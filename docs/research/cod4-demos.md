@@ -306,7 +306,7 @@ count within two. VERIFIED live.
 The one `.dm_1` in the 1.7 install was recorded by vcod: its gamestate's
 `sv_hostname` is `vcod`, and its records skip the message after the
 gamestate, as vcod's `demowaiting` does (VERIFIED, `cargo run -p
-vcod-cod4 --example demo_dump -- <file>`, which prints a file record by
+vcod-cod4 --example cod4_demo_dump -- <file>`, which prints a file record by
 record). So no retail-recorded demo exists to read, and the gate builds
 one from a retail capture instead:
 `play::cod4::tests::cod4_retail_framed_demo_plays_and_vcod_writes_it_alike`.

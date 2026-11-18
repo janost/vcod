@@ -3306,7 +3306,7 @@ three (833, 769, 317 stalled bot-ticks). VERIFIED (the runs).
   edges in (walks down off its rim at 24) and none out. VERIFIED (the
   graph). The rim is ringed by mantle strips 12 wide at (168, -5756),
   (168, -5310) and (378, -5536), tops at 28, which 1.7's pmove climbs
-  from the floor (row 1, flags 4, 700 ms; `mantle_spots`) and the
+  from the floor (row 1, flags 4, 700 ms; `cod4_mantle_spots`) and the
   graph's probe climbs too from the pool's nodes. VERIFIED (the
   probe from those nodes). The probe ran once, before the flood off the
   mantles' tops had found the pool, so no node there was probed. A CoD4

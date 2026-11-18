@@ -5,7 +5,7 @@
 //! Prints each spot the mantle starts from, with its rise, its row and
 //! where it ends.
 //!
-//!     COD4_DIR=... cargo run -p vcod-cod4 --example mantle_spots [mp_crash]
+//!     COD4_DIR=... cargo run -p vcod-cod4 --example cod4_mantle_spots [mp_crash]
 
 use glam::Vec3;
 use vcod_cod4::assets::Assets;

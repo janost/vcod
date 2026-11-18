@@ -56,7 +56,7 @@ the retail 1.1d Linux server and its homepaths, old plans) and `tmp/`
   wgpu, winit or kira either. `cargo deny check` (`deny.toml`, run in CI)
   enforces the wgpu, winit and kira half of these two rules.
 - `gsc` depends on neither `common` nor the client: `cargo tree -p vcod-gsc
-  -e normal` lists only `anyhow` and `log`. `vcod-common` is a gsc
+  -e normal` lists only `log`. `vcod-common` is a gsc
   dev-dependency for the corpus tests.
 - Assets load by kind and name through `vcod_common::asset_source`
   (`load::<T>`). A reader that only reads takes `&dyn AssetSource`, not
@@ -124,10 +124,15 @@ cargo deny check   # after a dependency change
   `docs/dev/testing.md`.
 - `ci.yml` runs on ubuntu with no game data. A new test needing paks returns
   early through `game_fs()` or uses `Pk3Fs::empty()`: no pak test and no A/B
-  gate runs in CI, only on a machine with an install.
+  gate runs in CI, only on a machine with an install. It pins the toolchain
+  (`RUST_TOOLCHAIN`, bumped on purpose), passes `--locked`, and also checks
+  the workspace on Windows, macOS and the 1.90 MSRV.
 - `nightly.yml` rebuilds the rolling `nightly` release on master pushes that
   touch code (docs, tools and `*.md` are path-ignored). `workflow_dispatch`
-  forces one.
+  forces one. It runs `ci.yml` first and publishes only when that is green,
+  fails the Linux build if a strong glibc import passes README's floor, and
+  ships `THIRD-PARTY-LICENSES` (`tools/third_party_licenses.py`) and
+  `SHA256SUMS`.
 - Each crate's integration tests are one binary named after the crate
   (`--test common`, `--test cod2`, `--test cod4`, `--test gsc`, `--test
   server`; `tests/main.rs`). A new file there needs its `mod` line, and a

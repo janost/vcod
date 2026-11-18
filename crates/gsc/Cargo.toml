@@ -7,12 +7,11 @@ repository.workspace = true
 readme.workspace = true
 rust-version.workspace = true
 publish = false
-description = "Virtual machine for the Call of Duty (2003) 1.1 GSC script language"
+description = "Compiler and virtual machine for the GSC script language of Call of Duty, United Offensive, Call of Duty 2 and Call of Duty 4"
 # tests/main.rs links every test file into one binary (`cargo test --test gsc`).
 autotests = false
 
 [dependencies]
-anyhow.workspace = true
 log.workspace = true
 
 [dev-dependencies]

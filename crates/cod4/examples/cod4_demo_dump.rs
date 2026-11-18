@@ -3,7 +3,7 @@
 //! `--rows`, the opening gamestate's host, map and table size, and how the
 //! file ends.
 //!
-//!     cargo run -p vcod-cod4 --example demo_dump -- FILE.dm_1 [--rows]
+//!     cargo run -p vcod-cod4 --example cod4_demo_dump -- FILE.dm_1 [--rows]
 
 use anyhow::{Context, Result};
 use vcod_cod4::net::demo::{DemoReader, Record};
