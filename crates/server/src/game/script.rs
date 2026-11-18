@@ -3390,6 +3390,7 @@ impl ScriptRuntime {
                 });
                 self.host.vehicles.drop_seat_ops(slot);
                 self.host.vehicles.riders.remove(&slot);
+                self.host.vehicles.overheated_gunners.retain(|&g| g != slot);
                 // Whatever the last level boundary lifted for this slot dies
                 // with the client that owned it: the next occupant of the
                 // slot is a stranger and must not connect into its `pers[]`.
@@ -5894,6 +5895,26 @@ mod tests {
         rt.client_disconnect(3);
         let left: Vec<usize> = rt.host.vehicles.seat_ops.iter().map(SeatOp::slot).collect();
         assert_eq!(left, [1, 2]);
+    }
+
+    /// A gunner who leaves the server with the MG hot leaves no overheat
+    /// mark for the next client in the slot (BUG-142).
+    #[test]
+    fn a_disconnect_drops_the_overheated_gunner() {
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() {}\n\
+             CodeCallback_PlayerConnect() {}\n\
+             CodeCallback_PlayerDisconnect() {}\n",
+        );
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 3,
+            name: "vcod".into(),
+        });
+        rt.run_frame(50);
+        rt.host.vehicles.overheated_gunners = vec![1, 3];
+        rt.client_disconnect(3);
+        assert_eq!(rt.host.vehicles.overheated_gunners, [1]);
     }
 
     /// A thread still polling the player when it disconnects dies with the
