@@ -890,6 +890,15 @@ impl Posts {
         self.tally.map(|t| (t.cues, t.back, t.back_ms))
     }
 
+    /// Takes `old`'s surveys and outposts, for a level on the same map and
+    /// graph: they rest only on the graph and the world, which a restart
+    /// keeps. Everything else a level resets.
+    pub fn carry_surveys(&mut self, old: &mut Posts) {
+        self.graph = old.graph;
+        self.surveys = std::mem::take(&mut old.surveys);
+        self.outers = std::mem::take(&mut old.outers);
+    }
+
     /// Forgets every survey made on another graph than `g`.
     fn on_graph(&mut self, g: &Arc<NavGraph>) {
         let ptr = Arc::as_ptr(g) as usize;
