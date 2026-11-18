@@ -14,7 +14,7 @@ use vcod_cod4::sunshadow::{self, PARTITION, SunShadow, View};
 use wgpu::util::DeviceExt;
 
 /// The caster shaders.
-const CAST_WGSL: &str = include_str!("cod4_sunshadow.wgsl");
+pub(crate) const CAST_WGSL: &str = include_str!("cod4_sunshadow.wgsl");
 /// The camera group's bindings of the atlas and its uniform.
 pub(crate) const ATLAS_BINDING: u32 = 18;
 pub(crate) const UNIFORM_BINDING: u32 = 19;
@@ -389,7 +389,7 @@ fn draw_entities(
 
 /// Copies a spot tile's cached static depth into the atlas (a fullscreen
 /// triangle under the tile's viewport, writing its depth as it stands).
-const SPOT_BLIT_WGSL: &str = "
+pub(crate) const SPOT_BLIT_WGSL: &str = "
 @group(0) @binding(0) var t_static: texture_depth_2d;
 @vertex fn vs_blit(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
     let q = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));

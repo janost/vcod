@@ -21,7 +21,7 @@ use wgpu::util::DeviceExt;
 const MAX_CLOUDS: usize = 512;
 
 /// The `fx.wgsl` pass plus the cloud vertex and fragment entries.
-const FX_CLOUD_WGSL: &str = concat!(
+pub(super) const FX_CLOUD_WGSL: &str = concat!(
     include_str!("../fx.wgsl"),
     include_str!("../fx_cloud.wgsl"),
     include_str!("../tex_samplers.wgsl")

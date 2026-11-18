@@ -157,7 +157,11 @@ impl Default for Cod4Options {
 /// A shader's multisampled depth binding, single-sampled when the scene is:
 /// `textureLoad(t, p, 0)` reads sample 0 or mip 0 alike.
 pub(crate) fn depth_wgsl(src: &str) -> std::borrow::Cow<'_, str> {
-    if msaa_samples() > 1 {
+    depth_wgsl_at(src, msaa_samples())
+}
+
+fn depth_wgsl_at(src: &str, samples: u32) -> std::borrow::Cow<'_, str> {
+    if samples > 1 {
         src.into()
     } else {
         src.replace("texture_depth_multisampled_2d", "texture_depth_2d")
@@ -13728,10 +13732,13 @@ mod tests {
         assert!(hud_mip_names(&[]).contains("gfx/2d/net"));
     }
 
+    /// Every module the client builds, as its `create_shader_module` site
+    /// builds it, parses and validates with no GPU; every `.wgsl` file under
+    /// src is part of one of them.
     #[test]
     fn wgsl_modules_validate() {
         use wgpu::naga;
-        for (name, src) in [
+        let modules = [
             ("shader", WORLD_WGSL),
             ("dynamic_model", crate::entity_material::DYNAMIC_WGSL),
             ("viewmodel", crate::entity_material::VIEWMODEL_WGSL),
@@ -13750,16 +13757,48 @@ mod tests {
             ("sun_flare", include_str!("sun_flare.wgsl")),
             ("sun_shafts", include_str!("sun_shafts.wgsl")),
             ("soft_particles", include_str!("soft_particles.wgsl")),
-        ] {
-            let module = naga::front::wgsl::parse_str(src)
-                .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
-            naga::valid::Validator::new(
-                naga::valid::ValidationFlags::all(),
-                naga::valid::Capabilities::default(),
-            )
-            .validate(&module)
-            .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
+            ("cod4_dof", include_str!("cod4_dof.wgsl")),
+            ("cod4_sunshadow", crate::cod4_sunshadow::CAST_WGSL),
+            ("cod4_spot_blit", crate::cod4_sunshadow::SPOT_BLIT_WGSL),
+            ("cod2_glow", include_str!("cod2_glow.wgsl")),
+            ("cod2_cookie", cod2_cookie::COOKIE_WGSL),
+            ("fx_cloud", fx_cloud::FX_CLOUD_WGSL),
+            ("scene_copy", include_str!("scene_copy.wgsl")),
+            ("shadow_cast", include_str!("shadow_cast.wgsl")),
+            ("shadow_cut", crate::shadows::SHADOW_CUT_WGSL),
+            ("shadow_mask", include_str!("shadow_mask.wgsl")),
+        ];
+        for (name, src) in modules {
+            for (samples, src) in [(4, depth_wgsl_at(src, 4)), (1, depth_wgsl_at(src, 1))] {
+                let module = naga::front::wgsl::parse_str(&src)
+                    .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(&src)));
+                naga::valid::Validator::new(
+                    naga::valid::ValidationFlags::all(),
+                    naga::valid::Capabilities::default(),
+                )
+                .validate(&module)
+                .unwrap_or_else(|e| panic!("{name} at {samples}x: {}", e.emit_to_string(&src)));
+            }
         }
+        let mut dirs = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut files = 0;
+        while let Some(dir) = dirs.pop() {
+            for e in std::fs::read_dir(&dir).unwrap() {
+                let path = e.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|x| x == "wgsl") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    assert!(
+                        modules.iter().any(|(_, src)| src.contains(&text)),
+                        "{} is in no module this test validates",
+                        path.display()
+                    );
+                    files += 1;
+                }
+            }
+        }
+        assert!(files > 0, "no .wgsl file found");
     }
 
     #[test]

@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use vcod_common::static_light::{RegionKeep, Sun};
 
 /// shadow_cut.wgsl with the deforms its staged casters run.
-const SHADOW_CUT_WGSL: &str = concat!(
+pub(crate) const SHADOW_CUT_WGSL: &str = concat!(
     include_str!("shadow_cut.wgsl"),
     include_str!("noise.wgsl"),
     include_str!("deform.wgsl")
@@ -2164,24 +2164,5 @@ mod tests {
             ..k
         };
         assert!(keep_texels(&wide).is_none());
-    }
-
-    #[test]
-    fn mask_and_cast_shaders_validate() {
-        use wgpu::naga;
-        for src in [
-            include_str!("shadow_cast.wgsl"),
-            SHADOW_CUT_WGSL,
-            include_str!("shadow_mask.wgsl"),
-        ] {
-            let module = naga::front::wgsl::parse_str(src)
-                .unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
-            naga::valid::Validator::new(
-                naga::valid::ValidationFlags::all(),
-                naga::valid::Capabilities::default(),
-            )
-            .validate(&module)
-            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
-        }
     }
 }
