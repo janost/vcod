@@ -523,6 +523,9 @@ Server (`vcod-server <map> --game cod4`, or a CoD4 install):
   sight, R reload, 1-7 pick a weapon.
 - `vcod --net-probe <ip:port>` is a headless client that joins, prints a
   line a second and writes captures. `vcod --help` documents its modes.
+  Bare, on CoD1 and UO, it holds forward for 2 s in every 30 once in
+  play, which shows moves still apply; it sends no chat unless
+  `--probe-say` asks.
   `--probe-secs` sets how long it stays (default 65). On CoD2
   `--probe-team` / `--probe-weapon` make it join and play a scripted
   loop; `VCOD_COD2_RECORD=<dir>/<name>` records the run as

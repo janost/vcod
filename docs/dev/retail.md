@@ -141,10 +141,14 @@ in the header of the fixture it produced. `--net-probe --game cod2` and
 
 ### Fixtures are retail evidence
 
-Most modes write into `crates/server/tests/fixtures/` under a fixed name, so
-a run against vcod overwrites the evidence. After one, move the files to
-`tmp/` and `git checkout` the directory. `--capture-tag` names a second run;
-tagged fixtures refuse to overwrite without `--overwrite-fixture`.
+Most modes write into `crates/server/tests/fixtures/` under a fixed name.
+A write onto a file that is already there, tagged or not, is refused
+without `--overwrite-fixture`, so a run against vcod cannot replace the
+evidence by accident; the refused capture is kept under `tmp/` with the
+fixture's file name. Retaking a fixture is `--overwrite-fixture`;
+`--capture-tag` names a second run. `--save-entities` is the exception:
+each run's samples join its file's. A probe that ends on an error still
+sends `disconnect`, so the server does not hold a ghost player.
 
 `--save-fixture` / `--save-snapshots` rewrite the parser's byte-exact
 captures in `crates/common/tests/fixtures/net/`.
