@@ -140,9 +140,11 @@ ignored gates with their commands and costs, and the nightly build:
 
 Every claim in a research doc names the module, the virtual address and the
 string or table it rests on, and carries its own label: VERIFIED when read
-out of a binary, an asset or a live capture; INFERRED when read off control
-flow, which includes instruction order and branch conditions. No
-section-level blanket. The full rule, document defaults and what
+out of a binary, an asset or a live capture, which includes a branch
+condition or instruction order read at a named address range ("VERIFIED
+(the instructions)"); INFERRED for identity, intent, flow read without
+addresses, and another game's or engine's source shape. No section-level
+blanket. The full rule, document defaults and what
 `crates/common/tests/evidence_labels.rs` checks: `docs/research/README.md`.
 
 Research docs are cited by section number from code comments and other docs

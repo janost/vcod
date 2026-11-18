@@ -2,7 +2,10 @@
 
 Which retail binary answers which question, the scripts in `tools/re/`, and
 the disassembly traps. What a binary says goes into the subsystem's research
-doc with its address and an evidence label (AGENTS.md, "Evidence labels").
+doc with its address and an evidence label (`docs/research/README.md`,
+"Evidence labels"). A branch or an instruction order read at a named address
+range is VERIFIED (the instructions); which function it is, unless a string
+names it, is INFERRED.
 
 ## The binaries
 
