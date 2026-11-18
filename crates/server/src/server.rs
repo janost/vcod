@@ -108,7 +108,7 @@ pub struct ServerConfig {
     /// Log one line per snapshot per client with the numbers that drive a
     /// client's prediction. Off by default; a busy server would flood.
     pub trace: bool,
-    /// Debug bots in play. Each takes a real slot; 0 is off.
+    /// Bots added at start (docs/bots.md). Each takes a real slot; 0 is off.
     pub bots: usize,
     /// Whether the bots fight. Without it they only roam.
     pub bots_shoot: bool,

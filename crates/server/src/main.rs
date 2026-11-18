@@ -813,9 +813,6 @@ fn handle_queued<G: GameModule>(
     }
 }
 
-/// The protocol to host: `--set protocol=<1|6|22>`, else the install's
-/// ([`vcod_server::server::install_protocol`]). One per process, as each
-/// retail binary speaks one.
 /// The CoD demo's `pak0.pk3` checksum, the only pak `fs_restrict` admits
 /// (cod_lnxded 0x8071461; 1.5b and UO compare it xor 0x2261994).
 const DEMO_PAK_CHECKSUM: u32 = 0xb1f5_95f5;
@@ -829,6 +826,9 @@ fn last_set<'a>(sets: &'a [String], name: &str) -> Option<&'a str> {
         .next_back()
 }
 
+/// The protocol to host: `--set protocol=<1|6|22>`, else the install's
+/// ([`vcod_server::server::install_protocol`]). One per process, as each
+/// retail binary speaks one.
 fn protocol(sets: &[String], fs: &Pk3Fs) -> Result<&'static Cod1Wire> {
     Ok(set_protocol(sets)?.unwrap_or_else(|| vcod_server::server::install_protocol(fs)))
 }
