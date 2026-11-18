@@ -25,23 +25,9 @@ pub const NAMES: &[(&str, Builtin)] = &[
 /// C `atoi` as the Linux servers read it (`strtol`).
 pub(crate) use vcod_common::text::atoi;
 
-/// C `atof`: the longest numeric prefix, a decimal point and an exponent
-/// included, 0 when there is none.
+/// C `atof` ([`vcod_common::text::atof`]) stored as a float.
 pub fn atof(s: &str) -> f32 {
-    let s = s.trim_start();
-    let mut end = 0;
-    for (i, c) in s.char_indices() {
-        let ok = c.is_ascii_digit()
-            || (i == 0 && (c == '-' || c == '+'))
-            || (c == '.' && !s[..i].contains('.'))
-            || ((c == 'e' || c == 'E') && i > 0 && !s[..i].contains(['e', 'E']))
-            || ((c == '-' || c == '+') && matches!(s.as_bytes().get(i - 1), Some(b'e' | b'E')));
-        if !ok {
-            break;
-        }
-        end = i + c.len_utf8();
-    }
-    s[..end].parse().unwrap_or(0.0)
+    vcod_common::text::atof(s) as f32
 }
 
 /// `getCvar(name)`: an empty string for a name that is not set, which is

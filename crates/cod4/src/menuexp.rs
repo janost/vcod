@@ -7,6 +7,7 @@
 //! comes from an [`Env`].
 
 use crate::assets::ui::ExpEntry;
+pub use vcod_common::text::atof;
 
 /// An operand: `expDataType` 0 int, 1 float, 2 string.
 #[derive(Clone, Debug, PartialEq)]
@@ -864,41 +865,6 @@ pub fn atoi(s: &str) -> i32 {
         v = (v * 10 + i64::from(c - b'0')).min(i64::from(u32::MAX));
     }
     (if neg { -v } else { v }) as i32
-}
-
-/// C's `atof`: the longest leading decimal number; 0 for none.
-pub fn atof(s: &str) -> f64 {
-    let t = s.trim_start();
-    let b = t.as_bytes();
-    let mut end = 0;
-    if matches!(b.first(), Some(b'-' | b'+')) {
-        end = 1;
-    }
-    let digits = |end: &mut usize| {
-        while b.get(*end).is_some_and(u8::is_ascii_digit) {
-            *end += 1;
-        }
-    };
-    digits(&mut end);
-    if b.get(end) == Some(&b'.') {
-        end += 1;
-        digits(&mut end);
-    }
-    let mut best = t[..end].parse::<f64>().unwrap_or(0.0);
-    if matches!(b.get(end), Some(b'e' | b'E')) {
-        let mut e = end + 1;
-        if matches!(b.get(e), Some(b'-' | b'+')) {
-            e += 1;
-        }
-        let start = e;
-        digits(&mut e);
-        if e > start
-            && let Ok(v) = t[..e].parse::<f64>()
-        {
-            best = v;
-        }
-    }
-    best
 }
 
 #[cfg(test)]
