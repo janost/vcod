@@ -182,23 +182,34 @@ impl SnapshotRing {
     /// so a snapshot arriving late holds the scene rather than emptying it.
     /// `None` only with no valid frame.
     pub fn two_for_time(&self, t: i32) -> Option<(&Snapshot, &Snapshot)> {
-        let mut valid: Vec<&Snapshot> = self
-            .slots
-            .iter()
-            .filter_map(|s| s.as_ref())
-            .filter(|s| s.valid)
-            .collect();
-        valid.sort_by_key(|s| s.server_time);
-        let (first, last) = (*valid.first()?, *valid.last()?);
+        // One scan for what a stable sort by time and its windows would
+        // pick: among equal times the first slot is the lower end of a
+        // pair and the last slot the upper.
+        let (mut first, mut last): (Option<&Snapshot>, Option<&Snapshot>) = (None, None);
+        let (mut below, mut above): (Option<&Snapshot>, Option<&Snapshot>) = (None, None);
+        for s in self.slots.iter().flatten().filter(|s| s.valid) {
+            let st = s.server_time;
+            if first.is_none_or(|f| st < f.server_time) {
+                first = Some(s);
+            }
+            if last.is_none_or(|l| st >= l.server_time) {
+                last = Some(s);
+            }
+            if st <= t && below.is_none_or(|b| st >= b.server_time) {
+                below = Some(s);
+            }
+            if st > t && above.is_none_or(|a| st < a.server_time) {
+                above = Some(s);
+            }
+        }
+        let (first, last) = (first?, last?);
         if t < first.server_time {
             return Some((first, first));
         }
-        Some(
-            valid
-                .windows(2)
-                .find(|w| w[0].server_time <= t && t < w[1].server_time)
-                .map_or((last, last), |w| (w[0], w[1])),
-        )
+        Some(match (below, above) {
+            (Some(b), Some(a)) => (b, a),
+            _ => (last, last),
+        })
     }
 }
 
@@ -691,6 +702,33 @@ pub(crate) mod tests {
         assert_eq!(held(50), 100);
         assert_eq!(held(200), 200);
         assert_eq!(held(999), 200);
+    }
+
+    /// Frames that share a time pair up as a stable sort of the ring by
+    /// time pairs them: the scan picks the same slots.
+    #[test]
+    fn two_for_time_picks_tied_frames_as_the_sort_did() {
+        let mut ring = SnapshotRing::new();
+        for (num, time) in [(1, 100), (2, 150), (3, 150), (4, 200), (5, 200), (6, 250)] {
+            ring.insert(snap(num, num as i32 - 1, time, true));
+        }
+        let sorted = |t: i32| {
+            let mut v: Vec<&Snapshot> = ring.slots.iter().flatten().filter(|s| s.valid).collect();
+            v.sort_by_key(|s| s.server_time);
+            let (first, last) = (v[0], v[v.len() - 1]);
+            if t < first.server_time {
+                return (first.message_num, first.message_num);
+            }
+            v.windows(2)
+                .find(|w| w[0].server_time <= t && t < w[1].server_time)
+                .map_or((last.message_num, last.message_num), |w| {
+                    (w[0].message_num, w[1].message_num)
+                })
+        };
+        for t in (50..300).step_by(25) {
+            let (a, b) = ring.two_for_time(t).unwrap();
+            assert_eq!((a.message_num, b.message_num), sorted(t), "t {t}");
+        }
     }
 
     #[test]
