@@ -16,7 +16,7 @@ Contents: 1 queries, 2 handshake and PunkBuster, 3 codec, 4 netfields, 5 `pm_fla
 | `main/game_mp_x86.dll` 1.5 | `d396f23231a113f292c171443c403074` | game module the Windows server below loads |
 | `pb/pbsv.dll` (1.5 install) | `faf14ec5f413e822e090e3fb704ac25d` | PunkBuster server, v1.076 |
 
-The 1.1 counterparts are those listed in `AGENTS.md` and `cod11-events-and-fx.md`. Addresses in `game.mp.i386.so` are `nm` addresses (Ghidra's import of either module sits 0x10000 higher). 1.5 `CoDMP.exe` and cgame addresses are virtual at their image bases.
+The 1.1 counterparts are listed in `cod11-events-and-fx.md` (md5s) and `docs/dev/reverse-engineering.md`, "The binaries". Addresses in `game.mp.i386.so` are `nm` addresses (Ghidra's import of either module sits 0x10000 higher). 1.5 `CoDMP.exe` and cgame addresses are virtual at their image bases.
 
 Method:
 - `tools/re/netfields.py` and `tools/re/dump_field_table.py` on both servers.
@@ -502,7 +502,7 @@ Client:
 - `C` and `D` record under `cg_autodemo` (section 8).
 - Prediction on a protocol 6 connection runs 1.5's movement (`cod15-movement.md`, "What vcod does with this").
 - www-redirected downloads go over HTTP with checksum checks (section 14).
-- The net probe's scripted modes read through the connection's protocol and need `--capture-tag` to write off 1.1 (AGENTS.md, "The probe client"). Against 1.5b on mp_carentan dm the combat, motion, hit pair, weapon-select and item-drop runs (the last beside `client-probes/probe_itemdrop` under `COD_VERSION=1.5 tools/run_probe.sh`) recorded what they record on 1.1 (live, VERIFIED).
+- The net probe's scripted modes read through the connection's protocol and need `--capture-tag` to write off 1.1 (`docs/dev/retail.md`, "On 1.5 and UO"). Against 1.5b on mp_carentan dm the combat, motion, hit pair, weapon-select and item-drop runs (the last beside `client-probes/probe_itemdrop` under `COD_VERSION=1.5 tools/run_probe.sh`) recorded what they record on 1.1 (live, VERIFIED).
 
 Server:
 - `vcod-server` hosts protocol 6 when its install is 1.5 (section 13), with the match timeout (section 12), 1.5's chat and `g_deadChat`, votes and www redirects (sections 13, 14).

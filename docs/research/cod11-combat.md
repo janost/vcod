@@ -326,8 +326,8 @@ INFERRED: that is the whole semi-automatic edge. Nothing latches the button in
 `weaponTime == 0` while the trigger stays down, and the fire path is gated on
 `weaponTime` having reached 0. INFERRED: releasing the trigger lets the next
 frame take the `else` and store 0, after which the weapon can fire again. The
-net probe taps the bit for that reason (`Pulse`, AGENTS.md "The probe
-client").
+net probe taps the bit for that reason (`Pulse`, `docs/dev/retail.md`, "The
+probe client").
 
 VERIFIED, same block (`.so` 0x38842-0x388c4): after the store of 1 it
 compares `weaponstate` against 4, then against 3, 4, 10 and 11. Both arms
@@ -4169,7 +4169,8 @@ cmd-path death's comes due after 200. Ours matches on all three
 
 INFERRED: nothing frees a clone on a timer. It lives until the eighth
 subsequent death reuses its slot, which is the eight-body behaviour the
-project already observed live (`AGENTS.md`, "Netcode debugging").
+project already observed live (`docs/dev/traps.md`, "Combat and items", "The
+body queue is eight entities").
 
 **As implemented** (`crates/server/src/game/bodies.rs` and the `cloneplayer`
 builtin in `crates/server/src/game/builtins/client.rs`). The clone is written
@@ -7889,7 +7890,7 @@ the turret's waiters:
 
 INFERRED: the notifies wake their waiters after the builtin's caller has
 moved on, and the later notify's waiter runs first, the newest-first resume
-order of AGENTS.md's script notes. Where the turret falls in the walk
+order (`cod11-gsc-language.md` 9). Where the turret falls in the walk
 relative to slot 1 is not visible here, since its notifies are deferred.
 
 **As implemented.** `GameHost::blast_entities` lists the turrets with

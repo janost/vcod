@@ -31,7 +31,7 @@ systeminfo.
 
 Paks: `uo/pakuo00..07.pk3`, `uo/localized_english_pakuo00..02.pk3` and
 `uo/uomappack00.pk3`, layered over a 1.5 `main/` (section 1). The 1.1 and
-1.5 counterparts are in `AGENTS.md` and `cod15-protocol-diff.md`.
+1.5 counterparts are in `cod11-events-and-fx.md` and `cod15-protocol-diff.md`.
 
 Addresses in `coduo_lnxded` and `game.mp.uo.i386.so` are `nm` / ELF virtual
 addresses. Ghidra's import of the `.so` sits 0x10000 higher; Ghidra labels
@@ -762,7 +762,7 @@ down by the frame msec for a grenade with `cookOffHold`, raises
 (event 163, plus 210 when `explosionInnerDamage` is non-zero), and
 `fire_grenade` (0x5f7ad) fuses with what is left (VERIFIED decompile). Every
 stock UO grenade, smoke, flash and satchel has `cookOffHold 1` (VERIFIED).
-1.1 MP has no cook (`AGENTS.md`), so shared code gates it by version
+1.1 MP has no cook (`docs/dev/traps.md`, "Combat and items"), so shared code gates it by version
 (`pmove::weapon::cooking`). The cook starts only on the sight button's edge;
 `coduo-movement.md` 12 measures it.
 
@@ -1198,8 +1198,8 @@ The client side: vcod watches and plays on a UO server.
   and puts the camera where `CG_VehicleView` does, the local gunner's view
   on its gun included (`coduo-vehicles.md`).
 - **The net probe.** Every scripted mode reads through protocol 22 and
-  prints 1.1's event ids and means of death (AGENTS.md, "The probe
-  client"). Against retail 1.51b on mp_cassino and mp_carentan dm (live,
+  prints 1.1's event ids and means of death (`docs/dev/retail.md`, "On 1.5
+  and UO"). Against retail 1.51b on mp_cassino and mp_carentan dm (live,
   VERIFIED): the combat script saw its shots (`weaponstate` 3,
   `EV_FIRE_WEAPON` 163 printed as 1.1's 159); a suicide obituary's parm 149
   (MOD 21) printed as 150; the weapon-select probe read `EV_PUTAWAY_WEAPON`

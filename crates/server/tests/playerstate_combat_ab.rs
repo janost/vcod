@@ -345,7 +345,7 @@ fn check_on(
     }
     // A grenade capture replays from the spot its own script threw from:
     // where a blast lands, and so who it hurts, is the map's business and
-    // not the input's (`# grenade` header, AGENTS.md).
+    // not the input's (`# grenade` header, `common::captured_place`).
     let place = common::captured_place(&text);
     let replayed = common::replay_as(proto, map, gametype, &steps, (&team, &weapon), fs, place);
     let mine: Vec<Vec<Trace>> = replayed

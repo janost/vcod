@@ -172,7 +172,7 @@ pub(crate) enum Joining {
 
 /// What a game lends the driver for one tick. Each method is a read or a
 /// write the driver makes at one point of the tick, and the driver keeps
-/// that order (AGENTS.md, "Bots"): a call moved across another changes
+/// that order (docs/dev/traps.md, "Bots"): a call moved across another changes
 /// what the bots draw and see.
 pub(crate) trait BotWorld {
     /// The game's objective state, read once a tick before the views and

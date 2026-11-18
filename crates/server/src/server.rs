@@ -12289,7 +12289,8 @@ mod tests {
     /// announcing them, so the server must decode them against the cmd it
     /// last stored for this client, not `NULL_USERCMD`: decoding against
     /// the null base resets the move basis to yaw 0 for a frame (the
-    /// "spectator flash" bug, AGENTS.md's gotchas). `ps.yaw` steers
+    /// "spectator flash" bug; protocol doc, "The base cmd is built from the
+    /// playerstate"). `ps.yaw` steers
     /// `pmove::spectator_move`'s wishdir directly, so a burst of `forward`
     /// cmds sent right after the omission is a direct probe of which base
     /// the server used: yaw -45 accelerates the spectator diagonally

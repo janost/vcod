@@ -1,8 +1,8 @@
 //! The engine state both servers embed: what retail's `svs` and `sv` hold
 //! that no game module reads by its own layout. `Server` (CoD1) and
 //! `Cod2Server` are each an `Engine` with one as its `core`, `C` being the
-//! game's client slot; both drive it through `engine::tick` (AGENTS.md,
-//! "The server tick").
+//! game's client slot; both drive it through `engine::tick`
+//! (docs/dev/server-tick.md, "One skeleton for every game").
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;

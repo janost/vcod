@@ -1315,7 +1315,8 @@ pub struct Bot {
     /// (coduo-diff.md 22).
     armed: u8,
     /// A weapon switch under way: the byte every cmd carries until
-    /// `ps.weapon` reads it (AGENTS.md, "Every cmd carries the weapon").
+    /// `ps.weapon` reads it (docs/dev/traps.md, "Wire and netcode", "The cmd's
+    /// weapon byte").
     switch_to: Option<u8>,
     /// `bas` launchers tapped for with nothing taken and health items no
     /// body reaches (`Bot::track_heal`), and the ticks each stays passed
@@ -4860,8 +4861,8 @@ impl Bot {
         ]
     }
 
-    /// Semi-autos tap, at least `fireTime` apart (AGENTS.md, "Fire is
-    /// tapped"); automatics hold the bit for a burst, shorter at range.
+    /// Semi-autos tap, at least `fireTime` apart (combat doc 1.4); automatics
+    /// hold the bit for a burst, shorter at range.
     /// Inside the cone the trigger goes down; past it, with a chance that
     /// falls to none at the weapon's reach ([`REACH_AUTO`]), so a settling
     /// aim fires before it has settled.
