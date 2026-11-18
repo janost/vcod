@@ -4,10 +4,11 @@
 //! document's; the behaviour the two combat captures measured is in
 //! docs/research/player-model-anim-system.md, "The weapon channel".
 //!
-//! Not modelled yet: retail's `BG_TakePlayerWeapon` on a spent `clipOnly`
-//! weapon (the host owns the held bits, so pmove cannot clear one), and the
-//! three stops of 1.12, whose `pm_flags`/`pm_type`/`eFlags` this
-//! `PlayerState` does not carry.
+//! Not modelled: retail's `BG_TakePlayerWeapon` on a spent `clipOnly`
+//! weapon (the host owns the held bits, so pmove cannot clear one). The
+//! three stops of 1.12 run outside this module: the mounted gun in
+//! `pmove`'s mounted arm, the dead and respawned cases in
+//! `pmove::cmd::dead_step`.
 //!
 //! `cmd.weapon` is read as retail reads it: a 0 under a held weapon is a
 //! request to holster (1.8), so every caller sends the weapon it holds or
