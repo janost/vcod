@@ -151,6 +151,9 @@ pub struct Client {
     /// Each ring slot's [`CmdKind`], beside `netchan.reliable`.
     pub reliable_kind: [CmdKind; MAX_RELIABLE_COMMANDS],
     pub message_ack: i32,
+    /// `deltaMessage`: the acked message the next snapshot deltas from, set
+    /// by each move op, -1 after a `clc_moveNoDelta` or a gamestate.
+    pub delta_message: i32,
     /// The serverTime of the last usercmd the sim consumed; cmd-to-cmd
     /// deltas drive the pmove dt, retail-style.
     pub last_processed_st: i32,
@@ -211,6 +214,7 @@ impl Client {
             zombie: false,
             reliable_kind: [CmdKind::CanIgnore; MAX_RELIABLE_COMMANDS],
             message_ack: 0,
+            delta_message: -1,
             last_processed_st: 0,
             last_usercmd_st: 0,
             pending: Vec::new(),

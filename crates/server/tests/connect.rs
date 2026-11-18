@@ -504,6 +504,44 @@ fn messages_after_a_command_with_byte_0x92_decode() {
     }
 }
 
+/// A snapshot the client cannot parse is never a base: its next move goes
+/// out as `clc_moveNoDelta` (cod11-demos.md 4), the server answers with a
+/// full frame and the deltas resume from there.
+#[test]
+fn a_lost_frame_is_followed_by_a_no_delta_move_and_a_full_frame() {
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let mut sv = server();
+    let mut now = Instant::now();
+    let mut cl = connect(&mut sv, &q, &mut now);
+    enter(&mut sv, &q, &mut cl, &mut now);
+    assert!(cl.snapshots().newest().unwrap().delta_num > 0);
+
+    // One message cut in half on its way to the client.
+    now += Duration::from_millis(50);
+    cl.send_frame(&NULL_USERCMD);
+    let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
+    for p in pending {
+        sv.handle_packet(common::ADDR, &p, now);
+    }
+    sv.tick(now);
+    for (_, mut p) in sv.take_outgoing() {
+        p.truncate(8 + (p.len() - 8) / 2);
+        q.borrow_mut().to_client.push_back(p);
+    }
+    cl.pump_at(now);
+    assert!(!last_frame_valid(&cl));
+
+    let mut kinds = Vec::new();
+    for _ in 0..4 {
+        now += Duration::from_millis(50);
+        cl.send_frame(&NULL_USERCMD);
+        step(&mut sv, &q, &mut cl, now);
+        assert!(last_frame_valid(&cl), "message {}", cl.incoming_sequence());
+        kinds.push(cl.snapshots().newest().unwrap().delta_num > 0);
+    }
+    assert_eq!(kinds, [false, true, true, true]);
+}
+
 /// `client-probes/<probe>` on ours, mp_carentan, the install's protocol.
 /// `None` without paks.
 fn probe_server(probe: &str) -> Option<Server> {

@@ -220,6 +220,9 @@ otherwise.
   server's as the client reads it (`%` and high bytes as `.`), the client's
   as `write_string` sent it. A raw `%` in the server's ring mis-keys the
   client's moves until the next command is acked (cod11-chat.md 2.2).
+- `clc_moveNoDelta` sets the server's delta base to none; a client sends it
+  unless its last message held a valid frame (cod11-demos.md 4). Without it
+  a mid-level `record` never gets the full frame it waits on.
 - A move message's ack is stamped with the newest frame already sent when
   the packet arrived, not the tick time, or loopback ping reads 21-50 ms.
 - On a 1.5 server `sv_time_ms` is the game clock (`level.time`, the

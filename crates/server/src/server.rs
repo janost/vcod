@@ -152,8 +152,12 @@ enum ClientOp {
         seq: i32,
         text: String,
     },
-    /// Every usercmd of a move block, in wire order.
-    Move(Vec<UserCmd>),
+    /// Every usercmd of a move block, in wire order, and whether it came
+    /// as `clc_move` (true) or `clc_moveNoDelta`.
+    Move {
+        cmds: Vec<UserCmd>,
+        delta: bool,
+    },
 }
 
 /// One shot a client's weapon step took this tick: the queue between the
@@ -2631,7 +2635,7 @@ impl Server {
         self.game.packet_seq += 1;
         let mut commands_done = false;
         for op in ops {
-            if !commands_done && matches!(op, ClientOp::Move(_)) {
+            if !commands_done && matches!(op, ClientOp::Move { .. }) {
                 commands_done = true;
                 if !self.pure_after_commands(slot) {
                     return;
@@ -2643,7 +2647,12 @@ impl Server {
                         return;
                     }
                 }
-                ClientOp::Move(last) => self.user_move(slot, last),
+                ClientOp::Move { cmds, delta } => {
+                    // `SV_UserMove` sets `deltaMessage` before anything else.
+                    let c = self.core.clients[slot].as_mut().unwrap();
+                    c.delta_message = if delta { c.message_ack } else { -1 };
+                    self.user_move(slot, cmds);
+                }
             }
         }
         if !commands_done {
@@ -2683,7 +2692,10 @@ impl Server {
                 CLC_EOF => return Some((ops, prev)),
                 CLC_MOVE | CLC_MOVE_NO_DELTA => {
                     let cmds = self.parse_move(c, &mut r, m, &mut prev)?;
-                    ops.push(ClientOp::Move(cmds));
+                    ops.push(ClientOp::Move {
+                        cmds,
+                        delta: op == CLC_MOVE,
+                    });
                     return Some((ops, prev));
                 }
                 // `read_bits(CLC_BITS)` yields 0..=3; unreachable.
@@ -3047,6 +3059,7 @@ impl Server {
         // The client restarts its usercmd chain on every gamestate it
         // receives, so the base it deltas against restarts here too.
         c.last_cmd = NULL_USERCMD;
+        c.delta_message = -1;
         c.gamestate_message_num = i64::from(c.link.netchan.outgoing_sequence);
         let mut w = MsgWriter::new(&self.core.huff);
         write_pending_commands(&mut w, &c.link.netchan, c.link.reliable_ack);
@@ -7284,14 +7297,16 @@ impl Server {
                 valid: true,
             };
 
-            // The base is the frame the client last acked, if it is still in
-            // the ring and close enough for the byte-wide deltaNum offset.
+            // The base is the frame the client's last move acked, unless it
+            // asked for none, if it is still in the ring and close enough for
+            // the byte-wide deltaNum offset.
             // Safe at a full SV_PACKET_BACKUP depth (no margin, unlike
             // retail's SV_WriteSnapshotToClient, which keeps PACKET_BACKUP -
             // 3) only because both this ring and the client's own read a slot
             // before either side can overwrite it.
-            let base = c
-                .sent_frame(c.message_ack.max(0) as u32)
+            let base = u32::try_from(c.delta_message)
+                .ok()
+                .and_then(|n| c.sent_frame(n))
                 .filter(|b| {
                     let back = message_num.saturating_sub(b.message_num);
                     (1..=255).contains(&back)
