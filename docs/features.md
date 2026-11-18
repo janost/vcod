@@ -93,5 +93,5 @@ Retail's servers are the oracle. A headless probe client
 (`vcod --net-probe`) records what a retail server sends, the captures are
 committed as fixtures, and the A/B tests replay their inputs on
 vcod-server and diff the result. `.gsc` probes run on retail and on vcod's
-VM and the suite compares their output. [AGENTS.md](../AGENTS.md) has the
-details.
+VM and the suite compares their output. [docs/dev/retail.md](dev/retail.md)
+has the details.

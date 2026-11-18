@@ -351,8 +351,8 @@ fn the_ladder_mover_climbs_where_retail_does() {
             _ => &weapons,
         };
         println!("{name}");
-        // 1.5b's and UO's servers store their floats (AGENTS.md, "Movement
-        // and collision").
+        // 1.5b's and UO's servers store their floats (docs/dev/traps.md,
+        // "Movement and collision").
         world.set_arith(if rules.v15() {
             Arith::Stored
         } else {

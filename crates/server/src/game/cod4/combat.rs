@@ -733,10 +733,9 @@ impl Cod4Level {
         self.rt.host.cod4_mut().antilag.clear();
     }
 
-    /// `CalcMuzzlePoints`' axis (inlined at 0x80a2b81 and 0x80a30a7):
-    /// The gun pitch and yaw, what the
-    /// last cmd's aim block left, over the view's roll (cod4-combat.md
-    /// 3.2).
+    /// `CalcMuzzlePoints`' axis (inlined at 0x80a2b81 and 0x80a30a7): the
+    /// gun pitch and yaw the last cmd's aim block left, over the view's roll
+    /// (cod4-combat.md 3.2).
     pub(super) fn muzzle_axis(&self, slot: usize, ps: &vcod_cod4::pmove::PlayerState) -> [Vec3; 3] {
         let [pitch, yaw] = self.combat.gun_angles[slot];
         vcod_common::x87::angle_vectors_libm(Vec3::new(pitch, yaw, ps.view_angles[2]))
@@ -803,7 +802,7 @@ impl Cod4Level {
         let damage = if mod_ == "MOD_MELEE" {
             damage
         } else {
-            let mult = if d.weap_type == 0 && d.weap_class != 7 {
+            let mult = if d.weap_type == 0 && d.weap_class != super::weapons::WEAPCLASS_TURRET {
                 d.location_damage
                     .get(hitloc as usize)
                     .copied()

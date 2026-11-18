@@ -1,9 +1,12 @@
-//! CoD2's world shading (docs/research/cod2-materials.md 9): the
-//! lightmapped phong family (`cod2_world.wgsl`) and the cube-map sky
-//! (`sky_cube.wgsl`). A CoD2 world batch whose material carries
-//! [`PhongLit`] draws through [`Cod2World`] instead of its stage; every
-//! other CoD2 material, and every CoD1 one, keeps the stage path, so no
-//! CoD1 pipeline or key changes.
+//! The lit world of CoD2 and CoD4 (`cod2_world.wgsl`) and the cube-map sky
+//! (`sky_cube.wgsl`). CoD2: the lightmapped phong family
+//! (docs/research/cod2-materials.md 9). CoD4: lit world, static models and
+//! water, primary lights, reflection probes and the model lighting volume
+//! (cod4-world.md 3 and 9), one pipeline per lit path (cod4-client-perf.md
+//! 29) and `floatZ` from the depth prepass (cod4-client-perf.md 35). A world
+//! batch whose material carries [`PhongLit`] draws through [`Cod2World`]
+//! instead of its stage; every other material, CoD1's included, keeps the
+//! stage path, so no CoD1 pipeline or key changes.
 
 use std::collections::HashMap;
 use vcod_common::asset_source::AssetSource;
@@ -829,7 +832,6 @@ pub(super) fn uniform_entry(
     }
 }
 
-/// A one-level texture of `format` from tightly packed rows.
 /// A `width` x `height` x 4 RGBA volume, its slices one after another, as
 /// 1.7's model lighting image (`R_InitModelLightingImage`, cod4-world.md
 /// 3.2).
@@ -864,6 +866,7 @@ fn upload_volume(
         .create_view(&Default::default())
 }
 
+/// A one-level texture of `format` from tightly packed rows.
 fn upload_plain(
     device: &wgpu::Device,
     queue: &wgpu::Queue,

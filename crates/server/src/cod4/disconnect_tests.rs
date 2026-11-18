@@ -249,8 +249,8 @@ fn citystreets_runs_two_players_without_script_errors() {
 }
 
 /// One player beside four shooting bots, as `--bots 4 --bots-shoot` runs
-/// it, who takes the team menu's auto-assign and then leaves after
-/// `leave_ms`, with a `disconnect` first when `clean`.
+/// it, who takes the team menu's auto-assign and then leaves 14 s in, with
+/// a `disconnect` first when `clean`.
 /// `_teams::CountPlayers` writes `"allies"` and `"axis"` into its copy of
 /// `level.players`; were the copy the same array, `level.players.size`
 /// would count both keys and `spawnPerFrameUpdate` would read an

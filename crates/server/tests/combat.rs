@@ -906,7 +906,8 @@ fn a_bullet_deaths_frame_is_retails() {
     );
     sv.place_client(na, spot, 0.0);
     sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
-    // Both hold the carbine, as a retail client's cmd says (AGENTS.md).
+    // Both hold the carbine, as a retail client's cmd says (docs/dev/traps.md,
+    // "Wire and netcode", "The cmd's weapon byte").
     let sight = UserCmd {
         buttons: BUTTON_ADS,
         weapon: carbine,

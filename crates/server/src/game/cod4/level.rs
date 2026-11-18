@@ -33,6 +33,8 @@ use crate::game::script::{MenuRef, ScriptRuntime};
 use vcod_gsc::Value;
 
 /// How far back the killcam may look: 10 s of frames (200 at `sv_fps` 20).
+/// vcod's bound; retail's archive lookup stops at 1200 frames back
+/// (cod4-combat.md 7.1).
 const HISTORY_MS: i32 = 10_000;
 
 /// `pm_type`s: the walk capture's spectator reads 4, a playing
@@ -556,17 +558,12 @@ impl Cod4Level {
     }
 
     /// `ClientInactivityTimer` (0x80a4d56), from `ClientThink_real` for a
-    /// playing or dead client (0x80a5ccf; a spectator or one at the
-    /// intermission is never timed). `g_inactivity` 0 keeps the deadline a
-    /// minute ahead; a cmd with a move key or the 0x401 buttons
-    /// (`forwardmove`/`rightmove` as one word at 0x80a4d91, the buttons at
-    /// 0x80a4dcd) puts it `g_inactivity` seconds ahead. Past the deadline
-    /// the client goes; ten seconds before, it is warned once. 1.7 has no
-    /// `g_inactivitySpectator` (no such string in `cod4_lnxded`). The
-    /// engine calls this for its network clients only: `pers.localClient`
-    /// (a bot or loopback address, 0x813b1b0) exempts the rest. VERIFIED
-    /// live: an idle axis probe at `g_inactivity 30` was warned 20 s and
-    /// dropped 30 s after its spawn, a spectator beside it kept.
+    /// playing or dead client; a spectator or one at the intermission is
+    /// never timed. `g_inactivity` 0 keeps the deadline a minute ahead; a
+    /// cmd with a move key or the 0x401 buttons puts it `g_inactivity`
+    /// seconds ahead. Past the deadline the client goes; ten seconds
+    /// before, it is warned once. Network clients only: `pers.localClient`
+    /// exempts bots and loopback (cod4-server-gaps.md, "g_inactivity").
     pub fn inactivity_timer(&mut self, slot: usize, cmd: &UserCmd) -> Inactivity {
         let state = self.rt.client_session(slot).map(|s| s.state);
         if !matches!(state, Some(SessionState::Playing | SessionState::Dead)) {
@@ -934,6 +931,7 @@ impl Cod4Level {
     /// else 0, no `oldcmd`); a player walks at `g_speed`. Then the body is
     /// relinked where the move left it (`SV_LinkEntity`), a spectator
     /// unlinked. Without a clip map only the clock and the view move.
+    ///
     /// One cmd's `ClientThink_real` up to the link. A playing or dead
     /// client's returns the event sequence before the move, the cmd's time
     /// and the move's touch list, for [`Self::after_think`].
@@ -1907,12 +1905,6 @@ impl Cod4Level {
         self.relink(slot, &ps);
     }
 
-    /// `Cmd_Kill_f`: a playing client under `sv_cheats` (with
-    /// health, `CheatsOk`) dies by its own hand: `player_die` as
-    /// `MOD_SUICIDE` with 100000 damage, the `death` notify, the death anim
-    /// and `CodeCallback_PlayerKilled`. Otherwise the refusal `CheatsOk`
-    /// prints, both strings in 1.7's `cod4_lnxded` (VERIFIED). The reply
-    /// to send, if any.
     /// Reseeds the scripts' `randomInt` / `randomFloat` state, so a test
     /// replays a stock script's draws (an airstrike's path) the same on
     /// every run; for tests.
@@ -1993,6 +1985,12 @@ impl Cod4Level {
             });
     }
 
+    /// `Cmd_Kill_f`: a playing client under `sv_cheats` (with
+    /// health, `CheatsOk`) dies by its own hand: `player_die` as
+    /// `MOD_SUICIDE` with 100000 damage, the `death` notify, the death anim
+    /// and `CodeCallback_PlayerKilled`. Otherwise the refusal `CheatsOk`
+    /// prints, both strings in 1.7's `cod4_lnxded` (VERIFIED). The reply
+    /// to send, if any.
     pub fn kill_command(&mut self, slot: usize) -> Option<String> {
         let playing = self
             .rt

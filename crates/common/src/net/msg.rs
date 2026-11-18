@@ -1,14 +1,10 @@
 //! Contains routines ported from the RTCW-MP GPL source, Copyright (C) 1999-2010 id Software LLC, a ZeniMax Media company.
 //! See NOTICE.
 //!
-//! Message reader/writer and the delta codecs, ported from RTCW-MP
-//! `qcommon/msg.c` and corrected against cod_lnxded 1.1d. Wire layout:
-//! `docs/protocol-1.1.md`, "The message-block model" and "Delta field encoding".
-//!
-//! The body is block-decompressed up front and read as plain bytes with two
-//! cursors, `readcount` for whole bytes and `bit` for bit fields, as `msg_t`
-//! does. A raw byte read in the middle of a run of bit fields lands after the
-//! byte those bits are still filling.
+//! CoD1's delta codecs over [`super::codec`]'s reader and writer: entity,
+//! client, playerstate and usercmd, ported from RTCW-MP `qcommon/msg.c` and
+//! corrected against cod_lnxded 1.1d. Wire layout: `docs/protocol-1.1.md`,
+//! "Delta field encoding".
 
 use super::codec::{
     ANGLE_BITS, FieldCodec, NetField, write_delta_field, write_delta_struct, write_ps_value,
@@ -516,12 +512,12 @@ fn read_delta_field(r: &mut MsgReader, from_val: i32, bits: i32) -> i32 {
     FieldCodec::COD1.read_delta_field(r, from_val, bits)
 }
 
-/// `MSG_ReadDeltaPlayerstate` (cod_lnxded 0x807e2f0). No per-field zero flag,
-/// unlike the entity delta; the trailing array blocks are consumed only to
-/// stay aligned. docs/protocol-1.1.md, "PlayerState delta".
 /// `pm_flags`' slot in every protocol's playerState table.
 const PM_FLAGS_INDEX: usize = 12;
 
+/// `MSG_ReadDeltaPlayerstate` (cod_lnxded 0x807e2f0). No per-field zero flag,
+/// unlike the entity delta; the trailing array blocks are consumed only to
+/// stay aligned. docs/protocol-1.1.md, "PlayerState delta".
 pub fn read_delta_playerstate(r: &mut MsgReader, p: &Cod1Wire, from: &PlayerState) -> PlayerState {
     let mut to = PlayerState {
         fields: from.fields.clone(),

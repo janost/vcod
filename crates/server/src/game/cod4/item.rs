@@ -62,7 +62,8 @@ pub fn run(
 ) -> Step {
     // With no ground, or one that moves, an item not already falling falls
     // from where it is (0x80908cb..0x809096b). An item in flight has
-    // `groundEntityNum` 0, so one met mid-air falls on from rest.
+    // `groundEntityNum` 0, so one met mid-air falls on from rest. `trType`
+    // 5 or 10 is already falling (cod4-combat.md 6.1).
     if (it.ground == NONE || moves(it.ground)) && it.tr_type != TR_GRAVITY && it.tr_type != 10 {
         it.tr_type = TR_GRAVITY;
         it.start_ms = now;

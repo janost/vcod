@@ -1209,7 +1209,6 @@ pub(crate) fn contains(r: [f32; 4], p: [f32; 2]) -> bool {
     p[0] > r[0] && p[0] < r[0] + r[2] && p[1] > r[1] && p[1] < r[1] + r[3]
 }
 
-/// What the expressions read.
 /// An item's `action` held across its key (`ScriptMenus::action_of`).
 struct Action {
     menu: String,
@@ -1217,6 +1216,7 @@ struct Action {
     cmds: Vec<Cmd>,
 }
 
+/// What the expressions read.
 struct Ctx<'a>(&'a ScriptMenus);
 
 impl Env for Ctx<'_> {

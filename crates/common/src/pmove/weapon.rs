@@ -4,10 +4,11 @@
 //! document's; the behaviour the two combat captures measured is in
 //! docs/research/player-model-anim-system.md, "The weapon channel".
 //!
-//! Not modelled yet: retail's `BG_TakePlayerWeapon` on a spent `clipOnly`
-//! weapon (the host owns the held bits, so pmove cannot clear one), and the
-//! three stops of 1.12, whose `pm_flags`/`pm_type`/`eFlags` this
-//! `PlayerState` does not carry.
+//! Not modelled: retail's `BG_TakePlayerWeapon` on a spent `clipOnly`
+//! weapon (the host owns the held bits, so pmove cannot clear one). The
+//! three stops of 1.12 run outside this module: the mounted gun in
+//! `pmove`'s mounted arm, the dead and respawned cases in
+//! `pmove::cmd::dead_step`.
 //!
 //! `cmd.weapon` is read as retail reads it: a 0 under a held weapon is a
 //! request to holster (1.8), so every caller sends the weapon it holds or
@@ -41,7 +42,7 @@ pub const WEAPON_DEPLOY: u8 = 12;
 pub const WEAPON_BREAKDOWN: u8 = 13;
 
 /// The wire `EV_*` ids pmove raises. `EV_EMPTYCLIP` (150) is not among them:
-/// docs/research/cod11-events-and-fx.md section 1.5 found no site that raises it.
+/// docs/research/cod11-combat.md section 1.5 found no site that raises it.
 pub use crate::net::event_ids::{
     EV_EJECT_BRASS, EV_FIRE_MELEE, EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT, EV_MELEE_SWIPE,
     EV_NOAMMO, EV_PULLBACK_WEAPON, EV_PUTAWAY_WEAPON, EV_RAISE_WEAPON, EV_RECHAMBER_WEAPON,

@@ -8,9 +8,9 @@ use std::path::Path;
 pub enum Game {
     /// Call of Duty (2003): 1.1, 1.5 and United Offensive.
     Cod1,
-    /// Call of Duty 2. Detected only.
+    /// Call of Duty 2 1.3.
     Cod2,
-    /// Call of Duty 4. Detected only.
+    /// Call of Duty 4 1.7.
     Cod4,
 }
 

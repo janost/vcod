@@ -185,7 +185,7 @@ fn the_configstring_table_matches_retail_on_mp_carentan() {
 
 /// The other stock gametype the map-cycle gates run under, whose bootstrap
 /// precaches a different string set and only when `game["gamestarted"]` is
-/// unset (`tests/restart_carry.rs` is what checks the restart after it).
+/// unset (`roundrestart_ab.rs` checks the restart after it).
 #[test]
 fn the_configstring_table_matches_retail_on_mp_carentan_sd() {
     check("mp_carentan", "sd");

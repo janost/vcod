@@ -114,7 +114,12 @@ per-second snapshot summary, and dumps captures to `tmp/`. Each scripted mode
 `crates/client/src/main.rs` (`vcod --help`): what it does, which fixture it
 writes, which gsc probe it pairs with. A multi-shell recipe (gsc probe,
 target client, shooter client, `+set` cvars, start order, `--probe-secs`) is
-in the header of the fixture it produced. `--net-probe --game cod2` and
+in the header of the fixture it produced. Some header text is fixed, not
+read off the run: the "Retail CoD <build>" label (picked from the protocol
+version, so a vcod-server gets it too), most `sv_maxclients 8, sv_pure 0`
+lines, the slope recipes' `<spot>` and `<yaw>`, and the mp_carentan and
+port 28970 recipes in the sd, pickup, turret and weapsel headers. Correct
+them by hand before committing a fixture. `--net-probe --game cod2` and
 `--game cod4` probe those servers through `play::cod2` and `play::cod4`.
 
 - Both servers treat loopback and private addresses as LAN and skip rate

@@ -3287,7 +3287,7 @@ fn seatnext_read<'a>(mut log: impl Iterator<Item = &'a str>) -> Option<String> {
     Some(l[l.find('(')?..].trim_end().to_string())
 }
 
-/// `ClientSpawn` lets go of the gun before its think (turrets doc 8.1): a
+/// `ClientSpawn` lets go of the gun before its think (turrets doc 8): a
 /// gunner the script spawns off the gun reads the spawn's think origin in
 /// the spawning thread, as retail's, and his spawn frame carries the
 /// release's teleport pair. Its angles are the think's view

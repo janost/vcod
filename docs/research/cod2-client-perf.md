@@ -68,7 +68,7 @@ signal.
    mp_toujane 0.17 -> 0.08. CoD1 and CoD4 walk the same code.
 2. Cookie draws, 78 -> 42 on mp_toujane. A caster's consecutive surfaces
    whose indices follow on (the u16-rebased models of
-   `cod4-client-perf.md` 7.2) draw as one range, and receiving world
+   `cod4-client-perf.md` 7, item 2) draw as one range, and receiving world
    batches whose gathered ranges abut draw as one. Same triangles, same
    order; the GPU time did not move on lavapipe.
 

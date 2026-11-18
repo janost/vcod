@@ -49,8 +49,8 @@ impl Cod4Look {
         l
     }
 
-    /// A set by name; a name with no file draws `default`, as
-    /// The raw file read falls back.
+    /// A set by name; a name with no file draws `default`, as retail's raw
+    /// file read falls back (cod4-world.md 11.2).
     fn vision(&self, name: &str) -> Vision {
         let name = name.to_ascii_lowercase();
         self.visions

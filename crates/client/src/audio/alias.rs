@@ -347,7 +347,7 @@ impl AliasTable {
                 other => MasterSlave::Slave(other.parse::<f32>().unwrap_or(0.0)),
             };
 
-            // Clamped so a group's weights sum in u32; NaN falls to 1 via max.
+            // Clamped so up to 4294 rows' weights sum in u32; NaN falls to 1 via max.
             let probability = cell("probability")
                 .parse::<f32>()
                 .map(|p| p.round().max(1.0).min(MAX_PROBABILITY as f32) as u32)

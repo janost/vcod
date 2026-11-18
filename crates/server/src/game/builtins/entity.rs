@@ -1,7 +1,7 @@
 //! Entity builtins the map-load and spawn paths reach: lookup, spawn (both
 //! the map-entity form and `ClientSpawn`), delete, visibility/solidity and
-//! setModel. Per-family dispatch: `NAMES`/`lookup` is matched against
-//! `Cx::resolve_folded`, the same shape every family in `builtins/` uses.
+//! setModel. [`NAMES`] joins every game's set through
+//! `builtins::set::implementations`.
 
 use crate::configstrings::CsRange;
 use crate::game::entity::{FIRST_HUD_ELEM, ThinkFn};
@@ -937,9 +937,8 @@ pub fn is_alive(
 }
 
 /// `isDefined(x)`: false for a missing argument, `undefined` itself, and a
-/// handle whose slot is free. A reused slot reads live again, where retail's
-/// entity generation counter would not; the S&D gate hit the HUD element case
-/// at `sd.gsc:1850`/`2019` (gsc-language doc, section 10).
+/// handle whose slot is free or reused, as on retail: a handle carries its
+/// slot's generation (`ObjectTable`; gsc-language doc, section 9).
 pub fn is_defined(
     host: &mut GameHost,
     _cx: &mut Cx,

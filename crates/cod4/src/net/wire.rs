@@ -251,9 +251,10 @@ pub(crate) fn entity_wire(from: &EntityState, to: &EntityState, force: bool) -> 
 }
 
 /// `SV_WriteSnapshotToClient` from `svc_snapshot` on: the playerstate
-/// deltaed from `base`'s (origin and velocity always sent, D8), every
-/// entity and client against `base`'s or, new to the frame, its baseline
-/// or nothing, and `svc_EOF`'s callers' terminator left to the caller.
+/// deltaed from `base`'s (origin and velocity always sent, where retail
+/// skips them on a matching echo, cod4-netfields.md 3), every entity and
+/// client against `base`'s or, new to the frame, its baseline or nothing.
+/// The caller writes the `svc_EOF` terminator.
 pub fn write_snapshot(
     w: &mut MsgWriter,
     base: Option<&Frame4>,

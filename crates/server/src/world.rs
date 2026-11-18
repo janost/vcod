@@ -1,4 +1,6 @@
-//! The map side of the server: collision for spectator flight and a spawn.
+//! The CoD1 map side of the server: collision, the spawns, the snapshot
+//! cull, and what the bots' navigation graph is built from (hazards, rubble,
+//! objective cover).
 
 use std::collections::{BTreeMap, HashMap};
 use vcod_common::mapworld;

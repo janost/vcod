@@ -236,9 +236,9 @@ pub struct Drawn {
     pub part_bits: [u32; 4],
 }
 
-/// What a helicopter is posed and smoked from (the pose controllers,
-/// The vehicle effects step, cod4-client-view.md 11): its `lerp.u.vehicle` angles
-/// between the two snapshots, in degrees, and its
+/// What a helicopter is posed and smoked from (the pose controllers and
+/// the vehicle effects step, cod4-client-view.md 11): its
+/// `lerp.u.vehicle` angles between the two snapshots, in degrees, and its
 /// `un1.helicopterStage`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct VehicleView {
@@ -1073,7 +1073,6 @@ impl Cod4Session {
         }
     }
 
-    /// The serverinfo's `mapname`.
     /// The systeminfo's `sv_voice` and `sv_voiceQuality` (both are
     /// systeminfo dvars, so the client's copies are the server's;
     /// cod4-voice.md 4); off and 1 before a gamestate.
@@ -1141,6 +1140,7 @@ impl Cod4Session {
         out
     }
 
+    /// The serverinfo's `mapname`.
     pub fn map_name(&self) -> Option<String> {
         info_value(self.gamestate()?.configstring(CS_SERVERINFO), "mapname")
     }
@@ -3235,12 +3235,6 @@ type Walked = (
     HashSet<u32>,
 );
 
-/// One snapshot's events against the state the last one left: the
-/// playerstate ring past `ps_ring` unless the frame predicts it
-/// (`predicted`: the predicted ring fires instead, [`Cod4Session::scene`]),
-/// each entity's ring past its last `eventSequence` (an entity entering
-/// starts its count), and each event entity that was not in the last
-/// snapshot.
 /// The client a source reads, borrowed apart from the session's other
 /// fields.
 fn source_client(source: &Source) -> &Client {
@@ -3251,6 +3245,12 @@ fn source_client(source: &Source) -> &Client {
     }
 }
 
+/// One snapshot's events against the state the last one left: the
+/// playerstate ring past `ps_ring` unless the frame predicts it
+/// (`predicted`: the predicted ring fires instead, [`Cod4Session::scene`]),
+/// each entity's ring past its last `eventSequence` (an entity entering
+/// starts its count), and each event entity that was not in the last
+/// snapshot.
 fn walk_snapshot(
     c: &Client,
     s: &Snapshot,
@@ -3415,9 +3415,6 @@ fn is_map_restart(text: &[u8]) -> bool {
     matches!(text.split(|&b| b == b' ').next(), Some(b"n" | b"B"))
 }
 
-/// This frame's cmd on the newest snapshot's time plus its age (0 before
-/// one), `view` over the playerstate's `delta_angles`, the keys, the
-/// selected weapon and offhand (`play::cod4_input`).
 /// `CL_CGameNeedsServerCommand`'s `w` (`iw3mp.exe` 0x45b1d9): the server
 /// dropped us, `w "<reason>"` (`CL_DisconnectError`), or with no reason
 /// `EXE_SERVER_DISCONNECTED`; a `PB` third argument is PunkBuster's kick,
@@ -3611,6 +3608,9 @@ pub(crate) fn clock_now() -> Instant {
     crate::frame_clock::now()
 }
 
+/// This frame's cmd on the newest snapshot's time plus its age (0 before
+/// one), `view` over the playerstate's `delta_angles`, the keys, the
+/// selected weapon and offhand (`play::cod4_input`).
 fn own_cmd(
     c: &Client,
     snap_age: Duration,
@@ -3706,9 +3706,6 @@ pub fn localize_message(msg: &str, get: impl Fn(&str) -> Option<String>) -> Opti
     Some(out)
 }
 
-/// A refusal's argument fills its `&&1` (`EXE_SERVER_IS_DIFFERENT_VER`
-/// with its 0x15 version, cod4-handshake.md), and a plain key reads as
-/// its string.
 /// `demo`'s missing file (`timedemo 1` looks for `demos/1.dm_1`) reads
 /// in the install's words with the path in, not as its key
 /// (cod4-demos.md 1).
@@ -3722,6 +3719,9 @@ fn a_missing_demo_reads_localized() {
     assert!(t.contains("demos/1.dm_1") && !t.contains("EXE_"), "{t}");
 }
 
+/// A refusal's argument fills its `&&1` (`EXE_SERVER_IS_DIFFERENT_VER`
+/// with its 0x15 version, cod4-handshake.md), and a plain key reads as
+/// its string.
 #[cfg(test)]
 #[test]
 fn a_refusal_fills_its_arguments_in() {

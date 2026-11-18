@@ -21,7 +21,7 @@ pub struct XAnim {
     pub tracks: Vec<Track>,
     /// Header flag 0x2's nameless root-motion track, yaw-only rotations.
     pub root: Option<Track>,
-    /// Notetracks, no runtime consumer yet.
+    /// Notetracks, `(name, frame)`; the view weapon's sounds read them.
     pub notes: Vec<(String, u16)>,
 }
 

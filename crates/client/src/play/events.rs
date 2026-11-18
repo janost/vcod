@@ -64,7 +64,7 @@ impl PredictedEvents {
             self.played_to = Some(pred_seq);
             return Vec::new();
         };
-        // A respawn restarts the ring at 0 (AGENTS.md, Gotchas).
+        // A respawn restarts the ring at 0 (docs/dev/traps.md, "Wire and netcode").
         if ahead(pred_seq, mark) < -EVENT_RING {
             self.stop();
             self.played_to = Some(pred_seq);
@@ -475,8 +475,8 @@ mod tests {
         assert!(!e.filter_snapshot(84, FIRE), "played by the prediction");
     }
 
-    /// A respawn restarts the ring at 0 (AGENTS.md, Gotchas): the prediction
-    /// resets the mark, or the new life's events are all swallowed.
+    /// A respawn restarts the ring at 0 (docs/dev/traps.md, "Wire and
+    /// netcode"): the prediction resets the mark, or the new life's events are all swallowed.
     #[test]
     fn sequence_going_back_resets() {
         let mut e = tracking(0);

@@ -3486,7 +3486,8 @@ impl CollisionWorld {
         if self.nodes.is_empty() {
             return;
         }
-        // the root is nodes[0]: build() makes one top-level build_bvh call
+        // the root is nodes[0]: the one tree's root, or with static models
+        // the synthetic node over the world's and the models' subtrees
         let mut stack = vec![0u32];
         while let Some(i) = stack.pop() {
             let node = &self.nodes[i as usize];

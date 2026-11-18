@@ -137,7 +137,8 @@ pub fn is_text_field(kind: i32) -> bool {
             | ITEM_TYPE_UPREDITFIELD
     )
 }
-/// The owner draw of the controls pages' "press a key" line.
+/// The owner draw of the controls pages' "press a key" line; the value is
+/// CoD1's `ui/menudef.h` one, unverified on 1.7.
 pub const UI_KEYBINDSTATUS: i32 = 250;
 
 /// `WINDOW_VISIBLE` in `dynamicFlags`.
@@ -211,7 +212,8 @@ pub enum Cmd {
 }
 
 /// How `execOnDvar*Value` compares (`Script_ExecIfStringsEqual`,
-/// `IntsEqual`, `FloatsEqual`).
+/// `IntsEqual`, `FloatsEqual`; names, rules and the 1e-5 tolerance
+/// unverified on 1.7, no address recorded).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DvarCompare {
     /// Equal ignoring case.

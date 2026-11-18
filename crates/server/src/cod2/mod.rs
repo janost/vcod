@@ -25,9 +25,10 @@
 //!
 //! Voice chat's relay is `voice.rs` (docs/research/cod2-voice.md).
 //!
-//! Not here: PunkBuster, the authorize server, the status the
-//! master gets every 10 minutes. The heartbeat goes to cod.pm's CoD2
-//! list, only at `dedicated 2`.
+//! Not here: PunkBuster, the authorize server. The heartbeat and the
+//! 10-minute status go to cod.pm's CoD2 list, only at `dedicated 2`
+//! (cod2-protocol.md 17.6).
+//!
 //! Shots, damage, deaths and missiles are the level's
 //! (`game::cod2_combat`); this side sends their corpses, temp entities
 //! and missiles.
@@ -180,10 +181,6 @@ pub struct Cod2Game {
 /// The CoD2 server: the engine over [`Cod2Game`].
 pub type Cod2Server = crate::engine::Engine<Cod2Game>;
 
-/// CoD2's `SV_Frame` (cod2_lnxded 0x80969b0, cod2-protocol.md 14.1): the
-/// serverinfo and systeminfo dvars' changes as configstrings 0 and 1 and the
-/// mirror's block (a `fast_restart`'s `d 1` after its `B`, before the
-/// connect callbacks' commands, cod2-map-cycle.md 2), the bots (0x8096952),
 /// The roster and the world every CoD2 snapshot of a turn is built from,
 /// once the first client needs them.
 type Cod2Snapshots = Option<(
@@ -192,6 +189,10 @@ type Cod2Snapshots = Option<(
     Vec<crate::game::cod2_wire::Culled>,
 )>;
 
+/// CoD2's `SV_Frame` (cod2_lnxded 0x80969b0, cod2-protocol.md 14.1): the
+/// serverinfo and systeminfo dvars' changes as configstrings 0 and 1 and the
+/// mirror's block (a `fast_restart`'s `d 1` after its `B`, before the
+/// connect callbacks' commands, cod2-map-cycle.md 2), the bots (0x8096952),
 /// `SV_CalcPings` (0x80963c8), the frames owed, each `G_RunFrame`
 /// (0x810a13a) through its `ClientEndFrame`s to `CheckVote`, the archive
 /// between frames (0x809b016); then `SV_CheckTimeouts` (0x809657e, which
@@ -609,8 +610,6 @@ impl Cod2Server {
         }
     }
 
-    /// Configstrings 0 and 1: `Dvar_InfoString(0x404)` and
-    /// `Dvar_InfoString_Big(8)` (cod2-protocol.md 6, 9, 11.3).
     /// The level's `G_LogPrintf` lines since the last call into the file.
     fn drain_game_log(&mut self) {
         if let Some(level) = self.game.level.as_mut() {
@@ -631,6 +630,8 @@ impl Cod2Server {
         }
     }
 
+    /// Configstrings 0 and 1: `Dvar_InfoString(0x404)` and
+    /// `Dvar_InfoString_Big(8)` (cod2-protocol.md 6, 9, 11.3).
     fn write_engine_configstrings(&mut self) {
         self.core.configstrings[0] = self.serverinfo();
         self.core.configstrings[1] = self.systeminfo();
@@ -1125,7 +1126,8 @@ impl Cod2Server {
     }
 
     /// `SV_UserMove`: the keyed cmds, the pure verdict, entering the world,
-    /// then each cmd through the spectator's pmove.
+    /// then each cmd through the level's `ClientThink`
+    /// (`Cod2Level::client_think`).
     fn user_move(&mut self, slot: usize, r: &mut MsgReader, message_ack: i32, delta: bool) {
         crate::tick_trace::step!("SV_UserMove slot {slot}");
         let pure = self.pure();
