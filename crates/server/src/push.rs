@@ -11,13 +11,13 @@ use glam::Vec3;
 use vcod_common::collision::{CollisionWorld, MASK_PLAYERSOLID, Pusher};
 use vcod_common::movetrace::{Body, CONTENTS_BODY, MoveWorld};
 use vcod_common::patch::Arith;
+// `ANGLE2SHORT`'s factor is rodata 0x75bf4.
+use vcod_common::pmove::cmd::ANGLE2SHORT;
 use vcod_gsc::Cx;
 
 /// `G_TryPushingEntity`'s jitter step, and its reach is half the body's
 /// width (`maxs.x * 0.5`, rodata 0x75bf8 and 0x75c08).
 const JITTER_INC: f32 = 4.0;
-/// `ANGLE2SHORT`'s factor (rodata 0x75bf4).
-use vcod_common::pmove::cmd::ANGLE2SHORT;
 
 /// One push to undo if a later entity blocks the mover: `G_MoverTeam` puts
 /// every record back and relinks it (0x55744..0x557ef). A team keeps one
