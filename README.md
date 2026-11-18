@@ -73,8 +73,8 @@ copied on purpose.
 2. **Get vcod.** Grab the archive for your OS from the
    [nightly release](https://github.com/janost/vcod/releases/tag/nightly)
    (or [build it](#building-from-source)) and put `vcod` and `vcod-server`
-   in the game's directory. The Linux build needs glibc 2.39 or newer
-   (Ubuntu 24.04, Fedora 40). Each binary tells the games apart by the
+   in the game's directory. The Linux build needs glibc 2.35 or newer
+   (Ubuntu 22.04, Fedora 36). Each binary tells the games apart by the
    install. Elsewhere, point `COD_DIR` or `--game-dir` at it.
 3. **Play against bots**:
 
