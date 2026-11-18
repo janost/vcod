@@ -9,7 +9,6 @@ use std::sync::Arc;
 use glam::Vec3;
 use vcod_cod4::collision::ClipMap;
 use vcod_cod4::pmove::{self, PmWorld, Tr};
-use vcod_common::turretpose::angles_quat;
 
 /// A client's body as `SV_LinkEntity` links it: feet origin and the box
 /// its last move left (`r.mins`, `r.maxs`); or a mantle's blockage, a box
@@ -25,14 +24,8 @@ pub struct Body4 {
     pub owner: Option<u32>,
 }
 
-/// A brush entity linked with inline model `model`, where it stands.
-#[derive(Clone, Copy, Debug)]
-pub struct Brush4 {
-    pub entity: u32,
-    pub model: usize,
-    pub origin: Vec3,
-    pub angles: Vec3,
-}
+/// A brush entity linked with an inline model, where it stands.
+pub type Brush4 = pmove::Brush;
 
 /// One trace's world: the clip map, then each body (a temp box model of
 /// `CONTENTS_BODY`) and brush entity but `pass` that cuts it shorter.
@@ -48,67 +41,44 @@ impl PmWorld for Cod4Clip<'_> {
         if t.fraction == 0.0 {
             return t;
         }
-        {
-            let clips =
-                |b: &&Body4| b.entity != pass && b.owner != Some(pass) && mask & b.contents != 0;
-            for b in self.bodies.iter().filter(clips) {
+        let clips =
+            |b: &&Body4| b.entity != pass && b.owner != Some(pass) && mask & b.contents != 0;
+        for b in self.bodies.iter().filter(clips) {
+            // A client is a capsule; the mantle blocks stay boxes.
+            if b.entity < pmove::MAX_CLIENTS as u32 {
+                let body = vcod_common::movetrace::Body {
+                    entity: b.entity,
+                    origin: b.origin,
+                    mins: b.mins,
+                    maxs: b.maxs,
+                    contents: b.contents,
+                };
+                t.fold_capsule(start, end, mins, maxs, &body);
+            } else {
                 let mut c = vcod_common::collision::Trace::clear(end);
                 c.fraction = t.fraction;
-                // A client is `CM_TempBoxModel`'s capsule (`CM_Trace`'s
-                // 0xfff arm, `cod4_lnxded` 0x811d29c): a body met at an
-                // angle stops on its round side (cod4-pmove.md 15). The
-                // mantle blocks stay boxes.
-                if b.entity < pmove::MAX_CLIENTS as u32 {
-                    let body = vcod_common::movetrace::Body {
-                        entity: b.entity,
-                        origin: b.origin,
-                        mins: b.mins,
-                        maxs: b.maxs,
-                        contents: b.contents,
-                    };
-                    vcod_common::movetrace::clip_body_kept(&mut c, start, end, mins, maxs, &body);
-                } else {
-                    vcod_common::collision::clip_entity_box(
-                        &mut c,
-                        start,
-                        end,
-                        mins,
-                        maxs,
-                        b.origin + b.mins,
-                        b.origin + b.maxs,
-                        b.contents,
-                        b.entity,
-                    );
-                }
-                t.fold(Tr {
-                    fraction: c.fraction,
-                    normal: c.normal,
-                    surface_flags: 0,
-                    contents: b.contents,
-                    entity_num: b.entity,
-                    startsolid: c.startsolid,
-                    allsolid: c.allsolid,
-                    walkable: c.normal.z >= vcod_cod4::collision::WALKABLE_NORMAL_Z,
-                });
-                if t.fraction == 0.0 {
-                    return t;
-                }
+                vcod_common::collision::clip_entity_box(
+                    &mut c,
+                    start,
+                    end,
+                    mins,
+                    maxs,
+                    b.origin + b.mins,
+                    b.origin + b.maxs,
+                    b.contents,
+                    b.entity,
+                );
+                t.fold_body(&c, b.contents, b.entity);
+            }
+            if t.fraction == 0.0 {
+                return t;
             }
         }
         for b in self.brushes.iter().filter(|b| b.entity != pass) {
             if b.model == 0 || b.model >= self.clip.submodels.len() {
                 continue;
             }
-            // `CM_TransformedBoxTrace`: in the model's frame.
-            let q = angles_quat(b.angles.to_array());
-            let local = |p: Vec3| q.inverse() * (p - b.origin);
-            let c = self
-                .clip
-                .trace_model(b.model, local(start), local(end), mins, maxs, mask);
-            let mut w = pmove::world_tr(&c);
-            w.normal = q * c.normal;
-            w.entity_num = b.entity;
-            t.fold(w);
+            t.fold_brush(self.clip, b, start, end, mins, maxs, mask);
             if t.fraction == 0.0 {
                 break;
             }
