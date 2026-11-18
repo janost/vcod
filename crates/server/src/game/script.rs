@@ -1,7 +1,7 @@
 //! The server's script runtime: owns the VM, resolves scripts out of the
 //! paks, and steps threads once per server frame.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use vcod_common::asset_source::{AssetSource, RawFile};
 
@@ -372,7 +372,17 @@ pub struct ScriptRuntime {
     /// `developer` at the load, as `Scr_Init` took it: whether
     /// `scriptUsage` prints source lines or offsets.
     developer: bool,
+    /// Per slot, the bytes of new script strings its `mr` answers and vote
+    /// arguments added this level, and whether its refusal was logged
+    /// ([`Self::charge_client_strings`]).
+    client_strings: HashMap<usize, (usize, bool)>,
 }
+
+/// vcod's: the bytes of new script strings one client's `mr` answers and
+/// vote arguments may add to the interner in a level, which frees none.
+/// Stock menus answer with names the scripts already hold, which cost
+/// nothing.
+pub const CLIENT_STRING_BUDGET: usize = 64 * 1024;
 
 impl ScriptRuntime {
     /// Loads the gametype and map script closures, spawns the map's entities
@@ -834,6 +844,7 @@ impl ScriptRuntime {
             scripts: Some(scripts),
             script_lag_ms: 0,
             developer,
+            client_strings: HashMap::new(),
         };
         // `G_InitGame` hands `Scr_InitSystem` the level's own `level.time`
         // (docs/research/cod11-gsc-language.md, "The script clock").
@@ -2476,6 +2487,9 @@ impl ScriptRuntime {
             .to_string(),
             MenuRef::Name(name) => name.clone(),
         };
+        if !self.charge_client_strings(slot, &[&menu, response]) {
+            return;
+        }
         let (event, menu, response) = self.vm.with_cx(|cx| {
             (
                 cx.intern_folded(MENURESPONSE_NOTIFY),
@@ -2485,6 +2499,33 @@ impl ScriptRuntime {
         });
         self.vm
             .notify(id, event, &[Value::String(menu), Value::String(response)]);
+    }
+
+    /// Whether `slot` may add `texts` to the interner: what is not interned
+    /// yet counts against [`CLIENT_STRING_BUDGET`]. A refusal is logged once
+    /// a slot a level.
+    fn charge_client_strings(&mut self, slot: usize, texts: &[&str]) -> bool {
+        let interner = self.vm.interner();
+        let new: usize = texts
+            .iter()
+            .filter(|t| interner.get_exact(t).is_none())
+            .map(|t| t.len().max(1))
+            .sum();
+        if new == 0 {
+            return true;
+        }
+        let (used, warned) = self.client_strings.entry(slot).or_default();
+        if *used + new > CLIENT_STRING_BUDGET {
+            if !*warned {
+                *warned = true;
+                log::warn!(
+                    "client {slot}: past {CLIENT_STRING_BUDGET} bytes of new script strings this level; its menu answers and votes with new text are dropped"
+                );
+            }
+            return false;
+        }
+        *used += new;
+        true
     }
 
     /// An engine notify on client `slot`'s entity with string arguments,
@@ -2632,7 +2673,9 @@ impl ScriptRuntime {
         {
             return Some(vec![(Some(slot), "e \"GAME_INVALIDVOTESTRING\"".into())]);
         }
-        self.notify_client(slot, "call_vote", &[a, b, c]);
+        if self.charge_client_strings(slot, &[a, b, c]) {
+            self.notify_client(slot, "call_vote", &[a, b, c]);
+        }
         Some(Vec::new())
     }
 
@@ -4810,6 +4853,7 @@ impl ScriptRuntime {
             scripts: None,
             script_lag_ms: 0,
             developer: false,
+            client_strings: HashMap::new(),
         };
         let main = rt.vm.func_ref(&rt.entry, "main");
         rt.vm.start_thread(&mut rt.host, main, None, vec![]);
@@ -5648,6 +5692,36 @@ mod tests {
             "weapon_russian:mosin_nagant_mp"
         );
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+    }
+
+    /// A client spraying distinct `mr` answers fills its own budget and no
+    /// more: the interner stays bounded, and an answer the scripts already
+    /// hold still goes through.
+    #[test]
+    fn distinct_menu_responses_stop_at_the_client_s_string_budget() {
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() { level.callbackPlayerConnect = ::c; }\n\
+             CodeCallback_PlayerConnect() { [[level.callbackPlayerConnect]](); }\n\
+             c() { for (;;) { self waittill(\"menuresponse\", menu, response); \
+                   if (response == \"autoassign\") self.probe_out = menu; } }\n",
+        );
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 0,
+            name: "vcod".into(),
+        });
+        rt.run_frame(50);
+        let ent = rt.client_entity(0).expect("connect allocated no entity");
+        let before = rt.vm.string_lengths().len();
+        for i in 0..100_000 {
+            rt.menu_response(0, &MenuRef::Name("team".into()), &format!("{i:0>1000}"));
+        }
+        let added = rt.vm.string_lengths().len() - before;
+        assert!(added <= CLIENT_STRING_BUDGET / 1000 + 1, "{added} strings");
+        rt.run_frame(75);
+        rt.menu_response(0, &MenuRef::Name("team".into()), "autoassign");
+        rt.run_frame(100);
+        assert_eq!(rt.field_str(ent, "probe_out"), "team");
     }
 
     /// Disconnect runs its callback on the entity and only then frees the

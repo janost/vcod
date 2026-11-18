@@ -19,7 +19,11 @@ impl Cod2Server {
     /// an active one to `SV_UserVoice`, each of which returns at once with
     /// `sv_voice` off. The qport is read as a signed short and compared
     /// unmasked, so a client on a qport of 0x8000 or more matches no slot
-    /// (cod2-voice.md 3, VERIFIED live).
+    /// (cod2-voice.md 3, VERIFIED live). vcod neither takes the port nor
+    /// refreshes `lastPacketTime` for a packet off another port: the
+    /// netchan's next message moves the port once its checks pass, so a
+    /// sender on the IP that walks the qport cannot steer the snapshots or
+    /// keep a slot alive.
     pub(super) fn voice_packet(&mut self, from: SocketAddr, body: &[u8]) {
         let Some(qport) = body.get(..2).map(|q| i16::from_le_bytes([q[0], q[1]])) else {
             return;
@@ -35,11 +39,9 @@ impl Cod2Server {
         };
         let svs = self.core.sv_time_ms;
         let c = self.core.clients[slot].as_mut().unwrap();
-        if c.link.addr.port() != from.port() {
-            log::info!("SV_ReadPackets: fixing up a translated port");
-            c.link.addr = from;
+        if c.link.addr == from {
+            c.link.last_packet_ms = svs;
         }
-        c.link.last_packet_ms = svs;
         let active = c.state == State::Active;
         if self.int("sv_voice") == 0 {
             return;

@@ -58,6 +58,25 @@ pub fn clean_str(s: &str) -> String {
     out
 }
 
+/// Text bound for a terminal or a log file with every control character
+/// but newline and tab (C0, DEL, C1) shown as `\xNN`, so a peer's string
+/// cannot move the cursor, clear the screen or start a forged line with CR.
+pub fn escape_controls(s: &str) -> std::borrow::Cow<'_, str> {
+    let bad = |c: char| c.is_control() && c != '\n' && c != '\t';
+    if !s.chars().any(bad) {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        if bad(c) {
+            out.push_str(&format!("\\x{:02x}", c as u32));
+        } else {
+            out.push(c);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 /// The text after leading blanks and one sign, and whether that sign was `-`.
 fn sign(s: &str) -> (bool, &str) {
     let s = s.trim_start();
@@ -71,6 +90,18 @@ fn sign(s: &str) -> (bool, &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escape_controls_shows_c0_del_and_c1_and_keeps_newline_and_tab() {
+        assert_eq!(
+            escape_controls("a\x1b[2J\rb\x7f\u{9b}c\n\td"),
+            "a\\x1b[2J\\x0db\\x7f\\x9bc\n\td"
+        );
+        assert!(matches!(
+            escape_controls("plain é"),
+            std::borrow::Cow::Borrowed("plain é")
+        ));
+    }
 
     #[test]
     fn atoi_reads_the_c_prefix() {

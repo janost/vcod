@@ -33,7 +33,9 @@ impl Cod4Server {
     /// `SV_VoicePacket` (0x817771f): the slot by address and qport, a
     /// zombie's ignored, `lastPacketTime` refreshed; before the world
     /// `SV_PreGameUserVoice`, in it `SV_UserVoice`, both only with
-    /// `sv_voice` on.
+    /// `sv_voice` on. vcod refreshes `lastPacketTime` only for the slot's
+    /// own port: a sender on the IP that walks the qport cannot keep a
+    /// slot alive (cod4-voice.md 1).
     pub(super) fn voice_packet(&mut self, from: SocketAddr, body: &[u8]) {
         let Some(qport) = body.get(..2).map(|q| u16::from_le_bytes([q[0], q[1]])) else {
             return;
@@ -46,7 +48,9 @@ impl Cod4Server {
         if c.state == State::Zombie {
             return;
         }
-        c.link.last_packet_ms = svs;
+        if c.link.addr == from {
+            c.link.last_packet_ms = svs;
+        }
         let active = c.state == State::Active;
         if self.int("sv_voice") == 0 {
             return;

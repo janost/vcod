@@ -116,6 +116,12 @@ fn is_talking(
     Ok(Value::Int(i32::from(on)))
 }
 
+/// vcod's cap on a level's CoD2 weapons. The held mask is two words
+/// (`weapons[0..1]`, bit 0 the empty hand) and the ammo and clip arrays 64
+/// slots (cod2-protocol.md 5.3, 14.1); each weapon adds at most one slot, so
+/// 63 weapons keep every index in range. `bg_itemlist` holds 128 rows.
+pub const COD2_MAX_WEAPONS: usize = 63;
+
 /// CoD2's weapon index for `name`, registering it on first use: CoD2 has no
 /// fixed weapon list, `BG_FindWeaponIndexForName` misses and 0x80ebc24
 /// loads `weapons/mp/<name>` and appends it (0x80eb8bc), so the index is
@@ -138,6 +144,10 @@ pub fn register_weapon(host: &mut GameHost, name: &str) -> Option<usize> {
         return Some(i + 1);
     }
     if !host.initializing {
+        return None;
+    }
+    if host.cod2().weapons.len() >= COD2_MAX_WEAPONS {
+        log::warn!("{name}: more than {COD2_MAX_WEAPONS} weapons registered, not registered");
         return None;
     }
     let fs = host.fs.clone()?;
@@ -1293,6 +1303,36 @@ fn drop_item(
 mod tests {
     use super::*;
     use crate::game::testing::fixture;
+
+    /// Past 63 weapons a level's registration is refused before any file
+    /// is read, and 63 weapons with distinct ammo and clip names keep every
+    /// slot inside the 64-slot arrays.
+    #[test]
+    fn a_cod2_level_registers_at_most_63_weapons() {
+        let mut host = GameHost::new(&crate::game::profile::COD2, vec![String::new(); 2048]);
+        host.initializing = true;
+        host.cod2_mut().weapons = (1..=COD2_MAX_WEAPONS).map(|i| format!("w{i}")).collect();
+        assert_eq!(register_weapon(&mut host, "w5"), Some(5));
+        assert_eq!(register_weapon(&mut host, "one_too_many_mp"), None);
+        assert_eq!(host.cod2().weapons.len(), COD2_MAX_WEAPONS);
+        let defs = (1..=COD2_MAX_WEAPONS)
+            .map(|i| {
+                Some(vcod_common::weapon::WeaponDef {
+                    ammo_name: format!("a{i}"),
+                    clip_name: format!("c{i}"),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        let t = crate::weapons::WeaponTable::cod2(&host.cod2().weapons, defs);
+        let n = vcod_common::pmove::weapon::NUM_AMMO;
+        assert!(
+            t.defs()
+                .iter()
+                .flatten()
+                .all(|d| d.ammo_index < n && d.clip_index < n)
+        );
+    }
 
     #[test]
     fn int_truncates_parses_and_refuses() {

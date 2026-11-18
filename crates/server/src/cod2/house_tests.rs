@@ -384,6 +384,32 @@ fn a_zombie_is_sent_its_reason_until_sv_zombietime() {
     }
 }
 
+/// A `v` packet from another port of a client's address under its qport
+/// moves neither the client's port, where its snapshots go, nor its
+/// keep-alive; the netchan's next message is what moves a port.
+#[test]
+fn a_voice_packet_off_another_port_moves_no_slot() {
+    let mut h = Harness::new(4, &[("sv_voice", "1")]);
+    // A qport under 0x8000: a higher one matches no slot (cod2-voice.md 3).
+    h.port = 20000;
+    let mut p = h.join(LAN, "\\name\\talk\\rate\\25000\\snaps\\20");
+    h.pump(&mut p, 10, false);
+    let c = h.sv.core.clients[0].as_mut().unwrap();
+    c.link.last_packet_ms = -5;
+    let qport = c.link.netchan.qport;
+    let forger = SocketAddr::from((LAN, 40999));
+    let voice = vcod_common::net::voice::client_packet(qport, &[vec![1, 2, 3]]);
+    h.sv.handle_packet(forger, &voice, h.now);
+    let c = h.sv.core.clients[0].as_ref().unwrap();
+    assert_eq!((c.link.addr, c.link.last_packet_ms), (p.from, -5));
+    h.sv.handle_packet(p.from, &voice, h.now);
+    let svs = h.sv.core.sv_time_ms;
+    assert_eq!(
+        h.sv.core.clients[0].as_ref().unwrap().link.last_packet_ms,
+        svs
+    );
+}
+
 /// A silent client is dropped on the sixth frame past `sv_timeout` and
 /// freed at once: no zombie messages, the last message 3250 ms after its
 /// last packet under `sv_timeout 3` (17.3).

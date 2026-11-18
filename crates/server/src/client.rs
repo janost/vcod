@@ -227,6 +227,15 @@ impl Client {
         }
     }
 
+    /// Whether the last message sent is the gamestate: a `donedl` that asks
+    /// for another before anything went out between is a flood, each one a
+    /// whole gamestate built and queued (vcod's limit, as CoD2's and
+    /// CoD4's `engine::conn::gamestate_last`; retail sends one a `donedl`).
+    pub fn gamestate_last(&self) -> bool {
+        self.gamestate_message_num >= 0
+            && self.gamestate_message_num == i64::from(self.link.netchan.outgoing_sequence) - 1
+    }
+
     /// `SV_SpawnServer`'s client pass (docs/research/cod11-map-cycle.md,
     /// section 3 step 22): back to `CS_CONNECTED` with the level state gone
     /// and the netchan and both reliable rings kept. `gamestate_message_num`

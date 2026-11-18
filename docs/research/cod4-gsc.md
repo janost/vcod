@@ -139,7 +139,10 @@ scripts call.
   831. VERIFIED (capture). Model order follows `G_RegisterWeapon`.
   INFERRED. 2314: four bits per lowercase hex digit, weapon 0 and each
   registered weapon set; 113 weapons read
-  `ffffffffffffffffffffffffffff3000`. VERIFIED (capture).
+  `ffffffffffffffffffffffffffff3000`. VERIFIED (capture). 2314's 128
+  bits end at weapon 127; vcod refuses a 128th registration with its own
+  script error, as the held bits and the 128-slot ammo arrays hold no
+  more. Retail's limit is not recorded.
 - INFERRED: `hidePart` keeps `partBits` (`Cod4HostState::part_bits`) and a
   hidden bone's collision stops clipping rounds
   (`entity_damage::ModelPart`); `setCanDamage` is UO's `setTakeDamage`;

@@ -16,6 +16,36 @@ pub enum SayMode {
     Squad,
 }
 
+/// Chat text as `games_mp.log` and the server log take it: each control
+/// character a space, so a quoted LF cannot start a forged record. vcod's
+/// own; retail writes the bytes (cod11-chat.md 1). The chat line keeps them.
+pub fn log_text(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.chars().any(char::is_control) {
+        text.chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect::<String>()
+            .into()
+    } else {
+        text.into()
+    }
+}
+
+/// `Cmd_Tell_f`'s log line (`crate::server::Server`'s `log_tell`): 1.1's
+/// `tell: %s to %s: %s`, else `tell;%d;%d;%s;%d;%d;%s;%s` with GUID 0.
+pub fn tell_line(
+    logs_1_1: bool,
+    (slot, from): (usize, &str),
+    (to, to_name): (usize, &str),
+    text: &str,
+) -> String {
+    let text = log_text(text);
+    if logs_1_1 {
+        format!("tell: {from} to {to_name}: {text}\n")
+    } else {
+        format!("tell;0;{slot};{from};0;{to};{to_name};{text}\n")
+    }
+}
+
 /// `Q_strncpyz(text, 0x96)`: the message keeps 149 bytes.
 const MAX_SAY_TEXT: usize = 149;
 
@@ -51,19 +81,23 @@ impl GameHost {
             SayMode::Squad => "saysquad",
             SayMode::Tell => "",
         };
+        let logged = log_text(text);
         if mode == SayMode::Tell {
         } else if self.profile.game == vcod_common::game::Game::Cod4 {
             let (who, guid) = crate::game::cod4::log_client(self, speaker);
-            crate::game::cod4::log_printf(self, format!("{word};{guid};{speaker};{who};{text}\n"));
+            crate::game::cod4::log_printf(
+                self,
+                format!("{word};{guid};{speaker};{who};{logged}\n"),
+            );
         } else if self.logs_1_1() {
             // 1.1's `G_Say` (0x46c14): `say: %s: %s` or `sayteam: %s: %s`
             // with the cleaned name (cod11-chat.md).
-            self.log_printf(format!("{word}: {name}: {text}\n"));
+            self.log_printf(format!("{word}: {name}: {logged}\n"));
         } else {
             // 1.5's, UO's and CoD2 1.3's `%s;%d;%d;%s;%s` (cod2_lnxded
             // 0x110f1e): the GUID, 0 with no authorize, the slot, the
             // cleaned name, the text (cod11-map-cycle.md 9).
-            self.log_printf(format!("{word};0;{speaker};{name};{text}\n"));
+            self.log_printf(format!("{word};0;{speaker};{name};{logged}\n"));
         }
         let speaker_playing = self.playing(cx, speaker);
         // CoD4 colours the name by the recipient's side instead: `^8` on the
@@ -119,7 +153,7 @@ impl GameHost {
             SayMode::Tell => (format!("{status}[{name}]^7: "), '3'),
         };
         let body = truncate(text, MAX_SAY_TEXT);
-        log::info!("say: {name}: {body}");
+        log::info!("say: {name}: {}", log_text(body));
         let letter = if mode == SayMode::Team { 'i' } else { 'h' };
         let cmd = format!("{letter} \"\u{15}{head}^{colour}{body}\"");
         // 1.5's `g_deadChat` lets the dead and the spectators reach everyone.
@@ -387,6 +421,31 @@ mod tests {
             std::mem::take(&mut host.game_log),
             [(19_000, "sayteam;0;1;p1;go\n".to_string())]
         );
+    }
+
+    /// A quoted say keeps its control bytes in the chat line but writes one
+    /// log record: LF, CR and ESC are spaces there.
+    #[test]
+    fn a_quoted_say_with_lf_cr_and_esc_logs_one_line() {
+        let mut vm = vcod_gsc::Vm::new();
+        let mut host = host(&mut vm, &["allies", "axis"]);
+        host.level_time_ms = 19_000;
+        let text = concat_args("\"hi\n 5:00 say;0;3;Admin;!kick 7\r\x1b[2J\"").unwrap();
+        assert!(text.contains('\n'));
+        say(&mut vm, &mut host, 0, SayMode::All, &text);
+        assert_eq!(
+            std::mem::take(&mut host.game_log),
+            [(
+                19_000,
+                "say: p0: hi  5:00 say;0;3;Admin;!kick 7  [2J\n".to_string()
+            )]
+        );
+        assert!(host.client_commands.iter().all(|(_, c)| c.contains('\n')));
+        for logs_1_1 in [true, false] {
+            let line = tell_line(logs_1_1, (0, "p0"), (1, "p1"), &text);
+            assert_eq!(line.matches('\n').count(), 1, "{line:?}");
+            assert!(line.ends_with("!kick 7  [2J\n") && !line.contains(['\r', '\x1b']));
+        }
     }
 
     /// 1.5b's line for a playing axis speaker, from the live capture

@@ -604,13 +604,17 @@ impl<G: ConnGame> Engine<G> {
         text
     }
 
-    /// `SVC_RemoteCommand`: `rcon_password`, 1.1's 500 ms window, 1.7's
+    /// `SVC_RemoteCommand`: `rcon_password`, 1.1's 500 ms window, the
+    /// `Rcon from` or `Bad rcon from` log line with the third token, 1.7's
     /// refusals, the output back as `print` packets (cod2-protocol.md 1.6,
     /// cod4-handshake.md 14.2).
     pub(crate) fn remote_command(&mut self, from: SocketAddr, args: &[String], now: Instant) {
         let password = G::cvar(self, "rcon_password").to_string();
         let mut out = Redirect::default();
-        let verdict = self.core.rcon.check(&password, args, now);
+        let verdict = self.core.rcon.check(&password, args, from.ip(), now);
+        if let Some(line) = crate::rcon::log_line(&verdict, from, args) {
+            log::info!("{line}");
+        }
         match verdict {
             Verdict::Limited => return,
             Verdict::NoPassword | Verdict::BadPassword => {

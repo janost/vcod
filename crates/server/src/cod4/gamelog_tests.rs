@@ -192,7 +192,7 @@ fn cod4_console_dumpuser_kick_and_dvar_commands() {
         console(&mut sv, "kick shooter"),
         format!("1:shooter EXE_PLAYERKICKED\nshooter (guid \"{guid}\") was kicked for cheating\n")
     );
-    assert!(sv.temp_banned(&guid));
+    assert!(sv.temp_banned(&guid, None));
     assert_eq!(
         console(&mut sv, "onlykick target"),
         "0:target EXE_PLAYERKICKED\n"

@@ -989,6 +989,28 @@ mod tests {
         assert_eq!(vm.abort_count() as usize, n);
     }
 
+    /// A cast error whose text names a new script string each time is one
+    /// error to the log: the dedup keys on its place and kind.
+    #[test]
+    fn a_loop_of_distinct_cast_errors_logs_as_one() {
+        let mut vm = vm_with(
+            r#"main() {
+                for (i = 0; i < 5000; i++) { x = (int)("a" + i); }
+                mark("end");
+            }"#,
+        );
+        vm.set_recover_errors(true);
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, f, None, vec![]);
+        assert!(host.calls.iter().any(|(n, _)| n == "mark"));
+        assert_eq!(vm.abort_count(), 5000);
+        assert_eq!(vm.error_log.len(), 1);
+        let (first, _, again) = vm.error_log.values().next().unwrap();
+        assert!(first.contains("a0") && !first.contains("a1"), "{first}");
+        assert_eq!(*again, 4999);
+    }
+
     /// CoD4's frame-counted `wait` against CoD1's milliseconds, taken at
     /// 0 with 50 ms frames: the frame each resumes on, a thread due on a
     /// frame's `level.time` running the frame after. Retail 1.7 woke 0.624

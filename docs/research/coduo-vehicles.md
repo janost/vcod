@@ -585,6 +585,14 @@ are the engine's, non-PIC). Gentity offsets are UO's, 4 above 1.1's (UO's
   `impactSnd`, `info+0x174 + 0x40 i`) then `vehicle_hit_person` go through
   `G_SoundAliasIndex`, so the vehicles hold aliases 1..66 (CS 662..727) on
   every map (VERIFIED decompile; VERIFIED capture, `configstrings_uo_ab`).
+- vcod skips, with a warning, a file retail would load but whose numbers
+  panic or hang its drive step: a number past 100000 or not finite, a
+  negative `rotRate`, `rotAccel`, turret or gunner `RotRate`, `maxsX`,
+  `collisionFrontDist`, `collisionBackDist`, `stepsize` or
+  `suspensionTravel`, or `mins` past `maxs` (`VehicleInfo::check`). Every
+  stock file passes (largest number 1760 after the scaling). A
+  `script_vehicle` `angles` key past 131072 is reduced mod 360 at the spawn
+  (`fguard::turns`), where retail's 360 folds would never end.
 
 ### 10.2 Spawning one
 

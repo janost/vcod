@@ -314,6 +314,17 @@ pub struct ScriptError {
     pub kind: ErrorKind,
 }
 
+/// What [`Vm::record_error`] dedups on: where, how the thread fared and
+/// which kind of error, never its text, which may carry script values.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ErrorKey {
+    file: Atom,
+    func: Atom,
+    line: u32,
+    recovered: bool,
+    kind: std::mem::Discriminant<ErrorKind>,
+}
+
 /// Why `Vm::install` rejected a batch of functions.
 #[derive(Clone, PartialEq, Debug)]
 pub enum InstallError {
@@ -681,9 +692,10 @@ pub struct Vm {
     /// How many threads have died in total, including the ones `aborts`
     /// stopped recording, so a truncated list cannot pass for a whole one.
     aborts_seen: u32,
-    /// Each logged error's text: when it was last logged and how often it
-    /// came again since ([`Vm::record_error`]).
-    error_log: HashMap<String, (std::time::Instant, u32)>,
+    /// Each logged error's place and kind, its payload aside: the text it
+    /// was first logged with, when it was last logged and how often it came
+    /// again since ([`Vm::record_error`]).
+    error_log: HashMap<ErrorKey, (String, std::time::Instant, u32)>,
     /// Retail's mode below `developer 1`: a runtime error leaves the failed
     /// instruction's results undefined and the thread runs on
     /// (`step_frames`). Off, as at `developer 1`, the thread dies.
@@ -1006,6 +1018,11 @@ impl Vm {
     /// How often a repeating error's count is logged.
     const REPEAT_LOG: std::time::Duration = std::time::Duration::from_secs(10);
 
+    /// Places [`Self::record_error`] tracks before it starts over. vcod's;
+    /// the key is a source position, so only a script with this many
+    /// failing lines reaches it.
+    const MAX_ERROR_PLACES: usize = 4096;
+
     /// Logs a dead thread, counts it, and keeps it in `aborts` up to the cap.
     fn record_abort(&mut self, e: &ScriptError) {
         self.record_error(e, false);
@@ -1014,7 +1031,8 @@ impl Vm {
     /// Logs a runtime error, counts it, and keeps it in `aborts` up to the
     /// cap, whether the thread died of it or ran on (`recovered`).
     /// An error a loop hits every frame logs once, then its count every
-    /// [`Self::REPEAT_LOG`]. Retail prints every one, and only under
+    /// [`Self::REPEAT_LOG`]; one place and kind count as one error whatever
+    /// script value its text names. Retail prints every one, and only under
     /// `developer` or `logfile` (cod11-gsc-language.md, "Runtime errors
     /// below developer 1"); a line a frame buries a dedicated server's log,
     /// so this divergence is in the log only.
@@ -1025,16 +1043,26 @@ impl Vm {
             format!("thread aborted in {}", self.describe(e))
         };
         let now = std::time::Instant::now();
-        match self.error_log.get_mut(&text) {
+        let key = ErrorKey {
+            file: e.file,
+            func: e.func,
+            line: e.line,
+            recovered,
+            kind: std::mem::discriminant(&e.kind),
+        };
+        match self.error_log.get_mut(&key) {
             None => {
                 log::warn!("gsc: {text}");
-                self.error_log.insert(text, (now, 0));
+                if self.error_log.len() >= Self::MAX_ERROR_PLACES {
+                    self.error_log.clear();
+                }
+                self.error_log.insert(key, (text, now, 0));
             }
-            Some((at, n)) => {
+            Some((first, at, n)) => {
                 *n += 1;
                 if now.duration_since(*at) >= Self::REPEAT_LOG {
                     log::warn!(
-                        "gsc: {text} (again {n} times in {} s)",
+                        "gsc: {first} (again {n} times in {} s)",
                         now.duration_since(*at).as_secs()
                     );
                     *at = now;

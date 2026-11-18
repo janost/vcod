@@ -401,8 +401,11 @@ impl Physics {
         }
     }
 
-    /// The record as `G_SpawnVehicle` leaves it.
+    /// The record as `G_SpawnVehicle` leaves it. An `angles` key past
+    /// [`vcod_common::fguard::FOLD_LIMIT`] is reduced, or the step's 360
+    /// folds would never end.
     pub fn spawn(origin: Vec3, angles: Vec3, model: VehicleModel) -> Physics {
+        let angles = Vec3::from(<[f32; 3]>::from(angles).map(vcod_common::fguard::turns));
         let s = State {
             origin,
             prev_origin: origin,
@@ -2266,6 +2269,28 @@ mod tests {
         );
         assert!(push.velocity.x > 0.0, "{:?}", push.velocity);
         assert!(ours.x < 0.8 * info.max_speed, "{ours}");
+    }
+
+    /// A `script_vehicle` whose `angles` key reads 9e9 drives: its spawn
+    /// reduces the angles, so the suspension's 360 folds end.
+    #[test]
+    fn a_vehicle_spawned_at_a_huge_angle_drives() {
+        let info = panzer();
+        let mut p = Physics::spawn(Vec3::new(0.0, 0.0, 0.125), Vec3::splat(9e9), wheels());
+        assert!(p.s.angles.abs().max_element() < 360.0, "{}", p.s.angles);
+        p.init(&info, &FloorAndTank, false);
+        for k in 0..10 {
+            let input = StepInput {
+                now: 1000 + 50 * k,
+                driver: Some(DriveInput {
+                    forward: 127,
+                    ..DriveInput::default()
+                }),
+                driven: true,
+                ..StepInput::default()
+            };
+            p.think(&info, &FloorAndTank, &input);
+        }
     }
 
     /// [`Floor`] with another vehicle's hull, entity 300, all round the

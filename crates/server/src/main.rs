@@ -175,11 +175,13 @@ fn tty_console_wanted(args: &Args, game: vcod_common::game::Game) -> bool {
     }
 }
 
-/// The log on stderr. Under the tty console it goes through the writer
-/// that takes the typed line down around each record, coloured when
-/// stderr is a terminal unless `RUST_LOG_STYLE` says otherwise.
+/// The log on stderr, control characters escaped. Under the tty console
+/// it goes through the writer that takes the typed line down around each
+/// record, coloured when stderr is a terminal unless `RUST_LOG_STYLE`
+/// says otherwise.
 fn init_log(tty: bool) {
     let mut b = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+    vcod_server::logfmt::escape_controls(&mut b);
     #[cfg(unix)]
     if tty {
         use std::io::IsTerminal;
