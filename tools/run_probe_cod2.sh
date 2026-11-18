@@ -24,6 +24,8 @@
 #   PROBE_ARGS    extra move_probe arguments for the first script's client
 #                 (`--lag 100` holds its cmd clock 100 ms back)
 #   PORT          the server's port (default 28970)
+#   PROBE_SECS    how long each move_probe may run before it is stopped
+#                 (default 600)
 #   GDB_PY        a gdb python script the server runs under
 #                 (tools/re/cod2_skel_gdb.py dumps the posed skeletons)
 #   RAND_TRACE    1 loads tools/re/cod2_rand_trace.c (built into the
@@ -57,6 +59,7 @@ export COD2_DIR COD2_LNXDED LIB HOMEP PROBE MAP X Y Z YAW OUT LOG SCRIPT GTNAME
 export SECOND="${SECOND:-}"
 export SRV="${SRV:-}"
 export PROBE_ARGS="${PROBE_ARGS:-}"
+export PROBE_SECS="${PROBE_SECS:-600}"
 PRELOAD=""
 if [ "${RAND_TRACE:-}" = 1 ]; then
   PRELOAD="$HOMEP/cod2_rand_trace.so"
@@ -66,7 +69,10 @@ fi
 export PRELOAD
 export PORT="${PORT:-28970}"
 export GDB_PY="${GDB_PY:+$(realpath "$GDB_PY")}"
-unshare -rn bash -c '
+# The inner shell is its pid namespace's init: when it exits, or this
+# script is stopped, the server and the probes go with it.
+unshare -rn --pid --fork --kill-child --mount-proc --forward-signals bash -c '
+trap "exit 143" TERM INT
 ip link set lo up
 RUN=()
 [ -n "$GDB_PY" ] && RUN=(gdb -batch -x "$GDB_PY" --args)
@@ -83,11 +89,11 @@ done
 sleep 3
 status=0
 if [ -n "$SECOND" ]; then
-  "$PROBE" 127.0.0.1:$PORT --script "$SECOND" --name target --out "${OUT%.txt}-b.txt" --game-dir "$COD2_DIR" &
+  timeout "$PROBE_SECS" "$PROBE" 127.0.0.1:$PORT --script "$SECOND" --name target --out "${OUT%.txt}-b.txt" --game-dir "$COD2_DIR" &
   B=$!
   sleep 2
 fi
-"$PROBE" 127.0.0.1:$PORT --script "$SCRIPT" --out "$OUT" --game-dir "$COD2_DIR" $PROBE_ARGS || status=$?
+timeout "$PROBE_SECS" "$PROBE" 127.0.0.1:$PORT --script "$SCRIPT" --out "$OUT" --game-dir "$COD2_DIR" $PROBE_ARGS || status=$?
 [ -n "$SECOND" ] && { wait $B || status=$?; }
 sleep 0.5
 kill $SERVER 2>/dev/null; sleep 1; kill -9 $SERVER 2>/dev/null || true
@@ -95,7 +101,10 @@ kill $SERVER 2>/dev/null; sleep 1; kill -9 $SERVER 2>/dev/null || true
 grep -a PROBE "$HOMEP/main/games_mp.log" 2>/dev/null | sed "s/^/# /" | tee -a "$OUT" || true
 [ -n "$PRELOAD" ] && sed "s/^/# /" "$HOMEP/rand.log" >> "$OUT"
 exit $status
-'
+' &
+run=$!
+trap 'kill $run 2>/dev/null; wait $run; exit 143' TERM INT
+wait $run
 # The fixture's header: what the gate needs (the map) and how to remake it.
 HOW="${RAND_TRACE:+RAND_TRACE=$RAND_TRACE }${GT:+GT=$GT }${SECOND:+SECOND=$SECOND }${PROBE_GSC:+PROBE_GSC=$PROBE_GSC }${PROBE_ARGS:+PROBE_ARGS='$PROBE_ARGS' }tools/run_probe_cod2.sh $SCRIPT $MAP $X $Y $Z $YAW <out>"
 sed -i "1i # map $MAP\\n# made by: $HOW (retail cod2_lnxded 1.3, pure, defaults${SRV:+, $SRV})" "$OUT"

@@ -203,7 +203,9 @@ in process, on `play::cod4`'s `tests::sim` clock.
 ## Soaks
 
 Each soak plays every stock map for minutes through the real client frame and
-writes a `soak.md`.
+writes a `soak.md`. The soak, perf and off-LAN scripts first check the host
+tools and the built binaries they run (`tools/lib.sh`) and exit 2 naming
+the one missing.
 
 ### CoD4
 
