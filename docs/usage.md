@@ -149,7 +149,7 @@ Common ones:
 | `sv_privateClients`, `sv_privatePassword` | Reserve the first N slots for clients that send that password. |
 | `sv_mapRotation` | The map cycle `map_rotate` walks. |
 | `fs_game` | Run a mod: its paks go over `main/` and clients are told to load it. CoD4: `mods/<name>` (below). |
-| `dedicated` | 1 by default (retail's is 2), so dev runs stay off the master list. 2 sends heartbeats (below). |
+| `dedicated` | 1 by default (retail's is 2), so dev runs stay off the master list; the server says so at startup. 2 sends heartbeats (below). |
 | `protocol` | CoD1: `1`, `6` or `22` overrides the install's protocol. |
 | `g_log`, `g_logSync` | `games_mp.log` (below): empty `g_log` turns it off, `g_logSync 1` flushes every line. A `g_log` holding `..` or a colon, or starting at the root, logs nothing. |
 | `fs_homepath` | Where the log goes. Default the `--game-dir`. CoD2 serves downloads from here first, then the game dir. Like `fs_game` and `fs_basepath`, set on the command line only: rcon and scripts cannot move it. |
