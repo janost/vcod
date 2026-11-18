@@ -706,7 +706,6 @@ mod tests {
             ground_plane: grounded,
             almost_ground_plane: grounded,
             ground_trace: Tr::default(),
-            impact_speed: 0.0,
             previous_origin: glam::Vec3::ZERO,
             previous_velocity: glam::Vec3::ZERO,
         };

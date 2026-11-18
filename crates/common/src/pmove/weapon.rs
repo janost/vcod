@@ -987,13 +987,12 @@ fn putaway(
     ps.weaponstate = WEAPON_DROPPING;
     // The short branch of section 1.8: a weapon that is gone from under the
     // player, and a grenade still on its pin, go without a drop time, an anim
-    // or an event. Retail ORs `pm_flags` 0x400 in only for a prone player;
-    // this flag is set on every cancel, since nothing reads it either way.
+    // or an event. Retail also ORs `pm_flags` 0x400 in for a prone player;
+    // nothing reads that bit.
     if ps.weapon == 0 || !holds(ps, ps.weapon) || ps.grenade_time_left_ms > 0 {
         ps.weapon_time_ms = 0;
         if ps.grenade_time_left_ms > 0 {
             ps.grenade_time_left_ms = 0;
-            ps.grenade_cancelled = true;
         }
         // UO's short branch raises `EV_REMOVE_WEAPON_ATTACHMENTS` with the
         // weapon going down (game.mp.uo 0x448ee; coduo-diff.md 21).
@@ -1380,7 +1379,6 @@ const WEAPON_TYPE_GAS: &str = "gas";
 /// `holdFireTime`.
 fn pullback(ps: &mut PlayerState, def: &WeaponDef, events: &mut Vec<PmEvent>) {
     ps.grenade_time_left_ms = ms(def.fuse_time);
-    ps.grenade_cancelled = false;
     set_anim(ps, WEAP_GRENADE_PULLBACK);
     push(events, EV_PULLBACK_WEAPON);
     ps.weapon_delay_ms = ms(def.hold_fire_time);
@@ -1873,7 +1871,6 @@ mod tests {
         );
         assert_eq!(ev, vec![EV_RAISE_WEAPON]);
         assert_eq!(ps.grenade_time_left_ms, 0);
-        assert!(ps.grenade_cancelled);
         assert_eq!(ps.weaponstate, WEAPON_RAISING);
         assert_eq!(ps.weapon, 2);
         assert_eq!(ps.ammoclip[1], 3);

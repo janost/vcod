@@ -469,13 +469,6 @@ impl ClipMap {
             .map(|b| (b.mins, b.maxs))
             .collect()
     }
-
-    /// The brush contents bits [`trace`](Self::trace) and
-    /// [`point_contents`](Self::point_contents) read: the material's word
-    /// with 0x4 and 0x20000000 cleared (`CMod_LoadBrushes`).
-    pub fn brush_contents(&self, brush: usize) -> u32 {
-        self.brushes[brush].contents
-    }
 }
 
 impl WorldClip for ClipMap {

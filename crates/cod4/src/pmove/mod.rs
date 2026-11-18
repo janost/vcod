@@ -653,7 +653,6 @@ pub(crate) struct Pml {
     pub ground_plane: bool,
     pub almost_ground_plane: bool,
     pub ground_trace: Tr,
-    pub impact_speed: f32,
     pub previous_origin: Vec3,
     pub previous_velocity: Vec3,
 }
@@ -712,7 +711,6 @@ pub struct Pmove<'a> {
     pub rand: Option<&'a mut dyn FnMut() -> i32>,
     /// `touchents`: every entity the cmd met, first meeting first.
     pub touch: Vec<u32>,
-    pub prone_change: bool,
     /// The horizontal speed `PM_Footsteps` measured.
     pub xyspeed: f32,
     /// Each step `PM_StepSlideMove` took, as `(commandTime, dz)`: what it
@@ -753,7 +751,6 @@ impl<'a> Pmove<'a> {
             anim: None,
             rand: None,
             touch: Vec::new(),
-            prone_change: false,
             xyspeed: 0.0,
             view_steps: Vec::new(),
             mantle_started: None,

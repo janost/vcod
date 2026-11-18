@@ -413,11 +413,6 @@ impl Cx<'_> {
         self.heap.get_field(s, f)
     }
 
-    /// How many fields the struct holds.
-    pub fn field_count(&self, s: StructId) -> usize {
-        self.heap.struct_fields(s).len()
-    }
-
     pub fn set_field(&mut self, s: StructId, f: Atom, v: Value) {
         self.heap.set_field(s, f, v);
     }

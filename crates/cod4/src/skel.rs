@@ -375,22 +375,12 @@ pub fn calc_posed(
     out
 }
 
-/// A player body's `DObjAnimMat`s: the locals `pose` left, `controls`'
-/// bones set as 1.7's controller sets them ([`set_controls`]), composed by
-/// [`calc_posed`] in `a`'s arithmetic. The client's drawn bodies take it.
-pub fn player_mats(
-    skel: &Skeleton,
-    pose: &PoseBuffer,
-    controls: Option<&Controllers>,
-    a: Cod4Arith,
-) -> Vec<AnimMat> {
-    player_mats_sampled(skel, pose, &[], controls, a)
-}
-
-/// [`player_mats`] with the locals 1.7's sampler left
-/// ([`crate::xanimcalc::calc`]) in place of `pose`'s for each bone it
-/// reached (`sampled[b]` some): its quat as summed and its shift. The
-/// server's hit poses take it.
+/// A player body's `DObjAnimMat`s: the locals `pose` left, with 1.7's
+/// sampler's ([`crate::xanimcalc::calc`]) in their place for each bone it
+/// reached (`sampled[b]` some), its quat as summed and its shift;
+/// `controls`' bones set as 1.7's controller sets them ([`set_controls`]),
+/// composed by [`calc_posed`] in `a`'s arithmetic. The client's drawn
+/// bodies and the server's hit poses take it.
 pub fn player_mats_sampled(
     skel: &Skeleton,
     pose: &PoseBuffer,

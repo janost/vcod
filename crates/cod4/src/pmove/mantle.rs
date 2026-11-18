@@ -265,16 +265,6 @@ pub fn installed() -> Option<&'static MantleAnims> {
     ANIMS.get()
 }
 
-/// `pmove_t`'s `mantleEndPos` and `mantleDuration` for a mantle under way:
-/// where the clips end it and their whole length in ms.
-pub fn end_and_duration(anims: &MantleAnims, ps: &PlayerState) -> (Vec3, i32) {
-    let st = &ps.mantle;
-    let (up, over) = anims.lengths(st);
-    let total = up + over;
-    let left = sub(anims.delta(st, total), anims.delta(st, st.timer));
-    (add(ps.origin, left), total)
-}
-
 fn row(st: &MantleState) -> (usize, usize, f32) {
     TRANSITIONS[st.trans_index.clamp(0, 6) as usize]
 }

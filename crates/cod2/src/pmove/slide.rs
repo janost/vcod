@@ -107,9 +107,6 @@ pub(crate) fn slide_move(pm: &mut Pmove, pml: &mut Pml, gravity: bool) -> bool {
             planes.push(t.normal);
             let (order, least) = permute_planes(pm.ps.velocity, &planes);
             if least < MEETS {
-                if pml.impact_speed < -least {
-                    pml.impact_speed = -least;
-                }
                 let first = planes[order[0]];
                 let mut clip = clip_velocity(pm.ps.velocity, first);
                 let mut end_clip = clip_velocity(end_velocity, first);

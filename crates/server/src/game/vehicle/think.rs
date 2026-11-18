@@ -3,7 +3,7 @@
 //! the riders read back (docs/research/coduo-vehicles.md 12 and 13).
 
 use super::info::KIND_FOUR_WHEEL;
-use super::{Gun, MAX_SEATS, physics};
+use super::{MAX_SEATS, physics};
 use crate::game::host::GameHost;
 use vcod_gsc::{Cx, EntId};
 
@@ -649,16 +649,6 @@ pub fn riders(host: &GameHost, id: EntId) -> [Option<usize>; MAX_SEATS + 1] {
         .live
         .get(&id)
         .map_or([None; MAX_SEATS + 1], |v| v.seats)
-}
-
-/// Which gun a `turret_*` notify names.
-pub fn gun_of(event: &str) -> Option<Gun> {
-    match event {
-        "turret_fire" => Some(Gun::Main),
-        "turret_alt_fire" => Some(Gun::Alt),
-        "turret_gunner_fire" => Some(Gun::Gunner),
-        _ => None,
-    }
 }
 
 /// The collision world with the players' bodies in it: a trace whose mask

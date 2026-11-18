@@ -447,9 +447,9 @@ pub(crate) struct Pml {
     pub msec: i32,
     pub walking: bool,
     pub ground_plane: bool,
+    /// `pml_t`'s `almostGroundPlane`, kept as retail sets it; nothing reads it yet.
     pub almost_ground_plane: bool,
     pub ground_trace: Tr,
-    pub impact_speed: f32,
     pub previous_origin: Vec3,
     pub previous_velocity: Vec3,
 }
