@@ -432,6 +432,35 @@ mod tests {
     /// `movex` is a delta and `rotateyaw` is one too: a second call runs the
     /// yaw from 90 to 180 rather than staying at 90, which is the case the
     /// retail probe had to call twice to see.
+    /// A script `.origin` write after a finished `moveTo` stands: the next
+    /// passes read it and the wire carries it (BUG-074).
+    #[test]
+    fn an_origin_write_after_a_move_stands() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = mover(&mut host, cx, [100.0, 0.0, 100.0]);
+            let t = Some(Target::Entity(e));
+            let dest = Value::Vector([600.0, 0.0, 100.0]);
+            move_to(&mut host, cx, t, &[dest, Value::Int(1)]).unwrap();
+            host.level_time_ms = 1050;
+            crate::game::mover::run(&mut host, cx);
+            assert!((field_vec(&mut host, cx, e, "origin").x - 600.0).abs() < 0.01);
+            let origin = cx.intern_folded("origin");
+            let b = [0.0, 300.0, 50.0];
+            host.set_field(cx, e, origin, Value::Vector(b)).unwrap();
+            let angles = cx.intern_folded("angles");
+            host.set_field(cx, e, angles, Value::Vector([0.0, 45.0, 0.0]))
+                .unwrap();
+            for frame in 22..26 {
+                host.level_time_ms = frame * 50;
+                crate::game::mover::run(&mut host, cx);
+                assert_eq!(field_vec(&mut host, cx, e, "origin"), Vec3::from(b));
+            }
+            let (pos, _) = host.movers.wire(e, host.level_time_ms).unwrap();
+            assert_eq!(pos.base, Vec3::from(b));
+        });
+    }
+
     #[test]
     fn the_axis_verbs_take_deltas() {
         let (mut vm, mut host) = fixture();

@@ -522,9 +522,15 @@ impl BotWorld for Cod4Server {
 
     fn forget_drive(&mut self, _: usize) {}
 
-    fn lob_probe(&self, slot: usize, weapon: u8, target: [f32; 3], _: &[i32]) -> Option<[f32; 2]> {
+    fn lob_probe(
+        &self,
+        slot: usize,
+        weapon: u8,
+        target: [f32; 3],
+        teams: &[i32],
+    ) -> Option<[f32; 2]> {
         self.cod4_bots()
-            .lob_probe(self.game.level.as_ref()?, slot, weapon, target)
+            .lob_probe(self.game.level.as_ref()?, slot, weapon, target, teams)
     }
 
     fn take_orders(&mut self) -> Vec<(usize, String)> {
@@ -784,6 +790,48 @@ mod tests {
     use crate::game::cod4::bot_feed::Cod4Objectives;
     use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
     use std::time::{Duration, Instant};
+
+    /// A round restart under the same gametype keeps the bots' world (and
+    /// the graph over it); another gametype on the same map, whose brush
+    /// entities differ, builds it again (BUG-057). Needs `COD4_DIR`.
+    #[test]
+    fn cod4_bots_rebuild_their_world_for_another_gametype_on_the_map() {
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let mut sv = Cod4Server::new(
+            super::super::Cod4Config {
+                map: "mp_crash".into(),
+                gametype: "war".into(),
+                hostname: "bots".into(),
+                max_clients: 8,
+            },
+            5,
+        );
+        sv.set_cvar("sv_pure", "0");
+        sv.load(Some(&install)).unwrap();
+        sv.add_bots(1, false);
+        let mut now = Instant::now();
+        let mut run = |sv: &mut Cod4Server, frames: usize| {
+            for _ in 0..frames {
+                now += Duration::from_millis(50);
+                super::super::Cod4Game::drain_console(sv, now);
+                sv.tick_frames(now, 1);
+                sv.take_outgoing();
+            }
+        };
+        let world = |sv: &Cod4Server| sv.game.bots.as_ref().unwrap().world_ptr();
+        run(&mut sv, 20);
+        let war = world(&sv).expect("no world built");
+        sv.push_console("fast_restart");
+        run(&mut sv, 20);
+        assert_eq!(world(&sv), Some(war), "a round restart rebuilt the world");
+        sv.push_console("g_gametype sd");
+        sv.push_console("map_restart");
+        run(&mut sv, 20);
+        let sd = world(&sv).expect("no world after the change");
+        assert_ne!(sd, war, "the war world stayed under sd");
+    }
 
     /// Two bots on a fresh mp_crash `koth` level enter it as a loading
     /// client would ([`crate::bots::cod4::BOT_LOAD_MS`]): by their first

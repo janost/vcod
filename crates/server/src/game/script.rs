@@ -5072,6 +5072,58 @@ mod tests {
         assert_eq!(rt.level_field("held"), Value::Undefined);
     }
 
+    /// `delete()` on a connected client notifies `death` but leaves his
+    /// entity: the slot is the connection's until the drop.
+    #[test]
+    fn a_deleted_client_keeps_his_entity() {
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() { level.callbackPlayerConnect = ::c; }\n\
+             CodeCallback_PlayerConnect() { [[level.callbackPlayerConnect]](); }\n\
+             c() { self thread d(); level thread w(self); }\n\
+             d() { wait 0.05; self delete(); }\n\
+             w(p) { p waittill(\"death\"); level.died = 1; }\n",
+        );
+        rt.reconnect_client(0, "vcod".into());
+        let before = rt.client_entity(0).expect("connected");
+        for frame in 1..=6 {
+            rt.run_frame(frame * 50);
+        }
+        assert_eq!(rt.level_field("died"), Value::Int(1));
+        assert_eq!(rt.client_entity(0), Some(before));
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+    }
+
+    /// CoD4's `delete()` refuses a client with a script error before any
+    /// notify (cod4-combat.md 14).
+    #[test]
+    fn cod4_refuses_to_delete_a_client() {
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() { level.callbackPlayerConnect = ::c; }\n\
+             CodeCallback_PlayerConnect() { [[level.callbackPlayerConnect]](); }\n\
+             c() { self thread d(); level thread w(self); }\n\
+             d() { wait 0.05; self delete(); level.past = 1; }\n\
+             w(p) { p waittill(\"death\"); level.died = 1; }\n",
+        );
+        rt.host.set_profile(&crate::game::profile::COD4);
+        rt.reconnect_client(0, "vcod".into());
+        let before = rt.client_entity(0).expect("connected");
+        for frame in 1..=6 {
+            rt.run_frame(frame * 50);
+        }
+        assert_eq!(rt.level_field("died"), Value::Undefined);
+        assert_eq!(rt.level_field("past"), Value::Undefined);
+        assert_eq!(rt.client_entity(0), Some(before));
+        assert!(
+            rt.aborts()
+                .iter()
+                .any(|a| a.contains("Cannot delete a client entity")),
+            "{:?}",
+            rt.aborts()
+        );
+    }
+
     /// `probe_entnum` on retail: the free a `delete()` schedules 100 ms out
     /// runs in that frame's entity pass, after the frame's threads, so a
     /// thread woken on it still reads the entity (combat doc 14.7, "Entity
@@ -5535,6 +5587,39 @@ mod tests {
             "the dropped client's carried pers reached the next occupant"
         );
         assert!(after.aborts().is_empty(), "{:?}", after.aborts());
+    }
+
+    /// A client connecting into a slot its last occupant left in the same
+    /// level reads a zeroed `gclient_t`: no health, no `maxhealth`, not
+    /// alive, no `allowSpectateTeam` bits.
+    #[test]
+    fn a_connect_into_a_used_slot_starts_with_no_vitals_or_spectate_mask() {
+        use crate::game::host::Vitals;
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() { level.callbackPlayerConnect = ::c; }\n\
+             CodeCallback_PlayerConnect() { [[level.callbackPlayerConnect]](); }\n\
+             CodeCallback_PlayerDisconnect() {}\n\
+             c() { level.h = self.health; level.m = self.maxhealth; \
+                   level.alive = isAlive(self); }\n",
+        );
+        rt.reconnect_client(0, "first".into());
+        rt.host.client_vitals[0] = Vitals {
+            health: 100,
+            max_health: 100,
+            dead: false,
+            takedamage: true,
+        };
+        rt.host.client_no_spectate[0] = 0x17;
+        rt.client_disconnect(0);
+        rt.run_frame(50);
+
+        rt.reconnect_client(0, "second".into());
+        assert_eq!(rt.level_field("h"), vcod_gsc::Value::Int(0));
+        assert_eq!(rt.level_field("m"), vcod_gsc::Value::Int(0));
+        assert_eq!(rt.level_field("alive"), vcod_gsc::Value::Int(0));
+        assert_eq!(rt.host.client_vitals[0], Vitals::default());
+        assert_eq!(rt.host.client_no_spectate[0], 0);
     }
 
     /// `ClientDisconnect`'s `menuresponse` ("-1", "disconnect") wakes a

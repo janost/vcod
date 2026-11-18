@@ -608,6 +608,10 @@ pub fn delete(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = entity_receiver(recv)?;
+    let client = host.ents.get(id).is_some_and(|e| e.client.is_some());
+    if client && host.profile.delete_refuses_client {
+        return Err(ErrorKind::Custom("Cannot delete a client entity".into()));
+    }
     let death = cx.intern_folded("death");
     cx.notify(Target::Entity(id), death, vec![Value::Entity(id)]);
     if host.profile.delete_queues_number {
@@ -617,15 +621,20 @@ pub fn delete(
     Ok(Value::Undefined)
 }
 
-/// `delete()`'s unlink, and its free armed [`DELETE_DEFER_MS`] out.
-fn unlink_and_free(host: &mut GameHost, id: EntId) {
+/// `delete()`'s unlink, and its free armed [`DELETE_DEFER_MS`] out. A
+/// client keeps his entity: its slot is the connection's until the drop.
+pub(crate) fn unlink_and_free(host: &mut GameHost, id: EntId) {
     link_submodel(host, id, false);
     // The unlink (0x5da81) is now; the slot's reuse waits.
-    if let Some(e) = host.ents.get_mut(id).filter(|e| e.client.is_none()) {
+    let client = host.ents.get(id).is_some_and(|e| e.client.is_some());
+    if let Some(e) = host.ents.get_mut(id).filter(|_| !client) {
         e.unlinked = true;
         host.area.unlink(id.0);
     }
     host.unlink_world_copy(id);
+    if client {
+        return;
+    }
     host.ents
         .schedule(id, ThinkFn::Free, host.level_time_ms + DELETE_DEFER_MS);
 }

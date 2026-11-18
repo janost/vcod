@@ -13,6 +13,18 @@ use vcod_cod4::net::stats::Stats;
 const SPAWN_SLEEP_MS: u64 = 250;
 
 impl Cod4Server {
+    /// A map cycle command's result: logged, and with the level torn down
+    /// kept as the fatal that ends the process, as retail's `Com_Error`
+    /// stops its server. The cvar table survives either way.
+    pub(super) fn load_failed(&mut self, what: &str, r: anyhow::Result<()>) {
+        let Err(e) = r else { return };
+        if self.game.level.is_none() && self.game.install.is_some() {
+            self.game.fatal = Some(e.context(format!("cod4: {what}")));
+        } else {
+            log::error!("cod4: {what}: {e:#}");
+        }
+    }
+
     /// `SV_SpawnServer` over the running server: `loadingnewmap\n<map>\n
     /// <gametype>` to every client past `CS_CONNECTED` (0x81751f0), on the
     /// socket at once, then a 250 ms wait, the

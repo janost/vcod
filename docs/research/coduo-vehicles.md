@@ -3124,4 +3124,7 @@ drives under the fields (`playerstate/mp_peaks-tdm-slope-8ms-jeep-closespeed-uo.
   entity fields (`vehicletype`, `capturing`, `vehicle_owner`, script
   fields in vcod) across, and sends it as `eType` 13 standing still
   (`Vehicles::corpses`). Riders are not measured: retail leaves them on a
-  freed record, vcod's seats go with the record.
+  freed record. vcod's seats go with the record, and each rider gets a
+  forced exit where he sits (`SeatOp::Exit` with no spot) so his sim is
+  not left on a freed number; a `delete()` of an occupied vehicle does the
+  same.

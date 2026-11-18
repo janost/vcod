@@ -248,7 +248,7 @@ impl Cod4Bots {
         let gun = self.gun_step(level, slot, view, &guns, teams);
         self.pass.guns = guns;
         let throw = if gun.is_none() {
-            self.throw_back_step(level, slot, view)
+            self.throw_back_step(level, slot, view, teams)
         } else {
             None
         };
@@ -570,6 +570,7 @@ impl Cod4Bots {
         level: &Cod4Level,
         slot: usize,
         view: &BotView,
+        teams: &[i32],
     ) -> Option<ThrowBack> {
         let ps = self.ps(slot)?.clone();
         let none = ENTITYNUM_NONE as i32;
@@ -607,7 +608,9 @@ impl Cod4Bots {
         let missile = (level.rt.host.cod4().missiles.iter()).find(|m| m.id.0 as i32 == hint)?;
         let thrower = missile
             .owner
-            .filter(|&o| o != slot)
+            .filter(|&o| {
+                o != slot && !super::same_team(teams.get(slot).copied(), teams.get(o).copied())
+            })
             .and_then(|o| self.ps(o))
             .map(|p| p.origin + Vec3::Z * 40.0);
         let target = thrower.or(view.enemy.map(|e| Vec3::from(e.origin)));

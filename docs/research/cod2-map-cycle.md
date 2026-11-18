@@ -162,6 +162,10 @@ implemented; the dvar table is one (a level's `setCvar` survives the
 boundary), `default_mp.cfg` is exec'd at startup
 (`Cod2Server::exec_default_cfg`), `--set g_gametype=` picks the load's
 gametype, and `--gametype-script` overlays a gametype off disk as on CoD1.
+A spawn into a gametype with no script is refused before the teardown and
+the level serving stays; a load that fails after the teardown ends the
+process (`GameModule::take_fatal`), where retail raises `Com_Error`. vcod's
+choice, as CoD1's (`cod11-map-cycle.md`).
 
 The in-process gates (`crates/server/src/cod2/cycle_tests.rs`, `COD2_DIR`)
 run two vcod clients through section 2's sequences and assert the ids,

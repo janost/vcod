@@ -300,6 +300,11 @@ impl Server {
         true
     }
 
+    /// Test-facing: where the bots read a burning hull, by entity number.
+    pub fn test_wrecks(&self) -> Vec<[f32; 3]> {
+        self.game.module.bot_parked.wrecks()
+    }
+
     /// Test-facing: each live vehicle in pool order, as a bot would see it.
     pub fn test_vehicles(&self) -> Vec<VehicleSpot> {
         let Some(rt) = self.game.module.script.as_ref() else {
@@ -480,6 +485,14 @@ pub(super) struct BotDrives {
     routes: BTreeMap<usize, DriveRoute>,
     fits: HullFits,
     graph: usize,
+}
+
+impl BotDrives {
+    /// A restart of the level: the routes ran over the old level's
+    /// vehicles; the fits stay, the map being the same.
+    pub(super) fn restart(&mut self) {
+        self.routes.clear();
+    }
 }
 
 /// Fit tests by node point and box half width, kept across graph
@@ -955,6 +968,11 @@ impl Server {
                 nodes: Vec::new(),
                 wreck: None,
             });
+            // A live hull is no wreck, whatever a record of its number left
+            // (a restart reissues map vehicles under the same handles).
+            if !v.dead && p.wreck.take().is_some() {
+                changed = true;
+            }
             // A hull burns where it died until its second blast deletes it.
             if p.wreck.is_none() && v.dead && rt.host.ents.get(*id).is_some_and(|e| !e.unlinked) {
                 let at = v.pose.origin;

@@ -1300,6 +1300,12 @@ impl GameHost {
         if let Some(q) = self.client_squad.get_mut(slot) {
             *q = 0;
         }
+        if let Some(v) = self.client_vitals.get_mut(slot) {
+            *v = Vitals::default();
+        }
+        if let Some(m) = self.client_no_spectate.get_mut(slot) {
+            *m = 0;
+        }
         self.reset_client_objectives(slot);
         // The carried `pers`, if the boundary this client crossed kept one;
         // taken, so a later reconnect starts empty as retail's does.
@@ -2601,6 +2607,9 @@ impl GameHost {
         // ahead of the vehicle.
         crate::game::vehicle::free(self, id);
         self.missiles.free_vehicle_refs(id);
+        if let HostExt::Cod4(c) = &mut self.ext {
+            c.missiles.retain(|m| m.id != id);
+        }
         self.triggers.remove(id);
         self.looped_fx.remove(&id);
         self.script_takedamage.remove(&id);
@@ -3207,15 +3216,18 @@ impl Host for GameHost {
         value: Value,
     ) -> Result<(), ErrorKind> {
         self.write_field(cx, ent, field, value)?;
-        if ent.0 < FIRST_HUD_ELEM
-            && cx.resolve_folded(field) == "angles"
-            && let Some(e) = self.ents.get_mut_quiet(ent)
-        {
-            e.apos_base = None;
+        if ent.0 < FIRST_HUD_ELEM && cx.resolve_folded(field) == "angles" {
+            if let Some(e) = self.ents.get_mut_quiet(ent) {
+                e.apos_base = None;
+            }
+            if let Value::Vector(v) = value {
+                self.movers.set_angles(ent, glam::Vec3::from_array(v));
+            }
         }
         if ent.0 < FIRST_HUD_ELEM && cx.resolve_folded(field) == "origin" {
             if let Value::Vector(v) = value {
                 self.missiles.set_origin(ent, glam::Vec3::from_array(v));
+                self.movers.set_origin(ent, glam::Vec3::from_array(v));
             }
             self.link_entity(cx, ent);
         }

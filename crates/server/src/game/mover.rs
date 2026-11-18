@@ -555,6 +555,36 @@ impl Movers {
         self.rows.remove(&id);
     }
 
+    /// A script `.origin` write (`Scr_SetOrigin`'s `G_SetOrigin`) on a
+    /// group that has settled: the plan stands at `at`, so the next entity
+    /// pass and the wire keep it there, and the clip's pose moves with the
+    /// write's link. A group still moving is left to its plan: what retail
+    /// does to a running move is unmeasured.
+    pub fn set_origin(&mut self, id: EntId, at: Vec3) {
+        let Some(m) = self.rows.get_mut(&id) else {
+            return;
+        };
+        if m.pos.started && m.pos.notify.is_none() {
+            m.pos.current = stationary(at);
+            if let Some(c) = m.clip.as_mut() {
+                c.0 = at;
+            }
+        }
+    }
+
+    /// [`Self::set_origin`]'s twin for `.angles` (`Scr_SetAngles`).
+    pub fn set_angles(&mut self, id: EntId, at: Vec3) {
+        let Some(m) = self.rows.get_mut(&id) else {
+            return;
+        };
+        if m.apos.started && m.apos.notify.is_none() {
+            m.apos.current = stationary(at);
+            if let Some(c) = m.clip.as_mut() {
+                c.1 = at;
+            }
+        }
+    }
+
     /// The origin and angles a mover's plans put it at `t`, ahead of what
     /// script reads, `None` for a group no verb has run on.
     pub fn pose_at(&self, id: EntId, t: i32) -> Option<(Option<Vec3>, Option<Vec3>)> {

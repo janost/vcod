@@ -166,6 +166,9 @@ pub struct Cod2Game {
     /// list): the `challenge` the master's status carries
     /// (cod2-protocol.md 17.6).
     argv1: String,
+    /// A load that failed with the level torn down, for the loop to end the
+    /// process on ([`crate::engine::GameModule::take_fatal`]).
+    fatal: Option<anyhow::Error>,
     /// The seed each level's `G_InitGame` takes when a test pinned one
     /// ([`Cod2Server::pin_game_seed`]); otherwise a draw off the engine's.
     game_seed: Option<u32>,
@@ -294,6 +297,9 @@ impl crate::engine::GameModule for Cod2Game {
         e.drain_game_log();
         // `SV_Frame`'s last step (cod2-protocol.md 1.6, 14.1).
         e.heartbeat(false);
+    }
+    fn take_fatal(e: &mut Cod2Server) -> Option<anyhow::Error> {
+        e.game.fatal.take()
     }
 }
 
@@ -459,6 +465,7 @@ impl Cod2Server {
                 bots: None,
                 net_now: None,
                 argv1: String::new(),
+                fatal: None,
                 game_log: Default::default(),
                 game_seed: None,
             },
