@@ -420,12 +420,7 @@ impl AudioSystem {
     pub fn restart(&mut self, fs: &dyn AssetSource, rate: u32) {
         let ambient = self.ambient.as_ref().map(|(alias, _)| alias.clone());
         let ambient_id = self.ambient.as_ref().map(|(_, id)| *id);
-        let loops: HashSet<VoiceId> = self
-            .loop_voices
-            .values()
-            .chain(self.projectile_voices.values())
-            .flat_map(|v| std::iter::once(v.id).chain(v.secondary.iter().copied()))
-            .collect();
+        let loops = self.owner_started();
         let music = self.music;
         let mut saved: Vec<(VoiceId, Resumable)> = self
             .table
@@ -436,7 +431,6 @@ impl AudioSystem {
                     && Some(*id) != ambient_id
                     && !self.ambient_ramps.contains_key(id)
                     && !loops.contains(id)
-                    && self.shock_loop.is_none_or(|(l, _)| l != *id)
             })
             .filter_map(|id| {
                 let mut r = self.resumable.get(&id)?.clone();
@@ -451,7 +445,6 @@ impl AudioSystem {
             .collect();
         // Retail's save and restore walk the slots in order.
         saved.sort_by_key(|(id, _)| *id);
-        self.table.clear();
         self.stop_all();
         self.fade = SoundFade::FULL;
         self.bank = SoundBank::at_rate(rate);
@@ -485,7 +478,6 @@ impl AudioSystem {
     pub fn on_gamestate(&mut self, map: &str) {
         self.aliases = self.aliases_all.for_map(map);
         self.map = Some(map.to_string());
-        self.table.clear();
         self.stop_all();
         self.last_pick.clear();
         self.pick_counts.clear();
@@ -498,6 +490,8 @@ impl AudioSystem {
     /// restarts the ambient from CS 3; a loop restarts with the next
     /// snapshot that carries it.
     pub fn stop_all(&mut self) {
+        // The table too, so a sound started this frame meets clean pools.
+        self.table.clear();
         // A dropped kira handle keeps playing.
         for (_, mut h) in self.handles.drain() {
             h.stop();
@@ -1508,18 +1502,9 @@ impl AudioSystem {
     /// started (an event's `playSound`, an effect's sound) plays a frame.
     /// Returns how many it stopped.
     pub fn reap_loops(&mut self) -> usize {
-        let mut kept: HashSet<VoiceId> = self
-            .loop_voices
-            .values()
-            .chain(self.projectile_voices.values())
-            .flat_map(|v| std::iter::once(v.id).chain(v.secondary.iter().copied()))
-            .collect();
+        let mut kept = self.owner_started();
         kept.extend(self.ambient.as_ref().map(|a| a.1));
         kept.extend(self.music.as_ref().map(|m| m.id));
-        kept.extend(self.held.values().copied());
-        kept.extend(self.blends.values().map(|b| b.id));
-        kept.extend(self.fire_loops.values().filter_map(|f| f.voice));
-        kept.extend(self.shock_loop.map(|s| s.0));
         kept.extend(self.shock_end);
         let gone: Vec<VoiceId> = self
             .table
@@ -1532,6 +1517,24 @@ impl AudioSystem {
             self.stop_voice(id);
         }
         gone.len()
+    }
+
+    /// The voices an owner starts again itself: the entity and projectile
+    /// loops with their secondaries, the held and blend voices, the fire
+    /// loops and the shock loop. `snd_restart` leaves them to their owners
+    /// and the loop reaper keeps them.
+    fn owner_started(&self) -> HashSet<VoiceId> {
+        let mut ids: HashSet<VoiceId> = self
+            .loop_voices
+            .values()
+            .chain(self.projectile_voices.values())
+            .flat_map(|v| std::iter::once(v.id).chain(v.secondary.iter().copied()))
+            .collect();
+        ids.extend(self.held.values().copied());
+        ids.extend(self.blends.values().map(|b| b.id));
+        ids.extend(self.fire_loops.values().filter_map(|f| f.voice));
+        ids.extend(self.shock_loop.map(|s| s.0));
+        ids
     }
 
     /// A loop's voice and its secondary's.
@@ -2094,7 +2097,6 @@ impl AudioSystem {
     /// `S_StopAllSounds(0)` (0x44fa40): every voice ends, the ambient and
     /// the music with it.
     fn stop_everything(&mut self) {
-        self.table.clear();
         self.stop_all();
     }
 
@@ -2376,6 +2378,39 @@ mod tests {
         a.step(&HashMap::new(), &HashMap::new(), None);
         let s = a.stats();
         assert_eq!((s.plays, s.misses, s.voices, s.culled), (0, 1, 0, 1));
+    }
+
+    /// `stop_all` empties the voice table itself: a sound started in the
+    /// same frame after it counts against a clean pool (BUG-115).
+    #[test]
+    fn stop_all_leaves_no_voice_in_the_pools() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let mut a = AudioSystem::new(
+            &fs,
+            AudioOpts {
+                enabled: false,
+                volume: 1.0,
+                rate: 0,
+            },
+        );
+        let v = voices::NewVoice {
+            source: Source::Point(Vec3::ZERO),
+            channel: crate::audio::alias::Channel::Auto,
+            volume: 1.0,
+            dist: (100.0, 1100.0),
+            curve: None,
+            master_slave: alias::MasterSlave::None,
+            spatial: true,
+            looping: false,
+            streamed: false,
+            duration_ms: 500,
+            protected: false,
+        };
+        assert!(a.table.add(v, |_| false).is_ok());
+        a.stop_all();
+        assert!(a.table.is_empty());
     }
 
     #[test]
