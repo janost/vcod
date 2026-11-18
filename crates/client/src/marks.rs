@@ -661,9 +661,7 @@ mod tests {
         let Some(fs) = vcod_common::testing::game_fs() else {
             return;
         };
-        let Some(raw) = fs.read("maps/mp/mp_carentan.bsp") else {
-            return;
-        };
+        let raw = vcod_common::testing::stock_file(&fs, "maps/mp/mp_carentan.bsp");
         let bsp = vcod_common::bsp::parse(&raw).unwrap();
         let all = MarkWorld::build(&bsp, |_| true);
         let none = MarkWorld::build(&bsp, |_| false);

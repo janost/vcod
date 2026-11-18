@@ -102,9 +102,7 @@ mod tests {
         let Some(fs) = vcod_common::testing::game_fs() else {
             return;
         };
-        let Some(raw) = fs.read("maps/mp/mp_carentan.bsp") else {
-            return;
-        };
+        let raw = vcod_common::testing::stock_file(&fs, "maps/mp/mp_carentan.bsp");
         let bsp = vcod_common::bsp::parse(&raw).unwrap();
         let world = CollisionWorld::build(&bsp, &[]);
         let (spawn, _) = vcod_common::bsp::find_spawn(&bsp.entities).unwrap();

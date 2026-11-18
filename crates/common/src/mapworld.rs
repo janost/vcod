@@ -1068,9 +1068,7 @@ mod pvs_tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let Some(bytes) = fs.read("maps/mp/mp_pavlov.bsp") else {
-            return;
-        };
+        let bytes = crate::testing::stock_file(&fs, "maps/mp/mp_pavlov.bsp");
         let b = parse(&bytes).expect("parse the bsp");
         let pvs = b.pvs.as_ref().expect("mp_pavlov ships a pvs");
         let highest = b.leafs.iter().map(|l| l.cluster).max().unwrap_or(-1);

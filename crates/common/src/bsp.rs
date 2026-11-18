@@ -1294,9 +1294,7 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let Some(data) = fs.read("maps/MP/mp_ship.bsp") else {
-            return;
-        };
+        let data = crate::testing::stock_file(&fs, "maps/MP/mp_ship.bsp");
         let c = coronas(&parse(&data).unwrap().entities);
         assert_eq!(c.len(), 36);
         assert!(c.iter().all(|c| (c.radius - 7.65).abs() < 1e-4));
@@ -1307,9 +1305,7 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let Some(data) = fs.read("maps/MP/mp_ship.bsp") else {
-            return;
-        };
+        let data = crate::testing::stock_file(&fs, "maps/MP/mp_ship.bsp");
         let bsp = parse(&data).unwrap();
         // `-45 110 0` as angles; the compiler's lump-30 sun (words 7..9)
         // points the same way, which a vector reading of the key would not

@@ -193,6 +193,14 @@ pub fn uo_fs() -> Option<Pk3Fs> {
     Some(opened(&dir, Pk3Fs::open(&dir)))
 }
 
+/// `path` off `fs`, a file every install of the game ships (a stock map):
+/// a test that has its install panics when the lookup misses rather than
+/// passing with nothing checked.
+pub fn stock_file(fs: &Pk3Fs, path: &str) -> Vec<u8> {
+    fs.read(path)
+        .unwrap_or_else(|| panic!("{path}: every install ships it, and the lookup missed"))
+}
+
 /// `maps/mp/mp_pavlov.bsp` from the retail paks.
 pub fn real_bsp() -> Option<Vec<u8>> {
     game_fs()?.read("maps/mp/mp_pavlov.bsp")
