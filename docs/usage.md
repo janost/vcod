@@ -62,8 +62,10 @@ load a third-party map and refuses `--set fs_game`.
 | `--exec-after "<secs> <line>"` | A queue of console lines, each `secs` after the one before. |
 
 Start New Server in the menu runs `vcod-server` from beside `vcod` and
-joins it; build both. The client stops that server when it exits. vcod
-has no listen server.
+joins it; build both. The client stops that server when it exits: it
+sends `quit`, so players get their disconnect, and kills it only if it is
+still up 2 s later. A client that dies takes its server with it (the
+server reads the client's pipe as stdin). vcod has no listen server.
 
 ## CD keys
 

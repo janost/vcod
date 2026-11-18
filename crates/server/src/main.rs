@@ -87,6 +87,10 @@ struct Args {
     /// command, as on retail's dedicated servers.
     #[arg(long)]
     no_console: bool,
+    /// stdin is the pipe of the client that started this server (Start New
+    /// Server): its end, the client gone, runs `quit`.
+    #[arg(long, hide = true, conflicts_with = "no_console")]
+    quit_on_eof: bool,
 
     /// Log one line per snapshot per client: send interval, the serverTime and
     /// commandTime a client predicts from, the usercmds consumed, and whether
@@ -126,9 +130,9 @@ fn main() -> Result<()> {
         let chosen = vcod_common::game_dir::chosen_by(from_command_line(&matches, "game_dir"));
         vcod_common::game_dir::check_install(&args.game_dir, game, &args.mod_dir, chosen)?;
     }
-    let sock = bind(last_set(&args.set, "net_ip"), args.port)?;
     let tty = tty_console_wanted(&args, game);
     init_log(tty);
+    let sock = bind(last_set(&args.set, "net_ip"), args.port)?;
     // `Com_AddStartupCommands` queues the command line in order, so a set
     // after `+map` runs again once the level is up (map-cycle doc 4.5).
     let map_index = matches.index_of("map").unwrap_or(0);
@@ -156,7 +160,15 @@ fn main() -> Result<()> {
         default_panic(info);
     }));
     let trace = args.trace;
-    let console = (!args.no_console).then(|| stdin_console(tty));
+    let console = (!args.no_console).then(|| {
+        if args.quit_on_eof {
+            vcod_server::stdin_console::StdinConsole::spawn_child(std::io::BufReader::new(
+                std::io::stdin(),
+            ))
+        } else {
+            stdin_console(tty)
+        }
+    });
     if game == Game::Cod2 {
         let (mut server, net) = cod2_server(args, sock)?;
         return serve(&mut server, net, console, trace);
@@ -186,7 +198,10 @@ const GAME_FLAGS: [(&str, &[Game]); 5] = [
 /// Refuses a flag `game` would accept and ignore.
 fn check_game_flags(matches: &ArgMatches, game: Game) -> Result<()> {
     for (id, games) in GAME_FLAGS {
-        if !games.contains(&game) && from_command_line(matches, id) {
+        // `--mod-dir main` names the default, which every game reads.
+        let default =
+            id == "mod_dir" && matches.get_one::<String>(id).map(String::as_str) == Some("main");
+        if !games.contains(&game) && from_command_line(matches, id) && !default {
             let names: Vec<String> = games.iter().map(|g| format!("{g:?}")).collect();
             bail!(
                 "--{} is {} only; this is {game:?}",
@@ -882,6 +897,9 @@ mod tests {
         assert!(check_game_flags(&m, Game::Cod2).is_ok());
         let e = check_game_flags(&m, Game::Cod4).unwrap_err().to_string();
         assert_eq!(e, "--mod-dir is Cod1 and Cod2 only; this is Cod4");
+        // Start New Server passes the default on every game.
+        let (m, _) = parse(&["mp_crash", "--mod-dir", "main"]);
+        assert!(check_game_flags(&m, Game::Cod4).is_ok());
         let (m, _) = parse(&["mp_crash"]);
         for g in [Game::Cod1, Game::Cod2, Game::Cod4] {
             assert!(check_game_flags(&m, g).is_ok());
