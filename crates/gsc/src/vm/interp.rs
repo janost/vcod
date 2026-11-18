@@ -203,6 +203,20 @@ fn numeric_cmp(a: Value, b: Value, f: impl Fn(f32, f32) -> bool) -> Result<Value
 /// 30 turns.
 pub(crate) const MAX_STRING_LEN: usize = 8192;
 
+/// vcod's ceiling on a level's script variables: every struct and array
+/// allocated with their fields and elements ([`crate::heap::Heap::vars`]),
+/// plus the live threads. The heap frees nothing within a level, so this
+/// counts garbage too. Past it the allocating thread ends with
+/// `ErrorKind::TooManyVariables`, where retail's fixed pool raises
+/// `exceeded maximum number of script variables` (cod11-gsc-language.md,
+/// "Runtime errors below developer 1"). A stock CoD4 round with 12 bots
+/// adds about 17,000 a minute (cod2-gsc-diff.md 3.7).
+pub(crate) const MAX_VARIABLES: u64 = 64_000_000;
+
+/// The same ceiling on the interned strings' bytes, which no string is
+/// freed from either.
+pub(crate) const MAX_STRING_BYTES: usize = 256 << 20;
+
 /// `lhs` and `rhs` joined, or a script error past [`MAX_STRING_LEN`].
 fn concat(lhs: &str, rhs: &str) -> Result<String, ErrorKind> {
     if lhs.len() + rhs.len() > MAX_STRING_LEN {
@@ -211,7 +225,21 @@ fn concat(lhs: &str, rhs: &str) -> Result<String, ErrorKind> {
     Ok(format!("{lhs}{rhs}"))
 }
 
-fn eval_add(interner: &mut Interner, a: Value, b: Value) -> Result<Value, ErrorKind> {
+/// `a + b`; a concatenation past `max_bytes` of interned text fails.
+/// `s` interned, unless the interner already holds `max_bytes`.
+fn intern_within(interner: &mut Interner, max_bytes: usize, s: &str) -> Result<Value, ErrorKind> {
+    if interner.bytes() + s.len() > max_bytes && interner.get_exact(s).is_none() {
+        return Err(ErrorKind::TooManyVariables);
+    }
+    Ok(Value::String(interner.intern_exact(s)))
+}
+
+fn eval_add(
+    interner: &mut Interner,
+    max_bytes: usize,
+    a: Value,
+    b: Value,
+) -> Result<Value, ErrorKind> {
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x.wrapping_add(y))),
         (Value::Vector(x), Value::Vector(y)) => {
@@ -225,14 +253,14 @@ fn eval_add(interner: &mut Interner, a: Value, b: Value) -> Result<Value, ErrorK
                 "+ cannot concatenate that onto a string",
             ))?;
             let s = concat(interner.resolve(x), &rhs)?;
-            Ok(Value::String(interner.intern_exact(&s)))
+            intern_within(interner, max_bytes, &s)
         }
         (other, Value::String(y)) => {
             let lhs = format_number(other, interner).ok_or(ErrorKind::BadType(
                 "+ cannot concatenate that onto a string",
             ))?;
             let s = concat(&lhs, interner.resolve(y))?;
-            Ok(Value::String(interner.intern_exact(&s)))
+            intern_within(interner, max_bytes, &s)
         }
         (a, b) => match (to_f32(a), to_f32(b)) {
             (Some(x), Some(y)) => Ok(Value::Float(x + y)),
@@ -782,6 +810,15 @@ impl Vm {
                 }
             };
         }
+        // After an op that may allocate: past the level's ceiling the
+        // thread ends (`MAX_VARIABLES`).
+        macro_rules! ceiling {
+            () => {
+                if self.over_ceiling() {
+                    fail!(ErrorKind::TooManyVariables);
+                }
+            };
+        }
 
         // `LoadField`'s answer for a value it reads without failing:
         // `None` for a dead entity or a value with no such field.
@@ -937,6 +974,7 @@ impl Vm {
                             "field assignment needs a struct or entity"
                         )),
                     }
+                    ceiling!();
                 }
                 Op::LoadIndex => {
                     let key = pop!();
@@ -986,7 +1024,7 @@ impl Vm {
                     push!(v);
                 }
                 Op::StoreIndex => {
-                    let v = pop!();
+                    let mut v = pop!();
                     let key = pop!();
                     let obj = pop!();
                     self.heap.share(v);
@@ -996,12 +1034,23 @@ impl Vm {
                     let Some(k) = array_key(key) else {
                         fail!(ErrorKind::BadType("array key must be a string or a number"));
                     };
+                    // `a[0] = a`: the target was owned before the value was
+                    // read, so the value holds it. An array is a value; the
+                    // element takes the array as it stood, not a cycle.
+                    if let Value::Array(a) = v
+                        && self.heap.reaches(a, id)
+                    {
+                        v = Value::Array(self.heap.snapshot(a));
+                        self.heap.share(v);
+                    }
                     self.heap.set_index(id, k, v);
+                    ceiling!();
                 }
                 Op::OwnLocal(slot) => {
                     if let Value::Array(id) = locals[slot as usize] {
                         let own = self.heap.own(id);
                         locals[slot as usize] = Value::Array(own);
+                        ceiling!();
                     }
                     push!(locals[slot as usize]);
                 }
@@ -1037,6 +1086,7 @@ impl Vm {
                         }
                         _ => fail!(ErrorKind::BadType("indexing needs an array")),
                     };
+                    ceiling!();
                     push!(Value::Array(id));
                 }
                 Op::EnsureArrayField(name) => {
@@ -1119,6 +1169,7 @@ impl Vm {
                             "field assignment needs a struct or entity"
                         )),
                     };
+                    ceiling!();
                     push!(Value::Array(id));
                 }
                 Op::EnsureArrayIndex => {
@@ -1145,6 +1196,7 @@ impl Vm {
                         }
                         _ => fail!(ErrorKind::BadType("indexing needs an array")),
                     };
+                    ceiling!();
                     push!(Value::Array(id));
                 }
                 Op::LoadSelf => {
@@ -1159,6 +1211,7 @@ impl Vm {
                 Op::LoadAnim => push!(Value::Struct(self.anim)),
                 Op::NewArray => {
                     let id = self.heap.new_array();
+                    ceiling!();
                     push!(Value::Array(id));
                 }
                 Op::MakeVector => {
@@ -1194,6 +1247,7 @@ impl Vm {
                         if self.outer_frames as usize + depth >= MAX_FRAMES {
                             fail!(ErrorKind::StackOverflow);
                         }
+                        ceiling!();
                         let args = stack[base..sp].to_vec();
                         sp = base - usize::from(has_recv);
                         let spent = self
@@ -1268,6 +1322,7 @@ impl Vm {
                             nested_spent += spent;
                         }
                     }
+                    ceiling!();
                     push!(v);
                 }
                 Op::CallPtr {
@@ -1296,6 +1351,7 @@ impl Vm {
                         if self.outer_frames as usize + depth >= MAX_FRAMES {
                             fail!(ErrorKind::StackOverflow);
                         }
+                        ceiling!();
                         let args = args.to_vec();
                         let spent = self
                             .spawn_nested(host, target, callee, recv, args, depth, left, errors);
@@ -1324,7 +1380,7 @@ impl Vm {
                     let v = match (a, b) {
                         (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_add(y)),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
-                        _ => tri!(eval_add(&mut self.interner, a, b)),
+                        _ => tri!(eval_add(&mut self.interner, self.max_string_bytes, a, b)),
                     };
                     push!(v);
                 }
@@ -1785,7 +1841,7 @@ impl Vm {
                     let v = match (x, y) {
                         (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_add(y)),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
-                        _ => tri!(eval_add(&mut self.interner, x, y)),
+                        _ => tri!(eval_add(&mut self.interner, self.max_string_bytes, x, y)),
                     };
                     if left > 0 {
                         left -= 1;

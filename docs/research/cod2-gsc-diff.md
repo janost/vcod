@@ -606,11 +606,26 @@ vcod (all three games):
   hands back what it did not use. The heaviest stock step, a CoD4 map's
   load with the threads it starts, runs 394,000. A pass stops taking steps
   past `MAX_PASS_INSTRUCTIONS` (10,000,000; the heaviest stock pass runs
-  1.43 million) or `MAX_THREADS_PER_FRAME`, and the clock stays where the
-  walk stopped so the next pass runs what was left. Retail has neither
-  ceiling; a count, not wall time, keeps the replays deterministic.
+  1.43 million) or `MAX_THREADS_PER_FRAME`. Every thread still due then
+  turns runnable and the next pass runs those first, in the order this one
+  would have picked them (`Vm::deferred`), so a `wait 0` spin cannot
+  starve the other threads due beside it; the clock moves on to
+  `level.time` as usual. Retail has neither ceiling; a count, not wall time, keeps the replays deterministic.
 - A concatenation past 8192 bytes is a script error (`string too long`,
   `interp::MAX_STRING_LEN`); stock scripts build at most 138.
+- The heap frees nothing within a level, so vcod caps the level instead
+  of a live pool: past 64,000,000 variables (every struct and array
+  allocated with their fields and elements, `Heap::vars`, plus the live
+  threads; `interp::MAX_VARIABLES`) or 256 MiB of interned strings
+  (`MAX_STRING_BYTES`), the op that allocates ends its thread with
+  `ErrorKind::TooManyVariables`. Retail's counterpart is its fixed pool's
+  terminal `exceeded maximum number of script variables`
+  (cod11-gsc-language.md, "Runtime errors below developer 1"). Measured
+  on vcod-server, CoD4 `war` on mp_crash with 12 shooting bots, one
+  5.8-minute round: 97,340 variables (37,788 arrays, 3,616 structs), 852
+  threads at most, 379,460 bytes of strings. At that rate a level that
+  never rotates or restarts reaches the ceiling after about 60 hours; a
+  script allocating in a loop reaches it within seconds.
 
 ## 4. Callbacks, engine notifies, script loading
 

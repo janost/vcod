@@ -16,8 +16,8 @@
 //! waiting thread would hang with nothing logged.
 //!
 //! Runtime-built strings (e.g. `s = s + "x"` in a loop) intern permanently,
-//! with no reclamation. Not fixed here: the heap this feeds is dropped
-//! whole on map change, and G1 has no GC.
+//! with no reclamation until the level's `Vm` is dropped; a concatenation
+//! past `interp::MAX_STRING_BYTES` of interned text ends its thread.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -43,6 +43,8 @@ pub struct Interner {
     /// A vector renders as `(%g, %g, %g)`, CoD2's `SL_GetStringForVector`,
     /// not 1.1's two decimals (`value::format_number`).
     pub vectors_g: bool,
+    /// [`Interner::bytes`].
+    bytes: usize,
 }
 
 /// The next [`Interner::id`].
@@ -58,6 +60,7 @@ impl Default for Interner {
             folded: Vec::new(),
             canon: Vec::new(),
             vectors_g: false,
+            bytes: 0,
         }
     }
 }
@@ -74,6 +77,7 @@ impl Clone for Interner {
             folded: self.folded.clone(),
             canon: self.canon.clone(),
             vectors_g: self.vectors_g,
+            bytes: self.bytes,
         }
     }
 }
@@ -98,6 +102,7 @@ impl Interner {
         // `intern_exact` and `intern_folded` can never disagree about which
         // atom a folded key resolves to, whichever role saw the text first.
         let canon = *self.by_folded.entry(folded.clone()).or_insert(a);
+        self.bytes += s.len();
         self.text.push(s.to_string());
         self.folded.push(folded);
         self.canon.push(canon);
@@ -113,6 +118,7 @@ impl Interner {
             return a;
         }
         let a = Atom(self.text.len() as u32);
+        self.bytes += s.len();
         self.text.push(s.to_string());
         self.folded.push(folded.clone());
         self.canon.push(a);
@@ -150,6 +156,11 @@ impl Interner {
     /// differently.
     pub fn fold_atom(&self, a: Atom) -> Atom {
         self.canon[a.0 as usize]
+    }
+
+    /// The text of every atom interned, in bytes. Nothing is ever freed.
+    pub fn bytes(&self) -> usize {
+        self.bytes
     }
 
     /// Every atom's text, in interning order. Nothing is ever freed.

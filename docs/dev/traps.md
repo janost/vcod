@@ -35,7 +35,11 @@ names holds the evidence.
   (`Heap::share`, `Heap::own`). A write path that skips the
   `EnsureArray*`/`OwnLocal` ops writes into every holder. CoD4's
   `CountPlayers` shared `level.players` that way and flooded
-  `spawnPerFrameUpdate` (cod4-gsc.md 10).
+  `spawnPerFrameUpdate` (cod4-gsc.md 10). `a[0] = a` owns `a` before it
+  reads the value, so `StoreIndex` stores a deep copy (`Heap::snapshot`)
+  when the value holds the target: no array cycle exists. A struct cycle
+  (`s.a = s`) is legal; the level carry (`lift_array`) and `scriptUsage`
+  take each object once.
 - `Cx::spawn` runs a script thread before the calling builtin's next
   instruction. `Cx::spawn_then` adds `Host::spawn_returned` once that thread
   first suspends. Only a `Cx` handed to a builtin (or to `spawn_returned`)

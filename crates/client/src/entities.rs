@@ -1647,9 +1647,6 @@ fn place_body(
         .ok()
         .filter(|n| (64..1023).contains(n))?;
     let gun = guns.get(&gun)?;
-    if gun.rotate_inc <= 0.0 {
-        return None; // not a turret file: the column split would divide by 0
-    }
     place_gunner_at(
         GunnerRule::Cod1,
         anims,

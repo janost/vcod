@@ -36,10 +36,10 @@ pub fn latin1(b: &[u8]) -> String {
     b.iter().map(|&c| char::from(c)).collect()
 }
 
-/// A Latin-1 `String`'s bytes, one per char (the inverse of [`latin1`]); a
-/// char past U+00FF keeps its low byte.
+/// [`latin1`]'s inverse: one byte per char, a char above U+00FF as `.`, as
+/// `write_big_string` sends one. Its low byte could be a NUL or a `\`.
 pub fn latin1_bytes(s: &str) -> Vec<u8> {
-    s.chars().map(|c| c as u32 as u8).collect()
+    s.chars().map(|c| u8::try_from(c).unwrap_or(b'.')).collect()
 }
 
 /// `Q_CleanStr` (CoD2's `I_CleanStr`): colour codes out (`^` and the

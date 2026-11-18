@@ -10,7 +10,7 @@ const PREFIX: [u8; 4] = [0xff; 4];
 /// `FF FF FF FF` then `text`.
 pub fn packet(text: &str) -> Vec<u8> {
     let mut v = PREFIX.to_vec();
-    v.extend(text.chars().map(|c| c as u8));
+    v.extend(vcod_common::text::latin1_bytes(text));
     v
 }
 
@@ -109,6 +109,19 @@ pub fn parse_reply(payload: &[u8]) -> Reply {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A char above U+00FF goes out as `.`, never its low byte: U+1F600's
+    /// is a NUL, U+305C's a `\`. Latin-1 text keeps every byte.
+    #[test]
+    fn a_char_past_latin1_is_a_dot_on_the_wire() {
+        let text = "a\u{1f600}b\u{305c}c\u{4e00}";
+        assert_eq!(super::super::write::latin1_bytes(text), b"a.b.c.");
+        assert_eq!(packet(text)[4..], *b"a.b.c.");
+        let latin1: String = (1..=255u8).map(char::from).collect();
+        let bytes: Vec<u8> = (1..=255u8).collect();
+        assert_eq!(super::super::write::latin1_bytes(&latin1), bytes);
+        assert_eq!(packet(&latin1)[4..], bytes[..]);
+    }
 
     #[test]
     fn retail_replies_parse() {

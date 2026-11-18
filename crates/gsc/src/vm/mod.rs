@@ -36,11 +36,6 @@ pub enum Target {
     Struct(StructId),
 }
 
-/// How deep a carried array may nest before the copy stops. gsc arrays are
-/// reference-typed, so `a[0] = a` is expressible and would otherwise recurse
-/// forever; anything past this reads `undefined` on the far side.
-const MAX_CARRY_DEPTH: u32 = 32;
-
 /// An array key with its text rather than an `Atom`, since atoms are per-`Vm`.
 #[derive(Clone, Debug)]
 enum CarryKey {
@@ -52,24 +47,84 @@ enum CarryKey {
 /// the object, one per defined variable, and an array's own usage over its
 /// holders.
 fn object_usage(heap: &Heap, holders: &crate::fxhash::FxHashMap<u32, u32>, vars: &[Value]) -> f64 {
+    let mut memo = crate::fxhash::FxHashMap::default();
+    usage_of(heap, holders, vars, &mut memo)
+}
+
+/// [`object_usage`] over `vars`, each array's own usage read from `memo`.
+fn usage_of(
+    heap: &Heap,
+    holders: &crate::fxhash::FxHashMap<u32, u32>,
+    vars: &[Value],
+    memo: &mut crate::fxhash::FxHashMap<u32, f64>,
+) -> f64 {
+    for v in vars {
+        if let Value::Array(a) = v {
+            array_usage(heap, holders, *a, memo);
+        }
+    }
     1.0 + vars
         .iter()
         .filter(|v| !matches!(v, Value::Undefined))
         .map(|v| match v {
             Value::Array(a) => {
-                let elems: Vec<Value> =
-                    heap.array_entries(*a).into_iter().map(|(_, v)| v).collect();
                 let n = holders.get(&a.0).copied().unwrap_or(1).max(1);
-                1.0 + object_usage(heap, holders, &elems) / f64::from(n)
+                // An array still open below is a cycle: counted as empty.
+                1.0 + memo.get(&a.0).copied().unwrap_or(1.0) / f64::from(n)
             }
             _ => 1.0,
         })
         .sum::<f64>()
 }
 
+/// Fills `memo` with the usage of `root`'s elements and of every array
+/// under it, each array once however many hold it, deepest first.
+fn array_usage(
+    heap: &Heap,
+    holders: &crate::fxhash::FxHashMap<u32, u32>,
+    root: ArrayId,
+    memo: &mut crate::fxhash::FxHashMap<u32, f64>,
+) {
+    let mut open = std::collections::HashSet::<u32, crate::fxhash::FxBuildHasher>::default();
+    let mut todo = vec![(root, false)];
+    while let Some((a, expanded)) = todo.pop() {
+        if memo.contains_key(&a.0) {
+            continue;
+        }
+        let elems: Vec<Value> = heap.array_entries(a).into_iter().map(|(_, v)| v).collect();
+        if expanded {
+            let u = 1.0
+                + elems
+                    .iter()
+                    .filter(|v| !matches!(v, Value::Undefined))
+                    .map(|v| match v {
+                        Value::Array(b) => {
+                            let n = holders.get(&b.0).copied().unwrap_or(1).max(1);
+                            1.0 + memo.get(&b.0).copied().unwrap_or(1.0) / f64::from(n)
+                        }
+                        _ => 1.0,
+                    })
+                    .sum::<f64>();
+            memo.insert(a.0, u);
+            open.remove(&a.0);
+        } else if open.insert(a.0) {
+            todo.push((a, true));
+            for v in elems {
+                if let Value::Array(b) = v
+                    && !memo.contains_key(&b.0)
+                    && !open.contains(&b.0)
+                {
+                    todo.push((b, false));
+                }
+            }
+        }
+    }
+}
+
 /// One value lifted out of a `Vm`'s heap in a form the next one can rebuild:
-/// every atom carried as text and every nested array or struct by contents,
-/// because both the interner and the heap ids die with the old `Vm`.
+/// every atom carried as text, an array or struct as the index of its
+/// [`CarryNode`], because both the interner and the heap ids die with the
+/// old `Vm`.
 #[derive(Clone, Debug)]
 enum CarryValue {
     /// `Undefined`, `Int`, `Float` and `Vector`: no heap or interner reach.
@@ -81,6 +136,14 @@ enum CarryValue {
         file: String,
         name: String,
     },
+    Array(usize),
+    Struct(usize),
+}
+
+/// One array or struct lifted out, once however many places hold it, so
+/// a shared or cyclic graph carries as the same graph.
+#[derive(Debug)]
+enum CarryNode {
     Array(Vec<(CarryKey, CarryValue)>),
     Struct(Vec<(String, CarryValue)>),
 }
@@ -94,84 +157,155 @@ enum CarryValue {
 pub struct GameCarry(ArrayCarry);
 
 /// One client's `pers[]` across the same handover, lifted and rebuilt the
-/// same way.
+/// same way. Node 0 is the array itself.
 #[derive(Default, Debug)]
 pub struct ArrayCarry {
-    entries: Vec<(CarryKey, CarryValue)>,
+    nodes: Vec<CarryNode>,
 }
 
-/// `id`'s contents, deep-copied out of `heap` with every atom resolved
-/// through `interner`.
-fn lift_array(heap: &Heap, interner: &Interner, id: ArrayId, depth: u32) -> ArrayCarry {
-    let entries = heap
-        .array_entries(id)
-        .into_iter()
-        .map(|(k, v)| {
-            let key = match k {
-                ArrayKey::Int(i) => CarryKey::Int(i),
-                ArrayKey::Str(a) => CarryKey::Str(interner.resolve(a).to_string()),
-            };
-            (key, lift_value(heap, interner, v, depth))
+/// `root` and everything it reaches, lifted out of `heap` with every atom
+/// resolved through `interner`.
+fn lift_array(heap: &Heap, interner: &Interner, root: ArrayId) -> ArrayCarry {
+    let mut lift = Lift {
+        interner,
+        arrays: Default::default(),
+        structs: Default::default(),
+        todo: Vec::new(),
+        count: 0,
+    };
+    lift.value(Value::Array(root));
+    let mut nodes: Vec<Option<CarryNode>> = Vec::new();
+    while let Some((n, v)) = lift.todo.pop() {
+        let node = match v {
+            Value::Array(id) => CarryNode::Array(
+                heap.array_entries(id)
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let key = match k {
+                            ArrayKey::Int(i) => CarryKey::Int(i),
+                            ArrayKey::Str(a) => CarryKey::Str(interner.resolve(a).to_string()),
+                        };
+                        (key, lift.value(v))
+                    })
+                    .collect(),
+            ),
+            Value::Struct(id) => {
+                let mut fields: Vec<(String, CarryValue)> = heap
+                    .struct_fields(id)
+                    .into_iter()
+                    .map(|(f, v)| (interner.resolve(f).to_string(), lift.value(v)))
+                    .collect();
+                // `struct_fields` walks a `HashMap`; sorted so a carry is
+                // reproducible run to run.
+                fields.sort_by(|a, b| a.0.cmp(&b.0));
+                CarryNode::Struct(fields)
+            }
+            _ => unreachable!("only arrays and structs are queued"),
+        };
+        if nodes.len() <= n {
+            nodes.resize_with(n + 1, || None);
+        }
+        nodes[n] = Some(node);
+    }
+    ArrayCarry {
+        nodes: nodes
+            .into_iter()
+            .map(|n| n.expect("every node queued is lifted"))
+            .collect(),
+    }
+}
+
+/// [`lift_array`]'s walk: each array and struct numbered on first sight
+/// and queued for its contents.
+struct Lift<'a> {
+    interner: &'a Interner,
+    arrays: crate::fxhash::FxHashMap<u32, usize>,
+    structs: crate::fxhash::FxHashMap<u32, usize>,
+    todo: Vec<(usize, Value)>,
+    count: usize,
+}
+
+impl Lift<'_> {
+    fn value(&mut self, v: Value) -> CarryValue {
+        let interner = self.interner;
+        match v {
+            Value::Undefined | Value::Int(_) | Value::Float(_) | Value::Vector(_) => {
+                CarryValue::Plain(v)
+            }
+            Value::String(a) => CarryValue::Str(interner.resolve(a).to_string()),
+            Value::Localized(a) => CarryValue::Localized(interner.resolve(a).to_string()),
+            Value::Anim(a) => CarryValue::Anim(interner.resolve(a).to_string()),
+            Value::Function(f) => CarryValue::Function {
+                file: interner.resolve(f.file).to_string(),
+                name: interner.resolve(f.name).to_string(),
+            },
+            // The entity table is the level's; a handle into it means nothing
+            // to the next one.
+            Value::Entity(_) => CarryValue::Plain(Value::Undefined),
+            Value::Array(id) => CarryValue::Array(self.node(v, id.0, true)),
+            Value::Struct(id) => CarryValue::Struct(self.node(v, id.0, false)),
+        }
+    }
+
+    fn node(&mut self, v: Value, id: u32, array: bool) -> usize {
+        let seen = if array {
+            &mut self.arrays
+        } else {
+            &mut self.structs
+        };
+        if let Some(&n) = seen.get(&id) {
+            return n;
+        }
+        let n = self.count;
+        self.count += 1;
+        seen.insert(id, n);
+        self.todo.push((n, v));
+        n
+    }
+}
+
+/// The inverse of `lift_array`, into an array `id` this `Vm` already owns:
+/// node 0 lands in `id`, every other node in a new array or struct, and
+/// each lands once however many places name it.
+fn plant_array(heap: &mut Heap, interner: &mut Interner, id: ArrayId, carry: &ArrayCarry) {
+    let ids: Vec<Value> = carry
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(n, node)| match node {
+            CarryNode::Array(_) if n == 0 => Value::Array(id),
+            CarryNode::Array(_) => Value::Array(heap.new_array()),
+            CarryNode::Struct(_) => Value::Struct(heap.new_struct()),
         })
         .collect();
-    ArrayCarry { entries }
-}
-
-fn lift_value(heap: &Heap, interner: &Interner, v: Value, depth: u32) -> CarryValue {
-    match v {
-        Value::Undefined | Value::Int(_) | Value::Float(_) | Value::Vector(_) => {
-            CarryValue::Plain(v)
-        }
-        Value::String(a) => CarryValue::Str(interner.resolve(a).to_string()),
-        Value::Localized(a) => CarryValue::Localized(interner.resolve(a).to_string()),
-        Value::Anim(a) => CarryValue::Anim(interner.resolve(a).to_string()),
-        Value::Function(f) => CarryValue::Function {
-            file: interner.resolve(f.file).to_string(),
-            name: interner.resolve(f.name).to_string(),
-        },
-        // The entity table is the level's; a handle into it means nothing
-        // to the next one.
-        Value::Entity(_) => CarryValue::Plain(Value::Undefined),
-        Value::Array(id) if depth < MAX_CARRY_DEPTH => {
-            CarryValue::Array(lift_array(heap, interner, id, depth + 1).entries)
-        }
-        Value::Struct(id) if depth < MAX_CARRY_DEPTH => {
-            let mut fields: Vec<(String, CarryValue)> = heap
-                .struct_fields(id)
-                .into_iter()
-                .map(|(f, v)| {
-                    (
-                        interner.resolve(f).to_string(),
-                        lift_value(heap, interner, v, depth + 1),
-                    )
-                })
-                .collect();
-            // `struct_fields` walks a `HashMap`; sorted so a carry is
-            // reproducible run to run.
-            fields.sort_by(|a, b| a.0.cmp(&b.0));
-            CarryValue::Struct(fields)
-        }
-        Value::Array(_) | Value::Struct(_) => {
-            log::warn!("carried value past {MAX_CARRY_DEPTH} levels of nesting, dropped");
-            CarryValue::Plain(Value::Undefined)
+    for (node, at) in carry.nodes.iter().zip(&ids) {
+        match (node, *at) {
+            (CarryNode::Array(entries), Value::Array(a)) => {
+                for (k, v) in entries {
+                    // Array keys intern exact, field names fold (atom.rs).
+                    let key = match k {
+                        CarryKey::Int(i) => ArrayKey::Int(*i),
+                        CarryKey::Str(s) => ArrayKey::Str(interner.intern_exact(s)),
+                    };
+                    let value = plant_value(interner, v, &ids);
+                    heap.share(value);
+                    heap.set_index(a, key, value);
+                }
+            }
+            (CarryNode::Struct(fields), Value::Struct(s)) => {
+                for (name, v) in fields {
+                    let f = interner.intern_folded(name);
+                    let value = plant_value(interner, v, &ids);
+                    heap.share(value);
+                    heap.set_field(s, f, value);
+                }
+            }
+            _ => unreachable!("each node planted as its own kind"),
         }
     }
 }
 
-/// The inverse of `lift_array`, into an array `id` this `Vm` already owns.
-fn plant_array(heap: &mut Heap, interner: &mut Interner, id: ArrayId, carry: &ArrayCarry) {
-    for (k, v) in &carry.entries {
-        // Array keys intern exact, field names fold (atom.rs).
-        let key = match k {
-            CarryKey::Int(i) => ArrayKey::Int(*i),
-            CarryKey::Str(s) => ArrayKey::Str(interner.intern_exact(s)),
-        };
-        let value = plant_value(heap, interner, v);
-        heap.set_index(id, key, value);
-    }
-}
-
-fn plant_value(heap: &mut Heap, interner: &mut Interner, v: &CarryValue) -> Value {
+fn plant_value(interner: &mut Interner, v: &CarryValue, ids: &[Value]) -> Value {
     match v {
         CarryValue::Plain(v) => *v,
         CarryValue::Str(s) => Value::String(interner.intern_exact(s)),
@@ -181,27 +315,7 @@ fn plant_value(heap: &mut Heap, interner: &mut Interner, v: &CarryValue) -> Valu
             file: interner.intern_folded(file),
             name: interner.intern_folded(name),
         }),
-        CarryValue::Array(entries) => {
-            let id = heap.new_array();
-            plant_array(
-                heap,
-                interner,
-                id,
-                &ArrayCarry {
-                    entries: entries.clone(),
-                },
-            );
-            Value::Array(id)
-        }
-        CarryValue::Struct(fields) => {
-            let id = heap.new_struct();
-            for (name, v) in fields {
-                let f = interner.intern_folded(name);
-                let value = plant_value(heap, interner, v);
-                heap.set_field(id, f, value);
-            }
-            Value::Struct(id)
-        }
+        CarryValue::Array(n) | CarryValue::Struct(n) => ids[*n],
     }
 }
 
@@ -224,6 +338,10 @@ pub enum ErrorKind {
     /// The host's `G_Error` inside a builtin: the thread dies, the pass
     /// ends there, and the host drops the level.
     GameError(&'static str),
+    /// The level's script variables or interned strings past vcod's
+    /// ceiling (`interp::MAX_VARIABLES`): retail's `exceeded maximum number
+    /// of script variables`. Ends the thread whose op allocated.
+    TooManyVariables,
     /// A builtin panicked, with the panic's text, under
     /// [`contain_builtin_panics`]: the thread dies; what the builtin had
     /// done before the panic stands.
@@ -457,7 +575,7 @@ impl Cx<'_> {
     /// (`ArrayCarry`). A host carrying a client's `pers[]` across a level
     /// boundary takes it here.
     pub fn take_array(&self, a: ArrayId) -> ArrayCarry {
-        lift_array(self.heap, self.interner, a, 0)
+        lift_array(self.heap, self.interner, a)
     }
 
     /// `take_array`'s inverse, into an array this `Vm` owns. Keys and
@@ -730,6 +848,13 @@ pub struct Vm {
     notify_index: sched::NotifyIndex,
     /// The threads the scheduler may pick next ([`sched::ReadyIndex`]).
     ready: sched::ReadyIndex,
+    /// The threads still due when a pass stopped at a cap, in pick order,
+    /// each under its queue stamp: the next pass runs them first.
+    deferred: std::collections::VecDeque<(sched::ThreadId, u64)>,
+    /// `interp::MAX_VARIABLES` and `interp::MAX_STRING_BYTES`; a test lowers
+    /// them.
+    max_vars: u64,
+    max_string_bytes: usize,
 }
 
 impl Default for Vm {
@@ -791,6 +916,9 @@ impl Vm {
             frame_pool: Vec::new(),
             notify_index: Default::default(),
             ready: Default::default(),
+            deferred: Default::default(),
+            max_vars: interp::MAX_VARIABLES,
+            max_string_bytes: interp::MAX_STRING_BYTES,
         }
     }
 
@@ -874,6 +1002,13 @@ impl Vm {
     /// a thread on to its next suspend (cod11-gsc-language.md section 10).
     pub fn set_kill_mid_step(&mut self, on: bool) {
         self.kill_mid_step = on;
+    }
+
+    /// Whether the heap and the threads, or the interned strings, are past
+    /// the level's ceiling.
+    pub(crate) fn over_ceiling(&self) -> bool {
+        self.heap.vars() + self.threads.len() as u64 > self.max_vars
+            || self.interner.bytes() > self.max_string_bytes
     }
 
     pub fn set_budget(&mut self, budget: u32) {
@@ -1173,7 +1308,7 @@ impl Vm {
     /// One array's contents, for a host carrying something other than
     /// `game[]` across the same boundary (a client's `pers[]`).
     pub fn take_array(&self, a: ArrayId) -> ArrayCarry {
-        lift_array(&self.heap, &self.interner, a, 0)
+        lift_array(&self.heap, &self.interner, a)
     }
 
     /// `take_game`'s inverse: the carried table into this `Vm`'s own
@@ -1366,6 +1501,38 @@ pub(crate) mod tests {
         vm.call_now(&mut host, main, None, vec![])
             .expect_err("expected a runtime error")
             .kind
+    }
+
+    /// A script that keeps allocating ends at the level's ceiling with
+    /// `TooManyVariables`, in both error modes, instead of growing the heap,
+    /// the thread list or the interner until the host runs out of memory.
+    /// The ceilings are lowered here so each case stays small.
+    #[test]
+    fn a_leaking_script_ends_at_the_variable_ceiling() {
+        for src in [
+            "main() { for (i = 0; ; i++) a[i] = i; }",
+            "main() { a[0] = 1; for (;;) { b = a; b[1] = 2; } }",
+            "main() { for (;;) thread f(); } f() { wait 1; }",
+            "main() { for (i = 0; ; i++) s = \"x\" + i; }",
+        ] {
+            for recover in [false, true] {
+                let ast = crate::parse::parse_file(src).unwrap();
+                let mut vm = Vm::new();
+                let fns =
+                    crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+                vm.install(fns).unwrap();
+                vm.set_recover_errors(recover);
+                vm.max_vars = vm.heap.vars() + 5_000;
+                vm.max_string_bytes = vm.interner.bytes() + 50_000;
+                let main = vm.func_ref("test/script", "main");
+                let e = vm
+                    .call_now(&mut TestHost::default(), main, None, vec![])
+                    .unwrap_err();
+                assert_eq!(e.kind, ErrorKind::TooManyVariables, "{src}");
+                assert!(vm.heap.vars() + (vm.thread_count() as u64) < vm.max_vars + 10);
+                assert!(vm.interner.bytes() < vm.max_string_bytes + 100);
+            }
+        }
     }
 
     /// `s = s + s` stops at `MAX_STRING_LEN` with a script error, in both
@@ -2245,6 +2412,114 @@ pub(crate) mod tests {
         let game = b.game_id();
         let n = b.with_cx(|cx| cx.array_len(game));
         assert_eq!(n, 1);
+    }
+
+    /// A struct two fields hold, itself among them, carries as one struct:
+    /// each object is lifted and planted once, so sharing and the cycle
+    /// survive and the lift stays linear.
+    #[test]
+    fn a_shared_and_cyclic_struct_carries_as_one_struct() {
+        let mut a = Vm::new();
+        let game = a.game_id();
+        a.with_cx(|cx| {
+            let s = cx.new_struct();
+            let (fa, fb) = (cx.intern_folded("a"), cx.intern_folded("b"));
+            cx.set_field(s, fa, Value::Struct(s));
+            cx.set_field(s, fb, Value::Struct(s));
+            let key = ArrayKey::Str(cx.intern_exact("s"));
+            cx.set_index(game, key, Value::Struct(s));
+        });
+        let carry = a.take_game();
+        let mut b = Vm::new();
+        b.install_game(&carry);
+        let game = b.game_id();
+        b.with_cx(|cx| {
+            let key = ArrayKey::Str(cx.intern_exact("s"));
+            let s = cx.get_index(game, key);
+            let (fa, fb) = (cx.intern_folded("a"), cx.intern_folded("b"));
+            let Value::Struct(id) = s else {
+                panic!("game[\"s\"] is {s:?}");
+            };
+            assert_eq!(cx.get_field(id, fa), s);
+            assert_eq!(cx.get_field(id, fb), s);
+        });
+    }
+
+    /// Forty levels of an array held twice by the level above: 2^40 paths,
+    /// 41 arrays. The carry takes each once and keeps the whole depth.
+    #[test]
+    fn a_doubled_deep_array_carries_in_linear_time_and_whole() {
+        let mut a = Vm::new();
+        let game = a.game_id();
+        a.with_cx(|cx| {
+            let mut inner = cx.new_array();
+            cx.set_index(inner, ArrayKey::Int(0), Value::Int(7));
+            for _ in 0..40 {
+                let outer = cx.new_array();
+                cx.set_index(outer, ArrayKey::Int(0), Value::Array(inner));
+                cx.set_index(outer, ArrayKey::Int(1), Value::Array(inner));
+                inner = outer;
+            }
+            cx.set_index(game, ArrayKey::Int(0), Value::Array(inner));
+        });
+        let carry = a.take_game();
+        assert_eq!(carry.0.nodes.len(), 42);
+        let mut b = Vm::new();
+        b.install_game(&carry);
+        let mut at = b.game_id();
+        for k in std::iter::once(0).chain([1; 40]) {
+            let Value::Array(next) = b.heap().get_index(at, ArrayKey::Int(k)) else {
+                panic!("the chain ends early");
+            };
+            at = next;
+        }
+        assert_eq!(b.heap().get_index(at, ArrayKey::Int(0)), Value::Int(7));
+    }
+
+    /// An array stored into itself takes the array as it stood: retail's
+    /// arrays are values, so `a[0][0]` is undefined, and neither a carry
+    /// nor `scriptUsage` meets a cycle.
+    #[test]
+    fn an_array_stored_into_itself_stores_its_old_value() {
+        let (v, _, _) = run("main() { a = []; a[0] = a; return isdefined(a[0][0]); }");
+        assert_eq!(v, Value::Int(0));
+        let (v, _, _) = run("main() { a = []; a[0] = a; return a[0].size; }");
+        assert_eq!(v, Value::Int(0));
+        let (v, _, _) = run("main() { a = []; a[0] = []; a[0][0] = a; \
+             return isdefined(a[0][0][0]) * 10 + isdefined(a[0][0][0][0]); }");
+        assert_eq!(v, Value::Int(10));
+        let (v, _, _) = run(r#"main() { game["g"] = game; return isdefined(game["g"]["g"]); }"#);
+        assert_eq!(v, Value::Int(0));
+    }
+
+    /// `scriptUsage`'s walk takes each array once: a cyclic array a host
+    /// built returns, and a doubled deep array costs its size, not its
+    /// paths, with the acyclic arithmetic unchanged.
+    #[test]
+    fn script_usage_walks_each_array_once() {
+        let mut heap = Heap::new();
+        let a = heap.new_array();
+        heap.set_index(a, ArrayKey::Int(0), Value::Array(a));
+        let holders = heap.array_holders();
+        assert!(object_usage(&heap, &holders, &[Value::Array(a)]).is_finite());
+
+        let mut heap = Heap::new();
+        let mut inner = heap.new_array();
+        for _ in 0..40 {
+            let outer = heap.new_array();
+            heap.set_index(outer, ArrayKey::Int(0), Value::Array(inner));
+            heap.set_index(outer, ArrayKey::Int(1), Value::Array(inner));
+            inner = outer;
+        }
+        let holders = heap.array_holders();
+        let u = object_usage(&heap, &holders, &[Value::Array(inner)]);
+        // Each level: 1 for the object, two elements of 1 + half the level
+        // below; the empty bottom array is 1.
+        let mut want = 1.0f64;
+        for _ in 0..40 {
+            want = 1.0 + 2.0 * (1.0 + want / 2.0);
+        }
+        assert_eq!(u, 1.0 + 1.0 + want);
     }
 
     /// The G1 blocker: a builtin needs to allocate and populate a heap array
