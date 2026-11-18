@@ -1,0 +1,51 @@
+# cargo deny check: advisories, licences, layering and sources.
+# CI runs bans, licenses and sources on every push and advisories weekly
+# (.github/workflows/ci.yml).
+
+[advisories]
+ignore = [
+    # Unmaintained, no successor release. Reached only through winit's
+    # Wayland client-side decorations (sctk-adwaita -> ab_glyph ->
+    # owned_ttf_parser), which draw title bars on GNOME Wayland.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained, no fix; winit CSD title bars only" },
+]
+
+[licenses]
+# Every licence must be compatible with vcod's GPL-3.0-or-later.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unlicense",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "GPL-3.0-or-later",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+# The platform stacks under these carry their own duplicates (bitflags,
+# windows-sys, objc2, ...); vcod's manifests cannot fix them.
+skip-tree = [
+    { crate = "winit", reason = "platform stack duplicates" },
+    { crate = "wgpu-hal", reason = "platform stack duplicates" },
+    { crate = "cpal", reason = "platform stack duplicates" },
+]
+# AGENTS.md "Dependency rules": only the client (package `vcod`) links the
+# window, GPU and audio stacks; common, cod2, cod4, gsc and server never do.
+deny = [
+    { crate = "wgpu", wrappers = ["vcod"] },
+    { crate = "winit", wrappers = ["vcod"] },
+    { crate = "kira", wrappers = ["vcod"] },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
