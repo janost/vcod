@@ -2603,27 +2603,27 @@ CoDExtended's `shared.h`; bits 0x04/0x08/0x80/0x800/0x2000 are INFERRED from
 usage sites only. The 0x100, 0x200, 0x4000 and 0x8000 rows restate the
 sections they name, under those sections' labels.)
 
-## Tunables (all read directly from rodata, VERIFIED values)
+## Tunables
 
-| symbol | address | value |
-|---|---|---|
-| pm_stopspeed | 0x70824 | 100.0 |
-| walk accel floor | 0x70908 | 100.0 |
-| pm_ladderScale | 0x70828 | 0.5 |
-| pm_ladderPushOff | 0x7082C | 128.0 |
-| pm_ladderJumpTime | 0x70830 | 300 (ms, int) |
-| pm_waterSwimScale | 0x70834 | 0.5 |
-| pm_waterWadeScale | 0x70838 | 0.7 |
-| pm_prone_accelerate | 0x7083C | 19.0 |
-| pm_ducked_accelerate | 0x70840 | 12.0 |
-| pm_accelerate | 0x70844 | 9.0 |
-| pm_airaccelerate | 0x70848 | 1.0 |
-| pm_wateraccelerate | 0x7084C | 4.0 |
-| pm_flyaccelerate | 0x70850 | 8.0 |
-| pm_friction | 0x70854 | 5.5 |
-| pm_waterfriction | 0x70858 | 1.0 |
-| pm_ladderfriction | 0x7085C | 16.0 |
-| pm_spectatorfriction | 0x70860 | 5.0 |
+| symbol | address | value | label |
+|---|---|---|---|
+| pm_stopspeed | 0x70824 | 100.0 | VERIFIED (rodata) |
+| walk accel floor | 0x70908 | 100.0 | VERIFIED (rodata) |
+| pm_ladderScale | 0x70828 | 0.5 | VERIFIED (rodata) |
+| pm_ladderPushOff | 0x7082C | 128.0 | VERIFIED (rodata) |
+| pm_ladderJumpTime | 0x70830 | 300 (ms, int) | VERIFIED (rodata) |
+| pm_waterSwimScale | 0x70834 | 0.5 | VERIFIED (rodata) |
+| pm_waterWadeScale | 0x70838 | 0.7 | VERIFIED (rodata) |
+| pm_prone_accelerate | 0x7083C | 19.0 | VERIFIED (rodata) |
+| pm_ducked_accelerate | 0x70840 | 12.0 | VERIFIED (rodata) |
+| pm_accelerate | 0x70844 | 9.0 | VERIFIED (rodata) |
+| pm_airaccelerate | 0x70848 | 1.0 | VERIFIED (rodata) |
+| pm_wateraccelerate | 0x7084C | 4.0 | VERIFIED (rodata) |
+| pm_flyaccelerate | 0x70850 | 8.0 | VERIFIED (rodata) |
+| pm_friction | 0x70854 | 5.5 | VERIFIED (rodata) |
+| pm_waterfriction | 0x70858 | 1.0 | VERIFIED (rodata) |
+| pm_ladderfriction | 0x7085C | 16.0 | VERIFIED (rodata) |
+| pm_spectatorfriction | 0x70860 | 5.0 | VERIFIED (rodata) |
 
 Other constants seen in the move paths: 0.25 down-trace, MIN_WALK_NORMAL 0.7,
 impact threshold 10, viewheight lerp 180 deg/s-ish factors, spectator bbox

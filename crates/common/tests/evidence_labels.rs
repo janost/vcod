@@ -1,5 +1,5 @@
-//! The evidence labels in `docs/research/*.md`, checked for the two shapes a
-//! grep can see.
+//! The evidence labels in `docs/research/*.md` and `docs/protocol-1.1.md`,
+//! checked for the two shapes a grep can see.
 //!
 //! `AGENTS.md` asks for one label per claim: VERIFIED for what was read out
 //! of a binary, an asset or a capture, INFERRED for anything read off control
@@ -42,7 +42,8 @@
 
 use std::path::PathBuf;
 
-/// Every `docs/research/*.md`, sorted, read from the repo the crate sits in.
+/// Every `docs/research/*.md`, sorted, then `docs/protocol-1.1.md`, read from
+/// the repo the crate sits in.
 fn research_docs() -> Vec<(String, String)> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/research");
     let mut docs: Vec<(String, String)> = std::fs::read_dir(&dir)
@@ -57,6 +58,9 @@ fn research_docs() -> Vec<(String, String)> {
         .collect();
     docs.sort();
     assert!(!docs.is_empty(), "no research docs under {}", dir.display());
+    let wire = dir.join("../protocol-1.1.md");
+    let text = std::fs::read_to_string(&wire).unwrap_or_else(|e| panic!("read {wire:?}: {e}"));
+    docs.push(("protocol-1.1.md".into(), text));
     docs
 }
 
