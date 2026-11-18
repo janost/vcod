@@ -415,6 +415,53 @@ impl conn::ConnGame for Cod4Game {
     fn exec(e: &mut Cod4Server, line: &str, out: &mut crate::rcon::Redirect) {
         e.exec(line, out);
     }
+
+    const PROTOCOL: i32 = oob::PROTOCOL as i32;
+    const VERSION: &'static str = "1.7";
+    const FF_KC: [&'static str; 2] = ["scr_team_fftype", "scr_game_allowkillcam"];
+    fn names(e: &Cod4Server) -> [&str; 3] {
+        let cfg = &e.game.cfg;
+        [&cfg.hostname, &cfg.map, &cfg.gametype]
+    }
+    fn pure(e: &Cod4Server) -> bool {
+        e.pure()
+    }
+    fn modded(e: &Cod4Server) -> bool {
+        e.modded()
+    }
+    /// `G_GetClientScore` (0x81764a2; cod4-handshake.md 14).
+    fn status_score(e: &mut Cod4Server, slot: usize) -> i32 {
+        e.client_score(slot)
+    }
+    fn status_name(c: &Client) -> String {
+        client_name(&c.link.userinfo)
+    }
+    /// `killserver` ends the redirect with the server: nothing answers.
+    fn answers(e: &Cod4Server) -> bool {
+        !e.game.killed
+    }
+    fn password_refused(e: &Cod4Server, password: &str) -> bool {
+        let gp = e.game.cvars().get("g_password");
+        !gp.is_empty() && gp != password
+    }
+    /// `SV_FreeClient` at the reconnect (0x8171eb3), so
+    /// `ClientDisconnect`; a zombie's ran at its drop.
+    fn free_level_slot(e: &mut Cod4Server, slot: usize) {
+        if let Some(level) = e.game.level.as_mut() {
+            level.disconnect(slot);
+        }
+    }
+    fn find_player(
+        e: &Cod4Server,
+        by_name: bool,
+        who: &str,
+        out: &mut crate::rcon::Redirect,
+    ) -> Option<usize> {
+        e.find_client(by_name, who, out)
+    }
+    fn ban_client(e: &mut Cod4Server, slot: usize, out: &mut crate::rcon::Redirect) {
+        e.ban_client(slot, out);
+    }
 }
 
 impl Cod4Server {

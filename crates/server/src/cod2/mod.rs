@@ -208,8 +208,12 @@ impl crate::engine::GameModule for Cod2Game {
         challenge: &str,
     ) -> Option<String> {
         match query {
-            crate::engine::StatusQuery::Info => e.svc_info(challenge),
-            crate::engine::StatusQuery::Status => e.svc_status(challenge),
+            crate::engine::StatusQuery::Info => Some(e.svc_info(challenge)),
+            crate::engine::StatusQuery::Status => {
+                let text = e.svc_status(challenge);
+                e.status_argv1();
+                Some(text)
+            }
         }
     }
     fn connectionless(
@@ -330,6 +334,70 @@ impl conn::ConnGame for Cod2Game {
     }
     fn exec(e: &mut Cod2Server, line: &str, out: &mut crate::rcon::Redirect) {
         e.exec(line, out);
+    }
+
+    const PROTOCOL: i32 = vcod_cod2::net::ops::PROTOCOL;
+    const VERSION: &'static str = "1.3";
+    const FF_KC: [&'static str; 2] = ["scr_friendlyfire", "scr_killcam"];
+    fn names(e: &Cod2Server) -> [&str; 3] {
+        let cfg = &e.game.cfg;
+        [&cfg.hostname, &cfg.map, &cfg.gametype]
+    }
+    fn pure(e: &Cod2Server) -> bool {
+        e.pure()
+    }
+    fn modded(e: &Cod2Server) -> bool {
+        e.modded()
+    }
+    /// The public slots plus the private ones in use (17.1).
+    fn shown_slots(e: &Cod2Server) -> usize {
+        let private = (e.int("sv_privateClients").max(0) as usize).min(e.core.clients.len());
+        let private_used = e.core.clients[..private]
+            .iter()
+            .flatten()
+            .filter(|c| c.state >= State::Connected)
+            .count();
+        e.core.clients.len() - (private - private_used)
+    }
+    fn status_name(c: &Client) -> String {
+        vcod_common::net::info_value_for_key(&c.link.userinfo, "name")
+            .unwrap_or("")
+            .to_string()
+    }
+    /// `password` against `sv_privatePassword` (`strcmp`, so an empty one
+    /// matches an empty one) starts at 0, else past the private slots.
+    fn first_slot(e: &Cod2Server, password: &str) -> usize {
+        if password == e.game.cvars.get("sv_privatePassword") {
+            0
+        } else {
+            e.int("sv_privateClients").max(0) as usize
+        }
+    }
+    /// `ClientConnect` (0x80f8e7a): `g_password` unless empty or `none`,
+    /// compared case-sensitively.
+    fn password_refused(e: &Cod2Server, password: &str) -> bool {
+        let gp = e.game.cvars.get("g_password");
+        !gp.is_empty() && !gp.eq_ignore_ascii_case("none") && gp != password
+    }
+    fn free_level_slot(e: &mut Cod2Server, slot: usize) {
+        if let Some(level) = e.game.level.as_mut() {
+            level.disconnect(slot);
+        }
+    }
+    fn find_player(
+        e: &Cod2Server,
+        by_name: bool,
+        who: &str,
+        out: &mut crate::rcon::Redirect,
+    ) -> Option<usize> {
+        if by_name {
+            e.player_by_name(who, out)
+        } else {
+            e.player_by_num(who, out)
+        }
+    }
+    fn ban_client(e: &mut Cod2Server, slot: usize, out: &mut crate::rcon::Redirect) {
+        e.ban_client(slot, out);
     }
 }
 
@@ -1452,18 +1520,11 @@ impl Cod2Server {
     }
 
     /// A new client in `slot`: a spectator at the intermission spot, and
-    /// with a level `ClientConnect` (`SV_DirectConnect` calls it).
+    /// with a level `ClientConnect` (`SV_DirectConnect` calls it, a
+    /// reconnect's old client freed already).
     fn admit(&mut self, slot: usize, from: SocketAddr, qport: u16, challenge: i32, userinfo: &str) {
         let (origin, angles) = self.game.spot;
         if let Some(level) = self.game.level.as_mut() {
-            // A reconnect frees the old client first (`SV_FreeClient`); a
-            // zombie's game side is gone already.
-            if self.core.clients[slot]
-                .as_ref()
-                .is_some_and(|c| c.state > State::Zombie)
-            {
-                level.disconnect(slot);
-            }
             let name = vcod_common::net::info_value_for_key(userinfo, "name").unwrap_or("");
             level.rt.host.client_names[slot] = name.to_string();
             level.connect_at(slot, name, origin, angles);

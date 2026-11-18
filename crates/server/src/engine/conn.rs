@@ -7,6 +7,7 @@
 //! 15); what differs is a [`ConnGame`] hook. CoD1's server keeps its own.
 
 use std::net::SocketAddr;
+use std::time::Instant;
 
 use vcod_common::net::codec::MsgWriter;
 use vcod_common::net::netchan::ClientMessage;
@@ -16,7 +17,7 @@ use super::link;
 use super::slot::{Conn, State};
 use super::{Engine, EngineCore, GameModule};
 use crate::game::script::ScriptRuntime;
-use crate::rcon::Redirect;
+use crate::rcon::{Redirect, Verdict};
 
 /// A game whose slots are [`Conn`]s: what the shared routines ask of it.
 pub trait ConnGame: GameModule<Client = Conn<Self::Frame, Self::Extra>> {
@@ -54,6 +55,70 @@ pub trait ConnGame: GameModule<Client = Conn<Self::Frame, Self::Extra>> {
     }
     /// One console line.
     fn exec(e: &mut Engine<Self>, line: &str, out: &mut Redirect);
+
+    /// `PROTOCOL_VERSION`, and the version a refused `connect` names.
+    const PROTOCOL: i32;
+    const VERSION: &'static str;
+    /// The dvars `getinfo`'s `ff` and `kc` read.
+    const FF_KC: [&'static str; 2];
+    /// The host name, map and gametype `getinfo` names.
+    fn names(e: &Engine<Self>) -> [&str; 3];
+    /// `sv_pure` on.
+    fn pure(e: &Engine<Self>) -> bool;
+    /// `getinfo`'s and `getstatus`' `mod`.
+    fn modded(e: &Engine<Self>) -> bool;
+    /// `getinfo`'s `sv_maxclients`.
+    fn shown_slots(e: &Engine<Self>) -> usize {
+        e.core.clients.len()
+    }
+    /// The score of `getstatus`' line for `slot`.
+    fn status_score(_e: &mut Engine<Self>, _slot: usize) -> i32 {
+        0
+    }
+    /// The name of `getstatus`' line.
+    fn status_name(c: &Self::Client) -> String;
+    /// Whether rcon's output goes back (CoD4's `killserver` ends it).
+    fn answers(_e: &Engine<Self>) -> bool {
+        true
+    }
+    /// Where a new client's slot search starts (`sv_privateClients`).
+    fn first_slot(_e: &Engine<Self>, _password: &str) -> usize {
+        0
+    }
+    /// `ClientConnect`'s `g_password` refusal.
+    fn password_refused(e: &Engine<Self>, password: &str) -> bool;
+    /// `SV_FreeClient`'s game half: `ClientDisconnect` for `slot`.
+    fn free_level_slot(e: &mut Engine<Self>, slot: usize);
+    /// `SV_GetPlayerByName` or `SV_GetPlayerByNum`; a miss prints why.
+    fn find_player(e: &Engine<Self>, by_name: bool, who: &str, out: &mut Redirect)
+    -> Option<usize>;
+    /// `SV_BanClient`.
+    fn ban_client(e: &mut Engine<Self>, slot: usize, out: &mut Redirect);
+}
+
+/// A `connect` [`Engine::connect_slot`] let into a slot, for the game's
+/// `ClientConnect`.
+pub struct Admit {
+    pub slot: usize,
+    pub qport: u16,
+    pub challenge: i32,
+    /// The challenge slot, `taken` once the client is in.
+    pub ci: usize,
+}
+
+/// `Cmd_Args` past the command as `SV_ConSay_f` and `SV_ConTell_f` read
+/// it: the arguments joined by one space, a leading quote and the last
+/// character cut (cod4-handshake.md 14).
+pub fn console_args(args: &[String]) -> String {
+    let text = args.join(" ");
+    match text.strip_prefix('"') {
+        Some(rest) => {
+            let mut rest = rest.to_string();
+            rest.pop();
+            rest
+        }
+        None => text,
+    }
 }
 
 /// What [`incoming`] made of a netchan packet.
@@ -339,5 +404,266 @@ impl<G: ConnGame> Engine<G> {
                 }
             }
         }
+    }
+
+    /// `SVC_Info`, its keys in their order (cod2-protocol.md 1.4,
+    /// cod4-handshake.md 2; the two engines' are one routine).
+    pub(crate) fn svc_info(&mut self, challenge: &str) -> String {
+        let mut i = vcod_common::net::connectionless::Info::new();
+        i.set("challenge", challenge);
+        i.set("protocol", G::PROTOCOL);
+        let [hostname, mapname, gametype] = G::names(self);
+        i.set("hostname", hostname);
+        i.set("mapname", mapname);
+        let clients = self.client_count();
+        if clients > 0 {
+            i.set("clients", clients);
+        }
+        let shown = G::shown_slots(self);
+        if shown > 0 {
+            i.set("sv_maxclients", shown);
+        }
+        i.set("gametype", gametype);
+        if G::pure(self) {
+            i.set("pure", 1);
+        }
+        let set_on = |i: &mut vcod_common::net::connectionless::Info, key: &str, v: i32| {
+            if v != 0 {
+                i.set(key, v);
+            }
+        };
+        set_on(&mut i, "minPing", self.int("sv_minPing"));
+        set_on(&mut i, "maxPing", self.int("sv_maxPing"));
+        i.set("game", G::cvar(self, "fs_game"));
+        set_on(&mut i, "sv_allowAnonymous", self.int("sv_allowAnonymous"));
+        set_on(&mut i, "con_disabled", self.int("sv_disableClientConsole"));
+        if !G::cvar(self, "g_password").is_empty() {
+            i.set("pswrd", 1);
+        }
+        set_on(&mut i, "ff", self.int(G::FF_KC[0]));
+        set_on(&mut i, "kc", self.int(G::FF_KC[1]));
+        i.set("hw", 1);
+        i.set("mod", u8::from(G::modded(self)));
+        i.set("voice", self.int("sv_voice"));
+        i.set("pb", self.int("sv_punkbuster"));
+        format!("infoResponse\n{i}")
+    }
+
+    /// `SVC_Status`: the serverinfo with `challenge`, `pswrd` and `mod`
+    /// appended, then a `score ping "name"` line for each client past
+    /// `CS_ZOMBIE` (cod2-protocol.md 1.5, cod4-handshake.md 14).
+    pub(crate) fn svc_status(&mut self, challenge: &str) -> String {
+        let mut info = self.core.configstrings[0].clone();
+        let mut add = |k: &str, v: String| {
+            if !v.is_empty() {
+                info.push_str(&format!("\\{k}\\{v}"));
+            }
+        };
+        add("challenge", challenge.to_string());
+        add(
+            "pswrd",
+            u8::from(!G::cvar(self, "g_password").is_empty()).to_string(),
+        );
+        add("mod", u8::from(G::modded(self)).to_string());
+        let mut text = format!("statusResponse\n{info}\n");
+        for slot in 0..self.core.clients.len() {
+            let score = G::status_score(self, slot);
+            let Some(c) = self.core.clients[slot].as_ref() else {
+                continue;
+            };
+            if c.state >= State::Connected {
+                let name = G::status_name(c);
+                text.push_str(&format!("{score} {} \"{name}\"\n", c.link.ping));
+            }
+        }
+        text
+    }
+
+    /// `SVC_RemoteCommand`: `rcon_password`, 1.1's 500 ms window, 1.7's
+    /// refusals, the output back as `print` packets (cod2-protocol.md 1.6,
+    /// cod4-handshake.md 14.2).
+    pub(crate) fn remote_command(&mut self, from: SocketAddr, args: &[String], now: Instant) {
+        let password = G::cvar(self, "rcon_password").to_string();
+        let mut out = Redirect::default();
+        let verdict = self.core.rcon.check(&password, args, now);
+        match verdict {
+            Verdict::Limited => return,
+            Verdict::NoPassword | Verdict::BadPassword => {
+                out.print(verdict.login_refusal(args).unwrap_or_default())
+            }
+            Verdict::Run(None) => {}
+            Verdict::Run(Some(line)) => G::exec(self, &line, &mut out),
+        }
+        if !G::answers(self) {
+            return;
+        }
+        for text in out.finish() {
+            self.send_oob(from, &text);
+        }
+    }
+
+    /// `SV_DirectConnect` on a plain-text `connect "<userinfo>"` up to the
+    /// game's `ClientConnect` (cod2-protocol.md 17.1, cod4-handshake.md 3):
+    /// the protocol, the reconnect limit, the challenge and its ping off
+    /// the LAN, the slot, `g_password`. The same client again takes its old
+    /// slot, freed first when live (cod4-handshake.md 9, "Reconnects"); a
+    /// refused password leaves that slot free.
+    pub(crate) fn connect_slot(&mut self, from: SocketAddr, userinfo: &str) -> Option<Admit> {
+        let svs = self.core.sv_time_ms;
+        let key = |k: &str| vcod_common::net::info_value_for_key(userinfo, k).unwrap_or("");
+        let atoi = crate::game::builtins::cvar::atoi;
+        if atoi(key("protocol")) != G::PROTOCOL {
+            let refusal = format!("error\nEXE_SERVER_IS_DIFFERENT_VER\u{15}{}\n", G::VERSION);
+            self.send_oob(from, &refusal);
+            return None;
+        }
+        let challenge = atoi(key("challenge"));
+        let qport = atoi(key("qport")) as u16;
+        let same = |c: &G::Client| {
+            c.link.addr.ip() == from.ip()
+                && (c.link.netchan.qport == qport || c.link.addr.port() == from.port())
+        };
+        let limit = self.int("sv_reconnectlimit") * 1000;
+        if self
+            .core
+            .clients
+            .iter()
+            .flatten()
+            .find(|c| same(c))
+            .is_some_and(|c| svs - c.last_connect_ms < limit)
+        {
+            log::debug!("{from}: reconnect rejected: too soon");
+            return None;
+        }
+        let Some((ci, ping)) = self.core.challenges.connect(from, challenge, svs) else {
+            self.send_oob(from, "error\nEXE_BAD_CHALLENGE");
+            return None;
+        };
+        log::info!("Client {ci} connecting with {ping} challenge ping from {from}");
+        if !link::Lan::Cod2.is_lan(from.ip()) {
+            let (min, max) = (self.int("sv_minPing"), self.int("sv_maxPing"));
+            if min != 0 && ping < min {
+                self.send_oob(from, "error\nEXE_ERR_HIGH_PING_ONLY");
+                return None;
+            }
+            if max != 0 && ping > max {
+                self.send_oob(from, "error\nEXE_ERR_LOW_PING_ONLY");
+                return None;
+            }
+        }
+        let slot = match self
+            .core
+            .clients
+            .iter()
+            .position(|c| c.as_ref().is_some_and(same))
+        {
+            Some(slot) => {
+                if self.core.clients[slot]
+                    .as_ref()
+                    .is_some_and(|c| c.state > State::Zombie)
+                {
+                    G::free_level_slot(self, slot);
+                }
+                slot
+            }
+            None => {
+                let start = G::first_slot(self, key("password")).min(self.core.clients.len());
+                let Some(slot) =
+                    (start..self.core.clients.len()).find(|&i| self.core.clients[i].is_none())
+                else {
+                    self.send_oob(from, "error\nEXE_SERVERISFULL");
+                    return None;
+                };
+                slot
+            }
+        };
+        if G::password_refused(self, key("password")) {
+            self.core.clients[slot] = None;
+            self.send_oob(from, "error\nGAME_INVALIDPASSWORD");
+            return None;
+        }
+        Some(Admit {
+            slot,
+            qport,
+            challenge,
+            ci,
+        })
+    }
+
+    /// The console commands both engines run alike: `serverinfo` and
+    /// `systeminfo` (`Info_Print`, the key padded to 20), `dumpuser`,
+    /// `tell`, `banUser`, `banClient` and `unbanUser`. False for any other.
+    pub(crate) fn console_common(&mut self, args: &[String], out: &mut Redirect) -> bool {
+        let arg = |i: usize| args.get(i).map_or("", String::as_str);
+        let print_info = |out: &mut Redirect, info: &str| {
+            for (k, v) in vcod_common::net::connectionless::info_pairs(info) {
+                out.print(&format!("{k:<20}{v}\n"));
+            }
+        };
+        match args[0].to_ascii_lowercase().as_str() {
+            "serverinfo" => {
+                out.print("Server info settings:\n");
+                print_info(out, &self.core.configstrings[0]);
+            }
+            "systeminfo" => {
+                out.print("System info settings:\n");
+                print_info(out, &self.core.configstrings[1]);
+            }
+            // `SV_DumpUser_f`: `userinfo`, a rule, then the pairs.
+            "dumpuser" => {
+                if args.len() != 2 {
+                    out.print("Usage: info <userid>\n");
+                } else if let Some(slot) = G::find_player(self, true, arg(1), out) {
+                    out.print("userinfo\n--------\n");
+                    let c = self.core.clients[slot].as_ref().unwrap();
+                    print_info(out, &c.link.userinfo);
+                }
+            }
+            // `SV_ConTell_f`: the chat line to one client in the world;
+            // anything else is silent.
+            "tell" => {
+                let to = crate::game::builtins::cvar::atoi(arg(1));
+                if args.len() > 2
+                    && let Ok(slot) = usize::try_from(to)
+                    && self
+                        .core
+                        .clients
+                        .get(slot)
+                        .and_then(Option::as_ref)
+                        .is_some_and(|c| c.state == State::Active)
+                {
+                    let text = format!("h \"\u{15}console: {}\"", console_args(&args[2..]));
+                    self.send_server_command(slot, &text);
+                }
+            }
+            // `banUser` and `banClient` into `SV_BanClient`.
+            "banuser" | "banclient" => {
+                let by_name = args[0].eq_ignore_ascii_case("banuser");
+                if args.len() != 2 {
+                    out.print(if by_name {
+                        "Usage: banUser <player name>\n"
+                    } else {
+                        "Usage: banClient <client number>\n"
+                    });
+                } else if let Some(slot) = G::find_player(self, by_name, arg(1), out) {
+                    G::ban_client(self, slot, out);
+                }
+            }
+            // `unbanUser` into `SV_UnbanClient`.
+            "unbanuser" => {
+                if args.len() != 2 {
+                    out.print("Usage: unban <client name>\n");
+                } else {
+                    let name = crate::game::say::clean_name(arg(1));
+                    match self.core.bans.unban(&name) {
+                        None => {}
+                        Some(0) => out.print(&format!("no banned user has name {name}\n")),
+                        Some(n) => out.print(&format!("unbanned {n} user(s) named {name}\n")),
+                    }
+                }
+            }
+            _ => return false,
+        }
+        true
     }
 }

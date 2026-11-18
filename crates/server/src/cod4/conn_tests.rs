@@ -103,3 +103,32 @@ fn a_cod4_donedl_flood_sends_one_gamestate() {
     let c = sv.core.clients[0].as_ref().unwrap();
     assert_eq!(c.gamestate_message, before as i32);
 }
+
+/// A client connecting again from its address and qport frees its old
+/// slot (`SV_FreeClient`, cod4-handshake.md 9); a wrong `g_password` then
+/// refuses the connect and leaves the slot free, not held by the old
+/// client the level already let go of.
+#[test]
+fn a_cod4_reconnect_refused_by_g_password_frees_the_slot() {
+    let (mut sv, mut p, mut now) = joined();
+    // Past `sv_reconnectlimit`'s 3 s since the first connect.
+    for _ in 0..40 {
+        step(&mut sv, &mut p, &mut now);
+    }
+    sv.set_cvar("g_password", "secret");
+    let reply = p.oob(
+        &mut sv,
+        format!("getchallenge 0 \"{}\"", vcod_cod4::net::conn::KEY_HASH).as_bytes(),
+        now,
+    );
+    let text = String::from_utf8_lossy(&reply[0][4..]).into_owned();
+    let challenge: i32 = text.split_whitespace().nth(1).unwrap().parse().unwrap();
+    let ui = format!(
+        "\\name\\conn\\protocol\\6\\challenge\\{challenge}\\qport\\{}",
+        p.qport
+    );
+    let reply = p.oob(&mut sv, format!("connect \"{ui}\"").as_bytes(), now);
+    assert_eq!(reply.len(), 1);
+    assert!(reply[0].ends_with(b"error\nGAME_INVALIDPASSWORD"));
+    assert!(sv.core.clients[0].is_none());
+}

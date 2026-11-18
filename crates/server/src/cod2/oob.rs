@@ -5,10 +5,8 @@
 use std::net::SocketAddr;
 use std::time::Instant;
 
-use vcod_cod2::net::ops::PROTOCOL;
-
 use super::{Cod2Server, State};
-use crate::rcon::{Redirect, Verdict};
+use crate::rcon::Redirect;
 use crate::server::bot_admin;
 
 /// The engine dvars the two info strings and `getinfo` read, at the
@@ -268,96 +266,22 @@ impl Cod2Server {
     }
 
     /// `SV_DirectConnect` (0x808e2aa) on a plain-text `connect "<userinfo>"`
-    /// (1.2, 17.1): the protocol, the reconnect limit, the challenge and its
-    /// ping off the LAN, the slot (the private ones for `sv_privatePassword`),
-    /// then `ClientConnect`'s `g_password`.
+    /// (1.2, 17.1): the engine's checks and slot
+    /// ([`crate::engine::conn`]), `ClientConnect`, `connectResponse`, then
+    /// `SV_Heartbeat_f` when the clients past `CS_ZOMBIE` number 1 or
+    /// `sv_maxclients`.
     fn direct_connect(&mut self, from: SocketAddr, userinfo: &str, now: Instant) {
-        let svs = self.core.sv_time_ms;
-        let key = |k: &str| vcod_common::net::info_value_for_key(userinfo, k).unwrap_or("");
-        let atoi = crate::game::builtins::cvar::atoi;
-        if atoi(key("protocol")) != PROTOCOL {
-            self.send_oob(from, "error\nEXE_SERVER_IS_DIFFERENT_VER\x151.3\n");
-            return;
-        }
-        let challenge = atoi(key("challenge"));
-        let qport = atoi(key("qport")) as u16;
-        let same = |c: &super::Client| {
-            c.link.addr.ip() == from.ip()
-                && (c.link.netchan.qport == qport || c.link.addr.port() == from.port())
-        };
-        let limit = self.int("sv_reconnectlimit") * 1000;
-        if self
-            .core
-            .clients
-            .iter()
-            .flatten()
-            .find(|c| same(c))
-            .is_some_and(|c| svs - c.last_connect_ms < limit)
-        {
-            log::debug!("cod2: {from}: reconnect rejected: too soon");
-            return;
-        }
-        let Some((ci, ping)) = self.core.challenges.connect(from, challenge, svs) else {
-            self.send_oob(from, "error\nEXE_BAD_CHALLENGE");
+        let Some(a) = self.connect_slot(from, userinfo) else {
             return;
         };
-        log::info!("cod2: {from} connecting with {ping} challenge ping");
-        if !crate::engine::Lan::Cod2.is_lan(from.ip()) {
-            let (min, max) = (self.int("sv_minPing"), self.int("sv_maxPing"));
-            if min != 0 && ping < min {
-                self.send_oob(from, "error\nEXE_ERR_HIGH_PING_ONLY");
-                return;
-            }
-            if max != 0 && max < ping {
-                self.send_oob(from, "error\nEXE_ERR_LOW_PING_ONLY");
-                return;
-            }
-        }
-        // The same client again takes its old slot; anyone else the first
-        // free one, from 0 with `sv_privatePassword` (an empty one matches
-        // an empty `password`), else past the private ones.
-        let slot = match self
-            .core
-            .clients
-            .iter()
-            .position(|c| c.as_ref().is_some_and(same))
-        {
-            Some(slot) => slot,
-            None => {
-                let start = if key("password") == self.game.cvars.get("sv_privatePassword") {
-                    0
-                } else {
-                    (self.int("sv_privateClients").max(0) as usize).min(self.core.clients.len())
-                };
-                let Some(slot) =
-                    (start..self.core.clients.len()).find(|&i| self.core.clients[i].is_none())
-                else {
-                    self.send_oob(from, "error\nEXE_SERVERISFULL");
-                    return;
-                };
-                slot
-            }
-        };
-        // `ClientConnect` (0x80f8e7a): `g_password` unless empty or `none`,
-        // compared case-sensitively.
-        let gp = self.game.cvars.get("g_password");
-        if !gp.is_empty() && !gp.eq_ignore_ascii_case("none") && gp != key("password") {
-            if let Some(old) = self.core.clients[slot].take()
-                && old.state > State::Zombie
-                && let Some(level) = self.game.level.as_mut()
-            {
-                level.disconnect(slot);
-            }
-            self.send_oob(from, "error\nGAME_INVALIDPASSWORD");
-            return;
-        }
-        self.admit(slot, from, qport, challenge, userinfo);
+        self.admit(a.slot, from, a.qport, a.challenge, userinfo);
         // The connect took a client: the stored ping goes (0x808e2aa).
-        self.core.challenges.taken(ci);
-        if let Some(c) = self.core.clients[slot].as_mut() {
+        self.core.challenges.taken(a.ci);
+        if let Some(c) = self.core.clients[a.slot].as_mut() {
             c.extra.last_heard = now;
         }
-        log::info!("cod2: {from} connected as client {slot} ({})", key("name"));
+        let name = vcod_common::net::info_value_for_key(userinfo, "name").unwrap_or("");
+        log::info!("cod2: {from} connected as client {} ({name})", a.slot);
         self.send_oob(from, "connectResponse");
         let n = self.client_count();
         if n == 1 || n == self.core.clients.len() {
@@ -365,106 +289,10 @@ impl Cod2Server {
         }
     }
 
-    /// `mod`: 1 off pure, with `fs_game`, or with a referenced iwd that is
-    /// not a stock `iw_` one (1.4).
-    fn modded(&self) -> bool {
-        !self.pure()
-            || !self.game.cvars.get("fs_game").is_empty()
-            || self.game.iwds.referenced.iter().any(|(_, n)| {
-                !n.strip_prefix("main/iw_")
-                    .is_some_and(|d| d.len() == 2 && d.bytes().all(|b| b.is_ascii_digit()))
-            })
-    }
-
-    /// `SVC_Info` (0x809537c), its keys in its order (1.4, 9).
-    pub(super) fn svc_info(&mut self, challenge: &str) -> Option<String> {
-        let int = |s: &Self, n: &str| s.int(n);
-        // `clients` past `CS_ZOMBIE`; `sv_maxclients` the public slots plus
-        // the private ones in use (17.1).
-        let clients = self.client_count();
-        let private = (self.int("sv_privateClients").max(0) as usize).min(self.core.clients.len());
-        let private_used = self.core.clients[..private]
-            .iter()
-            .flatten()
-            .filter(|c| c.state >= State::Connected)
-            .count();
-        let max_shown = self.core.clients.len() - (private - private_used);
-        let mut i = vcod_common::net::connectionless::Info::new();
-        i.set("challenge", challenge);
-        i.set("protocol", PROTOCOL);
-        i.set("hostname", &self.game.cfg.hostname);
-        i.set("mapname", &self.game.cfg.map);
-        if clients > 0 {
-            i.set("clients", clients);
-        }
-        if max_shown > 0 {
-            i.set("sv_maxclients", max_shown);
-        }
-        i.set("gametype", &self.game.cfg.gametype);
-        if self.pure() {
-            i.set("pure", 1);
-        }
-        for (key, cvar) in [("minPing", "sv_minPing"), ("maxPing", "sv_maxPing")] {
-            let v = int(self, cvar);
-            if v != 0 {
-                i.set(key, v);
-            }
-        }
-        i.set("game", self.game.cvars.get("fs_game"));
-        for (key, cvar) in [
-            ("sv_allowAnonymous", "sv_allowAnonymous"),
-            ("con_disabled", "sv_disableClientConsole"),
-        ] {
-            let v = int(self, cvar);
-            if v != 0 {
-                i.set(key, v);
-            }
-        }
-        if !self.game.cvars.get("g_password").is_empty() {
-            i.set("pswrd", 1);
-        }
-        for (key, cvar) in [("ff", "scr_friendlyfire"), ("kc", "scr_killcam")] {
-            let v = int(self, cvar);
-            if v != 0 {
-                i.set(key, v);
-            }
-        }
-        i.set("hw", 1);
-        i.set("mod", u8::from(self.modded()));
-        i.set("voice", int(self, "sv_voice"));
-        i.set("pb", int(self, "sv_punkbuster"));
-        Some(format!("infoResponse\n{i}"))
-    }
-
-    /// `SVC_Status` (0x8094c84): the serverinfo with `challenge`, `pswrd`
-    /// and `mod` appended, then a `score ping "name"` line a client (1.5).
-    pub(super) fn svc_status(&mut self, challenge: &str) -> Option<String> {
-        let mut info = self.core.configstrings[0].clone();
-        let mut add = |k: &str, v: String| {
-            if !v.is_empty() {
-                info.push_str(&format!("\\{k}\\{v}"));
-            }
-        };
-        add("challenge", challenge.to_string());
-        add(
-            "pswrd",
-            u8::from(!self.game.cvars.get("g_password").is_empty()).to_string(),
-        );
-        add("mod", u8::from(self.modded()).to_string());
-        let mut text = format!("statusResponse\n{info}\n");
-        for c in self
-            .core
-            .clients
-            .iter()
-            .flatten()
-            .filter(|c| c.state >= State::Connected)
-        {
-            let name = vcod_common::net::info_value_for_key(&c.link.userinfo, "name").unwrap_or("");
-            text.push_str(&format!("0 {} \"{name}\"\n", c.link.ping));
-        }
-        // The `mod` test tokenizes `sv_referencedIwdNames` when the server
-        // is pure with no `fs_game` (0x8094c84), so the next status reads
-        // its second name as `challenge`.
+    /// The `mod` test tokenizes `sv_referencedIwdNames` when the server is
+    /// pure with no `fs_game` (`SVC_Status` 0x8094c84), so the next status
+    /// reads its second name as `challenge`.
+    pub(super) fn status_argv1(&mut self) {
         if self.pure()
             && self.game.cvars.get("fs_game").is_empty()
             && !self.game.iwds.referenced.is_empty()
@@ -476,26 +304,17 @@ impl Cod2Server {
                 .get(1)
                 .map_or(String::new(), |(_, n)| n.clone());
         }
-        Some(text)
     }
 
-    /// `SVC_RemoteCommand` (0x8097188): `rcon_password`, 1.1's 500 ms
-    /// window, CoD4's refusals, the output back as `print` packets (1.6).
-    fn remote_command(&mut self, from: SocketAddr, args: &[String], now: Instant) {
-        let password = self.game.cvars.get("rcon_password").to_string();
-        let mut out = Redirect::default();
-        let verdict = self.core.rcon.check(&password, args, now);
-        match verdict {
-            Verdict::Limited => return,
-            Verdict::NoPassword | Verdict::BadPassword => {
-                out.print(verdict.login_refusal(args).unwrap_or_default())
-            }
-            Verdict::Run(None) => {}
-            Verdict::Run(Some(line)) => self.exec(&line, &mut out),
-        }
-        for text in out.finish() {
-            self.send_oob(from, &text);
-        }
+    /// `mod`: 1 off pure, with `fs_game`, or with a referenced iwd that is
+    /// not a stock `iw_` one (1.4).
+    pub(super) fn modded(&self) -> bool {
+        !self.pure()
+            || !self.game.cvars.get("fs_game").is_empty()
+            || self.game.iwds.referenced.iter().any(|(_, n)| {
+                !n.strip_prefix("main/iw_")
+                    .is_some_and(|d| d.len() == 2 && d.bytes().all(|b| b.is_ascii_digit()))
+            })
     }
 
     /// The console (`SV_AddOperatorCommands`, Mac 0x172136): `status`,
@@ -511,35 +330,17 @@ impl Cod2Server {
         let arg = |i: usize| args.get(i).map_or("", String::as_str);
         match cmd.to_ascii_lowercase().as_str() {
             "status" => self.status(out),
-            "serverinfo" | "systeminfo" => {
-                // `SV_Serverinfo_f`, `SV_Systeminfo_f` and `Info_Print`: the
-                // key padded to 20.
-                let (info, head) = if cmd.eq_ignore_ascii_case("serverinfo") {
-                    (&self.core.configstrings[0], "Server")
-                } else {
-                    (&self.core.configstrings[1], "System")
-                };
-                out.print(&format!("{head} info settings:\n"));
-                for (k, v) in vcod_common::net::connectionless::info_pairs(info) {
-                    out.print(&format!("{k:<20}{v}\n"));
-                }
-            }
-            // `SV_DumpUser_f` (Mac 0x171f5a).
-            "dumpuser" => {
-                if args.len() != 2 {
-                    out.print("Usage: info <userid>\n");
-                } else if let Some(slot) = self.player_by_name(arg(1), out) {
-                    out.print("userinfo\n--------\n");
-                    let ui = &self.core.clients[slot].as_ref().unwrap().link.userinfo;
-                    for (k, v) in vcod_common::net::connectionless::info_pairs(ui) {
-                        out.print(&format!("{k:<20}{v}\n"));
-                    }
-                }
+            "serverinfo" | "systeminfo" | "dumpuser" | "tell" | "banuser" | "banclient"
+            | "unbanuser" => {
+                self.console_common(&args, out);
             }
             // `SV_ConSay_f` (Mac 0x171d16): `h` to everyone, the arguments
             // joined.
             "say" if args.len() > 1 => {
-                let text = format!("h \"\u{15}console: {}\"", console_args(&args[1..]));
+                let text = format!(
+                    "h \"\u{15}console: {}\"",
+                    crate::engine::conn::console_args(&args[1..])
+                );
                 for slot in 0..self.core.clients.len() {
                     if self.core.clients[slot]
                         .as_ref()
@@ -549,23 +350,7 @@ impl Cod2Server {
                     }
                 }
             }
-            // `SV_ConTell_f` (Mac 0x171de2): the same to one client in the
-            // world; anything else is silent.
-            "tell" if args.len() > 2 => {
-                let to = crate::game::builtins::cvar::atoi(arg(1));
-                if let Ok(slot) = usize::try_from(to)
-                    && self
-                        .core
-                        .clients
-                        .get(slot)
-                        .and_then(Option::as_ref)
-                        .is_some_and(|c| c.state == State::Active)
-                {
-                    let text = format!("h \"\u{15}console: {}\"", console_args(&args[2..]));
-                    self.send_server_command(slot, &text);
-                }
-            }
-            "say" | "tell" => {}
+            "say" => {}
             // `SV_KickUser_f` (0x808c3bc) by name, or `all`: `onlykick`
             // alone; `kick` and `tempBanUser` are `SV_TempBan_f` (0x808c55e),
             // which bans the kicked guid for `sv_kickBanTime` (17.7).
@@ -594,37 +379,6 @@ impl Cod2Server {
                 } else if let Some(slot) = self.player_by_num(arg(1), out) {
                     let ban = cmd.eq_ignore_ascii_case("tempbanclient");
                     self.kick_and_temp_ban(slot, ban, out);
-                }
-            }
-            // `SV_Ban_f` (0x808c5a8) and `SV_BanNum_f` (0x808c5fc) into
-            // `SV_BanClient`.
-            "banuser" | "banclient" => {
-                let by_name = cmd.eq_ignore_ascii_case("banuser");
-                if args.len() != 2 {
-                    out.print(if by_name {
-                        "Usage: banUser <player name>\n"
-                    } else {
-                        "Usage: banClient <client number>\n"
-                    });
-                } else if let Some(slot) = if by_name {
-                    self.player_by_name(arg(1), out)
-                } else {
-                    self.player_by_num(arg(1), out)
-                } {
-                    self.ban_client(slot, out);
-                }
-            }
-            // `SV_Unban_f` (0x808c650) into `SV_UnbanClient` (0x808d886).
-            "unbanuser" => {
-                if args.len() != 2 {
-                    out.print("Usage: unban <client name>\n");
-                } else {
-                    let name = crate::game::say::clean_name(arg(1));
-                    match self.core.bans.unban(&name) {
-                        None => {}
-                        Some(0) => out.print(&format!("no banned user has name {name}\n")),
-                        Some(n) => out.print(&format!("unbanned {n} user(s) named {name}\n")),
-                    }
                 }
             }
             // `SV_Map_f` (Mac 0x172038): the map's `.d3dbsp` must be on the
@@ -789,7 +543,7 @@ impl Cod2Server {
     /// `SV_BanClient` (0x808d75a): a guid of 0 or one already in `ban.txt`
     /// is refused with a print; otherwise `%i %s\r\n` is appended and the
     /// client kicked.
-    fn ban_client(&mut self, slot: usize, out: &mut Redirect) {
+    pub(super) fn ban_client(&mut self, slot: usize, out: &mut Redirect) {
         let Some((guid, name)) = self.guid_and_name(slot) else {
             return;
         };
@@ -818,7 +572,7 @@ impl Cod2Server {
 
     /// `SV_GetPlayerByName` (Mac 0x1713d8): a name as sent, or cleaned of
     /// colours, case folded.
-    fn player_by_name(&self, name: &str, out: &mut Redirect) -> Option<usize> {
+    pub(super) fn player_by_name(&self, name: &str, out: &mut Redirect) -> Option<usize> {
         let found = self.core.clients.iter().position(|c| {
             c.as_ref().is_some_and(|c| {
                 let n = client_name(c);
@@ -834,7 +588,7 @@ impl Cod2Server {
 
     /// `SV_GetPlayerByNum` (Mac 0x1714f6): digits only, below
     /// `sv_maxclients`, a slot in use.
-    fn player_by_num(&self, arg: &str, out: &mut Redirect) -> Option<usize> {
+    pub(super) fn player_by_num(&self, arg: &str, out: &mut Redirect) -> Option<usize> {
         if !arg.bytes().all(|b| b.is_ascii_digit()) {
             out.print(&format!("Bad slot number: {arg}\n"));
             return None;
@@ -861,20 +615,6 @@ fn client_name(c: &super::Client) -> &str {
         return "";
     }
     vcod_common::net::info_value_for_key(&c.link.userinfo, "name").unwrap_or("")
-}
-
-/// `Cmd_Args` past the command as `SV_ConSay_f` reads it: the arguments
-/// joined by one space, a leading quote and the last character dropped.
-fn console_args(args: &[String]) -> String {
-    let text = args.join(" ");
-    match text.strip_prefix('"') {
-        Some(rest) => {
-            let mut rest = rest.to_string();
-            rest.pop();
-            rest
-        }
-        None => text,
-    }
 }
 
 /// `I_DrawStrlen`: the characters drawn, `^` and the colour digit after it

@@ -8,8 +8,7 @@ use std::time::Instant;
 use vcod_cod4::net::stats::{STAT_CHUNK, STAT_PACKETS, STATS_BYTES};
 
 use super::{Cod4Server, State};
-use crate::engine::link;
-use crate::rcon::{Redirect, Verdict};
+use crate::rcon::Redirect;
 
 /// The engine dvars the info strings read, at the values the 1.7 captures
 /// carry (VERIFIED live, `handshake-1.7.txt`'s configstrings 0 and 1 and
@@ -375,7 +374,7 @@ impl Cod4Server {
                 crate::engine::answer_status(self, from, crate::engine::StatusQuery::Info, arg(1))
             }
             "getchallenge" => self.get_challenge(from, arg(2)),
-            "connect" => self.direct_connect(from, arg(1), now),
+            "connect" => self.direct_connect(from, arg(1)),
             "stats" => self.receive_stats(from, &payload[text.len().min(payload.len())..]),
             "rcon" => self.remote_command(from, &args, now),
             // `v\0` and the binary rest (0x81776e9).
@@ -427,92 +426,21 @@ impl Cod4Server {
     }
 
     /// `SV_DirectConnect` on a plain-text `connect "<userinfo>"`: the
-    /// protocol (`EXE_SERVER_IS_DIFFERENT_VER\x151.7`, VERIFIED live), the
-    /// reconnect limit, the challenge, a slot, `g_password`, then
+    /// engine's checks and slot ([`crate::engine::conn`]; the refusal
+    /// `EXE_SERVER_IS_DIFFERENT_VER\x151.7`, VERIFIED live), the GUID the
+    /// challenge kept (the connect reads no ban), `ClientConnect`, then
     /// `connectResponse ` with `fs_game` after the space (VERIFIED live).
-    fn direct_connect(&mut self, from: SocketAddr, userinfo: &str, _now: Instant) {
-        let svs = self.core.sv_time_ms;
-        let key = |k: &str| vcod_common::net::info_value_for_key(userinfo, k).unwrap_or("");
-        let atoi = crate::game::builtins::cvar::atoi;
-        if atoi(key("protocol")) != PROTOCOL as i32 {
-            self.send_oob(from, "error\nEXE_SERVER_IS_DIFFERENT_VER\u{15}1.7\n");
-            return;
-        }
-        let challenge = atoi(key("challenge"));
-        let qport = atoi(key("qport")) as u16;
-        let same = |c: &super::Client| {
-            c.link.addr.ip() == from.ip()
-                && (c.link.netchan.qport == qport || c.link.addr.port() == from.port())
-        };
-        let limit = self.int("sv_reconnectlimit") * 1000;
-        if self
-            .core
-            .clients
-            .iter()
-            .flatten()
-            .find(|c| same(c))
-            .is_some_and(|c| svs - c.last_connect_ms < limit)
-        {
-            log::debug!("cod4: {from}: reconnect rejected: too soon");
-            return;
-        }
-        let Some((ci, ping)) = self.core.challenges.connect(from, challenge, svs) else {
-            self.send_oob(from, "error\nEXE_BAD_CHALLENGE");
+    fn direct_connect(&mut self, from: SocketAddr, userinfo: &str) {
+        let Some(a) = self.connect_slot(from, userinfo) else {
             return;
         };
-        log::info!("Client {ci} connecting with {ping} challenge ping from {from}");
-        // `sv_minPing` and `sv_maxPing` hold off-LAN clients only
-        // (0x8171847..0x8171a1e), past the slot's `connected` mark.
-        if !link::Lan::Cod2.is_lan(from.ip()) {
-            let (min, max) = (self.int("sv_minPing"), self.int("sv_maxPing"));
-            if min != 0 && ping < min {
-                self.send_oob(from, "error\nEXE_ERR_HIGH_PING_ONLY");
-                return;
-            }
-            if max != 0 && ping > max {
-                self.send_oob(from, "error\nEXE_ERR_LOW_PING_ONLY");
-                return;
-            }
-        }
-        let slot = match self
-            .core
-            .clients
-            .iter()
-            .position(|c| c.as_ref().is_some_and(same))
-        {
-            // A reconnect into a live slot frees the old client first
-            // (`SV_FreeClient`, so `ClientDisconnect`); a zombie's ran at
-            // its drop (cod4-handshake.md, "Reconnects").
-            Some(slot) => {
-                if self.core.clients[slot]
-                    .as_ref()
-                    .is_some_and(|c| c.state > State::Zombie)
-                    && let Some(level) = self.game.level.as_mut()
-                {
-                    level.disconnect(slot);
-                }
-                slot
-            }
-            None => match self.core.clients.iter().position(Option::is_none) {
-                Some(slot) => slot,
-                None => {
-                    self.send_oob(from, "error\nEXE_SERVERISFULL");
-                    return;
-                }
-            },
-        };
-        let gp = self.game.cvars().get("g_password");
-        if !gp.is_empty() && gp != key("password") {
-            self.send_oob(from, "error\nGAME_INVALIDPASSWORD");
-            return;
-        }
-        // The bans were read at `getchallenge`; the connect reads none.
-        let guid = self.core.challenges.guid(ci).to_string();
-        self.admit(slot, from, qport, challenge, guid.clone(), userinfo);
-        self.core.challenges.taken(ci);
+        let guid = self.core.challenges.guid(a.ci).to_string();
+        self.admit(a.slot, from, a.qport, a.challenge, guid.clone(), userinfo);
+        self.core.challenges.taken(a.ci);
+        let name = vcod_common::net::info_value_for_key(userinfo, "name").unwrap_or("");
         log::info!(
-            "cod4: {from} connected as client {slot} ({}, guid {guid:?})",
-            key("name")
+            "cod4: {from} connected as client {} ({name}, guid {guid:?})",
+            a.slot
         );
         let fs_game = self.game.cvars().get("fs_game").to_string();
         self.send_oob(from, &format!("connectResponse {fs_game}"));
@@ -561,113 +489,9 @@ impl Cod4Server {
         self.send_oob(from, &format!("statResponse {left}"));
     }
 
-    /// `SVC_Info`, its keys in their order (VERIFIED live; 1.7's `hw` is
-    /// 1).
-    pub(super) fn svc_info(&mut self, challenge: &str) -> String {
-        let int = |s: &Self, n: &str| s.int(n);
-        let mut i = vcod_common::net::connectionless::Info::new();
-        i.set("challenge", challenge);
-        i.set("protocol", PROTOCOL);
-        i.set("hostname", &self.game.cfg.hostname);
-        i.set("mapname", &self.game.cfg.map);
-        let clients = self.client_count();
-        if clients > 0 {
-            i.set("clients", clients);
-        }
-        i.set("sv_maxclients", self.core.clients.len());
-        i.set("gametype", &self.game.cfg.gametype);
-        if self.pure() {
-            i.set("pure", 1);
-        }
-        for (key, cvar) in [("minPing", "sv_minPing"), ("maxPing", "sv_maxPing")] {
-            let v = int(self, cvar);
-            if v != 0 {
-                i.set(key, v);
-            }
-        }
-        i.set("game", self.game.cvars().get("fs_game"));
-        for (key, cvar) in [
-            ("sv_allowAnonymous", "sv_allowAnonymous"),
-            ("con_disabled", "sv_disableClientConsole"),
-        ] {
-            let v = int(self, cvar);
-            if v != 0 {
-                i.set(key, v);
-            }
-        }
-        if !self.game.cvars().get("g_password").is_empty() {
-            i.set("pswrd", 1);
-        }
-        for (key, cvar) in [("ff", "scr_team_fftype"), ("kc", "scr_game_allowkillcam")] {
-            let v = int(self, cvar);
-            if v != 0 {
-                i.set(key, v);
-            }
-        }
-        i.set("hw", 1);
-        i.set("mod", u8::from(self.modded()));
-        i.set("voice", int(self, "sv_voice"));
-        i.set("pb", int(self, "sv_punkbuster"));
-        format!("infoResponse\n{i}")
-    }
-
     /// `mod`: 1 off pure or with `fs_game`.
-    fn modded(&self) -> bool {
+    pub(super) fn modded(&self) -> bool {
         !self.pure() || !self.game.cvars().get("fs_game").is_empty()
-    }
-
-    /// `SVC_Status`: the serverinfo with `challenge`, `pswrd` and `mod`
-    /// appended, then a `score ping "name"` line for each client past
-    /// `CS_ZOMBIE`, the score `G_GetClientScore`'s (0x81764a2;
-    /// cod4-handshake.md 14).
-    pub(super) fn svc_status(&mut self, challenge: &str) -> String {
-        let mut info = self.core.configstrings[0].clone();
-        let mut add = |k: &str, v: String| {
-            if !v.is_empty() {
-                info.push_str(&format!("\\{k}\\{v}"));
-            }
-        };
-        add("challenge", challenge.to_string());
-        add(
-            "pswrd",
-            u8::from(!self.game.cvars().get("g_password").is_empty()).to_string(),
-        );
-        add("mod", u8::from(self.modded()).to_string());
-        let mut text = format!("statusResponse\n{info}\n");
-        for slot in 0..self.core.clients.len() {
-            let score = self.client_score(slot);
-            let Some(c) = self.core.clients[slot].as_ref() else {
-                continue;
-            };
-            if c.state >= State::Connected {
-                let name = super::client_name(&c.link.userinfo);
-                text.push_str(&format!("{score} {} \"{name}\"\n", c.link.ping));
-            }
-        }
-        text
-    }
-
-    /// `SVC_RemoteCommand` (`cod4_lnxded` 0x817818a): `rcon_password`, the
-    /// output as `print` packets, 1.7's refusals (cod4-handshake.md 14.2).
-    fn remote_command(&mut self, from: SocketAddr, args: &[String], now: Instant) {
-        let password = self.game.cvars().get("rcon_password").to_string();
-        let mut out = Redirect::default();
-        let verdict = self.core.rcon.check(&password, args, now);
-        match verdict {
-            Verdict::Limited => return,
-            Verdict::NoPassword | Verdict::BadPassword => {
-                out.print(verdict.login_refusal(args).unwrap_or_default())
-            }
-            Verdict::Run(None) => {}
-            Verdict::Run(Some(line)) => self.exec(&line, &mut out),
-        }
-        // `killserver` ends the redirect with the server: nothing answers.
-        if self.game.killed {
-            return;
-        }
-        for text in out.finish() {
-            self.send_oob(from, &text);
-        }
     }
 
     /// The console: `status`, `serverinfo`, `systeminfo`, `clientkick`,
@@ -716,16 +540,9 @@ impl Cod4Server {
                     out.print(&line);
                 }
             }
-            "serverinfo" | "systeminfo" => {
-                let (info, head) = if cmd.eq_ignore_ascii_case("serverinfo") {
-                    (&self.core.configstrings[0], "Server")
-                } else {
-                    (&self.core.configstrings[1], "System")
-                };
-                out.print(&format!("{head} info settings:\n"));
-                for (k, v) in vcod_common::net::connectionless::info_pairs(info) {
-                    out.print(&format!("{k:<20}{v}\n"));
-                }
+            "serverinfo" | "systeminfo" | "dumpuser" | "tell" | "banuser" | "banclient"
+            | "unbanuser" => {
+                self.console_common(&args, out);
             }
             "clientkick" => {
                 let n = crate::game::builtins::cvar::atoi(arg(1));
@@ -756,24 +573,6 @@ impl Cod4Server {
             "tempbanclient" | "tempbanuser" | "kick" | "onlykick" => {
                 self.kick_command(cmd, &args, out);
             }
-            // `SV_DumpUser_f` (0x816cc0a): `userinfo`, a rule, then the
-            // pairs as `Info_Print` lays them (VERIFIED live).
-            "dumpuser" => {
-                if args.len() != 2 {
-                    out.print("Usage: info <userid>\n");
-                } else if let Some(slot) = self.find_client(true, arg(1), out) {
-                    let info = self.core.clients[slot]
-                        .as_ref()
-                        .unwrap()
-                        .link
-                        .userinfo
-                        .clone();
-                    out.print("userinfo\n--------\n");
-                    for (k, v) in vcod_common::net::connectionless::info_pairs(&info) {
-                        out.print(&format!("{k:<20}{v}\n"));
-                    }
-                }
-            }
             // `SV_Heartbeat_f` (0x816c180): the next heartbeat is due at
             // once (`svs.nextHeartbeatTime` to INT_MIN).
             "heartbeat" => self.game.last_beat_ms = None,
@@ -784,51 +583,13 @@ impl Cod4Server {
             // chat line `h "\x15console: <text>"` (`%c "\x15%s"`,
             // 0x82300c7) to everyone, or to one client in the world.
             "say" if args.len() > 1 => {
-                let text = args[1..].join(" ");
-                let line = format!("h \"\u{15}console: {}\"", unquote(&text));
+                let line = format!(
+                    "h \"\u{15}console: {}\"",
+                    crate::engine::conn::console_args(&args[1..])
+                );
                 self.send_to_all(&line);
             }
-            "tell" if args.len() > 2 => {
-                let n = crate::game::builtins::cvar::atoi(arg(1));
-                if let Some(slot) = usize::try_from(n).ok().filter(|&s| {
-                    self.core
-                        .clients
-                        .get(s)
-                        .is_some_and(|c| c.as_ref().is_some_and(|c| c.state == State::Active))
-                }) {
-                    let text = args[2..].join(" ");
-                    let line = format!("h \"\u{15}console: {}\"", unquote(&text));
-                    self.send_server_command(slot, &line);
-                }
-            }
-            "say" | "tell" => {}
-            // `banUser` (0x816cbaa) and `banClient` (0x816d012) into
-            // `SV_BanClient` (0x8171360).
-            "banuser" | "banclient" => {
-                let by_name = cmd.eq_ignore_ascii_case("banuser");
-                if args.len() != 2 {
-                    out.print(if by_name {
-                        "Usage: banUser <player name>\n"
-                    } else {
-                        "Usage: banClient <client number>\n"
-                    });
-                } else if let Some(slot) = self.find_client(by_name, arg(1), out) {
-                    self.ban_client(slot, out);
-                }
-            }
-            // `unbanUser` into `SV_UnbanClient` (0x816ea9c).
-            "unbanuser" => {
-                if args.len() != 2 {
-                    out.print("Usage: unban <client name>\n");
-                } else {
-                    let name = crate::game::say::clean_name(arg(1));
-                    match self.core.bans.unban(&name) {
-                        None => {}
-                        Some(0) => out.print(&format!("no banned user has name {name}\n")),
-                        Some(n) => out.print(&format!("unbanned {n} user(s) named {name}\n")),
-                    }
-                }
-            }
+            "say" => {}
             // vcod's bot management (`server/bot_admin.rs`, docs/bots.md).
             "addbot" => crate::server::bot_admin::add_bot_command(self, &args[1..], out),
             "removebot" | "kickbot" => {
@@ -1003,7 +764,7 @@ impl Cod4Server {
 
     /// `G_GetClientScore` (0x80b384e): the script's `score` (`sess.score`),
     /// 0 for a slot with no entity.
-    fn client_score(&mut self, slot: usize) -> i32 {
+    pub(super) fn client_score(&mut self, slot: usize) -> i32 {
         self.game
             .level
             .as_mut()
@@ -1015,7 +776,12 @@ impl Cod4Server {
     /// `SV_GetPlayerByName` (0x816c1b6), a name as sent or cleaned of
     /// colours, case folded; or by number, a client past `CS_ZOMBIE`. A
     /// miss prints why.
-    fn find_client(&self, by_name: bool, who: &str, out: &mut Redirect) -> Option<usize> {
+    pub(super) fn find_client(
+        &self,
+        by_name: bool,
+        who: &str,
+        out: &mut Redirect,
+    ) -> Option<usize> {
         let found = if by_name {
             (0..self.core.clients.len()).find(|&s| {
                 self.core.clients[s].as_ref().is_some_and(|c| {
@@ -1046,7 +812,7 @@ impl Cod4Server {
     /// `SV_BanClient` (0x8171360): a client with no GUID, or one already
     /// in `ban.txt`, is refused with a print; otherwise `%s %s\r\n` (GUID,
     /// cleaned name) is appended and the client kicked.
-    fn ban_client(&mut self, slot: usize, out: &mut Redirect) {
+    pub(super) fn ban_client(&mut self, slot: usize, out: &mut Redirect) {
         let Some(c) = self.core.clients[slot].as_ref() else {
             return;
         };
@@ -1365,22 +1131,8 @@ fn default_cfg(name: &str) -> String {
     }
 }
 
-/// The console chat's text: a leading quote cut with the last character.
-fn unquote(text: &str) -> &str {
-    match text.strip_prefix('"') {
-        Some(rest) => {
-            let mut end = rest.len();
-            if let Some(c) = rest.chars().last() {
-                end -= c.len_utf8();
-            }
-            &rest[..end]
-        }
-        None => text,
-    }
-}
-
 /// `PROTOCOL_VERSION`, 6 for 1.6 and 1.7 alike (cod4-handshake.md 3).
-const PROTOCOL: u32 = 6;
+pub(super) const PROTOCOL: u32 = 6;
 
 #[cfg(test)]
 mod query_tests {
