@@ -7456,7 +7456,7 @@ pub(crate) mod tests {
                 }
                 Ok(Ctl::Shots(tx)) => {
                     let l = sv.game.level.as_ref().unwrap();
-                    let shots = l.combat_shots().iter().filter(|r| r.0 == 0);
+                    let shots = l.combat_shots().into_iter().filter(|r| r.0 == 0);
                     let _ = tx.send(shots.map(|r| (r.1, r.2, r.3, r.4)).collect());
                 }
                 Ok(Ctl::Probe(back)) => {

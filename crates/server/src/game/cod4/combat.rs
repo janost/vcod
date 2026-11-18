@@ -358,6 +358,44 @@ fn controller_frame(f: &BodyFrame, end_frame: Option<([f32; 3], f32)>) -> BodyFr
     c
 }
 
+/// The newest [`Tail::CAP`] entries of a level-long log, numbered from the
+/// level's first so a reader keeps its place by count.
+pub struct Tail<T> {
+    items: VecDeque<T>,
+    dropped: usize,
+}
+
+impl<T> Default for Tail<T> {
+    fn default() -> Self {
+        Tail {
+            items: VecDeque::new(),
+            dropped: 0,
+        }
+    }
+}
+
+impl<T> Tail<T> {
+    pub const CAP: usize = 4096;
+
+    pub fn push(&mut self, v: T) {
+        if self.items.len() == Self::CAP {
+            self.items.pop_front();
+            self.dropped += 1;
+        }
+        self.items.push_back(v);
+    }
+
+    /// How many were ever pushed.
+    pub fn total(&self) -> usize {
+        self.dropped + self.items.len()
+    }
+
+    /// The entries numbered `from` on that are still kept.
+    pub fn since(&self, from: usize) -> impl Iterator<Item = &T> {
+        self.items.iter().skip(from.saturating_sub(self.dropped))
+    }
+}
+
 /// What the level keeps for the shots: the body poses, the hit poses' rigs,
 /// the weapon defs pmove reads and the antilag's positions.
 #[derive(Default)]
@@ -397,16 +435,16 @@ pub struct Combat4 {
     /// The gun pitch and yaw by slot: what the last cmd's aim block left,
     /// the angles a round leaves along (cod4-combat.md 3.2).
     pub(super) gun_angles: Vec<[f32; 2]>,
-    /// Every bullet or melee hit scored, `(attacker, victim, hit
-    /// location)`, for the tests.
-    pub hits: Vec<(usize, usize, u8)>,
-    /// Every bullet round fired, a gunner's turret rounds too, `(shooter,
+    /// The bullet and melee hits scored, `(attacker, victim, hit
+    /// location)`: the bots' hit feed and the tests.
+    pub hits: Tail<(usize, usize, u8)>,
+    /// The bullet rounds fired, a gunner's turret rounds too, `(shooter,
     /// game time, start, the aim's end, where the spread put it)`, for the
     /// tests.
-    pub shots: Vec<(usize, i32, Vec3, Vec3, Vec3)>,
-    /// Every player a blast's splash reached, `(victim, damage)` as the
+    pub shots: Tail<(usize, i32, Vec3, Vec3, Vec3)>,
+    /// The players a blast's splash reached, `(victim, damage)` as the
     /// engine hands it to the scripts, for the tests.
-    pub splashes: Vec<(usize, i32)>,
+    pub splashes: Tail<(usize, i32)>,
     /// `info/bullet_penetration_mp`, read at the level's first shot
     /// (`None` inside when the zones carry none).
     pub(super) penetration: Option<Option<Rc<super::bullet::PenTable>>>,
@@ -1769,17 +1807,17 @@ impl Cod4Level {
 
     /// [`Combat4::hits`].
     pub fn combat_hits(&self) -> Vec<(usize, usize, u8)> {
-        self.combat.hits.clone()
+        self.combat.hits.since(0).copied().collect()
     }
 
     /// [`Combat4::splashes`].
-    pub fn combat_splashes(&self) -> &[(usize, i32)] {
-        &self.combat.splashes
+    pub fn combat_splashes(&self) -> Vec<(usize, i32)> {
+        self.combat.splashes.since(0).copied().collect()
     }
 
     /// [`Combat4::shots`].
-    pub fn combat_shots(&self) -> &[(usize, i32, Vec3, Vec3, Vec3)] {
-        &self.combat.shots
+    pub fn combat_shots(&self) -> Vec<(usize, i32, Vec3, Vec3, Vec3)> {
+        self.combat.shots.since(0).copied().collect()
     }
 
     /// `slot`'s playerstate as a pmove one.
@@ -2154,5 +2192,21 @@ mod tests {
         let (a, b) = (Vec3::new(-10.0, 0.0, 0.0), Vec3::new(10.0, 0.0, 0.0));
         assert!(segment_meets_box(a, b, lo, hi, 1.0));
         assert!(!segment_meets_box(a, b, lo, hi, 0.4));
+    }
+
+    /// A level-long log keeps its newest entries and its count, so a reader
+    /// past the dropped ones still gets exactly what is new.
+    #[test]
+    fn a_tail_keeps_the_newest_and_counts_them_all() {
+        let mut t = Tail::default();
+        for i in 0..Tail::<usize>::CAP + 5 {
+            t.push(i);
+        }
+        assert_eq!(t.total(), Tail::<usize>::CAP + 5);
+        assert_eq!(t.since(0).count(), Tail::<usize>::CAP);
+        assert_eq!(t.since(0).next(), Some(&5));
+        let last: Vec<_> = t.since(Tail::<usize>::CAP + 3).copied().collect();
+        assert_eq!(last, [Tail::<usize>::CAP + 3, Tail::<usize>::CAP + 4]);
+        assert_eq!(t.since(t.total()).count(), 0);
     }
 }
