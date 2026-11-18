@@ -6,6 +6,8 @@
 //! itself (`tty_console`). Retail's reads and their addresses:
 //! cod11-server-handshake.md, "The stdin console".
 
+#![allow(unsafe_code)]
+
 use crate::engine::{Engine, GameModule};
 use std::io::BufRead;
 use std::sync::mpsc::{Receiver, Sender, SyncSender, channel};

@@ -2,6 +2,8 @@
 //! class's network part with one of the host's own addresses
 //! (docs/research/cod11-server-handshake.md, "Rate").
 
+#![allow(unsafe_code)]
+
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::OnceLock;
 

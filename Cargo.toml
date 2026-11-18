@@ -12,6 +12,10 @@ rust-version = "1.90"
 
 # rustc 1.100's clippy widened this lint to loops that index several arrays
 # or walk a bit mask by position, the shape the retail ports keep on purpose.
+[workspace.lints.rust]
+# Unsafe code stays in the modules that `#![allow]` it.
+unsafe_code = "deny"
+
 [workspace.lints.clippy]
 needless_range_loop = "allow"
 

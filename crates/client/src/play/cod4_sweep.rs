@@ -31,6 +31,8 @@
 //! in the suite on `run_held`'s clock (docs/dev/testing.md, CoD4 live
 //! tests).
 
+#![allow(unsafe_code)]
+
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::net::SocketAddr;
