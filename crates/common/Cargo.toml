@@ -7,7 +7,7 @@ repository.workspace = true
 readme.workspace = true
 rust-version.workspace = true
 publish = false
-description = "Call of Duty (2003) formats, collision, movement and the 1.1 network protocol, shared by the vcod client and server"
+description = "What the vcod games share: formats, collision, movement and the Call of Duty 1.1, 1.5 and United Offensive network protocol"
 # tests/main.rs links every test file into one binary (`cargo test --test common`).
 autotests = false
 

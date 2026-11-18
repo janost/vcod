@@ -12,7 +12,7 @@ use vcod_server::engine::{Arrival, Engine, GameModule};
 use vcod_server::{Server, ServerConfig};
 
 #[derive(Parser)]
-#[command(about = "Call of Duty (2003) 1.1 dedicated server, in progress", version = env!("VCOD_VERSION"))]
+#[command(about = env!("CARGO_PKG_DESCRIPTION"), version = env!("VCOD_VERSION"))]
 struct Args {
     /// Map name, e.g. mp_carentan
     map: String,
