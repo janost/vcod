@@ -3287,7 +3287,7 @@ the lean:
 - The clock the grid poses at. VERIFIED, `game.mp.i386.so`: `G_RunFrame`'s
   first `Scr_RunCurrentThreads` (0x50653) runs before
   `trap_DObjInitServerTime` and `G_DObjUpdateServerTime` (0x5069f,
-  0x506ed; cod11-movers.md 15, "A bone asked for before anim update").
+  0x506ed; cod11-movers.md 15, "A bone asked for before the anim update").
   VERIFIED, `cod_lnxded`: the time step 0x080bbab0 adds `dtime * rate *
   frequency` to a node's old time (`+0x2c`, copied from the time by the
   weight step 0x080bb130 first) for every node whose weight is not 0,
@@ -9315,7 +9315,7 @@ calls `Com_EventLoop` in the loop at 0x806cfe0..0x806d001 and then
 never inside one. `Com_EventLoop` hands each received datagram to
 `SV_PacketEvent` as it takes it off the queue, and its only callers are
 `Com_Frame`'s loop and, on a non-dedicated process only, a second call after
-`SV_Frame` (cod11-server-handshake.md, "The read schedule"). INFERRED: so
+`SV_Frame` (cod11-server-handshake.md, "Pings", "The read schedule"). INFERRED: so
 within a server frame every client's cmds, and the shots in them, run in
 packet arrival order, and `G_RunFrame`'s `ClientEndFrame` pass runs after all
 of them.

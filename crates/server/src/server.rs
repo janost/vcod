@@ -10340,10 +10340,9 @@ mod tests {
         assert_eq!(pure_server_after(reset).client_count(), 0);
     }
 
-    /// `sv_pure` is retail's 1 on the binary's server
-    /// (cod11-server-handshake.md, "Defaults and order"), 0 on the test
-    /// constructor, and a set holds past the first level, as the carried
-    /// table keeps it.
+    /// `sv_pure` is retail's 1 on the binary's server (cod11-server-handshake.md,
+    /// "The four cvars", "Defaults and order"), 0 on the test constructor, and
+    /// a set holds past the first level, as the carried table keeps it.
     #[test]
     fn sv_pure_defaults_to_retails_and_a_set_outlives_the_level() {
         let fs = vcod_common::pk3::Pk3Fs::empty();
@@ -12301,7 +12300,7 @@ mod tests {
     /// gives the (correct or wrongly-reset) wishdir time to dominate, which
     /// I confirmed empirically (`vy` -283 with the real base, -20 with the
     /// bug forced, at this burst length). `viewangles` no longer carries
-    /// this (it stays unwritten, docs/protocol-1.1.md "Spectator view
+    /// this (it stays unwritten, docs/protocol-1.1.md "Spectator", "View
     /// angles"), so this checks the property directly instead of through
     /// that field.
     #[test]
