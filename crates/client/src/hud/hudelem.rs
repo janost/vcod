@@ -331,13 +331,7 @@ pub fn build(
     v: &Virtual,
     out: &mut Vec<HudQuad>,
 ) {
-    let mut order: Vec<&HudElem> = elems.iter().collect();
-    order.sort_by(|a, b| {
-        a.get_f32(f::SORT)
-            .partial_cmp(&b.get_f32(f::SORT))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    for e in order {
+    for e in draw_order(elems) {
         draw(
             e,
             configstrings,
@@ -350,6 +344,22 @@ pub fn build(
             out,
         );
     }
+}
+
+/// `elems` stably sorted by `sort`. A NaN key, which no stock server
+/// sends, sorts as 0 so the comparator stays a total order.
+fn draw_order(elems: &[HudElem]) -> Vec<&HudElem> {
+    let key = |e: &HudElem| {
+        let k = e.get_f32(f::SORT);
+        if k.is_nan() { 0.0 } else { k }
+    };
+    let mut order: Vec<&HudElem> = elems.iter().collect();
+    order.sort_by(|a, b| {
+        key(a)
+            .partial_cmp(&key(b))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    order
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -697,6 +707,28 @@ pub(crate) mod tests {
 
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-3
+    }
+
+    #[test]
+    fn a_nan_sort_key_sorts_as_zero() {
+        let keyed = |k: f32| {
+            let mut e = elem(&[(f::TYPE, 1)]);
+            e.set_f32(f::SORT, k);
+            e
+        };
+        let mut keys = vec![6.0];
+        keys.extend([5.0; 10]);
+        keys.push(f32::NAN);
+        keys.extend([1.0; 12]);
+        keys.extend([f32::NAN, -0.0, 2.0, f32::NAN, 0.0].repeat(4));
+        let elems: Vec<HudElem> = keys.iter().map(|&k| keyed(k)).collect();
+        let sorted: Vec<f32> = draw_order(&elems)
+            .iter()
+            .map(|e| e.get_f32(f::SORT))
+            .map(|k| if k.is_nan() { 0.0 } else { k })
+            .collect();
+        assert!(sorted.windows(2).all(|w| w[0] <= w[1]), "{sorted:?}");
+        run(&elems, &cs_with(&[]), 0, (640.0, 480.0));
     }
 
     #[test]

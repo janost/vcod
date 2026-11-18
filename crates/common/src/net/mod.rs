@@ -53,8 +53,8 @@ const WWW_FLAG_DISCON: i32 = 1;
 const WWW_FLAG_URL: i32 = 2;
 
 /// Packets read per `pump`, matching the server's `MAX_PACKETS_PER_FRAME`, so a
-/// flood cannot stall the caller's frame.
-const MAX_PACKETS_PER_PUMP: usize = 256;
+/// flood cannot stall the caller's frame. CoD2's and CoD4's polls take it too.
+pub const MAX_PACKETS_PER_PUMP: usize = 256;
 
 const CONNECT_RESEND: Duration = Duration::from_secs(2);
 const CONNECT_TRIES: u32 = 5;

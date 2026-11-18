@@ -2073,6 +2073,10 @@ impl AudioSystem {
     /// A time of 0 lands on the next step, and a target of 0 then stops
     /// every sound at once (research doc, section 10, "`soundFade`").
     pub fn sound_fade(&mut self, target: f32, ms: i32) {
+        // No retail server sends one, and it would poison every voice.
+        if !target.is_finite() {
+            return;
+        }
         let delta = target - self.fade.level;
         self.fade.target = target;
         if ms != 0 {
@@ -2992,6 +2996,31 @@ mod tests {
         a.play_local(&fs, "MP_announcer_allies_win");
         a.on_server_command(&fs, &cmd(&["q", "0.000000", "0"]), &[]);
         assert_eq!(a.table.len(), 0);
+    }
+
+    /// A hostile `q inf 0` or `q nan 0` leaves the fade alone; `q 1000 0`
+    /// raises it, and the dB kira gets stops at the ceiling. A UO blend of
+    /// -1e9 packs a pitch of 1e7, which plays at the fastest rate.
+    #[test]
+    fn hostile_fade_and_pitch_stay_bounded() {
+        let fs = vcod_common::pk3::Pk3Fs::empty();
+        let mut a = silent(&fs, 22050);
+        for v in ["inf", "nan", "-inf"] {
+            a.on_server_command(&fs, &cmd(&["q", v, "0"]), &[]);
+            a.advance_fades(16.0);
+            assert_eq!(a.fade, SoundFade::FULL, "{v}");
+        }
+        a.on_server_command(&fs, &cmd(&["q", "1000", "0"]), &[]);
+        a.advance_fades(16.0);
+        assert_eq!(a.master(), 1000.0);
+        assert_eq!(spatial::amplitude_db(a.master()), handle::MAX_DB);
+
+        let (_, pitch) = blend::split(-1e9);
+        assert_eq!(handle::playback_rate(f64::from(pitch)), handle::MAX_RATE);
+        assert_eq!(handle::playback_rate(f64::NAN), 1.0);
+        assert_eq!(handle::playback_rate(-3.0), 0.0);
+        assert_eq!(handle::gain_db(f32::INFINITY), handle::MAX_DB);
+        assert_eq!(handle::gain_db(f32::NAN), -60.0);
     }
 
     /// `snd_restart` runs `S_Init`, which sets the master fade back to full,

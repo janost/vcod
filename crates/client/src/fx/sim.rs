@@ -18,6 +18,14 @@ pub const MAX_PARTICLES: usize = 2048;
 /// stock chains go 5 deep at most, and `fx/explosions/moltov_hit.efx`
 /// replays itself on impact (grammar doc R10).
 pub const MAX_CHAIN_DEPTH: u8 = 8;
+/// Elements (particles, chained effects, marks) one top-level spawn and the
+/// chains it plays at once may create. Retail's bound is its 1800-slot
+/// pool; this one only stops a hostile fan-out (`FxRunner { count 2048
+/// playfx itself }` is 2048^depth plays).
+const MAX_SPAWN_BUDGET: usize = 4 * MAX_PARTICLES;
+/// Most chained effects and most marks waiting to fall due; past it the
+/// oldest go.
+const MAX_PENDING: usize = 4 * MAX_PARTICLES;
 /// `CEmitter::Update` walks its path in 12 ms steps (CoDMP.exe 0x48fd10).
 const EMIT_STEP_MS: i64 = 12;
 /// Fx lights the prop vertex shader takes, nearest the camera (`vs_prop`).
@@ -536,6 +544,8 @@ struct SpawnOut<'a> {
     marks: &'a mut Vec<PendingMark>,
     chains: &'a mut Vec<Chain>,
     trails: &'a mut Vec<(Bolt, cod4_trail::Trail)>,
+    /// What is left of [`MAX_SPAWN_BUDGET`].
+    budget: &'a mut usize,
 }
 
 /// What one effect spawn shares between its elements.
@@ -678,6 +688,10 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
         .filter(|el| el.prim.has_spawn(vcod_cod2::efx::spawn::EVEN_DISTRIBUTION))
         .map(|el| (el.prim.delay.1 - el.prim.delay.0).abs() / count.max(1) as f32);
     for index in 0..count {
+        if *out.budget == 0 {
+            break;
+        }
+        *out.budget -= 1;
         let delay = match even {
             Some(step) => (index as f32 * step).trunc() / 1000.0,
             None => sample_r1(rng, em.delay) / 1000.0,
@@ -984,6 +998,12 @@ fn forward_angles(dir: Vec3) -> Vec3 {
     let yaw = dir.y.atan2(dir.x).to_degrees();
     let pitch = -dir.z.atan2(dir.truncate().length()).to_degrees();
     Vec3::new(pitch, yaw, 0.0)
+}
+
+/// `v` cut to its newest `cap` entries.
+fn drop_oldest<T>(v: &mut Vec<T>, cap: usize) {
+    let excess = v.len().saturating_sub(cap);
+    v.drain(..excess);
 }
 
 fn push_capped(q: &mut VecDeque<Particle>, p: Particle, cap: usize) {
@@ -1538,6 +1558,9 @@ pub struct FxSystem {
     marks: Vec<PendingMark>,
     /// Effects other effects started, for [`Self::spawn_chained`].
     chains: Vec<Chain>,
+    /// What the current top-level spawn may still create, see
+    /// [`MAX_SPAWN_BUDGET`].
+    budget: usize,
     /// The camera, for `cullrange`.
     view: Option<Vec3>,
     /// CoD1's 0x305430c0: the view weapon's `tag_brass` the last frame it
@@ -1602,6 +1625,7 @@ impl FxSystem {
             particles: VecDeque::new(),
             marks: Vec::new(),
             chains: Vec::new(),
+            budget: MAX_SPAWN_BUDGET,
             view: None,
             view_brass: Vec3::ZERO,
             frustum: None,
@@ -1910,8 +1934,10 @@ impl FxSystem {
         };
         let first_chain = self.chains.len();
         let bolt = Some(Bolt::Tag(tag));
+        self.budget = MAX_SPAWN_BUDGET;
         let mut sounds = self.spawn_effect(fs, path, at, now, 0, bolt, cull_from);
         sounds.extend(self.drain_chains(fs, now, first_chain));
+        self.drop_oldest_pending();
         sounds
     }
 
@@ -1962,13 +1988,20 @@ impl FxSystem {
         let first_mark = self.marks.len();
         let first_chain = self.chains.len();
         let bolt = bolt.map(Bolt::Muzzle);
+        self.budget = MAX_SPAWN_BUDGET;
         let mut sounds = self.spawn_effect(fs, path, at, now, 0, bolt, cull_from);
         // An `FxRunner` without a delay plays inside PlayEffect (0x493870).
         sounds.extend(self.drain_chains(fs, now, first_chain));
         if !marks {
             self.marks.truncate(first_mark);
         }
+        self.drop_oldest_pending();
         sounds
+    }
+
+    fn drop_oldest_pending(&mut self) {
+        drop_oldest(&mut self.chains, MAX_PENDING);
+        drop_oldest(&mut self.marks, MAX_PENDING);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2002,6 +2035,7 @@ impl FxSystem {
                 marks: &mut self.marks,
                 chains: &mut self.chains,
                 trails: &mut self.trails,
+                budget: &mut self.budget,
             };
             for em in &effect.emitters {
                 if em.kind == "CameraShake" && em.cod2.is_some() {
@@ -2034,11 +2068,11 @@ impl FxSystem {
     }
 
     /// Spawns the chained effects due by `now` from `chains[from..]`,
-    /// and those they start in turn.
+    /// and those they start in turn, until the spawn budget runs out.
     fn drain_chains(&mut self, fs: &dyn AssetSource, now: f32, from: usize) -> Vec<FxSound> {
         let mut sounds = Vec::new();
         let mut i = from;
-        while i < self.chains.len() {
+        while i < self.chains.len() && self.budget > 0 {
             if self.chains[i].due > now {
                 i += 1;
                 continue;
@@ -2066,7 +2100,10 @@ impl FxSystem {
     }
 
     pub fn spawn_chained(&mut self, fs: &dyn AssetSource, now: f32) -> Vec<FxSound> {
-        self.drain_chains(fs, now, 0)
+        self.budget = MAX_SPAWN_BUDGET;
+        let sounds = self.drain_chains(fs, now, 0);
+        self.drop_oldest_pending();
+        sounds
     }
 
     /// One tracer from `muzzle` towards `impact`, per the retail client's
@@ -2160,6 +2197,7 @@ impl FxSystem {
             marks: &mut self.marks,
             chains: &mut self.chains,
             trails: &mut self.trails,
+            budget: &mut self.budget,
         };
         for em in &effect.emitters {
             spawn_emitter(&mut self.rng, &mut out, em, &cx);
@@ -2183,6 +2221,7 @@ impl FxSystem {
             bolts: &self.bolts,
         };
         step_pool(&mut self.particles, &cx, &mut self.rng, &mut self.chains);
+        drop_oldest(&mut self.chains, MAX_PENDING);
         for (id, t) in &mut self.trails {
             let frame = self.bolts.get(id).map(|f| {
                 let (x, y, z) = f.axis;
@@ -3652,6 +3691,33 @@ mod tests {
         );
         assert_eq!(s.counts().0, MAX_CHAIN_DEPTH as usize + 1);
         assert!(s.chains.is_empty());
+    }
+
+    /// A runner playing itself 2048 times would be 2048^9 plays; the spawn
+    /// budget ends it, and what is left waiting stays under the cap.
+    #[test]
+    fn a_wide_self_playing_runner_stops_at_the_spawn_budget() {
+        let mut r = runner("fx/loop");
+        r.count = R1 {
+            a: 2048.0,
+            b: 2048.0,
+        };
+        let mut s = sys_with_files(&[("fx/loop.efx", vec![r.clone(), still_particle()])]);
+        let fs = Pk3Fs::empty();
+        let at = SpawnAt::Point { pos: Vec3::ZERO };
+        s.spawn(&fs, "fx/loop.efx", at, 0.0);
+        assert!(s.chains.len() <= MAX_PENDING);
+        assert!(s.counts().0 <= MAX_PARTICLES);
+        s.spawn_chained(&fs, 0.0);
+        assert!(s.chains.len() <= MAX_PENDING);
+
+        // Delayed past any frame: the queue keeps the newest.
+        r.delay = R1 { a: 1e30, b: 1e30 };
+        let mut s = sys_with_files(&[("fx/far.efx", vec![r])]);
+        for _ in 0..8 {
+            s.spawn(&fs, "fx/far.efx", at, 0.0);
+        }
+        assert_eq!(s.chains.len(), MAX_PENDING);
     }
 
     /// An `Emitter` flying 200 u/s with `density 10` plays its `emitfx`

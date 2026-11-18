@@ -20,6 +20,7 @@ impl Handle {
     }
 
     pub(super) fn set_volume(&mut self, db: f32) {
+        let db = gain_db(db);
         match self {
             Handle::Static(h) => h.set_volume(Decibels(db), Tween::default()),
             Handle::Stream(h) => h.set_volume(Decibels(db), Tween::default()),
@@ -34,6 +35,7 @@ impl Handle {
     }
 
     pub(super) fn set_playback_rate(&mut self, rate: f64) {
+        let rate = playback_rate(rate);
         match self {
             Handle::Static(h) => h.set_playback_rate(PlaybackRate(rate), Tween::default()),
             Handle::Stream(h) => h.set_playback_rate(PlaybackRate(rate), Tween::default()),
@@ -63,15 +65,40 @@ impl Handle {
     }
 }
 
+/// Loudest a voice plays at: room for `q 2 0` doubling a loud alias
+/// (retail leaves the fade level unclamped), none for a hostile `q 1000 0`.
+pub(super) const MAX_DB: f32 = 12.0;
+/// Fastest playback rate a voice takes, three octaves up; csv pitches and
+/// UO's packed blend pitch are otherwise unbounded.
+pub(super) const MAX_RATE: f64 = 8.0;
+
+/// `db` as kira takes it: -60 (silence) up to [`MAX_DB`], NaN silent.
+pub(crate) fn gain_db(db: f32) -> f32 {
+    if db.is_nan() {
+        -60.0
+    } else {
+        db.clamp(-60.0, MAX_DB)
+    }
+}
+
+/// `rate` held to 0..=[`MAX_RATE`]; a non-finite one plays at 1.
+pub(crate) fn playback_rate(rate: f64) -> f64 {
+    if rate.is_finite() {
+        rate.clamp(0.0, MAX_RATE)
+    } else {
+        1.0
+    }
+}
+
 /// Applies gain, pan, pitch, start time, start position (seconds) and loop flag to `$data` and starts
 /// it as `Handle::$variant`. The error is stringified so both kinds share a
 /// type.
 macro_rules! start_sound {
     ($manager:expr, $data:expr, $variant:ident, $db:expr, $pan:expr, $pitch:expr, $start:expr, $from_s:expr, $looping:expr) => {{
         let mut data = $data
-            .volume(::kira::Decibels($db))
+            .volume(::kira::Decibels($crate::audio::handle::gain_db($db)))
             .panning(::kira::Panning($pan))
-            .playback_rate($pitch)
+            .playback_rate($crate::audio::handle::playback_rate($pitch))
             .start_time($start)
             .start_position($from_s);
         if $looping {

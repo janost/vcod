@@ -828,6 +828,8 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   `ui_lastServerRefresh_<n>` cvar. A right click acts as a left click and
   steps the game type and source owner draws back (section 19). A missing
   `menu/art/unknownmap` draws nothing.
+- The Internet list stops at retail's size: 2048 entries plus the `0x800`
+  overflow addresses on 1.1, 20000 on 1.5, UO and CoD2 (section 8).
 - Not done: the Internet list's cache in `servercache.dat` (section 8;
   vcod's Internet list lives for one run), `focusColor`'s pulse (section
   20). The server, map

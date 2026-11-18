@@ -170,7 +170,7 @@ impl ShockProbe {
         }
         let dir = "crates/server/tests/fixtures/shellshock";
         std::fs::create_dir_all(dir)?;
-        let path = format!("{dir}/{map}-dm-shock-client.txt");
+        let path = crate::probe::fixture_path(dir, &format!("{map}-dm-shock-client.txt"))?;
         if !overwrite && std::path::Path::new(&path).exists() {
             anyhow::bail!("{path} already exists; pass --overwrite-fixture to replace it");
         }

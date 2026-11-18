@@ -426,10 +426,10 @@ impl LegsProbe {
             out.push_str(l);
             out.push('\n');
         }
-        let path = format!(
-            "{path_dir}/{map}-dm-legs-client{}.txt",
-            crate::probe::tag_suffix(tag)
-        );
+        let path = crate::probe::fixture_path(
+            path_dir,
+            &format!("{map}-dm-legs-client{}.txt", crate::probe::tag_suffix(tag)),
+        )?;
         if !overwrite && std::path::Path::new(&path).exists() {
             anyhow::bail!("{path} already exists; pass --overwrite-fixture to replace it");
         }

@@ -54,12 +54,13 @@ pub fn pan(listener: &Listener, emitter: Vec3) -> f32 {
     (d / len).dot(listener.right).clamp(-1.0, 1.0)
 }
 
-/// Linear amplitude to dB, floored at kira's -60 dB silence.
+/// Linear amplitude to dB, floored at kira's -60 dB silence and capped at
+/// [`super::handle::MAX_DB`]; a non-finite amplitude is silent.
 pub fn amplitude_db(a: f32) -> f32 {
-    if a <= 0.001 {
+    if !a.is_finite() || a <= 0.001 {
         return -60.0;
     }
-    (20.0 * a.log10()).max(-60.0)
+    (20.0 * a.log10()).clamp(-60.0, super::handle::MAX_DB)
 }
 
 #[cfg(test)]
@@ -139,5 +140,12 @@ mod tests {
         assert!((amplitude_db(0.5) + 6.0206).abs() < 1e-3);
         assert_eq!(amplitude_db(0.0), -60.0);
         assert!((amplitude_db(1.5) - 3.5218).abs() < 1e-3);
+        // `q 2 0` on a full alias doubles it; `q 1000 0` and `q inf 0` are
+        // a hostile server's.
+        assert!((amplitude_db(2.0) - 6.0206).abs() < 1e-3);
+        assert_eq!(amplitude_db(1000.0), super::super::handle::MAX_DB);
+        for a in [f32::INFINITY, f32::NAN, f32::NEG_INFINITY] {
+            assert_eq!(amplitude_db(a), -60.0);
+        }
     }
 }

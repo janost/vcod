@@ -55,6 +55,32 @@ fn check_capture_tag(
     Ok(())
 }
 
+/// The serverinfo's `mapname` and `g_gametype`, which every fixture file
+/// name is built from, refused unless they are letters, digits and `_` as
+/// every stock name is: a hostile server's `../x` must not pick the file.
+fn check_fixture_names(writes_fixture: bool, serverinfo: &str) -> anyhow::Result<()> {
+    if !writes_fixture {
+        return Ok(());
+    }
+    for key in ["mapname", "g_gametype"] {
+        let v = net::info_value_for_key(serverinfo, key).unwrap_or("");
+        if v.is_empty() || !v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            anyhow::bail!(
+                "serverinfo {key} \"{}\" cannot name a fixture file",
+                escape_ctl(v)
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `dir/name` for a fixture file, refused when `name` would leave `dir`.
+pub(crate) fn fixture_path(dir: &str, name: &str) -> anyhow::Result<String> {
+    vcod_common::game_dir::confined_component(std::path::Path::new(dir), name)
+        .map(|p| p.to_string_lossy().into_owned())
+        .ok_or_else(|| anyhow::anyhow!("fixture name \"{}\" leaves {dir}", escape_ctl(name)))
+}
+
 /// The retail build behind the connection, as a fixture header names it.
 pub(crate) fn retail_build() -> &'static str {
     match wire().transport.version {
@@ -731,6 +757,9 @@ pub fn probe(
                     );
                     if let Err(e) =
                         check_capture_tag(client.protocol(), writes_fixture, tag.as_deref())
+                            .and_then(|()| {
+                                check_fixture_names(writes_fixture, client.configstring(0))
+                            })
                     {
                         client.disconnect();
                         return Err(e);
@@ -2505,10 +2534,10 @@ fn write_configstrings_fixture(
         }
     }
 
-    let path = format!(
-        "{CONFIGSTRINGS_FIXTURE_DIR}/{map}-{gametype}{}.txt",
-        tag_suffix(tag)
-    );
+    let path = fixture_path(
+        CONFIGSTRINGS_FIXTURE_DIR,
+        &format!("{map}-{gametype}{}.txt", tag_suffix(tag)),
+    )?;
     write_capture(&path, &out, tag, overwrite)?;
     println!("configstrings: {written} non-empty slots -> {path}");
     Ok(())
@@ -3224,10 +3253,10 @@ fn write_motion_fixture(
             out.push_str(&format!("{} {v}\n", f.name));
         }
     }
-    let path = format!(
-        "{PLAYERSTATE_FIXTURE_DIR}/{map}-{gametype}-motion{}.txt",
-        tag_suffix(tag)
-    );
+    let path = fixture_path(
+        PLAYERSTATE_FIXTURE_DIR,
+        &format!("{map}-{gametype}-motion{}.txt", tag_suffix(tag)),
+    )?;
     write_capture(&path, &out, tag, overwrite)?;
     println!(
         "motion: {} poses ({} fields each) -> {path}",
@@ -4909,10 +4938,10 @@ leanf={:.4} commandTime={}\n",
     // `--capture-tag` keeps a capture taken with another weapon beside the
     // committed one rather than on top of it.
     let suffix = tag.map(|t| format!("-{t}")).unwrap_or_default();
-    let path = format!(
-        "{PLAYERSTATE_FIXTURE_DIR}/{map}-{gametype}-{}{suffix}.txt",
-        combat.kind
-    );
+    let path = fixture_path(
+        PLAYERSTATE_FIXTURE_DIR,
+        &format!("{map}-{gametype}-{}{suffix}.txt", combat.kind),
+    )?;
     std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
     match tag {
         Some(_) => write_tagged_fixture(&path, &out, overwrite)?,
@@ -6485,10 +6514,10 @@ fn write_hit_fixture(
     }
     out.push_str(body);
 
-    let path = format!(
-        "{PLAYERSTATE_FIXTURE_DIR}/{map}-{gametype}-{role}{}.txt",
-        tag_suffix(tag)
-    );
+    let path = fixture_path(
+        PLAYERSTATE_FIXTURE_DIR,
+        &format!("{map}-{gametype}-{role}{}.txt", tag_suffix(tag)),
+    )?;
     std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
     write_capture(&path, &out, tag, overwrite)?;
     println!("hit: {role} -> {path}");
@@ -7000,10 +7029,10 @@ first_snapshot_after_gamestate_ms={}\n",
         out.push_str(&l);
     }
 
-    let path = format!(
-        "{NETCHAN_FIXTURE_DIR}/{map}-{gametype}-{role}{}.txt",
-        tag_suffix(tag)
-    );
+    let path = fixture_path(
+        NETCHAN_FIXTURE_DIR,
+        &format!("{map}-{gametype}-{role}{}.txt", tag_suffix(tag)),
+    )?;
     std::fs::create_dir_all(NETCHAN_FIXTURE_DIR)?;
     write_capture(&path, &out, tag, overwrite)?;
     println!("netchan: {role} -> {path}");
@@ -7068,10 +7097,10 @@ fn write_scripted_fixture(
         out.push('\n');
     }
     std::fs::create_dir_all(GAMETYPES_FIXTURE_DIR)?;
-    let path = format!(
-        "{GAMETYPES_FIXTURE_DIR}/{map}-{gametype}-{role}{}.txt",
-        tag_suffix(tag)
-    );
+    let path = fixture_path(
+        GAMETYPES_FIXTURE_DIR,
+        &format!("{map}-{gametype}-{role}{}.txt", tag_suffix(tag)),
+    )?;
     write_tagged_fixture(&path, &out, overwrite)?;
     println!("scripted: {} lines -> {path}", capture.lines.len());
     Ok(())
@@ -7139,10 +7168,10 @@ fn write_playerstate_fixture(
         out.push('\n');
     }
 
-    let path = format!(
-        "{PLAYERSTATE_FIXTURE_DIR}/{map}-{gametype}{}.txt",
-        tag_suffix(tag)
-    );
+    let path = fixture_path(
+        PLAYERSTATE_FIXTURE_DIR,
+        &format!("{map}-{gametype}{}.txt", tag_suffix(tag)),
+    )?;
     std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
     write_capture(&path, &out, tag, overwrite)?;
     println!(
@@ -7802,7 +7831,10 @@ fn write_slope_fixture(
         out.push('\n');
     }
     let suffix = tag.map(|t| format!("-{t}")).unwrap_or_default();
-    let path = format!("{PLAYERSTATE_FIXTURE_DIR}/{map}-{gametype}-slope-{cmd_ms}ms{suffix}.txt");
+    let path = fixture_path(
+        PLAYERSTATE_FIXTURE_DIR,
+        &format!("{map}-{gametype}-slope-{cmd_ms}ms{suffix}.txt"),
+    )?;
     match tag {
         Some(_) => write_tagged_fixture(&path, &out, overwrite)?,
         None => std::fs::write(&path, &out)?,
@@ -10165,10 +10197,10 @@ angles={},{},{}\n",
         }
     }
 
-    let path = format!(
-        "{PLAYERSTATE_FIXTURE_DIR}/{map}-sd-{role}{}.txt",
-        tag_suffix(tag)
-    );
+    let path = fixture_path(
+        PLAYERSTATE_FIXTURE_DIR,
+        &format!("{map}-sd-{role}{}.txt", tag_suffix(tag)),
+    )?;
     std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
     write_capture(&path, &out, tag, overwrite)?;
     println!("sd: {role} -> {path}");
@@ -10814,7 +10846,10 @@ fn write_pickup_fixture(
         }
     }
     std::fs::create_dir_all(ITEMS_FIXTURE_DIR)?;
-    let path = format!("{ITEMS_FIXTURE_DIR}/{map}-dm-pickup{}.txt", tag_suffix(tag));
+    let path = fixture_path(
+        ITEMS_FIXTURE_DIR,
+        &format!("{map}-dm-pickup{}.txt", tag_suffix(tag)),
+    )?;
     write_capture(&path, &out, tag, overwrite)?;
     println!("pickup: wrote {path}");
     Ok(())
@@ -11652,12 +11687,12 @@ fn write_turret_fixture(
     std::fs::create_dir_all(TURRET_FIXTURE_DIR)?;
     match tag {
         Some(tag) => {
-            let path = format!("{TURRET_FIXTURE_DIR}/{map}-dm-turret-{tag}.txt");
+            let path = fixture_path(TURRET_FIXTURE_DIR, &format!("{map}-dm-turret-{tag}.txt"))?;
             write_tagged_fixture(&path, &out, overwrite)?;
             println!("turret: wrote {path}");
         }
         None => {
-            let path = format!("{TURRET_FIXTURE_DIR}/{map}-dm-turret.txt");
+            let path = fixture_path(TURRET_FIXTURE_DIR, &format!("{map}-dm-turret.txt"))?;
             std::fs::write(&path, out)?;
             println!("turret: wrote {path}");
         }
@@ -12686,10 +12721,10 @@ fn write_ladder_fixture(
         out.push_str(l);
         out.push('\n');
     }
-    let path = format!(
-        "{PLAYERSTATE_FIXTURE_DIR}/{map}-dm-ladder{}.txt",
-        tag_suffix(tag)
-    );
+    let path = fixture_path(
+        PLAYERSTATE_FIXTURE_DIR,
+        &format!("{map}-dm-ladder{}.txt", tag_suffix(tag)),
+    )?;
     write_capture(&path, &out, tag, overwrite)?;
     println!("ladder: {} lines -> {path}", lines.len());
     Ok(())
@@ -12747,10 +12782,10 @@ fn write_weapsel_fixture(
         out.push('\n');
     }
     std::fs::create_dir_all(WEAPSEL_FIXTURE_DIR)?;
-    let path = format!(
-        "{WEAPSEL_FIXTURE_DIR}/{map}-dm-weapsel{}.txt",
-        tag_suffix(tag)
-    );
+    let path = fixture_path(
+        WEAPSEL_FIXTURE_DIR,
+        &format!("{map}-dm-weapsel{}.txt", tag_suffix(tag)),
+    )?;
     write_capture(&path, &out, tag, overwrite)?;
     println!("weapsel: wrote {path}");
     Ok(())
@@ -13917,7 +13952,10 @@ fn write_bump_fixture(
         Some(t) => format!("{t}-walker"),
         None => "walker".to_string(),
     };
-    let path = format!("{PLAYERSTATE_FIXTURE_DIR}/{map}-dm-bump-{role}.txt");
+    let path = fixture_path(
+        PLAYERSTATE_FIXTURE_DIR,
+        &format!("{map}-dm-bump-{role}.txt"),
+    )?;
     match tag {
         Some(_) => write_tagged_fixture(&path, &out, overwrite)?,
         None => std::fs::write(&path, &out)?,
@@ -14024,7 +14062,10 @@ sample of a set\n"
     head.push_str("# from Protocol::entity_fields; a field a block does not list is zero.\n");
 
     let suffix = tag.map(|t| format!("-{t}")).unwrap_or_default();
-    let path = format!("{ENTITIES_FIXTURE_DIR}/{map}-{gametype}{suffix}.txt");
+    let path = fixture_path(
+        ENTITIES_FIXTURE_DIR,
+        &format!("{map}-{gametype}{suffix}.txt"),
+    )?;
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let mut samples = parse_fixture_samples(&existing);
     let taken = samples.len();
@@ -14755,6 +14796,34 @@ mod tests {
         assert!(check_capture_tag(&PROTOCOL_V22, true, None).is_err());
         assert!(check_capture_tag(&PROTOCOL_V22, true, Some("uo")).is_ok());
         assert!(check_capture_tag(&PROTOCOL_V22, false, None).is_ok());
+    }
+
+    /// A server's mapname or g_gametype names the fixture file; one that
+    /// could leave the fixture directory ends the run.
+    #[test]
+    fn a_hostile_map_name_cannot_name_a_fixture() {
+        let info = |map: &str, gt: &str| format!("\\mapname\\{map}\\g_gametype\\{gt}");
+        assert!(check_fixture_names(true, &info("mp_carentan", "dm")).is_ok());
+        for (map, gt) in [
+            ("../x", "dm"),
+            ("mp_x", "../../y"),
+            ("a/b", "dm"),
+            ("", "dm"),
+        ] {
+            assert!(
+                check_fixture_names(true, &info(map, gt)).is_err(),
+                "{map} {gt}"
+            );
+        }
+        assert!(check_fixture_names(false, &info("../x", "dm")).is_ok());
+
+        assert_eq!(
+            fixture_path("fixtures/items", "mp_carentan-dm-pickup.txt").unwrap(),
+            "fixtures/items/mp_carentan-dm-pickup.txt"
+        );
+        for name in ["../x-dm-pickup.txt", "a/b-dm.txt", "..-dm.txt"] {
+            assert!(fixture_path("fixtures/items", name).is_err(), "{name}");
+        }
     }
 
     /// `dm` spawns and the gsc teleports before the join settles, so the

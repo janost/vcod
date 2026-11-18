@@ -764,8 +764,18 @@ impl Cod2Session {
     /// counted and logged, and the next one tried. A gamestate's `cp` is
     /// queued here when `fs` is given, else on the next call that gives it.
     pub fn poll(&mut self, fs: Option<&Pk3Fs>) {
+        self.poll_at_most(fs, vcod_common::net::MAX_PACKETS_PER_PUMP);
+    }
+
+    /// [`Self::poll`] reading at most `max` datagrams, so a flood cannot
+    /// hold the frame.
+    fn poll_at_most(&mut self, fs: Option<&Pk3Fs>, max: usize) {
         let mut buf = vec![0u8; 0x10000];
-        while let Some(n) = self.sock.as_mut().and_then(|s| s.try_recv(&mut buf)) {
+        let mut read = 0;
+        while read < max
+            && let Some(n) = self.sock.as_mut().and_then(|s| s.try_recv(&mut buf))
+        {
+            read += 1;
             let d = &buf[..n];
             if let Some(pl) = oob::payload(d) {
                 // `CL_ConnectionlessPacket`'s `v` (Mac 0x14c4c4) into
@@ -3609,6 +3619,22 @@ mod tests {
             fs.read("maps/mp/mp_dltest.d3dbsp").as_deref(),
             Some(&b"IBSP"[..])
         );
+    }
+
+    /// A flood of datagrams is read `max` at a time; the rest wait.
+    #[test]
+    fn a_poll_reads_a_bounded_number_of_datagrams() {
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let me = sock.local_addr().unwrap();
+        let mut s = Cod2Session::new(Some(sock), Client::new(1, 2));
+        let flood = UdpSocket::bind("127.0.0.1:0").unwrap();
+        for _ in 0..50 {
+            flood.send_to(b"x", me).unwrap();
+        }
+        s.poll_at_most(None, 8);
+        let mut buf = [0u8; 16];
+        let left = std::iter::from_fn(|| s.sock.as_mut().unwrap().try_recv(&mut buf)).count();
+        assert_eq!(left, 42);
     }
 
     fn session(join: Option<Join>) -> Cod2Session {

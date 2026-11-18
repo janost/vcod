@@ -9,6 +9,7 @@ use vcod_common::net::msg::{self, PlayerState, UserCmd};
 use vcod_common::net::protocol::Protocol;
 use vcod_common::text::atoi_msvc;
 use vcod_common::weapon::WeaponDef;
+use vcod_common::weapon_table::alt_chain;
 
 /// `eFlags` bits the server writes for a crouched/prone player
 /// (`crates/server/src/spectate.rs`, `to_wire`), the inverse the caller reads
@@ -500,29 +501,16 @@ impl Held {
         if !self.owns(w) {
             return 0;
         }
-        let mut at = w;
-        loop {
-            if let Some(n) = self.slot_range().find(|&n| self.slots[n] == at) {
-                return n;
-            }
-            at = self.alt_of(at);
-            if at == 0 || at == w {
-                return 0;
-            }
-        }
+        std::iter::once(w)
+            .chain(alt_chain(w, |a| self.alt_of(a)))
+            .find_map(|at| self.slot_range().find(|&n| self.slots[n] == at))
+            .unwrap_or(0)
     }
 
     /// Whether `of` sits further along `w`'s `altWeapon` chain (the walk at
     /// 0x30038661, which skips the selection's other modes).
     fn alt_mode_of(&self, w: u8, of: u8) -> bool {
-        let mut at = self.alt_of(w);
-        while at != 0 && at != w {
-            if at == of {
-                return true;
-            }
-            at = self.alt_of(at);
-        }
-        false
+        alt_chain(w, |a| self.alt_of(a)).any(|at| at == of)
     }
 }
 
@@ -1155,6 +1143,23 @@ mod tests {
             seat_refuses_slot: false,
             seat_refuses_alt: false,
         }
+    }
+
+    /// A hostile configstring 7 naming a weapon twice gives 1->2, 2->1,
+    /// 3->1: walks from 3 loop without passing it, and end.
+    #[test]
+    fn alt_walks_end_on_a_loop_that_skips_the_start() {
+        let mut h = held(3);
+        h.alt = vec![0, 2, 1, 1];
+        h.slots = [0; 8];
+        h.owned = 0b1110;
+        assert_eq!(h.slot_of(3), 0);
+        assert!(h.alt_mode_of(3, 2));
+        assert!(!h.alt_mode_of(3, 3));
+        // One-way: 1->2, 2 has none.
+        h.alt = vec![0, 2, 0, 0];
+        assert_eq!(h.slot_of(1), 0);
+        assert!(!h.alt_mode_of(1, 3));
     }
 
     #[test]
