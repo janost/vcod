@@ -2166,8 +2166,8 @@ impl Cod4Effects {
     /// pellets too (`DrawBulletImpacts`, 0x4567f2..0x456816), and each
     /// round draws one when it passed, contact or not. Another's round
     /// rolls `cg_tracerchance` on each contact it plays, the penetration's
-    /// too, and draws to it (`CG_BulletHitEvent`'s
-    /// The trajectory effects, 0x458bcd; the tracer test, 0x458720):
+    /// too, and draws to it (`CG_BulletHitEvent`'s trajectory effects,
+    /// 0x458bcd; the tracer test, 0x458720):
     /// none for a miss, none for a round into a player (the server's
     /// `EV_BULLET_HIT` plays it). The gun we man draws none: the caller
     /// skips it (0x458749..0x458758). The number spawned.

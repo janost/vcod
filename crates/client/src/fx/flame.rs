@@ -1,7 +1,7 @@
 //! United Offensive's flamethrower: the cgame's own chunk system, not an
 //! `.efx` (uo cgame 0x30024050 `CG_FireFlameChunks` .. 0x30027d10
 //! `CG_AddFlameChunks`, a reworked RTCW `cg_flamethrower.c`;
-//! docs/research/coduo-diff.md section 12). A body firing a `gas` weapon
+//! docs/research/coduo-diff.md section 19). A body firing a `gas` weapon
 //! streams chunks off its `tag_flash` while its `eFlags` firing bit is up;
 //! each chunk slows, grows, bounces off the world and the bodies in it
 //! ([`ChunkWorld`]) and plays through the
