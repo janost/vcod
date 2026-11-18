@@ -4697,15 +4697,9 @@ impl Server {
     /// them are flagged into the 140/204 mirror; only `makeCvarServerInfo`
     /// does that.
     ///
-    /// `default_mp.cfg` is where the stock `scr_*` values come from: the
-    /// engine execs it at startup, it ships in `localized_english_pak0.pk3`,
-    /// and it sets 45 cvars, 38 of them the `scr_*` the stock gametype
-    /// scripts read. All but one are invisible in a configstring capture,
-    /// because the file's value and the script's own
-    /// `makeCvarServerInfo` default agree; `scr_allow_fg42` is the one that
-    /// does not, `0` in the file against the script's `"1"`, and
-    /// `makeCvarServerInfo` keeps the value already there. It is not
-    /// cosmetic: `!getCvar("scr_allow_fg42")` is what makes
+    /// `default_mp.cfg` is where the stock `scr_*` values come from, and
+    /// its `scr_allow_fg42 0` is the one the scripts' defaults disagree with
+    /// (cod11-gsc-object-model.md 17). It is not cosmetic: it makes
     /// `_teams::restrictPlacedWeapons` `delete()` the map's placed fg42s, so
     /// the value moves entity numbering as well as the mirror.
     ///
