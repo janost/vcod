@@ -1049,7 +1049,7 @@ impl Cod4Level {
         } else {
             touched = pmove::player_step(&mut ps, &cmd, &mut oldcmd, &world, self.rules, weapon);
         }
-        p.ps = ps.to_wire(&p.ps);
+        ps.write_wire(&mut p.ps);
         p.old_velocity = ps.old_velocity;
         p.anim_conditions = (ps.anim_movetype, ps.anim_strafing);
         if state != SessionState::Spectator {
@@ -1695,7 +1695,7 @@ impl Cod4Level {
         // A torso-only line reads -1 (the legs took nothing) yet plays.
         pmove::anim::script_event(&mut ps, buttons, &input, "shellshock", pick, (false, true));
         let p = self.players[slot].as_mut().unwrap();
-        p.ps = ps.to_wire(&p.ps);
+        ps.write_wire(&mut p.ps);
     }
 
     /// The `death` event's commands as `slot` stands now, for a kill this
