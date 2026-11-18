@@ -228,10 +228,10 @@ impl Cod4World {
 
     /// [`Rules::shock_slows`] for the shellshock configstrings `cs`
     /// (1955 on, one a `shellshockIndex` from 1).
-    pub fn shock_slows(&self, cs: impl Fn(u16) -> Vec<u8>) -> u16 {
+    pub fn shock_slows<'a>(&self, cs: impl Fn(u16) -> &'a [u8]) -> u16 {
         (1..16u16)
             .filter(|&i| {
-                let name = String::from_utf8_lossy(&cs(1954 + i)).into_owned();
+                let name = String::from_utf8_lossy(cs(1954 + i));
                 !name.is_empty() && self.shock(&name).is_some_and(|p| p.movement)
             })
             .fold(0, |bits, i| bits | 1 << i)
@@ -313,20 +313,16 @@ pub fn new_events(ps: &Ring, old: &Ring) -> Vec<usize> {
 /// The lean dvars the body controllers read (`player_lean_shift_*`,
 /// `player_lean_rotate_*`) off the server's mirror, 1.7's defaults where
 /// it names none (cod4-player-anims.md 8).
-pub fn lean_from_mirror(cs: impl Fn(u16) -> Vec<u8>) -> vcod_common::playerpose::LeanDvars {
+pub fn lean_from_mirror<'a>(cs: impl Fn(u16) -> &'a [u8]) -> vcod_common::playerpose::LeanDvars {
     let mut d = vcod_common::playerpose::LeanDvars::default();
+    let mut buf = [0u8; 64];
     for i in CS_CODINFO..CS_CODINFO_VALUE {
-        let name = String::from_utf8_lossy(&cs(i)).to_ascii_lowercase();
+        let Some((name, v)) = mirror_slot(&cs, i, &mut buf) else {
+            continue;
+        };
         let Some(key) = name.strip_prefix("player_lean_") else {
             continue;
         };
-        let value = String::from_utf8_lossy(&cs(i + CS_CODINFO_VALUE - CS_CODINFO)).into_owned();
-        let Ok(v) = value.trim().parse::<f32>() else {
-            continue;
-        };
-        if !v.is_finite() {
-            continue;
-        }
         let slot = match key {
             "shift_left" => &mut d.shift_left,
             "shift_right" => &mut d.shift_right,
@@ -343,24 +339,35 @@ pub fn lean_from_mirror(cs: impl Fn(u16) -> Vec<u8>) -> vcod_common::playerpose:
     d
 }
 
+/// Mirror slot `i`'s dvar name, folded into `buf`, and its value as a
+/// finite float; `None` for an empty slot, a name longer than any dvar the
+/// readers know, or a value that is no finite float. Allocates nothing.
+fn mirror_slot<'a, 'b>(
+    cs: &impl Fn(u16) -> &'a [u8],
+    i: u16,
+    buf: &'b mut [u8; 64],
+) -> Option<(&'b str, f32)> {
+    let name = cs(i);
+    let dst = buf.get_mut(..name.len()).filter(|_| !name.is_empty())?;
+    dst.copy_from_slice(name);
+    dst.make_ascii_lowercase();
+    let name = std::str::from_utf8(dst).ok()?;
+    let value = std::str::from_utf8(cs(i + CS_CODINFO_VALUE - CS_CODINFO)).ok()?;
+    let v = value.trim().parse::<f32>().ok().filter(|v| v.is_finite())?;
+    Some((name, v))
+}
+
 /// The movement dvars off the server's mirror (`CS_CODINFO` names, the
 /// values 128 slots on): what a name the mirror carries says, held to the
 /// dvar's domain (cod4-pmove.md 12), the rest [`Rules::default`].
-pub fn rules_from_mirror(cs: impl Fn(u16) -> Vec<u8>) -> Rules {
+pub fn rules_from_mirror<'a>(cs: impl Fn(u16) -> &'a [u8]) -> Rules {
     let mut r = Rules::default();
+    let mut buf = [0u8; 64];
     for i in CS_CODINFO..CS_CODINFO_VALUE {
-        let name = String::from_utf8_lossy(&cs(i)).into_owned();
-        if name.is_empty() {
-            continue;
-        }
-        let value = String::from_utf8_lossy(&cs(i + CS_CODINFO_VALUE - CS_CODINFO)).into_owned();
-        let Ok(v) = value.trim().parse::<f32>() else {
+        let Some((name, v)) = mirror_slot(&cs, i, &mut buf) else {
             continue;
         };
-        if !v.is_finite() {
-            continue;
-        }
-        let (slot, lo, hi) = match name.to_ascii_lowercase().as_str() {
+        let (slot, lo, hi) = match name {
             "friction" => (&mut r.friction, 0.0, 100.0),
             "stopspeed" => (&mut r.stopspeed, 0.0, 1000.0),
             "inertiamax" => (&mut r.inertia_max, 0.0, 1000.0),
@@ -979,9 +986,9 @@ mod tests {
             let k = usize::from(i.wrapping_sub(CS_CODINFO));
             let v = usize::from(i.wrapping_sub(CS_CODINFO_VALUE));
             match (pairs.get(k), pairs.get(v)) {
-                (Some((name, _)), _) if i < CS_CODINFO_VALUE => name.as_bytes().to_vec(),
-                (_, Some((_, value))) if i >= CS_CODINFO_VALUE => value.as_bytes().to_vec(),
-                _ => Vec::new(),
+                (Some((name, _)), _) if i < CS_CODINFO_VALUE => name.as_bytes(),
+                (_, Some((_, value))) if i >= CS_CODINFO_VALUE => value.as_bytes(),
+                _ => &[],
             }
         });
         let d = Rules::default();

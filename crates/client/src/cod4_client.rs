@@ -1855,8 +1855,7 @@ impl Cod4Client {
             .filter_map(|d| Some((d.number, d.body.as_ref()?)))
             .collect();
         if let Some(gs) = self.session.gamestate() {
-            self.players.lean =
-                crate::play::cod4_predict::lean_from_mirror(|i| gs.configstring(i).to_vec());
+            self.players.lean = crate::play::cod4_predict::lean_from_mirror(|i| gs.configstring(i));
         }
         // Each gunner's gun as drawn: its model's two tags at the bind and
         // its weapon's column step.

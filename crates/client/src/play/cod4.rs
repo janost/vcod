@@ -2335,8 +2335,8 @@ impl Cod4Session {
                 let rules = vcod_cod4::pmove::Rules {
                     // The server's slowed walk under a concussion
                     // (cod4-combat.md 10.8).
-                    shock_slows: w.shock_slows(|i| gs.configstring(i).to_vec()),
-                    ..cod4_predict::rules_from_mirror(|i| gs.configstring(i).to_vec())
+                    shock_slows: w.shock_slows(|i| gs.configstring(i)),
+                    ..cod4_predict::rules_from_mirror(|i| gs.configstring(i))
                 };
                 let weapon = |n: u32| {
                     weapon_name(&weapons, n)
@@ -2436,9 +2436,12 @@ impl Cod4Session {
             let other = u("otherFlags");
             self.kick.check_respawn(u("clientNum"), new.ps.stats[4]);
             self.kick.step(render_time, def.as_ref(), frac, other);
-            let heights = {
-                let r = cod4_predict::rules_from_mirror(|i| gs.configstring(i).to_vec());
+            // Read only on a frame with a new event to land.
+            let heights = if self.fired.len() > self.kick_seen {
+                let r = cod4_predict::rules_from_mirror(|i| gs.configstring(i));
                 (r.fall_damage_min_height, r.fall_damage_max_height)
+            } else {
+                Default::default()
             };
             for fd in self.fired.iter().skip(self.kick_seen) {
                 if fd.entity.is_some() {
