@@ -57,8 +57,7 @@ pub fn getservers(protocol: u32) -> String {
 pub const MASTER_INTERVAL_MS: u64 = 1000;
 
 /// At most one packet per [`MASTER_INTERVAL_MS`] to each master host, on a
-/// clock the caller passes in milliseconds. A loopback host is no public
-/// master: its packets always go, so tests' fake masters wait on nothing.
+/// clock the caller passes in milliseconds.
 #[derive(Debug, Default)]
 pub struct RateLimiter {
     last: HashMap<IpAddr, u64>,
@@ -67,9 +66,6 @@ pub struct RateLimiter {
 impl RateLimiter {
     /// Whether a packet to `host` may go at `now_ms`; a yes counts as sent.
     pub fn allow(&mut self, host: IpAddr, now_ms: u64) -> bool {
-        if host.is_loopback() {
-            return true;
-        }
         match self.last.get(&host) {
             Some(&t) if now_ms < t.saturating_add(MASTER_INTERVAL_MS) => false,
             _ => {
@@ -81,8 +77,12 @@ impl RateLimiter {
 }
 
 /// [`RateLimiter::allow`] on the process's one limiter and the monotonic
-/// clock: every master packet the client sends asks this first.
+/// clock: every master packet the client sends asks this first. A loopback
+/// host always passes: the limit is a courtesy to public masters.
 pub fn master_send_allowed(host: IpAddr) -> bool {
+    if host.is_loopback() {
+        return true;
+    }
     static START: OnceLock<Instant> = OnceLock::new();
     static LIMIT: OnceLock<Mutex<RateLimiter>> = OnceLock::new();
     let now = Instant::now().duration_since(*START.get_or_init(Instant::now));
@@ -266,8 +266,14 @@ mod tests {
         assert!(r.allow(a, 6000));
         assert!(!r.allow(b, 6499));
         assert!(r.allow(b, 6500));
+    }
+
+    /// A loopback host is no public master: the client's packets to one
+    /// always go, so fake masters in tests wait on nothing.
+    #[test]
+    fn the_client_sends_to_a_loopback_master_unlimited() {
         let local: IpAddr = "127.0.0.1".parse().unwrap();
-        assert!(r.allow(local, 7000) && r.allow(local, 7000), "loopback");
+        assert!((0..3).all(|_| master_send_allowed(local)));
     }
 
     #[test]

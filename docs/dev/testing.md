@@ -83,7 +83,7 @@ broadcast on the LAN.
 | the bots' driver or its threads | `cargo test --release -p vcod-server --test server -- bot_threads::` (not ignored; each install it finds; `tdm` and `sd`, UO `ctf`) | ~15 s a game |
 | UO bot vehicles | `-- --ignored bot_vehicles::` at a UO install | ~12 s |
 | CoD4 bots | `cargo test --release -p vcod-server --lib -- --ignored cod4::bots::` (`COD4_DIR`) | ~4 s |
-| CoD4 hit boxes per map | `--lib -- --ignored cod4_every_map_poses_both_teams` (`COD4_DIR`) | ~25 s |
+| CoD4 hit boxes per map | `--lib -- --ignored cod4_every_map_poses_both_teams` (`COD4_DIR`) | 29 s of test, 7 min with the release build (2026-11-18) |
 | CoD2 gametypes | `--lib -- --ignored cod2_gametype_census` (`COD2_DIR`) | ~18 s |
 | 1.5 stuck seed | `--lib -- --ignored the_15_overlap_spectator_seed_is_the_only_fit` | ~2 s |
 | CoD2 maps, CoD2 load path | `cod2_map_census`, `cod2_load_profile` | |
