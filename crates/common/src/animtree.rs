@@ -35,22 +35,6 @@ pub struct AnimIndex {
     by_name: HashMap<Box<str>, i32>,
 }
 
-/// Runs `f` on `s` with ASCII folded to lowercase, on the stack when it fits.
-fn with_folded<R>(s: &str, f: impl FnOnce(&str) -> R) -> R {
-    if !s.bytes().any(|c| c.is_ascii_uppercase()) {
-        return f(s);
-    }
-    let mut buf = [0u8; 64];
-    match buf.get_mut(..s.len()) {
-        Some(dst) => {
-            dst.copy_from_slice(s.as_bytes());
-            dst.make_ascii_lowercase();
-            f(std::str::from_utf8(dst).expect("ASCII folding keeps UTF-8 valid"))
-        }
-        None => f(&s.to_ascii_lowercase()),
-    }
-}
-
 #[derive(PartialEq)]
 enum Tok<'a> {
     Open,
@@ -240,7 +224,7 @@ impl AnimIndex {
     /// names. The first index that carries the name wins; the flattening
     /// gives a node exactly one slot.
     pub fn wire_of(&self, _tree: &AnimTree, name: &str) -> Option<i32> {
-        with_folded(name, |n| self.by_name.get(n).copied())
+        crate::text::with_ascii_lowercase(name, |n| self.by_name.get(n).copied())
     }
 
     /// Slot 0 is always the root, so there is no empty index and no `is_empty`.
@@ -477,7 +461,7 @@ impl PlayerAnims {
     /// no state names.
     pub fn record(&self, wire: i32) -> crate::animscript::AnimRecord {
         self.name(wire)
-            .and_then(|n| with_folded(n, |n| self.records.get(n)))
+            .and_then(|n| crate::text::with_ascii_lowercase(n, |n| self.records.get(n)))
             .copied()
             .unwrap_or_default()
     }

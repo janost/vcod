@@ -1,6 +1,24 @@
 //! The C library's string readers as the retail binaries link them, and
 //! the engine's own small string helpers every crate shares.
 
+/// Runs `f` on `s` with ASCII folded to lowercase, on the stack when it
+/// fits in 64 bytes: a by-name lookup in a table keyed by folded names
+/// allocates nothing.
+pub fn with_ascii_lowercase<R>(s: &str, f: impl FnOnce(&str) -> R) -> R {
+    if !s.bytes().any(|c| c.is_ascii_uppercase()) {
+        return f(s);
+    }
+    let mut buf = [0u8; 64];
+    match buf.get_mut(..s.len()) {
+        Some(dst) => {
+            dst.copy_from_slice(s.as_bytes());
+            dst.make_ascii_lowercase();
+            f(std::str::from_utf8(dst).expect("ASCII folding keeps UTF-8 valid"))
+        }
+        None => f(&s.to_ascii_lowercase()),
+    }
+}
+
 /// `atoi` as glibc and Darwin libc read it on i386, `(int)strtol(s, 0,
 /// 10)`: leading blanks, a sign, then digits up to the first non-digit, 0
 /// with none; past `i32`'s range it saturates. The Linux servers' reading

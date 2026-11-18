@@ -413,13 +413,17 @@ pub fn player_locals(
         }],
     };
     let (mats, reached) = calc(&root, skel.bones().len(), a);
+    // Each model's base locals looked up once, in `models`' order.
+    let bases: Vec<_> = models.iter().filter_map(|m| src.base_locals(m)).collect();
     Some(
         mats.into_iter()
             .zip(reached)
             .zip(skel.bones())
             .map(|((m, r), bone)| match r {
                 true => Some(m),
-                false => models.iter().find_map(|m| src.base_local(m, &bone.name)),
+                false => bases
+                    .iter()
+                    .find_map(|b| b.iter().find(|(n, _)| *n == bone.name).map(|(_, m)| *m)),
             })
             .collect(),
     )
