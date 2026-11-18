@@ -167,7 +167,7 @@ impl Loader {
         self.loaded.len()
     }
 
-    /// Loads `path` and, recursively, every file it references by a static
+    /// Loads `path` and, transitively, every file it references by a static
     /// call target or a bare `::name` function pointer. `path` need not be
     /// canonical; every path discovered from compiled output already is
     /// (the compiler canonicalizes both halves of a `FuncRef`).
@@ -183,7 +183,7 @@ impl Loader {
         let mut installed = Vec::new();
         let mut visited = Vec::new();
         let read_before: HashSet<String> = self.files.borrow().keys().cloned().collect();
-        self.load_one(vm, &canonical(path), None, &mut installed, &mut visited)
+        self.load_one(vm, &canonical(path), &mut installed, &mut visited)
             .inspect_err(|_| {
                 vm.uninstall(&installed);
                 for p in &visited {
@@ -196,23 +196,52 @@ impl Loader {
             })
     }
 
-    /// `referrer` is the canonical path that named `path`, for the missing-
-    /// file error message; `None` at the top-level call. `installed` and
-    /// `visited` accumulate across the whole recursion so `load` can undo
-    /// exactly what this call did, and nothing older.
+    /// `path` and every file it reaches, depth first: a file installs
+    /// before the files it names, which load in sorted order. A stack of
+    /// each open file's remaining references stands in for recursion, so a
+    /// long reference chain costs no native stack. `installed` and
+    /// `visited` accumulate across the walk so `load` can undo exactly what
+    /// this call did, and nothing older.
     fn load_one(
+        &mut self,
+        vm: &mut Vm,
+        path: &str,
+        installed: &mut Vec<FuncRef>,
+        visited: &mut Vec<String>,
+    ) -> Result<(), LoadError> {
+        let mut open = Vec::new();
+        if let Some(refs) = self.load_file(vm, path, None, installed, visited)? {
+            open.push((path.to_string(), refs.into_iter()));
+        }
+        while let Some((referrer, refs)) = open.last_mut() {
+            let Some(r) = refs.next() else {
+                open.pop();
+                continue;
+            };
+            let referrer = referrer.clone();
+            if let Some(refs) = self.load_file(vm, &r, Some(&referrer), installed, visited)? {
+                open.push((r, refs.into_iter()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Compiles and installs one file; the files it references, or `None`
+    /// when it was already loaded. `referrer` is the canonical path that
+    /// named `path`, for the missing-file error message; `None` at the top.
+    fn load_file(
         &mut self,
         vm: &mut Vm,
         path: &str,
         referrer: Option<&str>,
         installed: &mut Vec<FuncRef>,
         visited: &mut Vec<String>,
-    ) -> Result<(), LoadError> {
+    ) -> Result<Option<BTreeSet<String>>, LoadError> {
         // Marked loaded before compiling, not after: two stock scripts
         // referencing each other is ordinary, and marking after would
-        // recurse forever on the cycle.
+        // loop forever on the cycle.
         if !self.loaded.insert(path.to_string()) {
-            return Ok(());
+            return Ok(None);
         }
         visited.push(path.to_string());
 
@@ -263,8 +292,8 @@ impl Loader {
         // pointer lowers to a `Value::Function` constant instead, since
         // `Expr::FuncRef` is an AST node compilation resolves away. Both
         // already carry a canonical file, resolved at compile time.
-        // A `BTreeSet`, not a `HashSet`: this drives the recursive load
-        // below, so hash iteration order would make which file a broken
+        // A `BTreeSet`, not a `HashSet`: this drives the load order in
+        // `load_one`, so hash iteration order would make which file a broken
         // reference gets blamed on, and which spelling of a folded key
         // `resolve` keeps (`atom.rs`'s "whichever the compiler saw first"),
         // nondeterministic run to run.
@@ -302,11 +331,7 @@ impl Loader {
             msg: e.to_string(),
         })?;
         installed.extend(new_funcs);
-
-        for r in refs {
-            self.load_one(vm, &r, Some(path), installed, visited)?;
-        }
-        Ok(())
+        Ok(Some(refs))
     }
 
     /// Every distinct builtin name an installed function calls, for which
@@ -373,6 +398,34 @@ mod tests {
             s.1 += 1;
             s.0.get(canonical).cloned()
         }
+    }
+
+    /// A reference chain thousands of files long loads off the native
+    /// stack; a missing link names the file that referenced it.
+    #[test]
+    fn a_long_reference_chain_loads() {
+        let n = 5_000;
+        let mut files: Vec<(String, String)> = (0..n)
+            .map(|i| (format!("f{i}"), format!("main() {{ f{}::main(); }}", i + 1)))
+            .collect();
+        files.push((format!("f{n}"), "main() { }".into()));
+        let refs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect();
+        let mut l = Loader::new(Box::new(source(&refs)));
+        l.load(&mut Vm::new(), "f0").unwrap();
+        assert_eq!(l.loaded_count(), n + 1);
+
+        let mut l = Loader::new(Box::new(source(&refs[..n])));
+        let e = l.load(&mut Vm::new(), "f0").unwrap_err();
+        assert_eq!(e.path, format!("f{n}"));
+        assert!(
+            e.msg.contains(&format!("referenced from f{}", n - 1)),
+            "{}",
+            e.msg
+        );
+        assert_eq!(l.loaded_count(), 0);
     }
 
     #[test]
@@ -544,7 +597,7 @@ mod tests {
         assert_eq!(l.loaded_count(), 2);
     }
 
-    /// `refs` (the set driving recursive loading) is a `BTreeSet`, so with
+    /// `refs` (the set driving the load order) is a `BTreeSet`, so with
     /// several broken references from one file, the one reported is always
     /// the alphabetically first — deterministic run to run, not whichever a
     /// `HashSet`'s hash-seed-dependent iteration order happened to visit

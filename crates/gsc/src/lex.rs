@@ -103,6 +103,7 @@ pub fn lex_dialect(src: &str, dialect: Dialect) -> Result<Vec<Spanned>, LexError
         i: 0,
         line: 1,
         dialect,
+        col_scan: Default::default(),
     }
     .run()
 }
@@ -112,6 +113,9 @@ struct Lexer<'a> {
     i: usize,
     line: u32,
     dialect: Dialect,
+    /// `col`'s last answer: how far it scanned and where that line starts,
+    /// so a long line is scanned once, not once a token.
+    col_scan: std::cell::Cell<(usize, usize)>,
 }
 
 fn is_ident_start(c: u8) -> bool {
@@ -386,10 +390,15 @@ impl<'a> Lexer<'a> {
 
     /// Bytes from the current line's start to the cursor.
     fn col(&self) -> u32 {
-        let start = self.b[..self.i]
-            .iter()
-            .rposition(|&c| c == b'\n')
-            .map_or(0, |n| n + 1);
+        let (scanned, mut start) = self.col_scan.get();
+        let from = if scanned <= self.i { scanned } else { 0 };
+        if from == 0 {
+            start = 0;
+        }
+        if let Some(n) = self.b[from..self.i].iter().rposition(|&c| c == b'\n') {
+            start = from + n + 1;
+        }
+        self.col_scan.set((self.i, start));
         (self.i - start) as u32
     }
 
@@ -515,6 +524,22 @@ mod tests {
 
     fn toks(src: &str) -> Vec<Tok> {
         lex(src).unwrap().into_iter().map(|s| s.tok).collect()
+    }
+
+    /// Columns count from the line's start, and a megabyte on one line
+    /// lexes in one pass.
+    #[test]
+    fn columns_are_found_in_one_pass() {
+        let cols: Vec<_> = lex("ab cd\n  ef /* x\n */ g")
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.line, s.col))
+            .collect();
+        assert_eq!(cols, [(1, 0), (1, 3), (2, 2), (3, 4), (3, 5)]);
+        let long = "a ".repeat(500_000);
+        let start = std::time::Instant::now();
+        assert_eq!(lex(&long).unwrap().len(), 500_001);
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
     }
 
     #[test]
