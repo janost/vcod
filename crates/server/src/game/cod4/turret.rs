@@ -331,7 +331,7 @@ impl Cod4Level {
             == Some(crate::follow::SessionState::Playing);
         let last_stand = self.players[slot]
             .as_ref()
-            .is_some_and(|p| p.ps.word(ps!("pm_type")) == super::level::PM_LASTSTAND);
+            .is_some_and(|p| p.ps.pm_type() == vcod_cod4::pmove::pm_type::LASTSTAND);
         if active != 1 || !playing || last_stand {
             self.stop_using_turret(id);
         } else {

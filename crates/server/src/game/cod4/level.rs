@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use glam::Vec3;
 use vcod_cod4::collision::ClipMap;
-use vcod_cod4::pmove::{self, Cmd, Rules};
+use vcod_cod4::pmove::{self, Cmd, Rules, pm_type};
 
 use vcod_cod4::install::Install;
 use vcod_cod4::net::clmsg::UserCmd;
@@ -29,29 +29,22 @@ use super::Cod4Zones;
 use super::clip::{Body4, Brush4, Cod4Clip};
 use crate::follow::SessionState;
 use crate::game::host::{ClientEvent, SpawnMode};
-use crate::game::script::{MenuRef, ScriptRuntime};
+use crate::game::script::{
+    MenuRef, ScriptRuntime, TEAM_ALLIES, TEAM_AXIS, TEAM_NONE, TEAM_SPECTATOR,
+};
 use vcod_gsc::Value;
 
 /// How far back the killcam may look: 10 s of frames (200 at `sv_fps` 20).
 /// vcod's bound; retail's archive lookup stops at 1200 frames back
 /// (cod4-combat.md 7.1).
-const HISTORY_MS: i32 = 10_000;
-
-/// `pm_type`s: the walk capture's spectator reads 4, a playing
-/// client 0. VERIFIED live.
-pub const PM_NORMAL: u32 = 0;
-/// A player `linkTo` holds (a plant or defuse), alive and dead.
-pub const PM_NORMAL_LINKED: u32 = 1;
-pub const PM_DEAD_LINKED: u32 = 8;
-pub const PM_SPECTATOR: u32 = 4;
-pub const PM_INTERMISSION: u32 = 5;
-/// `PM_LASTSTAND`: Last Stand's down state, a body still in play.
-pub const PM_LASTSTAND: u32 = 6;
-pub const PM_DEAD: u32 = 7;
+const KILLCAM_HISTORY_MS: i32 = 10_000;
 
 /// A body in play: `pm_type` normal (linked or not) or last stand.
-pub fn in_play(pm_type: u32) -> bool {
-    matches!(pm_type, PM_NORMAL | PM_NORMAL_LINKED | PM_LASTSTAND)
+pub fn in_play(pm: i32) -> bool {
+    matches!(
+        pm,
+        pm_type::NORMAL | pm_type::NORMAL_LINKED | pm_type::LASTSTAND
+    )
 }
 
 /// `otherFlags`: following someone (2), a player in the world
@@ -65,14 +58,10 @@ const EF_PING: u32 = 0x40_0000;
 const POF_SPECTATE_TEAM: u32 = 8;
 const POF_SPECTATE_FREE: u32 = 0x10;
 
-/// `TEAM_*` and the no-spectate bits `allowSpectateTeam` sets: bit `team`,
-/// `freelook` bit 4 (`TEAM_NUM_TEAMS`), as vcod's shared builtin keeps them
-/// (`GameHost::client_no_spectate`).
-const TEAM_FREE: u32 = 0;
-const TEAM_AXIS: u32 = 1;
-const TEAM_ALLIES: u32 = 2;
-const TEAM_SPECTATOR: u32 = 3;
-const NO_SPECTATE_FREELOOK: u8 = 1 << 4;
+/// The no-spectate bit `allowSpectateTeam` sets for `freelook`
+/// (`TEAM_NUM_TEAMS`), as vcod's shared builtin keeps them
+/// (`GameHost::client_no_spectate`); bit `team` refuses that team.
+const NO_SPECTATE_FREELOOK: u8 = 1 << crate::follow::FREELOOK;
 
 /// A playerstate word by its literal field name, resolved at compile time:
 /// a name `PLAYER_STATE` lacks fails the build.
@@ -143,8 +132,8 @@ pub(super) fn ent_u32(e: &EntityState, name: &str) -> u32 {
 struct Refused(u8);
 
 impl Refused {
-    fn team(self, team: u32) -> bool {
-        self.0 & (1 << team) != 0
+    fn team(self, team: i32) -> bool {
+        !crate::follow::can_spectate(self.0, team)
     }
 
     fn free_flight(self) -> bool {
@@ -152,7 +141,7 @@ impl Refused {
     }
 
     fn every_team(self) -> bool {
-        [TEAM_FREE, TEAM_AXIS, TEAM_ALLIES]
+        [TEAM_NONE, TEAM_AXIS, TEAM_ALLIES]
             .into_iter()
             .all(|t| self.team(t))
     }
@@ -173,6 +162,14 @@ pub(super) trait PsExt {
         self.set(word, v.to_bits());
     }
     fn word(&self, word: usize) -> u32;
+    /// `pm_type` (`vcod_cod4::pmove::pm_type`; the walk capture's
+    /// spectator reads 4, a playing client 0, VERIFIED live).
+    fn pm_type(&self) -> i32 {
+        self.word(ps!("pm_type")) as i32
+    }
+    fn set_pm_type(&mut self, t: i32) {
+        self.set(ps!("pm_type"), t as u32);
+    }
 }
 
 impl PsExt for PlayerState {
@@ -477,9 +474,9 @@ impl Cod4Level {
         self.rt.set_frame_ms(self.frame_ms());
     }
 
-    /// How many frames [`HISTORY_MS`] holds at this `sv_fps`.
+    /// How many frames [`KILLCAM_HISTORY_MS`] holds at this `sv_fps`.
     fn history_frames(&self) -> usize {
-        (HISTORY_MS / self.frame_ms()) as usize
+        (KILLCAM_HISTORY_MS / self.frame_ms()) as usize
     }
 
     /// Slot `slot`'s `lastVoiceTime` (cod4-voice.md 3), `None` before
@@ -537,7 +534,7 @@ impl Cod4Level {
         ps.setf(ps!("moveSpeedScaleMultiplier"), 1.0);
         ps.set(ps!("throwBackGrenadeOwner"), ENTITYNUM_NONE);
         ps.set(ps!("viewlocked_entNum"), ENTITYNUM_NONE);
-        ps.set(ps!("pm_type"), PM_SPECTATOR);
+        ps.set_pm_type(pm_type::SPECTATOR);
         place(&mut ps, spot.0, spot.1, None);
         self.players[slot] = Some(Player4 {
             ps,
@@ -617,7 +614,7 @@ impl Cod4Level {
             r.active = true;
         }
         if let Some(p) = self.players[slot].as_mut() {
-            p.ps.set(ps!("pm_type"), PM_SPECTATOR);
+            p.ps.set_pm_type(pm_type::SPECTATOR);
         }
         self.rt.push_client_event(ClientEvent::Begin(slot));
     }
@@ -689,7 +686,7 @@ impl Cod4Level {
         self.players
             .get(slot)
             .and_then(Option::as_ref)
-            .is_some_and(|p| p.ps.word(ps!("pm_type")) == PM_INTERMISSION)
+            .is_some_and(|p| p.ps.pm_type() == pm_type::INTERMISSION)
     }
 
     pub fn menu_response(&mut self, slot: usize, menu: &MenuRef, response: &str) {
@@ -799,7 +796,7 @@ impl Cod4Level {
         } else {
             return;
         };
-        let can = |team: u32| no_spectate & (1 << team) == 0;
+        let can = |team: i32| crate::follow::can_spectate(no_spectate, team);
         if let Some(t) = self.follow_cycle(slot, dir, &can) {
             self.players[slot].as_mut().unwrap().spectator_client = t as i32;
         }
@@ -962,7 +959,7 @@ impl Cod4Level {
                 if p.ps.word(ps!("otherFlags")) & POF_FOLLOW != 0 {
                     return None;
                 }
-                p.ps.set(ps!("pm_type"), PM_SPECTATOR);
+                p.ps.set_pm_type(pm_type::SPECTATOR);
                 p.ps.set(ps!("speed"), if freelook { 400 } else { 0 });
                 oldcmd = Cmd::default();
             }
@@ -1171,7 +1168,7 @@ impl Cod4Level {
             .filter_map(|(i, p)| {
                 let ps = &p.as_ref()?.ps;
                 (ps.word(ps!("otherFlags")) & POF_PLAYER != 0
-                    && in_play(ps.word(ps!("pm_type")))
+                    && in_play(ps.pm_type())
                     && ps.word(ps!("clientNum")) == i as u32)
                     .then(|| Body4 {
                         entity: i as u32,
@@ -1493,7 +1490,7 @@ impl Cod4Level {
                 let p = self.players[slot].as_mut().unwrap();
                 let of = p.ps.word(ps!("otherFlags")) & !0x1c;
                 p.ps.set(ps!("otherFlags"), of);
-                p.ps.set(ps!("pm_type"), PM_INTERMISSION);
+                p.ps.set_pm_type(pm_type::INTERMISSION);
                 p.ps.set(ps!("viewmodelIndex"), 0);
             }
         }
@@ -1567,16 +1564,13 @@ impl Cod4Level {
         ps.set(ps!("viewmodelIndex"), viewmodel);
         // `ClientEndFrame`: linked or not by `tagInfo`; Last
         // Stand's down state is its own `pm_type`.
-        ps.set(
-            ps!("pm_type"),
-            match (state == SessionState::Dead, p.linked) {
-                (true, false) => PM_DEAD,
-                (true, true) => PM_DEAD_LINKED,
-                (false, _) if last_stand => PM_LASTSTAND,
-                (false, false) => PM_NORMAL,
-                (false, true) => PM_NORMAL_LINKED,
-            },
-        );
+        ps.set_pm_type(match (state == SessionState::Dead, p.linked) {
+            (true, false) => pm_type::DEAD,
+            (true, true) => pm_type::DEAD_LINKED,
+            (false, _) if last_stand => pm_type::LASTSTAND,
+            (false, false) => pm_type::NORMAL,
+            (false, true) => pm_type::NORMAL_LINKED,
+        });
         ps.stats[0] = health;
         ps.stats[2] = max_health;
         // The think's own writes (`ClientThink_real`): the
@@ -1727,7 +1721,7 @@ impl Cod4Level {
         };
         let theirs = PlayerState::clone(self.archive.get(target)?.as_ref()?);
         let is_player = theirs.word(ps!("otherFlags")) & POF_PLAYER != 0;
-        let team = self.rt.client_team(target) as u32;
+        let team = self.rt.client_team(target);
         (is_player && !refused.team(team)).then_some((target, theirs))
     }
 
@@ -1769,7 +1763,7 @@ impl Cod4Level {
             self.stop_following(slot, Some(&cmd));
             let p = self.players[slot].as_mut().unwrap();
             p.ps.set(ps!("otherFlags"), 0);
-            p.ps.set(ps!("pm_type"), PM_SPECTATOR);
+            p.ps.set_pm_type(pm_type::SPECTATOR);
         }
         let p = self.players[slot].as_mut().unwrap();
         p.spectator_client = -1;
@@ -2052,7 +2046,7 @@ impl Cod4Level {
     /// slots, back to the start, the first other client playing on a
     /// team `can` allows. VERIFIED (the instructions); "playing" stands
     /// for `SV_GetArchivedClientInfo` finding it. INFERRED.
-    fn follow_cycle(&mut self, slot: usize, dir: i32, can: &dyn Fn(u32) -> bool) -> Option<usize> {
+    fn follow_cycle(&mut self, slot: usize, dir: i32, can: &dyn Fn(i32) -> bool) -> Option<usize> {
         let current = usize::try_from(self.players[slot].as_ref()?.spectator_client).ok();
         crate::follow::cycle(current, dir, self.players.len(), |u| {
             u != slot
@@ -2061,7 +2055,7 @@ impl Cod4Level {
                     .rt
                     .client_session(u)
                     .is_some_and(|s| s.state == SessionState::Playing)
-                && can(self.rt.client_team(u) as u32)
+                && can(self.rt.client_team(u))
         })
     }
 
@@ -2142,11 +2136,11 @@ impl Cod4Level {
         let team = match self.rt.client_entity(slot) {
             Some(_) => match self.rt.client_team(slot) {
                 t if t < 0 => TEAM_SPECTATOR,
-                t => t as u32,
+                t => t,
             },
             None => TEAM_SPECTATOR,
         };
-        cs.0[const { cs_word("team") }] = team;
+        cs.0[const { cs_word("team") }] = team as u32;
         cs.0[const { cs_word("attachedVehEntNum") }] = ENTITYNUM_NONE;
         let mut bytes = [0u8; 16];
         for (d, s) in bytes.iter_mut().zip(name.bytes().take(15)) {
@@ -2206,8 +2200,7 @@ impl Cod4Level {
         for (slot, p) in self.players.iter().enumerate() {
             let Some(p) = p else { continue };
             out.remove(&(slot as u32));
-            if p.ps.word(ps!("otherFlags")) & POF_PLAYER != 0 && in_play(p.ps.word(ps!("pm_type")))
-            {
+            if p.ps.word(ps!("otherFlags")) & POF_PLAYER != 0 && in_play(p.ps.pm_type()) {
                 let mut e = player_entity(slot, &p.ps);
                 p.body_events.write(&mut e);
                 out.insert(slot as u32, e);
@@ -2352,10 +2345,10 @@ fn spawn_playerstate(
     max_health: i32,
     mode: SpawnMode,
 ) -> PlayerState {
-    let pm_type = match mode {
-        SpawnMode::Player => PM_NORMAL,
-        SpawnMode::Spectator => PM_SPECTATOR,
-        SpawnMode::Intermission => PM_INTERMISSION,
+    let pm = match mode {
+        SpawnMode::Player => pm_type::NORMAL,
+        SpawnMode::Spectator => pm_type::SPECTATOR,
+        SpawnMode::Intermission => pm_type::INTERMISSION,
     };
     let mut ps = PlayerState::default();
     for (word, v) in [
@@ -2364,7 +2357,7 @@ fn spawn_playerstate(
         (ps!("viewlocked_entNum"), ENTITYNUM_NONE),
         (ps!("throwBackGrenadeOwner"), ENTITYNUM_NONE),
         (ps!("viewHeightTarget"), 60),
-        (ps!("pm_type"), pm_type),
+        (ps!("pm_type"), pm as u32),
         (ps!("pm_flags"), pmove::pmf::RESPAWNED),
     ] {
         ps.set(word, v);
@@ -2528,7 +2521,7 @@ mod tests {
         assert_eq!(ps.word(ps!("eFlags")), 0x10_0000);
         assert_eq!(ps.word(ps!("commandTime")), 0);
         assert_eq!(ps.word(ps!("clientNum")), 7);
-        assert_eq!(ps.word(ps!("pm_type")), PM_NORMAL);
+        assert_eq!(ps.pm_type(), pm_type::NORMAL);
         assert_eq!(ps.word(ps!("pm_flags")), pmove::pmf::RESPAWNED);
         assert_eq!(ps.word(ps!("viewlocked_entNum")), ENTITYNUM_NONE);
         assert_eq!(f32::from_bits(ps.word(ps!("viewHeightCurrent"))), 60.0);
@@ -2536,7 +2529,7 @@ mod tests {
         old.set(ps!("eFlags"), 0x4);
         let ps = spawn_playerstate(&old, 7, 100, SpawnMode::Spectator);
         assert_eq!(ps.word(ps!("eFlags")), 0x2);
-        assert_eq!(ps.word(ps!("pm_type")), PM_SPECTATOR);
+        assert_eq!(ps.pm_type(), pm_type::SPECTATOR);
     }
 
     /// The killcam's shift: the six playerstate clocks and the archival
@@ -2697,7 +2690,7 @@ mod tests {
         assert_eq!(watch(&mut level, 0, 0x16), (8, -1, 0, 0x10_0000));
         let ps = &level.players[0].as_ref().unwrap().ps;
         assert_eq!(ps.word(ps!("viewmodelIndex")), 0);
-        assert_eq!(ps.word(ps!("pm_type")), PM_SPECTATOR);
+        assert_eq!(ps.pm_type(), pm_type::SPECTATOR);
     }
 
     /// Refused free flight follows the first playing client of a team it
@@ -2725,8 +2718,8 @@ mod tests {
         let (of, followed, num, _) = watch(&mut level, 0, 0x16);
         assert_eq!((of, followed, num), (8, -1, 0));
         assert_eq!(
-            level.players[0].as_ref().unwrap().ps.word(ps!("pm_type")),
-            PM_SPECTATOR
+            level.players[0].as_ref().unwrap().ps.pm_type(),
+            pm_type::SPECTATOR
         );
         // Every team allowed, free flight refused: the allies player first.
         assert_eq!(watch(&mut level, 0, 0x10), (0xa, 1, 1, 0x10_0022));
@@ -2742,8 +2735,8 @@ mod tests {
         put(&mut level, 0, "spectator", "spectator");
         put(&mut level, 1, "playing", "allies");
         put(&mut level, 2, "playing", "axis");
-        let all = |_: u32| true;
-        let cycle = |level: &mut Cod4Level, from: i32, dir: i32, can: &dyn Fn(u32) -> bool| {
+        let all = |_: i32| true;
+        let cycle = |level: &mut Cod4Level, from: i32, dir: i32, can: &dyn Fn(i32) -> bool| {
             level.players[0].as_mut().unwrap().spectator_client = from;
             level.follow_cycle(0, dir, can)
         };
@@ -2752,9 +2745,9 @@ mod tests {
         assert_eq!(cycle(&mut level, 2, 1, &all), Some(1));
         assert_eq!(cycle(&mut level, 1, -1, &all), Some(2));
         assert_eq!(cycle(&mut level, 2, -1, &all), Some(1));
-        let no_axis = |t: u32| t != TEAM_AXIS;
+        let no_axis = |t: i32| t != TEAM_AXIS;
         assert_eq!(cycle(&mut level, 1, 1, &no_axis), Some(1));
-        let none = |_: u32| false;
+        let none = |_: i32| false;
         assert_eq!(cycle(&mut level, 1, 1, &none), None);
     }
 }

@@ -340,7 +340,7 @@ impl Cod4Level {
         if ps.pm_flags & busy != 0 || (15..=19).contains(&ps.weapon_state) {
             return;
         }
-        if ps.pm_type == super::level::PM_LASTSTAND as i32 {
+        if ps.pm_type == vcod_cod4::pmove::pm_type::LASTSTAND {
             self.show_hint(slot, None);
             return;
         }
@@ -710,19 +710,19 @@ impl Cod4Level {
     /// The stock scripts link a player only to a use trigger that stands
     /// still (`useHoldThink`), so the body is not carried along.
     pub(super) fn apply_link_ops(&mut self) {
-        use super::level::{PM_DEAD, PM_DEAD_LINKED, PM_NORMAL, PM_NORMAL_LINKED};
         use crate::game::host::LinkOp;
+        use vcod_cod4::pmove::pm_type::{DEAD, DEAD_LINKED, NORMAL, NORMAL_LINKED};
         for (slot, op) in self.rt.take_link_ops() {
             let Some(p) = self.players.get_mut(slot).and_then(Option::as_mut) else {
                 continue;
             };
-            let pm = p.ps.word(ps!("pm_type"));
+            let pm = p.ps.pm_type();
             match op {
                 LinkOp::Link { .. } => {
                     p.linked = true;
                     match pm {
-                        PM_NORMAL => p.ps.set(ps!("pm_type"), PM_NORMAL_LINKED),
-                        PM_DEAD => p.ps.set(ps!("pm_type"), PM_DEAD_LINKED),
+                        NORMAL => p.ps.set_pm_type(NORMAL_LINKED),
+                        DEAD => p.ps.set_pm_type(DEAD_LINKED),
                         _ => {}
                     }
                     for k in 0..3 {
@@ -732,8 +732,8 @@ impl Cod4Level {
                 LinkOp::Unlink => {
                     p.linked = false;
                     match pm {
-                        PM_NORMAL_LINKED => p.ps.set(ps!("pm_type"), PM_NORMAL),
-                        PM_DEAD_LINKED => p.ps.set(ps!("pm_type"), PM_DEAD),
+                        NORMAL_LINKED => p.ps.set_pm_type(NORMAL),
+                        DEAD_LINKED => p.ps.set_pm_type(DEAD),
                         _ => {}
                     }
                 }

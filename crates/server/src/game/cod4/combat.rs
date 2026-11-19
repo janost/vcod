@@ -27,7 +27,7 @@ use vcod_common::bonetrace::{PriorityMap, bone_trace_worlds_cod4};
 use vcod_common::playerpose::{Cod4Arith, Controllers};
 use vcod_gsc::{EntId, Value};
 
-use super::level::{Cod4Level, PM_DEAD, PsExt, ps};
+use super::level::{Cod4Level, PsExt, ps};
 use crate::follow::SessionState;
 
 /// `bulletPriorityMap` and `riflePriorityMap`, one byte per hit
@@ -81,8 +81,9 @@ pub use vcod_cod4::collision::MASK_SHOT;
 pub const DFLAG_NO_KNOCKBACK: i32 = 4;
 /// `Bullet_Fire`'s range for everything but a spread weapon.
 pub(super) const BULLET_RANGE: f32 = vcod_cod4::bullet::BULLET_RANGE;
-/// The archive of positions the antilag reads: one second of frames.
-const HISTORY_MS: i32 = 1000;
+/// The archive of positions the antilag reads: one second of frames, past
+/// the 400 ms a rewind reaches ([`Cod4Level::rewound`]).
+const ANTILAG_HISTORY_MS: i32 = 1000;
 
 /// The temp entity events this module raises, 1.7's numbers (VERIFIED off
 /// the name table, cod4-netfields.md 9).
@@ -1041,8 +1042,7 @@ impl Cod4Level {
     /// A body in play: playing, `pm_type` normal or last stand.
     pub(super) fn playing(&mut self, slot: usize) -> bool {
         self.players[slot].as_ref().is_some_and(|p| {
-            super::level::in_play(p.ps.word(ps!("pm_type")))
-                && p.ps.word(ps!("otherFlags")) & 4 != 0
+            super::level::in_play(p.ps.pm_type()) && p.ps.word(ps!("otherFlags")) & 4 != 0
         }) && self
             .rt
             .client_session(slot)
@@ -1445,7 +1445,7 @@ impl Cod4Level {
             })
             .collect();
         self.combat.history.push_front((now, row));
-        let keep = (HISTORY_MS / self.frame_ms()) as usize;
+        let keep = (ANTILAG_HISTORY_MS / self.frame_ms()) as usize;
         self.combat.history.truncate(keep);
     }
 
@@ -1528,7 +1528,7 @@ impl Cod4Level {
         let hurt =
             (blood > 0 && max_health > 0).then(|| (100 * blood / max_health).min(MAX_DAMAGE_COUNT));
         match hurt {
-            _ if ps.word(ps!("pm_type")) >= PM_DEAD => {}
+            _ if ps.pm_type() >= vcod_cod4::pmove::pm_type::DEAD => {}
             Some(count) => {
                 let [pitch, yaw] = damage_direction(from);
                 ps.set(
