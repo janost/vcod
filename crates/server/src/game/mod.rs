@@ -67,6 +67,7 @@ pub mod timeout;
 pub mod trigger;
 pub mod turret;
 pub mod usage;
+pub mod use_list;
 pub mod vehicle;
 pub mod vote;
 pub mod wire;

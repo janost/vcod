@@ -14,21 +14,10 @@ use vcod_gsc::{EntId, Host, Value};
 use super::level::{Cod4Level, PsExt, ps};
 use crate::game::trigger::TriggerKind;
 
-/// `+activate` (0x8) and `+usereload` (0x20).
-const USE_BUTTONS: u32 = 0x28;
-/// `Player_GetUseList`'s `CM_AreaEntities` box about the eye (192 or the
-/// throwback and MG radii, 96 up and down) and its contents.
-const AREA_BOX: Vec3 = Vec3::new(192.0, 192.0, 96.0);
-const CONTENTS_USE: i32 = 0x20_0000;
+const USE_BUTTONS: u32 = crate::game::use_list::USE_BUTTONS as u32;
+use crate::game::trigger::CONTENTS_USE;
+use crate::game::use_list::{ANGLE_WEIGHT, AREA_BOX, PENALTY, REACH, SIGHT_MASK};
 use vcod_cod4::pmove::{PLAYER_MAXS, PLAYER_MINS};
-/// The reach from the eye to an entry's middle, the view-angle weight,
-/// the penalty an ungrabbable item or a blocked sight takes (`cod4_lnxded`
-/// rodata 0x820e278, 0x8214ac8, 0x8220950) and the sight trace's mask
-/// (`G_TraceCapsuleComplete(.., 17)`).
-const REACH: f32 = 128.0;
-const ANGLE_WEIGHT: f32 = 256.0;
-const PENALTY: f32 = 10000.0;
-const SIGHT_MASK: u32 = 0x11;
 /// The use list's weight off a missile and a turret (rodata 0x8211e70's
 /// 512 and half the angle weight, `cod4_lnxded` 0x80d3655..0x80d36c4).
 const MISSILE_OFFSET: f32 = 512.0;
@@ -80,10 +69,13 @@ struct UseEntry {
     sight: Option<Vec3>,
 }
 
-/// `compare_use` (0x80d2c10): the score difference truncated to an int,
-/// under glibc's merge sort, as CoD2's.
-fn sort(list: &mut [UseEntry]) {
-    crate::game::item::msort(list, |a, b| (a.score - b.score) as i32 <= 0);
+impl crate::game::use_list::Scored for UseEntry {
+    fn score(&self) -> f32 {
+        self.score
+    }
+    fn score_mut(&mut self) -> &mut f32 {
+        &mut self.score
+    }
 }
 
 /// A float dvar off the host's cvars, `default` when unset or unparsed.
@@ -145,24 +137,11 @@ impl Cod4Level {
             MAX_GRENADE_INDICATOR_SPEED,
         );
         let prev_hint = ps.cursor_hint_ent_index as u32;
+        // The angle term plus the distance, in 1.7's order.
         let score_within = |centre: Vec3, reach: f32| -> Option<f32> {
-            let to = centre - eye;
-            let dist = to.length();
-            if dist > reach {
-                return None;
-            }
-            let dir = if dist > 0.0 { to / dist } else { Vec3::ZERO };
-            Some((1.0 - (dir.dot(forward) + 1.0) * 0.5) * ANGLE_WEIGHT + dist)
+            crate::game::use_list::score(eye, forward, centre, reach).map(|(a, d)| a + d)
         };
-        let score = |centre: Vec3| -> Option<f32> {
-            let to = centre - eye;
-            let dist = to.length();
-            if dist > REACH {
-                return None;
-            }
-            let dir = if dist > 0.0 { to / dist } else { Vec3::ZERO };
-            Some((1.0 - (dir.dot(forward) + 1.0) * 0.5) * ANGLE_WEIGHT + dist)
-        };
+        let score = |centre: Vec3| score_within(centre, REACH);
         let mut turrets: Vec<(EntId, f32, Vec3)> = Vec::new();
         let mut list = self.rt.with_host(|host, cx| {
             let classname = cx.intern_folded("classname");
@@ -268,24 +247,15 @@ impl Cod4Level {
                 sight: Some(at),
             });
         }
-        sort(&mut list);
-        list.truncate(list.len() - cut);
-        let mut blocked = 0;
-        if let Some(clip) = self.clip.as_deref() {
-            for e in list.iter_mut() {
-                let Some(to) = e.sight else { continue };
-                if clip
-                    .trace(eye, to, Vec3::ZERO, Vec3::ZERO, SIGHT_MASK)
-                    .fraction
-                    < 1.0
-                {
-                    e.score += PENALTY;
-                    blocked += 1;
-                }
-            }
-        }
-        sort(&mut list);
-        list.truncate(list.len() - blocked);
+        let clip = self.clip.as_deref();
+        crate::game::use_list::sort_and_cut(&mut list, cut, |e| {
+            let (Some(clip), Some(to)) = (clip, e.sight) else {
+                return false;
+            };
+            clip.trace(eye, to, Vec3::ZERO, Vec3::ZERO, SIGHT_MASK)
+                .fraction
+                < 1.0
+        });
         list
     }
 
