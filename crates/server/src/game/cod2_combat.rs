@@ -980,10 +980,8 @@ impl Cod2Level {
             .collect()
     }
 
-    /// The entity with no client a segment meets before `limit`: a linked
-    /// brush model (`SV_Trace`'s entity clip) or a script model's xmodel
-    /// collision, through the host's `bulletTrace` pass; `skip`'s own
-    /// entity is passed.
+    /// The entity with no client a segment meets before `limit`
+    /// ([`entity_hit`]); `skip`'s own entity is passed.
     fn entity_contact(
         &mut self,
         start: Vec3,
@@ -992,30 +990,9 @@ impl Cod2Level {
         limit: f32,
     ) -> Option<Contact> {
         let ignore = skip.and_then(|s| self.rt.client_entity(s));
-        // The brush models under CoD2's shot mask (the shared `shot_trace`
-        // holds 1.1's), then the script models.
-        let brush = self
-            .world
-            .collision
-            .point_trace(start, end, MASK_SHOT & !CONTENTS_BODY, false);
-        let n = self.world.collision.entity_num(&brush);
-        let brush = (brush.fraction < 1.0 && n < vcod_common::net::protocol::ENTITYNUM_WORLD)
-            .then(|| self.rt.host.ents.handle(n))
-            .flatten()
-            .map(|id| (brush.fraction, brush.normal, Some(id), brush.surface_flags));
-        let (model, _) = self.rt.with_host(|h, cx| {
-            super::builtins::combat::bullet_hit(h, cx, start, end, false, ignore)
-        });
-        let model = model.filter(|m| m.2.is_some());
-        let hit = match (brush, model) {
-            (Some(b), Some(m)) if m.0 < b.0 => m,
-            (Some(b), _) => b,
-            (None, Some(m)) => m,
-            (None, None) => return None,
-        };
-        let (fraction, normal, Some(id), surface_flags) = hit else {
-            return None;
-        };
+        let (fraction, normal, id, surface_flags) = self
+            .rt
+            .with_host(|h, cx| entity_hit(h, cx, start, end, ignore))?;
         (fraction < limit).then_some(Contact {
             fraction,
             normal,
@@ -2435,11 +2412,8 @@ impl Cod2Level {
         });
     }
 
-    /// The level's clear-test for `victim`'s blast ([`super::cod2_blast::Probe`]):
-    /// a `CanDamage` probe is `G_LocationalTracePassed` (lnxded 0x810a622)
-    /// under 0x802891 passing the victim, so the world, the static models
-    /// and the entities block it; the tenth's capsule trace meets the world
-    /// alone. Every trace passes on a level with no clip.
+    /// The level's clear-test for `victim`'s blast
+    /// ([`super::cod2_blast::passed`]), passing the victim.
     fn blast_clear(
         &mut self,
         victim: usize,
@@ -2447,23 +2421,9 @@ impl Cod2Level {
         b: Vec3,
         probe: super::cod2_blast::Probe,
     ) -> bool {
-        use super::cod2_blast::Probe;
-        let Some(clip) = &self.combat.clip else {
-            return true;
-        };
-        match probe {
-            Probe::Tenth => {
-                clip.trace(a, b, Vec3::ZERO, Vec3::ZERO, probe.mask())
-                    .fraction
-                    >= 1.0
-            }
-            Probe::Blast => {
-                let none = HashMap::new();
-                self.locational_trace(a, b, Some(victim), MASK_BLAST, &BULLET_PRIORITY, &none)
-                    .fraction
-                    >= 1.0
-            }
-        }
+        let ignore = self.rt.client_entity(victim);
+        self.rt
+            .with_host(|h, cx| super::cod2_blast::passed(h, cx, a, b, probe, ignore))
     }
 
     /// The missiles' entities for the snapshot, in CoD2's numbers over
@@ -2685,6 +2645,36 @@ impl Cod2Level {
             );
             self.fire_grenade(Some(slot), offhand, origin + Vec3::Z * 40.0, v, fuse);
         }
+    }
+}
+
+/// The entity with no client a segment meets: a linked brush model
+/// (`SV_Trace`'s entity clip, under CoD2's shot mask; the shared
+/// `shot_trace` holds 1.1's) or, nearer, a script model's xmodel collision
+/// through the host's `bulletTrace` pass, passing `ignore`. The fraction,
+/// normal, entity and surface flags.
+pub(super) fn entity_hit(
+    host: &mut GameHost,
+    cx: &mut vcod_gsc::Cx,
+    start: Vec3,
+    end: Vec3,
+    ignore: Option<EntId>,
+) -> Option<(f32, Vec3, EntId, u32)> {
+    let brush = host.world.as_ref().and_then(|w| {
+        let t = w
+            .collision
+            .point_trace(start, end, MASK_SHOT & !CONTENTS_BODY, false);
+        let n = w.collision.entity_num(&t);
+        (t.fraction < 1.0 && n < vcod_common::net::protocol::ENTITYNUM_WORLD).then_some((t, n))
+    });
+    let brush = brush
+        .and_then(|(t, n)| Some((t.fraction, t.normal, host.ents.handle(n)?, t.surface_flags)));
+    let (model, _) = super::builtins::combat::bullet_hit(host, cx, start, end, false, ignore);
+    let model = model.and_then(|(f, n, id, sf)| Some((f, n, id?, sf)));
+    match (brush, model) {
+        (Some(b), Some(m)) if m.0 < b.0 => Some(m),
+        (Some(b), _) => Some(b),
+        (None, m) => m,
     }
 }
 

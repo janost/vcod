@@ -232,6 +232,9 @@ pub struct Cod2HostState {
     /// the level loaded (1 without one): the `radiusDamage` builtin's
     /// multiplier.
     pub hitloc_none: f32,
+    /// The world's clip map and static models the level's blast traces
+    /// clip, for the builtin's walk (`game::cod2_blast::passed`).
+    pub blockers: crate::game::cod2_blast::Blockers,
 }
 
 /// The weapon files CoD2's registrations (`precacheItem` and kin) read and
@@ -300,6 +303,7 @@ impl Default for Cod2HostState {
             tag_drops: Vec::new(),
             weapon_files: WeaponFiles::default(),
             hitloc_none: 1.0,
+            blockers: Default::default(),
         }
     }
 }

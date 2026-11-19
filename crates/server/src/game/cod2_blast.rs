@@ -37,6 +37,44 @@ impl Probe {
 
 /// A trace that meets nothing: `clear(from, to, probe)`.
 pub type Clear<'a> = dyn FnMut(Vec3, Vec3, Probe) -> bool + 'a;
+
+/// What a CoD2 level's blast traces clip besides the entities: the world's
+/// clip map and the static models' collision (`CM_LoadStaticModels`),
+/// handed to the host at load so the builtin's walk sees them too.
+#[derive(Clone, Default)]
+pub struct Blockers {
+    pub clip: Option<std::sync::Arc<vcod_cod2::collision::ClipMap>>,
+    pub statics: Option<std::rc::Rc<vcod_common::collision::CollisionWorld>>,
+}
+
+/// The one clear-test both walks take, passing `ignore` (the victim). A
+/// `CanDamage` probe is `G_LocationalTracePassed` (lnxded 0x810a622, into
+/// `SV_TracePassed` 0x809dbbe with the locational and static model flags
+/// set) under [`MASK_BLAST`]: the world's clip, the static models, then the
+/// brush and script model entities ([`super::cod2_combat::entity_hit`]).
+/// The tenth's capsule trace meets the world's clip alone. Every trace
+/// passes on a host with no clip map. cod2-combat.md 7.
+pub fn passed(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    a: Vec3,
+    b: Vec3,
+    probe: Probe,
+    ignore: Option<EntId>,
+) -> bool {
+    let Blockers { clip, statics } = host.cod2().blockers.clone();
+    let Some(clip) = clip else {
+        return true;
+    };
+    let mask = probe.mask() & !vcod_cod2::collision::CONTENTS_BODY;
+    let world = clip.trace(a, b, Vec3::ZERO, Vec3::ZERO, mask).fraction;
+    if probe == Probe::Tenth {
+        return world >= 1.0;
+    }
+    let statics = statics.map_or(1.0, |w| w.point_trace(a, b, mask, true).fraction);
+    let entity = super::cod2_combat::entity_hit(host, cx, a, b, ignore);
+    world >= 1.0 && statics >= 1.0 && entity.is_none_or(|e| e.0 >= 1.0)
+}
 /// `CanDamage`'s side offset (rodata 0x3264c4, 0x326534: 15 and -15).
 const SIDE: f32 = 15.0;
 
@@ -222,16 +260,6 @@ pub fn entity_share(clear: &mut Clear, v: &Victim, at: Vec3) -> f32 {
     }
 }
 
-/// The host's clear-trace for [`victim_damage`]: the world's clip and the
-/// linked brush models, no props.
-fn host_clear(host: &GameHost) -> impl FnMut(Vec3, Vec3, Probe) -> bool + '_ {
-    move |a, b, probe| {
-        host.world
-            .as_ref()
-            .is_none_or(|w| w.collision.point_trace(a, b, probe.mask(), false).fraction >= 1.0)
-    }
-}
-
 /// The entities with no client a walk about `at` finds, in the area
 /// tree's order: those with `takedamage`, each with its link.
 pub fn entity_victims(
@@ -302,9 +330,8 @@ pub fn damage_entities(
         if Some(id) == ignore {
             continue;
         }
-        let Some((damage, dir)) =
-            victim_damage(&mut host_clear(host), &v, at, inner, outer, radius)
-        else {
+        let mut clear = |a, b, probe| passed(host, cx, a, b, probe, Some(id));
+        let Some((damage, dir)) = victim_damage(&mut clear, &v, at, inner, outer, radius) else {
             continue;
         };
         let world = host.ents.world(cx);
@@ -354,23 +381,20 @@ pub fn radius_damage(
     let ignore = host.ignore_radius_damage;
     host.blast_noises.push((at.to_array(), None));
     let none_mult = host.cod2().hitloc_none;
+    let bodies: Vec<(usize, BlastBody)> = (host.cod2().clients.iter().enumerate())
+        .filter_map(|(slot, state)| Some((slot, state.body?)))
+        .filter(|&(slot, _)| !ignore && host.client_vitals[slot].takedamage)
+        .collect();
     let mut clients = Vec::new();
-    {
-        let mut clear = host_clear(host);
-        for (slot, state) in host.cod2().clients.iter().enumerate() {
-            let Some(b) = state.body else {
-                continue;
-            };
-            if ignore || !host.client_vitals[slot].takedamage {
-                continue;
-            }
-            if let Some((damage, dir)) =
-                victim_damage(&mut clear, &b.victim(), at, max_damage, min_damage, radius)
-            {
-                let damage = (none_mult * damage as f32) as i32;
-                if damage > 0 {
-                    clients.push((slot, damage, dir));
-                }
+    for (slot, b) in bodies {
+        let own = host.ents.handle(slot as u32);
+        let mut clear = |a, b, probe| passed(host, cx, a, b, probe, own);
+        if let Some((damage, dir)) =
+            victim_damage(&mut clear, &b.victim(), at, max_damage, min_damage, radius)
+        {
+            let damage = (none_mult * damage as f32) as i32;
+            if damage > 0 {
+                clients.push((slot, damage, dir));
             }
         }
     }

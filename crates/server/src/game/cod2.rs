@@ -653,6 +653,10 @@ impl Cod2Level {
                 })
             }
         };
+        rt.host.cod2_mut().blockers = crate::game::cod2_blast::Blockers {
+            clip: Some(clip.clone()),
+            statics: parts.statics.clone(),
+        };
         let mut combat = crate::game::cod2_combat::Combat::with_parts(
             Some(clip),
             parts.statics.clone(),
