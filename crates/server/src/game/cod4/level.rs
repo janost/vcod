@@ -823,10 +823,11 @@ impl Cod4Level {
         }
         let ps = pmove::PlayerState::from_wire(&p.ps);
         let eye = super::combat::view_origin(&ps, self.level_time);
-        let [forward, _, up] = vcod_common::x87::angle_vectors(Vec3::from(ps.view_angles));
-        let end = eye - 40.0 * forward + 10.0 * up;
-        let pos = match self.clip.as_deref() {
-            Some(clip) => {
+        let (pos, angles) =
+            crate::follow::stop_spot_by(eye.to_array(), ps.view_angles, |eye, end| {
+                let Some(clip) = self.clip.as_deref() else {
+                    return end;
+                };
                 let bodies = Vec::new();
                 let world = Cod4Clip {
                     clip,
@@ -836,11 +837,7 @@ impl Cod4Level {
                 let r = Vec3::splat(8.0);
                 let tr = pmove::PmWorld::trace(&world, eye, end, -r, r, ENTITYNUM_NONE, 0x81_0011);
                 eye + (end - eye) * tr.fraction
-            }
-            None => end,
-        };
-        let mut angles = ps.view_angles;
-        angles[0] += 15.0;
+            });
         let p = self.players[slot].as_mut().unwrap();
         p.ps.set(ps!("clientNum"), slot as u32);
         let w = |p: &mut Player4, f: usize, clear: u32| {
@@ -861,7 +858,7 @@ impl Cod4Level {
         ] {
             p.ps.set(f, 0);
         }
-        place(&mut p.ps, pos.to_array(), angles, cmd);
+        place(&mut p.ps, pos, angles, cmd);
     }
 
     /// The player animtree's names by wire index, for `getCorpseAnim`,
@@ -2082,31 +2079,16 @@ impl Cod4Level {
     /// team `can` allows. VERIFIED (the instructions); "playing" stands
     /// for `SV_GetArchivedClientInfo` finding it. INFERRED.
     fn follow_cycle(&mut self, slot: usize, dir: i32, can: &dyn Fn(u32) -> bool) -> Option<usize> {
-        let n = self.players.len() as i32;
-        let start = self.players[slot].as_ref()?.spectator_client.max(0);
-        let mut t = start;
-        loop {
-            t += dir;
-            if t >= n {
-                t = 0;
-            }
-            if t < 0 {
-                t = n - 1;
-            }
-            let u = t as usize;
-            let playing = u != slot
+        let current = usize::try_from(self.players[slot].as_ref()?.spectator_client).ok();
+        crate::follow::cycle(current, dir, self.players.len(), |u| {
+            u != slot
                 && self.players[u].is_some()
                 && self
                     .rt
                     .client_session(u)
-                    .is_some_and(|s| s.state == SessionState::Playing);
-            if playing && can(self.rt.client_team(u) as u32) {
-                return Some(u);
-            }
-            if t == start {
-                return None;
-            }
-        }
+                    .is_some_and(|s| s.state == SessionState::Playing)
+                && can(self.rt.client_team(u) as u32)
+        })
     }
 
     /// The scoreboard reply for a `score` command: `b <rows> <team 1>

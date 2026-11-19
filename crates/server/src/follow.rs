@@ -95,7 +95,7 @@ pub fn cycle(
     current: Option<usize>,
     dir: i32,
     max_clients: usize,
-    followable: impl Fn(usize) -> bool,
+    mut followable: impl FnMut(usize) -> bool,
 ) -> Option<usize> {
     let n = max_clients as i32;
     if n == 0 {
@@ -128,17 +128,26 @@ pub fn stop_spot(
     eye: [f32; 3],
     view: [f32; 3],
 ) -> ([f32; 3], [f32; 3]) {
-    let axis = vcod_common::x87::angles_to_axis(view.into());
-    let eye = Vec3::from(eye);
-    let end = eye + axis[0] * -40.0 + axis[2] * 10.0;
-    let spot = match collision {
+    stop_spot_by(eye, view, |eye, end| match collision {
         Some(w) => {
             w.box_trace(eye, end, Vec3::splat(-8.0), Vec3::splat(8.0))
                 .endpos
         }
         None => end,
-    };
-    (spot.into(), [view[0] + 15.0, view[1], view[2]])
+    })
+}
+
+/// [`stop_spot`] with the game's own sweep: `sweep(eye, end)` is where the
+/// 8 capsule from the eye stops on its way to `end`.
+pub fn stop_spot_by(
+    eye: [f32; 3],
+    view: [f32; 3],
+    sweep: impl FnOnce(Vec3, Vec3) -> Vec3,
+) -> ([f32; 3], [f32; 3]) {
+    let axis = vcod_common::x87::angles_to_axis(view.into());
+    let eye = Vec3::from(eye);
+    let end = eye + axis[0] * -40.0 + axis[2] * 10.0;
+    (sweep(eye, end).into(), [view[0] + 15.0, view[1], view[2]])
 }
 
 /// The playerstate fields `ClientEndFrame`'s playing and dead arm writes
