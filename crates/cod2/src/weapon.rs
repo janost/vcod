@@ -723,13 +723,26 @@ pub fn parse(name: &str, text: &[u8], anim_types: &[String]) -> Result<Parsed> {
 
 /// `weapons/mp/<name>` off `fs`, with the pak's player anim types.
 pub fn load(fs: &(impl AssetSource + ?Sized), name: &str) -> Result<Parsed> {
+    load_with(fs, name, &anim_types(fs))
+}
+
+/// [`load`] of each of `names`, the anim types read once.
+pub fn load_all(fs: &(impl AssetSource + ?Sized), names: &[&str]) -> Vec<Result<Parsed>> {
+    let types = anim_types(fs);
+    names.iter().map(|n| load_with(fs, n, &types)).collect()
+}
+
+fn load_with(fs: &(impl AssetSource + ?Sized), name: &str, types: &[String]) -> Result<Parsed> {
     let path = format!("weapons/mp/{name}");
     let text = fs.read(&path).ok_or_else(|| anyhow!("{path} not found"))?;
-    let types = fs
-        .read("mp/playeranimtypes.txt")
+    parse(name, &text, types)
+}
+
+/// `mp/playeranimtypes.txt`'s list, empty when the pak lacks it.
+fn anim_types(fs: &(impl AssetSource + ?Sized)) -> Vec<String> {
+    fs.read("mp/playeranimtypes.txt")
         .map(|t| player_anim_types(&String::from_utf8_lossy(&t)))
-        .unwrap_or_default();
-    parse(name, &text, &types)
+        .unwrap_or_default()
 }
 
 /// `BG_LoadPlayerAnimTypes` (Mac 0xbcbf8 area): one name per token.

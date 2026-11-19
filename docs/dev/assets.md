@@ -25,6 +25,7 @@ cache, so within a level only its first load marks the pak it read.
 | `fx::efx::Effect` (by `fx/` path; a CoD2 source parses through `vcod_cod2::efx::Effect`, kind `Cod2Effect`), both games' impact tables | no | `FxSystem`, the impact table static, `Cod2Fx` |
 | `ui_menu::MenuFile` (by path, parsed in the source's game's grammar, `#include`s read) | no | the UI and both HUDs |
 | CoD1 map `MapWorld` (`mapworld::find`: `maps/` then `maps/mp/`, as `Pk3Fs::resolve_map`) | no | the level |
+| CoD2 weapon file `vcod_cod2::weapon::WeaponDef` (`weapons/mp/<name>`, `weapon::load`, `load_all` for a list) | no | a CoD2 session's `play::cod2_weapons::LevelWeapons`: CS 7's files, built once off its text, dropped at a gamestate and a search-path reopen; the prediction, effects, sounds, view and recoil read it. The view weapons, the bodies and the HUDs outside the session still load their own. |
 | CoD2 map `vcod_cod2::map::MapFile` (kind `Cod2Map`, `maps/mp/<name>.d3dbsp`; `LoadedMap::find` builds both halves) | no | the level |
 
 Exceptions that keep `&Pk3Fs`:

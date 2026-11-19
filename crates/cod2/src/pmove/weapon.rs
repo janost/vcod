@@ -1944,17 +1944,22 @@ pub fn table(
     fs: &(impl vcod_common::asset_source::AssetSource + ?Sized),
     names: &[&str],
 ) -> Vec<Option<WeaponParams>> {
-    let defs: Vec<Option<WeaponDef>> = names
-        .iter()
-        .map(|n| crate::weapon::load(fs, n).ok().map(|p| p.def))
+    let defs: Vec<Option<WeaponDef>> = crate::weapon::load_all(fs, names)
+        .into_iter()
+        .map(|p| p.ok().map(|p| p.def))
         .collect();
-    let index_of = |key: &str| {
-        crate::weapon::clip_indices(defs.iter().map(|d| d.as_ref().map_or("", |d| d.str(key))))
-    };
+    let defs: Vec<Option<&WeaponDef>> = defs.iter().map(Option::as_ref).collect();
+    table_of(names, &defs)
+}
+
+/// [`table`] over defs already loaded, `defs[k]` being `names[k]`'s.
+pub fn table_of(names: &[&str], defs: &[Option<&WeaponDef>]) -> Vec<Option<WeaponParams>> {
+    let index_of =
+        |key: &str| crate::weapon::clip_indices(defs.iter().map(|d| d.map_or("", |d| d.str(key))));
     let (ammo, clip) = (index_of("ammoName"), index_of("clipName"));
     let mut out = vec![None];
     for (k, d) in defs.iter().enumerate() {
-        out.push(d.as_ref().map(|d| {
+        out.push(d.map(|d| {
             let alt = names
                 .iter()
                 .position(|n| *n == d.str("altWeapon"))

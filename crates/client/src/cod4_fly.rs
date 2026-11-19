@@ -1344,13 +1344,14 @@ mod tests {
         for (p, w) in files {
             fs.overlay(&p, w);
         }
-        let mut a = AudioSystem::new(
+        let mut a = AudioSystem::with_aliases(
             &fs,
             AudioOpts {
                 enabled: false,
                 volume: 1.0,
                 rate: 44100,
             },
+            Default::default(),
         );
         a.on_gamestate("mp_crash");
         let mut fx = crate::fx::sim::FxSystem::new();

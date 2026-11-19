@@ -77,8 +77,9 @@ use crate::play::cod2_fx::{Cod2Fx, FxPlay};
 use crate::play::cod2_input::Cod2Input;
 use crate::play::cod2_net::{Lagometer, LerpStats, NetMeter};
 use crate::play::cod2_predict::{CMD_BACKUP, Cod2Predictor, Predicted2};
-use crate::play::cod2_recoil::{Cod2Recoil, KickDef};
+use crate::play::cod2_recoil::Cod2Recoil;
 use crate::play::cod2_sound::{Cod2Sounds, LoopSounds, SoundCommand};
+use crate::play::cod2_weapons::LevelWeapons;
 use crate::play::input::Action;
 use std::collections::{HashMap, VecDeque};
 use vcod_cod2::net::{PlayerView, SnapshotView};
@@ -315,11 +316,9 @@ pub struct Cod2Session {
     /// The map whose collision failed to build and the gamestate count it
     /// failed under: not tried again until a new gamestate.
     world_failed: Option<(String, u32)>,
-    /// `moveSpeedScale` by weapon name.
-    move_scales: HashMap<String, f32>,
-    /// The level's weapon table the prediction's `PM_Weapon` reads, and
-    /// the `CS_WEAPONS` it was built off.
-    weapon_defs: (String, Vec<Option<vcod_cod2::pmove::weapon::WeaponParams>>),
+    /// The level's weapon files, which every reader below takes its keys
+    /// from; dropped at a gamestate and a search-path reopen.
+    weapons: LevelWeapons,
     /// This frame's prediction and the newest snapshot with its
     /// playerstate replaced by the predicted one.
     predicted: Option<(Predicted2, SnapshotView)>,
@@ -330,8 +329,6 @@ pub struct Cod2Session {
     /// Each ridden gun model's `tag_aim` and `tag_player` bind positions,
     /// the gunner's eye (`None`: the model or a tag did not load).
     gun_tags: HashMap<String, Option<(Vec3, Vec3)>>,
-    /// Each gun weapon's `vertViewJitter` and `horizViewJitter`, by name.
-    gun_jitters: HashMap<String, [f32; 2]>,
     /// This frame's view jitter on a firing gun, pitch and yaw degrees.
     jitter: [f32; 2],
     jitter_rng: crate::fx::sim::Rng,
@@ -339,8 +336,6 @@ pub struct Cod2Session {
     /// client they run for.
     recoil: Cod2Recoil,
     recoil_for: (u32, i32),
-    /// Each weapon's kick keys by name (`None`: the file did not load).
-    kick_defs: HashMap<String, Option<KickDef>>,
     /// The own body's last landing and this frame's dips of the eye and
     /// the gun (`play::cod2_view::Land`).
     land: crate::play::cod2_view::Land,
@@ -428,18 +423,15 @@ impl Cod2Session {
             predict_bodies: true,
             world: None,
             world_failed: None,
-            move_scales: HashMap::new(),
-            weapon_defs: Default::default(),
+            weapons: LevelWeapons::default(),
             predicted: None,
             predicted_events: Vec::new(),
             predict_log: PredictLog::default(),
             gun_tags: HashMap::new(),
-            gun_jitters: HashMap::new(),
             jitter: [0.0; 2],
             jitter_rng: crate::fx::sim::Rng::new(0x6a69_7474),
             recoil: Cod2Recoil::default(),
             recoil_for: (0, -1),
-            kick_defs: HashMap::new(),
             land: Default::default(),
             land_dips: (0.0, 0.0),
             step: Default::default(),
@@ -679,7 +671,7 @@ impl Cod2Session {
             self.predicted = None;
             self.cg_time = None;
             self.input.reset();
-            self.move_scales.clear();
+            self.weapons.clear();
             self.answered.clear();
         }
         if let Some(n) = p.snapshot {
@@ -1178,18 +1170,17 @@ impl Cod2Session {
                 return [0.0; 2];
             }
             let gun = f.snap.entity(ps.raw.i32("viewlocked_entNum") as u32);
-            match gun.and_then(|e| f.configstrings.weapon_name(e.weapon)) {
-                Some(n) => n.to_string(),
+            match gun.filter(|e| f.configstrings.weapon_name(e.weapon).is_some()) {
+                Some(e) => e.weapon,
                 None => return [0.0; 2],
             }
         };
-        let [v, h] = *self.gun_jitters.entry(weapon).or_insert_with_key(|n| {
-            vcod_cod2::weapon::load(fs, n).map_or([0.0; 2], |w| {
-                [
-                    w.def.float("vertViewJitter"),
-                    w.def.float("horizViewJitter"),
-                ]
-            })
+        self.weapons.ensure(fs, &self.view.configstrings);
+        let [v, h] = self.weapons.get(weapon).map_or([0.0; 2], |w| {
+            [
+                w.def.float("vertViewJitter"),
+                w.def.float("horizViewJitter"),
+            ]
         });
         let mut crandom = || 2.0 * self.jitter_rng.next_f32() - 1.0;
         [crandom() * v, crandom() * h]
@@ -1344,18 +1335,10 @@ impl Cod2Session {
 
     /// The held weapon's `moveSpeedScale`, 0 (none) when its file is
     /// missing.
-    fn move_scale(&mut self, weapon: i32, fs: &Pk3Fs) -> f32 {
-        let Some(name) = self.view.configstrings.weapon_name(weapon) else {
-            return 0.0;
-        };
-        if let Some(&s) = self.move_scales.get(name) {
-            return s;
-        }
-        let s = vcod_cod2::weapon::load(fs, name)
-            .map(|p| p.def.float("moveSpeedScale"))
-            .unwrap_or(0.0);
-        self.move_scales.insert(name.to_string(), s);
-        s
+    fn move_scale(&self, weapon: i32) -> f32 {
+        self.weapons
+            .get(weapon)
+            .map_or(0.0, |w| w.def.float("moveSpeedScale"))
     }
 
     /// One cmd at `time` from the keys and `view`, the view kick added to
@@ -1580,15 +1563,8 @@ impl Cod2Session {
         let Some(weapon) = self.view.snap.as_ref().map(|s| s.ps.weapon) else {
             return;
         };
-        let scale = self.move_scale(weapon, fs);
-        let cs7 = self
-            .view
-            .configstrings
-            .get(vcod_cod2::net::protocol::CS_WEAPONS);
-        if self.weapon_defs.0 != cs7 || self.weapon_defs.1.is_empty() {
-            let names: Vec<&str> = cs7.split(' ').collect();
-            self.weapon_defs = (cs7.to_string(), vcod_cod2::pmove::weapon::table(fs, &names));
-        }
+        self.weapons.ensure(fs, &self.view.configstrings);
+        let scale = self.move_scale(weapon);
         let now = self.real_ms();
         // `cg.nextSnap`'s solid entities where this frame draws them
         // (`CG_CalcEntityLerpPositions` runs before `CG_PredictPlayerState`).
@@ -1611,7 +1587,7 @@ impl Cod2Session {
             draw_cmd.as_ref(),
             world,
             &bodies,
-            Some(&self.weapon_defs.1),
+            Some(self.weapons.params()),
             scale,
             now,
         ) else {
@@ -1656,7 +1632,11 @@ impl Cod2Session {
             return None;
         }
         self.fx_for = self.view.gamestates;
-        Some(self.fx.level_effects(&self.view.configstrings, fs))
+        self.weapons.ensure(fs, &self.view.configstrings);
+        Some(
+            self.fx
+                .level_effects(&self.view.configstrings, &self.weapons, fs),
+        )
     }
 
     /// The events of the snapshot that became current since the last call
@@ -1666,7 +1646,6 @@ impl Cod2Session {
         if self.events_for != self.view.gamestates {
             self.events_for = self.view.gamestates;
             self.events = EventTracker::default();
-            self.sounds.clear();
             self.fx = Cod2Fx::default();
         }
         // The move's own events come off the prediction instead.
@@ -1694,6 +1673,7 @@ impl Cod2Session {
     /// carry the view kick ([`Self::play_cmd`]); [`Self::gun_kick`] turns
     /// the view weapon.
     pub fn recoil_frame(&mut self, events: &[Event2], fs: &Pk3Fs) {
+        self.weapons.ensure(fs, &self.view.configstrings);
         let Some(t) = self.render_time() else {
             return;
         };
@@ -1725,18 +1705,7 @@ impl Cod2Session {
         self.land_dips = (eye, self.land.gun(f.time_ms));
         self.step_dip = self.step.eye(f.time_ms);
         let weapon = crate::play::cod2_recoil::kick_weapon(ps);
-        let def = f.configstrings.weapon_name(weapon).and_then(|name| {
-            self.kick_defs
-                .entry(name.to_string())
-                .or_insert_with(|| match vcod_cod2::weapon::load(fs, name) {
-                    Ok(p) => Some(KickDef::new(&p.def)),
-                    Err(e) => {
-                        log::warn!("cod2 recoil: {e:#}");
-                        None
-                    }
-                })
-                .as_ref()
-        });
+        let def = self.weapons.get(weapon).map(|w| &w.kick);
         self.recoil.frame(events, ps, def, f.time_ms);
     }
 
@@ -1763,6 +1732,7 @@ impl Cod2Session {
         muzzles: &HashMap<u32, Vec3>,
     ) -> (Vec<Cue>, (String, Option<String>, i32)) {
         self.sounds.muzzles.clone_from(muzzles);
+        self.weapons.ensure(fs, &self.view.configstrings);
         let cur = self
             .render_time()
             .and_then(|t| self.view.frame(t))
@@ -1778,7 +1748,7 @@ impl Cod2Session {
             .iter()
             .flat_map(|e| {
                 self.sounds
-                    .cues(e, cur, &self.view.configstrings, Some(fs), view)
+                    .cues(e, cur, &self.view.configstrings, &self.weapons, view)
             })
             .collect();
         (cues, ambient)
@@ -1787,11 +1757,12 @@ impl Cod2Session {
     /// The loop sounds and the missiles' projectile sounds at the render
     /// time ([`Cod2Sounds::loops`]).
     pub fn loop_sounds(&mut self, fs: &Pk3Fs) -> (LoopSounds, LoopSounds) {
+        self.weapons.ensure(fs, &self.view.configstrings);
         let Some(t) = self.render_time() else {
             return Default::default();
         };
         match self.view.frame(t) {
-            Some(f) => self.sounds.loops(&f, Some(fs)),
+            Some(f) => self.sounds.loops(&f, &self.weapons),
             None => Default::default(),
         }
     }
@@ -1822,11 +1793,14 @@ impl Cod2Session {
         view: Vec3,
         scene: crate::play::cod2_fx::FxScene,
     ) -> Vec<FxPlay> {
+        self.weapons.ensure(fs, &self.view.configstrings);
         let Some(t) = self.render_time() else {
             return Vec::new();
         };
         match self.view.frame(t) {
-            Some(f) => self.fx.frame(&f, events, view, Some(fs), scene),
+            Some(f) => self
+                .fx
+                .frame(&f, events, view, Some(fs), &self.weapons, scene),
             None => Vec::new(),
         }
     }
@@ -1834,7 +1808,19 @@ impl Cod2Session {
     /// The `viewFlashEffect` of CS 7 weapon `weapon`, what a held view
     /// flash plays on the gun placed (`play::cod2_fx::Play::ViewFlash`).
     pub fn view_flash_effect(&mut self, weapon: i32, fs: &dyn AssetSource) -> Option<String> {
-        self.fx.view_flash(&self.view.configstrings, fs, weapon)
+        self.weapons.ensure(fs, &self.view.configstrings);
+        self.weapons.get(weapon)?.fx.view_flash.clone()
+    }
+
+    /// The level's weapon files, read off `fs` unless held already
+    /// ([`LevelWeapons::ensure`]).
+    pub fn ensure_weapons(&mut self, fs: &dyn AssetSource) {
+        self.weapons.ensure(fs, &self.view.configstrings);
+    }
+
+    /// The level's weapon files as [`Self::ensure_weapons`] last read them.
+    pub fn weapons(&self) -> &LevelWeapons {
+        &self.weapons
     }
 
     /// A userinfo dvar changed (`name`, `rate`, `snaps`, `password`,
@@ -2003,7 +1989,12 @@ impl Cod2Session {
             (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
             (a, b) => a.is_none() && b.is_none(),
         };
-        fetched || !same
+        let reopen = fetched || !same;
+        // The files came off the old search path.
+        if reopen {
+            self.weapons.clear();
+        }
+        reopen
     }
 }
 

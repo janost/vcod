@@ -118,9 +118,8 @@ pub struct AudioSystem {
     /// starts.
     manager: Option<Mixer>,
     aliases_all: AliasTable,
-    /// `aliases_all` came from a CoD4 session's zones (`set_cod4_aliases`),
-    /// not from csvs on the search path: `reopen` keeps it.
-    zone_aliases: bool,
+    /// The game's sound rules, fixed when the session starts.
+    profile: AudioProfile,
     /// `aliases_all` filtered by loadspec for the current map; empty before
     /// the first gamestate.
     aliases: AliasTable,
@@ -168,9 +167,6 @@ pub struct AudioSystem {
     blends: HashMap<u32, BlendVoice>,
     /// Voices a caller holds on an entity frame by frame ([`Self::hold`]).
     held: HashMap<u32, VoiceId>,
-    /// The connection is United Offensive's, whose cgame plays
-    /// `loopFireSound` (1.1's ignores it).
-    uo: bool,
     /// What `snd_restart` needs to reopen a stream where it was, per
     /// streamed voice outside the menu set.
     resumable: HashMap<VoiceId, Resumable>,
@@ -190,8 +186,6 @@ pub struct AudioSystem {
     /// `shellshock_loop`'s voice and its picked volume, and the end cue's.
     shock_loop: Option<(VoiceId, f32)>,
     shock_end: Option<VoiceId>,
-    /// [`VOLUME_SCALE`] for CoD 1, [`COD2_VOLUME_SCALE`] for CoD2.
-    volume_scale: f32,
     /// CoD2's current ambient track (`SND_PlayAmbientAlias`, Mac 0x4c806):
     /// its row and the slot entity it plays on, [`cues::AMBIENT_ENTITY`]
     /// or [`cues::AMBIENT_ENTITY_2`]. `ambient` holds its voice.
@@ -211,18 +205,92 @@ pub struct AudioSystem {
     /// mixer ([`Self::mix`]).
     #[cfg(test)]
     rows: HashMap<VoiceId, AliasRow>,
+    /// Set across [`Self::play_as_master`]: every voice the call starts
+    /// plays as a master.
+    as_master: bool,
+}
+
+/// Where an [`AudioSystem`]'s alias table comes from, which is how
+/// [`AudioSystem::reopen`] reloads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AliasSource {
+    /// CoD 1's csvs ([`AliasTable::load`]).
+    Cod1Csv,
+    /// CoD2's csvs ([`cod2::load`]).
+    Cod2Csv,
+    /// CoD4's zones ([`AudioSystem::set_cod4_aliases`]): the search path has
+    /// no csvs, so a reopen keeps the table.
+    Zones,
+}
+
+/// One game's sound rules, fixed when its session starts:
+/// [`AudioSystem::new`] picks CoD 1's or CoD2's off the search path,
+/// [`AudioSystem::with_aliases`] CoD4's, and [`AudioSystem::set_protocol`]
+/// 1.1's or United Offensive's off the connection's wire.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct AudioProfile {
+    pub(crate) aliases: AliasSource,
+    /// Every row's volume factor: [`VOLUME_SCALE`], [`COD2_VOLUME_SCALE`]
+    /// or [`COD4_VOLUME_SCALE`].
+    pub(crate) volume_scale: f32,
+    /// CoD2's slave fade ([`VoiceTable::use_slave_lerp`]), which CoD4 keeps
+    /// (docs/research/cod4-sound.md 5).
+    pub(crate) slave_lerp: bool,
     /// CoD4's rule for secondary aliases: each starts its own in turn
     /// down the chain (`SND_PlaySoundAlias_Internal`, iw3mp.exe
     /// 0x5c3b5f..0x5c3bdb). Off, CoD2's: one secondary, refused when it
     /// names its own.
-    chain_secondaries: bool,
+    pub(crate) chain_secondaries: bool,
     /// CoD4's entity voices keep their start's offset from the entity
     /// (`SND_SetChannelStartInfo`, cod4-sound.md 4): a loop starts as a
     /// [`Source::Tag`], so a brush model's sounds at its bounds' middle.
-    entity_offsets: bool,
-    /// Set across [`Self::play_as_master`]: every voice the call starts
-    /// plays as a master.
-    as_master: bool,
+    pub(crate) entity_offsets: bool,
+    /// CoD2's environment effects (`r`, `D`, the shellshock's priority 2)
+    /// set the room, and configstring 3's ambient comes back through
+    /// [`AudioSystem::set_cod2_ambient`] after a restart.
+    pub(crate) environment: bool,
+    /// United Offensive's cgame: `loopFireSound`, the sound blends and the
+    /// `lod` pick (1.1's ignores them).
+    pub(crate) uo: bool,
+}
+
+impl AudioProfile {
+    /// CoD 1.1 and 1.5.
+    pub(crate) const COD1: AudioProfile = AudioProfile {
+        aliases: AliasSource::Cod1Csv,
+        volume_scale: VOLUME_SCALE,
+        slave_lerp: false,
+        chain_secondaries: false,
+        entity_offsets: false,
+        environment: false,
+        uo: false,
+    };
+
+    /// United Offensive 1.51.
+    pub(crate) const UO: AudioProfile = AudioProfile {
+        uo: true,
+        ..AudioProfile::COD1
+    };
+
+    /// CoD2 1.3.
+    pub(crate) const COD2: AudioProfile = AudioProfile {
+        aliases: AliasSource::Cod2Csv,
+        volume_scale: COD2_VOLUME_SCALE,
+        slave_lerp: true,
+        environment: true,
+        ..AudioProfile::COD1
+    };
+
+    /// CoD4 1.7: 1.7's master scale and CoD2's slave rules
+    /// (docs/research/cod4-sound.md 5); its room is CoD 1's stand-in.
+    pub(crate) const COD4: AudioProfile = AudioProfile {
+        aliases: AliasSource::Zones,
+        volume_scale: COD4_VOLUME_SCALE,
+        slave_lerp: true,
+        chain_secondaries: true,
+        entity_offsets: true,
+        ..AudioProfile::COD1
+    };
 }
 
 /// `snd_slaveFadeTime`'s default, ms (Mac `SND_Init`, 0x4b496).
@@ -340,20 +408,26 @@ impl Mixer {
 }
 
 impl AudioSystem {
+    /// CoD 1's or CoD2's system, by the search path's game, over its csvs.
     pub fn new(fs: &dyn AssetSource, opts: AudioOpts) -> AudioSystem {
-        let aliases = match fs.game() == vcod_common::game::Game::Cod2 {
-            true => cod2::load(fs),
-            false => AliasTable::load(fs),
+        let (aliases, profile) = match fs.game() == vcod_common::game::Game::Cod2 {
+            true => (cod2::load(fs), AudioProfile::COD2),
+            false => (AliasTable::load(fs), AudioProfile::COD1),
         };
-        Self::with_aliases(fs, opts, aliases)
+        Self::build(opts, aliases, profile)
     }
 
-    /// [`Self::new`] over an alias table read elsewhere (CoD4's zones).
+    /// CoD4's system over a table read off its zones; a session's own comes
+    /// with [`Self::set_cod4_aliases`].
     pub fn with_aliases(
-        fs: &dyn AssetSource,
+        _fs: &dyn AssetSource,
         opts: AudioOpts,
         aliases_all: AliasTable,
     ) -> AudioSystem {
+        Self::build(opts, aliases_all, AudioProfile::COD4)
+    }
+
+    fn build(opts: AudioOpts, aliases_all: AliasTable, profile: AudioProfile) -> AudioSystem {
         let mut reverb = None;
         let manager = if opts.enabled {
             let (main, room) = main_track();
@@ -374,22 +448,16 @@ impl AudioSystem {
         } else {
             None
         };
-        let cod2 = fs.game() == vcod_common::game::Game::Cod2;
         let mut table = VoiceTable::new();
-        if cod2 {
+        if profile.slave_lerp {
             table.use_slave_lerp();
         }
         AudioSystem {
-            volume_scale: if cod2 {
-                COD2_VOLUME_SCALE
-            } else {
-                VOLUME_SCALE
-            },
+            profile,
             manager,
             cs_sounds: cues::CS_SOUNDS_V1,
             menu_aliases: aliases_all.for_map("menu"),
             aliases_all,
-            zone_aliases: false,
             aliases: AliasTable::default(),
             map: None,
             bank: SoundBank::at_rate(opts.rate),
@@ -412,7 +480,6 @@ impl AudioSystem {
             fire_loops: HashMap::new(),
             blends: HashMap::new(),
             held: HashMap::new(),
-            uo: false,
             resumable: HashMap::new(),
             music: None,
             fade: SoundFade::FULL,
@@ -429,8 +496,6 @@ impl AudioSystem {
             subtitles: Vec::new(),
             #[cfg(test)]
             rows: HashMap::new(),
-            chain_secondaries: false,
-            entity_offsets: false,
             as_master: false,
         }
     }
@@ -485,7 +550,7 @@ impl AudioSystem {
         self.bank = SoundBank::at_rate(rate);
         // CoD2's comes back with the next `set_cod2_ambient`: `stop_all`
         // forgot configstring 3.
-        if !self.aliases_all.cod2 {
+        if !self.profile.environment {
             self.set_ambient(fs, ambient.as_deref());
         }
         for (old, r) in saved {
@@ -505,7 +570,11 @@ impl AudioSystem {
     /// moved (docs/research/coduo-diff.md, section 7).
     pub fn set_protocol(&mut self, p: &vcod_common::net::protocol::Cod1Wire) {
         self.cs_sounds = p.cs.sounds();
-        self.uo = p.is_uo();
+        debug_assert_eq!(self.profile.aliases, AliasSource::Cod1Csv);
+        self.profile = match p.is_uo() {
+            true => AudioProfile::UO,
+            false => AudioProfile::COD1,
+        };
     }
 
     /// New map. Refilters the aliases by loadspec and drops everything keyed
@@ -619,7 +688,7 @@ impl AudioSystem {
         } else {
             wet
         };
-        if self.aliases_all.cod2 {
+        if self.profile.environment {
             // CoD2's shellshock is the environment's priority 2
             // (`CG_UpdateShellShock`, Mac 0x1d7528, cod2-sound.md 7.12):
             // set each frame it blends, deactivated when it ends; `step`
@@ -683,11 +752,10 @@ impl AudioSystem {
     /// decoded sound, and redo the current map's `on_gamestate` against the
     /// new table. A CoD4 zone table has no csvs to reload and stays.
     pub fn reopen(&mut self, fs: &dyn AssetSource) {
-        if !self.zone_aliases {
-            self.aliases_all = match self.aliases_all.cod2 {
-                true => cod2::load(fs),
-                false => AliasTable::load(fs),
-            };
+        match self.profile.aliases {
+            AliasSource::Cod1Csv => self.aliases_all = AliasTable::load(fs),
+            AliasSource::Cod2Csv => self.aliases_all = cod2::load(fs),
+            AliasSource::Zones => {}
         }
         self.menu_aliases = self.aliases_all.for_map("menu");
         self.bank = SoundBank::at_rate(self.bank.rate);
@@ -700,19 +768,14 @@ impl AudioSystem {
     }
 
     /// A CoD4 session's alias table, built from its zones (`cod4_audio`),
-    /// played by 1.7's master scale and CoD2's slave rules
-    /// (docs/research/cod4-sound.md 5); the current map's gamestate filters
-    /// it again. The table comes with a new search path, so every decoded
-    /// sound goes.
+    /// on a system [`Self::with_aliases`] built; the current map's gamestate
+    /// filters it again. The table comes with a new search path, so every
+    /// decoded sound goes.
     pub fn set_cod4_aliases(&mut self, table: AliasTable) {
+        debug_assert_eq!(self.profile.aliases, AliasSource::Zones);
         self.aliases_all = table;
-        self.zone_aliases = true;
         self.menu_aliases = self.aliases_all.for_map("menu");
         self.bank = SoundBank::at_rate(self.bank.rate);
-        self.volume_scale = COD4_VOLUME_SCALE;
-        self.chain_secondaries = true;
-        self.entity_offsets = true;
-        self.table.use_slave_lerp();
         self.missed.clear();
         match self.map.clone() {
             Some(map) => self.on_gamestate(&map),
@@ -790,7 +853,7 @@ impl AudioSystem {
                 shot_fallbacks,
                 listener_pos: self.listener.pos,
                 ps_entity: self.ps_entity,
-                uo: self.uo,
+                uo: self.profile.uo,
             };
             cues::resolve(ev, &ctx)
         };
@@ -803,7 +866,7 @@ impl AudioSystem {
     /// its weapon has a `loopFireSound` (uo cgame 0x30047d20); only a player
     /// body off a turret and out of a vehicle runs it (0x30045ca0).
     fn start_fire_loop(&mut self, ev: &GameEvent) {
-        if !self.uo
+        if !self.profile.uo
             || !cues::fires_weapon(ev.event)
             || ev.e_type != vcod_common::net::flags::ET_PLAYER
             || ev.eflags & (crate::turret::EF_MOUNTED | vcod_common::net::flags::EF_IN_VEHICLE_V22)
@@ -925,7 +988,7 @@ impl AudioSystem {
         entity_pos: &HashMap<u32, Vec3>,
     ) {
         let mut sources = Vec::new();
-        if self.uo {
+        if self.profile.uo {
             sources = blend::sources(p, pair, self.cs_sounds, configstrings, entity_pos);
             sources.extend(blend::shell_sources(
                 p,
@@ -993,7 +1056,7 @@ impl AudioSystem {
                 // entity is never drawn, so `step` has no position for it.
                 self.table.set_entity_pos(v.id, s.pos);
                 self.table
-                    .set_volume(v.id, lerp(r1.vol.0, r2.vol.0) * self.volume_scale);
+                    .set_volume(v.id, lerp(r1.vol.0, r2.vol.0) * self.profile.volume_scale);
                 let fixed = |r: &AliasRow| r.pitch.0 == r.pitch.1;
                 if (r1.pitch.0 != 1.0 || r2.pitch.0 != 1.0) && fixed(&r1) && fixed(&r2) {
                     v.pitch = f64::from(lerp(r1.pitch.0, r2.pitch.0));
@@ -1023,7 +1086,7 @@ impl AudioSystem {
             let volume = self
                 .rng
                 .range(lerp(r1.vol.0, r2.vol.0), lerp(r1.vol.1, r2.vol.1))
-                * self.volume_scale;
+                * self.profile.volume_scale;
             let pitch = f64::from(
                 self.rng
                     .range(lerp(r1.pitch.0, r2.pitch.0), lerp(r1.pitch.1, r2.pitch.1)),
@@ -1122,7 +1185,7 @@ impl AudioSystem {
         };
         // United Offensive's pick weighs only the rows whose `lod` admits
         // the emitter's distance (syscall 0xc4).
-        let (pick, index) = match self.uo && !menu {
+        let (pick, index) = match self.profile.uo && !menu {
             true => {
                 let counts = self.pick_counts.entry(key.clone()).or_default();
                 (set.pick_lod(&cue.alias, roll, counts, dist), None)
@@ -1201,7 +1264,7 @@ impl AudioSystem {
     fn play_from(&mut self, fs: &dyn AssetSource, cue: Cue, from_s: f32) -> Option<VoiceId> {
         crate::frame_digest::cue(&cue);
         let row = self.pick_row(&cue, false)?;
-        let volume = self.rng.range(row.vol.0, row.vol.1) * self.volume_scale;
+        let volume = self.rng.range(row.vol.0, row.vol.1) * self.profile.volume_scale;
         let pitch = self.rng.range(row.pitch.0, row.pitch.1) as f64;
         self.start_row(
             fs,
@@ -1268,7 +1331,7 @@ impl AudioSystem {
             let Some(r) = self.pick_row(&sub, menu) else {
                 break;
             };
-            if self.chain_secondaries {
+            if self.profile.chain_secondaries {
                 let name = r.name.to_ascii_lowercase();
                 if seen.contains(&name) || seen.len() > MAX_SECONDARY_CHAIN {
                     log::debug!(
@@ -1329,7 +1392,7 @@ impl AudioSystem {
         let emitter = cue.source.pos();
         // Sampled before the device check so the rng path is device
         // independent.
-        let volume = self.rng.range(row.vol.0, row.vol.1) * self.volume_scale;
+        let volume = self.rng.range(row.vol.0, row.vol.1) * self.profile.volume_scale;
         let pitch = self.rng.range(row.pitch.0, row.pitch.1) as f64;
         let row_delay_s = row.start_delay_ms as f32 / 1000.0;
         // Start-time cull, `FUN_0044d670` @ `CoDMP.exe 0x44d670` (research
@@ -1666,7 +1729,7 @@ impl AudioSystem {
                 && cur.pitch == row.pitch
                 && cur.channel == row.channel
             {
-                let vol = self.rng.range(row.vol.0, row.vol.1) * self.volume_scale;
+                let vol = self.rng.range(row.vol.0, row.vol.1) * self.profile.volume_scale;
                 let old = self.ambient_ramps.get(&id).map_or(vol, |r| r.0);
                 let rate = if fade == 0 {
                     0.0
@@ -1705,7 +1768,7 @@ impl AudioSystem {
             self.stop_voice(id);
             self.ambient_ramps.remove(&id);
         }
-        let vol = self.rng.range(row.vol.0, row.vol.1) * self.volume_scale;
+        let vol = self.rng.range(row.vol.0, row.vol.1) * self.profile.volume_scale;
         let pitch = f64::from(self.rng.range(row.pitch.0, row.pitch.1));
         let (start, rate) = if fade < 1 {
             (vol, 0.0)
@@ -1911,7 +1974,7 @@ impl AudioSystem {
                 }
                 continue;
             }
-            let source = if self.entity_offsets {
+            let source = if self.profile.entity_offsets {
                 Source::Tag { num: ent, pos }
             } else {
                 Source::Entity { num: ent, pos }
@@ -2191,7 +2254,7 @@ impl AudioSystem {
         self.last_step = Some(t0);
         self.advance_fades(ms);
         self.table.advance_slave_lerp(ms, SLAVE_FADE_MS);
-        if self.aliases_all.cod2 {
+        if self.profile.environment {
             self.env.advance(ms);
             self.set_room_wet(self.env.wet());
         }
@@ -2781,7 +2844,7 @@ mod tests {
             "CoD2's rule: jet_mid has its own, refused"
         );
         a.set_loop_aliases(&fs, &HashMap::new());
-        a.chain_secondaries = true;
+        a.profile.chain_secondaries = true;
         a.set_loop_aliases(&fs, &wanted);
         assert_eq!(a.table.len(), 4, "the loop and its three links");
         assert_eq!(a.loop_voices[&5].secondary.len(), 3);
@@ -2856,7 +2919,7 @@ mod tests {
             },
         );
         a.aliases_all = AliasTable::parse_csv(csv, "loops.csv");
-        a.entity_offsets = true;
+        a.profile.entity_offsets = true;
         a.on_gamestate("mp_crash");
         let on = |num: u32| Cue {
             alias: "shot".into(),
@@ -2990,6 +3053,21 @@ mod tests {
                 volume: 1.0,
                 rate,
             },
+        );
+        a.on_gamestate("mp_carentan");
+        a
+    }
+
+    /// [`silent`] built as a CoD4 session builds it, before its table.
+    fn cod4_silent(fs: &dyn AssetSource) -> AudioSystem {
+        let mut a = AudioSystem::with_aliases(
+            fs,
+            AudioOpts {
+                enabled: false,
+                volume: 1.0,
+                rate: 0,
+            },
+            AliasTable::default(),
         );
         a.on_gamestate("mp_carentan");
         a
@@ -3853,12 +3931,15 @@ mod tests {
     /// at 0x70b0c8 (cod4-sound.md 5).
     #[test]
     fn a_cod4_table_plays_at_the_1_7_master_scale() {
-        let mut a = silent(&Pk3Fs::empty(), 0);
+        let mut a = cod4_silent(&Pk3Fs::empty());
         a.set_cod4_aliases(AliasTable::default());
-        assert_eq!(a.volume_scale, COD4_VOLUME_SCALE);
+        assert_eq!(a.profile.volume_scale, COD4_VOLUME_SCALE);
         assert_eq!(COD4_VOLUME_SCALE, 0.75);
         let shell = crate::console::shell::Shell::new();
-        assert_eq!(shell.cvar_f32("mss_volume") * a.volume_scale, 0.8 * 0.75);
+        assert_eq!(
+            shell.cvar_f32("mss_volume") * a.profile.volume_scale,
+            0.8 * 0.75
+        );
     }
 
     /// A download's `reopen` under a CoD4 zone table keeps the table: there
@@ -3867,7 +3948,7 @@ mod tests {
     fn reopen_keeps_a_cod4_zone_table() {
         let csv = "name,file\nweap_m4_fire,weapons/m4.wav\n";
         let fs = Pk3Fs::empty();
-        let mut a = silent(&fs, 0);
+        let mut a = cod4_silent(&fs);
         a.set_cod4_aliases(AliasTable::parse_csv(csv, "zone"));
         a.on_gamestate("mp_crash");
         assert!(a.aliases.get("weap_m4_fire").is_some());
@@ -3883,7 +3964,7 @@ mod tests {
         use crate::audio::bank::tests::wav;
         let mut fs = Pk3Fs::empty();
         fs.overlay("sound/weapons/shot.wav", wav(100));
-        let mut a = silent(&fs, 0);
+        let mut a = cod4_silent(&fs);
         a.set_cod4_aliases(AliasTable::default());
         assert_eq!(
             a.bank.get(&fs, "weapons/shot.wav").unwrap().frames.len(),
@@ -3898,15 +3979,21 @@ mod tests {
     }
 
     /// A silent system over a CoD2 table of `csv`, on mp_toujane.
-    fn cod2_silent(fs: &dyn AssetSource, csv: &str) -> AudioSystem {
-        let mut a = silent(fs, 0);
+    fn cod2_silent(csv: &str) -> AudioSystem {
         let ctx = cod2::Ctx {
             groups: &[],
             curves: &[],
         };
-        a.aliases_all = cod2::parse_csv(csv, "t.csv", &ctx);
-        a.table.use_slave_lerp();
-        a.volume_scale = 1.0;
+        let profile = AudioProfile {
+            volume_scale: 1.0,
+            ..AudioProfile::COD2
+        };
+        let opts = AudioOpts {
+            enabled: false,
+            volume: 1.0,
+            rate: 0,
+        };
+        let mut a = AudioSystem::build(opts, cod2::parse_csv(csv, "t.csv", &ctx), profile);
         a.on_gamestate("mp_toujane");
         a
     }
@@ -3922,7 +4009,7 @@ mod tests {
                    amb_a,ambient/a.mp3,0.8,local,streamed,looping\n\
                    amb_b,ambient/b.mp3,0.6,local,streamed,looping\n\
                    amb_b_quiet,ambient/b.mp3,0.2,local,streamed,looping\n";
-        let mut a = cod2_silent(&fs, csv);
+        let mut a = cod2_silent(csv);
         a.set_cod2_ambient(&fs, "n\\amb_a\\t\\0", Some("amb_a"), 0);
         let (_, first) = a.ambient.clone().unwrap();
         assert_eq!(a.table.volume(first), Some(0.8));
@@ -3967,7 +4054,7 @@ mod tests {
         let csv = "name,file,subtitle,channel\n\
                    vo_a,vo/a.wav,SUBTITLE_VO_A,local\n\
                    vo_b,vo/a.wav,,local\n";
-        let mut a = cod2_silent(&fs, csv);
+        let mut a = cod2_silent(csv);
         let cue = |alias: &str| Cue {
             alias: alias.to_string(),
             source: Source::Point(Vec3::ZERO),
