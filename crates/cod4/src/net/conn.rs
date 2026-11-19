@@ -422,7 +422,9 @@ impl Conn {
                     .parse()?;
                 let last = self.client.last_server_command().to_vec();
                 let key = clmsg::usercmd_key(gs.checksum_feed, self.ack, &last);
-                let mut ops: Vec<ClOp> = (self.commands_acked + 1..=self.reliable_sequence())
+                // The ack is the server's word, any `i32`.
+                let mut ops: Vec<ClOp> = (self.commands_acked.saturating_add(1)
+                    ..=self.reliable_sequence())
                     .map(|sequence| ClOp::Command {
                         sequence,
                         text: self.command_text(sequence).to_vec(),
@@ -511,11 +513,16 @@ impl Conn {
                 continue;
             }
             let rack = i32::from_le_bytes(msg[..4].try_into().unwrap());
+            self.ack = s as i32;
+            // `CL_PacketEvent` drops a message acknowledging less than the
+            // ring (`iw3mp.exe` 0x46c502, cod4-handshake.md 10).
+            if rack < self.reliable_sequence() - KEPT_COMMANDS as i32 {
+                continue;
+            }
             let key = self.command_text(rack).to_vec();
             self.chan.decode(s, &key, &mut msg);
             self.commands_acked = self.commands_acked.max(rack);
             self.drop_acked_commands();
-            self.ack = s as i32;
             // `CL_PacketEvent` warns `ignoring illegible message` and goes
             // on (`iw3mp.exe` 0x46c53c..0x46c548, cod4-handshake.md 4).
             let parsed = match self.client.parse(s, &msg[4..]) {
@@ -998,6 +1005,36 @@ mod tests {
         assert_eq!(got.iter().map(|r| r.sequence).collect::<Vec<_>>(), [1, 3]);
         assert!(matches!(got[0].parsed.ops[..], [Op::Nop]));
         assert_eq!(c.ack, 3);
+    }
+
+    /// A `reliableAcknowledge` at either end of `int`: `i32::MIN` is below
+    /// the ring and its message dropped, as `CL_PacketEvent` drops it
+    /// (`iw3mp.exe` 0x46c502); `i32::MAX` acks every command, and the next
+    /// move resends none.
+    #[test]
+    fn an_acknowledge_at_the_ends_of_int_is_survived() {
+        use super::super::huffman::Huffman;
+        use super::super::parse::{Gamestate, MAX_CONFIGSTRINGS, SVC_EOF};
+        use std::collections::BTreeMap;
+        use vcod_common::net::netchan::ServerNetchan;
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut c = joined(server.local_addr().unwrap());
+        let mut table = vec![String::new(); MAX_CONFIGSTRINGS as usize];
+        table[1] = "\\sv_serverid\\16".into();
+        c.client.gamestate = Some(Gamestate::from_table(0, &table, &BTreeMap::new(), 0, 0));
+        c.command("say hi");
+        let me = c.sock.local_addr().unwrap();
+        let mut chan = ServerNetchan::with_params(1, 0, NetchanParams::COD2);
+        let huff = Huffman::new();
+        for ack in [i32::MIN, i32::MAX] {
+            for p in chan.transmit_block(ack, &huff.compress(&[SVC_EOF])) {
+                server.send_to(&p, me).unwrap();
+            }
+        }
+        let got = c.poll(Instant::now() + Duration::from_millis(200)).unwrap();
+        assert_eq!(got.iter().map(|r| r.sequence).collect::<Vec<_>>(), [2]);
+        assert_eq!(c.commands_acked, i32::MAX);
+        c.send(&[]).unwrap();
     }
 
     /// Acknowledged commands past the reliable ring are dropped; the
