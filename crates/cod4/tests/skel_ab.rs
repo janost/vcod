@@ -484,7 +484,7 @@ fn anim_locals_in(a: Cod4Arith, shared: bool) -> Option<Sampled> {
                 Some(n) => {
                     let (parts, remap) = &leaves[n];
                     Tree::Leaf {
-                        parts,
+                        clip: parts,
                         remap,
                         time: w.time,
                         weight,

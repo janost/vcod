@@ -3,9 +3,12 @@
 //! bone's `DObjAnimMat`, and `DObjCalcSkel` (0x80b9dfa) composing them,
 //! each float rounded where the binary stores it, its x87 stack at the
 //! 64-bit precision the process runs at ([`F80`]; cod2-player-anims.md 11).
+//! The walk and its folds are CoD4's too ([`dobjanim`]); the leaf's sums
+//! are CoD2's own.
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
+use vcod_common::dobjanim;
 use vcod_common::skeleton::Skeleton;
 use vcod_common::x87::F80;
 use vcod_common::xanim::XAnim;
@@ -291,28 +294,73 @@ fn st<T: Ar>(x: T) -> f32 {
     x.st()
 }
 
-/// A node of the anim tree as the walk meets it: a leaf's clip at its
-/// node time and weight, or a node's weight and children in index order.
-pub enum Tree<'a> {
-    Leaf {
-        clip: &'a XAnim,
-        /// The clip's track to the skeleton's bone, `None` a bone the
-        /// models lack.
-        remap: &'a [Option<usize>],
-        time: f32,
-        weight: f32,
-    },
-    Node {
-        weight: f32,
-        children: Vec<Tree<'a>>,
-    },
+/// A node of the anim tree as the walk meets it, a leaf over its clip.
+pub type Tree<'a> = dobjanim::Tree<'a, XAnim>;
+
+/// `cod2_lnxded`'s arithmetic for the shared walk: every value on a `T`
+/// stack, every factor the folds pass on stored.
+struct Cod2<T>(std::marker::PhantomData<T>);
+
+impl<T> Clone for Cod2<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
-impl Tree<'_> {
-    fn weight(&self) -> f32 {
-        match self {
-            Tree::Leaf { weight, .. } | Tree::Node { weight, .. } => *weight,
-        }
+impl<T> Copy for Cod2<T> {}
+
+impl<T: Ar> Cod2<T> {
+    const ON: Cod2<T> = Cod2(std::marker::PhantomData);
+}
+
+impl dobjanim::Mat for Mat {
+    const ZERO: Mat = Mat::ZERO;
+
+    fn parts(&mut self) -> (&mut [f32; 4], &mut [f32; 3], &mut f32) {
+        (&mut self.quat, &mut self.trans, &mut self.weight)
+    }
+}
+
+impl<T: Ar> dobjanim::Calc for Cod2<T> {
+    type V = T;
+    type Mat = Mat;
+    type Clip = XAnim;
+
+    #[inline(always)]
+    fn ld(self, x: f32) -> T {
+        d(x)
+    }
+
+    #[inline(always)]
+    fn ext(self, x: f64) -> T {
+        ext(x)
+    }
+
+    #[inline(always)]
+    fn st(self, v: T) -> f32 {
+        st(v)
+    }
+
+    #[inline(always)]
+    fn pass(self, v: T) -> T {
+        d(st(v))
+    }
+
+    #[inline(always)]
+    fn is_zero(self, v: T) -> bool {
+        st(v) == 0.0
+    }
+
+    fn leaf(
+        self,
+        clip: &XAnim,
+        remap: &[Option<usize>],
+        t: f32,
+        w: f32,
+        mats: &mut [Mat],
+        need: &[bool],
+    ) {
+        leaf::<T>(clip, remap, t, w, mats, need);
     }
 }
 
@@ -425,9 +473,8 @@ fn leaf<T: Ar>(
     }
 }
 
-/// `DObjCalcAnim`'s walk from the root (weight 1, the bones cleared, its
-/// children's sums divided by their weight): the locals of `bones` bones
-/// and which a leaf reached.
+/// `DObjCalcAnim`'s walk from the root ([`dobjanim::calc`]): the locals
+/// of `bones` bones and which a leaf reached.
 ///
 /// Only the bones `need` holds are summed and folded (all without it):
 /// each bone's words are its own, so the rest read as retail's whatever is
@@ -436,147 +483,9 @@ pub fn calc(root: &Tree, bones: usize, need: Option<&[bool]>) -> (Vec<Mat>, Vec<
     let all = vec![true; bones];
     let need = need.unwrap_or(&all);
     exactly(
-        || calc_in::<Bounded>(root, bones, need),
-        || calc_in::<F80>(root, bones, need),
+        || dobjanim::calc(Cod2::<Bounded>::ON, root, bones, need),
+        || dobjanim::calc(Cod2::<F80>::ON, root, bones, need),
     )
-}
-
-fn calc_in<T: Ar>(root: &Tree, bones: usize, need: &[bool]) -> (Vec<Mat>, Vec<bool>) {
-    let mut mats = vec![Mat::ZERO; bones];
-    let mut reached = vec![false; bones];
-    walk::<T>(root, 1.0, true, false, &mut mats, &mut reached, need);
-    (mats, reached)
-}
-
-/// 0x80bfc04: `node` at weight `w`; `clear` zeroes the bones first,
-/// `nested` marks a child of a fold, whose own fold normalizes its quats
-/// rather than dividing by its weight.
-fn walk<T: Ar>(
-    node: &Tree,
-    w: f32,
-    clear: bool,
-    nested: bool,
-    mats: &mut [Mat],
-    reached: &mut [bool],
-    need: &[bool],
-) {
-    match node {
-        Tree::Leaf {
-            clip, remap, time, ..
-        } => {
-            if clear {
-                mats.fill(Mat::ZERO);
-            }
-            for &b in remap.iter().flatten() {
-                reached[b] = true;
-            }
-            leaf::<T>(clip, remap, *time, w, mats, need);
-        }
-        Tree::Node { children, .. } => {
-            let live: Vec<&Tree> = children.iter().filter(|c| c.weight() != 0.0).collect();
-            match live.len() {
-                0 => {
-                    if clear {
-                        mats.fill(Mat::ZERO);
-                    }
-                }
-                1 => walk::<T>(live[0], w, clear, nested, mats, reached, need),
-                _ if clear => {
-                    for (i, c) in live.iter().enumerate() {
-                        walk::<T>(c, c.weight(), i == 0, true, mats, reached, need);
-                    }
-                    match nested {
-                        false => divide::<T>(mats, need),
-                        true => normalize::<T>(mats, w, need),
-                    }
-                }
-                _ => {
-                    let mut scratch = vec![Mat::ZERO; mats.len()];
-                    for (i, c) in live.iter().enumerate() {
-                        walk::<T>(c, c.weight(), i == 0, true, &mut scratch, reached, need);
-                    }
-                    add_normalized::<T>(mats, &scratch, w, need);
-                }
-            }
-        }
-    }
-}
-
-/// The root's fold: each bone of non-zero weight times `1 / weight`, the
-/// factor passed as a float, each word stored; the weight stays.
-fn divide<T: Ar>(mats: &mut [Mat], need: &[bool]) {
-    let (d, ext) = (d::<T>, ext::<T>);
-    for m in mats
-        .iter_mut()
-        .zip(need)
-        .filter_map(|(m, &n)| n.then_some(m))
-        .filter(|m| m.weight != 0.0)
-    {
-        let r = d(st(ext(1.0) / d(m.weight)));
-        m.quat = m.quat.map(|c| st(d(c) * r));
-        m.trans = m.trans.map(|c| st(d(c) * r));
-    }
-}
-
-/// `|q|^2` (0x80c38e6, `((x^2 + y^2) + z^2) + w^2` on the stack) stored,
-/// and 0x80c34fe's `0x5f3759df` step off its bits with one Newton step
-/// (0.5 at 0x815042c, 1.5 at 0x8150428), its half and result stored;
-/// `None` for a zero quat.
-fn rsqrt<T: Ar>(q: [f32; 4]) -> Option<T> {
-    let (d, ext) = (d::<T>, ext::<T>);
-    let [x, y, z, w] = q.map(d);
-    let s = st(((x * x + y * y) + z * z) + w * w);
-    if s == 0.0 {
-        return None;
-    }
-    let h = d(st(d(s) * ext(0.5)));
-    let y0 = d(f32::from_bits(0x5f37_59df - (s.to_bits() >> 1)));
-    Some(d(st((ext(1.5) - (h * y0) * y0) * y0)))
-}
-
-/// A clearing child's fold in place: the quat times `rsqrt * w`, the
-/// shift times `w / weight`, both factors passed as floats, the weight
-/// then `w`.
-fn normalize<T: Ar>(mats: &mut [Mat], w: f32, need: &[bool]) {
-    let d = d::<T>;
-    let w = d(w);
-    for m in mats
-        .iter_mut()
-        .zip(need)
-        .filter_map(|(m, &n)| n.then_some(m))
-    {
-        if let Some(r) = rsqrt::<T>(m.quat) {
-            let s = d(st(r * w));
-            m.quat = m.quat.map(|c| st(d(c) * s));
-        }
-        if m.weight != 0.0 {
-            let g = d(st(w / d(m.weight)));
-            m.trans = m.trans.map(|c| st(d(c) * g));
-            m.weight = st(w);
-        }
-    }
-}
-
-/// A later child's fold out of scratch: its quat times `rsqrt * w` and its
-/// shift times `w / weight` added, `w` added to the weight.
-fn add_normalized<T: Ar>(mats: &mut [Mat], src: &[Mat], w: f32, need: &[bool]) {
-    let d = d::<T>;
-    let w = d(w);
-    for ((m, s), _) in mats.iter_mut().zip(src).zip(need).filter(|(_, n)| **n) {
-        if let Some(r) = rsqrt::<T>(s.quat) {
-            let k = d(st(r * w));
-            for c in 0..4 {
-                m.quat[c] = st(k * d(s.quat[c]) + d(m.quat[c]));
-            }
-        }
-        if s.weight != 0.0 {
-            let g = d(st(w / d(s.weight)));
-            for c in 0..3 {
-                m.trans[c] = st(g * d(s.trans[c]) + d(m.trans[c]));
-            }
-            m.weight = st(w + d(m.weight));
-        }
-    }
 }
 
 /// `a * b` as 0x80bc452 composes a bone's quat onto its parent's (`a` the
@@ -1000,21 +909,31 @@ mod tests {
                 ),
                 agree(
                     &format!("{i} rsqrt {:?}", m.quat),
-                    || rsqrt::<Bounded>(m.quat).map(st).into_iter().collect(),
-                    || rsqrt::<F80>(m.quat).map(st).into_iter().collect(),
+                    || {
+                        dobjanim::rsqrt(Cod2::<Bounded>::ON, m.quat)
+                            .map(st)
+                            .into_iter()
+                            .collect()
+                    },
+                    || {
+                        dobjanim::rsqrt(Cod2::<F80>::ON, m.quat)
+                            .map(st)
+                            .into_iter()
+                            .collect()
+                    },
                 ),
                 agree(
                     &format!("{i} normalize {m:?} {w}"),
                     || {
                         let mut ms = vec![m];
-                        normalize::<Bounded>(&mut ms, w, &[true]);
-                        divide::<Bounded>(&mut ms, &[true]);
+                        dobjanim::normalize(Cod2::<Bounded>::ON, &mut ms, w, &[true]);
+                        dobjanim::divide(Cod2::<Bounded>::ON, &mut ms, &[true]);
                         fold(ms)
                     },
                     || {
                         let mut ms = vec![m];
-                        normalize::<F80>(&mut ms, w, &[true]);
-                        divide::<F80>(&mut ms, &[true]);
+                        dobjanim::normalize(Cod2::<F80>::ON, &mut ms, w, &[true]);
+                        dobjanim::divide(Cod2::<F80>::ON, &mut ms, &[true]);
                         fold(ms)
                     },
                 ),

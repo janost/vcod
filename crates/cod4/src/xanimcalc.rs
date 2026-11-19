@@ -7,28 +7,18 @@
 //! composes ([`crate::skel`]). Both binaries run the same sums in the same
 //! order; either binary's x87 stack is an `f64` here, one rounding to `f32`
 //! where the binary stores, `iw3mp.exe` storing a few values `cod4_lnxded`
-//! keeps ([`Cod4Arith`]).
+//! keeps ([`Cod4Arith`]). The walk and the folds are CoD2's too
+//! ([`dobjanim`]); the leaf's sums ([`Parts::accum`]) are 1.7's own.
 
 use anyhow::{Context, Result, ensure};
 
 use crate::anim::{BodySource, Streams, script_string};
 use crate::assets::Assets;
 use crate::assets::model::XAnim;
-use crate::skel::{AnimMat, X};
+use crate::skel::{AnimMat, QUAT_SCALE, X, d, f};
+use vcod_common::dobjanim;
 use vcod_common::playerpose::{Cod4Arith, Leaf};
 use vcod_common::skeleton::Skeleton;
-
-/// The float 1/32767 a quat short scales by (0x823ba10; `iw3mp.exe`'s
-/// double at 0x70b2a0 holds the same value).
-const QUAT_SCALE: f32 = f32::from_bits(0x3800_0100);
-
-fn d(x: f32) -> f64 {
-    f64::from(x)
-}
-
-fn f(x: f64) -> f32 {
-    x as f32
-}
 
 /// A short times [`QUAT_SCALE`], stored (`fild`, `fmul`, `fstp`).
 fn q(s: i16) -> f32 {
@@ -360,38 +350,70 @@ impl Frame {
     }
 }
 
-/// A node of the anim tree as the walk meets it: a leaf's clip, its node
-/// time and weight, or a node's weight and children.
-pub enum Tree<'a> {
-    Leaf {
-        parts: &'a Parts,
-        remap: &'a [Option<usize>],
-        time: f32,
-        weight: f32,
-    },
-    Node {
-        weight: f32,
-        children: Vec<Tree<'a>>,
-    },
-}
+/// A node of the anim tree as the walk meets it, a leaf over its clip's
+/// parts.
+pub type Tree<'a> = dobjanim::Tree<'a, Parts>;
 
-impl Tree<'_> {
-    fn weight(&self) -> f32 {
-        match self {
-            Tree::Leaf { weight, .. } | Tree::Node { weight, .. } => *weight,
-        }
+/// `a`'s arithmetic for the shared walk ([`dobjanim`]).
+#[derive(Clone, Copy)]
+struct Stack(Cod4Arith);
+
+impl dobjanim::Mat for AnimMat {
+    const ZERO: AnimMat = AnimMat {
+        quat: [0.0; 4],
+        trans: [0.0; 3],
+        trans_weight: 0.0,
+    };
+
+    fn parts(&mut self) -> (&mut [f32; 4], &mut [f32; 3], &mut f32) {
+        (&mut self.quat, &mut self.trans, &mut self.trans_weight)
     }
 }
 
-/// `DObjCalcAnim`'s walk from the root (weight 1, the bones cleared, its
-/// children's sums divided by their weight) in `a`'s arithmetic: the
-/// locals of `bones` bones, and which bones a leaf reached (the rest keep
-/// the model's own, 0x81b4d6c).
+impl dobjanim::Calc for Stack {
+    type V = X;
+    type Mat = AnimMat;
+    type Clip = Parts;
+
+    fn ld(self, x: f32) -> X {
+        X::kept(x)
+    }
+
+    fn ext(self, x: f64) -> X {
+        X { v: x }
+    }
+
+    fn st(self, v: X) -> f32 {
+        v.f()
+    }
+
+    fn pass(self, v: X) -> X {
+        st(v, self.0)
+    }
+
+    fn is_zero(self, v: X) -> bool {
+        v.v == 0.0
+    }
+
+    /// Every bone summed: 1.7's walk takes no `need`.
+    fn leaf(
+        self,
+        clip: &Parts,
+        remap: &[Option<usize>],
+        t: f32,
+        w: f32,
+        mats: &mut [AnimMat],
+        _need: &[bool],
+    ) {
+        clip.accum(remap, t, w, mats, self.0);
+    }
+}
+
+/// `DObjCalcAnim`'s walk from the root ([`dobjanim::calc`]) in `a`'s
+/// arithmetic: the locals of `bones` bones, and which bones a leaf reached
+/// (the rest keep the model's own, 0x81b4d6c).
 pub fn calc(root: &Tree, bones: usize, a: Cod4Arith) -> (Vec<AnimMat>, Vec<bool>) {
-    let mut mats = vec![ZERO; bones];
-    let mut reached = vec![false; bones];
-    walk(root, 1.0, true, false, &mut mats, &mut reached, a);
-    (mats, reached)
+    dobjanim::calc(Stack(a), root, bones, &vec![true; bones])
 }
 
 /// A player body's locals as 1.7's sampler leaves them, by `skel`'s bone:
@@ -426,8 +448,8 @@ pub fn player_locals(
             children: leaves
                 .iter()
                 .zip(held.by_ref())
-                .map(|(l, (parts, remap))| Tree::Leaf {
-                    parts,
+                .map(|(l, (clip, remap))| Tree::Leaf {
+                    clip,
                     remap,
                     time: l.time,
                     weight: l.weight,
@@ -466,149 +488,6 @@ fn st(v: X, a: Cod4Arith) -> X {
     match a {
         Cod4Arith::Client => v.st(),
         Cod4Arith::Server => v,
-    }
-}
-
-const ZERO: AnimMat = AnimMat {
-    quat: [0.0; 4],
-    trans: [0.0; 3],
-    trans_weight: 0.0,
-};
-
-/// 0x81b2578: `node` at weight `w`; `clear` zeroes the bones first, `nested`
-/// (`p5`) marks a child of a fold, which folds its own children by
-/// normalizing their quats rather than dividing by their weight.
-fn walk(
-    node: &Tree,
-    w: f32,
-    clear: bool,
-    nested: bool,
-    mats: &mut [AnimMat],
-    reached: &mut [bool],
-    a: Cod4Arith,
-) {
-    match node {
-        Tree::Leaf {
-            parts, remap, time, ..
-        } => {
-            if clear {
-                mats.fill(ZERO);
-            }
-            for &m in remap.iter().flatten() {
-                reached[m] = true;
-            }
-            parts.accum(remap, *time, w, mats, a);
-        }
-        Tree::Node { children, .. } => {
-            let live: Vec<&Tree> = children.iter().filter(|c| c.weight() != 0.0).collect();
-            match live.len() {
-                0 => {
-                    if clear {
-                        mats.fill(ZERO);
-                    }
-                }
-                // One live child takes the node's weight and flags (0x81b46bc).
-                1 => walk(live[0], w, clear, nested, mats, reached, a),
-                _ => {
-                    // The children sum into the bones themselves when the
-                    // node clears, else into scratch the first one clears.
-                    if clear {
-                        for (i, c) in live.iter().enumerate() {
-                            walk(c, c.weight(), i == 0, true, mats, reached, a);
-                        }
-                        match nested {
-                            false => divide(mats, a),
-                            true => normalize(mats, w, a),
-                        }
-                    } else {
-                        let mut scratch = vec![ZERO; mats.len()];
-                        for (i, c) in live.iter().enumerate() {
-                            walk(c, c.weight(), i == 0, true, &mut scratch, reached, a);
-                        }
-                        add_normalized(mats, &scratch, w, a);
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// The root's fold (0x81b4608..0x81b4678, `iw3mp.exe` 0x586c10): each
-/// bone of non-zero weight times `1 / weight` kept, each word stored; the
-/// weight stays.
-fn divide(mats: &mut [AnimMat], a: Cod4Arith) {
-    for m in mats {
-        if m.trans_weight == 0.0 {
-            continue;
-        }
-        let r = st(X::kept(1.0) / X::kept(m.trans_weight), a);
-        for c in 0..4 {
-            m.quat[c] = (X::kept(m.quat[c]) * r).f();
-        }
-        for c in 0..3 {
-            m.trans[c] = (X::kept(m.trans[c]) * r).f();
-        }
-    }
-}
-
-/// `|q|^2` summed `((x^2 + y^2) + z^2) + w^2` on the stack, and the
-/// `0x5f3759df` step off its stored bits with one Newton step (0.5 and 1.5
-/// at 0x8209628, 0x820962c), the sum kept on the server; the client stores
-/// the sum, its half and the step (0x586f07, 0x586f2f, 0x586f51): `None`
-/// for a zero quat.
-fn rsqrt(q: [f32; 4], a: Cod4Arith) -> Option<X> {
-    let [x, y, z, w] = q.map(X::kept);
-    let s = st(((x * x + y * y) + z * z) + w * w, a);
-    if s.v == 0.0 {
-        return None;
-    }
-    let y0 = X::kept(f32::from_bits(0x5f37_59df - (s.f().to_bits() >> 1)));
-    let h = st(s * X::kept(0.5), a);
-    Some(st((1.5 - (h * y0) * y0) * y0, a))
-}
-
-/// A clearing child's fold in place (0x81b4a32..0x81b4abe, `iw3mp.exe`
-/// 0x586ea0): the quat normalized times `w`, the shift times
-/// `w / weight`, the weight `w`.
-fn normalize(mats: &mut [AnimMat], w: f32, a: Cod4Arith) {
-    let w = X::kept(w);
-    for m in mats {
-        if let Some(r) = rsqrt(m.quat, a) {
-            let s = st(w * r, a);
-            for c in 0..4 {
-                m.quat[c] = (X::kept(m.quat[c]) * s).f();
-            }
-        }
-        if m.trans_weight != 0.0 {
-            let g = st(w / X::kept(m.trans_weight), a);
-            for c in 0..3 {
-                m.trans[c] = (X::kept(m.trans[c]) * g).f();
-            }
-            m.trans_weight = w.f();
-        }
-    }
-}
-
-/// A later child's fold out of scratch (0x81b4b78..0x81b4c0d, `iw3mp.exe`
-/// 0x586fe0): its normalized quat times `w` and its shift times
-/// `w / weight` added, `w` to the weight.
-fn add_normalized(mats: &mut [AnimMat], src: &[AnimMat], w: f32, a: Cod4Arith) {
-    let w = X::kept(w);
-    let x = X::kept;
-    for (m, s) in mats.iter_mut().zip(src) {
-        if let Some(r) = rsqrt(s.quat, a) {
-            let k = st(w * r, a);
-            for c in 0..4 {
-                m.quat[c] = (x(s.quat[c]) * k + x(m.quat[c])).f();
-            }
-        }
-        if s.trans_weight != 0.0 {
-            let g = st(w / x(s.trans_weight), a);
-            for c in 0..3 {
-                m.trans[c] = (x(s.trans[c]) * g + x(m.trans[c])).f();
-            }
-            m.trans_weight = (w + x(m.trans_weight)).f();
-        }
     }
 }
 
