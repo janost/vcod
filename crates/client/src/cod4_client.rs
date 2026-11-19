@@ -22,6 +22,7 @@ use crate::cod4_audio::{self, Cod4Sounds};
 use crate::cod4_fly::WeaponModels;
 use crate::cod4_fx::{self, Cod4Effects};
 use crate::cod4_hud::Cod4Hud;
+use crate::cod4_loading::{Loader, MapLoaded};
 use crate::cod4_vehicles::Cod4Vehicles;
 use crate::cod4_viewmodel::{Cod4View, tag_to_world};
 use crate::console;
@@ -142,6 +143,9 @@ pub(crate) struct Cod4Client {
     /// Voice chat's codec, microphone and talker streams, made on the
     /// first live frame (`crate::voice`).
     voice: Option<crate::voice::VoiceChat>,
+    /// A map change loading on its worker ([`Self::start_map_load`]), and
+    /// when it started (the loading screen's dots).
+    map_load: Option<(Loader<MapLoaded>, Instant)>,
     /// Each fire event's client-side rounds as the effects took them, for
     /// the tests.
     #[cfg(test)]
@@ -307,9 +311,39 @@ impl Cod4Client {
             dof: Default::default(),
             ads_dof: None,
             voice: None,
+            map_load: None,
             #[cfg(test)]
             rounds_seen: Vec::new(),
         }
+    }
+
+    /// The map a new gamestate names
+    /// ([`crate::play::cod4::Cod4Session::take_map_change`]) loads on a
+    /// worker under the loading screen. The session is not read until
+    /// [`Self::take_map_load`] hands the load over, as when the window's
+    /// thread loaded it: the same packets go out once it lands.
+    pub(crate) fn start_map_load(&mut self, game_dir: &std::path::Path, map: String) {
+        let l = Loader::start_map(
+            game_dir.to_path_buf(),
+            map,
+            self.session.gametype(),
+            self.session.fs_game(),
+            self.session.entity_assets(),
+        );
+        self.map_load = Some((l, Instant::now()));
+    }
+
+    /// The map change's load, once it lands; the session runs again.
+    pub(crate) fn take_map_load(&mut self) -> Option<anyhow::Result<MapLoaded>> {
+        let done = self.map_load.as_mut()?.0.poll()?;
+        self.map_load = None;
+        Some(done)
+    }
+
+    /// The loading screen while a map change loads.
+    pub(crate) fn map_load_quads(&mut self, size: (f32, f32)) -> Option<Vec<crate::hud::HudQuad>> {
+        let (l, t0) = self.map_load.as_mut()?;
+        Some(l.quads(size, t0.elapsed().as_millis() as i32))
     }
 
     /// A map change (`play::cod4::Cod4Session::take_map_change`): the new
@@ -538,6 +572,10 @@ impl Cod4Client {
     /// snapshot yet (the camera flies).
     pub(crate) fn pump(&mut self, cx: &mut Cod2Frame, cam: &mut FlyCamera) -> bool {
         use crate::frame_prof::{Stage, span};
+        // The camera holds behind the loading screen (`Session::scene`).
+        if self.map_load.is_some() {
+            return true;
+        }
         let mut prof = span(Stage::Net);
         let now = self.now_ms(cx.dt);
         if let Some(fx) = &mut self.effects {
@@ -2009,6 +2047,9 @@ impl Cod4Client {
         (yaw, pitch, roll): (f32, f32, f32),
         size: (f32, f32),
     ) {
+        if self.map_load.is_some() {
+            return;
+        }
         let up = crate::camera::up_hint(yaw, pitch, roll);
         let fwd = crate::camera::basis(yaw, pitch).0;
         let right = fwd.cross(up).normalize();

@@ -123,6 +123,10 @@ impl Session {
         cam: &mut FlyCamera,
     ) -> (Option<cod2_viewmodel::ViewFrame>, Vec<hud::HudQuad>) {
         if let Session::Cod4(c) = self {
+            // A map change loading draws its loading screen alone.
+            if let Some(q) = c.map_load_quads(cx.r.screen_size()) {
+                return (None, q);
+            }
             return (c.take_view(), c.hud_quads(cx.r.screen_size(), cx.shell));
         }
         self.cod2_mut()
