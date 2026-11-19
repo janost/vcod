@@ -24,6 +24,13 @@ vcod draws it in `crates/client/src/cod2_player_hud.rs`, called from
   (the HUD menus), the foreground hudelems, the scoreboard, a red damage
   flash and the damage direction icons.
 
+A value hudelem (type 2) prints its float at `+0x70` through `va("%g")`:
+`CoD2MP_s.exe` 0x4dd6b8 loads it, widens it to a double and pushes
+`"%g"` (0x5a85f4) before the `va` call at 0x4dd6c6; the timers' arms of the
+same switch call 0x4dcc20 and 0x4dcca0, one of which formats `%i:%02i`
+(0x5b6a50, at 0x4dcc86). VERIFIED (the instructions and the strings). vcod:
+`cod2_hud::elem_body`, `hud::hudelem::format_g`.
+
 `ui_mp/hud.txt` loads `ui_mp/hud.menu` only. VERIFIED (the stock file). Its
 visible menus and their owner draws, numbered by `ui/menudefinition.h`.
 VERIFIED (the stock menu). `CG_OwnerDraw` (0x18cc30) switches on the
