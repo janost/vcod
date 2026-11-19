@@ -613,19 +613,35 @@ vcod (all three games):
   `level.time` as usual. Retail has neither ceiling; a count, not wall time, keeps the replays deterministic.
 - A concatenation past 8192 bytes is a script error (`string too long`,
   `interp::MAX_STRING_LEN`); stock scripts build at most 138.
-- The heap frees nothing within a level, so vcod caps the level instead
-  of a live pool: past 64,000,000 variables (every struct and array
-  allocated with their fields and elements, `Heap::vars`, plus the live
-  threads; `interp::MAX_VARIABLES`) or 256 MiB of interned strings
-  (`MAX_STRING_BYTES`), the op that allocates ends its thread with
-  `ErrorKind::TooManyVariables`. Retail's counterpart is its fixed pool's
-  terminal `exceeded maximum number of script variables`
+- Retail counts references and frees a variable at zero (INFERRED,
+  cod4-gsc.md 10); vcod sweeps instead. At the end of a frame, once as
+  many objects as the last sweep kept (and at least 16,384) have been
+  allocated since, `Vm::collect` marks what the threads' locals and stacks, their endon and `waittill`
+  targets, `level`, `game`, `anim` and the host (`Host::roots`: each
+  object's script struct and engine fields, the queued notifies) reach, and
+  frees the rest for the next allocations (`Heap::collect`). The level is
+  still capped: past 64,000,000 variables (every struct and array the last
+  sweep kept or allocated since, with their fields and elements,
+  `Heap::vars`, plus the live threads; `interp::MAX_VARIABLES`) or 256 MiB
+  of interned strings (`MAX_STRING_BYTES`), the op that allocates ends its
+  thread with `ErrorKind::TooManyVariables`. Retail's counterpart is its
+  fixed pool's terminal `exceeded maximum number of script variables`
   (cod11-gsc-language.md, "Runtime errors below developer 1"). Measured
-  on vcod-server, CoD4 `war` on mp_crash with 12 shooting bots, one
-  5.8-minute round: 97,340 variables (37,788 arrays, 3,616 structs), 852
-  threads at most, 379,460 bytes of strings. At that rate a level that
-  never rotates or restarts reaches the ceiling after about 60 hours; a
-  script allocating in a loop reaches it within seconds.
+  on vcod-server before the sweep, CoD4 `war` on mp_crash with 12 shooting
+  bots, one 5.8-minute round: 97,340 variables (37,788 arrays, 3,616
+  structs), 852 threads at most, 379,460 bytes of strings: about 60 hours
+  to the ceiling for a level that never rotates. VERIFIED, vcod
+  measurement 2026-11-19 (`bot_match`, `GAME=cod4`, mp_crash `war`, 12
+  bots, `scr_war_timelimit` and `scr_war_scorelimit` 0, 14,400 ticks, seed
+  1): without the sweep the heap ended at 80,189 array and 7,169 struct
+  slots and 194,749 variables, about 6,500 arrays more a minute; with it
+  the slots held at 17,135 and 2,202 from tick 7,200 on and the variables
+  ran between 19,000 and 48,000. Both runs printed the same `DIGEST=1`
+  line. The interner frees nothing: in both runs its strings grew from
+  159,483 bytes at tick 1,200 to 630,845 at 14,400, about 43 KB a minute,
+  which reaches `MAX_STRING_BYTES` after about 100 hours. A script
+  allocating in one step reaches the variable ceiling within seconds,
+  since no sweep runs inside a frame.
 
 ## 4. Callbacks, engine notifies, script loading
 

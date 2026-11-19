@@ -249,6 +249,8 @@ mod tests {
         ) -> Result<(), ErrorKind> {
             unreachable!("not exercised by this test")
         }
+
+        fn roots(&self, _out: &mut Vec<Value>) {}
     }
 
     /// `f32::to_string` and `Cx::format_number`'s `%g` renderer diverge for

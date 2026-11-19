@@ -1142,7 +1142,7 @@ probe in the game, a socket on 127.0.0.1:20510 as the master.
   per endon.
 - vcod (`Vm::thread_usage`, `game::usage`) counts the same over its frames:
   a frame's defined locals, an array's holders counted over every frame,
-  struct field and array element (garbage the heap keeps too), and `1 + n`
+  struct field and array element (garbage since the last sweep too), and `1 + n`
   for `n` endons; `script_usage_counts_as_retail` matches the capture byte
   for byte, the entity and HUD element lines included.
 - Order: a thread's record is its code positions innermost first (current,

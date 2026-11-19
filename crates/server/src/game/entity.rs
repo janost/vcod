@@ -957,6 +957,18 @@ impl ObjectTable {
         self.ents.iter_mut().flatten()
     }
 
+    /// Every live object's script struct and the struct and array values in
+    /// its engine and client fields, HUD elements and the world included:
+    /// the table's part of `Host::roots`.
+    pub fn script_roots(&self, out: &mut Vec<Value>) {
+        let objects = self.ents.iter().chain(&self.huds).flatten();
+        for e in objects.chain(&self.world) {
+            out.push(Value::Struct(e.script));
+            let fields = e.engine.iter().chain(e.client.iter().flatten());
+            out.extend(fields.filter(|v| matches!(v, Value::Struct(_) | Value::Array(_))));
+        }
+    }
+
     #[cfg(test)]
     pub fn force_num_entities_for_test(&mut self, n: u32) {
         self.num_entities = n;

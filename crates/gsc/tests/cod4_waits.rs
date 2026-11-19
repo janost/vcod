@@ -148,6 +148,8 @@ impl Host for WaitHost {
     fn set_field(&mut self, _cx: &mut Cx, _e: EntId, _f: Atom, _v: Value) -> Result<(), ErrorKind> {
         Ok(())
     }
+
+    fn roots(&self, _out: &mut Vec<Value>) {}
 }
 
 /// The probe's lines under `profile`, on 50 ms frames from 0.

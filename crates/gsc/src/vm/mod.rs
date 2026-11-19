@@ -712,6 +712,14 @@ pub trait Host {
     /// The other half of a `Cx::spawn_then`, with its token. A spawn queued
     /// here starts before the builtin's remaining queued threads.
     fn spawn_returned(&mut self, _cx: &mut Cx, _token: u32) {}
+
+    /// Pushes every struct and array value the host holds between frames
+    /// (an entity's script struct, an engine field, a queued notify's
+    /// arguments) onto `out`. [`Vm::run_frame`] sweeps the heap at its end
+    /// ([`Vm::collect`]) and frees whatever neither the VM nor this names,
+    /// so a value left out reads as an emptied slot another allocation
+    /// takes.
+    fn roots(&self, out: &mut Vec<Value>);
 }
 
 impl From<EntId> for Target {
@@ -1005,6 +1013,43 @@ impl Vm {
     pub(crate) fn over_ceiling(&self) -> bool {
         self.heap.vars() + self.threads.len() as u64 > self.max_vars
             || self.interner.bytes() > self.max_string_bytes
+    }
+
+    /// Frees every struct and array neither the VM nor `host` holds
+    /// ([`Heap::collect`]). Only between frames: a thread being stepped has
+    /// its frames off the thread list. [`Vm::run_frame`] calls it once
+    /// enough has been allocated since the last sweep.
+    pub fn collect(&mut self, host: &dyn Host) {
+        debug_assert!(self.spawn_depth == 0 && self.pool.is_none());
+        let target = |t: &Target| match *t {
+            Target::Struct(s) => Value::Struct(s),
+            Target::Entity(_) => Value::Undefined,
+        };
+        let mut roots = vec![
+            Value::Struct(self.level),
+            Value::Array(self.game),
+            Value::Struct(self.anim),
+        ];
+        roots.extend(self.thread_returned);
+        for t in &self.threads {
+            for f in &t.frames {
+                roots.extend_from_slice(&f.locals);
+                roots.extend_from_slice(&f.stack[..f.sp as usize]);
+                roots.extend(f.recv.as_ref().map(target));
+            }
+            roots.extend(t.endons.iter().map(|e| target(&e.0)));
+            if let sched::ThreadState::WaitingNotify {
+                target: on,
+                matches,
+                ..
+            } = &t.state
+            {
+                roots.push(target(on));
+                roots.extend_from_slice(matches);
+            }
+        }
+        host.roots(&mut roots);
+        self.heap.collect(roots);
     }
 
     pub fn set_budget(&mut self, budget: u32) {
@@ -1451,6 +1496,7 @@ pub(crate) mod tests {
                     _ => Err(ErrorKind::BadType("double wants an int")),
                 },
                 "isdefined" => Ok(Value::Int((args[0] != Value::Undefined) as i32)),
+                "spawnstruct" => Ok(Value::Struct(cx.new_struct())),
                 "boom" => panic!("boom"),
                 _ => Ok(Value::Undefined),
             }
@@ -1468,6 +1514,10 @@ pub(crate) mod tests {
         fn set_field(&mut self, cx: &mut Cx, e: EntId, f: Atom, v: Value) -> Result<(), ErrorKind> {
             self.fields.insert((e.0, cx.resolve(f).to_string()), v);
             Ok(())
+        }
+
+        fn roots(&self, out: &mut Vec<Value>) {
+            out.extend(self.fields.values());
         }
     }
 
@@ -1526,6 +1576,106 @@ pub(crate) mod tests {
                 assert!(vm.interner.bytes() < vm.max_string_bytes + 100);
             }
         }
+    }
+
+    /// Runs `src`'s `main` as a thread on entity 1 over `frames` 50 ms
+    /// frames, every frame free of errors; with `sweep`, a sweep after each.
+    fn run_frames(src: &str, frames: i32, sweep: bool) -> (TestHost, Vm) {
+        let ast = crate::parse::parse_file(src).unwrap();
+        let mut vm = Vm::new();
+        let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+        vm.install(fns).unwrap();
+        let mut host = TestHost::default();
+        let main = vm.func_ref("test/script", "main");
+        let me = Some(Target::Entity(EntId(1, 0)));
+        vm.start_thread(&mut host, main, me, vec![]);
+        for frame in 1..=frames {
+            let errors = vm.run_frame(&mut host, frame * 50);
+            assert!(errors.is_empty(), "frame {frame}: {errors:?}");
+            if sweep {
+                vm.collect(&host);
+            }
+        }
+        (host, vm)
+    }
+
+    fn level_value(vm: &Vm, name: &str) -> Value {
+        let f = vm.interner().get_folded(name).unwrap();
+        vm.heap().get_field(vm.level_id(), f)
+    }
+
+    /// A thread that builds and drops arrays every frame, through a helper
+    /// that copies at the write as stock `add_to_array` does, leaves the
+    /// heap flat: what its locals drop is freed and the slots reused.
+    #[test]
+    fn arrays_a_thread_drops_are_freed_and_the_heap_stays_flat() {
+        let src = "main() { for (;;) { for (i = 0; i < 100; i++) { \
+             a = []; a[0] = i; a = add(a, i); level.last = a; } wait 0.05; } } \
+             add(arr, v) { arr[arr.size] = v; return arr; }";
+        let (_, vm) = run_frames(src, 1000, false);
+        let (arrays, _) = vm.heap().objects();
+        assert!(arrays < 40_000, "{arrays} array slots for 300,000 arrays");
+        let Value::Array(a) = level_value(&vm, "last") else {
+            panic!("level.last is not an array");
+        };
+        let got: Vec<_> = vm.heap().array_entries(a);
+        let want: Vec<_> = (0..2).map(|i| (ArrayKey::Int(i), Value::Int(99))).collect();
+        assert_eq!(got, want);
+    }
+
+    /// What a sweep keeps reads as it did, and the slots it frees go to
+    /// new objects: two locals' array stays two arrays, an array a field
+    /// alone holds still copies for a new holder, `a[0] = a` stores the old
+    /// value, an entity field's array (the host's root) and a notify's
+    /// argument survive, and a struct only an endon or a `waittill` names
+    /// is not reused for another struct's notify.
+    #[test]
+    fn a_sweep_between_frames_keeps_what_a_script_can_still_reach() {
+        let src = r#"main() {
+             a = []; a[0] = 1; b = a;
+             level.f = []; level.f[0] = 1;
+             c = []; c[1] = 5;
+             self.list = []; self.list[0] = 7;
+             s = spawnstruct();
+             thread waiter(s);
+             thread guarded();
+             thread parked();
+             wait 0.05;
+             for (i = 0; i < 10; i++) { x = []; x[0] = i; y = spawnstruct(); y notify("die"); }
+             b[1] = 2;
+             g = level.f; g[1] = 2; g[2] = 3;
+             c[0] = c;
+             arg = []; arg[0] = 3;
+             wait 0.05;
+             s notify("go", arg);
+             wait 0.3;
+             level.copies = a.size * 10 + b.size;
+             level.field = level.f.size * 10 + g.size;
+             level.self = isdefined(c[0][0]) * 10 + c[0][1];
+             level.ent = self.list[0];
+           }
+           waiter(s) { s waittill("go", got); level.got = got[0]; }
+           guarded() {
+             level.k = spawnstruct(); level.k endon("die"); level.k = undefined;
+             wait 0.2; level.alive = 1;
+           }
+           parked() { level.p = spawnstruct(); thread unset(); level.p waittill("die"); level.woke = 1; }
+           unset() { wait 0.01; level.p = undefined; }"#;
+        let (_, vm) = run_frames(src, 20, true);
+        let want = [
+            ("copies", 12),
+            ("field", 13),
+            ("self", 5),
+            ("ent", 7),
+            ("got", 3),
+            ("alive", 1),
+        ];
+        for (name, v) in want {
+            assert_eq!(level_value(&vm, name), Value::Int(v), "level.{name}");
+        }
+        assert_eq!(vm.thread_count(), 1, "the parked thread still waits");
+        // The garbage went: what is left is a handful of objects.
+        assert!(vm.heap().vars() < 40, "{} vars", vm.heap().vars());
     }
 
     /// `s = s + s` stops at `MAX_STRING_LEN` with a script error, in both
@@ -2560,6 +2710,7 @@ pub(crate) mod tests {
             ) -> Result<(), ErrorKind> {
                 Ok(())
             }
+            fn roots(&self, _out: &mut Vec<Value>) {}
         }
 
         let src = "main() { a = getentarray(\"x\", \"classname\"); return a[1]; }";

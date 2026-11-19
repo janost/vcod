@@ -204,17 +204,18 @@ fn numeric_cmp(a: Value, b: Value, f: impl Fn(f32, f32) -> bool) -> Result<Value
 pub(crate) const MAX_STRING_LEN: usize = 8192;
 
 /// vcod's ceiling on a level's script variables: every struct and array
-/// allocated with their fields and elements ([`crate::heap::Heap::vars`]),
-/// plus the live threads. The heap frees nothing within a level, so this
-/// counts garbage too. Past it the allocating thread ends with
-/// `ErrorKind::TooManyVariables`, where retail's fixed pool raises
-/// `exceeded maximum number of script variables` (cod11-gsc-language.md,
-/// "Runtime errors below developer 1"). A stock CoD4 round with 12 bots
-/// adds about 17,000 a minute (cod2-gsc-diff.md 3.7).
+/// the last sweep kept or allocated since, with their fields and elements
+/// ([`crate::heap::Heap::vars`]), plus the live threads, so the garbage of
+/// the frames since the sweep counts too. Past it the allocating thread
+/// ends with `ErrorKind::TooManyVariables`, where retail's fixed pool
+/// raises `exceeded maximum number of script variables`
+/// (cod11-gsc-language.md, "Runtime errors below developer 1"). A stock
+/// CoD4 round with 12 bots allocates about 17,000 a minute
+/// (cod2-gsc-diff.md 3.7).
 pub(crate) const MAX_VARIABLES: u64 = 64_000_000;
 
-/// The same ceiling on the interned strings' bytes, which no string is
-/// freed from either.
+/// The same ceiling on the interned strings' bytes, which the interner
+/// never frees.
 pub(crate) const MAX_STRING_BYTES: usize = 256 << 20;
 
 /// `lhs` and `rhs` joined, or a script error past [`MAX_STRING_LEN`].
