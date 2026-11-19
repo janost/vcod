@@ -315,6 +315,8 @@ fn main_track() -> (MainTrackBuilder, (ReverbHandle, VolumeControlHandle)) {
 /// The kira manager voices start on: the output device's, or under test
 /// kira's mock backend, which renders only when [`AudioSystem::pump_mixer`]
 /// runs it.
+// one per AudioSystem; the mock variant exists only in the test build
+#[cfg_attr(test, expect(clippy::large_enum_variant))]
 enum Mixer {
     Device(AudioManager<DefaultBackend>),
     #[cfg(test)]
