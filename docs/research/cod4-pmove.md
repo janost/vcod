@@ -367,6 +367,21 @@ instructions below). No capture climbs one yet.
   instructions).
 - The ladder arm of `PM_UpdateViewAngles` is section 8's; the rung
   footstep is section 9's.
+- vcod: `vcod_common::pmladder`, CoD2's body, with 1.7's hooks in
+  `vcod_cod4::pmove`'s `ladder.rs`: the kept `free_scale`, the press's
+  zero test, the float yaw push, the floor folds, the kept normalizes and
+  `vectoyaw`, and the rung's `EV_FOOTSTEP_RUN`. `slide::pins`' `ladder` pin
+  and `ladder::tests` hold it; no capture does. VERIFIED (the tests).
+- vcod still rounds to a float where the ranges above keep the value on
+  the stack: the check's flat view (0x8059e78..0x8059ea1); the strafe's
+  `scale * 0.2 * rm` before the add (0x805d85d..0x805d893); the bleed's
+  `along` and drop (0x805dcf3..0x805ddaf); the strip's dot, the zero test
+  on the stored x and y, and the flat speed squared (0x805d917..0x805d9be);
+  the push-off's normalizes and its reflection (0x8050c0f..0x8050d65); and
+  the yaw cap's `AngleDelta` and excess before the push
+  (0x8057f19..0x8057f1e). The climb's z multiplies `fm * 0.5 * up * scale`
+  where 1.7 reads `up * 0.5 * scale * fm`. VERIFIED (the instructions
+  against `pmladder`). Each waits on a 1.7 ladder capture (section 14).
 
 The climb's wish velocity has only a vertical part (the forward key
 times `clamp((forward.z + 0.25) * 2.5, -1, 1)`) and the strafe laid on
@@ -771,7 +786,8 @@ server holds the float itself.
 - `PM_StepSlideMove` (0x805e930) and `PM_SlideMove` (0x805e030) are read
   in section 5; the rest of pmove in the kept model is unread.
 - Captures for the sprint, the ladder, a prone body and the sighted
-  walk.
+  walk. The ladder's kept values (section 7's last list) wait on its
+  capture.
 - The server's open items are section 15's last list.
 
 ## 15. The server: pmove in the think

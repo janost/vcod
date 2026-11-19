@@ -8,7 +8,7 @@
 use glam::Vec3;
 pub(crate) use vcod_common::x87::{
     angle_delta_floor as angle_delta, angle_normalize180_floor as angle_normalize180,
-    angle_normalize360_floor as angle_normalize360, dot, dot2, length_stored as length,
+    angle_normalize360_floor as angle_normalize360, dot, length_stored as length,
     lerp_stored as lerp, ma_stored as ma, normalize2_kept as normalize2, scale as scale_kept,
     scale_stored as scale, sqrt_stored as sqrt, vec3_normalize_kept as normalize,
     vec3_normalize_to_kept as normalize_to, vectopitch_kept as vectopitch,

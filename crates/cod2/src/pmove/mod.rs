@@ -424,6 +424,9 @@ impl PmState for PlayerState {
     const PMF_LADDER: u32 = pmf::LADDER;
     const PMF_LADDER_LEFT: u32 = pmf::LADDER_LEFT;
     const PMF_JUMPING: u32 = pmf::JUMPING;
+    const PMF_TIME_LAND: u32 = pmf::TIME_LAND;
+    const PMF_TIME_KNOCKBACK: u32 = pmf::TIME_KNOCKBACK;
+    const PM_DEAD: i32 = pm_type::DEAD;
 
     fn command_time(&mut self) -> &mut i32 {
         &mut self.command_time
@@ -449,11 +452,32 @@ impl PmState for PlayerState {
     fn timers(&mut self) -> [&mut i32; 2] {
         [&mut self.legs_timer, &mut self.torso_timer]
     }
+    fn pm_type(&mut self) -> &mut i32 {
+        &mut self.pm_type
+    }
+    fn gravity(&mut self) -> &mut i32 {
+        &mut self.gravity
+    }
+    fn jump_time(&mut self) -> &mut i32 {
+        &mut self.jump_time
+    }
+    fn ladder_vec(&mut self) -> &mut Vec3 {
+        &mut self.ladder_vec
+    }
+    fn view_angles(&mut self) -> &mut [f32; 3] {
+        &mut self.view_angles
+    }
+    fn movement_dir(&mut self) -> &mut i32 {
+        &mut self.movement_dir
+    }
+    fn effective_stance(&self) -> Stance {
+        PlayerState::effective_stance(self)
+    }
 }
 
 /// A trace as CoD2's pmove reads it: no end point.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct Tr {
+pub struct Tr {
     pub fraction: f32,
     pub normal: Vec3,
     pub surface_flags: u32,

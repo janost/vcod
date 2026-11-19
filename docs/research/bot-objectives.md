@@ -3241,7 +3241,7 @@ runs).
   INFERRED (the follower's path per tick). 1.7's `PM_LadderMove` is
   CoD2's: the climb is the forward key times the view's pitch, the
   strafe along the face, no flat move into it
-  (`vcod_cod4::pmove::ladder::ladder_move`, cod4-pmove.md 7), so the
+  (`vcod_common::pmladder::ladder_move`, cod4-pmove.md 7), so the
   rungs let go only past their top. INFERRED. The CoD4 view
   now sets `BotView::tops_out`, as CoD2's does: a head across the face
   is climbed on to.
