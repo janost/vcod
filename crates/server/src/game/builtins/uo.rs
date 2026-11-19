@@ -134,11 +134,11 @@ pub fn iprint_line_bold(
     match recv {
         Some(_) => {
             let slot = client_receiver(host, recv)?;
-            host.client_commands.push((slot, cmd));
+            host.client_commands.push(slot, cmd);
         }
         None => {
             for slot in host.client_slots() {
-                host.client_commands.push((slot, cmd.clone()));
+                host.client_commands.push(slot, cmd.clone());
             }
         }
     }
@@ -153,7 +153,7 @@ fn slot_weapon(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<(usize, usize), ErrorKind> {
-    let client = client_receiver(host, recv)?;
+    let client = client_receiver(host, recv)?.index();
     let Some(Value::String(name)) = args.first() else {
         return Err(ErrorKind::BadType("that builtin takes a weapon slot name"));
     };
@@ -215,7 +215,7 @@ pub fn attack_button_pressed(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let held = host.clients[slot].buttons & vcod_common::net::msg::BUTTON_ATTACK != 0;
     Ok(Value::Int(i32::from(held)))
 }
@@ -231,7 +231,7 @@ pub fn is_in_vehicle(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let seated =
         host.vehicles.seat_of(slot).is_some() || host.vehicles.stale_seated.contains(&slot);
     Ok(Value::Int(i32::from(seated)))
@@ -248,7 +248,7 @@ pub fn view_kick(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let (Some(force), Some(Value::Vector(from))) = (args.first(), args.get(1)) else {
         return Err(ErrorKind::Custom(
             "USAGE: <player> viewkick <force 0-127> <source position>\n".into(),
@@ -452,7 +452,7 @@ pub fn play_local_announcer_sound(
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
     let idx = super::sound::alloc_alias(host, cx, args)? - super::sound::sounds_base(host);
-    host.client_commands.push((slot, format!("S {idx}")));
+    host.client_commands.push(slot, format!("S {idx}"));
     Ok(Value::Undefined)
 }
 
@@ -475,7 +475,7 @@ pub fn rewind_fx(
     };
     let slot = client_receiver(host, Some(Target::Entity(*id)))?;
     host.client_commands
-        .push((slot, format!("F {}", secs.wrapping_mul(1000))));
+        .push(slot, format!("F {}", secs.wrapping_mul(1000)));
     Ok(Value::Undefined)
 }
 
@@ -491,7 +491,8 @@ pub fn get_stance(
 ) -> Result<Value, ErrorKind> {
     use vcod_common::pmove::Stance;
     let slot = client_receiver(host, recv)
-        .map_err(|_| ErrorKind::Custom("GetStance is only defined for players.".into()))?;
+        .map_err(|_| ErrorKind::Custom("GetStance is only defined for players.".into()))?
+        .index();
     let stance = match host.clients[slot].stance {
         Stance::Prone => "prone",
         Stance::Crouch => "crouch",

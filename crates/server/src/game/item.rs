@@ -1135,7 +1135,7 @@ pub fn touch(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, touched: 
         host.keep_script_line(line);
     }
     for c in out.commands {
-        host.client_commands.push((slot, c));
+        host.command_to(slot, c);
     }
     if !out.taken {
         return;

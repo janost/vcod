@@ -209,6 +209,9 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     mirrors, sessions, client events), `objectives.rs` (what the bots
     read), `testing.rs` the test seams, `tests.rs`.
   - `game/builtins/`: the script builtins per game.
+  - `game/slot.rs` `ClientSlot`, a slot checked where it is made
+    (`of_entity` for a script entity); `game/commands.rs` the game's queued
+    server commands, each to a `Recipient` (`All` or one `ClientSlot`).
 - Bots: `bots.rs` + `nav.rs`, and `bots/driver.rs`, the per-tick driver over
   `BotWorld`. `bots.rs` holds `Skill`, `Bot`, its think loop (`think`,
   `think_body`, `goal`) and the getters; the brain's seams sit beside it in

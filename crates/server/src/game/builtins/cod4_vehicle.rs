@@ -6,6 +6,7 @@
 //! set (`game::cod4::vehicle`). Semantics are INFERRED
 //! (`GScr_SpawnPlane`, `GScr_SpawnHelicopter`, `CMD_VEH_*`).
 
+use crate::game::slot::ClientSlot;
 use glam::Vec3;
 use vcod_gsc::{Cx, ErrorKind, Host, Target, Value};
 
@@ -96,9 +97,9 @@ fn owner(host: &mut GameHost, cx: &mut Cx, v: Option<&Value>) -> Result<(usize, 
     let Some(&Value::Entity(id)) = v else {
         return Err(ErrorKind::Custom("Owner entity is not a player".into()));
     };
-    if host.ents.get(id).is_none_or(|e| e.client.is_none()) {
+    let Some(slot) = ClientSlot::of_entity(&host.ents, id) else {
         return Err(ErrorKind::Custom("Owner entity is not a player".into()));
-    }
+    };
     let f = cx.intern_folded("sessionteam");
     let team = match host.get_field(cx, id, f) {
         Value::String(t) => match cx.resolve(t) {
@@ -109,7 +110,7 @@ fn owner(host: &mut GameHost, cx: &mut Cx, v: Option<&Value>) -> Result<(usize, 
         },
         _ => 0,
     };
-    Ok((id.0 as usize, team))
+    Ok((slot.index(), team))
 }
 
 /// `spawnPlane(owner, classname, origin[, spawnflags])`: the classname's

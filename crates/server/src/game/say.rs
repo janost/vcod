@@ -208,7 +208,7 @@ impl GameHost {
             } else {
                 cmd.clone()
             };
-            self.client_commands.push((slot, line));
+            self.command_to(slot, line);
         }
     }
 
@@ -330,6 +330,7 @@ pub(crate) fn tokenize(s: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::commands::one;
     use crate::game::scoreboard::RosterSlot;
     use vcod_gsc::{Host, Value};
 
@@ -375,13 +376,13 @@ mod tests {
         let all = "h \"\u{15}\u{15}p0^7: ^7hi\"".to_string();
         assert_eq!(
             std::mem::take(&mut host.client_commands),
-            [(0, all.clone()), (1, all.clone()), (2, all)]
+            [(one(0), all.clone()), (one(1), all.clone()), (one(2), all)]
         );
         say(&mut vm, &mut host, 0, SayMode::Team, "go");
         let team = "i \"\u{15}\u{15}(\u{14}GAME_ALLIES\u{15})p0^7: ^5go\"".to_string();
         assert_eq!(
             std::mem::take(&mut host.client_commands),
-            [(0, team.clone()), (2, team)]
+            [(one(0), team.clone()), (one(2), team)]
         );
     }
 
@@ -398,14 +399,14 @@ mod tests {
         let dead = "h \"\u{15}\u{15}(\u{14}GAME_DEAD\u{15})p0^7: ^7x\"".to_string();
         assert_eq!(
             std::mem::take(&mut host.client_commands),
-            [(0, dead.clone()), (2, dead)]
+            [(one(0), dead.clone()), (one(2), dead)]
         );
         // A spectator's team say is a plain say.
         say(&mut vm, &mut host, 2, SayMode::Team, "y");
         let spec = "h \"\u{15}\u{15}(\u{14}GAME_SPECTATOR\u{15})p2^7: ^7y\"".to_string();
         assert_eq!(
             std::mem::take(&mut host.client_commands),
-            [(0, spec.clone()), (2, spec)]
+            [(one(0), spec.clone()), (one(2), spec)]
         );
     }
 
@@ -473,12 +474,12 @@ mod tests {
         let line = "h \"\u{15}\u{15}^9vcod^7: ^7hi\"".to_string();
         assert_eq!(
             std::mem::take(&mut host.client_commands),
-            [(0, line.clone()), (1, line)]
+            [(one(0), line.clone()), (one(1), line)]
         );
         // A squad say from a speaker in no squad is a team say.
         say(&mut vm, &mut host, 1, SayMode::Squad, "go");
         let team = "i \"\u{15}\u{15}^8(\u{14}GAME_ALLIES\u{15})p1^7: ^5go\"".to_string();
-        assert_eq!(std::mem::take(&mut host.client_commands), [(1, team)]);
+        assert_eq!(std::mem::take(&mut host.client_commands), [(one(1), team)]);
     }
 
     /// A speaker in a squad (`sessionsquad`, 1.5b 0x3b515) says to his
@@ -509,7 +510,7 @@ mod tests {
             .to_string();
         assert_eq!(
             std::mem::take(&mut host.client_commands),
-            [(0, line.clone()), (2, line)]
+            [(one(0), line.clone()), (one(2), line)]
         );
         // `ClientConnect` clears it (1.5b 0x4c680).
         vm.with_cx(|cx| {
@@ -535,13 +536,13 @@ mod tests {
         let dead = "h \"\u{15}\u{15}^9(\u{14}GAME_DEAD\u{15})p0^7: ^7x\"".to_string();
         assert_eq!(
             std::mem::take(&mut host.client_commands),
-            [(0, dead.clone())]
+            [(one(0), dead.clone())]
         );
         host.cvars.set("g_deadChat", "1");
         say(&mut vm, &mut host, 0, SayMode::All, "x");
         assert_eq!(
             std::mem::take(&mut host.client_commands),
-            [(0, dead.clone()), (1, dead)]
+            [(one(0), dead.clone()), (one(1), dead)]
         );
     }
 

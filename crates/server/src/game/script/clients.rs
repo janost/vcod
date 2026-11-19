@@ -2,6 +2,7 @@
 //! roster reads, client events and the carry.
 
 use super::*;
+use crate::game::commands::Recipient;
 
 impl ScriptRuntime {
     /// `ClientEndFrame`'s `takedamage` write.
@@ -270,13 +271,13 @@ impl ScriptRuntime {
 
     /// The per-client server commands the script queued this frame, in call
     /// order. `Server` sends them; nothing here can reach a netchan.
-    pub fn take_client_commands(&mut self) -> Vec<(usize, String)> {
+    pub fn take_client_commands(&mut self) -> Vec<(Recipient, String)> {
         self.host.client_commands.take()
     }
 
     /// [`Self::take_client_commands`] with each command's write stamp, the
     /// order CoD2's engine sends them in among the configstrings.
-    pub fn take_client_commands_stamped(&mut self) -> Vec<(u64, usize, String)> {
+    pub fn take_client_commands_stamped(&mut self) -> Vec<(u64, Recipient, String)> {
         self.host.client_commands.take_stamped()
     }
 
@@ -294,7 +295,7 @@ impl ScriptRuntime {
         target: Option<usize>,
         mode: crate::game::say::SayMode,
         text: &str,
-    ) -> Vec<(usize, String)> {
+    ) -> Vec<(Recipient, String)> {
         let from = self.host.client_commands.len();
         let host = &mut self.host;
         self.vm.with_cx(|cx| host.say(cx, slot, target, mode, text));

@@ -1152,7 +1152,7 @@ impl Cod4Server {
                     .map_or("", |(_, r)| r);
                 if let Some(line) = crate::game::say::concat_args(rest) {
                     for (to, line) in level.rt.say(slot, None, mode, &line) {
-                        self.send_server_command(to, &line);
+                        self.send_to(to, &line);
                     }
                 }
             }
@@ -1277,8 +1277,7 @@ impl Cod4Server {
                     Inactivity::Warn => level
                         .rt
                         .host
-                        .client_commands
-                        .push((slot, "c \"GAME_INACTIVEDROPWARNING\"".to_string())),
+                        .command_to(slot, "c \"GAME_INACTIVEDROPWARNING\"".to_string()),
                     Inactivity::Keep => {}
                 }
                 level.client_think(slot, cmd);

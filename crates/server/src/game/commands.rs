@@ -4,21 +4,49 @@
 //! (CoD2's `SV_SetConfigstring` and `SV_GameSendServerCommand`,
 //! cod2-map-cycle.md 3) can put them back in one order.
 
-/// The slot a command to every client goes to (`SV_GameSendServerCommand(-1,
-/// ..)`): the engine fans it out to every client past `CS_CONNECTED`.
-/// CoD2's and CoD4's builtins and votes queue it; vcod's CoD1 server never
-/// sees one.
-pub const ALL_CLIENTS: usize = usize::MAX;
+use super::slot::ClientSlot;
+
+/// Who a queued server command goes to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Recipient {
+    /// `SV_GameSendServerCommand(-1, ..)`: the engine fans it out to every
+    /// client past `CS_CONNECTED`. CoD2's and CoD4's builtins and votes
+    /// queue it; vcod's CoD1 server never sees one.
+    All,
+    One(ClientSlot),
+}
+
+/// The client number `SV_GameSendServerCommand` takes: -1 for every client.
+impl std::fmt::Display for Recipient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Recipient::All => f.write_str("-1"),
+            Recipient::One(slot) => slot.fmt(f),
+        }
+    }
+}
+
+impl From<ClientSlot> for Recipient {
+    fn from(slot: ClientSlot) -> Self {
+        Recipient::One(slot)
+    }
+}
+
+/// `slot` as a recipient, for tests that name slots by number.
+#[cfg(test)]
+pub fn one(slot: usize) -> Recipient {
+    Recipient::One(ClientSlot::at(slot))
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ClientCommands {
-    list: Vec<(usize, String)>,
+    list: Vec<(Recipient, String)>,
     seqs: Vec<u64>,
 }
 
 impl ClientCommands {
-    pub fn push(&mut self, cmd: (usize, String)) {
-        self.list.push(cmd);
+    pub fn push(&mut self, to: impl Into<Recipient>, text: String) {
+        self.list.push((to.into(), text));
         self.seqs.push(crate::configstrings::next_write_seq());
     }
 
@@ -28,18 +56,18 @@ impl ClientCommands {
     }
 
     /// The commands from `at` on, taken out.
-    pub fn split_off(&mut self, at: usize) -> Vec<(usize, String)> {
+    pub fn split_off(&mut self, at: usize) -> Vec<(Recipient, String)> {
         self.seqs.truncate(at);
         self.list.split_off(at)
     }
 
-    pub fn take(&mut self) -> Vec<(usize, String)> {
+    pub fn take(&mut self) -> Vec<(Recipient, String)> {
         self.seqs.clear();
         std::mem::take(&mut self.list)
     }
 
     /// Every command with its write stamp, oldest first.
-    pub fn take_stamped(&mut self) -> Vec<(u64, usize, String)> {
+    pub fn take_stamped(&mut self) -> Vec<(u64, Recipient, String)> {
         let seqs = std::mem::take(&mut self.seqs);
         seqs.into_iter()
             .zip(std::mem::take(&mut self.list))
@@ -49,20 +77,20 @@ impl ClientCommands {
 }
 
 impl std::ops::Deref for ClientCommands {
-    type Target = [(usize, String)];
+    type Target = [(Recipient, String)];
     fn deref(&self) -> &Self::Target {
         &self.list
     }
 }
 
-impl PartialEq<Vec<(usize, String)>> for ClientCommands {
-    fn eq(&self, other: &Vec<(usize, String)>) -> bool {
+impl PartialEq<Vec<(Recipient, String)>> for ClientCommands {
+    fn eq(&self, other: &Vec<(Recipient, String)>) -> bool {
         self.list == *other
     }
 }
 
-impl<const N: usize> PartialEq<[(usize, String); N]> for ClientCommands {
-    fn eq(&self, other: &[(usize, String); N]) -> bool {
+impl<const N: usize> PartialEq<[(Recipient, String); N]> for ClientCommands {
+    fn eq(&self, other: &[(Recipient, String); N]) -> bool {
         self.list == other
     }
 }
@@ -73,8 +101,8 @@ mod tests {
 
     fn three() -> ClientCommands {
         let mut c = ClientCommands::default();
-        for (to, text) in [(0, "a"), (1, "b"), (ALL_CLIENTS, "c")] {
-            c.push((to, text.to_string()));
+        for (to, text) in [(one(0), "a"), (one(1), "b"), (Recipient::All, "c")] {
+            c.push(to, text.to_string());
         }
         c
     }
@@ -89,13 +117,13 @@ mod tests {
         let tail = c.split_off(1);
         assert_eq!(
             tail,
-            vec![(1, "b".to_string()), (ALL_CLIENTS, "c".to_string())]
+            vec![(one(1), "b".to_string()), (Recipient::All, "c".to_string())]
         );
-        c.push((2, "d".to_string()));
+        c.push(one(2), "d".to_string());
         let kept = c.take_stamped();
         assert_eq!(kept.len(), 2);
-        assert_eq!((kept[0].1, kept[0].2.as_str()), (0, "a"));
-        assert_eq!((kept[1].1, kept[1].2.as_str()), (2, "d"));
+        assert_eq!((kept[0].1, kept[0].2.as_str()), (one(0), "a"));
+        assert_eq!((kept[1].1, kept[1].2.as_str()), (one(2), "d"));
         assert!(kept[0].0 < kept[1].0);
         assert!(c.is_empty());
         assert!(c.take_stamped().is_empty());
@@ -110,10 +138,10 @@ mod tests {
         ] {
             let mut c = three();
             drain(&mut c);
-            c.push((5, "e".to_string()));
+            c.push(one(5), "e".to_string());
             let s = c.take_stamped();
             assert_eq!(s.len(), 1);
-            assert_eq!((s[0].1, s[0].2.as_str()), (5, "e"));
+            assert_eq!((s[0].1, s[0].2.as_str()), (one(5), "e"));
         }
     }
 }

@@ -72,7 +72,8 @@ pub(super) fn client_claim_trigger(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)
-        .map_err(|_| ErrorKind::BadType("clientclaimtrigger: claimer must be a client."))?;
+        .map_err(|_| ErrorKind::BadType("clientclaimtrigger: claimer must be a client."))?
+        .index();
     let t = use_trigger(host, entity_arg(args)?)?;
     if t.claimer.is_none_or(|c| usize::from(c) == slot) {
         t.claimer = Some(slot as u16);
@@ -89,7 +90,8 @@ pub(super) fn client_release_trigger(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)
-        .map_err(|_| ErrorKind::BadType("clientreleasetrigger: releaser must be a client."))?;
+        .map_err(|_| ErrorKind::BadType("clientreleasetrigger: releaser must be a client."))?
+        .index();
     let t = use_trigger(host, entity_arg(args)?)?;
     if t.claimer.is_some_and(|c| usize::from(c) == slot) {
         t.claimer = None;

@@ -5,6 +5,7 @@ use crate::game::builtins::client::client_receiver;
 use crate::game::combat::{DFLAG_NO_KNOCKBACK, DFLAG_RADIUS};
 use crate::game::host::{GameHost, SimOp};
 use crate::game::script::CALLBACK_SETUP;
+use crate::game::slot::ClientSlot;
 use crate::game::temp_entity::{Scope, TempEntity};
 use glam::Vec3;
 use vcod_common::net::protocol::ENTITYNUM_WORLD;
@@ -49,7 +50,7 @@ pub fn finish_player_damage(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let [
         inflictor,
         attacker,
@@ -73,9 +74,7 @@ pub fn finish_player_damage(
         return Ok(Value::Undefined);
     }
     let attacker_slot = match attacker {
-        Value::Entity(a) if host.ents.get(*a).is_some_and(|e| e.client.is_some()) => {
-            Some(a.0 as usize)
-        }
+        Value::Entity(a) => ClientSlot::of_entity(&host.ents, *a).map(ClientSlot::index),
         _ => None,
     };
     let dir = match dir {
@@ -444,7 +443,7 @@ pub fn suicide(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(args) = suicide_effects(host, cx, slot) else {
         return Ok(Value::Undefined);
     };
@@ -540,8 +539,8 @@ pub fn radius_damage(
         (entity(args.get(4)), entity(args.get(5)))
     };
     let candidates = blast_candidates(host, cx, &blast);
-    let by = attacker.filter(|&e| host.ents.get(e).is_some_and(|e| e.client.is_some()));
-    host.blast_noises.push((*origin, by.map(|e| e.0 as usize)));
+    let by = attacker.and_then(|e| ClientSlot::of_entity(&host.ents, e));
+    host.blast_noises.push((*origin, by.map(ClientSlot::index)));
     host.radius_ignore_active = host.ignore_radius_damage;
     host.blasts.push(ScriptBlast {
         blast,
@@ -600,14 +599,12 @@ pub fn blast_step(host: &mut GameHost, cx: &mut Cx) {
             return;
         }
         let id = walk.candidates.remove(0);
-        let slot = id.0 as usize;
-        let Some(ent) = host.ents.get(id) else {
+        let Some(slot) = ClientSlot::of_entity(&host.ents, id).map(ClientSlot::index) else {
+            if host.ents.get(id).is_some() {
+                blast_entity(host, cx, id);
+            }
             continue;
         };
-        if ent.client.is_none() {
-            blast_entity(host, cx, id);
-            continue;
-        }
         if !host.clients[slot].vitals.takedamage || host.radius_ignore_active {
             continue;
         }

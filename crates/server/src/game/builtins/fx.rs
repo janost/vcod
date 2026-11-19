@@ -5,6 +5,7 @@
 //! (docs/research/cod11-events-and-fx.md 2).
 
 use crate::game::host::GameHost;
+use crate::game::slot::ClientSlot;
 use crate::game::temp_entity::{Quake, Scope, TempEntity};
 use vcod_gsc::{Cx, ErrorKind, Host, Target, Value};
 
@@ -228,18 +229,15 @@ pub fn play_fx_on_tag(
     let parm = host
         .allocators
         .fx_tag_index(&mut host.configstrings, fx, &tag)?;
-    let Some(e) = host.ents.get_mut(ent) else {
-        return Ok(Value::Undefined);
-    };
-    if e.client.is_some() {
+    if let Some(slot) = ClientSlot::of_entity(&host.ents, ent) {
         host.client_sim_ops.push((
-            ent.0 as usize,
+            slot.index(),
             crate::game::host::SimOp::Event {
                 event: EV_PLAY_FX_ON_TAG,
                 parm,
             },
         ));
-    } else {
+    } else if let Some(e) = host.ents.get_mut(ent) {
         e.events.add(EV_PLAY_FX_ON_TAG, parm);
     }
     Ok(Value::Undefined)

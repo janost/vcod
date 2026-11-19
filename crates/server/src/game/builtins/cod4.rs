@@ -11,6 +11,7 @@ use vcod_gsc::{Cx, ErrorKind, Host, Target, Value};
 use super::Builtin;
 use super::cvar;
 use crate::game::host::GameHost;
+use crate::game::slot::ClientSlot;
 use vcod_common::net::protocol::CsRange;
 
 pub const NAMES: &[(&str, Builtin)] = &[
@@ -97,7 +98,7 @@ fn get_guid(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = super::client::client_receiver(host, recv)?;
+    let slot = super::client::client_receiver(host, recv)?.index();
     if !args.is_empty() {
         return Err(ErrorKind::BadType("USAGE: self getGuid()"));
     }
@@ -341,7 +342,7 @@ fn get_stat(
     let Some(&Value::Int(i)) = a.first() else {
         return Err(ErrorKind::BadType("getStat takes an int"));
     };
-    let slot = stat_player(host, id, "getstat")?;
+    let slot = stat_player(host, id, "getstat")?.index();
     if !(0..=3499).contains(&i) {
         return Err(ErrorKind::Custom(format!("getstat: invalid index {i}")));
     }
@@ -357,13 +358,9 @@ fn get_stat(
 
 /// The slot of `getStat`'s or `setStat`'s receiver, or `<name>: entity
 /// must be a player entity` (0x821f090, 0x821ee1c).
-fn stat_player(host: &GameHost, id: vcod_gsc::EntId, name: &str) -> Result<usize, ErrorKind> {
-    match host.ents.get(id) {
-        Some(e) if e.client.is_some() => Ok(id.0 as usize),
-        _ => Err(ErrorKind::Custom(format!(
-            "{name}: entity must be a player entity"
-        ))),
-    }
+fn stat_player(host: &GameHost, id: vcod_gsc::EntId, name: &str) -> Result<ClientSlot, ErrorKind> {
+    ClientSlot::of_entity(&host.ents, id)
+        .ok_or_else(|| ErrorKind::Custom(format!("{name}: entity must be a player entity")))
 }
 
 /// `self setStat(index, value)` (`GScr_SetStat` 0x80c5490): a receiver
@@ -383,7 +380,8 @@ fn set_stat(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = super::entity::entity_receiver(recv)?;
-    let slot = stat_player(host, id, "setstat")?;
+    let to = stat_player(host, id, "setstat")?;
+    let slot = to.index();
     if host
         .cvars
         .get("developer_script")
@@ -416,7 +414,7 @@ fn set_stat(
     // 3498 and 3499 pass the builtin's check and `SV_SetClientStat` drops.
     if stats.get(i as u16).is_some_and(|old| old != v as u32) {
         stats.set(i as u16, v as u32);
-        host.client_commands.push((slot, format!("N {i} {v}")));
+        host.client_commands.push(to, format!("N {i} {v}"));
     }
     Ok(Value::Undefined)
 }

@@ -444,7 +444,7 @@ fn clock(host: &mut GameHost, slot: usize) -> &mut RiderClock {
 }
 
 fn send(host: &mut GameHost, slot: usize, cmd: &str) {
-    host.client_commands.push((slot, cmd.to_string()));
+    host.command_to(slot, cmd.to_string());
 }
 
 /// Raised for the next frame's threads, as an engine notify from a cmd.
@@ -702,6 +702,7 @@ pub fn own_weapon(kind: i32, seat: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::commands::one;
     use crate::game::vehicle::info::VehicleInfo;
     use vcod_gsc::Vm;
 
@@ -737,7 +738,7 @@ mod tests {
     fn sent(host: &GameHost, slot: usize, text: &str) -> usize {
         host.client_commands
             .iter()
-            .filter(|(s, t)| *s == slot && t == text)
+            .filter(|(s, t)| *s == one(slot) && t == text)
             .count()
     }
 

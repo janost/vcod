@@ -72,7 +72,7 @@ fn disable_weapons(
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     host.cod4_mut().clients[slot].weap_flags |= 0x80;
     Ok(Value::Undefined)
 }
@@ -83,7 +83,7 @@ fn enable_weapons(
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     host.cod4_mut().clients[slot].weap_flags &= !0x80;
     Ok(Value::Undefined)
 }
@@ -96,7 +96,7 @@ fn freeze_controls(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let on = a
         .first()
         .ok_or(ErrorKind::BadType("freezeControls takes a boolean"))?
@@ -161,7 +161,7 @@ fn shell_shock(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     super::client::shell_shock(host, cx, recv, a)?;
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     if host.clients[slot].vitals.health > 0 {
         host.cod4_mut().clients[slot].shock_pmf = Some(true);
     }
@@ -179,7 +179,8 @@ fn set_normal_health(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let to = client_receiver(host, recv)?;
+    let slot = to.index();
     let frac = match a.first() {
         Some(Value::Int(i)) => *i as f32,
         Some(Value::Float(f)) => *f,
@@ -188,7 +189,7 @@ fn set_normal_health(
     .min(1.0);
     let max = host.clients[slot].vitals.max_health;
     let health = (f64::from(max) * f64::from(frac) + 0.5).floor() as i32;
-    host.client_commands.push((slot, "J \"0\"".into()));
+    host.client_commands.push(to, "J \"0\"".into());
     if health > 0 {
         host.clients[slot].vitals.health = health;
     }
@@ -204,7 +205,7 @@ fn stop_shell_shock(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     super::client::stop_shell_shock(host, cx, recv, a)?;
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     host.cod4_mut().clients[slot].shock_pmf = Some(false);
     Ok(Value::Undefined)
 }
@@ -260,7 +261,8 @@ fn give_weapon(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let to = client_receiver(host, recv)?;
+    let slot = to.index();
     let Some(weapon) = weapon_arg(host, cx, a.first())? else {
         return Ok(Value::Undefined);
     };
@@ -279,9 +281,9 @@ fn give_weapon(
     });
     if let Some(offhand) = given {
         if let Some(o) = offhand {
-            host.client_commands.push((slot, format!("C {o}")));
+            host.client_commands.push(to, format!("C {o}"));
         }
-        host.client_commands.push((slot, "J \"1\"".into()));
+        host.client_commands.push(to, "J \"1\"".into());
     }
     Ok(Value::Undefined)
 }
@@ -292,7 +294,7 @@ fn take_weapon(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     if let Some(weapon) = weapon_arg(host, cx, a.first())? {
         with_loadout(host, slot, |l, t| l.take(t, weapon));
     }
@@ -306,7 +308,7 @@ fn take_all_weapons(
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     with_loadout(host, slot, |l, t| {
         let held: Vec<usize> = l.held().collect();
         for w in held {
@@ -325,7 +327,8 @@ fn set_spawn_weapon(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let to = client_receiver(host, recv)?;
+    let slot = to.index();
     let Some(weapon) = weapon_arg(host, cx, a.first())? else {
         return Ok(Value::Undefined);
     };
@@ -338,7 +341,7 @@ fn set_spawn_weapon(
         ok
     });
     if ok {
-        host.client_commands.push((slot, format!("a {weapon}")));
+        host.client_commands.push(to, format!("a {weapon}"));
     }
     Ok(Value::Undefined)
 }
@@ -351,11 +354,12 @@ fn switch_to_weapon(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let to = client_receiver(host, recv)?;
+    let slot = to.index();
     let weapon = known_weapon(host, cx, a.first())?;
     let held = host.cod4().clients[slot].loadout.has(weapon);
     if held {
-        host.client_commands.push((slot, format!("a {weapon}")));
+        host.client_commands.push(to, format!("a {weapon}"));
     }
     Ok(Value::Int(i32::from(held)))
 }
@@ -368,12 +372,13 @@ fn switch_to_offhand(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let to = client_receiver(host, recv)?;
+    let slot = to.index();
     let weapon = known_weapon(host, cx, a.first())?;
     let held = host.cod4().clients[slot].loadout.has(weapon);
     if held {
         host.cod4_mut().clients[slot].loadout.offhand = weapon;
-        host.client_commands.push((slot, format!("C {weapon}")));
+        host.client_commands.push(to, format!("C {weapon}"));
     }
     Ok(Value::Int(i32::from(held)))
 }
@@ -384,7 +389,7 @@ fn has_weapon(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let held =
         weapon_arg(host, cx, a.first())?.is_some_and(|w| host.cod4().clients[slot].loadout.has(w));
     Ok(Value::Int(i32::from(held)))
@@ -406,7 +411,7 @@ fn get_current_weapon(
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let w = host.cod4().clients[slot].loadout.weapon;
     Ok(weapon_name(host, cx, w))
 }
@@ -417,7 +422,7 @@ fn get_current_offhand(
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let w = host.cod4().clients[slot].loadout.offhand;
     Ok(weapon_name(host, cx, w))
 }
@@ -429,7 +434,7 @@ fn get_weapons_list(
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let held: Vec<usize> = host.cod4().clients[slot].loadout.held().collect();
     let out = cx.new_array();
     for (i, w) in held.into_iter().enumerate() {
@@ -455,7 +460,7 @@ fn set_weapon_ammo_clip(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let n = int_arg(a.get(1), "setWeaponAmmoClip takes a count")?;
     if let Some(w) = weapon_arg(host, cx, a.first())? {
         with_loadout(host, slot, |l, t| {
@@ -474,7 +479,7 @@ fn set_weapon_ammo_stock(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let n = int_arg(a.get(1), "setWeaponAmmoStock takes a count")?;
     if let Some(w) = weapon_arg(host, cx, a.first())? {
         with_loadout(host, slot, |l, t| {
@@ -496,7 +501,7 @@ fn get_weapon_ammo_clip(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let n = weapon_arg(host, cx, a.first())?.map_or(0, |w| {
         let c4 = host.cod4();
         c4.clients[slot].loadout.ammoclip[c4.table.defs[w].clip_slot]
@@ -510,7 +515,7 @@ fn get_weapon_ammo_stock(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let n = weapon_arg(host, cx, a.first())?.map_or(0, |w| {
         let c4 = host.cod4();
         let d = &c4.table.defs[w];
@@ -531,7 +536,7 @@ fn give_max_ammo(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     if let Some(w) = weapon_arg(host, cx, a.first())? {
         with_loadout(host, slot, |l, t| {
             if l.has(w) {
@@ -551,7 +556,7 @@ fn give_start_ammo(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     if let Some(w) = weapon_arg(host, cx, a.first())? {
         with_loadout(host, slot, |l, t| {
             if l.has(w) {
@@ -571,7 +576,7 @@ fn set_action_slot(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let n = int_arg(a.first(), "setActionSlot takes a slot")?;
     if !(1..=4).contains(&n) {
         return Err(ErrorKind::Custom(format!(
@@ -615,7 +620,7 @@ fn set_offhand_secondary_class(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(&Value::String(kind)) = a.first() else {
         return Err(ErrorKind::Custom(
             "Incorrect number of parameters.\n".into(),
@@ -641,7 +646,7 @@ fn get_offhand_secondary_class(
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let v = host.cod4().clients[slot].loadout.offhand_secondary;
     let name = if v == 1 { "flash" } else { "smoke" };
     Ok(Value::String(cx.intern_exact(name)))
@@ -655,7 +660,7 @@ fn set_move_speed_scale(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let v = match a.first() {
         Some(&Value::Int(i)) => i as f32,
         Some(&Value::Float(f)) => f,
@@ -788,7 +793,7 @@ fn perk_arg(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<(usize, Option<u32>), ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(&Value::String(name)) = a.first() else {
         return Err(ErrorKind::BadType("takes a perk name"));
     };
@@ -808,7 +813,7 @@ fn ping_player(
     recv: Option<Target>,
     _a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let until = host.level_time_ms + 3000;
     host.cod4_mut().clients[slot].compass_ping_until = until;
     Ok(Value::Undefined)
@@ -857,7 +862,7 @@ fn is_talking(
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let window = crate::game::builtins::cvar::atoi(host.cvars.get("g_voiceChatTalkingDuration"));
     let now = host.level_time_ms;
     let on = host.cod4().clients[slot]
@@ -872,7 +877,7 @@ fn clear_perks(
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     host.cod4_mut().clients[slot].perks = 0;
     Ok(Value::Undefined)
 }
@@ -910,8 +915,8 @@ fn update_scores(
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
     let [axis, allies] = host.team_scores;
-    host.client_commands.push((slot, format!("H {allies}")));
-    host.client_commands.push((slot, format!("G {axis}")));
+    host.client_commands.push(slot, format!("H {allies}"));
+    host.client_commands.push(slot, format!("G {axis}"));
     Ok(Value::Undefined)
 }
 
@@ -942,8 +947,10 @@ fn set_team_score(
         _ => return Err(ErrorKind::BadType("setTeamScore takes a number")),
     };
     host.team_scores[i] = n;
-    host.client_commands
-        .push((crate::game::commands::ALL_CLIENTS, format!("{letter} {n}")));
+    host.client_commands.push(
+        crate::game::commands::Recipient::All,
+        format!("{letter} {n}"),
+    );
     host.ranks_dirty = true;
     Ok(Value::Undefined)
 }
@@ -975,7 +982,7 @@ fn set_client_dvars(
             .replace('"', "'");
         out.push_str(&format!(" {} \"{value}\"", cx.resolve(name)));
     }
-    host.client_commands.push((slot, out));
+    host.client_commands.push(slot, out);
     Ok(Value::Undefined)
 }
 
@@ -987,7 +994,7 @@ fn set_rank(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let int = |v: Option<&Value>| match v {
         Some(&Value::Int(i)) => Ok(i),
         _ => Err(ErrorKind::BadType("setRank takes ints")),
@@ -1025,7 +1032,7 @@ fn close_in_game_menu(
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
-    host.client_commands.push((slot, "L".into()));
+    host.client_commands.push(slot, "L".into());
     Ok(Value::Undefined)
 }
 

@@ -140,7 +140,7 @@ impl GameHost {
                 && self.client_field(cx, slot, "sessionstate").as_deref() == Some("spectator")
             {
                 let text = self.scoreboard(cx);
-                self.client_commands.push((slot, text));
+                self.command_to(slot, text);
             }
         }
     }
