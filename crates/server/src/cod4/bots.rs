@@ -10,7 +10,6 @@
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use vcod_cod4::net::clmsg::UserCmd as UserCmd4;
 use vcod_common::net::msg::UserCmd;
@@ -20,7 +19,7 @@ use super::{Cod4Server, MAX_RELIABLE_COMMANDS, State};
 use crate::botmgmt::{self, Member, Settings, Side, cvar};
 use crate::bots::cod4::{self, Cod4Bots};
 use crate::bots::driver::{Body, BotDriver, BotWorld, CoverBody, Joining};
-use crate::bots::{BotView, EnemyView, Goal, Noise, SeatView};
+use crate::bots::{BotView, EnemyView, Noise};
 use crate::nav::{Follower, NavGraph};
 use crate::rcon::Redirect;
 use crate::server::bot_admin::{self, AdminHost, Ledger};
@@ -417,11 +416,6 @@ impl BotWorld for Cod4Server {
         }
     }
 
-    /// No health packs on CoD4.
-    fn health_packs(&mut self) -> Vec<[f32; 3]> {
-        Vec::new()
-    }
-
     fn body(&self, slot: usize) -> Option<Body> {
         self.cod4_bots().body(self.game.level.as_ref()?, slot)
     }
@@ -434,17 +428,6 @@ impl BotWorld for Cod4Server {
     fn view(&self, slot: usize, enemy: Option<EnemyView>) -> Option<BotView> {
         self.cod4_bots()
             .view(self.game.level.as_ref()?, slot, enemy)
-    }
-
-    /// No sidestep on CoD4, as on CoD2.
-    fn friend_in_line(
-        &self,
-        _: usize,
-        _: [f32; 3],
-        _: &[i32],
-        _: Option<([f32; 3], i32)>,
-    ) -> (bool, Option<[f32; 3]>) {
-        (false, None)
     }
 
     fn cover_body(&self, slot: usize, threat: usize) -> Option<CoverBody> {
@@ -504,25 +487,6 @@ impl BotWorld for Cod4Server {
         self.cod4_bots().move_ps(slot)
     }
 
-    fn fall_kills(&self, _: usize) -> Option<f32> {
-        None
-    }
-
-    fn blocked_nodes(&self, _: usize) -> Arc<[u32]> {
-        Arc::default()
-    }
-
-    /// Read only by the CoD1 pmove probes CoD4's route goes without.
-    fn weapon_defs(&self) -> &[Option<vcod_common::weapon::WeaponDef>] {
-        &[]
-    }
-
-    fn drive_waypoint(&mut self, _: usize, _: Goal, _: &mut SeatView) -> Option<[f32; 3]> {
-        None
-    }
-
-    fn forget_drive(&mut self, _: usize) {}
-
     fn lob_probe(
         &self,
         slot: usize,
@@ -534,10 +498,6 @@ impl BotWorld for Cod4Server {
             .lob_probe(self.game.level.as_ref()?, slot, weapon, target, teams)
     }
 
-    fn take_orders(&mut self) -> Vec<(usize, String)> {
-        Vec::new()
-    }
-
     fn bot_command(&mut self, slot: usize, text: String) {
         let Some(seq) = self.core.clients[slot]
             .as_ref()
@@ -547,9 +507,6 @@ impl BotWorld for Cod4Server {
         };
         self.client_command(slot, seq, text.as_bytes(), false);
     }
-
-    /// Never called: [`Self::read_commands`] joins no bot.
-    fn begin(&mut self, _: usize) {}
 
     fn bot_packet(&mut self) {}
 
@@ -570,12 +527,6 @@ impl BotWorld for Cod4Server {
             }
         }
     }
-
-    /// Never called: [`Self::read_commands`] primes no bot.
-    fn enter(&mut self, _: usize) {}
-
-    /// Acknowledged as read ([`Self::manage`]).
-    fn ack(&mut self, _: usize) {}
 
     fn tick_done(&mut self) {
         if let Some(b) = self.game.bots.as_mut() {

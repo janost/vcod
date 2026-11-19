@@ -274,22 +274,28 @@ pub(crate) trait BotWorld {
     /// The hit the bot in `slot` felt, read every tick ahead of its enemy
     /// lookup, cached or not; [`Self::enemy`] and [`Self::view`] read it.
     fn feel(&mut self, _slot: usize) {}
-    /// The health packs lying about, for the retreat's heal.
-    fn health_packs(&mut self) -> Vec<[f32; 3]>;
+    /// The health packs lying about, for the retreat's heal; none by
+    /// default (CoD2's and CoD4's stock levels place none).
+    fn health_packs(&mut self) -> Vec<[f32; 3]> {
+        Vec::new()
+    }
     fn body(&self, slot: usize) -> Option<Body>;
     /// The enemy the bot in `slot` fights, looked for afresh.
     fn enemy(&self, slot: usize, teams: &[i32]) -> Option<EnemyView>;
     /// The body in `slot` as the brain reads it; `None` with no body.
     fn view(&self, slot: usize, enemy: Option<EnemyView>) -> Option<BotView>;
     /// [`BotView::friend_in_line`] and [`BotView::sidestep`] against
-    /// `target`, `held` the sidestep under way.
+    /// `target`, `held` the sidestep under way; by default no teammate is
+    /// in the line and no sidestep is picked (CoD1's alone).
     fn friend_in_line(
         &self,
-        slot: usize,
-        target: [f32; 3],
-        teams: &[i32],
-        held: Option<([f32; 3], i32)>,
-    ) -> (bool, Option<[f32; 3]>);
+        _slot: usize,
+        _target: [f32; 3],
+        _teams: &[i32],
+        _held: Option<([f32; 3], i32)>,
+    ) -> (bool, Option<[f32; 3]>) {
+        (false, None)
+    }
     fn cover_body(&self, slot: usize, threat: usize) -> Option<CoverBody>;
     /// Pass 2's objective roles over every view.
     fn deal(
@@ -321,17 +327,33 @@ pub(crate) trait BotWorld {
     /// playerstate).
     fn move_ps(&self, slot: usize) -> Option<vcod_common::pmove::PlayerState>;
     /// The fall that kills the body in `slot` now
-    /// ([`crate::nav::fall_that_kills`]).
-    fn fall_kills(&self, slot: usize) -> Option<f32>;
-    /// The graph nodes the follower of the bot in `slot` keeps off.
-    fn blocked_nodes(&self, slot: usize) -> Arc<[u32]>;
-    /// The weapon table the edge probes step pmove with.
-    fn weapon_defs(&self) -> &[Option<vcod_common::weapon::WeaponDef>];
+    /// ([`crate::nav::fall_that_kills`]); none known by default.
+    fn fall_kills(&self, _slot: usize) -> Option<f32> {
+        None
+    }
+    /// The graph nodes the follower of the bot in `slot` keeps off; none
+    /// by default (only UO's parked vehicles block nodes).
+    fn blocked_nodes(&self, _slot: usize) -> Arc<[u32]> {
+        Arc::default()
+    }
+    /// The weapon table the edge probes step pmove with; read only under
+    /// [`Self::PMOVE_PROBES`], so empty by default.
+    fn weapon_defs(&self) -> &[Option<vcod_common::weapon::WeaponDef>] {
+        &[]
+    }
     /// The driver's seat's waypoint toward `goal`; marks
-    /// [`SeatView::short`] when the route ran out short of it.
-    fn drive_waypoint(&mut self, slot: usize, goal: Goal, seat: &mut SeatView) -> Option<[f32; 3]>;
+    /// [`SeatView::short`] when the route ran out short of it. No seats
+    /// by default.
+    fn drive_waypoint(
+        &mut self,
+        _slot: usize,
+        _goal: Goal,
+        _seat: &mut SeatView,
+    ) -> Option<[f32; 3]> {
+        None
+    }
     /// The bot in `slot` is out of a driver's seat.
-    fn forget_drive(&mut self, slot: usize);
+    fn forget_drive(&mut self, _slot: usize) {}
     /// [`BotView::lob`]: the throw of grenade `weapon` that bursts nearest
     /// `target`.
     fn lob_probe(
@@ -342,8 +364,11 @@ pub(crate) trait BotWorld {
         teams: &[i32],
     ) -> Option<[f32; 2]>;
 
-    /// Client commands queued for the bots outside the tick.
-    fn take_orders(&mut self) -> Vec<(usize, String)>;
+    /// Client commands queued for the bots outside the tick; none by
+    /// default (CoD2's and CoD4's admin answers at once).
+    fn take_orders(&mut self) -> Vec<(usize, String)> {
+        Vec::new()
+    }
     /// One client command from the bot in `slot`.
     fn bot_command(&mut self, slot: usize, text: String);
     /// The index of the script menu `name` among the menu configstrings,
@@ -356,16 +381,19 @@ pub(crate) trait BotWorld {
     fn killer(&self, _slot: usize) -> Option<usize> {
         None
     }
-    /// The joined bot's gamestate.
-    fn begin(&mut self, slot: usize);
+    /// The joined bot's gamestate; called only for a bot
+    /// [`Self::read_commands`] returned [`Joining::Joined`] for.
+    fn begin(&mut self, _slot: usize) {}
     /// The bots' cmds are one packet: stamped once before them.
     fn bot_packet(&mut self);
     /// The bot's cmd for the tick, `climbing` on the rungs.
     fn send_cmd(&mut self, slot: usize, cmd: Self::Cmd, climbing: bool);
-    /// The entering cmd of a primed bot.
-    fn enter(&mut self, slot: usize);
-    /// The bot read every reliable command sent.
-    fn ack(&mut self, slot: usize);
+    /// The entering cmd of a bot [`Self::read_commands`] returned
+    /// [`Joining::Entering`] for.
+    fn enter(&mut self, _slot: usize) {}
+    /// The bot read every reliable command sent; a game that acknowledges
+    /// them as it reads them ([`Self::manage`]) leaves this empty.
+    fn ack(&mut self, _slot: usize) {}
     /// The tick's last step, after the acks.
     fn tick_done(&mut self) {}
 }

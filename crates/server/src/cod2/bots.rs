@@ -14,14 +14,13 @@ use vcod_cod2::net::ops::MAX_RELIABLE_COMMANDS;
 
 use super::{Cod2Server, State};
 use crate::botmgmt::{self, Member, Settings, Side, cvar};
-use std::sync::Arc;
 
 use vcod_cod2::net::UserCmd2;
 use vcod_common::net::msg::UserCmd;
 
 use crate::bots::cod2::{self, Cod2Bots, Cod2Frame};
 use crate::bots::driver::{Body, BotDriver, BotWorld, CoverBody, Joining};
-use crate::bots::{BotView, EnemyView, Goal, Noise, SeatView};
+use crate::bots::{BotView, EnemyView, Noise};
 use crate::nav::{Follower, NavGraph};
 use crate::rcon::Redirect;
 use crate::server::bot_admin::{self, AdminHost, Ledger};
@@ -344,11 +343,6 @@ impl BotWorld for Cod2Server {
         }
     }
 
-    /// No health packs on CoD2's stock levels.
-    fn health_packs(&mut self) -> Vec<[f32; 3]> {
-        Vec::new()
-    }
-
     fn body(&self, slot: usize) -> Option<Body> {
         cod2::body(self.cod2_level()?, slot)
     }
@@ -359,17 +353,6 @@ impl BotWorld for Cod2Server {
 
     fn view(&self, slot: usize, enemy: Option<EnemyView>) -> Option<BotView> {
         self.cod2_bots().felt_view(self.cod2_level()?, slot, enemy)
-    }
-
-    /// No sidestep on CoD2.
-    fn friend_in_line(
-        &self,
-        _: usize,
-        _: [f32; 3],
-        _: &[i32],
-        _: Option<([f32; 3], i32)>,
-    ) -> (bool, Option<[f32; 3]>) {
-        (false, None)
     }
 
     fn cover_body(&self, slot: usize, threat: usize) -> Option<CoverBody> {
@@ -420,29 +403,6 @@ impl BotWorld for Cod2Server {
         cod2::move_ps(self.cod2_level()?, slot)
     }
 
-    fn fall_kills(&self, _: usize) -> Option<f32> {
-        None
-    }
-
-    /// No vehicles on CoD2 to park on the graph.
-    fn blocked_nodes(&self, _: usize) -> Arc<[u32]> {
-        Arc::default()
-    }
-
-    /// Read only by the CoD1 pmove probes CoD2's route goes without; on,
-    /// they would step the follower's body ([`Self::move_ps`]) under the
-    /// graph's rules with no weapon, as the graph's walks did.
-    fn weapon_defs(&self) -> &[Option<vcod_common::weapon::WeaponDef>] {
-        &[]
-    }
-
-    /// No seats on CoD2.
-    fn drive_waypoint(&mut self, _: usize, _: Goal, _: &mut SeatView) -> Option<[f32; 3]> {
-        None
-    }
-
-    fn forget_drive(&mut self, _: usize) {}
-
     fn lob_probe(
         &self,
         slot: usize,
@@ -451,10 +411,6 @@ impl BotWorld for Cod2Server {
         teams: &[i32],
     ) -> Option<[f32; 2]> {
         cod2::lob_probe(self.cod2_level()?, slot, weapon, target, teams)
-    }
-
-    fn take_orders(&mut self) -> Vec<(usize, String)> {
-        Vec::new()
     }
 
     fn bot_command(&mut self, slot: usize, text: String) {
@@ -481,9 +437,6 @@ impl BotWorld for Cod2Server {
             .then_some(a)
     }
 
-    /// Never called: [`Self::read_commands`] joins no bot.
-    fn begin(&mut self, _: usize) {}
-
     /// The bots' pass resets the skeleton cache once for all of them
     /// (lnxded 0x8096952), as a packet does.
     fn bot_packet(&mut self) {
@@ -508,12 +461,6 @@ impl BotWorld for Cod2Server {
             }
         }
     }
-
-    /// Never called: [`Self::read_commands`] primes no bot.
-    fn enter(&mut self, _: usize) {}
-
-    /// Acknowledged as read ([`Self::manage`]).
-    fn ack(&mut self, _: usize) {}
 
     fn tick_done(&mut self) {
         if let Some(b) = self.game.bots.as_mut() {
