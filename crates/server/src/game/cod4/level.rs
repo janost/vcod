@@ -414,6 +414,7 @@ impl Cod4Level {
         };
         let rules = Rules {
             shock_slows: vcod_cod4::shock::movement_bits(&names, &read),
+            mantle_anims: zones.mantle,
             ..Rules::default()
         };
         let sv_fps = super::sv_fps(&rt.host.cvars);

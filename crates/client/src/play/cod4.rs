@@ -2342,6 +2342,7 @@ impl Cod4Session {
                     // The server's slowed walk under a concussion
                     // (cod4-combat.md 10.8).
                     shock_slows: w.shock_slows(|i| gs.configstring(i)),
+                    mantle_anims: w.mantle,
                     ..cod4_predict::rules_from_mirror(|i| gs.configstring(i))
                 };
                 let weapon = |n: u32| {

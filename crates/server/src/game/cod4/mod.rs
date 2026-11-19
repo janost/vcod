@@ -229,6 +229,8 @@ pub struct Cod4Zones {
     /// indexes every file again, 60 ms of each round's restart
     /// (cod4-server-frame.md 9).
     pub iwds: std::cell::OnceCell<Rc<vcod_common::pk3::Pk3Fs>>,
+    /// The mantle clips out of these zones, the mod's first.
+    pub mantle: Option<&'static vcod_cod4::pmove::mantle::MantleAnims>,
 }
 
 impl Cod4Zones {
@@ -359,7 +361,7 @@ impl Cod4Zones {
             .map(|a| a.as_ref())
             .collect();
         // `Mantle_CreateAnims`: the clips pmove's `Rules` take.
-        vcod_cod4::pmove::mantle::install(&refs);
+        let mantle = vcod_cod4::pmove::mantle::install(&refs);
         let bodies = vcod_cod4::anim::BodySource::from_zones(&refs, skeletons)
             .inspect(|b| log::info!("cod4: {} player clips for the hit poses", b.clip_count()))
             .inspect_err(|e| log::warn!("cod4: player anims: {e:#}, shots meet no body"))
@@ -435,6 +437,7 @@ impl Cod4Zones {
             clip,
             bodies,
             iwds: Default::default(),
+            mantle,
         })
     }
 }

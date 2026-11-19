@@ -7,11 +7,11 @@
 //! 0x8000 and `mantleState.flags` 0x10.
 //!
 //! The clips are the engine's `PLAYER_MANTLE` set (`Mantle_CreateAnims`
-//! 0x8050fa4) out of `common_mp`, installed once per process
+//! 0x8050fa4) out of the level's zones, read again for each level
 //! ([`install`]); [`Rules::mantle_anims`](super::Rules) carries them, and
 //! without them no mantle starts.
 
-use std::sync::OnceLock;
+use std::sync::Mutex;
 
 use glam::Vec3;
 
@@ -278,26 +278,40 @@ impl MantleAnims {
     }
 }
 
-static ANIMS: OnceLock<MantleAnims> = OnceLock::new();
+/// Every clip set [`install`] has read, each kept once for the process,
+/// and the last one read.
+static ANIMS: Mutex<(Vec<&'static MantleAnims>, Option<&'static MantleAnims>)> =
+    Mutex::new((Vec::new(), None));
 
-/// Reads the mantle clips off `zones` the first time they hold them and
-/// keeps them for the process, as retail keeps one `s_mantleAnims`.
+/// Reads the mantle clips off `zones`, as `G_InitGame` runs
+/// `Mantle_CreateAnims` for each level (`cod4_lnxded` 0x80b5834,
+/// cod4-pmove.md 17): a mod's zone that replaces them wins on its level.
+/// An equal set read before is shared, so each distinct one is kept once.
 pub fn install(zones: &[&Assets]) -> Option<&'static MantleAnims> {
-    if let Some(a) = ANIMS.get() {
-        return Some(a);
-    }
-    match MantleAnims::from_zones(zones) {
-        Ok(a) => Some(ANIMS.get_or_init(|| a)),
+    let read = match MantleAnims::from_zones(zones) {
+        Ok(a) => a,
         Err(e) => {
             log::warn!("cod4: no mantle: {e}");
-            None
+            return None;
         }
-    }
+    };
+    let mut g = ANIMS.lock().unwrap_or_else(|p| p.into_inner());
+    let kept = match g.0.iter().find(|a| ***a == read) {
+        Some(a) => *a,
+        None => {
+            let a: &'static MantleAnims = Box::leak(Box::new(read));
+            g.0.push(a);
+            a
+        }
+    };
+    g.1 = Some(kept);
+    Some(kept)
 }
 
-/// The clips [`install`] kept, if any zone held them yet.
+/// The clips [`install`] read last, if any zone held them yet: what
+/// [`Rules::default`](super::Rules) takes.
 pub fn installed() -> Option<&'static MantleAnims> {
-    ANIMS.get()
+    ANIMS.lock().unwrap_or_else(|p| p.into_inner()).1
 }
 
 fn row(st: &MantleState) -> (usize, usize, f32) {
@@ -672,6 +686,46 @@ mod tests {
         assert_eq!(c.abs_delta(0.2), Vec3::new(2.0, 0.0, 4.0));
         assert_eq!(c.abs_delta(0.7), Vec3::new(7.0, 0.0, 8.0));
         assert_eq!(c.abs_delta(1.0), Vec3::new(10.0, 0.0, 8.0));
+    }
+
+    /// Each level's zones give their own clips: a mod's set read after the
+    /// stock one replaces it, and the stock set read again is the kept one
+    /// (BUG-147).
+    #[test]
+    fn each_install_reads_its_own_zones_clips() {
+        let zone = |frames: u16| {
+            let mut a = Assets::default();
+            a.xanims = ANIM_NAMES[1..]
+                .iter()
+                .map(|n| XAnim {
+                    name: n.to_string(),
+                    num_frames: frames,
+                    looped: false,
+                    delta: true,
+                    bone_count: [0; 10],
+                    framerate: 30.0,
+                    frequency: 0.0,
+                    asset_type: 0,
+                    names: Vec::new(),
+                    notify: Vec::new(),
+                    data_byte: Vec::new(),
+                    data_short: Vec::new(),
+                    data_int: Vec::new(),
+                    random_data_short: Vec::new(),
+                    random_data_byte: Vec::new(),
+                    random_data_int: Vec::new(),
+                    indices: Vec::new(),
+                    root: None,
+                })
+                .collect();
+            a
+        };
+        let (stock, modded) = (zone(15), zone(30));
+        let a = install(&[&stock]).unwrap();
+        let b = install(&[&modded]).unwrap();
+        assert_eq!((a.length_ms(1), b.length_ms(1)), (500, 1000));
+        assert!(std::ptr::eq(installed().unwrap(), b));
+        assert!(std::ptr::eq(install(&[&stock]).unwrap(), a));
     }
 
     #[test]
