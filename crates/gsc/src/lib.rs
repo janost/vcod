@@ -7,6 +7,8 @@
 //! for speed, and the numbers: docs/research/cod4-server-frame.md 9 ("The
 //! spawn wave"); `tests/bench.rs` is its microbench.
 
+#![forbid(unsafe_code)]
+
 pub mod ast;
 pub mod atom;
 pub mod bytecode;

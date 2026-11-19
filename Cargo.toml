@@ -18,6 +18,9 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 needless_range_loop = "allow"
+# Pedantic, so off already; kept off by name: `f32::midpoint` is not
+# `(a + b) * 0.5` to the bit, and the ported trace kernels need the latter.
+manual_midpoint = "allow"
 
 [workspace.dependencies]
 anyhow = "1"

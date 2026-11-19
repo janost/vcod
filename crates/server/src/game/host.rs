@@ -183,7 +183,7 @@ impl HostExt {
         match profile.game {
             vcod_common::game::Game::Cod2 => HostExt::Cod2(Box::default()),
             vcod_common::game::Game::Cod4 => HostExt::Cod4(Box::default()),
-            _ => HostExt::Cod1,
+            vcod_common::game::Game::Cod1 => HostExt::Cod1,
         }
     }
 }
