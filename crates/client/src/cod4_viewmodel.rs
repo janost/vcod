@@ -1986,8 +1986,10 @@ mod tests {
             },
         ];
         let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        // each value to 1/1024 unit: libm's sin and cos differ in the last
+        // bits between platforms (Windows' CRT against glibc)
         let mut eat = |x: f32| {
-            for b in x.to_bits().to_le_bytes() {
+            for b in ((x * 1024.0).round() as i32).to_le_bytes() {
                 hash = (hash ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
             }
         };
@@ -2061,6 +2063,6 @@ mod tests {
         if let Some(path) = std::env::var_os("GUN_PIN_DUMP") {
             std::fs::write(path, dump).unwrap();
         }
-        assert_eq!(hash, 0x8401_29b8_e657_61f7, "{hash:#x}");
+        assert_eq!(hash, 0xd6c1_8f53_bc89_5368, "{hash:#x}");
     }
 }

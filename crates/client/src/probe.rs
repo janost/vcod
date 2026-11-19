@@ -14973,8 +14973,10 @@ mod tests {
         assert!(check_fixture_names(false, &info("../x", "dm")).is_ok());
 
         assert_eq!(
-            fixture_path("fixtures/items", "mp_carentan-dm-pickup.txt").unwrap(),
-            "fixtures/items/mp_carentan-dm-pickup.txt"
+            std::path::PathBuf::from(
+                fixture_path("fixtures/items", "mp_carentan-dm-pickup.txt").unwrap()
+            ),
+            std::path::Path::new("fixtures/items/mp_carentan-dm-pickup.txt")
         );
         for name in ["../x-dm-pickup.txt", "a/b-dm.txt", "..-dm.txt"] {
             assert!(fixture_path("fixtures/items", name).is_err(), "{name}");
