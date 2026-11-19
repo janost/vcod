@@ -496,6 +496,13 @@ before), and the packet entities and client states merge against that frame's
 lists as 1.1's do, a new entity from its baseline and a new client state from
 zero. VERIFIED live (section 10). The client keeps 32 frames and 2048 entities
 and 2048 client states in its rings (`& 0x1f`, `& 0x7ff`). VERIFIED.
+The Windows client (`CoD2MP_s.exe`) takes the base as a plain 32-bit `sub`
+of the delta byte from the message's sequence (0x413751), so it wraps; a
+`jg` (0x41377c) sends a base of 0 or less down the no-base arm, and the ring
+slot must be valid (0x4137d4, `Delta from invalid frame`) and hold that
+`messageNum` (0x4137e8, `Delta frame too old.`). VERIFIED (the instructions
+and the strings). vcod's parser wraps the same way: a demo's record sequence
+is any word.
 
 The entity, client and baseline deltas are 1.1's `MSG_ReadDeltaStruct` shape:
 a remove bit, a no-change bit, an `lc` byte, then `lc` fields through

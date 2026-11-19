@@ -162,7 +162,7 @@ Packet entities repeat `[GENTITYNUM_BITS(10)-bit entity number][delta]` and end 
 
 The delta base is the frame the client last acked only for a `CS_ACTIVE` client. Anything else, a zombie included, gets `deltaNum` 0 and a frame written from nothing. VERIFIED (the `cmpl $0x4` on the state at `0x808df11` takes the no-base arm).
 
-Keep a ring of recent snapshots (`PACKET_BACKUP`, 32) so any `deltaNum` resolves. A snapshot whose base is missing or too old is invalid and dropped.
+Keep a ring of recent snapshots (`PACKET_BACKUP`, 32) so any `deltaNum` resolves. A snapshot whose base is missing or too old is invalid and dropped. `CL_ParseSnapshot` (`CoDMP.exe` 0x415bb0) takes the base as a plain 32-bit `sub` of the byte from `serverMessageSequence` (0x415c36), so it wraps, then a `jg` (0x415c5b) sends a base of 0 or less down the no-base arm and anything else to the ring slot `& 0x1f`, whose valid word (0x415cbd) and `messageNum` (0x415cd1) must both match. VERIFIED (the instructions). A demo's record sequence is any word; vcod's `SnapshotRing::parse_into` wraps the same way.
 
 After the packet entities comes a third delta stream, `clientState_t`, which replaces Q3's per-client `CS_PLAYERS` configstring (`SV_WriteSnapshotToClient` `0x808e1fd`..`0x808e24f`):
 

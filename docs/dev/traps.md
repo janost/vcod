@@ -112,7 +112,10 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
   where release wraps. Snapshot and frame times are `net::Msec` in all four
   games: `+`, `-` and `since` wrap, `<` is retail's plain signed compare.
   A clock still held as `i32` (usercmds, trajectories, pmove) takes
-  `wrapping_*` for any sum or difference off the wire.
+  `wrapping_*` for any sum or difference off the wire. So does a sequence
+  number before its range check: a demo record's sequence and a server's
+  `reliableAcknowledge` are any word, and the snapshot's
+  `messageNum - deltaNum` is `wrapping_sub` in all four games.
 
 ### Bots
 

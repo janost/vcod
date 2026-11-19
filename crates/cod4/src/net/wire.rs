@@ -438,6 +438,46 @@ mod tests {
         assert!(s.clients.is_empty());
     }
 
+    /// A demo's sequence is any word: message 2^31 deltas one back from
+    /// 2^31 - 1, as retail's `int` subtraction wraps (iw3mp.exe 0x47378a).
+    #[test]
+    fn a_delta_across_the_sign_bit_resolves_its_base() {
+        let gs = Gamestate::from_table(3, &table(), &BTreeMap::new(), 1, 77);
+        let huff = Huffman::new();
+        let mut client = Client::new();
+        let mut w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
+        PROTOCOL_17.write_gamestate(&mut w, &gs);
+        w.write_byte(EOF);
+        client.parse(1, &huff.compress(&w.into_ops())).unwrap();
+        let mut ps = PlayerState::default();
+        let f = fields::PLAYER_STATE
+            .iter()
+            .find(|f| f.name == "origin[0]")
+            .unwrap();
+        ps.words[f.word()] = 336.0f32.to_bits();
+        let f1 = Frame4 {
+            server_time: Msec::from_raw(1000),
+            map_center: gs.map_center,
+            ps,
+            entities: Vec::new(),
+            clients: Vec::new(),
+        };
+        for (n, base) in [(0x7fff_ffff, None), (0x8000_0000, Some(&f1))] {
+            let mut w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
+            let head = SnapshotHead {
+                delta_num: base.map_or(0, |_| 1),
+                snap_flags: 4,
+            };
+            PROTOCOL_17.write_snapshot(&mut w, base, &f1, head, &BTreeMap::new());
+            w.write_byte(EOF);
+            client.parse(n, &huff.compress(&w.into_ops())).unwrap();
+        }
+        let s = client.snapshots.last().unwrap();
+        assert_eq!(s.message_num, i32::MIN);
+        assert_eq!(s.base, Some(0));
+        assert_eq!(s.ps.get_f32("origin[0]"), Some(336.0));
+    }
+
     /// Frames at `i32::MAX` and, one delta on, `i32::MIN`: the parser
     /// reads both times back and re-encodes each message byte for byte.
     #[test]
