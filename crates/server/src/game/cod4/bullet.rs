@@ -5,6 +5,7 @@
 //! the impacts it raises (cod4-effects.md 12.4). 1.7's calls are at
 //! `cod4_lnxded` 0x808a9aa..0x808aefa.
 
+use crate::game::combat::Parties;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -364,9 +365,11 @@ impl Cod4Level {
         };
         let damage = bullet_damage(d, h.pos.distance(bp.orig_start));
         let damage = (f64::from(damage) * f64::from(bp.mult)) as i32;
-        self.damage_client(
-            slot, victim, d, damage, dflags, bp.dir, h.pos, h.hitloc, game_time,
-        );
+        let who = Parties {
+            victim,
+            attacker: slot,
+        };
+        self.damage_client(who, d, damage, dflags, bp.dir, h.pos, h.hitloc, game_time);
     }
 
     /// `EV_BULLET_HIT` at `h` under `sv_clientSideBullets` 0 (0x808a05c):

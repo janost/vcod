@@ -364,6 +364,14 @@ pub struct Hit {
     pub hitloc: &'static str,
 }
 
+/// The two clients a damage call names, by field so a caller cannot swap
+/// them. CoD2's ownerless missile charges `ENTITYNUM_NONE` (1023).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Parties {
+    pub victim: usize,
+    pub attacker: usize,
+}
+
 /// One thing an attack does to the frame.
 pub enum Effect {
     /// A wall impact or a swing's hit or miss event. A bullet's flesh

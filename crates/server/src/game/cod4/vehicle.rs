@@ -8,6 +8,7 @@
 //! (0x809fbd6). Its collision and tags pose the turret and barrel as its
 //! controller does (0x80bab1e).
 
+use crate::game::combat::Parties;
 use std::collections::BTreeMap;
 
 use super::combat::WEAPTYPE_PROJECTILE;
@@ -1363,8 +1364,10 @@ impl Cod4Level {
             "MOD_PISTOL_BULLET"
         };
         self.damage_from(
-            h.owner,
-            victim,
+            Parties {
+                victim,
+                attacker: h.owner,
+            },
             Some(s.heli),
             &d,
             damage,

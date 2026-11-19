@@ -20,6 +20,7 @@
 //! 9.3). Left out: water (`missileWaterMaxDepth`, the splash), glass,
 //! Javelin's climb, and the actors' grenade danger.
 
+use crate::game::combat::Parties;
 use glam::Vec3;
 use vcod_cod4::net::delta::EntityState;
 use vcod_cod4::pmove::weapon::{WEAPTYPE_GRENADE, WeaponDef};
@@ -1170,8 +1171,10 @@ impl Cod4Level {
         let (id, at) = (m.id, m.origin);
         self.through_callbacks(m, |lvl| {
             lvl.damage_from(
-                owner,
-                victim,
+                Parties {
+                    victim,
+                    attacker: owner,
+                },
                 Some(id),
                 d,
                 d.damage,
@@ -1505,8 +1508,10 @@ impl Cod4Level {
             self.combat.splashes.push((slot, damage));
             let push = off + Vec3::Z * 24.0;
             self.damage_from(
-                attacker,
-                slot,
+                Parties {
+                    victim: slot,
+                    attacker,
+                },
                 Some(inflictor),
                 d,
                 damage,
