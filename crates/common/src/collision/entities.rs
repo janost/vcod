@@ -1,3 +1,6 @@
+//! Contains routines ported from the Quake III Arena GPL source, Copyright (C) 1999-2005 Id Software, Inc..
+//! See NOTICE.
+//!
 //! What a script moves: model instances and poses, world copies, links and entity numbers.
 
 use super::clip::{

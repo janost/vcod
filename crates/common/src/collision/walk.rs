@@ -1,3 +1,6 @@
+//! Contains routines ported from the Quake III Arena GPL source, Copyright (C) 1999-2005 Id Software, Inc..
+//! See NOTICE.
+//!
 //! The BVH walk and the leaf-order replay.
 
 use super::clip::NEAR_TIE;

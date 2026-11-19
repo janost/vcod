@@ -1,3 +1,6 @@
+//! Contains routines ported from the Quake III Arena GPL source, Copyright (C) 1999-2005 Id Software, Inc..
+//! See NOTICE.
+//!
 //! The primitive clips, with no world state: the capsule, brushes, model triangles and patches.
 
 use super::{ModelTri, Prim, SURFACE_CLIP_EPSILON, Trace, WorldPatch};

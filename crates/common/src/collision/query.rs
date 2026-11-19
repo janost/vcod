@@ -1,3 +1,6 @@
+//! Contains routines ported from the Quake III Arena GPL source, Copyright (C) 1999-2005 Id Software, Inc..
+//! See NOTICE.
+//!
 //! The query entry points: traces, position tests and contents.
 
 use super::build::Volume;

@@ -1,3 +1,6 @@
+//! Contains routines ported from the Quake III Arena GPL source, Copyright (C) 1999-2005 Id Software, Inc.,
+//! and the RTCW-MP GPL source, Copyright (C) 1999-2010 id Software LLC, a ZeniMax Media company. See NOTICE.
+//!
 //! `PM_CrashLand`: the landing's damage, stun and events.
 
 use super::PMF_TIME_KNOCKBACK;

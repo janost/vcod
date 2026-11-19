@@ -1,3 +1,6 @@
+//! Contains routines ported from the Quake III Arena GPL source, Copyright (C) 1999-2005 Id Software, Inc..
+//! See NOTICE.
+//!
 //! The contents, surface and trace mask bits.
 
 /// Shared with the xmodel collision surfaces, which use the same bits.

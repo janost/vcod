@@ -1,3 +1,6 @@
+//! Contains routines ported from the Quake III Arena GPL source, Copyright (C) 1999-2005 Id Software, Inc.,
+//! and the RTCW-MP GPL source, Copyright (C) 1999-2010 id Software LLC, a ZeniMax Media company. See NOTICE.
+//!
 //! `PmoveSingle` and its arms: the frame's setup, the linked and seated arms, the
 //! default arm's tail and the dead arms.
 
