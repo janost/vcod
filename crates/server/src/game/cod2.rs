@@ -521,7 +521,7 @@ impl Cod2Level {
             let file = vcod_cod2::map::MapFile::find(&**fs, map)?;
             drop(p);
             let p = crate::tick_profile::phase("load/world");
-            let world = file.world();
+            let world = file.world_unlit();
             drop(p);
             let _p = crate::tick_profile::phase("load/clip");
             Ok((world, std::sync::Arc::new(file.clip()?)))
