@@ -34,7 +34,7 @@ use vcod_common::x87::{F80, angle_vectors};
 use vcod_gsc::{EntId, Value};
 
 use super::cod2::Cod2Level;
-use super::combat::Hit;
+use super::combat::{Hit, segment_meets_box};
 use super::host::{GameHost, SimOp};
 use super::temp_entity::{Scope, TempEntity};
 
@@ -649,37 +649,6 @@ impl Cod2Level {
             .collect()
     }
 
-    /// The character `slot`'s entity carries: its model and attachments.
-    fn character(&mut self, slot: usize) -> Option<Character> {
-        let strip = |s: &str| s.strip_prefix("xmodel/").unwrap_or(s).to_string();
-        let body = strip(&self.rt.client_field(slot, "model")?);
-        if body.is_empty() {
-            return None;
-        }
-        let id = self.rt.client_entity(slot)?;
-        let (attachments, ignore_collision) = self.rt.with_host(|h, cx| {
-            h.ents.get(id).map_or_else(
-                || (Vec::new(), 0),
-                |e| {
-                    let list = e
-                        .attachments
-                        .iter()
-                        .map(|(m, t)| {
-                            let tag = cx.resolve(*t).to_string();
-                            (strip(cx.resolve(*m)), (!tag.is_empty()).then_some(tag))
-                        })
-                        .collect();
-                    (list, u32::from(e.attach_ignore_collision))
-                },
-            )
-        });
-        Some(Character {
-            body,
-            attachments,
-            ignore_collision,
-        })
-    }
-
     /// The frame `slot`'s body poses from at `origin`: its playerstate's
     /// anims, stance, view and lean.
     fn body_frame(&self, slot: usize, origin: Vec3) -> Option<BodyFrame> {
@@ -781,7 +750,7 @@ impl Cod2Level {
         all: bool,
     ) -> Option<(Rc<PlayerRig>, Rc<Vec<Mat>>, BodyFrame)> {
         let fs = self.rt.host.fs.clone()?;
-        let character = self.character(slot)?;
+        let character = self.rt.client_character(slot)?;
         let rig = self.combat.rig(&fs, &character)?;
         let now = self.level_time();
         let stamp = self.combat.stamp;
@@ -930,7 +899,7 @@ impl Cod2Level {
     #[cfg(test)]
     pub(super) fn tag_positions(&mut self, slot: usize, now_ms: i32, names: &[&str]) -> Vec<Vec3> {
         let fs = self.rt.host.fs.clone().unwrap();
-        let character = self.character(slot).unwrap();
+        let character = self.rt.client_character(slot).unwrap();
         let ps = &self.players[slot].as_ref().unwrap().ps;
         let (origin, yaw) = (ps.origin, ps.view_angles[1]);
         let f = self.body_frame(slot, origin).unwrap();
@@ -2743,31 +2712,6 @@ impl Cod2Level {
     }
 }
 
-/// Whether the segment `start..start + (end - start) * limit` meets the
-/// box `lo..hi`.
-fn segment_meets_box(start: Vec3, end: Vec3, lo: Vec3, hi: Vec3, limit: f32) -> bool {
-    let d = end - start;
-    let (mut t0, mut t1) = (0.0f32, limit);
-    for a in 0..3 {
-        if d[a].abs() < 1e-6 {
-            if start[a] < lo[a] || start[a] > hi[a] {
-                return false;
-            }
-            continue;
-        }
-        let (mut x, mut y) = ((lo[a] - start[a]) / d[a], (hi[a] - start[a]) / d[a]);
-        if x > y {
-            std::mem::swap(&mut x, &mut y);
-        }
-        t0 = t0.max(x);
-        t1 = t1.min(y);
-        if t0 > t1 {
-            return false;
-        }
-    }
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2781,20 +2725,5 @@ mod tests {
         assert_eq!(t[17], 0.5);
         assert_eq!(t[0], 1.0);
         assert!(parse_hitloc_table("nope").is_none());
-    }
-
-    #[test]
-    fn a_segment_meets_a_box_only_inside_its_limit() {
-        let (lo, hi) = (Vec3::new(-15.0, -15.0, 0.0), Vec3::new(15.0, 15.0, 70.0));
-        let (s, e) = (Vec3::new(-100.0, 0.0, 40.0), Vec3::new(100.0, 0.0, 40.0));
-        assert!(segment_meets_box(s, e, lo, hi, 1.0));
-        assert!(!segment_meets_box(s, e, lo, hi, 0.3));
-        assert!(!segment_meets_box(
-            s,
-            e + Vec3::Z * 200.0,
-            lo,
-            hi + Vec3::Z * 0.0,
-            0.2
-        ));
     }
 }

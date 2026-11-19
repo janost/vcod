@@ -2440,9 +2440,50 @@ impl Blast {
     }
 }
 
+/// Whether the segment `start..start + (end - start) * limit` meets the
+/// box `lo..hi`: the broad box a hit-box trace meets before the body is
+/// posed (CoD2, CoD4).
+pub(crate) fn segment_meets_box(start: Vec3, end: Vec3, lo: Vec3, hi: Vec3, limit: f32) -> bool {
+    let d = end - start;
+    let (mut t0, mut t1) = (0.0f32, limit);
+    for a in 0..3 {
+        if d[a].abs() < 1e-9 {
+            if start[a] < lo[a] || start[a] > hi[a] {
+                return false;
+            }
+            continue;
+        }
+        let (mut x, mut y) = ((lo[a] - start[a]) / d[a], (hi[a] - start[a]) / d[a]);
+        if x > y {
+            std::mem::swap(&mut x, &mut y);
+        }
+        t0 = t0.max(x);
+        t1 = t1.min(y);
+        if t0 > t1 {
+            return false;
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_segment_meets_a_box_only_inside_its_limit() {
+        let (lo, hi) = (Vec3::new(-15.0, -15.0, 0.0), Vec3::new(15.0, 15.0, 70.0));
+        let (s, e) = (Vec3::new(-100.0, 0.0, 40.0), Vec3::new(100.0, 0.0, 40.0));
+        assert!(segment_meets_box(s, e, lo, hi, 1.0));
+        assert!(!segment_meets_box(s, e, lo, hi, 0.3));
+        assert!(!segment_meets_box(
+            s,
+            e + Vec3::Z * 200.0,
+            lo,
+            hi + Vec3::Z * 0.0,
+            0.2
+        ));
+    }
     use crate::game::trigger::{PLAYER_MAXS, PLAYER_MINS};
 
     fn ps_on(rules: MoveRules, origin: Vec3) -> PlayerState {

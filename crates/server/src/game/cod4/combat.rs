@@ -44,28 +44,7 @@ pub const RIFLE_PRIORITY: PriorityMap = [1, 9, 9, 9, 8, 7, 6, 6, 6, 6, 5, 5, 4, 
 pub const HIT_BROAD_MINS: Vec3 = Vec3::new(-64.0, -64.0, -32.0);
 pub const HIT_BROAD_MAXS: Vec3 = Vec3::new(64.0, 64.0, 72.0);
 
-/// `hitLocation_t` by number, as `G_GetHitLocationString` names them.
-pub const HITLOC_NAMES: [&str; 19] = [
-    "none",
-    "helmet",
-    "head",
-    "neck",
-    "torso_upper",
-    "torso_lower",
-    "right_arm_upper",
-    "left_arm_upper",
-    "right_arm_lower",
-    "left_arm_lower",
-    "right_hand",
-    "left_hand",
-    "right_leg_upper",
-    "left_leg_upper",
-    "right_leg_lower",
-    "left_leg_lower",
-    "right_foot",
-    "left_foot",
-    "gun",
-];
+pub use crate::game::combat::HITLOC_NAMES;
 
 /// `weapType` 2 (a projectile) and `weapClass` 5 (a grenade): the grenade
 /// launcher's pair (`gl_m16_mp`, VERIFIED off `common_mp.ff`).
@@ -550,29 +529,7 @@ pub(super) struct Contact {
     pub(super) startsolid: bool,
 }
 
-/// Does `start..end` meet the box `lo..hi` before `limit`?
-pub(super) fn segment_meets_box(start: Vec3, end: Vec3, lo: Vec3, hi: Vec3, limit: f32) -> bool {
-    let d = end - start;
-    let (mut t0, mut t1) = (0.0f32, limit);
-    for a in 0..3 {
-        if d[a].abs() < 1e-9 {
-            if start[a] < lo[a] || start[a] > hi[a] {
-                return false;
-            }
-            continue;
-        }
-        let (mut u, mut v) = ((lo[a] - start[a]) / d[a], (hi[a] - start[a]) / d[a]);
-        if u > v {
-            std::mem::swap(&mut u, &mut v);
-        }
-        t0 = t0.max(u);
-        t1 = t1.min(v);
-        if t0 > t1 {
-            return false;
-        }
-    }
-    true
-}
+pub(super) use crate::game::combat::segment_meets_box;
 
 impl Cod4Level {
     /// The level's weapon table as pmove reads it, rebuilt when a weapon
@@ -1160,37 +1117,6 @@ impl Cod4Level {
         best
     }
 
-    /// The character `slot`'s entity carries: its body and attachments.
-    fn character(&mut self, slot: usize) -> Option<Character> {
-        let strip = |s: &str| s.strip_prefix("xmodel/").unwrap_or(s).to_string();
-        let body = strip(&self.rt.client_field(slot, "model")?);
-        if body.is_empty() {
-            return None;
-        }
-        let id = self.rt.client_entity(slot)?;
-        let (attachments, ignore_collision) = self.rt.with_host(|h, cx| {
-            h.ents.get(id).map_or_else(
-                || (Vec::new(), 0),
-                |e| {
-                    let list = e
-                        .attachments
-                        .iter()
-                        .map(|(m, t)| {
-                            let tag = cx.resolve(*t).to_string();
-                            (strip(cx.resolve(*m)), (!tag.is_empty()).then_some(tag))
-                        })
-                        .collect();
-                    (list, u32::from(e.attach_ignore_collision))
-                },
-            )
-        });
-        Some(Character {
-            body,
-            attachments,
-            ignore_collision,
-        })
-    }
-
     /// The frame `slot`'s body poses from at `origin`: the playerstate's
     /// anims, the view and the stance bits.
     fn body_frame(&mut self, slot: usize, origin: Vec3) -> Option<BodyFrame> {
@@ -1284,7 +1210,7 @@ impl Cod4Level {
         ease: bool,
     ) -> Option<vcod_common::bonetrace::BoneHit> {
         self.take_script_poses();
-        let character = self.character(slot)?;
+        let character = self.rt.client_character(slot)?;
         let f = self.body_frame(slot, origin)?;
         let rig = self.combat.rig(&character)?;
         let now = self.level_time();
@@ -1359,7 +1285,7 @@ impl Cod4Level {
             let Some(ps) = self.pm_state(slot) else {
                 continue;
             };
-            let Some(character) = self.character(slot) else {
+            let Some(character) = self.rt.client_character(slot) else {
                 continue;
             };
             let Some(f) = self.body_frame(slot, ps.origin) else {
@@ -1427,7 +1353,7 @@ impl Cod4Level {
     pub fn hit_box_center(&mut self, slot: usize, hitloc: u8) -> Option<Vec3> {
         self.take_script_poses();
         let ps = self.pm_state(slot)?;
-        let character = self.character(slot)?;
+        let character = self.rt.client_character(slot)?;
         let f = self.body_frame(slot, ps.origin)?;
         let rig = self.combat.rig(&character)?;
         let now = self.level_time();
@@ -2032,7 +1958,7 @@ impl Cod4Level {
             // takes rounds on the corpse.
             let character = Character {
                 ignore_collision: 0,
-                ..self.character(slot)?
+                ..self.rt.client_character(slot)?
             };
             let body = self.combat.bodies.get(slot)?.clone();
             self.combat.corpses.insert(
@@ -2255,14 +2181,6 @@ mod tests {
             let (x, y) = random_dir(t);
             assert!(x * x + y * y <= 1.0, "{t}: {x} {y}");
         }
-    }
-
-    #[test]
-    fn a_segment_meets_a_box_only_inside_its_limit() {
-        let (lo, hi) = (Vec3::splat(-1.0), Vec3::splat(1.0));
-        let (a, b) = (Vec3::new(-10.0, 0.0, 0.0), Vec3::new(10.0, 0.0, 0.0));
-        assert!(segment_meets_box(a, b, lo, hi, 1.0));
-        assert!(!segment_meets_box(a, b, lo, hi, 0.4));
     }
 
     /// A level-long log keeps its newest entries and its count, so a reader
