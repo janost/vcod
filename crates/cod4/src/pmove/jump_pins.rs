@@ -1,16 +1,19 @@
 //! Pins on the jump, the step and the landing where no retail capture
 //! reaches: a jump on a slope, steps at and past the step height, a jump
 //! onto a ledge near its height, the landing's stun tiers and the jump
-//! slowdown's two penalties. Each runs cmds in a world of convex brushes
-//! and folds every cmd's moved fields into one digest; `cod4_moves_ab`
-//! holds the covered arms to retail. The digests follow `PM_SlideMove`'s
-//! stored time left (`cod4_lnxded` 0x805e6e9, cod4-pmove.md 5), which no
-//! capture tells from a kept one.
+//! slowdown's two penalties, the ladder (cod4-pmove.md 7, no capture
+//! climbs one yet) and the mantle on stand-in clips (17). Each runs cmds in
+//! a world of convex brushes and folds every cmd's moved fields into one
+//! digest; `cod4_moves_ab` holds the covered arms to retail. The digests
+//! follow `PM_SlideMove`'s stored time left (`cod4_lnxded` 0x805e6e9,
+//! cod4-pmove.md 5), which no capture tells from a kept one.
 
 use glam::Vec3;
 
+use super::super::mantle::{self, CONTENTS_MANTLE, MantleAnims, SURF_MANTLE_ON, SURF_MANTLE_OVER};
 use super::super::pin::Pin;
 use super::super::*;
+use crate::collision::{CONTENTS_SOLID, SURF_LADDER};
 
 /// The sweep's stand-off from a face, as the clip map keeps it.
 const EPS: f32 = 0.125;
@@ -21,6 +24,7 @@ const ASPHALT: u32 = 22 << 20;
 struct Brush {
     planes: Vec<(Vec3, f32)>,
     surface_flags: u32,
+    contents: u32,
 }
 
 impl Brush {
@@ -37,6 +41,7 @@ impl Brush {
         Brush {
             planes,
             surface_flags: ASPHALT,
+            contents: CONTENTS_SOLID,
         }
     }
 
@@ -47,6 +52,7 @@ impl Brush {
         Brush {
             planes: vec![(n, base / len)],
             surface_flags: ASPHALT,
+            contents: CONTENTS_SOLID,
         }
     }
 
@@ -58,6 +64,11 @@ impl Brush {
 
     fn flags(mut self, f: u32) -> Self {
         self.surface_flags = f;
+        self
+    }
+
+    fn contents(mut self, c: u32) -> Self {
+        self.contents = c;
         self
     }
 
@@ -100,9 +111,9 @@ impl Brush {
 struct World(Vec<Brush>);
 
 impl PmWorld for World {
-    fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, _pass: u32, _mask: u32) -> Tr {
+    fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, _pass: u32, mask: u32) -> Tr {
         let mut t = Tr::default();
-        for b in &self.0 {
+        for b in self.0.iter().filter(|b| b.contents & mask != 0) {
             let Some((f, n, all)) = b.sweep(start, end, mins, maxs) else {
                 continue;
             };
@@ -111,7 +122,7 @@ impl PmWorld for World {
                 t.allsolid |= all;
                 t.fraction = 0.0;
                 t.entity_num = ENTITYNUM_WORLD as u32;
-                t.contents = 1;
+                t.contents = b.contents;
                 continue;
             }
             if f < t.fraction {
@@ -120,7 +131,7 @@ impl PmWorld for World {
                 t.walkable = n.z >= 0.7;
                 t.surface_flags = b.surface_flags;
                 t.entity_num = ENTITYNUM_WORLD as u32;
-                t.contents = 1;
+                t.contents = b.contents;
             }
         }
         t
@@ -540,4 +551,391 @@ fn friction_follows_the_jump_curve() {
         }
     }
     d.0.check("jump_friction", 0xcbcd_b771_90f0_d0f5);
+}
+
+/// `n` 50 ms cmds of `buttons`, the keys and a view yaw in degrees.
+type Turn = (usize, u32, i8, i8, f32);
+
+/// Runs `cmds`, digesting the state and the ladder's and the mantle's
+/// fields after each; `each` sees the state after every cmd.
+fn steer(
+    ps: &mut PlayerState,
+    cmds: &[Turn],
+    world: &World,
+    rules: Rules,
+    d: &mut Digest,
+    mut each: impl FnMut(&PlayerState),
+) {
+    let mut old = Cmd {
+        server_time: ps.command_time,
+        ..Default::default()
+    };
+    for &(n, buttons, forward, right, yaw) in cmds {
+        for _ in 0..n {
+            let c = Cmd {
+                server_time: ps.command_time + 50,
+                buttons,
+                forward_move: forward,
+                right_move: right,
+                angles: [0, (yaw / 360.0 * 65536.0) as i32 as u16, 0],
+                ..Default::default()
+            };
+            player_step(ps, &c, &mut old, world, rules, WeaponMove::NONE);
+            d.state(ps);
+            let p = &mut d.0;
+            p.vec("ladder_vec", ps.ladder_vec);
+            p.f32("yaw", ps.view_angles[1]);
+            p.f32("delta_yaw", ps.delta_angles[1]);
+            p.i32("movement_dir", ps.movement_dir);
+            p.u32("e_flags", ps.e_flags);
+            p.u32("mantle_flags", ps.mantle.flags);
+            p.i32("mantle_timer", ps.mantle.timer);
+            p.i32("mantle_row", ps.mantle.trans_index);
+            each(ps);
+        }
+    }
+}
+
+/// A ladder face at x 40 up to 96 on a block behind it, facing -x.
+fn ladder_world() -> World {
+    World(vec![
+        floor(),
+        Brush::cuboid(Vec3::new(40.0, -32.0, 0.0), Vec3::new(48.0, 32.0, 96.0)).flags(SURF_LADDER),
+        Brush::cuboid(Vec3::new(48.0, -512.0, 0.0), Vec3::new(400.0, 512.0, 96.0)),
+    ])
+}
+
+/// `PM_CheckLadderMove`, `PM_LadderMove`, the push-off and the yaw cap on a
+/// ladder brush: the grab walking into it, the climb, the strafe, the
+/// view held to `bg_ladder_yawcap` off the facing, a jump off and a climb
+/// out over the top.
+#[test]
+fn a_ladder_grabs_climbs_strafes_caps_the_yaw_and_lets_go() {
+    let world = ladder_world();
+    let mut d = Digest::default();
+    let on = |ps: &PlayerState| ps.pm_flags & pmf::LADDER != 0;
+
+    // Walking in: no grab short of the reach, a grab at it.
+    let mut ps = standing(Vec3::new(0.0, 0.0, 0.125));
+    let (mut grabbed_at, mut last_x) = (None, 0.0);
+    steer(
+        &mut ps,
+        &[(20, 0, 127, 0, 0.0)],
+        &world,
+        Rules::default(),
+        &mut d,
+        |ps| {
+            if on(ps) && grabbed_at.is_none() {
+                grabbed_at = Some((last_x, ps.origin.x));
+            }
+            last_x = ps.origin.x;
+        },
+    );
+    let (before, x) = grabbed_at.expect("no grab walking into the ladder");
+    // The 6-shrunk probe box (9 a side) reaches 8 past the body: the grab
+    // waits for a cmd that starts within 17 of the face at 40.
+    assert!(
+        before + 17.0 >= 40.0 - 0.125 && x <= 40.0 - 15.0,
+        "grab {before} -> {x}"
+    );
+    assert_eq!(ps.ladder_vec, Vec3::NEG_X);
+
+    // Up the rungs: the climb rises with the forward key alone.
+    let z0 = ps.origin.z;
+    steer(
+        &mut ps,
+        &[(8, 0, 127, 0, 0.0)],
+        &world,
+        Rules::default(),
+        &mut d,
+        |_| {},
+    );
+    assert!(on(&ps) && ps.origin.z > z0 + 20.0, "climb: {}", ps.origin);
+    assert_eq!(ps.ground_entity_num, ENTITYNUM_NONE);
+
+    // A strafe slides along the face, and the speed bleeds off after it.
+    let y0 = ps.origin.y;
+    steer(
+        &mut ps,
+        &[(4, 0, 0, 127, 0.0)],
+        &world,
+        Rules::default(),
+        &mut d,
+        |_| {},
+    );
+    assert!(on(&ps) && ps.origin.y < y0 - 2.0, "strafe: {}", ps.origin);
+    steer(
+        &mut ps,
+        &[(6, 0, 0, 0, 0.0)],
+        &world,
+        Rules::default(),
+        &mut d,
+        |_| {},
+    );
+    assert!(ps.velocity.y.abs() < 1.0, "bled: {}", ps.velocity);
+
+    // A view turned 150 off the facing is held 100 off it.
+    let delta0 = ps.delta_angles[1];
+    steer(
+        &mut ps,
+        &[(1, 0, 0, 0, 150.0)],
+        &world,
+        Rules::default(),
+        &mut d,
+        |_| {},
+    );
+    assert!(on(&ps));
+    assert!(
+        (ps.view_angles[1] - 100.0).abs() < 0.01,
+        "yaw {}",
+        ps.view_angles[1]
+    );
+    assert!(
+        (ps.delta_angles[1] - (delta0 - 50.0)).abs() < 0.1,
+        "{}",
+        ps.delta_angles[1]
+    );
+    // The other way, 260 is held at 260 + 50.
+    let mut left = ps.clone();
+    left.delta_angles[1] = delta0;
+    steer(
+        &mut left,
+        &[(1, 0, 0, 0, 210.0)],
+        &world,
+        Rules::default(),
+        &mut d,
+        |_| {},
+    );
+    assert!(
+        (left.view_angles[1] - 260.0).abs() < 0.01,
+        "yaw {}",
+        left.view_angles[1]
+    );
+    // And a cap of 0 leaves it free.
+    let free = Rules {
+        ladder_yawcap: 0.0,
+        ..Rules::default()
+    };
+    let mut loose = ps.clone();
+    loose.delta_angles[1] = delta0;
+    steer(
+        &mut loose,
+        &[(1, 0, 0, 0, 150.0)],
+        &world,
+        free,
+        &mut d,
+        |_| {},
+    );
+    assert!(loose.view_angles[1] > 140.0, "yaw {}", loose.view_angles[1]);
+    // Square to the ladder again.
+    ps.delta_angles[1] = delta0;
+
+    // A jump faces into the ladder: the push-off reflects it 128 out, less
+    // the frame's air move toward the ladder.
+    let mut off = ps.clone();
+    steer(
+        &mut off,
+        &[(1, 0, 0, 0, 0.0), (1, button::JUMP, 127, 0, 0.0)],
+        &world,
+        Rules::default(),
+        &mut d,
+        |_| {},
+    );
+    assert!(!on(&off), "still on after the jump");
+    let v = off.velocity;
+    assert!((-128.0..-100.0).contains(&v.x) && v.y == 0.0, "push {v}");
+    // Not grabbed again for 300 ms though it still faces the ladder.
+    steer(
+        &mut off,
+        &[(5, 0, 127, 0, 0.0)],
+        &world,
+        Rules::default(),
+        &mut d,
+        |ps| {
+            assert!(
+                ps.pm_flags & pmf::LADDER == 0,
+                "regrab at {}",
+                ps.command_time
+            );
+        },
+    );
+
+    // Up and out over the top: the climb's step lands on the block, and
+    // the next cmd walks off the ladder.
+    let mut top = ps;
+    let mut onto = Vec::new();
+    steer(
+        &mut top,
+        &[(12, 0, 127, 0, 0.0)],
+        &world,
+        Rules::default(),
+        &mut d,
+        |ps| {
+            if ps.on_ground() && ps.origin.z > 95.0 {
+                onto.push(on(ps));
+            }
+        },
+    );
+    assert_eq!(onto[..2], [true, false], "{}", top.origin);
+    d.0.check("ladder", 0x5943_a20a_4083_1862);
+}
+
+/// The rules with the stand-in mantle clips: 500 ms up, 400 ms over.
+fn mantling() -> Rules {
+    static ANIMS: std::sync::OnceLock<MantleAnims> = std::sync::OnceLock::new();
+    Rules {
+        mantle_anims: Some(ANIMS.get_or_init(|| MantleAnims::synthetic(500, 400))),
+        ..Rules::default()
+    }
+}
+
+/// A mantle wall at x 40, `top` high and `deep` thick, with `surface`.
+fn mantle_world(top: f32, deep: f32, surface: u32) -> World {
+    World(vec![
+        floor(),
+        Brush::cuboid(
+            Vec3::new(40.0, -256.0, 0.0),
+            Vec3::new(40.0 + deep, 256.0, top),
+        )
+        .flags(ASPHALT | surface)
+        .contents(CONTENTS_SOLID | CONTENTS_MANTLE),
+    ])
+}
+
+/// `Mantle_Check`, `Mantle_CheckLedge`, `Mantle_Move` and `Mantle_CapView`
+/// on a wall with stand-in clips: the hint without the jump key, a mantle
+/// onto a ledge 40 up on the row of the nearest rise, the view held to the
+/// cap while it runs, and its end on the ledge, standing.
+#[test]
+fn a_mantle_onto_a_ledge_climbs_on_its_clip_and_caps_the_view() {
+    let world = mantle_world(40.0, 64.0, SURF_MANTLE_ON);
+    let rules = mantling();
+    let mut d = Digest::default();
+    let mantling = |ps: &PlayerState| ps.pm_flags & pmf::MANTLE != 0;
+
+    // Square on: a hint, and nothing starts without the jump key.
+    let mut ps = standing(Vec3::new(20.0, 0.0, 0.125));
+    steer(&mut ps, &[(2, 0, 0, 0, 0.0)], &world, rules, &mut d, |_| {});
+    assert!(ps.mantle.flags & mantle::flag::HINT != 0);
+    assert!(!mantling(&ps));
+    // Too far turned off the wall's normal: no hint.
+    let mut turned = ps.clone();
+    steer(
+        &mut turned,
+        &[(1, 0, 0, 0, 70.0)],
+        &world,
+        rules,
+        &mut d,
+        |_| {},
+    );
+    assert!(turned.mantle.flags & mantle::flag::HINT == 0);
+
+    // The jump key starts it: the body set back by the clip's whole move
+    // and the row of the 39 rise picked for a 40 ledge.
+    steer(
+        &mut ps,
+        &[(1, button::JUMP, 0, 0, 0.0)],
+        &world,
+        rules,
+        &mut d,
+        |_| {},
+    );
+    assert!(mantling(&ps) && ps.e_flags & mantle::EF_MANTLE != 0);
+    assert_eq!(ps.mantle.trans_index, 3);
+    assert_eq!(ps.mantle.yaw, 0.0);
+    assert_eq!(ps.mantle.flags & mantle::flag::OVER, 0);
+    assert!(ps.mantle.flags & mantle::flag::STAND != 0);
+
+    // Each frame steps the timer and lifts the body; a view 90 off the
+    // mantle's yaw is held at the 60 cap.
+    let mut last = (ps.mantle.timer, ps.origin.z);
+    let (mut capped, mut ended) = (None, None);
+    steer(
+        &mut ps,
+        &[(12, 0, 0, 0, 90.0)],
+        &world,
+        rules,
+        &mut d,
+        |ps| {
+            if mantling(ps) {
+                assert!(
+                    ps.mantle.timer > last.0 && ps.origin.z > last.1,
+                    "{}",
+                    ps.origin
+                );
+                capped.get_or_insert(ps.view_angles[1]);
+            } else if ps.mantle.flags & mantle::flag::ENDED != 0 {
+                ended.get_or_insert((ps.mantle.timer, ps.origin, ps.events));
+            }
+            last = (ps.mantle.timer, ps.origin.z);
+        },
+    );
+    let yaw = capped.expect("the mantle ended at once");
+    assert!((yaw - 60.0).abs() < 0.01, "yaw {yaw}");
+    // Ended at 500 ms on the ledge, 16 past the start, told to stand.
+    let (timer, end, events) = ended.expect("the mantle never ended");
+    assert_eq!(timer, 500);
+    assert!(
+        (end - Vec3::new(36.0, 0.0, 40.125)).abs().max_element() < 0.2,
+        "{end}"
+    );
+    assert!(events.contains(&ev::STANCE_FORCE_STAND));
+    assert!(
+        ps.mantle.flags & mantle::flag::ENDED == 0,
+        "ENDED clears next frame"
+    );
+    d.0.check("mantle_on", 0xf2af_41b5_c081_ce4e);
+}
+
+/// A `MANTLE_OVER` wall thin enough to drop behind takes the over clip and
+/// ends 31 past the ledge and 18 down; a wall too high for the 60 ledge
+/// gives no hint.
+#[test]
+fn a_mantle_over_a_thin_wall_drops_behind_it() {
+    let rules = mantling();
+    let mut d = Digest::default();
+    let world = mantle_world(40.0, 8.0, SURF_MANTLE_OVER);
+    let mut ps = standing(Vec3::new(20.0, 0.0, 0.125));
+    let mut ended = None;
+    steer(
+        &mut ps,
+        &[
+            (1, 0, 0, 0, 0.0),
+            (1, button::JUMP, 0, 0, 0.0),
+            (20, 0, 0, 0, 0.0),
+        ],
+        &world,
+        rules,
+        &mut d,
+        |ps| {
+            if ps.mantle.flags & mantle::flag::ENDED != 0 {
+                ended.get_or_insert(ps.origin);
+            }
+        },
+    );
+    assert!(ps.mantle.flags & mantle::flag::OVER != 0);
+    let end = ended.expect("the mantle never ended");
+    assert!(
+        (end - Vec3::new(36.0 + 31.0, 0.0, 22.125))
+            .abs()
+            .max_element()
+            < 0.2,
+        "{end}"
+    );
+    assert!(ps.events.contains(&ev::STANCE_FORCE_STAND));
+
+    for top in [80.0f32, 100.0] {
+        let world = mantle_world(top, 64.0, SURF_MANTLE_ON);
+        let mut ps = standing(Vec3::new(20.0, 0.0, 0.125));
+        steer(
+            &mut ps,
+            &[(2, button::JUMP, 0, 0, 0.0)],
+            &world,
+            rules,
+            &mut d,
+            |_| {},
+        );
+        assert!(ps.pm_flags & pmf::MANTLE == 0, "mantled a {top} wall");
+    }
+    d.0.check("mantle_over", 0xdf6e_009d_b534_d615);
 }

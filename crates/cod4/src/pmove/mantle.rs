@@ -241,6 +241,43 @@ impl MantleAnims {
     }
 }
 
+#[cfg(test)]
+impl MantleAnims {
+    /// Stand-in clips for the pak-free tests: each a straight two-key line
+    /// to the end the engine's load check wants (16 along and the row's
+    /// rise up, or 31 along and 18 down), `up_ms` and `over_ms` long.
+    pub(crate) fn synthetic(up_ms: i32, over_ms: i32) -> MantleAnims {
+        let line = |length_ms: i32, end: Vec3| {
+            let mins = end.min(Vec3::ZERO).to_array();
+            let size = end.abs().to_array();
+            let q = |v: [f32; 3]| {
+                std::array::from_fn(|i| {
+                    if size[i] == 0.0 {
+                        0
+                    } else {
+                        ((v[i] - mins[i]) / size[i]) as u16
+                    }
+                })
+            };
+            Clip {
+                length_ms,
+                numframes: 10,
+                frames: vec![0, 10],
+                quant: vec![q([0.0; 3]), q(end.to_array())],
+                mins,
+                size,
+                frame0: Vec3::ZERO,
+            }
+        };
+        let mut clips = vec![Clip::default(); ANIM_NAMES.len()];
+        for (up, over, rise) in TRANSITIONS {
+            clips[up] = line(up_ms, Vec3::new(16.0, 0.0, rise));
+            clips[over] = line(over_ms, Vec3::new(31.0, 0.0, -18.0));
+        }
+        MantleAnims { clips }
+    }
+}
+
 static ANIMS: OnceLock<MantleAnims> = OnceLock::new();
 
 /// Reads the mantle clips off `zones` the first time they hold them and
