@@ -327,10 +327,11 @@ impl Cod4Bots {
         *self = fresh;
     }
 
-    /// The bots' world, for a test to tell a rebuilt one from a kept one.
+    /// The bots' world, for a test to tell a rebuilt one from a kept one
+    /// (`Rc::ptr_eq`; holding it keeps a rebuild off the old address).
     #[cfg(test)]
-    pub(crate) fn world_ptr(&self) -> Option<*const World> {
-        self.world.as_ref().map(|(w, _)| Rc::as_ptr(w))
+    pub(crate) fn world_rc(&self) -> Option<Rc<World>> {
+        self.world.as_ref().map(|(w, _)| w.clone())
     }
 
     /// The world and everything built over it, for the next tick to build
