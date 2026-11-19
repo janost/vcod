@@ -6,12 +6,12 @@
 //! (0x1d351e, the sight's zoom). The shake is 1.1's (`play::quake`), the
 //! kick 1.1's (`play::shock`).
 
-use std::collections::HashMap;
+use crate::play::cod2_weapons::LevelWeapons;
 
 use glam::Vec3;
 use vcod_cod2::net::Frame;
 use vcod_cod2::net::events::{EV_EARTHQUAKE, EV_FIRE_WEAPON_MG42};
-use vcod_cod2::weapon::{self, WeaponDef};
+use vcod_cod2::weapon::WeaponDef;
 use vcod_common::pk3::Pk3Fs;
 
 use crate::play::cod2_events::Event2;
@@ -533,8 +533,6 @@ pub struct ViewFx {
     latch: SightLatch,
     idle: IdleState,
     gun: GunState,
-    /// [`SightDef`] and [`GunKeys`] by weapon name.
-    defs: HashMap<String, Option<(SightDef, GunKeys)>>,
     breath: cod2_shock::HoldBreath,
     /// A console `cg_shellshock`'s arguments, run on the next frame's
     /// clock.
@@ -549,7 +547,6 @@ impl Default for ViewFx {
             latch: SightLatch::default(),
             idle: IdleState::default(),
             gun: GunState::default(),
-            defs: HashMap::new(),
             breath: cod2_shock::HoldBreath::default(),
             shock_command: None,
         }
@@ -565,7 +562,6 @@ impl ViewFx {
         self.latch = SightLatch::default();
         self.idle = IdleState::default();
         self.gun = GunState::default();
-        self.defs.clear();
         self.breath.reset();
     }
 
@@ -577,19 +573,14 @@ impl ViewFx {
 
     /// The view weapon's sight keys (`BG_GetViewmodelWeaponIndex`: the
     /// offhand while it is up).
-    pub fn sight_def(&mut self, f: &Frame, fs: &Pk3Fs) -> Option<(SightDef, GunKeys)> {
+    pub fn sight_def(f: &Frame, weapons: &LevelWeapons) -> Option<(SightDef, GunKeys)> {
         let ps = &f.snap.ps;
         let w = if ps.pm_flags & PMF_OFFHAND != 0 {
             ps.raw.i32("offHandIndex")
         } else {
             ps.weapon
         };
-        let name = f.configstrings.weapon_name(w)?;
-        *self.defs.entry(name.to_string()).or_insert_with(|| {
-            weapon::load(fs, name)
-                .ok()
-                .map(|p| (SightDef::of(&p.def), GunKeys::of(&p.def)))
-        })
+        Some(weapons.get(w)?.sight)
     }
 
     /// One frame at cg.time `now` (`msec` since the last) for a view drawn
@@ -607,6 +598,7 @@ impl ViewFx {
         &mut self,
         f: &Frame,
         fs: &Pk3Fs,
+        weapons: &LevelWeapons,
         events: &[Event2],
         kick: &DamageKick,
         (eye, angles): (Vec3, [f32; 3]),
@@ -622,7 +614,7 @@ impl ViewFx {
                 self.quakes.start(q, now);
             }
         }
-        let defs = self.sight_def(f, fs);
+        let defs = Self::sight_def(f, weapons);
         let def = defs.map(|(d, _)| d);
         let ps = &f.snap.ps;
         let pos = crate::cod2_viewmodel::pos_frac(f, predicted);
@@ -1002,7 +994,9 @@ mod tests {
         let Some(fs) = vcod_common::testing::cod2_fs() else {
             return;
         };
-        let def = weapon::load(&fs, "kar98k_sniper_mp").unwrap().def;
+        let def = vcod_cod2::weapon::load(&fs, "kar98k_sniper_mp")
+            .unwrap()
+            .def;
         let d = SightDef::of(&def);
         assert!(d.ads && d.overlay && d.reticle);
         assert_eq!(
@@ -1015,7 +1009,7 @@ mod tests {
         assert!(d.overlay_alpha(1.0, true).is_some_and(|a| a > 0.9999));
         assert_eq!(d.overlay_alpha(0.5, true), None);
         // A plain rifle sights without an overlay.
-        let plain = SightDef::of(&weapon::load(&fs, "kar98k_mp").unwrap().def);
+        let plain = SightDef::of(&vcod_cod2::weapon::load(&fs, "kar98k_mp").unwrap().def);
         assert!(plain.ads && !plain.overlay);
     }
 }

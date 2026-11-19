@@ -458,6 +458,7 @@ impl Cod2Client {
     ) -> Option<play::cod2_view::ViewOut> {
         let s = self.session.as_deref_mut()?;
         let _prof = crate::frame_prof::span(crate::frame_prof::Stage::Scene);
+        s.ensure_weapons(cx.fs);
         let f = s.frame()?;
         let dt = cx.dt;
         let audio = &mut *cx.audio;
@@ -475,6 +476,7 @@ impl Cod2Client {
         let out = self.view_fx.frame(
             &f,
             cx.fs,
+            s.weapons(),
             events,
             &kick,
             view,

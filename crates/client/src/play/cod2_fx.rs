@@ -8,6 +8,7 @@ use crate::fx::cod2_tracer;
 use crate::fx::sim::{FxSystem, Rng, SpawnAt, TagBolt, TagPose};
 use crate::play::cod2_events::{Event2, SURFACES};
 use crate::play::cod2_sound::{PMF_FIRST_PERSON, muzzle_point};
+use crate::play::cod2_weapons::LevelWeapons;
 use glam::Vec3;
 use std::collections::{HashMap, HashSet};
 use vcod_cod2::net::events::{self as ev, ET_EVENTS, ET_FX, ET_PLAYER, ET_TURRET};
@@ -251,8 +252,9 @@ fn byte_to_dir(b: i32) -> Vec3 {
 /// explosion, `CG_RegisterWeapon`'s (Mac 0x1d85cc) `cg_weapons` slots
 /// +0xc0, +0xc4, +0x15c, +0x160 and +0x164.
 #[derive(Clone, Debug, Default)]
-struct WeaponFx {
-    view_flash: Option<String>,
+pub(crate) struct WeaponFx {
+    /// `viewFlashEffect`, what a held view flash plays on the gun placed.
+    pub(crate) view_flash: Option<String>,
     world_flash: Option<String>,
     shell_eject: Option<String>,
     /// `lastShotEjectEffect`, else the shell eject.
@@ -263,7 +265,7 @@ struct WeaponFx {
 }
 
 impl WeaponFx {
-    fn of(d: &vcod_cod2::weapon::WeaponDef) -> WeaponFx {
+    pub(crate) fn of(d: &vcod_cod2::weapon::WeaponDef) -> WeaponFx {
         let s = |k: &str| Some(d.str(k).to_string()).filter(|s| !s.is_empty());
         let shell_eject = s("shellEjectEffect");
         WeaponFx {
@@ -277,14 +279,21 @@ impl WeaponFx {
     }
 }
 
-/// A CoD2 connection's effect state: the `ET_FX` timers, the impact table
-/// and the weapon files by CS 7 index. A new gamestate starts it over.
+/// Weapon `index`'s effects; none where its file did not load.
+fn fx_of(weapons: &LevelWeapons, index: i32) -> WeaponFx {
+    weapons
+        .get(index)
+        .map_or_else(WeaponFx::default, |w| w.fx.clone())
+}
+
+/// A CoD2 connection's effect state: the `ET_FX` timers and the impact
+/// table; the weapons' effects come off the session's
+/// [`LevelWeapons`]. A new gamestate starts it over.
 #[derive(Default)]
 pub struct Cod2Fx {
     /// `cent + 0x210`: the last play of each `ET_FX` entity.
     loops: HashMap<u32, i32>,
     impacts: Option<ImpactTable>,
-    weapons: HashMap<i32, WeaponFx>,
     /// Bad effect ids already logged.
     warned: HashSet<i32>,
     /// The tracers' `rand()`.
@@ -307,6 +316,7 @@ impl Cod2Fx {
         events: &[Event2],
         view: Vec3,
         fs: Option<&dyn AssetSource>,
+        weapons: &LevelWeapons,
         scene: FxScene,
     ) -> Vec<FxPlay> {
         let cs = frame.configstrings;
@@ -321,13 +331,13 @@ impl Cod2Fx {
         self.last_ms = Some(frame.time_ms);
         let mut out = Vec::new();
         for e in events {
-            self.event(e, cs, fs, &mut out);
-            self.weapon_fx(e, frame.snap, cs, fs, scene, &mut out);
+            self.event(e, cs, weapons, &mut out);
+            self.weapon_fx(e, frame.snap, weapons, scene, &mut out);
             self.tracer(e, frame.snap, scene.muzzles, frametime, &mut out);
         }
         // The events run before the frame adds its bodies, so a drawn
         // shooter flashes in his event's frame.
-        self.held_flashes(frame.snap, cs, fs, scene, &mut out);
+        self.held_flashes(frame.snap, weapons, scene, &mut out);
         for e in &frame.snap.entities {
             if e.etype == ET_FX {
                 self.looped(e, frame, view, &mut out);
@@ -343,7 +353,12 @@ impl Cod2Fx {
     /// `CG_RegisterWeapon` (0x1d85cc) each CS 7 weapon's flash, shell eject
     /// and explosion effects (cod2-client-perf.md, "The soak"). Loads the
     /// impact table and the weapon files on the way.
-    pub fn level_effects(&mut self, cs: &ConfigStrings, fs: &dyn AssetSource) -> Vec<String> {
+    pub fn level_effects(
+        &mut self,
+        cs: &ConfigStrings,
+        weapons: &LevelWeapons,
+        fs: &dyn AssetSource,
+    ) -> Vec<String> {
         let mut out: Vec<String> = (1..64)
             .map_while(|id| cs.effect(id))
             .map(str::to_string)
@@ -355,16 +370,12 @@ impl Cod2Fx {
             .get_or_insert_with(|| ImpactTable::load(fs, cs.map_name()));
         out.extend(impacts.rows.iter().flatten().flatten().cloned());
         for index in 1.. {
-            let Some(name) = cs.weapon_name(index) else {
+            if cs.weapon_name(index).is_none() {
                 break;
-            };
-            let Ok(p) = vcod_cod2::weapon::load(fs, name) else {
+            }
+            let Some(w) = weapons.get(index).map(|w| &w.fx) else {
                 continue;
             };
-            let w = self
-                .weapons
-                .entry(index)
-                .or_insert_with(|| WeaponFx::of(&p.def));
             out.extend(
                 [
                     &w.view_flash,
@@ -383,21 +394,6 @@ impl Cod2Fx {
         out
     }
 
-    fn weapon(&mut self, cs: &ConfigStrings, fs: Option<&dyn AssetSource>, index: i32) -> WeaponFx {
-        if let Some(w) = self.weapons.get(&index) {
-            return w.clone();
-        }
-        let Some(fs) = fs else {
-            return WeaponFx::default();
-        };
-        let w = cs
-            .weapon_name(index)
-            .and_then(|n| vcod_cod2::weapon::load(fs, n).ok())
-            .map_or_else(WeaponFx::default, |p| WeaponFx::of(&p.def));
-        self.weapons.insert(index, w.clone());
-        w
-    }
-
     /// A shot's muzzle flash and brass, and `EV_EJECT_BRASS`'s brass
     /// (cod2-efx.md 6.8). `CG_FireWeapon` (Mac 0x1d823c), on any weapon
     /// but 0, flags the shooter's flash for `CG_AddPlayerWeapon` (Mac
@@ -412,8 +408,7 @@ impl Cod2Fx {
         &mut self,
         e: &Event2,
         snap: &SnapshotView,
-        cs: &ConfigStrings,
-        fs: Option<&dyn AssetSource>,
+        weapons: &LevelWeapons,
         scene: FxScene,
         out: &mut Vec<FxPlay>,
     ) {
@@ -424,7 +419,7 @@ impl Cod2Fx {
             | ev::EV_FIRE_WEAPON_MG42 => 1,
             ev::EV_FIRE_QUADBARREL_1 | ev::EV_FIRE_QUADBARREL_2 => 2,
             ev::EV_EJECT_BRASS => {
-                self.brass(e, snap, cs, fs, scene, out);
+                self.brass(e, snap, weapons, scene, out);
                 return;
             }
             _ => return,
@@ -434,7 +429,7 @@ impl Cod2Fx {
         }
         let why = ev::event_name(e.event).unwrap_or("?");
         if e.etype == ET_TURRET {
-            let w = self.weapon(cs, fs, e.weapon);
+            let w = fx_of(weapons, e.weapon);
             let manned = snap.ps.eflags & EF_TURRET_STANCE != 0
                 && snap.ps.raw.i32("viewlocked_entNum") == e.entity as i32;
             let path = if manned { w.view_flash } else { w.world_flash };
@@ -463,9 +458,9 @@ impl Cod2Fx {
                 self.flashes.insert(e.entity);
             }
         }
-        if !self.weapon(cs, fs, e.weapon).bolt_action {
+        if !fx_of(weapons, e.weapon).bolt_action {
             for _ in 0..calls {
-                self.brass(e, snap, cs, fs, scene, out);
+                self.brass(e, snap, weapons, scene, out);
             }
         }
     }
@@ -479,8 +474,7 @@ impl Cod2Fx {
     fn held_flashes(
         &mut self,
         snap: &SnapshotView,
-        cs: &ConfigStrings,
-        fs: Option<&dyn AssetSource>,
+        weapons: &LevelWeapons,
         scene: FxScene,
         out: &mut Vec<FxPlay>,
     ) {
@@ -498,7 +492,7 @@ impl Cod2Fx {
         for (n, weapon) in due {
             self.flashes.remove(&n);
             let pose = scene.tags.get(&n).and_then(|t| t.flash);
-            if let (Some(path), Some(pose)) = (self.weapon(cs, fs, weapon).world_flash, pose) {
+            if let (Some(path), Some(pose)) = (fx_of(weapons, weapon).world_flash, pose) {
                 out.push(FxPlay {
                     play: Play::OnTag {
                         path,
@@ -514,17 +508,6 @@ impl Cod2Fx {
         }
     }
 
-    /// The `viewFlashEffect` of CS 7 weapon `weapon` (`cg_weapons + 0xc0`),
-    /// what a held view flash plays on the gun drawn when it plays.
-    pub fn view_flash(
-        &mut self,
-        cs: &ConfigStrings,
-        fs: &dyn AssetSource,
-        weapon: i32,
-    ) -> Option<String> {
-        self.weapon(cs, Some(fs), weapon).view_flash
-    }
-
     /// `CG_EjectWeaponBrass` (Mac 0x1d80ba): under `cg_brass`, for an
     /// entity that is no temp event and holds a weapon, the weapon's
     /// last-shot eject on `EV_FIRE_WEAPON_LASTSHOT`, else its shell eject,
@@ -534,15 +517,14 @@ impl Cod2Fx {
         &mut self,
         e: &Event2,
         snap: &SnapshotView,
-        cs: &ConfigStrings,
-        fs: Option<&dyn AssetSource>,
+        weapons: &LevelWeapons,
         scene: FxScene,
         out: &mut Vec<FxPlay>,
     ) {
         if !scene.brass || e.etype >= ET_EVENTS || e.weapon == 0 {
             return;
         }
-        let w = self.weapon(cs, fs, e.weapon);
+        let w = fx_of(weapons, e.weapon);
         let path = match e.event {
             ev::EV_FIRE_WEAPON_LASTSHOT => w.last_shot_eject,
             _ => w.shell_eject,
@@ -578,7 +560,7 @@ impl Cod2Fx {
         &mut self,
         e: &Event2,
         cs: &ConfigStrings,
-        fs: Option<&dyn AssetSource>,
+        weapons: &LevelWeapons,
         out: &mut Vec<FxPlay>,
     ) {
         let surf = e.surf;
@@ -623,7 +605,7 @@ impl Cod2Fx {
                     play(&p, SpawnAt::Directed { pos, dir: normal });
                 }
                 // The weapon's own explosion on top.
-                let w = self.weapon(cs, fs, e.weapon);
+                let w = fx_of(weapons, e.weapon);
                 if let Some(p) = w.explosion {
                     out.push(FxPlay::effect(
                         p,
@@ -801,6 +783,7 @@ fn angle_vectors(a: Vec3) -> (Vec3, Vec3, Vec3) {
 mod tests {
     use super::*;
     use crate::play::cod2_events::EventTracker;
+    use crate::play::cod2_weapons::tests::level;
     use std::collections::BTreeMap;
     use vcod_cod2::net::capture::{Capture, Dir};
     use vcod_cod2::net::oob::{self, Reply};
@@ -860,7 +843,7 @@ mod tests {
                 tags: &HashMap::new(),
                 brass: true,
             };
-            plays.extend(fx.frame(&f, &new, eye, None, scene));
+            plays.extend(fx.frame(&f, &new, eye, None, &LevelWeapons::default(), scene));
             events.extend(new);
         }
         (plays, events)
@@ -921,7 +904,7 @@ mod tests {
         };
         let cs = ConfigStrings::default();
         let mut out = Vec::new();
-        fx.event(&e, &cs, None, &mut out);
+        fx.event(&e, &cs, &LevelWeapons::default(), &mut out);
         // The reflect cell is blank: one play.
         assert_eq!(out.len(), 1);
         match &out[0].play {
@@ -942,7 +925,7 @@ mod tests {
             ..e
         };
         out.clear();
-        fx.event(&large, &cs, None, &mut out);
+        fx.event(&large, &cs, &LevelWeapons::default(), &mut out);
         assert_eq!(out[0].path(), Some("fx/impacts/large.efx"));
     }
 
@@ -1098,17 +1081,9 @@ mod tests {
             brass: true,
         };
         let mut fx = Cod2Fx::default();
-        let file = |bolt_action| WeaponFx {
-            view_flash: Some("fx/view.efx".into()),
-            world_flash: Some("fx/world.efx".into()),
-            shell_eject: Some("fx/shell.efx".into()),
-            last_shot_eject: Some("fx/last.efx".into()),
-            bolt_action,
-            ..Default::default()
-        };
-        fx.weapons.insert(1, file(false));
-        fx.weapons.insert(2, file(true));
-        let cs = ConfigStrings::default();
+        let file = "\\viewFlashEffect\\fx/view.efx\\worldFlashEffect\\fx/world.efx\
+                    \\shellEjectEffect\\fx/shell.efx\\lastShotEjectEffect\\fx/last.efx";
+        let weapons = level(&[("a_mp", file), ("b_mp", &format!("{file}\\boltAction\\1"))]);
         let ev = |entity: u32, event: i32, weapon: i32| Event2 {
             entity,
             event,
@@ -1127,8 +1102,8 @@ mod tests {
         };
         let mut run = |e: Event2, scene: FxScene| {
             let mut out = Vec::new();
-            fx.weapon_fx(&e, &snap, &cs, None, scene, &mut out);
-            fx.held_flashes(&snap, &cs, None, scene, &mut out);
+            fx.weapon_fx(&e, &snap, &weapons, scene, &mut out);
+            fx.held_flashes(&snap, &weapons, scene, &mut out);
             out.into_iter()
                 .map(|p| match p.play {
                     Play::OnTag { path, bolt, pose } => {
@@ -1195,7 +1170,7 @@ mod tests {
             ..snap.clone()
         };
         let mut out = Vec::new();
-        fx.weapon_fx(&turret, &gunner, &cs, None, scene, &mut out);
+        fx.weapon_fx(&turret, &gunner, &weapons, scene, &mut out);
         assert_eq!(out[0].path(), Some("fx/view.efx"));
     }
 
@@ -1245,14 +1220,10 @@ mod tests {
             brass: false,
         };
         let mut fx = Cod2Fx::default();
-        for (w, path) in [(1, "fx/one.efx"), (2, "fx/two.efx")] {
-            let f = WeaponFx {
-                world_flash: Some(path.into()),
-                ..Default::default()
-            };
-            fx.weapons.insert(w, f);
-        }
-        let cs = ConfigStrings::default();
+        let weapons = level(&[
+            ("one_mp", "\\worldFlashEffect\\fx/one.efx"),
+            ("two_mp", "\\worldFlashEffect\\fx/two.efx"),
+        ]);
         let fire = |entity: u32| Event2 {
             entity,
             event: ev::EV_FIRE_WEAPON,
@@ -1272,9 +1243,9 @@ mod tests {
         let mut frame = |events: &[Event2], snap: &SnapshotView, tags| {
             let mut out = Vec::new();
             for e in events {
-                fx.weapon_fx(e, snap, &cs, None, scene(tags), &mut out);
+                fx.weapon_fx(e, snap, &weapons, scene(tags), &mut out);
             }
-            fx.held_flashes(snap, &cs, None, scene(tags), &mut out);
+            fx.held_flashes(snap, &weapons, scene(tags), &mut out);
             out.iter()
                 .filter_map(|p| match &p.play {
                     Play::OnTag { path, bolt, .. } => Some(format!("{path} on {}", bolt.entity)),
