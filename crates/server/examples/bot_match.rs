@@ -3154,7 +3154,7 @@ mod cod2 {
         let mut level_of: HashMap<usize, u8> = HashMap::new();
         if let Some(b) = sv.bots_mut() {
             b.wait_for_graph();
-            b.man_guns = std::env::var("GUNS").map_or(true, |v| v != "0");
+            b.own.man_guns = std::env::var("GUNS").map_or(true, |v| v != "0");
             for (i, &slot) in slots.iter().enumerate() {
                 let l = if !list.is_empty() {
                     Some(list[i % list.len()])
@@ -4195,9 +4195,9 @@ mod cod4 {
         let slots = sv.add_bots(bots, true);
         if let Some(b) = sv.bots_mut() {
             b.wait_for_graph();
-            b.objectives = std::env::var("OBJ").as_deref() != Ok("0");
-            b.man_guns = std::env::var("GUNS").as_deref() != Ok("0");
-            b.throw_back = std::env::var("THROWBACK").as_deref() != Ok("0");
+            b.own.objectives = std::env::var("OBJ").as_deref() != Ok("0");
+            b.own.man_guns = std::env::var("GUNS").as_deref() != Ok("0");
+            b.own.throw_back = std::env::var("THROWBACK").as_deref() != Ok("0");
         }
         let mut last_obj = None;
         // `STALLS=1`: every 20th tick of a stalled sample to stderr.

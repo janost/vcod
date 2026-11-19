@@ -1345,9 +1345,9 @@ vcod's own extension, with nothing on retail to match beyond the paths a
 bot joins and leaves by. `crate::botmgmt` holds the rules and the name
 pool, `server/bot_admin.rs` the pass that runs at the top of the bots'
 tick (every 500 ms, or the tick after an `addbot` or `removebot`) and
-the commands. Both servers run that one copy over its `AdminHost`
-hooks: CoD1's `Server` implements them there, `Cod2Server` in
-`cod2/bots.rs`.
+the commands. Every server runs that one copy over its `AdminHost`
+hooks: CoD1's `Server` implements them there, `Cod2Server` and
+`Cod4Server` once in `engine/bots.rs` over each game's `BotGame`.
 
 - Names. VERIFIED: 1.1d's `ClientUserinfoChanged` (game.mp.i386.so
   0x520f4) copies the userinfo `name` into the client's 32-byte buffer at

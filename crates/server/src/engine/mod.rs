@@ -7,6 +7,7 @@
 
 pub mod archive;
 pub mod bans;
+pub mod bots;
 pub mod challenge;
 pub mod commands;
 pub mod conn;

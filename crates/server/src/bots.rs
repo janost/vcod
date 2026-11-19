@@ -12,6 +12,7 @@ pub mod cod2;
 pub mod cod4;
 pub(crate) mod cover;
 pub(crate) mod driver;
+pub mod game_bots;
 pub use driver::with_threads;
 pub(crate) mod hunt;
 pub(crate) mod posts;

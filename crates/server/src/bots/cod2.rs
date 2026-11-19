@@ -46,6 +46,7 @@ use vcod_cod2::net::UserCmd2;
 use vcod_cod2::pmove::{button, pm_type, pmf};
 use vcod_common::net::msg::{self, UserCmd};
 
+use super::game_bots::{GameBots, OwnBots};
 use super::{Bot, BotView, EnemyView, WeaponMenu};
 use crate::game::cod2::Cod2Level;
 use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
@@ -318,18 +319,13 @@ const SMOKE_TICKS: u32 = 60;
 /// comes up.
 const SMOKE_AIMED_DEG: f32 = 2.0;
 
-/// The CoD2 server's bots: the shared driver's state ([`Self::driver`])
-/// and what CoD2's hooks keep beside it (the throws, guns, hits heard and
-/// smoke).
-pub struct Cod2Bots {
-    /// The brains, the graph and what the shared driver keeps per bot.
-    pub(crate) driver: super::driver::BotDriver,
-    shoot: bool,
-    /// The management's state (`crate::server::bot_admin`), shared with
-    /// CoD1's.
-    pub admin: crate::server::bot_admin::Ledger,
-    /// The `vc_bot_shoot` and `vc_bot_skill` values last applied.
-    pub applied: Option<(bool, u8)>,
+/// The CoD2 server's bots: the shared state ([`GameBots`]) and what
+/// CoD2's hooks keep beside it ([`Cod2Own`]).
+pub type Cod2Bots = GameBots<Cod2Own>;
+
+/// What CoD2's hooks keep beside the shared bot state: the throws, guns,
+/// hits heard and smoke.
+pub struct Cod2Own {
     /// Whether bots man the mounted guns ([`gun`]); `bot_match`'s
     /// `GUNS=0` turns it off for a before and after.
     pub man_guns: bool,
@@ -406,16 +402,9 @@ enum Objectives {
     Uo(crate::game::script::UoObjectives),
 }
 
-impl Cod2Bots {
-    pub fn new(shoot: bool) -> Cod2Bots {
-        Cod2Bots {
-            driver: super::driver::BotDriver {
-                nav_background: true,
-                ..Default::default()
-            },
-            shoot,
-            admin: Default::default(),
-            applied: None,
+impl OwnBots for Cod2Own {
+    fn new() -> Self {
+        Cod2Own {
             man_guns: true,
             throwing: HashMap::new(),
             mantling: HashMap::new(),
@@ -435,56 +424,21 @@ impl Cod2Bots {
         }
     }
 
-    /// A brain for the client in `slot`, answering the team menu with
-    /// `team` (`autoassign`, `allies` or `axis`).
-    pub fn add(&mut self, slot: usize, name: &str, team: &str, seed: u64) {
-        let mut bot = Bot::new(team, self.shoot, seed);
-        bot.name = name.to_string();
+    fn dress(bot: &mut Bot) {
         bot.menus = &WEAPON_MENUS_COD2;
-        self.driver.bots.insert(slot, bot);
     }
 
-    /// A new level under the bots (`map`, `map_restart`, `fast_restart`,
-    /// `map_rotate`): every brain forgets the menus it answered, as the
-    /// level reopens them under the same indices (CoD1's `Bot::rearm` on a
-    /// gamestate), and what the old level left (paths, enemies, hits,
-    /// heard events, guns, smoke) is dropped. `new_map` drops the graph
-    /// too, for the next tick to build the new map's.
-    pub fn new_level(&mut self, new_map: bool) {
-        let mut fresh = Cod2Bots::new(self.shoot);
-        fresh.admin = std::mem::take(&mut self.admin);
-        fresh.applied = self.applied;
-        fresh.man_guns = self.man_guns;
-        fresh.smokes = self.smokes;
-        fresh.driver = std::mem::take(&mut self.driver);
-        fresh.driver.new_level(!new_map);
-        for bot in fresh.driver.bots.values_mut() {
-            bot.rearm();
-        }
-        *self = fresh;
+    /// The hits, heard events, guns and smoke of the old level go; the
+    /// smoke count and `GUNS=0` stay for the match.
+    fn new_level(&mut self, _: bool) {
+        *self = Cod2Own {
+            man_guns: self.man_guns,
+            smokes: self.smokes,
+            ..Cod2Own::new()
+        };
     }
 
-    /// Whether new bots fight, and `vc_bot_shoot`'s change for every bot.
-    pub fn set_shoot(&mut self, shoot: bool) {
-        self.shoot = shoot;
-        for b in self.driver.bots.values_mut() {
-            b.set_shoot(shoot);
-        }
-    }
-
-    pub fn shoots(&self) -> bool {
-        self.shoot
-    }
-
-    /// Smoke grenades the bots threw this game (`bot_match`).
-    pub fn smokes(&self) -> u32 {
-        self.smokes
-    }
-
-    pub fn remove(&mut self, slot: usize) {
-        self.admin.pinned.remove(&slot);
-        self.admin.skills.remove(&slot);
-        self.driver.forget(slot);
+    fn forget(&mut self, slot: usize) {
         self.throwing.remove(&slot);
         self.mantling.remove(&slot);
         self.crouched.remove(&slot);
@@ -497,30 +451,12 @@ impl Cod2Bots {
         self.smoking.remove(&slot);
         self.retreats.remove(&slot);
     }
+}
 
-    /// The brains, by slot.
-    pub fn bots(&self) -> &BTreeMap<usize, Bot> {
-        &self.driver.bots
-    }
-
-    pub fn bots_mut(&mut self) -> &mut BTreeMap<usize, Bot> {
-        &mut self.driver.bots
-    }
-
-    /// `bot_match`'s cue counts (`Server::bot_cue_tally`).
-    pub fn cue_tally(&self) -> [(u32, u32, u64); 2] {
-        self.driver.posts.cue_tally()
-    }
-
-    /// Block the tick on the graph's build rather than let the bots wander
-    /// until it lands: the in-process measuring runs set it.
-    pub fn wait_for_graph(&mut self) {
-        self.driver.nav_background = false;
-    }
-
-    /// The graph once its build has landed.
-    pub fn graph(&self) -> Option<&Arc<NavGraph>> {
-        self.driver.nav.as_ref()
+impl Cod2Bots {
+    /// Smoke grenades the bots threw this game (`bot_match`).
+    pub fn smokes(&self) -> u32 {
+        self.own.smokes
     }
 
     /// The graph's build under CoD2's movement and mantle probe, polled
@@ -545,13 +481,13 @@ impl Cod2Bots {
     /// [`Self::read_commands`]; the weapon spread reads every bot's pick as
     /// it stood here.
     pub(crate) fn inbox(&mut self, inbox: BTreeMap<usize, Vec<String>>) {
-        self.pass.loadouts = self
+        self.own.pass.loadouts = self
             .driver
             .bots
             .iter()
             .filter_map(|(s, b)| Some((*s, b.loadout()?.1)))
             .collect();
-        self.pass.inbox = inbox;
+        self.own.pass.inbox = inbox;
     }
 
     /// The `t` menus the bot in `slot` was sent, named off their
@@ -573,13 +509,13 @@ impl Cod2Bots {
         let allowed = |name: &str| {
             crate::game::builtins::cvar::atof(cvars.get(name)) != 0.0 || name.is_empty()
         };
-        let Some(texts) = self.pass.inbox.get(&slot) else {
+        let Some(texts) = self.own.pass.inbox.get(&slot) else {
             return;
         };
         let Some(bot) = self.driver.bots.get_mut(&slot) else {
             return;
         };
-        let loadouts = &mut self.pass.loadouts;
+        let loadouts = &mut self.own.pass.loadouts;
         let mut named: Vec<(i32, String)> = Vec::new();
         for (seq, text) in texts.iter().enumerate() {
             let menu = text
@@ -641,24 +577,24 @@ impl Cod2Bots {
             _ => None,
         };
         // The guns only where no objective deals out roles.
-        self.pass.guns = if objectives.is_none() && self.man_guns {
+        self.own.pass.guns = if objectives.is_none() && self.own.man_guns {
             level.gun_list()
         } else {
             Vec::new()
         };
-        self.pass.now = level.level_time();
-        self.pass.dm = gametype == "dm";
+        self.own.pass.now = level.level_time();
+        self.own.pass.dm = gametype == "dm";
         Cod2Frame(objectives)
     }
 
     /// The hit the bot in `slot` felt this tick ([`Self::hurt`]).
     pub(crate) fn feel(&mut self, level: &Cod2Level, slot: usize) {
-        let hurt = self.hurt(level, slot, self.pass.now);
-        self.pass.felt = Some((slot, hurt));
+        let hurt = self.hurt(level, slot, self.own.pass.now);
+        self.own.pass.felt = Some((slot, hurt));
     }
 
     fn felt(&self, slot: usize) -> Option<super::Hurt> {
-        self.pass.felt.filter(|f| f.0 == slot).and_then(|f| f.1)
+        self.own.pass.felt.filter(|f| f.0 == slot).and_then(|f| f.1)
     }
 
     /// The enemy the bot in `slot` fights, the one that just hit it seen
@@ -666,7 +602,14 @@ impl Cod2Bots {
     pub(crate) fn sight(&self, level: &Cod2Level, slot: usize, teams: &[i32]) -> Option<EnemyView> {
         let aware = self.driver.bots.get(&slot).is_none_or(|b| b.aware);
         let attacker = self.felt(slot).map(|h| h.slot).filter(|_| aware);
-        self.enemy(level, slot, teams, self.pass.dm, attacker, self.pass.now)
+        self.enemy(
+            level,
+            slot,
+            teams,
+            self.own.pass.dm,
+            attacker,
+            self.own.pass.now,
+        )
     }
 
     /// [`Self::view`] with the hit felt.
@@ -710,12 +653,12 @@ impl Cod2Bots {
         if smoke.is_some() {
             view.grenade = None;
         }
-        self.pass.smoke = smoke.map(|t| (slot, t));
+        self.own.pass.smoke = smoke.map(|t| (slot, t));
     }
 
     /// The bots following a mantle edge (`BotWorld::routed`).
     pub(crate) fn routed(&mut self, slot: usize, follower: &crate::nav::Follower, g: &NavGraph) {
-        self.mantling.insert(slot, follower.mantling(g));
+        self.own.mantling.insert(slot, follower.mantling(g));
     }
 
     /// The walk to a gun, else to a dropped one, over the route's waypoint.
@@ -726,22 +669,26 @@ impl Cod2Bots {
         view: &mut BotView,
         teams: &[i32],
     ) {
-        let guns = std::mem::take(&mut self.pass.guns);
-        let gun_step = self.gun_step(level, slot, view, &guns, teams, self.pass.dm);
-        self.pass.guns = guns;
+        let guns = std::mem::take(&mut self.own.pass.guns);
+        let gun_step = self.gun_step(level, slot, view, &guns, teams, self.own.pass.dm);
+        self.own.pass.guns = guns;
         let fetch_step = if gun_step.is_none() {
             self.fetch_step(level, slot, view)
         } else {
             None
         };
         let fetching = self.fetching(slot);
-        self.pass.steps = Some((slot, gun_step, fetch_step, fetching));
+        self.own.pass.steps = Some((slot, gun_step, fetch_step, fetching));
     }
 
     /// A dry bot on its way to a gun lying near holds off the brain's
     /// respawn.
     pub(crate) fn keeps_alive(&self, slot: usize) -> bool {
-        self.pass.steps.as_ref().is_some_and(|s| s.0 == slot && s.3)
+        self.own
+            .pass
+            .steps
+            .as_ref()
+            .is_some_and(|s| s.0 == slot && s.3)
     }
 
     /// The brain's `cmd` in CoD2's bits, with the frag, the smoke, the
@@ -756,15 +703,21 @@ impl Cod2Bots {
     ) -> Option<Vec<UserCmd2>> {
         let turn_deg = self.driver.bots.get(&slot)?.skill.turn_deg;
         let p = level.players[slot].as_ref()?;
-        let smoke = self.pass.smoke.take().filter(|s| s.0 == slot).map(|s| s.1);
-        let (gun_step, fetch_step) = match self.pass.steps.take() {
+        let smoke = self
+            .own
+            .pass
+            .smoke
+            .take()
+            .filter(|s| s.0 == slot)
+            .map(|s| s.1);
+        let (gun_step, fetch_step) = match self.own.pass.steps.take() {
             Some((s, g, f, _)) if s == slot => (g, f),
             _ => (None, None),
         };
-        let throwing = self.throwing.remove(&slot);
+        let throwing = self.own.throwing.remove(&slot);
         let (mut c2, armed) = offhand_cmd(&cmd, view.grenade, p.ws.weapon, throwing);
         if let Some(armed) = armed {
-            self.throwing.insert(slot, armed);
+            self.own.throwing.insert(slot, armed);
         }
         if let Some(t) = smoke {
             self.smoke_cmd(slot, t, view, p, &mut c2);
@@ -772,7 +725,7 @@ impl Cod2Bots {
         // A mantle edge: on to the ledge with the jump key once pmove
         // offers the climb (`Mantle_CheckLedge`'s hint); a jump short
         // of it would leave the ground and lose the hint.
-        if self.mantling.get(&slot).copied().unwrap_or(false) {
+        if self.own.mantling.get(&slot).copied().unwrap_or(false) {
             c2.buttons &= !button::JUMP;
             if p.ps.mantle.flags & vcod_cod2::pmove::mantle::flag::HINT != 0 {
                 c2.buttons |= button::JUMP;
@@ -801,11 +754,12 @@ impl Cod2Bots {
         if hold_breath(breath, sighted && view.enemy.is_some()) {
             c2.buttons |= vcod_cod2::pmove::weapon::key::HOLD_BREATH;
         }
-        self.last_views
+        self.own
+            .last_views
             .insert(slot, [p.ps.view_angles[0], p.ps.view_angles[1]]);
         let climbing = view.on_ladder && !view.on_ground;
         Some(
-            crate::nav::tick_times(self.pass.now, climbing)
+            crate::nav::tick_times(self.own.pass.now, climbing)
                 .map(|t| UserCmd2 {
                     server_time: t,
                     ..c2
@@ -834,21 +788,21 @@ impl Cod2Bots {
             return false;
         };
         let seq = ps.event_sequence;
-        let from = self.stance_seq.insert(slot, seq).unwrap_or(seq);
+        let from = self.own.stance_seq.insert(slot, seq).unwrap_or(seq);
         if ps.pm_type != pm_type::NORMAL {
-            self.crouched.remove(&slot);
+            self.own.crouched.remove(&slot);
             return false;
         }
         match forced_stance(ps, from) {
             Some(true) => {
-                self.crouched.insert(slot);
+                self.own.crouched.insert(slot);
             }
             Some(false) => {
-                self.crouched.remove(&slot);
+                self.own.crouched.remove(&slot);
             }
             None => {}
         }
-        if self.crouched.contains(&slot)
+        if self.own.crouched.contains(&slot)
             && ps.on_ground()
             && !vcod_common::movetrace::MoveWorld::bare(&level.world.collision)
                 .box_trace(
@@ -860,15 +814,15 @@ impl Cod2Bots {
                 )
                 .startsolid
         {
-            self.crouched.remove(&slot);
+            self.own.crouched.remove(&slot);
         }
-        self.crouched.contains(&slot)
+        self.own.crouched.contains(&slot)
     }
 
     /// The tick's end: the missiles burst since now are the next tick's.
     pub(crate) fn tick_done(&mut self) {
-        self.last_tick = self.pass.now;
-        self.pass = Pass::default();
+        self.own.last_tick = self.own.pass.now;
+        self.own.pass = Pass::default();
     }
 
     /// The S&D view off `sd.gsc`'s state, as the CoD1 driver deals it
@@ -1066,7 +1020,7 @@ impl Cod2Bots {
         attacker: Option<usize>,
         now: i32,
     ) -> Option<EnemyView> {
-        if !self.shoot || !playing(level, slot) {
+        if !self.shoots() || !playing(level, slot) {
             return None;
         }
         let me = level.players[slot].as_ref()?;
@@ -1126,7 +1080,7 @@ impl Cod2Bots {
     /// Whether the segment `a` to `b` passes through a smoke cloud thick
     /// at `now` ([`SMOKE_FORM_MS`]).
     fn smoked(&self, a: Vec3, b: Vec3, now: i32) -> bool {
-        self.clouds.iter().any(|&(at, t)| {
+        self.own.clouds.iter().any(|&(at, t)| {
             let age = now.wrapping_sub(t);
             (SMOKE_FORM_MS..SMOKE_GONE_MS).contains(&age)
                 && segment_dist(a, b, at + Vec3::Z * SMOKE_LIFT) < SMOKE_RADIUS
@@ -1145,11 +1099,11 @@ impl Cod2Bots {
         let mut noises = Vec::new();
         for (i, p) in level.players.iter().enumerate() {
             let Some(p) = p.as_ref().filter(|_| playing(level, i)) else {
-                self.heard.remove(&i);
+                self.own.heard.remove(&i);
                 continue;
             };
             let seq = p.ps.event_sequence;
-            let prev = self.heard.insert(i, seq).unwrap_or(seq);
+            let prev = self.own.heard.insert(i, seq).unwrap_or(seq);
             let fired = (prev.max(seq - 4)..seq).any(|k| {
                 matches!(
                     p.ps.events[(k & 3) as usize],
@@ -1164,7 +1118,7 @@ impl Cod2Bots {
                 });
             }
         }
-        let since = self.last_tick;
+        let since = self.own.last_tick;
         for m in &level.combat.missiles {
             let Some(t) = m.exploded_at.filter(|&t| t.wrapping_sub(since) > 0) else {
                 continue;
@@ -1175,7 +1129,7 @@ impl Cod2Bots {
                 .get(usize::from(m.weapon))
                 .and_then(Option::as_ref);
             if def.is_some_and(|d| d.offhand_class == OFFHAND_SMOKE) {
-                self.clouds.push((m.origin, t));
+                self.own.clouds.push((m.origin, t));
             } else if let Some(owner) = m.owner
                 && def.is_some_and(|d| d.explosion_radius > 0)
             {
@@ -1186,7 +1140,8 @@ impl Cod2Bots {
                 });
             }
         }
-        self.clouds
+        self.own
+            .clouds
             .retain(|&(_, t)| (0..SMOKE_GONE_MS).contains(&now.wrapping_sub(t)));
         noises
     }
@@ -1199,7 +1154,7 @@ impl Cod2Bots {
     /// driver's `bot_hurt`.
     fn hurt(&mut self, level: &Cod2Level, slot: usize, now: i32) -> Option<super::Hurt> {
         let p = level.players.get(slot)?.as_ref()?;
-        let seen = self.hits.entry(slot).or_insert((p.damage_event, None));
+        let seen = self.own.hits.entry(slot).or_insert((p.damage_event, None));
         if seen.0 != p.damage_event {
             seen.0 = p.damage_event;
             seen.1 = p
@@ -1234,17 +1189,18 @@ impl Cod2Bots {
         teams: &[i32],
     ) -> Option<SmokeThrow> {
         let retreat = self.driver.bots.get(&slot).map_or(0, |b| b.retreating());
-        let was = self.retreats.insert(slot, retreat).unwrap_or(0);
+        let was = self.own.retreats.insert(slot, retreat).unwrap_or(0);
         if !view.playing {
-            self.smoking.remove(&slot);
+            self.own.smoking.remove(&slot);
             return None;
         }
-        if let Some(t) = self.smoking.get(&slot) {
+        if let Some(t) = self.own.smoking.get(&slot) {
             return Some(*t);
         }
         let p = level.players.get(slot)?.as_ref()?;
         let e = view.enemy?;
-        if self.throwing.contains_key(&slot) || !view.on_ground || view.on_ladder || view.linked {
+        if self.own.throwing.contains_key(&slot) || !view.on_ground || view.on_ladder || view.linked
+        {
             return None;
         }
         let range = super::dist_sq(view.origin, e.origin).sqrt();
@@ -1285,7 +1241,7 @@ impl Cod2Bots {
             weapon,
             ticks: 0,
         };
-        self.smoking.insert(slot, t);
+        self.own.smoking.insert(slot, t);
         Some(t)
     }
 
@@ -1326,17 +1282,17 @@ impl Cod2Bots {
         t.ticks += 1;
         if hold && aimed {
             // The key comes up: the throw.
-            self.smoking.remove(&slot);
-            self.smokes += 1;
+            self.own.smoking.remove(&slot);
+            self.own.smokes += 1;
             return;
         }
         if t.ticks > SMOKE_TICKS {
             // Let go wherever the view is rather than hold the grenade.
-            self.smoking.remove(&slot);
+            self.own.smoking.remove(&slot);
             return;
         }
         c2.buttons |= key::SMOKE;
-        self.smoking.insert(slot, t);
+        self.own.smoking.insert(slot, t);
     }
 
     /// The body in `slot` as the brain reads it.
@@ -1387,7 +1343,7 @@ impl Cod2Bots {
         // trigger; on CoD2 the frag key does both ([`offhand_cmd`]), so
         // the frag reads as in hand from the cmd that asked for it.
         let weapon = match grenade {
-            Some(g) if self.throwing.contains_key(&slot) => g,
+            Some(g) if self.own.throwing.contains_key(&slot) => g,
             _ => ws.weapon,
         };
         let vitals = level
@@ -1478,7 +1434,7 @@ impl Cod2Bots {
     /// spring over the view) off the view that cmd started from, the one
     /// the last tick read. The brain aims by it as by CoD1's reticle.
     fn gun_offset(&self, slot: usize, p: &crate::game::cod2::Cod2Player) -> [f32; 2] {
-        let Some(v) = self.last_views.get(&slot) else {
+        let Some(v) = self.own.last_views.get(&slot) else {
             return [0.0; 2];
         };
         let d = |a: f32, b: f32| (a - b + 180.0).rem_euclid(360.0) - 180.0;
@@ -1991,9 +1947,9 @@ mod tests {
             sv.tick_frames(now + std::time::Duration::from_millis(50 * tick), 1);
             // A hit felt names another bot and a direction.
             let bots = sv.bots_mut().unwrap();
-            for (slot, (_, hit)) in &bots.hits {
+            for (slot, (_, hit)) in &bots.own.hits {
                 if let Some((a, at, dir)) = hit
-                    && *at == bots.last_tick
+                    && *at == bots.own.last_tick
                 {
                     assert_ne!(a, slot);
                     assert!(slots.contains(a));
@@ -2251,7 +2207,7 @@ mod tests {
         assert_eq!(at, [300.0, 0.0, 0.0]);
         assert_eq!(smoke_point([0.0; 3], [400.0, 0.0, 0.0]), [250.0, 0.0, 0.0]);
         let mut b = Cod2Bots::new(true);
-        b.clouds.push((Vec3::from(at), 1000));
+        b.own.clouds.push((Vec3::from(at), 1000));
         let (eye, far) = (Vec3::new(0.0, 0.0, 60.0), Vec3::new(900.0, 0.0, 60.0));
         assert!(!b.smoked(eye, far, 1000 + SMOKE_FORM_MS - 50));
         assert!(b.smoked(eye, far, 1000 + SMOKE_FORM_MS));

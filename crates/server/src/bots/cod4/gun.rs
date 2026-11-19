@@ -216,20 +216,20 @@ fn foe(dm: bool, mine: i32, theirs: i32) -> bool {
 impl Cod4Bots {
     /// Guns manned and live frags thrown back so far, over every level.
     pub fn gun_counts(&self) -> (u32, u32) {
-        (self.gun.mounts, self.gun.throw_backs)
+        (self.own.gun.mounts, self.own.gun.throw_backs)
     }
 
     /// Test-facing: `team` saw an enemy down `gun`'s lane at `now_ms`
     /// (the level's time).
     #[cfg(any(test, feature = "testing"))]
     pub fn mark_lane_for_test(&mut self, gun: EntId, team: i32, now_ms: i32) {
-        self.gun.lanes.insert((gun, team), now_ms);
+        self.own.gun.lanes.insert((gun, team), now_ms);
     }
 
     /// The guns the bots may man this tick (`BotWorld::frame`): none where
     /// an objective deals out roles or [`Cod4Bots::man_guns`] is off.
     pub(super) fn read_guns(&mut self, level: &mut Cod4Level, free_play: bool) {
-        self.pass.guns = if free_play && self.man_guns {
+        self.own.pass.guns = if free_play && self.own.man_guns {
             level.gun_list()
         } else {
             Vec::new()
@@ -245,21 +245,21 @@ impl Cod4Bots {
         view: &mut BotView,
         teams: &[i32],
     ) {
-        let guns = std::mem::take(&mut self.pass.guns);
+        let guns = std::mem::take(&mut self.own.pass.guns);
         let gun = self.gun_step(level, slot, view, &guns, teams);
-        self.pass.guns = guns;
+        self.own.pass.guns = guns;
         let throw = if gun.is_none() {
             self.throw_back_step(level, slot, view, teams)
         } else {
             None
         };
-        self.pass.steps = Some((slot, gun, throw));
+        self.own.pass.steps = Some((slot, gun, throw));
     }
 
     /// The steps [`Self::pre_think`] kept, over the cmd the brain asked
     /// for; a throw back ends the brain's own throw.
     pub(super) fn apply_steps(&mut self, slot: usize, c: &mut UserCmd4, ps: &PlayerState) {
-        let Some((s, gun, throw)) = self.pass.steps.take() else {
+        let Some((s, gun, throw)) = self.own.pass.steps.take() else {
             return;
         };
         if s != slot {
@@ -269,7 +269,7 @@ impl Cod4Bots {
             apply_gun(c, step, ps);
         }
         if let Some(t) = &throw {
-            self.throwing.remove(&slot);
+            self.own.throwing.remove(&slot);
             apply_throw(c, t, ps);
         }
     }
@@ -285,9 +285,9 @@ impl Cod4Bots {
         guns: &[GunInfo],
         teams: &[i32],
     ) -> Option<GunCmd> {
-        let now = self.pass.now;
+        let now = self.own.pass.now;
         if guns.is_empty() || !self.playing(level, slot) {
-            self.gun.tasks.remove(&slot);
+            self.own.gun.tasks.remove(&slot);
             return None;
         }
         let ps = self.ps(slot)?.clone();
@@ -295,20 +295,20 @@ impl Cod4Bots {
         // The lanes: an enemy this bot sees in a gun's arc marks it for
         // its team.
         if view.enemy.is_some() {
-            self.gun.last_enemy.insert(slot, now);
+            self.own.gun.last_enemy.insert(slot, now);
         }
         if let Some(e) = view.enemy {
             for g in guns.iter().filter(|g| covers(g, Vec3::from(e.origin))) {
-                self.gun.lanes.insert((g.id, mine), now);
+                self.own.gun.lanes.insert((g.id, mine), now);
             }
         }
-        let mut task = self.gun.tasks.get(&slot).copied().unwrap_or_default();
+        let mut task = self.own.gun.tasks.get(&slot).copied().unwrap_or_default();
         let out = if ps.e_flags & ef::TURRET != 0 {
             let gun = guns.iter().find(|g| g.owner == Some(slot))?;
             let my_eye = eye(&ps);
             let target = self.arc_enemy(level, slot, gun, my_eye, teams);
             if !task.manning || task.gun != Some(gun.id) {
-                self.gun.mounts += 1;
+                self.own.gun.mounts += 1;
                 task.seen = now;
             }
             if target.is_some() {
@@ -331,9 +331,9 @@ impl Cod4Bots {
             let release = (flanked || idle) && !task.pressed;
             task.pressed = release;
             if release {
-                self.gun.released.insert(slot, now);
+                self.own.gun.released.insert(slot, now);
                 if idle && !flanked {
-                    self.gun.far_rest.insert((gun.id, mine), now);
+                    self.own.gun.far_rest.insert((gun.id, mine), now);
                 }
             }
             Some(GunCmd::Man {
@@ -354,13 +354,13 @@ impl Cod4Bots {
                     task = GunTask::default();
                 }
             }
-            let rested = (self.gun.released.get(&slot)).is_none_or(|&t| now - t >= REST_MS);
+            let rested = (self.own.gun.released.get(&slot)).is_none_or(|&t| now - t >= REST_MS);
             if task.gun.is_none()
                 && rested
                 && let Some((gun, spot, far)) = self.pick_gun(slot, view, guns, teams)
             {
                 if far {
-                    self.gun.far_rest.insert((gun, mine), now);
+                    self.own.gun.far_rest.insert((gun, mine), now);
                 }
                 task = GunTask {
                     gun: Some(gun),
@@ -387,9 +387,9 @@ impl Cod4Bots {
             }
         };
         if task.gun.is_some() {
-            self.gun.tasks.insert(slot, task);
+            self.own.gun.tasks.insert(slot, task);
         } else {
-            self.gun.tasks.remove(&slot);
+            self.own.gun.tasks.remove(&slot);
         }
         out
     }
@@ -410,14 +410,14 @@ impl Cod4Bots {
     /// The post a bot walking to a gun over the graph makes for
     /// (`BotWorld::pre_route`): the floor behind the gun.
     pub(crate) fn gun_post(&self, slot: usize) -> Option<[f32; 3]> {
-        let t = self.gun.tasks.get(&slot)?;
+        let t = self.own.gun.tasks.get(&slot)?;
         (t.gun.is_some() && t.far && !t.manning).then_some(t.spot.to_array())
     }
 
     /// The floor under the spot behind `gun`. `None` with no world or no
     /// floor there.
     fn floor_spot(&self, gun: &GunInfo) -> Option<Vec3> {
-        let (world, _) = self.world.as_ref()?;
+        let (world, _) = self.own.world.as_ref()?;
         let spot = mount_spot(gun);
         let floor = world.collision.move_trace(
             spot + Vec3::Z * 32.0,
@@ -432,7 +432,7 @@ impl Cod4Bots {
     /// Whether feet at `feet` walk straight to `spot`: within
     /// [`GUN_REACH`], level with it and unblocked.
     fn straight_walk(&self, feet: Vec3, spot: Vec3) -> bool {
-        let Some((world, _)) = self.world.as_ref() else {
+        let Some((world, _)) = self.own.world.as_ref() else {
             return false;
         };
         if (spot - feet).truncate().length() > GUN_REACH || (spot.z - feet.z).abs() > GUN_STEP {
@@ -491,11 +491,11 @@ impl Cod4Bots {
         teams: &[i32],
     ) -> Option<(EntId, Vec3, bool)> {
         let team = teams.get(slot).copied().unwrap_or(0);
-        let now = self.pass.now;
+        let now = self.own.pass.now;
         let enemy = view.enemy.map(|e| Vec3::from(e.origin));
         let feet = Vec3::from(view.origin);
-        let calm = (self.gun.last_enemy.get(&slot)).is_none_or(|&t| now - t >= CALM_MS);
-        let taken: Vec<EntId> = (self.gun.tasks.iter())
+        let calm = (self.own.gun.last_enemy.get(&slot)).is_none_or(|&t| now - t >= CALM_MS);
+        let taken: Vec<EntId> = (self.own.gun.tasks.iter())
             .filter(|(s, _)| **s != slot)
             .filter_map(|(_, t)| t.gun)
             .collect();
@@ -504,6 +504,7 @@ impl Cod4Bots {
             .filter(|g| match enemy {
                 Some(at) => covers(g, at),
                 None => self
+                    .own
                     .gun
                     .lanes
                     .get(&(g.id, team))
@@ -519,7 +520,7 @@ impl Cod4Bots {
                     && calm
                     && (spot.z - feet.z).abs() > GUN_STEP
                     && d <= GUN_PATH_REACH
-                    && (self.gun.far_rest.get(&(g.id, team)))
+                    && (self.own.gun.far_rest.get(&(g.id, team)))
                         .is_none_or(|&t| now - t >= FAR_REST_MS)
                     && self.nearest_mate_to(slot, teams, spot)
                     && self.graph_reaches(spot);
@@ -539,15 +540,15 @@ impl Cod4Bots {
         my_eye: Vec3,
         teams: &[i32],
     ) -> Option<Vec3> {
-        if !self.shoot {
+        if !self.shoots() {
             return None;
         }
         let mine = teams.get(slot).copied().unwrap_or(0);
-        let (world, _) = self.world.as_ref()?;
+        let (world, _) = self.own.world.as_ref()?;
         let w = &world.collision;
-        let mut seen: Vec<(f32, usize, Vec3)> = (self.pass.states.iter())
+        let mut seen: Vec<(f32, usize, Vec3)> = (self.own.pass.states.iter())
             .filter(|(i, _)| **i != slot && self.playing(level, **i))
-            .filter(|(i, _)| foe(self.pass.dm, mine, teams.get(**i).copied().unwrap_or(0)))
+            .filter(|(i, _)| foe(self.own.pass.dm, mine, teams.get(**i).copied().unwrap_or(0)))
             .filter_map(|(&i, p)| {
                 let chest = Vec3::from(crate::bots::chest(p.origin.into(), p.view_height_current));
                 let d = chest.distance(my_eye);
@@ -576,32 +577,33 @@ impl Cod4Bots {
     ) -> Option<ThrowBack> {
         let ps = self.ps(slot)?.clone();
         let none = ENTITYNUM_NONE as i32;
-        if !self.throw_back || !self.playing(level, slot) || ps.e_flags & ef::TURRET != 0 {
-            self.gun.throws.remove(&slot);
+        if !self.own.throw_back || !self.playing(level, slot) || ps.e_flags & ef::TURRET != 0 {
+            self.own.gun.throws.remove(&slot);
             return None;
         }
         if ps.throw_back_grenade_owner != none && ps.grenade_time_left > 0 {
             // In hand: let the key go along the line taken.
             let line = self
+                .own
                 .gun
                 .throws
                 .get(&slot)
                 .map_or([ps.view_angles[0], ps.view_angles[1]], |t| t.0);
-            self.gun.throws.insert(slot, (line, THROW_HOLD_TICKS));
+            self.own.gun.throws.insert(slot, (line, THROW_HOLD_TICKS));
             return Some(ThrowBack {
                 view: line,
                 hold: false,
             });
         }
-        if let Some((line, left)) = self.gun.throws.get(&slot).copied() {
+        if let Some((line, left)) = self.own.gun.throws.get(&slot).copied() {
             if left > 0 {
-                self.gun.throws.insert(slot, (line, left - 1));
+                self.own.gun.throws.insert(slot, (line, left - 1));
                 return Some(ThrowBack {
                     view: line,
                     hold: false,
                 });
             }
-            self.gun.throws.remove(&slot);
+            self.own.gun.throws.remove(&slot);
         }
         let hint = ps.cursor_hint_ent_index;
         if hint == none || ps.throw_back_grenade_time_left < THROW_BACK_MS {
@@ -621,8 +623,8 @@ impl Cod4Bots {
             None => [ps.view_angles[0], ps.view_angles[1]],
         };
         line[0] -= THROW_LOFT;
-        self.gun.throws.insert(slot, (line, THROW_HOLD_TICKS));
-        self.gun.throw_backs += 1;
+        self.own.gun.throws.insert(slot, (line, THROW_HOLD_TICKS));
+        self.own.gun.throw_backs += 1;
         Some(ThrowBack {
             view: line,
             hold: true,
