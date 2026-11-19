@@ -7,7 +7,9 @@
 //! AGENTS.md keeps section numbers and file names stable because code
 //! cites them; this is what catches a renumbered section or a renamed
 //! paragraph. It cannot tell whether the cited section says what the
-//! citation claims. Short forms (`combat doc 12.4`) are not checked.
+//! citation claims. Short forms (`combat doc 12.4`) are not checked. A
+//! second test holds each doc to one heading per section number, so a
+//! citation cannot name two sections.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -185,6 +187,8 @@ struct Doc {
     lines: Vec<String>,
     headings: Vec<(usize, String)>,
     sections: HashMap<String, (usize, usize)>,
+    /// Section numbers more than one heading opens with.
+    repeated: Vec<String>,
 }
 
 fn index(text: &str) -> Doc {
@@ -203,6 +207,7 @@ fn index(text: &str) -> Doc {
         heads.push((i, level, l[level..].trim().to_string()));
     }
     let mut sections = HashMap::new();
+    let mut repeated = Vec::new();
     for (k, (i, level, title)) in heads.iter().enumerate() {
         let end = heads[k + 1..]
             .iter()
@@ -210,8 +215,10 @@ fn index(text: &str) -> Doc {
             .map_or(lines.len(), |h| h.0);
         let token = title.split_whitespace().next().unwrap_or("");
         let id = token.strip_suffix('.').unwrap_or(token);
-        if section_len(id.as_bytes()) == Some(id.len()) {
-            sections.insert(id.to_string(), (*i, end));
+        if section_len(id.as_bytes()) == Some(id.len())
+            && sections.insert(id.to_string(), (*i, end)).is_some()
+        {
+            repeated.push(id.to_string());
         }
     }
     let headings = heads.into_iter().map(|(i, _, t)| (i, t)).collect();
@@ -219,6 +226,7 @@ fn index(text: &str) -> Doc {
         lines,
         headings,
         sections,
+        repeated,
     }
 }
 
@@ -449,4 +457,18 @@ fn every_doc_citation_resolves() {
         bad.len(),
         bad.join("\n")
     );
+}
+
+#[test]
+fn no_doc_numbers_two_sections_alike() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut bad = Vec::new();
+    for p in docs(&root) {
+        let doc = index(&std::fs::read_to_string(&p).unwrap());
+        for id in &doc.repeated {
+            let rel = p.strip_prefix(&root).unwrap_or(&p).display();
+            bad.push(format!("{rel}: section {id} twice"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
 }

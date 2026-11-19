@@ -240,7 +240,7 @@ Four retail facts shape every probe:
 
 **Equality, VERIFIED.** `1 == 1.0` true; `"abc" == "abc"` true; `"ABC" == "abc"` false; `"5" == 5` true, but `"5.0" == 5`, `"05" == 5` and `"abc" == 0` false. A number against a string is rendered with `%g` and compared as text. `undefined == 0` is fatal: `pair has unmatching types 'undefined' and 'int'`.
 
-**Ordering: numbers only, VERIFIED.** `"a" < "b"` is fatal: `pair has unmatching types 'string' and 'string'`. No string collation.
+**Ordering: numbers only, VERIFIED.** `"a" < "b"` is fatal: `pair has unmatching types 'string' and 'string'`. No string collation. VERIFIED (the instructions): CoDMP.exe 1.1's `VM_Execute` arms for `<`, `>`, `<=` and `>=` (0x478b98..0x478cd8) cast the pair to one type through 0x476090 (an int beside a float becomes a float), then compare two ints (type 5) with `cmp` and `setl`/`setg`/`setle`/`setge` and two floats (type 4) with `fcomps`, so `16777217 > 16777216` is 1 where an `f32` compare reads 0. INFERRED: 1.1d's arms have the same shape (the CoD2 handler below does). vcod: `num_pair` in `crates/gsc/src/vm/interp.rs`, for the plain and the fused compares.
 
 **Case folding is per role, VERIFIED.** Field names fold; array keys and string values do not (section 8).
 
@@ -410,6 +410,8 @@ vcod: `crates/server/src/game/builtins/precache.rs` and `Allocators::index`'s ca
 ### Arrays are values
 
 VERIFIED (`probe_array_copy`, 1.1d on mp_pavlov): after `b = a`, a write through either leaves the other's size alone (`local_copy_write 1 2`, `local_orig_write 2 1`). Likewise a string key written into a copy of a `level` field (`field_copy_strkey 1 2`), a write through an argument (`arg_write 1`), into a copy of an outer array's nested array (`nested_write 1 2`), into a copy of an element (`element_copy_write 1 2`) and into a field assigned from another field (`field_to_field 1 2`). CoD4 1.7 prints the same lines, and there a struct an array holds is shared (cod4-gsc.md 10). vcod flags an array stored a second time and copies it at the next write (`Heap::share`, `Heap::own`); the sweep between frames that frees unreachable arrays recounts each one's holders and unflags an array one place holds (`Heap::collect`, cod2-gsc-diff.md 3.7). INFERRED: no 1.1 stock script depends on shared arrays, since vcod ran the corpus with them shared before this.
+
+VERIFIED (`probe_assign_order`, 1.1d, 1.5b and UO 1.51b on mp_pavlov, 2026-11-19): an index assignment runs its value before its key (`a[side("k")] = side("v")` logs `vk`), and both before it reads the target, so a value that changes the target writes into what the target is afterwards. A value that copies `level.arr` and writes `level.arr[1]` leaves all three keys in `level.arr` (`copied_target 3 1`); a value that clears `level.brr` leaves it vivified with the key (`cleared_target 1`); a field write whose value replaces `level.o` lands on the new struct (`swapped_object new 1`); `c[1] = c` stores `c` as it stood (`self_store 2 1`). vcod compiles the value first (`Compiler::compile_assign`; `StoreIndex` and `StoreField` pop the value last).
 
 ### Indexing past the first wait
 

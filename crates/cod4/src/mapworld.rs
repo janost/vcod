@@ -914,4 +914,73 @@ mod tests {
         let e = to_mapworld(&map(vec![surface(21846, 0)]), &[]).unwrap_err();
         assert!(format!("{e:#}").contains("21846 triangles"), "{e:#}");
     }
+
+    fn cells(m: &mut Map, n: usize) {
+        m.cells = vec![GfxCell::default(); n];
+    }
+
+    /// A root entry naming a cell is a one-leaf tree: one node whose sides
+    /// both reach that leaf.
+    #[test]
+    fn a_one_leaf_cell_tree_is_one_node() {
+        let mut m = map(vec![]);
+        cells(&mut m, 2);
+        m.dpvs_nodes = vec![2];
+        let (nodes, leafs) = cell_tree(&m).unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].children, [-1, -1]);
+        assert_eq!(leafs[0].cell, 1);
+    }
+
+    /// One plane node over two cell leaves: entry `cells + 1 + plane`, the
+    /// offset to its back child, then the front child's entry. An offset
+    /// back onto itself is refused, not walked for ever.
+    #[test]
+    fn a_three_entry_cell_tree_splits_two_cells() {
+        let mut m = map(vec![]);
+        cells(&mut m, 2);
+        m.dpvs_planes = vec![crate::map::Plane {
+            normal: [1.0, 0.0, 0.0],
+            dist: 0.0,
+        }];
+        m.dpvs_nodes = vec![3, 3, 1, 2];
+        let (nodes, leafs) = cell_tree(&m).unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].plane, 0);
+        assert_eq!(nodes[0].children, [-1, -2]);
+        assert_eq!(leafs.iter().map(|l| l.cell).collect::<Vec<_>>(), [0, 1]);
+
+        m.dpvs_nodes = vec![3, 0];
+        assert!(cell_tree(&m).is_err());
+        m.dpvs_nodes = vec![4, 2, 1, 2];
+        assert!(cell_tree(&m).is_err(), "plane 1 of 1");
+    }
+
+    /// A cell's surface tree flattens in preorder, a leaf keeping its
+    /// surfaces; a chain past 128 deep is refused.
+    #[test]
+    fn a_cell_surface_tree_flattens_in_preorder_and_stops_past_128() {
+        let node = |child_count, children_offset| GfxAabbTree {
+            child_count,
+            children_offset,
+            ..Default::default()
+        };
+        let leaf = |start_surf_index, surface_count| GfxAabbTree {
+            start_surf_index,
+            surface_count,
+            ..Default::default()
+        };
+        let trees = [node(2, 0x2C), leaf(4, 2), leaf(6, 1)];
+        let mut out = Vec::new();
+        preorder(&trees, 0, &mut out, 0).unwrap();
+        let got: Vec<_> = out
+            .iter()
+            .map(|n| (n.first_soup, n.soup_count, n.child_count))
+            .collect();
+        assert_eq!(got, [(0, 0, 2), (4, 2, 0), (6, 1, 0)]);
+
+        let mut chain: Vec<GfxAabbTree> = (0..129).map(|_| node(1, 0x2C)).collect();
+        chain.push(leaf(0, 1));
+        assert!(preorder(&chain, 0, &mut Vec::new(), 0).is_err());
+    }
 }

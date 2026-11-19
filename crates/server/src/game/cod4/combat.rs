@@ -97,8 +97,7 @@ const MASK_MELEE: u32 = 0x280_6891;
 /// of a dropped weapon already held (cod4-combat.md 6).
 const EV_ITEM_PICKUP: u32 = 9;
 
-/// `Bullet_Trace`'s mask (0x2806831).
-pub const MASK_SHOT: u32 = 0x280_6831;
+pub use vcod_cod4::collision::MASK_SHOT;
 /// `iDFlags` 4.
 pub const DFLAG_NO_KNOCKBACK: i32 = 4;
 /// `Bullet_Fire`'s range for everything but a spread weapon.

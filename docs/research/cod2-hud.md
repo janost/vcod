@@ -612,7 +612,7 @@ Against 1.1's 27 cvars (cod11-shellshock.md 3, 4), VERIFIED:
 `CG_DrawActiveFrame` (0x1d4a50) picks the record of `ps.shellshockIndex`
 (+0x5e4) with `shellshockTime` and `shellshockDuration` off `cg.snap` and
 runs `CG_UpdateShellShock` (0x1d7528). VERIFIED. Its formulas are 1.1's
-(cod11-shellshock.md 5..9): the sound fades, loop blend and end cue; the
+(cod11-shellshock.md 5): the sound fades, loop blend and end cue; the
 mouse scale and fade; `CL_SetUserCmdInShellshock` (button 0x800 in
 `CL_CmdButtons`, 0x188ee2, while `elapsed < duration`); and the kick off
 `_cg_perturbations` (`.data` 0x33c1a0), byte for byte 1.1's 131-point

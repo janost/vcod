@@ -704,8 +704,10 @@ otherwise.
   `probe_passthru`, z -151.875 at y -376) is the map's bottom brush, 145
   under the garden terrain. A view from there shows walls floating over sky:
   the town from below, not a culling bug.
-- Portal walk: a portal's plane faces out of its owning cell. vcod adds three
-  over-marking rules in `common/src/vis.rs` for the mp_ship decks.
+- Portal walk: a portal's plane faces out of its owning cell. vcod adds
+  over-marking passes in `common/src/vis.rs` for the mp_ship decks; what
+  they cost is in bsp-ibsp59-format.md, "How the retail client draws the
+  world".
 - No cell lists a brush model's soups. `WorldVis` marks them by the model's
   bounds against the frustum, and the renderer keeps only those whose model
   a snapshot entity carries (movers doc, "The client").

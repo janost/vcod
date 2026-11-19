@@ -1,8 +1,8 @@
 //! `ban.txt` and the temporary bans. 1.5b, UO 1.51b and CoD2 1.3 keep
 //! the same file, a `%i %s\r\n` guid and cleaned name a line, read whole
 //! at every check, and the same 16-entry temporary table `tempBan*`
-//! (CoD2's `kick`) fills (cod11-server-handshake.md, "1.5 permanent
-//! bans"; cod2-protocol.md 17.7). Addresses are CoD2 1.3's, 1.5b's
+//! (CoD2's `kick`) fills (cod11-server-handshake.md, "Permanent bans
+//! on 1.5"; cod2-protocol.md 17.7). Addresses are CoD2 1.3's, 1.5b's
 //! beside them. 1.1d keeps no file: its bans go to the authorize server,
 //! and vcod's stand-in for that list is this file too.
 //!
@@ -335,8 +335,8 @@ mod tests {
         assert_eq!(f.unban("foo"), Some(0));
     }
 
-    /// The 1.5b walk this one shares (handshake doc, "1.5 permanent
-    /// bans"): both dups go, a last line with no line end is missed, blanks
+    /// The 1.5b walk this one shares (handshake doc, "Permanent bans
+    /// on 1.5"): both dups go, a last line with no line end is missed, blanks
     /// after the guid are skipped.
     #[test]
     fn unban_walks_the_lines_as_retail() {

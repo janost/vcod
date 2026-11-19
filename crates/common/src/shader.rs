@@ -753,6 +753,10 @@ struct StageBuf {
     anim_fps: [Option<f32>; 2],
     /// `multiplyImage`'s four factors, folded into the gens at the end.
     multiply: Option<[ImageFactor; 4]>,
+    /// tcMods and `tcGen vector|environment` seen before their bundle's
+    /// `map`: retail's bundle exists from the stage's start (0x4f1b40).
+    early_tcmods: [Vec<TcMod>; 2],
+    early_tc_gen: [Option<TcGen>; 2],
 }
 
 /// One `multiplyImage` argument (CoDMP.exe 0x4f946e): a number, or
@@ -812,7 +816,42 @@ impl StageBuf {
             slot.clamp = b.clamp;
             slot.tc_gen = b.tc_gen;
         } else {
+            let mut b = b;
+            if let Some(early) = self.early_tcmods.get_mut(self.target) {
+                b.tcmods.splice(0..0, std::mem::take(early));
+            }
+            if let Some(g) = self
+                .early_tc_gen
+                .get_mut(self.target)
+                .and_then(Option::take)
+            {
+                b.tc_gen = g;
+            }
             self.bundles.push(b);
+        }
+    }
+
+    /// A bundle setting lands on the target bundle, or its early slot when
+    /// its `map` has not come yet.
+    fn set_tc_gen(&mut self, g: TcGen) {
+        match self.bundles.get_mut(self.target) {
+            Some(b) => b.tc_gen = g,
+            None => {
+                if let Some(slot) = self.early_tc_gen.get_mut(self.target) {
+                    *slot = Some(g);
+                }
+            }
+        }
+    }
+
+    fn push_tcmod(&mut self, m: TcMod) {
+        match self.bundles.get_mut(self.target) {
+            Some(b) => b.tcmods.push(m),
+            None => {
+                if let Some(slot) = self.early_tcmods.get_mut(self.target) {
+                    slot.push(m);
+                }
+            }
         }
     }
 }
@@ -1167,8 +1206,8 @@ fn tc_mod(sb: &mut StageBuf, args: &[&str], sname: &str, warns: &mut WarnSet) ->
     };
     if args.len() < 1 + need {
         warns.note_once(sname, &format!("tcMod {sub} short of parms, dropped"));
-    } else if let Some(b) = sb.bundles.get_mut(sb.target) {
-        b.tcmods.push(tcmod);
+    } else {
+        sb.push_tcmod(tcmod);
     }
     1 + need
 }
@@ -1213,15 +1252,11 @@ fn tc_gen(sb: &mut StageBuf, args: &[&str], sname: &str, warns: &mut WarnSet) ->
             if bad {
                 warns.warn_once(sname, "malformed tcGen vector");
             }
-            if let Some(b) = sb.bundles.get_mut(sb.target) {
-                b.tc_gen = TcGen::Vector(vals);
-            }
+            sb.set_tc_gen(TcGen::Vector(vals));
             k
         }
         "environment" => {
-            if let Some(b) = sb.bundles.get_mut(sb.target) {
-                b.tc_gen = TcGen::Environment;
-            }
+            sb.set_tc_gen(TcGen::Environment);
             1
         }
         _ => {
@@ -1973,6 +2008,20 @@ textures/sfx/test_water
         let (name, body) = first_block(text);
         let mut warns = WarnSet::new();
         parse_shader(&name, &body, &mut warns)
+    }
+
+    /// A tcMod or tcGen ahead of its stage's `map` stays on the bundle.
+    #[test]
+    fn tcmod_and_tcgen_before_map_are_kept() {
+        let sh = parse_one(
+            "s\n{\n{\ntcMod scroll 1 0\ntcGen environment\nmap textures/x.tga\ntcMod scale 2 2\n}\n}\n",
+        );
+        let b = &sh.stages[0].bundles[0];
+        assert_eq!(
+            b.tcmods,
+            vec![TcMod::Scroll(1.0, 0.0), TcMod::Scale(2.0, 2.0)]
+        );
+        assert_eq!(b.tc_gen, TcGen::Environment);
     }
 
     #[test]
