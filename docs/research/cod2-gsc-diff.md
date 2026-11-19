@@ -619,7 +619,8 @@ vcod (all three games):
   allocated since, `Vm::collect` marks what the threads' locals and stacks, their endon and `waittill`
   targets, `level`, `game`, `anim` and the host (`Host::roots`: each
   object's script struct and engine fields, the queued notifies) reach, and
-  frees the rest for the next allocations (`Heap::collect`). The level is
+  frees the rest for the next allocations (`Heap::collect`), the built
+  strings too (below). The level is
   still capped: past 64,000,000 variables (every struct and array the last
   sweep kept or allocated since, with their fields and elements,
   `Heap::vars`, plus the live threads; `interp::MAX_VARIABLES`) or 256 MiB
@@ -637,11 +638,40 @@ vcod (all three games):
   slots and 194,749 variables, about 6,500 arrays more a minute; with it
   the slots held at 17,135 and 2,202 from tick 7,200 on and the variables
   ran between 19,000 and 48,000. Both runs printed the same `DIGEST=1`
-  line. The interner frees nothing: in both runs its strings grew from
-  159,483 bytes at tick 1,200 to 630,845 at 14,400, about 43 KB a minute,
-  which reaches `MAX_STRING_BYTES` after about 100 hours. A script
-  allocating in one step reaches the variable ceiling within seconds,
-  since no sweep runs inside a frame.
+  line. In both runs the interner's strings grew from 159,483 bytes at
+  tick 1,200 to 630,845 at 14,400, about 43 KB a minute, which reaches
+  `MAX_STRING_BYTES` after about 100 hours. A script allocating in one
+  step reaches the variable ceiling within seconds, since no sweep runs
+  inside a frame.
+- The growth was strings built with `+`. The 7,465 atoms added after
+  tick 1,200 were nearly all `_globallogic`'s `D;` and `K;` `logPrint`
+  lines, the `logString` damage lines and every prefix the left-to-right
+  `+` built on the way. VERIFIED, vcod measurement 2026-11-19 (the same
+  run, the interner's texts dumped). So
+  the sweep frees strings too, the built ones only. A concatenation takes
+  a temporary atom (`Interner::intern_temp`); the compiler's atoms, and
+  every one the host interns, are permanent. A temporary atom turns
+  permanent the moment the host is handed it (`Interner::pin`): as a
+  builtin's argument, an entity field's new value, a value or key read
+  through `Cx`, or `call_now`'s result. The server keeps atoms in Rust
+  structs (attachments, trigger origins, per-atom caches keyed on
+  `Interner::id`), and none of them can then name a freed atom. The one
+  exception is a builtin the host lists in `Host::reads_text_only`
+  (GameHost: the print, log and assert names and `isDefined`, whose
+  handlers only render their arguments). `Vm::collect` marks the atoms
+  the walk reaches (values, array keys, field names, the events threads
+  wait on or end on, and the atom owning each one's folded key), frees
+  the unmarked temporary ones and reuses their numbers. It also runs once
+  1 MiB of temporary text, or as much as the last sweep kept, has been
+  built since (`Interner::collect_due`). Same run, 2026-11-19: the
+  strings ran between 107,259 and 247,115 bytes, 141,838 at tick 8,400
+  and 159,881 at 14,400, with the same `DIGEST=1` line
+  (`35f679116907ed0d`). VERIFIED, vcod measurement. What still turns
+  permanent there is a bounded set: dvar, tag, weapon, sound and table
+  names (`precacheItem`, `toLower`, `getDvar`, `playLocalSound`, about
+  4 KB). A built string's atom number is no longer its interning order,
+  so `ArrayKey`'s `Str` order is not either. It stays deterministic.
+  Retail frees a string at a zero `refCount` (INFERRED, cod4-gsc.md 10).
 
 ## 4. Callbacks, engine notifies, script loading
 

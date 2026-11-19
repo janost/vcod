@@ -3285,6 +3285,28 @@ impl Host for GameHost {
         self.set_field(cx, ent, field, value)
     }
 
+    /// The print and log builtins, whose handlers in every game render
+    /// their arguments to a `String` and keep no atom (`io::render`,
+    /// `message::construct`, `developer_statement`, `is_defined`): stock
+    /// CoD4's `logPrint` lines were most of a never-rotating level's string
+    /// growth (cod2-gsc-diff.md 3.7). A handler added under one of these
+    /// names that keeps an argument's atom must come off this list.
+    fn reads_text_only(&mut self, cx: &Cx, name: Atom) -> bool {
+        matches!(
+            cx.resolve_folded(name),
+            "print"
+                | "println"
+                | "iprintln"
+                | "iprintlnbold"
+                | "logprint"
+                | "logstring"
+                | "assert"
+                | "assertex"
+                | "assertmsg"
+                | "isdefined"
+        )
+    }
+
     /// The objects, and the notifies queued for the next frame.
     fn roots(&self, out: &mut Vec<Value>) {
         self.ents.script_roots(out);

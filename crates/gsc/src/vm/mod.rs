@@ -360,6 +360,9 @@ pub fn contain_builtin_panics(on: bool) {
 }
 
 /// `host.builtin`, its panic caught under [`contain_builtin_panics`].
+/// The arguments' strings turn permanent first, the host may keep them,
+/// unless it says this builtin only reads their text
+/// ([`Host::reads_text_only`]).
 pub(crate) fn call_builtin(
     host: &mut dyn Host,
     cx: &mut Cx,
@@ -367,6 +370,11 @@ pub(crate) fn call_builtin(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
+    if args.iter().any(|&v| cx.interner.holds_temporary(v)) && !host.reads_text_only(cx, name) {
+        for &v in args {
+            cx.interner.pin(v);
+        }
+    }
     if !CONTAIN.get() {
         return host.builtin(cx, name, recv, args);
     }
@@ -529,7 +537,9 @@ impl Cx<'_> {
     }
 
     pub fn get_field(&self, s: StructId, f: Atom) -> Value {
-        self.heap.get_field(s, f)
+        let v = self.heap.get_field(s, f);
+        self.interner.pin(v);
+        v
     }
 
     pub fn set_field(&mut self, s: StructId, f: Atom, v: Value) {
@@ -550,7 +560,9 @@ impl Cx<'_> {
     }
 
     pub fn get_index(&self, a: ArrayId, k: ArrayKey) -> Value {
-        self.heap.get_index(a, k)
+        let v = self.heap.get_index(a, k);
+        self.interner.pin(v);
+        v
     }
 
     pub fn set_index(&mut self, a: ArrayId, k: ArrayKey, v: Value) {
@@ -564,7 +576,13 @@ impl Cx<'_> {
     /// An array's keys, the most recently added first, for a builtin that
     /// lists them (CoD4's `getArrayKeys`).
     pub fn array_keys_newest_first(&self, a: ArrayId) -> Vec<ArrayKey> {
-        self.heap.array_keys_newest_first(a)
+        let keys = self.heap.array_keys_newest_first(a);
+        for k in &keys {
+            if let ArrayKey::Str(a) = *k {
+                self.interner.pin(Value::String(a));
+            }
+        }
+        keys
     }
 
     /// One array's contents, lifted out of this heap for another `Vm`
@@ -712,6 +730,15 @@ pub trait Host {
     /// The other half of a `Cx::spawn_then`, with its token. A spawn queued
     /// here starts before the builtin's remaining queued threads.
     fn spawn_returned(&mut self, _cx: &mut Cx, _token: u32) {}
+
+    /// Whether builtin `name` only reads its arguments' text while it runs
+    /// and keeps no `Atom` of theirs (a print, a log line). The VM leaves
+    /// a string built at run time among them temporary, for a sweep to free
+    /// once nothing names it ([`Vm::collect`]); for any other builtin it
+    /// turns permanent, so whatever the host keeps stays valid.
+    fn reads_text_only(&mut self, _cx: &Cx, _name: Atom) -> bool {
+        false
+    }
 
     /// Pushes every struct and array value the host holds between frames
     /// (an entity's script struct, an engine field, a queued notify's
@@ -1016,8 +1043,9 @@ impl Vm {
     }
 
     /// Frees every struct and array neither the VM nor `host` holds
-    /// ([`Heap::collect`]). Only between frames: a thread being stepped has
-    /// its frames off the thread list. [`Vm::run_frame`] calls it once
+    /// ([`Heap::collect`]), and every temporary string none of them names
+    /// ([`Interner::sweep`]). Only between frames: a thread being stepped
+    /// has its frames off the thread list. [`Vm::run_frame`] calls it once
     /// enough has been allocated since the last sweep.
     pub fn collect(&mut self, host: &dyn Host) {
         debug_assert!(self.spawn_depth == 0 && self.pool.is_none());
@@ -1031,7 +1059,15 @@ impl Vm {
             Value::Struct(self.anim),
         ];
         roots.extend(self.thread_returned);
+        let mut atoms = self.interner.marks();
         for t in &self.threads {
+            // The event names a thread waits on or ends on.
+            for e in &t.endons {
+                atoms[e.1.0 as usize] = true;
+            }
+            if let sched::ThreadState::WaitingNotify { event, .. } = t.state {
+                atoms[event.0 as usize] = true;
+            }
             for f in &t.frames {
                 roots.extend_from_slice(&f.locals);
                 roots.extend_from_slice(&f.stack[..f.sp as usize]);
@@ -1049,7 +1085,8 @@ impl Vm {
             }
         }
         host.roots(&mut roots);
-        self.heap.collect(roots);
+        self.heap.collect(roots, &mut atoms);
+        self.interner.sweep(atoms);
     }
 
     pub fn set_budget(&mut self, budget: u32) {
@@ -1178,7 +1215,8 @@ impl Vm {
     }
 
     /// The length of every string the VM holds, for the `stringUsage`
-    /// console command. vcod's interner never frees one.
+    /// console command: the permanent ones, and the temporary ones the last
+    /// sweep kept or built since.
     pub fn string_lengths(&self) -> Vec<usize> {
         self.interner.texts().map(str::len).collect()
     }
@@ -1301,7 +1339,9 @@ impl Vm {
     /// or struct (`getentarray`, `spawnstruct`) or read/write a field or
     /// element from outside the instruction loop. `Heap`'s own methods are
     /// the API: bounds-checked, so an id the host mishandles reads
-    /// `Undefined` or drops a write rather than panicking.
+    /// `Undefined` or drops a write rather than panicking. A string read
+    /// here is not pinned (`Interner::pin`): a host that keeps one reads it
+    /// through `Cx` instead.
     pub fn heap(&self) -> &Heap {
         &self.heap
     }
@@ -1581,22 +1621,28 @@ pub(crate) mod tests {
     /// Runs `src`'s `main` as a thread on entity 1 over `frames` 50 ms
     /// frames, every frame free of errors; with `sweep`, a sweep after each.
     fn run_frames(src: &str, frames: i32, sweep: bool) -> (TestHost, Vm) {
+        let mut host = TestHost::default();
+        let vm = run_frames_on(&mut host, src, frames, sweep);
+        (host, vm)
+    }
+
+    /// [`run_frames`] on a host of the test's own.
+    fn run_frames_on(host: &mut dyn Host, src: &str, frames: i32, sweep: bool) -> Vm {
         let ast = crate::parse::parse_file(src).unwrap();
         let mut vm = Vm::new();
         let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
         vm.install(fns).unwrap();
-        let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
         let me = Some(Target::Entity(EntId(1, 0)));
-        vm.start_thread(&mut host, main, me, vec![]);
+        vm.start_thread(host, main, me, vec![]);
         for frame in 1..=frames {
-            let errors = vm.run_frame(&mut host, frame * 50);
+            let errors = vm.run_frame(host, frame * 50);
             assert!(errors.is_empty(), "frame {frame}: {errors:?}");
             if sweep {
-                vm.collect(&host);
+                vm.collect(host);
             }
         }
-        (host, vm)
+        vm
     }
 
     fn level_value(vm: &Vm, name: &str) -> Value {
@@ -1676,6 +1722,110 @@ pub(crate) mod tests {
         assert_eq!(vm.thread_count(), 1, "the parked thread still waits");
         // The garbage went: what is left is a handful of objects.
         assert!(vm.heap().vars() < 40, "{} vars", vm.heap().vars());
+    }
+
+    /// A thread that builds a new string every iteration, as stock CoD4's
+    /// `logPrint` lines do, leaves the interner flat: the strings nothing
+    /// names any more are freed between frames.
+    #[test]
+    fn strings_a_thread_drops_are_freed_and_the_interner_stays_flat() {
+        let src = "main() { level.n = 0; for (;;) { for (i = 0; i < 100; i++) { \
+             s = \"line \" + level.n + \" of a log that never rotates\"; level.n++; } \
+             level.last = s; wait 0.05; } }";
+        let (_, vm) = run_frames(src, 1000, false);
+        let bytes = vm.interner().bytes();
+        assert!(
+            bytes < 2 << 20,
+            "{bytes} bytes of strings for 100,000 lines"
+        );
+        let Value::String(last) = level_value(&vm, "last") else {
+            panic!("level.last is not a string");
+        };
+        assert_eq!(
+            vm.interner().resolve(last),
+            "line 99999 of a log that never rotates"
+        );
+    }
+
+    /// Keeps `keep(s)`'s atom in a Rust field, as a server's attach table
+    /// does, and only reads `log(s)`'s text.
+    #[derive(Default)]
+    struct KeepHost {
+        kept: Vec<Atom>,
+        logged: usize,
+    }
+
+    impl Host for KeepHost {
+        fn builtin(
+            &mut self,
+            cx: &mut Cx,
+            name: Atom,
+            _: Option<Target>,
+            args: &[Value],
+        ) -> Result<Value, ErrorKind> {
+            match (cx.resolve_folded(name), args.first()) {
+                ("keep", Some(&Value::String(a))) => self.kept.push(a),
+                ("log", Some(&Value::String(a))) => self.logged += cx.resolve(a).len(),
+                ("spawnstruct", _) => return Ok(Value::Struct(cx.new_struct())),
+                _ => {}
+            }
+            Ok(Value::Undefined)
+        }
+
+        fn get_field(&mut self, _: &mut Cx, _: EntId, _: Atom) -> Value {
+            Value::Undefined
+        }
+
+        fn set_field(&mut self, _: &mut Cx, _: EntId, _: Atom, _: Value) -> Result<(), ErrorKind> {
+            Ok(())
+        }
+
+        fn reads_text_only(&mut self, cx: &Cx, name: Atom) -> bool {
+            cx.resolve_folded(name) == "log"
+        }
+
+        fn roots(&self, _: &mut Vec<Value>) {}
+    }
+
+    /// What a sweep frees is only what nothing can name: a built string
+    /// handed to a builtin that may keep it, one held as an array key, a
+    /// field, a `waittill`'s event or an `endon`'s all survive sweeps under
+    /// a flood of garbage strings, while what `log` only read is freed.
+    #[test]
+    fn a_sweep_frees_no_string_the_host_or_a_script_can_still_name() {
+        let src = r#"main() {
+             keep("kept " + 1);
+             level.a["k" + 7] = 70;
+             level.s = spawnstruct(); level.s.name = "name " + 2;
+             thread waiter(); thread ender();
+             for (n = 0; n < 200; n++) {
+               for (i = 0; i < 20; i++) log("garbage " + n + " " + i);
+               wait 0.05;
+             }
+             level notify("ev" + 5);
+             level notify("stop" + 1);
+             wait 0.05;
+             level.key = level.a["k" + (3 + 4)];
+             level.field = level.s.name == "name " + (1 + 1);
+           }
+           waiter() { level waittill("ev" + 5); level.woke = 1; }
+           ender() { level endon("stop" + 1); level.ended = 0; wait 100; level.ended = 1; }"#;
+        let mut host = KeepHost::default();
+        let vm = run_frames_on(&mut host, src, 205, true);
+        assert_eq!(level_value(&vm, "key"), Value::Int(70));
+        assert_eq!(level_value(&vm, "field"), Value::Int(1));
+        assert_eq!(level_value(&vm, "woke"), Value::Int(1));
+        assert_eq!(level_value(&vm, "ended"), Value::Int(0));
+        assert_eq!(vm.thread_count(), 0, "the ender's endon ended it");
+        assert_eq!(host.kept.len(), 1);
+        assert_eq!(vm.interner().resolve(host.kept[0]), "kept 1");
+        assert!(host.logged > 40_000);
+        let garbage = vm
+            .interner()
+            .texts()
+            .filter(|t| t.starts_with("garbage"))
+            .count();
+        assert!(garbage <= 20, "{garbage} garbage strings left");
     }
 
     /// `s = s + s` stops at `MAX_STRING_LEN` with a script error, in both

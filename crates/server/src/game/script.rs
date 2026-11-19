@@ -350,8 +350,8 @@ pub enum PassStop {
 /// already has it would fail loudly. Every stock gametype references the
 /// same shared scripts, so a map change that reused one long-lived `Vm`
 /// would hit this on the first shared file. A map change therefore builds
-/// a new `ScriptRuntime` and drops the old one; the heap goes with it,
-/// which is also what the VM's no-garbage-collection design assumes.
+/// a new `ScriptRuntime` and drops the old one; the heap and the interner
+/// go with it.
 pub struct ScriptRuntime {
     vm: Vm,
     pub(crate) host: GameHost,
@@ -376,7 +376,8 @@ pub struct ScriptRuntime {
 }
 
 /// vcod's: the bytes of new script strings one client's `mr` answers and
-/// vote arguments may add to the interner in a level, which frees none.
+/// vote arguments may add to the interner in a level, where the host's
+/// strings stay until it ends.
 /// Stock menus answer with names the scripts already hold, which cost
 /// nothing.
 pub const CLIENT_STRING_BUDGET: usize = 64 * 1024;
@@ -5792,6 +5793,24 @@ mod tests {
             "weapon_russian:mosin_nagant_mp"
         );
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+    }
+
+    /// `logPrint` only reads its line's text (`Host::reads_text_only`), so
+    /// a level logging new lines every frame keeps its strings flat: the
+    /// lines are freed between frames (cod2-gsc-diff.md 3.7).
+    #[test]
+    fn logged_lines_are_freed_between_frames() {
+        let mut rt = ScriptRuntime::for_test(
+            "main() { for (n = 0; ; n++) { for (i = 0; i < 100; i++) \
+             logPrint(\"K;\" + n + \";\" + i + \";a line of the log that never rotates\\n\"); \
+             wait 0.05; } }",
+        );
+        for frame in 1..=600 {
+            rt.run_frame(frame * 50);
+        }
+        assert_eq!(rt.host.game_log.len(), 60_000);
+        let bytes = rt.vm.interner().bytes();
+        assert!(bytes < 3 << 19, "{bytes} bytes of strings for 60,000 lines");
     }
 
     /// A client spraying distinct `mr` answers fills its own budget and no

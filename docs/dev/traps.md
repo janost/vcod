@@ -61,6 +61,15 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
   table (script structs, engine and client fields) and the two queued
   notify lists. A host holding an id in a Rust local across `run_frame`
   has the same bug.
+- The same sweep frees strings built with `+` that nothing names
+  (`Interner::intern_temp`, cod2-gsc-diff.md 3.7). One turns permanent when
+  the host is handed it: a builtin's argument, an entity field write, a read
+  through `Cx`. A host may keep any `Atom` it got that way. It must not keep
+  one read through `Vm::heap()`, which does not pin. A builtin named in
+  `GameHost::reads_text_only` gets its arguments unpinned, so its handler
+  must not keep an argument's atom. A new VM path that hands a value to the
+  host pins it (`Interner::pin`), or a host's cached atom later names other
+  text.
 - `Cx::spawn` runs a script thread before the calling builtin's next
   instruction. `Cx::spawn_then` adds `Host::spawn_returned` once that thread
   first suspends. Only a `Cx` handed to a builtin (or to `spawn_returned`)
