@@ -35,7 +35,7 @@ flow.
 ## The captures
 
 `crates/server/tests/fixtures/playerstate/mp_carentan-dm-slope-8ms-moves-1.1.txt`
-and `...-moves-1.5.txt`: `moves_script` (`crates/client/src/probe.rs`,
+and `...-moves-1.5.txt`: `moves_script` (`crates/client/src/probe/scripts.rs`,
 `--probe-moves`) on the street placement of `client-probes/probe_prone`,
 run against `tools/run_probe.sh` on each server, cmds every 8 ms, every
 snapshot's decoded playerstate logged. They show, all VERIFIED:

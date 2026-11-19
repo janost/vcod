@@ -3125,7 +3125,7 @@ table reads as full damage; retail has no such state.
 
 #### What the sweep measured
 
-`--probe-sweep` (`crates/client/src/probe.rs`) taps once per entry of a
+`--probe-sweep` (`crates/client/src/probe/hit.rs`) taps once per entry of a
 table of pitch offsets around the aim at the target's eye and echoes the
 offset on its `!trace` line; the retail server logs `sHitLoc` per hit in its
 `games_mp.log`, a `D;` record for a wound and a `K;` record for the kill, and
@@ -6952,7 +6952,7 @@ VERIFIED: on the committed take the first traces of `cook_release`
 it the other way round, `pin_out` alone opening on the pullback).
 VERIFIED: `to_frag`'s last trace is `serverTime` 16700 at `weaponstate` 0,
 so no snapshot is missing between the two steps. INFERRED, off
-`CombatProbe::step` in `crates/client/src/probe.rs`: a step's clock starts
+`CombatProbe::step` in `crates/client/src/probe/combat.rs`: a step's clock starts
 on the probe's first iteration after the step before it ended, and a
 snapshot already traced is not traced again, so a step's first trace is
 whichever snapshot arrives next, before or after its first cmd reached the

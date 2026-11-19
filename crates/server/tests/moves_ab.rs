@@ -4,7 +4,7 @@
 //! (`the_predictor_replays_uo_sprint_and_bipod`, below) under UO's rules.
 //!
 //! The fixtures are `--save-slope --probe-moves` runs of one movement script
-//! (`moves_script` in `crates/client/src/probe.rs`: jumps inside and past
+//! (`moves_script` in `crates/client/src/probe/scripts.rs`: jumps inside and past
 //! 1.5's jump penalty, crouch, prone, the prone press while running,
 //! strafes, hip and sighted shots) against the retail 1.1d server and the
 //! retail 1.5b server, tagged `moves-1.1` and `moves-1.5`, and two
@@ -475,14 +475,14 @@ const SPEEDGRAV_1_1: &str = "mp_carentan-dm-slope-8ms-speedgrav-1.1.txt";
 const SPEEDGRAV_1_5: &str = "mp_carentan-dm-slope-8ms-speedgrav-1.5.txt";
 const SPEEDGRAV_UO: &str = "mp_carentan-dm-slope-8ms-speedgrav-uo.txt";
 /// The talk script (`--probe-talk`, `talk_script` in
-/// `crates/client/src/probe.rs`): the talk bit over the sight, a run, a
+/// `crates/client/src/probe/scripts.rs`): the talk bit over the sight, a run, a
 /// shot, a jump, a crouch and a prone crawl. 1.1 drops the sight under it,
 /// 1.5 and UO keep it (cod15-movement.md 5, "The talk button").
 const TALK_1_1: &str = "mp_carentan-dm-slope-8ms-talk-1.1.txt";
 const TALK_1_5: &str = "mp_carentan-dm-slope-8ms-talk-1.5.txt";
 const TALK_UO: &str = "mp_carentan-dm-slope-8ms-talk-uo.txt";
 /// The prone move key (`--probe-pronemove rifle`, `pronemove_script` in
-/// `crates/client/src/probe.rs`, springfield_mp): pressed prone under the
+/// `crates/client/src/probe/scripts.rs`, springfield_mp): pressed prone under the
 /// sight, in a rechamber and in a swing's windup, which
 /// `PM_InteruptWeaponWithProneMove` answers per patch (cod11-combat.md
 /// 1.13), then a prone press from a crouched walk back.
@@ -726,7 +726,7 @@ fn the_predictor_replays_uo_talk() {
 const SPRINT_UO: &str = "mp_carentan-dm-slope-8ms-sprint-uo.txt";
 
 /// United Offensive's sprint and bipod (`--probe-sprint`, `sprint_script`
-/// in `crates/client/src/probe.rs`, docs/research/coduo-movement.md): a
+/// in `crates/client/src/probe/scripts.rs`, docs/research/coduo-movement.md): a
 /// sprint to exhaustion, its regeneration, sprint with every other gait,
 /// the bipod deployed prone, swung past its yaw cap, moved and fired, and
 /// broken down. The weapon defs are UO's, so this runs only with `COD_DIR`
@@ -753,7 +753,7 @@ fn the_predictor_replays_uo_sprint_and_bipod() {
 }
 
 /// The windows out of United Offensive's walled-in spawn rooms
-/// (`--probe-crouchjump`, `crouchjump_script` in `crates/client/src/probe.rs`,
+/// (`--probe-crouchjump`, `crouchjump_script` in `crates/client/src/probe/scripts.rs`,
 /// `client-probes/probe_crouchjump`, bot-navigation.md "Walled-in spawns"):
 /// a run at the wall under the window, a jump, crouch held in the air for
 /// a second (none in the `-stand` controls), then on through the window and
@@ -825,7 +825,7 @@ fn the_predictor_replays_uo_jumps_through_low_windows() {
 const AUTOFIRE_UO: &str = "mp_carentan-dm-slope-8ms-autofire-uo.txt";
 
 /// United Offensive's automatic fire (`--probe-autofire`, `autofire_script`
-/// in `crates/client/src/probe.rs`, docs/research/coduo-movement.md): the
+/// in `crates/client/src/probe/scripts.rs`, docs/research/coduo-movement.md): the
 /// mp44 held from the hip, held down the sight, then tapped. Needs
 /// `COD_DIR` at a UO install, as the sprint gate does.
 #[test]
@@ -1031,7 +1031,7 @@ const UOFOOT: [&str; 3] = [
 ];
 
 /// United Offensive's mounts and grenade cook (`--probe-uofoot`,
-/// `uofoot_script` in `crates/client/src/probe.rs`, `client-probes/
+/// `uofoot_script` in `crates/client/src/probe/scripts.rs`, `client-probes/
 /// probe_uofoot`, docs/research/coduo-movement.md 11 and 12) on mp_foy: the
 /// mg30cal deployed standing on an `hmgstanding` brush, crouched on an
 /// `hmgcrouching` one and crouched at a script `trigger_mount` the client
@@ -1073,7 +1073,7 @@ const UOFOOT_GAPS: &[(&str, &str, &[i32])] = &[
 ];
 
 /// Runs at, along and over mp_carentan's patches (`--probe-patchwalk`,
-/// `patchwalk_script` in `crates/client/src/probe.rs`, `client-probes/
+/// `patchwalk_script` in `crates/client/src/probe/scripts.rs`, `client-probes/
 /// probe_patchwalk`): a pole (patch 4), a pillar on terrain (11) and the
 /// row of posts round the square (97, 98, 133, 136 and their neighbours),
 /// on each server build, replayed under that build's rules and patch
