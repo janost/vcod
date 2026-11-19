@@ -234,17 +234,11 @@ impl Server {
             .map(|c| (crate::bots::dist_sq(view.origin, c.spot.centre()), c))
             .filter(|(d, _)| *d >= min * min && *d <= max * max)
             .filter(|(_, c)| {
-                // The hull's own clip may stop the trace short of its
-                // middle: a stop at its box is the vehicle.
                 world.is_none_or(|w| {
                     let to = glam::Vec3::from(c.spot.centre());
                     let t = w.shot_trace(eye, to);
                     let end: [f32; 3] = (eye + (to - eye) * t.fraction).into();
-                    let up = end[2] - c.spot.origin[2];
-                    t.fraction >= 1.0
-                        || c.spot.gap(end) < ARMOR_REACH
-                            && up > c.spot.mins[2] - ARMOR_REACH
-                            && up < c.spot.maxs[2] + ARMOR_REACH
+                    hull_met(&c.spot, t.fraction, end)
                 })
             })
             .min_by(|a, b| a.0.total_cmp(&b.0))
@@ -388,6 +382,17 @@ fn seat_view(
 /// hull.
 const ARMOR_REACH: f32 = 24.0;
 
+/// Whether a trace toward `spot`'s middle that stopped at `fraction`, at
+/// `end`, met the hull: clear through, or stopped within [`ARMOR_REACH`] of
+/// its box, the hull's own clip being able to stop it short of the middle.
+fn hull_met(spot: &VehicleSpot, fraction: f32, end: [f32; 3]) -> bool {
+    let up = end[2] - spot.origin[2];
+    fraction >= 1.0
+        || spot.gap(end) < ARMOR_REACH
+            && up > spot.mins[2] - ARMOR_REACH
+            && up < spot.maxs[2] + ARMOR_REACH
+}
+
 /// A vehicle with a rider, for [`Server::armor_view`].
 struct Crewed {
     spot: VehicleSpot,
@@ -410,32 +415,51 @@ fn crowd(
     mine: i32,
     walkers: &[(usize, [f32; 3], i32)],
 ) -> Crowd {
+    let Some((id, _)) = host.vehicles.seat_of(slot) else {
+        return Crowd::default();
+    };
+    let Some(v) = host.vehicles.live.get(&id) else {
+        return Crowd::default();
+    };
+    let info = host.vehicles.info_of(v);
+    let hull = VehicleSpot {
+        num: id.0,
+        origin: v.pose.origin,
+        yaw: v.pose.angles[1],
+        mins: info.mins,
+        maxs: info.maxs,
+        tank: info.kind == KIND_TANK,
+    };
+    crowd_round(&hull, v.forward_speed, slot, mine, walkers)
+}
+
+/// [`crowd`]'s strips round `hull` moving at `speed`: the teammates of
+/// `mine` (an axis or allies team) on foot other than `slot` in the strip ahead or behind, out to
+/// [`CROWD_REACH`] and more with speed, or within a corner's turn.
+fn crowd_round(
+    hull: &VehicleSpot,
+    speed: f32,
+    slot: usize,
+    mine: i32,
+    walkers: &[(usize, [f32; 3], i32)],
+) -> Crowd {
     let mut c = Crowd::default();
     if mine != script::TEAM_AXIS && mine != script::TEAM_ALLIES {
         return c;
     }
-    let Some((id, _)) = host.vehicles.seat_of(slot) else {
-        return c;
-    };
-    let Some(v) = host.vehicles.live.get(&id) else {
-        return c;
-    };
-    let info = host.vehicles.info_of(v);
-    let (s, k) = v.pose.angles[1].to_radians().sin_cos();
-    let reach = CROWD_REACH + v.forward_speed.abs() * CROWD_REACH_PER_SPEED;
-    let corner = info.mins[0]
-        .abs()
-        .max(info.maxs[0])
-        .hypot(info.mins[1].abs().max(info.maxs[1]));
+    let (s, k) = hull.yaw.to_radians().sin_cos();
+    let reach = CROWD_REACH + speed.abs() * CROWD_REACH_PER_SPEED;
+    let (mins, maxs) = (hull.mins, hull.maxs);
+    let corner = mins[0].abs().max(maxs[0]).hypot(mins[1].abs().max(maxs[1]));
     for &(_, p, _) in walkers.iter().filter(|w| w.0 != slot && w.2 == mine) {
-        let (dx, dy) = (p[0] - v.pose.origin[0], p[1] - v.pose.origin[1]);
-        if (p[2] - v.pose.origin[2]).abs() > info.maxs[2] + 64.0 {
+        let (dx, dy) = (p[0] - hull.origin[0], p[1] - hull.origin[1]);
+        if (p[2] - hull.origin[2]).abs() > maxs[2] + 64.0 {
             continue;
         }
         let (x, y) = (dx * k + dy * s, -dx * s + dy * k);
-        let wide = y > info.mins[1] - CROWD_MARGIN && y < info.maxs[1] + CROWD_MARGIN;
-        c.ahead |= wide && x > 0.0 && x < info.maxs[0] + reach;
-        c.behind |= wide && x < 0.0 && x > info.mins[0] - reach;
+        let wide = y > mins[1] - CROWD_MARGIN && y < maxs[1] + CROWD_MARGIN;
+        c.ahead |= wide && x > 0.0 && x < maxs[0] + reach;
+        c.behind |= wide && x < 0.0 && x > mins[0] - reach;
         c.beside |= dx.hypot(dy) < corner + CROWD_MARGIN;
     }
     c
@@ -507,7 +531,7 @@ impl BotDrives {
 /// (cod11-map-cycle.md 4.9).
 #[derive(Default)]
 struct HullFits {
-    fit: HashMap<([u32; 3], u32), bool>,
+    fit: FitCache,
     /// Each lump-27 model's link when the fits were taken.
     linked: Vec<bool>,
     /// The warm pass's next node, for the graph it walks; `usize::MAX`
@@ -742,9 +766,8 @@ impl Server {
         Some(((info.maxs[0] - info.mins[0]).min(info.maxs[1] - info.mins[1])) * 0.5)
     }
 
-    /// A* from the node nearest `at` to the node nearest `want` (a random
-    /// far node for a roam) over the nodes a hull of `half` fits on. A goal
-    /// out of reach routes to the reached node nearest it.
+    /// [`plan_route`] for the vehicle's hull, on the fits cache once it has
+    /// dropped what the brush links since moved.
     fn plan_drive(
         &mut self,
         g: &crate::nav::NavGraph,
@@ -754,8 +777,6 @@ impl Server {
         rng: &mut u64,
     ) -> Option<Vec<u32>> {
         let world = self.game.world.as_ref()?;
-        let r = half * FIT_SHARE;
-        let key = r as u32;
         let hull = &mut self.game.module.bot_drives.fits;
         let bounds = self
             .game
@@ -764,80 +785,99 @@ impl Server {
             .as_ref()
             .map_or(&[][..], |rt| &rt.host.model_bounds[..]);
         hull.relink(&world.collision, bounds);
-        let fit = &mut hull.fit;
-        let mut fits = |n: u32| {
-            let node = g.nodes[n as usize];
-            *fit.entry((node.to_array().map(f32::to_bits), key))
-                .or_insert_with(|| test_fit(&world.collision, node, r))
-        };
-        let from = g.nearest(at.into())?;
-        let to = match want {
-            Some(p) => g.goal_node(p).or_else(|| g.nearest(p))?,
-            None => {
-                // A few draws for a far node a hull fits on.
-                (0..16).find_map(|_| {
-                    let n = (rand_from(rng) as usize % g.nodes.len()) as u32;
-                    let p = g.nodes[n as usize];
-                    ((p - at).truncate().length() > ROAM_MIN && fits(n)).then_some(n)
-                })?
-            }
-        };
-        let goal = g.nodes[to as usize];
-        let h = |n: u32| g.nodes[n as usize].distance(goal);
-        let mut open = std::collections::BinaryHeap::new();
-        // Each node's best cost so far and the node it came from;
-        // infinite while unreached.
-        let mut cost = vec![(f32::INFINITY, u32::MAX); g.nodes.len()];
-        cost[from as usize] = (0.0, from);
-        open.push(std::cmp::Reverse((ordered(h(from)), from)));
-        let (mut best, mut best_h) = (from, h(from));
-        let mut expanded = 0;
-        while let Some(std::cmp::Reverse((_, n))) = open.pop() {
-            // A node is tested as it comes off the heap, not as it goes
-            // on: the frontier left at the goal is never tested.
-            if n != from && !fits(n) {
+        plan_route(g, &world.collision, &mut hull.fit, half, at, want, rng)
+    }
+}
+
+/// The fit cache: whether a hull fits, by node point bits and fit radius.
+type FitCache = HashMap<([u32; 3], u32), bool>;
+
+/// A* from the node nearest `at` to the node nearest `want` (a random far
+/// node for a roam) over the nodes a hull of `half` fits on, through `fit`.
+/// A goal out of reach routes to the reached node nearest it.
+fn plan_route(
+    g: &crate::nav::NavGraph,
+    collision: &vcod_common::collision::CollisionWorld,
+    fit: &mut FitCache,
+    half: f32,
+    at: glam::Vec3,
+    want: Option<[f32; 3]>,
+    rng: &mut u64,
+) -> Option<Vec<u32>> {
+    let r = half * FIT_SHARE;
+    let key = r as u32;
+    let mut fits = |n: u32| {
+        let node = g.nodes[n as usize];
+        *fit.entry((node.to_array().map(f32::to_bits), key))
+            .or_insert_with(|| test_fit(collision, node, r))
+    };
+    let from = g.nearest(at.into())?;
+    let to = match want {
+        Some(p) => g.goal_node(p).or_else(|| g.nearest(p))?,
+        None => {
+            // A few draws for a far node a hull fits on.
+            (0..16).find_map(|_| {
+                let n = (rand_from(rng) as usize % g.nodes.len()) as u32;
+                let p = g.nodes[n as usize];
+                ((p - at).truncate().length() > ROAM_MIN && fits(n)).then_some(n)
+            })?
+        }
+    };
+    let goal = g.nodes[to as usize];
+    let h = |n: u32| g.nodes[n as usize].distance(goal);
+    let mut open = std::collections::BinaryHeap::new();
+    // Each node's best cost so far and the node it came from;
+    // infinite while unreached.
+    let mut cost = vec![(f32::INFINITY, u32::MAX); g.nodes.len()];
+    cost[from as usize] = (0.0, from);
+    open.push(std::cmp::Reverse((ordered(h(from)), from)));
+    let (mut best, mut best_h) = (from, h(from));
+    let mut expanded = 0;
+    while let Some(std::cmp::Reverse((_, n))) = open.pop() {
+        // A node is tested as it comes off the heap, not as it goes
+        // on: the frontier left at the goal is never tested.
+        if n != from && !fits(n) {
+            continue;
+        }
+        if n == to {
+            best = to;
+            break;
+        }
+        expanded += 1;
+        if expanded > PLAN_EXPANSIONS {
+            break;
+        }
+        let here = cost[n as usize].0;
+        let p = g.nodes[n as usize];
+        if h(n) < best_h {
+            (best, best_h) = (n, h(n));
+        }
+        for &m in &g.edges[n as usize] {
+            let q = g.nodes[m as usize];
+            let plain = !g.jumps.contains(&(n, m)) && !g.leaps.contains(&(n, m));
+            if !plain || (q.z - p.z).abs() > vcod_common::pmove::STEPSIZE {
                 continue;
             }
-            if n == to {
-                best = to;
-                break;
-            }
-            expanded += 1;
-            if expanded > PLAN_EXPANSIONS {
-                break;
-            }
-            let here = cost[n as usize].0;
-            let p = g.nodes[n as usize];
-            if h(n) < best_h {
-                (best, best_h) = (n, h(n));
-            }
-            for &m in &g.edges[n as usize] {
-                let q = g.nodes[m as usize];
-                let plain = !g.jumps.contains(&(n, m)) && !g.leaps.contains(&(n, m));
-                if !plain || (q.z - p.z).abs() > vcod_common::pmove::STEPSIZE {
-                    continue;
-                }
-                let c = here + p.distance(q);
-                if c < cost[m as usize].0 {
-                    cost[m as usize] = (c, n);
-                    open.push(std::cmp::Reverse((ordered(c + h(m)), m)));
-                }
+            let c = here + p.distance(q);
+            if c < cost[m as usize].0 {
+                cost[m as usize] = (c, n);
+                open.push(std::cmp::Reverse((ordered(c + h(m)), m)));
             }
         }
-        let mut path = vec![best];
-        // `best` was expanded, so its chain runs back to `from`, its own
-        // parent.
-        loop {
-            let last = path[path.len() - 1];
-            let prev = cost[last as usize].1;
-            if prev == last {
-                break;
-            }
-            path.push(prev);
-        }
-        path.reverse();
-        (path.len() > 1).then_some(path)
     }
+    let mut path = vec![best];
+    // `best` was expanded, so its chain runs back to `from`, its own
+    // parent.
+    loop {
+        let last = path[path.len() - 1];
+        let prev = cost[last as usize].1;
+        if prev == last {
+            break;
+        }
+        path.push(prev);
+    }
+    path.reverse();
+    (path.len() > 1).then_some(path)
 }
 
 /// An f32 cost as a heap key; costs are finite and non-negative.
@@ -949,23 +989,59 @@ impl Server {
         ) else {
             return;
         };
-        let parked = &mut self.game.module.bot_parked;
+        let host = &rt.host;
+        let live: Vec<LiveHull> = (host.vehicles.live.iter())
+            .map(|(id, v)| LiveHull {
+                id: *id,
+                pose: v.pose,
+                dead: v.dead,
+                linked: host.ents.get(*id).is_some_and(|e| !e.unlinked),
+            })
+            .collect();
         let graph = std::sync::Arc::as_ptr(g) as usize;
-        if parked.graph != graph {
-            *parked = ParkedVehicles {
+        self.game
+            .module
+            .bot_parked
+            .update(g, graph, &world.collision, &live);
+    }
+}
+
+/// What [`ParkedVehicles::update`] reads of one live vehicle.
+struct LiveHull {
+    id: vcod_gsc::EntId,
+    pose: crate::game::vehicle::Pose,
+    dead: bool,
+    /// Its entity is linked: a dead one burns until its second blast
+    /// unlinks it.
+    linked: bool,
+}
+
+impl ParkedVehicles {
+    /// One tick of the live vehicles on graph `g` (`graph` its identity): a
+    /// pose held [`PARK_TICKS`] covers the nodes its collmap blocks, a move
+    /// past [`PARK_SHOVE`] lets them go, and a dead linked hull burns where
+    /// it died.
+    fn update(
+        &mut self,
+        g: &crate::nav::NavGraph,
+        graph: usize,
+        collision: &vcod_common::collision::CollisionWorld,
+        live: &[LiveHull],
+    ) {
+        if self.graph != graph {
+            *self = ParkedVehicles {
                 graph,
                 ..Default::default()
             };
         }
-        let live = &rt.host.vehicles.live;
         let mut changed = false;
-        parked.each.retain(|id, p| {
-            let keep = live.contains_key(id);
+        self.each.retain(|id, p| {
+            let keep = live.iter().any(|v| v.id == *id);
             changed |= !keep && (!p.nodes.is_empty() || p.wreck.is_some());
             keep
         });
-        for (id, v) in live {
-            let p = parked.each.entry(*id).or_insert(Parked {
+        for v in live {
+            let p = self.each.entry(v.id).or_insert(Parked {
                 pose: v.pose,
                 still: 0,
                 at: v.pose.origin,
@@ -978,7 +1054,7 @@ impl Server {
                 changed = true;
             }
             // A hull burns where it died until its second blast deletes it.
-            if p.wreck.is_none() && v.dead && rt.host.ents.get(*id).is_some_and(|e| !e.unlinked) {
+            if p.wreck.is_none() && v.dead && v.linked {
                 let at = v.pose.origin;
                 let reach = crate::bots::WRECK_REACH;
                 let nodes = g
@@ -1006,27 +1082,309 @@ impl Server {
             }
             p.still = p.still.saturating_add(1);
             if p.still == PARK_TICKS {
-                let nodes = g.blocked_near(&world.collision, v.pose.origin.into(), PARK_REACH);
+                let nodes = g.blocked_near(collision, v.pose.origin.into(), PARK_REACH);
                 changed |= nodes != p.nodes;
                 (p.at, p.nodes) = (v.pose.origin, nodes);
             }
         }
         if changed {
-            let mut all: Vec<u32> = parked
-                .each
-                .values()
+            let mut all: Vec<u32> = (self.each.values())
                 .flat_map(|p| p.nodes.iter().copied())
                 .collect();
             all.sort_unstable();
             all.dedup();
             let mut round = all.clone();
-            for w in parked.each.values().filter_map(|p| p.wreck.as_ref()) {
+            for w in self.each.values().filter_map(|p| p.wreck.as_ref()) {
                 round.extend(w.nodes.iter().map(|n| n.0));
             }
             round.sort_unstable();
             round.dedup();
-            parked.blocked = all.into();
-            parked.round_wrecks = round.into();
+            self.blocked = all.into();
+            self.round_wrecks = round.into();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use glam::Vec3;
+    use vcod_common::collision::{submodel_test_world, test_world};
+
+    use super::*;
+    use crate::nav::NavGraph;
+
+    /// A `nx` by `ny` grid of nodes `pitch` apart from the origin, each
+    /// joined both ways to its four neighbours.
+    fn grid(nx: usize, ny: usize, pitch: f32) -> NavGraph {
+        let id = |x: usize, y: usize| (y * nx + x) as u32;
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+        for y in 0..ny {
+            for x in 0..nx {
+                nodes.push(Vec3::new(x as f32 * pitch, y as f32 * pitch, 0.0));
+                let mut e = Vec::new();
+                if x > 0 {
+                    e.push(id(x - 1, y));
+                }
+                if x + 1 < nx {
+                    e.push(id(x + 1, y));
+                }
+                if y > 0 {
+                    e.push(id(x, y - 1));
+                }
+                if y + 1 < ny {
+                    e.push(id(x, y + 1));
+                }
+                edges.push(e);
+            }
+        }
+        NavGraph::from_parts(nodes, edges)
+    }
+
+    fn plan(
+        g: &NavGraph,
+        world: &vcod_common::collision::CollisionWorld,
+        half: f32,
+        from: u32,
+        to: u32,
+    ) -> Vec<u32> {
+        let goal = g.nodes[to as usize].to_array();
+        let at = g.nodes[from as usize];
+        let path = plan_route(g, world, &mut FitCache::new(), half, at, Some(goal), &mut 1);
+        let path = path.expect("no route");
+        // A chain of the graph's own edges from the start.
+        assert_eq!(path[0], from);
+        for w in path.windows(2) {
+            assert!(g.edges[w[0] as usize].contains(&w[1]), "{w:?} is no edge");
+        }
+        path
+    }
+
+    /// A pillar 40 wide on the middle of a 5 x 3 grid's first row, 48
+    /// apart: a hull whose fit radius clears the gaps beside it drives
+    /// past it, a wider one goes round by the next row, and a goal on the
+    /// far side of a wall no hull fits round is driven to the node nearest
+    /// it.
+    #[test]
+    fn a_route_keeps_to_the_nodes_its_hull_fits_on() {
+        let g = grid(5, 3, 48.0);
+        let pillar = (Vec3::new(76.0, -20.0, 0.0), Vec3::new(116.0, 20.0, 200.0));
+        let world = test_world(&[pillar]);
+        // Fit radius 0.75 x half: 7.5 stands beside the pillar on node 2's
+        // neighbours; 30 meets it from nodes 1 and 3 too.
+        let narrow = plan(&g, &world, 10.0, 0, 4);
+        assert!(!narrow.contains(&2), "{narrow:?}");
+        assert_eq!(narrow.len(), 7, "{narrow:?}");
+        let wide = plan(&g, &world, 40.0, 0, 4);
+        assert!(wide.iter().all(|&n| n >= 5 || n == 0 || n == 4), "{wide:?}");
+
+        // A wall across x 96 on every row: the plan stops at the node of
+        // the near side nearest the goal.
+        let wall = (Vec3::new(86.0, -100.0, 0.0), Vec3::new(106.0, 200.0, 200.0));
+        let world = test_world(&[wall]);
+        let short = plan(&g, &world, 10.0, 0, 4);
+        assert_eq!(short.last(), Some(&1), "{short:?}");
+    }
+
+    /// The plan takes plain edges within a step: a jump edge, a leap edge
+    /// and one up to a node more than a step high are no road for a hull.
+    #[test]
+    fn a_route_takes_no_jump_leap_or_step_high_edge() {
+        let world = test_world(&[]);
+        let mut g = grid(4, 2, 64.0);
+        // The direct row 0 -> 1 -> 2 -> 3 and its detour by row 1.
+        assert_eq!(plan(&g, &world, 10.0, 0, 3), [0, 1, 2, 3]);
+        g.jumps.insert((1, 2));
+        let p = plan(&g, &world, 10.0, 0, 3);
+        assert!(!p.windows(2).any(|w| w == [1, 2]), "{p:?}");
+        g.jumps.clear();
+        g.leaps.insert((1, 2));
+        let p = plan(&g, &world, 10.0, 0, 3);
+        assert!(!p.windows(2).any(|w| w == [1, 2]), "{p:?}");
+        g.leaps.clear();
+        g.nodes[2].z = vcod_common::pmove::STEPSIZE + 1.0;
+        let p = plan(&g, &world, 10.0, 0, 3);
+        assert!(!p.contains(&2), "{p:?}");
+        g.nodes[2].z = vcod_common::pmove::STEPSIZE;
+        assert_eq!(plan(&g, &world, 10.0, 0, 3), [0, 1, 2, 3]);
+    }
+
+    /// A link change drops only the fits a toggled submodel's bounds (2
+    /// wider) overlap; a model the bounds do not name drops them all, as
+    /// does a different model count.
+    #[test]
+    fn a_relink_drops_the_fits_a_toggled_model_can_change() {
+        let door = ([200.0, -8.0, 0.0], [216.0, 8.0, 96.0]);
+        let world = submodel_test_world("", &[door]);
+        let bounds = vec![([-1024.0, -1024.0, -16.0], [1024.0, 1024.0, 0.0]), door];
+        let mut fits = HullFits::default();
+        let key = |x: f32| ([x, 0.0, 0.0].map(f32::to_bits), 15u32);
+        let fill = |fits: &mut HullFits| {
+            for x in [0.0f32, 190.0, 230.0, 260.0] {
+                fits.fit.insert(key(x), true);
+            }
+        };
+        // The first call is a new map: nothing kept.
+        fill(&mut fits);
+        fits.relink(&world, &bounds);
+        assert!(fits.fit.is_empty());
+        fill(&mut fits);
+        fits.relink(&world, &bounds);
+        assert_eq!(fits.fit.len(), 4, "nothing toggled");
+
+        // The door unlinked: a radius 15 box on x 190 or 230 reaches it.
+        world.set_model_linked(1, false);
+        fits.relink(&world, &bounds);
+        let mut left: Vec<f32> = fits.fit.keys().map(|k| f32::from_bits(k.0[0])).collect();
+        left.sort_by(f32::total_cmp);
+        assert_eq!(left, [0.0, 260.0]);
+
+        // Toggled with no bounds for it: every fit goes.
+        world.set_model_linked(1, true);
+        fits.relink(&world, &bounds[..1]);
+        assert!(fits.fit.is_empty());
+    }
+
+    fn pose(x: f32, y: f32, yaw: f32) -> crate::game::vehicle::Pose {
+        crate::game::vehicle::Pose {
+            origin: [x, y, 0.0],
+            angles: [0.0, yaw, 0.0],
+        }
+    }
+
+    fn hull(id: u32, pose: crate::game::vehicle::Pose, dead: bool) -> LiveHull {
+        LiveHull {
+            id: vcod_gsc::EntId(id, 0),
+            pose,
+            dead,
+            linked: true,
+        }
+    }
+
+    /// A hull covers the nodes its collmap blocks once it has held its
+    /// pose a second, keeps them through a shove of less than 48 and lets
+    /// them go past it or when it leaves the level.
+    #[test]
+    fn a_parked_hull_blocks_its_nodes_until_it_moves_off() {
+        let g = grid(9, 3, 32.0);
+        // The collmap, as the world clips it, over nodes x 96..160 of row 0.
+        let body = (Vec3::new(90.0, -10.0, 0.0), Vec3::new(166.0, 10.0, 60.0));
+        let world = test_world(&[body]);
+        let mut parked = ParkedVehicles::default();
+        let tick = |p: &mut ParkedVehicles, live: &[LiveHull]| p.update(&g, 1, &world, live);
+        let at = pose(128.0, 0.0, 0.0);
+        for _ in 0..PARK_TICKS - 1 {
+            tick(&mut parked, &[hull(5, at, false)]);
+        }
+        assert!(parked.blocked.is_empty(), "blocked before a second");
+        tick(&mut parked, &[hull(5, at, false)]);
+        let covered: Vec<u32> = (0..g.nodes.len() as u32)
+            .filter(|&n| {
+                let p = g.nodes[n as usize];
+                p.y == 0.0 && (96.0..=160.0).contains(&p.x)
+            })
+            .collect();
+        assert_eq!(*parked.blocked, covered[..]);
+
+        // Shoved 30: still its nodes, even once it parks again there.
+        let shoved = pose(158.0, 0.0, 0.0);
+        tick(&mut parked, &[hull(5, shoved, false)]);
+        assert_eq!(*parked.blocked, covered[..]);
+        // Driven 100 off: let go.
+        tick(&mut parked, &[hull(5, pose(228.0, 0.0, 0.0), false)]);
+        assert!(parked.blocked.is_empty());
+        // Parked again (the first tick back is the move), then gone from
+        // the level.
+        for _ in 0..=PARK_TICKS {
+            tick(&mut parked, &[hull(5, at, false)]);
+        }
+        assert!(!parked.blocked.is_empty());
+        tick(&mut parked, &[]);
+        assert!(parked.blocked.is_empty() && parked.each.is_empty());
+    }
+
+    /// A burning hull's nodes: all of them for a bot outside its reach,
+    /// for one inside only those [`WRECK_DEEPER`] nearer it than he is, and
+    /// none once the hull lives again under its handle.
+    #[test]
+    fn a_wreck_is_planned_round_by_where_the_bot_stands() {
+        let g = grid(30, 1, 32.0);
+        let world = test_world(&[]);
+        let mut parked = ParkedVehicles::default();
+        let wreck = pose(0.0, 0.0, 0.0);
+        parked.update(&g, 1, &world, &[hull(7, wreck, true)]);
+        assert_eq!(parked.wrecks(), [[0.0, 0.0, 0.0]]);
+        let reach = crate::bots::WRECK_REACH;
+        let all: Vec<u32> = (0..g.nodes.len() as u32)
+            .filter(|&n| g.nodes[n as usize].x < reach)
+            .collect();
+        assert!(parked.blocked_at(None).is_empty(), "no parked hull");
+        assert_eq!(*parked.blocked_at(Some([reach + 10.0, 0.0, 0.0])), all[..]);
+        // 200 off: the nodes nearer the hull than 152.
+        let near: Vec<u32> = all
+            .iter()
+            .copied()
+            .filter(|&n| g.nodes[n as usize].x < 200.0 - WRECK_DEEPER)
+            .collect();
+        assert_eq!(*parked.blocked_at(Some([200.0, 0.0, 0.0])), near[..]);
+        // Under it in height reach and over it: out of reach above.
+        assert_eq!(*parked.blocked_at(Some([200.0, 0.0, reach + 1.0])), all[..]);
+        // The level restarted under the same handle: no wreck.
+        parked.update(&g, 1, &world, &[hull(7, wreck, false)]);
+        assert!(parked.wrecks().is_empty());
+        assert!(parked.blocked_at(Some([200.0, 0.0, 0.0])).is_empty());
+    }
+
+    fn tank_at(origin: [f32; 3], yaw: f32) -> VehicleSpot {
+        VehicleSpot {
+            num: 1,
+            origin,
+            yaw,
+            mins: [-130.0, -70.0, 0.0],
+            maxs: [120.0, 70.0, 90.0],
+            tank: true,
+        }
+    }
+
+    /// The driver's crowd strips: a teammate ahead within the reach (more
+    /// with speed), behind, within a corner's turn; never himself, an
+    /// enemy, one far above, or anyone in a team-less game.
+    #[test]
+    fn the_crowd_reads_teammates_ahead_behind_and_beside() {
+        let (axis, allies) = (script::TEAM_AXIS, script::TEAM_ALLIES);
+        // Turned to face +y: ahead is +y.
+        let t = tank_at([0.0, 0.0, 0.0], 90.0);
+        let c =
+            |p: [f32; 3], team: i32, speed: f32| crowd_round(&t, speed, 3, axis, &[(5, p, team)]);
+        let ahead = c([0.0, 200.0, 0.0], axis, 0.0);
+        assert!(ahead.ahead && !ahead.behind && !ahead.beside, "{ahead:?}");
+        // Past 120 + 120 at rest, inside it at 300 units/s.
+        assert!(!c([0.0, 280.0, 0.0], axis, 0.0).ahead);
+        assert!(c([0.0, 280.0, 0.0], axis, 300.0).ahead);
+        let behind = c([0.0, -200.0, 0.0], axis, 0.0);
+        assert!(behind.behind && !behind.ahead, "{behind:?}");
+        // Off to the side: past the strip's 40 margin, inside the corner's.
+        let side = c([150.0, 0.0, 0.0], axis, 0.0);
+        assert!(side.beside && !side.ahead && !side.behind, "{side:?}");
+        assert_eq!(c([0.0, 200.0, 0.0], allies, 0.0), Crowd::default());
+        assert_eq!(c([0.0, 200.0, 200.0], axis, 0.0), Crowd::default());
+        let me = crowd_round(&t, 0.0, 3, axis, &[(3, [0.0, 200.0, 0.0], axis)]);
+        assert_eq!(me, Crowd::default());
+        let dm = crowd_round(&t, 0.0, 3, 0, &[(5, [0.0, 200.0, 0.0], 0)]);
+        assert_eq!(dm, Crowd::default());
+    }
+
+    /// A shot line toward the hull's middle meets it clear through, or
+    /// stopped within 24 of its box and its height; short of that it met
+    /// the world.
+    #[test]
+    fn a_shot_line_meets_the_hull_at_its_box() {
+        let t = tank_at([0.0, 0.0, 0.0], 0.0);
+        assert!(hull_met(&t, 1.0, [0.0, 0.0, 45.0]));
+        assert!(hull_met(&t, 0.5, [140.0, 0.0, 45.0]));
+        assert!(!hull_met(&t, 0.5, [150.0, 0.0, 45.0]));
+        assert!(hull_met(&t, 0.5, [0.0, 90.0, 45.0]));
+        assert!(!hull_met(&t, 0.5, [0.0, 0.0, 120.0]));
+        assert!(!hull_met(&t, 0.5, [0.0, 0.0, -30.0]));
     }
 }
