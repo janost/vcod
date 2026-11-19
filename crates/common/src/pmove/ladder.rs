@@ -4,13 +4,12 @@
 //! `PM_CheckLadderMove`, `PM_LadderMove` and the ladder yaw cap.
 
 use super::angles::{
-    angle_delta, delta_stored, normalize360_accurate, short_normalize360, vectoyaw, view_deg,
+    angle_delta, angle_normalize360_short, delta_stored, normalize360_accurate, vectoyaw, view_deg,
     view_rad,
 };
 use super::ground::pm_trace;
 use super::jump::check_jump;
 use super::slide::step_slide_move;
-use super::stance::move_stance;
 use super::state::{MoveRules, PlayerState, PmEvent, PmInput, Stance};
 use super::walk::{
     LADDER_MOVEMENT_DIR_CAP, accelerate_msvc, accelerate_stored, air_move, clamp_movement_dir,
@@ -88,7 +87,7 @@ pub(super) fn cap_ladder_yaw(ps: &mut PlayerState, world: &MoveWorld) {
     let yaw = if ps.rules.v15() {
         normalize360_accurate(at)
     } else {
-        short_normalize360(f64::from(at))
+        angle_normalize360_short(at)
     };
     ps.view_yaw_correction = excess;
     ps.view_capped[1] = Some(yaw);
@@ -162,7 +161,7 @@ pub(super) fn check_ladder_move(
     ps.on_ladder = false;
     // `PM_GetEffectiveStance` 1 (0x33802), then the re-grab lock after a
     // jump, `pm_ladderJumpTime` 300 (0x33822): what lets a push-off leave.
-    if move_stance(ps) == Stance::Prone || ps.since_jump_ms < LADDER_REGRAB_LOCK_MS {
+    if ps.effective_stance() == Stance::Prone || ps.since_jump_ms < LADDER_REGRAB_LOCK_MS {
         return None;
     }
     let mut probe_mins = ps.mins();

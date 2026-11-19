@@ -133,12 +133,12 @@ fn a_capped_prone_view_lands_on_the_shorts_grid_on_1_1() {
     assert!((0.0..360.0).contains(&yaw) && on_grid(yaw), "yaw {yaw}");
     assert_eq!(
         yaw,
-        short_normalize360(f64::from(ps.prone_direction - PRONE_YAWCAP))
+        angle_normalize360_short(ps.prone_direction - PRONE_YAWCAP)
     );
     assert_eq!(ps.view_capped[1], Some(yaw));
     let pitch = ps.view_capped[0].expect("the pitch is capped");
     assert!(on_grid(pitch), "pitch {pitch}");
-    assert_eq!(pitch, short_normalize180(f64::from(-4.1f32 + 45.0)));
+    assert_eq!(pitch, angle_normalize180_short(-4.1f32 + 45.0));
 
     ps.rules = MoveRules::V1_5;
     ps.pitch = -view_rad(10923.0 * (360.0 / 65536.0));
@@ -158,12 +158,12 @@ fn a_prone_player_given_a_view_is_held_in_the_cone() {
     ps.prone_direction = 10.3;
     ps.prone_torso_pitch = -4.0;
     let held = prone_view_angle(&ps, [60.0, 100.0, 0.0]);
-    assert_eq!(held[1], short_normalize360(f64::from(10.3f32 + 45.0)));
-    assert_eq!(held[0], short_normalize180(f64::from(-4.0f32 + 15.0)));
+    assert_eq!(held[1], angle_normalize360_short(10.3f32 + 45.0));
+    assert_eq!(held[0], angle_normalize180_short(-4.0f32 + 15.0));
     let held = prone_view_angle(&ps, [-60.0, -50.0, 0.0]);
-    assert_eq!(held[1], short_normalize360(f64::from(10.3f32 - 45.0)));
+    assert_eq!(held[1], angle_normalize360_short(10.3f32 - 45.0));
     assert!(held[1] > 300.0);
-    assert_eq!(held[0], short_normalize180(f64::from(-4.0f32 - 45.0)));
+    assert_eq!(held[0], angle_normalize180_short(-4.0f32 - 45.0));
 }
 
 /// `BG_CheckProneValid`'s ground samples: a chest on a 4-unit slab and

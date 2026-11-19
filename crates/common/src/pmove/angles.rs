@@ -3,9 +3,16 @@
 //!
 //! The angle folds and conversions the moves share.
 
-use super::cmd;
 use super::state::MoveRules;
 use crate::movetrace::MoveWorld;
+/// `AngleNormalize180` (0x3eb70): the float argument's product with
+/// `ANGLE2SHORT` kept into the truncation to a short.
+pub use crate::x87::angle_normalize180_short as angle_normalize180;
+pub use crate::x87::angle_shorts;
+pub(crate) use crate::x87::normalize360_accurate;
+pub(super) use crate::x87::{
+    angle_normalize180_short, angle_normalize360_short, angle_subtract, normalize180_accurate,
+};
 use glam::Vec3;
 
 /// `vectopitch` (0x3dd7c): wire convention (positive down), in 0..360.
@@ -16,55 +23,6 @@ pub(super) fn vectopitch(v: Vec3) -> f32 {
     let len = (v.x * v.x + v.y * v.y).sqrt();
     let p = (-f64::from(v.z).atan2(f64::from(len)) * 180.0 / std::f64::consts::PI) as f32;
     if p < 0.0 { p + 360.0 } else { p }
-}
-
-/// `AngleSubtract`: `a - b` folded into -180..180.
-pub(super) fn angle_subtract(a: f32, b: f32) -> f32 {
-    let mut d = crate::fguard::turns(a - b);
-    while d > 180.0 {
-        d -= 360.0;
-    }
-    while d < -180.0 {
-        d += 360.0;
-    }
-    d
-}
-
-/// `AngleNormalize180` (0x3eb70): through a truncated 16-bit angle first.
-pub fn angle_normalize180(deg: f32) -> f32 {
-    let short = ((deg * (65536.0 / 360.0)) as i32) & 0xffff;
-    let a = short as f32 * (360.0 / 65536.0);
-    if a > 180.0 { a - 360.0 } else { a }
-}
-
-/// [`angle_normalize180`] on the x87's unrounded product: the float
-/// argument times rodata's 182.04445 truncated to a short, as 1.1d's
-/// `AngleNormalize180` (0x3eb70) and `AngleDelta` (0x3ec9c, on `a - b`) do.
-pub(super) fn short_normalize180(deg: f64) -> f32 {
-    let short = ((deg * f64::from(cmd::ANGLE2SHORT)) as i32) & 0xffff;
-    let a = short as f32 * (360.0 / 65536.0);
-    if a > 180.0 { a - 360.0 } else { a }
-}
-
-/// `AngleNormalize360` (1.1 0x3eb30, 1.5 0x36a3c, UO 0x3dc8c) on the x87's
-/// unrounded product: 0..360 on the shorts grid.
-pub(super) fn short_normalize360(deg: f64) -> f32 {
-    let short = ((deg * f64::from(cmd::ANGLE2SHORT)) as i32) & 0xffff;
-    short as f32 * (360.0 / 65536.0)
-}
-
-/// `AngleNormalize180Accurate` (1.5 0x36b75): whole turns added while the
-/// angle is at or under -180 and taken away while it is over 180, each sum
-/// stored, so an angle already in range comes back as it went in.
-pub(super) fn normalize180_accurate(deg: f32) -> f32 {
-    let mut deg = crate::fguard::turns(deg);
-    while deg <= -180.0 {
-        deg += 360.0;
-    }
-    while deg > 180.0 {
-        deg -= 360.0;
-    }
-    deg
 }
 
 /// A view angle in degrees off the sim's radians. Retail holds degrees,
@@ -85,29 +43,10 @@ pub(crate) fn view_deg(rad: f32) -> f32 {
 }
 
 /// Degrees to the sim's radians as `AngleVectors` takes them, by the double
-/// pi / 180 rounded to a float (game.mp 0x3b234), as [`cmd::apply_view`]
+/// pi / 180 rounded to a float (game.mp 0x3b234), as [`super::cmd::apply_view`]
 /// does.
 pub(super) fn view_rad(deg: f32) -> f32 {
     (f64::from(deg) * (std::f64::consts::PI / 180.0)) as f32
-}
-
-/// `AngleNormalize360Accurate` (1.5 0x36ae0): whole turns added or taken
-/// away until the angle is in 0..360.
-pub(crate) fn normalize360_accurate(deg: f32) -> f32 {
-    let mut deg = crate::fguard::turns(deg);
-    while deg < 0.0 {
-        deg += 360.0;
-    }
-    while deg >= 360.0 {
-        deg -= 360.0;
-    }
-    deg
-}
-
-/// One `delta_angles` push: `(int)(deg * 182.04445)`, truncated (1.5
-/// 0x26368 and three more, control word 0xc00).
-pub fn angle_shorts(deg: f32) -> i32 {
-    (f64::from(deg) * f64::from(cmd::ANGLE2SHORT)) as i32 & 0xffff
 }
 
 /// `vectoyaw` (1.1 0x3dccc, 1.5 0x338ab): the double atan2's degrees
@@ -129,9 +68,9 @@ pub(super) fn vectoyaw(v: Vec3) -> f64 {
 /// ([`delta_stored`]; cod11-mantle.md, "AngleDelta").
 pub(crate) fn angle_delta(a: f32, b: f32, stored: bool) -> f32 {
     if stored {
-        short_normalize180(f64::from(a - b))
+        crate::x87::angle_delta_short(a, b)
     } else {
-        short_normalize180(f64::from(a) - f64::from(b))
+        crate::x87::angle_delta_kept(a, b)
     }
 }
 

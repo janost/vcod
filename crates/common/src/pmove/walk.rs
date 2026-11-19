@@ -8,7 +8,7 @@ use super::angles::view_deg;
 use super::ground::{WATER_FRICTION, on_slick};
 use super::jump::{JUMP_PENALTY_MS, jump_penalty_scale};
 use super::slide::step_slide_move;
-use super::stance::{move_stance, stance_speed_scale, stance_speed_scale_kept};
+use super::stance::{stance_speed_scale, stance_speed_scale_kept};
 use super::state::{MoveRules, PlayerState, PmEvent, PmInput, Stance};
 use super::uo::SCALE_SPRINT;
 use super::{
@@ -618,7 +618,7 @@ pub(super) fn walk_move(
     let (dir, wishspeed) = wish(ps, input, weapon, arith);
     // Slick ground or a hit's knockback (0x2f492, 0x2f58c).
     let sliding = on_slick(ps) || ps.knockback_flags & PMF_TIME_DAMAGE != 0;
-    let mut accel = f64::from(match move_stance(ps) {
+    let mut accel = f64::from(match ps.effective_stance() {
         _ if sliding => 1.0,
         Stance::Stand => PM_ACCELERATE,
         Stance::Crouch => PM_DUCKED_ACCELERATE,

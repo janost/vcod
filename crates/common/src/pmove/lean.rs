@@ -3,9 +3,9 @@
 //!
 //! `PM_UpdateLean`.
 
+use super::aim;
 use super::frame::msec;
 use super::state::{MoveRules, PlayerState, PmInput, Stance};
-use super::{VIEW_CROUCH, VIEW_PRONE, aim};
 use crate::collision::MASK_PLAYERSOLID;
 use crate::movetrace::MoveWorld;
 use glam::Vec3;
@@ -97,24 +97,10 @@ pub(super) fn update_lean(
 /// `pm_flags` and the eye's lerp: prone, or easing up out of it, 0.25;
 /// crouched, or easing down into it, 0.5; standing 1.
 fn lean_scale(ps: &PlayerState) -> f32 {
-    if ps.rules.v15() {
+    match ps.effective_stance() {
+        Stance::Prone => LEAN_SCALE_PRONE,
         // 1.5 0x25ce0..0x25cf5: no full lean standing.
-        return if ps.effective_stance() == Stance::Prone {
-            LEAN_SCALE_PRONE
-        } else {
-            LEAN_SCALE_CROUCH
-        };
-    }
-    let lerping = ps.view_lerp_ms.is_some();
-    let target = ps.view_lerp_target;
-    if ps.stance == Stance::Prone
-        || target == VIEW_PRONE
-        || (lerping && target == VIEW_CROUCH && !ps.view_lerp_down)
-    {
-        LEAN_SCALE_PRONE
-    } else if ps.ducked || (lerping && target == VIEW_CROUCH) {
-        LEAN_SCALE_CROUCH
-    } else {
-        1.0
+        Stance::Stand if !ps.rules.v15() => 1.0,
+        _ => LEAN_SCALE_CROUCH,
     }
 }

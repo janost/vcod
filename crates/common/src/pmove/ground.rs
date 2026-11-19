@@ -239,12 +239,18 @@ pub(super) fn ground_trace(ps: &mut PlayerState, world: &MoveWorld, mask: u32, i
     }
 }
 
-/// What a ground trace that cannot stand the body clears: `groundEntityNum`
-/// 1023 and `pml.groundPlane`, `pml.walking` and 1.5's near flag.
-fn lose_ground(ps: &mut PlayerState) {
-    ps.ground_plane = None;
+/// What a ground trace that cannot stand the body clears: [`leave_ground`]'s
+/// and 1.5's near flag.
+pub(super) fn lose_ground(ps: &mut PlayerState) {
+    leave_ground(ps);
     ps.near_ground = false;
+}
+
+/// `groundEntityNum` 1023 and `pml.groundPlane` and `pml.walking` 0: the
+/// stores of the arms that run no ground trace.
+pub(super) fn leave_ground(ps: &mut PlayerState) {
     ps.on_ground = false;
+    ps.ground_plane = None;
     ps.ground_normal = Vec3::Z;
     ps.ground_surface_flags = 0;
 }

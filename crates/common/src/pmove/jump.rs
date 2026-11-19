@@ -6,7 +6,6 @@
 use super::footsteps::SURF_NO_SOUND;
 use super::ground::Takeoff;
 use super::ladder::{LADDER_PUSHOFF_SPEED, forward3};
-use super::stance::move_stance;
 use super::state::{MoveRules, PlayerState, PmEvent, PmInput, Stance};
 use crate::net::event_ids::EV_JUMP_BASE;
 use glam::Vec3;
@@ -41,7 +40,7 @@ pub(super) fn check_jump(
 ) -> bool {
     // UO refuses a deployed bipod ahead of the latch (0x24483).
     if ps.since_jump_ms <= JUMP_COOLDOWN_MS - 1.0
-        || move_stance(ps) != Stance::Stand
+        || ps.effective_stance() != Stance::Stand
         || !input.jump
         || ps.deployed()
     {

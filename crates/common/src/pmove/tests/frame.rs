@@ -181,6 +181,26 @@ fn a_mounted_player_takes_no_step_and_leaves_the_ladder() {
     assert!(events.is_empty(), "{events:?}");
 }
 
+/// The mounted arm runs no ground trace (turrets doc 5), so a gunner who
+/// mounted off a steep face keeps no plane: it does not read as sliding,
+/// and 1.5's near flag does not pass the sight.
+#[test]
+fn a_mounted_player_keeps_no_ground_plane() {
+    let world = flat();
+    let world = MoveWorld::bare(&world);
+    for rules in [MoveRules::V1_1, MoveRules::V1_5] {
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.rules = rules;
+        ps.mounted = Some(Stance::Stand);
+        ps.on_ground = false;
+        ps.ground_plane = Some(Vec3::new(0.8, 0.0, 0.6));
+        ps.near_ground = true;
+        pmove(&mut ps, &PmInput::default(), &world, 0.05, &[]);
+        assert!(!ps.sliding(), "{rules:?}");
+        assert!(!ps.sight_ground(), "{rules:?}");
+    }
+}
+
 #[test]
 fn the_velocity_snap_rounds_to_nearest_even_and_stores_plus_zero() {
     let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);

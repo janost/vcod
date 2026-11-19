@@ -157,7 +157,7 @@ the prone height; while a lerp toward the crouch height runs; unless
 case `upmove` is also zeroed for the rest of the frame. So only a standing
 player jumps, and a held key jumps once. The four stance and lerp gates are
 the same test the walk's scale and accel make ("The eye through a stance
-change"), and vcod's `move_stance` is that test.
+change"), and vcod's `PlayerState::effective_stance` is that test.
 
 VERIFIED: the latch is set by the jump (0x2ec36) and cleared in
 `PmoveSingle` when `cmd.upmove` is 9 or less (0x3412d-0x34135), and `Pmove`
@@ -543,7 +543,7 @@ VERIFIED, call targets. Their difference still goes through `AngleDelta`
 so a 1.5 or UO pitch stops up to a short short of its target: a
 difference under one short reads 0 and the pitch stays. VERIFIED,
 disassembly. vcod: `update_prone_pitch` measures through `angle_delta` on
-every build and stores through `short_normalize180` on 1.1,
+every build and stores through `x87::angle_normalize180_short` on 1.1,
 `normalize180_accurate` on 1.5 and UO.
 
 ### `AngleDelta` and the angle folds at every call site
@@ -1056,7 +1056,7 @@ and falls through 86, 75, 66, 52 and 41, where the blended wish slides from
 116 at the leg's start toward 27.
 
 vcod: `pmove::view_height_adjust` ports the function without the offset
-term, `move_stance` the stance test, `view_lerp_frac` 0x308cc and
+term, `PlayerState::effective_stance` the stance test, `view_lerp_frac` 0x308cc and
 `stance_speed_scale` the blend; `pmove::weapon::hip_spread_min` reads the
 same legs for the hip cone (`cod11-combat.md` 2.1). `PlayerState::view_lerp_ms` is `cmd.serverTime
 - viewHeightLerpTime`; the server and the predictor turn it into the wire

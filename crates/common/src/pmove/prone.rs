@@ -4,8 +4,8 @@
 //! `BG_CheckProneValid`, the prone entry, the prone view and pitch.
 
 use super::angles::{
-    angle_delta, angle_normalize180, angle_shorts, angle_subtract, delta_stored,
-    normalize180_accurate, normalize360_accurate, short_normalize180, short_normalize360,
+    angle_delta, angle_normalize180, angle_normalize180_short, angle_normalize360_short,
+    angle_shorts, angle_subtract, delta_stored, normalize180_accurate, normalize360_accurate,
     vectopitch, view_deg, view_rad,
 };
 use super::stance::push_event;
@@ -381,7 +381,7 @@ pub(super) fn update_prone_view(ps: &mut PlayerState, input: &PmInput, world: &M
     // the shorts grid, in 0..360.
     if delta.abs() > PRONE_YAWCAP {
         ps.view_yaw_correction = delta - PRONE_YAWCAP.copysign(delta);
-        let yaw = short_normalize360(f64::from(ps.prone_direction - PRONE_YAWCAP.copysign(delta)));
+        let yaw = angle_normalize360_short(ps.prone_direction - PRONE_YAWCAP.copysign(delta));
         ps.view_capped[1] = Some(yaw);
         ps.yaw = view_rad(yaw);
     }
@@ -406,7 +406,7 @@ pub(super) fn cap_prone_pitch(ps: &mut PlayerState, world: &MoveWorld) {
         let pitch = if ps.rules.v15() {
             normalize180_accurate(at)
         } else {
-            short_normalize180(f64::from(at))
+            angle_normalize180_short(at)
         };
         ps.view_capped[0] = Some(pitch);
         ps.pitch = -view_rad(pitch);
@@ -448,15 +448,15 @@ impl ProneCone {
     pub fn hold(self, mut angles: [f32; 3]) -> [f32; 3] {
         let d = angle_normalize180(angle_delta(self.direction, angles[1], self.rules.v15()));
         if d > 45.0 {
-            angles[1] = short_normalize360(f64::from(self.direction - 45.0));
+            angles[1] = angle_normalize360_short(self.direction - 45.0);
         } else if d < -45.0 {
-            angles[1] = short_normalize360(f64::from(self.direction + 45.0));
+            angles[1] = angle_normalize360_short(self.direction + 45.0);
         }
         let d = angle_normalize180(angle_delta(self.torso_pitch, angles[0], self.rules.v15()));
         if d > 45.0 {
-            angles[0] = short_normalize180(f64::from(self.torso_pitch - 45.0));
+            angles[0] = angle_normalize180_short(self.torso_pitch - 45.0);
         } else if d < -15.0 {
-            angles[0] = short_normalize180(f64::from(self.torso_pitch + 15.0));
+            angles[0] = angle_normalize180_short(self.torso_pitch + 15.0);
         }
         angles
     }
@@ -484,11 +484,7 @@ fn update_prone_view_v15(
     // `AngleDelta` folds through the shorts (`AngleNormalize180` 0x36a8f),
     // the float difference times the float 182.04445 left unrounded on the
     // x87 stack before the truncation (`AngleNormalize360` 0x36a4e-0x36a6b).
-    let delta = |a: f32, b: f32| {
-        let short = (f64::from(a - b) * f64::from(65536.0f32 / 360.0)) as i32 & 0xffff;
-        let d = short as f32 * (360.0 / 65536.0);
-        if d > 180.0 { d - 360.0 } else { d }
-    };
+    let delta = crate::x87::angle_delta_short;
     let origin = ps.origin;
     let query = |yaw_deg: f32, length: f32, ground: bool| ProneQuery {
         origin,
@@ -669,7 +665,7 @@ pub(super) fn update_prone_pitch(
         if rules.v15() {
             normalize180_accurate(next)
         } else {
-            short_normalize180(f64::from(next))
+            angle_normalize180_short(next)
         }
     };
     let (body, view) = match ps.ground_plane {

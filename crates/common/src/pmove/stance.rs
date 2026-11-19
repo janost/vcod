@@ -408,27 +408,6 @@ fn view_curve_height(curve: &[(i32, f32)], pct: i32) -> f32 {
     (f64::from(h0) + t * f64::from(h1 - h0)) as f32
 }
 
-/// Retail's stance for the walk's scale and accel and the jump's gate, one
-/// test inlined three times (0x2e7a1, 0x2f436, 0x2ebc8): the eye's leg counts
-/// as much as the flags, so a player standing up out of prone keeps prone's
-/// accel and cannot jump until the eye reaches the crouch height.
-pub(super) fn move_stance(ps: &PlayerState) -> Stance {
-    if ps.rules.v15() {
-        return ps.effective_stance();
-    }
-    let lerping = ps.view_lerp_ms.is_some();
-    if ps.stance == Stance::Prone
-        || ps.view_lerp_target == VIEW_PRONE
-        || (lerping && ps.view_lerp_target == VIEW_CROUCH && !ps.view_lerp_down)
-    {
-        Stance::Prone
-    } else if ps.ducked || (lerping && ps.view_lerp_target == VIEW_CROUCH) {
-        Stance::Crouch
-    } else {
-        Stance::Stand
-    }
-}
-
 /// How far the running leg has come from `from` toward `to`, 0..1, or 0 when
 /// that is not the leg running (0x308cc).
 fn view_lerp_frac(ps: &PlayerState, from: f32, to: f32) -> f32 {
@@ -448,7 +427,7 @@ fn view_lerp_frac(ps: &PlayerState, from: f32, to: f32) -> f32 {
 
 /// The walk scale's stance factor (0x2e7a1-0x2e8d2): across a leg between
 /// crouch and prone the two scales blend by the leg's progress, otherwise
-/// [`move_stance`]'s own.
+/// [`PlayerState::effective_stance`]'s own.
 pub(super) fn stance_speed_scale(ps: &PlayerState) -> f32 {
     let f = view_lerp_frac(ps, VIEW_CROUCH, VIEW_PRONE);
     if f != 0.0 {
@@ -458,7 +437,7 @@ pub(super) fn stance_speed_scale(ps: &PlayerState) -> f32 {
     if f != 0.0 {
         return f * SCALE_CROUCH + (1.0 - f) * SCALE_PRONE;
     }
-    move_stance(ps).speed_scale()
+    ps.effective_stance().speed_scale()
 }
 
 /// [`stance_speed_scale`] as 1.5b's walk scale reads it: a leg's blend
@@ -476,5 +455,5 @@ pub(super) fn stance_speed_scale_kept(ps: &PlayerState) -> f64 {
     if f != 0.0 {
         return blend(f, SCALE_CROUCH, SCALE_PRONE);
     }
-    f64::from(move_stance(ps).speed_scale())
+    f64::from(ps.effective_stance().speed_scale())
 }
