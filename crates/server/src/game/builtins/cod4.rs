@@ -1028,8 +1028,182 @@ pub fn placed_spawn(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
+
+    /// A CoD4 host with no zones, and a player in slot 0.
+    pub(crate) fn cod4_host(cx: &mut Cx) -> (GameHost, Option<Target>) {
+        let mut host = GameHost::new(
+            &crate::game::profile::COD4,
+            vec![String::new(); crate::game::cod4::MAX_CONFIGSTRINGS],
+        );
+        host.connect_client(cx, 0, "a").unwrap();
+        host.client_roster[0] = Some(Default::default());
+        let me = Some(Target::Entity(host.ents.handle(0).unwrap()));
+        (host, me)
+    }
+
+    fn s(cx: &mut Cx, t: &str) -> Value {
+        Value::String(cx.intern_exact(t))
+    }
+
+    fn text(cx: &Cx, v: Value) -> String {
+        match v {
+            Value::String(a) | Value::Localized(a) => cx.resolve(a).to_string(),
+            v => panic!("{v:?} is no string"),
+        }
+    }
+
+    /// `getSubStr`'s byte bounds clamp into the string and an end before
+    /// the start is empty; `strTok` drops the empty runs between any of
+    /// its delimiters.
+    #[test]
+    fn substrings_and_tokens_slice_by_bytes_and_delimiters() {
+        let mut vm = vcod_gsc::Vm::new();
+        vm.with_cx(|cx| {
+            let (mut host, _) = cod4_host(cx);
+            let abc = s(cx, "abcdef");
+            let mut sub = |a: &[Value]| get_substr(&mut host, cx, None, a).map(|v| text(cx, v));
+            let i = Value::Int;
+            assert_eq!(sub(&[abc, i(1), i(4)]).unwrap(), "bcd");
+            assert_eq!(sub(&[abc, i(4)]).unwrap(), "ef");
+            assert_eq!(sub(&[abc, i(-2), i(3)]).unwrap(), "abc");
+            assert_eq!(sub(&[abc, i(3), i(100)]).unwrap(), "def");
+            assert_eq!(sub(&[abc, i(4), i(2)]).unwrap(), "");
+            assert!(sub(&[abc, Value::Float(1.0)]).is_err());
+
+            let (line, delims) = (s(cx, ",a,,b c,"), s(cx, ", "));
+            let Value::Array(arr) = str_tok(&mut host, cx, None, &[line, delims]).unwrap() else {
+                panic!("strTok gave no array");
+            };
+            let toks: Vec<String> = (0..cx.array_len(arr) as i32)
+                .map(|k| text(cx, cx.get_index(arr, vcod_gsc::ArrayKey::Int(k))))
+                .collect();
+            assert_eq!(toks, ["a", "b", "c"]);
+        });
+    }
+
+    fn table(rows: &[[&str; 3]]) -> Rc<vcod_cod4::assets::misc::StringTable> {
+        Rc::new(vcod_cod4::assets::misc::StringTable {
+            name: "mp/t.csv".into(),
+            columns: 3,
+            rows: rows.len() as u32,
+            values: rows.iter().flatten().map(|c| Some(c.to_string())).collect(),
+        })
+    }
+
+    /// `tableLookup`: the first row whose search column matches case-blind,
+    /// a number value matched as its text, `""` for no row or a column off
+    /// the table, an error for a table not loaded; and a table loaded anew
+    /// under the same name rebuilds the column's index.
+    #[test]
+    fn table_lookup_finds_the_first_row_and_follows_a_reloaded_table() {
+        let mut vm = vcod_gsc::Vm::new();
+        vm.with_cx(|cx| {
+            let (mut host, _) = cod4_host(cx);
+            let t = table(&[["1", "M16", "5"], ["2", "ak47", "6"], ["2", "dup", "7"]]);
+            host.cod4_mut().string_tables.insert("mp/t.csv".into(), t);
+            let name = s(cx, "MP/T.csv");
+            let i = Value::Int;
+            let (m16, gone) = (s(cx, "m16"), s(cx, "mp/none.csv"));
+            let mut look = |col: i32, v: Value, out: i32| {
+                table_lookup(&mut host, cx, None, &[name, i(col), v, i(out)]).map(|v| text(cx, v))
+            };
+            assert_eq!(look(1, m16, 0).unwrap(), "1");
+            assert_eq!(look(0, i(2), 1).unwrap(), "ak47");
+            assert_eq!(look(0, i(2), 3).unwrap(), "");
+            assert_eq!(look(3, i(2), 1).unwrap(), "");
+            assert_eq!(look(0, i(9), 1).unwrap(), "");
+            assert!(table_lookup(&mut host, cx, None, &[gone, i(0), i(1), i(1)]).is_err());
+
+            let t = table(&[["2", "g3", "8"]]);
+            host.cod4_mut().string_tables.insert("mp/t.csv".into(), t);
+            let found = table_lookup(&mut host, cx, None, &[name, i(0), i(2), i(1)]).unwrap();
+            assert_eq!(text(cx, found), "g3");
+            let loc = table_lookup_istring(&mut host, cx, None, &[name, i(0), i(2), i(2)]);
+            assert!(matches!(loc, Ok(Value::Localized(_))));
+        });
+    }
+
+    /// `setStat` writes a changed stat and tells the client `N <i> <v>`; a
+    /// byte stat past 255, an index past 3499, a third argument and
+    /// `developer_script` on are errors; 3498 and 3499 read 0 and keep
+    /// nothing. `getStat` refuses a slot no longer connected.
+    #[test]
+    fn stats_keep_their_bounds_and_tell_the_client() {
+        let mut vm = vcod_gsc::Vm::new();
+        vm.with_cx(|cx| {
+            let (mut host, me) = cod4_host(cx);
+            let i = Value::Int;
+            let mut set = |host: &mut GameHost, a: &[Value]| set_stat(host, cx, me, a);
+            assert_eq!(set(&mut host, &[i(5), i(200)]), Ok(Value::Undefined));
+            assert_eq!(set(&mut host, &[i(5), i(200)]), Ok(Value::Undefined));
+            assert_eq!(set(&mut host, &[i(2500), i(100_000)]), Ok(Value::Undefined));
+            assert_eq!(set(&mut host, &[i(3498), i(7)]), Ok(Value::Undefined));
+            assert!(set(&mut host, &[i(5), i(256)]).is_err());
+            assert!(set(&mut host, &[i(1999), i(-1)]).is_err());
+            assert!(set(&mut host, &[i(3500), i(1)]).is_err());
+            assert!(set(&mut host, &[i(5), i(1), i(1)]).is_err());
+            let sent: Vec<&str> = host.client_commands.iter().map(|c| c.1.as_str()).collect();
+            assert_eq!(sent, ["N 5 200", "N 2500 100000"]);
+            let mut get = |host: &mut GameHost, n: i32| get_stat(host, cx, me, &[i(n)]);
+            assert_eq!(get(&mut host, 5), Ok(i(200)));
+            assert_eq!(get(&mut host, 2500), Ok(i(100_000)));
+            assert_eq!(get(&mut host, 3498), Ok(i(0)));
+            assert!(get(&mut host, -1).is_err());
+            assert!(get(&mut host, 3500).is_err());
+            host.client_roster[0] = None;
+            assert!(get(&mut host, 5).is_err());
+            host.cvars.set("developer_script", "1");
+            assert!(set_stat(&mut host, cx, me, &[i(6), i(1)]).is_err());
+        });
+    }
+
+    /// Configstring 2314's weapon bits: the capture's 113 weapons, and
+    /// weapon 0 alone.
+    #[test]
+    fn the_registered_bits_read_as_the_capture() {
+        assert_eq!(registered_bits(113), "ffffffffffffffffffffffffffff3000");
+        assert_eq!(registered_bits(0), format!("1{}", "0".repeat(31)));
+        assert_eq!(registered_bits(127), "f".repeat(32));
+    }
+
+    /// `setExpFog`'s density is `ln 2` over the halfway distance (the
+    /// capture's `0.000198042` for 3500) and its time is in ms;
+    /// `visionSetNaked` writes `"<name>" <ms>`, a missing time a second.
+    #[test]
+    fn fog_and_vision_sets_write_the_capture_formats() {
+        let mut vm = vcod_gsc::Vm::new();
+        vm.with_cx(|cx| {
+            let (mut host, _) = cod4_host(cx);
+            let f = Value::Float;
+            let fog = [f(500.0), f(3500.0), f(0.5), f(0.25), f(0.75), f(2.0)];
+            set_exp_fog(&mut host, cx, None, &fog).unwrap();
+            let slot = host.allocators.layout().fog;
+            assert_eq!(
+                host.configstrings[slot],
+                "500 0.000198042 0.5 0.25 0.75 2000"
+            );
+            let mut bad = fog;
+            bad[1] = f(0.0);
+            assert!(set_exp_fog(&mut host, cx, None, &bad).is_err());
+            bad = fog;
+            bad[0] = f(-1.0);
+            assert!(set_exp_fog(&mut host, cx, None, &bad).is_err());
+            assert!(set_exp_fog(&mut host, cx, None, &fog[..5]).is_err());
+
+            let crash = s(cx, "mp_crash");
+            vision_set_naked(&mut host, cx, None, &[crash, f(2.5)]).unwrap();
+            let night = s(cx, "default_night");
+            vision_set_night(&mut host, cx, None, &[night]).unwrap();
+            use crate::game::cod4::{CS_VISIONSET_NAKED, CS_VISIONSET_NIGHT};
+            assert_eq!(host.configstrings[CS_VISIONSET_NAKED], "\"mp_crash\" 2500");
+            assert_eq!(
+                host.configstrings[CS_VISIONSET_NIGHT],
+                "\"default_night\" 1000"
+            );
+        });
+    }
 
     /// Weapon 127 is the last the held bits and the 128-slot ammo arrays
     /// hold: the 128th registration is a script error, and 127 can be
