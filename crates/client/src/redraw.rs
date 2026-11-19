@@ -37,7 +37,6 @@ impl App {
         self.texture_mode_changed();
         self.audio
             .set_master_volume(self.shell.cvar_f32(audio::volume_cvar(&self.shell)));
-        let demo_dirs = self.demo_dirs();
         let gamma = gamma_cvar(&mut self.shell);
         let fullscreen = self
             .window
@@ -141,13 +140,9 @@ impl App {
             ),
             Mode::Fly(_) => self.fly_frame(&tick, &mut hud_quads),
             Mode::Cod2(_) => self.cod2_frame(&tick, &mut hud_quads),
-            Mode::Online { .. } => self.online_frame(
-                &tick,
-                &demo_dirs,
-                &mut hud_quads,
-                &mut fatal,
-                &mut demo_over,
-            ),
+            Mode::Online { .. } => {
+                self.online_frame(&tick, &mut hud_quads, &mut fatal, &mut demo_over)
+            }
             Mode::Walk { .. } => self.walk_frame(&tick, &mut hud_quads),
         };
         // A drop or a failed load ends the session, not the program:

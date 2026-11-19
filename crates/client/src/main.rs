@@ -2522,6 +2522,30 @@ fn load_profile_config(shell: &mut console::shell::Shell, fs: &Pk3Fs, path: &std
     }
 }
 
+/// [`App::demo_dirs`] off the fields it reads, for a caller holding the
+/// mode borrowed.
+fn demo_dirs(
+    config_path: &std::path::Path,
+    game_dir: &std::path::Path,
+    fs_game: &Option<String>,
+    mod_dir: &str,
+    shell: &console::shell::Shell,
+) -> Vec<std::path::PathBuf> {
+    let base = config_path
+        .parent()
+        .map_or_else(|| game_dir.to_path_buf(), std::path::Path::to_path_buf);
+    let fs_game_cvar = net::download::mod_dir(shell.cvar("fs_game").unwrap_or(""), mod_dir);
+    let mut dirs: Vec<_> = fs_game
+        .iter()
+        .chain(&fs_game_cvar)
+        .map(|g| game_dir.join(g))
+        .chain([base])
+        .map(|d| d.join("demos"))
+        .collect();
+    dirs.dedup();
+    dirs
+}
+
 /// `exec`'s file: the search path's, else the one under `config_dir`
 /// (vcod's own fallback), which a rooted, `..` or drive name never reaches.
 fn exec_text(fs: &Pk3Fs, config_dir: Option<&std::path::Path>, file: &str) -> Option<Vec<u8>> {
@@ -4398,20 +4422,13 @@ impl App {
     /// Where demos go and are looked for: the server's or the player's mod
     /// directory, then the base one the config sits in, each's `demos/`.
     fn demo_dirs(&self) -> Vec<std::path::PathBuf> {
-        let base = self
-            .config_path
-            .parent()
-            .map_or_else(|| self.game_dir.clone(), std::path::Path::to_path_buf);
-        let mut dirs: Vec<_> = self
-            .fs_game
-            .iter()
-            .chain(&self.fs_game_cvar())
-            .map(|g| self.game_dir.join(g))
-            .chain([base])
-            .map(|d| d.join("demos"))
-            .collect();
-        dirs.dedup();
-        dirs
+        demo_dirs(
+            &self.config_path,
+            &self.game_dir,
+            &self.fs_game,
+            &self.mod_dir,
+            &self.shell,
+        )
     }
 
     /// `demo <name>` (CoDMP.exe 0x40eb40): leaves any server, then plays

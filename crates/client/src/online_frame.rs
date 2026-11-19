@@ -7,7 +7,6 @@ impl App {
     pub(crate) fn online_frame(
         &mut self,
         tick: &Tick,
-        demo_dirs: &[std::path::PathBuf],
         hud_quads: &mut Vec<hud::HudQuad>,
         fatal: &mut Option<anyhow::Error>,
         demo_over: &mut bool,
@@ -54,7 +53,7 @@ impl App {
         } else {
             net.pump()
         };
-        let gamestate_ready = self.online_events(tick, &events, demo_dirs, fatal, demo_over);
+        let gamestate_ready = self.online_events(tick, &events, fatal, demo_over);
 
         self.online_cmds(tick, gamestate_ready, demo_clock, fatal);
         let Some(r) = &mut self.renderer else {
@@ -309,7 +308,6 @@ impl App {
         &mut self,
         tick: &Tick,
         events: &[net::NetEvent],
-        demo_dirs: &[std::path::PathBuf],
         fatal: &mut Option<anyhow::Error>,
         demo_over: &mut bool,
     ) -> bool {
@@ -466,7 +464,16 @@ impl App {
                         &play::demos::stamp_now(),
                     ) {
                         match cmd.strip_prefix("record ") {
-                            Some(name) => start_record(net, &demo_dirs[0], Some(name)),
+                            Some(name) => {
+                                let dirs = demo_dirs(
+                                    &self.config_path,
+                                    &self.game_dir,
+                                    &self.fs_game,
+                                    &self.mod_dir,
+                                    &self.shell,
+                                );
+                                start_record(net, &dirs[0], Some(name))
+                            }
                             None => {
                                 if net.stop_recording().unwrap_or(false) {
                                     console::log::print("Stopped demo.");
