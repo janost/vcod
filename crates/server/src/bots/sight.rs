@@ -1,5 +1,5 @@
-//! What a bot sees and hears: the sight cone, the enemy pick, the aim point, friends in the line,
-//! noises, and the spots it remembers.
+//! What a bot sees, hears and feels: the sight cone, the enemy pick, the aim point, friends in the
+//! line, frags near, gunfire, the hits it takes, noises, and the spots it remembers.
 
 use super::*;
 
@@ -46,6 +46,91 @@ pub(crate) fn notices_frag(
 /// map; these keep the same ratio at a range that leaves bots roaming.
 pub(crate) const HEAR_GUNFIRE: f32 = 2000.0;
 pub(crate) const HEAR_BLAST: f32 = 1500.0;
+
+/// The nearest of `frags` (where it lies, and whether the bot knows of it
+/// already, its own one) within [`FLEE_REACH`] across and [`FLEE_HEIGHT`]
+/// up or down of `at`: one known, or one `notices` says the bot notices
+/// ([`notices_frag`]).
+pub(crate) fn frag_near(
+    at: glam::Vec3,
+    frags: impl IntoIterator<Item = (glam::Vec3, bool)>,
+    notices: impl Fn(glam::Vec3) -> bool,
+) -> Option<[f32; 3]> {
+    frags
+        .into_iter()
+        .filter(|&(o, known)| known || notices(o))
+        .map(|(o, _)| o)
+        .filter(|o| (o.z - at.z).abs() < FLEE_HEIGHT && (*o - at).truncate().length() < FLEE_REACH)
+        .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
+        .map(Into::into)
+}
+
+/// Whether the client in `slot` fired since `heard`'s last read of its
+/// event ring (`events` at `eventSequence` `seq`, a shot one of `fire`);
+/// the read is kept.
+pub(crate) fn fired<E: PartialEq>(
+    heard: &mut std::collections::HashMap<usize, i32>,
+    slot: usize,
+    seq: i32,
+    events: &[E; 4],
+    fire: &[E],
+) -> bool {
+    let prev = heard.insert(slot, seq).unwrap_or(seq);
+    (prev.max(seq - 4)..seq).any(|k| fire.contains(&events[(k & 3) as usize]))
+}
+
+/// The gunfire the client in `source` makes, chest high on its body at
+/// `origin` with its eye `view_height` over it.
+pub(crate) fn gunfire(source: usize, origin: [f32; 3], view_height: f32) -> Noise {
+    Noise {
+        at: chest(origin, view_height),
+        source,
+        radius: HEAR_GUNFIRE,
+    }
+}
+
+/// A hit a bot felt: the attacker, the time it was read, the direction it
+/// came along.
+pub(crate) type HitFelt = (usize, i32, [f32; 3]);
+
+/// A bot's hit off its `damageEvent` latch (the event last read and the
+/// hit it gave): an `event` other than the last is a hit by `attacker`,
+/// the client last named with the time he hit, if that was under a second
+/// before `now`, along `dir` (zero for none).
+pub(crate) fn feel_hit<E: PartialEq>(
+    latch: &mut (E, Option<HitFelt>),
+    event: E,
+    attacker: Option<(usize, i32)>,
+    dir: impl FnOnce() -> Option<glam::Vec3>,
+    now: i32,
+) -> Option<HitFelt> {
+    if latch.0 != event {
+        latch.0 = event;
+        latch.1 = attacker
+            .filter(|&(_, t)| (0..1000).contains(&now.wrapping_sub(t)))
+            .map(|(a, _)| (a, now, dir().unwrap_or(glam::Vec3::ZERO).to_array()));
+    }
+    latch.1
+}
+
+/// [`BotView::hurt`] off the hit [`feel_hit`] gave: reported for
+/// [`HURT_MS`] while `plays` says the attacker still plays.
+pub(crate) fn hurt_of(
+    hit: Option<HitFelt>,
+    now: i32,
+    plays: impl Fn(usize) -> bool,
+) -> Option<Hurt> {
+    let (a, at, dir) = hit?;
+    let ago_ms = now.wrapping_sub(at);
+    if !(0..HURT_MS).contains(&ago_ms) || !plays(a) {
+        return None;
+    }
+    Some(Hurt {
+        slot: a,
+        ago_ms,
+        dir,
+    })
+}
 /// A lost enemy is remembered this far along its last velocity, seconds.
 const MEMORY_LEAD_S: f32 = 0.5;
 
@@ -501,6 +586,47 @@ mod tests {
             e.origin,
             [400.0, 0.0, 60.0],
             "the chest is covered: the head"
+        );
+    }
+
+    /// A shot is heard once, off the events past the last read; a ring
+    /// that ran more than 4 past it is read from its oldest.
+    #[test]
+    fn gunfire_is_heard_once_off_the_ring_past_the_last_read() {
+        let mut heard = std::collections::HashMap::new();
+        let fire = [7, 8];
+        assert!(
+            !fired(&mut heard, 1, 10, &[7, 7, 7, 7], &fire),
+            "the first read"
+        );
+        assert!(
+            fired(&mut heard, 1, 11, &[0, 0, 7, 0], &fire),
+            "event 10 sits at 10 & 3"
+        );
+        assert!(
+            !fired(&mut heard, 1, 11, &[0, 0, 7, 0], &fire),
+            "read twice"
+        );
+        assert!(fired(&mut heard, 1, 20, &[8, 0, 0, 0], &fire));
+    }
+
+    /// A new `damageEvent` is a hit by the attacker named under a second
+    /// before; the same event read again keeps the hit until `HURT_MS`.
+    #[test]
+    fn a_hit_is_felt_off_a_new_damage_event_for_hurt_ms() {
+        let dir = || Some(glam::Vec3::X);
+        let mut latch = (0u32, None);
+        assert_eq!(feel_hit(&mut latch, 0, Some((3, 900)), dir, 1000), None);
+        let hit = feel_hit(&mut latch, 1, Some((3, 900)), dir, 1000);
+        assert_eq!(hit, Some((3, 1000, [1.0, 0.0, 0.0])));
+        assert_eq!(feel_hit(&mut latch, 1, None, dir, 1500), hit);
+        assert_eq!(hurt_of(hit, 1500, |_| true).map(|h| h.ago_ms), Some(500));
+        assert_eq!(hurt_of(hit, 1000 + HURT_MS, |_| true), None);
+        assert_eq!(hurt_of(hit, 1500, |_| false), None, "the attacker left");
+        assert_eq!(
+            feel_hit(&mut latch, 2, Some((3, 0)), dir, 1500),
+            None,
+            "stale"
         );
     }
 

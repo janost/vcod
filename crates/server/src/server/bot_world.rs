@@ -538,10 +538,8 @@ impl Server {
                 .is_some_and(|d| d.cook_off_hold),
             grenade_ready: sim.ps.grenade_time_left_ms > 0 && sim.ps.weapon_delay_ms <= 1,
             frag_near: self.game.module.script.as_ref().and_then(|rt| {
-                let at = sim.ps.origin;
                 let eye = glam::Vec3::from(sim.eye_origin());
-                rt.missiles()
-                    .armed()
+                let frags = (rt.missiles().armed())
                     .filter(|(_, w, _, _)| {
                         weapons.get(*w as usize).is_some_and(|d| {
                             d.explosion_radius > 0.0 && d.explosion_inner_damage > 0
@@ -550,22 +548,14 @@ impl Server {
                     // A cook dropped by a thrower killed holding it is seen
                     // fall: one went off by a teammate 3.5 s on and killed
                     // him (bot-combat.md 12).
-                    .filter(|(o, _, owner, dropped)| {
-                        *owner == Some(slot)
-                            || *dropped
-                            || self.game.world.as_ref().is_none_or(|w| {
-                                crate::bots::notices_frag(eye, sim.view_angles()[1], *o, |a, b| {
-                                    w.collision.shot_trace(a, b).fraction >= 1.0
-                                })
-                            })
+                    .map(|(o, _, owner, dropped)| (o, owner == Some(slot) || dropped));
+                crate::bots::frag_near(sim.ps.origin, frags, |o| {
+                    self.game.world.as_ref().is_none_or(|w| {
+                        crate::bots::notices_frag(eye, sim.view_angles()[1], o, |a, b| {
+                            w.collision.shot_trace(a, b).fraction >= 1.0
+                        })
                     })
-                    .map(|(o, _, _, _)| o)
-                    .filter(|o| {
-                        (o.z - at.z).abs() < crate::bots::FLEE_HEIGHT
-                            && (*o - at).truncate().length() < crate::bots::FLEE_REACH
-                    })
-                    .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
-                    .map(Into::into)
+                })
             }),
             wrecks: if sim.seat.is_none() {
                 self.game.module.bot_parked.wrecks()

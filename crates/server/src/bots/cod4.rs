@@ -150,7 +150,7 @@ pub struct Cod4Own {
     stance_seq: HashMap<usize, i32>,
     arms: HashMap<usize, Arms>,
     /// Each bot's `damageEvent` last read and the hit it reported.
-    hits: HashMap<usize, (u32, Option<HitFelt>)>,
+    hits: HashMap<usize, (u32, Option<super::HitFelt>)>,
     /// The level's scored hits read so far, and each victim's last
     /// attacker off them with the level time.
     hits_read: usize,
@@ -184,9 +184,6 @@ pub struct Cod4Own {
 /// The bots' tick: the 50 ms the brain, its timers and the nav graph's
 /// walks were built on, whatever `sv_fps` steps the server.
 pub const BOT_TICK_MS: i32 = 50;
-
-/// A hit a bot felt: the attacker, the level time, the direction.
-type HitFelt = (usize, i32, [f32; 3]);
 
 /// What one tick carries from one of the driver's hooks to a later one.
 #[derive(Default)]
@@ -569,23 +566,9 @@ impl Cod4Bots {
         };
         let event = word("damageEvent");
         let attacker = self.own.attackers.get(&slot).copied();
-        let seen = self.own.hits.entry(slot).or_insert((event, None));
-        if seen.0 != event {
-            seen.0 = event;
-            seen.1 = attacker
-                .filter(|&(_, t)| (0..1000).contains(&now.wrapping_sub(t)))
-                .map(|(a, _)| (a, now, level.hit_dir(slot).unwrap_or(Vec3::ZERO).to_array()));
-        }
-        let (a, at, dir) = seen.1?;
-        let ago_ms = now.wrapping_sub(at);
-        if !(0..super::HURT_MS).contains(&ago_ms) || !self.playing(level, a) {
-            return None;
-        }
-        Some(super::Hurt {
-            slot: a,
-            ago_ms,
-            dir,
-        })
+        let latch = self.own.hits.entry(slot).or_insert((event, None));
+        let hit = super::feel_hit(latch, event, attacker, || level.hit_dir(slot), now);
+        super::hurt_of(hit, now, |a| self.playing(level, a))
     }
 
     /// The enemy the bot in `slot` fights, the one that just hit it seen
@@ -662,26 +645,15 @@ impl Cod4Bots {
         let mut noises = Vec::new();
         let mut slots: Vec<usize> = self.own.pass.states.keys().copied().collect();
         slots.sort_unstable();
+        let fire = [weap::ev::FIRE_WEAPON, weap::ev::FIRE_WEAPON_LASTSHOT];
         for i in slots {
             if !self.playing(level, i) {
                 self.own.heard.remove(&i);
                 continue;
             }
             let ps = &self.own.pass.states[&i];
-            let seq = ps.event_sequence;
-            let prev = self.own.heard.insert(i, seq).unwrap_or(seq);
-            let fired = (prev.max(seq - 4)..seq).any(|k| {
-                matches!(
-                    ps.events[(k & 3) as usize],
-                    weap::ev::FIRE_WEAPON | weap::ev::FIRE_WEAPON_LASTSHOT
-                )
-            });
-            if fired {
-                noises.push(super::Noise {
-                    at: super::chest(ps.origin.into(), ps.view_height_current),
-                    source: i,
-                    radius: super::HEAR_GUNFIRE,
-                });
+            if super::fired(&mut self.own.heard, i, ps.event_sequence, &ps.events, &fire) {
+                noises.push(super::gunfire(i, ps.origin.into(), ps.view_height_current));
             }
         }
         noises
@@ -924,33 +896,20 @@ impl Cod4Bots {
     fn frag_near(&self, level: &Cod4Level, slot: usize) -> Option<[f32; 3]> {
         let ps = self.ps(slot)?;
         let (world, _) = self.own.world.as_ref()?;
-        let at = ps.origin;
         let eye = eye(ps);
         let defs = level.weapon_defs();
-        level
-            .rt
-            .host
-            .cod4()
-            .missiles
-            .iter()
+        let frags = (level.rt.host.cod4().missiles.iter())
             .filter(|m| {
                 defs.get(m.weapon as usize).is_some_and(|d| {
                     d.offhand_class == weap::OFFHAND_CLASS_FRAG && d.explosion_radius > 0
                 })
             })
-            .filter(|m| {
-                m.owner == Some(slot)
-                    || super::notices_frag(eye, ps.view_angles[1], m.origin, |a, b| {
-                        world.collision.shot_trace(a, b).fraction >= 1.0
-                    })
+            .map(|m| (m.origin, m.owner == Some(slot)));
+        super::frag_near(ps.origin, frags, |o| {
+            super::notices_frag(eye, ps.view_angles[1], o, |a, b| {
+                world.collision.shot_trace(a, b).fraction >= 1.0
             })
-            .map(|m| m.origin)
-            .filter(|o| {
-                (o.z - at.z).abs() < super::FLEE_HEIGHT
-                    && (*o - at).truncate().length() < super::FLEE_REACH
-            })
-            .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
-            .map(Into::into)
+        })
     }
 
     /// [`BotView::lob`] for the bot in `slot` throwing frag `weapon` (the

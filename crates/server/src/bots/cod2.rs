@@ -350,7 +350,7 @@ pub struct Cod2Own {
     smokes: u32,
     /// Each bot's `damageEvent` last read and the hit it reported: the
     /// attacker, the level time read, the direction it came along.
-    hits: HashMap<usize, (i32, Option<HitFelt>)>,
+    hits: HashMap<usize, (i32, Option<super::HitFelt>)>,
     /// Every client's `eventSequence` last read, and the gunfire and blasts
     /// of the frame since the last tick.
     heard: HashMap<usize, i32>,
@@ -362,9 +362,6 @@ pub struct Cod2Own {
     retreats: HashMap<usize, u8>,
     pass: Pass,
 }
-
-/// A hit a bot felt: the attacker, the level time, the direction.
-type HitFelt = (usize, i32, [f32; 3]);
 
 /// A smoke grenade on its way out: the throw's (pitch, yaw), the smoke
 /// weapon and the ticks since the ask.
@@ -1079,20 +1076,19 @@ impl Cod2Bots {
                 self.own.heard.remove(&i);
                 continue;
             };
-            let seq = p.ps.event_sequence;
-            let prev = self.own.heard.insert(i, seq).unwrap_or(seq);
-            let fired = (prev.max(seq - 4)..seq).any(|k| {
-                matches!(
-                    p.ps.events[(k & 3) as usize],
-                    ev::FIRE_WEAPON | ev::FIRE_WEAPON_LASTSHOT
-                )
-            });
-            if fired {
-                noises.push(super::Noise {
-                    at: super::chest(p.ps.origin.into(), p.ps.view_height_current),
-                    source: i,
-                    radius: super::HEAR_GUNFIRE,
-                });
+            let fire = [ev::FIRE_WEAPON, ev::FIRE_WEAPON_LASTSHOT];
+            if super::fired(
+                &mut self.own.heard,
+                i,
+                p.ps.event_sequence,
+                &p.ps.events,
+                &fire,
+            ) {
+                noises.push(super::gunfire(
+                    i,
+                    p.ps.origin.into(),
+                    p.ps.view_height_current,
+                ));
             }
         }
         let since = self.own.last_tick;
@@ -1131,24 +1127,10 @@ impl Cod2Bots {
     /// driver's `bot_hurt`.
     fn hurt(&mut self, level: &Cod2Level, slot: usize, now: i32) -> Option<super::Hurt> {
         let p = level.players.get(slot)?.as_ref()?;
-        let seen = self.own.hits.entry(slot).or_insert((p.damage_event, None));
-        if seen.0 != p.damage_event {
-            seen.0 = p.damage_event;
-            seen.1 = p
-                .last_attacker
-                .filter(|&(_, t)| p.damage_event != 0 && (0..1000).contains(&now.wrapping_sub(t)))
-                .map(|(a, _)| (a, now, p.damage_dir().unwrap_or(Vec3::ZERO).to_array()));
-        }
-        let (a, at, dir) = seen.1?;
-        let ago_ms = now.wrapping_sub(at);
-        if !(0..super::HURT_MS).contains(&ago_ms) || !playing(level, a) {
-            return None;
-        }
-        Some(super::Hurt {
-            slot: a,
-            ago_ms,
-            dir,
-        })
+        let latch = self.own.hits.entry(slot).or_insert((p.damage_event, None));
+        let attacker = p.last_attacker.filter(|_| p.damage_event != 0);
+        let hit = super::feel_hit(latch, p.damage_event, attacker, || p.damage_dir(), now);
+        super::hurt_of(hit, now, |a| playing(level, a))
     }
 
     /// The smoke throw the bot in `slot` is under way with, or the one it
@@ -1687,13 +1669,9 @@ fn cod1_body(ps: &vcod_cod2::pmove::PlayerState, now: i32) -> vcod_common::pmove
 /// [`BotView::frag_near`].
 fn frag_near(level: &Cod2Level, slot: usize) -> Option<[f32; 3]> {
     let p = level.players.get(slot)?.as_ref()?;
-    let at = p.ps.origin;
     let eye = eye(&p.ps);
     let w = &level.world.collision;
-    level
-        .combat
-        .missiles
-        .iter()
+    let frags = (level.combat.missiles.iter())
         .filter(|m| !m.rocket && m.exploded_at.is_none())
         .filter(|m| {
             level
@@ -1703,19 +1681,12 @@ fn frag_near(level: &Cod2Level, slot: usize) -> Option<[f32; 3]> {
                 .and_then(Option::as_ref)
                 .is_some_and(|d| d.explosion_radius > 0 && d.explosion_inner_damage > 0)
         })
-        .filter(|m| {
-            m.owner == Some(slot)
-                || super::notices_frag(eye, p.ps.view_angles[1], m.origin, |a, b| {
-                    w.shot_trace(a, b).fraction >= 1.0
-                })
+        .map(|m| (m.origin, m.owner == Some(slot)));
+    super::frag_near(p.ps.origin, frags, |o| {
+        super::notices_frag(eye, p.ps.view_angles[1], o, |a, b| {
+            w.shot_trace(a, b).fraction >= 1.0
         })
-        .map(|m| m.origin)
-        .filter(|o| {
-            (o.z - at.z).abs() < super::FLEE_HEIGHT
-                && (*o - at).truncate().length() < super::FLEE_REACH
-        })
-        .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
-        .map(Into::into)
+    })
 }
 
 /// [`BotView::lob`] for the bot in `slot` throwing frag `weapon` at
