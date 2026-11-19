@@ -5,6 +5,9 @@
 
 use super::state::MoveRules;
 use crate::movetrace::MoveWorld;
+/// `AngleNormalize180` (0x3eb70): the float argument's product with
+/// `ANGLE2SHORT` kept into the truncation to a short.
+pub use crate::x87::angle_normalize180_short as angle_normalize180;
 pub use crate::x87::angle_shorts;
 pub(crate) use crate::x87::normalize360_accurate;
 pub(super) use crate::x87::{
@@ -20,13 +23,6 @@ pub(super) fn vectopitch(v: Vec3) -> f32 {
     let len = (v.x * v.x + v.y * v.y).sqrt();
     let p = (-f64::from(v.z).atan2(f64::from(len)) * 180.0 / std::f64::consts::PI) as f32;
     if p < 0.0 { p + 360.0 } else { p }
-}
-
-/// `AngleNormalize180` (0x3eb70): through a truncated 16-bit angle first.
-pub fn angle_normalize180(deg: f32) -> f32 {
-    let short = ((deg * (65536.0 / 360.0)) as i32) & 0xffff;
-    let a = short as f32 * (360.0 / 65536.0);
-    if a > 180.0 { a - 360.0 } else { a }
 }
 
 /// A view angle in degrees off the sim's radians. Retail holds degrees,
