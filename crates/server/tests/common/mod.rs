@@ -542,6 +542,161 @@ pub fn cfg(map: &str, gametype: &str) -> vcod_server::ServerConfig {
     }
 }
 
+/// A gate's server: [`Boot::new`]'s map and gametype, the parts a gate
+/// changes by struct update, then [`Boot::start`]. Every A/B gate boots the
+/// same way, so a new step between the world and the scripts goes here.
+pub struct Boot<'a> {
+    pub cfg: vcod_server::ServerConfig,
+    /// A gsc source loaded as the gametype's script, a probe's.
+    pub script: Option<&'a str>,
+    /// Cvars set ahead of the scripts.
+    pub cvars: &'a [(&'a str, &'a str)],
+    /// The wire; the install's ([`vcod_server::server::install_protocol`])
+    /// when `None`.
+    pub proto: Option<&'static vcod_common::net::protocol::Cod1Wire>,
+}
+
+impl<'a> Boot<'a> {
+    pub fn new(map: &str, gametype: &str) -> Boot<'a> {
+        Boot {
+            cfg: cfg(map, gametype),
+            script: None,
+            cvars: &[],
+            proto: None,
+        }
+    }
+
+    /// The server on the map's world with the scripts loaded, and its clock.
+    pub fn start(self, fs: vcod_common::pk3::Pk3Fs) -> (Server, Instant) {
+        let map = self.cfg.map.clone();
+        let bsp_path = fs.resolve_map(&map).expect("map in the mounted paks");
+        let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+        let proto = self
+            .proto
+            .unwrap_or_else(|| vcod_server::server::install_protocol(&fs));
+        let gametype = self.cfg.gametype.clone();
+        let now = Instant::now();
+        let mut sv = Server::new(self.cfg, now);
+        sv.set_protocol(proto);
+        for (k, v) in self.cvars {
+            sv.set_cvar(k, v);
+        }
+        if let Some(src) = self.script {
+            sv.overlay_script(&format!("maps/mp/gametypes/{gametype}"), src);
+        }
+        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        (sv, now)
+    }
+}
+
+/// The source of the client probe `name`
+/// (`gsc/tests/fixtures/semantics/client-probes/<name>.gsc`).
+pub fn client_probe(name: &str) -> String {
+    std::fs::read_to_string(format!(
+        "../gsc/tests/fixtures/semantics/client-probes/{name}.gsc"
+    ))
+    .expect("the probe")
+}
+
+/// What a gate adds to [`run_probe`]'s client.
+pub trait ProbeHooks {
+    /// A server command, before the join reads it.
+    fn command(&mut self, _tokens: &[String]) {}
+    /// A live frame's cmds, before they go.
+    fn cmds(&mut self, _cmds: &mut [UserCmd]) {}
+}
+
+impl ProbeHooks for () {}
+
+/// The probes' direct input (`--probe-uo-weapon direct`): `f "PROBE_IN
+/// <buttons> <wbuttons> <up>"` sets the cmds' `wbuttons`, `a <weapon>` their
+/// weapon.
+#[derive(Default)]
+pub struct DirectInput {
+    pub wbuttons: u8,
+    pub weapon: Option<u8>,
+}
+
+impl ProbeHooks for DirectInput {
+    fn command(&mut self, tokens: &[String]) {
+        match tokens.first().map(String::as_str) {
+            Some("a") => self.weapon = tokens.get(1).and_then(|w| w.parse().ok()),
+            Some("f") => {
+                let w = tokens
+                    .get(1)
+                    .and_then(|t| t.strip_prefix("PROBE_IN "))
+                    .and_then(|t| t.split_whitespace().nth(1)?.parse().ok());
+                if let Some(w) = w {
+                    self.wbuttons = w;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn cmds(&mut self, cmds: &mut [UserCmd]) {
+        for c in cmds {
+            c.wbuttons = self.wbuttons;
+            if let Some(w) = self.weapon {
+                c.weapon = w;
+            }
+        }
+    }
+}
+
+/// One client joined as `join` and driven by `hold` and `hooks`, a frame
+/// at a time for at most `frames`, until the script logs `PROBE done`:
+/// the log's `PROBE` lines, trimmed.
+pub fn run_probe(
+    sv: &mut Server,
+    now: &mut Instant,
+    mut join: Join,
+    mut hold: ProbeHold,
+    frames: usize,
+    hooks: &mut impl ProbeHooks,
+) -> Vec<String> {
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let mut cl = NetClient::start_with_qport(ClientEnd(q.clone()), *now, 0x2001);
+    let frame = Duration::from_millis(FRAME_MS as u64);
+    for _ in 0..frames {
+        if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
+            break;
+        }
+        *now += frame;
+        let live = cl
+            .snapshots()
+            .newest()
+            .is_some_and(|s| s.ps.field_i32(cl.protocol(), "pm_type") == 0);
+        if live {
+            let mut cmds = hold.cmds(&cl, 0);
+            hooks.cmds(&mut cmds);
+            cl.send_cmds(&cmds);
+        } else if let Some(c) = cl.send_frame(&UserCmd::default()) {
+            hold.last = c.server_time;
+        }
+        let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
+        for p in pending {
+            sv.handle_packet(ADDR, &p, *now);
+        }
+        sv.tick(*now);
+        for (_, p) in sv.take_outgoing() {
+            q.borrow_mut().to_client.push_back(p);
+        }
+        for e in cl.pump_at(*now) {
+            if let NetEvent::ServerCommand(tokens) = e {
+                hooks.command(&tokens);
+                join.on_server_command(&tokens, &mut cl, *now);
+            }
+        }
+    }
+    sv.script_log()
+        .iter()
+        .map(|l| l.trim().to_string())
+        .filter(|l| l.starts_with("PROBE"))
+        .collect()
+}
+
 /// What the moving-shot captures' servers changed in a stock weapon file
 /// (`moveshot_ab.rs`, `vehicle_ab.rs`'s rider): no spread and no gun kick,
 /// so a round leaves along the view from the muzzle. Keys a file lacks are
@@ -1028,14 +1183,11 @@ pub fn replay_as(
     fs: vcod_common::pk3::Pk3Fs,
     place: Option<([f32; 3], f32)>,
 ) -> Vec<Vec<Sample>> {
-    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let fs = std::rc::Rc::new(fs);
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(map, gametype), now);
-    sv.set_protocol(proto);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    let (mut sv, mut now) = Boot {
+        proto: Some(proto),
+        ..Boot::new(map, gametype)
+    }
+    .start(fs);
     let q = std::rc::Rc::new(RefCell::new(Queues::default()));
     let (mut cl, _join) = self::join(&mut sv, &q, &mut now, join.0, join.1);
     // The client sends absolute view angles: `NetClient::send_frame`
@@ -2530,18 +2682,6 @@ fn direct_replay_once(
     late_ms: i64,
     pin: bool,
 ) -> (Vec<String>, Option<i32>, SnapEntities) {
-    let fs = Rc::new(fs);
-    let bsp_path = fs.resolve_map(map).unwrap();
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = Server::new(cfg(map, probe), now);
-    sv.set_protocol(proto);
-    let src = std::fs::read_to_string(format!(
-        "../gsc/tests/fixtures/semantics/client-probes/{probe}.gsc"
-    ))
-    .expect("the probe");
-    sv.overlay_script(&format!("maps/mp/gametypes/{probe}"), &src);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     let spawn = pin.then(|| {
         let at = spawned_origin(text);
         let d = |p: &[f32; 3]| (0..3).map(|i| (p[i] - at[i]).powi(2)).sum::<f32>();
@@ -2550,7 +2690,13 @@ fn direct_replay_once(
             .min_by(|a, b| d(&a.0).total_cmp(&d(&b.0)))
             .expect("a spawn point")
     });
-    sv.load_scripts(fs).expect("load the scripts");
+    let src = client_probe(probe);
+    let (mut sv, mut now) = Boot {
+        script: Some(&src),
+        proto: Some(proto),
+        ..Boot::new(map, probe)
+    }
+    .start(fs);
     if let Some(at) = spawn {
         pin_spawns_at(&mut sv, &[&[at]]);
     }

@@ -13,7 +13,7 @@ use crate::common;
 use common::{Queues, step};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::NetClient;
 use vcod_common::net::msg::NULL_USERCMD;
 
@@ -33,17 +33,12 @@ fn probe_lines<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<String> {
 /// `developer 1`), while 1.5b ran on to the next line and dropped the
 /// client after (gametypes doc 7.3), as ours runs on below 1.
 fn check(fs: vcod_common::pk3::Pk3Fs, fixture: &str, developer: &str) {
-    let proto = vcod_server::server::install_protocol(&fs);
-    let map = "mp_carentan";
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_noclass"), now);
-    sv.set_protocol(proto);
-    sv.set_cvar("developer", developer);
-    sv.overlay_script("maps/mp/gametypes/probe_noclass", SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(SCRIPT),
+        cvars: &[("developer", developer)],
+        ..common::Boot::new("mp_carentan", "probe_noclass")
+    }
+    .start(fs);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl = NetClient::start_with_qport(common::ClientEnd(q.clone()), now, 0x2001);
     let frame = Duration::from_millis(common::FRAME_MS as u64);
