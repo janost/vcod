@@ -33,6 +33,7 @@ const COD4_FLAG: u32 = 3u;
 // weights the eight corner colours (lightGridColorsR0..B1). No clamp, as
 // the shader has none. What `$lightgridweights0`/`1` hold; the per-pixel
 // probe reads those (`probe_grid_cubes`), the per-vertex fallbacks this.
+// @region probe_grid
 fn probe_grid(ls: LightSet, n: vec3<f32>) -> vec3<f32> {
     let r = n.x * vec3<f32>(0.81649658, -0.40824829, -0.40824829)
         + n.y * vec3<f32>(0.0, 0.70710678, -0.70710678)
@@ -115,6 +116,7 @@ fn cod2_flap(p: vec3<f32>, n: vec3<f32>, t: vec3<f32>, b: vec3<f32>, uv: vec2<f3
     return Flapped(p + offset * n, nu * t + nv * b + nout * n, vec4<f32>(vcol.r, vcol.b, vcol.g, 1.0));
 }
 
+// @end probe_grid
 // The texcoords `TexScroll` (lib/texscroll.hlsl) gives a `_scroll`
 // technique at the material clock `game_time` seconds: t falls by its
 // fraction (gameTime.z).

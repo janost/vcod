@@ -417,11 +417,24 @@ mod tests {
         crate::renderer::headless::test_device(crate::renderer::headless::Need::NotGl)
     }
 
-    /// `src` between the line holding `from` and the one holding `to`.
-    fn cut<'a>(src: &'a str, from: &str, to: &str) -> &'a str {
-        let a = src.find(from).unwrap();
-        let b = a + src[a..].find(to).unwrap();
+    /// The lines between `src`'s `// @region <name>` and `// @end <name>`
+    /// markers: what a test splices into its own shader.
+    fn region<'a>(src: &'a str, name: &str) -> &'a str {
+        let (open, close) = (format!("// @region {name}\n"), format!("// @end {name}\n"));
+        let a = src.find(&open).unwrap_or_else(|| panic!("no `{open}` in the shader")) + open.len();
+        let b = a + src[a..].find(&close).unwrap_or_else(|| panic!("no `{close}` in the shader"));
         &src[a..b]
+    }
+
+    /// Every region the GPU tests splice is marked, so they fail here on a
+    /// machine with no adapter rather than nowhere (TEST-060).
+    #[test]
+    fn the_spliced_shader_regions_are_marked() {
+        let dm = include_str!("dynamic_model.wgsl");
+        for name in ["ent_light", "stage_params", "light_model", "stage_colour"] {
+            assert!(!region(dm, name).is_empty(), "{name}");
+        }
+        assert!(!region(include_str!("cod2_model.wgsl"), "probe_grid").is_empty());
     }
 
     const W: u32 = 128;
@@ -470,14 +483,10 @@ mod tests {
         let src = include_str!("dynamic_model.wgsl");
         let wgsl = format!(
             "{}{}\n@group(0) @binding(0) var<storage, read> light_sets: array<LightSet>;\n{}{}{}",
-            cut(src, "struct EntLight", "// The frame's light sets"),
-            cut(src, "const F_AF_GT0", "// GL_LIGHTING's vertex colour"),
-            cut(
-                include_str!("cod2_model.wgsl"),
-                "fn probe_grid",
-                "// The texcoords `TexScroll`"
-            ),
-            cut(src, "fn stage_colour", "// alphaFunc decode"),
+            region(src, "ent_light"),
+            region(src, "light_model"),
+            region(include_str!("cod2_model.wgsl"), "probe_grid"),
+            region(src, "stage_colour"),
             r#"
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -928,12 +937,8 @@ fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
         let src = include_str!("dynamic_model.wgsl");
         let wgsl = format!(
             "{}\n@group(0) @binding(0) var<storage, read> light_sets: array<LightSet>;\n{}{}",
-            cut(src, "struct EntLight", "// The frame's light sets"),
-            cut(
-                include_str!("cod2_model.wgsl"),
-                "fn probe_grid",
-                "// The texcoords `TexScroll`"
-            ),
+            region(src, "ent_light"),
+            region(include_str!("cod2_model.wgsl"), "probe_grid"),
             r#"
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
@@ -1447,12 +1452,8 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
         let dm = include_str!("dynamic_model.wgsl");
         format!(
             "{}{}\n@group(0) @binding(0) var<storage, read> light_sets: array<LightSet>;\n{}\n{}{}{}{}",
-            cut(dm, "struct EntLight", "// The frame's light sets"),
-            cut(
-                dm,
-                "// The stage's `renderer::StageParams`",
-                "const F_AF_GT0"
-            ),
+            region(dm, "ent_light"),
+            region(dm, "stage_params"),
             "@group(1) @binding(0) var t_unused: texture_2d<f32>;",
             concat!(
                 include_str!("cod2_model.wgsl"),
