@@ -648,6 +648,97 @@ mod tests {
         });
     }
 
+    /// The weapon slot builtins take the slot names but `none` (slot 0);
+    /// an empty slot's weapon reads 0 rounds.
+    #[test]
+    fn a_weapon_slot_builtin_refuses_none_and_unknown_names() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn_client(cx, 1, None).unwrap();
+            let t = Some(Target::Entity(e));
+            let ask = |host: &mut GameHost, cx: &mut Cx, name: &str| {
+                let n = Value::String(cx.intern_exact(name));
+                get_weapon_slot_ammo(host, cx, t, &[n])
+            };
+            assert_eq!(ask(&mut host, cx, "primaryb"), Ok(Value::Int(0)));
+            assert_eq!(ask(&mut host, cx, "smokegrenade"), Ok(Value::Int(0)));
+            for bad in ["none", "Primary", "rifle"] {
+                assert!(
+                    matches!(ask(&mut host, cx, bad), Err(ErrorKind::Custom(m)) if m.starts_with("Unknown weaponslot name")),
+                    "{bad}"
+                );
+            }
+            assert!(get_weapon_slot_ammo(&mut host, cx, t, &[Value::Int(1)]).is_err());
+            let not_a_player = Some(Target::Entity(host.ents.spawn(cx).unwrap()));
+            let n = Value::String(cx.intern_exact("primary"));
+            assert!(get_weapon_slot_ammo(&mut host, cx, not_a_player, &[n]).is_err());
+        });
+    }
+
+    /// `doDamage` with no attacker names the world as both attacker and
+    /// inflictor; with an attacker alone the attacker is the inflictor too
+    /// (coduo-diff.md 22). Read off the `damage` notify's second and sixth
+    /// arguments.
+    #[test]
+    fn dodamage_defaults_its_attacker_and_inflictor() {
+        let src = "hit(e, by) {\n\
+                       e thread watch();\n\
+                       if (isDefined(by)) e doDamage(5, (0, 0, 0), by);\n\
+                       else e doDamage(5, (0, 0, 0));\n\
+                   }\n\
+                   watch() {\n\
+                       self waittill(\"damage\", d, a, dir, p, m, i);\n\
+                       self.seen_a = a getEntityNumber();\n\
+                       self.seen_i = i getEntityNumber();\n\
+                   }\n";
+        let mut vm = vcod_gsc::Vm::new();
+        let ast = vcod_gsc::parse::parse_file(src).unwrap();
+        let fns = vcod_gsc::compile::compile_file(&ast, "maps/mp/t", vm.interner_mut()).unwrap();
+        vm.install(fns).unwrap();
+        let mut host = GameHost::new(&crate::game::profile::COD1_UO, vec![String::new(); 2048]);
+        let (e, by) = vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            let classname = cx.intern_folded("classname");
+            let model = Value::String(cx.intern_exact("script_model"));
+            host.set_field(cx, e, classname, model).unwrap();
+            let origin = cx.intern_folded("origin");
+            host.set_field(cx, e, origin, Value::Vector([0.0, 0.0, 64.0]))
+                .unwrap();
+            host.script_takedamage.insert(e);
+            (e, host.ents.spawn(cx).unwrap())
+        });
+        let hit = vm.func_ref("maps/mp/t", "hit");
+        let seen = |vm: &mut vcod_gsc::Vm, host: &mut GameHost| {
+            vm.with_cx(|cx| {
+                let a = cx.intern_folded("seen_a");
+                let i = cx.intern_folded("seen_i");
+                (host.get_field(cx, e, a), host.get_field(cx, e, i))
+            })
+        };
+        vm.start_thread(
+            &mut host,
+            hit,
+            None,
+            vec![Value::Entity(e), Value::Undefined],
+        );
+        vm.run_frame(&mut host, 50);
+        let world = vm.with_cx(|cx| host.ents.world(cx)).0 as i32;
+        assert_eq!(
+            seen(&mut vm, &mut host),
+            (Value::Int(world), Value::Int(world))
+        );
+        vm.start_thread(
+            &mut host,
+            hit,
+            None,
+            vec![Value::Entity(e), Value::Entity(by)],
+        );
+        vm.run_frame(&mut host, 100);
+        let by = by.0 as i32;
+        assert_eq!(seen(&mut vm, &mut host), (Value::Int(by), Value::Int(by)));
+        assert!(vm.aborts().is_empty(), "{:?}", vm.aborts());
+    }
+
     #[test]
     fn getstance_reads_the_mirrored_stance() {
         let (mut vm, mut host) = fixture();
