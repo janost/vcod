@@ -36,6 +36,7 @@ pub use skill::{DEFAULT_LEVEL, MAX_LEVEL};
 
 mod fight;
 mod grenade;
+pub(crate) mod gun;
 mod menus;
 mod objective;
 mod sight;
