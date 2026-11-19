@@ -42,6 +42,7 @@ path says otherwise.
 | `spawnpoints` | 1.1d and 1.5b, `client-probes/probe_placespawn` on every stock map | `placespawn_ab`, `legs_ab` |
 | `spawnview` | 1.1d, 1.5b and UO, `client-probes/probe_spawnview` | `spawnview_ab` |
 | `specspawn` | 1.1d, 1.5b and UO, `client-probes/probe_specspawn` | `specspawn_ab` |
+| `tapes` | Not retail: trace tapes, every trace and point contents a 1.1 replay asked of the retail map and the answer it got, plus the numbers of the weapon files it read, written under `RECORD_TAPES=1` at the 1.1 install (docs/dev/testing.md, "Trace tapes") | `moves_ab`, `ladder_ab` |
 | `teams` | 1.1d, 1.5b and UO under gdb, no client; `mp_carentan-teams.ent` is a hand-written entity block the recipe appends to mp_carentan | `src/game/teams_ab.rs` |
 | `threadorder` | 1.1d, 1.5b and UO, `client-probes/probe_threadorder` (`mp_pavlov*.txt`, the servers' `PROBE` lines) and `probe_menuclock` (`menuclock-first*.txt` with a header, `menuclock-log*.txt` the servers' `PROBE` lines). The gates compare these files line for line, so the headerless ones carry no header; their recipes are the two probes' sections of the client-probes README | `threadorder_ab`, `menuclock_ab` |
 | `timeout` | 1.5b, `--probe-say` clients | `timeout_15_ab` |

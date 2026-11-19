@@ -39,3 +39,11 @@ impl PmWorld for Floor {
         t
     }
 }
+
+#[cfg(any(test, feature = "testing"))]
+/// Stand-in mantle clips for a replay with no zones: a capture that never
+/// mantles asks the same traces with any clips installed.
+pub fn stand_in_mantle() -> &'static super::mantle::MantleAnims {
+    static ANIMS: std::sync::OnceLock<super::mantle::MantleAnims> = std::sync::OnceLock::new();
+    ANIMS.get_or_init(|| super::mantle::MantleAnims::synthetic(500, 400))
+}

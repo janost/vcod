@@ -241,7 +241,7 @@ impl MantleAnims {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 impl MantleAnims {
     /// Stand-in clips for the pak-free tests: each a straight two-key line
     /// to the end the engine's load check wants (16 along and the row's

@@ -124,6 +124,9 @@ pub struct MoveWorld<'a> {
     pub pm: Option<&'a Pm>,
     /// Box entities the traces clip, after the bodies.
     pub clip_boxes: &'a [ClipBox],
+    /// Records every trace and point contents, or answers them instead of
+    /// the world ([`crate::tracetape`]).
+    pub tape: Option<&'a crate::tracetape::Tape>,
 }
 
 impl<'a> MoveWorld<'a> {
@@ -135,6 +138,7 @@ impl<'a> MoveWorld<'a> {
             boxes: &[],
             pm: None,
             clip_boxes: &[],
+            tape: None,
         }
     }
 
@@ -146,6 +150,7 @@ impl<'a> MoveWorld<'a> {
             boxes: &[],
             pm: None,
             clip_boxes: &[],
+            tape: None,
         }
     }
 
@@ -157,6 +162,14 @@ impl<'a> MoveWorld<'a> {
     /// The same world with entity boxes in its point contents.
     pub fn with_boxes(self, boxes: &'a [ContentsBox]) -> MoveWorld<'a> {
         MoveWorld { boxes, ..self }
+    }
+
+    /// The same world traced through `tape`.
+    pub fn with_tape(self, tape: &'a crate::tracetape::Tape) -> MoveWorld<'a> {
+        MoveWorld {
+            tape: Some(tape),
+            ..self
+        }
     }
 
     /// The same world serving `pm`'s `Pmove`.
@@ -211,6 +224,24 @@ impl<'a> MoveWorld<'a> {
     }
 
     pub fn box_trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> Trace {
+        let live = || self.live_trace(start, end, mins, maxs, mask);
+        match self.tape {
+            None => live(),
+            Some(tape) => crate::tracetape::cod1::trace(
+                tape,
+                start,
+                end,
+                mins,
+                maxs,
+                mask,
+                self.pass,
+                live,
+                |t| self.entity_num(t),
+            ),
+        }
+    }
+
+    fn live_trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> Trace {
         let mut t = self.world.move_trace(start, end, mins, maxs, mask);
         if t.fraction == 0.0 {
             return t;
@@ -267,7 +298,11 @@ impl<'a> MoveWorld<'a> {
     /// The world's contents at `p` and those of every [`ContentsBox`]
     /// holding it.
     pub fn point_contents(&self, p: Vec3) -> u32 {
-        self.world.point_contents(p) | ContentsBox::contents_at(self.boxes, p)
+        let live = || self.world.point_contents(p) | ContentsBox::contents_at(self.boxes, p);
+        match self.tape {
+            None => live(),
+            Some(tape) => crate::tracetape::cod1::contents(tape, p, live),
+        }
     }
 
     pub fn entity_num(&self, t: &Trace) -> u32 {

@@ -83,7 +83,8 @@ picks through `Server::pin_spawns`, as `gametypes_ab` does.
 ## CI and the test binaries
 
 - `ci.yml` runs on ubuntu with no game data, so no pak test and no A/B gate
-  runs there; they run only on a machine with an install. It pins the
+  runs there; they run only on a machine with an install, save the taped
+  replays ([Trace tapes](#trace-tapes)). It pins the
   toolchain (`RUST_TOOLCHAIN`, bumped on purpose), passes `--locked`, and
   also checks the workspace on Windows, macOS and the 1.95 MSRV, and runs
   the suite on Windows and macOS. A second Linux step runs the client's
@@ -103,6 +104,46 @@ picks through `Server::pin_spawns`, as `gametypes_ab` does.
   server`; `tests/main.rs`). A file's tests filter by its name (`--
   vehicle_ab::`). The client's tests live in its binary: `cargo test -p
   vcod --bins`.
+
+## Trace tapes
+
+A trace tape lets a pmove A/B gate replay in CI with no install. At an
+install the gate's replay runs once with a recorder between pmove and the
+world, which writes every collision query pmove asks and the answer it got
+to `tests/fixtures/tapes/<capture>.tape`. Without the install the same
+replay answers each query off the tape, and the first query that is not the
+next one on the tape panics with both, so an edit that changes which traces
+pmove makes fails there. Each tape's header holds the report the live
+replay gave, and the taped test fails unless the replay gives it back and
+passes the gate's own checks.
+
+The seams: `vcod_common::tracetape` holds the tape and CoD1's codec, which
+`MoveWorld::with_tape` puts behind `box_trace` and `point_contents` (CoD2's
+pmove traces through the same `MoveWorld`); `vcod_cod4::pmove::tape::Taped`
+is a `PmWorld` on a tape. The tape is text, one query per line, floats in
+their shortest round-trip form, with two shorthands: `^k` repeats the entry
+`k` back and `.` repeats a token of the last query of its kind. It holds
+query and answer numbers only, no geometry. A weapon list beside it
+(`weapons-*.txt`, or the CoD4 tape's header) keeps the numeric keys of the
+weapons the captures carry and the ammo names of the rest.
+
+| Test | Captures | Tape size |
+|---|---|---|
+| `moves_ab::the_taped_captures_replay_without_the_paks` | `moves-1.1` (ground, air, crouch, prone, strafes), `patchwalk-kerb-1.1` (steps up the kerb's patches, slides along them) | 849 KB, 425 KB |
+| `ladder_ab::the_taped_ladder_climbs_without_the_paks` | `mp_ship-dm-ladder.txt` (climb, back down, strafe, let go, off the top) | 510 KB |
+| `moves_ab::cod4_taped_moves_replay_without_the_zones` (`--test cod4`) | `play-1.7-walk.txt`, unarmed | 202 KB |
+
+A change that moves pmove's queries or its result on purpose re-records
+them at the installs (each test records first, then replays the new tape):
+
+```
+RECORD_TAPES=1 COD_DIR=<abs 1.1 install> cargo test -p vcod-server --test server -- the_taped_
+RECORD_TAPES=1 COD4_DIR=<abs> cargo test -p vcod-cod4 --test cod4 -- cod4_taped_
+```
+
+Then run the live gates (`moves_ab::`, `ladder_ab::`, `cod4_moves_ab`): a
+tape replays what the live replay did, and only the live gate says it still
+matches retail.
 
 ## The gate runner
 
