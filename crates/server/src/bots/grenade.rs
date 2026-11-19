@@ -24,11 +24,11 @@ pub(crate) const LOB_BODY_GROW: f32 = 24.0;
 /// within `LOB_SLACK` of it, else within `AWAY_DEG` of the throw's yaw,
 /// `AWAY_TICKS` at most.
 const AWAY_PITCH: f32 = -30.0;
-pub(super) const AWAY_DEG: f32 = 30.0;
-pub(super) const AWAY_TICKS: u32 = 16;
+const AWAY_DEG: f32 = 30.0;
+const AWAY_TICKS: u32 = 16;
 /// Ticks past the hold a frag waits for its pin ([`BotView::grenade_ready`])
 /// before it is put back: the raise and the pullback take 17 at most.
-pub(super) const PIN_WAIT_TICKS: u32 = 30;
+const PIN_WAIT_TICKS: u32 = 30;
 /// A UO cook's hold: `COOK_TICKS` plus a draw under `COOK_SPREAD`, the
 /// sight button down from `COOK_SPOON_AFTER` ticks in (`Bot::think_grenade`).
 const COOK_TICKS: u32 = 24;
@@ -338,9 +338,496 @@ impl Bot {
 /// An enemy in sight this many ticks with no round at him is thrown at;
 /// one lost from sight between these ticks ago is thrown at where he went
 /// ([`Bot::throw_spot`]).
-pub(super) const COVER_THROW_TICKS: u32 = 20;
+const COVER_THROW_TICKS: u32 = 20;
 const LOST_THROW_MIN: u32 = 4;
-pub(super) const LOST_THROW_TICKS: u32 = 60;
+const LOST_THROW_TICKS: u32 = 60;
 /// ...if he was slower than this when lost, units/s: a frag at the spot a
 /// runner left lands where he no longer is.
 const LOST_STILL: f32 = 100.0;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bots::tests::*;
+    use vcod_common::net::msg::{BUTTON_ATTACK, BUTTON_USE};
+
+    /// An intermission or a spectator spell drops a throw under way, as a
+    /// death does: the next level does not start on last level's frag
+    /// (BUG-135).
+    #[test]
+    fn a_throw_under_way_ends_when_the_bot_stops_playing() {
+        let mut bot = Bot::new("allies", true, 1);
+        bot.stage = Stage::Cook { left: 5, spoon: 2 };
+        bot.throw_at = Some([100.0, 0.0, 0.0]);
+        let mut v = view();
+        v.playing = false;
+        bot.think(&v);
+        assert!(matches!(bot.stage, Stage::Wander));
+        assert_eq!(bot.throw_at, None);
+    }
+
+    /// UO's frag cooks: the sight button goes down a few ticks into the
+    /// pullback, and the hold stays well inside the 4 s fuse.
+    #[test]
+    fn a_uo_frag_is_spooned_after_the_pullback() {
+        let mut bot = Bot::new("allies", true, 7);
+        let mut v = view();
+        v.grenade_cooks = true;
+        v.weapon = 6;
+        bot.stage = Stage::ToGrenade;
+        let mut ticks = Vec::new();
+        for _ in 0..60 {
+            let cmd = bot.think(&v);
+            ticks.push(cmd.buttons);
+            if matches!(bot.stage, Stage::BackToRifle { .. }) {
+                break;
+            }
+        }
+        let held = ticks
+            .iter()
+            .filter(|b| *b & msg::BUTTON_ATTACK != 0)
+            .count();
+        let spoon = ticks.iter().position(|b| b & msg::BUTTON_ADS != 0);
+        assert!(
+            spoon.is_some_and(|i| i >= 3),
+            "spooned after the pullback: {ticks:?}"
+        );
+        assert!(held * 50 < 2000, "held {held} ticks");
+    }
+
+    #[test]
+    fn a_bot_throw_switches_to_the_frag_cooks_and_throws() {
+        let mut bot = Bot::new("allies", true, 0x1234_5678);
+        let mut v = view();
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [300.0, 0.0, 40.0],
+            velocity: [0.0; 3],
+        });
+        // The server's probe found the flight clear.
+        v.lob = Some([-12.0, 0.0]);
+        // Grind until the grenade machine starts; the cooldown is short with
+        // a live enemy this close.
+        let mut switched = None;
+        let mut held = false;
+        let mut released = false;
+        for _ in 0..600 {
+            let cmd = bot.think(&v);
+            // The real sim follows the byte; the fake view does the same.
+            v.weapon = cmd.weapon;
+            if cmd.weapon == 6 {
+                switched = Some(cmd.weapon);
+                held |= cmd.buttons & BUTTON_ATTACK != 0;
+            }
+            if held && cmd.weapon == 6 && cmd.buttons & BUTTON_ATTACK == 0 {
+                released = true;
+            }
+        }
+        assert!(switched.is_some(), "the bot never switched to the frag");
+        assert!(held, "the pullback never held the trigger");
+        assert!(released, "the cooked throw never released");
+    }
+
+    /// The hold runs out before the raise and the pullback's
+    /// `holdFireTime` have: the trigger stays down until the pin is out,
+    /// and only then comes up. Let go early, the throw waited for the pin
+    /// and the next tick's switch to the rifle cancelled it.
+    #[test]
+    fn a_frag_is_held_until_its_pin_is_out() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = view();
+        v.weapon = 6;
+        v.view = [-12.0, 0.0, 0.0];
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [300.0, 0.0, 40.0],
+            velocity: [0.0; 3],
+        });
+        v.lob = Some([-12.0, 0.0]);
+        v.grenade_ready = false;
+        bot.stage = Stage::Cook { left: 1, spoon: 0 };
+        for _ in 0..10 {
+            let cmd = bot.think(&v);
+            assert_ne!(cmd.buttons & BUTTON_ATTACK, 0, "let go on the pin");
+            assert_eq!(cmd.weapon, 6);
+        }
+        v.grenade_ready = true;
+        bot.take_yell();
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.buttons & BUTTON_ATTACK, 0, "held past the pin");
+        assert_eq!(bot.throws(), 1);
+        assert_eq!(bot.take_yell(), Some(yell::Yell::Grenade));
+    }
+
+    /// The view on the lob with the gun kicked 17 degrees up off it (a
+    /// blast's knock): the release waits until the view plus the offset is
+    /// on the lob. UO mp_cassino seed 13 let go there, the frag went up
+    /// at 87 degrees and came down on its thrower.
+    #[test]
+    fn a_throw_waits_for_the_aim_not_the_view() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = view();
+        v.weapon = 6;
+        v.view = [-70.0, 173.0, 0.0];
+        v.gun_offset = [-17.0, 0.0];
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [-300.0, 40.0, 40.0],
+            velocity: [0.0; 3],
+        });
+        v.lob = Some([-70.0, 173.0]);
+        bot.stage = Stage::Cook { left: 1, spoon: 0 };
+        let cmd = bot.think(&v);
+        assert_ne!(cmd.buttons & BUTTON_ATTACK, 0, "let go off the aim");
+        let pitch = cmd.angles[0] as f32 / ANGLE2SHORT;
+        assert!(pitch > -70.0, "the view goes down under the kick: {pitch}");
+        v.view = [-53.0, 173.0, 0.0];
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.buttons & BUTTON_ATTACK, 0, "held on the aim");
+    }
+
+    /// A pin that never comes out (the raise refused) puts the frag back.
+    #[test]
+    fn a_frag_whose_pin_never_comes_out_is_put_back() {
+        let mut bot = Bot::new("allies", true, 1);
+        bot.rifle = 10;
+        let mut v = view();
+        v.weapon = 6;
+        v.view = [-12.0, 0.0, 0.0];
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [300.0, 0.0, 40.0],
+            velocity: [0.0; 3],
+        });
+        v.lob = Some([-12.0, 0.0]);
+        v.grenade_ready = false;
+        bot.stage = Stage::Cook { left: 1, spoon: 0 };
+        for _ in 0..=PIN_WAIT_TICKS + 1 {
+            bot.think(&v);
+        }
+        assert!(matches!(bot.stage, Stage::BackToRifle { weapon: 10 }));
+        assert_eq!(bot.throws(), 0);
+    }
+
+    /// Through the throw the view turns toward the enemy and up over it,
+    /// never to the zero angles that threw the frag wherever
+    /// `delta_angles` pointed.
+    #[test]
+    fn a_throw_lobs_over_the_enemy() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = view();
+        v.weapon = 6;
+        // The enemy 400 ahead at eye height, the view level on it: the
+        // pitch rises over the line, a bounded step a tick.
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [0.0, 400.0, 64.0 + vcod_common::pmove::VIEW_STAND],
+            velocity: [0.0; 3],
+        });
+        bot.stage = Stage::Cook { left: 20, spoon: 0 };
+        let cmd = bot.think(&v);
+        let pitch = cmd.angles[0] as f32 / ANGLE2SHORT;
+        let yaw = cmd.angles[1] as f32 / ANGLE2SHORT;
+        assert!(pitch < -10.0, "pitched up: {pitch}");
+        assert!((yaw - 90.0).abs() < 1.0, "on the enemy: {yaw}");
+    }
+
+    /// An enemy that closed inside the blast during the hold: the release
+    /// waits while the view comes round, then the frag goes the other way,
+    /// high (the self-kills of bot-objectives.md 6).
+    #[test]
+    fn a_throw_turns_away_from_an_enemy_inside_the_blast() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = view();
+        v.weapon = 6;
+        v.view = [0.0, 90.0, 0.0];
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [0.0, 100.0, 64.0 + vcod_common::pmove::VIEW_STAND],
+            velocity: [0.0; 3],
+        });
+        bot.stage = Stage::Cook { left: 1, spoon: 0 };
+        let mut released = None;
+        for tick in 0..30 {
+            let cmd = bot.think(&v);
+            v.view = [
+                cmd.angles[0] as f32 / ANGLE2SHORT,
+                cmd.angles[1] as f32 / ANGLE2SHORT,
+                0.0,
+            ];
+            if cmd.buttons & BUTTON_ATTACK == 0 {
+                released = Some((tick, v.view));
+                break;
+            }
+        }
+        let (tick, at) = released.expect("never thrown");
+        assert!(tick > 5, "released at once, at the enemy: {at:?}");
+        assert!(yaw_diff(at[1], -90.0).abs() <= AWAY_DEG + 1.0, "{at:?}");
+        assert!(at[0] < -20.0, "high: {at:?}");
+    }
+
+    /// The view still high off an earlier lob when the hold runs out: the
+    /// release waits for the probed lob's pitch, not only its yaw. mp_cassino
+    /// on UO, a bot let go at -22 with the probe's lob at -5.75; the frag
+    /// struck the wall above the enemy and its blast killed the thrower.
+    #[test]
+    fn a_throw_waits_for_the_lobs_pitch() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = view();
+        v.weapon = 6;
+        v.view = [-22.0, 6.0, 0.0];
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [270.0, -6.0, 40.0],
+            velocity: [0.0; 3],
+        });
+        v.lob = Some([-5.75, -1.35]);
+        bot.stage = Stage::Cook { left: 1, spoon: 0 };
+        let mut released = None;
+        for tick in 0..30 {
+            let cmd = bot.think(&v);
+            if cmd.buttons & BUTTON_ATTACK == 0 {
+                released = Some((tick, v.view));
+                break;
+            }
+            v.view = [
+                cmd.angles[0] as f32 / ANGLE2SHORT,
+                cmd.angles[1] as f32 / ANGLE2SHORT,
+                0.0,
+            ];
+        }
+        let (tick, at) = released.expect("never thrown");
+        assert!(tick > 0, "let go on the old pitch: {at:?}");
+        assert!(yaw_diff(at[0], -5.75).abs() <= LOB_SLACK, "{at:?}");
+        assert!(yaw_diff(at[1], -1.35).abs() <= LOB_SLACK, "{at:?}");
+    }
+
+    /// The enemy steps out of sight during the hold: the frag still goes
+    /// at where it was, and only by a probed lob, held until one is found.
+    /// mp_cassino on UO, a bot let go along its view the tick its enemy
+    /// left sight; the frag struck the cover and killed the thrower.
+    #[test]
+    fn a_throw_at_an_enemy_gone_from_sight_waits_for_a_lob() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = view();
+        v.weapon = 6;
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [300.0, 0.0, 40.0],
+            velocity: [0.0; 3],
+        });
+        v.lob = Some([-10.0, 0.0]);
+        bot.stage = Stage::Cook { left: 3, spoon: 0 };
+        bot.think(&v);
+        v.enemy = None;
+        v.lob = None;
+        assert_eq!(bot.throw_target(&v), Some([300.0, 0.0, 40.0]));
+        assert!(bot.wants_lob(&v), "the server stops probing");
+        for tick in 0..4 {
+            let cmd = bot.think(&v);
+            assert!(cmd.buttons & BUTTON_ATTACK != 0, "let go blind at {tick}");
+        }
+        v.lob = Some([-10.0, 0.0]);
+        v.view = [-10.0, 0.0, 0.0];
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.buttons & BUTTON_ATTACK, 0, "never thrown on the lob");
+        assert_eq!(bot.throw_target(&v), None);
+    }
+
+    /// A 1.1 frag with no clear lob once the wait is out is put back: the
+    /// cmd that lets the trigger go asks for the rifle, which cancels the
+    /// pullback. A UO frag, its fuse running, is let go.
+    #[test]
+    fn a_throw_with_no_lob_is_put_back() {
+        for cooks in [false, true] {
+            let mut bot = Bot::new("allies", true, 1);
+            bot.rifle = 10;
+            let mut v = view();
+            v.weapon = 6;
+            v.grenade_cooks = cooks;
+            v.enemy = Some(EnemyView {
+                slot: 3,
+                origin: [300.0, 0.0, 40.0],
+                velocity: [0.0; 3],
+            });
+            bot.stage = Stage::Cook { left: 1, spoon: 0 };
+            let cmd = (0..=AWAY_TICKS)
+                .map(|_| bot.think(&v))
+                .find(|c| c.buttons & BUTTON_ATTACK == 0)
+                .expect("held for good");
+            assert_eq!(cmd.weapon, if cooks { 6 } else { 10 }, "cooks {cooks}");
+            assert_eq!(bot.throws(), u32::from(cooks), "cooks {cooks}");
+        }
+    }
+
+    /// mp_cassino on UO, seed 1: the tick a throw started sent null angles,
+    /// which turned the view onto `delta_angles` (45 degrees off the
+    /// enemy), and the enemy left sight before any target was recorded.
+    /// The cook ran out with no target and the frag went flat along that
+    /// heading into the wall beside the thrower.
+    #[test]
+    fn the_tick_a_throw_starts_aims_and_records_the_enemy() {
+        let mut v = view();
+        v.view = [0.0, 10.0, 0.0];
+        v.delta_angles = [0, 8192, 0];
+        v.grenade = Some(6);
+        v.lob = Some([-10.0, 0.0]);
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [400.0, 0.0, 40.0],
+            velocity: [0.0; 3],
+        });
+        let mut bot = Bot::new("allies", true, 1);
+        let cmd = (0..400)
+            .find_map(|_| {
+                let cmd = bot.think(&v);
+                matches!(bot.stage, Stage::ToGrenade).then_some(cmd)
+            })
+            .expect("a throw starts");
+        assert_eq!(cmd.weapon, 6);
+        let yaw = (cmd.angles[1] + v.delta_angles[1]) as f32 / ANGLE2SHORT;
+        assert!(yaw.abs() < 10.0, "the view turns onto the enemy: {yaw}");
+        v.enemy = None;
+        assert_eq!(bot.throw_target(&v), Some([400.0, 0.0, 40.0]));
+    }
+
+    /// On the rungs the hands stay empty: no throw starts there, and one
+    /// whose switch never lands (the body grabbed a ladder mid-switch) is
+    /// given up, the bot back on its keys. mp_ship's hold ladder held
+    /// such a bot 3000 ticks (bot-combat.md 17.2).
+    #[test]
+    fn a_throw_whose_switch_never_lands_is_given_up() {
+        let mut v = view();
+        v.grenade = Some(6);
+        v.lob = Some([-10.0, 0.0]);
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [400.0, 0.0, 40.0],
+            velocity: [0.0; 3],
+        });
+        v.on_ladder = true;
+        let mut bot = Bot::new("allies", true, 1);
+        for _ in 0..400 {
+            bot.think(&v);
+            assert!(
+                matches!(bot.stage, Stage::Wander),
+                "a throw starts on the rungs"
+            );
+        }
+        bot.stage = Stage::ToGrenade;
+        v.weapon = 0;
+        v.busy_ms = 0;
+        for _ in 0..SWITCH_IDLE_TICKS {
+            bot.think(&v);
+            assert!(matches!(bot.stage, Stage::ToGrenade), "given up early");
+        }
+        bot.think(&v);
+        assert!(
+            matches!(bot.stage, Stage::Wander),
+            "the switch waited for good"
+        );
+    }
+
+    /// An enemy lost from sight a second ago is thrown at where he went;
+    /// one gone longer than [`LOST_THROW_TICKS`] is not.
+    #[test]
+    fn a_bot_throws_where_an_enemy_was_lost() {
+        let mut v = view();
+        v.grenade = Some(6);
+        v.lob = Some([-10.0, 0.0]);
+        let mut bot = Bot::new("allies", true, 1);
+        bot.grenade_cooldown = 0;
+        let lost = |ticks| Recall {
+            at: [400.0, 0.0, 40.0],
+            ticks,
+            seen: true,
+        };
+        bot.recall = Some(lost(bot.skill.memory_ticks - LOST_THROW_TICKS - 2));
+        bot.think(&v);
+        assert!(
+            matches!(bot.stage, Stage::Wander),
+            "a stale spot drew a throw"
+        );
+        bot.recall = Some(lost(bot.skill.memory_ticks - 20));
+        let cmd = bot.think(&v);
+        assert!(matches!(bot.stage, Stage::ToGrenade));
+        assert_eq!(cmd.weapon, 6);
+        assert_eq!(bot.throw_target(&v), Some([400.0, 0.0, 40.0]));
+    }
+
+    /// An enemy in sight takes the gun until no round has gone at him for
+    /// [`COVER_THROW_TICKS`].
+    #[test]
+    fn a_bot_throws_at_an_enemy_only_once_the_gun_has_failed() {
+        let mut v = view();
+        v.lob = Some([-10.0, 0.0]);
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [400.0, 0.0, 40.0],
+            velocity: [0.0; 3],
+        });
+        let mut bot = Bot::new("allies", true, 1);
+        bot.grenade_cooldown = 0;
+        bot.futile = COVER_THROW_TICKS - 2;
+        assert_eq!(bot.throw_target(&v), None);
+        bot.futile = COVER_THROW_TICKS;
+        assert_eq!(bot.throw_target(&v), Some([400.0, 0.0, 40.0]));
+        bot.think(&v);
+        assert!(matches!(bot.stage, Stage::ToGrenade));
+    }
+
+    /// No clear lob at the enemy (a wall, a ceiling or a body in the way):
+    /// no throw starts, whatever the dice.
+    #[test]
+    fn no_frag_goes_without_a_clear_lob() {
+        let mut v = view();
+        v.lob = None;
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [300.0, 0.0, 40.0],
+            velocity: [0.0; 3],
+        });
+        let mut bot = Bot::new("allies", true, 0x1234_5678);
+        for _ in 0..600 {
+            let cmd = bot.think(&v);
+            assert_ne!(cmd.weapon, 6, "switched to the frag");
+        }
+    }
+
+    /// A death mid-grenade-phase must not strand the corpse: the stage
+    /// machine must not swallow the respawn press.
+    #[test]
+    fn a_bot_killed_mid_grenade_phase_still_presses_use() {
+        for start_stage in 0..3 {
+            let mut bot = Bot::new("allies", true, 1);
+            // Walk the machine into each non-wander stage by force.
+            match start_stage {
+                0 => {
+                    bot.rifle = 10;
+                    bot.stage = Stage::ToGrenade;
+                }
+                1 => {
+                    bot.rifle = 10;
+                    bot.stage = Stage::Cook { left: 5, spoon: 0 };
+                }
+                _ => {
+                    bot.stage = Stage::BackToRifle { weapon: 10 };
+                }
+            }
+            let mut v = view();
+            v.dead = true;
+            v.playing = false;
+            let mut pressed = false;
+            for _ in 0..RESPAWN_DELAY + RESPAWN_RETRY * 3 {
+                if bot.think(&v).buttons & BUTTON_USE != 0 {
+                    pressed = true;
+                    break;
+                }
+            }
+            assert!(
+                pressed,
+                "stage {start_stage}: a bot killed mid-grenade-phase never pressed use"
+            );
+        }
+    }
+}

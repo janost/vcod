@@ -47,7 +47,7 @@ pub(crate) fn notices_frag(
 pub(crate) const HEAR_GUNFIRE: f32 = 2000.0;
 pub(crate) const HEAR_BLAST: f32 = 1500.0;
 /// A lost enemy is remembered this far along its last velocity, seconds.
-pub(super) const MEMORY_LEAD_S: f32 = 0.5;
+const MEMORY_LEAD_S: f32 = 0.5;
 
 /// A tracked target in sight is kept over a new one unless the new one
 /// stands nearer than this share of its range: picked nearest-first every
@@ -117,7 +117,7 @@ pub(crate) fn aim_point(
 }
 
 /// How long a bot keeps walking to one sidestep before it picks again.
-pub(super) const SIDESTEP_HOLD_MS: i32 = 3000;
+const SIDESTEP_HOLD_MS: i32 = 3000;
 /// A sidestep this near across is reached: the bot picks again if the line
 /// is still blocked from there.
 const SIDESTEP_REACHED: f32 = 16.0;
@@ -231,5 +231,195 @@ impl Bot {
                 seen: false,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bots::tests::*;
+
+    #[test]
+    fn a_lost_enemy_is_looked_for_where_it_was_headed_until_memory_runs_out() {
+        let (mut bot, v) = lost([500.0, 0.0, 104.0], [200.0, 0.0, 0.0]);
+        bot.wary = false;
+        let spot = Goal::To([500.0 + 200.0 * MEMORY_LEAD_S, 0.0, 104.0]);
+        assert_eq!(bot.goal(&v), spot);
+        for _ in 1..bot.skill.memory_ticks {
+            bot.think(&v);
+        }
+        assert_eq!(bot.goal(&v), spot, "forgotten early");
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::Roam, "never forgotten");
+    }
+
+    /// A wary bot heads for the server's vantage over the spot, and gives
+    /// the spot up before its memory of it runs out.
+    #[test]
+    fn a_wary_bot_hunts_from_the_vantage_and_gives_up_sooner() {
+        let (mut bot, mut v) = lost([500.0, 0.0, 104.0], [0.0; 3]);
+        assert_eq!(bot.hunt_query(), Some([500.0, 0.0, 104.0]));
+        v.hunt = Some([400.0, 150.0, 64.0]);
+        assert_eq!(bot.goal(&v), Goal::To([400.0, 150.0, 64.0]));
+        let hunt = 70.min(bot.skill.memory_ticks);
+        assert!(hunt < bot.skill.memory_ticks);
+        for _ in 1..hunt {
+            bot.think(&v);
+        }
+        assert_eq!(bot.goal(&v), Goal::To([400.0, 150.0, 64.0]));
+        bot.think(&v);
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::Roam, "hunted past its budget");
+        assert_eq!(bot.hunt_query(), None);
+        assert!(bot.recall.is_some(), "the spot is still remembered");
+    }
+
+    #[test]
+    fn reaching_the_vantage_ends_the_hunt() {
+        let (mut bot, mut v) = lost([500.0, 0.0, 104.0], [0.0; 3]);
+        v.hunt = Some([400.0, 150.0, 64.0]);
+        v.origin = [390.0, 140.0, 64.0];
+        bot.think(&v);
+        assert!(bot.recall.is_none());
+        assert_eq!(bot.tactics()[2], 1);
+    }
+
+    #[test]
+    fn reaching_the_remembered_spot_with_nothing_there_forgets_it() {
+        let (mut bot, mut v) = lost([500.0, 0.0, 104.0], [0.0; 3]);
+        v.origin = [470.0, 10.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Roam);
+        bot.think(&v);
+        v.origin = [0.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Roam, "the reached spot came back");
+    }
+
+    #[test]
+    fn a_heard_noise_is_a_goal_that_outlasts_the_tick() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.noise = Some([0.0, 900.0, 104.0]);
+        assert_eq!(bot.goal(&v), Goal::To([0.0, 900.0, 104.0]));
+        bot.think(&v);
+        v.noise = None;
+        assert_eq!(bot.goal(&v), Goal::To([0.0, 900.0, 104.0]));
+    }
+
+    #[test]
+    fn a_seen_enemys_spot_beats_a_noise() {
+        let (mut bot, mut v) = lost([500.0, 0.0, 104.0], [0.0; 3]);
+        v.noise = Some([0.0, 900.0, 104.0]);
+        assert_eq!(bot.goal(&v), Goal::To([500.0, 0.0, 104.0]));
+        bot.think(&v);
+        v.noise = None;
+        assert_eq!(bot.goal(&v), Goal::To([500.0, 0.0, 104.0]));
+        // Once the spot is reached, the noise is what is left to check.
+        v.origin = [500.0, 0.0, 64.0];
+        v.noise = Some([0.0, 900.0, 104.0]);
+        bot.think(&v);
+        v.noise = None;
+        assert_eq!(bot.goal(&v), Goal::To([0.0, 900.0, 104.0]));
+    }
+
+    #[test]
+    fn the_loudest_noise_is_the_nearest_for_its_range_and_never_ones_own() {
+        let at = [0.0, 0.0, 0.0];
+        let noise = |x: f32, source, radius| Noise {
+            at: [x, 0.0, 0.0],
+            source,
+            radius,
+        };
+        let heard = |n: &[Noise]| loudest(n, 1, at, 1.0);
+        assert_eq!(heard(&[noise(10.0, 1, HEAR_GUNFIRE)]), None, "own shot");
+        assert_eq!(heard(&[noise(HEAR_BLAST + 1.0, 2, HEAR_BLAST)]), None);
+        // 1800 of 2000 (0.90) is louder than 1400 of 1500 (0.93).
+        let far_shot = noise(1800.0, 2, HEAR_GUNFIRE);
+        let near_blast = noise(1400.0, 3, HEAR_BLAST);
+        assert_eq!(heard(&[near_blast, far_shot]), Some(far_shot.at));
+    }
+
+    /// A sidestep is held until reached, blocked or stale, so a teammate
+    /// moving across the line does not swing the bot between spots.
+    #[test]
+    fn a_sidestep_is_held_until_reached_or_blocked() {
+        let spot = [64.0, 0.0, 0.0];
+        let at = glam::Vec3::ZERO;
+        let all = |_: glam::Vec3| true;
+        assert_eq!(held_sidestep(Some((spot, 1000)), 1500, at, all), Some(spot));
+        assert_eq!(held_sidestep(None, 1500, at, all), None);
+        let near = glam::Vec3::new(56.0, 4.0, 18.0);
+        assert_eq!(held_sidestep(Some((spot, 1000)), 1500, near, all), None);
+        assert_eq!(held_sidestep(Some((spot, 1000)), 1500, at, |_| false), None);
+        let stale = 1000 + SIDESTEP_HOLD_MS;
+        assert_eq!(held_sidestep(Some((spot, 1000)), stale, at, all), None);
+    }
+
+    #[test]
+    fn the_attacker_then_the_held_target_then_the_nearest() {
+        let e = |slot| EnemyView {
+            slot,
+            origin: [0.0; 3],
+            velocity: [0.0; 3],
+        };
+        // Slots 1, 2, 3 at 100, 200, 300 units; slot 3 out of sight.
+        let order = [(1e4, 1), (4e4, 2), (9e4, 3)];
+        let seen = |i: usize| (order[i].1 != 3).then(|| e(order[i].1));
+        let pick = |a, t| pick_enemy(&order, a, t, seen).map(|e| e.slot);
+        assert_eq!(pick(None, None), Some(1));
+        assert_eq!(pick(Some(2), Some(1)), Some(2));
+        // Unseen, the attacker gives way.
+        assert_eq!(pick(Some(3), None), Some(1));
+        // Slot 1 is under 0.6 of the held slot 2's range; nothing is
+        // nearer than 0.6 of slot 1's.
+        assert_eq!(pick(None, Some(2)), Some(1));
+        let order = [(2e4, 1), (4e4, 2)];
+        let seen = |i: usize| Some(e(order[i].1));
+        assert_eq!(
+            pick_enemy(&order, None, Some(2), seen).map(|e| e.slot),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn the_sight_cone_is_about_the_view() {
+        let eye = glam::Vec3::ZERO;
+        let ahead = glam::Vec3::new(100.0, 0.0, 0.0);
+        let side = glam::Vec3::new(0.0, 100.0, 0.0);
+        assert!(in_sight_cone(eye, [0.0; 3], ahead, 120.0));
+        assert!(!in_sight_cone(eye, [0.0; 3], side, 120.0));
+        assert!(in_sight_cone(eye, [0.0, 90.0, 0.0], side, 120.0));
+        assert!(in_sight_cone(eye, [0.0; 3], side, 181.0));
+        assert!(in_sight_cone(eye, [0.0; 3], -ahead, 360.0));
+        // Pitch is down positive: a view 80 down misses a level target.
+        assert!(!in_sight_cone(eye, [80.0, 0.0, 0.0], ahead, 120.0));
+    }
+
+    /// A wall 50 high between a level bot and a standing enemy covers the
+    /// chest (40) but not the eye (60): the bot aims at the head.
+    #[test]
+    fn a_chest_behind_cover_is_aimed_over() {
+        let (chest, eye) = ([500.0, 0.0, 40.0], [500.0, 0.0, 60.0]);
+        let over_wall = |p: [f32; 3]| p[2] > 50.0;
+        assert_eq!(aim_point(chest, eye, over_wall), Some(eye));
+        assert_eq!(aim_point(chest, eye, |_| true), Some(chest));
+        assert_eq!(aim_point(chest, eye, |_| false), None);
+    }
+
+    /// Another's frag is noticed in front in a clear line, or close by;
+    /// one behind or out of the line goes unnoticed.
+    #[test]
+    fn a_frag_is_noticed_in_front_or_close() {
+        let eye = glam::Vec3::new(0.0, 0.0, 60.0);
+        let open = |_, _| true;
+        let notices = |at: [f32; 3], clear: &dyn Fn(glam::Vec3, glam::Vec3) -> bool| {
+            notices_frag(eye, 0.0, at.into(), clear)
+        };
+        assert!(notices([300.0, 50.0, 0.0], &open));
+        assert!(!notices([-300.0, 0.0, 0.0], &open), "seen behind");
+        assert!(notices([-100.0, 0.0, 0.0], &open), "not heard close");
+        assert!(
+            !notices([300.0, 0.0, 0.0], &|_, _| false),
+            "seen through a wall"
+        );
     }
 }

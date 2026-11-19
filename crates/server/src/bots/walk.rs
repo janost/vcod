@@ -852,7 +852,7 @@ impl Bot {
     }
 
     /// A fresh wander heading, and a new stall baseline to measure it by.
-    pub(super) fn pick_heading(&mut self, view: &BotView) {
+    fn pick_heading(&mut self, view: &BotView) {
         self.heading = (self.rand() % 360) as f32;
         // Turned a step at a time off a hazard or a drop, beside the
         // heading too where it can (a heading into a wall slides along it:
@@ -883,7 +883,7 @@ impl Bot {
     /// than a jump below. Neither takes one that hurts, unless the path
     /// drops as far: a back down onto a ladder is no licence to leave the
     /// roof (mp_depot's at (-2750, -1217), section 3).
-    pub(super) fn shuns(&self, view: &BotView, yaw: f32) -> bool {
+    fn shuns(&self, view: &BotView, yaw: f32) -> bool {
         let o = octant(yaw);
         let jump = vcod_common::pmove::JUMP_HEIGHT;
         let path_drop = view.waypoint.map_or(0.0, |w| view.origin[2] - w[2]);
@@ -928,7 +928,7 @@ const LADDER_CENTRED: f32 = 2.0;
 /// under its top. Two steps leave the bleed a fifth of a second.
 const STRAFE_STOP: f32 = 2.0 * vcod_common::pmove::STEPSIZE;
 /// Ticks a stuck bot spends on a random heading before its waypoint again.
-pub(super) const UNSTICK_TICKS: u32 = 15;
+const UNSTICK_TICKS: u32 = 15;
 /// The ticks of a stall window, and the circle a body that stays in it is
 /// stuck in ([`Bot::think`]).
 const STALL_TICKS: u32 = 10;
@@ -940,19 +940,19 @@ const RUNG_GRACE: u32 = 10;
 /// (`Bot::topping`).
 const TOPPING_REACH: f32 = 24.0;
 /// Five seconds held off the ground within a unit of one spot.
-pub(super) const WEDGE_TICKS: u32 = 100;
+const WEDGE_TICKS: u32 = 100;
 /// Ten seconds nearest a node with no way on.
-pub(super) const STRAND_TICKS: u32 = 200;
+const STRAND_TICKS: u32 = 200;
 const WEDGE_SLACK: f32 = 1.0;
 /// Unstick spells that start within [`CORNER`] units of the one before;
 /// from this many on, the bot is cornered and a drop is a way out.
-pub(super) const CORNERED: u32 = 3;
+const CORNERED: u32 = 3;
 const CORNER: f32 = 96.0;
 /// Inside this of a leap's foot, flat, the run slows in proportion.
 const LEAP_SLOW: f32 = 48.0;
 /// Under this pace, units/s, the keys keep the path's own run: no
 /// pre-aim turns them.
-pub(super) const RECALL_PACE: f32 = 66.0;
+const RECALL_PACE: f32 = 66.0;
 /// A waypoint this far above the feet is up a ladder: look up, where
 /// `ladder_move` climbs at full rate.
 const CLIMB_HEIGHT: f32 = 48.0;
@@ -999,4 +999,1227 @@ pub(crate) fn rekey(forward: i8, right: i8, from: f32, to: f32) -> (i8, i8) {
         key(f * d.cos() + r * d.sin()),
         key(r * d.cos() - f * d.sin()),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bots::tests::*;
+
+    #[test]
+    fn a_wandering_bot_runs_forward_carrying_the_held_weapon() {
+        let mut bot = Bot::new("allies", false, 1);
+        let cmd = bot.think(&view());
+        assert_eq!(cmd.forward, 127, "the wander holds forward");
+        assert_eq!(cmd.weapon, 10, "the cmd carries the held weapon byte");
+        assert_eq!(cmd.buttons, 0, "nothing is pressed without an enemy");
+        assert_eq!(cmd.right, 0);
+    }
+
+    #[test]
+    fn a_stalled_heading_is_swapped_for_a_new_one() {
+        let mut bot = Bot::new("allies", false, 1);
+        let v = view();
+        let first = bot.think(&v).angles[1];
+        // Grinding into a wall: ten ticks without moving off the stall spot.
+        for _ in 0..20 {
+            bot.think(&v);
+        }
+        let after = bot.think(&v).angles[1];
+        assert_ne!(first, after, "a bot that cannot move keeps one heading");
+        // And the new heading eventually turns again too.
+        for _ in 0..40 {
+            bot.think(&v);
+        }
+        assert_ne!(after, bot.think(&v).angles[1], "the stall swap is not once");
+    }
+
+    #[test]
+    fn the_view_turns_toward_a_remembered_spot_while_the_keys_keep_the_path() {
+        let (mut bot, mut v) = lost([0.0, 500.0, 124.0], [0.0; 3]);
+        v.view = [0.0, 0.0, 0.0];
+        v.waypoint = Some([500.0, 0.0, 64.0]);
+        v.speed = vcod_common::pmove::SPEED_RUN;
+        let cmd = bot.think(&v);
+        let yaw = cmd.angles[1] as f32 / ANGLE2SHORT;
+        assert!((yaw - bot.skill.turn_deg).abs() < 0.1, "yaw {yaw}");
+        // The path runs along +x, right of a view turned 15 degrees left.
+        assert!(cmd.forward > 120 && cmd.right > 30, "{cmd:?}");
+    }
+
+    /// With no path a bot wanders on a random heading; it never takes one
+    /// into a minefield, and turns off one it walks up to.
+    #[test]
+    fn a_wandering_bot_keeps_out_of_hazards() {
+        for seed in 1..20 {
+            let mut bot = Bot::new("allies", false, seed);
+            let mut v = view();
+            // Everywhere but -y (octant 6) is a minefield.
+            v.hazard_ahead = [true; 8];
+            v.hazard_ahead[6] = false;
+            let cmd = bot.think(&v);
+            assert_eq!(
+                octant(bot.heading),
+                6,
+                "seed {seed}: heading {}",
+                bot.heading
+            );
+            assert_eq!(cmd.forward, 127);
+            // A hazard turns up in front: the next tick picks again.
+            v.hazard_ahead = [false; 8];
+            v.hazard_ahead[6] = true;
+            bot.think(&v);
+            assert_ne!(octant(bot.heading), 6, "seed {seed}: kept walking in");
+        }
+    }
+
+    #[test]
+    fn octants_run_counter_clockwise_from_plus_x() {
+        assert_eq!(octant(0.0), 0);
+        assert_eq!(octant(22.0), 0);
+        assert_eq!(octant(23.0), 1);
+        assert_eq!(octant(90.0), 2);
+        assert_eq!(octant(-90.0), 6);
+        assert_eq!(octant(350.0), 0);
+    }
+
+    #[test]
+    fn a_bot_runs_at_its_waypoint() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([0.0, 100.0, 64.0]);
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.forward, 127);
+        assert_eq!(cmd.angles, [0, deg_short(90.0), 0], "level, facing +y");
+    }
+
+    /// A waypoint off the walking view's heading: the view comes round at
+    /// `walk_turn_deg` a tick while the keys, full, run the body at the
+    /// waypoint all along.
+    #[test]
+    fn the_walking_view_comes_round_while_the_keys_keep_the_path() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([100.0, 0.0, 64.0]);
+        let most = bot.skill.walk_turn_deg;
+        let mut ticks = 0;
+        loop {
+            let cmd = bot.think(&v);
+            let yaw = cmd.angles[1] as f32 / ANGLE2SHORT;
+            let turn = yaw_diff(yaw, v.view[1]);
+            assert!(turn.abs() <= most + 0.01, "turned {turn}");
+            let way = yaw + (-(cmd.right as f32)).atan2(cmd.forward as f32).to_degrees();
+            assert!(yaw_diff(way, 0.0).abs() < 1.0, "keys run at {way}");
+            assert_eq!(
+                cmd.forward.unsigned_abs().max(cmd.right.unsigned_abs()),
+                127
+            );
+            v.view[1] = yaw;
+            ticks += 1;
+            if yaw_diff(yaw, 0.0).abs() < 0.01 {
+                assert_eq!((cmd.forward, cmd.right), (127, 0));
+                break;
+            }
+            assert!(ticks < 10);
+        }
+        assert_eq!(ticks, (90.0 / most).ceil() as i32);
+    }
+
+    /// A view a fight owned is handed back to the walk at once: the first
+    /// walking tick after it faces the path, and the limit runs again
+    /// from the tick after.
+    #[test]
+    fn the_walking_view_takes_the_path_at_once_after_a_fight() {
+        let (mut bot, mut v) = engaged(1);
+        // Enemy east, waypoint north, the view on the enemy.
+        v.waypoint = Some([0.0, 100.0, 64.0]);
+        bot.think(&v);
+        bot.think(&v);
+        // Out of sight, and out of mind, so nothing else owns the view.
+        v.enemy = None;
+        bot.skill.forget_ticks = 0;
+        bot.disengage();
+        bot.prior = None;
+        bot.recall = None;
+        let yaw = |c: &UserCmd| c.angles[1] as f32 / ANGLE2SHORT;
+        let cmd = bot.think(&v);
+        assert!(yaw_diff(yaw(&cmd), 90.0).abs() < 0.01, "yaw {}", yaw(&cmd));
+        v.view[1] = yaw(&cmd);
+        // The path turns south-east: the limit is back.
+        v.waypoint = Some([100.0, -100.0, 64.0]);
+        let cmd = bot.think(&v);
+        let turn = yaw_diff(yaw(&cmd), v.view[1]).abs();
+        assert!(
+            (turn - bot.skill.walk_turn_deg).abs() < 0.01,
+            "turned {turn}"
+        );
+    }
+
+    /// On UO a bot sprints a long straight leg with breath to spare, at
+    /// the full key (the sprint takes no weapon scale), and stops short of
+    /// the leg's end, with an enemy in sight and once the bar runs low.
+    #[test]
+    fn a_uo_bot_sprints_a_long_straight_leg() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([0.0, 100.0, 64.0]);
+        v.move_scale = 1.2;
+        v.sprint_room = 600.0;
+        let sprints = |c: &UserCmd| c.buttons & msg::BUTTON_SPRINT_V22 != 0;
+        assert!(!sprints(&bot.think(&v)), "no sprint off UO");
+        v.fatigue = Some(1.0);
+        let cmd = bot.think(&v);
+        assert!(sprints(&cmd));
+        assert_eq!(cmd.forward, 127, "the full key");
+        v.sprinting = true;
+        v.sprint_room = 200.0;
+        assert!(sprints(&bot.think(&v)), "carries on to the tail");
+        v.sprint_room = 100.0;
+        assert!(!sprints(&bot.think(&v)), "stops short of the end");
+        v.sprinting = false;
+        v.sprint_room = 600.0;
+        v.fatigue = Some(0.3);
+        assert!(!sprints(&bot.think(&v)), "no fresh sprint on a low bar");
+        v.fatigue = Some(1.0);
+        v.jump = true;
+        assert!(!sprints(&bot.think(&v)), "not onto a jump edge");
+    }
+
+    /// A remembered spot past the end of a straight the bot has the breath
+    /// to sprint is run at along the path; one short of it turns the view
+    /// (seed 19 of `uo_bots_fight_and_sprint_in_tdm`).
+    #[test]
+    fn a_uo_bot_sprints_toward_a_spot_past_the_straight() {
+        let sprints = |c: &UserCmd| c.buttons & msg::BUTTON_SPRINT_V22 != 0;
+        let mut v = view();
+        v.waypoint = Some([0.0, 100.0, 64.0]);
+        v.sprint_room = 600.0;
+        v.fatigue = Some(1.0);
+        v.speed = vcod_common::pmove::SPEED_RUN;
+        let think = |at: [f32; 3]| {
+            let mut bot = Bot::new("allies", true, 1);
+            bot.recall = Some(Recall {
+                at,
+                ticks: 100,
+                seen: true,
+            });
+            bot.think(&v)
+        };
+        let cmd = think([400.0, 1200.0, 64.0]);
+        assert!(sprints(&cmd), "far spot");
+        assert_eq!((cmd.forward, cmd.right), (127, 0));
+        assert!(
+            !sprints(&think([300.0, 300.0, 64.0])),
+            "spot short of the end"
+        );
+    }
+
+    /// A remembered spot to the side turns the view off the path, but not
+    /// on a CoD2 mantle edge: pmove offers the climb only to a view on the
+    /// wall (bot-combat.md 17.1).
+    #[test]
+    fn a_recall_look_keeps_off_a_mantle_edge() {
+        let mut v = view();
+        v.waypoint = Some([0.0, 100.0, 64.0]);
+        v.speed = vcod_common::pmove::SPEED_RUN;
+        let think = |v: &BotView| {
+            let mut bot = Bot::new("allies", true, 1);
+            bot.recall = Some(Recall {
+                at: [300.0, -300.0, 64.0],
+                ticks: 100,
+                seen: true,
+            });
+            bot.think(v)
+        };
+        assert_ne!(think(&v).right, 0, "the plain run turns to the spot");
+        v.mantle = true;
+        assert_eq!(think(&v).right, 0, "a mantle edge keeps the view");
+    }
+
+    /// Under [`RECALL_PACE`] the keys keep the path's run: turned off it,
+    /// a back key and a strafe at retail's 0.7 and 0.8 scales left a body
+    /// against mp_ship's deck corner at (3564, 8, 352) sliding along it at
+    /// a few units a tick (bot-navigation.md, "The ship's leftovers").
+    #[test]
+    fn a_slow_body_keeps_the_path_under_a_recall() {
+        let mut v = view();
+        v.waypoint = Some([0.0, 100.0, 64.0]);
+        let think = |v: &BotView| {
+            let mut bot = Bot::new("allies", true, 1);
+            bot.recall = Some(Recall {
+                at: [300.0, -300.0, 64.0],
+                ticks: 100,
+                seen: true,
+            });
+            bot.think(v)
+        };
+        v.speed = RECALL_PACE - 1.0;
+        assert_eq!(think(&v).right, 0, "slow: the path's own keys");
+        v.speed = vcod_common::pmove::SPEED_RUN;
+        assert_ne!(think(&v).right, 0, "at a run: turned to the spot");
+    }
+
+    /// Slowing onto a stop under a recall look scales the turned keys, so
+    /// the body still heads for the stop (bot-combat.md 17.1).
+    #[test]
+    fn a_recall_look_slows_onto_a_stop_along_the_path() {
+        let mut v = view();
+        v.waypoint = Some([0.0, 24.0, 64.0]);
+        v.stop = true;
+        v.speed = vcod_common::pmove::SPEED_RUN;
+        // Already turned to the spot.
+        v.view = [0.0, -45.0, 0.0];
+        let mut bot = Bot::new("allies", true, 1);
+        bot.recall = Some(Recall {
+            at: [300.0, -300.0, 64.0],
+            ticks: 100,
+            seen: true,
+        });
+        let cmd = bot.think(&v);
+        // The keys in the world: the view's yaw turned by the keys' angle.
+        let yaw = f32::from(cmd.angles[1] as i16) * 360.0 / 65536.0;
+        let keys = f32::from(-cmd.right)
+            .atan2(f32::from(cmd.forward))
+            .to_degrees();
+        let heading = yaw + keys;
+        assert!(
+            yaw_diff(heading, 90.0).abs() < 10.0,
+            "heads for the stop: view {yaw}, keys ({}, {})",
+            cmd.forward,
+            cmd.right
+        );
+    }
+
+    /// A light weapon's keys are cut to the graph's 190 units/s on the
+    /// ground, and left whole on the rungs, where the climb takes no
+    /// weapon scale.
+    #[test]
+    fn a_light_weapon_follows_at_the_graphs_pace() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([0.0, 100.0, 64.0]);
+        v.move_scale = 1.2;
+        assert_eq!(bot.think(&v).forward, 106, "127 / 1.2");
+        v.move_scale = 0.9;
+        assert_eq!(bot.think(&v).forward, 127, "a heavy one keeps the key");
+        v.move_scale = 1.2;
+        v.on_ground = false;
+        v.on_ladder = true;
+        v.waypoint = Some([0.0, 0.0, 300.0]);
+        assert_eq!(bot.think(&v).forward, 127, "on the rungs");
+    }
+
+    /// Pinned at a ledge's face on a jump edge, as the graph's walk was
+    /// (two ticks moved under 2 units with the key held at the top): jump,
+    /// release the key the next tick (a held key never jumps again), then
+    /// jump again after two more pinned ticks.
+    #[test]
+    fn a_bot_jumps_a_jump_edge_and_releases_the_key() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([30.0, 0.0, 96.0]);
+        assert_eq!(bot.think(&v).up, 0, "a plain edge");
+        v.jump = true;
+        let ups: Vec<i8> = (0..4).map(|_| bot.think(&v).up).collect();
+        assert_eq!(ups, [0, 127, 0, 127]);
+    }
+
+    /// Not closing on the top for one tick is no jump; the walk's second
+    /// pinned tick is. Jumping on the first, a bot in mp_depot's pit at
+    /// (-1569, 2087, 212) carried back off each landing jumped at the step
+    /// at (-1533, 2112, 239) again and again (seed 1145, bot-navigation.md
+    /// "Jumps").
+    #[test]
+    fn a_bot_jumps_on_its_second_tick_not_closing_on_the_top() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.jump = true;
+        v.waypoint = Some([60.0, 0.0, 96.0]);
+        v.velocity = [190.0, 0.0, 0.0];
+        assert_eq!(bot.think(&v).up, 0, "running at it");
+        // Carried away from the top by a landing, 4 units a tick.
+        v.velocity = [-80.0, 0.0, 0.0];
+        let ups: Vec<i8> = (0..2).map(|_| bot.think(&v).up).collect();
+        assert_eq!(ups, [0, 127]);
+    }
+
+    /// Sliding along a ledge's face on the ground at a run, across the
+    /// way to the top, is no pin, as the graph's walk measures it: the bot
+    /// slides on to where it comes to rest and jumps there, where the walk
+    /// jumped.
+    #[test]
+    fn a_bot_sliding_along_a_ledges_face_jumps_where_it_comes_to_rest() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.jump = true;
+        v.waypoint = Some([20.0, 10.0, 96.0]);
+        v.velocity = [0.0, 190.0, 0.0];
+        let ups: Vec<i8> = [0.0, 9.5, 19.0, 28.5, 29.0, 29.0]
+            .into_iter()
+            .map(|y| {
+                v.origin = [0.0, y, 64.0];
+                bot.think(&v).up
+            })
+            .collect();
+        assert_eq!(ups, [0, 0, 0, 0, 0, 127]);
+    }
+
+    /// Sliding along a face too steep to stand on, across the way to the
+    /// top, the bot is not closing on it: two such ticks start the walk's
+    /// bob, and it jumps on its next tick on the ground.
+    #[test]
+    fn a_bot_sliding_along_a_steep_face_jumps_out_of_the_bob() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.jump = true;
+        v.waypoint = Some([40.0, 0.0, 96.0]);
+        bot.think(&v);
+        v.on_ground = false;
+        v.sliding = true;
+        v.velocity = [0.0, 100.0, 0.0];
+        for i in 1..4 {
+            v.origin = [0.0, 5.0 * i as f32, 64.0];
+            assert_eq!(bot.think(&v).up, 0, "in the air");
+        }
+        v.on_ground = true;
+        v.sliding = false;
+        v.origin = [0.0, 20.0, 64.0];
+        assert_eq!(bot.think(&v).up, 127, "out of the bob");
+    }
+
+    /// Set off from rest on a jump edge's foot (`nav::Follower::jump_wait`),
+    /// the body moves little on its first tick: no jump until the key has
+    /// been held against the waypoint for two ticks.
+    #[test]
+    fn a_bot_set_off_from_rest_is_not_pinned() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.stop = true;
+        v.waypoint = Some([2.0, 0.0, 64.0]);
+        assert_eq!(bot.think(&v).forward, 0, "at rest on the foot");
+        v.stop = false;
+        v.jump = true;
+        v.waypoint = Some([30.0, 0.0, 84.0]);
+        let ups: Vec<i8> = (0..3).map(|_| bot.think(&v).up).collect();
+        assert_eq!(ups, [0, 0, 127]);
+    }
+
+    /// On a crouched jump edge the cmd after the jump holds crouch, with
+    /// `upmove` -127, through the air, and lets it go on the ground.
+    #[test]
+    fn a_bot_on_a_crouched_jump_edge_crouches_in_the_air() {
+        use vcod_common::net::msg::WBUTTON_CROUCH;
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.stop = true;
+        v.waypoint = Some([2.0, 0.0, 64.0]);
+        bot.think(&v);
+        v.stop = false;
+        v.jump = true;
+        v.crouch_jump = true;
+        v.waypoint = Some([30.0, 0.0, 84.0]);
+        bot.think(&v);
+        bot.think(&v);
+        let jump = bot.think(&v);
+        assert_eq!((jump.up, jump.wbuttons & WBUTTON_CROUCH), (127, 0));
+        v.on_ground = false;
+        for _ in 0..3 {
+            let air = bot.think(&v);
+            assert_eq!(
+                (air.up, air.wbuttons & WBUTTON_CROUCH),
+                (-127, WBUTTON_CROUCH)
+            );
+        }
+        v.on_ground = true;
+        v.jump = false;
+        v.crouch_jump = false;
+        assert_eq!(bot.think(&v).wbuttons & WBUTTON_CROUCH, 0, "landed");
+    }
+
+    /// A jump edge whose top is more than a jump below, the body still
+    /// slowing from the last waypoint's pace: pinned only after two cmds
+    /// with the key held at the new waypoint, as the graph's walk stalled.
+    /// Read as pinned at once, a bot jumped off mp_ship's shelf at (5403,
+    /// -160, 396) where the walk ran off its lip (bot-navigation.md
+    /// section 3).
+    #[test]
+    fn a_bot_turning_for_a_top_below_is_not_pinned() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([-60.0, 0.0, 64.0]);
+        assert_eq!(bot.think(&v).up, 0, "a plain edge west");
+        // Slowing west, the jump edge's top east and 140 below.
+        v.velocity = [-30.0, 0.0, 0.0];
+        v.speed = 30.0;
+        v.jump = true;
+        v.waypoint = Some([60.0, -40.0, -76.0]);
+        let ups: Vec<i8> = (0..3).map(|_| bot.think(&v).up).collect();
+        assert_eq!(ups, [0, 0, 127], "the third cmd against the key jumps");
+    }
+
+    /// At a leap's foot the run slows and stops on it; the leap itself
+    /// jumps only at the lip.
+    #[test]
+    fn a_bot_stops_at_a_leaps_foot_and_leaps_at_the_lip() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.stop = true;
+        v.waypoint = Some([100.0, 0.0, 64.0]);
+        assert_eq!(bot.think(&v).forward, 127);
+        v.waypoint = Some([24.0, 0.0, 64.0]);
+        assert_eq!(bot.think(&v).forward, 63);
+        v.waypoint = Some([4.0, 0.0, 64.0]);
+        assert_eq!(bot.think(&v).forward, 0);
+        v.stop = false;
+        v.jump = true;
+        v.leap = true;
+        v.waypoint = Some([60.0, 0.0, 96.0]);
+        assert_eq!(bot.think(&v).up, 0, "at rest, no lip");
+        v.lip = true;
+        assert_eq!(bot.think(&v).up, 127);
+    }
+
+    #[test]
+    fn a_waypoint_up_a_ladder_looks_up_and_one_below_is_backed_onto() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([32.0, 0.0, 200.0]);
+        let up = bot.think(&v);
+        assert_eq!(
+            (up.forward, up.angles[0]),
+            (127, deg_short(-crate::nav::LADDER_PITCH))
+        );
+        v.waypoint = Some([32.0, 0.0, -100.0]);
+        let down = bot.think(&v);
+        assert_eq!(down.forward, -127, "backs off the ledge");
+        assert_eq!(
+            down.angles[1],
+            deg_short(-180.0),
+            "facing away from the waypoint"
+        );
+    }
+
+    #[test]
+    fn a_climb_looks_up_to_the_top_and_a_descent_backs_all_the_way_down() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.on_ladder = true;
+        // Near the top: the head is only 20 above, still looking up.
+        v.waypoint = Some([16.0, 0.0, 84.0]);
+        let up = bot.think(&v);
+        assert_eq!(
+            (up.forward, up.angles[0]),
+            (127, deg_short(-crate::nav::LADDER_PITCH))
+        );
+        // Near the bottom of a descent: the foot is 20 below, still backing.
+        v.waypoint = Some([16.0, 0.0, 44.0]);
+        assert_eq!(bot.think(&v).forward, -127);
+    }
+
+    /// A ladder whose rungs let go only past its top (CoD2's): a head a
+    /// few units under the body and far across the face is climbed on to,
+    /// where CoD1's rungs, which step off onto it, back down.
+    #[test]
+    fn a_far_head_over_a_ladder_that_tops_out_is_climbed_on_to() {
+        let mut v = view();
+        v.on_ladder = true;
+        v.ladder_normal = [1.0, 0.0, 0.0];
+        v.waypoint = Some([v.origin[0] - 77.0, v.origin[1] - 11.0, v.origin[2] - 7.0]);
+        let backs = Bot::new("allies", false, 1).think(&v);
+        assert!(backs.forward < 0, "CoD1's backs down: {}", backs.forward);
+        v.tops_out = true;
+        let climbs = Bot::new("allies", false, 1).think(&v);
+        assert_eq!(
+            (climbs.forward, climbs.angles[0]),
+            (127, deg_short(-crate::nav::LADDER_PITCH))
+        );
+    }
+
+    #[test]
+    fn a_leaps_foot_at_a_ladders_head_is_climbed_to_at_full_rate() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.stop = true;
+        v.on_ladder = true;
+        v.waypoint = Some([4.0, 0.0, 600.0]);
+        let climb = bot.think(&v);
+        assert_eq!(
+            (climb.forward, climb.angles[0]),
+            (127, deg_short(-crate::nav::LADDER_PITCH))
+        );
+    }
+
+    /// Up a ladder the climb faces square into it, whatever the waypoint's
+    /// bearing, and strafes toward the middle of the rungs.
+    #[test]
+    fn a_climb_faces_the_ladder_and_strafes_to_its_middle() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.on_ladder = true;
+        v.ladder_normal = [-1.0, 0.0, 0.0];
+        v.waypoint = Some([40.0, -60.0, 300.0]);
+        v.ladder_middle = Some([v.origin[0], v.origin[1] - 8.0]);
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.angles[1], deg_short(0.0), "square into the face");
+        assert_eq!(cmd.forward, 127);
+        assert!(
+            cmd.right > 0,
+            "facing +x, the middle at -y is to the right: {}",
+            cmd.right
+        );
+        v.ladder_middle = Some([v.origin[0], v.origin[1]]);
+        assert_eq!(bot.think(&v).right, 0, "centred");
+    }
+
+    /// A strafe held under a full-rate climb never turns the pace the grab
+    /// carried in, and keeps the bleed off it: the key comes up until the
+    /// body no longer slides away from the middle.
+    #[test]
+    fn a_climber_sliding_away_from_the_middle_lets_the_strafe_go() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.on_ladder = true;
+        v.ladder_normal = [-1.0, 0.0, 0.0];
+        v.waypoint = Some([40.0, -60.0, 300.0]);
+        v.ladder_middle = Some([v.origin[0], v.origin[1] - 8.0]);
+        v.velocity = [0.0, 30.0, 95.0];
+        assert_eq!(bot.think(&v).right, 0, "sliding +y, the middle at -y");
+        v.velocity = [0.0, -30.0, 95.0];
+        assert!(bot.think(&v).right > 0, "sliding toward the middle");
+        v.velocity = [0.0, 0.5, 95.0];
+        assert!(bot.think(&v).right > 0, "all but still");
+    }
+
+    #[test]
+    fn a_bot_on_a_ladder_with_no_waypoint_or_pinned_climbs_down() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.on_ladder = true;
+        let down = (127, deg_short(crate::nav::LADDER_PITCH));
+        let cmd = bot.think(&v);
+        assert_eq!((cmd.forward, cmd.angles[0]), down, "no waypoint");
+        // Pinned under something on the way up: the unstick goes down too.
+        v.waypoint = Some([16.0, 0.0, 200.0]);
+        let unstuck = (0..25)
+            .map(|_| bot.think(&v))
+            .any(|c| (c.forward, c.angles[0]) == down);
+        assert!(unstuck, "a pinned climber kept pushing up");
+    }
+
+    #[test]
+    fn a_bot_creeps_backward_over_a_lip_and_keeps_facing_the_ladder() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        // The foot is 300 below, 20 ahead in +x: back toward it facing -x.
+        v.waypoint = Some([20.0, 0.0, -236.0]);
+        let first = bot.think(&v);
+        assert_eq!(first.forward, -crate::nav::CREEP);
+        assert_eq!(first.angles[1], deg_short(-180.0));
+        // Over the lip and past the foot's column: same heading.
+        v.origin[0] = 21.0;
+        let past = bot.think(&v);
+        assert_eq!(
+            (past.forward, past.angles[1]),
+            (first.forward, first.angles[1])
+        );
+    }
+
+    /// A waypoint 50 under the feet is run at, unless the graph's run off
+    /// that drop missed: then it is backed toward, as the graph proved it
+    /// (`BotView::back_drop`). A body on the rungs told to hold presses no
+    /// key (`BotView::rungs_hold`).
+    #[test]
+    fn a_drop_the_graph_backed_down_is_backed_and_a_held_climber_presses_nothing() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        // 50 under the feet at 64.
+        v.waypoint = Some([20.0, 0.0, 14.0]);
+        assert!(bot.think(&v).forward > 0, "run at");
+        v.back_drop = true;
+        assert!(bot.think(&v).forward < 0, "backed toward");
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.on_ladder = true;
+        v.waypoint = Some([0.0, 0.0, 200.0]);
+        assert_ne!(bot.think(&v).forward, 0, "climbs");
+        v.rungs_hold = true;
+        v.stop = true;
+        let cmd = bot.think(&v);
+        assert_eq!((cmd.forward, cmd.right), (0, 0), "holds");
+    }
+
+    /// mp_ship's crow's nest: backed toward the foot from a few units off
+    /// the rungs' line, bots slid past the rungs down the hatch (seeds
+    /// 1919, 3941, 4161, 4545). Off the head of a ladder whose fall kills
+    /// the creep faces the rungs and strafes to their middle.
+    #[test]
+    fn a_creep_off_a_deadly_head_faces_the_rungs_and_strafes_to_them() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        // The rungs face -x at x 4975, y 59 to 69; the body is 8 south.
+        v.origin = [4963.9, 56.0, 1219.125];
+        v.waypoint = Some([4959.0, 64.0, 692.125]);
+        v.back_face = Some((0.0, [4959.0, 64.0]));
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.forward, -crate::nav::CREEP);
+        assert_eq!(cmd.angles[1], deg_short(0.0));
+        // Facing +x, the middle at +y is to the left.
+        assert!(
+            cmd.right < 0 && cmd.right >= -crate::nav::CREEP,
+            "{}",
+            cmd.right
+        );
+        v.origin[1] = 64.0;
+        assert_eq!(bot.think(&v).right, 0, "on the line");
+    }
+
+    #[test]
+    fn a_stuck_bot_leaves_its_waypoint_for_a_spell() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([0.0, 100.0, 64.0]);
+        let toward = bot.think(&v).angles[1];
+        // Pinned: the origin never moves, and the stall reads within two
+        // ten-tick windows.
+        let turned = (0..25).any(|_| bot.think(&v).angles[1] != toward);
+        assert!(turned, "a pinned bot kept pushing at its waypoint");
+        // The random heading gets it moving again.
+        for _ in 0..UNSTICK_TICKS {
+            v.origin[0] += 5.0;
+            v.waypoint = Some([v.origin[0], 100.0, 64.0]);
+            bot.think(&v);
+        }
+        assert_eq!(bot.think(&v).angles[1], toward, "and goes back to it after");
+    }
+
+    /// A creep onto a ladder below a lip covers under a unit a tick, short
+    /// of the 15-unit stall circle in ten: mp_depot's back down over the
+    /// 1-unit ladder at (-2750, -1217, 504) read as stuck, and the spell
+    /// walked off the roof (bot-navigation.md section 3). A creep that stops
+    /// is stuck all the same.
+    #[test]
+    fn a_creep_is_not_stuck_until_it_stops() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([20.0, 0.0, -236.0]);
+        for _ in 0..30 {
+            let cmd = bot.think(&v);
+            assert_eq!(cmd.forward, -crate::nav::CREEP);
+            assert!(!bot.unsticking(), "creeping at {:?}", v.origin);
+            v.origin[0] += 0.7;
+        }
+        let stuck = (0..12).any(|_| {
+            bot.think(&v);
+            bot.unsticking()
+        });
+        assert!(stuck, "a creep held still never unsticks");
+    }
+
+    /// mp_ship's crow's nest: a bot backing from the platform for the deck
+    /// 527 below pins on the hatch's rim and slides along it at under a
+    /// unit a tick before it drops through onto the rungs. That gains on
+    /// the waypoint and is no stall; backing in place is.
+    #[test]
+    fn a_back_down_sliding_along_a_rim_is_not_stuck() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.origin = [4954.1, 92.0, 1219.125];
+        v.waypoint = Some([4929.0, 68.0, 692.125]);
+        for _ in 0..30 {
+            let cmd = bot.think(&v);
+            assert_eq!(cmd.forward, -127);
+            assert!(!bot.unsticking(), "sliding at {:?}", v.origin);
+            v.origin[1] -= 0.6;
+        }
+        let stuck = (0..12).any(|i| {
+            v.origin[0] += if i % 2 == 0 { 0.5 } else { -0.5 };
+            bot.think(&v);
+            bot.unsticking()
+        });
+        assert!(stuck, "a back down held on the rim never unsticks");
+    }
+
+    /// On the rungs a head across the face just below is climbed over, a
+    /// floor on the climber's side below is backed down to
+    /// (`tests/bots.rs`, `a_bot_climbs_over_mp_ships_hold_ladder_top`).
+    #[test]
+    fn a_head_across_the_face_is_climbed_over() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.on_ladder = true;
+        v.on_ground = false;
+        // The face at y 15, its normal toward the climber.
+        v.ladder_normal = [0.0, -1.0, 0.0];
+        v.waypoint = Some([v.origin[0], v.origin[1] + 6.0, v.origin[2] - 2.0]);
+        assert_eq!(bot.think(&v).forward, 127);
+        v.waypoint = Some([v.origin[0], v.origin[1] - 1.0, v.origin[2] - 2.0]);
+        assert_eq!(bot.think(&v).forward, -127);
+    }
+
+    /// A path that drops licenses a drop as deep as its own, not a fall
+    /// that hurts below it: mp_depot's bots backing down the ladder from
+    /// the roof at 508 to its foot at 326 took unstick headings off the
+    /// roof's edge to the yard at -24 and died (section 3).
+    #[test]
+    fn a_path_down_licenses_no_deeper_fall() {
+        let bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([20.0, 0.0, v.origin[2] - 180.0]);
+        v.drop_ahead[0] = Some(150.0);
+        v.drop_ahead[2] = Some(f32::INFINITY);
+        v.drop_ahead[4] = Some(500.0);
+        assert!(!bot.shuns(&v, 0.0), "a drop the path takes anyway");
+        assert!(bot.shuns(&v, 90.0), "a fall that hurts");
+        assert!(bot.shuns(&v, 180.0), "a fall that hurts");
+        v.waypoint = Some([20.0, 0.0, v.origin[2] - 600.0]);
+        assert!(!bot.shuns(&v, 180.0), "a path that drops as far");
+    }
+
+    /// The server feels for drops and walls only on the ticks
+    /// [`Bot::reads_drops`] and [`Bot::reads_walls`] name: a bot fed them
+    /// every tick and one fed them only then press the same keys, stuck
+    /// on the way to a waypoint, on its spells and wandering with none.
+    #[test]
+    fn drops_are_felt_only_when_the_brain_reads_them() {
+        let mut drops = [Some(100.0); 8];
+        drops[2] = None;
+        let walls = [true, false, true, true, false, true, false, true];
+        for seed in 1..20 {
+            let (mut every, mut lazy) = (
+                Bot::new("allies", false, seed),
+                Bot::new("allies", false, seed),
+            );
+            let mut v = view();
+            let mut skipped = 0;
+            for tick in 0..120 {
+                v.waypoint = (tick < 60).then_some([0.0, 100.0, 64.0]);
+                v.drop_ahead = drops;
+                v.wall_ahead = walls;
+                let want = every.think(&v);
+                if !lazy.reads_drops(&v) {
+                    v.drop_ahead = [None; 8];
+                    skipped += 1;
+                }
+                if !lazy.reads_walls(&v) {
+                    v.wall_ahead = [false; 8];
+                }
+                assert_eq!(lazy.think(&v), want, "seed {seed} tick {tick}");
+            }
+            assert!(skipped > 10, "seed {seed}: felt every tick");
+        }
+    }
+
+    /// A bot pinned by a deck's edge takes its unstick heading along the
+    /// deck, never off it, and turns off a drop it walks up to. Seed 5 on
+    /// mp_ship walked one off the deck at (3288, -460, 56) to the hull.
+    #[test]
+    fn a_stuck_bot_unsticks_away_from_a_drop() {
+        for seed in 1..20 {
+            let mut bot = Bot::new("allies", false, seed);
+            let mut v = view();
+            v.waypoint = Some([0.0, 100.0, 64.0]);
+            // A drop everywhere but +y (octant 2), a minefield at -y.
+            v.drop_ahead = [Some(100.0); 8];
+            v.drop_ahead[2] = None;
+            v.hazard_ahead[6] = true;
+            let unstuck = (0..25).find(|_| {
+                bot.think(&v);
+                bot.unsticking()
+            });
+            assert!(unstuck.is_some(), "seed {seed}: never unstuck");
+            assert_eq!(octant(bot.heading), 2, "seed {seed}: {}", bot.heading);
+            // Boxed in by drops: off the hazard still.
+            v.drop_ahead = [Some(100.0); 8];
+            bot.pick_heading(&v);
+            assert_ne!(octant(bot.heading), 6, "seed {seed}: into the minefield");
+            // A drop turns up ahead mid-spell: the next tick picks again.
+            v.drop_ahead = [None; 8];
+            v.hazard_ahead = [false; 8];
+            bot.heading = 90.0;
+            v.drop_ahead[2] = Some(100.0);
+            bot.think(&v);
+            assert_ne!(octant(bot.heading), 2, "seed {seed}: kept walking off");
+        }
+    }
+
+    /// A climb that bobs under a ladder's top lets go of the rungs and
+    /// stands on the head's plate in the stall window: the spell holds still
+    /// there, where a heading ran bots down mp_ship's crow's nest hatch. So
+    /// does a body in the air just off the rungs with no waypoint.
+    #[test]
+    fn a_spell_just_off_the_rungs_holds_still() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([0.0, 100.0, 64.0]);
+        v.on_ground = false;
+        v.on_ladder = true;
+        bot.think(&v);
+        v.on_ground = true;
+        v.on_ladder = false;
+        let mut keys = Vec::new();
+        for _ in 0..12 {
+            bot.think(&v);
+        }
+        v.on_ground = false;
+        v.on_ladder = true;
+        bot.think(&v);
+        v.on_ground = true;
+        v.on_ladder = false;
+        for _ in 0..12 {
+            let cmd = bot.think(&v);
+            if bot.unstick_ticks > 0 {
+                keys.push(cmd.forward);
+            }
+        }
+        assert!(!keys.is_empty() && keys.iter().all(|&k| k == 0), "{keys:?}");
+        // Off the ground with no waypoint, the same.
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.on_ground = false;
+        v.on_ladder = true;
+        bot.think(&v);
+        v.on_ladder = false;
+        assert_eq!(bot.think(&v).forward, 0);
+        // Away from the rungs a spell walks.
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([0.0, 100.0, 64.0]);
+        let walked = (0..30).any(|_| {
+            let cmd = bot.think(&v);
+            bot.unstick_ticks > 0 && cmd.forward != 0
+        });
+        assert!(walked);
+    }
+
+    /// A body that runs 20 units out and back within the ten ticks left
+    /// the stall circle: no spell. One that never left it gets one.
+    #[test]
+    fn out_and_back_is_no_stall() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([0.0, 300.0, 64.0]);
+        for tick in 0..60 {
+            let x = [0.0, 10.0, 20.0, 10.0, 0.0][tick % 5];
+            v.origin = [x, 0.0, 64.0];
+            bot.think(&v);
+            assert_eq!(bot.unstick_ticks, 0, "tick {tick}");
+        }
+        v.origin = [0.0, 0.0, 64.0];
+        assert!((0..30).any(|_| {
+            bot.think(&v);
+            bot.unstick_ticks > 0
+        }));
+    }
+
+    /// A climb bobbing under a ladder's top, on and off the rungs right
+    /// under its waypoint, is not stuck: no spell.
+    #[test]
+    fn a_climb_bobbing_under_the_top_is_not_stuck() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([4.0, 0.0, 84.0]);
+        v.on_ground = false;
+        for tick in 0..40 {
+            v.on_ladder = tick % 6 < 3;
+            bot.think(&v);
+            assert_eq!(bot.unstick_ticks, 0, "tick {tick}");
+        }
+        // Far under it, pinned under a spar, it is.
+        v.waypoint = Some([4.0, 0.0, 164.0]);
+        assert!((0..40).any(|tick| {
+            v.on_ladder = tick % 6 < 3;
+            bot.think(&v);
+            bot.unstick_ticks > 0
+        }));
+    }
+
+    /// Stuck spell after spell in one spot with only drops open (mp_ship's
+    /// rim at (4223, 345, 276), under a ramp), a bot is cornered and takes
+    /// a drop out.
+    #[test]
+    fn a_cornered_bot_takes_a_drop_out() {
+        let mut dropped = 0;
+        for seed in 1..20 {
+            let mut bot = Bot::new("allies", false, seed);
+            let mut v = view();
+            v.waypoint = Some([0.0, 100.0, 64.0]);
+            // +y (octant 2) is the wall it is pinned against.
+            v.drop_ahead = [Some(100.0); 8];
+            v.drop_ahead[2] = None;
+            let mut spells = Vec::new();
+            for _ in 0..200 {
+                bot.think(&v);
+                // A spell starts at UNSTICK_TICKS and its first tick spends one.
+                if bot.unstick_ticks == UNSTICK_TICKS - 1 {
+                    spells.push(octant(bot.heading));
+                }
+            }
+            let first = CORNERED as usize;
+            assert!(spells.len() > first, "seed {seed}: {spells:?}");
+            assert!(
+                spells[..first].iter().all(|o| *o == 2),
+                "seed {seed}: {spells:?}"
+            );
+            dropped += usize::from(spells[first..].iter().any(|o| *o != 2));
+        }
+        assert!(dropped > 10, "only {dropped} of 19 seeds took a drop out");
+        // A drop that hurts stays off even cornered.
+        for seed in 1..20 {
+            let mut bot = Bot::new("allies", false, seed);
+            let mut v = view();
+            v.waypoint = Some([0.0, 100.0, 64.0]);
+            v.drop_ahead = [Some(f32::INFINITY); 8];
+            v.drop_ahead[2] = None;
+            for _ in 0..200 {
+                bot.think(&v);
+                if bot.unstick_ticks == UNSTICK_TICKS - 1 {
+                    assert_eq!(octant(bot.heading), 2, "seed {seed}: off a deep drop");
+                }
+            }
+        }
+    }
+
+    /// mp_ship's hold ladder head, seed 149: walls north and east, the
+    /// shaft south. A heading into a wall reads as no drop, and the bot
+    /// stood pinned on one spell after spell; the open one west comes
+    /// first.
+    #[test]
+    fn a_stuck_bot_takes_a_heading_into_a_wall_last() {
+        for seed in 1..20 {
+            let mut bot = Bot::new("allies", false, seed);
+            let mut v = view();
+            v.wall_ahead = [true, true, true, true, false, false, false, true];
+            v.drop_ahead = [
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(500.0),
+                Some(500.0),
+                Some(500.0),
+            ];
+            bot.pick_heading(&v);
+            assert_eq!(octant(bot.heading), 4, "seed {seed}: {}", bot.heading);
+            // Walled in but for drops: a wall it is.
+            v.wall_ahead[4] = true;
+            bot.pick_heading(&v);
+            assert!(octant(bot.heading) < 5, "seed {seed}: {}", bot.heading);
+        }
+    }
+
+    /// Pinned through a spell, the bot picks a new heading but the spell
+    /// still ends on time and the waypoint gets its turn. Chained spells
+    /// held one on mp_ship's hold ladder head for the rest of the run
+    /// while its waypoint lay a walk away.
+    /// A push-off jumps facing the rungs, then brakes facing the same way
+    /// until the body lands (`nav::push_off`).
+    #[test]
+    fn a_push_off_jumps_then_brakes_until_it_lands() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.on_ladder = true;
+        v.on_ground = false;
+        v.ladder_normal = [0.0, -1.0, 0.0];
+        v.origin = [2146.5, -214.1, 103.0];
+        v.waypoint = Some([2144.7, -229.9, 104.1]);
+        v.push_off = Some(90.0);
+        let out = cmd_angles(&v, [0.0, 90.0]);
+        let cmd = bot.think(&v);
+        assert_eq!((cmd.up, cmd.forward, cmd.angles), (127, 0, out));
+        v.on_ladder = false;
+        v.push_off = None;
+        v.origin = [2146.5, -230.0, 120.0];
+        for _ in 0..5 {
+            let cmd = bot.think(&v);
+            assert_eq!((cmd.up, cmd.forward, cmd.angles), (0, 127, out));
+        }
+        // Landed facing the waypoint, it runs on.
+        v.on_ground = true;
+        v.view[1] = (-229.9f32 + 230.0).atan2(2144.7 - 2146.5).to_degrees();
+        assert_eq!(bot.think(&v).forward, 127);
+    }
+
+    /// An unpinning heading is held for its ticks, then the bot heads at
+    /// the waypoint again.
+    #[test]
+    fn an_unpinning_heading_is_held_for_its_ticks() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([0.0, 100.0, 64.0]);
+        let toward = bot.think(&v).angles;
+        v.unpin = Some(180.0);
+        let aside = cmd_angles(&v, [0.0, 180.0]);
+        assert_eq!(bot.think(&v).angles, aside);
+        v.unpin = None;
+        for _ in 1..crate::nav::UNPIN_TICKS {
+            assert_eq!(bot.think(&v).angles, aside);
+        }
+        assert_eq!(bot.think(&v).angles, toward);
+    }
+
+    /// Held still off the ground (mp_hurtgen's crease at (437, 2824, -97))
+    /// for [`WEDGE_TICKS`], the bot asks for a `kill`; on the ground, on
+    /// the rungs or moving, never.
+    #[test]
+    fn a_body_held_in_the_air_asks_for_a_kill() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([0.0, 100.0, 64.0]);
+        let ticks = |bot: &mut Bot, v: &BotView| {
+            (1..=2 * WEDGE_TICKS).find(|_| {
+                bot.think(v);
+                bot.take_kill()
+            })
+        };
+        assert_eq!(ticks(&mut bot, &v), None, "on the ground");
+        v.on_ground = false;
+        v.on_ladder = true;
+        assert_eq!(ticks(&mut bot, &v), None, "on the rungs");
+        v.on_ladder = false;
+        assert_eq!(ticks(&mut bot, &v), Some(WEDGE_TICKS));
+        assert!(!bot.take_kill(), "asked once");
+        for _ in 0..2 * WEDGE_TICKS {
+            v.origin[2] -= 2.0;
+            bot.think(&v);
+            assert!(!bot.take_kill(), "falling");
+        }
+        // A round's one life is worth more than the crease costs.
+        v.one_life = true;
+        assert_eq!(ticks(&mut bot, &v), None, "one life a round");
+    }
+
+    /// mp_ship, seed 577: a bot slid off the bow roof into the gutter at
+    /// (1955, 281, 312), whose nodes lead nowhere: north is a fall of 376,
+    /// south the roof's slope it slides back down. The wander keeps off
+    /// the fall for good, so the bot asks for a kill, as in a crease.
+    #[test]
+    fn a_body_stranded_off_the_graph_asks_for_a_kill() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.stranded = true;
+        let ticks = |bot: &mut Bot, v: &BotView| {
+            (1..=2 * STRAND_TICKS).find(|_| {
+                bot.think(v);
+                bot.take_kill()
+            })
+        };
+        assert_eq!(ticks(&mut bot, &v), Some(STRAND_TICKS));
+        v.one_life = true;
+        assert_eq!(ticks(&mut bot, &v), None, "one life a round");
+        v.one_life = false;
+        v.stranded = false;
+        assert_eq!(ticks(&mut bot, &v), None, "on the graph");
+    }
+
+    #[test]
+    fn a_pinned_spell_hands_back_to_the_waypoint() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([0.0, 100.0, 64.0]);
+        let toward = bot.think(&v).angles[1];
+        let start = (0..25).find(|_| {
+            bot.think(&v);
+            bot.unsticking()
+        });
+        assert!(start.is_some(), "never unstuck");
+        let back = (0..UNSTICK_TICKS + 1).any(|_| bot.think(&v).angles[1] == toward);
+        assert!(back, "spell after spell, never the waypoint");
+    }
+
+    /// mp_ship's ladder at x 3792: a climb pinned under another bot takes
+    /// a spell down the rungs, then climbs back. A stall window that
+    /// straddles the turn reads the way down and the way back up as
+    /// standing still, and spell followed spell down the ladder.
+    #[test]
+    fn a_spell_end_starts_the_stall_window_afresh() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.on_ladder = true;
+        v.on_ground = false;
+        v.ladder_normal = [-1.0, 0.0, 0.0];
+        v.waypoint = Some([3783.0, 64.0, 623.0]);
+        v.origin = [3808.0, 67.0, 511.0];
+        let start = (0..25).find(|_| {
+            bot.think(&v);
+            bot.unsticking()
+        });
+        assert!(start.is_some(), "never unstuck");
+        // Down the rungs for the spell at the climb's rate, then back up.
+        while bot.unsticking() {
+            v.origin[2] -= 2.67;
+            bot.think(&v);
+        }
+        for tick in 0..UNSTICK_TICKS {
+            v.origin[2] += 2.67;
+            bot.think(&v);
+            assert!(!bot.unsticking(), "a new spell {tick} ticks after the last");
+        }
+    }
+
+    /// Behind a teammate just ahead (`BotView::mate_ahead`) a bot on its
+    /// way eases its keys to half; not with an enemy in sight, a bomb down
+    /// or `Bot::squad` off.
+    #[test]
+    fn a_bot_walks_behind_a_teammate_just_ahead() {
+        let forward = |ahead: bool, enemy: bool, bomb: bool, on: bool| {
+            let mut bot = Bot::new("allies", false, 1);
+            bot.squad = on;
+            let mut v = sd_view(ObjRole::Attack);
+            v.origin = [1000.0, 0.0, 64.0];
+            v.view = [0.0, 90.0, 0.0];
+            v.waypoint = Some([1000.0, 400.0, 64.0]);
+            v.on_ground = true;
+            v.move_scale = 1.0;
+            v.mate_ahead = ahead;
+            if bomb && let Some(sd) = v.sd.as_mut() {
+                sd.bomb = Some(BombView {
+                    origin: [0.0; 3],
+                    aim: [0.0; 3],
+                });
+            }
+            if enemy {
+                v.enemy = Some(EnemyView {
+                    slot: 3,
+                    origin: [3000.0, 3000.0, 64.0],
+                    velocity: [0.0; 3],
+                });
+            }
+            bot.think(&v).forward
+        };
+        assert_eq!(forward(false, false, false, true), 127);
+        assert_eq!(forward(true, false, false, true), 63);
+        assert_eq!(forward(true, false, false, false), 127);
+        assert_eq!(forward(true, false, true, true), 127);
+        assert_eq!(
+            forward(false, true, false, true),
+            forward(true, true, false, true)
+        );
+    }
+
+    /// A live frag near, anyone's: the goal is away from it and the keys
+    /// run that way, the view still on the fight.
+    #[test]
+    fn a_bot_runs_from_a_live_frag() {
+        let (mut bot, mut v) = engaged(3);
+        v.frag_near = Some([60.0, 0.0, 0.0]);
+        assert!(matches!(bot.goal(&v), Goal::Away(_)));
+        let cmd = bot.think(&v);
+        // The enemy is down +x, the frag too: the run is backwards.
+        assert!(cmd.forward < -100, "{}", cmd.forward);
+        let yaw = cmd.angles[1] as f32 / ANGLE2SHORT;
+        assert!(yaw.abs() < 20.0, "the view stays on the enemy: {yaw}");
+    }
+
+    /// mp_cassino, seed 1: a frag thrown away from a close enemy came back
+    /// off the wall and rolled to the thrower, who stood through the switch
+    /// back to its rifle and took the blast. The keys run from it there too.
+    #[test]
+    fn a_bot_switching_back_from_a_throw_runs_from_a_live_frag() {
+        let (mut bot, mut v) = engaged(3);
+        v.frag_near = Some([60.0, 0.0, 0.0]);
+        bot.stage = Stage::BackToRifle { weapon: 10 };
+        let cmd = bot.think(&v);
+        assert!(cmd.forward < -100, "{}", cmd.forward);
+    }
 }

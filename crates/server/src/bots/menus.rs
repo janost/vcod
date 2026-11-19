@@ -58,7 +58,7 @@ impl Bot {
 
     /// The team menu takes the bot's team; the weapon menu takes a weapon
     /// its nationality offers and the cvars allow, picked at random.
-    pub(super) fn menu_reply(&mut self, allowed: &dyn Fn(&str) -> bool) -> Option<String> {
+    fn menu_reply(&mut self, allowed: &dyn Fn(&str) -> bool) -> Option<String> {
         // `bel`'s team menu takes axis only (`bel.gsc` 150, 287); the script
         // deals out the allied places.
         if self.main_menu == "team_germanonly" {
@@ -221,3 +221,138 @@ pub(crate) const WEAPON_MENUS_UO: [WeaponMenu; 4] = [
         ],
     ),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bots::tests::*;
+
+    const SID: i32 = 0x10;
+
+    #[test]
+    fn an_allied_bot_answers_bels_team_menu_with_axis() {
+        let mut bot = Bot::new("allies", false, 1);
+        bot.observe(SID, &[(1, "v g_scriptMainMenu \"team_germanonly\"")], &all);
+        let reply = bot.observe(SID, &[(2, "t 3")], &all);
+        assert_eq!(reply, [format!("mr {SID} 3 axis")]);
+    }
+
+    #[test]
+    fn a_reopened_weapon_menu_gets_the_same_weapon() {
+        for seed in 1..16 {
+            let mut bot = Bot::new("axis", false, seed);
+            bot.observe(SID, &[(1, "v g_scriptMainMenu weapon_german")], &all);
+            let first = bot.observe(SID, &[(2, "t 1")], &all);
+            for idx in 2..6 {
+                let t = format!("t {idx}");
+                let again = bot.observe(SID, &[(idx, t.as_str())], &all);
+                assert_eq!(
+                    again[0].rsplit(' ').next(),
+                    first[0].rsplit(' ').next(),
+                    "seed {seed}"
+                );
+            }
+        }
+        // Restricted since: a new pick among what is left.
+        let mut bot = Bot::new("axis", false, 3);
+        bot.observe(SID, &[(1, "v g_scriptMainMenu weapon_german")], &all);
+        let first = bot.observe(SID, &[(2, "t 1")], &all).remove(0);
+        let w = first.rsplit(' ').next().unwrap().to_string();
+        let cvar = WEAPON_MENUS[3].1.iter().find(|(n, _)| *n == w).unwrap().1;
+        let not_it = |c: &str| c != cvar;
+        let again = bot.observe(SID, &[(3, "t 2")], &not_it).remove(0);
+        assert_ne!(again.rsplit(' ').next().unwrap(), w);
+    }
+
+    #[test]
+    fn an_open_team_menu_is_answered_with_the_bots_team_once() {
+        let mut bot = Bot::new("allies", false, 1);
+        assert_eq!(
+            bot.observe(SID, &[(1, "v g_scriptMainMenu \"team_allies\"")], &all),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            bot.observe(SID, &[(2, "t 0")], &all),
+            vec![format!("mr {SID} 0 allies")]
+        );
+        assert_eq!(bot.observe(SID, &[(3, "t 0")], &all), Vec::<String>::new());
+    }
+
+    /// A UO bot answers from UO's menus, the light machine guns among them,
+    /// and a two-nation menu offers both nations' weapons.
+    #[test]
+    fn a_uo_bot_picks_from_uos_menus() {
+        let mut seen = std::collections::HashSet::new();
+        for seed in 1..200 {
+            let mut bot = Bot::new("allies", true, seed);
+            bot.menus = &WEAPON_MENUS_UO;
+            for menu in ["weapon_russian", "weapon_german", "weapon_americangerman"] {
+                bot.main_menu = menu.into();
+                bot.loadout = None;
+                seen.insert(bot.menu_reply(&all).expect("a reply"));
+            }
+        }
+        for w in [
+            "svt40_mp",
+            "gewehr43_mp",
+            "m1garand_mp",
+            "kar98k_mp",
+            "mg30cal_mp",
+            "mg34_mp",
+            "dp28_mp",
+        ] {
+            assert!(seen.contains(w), "{w} never picked: {seen:?}");
+        }
+    }
+
+    #[test]
+    fn a_weapon_menu_reply_is_one_the_nationality_offers_and_the_cvars_allow() {
+        for (nation, weapons) in WEAPON_MENUS {
+            let mut seen = Vec::new();
+            for seed in 1..64 {
+                let mut bot = Bot::new("axis", false, seed);
+                let menu = format!("v g_scriptMainMenu weapon_{nation}");
+                bot.observe(SID, &[(1, menu.as_str())], &all);
+                let reply = bot.observe(SID, &[(2, "t 1")], &all);
+                let w = reply[0]
+                    .strip_prefix(&format!("mr {SID} 1 "))
+                    .unwrap()
+                    .to_string();
+                assert!(weapons.iter().any(|(n, _)| *n == w), "{nation}: {w}");
+                seen.push(w);
+            }
+            for (w, _) in weapons {
+                assert!(seen.iter().any(|s| s == w), "{nation}: {w} never picked");
+            }
+        }
+        // A restricted weapon is never picked; nothing left means no reply.
+        let only_kar = |c: &str| c == "scr_allow_kar98k";
+        for seed in 1..32 {
+            let mut bot = Bot::new("axis", false, seed);
+            bot.observe(SID, &[(1, "v g_scriptMainMenu weapon_german")], &all);
+            assert_eq!(
+                bot.observe(SID, &[(2, "t 1")], &only_kar),
+                vec![format!("mr {SID} 1 kar98k_mp")]
+            );
+        }
+        let mut bot = Bot::new("allies", false, 1);
+        bot.observe(SID, &[(1, "v g_scriptMainMenu weapon_russian")], &all);
+        assert!(bot.observe(SID, &[(2, "t 1")], &|_: &str| false).is_empty());
+    }
+
+    /// `switchToWeapon`'s `a <n>` moves the bot's byte, as a cgame's
+    /// selection, until `ps.weapon` reads it: the pickup reads only the cmd.
+    #[test]
+    fn an_a_command_selects_the_weapon_the_cmds_ask_for() {
+        let (mut bot, mut v) = engaged(21);
+        v.pistol = Some(2);
+        v.weapons_held |= 1 << 2;
+        v.loaded |= 1 << 2;
+        assert_eq!(bot.think(&v).weapon, 10);
+        assert!(bot.observe(1, &[(5, "a 2")], &|_| true).is_empty());
+        assert_eq!(bot.think(&v).weapon, 2, "mid-drop");
+        assert_eq!(bot.think(&v).weapon, 2, "still mid-drop");
+        v.weapon = 2;
+        assert_eq!(bot.think(&v).weapon, 2, "landed");
+    }
+}

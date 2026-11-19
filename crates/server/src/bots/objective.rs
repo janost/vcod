@@ -133,7 +133,7 @@ const DEFUSE_REACH: f32 = 48.0;
 const DEFUSE_CLOSE: f32 = 16.0;
 /// Past this long closing in (the bomb's own body in the way), the press
 /// goes ahead whatever it takes.
-pub(super) const DEFUSE_CLOSE_TICKS: u32 = 100;
+const DEFUSE_CLOSE_TICKS: u32 = 100;
 const GUARD_RADIUS: f32 = 250.0;
 /// An escort this near the carrier it keeps by steps off: standing at his
 /// next node on a stair it held mp_carentan's carrier upstairs for 75 s
@@ -145,7 +145,7 @@ const ESCORT_CLEAR: f32 = 80.0;
 pub(super) const SHORT_TICKS: u32 = 60;
 pub(super) const SHORT_GAIN: f32 = 16.0;
 /// Ticks a point given up on reads as a guard round it.
-pub(super) const SHY_TICKS: u32 = 300;
+const SHY_TICKS: u32 = 300;
 /// How near a target's point must stand to the one given up on to be it.
 const SHY_SAME: f32 = 32.0;
 /// A guard ring is at least this wide.
@@ -173,17 +173,17 @@ const PICKUP_REACH: f32 = 48.0;
 const PICKUP_RING: f32 = 40.0;
 /// Use held this long with no link means the plant or defuse never
 /// started (not touching, not on the ground, the aim off the trigger).
-pub(super) const START_TICKS: u32 = 20;
+const START_TICKS: u32 = 20;
 /// Release after a failed try, so the next press is a fresh one.
 const RETRY_TICKS: u32 = 10;
 /// The aim trace is read a frame late (object-model doc 23.1): the view
 /// rests on the bomb this many ticks before the press.
 const SETTLE_TICKS: u32 = 2;
-pub(super) const SETTLE_DEG: f32 = 1.0;
+const SETTLE_DEG: f32 = 1.0;
 /// The planter's view pitch, wire convention (up). An item on the floor
 /// inside 128 units sits more than 30 degrees below level, and
 /// `G_GetActivateEnt`'s cone is 40 either side of the view.
-pub(super) const PLANT_PITCH: f32 = -60.0;
+const PLANT_PITCH: f32 = -60.0;
 /// `level.zradioradius` (`hq.gsc` 186): how far up or down of a radio a
 /// body still counts; the bot stands this far inside both reaches.
 pub(crate) const RADIO_HEIGHT: f32 = 50.0;
@@ -202,7 +202,7 @@ const BAS_BLAST: f32 = 520.0;
 /// An attacker holds the room of its own charge until this many seconds
 /// are left on it, then gets out of the blast: with 8 s a planter climbing
 /// out of the room was still inside it when it went.
-pub(super) const BAS_CLEAR_S: f32 = 20.0;
+const BAS_CLEAR_S: f32 = 20.0;
 /// An attacker this near a charge on its own base turns back to defuse it.
 const BAS_DEFUSE_NEAR: f32 = 2000.0;
 /// The graph's run, units a second: a bot this far from a charge in
@@ -233,10 +233,10 @@ const DRY_FETCH: f32 = 1500.0;
 const ARMS_FETCH: f32 = 800.0;
 /// Ticks a fetch may go without coming [`FETCH_CLOSING`] nearer its
 /// launcher (the reach included: one stood at counts down too).
-pub(super) const FETCH_STALL_TICKS: u32 = 400;
+const FETCH_STALL_TICKS: u32 = 400;
 const FETCH_CLOSING: f32 = 32.0;
 /// Taps at one launcher before it is passed over, and for how long.
-pub(super) const LAUNCHER_TAPS: u32 = 3;
+const LAUNCHER_TAPS: u32 = 3;
 pub(super) const SHUN_TICKS: u32 = 1200;
 /// Stood this long at a breach stand with no shot, the bot tries another.
 const BREACH_IDLE_TICKS: u32 = 40;
@@ -1081,7 +1081,7 @@ impl Bot {
     /// fetched, then not the gun it fights with. A launcher fetch with a
     /// spent launcher and a gun drops the launcher; a gun fetch with a
     /// loaded launcher and a dry gun drops the gun.
-    pub(super) fn swap_out(view: &BotView, launcher: bool) -> Option<u8> {
+    fn swap_out(view: &BotView, launcher: bool) -> Option<u8> {
         let [a, b] = view.primaries;
         if a == 0 || b == 0 {
             return None;
@@ -1101,7 +1101,7 @@ impl Bot {
     /// A tap at a `bas` launcher: [`LAUNCHER_TAPS`] at one with no rocket
     /// in hand after passes it over for a while. The use pickup refused
     /// some for good (a bot stood tapping at one for 20 minutes).
-    pub(super) fn tapped_launcher(&mut self, at: [f32; 3]) {
+    fn tapped_launcher(&mut self, at: [f32; 3]) {
         let taps = match self.tapped {
             Some((p, n)) if arrived(p, at) => n + 1,
             _ => 1,
@@ -1200,4 +1200,1376 @@ pub(crate) fn inside_site(o: [f32; 3], s: &SiteView) -> bool {
         && o[2] + PLAYER_HEIGHT >= s.mins[2];
     let flat = (o[0] - s.stand[0]).hypot(o[1] - s.stand[1]);
     inside || (flat < 16.0 && (o[2] - s.stand[2]).abs() < 32.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bots::fight::{FUTILE_TICKS, IGNORE_TICKS};
+    use crate::bots::tests::*;
+    use crate::bots::walk::WATCH_DEG;
+    use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, BUTTON_USE, WBUTTON_RELOAD};
+
+    /// A bot in a zone it does not hold, contested or not.
+    fn dom_zone_view(at: [f32; 3], contested: bool) -> BotView {
+        let mut v = view();
+        v.origin = at;
+        v.uo = Some(UoView::Dom(DomView {
+            flags: vec![DomFlagView {
+                site: SiteView {
+                    mins: [0.0, 0.0, 0.0],
+                    maxs: [400.0, 200.0, 128.0],
+                    stand: [200.0, 100.0, 0.0],
+                },
+                ours: false,
+                contested,
+            }],
+            rank: 0,
+        }));
+        v
+    }
+
+    #[test]
+    fn a_bot_in_a_contested_zone_walks_its_far_side_until_the_contest_ends() {
+        let mut bot = Bot::new("allies", true, 1);
+        let v = dom_zone_view([350.0, 150.0, 0.0], false);
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::Hold, "in the zone, nobody else in it");
+        let v = dom_zone_view([350.0, 150.0, 0.0], true);
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::To([50.0, 50.0, 0.0]), "to the far side");
+        let v = dom_zone_view([200.0, 100.0, 0.0], true);
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::To([50.0, 50.0, 0.0]), "kept on the way");
+        let v = dom_zone_view([50.0, 50.0, 0.0], true);
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::To([350.0, 150.0, 0.0]), "and back");
+        let v = dom_zone_view([200.0, 100.0, 0.0], false);
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::Hold, "the contest over");
+    }
+
+    /// A bot whose follower walked out its plan to a zone's stand short of
+    /// the zone gives the stand up after `SHORT_TICKS` without coming
+    /// nearer, guards round it for `SHY_TICKS`, then walks at it again.
+    #[test]
+    fn a_bot_that_cannot_close_on_its_zone_guards_round_it_for_a_while() {
+        let mut bot = Bot::new("allies", true, 1);
+        // Outside the zone, 60 off its stand, walking at it.
+        let v = dom_zone_view([200.0, 260.0, 0.0], false);
+        let stand = [200.0, 100.0, 0.0];
+        assert_eq!(bot.goal(&v), Goal::To(stand));
+        for tick in 0..SHORT_TICKS {
+            bot.arrived_goal = Some(stand);
+            bot.think(&v);
+            assert_eq!(bot.goal(&v), Goal::To(stand), "tick {tick}");
+        }
+        bot.arrived_goal = Some(stand);
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::Hold, "a guard round the stand");
+        assert!(bot.on_objective(), "held on purpose");
+        for _ in 1..SHY_TICKS {
+            bot.think(&v);
+        }
+        assert_eq!(bot.goal(&v), Goal::Hold);
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::To(stand), "tried again");
+        // A follower still on its plan never gives the stand up.
+        for _ in 0..2 * SHORT_TICKS {
+            bot.think(&v);
+        }
+        assert_eq!(bot.goal(&v), Goal::To(stand));
+    }
+
+    /// A guard with a post walks to it rather than hold where it first
+    /// stands in the ring, then holds it, watching the objective, crouched
+    /// where the post hides it; with tactics off it holds where it stands.
+    #[test]
+    fn a_guard_walks_to_its_post_and_crouches_there() {
+        let mut bot = Bot::new("axis", true, 1);
+        let mut v = sd_view(ObjRole::Defend);
+        v.origin = [100.0, 0.0, 64.0];
+        let post = GuardPost {
+            at: [-150.0, 60.0, 64.0],
+            crouch: true,
+            look: [0.0, 0.0, 64.0],
+            careful: None,
+        };
+        v.guard_post = Some(post);
+        assert_eq!(bot.goal(&v), Goal::To(post.at), "to the post, not held");
+        v.origin = post.at;
+        assert_eq!(bot.goal(&v), Goal::Hold);
+        let cmd = bot.think(&v);
+        assert!(bot.on_objective(), "held on purpose");
+        assert_ne!(cmd.wbuttons & msg::WBUTTON_CROUCH, 0, "crouched");
+        assert_eq!((cmd.forward, cmd.right), (0, 0));
+        // It looks within `WATCH_DEG` of the site's middle.
+        let toward = (-60.0f32).atan2(150.0).to_degrees();
+        assert!(yaw_diff(bot.heading, toward).abs() <= WATCH_DEG as f32 + 0.5);
+        // Where a standing box would not fit, it stays up: it could not
+        // rise again.
+        v.stand_room = false;
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.wbuttons & (msg::WBUTTON_CROUCH | msg::WBUTTON_PRONE), 0);
+        assert!(cmd.up >= 0);
+        v.stand_room = true;
+        bot.tactics = false;
+        v.origin = [100.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Hold, "anywhere in the ring");
+    }
+
+    /// An S&D defender with a site under attack goes there instead of its
+    /// own; with converge off it keeps its own.
+    #[test]
+    fn a_defender_converges_on_the_site_under_attack() {
+        let mut bot = Bot::new("axis", true, 1);
+        let mut v = sd_view(ObjRole::Defend);
+        v.origin = [0.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Hold, "at its own site");
+        v.sd.as_mut().unwrap().hot = Some(1);
+        assert_eq!(bot.goal(&v), Goal::To([2000.0, 0.0, 64.0]));
+        bot.converge = false;
+        assert_eq!(bot.goal(&v), Goal::Hold);
+    }
+
+    /// An attacker with a lane walks its way in first; with lanes off,
+    /// straight to the site.
+    #[test]
+    fn an_attacker_walks_its_lane_first() {
+        let mut bot = attacker();
+        let mut v = sd_view(ObjRole::Attack);
+        v.origin = [-3000.0, 0.0, 64.0];
+        v.lane = Some([-600.0, 900.0, 64.0]);
+        assert_eq!(bot.goal(&v), Goal::To([-600.0, 900.0, 64.0]));
+        bot.lanes = false;
+        assert_eq!(bot.goal(&v), Goal::To([0.0, 0.0, 64.0]));
+    }
+
+    /// An attacker that always goes to the first site.
+    fn attacker() -> Bot {
+        let mut bot = Bot::new("allies", true, 1);
+        bot.obj.pick = 0;
+        bot
+    }
+
+    fn plant_bomb(v: &mut BotView, at: [f32; 3]) {
+        let sd = v.sd.as_mut().unwrap();
+        sd.sites.clear();
+        sd.bomb = Some(BombView {
+            origin: at,
+            aim: [at[0], at[1], at[2] + 8.0],
+        });
+    }
+
+    #[test]
+    fn an_attacker_at_a_site_holds_use_still_until_the_zones_go() {
+        let mut bot = attacker();
+        let mut v = sd_view(ObjRole::Attack);
+        for tick in 0..100 {
+            let cmd = bot.think(&v);
+            assert_eq!(cmd.buttons, BUTTON_USE, "tick {tick}");
+            assert_eq!((cmd.forward, cmd.right, cmd.up), (0, 0, 0), "tick {tick}");
+            assert_eq!(cmd.weapon, 10, "the cmd carries the held weapon byte");
+            assert_eq!(bot.goal(&v), Goal::Hold);
+            // The script links the planter once its loop reads the press.
+            v.linked = tick >= 2;
+        }
+        // Planted: the zones are gone and the bomb sits at the feet.
+        plant_bomb(&mut v, [0.0, 0.0, 64.0]);
+        v.linked = false;
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.buttons & BUTTON_USE, 0, "use held past the plant");
+        assert_eq!(bot.goal(&v), Goal::Roam, "the planter stays on its bomb");
+    }
+
+    #[test]
+    fn a_planting_bot_holds_use_through_an_enemy_and_a_stall() {
+        let mut bot = attacker();
+        let mut v = sd_view(ObjRole::Attack);
+        bot.think(&v);
+        v.linked = true;
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [300.0, 0.0, 104.0],
+            velocity: [0.0; 3],
+        });
+        for tick in 0..90 {
+            let cmd = bot.think(&v);
+            assert_eq!(cmd.buttons, BUTTON_USE, "tick {tick}: let go to fight");
+            assert_eq!((cmd.forward, cmd.right), (0, 0), "tick {tick}");
+            assert_eq!(bot.goal(&v), Goal::Hold);
+        }
+    }
+
+    #[test]
+    fn a_plant_that_never_links_is_let_go_for_the_other_site() {
+        let mut bot = attacker();
+        let v = sd_view(ObjRole::Attack);
+        let held = (0..60)
+            .take_while(|_| bot.think(&v).buttons == BUTTON_USE)
+            .count();
+        assert_eq!(held as u32, START_TICKS);
+        assert_eq!(bot.goal(&v), Goal::To([2000.0, 0.0, 64.0]));
+    }
+
+    #[test]
+    fn a_defender_turns_onto_the_bomb_then_holds_use() {
+        let mut bot = Bot::new("axis", true, 1);
+        let mut v = sd_view(ObjRole::Defend);
+        let bomb = [30.0, 0.0, 64.0];
+        plant_bomb(&mut v, bomb);
+        // Facing away from it, down +y.
+        v.view = [0.0, 90.0, 0.0];
+        assert_eq!(bot.goal(&v), Goal::Hold, "within reach already");
+        let (tp, ty) = aim_angles(&v, [30.0, 0.0, 72.0]);
+        let mut pressed = None;
+        for tick in 0..40 {
+            let cmd = bot.think(&v);
+            let aim = [
+                cmd.angles[0] as f32 / ANGLE2SHORT,
+                cmd.angles[1] as f32 / ANGLE2SHORT,
+            ];
+            assert_eq!((cmd.forward, cmd.right), (0, 0));
+            if cmd.buttons & BUTTON_USE != 0 {
+                // Pressed only with the view, not just the cmd, on the bomb.
+                assert!(yaw_diff(v.view[0], tp).hypot(yaw_diff(v.view[1], ty)) < SETTLE_DEG);
+                pressed = Some(tick);
+                break;
+            }
+            v.view = [aim[0], aim[1], 0.0];
+        }
+        let pressed = pressed.expect("never pressed use on the bomb");
+        assert!(pressed >= 6, "90 degrees at 15 a tick takes six ticks");
+        v.linked = true;
+        for _ in 0..180 {
+            assert_eq!(bot.think(&v).buttons, BUTTON_USE);
+        }
+        // Defused: the trigger is gone, so is the press.
+        v.sd.as_mut().unwrap().bomb = None;
+        v.linked = false;
+        assert_eq!(bot.think(&v).buttons & BUTTON_USE, 0);
+    }
+
+    /// A weapon lying by the bomb that the settled view would take
+    /// (a planter's, dropped where he died) keeps the press back: the
+    /// defuser closes in over the bomb and presses there, and presses
+    /// anyway once [`DEFUSE_CLOSE_TICKS`] run out.
+    #[test]
+    fn a_defuser_closes_in_rather_than_take_a_weapon_by_the_bomb() {
+        let mut bot = Bot::new("axis", true, 1);
+        let mut v = sd_view(ObjRole::Defend);
+        let bomb = [30.0, 0.0, 64.0];
+        plant_bomb(&mut v, bomb);
+        let (tp, ty) = aim_angles(&v, [30.0, 0.0, 72.0]);
+        v.view = [tp, ty, 0.0];
+        v.use_takes_weapon = true;
+        for tick in 0..10 {
+            assert_eq!(bot.think(&v).buttons & BUTTON_USE, 0, "tick {tick}");
+        }
+        assert_eq!(bot.goal(&v), Goal::To(bomb), "closes in");
+        // Over the bomb the trigger is the pick.
+        v.origin = [26.0, 0.0, 64.0];
+        v.use_takes_weapon = false;
+        assert_eq!(bot.goal(&v), Goal::Hold);
+        let (tp, ty) = aim_angles(&v, [30.0, 0.0, 72.0]);
+        v.view = [tp, ty, 0.0];
+        assert!((0..4).any(|_| bot.think(&v).buttons & BUTTON_USE != 0));
+
+        let mut bot = Bot::new("axis", true, 1);
+        v.origin = [0.0, 0.0, 64.0];
+        let (tp, ty) = aim_angles(&v, [30.0, 0.0, 72.0]);
+        v.view = [tp, ty, 0.0];
+        v.use_takes_weapon = true;
+        let pressed =
+            (0..2 * DEFUSE_CLOSE_TICKS).position(|_| bot.think(&v).buttons & BUTTON_USE != 0);
+        assert!(
+            pressed.is_some_and(|t| t >= DEFUSE_CLOSE_TICKS as usize - 2),
+            "{pressed:?}"
+        );
+    }
+
+    /// The `bas` charge press keeps back from a weapon lying by the
+    /// charge as the S&D defuse does: it closes in, then presses.
+    #[test]
+    fn a_bas_planter_closes_in_rather_than_take_a_weapon_by_the_charge() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = bas_view();
+        let charge = [2000.0, 0.0, -176.0];
+        let aim = [2000.0, 0.0, -160.0];
+        let b = their_base(&mut v);
+        b.breached = true;
+        b.charge = Some(BombView {
+            origin: charge,
+            aim,
+        });
+        v.origin = [1920.0, 0.0, -176.0];
+        let (tp, ty) = aim_angles(&v, aim);
+        v.view = [tp, ty, 0.0];
+        v.use_takes_weapon = true;
+        for tick in 0..10 {
+            assert_eq!(bot.think(&v).buttons & BUTTON_USE, 0, "tick {tick}");
+        }
+        assert_eq!(bot.goal(&v), Goal::To(charge), "closes in");
+        v.origin = [1990.0, 0.0, -176.0];
+        v.use_takes_weapon = false;
+        assert_eq!(bot.goal(&v), Goal::Hold);
+        let (tp, ty) = aim_angles(&v, aim);
+        v.view = [tp, ty, 0.0];
+        assert!((0..4).any(|_| bot.think(&v).buttons & BUTTON_USE != 0));
+    }
+
+    /// A charge room a teammate died in of late is held: the planter
+    /// making for it stops in range and lobs one frag at the charge from
+    /// outside the room before it goes in, and none into a room nobody
+    /// died in.
+    #[test]
+    fn a_bas_planter_lobs_a_frag_into_a_held_charge_room() {
+        let throws = |fallen: Vec<[f32; 3]>, held: bool| {
+            let mut bot = Bot::new("allies", true, 1);
+            let mut v = bas_view();
+            let b = their_base(&mut v);
+            b.breached = true;
+            b.charge = Some(BombView {
+                origin: [2000.0, 0.0, -176.0],
+                aim: [2000.0, 0.0, -160.0],
+            });
+            v.origin = [1500.0, 0.0, -176.0];
+            v.lob = Some([-12.0, 0.0]);
+            v.fallen = fallen;
+            let mut starts = 0;
+            for tick in 0..600 {
+                // On the run as the first throw's cooldown ends: it stops
+                // for the throw.
+                v.speed = if tick < 210 { 190.0 } else { 0.0 };
+                let cmd = bot.think(&v);
+                if (201..210).contains(&tick) && held {
+                    assert_eq!((cmd.forward, cmd.right), (0, 0), "tick {tick}");
+                }
+                if cmd.weapon == 6 && v.weapon != 6 {
+                    starts += 1;
+                }
+                v.weapon = cmd.weapon;
+            }
+            starts
+        };
+        assert_eq!(throws(vec![[1950.0, 40.0, -176.0]], true), 1);
+        assert_eq!(throws(Vec::new(), false), 0);
+        assert_eq!(
+            throws(vec![[1500.0, 0.0, -176.0]], false),
+            0,
+            "died outside the room"
+        );
+    }
+
+    #[test]
+    fn a_planter_looks_up_off_the_floor() {
+        let mut bot = attacker();
+        let v = sd_view(ObjRole::Attack);
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.buttons, BUTTON_USE);
+        assert_eq!(
+            cmd.angles[0],
+            deg_short(PLANT_PITCH),
+            "pressed looking down"
+        );
+    }
+
+    #[test]
+    fn a_team_deals_its_bots_out_over_both_sites() {
+        for role in [ObjRole::Attack, ObjRole::Defend] {
+            let mut v = sd_view(role);
+            v.origin = [1000.0, 0.0, 64.0];
+            let goals: Vec<Goal> = (0..4)
+                .map(|rank| {
+                    v.sd.as_mut().unwrap().rank = rank;
+                    Bot::new("allies", true, rank as u64).goal(&v)
+                })
+                .collect();
+            let (a, b) = (Goal::To([0.0, 0.0, 64.0]), Goal::To([2000.0, 0.0, 64.0]));
+            assert_eq!(goals, [a, b, a, b], "{role:?}");
+        }
+    }
+
+    #[test]
+    fn only_the_lead_defender_goes_for_the_bomb() {
+        let bomb = [30.0, 0.0, 64.0];
+        let mut v = sd_view(ObjRole::Defend);
+        plant_bomb(&mut v, bomb);
+        v.sd.as_mut().unwrap().lead = false;
+        v.view = [0.0, 0.0, 0.0];
+        let mut bot = Bot::new("axis", true, 1);
+        // On the bomb: it steps off, the defuser's line clear.
+        assert_eq!(bot.goal(&v), Goal::Roam);
+        for _ in 0..60 {
+            assert_eq!(bot.think(&v).buttons & BUTTON_USE, 0);
+        }
+        // Off to the side, inside the guard ring, it holds.
+        v.origin = [200.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Hold);
+        // Far off, it closes on the ring, not the bomb's reach.
+        v.origin = [1000.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::To(bomb));
+        bot.think(&v);
+        v.origin = [150.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Hold);
+    }
+
+    #[test]
+    fn an_attacker_taps_use_on_the_objective_then_carries_it_home() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = re_view(ObjRole::Attack);
+        assert_eq!(bot.goal(&v), Goal::Hold, "within reach already");
+        let mut presses = Vec::new();
+        while presses.len() < 40 && !presses.ends_with(&[true, true, false]) {
+            let cmd = bot.think(&v);
+            if !presses.ends_with(&[true, true]) {
+                assert_eq!((cmd.forward, cmd.right), (0, 0), "moved before the tap");
+            }
+            // The sim takes the view where the cmd points it.
+            let a = cmd.angles.map(|a| a as f32 / ANGLE2SHORT);
+            v.view = [a[0], a[1], 0.0];
+            presses.push(cmd.buttons & BUTTON_USE != 0);
+        }
+        // Two ticks down, then up: held, the use key drops what a carrier
+        // holds.
+        assert!(
+            presses.ends_with(&[false, true, true, false]),
+            "{presses:?}"
+        );
+        // A tap that took nothing tries from beside the objective next.
+        assert_ne!(bot.goal(&v), Goal::Hold);
+        // Taken: the trigger is gone and the bot carries it to the goal,
+        // use up all the way.
+        let o = &mut v.re.as_mut().unwrap().objectives[0];
+        (o.pickup, o.carried, o.mine) = (None, true, true);
+        assert_eq!(bot.goal(&v), Goal::To([3000.0, 0.0, 64.0]));
+        for _ in 0..100 {
+            assert_eq!(bot.think(&v).buttons & BUTTON_USE, 0);
+        }
+    }
+
+    #[test]
+    fn a_defender_guards_the_objective_then_the_goal_it_is_carried_to() {
+        let bot = Bot::new("axis", true, 1);
+        let mut v = re_view(ObjRole::Defend);
+        v.origin = [1000.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::To([30.0, 0.0, 72.0]));
+        let o = &mut v.re.as_mut().unwrap().objectives[0];
+        (o.pickup, o.carried) = (None, true);
+        assert_eq!(bot.goal(&v), Goal::To([3000.0, 0.0, 64.0]));
+        // It holds outside the goal trigger, and walks out of it.
+        v.origin = [2650.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Hold);
+        v.origin = [2900.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Roam);
+        // A teammate carries it: an attacker escorts it the same way.
+        let mut v = re_view(ObjRole::Attack);
+        let o = &mut v.re.as_mut().unwrap().objectives[0];
+        (o.pickup, o.carried) = (None, true);
+        assert_eq!(bot.goal(&v), Goal::To([3000.0, 0.0, 64.0]));
+        v.origin = [2900.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Roam);
+    }
+
+    /// An escort holds inside its ring round the carrier, but within
+    /// `ESCORT_CLEAR` of him it walks off: standing on his next node on a
+    /// stair it held mp_carentan's carrier for 75 s.
+    #[test]
+    fn an_escort_steps_off_a_carrier_it_stands_on() {
+        let bot = Bot::new("allies", true, 1);
+        let mut v = re_view(ObjRole::Attack);
+        let o = &mut v.re.as_mut().unwrap().objectives[0];
+        (o.pickup, o.carried, o.carrier_at) = (None, true, Some([500.0, 0.0, 64.0]));
+        v.origin = [350.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Hold);
+        v.origin = [470.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Away([500.0, 0.0, 64.0]));
+    }
+
+    /// A dropped objective 1000 units off: with 10 s left on its clock
+    /// an attacker goes for it and a defender guards it; with 3 s left
+    /// (570 units of run) both wait where it goes back to.
+    #[test]
+    fn a_dropped_objective_out_of_reach_of_its_clock_is_awaited_at_its_start() {
+        let home = [-2000.0, 0.0, 72.0];
+        for role in [ObjRole::Attack, ObjRole::Defend] {
+            let bot = Bot::new("allies", true, 1);
+            let mut v = re_view(role);
+            v.origin = [1030.0, 0.0, 64.0];
+            let o = &mut v.re.as_mut().unwrap().objectives[0];
+            o.returns = Some((home, 10.0));
+            assert_eq!(bot.goal(&v), Goal::To([30.0, 0.0, 72.0]), "{role:?}");
+            v.re.as_mut().unwrap().objectives[0].returns = Some((home, 3.0));
+            assert_eq!(bot.goal(&v), Goal::To(home), "{role:?}");
+        }
+    }
+
+    /// Past the first by rank, a defender goes after a carried objective:
+    /// back to where it was taken while the compass hides the carrier,
+    /// then to the goal; straight at him once the compass shows him.
+    #[test]
+    fn the_other_defenders_go_after_the_carrier() {
+        let mut bot = Bot::new("axis", true, 1);
+        let mut v = re_view(ObjRole::Defend);
+        v.origin = [2500.0, 0.0, 64.0];
+        let re = v.re.as_mut().unwrap();
+        re.rank = 1;
+        let o = &mut re.objectives[0];
+        (o.pickup, o.carried) = (None, true);
+        assert_eq!(bot.goal(&v), Goal::To([30.0, 0.0, 64.0]));
+        v.origin = [40.0, 0.0, 64.0];
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::To([3000.0, 0.0, 64.0]), "swept once");
+        v.re.as_mut().unwrap().objectives[0].carrier_at = Some([1200.0, 50.0, 64.0]);
+        assert_eq!(bot.goal(&v), Goal::To([1200.0, 50.0, 64.0]));
+        // Dropped and lying again: the next carry is swept afresh.
+        let o = &mut v.re.as_mut().unwrap().objectives[0];
+        (o.pickup, o.carried, o.carrier_at) = (Some([30.0, 0.0, 72.0]), false, None);
+        bot.think(&v);
+        let o = &mut v.re.as_mut().unwrap().objectives[0];
+        (o.pickup, o.carried) = (None, true);
+        v.origin = [2500.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::To([30.0, 0.0, 64.0]));
+    }
+
+    /// An attacker escorts a teammate's carry: it closes on him and holds
+    /// once within the guard ring.
+    #[test]
+    fn an_attacker_escorts_the_carrier() {
+        let bot = Bot::new("allies", true, 1);
+        let mut v = re_view(ObjRole::Attack);
+        let o = &mut v.re.as_mut().unwrap().objectives[0];
+        (o.pickup, o.carried, o.carrier_at) = (None, true, Some([1000.0, 0.0, 64.0]));
+        assert_eq!(bot.goal(&v), Goal::To([1000.0, 0.0, 64.0]));
+        v.origin = [900.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Hold);
+    }
+
+    /// A carrier with an enemy in sight keeps for the goal: the path
+    /// keys stay, and only the view turns to fight.
+    #[test]
+    fn a_carrier_runs_for_the_goal_through_a_fight() {
+        let (mut bot, mut v) = engaged(1);
+        let e = v.enemy;
+        v.re = re_view(ObjRole::Attack).re;
+        let o = &mut v.re.as_mut().unwrap().objectives[0];
+        (o.pickup, o.carried, o.mine) = (None, true, true);
+        v.enemy = e;
+        assert_eq!(bot.goal(&v), Goal::To([3000.0, 0.0, 64.0]));
+        v.waypoint = Some([0.0, 500.0, 64.0]);
+        let cmd = bot.think(&v);
+        assert!(cmd.forward != 0 || cmd.right != 0, "the keys run the path");
+        bot.team_play = false;
+        assert!(
+            !bot.carrying(&v),
+            "team play off: the carrier fights as any bot"
+        );
+    }
+
+    /// Only the escort keeps by the carrier; the rest of the team go
+    /// ahead and hold the ring round his goal, clear of its trigger.
+    #[test]
+    fn the_other_attackers_hold_the_carriers_goal() {
+        let bot = Bot::new("allies", true, 1);
+        let mut v = re_view(ObjRole::Attack);
+        v.re.as_mut().unwrap().escort = false;
+        let o = &mut v.re.as_mut().unwrap().objectives[0];
+        (o.pickup, o.carried, o.carrier_at) = (None, true, Some([1000.0, 0.0, 64.0]));
+        assert_eq!(bot.goal(&v), Goal::To([3000.0, 0.0, 64.0]));
+        v.origin = [3000.0 - 350.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Hold);
+    }
+
+    /// An attacker with a teammate planting nearby guards him, off the
+    /// zone, instead of making for its own site or pressing use in his.
+    #[test]
+    fn an_attacker_covers_a_planting_teammate() {
+        let mut bot = attacker();
+        let mut v = sd_view(ObjRole::Attack);
+        v.sd.as_mut().unwrap().rank = 1;
+        v.sd.as_mut().unwrap().cover = Some([0.0, 0.0, 64.0]);
+        v.origin = [1000.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::To([0.0, 0.0, 64.0]));
+        // On the planter: off him; in the ring: holds, use never pressed.
+        v.origin = [20.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Roam);
+        v.origin = [200.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Hold);
+        for _ in 0..40 {
+            assert_eq!(bot.think(&v).buttons & BUTTON_USE, 0);
+        }
+    }
+
+    #[test]
+    fn use_is_pressed_only_at_the_objective() {
+        for role in [ObjRole::Attack, ObjRole::Defend] {
+            let mut bot = attacker();
+            let mut v = sd_view(role);
+            v.origin = [800.0, 0.0, 64.0];
+            v.waypoint = Some([700.0, 0.0, 64.0]);
+            v.view[1] = 180.0;
+            assert_eq!(bot.goal(&v), Goal::To([0.0, 0.0, 64.0]), "{role:?}");
+            for _ in 0..100 {
+                let cmd = bot.think(&v);
+                assert_eq!(cmd.buttons & BUTTON_USE, 0, "{role:?}");
+                assert_eq!(cmd.forward, 127, "{role:?}");
+                v.origin[0] -= 1.0;
+            }
+            // A guarding defender stands in its zone and presses nothing.
+            if role == ObjRole::Defend {
+                v.origin = [0.0, 0.0, 64.0];
+                assert_eq!(bot.goal(&v), Goal::Hold);
+                for _ in 0..100 {
+                    let cmd = bot.think(&v);
+                    assert_eq!((cmd.buttons, cmd.forward), (0, 0));
+                }
+            }
+        }
+        // A defender short of the bomb walks to it without a press.
+        let mut bot = Bot::new("axis", true, 1);
+        let mut v = sd_view(ObjRole::Defend);
+        plant_bomb(&mut v, [500.0, 0.0, 64.0]);
+        assert_eq!(bot.goal(&v), Goal::To([500.0, 0.0, 64.0]));
+        assert_eq!(bot.think(&v).buttons & BUTTON_USE, 0);
+    }
+
+    fn bel_view(hunted: bool, markers: Vec<[f32; 3]>) -> BotView {
+        let mut v = view();
+        v.bel = Some(BelView {
+            hunted,
+            markers,
+            trail: None,
+        });
+        v
+    }
+
+    /// A hunter heads for the nearest allied marker, looks round from it
+    /// once there instead of standing on it, and a seen or heard enemy
+    /// comes first.
+    #[test]
+    fn a_hunter_goes_for_the_nearest_marker_once() {
+        let mut bot = Bot::new("axis", true, 1);
+        let mut v = bel_view(false, vec![[2000.0, 0.0, 64.0], [800.0, 0.0, 64.0]]);
+        assert_eq!(bot.goal(&v), Goal::To([800.0, 0.0, 64.0]));
+        v.origin = [790.0, 10.0, 64.0];
+        bot.think(&v);
+        assert_eq!(
+            bot.goal(&v),
+            Goal::To([2000.0, 0.0, 64.0]),
+            "the next marker"
+        );
+        v.bel.as_mut().unwrap().markers.pop();
+        bot.think(&v);
+        v.origin = [1990.0, 0.0, 64.0];
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::Roam, "every marker stood at");
+        // The marker moves on: a new one to go for.
+        v.bel.as_mut().unwrap().markers = vec![[1500.0, 300.0, 64.0]];
+        assert_eq!(bot.goal(&v), Goal::To([1500.0, 300.0, 64.0]));
+        v.noise = Some([0.0, 900.0, 104.0]);
+        assert_eq!(bot.goal(&v), Goal::To([0.0, 900.0, 104.0]), "a noise first");
+    }
+
+    /// A marker hanging 150 units over the floor (the mean of a spot on a
+    /// ledge and one below it): once the plan to it is walked out and the
+    /// body comes no nearer for [`SHORT_TICKS`], the hunter moves on.
+    #[test]
+    fn a_hunter_gives_up_a_marker_off_the_graph() {
+        let mut bot = Bot::new("axis", true, 1);
+        let high = [800.0, 0.0, 214.0];
+        let mut v = bel_view(false, vec![high, [2000.0, 0.0, 64.0]]);
+        v.origin = [780.0, 0.0, 64.0];
+        for _ in 0..SHORT_TICKS {
+            bot.walked_to = Some(high);
+            bot.think(&v);
+            assert_eq!(bot.goal(&v), Goal::To(high), "still walking at it");
+        }
+        // A plan not walked out (a way round still ahead) keeps the marker.
+        let mut other = Bot::new("axis", true, 1);
+        for _ in 0..=SHORT_TICKS {
+            other.think(&v);
+        }
+        assert_eq!(other.goal(&v), Goal::To(high));
+        bot.walked_to = Some(high);
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::To([2000.0, 0.0, 64.0]), "given up");
+    }
+
+    /// The hunted run from what they last saw or heard, else from their own
+    /// marker, and fight what they see.
+    #[test]
+    fn the_hunted_run_from_a_threat() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = bel_view(true, Vec::new());
+        assert_eq!(bot.goal(&v), Goal::Roam);
+        v.noise = Some([0.0, 900.0, 104.0]);
+        assert_eq!(bot.goal(&v), Goal::Away([0.0, 900.0, 104.0]));
+        bot.think(&v);
+        v.noise = None;
+        assert_eq!(bot.goal(&v), Goal::Away([0.0, 900.0, 104.0]), "remembered");
+        // Nothing seen or heard: away from its own marker.
+        let mut calm = bel_view(true, Vec::new());
+        calm.bel.as_mut().unwrap().trail = Some([-300.0, 0.0, 64.0]);
+        assert_eq!(
+            Bot::new("allies", true, 1).goal(&calm),
+            Goal::Away([-300.0, 0.0, 64.0])
+        );
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [500.0, 0.0, 40.0],
+            velocity: [0.0; 3],
+        });
+        assert_eq!(bot.goal(&v), Goal::To([500.0, 0.0, 40.0]));
+    }
+
+    /// A guard pulled back to its objective (`GuardPost::careful`) walks
+    /// at half keys looking at the objective from `CAREFUL_NEAR` in and
+    /// crouches from `CAREFUL_CROUCH`; out past it, it runs.
+    #[test]
+    fn a_guard_pulled_back_walks_in_with_care() {
+        let think = |at: [f32; 3]| {
+            let mut bot = Bot::new("axis", false, 1);
+            let mut v = sd_view(ObjRole::Defend);
+            v.origin = at;
+            v.view = [0.0, 90.0, 0.0];
+            v.waypoint = Some([at[0] + 400.0, at[1], 64.0]);
+            v.on_ground = true;
+            v.move_scale = 1.0;
+            v.guard_post = Some(GuardPost {
+                at: [100.0, 60.0, 64.0],
+                crouch: false,
+                look: [0.0, 0.0, 64.0],
+                careful: Some([0.0, 0.0, 64.0]),
+            });
+            bot.think(&v)
+        };
+        let far = think([-1500.0, 0.0, 64.0]);
+        assert_eq!(far.forward.max(far.right.abs()), 127, "runs");
+        let near = think([-500.0, 0.0, 64.0]);
+        let keys = f32::from(near.forward).hypot(f32::from(near.right));
+        assert!(keys < 80.0, "walks: {near:?}");
+        assert_eq!(near.wbuttons & msg::WBUTTON_CROUCH, 0);
+        let close = think([-200.0, 0.0, 64.0]);
+        assert_ne!(close.wbuttons & msg::WBUTTON_CROUCH, 0, "crouched");
+    }
+
+    /// A `ctf` bot the driver sends after the enemy carrying its flag
+    /// (`CtfView::hunt`) chases him instead of guarding.
+    #[test]
+    fn a_ctf_bot_hunts_the_carrier_of_its_flag() {
+        let bot = Bot::new("axis", true, 1);
+        let mut v = view();
+        let site = |x: f32| SiteView {
+            mins: [x - 50.0, -50.0, 0.0],
+            maxs: [x + 50.0, 50.0, 100.0],
+            stand: [x, 0.0, 0.0],
+        };
+        let flag = |home: Option<SiteView>, goal: SiteView, carrier: Option<usize>| CtfFlagView {
+            home,
+            dropped: None,
+            goal,
+            carried: carrier.is_some(),
+            carrier,
+        };
+        v.uo = Some(UoView::Ctf(Box::new(CtfView {
+            ours: flag(None, site(3000.0), Some(7)),
+            theirs: flag(Some(site(3000.0)), site(0.0), None),
+            carrying: false,
+            escort: None,
+            rank: 1,
+            hunt: None,
+            lead: None,
+            watch: None,
+        })));
+        assert_eq!(bot.goal(&v), Goal::To([3000.0, 0.0, 0.0]), "holds his goal");
+        if let Some(UoView::Ctf(c)) = v.uo.as_mut() {
+            c.hunt = Some([1500.0, 200.0, 0.0]);
+        }
+        assert_eq!(bot.goal(&v), Goal::To([1500.0, 200.0, 0.0]));
+    }
+
+    /// A `ctf` carrier (`Bot::ctf_carry`) keeps for its goal through a
+    /// fight; with its own flag away it returns the flag lying near
+    /// itself, else guards round the goal instead of standing in it.
+    #[test]
+    fn a_ctf_carrier_keeps_home_and_waits_near_the_goal() {
+        let mut bot = Bot::new("axis", true, 1);
+        let mut v = view();
+        let site = |x: f32| SiteView {
+            mins: [x - 50.0, -50.0, 0.0],
+            maxs: [x + 50.0, 50.0, 100.0],
+            stand: [x, 0.0, 0.0],
+        };
+        let ours = CtfFlagView {
+            home: None,
+            dropped: Some(site(600.0)),
+            goal: site(3000.0),
+            carried: false,
+            carrier: None,
+        };
+        v.uo = Some(UoView::Ctf(Box::new(CtfView {
+            ours,
+            theirs: CtfFlagView {
+                home: None,
+                dropped: None,
+                goal: site(0.0),
+                carried: true,
+                carrier: Some(0),
+            },
+            carrying: true,
+            escort: None,
+            rank: 2,
+            hunt: None,
+            lead: None,
+            watch: None,
+        })));
+        assert_eq!(bot.goal(&v), Goal::To([600.0, 0.0, 0.0]), "returns it");
+        if let Some(UoView::Ctf(c)) = v.uo.as_mut() {
+            c.ours.dropped = None;
+            c.ours.carried = true;
+            c.ours.carrier = Some(7);
+        }
+        assert!(matches!(
+            bot.objective_target(&v),
+            Some(ObjTarget::Guard {
+                at: [0.0, 0.0, 0.0],
+                hold: GuardHold::Near,
+                ..
+            })
+        ));
+        assert!(bot.carrying(&v), "keeps for the goal through a fight");
+        // Not carrying, dealt a point by the carrier ([`Bot::ctf_escort`]).
+        if let Some(UoView::Ctf(c)) = v.uo.as_mut() {
+            c.carrying = false;
+            c.ours.carried = false;
+            c.ours.carrier = None;
+            c.ours.home = Some(site(3000.0));
+            c.theirs.home = None;
+            c.lead = Some([700.0, 0.0, 0.0]);
+        }
+        assert!(matches!(
+            bot.objective_target(&v),
+            Some(ObjTarget::Escort([700.0, 0.0, 0.0]))
+        ));
+        if let Some(UoView::Ctf(c)) = v.uo.as_mut() {
+            c.carrying = true;
+            c.lead = None;
+            c.ours.home = None;
+            c.ours.carried = true;
+            c.ours.carrier = Some(7);
+        }
+        bot.ctf_carry = false;
+        assert!(matches!(
+            bot.objective_target(&v),
+            Some(ObjTarget::Occupy(_))
+        ));
+        assert!(!bot.carrying(&v));
+    }
+
+    /// Without a rocket the attacker fetches a launcher, the near one, not
+    /// the one in the standing base's bunker behind its walls.
+    #[test]
+    fn a_bas_attacker_without_a_rocket_fetches_a_launcher() {
+        let bot = Bot::new("allies", false, 1);
+        let v = bas_view();
+        assert_eq!(bot.goal(&v), Goal::To([300.0, 200.0, 8.0]));
+    }
+
+    /// With a rocket and no shot it walks to the breach stand nearest its
+    /// own side; at one with a shot it stands, draws the launcher, fires
+    /// once the view rests on the aim and reloads the dry clip.
+    #[test]
+    fn a_bas_attacker_with_a_rocket_walks_to_a_stand_and_fires() {
+        let mut bot = Bot::new("allies", false, 1);
+        bot.skill.turn_deg = 360.0;
+        let mut v = bas_view();
+        v.rocket = Some(20);
+        v.weapons_held |= 1 << 20;
+        their_base(&mut v).stands = vec![[2600.0, 0.0, 0.0], [1400.0, 0.0, 0.0]];
+        assert_eq!(bot.goal(&v), Goal::To([1400.0, 0.0, 0.0]));
+
+        v.origin = [1400.0, 0.0, 0.0];
+        their_base(&mut v).shot = Some([2000.0, 0.0, 40.0]);
+        assert_eq!(bot.goal(&v), Goal::Hold);
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.weapon, 20, "the launcher comes out");
+        assert_eq!(cmd.buttons & BUTTON_ATTACK, 0);
+
+        v.weapon = 20;
+        v.clip = 1;
+        let (pitch, yaw) = aim_angles(&v, [2000.0, 0.0, 40.0]);
+        v.view = [pitch, yaw, 0.0];
+        v.ads_frac = 0.5;
+        let cmd = bot.think(&v);
+        assert_ne!(cmd.buttons & BUTTON_ADS, 0, "sights up for the shot");
+        assert_eq!(cmd.buttons & BUTTON_ATTACK, 0, "not from the hip");
+        v.ads_frac = 1.0;
+        // Sighted, but the cone a turn on the way up opened is still wide:
+        // mp_kursk's stand took one such rocket on its own wall.
+        v.spread_scale = 40.0;
+        let early = (0..4).any(|_| bot.think(&v).buttons & BUTTON_ATTACK != 0);
+        assert!(!early, "a round through the opened cone");
+        v.spread_scale = 0.0;
+        let fired = (0..4).any(|_| bot.think(&v).buttons & BUTTON_ATTACK != 0);
+        assert!(fired, "no round at the base");
+
+        v.clip = 0;
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.buttons & BUTTON_ATTACK, 0);
+        assert_ne!(cmd.wbuttons & WBUTTON_RELOAD, 0, "the dry launcher reloads");
+    }
+
+    /// A breached base is planted as before, rocket or not.
+    #[test]
+    fn a_breached_base_is_planted_not_shot() {
+        let bot = Bot::new("allies", false, 1);
+        let mut v = bas_view();
+        v.rocket = Some(20);
+        let b = their_base(&mut v);
+        b.breached = true;
+        b.shot = Some([2000.0, 0.0, 40.0]);
+        b.charge = Some(BombView {
+            origin: [2000.0, 0.0, -176.0],
+            aim: [2000.0, 0.0, -160.0],
+        });
+        assert_eq!(bot.goal(&v), Goal::To([2000.0, 0.0, -176.0]));
+    }
+
+    /// A launcher in the bot's own standing base lies behind its walls
+    /// too: the bot passed it by and stood at the wall for good.
+    #[test]
+    fn a_launcher_in_its_own_standing_bunker_is_passed_by() {
+        let bot = Bot::new("allies", false, 1);
+        let mut v = bas_view();
+        v.origin = [-1700.0, 0.0, 64.0];
+        let Some(UoView::Bas(b)) = v.uo.as_mut() else {
+            unreachable!()
+        };
+        b.launchers.push([-1900.0, 0.0, 8.0]);
+        assert_eq!(bot.goal(&v), Goal::To([300.0, 200.0, 8.0]));
+        let Some(UoView::Bas(b)) = v.uo.as_mut() else {
+            unreachable!()
+        };
+        b.bases[0].breached = true;
+        assert_eq!(bot.goal(&v), Goal::To([-1900.0, 0.0, 8.0]));
+    }
+
+    /// Each life lost sends the attacker at the next of the other side's
+    /// bases, off the defender guarding the last.
+    #[test]
+    fn a_bas_attacker_turns_to_the_next_base_after_a_death() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = bas_view();
+        let Some(UoView::Bas(b)) = v.uo.as_mut() else {
+            unreachable!()
+        };
+        b.bases[1].breached = true;
+        let mut other = b.bases[1].clone();
+        other.at = [0.0, 2000.0, 0.0];
+        b.bases.push(other);
+        assert_eq!(bot.goal(&v), Goal::To([2000.0, 0.0, 0.0]));
+        v.dead = true;
+        bot.think(&v);
+        v.dead = false;
+        assert_eq!(bot.goal(&v), Goal::To([0.0, 2000.0, 0.0]));
+    }
+
+    /// A launcher tapped at three times with nothing taken is passed over.
+    #[test]
+    fn a_launcher_that_gives_nothing_is_passed_over() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = bas_view();
+        let Some(UoView::Bas(b)) = v.uo.as_mut() else {
+            unreachable!()
+        };
+        b.launchers.push([-900.0, 0.0, 8.0]);
+        for _ in 0..LAUNCHER_TAPS {
+            assert_eq!(bot.goal(&v), Goal::To([300.0, 200.0, 8.0]));
+            bot.tapped_launcher([300.0, 200.0, 8.0]);
+        }
+        assert_eq!(bot.goal(&v), Goal::To([-900.0, 0.0, 8.0]));
+    }
+
+    /// At a launcher with an empty one carried, the bot draws the empty
+    /// one before it taps: the swap drops what is held, and with the gun
+    /// out it traded the gun.
+    #[test]
+    fn a_bas_bot_taps_for_a_launcher_with_its_empty_one_in_hand() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = bas_view();
+        v.origin = [260.0, 200.0, 8.0];
+        let (pitch, yaw) = aim_angles(&v, [300.0, 200.0, 8.0]);
+        v.view = [pitch.clamp(-80.0, 80.0), yaw, 0.0];
+        v.primaries = [10, 5];
+        v.weapons_held |= 1 << 5;
+        v.launchers = 1 << 5;
+        let mut used = false;
+        for _ in 0..60 {
+            let cmd = bot.think(&v);
+            assert_eq!(cmd.weapon, 5, "the empty launcher drawn");
+            used |= cmd.buttons & BUTTON_USE != 0;
+        }
+        assert!(!used, "a tap with the gun out");
+        v.weapon = 5;
+        let used = (0..60).any(|_| bot.think(&v).buttons & BUTTON_USE != 0);
+        assert!(used, "no tap once it is in hand");
+    }
+
+    /// What a `bas` bot holds for a weapon tap: nothing drawn with a
+    /// primary slot free; else an empty primary, one of the fetched kind,
+    /// then not the gun it fights with (`cod11-items.md` 5).
+    #[test]
+    fn a_bas_bot_draws_the_primary_it_would_rather_lose() {
+        let mut v = view();
+        // Carbine 10 loaded in hand, panzerschreck 5, gun 12.
+        v.weapons_held = (1 << 10) | (1 << 5) | (1 << 12);
+        v.launchers = 1 << 5;
+        v.primaries = [10, 0];
+        assert_eq!(Bot::swap_out(&v, true), None, "a slot free");
+        // A loaded launcher and a dry gun: a gun fetch loses the gun, not
+        // the rocket in hand.
+        (v.primaries, v.weapon, v.loaded, v.gun) = ([10, 5], 5, 1 << 5, None);
+        assert_eq!(Bot::swap_out(&v, false), Some(10));
+        // A launcher fetch the same: the dry gun before the loaded rocket.
+        assert_eq!(Bot::swap_out(&v, true), Some(10));
+        // Both dry: the kind fetched goes.
+        v.loaded = 0;
+        assert_eq!(Bot::swap_out(&v, true), Some(5));
+        assert_eq!(Bot::swap_out(&v, false), Some(10));
+        // Two loaded guns, a launcher fetch: not the one it fights with,
+        // whichever is in hand.
+        (v.primaries, v.loaded, v.gun) = ([10, 12], (1 << 10) | (1 << 12), Some(10));
+        v.weapon = 10;
+        assert_eq!(Bot::swap_out(&v, true), Some(12));
+        // Nothing else between them: the one in hand, with no draw.
+        v.gun = None;
+        assert_eq!(Bot::swap_out(&v, true), Some(10));
+        v.weapon = 12;
+        assert_eq!(Bot::swap_out(&v, true), Some(12));
+    }
+
+    /// A bot with no round left anywhere asks for `kill`, once it has
+    /// been dry a while; one with a gun loaded never does.
+    #[test]
+    fn a_bot_with_nothing_to_fire_respawns() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = view();
+        v.gun = Some(10);
+        (0..DRY_TICKS + 1).for_each(|_| _ = bot.think(&v));
+        assert!(!bot.take_kill());
+        v.gun = None;
+        (v.clip, v.loaded) = (0, 0);
+        (0..DRY_TICKS).for_each(|_| _ = bot.think(&v));
+        assert!(bot.take_kill());
+    }
+
+    /// A defender attacks while none of its side's bases is breached, and
+    /// keeps the charge room of one that is; one that does not shoot
+    /// attacks still.
+    #[test]
+    fn a_bas_defender_attacks_until_a_base_of_its_own_is_breached() {
+        let bot = Bot::new("allies", true, 1);
+        let mut v = bas_view();
+        let Some(UoView::Bas(b)) = v.uo.as_mut() else {
+            unreachable!()
+        };
+        b.rank = 1;
+        assert_eq!(
+            bot.goal(&v),
+            Goal::To([300.0, 200.0, 8.0]),
+            "fetches a launcher"
+        );
+        let Some(UoView::Bas(b)) = v.uo.as_mut() else {
+            unreachable!()
+        };
+        b.bases[0].breached = true;
+        b.bases[0].charge = Some(BombView {
+            origin: [-2000.0, 0.0, -176.0],
+            aim: [-2000.0, 0.0, -160.0],
+        });
+        assert_eq!(bot.goal(&v), Goal::To([-2000.0, 0.0, -176.0]));
+        let calm = Bot::new("allies", false, 1);
+        assert_eq!(calm.goal(&v), Goal::To([300.0, 200.0, 8.0]));
+        // With two bases of theirs it takes the one the first bot does not.
+        let Some(UoView::Bas(b)) = v.uo.as_mut() else {
+            unreachable!()
+        };
+        let mut other = b.bases[1].clone();
+        other.at = [2000.0, 3000.0, 0.0];
+        other.breached = true;
+        other.charge = Some(BombView {
+            origin: [2000.0, 3000.0, -176.0],
+            aim: [2000.0, 3000.0, -160.0],
+        });
+        b.bases.push(other);
+        assert_eq!(calm.goal(&v), Goal::To([2000.0, 3000.0, -176.0]));
+        assert_eq!(bot.goal(&v), Goal::To([-2000.0, 0.0, -176.0]));
+    }
+
+    /// A defender with a charge of its side's ticking on the other side's
+    /// base leaves its own breached base's room to hold that one's, and so
+    /// does one whose side has breached the other side's last base.
+    #[test]
+    fn a_bas_defender_backs_a_ticking_charge() {
+        let bot = Bot::new("allies", true, 1);
+        let mut v = bas_view();
+        let Some(UoView::Bas(b)) = v.uo.as_mut() else {
+            unreachable!()
+        };
+        b.rank = 1;
+        b.bases[0].breached = true;
+        b.bases[0].charge = Some(BombView {
+            origin: [-2000.0, 0.0, -176.0],
+            aim: [-2000.0, 0.0, -160.0],
+        });
+        let theirs = [2000.0, 0.0, -176.0];
+        let t = &mut b.bases[1];
+        t.breached = true;
+        t.charge = Some(BombView {
+            origin: theirs,
+            aim: [2000.0, 0.0, -160.0],
+        });
+        let mut standing = t.clone();
+        standing.at = [2000.0, 3000.0, 0.0];
+        standing.breached = false;
+        standing.charge = None;
+        b.bases.push(standing);
+        assert_eq!(bot.goal(&v), Goal::To([-2000.0, 0.0, -176.0]), "its room");
+        let Some(UoView::Bas(b)) = v.uo.as_mut() else {
+            unreachable!()
+        };
+        b.bases.pop();
+        assert_eq!(bot.goal(&v), Goal::To(theirs), "their last base");
+        let t = their_base(&mut v);
+        t.planted = true;
+        t.blows_in = Some(40.0);
+        assert_eq!(bot.goal(&v), Goal::To(theirs), "the charge's room");
+    }
+
+    /// A charge on a base of its side's: a shooting defender comes back from
+    /// anywhere to defuse it while the clock leaves time for the run and
+    /// the hold, one that does not shoot only from near.
+    #[test]
+    fn a_bas_defender_that_does_not_shoot_defuses_only_from_near() {
+        let mut v = bas_view();
+        let Some(UoView::Bas(b)) = v.uo.as_mut() else {
+            unreachable!()
+        };
+        b.rank = 1;
+        let ours = [-2000.0, 0.0, -176.0];
+        let mine = &mut b.bases[0];
+        mine.breached = true;
+        mine.planted = true;
+        mine.blows_in = Some(50.0);
+        mine.charge = Some(BombView {
+            origin: ours,
+            aim: [-2000.0, 0.0, -160.0],
+        });
+        v.origin = [2500.0, 0.0, 0.0];
+        assert_eq!(Bot::new("allies", true, 1).goal(&v), Goal::To(ours));
+        // 4500 units off, 30 s left: no time for the run and the hold.
+        let Some(UoView::Bas(b)) = v.uo.as_mut() else {
+            unreachable!()
+        };
+        b.bases[0].blows_in = Some(30.0);
+        let late = Bot::new("allies", true, 1).objective_target(&v);
+        assert!(!matches!(late, Some(ObjTarget::Defuse { .. })), "too late");
+        let Some(UoView::Bas(b)) = v.uo.as_mut() else {
+            unreachable!()
+        };
+        b.bases[0].blows_in = Some(50.0);
+        let calm = Bot::new("allies", false, 1);
+        assert_eq!(calm.goal(&v), Goal::To([300.0, 200.0, 8.0]), "attacks on");
+        v.origin = [-1000.0, 0.0, 0.0];
+        assert_eq!(calm.goal(&v), Goal::To(ours), "near");
+    }
+
+    /// A launcher the body comes no nearer to is passed over.
+    #[test]
+    fn a_launcher_out_of_reach_is_passed_over() {
+        let mut bot = Bot::new("allies", false, 1);
+        let v = bas_view();
+        for _ in 0..FETCH_STALL_TICKS + 1 {
+            bot.think(&v);
+        }
+        assert_ne!(bot.goal(&v), Goal::To([300.0, 200.0, 8.0]));
+    }
+
+    /// Empty hands whose last weapon a pickup swapped away ask for one the
+    /// bot still carries.
+    #[test]
+    fn empty_hands_ask_for_a_weapon_still_carried() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        bot.think(&v);
+        v.weapon = 0;
+        v.weapons_held = 1 << 20;
+        v.gun = Some(20);
+        assert_eq!(bot.think(&v).weapon, 20);
+    }
+
+    /// A spent launcher in hand and a spent pistol: the gun comes out.
+    #[test]
+    fn a_spent_launcher_and_pistol_hand_over_to_the_gun() {
+        let (mut bot, mut v) = engaged(21);
+        v.weapon = 20;
+        v.weapons_held |= (1 << 20) | (1 << 2);
+        v.pistol = Some(2);
+        v.clip = 0;
+        v.loaded = 1 << 10;
+        v.gun = Some(10);
+        assert_eq!(bot.think(&v).weapon, 10);
+    }
+
+    /// With nothing left to fire, a `bas` bot fetches the nearest weapon
+    /// lying within `DRY_FETCH`, even from its charge's room, and asks for
+    /// no `kill` while it does; with none in reach it uses `kill`.
+    #[test]
+    fn a_dry_bas_bot_fetches_a_weapon_before_it_kills_itself() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = bas_view();
+        let charge = [2000.0, 0.0, -176.0];
+        let b = their_base(&mut v);
+        b.breached = true;
+        b.planted = true;
+        b.blows_in = Some(50.0);
+        b.charge = Some(BombView {
+            origin: charge,
+            aim: [2000.0, 0.0, -160.0],
+        });
+        v.origin = [1900.0, 0.0, -176.0];
+        v.gun = None;
+        v.rocket = None;
+        v.pistol = None;
+        v.weapon = 0;
+        v.loaded = 0;
+        assert_eq!(bot.goal(&v), Goal::To([2100.0, 50.0, 8.0]), "the launcher");
+        let Some(UoView::Bas(b)) = v.uo.as_mut() else {
+            unreachable!()
+        };
+        b.guns.push([1800.0, 40.0, -176.0]);
+        assert_eq!(bot.goal(&v), Goal::To([1800.0, 40.0, -176.0]), "the gun");
+        for _ in 0..DRY_TICKS + 10 {
+            bot.think(&v);
+            assert!(!bot.take_kill(), "a kill while fetching");
+        }
+        let Some(UoView::Bas(b)) = v.uo.as_mut() else {
+            unreachable!()
+        };
+        b.guns.clear();
+        b.launchers.clear();
+        let killed = (0..DRY_TICKS + 10).any(|_| {
+            bot.think(&v);
+            bot.take_kill()
+        });
+        assert!(killed, "nothing in reach");
+    }
+
+    /// Shooting, with only a rocket left, a `bas` bot that has given up on
+    /// an enemy it cannot fire at fetches a gun lying near, never a
+    /// launcher; before it gives up it fights, and one that does not shoot
+    /// keeps to its objective.
+    #[test]
+    fn a_bas_bot_with_only_a_rocket_fetches_a_gun_off_a_futile_enemy() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = bas_view();
+        v.origin = [1900.0, 0.0, -176.0];
+        v.gun = None;
+        v.pistol = Some(2);
+        v.rocket = Some(5);
+        v.weapon = 5;
+        v.loaded = 1 << 5;
+        let gun = [1800.0, 40.0, -176.0];
+        let Some(UoView::Bas(b)) = v.uo.as_mut() else {
+            unreachable!()
+        };
+        b.guns.push(gun);
+        let fetches = |bot: &Bot, v: &BotView| matches!(bot.objective_target(v), Some(ObjTarget::Pickup { from, .. }) if from == gun);
+        assert!(!fetches(&bot, &v), "no enemy given up on");
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [1950.0, 0.0, -136.0],
+            velocity: [0.0; 3],
+        });
+        assert!(!fetches(&bot, &v), "in the fight");
+        for _ in 0..FUTILE_TICKS {
+            bot.think(&v);
+        }
+        assert!(bot.ignores(3));
+        v.enemy = None;
+        assert!(fetches(&bot, &v), "the gun");
+        let Some(UoView::Bas(b)) = v.uo.as_mut() else {
+            unreachable!()
+        };
+        b.guns.clear();
+        assert!(
+            !matches!(bot.objective_target(&v), Some(ObjTarget::Pickup { .. })),
+            "no launcher"
+        );
+        let mut calm = Bot::new("allies", false, 1);
+        calm.ignored = Some((3, IGNORE_TICKS));
+        let Some(UoView::Bas(b)) = v.uo.as_mut() else {
+            unreachable!()
+        };
+        b.guns.push(gun);
+        assert!(!fetches(&calm, &v), "not shooting");
+    }
+
+    /// The planter holds the room of its charge against the defuse while
+    /// the clock has time on it, and gets out of the blast before it goes.
+    #[test]
+    fn a_bas_planter_holds_its_charge_then_clears_the_blast() {
+        let bot = Bot::new("allies", false, 1);
+        let mut v = bas_view();
+        let charge = [2000.0, 0.0, -176.0];
+        let b = their_base(&mut v);
+        b.breached = true;
+        b.planted = true;
+        b.blows_in = Some(30.0);
+        b.charge = Some(BombView {
+            origin: charge,
+            aim: [2000.0, 0.0, -160.0],
+        });
+        assert_eq!(bot.goal(&v), Goal::To(charge), "out of the room");
+        v.origin = [1900.0, 0.0, -176.0];
+        assert_eq!(bot.goal(&v), Goal::Hold, "in the room, on guard");
+        their_base(&mut v).blows_in = Some(BAS_CLEAR_S);
+        assert_eq!(bot.goal(&v), Goal::Away(charge), "inside the blast");
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [1800.0, 0.0, -150.0],
+            velocity: [0.0; 3],
+        });
+        assert_eq!(bot.goal(&v), Goal::Away(charge), "a fight in the blast");
+        v.enemy = None;
+        v.origin = [1400.0, 0.0, 0.0];
+        assert_eq!(bot.goal(&v), Goal::Hold, "clear of it");
+    }
+
+    /// A fight inside the blast of a charge about to go: the gun stays on
+    /// the enemy, the keys run the graph's way out.
+    #[test]
+    fn a_fight_in_a_charges_blast_keeps_running_out() {
+        let (mut bot, mut v) = engaged(21);
+        v.uo = bas_view().uo;
+        let b = their_base(&mut v);
+        b.breached = true;
+        b.planted = true;
+        b.blows_in = Some(8.0);
+        b.charge = Some(BombView {
+            origin: [50.0, 0.0, 0.0],
+            aim: [50.0, 0.0, 16.0],
+        });
+        v.waypoint = Some([-300.0, 0.0, 64.0]);
+        for _ in 0..20 {
+            let cmd = bot.think(&v);
+            let yaw = (cmd.angles[1] + v.delta_angles[1]) as f32 / ANGLE2SHORT;
+            let way = yaw + (-(cmd.right as f32)).atan2(cmd.forward as f32).to_degrees();
+            assert!(cmd.forward != 0 || cmd.right != 0, "keys down");
+            assert!(yaw_diff(way, 180.0).abs() < 45.0, "runs west, not {way}");
+            assert_eq!(cmd.buttons & msg::BUTTON_ADS, 0);
+            // On the move, or the stall check sends it a random way.
+            v.origin[0] -= 10.0;
+        }
+    }
 }
