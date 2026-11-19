@@ -410,7 +410,7 @@ vcod:
 
 - The sim moves in the frame's spawn pass, after the spawning thread, so
   the `spawn` builtin runs the same think on a fresh sim (the client's
-  last cmd mirrored into `GameHost::client_last_cmd`) and writes and
+  last cmd mirrored into `HostClient::last_cmd`) and writes and
   links that origin.
 - `ClientSim::spawn_cmd` runs the client's last cmd under 1.5's and UO's
   rules, a 1.5 spawn starts with the body on the ground, and

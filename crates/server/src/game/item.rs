@@ -540,10 +540,10 @@ pub fn restore_pushed(host: &mut GameHost, cx: &mut Cx, id: EntId, at: Vec3) {
 
 /// The player as the pickup arithmetic sees it, off the host's mirrors.
 pub fn inventory(host: &GameHost, slot: usize) -> Inventory {
-    let v = host.client_vitals[slot];
-    let a = host.client_ammo[slot];
+    let v = host.clients[slot].vitals;
+    let a = host.clients[slot].ammo;
     Inventory {
-        weapons: host.client_weapons[slot],
+        weapons: host.clients[slot].weapons,
         ammo: a.ammo,
         clip: a.clip,
         health: v.health,
@@ -555,10 +555,10 @@ pub fn inventory(host: &GameHost, slot: usize) -> Inventory {
 /// What a pickup or a drop changed, back onto the host: the weapons and
 /// health directly, the ammo as ops for the sim.
 pub fn write_back(host: &mut GameHost, slot: usize, before: &Inventory, after: &Inventory) {
-    host.client_weapons[slot] = after.weapons;
+    host.clients[slot].weapons = after.weapons;
     // CoD2's `BG_TakePlayerWeapon` (Mac 0x7bec4) empties the hand when it
     // takes the weapon in it; 1.1's leaves `ps.weapon` for pmove.
-    let w = &mut host.client_weapons[slot];
+    let w = &mut host.clients[slot].weapons;
     if host.profile.items.take_empties_hand && w.current != 0 && !w.holds(w.current.into()) {
         w.current = 0;
     }
@@ -582,7 +582,7 @@ pub fn write_back(host: &mut GameHost, slot: usize, before: &Inventory, after: &
             );
         }
     }
-    host.client_vitals[slot].health = after.health;
+    host.clients[slot].vitals.health = after.health;
 }
 
 /// Where a dropped weapon starts.
@@ -688,7 +688,7 @@ fn launch_off(
     let up = (f64::from(LAUNCH_UP) + f64::from(LAUNCH_UP_SPREAD) * crandom(host)) as f32;
     let velocity = Vec3::new(yaw.cos() * LAUNCH_SPEED, yaw.sin() * LAUNCH_SPEED, up);
     let mut origin = Vec3::from(origin_of(host, cx, player));
-    origin.z += host.client_height.get(slot).copied().unwrap_or(0.0) * 0.5;
+    origin.z += host.clients.get(slot).map(|c| c.height).unwrap_or(0.0) * 0.5;
     launch(host, cx, index, origin, velocity, Some(slot as u8))
 }
 
@@ -881,7 +881,7 @@ fn finish_drop(
 /// with the item's box so it never starts inside a wall. `None` without the
 /// model, the animtree or the paks.
 fn tag_start(host: &mut GameHost, slot: usize, tag: &str) -> Option<Vec3> {
-    let body = host.client_dobjs.get(slot)?.clone()?;
+    let body = host.clients.get(slot).map(|c| &c.dobj)?.clone()?;
     let world = host.world.clone()?;
     let at = body.origin + crate::game::link::client_bone(host, slot, tag)?.0;
     let centre = body.origin + (body.mins + body.maxs) * 0.5;
@@ -957,8 +957,8 @@ pub fn activate_ent(
         .ents
         .handle(slot as u32)
         .map_or([0.0; 3], |c| origin_of(host, cx, c));
-    let grenade_ms = host.client_grenade_ms.get(slot).copied().unwrap_or(0);
-    let on_ground = host.client_on_ground.get(slot).copied().unwrap_or(false);
+    let grenade_ms = host.clients.get(slot).map(|c| c.grenade_ms).unwrap_or(0);
+    let on_ground = host.clients.get(slot).map(|c| c.on_ground).unwrap_or(false);
     // The walk over `muzzle ± (192, 192, 96)` under mask 0x200000, in the
     // tree's order (0x4f224..0x4f237), which the stable score sort keeps
     // for ties; the centre is the link's `(absmin + absmax) * 0.5`.
@@ -1124,7 +1124,10 @@ pub fn touch(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, touched: 
                 (w, rest.split_once(' ').map_or("", |(_, i)| i))
             });
             let name = crate::game::say::clean_name(
-                host.client_names.get(slot).map_or("", String::as_str),
+                host.clients
+                    .get(slot)
+                    .map(|c| &c.name)
+                    .map_or("", String::as_str),
             );
             format!("{word};0;{slot};{name};{item}")
         };
@@ -1491,7 +1494,7 @@ mod tests {
             count: 400,
             clip: 15,
         };
-        host.client_height[0] = 70.0;
+        host.clients[0].height = 70.0;
         let id = vm.with_cx(|cx| {
             let c = host.ents.spawn_client(cx, 0, None).unwrap();
             for (name, v) in [
@@ -1639,9 +1642,9 @@ mod tests {
         let (mut vm, mut host) = fixture();
         host.weapons = std::rc::Rc::new(crate::game::pickup::tests_table());
         let colt = crate::defs::V1.weapon_index("colt_mp").unwrap();
-        host.client_weapons[0].give(colt, 3);
-        host.client_vitals[0].max_health = 100;
-        host.client_vitals[0].health = 40;
+        host.clients[0].weapons.give(colt, 3);
+        host.clients[0].vitals.max_health = 100;
+        host.clients[0].vitals.health = 40;
         host.level_time_ms = 1000;
         let (weapon, health, plain) = vm.with_cx(|cx| {
             host.ents.spawn_client(cx, 0, None).unwrap();
@@ -1672,7 +1675,7 @@ mod tests {
         vm.with_cx(|cx| {
             touch(&mut host, cx, weapon, 0, true);
             touch(&mut host, cx, health, 0, true);
-            host.client_vitals[0].health = 40;
+            host.clients[0].vitals.health = 40;
             touch(&mut host, cx, plain, 0, true);
         });
         let taken = |host: &GameHost, id: EntId| host.ents.get(id).unwrap().item.unwrap().taken;

@@ -800,7 +800,11 @@ pub fn log_printf(host: &mut crate::game::host::GameHost, text: String) {
 /// A client's `I_CleanStr`'d name and GUID, as `G_Say` and the weapon
 /// pickup's log lines read them (`pers.netname`, `SV_GetGuid`).
 pub fn log_client(host: &crate::game::host::GameHost, slot: usize) -> (String, String) {
-    let name = host.client_names.get(slot).map_or("", String::as_str);
+    let name = host
+        .clients
+        .get(slot)
+        .map(|c| &c.name)
+        .map_or("", String::as_str);
     let guid = match &host.ext {
         crate::game::host::HostExt::Cod4(c) => c.clients.get(slot).map(|c| c.guid.clone()),
         _ => None,

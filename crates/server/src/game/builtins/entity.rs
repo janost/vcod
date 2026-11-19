@@ -332,7 +332,7 @@ fn client_spawn(
     for (notified, other) in host.impacts(slot, &touched) {
         cx.notify(Target::Entity(notified), touch, vec![other]);
     }
-    host.client_prone_cone[slot] = cone;
+    host.clients[slot].prone_cone = cone;
     let origin_field = cx.intern_folded("origin");
     host.set_field(cx, id, origin_field, Value::Vector(moved))?;
     // `SetClientViewAngle` writes the spot's angles (0x4209f); a playing
@@ -346,7 +346,7 @@ fn client_spawn(
     let angles_field = cx.intern_folded("angles");
     host.set_field(cx, id, angles_field, Value::Vector(read))?;
 
-    host.client_weapons[slot] = crate::weapons::PlayerWeapons::default();
+    host.clients[slot].weapons = crate::weapons::PlayerWeapons::default();
     if let Some(c4) = host.as_cod4_mut() {
         c4.clients[slot].spawned();
         // 1.7's `ClientSpawn` writes the playerstate's `pm_type` in the call,
@@ -354,7 +354,7 @@ fn client_spawn(
         // copy here was the last move's, a dead body's 7 at a round's start
         // (bot-objectives.md 12.4).
         if mode == SpawnMode::Player {
-            host.client_pm_type[slot] = 0;
+            host.clients[slot].pm_type = 0;
         }
     }
     // The `gclient_t` memset (0x42804) takes the client's objective copy
@@ -373,12 +373,12 @@ fn client_spawn(
     // the loadout, which the spawn pass then keeps (cod11-gsc-object-model.md
     // 20, "The spawn's memset and the weapon op queue").
     host.weapon_op(slot, crate::game::host::WeaponOp::TakeAll);
-    host.client_shellshock[slot] = [0; 3];
+    host.clients[slot].shellshock = [0; 3];
     // `ClientSpawn` never writes `ent->health` (combat doc 5.6): a spawn in
     // any mode keeps what the entity held, a spectator spawned after a death
     // its negative health, until the gametype writes it. `player_die` is
     // the `die` pointer again (0x42753).
-    let v = &mut host.client_vitals[slot];
+    let v = &mut host.clients[slot].vitals;
     v.dead = false;
     // `ClientSpawn` clears `takedamage` (0x4273c) and its own
     // `ClientEndFrame` call sets it again for a playing client.
@@ -395,7 +395,7 @@ fn client_spawn(
     let playing = mode == SpawnMode::Player;
     // `ClientSpawn` writes the standing `playerMaxs` (0x427a5) and its think
     // copies pmove's box over it (gsc object model doc 22.3).
-    host.client_height[slot] = height;
+    host.clients[slot].height = height;
     host.link_client(slot, moved, host.client_box(slot), contents, playing);
     host.move_client_body(slot, playing.then_some(moved));
     host.client_spawns.push(SpawnRequest {
@@ -456,7 +456,7 @@ fn spawn_think(
     f32,
     Vec<u32>,
 ) {
-    let last = host.client_last_cmd[slot];
+    let last = host.clients[slot].last_cmd;
     let mut sim = crate::spectate::ClientSim::spectator(origin, yaw_deg, last.angles);
     sim.ps.rules = vcod_common::pmove::MoveRules::for_protocol(host.defs.proto);
     match mode {
@@ -927,7 +927,7 @@ pub fn is_alive(
     };
     let id = *id;
     let alive = match host.ents.get(id) {
-        Some(e) if e.client.is_some() => host.client_vitals[id.0 as usize].health > 0,
+        Some(e) if e.client.is_some() => host.clients[id.0 as usize].vitals.health > 0,
         Some(_) => {
             let health = cx.intern_folded("health");
             matches!(host.get_field(cx, id, health), Value::Int(n) if n > 0)
@@ -1167,7 +1167,7 @@ mod tests {
             let state = cx.intern_folded("sessionstate");
             let playing = Value::String(cx.intern_exact("playing"));
             host.set_field(cx, e, state, playing).unwrap();
-            host.client_weapons[2].give(4, 3);
+            host.clients[2].weapons.give(4, 3);
 
             let at = Value::Vector([10.0, 20.0, 30.0]);
             let angles = Value::Vector([0.0, 90.0, 0.0]);
@@ -1180,7 +1180,7 @@ mod tests {
                 (2, [10.0, 20.0, 30.0], 90.0, SpawnMode::Player)
             );
             assert_eq!(
-                host.client_weapons[2],
+                host.clients[2].weapons,
                 crate::weapons::PlayerWeapons::default()
             );
             let origin = cx.intern_folded("origin");
@@ -1190,7 +1190,7 @@ mod tests {
             // `sessionstate` string is the whole of what tells them apart
             // (map-cycle doc, 6.1). None of the three writes health
             // (`probe_victims`, combat doc 5.6).
-            host.client_vitals[2].health = -20;
+            host.clients[2].vitals.health = -20;
             for (state_name, mode) in [
                 ("spectator", SpawnMode::Spectator),
                 ("intermission", SpawnMode::Intermission),
@@ -1199,7 +1199,7 @@ mod tests {
                 host.set_field(cx, e, state, v).unwrap();
                 spawn(&mut host, cx, t, &[at, angles]).unwrap();
                 assert_eq!(host.client_spawns.last().unwrap().mode, mode);
-                assert_eq!(host.client_vitals[2].health, -20);
+                assert_eq!(host.clients[2].vitals.health, -20);
             }
 
             // No receiver is still the free function.
@@ -1715,12 +1715,12 @@ mod tests {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
             let player = host.ents.spawn_client(cx, 0, None).unwrap();
-            host.client_vitals[0].health = 100;
+            host.clients[0].vitals.health = 100;
             assert_eq!(
                 is_alive(&mut host, cx, None, &[Value::Entity(player)]).unwrap(),
                 Value::Int(1)
             );
-            host.client_vitals[0].health = 0;
+            host.clients[0].vitals.health = 0;
             assert_eq!(
                 is_alive(&mut host, cx, None, &[Value::Entity(player)]).unwrap(),
                 Value::Int(0)
@@ -2097,7 +2097,7 @@ mod tests {
             assert_eq!(touching(&mut host, cx, zone), Ok(Value::Int(1)), "standing");
             assert_eq!(touching(&mut host, cx, b), Ok(Value::Int(1)), "standing");
             for stance in [Stance::Crouch, Stance::Prone] {
-                host.client_height[0] = stance.height();
+                host.clients[0].height = stance.height();
                 assert_eq!(
                     touching(&mut host, cx, zone),
                     Ok(Value::Int(0)),
@@ -2105,7 +2105,7 @@ mod tests {
                 );
                 assert_eq!(touching(&mut host, cx, b), Ok(Value::Int(0)), "{stance:?}");
             }
-            host.client_height[0] = HEIGHT_STAND;
+            host.clients[0].height = HEIGHT_STAND;
             assert_eq!(touching(&mut host, cx, zone), Ok(Value::Int(1)));
         });
     }

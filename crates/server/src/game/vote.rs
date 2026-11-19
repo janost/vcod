@@ -305,8 +305,9 @@ impl GameHost {
 
     /// A slot the game counts as `CON_CONNECTED`: in the world.
     fn in_world(&self, slot: usize) -> bool {
-        self.client_roster
+        self.clients
             .get(slot)
+            .map(|c| &c.roster)
             .and_then(Option::as_ref)
             .is_some_and(|r| r.active)
     }
@@ -318,8 +319,8 @@ impl GameHost {
     /// bots, which never vote and would hold every vote short of a pass.
     fn voting_clients(&mut self, cx: &mut Cx) -> i32 {
         let mut n = 0;
-        for slot in 0..self.client_roster.len() {
-            let bot = self.client_roster[slot].is_some_and(|r| r.bot);
+        for slot in 0..self.clients.len() {
+            let bot = self.clients[slot].roster.is_some_and(|r| r.bot);
             if self.in_world(slot) && !bot && !self.is_spectator(cx, slot) {
                 n += 1;
             }
@@ -328,7 +329,10 @@ impl GameHost {
     }
 
     fn netname(&self, slot: usize) -> &str {
-        self.client_names.get(slot).map_or("", String::as_str)
+        self.clients
+            .get(slot)
+            .map(|c| &c.name)
+            .map_or("", String::as_str)
     }
 
     /// `Scr_GetGameTypeNameForScript` for a name `Scr_IsValidGameType`
@@ -414,7 +418,11 @@ impl GameHost {
         if crate::game::builtins::cvar::atoi(self.cvars.get("g_allowVote")) == 0 {
             return reply("e \"GAME_VOTINGNOTENABLED\"");
         }
-        let connected = self.client_roster.iter().flatten().count();
+        let connected = self
+            .clients
+            .iter()
+            .filter_map(|c| c.roster.as_ref())
+            .count();
         if connected < self.profile.votes.min_connected {
             return reply("e \"GAME_VOTINGNOTENOUGHPLAYERS\"");
         }
@@ -478,9 +486,9 @@ impl GameHost {
         self.vote.end_ms = now.wrapping_add(VOTE_MS);
         self.vote.yes = 1;
         self.vote.no = 0;
-        self.client_voted.fill(false);
-        if let Some(v) = self.client_voted.get_mut(slot) {
-            *v = true;
+        self.clients.iter_mut().for_each(|c| c.voted = false);
+        if let Some(c) = self.clients.get_mut(slot) {
+            c.voted = true;
         }
         let time = match self.profile.votes.time {
             VoteTime::EndAndServerId => {
@@ -633,7 +641,7 @@ impl GameHost {
             return;
         }
         self.client_commands.push((victim, format!("m {attacker}")));
-        if let Some(c) = self.client_complaints.get_mut(victim) {
+        if let Some(c) = self.clients.get_mut(victim).map(|c| &mut c.complaint) {
             c.against = attacker as i32;
             c.end_ms = self.level_time_ms.wrapping_add(COMPLAINT_MS);
         }
@@ -646,12 +654,17 @@ impl GameHost {
     /// since left can take the clear.
     pub fn complaints_about_gone(&mut self, gone: usize) {
         let v15 = self.profile.votes.complaints_connected_only;
-        let hit = (0..self.client_complaints.len()).find(|&slot| {
-            self.client_complaints[slot].against == gone as i32
-                && (!v15 || self.client_roster.get(slot).is_some_and(Option::is_some))
+        let hit = (0..self.clients.len()).find(|&slot| {
+            self.clients[slot].complaint.against == gone as i32
+                && (!v15
+                    || self
+                        .clients
+                        .get(slot)
+                        .map(|c| &c.roster)
+                        .is_some_and(Option::is_some))
         });
         if let Some(slot) = hit {
-            let c = &mut self.client_complaints[slot];
+            let c = &mut self.clients[slot].complaint;
             c.against = -1;
             c.end_ms = 0;
             self.client_commands.push((slot, "m -2".into()));
@@ -664,7 +677,7 @@ impl GameHost {
     /// (`complaint_drop`); short of it they are warned with the count
     /// left. `None` when the window is shut, which `vote` then closes.
     fn complain(&mut self, slot: usize, arg: &str) -> Option<Sends> {
-        let c = *self.client_complaints.get(slot)?;
+        let c = *self.clients.get(slot).map(|c| &c.complaint)?;
         if c.end_ms.wrapping_sub(self.level_time_ms) <= 0 {
             return None;
         }
@@ -676,15 +689,15 @@ impl GameHost {
         let Some(target) = target else {
             return Some(Vec::new());
         };
-        self.client_complaints[slot].against = -1;
-        self.client_complaints[slot].end_ms = -1;
+        self.clients[slot].complaint.against = -1;
+        self.clients[slot].complaint.end_ms = -1;
         let arg: String = arg.chars().take(63).collect();
         if !is_yes(&arg) {
             return Some(vec![(Some(slot), "m -2".into())]);
         }
-        self.client_complaints[target].count += 1;
+        self.clients[target].complaint.count += 1;
         let limit = atoi(self.cvars.get("g_complaintlimit"));
-        let left = limit.wrapping_sub(self.client_complaints[target].count);
+        let left = limit.wrapping_sub(self.clients[target].complaint.count);
         if left <= 0 {
             self.complaint_drop = Some(target);
             return Some(vec![(Some(slot), "m -1".into())]);
@@ -709,7 +722,7 @@ impl GameHost {
         {
             return sends;
         }
-        if let Some(c) = self.client_complaints.get_mut(slot) {
+        if let Some(c) = self.clients.get_mut(slot).map(|c| &mut c.complaint) {
             c.against = -1;
             c.end_ms = -1;
         }
@@ -717,14 +730,14 @@ impl GameHost {
         if self.vote.end_ms == 0 {
             return reply("GAME_NOVOTEINPROGRESS");
         }
-        if self.client_voted.get(slot).copied().unwrap_or(false) {
+        if self.clients.get(slot).map(|c| c.voted).unwrap_or(false) {
             return reply("GAME_VOTEALREADYCAST");
         }
         if self.is_spectator(cx, slot) {
             return reply("GAME_NOSPECTATORVOTE");
         }
-        if let Some(v) = self.client_voted.get_mut(slot) {
-            *v = true;
+        if let Some(c) = self.clients.get_mut(slot) {
+            c.voted = true;
         }
         // `trap_Argv` into a 64-byte buffer.
         let arg: String = arg.chars().take(63).collect();
@@ -845,11 +858,11 @@ mod tests {
                 let value = Value::String(cx.intern_exact(team));
                 host.set_field(cx, ent, atom, value).unwrap();
             });
-            host.client_roster[slot] = Some(RosterSlot {
+            host.clients[slot].roster = Some(RosterSlot {
                 active: true,
                 ..Default::default()
             });
-            host.client_names[slot] = ["Able", "Baker", "Charlie", "Dog"][slot].into();
+            host.clients[slot].name = ["Able", "Baker", "Charlie", "Dog"][slot].into();
         }
         host
     }
@@ -1094,7 +1107,7 @@ mod tests {
         let mut vm = vcod_gsc::Vm::new();
         let mut host = host(&mut vm, &["axis", "allies", "axis"]);
         for slot in 1..3 {
-            host.client_roster[slot].as_mut().unwrap().bot = true;
+            host.clients[slot].roster.as_mut().unwrap().bot = true;
         }
         call(&mut vm, &mut host, 0, "callvote map_restart");
         assert_eq!(check(&mut vm, &mut host), ["e \"GAME_VOTEPASSED\""]);
@@ -1174,7 +1187,7 @@ mod tests {
             for slot in 1..4 {
                 host.allow_complaint(slot, 0);
             }
-            host.client_roster[1] = None;
+            host.clients[1].roster = None;
             host.client_commands.clear();
             host.complaints_about_gone(0);
             let cleared = if v15 { 2 } else { 1 };
@@ -1183,7 +1196,7 @@ mod tests {
                 [(cleared, "m -2".into())],
                 "1.5 {v15}"
             );
-            assert_eq!(host.client_complaints[3].against, 0, "1.5 {v15}");
+            assert_eq!(host.clients[3].complaint.against, 0, "1.5 {v15}");
         }
     }
 

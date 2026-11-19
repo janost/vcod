@@ -98,8 +98,9 @@ impl Cod2Level {
         let voted = self
             .rt
             .host
-            .client_voted
+            .clients
             .get(slot)
+            .map(|c| &c.voted)
             .copied()
             .unwrap_or(false);
         let own_ef = if voted { super::cod2_cmds::EF_VOTED } else { 0 };
@@ -121,7 +122,7 @@ impl Cod2Level {
                 None => self.wire_playerstate(f.target, f.team)?,
             };
             let (pm, ef) = (ps2!("pm_flags"), ps2!("eFlags"));
-            let mask = self.rt.host.client_no_spectate[slot];
+            let mask = self.rt.host.clients[slot].no_spectate;
             let (pm_flags, e_flags) =
                 Cod2Level::follow_flags(w.f[pm], w.f[ef], own_ef, f.forced, mask);
             w.f[pm] = pm_flags;
@@ -141,7 +142,11 @@ impl Cod2Level {
         set(ps2!("viewlocked_entNum"), g.viewlocked_ent);
         set(ps2!("cursorHint"), g.hint as u32);
         set(ps2!("cursorHintString"), g.hint_string as u32);
-        let weapons = host.client_weapons.get(slot).copied().unwrap_or_default();
+        let weapons = host
+            .clients
+            .get(slot)
+            .map(|c| c.weapons)
+            .unwrap_or_default();
         set(ps2!("weapon"), u32::from(weapons.current));
         set(ps2!("weapons[0]"), weapons.held as u32);
         set(ps2!("weapons[1]"), (weapons.held >> 32) as u32);
@@ -163,7 +168,7 @@ impl Cod2Level {
         );
         set(
             ps2!("viewmodelIndex"),
-            host.client_viewmodel.get(slot).copied().unwrap_or(0) as u32,
+            host.clients.get(slot).map(|c| c.viewmodel).unwrap_or(0) as u32,
         );
         // `ClientEndFrame`'s use pass (0x8121bc6, the gunner's hint above)
         // runs in its playing arm only: a spectator keeps `ClientSpawn`'s
@@ -190,7 +195,7 @@ impl Cod2Level {
         set(ps2!("damageYaw"), p.damage_yaw as u32 & 0xff);
         set(ps2!("damagePitch"), p.damage_pitch as u32 & 0xff);
         set(ps2!("damageCount"), p.damage_count as u32);
-        if let Some(a) = host.client_ammo.get(slot) {
+        if let Some(a) = host.clients.get(slot).map(|c| &c.ammo) {
             for (to, from) in w.ammo.iter_mut().zip(a.ammo) {
                 *to = i32::from(from);
             }
@@ -219,7 +224,7 @@ impl Cod2Level {
         let (archived, current) = hud_elems(host, slot, team);
         w.hud_archival = archived;
         w.hud_current = current;
-        if let Some(copy) = host.client_objectives.get(slot) {
+        if let Some(copy) = host.clients.get(slot).map(|c| &c.objectives) {
             for (dst, o) in w.objectives.iter_mut().zip(copy) {
                 *dst = objective_wire(o);
             }
@@ -308,8 +313,9 @@ impl Cod2Level {
         let weapon = self
             .rt
             .host
-            .client_weapons
+            .clients
             .get(slot)
+            .map(|c| &c.weapons)
             .map_or(0, |w| w.current);
         seti(es2!("weapon"), i32::from(weapon));
         // The prone pitches; the lerp across a stance change is not done

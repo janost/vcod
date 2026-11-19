@@ -1054,8 +1054,8 @@ A swap's drop is placed exactly where the replaced item lay
 than the world's 1022 (section 9).
 
 The pickup arithmetic never touches a player entity's fields directly.
-`item::inventory` copies the host's `client_weapons`, `client_ammo` and
-`client_vitals` mirrors into an `Inventory`, `touch_item` mutates a copy, and
+`item::inventory` copies the host's `HostClient::weapons`, `HostClient::ammo` and
+`HostClient::vitals` mirrors into an `Inventory`, `touch_item` mutates a copy, and
 `write_back` copies weapons and health onto the host at once and queues every
 changed ammo or clip count as a `WeaponOp` and the event as a `SimOp`.
 `GameHost::weapon_op` moves the host's ammo mirror as it queues, so a
@@ -1565,9 +1565,9 @@ of the `origin` and `angles` fields. `CollisionWorld::item_trace` is the
 capsule sweep with the static models, and the loader keeps world brushes
 carrying 0x80000000 as volumes for `point_contents`.
 
-`dropItem`'s weapon arm poses the dropper's rig off the `client_dobjs`
-mirror, which `Server` refreshes beside `client_bodies` and before every
-damage callback, and which, unlike `client_bodies`, keeps a dead player's
+`dropItem`'s weapon arm poses the dropper's rig off the `HostClient::dobj`
+mirror, which `Server` refreshes beside `HostClient::body` and before every
+damage callback, and which, unlike `HostClient::body`, keeps a dead player's
 pose, so a death drop leaves from the hand. Without the rig, the animtree or
 the paks, the drop leaves from mid-height, `Drop_Weapon`'s own fallback.
 

@@ -63,7 +63,7 @@ impl GameHost {
     ) {
         let team = self.client_field(cx, speaker, "sessionteam");
         let team = team.as_deref().unwrap_or("");
-        let squad = self.client_squad.get(speaker).copied().unwrap_or(0);
+        let squad = self.clients.get(speaker).map(|c| c.squad).unwrap_or(0);
         let mode = match mode {
             SayMode::Team if !matches!(team, "axis" | "allies") => SayMode::All,
             // 1.5's `G_Say` (0x42dc9) sends a squad say from a speaker in
@@ -71,7 +71,12 @@ impl GameHost {
             SayMode::Squad if squad == 0 => SayMode::Team,
             m => m,
         };
-        let name = clean_name(self.client_names.get(speaker).map_or("", String::as_str));
+        let name = clean_name(
+            self.clients
+                .get(speaker)
+                .map(|c| &c.name)
+                .map_or("", String::as_str),
+        );
         // CoD4's `G_Say` (0x80ae962) logs a plain or team line before it
         // sends anything (`say;` 0x821957d, `sayteam;` 0x821958e); a tell
         // writes none (VERIFIED live, games_mp.log).
@@ -122,7 +127,13 @@ impl GameHost {
                 "(\u{14}GAME_DEAD\u{15})"
             };
             format!("\u{15}{side}{dead}")
-        } else if self.client_vitals.get(speaker).map_or(0, |v| v.health) < 1 {
+        } else if self
+            .clients
+            .get(speaker)
+            .map(|c| &c.vitals)
+            .map_or(0, |v| v.health)
+            < 1
+        {
             "\u{15}(\u{14}GAME_DEAD\u{15})".to_string()
         } else {
             "\u{15}".to_string()
@@ -161,12 +172,13 @@ impl GameHost {
             && crate::game::builtins::cvar::atoi(self.cvars.get("g_deadChat")) != 0;
         let recipients: Vec<usize> = match target {
             Some(t) => vec![t],
-            None => (0..self.client_roster.len()).collect(),
+            None => (0..self.clients.len()).collect(),
         };
         for slot in recipients {
             if !self
-                .client_roster
+                .clients
                 .get(slot)
+                .map(|c| &c.roster)
                 .copied()
                 .flatten()
                 .is_some_and(|r| r.active)
@@ -179,7 +191,7 @@ impl GameHost {
             // `InSameSquad` (1.5b 0x69987): the same team and the same squad.
             if mode == SayMode::Squad
                 && !(self.same_team(cx, speaker, slot)
-                    && self.client_squad.get(slot).copied() == Some(squad))
+                    && self.clients.get(slot).map(|c| c.squad) == Some(squad))
             {
                 continue;
             }
@@ -332,12 +344,12 @@ mod tests {
                 set(&mut host, cx, slot, "sessionstate", "playing");
                 id
             });
-            host.client_roster[slot] = Some(RosterSlot {
+            host.clients[slot].roster = Some(RosterSlot {
                 active: true,
                 ..Default::default()
             });
-            host.client_names[slot] = format!("^1p{slot}");
-            host.client_vitals[slot].health = 100;
+            host.clients[slot].name = format!("^1p{slot}");
+            host.clients[slot].vitals.health = 100;
         }
         host
     }
@@ -381,7 +393,7 @@ mod tests {
             set(&mut host, cx, 0, "sessionstate", "dead");
             set(&mut host, cx, 2, "sessionstate", "spectator");
         });
-        host.client_vitals[0].health = 0;
+        host.clients[0].vitals.health = 0;
         say(&mut vm, &mut host, 0, SayMode::All, "x");
         let dead = "h \"\u{15}\u{15}(\u{14}GAME_DEAD\u{15})p0^7: ^7x\"".to_string();
         assert_eq!(
@@ -456,7 +468,7 @@ mod tests {
         let mut vm = vcod_gsc::Vm::new();
         let mut host = host(&mut vm, &["axis", "allies"]);
         host.set_profile(&crate::game::profile::COD1_15);
-        host.client_names[0] = "vcod".into();
+        host.clients[0].name = "vcod".into();
         say(&mut vm, &mut host, 0, SayMode::All, "hi");
         let line = "h \"\u{15}\u{15}^9vcod^7: ^7hi\"".to_string();
         assert_eq!(
@@ -537,7 +549,7 @@ mod tests {
     fn a_client_not_yet_in_the_world_hears_nothing() {
         let mut vm = vcod_gsc::Vm::new();
         let mut host = host(&mut vm, &["allies", "allies"]);
-        host.client_roster[1] = Some(RosterSlot::default());
+        host.clients[1].roster = Some(RosterSlot::default());
         say(&mut vm, &mut host, 0, SayMode::All, "hi");
         assert_eq!(host.client_commands.len(), 1);
     }

@@ -486,7 +486,7 @@ mod tests {
         let rt = sv.game.module.script.as_mut().unwrap();
         rt.host.weapons = sv.game.module.weapon_table.clone();
         rt.host.precache_items_for_test(&["fraggrenade_mp"]);
-        rt.host.client_weapons[0] = held;
+        rt.host.clients[0].weapons = held;
         let c = sv.core.clients[0].as_mut().unwrap();
         let sim = c.sim.as_mut().unwrap();
         sim.ps.weapons_held = held.held;
@@ -535,7 +535,7 @@ mod tests {
             let thrown = rt.missiles().entities(sv.game.proto).next().is_some();
             if thrown {
                 assert!(
-                    !rt.host.client_weapons[0].holds(frag),
+                    !rt.host.clients[0].weapons.holds(frag),
                     "the spent frag was still held when its cmd's touch ran"
                 );
                 return;
@@ -797,7 +797,9 @@ mod tests {
             sv.tick(now);
             if sv.script_log().iter().any(|l| l.trim() == "regive") {
                 assert!(
-                    sv.game.module.script.as_ref().unwrap().host.client_weapons[0].holds(frag),
+                    sv.game.module.script.as_ref().unwrap().host.clients[0]
+                        .weapons
+                        .holds(frag),
                     "the frag the script gave back was taken again"
                 );
                 return;
@@ -852,8 +854,8 @@ mod tests {
         rt.host.weapons = table.clone();
         rt.host
             .precache_items_for_test(&["m1carbine_mp", "thompson_mp", "colt_mp"]);
-        rt.host.client_weapons[0] = held;
-        rt.host.client_vitals[0] = crate::game::host::Vitals {
+        rt.host.clients[0].weapons = held;
+        rt.host.clients[0].vitals = crate::game::host::Vitals {
             health: 100,
             max_health: 100,
             dead: false,
@@ -1097,8 +1099,8 @@ mod tests {
         let rt = sv.game.module.script.as_mut().unwrap();
         rt.host.weapons = sv.game.module.weapon_table.clone();
         rt.host.precache_items_for_test(&["fraggrenade_mp"]);
-        rt.host.client_weapons[0] = held;
-        rt.host.client_vitals[0] = crate::game::host::Vitals {
+        rt.host.clients[0].weapons = held;
+        rt.host.clients[0].vitals = crate::game::host::Vitals {
             health: 100,
             max_health: 100,
             dead: false,

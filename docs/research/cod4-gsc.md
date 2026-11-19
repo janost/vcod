@@ -2846,7 +2846,7 @@ VERIFIED (both consoles, 8.1's table).
   `updateClientNames`. VERIFIED (the zone's scripts). So on `sd` a rename
   shows from the next map on.
 - vcod: `Cod4Level::userinfo_changed` writes the name the scripts, chat
-  and snapshots' client states read (`GameHost::client_names`), under
+  and snapshots' client states read (`HostClient::name`), under
   `auto_change`, or under `manual_change` for a client not yet in the
   game, cleaned as above (`cod4::game_name`). The engine's copy (`status`,
   the log, the drop print) follows the userinfo at once, as retail's, cut

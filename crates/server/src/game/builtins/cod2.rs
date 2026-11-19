@@ -391,7 +391,7 @@ fn get_ammo_count(
     let Some(def) = host.weapons.get(index) else {
         return Ok(Value::Int(0));
     };
-    let a = &host.client_ammo[slot];
+    let a = &host.clients[slot].ammo;
     Ok(Value::Int(
         i32::from(a.ammo[def.ammo_index]) + i32::from(a.clip[def.clip_index]),
     ))
@@ -425,7 +425,7 @@ fn get_current_weapon(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
-    let index = host.client_weapons[slot].current as usize;
+    let index = host.clients[slot].weapons.current as usize;
     let name = host
         .weapon_name(index)
         .unwrap_or_else(|| "none".to_string());
@@ -588,7 +588,7 @@ fn set_normal_health(
     let is_client = host.ents.get(id).is_some_and(|e| e.client.is_some());
     let health = if is_client {
         let slot = id.0 as usize;
-        let max = host.client_vitals[slot].max_health;
+        let max = host.clients[slot].vitals.max_health;
         host.client_commands.push((slot, "I \"0\"".to_string()));
         (0.5 + max as f32 * f).floor() as i32
     } else {
@@ -702,7 +702,7 @@ fn switch_to_offhand(
     let Some(index) = host.weapon_index(&name) else {
         return Err(ErrorKind::Custom(format!("unknown weapon '{name}'")));
     };
-    if !host.client_weapons[slot].holds(index) {
+    if !host.clients[slot].weapons.holds(index) {
         return Ok(Value::Int(0));
     }
     host.client_commands.push((slot, format!("C {index}")));
@@ -772,16 +772,16 @@ fn give_weapon(
     let name = string_arg(cx, args, 0, "giveWeapon takes a weapon name")?;
     let had = host
         .weapon_index(&name)
-        .is_some_and(|i| host.client_weapons[slot].holds(i));
-    let before = host.client_weapons[slot];
-    let rounds = host.client_ammo[slot];
+        .is_some_and(|i| host.clients[slot].weapons.holds(i));
+    let before = host.clients[slot].weapons;
+    let rounds = host.clients[slot].ammo;
     super::client::give_weapon(host, cx, recv, args)?;
     let Some(index) = host.weapon_index(&name) else {
         return Ok(Value::Undefined);
     };
     let offhand = host.cod2().offhands.get(index - 1).copied().unwrap_or(0) != 0;
     let weapons = host.weapons.clone();
-    let w = &mut host.client_weapons[slot];
+    let w = &mut host.clients[slot].weapons;
     w.slots = before.slots;
     if !had
         && !offhand
@@ -831,7 +831,7 @@ fn give_weapon(
     }
     // A weapon the player lacked: `I "1"` after the give (0x80f9b8c,
     // cod2-protocol.md 15.5).
-    if !had && host.client_weapons[slot].holds(index) {
+    if !had && host.clients[slot].weapons.holds(index) {
         host.client_commands.push((slot, "I \"1\"".to_string()));
     }
     Ok(Value::Undefined)
@@ -858,7 +858,10 @@ pub(crate) fn give_offhand(host: &mut GameHost, slot: usize, index: usize) {
 
 /// `BG_WeaponAmmo` (Mac 0x7a8f4): the weapon's reserve and clip together.
 fn weapon_ammo(host: &GameHost, slot: usize, weapon: usize) -> i32 {
-    let (Some(def), Some(a)) = (host.weapons.get(weapon), host.client_ammo.get(slot)) else {
+    let (Some(def), Some(a)) = (
+        host.weapons.get(weapon),
+        host.clients.get(slot).map(|c| &c.ammo),
+    ) else {
         return 0;
     };
     i32::from(a.ammo[def.ammo_index]) + i32::from(a.clip[def.clip_index])
@@ -870,7 +873,7 @@ fn first_available_offhand(host: &GameHost, slot: usize, class: i32) -> Option<u
     let offhands = &host.cod2().offhands;
     (1..=offhands.len()).find(|&i| {
         offhands[i - 1] == class
-            && host.client_weapons[slot].holds(i)
+            && host.clients[slot].weapons.holds(i)
             && weapon_ammo(host, slot, i) != 0
     })
 }
@@ -1002,7 +1005,7 @@ fn finish_player_damage(
             );
         }
     }
-    let v = &mut host.client_vitals[slot];
+    let v = &mut host.clients[slot].vitals;
     // A demigod keeps one point.
     let damage = if flags & crate::game::cod2_cmds::FL_DEMI_GODMODE != 0 && v.health <= damage {
         v.health - 1
@@ -1124,7 +1127,7 @@ fn dead_yaw(host: &GameHost, slot: usize, attacker: Option<usize>) -> i32 {
     };
     let origin = |s: usize| -> Option<[f32; 3]> {
         let p = vcod_cod2::net::PROTOCOL_118.as_cod1_shim();
-        let e = host.client_entity_states.get(s)?.as_ref()?;
+        let e = host.clients.get(s).map(|c| &c.entity_state)?.as_ref()?;
         Some([0, 1, 2].map(|k| f32::from_bits(e.field_i32(p, &format!("pos.trBase[{k}]")) as u32)))
     };
     let (Some(to), Some(from)) = (origin(a), origin(slot)) else {
@@ -1149,7 +1152,7 @@ fn clone_player(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
-    let Some(state) = host.client_entity_states[slot].clone() else {
+    let Some(state) = host.clients[slot].entity_state.clone() else {
         return Ok(Value::Undefined);
     };
     let p = vcod_cod2::net::PROTOCOL_118.as_cod1_shim();

@@ -280,11 +280,15 @@ fn roster(
 /// [`roster`] onto the host, ahead of every script entry that can kill: the
 /// walk runs inside the VM, the moment the killed callback returns.
 pub(super) fn mirror_roster(clients: &[Option<Client>], rt: &mut script::ScriptRuntime) {
-    rt.host.client_roster = roster(clients).collect();
-    for (name, c) in rt.host.client_names.iter_mut().zip(clients) {
-        name.clear();
-        if let Some(c) = c {
-            name.push_str(&c.name);
+    rt.host.engine_slots = clients.len();
+    let mut roster = roster(clients);
+    for (slot, h) in rt.host.clients.iter_mut().enumerate() {
+        h.roster = roster.next().flatten();
+        if let Some(c) = clients.get(slot) {
+            h.name.clear();
+            if let Some(c) = c {
+                h.name.push_str(&c.name);
+            }
         }
     }
 }

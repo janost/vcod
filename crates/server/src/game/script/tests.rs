@@ -24,8 +24,8 @@ fn the_per_tick_ammo_copy_keeps_a_queued_op() {
     let mut clip = [0; NUM_AMMO];
     clip[3] = 2;
     rt.set_client_ammo(0, [0; NUM_AMMO], clip);
-    assert_eq!(rt.host.client_ammo[0].ammo[10], 400);
-    assert_eq!(rt.host.client_ammo[0].clip[3], 2, "slot 1's op leaked");
+    assert_eq!(rt.host.clients[0].ammo.ammo[10], 400);
+    assert_eq!(rt.host.clients[0].ammo.clip[3], 2, "slot 1's op leaked");
 }
 
 /// `probe_delete`'s measurement: an entity deleted in one frame is out of
@@ -526,7 +526,7 @@ fn a_carried_pers_is_back_on_the_client_the_next_level_connects() {
     before.reconnect_client(0, "vcod".into());
     assert_eq!(before.client_pers(0, "team").as_deref(), Some("axis"));
     // Something only the first level wrote, to show what does not carry.
-    before.host.client_vitals[0].health = 42;
+    before.host.clients[0].vitals.health = 42;
     let carry = before.take_carry();
 
     let mut after = ScriptRuntime::for_test_at(CALLBACK_SETUP, &src("allies"));
@@ -540,7 +540,7 @@ fn a_carried_pers_is_back_on_the_client_the_next_level_connects() {
     // The `gclient_t` itself does not carry: retail bzeroes it in
     // `ClientConnect` and the script-side `pers` is the whole of what
     // survives.
-    assert_eq!(after.host.client_vitals[0].health, 0);
+    assert_eq!(after.host.clients[0].vitals.health, 0);
 
     // The carry is spent by the connect that took it, so the next one
     // starts empty, which is every connect but a persisting
@@ -603,13 +603,13 @@ fn a_connect_into_a_used_slot_starts_with_no_vitals_or_spectate_mask() {
                level.alive = isAlive(self); }\n",
     );
     rt.reconnect_client(0, "first".into());
-    rt.host.client_vitals[0] = Vitals {
+    rt.host.clients[0].vitals = Vitals {
         health: 100,
         max_health: 100,
         dead: false,
         takedamage: true,
     };
-    rt.host.client_no_spectate[0] = 0x17;
+    rt.host.clients[0].no_spectate = 0x17;
     rt.client_disconnect(0);
     rt.run_frame(50);
 
@@ -617,8 +617,8 @@ fn a_connect_into_a_used_slot_starts_with_no_vitals_or_spectate_mask() {
     assert_eq!(rt.level_field("h"), vcod_gsc::Value::Int(0));
     assert_eq!(rt.level_field("m"), vcod_gsc::Value::Int(0));
     assert_eq!(rt.level_field("alive"), vcod_gsc::Value::Int(0));
-    assert_eq!(rt.host.client_vitals[0], Vitals::default());
-    assert_eq!(rt.host.client_no_spectate[0], 0);
+    assert_eq!(rt.host.clients[0].vitals, Vitals::default());
+    assert_eq!(rt.host.clients[0].no_spectate, 0);
 }
 
 /// `ClientDisconnect`'s `menuresponse` ("-1", "disconnect") wakes a
@@ -872,12 +872,12 @@ fn kill_from_a_spectator_who_played_is_ignored() {
          CodeCallback_PlayerKilled(a, b, c, d, e, f, g) { level.killed = 1; }\n",
     );
     rt.spawn_client_for_test(0, [0.0; 3]);
-    rt.host.client_vitals[0].max_health = 100;
-    rt.host.client_vitals[0].health = 100;
+    rt.host.clients[0].vitals.max_health = 100;
+    rt.host.clients[0].vitals.health = 100;
     rt.set_client_state_for_test(0, "spectator");
     assert!(!rt.kill_client(0));
     rt.run_frame(50);
-    assert!(!rt.host.client_vitals[0].dead);
+    assert!(!rt.host.clients[0].vitals.dead);
     assert!(rt.host.client_sim_ops.is_empty());
     assert_eq!(rt.level_field("killed"), Value::Undefined);
     rt.set_client_state_for_test(0, "playing");
@@ -1101,7 +1101,7 @@ fn a_hit_with_no_inflictor_and_no_attacker_reaches_the_callback_undefined() {
         name: "vcod".into(),
     });
     rt.run_frame(0);
-    rt.host.client_vitals[0].takedamage = true;
+    rt.host.clients[0].vitals.takedamage = true;
     rt.deliver_hits(vec![crate::game::combat::Hit {
         victim: 0,
         attacker: crate::game::host::ENTITYNUM_NONE as usize,
@@ -1137,7 +1137,7 @@ fn a_blast_charged_to_a_vehicle_names_it() {
         name: "vcod".into(),
     });
     rt.run_frame(0);
-    rt.host.client_vitals[0].takedamage = true;
+    rt.host.clients[0].vitals.takedamage = true;
     let tank = rt.vm.with_cx(|cx| rt.host.ents.spawn(cx)).unwrap();
     rt.host
         .vehicles
@@ -1185,7 +1185,7 @@ fn a_hit_charged_to_an_empty_slot_names_entity_0() {
         });
     }
     rt.run_frame(0);
-    rt.host.client_vitals[1].takedamage = true;
+    rt.host.clients[1].vitals.takedamage = true;
     assert_eq!(rt.charged_owner(Some(0)), Some(0));
     let attacker = rt.charged_owner(Some(5)).unwrap();
     assert_eq!(attacker, crate::game::host::ZEROED_ENTITY);
@@ -1784,7 +1784,7 @@ fn pickup_rig_with(callbacks: &str) -> ScriptRuntime {
         name: "p".into(),
     });
     rt.run_frame(0);
-    rt.host.client_vitals[0] = Vitals {
+    rt.host.clients[0].vitals = Vitals {
         health: 100,
         max_health: 100,
         dead: false,
@@ -1794,13 +1794,14 @@ fn pickup_rig_with(callbacks: &str) -> ScriptRuntime {
         rt.host.precache_items_for_test(&[name]);
         let w = crate::defs::V1.weapon_index(name).unwrap();
         let d = rt.host.weapons.get(w).unwrap().clone();
-        rt.host.client_weapons[0].give(w, s);
-        rt.host.client_ammo[0].clip[d.clip_index] = d.clip_size as i16;
+        rt.host.clients[0].weapons.give(w, s);
+        rt.host.clients[0].ammo.clip[d.clip_index] = d.clip_size as i16;
         if !d.clip_only {
-            rt.host.client_ammo[0].ammo[d.ammo_index] = d.max_ammo as i16;
+            rt.host.clients[0].ammo.ammo[d.ammo_index] = d.max_ammo as i16;
         }
     }
-    rt.host.client_weapons[0].current = crate::defs::V1.weapon_index("m1carbine_mp").unwrap() as u8;
+    rt.host.clients[0].weapons.current =
+        crate::defs::V1.weapon_index("m1carbine_mp").unwrap() as u8;
     rt.set_client_origin(0, [0.0; 3]);
     rt
 }
@@ -1817,10 +1818,10 @@ fn cmd(rt: &mut ScriptRuntime, slot: usize, buttons: u8, eye: [f32; 3], view: [f
 #[test]
 fn a_health_pack_underfoot_heals_and_leaves_the_wire() {
     let mut rt = pickup_rig();
-    rt.host.client_vitals[0].health = 50;
+    rt.host.clients[0].vitals.health = 50;
     let id = rt.place_item("item_health", [0.0, 0.0, 1.0], 0);
     cmd(&mut rt, 0, 0, [0.0, 0.0, 60.0], DOWN);
-    assert_eq!(rt.host.client_vitals[0].health, 75);
+    assert_eq!(rt.host.clients[0].vitals.health, 75);
     assert!(rt.host.ents.get(id).unwrap().item.unwrap().taken);
     assert_eq!(
         rt.take_sim_ops(),
@@ -1844,7 +1845,7 @@ fn a_health_pack_underfoot_heals_and_leaves_the_wire() {
 #[test]
 fn a_grabbed_drop_is_freed_and_a_grabbed_placed_item_stays_hidden() {
     let mut rt = pickup_rig();
-    rt.host.client_vitals[0].health = 10;
+    rt.host.clients[0].vitals.health = 10;
     let placed = rt.place_item("item_health", [0.0, 0.0, 1.0], 0);
     let drop = rt.place_item("item_health", [4.0, 0.0, 1.0], 0);
     rt.host
@@ -1879,7 +1880,7 @@ fn a_health_pack_at_full_health_stays() {
 fn a_dead_or_spectating_player_takes_nothing() {
     use crate::game::host::Vitals;
     let mut rt = pickup_rig();
-    rt.host.client_vitals[0].health = 50;
+    rt.host.clients[0].vitals.health = 50;
     let id = rt.place_item("item_health", [0.0, 0.0, 1.0], 0);
     rt.set_client_pm_type(0, 4);
     cmd(
@@ -1890,7 +1891,7 @@ fn a_dead_or_spectating_player_takes_nothing() {
         DOWN,
     );
     rt.set_client_pm_type(0, 0);
-    rt.host.client_vitals[0] = Vitals {
+    rt.host.clients[0].vitals = Vitals {
         health: 0,
         max_health: 100,
         dead: true,
@@ -1906,7 +1907,7 @@ fn a_dead_or_spectating_player_takes_nothing() {
 #[test]
 fn a_held_use_key_grabs_once() {
     let mut rt = pickup_rig();
-    rt.host.client_vitals[0].health = 10;
+    rt.host.clients[0].vitals.health = 10;
     let a = rt.place_item("item_health", [40.0, 0.0, 30.0], 0);
     let b = rt.place_item("item_health", [40.0, 4.0, 30.0], 0);
     for _ in 0..10 {
@@ -1923,7 +1924,7 @@ fn a_held_use_key_grabs_once() {
         .filter(|id| rt.host.ents.get(**id).unwrap().item.unwrap().taken)
         .count();
     assert_eq!(taken, 1);
-    assert_eq!(rt.host.client_vitals[0].health, 35);
+    assert_eq!(rt.host.clients[0].vitals.health, 35);
 }
 
 /// Two fg42s underfoot on one cmd, the player holding one short of full:
@@ -1934,9 +1935,9 @@ fn two_items_in_reach_on_one_cmd_see_each_others_ammo() {
     let mut rt = pickup_rig();
     let fg = crate::defs::V1.weapon_index("fg42_mp").unwrap();
     let d = rt.host.weapons.get(fg).unwrap().clone();
-    rt.host.client_weapons[0].give(fg, 2);
-    rt.host.client_ammo[0].clip[d.clip_index] = 20;
-    rt.host.client_ammo[0].ammo[d.ammo_index] = 300;
+    rt.host.clients[0].weapons.give(fg, 2);
+    rt.host.clients[0].ammo.clip[d.clip_index] = 20;
+    rt.host.clients[0].ammo.ammo[d.ammo_index] = 300;
     let a = rt.place_item("mpweapon_fg42", [0.0, 0.0, 1.0], 90);
     let b = rt.place_item("mpweapon_fg42", [4.0, 0.0, 1.0], 90);
     // The later link heads the list, so b is met first, not a.
@@ -1945,7 +1946,7 @@ fn two_items_in_reach_on_one_cmd_see_each_others_ammo() {
     cmd(&mut rt, 0, 0, [0.0, 0.0, 60.0], DOWN);
     assert!(rt.host.ents.get(b).unwrap().item.unwrap().taken);
     assert!(!rt.host.ents.get(a).unwrap().item.unwrap().taken);
-    assert_eq!(rt.host.client_ammo[0].ammo[d.ammo_index], 320);
+    assert_eq!(rt.host.clients[0].ammo.ammo[d.ammo_index], 320);
 }
 
 /// The swap with the use key: the carbine lands on the panzerfaust's own
@@ -1980,7 +1981,7 @@ fn a_weapon_item_with_a_reserve_behind_an_empty_clip_is_not_empty() {
 fn the_use_key_swaps_and_the_trigger_notify_names_the_drop() {
     let mut rt = pickup_rig();
     let fg = crate::defs::V1.weapon_index("fg42_mp").unwrap();
-    rt.host.client_weapons[0].give(fg, 2);
+    rt.host.clients[0].weapons.give(fg, 2);
     let pf = rt.place_item("mpweapon_panzerfaust", [40.0, 0.0, 30.0], 0);
     cmd(&mut rt, 0, 0, [0.0, 0.0, 60.0], [36.0, 0.0, 0.0]);
     cmd(
@@ -2038,7 +2039,7 @@ fn turret_rig() -> (ScriptRuntime, EntId) {
         name: "q".into(),
     });
     rt.run_frame(0);
-    rt.host.client_vitals[1] = rt.host.client_vitals[0];
+    rt.host.clients[1].vitals = rt.host.clients[0].vitals;
     rt.set_client_origin(1, [0.0, 4.0, 0.0]);
     rt.set_client_on_ground(0, true);
     rt.set_client_on_ground(1, true);
@@ -2107,7 +2108,7 @@ fn freeing_a_manned_gun_links_its_gunner_at_once() {
         host.get_field(cx, me, f)
     });
     assert_eq!(origin, Value::Vector([10.0, 20.0, 1.0]));
-    assert_eq!(rt.host.client_link_origin[0], [10.0, 20.0, 1.0]);
+    assert_eq!(rt.host.clients[0].link_origin, [10.0, 20.0, 1.0]);
 }
 
 /// A gun whose record names a slot whose playerstate is not mounted, as
@@ -2291,7 +2292,7 @@ fn aiming_at_an_unowned_fg42_hints_nine_past_its_index() {
     // fg42 is index 6: the capture's 15 (docs/research/cod11-items.md 12.3).
     assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM).0, 15);
     assert_eq!(rt.cursor_hint_pass(0, EYE, [-36.0, 0.0, 0.0]).0, 0);
-    rt.host.client_vitals[0] = crate::game::host::Vitals {
+    rt.host.clients[0].vitals = crate::game::host::Vitals {
         health: 0,
         max_health: 100,
         dead: true,
@@ -2307,8 +2308,8 @@ fn an_owned_weapon_hints_73_past_its_index_until_taken() {
     let mut rt = pickup_rig();
     let fg = crate::defs::V1.weapon_index("fg42_mp").unwrap();
     let d = rt.host.weapons.get(fg).unwrap().clone();
-    rt.host.client_weapons[0].give(fg, 2);
-    rt.host.client_ammo[0].ammo[d.ammo_index] = 100;
+    rt.host.clients[0].weapons.give(fg, 2);
+    rt.host.clients[0].ammo.ammo[d.ammo_index] = 100;
     rt.place_item("mpweapon_fg42", [40.0, 0.0, 30.0], 90);
     assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM).0, 79);
     cmd(&mut rt, 0, vcod_common::net::msg::BUTTON_USE, EYE, AT_ITEM);
@@ -2321,7 +2322,7 @@ fn an_owned_weapon_hints_73_past_its_index_until_taken() {
 fn an_owner_locked_drop_hints_nothing_until_its_lock_clears() {
     let mut rt = pickup_rig();
     let fg = crate::defs::V1.weapon_index("fg42_mp").unwrap();
-    rt.host.client_weapons[0].give(fg, 2);
+    rt.host.clients[0].weapons.give(fg, 2);
     rt.place_item("mpweapon_panzerfaust", [40.0, 0.0, 30.0], 0);
     assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM).0, 32);
     cmd(&mut rt, 0, vcod_common::net::msg::BUTTON_USE, EYE, AT_ITEM);
@@ -2371,7 +2372,7 @@ fn an_item_notified_thread_runs_before_the_frames_waits() {
          watch() { self waittill(\"trigger\", player); level.flag = 1; }\n\
          CodeCallback_PlayerConnect() {}\n",
     );
-    rt.host.client_vitals[0].health = 50;
+    rt.host.clients[0].vitals.health = 50;
     let id = rt.place_item("item_health", [0.0, 0.0, 1.0], 0);
     rt.start_thread_for_test(id, "watch");
     // The loop's first `wait` from the load falls due on the first

@@ -600,8 +600,10 @@ mod tests {
         sv.load(Some(&install)).unwrap();
         let slots = sv.add_bots(2, false);
         let marked = |sv: &Cod4Server| {
-            let roster = &sv.game.level.as_ref().unwrap().rt.host.client_roster;
-            slots.iter().all(|&s| roster[s].is_some_and(|r| r.bot))
+            let clients = &sv.game.level.as_ref().unwrap().rt.host.clients;
+            slots
+                .iter()
+                .all(|&s| clients[s].roster.is_some_and(|r| r.bot))
         };
         assert!(marked(&sv));
         sv.map_restart(true).unwrap();

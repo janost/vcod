@@ -252,7 +252,7 @@ impl ScriptRuntime {
     /// Set a test client's health and max health, the way a spawn does.
     #[cfg(any(test, feature = "testing"))]
     pub fn set_client_health_for_test(&mut self, slot: usize, health: i32) {
-        if let Some(v) = self.host.client_vitals.get_mut(slot) {
+        if let Some(v) = self.host.clients.get_mut(slot).map(|c| &mut c.vitals) {
             v.health = health;
             v.max_health = health;
         }

@@ -452,7 +452,7 @@ mod tests {
     #[test]
     fn protocol_6_without_freelook_the_spectator_follows() {
         let mut rig = v6_rig();
-        rig.script().host.client_no_spectate[0] = 0x10;
+        rig.script().host.clients[0].no_spectate = 0x10;
         let s = rig.step(0);
         let s = if ps_i32(&s, "clientNum") == 0 {
             rig.step(0)
@@ -472,12 +472,12 @@ mod tests {
         let mut rig = v6_rig();
         rig.script().set_client_team_for_test(1, "axis");
         rig.script().set_client_team_for_test(2, "allies");
-        rig.script().host.client_no_spectate[0] = 0x2;
+        rig.script().host.clients[0].no_spectate = 0x2;
         let s = rig.press(msg::BUTTON_ATTACK);
         assert_eq!(ps_i32(&s, "clientNum"), 2, "slot 1 is axis");
         let s = rig.press(msg::BUTTON_ATTACK);
         assert_eq!(ps_i32(&s, "clientNum"), 2);
-        rig.script().host.client_no_spectate[0] = 0x7;
+        rig.script().host.clients[0].no_spectate = 0x7;
         let s = rig.step(0);
         assert_eq!(ps_i32(&s, "clientNum"), 0);
         assert_eq!(ps_i32(&s, "pm_flags") & 0x1f0000, 0);
@@ -639,7 +639,7 @@ mod tests {
     fn a_dead_client_is_still_followed_and_a_spectating_one_lets_go() {
         let mut rig = FollowRig::new();
         rig.press(msg::BUTTON_ATTACK);
-        rig.script().host.client_vitals[1].dead = true;
+        rig.script().host.clients[1].vitals.dead = true;
         rig.script().set_client_state_for_test(1, "dead");
         rig.step(0);
         let s = rig.step(0);
@@ -802,7 +802,7 @@ mod tests {
     #[test]
     fn protocol_6_a_forced_follow_past_the_slots_is_cleared() {
         let mut rig = v6_rig();
-        rig.script().host.client_no_spectate[0] = 0x2;
+        rig.script().host.clients[0].no_spectate = 0x2;
         rig.script()
             .set_client_field_for_test(0, "spectatorclient", vcod_gsc::Value::Int(64));
         let s = rig.step(0);
@@ -998,7 +998,7 @@ mod tests {
             .set_client_field_for_test(0, "archivetime", vcod_gsc::Value::Float(1.0));
         let last = rig.step(0);
         assert_eq!(ps_i32(&last, "clientNum"), 1);
-        rig.script().host.client_vitals[0].dead = true;
+        rig.script().host.clients[0].vitals.dead = true;
         rig.script()
             .set_client_field_for_test(0, "spectatorclient", vcod_gsc::Value::Int(-1));
         rig.script()
@@ -1044,7 +1044,7 @@ mod tests {
     #[test]
     fn a_stopped_follow_keeps_the_rest_of_the_copy() {
         let mut rig = FollowRig::new();
-        rig.script().host.client_vitals[1].health = 100;
+        rig.script().host.clients[1].vitals.health = 100;
         rig.script().set_client_weapon(1, 9);
         rig.sim_mut(1).ps.velocity = glam::Vec3::new(120.0, 0.0, 0.0);
         rig.sim_mut(1).ps.ducked = true;
@@ -1085,7 +1085,7 @@ mod tests {
     fn an_end_frame_stop_keeps_the_copy_s_pm_type_until_the_next_cmd() {
         let mut rig = FollowRig::new();
         rig.press(msg::BUTTON_ATTACK);
-        rig.script().host.client_vitals[1].dead = true;
+        rig.script().host.clients[1].vitals.dead = true;
         rig.script().set_client_state_for_test(1, "dead");
         rig.step(0);
         rig.step(0);
@@ -1109,7 +1109,7 @@ mod tests {
     fn a_follower_below_its_target_reads_the_end_frame_s_fields_a_frame_late() {
         let mut rig = FollowRig::new();
         rig.press(msg::BUTTON_ATTACK);
-        rig.script().host.client_vitals[1].dead = true;
+        rig.script().host.clients[1].vitals.dead = true;
         // What a stock killed callback writes; the dead arm keys on it.
         rig.script().set_client_state_for_test(1, "dead");
         let s = rig.step(0);
@@ -1127,8 +1127,8 @@ mod tests {
         let mut rig = FollowRig::new();
         rig.press(msg::BUTTON_ATTACK);
         let seq = ps_i32(&rig.step(0), "eventSequence");
-        rig.script().host.client_vitals[1].health = 67;
-        rig.script().host.client_vitals[1].max_health = 100;
+        rig.script().host.clients[1].vitals.health = 67;
+        rig.script().host.clients[1].vitals.max_health = 100;
         rig.script().host.client_sim_ops.push((
             1,
             crate::game::host::SimOp::Damaged {

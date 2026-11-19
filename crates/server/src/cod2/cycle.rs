@@ -325,7 +325,7 @@ impl Cod2Server {
             .to_string();
         let bot = c.bot;
         if let Some(level) = self.game.level.as_mut() {
-            level.rt.host.client_names[slot] = name.clone();
+            level.rt.host.clients[slot].name = name.clone();
             level.connect_at(slot, &name, origin, angles);
             if bot {
                 level.mark_bot(slot);

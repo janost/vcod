@@ -60,7 +60,7 @@ const POF_SPECTATE_FREE: u32 = 0x10;
 
 /// The no-spectate bit `allowSpectateTeam` sets for `freelook`
 /// (`TEAM_NUM_TEAMS`), as vcod's shared builtin keeps them
-/// (`GameHost::client_no_spectate`); bit `team` refuses that team.
+/// (`HostClient::no_spectate`); bit `team` refuses that team.
 const NO_SPECTATE_FREELOOK: u8 = 1 << crate::follow::FREELOOK;
 
 /// A playerstate word by its literal field name, resolved at compile time:
@@ -506,7 +506,7 @@ impl Cod4Level {
     /// `numVotingClients` leaves out (`game::vote`). A fresh level's
     /// [`Self::connect`] clears it, so each level change marks again.
     pub fn mark_bot(&mut self, slot: usize) {
-        if let Some(r) = self.rt.host.client_roster[slot].as_mut() {
+        if let Some(r) = self.rt.host.clients[slot].roster.as_mut() {
             r.bot = true;
         }
     }
@@ -516,7 +516,7 @@ impl Cod4Level {
     /// next frame's packet pass, a spectator floating at `spot` until the
     /// script spawns it.
     pub fn connect(&mut self, slot: usize, name: &str, spot: ([f32; 3], [f32; 3])) {
-        self.rt.host.client_names[slot] = name.to_string();
+        self.rt.host.clients[slot].name = name.to_string();
         let c4 = self.rt.host.cod4_mut();
         c4.clients[slot] = Default::default();
         c4.stats[slot] = Stats::fresh();
@@ -524,7 +524,7 @@ impl Cod4Level {
             slot,
             name: name.to_string(),
         });
-        self.rt.host.client_roster[slot] = Some(crate::game::scoreboard::RosterSlot {
+        self.rt.host.clients[slot].roster = Some(crate::game::scoreboard::RosterSlot {
             connecting: true,
             ..Default::default()
         });
@@ -609,7 +609,7 @@ impl Cod4Level {
 
     /// `ClientBegin`: `pers.connected` CON_CONNECTED and the `begin` notify.
     pub fn begin(&mut self, slot: usize) {
-        if let Some(r) = self.rt.host.client_roster[slot].as_mut() {
+        if let Some(r) = self.rt.host.clients[slot].roster.as_mut() {
             r.connecting = false;
             r.active = true;
         }
@@ -632,7 +632,7 @@ impl Cod4Level {
         if host.client_name_mode == ClientNameMode::Manual && in_game {
             return false;
         }
-        let Some(n) = host.client_names.get_mut(slot) else {
+        let Some(n) = host.clients.get_mut(slot).map(|c| &mut c.name) else {
             return false;
         };
         let changed = n != name;
@@ -644,15 +644,16 @@ impl Cod4Level {
     pub fn client_name(&self, slot: usize) -> &str {
         self.rt
             .host
-            .client_names
+            .clients
             .get(slot)
+            .map(|c| &c.name)
             .map_or("", String::as_str)
     }
 
     /// `ClientDisconnect`, inside the drop.
     pub fn disconnect(&mut self, slot: usize) {
         self.rt.client_disconnect(slot);
-        self.rt.host.client_roster[slot] = None;
+        self.rt.host.clients[slot].roster = None;
         self.players[slot] = None;
         self.archive[slot] = None;
     }
@@ -671,7 +672,7 @@ impl Cod4Level {
     /// it on every client and sets it on the caller, a vote on the voter;
     /// a spawn keeps it.
     fn sync_voted(&mut self) {
-        let voted = self.rt.host.client_voted.clone();
+        let voted: Vec<bool> = self.rt.host.clients.iter().map(|c| c.voted).collect();
         for (slot, p) in self.players.iter_mut().enumerate() {
             let Some(p) = p.as_mut() else { continue };
             let on = voted.get(slot).copied().unwrap_or(false);
@@ -780,7 +781,7 @@ impl Cod4Level {
         if forced >= 0 {
             return;
         }
-        let no_spectate = self.rt.host.client_no_spectate[slot];
+        let no_spectate = self.rt.host.clients[slot].no_spectate;
         let free = no_spectate & NO_SPECTATE_FREELOOK == 0;
         let following = self.players[slot]
             .as_ref()
@@ -936,7 +937,7 @@ impl Cod4Level {
             .client_session(slot)
             .map_or(SessionState::Spectator, |s| s.state);
         let level_time = self.level_time;
-        let freelook = self.rt.host.client_no_spectate[slot] & NO_SPECTATE_FREELOOK == 0;
+        let freelook = self.rt.host.clients[slot].no_spectate & NO_SPECTATE_FREELOOK == 0;
         let g_speed = crate::game::builtins::cvar::atoi(self.rt.host.cvars.get("g_speed"));
         let bodies = self.bodies(slot);
         self.combat.anims();
@@ -1150,7 +1151,7 @@ impl Cod4Level {
         }
         if playing {
             let h = body_height(ps.pm_flags);
-            host.client_height[slot] = h;
+            host.clients[slot].height = h;
             let contents = vcod_common::movetrace::CONTENTS_BODY as i32;
             host.link_client(slot, origin, host.client_box(slot), contents, true);
         } else {
@@ -1376,7 +1377,7 @@ impl Cod4Level {
         let now = self.level_time;
         let cvar = |name: &str| crate::game::builtins::cvar::atoi(self.rt.host.cvars.get(name));
         let (idle_secs, gravity) = (cvar("g_inactivity"), cvar("g_gravity"));
-        let max_health = self.rt.host.client_vitals[slot].max_health;
+        let max_health = self.rt.host.clients[slot].vitals.max_health;
         // A gunner still on a gun lets go first, so the release's
         // teleport lands before the spawn spot (0x80a7b8c..0x80a7ecf).
         if let Some(p) = self.players[slot].as_ref()
@@ -1539,9 +1540,9 @@ impl Cod4Level {
         let host = &self.rt.host;
         let c4 = &host.cod4().clients[slot];
         let l = &c4.loadout;
-        let health = host.client_vitals[slot].health;
-        let max_health = host.client_vitals[slot].max_health;
-        let viewmodel = host.client_viewmodel[slot] as u32;
+        let health = host.clients[slot].vitals.health;
+        let max_health = host.clients[slot].vitals.max_health;
+        let viewmodel = host.clients[slot].viewmodel as u32;
         let speed = crate::game::builtins::cvar::atoi(host.cvars.get("g_speed")) as u32;
         let gravity = crate::game::builtins::cvar::atoi(host.cvars.get("g_gravity")) as u32;
         let perks = c4.perks;
@@ -1549,7 +1550,7 @@ impl Cod4Level {
         let frozen = c4.frozen;
         let last_stand = c4.last_stand;
         let (c4_ping_until, host_time) = (c4.compass_ping_until, host.level_time_ms);
-        let shock = host.client_shellshock[slot];
+        let shock = host.clients[slot].shellshock;
         let l = l.clone();
         let shock_pmf = self.rt.host.cod4_mut().clients[slot].shock_pmf.take();
         let pinged = c4_ping_until > host_time;
@@ -1698,7 +1699,7 @@ impl Cod4Level {
         if self.killcam_end_frame(slot) {
             return;
         }
-        let refused = Refused(self.rt.host.client_no_spectate[slot]);
+        let refused = Refused(self.rt.host.clients[slot].no_spectate);
         match self.spectate_target(slot, refused) {
             Some((target, theirs)) => self.watch(slot, target, theirs, refused),
             None => self.float(slot, refused),
@@ -1927,7 +1928,7 @@ impl Cod4Level {
     /// frames, and two head hits kill.
     #[cfg(any(test, feature = "testing"))]
     pub fn heal_for_test(&mut self, slot: usize) {
-        if let Some(v) = self.rt.host.client_vitals.get_mut(slot)
+        if let Some(v) = self.rt.host.clients.get_mut(slot).map(|c| &mut c.vitals)
             && v.health > 0
         {
             v.max_health = 1100;
@@ -1988,7 +1989,7 @@ impl Cod4Level {
         });
         let host = &mut self.rt.host;
         host.die(slot);
-        host.client_vitals[slot].health = 0;
+        host.clients[slot].vitals.health = 0;
         let choices = host.cod4().death_anims[slot].clone();
         let death = (!choices.is_empty()).then(|| {
             let k = host.cod4_mut().rand() as usize % choices.len();
@@ -2077,7 +2078,7 @@ impl Cod4Level {
         let mut rows = Vec::new();
         for (slot, ping) in pings.iter().enumerate() {
             let Some(ping) = *ping else { continue };
-            let Some(r) = self.rt.host.client_roster.get(slot).copied().flatten() else {
+            let Some(r) = self.rt.host.clients.get(slot).and_then(|c| c.roster) else {
                 continue;
             };
             let num = |v: Option<String>| v.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
@@ -2656,7 +2657,7 @@ mod tests {
     /// What a spectator's end frame leaves: `otherFlags`, the slot
     /// followed, the playerstate's `clientNum` and `eFlags`.
     fn watch(level: &mut Cod4Level, slot: usize, refused: u8) -> (u32, i32, u32, u32) {
-        level.rt.host.client_no_spectate[slot] = refused;
+        level.rt.host.clients[slot].no_spectate = refused;
         level.spectator_end_frame(slot);
         let p = level.players[slot].as_ref().unwrap();
         (

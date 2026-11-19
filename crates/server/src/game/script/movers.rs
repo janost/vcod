@@ -106,8 +106,9 @@ impl ScriptRuntime {
         }
         let dead = self
             .host
-            .client_vitals
+            .clients
             .get(slot)
+            .map(|c| &c.vitals)
             .is_some_and(|v| v.health <= 0);
         for dmg in door::blocked_damage(&self.host, master, dead) {
             self.deliver_world_hit(slot, master, dmg, 0, "MOD_CRUSH");

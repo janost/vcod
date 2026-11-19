@@ -221,7 +221,7 @@ pub struct ClientSim {
     /// mirrored from the script host every frame the way the weapons are.
     pub viewmodel_index: i32,
     /// `ps.shellshockIndex`, `shellshockTime`, `shellshockDuration`, from
-    /// `GameHost::client_shellshock`.
+    /// `HostClient::shellshock`.
     pub shellshock: [i32; 3],
     /// The body, head and helmet the character script dressed this client in,
     /// mirrored the same way: the locational trace poses the grafted rig they
@@ -423,10 +423,10 @@ pub struct ClientSim {
     /// talk bit (1.1 0x33f6a, 1.5b 0x281d4; UO's 0x20000 at 0x2d8af).
     pub talking: bool,
     /// `eFlags` 0x80000, `pingPlayer`'s chat flash on teammates' compasses,
-    /// held until the stamp the builtin left (`GameHost::client_ping_until`).
+    /// held until the stamp the builtin left (`HostClient::ping_until`).
     pub ping: bool,
     /// `eFlags` 0x20000, this client's vote in on the running vote
-    /// (`GameHost::client_voted`, docs/research/cod11-votes.md).
+    /// (`HostClient::voted`, docs/research/cod11-votes.md).
     pub voted: bool,
     /// `ps.iCompassFriendInfo`, the out-of-view teammate the end frame packs
     /// (`crate::compass`), 0 for none.

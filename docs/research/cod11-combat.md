@@ -4224,7 +4224,7 @@ free.
 
 Where the state comes from is a two-step arrangement retail does not need.
 A builtin cannot reach a client's sim, so `Server::replay_moves` mirrors each
-player's entity state onto `GameHost::client_entity_states` before the script
+player's entity state onto `HostClient::entity_state` before the script
 frame, and `cloneplayer` copies the slot's entry. That copy is one step stale
 by construction: the gametype clones the player before the death animation is
 raised. So the queue records which client each body was born from, and
@@ -4909,7 +4909,7 @@ the entity is. `mover::use_binary` is `Use_BinaryMover` at `pos1` and
 `SetMoverState`; the start and stop sounds (alias 0) and the area portal
 are not modelled, nor a use during a leg. `turret::use_by` runs
 `turret_use`'s record half on the spot from the host's mirrors (origin,
-stance, `client_aim`), writes the player's `angles` and queues
+stance, `HostClient::aim`), writes the player's `angles` and queues
 `SimOp::Mount` for the sim half; a user that is no player notifies alone,
 where retail segfaults, a crash vcod keeps out on purpose.
 `item::spawn_misc_spawner` gives a map spawner with a `spawnitem` its use,
@@ -7629,7 +7629,7 @@ and probed at its unsnapped origin, and the second chance's midpoint is
 taken at `BlastVictim::link_origin`: `ClientSim::link_origin` for a
 grenade's blast, the truncated origin unless the client is linked or its last
 link was a `setOrigin` or `TeleportPlayer` with no cmd since, and for the
-builtin's the same value mirrored onto `GameHost::client_link_origin`, which
+builtin's the same value mirrored onto `HostClient::link_origin`, which
 the `setOrigin` builtin moves to its own unsnapped origin at once. Pinned by
 `a_set_origin_links_unsnapped_until_the_next_cmd`
 (`crates/server/src/spectate.rs`). INFERRED, off `TeleportPlayer`'s
@@ -7740,7 +7740,7 @@ body (`HitBody`, through the same `trace_bodies` a bullet uses), posed at
 the tick's clock; the second chance traces the world alone with mask 0x11 and
 no static models. A grenade's blast takes its bodies from the sims; the
 `radiusDamage` builtin takes the pose `Server` mirrors onto the host before
-the script frame (`GameHost::client_bodies`) at the script `origin` of each
+the script frame (`HostClient::body`) at the script `origin` of each
 client, so a `setOrigin` earlier in the frame moves the body.
 The replay column above holds at every anim phase the test pose was tried
 at but one: at yaw 135 one of nine phases reads 6 where retail read none,
@@ -7865,7 +7865,7 @@ as retail did, and since the walk took the area tree's order (14.7) and
 the player set down inside the flak88 clip stays there (mantle doc, "A
 start inside a solid") every line-2 row too. A grenade blast reads victims
 and bodies off the sims, except a client whose link a callback of the walk
-moved (`setOrigin`, `client_link_origin`), which it measures and stands at
+moved (`setOrigin`, `HostClient::link_origin`), which it measures and stands at
 that link with the sim's box. `probe_blastmove` against `vcod-server` read
 every builtin row above as retail did;
 `a_callback_reaches_the_rest_of_its_walk`

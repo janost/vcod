@@ -543,7 +543,7 @@ fn cone_trace(
     let (origin, _) = place(host, cx, id);
     let is_client = host.ents.get(id).is_some_and(|e| e.client.is_some());
     let points: Vec<Vec3> = if is_client {
-        let eye = Vec3::from(host.client_aim[id.0 as usize].0);
+        let eye = Vec3::from(host.clients[id.0 as usize].aim.0);
         let half = (eye.z - origin.z) * 0.5;
         let mut fwd = from - origin;
         fwd.z = 0.0;

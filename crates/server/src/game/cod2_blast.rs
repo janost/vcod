@@ -383,7 +383,7 @@ pub fn radius_damage(
     let none_mult = host.cod2().hitloc_none;
     let bodies: Vec<(usize, BlastBody)> = (host.cod2().clients.iter().enumerate())
         .filter_map(|(slot, state)| Some((slot, state.body?)))
-        .filter(|&(slot, _)| !ignore && host.client_vitals[slot].takedamage)
+        .filter(|&(slot, _)| !ignore && host.clients[slot].vitals.takedamage)
         .collect();
     let mut clients = Vec::new();
     for (slot, b) in bodies {

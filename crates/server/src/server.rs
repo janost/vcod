@@ -260,7 +260,7 @@ const FLAME_REPORT_MS: i32 = 3000;
 const FALL_PAIN_DEBOUNCE_MS: i32 = 200;
 
 /// One `WeaponOp` against a client's playerstate. The op is an edge the
-/// script made, so it is applied once, where `client_weapons` is mirrored
+/// script made, so it is applied once, where `HostClient::weapons` is mirrored
 /// every frame.
 pub(crate) fn apply_weapon_op(
     sim: &mut crate::spectate::ClientSim,

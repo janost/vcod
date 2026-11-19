@@ -247,8 +247,8 @@ impl Server {
     pub fn test_ping_player(&mut self, slot: usize) {
         if let Some(rt) = self.game.module.script.as_mut() {
             let until = rt.host.level_time_ms + 3000;
-            if let Some(p) = rt.host.client_ping_until.get_mut(slot) {
-                *p = until;
+            if let Some(c) = rt.host.clients.get_mut(slot) {
+                c.ping_until = until;
             }
         }
     }
@@ -264,7 +264,9 @@ impl Server {
             return false;
         };
         let weapons = rt.host.weapons.clone();
-        rt.host.client_weapons[slot].give_chain(&weapons, index, weapons.slot(index));
+        rt.host.clients[slot]
+            .weapons
+            .give_chain(&weapons, index, weapons.slot(index));
         true
     }
 

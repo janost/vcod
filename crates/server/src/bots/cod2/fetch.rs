@@ -279,8 +279,8 @@ mod tests {
         let d = defs[mine].as_ref().unwrap();
         let (ci, ai) = (d.clip_index, d.ammo_index);
         level.rt.with_host(|host, cx| {
-            host.client_ammo[slot].clip[ci] = 0;
-            host.client_ammo[slot].ammo[ai] = 0;
+            host.clients[slot].ammo.clip[ci] = 0;
+            host.clients[slot].ammo.ammo[ai] = 0;
             crate::game::item::launch(host, cx, other, drop + Vec3::Z * 16.0, Vec3::ZERO, None)
                 .unwrap();
         });

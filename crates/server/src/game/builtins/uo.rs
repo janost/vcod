@@ -167,7 +167,7 @@ fn slot_weapon(
                 cx.resolve(*name)
             ))
         })?;
-    Ok((client, host.client_weapons[client].slots[slot] as usize))
+    Ok((client, host.clients[client].weapons.slots[slot] as usize))
 }
 
 /// `self getWeaponSlotAmmo(slot)` (0x4838a): the reserve of the slot's
@@ -182,7 +182,7 @@ pub fn get_weapon_slot_ammo(
     let Some(def) = host.weapons.get(weapon) else {
         return Ok(Value::Int(0));
     };
-    let a = &host.client_ammo[client];
+    let a = &host.clients[client].ammo;
     let rounds = if def.clip_only {
         a.clip[def.clip_index]
     } else {
@@ -203,7 +203,7 @@ pub fn get_weapon_slot_clip_ammo(
         return Ok(Value::Int(0));
     };
     Ok(Value::Int(i32::from(
-        host.client_ammo[client].clip[def.clip_index],
+        host.clients[client].ammo.clip[def.clip_index],
     )))
 }
 
@@ -216,7 +216,7 @@ pub fn attack_button_pressed(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
-    let held = host.client_buttons[slot] & vcod_common::net::msg::BUTTON_ATTACK != 0;
+    let held = host.clients[slot].buttons & vcod_common::net::msg::BUTTON_ATTACK != 0;
     Ok(Value::Int(i32::from(held)))
 }
 
@@ -492,7 +492,7 @@ pub fn get_stance(
     use vcod_common::pmove::Stance;
     let slot = client_receiver(host, recv)
         .map_err(|_| ErrorKind::Custom("GetStance is only defined for players.".into()))?;
-    let stance = match host.client_stance[slot] {
+    let stance = match host.clients[slot].stance {
         Stance::Prone => "prone",
         Stance::Crouch => "crouch",
         Stance::Stand => "stand",
@@ -744,7 +744,7 @@ mod tests {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
             let e = host.ents.spawn_client(cx, 2, None).unwrap();
-            host.client_stance[2] = vcod_common::pmove::Stance::Prone;
+            host.clients[2].stance = vcod_common::pmove::Stance::Prone;
             let v = get_stance(&mut host, cx, Some(Target::Entity(e)), &[]).unwrap();
             assert!(matches!(v, Value::String(a) if cx.resolve(a) == "prone"));
             let other = host.ents.spawn(cx).unwrap();

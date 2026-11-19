@@ -245,7 +245,7 @@ fn vector(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> [f32; 3] {
 /// and `tag_origin`'s local tag turns the body from there by the legs' yaw
 /// off the view (`docs/research/cod11-combat.md` 16.4).
 pub fn client_bone(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Vec3, Quat)> {
-    let body = host.client_dobjs.get(slot)?.clone()?;
+    let body = host.clients.get(slot).map(|c| &c.dobj)?.clone()?;
     let anims = host.anims.clone()?;
     let fs = host.fs.clone()?;
     let skel = host.hit_rigs.rig(&*fs, &body.pose.assembly)?;
@@ -283,7 +283,7 @@ pub fn client_bone(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Vec3,
 /// matrix's axes, each bone of the chain from the build that first posed
 /// it. `None` where the pose kept no engine records.
 fn client_bone_stored(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Vec3, [Vec3; 3])> {
-    let body = host.client_dobjs.get(slot)?.clone()?;
+    let body = host.clients.get(slot).map(|c| &c.dobj)?.clone()?;
     let anims = host.anims.clone()?;
     let fs = host.fs.clone()?;
     let skel = host.hit_rigs.rig(&*fs, &body.pose.assembly)?;
@@ -322,7 +322,7 @@ fn client_bone_stored(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Ve
 /// a link holds in the parent entity's `angles` (`G_CalcTagParentAxis`
 /// multiplies the tag's model-space matrix by the parent's axis).
 fn client_bone_local(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Vec3, Quat)> {
-    host.client_dobjs.get(slot)?.as_ref()?;
+    host.clients.get(slot).map(|c| &c.dobj)?.as_ref()?;
     let frame = host.dobj_posed.get(slot)?.frame().inverse();
     let (o, r) = client_bone(host, slot, tag)?;
     Some((frame * o, frame * r))
@@ -330,7 +330,7 @@ fn client_bone_local(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Vec
 
 /// Whether the client's body has `tag`, without posing it.
 fn client_has_bone(host: &mut GameHost, slot: usize, tag: &str) -> bool {
-    let Some(body) = host.client_dobjs.get(slot).cloned().flatten() else {
+    let Some(body) = host.clients.get(slot).map(|c| &c.dobj).cloned().flatten() else {
         return false;
     };
     let Some(fs) = host.fs.clone() else {

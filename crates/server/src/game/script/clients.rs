@@ -6,55 +6,56 @@ use super::*;
 impl ScriptRuntime {
     /// `ClientEndFrame`'s `takedamage` write.
     pub fn set_client_takedamage(&mut self, slot: usize, on: bool) {
-        if let Some(v) = self.host.client_vitals.get_mut(slot) {
+        if let Some(v) = self.host.clients.get_mut(slot).map(|c| &mut c.vitals) {
             v.takedamage = on;
         }
     }
 
     /// One client's health as the script left it, read every frame the way
-    /// `client_weapons` is.
+    /// `HostClient::weapons` is.
     pub fn client_vitals(&self, slot: usize) -> crate::game::host::Vitals {
         self.host
-            .client_vitals
+            .clients
             .get(slot)
+            .map(|c| &c.vitals)
             .copied()
             .unwrap_or_default()
     }
 
     /// The buttons of a client's last usercmd, for `useButtonPressed`.
     pub fn set_client_buttons(&mut self, slot: usize, buttons: u8) {
-        if let Some(b) = self.host.client_buttons.get_mut(slot) {
-            *b = buttons;
+        if let Some(c) = self.host.clients.get_mut(slot) {
+            c.buttons = buttons;
         }
     }
 
     /// A client's last usercmd, for the `spawn` builtin's think.
     pub fn set_client_last_cmd(&mut self, slot: usize, cmd: vcod_common::net::msg::UserCmd) {
-        if let Some(c) = self.host.client_last_cmd.get_mut(slot) {
-            *c = cmd;
+        if let Some(c) = self.host.clients.get_mut(slot) {
+            c.last_cmd = cmd;
         }
     }
 
     /// A client's wire `ps.pm_type` as the tick's moves left it, for the
     /// touch pass's gate.
     pub fn set_client_pm_type(&mut self, slot: usize, pm_type: i32) {
-        if let Some(t) = self.host.client_pm_type.get_mut(slot) {
-            *t = pm_type;
+        if let Some(c) = self.host.clients.get_mut(slot) {
+            c.pm_type = pm_type;
         }
     }
 
     /// A client's `ps.on_ground` as the tick's moves left it, for
     /// `isOnGround` (docs/research/cod11-gsc-object-model.md, 23.5).
     pub fn set_client_on_ground(&mut self, slot: usize, on_ground: bool) {
-        if let Some(g) = self.host.client_on_ground.get_mut(slot) {
-            *g = on_ground;
+        if let Some(c) = self.host.clients.get_mut(slot) {
+            c.on_ground = on_ground;
         }
     }
 
     /// A client's stance as the tick's moves left it, for `getStance`.
     pub fn set_client_stance(&mut self, slot: usize, stance: vcod_common::pmove::Stance) {
-        if let Some(s) = self.host.client_stance.get_mut(slot) {
-            *s = stance;
+        if let Some(c) = self.host.clients.get_mut(slot) {
+            c.stance = stance;
         }
     }
 
@@ -65,8 +66,8 @@ impl ScriptRuntime {
         slot: usize,
         cone: Option<vcod_common::pmove::ProneCone>,
     ) {
-        if let Some(c) = self.host.client_prone_cone.get_mut(slot) {
-            *c = cone;
+        if let Some(c) = self.host.clients.get_mut(slot) {
+            c.prone_cone = cone;
         }
     }
 
@@ -74,8 +75,8 @@ impl ScriptRuntime {
     /// them, for `aim_lookat`, and whether the held weapon is a `rifleBullet`
     /// one, which picks the priority map the trace ranks bones with.
     pub fn set_client_aim(&mut self, slot: usize, eye: [f32; 3], aim: [f32; 2], rifle: bool) {
-        if let Some(a) = self.host.client_aim.get_mut(slot) {
-            *a = (eye, aim, rifle);
+        if let Some(c) = self.host.clients.get_mut(slot) {
+            c.aim = (eye, aim, rifle);
         }
     }
 
@@ -86,26 +87,25 @@ impl ScriptRuntime {
         slot: usize,
         state: Option<vcod_common::net::msg::EntityState>,
     ) {
-        if let Some(s) = self.host.client_entity_states.get_mut(slot) {
-            *s = state;
+        if let Some(c) = self.host.clients.get_mut(slot) {
+            c.entity_state = state;
         }
     }
 
     /// A client's body as the tick's moves left it, for a scripted blast.
     pub fn set_client_body(&mut self, slot: usize, body: Option<crate::game::combat::HitBody>) {
-        if let Some(b) = self.host.client_bodies.get_mut(slot) {
-            *b = body;
+        if let Some(c) = self.host.clients.get_mut(slot) {
+            c.body = body;
         }
     }
 
     /// [`crate::spectate::ClientSim::land_gunner_goals`] on the host's
     /// copies of the slot's body, which script traces and tags read.
     pub fn land_gunner_goals(&mut self, slot: usize, legs: &crate::spectate::TurretLegs) {
-        let bodies = [
-            self.host.client_bodies.get_mut(slot),
-            self.host.client_dobjs.get_mut(slot),
-        ];
-        for b in bodies.into_iter().flatten().flatten() {
+        let Some(c) = self.host.clients.get_mut(slot) else {
+            return;
+        };
+        for b in [&mut c.body, &mut c.dobj].into_iter().flatten() {
             b.pose.turret_leaves.clone_from(&legs.0);
             b.pose.turret_left.clone_from(&legs.1);
         }
@@ -113,8 +113,8 @@ impl ScriptRuntime {
 
     /// A client's posed model, live or dead, for `dropItem`'s tag.
     pub fn set_client_dobj(&mut self, slot: usize, body: Option<crate::game::combat::HitBody>) {
-        if let Some(b) = self.host.client_dobjs.get_mut(slot) {
-            *b = body;
+        if let Some(c) = self.host.clients.get_mut(slot) {
+            c.dobj = body;
         }
     }
 
@@ -138,22 +138,22 @@ impl ScriptRuntime {
     /// death drop (`docs/research/cod11-combat.md` 5.1 step 5). 0 for a slot
     /// with no sim.
     pub fn set_client_grenade_ms(&mut self, slot: usize, ms: i32) {
-        if let Some(g) = self.host.client_grenade_ms.get_mut(slot) {
-            *g = ms;
+        if let Some(c) = self.host.clients.get_mut(slot) {
+            c.grenade_ms = ms;
         }
     }
 
     /// A client's box height as the tick's moves left it, for `dropItem`.
     pub fn set_client_height(&mut self, slot: usize, height: f32) {
-        if let Some(h) = self.host.client_height.get_mut(slot) {
-            *h = height;
+        if let Some(c) = self.host.clients.get_mut(slot) {
+            c.height = height;
         }
     }
 
     /// A client's origin at its last link, for the `radiusDamage` walk.
     pub fn set_client_link_origin(&mut self, slot: usize, origin: [f32; 3]) {
-        if let Some(o) = self.host.client_link_origin.get_mut(slot) {
-            *o = origin;
+        if let Some(c) = self.host.clients.get_mut(slot) {
+            c.link_origin = origin;
         }
     }
 
@@ -167,7 +167,7 @@ impl ScriptRuntime {
         clip: [i16; vcod_common::pmove::weapon::NUM_AMMO],
     ) {
         let host = &mut self.host;
-        let Some(a) = host.client_ammo.get_mut(slot) else {
+        let Some(a) = host.clients.get_mut(slot).map(|c| &mut c.ammo) else {
             return;
         };
         *a = crate::game::host::AmmoArrays { ammo, clip };
@@ -370,7 +370,13 @@ impl ScriptRuntime {
         }
         // CoD4's two-client floor comes ahead of the script's call too
         // (0x80adc1d).
-        if self.host.client_roster.iter().flatten().count() < self.host.profile.votes.min_connected
+        if self
+            .host
+            .clients
+            .iter()
+            .filter_map(|c| c.roster.as_ref())
+            .count()
+            < self.host.profile.votes.min_connected
         {
             return Some(vec![(
                 Some(slot),
@@ -406,8 +412,9 @@ impl ScriptRuntime {
     /// same reason the configstrings are: any thread can have changed them.
     pub fn client_weapons(&self, slot: usize) -> crate::weapons::PlayerWeapons {
         self.host
-            .client_weapons
+            .clients
             .get(slot)
+            .map(|c| &c.weapons)
             .copied()
             .unwrap_or_default()
     }
@@ -419,7 +426,7 @@ impl ScriptRuntime {
     /// `PM_Weapon` starts the identical putaway again, once every
     /// `dropTime`, for as long as the client keeps asking.
     pub fn set_client_weapon(&mut self, slot: usize, weapon: u8) {
-        if let Some(w) = self.host.client_weapons.get_mut(slot) {
+        if let Some(w) = self.host.clients.get_mut(slot).map(|c| &mut c.weapons) {
             w.current = weapon;
         }
     }
@@ -428,7 +435,7 @@ impl ScriptRuntime {
     /// arm, `docs/research/cod11-combat.md` 1.8), which the mirror would
     /// otherwise put back the next frame.
     pub fn set_client_slots(&mut self, slot: usize, slots: [u8; crate::weapons::NUM_SLOTS]) {
-        if let Some(w) = self.host.client_weapons.get_mut(slot) {
+        if let Some(w) = self.host.clients.get_mut(slot).map(|c| &mut c.weapons) {
             w.slots = slots;
         }
     }
@@ -438,13 +445,13 @@ impl ScriptRuntime {
     /// `ps.weapon` is left alone: the switch path takes it to 0 on its own
     /// once the player no longer holds it (1.8).
     pub fn take_client_weapon(&mut self, slot: usize, weapon: u8) {
-        if let Some(w) = self.host.client_weapons.get_mut(slot) {
+        if let Some(w) = self.host.clients.get_mut(slot).map(|c| &mut c.weapons) {
             w.take(weapon as usize);
         }
     }
 
     /// The ammo and current-weapon edges the weapon builtins made this frame,
-    /// in call order. Drained rather than read, unlike `client_weapons`: they
+    /// in call order. Drained rather than read, unlike `HostClient::weapons`: they
     /// are edges, and applying one twice would refill a spent clip.
     pub fn take_weapon_ops(&mut self) -> Vec<(usize, crate::game::host::WeaponOp)> {
         std::mem::take(&mut self.host.client_weapon_ops)
@@ -495,16 +502,21 @@ impl ScriptRuntime {
     }
 
     /// One client's viewmodel index, read every frame for the same reason
-    /// `client_weapons` is.
+    /// `HostClient::weapons` is.
     pub fn client_viewmodel(&self, slot: usize) -> i32 {
-        self.host.client_viewmodel.get(slot).copied().unwrap_or(0)
+        self.host
+            .clients
+            .get(slot)
+            .map(|c| c.viewmodel)
+            .unwrap_or(0)
     }
 
     /// The slot's shellshock fields: index, start ms, duration ms.
     pub fn client_shellshock(&self, slot: usize) -> [i32; 3] {
         self.host
-            .client_shellshock
+            .clients
             .get(slot)
+            .map(|c| &c.shellshock)
             .copied()
             .unwrap_or([0; 3])
     }
@@ -703,7 +715,12 @@ impl ScriptRuntime {
             .and_then(|v| v.parse().ok())
             .unwrap_or(-1);
         let archive_ms = self.client_archive_ms(slot);
-        let no_spectate = self.host.client_no_spectate.get(slot).copied().unwrap_or(0);
+        let no_spectate = self
+            .host
+            .clients
+            .get(slot)
+            .map(|c| c.no_spectate)
+            .unwrap_or(0);
         Some(Session {
             state,
             spectator_client,
@@ -772,14 +789,14 @@ impl ScriptRuntime {
     /// entity is at the new spot. Unlike the `spawn` builtin it leaves the
     /// health, which the dead end of a killcam reads 0 on.
     pub fn engine_client_spawn(&mut self, slot: usize, origin: [f32; 3], yaw_deg: f32) {
-        if let Some(w) = self.host.client_weapons.get_mut(slot) {
-            *w = crate::weapons::PlayerWeapons::default();
+        if let Some(c) = self.host.clients.get_mut(slot) {
+            c.weapons = crate::weapons::PlayerWeapons::default();
         }
-        if let Some(a) = self.host.client_ammo.get_mut(slot) {
-            *a = crate::game::host::AmmoArrays::default();
+        if let Some(c) = self.host.clients.get_mut(slot) {
+            c.ammo = crate::game::host::AmmoArrays::default();
         }
-        if let Some(s) = self.host.client_shellshock.get_mut(slot) {
-            *s = [0; 3];
+        if let Some(c) = self.host.clients.get_mut(slot) {
+            c.shellshock = [0; 3];
         }
         self.set_client_origin(slot, origin);
         let Some(ent) = self.client_entity(slot) else {

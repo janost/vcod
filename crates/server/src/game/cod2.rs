@@ -719,7 +719,7 @@ impl Cod2Level {
         self.rt.host.cod2_mut().clients[slot] = Cod2ClientState::default();
         // `pers.connected` CON_CONNECTING (gclient+0x26c4 = 1) until
         // `ClientBegin`; the scoreboard and the chat recipients read it.
-        self.rt.host.client_roster[slot] = Some(RosterSlot {
+        self.rt.host.clients[slot].roster = Some(RosterSlot {
             connecting: true,
             ..Default::default()
         });
@@ -742,7 +742,7 @@ impl Cod2Level {
                     ..Default::default()
                 },
             ));
-            self.rt.host.client_names[slot] = name.clone();
+            self.rt.host.clients[slot].name = name.clone();
             self.combat.reset_body(slot);
             self.test_clients.push((slot, port, name));
         }
@@ -800,7 +800,7 @@ impl Cod2Level {
 
     /// `ClientBegin`: `pers.connected` CON_CONNECTED (2).
     pub fn begin(&mut self, slot: usize) {
-        if let Some(r) = self.rt.host.client_roster[slot].as_mut() {
+        if let Some(r) = self.rt.host.clients[slot].roster.as_mut() {
             r.connecting = false;
             r.active = true;
         }
@@ -811,14 +811,14 @@ impl Cod2Level {
     /// `numVotingClients` leaves out (`game::vote`); retail has no such
     /// clients, and its `addTestClient` ones still count.
     pub fn mark_bot(&mut self, slot: usize) {
-        if let Some(r) = self.rt.host.client_roster[slot].as_mut() {
+        if let Some(r) = self.rt.host.clients[slot].roster.as_mut() {
             r.bot = true;
         }
     }
 
     /// `cl->ping` as `SV_CalcPings` left it, which the scoreboard sends.
     pub fn set_ping(&mut self, slot: usize, ping: i32) {
-        if let Some(r) = self.rt.host.client_roster[slot].as_mut() {
+        if let Some(r) = self.rt.host.clients[slot].roster.as_mut() {
             r.ping = ping;
         }
     }
@@ -873,7 +873,7 @@ impl Cod2Level {
         // the script's lines go out ahead of the drop's `J`
         // (cod2-protocol.md 15.5).
         self.rt.client_disconnect(slot);
-        self.rt.host.client_roster[slot] = None;
+        self.rt.host.clients[slot].roster = None;
         self.rt.host.cod2_mut().clients[slot].body = None;
         self.players[slot] = None;
         // `G_FreeEntity`'s reference sweep: no missile keeps the slot as
@@ -1276,7 +1276,7 @@ impl Cod2Level {
         self.apply_sim_ops();
         self.apply_link_ops();
         // The ammo arrays the weapon builtins write are the host's own
-        // (`GameHost::client_ammo`), which the playerstate is built from.
+        // (`HostClient::ammo`), which the playerstate is built from.
         self.rt.take_weapon_ops();
         // CoD1's bots hear the blasts off this list; CoD2's read the level.
         self.rt.take_blast_noises();
@@ -1781,11 +1781,15 @@ fn damage_feedback(p: &mut Cod2Player, max_health: i32, level_time: i32) {
 /// weapons, the weapon in hand, the offhand, the rounds. They are the
 /// truth between cmds, which the weapon builtins write.
 fn sync_weapons_in(host: &GameHost, slot: usize, ws: &mut vcod_cod2::pmove::weapon::WeaponState) {
-    let w = host.client_weapons.get(slot).copied().unwrap_or_default();
+    let w = host
+        .clients
+        .get(slot)
+        .map(|c| c.weapons)
+        .unwrap_or_default();
     ws.held = u128::from(w.held);
     ws.weapon = w.current;
     ws.offhand = host.cod2().clients[slot].offhand;
-    if let Some(a) = host.client_ammo.get(slot) {
+    if let Some(a) = host.clients.get(slot).map(|c| &c.ammo) {
         for i in 0..a.ammo.len() {
             ws.ammo[i] = i32::from(a.ammo[i]);
             ws.clip[i] = i32::from(a.clip[i]);
@@ -1795,12 +1799,12 @@ fn sync_weapons_in(host: &GameHost, slot: usize, ws: &mut vcod_cod2::pmove::weap
 
 /// The weapon state's cmd back into the script's tables.
 fn sync_weapons_out(host: &mut GameHost, slot: usize, ws: &vcod_cod2::pmove::weapon::WeaponState) {
-    if let Some(w) = host.client_weapons.get_mut(slot) {
+    if let Some(w) = host.clients.get_mut(slot).map(|c| &mut c.weapons) {
         w.current = ws.weapon;
         w.held &= ws.held as u64;
     }
     host.cod2_mut().clients[slot].offhand = ws.offhand;
-    if let Some(a) = host.client_ammo.get_mut(slot) {
+    if let Some(a) = host.clients.get_mut(slot).map(|c| &mut c.ammo) {
         for i in 0..a.ammo.len() {
             a.ammo[i] = ws.ammo[i].clamp(i16::MIN.into(), i16::MAX.into()) as i16;
             a.clip[i] = ws.clip[i].clamp(i16::MIN.into(), i16::MAX.into()) as i16;

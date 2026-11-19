@@ -645,7 +645,7 @@ impl ObjectTable {
     /// pushed onto the free list: that list feeds `spawn`, and a map entity
     /// must never be handed a client's number.
     ///
-    /// `GameHost::client_weapons` and `client_viewmodel` are left alone; the
+    /// `HostClient::weapons` and `HostClient::viewmodel` are left alone; the
     /// Connect path resets them, so the slot is clean before anything can
     /// read it and a reset here would only be the second half of the same
     /// guarantee.
