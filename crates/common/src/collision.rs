@@ -141,6 +141,9 @@ pub trait WorldClip: Send + Sync {
     fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> WorldHit;
     /// The contents of the world's brushes at `p`.
     fn point_contents(&self, p: Vec3) -> u32;
+    /// The game's bullet mask: what [`CollisionWorld::shot_trace`] traces
+    /// under on a world with this clip.
+    fn shot_mask(&self) -> u32;
     /// The world's ladder brushes as axial boxes, for the bots' graph
     /// (`nav::ladders` reads [`CollisionWorld::brushes`] for the rest).
     fn ladder_boxes(&self) -> Vec<(Vec3, Vec3)> {
@@ -2621,18 +2624,15 @@ impl CollisionWorld {
         self.trace_with_mask(start, end, mins, maxs, mask, false, Some(pusher))
     }
 
-    /// Bullet segment, retail's `trap_LocationalTrace`: [`MASK_SHOT`] and the
-    /// static models.
+    /// Bullet segment, retail's `trap_LocationalTrace`: [`MASK_SHOT`] (on a
+    /// world with a clip, its [`WorldClip::shot_mask`]) and the static
+    /// models.
     pub fn shot_trace(&self, start: Vec3, end: Vec3) -> Trace {
-        self.trace_with_mask(
-            start,
-            end,
-            Vec3::ZERO,
-            Vec3::ZERO,
-            TRACE_MASK_SHOT,
-            true,
-            None,
-        )
+        let mask = self
+            .world_clip
+            .as_ref()
+            .map_or(TRACE_MASK_SHOT, |c| c.shot_mask());
+        self.trace_with_mask(start, end, Vec3::ZERO, Vec3::ZERO, mask, true, None)
     }
 
     /// A point segment with any mask, with or without the static models:
@@ -3986,6 +3986,41 @@ fn synthetic_bsp(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A world clip that is one sky-only slab: only a mask carrying
+    /// `CONTENTS_SKY` (0x800) stops on it.
+    struct SkySlab;
+
+    impl WorldClip for SkySlab {
+        fn trace(&self, _: Vec3, _: Vec3, _: Vec3, _: Vec3, mask: u32) -> WorldHit {
+            let hit = mask & 0x800 != 0;
+            WorldHit {
+                fraction: if hit { 0.5 } else { 1.0 },
+                normal: if hit { Vec3::Z } else { Vec3::ZERO },
+                surface_flags: 0,
+                contents: if hit { 0x800 } else { 0 },
+                startsolid: false,
+                allsolid: false,
+            }
+        }
+        fn point_contents(&self, _: Vec3) -> u32 {
+            0
+        }
+        fn shot_mask(&self) -> u32 {
+            crate::clipmap::MASK_SHOT
+        }
+    }
+
+    /// `shot_trace` on a world with a game's clip traces under that
+    /// game's bullet mask, which carries sky where CoD1's does not.
+    #[test]
+    fn shot_trace_takes_the_world_clips_mask() {
+        let mut world = test_world(&[]);
+        let (start, end) = (Vec3::new(0.0, 0.0, 300.0), Vec3::new(0.0, 0.0, 100.0));
+        assert_eq!(MASK_SHOT & 0x800, 0);
+        world.set_world_clip(Arc::new(SkySlab));
+        assert!(world.shot_trace(start, end).fraction < 1.0);
+    }
 
     /// mp_depot's `*1` is an exploder and a `bombzone`, so `sd` keeps the
     /// gameobject and `_load.gsc` still takes it out; `*2` carries

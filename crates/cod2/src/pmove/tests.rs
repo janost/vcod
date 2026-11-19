@@ -573,6 +573,10 @@ impl vcod_common::collision::WorldClip for Bush {
     fn point_contents(&self, _p: Vec3) -> u32 {
         0
     }
+
+    fn shot_mask(&self) -> u32 {
+        vcod_common::clipmap::MASK_SHOT
+    }
 }
 
 /// `PM_FoliageSounds` (0x80e6784): a full run through foliage raises

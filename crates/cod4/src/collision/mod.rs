@@ -27,8 +27,11 @@ use crate::zone::Pointer;
 
 pub use vcod_common::clipmap::{
     CONTENTS_BODY, CONTENTS_GLASS, CONTENTS_PLAYERCLIP, CONTENTS_SOLID, MASK_PLAYERSOLID,
-    MASK_SHOT, SURF_LADDER,
+    SURF_LADDER,
 };
+
+/// `Bullet_Trace`'s mask, 0x2806831: CoD2's with 0x4000 (cod4-combat.md 5.3).
+pub const MASK_SHOT: u32 = 0x280_6831;
 
 /// `CM_Trace`'s closing rule: a contact no kernel called walkable is
 /// walkable when its normal climbs at least this steeply.
@@ -430,6 +433,10 @@ impl WorldClip for ClipMap {
 
     fn point_contents(&self, p: Vec3) -> u32 {
         ClipMap::point_contents(self, p)
+    }
+
+    fn shot_mask(&self) -> u32 {
+        MASK_SHOT
     }
 
     fn ladder_boxes(&self) -> Vec<(Vec3, Vec3)> {
