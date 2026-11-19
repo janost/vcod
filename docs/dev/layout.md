@@ -116,6 +116,10 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     delta, the script's commands out, `getinfo`, `getstatus`, rcon,
     `connect` up to `ClientConnect`, the shared console arms, voice
     queueing.
+  - `download.rs` serving a file: `DownloadFile`, the block window,
+    `nextdl`, `retransdl` and the `wwwdl` ladder over each game's
+    `DownloadWire`; each game keeps its first write (CoD1's in
+    `crate::download`).
   - `link.rs` the LAN test, rates, pacing, ping. `archive.rs` the killcam
     ring. `rotation.rs` `map_rotate`'s walk. `challenge.rs` the challenge
     table. `ratelimit.rs` the query limiter. `bans.rs` `ban.txt` and the temporary bans. `gamelog.rs`
@@ -140,7 +144,7 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
   - `test_hooks.rs` the `test_*` and `pin_*` seams and the readers the gates
     call.
 - `cod2/`: the CoD2 engine, `Cod2Game` in `cod2/mod.rs`: handshake,
-  gamestate, snapshots, spectators. `house.rs`: zombies, downloads,
+  gamestate, snapshots, spectators. `house.rs`: zombies, the download's first write,
   heartbeat. `voice.rs`: the voice relay.
 - `voice.rs`: the voice queue, mute list and relay rules CoD2 and CoD4
   share.

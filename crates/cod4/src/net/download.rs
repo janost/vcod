@@ -260,17 +260,6 @@ pub fn iwd_file_checksum(path: &Path) -> Option<i32> {
     Some(super::pure::iwd_checksum(&crcs, 0))
 }
 
-/// `SV_WriteDownloadToClient`'s blocks a message: the client's rate (capped
-/// by `sv_maxRate` when that is 1000 or more) over its snapshot interval in
-/// 2 KiB units, rounded up past a whole one (0x816fa21..0x816fa93); 1 at
-/// rate 0.
-pub fn blocks_per_message(rate: i32, snapshot_msec: i32) -> u32 {
-    if rate == 0 {
-        return 1;
-    }
-    ((rate * snapshot_msec / 1000 + 0x800) >> 11).max(1) as u32
-}
-
 /// The file in flight for the connect screen: its referenced name, the
 /// bytes landed and its size (0 until the server names it: block 0 over
 /// UDP, the redirect over HTTP).

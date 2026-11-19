@@ -1100,7 +1100,7 @@ impl Cod4Server {
                 }
             }
             "retransdl" => c.extra.download.retransmit(atoi(arg)),
-            _ => match c.extra.download.wwwdl(arg) {
+            _ => match c.extra.download.wwwdl(arg, &client_name(&c.link.userinfo)) {
                 download::Www::None => {}
                 download::Www::Gamestate if conn::gamestate_last(c) => {}
                 download::Www::Gamestate => self.send_gamestate(slot),
@@ -1533,7 +1533,7 @@ impl Cod4Server {
         }
         if c.extra.download.active() && c.state != State::Zombie {
             let rate = c.rates.send_rate(max_rate);
-            let budget = vcod_cod4::net::download::blocks_per_message(rate, c.rates.snapshot_msec);
+            let budget = crate::engine::download::blocks_per_message(rate, c.rates.snapshot_msec);
             let wants_www =
                 vcod_common::net::info_value_for_key(&c.link.userinfo, "cl_wwwDownload")
                     .is_some_and(|v| v != "0");

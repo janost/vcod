@@ -3485,7 +3485,10 @@ blocks a message.
 `PC_PATCH_1_1_DOWNLOADDISCONNECTED`; before the ack anything else drops the
 unexpected reason; `done` clears the transfer; `fail` and `chkfail` clear it,
 mark the failure and send the gamestate again. VERIFIED (the strings `ack`,
-`done`, `fail` at 0x814a486, 0x814a502, 0x814a507).
+`done`, `fail` at 0x814a486, 0x814a502, 0x814a507). No arm writes the redirect mark
+(+0x20e0c): the handler stores only the ack (+0x20e10) and the failure
+(+0x20e14), so the mark stays until the next first write clears it. VERIFIED
+(the instructions, 0x808f97c..0x808fc0a).
 
 The client (Mac): `CL_InitDownloads` (0x14d84c), under `cl_allowDownload`
 (registered 1 in `CL_InitOnceForAllClients`, Mac 0x1485e2), asks
@@ -3592,7 +3595,7 @@ system over `veteran/`, sends `donedl`, and takes the gamestate again and its
 a drop reads as "the server dropped the connection" when the server dropped
 nothing.
 
-vcod: the server side is `house::Download` (`DownloadMsg` writes the three
+vcod: the server side is `house::Download` (the engine's window and `wwwdl`, `crate::engine::download`; `DownloadMsg` writes the three
 shapes), the file opened by `house::open_download`: retail's first two roots,
 `<fs_homepath>/<name>` then `<fs_basepath>/<name>` when the two differ
 (`main.rs` sets both to the game dir, `--set fs_homepath` moves the first),
@@ -3610,7 +3613,7 @@ them alone; the third root (`fs_cdpath`, the filesystem root) is never tried,
 so an absolute name resolves under the two roots; an empty path is no root; a
 directory opens nothing. Each reads as a file not there,
 `EXE_AUTODL_FILENOTONSERVER`. The transfer holds the open file and reads each
-block off it as it goes out (`crate::download::DownloadFile`), never the whole
+block off it as it goes out (`crate::engine::download::DownloadFile`), never the whole
 file; the redirect takes the size from the file's metadata. A stock client
 asks only for the referenced iwds, so none of these names reach a server from
 one. INFERRED (`FS_CompareIwds` above). The client side is
