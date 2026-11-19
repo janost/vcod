@@ -58,7 +58,7 @@ impl Capsule {
 /// absolute box `box_min..box_max` met by the box `mins..maxs` swept from
 /// `start` to `end`. Its six sides are axial, which take a capsule as its
 /// box, so the sweep is the box's. A contact it makes names `entity`
-/// ([`CollisionWorld::entity_num`]) and its `hit` is `Prim::Clip(contents)`.
+/// ([`CollisionWorld::entity_num`](super::CollisionWorld::entity_num)) and its `hit` is `Prim::Clip(contents)`.
 #[expect(clippy::too_many_arguments)]
 pub fn clip_entity_box(
     trace: &mut Trace,

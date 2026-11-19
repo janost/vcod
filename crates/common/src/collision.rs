@@ -83,7 +83,7 @@ pub enum Prim {
 }
 
 /// A game's own clip of the world (model 0), traced in place of the BVH and
-/// leaf walk this module builds from a [`MapWorld`]: CoD2's
+/// leaf walk this module builds from a [`MapWorld`](crate::mapworld::MapWorld): CoD2's
 /// `vcod_cod2::collision::ClipMap`. The world's other models still clip
 /// here.
 pub trait WorldClip: Send + Sync {

@@ -125,7 +125,7 @@ pub struct PlayerState {
     pub view_capped: [Option<f32>; 2],
     /// The view yaw before this cmd's angles, retail's `viewangles[1]` at
     /// the top of `PM_UpdateViewAngles`: what 1.5's refused prone turn eases
-    /// back toward. [`cmd::apply_view`] keeps it.
+    /// back toward. [`cmd::apply_view`](super::cmd::apply_view) keeps it.
     pub prev_yaw: f32,
     /// `ps.proneDirectionPitch`: the ground's pitch along the body, eased
     /// toward it while prone. Degrees, wire convention.
@@ -135,7 +135,7 @@ pub struct PlayerState {
     pub prone_torso_pitch: f32,
     /// `fTorsoHeight`, `fTorsoPitch` and `fWaistPitch` (`ps+0x3c4..0x3cc`):
     /// how the prone body bends over the ground, which `BG_CheckProneValid`
-    /// writes off its ground samples ([`check_prone`]).
+    /// writes off its ground samples ([`check_prone`](super::check_prone)).
     pub prone_body: ProneBody,
     /// Retail's `pm_flags` 0x4: the prone press landed on a player moving
     /// forward or back, which throws it into the air (the dive). Held while
@@ -159,11 +159,11 @@ pub struct PlayerState {
     /// `pm_time`: what is left of the knockback timer, 0 when free.
     pub knockback_ms: f32,
     /// The `pm_flags` bits riding `knockback_ms`, cleared with it.
-    /// [`PMF_TIME_KNOCKBACK`], `StuckInClient`'s push
+    /// [`PMF_TIME_KNOCKBACK`](super::PMF_TIME_KNOCKBACK), `StuckInClient`'s push
     /// (`crates/server/src/game/stuck.rs`) and a damaging landing's stun
     /// (`crash_land`), quarters `walk_move`'s accel and
     /// softens ground friction to 0.3 of its control term
-    /// (`docs/research/cod11-player-clip.md`); [`PMF_TIME_DAMAGE`] is a hit's.
+    /// (`docs/research/cod11-player-clip.md`); [`PMF_TIME_DAMAGE`](super::PMF_TIME_DAMAGE) is a hit's.
     pub knockback_flags: i32,
     /// Touching a climbable surface (trace hit with SURF_LADDER) this frame.
     pub on_ladder: bool,
@@ -193,7 +193,7 @@ pub struct PlayerState {
     /// set @0x2ec36, cleared @0x34135 when upmove <= 9).
     pub jump_latched: bool,
     /// Retail's `fJumpOriginZ` (ps+0x68, wire `fJumpPeak`): the takeoff height
-    /// plus [`JUMP_HEIGHT`] from a jump until the ground trace next hits, 0
+    /// plus [`JUMP_HEIGHT`](super::JUMP_HEIGHT) from a jump until the ground trace next hits, 0
     /// otherwise. Only an airborne step reads it.
     pub jump_origin_z: f32,
     /// Footstep phase counter, retail `ps->bobCycle` (ps+0x8). Steps fire on
@@ -245,7 +245,7 @@ pub struct PlayerState {
     /// apart (docs/research/player-model-anim-system.md).
     pub jumped: bool,
     /// Whether this move landed fast enough for the land anim: `PM_CrashLand`
-    /// raises it only below [`LAND_ANIM_SPEED`] (docs/research/cod11-sound-system.md,
+    /// raises it only below [`LAND_ANIM_SPEED`](super::LAND_ANIM_SPEED) (docs/research/cod11-sound-system.md,
     /// "Landing"). Cleared at the top of every move, like `jumped`.
     pub land_anim: bool,
     /// The horizontal speed the last `PM_Footsteps` read, ahead of the
@@ -325,7 +325,7 @@ pub struct PlayerState {
     /// (`PM_UpdatePlayerWalkingFlag`, 0x33694). It is what puts
     /// `walkSpeedScale` on the wish speed.
     pub walking: bool,
-    /// `ps.pm_type` 1, the link `linkTo` makes: [`pmove`] runs retail's
+    /// `ps.pm_type` 1, the link `linkTo` makes: [`pmove`](super::pmove) runs retail's
     /// linked arm, which moves nothing. The caller owns the link and sets it.
     pub linked: bool,
     /// `eFlags & 0xC000`, the mounted-gun bits: `Some(stance)` while riding a
@@ -344,7 +344,7 @@ pub struct PlayerState {
     pub bob: BobCvars,
     /// The movement cvars; the caller copies them in.
     pub bg: BgCvars,
-    /// The cmd running is a spectator's: [`spectator_move`] sets it for its
+    /// The cmd running is a spectator's: [`spectator_move`](super::spectator_move) sets it for its
     /// slide and clears it after, so the hull and the step gate below read
     /// retail's `pm_type` 4 arms.
     pub spectator: bool,
@@ -373,7 +373,7 @@ pub struct PlayerState {
     /// UO's `ps.lastSprintTime`: the serverTime of the last sprinting cmd.
     pub last_sprint_time: i32,
     /// UO's `ps.iFatigueSoundTime`: the serverTime of the last winded
-    /// breath [`fatigue_sound`] raised, 0 once rested.
+    /// breath `fatigue_sound` raised, 0 once rested.
     pub fatigue_sound_time: i32,
     /// UO's `serverCursorHint` 7, a mount ahead the server found (an
     /// `hmgstanding`/`hmgcrouching` brush or a `trigger_mount`), with the
@@ -675,7 +675,7 @@ impl PlayerState {
     /// this state's move: the stance box's, or for a spectator the standing
     /// one `ClientSpawn` wrote, which `SpectatorThink` never copies over
     /// (docs/research/cod11-gsc-object-model.md 22.3). `spectator` reads
-    /// true only inside [`spectator_move`]'s slide, so the callers, all
+    /// true only inside [`spectator_move`](super::spectator_move)'s slide, so the callers, all
     /// outside it, never take that arm.
     pub fn box_height(&self) -> f32 {
         if self.spectator {
@@ -838,7 +838,7 @@ pub struct PmInput {
     /// rather than `cl_stance`, so a refusal forces nothing on the client.
     pub stance_held: bool,
     /// `wbuttons` 0x4, which a shellshocked client holds: the walk's wish
-    /// speed takes [`SCALE_SHELLSHOCK`].
+    /// speed takes [`SCALE_SHELLSHOCK`](super::SCALE_SHELLSHOCK).
     pub shellshock: bool,
     pub walk_slow: bool,
     pub lean_left: bool,

@@ -262,8 +262,8 @@ impl CollisionWorld {
         self.trace_with_mask(start, end, mins, maxs, mask, false, Some(pusher))
     }
 
-    /// Bullet segment, retail's `trap_LocationalTrace`: [`MASK_SHOT`] (on a
-    /// world with a clip, its [`WorldClip::shot_mask`]) and the static
+    /// Bullet segment, retail's `trap_LocationalTrace`: [`MASK_SHOT`](super::MASK_SHOT) (on a
+    /// world with a clip, its [`WorldClip::shot_mask`](super::WorldClip::shot_mask)) and the static
     /// models.
     pub fn shot_trace(&self, start: Vec3, end: Vec3) -> Trace {
         let mask = self
