@@ -648,3 +648,42 @@ fn a_key_catcher_lights_the_talk_flag() {
     assert_eq!(talk(true), EF_TALK, "a catcher up lights the talk flag");
     assert_eq!(talk(false), 0, "the flag clears once it is down");
 }
+
+/// `record` while recording is refused before any file is made: the live
+/// demo is not truncated and no empty `demoNNNN` appears (CoDMP.exe
+/// 0x40e540). Needs no paks.
+#[test]
+fn record_while_recording_makes_no_file() {
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(common::cfg("mp_carentan", "dm"), now);
+    let q = Rc::new(RefCell::new(common::Queues::default()));
+    let mut net = common::connect(&mut sv, &q, &mut now);
+    let step = |sv: &mut vcod_server::Server, net: &mut _, now: &mut Instant| {
+        for _ in 0..4 {
+            *now += Duration::from_millis(50);
+            vcod_common::net::NetClient::send_frame(net, &NULL_USERCMD);
+            common::step(sv, &q, net, *now);
+        }
+    };
+    step(&mut sv, &mut net, &mut now);
+    let dir = tempfile::tempdir().unwrap();
+    crate::start_record(&mut net, dir.path(), Some("live"));
+    assert!(net.is_recording());
+    step(&mut sv, &mut net, &mut now);
+    crate::start_record(&mut net, dir.path(), Some("live"));
+    crate::start_record(&mut net, dir.path(), None);
+    step(&mut sv, &mut net, &mut now);
+    assert!(net.stop_recording().unwrap());
+    let mut files: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    files.sort();
+    assert_eq!(files, ["live.dm_1"]);
+    let demo = std::fs::read(dir.path().join("live.dm_1")).unwrap();
+    let mut r = vcod_common::net::demo::DemoReader::new(demo, &PROTOCOL_V1);
+    assert!(
+        r.next_message().is_ok(),
+        "the live demo opens on its gamestate"
+    );
+}

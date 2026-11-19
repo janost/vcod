@@ -2516,8 +2516,8 @@ fn exec_text(fs: &Pk3Fs, config_dir: Option<&std::path::Path>, file: &str) -> Op
 
 /// `record [name]` on `net` (CoDMP.exe 0x40e540): the file in `dir`, its
 /// refusals and progress printed as retail prints them.
-fn start_record(
-    net: &mut net::NetClient<net::UdpTransport>,
+fn start_record<T: net::Transport>(
+    net: &mut net::NetClient<T>,
     dir: &std::path::Path,
     name: Option<&str>,
 ) {
