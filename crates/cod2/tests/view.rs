@@ -92,8 +92,8 @@ fn retail_session_through_the_snapshot_view() {
     let mid = f.entity_origin(b);
     for i in 0..3 {
         let (pa, pb) = (
-            a.pos.evaluate(prev.server_time),
-            b.pos.evaluate(snap.server_time),
+            a.pos.evaluate_f32(prev.server_time),
+            b.pos.evaluate_f32(snap.server_time),
         );
         assert!((mid[i] - (pa[i] + pb[i]) * 0.5).abs() < 1e-3);
     }

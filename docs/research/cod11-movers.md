@@ -484,7 +484,7 @@ vcod: `mover::run_one` keeps `.angles` as `r.currentAngles`, takes the push's
 `amove` off it, snaps it (`mover::snap_angles`) and quantizes it when a
 rotate ends. The verbs start a stationary rotate from it and snap it in their
 link; a link reads it, not the trajectory. Linear trajectories evaluate as the
-x87 does, `delta * dt + base` rounded once (`mover::bg_evaluate`). VERIFIED,
+x87 does, `delta * dt + base` rounded once (`Trajectory::evaluate_kept`). VERIFIED,
 vcod measurement: `ride_ab.rs`'s
 `a_rotated_brush_model_keeps_retails_quantized_angles` matches every capture
 row to the digit; the ride push and the linkto children match to 0.05 and
@@ -3351,8 +3351,8 @@ there are more than two and three arguments, as on every other verb.
 vcod: `builtins::mover::rotate_to` folds the target; `rotate_velocity` takes
 two arguments; `mover::run_one` writes a moving group's `prev + (eval - prev)`
 unless its segment ended that frame; the plan's `finish` stops a
-`movegravity` at the frame's evaluation; `bg_evaluate` takes a gravity arc
-through `Trajectory::evaluate_kept` (`evaluate_stored` on 1.5 and UO).
+`movegravity` at the frame's evaluation; `mover::bg_evaluate` takes every
+arm through `Trajectory::evaluate_kept` (`evaluate_stored` on 1.5 and UO).
 
 **1.5b and UO.** VERIFIED, two captures off the same probe on mp_carentan,
 2026-10-20: `mp_carentan-dm-moverreads-1.5.txt` (retail 1.5b) and
@@ -3471,8 +3471,8 @@ segment's value at `level.time`, a frame past the row before.
 
 vcod: `game::mover::Plan` holds the setup's fields (`Segs`);
 `Plan::start_toward` and `Plan::start_velocity` are the two setups,
-`Plan::step` the helper, one step a frame; `ramp_kept` and `ramp_stored` the
-ramp arms; `Ramp::check` the argument errors. VERIFIED, vcod measurement
+`Plan::step` the helper, one step a frame; `Trajectory::ramp_kept` and
+`ramp_stored` the ramp arms; `Ramp::check` the argument errors. VERIFIED, vcod measurement
 2026-11-14: the replay failed on the old model (segments chained at their
 own end, `rotatevelocity` scaled to `v * T`, durations rounded, overrunning
 ramps trimmed); on the port every row of the three captures matches.

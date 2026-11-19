@@ -247,13 +247,13 @@ impl Cod4Session {
                     // `BG_EvaluateTrajectory` on the older state at the drawn
                     // time (`CG_CalcEntityLerpPositions`).
                     Some(p) => (
-                        trajectory(p, "pos").evaluate(render_time),
-                        trajectory(p, "apos").evaluate(render_time),
+                        trajectory(p, "pos").evaluate_f32(render_time),
+                        trajectory(p, "apos").evaluate_f32(render_time),
                     ),
                     None if interpolates(e, e) => (o1, a1),
                     None => (
-                        trajectory(e, "pos").evaluate(render_time),
-                        trajectory(e, "apos").evaluate(render_time),
+                        trajectory(e, "pos").evaluate_f32(render_time),
+                        trajectory(e, "apos").evaluate_f32(render_time),
                     ),
                 }
             };

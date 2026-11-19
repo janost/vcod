@@ -325,7 +325,7 @@ impl PickupProbe {
             .filter(|e| e.field_i32(p, "index") == i32::from(index))
             .map(|e| {
                 let at: [f32; 3] = Trajectory::read(e, p, "pos")
-                    .evaluate(snap.server_time)
+                    .evaluate_f32(snap.server_time)
                     .into();
                 at
             })
@@ -374,7 +374,7 @@ eventParms={},{},{},{} origin={} viewangles={}",
                 continue;
             }
             let pos = Trajectory::read(e, p, "pos");
-            let at: [f32; 3] = pos.evaluate(snap.server_time).into();
+            let at: [f32; 3] = pos.evaluate_f32(snap.server_time).into();
             if dist(at, origin) > PICKUP_ITEM_RADIUS {
                 continue;
             }

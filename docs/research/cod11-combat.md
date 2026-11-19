@@ -6556,6 +6556,12 @@ stack.
   takes `z - dt * 400 * dt` (400 at `.rodata 0x74e9c`) off the stored `z`
   and stores it again (0x1bade-0x1baf0). The line arm (0x1b8da) is the
   first half alone.
+- VERIFIED (the instructions): the line arm's `dt` (0x1b8e6..0x1b8f5) is
+  `fildl` of the ms, `fmulp` by the float at `.rodata 0x74e8c` (0x3a83126f,
+  read through `%ebx` at `.got` 0x88d98 less 0x13f0c) and `fstps`: the exact
+  product rounded once, the ms never a float first. vcod's `secs_stored`
+  (`net::trajectory`) computes it so; casting the ms to a float first parts
+  from it past 2^24 ms.
 - VERIFIED: `BG_EvaluateTrajectoryDelta`'s gravity arm (0x1c002) stores
   `dt` the same way (0x1c01d), then `delta.z - dt * 800`, rounded once
   (0x1c053-0x1c062).

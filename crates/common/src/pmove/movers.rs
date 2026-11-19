@@ -82,16 +82,20 @@ impl SnapshotMovers {
         world.clear_world_copies();
         for &(n, model, pos, apos, own) in &self.clipped {
             if model == 0 {
-                world.set_world_copy(n, Some((pos.evaluate(t), apos.evaluate(t), -1)));
+                world.set_world_copy(n, Some((pos.evaluate_f32(t), apos.evaluate_f32(t), -1)));
                 continue;
             }
             if own {
-                world.set_model_instance(n, model, Some((pos.evaluate(t), apos.evaluate(t), !0)));
+                world.set_model_instance(
+                    n,
+                    model,
+                    Some((pos.evaluate_f32(t), apos.evaluate_f32(t), !0)),
+                );
                 continue;
             }
             world.set_model_linked(model, true);
             world.set_model_entity(model, n);
-            world.set_model_pose(model, pos.evaluate(t), apos.evaluate(t));
+            world.set_model_pose(model, pos.evaluate_f32(t), apos.evaluate_f32(t));
         }
     }
 
@@ -100,7 +104,7 @@ impl SnapshotMovers {
     /// rotating mover (movers doc 14).
     pub fn carry(&self, origin: Vec3, ground: i32, from: i32, to: i32) -> Vec3 {
         match self.carrier(ground) {
-            Some((pos, _)) => origin + pos.evaluate(to) - pos.evaluate(from),
+            Some((pos, _)) => origin + pos.evaluate_f32(to) - pos.evaluate_f32(from),
             None => origin,
         }
     }
@@ -109,7 +113,7 @@ impl SnapshotMovers {
     /// between `from` and `to`, in degrees, 0 off a mover.
     pub fn carry_yaw(&self, ground: i32, from: i32, to: i32) -> f32 {
         match self.carrier(ground) {
-            Some((_, apos)) => apos.evaluate(to).y - apos.evaluate(from).y,
+            Some((_, apos)) => apos.evaluate_f32(to).y - apos.evaluate_f32(from).y,
             None => 0.0,
         }
     }

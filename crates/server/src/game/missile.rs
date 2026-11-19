@@ -1006,7 +1006,8 @@ impl Missile {
     /// with the downward trace's normal packed into its parm, and the
     /// entity kept on the wire until [`EVENT_VALID_MS`] has passed.
     fn explode(&mut self, world: Option<&CollisionWorld>, now_ms: i32) -> Explosion {
-        let org = self.traj.evaluate(now_ms).trunc();
+        // f32: truncated next, and no capture pins its last bit.
+        let org = self.traj.evaluate_f32(now_ms).trunc();
         self.origin = org;
         self.traj = Trajectory {
             tr_type: TR_STATIONARY,

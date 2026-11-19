@@ -137,24 +137,22 @@ pub struct Missile {
 }
 
 impl Missile {
-    /// `BG_EvaluateTrajectory` (lnxded 0x80df5d4): the seconds stored as a
-    /// float, then `VectorMA` on the stack with one store per component.
+    /// `BG_EvaluateTrajectory` (lnxded 0x80df5d4): a line or an arc as 1.5b
+    /// stores it (`Trajectory::evaluate_stored`, which numbers both as CoD2
+    /// does), anything else its base.
     fn evaluate(&self, at: i32) -> Vec3 {
-        let t = (at - self.tr_time) as f32 * 0.001;
-        let ma = |b: f32, d: f32| (f64::from(d) * f64::from(t) + f64::from(b)) as f32;
-        let linear = Vec3::new(
-            ma(self.base.x, self.delta.x),
-            ma(self.base.y, self.delta.y),
-            ma(self.base.z, self.delta.z),
-        );
+        use vcod_cod2::trajectory::{TR_GRAVITY, TR_LINEAR};
+        use vcod_common::net::trajectory::{self as v1, Trajectory};
+        const _: () = assert!(TR_LINEAR == v1::TR_LINEAR && TR_GRAVITY == v1::TR_GRAVITY);
         match self.tr_type {
-            vcod_cod2::trajectory::TR_GRAVITY => {
-                let mut p = linear;
-                let fall = f64::from(t) * 400.0 * f64::from(t);
-                p.z = (f64::from(p.z) - fall) as f32;
-                p
+            TR_LINEAR | TR_GRAVITY => Trajectory {
+                tr_type: self.tr_type,
+                tr_time: self.tr_time,
+                tr_duration: 0,
+                base: self.base,
+                delta: self.delta,
             }
-            vcod_cod2::trajectory::TR_LINEAR => linear,
+            .evaluate_stored(at),
             _ => self.base,
         }
     }

@@ -12,7 +12,7 @@
 //!   `TR_INTERPOLATE` one, or a client's `TR_LINEAR_STOP` (players), lerps
 //!   between the two snapshots as `CG_CalcEntityLerpPositions` does; every
 //!   other one evaluates its trajectory at the render time
-//!   ([`Trajectory2::evaluate`]), riding the script mover under it. An
+//!   ([`Trajectory2::evaluate_f32`]), riding the script mover under it. An
 //!   entity new in the snapshot or whose teleport bit flipped starts from
 //!   its newer state ([`teleported`]).
 //! - [`EntityView`] carries what a draw needs: `etype`, `model_index` (a
@@ -619,19 +619,19 @@ impl Frame<'_> {
         let cur = self.current(e);
         if Self::interpolates(cur) {
             let (pos, ang) = (
-                e.pos.evaluate(self.snap.server_time),
-                e.apos.evaluate(self.snap.server_time),
+                e.pos.evaluate_f32(self.snap.server_time),
+                e.apos.evaluate_f32(self.snap.server_time),
             );
             if std::ptr::eq(cur, e) {
                 return (pos, ang);
             }
             let from = self.older_ms();
             return (
-                cur.pos.evaluate(from).lerp(pos, self.frac),
-                lerp_angles(cur.apos.evaluate(from), ang, self.frac),
+                cur.pos.evaluate_f32(from).lerp(pos, self.frac),
+                lerp_angles(cur.apos.evaluate_f32(from), ang, self.frac),
             );
         }
-        let mut origin = cur.pos.evaluate(self.time_ms);
+        let mut origin = cur.pos.evaluate_f32(self.time_ms);
         let ground = cur.ground_entity;
         if (1..=1021).contains(&ground)
             && let Some(mover) = self
@@ -640,9 +640,9 @@ impl Frame<'_> {
                 .filter(|m| m.etype == ET_SCRIPTMOVER)
         {
             let mover = self.current(mover).pos;
-            origin += mover.evaluate(self.time_ms) - mover.evaluate(self.older_ms());
+            origin += mover.evaluate_f32(self.time_ms) - mover.evaluate_f32(self.older_ms());
         }
-        (origin, cur.apos.evaluate(self.time_ms))
+        (origin, cur.apos.evaluate_f32(self.time_ms))
     }
 
     /// [`Self::entity_place`]'s origin.

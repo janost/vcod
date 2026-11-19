@@ -364,7 +364,7 @@ fn flights_land(patch: &Patch) {
         };
         let weapon = launch.index <= patch.proto.max_weapons as i32;
         let mut pos = launch.pos;
-        let mut origin = pos.evaluate(pos.tr_time);
+        let mut origin = pos.evaluate_f32(pos.tr_time);
         let mut now = pos.tr_time;
         let mut nudges = Vec::new();
         let landed = loop {

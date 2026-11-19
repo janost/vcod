@@ -223,7 +223,8 @@ pub fn link_at(
 fn link_pose(e: &EntityState, time: i32, p: &Cod1Wire) -> ([f32; 3], [f32; 3]) {
     use vcod_common::net::flags::{ET_MOVER, ET_SCRIPTMOVER};
     if matches!(e.field_i32(p, "eType"), ET_MOVER | ET_SCRIPTMOVER) {
-        let at = |group| Trajectory::read(e, p, group).evaluate(time).to_array();
+        // The cull's box only; the build's exact pose is `mover::Plan`'s.
+        let at = |group| Trajectory::read(e, p, group).evaluate_f32(time).to_array();
         return (at("pos"), at("apos"));
     }
     (e.origin(p), e.angles(p))
