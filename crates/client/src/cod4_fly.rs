@@ -170,6 +170,41 @@ pub fn load(
 pub struct StockZones {
     common: vcod_cod4::walk::Walked,
     sound: Vec<vcod_cod4::walk::Walked>,
+    /// The map's `_load` zone, walked ahead for the connect screen.
+    load: Option<LoadZone>,
+}
+
+impl StockZones {
+    pub fn with_load(self, load: Option<LoadZone>) -> StockZones {
+        StockZones { load, ..self }
+    }
+}
+
+/// `<map>_load.ff` walked, and its `$levelbriefing` image name: the
+/// connect screen's levelshot (`loadscreen_<map>` on the stock maps).
+pub struct LoadZone {
+    walked: vcod_cod4::walk::Walked,
+    pub levelshot: Option<String>,
+}
+
+/// [`LoadZone`] for `map` (stock, or a usermap's) off the install at
+/// `game_dir`; `None` when the map has no such zone or it does not walk.
+pub fn walk_load_zone(game_dir: &Path, fs_game: Option<&str>, map: &str) -> Option<LoadZone> {
+    let install = Install::at(game_dir)?
+        .with_fs_game(fs_game)
+        .with_map(Some(map));
+    let f = install.zone_file("english", &format!("{map}_load"))?;
+    let walked = Zone::open_path(&f.path)
+        .and_then(|z| walk(z, WalkOptions::default()))
+        .inspect_err(|e| log::warn!("cod4: {}: {e:#}", f.path.display()))
+        .ok()?;
+    let a = &walked.assets;
+    let levelshot = a
+        .materials
+        .iter()
+        .find(|m| m.name.eq_ignore_ascii_case("$levelbriefing"))
+        .and_then(|m| vcod_cod4::hud::colour_image(a, m));
+    Some(LoadZone { walked, levelshot })
 }
 
 /// [`StockZones`] off the install at `game_dir`, each zone on a thread
@@ -193,7 +228,11 @@ pub fn walk_stock(game_dir: &Path) -> Result<StockZones> {
     .collect::<Result<Vec<_>>>()?;
     let sound = walked.split_off(1);
     let common = walked.pop().expect("common_mp walked");
-    Ok(StockZones { common, sound })
+    Ok(StockZones {
+        common,
+        sound,
+        load: None,
+    })
 }
 
 /// [`load`] over `stock` walked already, or with none walked beside the
@@ -225,7 +264,11 @@ pub fn load_from(
         (Map::load(&install, "english", map), stock)
     });
     let (mut m, walked) = map_zone?;
-    let StockZones { common, sound } = stock?;
+    let StockZones {
+        common,
+        sound,
+        load,
+    } = stock?;
     laps.lap("map and stock zones");
     report_load(0.6);
     let ambient = map_ambient(&walked.assets, map);
@@ -344,9 +387,9 @@ pub fn load_from(
     if let Some(z) = mod_zone {
         src.add_zone_flagged(Arc::new(z.assets), vcod_cod4::install::zone_flags::MOD);
     }
-    // Only the zone's assets are kept; the loading screen reads its image
-    // through `levelshot`.
-    load_zone(&install, map, &mut src);
+    // Only the zone's assets are kept; the connect screen read its image
+    // off the walk (`walk_load_zone`).
+    load_zone(&install, map, &mut src, load);
     laps.lap("load zone");
     let lightmaps = m
         .lightmaps
@@ -503,34 +546,27 @@ fn report_load(f: f32) {
     });
 }
 
-/// `<map>_load.ff`'s `$levelbriefing` image name, the loading screen's
-/// levelshot (`loadscreen_<map>` on the stock maps), without walking it
-/// into a source.
-pub fn levelshot(game_dir: &Path, map: &str) -> Option<String> {
-    let install = Install::at(game_dir)?;
-    let f = install.zone_file("english", &format!("{map}_load"))?;
-    let walked = Zone::open_path(&f.path)
-        .and_then(|z| walk(z, WalkOptions::default()))
-        .ok()?;
-    let a = &walked.assets;
-    let m = a
-        .materials
-        .iter()
-        .find(|m| m.name.eq_ignore_ascii_case("$levelbriefing"))?;
-    vcod_cod4::hud::colour_image(a, m)
-}
-
 /// The load screen load: `<map>_load.ff` (stock, or a usermap's) walked into
 /// `src` with the load flags, over every other zone (cod4-fastfile.md 13).
 /// Returns its `$levelbriefing` loading screen's image name once that
 /// decodes; `None` when the map has no such zone or the image does not
 /// decode.
-fn load_zone(install: &Install, map: &str, src: &mut Cod4Source) -> Option<String> {
-    let f = install.zone_file("english", &format!("{map}_load"))?;
-    let walked = Zone::open_path(&f.path)
-        .and_then(|z| walk(z, WalkOptions::default()))
-        .inspect_err(|e| log::warn!("cod4: {}: {e:#}", f.path.display()))
-        .ok()?;
+fn load_zone(
+    install: &Install,
+    map: &str,
+    src: &mut Cod4Source,
+    walked: Option<LoadZone>,
+) -> Option<String> {
+    let walked = match walked {
+        Some(z) => z.walked,
+        None => {
+            let f = install.zone_file("english", &format!("{map}_load"))?;
+            Zone::open_path(&f.path)
+                .and_then(|z| walk(z, WalkOptions::default()))
+                .inspect_err(|e| log::warn!("cod4: {}: {e:#}", f.path.display()))
+                .ok()?
+        }
+    };
     src.add_zone_flagged(
         Arc::new(walked.assets),
         vcod_cod4::install::zone_flags::LOAD,
@@ -809,7 +845,7 @@ pub fn load_av(game_dir: &Path, map: &str) -> Result<(Av, OverlayFiles)> {
         )
     })?;
     let (mut m, walked) = Map::load(&install, "english", map)?;
-    let StockZones { common, sound } = walk_stock(game_dir)?;
+    let StockZones { common, sound, .. } = walk_stock(game_dir)?;
     sound_and_fx(&mut m, &[&walked.assets, &common.assets], map, &sound)
 }
 
@@ -825,7 +861,7 @@ pub fn load_fly_av(game_dir: &Path, map: &str) -> Result<(FlyAv, OverlayFiles)> 
         )
     })?;
     let (mut m, walked) = Map::load(&install, "english", map)?;
-    let StockZones { common, sound } = walk_stock(game_dir)?;
+    let StockZones { common, sound, .. } = walk_stock(game_dir)?;
     let (av, files) = sound_and_fx(&mut m, &[&walked.assets, &common.assets], map, &sound)?;
     let look = crate::cod4_look::Cod4Look::default();
     Ok((
@@ -1296,10 +1332,13 @@ mod tests {
         let m = super::load(install.root(), g, "mp_crash", &Default::default()).unwrap();
         assert!(!m.bsp.soups.is_empty());
         // `mp_crash_load.ff`'s `$levelbriefing` decodes off the iwds.
+        let walked = super::walk_load_zone(install.root(), g, "mp_crash").unwrap();
         let i = install.with_fs_game(g);
         let mut src = vcod_cod4::source::Cod4Source::open(&i).unwrap();
-        let shot = super::load_zone(&i, "mp_crash", &mut src);
+        let shot = super::load_zone(&i, "mp_crash", &mut src, None);
         assert_eq!(shot.as_deref(), Some("loadscreen_mp_crash"));
+
+        assert_eq!(walked.levelshot.as_deref(), Some("loadscreen_mp_crash"));
     }
 
     /// Fly mode over mp_crash plays what a session on it does (C4-19's

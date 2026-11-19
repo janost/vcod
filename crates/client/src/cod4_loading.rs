@@ -52,6 +52,8 @@ pub(crate) struct Status {
     pub map: Option<String>,
     pub gametype: Option<String>,
     pub download: Option<Download>,
+    /// The map's `_load` zone's levelshot image, once the worker walked it.
+    pub levelshot: Option<String>,
     /// `DB_GetLoadedFraction`: 0 to 1 over the map's load.
     pub loaded: f32,
     /// `clc.serverMessage`: a `print`'s text or `EXE_AWAITINGCDKEYAUTH`,
@@ -105,6 +107,10 @@ impl LoadProgress {
             s.gametype = gametype;
             s.stage = Stage::Loading;
         });
+    }
+
+    pub fn set_levelshot(&self, image: Option<String>) {
+        self.with(|s| s.levelshot = image);
     }
 
     pub fn set_loaded(&self, f: f32) {
@@ -176,11 +182,8 @@ pub(crate) struct Loader {
     job: Option<JoinHandle<Result<Joined>>>,
     hud: Option<JoinHandle<Cod4Hud>>,
     loaded_hud: Option<Cod4Hud>,
-    /// The levelshot's image, looked up once the map is known.
-    levelshot: Option<(String, Option<String>)>,
     /// The download's time-left estimates.
     time_left: crate::cod4_hud::connect::TimeLeft,
-    game_dir: PathBuf,
     /// Set by [`Loader::cancel`]; the worker's reads stop on it.
     cancel: Arc<AtomicBool>,
 }
@@ -265,9 +268,7 @@ impl Loader {
             job: Some(job),
             hud: Some(hud),
             loaded_hud: None,
-            levelshot: None,
             time_left: Default::default(),
-            game_dir,
             cancel,
         }
     }
@@ -302,15 +303,8 @@ impl Loader {
             self.loaded_hud = h.join().ok();
         }
         let st = self.progress.status();
-        if let Some(map) = &st.map
-            && self.levelshot.as_ref().is_none_or(|(m, _)| m != map)
-        {
-            let shot = crate::cod4_fly::levelshot(&self.game_dir, map);
-            self.levelshot = Some((map.clone(), shot));
-        }
-        let shot = self.levelshot.as_ref().and_then(|(_, s)| s.as_deref());
         match &self.loaded_hud {
-            Some(h) => h.connect_screen(&st, shot, size, now, &mut self.time_left),
+            Some(h) => h.connect_screen(&st, st.levelshot.as_deref(), size, now, &mut self.time_left),
             None => Vec::new(),
         }
     }
@@ -396,6 +390,10 @@ fn load_map(
     let report = p.clone();
     crate::cod4_fly::set_load_report(Some(Box::new(move |f| report.set_loaded(f))));
     let loaded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // The connect screen's levelshot first; the load takes the walk.
+        let load = crate::cod4_fly::walk_load_zone(game_dir, fs_game.as_deref(), &map_name);
+        p.set_levelshot(load.as_ref().and_then(|l| l.levelshot.clone()));
+        let stock = stock.map(|s| s.with_load(load));
         crate::cod4_fly::load_with_hud(game_dir, fs_game.as_deref(), &map_name, &ents, stock)
     }))
     .unwrap_or_else(|_| Err(anyhow::anyhow!("the load panicked")))
