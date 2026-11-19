@@ -41,6 +41,11 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
   Only files whose path names the game call it; shared code takes
   `as_cod2()` / `as_cod4()` (`shared_code_reaches_game_state_without_panicking`),
   and a builtin set's handlers run only on a host of the set's game.
+- A builtin turns an entity into a client slot through
+  `ClientSlot::of_entity` (`game::slot`), never by casting its number: a
+  script entity's number is past the client arrays, and a command queued
+  for it panicked the engine's drain (CoD2 `updateScores`). A queued server
+  command takes a `Recipient`, so it can only name a real slot or every one.
 - gsc folds case for identifiers, fields, paths and event names, not for
   string values or array keys. A misrouted event name hangs its `waittill`
   silently.
