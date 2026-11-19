@@ -250,7 +250,7 @@ impl Netchan {
     ) -> anyhow::Result<Vec<u8>> {
         let mut comp = huff.compress_block(ops);
         anyhow::ensure!(
-            CLIENT_HEADER_LEN + comp.len() < FRAGMENT_SIZE,
+            fits_compressed(comp.len()),
             "client message of {} bytes needs fragmenting (limit {}); \
              outgoing fragmentation is not ported",
             CLIENT_HEADER_LEN + comp.len(),
@@ -269,6 +269,15 @@ impl Netchan {
         pkt.extend_from_slice(&comp);
         Ok(pkt)
     }
+}
+
+/// Whether a client message of op block `ops` goes out unfragmented.
+pub fn fits(ops: &[u8], huff: &Huffman) -> bool {
+    fits_compressed(huff.compress_block(ops).len())
+}
+
+fn fits_compressed(len: usize) -> bool {
+    CLIENT_HEADER_LEN + len < FRAGMENT_SIZE
 }
 
 /// One client's netchan on the server, the mirror of [`Netchan`]:
