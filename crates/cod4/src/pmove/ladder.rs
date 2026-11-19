@@ -61,7 +61,8 @@ fn probe_box(pm: &Pmove) -> (Vec3, Vec3) {
 /// `-vLadderVec` once on one. A fresh grab takes the struck normal as
 /// `vLadderVec` and must meet the ladder again along it. Skipped while a
 /// land or knockback timer runs off the ladder; refused prone, dead, within
-/// 300 ms of a jump and until a walking frame after leaving one.
+/// 300 ms of a jump and until a walking frame after leaving one. Letting go
+/// in the air raises the forced jump anim.
 pub(crate) fn check_ladder_move(pm: &mut Pmove, pml: &mut Pml) {
     if pml.walking {
         pm.ps.pm_flags &= !pmf::LADDER_LEFT;
@@ -114,6 +115,10 @@ pub(crate) fn check_ladder_move(pm: &mut Pmove, pml: &mut Pml) {
         }
     }
     leave_ladder(pm.ps);
+    // Let go of the rungs in the air: the jump anim, forced (0x805a0a7..0x805a0cc).
+    if stick {
+        super::anim::event(pm, super::anim::Event::Jump, false, true);
+    }
 }
 
 /// `PM_LadderMove`: a jump pushes off through the air move; else the climb
@@ -276,4 +281,92 @@ pub(crate) fn rung_footstep(pm: &mut Pmove) {
         surf = RUNG_DEFAULT_SURFACE;
     }
     pm.ps.add_event(ev::FOOTSTEP_RUN, surf);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use glam::Vec3;
+    use vcod_common::animtree::PlayerAnims;
+    use vcod_common::asset_source::{AssetCache, AssetSource};
+    use vcod_common::game::Game;
+
+    use super::super::anim::{ANIM_TOGGLEBIT, AnimInput};
+    use super::super::{Cmd, ENTITYNUM_NONE, PlayerState, PmWorld, Pmove, Rules, Tr, pmf, pmove};
+
+    /// The player tree and script as loose text.
+    struct Text(HashMap<&'static str, &'static str>, AssetCache);
+
+    impl AssetSource for Text {
+        fn game(&self) -> Game {
+            Game::Cod4
+        }
+        fn read(&self, path: &str) -> Option<Vec<u8>> {
+            self.0.get(path).map(|s| s.as_bytes().to_vec())
+        }
+        fn exists(&self, path: &str) -> bool {
+            self.0.contains_key(path)
+        }
+        fn list(&self, _: &str, _: &str) -> Vec<String> {
+            Vec::new()
+        }
+        fn cache(&self) -> &AssetCache {
+            &self.1
+        }
+    }
+
+    /// Nothing to meet: every trace runs its full length.
+    struct Open;
+
+    impl PmWorld for Open {
+        fn trace(&self, _: Vec3, _: Vec3, _: Vec3, _: Vec3, _: u32, _: u32) -> Tr {
+            Tr::default()
+        }
+    }
+
+    /// A body held on the rungs in the air whose probe meets no ladder
+    /// lets go and raises the jump anim, forced past the legs' timer
+    /// (cod4-pmove.md 7, 0x805a0a7..0x805a0cc).
+    #[test]
+    fn letting_go_in_the_air_forces_the_jump_anim() {
+        let fs = Text(
+            HashMap::from([
+                ("animtrees/multiplayer.atr", "main { legs { pb_letgo } }"),
+                (
+                    "mp/playeranim.script",
+                    "ANIMATIONS\nSTATE COMBAT\n{\n}\nEVENTS\njump\n{\n\tdefault\n\t{\n\t\tlegs pb_letgo duration 300\n\t}\n}\n",
+                ),
+            ]),
+            AssetCache::default(),
+        );
+        let anims = PlayerAnims::load(&fs).unwrap();
+        let letgo = anims.wire_of("pb_letgo").unwrap() as u32;
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 64.0), 0.0, 1000);
+        ps.pm_flags |= pmf::LADDER;
+        ps.ground_entity_num = ENTITYNUM_NONE;
+        ps.ladder_vec = Vec3::NEG_X;
+        ps.legs_timer = 500;
+        let cmd = Cmd {
+            server_time: 1050,
+            ..Default::default()
+        };
+        let old = Cmd {
+            server_time: 1000,
+            ..Default::default()
+        };
+        let mut pm = Pmove::new(&mut ps, cmd, old, &Open, Rules::default());
+        pm.anim = Some(AnimInput {
+            anims: &anims,
+            player_anim_type: 0,
+            weapon_class: 0,
+        });
+        pmove(&mut pm);
+        assert_eq!(
+            ps.pm_flags & (pmf::LADDER | pmf::LADDER_LEFT),
+            pmf::LADDER_LEFT
+        );
+        assert_eq!(ps.legs_anim & !ANIM_TOGGLEBIT, letgo);
+        assert_eq!(ps.legs_timer, 350);
+    }
 }
