@@ -9,7 +9,9 @@
 # (a file or a directory of .rs files). All old files and receivers form
 # one set, so code moved between two old files passes when both are named.
 #
-# Both sides are rustfmt'd (edition 2024), then blank lines, comment-only
+# Both sides are rustfmt'd (edition 2024, max_width 1000, so a signature
+# that a longer visibility or a deeper indent would rewrap stays on one
+# line), then blank lines, comment-only
 # lines and leading and trailing whitespace are dropped, and the multisets
 # of lines are compared. Allowed differences:
 #   - `use` and `mod` items (multi-line `use` trees included)
@@ -17,9 +19,11 @@
 #     start of a line
 #   - `impl ... {` and `mod ... {` header lines, with one closing `}` for
 #     each such header added or removed
+#   - `#[cfg(test)]`, which each test module that moves into its own file
+#     carries
 # Every other added (+) or removed (-) line is printed, with its count, and
 # the exit status is 1. Exit 2: bad usage, or a file rustfmt cannot parse.
-# A line rustfmt rewraps because the move changed its indentation shows up
+# A path that moved one directory deeper (`include_bytes!("../x")`) shows up
 # as a difference; read it and judge.
 set -euo pipefail
 command -v rustfmt > /dev/null || { echo "move_check: rustfmt not found" >&2; exit 2; }
@@ -90,7 +94,7 @@ def receivers(rev, olds, into):
 
 def fmt(path, rev, text):
     r = subprocess.run(
-        ["rustfmt", "--edition", "2024"], input=text, capture_output=True, text=True
+        ["rustfmt", "--edition", "2024", "--config", "max_width=1000"], input=text, capture_output=True, text=True
     )
     if r.returncode != 0:
         die(f"rustfmt failed on {rev}:{path}:\n{r.stderr.strip()}")
@@ -125,6 +129,9 @@ def norm_lines(text):
             skipped.append(line)
             if line.endswith(";"):
                 in_use = False
+            continue
+        if line == "#[cfg(test)]":
+            skipped.append(line)
             continue
         if USE_OR_MOD.match(line) and not BLOCK_HEADER.match(line):
             skipped.append(line)
