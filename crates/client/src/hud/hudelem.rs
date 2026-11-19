@@ -485,10 +485,12 @@ fn place(e: &HudElem, now: i32, w: f32, h: f32) -> (f32, f32) {
 /// `to` once `time` ms from `start` have passed or when `time` is 0, `from`
 /// before `start`.
 fn lerp_over(from: f32, to: f32, now: i32, start: i32, time: i32) -> f32 {
-    if time <= 0 || now - start >= time {
+    // Server times wrap the way retail's C ints do.
+    let since = now.wrapping_sub(start);
+    if time <= 0 || since >= time {
         return to;
     }
-    let t = ((now - start) as f32 / time as f32).clamp(0.0, 1.0);
+    let t = (since as f32 / time as f32).clamp(0.0, 1.0);
     from + (to - from) * t
 }
 
@@ -548,10 +550,10 @@ pub fn unpack_color(rgba: i32) -> [f32; 4] {
 /// The ms a timer or clock element (types 4 to 9) shows, never below 0.
 fn timer_ms(ty: i32, time: i32, now: i32) -> i32 {
     let ms = match ty {
-        4 => time - now + 999,
-        6 => time - now + 99,
-        8 => time - now,
-        5 | 7 | 9 => now - time,
+        4 => time.wrapping_sub(now).wrapping_add(999),
+        6 => time.wrapping_sub(now).wrapping_add(99),
+        8 => time.wrapping_sub(now),
+        5 | 7 | 9 => now.wrapping_sub(time),
         _ => 0,
     };
     ms.max(0)
@@ -878,6 +880,17 @@ pub(crate) mod tests {
         let cs = cs_with(&[]);
         let e = elem(&[(f::TYPE, 3), (f::SHADER, 9), (f::WIDTH, 8), (f::HEIGHT, 8)]);
         assert!(run(&[e, e], &cs, 0, (640.0, 480.0)).is_empty());
+    }
+
+    /// Server times at the i32 limits wrap as retail's ints do instead of
+    /// overflowing (SEC-100).
+    #[test]
+    fn timers_and_tweens_wrap_at_the_i32_limits() {
+        assert_eq!(timer_ms(4, i32::MAX, i32::MIN), 998);
+        assert_eq!(timer_ms(5, i32::MIN, i32::MAX), 0);
+        assert_eq!(timer_ms(8, i32::MIN, i32::MAX), 1);
+        assert_eq!(lerp_over(0.0, 1.0, i32::MIN, i32::MAX, 100), 0.01);
+        assert_eq!(lerp_over(0.0, 1.0, i32::MAX, i32::MIN, 100), 0.0);
     }
 
     #[test]
