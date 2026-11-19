@@ -118,6 +118,9 @@ pub struct AudioSystem {
     /// starts.
     manager: Option<Mixer>,
     aliases_all: AliasTable,
+    /// `aliases_all` came from a CoD4 session's zones (`set_cod4_aliases`),
+    /// not from csvs on the search path: `reopen` keeps it.
+    zone_aliases: bool,
     /// `aliases_all` filtered by loadspec for the current map; empty before
     /// the first gamestate.
     aliases: AliasTable,
@@ -386,6 +389,7 @@ impl AudioSystem {
             cs_sounds: cues::CS_SOUNDS_V1,
             menu_aliases: aliases_all.for_map("menu"),
             aliases_all,
+            zone_aliases: false,
             aliases: AliasTable::default(),
             map: None,
             bank: SoundBank::at_rate(opts.rate),
@@ -677,12 +681,14 @@ impl AudioSystem {
 
     /// A download reopened the search path: reload the alias csvs, drop every
     /// decoded sound, and redo the current map's `on_gamestate` against the
-    /// new table.
+    /// new table. A CoD4 zone table has no csvs to reload and stays.
     pub fn reopen(&mut self, fs: &dyn AssetSource) {
-        self.aliases_all = match self.aliases_all.cod2 {
-            true => cod2::load(fs),
-            false => AliasTable::load(fs),
-        };
+        if !self.zone_aliases {
+            self.aliases_all = match self.aliases_all.cod2 {
+                true => cod2::load(fs),
+                false => AliasTable::load(fs),
+            };
+        }
         self.menu_aliases = self.aliases_all.for_map("menu");
         self.bank = SoundBank::at_rate(self.bank.rate);
         self.missed.clear();
@@ -700,6 +706,8 @@ impl AudioSystem {
     /// sound goes.
     pub fn set_cod4_aliases(&mut self, table: AliasTable) {
         self.aliases_all = table;
+        self.zone_aliases = true;
+        self.menu_aliases = self.aliases_all.for_map("menu");
         self.bank = SoundBank::at_rate(self.bank.rate);
         self.volume_scale = COD4_VOLUME_SCALE;
         self.chain_secondaries = true;
@@ -3858,6 +3866,21 @@ mod tests {
         assert_eq!(COD4_VOLUME_SCALE, 0.75);
         let shell = crate::console::shell::Shell::new();
         assert_eq!(shell.cvar_f32("mss_volume") * a.volume_scale, 0.8 * 0.75);
+    }
+
+    /// A download's `reopen` under a CoD4 zone table keeps the table: there
+    /// are no csvs on the search path to reload it from.
+    #[test]
+    fn reopen_keeps_a_cod4_zone_table() {
+        let csv = "name,file\nweap_m4_fire,weapons/m4.wav\n";
+        let fs = Pk3Fs::empty();
+        let mut a = silent(&fs, 0);
+        a.set_cod4_aliases(AliasTable::parse_csv(csv, "zone"));
+        a.on_gamestate("mp_crash");
+        assert!(a.aliases.get("weap_m4_fire").is_some());
+        a.reopen(&fs);
+        assert!(a.aliases_all.get("weap_m4_fire").is_some());
+        assert!(a.aliases.get("weap_m4_fire").is_some());
     }
 
     /// A file a new CoD4 table's search path overlays under a name already
