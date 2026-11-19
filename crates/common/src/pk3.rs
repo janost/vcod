@@ -831,6 +831,23 @@ impl Pk3Fs {
         Some(buf)
     }
 
+    /// `path`'s size and the CRC-32 its archive's central directory keeps
+    /// for its bytes, `size << 32 | crc`, read without inflating it; `None`
+    /// for an overlaid or missing entry.
+    pub fn entry_checksum(&self, path: &str) -> Option<u64> {
+        let key = path_key(path);
+        if self.overlay.contains_key(&key) {
+            return None;
+        }
+        let (ai, entry) = self
+            .index
+            .get(&key)
+            .or_else(|| self.alias_index.get(&key))?;
+        let mut zip = self.archive(*ai)?;
+        let f = zip.by_name(entry).ok()?;
+        Some(f.size() << 32 | u64::from(f.crc32()))
+    }
+
     /// Archive `ai` off the open cache, its central directory parsed once
     /// per `Pk3Fs`. A poisoned lock still holds a usable cache; `by_name`
     /// re-seeks from the central directory.
@@ -974,6 +991,11 @@ impl Pk3Fs {
             }
         }
         None
+    }
+
+    /// [`Self::entry_checksum`] of the map [`Self::resolve_map`] finds.
+    pub fn map_checksum(&self, name: &str) -> Option<u64> {
+        self.entry_checksum(&self.resolve_map(name)?)
     }
 }
 

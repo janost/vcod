@@ -239,6 +239,9 @@ pub struct Vehicles {
     /// Each vehicle model's skeleton and collision, for its tags and the
     /// locational trace.
     pub rigs: HashMap<String, Option<std::rc::Rc<seat::Rig>>>,
+    /// Each vehicle's posed collision as the last trace met it
+    /// ([`seat::hull_collision`]).
+    pub hulls: HashMap<EntId, seat::HullCollision>,
     /// Stuck kills landed since the level loaded, for the bot gates.
     pub stuck_kills: u32,
 }
@@ -262,6 +265,7 @@ impl Default for Vehicles {
             overheated_gunners: Vec::new(),
             seat_ops: Vec::new(),
             rigs: HashMap::new(),
+            hulls: HashMap::new(),
             stuck_kills: 0,
         }
     }
@@ -640,11 +644,10 @@ pub fn placed_models(host: &mut GameHost, cx: &mut Cx) -> Vec<crate::game::comba
         {
             continue;
         }
-        let Some(posed) = seat::posed(host, cx, id) else {
+        let Some((origin, rot, hull)) = seat::hull_collision(host, cx, id) else {
             continue;
         };
-        let (tris, surfs) = posed.collision();
-        if tris.is_empty() {
+        if hull.tris.is_empty() {
             continue;
         }
         let owner = host.vehicles.live[&id].seats[1].map(|s| s as u32);
@@ -654,10 +657,10 @@ pub fn placed_models(host: &mut GameHost, cx: &mut Cx) -> Vec<crate::game::comba
             .map(|(lo, hi)| (glam::Vec3::from(lo), glam::Vec3::from(hi)));
         out.push(crate::game::combat::PlacedModel {
             id,
-            origin: posed.origin,
-            axis: glam::Mat3::from_quat(posed.rot),
-            tris: std::sync::Arc::from(tris),
-            surfs: std::sync::Arc::from(surfs),
+            origin,
+            axis: glam::Mat3::from_quat(rot),
+            tris: hull.tris,
+            surfs: hull.surfs,
             owner,
             takes_damage: true,
             body: false,

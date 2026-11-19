@@ -218,6 +218,19 @@ pub fn apply_hull(pose: &mut PoseBuffer, skel: &Skeleton, v: &VehiclePose) {
     set("tag_secondary_gun", v.gunner_gun);
 }
 
+/// Every [`VehiclePose`] field [`apply_hull`] reads, by bits: two poses
+/// with the same key pose the hull the same. Keep it in step with
+/// [`apply_hull`].
+pub fn hull_key(v: &VehiclePose) -> [u32; 16] {
+    let mut k = [0; 16];
+    let angles = [v.body, v.turret, v.barrel, v.gunner_base, v.gunner_gun];
+    for (i, a) in angles.iter().flatten().enumerate() {
+        k[i] = a.to_bits();
+    }
+    k[15] = v.kind as u32;
+    k
+}
+
 /// The wheels the callback walks, in its order (0x300851ac).
 pub const WHEEL_TAGS: [&str; 6] = [
     "tag_wheel_front_left",
@@ -489,6 +502,44 @@ mod tests {
             local(true, "tag_secondary_base"),
             local(false, "tag_secondary_base")
         );
+    }
+
+    /// A hull posed again only on a new key poses as a fresh one: what
+    /// the key leaves out moves no bone, each field it holds moves it.
+    #[test]
+    fn the_hull_key_holds_what_the_hull_pose_reads() {
+        for (m, kind) in [(panzer(), KIND_TANK), (jeep(), KIND_FOUR_WHEEL)] {
+            let skel = Skeleton::build(&[&m]);
+            let worlds = |v: &VehiclePose| {
+                let mut pose = PoseBuffer::new(&skel);
+                apply_hull(&mut pose, &skel, v);
+                pose.bone_worlds(&skel)
+            };
+            let mut f = fields(kind);
+            f.turret = [3.0, 40.0];
+            f.gunner = [-4.0, 25.0];
+            f.body_packed = [140, 120];
+            let v = lerp(&f, &f, 0.0);
+            let mut unread = v;
+            unread.steer = 17.0;
+            unread.steering_ratio = 1.0;
+            unread.shader_time = 9.5;
+            assert_eq!(hull_key(&unread), hull_key(&v));
+            assert_eq!(worlds(&unread), worlds(&v));
+            let read: [fn(&mut VehiclePose); 6] = [
+                |v| v.body[0] += 1.0,
+                |v| v.turret[1] += 1.0,
+                |v| v.barrel[0] += 1.0,
+                |v| v.gunner_base[1] += 1.0,
+                |v| v.gunner_gun[0] += 1.0,
+                |v| v.kind ^= 1,
+            ];
+            for (i, change) in read.iter().enumerate() {
+                let mut moved = v;
+                change(&mut moved);
+                assert_ne!(hull_key(&moved), hull_key(&v), "field {i}");
+            }
+        }
     }
 
     /// The tags the pose reads on `mp_vehicle_panzeriv`, at their bind.

@@ -51,7 +51,9 @@ UO, `rcon login secret` then `rcon <command>` on CoD2 and CoD4.
 
 The bots join once the level is up. The navigation graph builds on its
 own thread on the first tick, a few seconds on a big map; bots wander
-until it is ready.
+until it is ready. The server keeps each graph it built on disk
+(`--nav-cache`, [usage.md](usage.md#server)), so the next start of the
+same binary on the same map loads it in milliseconds.
 
 ## rcon commands
 

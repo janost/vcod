@@ -77,6 +77,9 @@ pub struct WorldSolids {
 #[derive(Clone, Debug)]
 pub struct ClipMap {
     pub name: String,
+    /// A hash of the clip map's arrays as the zone holds them
+    /// ([`content_hash`]): what the server's bots key their graph on disk by.
+    pub checksum: u64,
     pub world: clipmap::ClipMap,
     /// `cmodels`; index 0 is the world's own and traces as [`Self::world`].
     pub submodels: Vec<Submodel>,
@@ -559,6 +562,43 @@ fn vec3_at(b: &[u8], o: usize) -> Vec3 {
     Vec3::new(f32_at(b, o), f32_at(b, o + 4), f32_at(b, o + 8))
 }
 
+/// A hash of every array of `c` the clip reads, each led by its length.
+/// `DefaultHasher::new()` hashes alike within one binary, the only place
+/// a value is compared.
+fn content_hash(c: &world::ClipMap) -> u64 {
+    use std::hash::Hasher;
+    let bulks = [
+        &c.planes,
+        &c.brush_sides,
+        &c.brush_edges,
+        &c.nodes,
+        &c.leafs,
+        &c.leaf_brushes,
+        &c.leaf_brush_nodes,
+        &c.leaf_surfaces,
+        &c.verts,
+        &c.tri_indices,
+        &c.tri_edge_walkable,
+        &c.borders,
+        &c.partitions,
+        &c.aabb_trees,
+        &c.cmodels,
+        &c.brushes,
+    ];
+    let models = c.static_models.iter().map(|(_, b)| b.as_slice());
+    let mut h = std::hash::DefaultHasher::new();
+    for a in bulks
+        .into_iter()
+        .map(|b| b.as_deref().unwrap_or_default())
+        .chain([c.materials.as_slice()])
+        .chain(models)
+    {
+        h.write_usize(a.len());
+        h.write(a);
+    }
+    h.finish()
+}
+
 fn bulk<'a>(b: &'a Option<Vec<u8>>, what: &str) -> Result<&'a [u8]> {
     b.as_deref()
         .with_context(|| format!("{what} not kept (walk with keep_bulk)"))
@@ -854,6 +894,7 @@ fn build(c: &world::ClipMap, a: &Assets, refs: &[&Assets]) -> Result<ClipMap> {
     world.check_trees()?;
     Ok(ClipMap {
         name: c.name.clone(),
+        checksum: content_hash(c),
         world,
         submodels,
         static_models,

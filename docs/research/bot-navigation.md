@@ -785,6 +785,23 @@ The server:
   17 to 39 from other builds, 2026-11-17). Every bot still plans on that
   tick; each search stops at `PLAN_SLICE` (section 3, "The pass on
   threads").
+- `vcod-server` also keeps each graph it builds on disk (`nav::disk`,
+  `--nav-cache`, by default `navcache/` beside the binary): the next start
+  of the same binary on the same map loads it on the build thread instead
+  of building it. A file is keyed by the map file (`CollisionWorld::source`:
+  a BSP's or d3dbsp's size and CRC-32 from its archive's central directory,
+  CoD4's clip map arrays hashed), the binary's own hash, a format number
+  and the in-memory key, and is read as hostile input: any mismatch, short
+  read, bad hash, index past the nodes or non-finite float rebuilds. The
+  derived component tables are recomputed (`index_components`), the rest
+  is stored as built. VERIFIED (measured, release, `--bots 4`, `unshare
+  -rn`, 2026-11-19), first start then second: 1.1 `mp_carentan` built in
+  361-783 ms, loaded in 6 ms; UO `mp_cassino` 2660 ms, 6 ms; CoD2
+  `mp_toujane` 2390 ms, 14 ms; CoD4 `mp_crossfire` 4074-5792 ms, 8 ms.
+  `nav_build` and the in-process gates keep nothing on disk. The whole
+  builds' CPU, `nav_build` on 8 cores: `mp_carentan` and `mp_hurtgen`
+  together 20.5 s user for 3.2 s wall; CoD4 `mp_crossfire` 41.2 s user
+  for 6.8 s wall. VERIFIED (measured).
 
 Spawn gaps, explained:
 

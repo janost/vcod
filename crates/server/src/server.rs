@@ -5382,7 +5382,11 @@ impl Server {
         self.game.snap_flag_server_bit ^= console::SNAPFLAG_SERVERCOUNT;
         // Step 15's `Cvar_Set("mapname", ...)` and the collision with it.
         self.game.cfg.map = map.to_string();
-        self.load_world(World::from_bsp(&bsp, Some(&fs)));
+        let mut world = World::from_bsp(&bsp, Some(&fs));
+        world
+            .collision
+            .set_source(fs.map_checksum(map).unwrap_or(0));
+        self.load_world(world);
         // Step 16, then steps 7 and 10 with step 24 folded in: the table is
         // rebuilt empty around the serverinfo and systeminfo the new id
         // belongs in, which is where the client reads the id back from.

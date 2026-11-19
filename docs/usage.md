@@ -117,6 +117,7 @@ vcod-server <map> [--port 28960] [--hostname vcod] [--max-clients 8] [--gametype
 | `--set NAME=VALUE` | Retail's `+set`, repeatable. |
 | `--bots <n>`, `--bots-shoot` | Start with `n` bots; without `--bots-shoot` they never fire ([bots.md](bots.md)). |
 | `--ban-file <path>` | Keep `banUser`/`banClient` bans across runs. |
+| `--nav-cache <dir>` | Where the bots' navigation graphs are kept between runs, keyed by the map file and the server binary. Default `navcache/` beside the binary, or none when the binary sits inside the game dir. |
 | `--gametype-script <file>` | CoD1, UO, CoD2: run a gametype from disk instead of the paks. |
 | `--script-dir <dir>` | CoD4: loose `.gsc` files read over the zones' scripts each level, as retail reads a mod's. |
 | `--vanilla` | See [Install and game](#install-and-game). |

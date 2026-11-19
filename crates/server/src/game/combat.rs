@@ -1533,11 +1533,13 @@ fn trace_attack(
         limit = f;
         model_hit = None;
     }
+    let p = crate::tick_profile::phase("trace/hit bodies");
     let bodies: Vec<HitBody> = sims
         .iter()
         .filter(|(s, sim)| !pass.skips(*s as u32, sim.seat.map(|seat| seat.vehicle)))
         .filter_map(|(s, sim)| sim.hit_body(*s))
         .collect();
+    drop(p);
     let arith = bones.as_ref().map_or(Arith::Kept, |b| b.arith);
     if let Some((slot, fraction, hitloc)) =
         trace_bodies(muzzle, end, usize::MAX, &bodies, limit, priority, bones)
@@ -1747,7 +1749,9 @@ pub fn trace_bodies_faced(
         let angles = stamps.as_deref().map_or([0.0; 3], DobjStamps::angles);
         let frame = body_frame(angles);
         let axis_stored = vcod_common::x87::angles_to_axis(angles.into());
+        let p = crate::tick_profile::phase("trace/pose");
         let pose = stamped_pose(&skel, body, anims, rigs, fs, *now_ms, stamps);
+        drop(p);
         // Into the body's own frame: its `tag_origin` sits at the feet.
         let (ls, le) = match arith {
             Arith::Stored => (
