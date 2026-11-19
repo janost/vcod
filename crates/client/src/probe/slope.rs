@@ -1,6 +1,8 @@
 //! `--save-slope`: every cmd and snapshot of a scripted walk, for `playerstate_slope_ab.rs`.
 
-use super::fixture::{PLAYERSTATE_FIXTURE_DIR, write_capture};
+use super::fixture::{
+    PLAYERSTATE_FIXTURE_DIR, cmd_fields, serverinfo_key, tagged_name, write_fixture_file,
+};
 use super::*;
 
 /// What `--probe-slope` counts over the route walk, per second and for the
@@ -148,19 +150,7 @@ pub(super) struct SlopeCapture {
 
 impl SlopeCapture {
     fn cmd_line(head: &str, c: &net::msg::UserCmd) -> String {
-        format!(
-            "{head} st={} buttons={} wbuttons={} weapon={} up={} forward={} right={} angles={},{},{}",
-            c.server_time,
-            c.buttons,
-            c.wbuttons,
-            c.weapon,
-            c.up,
-            c.forward,
-            c.right,
-            c.angles[0],
-            c.angles[1],
-            c.angles[2]
-        )
+        format!("{head} {}", cmd_fields(c))
     }
 
     /// A snapshot before the capture opens, under [`Self::wait_log`].
@@ -410,8 +400,7 @@ pub(super) fn write_slope_fixture(
     tag: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
-    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
-    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let key = |k: &str| serverinfo_key(configstrings, k);
     let map = key("mapname");
     // A client-probe gametype runs `dm::main` under its own name; the replay
     // needs the gametype whose rules the map was loaded under.
@@ -585,30 +574,18 @@ pub(super) fn write_slope_fixture(
             out.push('\n');
             next_snap.next();
         }
-        out.push_str(&format!(
-            "!cmd st={} buttons={} wbuttons={} weapon={} up={} forward={} right={} angles={},{},{}\n",
-            c.server_time,
-            c.buttons,
-            c.wbuttons,
-            c.weapon,
-            c.up,
-            c.forward,
-            c.right,
-            c.angles[0],
-            c.angles[1],
-            c.angles[2]
-        ));
+        out.push_str(&format!("!cmd {}\n", cmd_fields(c)));
     }
     for (_, line) in next_snap {
         out.push_str(line);
         out.push('\n');
     }
-    let suffix = tag.map(|t| format!("-{t}")).unwrap_or_default();
-    let path = fixture_path(
+    let path = write_fixture_file(
         PLAYERSTATE_FIXTURE_DIR,
-        &format!("{map}-{gametype}-slope-{cmd_ms}ms{suffix}.txt"),
+        &tagged_name(&format!("{map}-{gametype}-slope-{cmd_ms}ms"), tag),
+        &out,
+        overwrite,
     )?;
-    write_capture(&path, &out, overwrite)?;
     println!(
         "slope: {} cmds, {} snapshots -> {path}",
         capture.cmds.len(),

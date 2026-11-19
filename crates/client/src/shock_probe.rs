@@ -64,6 +64,7 @@ impl ShockProbe {
         }
         let line = |ms: u128| {
             format!(
+                // forward, right, up: the shellshock gate reads this order, not cmd_fields's.
                 "!cmd ms={ms} st={} buttons={} wbuttons={} weapon={} forward={} right={} up={} angles={},{},{}",
                 sent.server_time,
                 sent.buttons,
@@ -174,15 +175,12 @@ impl ShockProbe {
             env!("CARGO_MANIFEST_DIR"),
             "/../server/tests/fixtures/shellshock"
         );
-        std::fs::create_dir_all(dir)?;
-        let path = crate::probe::fixture_path(
+        let path = crate::probe::write_fixture_file(
             dir,
-            &format!("{map}-dm-shock-client{}.txt", crate::probe::tag_suffix(tag)),
+            &crate::probe::tagged_name(&format!("{map}-dm-shock-client"), tag),
+            &out,
+            overwrite,
         )?;
-        if !overwrite && std::path::Path::new(&path).exists() {
-            anyhow::bail!("{path} already exists; pass --overwrite-fixture to replace it");
-        }
-        std::fs::write(&path, out)?;
         println!("shock: {} lines -> {path}", self.lines.len());
         Ok(())
     }

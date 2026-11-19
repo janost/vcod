@@ -4,7 +4,10 @@ use super::combat::{
     FRAG_WEAPON, MissileSample, MissileWatch, PULSE_HOLD, PULSE_MARGIN, PULSE_PERIOD, WeaponSwitch,
     data_secs, weapon_cs_index,
 };
-use super::fixture::{PLAYERSTATE_FIXTURE_DIR, nonzero_pairs, pairs_str, vec_str, write_capture};
+use super::fixture::{
+    PLAYERSTATE_FIXTURE_DIR, nonzero_pairs, pairs_str, serverinfo_key, tagged_name, vec_str,
+    write_fixture_file,
+};
 use super::*;
 
 /// The target's script. It kills itself rather than waiting to be shot, so the
@@ -1488,8 +1491,7 @@ fn write_hit_fixture(
     tag: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
-    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
-    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let key = |k: &str| serverinfo_key(configstrings, k);
     let map = key("mapname");
     let gametype = key("g_gametype");
 
@@ -1536,12 +1538,12 @@ fn write_hit_fixture(
     }
     out.push_str(body);
 
-    let path = fixture_path(
+    let path = write_fixture_file(
         PLAYERSTATE_FIXTURE_DIR,
-        &format!("{map}-{gametype}-{role}{}.txt", tag_suffix(tag)),
+        &tagged_name(&format!("{map}-{gametype}-{role}"), tag),
+        &out,
+        overwrite,
     )?;
-    std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
-    write_capture(&path, &out, overwrite)?;
     println!("hit: {role} -> {path}");
     Ok(())
 }

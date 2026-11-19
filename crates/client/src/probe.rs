@@ -29,11 +29,11 @@ mod watch;
 use bump::{BumpProbe, BumpTarget, write_bump_fixture};
 use combat::{CombatProbe, lean_sightline, longest_sightline, write_combat_fixture};
 use download::DownloadProbe;
-pub(crate) use fixture::tag_suffix;
 use fixture::{
     MOVERS_FIXTURE_DIR, finish_probe, write_configstrings_fixture, write_playerstate_fixture,
     write_scripted_fixture,
 };
+pub(crate) use fixture::{cmd_fields, tagged_name, write_fixture_file};
 use hit::{
     ENGAGE_RANGE, EV_BULLET_HIT_SMALL, HitProbe, KILL_CMDS_QUIET, ROUNDRESTART_KILL_AT,
     SWEEP_PITCH_OFFSETS, SWEEP_RANGE, TARGET_KILL_AT, TARGET_SCORE_PERIOD, TargetProbe,

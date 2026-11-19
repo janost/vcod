@@ -1,7 +1,10 @@
 //! `--probe-ladder`, `--save-ladder` and `--probe-weapsel`: the play client's own input on a ladder
 //! and its weapon selection.
 
-use super::fixture::{PLAYERSTATE_FIXTURE_DIR, nonzero_pairs, pairs_str, write_capture};
+use super::fixture::{
+    PLAYERSTATE_FIXTURE_DIR, cmd_fields, nonzero_pairs, pairs_str, serverinfo_key, tagged_name,
+    write_fixture_file,
+};
 use super::*;
 
 /// `--probe-ladder` and `--probe-weapsel`: every cmd built by the play
@@ -346,19 +349,7 @@ impl LadderProbe {
             return;
         }
         if let Some(lines) = &mut self.capture {
-            lines.push(format!(
-                "!cmd st={} buttons={} wbuttons={} weapon={} up={} forward={} right={} angles={},{},{}",
-                c.server_time,
-                c.buttons,
-                c.wbuttons,
-                c.weapon,
-                c.up,
-                c.forward,
-                c.right,
-                c.angles[0],
-                c.angles[1],
-                c.angles[2]
-            ));
+            lines.push(format!("!cmd {}", cmd_fields(&c)));
         }
     }
 
@@ -373,23 +364,7 @@ impl LadderProbe {
 
     /// The cmd as it went on the wire, with its server time.
     pub(super) fn sent_cmd(&mut self, now: Instant, c: &net::msg::UserCmd) {
-        self.row(
-            now,
-            "cmd",
-            format!(
-                "st={} buttons={} wbuttons={} weapon={} up={} forward={} right={} angles={},{},{}",
-                c.server_time,
-                c.buttons,
-                c.wbuttons,
-                c.weapon,
-                c.up,
-                c.forward,
-                c.right,
-                c.angles[0],
-                c.angles[1],
-                c.angles[2]
-            ),
-        );
+        self.row(now, "cmd", cmd_fields(c));
     }
 
     /// A reliable server command; `a <weapon>` selects, as in the play
@@ -550,8 +525,7 @@ pub(super) fn write_ladder_fixture(
     tag: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
-    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
-    let map = net::info_value_for_key(serverinfo, "mapname").unwrap_or("?");
+    let map = serverinfo_key(configstrings, "mapname");
     let mut out = String::new();
     let script = lp.script.name();
     out.push_str(&format!(
@@ -593,11 +567,12 @@ pub(super) fn write_ladder_fixture(
         out.push_str(l);
         out.push('\n');
     }
-    let path = fixture_path(
+    let path = write_fixture_file(
         PLAYERSTATE_FIXTURE_DIR,
-        &format!("{map}-dm-ladder{}.txt", tag_suffix(tag)),
+        &tagged_name(&format!("{map}-dm-ladder"), tag),
+        &out,
+        overwrite,
     )?;
-    write_capture(&path, &out, overwrite)?;
     println!("ladder: {} lines -> {path}", lines.len());
     Ok(())
 }
@@ -612,8 +587,7 @@ pub(super) fn write_weapsel_fixture(
     tag: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
-    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
-    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let key = |k: &str| serverinfo_key(configstrings, k);
     let (map, gametype) = (key("mapname"), key("g_gametype"));
     let mut out = String::new();
     out.push_str(&format!(
@@ -650,12 +624,12 @@ pub(super) fn write_weapsel_fixture(
         out.push_str(r);
         out.push('\n');
     }
-    std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
-    let path = fixture_path(
+    let path = write_fixture_file(
         PLAYERSTATE_FIXTURE_DIR,
-        &format!("{map}-dm-weapsel{}.txt", tag_suffix(tag)),
+        &tagged_name(&format!("{map}-dm-weapsel"), tag),
+        &out,
+        overwrite,
     )?;
-    write_capture(&path, &out, overwrite)?;
     println!("weapsel: wrote {path}");
     Ok(())
 }

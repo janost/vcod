@@ -1,6 +1,6 @@
 //! `--save-motion`: the motion script and its fixture.
 
-use super::fixture::{PLAYERSTATE_FIXTURE_DIR, write_capture};
+use super::fixture::{PLAYERSTATE_FIXTURE_DIR, serverinfo_key, tagged_name, write_fixture_file};
 use super::*;
 
 /// One held input and the label the playerstate settled under it is captured
@@ -348,8 +348,7 @@ pub(super) fn write_motion_fixture(
     overwrite: bool,
 ) -> anyhow::Result<()> {
     let p = wire();
-    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
-    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let key = |k: &str| serverinfo_key(configstrings, k);
     let map = key("mapname");
     let gametype = key("g_gametype");
 
@@ -394,11 +393,12 @@ pub(super) fn write_motion_fixture(
             out.push_str(&format!("{} {v}\n", f.name));
         }
     }
-    let path = fixture_path(
+    let path = write_fixture_file(
         PLAYERSTATE_FIXTURE_DIR,
-        &format!("{map}-{gametype}-motion{}.txt", tag_suffix(tag)),
+        &tagged_name(&format!("{map}-{gametype}-motion"), tag),
+        &out,
+        overwrite,
     )?;
-    write_capture(&path, &out, overwrite)?;
     println!(
         "motion: {} poses ({} fields each) -> {path}",
         motion.captured.len(),

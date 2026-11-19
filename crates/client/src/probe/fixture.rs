@@ -1,5 +1,6 @@
 //! Fixture writers the modes share: gamestate, snapshots, configstrings, playerstate, scripted, and
-//! the capture write that refuses to replace a fixture.
+//! the one write every mode's fixture goes through ([`write_fixture_file`], [`write_capture`]),
+//! which refuses to replace a fixture.
 
 use super::join::SPAWN_SETTLE;
 use super::*;
@@ -16,23 +17,17 @@ pub(super) fn finish_probe(
     tag: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
-    let tagged = |path: &str| match tag {
-        Some(t) if save_fixture || save_snapshots => {
-            path.replace(".bin", &format!("{}.bin", tag_suffix(Some(t))))
+    let tagged = |path: &str| match (tag, path.strip_suffix(".bin")) {
+        (Some(t), Some(stem)) if save_fixture || save_snapshots => {
+            format!("{stem}{}.bin", tag_suffix(Some(t)))
         }
         _ => path.to_string(),
     };
     let save_fixture = save_fixture || (tag.is_some() && save_snapshots);
     // The scratch copies under `tmp/` are rewritten freely; a fixture is not.
-    let guard = |path: &str| -> anyhow::Result<()> {
+    let write = |path: &str, data: &[u8]| {
         let scratch = path == SCRATCH_PATH || path == SNAP_SCRATCH_PATH;
-        if !scratch && !overwrite && std::path::Path::new(path).exists() {
-            anyhow::bail!(
-                "{path} already exists; pass --overwrite-fixture to replace it, or \
-                 --capture-tag for a new name"
-            );
-        }
-        Ok(())
+        write_capture(path, data, overwrite || scratch)
     };
     client.disconnect();
     let Some(cap): Option<SnapshotCapture> = client.take_capture() else {
@@ -50,8 +45,7 @@ pub(super) fn finish_probe(
         } else {
             SCRATCH_PATH.to_string()
         };
-        guard(&path)?;
-        write_fixture(&path, gs_bytes)?;
+        write(&path, gs_bytes)?;
         println!("gamestate: {} bytes -> {path}", gs_bytes.len());
     }
     if cap.count == 0 {
@@ -63,8 +57,7 @@ pub(super) fn finish_probe(
     } else {
         SNAP_SCRATCH_PATH.to_string()
     };
-    guard(&path)?;
-    write_fixture(&path, &cap.triples)?;
+    write(&path, &cap.triples)?;
     println!(
         "snapshots: {} message(s), {} bytes -> {path}",
         cap.count,
@@ -73,15 +66,6 @@ pub(super) fn finish_probe(
     if !save_fixture && !save_snapshots {
         println!("(pass --save-snapshots to replace the committed snapshot fixture)");
     }
-    Ok(())
-}
-
-fn write_fixture(path: &str, data: &[u8]) -> anyhow::Result<()> {
-    let p = std::path::Path::new(path);
-    if let Some(dir) = p.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(p, data)?;
     Ok(())
 }
 
@@ -100,8 +84,21 @@ pub(super) fn write_configstrings_fixture(
     tag: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
-    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
-    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let key = |k: &str| serverinfo_key(configstrings, k);
+    let (out, written) = configstrings_text(configstrings);
+    let path = write_fixture_file(
+        CONFIGSTRINGS_FIXTURE_DIR,
+        &tagged_name(&format!("{}-{}", key("mapname"), key("g_gametype")), tag),
+        &out,
+        overwrite,
+    )?;
+    println!("configstrings: {written} non-empty slots -> {path}");
+    Ok(())
+}
+
+/// [`write_configstrings_fixture`]'s text and how many slots it holds.
+fn configstrings_text(configstrings: &[String]) -> (String, usize) {
+    let key = |k: &str| serverinfo_key(configstrings, k);
     let map = key("mapname");
     let gametype = key("g_gametype");
     let max_clients = key("sv_maxclients");
@@ -132,14 +129,7 @@ pub(super) fn write_configstrings_fixture(
             written += 1;
         }
     }
-
-    let path = fixture_path(
-        CONFIGSTRINGS_FIXTURE_DIR,
-        &format!("{map}-{gametype}{}.txt", tag_suffix(tag)),
-    )?;
-    write_capture(&path, &out, overwrite)?;
-    println!("configstrings: {written} non-empty slots -> {path}");
-    Ok(())
+    (out, written)
 }
 
 /// Directory `crates/server/tests/playerstate_ab.rs` reads its fixtures from.
@@ -148,26 +138,60 @@ pub(super) const PLAYERSTATE_FIXTURE_DIR: &str = concat!(
     "/../server/tests/fixtures/playerstate"
 );
 
-/// Writes a fixture, refusing to land on a file that is already there
-/// unless `--overwrite-fixture` says to. The fixed names hold retail
+/// Writes a text fixture as `dir/name`, the write every `--save-*` mode's fixture takes: refuses
+/// a name that leaves `dir`, creates `dir` and refuses to replace a file without
+/// `--overwrite-fixture` ([`write_capture`]). Returns the path for the mode's summary line.
+pub(crate) fn write_fixture_file(
+    dir: &str,
+    name: &str,
+    body: &str,
+    overwrite: bool,
+) -> anyhow::Result<String> {
+    let path = fixture_path(dir, name)?;
+    write_capture(&path, body, overwrite)?;
+    Ok(path)
+}
+
+/// `<stem>[-<tag>].txt`, the name every text fixture takes but bump's, which puts the tag before
+/// its role.
+pub(crate) fn tagged_name(stem: &str, tag: Option<&str>) -> String {
+    format!("{stem}{}.txt", tag_suffix(tag))
+}
+
+/// A cs 0 (serverinfo) value, `?` when cs 0 or the key is missing.
+pub(super) fn serverinfo_key<'a>(configstrings: &'a [String], key: &str) -> &'a str {
+    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
+    net::info_value_for_key(serverinfo, key).unwrap_or("?")
+}
+
+/// Writes a fixture, creating its directory, and refuses to land on a file that is already
+/// there unless `--overwrite-fixture` says to. The fixed names hold retail
 /// evidence, and a tag is free text that can spell one of them
 /// (`--save-ads --capture-tag sniper` is the scoped-rifle fixture's path):
 /// a capture against vcod's own server silently replacing the oracle is the
 /// one mistake these directories cannot survive. A refused capture is kept
 /// under `tmp/` rather than thrown away.
-pub(super) fn write_capture(path: &str, out: &str, overwrite: bool) -> anyhow::Result<()> {
-    write_capture_in(path, out, overwrite, std::path::Path::new("tmp"))
+pub(super) fn write_capture(
+    path: &str,
+    out: impl AsRef<[u8]>,
+    overwrite: bool,
+) -> anyhow::Result<()> {
+    write_capture_in(path, out.as_ref(), overwrite, std::path::Path::new("tmp"))
 }
 
 /// [`write_capture`] keeping a refused capture in `keep` instead of `tmp/`.
 fn write_capture_in(
     path: &str,
-    out: &str,
+    out: &[u8],
     overwrite: bool,
     keep: &std::path::Path,
 ) -> anyhow::Result<()> {
-    if overwrite || !std::path::Path::new(path).exists() {
-        std::fs::write(path, out)?;
+    let p = std::path::Path::new(path);
+    if overwrite || !p.exists() {
+        if let Some(dir) = p.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(p, out)?;
         return Ok(());
     }
     let kept = refused_copy(path, keep);
@@ -195,7 +219,7 @@ fn refused_copy(path: &str, keep: &std::path::Path) -> std::path::PathBuf {
 }
 
 /// `-<tag>` for a `--capture-tag`, empty without one.
-pub(crate) fn tag_suffix(tag: Option<&str>) -> String {
+fn tag_suffix(tag: Option<&str>) -> String {
     tag.map(|t| format!("-{t}")).unwrap_or_default()
 }
 
@@ -230,6 +254,69 @@ pub(super) fn vec_exact(v: [f32; 3]) -> String {
     format!("{},{},{}", v[0], v[1], v[2])
 }
 
+/// A sent usercmd as the `!cmd` lines carry it: `st= buttons= wbuttons= weapon= up= forward=
+/// right= angles=p,y,r`. The caller puts the line's head before it and its extras after.
+/// shock_probe's `!cmd` keeps its own order (forward, right, up) and does not use it.
+pub(crate) fn cmd_fields(c: &net::msg::UserCmd) -> String {
+    format!(
+        "st={} buttons={} wbuttons={} weapon={} up={} forward={} right={} angles={},{},{}",
+        c.server_time,
+        c.buttons,
+        c.wbuttons,
+        c.weapon,
+        c.up,
+        c.forward,
+        c.right,
+        c.angles[0],
+        c.angles[1],
+        c.angles[2]
+    )
+}
+
+/// A capture phase the pickup and turret fixtures group their lines by.
+pub(super) trait FixturePhase: Copy + PartialEq {
+    /// The phase's place in the file.
+    fn order(self) -> u8;
+    /// `<label>` in `[phase <label>]`.
+    fn label(self) -> &'static str;
+}
+
+/// One `[phase <label>]` block per phase a cmd row or a line names, in phase order: the phase's
+/// `!station` lines, then its cmd rows and lines interleaved by ms. The sort is stable and cmd
+/// rows go in first, so a cmd keeps its place before a line of the same ms and a `!trace` keeps
+/// the lines recorded after it. The pickup and turret fixtures.
+pub(super) fn write_phase_blocks<P: FixturePhase>(
+    out: &mut String,
+    stations: &[(P, [f32; 3], [f32; 3])],
+    cmds: &[(P, u128, String)],
+    lines: &[(P, u128, String)],
+) {
+    let mut phases: Vec<P> = Vec::new();
+    for p in cmds.iter().chain(lines).map(|r| r.0) {
+        if !phases.contains(&p) {
+            phases.push(p);
+        }
+    }
+    phases.sort_by_key(|p| p.order());
+    for phase in phases {
+        out.push_str(&format!("[phase {}]\n", phase.label()));
+        for (_, o, v) in stations.iter().filter(|s| s.0 == phase) {
+            out.push_str(&format!(
+                "!station origin={} viewangles={}\n",
+                vec_str(*o),
+                vec_str(*v)
+            ));
+        }
+        let mut rows: Vec<&(P, u128, String)> =
+            cmds.iter().chain(lines).filter(|r| r.0 == phase).collect();
+        rows.sort_by_key(|r| r.1);
+        for (_, _, r) in rows {
+            out.push_str(r);
+            out.push('\n');
+        }
+    }
+}
+
 /// Where `--save-scripted` writes.
 const GAMETYPES_FIXTURE_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -248,8 +335,7 @@ pub(super) fn write_scripted_fixture(
     tag: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
-    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
-    let probe_gt = net::info_value_for_key(serverinfo, "g_gametype").unwrap_or("?");
+    let probe_gt = serverinfo_key(configstrings, "g_gametype");
     let gametype = probe_gt.strip_prefix("probe_").unwrap_or(probe_gt);
     let mut out = String::new();
     let build = retail_build();
@@ -287,12 +373,12 @@ pub(super) fn write_scripted_fixture(
         out.push_str(l);
         out.push('\n');
     }
-    std::fs::create_dir_all(GAMETYPES_FIXTURE_DIR)?;
-    let path = fixture_path(
+    let path = write_fixture_file(
         GAMETYPES_FIXTURE_DIR,
-        &format!("{map}-{gametype}-{role}{}.txt", tag_suffix(tag)),
+        &tagged_name(&format!("{map}-{gametype}-{role}"), tag),
+        &out,
+        overwrite,
     )?;
-    write_capture(&path, &out, overwrite)?;
     println!("scripted: {} lines -> {path}", capture.lines.len());
     Ok(())
 }
@@ -308,8 +394,7 @@ pub(super) fn write_playerstate_fixture(
     overwrite: bool,
 ) -> anyhow::Result<()> {
     let p = wire();
-    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
-    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let key = |k: &str| serverinfo_key(configstrings, k);
     let map = key("mapname");
     let gametype = key("g_gametype");
 
@@ -360,12 +445,12 @@ pub(super) fn write_playerstate_fixture(
         out.push('\n');
     }
 
-    let path = fixture_path(
+    let path = write_fixture_file(
         PLAYERSTATE_FIXTURE_DIR,
-        &format!("{map}-{gametype}{}.txt", tag_suffix(tag)),
+        &tagged_name(&format!("{map}-{gametype}"), tag),
+        &out,
+        overwrite,
     )?;
-    std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
-    write_capture(&path, &out, overwrite)?;
     println!(
         "playerstate: {} fields, {}, {} serverCommands -> {path}",
         snap.ps.fields.len(),
@@ -396,14 +481,15 @@ mod tests {
 
     /// A fixture name already on disk, tagged or not, is refused without
     /// `--overwrite-fixture`, and the refused capture is kept under `tmp/`.
+    /// The first write creates the fixture's directory.
     #[test]
     fn a_write_refuses_to_replace_a_fixture() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("mp_carentan-tdm-ads-sniper.txt");
+        let path = dir.path().join("items/mp_carentan-tdm-ads-sniper.txt");
         let path = path.to_str().unwrap();
 
         let keep = dir.path().join("tmp");
-        let write = |out, overwrite| write_capture_in(path, out, overwrite, &keep);
+        let write = |out: &str, overwrite| write_capture_in(path, out.as_bytes(), overwrite, &keep);
 
         write("retail", false).expect("a name nothing holds yet");
         let err = write("ours", false).expect_err("the second write lands on the first");
@@ -414,5 +500,119 @@ mod tests {
 
         write("ours", true).expect("the flag says to");
         assert_eq!(std::fs::read_to_string(path).unwrap(), "ours");
+    }
+
+    /// The committed fixtures under `crates/server/tests/fixtures`, with their paths.
+    fn committed_fixtures() -> Vec<(std::path::PathBuf, String)> {
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../server/tests/fixtures");
+        let mut dirs = vec![root];
+        let mut out = Vec::new();
+        while let Some(d) = dirs.pop() {
+            for e in std::fs::read_dir(&d).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    dirs.push(p);
+                } else if p.extension().is_some_and(|x| x == "txt") {
+                    out.push((p.clone(), std::fs::read_to_string(&p).unwrap()));
+                }
+            }
+        }
+        out
+    }
+
+    /// Every committed `!cmd`, `!pcmd` and `!wcmd` line in [`cmd_fields`]'s order reads back
+    /// into a usercmd that [`cmd_fields`] writes out again byte for byte, across the item,
+    /// turret, bump, ladder, weapsel, slope, sd and legs fixtures the probe wrote.
+    #[test]
+    fn cmd_fields_writes_every_committed_cmd_line_back() {
+        const NAMES: [&str; 8] = [
+            "st", "buttons", "wbuttons", "weapon", "up", "forward", "right", "angles",
+        ];
+        let mut checked: BTreeMap<String, usize> = BTreeMap::new();
+        for (path, text) in committed_fixtures() {
+            for line in text.lines() {
+                if !["!cmd ", "!pcmd ", "!wcmd "]
+                    .iter()
+                    .any(|h| line.starts_with(h))
+                {
+                    continue;
+                }
+                let Some(at) = line.find(" st=") else {
+                    continue;
+                };
+                let fields: Vec<&str> = line[at + 1..].split(' ').take(8).collect();
+                let named = fields.len() == 8
+                    && fields
+                        .iter()
+                        .zip(NAMES)
+                        .all(|(f, n)| f.split_once('=').is_some_and(|(k, _)| k == n));
+                if !named {
+                    continue;
+                }
+                let v = |i: usize| fields[i].split_once('=').unwrap().1;
+                let num = |i: usize| {
+                    v(i).parse::<i64>()
+                        .unwrap_or_else(|e| panic!("{line}: {e}"))
+                };
+                let angles: Vec<i32> = v(7).split(',').map(|a| a.parse().unwrap()).collect();
+                let c = net::msg::UserCmd {
+                    server_time: num(0) as i32,
+                    buttons: num(1) as u8,
+                    wbuttons: num(2) as u8,
+                    weapon: num(3) as u8,
+                    up: num(4) as i8,
+                    forward: num(5) as i8,
+                    right: num(6) as i8,
+                    angles: angles.try_into().unwrap(),
+                    ..Default::default()
+                };
+                assert_eq!(
+                    cmd_fields(&c),
+                    fields.join(" "),
+                    "{}: {line}",
+                    path.display()
+                );
+                let dir = path
+                    .parent()
+                    .unwrap()
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy();
+                *checked.entry(dir.into_owned()).or_default() += 1;
+            }
+        }
+        for dir in ["items", "turret", "playerstate"] {
+            assert!(
+                checked.get(dir).is_some_and(|&n| n > 0),
+                "no {dir} cmd lines: {checked:?}"
+            );
+        }
+    }
+
+    /// The configstring table round-trips: the table read out of a committed fixture comes out
+    /// of [`configstrings_text`] with the same first header line and the same slot lines. The
+    /// other header lines are older than the writer and say the same with other words.
+    #[test]
+    fn configstrings_text_writes_a_committed_table_back() {
+        let committed =
+            include_str!("../../../server/tests/fixtures/configstrings/mp_carentan-dm.txt");
+        let mut cs: Vec<String> = Vec::new();
+        for line in committed.lines().filter(|l| !l.starts_with('#')) {
+            let (i, v) = line.split_once(' ').unwrap();
+            let i: usize = i.parse().unwrap();
+            cs.resize(cs.len().max(i + 1), String::new());
+            cs[i] = v.to_string();
+        }
+        let (out, written) = configstrings_text(&cs);
+        let slots = |t: &str| {
+            t.lines()
+                .filter(|l| !l.starts_with('#'))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(written, slots(committed).len());
+        assert_eq!(out.lines().next(), committed.lines().next());
+        assert_eq!(slots(&out), slots(committed));
     }
 }

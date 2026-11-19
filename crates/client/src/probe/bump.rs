@@ -1,6 +1,6 @@
 //! `--save-bump`: the walker and the target of the player-bump capture.
 
-use super::fixture::{PLAYERSTATE_FIXTURE_DIR, write_capture};
+use super::fixture::{PLAYERSTATE_FIXTURE_DIR, cmd_fields, serverinfo_key, write_fixture_file};
 use super::*;
 
 /// The target's feet under `client-probes/probe_bump`'s `probe_teleport 1`; the
@@ -468,19 +468,7 @@ impl BumpProbe {
             return;
         }
         let ms = self.ms(now);
-        self.lines.push(format!(
-            "!cmd ms={ms} st={} buttons={} wbuttons={} weapon={} up={} forward={} right={} angles={},{},{}",
-            c.server_time,
-            c.buttons,
-            c.wbuttons,
-            c.weapon,
-            c.up,
-            c.forward,
-            c.right,
-            c.angles[0],
-            c.angles[1],
-            c.angles[2]
-        ));
+        self.lines.push(format!("!cmd ms={ms} {}", cmd_fields(&c)));
     }
 
     fn enter(&mut self, now: Instant, next: BumpPhase) {
@@ -741,8 +729,7 @@ pub(super) fn write_bump_fixture(
     tag: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
-    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
-    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let key = |k: &str| serverinfo_key(configstrings, k);
     let (map, gametype) = (key("mapname"), key("g_gametype"));
     let mut out = String::new();
     out.push_str(&format!(
@@ -816,11 +803,13 @@ pub(super) fn write_bump_fixture(
         Some(t) => format!("{t}-walker"),
         None => "walker".to_string(),
     };
-    let path = fixture_path(
+    // The tag goes before the role here, not after it as in every other mode's name.
+    let path = write_fixture_file(
         PLAYERSTATE_FIXTURE_DIR,
         &format!("{map}-dm-bump-{role}.txt"),
+        &out,
+        overwrite,
     )?;
-    write_capture(&path, &out, overwrite)?;
     println!("bump: {} lines -> {path}", bp.lines.len());
     Ok(())
 }

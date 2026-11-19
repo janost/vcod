@@ -281,7 +281,9 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
   loop, `Save`, the wire it speaks and the helpers the modes share
   (`hold_view_yaw`, `aim_at`, `escape_ctl`). Each mode lives in `probe/`:
   - `fixture.rs` the shared writers (gamestate, snapshots, configstrings,
-    playerstate, scripted, `write_capture`, `tag_suffix`); `watch.rs` the
+    playerstate, scripted), the one file write every fixture takes
+    (`write_fixture_file`, `write_capture`), the `!cmd` usercmd fields
+    (`cmd_fields`) and the pickup and turret `[phase]` blocks; `watch.rs` the
     default run's `ProbeWatch`; `join.rs` the menu handshake;
     `download.rs` `--probe-download`.
   - `motion.rs`, `combat.rs` (combat, ADS, sway, lean, grenade),
