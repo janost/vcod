@@ -853,7 +853,8 @@ Before (`AWARE=none`): the nearest enemy in line of sight within
 full reaction and `error_start` on every slot change, hits ignored; a bot
 between two enemies swapped targets and paid the delay each time.
 
-Now (`crates/server/src/bots.rs`, `server/sim_ops.rs`, `server/bot_world.rs`,
+Now (`crates/server/src/bots/sight.rs`, `bots/fight.rs`, `server/sim_ops.rs`,
+`server/bot_world.rs`,
 `spectate.rs`):
 
 - `ClientSim::last_hit`: each `SimOp::Damaged` with another client as
@@ -957,7 +958,7 @@ VERIFIED (measured, ours, `bot_match`, 2026-10-21): `AWARE=alt`, `tdm`,
 ## 9. Aim and footwork
 
 `Bot::engage`, `Bot::trigger` and `Bot::footwork` in
-`crates/server/src/bots.rs`; measured in 6.6.
+`crates/server/src/bots/fight.rs`; measured in 6.6.
 
 Before: the error only shrank with time on target and the trigger waited
 for the 10-unit cone, so a bot paused about a second on a fresh target
@@ -1156,7 +1157,7 @@ VERIFIED (measured, ours, `bot_match`, 2026-10-21): `WARY=alt`, `tdm`,
 
 ## 11. The walking view and string-pulling (2026-10-21)
 
-`Bot::walk_turn` in `crates/server/src/bots.rs` and `Follower::pull` in
+`Bot::walk_turn` in `crates/server/src/bots/walk.rs` and `Follower::pull` in
 `crates/server/src/nav.rs`; the follower's side is in
 `bot-navigation.md` section 3, "String-pulling".
 
@@ -1263,7 +1264,7 @@ With the hand-back (VERIFIED, measured, same dumps): stalled 3 240 and
 The same pair again within 10 s still read 385 and 405 against master's
 226 and 189; section 13 measures it on eight seeds, where it does not
 rise. Without the hand-back
-`bots::tests::the_walking_view_takes_the_path_at_once_after_a_fight`
+`bots::walk::tests::the_walking_view_takes_the_path_at_once_after_a_fight`
 fails.
 
 ## 12. Frags that leave the hand and land where thrown (2026-10-21)

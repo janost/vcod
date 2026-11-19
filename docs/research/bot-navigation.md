@@ -471,7 +471,7 @@ that proved it jumped (`nav::PinJump`, `nav::leap_cue`, `nav::jump_key`):
   (`nav::tests::a_jump_edge_waits_on_its_foot_for_the_jump`). Set off
   from rest on the foot a body moves little on its first tick, so a
   pinned tick counts only with a move key held at the waypoint the tick
-  before (`bots::tests::a_bot_set_off_from_rest_is_not_pinned`).
+  before (`bots::walk::tests::a_bot_set_off_from_rest_is_not_pinned`).
 - A body more than 8 units over the foot, under a step, with the top
   still more than a step over it, waits where it stands instead (one on
   the top's own floor beside a top 16 over its foot, as on mp_cassino's
@@ -1094,7 +1094,7 @@ lets go 160 short of the straight's end. The sprint leaves the weapon's
 `moveSpeedScale` out (`coduo-movement.md` 3), so it runs at 304 and the
 keys are not cut to the graph's pace; the graph's walks ran at 190, so
 the sprint is kept off turns and drops it never proved
-(`bots::tests::a_uo_bot_sprints_a_long_straight_leg`,
+(`bots::walk::tests::a_uo_bot_sprints_a_long_straight_leg`,
 `nav::tests::the_straight_run_stops_at_a_turn_a_rise_and_a_jump`).
 
 VERIFIED (measured, release `ship_stalls` `UO=1`, `tdm`, 6 bots shooting
@@ -1501,9 +1501,9 @@ plus 128.
 
 A stall inside a spell picks a new heading without restarting the spell,
 so the waypoint gets its turn when the spell ends
-(`bots::tests::a_pinned_spell_hands_back_to_the_waypoint`), and a spell's
-end starts the stall window afresh
-(`bots::tests::a_spell_end_starts_the_stall_window_afresh`). Each spell
+(`bots::walk::tests::a_pinned_spell_hands_back_to_the_waypoint`), and a
+spell's end starts the stall window afresh
+(`bots::walk::tests::a_spell_end_starts_the_stall_window_afresh`). Each spell
 drops the held creep heading.
 
 **The `mp_ship` stall log.**
@@ -1654,7 +1654,7 @@ noted). Every row VERIFIED (measured). The current numbers are the
   rungs and unlinked within a unit of one spot for 100 ticks sends `kill`
   as a client command (`Bot::wedged`), once per 100 ticks, not on an `sd`
   or `re` level (`bot-objectives.md` section 3;
-  `bots::tests::a_body_held_in_the_air_asks_for_a_kill`, `tests/bots.rs`
+  `bots::walk::tests::a_body_held_in_the_air_asks_for_a_kill`, `tests/bots.rs`
   `a_bot_held_in_mp_hurtgens_crease_kills_itself`). The boat (seed 297):
   a spell ran a bot off the deck at (5209, -352, 375) into a dish of
   patches 122 and 124 (floor z 5 to 29) between x 4995 and 5350, y -440
@@ -1987,12 +1987,12 @@ each) and 43 us with 10-13d's half-way samples. VERIFIED (measured
 23 988 on `mp_hurtgen` (seed 5), about 2 us a tick for six bots where it
 was 0.26 ms of a 2.4 ms tick; the detector's logs over 48 `mp_ship`
 seeds were byte-identical with it on every tick
-(`bots::tests::drops_are_felt_only_when_the_brain_reads_them`). `tests/bots.rs`,
-`bots_on_mp_ship_unstick_without_walking_off_the_deck`, replays seed 5
-to tick 1800 and fails at tick 1671 without the probe.
-In S&D the objective names the point and can hold the bot still
-(`bot-objectives.md`); a bot standing at its objective or linked by the
-script is never counted as stuck.
+(`bots::walk::tests::drops_are_felt_only_when_the_brain_reads_them`).
+`tests/bots.rs`, `bots_on_mp_ship_unstick_without_walking_off_the_deck`,
+replays seed 5 to tick 1800 and fails at tick 1671 without the probe. In S&D
+the objective names the point and can hold the bot still
+(`bot-objectives.md`); a bot standing at its objective or linked by the script
+is never counted as stuck.
 
 ### 3.1 The lip walk
 
@@ -2169,10 +2169,11 @@ merge, the same detector; ship seeds in three blocks of 768):
   to master's 48; pinned off its pace toward the top, as master's bot
   was, 149, and they reached the floor at 204 88 times to master's 62.
   VERIFIED (measured, traces and tick counts). The two pinned ticks
-  stay (`bots::tests::a_bot_jumps_on_its_second_tick_not_closing_on_the_top`).
-  On the ground the body has to move under the pinned pace as well since
-  "The recheck's leftovers" (below):
-  `bots::tests::a_bot_sliding_along_a_ledges_face_jumps_where_it_comes_to_rest`.
+  stay
+  (`bots::walk::tests::a_bot_jumps_on_its_second_tick_not_closing_on_the_top`).
+  On the ground the body has to move under the pinned pace as well since "The
+  recheck's leftovers" (below):
+  `bots::walk::tests::a_bot_sliding_along_a_ledges_face_jumps_where_it_comes_to_rest`.
 - Tried and dropped, both measured in the table: one jump an edge, as
   the walk takes (bots stood pinned at that stair top and fell off it
   on unstick spells, 20 falls), and master's one pinned tick under a
@@ -2750,7 +2751,7 @@ release, 1.1, on "Bodies in the way"'s tip (ae407a223):
   round a stuck edge still takes none, as seed 969 needs); and under
   `RECALL_PACE` (66 units/s) the keys keep the path's own run with no
   pre-aim (`Bot::think_wander`,
-  `bots::tests::a_slow_body_keeps_the_path_under_a_recall`).
+  `bots::walk::tests::a_slow_body_keeps_the_path_under_a_recall`).
 - A health item on the ledge at (4603, -586, 52) (`tdm` seed 5 on the
   pre-aim change, 388 stalled). A hurt bot's heal goal kept the
   destination of its fight's plan, the hold floor node (4578, -576, -64)

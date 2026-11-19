@@ -164,9 +164,18 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     corpses, turrets, vehicles, the use key, weapons.
   - `game/builtins/`: the script builtins per game.
 - Bots: `bots.rs` + `nav.rs`, and `bots/driver.rs`, the per-tick driver over
-  `BotWorld`. CoD1's `impl` and view builders are in `server/bot_world.rs`,
-  CoD2's `impl` in `cod2/bots.rs` over the readers in `bots/cod2.rs`, CoD4's
-  in `cod4/bots.rs` over `bots/cod4.rs`. `server/bot_admin.rs` is the bot
+  `BotWorld`. `bots.rs` holds `Skill`, `Bot`, its think loop (`think`,
+  `think_body`, `goal`) and the getters; the brain's seams sit beside it in
+  `bots/`: `view.rs` (`BotView`, the gametype views, `BotBody`), `sight.rs`
+  (sight cone, enemy pick, aim point, noises, remembered spots),
+  `objective.rs` (`ObjTarget`, guard posts, plant, defuse, carry, breach;
+  UO's `ctf`, `dom`, `hq` and `bas` in `objective/uo.rs`), `menus.rs` (the
+  menu replies, the weapon menus), `grenade.rs` (the throw's stages),
+  `fight.rs` (tracking, aim, trigger, footwork, weapon swaps) and `walk.rs`
+  (the wander brain, steering, stalls, ladders). CoD1's `impl` and view
+  builders are in `server/bot_world.rs`, CoD2's `impl` in `cod2/bots.rs`
+  over the readers in `bots/cod2.rs`, CoD4's in `cod4/bots.rs` over
+  `bots/cod4.rs`. `server/bot_admin.rs` is the bot
   admin every server calls (the pass, `addbot`, `removebot`, `listbots`)
   over `AdminHost`.
 - `rcon.rs`, `console.rs`, `stdin_console.rs` (stdin lines into the
