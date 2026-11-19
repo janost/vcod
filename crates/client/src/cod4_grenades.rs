@@ -256,6 +256,10 @@ mod tests {
     /// windows, bearings and times, against the digest the drawing gave
     /// before its rewrite.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "the pins rest on glibc's sinf and cosf; Windows' CRT differs in the last bit"
+    )]
     fn the_indicators_draw_their_pinned_quads() {
         let mut s = String::new();
         let windows = [

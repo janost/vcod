@@ -642,6 +642,10 @@ mod tests {
     /// gsc (`think-gdb.txt`), and the yaw probe's goal yaws and look-at
     /// (`yaw-gdb.txt`).
     #[test]
+    #[cfg_attr(
+        not(all(target_os = "linux", target_env = "gnu")),
+        ignore = "retail's words match glibc's sinf and cosf; other libms miss some by an ulp"
+    )]
     fn every_think_matches_retail_word_for_word() {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../cod4/tests/fixtures/heli/");
         let mut off = Vec::new();
