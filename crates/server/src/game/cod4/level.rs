@@ -1313,6 +1313,11 @@ impl Cod4Level {
         }
         self.history.push_front((now_ms, self.archive.clone()));
         self.history.truncate(self.history_frames());
+        // What the shared builtins queue for CoD1's engine: the playerstate
+        // here is the level's own, and its bots read the level, not the
+        // blast list.
+        self.rt.take_weapon_ops();
+        self.rt.take_blast_noises();
     }
 
     /// A player's `setOrigin` (`SetClientOrigin`, INFERRED):

@@ -1273,6 +1273,8 @@ impl Cod2Level {
         // The ammo arrays the weapon builtins write are the host's own
         // (`GameHost::client_ammo`), which the playerstate is built from.
         self.rt.take_weapon_ops();
+        // CoD1's bots hear the blasts off this list; CoD2's read the level.
+        self.rt.take_blast_noises();
         _p = crate::tick_profile::phase("frame/end frames");
         self.end_frame();
         crate::tick_trace::step!("identify_clients");
@@ -2227,5 +2229,9 @@ mod tests {
         level.connect(0, "successor");
         assert_eq!(level.combat.missiles[mine].owner, None);
         assert_eq!(level.combat.missiles[theirs].owner, Some(1));
+        // Nothing reads the blast list on CoD2: a frame drops it.
+        level.rt.host.blast_noises.push(([0.0; 3], None));
+        level.run_frame(50);
+        assert!(level.rt.host.blast_noises.is_empty());
     }
 }
