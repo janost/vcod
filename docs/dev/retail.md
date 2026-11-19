@@ -49,6 +49,10 @@ them on vcod.
   in it truncates. From a worktree whose path holds one, point
   `COD_LNXDED_HOME` at an absolute path without it.
 - `PRE_MAP_ARGS` holds `+set`s that must land before `+map`.
+- `GDB_PY=tools/re/gdb_<name>.py` runs a CoD1 server under gdb with that
+  script sourced, in both scripts (`tools/re/gdb_*.py` say what they log
+  and which `GDB_*` they read). `run_probe_cod2.sh` has its own `GDB_PY`
+  for the CoD2 scripts, which start the server themselves.
 - The retail engine runs at most 32 `+` commands and folds the rest of the
   line into the 32nd's value. `run_probe.sh` spends twelve, so a recipe gets
   twenty `+set`s.
