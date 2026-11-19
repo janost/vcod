@@ -419,7 +419,8 @@ fn cod4_renderer_builds_and_draws_without_validation_errors() {
         return;
     };
     assert_clean(&errors, "CoD4 renderer build");
-    // the window's ramp, as main.rs sets it: gamma 1, windowed overbright
+    // the window's ramp, as `App::apply_render_cvars` sets it: gamma 1,
+    // windowed overbright
     r.set_gamma(1.0, crate::gamma::overbright_bits(fs.game(), false, true));
     // an AK-47's world model to cast into the sun shadow map
     let ents = crate::cod4_fly::EntityAssets {
@@ -732,7 +733,7 @@ fn cod2_capture_frame_draws_lit() {
         eprintln!("no adapter with BC textures; skipped");
         return;
     };
-    // the window's ramp, as `main.rs`'s frame sets it
+    // the window's ramp, as `App::apply_render_cvars` sets it
     r.set_gamma(1.0, crate::gamma::overbright_bits(fs.game(), false, true));
     vcod_cod2::model::register();
     let data = fs.read("maps/mp/mp_toujane.d3dbsp").expect("mp_toujane");

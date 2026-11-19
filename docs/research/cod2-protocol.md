@@ -1115,7 +1115,7 @@ and 2 (`cg + 0x26118` is `ps + 0x554`, the field at 1364), then
 
 The probe (`vcod --net-probe ... --game cod2 --probe-team allies`) pressed 2
 and then turned the wheel up through the stock binds (`Shell::key_event`, the
-path `main.rs` routes a key down) on `mp_toujane`. VERIFIED live, both
+path `input_events.rs` routes a key down) on `mp_toujane`. VERIFIED live, both
 servers:
 
 - Retail 1.3: the cmd's weapon went from 6 (`enfield_mp`) to 5 (`webley_mp`);

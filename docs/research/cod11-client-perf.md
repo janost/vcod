@@ -11,8 +11,8 @@ real card's milliseconds. The profile's stages and GPU groups are in
 
 ## 1. The tool on CoD1
 
-`VCOD_FRAME_PROFILE` covers the CoD1 session's frame (`Mode::Online` in
-`main.rs`), with CoD4's stage names and file format, so
+`VCOD_FRAME_PROFILE` covers the CoD1 session's frame (`Mode::Online`'s, in
+`online_frame.rs` and `live_frame.rs`), with CoD4's stage names and file format, so
 `tools/cod4_perf.py` reads it unchanged:
 
 - `net`: packets, snapshots, demo reads, the prediction.

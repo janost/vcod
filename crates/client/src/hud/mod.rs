@@ -86,7 +86,8 @@ pub struct Hud {
     /// The `messagemode` line being typed: `main.rs` edits it, the HUD
     /// draws it.
     pub chat_field: Option<ChatField>,
-    /// `main.rs`'s Tab handler holds it and sends the `score` requests.
+    /// `main.rs`'s Tab handler holds it; `online_frame.rs` sends the `score`
+    /// requests.
     pub scoreboard: Scoreboard,
     /// `UI_LoadGameTypes`' list, which names the board's game type.
     game_types: Vec<vcod_common::ui_menu::GameType>,
@@ -104,14 +105,14 @@ pub struct Hud {
     /// The newest snapshot's `(clientNum, stats[5])` ([`Self::track_spawn`]);
     /// `None` from a gamestate or a restart until the next snapshot.
     spawn: Option<(i32, i32)>,
-    /// A vote draw owes `player_talk`; `main.rs` takes it.
+    /// A vote draw owes `player_talk`; `live_frame.rs` takes it.
     pub vote_sound: bool,
     pub unknown: u64,
     /// The bob cvars the gun, sight and eye bobs read: the defaults, or a
-    /// 1.5 server's through the 140/204 mirror. `main.rs` keeps them.
+    /// 1.5 server's through the 140/204 mirror. `live_frame.rs` keeps them.
     pub bob: vcod_common::pmove::BobCvars,
     /// The view last drawn, (pitch, yaw, roll) wire degrees: the refdef
-    /// the next hit's kick is split along. `main.rs` sets it each frame.
+    /// the next hit's kick is split along. `live_frame.rs` sets it each frame.
     pub drawn_view: Option<[f32; 3]>,
 }
 

@@ -1496,7 +1496,7 @@ The server (`crates/server/src/spectate.rs`, `server/`, `game/stuck.rs`):
   top 31 bits of the server's xorshift, or glibc's `rand()` once a gate pins
   it (`Server::pin_stuck_rand`, 13.4).
 
-The client (`crates/client/src/play/predict.rs`, `main.rs`): the predictor
+The client (`crates/client/src/play/predict.rs`, `live_frame.rs`): the predictor
 lands with `FallHeights::from_systeminfo` of configstring 1, reread at each
 gamestate and each change. `solid_bodies` builds the body list from the
 newest snapshot, skipping the own client, `solid` 0, `solid` 0xffffff (a

@@ -2,7 +2,7 @@
 //! headless: the prediction (`Predictor::predict`), the event collection and
 //! its dedup (`events::frame_events`), the kick (`events::view_kicks`), the
 //! effects (`fx::registry::resolve`) and the sounds (`audio::cues::resolve`),
-//! each called as the frame in `main.rs` calls it. Every shot has to play
+//! each called as the frame in `live_frame.rs` calls it. Every shot has to play
 //! once: one fire event, one flash, one fire sound, one kick.
 //!
 //! The own-body replays read a `--save-slope` capture's cmds and snapshots
@@ -137,7 +137,7 @@ impl<'a> Client<'a> {
             }
             None => None,
         };
-        // `main.rs`'s `Hud::feed_damage`, the playerstate's view standing in
+        // `live_frame.rs`'s `Hud::feed_damage`, the playerstate's view standing in
         // for the drawn one.
         let fb = DamageFeedback::from_ps(p, &newest.ps);
         let t = newest.server_time.raw();

@@ -75,7 +75,7 @@ impl Session {
         }
     }
 
-    // The frame, in its order (`App::window_event`'s `RedrawRequested`).
+    // The frame, in its order (`App::redraw`).
 
     /// Before the frame: the script menus off the session. True when a
     /// session read them (the caller syncs the menu mouse).
