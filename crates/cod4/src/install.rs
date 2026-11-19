@@ -287,16 +287,24 @@ pub fn resolve_ci(base: &Path, rel: &Path) -> PathBuf {
     at
 }
 
-/// The entry of `dir` named `name`, exactly or else case-blind.
+/// The entry of `dir` named `name`, exactly or else case-blind, spelled as
+/// the listing has it: on a case-folding file system `mods` exists too,
+/// under the wrong name.
 fn find_ci(dir: &Path, name: &str) -> Option<std::ffi::OsString> {
-    if dir.join(name).exists() {
-        return Some(name.into());
+    let Ok(list) = std::fs::read_dir(dir) else {
+        return dir.join(name).exists().then(|| name.into());
+    };
+    let mut hit = None;
+    for n in list.filter_map(|e| e.ok()).map(|e| e.file_name()) {
+        match n.to_str() {
+            Some(s) if s == name => return Some(n),
+            Some(s) if s.eq_ignore_ascii_case(name) => {
+                hit.get_or_insert(n);
+            }
+            _ => {}
+        }
     }
-    std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name())
-        .find(|n| n.to_str().is_some_and(|n| n.eq_ignore_ascii_case(name)))
+    hit
 }
 
 /// The language directory under `root/zone/`: `english` when there is
