@@ -23,6 +23,12 @@ By how much a player notices.
   swing and the controls' ease on a strafe under gdb (cod4-combat.md
   6.1).
 
+- Two retail captures were never committed, so their claims are VERIFIED
+  live with no gate replaying them: the mounted SAW on mp_backlot
+  (`play-1.7-saw.txt`, cod4-gsc.md 9.2, cod4-effects.md 12.4) and the use
+  key's weapon swap (cod4-combat.md 12). Both want a fresh capture beside
+  the other pairs of `cod4::capture_ab`.
+
 ## Not gaps
 
 - The authorize round trip, out on purpose: with its authorize

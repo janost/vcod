@@ -308,7 +308,8 @@ client command each re-encode only that way. VERIFIED live.
 `play-1.7-walk.txt` and `play-1.7-spec.txt`: three probes on `cod4_lnxded
 +set g_gametype war +set sv_pure 0 ... +map mp_crash` in the namespace of
 `cod4-handshake.md` 7, the probe's recipe in its header. `mate` (an idle
-allies teammate, not committed) and `spec` start together; `walker`
+allies teammate, its capture not kept: nothing is read off it) and
+`spec` start together; `walker`
 joins a second later on allies, picks `assault_mp,0`, and plays its
 script from the spawn for 42 s. `walker`: 842 server and 438 client
 messages; `spec`: 902 and 469. VERIFIED live.

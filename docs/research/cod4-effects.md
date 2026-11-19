@@ -862,9 +862,9 @@ Addresses are `iw3mp.exe` 1.7.
   (0x808a127..0x808a12c). INFERRED (the store's source). In a retail run
   under 0
   (`cod4_probe --script saw --face 0 --goto "-770 68 320 0"` on
-  mp_backlot's SAW 393, a spectator beside it, uncommitted like
-  `play-1.7-saw.txt`) all 75 of the gunner's impacts read 393. VERIFIED
-  live. Ours passes `Fire_Lead`'s gun to `bullet_fire_round`;
+  mp_backlot's SAW 393, a spectator beside it) all 75 of the gunner's
+  impacts read 393. VERIFIED live (capture not kept, like
+  `play-1.7-saw.txt`, cod4-gsc.md 9.2). Ours passes `Fire_Lead`'s gun to `bullet_fire_round`;
   `turret_tests::a_mounted_guns_impacts_name_the_gun` holds it. VERIFIED
   (the test, ours).
 - vcod's client: `cod4_fx::client_side_bullets` reads the systeminfo;
