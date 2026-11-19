@@ -44,8 +44,9 @@ use std::sync::Arc;
 use glam::Vec3;
 use vcod_cod2::net::UserCmd2;
 use vcod_cod2::pmove::{button, pm_type, pmf};
-use vcod_common::net::msg::{self, UserCmd};
+use vcod_common::net::msg::UserCmd;
 
+use super::bridge::eye;
 use super::game_bots::{GameBots, OwnBots};
 use super::{Bot, BotView, EnemyView, WeaponMenu};
 use crate::game::cod2::Cod2Level;
@@ -1459,10 +1460,6 @@ fn forced_stance(ps: &vcod_cod2::pmove::PlayerState, from: i32) -> Option<bool> 
         })
 }
 
-fn eye(ps: &vcod_cod2::pmove::PlayerState) -> Vec3 {
-    ps.origin + Vec3::Z * ps.view_height_current
-}
-
 /// The body in `slot` as the driver's team passes read it. A client
 /// killed this frame keeps `pm_type` normal until its end frame; the
 /// vitals already say dead, and the yields walk round no corpse.
@@ -1593,45 +1590,37 @@ pub fn offhand_cmd(
     c.weapon = held;
     let trigger = c.buttons & button::ATTACK != 0;
     c.buttons &= !(button::ATTACK | button::ADS);
-    let armed = throwing.unwrap_or(false) || trigger;
-    if trigger || !armed {
+    let (key, armed) = super::bridge::frag_key(trigger, throwing);
+    if key {
         c.buttons |= vcod_cod2::pmove::weapon::key::FRAG;
     }
     c.off_hand_index = g;
     (c, Some(armed))
 }
 
-/// A CoD1 usercmd in CoD2's bits (cod2-movement.md 3, the client's
-/// `CL_CmdButtons` map): the attack, melee, use and sight move to 0x1,
-/// 0x4, 0x8 and 0x1000; reload, the leans and the two stances leave
-/// `wbuttons` for 0x10, 0x40/0x80 and 0x100/0x200; `upmove` is gone, so a
-/// jump is 0x400 and a crouch held through `up` is 0x200.
+/// CoD2's bits for the CoD1 keys (cod2-movement.md 3, the client's
+/// `CL_CmdButtons` map): the attack, melee, use and sight to 0x1, 0x4, 0x8
+/// and 0x1000; reload, the leans and the two stances to 0x10, 0x40/0x80
+/// and 0x100/0x200; a jump is 0x400.
+const BUTTONS: super::bridge::Buttons = super::bridge::Buttons {
+    attack: button::ATTACK as u32,
+    melee: 0x4,
+    use_key: 0x8,
+    ads: button::ADS as u32,
+    reload: 0x10,
+    lean_left: button::LEAN_LEFT as u32,
+    lean_right: button::LEAN_RIGHT as u32,
+    prone: button::PRONE as u32,
+    crouch: button::CROUCH as u32,
+    jump: button::JUMP as u32,
+};
+
+/// A CoD1 usercmd in CoD2's bits ([`BUTTONS`]); the moves and angles go
+/// as they are.
 pub fn to_cmd2(cmd: &UserCmd) -> UserCmd2 {
-    let mut b = 0;
-    let map = [
-        (cmd.buttons & msg::BUTTON_ATTACK, button::ATTACK),
-        (cmd.buttons & msg::BUTTON_MELEE, 0x4),
-        (cmd.buttons & msg::BUTTON_USE, 0x8),
-        (cmd.buttons & msg::BUTTON_ADS, button::ADS),
-        (cmd.wbuttons & msg::WBUTTON_RELOAD, 0x10),
-        (cmd.wbuttons & msg::WBUTTON_LEAN_LEFT, button::LEAN_LEFT),
-        (cmd.wbuttons & msg::WBUTTON_LEAN_RIGHT, button::LEAN_RIGHT),
-        (cmd.wbuttons & msg::WBUTTON_PRONE, button::PRONE),
-        (cmd.wbuttons & msg::WBUTTON_CROUCH, button::CROUCH),
-    ];
-    for (on, bit) in map {
-        if on != 0 {
-            b |= bit;
-        }
-    }
-    if cmd.up > 0 {
-        b |= button::JUMP;
-    } else if cmd.up < 0 && b & button::PRONE == 0 {
-        b |= button::CROUCH;
-    }
     UserCmd2 {
         server_time: cmd.server_time,
-        buttons: b,
+        buttons: super::bridge::cmd_buttons(cmd, &BUTTONS) as i32,
         weapon: cmd.weapon,
         off_hand_index: 0,
         angles: cmd.angles,
@@ -1643,6 +1632,7 @@ pub fn to_cmd2(cmd: &UserCmd) -> UserCmd2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::net::msg;
 
     /// The last forced stance in the ring past the mark wins; events at or
     /// before it, or rolled out of the four slots, are not read again.

@@ -35,9 +35,10 @@ use vcod_cod4::collision::ClipMap;
 use vcod_cod4::net::clmsg::UserCmd as UserCmd4;
 use vcod_cod4::pmove::weapon::{self as weap, WeaponDef};
 use vcod_cod4::pmove::{PlayerState, button, pm_type, pmf};
-use vcod_common::net::msg::{self, UserCmd};
+use vcod_common::net::msg::UserCmd;
 use vcod_gsc::EntId;
 
+use super::bridge::eye;
 use super::game_bots::{GameBots, OwnBots};
 use super::{
     BombView, BotView, DomFlagView, DomView, EnemyView, KeyBomb, ObjRole, SdView, SiteView, UoView,
@@ -1640,10 +1641,6 @@ fn fire_cycle(d: &WeaponDef) -> i32 {
     }
 }
 
-fn eye(ps: &PlayerState) -> Vec3 {
-    ps.origin + Vec3::Z * ps.view_height_current
-}
-
 /// `ANGLE2SHORT` of 1.7's float `delta_angles`, as the brain's cmd angles
 /// subtract them.
 fn deg_short(a: f32) -> i32 {
@@ -1669,51 +1666,39 @@ pub fn offhand_cmd(
     c.weapon = held as u8;
     let trigger = c.buttons & button::ATTACK != 0;
     c.buttons &= !(button::ATTACK | button::ADS_MODE);
-    let armed = throwing.unwrap_or(false) || trigger;
-    if trigger || !armed {
+    let (key, armed) = super::bridge::frag_key(trigger, throwing);
+    if key {
         c.buttons |= button::FRAG;
     }
     c.offhand = g as u8;
     (c, Some(armed))
 }
 
-/// The reload key (`PM_Weapon_CheckForReload`'s 0x10) and the use key
-/// (0x8, `ClientThink`'s 0x28 reads it).
-const BUTTON_RELOAD: u32 = 0x10;
-const BUTTON_USE: u32 = 0x8;
-
-/// A CoD1 usercmd in 1.7's bits (`vcod_cod4::pmove::button`): the attack,
+/// 1.7's bits for the CoD1 keys (`vcod_cod4::pmove::button`): the attack,
 /// melee, use and sight to 0x1, 0x4, 0x8 and 0x800; the reload, the leans
-/// and the two stances out of `wbuttons` to 0x10, 0x40/0x80 and
-/// 0x100/0x200; a jump is 0x400 and a crouch held through `up` is 0x200.
-/// The moves go whole, as the wire carries only their sign.
+/// and the two stances to 0x10, 0x40/0x80 and 0x100/0x200; a jump is
+/// 0x400. The use key is `ClientThink`'s 0x28 read, the reload
+/// `PM_Weapon_CheckForReload`'s.
+const BUTTONS: super::bridge::Buttons = super::bridge::Buttons {
+    attack: button::ATTACK,
+    melee: button::MELEE,
+    use_key: 0x8,
+    ads: button::ADS_MODE,
+    reload: button::RELOAD,
+    lean_left: button::LEAN_LEFT,
+    lean_right: button::LEAN_RIGHT,
+    prone: button::PRONE,
+    crouch: button::CROUCH,
+    jump: button::JUMP,
+};
+
+/// A CoD1 usercmd in 1.7's bits ([`BUTTONS`]). The moves go whole, as the
+/// wire carries only their sign.
 pub fn to_cmd4(cmd: &UserCmd) -> UserCmd4 {
-    let mut b = 0;
-    let map = [
-        (cmd.buttons & msg::BUTTON_ATTACK, button::ATTACK),
-        (cmd.buttons & msg::BUTTON_MELEE, button::MELEE),
-        (cmd.buttons & msg::BUTTON_USE, BUTTON_USE),
-        (cmd.buttons & msg::BUTTON_ADS, button::ADS_MODE),
-        (cmd.wbuttons & msg::WBUTTON_RELOAD, BUTTON_RELOAD),
-        (cmd.wbuttons & msg::WBUTTON_LEAN_LEFT, button::LEAN_LEFT),
-        (cmd.wbuttons & msg::WBUTTON_LEAN_RIGHT, button::LEAN_RIGHT),
-        (cmd.wbuttons & msg::WBUTTON_PRONE, button::PRONE),
-        (cmd.wbuttons & msg::WBUTTON_CROUCH, button::CROUCH),
-    ];
-    for (on, bit) in map {
-        if on != 0 {
-            b |= bit;
-        }
-    }
-    if cmd.up > 0 {
-        b |= button::JUMP;
-    } else if cmd.up < 0 && b & button::PRONE == 0 {
-        b |= button::CROUCH;
-    }
     let whole = |m: i8| (i32::from(m).signum() * 127) as i8;
     UserCmd4 {
         server_time: cmd.server_time,
-        buttons: b,
+        buttons: super::bridge::cmd_buttons(cmd, &BUTTONS),
         angles: cmd.angles.map(|a| a as u16),
         weapon: cmd.weapon,
         offhand: 0,
@@ -1794,6 +1779,7 @@ fn blasts(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::net::msg;
 
     /// A fuse's burst is its vanished frag's thrower's, heard once; a
     /// spent impact is heard where it struck; smoke and an unseen

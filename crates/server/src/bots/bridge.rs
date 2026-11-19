@@ -1,9 +1,10 @@
 //! The CoD1-body bridge CoD2's and CoD4's bots share: a nav walk's CoD1
 //! body carried on a CoD2-family body ([`walk_cmd`], [`walk_body`],
 //! [`read_walk_body`]), the follower's CoD1 body ([`follower_body`]), the
-//! mantle probe's walk ([`mantle_walk`]). Each game keeps what it
-//! moves by in `bots/cod2.rs` and `bots/cod4.rs`: its pmove, its cmd, its
-//! traces and its `delta_angles`.
+//! eye ([`eye`]), the mantle probe's walk ([`mantle_walk`]) and the CoD1
+//! usercmd's keys in the game's bits ([`cmd_buttons`], [`frag_key`]). Each
+//! game keeps what it moves by in `bots/cod2.rs` and `bots/cod4.rs`: its
+//! pmove, its cmd, its traces and its `delta_angles`.
 
 use std::sync::Arc;
 
@@ -11,6 +12,7 @@ use glam::Vec3;
 use vcod_cod2::pmove as pm2;
 use vcod_cod4::pmove as pm4;
 use vcod_common::clipmap::{CONTENTS_MANTLE, SURF_MANTLE_ON, SURF_MANTLE_OVER};
+use vcod_common::net::msg::{self, UserCmd};
 use vcod_common::net::protocol::ENTITYNUM_NONE;
 use vcod_common::pmove::{MoveRules, PlayerState as Cod1Ps, Stance};
 use vcod_common::pmshared::PmState;
@@ -43,6 +45,7 @@ pub(crate) struct Seen {
     pub jump_time: i32,
     pub pm_time: i32,
     pub jump_origin_z: f32,
+    pub view_height_current: f32,
     /// `PM_GetEffectiveStance`.
     pub stance: Stance,
 }
@@ -97,6 +100,7 @@ macro_rules! bridge_ps {
                     jump_time: self.jump_time,
                     pm_time: self.pm_time,
                     jump_origin_z: self.jump_origin_z,
+                    view_height_current: self.view_height_current,
                     stance: self.effective_stance(),
                 }
             }
@@ -127,6 +131,12 @@ macro_rules! bridge_ps {
 
 bridge_ps!(pm2);
 bridge_ps!(pm4);
+
+/// Where a game body's eye is: `viewHeightCurrent` over its origin.
+pub(crate) fn eye<P: BridgePs>(ps: &P) -> Vec3 {
+    let s = ps.seen();
+    s.origin + Vec3::Z * s.view_height_current
+}
 
 /// A trace as the bridge reads it, whichever world the game traces.
 pub(crate) struct Hit {
@@ -352,4 +362,57 @@ pub(crate) fn mantle_walk<P: BridgePs>(
         }
     }
     None
+}
+
+/// The bits a game gives the CoD1 usercmd's keys ([`cmd_buttons`]).
+pub(crate) struct Buttons {
+    pub attack: u32,
+    pub melee: u32,
+    pub use_key: u32,
+    pub ads: u32,
+    pub reload: u32,
+    pub lean_left: u32,
+    pub lean_right: u32,
+    pub prone: u32,
+    pub crouch: u32,
+    pub jump: u32,
+}
+
+/// A CoD1 usercmd's keys in a game's bits `to`: the attack, melee, use and
+/// sight out of `buttons`, the reload, the leans and the two stances out
+/// of `wbuttons`; `upmove` is gone, so a jump is `to.jump` and a crouch
+/// held through `up` is `to.crouch`, short of prone.
+pub(crate) fn cmd_buttons(cmd: &UserCmd, to: &Buttons) -> u32 {
+    let map = [
+        (cmd.buttons & msg::BUTTON_ATTACK, to.attack),
+        (cmd.buttons & msg::BUTTON_MELEE, to.melee),
+        (cmd.buttons & msg::BUTTON_USE, to.use_key),
+        (cmd.buttons & msg::BUTTON_ADS, to.ads),
+        (cmd.wbuttons & msg::WBUTTON_RELOAD, to.reload),
+        (cmd.wbuttons & msg::WBUTTON_LEAN_LEFT, to.lean_left),
+        (cmd.wbuttons & msg::WBUTTON_LEAN_RIGHT, to.lean_right),
+        (cmd.wbuttons & msg::WBUTTON_PRONE, to.prone),
+        (cmd.wbuttons & msg::WBUTTON_CROUCH, to.crouch),
+    ];
+    let mut b = 0;
+    for (on, bit) in map {
+        if on != 0 {
+            b |= bit;
+        }
+    }
+    if cmd.up > 0 {
+        b |= to.jump;
+    } else if cmd.up < 0 && b & to.prone == 0 {
+        b |= to.crouch;
+    }
+    b
+}
+
+/// The frag key's state while the brain asks for the frag: the key is held
+/// from the ask until the brain has held the trigger and let it go.
+/// `trigger` is this cmd's attack, `throwing` the last cmd's state; returns
+/// whether the key is down and the state to keep.
+pub(crate) fn frag_key(trigger: bool, throwing: Option<bool>) -> (bool, bool) {
+    let armed = throwing.unwrap_or(false) || trigger;
+    (trigger || !armed, armed)
 }
