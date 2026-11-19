@@ -378,7 +378,7 @@ replay gate resolves each it meets).
   well (INFERRED, the code before). Gates: `audio::tests::a_loops_secondary_ends_with_it`,
   `audio::tests::cod4_reaps_the_loops_nothing_refreshed` and the live
   `cod4_vehicles::tests::cod4_live_hardpoints_draw_smoke_and_sound`,
-  which keeps the silent mixer's loops (`AudioSystem::keep_silent_loops`)
+  which plays its sounds on kira's mock backend (`AudioSystem::mock_mixer`)
   and finds none but the ambient 25 s after the strike. VERIFIED (ours).
 
 - A looping voice tied to an entity stops once the entity is freed,

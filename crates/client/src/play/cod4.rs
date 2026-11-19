@@ -11052,11 +11052,12 @@ pub(crate) mod tests {
                 let mut a = AudioSystem::new(
                     &fs,
                     AudioOpts {
-                        enabled: true,
+                        enabled: false,
                         volume: 1.0,
                         rate: 44100,
                     },
                 );
+                a.mock_mixer();
                 a.on_gamestate("mp_crash");
                 a.set_cod4_aliases(sounds.take_table().unwrap());
                 (a, fs, sounds)
@@ -11077,6 +11078,7 @@ pub(crate) mod tests {
                     flash: &|_| None,
                 },
             );
+            audio.pump_mixer(1.0 / 60.0);
             audio.step(&HashMap::new(), &HashMap::new(), None);
             if !f.both || frozen(f.e) || frozen(f.s) {
                 return None;

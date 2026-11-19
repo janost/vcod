@@ -1432,7 +1432,7 @@ mod tests {
         let mut probe = AudioSystem::with_aliases(&fs, opts(), Default::default());
         probe.on_gamestate("mp_crash");
         probe.set_cod4_aliases(sounds.take_table().unwrap());
-        probe.keep_silent_loops();
+        probe.mock_mixer();
         let mut fx = crate::fx::sim::FxSystem::new();
         let mut c = crate::cod4_client::Cod4Client::new(
             s,
@@ -1550,7 +1550,7 @@ mod tests {
             Default::default(),
         );
         audio.on_gamestate("mp_crash");
-        audio.keep_silent_loops();
+        audio.mock_mixer();
         let mut fx = crate::fx::sim::FxSystem::new();
         let mut c = crate::cod4_client::Cod4Client::new(
             s,
@@ -1593,6 +1593,7 @@ mod tests {
                 .filter(|(row, _)| row.looping)
                 .map(|(row, _)| row.name)
                 .collect();
+            audio.pump_mixer(f64::from(dt));
             audio.step(&c.entity_positions(), &HashMap::new(), None);
             if !frames.is_empty() || looping.iter().any(|n| n == "mp_cobra_helicopter") {
                 frames.push(looping);

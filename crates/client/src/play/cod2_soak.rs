@@ -330,6 +330,8 @@ fn rig(map: &str, addr: SocketAddr) -> anyhow::Result<Rig> {
         },
     );
     audio.on_gamestate(map);
+    // the soak's sounds start, play out and reap as on a device
+    audio.mock_mixer();
     let (origin, yaw) = vcod_common::bsp::find_spawn(&bsp.entities).unwrap_or(([0.0; 3], 0.0));
     let cam = crate::camera::FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw);
     Ok(Rig {
@@ -404,6 +406,7 @@ fn step(
     let t2 = Instant::now();
     if pumped {
         let events = sess.events(&mut cx);
+        cx.audio.pump_mixer(f64::from(dt));
         sess.audio(&mut cx, &events, cam.pos);
         sess.effects(&mut cx, &events, cam.pos);
         view_fx = sess.view(&mut cx, &events, cam);
