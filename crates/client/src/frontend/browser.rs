@@ -500,8 +500,6 @@ impl Browser {
         }
     }
 
-    /// The servers the list shows, in display order: those that answered
-    /// (every favourite, answered or not) that pass the filter.
     /// The servers the filter keeps, in the list's order.
     fn filtered(&self) -> impl Iterator<Item = &Server> {
         let all = self.source == Source::Favorites;
@@ -521,6 +519,8 @@ impl Browser {
         self.filtered().find(|s| s.addr == addr)
     }
 
+    /// The servers the list shows, in display order: those that answered
+    /// (every favourite, answered or not) that pass the filter.
     pub fn rows(&self) -> Vec<&Server> {
         let blank = ServerInfo::default();
         let mut rows: Vec<&Server> = self.filtered().collect();

@@ -3623,10 +3623,6 @@ mod tests {
         );
     }
 
-    /// Combat doc 2.4, step 5: a rifle round goes on from the hit point past
-    /// the player it hit, at half its damage, into the next player and then
-    /// the wall behind; a pistol round stops on the first player, and so
-    /// does a rifle round whose halving leaves nothing.
     /// A UO round rolls its tracer on every leg that may draw one
     /// (coduo-diff.md 21): through B into C both player hits draw, each from
     /// its own leg's start, and the miss past B draws none, its pass entity
@@ -3688,6 +3684,10 @@ mod tests {
         assert!(got[0].1 > 1000.0, "{got:?}");
     }
 
+    /// Combat doc 2.4, step 5: a rifle round goes on from the hit point past
+    /// the player it hit, at half its damage, into the next player and then
+    /// the wall behind; a pistol round stops on the first player, and so
+    /// does a rifle round whose halving leaves nothing.
     #[test]
     fn a_rifle_round_passes_through_a_player_at_half_damage_and_a_pistol_round_stops() {
         let a = new_for_test([0.0, 0.0, 0.0], 0.0);

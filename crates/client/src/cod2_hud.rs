@@ -365,13 +365,6 @@ pub struct Obit {
     pub center: Option<String>,
 }
 
-/// `CG_Obituary` (inline in `CG_EntityEvent`, Mac 0x1e4650, event 198) over
-/// a temp entity's `otherEntityNum` (the victim), `attackerEntityNum` (64
-/// and up: none) and `parm` (`0x80 | mod`, or the weapon's index), with
-/// the names off the snapshot's client states. `None` when the victim or
-/// the attacker has none, as retail returns. `kill_icon` gives a weapon
-/// index's `killIcon`, `wideKillIcon` and `flipKillIcon`; `team_rgb` a
-/// team's colour (`CG_DrawScoreboard_GetTeamColor`).
 /// Weapon `index`'s kill icon, wide and flip flags off configstring 7,
 /// each weapon file read once.
 fn kill_icon(
@@ -394,6 +387,13 @@ fn kill_icon(
         .clone()
 }
 
+/// `CG_Obituary` (inline in `CG_EntityEvent`, Mac 0x1e4650, event 198) over
+/// a temp entity's `otherEntityNum` (the victim), `attackerEntityNum` (64
+/// and up: none) and `parm` (`0x80 | mod`, or the weapon's index), with
+/// the names off the snapshot's client states. `None` when the victim or
+/// the attacker has none, as retail returns. `kill_icon` gives a weapon
+/// index's `killIcon`, `wideKillIcon` and `flipKillIcon`; `team_rgb` a
+/// team's colour (`CG_DrawScoreboard_GetTeamColor`).
 pub fn obituary(
     victim: i32,
     attacker: i32,
@@ -483,8 +483,6 @@ pub fn board_client(clients: &[ClientState2], n: u32) -> Option<(String, i32)> {
     Some((c.name(), team))
 }
 
-/// `m:ss` of a timer element at `now`: counting down to `time` (7, 9) or
-/// up from it (8, 10), whole seconds.
 /// A hudelem's text before its label merges in: a value prints as `%g`
 /// (`CoD2MP_s.exe` 0x4dd6b8, cod2-hud.md).
 fn elem_body(e: &HudElem, text: impl FnOnce() -> String, now: i32) -> String {
@@ -496,6 +494,8 @@ fn elem_body(e: &HudElem, text: impl FnOnce() -> String, now: i32) -> String {
     }
 }
 
+/// `m:ss` of a timer element at `now`: counting down to `time` (7, 9) or
+/// up from it (8, 10), whole seconds.
 fn timer(e: &HudElem, now: i32) -> String {
     let ms = match e.kind {
         8 | 10 => now - e.time,
@@ -903,8 +903,6 @@ mod tests {
         assert_eq!(map_display_name(&arenas, "mp_custom"), "mp_custom");
     }
 
-    /// A weapon's `flipKillIcon` mirrors its icon; a means of death's icon
-    /// never flips. Names take the mirror's team colours.
     /// Configstring 7 is per level: after a map change an index names the
     /// new list's weapon, and so does its kill icon.
     #[test]
@@ -929,6 +927,8 @@ mod tests {
         assert_eq!(second, mp44);
     }
 
+    /// A weapon's `flipKillIcon` mirrors its icon; a means of death's icon
+    /// never flips. Names take the mirror's team colours.
     #[test]
     fn an_obituary_flips_the_weapon_icon() {
         let clients = [client(0, "a", 1), client(1, "b", 2)];

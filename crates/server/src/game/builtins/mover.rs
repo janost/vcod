@@ -425,9 +425,6 @@ mod tests {
         });
     }
 
-    /// `movex` is a delta and `rotateyaw` is one too: a second call runs the
-    /// yaw from 90 to 180 rather than staying at 90, which is the case the
-    /// retail probe had to call twice to see.
     /// A script `.origin` write after a finished `moveTo` stands: the next
     /// passes read it and the wire carries it (BUG-074).
     #[test]
@@ -457,6 +454,9 @@ mod tests {
         });
     }
 
+    /// `movex` is a delta and `rotateyaw` is one too: a second call runs the
+    /// yaw from 90 to 180 rather than staying at 90, which is the case the
+    /// retail probe had to call twice to see.
     #[test]
     fn the_axis_verbs_take_deltas() {
         let (mut vm, mut host) = fixture();

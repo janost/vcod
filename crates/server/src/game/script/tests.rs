@@ -1950,9 +1950,6 @@ fn two_items_in_reach_on_one_cmd_see_each_others_ammo() {
     assert_eq!(rt.host.clients[0].ammo.ammo[d.ammo_index], 320);
 }
 
-/// The swap with the use key: the carbine lands on the panzerfaust's own
-/// origin, carries its rounds and its dropper, and the `"trigger"` notify
-/// names the player and the carbine, in that order.
 /// A drop with an empty clip and a reserve still has rounds to take;
 /// only a count and a clip both written empty (-1) read as empty.
 #[test]
@@ -1978,6 +1975,9 @@ fn a_weapon_item_with_a_reserve_behind_an_empty_clip_is_not_empty() {
     assert!(at(200.0));
 }
 
+/// The swap with the use key: the carbine lands on the panzerfaust's own
+/// origin, carries its rounds and its dropper, and the `"trigger"` notify
+/// names the player and the carbine, in that order.
 #[test]
 fn the_use_key_swaps_and_the_trigger_notify_names_the_drop() {
     let mut rt = pickup_rig();

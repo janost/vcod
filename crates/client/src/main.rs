@@ -2301,8 +2301,6 @@ fn exec_after_queue(args: &[String]) -> std::collections::VecDeque<(f32, String)
         .collect()
 }
 
-/// A switch cvar, on unless set to 0 (on when unregistered: the CoD4
-/// Options dvars exist only on a CoD4 install).
 /// The CoD4 renderer's dvars, read every frame.
 pub(crate) fn cod4_options(shell: &console::shell::Shell) -> renderer::Cod4Options {
     renderer::Cod4Options {
@@ -2319,6 +2317,8 @@ pub(crate) fn cod4_options(shell: &console::shell::Shell) -> renderer::Cod4Optio
     }
 }
 
+/// A switch cvar, on unless set to 0 (on when unregistered: the CoD4
+/// Options dvars exist only on a CoD4 install).
 fn cvar_on(shell: &console::shell::Shell, name: &str) -> bool {
     shell
         .cvar(name)
@@ -2853,8 +2853,6 @@ fn reopen_fs(
     Ok(())
 }
 
-/// `maps/mp/<map>.bsp` off the search path, parsed ([`MapWorld`]'s asset
-/// kind): what `CM_LoadMap` (CoDMP.exe 0x419c90) and `R_LoadWorldMap` read.
 /// A map argument's base name, as the renderer's world keeps it: no
 /// folder, no extension (`maps/mp/mp_carentan.bsp` -> `mp_carentan`).
 fn map_base_name(map: &str) -> String {
@@ -2864,6 +2862,8 @@ fn map_base_name(map: &str) -> String {
         .to_string()
 }
 
+/// `maps/mp/<map>.bsp` off the search path, parsed ([`MapWorld`]'s asset
+/// kind): what `CM_LoadMap` (CoDMP.exe 0x419c90) and `R_LoadWorldMap` read.
 fn read_map(fs: &dyn AssetSource, map: &str) -> Result<MapWorld> {
     mapworld::find(fs, map).with_context(|| format!("cannot load map '{map}'"))
 }
@@ -3295,7 +3295,6 @@ impl App {
         event_loop.exit();
     }
 
-    /// Gives the mouse to the view (`grabbed`) or takes it back.
     /// `CL_AdjustAngles` (CoDMP.exe 0x40ade0) online, then `CL_MouseMove`
     /// (0x40b240) once a frame: the motion since the last frame, or with
     /// `m_filter` its mean with the last frame's, turns the view or,
@@ -3360,6 +3359,7 @@ impl App {
         }
     }
 
+    /// Gives the mouse to the view (`grabbed`) or takes it back.
     fn set_grab(&mut self, grabbed: bool) {
         if self.window.is_none() {
             return;
@@ -3505,7 +3505,6 @@ impl App {
         true
     }
 
-    /// Whether keys go to the console: it is down, or there is nothing else.
     /// Keys, mouse buttons and the wheel go through the binds: online,
     /// a CoD2 session included (`Mode::Cod2`,
     /// `play::cod2_input`).
@@ -3513,6 +3512,7 @@ impl App {
         matches!(self.mode, Mode::Online { .. }) || self.session.live()
     }
 
+    /// Whether keys go to the console: it is down, or there is nothing else.
     fn console_active(&self) -> bool {
         self.console.open
             || (matches!(self.mode, Mode::Idle)
@@ -4712,12 +4712,6 @@ impl App {
         running
     }
 
-    /// The Mods menu's `RunMod` (and `Quake3` with `None`): `fs_game` and a
-    /// `vid_restart`, which brings the main menu back up off the mod's
-    /// paks. In a game, `vid_restart` keeps the connection: the search path
-    /// reopens under the server's pure list, the UI reloads closed and the
-    /// cgame half sends `cp` again (CoDMP.exe 0x40fbe0,
-    /// docs/research/cod11-front-end.md section 17).
     /// CoD2's `Com_ChangePlayerProfile` (Mac 0x111936): `players/active.txt`
     /// names the profile, `com_playerProfile` holds it and its config file
     /// takes over, run when it has one, else written from what is set now.
@@ -4752,6 +4746,12 @@ impl App {
         log::info!("player profile {name}: {}", self.config_path.display());
     }
 
+    /// The Mods menu's `RunMod` (and `Quake3` with `None`): `fs_game` and a
+    /// `vid_restart`, which brings the main menu back up off the mod's
+    /// paks. In a game, `vid_restart` keeps the connection: the search path
+    /// reopens under the server's pure list, the UI reloads closed and the
+    /// cgame half sends `cp` again (CoDMP.exe 0x40fbe0,
+    /// docs/research/cod11-front-end.md section 17).
     fn run_mod(&mut self, game: Option<String>) {
         log::info!("fs_game {}", game.as_deref().unwrap_or("(none)"));
         self.shell.force("fs_game", game.as_deref().unwrap_or(""));

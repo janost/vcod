@@ -1306,10 +1306,6 @@ mod tests {
         assert_eq!(s.ps.field_i32(p, "delta_angles[2]"), 0);
     }
 
-    /// `gameCompleteStatus` over rcon (handshake doc, "Console commands
-    /// over rcon"): a master the heartbeat resolved first is named and sent
-    /// nothing; one the command resolves itself gets the serverinfo with
-    /// the argument as `challenge` and a line per player.
     /// A UO server heartbeats UO's master unless `sv_master1` says otherwise.
     #[test]
     fn sv_master1_defaults_to_the_protocols_master() {

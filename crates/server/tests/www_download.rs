@@ -101,9 +101,6 @@ fn a_redirected_download_lands_over_http_and_the_gamestate_follows() {
     assert_ne!(cl.state(), NetState::Disconnected);
 }
 
-/// A server on `proto` holding `zzz_www.pk3` with `sv_wwwDownload` on and
-/// another pak of that name behind its `sv_wwwBaseURL`, and a connected
-/// client asking for it. Returns the HTTP request log too.
 /// What [`wrong_pak_at_the_url`] sets up.
 struct WrongPak {
     sv: Server,
@@ -114,6 +111,9 @@ struct WrongPak {
     scratch: tempfile::TempDir,
 }
 
+/// A server on `proto` holding `zzz_www.pk3` with `sv_wwwDownload` on and
+/// another pak of that name behind its `sv_wwwBaseURL`, and a connected
+/// client asking for it. Returns the HTTP request log too.
 fn wrong_pak_at_the_url(proto: &'static Cod1Wire) -> WrongPak {
     let scratch = tempfile::tempdir().unwrap();
     let served = scratch.path().join("server/main");

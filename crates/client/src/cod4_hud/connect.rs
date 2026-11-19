@@ -504,13 +504,13 @@ mod tests {
         .to_string()
     }
 
-    /// Lines break at the first space past 40 characters, keeping it, and
-    /// at 59 characters with none.
     /// Fails with the whole new text when `actual` moved off the pin.
     fn pin(tag: &str, actual: &str, expected: &str) {
         assert!(actual == expected, "{tag} moved:\n{actual}");
     }
 
+    /// Lines break at the first space past 40 characters, keeping it, and
+    /// at 59 characters with none.
     #[test]
     fn message_wrap_pins() {
         let s: String = crate::cod4_hud::tests::wrap_corpus()

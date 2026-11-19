@@ -804,8 +804,6 @@ impl Cursor {
 /// The smallest scale a CoD2 row cell keeps its shadow at (0x326398).
 const SHADOW_MIN_SCALE: f32 = 0.16;
 
-/// CoD2's `CG_DrawClientScore` (Mac 0x1c51b2): the scale less 0.02 at a
-/// time until `s` fits `w`.
 /// A team's mean ping, 0 without players or a positive sum; the sum wraps
 /// as retail's int does.
 fn team_ping(pings: impl Iterator<Item = i32>, count: usize) -> i32 {
@@ -817,6 +815,8 @@ fn team_ping(pings: impl Iterator<Item = i32>, count: usize) -> i32 {
     }
 }
 
+/// CoD2's `CG_DrawClientScore` (Mac 0x1c51b2): the scale less 0.02 at a
+/// time until `s` fits `w`.
 fn shrink(d: &Draw, s: &str, w: f32, mut scale: f32) -> f32 {
     while d.width(s, scale) > w && scale > 0.02 {
         scale -= 0.02;

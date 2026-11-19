@@ -2439,7 +2439,6 @@ fn hitbody_rows<'a>(
     }
 }
 
-/// Client 0's first `PROBE spawnat <num> <origin> <angles>` line.
 /// The target's spawn for a capture that predates `PROBE spawnat`: the
 /// spawn think's drift off this sloped point puts ours on retail's origin
 /// to 0.001 on every such capture, where the script's own pick (off a
@@ -2447,6 +2446,7 @@ fn hitbody_rows<'a>(
 /// unit off. INFERRED: retail's target spawned here.
 const PRE_SPAWNAT: common::SpawnAt = common::CARENTAN_NORTH;
 
+/// Client 0's first `PROBE spawnat <num> <origin> <angles>` line.
 fn spawn_at(script: &str) -> Option<([f32; 3], [f32; 3])> {
     let rest = script
         .lines()

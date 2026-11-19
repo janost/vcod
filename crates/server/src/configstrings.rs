@@ -840,9 +840,6 @@ mod tests {
         }
     }
 
-    /// The pak half of the retail capture under `sv_pure 1` (2026-10-09,
-    /// 1.1d on a stock 1.1 install, docs/research/cod11-server-handshake.md,
-    /// "Pak checksums"), trimmed to three paks.
     /// Past initializing a name in the range is found in any case and a new
     /// one is the indexer's error with nothing taken; while initializing
     /// it is allocated.
@@ -869,6 +866,9 @@ mod tests {
         assert_eq!(a.localized_index(&mut cs, "", false), Ok(0));
     }
 
+    /// The pak half of the retail capture under `sv_pure 1` (2026-10-09,
+    /// 1.1d on a stock 1.1 install, docs/research/cod11-server-handshake.md,
+    /// "Pak checksums"), trimmed to three paks.
     #[test]
     fn systeminfo_carries_the_pak_lists_as_retail_does() {
         let paks = [

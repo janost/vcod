@@ -1215,13 +1215,6 @@ mod tests {
         assert!(!shown(&m));
     }
 
-    /// Esc in a game: retail's server leaves `g_scriptMainMenu` at
-    /// `class_marines` after the team pick (the prematch capture's `v`),
-    /// whose `onOpen` opens `class`, drawn from the zone: the game type's
-    /// name and objective over the rows, and each row's script: Change
-    /// Team answers `changeteam` from `class`'s slot, Leave Game opens
-    /// `popup_leavegame`, whose Yes runs `disconnect` on the client's
-    /// console (cod4-hud.md 12.5).
     /// A game's menus play their `play` aliases as the front end's do
     /// (cod4-hud.md 23): the `class` menu's row under the cursor plays
     /// `mouse_over` (`onFocus`), a click `mouse_click`, and the menus'
@@ -1267,6 +1260,13 @@ mod tests {
         }
     }
 
+    /// Esc in a game: retail's server leaves `g_scriptMainMenu` at
+    /// `class_marines` after the team pick (the prematch capture's `v`),
+    /// whose `onOpen` opens `class`, drawn from the zone: the game type's
+    /// name and objective over the rows, and each row's script: Change
+    /// Team answers `changeteam` from `class`'s slot, Leave Game opens
+    /// `popup_leavegame`, whose Yes runs `disconnect` on the client's
+    /// console (cod4-hud.md 12.5).
     #[test]
     fn cod4_esc_in_game_draws_the_class_menu() {
         let Some(install) = vcod_cod4::testing::cod4_install() else {
@@ -1713,12 +1713,6 @@ mod tests {
         assert_eq!(m.take_console(), ["muteplayer 39"]);
     }
 
-    /// The in-game Options as 1.7 MP shows them: `ui_multiplayer` reads
-    /// 1, so Multiplayer Options stands where single player's Cheats would
-    /// and Game Options drops the subtitles and crosshair rows. Shadows
-    /// (`sm_enable`) and Allow Downloading (`cl_allowDownload`) set vcod's
-    /// cvars, and the player name typed into `ui_name` goes to `name` as
-    /// the page closes (cod4-front-end.md 9).
     /// The Options pages' rows that 1.7 swaps by state (cod4-hud.md 12.6):
     /// on a client of a remote server (`sv_running` 0) Graphics opens its
     /// page; a listen server's `sv_running` 1 (vcod's: a joined Dedicated
@@ -1766,6 +1760,12 @@ mod tests {
         assert!(dev.iter().any(|s| s == "Language"), "{dev:?}");
     }
 
+    /// The in-game Options as 1.7 MP shows them: `ui_multiplayer` reads
+    /// 1, so Multiplayer Options stands where single player's Cheats would
+    /// and Game Options drops the subtitles and crosshair rows. Shadows
+    /// (`sm_enable`) and Allow Downloading (`cl_allowDownload`) set vcod's
+    /// cvars, and the player name typed into `ui_name` goes to `name` as
+    /// the page closes (cod4-front-end.md 9).
     #[test]
     fn cod4_options_rows_follow_ui_multiplayer() {
         let Some(install) = vcod_cod4::testing::cod4_install() else {

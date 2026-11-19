@@ -256,9 +256,6 @@ pub fn blur_plan(radius: f32, width: u32, height: u32) -> Option<BlurPlan> {
     Some(BlurPlan { chain, alpha })
 }
 
-/// The frame's glow for a `width`-wide view (`RB_ApplyLatePostEffectsCmd`
-/// and `RB_GlowFilterImage`): `None` when no level glows. `sky` is whether
-/// the level has a sky, without which no sky bleed counts.
 /// A glow step's texture: the scene or one of the quarter targets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Target {
@@ -291,6 +288,9 @@ fn glow_route(totals: &[usize]) -> (Vec<(Target, Target)>, Target) {
     (out, src)
 }
 
+/// The frame's glow for a `width`-wide view (`RB_ApplyLatePostEffectsCmd`
+/// and `RB_GlowFilterImage`): `None` when no level glows. `sky` is whether
+/// the level has a sky, without which no sky bleed counts.
 pub fn plan(s: &GlowSettings, width: u32, height: u32, sky: bool) -> Option<Plan> {
     let mut r: [f32; 2] = std::array::from_fn(|i| {
         if s.bloom[i] > 0.0 || (sky && s.sky_bleed[i] > 0.0) {

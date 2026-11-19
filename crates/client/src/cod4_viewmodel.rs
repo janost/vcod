@@ -1448,9 +1448,6 @@ mod tests {
         assert!(v.pending_models.is_some());
     }
 
-    /// The sight's fov eases in over the raise's last `adsZoomInFrac`,
-    /// out over the drop's last `adsZoomOutFrac`, and floors at
-    /// `cg_fovMin`.
     /// A weapon's negative or NaN `swayMaxAngle`, a huge sway scale and a
     /// view of 1e30 step the sway without a panic or a hang (SEC-019).
     #[test]
@@ -1480,6 +1477,9 @@ mod tests {
         }
     }
 
+    /// The sight's fov eases in over the raise's last `adsZoomInFrac`,
+    /// out over the drop's last `adsZoomOutFrac`, and floors at
+    /// `cg_fovMin`.
     #[test]
     fn the_sight_zooms_over_its_last_fraction() {
         let n = ViewNumbers {

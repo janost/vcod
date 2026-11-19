@@ -932,8 +932,6 @@ mod tests {
         );
     }
 
-    /// Off the sight the gun's angles never enter the aim: a hip shot goes
-    /// where the view points however the gun sways.
     /// The kar98k's position under movement: at a run the gun eases
     /// toward `standMove` (0, 0.6, -1) at `posMoveRate` 4 a second, sits
     /// at `duckedOfs` crouched still, and the raised sight takes it away.
@@ -1051,6 +1049,8 @@ mod tests {
         assert_eq!(g.step(&ps, &aim, 50), [0.0, 0.5, -1.2], "back at a run");
     }
 
+    /// Off the sight the gun's angles never enter the aim: a hip shot goes
+    /// where the view points however the gun sways.
     #[test]
     fn a_hip_shot_aims_the_raw_view() {
         let def = sniper();

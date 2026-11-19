@@ -2823,11 +2823,6 @@ mod tests {
         (ps, w)
     }
 
-    /// The switch to a weapon's `altWeapon` is the alt arm on both halves:
-    /// `EV_WEAPON_ALT` and `WEAP_ALTSWITCHFROM` for `altDropTime`, then the
-    /// mode up on `altRaiseTime` with `WEAP_ALTSWITCHTO`, no raise event,
-    /// the cone opened only to 128, and the primary slot naming the mode
-    /// now in hand (`.so` 0x37a9c, 0x37d84).
     /// The held mode in no slot and a chain that never leads back to it:
     /// a loop skipping it (`A B B` in configstring 7) or a one-way link.
     /// The swap gives up and leaves the slots alone.
@@ -2852,6 +2847,11 @@ mod tests {
         assert_eq!(ps.weapon_slots, [0; NUM_SLOTS]);
     }
 
+    /// The switch to a weapon's `altWeapon` is the alt arm on both halves:
+    /// `EV_WEAPON_ALT` and `WEAP_ALTSWITCHFROM` for `altDropTime`, then the
+    /// mode up on `altRaiseTime` with `WEAP_ALTSWITCHTO`, no raise event,
+    /// the cone opened only to 128, and the primary slot naming the mode
+    /// now in hand (`.so` 0x37a9c, 0x37d84).
     #[test]
     fn an_alt_switch_takes_the_alt_arm_and_moves_the_slot() {
         let (mut ps, w) = select_fire();

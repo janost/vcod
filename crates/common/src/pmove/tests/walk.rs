@@ -42,10 +42,6 @@ fn the_1_5_walk_scale_rounds_each_step() {
     assert_eq!(stored / len, f64::from(f32::from_bits(0x3f87687e)));
 }
 
-/// The Windows cgames' walk scale (1.5 0x30007e40) stores the run
-/// scale's product before the stance's, where 1.1d rounds once: a
-/// crouched diagonal run wishes a float step less on every protocol's
-/// client (cod15-movement.md 8.2, "The walk's cmd scale").
 /// The Windows cgames' `PM_Accelerate` (1.1 0x30007560) caps the rate
 /// at the lack stored as a float, where 1.1d's inline one keeps it.
 #[test]
@@ -78,6 +74,10 @@ fn the_windows_walk_clip_takes_the_reciprocal_overclip() {
     );
 }
 
+/// The Windows cgames' walk scale (1.5 0x30007e40) stores the run
+/// scale's product before the stance's, where 1.1d rounds once: a
+/// crouched diagonal run wishes a float step less on every protocol's
+/// client (cod15-movement.md 8.2, "The walk's cmd scale").
 #[test]
 fn the_windows_walk_scale_stores_the_run_product() {
     let run = PmInput {

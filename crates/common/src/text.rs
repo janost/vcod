@@ -95,7 +95,6 @@ pub fn escape_controls(s: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(out)
 }
 
-/// The text after leading blanks and one sign, and whether that sign was `-`.
 /// C's `atof` over the decimal forms the games' files and commands use:
 /// leading blanks, a sign, digits with at most one point, then an exponent
 /// only when digits follow it; the longest such prefix, 0 with none. The
@@ -135,6 +134,7 @@ pub fn atof(s: &str) -> f64 {
     best
 }
 
+/// The text after leading blanks and one sign, and whether that sign was `-`.
 fn sign(s: &str) -> (bool, &str) {
     let s = s.trim_start();
     match s.as_bytes().first() {

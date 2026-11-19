@@ -95,13 +95,6 @@ fn cod4_live_w_drops_with_its_reason() {
     assert!(!text.contains("EXE_") && !text.contains("&&1"), "{text}");
 }
 
-/// Holding the mouse past `player_view_pitch_down` (85) or `_up` keeps
-/// the drawn view still at the limit: the mouse turns the cmd's view
-/// ([`Cod4Session::turn`], `cl.viewangles`), the camera draws the
-/// predicted view, and the server's `delta_angles` pushes take the
-/// excess back. In play the view jumped between 85 and the
-/// camera's own 89 at each push. Turning back moves the view at once
-/// and only one way.
 /// A live session sheds its old snapshots (the soak's leak: every
 /// snapshot was kept, 100 MB a match) and plays on: the clock reads
 /// each new snapshot, the scene draws and our own shots still fire
@@ -181,6 +174,13 @@ fn cod4_live_session_sheds_old_snapshots_and_plays_on() {
     assert!(scenes > 100, "{scenes} scenes");
 }
 
+/// Holding the mouse past `player_view_pitch_down` (85) or `_up` keeps
+/// the drawn view still at the limit: the mouse turns the cmd's view
+/// ([`Cod4Session::turn`], `cl.viewangles`), the camera draws the
+/// predicted view, and the server's `delta_angles` pushes take the
+/// excess back. In play the view jumped between 85 and the
+/// camera's own 89 at each push. Turning back moves the view at once
+/// and only one way.
 #[test]
 fn cod4_live_pitch_held_past_the_limit_stays_at_the_limit() {
     let Some(out) = live_join(|s, spawned, t0| {

@@ -137,13 +137,6 @@ impl Server {
         }
     }
 
-    /// `SV_AddServerCommand` (cod_lnxded 0x808b680): queued, squashed or
-    /// dropped by [`Client::queue_server_command`], and sent with the
-    /// client's next snapshot or gamestate. A client whose acks fall a whole
-    /// ring behind has stopped consuming reliables; overwriting an unacked
-    /// slot would desync both ends' scramble keys, so that is fatal, with
-    /// retail's `EXE_SERVERCOMMANDOVERFLOW` (docs/protocol-1.1.md, "The
-    /// server command queue").
     /// `SV_GameSendServerCommand`: `cmd` to one client or to every one.
     pub(super) fn send_to(&mut self, to: Recipient, cmd: &str) {
         match to {
@@ -152,6 +145,13 @@ impl Server {
         }
     }
 
+    /// `SV_AddServerCommand` (cod_lnxded 0x808b680): queued, squashed or
+    /// dropped by [`Client::queue_server_command`], and sent with the
+    /// client's next snapshot or gamestate. A client whose acks fall a whole
+    /// ring behind has stopped consuming reliables; overwriting an unacked
+    /// slot would desync both ends' scramble keys, so that is fatal, with
+    /// retail's `EXE_SERVERCOMMANDOVERFLOW` (docs/protocol-1.1.md, "The
+    /// server command queue").
     pub(super) fn send_server_command(&mut self, slot: usize, cmd: &str) {
         let Some(c) = self.core.clients[slot].as_mut() else {
             return;
@@ -660,9 +660,6 @@ mod tests {
         assert_eq!(wan_n, 2, "a keepalive at 0 and at 1000 ms");
     }
 
-    /// `clientkick` drops through `SV_DropClient`: the slot is a zombie that
-    /// resends the notice every frame until it is acked, shows as `ZMBI`,
-    /// and is freed `sv_zombietime` after the kick, not at it.
     /// `SV_CheckTimeouts` (0x808cbc0): after the clock advance, a last
     /// packet more than `sv_timeout` seconds old counts a frame, a fresh one
     /// resets the count, and the sixth stale frame in a row drops the client
@@ -758,6 +755,9 @@ mod tests {
         }
     }
 
+    /// `clientkick` drops through `SV_DropClient`: the slot is a zombie that
+    /// resends the notice every frame until it is acked, shows as `ZMBI`,
+    /// and is freed `sv_zombietime` after the kick, not at it.
     #[test]
     fn a_kicked_client_lingers_as_a_zombie() {
         let t = Instant::now();

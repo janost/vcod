@@ -2008,10 +2008,6 @@ mod tests {
         }
     }
 
-    /// Pinned through a spell, the bot picks a new heading but the spell
-    /// still ends on time and the waypoint gets its turn. Chained spells
-    /// held one on mp_ship's hold ladder head for the rest of the run
-    /// while its waypoint lay a walk away.
     /// A push-off jumps facing the rungs, then brakes facing the same way
     /// until the body lands (`nav::push_off`).
     #[test]
@@ -2112,6 +2108,10 @@ mod tests {
         assert_eq!(ticks(&mut bot, &v), None, "on the graph");
     }
 
+    /// Pinned through a spell, the bot picks a new heading but the spell
+    /// still ends on time and the waypoint gets its turn. Chained spells
+    /// held one on mp_ship's hold ladder head for the rest of the run
+    /// while its waypoint lay a walk away.
     #[test]
     fn a_pinned_spell_hands_back_to_the_waypoint() {
         let mut bot = Bot::new("allies", false, 1);

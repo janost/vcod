@@ -2452,8 +2452,6 @@ mod tests {
         assert_eq!(s.cvar("cg_fov"), Some("80"), "no sv_cheats reads 0");
     }
 
-    /// `CL_SystemInfoChanged` forces every key: read-only, cheat and
-    /// latched cvars too, and keys the client never registered.
     /// `fs_game` is `CVAR_INIT`: the console cannot set it, the Mods
     /// menu's forced set and a systeminfo can, and a systeminfo without the
     /// key leaves it.
@@ -2473,6 +2471,8 @@ mod tests {
         assert!(!s.config_text().contains("fs_game"));
     }
 
+    /// `CL_SystemInfoChanged` forces every key: read-only, cheat and
+    /// latched cvars too, and keys the client never registered.
     #[test]
     fn the_systeminfo_forces_every_key() {
         let mut s = Shell::new();

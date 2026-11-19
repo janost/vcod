@@ -350,8 +350,6 @@ impl<G: ConnGame> Engine<G> {
         }
     }
 
-    /// `SV_SendServerCommand(NULL, ..)`: every client past `CS_CONNECTED`,
-    /// zombies left out.
     /// `SV_GameSendServerCommand`: `cmd` to one client or to every one.
     pub(crate) fn send_to(&mut self, to: crate::game::commands::Recipient, cmd: &str) {
         match to {
@@ -362,6 +360,8 @@ impl<G: ConnGame> Engine<G> {
         }
     }
 
+    /// `SV_SendServerCommand(NULL, ..)`: every client past `CS_CONNECTED`,
+    /// zombies left out.
     pub(crate) fn send_to_all(&mut self, cmd: &str) {
         for slot in 0..self.core.clients.len() {
             if self.core.clients[slot]

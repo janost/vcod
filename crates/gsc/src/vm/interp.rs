@@ -254,7 +254,6 @@ fn concat(lhs: &str, rhs: &str) -> Result<String, ErrorKind> {
     Ok(format!("{lhs}{rhs}"))
 }
 
-/// `a + b`; a concatenation past `max_bytes` of interned text fails.
 /// `s` interned as a temporary string, unless the interner already holds
 /// `max_bytes`.
 fn intern_within(interner: &mut Interner, max_bytes: usize, s: &str) -> Result<Value, ErrorKind> {
@@ -264,6 +263,7 @@ fn intern_within(interner: &mut Interner, max_bytes: usize, s: &str) -> Result<V
     Ok(Value::String(interner.intern_temp(s)))
 }
 
+/// `a + b`; a concatenation past `max_bytes` of interned text fails.
 fn eval_add(
     interner: &mut Interner,
     max_bytes: usize,

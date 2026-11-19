@@ -1634,11 +1634,6 @@ land
         assert_eq!(st.legs(), before);
     }
 
-    /// A condition the machine has no kind for makes its clause unselectable.
-    /// Dropping the condition instead would make the clause match everything
-    /// it was written to gate: the shipped `DEATH` and `pain` blocks test
-    /// `enemy_weapon` and `impact_point`, and reading those as unconditional
-    /// would hand every death the first listed clause.
     /// UO's script puts a legs and a torso anim on one line and spells a
     /// channel in capitals (`BOTH C_MP_BINOCULAR_ADS`); both name anims the
     /// retail server indexes (docs/research/coduo-diff.md 20).
@@ -1663,6 +1658,11 @@ land
         assert!(both.torso[0].both, "a `both` line's torso half");
     }
 
+    /// A condition the machine has no kind for makes its clause unselectable.
+    /// Dropping the condition instead would make the clause match everything
+    /// it was written to gate: the shipped `DEATH` and `pain` blocks test
+    /// `enemy_weapon` and `impact_point`, and reading those as unconditional
+    /// would hand every death the first listed clause.
     #[test]
     fn a_clause_with_an_unknown_condition_never_matches() {
         let script = r#"
