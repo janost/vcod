@@ -14,21 +14,11 @@ use vcod_common::ui_menu::{
 };
 use vcod_common::ui_menu::{ITEM_TYPE_DECIMALFIELD, ITEM_TYPE_DVARENUM};
 
-/// The entry an enum item's dvar value names (`atoi` in range, else a
-/// case-blind name match), 0 when none does.
-fn enum_index(entries: &[String], value: &str) -> usize {
-    let n = atoi_msvc(value);
-    if n >= 0 && (n as usize) < entries.len() {
-        return n as usize;
-    }
-    entries
-        .iter()
-        .position(|e| e.eq_ignore_ascii_case(value))
-        .unwrap_or(0)
-}
-
 use winit::keyboard::KeyCode;
 
+use super::item_rules::{
+    SLIDER_H, SLIDER_W, THUMB_H, THUMB_W, enum_index, slider_value, step, thumb_x,
+};
 use super::paint::Painter;
 use super::{Ui, UiEffect};
 use crate::console::shell::{Shell, bare, quotable};
@@ -100,15 +90,8 @@ const BIND_COMMANDS: &[&str] = &[
 /// `UI_KEYBINDSTATUS` from `ui/menudef.h`.
 pub(super) const UI_KEYBINDSTATUS: i32 = 250;
 
-/// `Item_Slider_Paint` (0x400150a0): the bar is 96 x 16 at the item's top,
-/// the thumb 10 x 20, 2 above it, centred on a point that travels 84 units
-/// from 6 in.
-const SLIDER_WIDTH: f32 = 96.0;
-const SLIDER_HEIGHT: f32 = 16.0;
-const THUMB_WIDTH: f32 = 10.0;
-const THUMB_HEIGHT: f32 = 20.0;
-const THUMB_TRAVEL: f32 = 84.0;
-const THUMB_INSET: f32 = 6.0;
+/// `Item_Slider_Paint`'s (0x400150a0) bar, at the item's top, and thumb,
+/// 2 above it ([`super::item_rules`] holds their sizes).
 const SLIDER_BAR: &str = "ui/assets/slider2.tga";
 const SLIDER_THUMB: &str = "ui/assets/sliderbutt_1.tga";
 
@@ -202,8 +185,8 @@ impl Ui {
                     // `Item_Slider_HandleKey` (0x40012f40): inside the bar
                     // or half a thumb left of it, unclamped.
                     let c = self.cursor[0];
-                    if c >= x - THUMB_WIDTH / 2.0 && c <= x + SLIDER_WIDTH {
-                        let v = (c - x) / SLIDER_WIDTH * (range.max - range.min) + range.min;
+                    if c >= x - THUMB_W / 2.0 && c <= x + SLIDER_W {
+                        let v = slider_value((c - x) / SLIDER_W, range.min, range.max);
                         self.set_cvar(&cvar, &format!("{v:.6}"), out);
                         self.options.drag = Some((m, i));
                     }
@@ -234,10 +217,9 @@ impl Ui {
             let at = item.float_list.iter().position(|(_, v)| *v == f);
             (at, item.float_list.len())
         };
-        if len == 0 {
+        let Some(next) = step(at.unwrap_or(0), len, false) else {
             return;
-        }
-        let next = (at.unwrap_or(0) + 1) % len;
+        };
         let value = if item.str_list.is_empty() {
             item.float_list[next].1.to_string()
         } else {
@@ -262,14 +244,11 @@ impl Ui {
             return;
         };
         let entries = shell.enum_domain(list).unwrap_or_default();
-        let at = enum_index(entries, &self.cvar(cvar, shell).unwrap_or_default());
-        let n = entries.len();
-        let next = match n {
-            0 => 0,
-            _ if back => (at + n - 1) % n,
-            _ => (at + 1) % n,
-        };
-        if next != at {
+        let v = self.cvar(cvar, shell).unwrap_or_default();
+        let at = enum_index(entries, &v, atoi_msvc);
+        if let Some(next) = step(at, entries.len(), back)
+            && next != at
+        {
             self.set_cvar(cvar, &next.to_string(), out);
         }
     }
@@ -285,8 +264,8 @@ impl Ui {
             return;
         };
         let x = self.slider_x(m, i);
-        let c = self.cursor[0].clamp(x, x + SLIDER_WIDTH);
-        let v = (c - x) / SLIDER_WIDTH * (range.max - range.min) + range.min;
+        let c = self.cursor[0].clamp(x, x + SLIDER_W);
+        let v = slider_value((c - x) / SLIDER_W, range.min, range.max);
         if self.cvar(cvar, shell).and_then(|s| s.parse::<f32>().ok()) != Some(v) {
             self.set_cvar(cvar, &format!("{v:.6}"), out);
         }
@@ -470,7 +449,8 @@ impl Ui {
                     None => "<not an enum dvar>".to_string(),
                     Some([]) => String::new(),
                     Some(e) => {
-                        e[enum_index(e, &self.cvar(cvar, shell).unwrap_or_default())].clone()
+                        let v = self.cvar(cvar, shell).unwrap_or_default();
+                        e[enum_index(e, &v, atoi_msvc)].clone()
                     }
                 },
             },
@@ -539,7 +519,7 @@ impl Ui {
         let x = label_end.map_or(item.rect[0], |end| end + 8.0);
         self.options.slider_x.borrow_mut().insert(at, x);
         let y = item.rect[1];
-        p.quad([x, y, SLIDER_WIDTH, SLIDER_HEIGHT], color, SLIDER_BAR, out);
+        p.quad([x, y, SLIDER_W, SLIDER_H], color, SLIDER_BAR, out);
         let v = self.cvar_value(cvar, shell);
         let span = range.max - range.min;
         let frac = if span > 0.0 {
@@ -547,14 +527,9 @@ impl Ui {
         } else {
             0.0
         };
-        let thumb = x + THUMB_INSET + frac * THUMB_TRAVEL;
+        let thumb = thumb_x(x, frac);
         p.quad(
-            [
-                thumb - THUMB_WIDTH / 2.0,
-                y - 2.0,
-                THUMB_WIDTH,
-                THUMB_HEIGHT,
-            ],
+            [thumb - THUMB_W / 2.0, y - 2.0, THUMB_W, THUMB_H],
             color,
             SLIDER_THUMB,
             out,

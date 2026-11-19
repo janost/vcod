@@ -19,6 +19,9 @@ use vcod_cod4::scriptmenu::{
 use super::{ScriptMenus, placed};
 use crate::console::keys;
 use crate::console::shell::{bare, quotable};
+use crate::frontend::item_rules::{
+    SLIDER_H, SLIDER_W, THUMB_INSET, THUMB_TRAVEL, enum_index, slider_value, step, thumb_x,
+};
 use crate::hud::cod2elem::ScreenPlacement;
 use crate::hud::hudelem::format_g;
 
@@ -150,13 +153,6 @@ pub struct Slider {
     pub thumb: f32,
 }
 
-/// The bar's size, the thumb's travel and inset, and the thumb's size.
-pub const SLIDER_W: f32 = 96.0;
-pub const SLIDER_H: f32 = 16.0;
-const THUMB_TRAVEL: f32 = 84.0;
-const THUMB_INSET: f32 = 6.0;
-pub const THUMB_W: f32 = 10.0;
-pub const THUMB_H: f32 = 20.0;
 /// A list box scroll bar's width, and each arrow's and the thumb's side.
 pub const SCROLL: f32 = 16.0;
 
@@ -172,7 +168,9 @@ pub struct ScrollBar {
 /// The thumb's path down a vertical list box of grid rect `r` whose first
 /// row runs 0..=`max` (cod4-hud.md 12.6): its top starts a unit under the
 /// up arrow, each first row moves it an equal share of the travel, and its
-/// bottom stays two units clear of the down arrow.
+/// bottom stays two units clear of the down arrow. Not CoD1's
+/// `frontend/listbox.rs` maths, which truncates the thumb's top and scrolls
+/// one row past a full last page.
 struct ThumbPath {
     top: f32,
     travel: f32,
@@ -372,7 +370,8 @@ impl ScriptMenus {
         }
         let dvar = it.dvar.clone().unwrap_or_default();
         match it.kind {
-            // `Item_YesNo_HandleKey`: `va("%i", atoi(value) == 0)`.
+            // `Item_YesNo_HandleKey`: `va("%i", atoi(value) == 0)`. Not
+            // shared with CoD1's, which reads the value as a float.
             ITEM_TYPE_YESNO => {
                 let on = atoi(&self.dvar(&dvar).unwrap_or_default()) != 0;
                 self.set_dvar(&dvar, if on { "0" } else { "1" });
@@ -383,14 +382,9 @@ impl ScriptMenus {
             ITEM_TYPE_DVARENUM => {
                 let n = self.enum_entries(&it).len();
                 let cur = self.enum_index(&it);
-                let next = match key {
-                    _ if n == 0 => return false,
-                    ItemKey::Left => (cur + n - 1) % n,
-                    _ => (cur + 1) % n,
-                };
-                if next == cur {
+                let Some(next) = step(cur, n, key == ItemKey::Left).filter(|&to| to != cur) else {
                     return false;
-                }
+                };
                 self.set_dvar(&dvar, &next.to_string());
                 true
             }
@@ -400,14 +394,9 @@ impl ScriptMenus {
                 };
                 let n = m.labels.len();
                 let cur = self.multi_index(&dvar, m);
-                let next = match key {
-                    _ if n == 0 => return false,
-                    ItemKey::Left => (cur + n - 1) % n,
-                    _ => (cur + 1) % n,
-                };
-                if next == cur {
+                let Some(next) = step(cur, n, key == ItemKey::Left).filter(|&to| to != cur) else {
                     return false;
-                }
+                };
                 let v = if m.str_def {
                     m.strings[next].clone()
                 } else {
@@ -587,7 +576,7 @@ impl ScriptMenus {
                     ([s.x + THUMB_INSET, s.y, THUMB_TRAVEL, SLIDER_H], align),
                 );
                 let frac = ((c[0] - x) / w).clamp(0.0, 1.0);
-                self.set_dvar(d, &format_g(frac * (e.max - e.min) + e.min));
+                self.set_dvar(d, &format_g(slider_value(frac, e.min, e.max)));
             }
             ITEM_TYPE_LISTBOX => {
                 let Some(bar) = self.scroll_bar(i) else {
@@ -702,6 +691,8 @@ impl ScriptMenus {
             _ => 255,
         };
         let mut v = self.dvar(d).unwrap_or_default();
+        // Not shared with CoD1's filter, which takes any character but a
+        // control or `"`.
         let takes = |c: char| match it.kind {
             ITEM_TYPE_NUMERICFIELD => c.is_ascii_digit(),
             ITEM_TYPE_DECIMALFIELD => c.is_ascii_digit() || c == '.',
@@ -776,7 +767,8 @@ impl ScriptMenus {
 
     /// `Item_Bind_HandleKey` while waiting, `key` vcod's key name: Escape
     /// cancels; Backspace, or a command that already has two keys, unbinds
-    /// them; any key but Backspace then takes the command.
+    /// them; any key but Backspace then takes the command. Not shared with
+    /// CoD1's, which takes the pressed key off the two before it counts.
     pub fn bind_key(&mut self, key: &str) {
         let Some(i) = self.waiting.take() else {
             return;
@@ -848,7 +840,8 @@ impl ScriptMenus {
                 .get(self.enum_index(it))
                 .cloned()
                 .unwrap_or_default(),
-            // `Item_TextField_Paint`: a decimal field's float to two places.
+            // `Item_TextField_Paint`: a decimal field's float to two places;
+            // unlike CoD2's, a value that is no float shows as typed.
             ITEM_TYPE_DECIMALFIELD => {
                 let v = value();
                 match v.trim().parse::<f32>() {
@@ -902,22 +895,17 @@ impl ScriptMenus {
     /// `Item_DvarEnum_EnumIndex`: the item's dvar as an index
     /// in range, else the entry it names in any case, else 0.
     fn enum_index(&self, it: &LayoutItem) -> usize {
-        let entries = self.enum_entries(it);
         let v = it
             .dvar
             .as_deref()
             .and_then(|d| self.dvar(d))
             .unwrap_or_default();
-        match usize::try_from(atoi(&v)) {
-            Ok(i) if i < entries.len() => i,
-            _ => entries
-                .iter()
-                .position(|e| e.eq_ignore_ascii_case(&v))
-                .unwrap_or(0),
-        }
+        enum_index(self.enum_entries(it), &v, atoi)
     }
 
-    /// `Item_Multi_FindDvarByValue`: the entry the dvar holds, else 0.
+    /// `Item_Multi_FindDvarByValue`: the entry the dvar holds, else 0. Not
+    /// shared with CoD1's, which reads a float list without `atof` and paints
+    /// no match blank.
     fn multi_index(&self, dvar: &str, m: &MultiDef) -> usize {
         let v = self.dvar(dvar).unwrap_or_default();
         if m.str_def {
@@ -960,11 +948,12 @@ impl ScriptMenus {
             .map_or(0.0, |v| atof(&v) as f32)
             .clamp(e.min.min(e.max), e.max.max(e.min));
         let span = e.max - e.min;
+        // A reversed range moves the thumb too; CoD1's pins it at the inset.
         let frac = if span != 0.0 { (v - e.min) / span } else { 0.0 };
         Some(Slider {
             x,
             y,
-            thumb: x + THUMB_INSET + frac * THUMB_TRAVEL,
+            thumb: thumb_x(x, frac),
         })
     }
 
