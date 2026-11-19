@@ -886,7 +886,11 @@ mod tests {
                 d.push(std::iter::repeat_n(0.5, n), &sink);
             }
             let got = sink.lock().unwrap();
-            assert!(got.len().abs_diff(rate as usize) <= 1, "{device}: {}", got.len());
+            assert!(
+                got.len().abs_diff(rate as usize) <= 1,
+                "{device}: {}",
+                got.len()
+            );
             assert!(got.iter().all(|&s| s == 16383), "{device}");
         }
     }

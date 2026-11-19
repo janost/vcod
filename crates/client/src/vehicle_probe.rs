@@ -769,12 +769,21 @@ mod tests {
     #[test]
     fn direct_input_reads_three_or_five_fields() {
         let d = direct_input("f \"PROBE_IN 1 4 -127\"").unwrap();
-        assert_eq!((d.buttons, d.wbuttons, d.up, d.forward, d.right), (1, 4, -127, 0, 0));
+        assert_eq!(
+            (d.buttons, d.wbuttons, d.up, d.forward, d.right),
+            (1, 4, -127, 0, 0)
+        );
         let d = direct_input("f \"PROBE_IN 0 0 0 127 -64\"").unwrap();
         assert_eq!((d.forward, d.right), (127, -64));
-        assert!(direct_input("f \"PROBE_IN 0 0 0 127\"").is_none(), "forward without right");
+        assert!(
+            direct_input("f \"PROBE_IN 0 0 0 127\"").is_none(),
+            "forward without right"
+        );
         assert!(direct_input("f \"PROBE_IN 0 x 0\"").is_none());
-        assert!(direct_input("f \"PROBE_IN 300 0 0\"").is_none(), "past a byte");
+        assert!(
+            direct_input("f \"PROBE_IN 300 0 0\"").is_none(),
+            "past a byte"
+        );
         assert!(direct_input("e \"PROBE_IN 0 0 0\"").is_none());
     }
 

@@ -459,7 +459,10 @@ impl Scoreboard {
         let count = |t: i32| rows.iter().filter(|(e, _)| e.team == t).count();
         let counts = [count(0), count(1), count(2), count(3)];
         let ping = |t: i32| {
-            let pings = rows.iter().filter(|(e, _)| e.team == t).map(|(e, _)| e.ping);
+            let pings = rows
+                .iter()
+                .filter(|(e, _)| e.team == t)
+                .map(|(e, _)| e.ping);
             team_ping(pings, counts[t as usize])
         };
         let teams = counts[1] != 0 || counts[2] != 0;

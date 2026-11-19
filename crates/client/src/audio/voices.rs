@@ -585,7 +585,13 @@ mod tests {
         let loc = put(&mut t, nv2d(Channel::Auto));
         let mut pos = HashMap::new();
         pos.insert(3u32, -l.right * 100.0);
-        let ups = t.update(&l, &|n| pos.get(&n).copied(), &|_| None, &HashMap::new(), 1.0);
+        let ups = t.update(
+            &l,
+            &|n| pos.get(&n).copied(),
+            &|_| None,
+            &HashMap::new(),
+            1.0,
+        );
         let get = |id| ups.iter().find(|u| u.id == id).unwrap();
         assert!((get(p).gain - 0.5).abs() < 1e-5); // 600 into a 100..1100 range
         assert!((get(p).pan - 1.0).abs() < 1e-5);
@@ -625,10 +631,22 @@ mod tests {
         let tag = Vec3::new(30.0, 0.0, 60.0);
         let id = put(&mut t, nv(Source::Tag { num: 4, pos: tag }, Channel::Auto));
         let mut pos = HashMap::from([(4u32, Vec3::new(10.0, 0.0, 0.0))]);
-        t.update(&l, &|n| pos.get(&n).copied(), &|_| None, &HashMap::new(), 1.0);
+        t.update(
+            &l,
+            &|n| pos.get(&n).copied(),
+            &|_| None,
+            &HashMap::new(),
+            1.0,
+        );
         assert_eq!(t.source(id).unwrap().pos(), tag);
         pos.insert(4, Vec3::new(110.0, 50.0, 0.0));
-        t.update(&l, &|n| pos.get(&n).copied(), &|_| None, &HashMap::new(), 1.0);
+        t.update(
+            &l,
+            &|n| pos.get(&n).copied(),
+            &|_| None,
+            &HashMap::new(),
+            1.0,
+        );
         assert_eq!(t.source(id).unwrap().pos(), Vec3::new(130.0, 50.0, 60.0));
         t.update(&l, &|_| None, &|_| None, &HashMap::new(), 1.0);
         assert_eq!(t.source(id).unwrap().pos(), Vec3::new(130.0, 50.0, 60.0));
@@ -649,10 +667,22 @@ mod tests {
         let id = put(&mut t, nv(Source::Tag { num: 4, pos: tag }, Channel::Auto));
         let pos = HashMap::from([(4u32, origin)]);
         let mut axes = HashMap::from([(4u32, axis(0.0))]);
-        t.update(&l, &|n| pos.get(&n).copied(), &|n| axes.get(&n).copied(), &HashMap::new(), 1.0);
+        t.update(
+            &l,
+            &|n| pos.get(&n).copied(),
+            &|n| axes.get(&n).copied(),
+            &HashMap::new(),
+            1.0,
+        );
         assert_eq!(t.source(id).unwrap().pos(), tag);
         axes.insert(4, axis(90.0));
-        t.update(&l, &|n| pos.get(&n).copied(), &|n| axes.get(&n).copied(), &HashMap::new(), 1.0);
+        t.update(
+            &l,
+            &|n| pos.get(&n).copied(),
+            &|n| axes.get(&n).copied(),
+            &HashMap::new(),
+            1.0,
+        );
         let got = t.source(id).unwrap().pos();
         assert!(got.abs_diff_eq(Vec3::new(10.0, 30.0, 60.0), 1e-4), "{got}");
         // Started while the entity faced 90: the offset is taken in that frame.
@@ -660,9 +690,21 @@ mod tests {
             &mut t,
             nv(Source::Tag { num: 4, pos: got }, Channel::Weapon),
         );
-        t.update(&l, &|n| pos.get(&n).copied(), &|n| axes.get(&n).copied(), &HashMap::new(), 1.0);
+        t.update(
+            &l,
+            &|n| pos.get(&n).copied(),
+            &|n| axes.get(&n).copied(),
+            &HashMap::new(),
+            1.0,
+        );
         axes.insert(4, axis(180.0));
-        t.update(&l, &|n| pos.get(&n).copied(), &|n| axes.get(&n).copied(), &HashMap::new(), 1.0);
+        t.update(
+            &l,
+            &|n| pos.get(&n).copied(),
+            &|n| axes.get(&n).copied(),
+            &HashMap::new(),
+            1.0,
+        );
         let got = t.source(id).unwrap().pos();
         assert!(got.abs_diff_eq(Vec3::new(-20.0, 0.0, 60.0), 1e-4), "{got}");
     }

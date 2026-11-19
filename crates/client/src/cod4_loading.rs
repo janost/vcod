@@ -304,7 +304,9 @@ impl Loader {
         }
         let st = self.progress.status();
         match &self.loaded_hud {
-            Some(h) => h.connect_screen(&st, st.levelshot.as_deref(), size, now, &mut self.time_left),
+            Some(h) => {
+                h.connect_screen(&st, st.levelshot.as_deref(), size, now, &mut self.time_left)
+            }
             None => Vec::new(),
         }
     }

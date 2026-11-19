@@ -570,7 +570,12 @@ impl Cod2World {
     }
 
     /// The pipeline of a lit draw of `lit` in variant `v`.
-    pub fn pipeline(&self, v: StageVariant, two_sided: bool, lit: &LitBind) -> &wgpu::RenderPipeline {
+    pub fn pipeline(
+        &self,
+        v: StageVariant,
+        two_sided: bool,
+        lit: &LitBind,
+    ) -> &wgpu::RenderPipeline {
         let (slot, ..) = variant_state(v).expect("lit draws take a lit variant");
         &self.pipelines[&(slot, two_sided, lit.offset, self.fs_key(lit))]
     }
