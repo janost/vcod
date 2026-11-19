@@ -269,8 +269,9 @@ pub fn view_kick(
 
 /// `setTakeDamage(bool)` (0x691d2): `ent->takedamage` (+0x17d). A script
 /// entity with it set takes `G_Damage` from blasts and `doDamage`
-/// (`GameHost::damage_nonclient`); a client's lives on the sim and is not
-/// moved here.
+/// (`GameHost::damage_nonclient`); a vehicle's is its record's
+/// (`Vehicle::takedamage`); a client's lives on the sim and is not moved
+/// here.
 pub fn set_take_damage(
     host: &mut GameHost,
     _cx: &mut Cx,
@@ -281,7 +282,9 @@ pub fn set_take_damage(
     let [v] = args else {
         return Err(ErrorKind::Custom("SetTakeDamage true/false\n".into()));
     };
-    if host.ents.get(id).is_some_and(|e| e.client.is_none()) {
+    if let Some(veh) = host.vehicles.live.get_mut(&id) {
+        veh.takedamage = v.as_bool()?;
+    } else if host.ents.get(id).is_some_and(|e| e.client.is_none()) {
         if v.as_bool()? {
             host.script_takedamage.insert(id);
         } else {
@@ -594,6 +597,54 @@ mod tests {
             assert!(matches!(a[4], Value::String(m) if cx.resolve(m) == "MOD_GRENADE_SPLASH"));
             let health = cx.intern_folded("health");
             assert_ne!(host.get_field(cx, e, health), Value::Int(-500));
+        });
+    }
+
+    /// `setTakeDamage` on a vehicle writes its record's `takedamage`: off,
+    /// `G_Damage` and the blast walk pass it by; on, the blast lists it
+    /// once, as a vehicle (coduo-vehicles.md 13).
+    #[test]
+    fn set_take_damage_gates_a_vehicle() {
+        use crate::game::vehicle::{Vehicle, info::VehicleInfo, vehicle_damage};
+        let mut host = GameHost::new(&crate::game::profile::COD1_UO, vec![String::new(); 2048]);
+        let mut vm = vcod_gsc::Vm::new();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            let health = cx.intern_folded("health");
+            host.set_field(cx, e, health, Value::Int(100)).unwrap();
+            host.vehicles
+                .infos
+                .list
+                .push(std::rc::Rc::new(VehicleInfo::default()));
+            host.vehicles.slots[0] = Some(e);
+            host.vehicles.live.insert(e, Vehicle::for_test(0));
+            let recv = Some(Target::Entity(e));
+            let hit = |host: &mut GameHost, cx: &mut Cx| {
+                vehicle_damage(
+                    host,
+                    cx,
+                    e,
+                    None,
+                    None,
+                    [0.0, 0.0, 1.0],
+                    [0.0; 3],
+                    50,
+                    0,
+                    "MOD_EXPLOSIVE",
+                )
+            };
+            let listed = |host: &mut GameHost, cx: &mut Cx| {
+                host.blast_entities(cx).iter().filter(|v| v.id == e).count()
+            };
+            set_take_damage(&mut host, cx, recv, &[Value::Int(0)]).unwrap();
+            assert!(hit(&mut host, cx).is_empty());
+            assert_eq!(host.get_field(cx, e, health), Value::Int(100));
+            assert_eq!(listed(&mut host, cx), 0);
+            set_take_damage(&mut host, cx, recv, &[Value::Int(1)]).unwrap();
+            assert!(host.script_takedamage.is_empty());
+            assert_eq!(listed(&mut host, cx), 1);
+            assert_eq!(hit(&mut host, cx)[0].0, "damage");
+            assert!(matches!(host.get_field(cx, e, health), Value::Int(h) if h < 100));
         });
     }
 

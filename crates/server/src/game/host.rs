@@ -1726,7 +1726,7 @@ impl GameHost {
         }
         // A UO vehicle takes blasts on its collmap's box.
         for (&id, v) in &self.vehicles.live {
-            if self.ents.get(id).is_none_or(|e| e.unlinked) {
+            if !v.takedamage || self.ents.get(id).is_none_or(|e| e.unlinked) {
                 continue;
             }
             let info = self.vehicles.info_of(v);
