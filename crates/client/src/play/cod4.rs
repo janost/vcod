@@ -3997,14 +3997,24 @@ pub(crate) mod tests {
         ) -> std::thread::JoinHandle<T> {
             let c = clock.clone();
             std::thread::spawn(move || {
-                CLOCK.with(|x| *x.borrow_mut() = Some(c));
-                // The join's waits and deadlines too, a frame a wait as a
-                // client reads its packets once a frame.
-                vcod_cod4::net::conn::set_thread_clock(super::clk_now, |_| {
-                    super::clk_sleep(Duration::from_millis(16))
-                });
+                install(Some(c));
                 f()
             })
+        }
+
+        /// Puts this thread on `clock` (`None`: back on the wall), the
+        /// join's waits and deadlines too, a frame a wait as a client
+        /// reads its packets once a frame.
+        pub(crate) fn install(clock: Option<Clock>) {
+            CLOCK.with(|x| *x.borrow_mut() = clock);
+            vcod_cod4::net::conn::set_thread_clock(super::clk_now, |_| {
+                super::clk_sleep(Duration::from_millis(16))
+            });
+        }
+
+        /// This thread's clock, for a thread it starts to run on too.
+        pub(crate) fn current() -> Option<Clock> {
+            CLOCK.with(|c| c.borrow().clone())
         }
 
         /// This thread's clock, if it runs on one.
@@ -4046,13 +4056,24 @@ pub(crate) mod tests {
         sock: &std::net::UdpSocket,
         clock: &sim::Clock,
         client: &std::thread::JoinHandle<T>,
+        tick: impl FnMut(&mut vcod_server::cod4::Cod4Server, Instant, &mut Instant) -> bool,
+    ) {
+        serve_until(sv, sock, clock, || client.is_finished(), tick);
+    }
+
+    /// [`serve`] until `finished`.
+    pub(crate) fn serve_until(
+        sv: &mut vcod_server::cod4::Cod4Server,
+        sock: &std::net::UdpSocket,
+        clock: &sim::Clock,
+        finished: impl Fn() -> bool,
         mut tick: impl FnMut(&mut vcod_server::cod4::Cod4Server, Instant, &mut Instant) -> bool,
     ) {
         let mut buf = [0u8; 2048];
         let mut quiet = false;
         let mut next = clock.now();
         let mut heard = next;
-        while let Some(until) = clock.turn(|| client.is_finished()) {
+        while let Some(until) = clock.turn(&finished) {
             // The bots' graph lands on the frame that asks for it, not
             // when a build thread is done.
             if let Some(b) = sv.bots_mut() {
