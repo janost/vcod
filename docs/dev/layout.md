@@ -120,9 +120,25 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     ring. `rotation.rs` `map_rotate`'s walk. `challenge.rs` the challenge
     table. `ratelimit.rs` the query limiter. `bans.rs` `ban.txt` and the temporary bans. `gamelog.rs`
     `games_mp.log`.
-- CoD1: `server.rs` (the frame), `server/cod1_game.rs` (`Cod1Game`),
+- CoD1: `server.rs` (the types, construction, the packet entry and the
+  test helpers several seams share), `server/cod1_game.rs` (`Cod1Game`),
   `server/cod1_frame.rs`, `spectate.rs` (usercmds in, playerstate out).
-  `server/test_hooks.rs` holds the `test_*` and `pin_*` seams the gates call.
+  `impl Server` is split by seam under `server/`, each file with its tests:
+  - `frame.rs` `enter_world`, the tick, the game clock, `game_frame`,
+    `replay_moves`; `snapshots.rs` the world frame, snapshot build and send,
+    the archive; `follow_frame.rs` the end frame's follow pass.
+  - `connectionless.rs` getinfo, getstatus, rcon, getchallenge, connect;
+    `client_msg.rs` a client's message parse, commands, moves, votes, say;
+    `slots.rs` gamestate, server commands, drops, zombies, pings, timeouts.
+  - `level.rs` level load, scripts, cvars, serverinfo; `map_cycle.rs`
+    `spawn_server`, `map_restart`, settle frames, baselines;
+    `configstring_sync.rs` the configstring diff and send;
+    `console_cmds.rs` the console's commands, kick and ban, status.
+  - `sim_ops.rs` the script runtime and the client sims mirrored both ways;
+    `vehicles.rs` UO's seat, vehicle fire and crush glue; `breach.rs` the
+    bots' breach aim and shell arcs.
+  - `test_hooks.rs` the `test_*` and `pin_*` seams and the readers the gates
+    call.
 - `cod2/`: the CoD2 engine, `Cod2Game` in `cod2/mod.rs`: handshake,
   gamestate, snapshots, spectators. `house.rs`: zombies, downloads,
   heartbeat. `voice.rs`: the voice relay.

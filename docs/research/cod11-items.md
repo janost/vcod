@@ -1123,7 +1123,7 @@ vitals mirrored (`apply_callback_ops`, the hit's own path), so a hit's
 lands there too. The trap: ops applied after the script frame instead reach
 the sim a tick late, or at a later hit on the toucher in the same tick, so
 one pickup lands at different points from tick to tick. Pinned by
-`a_walk_over_pickup_lands_before_the_next_cmd` (`crates/server/src/server.rs`),
+`a_walk_over_pickup_lands_before_the_next_cmd` (`crates/server/src/server/frame.rs`),
 which reads the ammo and a 148 ahead of the next cmd's shot on the ring
 straight after the move pass.
 

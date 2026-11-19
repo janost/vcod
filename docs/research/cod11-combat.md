@@ -4518,11 +4518,11 @@ mirrored entity state's `trBase` is `ps.origin`, unsnapped on the
 (`crates/server/tests/combat.rs`), which stands the player off the unit grid
 and holds the `kill` drop to the unsnapped origin plus 40, and
 `a_trigger_hurt_death_drops_and_clones_at_the_snapped_origin`
-(`crates/server/src/server.rs`), which holds a `trigger_hurt` death's grenade,
-weapon and corpse to the truncated one. `cloneplayer` places the body at the
-`origin` field, as retail's `G_SetOrigin(body, self->r.currentOrigin)` (5.2)
-does, so a `trigger_hurt` corpse lies at the truncated origin and a bullet's
-at the unsnapped one. Fall damage (`fall_damage`, `deliver_fall` in
+(`crates/server/src/server/frame.rs`), which holds a `trigger_hurt` death's
+grenade, weapon and corpse to the truncated one. `cloneplayer` places the body
+at the `origin` field, as retail's `G_SetOrigin(body, self->r.currentOrigin)`
+(5.2) does, so a `trigger_hurt` corpse lies at the truncated origin and a
+bullet's at the unsnapped one. Fall damage (`fall_damage`, `deliver_fall` in
 `crates/server/src/server/cod1_think.rs`) and the weapon drop's tag sweep
 (`item::launch_weapon`, `cod11-items.md` 11) are modelled; no capture checks
 either against a snapped origin.
@@ -6059,8 +6059,8 @@ swing as well as the throw. Pinned by
 capture's two throws stood and holds `trTime`, `trBase` exactly and
 `trDelta` to within two units of it, and
 `a_throw_leaves_from_its_own_cmd_not_the_tick_s_last`
-(`crates/server/src/server.rs`), a run queued behind the release in the same
-tick.
+(`crates/server/src/server/frame.rs`), a run queued behind the release in the
+same tick.
 
 ---
 
@@ -8471,7 +8471,7 @@ The other walks and links:
   writes `r.currentOrigin` from the seat link, the tag of the vehicle as it
   stands shifted by the link's offset, then links him (coduo-vehicles.md
   13). vcod runs it on the rider's turn of the pass, his vehicle first
-  (`run_rider_link` in `server.rs`), with the offset `VEH_LinkPlayer`
+  (`run_rider_link` in `server/sim_ops.rs`), with the offset `VEH_LinkPlayer`
   asked for (`Seat::link_offset`).
 - VERIFIED, `cod_lnxded` `SV_LinkEntity`: the unlink at 0x8090c84 runs
   when `CM_BoxLeafnums` (0x8053d94) returns 0. INFERRED: that walk ends in
@@ -9488,7 +9488,7 @@ wall in the velocity (`cod11-player-clip.md` 8.5, `probe_slide`).
 
 ### 16.2 vcod's port, and a retail read
 
-`Server::replay_moves` (`crates/server/src/server.rs`) runs every packet
+`Server::replay_moves` (`crates/server/src/server/frame.rs`) runs every packet
 since the last tick in the order the server executed it: `handle_packet`
 numbers each client packet, a bot's cmd is a packet of its own numbered
 after the real ones, each queued cmd and `kill` carries its packet's number,
@@ -9574,10 +9574,10 @@ weight 0, so it reads the same from either slot,
 `a_stance_change_blends_in_whatever_the_slot_order`, movers doc 15; the same `probe_pose` run against
 `vcod-server` switched hit location at k+1 with the target in slot 1 and at
 k0 with it in slot 0), and delivered there by
-`deliver_turret_rounds` (`crates/server/src/server.rs`): the callback, the
-weapon and sim ops it queued, the vitals mirror, a higher victim's end frame
-again for its feedback, and every body refreshed for the later slots' aim
-traces. A victim below the gunner takes its feedback on the next frame.
+`deliver_turret_rounds` (`crates/server/src/server/sim_ops.rs`): the callback,
+the weapon and sim ops it queued, the vitals mirror, a higher victim's end
+frame again for its feedback, and every body refreshed for the later slots'
+aim traces. A victim below the gunner takes its feedback on the next frame.
 
 - A higher-slot gunner the round kills is dead on its own turn, so
   `turret_think_client` releases instead of firing (0x5236b, turrets doc 8)

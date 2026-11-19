@@ -975,9 +975,9 @@ Map commands:
   VERIFIED.
 - `fast_restart` answered an empty `print\n`. VERIFIED.
 - vcod prints the head of the block before the script load
-  (`restart_game_banner`, `game_init_head` in `server.rs`, with 1.5's and
-  UO's name and date) and `G_FindTeams`' line and the dashes after the
-  spawn (`game_init_tail`, off `game::teams::find_teams`).
+  (`restart_game_banner`, `game_init_head` in `server/map_cycle.rs`, with
+  1.5's and UO's name and date) and `G_FindTeams`' line and the dashes after
+  the spawn (`game_init_tail`, off `game::teams::find_teams`).
 - `G_FindTeams` (1.1d 0x4f9c4), Q3's: VERIFIED, the disassembly. Over
   entities 1 up to `level.num_entities` it takes one in use (`+0x160`), with
   a `team` key (`+0x1d8`, a string index) and not yet a slave (`+0x17c` bit
@@ -1064,7 +1064,7 @@ Map commands:
 - vcod prints the same lines off its own search path, a pak's count from
   the end of central directory record (`pak_checksum::entry_count`), with no
   `Hunk_Clear` or `Sys_LoadDll` line: it has no hunk and loads no module
-  (`spawn_server_banner` in `server.rs`;
+  (`spawn_server_banner` in `server/map_cycle.rs`;
   `a_map_change_over_rcon_prints_the_spawn_and_the_search_path`). Against
   the same install its search path lines matched retail's install half line
   for line. VERIFIED (capture).
@@ -1415,9 +1415,9 @@ keep the line reader, as their `ttycon` is forced off (cod2-protocol.md
 
 Gates: `stdin_console::tests` (a pipe's line arrives, its EOF stops only
 the reading, a line reaches CoD2's and CoD4's servers),
-`server::tests::a_stdin_line_runs_on_the_console` (CoD1),
+`server::console_cmds::tests::a_stdin_line_runs_on_the_console` (CoD1),
 `tty_console::tests` (keys to line, history, flushes and completion) and
-`server::tests::a_tab_gets_the_commands_and_cvars`.
+`server::console_cmds::tests::a_tab_gets_the_commands_and_cvars`.
 
 ### Pings (`SV_CalcPings`, 0x808cab8)
 
@@ -1814,12 +1814,13 @@ case alike. VERIFIED (captures).
   and go on: a 1000-byte `getinfo` came back `\challenge\<1000>\protocol\6`
   alone; a 1000-byte `getstatus` as the serverinfo without `challenge`,
   `\pswrd\0\mod\1` still at the end. VERIFIED.
-- vcod (`oob_argv` and `Server::info_pairs` in `crates/server/src/server.rs`,
-  `Info::set_value_for_key` in `crates/common/src/net/connectionless.rs`)
-  reads, tokenizes and strips the same, skips an overflowing pair on 1.5/UO,
-  and on 1.1 sends no reply and keeps its level. A loopback A/B of these cases
-  matched retail byte for byte on all three protocols, except 1.5b's archived
-  `g_timeoutsAllowed 2` from its homepath config.
+- vcod (`oob_argv` and `Server::info_pairs` in
+  `crates/server/src/server/connectionless.rs`, `Info::set_value_for_key` in
+  `crates/common/src/net/connectionless.rs`) reads, tokenizes and strips the
+  same, skips an overflowing pair on 1.5/UO, and on 1.1 sends no reply and
+  keeps its level. A loopback A/B of these cases matched retail byte for byte
+  on all three protocols, except 1.5b's archived `g_timeoutsAllowed 2` from
+  its homepath config.
 
 ### `fs_restrict`
 
@@ -2205,10 +2206,11 @@ with chosen userinfo) and `vcod --net-probe` for the level-boundary drops.
   rcon set `secret`, and both `map_restart` and `map mp_harbor` dropped it
   with `w "GAME_INVALIDPASSWORD"`; the restart also printed `SV_MapRestart_f:
   dropped client 3 - denied!` per client).
-- vcod (`Server::password_denied`, `crates/server/src/server.rs`) reads
-  `g_password` from the level's cvar table and tests in `svc_direct_connect`
-  after the full-server check and at both level boundaries before the script's
-  reconnect; its bots are exempt like retail's test clients.
+- vcod (`Server::password_denied`,
+  `crates/server/src/server/connectionless.rs`) reads `g_password` from the
+  level's cvar table and tests in `svc_direct_connect` after the full-server
+  check and at both level boundaries before the script's reconnect; its bots
+  are exempt like retail's test clients.
 
 ## Pak checksums and pure servers
 

@@ -1085,8 +1085,8 @@ the callback `inflictor->s.weapon` on all three. VERIFIED,
 `mp_carentan-dm-turret-spawn-uo-script.txt` and
 `-hitfine-uo-script.txt`: the `D;` line names `mg42_bipod_stand_mp`,
 where 1.1d's and 1.5b's name `m1carbine_mp`. vcod: on UO the turret
-round's hits carry the gun as inflictor and its weapon (`server.rs`, the
-end-frame turret pass); `turret_ab`'s spawn gates compare the `D;` and
+round's hits carry the gun as inflictor and its weapon (`server/sim_ops.rs`,
+the end-frame turret pass); `turret_ab`'s spawn gates compare the `D;` and
 `K;` records on all three servers.
 
 Not determined from the bytes: the means of death and the hit location a
