@@ -1,6 +1,7 @@
 //! What CoD2 1.3's and CoD4 1.7's pmove ports share token for token:
 //! `pml_t`, the touch list, and the playerstate both name alike
-//! ([`PmState`]) with the few functions that read only it. Everything whose
+//! ([`PmState`]) with the few functions that read only it. The ladder is
+//! [`crate::pmladder`]. Everything whose
 //! float handling or retail evidence differs stays in each game's crate
 //! (docs/research/cod4-pmove.md 1). The body's stance is
 //! [`crate::pmove::Stance`], CoD1's too.
@@ -62,6 +63,10 @@ pub trait PmState {
     const PMF_LADDER: u32;
     const PMF_LADDER_LEFT: u32;
     const PMF_JUMPING: u32;
+    const PMF_TIME_LAND: u32;
+    const PMF_TIME_KNOCKBACK: u32;
+    /// `PM_DEAD`: this `pm_type` and above are dead.
+    const PM_DEAD: i32;
 
     fn command_time(&mut self) -> &mut i32;
     fn pm_flags(&mut self) -> &mut u32;
@@ -72,6 +77,14 @@ pub trait PmState {
     fn jump_origin_z(&mut self) -> &mut f32;
     /// `legsTimer` and `torsoTimer`.
     fn timers(&mut self) -> [&mut i32; 2];
+    fn pm_type(&mut self) -> &mut i32;
+    fn gravity(&mut self) -> &mut i32;
+    fn jump_time(&mut self) -> &mut i32;
+    fn ladder_vec(&mut self) -> &mut Vec3;
+    fn view_angles(&mut self) -> &mut [f32; 3];
+    fn movement_dir(&mut self) -> &mut i32;
+    /// `PM_GetEffectiveStance`.
+    fn effective_stance(&self) -> crate::pmove::Stance;
 }
 
 /// `PM_ClearLadderFlag` (CoD2 0x80e8026): a player taken off the ladder

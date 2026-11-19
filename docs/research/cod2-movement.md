@@ -875,7 +875,8 @@ call sites.
   passes through them to the wall behind: the `ladder` capture's rung
   steps are event 17 (material 16). VERIFIED, the brush and its material
   off the `.d3dbsp`, the events off the capture.
-- vcod: `vcod_cod2::pmove`'s `ladder.rs`. The `ladder` capture (17.1)
+- vcod: `vcod_common::pmladder`, shared with CoD4 (cod4-pmove.md 7), with
+  CoD2's hooks in `vcod_cod2::pmove`'s `ladder.rs`. The `ladder` capture (17.1)
   replays it, with the weapon half, in every row of both runs. VERIFIED
   (`moves_ab`). The gun goes down on the rungs and comes back off them
   (`PM_Weapon`'s, `cod2-combat.md` 1.7). `game::cod2_ladder`
