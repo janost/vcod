@@ -291,12 +291,12 @@ mod tests {
         let mut head = both.clone();
         head.attachments.pop();
         d.update(&both, 0, 0);
-        assert_eq!(d.update(&head, 0, 0), &both);
+        assert_eq!(**d.update(&head, 0, 0), both);
         let mut flagged = both.clone();
         flagged.ignore_collision = 2;
-        assert_eq!(d.update(&flagged, 0, 0), &flagged);
+        assert_eq!(**d.update(&flagged, 0, 0), flagged);
         d.update(&head, 0, 0);
-        assert_eq!(d.update(&head, 4, 0), &head);
+        assert_eq!(**d.update(&head, 4, 0), head);
     }
 
     #[test]
