@@ -223,4 +223,53 @@ mod tests {
         assert_eq!(t.entity_num, alone.entity_num);
         assert!(t.startsolid);
     }
+
+    /// A client's body stops a sweep short of the wall behind it unless it
+    /// is the sweep's own; a mantle block stops everyone but its owner and
+    /// itself (`Body4::owner`).
+    #[test]
+    fn a_body_stops_a_sweep_but_for_its_own_and_its_climber() {
+        use vcod_cod4::collision::CONTENTS_BODY;
+        let clip = wall_and_block();
+        let body = |entity: u32, owner: Option<u32>| Body4 {
+            entity,
+            origin: Vec3::new(32.0, 0.0, 0.0),
+            mins: Vec3::new(-15.0, -15.0, 0.0),
+            maxs: Vec3::new(15.0, 15.0, 70.0),
+            contents: CONTENTS_BODY,
+            owner,
+        };
+        let (start, end) = (Vec3::new(0.0, 0.0, 30.0), Vec3::new(60.0, 0.0, 30.0));
+        let sweep = |bodies: &[Body4], pass: u32| {
+            let world = Cod4Clip {
+                clip: &clip,
+                bodies,
+                brushes: &[],
+            };
+            world.trace(start, end, Vec3::ZERO, Vec3::ZERO, pass, MASK_PLAYERSOLID)
+        };
+        let open = sweep(&[], 1023);
+        assert_eq!(open.fraction, 1.0, "the wall is past the end: {open:?}");
+        let player = [body(3, None)];
+        let met = sweep(&player, 1023);
+        assert!(met.fraction < 0.5 && met.entity_num == 3, "{met:?}");
+        assert_eq!(sweep(&player, 3).fraction, 1.0);
+        let block = [body(100, Some(5))];
+        let met = sweep(&block, 1023);
+        assert!(met.fraction < 0.5 && met.entity_num == 100, "{met:?}");
+        assert_eq!(sweep(&block, 5).fraction, 1.0);
+        assert_eq!(sweep(&block, 100).fraction, 1.0);
+        // A mask without CONTENTS_BODY passes both.
+        let world = Cod4Clip {
+            clip: &clip,
+            bodies: &player,
+            brushes: &[],
+        };
+        assert_eq!(
+            world
+                .trace(start, end, Vec3::ZERO, Vec3::ZERO, 1023, CONTENTS_SOLID)
+                .fraction,
+            1.0
+        );
+    }
 }

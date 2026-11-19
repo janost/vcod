@@ -104,33 +104,80 @@ fn a_cod4_donedl_flood_sends_one_gamestate() {
     assert_eq!(c.gamestate_message, before as i32);
 }
 
+/// Frames with no message from the probe, as a client whose game went
+/// down.
+fn silent(sv: &mut Cod4Server, now: &mut Instant, ms: i32) {
+    for _ in 0..ms / FRAME_MS {
+        *now += Duration::from_millis(FRAME_MS as u64);
+        sv.tick_frames(*now, 1);
+        sv.take_outgoing();
+    }
+}
+
+/// `getchallenge` then `connect` from `from` under `qport`: the replies.
+fn connect_from(sv: &mut Cod4Server, from: SocketAddr, qport: u16, now: Instant) -> Vec<Vec<u8>> {
+    let mut d = b"\xff\xff\xff\xff".to_vec();
+    d.extend_from_slice(
+        format!("getchallenge 0 \"{}\"", vcod_cod4::net::conn::KEY_HASH).as_bytes(),
+    );
+    sv.handle_packet(from, &d, now);
+    let reply = sv.take_outgoing();
+    let text = String::from_utf8_lossy(&reply[0].1[4..]).into_owned();
+    let challenge: i32 = text.split_whitespace().nth(1).unwrap().parse().unwrap();
+    let ui = format!("\\name\\conn\\protocol\\6\\challenge\\{challenge}\\qport\\{qport}");
+    let mut d = b"\xff\xff\xff\xff".to_vec();
+    d.extend_from_slice(format!("connect \"{ui}\"").as_bytes());
+    sv.handle_packet(from, &d, now);
+    sv.take_outgoing()
+        .into_iter()
+        .filter(|(to, _)| *to == from)
+        .map(|(_, p)| p)
+        .collect()
+}
+
 /// A client connecting again from its address and qport frees its old
 /// slot (`SV_FreeClient`, cod4-handshake.md 9); a wrong `g_password` then
 /// refuses the connect and leaves the slot free, not held by the old
 /// client the level already let go of.
 #[test]
 fn a_cod4_reconnect_refused_by_g_password_frees_the_slot() {
-    let (mut sv, mut p, mut now) = joined();
-    // Past `sv_reconnectlimit`'s 3 s since the first connect.
-    for _ in 0..40 {
-        step(&mut sv, &mut p, &mut now);
-    }
+    let (mut sv, p, mut now) = joined();
+    // Past `sv_reconnectlimit`'s 3 s since the first connect, and silent
+    // as long: the new challenge may take the slot.
+    silent(&mut sv, &mut now, 3_100);
     sv.set_cvar("g_password", "secret");
-    let reply = p.oob(
-        &mut sv,
-        format!("getchallenge 0 \"{}\"", vcod_cod4::net::conn::KEY_HASH).as_bytes(),
-        now,
-    );
-    let text = String::from_utf8_lossy(&reply[0][4..]).into_owned();
-    let challenge: i32 = text.split_whitespace().nth(1).unwrap().parse().unwrap();
-    let ui = format!(
-        "\\name\\conn\\protocol\\6\\challenge\\{challenge}\\qport\\{}",
-        p.qport
-    );
-    let reply = p.oob(&mut sv, format!("connect \"{ui}\"").as_bytes(), now);
+    let reply = connect_from(&mut sv, p.addr, p.qport, now);
     assert_eq!(reply.len(), 1);
     assert!(reply[0].ends_with(b"error\nGAME_INVALIDPASSWORD"));
     assert!(sv.core.clients[0].is_none());
+}
+
+/// A connect from the client's ip under its qport with another challenge
+/// is refused while the client is still heard from (vcod's guard,
+/// cod4-handshake.md 9, "Reconnects"), with or without `g_password`: the
+/// client keeps its slot and its next message is taken.
+#[test]
+fn a_cod4_connect_with_a_foreign_challenge_leaves_a_live_client() {
+    let (mut sv, mut p, mut now) = joined();
+    for _ in 0..70 {
+        step(&mut sv, &mut p, &mut now);
+    }
+    let neighbour = SocketAddr::from(([127, 0, 0, 1], 40001));
+    for password in ["", "secret"] {
+        sv.set_cvar("g_password", password);
+        assert!(connect_from(&mut sv, neighbour, p.qport, now).is_empty());
+        let c = sv.core.clients[0].as_ref().unwrap();
+        assert_eq!((c.state, c.link.addr), (State::Active, p.addr));
+    }
+    let before = sv.core.clients[0]
+        .as_ref()
+        .unwrap()
+        .link
+        .netchan
+        .incoming_sequence;
+    step(&mut sv, &mut p, &mut now);
+    let l = &sv.core.clients[0].as_ref().unwrap().link;
+    assert!(l.netchan.incoming_sequence > before);
 }
 
 /// `stats` and `v` from another port of the client's address under its
@@ -187,4 +234,83 @@ fn a_cod4_move_of_33_cmds_or_none_is_refused() {
     assert_eq!(last(&sv), t0);
     sv.user_move(0, -1, false, &cmds(32));
     assert_eq!(last(&sv), t0 + 32);
+}
+
+/// Hostile datagrams on both entry points, connectionless and netchan,
+/// from the client's own address and a stranger's: none panics, none takes
+/// a slot or moves the client's, and the client's next message is taken.
+#[test]
+fn a_cod4_server_shrugs_off_malformed_packets() {
+    let (mut sv, mut p, mut now) = joined();
+    sv.set_cvar("sv_voice", "1");
+    sv.set_cvar("rcon_password", "pw");
+    let q = p.qport.to_le_bytes();
+    let oob = |parts: &[&[u8]]| {
+        let mut d = vec![0xff; 4];
+        for part in parts {
+            d.extend_from_slice(part);
+        }
+        d
+    };
+    let mut cases: Vec<Vec<u8>> = vec![
+        Vec::new(),
+        vec![1, 2, 3],
+        vec![0xff; 4],
+        oob(&[b"stats\0", &q[..1]]),
+        oob(&[b"stats\0", &q]),
+        oob(&[b"stats\0", &q, &[7], &[0xab; 64]]),
+        oob(&[b"stats\0", &q, &[255], &[0xab; 2000]]),
+        oob(&[b"stats\0", &q, &[0], &[0xab; 3]]),
+        oob(&[b"v"]),
+        oob(&[b"v\0", &q[..1]]),
+        oob(&[b"v\0", &q, &[255]]),
+        oob(&[b"v\0", &q, &[3, 255, 1]]),
+        oob(&[b"rcon"]),
+        oob(&[b"rcon pw"]),
+        oob(&[b"rcon pw ", &[b'x'; 2000]]),
+        oob(&[b"connect"]),
+        oob(&[b"connect \"\\protocol\\6\\challenge\\-1\\qport\\0\""]),
+        oob(&[b"getchallenge 0 \"", &[b'a'; 2000], b"\""]),
+    ];
+    // The netchan header's extremes: sequence, then the message and
+    // reliable acknowledges, with and without a body.
+    for (seq, ack, rack) in [
+        (u32::MAX, i32::MIN, i32::MIN),
+        (0x8000_0000, -1, -1),
+        (p.ack as u32 + 1, i32::MAX, i32::MAX),
+        (p.ack as u32 + 1, 0, i32::MIN),
+    ] {
+        let mut d = seq.to_le_bytes().to_vec();
+        d.extend_from_slice(&q);
+        d.push(sv.game.server_id as u8);
+        d.extend_from_slice(&ack.to_le_bytes());
+        d.extend_from_slice(&rack.to_le_bytes());
+        cases.push(d.clone());
+        d.extend_from_slice(&[0x55; 40]);
+        cases.push(d);
+    }
+    let stranger = SocketAddr::from(([10, 0, 0, 9], 40002));
+    let state = |sv: &Cod4Server| {
+        let c = sv.core.clients[0].as_ref().unwrap();
+        (c.state, c.link.addr, c.link.reliable_ack)
+    };
+    let before = state(&sv);
+    for d in &cases {
+        for from in [stranger, p.addr] {
+            sv.handle_packet(from, d, now);
+            sv.take_outgoing();
+        }
+    }
+    assert_eq!(state(&sv), before);
+    assert_eq!(sv.core.clients.iter().flatten().count(), 1);
+    let seq = sv.core.clients[0]
+        .as_ref()
+        .unwrap()
+        .link
+        .netchan
+        .incoming_sequence;
+    step(&mut sv, &mut p, &mut now);
+    let c = sv.core.clients[0].as_ref().unwrap();
+    assert!(c.link.netchan.incoming_sequence > seq);
+    assert_eq!(c.state, State::Active);
 }

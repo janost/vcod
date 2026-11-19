@@ -1020,6 +1020,19 @@ mp_uo_dawnville 189 / 243, mp_uo_powcamp 226 / 254, mp_uo_hurtgen 281 /
     both changes switched off; its floor of 154 was stale).
   `bots.rs`'s `uo_bots_leave_their_walled_in_spawns` places a bot in the
   cassino floor and the streets rooms; each leaves within 30 s.
+  `link_pockets` runs after `link_back`, `link_leaps`, `reprove_jumps`
+  and the mantle probe, so its nodes and the jump edges its walks and
+  floods prove get none of them: no edge on its floors is walked back,
+  no leap tried, no mantle probed, and no jump walked again as a bot
+  (`as_a_bot`). Jump edges it adds, of the graph's (`nav_build`,
+  `GAMETYPE=tdm`, 2026-11-19): 1.1 mp_powcamp 27 of 595, mp_rocket 15
+  of 566, mp_hurtgen 8 of 1042, mp_chateau 7 of 2319, the other eight
+  none; UO mp_streets 200 of 1757, mp_arnhem 198 of 1080, mp_foy 94 of
+  2715, mp_rhinevalley 71 of 4173, mp_uo_stanjel 51 of 1168, mp_peaks
+  47 of 1632, mp_uo_powcamp 33, mp_powcamp 31, mp_sicily 29, mp_rocket
+  16, mp_uo_hurtgen 10, mp_hurtgen 9, mp_chateau 8, mp_ponyri 7,
+  mp_berlin 5, mp_cassino 4. VERIFIED (counted in the build). Running the
+  late passes over them would move the census; not done.
 - Crouched jumps (2026-10-17). Three rooms still held 22 spawns after
   the two fixes above, each walled in by a window whose sill is a jump
   up and whose lintel stops a standing body's rise. VERIFIED (measured,

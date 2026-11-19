@@ -15,6 +15,13 @@ ones are kept at the end for the causes they name.
 
 By how much a player notices.
 
+- Fall damage: pmove raises the painful landing (`ev::LANDING_PAIN_FIRST`
+  and up, `crates/cod4/src/pmove`), but `Cod4Level::client_events` has no
+  arm for it, so no `G_Damage` with `MOD_FALLING` runs and a CoD4 fall
+  takes no health; only the landing stun applies. The bots' nav graph and
+  followers also keep CoD1's fall heights (256 hurts, 480 kills) where
+  CoD4's are 128 and 300 (cod4-pmove.md's dvar table); the two go
+  together. Not read off `cod4_lnxded` yet.
 - `cod4_tag_read_ab`'s 2 `GAPS` frames, the target's head a tenth off
   across the truncation, which fit the skeleton's few ulps off retail's
   in a gdb run (cod4-combat.md 6.1); `cod4_trace_read_ab`'s 11, the

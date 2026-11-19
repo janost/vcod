@@ -368,6 +368,7 @@ pub fn tick<G: GameModule>(e: &mut Engine<G>, now: Instant, frames: u32) {
         let step = G::frame_step_ms(e);
         e.core.sv_time_ms = e.core.sv_time_ms.wrapping_add(step);
         if G::THINK == ThinkTiming::InFrame {
+            let _p = crate::tick_profile::phase("cmds");
             G::replay_moves(e);
         }
         let ran = {

@@ -1111,8 +1111,8 @@ pub struct GameHost {
     /// can call the builtin again before its first `wait`.
     pub blasts: Vec<crate::game::builtins::combat::ScriptBlast>,
     /// Where each `radiusDamage` since the server last asked went off, and
-    /// the client its attacker argument named (UO, CoD4), for the bots'
-    /// hearing.
+    /// the client its attacker argument named (UO, CoD4), for CoD1's bots'
+    /// hearing; CoD2's and CoD4's frames drop them unread.
     pub blast_noises: Vec<([f32; 3], Option<usize>)>,
     /// The value retail's `vmMain` case 16 returns
     /// (docs/research/cod11-map-cycle.md section 1): whether the outgoing
@@ -1726,7 +1726,7 @@ impl GameHost {
         }
         // A UO vehicle takes blasts on its collmap's box.
         for (&id, v) in &self.vehicles.live {
-            if self.ents.get(id).is_none_or(|e| e.unlinked) {
+            if !v.takedamage || self.ents.get(id).is_none_or(|e| e.unlinked) {
                 continue;
             }
             let info = self.vehicles.info_of(v);

@@ -503,7 +503,10 @@ fn cod4_min_ping_refuses_only_off_the_lan() {
         connect(&mut probes[0], &mut sv),
         "error\nEXE_ERR_HIGH_PING_ONLY"
     );
+    // A qport of its own: under the live client's, another challenge is
+    // refused while he is heard from (vcod's guard, cod4-handshake.md 9).
     probes[0].addr = std::net::SocketAddr::from(([127, 0, 0, 1], 28970));
+    probes[0].qport = 4970;
     assert!(connect(&mut probes[0], &mut sv).starts_with("connectResponse"));
 }
 

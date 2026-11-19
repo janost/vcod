@@ -234,7 +234,7 @@ pub fn systeminfo(
         if i.to_string().len() <= bound || (paks.referenced.is_empty() && paks.paks.is_empty()) {
             return i;
         }
-        // Rebuilt every frame the fall bounds are read: say it once.
+        // Rebuilt whenever an input moves (a restart's server id): say it once.
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| log::warn!("systeminfo over {bound} chars: trimming the pak lists"));
         // A stock pak is never downloaded, so its referenced entry is the

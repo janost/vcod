@@ -132,10 +132,11 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
 - A bot on a jump edge jumps by the walk's own rule (`nav::PinJump`: two
   pinned ticks, a bob, or right under the top; no `jump_clear` room test;
   pinned off its pace toward the top and, on the ground, off the distance
-  moved too) and steers at `NavGraph::aim`. Every non-leap jump edge is
-  walked again that way, aimed there (`NavGraph::reprove_jumps`,
-  `nav::as_a_bot`). A change to the bot's jump goes in `PinJump` or
-  `as_a_bot`, or the bot and the graph part. What a bot's jump adds (no room
+  moved too) and steers at `NavGraph::aim`. Every non-leap jump edge but
+  `link_pockets'` is walked again that way, aimed there
+  (`NavGraph::reprove_jumps`, `nav::as_a_bot`); the pockets' come after
+  the re-proof (bot-navigation.md, "Other rules"). A change to the bot's
+  jump goes in `PinJump` or `as_a_bot`, or the bot and the graph part. What a bot's jump adds (no room
   test, the ramp wait) stays out of the flood's walks: in them it reshapes
   the graph. A jump edge is run forward whatever its drop: only the forward
   walk jumps, so every jump edge was proved that way.

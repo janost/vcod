@@ -56,6 +56,7 @@ impl Cod1Module {
             }
             mirror_roster(clients, rt);
             crate::tick_trace::step!("Scr_RunThreads");
+            let mut _p = crate::tick_profile::phase("frame/scripts");
             rt.run_threads(sv_time_ms);
             *test_client_counter = rt.host.test_clients.counter;
             // 1.1's `G_DObjUpdateServerTime` lands each gunner's last
@@ -92,6 +93,7 @@ impl Cod1Module {
             // because a spawn resets the playerstate; the ammo arrays are
             // the weapon ops' alone, so the loadout survives the reset
             // whichever pass applied it.
+            _p = crate::tick_profile::phase("frame/spawns and ops");
             for s in rt.take_client_spawns() {
                 crate::tick_trace::step!("ClientSpawn slot {}", s.slot);
                 let Some(c) = clients.get_mut(s.slot).and_then(Option::as_mut) else {
@@ -323,6 +325,7 @@ impl Cod1Module {
                 })
                 .collect();
             crate::tick_trace::step!("G_RunFrame entities");
+            _p = crate::tick_profile::phase("frame/entities");
             let mut pass = rt.begin_entity_pass(client_links);
             loop {
                 let sims: Vec<(usize, &crate::spectate::ClientSim)> = clients
@@ -631,6 +634,7 @@ impl Cod1Module {
             // spectator reads the own-view bit a lower slot took this frame
             // and a higher slot's from the last one, as retail's loop does.
             let collision = world.as_ref().map(|w| &w.collision);
+            _p = crate::tick_profile::phase("frame/end frames");
             for slot in 0..clients.len() {
                 crate::tick_trace::step!("ClientEndFrame slot {slot}");
                 follow_end_frame(clients, proto, slot, rt, archive, collision, sv_time_ms);
@@ -1005,6 +1009,7 @@ impl Cod1Module {
             // the end of 1.5's `G_RunFrame`, on `trap_Milliseconds`.
             mirror_roster(clients, rt);
             crate::tick_trace::step!("CheckVote");
+            _p = crate::tick_profile::phase("frame/vote");
             vote_lines = rt.check_vote(svs_ms).0;
             timeout_written = rt.host.patch_1_5 && rt.host.check_match_timeout(svs_ms);
             console_lines = rt.take_console();
