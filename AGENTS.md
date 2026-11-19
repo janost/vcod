@@ -96,7 +96,9 @@ limitation lists), `docs/getting-started.md`, `docs/usage.md` (flags),
   until all of them match the code.
 - Comments: one line where the code doesn't explain itself (an invariant, a
   unit or sign convention, a workaround and what it works around). Facts that
-  live in a doc stay there; the comment is the pointer.
+  live in a doc stay there; the comment is the pointer. A doc comment moves
+  with its item: `crates/common/tests/doc_placement.rs` fails on one left
+  glued onto the next item's.
 - Pixel and by-ear checks (aim sign, lean direction, shading, sound) belong
   to the human. Report them as pending.
 
