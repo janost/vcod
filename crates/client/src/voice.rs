@@ -200,24 +200,52 @@ pub struct Speex {
     _lib: libloading::Library,
 }
 
+/// The names `libspeex` is opened by. `dlopen` searches no working
+/// directory for a bare name on Linux; macOS's does, so its are absolute
+/// (Homebrew's and the system's), and Windows loads beside `vcod.exe` and
+/// from System32 only ([`load_speex`]).
+#[cfg(target_os = "macos")]
 const SPEEX_LIBS: &[&str] = &[
-    "libspeex.so.1",
-    "libspeex.so",
-    "libspeex-1.dll",
-    "libspeex.dll",
-    "speex.dll",
-    "libspeex.1.dylib",
-    "libspeex.dylib",
+    "/opt/homebrew/lib/libspeex.1.dylib",
+    "/usr/local/lib/libspeex.1.dylib",
+    "/usr/lib/libspeex.1.dylib",
 ];
+#[cfg(windows)]
+const SPEEX_LIBS: &[&str] = &["libspeex-1.dll", "libspeex.dll", "speex.dll"];
+#[cfg(not(any(windows, target_os = "macos")))]
+const SPEEX_LIBS: &[&str] = &["libspeex.so.1", "libspeex.so"];
+
+/// Opens `name`; on Windows with the search held to the application's
+/// directory and System32, so neither the working directory nor `PATH`
+/// supplies it.
+///
+/// # Safety
+/// Loading runs the library's initialisers.
+unsafe fn load_speex(name: &str) -> Option<libloading::Library> {
+    #[cfg(windows)]
+    {
+        use libloading::os::windows::{
+            LOAD_LIBRARY_SEARCH_APPLICATION_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32, Library,
+        };
+        let flags = LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32;
+        // SAFETY: the caller's.
+        unsafe { Library::load_with_flags(name, flags) }
+            .ok()
+            .map(Into::into)
+    }
+    #[cfg(not(windows))]
+    {
+        // SAFETY: the caller's.
+        unsafe { libloading::Library::new(name) }.ok()
+    }
+}
 
 impl Speex {
     /// The system's `libspeex` at `rate` (`SPEEX_SET_SAMPLING_RATE`, which
     /// sets the bit rate it reports, not the frame), else `None`.
     pub fn open(rate: u32) -> Option<Speex> {
         // SAFETY: loading libspeex runs no initialisers beyond libc's.
-        let lib = SPEEX_LIBS
-            .iter()
-            .find_map(|n| unsafe { libloading::Library::new(n) }.ok())?;
+        let lib = SPEEX_LIBS.iter().find_map(|n| unsafe { load_speex(n) })?;
         // SAFETY: every symbol is looked up by its libspeex 1.2 name and
         // typed after `speex.h`; the library stays loaded in `_lib`.
         unsafe {
@@ -225,12 +253,21 @@ impl Speex {
                 // SAFETY: the caller types `T` after the symbol.
                 unsafe { lib.get::<T>(n).ok().map(|s| *s) }
             }
+            // Every symbol first, so a missing one leaks no codec state.
             let mode: ModeFn = sym(&lib, b"speex_lib_get_mode")?;
             let enc_init: InitFn = sym(&lib, b"speex_encoder_init")?;
             let dec_init: InitFn = sym(&lib, b"speex_decoder_init")?;
             let ctl_enc: CtlFn = sym(&lib, b"speex_encoder_ctl")?;
             let ctl_dec: CtlFn = sym(&lib, b"speex_decoder_ctl")?;
             let bits_init: BitsFn = sym(&lib, b"speex_bits_init")?;
+            let encode: EncodeFn = sym(&lib, b"speex_encode_int")?;
+            let write: WriteFn = sym(&lib, b"speex_bits_write")?;
+            let reset: BitsFn = sym(&lib, b"speex_bits_reset")?;
+            let read: ReadFn = sym(&lib, b"speex_bits_read_from")?;
+            let decode: DecodeFn = sym(&lib, b"speex_decode_int")?;
+            let free_enc: FreeFn = sym(&lib, b"speex_encoder_destroy")?;
+            let free_dec: FreeFn = sym(&lib, b"speex_decoder_destroy")?;
+            let free_bits: BitsFn = sym(&lib, b"speex_bits_destroy")?;
             let nb = mode(SPEEX_MODEID_NB);
             if nb.is_null() {
                 return None;
@@ -238,12 +275,34 @@ impl Speex {
             let enc = enc_init(nb);
             let dec = dec_init(nb);
             if enc.is_null() || dec.is_null() {
+                if !enc.is_null() {
+                    free_enc(enc);
+                }
+                if !dec.is_null() {
+                    free_dec(dec);
+                }
                 return None;
             }
-            let mut enc_bits: Box<SpeexBits> = Box::new(std::mem::zeroed());
-            let mut dec_bits: Box<SpeexBits> = Box::new(std::mem::zeroed());
-            bits_init(&mut *enc_bits);
-            bits_init(&mut *dec_bits);
+            let mut speex = Speex {
+                enc,
+                dec,
+                enc_bits: Box::new(std::mem::zeroed()),
+                dec_bits: Box::new(std::mem::zeroed()),
+                quality: wire::DEFAULT_QUALITY,
+                ctl_enc,
+                encode,
+                write,
+                reset,
+                read,
+                decode,
+                free_enc,
+                free_dec,
+                free_bits,
+                _lib: lib,
+            };
+            // From here a `None` drops `speex`, which frees all four.
+            bits_init(&mut *speex.enc_bits);
+            bits_init(&mut *speex.dec_bits);
             let set = |ctl: CtlFn, st, req, mut v: c_int| ctl(st, req, (&raw mut v).cast());
             let rate = rate as c_int;
             set(ctl_enc, enc, SPEEX_SET_SAMPLING_RATE, rate);
@@ -252,28 +311,15 @@ impl Speex {
             set(ctl_enc, enc, SPEEX_SET_DTX, 1);
             set(ctl_dec, dec, SPEEX_SET_ENH, 1);
             set(ctl_dec, dec, SPEEX_SET_SAMPLING_RATE, rate);
-            let mut frame: c_int = 0;
-            ctl_enc(enc, SPEEX_GET_FRAME_SIZE, (&raw mut frame).cast());
-            if frame as usize != FRAME_SAMPLES {
+            let frame = |ctl: CtlFn, st| {
+                let mut n: c_int = 0;
+                ctl(st, SPEEX_GET_FRAME_SIZE, (&raw mut n).cast());
+                n as usize
+            };
+            if frame(ctl_enc, enc) != FRAME_SAMPLES || frame(ctl_dec, dec) != FRAME_SAMPLES {
                 return None;
             }
-            Some(Speex {
-                enc,
-                dec,
-                enc_bits,
-                dec_bits,
-                quality: wire::DEFAULT_QUALITY,
-                ctl_enc,
-                encode: sym(&lib, b"speex_encode_int")?,
-                write: sym(&lib, b"speex_bits_write")?,
-                reset: sym(&lib, b"speex_bits_reset")?,
-                read: sym(&lib, b"speex_bits_read_from")?,
-                decode: sym(&lib, b"speex_decode_int")?,
-                free_enc: sym(&lib, b"speex_encoder_destroy")?,
-                free_dec: sym(&lib, b"speex_decoder_destroy")?,
-                free_bits: sym(&lib, b"speex_bits_destroy")?,
-                _lib: lib,
-            })
+            Some(speex)
         }
     }
 
@@ -404,6 +450,7 @@ impl VoiceInput for Tone {
 pub struct Mic {
     stream: cpal::Stream,
     buf: Arc<Mutex<VecDeque<i16>>>,
+    rate: u32,
 }
 
 impl Mic {
@@ -413,7 +460,9 @@ impl Mic {
         let cfg = dev.default_input_config().ok()?;
         let channels = usize::from(cfg.channels()).max(1);
         let step = f64::from(cfg.sample_rate()) / f64::from(rate);
-        let buf = Arc::new(Mutex::new(VecDeque::new()));
+        // Room for the second kept and a callback past it, so the
+        // callback's extend never grows the buffer.
+        let buf = Arc::new(Mutex::new(VecDeque::with_capacity(2 * rate as usize)));
         let mut down = Downsample::new(channels, step, rate);
         let sink = buf.clone();
         let err = |e| log::warn!("voice: microphone: {e}");
@@ -437,16 +486,19 @@ impl Mic {
         }
         .ok()?;
         stream.play().ok()?;
-        Some(Mic { stream, buf })
+        Some(Mic { stream, buf, rate })
     }
 }
 
 impl VoiceInput for Mic {
     fn take(&mut self) -> Vec<i16> {
-        self.buf
-            .lock()
-            .map(|mut b| b.drain(..).collect())
-            .unwrap_or_default()
+        // Allocated before the lock, so the capture callback never waits on
+        // an allocation; the buffer holds at most two seconds.
+        let mut out = Vec::with_capacity(2 * self.rate as usize);
+        if let Ok(mut b) = self.buf.lock() {
+            out.extend(b.drain(..));
+        }
+        out
     }
 
     fn set_active(&mut self, on: bool) {
@@ -471,6 +523,9 @@ struct Downsample {
     sum: f32,
     n: u32,
     pos: f64,
+    /// One callback's samples, kept so a callback allocates only while it
+    /// grows.
+    out: Vec<i16>,
 }
 
 impl Downsample {
@@ -483,11 +538,12 @@ impl Downsample {
             sum: 0.0,
             n: 0,
             pos: 0.0,
+            out: Vec::new(),
         }
     }
 
     fn push(&mut self, data: impl Iterator<Item = f32>, sink: &Mutex<VecDeque<i16>>) {
-        let mut out = Vec::new();
+        self.out.clear();
         let mut frame = 0.0;
         for (i, s) in data.enumerate() {
             frame += s;
@@ -502,13 +558,13 @@ impl Downsample {
                 self.acc += self.step - self.pos;
                 self.pos = 0.0;
                 let v = self.sum / self.n as f32;
-                out.push((v.clamp(-1.0, 1.0) * 32767.0) as i16);
+                self.out.push((v.clamp(-1.0, 1.0) * 32767.0) as i16);
                 self.sum = 0.0;
                 self.n = 0;
             }
         }
         if let Ok(mut b) = sink.lock() {
-            b.extend(out);
+            b.extend(self.out.iter().copied());
             // A second at most: the rest is stale.
             let over = b.len().saturating_sub(self.rate as usize);
             b.drain(..over);
@@ -535,9 +591,16 @@ struct VoiceStream {
 
 impl kira::sound::Sound for VoiceStream {
     fn process(&mut self, out: &mut [kira::Frame], dt: f64, _: &kira::info::Info) {
-        let mut ring = match self.ring.lock() {
+        // The audio thread never waits on the window's thread: a ring held
+        // there holds this buffer at the last sample.
+        let mut ring = match self.ring.try_lock() {
             Ok(r) => r,
-            Err(_) => return,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                let s = self.next;
+                out.fill(kira::Frame { left: s, right: s });
+                return;
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => return,
         };
         for f in out {
             self.pos += dt * f64::from(self.rate);
@@ -644,7 +707,9 @@ pub struct VoiceChat {
     /// The game's codec rate (`vcod_cod2::net::voice::SAMPLE_RATE`,
     /// `vcod_cod4::net::voice::SAMPLE_RATE`).
     rate: u32,
-    speex: Option<Speex>,
+    /// The codec, opened the first time a frame is sent or heard; `None`
+    /// before, `Some(None)` without libspeex.
+    speex: Option<Option<Speex>>,
     input: Option<Box<dyn VoiceInput>>,
     /// Captured samples not yet a whole frame.
     pending: Vec<i16>,
@@ -657,20 +722,20 @@ pub struct VoiceChat {
 }
 
 impl VoiceChat {
-    /// Speex at `rate` if the system has it; the input opens on the first
-    /// talk.
+    /// Speex at `rate`, opened when voice is first sent or heard, so a
+    /// server or a player with voice off never loads it; the input opens
+    /// on the first talk.
     pub fn new(rate: u32) -> VoiceChat {
-        let speex = Speex::open(rate);
-        if speex.is_none() {
-            log::info!("voice: no libspeex; voice chat neither sends nor plays");
+        VoiceChat {
+            speex: None,
+            ..VoiceChat::with(rate, None, None)
         }
-        VoiceChat::with(rate, speex, None)
     }
 
     pub fn with(rate: u32, speex: Option<Speex>, input: Option<Box<dyn VoiceInput>>) -> VoiceChat {
         VoiceChat {
             rate,
-            speex,
+            speex: Some(speex),
             input,
             pending: Vec::new(),
             talking: false,
@@ -689,10 +754,10 @@ impl VoiceChat {
         f: &VoiceFrame,
         mut audio: Option<&mut crate::audio::AudioSystem>,
     ) {
+        let rate = self.rate;
         if f.sending
-            && let Some(speex) = self.speex.as_mut()
+            && let Some(speex) = codec(&mut self.speex, rate)
         {
-            let rate = self.rate;
             let input = self
                 .input
                 .get_or_insert_with(|| match std::env::var("VCOD_VOICE_INPUT") {
@@ -731,16 +796,23 @@ impl VoiceChat {
             self.talking = false;
             self.pending.clear();
         }
-        for (talker, packet) in link.take_heard() {
-            let Some(speex) = self.speex.as_mut() else {
-                continue;
-            };
+        let heard = link.take_heard();
+        if heard.is_empty() {
+            return;
+        }
+        let Some(speex) = codec(&mut self.speex, rate) else {
+            return;
+        };
+        for (talker, packet) in heard {
             let pcm = speex.decode(&packet);
             self.played += 1;
             let ring = match &self.streams[talker as usize] {
                 Some(r) => r.clone(),
                 None => {
-                    let r: Ring = Arc::new(Mutex::new(VecDeque::new()));
+                    // The half second kept and a frame past it, so the
+                    // extend below never grows the ring under its lock.
+                    let room = self.rate as usize / 2 + FRAME_SAMPLES;
+                    let r: Ring = Arc::new(Mutex::new(VecDeque::with_capacity(room)));
                     if let Some(a) = audio.as_deref_mut() {
                         a.play_custom(VoiceStreamData(r.clone(), self.rate));
                     }
@@ -755,6 +827,18 @@ impl VoiceChat {
             }
         }
     }
+}
+
+/// The codec in `slot`, opened at `rate` on first use.
+fn codec(slot: &mut Option<Option<Speex>>, rate: u32) -> Option<&mut Speex> {
+    slot.get_or_insert_with(|| {
+        let s = Speex::open(rate);
+        if s.is_none() {
+            log::info!("voice: no libspeex; voice chat neither sends nor plays");
+        }
+        s
+    })
+    .as_mut()
 }
 
 /// No input device: nothing to send.
@@ -787,6 +871,83 @@ mod tests {
         assert!(!sound.finished());
         drop(v);
         assert!(sound.finished());
+    }
+
+    /// A second of device audio comes down to the codec's rate, a
+    /// constant level staying constant (TEST-049).
+    #[test]
+    fn the_downsampler_yields_the_codec_rate() {
+        for (device, rate, channels) in [(48000, 8000, 2), (44100, 8192, 1)] {
+            let mut d = Downsample::new(channels, f64::from(device) / f64::from(rate), rate);
+            let sink = Mutex::new(VecDeque::new());
+            // A second in 10 ms callbacks.
+            for _ in 0..100 {
+                let n = device as usize / 100 * channels;
+                d.push(std::iter::repeat_n(0.5, n), &sink);
+            }
+            let got = sink.lock().unwrap();
+            assert!(
+                got.len().abs_diff(rate as usize) <= 1,
+                "{device}: {}",
+                got.len()
+            );
+            assert!(got.iter().all(|&s| s == 16383), "{device}");
+        }
+    }
+
+    /// A talker's stream steps its ring at the codec's rate between
+    /// samples, plays silence on an empty ring, and holds the last sample
+    /// while the window's thread has the ring (TEST-049, PERF-069).
+    #[test]
+    fn a_talkers_stream_interpolates_its_ring() {
+        use kira::sound::SoundData;
+        let info = kira::info::MockInfoBuilder::new().build();
+        let ring: Ring = Arc::new(Mutex::new(VecDeque::from([1.0, 0.0, 1.0])));
+        let (mut sound, ()) = VoiceStreamData(ring.clone(), 4).into_sound().unwrap();
+        let mut out = [kira::Frame::ZERO; 6];
+        // Half a codec sample a frame, a sample behind: 0, then 1, 0, 1
+        // lerped through their midpoints.
+        sound.process(&mut out, 0.125, &info);
+        let left: Vec<f32> = out.iter().map(|f| f.left).collect();
+        assert_eq!(left, [0.0, 0.0, 0.5, 1.0, 0.5, 0.0]);
+        assert!(out.iter().all(|f| f.left == f.right));
+        let held = ring.lock().unwrap();
+        sound.process(&mut out, 0.125, &info);
+        assert!(out.iter().all(|f| f.left == 1.0), "held at the last sample");
+        drop(held);
+        sound.process(&mut out, 0.125, &info);
+        assert_eq!(out[5].left, 0.0, "an empty ring runs out to silence");
+    }
+
+    /// The codec loads only once a frame is sent or heard: a session with
+    /// voice off never opens libspeex (SEC-110).
+    #[test]
+    fn libspeex_opens_on_the_first_frame_sent_or_heard() {
+        let mut v = VoiceChat::new(COD4_RATE);
+        let mut link = VoiceLink::default();
+        let idle = VoiceFrame {
+            sending: false,
+            quality: 3,
+            mic: MicGain::default(),
+        };
+        v.frame(&mut link, &idle, None);
+        assert!(v.speex.is_none(), "opened with nothing sent or heard");
+        link.hear(vec![(1, vec![0; 20])], 0.0, |_| false);
+        v.frame(&mut link, &idle, None);
+        assert!(v.speex.is_some());
+    }
+
+    /// Each OS's names: macOS's absolute (its `dlopen` searches the working
+    /// directory for a bare one), none of another OS's.
+    #[test]
+    fn libspeex_names_suit_the_os() {
+        for n in SPEEX_LIBS {
+            assert_eq!(n.ends_with(".dll"), cfg!(windows), "{n}");
+            assert_eq!(n.ends_with(".dylib"), cfg!(target_os = "macos"), "{n}");
+            if cfg!(target_os = "macos") {
+                assert!(n.starts_with('/'), "{n}");
+            }
+        }
     }
 
     #[test]

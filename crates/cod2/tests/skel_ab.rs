@@ -337,11 +337,10 @@ fn the_skeleton_matches_retail_word_for_word() {
 
 /// `SKEL_BENCH=1`: the walk and the build's time a call over the dump.
 #[test]
+#[ignore = "tool: set SKEL_BENCH=1"]
 fn bench_the_pose() {
-    let (Some(fs), true) = (
-        vcod_common::testing::cod2_fs(),
-        std::env::var_os("SKEL_BENCH").is_some(),
-    ) else {
+    assert!(std::env::var_os("SKEL_BENCH").is_some(), "set SKEL_BENCH=1");
+    let Some(fs) = vcod_common::testing::cod2_fs() else {
         return;
     };
     let rig = rig(&fs);

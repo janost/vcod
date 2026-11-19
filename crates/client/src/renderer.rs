@@ -559,7 +559,14 @@ enum Bound {
     Stage(StageVariant, bool, bool),
     /// CoD2's lit pipeline (`cod2::Cod2World`), then a static prop's and
     /// a water's, and which of the depth prepass's pipelines.
-    Lit(StageVariant, bool, bool, cod2::FsKey, bool, Depth),
+    Lit(
+        StageVariant,
+        bool,
+        Option<vcod_common::material::PolygonOffset>,
+        cod2::FsKey,
+        bool,
+        Depth,
+    ),
     /// A CoD4 feathered or distortion stage (`cod4_worldfx`).
     Fx(cod4_worldfx::WorldFx, StageVariant, bool, bool),
 }
@@ -7310,7 +7317,7 @@ impl Renderer {
                 let key = Bound::Lit(
                     sb.variant,
                     sb.two_sided,
-                    sb.bias,
+                    lit.offset,
                     c2.fs_key(&lit),
                     lit.water,
                     depth,
@@ -7322,10 +7329,8 @@ impl Renderer {
                     // the groups and tangents bound stay
                     let kept = !lit.water && matches!(*bound, Some(Bound::Lit(.., false, _)));
                     pass.pipeline(match (water, depth) {
-                        (Some(w), _) => w.pipeline(sb.variant, sb.two_sided, sb.bias),
-                        (None, Depth::Plain) => {
-                            c2.pipeline(sb.variant, sb.two_sided, sb.bias, &lit)
-                        }
+                        (Some(w), _) => w.pipeline(sb.variant, sb.two_sided, lit.offset),
+                        (None, Depth::Plain) => c2.pipeline(sb.variant, sb.two_sided, &lit),
                         (None, Depth::Prepass) => c2.prepass_pipeline(sb.two_sided, None),
                         (None, Depth::FloatZ) => c2.floatz_pipeline(
                             sb.two_sided,

@@ -459,16 +459,11 @@ impl Scoreboard {
         let count = |t: i32| rows.iter().filter(|(e, _)| e.team == t).count();
         let counts = [count(0), count(1), count(2), count(3)];
         let ping = |t: i32| {
-            let sum: i32 = rows
+            let pings = rows
                 .iter()
                 .filter(|(e, _)| e.team == t)
-                .map(|(e, _)| e.ping)
-                .sum();
-            if counts[t as usize] < 1 || sum < 1 {
-                0
-            } else {
-                sum / counts[t as usize] as i32
-            }
+                .map(|(e, _)| e.ping);
+            team_ping(pings, counts[t as usize])
         };
         let teams = counts[1] != 0 || counts[2] != 0;
 
@@ -811,6 +806,17 @@ const SHADOW_MIN_SCALE: f32 = 0.16;
 
 /// CoD2's `CG_DrawClientScore` (Mac 0x1c51b2): the scale less 0.02 at a
 /// time until `s` fits `w`.
+/// A team's mean ping, 0 without players or a positive sum; the sum wraps
+/// as retail's int does.
+fn team_ping(pings: impl Iterator<Item = i32>, count: usize) -> i32 {
+    let sum = pings.fold(0i32, i32::wrapping_add);
+    if count < 1 || sum < 1 {
+        0
+    } else {
+        sum / count as i32
+    }
+}
+
 fn shrink(d: &Draw, s: &str, w: f32, mut scale: f32) -> f32 {
     while d.width(s, scale) > w && scale > 0.02 {
         scale -= 0.02;
@@ -1067,6 +1073,15 @@ mod tests {
         let before = b.entries.len();
         b.on_server_command(&toks("b garbage"));
         assert_eq!(b.entries.len(), before);
+    }
+
+    /// Server-sent pings near the i32 limit wrap instead of panicking
+    /// (SEC-100).
+    #[test]
+    fn team_pings_wrap_like_retail() {
+        assert_eq!(team_ping([50, 70].into_iter(), 2), 60);
+        assert_eq!(team_ping([i32::MAX, 1].into_iter(), 2), 0);
+        assert_eq!(team_ping([].into_iter(), 0), 0);
     }
 
     #[test]

@@ -79,15 +79,17 @@ pub struct Cod4World {
     pub parts: HashMap<String, Arc<vcod_cod4::physics::PartModel>>,
     /// The map's dynamic entities' defs (`vcod_cod4::dynent`).
     pub dynents: Arc<Vec<vcod_cod4::dynent::DynDef>>,
+    /// The mantle clips out of these zones, which prediction mantles along.
+    pub mantle: Option<&'static vcod_cod4::pmove::mantle::MantleAnims>,
 }
 
 impl Cod4World {
     /// The clip map of `map` (a walked map zone) and the weapons of
-    /// `zones`, the first naming one winning; the mantle clips out of
-    /// `zones` go to [`vcod_cod4::pmove::mantle::install`].
+    /// `zones`, the first naming one winning; the mantle clips are read
+    /// out of `zones` ([`vcod_cod4::pmove::mantle::install`]).
     pub fn from_assets(map: &Assets, zones: &[&Assets]) -> Result<Cod4World> {
         let clip = Arc::new(ClipMap::from_assets(map)?);
-        vcod_cod4::pmove::mantle::install(zones);
+        let mantle = vcod_cod4::pmove::mantle::install(zones);
         let mut weapons = HashMap::new();
         let mut primaries = HashSet::new();
         let mut defs = HashMap::new();
@@ -147,6 +149,7 @@ impl Cod4World {
             model_coll,
             parts: vcod_cod4::physics::part_models(&all),
             dynents: Arc::new(vcod_cod4::dynent::defs(map, zones)),
+            mantle,
         })
     }
 

@@ -187,3 +187,21 @@ impl ShockProbe {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `wbuttons` 0x4 is held from the shock's start for its duration only.
+    #[test]
+    fn the_shock_button_holds_for_the_shock() {
+        let mut s = ShockProbe::default();
+        let held = |s: &ShockProbe| s.cmd(Instant::now()).wbuttons & WBUTTON_SHELLSHOCK != 0;
+        for (t, want) in [(499, false), (500, true), (999, true), (1000, false)] {
+            s.shock = (t, 500, 500);
+            assert_eq!(held(&s), want, "at {t}");
+        }
+        s.shock = (100, 0, 500);
+        assert!(!held(&s), "no shock while its start is 0");
+    }
+}

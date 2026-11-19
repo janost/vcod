@@ -1187,18 +1187,24 @@ impl Cod4Session {
             } => {
                 while *next < lines.len() && (lines[*next].ms as f64) <= *start_ms as f64 + now_ms {
                     let line = &lines[*next];
+                    *next += 1;
                     let snaps = session.client.snapshots.len();
-                    if let Some(Item::Client { msg, .. }) = session.feed(line)? {
-                        let last = msg.ops.iter().rev().find_map(|o| match o {
-                            ClOp::Move { cmds, .. } => cmds.last().map(|(c, _)| c.angles),
-                            _ => None,
-                        });
-                        self.cmd_angles = last.or(self.cmd_angles);
+                    // A line that does not decode is skipped, as a live
+                    // illegible message is.
+                    match session.feed(line) {
+                        Ok(Some(Item::Client { msg, .. })) => {
+                            let last = msg.ops.iter().rev().find_map(|o| match o {
+                                ClOp::Move { cmds, .. } => cmds.last().map(|(c, _)| c.angles),
+                                _ => None,
+                            });
+                            self.cmd_angles = last.or(self.cmd_angles);
+                        }
+                        Ok(_) => {}
+                        Err(e) => log::warn!("cod4: capture line at {} ms: {e:#}", line.ms),
                     }
                     if session.client.snapshots.len() > snaps {
                         self.snap_at_ms = line.ms.saturating_sub(*start_ms) as f64;
                     }
-                    *next += 1;
                 }
             }
             Source::Live {
@@ -2336,6 +2342,7 @@ impl Cod4Session {
                     // The server's slowed walk under a concussion
                     // (cod4-combat.md 10.8).
                     shock_slows: w.shock_slows(|i| gs.configstring(i)),
+                    mantle_anims: w.mantle,
                     ..cod4_predict::rules_from_mirror(|i| gs.configstring(i))
                 };
                 let weapon = |n: u32| {
@@ -4293,6 +4300,27 @@ pub(crate) mod tests {
             last = now;
         }
         n
+    }
+
+    /// A capture line that does not decode is skipped: the replay plays to
+    /// its end with every snapshot (BUG-144).
+    #[test]
+    fn a_capture_skips_a_line_that_does_not_decode() {
+        let text = std::fs::read_to_string(format!("{FIXTURES}/play-1.7-spec.txt")).unwrap();
+        let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+        let at = lines.iter().position(|l| l.starts_with("6803 ")).unwrap();
+        lines.insert(at, "6803 c2s 127.0.0.1:28960 00".into());
+        let mut s = Cod4Session::open_capture(&lines.join("\n")).unwrap();
+        let mut ms = 0.0;
+        for _ in 0..10_000 {
+            if s.finished() {
+                break;
+            }
+            ms += 1000.0 / 60.0;
+            s.step(ms).unwrap();
+        }
+        assert!(s.finished(), "stalled at {ms} ms");
+        assert_eq!(s.client().snapshots.len(), 900);
     }
 
     #[test]

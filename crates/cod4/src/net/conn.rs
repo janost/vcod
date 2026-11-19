@@ -515,11 +515,16 @@ impl Conn {
             self.chan.decode(s, &key, &mut msg);
             self.commands_acked = self.commands_acked.max(rack);
             self.drop_acked_commands();
-            let parsed = self
-                .client
-                .parse(s, &msg[4..])
-                .with_context(|| format!("message {s}"))?;
             self.ack = s as i32;
+            // `CL_PacketEvent` warns `ignoring illegible message` and goes
+            // on (`iw3mp.exe` 0x46c53c..0x46c548, cod4-handshake.md 4).
+            let parsed = match self.client.parse(s, &msg[4..]) {
+                Ok(p) => p,
+                Err(e) => {
+                    log::warn!("cod4: ignoring illegible message {s}: {e:#}");
+                    continue;
+                }
+            };
             self.apply_configstrings(&parsed);
             if parsed.ops.iter().any(|o| matches!(o, Op::Gamestate)) {
                 self.answer_gamestate()?;
@@ -969,6 +974,30 @@ mod tests {
         }
         assert!(c.recv(Instant::now()).unwrap().is_none());
         assert_eq!(waiting(&c), 49);
+    }
+
+    /// A message that does not parse is skipped and acknowledged, as
+    /// retail's `ignoring illegible message`; the ones around it come
+    /// through in the same poll.
+    #[test]
+    fn an_illegible_message_is_skipped_not_fatal() {
+        use super::super::huffman::Huffman;
+        use super::super::parse::{SVC_EOF, SVC_NOP};
+        use vcod_common::net::netchan::ServerNetchan;
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut c = joined(server.local_addr().unwrap());
+        let me = c.sock.local_addr().unwrap();
+        let mut chan = ServerNetchan::with_params(1, 0, NetchanParams::COD2);
+        let huff = Huffman::new();
+        for ops in [&[SVC_NOP, SVC_EOF][..], &[0xc8], &[SVC_EOF]] {
+            for p in chan.transmit_block(0, &huff.compress(ops)) {
+                server.send_to(&p, me).unwrap();
+            }
+        }
+        let got = c.poll(Instant::now() + Duration::from_millis(200)).unwrap();
+        assert_eq!(got.iter().map(|r| r.sequence).collect::<Vec<_>>(), [1, 3]);
+        assert!(matches!(got[0].parsed.ops[..], [Op::Nop]));
+        assert_eq!(c.ack, 3);
     }
 
     /// Acknowledged commands past the reliable ring are dropped; the
