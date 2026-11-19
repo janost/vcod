@@ -833,7 +833,7 @@ in the same place.
   flies silent on all three versions: the voice is real but plays the
   silent file (section 1f). UO's tank and gun shells are heard in flight
   through `projectileSoundBlend1/2` instead (coduo-diff.md 16).
-- VERIFIED, live (`*-uo-bazooka.bin`, coduo-diff.md 19 "Capture recipe"):
+- VERIFIED, live (`*-uo-bazooka.bin`, coduo-diff.md 19.8 "Capture recipe"):
   one bazooka round rides entity 158 as `eType` 4 for eight snapshots and
   blows on it as `eType` 0, 400 ms after the fire event.
 

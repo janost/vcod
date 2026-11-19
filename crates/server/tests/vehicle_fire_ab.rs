@@ -138,7 +138,7 @@ fn ours(pitch: f32, secs: i64) -> Vec<Seen> {
         now += frame;
         let since = |at: Option<i64>| at.map(|a| (i - a) * common::FRAME_MS);
         // Retail's `PROBE activated` is 2050 past its `PROBE place`
-        // (coduo-vehicles.md 13, "The driver's idle").
+        // (coduo-vehicles.md 13.7, "The driver's idle").
         let tap =
             since(placed_at).is_some_and(|ms| (2050..2200).contains(&ms)) && seated_at.is_none();
         let seated = since(seated_at);

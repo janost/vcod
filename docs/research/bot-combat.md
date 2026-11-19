@@ -1605,7 +1605,7 @@ VERIFIED (measured, ours, release):
 
 CoD2's graph is flooded and proved under 1.5's rules
 (`bots::cod2::GRAPH_RULES`), while its bots move by CoD2's pmove. A seam
-in the walks (`nav::WalkStep`, `nav::with_step`, bot-navigation.md 2,
+in the walks (`nav::WalkStep`, `nav::with_step`, bot-navigation.md 2.6,
 "Other rules") takes a CoD2 step (`bots::cod2::Cod2Walk`): each walk's
 body is a CoD2 playerstate stepped by `vcod_cod2::pmove::player_step` over
 the level's `Rules`, the cmd through `to_cmd2`, read back into the CoD1

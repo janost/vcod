@@ -804,7 +804,7 @@ fn a_bot_climbs_down_mp_ships_mast_from_the_spar() {
 }
 
 /// mp_depot's roof at 508 by the ladder at x -2750, and the ledges at 326
-/// south and north of the ladder's foot (bot-navigation.md section 3, "The
+/// south and north of the ladder's foot (bot-navigation.md section 3.1, "The
 /// lip walk"). Bots sent from across the roof onto either ledge, seed 183's
 /// way among them (west along y -1246 with the south ledge below), get
 /// down without falling past the ledge to the yard at -24 and stand on it.

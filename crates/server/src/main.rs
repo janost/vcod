@@ -58,12 +58,15 @@ struct Args {
     /// 0 is off.
     #[arg(long, default_value_t = 0, help_heading = "Developer")]
     test_entities: usize,
-    /// Bots to add at start. Each takes a client slot; 0 is off. Without
-    /// --bots-shoot they only roam (docs/bots.md).
+    /// Bots to add at start. Each takes a client slot; 0 is off. They fight
+    /// unless --bots-peaceful (docs/bots.md).
     #[arg(long, default_value_t = 0)]
     bots: usize,
-    /// Whether the --bots fight. Without it they only roam.
+    /// The --bots only roam and play objectives: `vc_bot_shoot 0`.
     #[arg(long)]
+    bots_peaceful: bool,
+    /// Fighting bots, the default now; kept so old command lines run.
+    #[arg(long, hide = true, conflicts_with = "bots_peaceful")]
     bots_shoot: bool,
     /// A cvar to set, retail's `+set name value`; repeatable, e.g.
     /// `--set scr_friendlyfire=1`. Every one is set before the scripts load;
@@ -264,6 +267,13 @@ fn check_game_flags(matches: &ArgMatches, game: Game) -> Result<()> {
     Ok(())
 }
 
+impl Args {
+    /// Whether the --bots fire: unless --bots-peaceful.
+    fn bots_fire(&self) -> bool {
+        self.bots_shoot || !self.bots_peaceful
+    }
+}
+
 /// The argument checks that need no game data.
 fn check_args(args: &Args) -> Result<()> {
     if let Some(pair) = args.set.iter().find(|p| !p.contains('=')) {
@@ -410,6 +420,10 @@ fn cod1_server(args: Args, sock: UdpSocket, sets_after_map: &[bool]) -> Result<(
         protocol.transport.version,
         protocol.transport.short_version
     );
+    if let Some(w) = vcod_common::net::protocol::patch_warning_of(fs.paks()) {
+        log::warn!("{w}");
+    }
+    let bots_shoot = args.bots_fire();
     let mut server = Server::with_seed(
         ServerConfig {
             map: args.map,
@@ -418,7 +432,7 @@ fn cod1_server(args: Args, sock: UdpSocket, sets_after_map: &[bool]) -> Result<(
             gametype,
             test_entities: args.test_entities,
             bots: args.bots,
-            bots_shoot: args.bots_shoot,
+            bots_shoot,
             trace: args.trace,
         },
         Instant::now(),
@@ -499,7 +513,7 @@ fn cod2_server(args: Args, sock: UdpSocket) -> Result<(vcod_server::cod2::Cod2Se
     server.set_cvar("fs_basepath", &args.game_dir.to_string_lossy());
     server.load(Some(fs)).context("loading the level")?;
     if args.bots > 0 {
-        server.add_bots(args.bots, args.bots_shoot);
+        server.add_bots(args.bots, args.bots_fire());
     }
     let (sock, packets) = listen(sock)?;
     let out = sock.try_clone().context("cloning the socket")?;
@@ -511,7 +525,10 @@ fn cod2_server(args: Args, sock: UdpSocket) -> Result<(vcod_server::cod2::Cod2Se
         }),
         sleep: Box::new(net_sleep),
     });
-    log::info!("vcod-server: CoD2 {} on udp/{}", args.map, args.port);
+    log::info!("vcod-server: CoD2 1.3 {} on udp/{}", args.map, args.port);
+    if let Some(w) = vcod_common::game_dir::patch_warning(&args.game_dir, Game::Cod2) {
+        log::warn!("{w}");
+    }
     master_hint(&args.set);
     Ok((server, (sock, packets)))
 }
@@ -548,7 +565,7 @@ fn cod4_server(args: Args, sock: UdpSocket) -> Result<(vcod_server::cod4::Cod4Se
     }
     server.load(Some(&install)).context("loading the level")?;
     if args.bots > 0 {
-        server.add_bots(args.bots, args.bots_shoot);
+        server.add_bots(args.bots, args.bots_fire());
     }
     let (sock, packets) = listen(sock)?;
     let out = sock.try_clone().context("cloning the socket")?;
@@ -560,7 +577,7 @@ fn cod4_server(args: Args, sock: UdpSocket) -> Result<(vcod_server::cod4::Cod4Se
         }),
         sleep: Box::new(net_sleep),
     });
-    log::info!("vcod-server: CoD4 {} on udp/{}", args.map, args.port);
+    log::info!("vcod-server: CoD4 1.7 {} on udp/{}", args.map, args.port);
     master_hint(&args.set);
     Ok((server, (sock, packets)))
 }
@@ -988,6 +1005,16 @@ mod tests {
         for g in [Game::Cod1, Game::Cod2, Game::Cod4] {
             assert!(check_game_flags(&m, g).is_ok());
         }
+    }
+
+    /// `--bots` fight; `--bots-peaceful` keeps them from firing, and the old
+    /// `--bots-shoot` still parses.
+    #[test]
+    fn bots_fire_unless_peaceful() {
+        let fire = |argv: &[&str]| parse(argv).1.bots_fire();
+        assert!(fire(&["mp_crash", "--bots", "2"]));
+        assert!(!fire(&["mp_crash", "--bots", "2", "--bots-peaceful"]));
+        assert!(fire(&["mp_crash", "--bots", "2", "--bots-shoot"]));
     }
 
     /// The checks that need no game data, and clap's slot range.

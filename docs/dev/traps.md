@@ -512,7 +512,7 @@ otherwise.
 - 1.5's and UO's `ClientSpawn` thinks on the client's last cmd, not 1.1's
   null one (`ClientSim::spawn_cmd`). A client holding prone lies down along
   the spawn point's yaw before the script turns him, and a spectator flies
-  off the spot on his held keys (cod15-movement.md 4, "The spawn's
+  off the spot on his held keys (cod15-movement.md 4.2, "The spawn's
   lie-down"). The think runs twice in vcod, both through
   `ClientSim::spawn_think_on`: on a fresh sim in the `spawn` builtin, for the
   origin the spawning thread reads, and on the real sim in the frame's spawn
@@ -786,7 +786,7 @@ otherwise.
 ### Rendering and sound
 
 - UO's impact tables spell their explode paths with backslashes. `Pk3Fs`
-  reads `\` as `/`, as the engine's lookup does (coduo-diff.md 19,
+  reads `\` as `/`, as the engine's lookup does (coduo-diff.md 19.1,
   "Backslashed rows").
 - A rider poses through the server's `Controllers::rider` and
   `playerpose::seat_inputs` on both sides, but the cgame scales the jeep's

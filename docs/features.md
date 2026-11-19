@@ -78,7 +78,7 @@ still missing against retail, and what vcod adds that retail never had.
 
 ### Bots
 
-`vcod-server --bots N [--bots-shoot]` and rcon's `addbot`, `removebot`
+`vcod-server --bots N [--bots-peaceful]` and rcon's `addbot`, `removebot`
 and `listbots` work in all four games. One driver runs them over a nav
 graph built from each game's own pmove; they join through the stock
 menus, play the objectives and fight. On CoD1, UO and CoD2 they also yell

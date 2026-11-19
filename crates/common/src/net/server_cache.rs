@@ -450,14 +450,18 @@ mod tests {
     fn the_installs_cache_files_read() {
         let tmp = tempfile::tempdir().unwrap();
         let mut seen = 0;
-        for (var, layouts) in [
-            ("COD_DIR", &[Layout::Cod11, Layout::Cod15, Layout::Uo][..]),
-            ("COD2_DIR", &[Layout::Cod2][..]),
+        for (var, game, layouts) in [
+            (
+                "COD_DIR",
+                "cod1",
+                &[Layout::Cod11, Layout::Cod15, Layout::Uo][..],
+            ),
+            ("COD2_DIR", "cod2", &[Layout::Cod2][..]),
         ] {
-            let Some(dir) = std::env::var_os(var) else {
+            let Some(dir) = crate::testing::install_root(var, game, "main") else {
                 continue;
             };
-            for root in install_roots(std::path::Path::new(&dir)) {
+            for root in install_roots(&dir) {
                 for &layout in layouts {
                     let path = root.join(layout.file_name());
                     let copy = tmp.path().join(format!("{seen}-{}", layout.file_name()));

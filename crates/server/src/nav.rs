@@ -3754,7 +3754,7 @@ impl Follower {
     /// them when no way goes round, and not again until those run out.
     /// Before, the follower took one edge out of its plans after
     /// [`STUCK_TICKS`] without closing, and the next plan took the edge
-    /// beside it past the same body (bot-navigation.md section 3, "Bodies
+    /// beside it past the same body (bot-navigation.md section 3.8, "Bodies
     /// in the way"). Returns whether the plan was dropped.
     pub fn bodies_in_way(
         &mut self,
@@ -3842,7 +3842,7 @@ impl Follower {
     /// [`ASIDE_TICKS`], then plans again; not again for
     /// [`ASIDE_REST`]. Pressed in a corridor, two bots each planned
     /// through the other and paced until an unstick spell parted them
-    /// (bot-navigation.md section 3, "Bodies in the way").
+    /// (bot-navigation.md section 3.8, "Bodies in the way").
     pub fn stand_aside(
         &mut self,
         g: &NavGraph,
@@ -10647,7 +10647,7 @@ mod tests {
     /// mp_ship's shelf corners at (5375.1, 321.1, 352.1) and (5375.1,
     /// -193.1, 352.1), a body respawned at rest there and run 2 s at a
     /// yaw. Retail 1.1d (`client-probes/probe_shipcrease`, 2026-10-18,
-    /// bot-navigation.md section 3, "The corners at x 5375.1"): the north
+    /// bot-navigation.md section 3, "the push-off, the unpin and the slope"): the north
     /// one runs free at 200 and 225 to (5343.12, 227.13) and at 140 to
     /// (5343.12, 332.87); the south one stays at x 5375.1 at 140 and runs
     /// at 200 and 225 to (5343.12, -204.87). So the run at the north

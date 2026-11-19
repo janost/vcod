@@ -2364,7 +2364,7 @@ pub(crate) mod uo_captures {
 }
 
 /// What the client draws for the retail UO captures' events
-/// (docs/research/coduo-diff.md 19, "Captures").
+/// (docs/research/coduo-diff.md 19.6, "Captures").
 #[cfg(test)]
 mod uo_capture_gates {
     use super::*;
@@ -2837,7 +2837,7 @@ mod uo_capture_gates {
 
     /// `uo-shellveh`'s three shells strike the Elefant: each explode is 186
     /// with the vehicle bit on metal, and draws the `tank_explode` row's
-    /// vehicle column, not the metal one (coduo-vehicles.md 13, "A shell
+    /// vehicle column, not the metal one (coduo-vehicles.md 13.9, "A shell
     /// on a hull").
     #[test]
     fn the_uo_shellveh_capture_explodes_on_the_vehicle_column() {

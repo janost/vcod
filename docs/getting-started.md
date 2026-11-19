@@ -41,7 +41,7 @@ Hosting and joining work on one machine: the server answers on
 vcod                                                    # main menu and server browser
 vcod --connect 1.2.3.4:28960                            # join through the team and weapon menus
 vcod --connect 1.2.3.4:28960 --team axis --weapon kar98k_mp
-vcod-server mp_carentan --gametype tdm --bots 6 --bots-shoot
+vcod-server mp_carentan --gametype tdm --bots 6
 ```
 
 A 1.1 install hosts 1.1 (protocol 1), a 1.5 install hosts 1.5 (protocol 6).
@@ -53,7 +53,7 @@ when a server refuses it.
 ```
 vcod --mod-dir uo
 vcod --mod-dir uo --connect 1.2.3.4:28960 --team allies
-vcod-server mp_cassino --mod-dir uo --gametype tdm --bots 6 --bots-shoot
+vcod-server mp_cassino --mod-dir uo --gametype tdm --bots 6
 ```
 
 Without `--mod-dir uo` the install reads as plain 1.5. A UO client
@@ -64,7 +64,7 @@ refuses 1.1 and 1.5 servers and the others refuse UO servers.
 ```
 vcod                                                    # CoD2's main menu and browser
 vcod --connect 1.2.3.4:28960 --team allies --weapon thompson_mp
-vcod-server mp_toujane --gametype tdm --bots 6 --bots-shoot
+vcod-server mp_toujane --gametype tdm --bots 6
 ```
 
 ### CoD4
@@ -72,7 +72,7 @@ vcod-server mp_toujane --gametype tdm --bots 6 --bots-shoot
 ```
 vcod                                                    # 1.7's main menu; the first start asks for a profile
 vcod --connect 1.2.3.4:28960 --team allies --class assault_mp,0
-vcod-server mp_crash --bots 6 --bots-shoot              # war unless --gametype says otherwise
+vcod-server mp_crash --bots 6                           # war unless --gametype says otherwise
 ```
 
 Stock classes: `assault_mp,0`, `specops_mp,0`, `heavygunner_mp,0`,

@@ -6,8 +6,8 @@
 #       gdb -q -batch -ex 'source tools/re/gdb_teams.py' -ex run \
 #       --args <server> ...
 #
-# Run it as `COD_LNXDED` for tools/run_probe.sh through a wrapper that execs
-# gdb with these arguments. Lines:
+# tools/run_probe.sh and tools/run_server.sh run the server this way under
+# `GDB_PY=tools/re/gdb_teams.py`. Lines:
 #   GDB use <entity>        Use_Item's self
 #   GDB respawn <entity>    RespawnItem's self
 #   GDB draw <rand()>       the team branch's draw

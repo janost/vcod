@@ -1101,7 +1101,7 @@ struct SeatLeaves {
 impl SeatLeaves {
     /// This frame's seat goal, then the leaves of the node the last seat
     /// change left, which the old legs clip fades out on: nothing in the
-    /// cgame clears them (coduo-vehicles.md 13, "The glide back").
+    /// cgame clears them (coduo-vehicles.md 13.7, "The glide back").
     fn next(
         &mut self,
         goal: Option<(usize, Vec<(usize, f32)>)>,
