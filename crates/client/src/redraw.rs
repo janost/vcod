@@ -500,7 +500,6 @@ impl App {
             time,
             cull,
             aspect,
-            widescreen,
             ..
         } = *tick;
         let Some(r) = &mut self.renderer else {
@@ -517,11 +516,7 @@ impl App {
             reserve,
             switch_to,
             rigs,
-            fire_edge,
-            fire_held,
-            reload_edge,
-            ads_held,
-            gun_aim,
+            ..
         } = &mut self.mode
         else {
             unreachable!()
@@ -600,6 +595,122 @@ impl App {
         let (eye_forward, eye_right, eye_up) = camera::basis(v.yaw, v.pitch);
         self.audio
             .set_listener(v.eye, eye_forward, eye_right, eye_up, u32::MAX);
+        let (bone_sets, fov, gun_pose, scope_quads, scoped) =
+            self.walk_weapon(tick, &v, eye_forward);
+        let Some(r) = &mut self.renderer else {
+            unreachable!()
+        };
+        let Mode::Walk {
+            ps,
+            view_weapon,
+            configstrings,
+            weapon_slot,
+            reserve,
+            fire_edge,
+            reload_edge,
+            ..
+        } = &mut self.mode
+        else {
+            unreachable!()
+        };
+        *fire_edge = false;
+        *reload_edge = false;
+
+        *hud_quads = scope_quads;
+        self.audio.step(&HashMap::new(), &HashMap::new(), None);
+        r.set_fx_quads(
+            &self.fs,
+            self.fx.build_quads(v.eye, eye_right, eye_up, time),
+            time,
+        );
+        let clouds = self.fx.clouds(v.eye, eye_right, eye_up, time);
+        let map = self.session.map_name();
+        r.set_fx_clouds(&self.fs, map, &clouds, time);
+        r.set_marks(
+            &self.fs,
+            &self.fx.take_marks(time),
+            &[],
+            (time * 1000.0) as i32,
+            time,
+            self.shell.cvar_f32("cg_marks") != 0.0,
+        );
+        r.set_fx_lights(&self.fx.lights(v.eye, time));
+        r.set_fog(
+            net::FogParams::parse(
+                configstrings
+                    .get(net::protocol::CS_FOG_V1)
+                    .map(String::as_str)
+                    .unwrap_or(""),
+            ),
+            time,
+        );
+        self.fx_ms = fx_t0.elapsed().as_secs_f32() * 1000.0;
+        (
+            renderer::Frame {
+                view_proj: camera::view_proj_from(v.eye, v.yaw, v.pitch, 0.0, fov, aspect),
+                eye: v.eye,
+                fwd: camera::basis(v.yaw, v.pitch).0,
+                up: camera::up_hint(v.yaw, v.pitch, 0.0),
+                time,
+                fov_x: fov,
+                cull,
+                hud_lines: vec![format!(
+                    "[{}] {} {} / {}",
+                    *weapon_slot + 1,
+                    WALK_LOADOUT[*weapon_slot],
+                    view_weapon.as_ref().map_or(0, |w| w.state.ammo()),
+                    reserve
+                )],
+            },
+            (!scoped).then(|| renderer::VmDraw {
+                transform: play::view::pose_transform(gun_pose),
+                light_origin: ps.origin + Vec3::Z * ps.view_height(),
+                fov_x: fov,
+                bone_sets,
+            }),
+        )
+    }
+
+    /// The walk mode's view weapon: its state, pose, sway, scope and cues.
+    pub(crate) fn walk_weapon(
+        &mut self,
+        tick: &Tick,
+        v: &pmove::ViewParams,
+        eye_forward: Vec3,
+    ) -> (
+        Vec<Vec<glam::Mat4>>,
+        f32,
+        hud::scope::GunPose,
+        Vec<hud::HudQuad>,
+        bool,
+    ) {
+        let Tick {
+            dt,
+            time,
+            aspect,
+            widescreen,
+            ..
+        } = *tick;
+        let Some(r) = &mut self.renderer else {
+            unreachable!()
+        };
+        let Mode::Walk {
+            world,
+            ps,
+            view_weapon,
+            configstrings,
+            weapon_slot,
+            reserve,
+            fire_edge,
+            fire_held,
+            reload_edge,
+            ads_held,
+            gun_aim,
+            ..
+        } = &mut self.mode
+        else {
+            unreachable!()
+        };
         let mut bone_sets = Vec::new();
         let mut fov = camera::view_fov_x(camera::DEFAULT_FOV_DEG, aspect, widescreen);
         let mut gun_pose = hud::scope::GunPose::default();
@@ -765,62 +876,7 @@ impl App {
                 }
             }
         }
-        *fire_edge = false;
-        *reload_edge = false;
-
-        *hud_quads = scope_quads;
-        self.audio.step(&HashMap::new(), &HashMap::new(), None);
-        r.set_fx_quads(
-            &self.fs,
-            self.fx.build_quads(v.eye, eye_right, eye_up, time),
-            time,
-        );
-        let clouds = self.fx.clouds(v.eye, eye_right, eye_up, time);
-        let map = self.session.map_name();
-        r.set_fx_clouds(&self.fs, map, &clouds, time);
-        r.set_marks(
-            &self.fs,
-            &self.fx.take_marks(time),
-            &[],
-            (time * 1000.0) as i32,
-            time,
-            self.shell.cvar_f32("cg_marks") != 0.0,
-        );
-        r.set_fx_lights(&self.fx.lights(v.eye, time));
-        r.set_fog(
-            net::FogParams::parse(
-                configstrings
-                    .get(net::protocol::CS_FOG_V1)
-                    .map(String::as_str)
-                    .unwrap_or(""),
-            ),
-            time,
-        );
-        self.fx_ms = fx_t0.elapsed().as_secs_f32() * 1000.0;
-        (
-            renderer::Frame {
-                view_proj: camera::view_proj_from(v.eye, v.yaw, v.pitch, 0.0, fov, aspect),
-                eye: v.eye,
-                fwd: camera::basis(v.yaw, v.pitch).0,
-                up: camera::up_hint(v.yaw, v.pitch, 0.0),
-                time,
-                fov_x: fov,
-                cull,
-                hud_lines: vec![format!(
-                    "[{}] {} {} / {}",
-                    *weapon_slot + 1,
-                    WALK_LOADOUT[*weapon_slot],
-                    view_weapon.as_ref().map_or(0, |w| w.state.ammo()),
-                    reserve
-                )],
-            },
-            (!scoped).then(|| renderer::VmDraw {
-                transform: play::view::pose_transform(gun_pose),
-                light_origin: ps.origin + Vec3::Z * ps.view_height(),
-                fov_x: fov,
-                bone_sets,
-            }),
-        )
+        (bone_sets, fov, gun_pose, scope_quads, scoped)
     }
 
     /// The 2D layer over the mode's: the demo line, the menus, the console.
