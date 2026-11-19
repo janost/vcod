@@ -18,7 +18,7 @@ pub(super) struct JoinProbe {
     pub(super) team: String,
     /// The menu retail last named in `v g_scriptMainMenu`; the `t` that follows
     /// opens it.
-    pub(super) main_menu: String,
+    main_menu: String,
     /// Menu indices already answered, so a reopened menu is not answered twice.
     pub(super) answered: Vec<i32>,
     /// What the weapon menu is answered with when `--probe-weapon` names one,
@@ -28,7 +28,7 @@ pub(super) struct JoinProbe {
     weapon_pick: Option<String>,
     pub(super) weapon: String,
     /// When the weapon answer went out.
-    pub(super) answered_weapon: Option<Instant>,
+    answered_weapon: Option<Instant>,
     /// Every serverCommand since the gamestate, verbatim and in order.
     pub(super) commands: Vec<String>,
 }
@@ -140,5 +140,44 @@ fn menu_reply<'a>(menu: &str, team: &'a str, weapon: Option<&'a str>) -> Option<
         "russian" => Some("mosin_nagant_mp"),
         "german" => Some("kar98k_mp"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The stock rifle is semi-automatic: a held fire bit is one shot and then
+    /// nothing, so every shot needs its own release edge. Counted at the
+    /// probe's send rate rather than read off the pattern by eye.
+    /// A map change and a dm map restart both rerun retail's `ClientConnect`
+    /// and offer the team menu again, under the indices the last one used.
+    /// Without the re-arm the probe skips them and never spawns again; a join
+    /// left "settled" across a gamestate would have the capture reading the
+    /// new map's menu as a spawn.
+    #[test]
+    fn a_restart_and_a_gamestate_reopen_the_menus() {
+        let t0 = Instant::now();
+        let mut join = JoinProbe::new(Some("allies"), None);
+        join.main_menu = "weapon_american".to_string();
+        join.answered = vec![0, 1];
+        join.weapon = "m1carbine_mp".to_string();
+        join.answered_weapon = Some(t0);
+        assert!(join.settled(t0 + SPAWN_SETTLE));
+
+        // A map restart reopens the menu without unspawning the run: the sd
+        // pair crosses four of them and its script must not pause.
+        join.reopen_menus();
+        assert!(join.answered.is_empty());
+        assert!(join.main_menu.is_empty());
+        assert!(join.settled(t0 + SPAWN_SETTLE));
+
+        join.answered = vec![0, 1];
+        join.answered_weapon = Some(t0);
+        join.rearm();
+        assert!(join.answered.is_empty());
+        assert!(!join.settled(t0 + SPAWN_SETTLE));
+        // The team is the run's, not the map's: it survives.
+        assert_eq!(join.team, "allies");
     }
 }

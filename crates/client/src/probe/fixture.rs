@@ -160,7 +160,7 @@ pub(super) fn write_capture(path: &str, out: &str, overwrite: bool) -> anyhow::R
 }
 
 /// [`write_capture`] keeping a refused capture in `keep` instead of `tmp/`.
-pub(super) fn write_capture_in(
+fn write_capture_in(
     path: &str,
     out: &str,
     overwrite: bool,
@@ -389,3 +389,30 @@ pub(super) const ITEMS_FIXTURE_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../server/tests/fixtures/items"
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fixture name already on disk, tagged or not, is refused without
+    /// `--overwrite-fixture`, and the refused capture is kept under `tmp/`.
+    #[test]
+    fn a_write_refuses_to_replace_a_fixture() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mp_carentan-tdm-ads-sniper.txt");
+        let path = path.to_str().unwrap();
+
+        let keep = dir.path().join("tmp");
+        let write = |out, overwrite| write_capture_in(path, out, overwrite, &keep);
+
+        write("retail", false).expect("a name nothing holds yet");
+        let err = write("ours", false).expect_err("the second write lands on the first");
+        assert!(err.to_string().contains("--overwrite-fixture"), "{err}");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "retail");
+        let kept = keep.join("mp_carentan-tdm-ads-sniper.txt");
+        assert_eq!(std::fs::read_to_string(kept).unwrap(), "ours");
+
+        write("ours", true).expect("the flag says to");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "ours");
+    }
+}

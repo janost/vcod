@@ -60,7 +60,7 @@ pub(super) enum LadderScript {
 }
 
 impl LadderScript {
-    pub(super) fn phases(self) -> &'static [LadderPhase] {
+    fn phases(self) -> &'static [LadderPhase] {
         match self {
             LadderScript::Full => LADDER_SCRIPT,
             LadderScript::Climb => LADDER_CLIMB_SCRIPT,
@@ -70,7 +70,7 @@ impl LadderScript {
     }
 
     /// The fixture header's name for it.
-    pub(super) fn name(self) -> &'static str {
+    fn name(self) -> &'static str {
         match self {
             LadderScript::Full => "full",
             LadderScript::Climb => "climb",
@@ -87,7 +87,7 @@ const LADDER_CLIMB: Duration = Duration::from_secs(14);
 /// in degrees, positive down, view yaw offset in degrees). Run once the player has stood at the foot
 /// for [`LADDER_SETTLE`]. Pitches straddle the climb rate's clamps (fz
 /// -0.25 and 0.15) and its zero (fz = -0.25 is pitch 14.5).
-pub(super) const LADDER_SCRIPT: &[LadderPhase] = &[
+const LADDER_SCRIPT: &[LadderPhase] = &[
     ("up-level", 2500, 127, 0, 0.0, 0.0),
     ("hang", 1000, 0, 0, 0.0, 0.0),
     ("up-look-up", 1200, 127, 0, -45.0, 0.0),
@@ -103,7 +103,7 @@ pub(super) const LADDER_SCRIPT: &[LadderPhase] = &[
 ];
 
 /// `--save-ladder climb`: straight up looking up, and off the top.
-pub(super) const LADDER_CLIMB_SCRIPT: &[LadderPhase] = &[
+const LADDER_CLIMB_SCRIPT: &[LadderPhase] = &[
     ("up-look-up", 9000, 127, 0, -45.0, 0.0),
     ("off", 1500, 0, 0, -45.0, 0.0),
 ];
@@ -115,7 +115,7 @@ pub(super) const LADDER_CLIMB_SCRIPT: &[LadderPhase] = &[
 /// at, swept linearly from the last phase's, and goes on the wire as a
 /// mouse would send it: rebased on the `delta_angles` the script started
 /// with, not on each snapshot's.
-pub(super) const LADDER_TURN_SCRIPT: &[LadderPhase] = &[
+const LADDER_TURN_SCRIPT: &[LadderPhase] = &[
     ("up", 1500, 127, 0, 0.0, 0.0),
     ("hang", 500, 0, 0, 0.0, 0.0),
     ("turn-left", 1500, 0, 0, 0.0, 160.0),
@@ -137,7 +137,7 @@ pub(super) const LADDER_TURN_SCRIPT: &[LadderPhase] = &[
 /// probe's yaw while the gsc sets the body down at `probe_spot`, then turned
 /// 180 still and forward into the rungs: a grab that only the view's trace
 /// meets (cod15-movement.md 2, the second grab). Its yaw stays absolute.
-pub(super) const LADDER_GRAB_SCRIPT: &[LadderPhase] = &[
+const LADDER_GRAB_SCRIPT: &[LadderPhase] = &[
     ("wait", 2500, 0, 0, 0.0, 0.0),
     ("face", 500, 0, 0, 0.0, -180.0),
     ("still", 500, 0, 0, 0.0, -180.0),
@@ -658,4 +658,25 @@ pub(super) fn write_weapsel_fixture(
     write_capture(&path, &out, overwrite)?;
     println!("weapsel: wrote {path}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each `--save-ladder` script is told apart by its value, not by a
+    /// const slice's address, and names itself in the fixture (BUG-092).
+    #[test]
+    fn each_ladder_script_runs_and_names_its_own_phases() {
+        for (s, name, phases) in [
+            (LadderScript::Full, "full", LADDER_SCRIPT),
+            (LadderScript::Climb, "climb", LADDER_CLIMB_SCRIPT),
+            (LadderScript::Turn, "turn", LADDER_TURN_SCRIPT),
+            (LadderScript::Grab, "grab", LADDER_GRAB_SCRIPT),
+        ] {
+            assert_eq!(s.name(), name);
+            assert_eq!(s.phases().len(), phases.len(), "{name}");
+            assert_eq!(s.phases()[0].0, phases[0].0, "{name}");
+        }
+    }
 }

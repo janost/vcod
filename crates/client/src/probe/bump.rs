@@ -283,7 +283,7 @@ impl BumpPhase {
 
 /// How far a ground mover at `v` along an axis coasts before friction stops
 /// it: 5.5 friction with a 100 u/s control floor (`PM_Friction`).
-pub(super) fn bump_stop_distance(v: f32) -> f32 {
+fn bump_stop_distance(v: f32) -> f32 {
     use vcod_common::pmove::{PM_FRICTION, PM_STOPSPEED};
     let decel = PM_STOPSPEED * PM_FRICTION;
     if v > PM_STOPSPEED {
@@ -296,7 +296,7 @@ pub(super) fn bump_stop_distance(v: f32) -> f32 {
 /// One move axis toward a mark `d` units away, moving at `v` along it, while
 /// the mark is far: press until friction plus the lag would carry it to
 /// within [`BUMP_NAV_NEAR`]. The compact cmd carries only -127/0/127.
-pub(super) fn bump_axis_far(d: f32, v: f32) -> i8 {
+fn bump_axis_far(d: f32, v: f32) -> i8 {
     let toward = v * d > 0.0;
     if !toward && v.abs() > 5.0 {
         return 0;
@@ -823,4 +823,27 @@ pub(super) fn write_bump_fixture(
     write_capture(&path, &out, overwrite)?;
     println!("bump: {} lines -> {path}", bp.lines.len());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bump walk presses toward a far mark until friction and the
+    /// velocity's lag would coast it inside 8 units, and never presses
+    /// while it moves away faster than 5 u/s.
+    #[test]
+    fn the_bump_walk_presses_until_its_coast_reaches_the_mark() {
+        // PM_Friction from 300 u/s: (300 - 100) / 5.5 + 100^2 / 1100
+        assert!((bump_stop_distance(300.0) - 45.4545).abs() < 1e-3);
+        assert!((bump_stop_distance(50.0) - 2.2727).abs() < 1e-3);
+        // 300 u/s toward coasts 45.45 + 30 of lag
+        assert_eq!(bump_axis_far(90.0, 300.0), 127);
+        assert_eq!(bump_axis_far(83.0, 300.0), 0);
+        assert_eq!(bump_axis_far(-90.0, -300.0), -127);
+        assert_eq!(bump_axis_far(9.0, 0.0), 127);
+        assert_eq!(bump_axis_far(8.0, 0.0), 0);
+        assert_eq!(bump_axis_far(100.0, -6.0), 0, "moving away");
+        assert_eq!(bump_axis_far(100.0, -4.0), 127, "drifting");
+    }
 }

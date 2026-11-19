@@ -265,7 +265,7 @@ impl FallProbe {
 
     /// The `CMDS` line of the cmds recorded since the last one, cleared;
     /// `None` with none.
-    pub(super) fn take_line(&mut self) -> Option<String> {
+    fn take_line(&mut self) -> Option<String> {
         if self.cmds.is_empty() {
             return None;
         }
@@ -864,4 +864,66 @@ fn killcam_hud_str(elems: &[net::msg::HudElem]) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::probe::tests::pickup_snap;
+
+    /// A run's last partial block of cmds is printed too: 61 cmds make two
+    /// `CMDS` lines (BUG-091).
+    #[test]
+    fn the_last_partial_block_of_cmds_is_kept() {
+        let ring = vcod_common::net::snapshot::SnapshotRing::default();
+        let mut fall = FallProbe::default();
+        for i in 0..61 {
+            fall.record_cmd(1000 + 8 * i, None, (0, 0, 0), i as u32, &ring);
+        }
+        let line = fall.take_line().expect("the 61st cmd's line");
+        assert!(line.starts_with("CMDS st=1480 d= "), "{line}");
+        assert_eq!(fall.take_line(), None);
+    }
+
+    /// `FallProbe`'s `CMDS` line: the first `serverTime` and each step,
+    /// the yaws, the inputs and snapshots by the cmd they came at, every
+    /// snapshot's `commandTime` since the last cmd, and the sequences
+    /// with their wrap, as the fall and turret gates read them.
+    #[test]
+    fn a_fall_cmds_line_carries_its_cmds_by_index() {
+        let mut ring = vcod_common::net::snapshot::SnapshotRing::default();
+        let snap = |num, t: i32, ct| {
+            let mut s = pickup_snap(num, &[("commandTime", ct)], &[]);
+            s.server_time = t;
+            s
+        };
+        let mut fall = FallProbe::default();
+        let seq0 = u32::MAX - 1;
+        for k in 0..4u32 {
+            if k == 1 {
+                ring.insert(snap(1, 1050, 1040));
+            }
+            if k == 3 {
+                ring.insert(snap(2, 1100, 1090));
+                ring.insert(snap(3, 1150, 1140));
+            }
+            let input = if k < 2 { (1, 0, 0) } else { (0, 4, 127) };
+            let yaw = (k == 0).then_some(16384);
+            fall.record_cmd(
+                1000 + 16 * k as i32,
+                yaw,
+                input,
+                seq0.wrapping_add(k),
+                &ring,
+            );
+        }
+        let line = fall.take_line().unwrap();
+        let (head, tail) = line.split_once(" w=").unwrap();
+        assert_eq!(
+            head,
+            "CMDS st=1000 d=16,16,16 yaw=16384 in=0:1:0:0,2:0:4:127 snap=1:1050,3:1150 \
+             ct=1050:1040,1100:1090,1150:1140"
+        );
+        assert_eq!(tail.split_once(" q=").unwrap().1, "4294967294,1,1,1");
+    }
 }

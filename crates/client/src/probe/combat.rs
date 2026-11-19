@@ -27,11 +27,11 @@ const WEAPONSTATE_FIRING: i32 = vcod_common::pmove::weapon::WEAPON_FIRING as i32
 /// a held fire bit fires once and then nothing: every shot needs its own
 /// release edge, and reload is a press for the same reason.
 #[derive(Clone, Copy, Default)]
-pub(super) struct Pulse {
-    pub(super) buttons: u8,
-    pub(super) wbuttons: u8,
+struct Pulse {
+    buttons: u8,
+    wbuttons: u8,
     /// Taps the step sends; after the last one it holds its base input alone.
-    pub(super) count: u32,
+    count: u32,
 }
 
 /// How long a tap is held down, and the floor on how often one starts: two
@@ -51,7 +51,7 @@ pub(super) const PULSE_MARGIN: Duration = Duration::from_millis(48);
 /// so the index rides every cmd until `ps.weapon` carries it; see
 /// [`WeaponSwitch`].
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum SwitchTo {
+enum SwitchTo {
     /// The frag, by its configstring 7 index.
     Frag,
     /// Back to the rifle the join chose.
@@ -109,14 +109,14 @@ impl WeaponSwitch {
 /// (docs/research/cod11-combat.md, section 13), so an entity is recorded from
 /// its first missile snapshot until it leaves the wire, not while it reads 4.
 pub(super) struct MissileSample {
-    pub(super) num: u32,
-    pub(super) e_type: i32,
+    num: u32,
+    e_type: i32,
     e_flags: i32,
     pos: vcod_common::net::trajectory::Trajectory,
     apos: vcod_common::net::trajectory::Trajectory,
     weapon: i32,
     index: i32,
-    pub(super) events: [i32; 4],
+    events: [i32; 4],
     event_parms: [i32; 4],
     event_sequence: i32,
     /// `pos` evaluated at the snapshot's own `serverTime`.
@@ -160,7 +160,7 @@ events={},{},{},{} eventParms={},{},{},{} eventSequence={} origin={}\n",
 /// read it in an earlier snapshot and has not left the wire since.
 #[derive(Default)]
 pub(super) struct MissileWatch {
-    pub(super) seen: std::collections::BTreeSet<u32>,
+    seen: std::collections::BTreeSet<u32>,
 }
 
 impl MissileWatch {
@@ -210,28 +210,28 @@ impl MissileWatch {
 /// `pulse`'s bits tapped on top of it.
 pub(super) struct CombatStep {
     pub(super) label: &'static str,
-    pub(super) base: net::msg::UserCmd,
-    pub(super) pulse: Pulse,
+    base: net::msg::UserCmd,
+    pulse: Pulse,
     /// Bits held down for the first of the step rather than tapped: a grenade
     /// is cooked by holding the trigger, and the throw is the release.
-    pub(super) press: u8,
-    pub(super) press_for: Duration,
+    press: u8,
+    press_for: Duration,
     /// A `cmd.weapon` the step asks for, and how far into it the ask goes
     /// out. The byte is then held by [`WeaponSwitch`], not sent once.
-    pub(super) switch: Option<(Duration, SwitchTo)>,
-    pub(super) dur: Duration,
+    switch: Option<(Duration, SwitchTo)>,
+    dur: Duration,
     /// Whether the step walks. A walking step is steered by [`StallTurn`], so
     /// where it ends up is not reproducible and a gate cannot replay it.
-    pub(super) walks: bool,
+    walks: bool,
     /// Whether the step's clock waits for `weaponstate` to read ready. A step
     /// that taps has to: the weapon it inherits may still be busy, and a
     /// reload that outlives its step recorded a reload under a fire label.
-    pub(super) wait_ready: bool,
+    wait_ready: bool,
     /// Set to the weapon file's `reloadTime` plus a margin once the join names
     /// the weapon, so the hold is not a guess about one rifle's timings.
-    pub(super) from_reload_time: bool,
+    from_reload_time: bool,
     /// How often a tap starts; [`PULSE_PERIOD`] until the weapon file raises it.
-    pub(super) period: Duration,
+    period: Duration,
 }
 
 impl Default for CombatStep {
@@ -256,7 +256,7 @@ impl CombatStep {
     /// What the step sends `elapsed` into itself: its held input, with the
     /// pulsed bits down for the first [`PULSE_HOLD`] of each `period` until
     /// `count` taps have gone out.
-    pub(super) fn cmd_at(&self, elapsed: Duration) -> net::msg::UserCmd {
+    fn cmd_at(&self, elapsed: Duration) -> net::msg::UserCmd {
         let mut cmd = self.base;
         let ms = elapsed.as_millis();
         if ms / self.period.as_millis() < self.pulse.count as u128
@@ -275,7 +275,7 @@ impl CombatStep {
 /// The steps, each starting from the one before. The two idles bracket the
 /// shooting so the capture shows what the channels return to, and the stances
 /// are separate steps because the animscript's fire clauses are per stance.
-pub(super) fn combat_script() -> Vec<CombatStep> {
+fn combat_script() -> Vec<CombatStep> {
     use net::msg::{NULL_USERCMD, WBUTTON_CROUCH, WBUTTON_PRONE, WBUTTON_RELOAD};
     let hold = |label, base, ms| CombatStep {
         label,
@@ -615,10 +615,10 @@ fn grenade_script() -> Vec<CombatStep> {
 }
 
 /// One snapshot's worth of the channels a shot moves.
-pub(super) struct CombatSample {
+struct CombatSample {
     label: &'static str,
     elapsed_ms: u128,
-    pub(super) server_time: i32,
+    server_time: i32,
     /// `ps.commandTime`: the last cmd the snapshot's frame ran, which says
     /// which of the logged cmds reached it.
     command_time: i32,
@@ -664,22 +664,22 @@ pub(super) struct CombatSample {
 
 /// What a step turned out to be: kept beside the playerstate it ended at, so
 /// the fixture can say on its face whether a step labelled fire ever fired.
-pub(super) struct StepResult {
+struct StepResult {
     label: &'static str,
     /// The step ever observed `weaponstate` firing. False on a fire step is a
     /// broken capture, not a fact about retail.
-    pub(super) fired: bool,
+    fired: bool,
     /// Snapshots where `weaponstate` rose into firing. A shot shorter than the
     /// gap between snapshots can slip through, which is what `seq_delta` is
     /// the check on.
-    pub(super) shots_seen: u32,
+    shots_seen: u32,
     /// `eventSequence` gained over the step. 8 bits on the wire, so it wraps.
-    pub(super) seq_delta: i32,
+    seq_delta: i32,
     /// How long the step waited for the weapon to read ready before its clock
     /// started.
-    pub(super) waited_ms: u128,
+    waited_ms: u128,
     /// The step was restarted because the weapon went busy under it.
-    pub(super) retried: bool,
+    retried: bool,
     /// The playerstate the step ended at, for the fields a trace line omits.
     fields: Vec<i32>,
 }
@@ -692,24 +692,24 @@ pub(super) struct CombatProbe {
     pub(super) steps: Vec<CombatStep>,
     /// Which script runs, which is also the fixture's suffix and the flag
     /// the header names: `combat` or `ads`.
-    pub(super) kind: &'static str,
+    kind: &'static str,
     pub(super) idx: usize,
     /// Set when the current step's clock starts, which a `wait_ready` step
     /// defers until the weapon reads ready.
-    pub(super) started: Option<Instant>,
+    started: Option<Instant>,
     /// When the current step began waiting for that, and since when the weapon
     /// has read ready without interruption.
-    pub(super) waiting_since: Option<Instant>,
-    pub(super) ready_since: Option<Instant>,
+    waiting_since: Option<Instant>,
+    ready_since: Option<Instant>,
     /// Steps already restarted once, so a weapon that goes busy every time
     /// costs one retry and not the run.
-    pub(super) retried: Vec<&'static str>,
-    pub(super) trace: Vec<CombatSample>,
-    pub(super) results: Vec<StepResult>,
-    pub(super) done: bool,
+    retried: Vec<&'static str>,
+    trace: Vec<CombatSample>,
+    results: Vec<StepResult>,
+    done: bool,
     /// Newest snapshot already recorded, so the trace runs per snapshot rather
     /// than per loop iteration.
-    pub(super) traced: Option<u32>,
+    traced: Option<u32>,
     /// The weapon file has been read once; a second look would reread it every
     /// frame.
     pub(super) weapon_read: bool,
@@ -717,15 +717,15 @@ pub(super) struct CombatProbe {
     pub(super) stall: StallTurn,
     /// Configstring 7 indexes, 1-based, of the frag and of the weapon the join
     /// chose; 0 until the list is read.
-    pub(super) frag_index: u8,
-    pub(super) joined_index: u8,
+    frag_index: u8,
+    joined_index: u8,
     /// The frag's name, for the fixture header.
-    pub(super) frag_name: String,
-    pub(super) switch: WeaponSwitch,
-    pub(super) missiles: MissileWatch,
+    frag_name: String,
+    switch: WeaponSwitch,
+    missiles: MissileWatch,
     /// The player's origin and view at the first step, which is the spot a
     /// replay of this capture has to throw from.
-    pub(super) spawn_pose: Option<([f32; 3], [f32; 3])>,
+    spawn_pose: Option<([f32; 3], [f32; 3])>,
     /// `--probe-sway` only: the wire yaw of the longest clear sightline from
     /// the spawn, so the impacts land far enough for the sway to be read off
     /// their whole-unit origins. `None` holds the spawn view.
@@ -735,11 +735,11 @@ pub(super) struct CombatProbe {
     /// stall turn's included. The first step's also holds the cmds sent
     /// before it started that its first snapshot's `commandTime` had not
     /// reached.
-    pub(super) sent: Vec<(&'static str, SentCmd)>,
+    sent: Vec<(&'static str, SentCmd)>,
     /// The last cmds sent before the first step started.
-    pub(super) before: Vec<SentCmd>,
+    before: Vec<SentCmd>,
     /// The newest snapshot's `serverTime` when each step became current.
-    pub(super) start_times: Vec<(&'static str, i32)>,
+    start_times: Vec<(&'static str, i32)>,
 }
 
 impl Default for CombatProbe {
@@ -1298,7 +1298,7 @@ pub(super) fn data_secs(s: f32) -> Option<Duration> {
 /// `docs/research/cod11-combat.md` 1.1). A fire step that meets one before
 /// it has seen a shot restarts once: the weapon went busy under it, and the
 /// taps it has already spent bought nothing.
-pub(super) fn reloading(weaponstate: i32) -> bool {
+fn reloading(weaponstate: i32) -> bool {
     use vcod_common::pmove::weapon::{WEAPON_RELOAD_END, WEAPON_RELOADING};
     (i32::from(WEAPON_RELOADING)..=i32::from(WEAPON_RELOAD_END)).contains(&weaponstate)
 }
@@ -1351,7 +1351,7 @@ impl StallTurn {
 
 /// One cmd [`CombatProbe::record`] logged, as the `!cmds` line writes it.
 #[derive(Clone, Copy)]
-pub(super) struct SentCmd {
+struct SentCmd {
     server_time: i32,
     buttons: u8,
     wbuttons: u8,
@@ -1687,4 +1687,299 @@ leanf={:.4} commandTime={}\n",
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::probe::tests::pickup_snap;
+
+    /// A weapon file's negative or non-finite time is no duration, not a
+    /// panic (BUG-089).
+    #[test]
+    fn a_weapon_time_that_is_no_duration_is_refused() {
+        for bad in [-1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(data_secs(bad), None);
+        }
+        assert_eq!(data_secs(0.5), Some(Duration::from_millis(500)));
+    }
+
+    /// The reload the fire step restarts on is weaponstate 5 to 9; 2 is
+    /// the drop (combat doc 1.1; BUG-088).
+    #[test]
+    fn a_fire_step_restarts_on_the_reload_states() {
+        assert!((5..=9).all(reloading));
+        assert!(![0, 1, 2, 3, 4, 10].into_iter().any(reloading));
+    }
+
+    #[test]
+    fn a_fire_step_taps_the_attack_bit_once_per_shot() {
+        let script = combat_script();
+        let step = script
+            .iter()
+            .find(|s| s.label == "sustained_fire")
+            .expect("the script fires a burst");
+        let (mut edges, mut frames_down, mut was_down) = (0, 0, false);
+        for frame in 0..step.dur.as_millis() / 16 {
+            let down = step
+                .cmd_at(Duration::from_millis(frame as u64 * 16))
+                .buttons
+                & BUTTON_ATTACK
+                != 0;
+            edges += u32::from(down && !was_down);
+            frames_down += u32::from(down);
+            was_down = down;
+        }
+        assert_eq!(edges, step.pulse.count);
+        assert!(
+            frames_down <= 3 * step.pulse.count,
+            "{frames_down} frames down for {} taps: the bit is being held",
+            step.pulse.count
+        );
+    }
+
+    /// A step that taps has to start from a weapon that can take the input.
+    /// A reload that outlived its step ran on into both stance steps and was
+    /// recorded under their labels, with no shot in either.
+    #[test]
+    fn a_tapping_step_starts_from_a_ready_weapon() {
+        for step in combat_script().iter().filter(|s| s.pulse.count > 0) {
+            assert!(
+                step.wait_ready,
+                "{} taps without waiting for the weapon",
+                step.label
+            );
+        }
+        let reload = combat_script()
+            .into_iter()
+            .find(|s| s.from_reload_time)
+            .expect("the script reloads");
+        // m1carbine_mp's `reloadTime`, the shortest hold the fallback has to
+        // outlast when no weapon file can be read.
+        assert!(reload.dur > Duration::from_millis(2650));
+    }
+
+    /// An entity is a missile from its first eType-4 snapshot until it leaves
+    /// the wire, not while it reads 4: the explode flips the missile's own
+    /// eType to 0 and adds event 178 there (combat doc, section 13), so an
+    /// eType-4 filter drops the one frame the capture exists for.
+    #[test]
+    fn missile_watch_keeps_an_entity_past_its_last_etype_4_frame() {
+        use crate::fx::registry::EV_GRENADE_EXPLODE;
+        use net::msg::{EntityState, PlayerState};
+        let p = &net::protocol::PROTOCOL_V1;
+        let ent = |num: u32, etype: i32, event: i32| {
+            let mut e = EntityState::null(p);
+            e.number = num;
+            e.fields[EntityState::field_index(p, "eType").unwrap()] = etype;
+            e.fields[EntityState::field_index(p, "events[0]").unwrap()] = event;
+            e
+        };
+        let snap = |ents: Vec<EntityState>| net::snapshot::Snapshot {
+            server_time: 1000,
+            message_num: 1,
+            delta_num: -1,
+            snap_flags: 0,
+            ps: PlayerState::null(p),
+            entities: ents.into_iter().map(|e| (e.number, e)).collect(),
+            clients: BTreeMap::new(),
+            valid: true,
+        };
+        let mut watch = MissileWatch::default();
+
+        // A flying grenade and a player: only the grenade is a missile.
+        let flying = watch.sample(&snap(vec![
+            ent(5, crate::entities::ET_MISSILE, 0),
+            ent(2, crate::entities::ET_PLAYER, 0),
+        ]));
+        assert_eq!(flying.iter().map(|m| m.num).collect::<Vec<_>>(), vec![5]);
+
+        // The explode frame: the same entity now reads eType 0 with 178 on it.
+        let exploding = watch.sample(&snap(vec![
+            ent(5, crate::entities::ET_GENERAL, EV_GRENADE_EXPLODE),
+            ent(2, crate::entities::ET_PLAYER, 0),
+        ]));
+        assert_eq!(exploding.len(), 1, "the explode frame was dropped");
+        assert_eq!(exploding[0].num, 5);
+        assert_eq!(exploding[0].e_type, crate::entities::ET_GENERAL);
+        assert_eq!(exploding[0].events[0], EV_GRENADE_EXPLODE);
+
+        // Freed: the slot is forgotten, so its reuse does not read as a missile.
+        assert!(
+            watch
+                .sample(&snap(vec![ent(2, crate::entities::ET_PLAYER, 0)]))
+                .is_empty()
+        );
+        assert!(
+            watch
+                .sample(&snap(vec![ent(5, crate::entities::ET_ITEM, 0)]))
+                .is_empty()
+        );
+    }
+
+    /// A capture off another protocol prints vcod's (1.1's) event ids and
+    /// means of death, as it prints `pm_flags` and `eFlags`: UO's grenade
+    /// explode (185) on a missile's ring and its suicide obituary (MOD 21)
+    /// read as 1.1's.
+    #[test]
+    fn a_uo_capture_prints_1_1_ids() {
+        use net::event_ids::{EV_GRENADE_EXPLODE, EV_OBITUARY};
+        use net::msg::{EntityState, PlayerState};
+        let p = &net::protocol::PROTOCOL_V22;
+        set_wire(p);
+        let set = |e: &mut EntityState, name: &str, v: i32| {
+            e.fields[EntityState::field_index(p, name).unwrap()] = v;
+        };
+        let mut missile = EntityState::null(p);
+        missile.number = 5;
+        set(&mut missile, "eType", crate::entities::ET_GENERAL);
+        set(&mut missile, "events[0]", 185);
+        let mut obit = EntityState::null(p);
+        obit.number = 70;
+        set(&mut obit, "eType", p.et_events + 209);
+        set(&mut obit, "eventParm", 0x80 | 21);
+        let mut ps = PlayerState::null(p);
+        ps.fields[PlayerState::field_index(p, "weapons[2]").unwrap()] = 4;
+        let snap = net::snapshot::Snapshot {
+            server_time: 1000,
+            message_num: 1,
+            delta_num: -1,
+            snap_flags: 0,
+            ps,
+            entities: [(5, missile), (70, obit)].into_iter().collect(),
+            clients: BTreeMap::new(),
+            valid: true,
+        };
+        let mut watch = MissileWatch::default();
+        watch.seen.insert(5);
+        assert_eq!(watch.sample(&snap)[0].events[0], EV_GRENADE_EXPLODE);
+        let mut tracker = vcod_common::net::events::EventTracker::new();
+        let obits: Vec<i32> = drain_v1(&mut tracker, &snap, p)
+            .iter()
+            .filter(|e| e.event == EV_OBITUARY)
+            .map(|e| e.parm)
+            .collect();
+        assert_eq!(obits, [0x80 | 22]);
+        assert_eq!(weapon_bits(&snap.ps, p), "0,0,4,0");
+        assert_eq!(retail_build(), "UO 1.51b");
+    }
+
+    /// One fire step of one tap, held `ms`.
+    fn one_shot(wait_ready: bool, ms: u64) -> CombatProbe {
+        CombatProbe {
+            steps: vec![CombatStep {
+                label: "shot",
+                pulse: Pulse {
+                    buttons: BUTTON_ATTACK,
+                    wbuttons: 0,
+                    count: 1,
+                },
+                dur: Duration::from_millis(ms),
+                wait_ready,
+                ..CombatStep::default()
+            }],
+            ..CombatProbe::default()
+        }
+    }
+
+    /// A tapping step's clock starts once the weapon has read ready for
+    /// 500 ms without a break, or after 8 s of waiting whatever it reads.
+    #[test]
+    fn a_combat_step_waits_for_a_steady_ready_weapon_or_its_timeout() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let ws = |num, state: u8| pickup_snap(num, &[("weaponstate", i32::from(state))], &[]);
+        use vcod_common::pmove::weapon::{WEAPON_FIRING, WEAPON_RAISING, WEAPON_READY};
+        let mut c = one_shot(true, 1000);
+        assert!(!c.step(ms(0), &ws(1, WEAPON_RAISING)));
+        assert!(!c.step(ms(300), &ws(2, WEAPON_READY)));
+        assert!(!c.step(ms(400), &ws(3, WEAPON_RAISING)), "a break");
+        assert!(!c.step(ms(500), &ws(4, WEAPON_READY)));
+        assert!(!c.step(ms(999), &ws(5, WEAPON_READY)));
+        assert_eq!(c.started, None, "499 ms steady");
+        assert!(!c.step(ms(1000), &ws(6, WEAPON_READY)));
+        assert_eq!(c.started, Some(ms(1000)));
+        assert!(!c.step(ms(1100), &ws(7, WEAPON_FIRING)));
+        assert!(c.step(ms(2000), &ws(8, WEAPON_READY)), "the last step ends");
+        let r = &c.results[0];
+        assert_eq!((r.fired, r.shots_seen, r.waited_ms), (true, 1, 1000));
+        assert_eq!(c.trace.len(), 3, "a sample per snapshot from the start");
+
+        let mut c = one_shot(true, 1000);
+        assert!(!c.step(ms(0), &ws(1, WEAPON_RAISING)));
+        assert!(!c.step(ms(7999), &ws(2, WEAPON_RAISING)));
+        assert_eq!(c.started, None);
+        assert!(!c.step(ms(8000), &ws(3, WEAPON_RAISING)));
+        assert_eq!(c.started, Some(ms(8000)), "the timeout");
+    }
+
+    /// A reload under a fire step before its shot restarts the step once,
+    /// dropping its samples; a second reload rides; `eventSequence`'s
+    /// count runs across its 8-bit wrap.
+    #[test]
+    fn a_fire_step_restarts_once_on_a_reload_and_counts_events_across_the_wrap() {
+        use vcod_common::pmove::weapon::{WEAPON_READY, WEAPON_RELOADING};
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let snap = |num, state: u8, seq| {
+            pickup_snap(
+                num,
+                &[("weaponstate", i32::from(state)), ("eventSequence", seq)],
+                &[],
+            )
+        };
+        let mut c = one_shot(false, 1000);
+        assert!(!c.step(ms(0), &snap(1, WEAPON_READY, 240)));
+        assert!(!c.step(ms(100), &snap(2, WEAPON_RELOADING, 241)));
+        assert_eq!(c.started, None, "restarted");
+        assert_eq!(c.retried, ["shot"]);
+        assert!(c.trace.is_empty());
+        assert!(!c.step(ms(200), &snap(3, WEAPON_READY, 250)));
+        assert!(!c.step(ms(300), &snap(4, WEAPON_RELOADING, 254)));
+        assert_eq!(c.started, Some(ms(200)), "once only");
+        assert!(c.step(ms(1200), &snap(5, WEAPON_READY, 4)));
+        let r = &c.results[0];
+        assert!(r.retried && !r.fired);
+        assert_eq!(r.seq_delta, 10, "250 to 4 across the wrap");
+        let kept: Vec<u32> = c.trace.iter().map(|s| s.server_time as u32).collect();
+        assert_eq!(kept, [1150, 1200, 1250]);
+    }
+
+    /// A forward walk that covers under 60 units in a 1.5 s window turns
+    /// 45 degrees more each window; the detour stays once it moves again;
+    /// a cmd that does not walk forward closes the window.
+    #[test]
+    fn a_stalled_walk_turns_45_degrees_a_window_and_keeps_the_detour() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let walk = || net::msg::UserCmd {
+            forward: 127,
+            ..net::msg::NULL_USERCMD
+        };
+        let mut st = StallTurn::default();
+        let yaw = |st: &mut StallTurn, at, origin| {
+            let mut c = walk();
+            st.apply(&mut c, ms(at), origin);
+            c.angles[1]
+        };
+        assert_eq!(yaw(&mut st, 0, [0.0; 3]), 0);
+        assert_eq!(yaw(&mut st, 1499, [10.0, 0.0, 0.0]), 0);
+        assert_eq!(
+            yaw(&mut st, 1500, [50.0, 0.0, 500.0]),
+            8192,
+            "a fall is no progress"
+        );
+        assert_eq!(yaw(&mut st, 3000, [50.0, 30.0, 0.0]), 16384);
+        assert_eq!(
+            yaw(&mut st, 4500, [200.0, 0.0, 0.0]),
+            16384,
+            "moved; the detour stays"
+        );
+        let mut stand = net::msg::NULL_USERCMD;
+        st.apply(&mut stand, ms(5000), [200.0, 0.0, 0.0]);
+        assert_eq!(stand.angles[1], 0, "a stand is not turned");
+        assert_eq!(yaw(&mut st, 6000, [200.0, 0.0, 0.0]), 16384);
+        assert_eq!(yaw(&mut st, 7499, [200.0, 0.0, 0.0]), 16384, "a new window");
+        assert_eq!(yaw(&mut st, 7500, [200.0, 0.0, 0.0]), 24576);
+    }
 }

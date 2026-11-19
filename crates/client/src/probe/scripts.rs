@@ -9,14 +9,14 @@ use super::*;
 /// angles to this one's over the step. Yaw is degrees off the uphill
 /// heading, pitch positive down the way the wire reads it.
 pub(super) struct ProneStep {
-    pub(super) at_ms: u64,
-    pub(super) buttons: u8,
-    pub(super) wbuttons: u8,
-    pub(super) forward: i8,
-    pub(super) right: i8,
-    pub(super) up: i8,
-    pub(super) yaw: f32,
-    pub(super) pitch: f32,
+    at_ms: u64,
+    buttons: u8,
+    wbuttons: u8,
+    forward: i8,
+    right: i8,
+    up: i8,
+    yaw: f32,
+    pitch: f32,
 }
 
 /// The prone crawl `--probe-prone` runs from the placement, facing up the
@@ -954,7 +954,7 @@ pub(super) struct ProneScript {
     switch: WeaponSwitch,
     switched: usize,
     first_spawned: Option<Instant>,
-    pub(super) started: Option<Instant>,
+    started: Option<Instant>,
     steps: Vec<ProneStep>,
     done: bool,
 }
@@ -1067,5 +1067,55 @@ impl ProneScript {
             self.done = true;
         }
         self.done
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn prone_step(at_ms: u64, forward: i8, yaw: f32, pitch: f32) -> ProneStep {
+        ProneStep {
+            at_ms,
+            buttons: 0,
+            wbuttons: 0,
+            forward,
+            right: 0,
+            up: 0,
+            yaw,
+            pitch,
+        }
+    }
+
+    /// A slope script's view eases from the step before's angles to its
+    /// step's over the step, off the uphill yaw; the first and last steps
+    /// hold their own; the moves are the step's from its first ms.
+    #[test]
+    fn a_prone_script_eases_the_view_across_each_step() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let word = |deg: f32| (deg * 65536.0 / 360.0).round() as i32 & 0xffff;
+        let mut p = ProneScript::new(
+            30.0,
+            vec![
+                prone_step(0, 0, 0.0, 0.0),
+                prone_step(1000, 127, 90.0, -20.0),
+                prone_step(2000, 0, 180.0, 10.0),
+            ],
+        );
+        assert_eq!(p.cmd(ms(0)).angles, [0; 3], "not started");
+        p.started = Some(t0);
+        let at = |p: &ProneScript, n| {
+            let c = p.cmd(ms(n));
+            (c.angles[0], c.angles[1], c.forward)
+        };
+        assert_eq!(at(&p, 999), (word(0.0), word(30.0), 0));
+        assert_eq!(
+            at(&p, 1000),
+            (word(0.0), word(30.0), 127),
+            "the step's first ms"
+        );
+        assert_eq!(at(&p, 1500), (word(-10.0), word(75.0), 127), "mid-step");
+        assert_eq!(at(&p, 2000), (word(10.0), word(210.0), 0), "the last step");
     }
 }

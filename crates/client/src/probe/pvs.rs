@@ -94,11 +94,11 @@ impl EntInfo {
 
 /// One recorded stop on the route: where the probe stood, and every entity
 /// the server had sent it as of that frame.
-pub(super) struct PvsStation {
-    pub(super) label: &'static str,
-    pub(super) origin: [f32; 3],
-    pub(super) server_time: i32,
-    pub(super) ents: BTreeMap<u32, net::msg::EntityState>,
+struct PvsStation {
+    label: &'static str,
+    origin: [f32; 3],
+    server_time: i32,
+    ents: BTreeMap<u32, net::msg::EntityState>,
 }
 
 /// Directory `crates/server/tests/entities_ab.rs` reads its fixtures from.
@@ -192,10 +192,7 @@ sample of a set\n"
 /// The samples of an entities fixture's `existing` text, then a sample per
 /// station, at most [`MAX_SAMPLES_PER_SET`] of any one entity set, numbered
 /// afresh; with how many were read, how many kept and the distinct sets.
-pub(super) fn merge_entity_samples(
-    existing: &str,
-    stations: &[PvsStation],
-) -> (String, usize, usize, usize) {
+fn merge_entity_samples(existing: &str, stations: &[PvsStation]) -> (String, usize, usize, usize) {
     let p = wire();
     let mut samples = parse_fixture_samples(existing);
     let taken = samples.len();
@@ -242,16 +239,16 @@ const MAX_SAMPLES_PER_SET: usize = 3;
 
 /// A sample as it sits in the fixture. The body is kept verbatim so a reread
 /// and rewrite never has to understand the fields it carries.
-pub(super) struct FixtureSample {
-    pub(super) label: String,
-    pub(super) ents: Vec<u32>,
-    pub(super) body: String,
+struct FixtureSample {
+    label: String,
+    ents: Vec<u32>,
+    body: String,
 }
 
 /// Splits a fixture into its samples, dropping the header. Tolerant by
 /// design: an unreadable file reads as no samples and the run starts the map
 /// over rather than failing after the capture is already spent.
-pub(super) fn parse_fixture_samples(text: &str) -> Vec<FixtureSample> {
+fn parse_fixture_samples(text: &str) -> Vec<FixtureSample> {
     let mut out: Vec<FixtureSample> = Vec::new();
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("[sample ") {
@@ -523,5 +520,78 @@ impl PvsProbe {
                 "PVS verdict: the entity list differs between stations; it depends on where the client stands"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn station(label: &'static str, ents: &[u32]) -> PvsStation {
+        let p = wire();
+        PvsStation {
+            label,
+            origin: [1.0, 2.0, 3.0],
+            server_time: 1000,
+            ents: ents
+                .iter()
+                .map(|&n| {
+                    let mut e = net::msg::EntityState::null(p);
+                    e.number = n;
+                    e.fields[net::msg::EntityState::field_index(p, "eType").unwrap()] = 2;
+                    (n, e)
+                })
+                .collect(),
+        }
+    }
+
+    /// The entities fixture's rewrite: a second run's samples join the
+    /// first's past its header, at most three of one entity set, numbered
+    /// afresh, the first run's bodies byte for byte.
+    #[test]
+    fn an_entities_rewrite_keeps_three_samples_a_set_and_the_old_bodies() {
+        let (first, taken, kept, sets) = merge_entity_samples(
+            "",
+            &[
+                station("a", &[1, 2]),
+                station("b", &[1, 2]),
+                station("c", &[1]),
+            ],
+        );
+        assert_eq!((taken, kept, sets), (0, 3, 2));
+        let file = format!("# a header line\n{first}");
+        let read = parse_fixture_samples(&file);
+        let ents: Vec<&[u32]> = read.iter().map(|s| s.ents.as_slice()).collect();
+        assert_eq!(ents, [&[1, 2][..], &[1, 2], &[1]]);
+        assert!(
+            read[0]
+                .body
+                .starts_with("serverTime 1000\norigin[0] 1065353216\n")
+        );
+        assert!(read[0].body.contains("[ent 2]\neType 2\n"));
+        let (second, taken, kept, sets) = merge_entity_samples(
+            &file,
+            &[
+                station("d", &[1, 2]),
+                station("e", &[1, 2]),
+                station("f", &[3]),
+            ],
+        );
+        assert_eq!((taken, kept, sets), (3, 5, 3));
+        let labels: Vec<String> = parse_fixture_samples(&second)
+            .iter()
+            .map(|s| s.label.clone())
+            .collect();
+        assert_eq!(
+            labels,
+            ["a", "b", "c", "d", "f"],
+            "e is a fourth of its set"
+        );
+        assert!(
+            second.starts_with(&first),
+            "the first run's samples as they were"
+        );
+        assert!(second.contains("[sample 3] d\n") && second.contains("[sample 4] f\n"));
+        assert!(!second.contains("header"));
     }
 }

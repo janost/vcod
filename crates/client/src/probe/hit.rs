@@ -445,14 +445,14 @@ impl TargetProbe {
 
 /// How long the shooter walks toward the target before it gives up and shoots
 /// from where it stands.
-pub(super) const APPROACH_LIMIT: Duration = Duration::from_secs(150);
+const APPROACH_LIMIT: Duration = Duration::from_secs(150);
 
-pub(super) const SINGLE_SHOT_HOLD: Duration = Duration::from_millis(2000);
+const SINGLE_SHOT_HOLD: Duration = Duration::from_millis(2000);
 
 const BURST_HOLD: Duration = Duration::from_millis(3000);
 
 /// The caps on `Finish`: taps, and the wall clock behind them.
-pub(super) const FINISH_TAPS: u32 = 30;
+const FINISH_TAPS: u32 = 30;
 
 const FINISH_LIMIT: Duration = Duration::from_secs(15);
 
@@ -467,13 +467,13 @@ const COOK_HOLDS: [Duration; 2] = [Duration::from_millis(1000), Duration::from_m
 const COOK_LIMIT: Duration = Duration::from_secs(8);
 
 /// Long enough for the release and the frames the missile spawns on.
-pub(super) const THROW_HOLD: Duration = Duration::from_millis(600);
+const THROW_HOLD: Duration = Duration::from_millis(600);
 
 /// A grenade's fuse is about 4 s from the pull, so the watch has to outlast
 /// the flight, the bounces and the explode.
-pub(super) const GRENADE_WATCH_HOLD: Duration = Duration::from_secs(8);
+const GRENADE_WATCH_HOLD: Duration = Duration::from_secs(8);
 
-pub(super) const GRENADE_THROWS: u32 = 2;
+const GRENADE_THROWS: u32 = 2;
 
 /// How far into the cook `--probe-grenade-death` kills itself, which is what
 /// puts the death drop's missile on the wire.
@@ -683,7 +683,7 @@ const SWEEP_LIMIT: Duration = Duration::from_secs(240);
 
 /// The shooter's phases, in order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum HitPhase {
+enum HitPhase {
     /// Walk toward the other player, steered by [`Steer`], until the
     /// eye-to-eye trace is clear or [`APPROACH_LIMIT`] passes.
     Approach,
@@ -743,7 +743,7 @@ impl HitPhase {
     }
 
     /// What the phase is after `in_phase` spent in it.
-    pub(super) fn advance(self, in_phase: Duration, cx: &PhaseCtx) -> HitPhase {
+    fn advance(self, in_phase: Duration, cx: &PhaseCtx) -> HitPhase {
         use crate::entities::ET_PLAYER;
         let engaged = cx.ready || in_phase >= APPROACH_LIMIT;
         match self {
@@ -794,19 +794,19 @@ impl HitPhase {
 }
 
 /// What [`HitPhase::advance`] needs beyond the phase's own clock.
-pub(super) struct PhaseCtx {
+struct PhaseCtx {
     /// The target is in the PVS, the trace to it is clear and it is inside the
     /// script's engagement range.
-    pub(super) ready: bool,
+    ready: bool,
     /// The aimed-at entity's eType; `None` when the server sent none, which is
     /// not a reason to stop shooting.
-    pub(super) target_etype: Option<i32>,
-    pub(super) taps: u32,
-    pub(super) script: ShooterScript,
+    target_etype: Option<i32>,
+    taps: u32,
+    script: ShooterScript,
     /// The trigger has been held down long enough for this throw.
-    pub(super) cook_done: bool,
+    cook_done: bool,
     /// Throws released so far, which is what ends a grenade run.
-    pub(super) throws: u32,
+    throws: u32,
 }
 
 /// One snapshot's worth of the shooter's side, with what it could see of the
@@ -922,10 +922,10 @@ target_etype={} target_origin={} origin={} grenadeTimeLeft={} weaponDelay={}\n",
 /// death half of the capture is the target's own `kill`, so a run that never
 /// finds a line of sight costs the hits and nothing else.
 pub(super) struct HitProbe {
-    pub(super) phase: HitPhase,
+    phase: HitPhase,
     started: Option<Instant>,
     /// When the current phase started, so its taps and its clock are its own.
-    pub(super) phase_started: Option<Instant>,
+    phase_started: Option<Instant>,
     trace: Vec<ShooterSample>,
     last_kept: Option<(Vec<i32>, u128)>,
     obituaries: Vec<(u128, u32, i32, i32)>,
@@ -1728,4 +1728,147 @@ traced={} throws={} missile_samples={} events={} obituaries={} corpse_edges={}\n
         tag,
         overwrite,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The phase context a test varies one field of at a time.
+    fn ctx(ready: bool, script: ShooterScript) -> PhaseCtx {
+        PhaseCtx {
+            ready,
+            target_etype: Some(crate::entities::ET_PLAYER),
+            taps: 0,
+            script,
+            cook_done: false,
+            throws: 0,
+        }
+    }
+
+    /// The two transitions the capture depends on: the approach ends on a
+    /// clear trace, and it ends anyway at the limit so a run behind a wall
+    /// still records its shots.
+    #[test]
+    fn hit_approach_ends_on_a_clear_trace_or_at_the_limit() {
+        let hit = ShooterScript::Hit;
+        let blocked = HitPhase::Approach.advance(Duration::from_secs(30), &ctx(false, hit));
+        assert_eq!(blocked, HitPhase::Approach);
+        let clear = HitPhase::Approach.advance(Duration::from_secs(30), &ctx(true, hit));
+        assert_eq!(clear, HitPhase::SingleShot);
+        let out_of_time = HitPhase::Approach.advance(APPROACH_LIMIT, &ctx(false, hit));
+        assert_eq!(out_of_time, HitPhase::SingleShot);
+    }
+
+    /// A target that stopped being a player is a target that died, which is
+    /// what `Finish` is waiting for; a target the server stopped sending is
+    /// not, or the shooter would stop firing every time PVS blinked.
+    #[test]
+    fn hit_finish_ends_when_the_target_stops_being_a_player() {
+        let hit = ShooterScript::Hit;
+        let one = Duration::from_secs(1);
+        let mut cx = ctx(true, hit);
+        cx.taps = 3;
+        assert_eq!(HitPhase::Finish.advance(one, &cx), HitPhase::Finish);
+        cx.target_etype = None;
+        cx.ready = false;
+        assert_eq!(HitPhase::Finish.advance(one, &cx), HitPhase::Finish);
+        cx.target_etype = Some(crate::entities::ET_CORPSE);
+        assert_eq!(HitPhase::Finish.advance(one, &cx), HitPhase::Watch);
+        let mut spent = ctx(true, hit);
+        spent.taps = FINISH_TAPS;
+        assert_eq!(HitPhase::Finish.advance(one, &spent), HitPhase::Watch);
+    }
+
+    /// The sweep replaces the three scripted firing phases and ends on its
+    /// table, not on the clock.
+    #[test]
+    fn hit_sweep_takes_the_approach_and_ends_on_its_table() {
+        let t = Duration::from_secs(30);
+        let plain = HitPhase::Approach.advance(t, &ctx(true, ShooterScript::Hit));
+        assert_eq!(plain, HitPhase::SingleShot);
+        let mut cx = ctx(true, ShooterScript::Sweep);
+        assert_eq!(HitPhase::Approach.advance(t, &cx), HitPhase::Sweep);
+        cx.taps = 3;
+        assert_eq!(HitPhase::Sweep.advance(t, &cx), HitPhase::Sweep);
+        cx.taps = SWEEP_PITCH_OFFSETS.len() as u32;
+        assert_eq!(HitPhase::Sweep.advance(t, &cx), HitPhase::Watch);
+    }
+
+    /// A grenade run cooks instead of shooting, and ends after its second
+    /// throw rather than on the watch clock the bullet run ends on.
+    #[test]
+    fn grenade_run_cooks_throws_twice_and_stops() {
+        let t = Duration::from_secs(30);
+        let mut cx = ctx(true, ShooterScript::Grenade);
+        assert_eq!(HitPhase::Approach.advance(t, &cx), HitPhase::Cook);
+        // The cook holds the trigger until the hold is spent, not on a clock.
+        assert_eq!(
+            HitPhase::Cook.advance(Duration::from_secs(1), &cx),
+            HitPhase::Cook
+        );
+        cx.cook_done = true;
+        assert_eq!(
+            HitPhase::Cook.advance(Duration::from_secs(1), &cx),
+            HitPhase::Throw
+        );
+        assert_eq!(HitPhase::Throw.advance(THROW_HOLD, &cx), HitPhase::Watch);
+        cx.throws = 1;
+        assert_eq!(
+            HitPhase::Watch.advance(GRENADE_WATCH_HOLD, &cx),
+            HitPhase::Cook
+        );
+        cx.throws = GRENADE_THROWS;
+        assert_eq!(
+            HitPhase::Watch.advance(GRENADE_WATCH_HOLD, &cx),
+            HitPhase::Done
+        );
+    }
+
+    /// The melee script is the bullet script with another bit: it takes the
+    /// same phases, and every tap of them swings instead of shooting. A tap
+    /// that still carried `BUTTON_ATTACK` would fire the rifle and the
+    /// capture would measure a bullet.
+    #[test]
+    fn melee_run_takes_the_bullet_phases_and_swings_on_every_tap() {
+        let t = Duration::from_secs(30);
+        let cx = ctx(true, ShooterScript::Melee);
+        assert_eq!(HitPhase::Approach.advance(t, &cx), HitPhase::SingleShot);
+        assert_eq!(
+            HitPhase::SingleShot.advance(SINGLE_SHOT_HOLD, &cx),
+            HitPhase::Burst
+        );
+        // The head of a tap period, where the bit is down.
+        let now = Instant::now();
+        for phase in [HitPhase::SingleShot, HitPhase::Burst, HitPhase::Finish] {
+            let mut melee = HitProbe::new(ShooterScript::Melee);
+            melee.phase = phase;
+            melee.phase_started = Some(now);
+            let bits = melee.cmd(now).buttons;
+            assert_eq!(bits & net::msg::BUTTON_MELEE, net::msg::BUTTON_MELEE);
+            assert_eq!(bits & BUTTON_ATTACK, 0, "{phase:?} fired the rifle");
+
+            let mut bullet = HitProbe::new(ShooterScript::Hit);
+            bullet.phase = phase;
+            bullet.phase_started = Some(now);
+            let bits = bullet.cmd(now).buttons;
+            assert_eq!(bits & BUTTON_ATTACK, BUTTON_ATTACK);
+            assert_eq!(bits & net::msg::BUTTON_MELEE, 0);
+        }
+    }
+
+    /// A trace 20 samples a second for minutes is unreadable and huge, and a
+    /// collapse that drops a transition is worse than either.
+    #[test]
+    fn hit_trace_keeps_every_transition_and_one_sample_a_second() {
+        let mut last = None;
+        assert!(keep_sample(&mut last, vec![100], 0));
+        assert!(!keep_sample(&mut last, vec![100], 500));
+        assert!(keep_sample(&mut last, vec![55], 550), "a change is kept");
+        assert!(!keep_sample(&mut last, vec![55], 900));
+        assert!(
+            keep_sample(&mut last, vec![55], 1550),
+            "the heartbeat is due"
+        );
+    }
 }

@@ -21,7 +21,7 @@ pub(super) struct DownloadProbe {
     /// stands once a pak lands: what `cp` reads after the downloads.
     searched: Option<vcod_common::pk3::Pk3Fs>,
     /// The scratch directories the server's paks land in.
-    pub(super) scratch_dirs: Vec<std::path::PathBuf>,
+    scratch_dirs: Vec<std::path::PathBuf>,
     loader: Option<crate::loading::MapLoader>,
     /// remote name -> (local path, the server's checksum).
     expected: std::collections::HashMap<String, (std::path::PathBuf, Option<i32>)>,
@@ -56,7 +56,7 @@ impl DownloadProbe {
 
     /// Reopens [`Self::searched`] over the install and the scratch
     /// directories, as the client's `FS_Restart` does after a download.
-    pub(super) fn reopen(&mut self) {
+    fn reopen(&mut self) {
         let dirs: Vec<std::path::PathBuf> = self
             .install_dirs
             .iter()
@@ -167,5 +167,48 @@ impl DownloadProbe {
             Action::Wait(_) => {}
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `--vanilla` holds across the download reopen: a pak an earlier run
+    /// left in the scratch directory stays off the search path `cp` reads.
+    #[test]
+    fn a_vanilla_download_reopen_keeps_to_the_stock_paks() {
+        use std::io::Write;
+        let pk3 = |dir: &std::path::Path, file: &str| {
+            std::fs::create_dir_all(dir).unwrap();
+            let mut z = zip::ZipWriter::new(std::fs::File::create(dir.join(file)).unwrap());
+            z.start_file("readme.txt", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            z.write_all(file.as_bytes()).unwrap();
+            z.finish().unwrap();
+        };
+        let root = tempfile::tempdir().unwrap();
+        let install = root.path().join("install/main");
+        let scratch = root.path().join("scratch");
+        pk3(&install, "pak0.pk3");
+        pk3(&scratch.join("main"), "mp_custom.pk3");
+        for vanilla in [false, true] {
+            let fs = vcod_common::pk3::Pk3Fs::open_search(&install, None, None, vanilla).unwrap();
+            let mut dl = DownloadProbe::new(scratch.clone(), Some(&fs));
+            dl.scratch_dirs = vec![scratch.join("main")];
+            dl.reopen();
+            let names: Vec<String> = dl
+                .fs()
+                .unwrap()
+                .paks()
+                .map(vcod_common::pk3::PakInfo::qualified_name)
+                .collect();
+            assert_eq!(
+                names.contains(&"main/mp_custom".to_string()),
+                !vanilla,
+                "{names:?}"
+            );
+            assert_eq!(dl.fs().unwrap().vanilla(), vanilla);
+        }
     }
 }

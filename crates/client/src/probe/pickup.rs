@@ -14,7 +14,7 @@ const PICKUP_AIM: Duration = Duration::from_secs(1);
 
 /// Held on the target before a use tap goes out, so the tap's cmd carries the
 /// settled view rather than the previous phase's.
-pub(super) const PICKUP_SETTLE: Duration = Duration::from_millis(300);
+const PICKUP_SETTLE: Duration = Duration::from_millis(300);
 
 const PICKUP_AFTER_USE1: Duration = Duration::from_millis(1500);
 
@@ -43,7 +43,7 @@ const PICKUP_ITEM_RADIUS: f32 = 256.0;
 /// mp_carentan's two fg42s, xy, off the entity lump. The gsc probe teleports
 /// onto their origins; which one `getentarray` hands it first is not pinned,
 /// so either counts as the first.
-pub(super) const PICKUP_FG42_XY: [[f32; 2]; 2] = [[468.0, -822.0], [838.0, 2222.0]];
+const PICKUP_FG42_XY: [[f32; 2]; 2] = [[468.0, -822.0], [838.0, 2222.0]];
 
 /// Standing this close in xy to one of those is standing on it. The first
 /// teleport lands before the join settles, so no jump is ever seen for it.
@@ -98,46 +98,46 @@ impl PickupPhase {
 #[derive(Default)]
 pub(super) struct PickupProbe {
     pub(super) phase: PickupPhase,
-    pub(super) phase_started: Option<Instant>,
-    pub(super) settled_at: Option<Instant>,
-    pub(super) last_origin: Option<[f32; 3]>,
+    phase_started: Option<Instant>,
+    settled_at: Option<Instant>,
+    last_origin: Option<[f32; 3]>,
     /// Which of [`PICKUP_FG42_XY`] the first teleport landed on, when the
     /// wait saw it by position.
-    pub(super) first_fg42: Option<usize>,
+    first_fg42: Option<usize>,
     /// The touch2 phase's teleport, once seen.
-    pub(super) touch2_at: Option<Instant>,
+    touch2_at: Option<Instant>,
     /// Absolute `(yaw, pitch)` in wire shorts.
-    pub(super) aim: Option<(i32, i32)>,
+    aim: Option<(i32, i32)>,
     /// When the current phase's use tap goes down.
-    pub(super) tap_at: Option<Instant>,
+    tap_at: Option<Instant>,
     /// The swap's own tap, which the two carbine taps are timed from.
-    pub(super) use2_tap: Option<Instant>,
+    use2_tap: Option<Instant>,
     /// What the last `a <index>` named: a retail client switches to what it
     /// just picked up, so the byte rides every cmd until `ps.weapon` reads it.
-    pub(super) select: Option<u8>,
+    select: Option<u8>,
     /// The switch phase's own request.
-    pub(super) switch_to: Option<u8>,
-    pub(super) idx_fg42: u8,
-    pub(super) idx_carbine: u8,
-    pub(super) idx_panzer: u8,
+    switch_to: Option<u8>,
+    idx_fg42: u8,
+    idx_carbine: u8,
+    idx_panzer: u8,
     /// `(phase, ms, wire cmd, asked view)` per cmd sent from `stand` on.
-    pub(super) cmds: Vec<(PickupPhase, u128, net::msg::UserCmd, [i32; 3])>,
+    cmds: Vec<(PickupPhase, u128, net::msg::UserCmd, [i32; 3])>,
     /// Every trace, item and server line, in arrival order, with its phase.
-    pub(super) lines: Vec<(PickupPhase, u128, String)>,
-    pub(super) stations: Vec<(PickupPhase, [f32; 3], [f32; 3])>,
-    pub(super) traced: Option<u32>,
+    lines: Vec<(PickupPhase, u128, String)>,
+    stations: Vec<(PickupPhase, [f32; 3], [f32; 3])>,
+    traced: Option<u32>,
     pub(super) notes: Vec<String>,
     /// Every phase entered, in order.
-    pub(super) visited: Vec<PickupPhase>,
+    visited: Vec<PickupPhase>,
     /// The last cmds sent before the first spawned snapshot, of which those
     /// past its `commandTime` ran after the spawn and go in the log.
-    pub(super) before_spawn: std::collections::VecDeque<(net::msg::UserCmd, [i32; 3])>,
+    before_spawn: std::collections::VecDeque<(net::msg::UserCmd, [i32; 3])>,
     /// The first spawned snapshot's message, once seen.
-    pub(super) spawned: Option<u32>,
+    spawned: Option<u32>,
     /// What each phase took: an `a <index>` or a pickup event on the
     /// playerstate's ring.
-    pub(super) took: Vec<(PickupPhase, String)>,
-    pub(super) events: vcod_common::net::events::EventTracker,
+    took: Vec<(PickupPhase, String)>,
+    events: vcod_common::net::events::EventTracker,
 }
 
 impl PickupProbe {
@@ -249,7 +249,7 @@ impl PickupProbe {
         ));
     }
 
-    pub(super) fn enter(&mut self, now: Instant, next: PickupPhase) {
+    fn enter(&mut self, now: Instant, next: PickupPhase) {
         if next == self.phase {
             return;
         }
@@ -639,4 +639,151 @@ pub(super) fn write_pickup_fixture(
     write_capture(&path, &out, overwrite)?;
     println!("pickup: wrote {path}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::probe::tests::pickup_snap;
+
+    /// `dm` spawns and the gsc teleports before the join settles, so the
+    /// capture's first snapshot is already on the fg42 and no jump is ever
+    /// seen for it. The second teleport is seen by position
+    /// too, whichever fg42 `getentarray` handed the gsc first.
+    #[test]
+    fn pickup_starts_on_the_first_fg42_without_seeing_a_jump() {
+        use net::msg::PlayerState;
+        let p = &net::protocol::PROTOCOL_V1;
+        let snap = |num: u32, o: [f32; 3]| {
+            let mut ps = PlayerState::null(p);
+            for (i, v) in o.into_iter().enumerate() {
+                ps.fields[PlayerState::field_index(p, &format!("origin[{i}]")).unwrap()] =
+                    v.to_bits() as i32;
+            }
+            net::snapshot::Snapshot {
+                server_time: 1000 + 50 * num as i32,
+                message_num: num,
+                delta_num: -1,
+                snap_flags: 0,
+                ps,
+                entities: BTreeMap::new(),
+                clients: BTreeMap::new(),
+                valid: true,
+            }
+        };
+        let [second, first] = PICKUP_FG42_XY;
+        let t0 = Instant::now();
+        let mut pk = PickupProbe::default();
+        assert!(!pk.step(t0, &snap(1, [first[0] + 10.0, first[1], 20.0])));
+        assert_eq!(pk.phase, PickupPhase::Stand);
+        assert_eq!(pk.first_fg42, Some(1));
+
+        pk.phase = PickupPhase::Touch2;
+        pk.phase_started = Some(t0);
+        pk.last_origin = None;
+        pk.step(t0, &snap(2, [first[0], first[1], 20.0]));
+        assert!(pk.touch2_at.is_none(), "still on the first fg42");
+        pk.step(t0, &snap(3, [second[0], second[1] - 30.0, 20.0]));
+        assert!(pk.touch2_at.is_some(), "on the second fg42");
+    }
+
+    /// The swap's tap and the two carbine taps rise at +0, +500 and +1500 ms
+    /// of the swap's own tap, on the probe's own send clock.
+    #[test]
+    fn pickup_taps_use_at_the_swap_and_either_side_of_the_lockout() {
+        let mut pk = PickupProbe {
+            phase: PickupPhase::Switch,
+            idx_carbine: 10,
+            ..PickupProbe::default()
+        };
+        let t0 = Instant::now();
+        let mut rises = Vec::new();
+        let mut down = false;
+        // 4 ms divides every mark, so a rise lands on it rather than after it.
+        for k in 0..800u32 {
+            let now = t0 + Duration::from_millis(u64::from(k) * 4);
+            let snap = pickup_snap(k + 1, &[("weapon", 10)], &[]);
+            pk.step(now, &snap);
+            let pressed = pk.cmd(now).buttons & BUTTON_USE != 0;
+            if pressed && !down {
+                rises.push(now);
+            }
+            down = pressed;
+        }
+        let tap = pk.use2_tap.expect("use2 was entered");
+        let at: Vec<u128> = rises
+            .iter()
+            .map(|r| r.duration_since(tap).as_millis())
+            .collect();
+        assert_eq!(at, vec![0, 500, 1500]);
+    }
+
+    /// Once the use tap is down the aim holds: the taken fg42 leaves the wire
+    /// and the view must not swing to the next item `nearest_item` finds.
+    #[test]
+    fn pickup_latches_the_aim_at_the_tap() {
+        let mut pk = PickupProbe {
+            phase: PickupPhase::Aim,
+            idx_fg42: 6,
+            ..PickupProbe::default()
+        };
+        let t0 = Instant::now();
+        let near = [(251, 6, [100.0, 0.0, 0.0])];
+        let far = [(257, 6, [0.0, 100.0, 0.0])];
+        pk.step(t0, &pickup_snap(1, &[], &near));
+        pk.enter(t0, PickupPhase::Use1);
+        pk.step(t0, &pickup_snap(2, &[], &near));
+        let aimed = pk.aim;
+        assert_eq!(aimed.map(|a| a.0), Some(0), "yaw 0, at the near fg42");
+        let after_tap = t0 + PICKUP_SETTLE;
+        pk.step(after_tap, &pickup_snap(3, &[], &far));
+        assert_eq!(pk.aim, aimed, "the aim moved after the tap");
+    }
+
+    /// A phase that should take something and did not is marked, and a take
+    /// inside the owner lockout is recorded rather than marked.
+    #[test]
+    fn pickup_marks_a_phase_that_took_nothing() {
+        let t0 = Instant::now();
+        let mut pk = PickupProbe::default();
+        for phase in [
+            PickupPhase::Touch2,
+            PickupPhase::Switch,
+            PickupPhase::Use2,
+            PickupPhase::Early,
+        ] {
+            pk.enter(t0, phase);
+        }
+        pk.on_server_command(t0, &["a".to_string(), "9".to_string()]);
+        pk.enter(t0, PickupPhase::Late);
+        pk.enter(t0, PickupPhase::Done);
+        assert_eq!(
+            pk.notes,
+            vec![
+                "# BROKEN touch2 took nothing",
+                "# BROKEN use2 took nothing",
+                "# BROKEN late took nothing",
+                "# early took a 9",
+            ]
+        );
+    }
+
+    /// A retail client switches to what an `a <index>` names; the byte rides
+    /// every cmd until `ps.weapon` reads it, and only then falls back to the
+    /// switch phase's own request.
+    #[test]
+    fn pickup_holds_the_selected_weapon_until_the_playerstate_reads_it() {
+        let mut pk = PickupProbe {
+            switch_to: Some(10),
+            ..PickupProbe::default()
+        };
+        pk.on_server_command(Instant::now(), &["a".to_string(), "6".to_string()]);
+        assert_eq!(pk.weapon_byte(3), Some(6));
+        assert_eq!(pk.weapon_byte(6), Some(10));
+        assert_eq!(pk.weapon_byte(10), None, "both requests are met");
+        assert_eq!(
+            escape_ctl("f \"GAME_PICKUP_AMMO\u{14}WEAPON_FG42\""),
+            "f \"GAME_PICKUP_AMMO\\x14WEAPON_FG42\""
+        );
+    }
 }

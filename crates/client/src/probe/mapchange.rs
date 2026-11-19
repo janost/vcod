@@ -113,11 +113,11 @@ pub(super) struct MapChangeProbe {
     last_kept: Option<(Vec<i32>, u128)>,
     traced: Option<u32>,
     /// `(ms, reliable sequence, verbatim text)` per serverCommand.
-    pub(super) commands: Vec<(u128, i32, String)>,
+    commands: Vec<(u128, i32, String)>,
     /// `(ms, command word and the rest)` per out-of-band packet.
     oob: Vec<(u128, String)>,
     /// `(ms, serverId, netchan sequence, non-empty configstrings, mapname)`.
-    pub(super) gamestates: Vec<(u128, i32, u32, usize, String)>,
+    gamestates: Vec<(u128, i32, u32, usize, String)>,
     /// When `pm_type` first read [`PM_INTERMISSION`].
     intermission_at: Option<u128>,
     /// The first snapshot after the newest gamestate, which is what says how
@@ -127,7 +127,7 @@ pub(super) struct MapChangeProbe {
 }
 
 impl MapChangeProbe {
-    pub(super) fn elapsed_ms(&mut self, now: Instant) -> u128 {
+    fn elapsed_ms(&mut self, now: Instant) -> u128 {
         let started = *self.started.get_or_insert(now);
         now.duration_since(started).as_millis()
     }
@@ -215,7 +215,7 @@ pub(super) fn write_mapchange_fixture(
 }
 
 /// [`write_mapchange_fixture`]'s text.
-pub(super) fn mapchange_text(
+fn mapchange_text(
     role: &str,
     gametype: &str,
     join: &JoinProbe,
@@ -344,4 +344,58 @@ first_snapshot_after_gamestate_ms={}\n",
         out.push_str(&l);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::probe::tests::pickup_snap;
+
+    /// The commands of one batch end at the client's reliable sequence;
+    /// the fixture interleaves every kind by ms, and at one ms puts the
+    /// gamestate first, then the commands, the out-of-band text and the
+    /// trace, each kind in its own order.
+    #[test]
+    fn a_mapchange_capture_numbers_its_commands_and_orders_lines_by_ms_then_kind() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let mut m = MapChangeProbe::default();
+        m.elapsed_ms(ms(0));
+        m.on_commands(ms(0), 10, &["a".into(), "b".into(), "c".into()]);
+        let restart = wire().map_restart_command;
+        m.on_commands(ms(500), 11, &[restart.into()]);
+        m.on_oob(ms(500), "disconnect");
+        m.sample(ms(500), &pickup_snap(1, &[], &[]));
+        m.gamestates.push((500, 7, 3, 12, "mp_brecourt".into()));
+        m.on_commands(ms(500), 12, &["e".into()]);
+        let seqs: Vec<i32> = m.commands.iter().map(|c| c.1).collect();
+        assert_eq!(seqs, [8, 9, 10, 11, 12]);
+        let join = JoinProbe::new(Some("allies"), None);
+        let text = mapchange_text("mapchange", "dm", &join, &m, "mp_carentan");
+        let lines: Vec<&str> = text
+            .lines()
+            .filter(|l| l.starts_with('!') && !l.starts_with("!observed"))
+            .map(|l| l.split(' ').take(3).collect::<Vec<_>>())
+            .map(|w| w[0])
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "!cmd",
+                "!cmd",
+                "!cmd",
+                "!gamestate",
+                "!cmd",
+                "!cmd",
+                "!oob",
+                "!trace"
+            ]
+        );
+        assert!(text.contains(&format!(
+            "!cmd ms=500 seq=11 text={restart}\n!cmd ms=500 seq=12 text=e\n"
+        )));
+        assert!(text.contains("# BROKEN only one gamestate"));
+        let text = mapchange_text("roundrestart-target", "sd", &join, &m, "mp_carentan");
+        assert!(!text.contains("# BROKEN"), "the wire's restart command");
+    }
 }

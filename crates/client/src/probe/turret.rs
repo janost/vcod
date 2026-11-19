@@ -104,16 +104,16 @@ impl TurretPhase {
 }
 
 pub(super) struct TurretGun {
-    pub(super) origin: [f32; 3],
+    origin: [f32; 3],
     /// The lump's `angles`, for the header.
-    pub(super) angles: [f32; 3],
-    pub(super) yaw: f32,
+    angles: [f32; 3],
+    yaw: f32,
     /// Learned from the first snapshot carrying `eType` 11 near `origin`.
-    pub(super) num: Option<u32>,
+    num: Option<u32>,
 }
 
 /// The gun in the entity lump nearest `TURRET_XY`.
-pub(super) fn turret_from_entities(entities: &str) -> Option<TurretGun> {
+fn turret_from_entities(entities: &str) -> Option<TurretGun> {
     vcod_common::bsp::entity_blocks(entities)
         .into_iter()
         .filter(|b| b.get("classname").map(String::as_str) == Some("misc_mg42"))
@@ -143,14 +143,14 @@ fn sweep_step(i: usize, edge: f32) -> Option<f32> {
 }
 
 /// Yaw offset from the gun's own yaw for sweep step `i`, -90..=90 in 2s.
-pub(super) fn turret_sweep_offset(i: usize) -> Option<f32> {
+fn turret_sweep_offset(i: usize) -> Option<f32> {
     sweep_step(i, TURRET_YAW_EDGE)
 }
 
 /// `at`'s horizontal bearing in degrees from the gun, measured against the
 /// direction behind it (`yaw + 180`), and its horizontal distance. The arc
 /// test in `G_IsTurretUsable` reads the same angle (cod11-turrets.md 4.2).
-pub(super) fn turret_bearing(gun: [f32; 3], yaw: f32, at: [f32; 3]) -> (f32, f32) {
+fn turret_bearing(gun: [f32; 3], yaw: f32, at: [f32; 3]) -> (f32, f32) {
     let (dx, dy) = (at[0] - gun[0], at[1] - gun[1]);
     let d = dx.hypot(dy);
     let (s, c) = yaw.to_radians().sin_cos();
@@ -160,7 +160,7 @@ pub(super) fn turret_bearing(gun: [f32; 3], yaw: f32, at: [f32; 3]) -> (f32, f32
 
 /// Where the strafe out of the arc stands.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum StrafeStop {
+enum StrafeStop {
     /// Still inside the refuse bearing: keep strafing.
     Inside,
     /// Past the bearing and inside the range: stop here.
@@ -169,7 +169,7 @@ pub(super) enum StrafeStop {
     OutOfRange,
 }
 
-pub(super) fn turret_strafe_stop(bearing: f32, dist: f32) -> StrafeStop {
+fn turret_strafe_stop(bearing: f32, dist: f32) -> StrafeStop {
     if dist >= TURRET_REFUSE_RANGE {
         StrafeStop::OutOfRange
     } else if bearing > TURRET_REFUSE_BEARING {
@@ -182,7 +182,7 @@ pub(super) fn turret_strafe_stop(bearing: f32, dist: f32) -> StrafeStop {
 /// The gunner's playerstate as one `!trace` line; `ct=` is its
 /// `commandTime`, which places each cmd on the frame that ran it, and
 /// `exact=` and `velocity=` carry the origin and velocity at full precision.
-pub(super) fn turret_trace_line(ms: u128, snap: &net::snapshot::Snapshot) -> String {
+fn turret_trace_line(ms: u128, snap: &net::snapshot::Snapshot) -> String {
     let p = wire();
     let f = |n: &str| snap.ps.field_i32(p, n);
     format!(
@@ -417,12 +417,7 @@ impl TurretProbe {
         }
     }
 
-    pub(super) fn enter(
-        &mut self,
-        now: Instant,
-        next: TurretPhase,
-        snap: &net::snapshot::Snapshot,
-    ) {
+    fn enter(&mut self, now: Instant, next: TurretPhase, snap: &net::snapshot::Snapshot) {
         if next == self.phase {
             return;
         }
@@ -875,4 +870,213 @@ pub(super) fn write_turret_fixture(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::probe::tests::pickup_snap;
+
+    #[test]
+    fn turret_sweep_steps_two_degrees_a_cmd_and_ends_past_both_edges() {
+        let offs: Vec<f32> = (0..)
+            .map(turret_sweep_offset)
+            .take_while(|o| o.is_some())
+            .map(Option::unwrap)
+            .collect();
+        assert_eq!(offs.first(), Some(&-90.0));
+        assert_eq!(offs.last(), Some(&90.0));
+        assert!(offs.windows(2).all(|w| (w[1] - w[0] - 2.0).abs() < 1e-4));
+    }
+
+    #[test]
+    fn turret_probe_finds_the_gun_nearest_the_capture_spot() {
+        let ents = "{\n\"classname\" \"misc_mg42\"\n\"origin\" \"-500 1896 175\"\n\"angles\" \"0 90 0\"\n}\n{\n\"classname\" \"misc_mg42\"\n\"origin\" \"1712 1830 8\"\n\"angles\" \"0 180 0\"\n}\n";
+        let gun = turret_from_entities(ents).unwrap();
+        assert_eq!(gun.origin, [1712.0, 1830.0, 8.0]);
+        assert_eq!(gun.yaw, 180.0);
+    }
+
+    #[test]
+    fn a_turret_trace_line_carries_the_view_lock() {
+        let snap = pickup_snap(
+            1,
+            &[
+                ("viewlocked", 1),
+                ("viewlocked_entNum", 298),
+                ("eFlags", 0xC000),
+            ],
+            &[],
+        );
+        let line = turret_trace_line(10, &snap);
+        assert!(
+            line.contains("viewlocked=1 viewlocked_entNum=298"),
+            "{line}"
+        );
+        assert!(line.contains(&format!("eFlags={}", 0xC000)), "{line}");
+        assert!(line.contains(" ct="), "{line}");
+    }
+
+    /// The whole script on fake snapshots: use rises once per mount or
+    /// dismount phase, attack is held on every `fire` cmd off the target's
+    /// line, and a refused tap is noted where it was made, not where the
+    /// strafe stopped.
+    #[test]
+    fn turret_script_taps_use_per_phase_and_holds_attack_through_fire() {
+        let gun = [1712.0f32, 1830.0, 8.0];
+        let mut tp = TurretProbe {
+            gun: Some(TurretGun {
+                origin: gun,
+                angles: [0.0, 229.0, 0.0],
+                yaw: 229.0,
+                num: Some(298),
+            }),
+            ..TurretProbe::default()
+        };
+        let bits = |v: f32| v.to_bits() as i32;
+        let t0 = Instant::now();
+        let (mut mounted, mut down) = (false, false);
+        let mut rises = Vec::new();
+        let mut fire_cmds = (0, 0);
+        let mut first_yaw = None;
+        let mut fire_view = None;
+        // 40 behind the gun; the strafe walks right at 200 units a second and
+        // the gunner coasts 25 units a second through refused.
+        let (s, c) = 229f32.to_radians().sin_cos();
+        let mut lateral = 0.0f32;
+        for k in 0..6000u32 {
+            let now = t0 + Duration::from_millis(u64::from(k) * 4);
+            match tp.phase {
+                TurretPhase::Strafe => lateral += 0.8,
+                TurretPhase::Refused => lateral += 0.1,
+                _ => {}
+            }
+            let at = [
+                gun[0] - 40.0 * c + lateral * s,
+                gun[1] - 40.0 * s - lateral * c,
+            ];
+            let snap = pickup_snap(
+                k + 1,
+                &[
+                    ("origin[0]", bits(at[0])),
+                    ("origin[1]", bits(at[1])),
+                    ("origin[2]", bits(gun[2])),
+                    ("viewlocked", i32::from(mounted)),
+                ],
+                &[],
+            );
+            if tp.step(now, &snap) {
+                break;
+            }
+            let cmd = tp.cmd(now);
+            tp.record(now, cmd, cmd.angles, 0);
+            let pressed = cmd.buttons & BUTTON_USE != 0;
+            if pressed && !down {
+                rises.push(tp.phase);
+                if tp.phase != TurretPhase::Refused {
+                    mounted = !mounted;
+                }
+            }
+            down = pressed;
+            if tp.phase == TurretPhase::Fire {
+                fire_cmds.0 += 1;
+                fire_cmds.1 += u32::from(cmd.buttons & net::msg::BUTTON_ATTACK != 0);
+                fire_view.get_or_insert((cmd.angles[1], cmd.angles[0]));
+            }
+            if tp.phase == TurretPhase::Yaw && first_yaw.is_none() {
+                first_yaw = Some(cmd.angles[1]);
+            }
+        }
+        assert_eq!(tp.phase, TurretPhase::Done);
+        assert_eq!(
+            rises,
+            [
+                TurretPhase::Mount,
+                TurretPhase::Dismount,
+                TurretPhase::Crouch,
+                TurretPhase::Uncrouch,
+                TurretPhase::Refused,
+            ]
+        );
+        assert!(
+            fire_cmds.0 > 0 && fire_cmds.0 == fire_cmds.1,
+            "{fire_cmds:?}"
+        );
+        assert_eq!(first_yaw, Some(deg_to_short(229.0 - 90.0) & 0xffff));
+        assert_eq!(
+            fire_view,
+            Some((deg_to_short(229.0 + 30.0) & 0xffff, deg_to_short(10.0)))
+        );
+        assert_eq!(tp.notes.len(), 3, "{:?}", tp.notes);
+        assert_eq!(
+            tp.notes[0],
+            "# BROKEN target: the axis client was never in the snapshot"
+        );
+        // The strafe stops just past 50 degrees; 500 ms of coasting later the
+        // tap stands near 56.
+        let bearing: f32 = tp.notes[1]
+            .strip_prefix("# refused bearing=")
+            .and_then(|r| r.split(' ').next())
+            .and_then(|b| b.parse().ok())
+            .unwrap_or_else(|| panic!("{:?}", tp.notes));
+        assert!((55.0..58.0).contains(&bearing), "{:?}", tp.notes);
+        assert_eq!(tp.notes[2], "# REFUSED ok");
+    }
+
+    /// The strafe stops outside the arc but inside the use range: 40 behind
+    /// is inside, and so is 40 across at 45 degrees; 40 behind and 50 across
+    /// (51 degrees) and 80 across (63 degrees, 89 units) are out of the arc,
+    /// and 200 across is out of range.
+    #[test]
+    fn turret_strafe_stops_outside_the_arc_and_inside_the_range() {
+        let gun = [1712.0f32, 1830.0, 8.0];
+        let yaw = 229.0f32;
+        let (s, c) = yaw.to_radians().sin_cos();
+        let spot = |behind: f32, across: f32| {
+            [
+                gun[0] - behind * c + across * s,
+                gun[1] - behind * s - across * c,
+                gun[2],
+            ]
+        };
+        let stop = |at| {
+            let (b, d) = turret_bearing(gun, yaw, at);
+            turret_strafe_stop(b, d)
+        };
+        let (b, d) = turret_bearing(gun, yaw, spot(40.0, 0.0));
+        assert!(b.abs() < 1e-3 && (d - 40.0).abs() < 1e-3, "{b} {d}");
+        assert_eq!(stop(spot(40.0, 0.0)), StrafeStop::Inside);
+        assert_eq!(stop(spot(40.0, 40.0)), StrafeStop::Inside, "45 degrees");
+        assert_eq!(stop(spot(40.0, 50.0)), StrafeStop::Outside);
+        assert_eq!(stop(spot(40.0, 80.0)), StrafeStop::Outside);
+        assert_eq!(stop(spot(40.0, 200.0)), StrafeStop::OutOfRange);
+    }
+
+    /// A target that died before its phase is not reported as never seen.
+    #[test]
+    fn turret_target_note_tells_a_dead_target_from_a_missing_one() {
+        let snap = pickup_snap(1, &[], &[]);
+        let note = |killed: Option<TurretPhase>, before: bool| {
+            let mut tp = TurretProbe {
+                phase: TurretPhase::Target,
+                target_killed_in: killed,
+                target_seen_before: before,
+                ..TurretProbe::default()
+            };
+            tp.enter(Instant::now(), TurretPhase::Cool, &snap);
+            tp.notes.join("|")
+        };
+        assert_eq!(
+            note(Some(TurretPhase::Fire), true),
+            "# BROKEN target: the axis client was dead through target (obituary in fire)"
+        );
+        assert_eq!(
+            note(None, true),
+            "# BROKEN target: the axis client left the snapshot before target"
+        );
+        assert_eq!(
+            note(None, false),
+            "# BROKEN target: the axis client was never in the snapshot"
+        );
+    }
 }
