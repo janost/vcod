@@ -4,7 +4,7 @@
 //! UO install; each test builds mp_cassino's graph, so they are ignored and
 //! run in release.
 
-use std::rc::Rc;
+use crate::common;
 use std::time::{Duration, Instant};
 
 const MAP: &str = "mp_cassino";
@@ -16,23 +16,16 @@ fn uo_server(bots: usize, shoot: bool) -> Option<(vcod_server::Server, Instant)>
 
 fn uo_server_on(map: &str, bots: usize, shoot: bool) -> Option<(vcod_server::Server, Instant)> {
     let fs = vcod_common::testing::uo_fs()?;
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map(map).unwrap()).unwrap())
-        .expect("parse the bsp");
-    let now = Instant::now();
     let cfg = vcod_server::ServerConfig {
-        map: map.into(),
-        hostname: "vcod test".into(),
-        max_clients: 8,
-        gametype: "tdm".into(),
-        test_entities: 0,
-        trace: false,
         bots,
         bots_shoot: shoot,
+        ..common::cfg(map, "tdm")
     };
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.set_protocol(&vcod_common::net::protocol::PROTOCOL_V22);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, now) = common::Boot {
+        proto: Some(&vcod_common::net::protocol::PROTOCOL_V22),
+        ..common::Boot::on(cfg)
+    }
+    .start(fs);
     // The bots stay on foot through the warm-up, whatever their spawn has
     // near it; `warm_up` lets them board.
     sv.set_cvar("vc_bot_vehicles", "0");

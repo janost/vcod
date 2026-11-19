@@ -20,14 +20,10 @@ fn server() -> Server {
 fn server_with_entities(test_entities: usize) -> Server {
     Server::new(
         ServerConfig {
-            map: "mp_carentan".into(),
             hostname: "loop".into(),
             max_clients: 2,
-            gametype: "dm".into(),
             test_entities,
-            trace: false,
-            bots: 0,
-            bots_shoot: false,
+            ..common::cfg("mp_carentan", "dm")
         },
         Instant::now(),
     )

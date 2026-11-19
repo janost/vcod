@@ -14,12 +14,11 @@ use crate::common;
 use common::{ClientEnd, Queues};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::NetClient;
 use vcod_common::net::msg::NULL_USERCMD;
 
 const MAP: &str = "mp_carentan";
-const PROBE_PATH: &str = "maps/mp/gametypes/probe_playersound";
 const PROBE_SRC: &str = "../gsc/tests/fixtures/semantics/client-probes/probe_playersound.gsc";
 
 #[test]
@@ -29,13 +28,11 @@ fn a_sounded_player_rides_every_snapshot_until_the_restart() {
         return;
     };
     let probe = std::fs::read_to_string(PROBE_SRC).expect("read the probe");
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_playersound"), now);
-    sv.overlay_script(PROBE_PATH, &probe);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(&probe),
+        ..common::Boot::new(MAP, "probe_playersound")
+    }
+    .start(fs);
 
     let (qa, qb) = (
         Rc::new(RefCell::new(Queues::default())),

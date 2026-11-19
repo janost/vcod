@@ -24,16 +24,7 @@ const ET_MISSILE: i32 = 4;
 const FIRST_BODY: u32 = 64;
 
 fn cfg() -> vcod_server::ServerConfig {
-    vcod_server::ServerConfig {
-        map: MAP.into(),
-        hostname: "vcod test".into(),
-        max_clients: 8,
-        gametype: "dm".into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
-    }
+    common::cfg(MAP, "dm")
 }
 
 /// The damage path end to end, on the retail hit capture's numbers (combat
@@ -55,13 +46,11 @@ fn a_shot_takes_health_and_a_second_one_kills() {
         return;
     };
     let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    common::pin_carentan_pair(&mut sv);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        prep: Some(&common::pin_carentan_pair),
+        ..common::Boot::on(cfg())
+    }
+    .start(fs);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
     let (mut ca, mut cb) = common::join_pair(
@@ -533,12 +522,7 @@ fn the_kill_command_suicides_a_player() {
         return;
     };
     let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg()).start(fs);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
     let (mut ca, mut cb) = common::join_pair(
@@ -753,12 +737,7 @@ fn the_kill_commands_death_frame_is_retails() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg()).start(fs);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
     let (mut ca, mut cb) = common::join_pair(
@@ -876,13 +855,11 @@ fn a_bullet_deaths_frame_is_retails() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    common::pin_carentan_pair(&mut sv);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        prep: Some(&common::pin_carentan_pair),
+        ..common::Boot::on(cfg())
+    }
+    .start(fs);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
     let (mut ca, mut cb) = common::join_pair(
@@ -982,12 +959,7 @@ fn a_player_killed_earlier_in_the_frame_stops_no_later_round() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg()).start(fs);
     let q: [Rc<RefCell<Queues>>; 3] = Default::default();
     // The thompson is no `rifleBullet`, so its round stops on the first
     // player it meets (combat doc 2.4, step 5).
@@ -1085,13 +1057,11 @@ fn a_melee_swing_hits_and_the_kill_shows_the_melee_icon() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    common::pin_carentan_pair(&mut sv);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        prep: Some(&common::pin_carentan_pair),
+        ..common::Boot::on(cfg())
+    }
+    .start(fs);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
     let (mut ca, mut cb) = common::join_pair(
@@ -2324,12 +2294,7 @@ struct Followed {
 impl Followed {
     fn new() -> Option<Self> {
         let fs = vcod_common::testing::game_fs_11()?;
-        let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-        let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-        let mut now = Instant::now();
-        let mut sv = vcod_server::Server::new(cfg(), now);
-        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        let (mut sv, mut now) = common::Boot::on(cfg()).start(fs);
         let q: [Rc<RefCell<Queues>>; 3] = Default::default();
         let cs = common::connect_at(&mut sv, common::ADDR_C, &q[0], &mut now, 0x2000);
         let ca = Client::start_with_qport(common::ClientEnd(q[1].clone()), now, 0x2001);
@@ -2949,17 +2914,14 @@ fn a_round_through_the_depot_pane_hits_like_retail() {
         return;
     };
     let map = "mp_depot";
-    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_glass"), now);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_glass",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_glass.gsc"),
-    );
-    sv.set_cvar("probe_teleport", "1");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        cvars: &[("probe_teleport", "1")],
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_glass.gsc"
+        )),
+        ..common::Boot::new(map, "probe_glass")
+    }
+    .start(fs);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
     let (mut ca, mut cb) = common::join_pair(

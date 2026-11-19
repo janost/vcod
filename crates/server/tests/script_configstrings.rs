@@ -5,14 +5,8 @@
 
 fn cfg(map: &str) -> vcod_server::ServerConfig {
     vcod_server::ServerConfig {
-        map: map.into(),
-        hostname: "vcod test".into(),
         max_clients: 4,
-        gametype: "dm".into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
+        ..crate::common::cfg(map, "dm")
     }
 }
 

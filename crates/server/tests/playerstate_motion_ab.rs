@@ -239,16 +239,7 @@ const HOLD_FRAMES: usize = 60;
 /// The same server the standing gate configures, so both diff against
 /// captures taken on the same settings.
 fn cfg(map: &str) -> vcod_server::ServerConfig {
-    vcod_server::ServerConfig {
-        map: map.into(),
-        hostname: "vcod test".into(),
-        max_clients: 8,
-        gametype: "dm".into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
-    }
+    common::cfg(map, "dm")
 }
 
 struct Pose {

@@ -6,6 +6,7 @@
 //!
 //! Needs `COD_DIR`; without the paks it returns early.
 
+use crate::common;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -36,15 +37,10 @@ fn server_from(
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let now = Instant::now();
     let cfg = vcod_server::ServerConfig {
-        map: map.into(),
-        hostname: "vcod test".into(),
-        max_clients: 8,
-        gametype: gametype.into(),
-        test_entities: 0,
-        trace: false,
         bots,
         // Nobody dies, so the round runs until the bomb settles it.
         bots_shoot: false,
+        ..common::cfg(map, gametype)
     };
     let mut sv = vcod_server::Server::new(cfg, now);
     if let Some(p) = protocol {
@@ -224,27 +220,20 @@ fn uo_server(
         return None;
     };
     let p = &vcod_common::net::protocol::PROTOCOL_V22;
-    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let now = Instant::now();
     let cfg = vcod_server::ServerConfig {
-        map: map.into(),
-        hostname: "vcod test".into(),
-        max_clients: 8,
-        gametype: gametype.into(),
-        test_entities: 0,
-        trace: false,
         bots: 2,
         bots_shoot: shoot,
+        ..common::cfg(map, gametype)
     };
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.set_protocol(p);
-    sv.test_seed_rng(seed);
-    for (k, v) in cvars {
-        sv.set_cvar(k, v);
+    let (sv, now) = common::Boot {
+        proto: Some(p),
+        cvars,
+        prep: Some(&|sv: &mut vcod_server::Server| {
+            sv.test_seed_rng(seed);
+        }),
+        ..common::Boot::on(cfg)
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     Some((sv, now))
 }
 

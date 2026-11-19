@@ -28,16 +28,7 @@ use vcod_common::net::protocol::PROTOCOL_V1;
 const GAPS: &[(&str, &str, &str)] = &[];
 
 fn cfg(map: &str) -> vcod_server::ServerConfig {
-    vcod_server::ServerConfig {
-        map: map.into(),
-        hostname: "vcod test".into(),
-        max_clients: 8,
-        gametype: "dm".into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
-    }
+    common::cfg(map, "dm")
 }
 
 /// One station of the trace: where the probe stood, and the entity numbers it

@@ -22,16 +22,7 @@ const TYPE_TEXT: i32 = 1;
 const LOCALIZED_BASE: usize = 1244;
 
 fn cfg(gametype: &str) -> vcod_server::ServerConfig {
-    vcod_server::ServerConfig {
-        map: MAP.into(),
-        hostname: "vcod test".into(),
-        max_clients: 8,
-        gametype: gametype.into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
-    }
+    common::cfg(MAP, gametype)
 }
 
 fn server(now: Instant) -> Option<vcod_server::Server> {

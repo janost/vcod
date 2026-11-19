@@ -25,16 +25,7 @@ use std::time::Instant;
 use vcod_common::net::protocol::PROTOCOL_V1;
 
 fn cfg(map: &str) -> vcod_server::ServerConfig {
-    vcod_server::ServerConfig {
-        map: map.into(),
-        hostname: "vcod test".into(),
-        max_clients: 8,
-        gametype: "dm".into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
-    }
+    common::cfg(map, "dm")
 }
 
 /// A server with `map` loaded on `dm`, exactly as `configstrings_ab` boots one.

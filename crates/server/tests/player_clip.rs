@@ -89,13 +89,11 @@ fn facing(cl: &Client, yaw: f32) -> UserCmd {
 
 fn server() -> Option<(Server, Instant)> {
     let fs = vcod_common::testing::game_fs_11()?;
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let now = Instant::now();
-    let mut sv = Server::new(common::cfg(MAP, "dm"), now);
-    common::pin_carentan_pair(&mut sv);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (sv, now) = common::Boot {
+        prep: Some(&common::pin_carentan_pair),
+        ..common::Boot::new(MAP, "dm")
+    }
+    .start(fs);
     Some((sv, now))
 }
 

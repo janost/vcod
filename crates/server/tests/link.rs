@@ -252,21 +252,18 @@ fn a_client_linked_on_the_move_keeps_its_velocity() {
 #[test]
 fn set_origin_moves_a_player_a_unit_up_and_flips_the_teleport_bit() {
     let p = &PROTOCOL_V1;
-    let mut now = Instant::now();
     let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_lookat"), now);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_lookat",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_lookat.gsc"),
-    );
-    sv.set_cvar("probe_teleport", "1");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        cvars: &[("probe_teleport", "1")],
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_lookat.gsc"
+        )),
+        ..common::Boot::new(MAP, "probe_lookat")
+    }
+    .start(fs);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
     let mut ca = NetClient::start_with_qport(ClientEnd(qa.clone()), now, 0x2001);

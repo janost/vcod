@@ -84,14 +84,10 @@ fn cod1_match(
         .expect("parse the bsp");
     let mut now = Instant::now();
     let cfg = vcod_server::ServerConfig {
-        map: map.into(),
-        hostname: "vcod test".into(),
         max_clients: bots + 2,
-        gametype: gametype.into(),
-        test_entities: 0,
-        trace: false,
         bots,
         bots_shoot: true,
+        ..crate::common::cfg(map, gametype)
     };
     let mut sv = vcod_server::Server::new(cfg, now);
     if uo {
