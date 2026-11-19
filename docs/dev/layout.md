@@ -214,6 +214,8 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
   UO's `ctf`, `dom`, `hq` and `bas` in `objective/uo.rs`), `menus.rs` (the
   menu replies, the weapon menus), `grenade.rs` (the throw's stages; CoD2's
   and CoD4's lob), `gun.rs` (CoD2's and CoD4's mounted-gun helpers),
+  `bridge.rs` (CoD2's and CoD4's playerstate to and from the CoD1 body:
+  the nav walks' step, the follower's body, the mantle walk, the key map),
   `fight.rs` (tracking, aim, trigger, footwork, weapon swaps) and `walk.rs`
   (the wander brain, steering, stalls, ladders). CoD1's `impl` and view
   builders are in `server/bot_world.rs`, CoD2's `impl` in `cod2/bots.rs`
