@@ -6301,8 +6301,9 @@ pub fn on_jump_top(flat: f32, rise: f32) -> bool {
 /// of a bob, or after two ticks pinned (moved under [`PINNED`] units, half
 /// one creeping), each only where [`jump_clear`] passes. A bot on a jump
 /// edge runs the same rule without the room test (`Bot::think`), and
-/// every jump edge is walked again that way ([`NavGraph::reprove_jumps`],
-/// [`as_a_bot`]), so it jumps where the walk that proved the edge did.
+/// every jump edge but `NavGraph::link_pockets`' is walked again that way
+/// ([`NavGraph::reprove_jumps`], [`as_a_bot`]), so it jumps where the walk
+/// that proved the edge did.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PinJump {
     stalled: u32,
