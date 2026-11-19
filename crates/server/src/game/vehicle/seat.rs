@@ -11,6 +11,8 @@ use super::{MAX_SEATS, Vehicle};
 use crate::game::host::GameHost;
 use glam::{Quat, Vec3};
 use std::rc::Rc;
+use std::sync::Arc;
+use vcod_common::collision::{ModelSurf, ModelTri};
 use vcod_common::skeleton::{PoseBuffer, Skeleton};
 use vcod_gsc::{Cx, EntId, Host, Value};
 
@@ -185,7 +187,18 @@ pub fn posed(host: &mut GameHost, cx: &mut Cx, id: EntId) -> Option<Posed> {
 pub fn posed_as(host: &mut GameHost, cx: &mut Cx, id: EntId, cached: bool) -> Option<Posed> {
     let model = model_name(host, cx, id);
     let rig = rig(host, &model)?;
-    let skel = &rig.skel;
+    let (pose_now, origin, rot) = controls(host, id, cached)?;
+    Some(pose_rig(rig, &pose_now, origin, rot))
+}
+
+/// The controls `Scr_Vehicle_Controller` poses vehicle `id` by, from its
+/// wire fields (those the frame's think started from when `cached`), and
+/// its origin and rotation.
+fn controls(
+    host: &GameHost,
+    id: EntId,
+    cached: bool,
+) -> Option<(vcod_common::vehiclepose::VehiclePose, Vec3, Quat)> {
     let v = host.vehicles.live.get(&id)?;
     let wire = if cached { v.posed_wire } else { v.wire };
     let kind = host.vehicles.info_of(v).kind;
@@ -198,17 +211,77 @@ pub fn posed_as(host: &mut GameHost, cx: &mut Cx, id: EntId, cached: bool) -> Op
         kind,
         gunner_spans: [wire.torso_pitch, wire.waist_pitch],
     };
-    let pose_now = vcod_common::vehiclepose::lerp(&fields, &fields, 0.0);
+    Some((
+        vcod_common::vehiclepose::lerp(&fields, &fields, 0.0),
+        Vec3::from(v.pose.origin),
+        vcod_common::turretpose::angles_quat(v.pose.angles),
+    ))
+}
+
+fn pose_rig(
+    rig: Rc<Rig>,
+    pose_now: &vcod_common::vehiclepose::VehiclePose,
+    origin: Vec3,
+    rot: Quat,
+) -> Posed {
+    let skel = &rig.skel;
     let mut pose = PoseBuffer::new(skel);
-    vcod_common::vehiclepose::apply_hull(&mut pose, skel, &pose_now);
-    let worlds = pose.bone_worlds(skel);
-    Some(Posed {
-        worlds,
-        origin: Vec3::from(v.pose.origin),
-        rot: vcod_common::turretpose::angles_quat(v.pose.angles),
-        kind,
+    vcod_common::vehiclepose::apply_hull(&mut pose, skel, pose_now);
+    Posed {
+        worlds: pose.bone_worlds(skel),
+        origin,
+        rot,
+        kind: pose_now.kind,
         rig,
-    })
+    }
+}
+
+/// A vehicle's collision in its own frame ([`Posed::collision`]).
+#[derive(Clone)]
+pub struct HullTris {
+    pub tris: Arc<[ModelTri]>,
+    pub surfs: Arc<[ModelSurf]>,
+}
+
+/// [`HullTris`] and the model and hull controls they were posed for.
+#[derive(Clone)]
+pub struct HullCollision {
+    model: String,
+    key: [u32; 16],
+    hull: HullTris,
+}
+
+/// [`posed`]'s collision in the vehicle's own frame, with its origin and
+/// rotation: posed again only when the model or the hull's controls
+/// changed since the last ask (`Vehicles::hulls`), as every round and
+/// blast victim asks for every vehicle.
+pub fn hull_collision(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    id: EntId,
+) -> Option<(Vec3, Quat, HullTris)> {
+    let model = model_name(host, cx, id);
+    let rig = rig(host, &model)?;
+    let (pose_now, origin, rot) = controls(host, id, false)?;
+    let key = vcod_common::vehiclepose::hull_key(&pose_now);
+    if let Some(h) = host.vehicles.hulls.get(&id)
+        && h.key == key
+        && h.model == model
+    {
+        return Some((origin, rot, h.hull.clone()));
+    }
+    let (tris, surfs) = pose_rig(rig, &pose_now, origin, rot).collision();
+    let hull = HullTris {
+        tris: tris.into(),
+        surfs: surfs.into(),
+    };
+    let kept = HullCollision {
+        model,
+        key,
+        hull: hull.clone(),
+    };
+    host.vehicles.hulls.insert(id, kept);
+    Some((origin, rot, hull))
 }
 
 /// `vectoangles` of a rotation's forward, roll 0 (`Axis4ToAngles`, the
