@@ -431,7 +431,7 @@ pub(crate) fn cod4_model_tag(
     tag: &str,
 ) -> Option<(Vec3, Quat)> {
     use crate::game::hitrig::model_name;
-    let tags = &host.cod4().model_tags;
+    let tags = &host.as_cod4()?.model_tags;
     let find = |model: &str, name: &str| {
         let t = tags.get(&model_name(model).to_ascii_lowercase())?;
         t.iter()
@@ -1071,7 +1071,7 @@ mod tests {
         let tags = |t: &[(&str, Vec3, Quat)]| {
             std::rc::Rc::new(t.iter().map(|&(n, p, r)| (n.to_string(), p, r)).collect())
         };
-        let c4 = host.cod4_mut();
+        let c4 = host.as_cod4_mut().unwrap();
         c4.model_tags.insert(
             "car".into(),
             tags(&[

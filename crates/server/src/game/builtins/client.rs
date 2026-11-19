@@ -82,6 +82,11 @@ pub fn add_test_client(
     _recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
+    // The fresh `gclient_t` below is CoD2's client state.
+    let enters_world = host.profile.test_client_enters_world;
+    if enters_world && host.as_cod2().is_none() {
+        return Err(crate::game::host::wrong_game("addtestclient"));
+    }
     let taken = |host: &GameHost, slot: usize| {
         host.client_roster.get(slot).is_some_and(Option::is_some)
             || host.test_clients.added.iter().any(|(s, _, _)| *s == slot)
@@ -109,11 +114,10 @@ pub fn add_test_client(
         return Ok(Value::Undefined);
     }
     let name = format!("bot{port}");
-    let enters_world = host.profile.test_client_enters_world;
-    if enters_world {
+    if let Some(c2) = host.as_cod2_mut().filter(|_| enters_world) {
         // `ClientConnect`'s fresh `gclient_t` and `pers.connected` 1, as
         // `Cod2Level::connect_at` gives a real client.
-        host.cod2_mut().clients[slot] = Default::default();
+        c2.clients[slot] = Default::default();
         host.client_roster[slot] = Some(crate::game::scoreboard::RosterSlot {
             connecting: true,
             ..Default::default()

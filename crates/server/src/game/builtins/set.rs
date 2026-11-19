@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use vcod_common::game::Game;
 use vcod_common::net::protocol::Cod1Wire;
 use vcod_gsc::Vm;
 use vcod_gsc::bytecode::Op;
@@ -26,6 +27,9 @@ use super::Builtin;
 /// A name retail lists that vcod has no handler for compiles and fails when
 /// a thread reaches it, as before.
 pub struct BuiltinSet {
+    /// The game whose tables bound the handlers: they run only on a host
+    /// holding that game's state (`GameHost::builtin`).
+    pub game: Game,
     names: HashMap<&'static str, Entry>,
 }
 
@@ -51,13 +55,19 @@ impl BuiltinSet {
     /// 1.1's set.
     pub fn v11() -> &'static BuiltinSet {
         static V1: OnceLock<BuiltinSet> = OnceLock::new();
-        V1.get_or_init(|| Self::build(&[FUNCTIONS_11], &[METHODS_11]))
+        V1.get_or_init(|| Self::build(Game::Cod1, &[FUNCTIONS_11], &[METHODS_11]))
     }
 
     /// 1.5's: 1.1's names and what 1.5b adds.
     pub fn v15() -> &'static BuiltinSet {
         static V15: OnceLock<BuiltinSet> = OnceLock::new();
-        V15.get_or_init(|| Self::build(&[FUNCTIONS_11, FUNCTIONS_15], &[METHODS_11, METHODS_15]))
+        V15.get_or_init(|| {
+            Self::build(
+                Game::Cod1,
+                &[FUNCTIONS_11, FUNCTIONS_15],
+                &[METHODS_11, METHODS_15],
+            )
+        })
     }
 
     /// United Offensive 1.51's: 1.5's names and what UO adds.
@@ -65,6 +75,7 @@ impl BuiltinSet {
         static UO: OnceLock<BuiltinSet> = OnceLock::new();
         UO.get_or_init(|| {
             Self::build(
+                Game::Cod1,
                 &[FUNCTIONS_11, FUNCTIONS_15, FUNCTIONS_UO],
                 &[METHODS_11, METHODS_15, METHODS_UO],
             )
@@ -77,7 +88,7 @@ impl BuiltinSet {
     pub fn cod2() -> &'static BuiltinSet {
         static COD2: OnceLock<BuiltinSet> = OnceLock::new();
         COD2.get_or_init(|| {
-            let mut set = Self::build(&[FUNCTIONS_COD2], &[METHODS_COD2]);
+            let mut set = Self::build(Game::Cod2, &[FUNCTIONS_COD2], &[METHODS_COD2]);
             for &(n, imp) in super::cod2::NAMES
                 .iter()
                 .chain(super::cod2_fx::NAMES)
@@ -113,7 +124,7 @@ impl BuiltinSet {
                 t::ENTITY_METHODS,
                 t::HUDELEM_METHODS,
             ]);
-            let mut set = Self::build(&[&functions], &[&methods]);
+            let mut set = Self::build(Game::Cod4, &[&functions], &[&methods]);
             for &(n, imp) in super::cod4::NAMES
                 .iter()
                 .chain(super::cod4_client::NAMES)
@@ -138,7 +149,7 @@ impl BuiltinSet {
         Box::new(move |n| self.names.contains_key(n))
     }
 
-    fn build(functions: &[&[&'static str]], methods: &[&[&'static str]]) -> BuiltinSet {
+    fn build(game: Game, functions: &[&[&'static str]], methods: &[&[&'static str]]) -> BuiltinSet {
         let imps: HashMap<&'static str, Builtin> = implementations().collect();
         let mut names: HashMap<&'static str, Entry> = HashMap::new();
         let mut add = |n: &'static str, method: bool| {
@@ -159,7 +170,7 @@ impl BuiltinSet {
         for &n in methods.iter().flat_map(|t| t.iter()) {
             add(n, true);
         }
-        BuiltinSet { names }
+        BuiltinSet { game, names }
     }
 
     /// vcod's handler for a folded name, if this version lists it.
@@ -861,6 +872,77 @@ const METHODS_COD2: &[&str] = &[
 mod tests {
     use super::*;
     use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
+
+    /// Every handler of each version's set, called once with no arguments
+    /// through the VM on a fresh host of that version, as a function and as
+    /// a method on a connected player, answers with a value or an error,
+    /// never a panic: a game's own handlers find its state, the shared ones
+    /// reach none they lack.
+    #[test]
+    fn every_builtin_answers_on_its_own_games_host() {
+        use crate::game::profile::{COD1_11, COD1_15, COD1_UO, COD2, COD4};
+        for profile in [&COD1_11, &COD1_15, &COD1_UO, &COD2, &COD4] {
+            let set = (profile.builtins)();
+            assert_eq!(set.game, profile.game);
+            let mut names: Vec<&str> = (set.names.iter())
+                .filter_map(|(&n, e)| e.imp.map(|_| n))
+                .collect();
+            names.sort_unstable();
+            let src: String = (names.iter().enumerate())
+                .map(|(i, n)| format!("f{i}() {{ {n}(); }} m{i}() {{ self {n}(); }}\n"))
+                .collect();
+            let mut vm = Vm::new();
+            let ast = vcod_gsc::parse::parse_file(&src).unwrap();
+            let fns = vcod_gsc::compile::compile_file(&ast, "every", vm.interner_mut()).unwrap();
+            vm.install(fns).unwrap();
+            let program = vm.program();
+            let mut panicked = Vec::new();
+            for (i, name) in names.iter().enumerate() {
+                for method in [false, true] {
+                    let mut vm = Vm::from_program(&program);
+                    let mut host =
+                        crate::game::host::GameHost::new(profile, vec![String::new(); 2048]);
+                    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let recv = (method)
+                            .then(|| vm.with_cx(|cx| host.connect_client(cx, 0, "p0")))
+                            .flatten()
+                            .map(vcod_gsc::Target::Entity);
+                        let f =
+                            vm.func_ref("every", &format!("{}{i}", ["f", "m"][method as usize]));
+                        let _ = vm.call_now(&mut host, f, recv, Vec::new());
+                    }));
+                    if run.is_err() {
+                        panicked.push((*name, method));
+                    }
+                }
+            }
+            assert!(
+                panicked.is_empty(),
+                "{:?} panics in {panicked:?}",
+                profile.game
+            );
+        }
+    }
+
+    /// A host whose profile names another game's builtins runs none of
+    /// them: CoD2's `setstablemissile` on a CoD4 host is an error.
+    #[test]
+    fn another_games_set_runs_nothing_on_a_host() {
+        use vcod_gsc::Host;
+        let mut vm = Vm::new();
+        let mut host = crate::game::host::GameHost::new(
+            &crate::game::profile::COD4,
+            vec![String::new(); 2048],
+        );
+        host.profile = &crate::game::profile::COD2;
+        vm.with_cx(|cx| {
+            let name = cx.intern_folded("setstablemissile");
+            assert_eq!(
+                host.builtin(cx, name, None, &[]),
+                Err(crate::game::host::wrong_game("setstablemissile"))
+            );
+        });
+    }
 
     /// CoD4's `addTestClient` is its own: `undefined`, where the shared
     /// handler reached CoD2's host state and panicked (BUG-064).

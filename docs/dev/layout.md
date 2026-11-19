@@ -181,7 +181,8 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     every rule the host tells the versions apart by.
   - A game's own host state is `GameHost::ext`, a `HostExt` arm: CoD2's
     `Cod2HostState` through `host.cod2()` / `cod2_mut()`, CoD4's
-    `Cod4HostState` through `host.cod4()`.
+    `Cod4HostState` through `host.cod4()`, in the game's own files; code
+    every game shares takes `as_cod2()` / `as_cod4()`.
   - `game/cod2*.rs`: CoD2's level (`Cod2Level`): combat, corpses, items,
     turrets, killcam archive, gametypes.
   - `game/cod4/`: loads CoD4 1.7's zones and runs its level: the gametype's

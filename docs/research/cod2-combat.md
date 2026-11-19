@@ -1090,7 +1090,7 @@ vcod:
 - `builtins::cod2::drop_item` runs 1.1's `dropItem`. `item::launch` names
   CoD2's row off the level's weapon list (`weapon_<name>`, INFERRED) and
   `cod2_items::launch_off` launches it, its climb off the game's `rand()`
-  (`GameHost::cod2_crandom`).
+  (`cod2_items::crandom`).
 - A thrown drop waits in `Cod2HostState::tag_drops` until
   `Cod2Level::place_drops` (each frame's start and after its threads)
   poses the dropper, controls eased toward the frame its last end frame

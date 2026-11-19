@@ -169,6 +169,12 @@ pub struct Cod2CallbackArgs {
     pub death_anim_duration: i32,
 }
 
+/// A builtin's error on a host without the game state it needs: shared
+/// code reaches a game's state through `GameHost::as_cod2` and kin.
+pub fn wrong_game(builtin: &str) -> ErrorKind {
+    ErrorKind::Custom(format!("{builtin}: not on this game's host"))
+}
+
 /// The game's own host state, one arm per game: CoD1 keeps all of its in
 /// the shared [`GameHost`] fields.
 pub enum HostExt {
@@ -184,6 +190,15 @@ impl HostExt {
             vcod_common::game::Game::Cod2 => HostExt::Cod2(Box::default()),
             vcod_common::game::Game::Cod4 => HostExt::Cod4(Box::default()),
             vcod_common::game::Game::Cod1 => HostExt::Cod1,
+        }
+    }
+
+    /// The game whose state this arm holds.
+    pub fn game(&self) -> vcod_common::game::Game {
+        match self {
+            HostExt::Cod1 => vcod_common::game::Game::Cod1,
+            HostExt::Cod2(_) => vcod_common::game::Game::Cod2,
+            HostExt::Cod4(_) => vcod_common::game::Game::Cod4,
         }
     }
 }
@@ -2248,7 +2263,43 @@ impl GameHost {
         self.defs = profile.defs;
     }
 
-    /// CoD2's state; panics on a CoD1 host.
+    /// CoD2's state, `None` on another game's host: the way in for code
+    /// every game shares.
+    pub fn as_cod2(&self) -> Option<&Cod2HostState> {
+        match &self.ext {
+            HostExt::Cod2(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// [`Self::as_cod2`], mutable.
+    pub fn as_cod2_mut(&mut self) -> Option<&mut Cod2HostState> {
+        match &mut self.ext {
+            HostExt::Cod2(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// CoD4's state, `None` on another game's host.
+    pub fn as_cod4(&self) -> Option<&crate::game::cod4::Cod4HostState> {
+        match &self.ext {
+            HostExt::Cod4(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// [`Self::as_cod4`], mutable.
+    pub fn as_cod4_mut(&mut self) -> Option<&mut crate::game::cod4::Cod4HostState> {
+        match &mut self.ext {
+            HostExt::Cod4(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// CoD2's state; panics on another game's host. Only CoD2's own
+    /// modules call it, where the builtin table or the level proves the
+    /// game (`shared_code_reaches_game_state_without_panicking`); shared
+    /// code takes [`Self::as_cod2`].
     pub fn cod2(&self) -> &Cod2HostState {
         match &self.ext {
             HostExt::Cod2(c) => c,
@@ -2264,7 +2315,8 @@ impl GameHost {
         }
     }
 
-    /// CoD4's state; panics on another game's host.
+    /// CoD4's state; panics on another game's host. As [`Self::cod2`],
+    /// for CoD4's own modules only.
     pub fn cod4(&self) -> &crate::game::cod4::Cod4HostState {
         match &self.ext {
             HostExt::Cod4(c) => c,
@@ -2299,8 +2351,9 @@ impl GameHost {
     pub fn callback_args(&self, name: &str, mut args: Vec<Value>) -> Vec<Value> {
         if self.profile.callback_extra_args {
             let c = match &self.ext {
+                HostExt::Cod2(c) => c.callback,
                 HostExt::Cod4(c) => c.callback,
-                _ => self.cod2().callback,
+                HostExt::Cod1 => Cod2CallbackArgs::default(),
             };
             match name {
                 "CodeCallback_PlayerDamage" => args.push(Value::Int(c.time_offset)),
@@ -2515,7 +2568,9 @@ impl GameHost {
     /// numbers them.
     pub fn weapon_name(&self, index: usize) -> Option<String> {
         match self.profile.weapons {
-            WeaponNumbering::Registered => self.cod2().weapons.get(index.checked_sub(1)?).cloned(),
+            WeaponNumbering::Registered => {
+                self.as_cod2()?.weapons.get(index.checked_sub(1)?).cloned()
+            }
             WeaponNumbering::Fixed => self.defs.weapon_name(index).map(str::to_string),
         }
     }
@@ -2566,14 +2621,6 @@ impl GameHost {
             self.register_item(name).unwrap();
         }
         self.initializing = was;
-    }
-
-    /// CoD2's `G_crandom` (Mac 0x2cf1a): `2 * rand() / 2^31 - 1` off the
-    /// game's `rand()`, on the stack; a drop pin, when one waits, stands
-    /// in for the value.
-    pub fn cod2_crandom(&mut self) -> f64 {
-        let drawn = 2.0 * self.cod2().rand.g_random() - 1.0;
-        self.cod2_mut().drop_pins.pop_front().unwrap_or(drawn)
     }
 
     /// A uniform draw in `[0, 1)` off the host's own state.
@@ -3107,6 +3154,11 @@ impl Host for GameHost {
         args: &[Value],
     ) -> Result<Value, ErrorKind> {
         match self.memo.builtin(self.profile, cx, name) {
+            // A set's own handlers reach its game's state through the
+            // panicking accessors: on a host without it none runs.
+            Some(_) if self.builtins().game != self.ext.game() => {
+                Err(wrong_game(cx.resolve_folded(name)))
+            }
             Some(f) => f(self, cx, recv, args),
             None => Err(ErrorKind::MissingBuiltin(name)),
         }
@@ -3782,6 +3834,51 @@ fn type_accepts(ty: FieldType, v: Value) -> bool {
 mod tests {
     use super::*;
     use crate::game::testing::fixture;
+
+    /// Code every game shares reaches a game's state through
+    /// `GameHost::as_cod2` and kin; the panicking accessors stay in the
+    /// game's own modules, the files whose paths name it.
+    #[test]
+    fn shared_code_reaches_game_state_without_panicking() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        let accessors: Vec<String> = ["cod2", "cod4"]
+            .iter()
+            .flat_map(|g| ["()", "_mut()"].map(|tail| format!(".{g}{tail}")))
+            .collect();
+        let mut hits = Vec::new();
+        for f in files {
+            let rel = f
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            if rel.contains("cod2") || rel.contains("cod4") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&f).unwrap();
+            for (i, line) in text.lines().enumerate() {
+                if accessors.iter().any(|a| line.contains(a.as_str())) {
+                    hits.push(format!("{rel}:{}", i + 1));
+                }
+            }
+        }
+        assert!(
+            hits.is_empty(),
+            "panicking game state accessors in shared code: {hits:?}"
+        );
+    }
 
     /// The workaround cast rounds as `as f32` does, ties and the top included.
     #[test]

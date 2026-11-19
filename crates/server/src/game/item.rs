@@ -785,7 +785,8 @@ pub fn launch_weapon(
                 // the player's (`G_SetAngle(item, player+0x144)`; the
                 // tag's axis and the 90 of roll land in a local nothing
                 // reads) and its spin is `cod2_items::spin`.
-                host.cod2_mut()
+                host.as_cod2_mut()
+                    .ok_or_else(|| crate::game::host::wrong_game("dropitem"))?
                     .tag_drops
                     .push(crate::game::cod2_items::TagDrop {
                         item: id,

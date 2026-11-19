@@ -718,7 +718,7 @@ fn kind_of(host: &mut GameHost, cx: &mut Cx, id: EntId, classname: &str) -> Opti
             .and_then(|w| match host.profile.weapons {
                 // The index `G_SpawnTurret` registered.
                 WeaponNumbering::Registered => host
-                    .cod2()
+                    .as_cod2()?
                     .weapons
                     .iter()
                     .position(|n| n.eq_ignore_ascii_case(&w))

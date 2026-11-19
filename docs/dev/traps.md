@@ -36,8 +36,11 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
   The VM's rules go through `VmProfile` (`Vm::apply_profile`). The load picks
   the profile and `GameHost::new` takes it. A test that switches version calls
   `GameHost::set_profile`: a write to `defs` alone leaves the builtins and
-  rules on the old version. `host.cod2()` panics on a CoD1 host;
+  rules on the old version. `host.cod2()` panics on another game's host;
   `GameHost::new` and `set_profile` pick the `HostExt` arm off the game.
+  Only files whose path names the game call it; shared code takes
+  `as_cod2()` / `as_cod4()` (`shared_code_reaches_game_state_without_panicking`),
+  and a builtin set's handlers run only on a host of the set's game.
 - gsc folds case for identifiers, fields, paths and event names, not for
   string values or array keys. A misrouted event name hangs its `waittill`
   silently.
