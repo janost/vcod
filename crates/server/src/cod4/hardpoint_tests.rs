@@ -649,13 +649,13 @@ fn the_helicopter_pulls_a_wide_rpg_in() {
     assert!(near + 20.0 < far, "{near} {far}");
 }
 
+/// A flight's frames: the rocket's origin and velocity.
+type Flight = Vec<(Vec3, Vec3)>;
+
 /// One `hind_FFAR_mp` from the helicopter's `fire_missile("ffar", 1,
 /// target)` once ground 4000 ahead of it is in its sight, the allied
 /// target held there (`guided` false: no target given). Each frame's
 /// rocket (origin, velocity) and the target's eye.
-/// A flight's frames: the rocket's origin and velocity.
-type Flight = Vec<(Vec3, Vec3)>;
-
 fn ffar(guided: bool) -> Option<(Flight, Vec3, Vec<String>)> {
     let mut rows = Vec::new();
     let mut spot: Option<Vec3> = None;

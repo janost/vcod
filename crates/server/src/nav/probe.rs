@@ -526,9 +526,6 @@ mod tests {
         );
     }
 
-    /// mp_ship, seed 5: a bot against the slanted wall at (6111, -304, 97)
-    /// headed south slid along it and off the ledge 41 units to the deck.
-    /// The sweep due south touches the wall at once; the slide finds it.
     /// mp_ship's hull slope north of (3762, 339, 352): no sample a jump
     /// under the one before, but 49 down within 75 units, to a wedge off
     /// the graph at (3752, 414, 303) that a seed 5 unstick heading ran a
@@ -543,6 +540,9 @@ mod tests {
         assert!(depth.is_some_and(|d| d > 39.0), "{depth:?}");
     }
 
+    /// mp_ship, seed 5: a bot against the slanted wall at (6111, -304, 97)
+    /// headed south slid along it and off the ledge 41 units to the deck.
+    /// The sweep due south touches the wall at once; the slide finds it.
     #[test]
     fn a_drop_ahead_is_felt_along_a_wall_it_slides_on() {
         let Some(world) = map_world("mp_ship") else {

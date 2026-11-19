@@ -921,10 +921,6 @@ fn near_ties_read_as_retails_leaf_order() {
     }
 }
 
-/// `near_ties_read_as_retails_leaf_order`'s sampler over every stock
-/// 1.1 map (`LEAF_MAPS` narrows it, `LEAF_SAMPLES` spots a map): each
-/// difference from the leaf walk, as `in` (the walk enters an open
-/// leaf) or `out` (only solid ones). Run in release.
 /// A capsule the BVH stops at fraction 0 or starts all in solid ends
 /// on whatever it clipped first, so it reads the contact retail's leaf
 /// order meets first: on mp_depot a run into the wall where brushes 182
@@ -975,6 +971,10 @@ fn a_capsule_stopped_at_0_reads_the_first_in_leaf_order() {
     }
 }
 
+/// `near_ties_read_as_retails_leaf_order`'s sampler over every stock
+/// 1.1 map (`LEAF_MAPS` narrows it, `LEAF_SAMPLES` spots a map): each
+/// difference from the leaf walk, as `in` (the walk enters an open
+/// leaf) or `out` (only solid ones). Run in release.
 #[test]
 #[ignore]
 fn leaf_order_census() {

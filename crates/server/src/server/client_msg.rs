@@ -726,9 +726,6 @@ mod tests {
     use super::*;
     use crate::server::tests::*;
 
-    /// Every landing of the two 2026-10-05 retail runs, parm and maxhealth
-    /// to damage (player-clip doc 8.10): the float `0.01` keeps each whole
-    /// share just under, and past 99 the fall does 110 percent.
     /// `Cmd_FlameDamageClient_f`'s reading (game.mp.uo 0x4ee2c): `atoi` of
     /// the first three characters, kept in `0..=maxclients`, one argument
     /// only.

@@ -710,7 +710,6 @@ impl EntityMaterials {
         }
     }
 
-    /// The pipeline pairs built so far.
     /// The pipeline keys [`Self::skin`] would build for `skins` not
     /// built yet, read off their materials as it reads them, for
     /// [`Self::prewarm`] to build at once.
@@ -744,6 +743,7 @@ impl EntityMaterials {
         keys
     }
 
+    /// The pipeline pairs built so far.
     #[cfg(test)]
     pub(crate) fn pipeline_count(&self) -> usize {
         self.pipelines.len()

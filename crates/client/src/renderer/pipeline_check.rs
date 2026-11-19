@@ -259,9 +259,6 @@ fn assert_clean(errors: &Errors, what: &str) {
     );
 }
 
-/// mp_carentan through the app's path: the world, its submodels, a player
-/// body bind-posed and skinned, the kar98k viewmodel, a smoke and an
-/// impact sprite, a bullet hole and the HUD, every cvar pass on.
 /// The headless device asks for the window's limits: with the default
 /// 256 MB buffer size mp_creek's and mp_killhouse's every-LOD vertices
 /// were an invalid buffer and the map sweep's client panicked at load.
@@ -283,6 +280,9 @@ fn headless_device_has_the_window_limits() {
     );
 }
 
+/// mp_carentan through the app's path: the world, its submodels, a player
+/// body bind-posed and skinned, the kar98k viewmodel, a smoke and an
+/// impact sprite, a bullet hole and the HUD, every cvar pass on.
 #[test]
 fn cod1_renderer_builds_and_draws_without_validation_errors() {
     let Some(fs) = vcod_common::testing::game_fs() else {

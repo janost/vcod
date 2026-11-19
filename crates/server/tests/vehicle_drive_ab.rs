@@ -327,8 +327,6 @@ impl Case {
         self.snaps.len()
     }
 
-    /// Retail's wire state put back on ours before the frame after
-    /// snapshot `k`: the pose, the turret, the clock, the steer.
     /// The record at the first snapshot, parked.
     fn start(&self) -> Physics {
         let s0 = &self.snaps[0];
@@ -338,6 +336,8 @@ impl Case {
         p
     }
 
+    /// Retail's wire state put back on ours before the frame after
+    /// snapshot `k`: the pose, the turret, the clock, the steer.
     fn put_wire(&self, p: &mut Physics, k: usize) {
         let s = &self.snaps[k];
         p.s.origin = s.origin();

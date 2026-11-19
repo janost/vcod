@@ -1166,13 +1166,13 @@ fn objective_rows(from: &Objective, to: &Objective) -> Option<Sent> {
         .then_some(Sent(rows))
 }
 
-/// `MSG_ReadDeltaPlayerstate` (`predictedFieldsIgnoreXor` set, as
-/// `CL_ParseSnapshot` calls it).
 /// The all-zero base a delta with no old playerstate reads against, built
 /// once: a `PlayerState` is about 13.6 KB.
 pub static ZERO_PS: std::sync::LazyLock<PlayerState> =
     std::sync::LazyLock::new(PlayerState::default);
 
+/// `MSG_ReadDeltaPlayerstate` (`predictedFieldsIgnoreXor` set, as
+/// `CL_ParseSnapshot` calls it).
 pub fn read_delta_playerstate(
     r: &mut MsgReader,
     ctx: &Ctx,

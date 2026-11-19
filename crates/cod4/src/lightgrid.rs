@@ -583,8 +583,6 @@ mod tests {
         }
     }
 
-    /// Three samples at weights 0.5, 0.3 and 0.2 blend in 256ths as the
-    /// fixed point does: 128, 77 and 51 sum to 256.
     /// An origin past the grid's 32-bit cell math wraps as 1.7's adds do
     /// instead of overflowing (BUG-150).
     #[test]
@@ -595,6 +593,8 @@ mod tests {
         }
     }
 
+    /// Three samples at weights 0.5, 0.3 and 0.2 blend in 256ths as the
+    /// fixed point does: 128, 77 and 51 sum to 256.
     #[test]
     fn blend_rounds_in_fixed_point() {
         let g = LightGrid {

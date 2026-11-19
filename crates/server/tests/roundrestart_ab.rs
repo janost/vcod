@@ -207,9 +207,6 @@ fn restarts(who: &str, events: &[NetchanEvent]) -> Vec<Restart> {
     out
 }
 
-/// The connect-time gamestate's serverId, and a check that nothing sent
-/// another one from the first restart onwards: a restart pushes none
-/// (map-cycle doc 3.1).
 /// Every slot a half was sent a `d <slot>` for over the run, as a sorted set
 /// minus [`CS_BURST_SLOTS`]. A set rather than a sequence: what it proves is
 /// which slots moved at all, and retail's run has one more elimination round
@@ -227,6 +224,9 @@ fn updated_slots(events: &[NetchanEvent]) -> Vec<usize> {
     slots
 }
 
+/// The connect-time gamestate's serverId, and a check that nothing sent
+/// another one from the first restart onwards: a restart pushes none
+/// (map-cycle doc 3.1).
 fn one_gamestate(who: &str, events: &[NetchanEvent], from_ms: i64) {
     let late = events
         .iter()

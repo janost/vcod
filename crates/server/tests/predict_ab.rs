@@ -1637,12 +1637,6 @@ fn replay(
     rows
 }
 
-/// Every slope capture off one retail server (`server`, its header's name)
-/// whose `!snap` lines log the whole playerstate (`wire=`), replayed under
-/// `p` exactly: a snapshot off retail's origin by any amount, or on the other
-/// side of the ground, fails unless the server moved the body
-/// ([`Delta::relocated`]). Each capture's weapons are its own `# cs7`
-/// header's, or mp_carentan's 1.1 list where it has none.
 /// Rows the replay cannot match, `(file, commandTime)`, each with its reason.
 /// A listed row that matches fails the gate, so the list cannot go stale.
 const REPLAY_GAPS: &[(&str, i32)] = &[
@@ -1654,6 +1648,12 @@ const REPLAY_GAPS: &[(&str, i32)] = &[
     ("mp_peaks-tdm-slope-8ms-jeep-die-uo.txt", 18793),
 ];
 
+/// Every slope capture off one retail server (`server`, its header's name)
+/// whose `!snap` lines log the whole playerstate (`wire=`), replayed under
+/// `p` exactly: a snapshot off retail's origin by any amount, or on the other
+/// side of the ground, fails unless the server moved the body
+/// ([`Delta::relocated`]). Each capture's weapons are its own `# cs7`
+/// header's, or mp_carentan's 1.1 list where it has none.
 fn replay_retail_runs(p: &Cod1Wire, fs: &vcod_common::pk3::Pk3Fs, server: &str, min_runs: usize) {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/playerstate");
     let mut runs: Vec<(String, String)> = std::fs::read_dir(dir)

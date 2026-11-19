@@ -1151,8 +1151,6 @@ fn taps(step: &Step) -> Vec<i64> {
         .collect()
 }
 
-/// Replays the capture's taps against our server: one trace per snapshot
-/// per step, the way the probe traced retail's.
 /// The weapon byte a cmd carries: the step's switch once it has been asked
 /// for, the step's own byte otherwise, and our own `ps.weapon` where the
 /// capture recorded a 0. A 0 is not neutral (retail reads a `cmd.weapon`
@@ -1738,11 +1736,6 @@ impl Join {
     }
 }
 
-/// Connects a client, answers both stock menus with `team` and `weapon`, and
-/// runs on until the spawn has settled. 20 s of simulated time at sv_fps 20,
-/// well past the settle a completed join needs; a join that never happens
-/// burns the lot. The loop's first usercmd is what enters the world and
-/// releases `Callback_PlayerConnect`'s `waittill`; the menus follow from it.
 /// A client that connects and leaves again, the way each earlier probe run
 /// left the capture's server: its `ClientDisconnect` frees entity 0, and
 /// `G_FreeEntity`'s sweep reads 1023 into every `groundEntityNum` still at
@@ -1756,6 +1749,11 @@ pub fn connect_and_leave(sv: &mut Server, q: &Rc<RefCell<Queues>>, now: &mut Ins
     }
 }
 
+/// Connects a client, answers both stock menus with `team` and `weapon`, and
+/// runs on until the spawn has settled. 20 s of simulated time at sv_fps 20,
+/// well past the settle a completed join needs; a join that never happens
+/// burns the lot. The loop's first usercmd is what enters the world and
+/// releases `Callback_PlayerConnect`'s `waittill`; the menus follow from it.
 pub fn join(
     sv: &mut Server,
     q: &Rc<RefCell<Queues>>,

@@ -594,11 +594,6 @@ fn a_gametype_script_from_disk_runs() {
     assert_eq!(probe(&mut sv), "mp_carentan");
 }
 
-/// A map change resumes the gametype's compile from the last level's
-/// instead of compiling it again, and lands where compiling afresh does:
-/// the compile a first load of the map makes, and the configstrings and
-/// baselines of the same map change with nothing carried. A changed
-/// gametype script is compiled afresh.
 /// A `map_restart` or a `fast_restart` takes the level's map parts instead
 /// of reading them again, and still references the iwds a fresh load
 /// does; another map reads its own.
@@ -622,6 +617,11 @@ fn a_reload_of_the_map_reuses_its_parts_and_references_the_same_iwds() {
     assert!(!Rc::ptr_eq(&first, &parts(&rig)));
 }
 
+/// A map change resumes the gametype's compile from the last level's
+/// instead of compiling it again, and lands where compiling afresh does:
+/// the compile a first load of the map makes, and the configstrings and
+/// baselines of the same map change with nothing carried. A changed
+/// gametype script is compiled afresh.
 #[test]
 fn a_map_change_resumes_the_gametype_compile_where_a_fresh_one_lands() {
     let Some(fs) = vcod_common::testing::cod2_fs() else {

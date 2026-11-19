@@ -12752,9 +12752,6 @@ mod tests {
         );
     }
 
-    /// Every base stage draws, in order, on its own image and tcMods; a
-    /// `perLight` stage is the dlight pass's and a `$lightmap` bundle 1 is
-    /// not drawn (CoDMP.exe 0x500b30, 0x4f3699).
     /// The view weapon's light pick reads the same list as every other
     /// model's: the cgame's and the entities' lights, capped, and none
     /// under `r_dynamiclight 0` (BUG-123).
@@ -12782,6 +12779,9 @@ mod tests {
         );
     }
 
+    /// Every base stage draws, in order, on its own image and tcMods; a
+    /// `perLight` stage is the dlight pass's and a `$lightmap` bundle 1 is
+    /// not drawn (CoDMP.exe 0x500b30, 0x4f3699).
     #[test]
     fn fx_stage_draws_every_base_stage() {
         assert_eq!(fx_stage_draws(None, "gfx/x", 0.0).len(), 1);
@@ -13030,10 +13030,6 @@ mod tests {
         }
     }
 
-    /// `white` and `$whiteimage` are the engine built-in; `black` shares its
-    /// texture (pak4 `scripts/hud.shader`: both stage `map $whiteimage`,
-    /// `black` differs only by `rgbGen const 0`, which `set_hud_quads`
-    /// applies to the quad colour).
     /// A CoD2 font's material draws its colour map, not the loose
     /// `fonts/gamefonts.tga` beside the font files.
     #[test]
@@ -13049,6 +13045,10 @@ mod tests {
         assert_eq!(cod2_hud_image(&fs, &lib, "fonts/no_such_material"), None);
     }
 
+    /// `white` and `$whiteimage` are the engine built-in; `black` shares its
+    /// texture (pak4 `scripts/hud.shader`: both stage `map $whiteimage`,
+    /// `black` differs only by `rgbGen const 0`, which `set_hud_quads`
+    /// applies to the quad colour).
     #[test]
     fn hud_texture_path_resolves_the_white_and_black_built_ins() {
         let Some(fs) = vcod_common::testing::game_fs() else {

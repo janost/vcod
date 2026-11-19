@@ -147,9 +147,6 @@ fn menu_reply<'a>(menu: &str, team: &'a str, weapon: Option<&'a str>) -> Option<
 mod tests {
     use super::*;
 
-    /// The stock rifle is semi-automatic: a held fire bit is one shot and then
-    /// nothing, so every shot needs its own release edge. Counted at the
-    /// probe's send rate rather than read off the pattern by eye.
     /// A map change and a dm map restart both rerun retail's `ClientConnect`
     /// and offer the team menu again, under the indices the last one used.
     /// Without the re-arm the probe skips them and never spawns again; a join

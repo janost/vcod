@@ -2153,8 +2153,6 @@ mod tests {
         );
     }
 
-    /// The count byte after a 2-bit clc op lands at the byte cursor, alone and
-    /// behind a reliable `clc_clientCommand`.
     /// The serverTime must survive a decode against a base the server never
     /// received (a dropped usercmd): we send absolute time, so it reconstructs
     /// correctly regardless of the server's stored base. An 8-bit delta anchored
@@ -2217,6 +2215,8 @@ mod tests {
         assert_eq!(got.server_time, i32::MIN + 4);
     }
 
+    /// The count byte after a 2-bit clc op lands at the byte cursor, alone and
+    /// behind a reliable `clc_clientCommand`.
     #[test]
     fn move_ops_count_reads_back() {
         let h = Huffman::new();

@@ -620,8 +620,6 @@ mod tests {
         assert_eq!(x.loadspec, "! airfield");
     }
 
-    /// `weap_mg42_loop`'s two rows in UO's `gmi_mp_vehicles_ge.csv`: the
-    /// near file inside 1800 units, the distant one past it.
     /// UO's no-repeat rule counts only the admitted rows (0x438300): two
     /// near rows of a four-row group may repeat, three may not, and a far
     /// pick between leaves the near rows' counters alone.
@@ -652,6 +650,8 @@ mod tests {
         assert_eq!(file(&three, &mut counts, 10.0), "n0.wav");
     }
 
+    /// `weap_mg42_loop`'s two rows in UO's `gmi_mp_vehicles_ge.csv`: the
+    /// near file inside 1800 units, the distant one past it.
     #[test]
     fn a_lod_pick_takes_the_row_for_the_distance() {
         let text = "name,sequence,file,vol_min,vol_max,pitch_min,pitch_max,dist_min,dist_max,lod_min,lod_max,channel,type,probability,loop\n\

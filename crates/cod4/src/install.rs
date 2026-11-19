@@ -249,14 +249,14 @@ impl Install {
     }
 }
 
-/// `base/rel` with each component of `rel` matched case-blind where the
-/// exact name is missing; `None` when a component is not there.
 /// Whether `name` (a server's `mapname`, a zone list's entry) can name a
 /// zone: one path component, no `..`, root, drive or control byte.
 pub fn is_zone_name(name: &str) -> bool {
     vcod_common::game_dir::confined_component(Path::new(""), name).is_some()
 }
 
+/// `base/rel` with each component of `rel` matched case-blind where the
+/// exact name is missing; `None` when a component is not there.
 fn resolve_dir(base: &Path, rel: &str) -> Option<PathBuf> {
     let mut at = base.to_path_buf();
     for part in rel.split(['/', '\\']).filter(|p| !p.is_empty()) {

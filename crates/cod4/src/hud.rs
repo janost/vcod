@@ -1056,15 +1056,15 @@ impl HudAssets {
     }
 }
 
-/// A material's colour map: its 2D (semantic 0) or colour (2) texture's
-/// image, else its first; a reference to another zone's image (`,name`)
-/// by its name.
 /// The material zone weapon `w`'s field `field` points at, by name.
 fn zone_material(a: &Assets, w: &Weapon, field: &str) -> Option<String> {
     let m = w.materials.get(field)?;
     Some(stub_name(&a.materials[m.index()].name).to_string())
 }
 
+/// A material's colour map: its 2D (semantic 0) or colour (2) texture's
+/// image, else its first; a reference to another zone's image (`,name`)
+/// by its name.
 pub fn colour_image(a: &Assets, m: &Material) -> Option<String> {
     let t = m
         .textures

@@ -4378,10 +4378,6 @@ mod tests {
         assert_eq!(w.field_i32(p, "damageYaw"), 64);
     }
 
-    /// The killing hit: `EV_DEATH` with parm 0, `pm_type` 6, the dead yaw
-    /// toward the attacker in `stats[1]`, and the feedback left as the last
-    /// surviving hit wrote it (combat doc, 8.4). Then the body: no input
-    /// moves it, and the eye drops 9 units a frame to `deadViewHeight`.
     /// A killing hit is `player_die`'s CORPSE write at once, so the body
     /// stops blocking before the end frame zeroes it: a turret's kill lands
     /// after that frame's end-frame pass.
@@ -4400,6 +4396,10 @@ mod tests {
         assert_eq!(sim.body(3), None);
     }
 
+    /// The killing hit: `EV_DEATH` with parm 0, `pm_type` 6, the dead yaw
+    /// toward the attacker in `stats[1]`, and the feedback left as the last
+    /// surviving hit wrote it (combat doc, 8.4). Then the body: no input
+    /// moves it, and the eye drops 9 units a frame to `deadViewHeight`.
     #[test]
     fn a_fatal_hit_kills_freezes_the_feedback_and_drops_the_eye() {
         let p = &PROTOCOL_V1;
@@ -4815,10 +4815,6 @@ mod tests {
         assert_eq!(sim.to_entity(p, 3, 0).field_i32(p, "otherEntityNum"), 0);
     }
 
-    /// `TeleportPlayer` (turrets doc, section 8 and 12.7): 200 at the old
-    /// origin and 199 at the destination on temp entities naming the
-    /// client, the origin a unit above the destination, the bit flipped and
-    /// the view set.
     /// `setOrigin` links at the unsnapped origin, and that link holds until
     /// the next cmd relinks at the snapped one (combat doc 14.3).
     #[test]
@@ -4832,6 +4828,10 @@ mod tests {
         assert_eq!(sim.link_origin(), sim.ps.origin.trunc());
     }
 
+    /// `TeleportPlayer` (turrets doc, section 8 and 12.7): 200 at the old
+    /// origin and 199 at the destination on temp entities naming the
+    /// client, the origin a unit above the destination, the bit flipped and
+    /// the view set.
     #[test]
     fn teleport_player_raises_out_and_in_and_flips_the_bit() {
         use crate::game::temp_entity::Scope;
