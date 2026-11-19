@@ -623,17 +623,17 @@ fn cod4_live_enemy_shot_ping_holds_for_its_fire_sound() {
             for (p, w) in files {
                 fs.overlay(&p, w);
             }
-            let mut a = AudioSystem::new(
+            let mut a = AudioSystem::with_aliases(
                 &fs,
                 AudioOpts {
                     enabled: false,
                     volume: 1.0,
                     rate: 44100,
                 },
+                sounds.take_table().unwrap(),
             );
             a.mock_mixer();
             a.on_gamestate("mp_crash");
-            a.set_cod4_aliases(sounds.take_table().unwrap());
             (a, fs, sounds)
         });
         let gs = f.s.gamestate()?;
