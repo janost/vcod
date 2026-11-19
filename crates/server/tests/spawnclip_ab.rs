@@ -8,8 +8,7 @@
 
 use crate::common;
 
-use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const MAP: &str = "mp_carentan";
 const FIXTURE: &str = "tests/fixtures/movers/mp_carentan-dm-spawnclip.txt";
@@ -28,13 +27,11 @@ fn a_spawned_brush_entity_clips_as_the_world_where_it_stands() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_spawnclip"), now);
-    sv.overlay_script("maps/mp/gametypes/probe_spawnclip", PROBE);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(PROBE),
+        ..common::Boot::new(MAP, "probe_spawnclip")
+    }
+    .start(fs);
     let mut log = Vec::new();
     for _ in 0..100 {
         now += Duration::from_millis(common::FRAME_MS as u64);

@@ -324,6 +324,11 @@ and in their crates (`crates/cod2/tests/*_ab.rs`, `crates/cod4/tests/moves_ab.rs
 - Debug env vars (`*_REPORT=1`, `*_TRACE=<ct>`, `*_DUMP=<path>`,
   `SLOPE_FIXTURE=<path>`) are read near the top of each gate.
 - Gates that need paks skip without `COD_DIR`.
+- A new CoD1 gate boots through `common::Boot` (map, gametype, a probe's
+  gsc as the gametype script, cvars, the wire) and drives one probe client
+  through `common::run_probe`, its per-frame cmds and server commands
+  through `common::ProbeHooks` (`DirectInput` for `--probe-uo-weapon
+  direct`). Older gates still carry their own copies.
 - A gate on a client probe whose watcher sleeps before it polls runs the
   server alone for `common::PROBE_JOIN_MS` before its client connects, as
   retail's client joined late. A body's idle clip runs from the spawn, and a

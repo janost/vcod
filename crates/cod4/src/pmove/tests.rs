@@ -2705,47 +2705,38 @@ fn hold(n: usize, buttons: u32, forward: i8) -> Script {
 
 /// An FNV-1a digest of every field the frame's head, the sprint, the
 /// foliage and the tail write, after each cmd of `script`.
-fn digest(mut ps: PlayerState, script: &Script, rules: Rules, weapon: WeaponMove) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut eat = |v: u32| {
-        for b in v.to_le_bytes() {
-            h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
-        }
-    };
+fn digest(mut ps: PlayerState, script: &Script, rules: Rules, weapon: WeaponMove) -> pin::Pin {
+    let mut p = pin::Pin::bytes();
     let mut old = cmd(ps.command_time, 0, 0);
     for &(buttons, forward) in script {
         let mut c = cmd(ps.command_time + 50, buttons, forward);
         c.right_move = if buttons & 0x8_0000 != 0 { 64 } else { 0 };
         player_step(&mut ps, &c, &mut old, &Brush, rules, weapon);
         let s = ps.sprint;
-        for v in [
-            ps.pm_flags,
-            ps.e_flags,
-            ps.pm_time as u32,
-            ps.event_sequence as u32,
-            ps.events[0],
-            ps.events[1],
-            ps.events[2],
-            ps.events[3],
-            ps.foliage_sound_time as u32,
-            s.last_start as u32,
-            s.last_end as u32,
-            s.start_max_length as u32,
+        p.step();
+        p.u32("pm_flags", ps.pm_flags);
+        p.u32("e_flags", ps.e_flags);
+        p.i32("pm_time", ps.pm_time);
+        p.i32("event_sequence", ps.event_sequence);
+        for e in ps.events {
+            p.u32("event", e);
+        }
+        p.i32("foliage_sound_time", ps.foliage_sound_time);
+        p.i32("sprint_last_start", s.last_start);
+        p.i32("sprint_last_end", s.last_end);
+        p.i32("sprint_start_max_length", s.start_max_length);
+        p.u32(
+            "sprint_delay_up",
             u32::from(s.delay) | u32::from(s.button_up_required) << 1,
-            ps.ground_entity_num as u32,
-            ps.view_height_target as u32,
-        ] {
-            eat(v);
-        }
-        for v in [ps.origin, ps.velocity] {
-            for x in v.to_array() {
-                eat(x.to_bits());
-            }
-        }
-        eat(ps.old_velocity[0].to_bits());
-        eat(ps.old_velocity[1].to_bits());
+        );
+        p.i32("ground", ps.ground_entity_num);
+        p.i32("view_height_target", ps.view_height_target);
+        p.vec("origin", ps.origin);
+        p.vec("velocity", ps.velocity);
+        p.f32("old_velocity_x", ps.old_velocity[0]);
+        p.f32("old_velocity_y", ps.old_velocity[1]);
     }
-    h
+    p
 }
 
 /// Pins `PmoveSingle`'s head, every arm's call order, the sprint and the
@@ -3051,8 +3042,8 @@ fn pmove_single_and_the_sprint_hold_their_pinned_traces() {
     let mut wrong = Vec::new();
     for (name, ps, script, rules, weapon, want) in cases {
         let got = digest(ps, &script, rules, weapon);
-        if got != want {
-            wrong.push(format!("(\"{name}\", {got:#018x})"));
+        if let Some(m) = got.miss(&format!("pmove_single_{name}"), want) {
+            wrong.push(m);
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));

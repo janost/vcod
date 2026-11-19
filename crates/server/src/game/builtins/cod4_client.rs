@@ -1028,3 +1028,110 @@ fn close_in_game_menu(
     host.client_commands.push((slot, "L".into()));
     Ok(Value::Undefined)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::cod4::tests::cod4_host;
+    use super::*;
+
+    /// The perk bits follow `bg_perkNames` case-blind; a name off the
+    /// table sets nothing and reads as unset.
+    #[test]
+    fn perks_set_their_table_bits() {
+        let mut vm = vcod_gsc::Vm::new();
+        vm.with_cx(|cx| {
+            let (mut host, me) = cod4_host(cx);
+            let p = |cx: &mut Cx, n: &str| [Value::String(cx.intern_exact(n))];
+            let reload = p(cx, "Specialty_FastReload");
+            let null = p(cx, "specialty_null");
+            let vest = p(cx, "specialty_armorvest");
+            set_perk(&mut host, cx, me, &reload).unwrap();
+            set_perk(&mut host, cx, me, &vest).unwrap();
+            set_perk(&mut host, cx, me, &null).unwrap();
+            assert_eq!(host.cod4().clients[0].perks, 1 << 2 | 1 << 17);
+            assert_eq!(has_perk(&mut host, cx, me, &reload), Ok(Value::Int(1)));
+            assert_eq!(has_perk(&mut host, cx, me, &null), Ok(Value::Int(0)));
+            unset_perk(&mut host, cx, me, &reload).unwrap();
+            assert_eq!(host.cod4().clients[0].perks, 1 << 17);
+            clear_perks(&mut host, cx, me, &[]).unwrap();
+            assert_eq!(host.cod4().clients[0].perks, 0);
+        });
+    }
+
+    /// `setRank`'s rank and prestige stay under 256; a bad prestige leaves
+    /// the rank as it was.
+    #[test]
+    fn set_rank_keeps_rank_and_prestige_under_256() {
+        let mut vm = vcod_gsc::Vm::new();
+        vm.with_cx(|cx| {
+            let (mut host, me) = cod4_host(cx);
+            let i = Value::Int;
+            set_rank(&mut host, cx, me, &[i(255), i(3)]).unwrap();
+            set_rank(&mut host, cx, me, &[i(12)]).unwrap();
+            let c = &host.cod4().clients[0];
+            assert_eq!((c.rank, c.prestige), (12, 3));
+            assert!(set_rank(&mut host, cx, me, &[i(256)]).is_err());
+            assert!(set_rank(&mut host, cx, me, &[i(-1)]).is_err());
+            assert!(set_rank(&mut host, cx, me, &[i(40), i(256)]).is_err());
+            let c = &host.cod4().clients[0];
+            assert_eq!((c.rank, c.prestige), (12, 3));
+        });
+    }
+
+    /// `setClientDvars` sends its pairs in one `v`, a `"` in a value as
+    /// `'`; an odd count is an error.
+    #[test]
+    fn set_client_dvars_pairs_its_arguments() {
+        let mut vm = vcod_gsc::Vm::new();
+        vm.with_cx(|cx| {
+            let (mut host, me) = cod4_host(cx);
+            let a = [
+                Value::String(cx.intern_exact("cg_hudGrenadeIconHeight")),
+                Value::Int(25),
+                Value::String(cx.intern_exact("ui_x")),
+                Value::String(cx.intern_exact("say \"hi\"")),
+            ];
+            set_client_dvars(&mut host, cx, me, &a).unwrap();
+            assert!(set_client_dvars(&mut host, cx, me, &a[..3]).is_err());
+            let sent: Vec<&str> = host.client_commands.iter().map(|c| c.1.as_str()).collect();
+            assert_eq!(sent, ["v cg_hudGrenadeIconHeight \"25\" ui_x \"say 'hi'\""]);
+        });
+    }
+
+    /// `setActionSlot`: slots 1 to 4; `weapon` keeps the weapon's number,
+    /// `altMode` and `nightvision` their types, `""` clears; an unknown
+    /// weapon or option is an error.
+    #[test]
+    fn set_action_slot_takes_its_four_slots_and_options() {
+        let mut vm = vcod_gsc::Vm::new();
+        vm.with_cx(|cx| {
+            let (mut host, me) = cod4_host(cx);
+            let m16 = super::super::cod4::register_weapon(&mut host, "m16_mp").unwrap();
+            let v = |cx: &mut Cx, t: &str| Value::String(cx.intern_exact(t));
+            let (weapon, alt, night, none) = (
+                v(cx, "weapon"),
+                v(cx, "altMode"),
+                v(cx, "nightvision"),
+                v(cx, ""),
+            );
+            let (gun, nope, odd) = (v(cx, "m16_mp"), v(cx, "nope_mp"), v(cx, "zoom"));
+            let i = Value::Int;
+            set_action_slot(&mut host, cx, me, &[i(1), night]).unwrap();
+            set_action_slot(&mut host, cx, me, &[i(2), alt]).unwrap();
+            set_action_slot(&mut host, cx, me, &[i(4), weapon, gun]).unwrap();
+            let l = &host.cod4().clients[0].loadout;
+            assert_eq!(l.action_slot_type[..], [3, 2, 0, 1]);
+            assert_eq!(l.action_slot_param[3], m16 as u32);
+            set_action_slot(&mut host, cx, me, &[i(1), none]).unwrap();
+            assert_eq!(host.cod4().clients[0].loadout.action_slot_type[0], 0);
+            for bad in [
+                vec![i(0), night],
+                vec![i(5), night],
+                vec![i(3), weapon, nope],
+                vec![i(3), odd],
+            ] {
+                assert!(set_action_slot(&mut host, cx, me, &bad).is_err(), "{bad:?}");
+            }
+        });
+    }
+}

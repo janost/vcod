@@ -173,6 +173,14 @@ results Rust does not promise across versions. A gate that fails after a
 glibc update or on another distro, with no code change, is that before it
 is a regression: name `ldd --version` in the report.
 
+CoD4's pmove self-pins (`moves_pins.rs`, `jump_pins.rs`, the
+`pmove_single` cases, the charge pick and the legs' anim pick) hold the
+model's own output where no capture reaches, not retail's. Each checks a
+digest through `pmove::pin::Pin`; a miss prints the first steps and
+fields that differ from `crates/cod4/tests/fixtures/pins/<name>.txt`.
+After an intended change, update the digest and rerun with `PIN_DUMP=1`
+to rewrite the fixtures.
+
 ## Headless render: pipeline_check
 
 `renderer::pipeline_check` builds the real `Renderer` headless and draws a

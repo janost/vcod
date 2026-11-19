@@ -280,13 +280,13 @@ mod tests {
     /// one body and pairs, pinned by an FNV-1a digest of `(yaw bits, dist)`.
     #[test]
     fn the_pick_holds_over_a_grid() {
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut p = crate::pmove::pin::Pin::bytes();
         let mut lunges = 0;
         let mut eat = |(yaw, dist): (f32, u8)| {
             lunges += usize::from(dist != 0);
-            for b in yaw.to_bits().to_le_bytes().into_iter().chain([dist]) {
-                h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
-            }
+            p.step();
+            p.f32("yaw", yaw);
+            p.byte("dist", dist);
         };
         let own = Vec3::new(3.0, -2.0, 0.0);
         let mut spots = Vec::new();
@@ -326,7 +326,7 @@ mod tests {
             }
         }
         assert!(lunges > 500 && lunges < 5000, "{lunges}");
-        assert_eq!(h, 0xfef1_e593_0c88_c6f0, "digest {h:#x}");
+        p.check("charge_pick", 0xfef1_e593_0c88_c6f0);
     }
 
     #[test]
