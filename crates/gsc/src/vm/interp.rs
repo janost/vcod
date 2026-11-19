@@ -186,14 +186,42 @@ pub(crate) fn values_equal(interner: &Interner, a: Value, b: Value) -> Result<bo
     }
 }
 
-/// `x op y` for one of the four ordering comparisons, promoting Int/Float
-/// like every other arithmetic op. Retail has no ordering outside numbers:
-/// `"a" < "b"` is fatal there (`# probe_cmp_order`).
-fn numeric_cmp(a: Value, b: Value, f: impl Fn(f32, f32) -> bool) -> Result<Value, ErrorKind> {
-    match (to_f32(a), to_f32(b)) {
-        (Some(x), Some(y)) => Ok(Value::Int(f(x, y) as i32)),
-        _ => Err(ErrorKind::BadType("< > <= >= need numbers")),
+/// Two numbers as the ordering comparisons read them: two ints stay ints,
+/// any other numeric pair compares as floats. Retail casts the pair to one
+/// type, then compares ints with `cmp`/`setl` and floats with `fcomps`
+/// (CoDMP.exe 1.1 0x478b98..0x478cd8, cod2_lnxded 0x807dd52).
+#[derive(Clone, Copy)]
+enum NumPair {
+    Int(i32, i32),
+    Float(f32, f32),
+}
+
+fn num_pair(a: Value, b: Value) -> Option<NumPair> {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => Some(NumPair::Int(x, y)),
+        _ => Some(NumPair::Float(to_f32(a)?, to_f32(b)?)),
     }
+}
+
+/// `x op y` on a [`NumPair`].
+macro_rules! pair_cmp {
+    ($p:expr, $cmp:tt) => {
+        match $p {
+            NumPair::Int(x, y) => x $cmp y,
+            NumPair::Float(x, y) => x $cmp y,
+        }
+    };
+}
+
+/// `a op b` for one of the four ordering comparisons. Retail has no
+/// ordering outside numbers: `"a" < "b"` is fatal there (`# probe_cmp_order`).
+macro_rules! numeric_cmp {
+    ($a:expr, $b:expr, $cmp:tt) => {
+        match num_pair($a, $b) {
+            Some(p) => Ok(Value::Int(pair_cmp!(p, $cmp) as i32)),
+            None => Err(ErrorKind::BadType("< > <= >= need numbers")),
+        }
+    };
 }
 
 /// The longest string a concatenation may build. No retail limit is on
@@ -848,14 +876,14 @@ impl Vm {
             }};
         }
         // A fused compare and `JumpIfFalse`: `Lt`'s two floats inline, any
-        // other pair through `numeric_cmp`, as the compare ops do.
+        // other pair through `numeric_cmp!`, as the compare ops do.
         macro_rules! cmp_jump {
             ($to:expr, $cmp:tt) => {{
                 let b = pop!();
                 let a = pop!();
                 let r = match (a, b) {
                     (Value::Float(x), Value::Float(y)) => x $cmp y,
-                    _ => tri!(numeric_cmp(a, b, |x, y| x $cmp y)) == Value::Int(1),
+                    _ => tri!(numeric_cmp!(a, b, $cmp)) == Value::Int(1),
                 };
                 if left > 0 {
                     left -= 1;
@@ -867,16 +895,20 @@ impl Vm {
         }
 
         // A fused `LoadLocal`/`Const`, compare and `JumpIfFalse`: two
-        // numbers compare as `numeric_cmp` does (as floats); any other pair
-        // runs the first op alone, so the compare's error comes from it.
+        // numbers compare as `numeric_cmp!` does; any other pair runs the
+        // first op alone, so the compare's error comes from it.
         macro_rules! operand_cmp_jump {
             ($b:expr, $to:expr, $cmp:tt) => {{
                 let b = $b;
-                match (to_f32(stack[sp - 1]), to_f32(b)) {
-                    (Some(x), Some(y)) if left >= 2 => {
+                match num_pair(stack[sp - 1], b) {
+                    Some(p) if left >= 2 => {
                         left -= 2;
                         sp -= 1;
-                        ip = if x $cmp y { ip + 2 } else { $to as usize };
+                        ip = if pair_cmp!(p, $cmp) {
+                            ip + 2
+                        } else {
+                            $to as usize
+                        };
                     }
                     _ => push!(b),
                 }
@@ -1496,7 +1528,7 @@ impl Vm {
                     let a = pop!();
                     let v = match (a, b) {
                         (Value::Float(x), Value::Float(y)) => Value::Int((x < y) as i32),
-                        _ => tri!(numeric_cmp(a, b, |x, y| x < y)),
+                        _ => tri!(numeric_cmp!(a, b, <)),
                     };
                     push!(v);
                 }
@@ -1505,7 +1537,7 @@ impl Vm {
                     let a = pop!();
                     let v = match (a, b) {
                         (Value::Float(x), Value::Float(y)) => Value::Int((x > y) as i32),
-                        _ => tri!(numeric_cmp(a, b, |x, y| x > y)),
+                        _ => tri!(numeric_cmp!(a, b, >)),
                     };
                     push!(v);
                 }
@@ -1514,7 +1546,7 @@ impl Vm {
                     let a = pop!();
                     let v = match (a, b) {
                         (Value::Float(x), Value::Float(y)) => Value::Int((x <= y) as i32),
-                        _ => tri!(numeric_cmp(a, b, |x, y| x <= y)),
+                        _ => tri!(numeric_cmp!(a, b, <=)),
                     };
                     push!(v);
                 }
@@ -1523,7 +1555,7 @@ impl Vm {
                     let a = pop!();
                     let v = match (a, b) {
                         (Value::Float(x), Value::Float(y)) => Value::Int((x >= y) as i32),
-                        _ => tri!(numeric_cmp(a, b, |x, y| x >= y)),
+                        _ => tri!(numeric_cmp!(a, b, >=)),
                     };
                     push!(v);
                 }
@@ -1904,30 +1936,31 @@ impl Vm {
                         (Some(v), Value::Array(id)) if left >= u32::from(extra) => {
                             left -= u32::from(extra);
                             locals[i as usize] = v;
-                            let x = to_f32(v).expect("a number");
-                            let n = self.heap.array_len(id) as i32;
-                            ip = if x < n as f32 { body } else { exit } as usize;
+                            let n = Value::Int(self.heap.array_len(id) as i32);
+                            let p = num_pair(v, n).expect("a number");
+                            ip = if pair_cmp!(p, <) { body } else { exit } as usize;
                         }
                         _ => push!(x),
                     }
                 }
                 Op::LtLevelSizeJumpIfFalse { i, f, to } => {
                     let x = locals[i as usize];
-                    match (to_f32(x), self.heap.get_field(self.level, f)) {
-                        (Some(x), Value::Array(id)) if left >= 5 => {
+                    match (x, self.heap.get_field(self.level, f)) {
+                        (Value::Int(_) | Value::Float(_), Value::Array(id)) if left >= 5 => {
                             left -= 5;
-                            let n = self.heap.array_len(id) as i32;
-                            ip = if x < n as f32 { at + 6 } else { to as usize };
+                            let n = Value::Int(self.heap.array_len(id) as i32);
+                            let p = num_pair(x, n).expect("a number");
+                            ip = if pair_cmp!(p, <) { at + 6 } else { to as usize };
                         }
                         _ => push!(x),
                     }
                 }
                 Op::LtLocalConstJumpIfFalse { a, c, to } => {
                     let x = locals[a as usize];
-                    match (to_f32(x), to_f32(func.consts[c as usize])) {
-                        (Some(x), Some(y)) if left >= 3 => {
+                    match num_pair(x, func.consts[c as usize]) {
+                        Some(p) if left >= 3 => {
                             left -= 3;
-                            ip = if x < y { at + 4 } else { to as usize };
+                            ip = if pair_cmp!(p, <) { at + 4 } else { to as usize };
                         }
                         _ => push!(x),
                     }
@@ -1945,13 +1978,14 @@ impl Vm {
                 }
                 Op::LtSizeJumpIfFalse { i, a, to } => {
                     let x = locals[i as usize];
-                    match (to_f32(x), locals[a as usize]) {
+                    match (x, locals[a as usize]) {
                         // `LoadField size`'s `Int`, then `Lt` through
-                        // `numeric_cmp` as two floats.
-                        (Some(x), Value::Array(id)) if left >= 4 => {
+                        // `numeric_cmp!`.
+                        (Value::Int(_) | Value::Float(_), Value::Array(id)) if left >= 4 => {
                             left -= 4;
-                            let n = self.heap.array_len(id) as i32;
-                            ip = if x < n as f32 { at + 5 } else { to as usize };
+                            let n = Value::Int(self.heap.array_len(id) as i32);
+                            let p = num_pair(x, n).expect("a number");
+                            ip = if pair_cmp!(p, <) { at + 5 } else { to as usize };
                         }
                         _ => push!(x),
                     }

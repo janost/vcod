@@ -240,7 +240,7 @@ Four retail facts shape every probe:
 
 **Equality, VERIFIED.** `1 == 1.0` true; `"abc" == "abc"` true; `"ABC" == "abc"` false; `"5" == 5` true, but `"5.0" == 5`, `"05" == 5` and `"abc" == 0` false. A number against a string is rendered with `%g` and compared as text. `undefined == 0` is fatal: `pair has unmatching types 'undefined' and 'int'`.
 
-**Ordering: numbers only, VERIFIED.** `"a" < "b"` is fatal: `pair has unmatching types 'string' and 'string'`. No string collation.
+**Ordering: numbers only, VERIFIED.** `"a" < "b"` is fatal: `pair has unmatching types 'string' and 'string'`. No string collation. VERIFIED (the instructions): CoDMP.exe 1.1's `VM_Execute` arms for `<`, `>`, `<=` and `>=` (0x478b98..0x478cd8) cast the pair to one type through 0x476090 (an int beside a float becomes a float), then compare two ints (type 5) with `cmp` and `setl`/`setg`/`setle`/`setge` and two floats (type 4) with `fcomps`, so `16777217 > 16777216` is 1 where an `f32` compare reads 0. INFERRED: 1.1d's arms have the same shape (the CoD2 handler below does). vcod: `num_pair` in `crates/gsc/src/vm/interp.rs`, for the plain and the fused compares.
 
 **Case folding is per role, VERIFIED.** Field names fold; array keys and string values do not (section 8).
 
