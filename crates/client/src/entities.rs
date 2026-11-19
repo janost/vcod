@@ -1599,12 +1599,15 @@ fn lerp_pos_angles(
         pos_tr.tr_type == TR_INTERPOLATE || (pos_tr.tr_type == TR_LINEAR_STOP && num < MAX_CLIENTS);
     if !interpolates {
         let pos = from.movers.carry(
-            pos_tr.evaluate(render_time),
+            pos_tr.evaluate_f32(render_time),
             cur.field_i32(p, "groundEntityNum"),
             from.snap.snap.server_time,
             render_time,
         );
-        return (pos, Trajectory::read(cur, p, "apos").evaluate(render_time));
+        return (
+            pos,
+            Trajectory::read(cur, p, "apos").evaluate_f32(render_time),
+        );
     }
     let ob = Vec3::from(ent.origin(p));
     let ab = ent.angles(p);

@@ -184,7 +184,7 @@ impl MissileWatch {
                     num,
                     e_type: f("eType"),
                     e_flags: f("eFlags"),
-                    origin: pos.evaluate(snap.server_time).into(),
+                    origin: pos.evaluate_f32(snap.server_time).into(),
                     pos,
                     apos: vcod_common::net::trajectory::Trajectory::read(e, p, "apos"),
                     weapon: f("weapon"),

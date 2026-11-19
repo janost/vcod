@@ -153,7 +153,7 @@ pub(crate) fn muzzle_point(snap: &SnapshotView, shooter: i32, view: Vec3) -> Opt
         return Some(view);
     }
     let e = snap.entity(u32::try_from(shooter).ok()?)?;
-    let origin = e.pos.evaluate(snap.server_time);
+    let origin = e.pos.evaluate_f32(snap.server_time);
     if shooter >= 64 {
         return Some(origin);
     }

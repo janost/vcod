@@ -331,7 +331,7 @@ pub fn origin_of(e: &EntityState) -> Vec3 {
 
 /// Where `e`'s trajectory puts it at `time` (`BG_EvaluateTrajectory`).
 pub fn position_at(e: &EntityState, time: i32) -> Vec3 {
-    trajectory(e, "pos").evaluate(time)
+    trajectory(e, "pos").evaluate_f32(time)
 }
 
 /// `e`'s yaw at `time` off its angle trajectory.
@@ -341,5 +341,5 @@ pub fn yaw_at(e: &EntityState, time: i32) -> f32 {
 
 /// `e`'s angles at `time` off its angle trajectory.
 pub fn angles_at(e: &EntityState, time: i32) -> Vec3 {
-    trajectory(e, "apos").evaluate(time)
+    trajectory(e, "apos").evaluate_f32(time)
 }

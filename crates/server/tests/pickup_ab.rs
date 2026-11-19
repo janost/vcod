@@ -484,7 +484,9 @@ fn items_near(s: &Snapshot, me: [f32; 3]) -> (BTreeSet<ItemKey>, BTreeSet<(i32, 
         if e.field_i32(p, "eType") != ET_ITEM {
             continue;
         }
-        let at: [f32; 3] = Trajectory::read(e, p, "pos").evaluate(s.server_time).into();
+        let at: [f32; 3] = Trajectory::read(e, p, "pos")
+            .evaluate_f32(s.server_time)
+            .into();
         if dist(at, me) > ITEM_RADIUS {
             continue;
         }

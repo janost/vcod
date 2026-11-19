@@ -254,7 +254,8 @@ pub fn run_flight(
     now_ms: i32,
     lift: &mut dyn FnMut(Vec3) -> f32,
 ) -> Ran {
-    let to = pos.evaluate(now_ms);
+    // f32: itemdrop_ab holds the arc to the hundredth, not the bit.
+    let to = pos.evaluate_f32(now_ms);
     let mut tr = world.item_trace(*origin, to, mins, maxs, mask);
     *origin = tr.endpos;
     if tr.startsolid {

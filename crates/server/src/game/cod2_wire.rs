@@ -634,7 +634,8 @@ fn link(
     let etype = word(es2!("eType"));
     let base = |ix: [usize; 3]| ix.map(|i| f32::from_bits(e.f[i]));
     let (o, a) = if etype == c2ev::ET_SCRIPTMOVER {
-        let at = |g: &str| Trajectory2::read(e, g).evaluate(time).to_array();
+        // The cull's box only, as 1.1's `world::link_pose`.
+        let at = |g: &str| Trajectory2::read(e, g).evaluate_f32(time).to_array();
         (at("pos"), at("apos"))
     } else {
         (base(es2!(3 "pos.trBase")), base(es2!(3 "apos.trBase")))

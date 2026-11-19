@@ -82,37 +82,6 @@ pub fn spin(host: &mut GameHost) -> Vec3 {
     )
 }
 
-/// `BG_EvaluateTrajectory` (lnxded 0x80df5d4) as `G_RunItem` reads the
-/// arc: the seconds stored as a float, then `VectorMA` on the stack with
-/// one store a component, `TR_GRAVITY` taking `t * 400 * t` off the stored
-/// z on the stack (cod2-combat.md 9.4), `TR_LINEAR_STOP` at its end time at
-/// most and never before its start. The shared `Trajectory::evaluate` rounds
-/// each product and sum to a float, which put a second dropped weapon's
-/// arc a last bit of z off retail's (cod2-protocol.md 15.7).
-pub fn evaluate(pos: &vcod_common::net::trajectory::Trajectory, at_ms: i32) -> Vec3 {
-    use vcod_common::net::trajectory::{TR_GRAVITY, TR_LINEAR, TR_LINEAR_STOP};
-    let secs = |at: i32| (at - pos.tr_time) as f32 * 0.001;
-    let ma = |t: f32| {
-        let m = |b: f32, d: f32| (f64::from(d) * f64::from(t) + f64::from(b)) as f32;
-        Vec3::new(
-            m(pos.base.x, pos.delta.x),
-            m(pos.base.y, pos.delta.y),
-            m(pos.base.z, pos.delta.z),
-        )
-    };
-    match pos.tr_type {
-        TR_LINEAR => ma(secs(at_ms)),
-        TR_LINEAR_STOP => ma(secs(at_ms.min(pos.tr_time + pos.tr_duration)).max(0.0)),
-        TR_GRAVITY => {
-            let t = secs(at_ms);
-            let mut p = ma(t);
-            p.z = (f64::from(p.z) - f64::from(t) * 400.0 * f64::from(t)) as f32;
-            p
-        }
-        _ => pos.evaluate(at_ms),
-    }
-}
-
 /// `G_RunItem`'s flight (lnxded 0x8107de6), CoD2's own: the arc read 50 ms
 /// ahead (a unit lower when that is under 0.1 squared off), swept from
 /// `origin`; a stop eases the item there over 50 ms (`TR_LINEAR_STOP` at 20
@@ -130,12 +99,17 @@ pub fn run_flight(
     now_ms: i32,
 ) -> super::item::Ran {
     use super::item::Ran;
-    use vcod_common::net::trajectory::{TR_LINEAR_STOP, Trajectory};
+    use vcod_common::net::trajectory::{TR_GRAVITY, TR_LINEAR, TR_LINEAR_STOP, Trajectory};
     const CONTENTS_NODROP: u32 = 0x8000_0000;
     let lerp = |a: Vec3, b: Vec3, f: f32| {
         (a.as_dvec3() + (b.as_dvec3() - a.as_dvec3()) * f64::from(f)).as_vec3()
     };
-    let mut to = evaluate(pos, now_ms + 50);
+    // lnxded's line, stop and arc store as 1.5b's (cod2-protocol.md 15.7);
+    // its other arms are unmeasured.
+    let mut to = match pos.tr_type {
+        TR_LINEAR | TR_LINEAR_STOP | TR_GRAVITY => pos.evaluate_stored(now_ms + 50),
+        _ => pos.evaluate_f32(now_ms + 50),
+    };
     if (origin.as_dvec3() - to.as_dvec3()).length_squared() < f64::from(0.1f32) {
         to.z -= 1.0;
     }

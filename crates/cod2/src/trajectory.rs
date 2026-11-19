@@ -42,10 +42,12 @@ impl Trajectory2 {
         }
     }
 
-    /// `BG_EvaluateTrajectory` at `at_ms`. Retail `Com_Error`s on a type past
-    /// 8; this returns `base`. The clocks wrap as the C `int`s do: CoD4's
+    /// `BG_EvaluateTrajectory` at `at_ms` with every product and sum rounded
+    /// to a float. The server's items and missiles evaluate as 1.5b's
+    /// (`vcod_common`'s `Trajectory::evaluate_stored`). Retail `Com_Error`s
+    /// on a type past 8; this returns `base`. The clocks wrap as the C `int`s do: CoD4's
     /// `physicsLaunch` sends `trDuration` 0x7fffffff (cod4-gsc.md).
-    pub fn evaluate(&self, at_ms: i32) -> Vec3 {
+    pub fn evaluate_f32(&self, at_ms: i32) -> Vec3 {
         let secs = |t: i32| t.wrapping_sub(self.tr_time) as f32 * 0.001;
         let end = self.tr_time.wrapping_add(self.tr_duration);
         match self.tr_type {
@@ -96,7 +98,7 @@ mod tests {
     }
 
     fn x(tr_type: i32, at: i32) -> f32 {
-        tr(tr_type).evaluate(at).x
+        tr(tr_type).evaluate_f32(at).x
     }
 
     fn close(a: f32, b: f32) -> bool {
@@ -112,7 +114,7 @@ mod tests {
         assert!(close(x(TR_LINEAR_STOP, 4000), 210.0));
         assert!(close(x(TR_LINEAR_STOP, 500), 10.0));
         assert!(close(x(TR_SINE, 1500), 110.0));
-        let g = tr(TR_GRAVITY).evaluate(2000);
+        let g = tr(TR_GRAVITY).evaluate_f32(2000);
         assert!(close(g.x, 110.0) && close(g.z, -400.0));
         // From rest a full duration covers half of `delta`'s pace; to rest,
         // the pace less that half.
@@ -133,7 +135,7 @@ mod tests {
                 base: Vec3::ONE,
                 delta: Vec3::X,
             };
-            assert!(t.evaluate(95_000).is_finite());
+            assert!(t.evaluate_f32(95_000).is_finite());
         }
     }
 }

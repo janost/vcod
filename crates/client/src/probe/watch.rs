@@ -120,7 +120,7 @@ impl ProbeWatch {
                 // rewrites the ground entity to 1022 when the body lands
                 // (`docs/research/cod11-combat.md` 5.3).
                 let tr = net::trajectory::Trajectory::read(ent, p, "pos");
-                let eval = tr.evaluate(s.server_time);
+                let eval = tr.evaluate_f32(s.server_time);
                 println!(
                     "corpse {num} trType {} trTime {} (age {} ms) base z {:.0} delta {:?} eval z {:.0} eFlags {:#x} groundEntityNum {}",
                     tr.tr_type,

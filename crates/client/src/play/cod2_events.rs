@@ -106,7 +106,7 @@ impl EventTracker {
                 time: es.i32("time"),
                 scale: es.i32("scale"),
                 angles2: [es.f32("angles2[0]"), es.f32("angles2[1]")],
-                pos: e.pos.evaluate(snap.server_time),
+                pos: e.pos.evaluate_f32(snap.server_time),
                 angles: e.apos.base,
                 from_ps: false,
             };

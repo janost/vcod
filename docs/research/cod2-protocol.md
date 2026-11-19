@@ -2776,10 +2776,10 @@ Still differing, the kill runs' `GAPS` (VERIFIED live, the fixtures):
   16800 and the weapon menu at 16850, spawns into the 16900 snapshot and sets
   the idle at 16950, as retail's capture does. VERIFIED (the replay's
   timeline). The second drop then rested a last bit of `trBase[2]` off:
-  `G_RunItem`'s arc read off the shared `Trajectory::evaluate`, which rounds
+  `G_RunItem`'s arc read off the shared `Trajectory::evaluate_f32`, which rounds
   each product and sum to a float, where `BG_EvaluateTrajectory` (lnxded
   0x80df5d4) keeps `VectorMA` and the fall on the stack (cod2-combat.md 9.4);
-  `game::cod2_items::evaluate` runs it so. VERIFIED, the gate (first parted at
+  `Trajectory::evaluate_stored` runs it so, as 1.5b's. VERIFIED, the gate (first parted at
   21500, the bounce off the arc at 21450's end). Both drops match every word;
   the live body's anim and the other placed fields too, so the spectator's
   diff now skips only a live body's `pos.trTime`. VERIFIED, the gate.

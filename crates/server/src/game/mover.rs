@@ -28,8 +28,7 @@ use crate::game::host::GameHost;
 use glam::Vec3;
 use vcod_common::collision::Pusher;
 use vcod_common::net::trajectory::{
-    TR_ACCELERATE, TR_DECCELERATE, TR_GRAVITY, TR_LINEAR, TR_LINEAR_STOP, TR_SINE, TR_STATIONARY,
-    Trajectory,
+    TR_ACCELERATE, TR_DECCELERATE, TR_GRAVITY, TR_LINEAR_STOP, TR_SINE, TR_STATIONARY, Trajectory,
 };
 use vcod_common::x87;
 use vcod_gsc::EntId;
@@ -358,95 +357,18 @@ fn normalize_in_place(stored: bool, v: Vec3) -> Vec3 {
     }
 }
 
-/// `BG_EvaluateTrajectory` (game.mp 0x2c600) as the 1.1d build runs it:
-/// a linear trajectory's `delta * dt + base` stays on the x87 stack until
-/// the store, `dt` the milliseconds times `0.001f`, so the turn a frame
-/// lands a float step off an `f32` evaluation (movers doc 12, "The
-/// residual yaw"). A gravity arc is `Trajectory::evaluate_kept` (0x2c6c0);
-/// the ramps are [`ramp_kept`] (0x2c767, 0x2c800); every other type
-/// `Trajectory::evaluate`.
-///
-/// 1.5b and UO store `dt` to a float before the mul-add (1.5b
-/// `0x1b8f5`), `stored`, and each ramp's terms ([`ramp_stored`]).
+/// `BG_EvaluateTrajectory` as the build runs it: 1.1d's on the x87 stack
+/// (`Trajectory::evaluate_kept`), 1.5b's and UO's stored
+/// (`Trajectory::evaluate_stored`). A linear turn lands a float step off an
+/// `f32` evaluation (movers doc 12, "The residual yaw").
 fn bg_evaluate(stored: bool, tr: &Trajectory, t: i32) -> Vec3 {
-    if tr.tr_type == TR_GRAVITY {
-        return if stored {
-            tr.evaluate_stored(t)
-        } else {
-            tr.evaluate_kept(t)
-        };
-    }
-    if matches!(tr.tr_type, TR_ACCELERATE | TR_DECCELERATE) {
-        return if stored {
-            ramp_stored(tr, t)
-        } else {
-            ramp_kept(tr, t)
-        };
-    }
-    let dt = |t: i32| {
-        let dt = f64::from(t.wrapping_sub(tr.tr_time)) * f64::from(0.001_f32);
-        if stored { f64::from(dt as f32) } else { dt }
-    };
-    let dt = match tr.tr_type {
-        TR_LINEAR => dt(t),
-        // Clamped to the end and to no less than 0 (0x2c673..0x2c69e).
-        TR_LINEAR_STOP => dt(t.min(tr.tr_time.wrapping_add(tr.tr_duration))).max(0.0),
-        _ => return tr.evaluate(t),
-    };
-    let f = |base: f32, delta: f32| (f64::from(delta) * dt + f64::from(base)) as f32;
-    Vec3::new(
-        f(tr.base.x, tr.delta.x),
-        f(tr.base.y, tr.delta.y),
-        f(tr.base.z, tr.delta.z),
-    )
-}
-
-/// 1.1d's `TR_ACCELERATE` and `TR_DECCELERATE` arms (0x2c767, 0x2c800):
-/// the time clamped at the segment's end, `phase` the stored length of the
-/// delta over the duration, both kept on the stack, the direction
-/// `VectorNormalize2`'s; `base + dir * (phase/2 dt^2)` accelerating,
-/// `(base + delta dt) - dir * (phase/2 dt^2)` decelerating, one rounding.
-fn ramp_kept(tr: &Trajectory, t: i32) -> Vec3 {
-    let k = f64::from(0.001_f32);
-    let dt = f64::from(
-        t.min(tr.tr_time.wrapping_add(tr.tr_duration))
-            .wrapping_sub(tr.tr_time),
-    ) * k;
-    let len = x87::dot(tr.delta, tr.delta).sqrt() as f32;
-    let phase = f64::from(len) / (f64::from(tr.tr_duration) * k);
-    let dir = x87::normalize(tr.delta).as_dvec3();
-    let (base, delta) = (tr.base.as_dvec3(), tr.delta.as_dvec3());
-    let out = if tr.tr_type == TR_ACCELERATE {
-        let s = phase * 0.5 * dt * dt;
-        dir * s + base
+    if stored {
+        tr.evaluate_stored(t)
     } else {
-        let s = -phase * 0.5 * dt * dt;
-        (delta * dt + base) + dir * s
-    };
-    out.as_vec3()
+        tr.evaluate_kept(t)
+    }
 }
 
-/// 1.5b's ramp arms (game.mp 0x1bc0a, 0x1bd22), which UO shares: `dt`,
-/// the length and `phase` each stored as a float, the decelerating
-/// segment's `base + delta dt` stored before the ramp term is added.
-fn ramp_stored(tr: &Trajectory, t: i32) -> Vec3 {
-    let k = f64::from(0.001_f32);
-    let dt = f64::from(
-        (f64::from(
-            t.min(tr.tr_time.wrapping_add(tr.tr_duration))
-                .wrapping_sub(tr.tr_time),
-        ) * k) as f32,
-    );
-    let len = x87::dot(tr.delta, tr.delta).sqrt() as f32;
-    let phase = f64::from((f64::from(len) / (f64::from(tr.tr_duration) * k)) as f32);
-    let dir = x87::normalize2_stored(tr.delta).as_dvec3();
-    let base = tr.base.as_dvec3();
-    if tr.tr_type == TR_ACCELERATE {
-        return (phase * 0.5 * dt * dt * dir + base).as_vec3();
-    }
-    let a = (tr.delta.as_dvec3() * dt + base).as_vec3().as_dvec3();
-    (-phase * 0.5 * dt * dt * dir + a).as_vec3()
-}
 /// Every entity a mover verb has been called on, and what it is doing.
 #[derive(Default)]
 pub struct Movers {
@@ -1844,14 +1766,14 @@ mod tests {
         );
         let (pos, _) = movers.wire(id, 0).unwrap();
         // z(t) = 100 + 300t - 400t^2, the retail trace to the digit.
-        assert!((pos.evaluate(375).z - 156.25).abs() < 0.01);
-        assert!((pos.evaluate(3000).z + 2600.0).abs() < 0.01);
+        assert!((pos.evaluate_f32(375).z - 156.25).abs() < 0.01);
+        assert!((pos.evaluate_f32(3000).z + 2600.0).abs() < 0.01);
 
         // It stops where it is on the frame its time runs out (0x5f93b).
         let row = movers.rows.get_mut(&id).unwrap();
         assert_eq!(row.pos.advance(3000), Some(MOVEDONE));
         assert_eq!(row.pos.current.tr_type, TR_STATIONARY);
-        assert!((row.pos.current.evaluate(3500).z + 2600.0).abs() < 0.01);
+        assert!((row.pos.current.evaluate_f32(3500).z + 2600.0).abs() < 0.01);
     }
 
     /// `G_MoverPush`'s boxes for an unrotated pusher: the list box grows
