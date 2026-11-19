@@ -527,6 +527,15 @@ Header tokens:
 
 - `numRows` is `min(level.numConnectedClients, 64)`; the client clamps to
   `0x40` again.
+- The rows stop at 1024 bytes: each row is `Com_sprintf`ed into a
+  0x400-byte buffer, and the loop breaks at the first row whose length
+  plus the rows' so far is over 0x400; the header's `numRows` is the loop
+  counter, the rows written. VERIFIED (the instructions), 1.1
+  `game_mp_x86.dll` 0x2001d1f7..0x2001d248 (`cmp esi,0x400` / `jg` at
+  0x2001d21c), the counter pushed for `"b %i %i %i%s"` at 0x2001d265;
+  1.5 `game_mp_x86.dll` 0x2001e9fc, UO `uo_game_mp_x86.dll` 0x200218ac,
+  the same test. CoD2's is the same (cod2-protocol.md 3.4). vcod:
+  `scoreboard::text`, every game.
 - Token 2 is `level.teamScores[1]` (Axis), token 3 `level.teamScores[2]`
   (Allies) (section 5). The client stores them at `0x3020ba04` /
   `0x3020ba08`; `-9999` means no score and renders `"-"` (`0x300630c8`).
