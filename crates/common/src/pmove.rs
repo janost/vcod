@@ -5695,7 +5695,7 @@ mod tests {
             pmove(&mut kb, &run, &mw, 0.016, &[]);
         }
         assert!(
-            (kb.velocity.x - free.velocity.x * 0.25).abs() < 3.0,
+            kb.velocity.x == 43.0,
             "{} vs {}",
             kb.velocity.x,
             free.velocity.x
@@ -6768,9 +6768,9 @@ mod tests {
             250,
         );
         let h = ps.velocity.truncate().length();
-        assert!((h - SPEED_RUN).abs() < 5.0, "run speed {h}");
+        assert!(h == 190.0, "run speed {h}");
         // yaw 0 => moving along +X
-        assert!(ps.velocity.x > 100.0 && ps.velocity.y.abs() < 1.0);
+        assert!(ps.velocity.x > 100.0 && ps.velocity.y == 0.0);
     }
 
     /// The walk wishes `ps.speed`, not a fixed 190: a `g_speed` 250
@@ -6790,7 +6790,7 @@ mod tests {
             ps.velocity.truncate().length()
         };
         let h = run(250.0);
-        assert!((h - 250.0).abs() < 5.0, "run speed {h}");
+        assert!(h == 250.0, "run speed {h}");
         assert_eq!(run(0.0), 0.0);
     }
 
@@ -6841,7 +6841,7 @@ mod tests {
             apex = apex.max(ps.origin.z);
         }
         assert!(
-            (apex - JUMP_HEIGHT).abs() < 2.0,
+            apex == 39.035995,
             "standing apex {apex}, expected ~{JUMP_HEIGHT}"
         );
         assert!(ps.on_ground);
@@ -7570,12 +7570,9 @@ mod tests {
         assert_eq!(ps.stance, Stance::Prone);
         assert!(ps.prone_dive);
         assert!(!ps.on_ground);
-        let takeoff = (2.0 * DIVE_HEIGHT_STAND * GRAVITY).sqrt();
-        assert!(
-            (ps.velocity.z - (takeoff - GRAVITY * 0.008)).abs() < 1.0,
-            "vz {}",
-            ps.velocity.z
-        );
+        // The takeoff, sqrt(2 * DIVE_HEIGHT_STAND * GRAVITY), less one
+        // 8 ms tick of gravity, snapped.
+        assert!(ps.velocity.z == 227.0, "vz {}", ps.velocity.z);
         // A sideways press does not dive.
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         let strafe = PmInput {
@@ -7621,7 +7618,7 @@ mod tests {
             apex = apex.max(ps.origin.z);
         }
         assert!(
-            (apex - JUMP_HEIGHT).abs() < 2.0,
+            apex == 39.035995,
             "standing apex {apex}, expected ~{JUMP_HEIGHT}"
         );
     }
@@ -7758,7 +7755,7 @@ mod tests {
             apex
         };
         let (fast, slow) = (apex(0.008), apex(0.02));
-        assert!((slow - JUMP_HEIGHT).abs() < 1.0, "20 ms apex {slow}");
+        assert!(slow == 39.035995, "20 ms apex {slow}");
         assert!(fast - slow > 1.5, "8 ms apex {fast}, 20 ms {slow}");
     }
 
@@ -7985,7 +7982,7 @@ mod tests {
         // Retail's cmd scale wades at `1 - waterlevel / 3 * 0.5`
         // (cod11-mantle.md, "The wish speed").
         assert!(
-            (wet_speed - dry_speed * (1.0 - WADE_SCALE / 3.0)).abs() < 2.0,
+            wet_speed == 158.0,
             "ankle-deep run {wet_speed} vs dry {dry_speed}"
         );
     }
@@ -8175,10 +8172,7 @@ mod tests {
         };
         tick(&mut ps, &crouched, &w, 250);
         let h = ps.velocity.truncate().length();
-        assert!(
-            (h - SPEED_RUN * SCALE_CROUCH).abs() < 5.0,
-            "crouch speed {h}"
-        );
+        assert!(h == 123.0, "crouch speed {h}");
         tick(&mut ps, &PmInput::default(), &w, 10);
         assert_eq!(ps.stance, Stance::Crouch);
     }
@@ -8195,7 +8189,7 @@ mod tests {
         };
         tick(&mut ps, &prone, &w, 400);
         let h = ps.velocity.truncate().length();
-        assert!((h - SPEED_RUN * SCALE_PRONE).abs() < 3.0, "prone speed {h}");
+        assert!(h == 29.0, "prone speed {h}");
     }
 
     /// `PM_UpdateLean`'s ramps: a full lean in 350 ms, back in 280.
@@ -8329,7 +8323,7 @@ mod tests {
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(&mut ps, &PmInput::default(), &w, 50);
         let v = ps.view();
-        assert!((v.eye.z - VIEW_STAND).abs() < 1.0);
+        assert!(v.eye.z == 60.0);
         let lean_r = PmInput {
             lean_right: true,
             ..Default::default()
@@ -8525,7 +8519,7 @@ mod tests {
         tick(&mut ps, &PmInput::default(), &w, 50);
         assert!(ps.on_ladder, "must stay on the ladder while hanging");
         assert!(
-            ps.velocity.z.abs() < 5.0,
+            ps.velocity.z == 0.0,
             "vertical speed should damp to zero, vz {}",
             ps.velocity.z
         );
@@ -8790,11 +8784,7 @@ mod tests {
             1.0 / 125.0,
             &mut Vec::new(),
         );
-        assert!(
-            (ps.velocity.x - 250.0).abs() < 1.0,
-            "neutral vx {}",
-            ps.velocity.x
-        );
+        assert!(ps.velocity.x == 250.0, "neutral vx {}", ps.velocity.x);
 
         let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 40.0), 0.0);
         ps.on_ground = false;
@@ -8809,11 +8799,7 @@ mod tests {
             1.0 / 125.0,
             &mut Vec::new(),
         );
-        assert!(
-            (ps.velocity.x - 500.0).abs() < 1.0,
-            "forward vx {}",
-            ps.velocity.x
-        );
+        assert!(ps.velocity.x == 500.0, "forward vx {}", ps.velocity.x);
 
         // tangential motion survives the glue (minus ladder friction)
         let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 40.0), 0.0);
@@ -8832,7 +8818,7 @@ mod tests {
             "tangential vy survives, {}",
             ps.velocity.y
         );
-        assert!((ps.velocity.x - 250.0).abs() < 1.0);
+        assert!(ps.velocity.x == 250.0);
     }
 
     #[test]
@@ -8860,11 +8846,11 @@ mod tests {
             );
             ps.velocity.x
         };
-        assert!((vx(0.0, 1.0) - 500.0).abs() < 1.0, "W level: 500");
+        assert!(vx(0.0, 1.0) == 500.0, "W level: 500");
         // -30 deg: fz = -0.5, u = -0.625 -> sign flips
-        assert!((vx(-30.0, 1.0) - 250.0).abs() < 1.0, "W down: 250");
-        assert!((vx(-30.0, -1.0) - 500.0).abs() < 1.0, "S down: 500");
-        assert!((vx(30.0, -1.0) - 250.0).abs() < 1.0, "S up: 250");
+        assert!(vx(-30.0, 1.0) == 250.0, "W down: 250");
+        assert!(vx(-30.0, -1.0) == 500.0, "S down: 500");
+        assert!(vx(30.0, -1.0) == 250.0, "S up: 250");
     }
 
     #[test]
@@ -9018,8 +9004,9 @@ mod tests {
             spectator_move(&mut ps, None, FULL, 0.0, 0.0, 0, 1.0 / 125.0);
         }
         let h = ps.velocity.truncate().length();
-        assert!((h - SPEED_SPECTATOR).abs() < 6.0, "speed {h}");
-        assert!(ps.velocity.y > 350.0 && ps.velocity.x.abs() < 1.0);
+        assert!(h == 400.0, "speed {h}");
+        // x is 400 * cos(pi / 2) in f32 (-1.7e-5 here): libm's, so a bound.
+        assert!(ps.velocity.y > 350.0 && ps.velocity.x.abs() < 1e-3);
     }
 
     /// `PM_FlyMove` wishes along the full view and scales by
@@ -9045,11 +9032,7 @@ mod tests {
         for _ in 0..250 {
             spectator_move(&mut ps, None, 63.5, 0.0, 0.0, 0, 1.0 / 125.0);
         }
-        assert!(
-            (ps.velocity.x - SPEED_SPECTATOR / 2.0).abs() < 1.0,
-            "{}",
-            ps.velocity
-        );
+        assert!(ps.velocity.x == 200.0, "{}", ps.velocity);
 
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         ps.speed = SPEED_SPECTATOR;
@@ -9242,7 +9225,7 @@ mod tests {
             ps.origin,
             ps.ground_entity
         );
-        assert!((ps.origin.z - 70.0).abs() < 1.0, "{}", ps.origin.z);
+        assert!(ps.origin.z == 70.125, "{}", ps.origin.z);
     }
 
     #[test]
@@ -9298,7 +9281,7 @@ mod tests {
         tick(&mut ps, &PmInput::default(), &w, 30);
         // 125 fps jumps a little over the 39 (`a_125_fps_jump_goes_higher`).
         let first = jump_apex(&mut ps, &w);
-        assert!((first - JUMP_HEIGHT).abs() < 3.0, "{first}");
+        assert!(first == 41.26878, "{first}");
         assert!(ps.jump_penalty);
         assert_eq!(ps.jump_origin_z, 0.0, "the takeoff height, kept");
         // The landing frame armed the timer; a jump 500 ms on pays the curve
@@ -9357,7 +9340,7 @@ mod tests {
         run(&mut ps, sprint, 1000);
         assert!(ps.sprinting);
         let speed = ps.velocity.truncate().length();
-        assert!((speed - SPEED_RUN * SCALE_SPRINT).abs() < 2.0, "{speed}");
+        assert!(speed == 304.0, "{speed}");
         run(&mut ps, sprint, 600);
         assert!(ps.winded && ps.fatigue < 0.5);
         run(&mut ps, sprint, 1500);
