@@ -871,6 +871,13 @@ impl Cod2Level {
         self.rt.host.client_roster[slot] = None;
         self.rt.host.cod2_mut().clients[slot].body = None;
         self.players[slot] = None;
+        // `G_FreeEntity`'s reference sweep: no missile keeps the slot as
+        // its thrower (cod2-combat.md 2.6).
+        for m in &mut self.combat.missiles {
+            if m.owner == Some(slot) {
+                m.owner = None;
+            }
+        }
     }
 
     /// The `mr` client command.
@@ -2174,5 +2181,43 @@ mod tests {
         assert_eq!(binocular_notify(168), Some("binocular_enter"));
         assert_eq!(binocular_notify(172), Some("binocular_drop"));
         assert_eq!(binocular_notify(173), None);
+    }
+
+    /// A grenade whose thrower left goes off with no thrower, even after
+    /// another client took his slot (`G_FreeEntity`'s sweep, lnxded
+    /// 0x811eb3e). Needs `COD2_DIR`.
+    #[test]
+    fn a_thrower_who_left_is_not_his_successor() {
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let gsc = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../cod2/tests/fixtures/moves/probe_moves.gsc"
+        ))
+        .unwrap();
+        let script = ("maps/mp/gametypes/probe_moves".to_string(), gsc);
+        let mut level = Cod2Level::load_with_script(
+            Rc::new(fs),
+            "mp_toujane",
+            "probe_moves",
+            script,
+            crate::cvars::Cvars::new(),
+            0,
+        )
+        .unwrap();
+        level.connect(0, "thrower");
+        level.connect(1, "bystander");
+        let at = Vec3::new(0.0, 1000.0, 100.0);
+        let mine = level
+            .fire_grenade(Some(0), 1, at, Vec3::ZERO, 3000)
+            .unwrap();
+        let theirs = level
+            .fire_grenade(Some(1), 1, at, Vec3::ZERO, 3000)
+            .unwrap();
+        level.disconnect(0);
+        level.connect(0, "successor");
+        assert_eq!(level.combat.missiles[mine].owner, None);
+        assert_eq!(level.combat.missiles[theirs].owner, Some(1));
     }
 }
