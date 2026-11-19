@@ -207,6 +207,11 @@ While `demowaiting` is set, `CL_WritePacket` writes the move as
 the snapshot parse, on the arm a delta byte of 0 takes: that byte reads
 as `deltaNum` -1 (0x47377c), and a `deltaNum` of 0 or less clears it
 and marks the snapshot valid with no base (VERIFIED, 0x473773..0x4737e5).
+Any other byte is a plain 32-bit `sub` from `serverMessageSequence`
+(0x47378a), so the base wraps on a record sequence past `i32::MAX`; a
+positive one needs its ring slot (`& 0x1f`) valid (0x473842) and holding
+that number (0x47386a), else the message stops there (VERIFIED, the
+instructions). vcod's `Client::parse_snapshot` wraps the same way.
 The parse runs before `CL_PacketEvent`'s write, so the full frame is
 the first message written (VERIFIED, the call at 0x46c534 ahead of the
 compare at 0x46c56e). vcod: `Conn::no_delta`, cleared on a snapshot

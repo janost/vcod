@@ -556,6 +556,47 @@ mod tests {
         }
     }
 
+    /// A demo's sequence is any word: message `i32::MIN` deltas one back
+    /// from `i32::MAX`, as retail's `int` subtraction wraps (CoD2MP_s.exe
+    /// 0x413751).
+    #[test]
+    fn a_delta_across_the_sign_bit_resolves_its_base() {
+        let huff = Huffman::new();
+        let gs = Gamestate2 {
+            server_command_sequence: 0,
+            configstrings: Default::default(),
+            baselines: Default::default(),
+            client_num: 0,
+            checksum_feed: 0,
+        };
+        let mut parser = Parser::new();
+        let mut w = MsgWriter::new(&huff);
+        write_gamestate(&mut w, &gs);
+        w.write_byte(Svc::Eof as u8);
+        parser.parse(1, &w.into_ops()).unwrap();
+        let mut ps = PlayerState2::default();
+        ps.f[field_index(&PLAYER_STATE_FIELDS, "pm_type")] = 4;
+        let f = Frame2 {
+            server_time: Msec::from_raw(1000),
+            ps,
+            entities: vec![],
+            clients: vec![],
+        };
+        let mut w = MsgWriter::new(&huff);
+        write_snapshot(&mut w, None, 0, 4, &f, |_| None, 0);
+        w.write_byte(Svc::Eof as u8);
+        parser.parse(i32::MAX, &w.into_ops()).unwrap();
+
+        let mut w = MsgWriter::new(&huff);
+        write_snapshot(&mut w, Some(&f), 1, 4, &f, |_| None, 0);
+        w.write_byte(Svc::Eof as u8);
+        parser.parse(i32::MIN, &w.into_ops()).unwrap();
+        let s = parser.frame(i32::MIN).unwrap();
+        assert!(s.valid);
+        assert_eq!(s.delta_num, i32::MAX);
+        assert_eq!(s.ps, f.ps);
+    }
+
     /// A message that fails after a server command, a gamestate or a
     /// snapshot leaves the parser as it was: the next packet acknowledges
     /// no command the caller never got.
