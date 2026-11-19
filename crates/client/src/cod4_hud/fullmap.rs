@@ -3,6 +3,9 @@
 //! (181..188) in the team and class menus (docs/research/cod4-hud.md
 //! 15.8). A child of `cod4_hud`, whose loaded zones it draws with.
 
+use super::assets::Loaded;
+use super::env::HudEnv;
+use super::text::text;
 use super::*;
 use vcod_cod4::menuexp;
 
