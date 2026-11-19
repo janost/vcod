@@ -28,6 +28,9 @@ Grep the module header comments for more; each one names its research doc.
   (`CollisionWorld::build`, the BVH), `entities` (model instances, poses,
   world copies, links), `query` (the trace and contents entry points) and
   `walk` (the BVH walk and the leaf-order replay).
+- `dobjanim`: `DObjCalcAnim`'s tree walk and folds, CoD2's and CoD4's;
+  each game brings its arithmetic and leaf sampler (`dobj.rs`,
+  `xanimcalc.rs`).
 - `clipmap/`: the CoD2-family clip map and its trace kernels.
   `vcod_cod2::collision` builds one from a `.d3dbsp`, `vcod_cod4::collision`
   from a clipMap_t.

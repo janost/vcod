@@ -6,6 +6,7 @@
 
 use crate::assets::Assets;
 use crate::assets::model::{XAnim, XModel};
+use crate::xanimcalc::{Parts, Rot, Trans};
 use anyhow::{Context, Result, bail, ensure};
 use glam::{Quat, Vec3};
 use vcod_common::asset_source::AssetSource;
@@ -429,143 +430,80 @@ impl<'a> Streams<'a> {
         };
         (0..=size).map(|_| src.u16()).collect()
     }
-}
 
-/// Frame `f`'s key list checked: ascending, starting at 0 and ending at
-/// the clip's last frame, as `XAnim_GetTimeIndex` reads it.
-fn check_keys(keys: &[u16], last: u16) -> Result<()> {
-    ensure!(
-        keys.first() == Some(&0) && keys.last() == Some(&last),
-        "keys run {:?}..{:?}, the clip 0..{last}",
-        keys.first(),
-        keys.last()
-    );
-    ensure!(keys.windows(2).all(|w| w[0] < w[1]), "keys not ascending");
-    Ok(())
+    /// A clip's streams end where its last bone's data does: each read to
+    /// its last byte.
+    pub(crate) fn finished(&self) -> Result<()> {
+        for c in [
+            &self.byte,
+            &self.short,
+            &self.int,
+            &self.rshort,
+            &self.rbyte,
+        ] {
+            ensure!(
+                c.at == c.b.len(),
+                "{} read {} of {}",
+                c.what,
+                c.at,
+                c.b.len()
+            );
+        }
+        Ok(())
+    }
 }
 
 /// `x`'s tracks, one per bone it names: rotation keys as the local
 /// quaternion (`noQuat` bones the identity, half quats about z), and
 /// translation keys as the offset from the bind's local position
-/// (`noTrans` bones none), decoded in `XAnimCalcParts`' stream order;
-/// the root motion as the nameless root track.
+/// (`noTrans` bones none), off [`Parts::of`]'s one decode; the root motion
+/// as the nameless root track.
 pub fn clip(a: &Assets, x: &XAnim) -> Result<cxanim::XAnim> {
-    let names: Vec<String> = x
-        .names
-        .iter()
-        .map(|&i| script_string(a, i).to_string())
-        .collect();
-    let bc = x.bone_count.map(usize::from);
-    let quat_total: usize = bc[..5].iter().sum();
-    let trans_total: usize = bc[5..9].iter().sum();
-    ensure!(
-        names.len() == bc[9] && quat_total == bc[9] && trans_total == bc[9],
-        "{}: bone counts {:?} for {} names",
-        x.name,
-        x.bone_count,
-        names.len()
-    );
-    let last = x.num_frames;
-    let mut s = Streams::of(x);
-    let mut tracks: Vec<Track> = names
-        .iter()
-        .map(|n| Track {
-            bone: n.clone(),
-            rot_keys: Vec::new(),
-            trans_keys: Vec::new(),
-            rot_raw: Vec::new(),
-        })
-        .collect();
+    Ok(clip_of(a, x, &Parts::of(a, x)?))
+}
+
+/// [`clip`] off `x`'s parts already decoded ([`Parts::of`]).
+pub fn clip_of(a: &Assets, x: &XAnim, p: &Parts) -> cxanim::XAnim {
     let q = |v: [i16; 4]| {
         let [x, y, z, w] = v.map(|c| f32::from(c) / 32767.0);
         Quat::from_xyzw(x, y, z, w).normalize()
     };
-    let mut bone = 0;
-    let mut decode = || -> Result<()> {
-        for t in tracks.iter_mut().take(bc[0]) {
-            t.rot_keys.push((0, Quat::IDENTITY));
-        }
-        bone += bc[0];
-        for (part, &count) in bc.iter().enumerate().take(5).skip(1) {
-            for _ in 0..count {
-                let t = &mut tracks[bone];
-                bone += 1;
-                let half = part % 2 == 1;
-                if part <= 2 {
-                    let keys = s.keys()?;
-                    check_keys(&keys, last).with_context(|| format!("bone {}", t.bone))?;
-                    for f in keys {
-                        let v = if half {
-                            [0, 0, s.rshort.i16()?, s.rshort.i16()?]
-                        } else {
-                            [
-                                s.rshort.i16()?,
-                                s.rshort.i16()?,
-                                s.rshort.i16()?,
-                                s.rshort.i16()?,
-                            ]
-                        };
-                        t.rot_keys.push((f, q(v)));
-                    }
-                } else {
-                    let v = if half {
-                        [0, 0, s.short.i16()?, s.short.i16()?]
-                    } else {
-                        [
-                            s.short.i16()?,
-                            s.short.i16()?,
-                            s.short.i16()?,
-                            s.short.i16()?,
-                        ]
-                    };
-                    t.rot_keys.push((0, q(v)));
+    // A held part is one key at frame 0.
+    let keyed = |keys: &Option<Vec<u16>>, i: usize| keys.as_ref().map_or(0, |k| k[i]);
+    let tracks = p
+        .bones
+        .iter()
+        .zip(p.rot.iter().zip(&p.trans))
+        .map(|(bone, (r, t))| Track {
+            bone: bone.clone(),
+            rot_keys: match r {
+                Rot::None => vec![(0, Quat::IDENTITY)],
+                Rot::Half(keys, v) => (v.iter().enumerate())
+                    .map(|(i, &[z, w])| (keyed(keys, i), q([0, 0, z, w])))
+                    .collect(),
+                Rot::Full(keys, v) => (v.iter().enumerate())
+                    .map(|(i, &v)| (keyed(keys, i), q(v)))
+                    .collect(),
+            },
+            trans_keys: match t {
+                Trans::Keyed {
+                    keys,
+                    mins,
+                    size,
+                    v,
+                } => {
+                    let (mins, size) = (Vec3::from(*mins), Vec3::from(*size));
+                    keys.iter()
+                        .zip(v)
+                        .map(|(&f, v)| (f, mins + size * Vec3::from(v.map(f32::from))))
+                        .collect()
                 }
-            }
-        }
-        for (part, &count) in bc.iter().enumerate().take(9).skip(5) {
-            for _ in 0..count {
-                let b = usize::from(s.byte.u8()?);
-                let t = tracks
-                    .get_mut(b)
-                    .with_context(|| format!("trans bone {b}"))?;
-                match part {
-                    5 | 6 => {
-                        let keys = s.keys()?;
-                        check_keys(&keys, last).with_context(|| format!("bone {}", t.bone))?;
-                        let (mins, size) = (s.int.vec3()?, s.int.vec3()?);
-                        for f in keys {
-                            let v = if part == 5 {
-                                let b = s.rbyte.take(3)?;
-                                Vec3::new(b[0].into(), b[1].into(), b[2].into())
-                            } else {
-                                Vec3::new(
-                                    s.rshort.u16()?.into(),
-                                    s.rshort.u16()?.into(),
-                                    s.rshort.u16()?.into(),
-                                )
-                            };
-                            t.trans_keys.push((f, mins + size * v));
-                        }
-                    }
-                    7 => t.trans_keys.push((0, s.int.vec3()?)),
-                    _ => t.trans_keys.push((0, Vec3::ZERO)),
-                }
-            }
-        }
-        Ok(())
-    };
-    decode().with_context(|| x.name.clone())?;
-    // A clip's streams end where its last bone's data does.
-    for c in [&s.byte, &s.short, &s.int, &s.rshort, &s.rbyte] {
-        ensure!(
-            c.at == c.b.len(),
-            "{}: {} read {} of {}",
-            x.name,
-            c.what,
-            c.at,
-            c.b.len()
-        );
-    }
+                Trans::Fixed(o) => vec![(0, Vec3::from(*o))],
+                Trans::None => vec![(0, Vec3::ZERO)],
+            },
+            rot_raw: Vec::new(),
+        })
+        .collect();
     let root = x.root.as_ref().map(|d| Track {
         bone: String::new(),
         rot_keys: d
@@ -576,7 +514,8 @@ pub fn clip(a: &Assets, x: &XAnim) -> Result<cxanim::XAnim> {
         trans_keys: d.trans.iter().map(|&(f, p)| (f, Vec3::from(p))).collect(),
         rot_raw: Vec::new(),
     });
-    Ok(cxanim::XAnim {
+    let last = x.num_frames;
+    cxanim::XAnim {
         name: x.name.clone(),
         frame_count: u32::from(last) + 1,
         framerate: x.framerate,
@@ -593,7 +532,7 @@ pub fn clip(a: &Assets, x: &XAnim) -> Result<cxanim::XAnim> {
                 )
             })
             .collect(),
-    })
+    }
 }
 
 /// The player animtree and script, as rawfiles (`common_mp` carries both).
@@ -615,7 +554,7 @@ pub struct BodySource {
     raw: std::collections::HashMap<String, Vec<u8>>,
     clips: std::collections::HashMap<String, cxanim::XAnim>,
     /// The same clips as 1.7's sampler reads them ([`crate::xanimcalc`]).
-    parts: std::collections::HashMap<String, crate::xanimcalc::Parts>,
+    parts: std::collections::HashMap<String, Parts>,
     /// Each of `models`' bones by name with the local 1.7 gives a bone no
     /// leaf reached (`SkelModel::base_locals`).
     bases: std::collections::HashMap<String, Vec<(String, crate::skel::AnimMat)>>,
@@ -671,9 +610,9 @@ impl BodySource {
             let Some((a, x)) = found else {
                 continue;
             };
-            match clip(a, x).and_then(|c| Ok((c, crate::xanimcalc::Parts::of(a, x)?))) {
-                Ok((c, p)) => {
-                    clips.insert(name.to_ascii_lowercase(), c);
+            match Parts::of(a, x) {
+                Ok(p) => {
+                    clips.insert(name.to_ascii_lowercase(), clip_of(a, x, &p));
                     parts.insert(name.to_ascii_lowercase(), p);
                 }
                 Err(e) => log::warn!("cod4 anim {name}: {e:#}"),
@@ -717,7 +656,7 @@ impl BodySource {
     }
 
     /// The clip `name` as 1.7's sampler reads it.
-    pub fn parts(&self, name: &str) -> Option<&crate::xanimcalc::Parts> {
+    pub fn parts(&self, name: &str) -> Option<&Parts> {
         vcod_common::text::with_ascii_lowercase(name, |n| self.parts.get(n))
     }
 

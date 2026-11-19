@@ -74,12 +74,12 @@ impl AnimMat {
 }
 
 /// A float on the x87 stack (an `f64` here).
-fn d(x: f32) -> f64 {
+pub(crate) fn d(x: f32) -> f64 {
     f64::from(x)
 }
 
 /// A store to a float.
-fn f(x: f64) -> f32 {
+pub(crate) fn f(x: f64) -> f32 {
     x as f32
 }
 
@@ -175,9 +175,10 @@ pub fn base_mats(x: &XModel) -> Vec<AnimMat> {
         .collect()
 }
 
-/// `1 / 32767` as the float 1.7 scales an `XModelQuat`'s shorts by
-/// (0x823ba10, 0x38000100).
-const QUAT_SCALE: f32 = f32::from_bits(0x3800_0100);
+/// `1 / 32767` as the float 1.7 scales an `XModelQuat`'s and a clip's quat
+/// shorts by (0x823ba10, 0x38000100; `iw3mp.exe`'s double at 0x70b2a0
+/// holds the same value).
+pub(crate) const QUAT_SCALE: f32 = f32::from_bits(0x3800_0100);
 
 /// The double `M_PI / 360` of `AnglesToQuat` (0x8238538).
 const HALF_DEG2RAD: f64 = 0.008_726_646_259_971_648;

@@ -8,15 +8,8 @@
 //! precision: an `f64` between the binary's stores. [`FlatTree::tree`]
 //! hands the walk ([`crate::xanimcalc`]) its leaves.
 
+use crate::skel::{d, f};
 use crate::xanimcalc::{Parts, Tree};
-
-fn d(x: f32) -> f64 {
-    f64::from(x)
-}
-
-fn f(x: f64) -> f32 {
-    x as f32
-}
 
 /// The float 0.001 widened (0x70af98): a weight starting from 0 starts at
 /// this share of its goal.
@@ -218,7 +211,7 @@ impl FlatTree {
                 .filter_map(|i| {
                     let (parts, remap) = leaf(i.node)?;
                     Some(Tree::Leaf {
-                        parts,
+                        clip: parts,
                         remap,
                         time: i.state.time,
                         weight: i.state.weight,
