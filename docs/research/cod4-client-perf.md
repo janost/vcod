@@ -1798,13 +1798,22 @@ census).
   frame (`dynent_census`, debug build). A blast wakes at most 20 a list
   (`dynEnt_explodeMaxEnts`), and a sleeping body is dropped. VERIFIED
   (the runs, ours).
-- The frame: not measured. The 2026-11-14 box had no Vulkan adapter
-  (`vulkaninfo` finds none, no lavapipe), so `tools/cod4_perf.sh` drew no
-  frame.
+- The frame, on a card (AMD Radeon 780M, RADV, Mesa 26.3.1; 1280x800,
+  `SESSION=1 GAMETYPE=war tools/cod4_perf.sh <out> <map> 25`, 12 bots;
+  mean ms a frame): with the dynents mp_crash spends 0.92 ms in `build`
+  and 0.12 in `pose`, against 0.13 and 0.04 with `VCOD_NO_DYNENTS=1`, at
+  4.09 ms against 3.37 a frame (245 against 297 fps). `gpu.scene` reads
+  2.79 against 2.86 ms: the instances cost no GPU time past the runs'
+  spread. mp_backlot: `build` 1.37, `pose` 0.18, `gpu.scene` 3.49, 5.58
+  ms a frame. VERIFIED (the runs, ours, 2026-11-19).
+- PERF-002's change (a dynent poses from its model by reference, not a
+  deep clone each frame), the same runs a side, the build before and
+  after merge 524510409: `pose` on mp_crash 0.33 -> 0.12, mp_backlot 0.49
+  -> 0.18, mp_crossfire turning at 90 deg/s (`TURN=90`) 0.59 -> 0.16; the
+  frame 4.19 -> 4.09, 5.64 -> 5.58 and 7.23 -> 6.73 ms (138 -> 149 fps on
+  the turn). `build`, `hud` and the GPU groups move within the runs'
+  spread. VERIFIED (the runs, ours, 2026-11-19).
 
-Pending, lavapipe or a card: `GAMETYPE=war PORT=29015
-tools/cod4_perf.sh <out> mp_crash 25` with and without
-`VCOD_NO_DYNENTS=1`, then mp_backlot, reading `pose`, `models`, `draws`,
-`entcalls`, `entbundled` and `gpu.scene`. If the instances cost more than
-section 2's spread, the next cut is batching each model's dynents into
-one static draw while none is awake.
+What the dynents still cost is CPU in `build` (0.8 ms on mp_crash): the
+next cut is batching each model's dynents into one static draw while none
+is awake.
