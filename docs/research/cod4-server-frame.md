@@ -1233,6 +1233,8 @@ M instructions a tick, mean (tick p50), before and after:
 | CoD2 mp_toujane, 8 observers | `archive` | 6.47 | 1.28 |
 | CoD4 mp_crossfire | `bots/moves` | 37.1 | 31.6 |
 | CoD4 mp_crossfire | tick p50 | 89.6 | 81.3 |
+| UO mp_kursk | `models/vehicles` | 2.26 | 0.69 |
+| UO mp_kursk | `frame` | 9.13 | 7.77 |
 
 What cost what:
 
@@ -1252,11 +1254,29 @@ What cost what:
 - CoD4's killcam history kept 64 inline playerstate slots a frame, present
   or not, plus a second copy: peak resident 523 to 448 MB at 32 bots.
   VERIFIED (the runs' `getrusage`).
+- UO: every traced round and every blast victim posed each vehicle's
+  hull and copied out all its collision triangles
+  (`vehicle::placed_models`); a hull now poses again only when its model
+  or the controls `apply_hull` reads change (`seat::hull_collision`,
+  `vehiclepose::hull_key`). `models/vehicles` p99 30.4 to 7.3 on
+  mp_kursk, 1.18 to 0.43 on mp_cassino. VERIFIED (the runs' logs,
+  `DIGEST=1` and `NETDIGEST=600` the same; 2026-11-19).
 - S&D round starts in CoD2 and CoD4 redid every guard-post survey (143 M
   instructions in one tick on mp_crash); the surveys now outlive a round
   on the same map. VERIFIED (the runs' logs).
 
-Left, measured and not changed: CoD4's end frame poses every playing body
+Left, measured and not changed: the CoD1 locational trace. Its bodies'
+pose copies (`trace/hit bodies`) cost 0.013 M a tick on 1.1 mp_carentan
+and UO mp_cassino, and posing the crossed skeletons (`trace/pose`) 0.073
+M on mp_carentan, 0.051 on mp_cassino, 0.015 on mp_kursk; of that, a
+pose of a body the stamp had already posed every bone of took 0.010 M on
+mp_carentan and none on mp_kursk. A pose kept per stamp would save under
+0.1% of a 23 M tick. VERIFIED (instrumented runs, 2026-11-19). The two
+phases stay. The `head` phase's `bots/plans` moves about 10% between
+runs of one binary with the same digests: its plans run on threads.
+VERIFIED (the runs' logs).
+
+CoD4's end frame poses every playing body
 for the next frame's tag reads (`posed_bodies`, 7 M of `frame/end frames`'
 9.6 M at 32 bots) and evaluates the death anim choices twice a cmd and
 frame (1.3 M each); CoD1's per-frame configstring copy, systeminfo and
