@@ -46,13 +46,11 @@ impl Rig {
     fn new() -> Option<Self> {
         let fs = vcod_common::testing::game_fs_11()?;
         let p = &PROTOCOL_V1;
-        let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-        let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-        let mut now = Instant::now();
-        let mut sv = vcod_server::Server::new(common::cfg(MAP, "dm"), now);
-        common::pin_carentan_pair(&mut sv);
-        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        let (mut sv, mut now) = common::Boot {
+            prep: Some(&common::pin_carentan_pair),
+            ..common::Boot::new(MAP, "dm")
+        }
+        .start(fs);
         let qa = Rc::new(RefCell::new(Queues::default()));
         let qb = Rc::new(RefCell::new(Queues::default()));
         let (ca, cb) = common::join_pair(

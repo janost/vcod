@@ -760,6 +760,45 @@ impl physics::VehicleWorld for BodiesWorld<'_> {
 mod tests {
     use super::*;
 
+    /// A sweep with `CONTENTS_BODY` in its mask meets a body's box grown by
+    /// the swept box, by the face it entered; a start inside the grown box
+    /// is startsolid at 0; a mask without it passes the bodies.
+    #[test]
+    fn the_vehicle_s_sweep_meets_the_bodies_only_under_their_mask() {
+        use glam::Vec3;
+        let collision = vcod_common::collision::test_world(&[]);
+        let bodies = [(
+            3,
+            Vec3::ZERO,
+            Vec3::new(-15.0, -15.0, 0.0),
+            Vec3::new(15.0, 15.0, 70.0),
+        )];
+        let w = BodiesWorld {
+            inner: physics::CollisionVehicleWorld {
+                world: &collision,
+                skip: None,
+            },
+            bodies: &bodies,
+            vehicles: &[],
+        };
+        use physics::VehicleWorld;
+        let (lo, hi) = (Vec3::splat(-8.0), Vec3::splat(8.0));
+        let (a, b) = (Vec3::new(-200.0, 0.0, 50.0), Vec3::new(200.0, 0.0, 50.0));
+        let t = w.trace(a, b, lo, hi, CONTENTS_BODY);
+        assert_eq!(t.entity, 3);
+        assert!((t.fraction - 177.0 / 400.0).abs() < 1e-6, "{}", t.fraction);
+        assert_eq!(t.normal, Vec3::new(-1.0, 0.0, 0.0));
+        assert!(!t.startsolid);
+        let t = w.trace(a, b, lo, hi, vcod_common::collision::CONTENTS_SOLID);
+        assert_eq!(t.fraction, 1.0);
+        let inside = Vec3::new(10.0, 0.0, 50.0);
+        let t = w.trace(inside, b, lo, hi, CONTENTS_BODY);
+        assert_eq!((t.fraction, t.entity, t.endpos), (0.0, 3, inside));
+        assert!(t.startsolid && !t.allsolid);
+        let t = w.trace(inside, inside, lo, hi, CONTENTS_BODY);
+        assert!(t.allsolid);
+    }
+
     /// The retail overheat capture (`snapshots-uo-overheat.bin`): a tank
     /// gunner holding `mg42_turret_mp` (`fireHeat` 0.04, `cooldownRate`
     /// 0.01, `fireTime` 0.1) fires 49 rounds 100 ms apart, overheats on the

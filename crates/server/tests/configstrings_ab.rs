@@ -25,17 +25,11 @@ const GAPS: &[(usize, &str)] = &[];
 
 fn cfg(map: &str, gametype: &str) -> vcod_server::ServerConfig {
     vcod_server::ServerConfig {
-        map: map.into(),
-        hostname: "vcod test".into(),
         // The capture was taken at 8. `sv_maxclients` reaches the script
         // through the cvar table, so it has to match or the diff moves for
         // a reason that is not a bug.
         max_clients: 8,
-        gametype: gametype.into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
+        ..crate::common::cfg(map, gametype)
     }
 }
 

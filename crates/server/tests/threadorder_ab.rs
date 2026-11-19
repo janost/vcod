@@ -81,13 +81,12 @@ fn server(
     now: &mut Instant,
 ) -> vcod_server::Server {
     let map = "mp_pavlov";
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_threadorder"), *now);
-    sv.set_protocol(proto);
-    sv.overlay_script("maps/mp/gametypes/probe_threadorder", SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, _) = common::Boot {
+        proto: Some(proto),
+        script: Some(SCRIPT),
+        ..common::Boot::new(map, "probe_threadorder")
+    }
+    .start(fs);
     common::run_alone(&mut sv, now, common::PROBE_JOIN_MS);
     sv
 }

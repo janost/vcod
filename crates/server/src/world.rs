@@ -41,32 +41,6 @@ pub struct World {
 /// gives a script model, whose own box is a point, any clusters at all.
 const LINK_EPSILON: f32 = 1.0;
 
-/// Which of `entities` a client standing at `eye` is sent. Retail's rule is
-/// the entity's clusters against the client's PVS row
-/// (`docs/protocol-1.1.md`, "Which entities a client is sent"), collected from
-/// the box its spawn function links it with, and this does the same. A point
-/// lookup is not enough: a turret's origin sits inside the geometry it stands
-/// on and reads as a solid leaf, so it would be visible from everywhere.
-/// The two areas must connect too, and an eye in a solid leaf is sent
-/// nothing ([`Viewer::sees_nothing`]).
-pub fn visible_entities(
-    vis: &mapworld::Visibility,
-    eye: [f32; 3],
-    entities: &BTreeMap<u32, EntityState>,
-    time: i32,
-    p: &Cod1Wire,
-) -> BTreeMap<u32, EntityState> {
-    let v = Viewer::at(vis, eye);
-    if v.sees_nothing() {
-        return BTreeMap::new();
-    }
-    entities
-        .iter()
-        .filter(|(_, e)| entity_seen(vis, &v, e, time, p, None))
-        .map(|(n, e)| (*n, e.clone()))
-        .collect()
-}
-
 /// Where a snapshot is built from: the eye, and the cluster and area of
 /// its leaf.
 #[derive(Clone, Copy, Debug)]
@@ -92,18 +66,6 @@ impl Viewer {
     pub fn sees_nothing(&self) -> bool {
         self.area < 0
     }
-}
-
-/// [`visible_entities`]' cluster test for one entity, from the cluster
-/// `from`, in the frame whose level time is `time`.
-pub fn entity_visible(
-    vis: &mapworld::Visibility,
-    from: i32,
-    e: &EntityState,
-    time: i32,
-    p: &Cod1Wire,
-) -> bool {
-    vis.link_visible(from, &entity_link(vis, e, time, p).0)
 }
 
 /// The snapshot builder's whole test for an entity the viewer is not sent
@@ -423,6 +385,18 @@ impl TestEntities {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The cull's cluster test alone for one entity, from the cluster
+    /// `from`, in the frame whose level time is `time`.
+    fn entity_visible(
+        vis: &mapworld::Visibility,
+        from: i32,
+        e: &EntityState,
+        time: i32,
+        p: &Cod1Wire,
+    ) -> bool {
+        vis.link_visible(from, &entity_link(vis, e, time, p).0)
+    }
 
     #[test]
     fn spawns_at_a_map_spot_on_real_maps() {

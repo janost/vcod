@@ -60,14 +60,8 @@ fn ours_with(
     let fs = std::rc::Rc::new(fs);
     let start = std::time::Instant::now();
     let cfg = vcod_server::ServerConfig {
-        map: "mp_carentan".into(),
         hostname: "CoDHost".into(),
-        max_clients: 8,
-        gametype: "dm".into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
+        ..crate::common::cfg("mp_carentan", "dm")
     };
     let mut sv = vcod_server::server::Server::new(cfg, start);
     sv.set_protocol(&PROTOCOL_V6);

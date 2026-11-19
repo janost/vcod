@@ -6,6 +6,16 @@
 
 use super::*;
 
+/// What `configstrings::systeminfo` reads: the server id, the fall
+/// bounds' bits, `sv_cheats`, the paks and 1.5's rows.
+pub(super) type SystemInfoKey = (
+    u8,
+    [u32; 2],
+    bool,
+    configstrings::PakLists,
+    Option<Vec<(String, String)>>,
+);
+
 /// CoD1 behind the engine: its game module ([`Cod1Module`]) and the engine
 /// state CoD1 keeps itself, beside [`crate::engine::EngineCore`].
 pub struct Cod1Game {
@@ -56,6 +66,9 @@ pub struct Cod1Game {
     pub(super) fs: Option<Rc<vcod_common::pk3::Pk3Fs>>,
     /// The pak cvars of the mounted search path, systeminfo's lists.
     pub(super) paks: configstrings::PakLists,
+    /// The last systeminfo `refresh_fall_heights` built and what it was
+    /// built from: the same inputs build the same string, pak trim and all.
+    pub(super) systeminfo: Option<(SystemInfoKey, String)>,
     /// The pure checksums a `cp` is checked against, keyed with this
     /// level's `checksumFeed`; `None` until a level loads.
     pub(super) pure_check: Option<PureCheck>,

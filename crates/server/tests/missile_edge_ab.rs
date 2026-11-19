@@ -21,7 +21,7 @@ use crate::common;
 use common::{Join, Queues, step};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, BUTTON_MELEE, UserCmd};
 use vcod_common::net::{NetClient, NetEvent};
 
@@ -99,17 +99,12 @@ fn ours_pinned(
     draws: Vec<f64>,
     rocket_deltas: Vec<[f32; 3]>,
 ) -> Vec<String> {
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, name), now);
-    sv.set_protocol(vcod_server::server::install_protocol(&fs));
-    sv.overlay_script(&format!("maps/mp/gametypes/{name}"), script);
-    for (k, v) in cvars {
-        sv.set_cvar(k, v);
+    let (mut sv, mut now) = common::Boot {
+        cvars,
+        script: Some(script),
+        ..common::Boot::new(map, name)
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     sv.pin_missile_draws(draws);
     sv.pin_rocket_deltas(rocket_deltas);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);

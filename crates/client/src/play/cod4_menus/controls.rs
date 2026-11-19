@@ -20,6 +20,7 @@ use super::{ScriptMenus, placed};
 use crate::console::keys;
 use crate::console::shell::{bare, quotable};
 use crate::hud::cod2elem::ScreenPlacement;
+use crate::hud::hudelem::format_g;
 
 /// The CoD4 dvars an option control sets and the vcod cvar each is: the
 /// mouse's (`main.rs`'s `mouse_frame`), `r_gamma` (the gamma pass),
@@ -1201,22 +1202,6 @@ pub fn clean(s: &str) -> String {
     out
 }
 
-/// C's `%g` for the menus' values: six significant digits, trailing zeros
-/// dropped.
-pub fn format_g(v: f32) -> String {
-    if v == 0.0 || !v.is_finite() {
-        return "0".into();
-    }
-    let digits = (v.abs() as f64).log10().floor() as i32 + 1;
-    let decimals = (6 - digits).clamp(0, 6) as usize;
-    let s = format!("{:.*}", decimals, v);
-    if s.contains('.') {
-        s.trim_end_matches('0').trim_end_matches('.').to_string()
-    } else {
-        s
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1228,6 +1213,8 @@ mod tests {
         assert_eq!(format_g(-0.022), "-0.022");
         assert_eq!(format_g(15.5), "15.5");
         assert_eq!(format_g(65535.0), "65535");
+        assert_eq!(format_g(0.00001), "1e-05");
+        assert_eq!(format_g(0.012345678), "0.0123457");
         assert_eq!(clean("\u{15}\u{15}^9walker^7: ^7hi"), "walker: hi");
     }
 

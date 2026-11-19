@@ -93,6 +93,12 @@ dispatcher (`0x401e22`, table `0x4041f0`) sends trap 9 to `0x402331`, which
 calls `Cvar_Set2` (`0x439650`) with `eax` 1, the `force` path: no
 read-only, cheat or latch check, and an unregistered name is made with no
 flags (cod11-console.md 5). VERIFIED, asm: UO's engine does the same.
+A made cvar takes a slot of a 1024-entry table: the creation path compares
+the count at 0x1646420 with 0x400 (CoDMP.exe 0x4394bb) and past it calls
+0x435ad0 with 0 and `MAX_CVARS` (0x562368). VERIFIED (the instructions and
+the string). That the call is `Com_Error(ERR_FATAL)` is INFERRED. vcod drops
+a new name once the server has set 1024 (`ClientCvars::server_set`) and
+stays up.
 CoDUOMP.exe's cgame syscall switch (`0x401f5f`, table `0x404ae8`, bound
 `0xfa`) sends trap 9 to `0x4023fe`, which calls `0x43df50`, and that calls
 `Cvar_Set2` (`0x43dc50`, the function holding `%s is read only.` and `%s is
@@ -527,6 +533,15 @@ Header tokens:
 
 - `numRows` is `min(level.numConnectedClients, 64)`; the client clamps to
   `0x40` again.
+- The rows stop at 1024 bytes: each row is `Com_sprintf`ed into a
+  0x400-byte buffer, and the loop breaks at the first row whose length
+  plus the rows' so far is over 0x400; the header's `numRows` is the loop
+  counter, the rows written. VERIFIED (the instructions), 1.1
+  `game_mp_x86.dll` 0x2001d1f7..0x2001d248 (`cmp esi,0x400` / `jg` at
+  0x2001d21c), the counter pushed for `"b %i %i %i%s"` at 0x2001d265;
+  1.5 `game_mp_x86.dll` 0x2001e9fc, UO `uo_game_mp_x86.dll` 0x200218ac,
+  the same test. CoD2's is the same (cod2-protocol.md 3.4). vcod:
+  `scoreboard::text`, every game.
 - Token 2 is `level.teamScores[1]` (Axis), token 3 `level.teamScores[2]`
   (Allies) (section 5). The client stores them at `0x3020ba04` /
   `0x3020ba08`; `-9999` means no score and renders `"-"` (`0x300630c8`).

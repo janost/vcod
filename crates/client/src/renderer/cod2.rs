@@ -317,6 +317,14 @@ pub(super) struct LitBind {
     pub lightmap: u32,
     pub entry: LitEntry,
     pub water: bool,
+    /// The draw's polygon offset ([`lit_offset`]), part of its pipeline's key.
+    pub offset: Option<PolygonOffset>,
+}
+
+/// A lit draw's polygon offset: the material's kind when the stage takes
+/// one, `Single` for a stage that takes one off a material naming none.
+pub(super) fn lit_offset(bias: bool, sh: &Material) -> Option<PolygonOffset> {
+    bias.then(|| sh.depth_bias.unwrap_or(PolygonOffset::Single))
 }
 
 /// The lit pipeline's fragment entry: a lightmapped world batch
@@ -383,7 +391,7 @@ impl LitPath {
 pub type FsKey = (LitEntry, Option<LitPath>);
 
 /// The pipeline key: variant slot, two-sided, polygon offset, fragment.
-type Key = (usize, bool, bool, FsKey);
+type Key = (usize, bool, Option<PolygonOffset>, FsKey);
 
 /// A depth prepass pipeline's key: two-sided, and the fragment of the
 /// EQUAL colour pipeline (`None` the depth-only one).
@@ -566,11 +574,10 @@ impl Cod2World {
         &self,
         v: StageVariant,
         two_sided: bool,
-        bias: bool,
         lit: &LitBind,
     ) -> &wgpu::RenderPipeline {
         let (slot, ..) = variant_state(v).expect("lit draws take a lit variant");
-        &self.pipelines[&(slot, two_sided, bias, self.fs_key(lit))]
+        &self.pipelines[&(slot, two_sided, lit.offset, self.fs_key(lit))]
     }
 }
 
@@ -681,8 +688,8 @@ struct LitBase {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 struct MadeKey {
     two_sided: bool,
-    /// whether it takes a polygon offset, and which
-    offset: Option<Option<PolygonOffset>>,
+    /// the polygon offset it takes, if any
+    offset: Option<PolygonOffset>,
     fs: FsKey,
     blend: Option<wgpu::BlendState>,
     depth_write: bool,
@@ -1109,13 +1116,14 @@ impl<'a> Cod2Builder<'a> {
             fs,
             &self.sun_buf,
             sh,
-            (v, two_sided, bias),
+            (v, two_sided, lit_offset(bias, sh)),
         );
         LitBind {
             material: i,
             lightmap: i,
             entry: LitEntry::Main,
             water: true,
+            offset: lit_offset(bias, sh),
         }
     }
 
@@ -1363,16 +1371,16 @@ impl<'a> Cod2Builder<'a> {
             lightmap,
             entry,
             water: false,
+            offset: lit_offset(bias, sh),
         };
         let (slot, blend, depth_write) = variant_state(v).expect("a lit variant");
         let fs = self.fs_key(&bind);
-        // the first draw of a key picks its offset; [`Self::finish_keeping`]
-        // compiles them all
+        // [`Self::finish_keeping`] compiles every key
         self.made
-            .entry((slot, two_sided, bias, fs))
+            .entry((slot, two_sided, bind.offset, fs))
             .or_insert(MadeKey {
                 two_sided,
-                offset: bias.then_some(sh.depth_bias),
+                offset: bind.offset,
                 fs,
                 blend,
                 depth_write,
@@ -1529,8 +1537,8 @@ impl<'a> Cod2Builder<'a> {
         let mut keys: Vec<PrepassKey> = self
             .made
             .keys()
-            .filter(|&&(slot, _, bias, (entry, _))| {
-                slot == opaque && !bias && entry != LitEntry::Cod4Water
+            .filter(|&&(slot, _, offset, (entry, _))| {
+                slot == opaque && offset.is_none() && entry != LitEntry::Cod4Water
             })
             .flat_map(|&(_, two_sided, _, fs)| [(two_sided, None), (two_sided, Some(fs))])
             .collect();
@@ -1955,10 +1963,7 @@ fn build_made(
         made.depth_write,
         made.two_sided,
         (made.fs.0.name(), made.fs.1),
-        match made.offset {
-            Some(offset) => depth_bias(offset.unwrap_or(PolygonOffset::Single)),
-            None => Default::default(),
-        },
+        made.offset.map_or_else(Default::default, depth_bias),
     )
 }
 
@@ -2367,6 +2372,27 @@ fn make_sky_pipeline(
 pub(super) mod tests {
     use super::*;
 
+    /// Two decals that differ only in their offset kind key two pipelines
+    /// (BUG-148); a stage that takes none keys none.
+    #[test]
+    fn a_lit_draw_keys_its_polygon_offset_kind() {
+        let with = |o: Option<PolygonOffset>| Material {
+            depth_bias: o,
+            ..Material::from_shader(&vcod_common::shader::Shader::default())
+        };
+        let (single, double) = (
+            with(Some(PolygonOffset::Single)),
+            with(Some(PolygonOffset::Double)),
+        );
+        assert_eq!(lit_offset(true, &single), Some(PolygonOffset::Single));
+        assert_eq!(lit_offset(true, &double), Some(PolygonOffset::Double));
+        assert_eq!(lit_offset(true, &with(None)), Some(PolygonOffset::Single));
+        assert_eq!(lit_offset(false, &double), None);
+        let fs: FsKey = (LitEntry::Main, None);
+        let key = |sh: &Material| -> Key { (0, false, lit_offset(true, sh), fs) };
+        assert_ne!(key(&single), key(&double));
+    }
+
     #[test]
     fn weights_sum_to_one_and_favour_up_at_the_centre() {
         let w = lightmap_weights();
@@ -2630,6 +2656,7 @@ pub(super) mod tests {
                             lightmap: 0,
                             entry: LitEntry::Main,
                             water: false,
+                            offset: bias.then_some(PolygonOffset::Single),
                         }
                     );
                 }
@@ -2935,7 +2962,7 @@ pub(super) mod tests {
                 &camera_bytes(glam::Mat4::IDENTITY, eye, fog),
             );
             centre_texel(&device, &queue, |pass| {
-                pass.set_pipeline(world.pipeline(StageVariant::Opaque, true, false, &bind));
+                pass.set_pipeline(world.pipeline(StageVariant::Opaque, true, &bind));
                 pass.set_bind_group(0, &cam, &[]);
                 pass.set_bind_group(1, &world.material_bgs[bind.material as usize], &[]);
                 pass.set_bind_group(2, &world.lightmap_bgs[bind.lightmap as usize], &[]);
@@ -3094,7 +3121,7 @@ pub(super) mod tests {
             &camera_bytes(glam::Mat4::IDENTITY, eye, None),
         );
         let px = centre_texel(&device, &queue, |pass| {
-            pass.set_pipeline(world.pipeline(StageVariant::Opaque, true, false, &bind));
+            pass.set_pipeline(world.pipeline(StageVariant::Opaque, true, &bind));
             pass.set_bind_group(0, &cam, &[]);
             pass.set_bind_group(1, &world.material_bgs[bind.material as usize], &[]);
             pass.set_bind_group(2, &world.lightmap_bgs[bind.lightmap as usize], &[]);
@@ -3245,7 +3272,7 @@ pub(super) mod tests {
             &camera_bytes(glam::Mat4::IDENTITY, eye, None),
         );
         let px = centre_texel(&device, &queue, |pass| {
-            pass.set_pipeline(world.pipeline(StageVariant::Opaque, true, false, &bind));
+            pass.set_pipeline(world.pipeline(StageVariant::Opaque, true, &bind));
             pass.set_bind_group(0, &cam, &[]);
             pass.set_bind_group(1, &world.material_bgs[bind.material as usize], &[]);
             pass.set_bind_group(2, &world.lightmap_bgs[bind.lightmap as usize], &[]);
@@ -3540,7 +3567,7 @@ pub(super) mod tests {
                 Some(&pass),
             );
             let px = centre_texel(&device, &queue, |p| {
-                p.set_pipeline(world.pipeline(StageVariant::Opaque, true, false, &bind));
+                p.set_pipeline(world.pipeline(StageVariant::Opaque, true, &bind));
                 p.set_bind_group(0, &cam, &[]);
                 p.set_bind_group(1, &world.material_bgs[bind.material as usize], &[]);
                 p.set_bind_group(2, &world.lightmap_bgs[bind.lightmap as usize], &[]);
@@ -3750,7 +3777,7 @@ pub(super) mod tests {
         ];
         for (bind, want) in binds.iter().zip(wants) {
             let px = centre_texel(&device, &queue, |pass| {
-                pass.set_pipeline(world.pipeline(StageVariant::Opaque, true, false, bind));
+                pass.set_pipeline(world.pipeline(StageVariant::Opaque, true, bind));
                 pass.set_bind_group(0, &cam, &[]);
                 pass.set_bind_group(1, &world.material_bgs[bind.material as usize], &[]);
                 pass.set_bind_group(2, &world.lightmap_bgs[bind.lightmap as usize], &[]);
@@ -4017,7 +4044,7 @@ pub(super) mod tests {
         );
         let shade = |bind: LitBind| {
             centre_texel(&device, &queue, |pass| {
-                pass.set_pipeline(world.pipeline(StageVariant::Opaque, true, false, &bind));
+                pass.set_pipeline(world.pipeline(StageVariant::Opaque, true, &bind));
                 pass.set_bind_group(0, &cam, &[]);
                 pass.set_bind_group(1, &world.material_bgs[bind.material as usize], &[]);
                 pass.set_bind_group(2, &world.lightmap_bgs[bind.lightmap as usize], &[]);
@@ -4270,7 +4297,7 @@ pub(super) mod tests {
             &camera_bytes(glam::Mat4::IDENTITY, eye, None),
         );
         let px = centre_texel(&device, &queue, |pass| {
-            pass.set_pipeline(world.pipeline(StageVariant::Opaque, true, false, &bind));
+            pass.set_pipeline(world.pipeline(StageVariant::Opaque, true, &bind));
             pass.set_bind_group(0, &cam, &[]);
             pass.set_bind_group(1, &world.material_bgs[bind.material as usize], &[]);
             pass.set_bind_group(2, &world.lightmap_bgs[bind.lightmap as usize], &[]);
@@ -4451,7 +4478,7 @@ pub(super) mod tests {
             &camera_bytes(glam::Mat4::IDENTITY, eye, None),
         );
         let px = centre_texel(&device, &queue, |pass| {
-            pass.set_pipeline(world.pipeline(StageVariant::Opaque, true, false, &bind));
+            pass.set_pipeline(world.pipeline(StageVariant::Opaque, true, &bind));
             pass.set_bind_group(0, &cam, &[]);
             pass.set_bind_group(1, &world.material_bgs[bind.material as usize], &[]);
             pass.set_bind_group(2, &world.lightmap_bgs[bind.lightmap as usize], &[]);
@@ -4833,7 +4860,7 @@ pub(super) mod tests {
                         key: (StageVariant, bool, bool),
                         bind: LitBind,
                         vbuf: &wgpu::Buffer| {
-            pass.set_pipeline(world.pipeline(key.0, key.1, key.2, &bind));
+            pass.set_pipeline(world.pipeline(key.0, key.1, &bind));
             pass.set_bind_group(0, &cam, &[]);
             pass.set_bind_group(1, &world.material_bgs[bind.material as usize], &[]);
             pass.set_bind_group(2, &world.lightmap_bgs[bind.lightmap as usize], &[]);
@@ -5032,7 +5059,7 @@ pub(super) mod tests {
         // lit: white under every coefficient 200
         let white_tri = tri([255; 4]);
         let px = centre_texel(&device, &queue, |pass| {
-            pass.set_pipeline(world.pipeline(key.0, key.1, key.2, &lit_bind));
+            pass.set_pipeline(world.pipeline(key.0, key.1, &lit_bind));
             pass.set_bind_group(0, &cam, &[]);
             pass.set_bind_group(1, &world.material_bgs[lit_bind.material as usize], &[]);
             pass.set_bind_group(2, &world.lightmap_bgs[lit_bind.lightmap as usize], &[]);
@@ -5085,7 +5112,7 @@ pub(super) mod tests {
             [0, 1, 2].map(|k| want[k] + [0.5, 0.5, 0.45][k] * 255.0 * (1.0 - keep)),
         );
         let px = centre_texel(&device, &queue, |pass| {
-            pass.set_pipeline(world.pipeline(key.0, key.1, key.2, &lit_bind));
+            pass.set_pipeline(world.pipeline(key.0, key.1, &lit_bind));
             pass.set_bind_group(0, &cam, &[]);
             pass.set_bind_group(1, &world.material_bgs[lit_bind.material as usize], &[]);
             pass.set_bind_group(2, &world.lightmap_bgs[lit_bind.lightmap as usize], &[]);

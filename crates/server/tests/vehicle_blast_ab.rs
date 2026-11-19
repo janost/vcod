@@ -20,7 +20,7 @@ use crate::common;
 use common::{Join, Queues, step};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::NetEvent;
 use vcod_common::net::event_ids::{
     EV_GRENADE_BOUNCE, EV_UO_PROJECTILE_EXPLODE, EV_UO_PROJECTILE_EXPLODE_NOMARKS,
@@ -207,25 +207,14 @@ fn ours(c: &Case) -> Option<(Vec<String>, Explodes)> {
     let _ = env_logger::builder().is_test(true).try_init();
     let fs = vcod_common::testing::uo_fs()?;
     let p = &PROTOCOL_V22;
-    let bsp_path = fs.resolve_map(c.map).expect("map in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(c.map, "probe_vehblast"), now);
-    sv.set_protocol(p);
-    sv.overlay_script("maps/mp/gametypes/probe_vehblast", SCRIPT);
-    // The recipe's `+set`s.
-    for l in c.fixture.lines().filter(|l| l.starts_with('#')) {
-        let mut t = l.split_whitespace();
-        while let Some(w) = t.next() {
-            if w == "+set"
-                && let (Some(name), Some(value)) = (t.next(), t.next())
-            {
-                sv.set_cvar(name, value);
-            }
-        }
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        // The recipe's `+set`s.
+        cvars: &common::recipe_sets(c.fixture),
+        script: Some(SCRIPT),
+        ..common::Boot::new(c.map, "probe_vehblast")
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     if c.spread {
         sv.pin_rocket_deltas(retail_deltas(c));
     }

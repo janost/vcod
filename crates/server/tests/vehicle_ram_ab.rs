@@ -23,7 +23,7 @@ use crate::common;
 use common::{Join, Queues, step};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::NetEvent;
 use vcod_common::net::msg::{BUTTON_USE, UserCmd};
 use vcod_common::net::protocol::PROTOCOL_V22;
@@ -38,27 +38,21 @@ const STOP_MS: i64 = 3000;
 
 fn ours(extra: &[(&str, &str)]) -> Option<Vec<String>> {
     let fs = vcod_common::testing::uo_fs()?;
-    let bsp_path = fs.resolve_map(MAP).expect("map in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_vehicle_ram"), now);
-    sv.set_protocol(&PROTOCOL_V22);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_vehicle_ram",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_vehicle_ram.gsc"),
-    );
-    for (k, v) in [
+    let mut cvars = vec![
         ("probe_vehicletype", "horch_mp"),
         ("probe_index", "1"),
         ("probe_ahead", "680"),
-    ]
-    .iter()
-    .chain(extra)
-    {
-        sv.set_cvar(k, v);
+    ];
+    cvars.extend_from_slice(extra);
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&PROTOCOL_V22),
+        cvars: &cvars,
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_vehicle_ram.gsc"
+        )),
+        ..common::Boot::new(MAP, "probe_vehicle_ram")
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl =

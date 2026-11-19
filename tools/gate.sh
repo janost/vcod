@@ -18,7 +18,7 @@
 #   bots    bots:: at both, bot_threads::, cod4::bots:: with COD4_DIR
 #   render  renderer::pipeline_check (needs a Vulkan adapter; LVP_ICD
 #           names lavapipe's ICD json to use it)
-#   cod2    cod2_gametype_census with COD2_DIR; the client's real-time
+#   cod2    cod2_gametype_census with COD2_DIR; the client's
 #           play::cod2_soak::cod2_live_ (needs an adapter too)
 #   cod4    cod4_every_map_poses_both_teams with COD4_DIR
 #

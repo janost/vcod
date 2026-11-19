@@ -923,6 +923,14 @@ Debug ======" 0x820a5be, "Mantle Failed: Forward movement is blocked"
 | `Mantle_Check` (with `Mantle_FindMantleSurface` inlined) | 0x8051f7a |
 | `XAnim_CalcDeltaForTime` / `XAnimGetAbsDelta` / `XAnimGetLengthMsec` | 0x81b0930 / 0x81b5e50 / 0x81b726c |
 
+`Mantle_CreateAnims` has one caller, at 0x80b5834 inside the function that
+prints `gamename: %s` and `gamedate: %s` (0x821a306, 0x821a314) and seeds
+`srand` (0x80b56ee): `G_InitGame`, so the clips are read off each level's
+zones as it loads. VERIFIED (the call and the strings); the name INFERRED.
+vcod reads them per level too: `pmove::mantle::install` from
+`Cod4World::from_assets` and the server's `Cod4Zones::from_zones`, each
+holding its own set in `Rules::mantle_anims`.
+
 ### 17.1 What differs from CoD2's
 
 1.7's is CoD2's (cod2-movement.md 9) but for these, each labelled on

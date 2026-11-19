@@ -12,6 +12,7 @@
 //! install with the third-party `nsf_mp_j5outpost.pk3` added to `main/`
 //! (coduo-diff.md 24); without that pak their gate returns early.
 
+use crate::common;
 use std::collections::BTreeMap;
 use vcod_common::net::protocol::PROTOCOL_V22;
 
@@ -105,27 +106,19 @@ fn server_at(
         fs.overlay(&path, bsp);
     }
     let fs = std::rc::Rc::new(fs);
-    let start = std::time::Instant::now();
     let cfg = vcod_server::ServerConfig {
-        map: map.into(),
         hostname: "CoDHost".into(),
-        max_clients: 8,
-        gametype: gametype.into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
+        ..common::cfg(map, gametype)
     };
-    let mut sv = vcod_server::server::Server::new(cfg, start);
-    sv.set_protocol(&PROTOCOL_V22);
-    sv.start_clock_at(clock_ms);
-    for (k, v) in sets {
-        sv.set_cvar(k, v);
+    let (mut sv, start) = common::Boot {
+        proto: Some(&PROTOCOL_V22),
+        cvars: sets,
+        prep: Some(&|sv: &mut vcod_server::Server| {
+            sv.start_clock_at(clock_ms);
+        }),
+        ..common::Boot::on(cfg)
     }
-    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    .start(fs);
     if replay {
         for (k, v) in sets {
             sv.push_set(k, v);

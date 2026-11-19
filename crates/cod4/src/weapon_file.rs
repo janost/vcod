@@ -283,15 +283,17 @@ pub fn load(fs: &(impl AssetSource + ?Sized), name: &str) -> Option<Result<TextW
 
 /// Under a set `fs_game`, the weapons `BG_LoadWeaponDef` reads off `fs`'s
 /// weapon files in place of the zones' structs (cod4-fastfile.md 13):
-/// every name in `zone` and every `weapons/mp/` file, lowercased; a
-/// missing or broken file takes `defaultweapon_mp`'s under its own name. A
-/// name left out (that fails too) keeps its zone struct.
+/// every name in `zone` and every `weapons/mp/` file in `iwds`, lowercased;
+/// a missing or broken file takes `defaultweapon_mp`'s under its own name.
+/// A name left out (that fails too) keeps its zone struct. `fs` is `iwds`
+/// itself or a source over it (the server's `Cod4Source`).
 pub fn load_overlay(
-    fs: &vcod_common::pk3::Pk3Fs,
+    fs: &(impl AssetSource + ?Sized),
+    iwds: &vcod_common::pk3::Pk3Fs,
     zone: impl IntoIterator<Item = String>,
 ) -> Vec<(String, TextWeapon)> {
     let mut names: Vec<String> = zone.into_iter().map(|n| n.to_ascii_lowercase()).collect();
-    for path in fs.list_prefix("weapons/mp/") {
+    for path in iwds.list_prefix("weapons/mp/") {
         let name = &path["weapons/mp/".len()..];
         if !name.is_empty() && !name.contains('/') {
             names.push(name.to_ascii_lowercase());

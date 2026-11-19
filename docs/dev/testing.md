@@ -116,6 +116,20 @@ A step passes only on `test result: ok` lines that ran tests. `CARGO_WRAP`
 puts each cargo run under a wrapper (a memory-capped scope), `DRY=1`
 prints the commands.
 
+## Refactor checks
+
+`tools/move_check.sh <base> <head> <old-file>... [--into <path>]...`
+proves a split commit only moved code: it compares the old files at
+`<base>` with the files that received them at `<head>` (the old path, its
+module directory, each `--into`), line by line after rustfmt. Its header
+lists the differences it allows.
+
+`tools/baselines.sh <out-dir>` records the `bot_match` digests, the
+`nav_build` digests and each crate's test list at the installs the
+environment names (`COD_DIR`, `COD_UO_DIR`, `COD2_DIR`, `COD4_DIR`; takes
+`CARGO_WRAP` as `gate.sh` does). `tools/baselines.sh --compare <old-dir>
+<new-dir>` prints what differs and exits 1 if anything does.
+
 ## Ignored tests: when to run them
 
 `--ignored` always takes a name filter. Unfiltered it also starts the soaks
@@ -132,7 +146,7 @@ broadcast on the LAN.
 | CoD4 bots | `cargo test --release -p vcod-server --lib -- --ignored cod4::bots::` (`COD4_DIR`) | ~4 s |
 | CoD4 hit boxes per map | `--lib -- --ignored cod4_every_map_poses_both_teams` (`COD4_DIR`) | 29 s of test, 7 min with the release build (2026-11-18) |
 | CoD2 gametypes | `--lib -- --ignored cod2_gametype_census` (`COD2_DIR`) | ~18 s |
-| CoD2 play: level effects, model pipelines, view weapons, muzzle flash and brass | `cargo test -p vcod --bins -- --ignored play::cod2_soak::cod2_live_` (`COD2_DIR`, a Vulkan adapter) | real time: each plays 16 ms frames for its seconds after the spawn against a server paced by the wall, with a 120 to 180 s deadline; CoD2 has no `sim` clock |
+| CoD2 play: level effects, model pipelines, view weapons, muzzle flash and brass | `cargo test -p vcod --bins -- --ignored play::cod2_soak::cod2_live_` (`COD2_DIR`, a Vulkan adapter) | each plays 16 ms frames for its seconds after the spawn, client and server on one `sim` clock (`tests::run_held`), with a 120 to 180 s deadline on it |
 | 1.5 stuck seed | `--lib -- --ignored the_15_overlap_spectator_seed_is_the_only_fit` | ~2 s |
 | shaders or render layouts | `cargo test -p vcod --bins -- renderer::pipeline_check` (not ignored: it skips without a Vulkan adapter; lavapipe env below) | |
 | CoD2 maps, CoD2 load path | `cod2_map_census`, `cod2_load_profile` | |
@@ -158,6 +172,24 @@ its doc comment says what it reads and which env vars drive it.
 | `a_prone_view_flick_costs` | CoD2 prone view cost | cod2-movement.md 10 |
 | `lit_pipeline_register_census` | CoD4 shader registers on a driver | cod4-client-perf.md 29 |
 | `spawn_wave` | the gsc interpreter | "The gsc interpreter" below |
+
+By-hand tools behind an env var: each is `#[ignore = "tool: set <VAR>"]`
+and panics with that line when run without it.
+
+| Test | Var | What | Where |
+|---|---|---|---|
+| `cod4_browser_against_a_named_server` | `COD4_BROWSER_SERVER=ip:port` (and `COD4_BROWSER_BROADCAST`) | the CoD4 browser's Local and Server Info lists against one server, retail in its namespace | `play/cod4_menus/browser.rs` |
+| `cod2_main_menu_shot` | `VCOD_MENU_SHOT=<out>` | the CoD2 main menu as a picture (BC adapter) | `renderer/hud_shot.rs` |
+| `cod2_dumped_hud_shot` | `VCOD_HUD_QUADS=<files>` | dumped HUD quads drawn | `renderer/hud_shot.rs` |
+| `cod2_player_hud_shot` | `VCOD_HUD_SHOT=<out>` | a staged CoD2 HUD | `renderer/hud_shot.rs` |
+| `cod2_ui_shot` | `VCOD_UI_SHOT=<prefix>` | the CoD2 scoreboard and chat | `renderer/hud_shot.rs` |
+| `bench_the_pose` | `SKEL_BENCH=1` | the CoD2 skeleton walk and build times (`COD2_DIR`) | `cod2/tests/skel_ab.rs` |
+| `cull_census` | `CULL_CENSUS=<map>` (`CULL_OLD`, `CULL_TURN`) | CoD4 culled triangles over the spawn views | `cod4/tests/cull_census.rs` |
+| `cull_census_view` | `CULL_VIEW=<spec>` | the same for one view | `cod4/tests/cull_census.rs` |
+| `cull_techsets` | `CULL_TECHSETS=<map>` | triangles and batches by techset (cod4-client-perf.md 21) | `cod4/tests/cull_census.rs` |
+| `cull_draws` | `CULL_DRAWS=<map>` (`CULL_DRAWS_VIEWS`) | 1.7's draw surface count over the views | `cod4/tests/cull_census.rs` |
+| `an_env_named_capture_reencodes` | `COD4_REENCODE=<capture>` | any capture through the reencode gate | `cod4/tests/net_decode.rs` |
+| `spawn_sweep` | `VIS_RAYS=<map>` | CoD4 visibility rays from the spawns | `cod4/tests/vis_rays.rs` |
 
 Never run by an agent: `master_list_live` (cod.pm's public master and every
 server it lists) and `lan_scan_live` (a LAN broadcast). Both panic unless
@@ -247,6 +279,12 @@ in process, on `play::cod4`'s `tests::sim` clock.
   polling the loader waits off the clock, so only the worker moves it. `play/cod4_sweep.rs`'s `rig` and
   `answer_menu` wait on the thread's `sim` clock, the wall off one (the
   sweep and the soak).
+- CoD2's live tests (`cod2_live_*`, `COD2_DIR`) run on the same clock:
+  `play::cod2::clock_now` is the session's, and `tests::run_held` serves a
+  `Cod2Server` (`tests::Held`: `drain_console`, then the frame). A
+  `Connecting`'s worker runs on its starter's clock, the starter waiting
+  off it while the worker runs; the load pump (`Cod2Session::pump`) reads
+  the clock but sleeps on the wall, so a map's load takes no clock time.
 - A live test that writes frames (`VCOD_C4_SHOTS`) runs through
   `tests::run_held`, each frame loop sleeping its 16 ms first. The client
   reads the session's clock through `play::cod4::clock_now`, never
@@ -363,7 +401,9 @@ only yardstick.
     error the levels raised (docs/bots.md "CoD4").
   - `DIGEST=1` or `DIGEST=<N>` adds a per-tick hash of every bot's cmd and
     body, the check that a refactor moved no bot. `NETDIGEST=<N>` hashes
-    every datagram sent, with an observer client joined.
+    every datagram sent, with an observer client joined. `OBSERVERS=<N>`
+    joins N more (CoD4's in process), whose snapshots the server builds;
+    `OBSERVERS_PLAY=1` (CoD1, CoD4) puts them in the world, walking.
     `VCOD_TICK_TRACE=<dir>` writes the tick's step log (bot-combat.md
     section 1). `SPIKE_MS` logs slow ticks (every game), with the ticking
     thread's instructions where the kernel lets a process count them, the

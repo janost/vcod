@@ -950,7 +950,7 @@ fn player_view<'a>(
                 lerp_target: f32::from(int("viewHeightLerpTarget") as u8 as i8),
                 lerp_down: int("viewHeightLerpDown") != 0,
                 dive: pm_flags & 0x4 != 0,
-                into_leg_ms: (lerp_time != 0).then(|| f.snap_time - lerp_time),
+                into_leg_ms: (lerp_time != 0).then(|| f.snap_time.wrapping_sub(lerp_time)),
             };
             (
                 int("weapon") as usize,
@@ -1357,6 +1357,18 @@ mod tests {
             (own.ammoclip[10], own.aim_spread_scale, own.eflags),
             (4, 50.0, 0x10 | EF_CROUCH)
         );
+
+        // A hostile lerp time wraps as retail's int does (SEC-100).
+        ps.fields[PlayerState::field_index(p, "viewHeightLerpTime").unwrap()] = i32::MIN;
+        let wrapped = player_view(
+            &ps,
+            &[],
+            &HudFrame {
+                snap_time: i32::MAX,
+                ..frame(&ps, None, &fs, &loc, &clients)
+            },
+        );
+        assert_eq!(wrapped.spread_stance.into_leg_ms, Some(-1));
     }
 
     #[test]

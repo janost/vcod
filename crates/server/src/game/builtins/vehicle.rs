@@ -737,3 +737,145 @@ fn free_vehicle(
     crate::game::vehicle::free_to_corpse(host, cx, id);
     Ok(Value::Undefined)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::vehicle::Vehicle;
+    use crate::game::vehicle::info::VehicleInfo;
+    use vcod_gsc::Vm;
+
+    fn uo() -> (Vm, GameHost) {
+        let mut host = GameHost::new(&crate::game::profile::COD1_UO, vec![String::new(); 2048]);
+        host.vehicles
+            .infos
+            .list
+            .push(std::rc::Rc::new(VehicleInfo::default()));
+        (Vm::new(), host)
+    }
+
+    /// A live vehicle record on a fresh entity, its receiver.
+    fn vehicle_on(host: &mut GameHost, cx: &mut Cx) -> Option<Target> {
+        let id = host.ents.spawn(cx).unwrap();
+        host.vehicles.slots[0] = Some(id);
+        host.vehicles.live.insert(id, Vehicle::for_test(0));
+        Some(Target::Entity(id))
+    }
+
+    fn message(r: Result<Value, ErrorKind>) -> String {
+        match r {
+            Err(ErrorKind::Custom(m)) => m,
+            Err(ErrorKind::BadType(m)) => format!("type: {m}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// The path methods' order (coduo-vehicles.md 17): `attachPath` and
+    /// `setSwitchNode` read the node before the use test, `setWaitNode`
+    /// and the speeds test use first; a driven vehicle tells them apart.
+    #[test]
+    fn the_path_methods_raise_in_retail_s_order() {
+        let (mut vm, mut host) = uo();
+        vm.with_cx(|cx| {
+            let v = vehicle_on(&mut host, cx);
+            let node = Value::Entity(host.ents.spawn(cx).unwrap());
+            let n = |r| message(r);
+            assert_eq!(
+                n(attach_path(&mut host, cx, v, &[node])),
+                "Not a vehicle node"
+            );
+            assert_eq!(
+                n(attach_path(&mut host, cx, v, &[Value::Int(1)])),
+                "type: not an entity"
+            );
+            assert_eq!(
+                n(start_path(&mut host, cx, v, &[])),
+                "Can't start path on a vehicle that hasn't been attached"
+            );
+            assert!(set_wait_speed(&mut host, cx, v, &[Value::Int(5)]).is_ok());
+            assert_eq!(
+                n(set_speed(
+                    &mut host,
+                    cx,
+                    v,
+                    &[Value::Int(5), Value::Int(-1)]
+                )),
+                "Cannot set negative acceleration on vehicle"
+            );
+            let Some(Target::Entity(id)) = v else {
+                unreachable!()
+            };
+            host.vehicles.live.get_mut(&id).unwrap().driven = true;
+            let used = "Vehicle is invalid on path after it's been used";
+            assert_eq!(
+                n(attach_path(&mut host, cx, v, &[node])),
+                "Not a vehicle node"
+            );
+            assert_eq!(
+                n(set_switch_node(&mut host, cx, v, &[node, node])),
+                "Not a vehicle node"
+            );
+            assert_eq!(n(set_wait_node(&mut host, cx, v, &[node])), used);
+            assert_eq!(n(start_path(&mut host, cx, v, &[])), used);
+            assert_eq!(n(set_wait_speed(&mut host, cx, v, &[Value::Int(-5)])), used);
+            assert_eq!(n(resume_speed(&mut host, cx, v, &[Value::Int(-5)])), used);
+            // A receiver with no vehicle record fails before any of it.
+            let other = Some(Target::Entity(host.ents.spawn(cx).unwrap()));
+            assert_eq!(
+                n(attach_path(&mut host, cx, other, &[node])),
+                "entity is not a script_vehicle"
+            );
+        });
+    }
+
+    /// `joltBody`'s speed fraction is held to 0..1 and its deceleration to
+    /// 0 or more, in mph; a good jolt queues for the step.
+    #[test]
+    fn jolt_body_checks_its_fraction_and_deceleration() {
+        let (mut vm, mut host) = uo();
+        vm.with_cx(|cx| {
+            let v = vehicle_on(&mut host, cx);
+            let at = Value::Vector([1.0, 2.0, 3.0]);
+            let jolt = |host: &mut GameHost, cx: &mut Cx, frac: f32, decel: f32| {
+                jolt_body(
+                    host,
+                    cx,
+                    v,
+                    &[at, Value::Int(100), Value::Float(frac), Value::Float(decel)],
+                )
+            };
+            assert!(jolt(&mut host, cx, 1.5, 0.0).is_err());
+            assert!(jolt(&mut host, cx, 0.5, -1.0).is_err());
+            jolt(&mut host, cx, 0.5, 2.0).unwrap();
+            let Some(Target::Entity(id)) = v else {
+                unreachable!()
+            };
+            let j = &host.vehicles.live[&id].jolts;
+            assert_eq!(j.len(), 1);
+            assert_eq!(
+                (j[0].speed_frac, j[0].decel),
+                (0.5, 2.0 * crate::game::vehicle::info::MPH)
+            );
+        });
+    }
+
+    /// `makeVehicleUnusable` is refused while a driver sits in seat 1.
+    #[test]
+    fn a_driven_vehicle_cannot_be_made_unusable() {
+        let (mut vm, mut host) = uo();
+        vm.with_cx(|cx| {
+            let v = vehicle_on(&mut host, cx);
+            make_vehicle_usable(&mut host, cx, v, &[]).unwrap();
+            let Some(Target::Entity(id)) = v else {
+                unreachable!()
+            };
+            let usable = crate::game::vehicle::CONTENTS_USABLE;
+            host.vehicles.live.get_mut(&id).unwrap().seats[1] = Some(2);
+            assert!(make_vehicle_unusable(&mut host, cx, v, &[]).is_err());
+            assert_ne!(host.vehicles.live[&id].contents & usable, 0);
+            host.vehicles.live.get_mut(&id).unwrap().seats[1] = None;
+            make_vehicle_unusable(&mut host, cx, v, &[]).unwrap();
+            assert_eq!(host.vehicles.live[&id].contents & usable, 0);
+        });
+    }
+}

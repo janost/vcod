@@ -189,16 +189,8 @@ impl App {
                 .read(&path)
                 .ok_or_else(|| ServerError(format!("EXE_ERR_COULDNT_LOAD\u{15}{path}")))?;
             laps.lap("read");
-            // A downloaded map is anyone's bytes: a parse or upload that
-            // panics ends the game with `Com_LoadBsp`'s error, not the client.
-            let (file, bsp) = std::panic::catch_unwind(|| {
-                let file = vcod_cod2::map::MapFile::parse(&data)?;
-                let bsp = file.world();
-                anyhow::Ok((file, bsp))
-            })
-            .map_err(|_| anyhow::anyhow!("the parser panicked"))
-            .and_then(|r| r)
-            .with_context(|| format!("cannot parse {path}"))?;
+            // An upload that panics ends the game too, not the client.
+            let (file, bsp) = parse_map(&data, &path)?;
             laps.lap("parse");
             // The session's prediction collision builds beside the upload.
             let session = pump.is_some();
@@ -350,9 +342,46 @@ fn download_line(p: &vcod_cod2::net::download::Progress, loc: impl Fn(&str) -> S
     format!("{} {name}  {copied}", loc("EXE_DOWNLOADING"))
 }
 
+/// A `.d3dbsp` parsed into its file and world. A downloaded map is anyone's
+/// bytes: a parse that panics is `path`'s error, not the client's end.
+fn parse_map(data: &[u8], path: &str) -> Result<(vcod_cod2::map::MapFile, MapWorld)> {
+    std::panic::catch_unwind(|| {
+        let file = vcod_cod2::map::MapFile::parse(data)?;
+        let bsp = file.world();
+        anyhow::Ok((file, bsp))
+    })
+    .map_err(|_| anyhow::anyhow!("the parser panicked"))
+    .and_then(|r| r)
+    .with_context(|| format!("cannot parse {path}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A map that is not one fails its load with the path, whatever its
+    /// bytes, and the client stays up (TEST-050).
+    #[test]
+    fn a_hostile_map_fails_its_parse_not_the_client() {
+        let mut seed = 0x5eed_u64;
+        let junk: Vec<u8> = (0..4096)
+            .map(|_| vcod_common::rng::xorshift(&mut seed) as u8)
+            .collect();
+        let mut head = b"IBSP\x04\0\0\0".to_vec();
+        head.extend_from_slice(&junk);
+        for bytes in [&[][..], &junk, &head] {
+            let e = parse_map(bytes, "maps/mp/x.d3dbsp").err().expect("no map");
+            assert!(format!("{e:#}").contains("maps/mp/x.d3dbsp"), "{e:#}");
+        }
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let stock = fs.read("maps/mp/mp_toujane.d3dbsp").expect("mp_toujane");
+        assert!(parse_map(&stock, "toujane").is_ok());
+        for cut in [16, stock.len() / 3, stock.len() - 1] {
+            assert!(parse_map(&stock[..cut], "toujane").is_err(), "cut at {cut}");
+        }
+    }
 
     #[test]
     fn the_download_line_reads_as_retails() {

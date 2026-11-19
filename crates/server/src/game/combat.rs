@@ -1367,7 +1367,8 @@ pub struct HitBody {
 /// both anim channels and the controllers' inputs.
 #[derive(Clone, Default, Debug)]
 pub struct BodyPose {
-    pub assembly: crate::game::hitrig::Assembly,
+    /// Shared with the DObj record that built it: a mirror's copy is a count.
+    pub assembly: std::rc::Rc<crate::game::hitrig::Assembly>,
     /// Wire `legsAnim` / `torsoAnim` and each channel's clip clock.
     pub legs: i32,
     pub torso: i32,

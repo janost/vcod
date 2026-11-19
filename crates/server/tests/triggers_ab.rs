@@ -57,13 +57,12 @@ use crate::common;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use vcod_common::net::msg::NULL_USERCMD;
 
 /// The probe script both sides run, as the gametype. Overlaid onto the pak
 /// path a gametype is loaded from, since it ships in no pak.
-const PROBE_PATH: &str = "maps/mp/gametypes/probe_trigger";
 const PROBE_SRC: &str = "../gsc/tests/fixtures/semantics/client-probes/probe_trigger.gsc";
 
 const MAP: &str = "mp_pavlov";
@@ -170,18 +169,16 @@ fn the_touch_pass_matches_retail_on_mp_pavlov() {
 
     let probe =
         std::fs::read_to_string(PROBE_SRC).unwrap_or_else(|e| panic!("read the probe: {e}"));
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("the bsp");
     let fs = Rc::new(fs);
 
-    let mut now = Instant::now();
     // `g_gametype` is the probe, exactly as retail ran it: the probe's own
     // `main()` is what calls the real gametype's, and `_gameobjects` deletes
     // by the list that gametype registered either way.
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_trigger"), now);
-    sv.overlay_script(PROBE_PATH, &probe);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(&probe),
+        ..common::Boot::new(MAP, "probe_trigger")
+    }
+    .start(fs);
 
     let q = Rc::new(RefCell::new(common::Queues::default()));
     // The join is what puts a player in the world; it also spends the four

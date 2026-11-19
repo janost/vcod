@@ -17,10 +17,9 @@ fn headless() -> Option<(wgpu::Device, wgpu::Queue)> {
 }
 
 #[test]
+#[ignore = "tool: set VCOD_MENU_SHOT"]
 fn cod2_main_menu_shot() {
-    let Some(out) = std::env::var_os("VCOD_MENU_SHOT") else {
-        return;
-    };
+    let out = std::env::var_os("VCOD_MENU_SHOT").expect("set VCOD_MENU_SHOT");
     let Some(fs) = vcod_common::testing::cod2_fs() else {
         return;
     };
@@ -64,10 +63,9 @@ fn cod2_main_menu_shot() {
 }
 
 #[test]
+#[ignore = "tool: set VCOD_HUD_QUADS"]
 fn cod2_dumped_hud_shot() {
-    let Some(files) = std::env::var_os("VCOD_HUD_QUADS") else {
-        return;
-    };
+    let files = std::env::var_os("VCOD_HUD_QUADS").expect("set VCOD_HUD_QUADS");
     let Some(fs) = vcod_common::testing::cod2_fs() else {
         return;
     };
@@ -181,6 +179,7 @@ fn shoot(
 /// third of his health, a use trigger in his sight, a teammate ahead and
 /// a hit from his right, a second into the hit.
 #[test]
+#[ignore = "tool: set VCOD_HUD_SHOT"]
 fn cod2_player_hud_shot() {
     use vcod_cod2::net::delta::field_index;
     use vcod_cod2::net::delta::{ClientState2, EntityState2, PlayerState2};
@@ -188,9 +187,7 @@ fn cod2_player_hud_shot() {
     use vcod_cod2::net::parse::{Gamestate2, Snapshot2};
     use vcod_cod2::net::{ConfigStrings, Frame, SnapshotView};
 
-    let Some(out) = std::env::var_os("VCOD_HUD_SHOT") else {
-        return;
-    };
+    let out = std::env::var_os("VCOD_HUD_SHOT").expect("set VCOD_HUD_SHOT");
     let Some(fs) = vcod_common::testing::cod2_fs() else {
         return;
     };
@@ -300,6 +297,7 @@ fn cod2_player_hud_shot() {
 /// `<prefix>-chat.ppm` (chat lines, the open say field, two kill lines and
 /// the viewer's death print) through `Cod2Hud`.
 #[test]
+#[ignore = "tool: set VCOD_UI_SHOT"]
 fn cod2_ui_shot() {
     use vcod_cod2::net::delta::field_index;
     use vcod_cod2::net::delta::{ClientState2, EntityState2, PlayerState2};
@@ -307,9 +305,7 @@ fn cod2_ui_shot() {
     use vcod_cod2::net::parse::{Gamestate2, Snapshot2};
     use vcod_cod2::net::{ConfigStrings, Frame, SnapshotView};
 
-    let Some(prefix) = std::env::var_os("VCOD_UI_SHOT") else {
-        return;
-    };
+    let prefix = std::env::var_os("VCOD_UI_SHOT").expect("set VCOD_UI_SHOT");
     let Some(fs) = vcod_common::testing::cod2_fs() else {
         return;
     };

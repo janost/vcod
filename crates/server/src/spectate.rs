@@ -2412,7 +2412,7 @@ impl ClientSim {
     pub fn update_dobj(
         &mut self,
         now: &crate::game::hitrig::Assembly,
-    ) -> &crate::game::hitrig::Assembly {
+    ) -> &std::rc::Rc<crate::game::hitrig::Assembly> {
         use vcod_common::net::flags::{EF_IN_VEHICLE_V22, EF_MOUNTED};
         let rides = self.entity_eflags() & (EF_MOUNTED | EF_IN_VEHICLE_V22) != 0;
         let armed_seat = self.seat.is_some_and(|s| s.kind == 1 && s.pos == 3);
@@ -2507,7 +2507,9 @@ impl ClientSim {
         angles.step(&input, frametime_ms, swing_speed);
         angles.update_conditions(&input);
         let (eased, mut seat_ramp) = (self.pose.eased, self.pose.seat_ramp.clone());
-        let assembly = self.update_dobj(&self.assembly.clone()).clone();
+        let now = std::mem::take(&mut self.assembly);
+        let assembly = self.update_dobj(&now).clone();
+        self.assembly = now;
         self.pose = crate::game::combat::BodyPose {
             assembly,
             legs,

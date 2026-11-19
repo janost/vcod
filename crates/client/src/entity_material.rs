@@ -317,6 +317,14 @@ pub(crate) struct EntSkin {
 /// widest uniform offset alignment so no device limit is needed.
 pub(crate) const ENT_STAGE_STRIDE: u64 = 512;
 const MAX_ENT_STAGES: u32 = 1024;
+
+/// The slots a skin of `stages` stages takes from `next` under `cap`, all
+/// or none: a skin that does not fit draws as the implicit one and takes
+/// no slot.
+fn stage_slots(next: u32, stages: usize, cap: u32) -> Option<std::ops::Range<u32>> {
+    let end = next.checked_add(u32::try_from(stages).ok()?)?;
+    (end <= cap).then_some(next..end)
+}
 const _: () = assert!(STAGE_PARAMS_SIZE <= ENT_STAGE_STRIDE);
 
 /// A stage's blend pair, depth write, depth test and whether a world
@@ -634,6 +642,12 @@ impl EntityMaterials {
     /// Forgets every material and stage image, for a map change (retail
     /// reloads them too).
     pub(crate) fn clear(&mut self) {
+        if self.next_slot > 1 {
+            log::info!(
+                "entity materials: {} of {MAX_ENT_STAGES} stage slots used",
+                self.next_slot
+            );
+        }
         self.by_skin.clear();
         self.animated.clear();
         self.images.truncate(1);
@@ -713,11 +727,11 @@ impl EntityMaterials {
             .filter(|s| !self.by_skin.contains_key(s.as_str()))
         {
             let sh = load(fs, lib, skin, &mut self.warns);
+            let Some(slots) = stage_slots(slot, sh.stages.len(), MAX_ENT_STAGES) else {
+                continue;
+            };
+            slot = slots.end;
             for (i, st) in sh.stages.iter().enumerate() {
-                if slot == MAX_ENT_STAGES {
-                    return keys;
-                }
-                slot += 1;
                 let depth_write = sh.classify_stage(i).is_some_and(|c| c.depth_write);
                 keys.push((
                     st.blend.clone(),
@@ -929,17 +943,14 @@ impl EntityMaterials {
         let mut lit = is_lit(&sh);
         let mut sort = sh.sort;
         let mut stages = Vec::with_capacity(sh.stages.len());
-        for (i, st) in sh.stages.iter().enumerate() {
-            if self.next_slot == MAX_ENT_STAGES {
-                static FULL: std::sync::Once = std::sync::Once::new();
-                FULL.call_once(|| {
-                    log::warn!(
-                        "more than {MAX_ENT_STAGES} entity material stages; the rest draw plain"
-                    )
-                });
-                stages.clear();
-                break;
-            }
+        let fits = stage_slots(self.next_slot, sh.stages.len(), MAX_ENT_STAGES).is_some();
+        if !fits {
+            static FULL: std::sync::Once = std::sync::Once::new();
+            FULL.call_once(|| {
+                log::warn!("more than {MAX_ENT_STAGES} entity material stages; the rest draw plain")
+            });
+        }
+        for (i, st) in sh.stages.iter().enumerate().filter(|_| fits) {
             let b0 = &st.bundles[0];
             let image = match &b0.image {
                 ImageRef::White => StageImage::Own(0),
@@ -1011,14 +1022,15 @@ impl EntityMaterials {
             lit = true;
             sort = SORT_OPAQUE;
         }
-        // `stages` is the material's, one for one (or the fallback alone)
+        // `stages` is the material's, one for one, or the fallback, which
+        // cuts nothing
         let sun_cut = sh
             .stages
             .iter()
             .zip(&stages)
             .find(|(st, _)| st.alpha_func.is_some())
             .map(|(_, d)| d.image)
-            .filter(|_| sh.cookie.sun_caster);
+            .filter(|_| fits && sh.cookie.sun_caster);
         let out = Rc::new(EntSkin {
             stages,
             lit,
@@ -1410,6 +1422,17 @@ pub(crate) fn wgpu_blend_factor(f: &BlendFactor) -> wgpu::BlendFactor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A skin takes all its stage slots or none: past the cap it draws the
+    /// implicit stage and leaves the slots for a smaller skin (TEST-045).
+    #[test]
+    fn a_skin_takes_all_its_stage_slots_or_none() {
+        assert_eq!(stage_slots(1, 3, 8), Some(1..4));
+        assert_eq!(stage_slots(6, 2, 8), Some(6..8));
+        assert_eq!(stage_slots(6, 3, 8), None);
+        assert_eq!(stage_slots(7, 0, 8), Some(7..7));
+        assert_eq!(stage_slots(u32::MAX, 1, u32::MAX), None);
+    }
     use vcod_common::shader::{AlphaFunc, BlendFactor, WaveForm};
 
     const OBJECTIVE: &str = "{ { map $texturename rgbGen lightingDiffuse } \

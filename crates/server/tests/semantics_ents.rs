@@ -485,14 +485,8 @@ fn run_persist_probe(name: &str, rotation: Option<&str>) -> Vec<String> {
 
     let mut now = std::time::Instant::now();
     let cfg = vcod_server::ServerConfig {
-        map: "mp_pavlov".into(),
         hostname: "vcod probe".into(),
-        max_clients: 8,
-        gametype: name.into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
+        ..crate::common::cfg("mp_pavlov", name)
     };
     let mut sv = vcod_server::Server::new(cfg, now);
     sv.overlay_script(&format!("maps/mp/gametypes/{name}"), &text);

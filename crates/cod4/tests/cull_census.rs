@@ -140,10 +140,9 @@ pub fn spawn_eyes(w: &MapWorld) -> Vec<Vec3> {
 type Row = (u64, u64, u64, u64, usize, Vec3, i32, f32);
 
 #[test]
+#[ignore = "tool: set CULL_CENSUS"]
 fn cull_census() {
-    let Ok(name) = std::env::var("CULL_CENSUS") else {
-        return;
-    };
+    let name = std::env::var("CULL_CENSUS").expect("set CULL_CENSUS");
     let Some(mut w) = load(&name) else {
         return;
     };
@@ -267,10 +266,9 @@ fn turn(name: &str, w: &MapWorld, vis: &WorldVis, step: f32) {
 }
 
 #[test]
+#[ignore = "tool: set CULL_VIEW"]
 fn cull_census_view() {
-    let Ok(spec) = std::env::var("CULL_VIEW") else {
-        return;
-    };
+    let spec = std::env::var("CULL_VIEW").expect("set CULL_VIEW");
     let v: Vec<&str> = spec.split_whitespace().collect();
     let Some(w) = load(v[0]) else {
         return;
@@ -330,10 +328,9 @@ fn cull_census_view() {
 /// distinct materials among the drawn soups: the world draws against
 /// what one draw per material would be (cod4-client-perf.md 21).
 #[test]
+#[ignore = "tool: set CULL_TECHSETS"]
 fn cull_techsets() {
-    let Ok(name) = std::env::var("CULL_TECHSETS") else {
-        return;
-    };
+    let name = std::env::var("CULL_TECHSETS").expect("set CULL_TECHSETS");
     let Some((w, techsets)) = load_with_techsets(&name) else {
         return;
     };
@@ -385,10 +382,9 @@ fn cull_techsets() {
 /// counted apart: 1.7 draws them through its own path. Over the spawn
 /// views, and at `CULL_DRAWS_VIEWS="x y z yaw pitch; ..."` one by one.
 #[test]
+#[ignore = "tool: set CULL_DRAWS"]
 fn cull_draws() {
-    let Ok(name) = std::env::var("CULL_DRAWS") else {
-        return;
-    };
+    let name = std::env::var("CULL_DRAWS").expect("set CULL_DRAWS");
     let Some(install) = cod4_install() else {
         return;
     };

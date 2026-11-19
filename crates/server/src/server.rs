@@ -1870,6 +1870,7 @@ impl Server {
             cvar_overrides: Vec::new(),
             fs: None,
             paks: Default::default(),
+            systeminfo: None,
             pure_check: None,
             rotation: console::Rotation::default(),
             sv_map_rotation: String::new(),
@@ -3152,6 +3153,13 @@ impl Server {
             .script
             .as_mut()
             .map_or_else(BTreeMap::new, |rt| rt.packet_entities(proto))
+    }
+
+    /// The frame the next snapshots take their entities from, as
+    /// `snapshots_begin` builds it: a gate that culls from a spot of its
+    /// own reads the server's own cull ([`crate::archive::WorldFrame::entities_for`]).
+    pub fn world_frame(&mut self) -> crate::archive::WorldFrame {
+        self.build_world_frame()
     }
 
     /// Puts a client where the caller says, the way the `spawn` builtin does.
@@ -4610,18 +4618,43 @@ impl Server {
             return;
         };
         let cvars = rt.cvars();
-        self.game.module.fall_heights = FallHeights {
+        let fall = FallHeights {
             min: atof(cvars.get("bg_fallDamageMinHeight")),
             max: atof(cvars.get("bg_fallDamageMaxHeight")),
         };
+        self.game.module.fall_heights = fall;
+        // Rebuilt only when an input moved or something else wrote slot 1.
+        if let Some((_, info)) = self.game.systeminfo.as_ref().filter(|(k, info)| {
+            k.0 == self.game.server_id
+                && k.1 == [fall.min.to_bits(), fall.max.to_bits()]
+                && k.2 == self.game.cheats
+                && k.3 == self.game.paks
+                && k.4 == v6
+                && rt.configstrings().get(1) == Some(info)
+        }) {
+            if let Some(slot) = self.core.configstrings.get_mut(1)
+                && slot != info
+            {
+                slot.clone_from(info);
+            }
+            return;
+        }
         let info = configstrings::systeminfo(
             self.game.server_id,
-            self.game.module.fall_heights,
+            fall,
             self.game.cheats,
             &self.game.paks,
             v6.as_deref(),
         )
         .to_string();
+        let key = (
+            self.game.server_id,
+            [fall.min.to_bits(), fall.max.to_bits()],
+            self.game.cheats,
+            self.game.paks.clone(),
+            v6,
+        );
+        self.game.systeminfo = Some((key, info.clone()));
         rt.host.configstrings.set(1, info.clone());
         if let Some(slot) = self.core.configstrings.get_mut(1) {
             *slot = info;
@@ -6131,6 +6164,7 @@ impl Server {
         if timeout_written {
             self.copy_timeout_configstrings();
         }
+        let mut _p = crate::tick_profile::phase("frame/configstrings");
         if let Some(rt) = self.game.module.script.as_mut() {
             // The script owns the table while it runs and allocates into it
             // from any thread, so the server re-reads it rather than trusting
@@ -6154,6 +6188,7 @@ impl Server {
         // is named before anything points at it, and one allocated after a
         // command goes out after it (gametypes doc 7.6).
         crate::tick_trace::step!("SV_SetConfigstring broadcast");
+        _p = crate::tick_profile::phase("frame/commands");
         let writes = self
             .game
             .module
@@ -6453,6 +6488,7 @@ impl Server {
         moved: Vec<MoveSummary>,
         wall: (Option<f32>, u32),
     ) -> Cod1Snapshots {
+        let _p = crate::tick_profile::phase("messages/begin");
         let live = self.build_world_frame();
         // The game clock: what 1.5b and UO compare `r.broadcastTime` with
         // (cod15-protocol-diff.md 15), which a match timeout stands still.
@@ -6607,6 +6643,7 @@ impl Server {
             Some(c) if c.sim.is_none() => return self.send_unentered(slot, snaps),
             Some(_) => {}
         }
+        let _p = crate::tick_profile::phase("messages/snapshot");
         let svs_ms = self.svs_time_ms();
         let collision_vis = self.game.world.as_ref().map(|w| &w.vis);
         let Cod1Snapshots {
@@ -6648,6 +6685,7 @@ impl Server {
                 Some((index, shift)) => (&self.game.archive.frame(index).unwrap().world, shift),
                 None => (live, 0),
             };
+            let cull = crate::tick_profile::phase("messages/snapshot/cull");
             let mut visible =
                 world.entities_for(client_num, eye, collision_vis, shift, self.game.proto);
             if self.game.proto.et_events != vcod_common::net::events::ET_EVENTS {
@@ -6656,6 +6694,7 @@ impl Server {
                 }
             }
             let roster = (*world.roster).clone();
+            drop(cull);
 
             let mut ps = match follow_frame {
                 Some(f) => f.ps.clone(),
@@ -6718,19 +6757,22 @@ impl Server {
                 .filter(|b| {
                     let back = message_num.saturating_sub(b.message_num);
                     (1..=255).contains(&back)
-                })
-                .cloned();
+                });
 
+            let _w = crate::tick_profile::phase("messages/snapshot/write");
             let mut w = MsgWriter::new(&self.core.huff);
             write_pending_commands(&mut w, &c.link.netchan, c.link.reliable_ack);
-            c.link.reliable_sent = c.link.netchan.reliable_sequence as i32;
             self.game.proto.write_snapshot(
                 &mut w,
-                base.as_ref(),
+                base,
                 &frame,
-                frame.head(base.as_ref()),
+                frame.head(base),
                 &self.game.baselines,
             );
+            // The base is read in place out of the ring; the frame files
+            // into it once the write is done.
+            let base_num = base.map(|b| b.message_num);
+            c.link.reliable_sent = c.link.netchan.reliable_sequence as i32;
             c.record_frame(frame);
             write_download(c, &mut w, svs_ms, rate, &open, www.as_ref());
 
@@ -6751,8 +6793,8 @@ impl Server {
                     _ => "-".into(),
                 };
                 let ack_behind = message_num as i64 - i64::from(c.message_ack);
-                let base_desc = match base.as_ref() {
-                    Some(b) => format!("d{}", message_num - b.message_num),
+                let base_desc = match base_num {
+                    Some(b) => format!("d{}", message_num - b),
                     None => "uncompressed".into(),
                 };
                 // The walker's own state, for chasing a prediction error a

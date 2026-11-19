@@ -452,7 +452,10 @@ Client:
   for the next spawn. A map change loads the new map.
 - Voice chat on a server with `sv_voice 1`: hold Z (`+talk`) to talk
   (needs the system's libspeex and a `rate` of 5000 or more); `cl_voice 0`
-  turns it off both ways. The scoreboard marks talkers and muted players,
+  turns it off both ways. On Windows put `libspeex-1.dll` (or `libspeex.dll`,
+  `speex.dll`) beside `vcod.exe`; only that directory and System32 are
+  searched. On macOS vcod looks in `/opt/homebrew/lib`, `/usr/local/lib` and
+  `/usr/lib`. The library loads the first time voice is sent or heard. The scoreboard marks talkers and muted players,
   the talker list shows at the top left, and Esc's Mute Players
   menu mutes a player for the session. `VCOD_VOICE_INPUT=tone` sends a
   440 Hz tone instead of the microphone.

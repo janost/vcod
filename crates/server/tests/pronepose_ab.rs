@@ -27,7 +27,7 @@ use crate::common;
 use common::{Join, Queues, step};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::msg::{UserCmd, WBUTTON_PRONE};
 use vcod_common::net::protocol::PROTOCOL_V6;
 use vcod_common::net::{NetClient, NetEvent};
@@ -60,21 +60,21 @@ fn ours(
     rays: Option<&str>,
 ) -> (Vec<String>, [f32; 3], f32) {
     let proto = vcod_server::server::install_protocol(&fs);
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_pronebones"), now);
-    sv.set_protocol(proto);
-    sv.overlay_script("maps/mp/gametypes/probe_pronebones", SCRIPT);
-    sv.set_cvar("probe_spot", spot);
-    if let Some(y) = spawn_yaw {
-        sv.set_cvar("probe_spawn_yaw", &y.to_string());
+    let spawn_yaw = spawn_yaw.map(|y| y.to_string());
+    let mut cvars = vec![("probe_spot", spot)];
+    if let Some(y) = &spawn_yaw {
+        cvars.push(("probe_spawn_yaw", y.as_str()));
     }
     if rays.is_some() {
-        sv.set_cvar("probe_rays", "1");
+        cvars.push(("probe_rays", "1"));
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        cvars: &cvars,
+        script: Some(SCRIPT),
+        ..common::Boot::new(map, "probe_pronebones")
+    }
+    .start(fs);
     let join_ms = rays.map_or(common::PROBE_JOIN_MS, |f| {
         first_place(f)
             - match proto.transport.version == PROTOCOL_V6.transport.version {

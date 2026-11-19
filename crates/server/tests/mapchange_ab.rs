@@ -24,7 +24,7 @@ use crate::common;
 use common::{NetchanEvent, NetchanKind};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::NetEvent;
 
 const MAP: &str = "mp_carentan";
@@ -205,18 +205,18 @@ fn a_dm_map_end_and_rotation_match_retail() {
     let text = std::fs::read_to_string(FIXTURE).unwrap_or_else(|e| panic!("read {FIXTURE}: {e}"));
     let retail = common::collapse_traces(&common::parse_netchan_fixture(&text));
 
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "dm"), now);
-    // The fixture header's two cvars, verbatim.
-    sv.set_cvar("scr_dm_timelimit", "1");
-    sv.set_cvar(
-        "sv_mapRotation",
-        &format!("gametype dm map {MAP} map {NEXT}"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        // The fixture header's two cvars, verbatim.
+        cvars: &[
+            ("scr_dm_timelimit", "1"),
+            (
+                "sv_mapRotation",
+                &format!("gametype dm map {MAP} map {NEXT}"),
+            ),
+        ],
+        ..common::Boot::new(MAP, "dm")
+    }
+    .start(fs);
 
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let (mut cl, mut join) = common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp");

@@ -184,6 +184,14 @@ impl Connecting {
     }
 }
 
+impl Connecting {
+    /// Whether the connect's thread still runs.
+    #[cfg(test)]
+    pub(super) fn running(&self) -> bool {
+        !self.job.is_finished()
+    }
+}
+
 impl Drop for Connecting {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
@@ -215,7 +223,14 @@ impl Cod2Session {
         let progress = Arc::new(std::sync::Mutex::new(None));
         let shown = progress.clone();
         let (slot, flag) = (handoff.clone(), cancel.clone());
+        // A live test's join runs on its clock (`play::cod4::tests::sim`).
+        #[cfg(test)]
+        let clock = crate::play::cod4::tests::sim::current();
         let job = std::thread::spawn(move || {
+            #[cfg(test)]
+            if clock.is_some() {
+                crate::play::cod4::tests::sim::install(clock);
+            }
             let r = Self::connect_with(&a, &opts, timeout, Some(shown), Some(&flag));
             let Ok(mut slot) = slot.lock() else {
                 return;
@@ -278,7 +293,7 @@ impl Cod2Session {
         let mut s = Cod2Session::new(Some(sock), Client::new(qport, challenge));
         s.opts = opts.clone();
         s.progress = progress;
-        let until = Instant::now() + timeout;
+        let until = clock_now() + timeout;
         // Past the first gamestate only `cl_timeout` gives up: a download
         // takes as long as it takes.
         while !s.settled() {
@@ -286,7 +301,7 @@ impl Cod2Session {
                 s.disconnect();
                 bail!("connect to {addr} cancelled");
             }
-            if s.view.gamestates == 0 && Instant::now() > until {
+            if s.view.gamestates == 0 && clock_now() > until {
                 bail!("no gamestate from {addr}");
             }
             s.poll(None);
@@ -296,7 +311,7 @@ impl Cod2Session {
                 return Err(ServerError(why).into());
             }
             s.send_due()?;
-            std::thread::sleep(Duration::from_millis(2));
+            clock_sleep(Duration::from_millis(2));
         }
         s.level_gamestates = s.view.gamestates;
         s.loaded_map = s.map_name().unwrap_or_default().to_string();
@@ -354,9 +369,11 @@ fn ask_keyed_paced<T>(
             a.request();
         }
         sock.send(p)?;
-        let until = Instant::now() + wait;
-        while Instant::now() < until {
+        let until = clock_now() + wait;
+        while clock_now() < until {
+            // The read waited its timeout on the wall.
             let Ok(n) = sock.recv(&mut buf) else {
+                clock_sleep(Duration::ZERO);
                 continue;
             };
             let Some(pl) = oob::payload(&buf[..n]) else {

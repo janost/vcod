@@ -75,17 +75,13 @@ fn run_once(
 ) -> Option<Ours> {
     let (name, source) = probe;
     let p = vcod_server::server::install_protocol(&fs);
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, name), now);
-    sv.set_protocol(p);
-    sv.overlay_script(&format!("maps/mp/gametypes/{name}"), source);
-    for (k, v) in cvars {
-        sv.set_cvar(k, v);
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        cvars,
+        script: Some(source),
+        ..common::Boot::new(MAP, name)
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     let mut hold = common::ProbeHold {
         base: Some([0.0; 3]),
         framed: true,

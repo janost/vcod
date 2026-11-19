@@ -92,6 +92,44 @@ mod probe;
 pub use connect::{ConnectOpts, Connecting, Join, home_of};
 pub use probe::{demo_probe, probe};
 
+/// Now for a session's waits, send pacing and timeouts: the wall's, or the
+/// clock a live test shares with its in-process server on this thread
+/// (`play::cod4::tests::sim`, the CoD2 server through `tests::run_held`).
+pub(crate) fn clock_now() -> Instant {
+    #[cfg(test)]
+    if let Some(t) = crate::play::cod4::tests::sim::now() {
+        return t;
+    }
+    Instant::now()
+}
+
+/// [`Instant::elapsed`] on [`clock_now`].
+fn since(t: Instant) -> Duration {
+    clock_now().saturating_duration_since(t)
+}
+
+/// A wait between two socket reads: `d` of the wall, or on a test's clock
+/// a frame of it, which is what lets its server answer.
+fn clock_sleep(d: Duration) {
+    #[cfg(test)]
+    if crate::play::cod4::tests::sim::sleep(Duration::from_millis(16)) {
+        return;
+    }
+    if !d.is_zero() {
+        std::thread::sleep(d);
+    }
+}
+
+/// [`clock_now`] on the client's frame clock (`cls.realtime`, which
+/// `cl_avidemo` steps) where no test clock runs.
+fn frame_now() -> Instant {
+    #[cfg(test)]
+    if let Some(t) = crate::play::cod4::tests::sim::now() {
+        return t;
+    }
+    crate::frame_clock::now()
+}
+
 /// `ANGLE2SHORT`.
 fn angle_to_short(deg: f32) -> i32 {
     ((deg * (65536.0 / 360.0)) as i32) & 0xffff
@@ -327,7 +365,7 @@ pub struct PredictLog {
 impl Cod2Session {
     /// A session on `sock` past `connectResponse`, before the gamestate.
     fn new(sock: Option<UdpSocket>, client: Client) -> Self {
-        let now = Instant::now();
+        let now = clock_now();
         Cod2Session {
             sock: sock.and_then(|s| UdpTransport::from_socket(s).ok()),
             demo: None,
@@ -382,7 +420,7 @@ impl Cod2Session {
             talking: false,
             voice: crate::voice::VoiceLink::cod2(),
             muted: [false; 64],
-            epoch: crate::frame_clock::now(),
+            epoch: frame_now(),
             clock: ServerClock::cod2(),
             cmd_clock: CmdClock::default(),
             sent: VecDeque::new(),
@@ -545,7 +583,7 @@ impl Cod2Session {
                 }
                 match oob::parse_reply(pl) {
                     Reply::Error(e) => self.dropped = Some(e),
-                    Reply::Disconnect if self.last_msg.elapsed() >= OOB_DISCONNECT_QUIET => {
+                    Reply::Disconnect if since(self.last_msg) >= OOB_DISCONNECT_QUIET => {
                         self.dropped = Some("EXE_SERVER_DISCONNECTED".into())
                     }
                     // `CL_ConnectionlessPacket` prints a `print` from any
@@ -570,7 +608,7 @@ impl Cod2Session {
             let lost = self.client.netchan.total_dropped;
             let got = self.client.receive(d);
             let lost = self.client.netchan.total_dropped - lost;
-            self.meter.packet(fragment, lost as u32, Instant::now());
+            self.meter.packet(fragment, lost as u32, clock_now());
             match got {
                 Ok(Some(p)) => self.on_message(p),
                 Ok(None) => {}
@@ -594,7 +632,7 @@ impl Cod2Session {
         }
         // `CL_Frame` (Mac 0x14b182): six frames in a row past `cl_timeout`
         // without a sequenced packet drop the connection.
-        if self.last_msg.elapsed() > self.timeout {
+        if since(self.last_msg) > self.timeout {
             self.timeout_frames += 1;
             if self.timeout_frames >= TIMEOUT_FRAMES && self.dropped.is_none() {
                 self.dropped = Some("EXE_ERR_SERVER_TIMEOUT".into());
@@ -623,7 +661,7 @@ impl Cod2Session {
 
     /// What one parsed server message brings, off the socket or a demo.
     fn on_message(&mut self, p: vcod_cod2::net::Parsed) {
-        self.last_msg = Instant::now();
+        self.last_msg = clock_now();
         self.stats.messages += 1;
         self.stats.commands += p.commands.len();
         if p.gamestate && self.view.gamestates > 0 {
@@ -654,14 +692,14 @@ impl Cod2Session {
             {
                 self.stats.deltas += 1;
             }
-            self.snap_at = Instant::now();
+            self.snap_at = clock_now();
         }
         self.view.update(&self.client.parser, &p);
-        self.meter.message(Instant::now());
+        self.meter.message(clock_now());
         if p.snapshot.is_some()
             && let Some(s) = &self.view.snap
         {
-            self.meter.snapshot(s.ps.command_time, Instant::now());
+            self.meter.snapshot(s.ps.command_time, clock_now());
             self.lagometer
                 .parsed(s.message_num, self.meter.ping, s.snap_flags);
         }
@@ -978,7 +1016,7 @@ impl Cod2Session {
             .prev
             .as_ref()
             .map_or(0, |p| snap.server_time - p.server_time);
-        Some(snap.server_time - gap + self.snap_at.elapsed().as_millis() as i32)
+        Some(snap.server_time - gap + since(self.snap_at).as_millis() as i32)
     }
 
     /// The server time a cmd made now carries.
@@ -987,13 +1025,13 @@ impl Cod2Session {
         if self.clock.started() {
             return self.clock.cmd_time(snap);
         }
-        snap + self.snap_at.elapsed().as_millis() as i32
+        snap + since(self.snap_at).as_millis() as i32
     }
 
     /// Local ms since the session started, on the client's frame clock
     /// (`cls.realtime`, which `cl_avidemo` steps).
     fn real_ms(&self) -> f64 {
-        crate::frame_clock::now()
+        frame_now()
             .saturating_duration_since(self.epoch)
             .as_secs_f64()
             * 1000.0
@@ -1202,7 +1240,7 @@ impl Cod2Session {
     /// frames held or extrapolated ([`LerpStats`]); the prediction's
     /// corrections.
     pub fn debug_lines(&mut self) -> Vec<String> {
-        let r = self.meter.rates(Instant::now());
+        let r = self.meter.rates(clock_now());
         let lan = self.sock.as_ref().is_some_and(UdpTransport::is_lan);
         let mut lines = vec![format!(
             "net: ping {:3}  snaps {:2}/s  msgs {:2}/s  out {:2}/s  lost {} ({})  frag {}/s ({})  rate {} snaps {}{}",
@@ -1369,9 +1407,9 @@ impl Cod2Session {
         self.advance_clock();
         if self.view.gamestates > 0
             && !self.cp_owed
-            && self.last_cmd.elapsed() >= Duration::from_millis(CMD_MS)
+            && since(self.last_cmd) >= Duration::from_millis(CMD_MS)
         {
-            self.last_cmd = Instant::now();
+            self.last_cmd = clock_now();
             let mut cmd = self.client.idle_cmd(self.cmd_time());
             if self
                 .sent
@@ -1410,7 +1448,7 @@ impl Cod2Session {
         } else {
             PACKET_MS
         };
-        if self.last_packet.elapsed() < Duration::from_millis(wait) {
+        if since(self.last_packet) < Duration::from_millis(wait) {
             return Ok(());
         }
         // No new cmd: the clock stands (a cmd is held within 5 s of the
@@ -1420,8 +1458,7 @@ impl Cod2Session {
         if self.view.gamestates > 0
             && self.pending.is_empty()
             && !self.cp_owed
-            && (self.sent.is_empty()
-                || self.last_packet.elapsed() < Duration::from_millis(PACKET_MS))
+            && (self.sent.is_empty() || since(self.last_packet) < Duration::from_millis(PACKET_MS))
         {
             return Ok(());
         }
@@ -1429,7 +1466,7 @@ impl Cod2Session {
             self.pending.clear();
             return Ok(());
         };
-        self.last_packet = Instant::now();
+        self.last_packet = clock_now();
         let new = std::mem::take(&mut self.pending).len();
         let n =
             packet_cmds(new, &self.dup, self.sent.len()).max(usize::from(!self.sent.is_empty()));
@@ -1509,7 +1546,7 @@ impl Cod2Session {
         }
         self.predict(fs, draw_cmd);
         self.jitter = self.gun_jitter(fs);
-        let log_due = self.last_log.elapsed() >= Duration::from_secs(10);
+        let log_due = since(self.last_log) >= Duration::from_secs(10);
         if let Some((eye, _)) = self.view() {
             cam.pos = eye;
         } else if let Some(f) = self.frame() {
@@ -1530,7 +1567,7 @@ impl Cod2Session {
             );
         }
         if log_due {
-            self.last_log = Instant::now();
+            self.last_log = clock_now();
         }
     }
 
@@ -1866,7 +1903,15 @@ impl Cod2Session {
     pub fn pump(self: Box<Self>) -> Pump {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
+        // A live test's clock holds while the map loads: this thread reads
+        // it but sleeps on the wall.
+        #[cfg(test)]
+        let clock = crate::play::cod4::tests::sim::current();
         let handle = std::thread::spawn(move || {
+            #[cfg(test)]
+            if clock.is_some() {
+                crate::play::cod4::tests::sim::install(clock);
+            }
             let mut s = self;
             let (start, messages) = (Instant::now(), s.stats.messages);
             while !flag.load(Ordering::Relaxed) {
@@ -2035,7 +2080,7 @@ mod tests {
     /// nothing of it, as retail's does. Needs `COD2_DIR`.
     #[test]
     fn cod2_live_a_dropped_connect_frees_the_server_slot() {
-        use vcod_server::cod2::{Cod2Config, Cod2Server, FRAME_MS};
+        use vcod_server::cod2::{Cod2Config, Cod2Server};
         let Some(fs) = vcod_common::testing::cod2_fs() else {
             return;
         };
@@ -2054,49 +2099,54 @@ mod tests {
         sv.exec_default_cfg(&*fs);
         sv.set_cvar("sv_pure", "0");
         sv.load(Some(fs)).unwrap();
-        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
-        sock.set_nonblocking(true).unwrap();
-        let addr = sock.local_addr().unwrap().to_string();
         let opts = ConnectOpts {
             name: "dropper".into(),
             allow_download: false,
             www_download: false,
             ..ConnectOpts::default()
         };
-        let mut connecting = Some(Cod2Session::connect_in_background(
-            &addr,
-            opts,
-            Duration::from_secs(15),
-        ));
-        let (mut buf, mut next) = ([0u8; 4096], Instant::now());
-        let (mut joined, mut freed) = (None, false);
-        let t0 = Instant::now();
-        while t0.elapsed() < Duration::from_secs(30) {
-            while let Ok((n, from)) = sock.recv_from(&mut buf) {
-                sv.handle_packet(from, &buf[..n], Instant::now());
-            }
-            let now = Instant::now();
-            if now >= next {
-                next = now + Duration::from_millis(FRAME_MS as u64);
-                sv.tick_frames(now, 1);
-            }
-            for (to, p) in sv.take_outgoing() {
-                let _ = sock.send_to(&p, to);
-            }
-            if joined.is_none() && sv.client_count() == 1 {
-                joined = Some(Instant::now());
-            }
-            // The gamestate is a few frames out on loopback.
-            if joined.is_some_and(|t| t.elapsed() > Duration::from_millis(500)) {
-                connecting = None;
-            }
-            if connecting.is_none() && sv.client_count() == 0 {
-                freed = true;
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        assert!(connecting.is_none(), "the connect never took a slot");
+        // The server's client count at each frame.
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = count.clone();
+        let (connected, freed) = crate::play::cod4::tests::run_held(
+            &mut sv,
+            move |addr| {
+                let mut connecting = Some(Cod2Session::connect_in_background(
+                    &addr.to_string(),
+                    opts,
+                    Duration::from_secs(15),
+                ));
+                let t0 = clock_now();
+                let mut joined = None;
+                while since(t0) < Duration::from_secs(30) {
+                    let n = seen.load(Ordering::Relaxed);
+                    if joined.is_none() && n == 1 {
+                        joined = Some(clock_now());
+                    }
+
+                    // The gamestate is a few frames out on loopback.
+                    if joined.is_some_and(|t| since(t) > Duration::from_millis(500)) {
+                        connecting = None;
+                    }
+                    if connecting.is_none() && n == 0 {
+                        return (true, true);
+                    }
+                    // One thread moves the clock at a time: the join while
+                    // it runs, this one after.
+                    if connecting.as_ref().is_some_and(Connecting::running) {
+                        std::thread::sleep(Duration::from_millis(1));
+                    } else {
+                        crate::play::cod4::tests::clk_sleep(Duration::from_millis(16));
+                    }
+                }
+                (connecting.is_none(), false)
+            },
+            |sv, _, _| {
+                count.store(sv.client_count(), Ordering::Relaxed);
+                true
+            },
+        );
+        assert!(connected, "the connect never took a slot");
         assert!(freed, "the server kept the dropped connect's slot");
     }
 

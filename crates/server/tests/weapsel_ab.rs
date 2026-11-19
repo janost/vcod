@@ -30,7 +30,6 @@ use vcod_common::net::{NetClient, NetEvent};
 use vcod_server::Server;
 
 const MAP: &str = "mp_carentan";
-const PROBE_PATH: &str = "maps/mp/gametypes/probe_weapsel";
 const PROBE_SRC: &str = "../gsc/tests/fixtures/semantics/client-probes/probe_weapsel.gsc";
 const FIXTURE: &str = "tests/fixtures/playerstate/mp_carentan-dm-weapsel.txt";
 /// The same recipe with the probe's last two commands: the thompson back,
@@ -174,15 +173,13 @@ struct Rig {
 
 fn rig() -> Option<Rig> {
     let fs = vcod_common::testing::game_fs_11()?;
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let fs = Rc::new(fs);
-    let mut now = Instant::now();
-    let mut sv = Server::new(common::cfg(MAP, "probe_weapsel"), now);
     let src = std::fs::read_to_string(PROBE_SRC).expect("the gsc probe");
-    sv.overlay_script(PROBE_PATH, &src);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(&src),
+        ..common::Boot::new(MAP, "probe_weapsel")
+    }
+    .start(fs);
     let q = Rc::new(RefCell::new(Queues::default()));
     let (cl, join) = common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp");
     assert!(join.findings().is_empty(), "{}", join.summary());

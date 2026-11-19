@@ -52,7 +52,7 @@ use common::{ADDR, ClientEnd, FRAME_MS, Join, Queues, holding, step_at};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6};
 use vcod_common::net::{NetClient, NetEvent};
@@ -448,14 +448,12 @@ fn run_ours(
             ),
         );
     }
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, gametype), now);
-    sv.set_protocol(proto);
-    sv.overlay_script(&format!("maps/mp/gametypes/{gametype}"), script);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        script: Some(script),
+        ..common::Boot::new(MAP, gametype)
+    }
+    .start(fs);
     if spawn.is_some() {
         sv.pin_spawns(vec![vec![spawn]]);
     }

@@ -11,25 +11,18 @@
 
 use crate::common;
 
-use std::rc::Rc;
-use std::time::Instant;
-use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V6, PROTOCOL_V22};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 
 const SCRIPT: &str =
     include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_modelbounds.gsc");
 
 fn ours(fs: vcod_common::pk3::Pk3Fs, proto: Option<&'static Cod1Wire>) -> Vec<String> {
-    let map = "mp_carentan";
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_modelbounds"), now);
-    if let Some(p) = proto {
-        sv.set_protocol(p);
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto.unwrap_or(&PROTOCOL_V1)),
+        script: Some(SCRIPT),
+        ..common::Boot::new("mp_carentan", "probe_modelbounds")
     }
-    sv.overlay_script("maps/mp/gametypes/probe_modelbounds", SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     common::run_alone(&mut sv, &mut now, 5000);
     sv.script_log().to_vec()
 }

@@ -951,8 +951,9 @@ impl Shell {
     }
 
     pub fn cvar(&self, name: &str) -> Option<&str> {
+        let mut buf = [0; 64];
         self.cvars
-            .get(&name.to_ascii_lowercase())
+            .get(lower_key(name, &mut buf).as_ref())
             .map(|c| c.value.as_str())
     }
 
@@ -1893,9 +1894,36 @@ pub fn split_commands(text: &str) -> Vec<String> {
     out
 }
 
+/// The store's key for `name`, lowercased into `buf` when it fits, so a
+/// read allocates nothing.
+fn lower_key<'a>(name: &'a str, buf: &'a mut [u8; 64]) -> std::borrow::Cow<'a, str> {
+    if !name.bytes().any(|b| b.is_ascii_uppercase()) {
+        return name.into();
+    }
+    match buf.get_mut(..name.len()) {
+        Some(b) => {
+            b.copy_from_slice(name.as_bytes());
+            b.make_ascii_lowercase();
+            // ASCII lowercasing keeps UTF-8 valid.
+            std::str::from_utf8(b).unwrap_or_default().into()
+        }
+        None => name.to_ascii_lowercase().into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cvar_read_takes_any_case_and_any_length() {
+        let mut s = Shell::new();
+        let long = format!("x{}", "Y".repeat(80));
+        s.force(&long, "1");
+        assert_eq!(s.cvar(&long.to_ascii_lowercase()), Some("1"));
+        assert_eq!(s.cvar(&long), Some("1"));
+        assert_eq!(s.cvar("CG_DRAWGUN"), s.cvar("cg_drawgun"));
+    }
 
     #[test]
     fn nextdemo_holds_a_whole_line_and_clears() {

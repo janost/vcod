@@ -485,6 +485,17 @@ pub fn board_client(clients: &[ClientState2], n: u32) -> Option<(String, i32)> {
 
 /// `m:ss` of a timer element at `now`: counting down to `time` (7, 9) or
 /// up from it (8, 10), whole seconds.
+/// A hudelem's text before its label merges in: a value prints as `%g`
+/// (`CoD2MP_s.exe` 0x4dd6b8, cod2-hud.md).
+fn elem_body(e: &HudElem, text: impl FnOnce() -> String, now: i32) -> String {
+    match e.kind {
+        1 => text(),
+        2 => crate::hud::hudelem::format_g(e.value),
+        7..=10 => timer(e, now),
+        _ => String::new(),
+    }
+}
+
 fn timer(e: &HudElem, now: i32) -> String {
     let ms = match e.kind {
         8 | 10 => now - e.time,
@@ -614,12 +625,7 @@ impl Cod2Hud {
         let sp = ScreenPlacement::new(w, h);
         let text_of = |e: &HudElem| {
             let label = localized(frame, loc, e.label).unwrap_or_default();
-            let body = match e.kind {
-                1 => localized(frame, loc, e.text).unwrap_or_default(),
-                2 => format!("{}", e.value),
-                7..=10 => timer(e, now),
-                _ => String::new(),
-            };
+            let body = elem_body(e, || localized(frame, loc, e.text).unwrap_or_default(), now);
             match label.find("&&1") {
                 Some(i) => format!("{}{body}{}", &label[..i], &label[i + 3..]),
                 None => format!("{label}{body}"),
@@ -795,6 +801,21 @@ mod tests {
 
     /// The HUD dvars: a vec2 dvar's two numbers, the stance prints' keys
     /// only while they are on, defaults for what is missing.
+    #[test]
+    fn a_value_hudelem_prints_as_percent_g() {
+        let e = HudElem {
+            kind: 2,
+            value: 100.0 / 3.0,
+            ..Default::default()
+        };
+        assert_eq!(elem_body(&e, String::new, 0), "33.3333");
+        let e = HudElem {
+            value: 1_234_567.5,
+            ..e
+        };
+        assert_eq!(elem_body(&e, String::new, 0), "1.23457e+06");
+    }
+
     #[test]
     fn hud_dvars_read_the_positions_and_the_hint_keys() {
         let off = HudDvars::read(|_| None, |_| Some("X".into()));
