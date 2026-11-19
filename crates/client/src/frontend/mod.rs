@@ -15,6 +15,7 @@
 pub mod browser;
 pub mod cod2;
 pub mod create;
+pub mod item_rules;
 mod listbox;
 mod options;
 mod players;

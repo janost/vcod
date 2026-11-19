@@ -21,12 +21,11 @@ use vcod_cod4::scriptmenu::{
 };
 
 use crate::cod4_hud::{MenuAssets, quad, text};
+use crate::frontend::item_rules::{SLIDER_H, SLIDER_W, THUMB_H, THUMB_W};
 use crate::hud::HudQuad;
 use crate::hud::cod2elem::ScreenPlacement;
 use crate::hud::font::{self, Font};
-use crate::play::cod4_menus::controls::{
-    SCROLL, SLIDER_H, SLIDER_W, THUMB_H, THUMB_W, UI_MAPPREVIEW, list_rows,
-};
+use crate::play::cod4_menus::controls::{SCROLL, UI_MAPPREVIEW, list_rows};
 use crate::play::cod4_menus::{OpenMenu, ScriptMenus, label, placed};
 
 /// The list's left edge, first line and line step on the 640x480 grid,
@@ -236,6 +235,8 @@ fn break_lines<'s>(s: &'s str, width: f32, measure: &impl Fn(&str) -> f32) -> Ve
 /// 8 are unverified against retail): the fewest lines the rect's width allows
 /// are kept at the narrowest width, tried from an even split upward in steps of
 /// 8 below the rect's, that still breaks into that many.
+/// Not CoD1's `Painter::wrap_lines`, which aims every line at an even share
+/// of the width and measures one character behind.
 fn wrap_lines(s: &str, width: f32, centred: bool, measure: impl Fn(&str) -> f32) -> Vec<&str> {
     let full = measure(s);
     let rect = width as i32;
