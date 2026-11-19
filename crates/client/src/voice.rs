@@ -200,24 +200,52 @@ pub struct Speex {
     _lib: libloading::Library,
 }
 
+/// The names `libspeex` is opened by. `dlopen` searches no working
+/// directory for a bare name on Linux; macOS's does, so its are absolute
+/// (Homebrew's and the system's), and Windows loads beside `vcod.exe` and
+/// from System32 only ([`load_speex`]).
+#[cfg(target_os = "macos")]
 const SPEEX_LIBS: &[&str] = &[
-    "libspeex.so.1",
-    "libspeex.so",
-    "libspeex-1.dll",
-    "libspeex.dll",
-    "speex.dll",
-    "libspeex.1.dylib",
-    "libspeex.dylib",
+    "/opt/homebrew/lib/libspeex.1.dylib",
+    "/usr/local/lib/libspeex.1.dylib",
+    "/usr/lib/libspeex.1.dylib",
 ];
+#[cfg(windows)]
+const SPEEX_LIBS: &[&str] = &["libspeex-1.dll", "libspeex.dll", "speex.dll"];
+#[cfg(not(any(windows, target_os = "macos")))]
+const SPEEX_LIBS: &[&str] = &["libspeex.so.1", "libspeex.so"];
+
+/// Opens `name`; on Windows with the search held to the application's
+/// directory and System32, so neither the working directory nor `PATH`
+/// supplies it.
+///
+/// # Safety
+/// Loading runs the library's initialisers.
+unsafe fn load_speex(name: &str) -> Option<libloading::Library> {
+    #[cfg(windows)]
+    {
+        use libloading::os::windows::{
+            LOAD_LIBRARY_SEARCH_APPLICATION_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32, Library,
+        };
+        let flags = LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32;
+        // SAFETY: the caller's.
+        unsafe { Library::load_with_flags(name, flags) }
+            .ok()
+            .map(Into::into)
+    }
+    #[cfg(not(windows))]
+    {
+        // SAFETY: the caller's.
+        unsafe { libloading::Library::new(name) }.ok()
+    }
+}
 
 impl Speex {
     /// The system's `libspeex` at `rate` (`SPEEX_SET_SAMPLING_RATE`, which
     /// sets the bit rate it reports, not the frame), else `None`.
     pub fn open(rate: u32) -> Option<Speex> {
         // SAFETY: loading libspeex runs no initialisers beyond libc's.
-        let lib = SPEEX_LIBS
-            .iter()
-            .find_map(|n| unsafe { libloading::Library::new(n) }.ok())?;
+        let lib = SPEEX_LIBS.iter().find_map(|n| unsafe { load_speex(n) })?;
         // SAFETY: every symbol is looked up by its libspeex 1.2 name and
         // typed after `speex.h`; the library stays loaded in `_lib`.
         unsafe {
@@ -225,12 +253,21 @@ impl Speex {
                 // SAFETY: the caller types `T` after the symbol.
                 unsafe { lib.get::<T>(n).ok().map(|s| *s) }
             }
+            // Every symbol first, so a missing one leaks no codec state.
             let mode: ModeFn = sym(&lib, b"speex_lib_get_mode")?;
             let enc_init: InitFn = sym(&lib, b"speex_encoder_init")?;
             let dec_init: InitFn = sym(&lib, b"speex_decoder_init")?;
             let ctl_enc: CtlFn = sym(&lib, b"speex_encoder_ctl")?;
             let ctl_dec: CtlFn = sym(&lib, b"speex_decoder_ctl")?;
             let bits_init: BitsFn = sym(&lib, b"speex_bits_init")?;
+            let encode: EncodeFn = sym(&lib, b"speex_encode_int")?;
+            let write: WriteFn = sym(&lib, b"speex_bits_write")?;
+            let reset: BitsFn = sym(&lib, b"speex_bits_reset")?;
+            let read: ReadFn = sym(&lib, b"speex_bits_read_from")?;
+            let decode: DecodeFn = sym(&lib, b"speex_decode_int")?;
+            let free_enc: FreeFn = sym(&lib, b"speex_encoder_destroy")?;
+            let free_dec: FreeFn = sym(&lib, b"speex_decoder_destroy")?;
+            let free_bits: BitsFn = sym(&lib, b"speex_bits_destroy")?;
             let nb = mode(SPEEX_MODEID_NB);
             if nb.is_null() {
                 return None;
@@ -238,12 +275,34 @@ impl Speex {
             let enc = enc_init(nb);
             let dec = dec_init(nb);
             if enc.is_null() || dec.is_null() {
+                if !enc.is_null() {
+                    free_enc(enc);
+                }
+                if !dec.is_null() {
+                    free_dec(dec);
+                }
                 return None;
             }
-            let mut enc_bits: Box<SpeexBits> = Box::new(std::mem::zeroed());
-            let mut dec_bits: Box<SpeexBits> = Box::new(std::mem::zeroed());
-            bits_init(&mut *enc_bits);
-            bits_init(&mut *dec_bits);
+            let mut speex = Speex {
+                enc,
+                dec,
+                enc_bits: Box::new(std::mem::zeroed()),
+                dec_bits: Box::new(std::mem::zeroed()),
+                quality: wire::DEFAULT_QUALITY,
+                ctl_enc,
+                encode,
+                write,
+                reset,
+                read,
+                decode,
+                free_enc,
+                free_dec,
+                free_bits,
+                _lib: lib,
+            };
+            // From here a `None` drops `speex`, which frees all four.
+            bits_init(&mut *speex.enc_bits);
+            bits_init(&mut *speex.dec_bits);
             let set = |ctl: CtlFn, st, req, mut v: c_int| ctl(st, req, (&raw mut v).cast());
             let rate = rate as c_int;
             set(ctl_enc, enc, SPEEX_SET_SAMPLING_RATE, rate);
@@ -252,28 +311,15 @@ impl Speex {
             set(ctl_enc, enc, SPEEX_SET_DTX, 1);
             set(ctl_dec, dec, SPEEX_SET_ENH, 1);
             set(ctl_dec, dec, SPEEX_SET_SAMPLING_RATE, rate);
-            let mut frame: c_int = 0;
-            ctl_enc(enc, SPEEX_GET_FRAME_SIZE, (&raw mut frame).cast());
-            if frame as usize != FRAME_SAMPLES {
+            let frame = |ctl: CtlFn, st| {
+                let mut n: c_int = 0;
+                ctl(st, SPEEX_GET_FRAME_SIZE, (&raw mut n).cast());
+                n as usize
+            };
+            if frame(ctl_enc, enc) != FRAME_SAMPLES || frame(ctl_dec, dec) != FRAME_SAMPLES {
                 return None;
             }
-            Some(Speex {
-                enc,
-                dec,
-                enc_bits,
-                dec_bits,
-                quality: wire::DEFAULT_QUALITY,
-                ctl_enc,
-                encode: sym(&lib, b"speex_encode_int")?,
-                write: sym(&lib, b"speex_bits_write")?,
-                reset: sym(&lib, b"speex_bits_reset")?,
-                read: sym(&lib, b"speex_bits_read_from")?,
-                decode: sym(&lib, b"speex_decode_int")?,
-                free_enc: sym(&lib, b"speex_encoder_destroy")?,
-                free_dec: sym(&lib, b"speex_decoder_destroy")?,
-                free_bits: sym(&lib, b"speex_bits_destroy")?,
-                _lib: lib,
-            })
+            Some(speex)
         }
     }
 
@@ -644,7 +690,9 @@ pub struct VoiceChat {
     /// The game's codec rate (`vcod_cod2::net::voice::SAMPLE_RATE`,
     /// `vcod_cod4::net::voice::SAMPLE_RATE`).
     rate: u32,
-    speex: Option<Speex>,
+    /// The codec, opened the first time a frame is sent or heard; `None`
+    /// before, `Some(None)` without libspeex.
+    speex: Option<Option<Speex>>,
     input: Option<Box<dyn VoiceInput>>,
     /// Captured samples not yet a whole frame.
     pending: Vec<i16>,
@@ -657,20 +705,20 @@ pub struct VoiceChat {
 }
 
 impl VoiceChat {
-    /// Speex at `rate` if the system has it; the input opens on the first
-    /// talk.
+    /// Speex at `rate`, opened when voice is first sent or heard, so a
+    /// server or a player with voice off never loads it; the input opens
+    /// on the first talk.
     pub fn new(rate: u32) -> VoiceChat {
-        let speex = Speex::open(rate);
-        if speex.is_none() {
-            log::info!("voice: no libspeex; voice chat neither sends nor plays");
+        VoiceChat {
+            speex: None,
+            ..VoiceChat::with(rate, None, None)
         }
-        VoiceChat::with(rate, speex, None)
     }
 
     pub fn with(rate: u32, speex: Option<Speex>, input: Option<Box<dyn VoiceInput>>) -> VoiceChat {
         VoiceChat {
             rate,
-            speex,
+            speex: Some(speex),
             input,
             pending: Vec::new(),
             talking: false,
@@ -689,10 +737,10 @@ impl VoiceChat {
         f: &VoiceFrame,
         mut audio: Option<&mut crate::audio::AudioSystem>,
     ) {
+        let rate = self.rate;
         if f.sending
-            && let Some(speex) = self.speex.as_mut()
+            && let Some(speex) = codec(&mut self.speex, rate)
         {
-            let rate = self.rate;
             let input = self
                 .input
                 .get_or_insert_with(|| match std::env::var("VCOD_VOICE_INPUT") {
@@ -731,10 +779,14 @@ impl VoiceChat {
             self.talking = false;
             self.pending.clear();
         }
-        for (talker, packet) in link.take_heard() {
-            let Some(speex) = self.speex.as_mut() else {
-                continue;
-            };
+        let heard = link.take_heard();
+        if heard.is_empty() {
+            return;
+        }
+        let Some(speex) = codec(&mut self.speex, rate) else {
+            return;
+        };
+        for (talker, packet) in heard {
             let pcm = speex.decode(&packet);
             self.played += 1;
             let ring = match &self.streams[talker as usize] {
@@ -755,6 +807,18 @@ impl VoiceChat {
             }
         }
     }
+}
+
+/// The codec in `slot`, opened at `rate` on first use.
+fn codec(slot: &mut Option<Option<Speex>>, rate: u32) -> Option<&mut Speex> {
+    slot.get_or_insert_with(|| {
+        let s = Speex::open(rate);
+        if s.is_none() {
+            log::info!("voice: no libspeex; voice chat neither sends nor plays");
+        }
+        s
+    })
+    .as_mut()
 }
 
 /// No input device: nothing to send.
@@ -787,6 +851,37 @@ mod tests {
         assert!(!sound.finished());
         drop(v);
         assert!(sound.finished());
+    }
+
+    /// The codec loads only once a frame is sent or heard: a session with
+    /// voice off never opens libspeex (SEC-110).
+    #[test]
+    fn libspeex_opens_on_the_first_frame_sent_or_heard() {
+        let mut v = VoiceChat::new(COD4_RATE);
+        let mut link = VoiceLink::default();
+        let idle = VoiceFrame {
+            sending: false,
+            quality: 3,
+            mic: MicGain::default(),
+        };
+        v.frame(&mut link, &idle, None);
+        assert!(v.speex.is_none(), "opened with nothing sent or heard");
+        link.hear(vec![(1, vec![0; 20])], 0.0, |_| false);
+        v.frame(&mut link, &idle, None);
+        assert!(v.speex.is_some());
+    }
+
+    /// Each OS's names: macOS's absolute (its `dlopen` searches the working
+    /// directory for a bare one), none of another OS's.
+    #[test]
+    fn libspeex_names_suit_the_os() {
+        for n in SPEEX_LIBS {
+            assert_eq!(n.ends_with(".dll"), cfg!(windows), "{n}");
+            assert_eq!(n.ends_with(".dylib"), cfg!(target_os = "macos"), "{n}");
+            if cfg!(target_os = "macos") {
+                assert!(n.starts_with('/'), "{n}");
+            }
+        }
     }
 
     #[test]
