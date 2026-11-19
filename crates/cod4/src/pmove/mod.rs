@@ -1540,4 +1540,6 @@ fn settle_velocity(ps: &mut PlayerState, pml: &Pml) {
 }
 
 #[cfg(test)]
+mod pin;
+#[cfg(test)]
 mod tests;

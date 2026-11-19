@@ -9,6 +9,7 @@
 
 use glam::Vec3;
 
+use super::super::pin::Pin;
 use super::super::*;
 
 /// The sweep's stand-off from a face, as the clip map keeps it.
@@ -133,45 +134,28 @@ fn floor() -> Brush {
     )
 }
 
-/// FNV-1a over 32-bit words.
+/// The pin and the peak height of the run.
 #[derive(Default)]
-struct Digest(u64, f32);
+struct Digest(Pin, f32);
 
 impl Digest {
-    fn word(&mut self, w: u32) {
-        let h = if self.0 == 0 {
-            0xcbf2_9ce4_8422_2325
-        } else {
-            self.0
-        };
-        self.0 = (h ^ u64::from(w)).wrapping_mul(0x0100_0000_01b3);
-    }
-
-    fn vec(&mut self, v: Vec3) {
-        for c in v.to_array() {
-            self.word(c.to_bits());
-        }
-    }
-
     fn state(&mut self, ps: &PlayerState) {
         self.1 = self.1.max(ps.origin.z);
-        self.vec(ps.origin);
-        self.vec(ps.velocity);
-        for w in [
-            ps.pm_flags,
-            ps.pm_time as u32,
-            ps.jump_time as u32,
-            ps.jump_origin_z.to_bits(),
-            ps.ground_entity_num as u32,
-            ps.bob_cycle as u32,
-            ps.event_sequence as u32,
-            ps.aim_spread_scale.to_bits(),
-        ] {
-            self.word(w);
-        }
+        let p = &mut self.0;
+        p.step();
+        p.vec("origin", ps.origin);
+        p.vec("velocity", ps.velocity);
+        p.u32("pm_flags", ps.pm_flags);
+        p.i32("pm_time", ps.pm_time);
+        p.i32("jump_time", ps.jump_time);
+        p.f32("jump_origin_z", ps.jump_origin_z);
+        p.i32("ground", ps.ground_entity_num);
+        p.i32("bob_cycle", ps.bob_cycle);
+        p.i32("event_sequence", ps.event_sequence);
+        p.f32("aim_spread_scale", ps.aim_spread_scale);
         for i in 0..4 {
-            self.word(ps.events[i]);
-            self.word(ps.event_parms[i]);
+            p.u32("event", ps.events[i]);
+            p.u32("parm", ps.event_parms[i]);
         }
     }
 }
@@ -247,7 +231,7 @@ fn a_jump_up_and_down_a_slope_pins() {
         play(&mut ps, &keys, &world, Rules::default(), &mut d);
         assert!(ps.origin.x > 0.0, "still on the ramp: {}", ps.origin);
     }
-    assert_eq!(d.0, 0x1cc2_dfc5_c968_65a3);
+    d.0.check("jump_slope", 0x1cc2_dfc5_c968_65a3);
 }
 
 #[test]
@@ -295,7 +279,7 @@ fn steps_up_and_down_at_the_step_height_pin() {
         Rules::default(),
         &mut d,
     );
-    assert_eq!(d.0, 0x5d84_51ad_97c5_9b31);
+    d.0.check("jump_steps", 0x5d84_51ad_97c5_9b31);
 }
 
 #[test]
@@ -338,7 +322,7 @@ fn a_jump_onto_a_ledge_near_the_jump_height_pins() {
         ];
         play(&mut ps, &keys, &world, Rules::default(), &mut d);
     }
-    assert_eq!(d.0, 0x79d7_0c81_f997_1f04);
+    d.0.check("jump_ledge", 0x79d7_0c81_f997_1f04);
 }
 
 #[test]
@@ -400,7 +384,7 @@ fn landings_stun_by_fall_height() {
     // A fatal fall damps the speed but stuns nothing.
     assert!(stuns[5..9].windows(2).all(|w| w[0] < w[1]), "{stuns:?}");
     assert_eq!(stuns[8..], [2000, 2000, 2000, 0], "{stuns:?}");
-    assert_eq!(d.0, 0x200a_4adf_1942_f295);
+    d.0.check("jump_landings", 0x200a_4adf_1942_f295);
 }
 
 #[test]
@@ -487,7 +471,7 @@ fn the_jump_slowdown_takes_its_two_penalties() {
     assert!(ps.pm_flags & pmf::JUMPING == 0);
     let penalties: Vec<i32> = landed.iter().map(|l| l.0).collect();
     assert_eq!(penalties[..4], [1800, 1800, 1800, 1200], "{landed:?}");
-    assert_eq!(d.0, 0xe676_0b8d_c5fc_610c);
+    d.0.check("jump_slowdown", 0xe676_0b8d_c5fc_610c);
 }
 
 /// `PM_ProjectVelocity` over a handful of velocities and planes. The new z
@@ -514,14 +498,15 @@ fn the_projection_keeps_the_flat_length_on_its_planes() {
     ];
     for n in planes {
         for v in velocities {
-            d.vec(super::project_velocity(v, n));
+            d.0.step();
+            d.0.vec("projected", super::project_velocity(v, n));
         }
     }
     assert_eq!(
         super::project_velocity(Vec3::new(0.0, 0.0, -9.0), Vec3::Z),
         Vec3::new(0.0, 0.0, -9.0)
     );
-    assert_eq!(d.0, 0xc561_f777_d177_cc41);
+    d.0.check("jump_projection", 0xc561_f777_d177_cc41);
 }
 
 /// `PM_Friction` on a jumping body at each point of the slowdown curve.
@@ -554,5 +539,5 @@ fn friction_follows_the_jump_curve() {
             }
         }
     }
-    assert_eq!(d.0, 0xcbcd_b771_90f0_d0f5);
+    d.0.check("jump_friction", 0xcbcd_b771_90f0_d0f5);
 }
