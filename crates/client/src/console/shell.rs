@@ -59,7 +59,11 @@ pub enum Effect {
     /// A bind or an archived cvar changed.
     SaveConfig,
     /// `exec <file>`: run a config file from the game's search path.
+    /// The commands after it come as the next effect, [`Effect::Then`].
     Exec(String),
+    /// The commands after an `exec`, run once its file has: `Cmd_Exec_f`
+    /// inserts the file ahead of the rest of the buffer (cod11-console.md 10).
+    Then(String),
     /// `vid_restart`: apply `r_mode` and `r_fullscreen` to the window and
     /// restart the UI.
     VidRestart,
@@ -520,6 +524,9 @@ const COD4_OPTION_DVARS: [(&str, &str, u32); 56] = [
 
 /// `r_aspectRatio`'s names (iw3mp.exe 0x71c5f0), its enum's order.
 pub const COD4_ASPECT_RATIOS: [&str; 4] = ["auto", "standard", "wide 16:10", "wide 16:9"];
+
+/// How deep `exec` nests before a file that execs itself is skipped.
+pub const EXEC_DEPTH: u8 = 8;
 
 /// The stamp [`Shell::config_text`] writes as `vc_cfgVersion`; one past
 /// the newest [`STALE_DEFAULTS`] row's version (cod11-console.md 8).
@@ -1287,13 +1294,60 @@ impl Shell {
     }
 
     /// Runs `text`: commands split on `;` and newlines outside quotes, as
-    /// `Cbuf_Execute` does.
+    /// `Cbuf_Execute` does. An `exec` stops the run: the commands after it
+    /// come back as [`Effect::Then`], for the caller to run after the file.
     pub fn execute(&mut self, text: &str) -> Vec<Effect> {
         let mut out = Vec::new();
-        for line in split_commands(text) {
-            self.execute_one(&line, &mut out);
+        let lines = split_commands(text);
+        for (i, line) in lines.iter().enumerate() {
+            let before = out.len();
+            self.execute_one(line, &mut out);
+            if i + 1 < lines.len() && out[before..].iter().any(|e| matches!(e, Effect::Exec(_))) {
+                out.push(Effect::Then(lines[i + 1..].join("\n")));
+                break;
+            }
         }
         out
+    }
+
+    /// `effects` with each `exec` run where it stands, its file read
+    /// through `read`, for a config run with no app up to apply them.
+    /// Nesting stops at [`EXEC_DEPTH`]. The other effects come back in order.
+    pub fn run_execs(
+        &mut self,
+        effects: Vec<Effect>,
+        read: &mut dyn FnMut(&str) -> Option<Vec<u8>>,
+    ) -> Vec<Effect> {
+        let mut out = Vec::new();
+        self.run_execs_into(effects, read, 0, &mut out);
+        out
+    }
+
+    fn run_execs_into(
+        &mut self,
+        effects: Vec<Effect>,
+        read: &mut dyn FnMut(&str) -> Option<Vec<u8>>,
+        depth: u8,
+        out: &mut Vec<Effect>,
+    ) {
+        for effect in effects {
+            match effect {
+                Effect::Exec(file) => match read(&file) {
+                    None => out.push(Effect::Print(format!("couldn't exec {file}"))),
+                    Some(_) if depth >= EXEC_DEPTH => log::warn!("exec {file}: too deep, skipped"),
+                    Some(text) => {
+                        out.push(Effect::Print(format!("execing {file}")));
+                        let more = self.execute(&String::from_utf8_lossy(&text));
+                        self.run_execs_into(more, read, depth + 1, out);
+                    }
+                },
+                Effect::Then(rest) => {
+                    let more = self.execute(&rest);
+                    self.run_execs_into(more, read, depth, out);
+                }
+                e => out.push(e),
+            }
+        }
     }
 
     /// A bound key's edge. A press runs the bind; a release runs `-cmd` for a
@@ -1713,14 +1767,20 @@ impl Shell {
         names
     }
 
-    /// Runs a saved config ([`Self::execute`]). A vcod config without a
+    /// Runs a saved config ([`Self::execute`]), each `exec` in it read
+    /// through `read` where it stands ([`Self::run_execs`]). A vcod config without a
     /// `vc_cfgVersion` line reads as stamp 0; any other file (1.7's
     /// `config_mp.cfg`) as this build's, so [`Self::upgrade_config`]
     /// leaves what it set alone.
-    pub fn exec_config(&mut self, text: &str) -> Vec<Effect> {
+    pub fn exec_config(
+        &mut self,
+        text: &str,
+        read: &mut dyn FnMut(&str) -> Option<Vec<u8>>,
+    ) -> Vec<Effect> {
         let vcod = text.starts_with(CONFIG_HEADER);
         self.set_rom("vc_cfgVersion", "0");
         let out = self.execute(text);
+        let out = self.run_execs(out, read);
         if !vcod {
             self.set_rom("vc_cfgVersion", &CONFIG_VERSION.to_string());
         }
@@ -1956,7 +2016,7 @@ mod tests {
     /// The config a run reads at start-up, through the late registration.
     fn load(text: &str, game: Game) -> (Shell, Vec<String>, bool) {
         let mut s = Shell::new();
-        s.exec_config(text);
+        s.exec_config(text, &mut |_| None);
         s.register_aa_samples();
         let (reset, moved) = s.upgrade_config(game);
         (s, reset, moved)
@@ -2235,7 +2295,7 @@ mod tests {
         s.apply_systeminfo("\\rate\\25000\"\nbind MOUSE1 \"quit;\r\nseta name x");
         let text = s.config_text();
         let mut t = Shell::new();
-        t.exec_config(&text);
+        t.exec_config(&text, &mut |_| None);
         assert_eq!(t.cvar("rate"), Some("25000bind MOUSE1 quit;seta name x"));
         assert_eq!(t.bind("F1"), Some("say a; say b"));
         assert_eq!(t.bind("MOUSE1"), None);
@@ -2328,7 +2388,10 @@ mod tests {
         assert_eq!(s.cvar("ui_x"), Some(""));
         assert_eq!(
             s.execute("exec default_mp.cfg; vid_restart"),
-            [Effect::Exec("default_mp.cfg".into()), Effect::VidRestart]
+            [
+                Effect::Exec("default_mp.cfg".into()),
+                Effect::Then(" vid_restart".into())
+            ]
         );
         // Space (32) before letters, letters before named keys, mouse last.
         s.execute("bind MOUSE2 +forward; bind UPARROW +forward; bind SPACE +forward");
@@ -2582,5 +2645,40 @@ mod tests {
         let mut s = Shell::new();
         assert_eq!(s.key_event("V", true), [Effect::QuickMessage]);
         assert_eq!(s.complete("mp_q"), ["mp_QuickMessage"]);
+    }
+
+    /// `exec` runs its file where it stands, ahead of the commands after
+    /// it, as `Cmd_Exec_f` inserts the file into the buffer
+    /// (cod11-console.md 10): on a console line the rest waits for the caller, and in
+    /// a config the nested file runs in place, its own `exec` too.
+    #[test]
+    fn exec_runs_its_file_before_the_rest() {
+        let mut s = Shell::new();
+        assert_eq!(
+            s.execute("exec a.cfg; set x 2"),
+            [
+                Effect::Exec("a.cfg".into()),
+                Effect::Then(" set x 2".into())
+            ]
+        );
+        assert_eq!(s.cvar("x"), None);
+
+        let mut read = |f: &str| match f {
+            "outer.cfg" => Some(b"set x 1; exec inner.cfg; set y 1".to_vec()),
+            "inner.cfg" => Some(b"set x 2; set y 2; set z 2".to_vec()),
+            _ => None,
+        };
+        let out = s.exec_config("exec outer.cfg\nset z 3", &mut read);
+        assert_eq!(
+            (s.cvar("x"), s.cvar("y"), s.cvar("z")),
+            (Some("2"), Some("1"), Some("3"))
+        );
+        assert_eq!(
+            out,
+            [
+                Effect::Print("execing outer.cfg".into()),
+                Effect::Print("execing inner.cfg".into())
+            ]
+        );
     }
 }

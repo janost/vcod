@@ -778,7 +778,7 @@ impl LiveCx<'_> {
                     view.fire(weapons, ps);
                 }
             }
-            let fall = pmove::FallHeights::from_systeminfo(net.configstring(1));
+            let fall = predictor.fall_heights;
             for ev in &evs {
                 let Some(now) = render_time else {
                     break;

@@ -7,7 +7,6 @@ impl App {
     pub(crate) fn online_frame(
         &mut self,
         tick: &Tick,
-        demo_dirs: &[std::path::PathBuf],
         hud_quads: &mut Vec<hud::HudQuad>,
         fatal: &mut Option<anyhow::Error>,
         demo_over: &mut bool,
@@ -54,7 +53,7 @@ impl App {
         } else {
             net.pump()
         };
-        let gamestate_ready = self.online_events(tick, &events, demo_dirs, fatal, demo_over);
+        let gamestate_ready = self.online_events(tick, &events, fatal, demo_over);
 
         self.online_cmds(tick, gamestate_ready, demo_clock, fatal);
         let Some(r) = &mut self.renderer else {
@@ -74,6 +73,37 @@ impl App {
         };
 
         let progress = net.download_progress();
+        // A gamestate for another level while a map loads (a rotation during
+        // the download) starts the load over on its map and paks.
+        if gamestate_ready
+            && let Phase::Loading { loader } = phase
+            && loader.other_level(
+                net::info_value_for_key(net.configstring(0), "mapname").unwrap_or(""),
+                net.configstring(1),
+            )
+        {
+            log::info!(
+                "a gamestate for another level: loading it instead of {}",
+                loader.map()
+            );
+            match start_loading(
+                net,
+                &mut self.hud,
+                &mut self.audio,
+                &mut self.fx,
+                &mut self.world,
+                r,
+                self.window.as_deref(),
+                &mut self.title,
+                &self.game_dir,
+                &download_dirs(&self.mod_dir, &self.fs_game),
+                allow_download(&self.shell),
+                self.fs.vanilla(),
+            ) {
+                Ok(next) => *phase = next,
+                Err(e) => *fatal = Some(e),
+            }
+        }
         let frame = match phase {
             Phase::Connecting => {
                 // The net client's own resend and gamestate
@@ -278,7 +308,6 @@ impl App {
         &mut self,
         tick: &Tick,
         events: &[net::NetEvent],
-        demo_dirs: &[std::path::PathBuf],
         fatal: &mut Option<anyhow::Error>,
         demo_over: &mut bool,
     ) -> bool {
@@ -435,7 +464,16 @@ impl App {
                         &play::demos::stamp_now(),
                     ) {
                         match cmd.strip_prefix("record ") {
-                            Some(name) => start_record(net, &demo_dirs[0], Some(name)),
+                            Some(name) => {
+                                let dirs = demo_dirs(
+                                    &self.config_path,
+                                    &self.game_dir,
+                                    &self.fs_game,
+                                    &self.mod_dir,
+                                    &self.shell,
+                                );
+                                start_record(net, &dirs[0], Some(name))
+                            }
                             None => {
                                 if net.stop_recording().unwrap_or(false) {
                                     console::log::print("Stopped demo.");
@@ -628,12 +666,12 @@ impl App {
                     Ok(()) => {
                         r.reopen(&self.fs);
                         view.reopen();
-                        self.shell.execute("set ui_menuFiles ui_mp/menus.txt");
-                        self.ui = new_ui(
+                        restart_ui(
+                            &mut self.ui,
+                            &mut self.shell,
                             &self.fs,
                             &self.game_dir,
                             &self.mod_dir,
-                            self.shell.cvar("cl_language").unwrap_or(""),
                         );
                     }
                     Err(e) => *fatal = Some(e),

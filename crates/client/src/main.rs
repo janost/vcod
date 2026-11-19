@@ -1722,9 +1722,10 @@ fn main() -> Result<()> {
     } else {
         dir.join(CONFIG_FILE)
     };
-    let config_text = std::fs::read_to_string(&read_path).ok();
+    let config_text = read_config(&read_path);
     if let Some(text) = &config_text {
-        for effect in shell.exec_config(text) {
+        let mut read = |file: &str| exec_text(&fs, config_path.parent(), file);
+        for effect in shell.exec_config(text, &mut read) {
             if let console::shell::Effect::Print(line) = effect {
                 log::warn!("{CONFIG_FILE}: {line}");
             }
@@ -2479,6 +2480,72 @@ fn chat_field_key(
     None
 }
 
+/// A config file's text, decoded lossily as `exec` decodes: `None` when
+/// there is none, or with a warning when it exists but cannot be read.
+fn read_config(path: &std::path::Path) -> Option<String> {
+    match std::fs::read(path) {
+        Ok(bytes) => Some(config_from_bytes(path, bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            log::warn!("cannot read {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+/// A config's bytes as text; bytes that are not UTF-8 become U+FFFD.
+fn config_from_bytes(path: &std::path::Path, bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).unwrap_or_else(|e| {
+        log::warn!("{}: not UTF-8, read lossily", path.display());
+        String::from_utf8_lossy(e.as_bytes()).into_owned()
+    })
+}
+
+/// A CoD2 profile's config into `shell`: run when the file is there,
+/// written from what is set now only when it is absent, so a file that
+/// fails to read is never overwritten.
+fn load_profile_config(shell: &mut console::shell::Shell, fs: &Pk3Fs, path: &std::path::Path) {
+    let write = match std::fs::read(path) {
+        Ok(bytes) => {
+            let mut read = |file: &str| exec_text(fs, path.parent(), file);
+            let _ = shell.exec_config(&config_from_bytes(path, bytes), &mut read);
+            shell.upgrade_config(vcod_common::game::Game::Cod2).1
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(e) => {
+            log::warn!("cannot read {}: {e}", path.display());
+            false
+        }
+    };
+    if write && let Err(e) = std::fs::write(path, shell.config_text()) {
+        log::warn!("cannot write {}: {e}", path.display());
+    }
+}
+
+/// [`App::demo_dirs`] off the fields it reads, for a caller holding the
+/// mode borrowed.
+fn demo_dirs(
+    config_path: &std::path::Path,
+    game_dir: &std::path::Path,
+    fs_game: &Option<String>,
+    mod_dir: &str,
+    shell: &console::shell::Shell,
+) -> Vec<std::path::PathBuf> {
+    let base = config_path
+        .parent()
+        .map_or_else(|| game_dir.to_path_buf(), std::path::Path::to_path_buf);
+    let fs_game_cvar = net::download::mod_dir(shell.cvar("fs_game").unwrap_or(""), mod_dir);
+    let mut dirs: Vec<_> = fs_game
+        .iter()
+        .chain(&fs_game_cvar)
+        .map(|g| game_dir.join(g))
+        .chain([base])
+        .map(|d| d.join("demos"))
+        .collect();
+    dirs.dedup();
+    dirs
+}
+
 /// `exec`'s file: the search path's, else the one under `config_dir`
 /// (vcod's own fallback), which a rooted, `..` or drive name never reaches.
 fn exec_text(fs: &Pk3Fs, config_dir: Option<&std::path::Path>, file: &str) -> Option<Vec<u8>> {
@@ -2679,13 +2746,14 @@ fn start_loading(
     // A demo sets no pak list (`CL_SystemInfoChanged` returns first while
     // one plays, CoDMP.exe 0x415eb0), so nothing is fetched, and a map
     // missing here fails as `CM_LoadMap` does (0x419c90).
+    let systeminfo = net.configstring(1).to_string();
     if net.is_demo() {
         return Ok(Phase::Loading {
-            loader: loading::MapLoader::without_downloads(map.clone(), couldnt_load(&map)),
+            loader: loading::MapLoader::without_downloads(map.clone(), couldnt_load(&map))
+                .for_systeminfo(systeminfo),
         });
     }
     // Same candidate order as the old blocking downloader; `MapLoader` caps it.
-    let systeminfo = net.configstring(1).to_string();
     let exists = |rel: &std::path::Path| game_dir.join(rel).exists();
     // The base dir's own base under it (`main/` under `uo/`), then the rest.
     let dir_paths: Vec<std::path::PathBuf> = dirs
@@ -2734,7 +2802,7 @@ fn start_loading(
             }
         );
         return Ok(Phase::Loading {
-            loader: loading::MapLoader::without_downloads(map, why),
+            loader: loading::MapLoader::without_downloads(map, why).for_systeminfo(systeminfo),
         });
     }
     let candidates = if allow_download {
@@ -2756,7 +2824,7 @@ fn start_loading(
         Vec::new()
     };
     Ok(Phase::Loading {
-        loader: loading::MapLoader::new(map, candidates),
+        loader: loading::MapLoader::new(map, candidates).for_systeminfo(systeminfo),
     })
 }
 
@@ -2764,6 +2832,26 @@ fn start_loading(
 /// localized `Couldn't load maps/mp/<map>.bsp`.
 fn couldnt_load(map: &str) -> String {
     format!("EXE_ERR_COULDNT_LOAD\u{15}maps/mp/{map}.bsp")
+}
+
+/// [`App::restart_ui`]'s front end: `ui_menuFiles` back to its default,
+/// a fresh UI off `fs`, the server lists of `ui` carried over.
+fn restart_ui(
+    ui: &mut frontend::Ui,
+    shell: &mut console::shell::Shell,
+    fs: &Pk3Fs,
+    game_dir: &std::path::Path,
+    mod_dir: &str,
+) {
+    shell.execute("set ui_menuFiles ui_mp/menus.txt");
+    let browser = std::mem::take(&mut ui.browser);
+    *ui = new_ui(
+        fs,
+        game_dir,
+        mod_dir,
+        shell.cvar("cl_language").unwrap_or(""),
+    );
+    ui.set_browser(browser);
 }
 
 /// The front end off `fs`, with the favourites file and the Mods menu's
@@ -3537,15 +3625,13 @@ impl App {
     /// In a live game the cgame starts again too; an error is its drop
     /// ([`load_script_menus`]).
     fn restart_ui(&mut self) -> Result<(), String> {
-        self.shell.execute("set ui_menuFiles ui_mp/menus.txt");
-        let browser = std::mem::take(&mut self.ui.browser);
-        self.ui = new_ui(
+        restart_ui(
+            &mut self.ui,
+            &mut self.shell,
             &self.fs,
             &self.game_dir,
             &self.mod_dir,
-            self.shell.cvar("cl_language").unwrap_or(""),
         );
-        self.ui.set_browser(browser);
         // The cgame starts again with the UI and loads its menus back.
         if let Mode::Online {
             net,
@@ -3808,7 +3894,8 @@ impl App {
     /// Carries out what the console's commands asked for.
     fn apply(&mut self, event_loop: &ActiveEventLoop, effects: Vec<console::shell::Effect>) {
         use console::shell::Effect;
-        for effect in effects {
+        let mut queue = std::collections::VecDeque::from(effects);
+        while let Some(effect) = queue.pop_front() {
             // A CoD2 session takes the gameplay binds (play::cod2_input).
             if self.session.apply(&effect, &self.shell, self.start) {
                 continue;
@@ -4044,6 +4131,12 @@ impl App {
                     }
                 }
                 Effect::Exec(file) => self.exec_file(event_loop, &file),
+                // after the exec'd file, ahead of what was queued behind it
+                Effect::Then(rest) => {
+                    for e in self.shell.execute(&rest).into_iter().rev() {
+                        queue.push_front(e);
+                    }
+                }
                 // CoD2's; a CoD1 client has no such command.
                 Effect::OpenScriptMenu { .. } => {}
                 // cgame 0x300140e0: only with the client's own view
@@ -4300,7 +4393,7 @@ impl App {
             console::log::print(&format!("couldn't exec {file}"));
             return;
         };
-        if self.exec_depth >= 8 {
+        if self.exec_depth >= console::shell::EXEC_DEPTH {
             log::warn!("exec {file}: too deep, skipped");
             return;
         }
@@ -4329,20 +4422,13 @@ impl App {
     /// Where demos go and are looked for: the server's or the player's mod
     /// directory, then the base one the config sits in, each's `demos/`.
     fn demo_dirs(&self) -> Vec<std::path::PathBuf> {
-        let base = self
-            .config_path
-            .parent()
-            .map_or_else(|| self.game_dir.clone(), std::path::Path::to_path_buf);
-        let mut dirs: Vec<_> = self
-            .fs_game
-            .iter()
-            .chain(&self.fs_game_cvar())
-            .map(|g| self.game_dir.join(g))
-            .chain([base])
-            .map(|d| d.join("demos"))
-            .collect();
-        dirs.dedup();
-        dirs
+        demo_dirs(
+            &self.config_path,
+            &self.game_dir,
+            &self.fs_game,
+            &self.mod_dir,
+            &self.shell,
+        )
     }
 
     /// `demo <name>` (CoDMP.exe 0x40eb40): leaves any server, then plays
@@ -4732,21 +4818,7 @@ impl App {
         self.config_path = dir.join(CONFIG_FILE);
         self.shell
             .execute(&format!("set com_playerProfile \"{name}\""));
-        match std::fs::read_to_string(&self.config_path) {
-            Ok(text) => {
-                self.shell.exec_config(&text);
-                if self.shell.upgrade_config(vcod_common::game::Game::Cod2).1
-                    && let Err(e) = std::fs::write(&self.config_path, self.shell.config_text())
-                {
-                    log::warn!("cannot write {}: {e}", self.config_path.display());
-                }
-            }
-            Err(_) => {
-                if let Err(e) = std::fs::write(&self.config_path, self.shell.config_text()) {
-                    log::warn!("cannot write {}: {e}", self.config_path.display());
-                }
-            }
-        }
+        load_profile_config(&mut self.shell, &self.fs, &self.config_path);
         log::info!("player profile {name}: {}", self.config_path.display());
     }
 
@@ -5962,5 +6034,46 @@ mod tests {
         let (pos, dir) = view_muzzle(cam_pos, forward, right, up);
         assert_eq!(pos, Vec3::new(120.0, 204.0, 297.0));
         assert_eq!(dir, forward);
+    }
+
+    /// A config holding a byte that is not UTF-8 (a retail config's
+    /// Latin-1 `ö`) still runs, at startup and as a CoD2 profile's, and
+    /// the profile's file is not overwritten.
+    #[test]
+    fn a_config_that_is_not_utf8_still_runs_and_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CONFIG_FILE);
+        // Not vcod's header, so the stamp is current and nothing upgrades.
+        let bytes = b"bind F1 \"say sch\xf6n\"\n".to_vec();
+        std::fs::write(&path, &bytes).unwrap();
+
+        let text = read_config(&path).expect("the config reads");
+        let mut shell = console::shell::Shell::new();
+        shell.exec_config(&text, &mut |_| None);
+        assert_eq!(shell.bind("F1"), Some("say sch\u{fffd}n"));
+
+        let mut shell = console::shell::Shell::new();
+        load_profile_config(&mut shell, &Pk3Fs::empty(), &path);
+        assert_eq!(shell.bind("F1"), Some("say sch\u{fffd}n"));
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            bytes,
+            "the profile's config was rewritten"
+        );
+    }
+
+    /// The gamestate's search path restart and `vid_restart` rebuild the
+    /// UI through [`restart_ui`], which keeps the Internet and LAN lists.
+    #[test]
+    fn a_ui_restart_keeps_the_server_lists() {
+        use frontend::browser::Source;
+        let dir = tempfile::tempdir().unwrap();
+        let fs = Pk3Fs::empty();
+        let mut shell = console::shell::Shell::new();
+        let mut ui = new_ui(&fs, dir.path(), "main", "");
+        let addr = std::net::SocketAddrV4::new([10, 0, 0, 1].into(), 28960);
+        ui.browser.list_server(Source::Internet, addr);
+        restart_ui(&mut ui, &mut shell, &fs, dir.path(), "main");
+        assert_eq!(ui.browser.listed(Source::Internet), vec![addr]);
     }
 }

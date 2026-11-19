@@ -3,9 +3,18 @@
 use super::*;
 
 impl App {
+    /// One frame, then the next frame's request: every early return of
+    /// `redraw_frame` (a drop, a demo played out) keeps the redraw chain going.
+    pub(crate) fn redraw(&mut self, event_loop: &ActiveEventLoop) {
+        self.redraw_frame(event_loop);
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
     /// One frame of whichever mode is up, then the 2D layer, the render and
     /// the frame's end.
-    pub(crate) fn redraw(&mut self, event_loop: &ActiveEventLoop) {
+    fn redraw_frame(&mut self, event_loop: &ActiveEventLoop) {
         {
             let _pace = frame_prof::span(frame_prof::Stage::Pace);
             self.pace_frame();
@@ -28,7 +37,6 @@ impl App {
         self.texture_mode_changed();
         self.audio
             .set_master_volume(self.shell.cvar_f32(audio::volume_cvar(&self.shell)));
-        let demo_dirs = self.demo_dirs();
         let gamma = gamma_cvar(&mut self.shell);
         let fullscreen = self
             .window
@@ -63,9 +71,6 @@ impl App {
             let why = play::cod4::localize_drop(&why, &self.game_dir);
             log::error!("{why}");
             self.leave_cod4_game(Some((&why, true)));
-            if let Some(w) = &self.window {
-                w.request_redraw();
-            }
             return;
         }
         // The CoD4 systeminfo's dvars, `sv_cheats` among them
@@ -135,13 +140,9 @@ impl App {
             ),
             Mode::Fly(_) => self.fly_frame(&tick, &mut hud_quads),
             Mode::Cod2(_) => self.cod2_frame(&tick, &mut hud_quads),
-            Mode::Online { .. } => self.online_frame(
-                &tick,
-                &demo_dirs,
-                &mut hud_quads,
-                &mut fatal,
-                &mut demo_over,
-            ),
+            Mode::Online { .. } => {
+                self.online_frame(&tick, &mut hud_quads, &mut fatal, &mut demo_over)
+            }
             Mode::Walk { .. } => self.walk_frame(&tick, &mut hud_quads),
         };
         // A drop or a failed load ends the session, not the program:
@@ -152,9 +153,6 @@ impl App {
         }
         if let Some(err) = fatal {
             self.disconnect(Some(format!("{err:#}")));
-            if let Some(w) = &self.window {
-                w.request_redraw();
-            }
             return;
         }
         self.frame_ui(&tick, hud_quads);
@@ -266,9 +264,6 @@ impl App {
             self.apply(event_loop, effects);
             // after the line's own work (a `vid_restart`'s rebuild)
             self.exec_after_last = Some(std::time::Instant::now());
-        }
-        if let Some(w) = &self.window {
-            w.request_redraw();
         }
     }
 

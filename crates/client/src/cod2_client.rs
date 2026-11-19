@@ -773,11 +773,12 @@ impl Cod2Client {
         self.models_for = 0;
     }
 
-    /// What the draw and the view weapon parsed came off the old search
-    /// path, misses included.
+    /// What the draw, the view weapon and the HUD parsed came off the old
+    /// search path, misses included.
     pub(crate) fn search_path_reopened(&mut self) {
         self.draw = cod2_scene::Cod2Draw::new();
         self.view = cod2_viewmodel::Cod2View::default();
+        self.hud.search_path_reopened();
     }
 
     /// No key stays held in the session's input.
