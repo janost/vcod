@@ -2881,3 +2881,54 @@ mod saw_tests {
         (Some(seen), watch.finish())
     }
 }
+
+#[cfg(test)]
+mod new_map_tests {
+    use super::*;
+
+    const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../cod4/tests/fixtures/net");
+
+    /// A map change keeps no renderer handle, menu load, camera turn or
+    /// view weapon tags of the last map, and takes the new map's parts and
+    /// bodies' movetypes (none here) in place of the last's.
+    #[test]
+    fn a_new_map_drops_the_last_maps_handles_and_takes_its_parts() {
+        let text =
+            std::fs::read_to_string(format!("{FIXTURES}/play-1.7-csb0-shooter.txt")).unwrap();
+        let s = Cod4Session::open_capture(&text).unwrap();
+        let parts = |name: &str| crate::cod4_fly::Parts::from([(name.to_string(), vec![[1; 4]])]);
+        let mut c = Cod4Client::new(
+            s,
+            HashMap::new(),
+            parts("old"),
+            HashMap::new(),
+            None,
+            None,
+            None,
+            Default::default(),
+        );
+        c.uploaded.insert("xmodel/old".into(), None);
+        c.menus_loaded = true;
+        c.cam_left = Some((10.0, 20.0));
+        c.view_tags = Some((3, Default::default()));
+        c.session.legs_movetypes = Some(std::sync::Arc::from([1u64]));
+        c.new_map(
+            HashMap::new(),
+            parts("new"),
+            HashMap::new(),
+            None,
+            None,
+            None,
+            Default::default(),
+        );
+        assert!(c.uploaded.is_empty(), "the last map's handles");
+        assert!(!c.menus_loaded, "the zones' menus load again");
+        assert_eq!(c.cam_left, None);
+        assert!(c.view_tags.is_none());
+        assert_eq!(c.parts.keys().collect::<Vec<_>>(), ["new"]);
+        assert!(
+            c.session.legs_movetypes.is_none(),
+            "no bodies, no movetypes"
+        );
+    }
+}
