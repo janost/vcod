@@ -41,7 +41,10 @@ pub fn material_kind(name: &str, has_block: bool, nodraw: bool, sky: bool) -> Ma
 
 /// Name rules for materials without an authored block: the `textures/common`
 /// gameplay families never draw (other common materials do: water renders);
-/// unscripted sky names stay invisible. Everything else draws. Public for
+/// unscripted `textures/sky/` (CoD's sky directory) and `textures/skies/`
+/// stay invisible. Everything else draws, as
+/// retail builds a texture-times-lightmap shader for a surface with no
+/// script (cod11-shader-scripts.md, 0x4fc440), whatever its name. Public for
 /// lib-less callers (bounds, submodels, the asset census).
 pub fn implicit_kind(name: &str) -> MaterialKind {
     let skip = if let Some(rest) = name.strip_prefix("textures/common/") {
@@ -53,7 +56,7 @@ pub fn implicit_kind(name: &str) -> MaterialKind {
             || base.starts_with("areaportal")
             || base.starts_with("hint")
     } else {
-        name.starts_with("textures/skies/") || name.contains("sky")
+        name.starts_with("textures/sky/") || name.starts_with("textures/skies/")
     };
     if skip {
         MaterialKind::Skip
@@ -264,6 +267,7 @@ mod tests {
             "textures/common/areaportal",
             "textures/common/hintskip",
             "textures/skies/stalingrad_sky",
+            "textures/sky/mp_carentan",
         ] {
             assert_eq!(
                 material_kind(name, false, false, false),
@@ -271,11 +275,13 @@ mod tests {
                 "{name}"
             );
         }
-        // everything else draws, water included
+        // everything else draws, water and a name holding "sky" included
         for name in [
             "textures/common/water",
             "textures/common/white",
             "textures/normandy/walls/brick",
+            "textures/foo/skylight",
+            "textures/props/whisky_crate",
         ] {
             assert_eq!(
                 material_kind(name, false, false, false),
