@@ -46,12 +46,12 @@ use motion::{MotionProbe, write_motion_fixture};
 use observe::{CompassProbe, FallProbe, FollowProbe, ItemsProbe, KillcamProbe, RideProbe};
 use pickup::{PickupProbe, write_pickup_fixture};
 use pvs::{PvsProbe, write_entities_fixture};
-pub use scripts::{MoveShot, ProneMove};
 use scripts::{
-    ProneScript, UOFOOT_SWITCHES, autofire_script, crouchjump_script, moves_script,
+    InputScript, UOFOOT_SWITCHES, autofire_script, crouchjump_script, moves_script,
     moveshot_script, patchwalk_script, prone_script, pronemove_script, sprint_script, talk_script,
     turns_script, uofoot_script, uoturret_script,
 };
+pub use scripts::{MoveShot, ProneMove};
 use sd::{SdProbe, SdRole, write_sd_fixture};
 use slope::{SlopeCapture, SlopeStats, SlopeWalk, write_slope_fixture};
 use triggers::TriggerProbe;
@@ -215,7 +215,7 @@ pub struct Save {
     pub slope_every_state: bool,
     /// `--slope-from-spawn`: [`SlopeCapture`] starts at the spawn.
     pub slope_from_spawn: bool,
-    /// `--probe-prone <yaw>`: the slope capture's walk is [`ProneScript`]
+    /// `--probe-prone <yaw>`: the slope capture's walk is [`InputScript`]
     /// instead of the route, facing up the grade along that world yaw.
     pub prone: Option<f32>,
     /// `--probe-moves`: the slope capture's walk is [`moves_script`] where
@@ -553,29 +553,29 @@ pub fn probe(
     // A crew member's slope capture records its seats, not the route.
     let pvs = pvs || save_entities || (slope && !prone_crawl && probe_vehicle.is_none());
     let mut prone = if probe_moves {
-        ProneScript::new(0.0, moves_script())
+        InputScript::new(0.0, moves_script())
     } else if probe_turns {
-        ProneScript::new(90.0, turns_script())
+        InputScript::new(90.0, turns_script())
     } else if probe_sprint {
-        ProneScript::new(0.0, sprint_script())
+        InputScript::new(0.0, sprint_script())
     } else if probe_autofire {
-        ProneScript::new(0.0, autofire_script())
+        InputScript::new(0.0, autofire_script())
     } else if probe_talk {
-        ProneScript::new(0.0, talk_script())
+        InputScript::new(0.0, talk_script())
     } else if let Some(part) = probe_moveshot {
-        ProneScript::new(0.0, moveshot_script(part))
+        InputScript::new(0.0, moveshot_script(part))
     } else if let Some(part) = probe_pronemove {
-        ProneScript::switching(0.0, pronemove_script(part), part.switches())
+        InputScript::switching(0.0, pronemove_script(part), part.switches())
     } else if let Some(yaw) = probe_uofoot {
-        ProneScript::switching(yaw, uofoot_script(), UOFOOT_SWITCHES)
+        InputScript::switching(yaw, uofoot_script(), UOFOOT_SWITCHES)
     } else if let Some(yaw) = probe_uoturret {
-        ProneScript::new(yaw, uoturret_script())
+        InputScript::new(yaw, uoturret_script())
     } else if let Some(yaw) = probe_crouchjump {
-        ProneScript::new(yaw, crouchjump_script(!crouchjump_stand))
+        InputScript::new(yaw, crouchjump_script(!crouchjump_stand))
     } else if let Some(yaw) = probe_patchwalk {
-        ProneScript::new(yaw, patchwalk_script())
+        InputScript::new(yaw, patchwalk_script())
     } else {
-        ProneScript::new(prone_uphill.unwrap_or(0.0), prone_script())
+        InputScript::new(prone_uphill.unwrap_or(0.0), prone_script())
     };
     let mut slope_stats = SlopeStats::default();
     let mut slope_capture = SlopeCapture {

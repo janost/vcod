@@ -4,11 +4,12 @@
 use super::combat::{WeaponSwitch, weapon_cs_index};
 use super::*;
 
-/// One step of [`prone_script`]: from `at_ms` on, until the next step, hold
-/// these inputs, with the view moving linearly from the previous step's
-/// angles to this one's over the step. Yaw is degrees off the uphill
-/// heading, pitch positive down the way the wire reads it.
-pub(super) struct ProneStep {
+/// One step of an [`InputScript`] walk ([`prone_script`] and the rest): from
+/// `at_ms` on, until the next step, hold these inputs, with the view moving
+/// linearly from the previous step's angles to this one's over the step. Yaw
+/// is degrees off the uphill heading, pitch positive down the way the wire
+/// reads it.
+pub(super) struct InputStep {
     at_ms: u64,
     buttons: u8,
     wbuttons: u8,
@@ -26,11 +27,11 @@ pub(super) struct ProneStep {
 /// downhill, then stand. Then the prone press on a moving player: running
 /// forward, backward and sideways, forward with the sight held, and forward
 /// from a crouch, each followed by a crawl and a stand.
-pub(super) fn prone_script() -> Vec<ProneStep> {
+pub(super) fn prone_script() -> Vec<InputStep> {
     use net::msg::{BUTTON_ADS, WBUTTON_CROUCH, WBUTTON_PRONE};
     const P: u8 = WBUTTON_PRONE;
     const C: u8 = WBUTTON_CROUCH;
-    let step = |at_ms, buttons, wbuttons, forward, right, yaw, pitch| ProneStep {
+    let step = |at_ms, buttons, wbuttons, forward, right, yaw, pitch| InputStep {
         at_ms,
         buttons,
         wbuttons,
@@ -93,7 +94,7 @@ pub(super) fn prone_script() -> Vec<ProneStep> {
 /// with the view swinging, a fast turn past the yaw cap and back, stand;
 /// then the gaits the footstep rate tells apart: a run, a lean run each way,
 /// a lean strafe, a sighted walk, a crouch walk leaning, each from a stop.
-pub(super) fn turns_script() -> Vec<ProneStep> {
+pub(super) fn turns_script() -> Vec<InputStep> {
     use net::msg::{
         BUTTON_ADS, WBUTTON_CROUCH, WBUTTON_LEAN_LEFT, WBUTTON_LEAN_RIGHT, WBUTTON_PRONE,
     };
@@ -102,7 +103,7 @@ pub(super) fn turns_script() -> Vec<ProneStep> {
     const L: u8 = WBUTTON_LEAN_LEFT;
     const R: u8 = WBUTTON_LEAN_RIGHT;
     const S: u8 = BUTTON_ADS;
-    let step = |at_ms, buttons, wbuttons, forward, right, yaw| ProneStep {
+    let step = |at_ms, buttons, wbuttons, forward, right, yaw| InputStep {
         at_ms,
         buttons,
         wbuttons,
@@ -160,13 +161,13 @@ pub(super) fn turns_script() -> Vec<ProneStep> {
 /// backward (1.1's dive), diagonal runs, and semi-automatic shots at the hip
 /// and down the sight. A stance key holds `up` at -127, as a retail client
 /// does (docs/protocol-1.1.md, "Usercmd input bits").
-pub(super) fn moves_script() -> Vec<ProneStep> {
+pub(super) fn moves_script() -> Vec<InputStep> {
     use net::msg::{BUTTON_ADS, BUTTON_ATTACK, WBUTTON_CROUCH, WBUTTON_PRONE};
     const P: u8 = WBUTTON_PRONE;
     const C: u8 = WBUTTON_CROUCH;
     const A: u8 = BUTTON_ATTACK;
     const S: u8 = BUTTON_ADS;
-    let step = |at_ms, buttons, wbuttons, forward, right, up: i8| ProneStep {
+    let step = |at_ms, buttons, wbuttons, forward, right, up: i8| InputStep {
         at_ms,
         buttons,
         wbuttons,
@@ -260,14 +261,14 @@ pub(super) fn moves_script() -> Vec<ProneStep> {
 /// crouched, sighted, firing), then prone, the bipod deployed from prone
 /// with the view swung past its yaw cap both ways, a move and a burst while
 /// deployed, the breakdown and the stand (docs/research/coduo-movement.md).
-pub(super) fn sprint_script() -> Vec<ProneStep> {
+pub(super) fn sprint_script() -> Vec<InputStep> {
     use net::msg::{BUTTON_ADS, BUTTON_ATTACK, BUTTON_SPRINT_V22, WBUTTON_CROUCH, WBUTTON_PRONE};
     const P: u8 = WBUTTON_PRONE;
     const C: u8 = WBUTTON_CROUCH;
     const A: u8 = BUTTON_ATTACK;
     const S: u8 = BUTTON_ADS;
     const R: u8 = BUTTON_SPRINT_V22;
-    let step = |at_ms, buttons, wbuttons, forward, right, up: i8, yaw| ProneStep {
+    let step = |at_ms, buttons, wbuttons, forward, right, up: i8, yaw| InputStep {
         at_ms,
         buttons,
         wbuttons,
@@ -326,11 +327,11 @@ pub(super) fn sprint_script() -> Vec<ProneStep> {
 /// placement facing world yaw 0 with an automatic in hand (`--probe-weapon
 /// mp44_mp`): the trigger held from the hip, the sight raised and the
 /// trigger held down it, then four taps (docs/research/coduo-movement.md).
-pub(super) fn autofire_script() -> Vec<ProneStep> {
+pub(super) fn autofire_script() -> Vec<InputStep> {
     use net::msg::{BUTTON_ADS, BUTTON_ATTACK};
     const A: u8 = BUTTON_ATTACK;
     const S: u8 = BUTTON_ADS;
-    let step = |at_ms, buttons| ProneStep {
+    let step = |at_ms, buttons| InputStep {
         at_ms,
         buttons,
         wbuttons: 0,
@@ -366,7 +367,7 @@ pub(super) fn autofire_script() -> Vec<ProneStep> {
 /// with the bit released after. `PmoveSingle` masks a talking cmd's
 /// buttons to the talk bit on 1.1 and keeps the sight beside it on 1.5 and
 /// UO (docs/research/cod15-movement.md 5). A stance key holds `up` at -127.
-pub(super) fn talk_script() -> Vec<ProneStep> {
+pub(super) fn talk_script() -> Vec<InputStep> {
     use net::msg::{
         BUTTON_ADS, BUTTON_ATTACK, BUTTON_TALK, WBUTTON_CROUCH, WBUTTON_LEAN_LEFT, WBUTTON_PRONE,
     };
@@ -376,7 +377,7 @@ pub(super) fn talk_script() -> Vec<ProneStep> {
     const A: u8 = BUTTON_ATTACK;
     const S: u8 = BUTTON_ADS;
     const T: u8 = BUTTON_TALK;
-    let step = |at_ms, buttons, wbuttons, forward, up: i8| ProneStep {
+    let step = |at_ms, buttons, wbuttons, forward, up: i8| InputStep {
         at_ms,
         buttons,
         wbuttons,
@@ -490,14 +491,14 @@ impl ProneMove {
 /// (player-model-anim-system.md, "The takeoff and the landing").
 /// `deploy` is the standing bipod's pitch clamp off a stale
 /// `proneTorsoPitch` (coduo-movement.md 7).
-pub(super) fn pronemove_script(part: ProneMove) -> Vec<ProneStep> {
+pub(super) fn pronemove_script(part: ProneMove) -> Vec<InputStep> {
     use net::msg::{BUTTON_ADS, BUTTON_ATTACK, BUTTON_MELEE, WBUTTON_CROUCH, WBUTTON_PRONE};
     const P: u8 = WBUTTON_PRONE;
     const C: u8 = WBUTTON_CROUCH;
     const A: u8 = BUTTON_ATTACK;
     const S: u8 = BUTTON_ADS;
     const M: u8 = BUTTON_MELEE;
-    let step = |at_ms, buttons, wbuttons, forward, right| ProneStep {
+    let step = |at_ms, buttons, wbuttons, forward, right| InputStep {
         at_ms,
         buttons,
         wbuttons,
@@ -579,7 +580,7 @@ pub(super) fn pronemove_script(part: ProneMove) -> Vec<ProneStep> {
             } else {
                 0
             };
-            let aim = |at_ms, buttons, wbuttons: u8, yaw, pitch| ProneStep {
+            let aim = |at_ms, buttons, wbuttons: u8, yaw, pitch| InputStep {
                 yaw,
                 pitch,
                 ..step(
@@ -623,7 +624,7 @@ pub(super) fn pronemove_script(part: ProneMove) -> Vec<ProneStep> {
 /// wall: short bursts whose muzzle the walk bob, the lean or the bipod
 /// trace moves (docs/research/cod11-combat.md 2.1). Each moving burst
 /// starts after the body is up to speed. A stance key holds `up` at -127.
-pub(super) fn moveshot_script(part: MoveShot) -> Vec<ProneStep> {
+pub(super) fn moveshot_script(part: MoveShot) -> Vec<InputStep> {
     use net::msg::{
         BUTTON_ADS, BUTTON_ATTACK, WBUTTON_CROUCH, WBUTTON_LEAN_LEFT, WBUTTON_LEAN_RIGHT,
         WBUTTON_PRONE, WBUTTON_RELOAD,
@@ -635,7 +636,7 @@ pub(super) fn moveshot_script(part: MoveShot) -> Vec<ProneStep> {
     const L: u8 = WBUTTON_LEAN_LEFT;
     const R: u8 = WBUTTON_LEAN_RIGHT;
     const RL: u8 = WBUTTON_RELOAD;
-    let step = |at_ms, buttons, wbuttons: u8, forward, right, yaw| ProneStep {
+    let step = |at_ms, buttons, wbuttons: u8, forward, right, yaw| InputStep {
         at_ms,
         buttons,
         wbuttons,
@@ -651,7 +652,7 @@ pub(super) fn moveshot_script(part: MoveShot) -> Vec<ProneStep> {
             // Moving bursts: (buttons, wbuttons, forward, right), each key
             // held 500 ms, the trigger 400 ms of it, then 900 ms still.
             let mut t = 1000;
-            let burst = |v: &mut Vec<ProneStep>, t: &mut u64, b: u8, wb: u8, f: i8, r: i8| {
+            let burst = |v: &mut Vec<InputStep>, t: &mut u64, b: u8, wb: u8, f: i8, r: i8| {
                 v.push(step(*t, b, wb, f, r, 0.0));
                 v.push(step(*t + 500, b | A, wb, f, r, 0.0));
                 v.push(step(*t + 900, b, wb, f, r, 0.0));
@@ -725,10 +726,10 @@ pub(super) fn moveshot_script(part: MoveShot) -> Vec<ProneStep> {
 /// for a second (none with `crouch` false, the control), then the run on
 /// through the window and down outside (bot-navigation.md, "Walled-in
 /// spawns"). A stance key holds `up` at -127, as a retail client does.
-pub(super) fn crouchjump_script(crouch: bool) -> Vec<ProneStep> {
+pub(super) fn crouchjump_script(crouch: bool) -> Vec<InputStep> {
     use net::msg::WBUTTON_CROUCH;
     let c = if crouch { WBUTTON_CROUCH } else { 0 };
-    let step = |at_ms, wbuttons: u8, forward, up: i8| ProneStep {
+    let step = |at_ms, wbuttons: u8, forward, up: i8| InputStep {
         at_ms,
         buttons: 0,
         wbuttons,
@@ -754,11 +755,11 @@ pub(super) fn crouchjump_script(crouch: bool) -> Vec<ProneStep> {
 /// runs at it turned 30 degrees either side, a running jump at it,
 /// crouch walks along it, a crawl into and along it and a stand beside
 /// it, then a step back (bsp-ibsp59-format.md, "Patch collision on 1.5 and UO").
-pub(super) fn patchwalk_script() -> Vec<ProneStep> {
+pub(super) fn patchwalk_script() -> Vec<InputStep> {
     use net::msg::{WBUTTON_CROUCH, WBUTTON_PRONE};
     const C: u8 = WBUTTON_CROUCH;
     const P: u8 = WBUTTON_PRONE;
-    let step = |at_ms, wbuttons: u8, forward, right, up: i8, yaw| ProneStep {
+    let step = |at_ms, wbuttons: u8, forward, right, up: i8, yaw| InputStep {
         at_ms,
         buttons: 0,
         wbuttons,
@@ -812,12 +813,12 @@ pub(super) fn patchwalk_script() -> Vec<ProneStep> {
 /// pressed under the held trigger) thrown, a cook spooned by the sight's
 /// release, and a cook held past the fuse, which throws itself and kills
 /// the thrower, so the capture ends there (docs/research/coduo-movement.md, 11 and 12).
-pub(super) fn uofoot_script() -> Vec<ProneStep> {
+pub(super) fn uofoot_script() -> Vec<InputStep> {
     use net::msg::{BUTTON_ADS, BUTTON_ATTACK, WBUTTON_CROUCH};
     const C: u8 = WBUTTON_CROUCH;
     const A: u8 = BUTTON_ATTACK;
     const S: u8 = BUTTON_ADS;
-    let step = |at_ms, buttons, wbuttons, forward, right, yaw| ProneStep {
+    let step = |at_ms, buttons, wbuttons, forward, right, yaw| InputStep {
         at_ms,
         buttons,
         wbuttons,
@@ -882,11 +883,11 @@ pub(super) fn uofoot_script() -> Vec<ProneStep> {
 /// view swept past the yaw and pitch arcs, a burst, the move, jump and
 /// stance keys held against the mount, the use tap off it and a walk back
 /// (cod11-turrets.md 14, coduo-diff.md 19).
-pub(super) fn uoturret_script() -> Vec<ProneStep> {
+pub(super) fn uoturret_script() -> Vec<InputStep> {
     use net::msg::{BUTTON_ATTACK, BUTTON_USE, WBUTTON_CROUCH, WBUTTON_PRONE};
     const U: u8 = BUTTON_USE;
     const A: u8 = BUTTON_ATTACK;
-    let step = |at_ms, buttons, wbuttons, forward, right, up, yaw, pitch| ProneStep {
+    let step = |at_ms, buttons, wbuttons, forward, right, up, yaw, pitch| InputStep {
         at_ms,
         buttons,
         wbuttons,
@@ -947,7 +948,7 @@ const PRONE_PLACE_WAIT: Duration = Duration::from_millis(3000);
 /// view angles, which `send_frame` rebases on each snapshot's
 /// `delta_angles`, so the view holds the script's heading under a prone cap
 /// that pushes it, the way `hold_view_yaw` holds the route's.
-pub(super) struct ProneScript {
+pub(super) struct InputScript {
     uphill: f32,
     /// Weapons asked for by name from `at_ms` on, through [`WeaponSwitch`].
     switches: &'static [(u64, &'static str)],
@@ -955,12 +956,12 @@ pub(super) struct ProneScript {
     switched: usize,
     first_spawned: Option<Instant>,
     started: Option<Instant>,
-    steps: Vec<ProneStep>,
+    steps: Vec<InputStep>,
     done: bool,
 }
 
-impl ProneScript {
-    pub(super) fn new(uphill: f32, steps: Vec<ProneStep>) -> Self {
+impl InputScript {
+    pub(super) fn new(uphill: f32, steps: Vec<InputStep>) -> Self {
         Self {
             uphill,
             switches: &[],
@@ -975,7 +976,7 @@ impl ProneScript {
 
     pub(super) fn switching(
         uphill: f32,
-        steps: Vec<ProneStep>,
+        steps: Vec<InputStep>,
         switches: &'static [(u64, &'static str)],
     ) -> Self {
         Self {
@@ -1074,8 +1075,8 @@ impl ProneScript {
 mod tests {
     use super::*;
 
-    fn prone_step(at_ms: u64, forward: i8, yaw: f32, pitch: f32) -> ProneStep {
-        ProneStep {
+    fn prone_step(at_ms: u64, forward: i8, yaw: f32, pitch: f32) -> InputStep {
+        InputStep {
             at_ms,
             buttons: 0,
             wbuttons: 0,
@@ -1095,7 +1096,7 @@ mod tests {
         let t0 = Instant::now();
         let ms = |n: u64| t0 + Duration::from_millis(n);
         let word = |deg: f32| (deg * 65536.0 / 360.0).round() as i32 & 0xffff;
-        let mut p = ProneScript::new(
+        let mut p = InputScript::new(
             30.0,
             vec![
                 prone_step(0, 0, 0.0, 0.0),
@@ -1105,7 +1106,7 @@ mod tests {
         );
         assert_eq!(p.cmd(ms(0)).angles, [0; 3], "not started");
         p.started = Some(t0);
-        let at = |p: &ProneScript, n| {
+        let at = |p: &InputScript, n| {
             let c = p.cmd(ms(n));
             (c.angles[0], c.angles[1], c.forward)
         };
