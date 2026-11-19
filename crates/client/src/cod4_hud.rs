@@ -26,6 +26,7 @@ use crate::console::shell::Shell;
 use crate::hud::HudQuad;
 use crate::hud::cod2elem::{self, ScreenPlacement};
 use crate::hud::font::{self, Font, Glyph};
+use crate::hud::hudelem::format_g;
 use crate::play::cod4::{Cod4Session, EV_OBITUARY, Fired, client_name, ent_u32};
 
 /// `cg_chatHeight` 8 and `cg_chatTime` 12000 (`iw3mp.exe` 0x43ce07,
@@ -3762,15 +3763,6 @@ fn pulse(e: &HudElem, text: &str, now: i32, rgba: &mut [f32; 4]) -> String {
     text.chars().take(shown).collect()
 }
 
-/// `%g` of a value: six significant digits, no trailing zeros.
-fn format_g(v: f32) -> String {
-    if v.fract() == 0.0 && v.abs() < 1e6 {
-        return format!("{}", v as i64);
-    }
-    let s = format!("{v:.6}");
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
-}
-
 /// The fields `cod2elem::position` places by, which CoD4 packs as CoD2.
 fn as_cod2(e: &HudElem) -> vcod_cod2::hudelem::HudElem {
     vcod_cod2::hudelem::HudElem {
@@ -3850,6 +3842,17 @@ pub(crate) mod tests {
         assert_eq!(at(4500), ("HELLO".into(), 0.0));
         let plain = HudElem::default();
         assert_eq!(pulse(&plain, "HELLO", 0, &mut [1.0; 4]), "HELLO");
+    }
+
+    /// A value hudelem prints as C's `%g`: six significant digits, an
+    /// exponent from 1e6 up.
+    #[test]
+    fn a_value_hudelem_prints_like_percent_g() {
+        assert_eq!(format_g(5.0), "5");
+        assert_eq!(format_g(0.1), "0.1");
+        assert_eq!(format_g(-2.5), "-2.5");
+        assert_eq!(format_g(1234.5678), "1234.57");
+        assert_eq!(format_g(1_000_000.0), "1e+06");
     }
 
     /// `Scoreboard_HandleInput`: the board's keys reach it only while it
