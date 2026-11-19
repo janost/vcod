@@ -1139,7 +1139,7 @@ pub fn probe(
             );
         } else if save_motion && motion.running() {
             cmd = motion.cmd();
-            hold_view_yaw(&mut cmd, &client, &mut motion.spawn_yaw);
+            hold_view_yaw(&mut cmd, client.snapshots().newest(), &mut motion.spawn_yaw);
         } else if save_combat && combat.running() {
             cmd = combat.cmd();
             weapon_switch = combat.weapon_override(ps_weapon);
@@ -1157,7 +1157,7 @@ pub fn probe(
             }
             match combat.aim_yaw {
                 Some(yaw) => cmd.angles[1] = yaw,
-                None => hold_view_yaw(&mut cmd, &client, &mut combat.spawn_yaw),
+                None => hold_view_yaw(&mut cmd, client.snapshots().newest(), &mut combat.spawn_yaw),
             }
         } else if (save_hit || shooter_walk) && hit.running() {
             // No `hold_view_yaw`: the aim is absolute, and the shooter's own
@@ -1253,7 +1253,11 @@ pub fn probe(
             if slope {
                 cmd.buttons |= net::msg::BUTTON_ADS;
             }
-            hold_view_yaw(&mut cmd, &client, &mut pvs_probe.spawn_yaw);
+            hold_view_yaw(
+                &mut cmd,
+                client.snapshots().newest(),
+                &mut pvs_probe.spawn_yaw,
+            );
         } else if let Some(yaw) = probe_yaw.filter(|_| client.state() == NetState::Active) {
             // Absolute: `send_frame` takes `delta_angles` off.
             cmd.angles[1] = deg_to_short(yaw);
@@ -6980,7 +6984,25 @@ fn write_mapchange_fixture(
 ) -> anyhow::Result<()> {
     let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
     let gametype = net::info_value_for_key(serverinfo, "g_gametype").unwrap_or("?");
+    let out = mapchange_text(role, gametype, join, probe, map);
+    let path = fixture_path(
+        NETCHAN_FIXTURE_DIR,
+        &format!("{map}-{gametype}-{role}{}.txt", tag_suffix(tag)),
+    )?;
+    std::fs::create_dir_all(NETCHAN_FIXTURE_DIR)?;
+    write_capture(&path, &out, overwrite)?;
+    println!("netchan: {role} -> {path}");
+    Ok(())
+}
 
+/// [`write_mapchange_fixture`]'s text.
+fn mapchange_text(
+    role: &str,
+    gametype: &str,
+    join: &JoinProbe,
+    probe: &MapChangeProbe,
+    map: &str,
+) -> String {
     let mapchange = role == "mapchange";
 
     let mut out = String::new();
@@ -7102,15 +7124,7 @@ first_snapshot_after_gamestate_ms={}\n",
     for (_, _, _, l) in lines {
         out.push_str(&l);
     }
-
-    let path = fixture_path(
-        NETCHAN_FIXTURE_DIR,
-        &format!("{map}-{gametype}-{role}{}.txt", tag_suffix(tag)),
-    )?;
-    std::fs::create_dir_all(NETCHAN_FIXTURE_DIR)?;
-    write_capture(&path, &out, overwrite)?;
-    println!("netchan: {role} -> {path}");
-    Ok(())
+    out
 }
 
 /// Where `--save-scripted` writes.
@@ -7287,10 +7301,10 @@ struct ViewHold {
 /// every capture at world yaw 0.
 fn hold_view_yaw(
     cmd: &mut net::msg::UserCmd,
-    client: &NetClient<UdpTransport>,
+    newest: Option<&net::snapshot::Snapshot>,
     hold: &mut ViewHold,
 ) {
-    let Some(s) = client.snapshots().newest() else {
+    let Some(s) = newest else {
         return;
     };
     let p = wire();
@@ -14126,7 +14140,6 @@ fn write_entities_fixture(
     join: &JoinProbe,
     tag: Option<&str>,
 ) -> anyhow::Result<()> {
-    let p = wire();
     let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
     let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
     let (map, gametype) = (key("mapname"), key("g_gametype"));
@@ -14175,9 +14188,34 @@ sample of a set\n"
         &format!("{map}-{gametype}{suffix}.txt"),
     )?;
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let mut samples = parse_fixture_samples(&existing);
+    let (body, taken, kept, sets) = merge_entity_samples(&existing, &probe.stations);
+    let mut out = head;
+    out.push_str(&body);
+
+    std::fs::create_dir_all(ENTITIES_FIXTURE_DIR)?;
+    // Each run's samples join the file's: it is this mode's append target,
+    // so an existing file is no reason to refuse.
+    std::fs::write(&path, &out)?;
+    println!(
+        "entities: {} stations this run, {} samples in the file ({} read, {} dropped as \
+         repeats), {} distinct entity sets -> {path}",
+        probe.stations.len(),
+        kept,
+        taken,
+        taken + probe.stations.len() - kept,
+        sets,
+    );
+    Ok(())
+}
+
+/// The samples of an entities fixture's `existing` text, then a sample per
+/// station, at most [`MAX_SAMPLES_PER_SET`] of any one entity set, numbered
+/// afresh; with how many were read, how many kept and the distinct sets.
+fn merge_entity_samples(existing: &str, stations: &[PvsStation]) -> (String, usize, usize, usize) {
+    let p = wire();
+    let mut samples = parse_fixture_samples(existing);
     let taken = samples.len();
-    for st in &probe.stations {
+    for st in stations {
         let mut body = format!("serverTime {}\n", st.server_time);
         for (axis, v) in st.origin.iter().enumerate() {
             body.push_str(&format!("origin[{axis}] {}\n", v.to_bits() as i32));
@@ -14197,7 +14235,7 @@ sample of a set\n"
         });
     }
 
-    let mut out = head;
+    let mut out = String::new();
     let mut per_set: std::collections::HashMap<Vec<u32>, usize> = std::collections::HashMap::new();
     let mut kept = 0;
     for s in &samples {
@@ -14210,21 +14248,7 @@ sample of a set\n"
         out.push_str(&s.body);
         kept += 1;
     }
-
-    std::fs::create_dir_all(ENTITIES_FIXTURE_DIR)?;
-    // Each run's samples join the file's: it is this mode's append target,
-    // so an existing file is no reason to refuse.
-    std::fs::write(&path, &out)?;
-    println!(
-        "entities: {} stations this run, {} samples in the file ({} read, {} dropped as \
-         repeats), {} distinct entity sets -> {path}",
-        probe.stations.len(),
-        kept,
-        taken,
-        samples.len() - kept,
-        per_set.len(),
-    );
-    Ok(())
+    (out, taken, kept, per_set.len())
 }
 
 /// At most this many samples of one entity set survive in a fixture. A fourth
@@ -15062,6 +15086,389 @@ mod tests {
             clients: BTreeMap::new(),
             valid: true,
         }
+    }
+
+    /// One fire step of one tap, held `ms`.
+    fn one_shot(wait_ready: bool, ms: u64) -> CombatProbe {
+        CombatProbe {
+            steps: vec![CombatStep {
+                label: "shot",
+                pulse: Pulse {
+                    buttons: BUTTON_ATTACK,
+                    wbuttons: 0,
+                    count: 1,
+                },
+                dur: Duration::from_millis(ms),
+                wait_ready,
+                ..CombatStep::default()
+            }],
+            ..CombatProbe::default()
+        }
+    }
+
+    /// A tapping step's clock starts once the weapon has read ready for
+    /// 500 ms without a break, or after 8 s of waiting whatever it reads.
+    #[test]
+    fn a_combat_step_waits_for_a_steady_ready_weapon_or_its_timeout() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let ws = |num, state: u8| pickup_snap(num, &[("weaponstate", i32::from(state))], &[]);
+        use vcod_common::pmove::weapon::{WEAPON_FIRING, WEAPON_RAISING, WEAPON_READY};
+        let mut c = one_shot(true, 1000);
+        assert!(!c.step(ms(0), &ws(1, WEAPON_RAISING)));
+        assert!(!c.step(ms(300), &ws(2, WEAPON_READY)));
+        assert!(!c.step(ms(400), &ws(3, WEAPON_RAISING)), "a break");
+        assert!(!c.step(ms(500), &ws(4, WEAPON_READY)));
+        assert!(!c.step(ms(999), &ws(5, WEAPON_READY)));
+        assert_eq!(c.started, None, "499 ms steady");
+        assert!(!c.step(ms(1000), &ws(6, WEAPON_READY)));
+        assert_eq!(c.started, Some(ms(1000)));
+        assert!(!c.step(ms(1100), &ws(7, WEAPON_FIRING)));
+        assert!(c.step(ms(2000), &ws(8, WEAPON_READY)), "the last step ends");
+        let r = &c.results[0];
+        assert_eq!((r.fired, r.shots_seen, r.waited_ms), (true, 1, 1000));
+        assert_eq!(c.trace.len(), 3, "a sample per snapshot from the start");
+
+        let mut c = one_shot(true, 1000);
+        assert!(!c.step(ms(0), &ws(1, WEAPON_RAISING)));
+        assert!(!c.step(ms(7999), &ws(2, WEAPON_RAISING)));
+        assert_eq!(c.started, None);
+        assert!(!c.step(ms(8000), &ws(3, WEAPON_RAISING)));
+        assert_eq!(c.started, Some(ms(8000)), "the timeout");
+    }
+
+    /// A reload under a fire step before its shot restarts the step once,
+    /// dropping its samples; a second reload rides; `eventSequence`'s
+    /// count runs across its 8-bit wrap.
+    #[test]
+    fn a_fire_step_restarts_once_on_a_reload_and_counts_events_across_the_wrap() {
+        use vcod_common::pmove::weapon::{WEAPON_READY, WEAPON_RELOADING};
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let snap = |num, state: u8, seq| {
+            pickup_snap(
+                num,
+                &[("weaponstate", i32::from(state)), ("eventSequence", seq)],
+                &[],
+            )
+        };
+        let mut c = one_shot(false, 1000);
+        assert!(!c.step(ms(0), &snap(1, WEAPON_READY, 240)));
+        assert!(!c.step(ms(100), &snap(2, WEAPON_RELOADING, 241)));
+        assert_eq!(c.started, None, "restarted");
+        assert_eq!(c.retried, ["shot"]);
+        assert!(c.trace.is_empty());
+        assert!(!c.step(ms(200), &snap(3, WEAPON_READY, 250)));
+        assert!(!c.step(ms(300), &snap(4, WEAPON_RELOADING, 254)));
+        assert_eq!(c.started, Some(ms(200)), "once only");
+        assert!(c.step(ms(1200), &snap(5, WEAPON_READY, 4)));
+        let r = &c.results[0];
+        assert!(r.retried && !r.fired);
+        assert_eq!(r.seq_delta, 10, "250 to 4 across the wrap");
+        let kept: Vec<u32> = c.trace.iter().map(|s| s.server_time as u32).collect();
+        assert_eq!(kept, [1150, 1200, 1250]);
+    }
+
+    /// The spawn's facing is `delta_angles` at the spawn, less the last
+    /// spectating one, plus the yaw asked for under it; every cmd after
+    /// adds the script's yaw to it, and a later push of `delta_angles`
+    /// does not move it.
+    #[test]
+    fn a_held_view_yaw_latches_the_spawns_facing_off_delta_angles() {
+        let snap = |num, pm_type, delta| {
+            pickup_snap(
+                num,
+                &[("pm_type", pm_type), ("delta_angles[1]", delta)],
+                &[],
+            )
+        };
+        let asked = |yaw| net::msg::UserCmd {
+            angles: [0, yaw, 0],
+            ..net::msg::NULL_USERCMD
+        };
+        let mut hold = ViewHold::default();
+        let mut cmd = asked(500);
+        hold_view_yaw(&mut cmd, None, &mut hold);
+        assert_eq!(cmd.angles[1], 500, "no snapshot yet");
+        let spectating = snap(1, 4, 60000);
+        let mut cmd = asked(500);
+        hold_view_yaw(&mut cmd, Some(&spectating), &mut hold);
+        assert_eq!(cmd.angles[1], 500, "spectating, unheld");
+        // SetClientViewAngle: delta = spawn yaw - (asked - spectating delta)
+        let spawn_yaw = 8192;
+        let delta = (spawn_yaw - (500 - 60000)) & 0xffff;
+        let spawned = snap(2, PM_NORMAL, delta);
+        let mut cmd = asked(100);
+        hold_view_yaw(&mut cmd, Some(&spawned), &mut hold);
+        assert_eq!(hold.spawn, Some(spawn_yaw));
+        assert_eq!(cmd.angles[1], spawn_yaw + 100);
+        let pushed = snap(3, PM_NORMAL, delta + 3000);
+        let mut cmd = asked(100);
+        hold_view_yaw(&mut cmd, Some(&pushed), &mut hold);
+        assert_eq!(
+            cmd.angles[1],
+            spawn_yaw + 100,
+            "a push does not turn the heading"
+        );
+    }
+
+    /// A forward walk that covers under 60 units in a 1.5 s window turns
+    /// 45 degrees more each window; the detour stays once it moves again;
+    /// a cmd that does not walk forward closes the window.
+    #[test]
+    fn a_stalled_walk_turns_45_degrees_a_window_and_keeps_the_detour() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let walk = || net::msg::UserCmd {
+            forward: 127,
+            ..net::msg::NULL_USERCMD
+        };
+        let mut st = StallTurn::default();
+        let yaw = |st: &mut StallTurn, at, origin| {
+            let mut c = walk();
+            st.apply(&mut c, ms(at), origin);
+            c.angles[1]
+        };
+        assert_eq!(yaw(&mut st, 0, [0.0; 3]), 0);
+        assert_eq!(yaw(&mut st, 1499, [10.0, 0.0, 0.0]), 0);
+        assert_eq!(
+            yaw(&mut st, 1500, [50.0, 0.0, 500.0]),
+            8192,
+            "a fall is no progress"
+        );
+        assert_eq!(yaw(&mut st, 3000, [50.0, 30.0, 0.0]), 16384);
+        assert_eq!(
+            yaw(&mut st, 4500, [200.0, 0.0, 0.0]),
+            16384,
+            "moved; the detour stays"
+        );
+        let mut stand = net::msg::NULL_USERCMD;
+        st.apply(&mut stand, ms(5000), [200.0, 0.0, 0.0]);
+        assert_eq!(stand.angles[1], 0, "a stand is not turned");
+        assert_eq!(yaw(&mut st, 6000, [200.0, 0.0, 0.0]), 16384);
+        assert_eq!(yaw(&mut st, 7499, [200.0, 0.0, 0.0]), 16384, "a new window");
+        assert_eq!(yaw(&mut st, 7500, [200.0, 0.0, 0.0]), 24576);
+    }
+
+    /// The commands of one batch end at the client's reliable sequence;
+    /// the fixture interleaves every kind by ms, and at one ms puts the
+    /// gamestate first, then the commands, the out-of-band text and the
+    /// trace, each kind in its own order.
+    #[test]
+    fn a_mapchange_capture_numbers_its_commands_and_orders_lines_by_ms_then_kind() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let mut m = MapChangeProbe::default();
+        m.elapsed_ms(ms(0));
+        m.on_commands(ms(0), 10, &["a".into(), "b".into(), "c".into()]);
+        let restart = wire().map_restart_command;
+        m.on_commands(ms(500), 11, &[restart.into()]);
+        m.on_oob(ms(500), "disconnect");
+        m.sample(ms(500), &pickup_snap(1, &[], &[]));
+        m.gamestates.push((500, 7, 3, 12, "mp_brecourt".into()));
+        m.on_commands(ms(500), 12, &["e".into()]);
+        let seqs: Vec<i32> = m.commands.iter().map(|c| c.1).collect();
+        assert_eq!(seqs, [8, 9, 10, 11, 12]);
+        let join = JoinProbe::new(Some("allies"), None);
+        let text = mapchange_text("mapchange", "dm", &join, &m, "mp_carentan");
+        let lines: Vec<&str> = text
+            .lines()
+            .filter(|l| l.starts_with('!') && !l.starts_with("!observed"))
+            .map(|l| l.split(' ').take(3).collect::<Vec<_>>())
+            .map(|w| w[0])
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "!cmd",
+                "!cmd",
+                "!cmd",
+                "!gamestate",
+                "!cmd",
+                "!cmd",
+                "!oob",
+                "!trace"
+            ]
+        );
+        assert!(text.contains(&format!(
+            "!cmd ms=500 seq=11 text={restart}\n!cmd ms=500 seq=12 text=e\n"
+        )));
+        assert!(text.contains("# BROKEN only one gamestate"));
+        let text = mapchange_text("roundrestart-target", "sd", &join, &m, "mp_carentan");
+        assert!(!text.contains("# BROKEN"), "the wire's restart command");
+    }
+
+    fn station(label: &'static str, ents: &[u32]) -> PvsStation {
+        let p = wire();
+        PvsStation {
+            label,
+            origin: [1.0, 2.0, 3.0],
+            server_time: 1000,
+            ents: ents
+                .iter()
+                .map(|&n| {
+                    let mut e = net::msg::EntityState::null(p);
+                    e.number = n;
+                    e.fields[net::msg::EntityState::field_index(p, "eType").unwrap()] = 2;
+                    (n, e)
+                })
+                .collect(),
+        }
+    }
+
+    /// The entities fixture's rewrite: a second run's samples join the
+    /// first's past its header, at most three of one entity set, numbered
+    /// afresh, the first run's bodies byte for byte.
+    #[test]
+    fn an_entities_rewrite_keeps_three_samples_a_set_and_the_old_bodies() {
+        let (first, taken, kept, sets) = merge_entity_samples(
+            "",
+            &[
+                station("a", &[1, 2]),
+                station("b", &[1, 2]),
+                station("c", &[1]),
+            ],
+        );
+        assert_eq!((taken, kept, sets), (0, 3, 2));
+        let file = format!("# a header line\n{first}");
+        let read = parse_fixture_samples(&file);
+        let ents: Vec<&[u32]> = read.iter().map(|s| s.ents.as_slice()).collect();
+        assert_eq!(ents, [&[1, 2][..], &[1, 2], &[1]]);
+        assert!(
+            read[0]
+                .body
+                .starts_with("serverTime 1000\norigin[0] 1065353216\n")
+        );
+        assert!(read[0].body.contains("[ent 2]\neType 2\n"));
+        let (second, taken, kept, sets) = merge_entity_samples(
+            &file,
+            &[
+                station("d", &[1, 2]),
+                station("e", &[1, 2]),
+                station("f", &[3]),
+            ],
+        );
+        assert_eq!((taken, kept, sets), (3, 5, 3));
+        let labels: Vec<String> = parse_fixture_samples(&second)
+            .iter()
+            .map(|s| s.label.clone())
+            .collect();
+        assert_eq!(
+            labels,
+            ["a", "b", "c", "d", "f"],
+            "e is a fourth of its set"
+        );
+        assert!(
+            second.starts_with(&first),
+            "the first run's samples as they were"
+        );
+        assert!(second.contains("[sample 3] d\n") && second.contains("[sample 4] f\n"));
+        assert!(!second.contains("header"));
+    }
+
+    fn prone_step(at_ms: u64, forward: i8, yaw: f32, pitch: f32) -> ProneStep {
+        ProneStep {
+            at_ms,
+            buttons: 0,
+            wbuttons: 0,
+            forward,
+            right: 0,
+            up: 0,
+            yaw,
+            pitch,
+        }
+    }
+
+    /// A slope script's view eases from the step before's angles to its
+    /// step's over the step, off the uphill yaw; the first and last steps
+    /// hold their own; the moves are the step's from its first ms.
+    #[test]
+    fn a_prone_script_eases_the_view_across_each_step() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let word = |deg: f32| (deg * 65536.0 / 360.0).round() as i32 & 0xffff;
+        let mut p = ProneScript::new(
+            30.0,
+            vec![
+                prone_step(0, 0, 0.0, 0.0),
+                prone_step(1000, 127, 90.0, -20.0),
+                prone_step(2000, 0, 180.0, 10.0),
+            ],
+        );
+        assert_eq!(p.cmd(ms(0)).angles, [0; 3], "not started");
+        p.started = Some(t0);
+        let at = |p: &ProneScript, n| {
+            let c = p.cmd(ms(n));
+            (c.angles[0], c.angles[1], c.forward)
+        };
+        assert_eq!(at(&p, 999), (word(0.0), word(30.0), 0));
+        assert_eq!(
+            at(&p, 1000),
+            (word(0.0), word(30.0), 127),
+            "the step's first ms"
+        );
+        assert_eq!(at(&p, 1500), (word(-10.0), word(75.0), 127), "mid-step");
+        assert_eq!(at(&p, 2000), (word(10.0), word(210.0), 0), "the last step");
+    }
+
+    /// `FallProbe`'s `CMDS` line: the first `serverTime` and each step,
+    /// the yaws, the inputs and snapshots by the cmd they came at, every
+    /// snapshot's `commandTime` since the last cmd, and the sequences
+    /// with their wrap, as the fall and turret gates read them.
+    #[test]
+    fn a_fall_cmds_line_carries_its_cmds_by_index() {
+        let mut ring = vcod_common::net::snapshot::SnapshotRing::default();
+        let snap = |num, t: i32, ct| {
+            let mut s = pickup_snap(num, &[("commandTime", ct)], &[]);
+            s.server_time = t;
+            s
+        };
+        let mut fall = FallProbe::default();
+        let seq0 = u32::MAX - 1;
+        for k in 0..4u32 {
+            if k == 1 {
+                ring.insert(snap(1, 1050, 1040));
+            }
+            if k == 3 {
+                ring.insert(snap(2, 1100, 1090));
+                ring.insert(snap(3, 1150, 1140));
+            }
+            let input = if k < 2 { (1, 0, 0) } else { (0, 4, 127) };
+            let yaw = (k == 0).then_some(16384);
+            fall.record_cmd(
+                1000 + 16 * k as i32,
+                yaw,
+                input,
+                seq0.wrapping_add(k),
+                &ring,
+            );
+        }
+        let line = fall.take_line().unwrap();
+        let (head, tail) = line.split_once(" w=").unwrap();
+        assert_eq!(
+            head,
+            "CMDS st=1000 d=16,16,16 yaw=16384 in=0:1:0:0,2:0:4:127 snap=1:1050,3:1150 \
+             ct=1050:1040,1100:1090,1150:1140"
+        );
+        assert_eq!(tail.split_once(" q=").unwrap().1, "4294967294,1,1,1");
+    }
+
+    /// The bump walk presses toward a far mark until friction and the
+    /// velocity's lag would coast it inside 8 units, and never presses
+    /// while it moves away faster than 5 u/s.
+    #[test]
+    fn the_bump_walk_presses_until_its_coast_reaches_the_mark() {
+        // PM_Friction from 300 u/s: (300 - 100) / 5.5 + 100^2 / 1100
+        assert!((bump_stop_distance(300.0) - 45.4545).abs() < 1e-3);
+        assert!((bump_stop_distance(50.0) - 2.2727).abs() < 1e-3);
+        // 300 u/s toward coasts 45.45 + 30 of lag
+        assert_eq!(bump_axis_far(90.0, 300.0), 127);
+        assert_eq!(bump_axis_far(83.0, 300.0), 0);
+        assert_eq!(bump_axis_far(-90.0, -300.0), -127);
+        assert_eq!(bump_axis_far(9.0, 0.0), 127);
+        assert_eq!(bump_axis_far(8.0, 0.0), 0);
+        assert_eq!(bump_axis_far(100.0, -6.0), 0, "moving away");
+        assert_eq!(bump_axis_far(100.0, -4.0), 127, "drifting");
     }
 
     /// The swap's tap and the two carbine taps rise at +0, +500 and +1500 ms
