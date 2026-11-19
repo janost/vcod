@@ -151,7 +151,7 @@ impl Cod2Server {
             self.connect_level(slot);
         }
         if let Some(b) = self.game.bots.as_mut() {
-            b.new_level(new_map);
+            b.new_level(!new_map);
         }
         Ok(())
     }
@@ -207,7 +207,7 @@ impl Cod2Server {
         // `H 0`, `G 0`, `n`).
         self.flush_game_commands();
         if let Some(b) = self.game.bots.as_mut() {
-            b.new_level(false);
+            b.new_level(true);
         }
         let cmd = if persist { "n" } else { "B" };
         for slot in 0..self.core.clients.len() {

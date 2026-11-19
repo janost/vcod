@@ -16,17 +16,10 @@ impl Server {
             .collision
             .set_arith(vcod_common::patch::Arith::for_protocol(self.game.proto));
         self.game.world = Some(Rc::new(world));
-        self.game.module.driver.nav = None;
-        self.game.module.driver.nav_job = None;
+        self.game.module.driver.new_level(false);
         self.game.module.nav_relink = None;
         self.game.module.nav_rebuild = None;
-        self.game.module.driver.paths.clear();
-        self.game.module.driver.sites.clear();
         self.game.module.bot_breach_stands.clear();
-        self.game.module.driver.noises.clear();
-        self.game.module.driver.covers.clear();
-        self.game.module.driver.hunts.clear();
-        self.game.module.driver.creases = Default::default();
         self.game.module.bot_parked = Default::default();
         self.game.module.bot_drives = Default::default();
     }

@@ -133,6 +133,8 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     delta, the script's commands out, `getinfo`, `getstatus`, rcon,
     `connect` up to `ClientConnect`, the shared console arms, voice
     queueing.
+  - `bots.rs` CoD2's and CoD4's bot glue over `BotGame`: adding a bot,
+    the reliable commands a bot reads, `AdminHost`.
   - `download.rs` serving a file: `DownloadFile`, the block window,
     `nextdl`, `retransdl` and the `wwwdl` ladder over each game's
     `DownloadWire`; each game keeps its first write (CoD1's in
@@ -202,7 +204,10 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
   (the wander brain, steering, stalls, ladders). CoD1's `impl` and view
   builders are in `server/bot_world.rs`, CoD2's `impl` in `cod2/bots.rs`
   over the readers in `bots/cod2.rs`, CoD4's in `cod4/bots.rs` over
-  `bots/cod4.rs`. `server/bot_admin.rs` is the bot
+  `bots/cod4.rs`. CoD2's and CoD4's bots are one `GameBots` each
+  (`bots/game_bots.rs`: the driver, the admin's ledger, the game's own
+  part), and `engine/bots.rs` is the server glue the two share (adding a
+  bot, `AdminHost`) over a `BotGame`. `server/bot_admin.rs` is the bot
   admin every server calls (the pass, `addbot`, `removebot`, `listbots`)
   over `AdminHost`.
   - `nav.rs` + `nav/`: `graph.rs` the graph (nodes, edges, components,

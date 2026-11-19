@@ -59,7 +59,7 @@ impl Cod2Bots {
     ) -> Option<FetchCmd> {
         let now = level.level_time();
         let p = level.players.get(slot)?.as_ref()?;
-        let mut task = self.fetches.remove(&slot).unwrap_or_default();
+        let mut task = self.own.fetches.remove(&slot).unwrap_or_default();
         task.shunned.retain(|s| now.wrapping_sub(s.1) < SHUN_MS);
         let defs = &level.combat.weapons;
         let def = |w: u8| defs.get(usize::from(w)).and_then(Option::as_ref);
@@ -76,7 +76,7 @@ impl Cod2Bots {
             && view.enemy.is_none()
             && view.on_ground
             && !view.linked
-            && self.shoot;
+            && self.shoots();
         if !wants {
             if !playing(level, slot) {
                 task.item = None;
@@ -84,7 +84,7 @@ impl Cod2Bots {
                 // A fight or a gun come to hand ends the walk.
                 task.item = None;
             }
-            self.fetches.insert(slot, task);
+            self.own.fetches.insert(slot, task);
             return None;
         }
         let lying = weapon_items(level, Vec3::from(view.origin), &|w| primary(w));
@@ -99,7 +99,7 @@ impl Cod2Bots {
         if task.item.is_none() {
             let feet = Vec3::from(view.origin);
             let w = &level.world.collision;
-            let taken: Vec<EntId> = (self.fetches.values())
+            let taken: Vec<EntId> = (self.own.fetches.values())
                 .filter_map(|t| t.item.map(|i| i.0))
                 .collect();
             task.item = lying
@@ -124,7 +124,7 @@ impl Cod2Bots {
             task.pressed = false;
         }
         let Some((id, at)) = task.item else {
-            self.fetches.insert(slot, task);
+            self.own.fetches.insert(slot, task);
             return None;
         };
         view.waypoint = Some(at.to_array());
@@ -144,7 +144,7 @@ impl Cod2Bots {
         let ready = weapon.is_none_or(|w| p.ws.weapon == w);
         let press = ready && p.gunner.hint_ent == Some(id) && !task.pressed;
         task.pressed = press;
-        self.fetches.insert(slot, task);
+        self.own.fetches.insert(slot, task);
         Some(FetchCmd {
             look,
             weapon,
@@ -154,7 +154,10 @@ impl Cod2Bots {
 
     /// Whether the bot in `slot` is on its way to a gun.
     pub(super) fn fetching(&self, slot: usize) -> bool {
-        self.fetches.get(&slot).is_some_and(|t| t.item.is_some())
+        self.own
+            .fetches
+            .get(&slot)
+            .is_some_and(|t| t.item.is_some())
     }
 }
 

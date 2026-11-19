@@ -5,109 +5,25 @@
 //! moves by its cmds through the level's `ClientThink`, once per frame
 //! ahead of `G_RunFrame`, as a client's packet between two frames would.
 //! `addbot`, `removebot`, `listbots` and the management pass are the
-//! shared `server/bot_admin.rs`; this file holds the CoD2 server's hooks.
+//! shared `server/bot_admin.rs` over `engine/bots.rs`, which CoD4 shares;
+//! this file holds what CoD2 does its own way.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
-use vcod_cod2::net::ops::MAX_RELIABLE_COMMANDS;
-
-use super::{Cod2Server, State};
-use crate::botmgmt::{self, Member, Settings, Side, cvar};
-use std::sync::Arc;
-
 use vcod_cod2::net::UserCmd2;
 use vcod_common::net::msg::UserCmd;
 
-use crate::bots::cod2::{self, Cod2Bots, Cod2Frame};
+use super::{Cod2Server, State};
+use crate::bots::cod2::{self, Cod2Bots, Cod2Frame, Cod2Own};
 use crate::bots::driver::{Body, BotDriver, BotWorld, CoverBody, Joining};
-use crate::bots::{BotView, EnemyView, Goal, Noise, SeatView};
+use crate::bots::{BotView, EnemyView, Noise};
+use crate::engine::bots::{BotGame, read_reliable};
 use crate::nav::{Follower, NavGraph};
-use crate::rcon::Redirect;
-use crate::server::bot_admin::{self, AdminHost, Ledger};
+use crate::server::bot_admin;
 use crate::world::World;
 
 impl Cod2Server {
-    /// `count` bots, each in a free slot; `shoot` lets them fight. A team
-    /// game alternates them between `allies` and `axis`, `dm` autoassigns.
-    /// Returns the slots taken. They count toward the bots the management
-    /// pass keeps.
-    pub fn add_bots(&mut self, count: usize, shoot: bool) -> Vec<usize> {
-        let mut taken = Vec::new();
-        for _ in 0..count {
-            let n = self.game.bots.as_ref().map_or(0, |b| b.bots().len());
-            let side = match self.game.cfg.gametype.as_str() {
-                "dm" => Side::None,
-                _ if n.is_multiple_of(2) => Side::Allies,
-                _ => Side::Axis,
-            };
-            let Some(slot) = self.add_bot(side, shoot, None) else {
-                break;
-            };
-            taken.push(slot);
-        }
-        if let Some(b) = self.game.bots.as_mut() {
-            b.admin.manual = b.admin.manual.max(b.bots().len());
-        }
-        taken
-    }
-
-    /// One bot in the first free public slot asking for `side` (in a team
-    /// game `autoassign` takes allies, as CoD1's), at skill `level` or
-    /// `vc_bot_skill`'s.
-    fn add_bot(&mut self, side: Side, shoot: bool, level: Option<u8>) -> Option<usize> {
-        let private = (self.int("sv_privateClients").max(0) as usize).min(self.core.clients.len());
-        let Some(slot) =
-            (private..self.core.clients.len()).find(|&i| self.core.clients[i].is_none())
-        else {
-            log::warn!("cod2: no free slot for a bot");
-            return None;
-        };
-        let n = self.game.bots.as_ref().map_or(0, |b| b.bots().len());
-        let name = if self.game.cvars.get(cvar::NAMES) == "0" {
-            format!("bot{n}")
-        } else {
-            // CoD1's pool and draw (`botmgmt::draw_name`), off the level's rand.
-            let taken: Vec<String> = self
-                .game
-                .bots
-                .as_ref()
-                .map(|b| b.bots().values().map(|b| b.name.clone()).collect())
-                .unwrap_or_default();
-            botmgmt::draw_name(&taken, &mut |k| self.rand() as usize % k)
-        };
-        let team = match (side, self.game.cfg.gametype.as_str()) {
-            (Side::None, "dm") => "autoassign",
-            (Side::Axis, _) => "axis",
-            _ => "allies",
-        };
-        let userinfo = format!("\\name\\{name}\\rate\\25000\\snaps\\20");
-        self.admit(slot, SocketAddr::from(([0, 0, 0, 0], 0)), 0, 0, &userinfo);
-        if let Some(c) = self.core.clients[slot].as_mut() {
-            c.bot = true;
-        }
-        if let Some(level) = self.game.level.as_mut() {
-            level.mark_bot(slot);
-        }
-        let seed = self.rand() as u64;
-        let skill = self.skill_cvar();
-        let bots = self.game.bots.get_or_insert_with(|| Cod2Bots::new(shoot));
-        bots.add(slot, &name, team, seed);
-        if let Some(b) = bots.bots_mut().get_mut(&slot) {
-            b.skill = crate::bots::Skill::level(level.unwrap_or(skill));
-        }
-        if let Some(l) = level {
-            bots.admin.skills.insert(slot, l);
-        }
-        log::info!("cod2: bot {name} in slot {slot}");
-        Some(slot)
-    }
-
-    fn skill_cvar(&self) -> u8 {
-        crate::game::builtins::cvar::atoi(self.game.cvars.get(cvar::SKILL))
-            .clamp(0, i32::from(crate::bots::MAX_LEVEL)) as u8
-    }
-
     /// The bots' pass (lnxded 0x8096952) for `addTestClient`'s clients:
     /// each in slot order draws its random cmd and, active, thinks on it
     /// (`SV_ClientThink` 0x8090dac).
@@ -186,15 +102,7 @@ impl Cod2Server {
                 }
             }
             // The bot reads everything sent; its acknowledge says so.
-            let seq = c.link.netchan.reliable_sequence as i32;
-            let texts = (c.link.reliable_ack + 1..=seq)
-                .map(|s| c.link.netchan.reliable[s as usize & (MAX_RELIABLE_COMMANDS - 1)].clone())
-                .collect();
-            // Read is sent: `SV_AddServerCommand` squashes only commands not
-            // yet sent, and a bot's are never written to a message.
-            c.link.reliable_ack = seq;
-            c.link.reliable_sent = seq;
-            inbox.insert(slot, texts);
+            inbox.insert(slot, read_reliable(c));
         }
         if let Some(b) = self.game.bots.as_mut() {
             b.inbox(inbox);
@@ -344,11 +252,6 @@ impl BotWorld for Cod2Server {
         }
     }
 
-    /// No health packs on CoD2's stock levels.
-    fn health_packs(&mut self) -> Vec<[f32; 3]> {
-        Vec::new()
-    }
-
     fn body(&self, slot: usize) -> Option<Body> {
         cod2::body(self.cod2_level()?, slot)
     }
@@ -359,17 +262,6 @@ impl BotWorld for Cod2Server {
 
     fn view(&self, slot: usize, enemy: Option<EnemyView>) -> Option<BotView> {
         self.cod2_bots().felt_view(self.cod2_level()?, slot, enemy)
-    }
-
-    /// No sidestep on CoD2.
-    fn friend_in_line(
-        &self,
-        _: usize,
-        _: [f32; 3],
-        _: &[i32],
-        _: Option<([f32; 3], i32)>,
-    ) -> (bool, Option<[f32; 3]>) {
-        (false, None)
     }
 
     fn cover_body(&self, slot: usize, threat: usize) -> Option<CoverBody> {
@@ -420,29 +312,6 @@ impl BotWorld for Cod2Server {
         cod2::move_ps(self.cod2_level()?, slot)
     }
 
-    fn fall_kills(&self, _: usize) -> Option<f32> {
-        None
-    }
-
-    /// No vehicles on CoD2 to park on the graph.
-    fn blocked_nodes(&self, _: usize) -> Arc<[u32]> {
-        Arc::default()
-    }
-
-    /// Read only by the CoD1 pmove probes CoD2's route goes without; on,
-    /// they would step the follower's body ([`Self::move_ps`]) under the
-    /// graph's rules with no weapon, as the graph's walks did.
-    fn weapon_defs(&self) -> &[Option<vcod_common::weapon::WeaponDef>] {
-        &[]
-    }
-
-    /// No seats on CoD2.
-    fn drive_waypoint(&mut self, _: usize, _: Goal, _: &mut SeatView) -> Option<[f32; 3]> {
-        None
-    }
-
-    fn forget_drive(&mut self, _: usize) {}
-
     fn lob_probe(
         &self,
         slot: usize,
@@ -451,10 +320,6 @@ impl BotWorld for Cod2Server {
         teams: &[i32],
     ) -> Option<[f32; 2]> {
         cod2::lob_probe(self.cod2_level()?, slot, weapon, target, teams)
-    }
-
-    fn take_orders(&mut self) -> Vec<(usize, String)> {
-        Vec::new()
     }
 
     fn bot_command(&mut self, slot: usize, text: String) {
@@ -481,9 +346,6 @@ impl BotWorld for Cod2Server {
             .then_some(a)
     }
 
-    /// Never called: [`Self::read_commands`] joins no bot.
-    fn begin(&mut self, _: usize) {}
-
     /// The bots' pass resets the skeleton cache once for all of them
     /// (lnxded 0x8096952), as a packet does.
     fn bot_packet(&mut self) {
@@ -509,12 +371,6 @@ impl BotWorld for Cod2Server {
         }
     }
 
-    /// Never called: [`Self::read_commands`] primes no bot.
-    fn enter(&mut self, _: usize) {}
-
-    /// Acknowledged as read ([`Self::manage`]).
-    fn ack(&mut self, _: usize) {}
-
     fn tick_done(&mut self) {
         if let Some(b) = self.game.bots.as_mut() {
             b.tick_done();
@@ -523,216 +379,58 @@ impl BotWorld for Cod2Server {
     }
 }
 
-/// The CoD2 server's hooks for the shared bot admin
-/// (`server/bot_admin.rs`).
-impl AdminHost for Cod2Server {
-    type Out = Redirect;
+/// What CoD2's bot glue does its own way (`engine/bots.rs`).
+impl BotGame for super::Cod2Game {
+    type Own = Cod2Own;
+    const TAG: &'static str = "cod2";
 
-    fn say(&mut self, out: &mut Redirect, msg: &str) {
-        out.print(msg);
+    fn bots(&self) -> Option<&Cod2Bots> {
+        self.bots.as_ref()
+    }
+
+    fn bots_slot(&mut self) -> &mut Option<Cod2Bots> {
+        &mut self.bots
     }
 
     fn level_running(&self) -> bool {
-        self.game.level.is_some()
+        self.level.is_some()
     }
 
-    /// No bot yet: only a floor brings the bots' state in.
-    fn admin_ready(&mut self) -> bool {
-        if self.game.level.is_none() {
-            return false;
+    fn gametype(&self) -> &str {
+        &self.cfg.gametype
+    }
+
+    fn admit_bot(e: &mut Cod2Server, slot: usize, userinfo: &str) {
+        e.admit(slot, SocketAddr::from(([0, 0, 0, 0], 0)), 0, 0, userinfo);
+        if let Some(c) = e.core.clients[slot].as_mut() {
+            c.bot = true;
         }
-        if self.game.bots.is_none() {
-            let s = self.bot_settings();
-            if s.min_players == 0 {
-                return false;
-            }
-            self.game.bots = Some(Cod2Bots::new(s.shoot));
-        }
-        true
-    }
-
-    fn admin_now(&self) -> i32 {
-        self.core.sv_time_ms
-    }
-
-    fn ledger(&mut self) -> Option<&mut Ledger> {
-        self.game.bots.as_mut().map(|b| &mut b.admin)
-    }
-
-    fn ledger_or_new(&mut self) -> &mut Ledger {
-        let shoot = self
-            .game
-            .bots
-            .as_ref()
-            .map_or(self.bot_settings().shoot, |b| b.shoots());
-        &mut self
-            .game
-            .bots
-            .get_or_insert_with(|| Cod2Bots::new(shoot))
-            .admin
-    }
-
-    fn bot_settings(&self) -> Settings {
-        let on = |name: &str| crate::game::builtins::cvar::atoi(self.game.cvars.get(name)) != 0;
-        Settings {
-            min_players: self.int(cvar::MIN_PLAYERS).max(0) as usize,
-            autobalance: on(cvar::AUTOBALANCE),
-            shoot: on(cvar::SHOOT),
-            names: on(cvar::NAMES),
-            skill: self.skill_cvar(),
-            retreat: on(cvar::RETREAT),
+        if let Some(level) = e.game.level.as_mut() {
+            level.mark_bot(slot);
         }
     }
 
-    /// `--bots-peaceful` and the cvar's default stand until the cvar moves.
-    fn apply_settings(&mut self, s: Settings) {
-        let Some(b) = self.game.bots.as_mut() else {
-            return;
-        };
-        for bot in b.bots_mut().values_mut() {
-            bot.allow_retreat(s.retreat);
-        }
-        match b.applied {
-            None => b.applied = Some((s.shoot, s.skill)),
-            Some((shoot, skill)) => {
-                if shoot != s.shoot {
-                    b.set_shoot(s.shoot);
-                }
-                if skill != s.skill {
-                    let pinned = b.admin.skills.clone();
-                    for (slot, bot) in b.bots_mut().iter_mut() {
-                        if !pinned.contains_key(slot) {
-                            bot.skill = crate::bots::Skill::level(s.skill);
-                        }
-                    }
-                }
-                b.applied = Some((s.shoot, s.skill));
-            }
-        }
-    }
-
-    fn bot_teamed(&self) -> bool {
-        self.game.cfg.gametype != "dm"
-    }
-
-    /// A zombie is a client state here, so `clients` alone says it.
-    fn bot_room(&self) -> usize {
-        let private = (self.int("sv_privateClients").max(0) as usize).min(self.core.clients.len());
-        let free = (private..self.core.clients.len())
-            .filter(|&i| self.core.clients[i].is_none())
-            .count();
-        free + self.bot_count()
-    }
-
-    fn bot_count(&self) -> usize {
-        self.game.bots.as_ref().map_or(0, |b| b.bots().len())
-    }
-
-    /// Zombies are left out.
-    fn bot_roster(&mut self) -> Vec<Member> {
-        let mut out = Vec::new();
-        for slot in 0..self.core.clients.len() {
-            if self.core.clients[slot]
-                .as_ref()
-                .is_none_or(|c| c.state == State::Zombie)
-            {
-                continue;
-            }
-            let bot = self.game.bots.as_ref().and_then(|b| b.bots().get(&slot));
-            let (team, state, score) = match self.game.level.as_mut() {
-                Some(l) => (
-                    l.rt.client_pers(slot, "team").unwrap_or_default(),
-                    l.rt.client_field(slot, "sessionstate").unwrap_or_default(),
-                    l.rt.client_field(slot, "score").unwrap_or_default(),
-                ),
-                None => Default::default(),
-            };
-            let joining = !matches!(state.as_str(), "playing" | "dead");
-            out.push(Member {
-                slot,
-                bot: bot.is_some(),
-                side: bot_admin::roster_side(&team, bot.map(|b| b.team()), joining),
-                score: score.parse().unwrap_or(0),
-                playing: !matches!(state.as_str(), "dead" | "spectator"),
-                pinned: self
-                    .game
-                    .bots
-                    .as_ref()
-                    .is_some_and(|b| b.admin.pinned.contains(&slot)),
-            });
-        }
-        out
-    }
-
-    fn bot_name(&self, slot: usize) -> String {
-        self.game
-            .bots
-            .as_ref()
-            .and_then(|b| b.bots().get(&slot))
-            .map_or(String::new(), |b| b.name.clone())
-    }
-
-    fn bot_level(&self, slot: usize) -> Option<u8> {
-        self.game
-            .bots
-            .as_ref()
-            .and_then(|b| b.bots().get(&slot))
-            .and_then(|b| b.skill.level_of())
-    }
-
-    fn admit_bot(&mut self, side: Side, _: Settings, level: Option<u8>) -> Option<usize> {
-        let shoot = self.game.bots.as_ref().is_none_or(|b| b.shoots());
-        self.add_bot(side, shoot, level)
-    }
-
-    /// `drop_client` forgets the bot (`Cod2Bots::remove`).
-    fn remove_bot(&mut self, slot: usize) {
-        self.drop_client(slot, "EXE_PLAYERKICKED");
-    }
-
-    /// The stock handlers switch a dead or spectating player and reopen the
-    /// weapon menu, which the bot answers again. The reply runs at once.
-    fn move_bot(&mut self, slot: usize, side: Side) {
-        let Some(bot) = self
-            .game
-            .bots
-            .as_mut()
-            .and_then(|b| b.bots_mut().get_mut(&slot))
-        else {
-            return;
-        };
-        bot.set_team(side.response());
-        log::info!(
-            "cod2: bot {slot} {:?} moves to {}",
-            bot.name,
-            side.response()
-        );
+    /// The menu block's slots short of its last, as CoD2's bots have
+    /// always read it (CoD4's read the last too).
+    fn team_menu(e: &Cod2Server) -> Option<usize> {
         use vcod_common::net::protocol::CsRange;
         let (first, last) = vcod_cod2::net::protocol::CS_LAYOUT_118.bounds(CsRange::Menu);
-        let menu = (first..last).find(|&i| {
-            self.core
-                .configstrings
-                .get(i)
-                .is_some_and(|m| m.starts_with("team_"))
-        });
-        if let Some(i) = menu {
-            let seq = self.core.clients[slot]
-                .as_ref()
-                .map_or(0, |c| c.link.last_client_command + 1);
-            let reply = format!(
-                "mr {} {} {}",
-                self.game.server_id,
-                i - first,
-                side.response()
-            );
-            self.client_command(slot, seq, reply);
-        }
+        (first..last)
+            .find(|&i| {
+                e.core
+                    .configstrings
+                    .get(i)
+                    .is_some_and(|m| m.starts_with("team_"))
+            })
+            .map(|i| i - first)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rcon::Redirect;
+    use vcod_cod2::net::ops::MAX_RELIABLE_COMMANDS;
 
     fn bots(sv: &Cod2Server) -> usize {
         sv.game.bots.as_ref().map_or(0, |b| b.bots().len())

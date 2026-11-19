@@ -122,10 +122,10 @@ impl Cod2Bots {
         let now = level.level_time();
         let p = level.players.get(slot)?.as_ref()?;
         if guns.is_empty() || !playing(level, slot) {
-            self.guns.remove(&slot);
+            self.own.guns.remove(&slot);
             return None;
         }
-        let mut task = self.guns.get(&slot).copied().unwrap_or_default();
+        let mut task = self.own.guns.get(&slot).copied().unwrap_or_default();
         let mounted = p.ps.e_flags & ef::TURRET != 0;
         let out = if mounted {
             let gun = guns.iter().find(|g| g.owner == Some(slot))?;
@@ -182,9 +182,9 @@ impl Cod2Bots {
             }
         };
         if task.gun.is_some() {
-            self.guns.insert(slot, task);
+            self.own.guns.insert(slot, task);
         } else {
-            self.guns.remove(&slot);
+            self.own.guns.remove(&slot);
         }
         out
     }
@@ -201,7 +201,7 @@ impl Cod2Bots {
     ) -> Option<EntId> {
         let enemy = Vec3::from(view.enemy?.origin);
         let feet = Vec3::from(view.origin);
-        let taken: Vec<EntId> = (self.guns.iter())
+        let taken: Vec<EntId> = (self.own.guns.iter())
             .filter(|(s, _)| **s != slot)
             .filter_map(|(_, t)| t.gun)
             .collect();
@@ -247,7 +247,7 @@ impl Cod2Bots {
         teams: &[i32],
         dm: bool,
     ) -> Option<Vec3> {
-        if !self.shoot {
+        if !self.shoots() {
             return None;
         }
         let mine = teams.get(slot).copied().unwrap_or(0);

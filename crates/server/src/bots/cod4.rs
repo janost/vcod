@@ -37,9 +37,9 @@ use vcod_cod4::pmove::weapon::{self as weap, WeaponDef};
 use vcod_cod4::pmove::{PlayerState, button, pm_type, pmf};
 use vcod_common::net::msg::{self, UserCmd};
 
+use super::game_bots::{GameBots, OwnBots};
 use super::{
-    BombView, Bot, BotView, DomFlagView, DomView, EnemyView, KeyBomb, ObjRole, SdView, SiteView,
-    UoView,
+    BombView, BotView, DomFlagView, DomView, EnemyView, KeyBomb, ObjRole, SdView, SiteView, UoView,
 };
 use crate::game::cod4::bot_feed::{BombGame, Cod4Objectives, Zone};
 use crate::game::cod4::level::Cod4Level;
@@ -115,16 +115,12 @@ impl Arms {
 /// (cod4-gsc.md 8). 3 s covers 60 spawn points.
 pub(crate) const BOT_LOAD_MS: i32 = 3000;
 
-/// The CoD4 server's bots: the shared driver's state and what CoD4's hooks
-/// keep beside it.
-pub struct Cod4Bots {
-    pub(crate) driver: super::driver::BotDriver,
-    shoot: bool,
-    /// The management's state (`crate::server::bot_admin`), shared with
-    /// CoD1's and CoD2's.
-    pub admin: crate::server::bot_admin::Ledger,
-    /// The `vc_bot_shoot` and `vc_bot_skill` values last applied.
-    pub applied: Option<(bool, u8)>,
+/// The CoD4 server's bots: the shared state ([`GameBots`]) and what
+/// CoD4's hooks keep beside it ([`Cod4Own`]).
+pub type Cod4Bots = GameBots<Cod4Own>;
+
+/// What CoD4's hooks keep beside the shared bot state.
+pub struct Cod4Own {
     /// The level's world the graph, the sight and the throws trace, and
     /// the clip map the mantle probe steps 1.7's pmove over.
     world: Option<(Rc<World>, Arc<ClipMap>)>,
@@ -211,16 +207,9 @@ struct Pass {
     blockers: Vec<crate::game::cod4::entity_damage::DamageBox>,
 }
 
-impl Cod4Bots {
-    pub fn new(shoot: bool) -> Cod4Bots {
-        Cod4Bots {
-            driver: super::driver::BotDriver {
-                nav_background: true,
-                ..Default::default()
-            },
-            shoot,
-            admin: Default::default(),
-            applied: None,
+impl OwnBots for Cod4Own {
+    fn new() -> Self {
+        Cod4Own {
             world: None,
             brush_key: String::new(),
             recheck_brushes: false,
@@ -249,124 +238,28 @@ impl Cod4Bots {
         }
     }
 
-    /// A brain for the client in `slot`, answering the team menu with
-    /// `team` (`autoassign`, `allies` or `axis`).
-    pub fn add(&mut self, slot: usize, name: &str, team: &str, seed: u64) {
-        let mut bot = Bot::new(team, self.shoot, seed);
-        bot.name = name.to_string();
-        self.driver.bots.insert(slot, bot);
-    }
-
-    /// The level times the bots think at in the `SV_Frame` whose frames
-    /// run on from `level` by `frame` each: one every [`BOT_TICK_MS`] of
-    /// level time, before the next frame's. At `sv_fps` 20 that is one, at
-    /// `level`, every frame (a catch-up's too); at 40 one every other
-    /// frame; at 10 two a frame, so a bot moves 100 ms of cmds in its
-    /// 100 ms. A bot clock behind the level (a catch-up) or far ahead (a
-    /// clock that went back) starts over at `level`.
-    pub fn think_times(&mut self, level: i32, frame: i32) -> Vec<i32> {
-        let mut next = match self.next_think {
-            Some(n) if n >= level && n - level <= BOT_TICK_MS => n,
-            _ => level,
-        };
-        let mut out = Vec::new();
-        while next < level + frame.max(1) {
-            out.push(next);
-            next += BOT_TICK_MS;
-        }
-        self.next_think = Some(next);
-        out
-    }
-
-    /// The level the bots now stand on, `server_id` and `map`: on another
-    /// one every brain forgets the menus it answered and what the old level
-    /// left (paths, enemies, hits, events heard, weapon numbers); a new map
-    /// drops the graph and the world too, for the next tick to build, and
-    /// the same map keeps them while its brush entities stand the same.
-    pub fn on_level(&mut self, server_id: i32, map: &str) {
-        let same_map = self.on_level.as_ref().is_some_and(|(_, m)| m == map);
-        if self
-            .on_level
-            .as_ref()
-            .is_some_and(|(id, m)| *id == server_id && m == map)
-        {
-            return;
-        }
-        let first = self.on_level.is_none();
-        self.on_level = Some((server_id, map.to_string()));
-        if first {
-            return;
-        }
-        let mut fresh = Cod4Bots::new(self.shoot);
-        fresh.admin = std::mem::take(&mut self.admin);
-        fresh.applied = self.applied;
-        fresh.driver.nav_background = self.driver.nav_background;
+    /// The hits, events heard and weapon numbers of the old level go; the
+    /// classes picked, the gun counts and `bot_match`'s `OBJ`, `GUNS` and
+    /// `THROWBACK` stay, and on the same map the world, rechecked against
+    /// the first frame's brush entities.
+    fn new_level(&mut self, same_map: bool) {
+        let mut fresh = Cod4Own::new();
         fresh.on_level = self.on_level.take();
         fresh.classes = std::mem::take(&mut self.classes);
         fresh.objectives = self.objectives;
         fresh.man_guns = self.man_guns;
         fresh.throw_back = self.throw_back;
         fresh.gun.carry_counts(&self.gun);
-        // `bot_match`'s cue counts run over the whole match.
-        fresh.driver.posts.tally = self.driver.posts.tally;
         if same_map {
-            fresh.driver.nav_job = self.driver.nav_job.take();
-            fresh.driver.nav = self.driver.nav.take();
-            fresh.driver.creases = std::mem::take(&mut self.driver.creases);
-            fresh.driver.probes = std::mem::take(&mut self.driver.probes);
-            fresh.driver.sites = std::mem::take(&mut self.driver.sites);
-            fresh.driver.posts.carry_surveys(&mut self.driver.posts);
             fresh.world = self.world.take();
             fresh.brush_key = std::mem::take(&mut self.brush_key);
             fresh.recheck_brushes = fresh.world.is_some();
         }
-        fresh.driver.bots = std::mem::take(&mut self.driver.bots);
-        for bot in fresh.driver.bots.values_mut() {
-            bot.rearm();
-        }
         *self = fresh;
     }
 
-    /// The bots' world, for a test to tell a rebuilt one from a kept one
-    /// (`Rc::ptr_eq`; holding it keeps a rebuild off the old address).
-    #[cfg(test)]
-    pub(crate) fn world_rc(&self) -> Option<Rc<World>> {
-        self.world.as_ref().map(|(w, _)| w.clone())
-    }
-
-    /// The world and everything built over it, for the next tick to build
-    /// again.
-    fn drop_world(&mut self) {
-        self.world = None;
-        self.brush_key.clear();
-        self.driver.nav = None;
-        self.driver.nav_job = None;
-        self.driver.creases = Default::default();
-        self.driver.probes = Default::default();
-        self.driver.sites = Default::default();
-    }
-
-    /// Whether new bots fight, and `vc_bot_shoot`'s change for every bot.
-    pub fn set_shoot(&mut self, shoot: bool) {
-        self.shoot = shoot;
-        for b in self.driver.bots.values_mut() {
-            b.set_shoot(shoot);
-        }
-    }
-
-    pub fn shoots(&self) -> bool {
-        self.shoot
-    }
-
-    pub fn remove(&mut self, slot: usize) {
+    fn forget(&mut self, slot: usize) {
         self.held.remove(&slot);
-        self.admin.pinned.remove(&slot);
-        self.admin.skills.remove(&slot);
-        self.driver.bots.remove(&slot);
-        self.driver.paths.remove(&slot);
-        self.driver.enemies.remove(&slot);
-        self.driver.hunts.remove(&slot);
-        self.driver.covers.remove(&slot);
         self.throwing.remove(&slot);
         self.mantling.remove(&slot);
         self.climbed.remove(&slot);
@@ -379,34 +272,69 @@ impl Cod4Bots {
         self.switches.remove(&slot);
         self.gun.forget(slot);
     }
+}
 
-    /// The brains, by slot.
-    pub fn bots(&self) -> &BTreeMap<usize, Bot> {
-        &self.driver.bots
+impl Cod4Bots {
+    /// The level times the bots think at in the `SV_Frame` whose frames
+    /// run on from `level` by `frame` each: one every [`BOT_TICK_MS`] of
+    /// level time, before the next frame's. At `sv_fps` 20 that is one, at
+    /// `level`, every frame (a catch-up's too); at 40 one every other
+    /// frame; at 10 two a frame, so a bot moves 100 ms of cmds in its
+    /// 100 ms. A bot clock behind the level (a catch-up) or far ahead (a
+    /// clock that went back) starts over at `level`.
+    pub fn think_times(&mut self, level: i32, frame: i32) -> Vec<i32> {
+        let mut next = match self.own.next_think {
+            Some(n) if n >= level && n - level <= BOT_TICK_MS => n,
+            _ => level,
+        };
+        let mut out = Vec::new();
+        while next < level + frame.max(1) {
+            out.push(next);
+            next += BOT_TICK_MS;
+        }
+        self.own.next_think = Some(next);
+        out
     }
 
-    pub fn bots_mut(&mut self) -> &mut BTreeMap<usize, Bot> {
-        &mut self.driver.bots
+    /// The level the bots now stand on, `server_id` and `map`: on another
+    /// one every brain forgets the menus it answered and what the old level
+    /// left (paths, enemies, hits, events heard, weapon numbers); a new map
+    /// drops the graph and the world too, for the next tick to build, and
+    /// the same map keeps them while its brush entities stand the same.
+    pub fn on_level(&mut self, server_id: i32, map: &str) {
+        let same_map = self.own.on_level.as_ref().is_some_and(|(_, m)| m == map);
+        if self
+            .own
+            .on_level
+            .as_ref()
+            .is_some_and(|(id, m)| *id == server_id && m == map)
+        {
+            return;
+        }
+        let first = self.own.on_level.is_none();
+        self.own.on_level = Some((server_id, map.to_string()));
+        if !first {
+            self.new_level(same_map);
+        }
     }
 
-    /// `bot_match`'s cue counts (`Server::bot_cue_tally`).
-    pub fn cue_tally(&self) -> [(u32, u32, u64); 2] {
-        self.driver.posts.cue_tally()
+    /// The bots' world, for a test to tell a rebuilt one from a kept one
+    /// (`Rc::ptr_eq`; holding it keeps a rebuild off the old address).
+    #[cfg(test)]
+    pub(crate) fn world_rc(&self) -> Option<Rc<World>> {
+        self.own.world.as_ref().map(|(w, _)| w.clone())
     }
 
-    /// Block the tick on the graph's build rather than let the bots wander
-    /// until it lands: the in-process measuring runs set it.
-    pub fn wait_for_graph(&mut self) {
-        self.driver.nav_background = false;
-    }
-
-    /// The graph once its build has landed.
-    pub fn graph(&self) -> Option<&Arc<NavGraph>> {
-        self.driver.nav.as_ref()
+    /// The world and everything built over it, for the next tick to build
+    /// again.
+    fn drop_world(&mut self) {
+        self.own.world = None;
+        self.own.brush_key.clear();
+        self.driver.new_world();
     }
 
     pub(crate) fn world(&self) -> Option<&World> {
-        self.world.as_ref().map(|(w, _)| &**w)
+        self.own.world.as_ref().map(|(w, _)| &**w)
     }
 
     /// The level's world, built once a level from its clip map and the
@@ -423,28 +351,28 @@ impl Cod4Bots {
         // other gametypes' objects by then and `brushes` holds what stands.
         // Another gametype on the same map can leave other ones standing:
         // the carried world and graph go.
-        if self.recheck_brushes && level.level_time() > 0 {
-            self.recheck_brushes = false;
-            if brush_key(level.brushes()) != self.brush_key {
+        if self.own.recheck_brushes && level.level_time() > 0 {
+            self.own.recheck_brushes = false;
+            if brush_key(level.brushes()) != self.own.brush_key {
                 self.drop_world();
             }
         }
-        if self.world.is_none()
+        if self.own.world.is_none()
             && let Some(clip) = clip
             && level.level_time() > 0
         {
             let brushes = level.brushes().to_vec();
-            self.brush_key = brush_key(&brushes);
-            self.world = Some((bot_world(clip.clone(), entities, brushes), clip.clone()));
+            self.own.brush_key = brush_key(&brushes);
+            self.own.world = Some((bot_world(clip.clone(), entities, brushes), clip.clone()));
         }
-        let Some((world, clip)) = self.world.as_ref() else {
+        let Some((world, clip)) = self.own.world.as_ref() else {
             return;
         };
         if self.driver.nav.is_none() {
             let rules = level.rules;
             let job = self.driver.nav_job.get_or_insert_with(|| {
                 NavJob::start_opts(
-                    &format!("cod4 {map}{}", self.brush_key),
+                    &format!("cod4 {map}{}", self.own.brush_key),
                     world,
                     GRAPH_RULES,
                     Some(mantle_probe(clip.clone(), rules)),
@@ -459,14 +387,15 @@ impl Cod4Bots {
     /// The tick's top: every client's playerstate, read once, and each
     /// bot's weapons numbered for its brain ([`Arms`]).
     pub(crate) fn refresh(&mut self, level: &Cod4Level) {
-        self.pass.states = (0..level.players.len())
+        self.own.pass.states = (0..level.players.len())
             .filter_map(|s| Some((s, level.pm_state(s)?)))
             .collect();
-        self.pass.now = self.think_at.unwrap_or_else(|| level.level_time());
-        self.pass.dm = level.rt.cvars().get("g_gametype") == "dm";
+        self.own.pass.now = self.own.think_at.unwrap_or_else(|| level.level_time());
+        self.own.pass.dm = level.rt.cvars().get("g_gametype") == "dm";
         for &slot in self.driver.bots.keys() {
             // A follower's playerstate is the followed client's.
             let Some(ps) = self
+                .own
                 .pass
                 .states
                 .get(&slot)
@@ -474,7 +403,7 @@ impl Cod4Bots {
             else {
                 continue;
             };
-            let arms = self.arms.entry(slot).or_default();
+            let arms = self.own.arms.entry(slot).or_default();
             for w in 1..128u32 {
                 if ps.weapons[(w / 32) as usize] >> (w % 32) & 1 == 1 {
                     arms.number(w);
@@ -492,22 +421,22 @@ impl Cod4Bots {
     /// (bot-objectives.md 12.5).
     fn read_stance_events(&mut self) {
         use vcod_cod4::pmove::{MASK_PLAYERSOLID, PLAYER_MAXS, PLAYER_MINS, PmWorld, ev};
-        let clip = self.world.as_ref().map(|w| w.1.clone());
+        let clip = self.own.world.as_ref().map(|w| w.1.clone());
         for &slot in self.driver.bots.keys() {
-            let Some(ps) = self.pass.states.get(&slot) else {
+            let Some(ps) = self.own.pass.states.get(&slot) else {
                 continue;
             };
             let seq = ps.event_sequence;
-            let from = self.stance_seq.insert(slot, seq).unwrap_or(seq);
+            let from = self.own.stance_seq.insert(slot, seq).unwrap_or(seq);
             if ps.pm_type != pm_type::NORMAL || ps.other_flags & vcod_cod4::pmove::POF_PLAYER == 0 {
-                self.crouched.remove(&slot);
+                self.own.crouched.remove(&slot);
                 continue;
             }
             if (from.max(seq - 4)..seq)
                 .any(|i| ps.events[(i & 3) as usize] == ev::STANCE_FORCE_CROUCH)
             {
-                self.crouched.insert(slot);
-            } else if self.crouched.contains(&slot)
+                self.own.crouched.insert(slot);
+            } else if self.own.crouched.contains(&slot)
                 && ps.on_ground()
                 && clip.as_ref().is_some_and(|c| {
                     !PmWorld::trace(
@@ -522,18 +451,18 @@ impl Cod4Bots {
                     .startsolid
                 })
             {
-                self.crouched.remove(&slot);
+                self.own.crouched.remove(&slot);
             }
         }
     }
 
     fn ps(&self, slot: usize) -> Option<&PlayerState> {
-        self.pass.states.get(&slot)
+        self.own.pass.states.get(&slot)
     }
 
     /// Each bot's reliable server commands since the last tick.
     pub(crate) fn inbox(&mut self, inbox: BTreeMap<usize, Vec<String>>) {
-        self.pass.inbox = inbox;
+        self.own.pass.inbox = inbox;
     }
 
     /// The `t` menus the bot in `slot` was sent, named off their
@@ -548,7 +477,7 @@ impl Cod4Bots {
         server_id: i32,
         replies: &mut Vec<(usize, String)>,
     ) {
-        let Some(texts) = self.pass.inbox.get(&slot) else {
+        let Some(texts) = self.own.pass.inbox.get(&slot) else {
             return;
         };
         let changeclass = menus.iter().position(|m| m == "changeclass");
@@ -558,7 +487,7 @@ impl Cod4Bots {
             // The brain numbers weapons its own way ([`Arms`]): the switch
             // is asked for in CoD4's numbers by [`Self::cmd`].
             if let Some(w) = text.strip_prefix("a ").and_then(|w| w.trim().parse().ok()) {
-                self.switches.insert(slot, (w, SWITCH_TICKS));
+                self.own.switches.insert(slot, (w, SWITCH_TICKS));
                 continue;
             }
             let menu = text
@@ -593,35 +522,35 @@ impl Cod4Bots {
     /// The class the bot in `slot` answers with: kept once picked, else the
     /// one the fewest other bots carry, the lowest first.
     fn class_of(&mut self, slot: usize) -> usize {
-        if let Some(&c) = self.classes.get(&slot) {
+        if let Some(&c) = self.own.classes.get(&slot) {
             return c;
         }
-        let count = |c: usize| self.classes.values().filter(|&&x| x == c).count();
+        let count = |c: usize| self.own.classes.values().filter(|&&x| x == c).count();
         let pick = (0..CLASSES.len()).min_by_key(|&c| count(c)).unwrap_or(0);
-        self.classes.insert(slot, pick);
+        self.own.classes.insert(slot, pick);
         pick
     }
 
     /// The hit the bot in `slot` felt this tick ([`Self::hurt`]).
     pub(crate) fn feel(&mut self, level: &Cod4Level, slot: usize) {
         let hurt = self.hurt(level, slot);
-        self.pass.felt = Some((slot, hurt));
+        self.own.pass.felt = Some((slot, hurt));
     }
 
     fn felt(&self, slot: usize) -> Option<super::Hurt> {
-        self.pass.felt.filter(|f| f.0 == slot).and_then(|f| f.1)
+        self.own.pass.felt.filter(|f| f.0 == slot).and_then(|f| f.1)
     }
 
     /// The level's scored hits since the last read: each victim's last
     /// attacker, at the level time.
     pub(crate) fn read_hits(&mut self, level: &Cod4Level) {
         let now = level.level_time();
-        for &(attacker, victim, _) in level.hits_since(self.hits_read) {
+        for &(attacker, victim, _) in level.hits_since(self.own.hits_read) {
             if attacker != victim {
-                self.attackers.insert(victim, (attacker, now));
+                self.own.attackers.insert(victim, (attacker, now));
             }
         }
-        self.hits_read = level.hit_count();
+        self.own.hits_read = level.hit_count();
     }
 
     /// [`BotView::hurt`] for the bot in `slot`: a `damageEvent` new since
@@ -630,7 +559,7 @@ impl Cod4Bots {
     /// none); reported for [`super::HURT_MS`] while the attacker still
     /// plays.
     fn hurt(&mut self, level: &Cod4Level, slot: usize) -> Option<super::Hurt> {
-        let now = self.pass.now;
+        let now = self.own.pass.now;
         let w = level.wire_state(slot)?;
         let word = |name: &str| {
             vcod_cod4::net::fields::PLAYER_STATE
@@ -639,8 +568,8 @@ impl Cod4Bots {
                 .map_or(0, |f| w.words[f.word()])
         };
         let event = word("damageEvent");
-        let attacker = self.attackers.get(&slot).copied();
-        let seen = self.hits.entry(slot).or_insert((event, None));
+        let attacker = self.own.attackers.get(&slot).copied();
+        let seen = self.own.hits.entry(slot).or_insert((event, None));
         if seen.0 != event {
             seen.0 = event;
             seen.1 = attacker
@@ -677,11 +606,11 @@ impl Cod4Bots {
         teams: &[i32],
         attacker: Option<usize>,
     ) -> Option<EnemyView> {
-        if !self.shoot || !self.playing(level, slot) {
+        if !self.shoots() || !self.playing(level, slot) {
             return None;
         }
         let me = self.ps(slot)?;
-        let (world, _) = self.world.as_ref()?;
+        let (world, _) = self.own.world.as_ref()?;
         let bot = self.driver.bots.get(&slot);
         let mine = teams.get(slot).copied().unwrap_or(0);
         let tracked = bot
@@ -690,12 +619,12 @@ impl Cod4Bots {
         let fov = bot.map_or(super::Skill::default().fov_deg, |b| b.skill.fov_deg);
         let my_eye = eye(me);
         let mut candidates: Vec<(f32, Vec3, EnemyView)> = Vec::new();
-        for (&i, p) in &self.pass.states {
+        for (&i, p) in &self.own.pass.states {
             if i == slot || !self.playing(level, i) {
                 continue;
             }
             let theirs = teams.get(i).copied().unwrap_or(0);
-            let foe = self.pass.dm
+            let foe = self.own.pass.dm
                 || !(mine == TEAM_AXIS || mine == TEAM_ALLIES)
                 || (theirs != mine && (theirs == TEAM_AXIS || theirs == TEAM_ALLIES));
             if !foe {
@@ -744,7 +673,7 @@ impl Cod4Bots {
         to: Vec3,
     ) -> bool {
         w.shot_trace(from, to).fraction >= 1.0
-            && !self.pass.blockers.iter().any(|b| {
+            && !self.own.pass.blockers.iter().any(|b| {
                 b.trace(from, to, 1.0).is_some()
                     && b.trace_surfs(from, to, 1.0, crate::game::cod4::combat::MASK_SHOT)
                         .is_some()
@@ -756,16 +685,16 @@ impl Cod4Bots {
     /// not heard yet.
     pub(crate) fn listen(&mut self, level: &Cod4Level) -> Vec<super::Noise> {
         let mut noises = Vec::new();
-        let mut slots: Vec<usize> = self.pass.states.keys().copied().collect();
+        let mut slots: Vec<usize> = self.own.pass.states.keys().copied().collect();
         slots.sort_unstable();
         for i in slots {
             if !self.playing(level, i) {
-                self.heard.remove(&i);
+                self.own.heard.remove(&i);
                 continue;
             }
-            let ps = &self.pass.states[&i];
+            let ps = &self.own.pass.states[&i];
             let seq = ps.event_sequence;
-            let prev = self.heard.insert(i, seq).unwrap_or(seq);
+            let prev = self.own.heard.insert(i, seq).unwrap_or(seq);
             let fired = (prev.max(seq - 4)..seq).any(|k| {
                 matches!(
                     ps.events[(k & 3) as usize],
@@ -829,7 +758,7 @@ impl Cod4Bots {
     /// `pm_time`, as CoD2's).
     pub(crate) fn move_ps(&self, slot: usize) -> Option<vcod_common::pmove::PlayerState> {
         let ps = self.ps(slot)?;
-        let now = self.pass.now;
+        let now = self.own.pass.now;
         let mut b = vcod_common::pmove::PlayerState::spawn(ps.origin, ps.view_angles[1]);
         b.rules = GRAPH_RULES;
         b.velocity = ps.velocity;
@@ -850,8 +779,8 @@ impl Cod4Bots {
     /// The bots following a mantle edge (`BotWorld::routed`).
     pub(crate) fn routed(&mut self, slot: usize, follower: &crate::nav::Follower, g: &NavGraph) {
         match follower.mantle_edge(g) {
-            Some(e) => self.mantling.insert(slot, e),
-            None => self.mantling.remove(&slot),
+            Some(e) => self.own.mantling.insert(slot, e),
+            None => self.own.mantling.remove(&slot),
         };
     }
 
@@ -878,7 +807,7 @@ impl Cod4Bots {
             })
         };
         let no_arms = Arms::default();
-        let arms = self.arms.get(&slot).unwrap_or(&no_arms);
+        let arms = self.own.arms.get(&slot).unwrap_or(&no_arms);
         let mut weapons_held = 0u64;
         let mut loaded = 0u64;
         let (mut pistol, mut gun, mut grenade) = (None, None, None);
@@ -927,7 +856,7 @@ impl Cod4Bots {
         // ran out in the hand (bot-objectives.md 12.5).
         let in_throw = self.driver.bots.get(&slot).is_some_and(|b| b.in_throw());
         let weapon = match grenade {
-            Some(g) if in_throw && self.throwing.contains_key(&slot) => g,
+            Some(g) if in_throw && self.own.throwing.contains_key(&slot) => g,
             _ => arms.brain(ps.weapon),
         };
         let vitals = level.rt.client_vitals(slot);
@@ -935,7 +864,7 @@ impl Cod4Bots {
         let on_ladder = ps.pm_flags & pmf::LADDER != 0;
         let on_ground = ps.on_ground();
         let origin: [f32; 3] = ps.origin.into();
-        let (w, _) = self.world.as_ref()?;
+        let (w, _) = self.own.world.as_ref()?;
         let nav = self.driver.nav.as_ref();
         let enemy_eye = enemy.and_then(|e| Some(eye(self.ps(e.slot)?).into()));
         let frag_near = self.frag_near(level, slot);
@@ -1019,7 +948,7 @@ impl Cod4Bots {
     /// [`super::FLEE_HEIGHT`] up or down, the bot's own or one it notices.
     fn frag_near(&self, level: &Cod4Level, slot: usize) -> Option<[f32; 3]> {
         let ps = self.ps(slot)?;
-        let (world, _) = self.world.as_ref()?;
+        let (world, _) = self.own.world.as_ref()?;
         let at = ps.origin;
         let eye = eye(ps);
         let defs = level.weapon_defs();
@@ -1067,7 +996,7 @@ impl Cod4Bots {
     ) -> Option<[f32; 2]> {
         const STEP_S: f32 = 0.05;
         let ps = self.ps(slot)?;
-        let w = self.arms.get(&slot)?.weapon(weapon);
+        let w = self.own.arms.get(&slot)?.weapon(weapon);
         let def: &WeaponDef = level.weapon_defs().get(w as usize).filter(|_| w > 0)?;
         let radius = def.explosion_radius as f32;
         let target = Vec3::from(target);
@@ -1079,7 +1008,7 @@ impl Cod4Bots {
         if friendly_fire(level) && mate_in_blast(teams.get(slot).copied(), mates, target, radius) {
             return None;
         }
-        let (world, _) = self.world.as_ref()?;
+        let (world, _) = self.own.world.as_ref()?;
         let from = eye(ps);
         let to = target - from;
         let yaw = to.y.atan2(to.x).to_degrees();
@@ -1126,8 +1055,8 @@ impl Cod4Bots {
         view: &BotView,
     ) -> Option<Vec<UserCmd4>> {
         let ps = self.ps(slot)?.clone();
-        let arms = self.arms.get(&slot).cloned().unwrap_or_default();
-        let throwing = self.throwing.remove(&slot);
+        let arms = self.own.arms.get(&slot).cloned().unwrap_or_default();
+        let throwing = self.own.throwing.remove(&slot);
         // A body out of play throws nothing.
         let grenade = view
             .grenade
@@ -1135,7 +1064,7 @@ impl Cod4Bots {
             .map(|g| (g, arms.weapon(g)));
         let (mut c4, armed) = offhand_cmd(&cmd, grenade, ps.weapon, throwing);
         if let Some(armed) = armed {
-            self.throwing.insert(slot, armed);
+            self.own.throwing.insert(slot, armed);
         }
         if armed.is_none() {
             c4.weapon = arms.weapon(cmd.weapon) as u8;
@@ -1144,11 +1073,11 @@ impl Cod4Bots {
             }
         }
         // A script's switch until it lands, or a weapon never given.
-        if let Some((w, left)) = self.switches.get_mut(&slot) {
+        if let Some((w, left)) = self.own.switches.get_mut(&slot) {
             let held = ps.has_weapon(*w);
             *left = left.saturating_sub(u8::from(!held));
             if ps.weapon == *w || *left == 0 {
-                self.switches.remove(&slot);
+                self.own.switches.remove(&slot);
             } else if held && armed.is_none() {
                 c4.weapon = *w as u8;
             }
@@ -1161,22 +1090,22 @@ impl Cod4Bots {
         // `MANTLE_OVER` east to west and a crouched climb onto its top back
         // east, under a lintel a standing body does not fit beneath
         // (bot-objectives.md 12.5).
-        match self.mantling.get(&slot).copied() {
+        match self.own.mantling.get(&slot).copied() {
             Some(edge) => {
                 c4.buttons &= !button::JUMP;
                 if ps.pm_flags & pmf::MANTLE != 0 {
-                    self.climbed.insert(slot, edge);
-                } else if self.climbed.get(&slot) != Some(&edge)
+                    self.own.climbed.insert(slot, edge);
+                } else if self.own.climbed.get(&slot) != Some(&edge)
                     && ps.mantle.flags & vcod_cod4::pmove::mantle::flag::HINT != 0
                 {
                     c4.buttons |= button::JUMP;
                 }
             }
             None => {
-                self.climbed.remove(&slot);
+                self.own.climbed.remove(&slot);
             }
         }
-        if self.crouched.contains(&slot) {
+        if self.own.crouched.contains(&slot) {
             c4.buttons = (c4.buttons & !button::PRONE) | button::CROUCH;
         }
         if c4.offhand == 0 {
@@ -1185,7 +1114,7 @@ impl Cod4Bots {
         self.apply_steps(slot, &mut c4, &ps);
         let climbing = view.on_ladder && !view.on_ground;
         Some(
-            crate::nav::tick_times(self.pass.now, climbing)
+            crate::nav::tick_times(self.own.pass.now, climbing)
                 .map(|t| UserCmd4 {
                     server_time: t,
                     ..c4
@@ -1196,7 +1125,7 @@ impl Cod4Bots {
 
     /// The tick's end.
     pub(crate) fn tick_done(&mut self) {
-        self.pass = Pass::default();
+        self.own.pass = Pass::default();
     }
 }
 
@@ -1229,9 +1158,9 @@ impl Cod4Bots {
     /// The stock objective scripts' state, read once a tick
     /// (`BotWorld::frame`); nothing with [`Self::objectives`] off.
     pub(crate) fn frame(&mut self, level: &mut Cod4Level) -> Cod4Frame {
-        let frame = Cod4Frame(level.objectives().filter(|_| self.objectives));
+        let frame = Cod4Frame(level.objectives().filter(|_| self.own.objectives));
         self.read_guns(level, frame.0.is_none());
-        self.pass.blockers = level.shot_blockers();
+        self.own.pass.blockers = level.shot_blockers();
         frame
     }
 
@@ -2102,25 +2031,25 @@ mod tests {
         let mut b = Cod4Bots::new(true);
         b.add(0, "bot0", "axis", 1);
         b.on_level(1, "mp_crash");
-        b.brush_key = "crash brushes".into();
-        b.throwing.insert(0, true);
-        b.classes.insert(0, 2);
-        b.objectives = false;
+        b.own.brush_key = "crash brushes".into();
+        b.own.throwing.insert(0, true);
+        b.own.classes.insert(0, 2);
+        b.own.objectives = false;
         b.driver.bots.get_mut(&0).unwrap().answered.push(3);
         b.on_level(1, "mp_crash");
-        assert!(b.throwing.contains_key(&0), "the same level keeps all");
+        assert!(b.own.throwing.contains_key(&0), "the same level keeps all");
 
         b.on_level(2, "mp_crash");
         let bot = &b.driver.bots[&0];
         assert!(bot.answered.is_empty() && bot.round_start);
-        assert!(b.throwing.is_empty());
-        assert_eq!(b.brush_key, "crash brushes");
-        assert_eq!((b.classes.get(&0), b.objectives), (Some(&2), false));
+        assert!(b.own.throwing.is_empty());
+        assert_eq!(b.own.brush_key, "crash brushes");
+        assert_eq!((b.own.classes.get(&0), b.own.objectives), (Some(&2), false));
 
         b.on_level(3, "mp_strike");
-        assert!(b.brush_key.is_empty(), "another map builds its own");
-        assert_eq!((b.classes.get(&0), b.objectives), (Some(&2), false));
-        assert_eq!(b.on_level, Some((3, "mp_strike".into())));
+        assert!(b.own.brush_key.is_empty(), "another map builds its own");
+        assert_eq!((b.own.classes.get(&0), b.own.objectives), (Some(&2), false));
+        assert_eq!(b.own.on_level, Some((3, "mp_strike".into())));
         assert!(b.driver.bots.contains_key(&0));
     }
 
