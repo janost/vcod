@@ -10198,7 +10198,8 @@ pub(crate) mod tests {
             let right = &quads[centre + 1];
             let left_edge = right.verts.iter().map(|v| v[0]).fold(f32::MAX, f32::min);
             let k = if steady { 0.65 } else { 1.0 };
-            let [stand_min, _, _, stand_max, _, _] = r.hip_spread;
+            let (stand_min, stand_max) =
+                (def.def.hip_spread_stand_min, def.def.hip_spread_stand_max);
             let deg = ((stand_max - stand_min) * ps.aim_spread_scale / 255.0 + stand_min) * k;
             let px = (deg.to_radians().tan() * 240.0 / TAN_Y).max(r.min_ofs as f32);
             let spread = px - r.side_pos * r.side_size as f32;

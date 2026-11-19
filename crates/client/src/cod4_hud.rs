@@ -1352,7 +1352,7 @@ impl Cod4Hud {
                         .checked_sub(1)
                         .and_then(|w| self.weapons.get(w))
                         .and_then(|w| l.weapon_hud.get(w));
-                    if client == me || def.is_none_or(|d| d.silenced || d.weap_type == 1) {
+                    if client == me || def.is_none_or(|d| d.silenced || d.def.weap_type == 1) {
                         continue;
                     }
                     out.push(crate::cod4_radar::Shot {
@@ -2148,22 +2148,22 @@ fn held_ammo(l: &Loaded, s: &Cod4Session, snap: &Snapshot) -> Option<HeldAmmo> {
     // the sum over every held weapon on this ammo slot.
     let max = if d.shared_ammo_cap > 0 {
         d.shared_ammo_cap
-    } else if d.clip_only {
-        d.clip_size
+    } else if d.def.clip_only {
+        d.def.clip_size
     } else {
         (0..list.len())
             .filter(|&k| u(&format!("weapons[{}]", (k + 1) / 32)) >> ((k + 1) % 32) & 1 != 0)
             .filter(|&k| slots[k].0 == ammo)
             .filter_map(|k| l.weapon_hud.get(&list[k]))
-            .map(|d| d.max_ammo)
+            .map(|d| d.def.max_ammo)
             .sum()
     };
     Some(HeldAmmo {
         clip: clip_n,
-        clip_size: d.clip_size,
-        clip_only: d.clip_only,
+        clip_size: d.def.clip_size,
+        clip_only: d.def.clip_only,
         threshold: d.low_ammo_threshold,
-        reserve: if d.clip_only {
+        reserve: if d.def.clip_only {
             clip_n
         } else {
             ps.ammo.get(ammo).copied().unwrap_or(0)
@@ -2510,7 +2510,7 @@ impl Cod4Hud {
                 };
                 out.push(OwnerDraw::Clip {
                     kind: d.ammo_counter_clip,
-                    size: d.clip_size,
+                    size: d.def.clip_size,
                     rounds: clip(cl),
                     item: it.clone(),
                     rgba,
@@ -2536,7 +2536,7 @@ impl Cod4Hud {
                 .iter()
                 .filter_map(|&w| {
                     let (d, (_, cl)) = def(w)?;
-                    (d.offhand_class == class).then_some((w, clip(cl)))
+                    (d.def.offhand_class == class).then_some((w, clip(cl)))
                 })
                 .collect();
             // The class's first weapon with rounds, else its first

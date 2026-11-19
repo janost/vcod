@@ -212,7 +212,7 @@ pub(crate) fn quads(
 /// `CG_GetWeapReticleZoom` true: the held weapon's sight overlay is up.
 pub(crate) fn overlay_up(ps: &ViewPs, def: &WeaponHud) -> bool {
     let to_ads = ps.pm_flags & crate::cod4_viewmodel::PMF_SIGHT != 0;
-    overlay_zoom(&def.reticle, ps.pos_frac, to_ads).is_some()
+    overlay_zoom(def, ps.pos_frac, to_ads).is_some()
 }
 
 /// How far the sight's lerp `pos` has run past where a phase starts,
@@ -226,8 +226,9 @@ fn past_start(pos: f32, fracs: [f32; 2], to_ads: bool) -> (f32, f32) {
 /// The overlay's alpha (`CG_GetWeapReticleZoom`): the lerp past
 /// `1 - adsZoomInFrac` over that fraction, capped at 1; `None` at 0.01
 /// or under, at rest, or for a weapon with no overlay.
-fn overlay_zoom(r: &Reticle, pos: f32, to_ads: bool) -> Option<f32> {
-    let scoped = r.overlay.is_some() || r.overlay_reticle != 0;
+fn overlay_zoom(def: &WeaponHud, pos: f32, to_ads: bool) -> Option<f32> {
+    let r = &def.reticle;
+    let scoped = r.overlay.is_some() || def.def.overlay_reticle != 0;
     if !scoped || pos == 0.0 {
         return None;
     }
@@ -297,12 +298,13 @@ fn allowed(ps: &ViewPs, dv: &Dvars) -> bool {
 /// `CG_CalcReticleSpread` (0x430e40): how far out from the aim point the
 /// side pieces of grid size `side` sit at the sight's `scale`: the hip
 /// spread `aimSpreadScale` has reached between its two ends
-/// (`Reticle::spread`), projected at the drawn fov, at least
+/// (`bullet::hip_spread`), projected at the drawn fov, at least
 /// `reticleMinOfs`, less `hipReticleSidePos` of a piece.
 fn side_gap(v: &View, side: f32, scale: f32) -> f32 {
     let ps = v.ps;
     let r = &v.def.reticle;
-    let (lo, hi) = r.spread(
+    let (lo, hi) = vcod_cod4::bullet::hip_spread(
+        &v.def.def,
         ps.view_height_current,
         ps.perks,
         ps.spread_override_state,
@@ -363,7 +365,7 @@ impl Canvas<'_> {
     /// returning the alpha the crosshair keeps.
     fn sight_overlay(&mut self, v: &View) -> f32 {
         let r = &v.def.reticle;
-        let Some(zoom) = overlay_zoom(r, v.ps.pos_frac, v.to_ads) else {
+        let Some(zoom) = overlay_zoom(v.def, v.ps.pos_frac, v.to_ads) else {
             return 1.0;
         };
         if let Some(img) = self.overlay_image(r) {
@@ -408,8 +410,9 @@ impl Canvas<'_> {
         // `CG_DrawReticleCenter` (0x430d50); a cooking grenade's dot grows
         // a tenth of a unit for each 10 ms left in the fuse's second.
         if let Some(img) = self.image(r.center.as_deref()) {
-            let cooking =
-                v.def.weap_type == WEAPTYPE_GRENADE && r.cook_off_hold && ps.grenade_time_left != 0;
+            let cooking = v.def.def.weap_type == WEAPTYPE_GRENADE
+                && v.def.def.cook_off_hold
+                && ps.grenade_time_left != 0;
             let grow = if cooking {
                 (ps.grenade_time_left % 1000) as f32 / 100.0
             } else {
@@ -627,10 +630,16 @@ mod tests {
         r.min_ofs = 10;
         r.side_pos = 0.25;
         r.color_change = true;
-        r.hip_spread = [3.0, 2.5, 2.0, 10.0, 8.0, 6.0];
         r.ads_zoom_frac = [0.5, 0.3];
         r.ads_crosshair_frac = [0.4, 0.6];
         r.ads_aim_pitch = 1.5;
+        let w = &mut d.def;
+        w.hip_spread_stand_min = 3.0;
+        w.hip_spread_ducked_min = 2.5;
+        w.hip_spread_prone_min = 2.0;
+        w.hip_spread_stand_max = 10.0;
+        w.hip_spread_ducked_max = 8.0;
+        w.hip_spread_prone_max = 6.0;
         d
     }
 
@@ -767,12 +776,12 @@ mod tests {
         p.gun_dir = Some([0.8, -0.3, 0.2]);
         case("gun turned", draw(&p, &rifle(), &dynamic, wide, false));
         let mut nade = rifle();
-        nade.weap_type = WEAPTYPE_GRENADE;
-        nade.reticle.cook_off_hold = true;
+        nade.def.weap_type = WEAPTYPE_GRENADE;
+        nade.def.cook_off_hold = true;
         let mut p = ps();
         p.grenade_time_left = 2345;
         case("cooking", draw(&p, &nade, &dv, wide, false));
-        nade.reticle.cook_off_hold = false;
+        nade.def.cook_off_hold = false;
         case("not cooking", draw(&p, &nade, &dv, wide, false));
         for state in [1, 4, 5, 7, 12, 15] {
             let mut p = ps();
