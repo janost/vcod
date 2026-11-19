@@ -57,6 +57,9 @@ enum State {
 
 pub struct MapLoader {
     map: String,
+    /// The systeminfo (configstring 1) of the gamestate this load is for:
+    /// the pak lists the candidates came from.
+    systeminfo: String,
     candidates: Vec<(String, PathBuf)>,
     next: usize,
     downloaded: usize,
@@ -72,6 +75,7 @@ impl MapLoader {
     pub fn new(map: String, candidates: Vec<(String, PathBuf)>) -> Self {
         MapLoader {
             map,
+            systeminfo: String::new(),
             candidates,
             next: 0,
             downloaded: 0,
@@ -91,6 +95,21 @@ impl MapLoader {
 
     pub fn map(&self) -> &str {
         &self.map
+    }
+
+    /// The load is for the gamestate whose systeminfo is `systeminfo`.
+    pub fn for_systeminfo(self, systeminfo: String) -> Self {
+        MapLoader { systeminfo, ..self }
+    }
+
+    /// Whether a gamestate that just came, naming `map` under
+    /// `systeminfo`, needs a load of its own: it is for another level (the
+    /// server rotated while the paks downloaded) and no download is in
+    /// flight. Retail runs `CL_InitDownloads` on every gamestate
+    /// (cod11-front-end.md 17).
+    pub fn other_level(&self, map: &str, systeminfo: &str) -> bool {
+        !matches!(self.state, State::Downloading { .. } | State::Reopening)
+            && (map != self.map || systeminfo != self.systeminfo)
     }
 
     /// `events` are this frame's pumped net events, `progress` the net
@@ -397,5 +416,26 @@ mod tests {
             l.step(&[], None, true, t0 + Duration::from_secs(11)),
             Action::Failed(_)
         ));
+    }
+
+    /// The gamestate after `donedl` names the level it is for: the same
+    /// one goes on to the load, another map or pak list starts over, and a
+    /// gamestate during a download (a www reconnect's) waits for it.
+    #[test]
+    fn a_gamestate_for_another_level_starts_the_load_over() {
+        let t0 = Instant::now();
+        let mut l =
+            MapLoader::new("mp_x".into(), cands(1)).for_systeminfo("\\sv_serverid\\1".into());
+        assert!(matches!(
+            l.step(&[], None, false, t0),
+            Action::BeginDownload { .. }
+        ));
+        assert!(!l.other_level("mp_y", "\\sv_serverid\\2"));
+        let done = [NetEvent::DownloadComplete("main/zzz_0.pk3".into())];
+        assert_eq!(l.step(&done, None, false, t0), Action::Reopen);
+        assert_eq!(l.step(&[], None, true, t0), Action::FinishDownloads);
+        assert!(!l.other_level("mp_x", "\\sv_serverid\\1"));
+        assert!(l.other_level("mp_y", "\\sv_serverid\\2"));
+        assert!(l.other_level("mp_x", "\\sv_serverid\\2"));
     }
 }

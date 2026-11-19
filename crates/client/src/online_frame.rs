@@ -74,6 +74,37 @@ impl App {
         };
 
         let progress = net.download_progress();
+        // A gamestate for another level while a map loads (a rotation during
+        // the download) starts the load over on its map and paks.
+        if gamestate_ready
+            && let Phase::Loading { loader } = phase
+            && loader.other_level(
+                net::info_value_for_key(net.configstring(0), "mapname").unwrap_or(""),
+                net.configstring(1),
+            )
+        {
+            log::info!(
+                "a gamestate for another level: loading it instead of {}",
+                loader.map()
+            );
+            match start_loading(
+                net,
+                &mut self.hud,
+                &mut self.audio,
+                &mut self.fx,
+                &mut self.world,
+                r,
+                self.window.as_deref(),
+                &mut self.title,
+                &self.game_dir,
+                &download_dirs(&self.mod_dir, &self.fs_game),
+                allow_download(&self.shell),
+                self.fs.vanilla(),
+            ) {
+                Ok(next) => *phase = next,
+                Err(e) => *fatal = Some(e),
+            }
+        }
         let frame = match phase {
             Phase::Connecting => {
                 // The net client's own resend and gamestate

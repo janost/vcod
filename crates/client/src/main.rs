@@ -2722,13 +2722,14 @@ fn start_loading(
     // A demo sets no pak list (`CL_SystemInfoChanged` returns first while
     // one plays, CoDMP.exe 0x415eb0), so nothing is fetched, and a map
     // missing here fails as `CM_LoadMap` does (0x419c90).
+    let systeminfo = net.configstring(1).to_string();
     if net.is_demo() {
         return Ok(Phase::Loading {
-            loader: loading::MapLoader::without_downloads(map.clone(), couldnt_load(&map)),
+            loader: loading::MapLoader::without_downloads(map.clone(), couldnt_load(&map))
+                .for_systeminfo(systeminfo),
         });
     }
     // Same candidate order as the old blocking downloader; `MapLoader` caps it.
-    let systeminfo = net.configstring(1).to_string();
     let exists = |rel: &std::path::Path| game_dir.join(rel).exists();
     // The base dir's own base under it (`main/` under `uo/`), then the rest.
     let dir_paths: Vec<std::path::PathBuf> = dirs
@@ -2777,7 +2778,7 @@ fn start_loading(
             }
         );
         return Ok(Phase::Loading {
-            loader: loading::MapLoader::without_downloads(map, why),
+            loader: loading::MapLoader::without_downloads(map, why).for_systeminfo(systeminfo),
         });
     }
     let candidates = if allow_download {
@@ -2799,7 +2800,7 @@ fn start_loading(
         Vec::new()
     };
     Ok(Phase::Loading {
-        loader: loading::MapLoader::new(map, candidates),
+        loader: loading::MapLoader::new(map, candidates).for_systeminfo(systeminfo),
     })
 }
 
