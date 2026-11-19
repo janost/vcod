@@ -11,6 +11,7 @@
 //! `builtins::cod2`; `player_die`'s playerstate half runs here off the
 //! `SimOp::Damaged` the builtin queues.
 
+use crate::game::combat::Parties;
 use std::collections::{HashMap, VecDeque};
 use vcod_common::asset_source::{AssetSource, RawFile};
 
@@ -1461,8 +1462,7 @@ impl Cod2Level {
             return;
         };
         self.g_damage(
-            victim,
-            attacker,
+            Parties { victim, attacker },
             None,
             weapon,
             hit,
@@ -1564,8 +1564,7 @@ impl Cod2Level {
     #[expect(clippy::too_many_arguments)]
     pub fn g_damage(
         &mut self,
-        victim: usize,
-        attacker: usize,
+        Parties { victim, attacker }: Parties,
         inflictor: Option<EntId>,
         weapon: u8,
         point: Vec3,
@@ -1718,8 +1717,10 @@ impl Cod2Level {
         if let Some(victim) = tr.client {
             let damage = (self.combat.rand.rand() % 5) as i32 + damage;
             self.g_damage(
-                victim,
-                slot,
+                Parties {
+                    victim,
+                    attacker: slot,
+                },
                 None,
                 weapon,
                 hit,
@@ -2182,8 +2183,10 @@ impl Cod2Level {
             dir.z = 1.0;
         }
         self.g_damage(
-            victim,
-            m.owner.unwrap_or(1023),
+            Parties {
+                victim,
+                attacker: m.owner.unwrap_or(1023),
+            },
             Some(m.id),
             m.weapon,
             at,
@@ -2377,8 +2380,10 @@ impl Cod2Level {
                 continue;
             };
             self.g_damage(
-                v,
-                attacker,
+                Parties {
+                    victim: v,
+                    attacker,
+                },
                 Some(inflictor),
                 weapon,
                 at,

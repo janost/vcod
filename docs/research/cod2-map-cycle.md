@@ -198,7 +198,7 @@ Retail rules section 2 exposed, and vcod's match for each:
   the squash. vcod squashes `d` by index the same way.
 - `setTeamScore` sends `H`/`G` through `SV_GameSendServerCommand(-1, ..)`
   (`GScr_SetTeamScore` 0x8115dda), the engine's clients, not the level's.
-  VERIFIED. vcod queues it to `ALL_CLIENTS`, which the engine fans out, so
+  VERIFIED. vcod queues it to `Recipient::All`, which the engine fans out, so
   the restart's `resetScores` reaches the clients the restarted level has
   not yet connected.
 - Configstring 0 and 1 go out at the head of `SV_Frame` (0x80969b0, the

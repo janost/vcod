@@ -699,7 +699,7 @@ impl Cod4Level {
         c4.table = table;
         c4.items.retain(|i| i.id != id);
         c4.free_next.push(id);
-        self.rt.host.client_commands.push((slot, format!("a {w}")));
+        self.rt.host.command_to(slot, format!("a {w}"));
         Some(dropped)
     }
 

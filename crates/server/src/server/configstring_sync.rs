@@ -1,6 +1,7 @@
 //! Configstring changes, diffed and sent.
 
 use super::*;
+use crate::game::commands::Recipient;
 
 impl Server {
     /// `SV_SetConfigstring`'s per-client half, the `d <index> <text>` server
@@ -92,7 +93,7 @@ impl Server {
     pub(super) fn send_frame_writes(
         &mut self,
         writes: Vec<(u64, usize, String)>,
-        commands: Vec<(u64, usize, String)>,
+        commands: Vec<(u64, Recipient, String)>,
     ) {
         let first = commands.first().map_or(u64::MAX, |c| c.0);
         let split = writes.partition_point(|w| w.0 < first);
@@ -127,7 +128,7 @@ impl Server {
                 self.send_game_write(*i, v);
             }
             crate::tick_trace::step!("SV_GameSendServerCommand slot {slot}");
-            self.send_server_command(slot, &cmd);
+            self.send_to(slot, &cmd);
         }
         for (_, i, v) in late {
             self.send_game_write(*i, v);

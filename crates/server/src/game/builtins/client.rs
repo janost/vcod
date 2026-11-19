@@ -17,6 +17,7 @@ use crate::configstrings::{CsRange, script_menu_index};
 use crate::game::builtins::entity::entity_receiver;
 use crate::game::host::{GameHost, SimOp, WeaponOp};
 use crate::game::say::SayMode;
+use crate::game::slot::ClientSlot;
 use vcod_common::pmove;
 use vcod_gsc::{Cx, ErrorKind, Host, Target, Value};
 
@@ -175,7 +176,7 @@ pub fn disable_weapon(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     host.client_sim_ops
         .push((slot, SimOp::WeaponDisabled(true)));
     Ok(Value::Undefined)
@@ -188,7 +189,7 @@ pub fn enable_weapon(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     host.client_sim_ops
         .push((slot, SimOp::WeaponDisabled(false)));
     Ok(Value::Undefined)
@@ -204,7 +205,7 @@ pub fn allow_spectate_team(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let bit = match args.first() {
         Some(Value::String(s)) => match cx.resolve(*s) {
             "none" => 1,
@@ -253,7 +254,7 @@ fn auto_capture(
     if super::cvar::atoi(host.cvars.get(cvar)) == 0 {
         return Ok(Value::Undefined);
     }
-    host.client_commands.push((slot, command.to_string()));
+    host.client_commands.push(slot, command.to_string());
     Ok(Value::Int(1))
 }
 
@@ -302,7 +303,7 @@ pub fn use_button_pressed(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let held = host.clients[slot].buttons & vcod_common::net::msg::BUTTON_USE != 0;
     Ok(Value::Int(i32::from(held)))
 }
@@ -317,7 +318,7 @@ pub fn set_player_origin(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(&Value::Vector([x, y, z])) = args.first() else {
         return Err(ErrorKind::BadType("setOrigin takes a vector"));
     };
@@ -349,7 +350,7 @@ pub fn set_player_angles(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(&Value::Vector(angles)) = args.first() else {
         return Err(ErrorKind::BadType("setPlayerAngles takes a vector"));
     };
@@ -372,7 +373,7 @@ pub fn is_on_ground(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     Ok(Value::Int(host.clients[slot].on_ground as i32))
 }
 
@@ -385,7 +386,7 @@ pub fn is_looking_at(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let looking = match args.first() {
         Some(Value::Entity(id)) => host.clients[slot].lookat == Some(*id),
         _ => false,
@@ -405,7 +406,7 @@ pub fn get_current_weapon(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let index = host.clients[slot].weapons.current as usize;
     let name = crate::items::item_name(host.defs, index).unwrap_or("none");
     Ok(Value::String(cx.intern_exact(name)))
@@ -429,7 +430,7 @@ pub fn clone_player(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(mut state) = host.clients[slot].entity_state.clone() else {
         // A client with no sim: connected, never entered the world.
         return Ok(Value::Undefined);
@@ -474,7 +475,7 @@ pub fn drop_item(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(Value::String(name)) = args.first() else {
         return Err(ErrorKind::BadType("dropItem takes an item name"));
     };
@@ -535,7 +536,7 @@ fn script_say(
     args: &[Value],
     mode: SayMode,
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let mut text = format!("\u{14}{}", super::message::construct(host, cx, args));
     // The 0x3ff-byte buffer behind the leading byte.
     while text.len() > 0x3ff {
@@ -554,7 +555,7 @@ pub fn ping_player(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let until = host.level_time_ms + 3000;
     if let Some(c) = host.clients.get_mut(slot) {
         c.ping_until = until;
@@ -593,7 +594,7 @@ pub fn close_menu(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
-    host.client_commands.push((slot, "u".to_string()));
+    host.client_commands.push(slot, "u".to_string());
     Ok(Value::Undefined)
 }
 
@@ -626,12 +627,12 @@ fn model_index_base(host: &GameHost) -> usize {
 /// entity with a `gclient_t`, which is retail's own `entity %i is not a
 /// player` check (0x44703, 0x45413). The client's slot is its entity number,
 /// and that is what a reliable command is addressed to.
-pub(crate) fn client_receiver(host: &GameHost, recv: Option<Target>) -> Result<usize, ErrorKind> {
-    let id = entity_receiver(recv)?;
-    match host.ents.get(id) {
-        Some(e) if e.client.is_some() => Ok(id.0 as usize),
-        _ => Err(ErrorKind::BadType("that entity is not a player")),
-    }
+pub(crate) fn client_receiver(
+    host: &GameHost,
+    recv: Option<Target>,
+) -> Result<ClientSlot, ErrorKind> {
+    ClientSlot::of_entity(&host.ents, entity_receiver(recv)?)
+        .ok_or(ErrorKind::BadType("that entity is not a player"))
 }
 
 /// `self setClientCvar(name, value [, args...])`: the reliable command
@@ -662,7 +663,7 @@ pub fn set_client_cvar(
     }
     .replace('"', "'");
     host.client_commands
-        .push((slot, format!("v {name} \"{value}\"")));
+        .push(slot, format!("v {name} \"{value}\""));
     Ok(Value::Undefined)
 }
 
@@ -705,8 +706,7 @@ fn send_menu(
     let menu = cx.resolve(*menu).to_string();
     let index = script_menu_index(&host.configstrings, host.allocators.layout(), &menu)
         .ok_or(ErrorKind::BadType("that menu was not precached"))?;
-    host.client_commands
-        .push((slot, format!("t {index}{tail}")));
+    host.client_commands.push(slot, format!("t {index}{tail}"));
     Ok(Value::Int(1))
 }
 
@@ -779,7 +779,7 @@ pub fn give_weapon(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let (name, index) = weapon_argument(host, cx, args)?;
     register_given(host, slot, &name, index)?;
     let weapons = host.weapons.clone();
@@ -820,7 +820,7 @@ pub fn give_max_ammo(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let (_, index) = weapon_argument(host, cx, args)?;
     let weapons = host.weapons.clone();
     if host.profile.game == vcod_common::game::Game::Cod2 {
@@ -876,7 +876,7 @@ pub fn set_spawn_weapon(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let (_, index) = weapon_argument(host, cx, args)?;
     let w = &mut host.clients[slot].weapons;
     if w.holds(index) {
@@ -897,12 +897,13 @@ pub fn switch_to_weapon(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let to = client_receiver(host, recv)?;
+    let slot = to.index();
     let (_, index) = weapon_argument(host, cx, args)?;
     if !host.clients[slot].weapons.holds(index) {
         return Ok(Value::Int(0));
     }
-    host.client_commands.push((slot, format!("a {index}")));
+    host.client_commands.push(to, format!("a {index}"));
     Ok(Value::Int(1))
 }
 
@@ -918,7 +919,7 @@ pub fn take_weapon(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(Value::String(name)) = args.first() else {
         return Err(ErrorKind::BadType("takeWeapon takes a weapon name"));
     };
@@ -956,7 +957,7 @@ pub fn take_all_weapons(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     host.clients[slot].weapons = crate::weapons::PlayerWeapons::default();
     host.weapon_op(slot, WeaponOp::TakeAll);
     Ok(Value::Undefined)
@@ -972,7 +973,7 @@ pub fn get_weapon_slot_weapon(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let client = client_receiver(host, recv)?;
+    let client = client_receiver(host, recv)?.index();
     let slot = slot_argument(cx, args)?;
     let index = host.clients[client].weapons.slots[slot] as usize;
     let name = crate::items::item_name(host.defs, index).unwrap_or("none");
@@ -998,7 +999,7 @@ pub fn set_weapon_slot_weapon(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let client = client_receiver(host, recv)?;
+    let client = client_receiver(host, recv)?.index();
     let slot = slot_argument(cx, args)?;
     let rest = args.get(1..).unwrap_or_default();
     let index = match rest.first() {
@@ -1162,7 +1163,7 @@ fn slot_and_rounds(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<(usize, usize, i32), ErrorKind> {
-    let client = client_receiver(host, recv)?;
+    let client = client_receiver(host, recv)?.index();
     let slot = slot_argument(cx, args)?;
     // Clamped as the int it is (0x444d7, 0x444ed), not cut to 16 bits first.
     let rounds = match args.get(1) {
@@ -1243,7 +1244,7 @@ pub fn set_view_model(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(Value::String(name)) = args.first() else {
         return Err(ErrorKind::BadType("setViewmodel takes a model name"));
     };
@@ -1276,7 +1277,7 @@ pub fn shell_shock(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let [Value::String(a), duration] = args else {
         return Err(ErrorKind::Custom(
             "USAGE: <player> shellshock(<shellshockname>, <duration>)\n".into(),
@@ -1319,7 +1320,7 @@ pub fn stop_shell_shock(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     if !args.is_empty() {
         return Err(ErrorKind::Custom(
             "USAGE: <player> stopshellshock()\n".into(),
@@ -1339,7 +1340,7 @@ pub fn get_view_model(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let name = match host.clients[slot].viewmodel {
         0 => "",
         i => host.configstrings[model_index_base(host) + i as usize].as_str(),
@@ -1351,6 +1352,7 @@ pub fn get_view_model(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::commands::one;
 
     /// The slot setters clamp the script's int as an int: 40000 is the
     /// cap, not a 16-bit -25536 floored to 0 (BUG-113).
@@ -1689,13 +1691,16 @@ mod tests {
             assert_eq!(
                 host.client_commands,
                 vec![
-                    (3, "v g_scriptMainMenu \"team_russiangerman\"".to_string()),
-                    (3, "v scr_showweapontab \"0\"".to_string()),
                     (
-                        3,
+                        one(3),
+                        "v g_scriptMainMenu \"team_russiangerman\"".to_string()
+                    ),
+                    (one(3), "v scr_showweapontab \"0\"".to_string()),
+                    (
+                        one(3),
                         "v cg_objectiveText \"DM_KILL_OTHER_PLAYERS\u{15}\"".to_string()
                     ),
-                    (3, "t 1".to_string()),
+                    (one(3), "t 1".to_string()),
                 ]
             );
         });
@@ -1714,7 +1719,7 @@ mod tests {
             let menu = Value::String(cx.intern_exact("weapon_russian"));
             let r = open_menu_no_mouse(&mut host, cx, Some(Target::Entity(e)), &[menu]);
             assert!(matches!(r, Ok(Value::Int(1))));
-            assert_eq!(host.client_commands, vec![(2, "t 0 1".to_string())]);
+            assert_eq!(host.client_commands, vec![(one(2), "t 0 1".to_string())]);
         });
     }
 
@@ -1744,7 +1749,7 @@ mod tests {
             assert_eq!(
                 host.client_commands,
                 vec![(
-                    0,
+                    one(0),
                     "v cg_objectiveText \"MPSCRIPT_WINS\u{15}vcod^7\"".to_string()
                 )]
             );
@@ -1766,7 +1771,7 @@ mod tests {
             set_client_cvar(&mut host, cx, Some(Target::Entity(e)), &[name, value]).unwrap();
             assert_eq!(
                 host.client_commands,
-                vec![(0, "v cg_objectiveText \"say 'hi' now\"".to_string())]
+                vec![(one(0), "v cg_objectiveText \"say 'hi' now\"".to_string())]
             );
         });
     }
@@ -1822,7 +1827,7 @@ mod tests {
         vm.with_cx(|cx| {
             let c = host.ents.spawn_client(cx, 3, None).unwrap();
             close_menu(&mut host, cx, Some(Target::Entity(c)), &[]).unwrap();
-            assert_eq!(host.client_commands, vec![(3, "u".to_string())]);
+            assert_eq!(host.client_commands, vec![(one(3), "u".to_string())]);
             let prop = host.ents.spawn(cx).unwrap();
             assert!(close_menu(&mut host, cx, Some(Target::Entity(prop)), &[]).is_err());
         });
@@ -2343,7 +2348,7 @@ mod tests {
                 Ok(Value::Int(0))
             ));
         });
-        assert_eq!(host.client_commands, vec![(0, format!("a {colt}"))]);
+        assert_eq!(host.client_commands, vec![(one(0), format!("a {colt}"))]);
         assert!(host.client_weapon_ops.is_empty());
         assert_eq!(
             host.clients[0].weapons.current, carbine as u8,
@@ -2585,7 +2590,10 @@ mod tests {
             );
             auto_demo_stop(&mut host, cx, recv, &[]).unwrap();
             auto_screenshot(&mut host, cx, recv, &[]).unwrap();
-            assert_eq!(host.client_commands, [(2, "C".into()), (2, "D".into())]);
+            assert_eq!(
+                host.client_commands,
+                [(one(2), "C".into()), (one(2), "D".into())]
+            );
             disable_weapon(&mut host, cx, recv, &[]).unwrap();
             enable_weapon(&mut host, cx, recv, &[]).unwrap();
             assert!(matches!(

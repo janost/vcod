@@ -716,7 +716,7 @@ impl Server {
         };
         mirror_roster(&self.core.clients, rt);
         for (to, cmd) in rt.say(slot, target, mode, text) {
-            self.send_server_command(to, &cmd);
+            self.send_to(to, &cmd);
         }
     }
 }

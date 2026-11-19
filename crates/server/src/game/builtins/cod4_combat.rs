@@ -6,6 +6,7 @@
 //! lands on what the scripts read at once. `cod4_combat_ab` and
 //! `cod4::capture_ab` check it against retail captures.
 
+use crate::game::slot::ClientSlot;
 use vcod_cod4::pmove::anim::EventAnim;
 use vcod_gsc::{Cx, EntId, ErrorKind, Target, Value};
 
@@ -40,7 +41,7 @@ fn get_player_angles(
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     Ok(Value::Vector(
         host.cod4()
             .view_angles
@@ -172,8 +173,10 @@ impl Hit {
             _ => None,
         };
         let attacker = entity_or_world(&args[1]);
-        let is_player = matches!(args[1], Value::Entity(a)
-            if host.ents.get(a).is_some_and(|e| e.client.is_some()));
+        let attacker_slot = match args[1] {
+            Value::Entity(a) => ClientSlot::of_entity(&host.ents, a).map(ClientSlot::index),
+            _ => None,
+        };
         let weapon_num = string(cx, &args[5])
             .and_then(|w| host.cod4().table.index(&w))
             .unwrap_or(0);
@@ -184,7 +187,7 @@ impl Hit {
         Ok(Hit {
             inflictor: entity_or_world(&args[0]),
             attacker,
-            attacker_slot: is_player.then_some(attacker.0 as usize),
+            attacker_slot,
             damage,
             dflags: number(&args[3])?,
             means: args[4],
@@ -257,7 +260,7 @@ fn finish_player_damage(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     if args.len() < 9 {
         return Err(ErrorKind::BadType("finishPlayerDamage takes ten arguments"));
     }
@@ -475,7 +478,7 @@ fn suicide(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     if host
         .clients
         .get(slot)
@@ -678,7 +681,7 @@ fn clone_player(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let p = &crate::game::cod4::COD4_HOST_PROTO;
     // The clone's think, `BodyEnd`, takes the fresh bit out
     // `deathAnimDuration` after its birth (cod4-combat.md 5).
@@ -762,7 +765,7 @@ fn drop_item(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(weapon) = weapon_arg(host, cx, args.first())? else {
         return Ok(Value::Undefined);
     };
@@ -1001,7 +1004,7 @@ fn any_ammo_for_weapon_modes(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(weapon) = weapon_arg(host, cx, args.first())? else {
         return Ok(Value::Int(0));
     };
@@ -1029,7 +1032,7 @@ fn is_on_ladder(
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let pm = host.cod4().pm_flags.get(slot).copied().unwrap_or(0);
     Ok(Value::Int(i32::from(
         pm & vcod_cod4::pmove::pmf::LADDER != 0,
@@ -1044,7 +1047,7 @@ fn is_mantling(
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let pm = host.cod4().pm_flags.get(slot).copied().unwrap_or(0);
     Ok(Value::Int(i32::from(
         pm & vcod_cod4::pmove::pmf::MANTLE != 0,

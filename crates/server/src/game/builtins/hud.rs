@@ -15,6 +15,7 @@ use crate::game::builtins::entity::entity_receiver;
 use crate::game::entity::{FIRST_HUD_ELEM, HudState};
 use crate::game::host::GameHost;
 use crate::game::script::{TEAM_ALLIES, TEAM_AXIS, TEAM_SPECTATOR};
+use crate::game::slot::ClientSlot;
 use vcod_gsc::{Cx, EntId, ErrorKind, Target, Value};
 
 use super::Builtin;
@@ -95,10 +96,10 @@ pub fn new_client_hud_elem(
     let Some(Value::Entity(id)) = args.first() else {
         return Err(ErrorKind::BadType("newClientHudElem takes a player"));
     };
-    if !host.ents.get(*id).is_some_and(|e| e.client.is_some()) {
+    let Some(slot) = ClientSlot::of_entity(&host.ents, *id) else {
         return Err(ErrorKind::BadType("not a client"));
-    }
-    let owner = id.0;
+    };
+    let owner = slot.index() as u32;
     let elem = host
         .ents
         .spawn_hud_elem_for(cx, host.profile.game == vcod_common::game::Game::Cod4)?;

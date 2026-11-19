@@ -11,6 +11,7 @@ use crate::game::builtins::set::BuiltinSet;
 use crate::game::entity::{FIRST_HUD_ELEM, ObjectTable, ThinkFn};
 use crate::game::fields::{self, FieldType, Route};
 use crate::game::profile::WeaponNumbering;
+use crate::game::slot::ClientSlot;
 use crate::server::MAX_CLIENTS;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -2009,15 +2010,23 @@ impl GameHost {
     /// Every client slot that holds a client entity, which is every client
     /// from its `ClientConnect` to its disconnect. What a broadcast reliable
     /// command (`iPrintLn`) goes to.
-    pub fn client_slots(&self) -> Vec<usize> {
-        (0..MAX_CLIENTS)
-            .filter(|&s| {
-                self.ents
-                    .handle(s as u32)
-                    .and_then(|id| self.ents.get(id))
-                    .is_some_and(|e| e.client.is_some())
-            })
+    pub fn client_slots(&self) -> Vec<ClientSlot> {
+        (0..MAX_CLIENTS as u32)
+            .filter_map(|s| ClientSlot::of_entity(&self.ents, self.ents.handle(s)?))
             .collect()
+    }
+
+    /// `slot` as a [`ClientSlot`] if it is below the engine's client count.
+    pub fn client_slot(&self, slot: usize) -> Option<ClientSlot> {
+        ClientSlot::new(slot, self.engine_slots.min(self.clients.len()))
+    }
+
+    /// Queues `text` for the client in `slot`, for code that holds a bare
+    /// slot; one past the client count is dropped.
+    pub fn command_to(&mut self, slot: usize, text: String) {
+        if let Some(to) = self.client_slot(slot) {
+            self.client_commands.push(to, text);
+        }
     }
 
     /// `xmodel_collision`'s entry for `name` (the `.model` value, `xmodel/`

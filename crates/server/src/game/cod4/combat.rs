@@ -13,6 +13,7 @@
 //!
 //! `cod4_combat_ab` compares the result with the kill capture.
 
+use crate::game::combat::Parties;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
@@ -750,8 +751,7 @@ impl Cod4Level {
     #[expect(clippy::too_many_arguments)]
     pub(super) fn damage_client(
         &mut self,
-        attacker: usize,
-        victim: usize,
+        who: Parties,
         d: &WeaponDef,
         damage: i32,
         dflags: i32,
@@ -766,12 +766,10 @@ impl Cod4Level {
             "MOD_PISTOL_BULLET"
         };
         let dflags = dflags | if d.armor_piercing { 2 } else { 0 };
-        self.combat.hits.push((attacker, victim, hitloc));
+        self.combat.hits.push((who.attacker, who.victim, hitloc));
         let offset = self.level_time() - game_time;
         self.rt.host.cod4_mut().callback.time_offset = offset;
-        self.damage_from(
-            attacker, victim, None, d, damage, dflags, mod_, dir, point, hitloc,
-        );
+        self.damage_from(who, None, d, damage, dflags, mod_, dir, point, hitloc);
         self.rt.host.cod4_mut().callback = Default::default();
     }
 
@@ -782,8 +780,7 @@ impl Cod4Level {
     #[expect(clippy::too_many_arguments)]
     pub(super) fn damage_from(
         &mut self,
-        attacker: usize,
-        victim: usize,
+        Parties { victim, attacker }: Parties,
         inflictor: Option<EntId>,
         d: &WeaponDef,
         damage: i32,
@@ -891,8 +888,10 @@ impl Cod4Level {
         let damage = d.melee_damage + self.rt.host.cod4_mut().rand() % 5;
         self.rt.host.cod4_mut().callback.time_offset = self.level_time() - game_time;
         self.damage_from(
-            slot,
-            victim,
+            Parties {
+                victim,
+                attacker: slot,
+            },
             None,
             &d,
             damage,
@@ -994,8 +993,10 @@ impl Cod4Level {
             _ => (slot, "MOD_SUICIDE"),
         };
         self.damage_from(
-            attacker,
-            slot,
+            Parties {
+                victim: slot,
+                attacker,
+            },
             None,
             &d,
             health.max(1) + 100_000,

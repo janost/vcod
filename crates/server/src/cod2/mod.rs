@@ -41,6 +41,7 @@ mod voice;
 
 pub use cycle::{Rotation, rotate};
 
+use crate::game::commands::Recipient;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::rc::Rc;
@@ -1069,7 +1070,11 @@ impl Cod2Server {
                     .map_or("", |(_, r)| r);
                 if let Some(line) = crate::game::say::concat_args(rest) {
                     for (to, line) in level.rt.say(slot, None, mode, &line) {
-                        sends.push((Some(to), line));
+                        let to = match to {
+                            Recipient::All => None,
+                            Recipient::One(s) => Some(s.index()),
+                        };
+                        sends.push((to, line));
                     }
                 }
             }

@@ -13,6 +13,7 @@ use super::client::client_receiver;
 use super::entity::entity_receiver;
 use crate::game::cod4::Fx4;
 use crate::game::host::GameHost;
+use crate::game::slot::ClientSlot;
 use crate::game::temp_entity::{Scope, TempEntity};
 
 pub const NAMES: &[(&str, Builtin)] = &[
@@ -404,7 +405,7 @@ fn get_velocity(
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     Ok(Value::Vector(host.cod4().velocity[slot]))
 }
 
@@ -416,7 +417,7 @@ fn get_ammo_count(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(w) = super::cod4_client::weapon_arg(host, cx, a.first())? else {
         return Ok(Value::Int(0));
     };
@@ -541,9 +542,8 @@ fn cone_trace(
     let id = entity_receiver(recv)?;
     let from = vec(a.first(), "takes an origin")?;
     let (origin, _) = place(host, cx, id);
-    let is_client = host.ents.get(id).is_some_and(|e| e.client.is_some());
-    let points: Vec<Vec3> = if is_client {
-        let eye = Vec3::from(host.clients[id.0 as usize].aim.0);
+    let points: Vec<Vec3> = if let Some(slot) = ClientSlot::of_entity(&host.ents, id) {
+        let eye = Vec3::from(host.clients[slot.index()].aim.0);
         let half = (eye.z - origin.z) * 0.5;
         let mut fwd = from - origin;
         fwd.z = 0.0;
@@ -607,9 +607,9 @@ fn detonate(
     }
     let parent = match a.first() {
         None => None,
-        Some(Value::Entity(p)) => match host.ents.get(*p) {
-            Some(e) if e.client.is_some() => Some(Some(p.0 as usize)),
-            _ => return Err(ErrorKind::Custom("Entity is not a player".into())),
+        Some(Value::Entity(p)) => match ClientSlot::of_entity(&host.ents, *p) {
+            Some(slot) => Some(Some(slot.index())),
+            None => return Err(ErrorKind::Custom("Entity is not a player".into())),
         },
         Some(_) => Some(None),
     };
@@ -658,9 +658,9 @@ fn play_sound_to_team(
         }
     };
     let ignore = match a.get(2) {
-        Some(Value::Entity(p)) => match host.ents.get(*p) {
-            Some(e) if e.client.is_some() => Some(p.0 as usize),
-            _ => {
+        Some(Value::Entity(p)) => match ClientSlot::of_entity(&host.ents, *p) {
+            Some(slot) => Some(slot.index()),
+            None => {
                 return Err(ErrorKind::Custom(format!("entity {} is not a player", p.0)));
             }
         },
@@ -670,7 +670,7 @@ fn play_sound_to_team(
     let (origin, _) = place(host, cx, id);
     let mut mask = 0u64;
     let sessionteam = cx.intern_folded("sessionteam");
-    for slot in host.client_slots() {
+    for slot in host.client_slots().into_iter().map(ClientSlot::index) {
         let Some(e) = host.ents.handle(slot as u32) else {
             continue;
         };
@@ -1145,7 +1145,7 @@ fn set_depth_of_field(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let mut v = [0.0f32; 6];
     for (i, x) in v.iter_mut().enumerate() {
         *x = num(a.get(i), "setDepthOfField takes six numbers")?;
@@ -1156,7 +1156,7 @@ fn set_depth_of_field(
 
 /// `(buttons | buttonsSinceLastFrame) & bit` of the client's cmds.
 fn button(host: &GameHost, recv: Option<Target>, bit: u32) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let c = &host.cod4();
     Ok(Value::Int(i32::from(
         (c.buttons[slot] | c.buttons_since[slot]) & bit != 0,
@@ -1232,7 +1232,7 @@ fn begin_location_selection(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let name = string(cx, a.first(), "beginLocationSelection takes a material")?;
     let base = crate::game::cod4::CS_LOC_SEL_MTLS;
     let index = (base..base + 3)
@@ -1263,7 +1263,7 @@ fn end_location_selection(
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     host.cod4_mut().clients[slot].location_selection = Some(0);
     Ok(Value::Undefined)
 }
@@ -1276,7 +1276,8 @@ fn update_dm_scores(
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let to = client_receiver(host, recv)?;
+    let slot = to.index();
     let score_of = |host: &mut GameHost, cx: &mut Cx, s: usize| {
         let f = cx.intern_folded("score");
         match host
@@ -1289,11 +1290,11 @@ fn update_dm_scores(
         }
     };
     let mine = score_of(host, cx, slot);
-    host.client_commands
-        .push((slot, format!("I {slot} {mine}")));
+    host.client_commands.push(to, format!("I {slot} {mine}"));
     let best = host
         .client_slots()
         .into_iter()
+        .map(ClientSlot::index)
         .filter(|&s| s != slot)
         .map(|s| (score_of(host, cx, s), s))
         .collect::<Vec<_>>();
@@ -1301,7 +1302,7 @@ fn update_dm_scores(
         .iter()
         .max_by_key(|&&(sc, s)| (sc, std::cmp::Reverse(s)))
     {
-        host.client_commands.push((slot, format!("I {s} {score}")));
+        host.client_commands.push(to, format!("I {s} {score}"));
     }
     Ok(Value::Undefined)
 }

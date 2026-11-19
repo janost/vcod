@@ -6,6 +6,7 @@
 use crate::configstrings::CsRange;
 use crate::game::entity::{FIRST_HUD_ELEM, ThinkFn};
 use crate::game::host::{GameHost, LinkOp, SpawnMode, SpawnRequest};
+use crate::game::slot::ClientSlot;
 use crate::game::trigger::{PLAYER_MAXS, PLAYER_MINS};
 use crate::server::MAX_CLIENTS;
 use glam::Vec3;
@@ -287,10 +288,9 @@ fn client_spawn(
     id: EntId,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = match host.ents.get(id) {
-        Some(e) if e.client.is_some() => id.0 as usize,
-        _ => return Err(ErrorKind::BadType("that entity is not a player")),
-    };
+    let slot = ClientSlot::of_entity(&host.ents, id)
+        .ok_or(ErrorKind::BadType("that entity is not a player"))?
+        .index();
     let [Value::Vector(origin), Value::Vector(angles)] = args else {
         return Err(ErrorKind::BadType("spawn takes an origin and angles"));
     };
@@ -926,13 +926,13 @@ pub fn is_alive(
         return Ok(Value::Int(0));
     };
     let id = *id;
-    let alive = match host.ents.get(id) {
-        Some(e) if e.client.is_some() => host.clients[id.0 as usize].vitals.health > 0,
-        Some(_) => {
+    let alive = match (host.ents.get(id), ClientSlot::of_entity(&host.ents, id)) {
+        (_, Some(slot)) => host.clients[slot.index()].vitals.health > 0,
+        (Some(_), None) => {
             let health = cx.intern_folded("health");
             matches!(host.get_field(cx, id, health), Value::Int(n) if n > 0)
         }
-        None => false,
+        (None, None) => false,
     };
     Ok(Value::Int(alive as i32))
 }
@@ -992,8 +992,8 @@ pub fn link_to(
     let Some(&Value::Entity(parent)) = args.first() else {
         return Err(ErrorKind::BadType("linkTo needs an entity to link to"));
     };
-    if host.ents.get(child).is_some_and(|e| e.client.is_some()) {
-        return link_client(host, cx, child, parent);
+    if let Some(slot) = ClientSlot::of_entity(&host.ents, child) {
+        return link_client(host, cx, slot, child, parent);
     }
     let classname = super::super::link::classname(host, cx, child);
     if !super::super::link::has_link_bit(host, child, &classname) {
@@ -1023,10 +1023,10 @@ pub fn link_to(
 fn link_client(
     host: &mut GameHost,
     cx: &mut Cx,
+    slot: ClientSlot,
     child: EntId,
     parent: EntId,
 ) -> Result<Value, ErrorKind> {
-    let slot = child.0 as usize;
     let origin = cx.intern_folded("origin");
     let at = |host: &mut GameHost, cx: &mut Cx, id| match host.get_field(cx, id, origin) {
         Value::Vector(v) => v,
@@ -1045,7 +1045,7 @@ fn link_client(
     let axis = vcod_common::x87::angles_to_axis(parent_angles.into());
     let offset = [d.dot(axis[0]), d.dot(axis[1]), d.dot(axis[2])];
     host.client_link_ops
-        .push((slot, LinkOp::Link { parent, offset }));
+        .push((slot.index(), LinkOp::Link { parent, offset }));
     Ok(Value::Undefined)
 }
 
@@ -1059,8 +1059,8 @@ pub fn unlink(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = entity_receiver(recv)?;
-    if host.ents.get(id).is_some_and(|e| e.client.is_some()) {
-        host.client_link_ops.push((id.0 as usize, LinkOp::Unlink));
+    if let Some(slot) = ClientSlot::of_entity(&host.ents, id) {
+        host.client_link_ops.push((slot.index(), LinkOp::Unlink));
     } else {
         super::super::link::unlink(host, id);
     }

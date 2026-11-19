@@ -57,6 +57,7 @@ pub mod profile;
 pub mod say;
 pub mod scoreboard;
 pub mod script;
+pub mod slot;
 pub mod spawn;
 pub mod stuck;
 pub mod teams;

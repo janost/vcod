@@ -5,6 +5,7 @@
 //! docs/research/cod11-votes.md.
 
 use crate::game::host::GameHost;
+use crate::game::slot::ClientSlot;
 use vcod_common::asset_source::RawFile;
 use vcod_common::text::atoi;
 use vcod_gsc::Cx;
@@ -636,13 +637,17 @@ impl GameHost {
     /// victim may answer `vote` about `attacker` for 20.5 s, and is told
     /// with `m <attacker>`. Nothing when the two are one. Retail's `m -4`
     /// for a listen server's own client never goes: vcod has none.
-    pub fn allow_complaint(&mut self, victim: usize, attacker: usize) {
+    pub fn allow_complaint(&mut self, victim: ClientSlot, attacker: ClientSlot) {
         if victim == attacker {
             return;
         }
-        self.client_commands.push((victim, format!("m {attacker}")));
-        if let Some(c) = self.clients.get_mut(victim).map(|c| &mut c.complaint) {
-            c.against = attacker as i32;
+        self.client_commands.push(victim, format!("m {attacker}"));
+        if let Some(c) = self
+            .clients
+            .get_mut(victim.index())
+            .map(|c| &mut c.complaint)
+        {
+            c.against = attacker.index() as i32;
             c.end_ms = self.level_time_ms.wrapping_add(COMPLAINT_MS);
         }
     }
@@ -667,7 +672,7 @@ impl GameHost {
             let c = &mut self.clients[slot].complaint;
             c.against = -1;
             c.end_ms = 0;
-            self.client_commands.push((slot, "m -2".into()));
+            self.command_to(slot, "m -2".into());
         }
     }
 
@@ -829,8 +834,8 @@ impl GameHost {
         }
         self.vote.end_ms = 0;
         let lines = if self.profile.votes.queues_lines {
-            let all = crate::game::commands::ALL_CLIENTS;
-            self.client_commands.push((all, line.to_string()));
+            let all = crate::game::commands::Recipient::All;
+            self.client_commands.push(all, line.to_string());
             Vec::new()
         } else {
             vec![line.to_string()]
@@ -843,6 +848,7 @@ impl GameHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::commands::one;
     use crate::game::scoreboard::RosterSlot;
     use vcod_gsc::{Host, Value};
 
@@ -1132,12 +1138,12 @@ mod tests {
             )
         };
         let m = |s: &str| vec![(Some(1), s.to_string())];
-        host.allow_complaint(1, 1);
+        host.allow_complaint(ClientSlot::at(1), ClientSlot::at(1));
         assert!(host.client_commands.is_empty());
-        host.allow_complaint(1, 0);
+        host.allow_complaint(ClientSlot::at(1), ClientSlot::at(0));
         assert_eq!(
             std::mem::take(&mut host.client_commands),
-            [(1, "m 0".into())]
+            [(one(1), "m 0".into())]
         );
         assert_eq!(vote(&mut vm, &mut host, 1, "no"), m("m -2"));
         assert_eq!(
@@ -1145,28 +1151,28 @@ mod tests {
             [to(1, "GAME_NOVOTEINPROGRESS")]
         );
         for left in [2, 1] {
-            host.allow_complaint(1, 0);
+            host.allow_complaint(ClientSlot::at(1), ClientSlot::at(0));
             assert_eq!(
                 vote(&mut vm, &mut host, 1, "yes"),
                 [warn(left), (Some(1), "m -1".into())]
             );
         }
-        host.allow_complaint(1, 0);
+        host.allow_complaint(ClientSlot::at(1), ClientSlot::at(0));
         assert_eq!(vote(&mut vm, &mut host, 1, "yes"), m("m -1"));
         assert_eq!(host.complaint_drop, Some(0));
 
         // The window shuts 20.5 s on, and goes with the offender.
         host.client_commands.clear();
-        host.allow_complaint(1, 0);
+        host.allow_complaint(ClientSlot::at(1), ClientSlot::at(0));
         host.level_time_ms += 20_500;
         assert_eq!(
             vote(&mut vm, &mut host, 1, "yes"),
             [to(1, "GAME_NOVOTEINPROGRESS")]
         );
-        host.allow_complaint(1, 0);
+        host.allow_complaint(ClientSlot::at(1), ClientSlot::at(0));
         host.client_commands.clear();
         host.complaints_about_gone(0);
-        assert_eq!(host.client_commands, [(1, "m -2".into())]);
+        assert_eq!(host.client_commands, [(one(1), "m -2".into())]);
         assert_eq!(
             vote(&mut vm, &mut host, 1, "yes"),
             [to(1, "GAME_NOVOTEINPROGRESS")]
@@ -1185,7 +1191,7 @@ mod tests {
                 host.set_profile(&crate::game::profile::COD1_15);
             }
             for slot in 1..4 {
-                host.allow_complaint(slot, 0);
+                host.allow_complaint(ClientSlot::at(slot), ClientSlot::at(0));
             }
             host.clients[1].roster = None;
             host.client_commands.clear();
@@ -1193,7 +1199,7 @@ mod tests {
             let cleared = if v15 { 2 } else { 1 };
             assert_eq!(
                 host.client_commands,
-                [(cleared, "m -2".into())],
+                [(one(cleared), "m -2".into())],
                 "1.5 {v15}"
             );
             assert_eq!(host.clients[3].complaint.against, 0, "1.5 {v15}");

@@ -5,6 +5,7 @@
 //! `ClientThink`, `G_RunFrame`, the script callbacks).
 
 use super::*;
+use crate::game::commands::Recipient;
 
 /// What `configstrings::systeminfo` reads: the server id, the fall
 /// bounds' bits, `sv_cheats`, the paks and 1.5's rows.
@@ -287,7 +288,7 @@ pub(super) struct FrameOut {
     pub(super) console_lines: Vec<String>,
     /// Server commands for single clients, by slot, each with its write
     /// stamp (`configstrings::next_write_seq`).
-    pub(super) client_commands: Vec<(u64, usize, String)>,
+    pub(super) client_commands: Vec<(u64, Recipient, String)>,
     /// A score moved: the scoreboard goes to every client in intermission.
     pub(super) ranks_dirty: bool,
 }

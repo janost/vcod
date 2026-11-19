@@ -1,6 +1,7 @@
 //! Client slots: gamestate, server commands, drops, zombies, pings and timeouts.
 
 use super::*;
+use crate::game::commands::Recipient;
 use vcod_common::net::Msec;
 
 /// `SV_UpdateServerCommandsToClient`. The caller bounds `from_ack` to
@@ -143,6 +144,14 @@ impl Server {
     /// slot would desync both ends' scramble keys, so that is fatal, with
     /// retail's `EXE_SERVERCOMMANDOVERFLOW` (docs/protocol-1.1.md, "The
     /// server command queue").
+    /// `SV_GameSendServerCommand`: `cmd` to one client or to every one.
+    pub(super) fn send_to(&mut self, to: Recipient, cmd: &str) {
+        match to {
+            Recipient::All => self.send_to_all(cmd),
+            Recipient::One(slot) => self.send_server_command(slot.index(), cmd),
+        }
+    }
+
     pub(super) fn send_server_command(&mut self, slot: usize, cmd: &str) {
         let Some(c) = self.core.clients[slot].as_mut() else {
             return;
@@ -257,10 +266,9 @@ impl Server {
         self.copy_game_configstrings(written);
         let mut own = Vec::new();
         for (to, cmd) in commands {
-            if to == slot {
-                own.push(cmd);
-            } else {
-                self.send_server_command(to, &cmd);
+            match to {
+                Recipient::One(s) if s.index() == slot => own.push(cmd),
+                to => self.send_to(to, &cmd),
             }
         }
         own

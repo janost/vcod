@@ -1,4 +1,5 @@
 use super::*;
+use crate::game::commands::one;
 
 /// The per-tick copy from the sim keeps an op the sim has not applied
 /// yet: the copy predates it, the mirror must not.
@@ -1835,7 +1836,7 @@ fn a_health_pack_underfoot_heals_and_leaves_the_wire() {
     );
     assert_eq!(
         rt.take_client_commands(),
-        vec![(0, "f \"GAME_PICKUP_HEALTH\u{15}25\"".to_string())]
+        vec![(one(0), "f \"GAME_PICKUP_HEALTH\u{15}25\"".to_string())]
     );
     assert!(rt.script_log().iter().any(|l| l == "Item: 0 item_health"));
 }
@@ -2025,7 +2026,7 @@ fn the_use_key_swaps_and_the_trigger_notify_names_the_drop() {
     let panzerfaust = crate::defs::V1.weapon_index("panzerfaust_mp").unwrap();
     assert!(
         rt.take_client_commands()
-            .contains(&(0, format!("a {panzerfaust}")))
+            .contains(&(one(0), format!("a {panzerfaust}")))
     );
 }
 
