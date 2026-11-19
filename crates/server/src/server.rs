@@ -3181,6 +3181,13 @@ impl Server {
             .map_or_else(BTreeMap::new, |rt| rt.packet_entities(proto))
     }
 
+    /// The frame the next snapshots take their entities from, as
+    /// `snapshots_begin` builds it: a gate that culls from a spot of its
+    /// own reads the server's own cull ([`crate::archive::WorldFrame::entities_for`]).
+    pub fn world_frame(&mut self) -> crate::archive::WorldFrame {
+        self.build_world_frame()
+    }
+
     /// Puts a client where the caller says, the way the `spawn` builtin does.
     /// Test-facing: a gate about what two clients see of each other needs them
     /// somewhere known, and both spawn weighted-random.
