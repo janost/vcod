@@ -1502,8 +1502,8 @@ cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-secs 25 \
 Against ours: `vcod-server mp_pavlov --gametype-script
 crates/gsc/tests/fixtures/semantics/client-probes/probe_menuresponse.gsc`.
 Retail and ours, 2026-10-13, log the same fourteen `PROBE` lines; the doc's
-table quotes them. `server::tests::mr_answers_each_shape_as_retail` pins
-the parse.
+table quotes them. `server::client_msg::tests::mr_answers_each_shape_as_retail`
+pins the parse.
 
 
 ## probe_say
@@ -2371,8 +2371,8 @@ PROBE wait1 1050
 PROBE wait1b 2050
 ```
 
-`crates/server/src/server.rs`'s `the_script_clock_matches_probe_startclock`
-replays it on ours.
+`crates/server/src/server/frame.rs`'s
+`the_script_clock_matches_probe_startclock` replays it on ours.
 
 ```
 COD_LNXDED_HOME=<absolute, no '+'> PORT=29931 SECS=12 \
@@ -3025,5 +3025,5 @@ The logs are `crates/common/tests/fixtures/patch/pointarm-1.1.txt` and
 known, under stock tdm on mp_brecourt (`docs/research/cod11-server-handshake.md`,
 "Console commands over rcon"). No client needed; the capture is the rcon
 reply 4 s after the load, `crates/server/tests/fixtures/usage/mp_brecourt-probe_usage.txt`
-(recipe in its header). `crates/server/src/server.rs`'s
+(recipe in its header). `crates/server/src/server/console_cmds.rs`'s
 `script_usage_counts_as_retail` replays it on ours.
