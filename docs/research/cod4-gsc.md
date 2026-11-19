@@ -2020,7 +2020,7 @@ vcod (`ClipMap::world_solids`, `physics::box_contacts`,
   stayed on the waiter, and `finishAirstrikeUsage` notified it 50 ms
   later), so the next hardpoint's radio stayed in hand until the next
   spawn; an Esc out of the selector did the same. Gate:
-  `play::cod4::tests::cod4_live_airstrike_then_helicopter_in_one_life`.
+  `play::cod4::tests::live_streaks::cod4_live_airstrike_then_helicopter_in_one_life`.
   VERIFIED (ours).
 
 ## 5. Configstrings

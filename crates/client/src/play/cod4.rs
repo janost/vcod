@@ -7,7 +7,7 @@
 //! entities' rings, the temp entities as they enter) and the obituaries;
 //! [`Cod4Session::scene`] is the view and the entities to draw, lerped
 //! between the two newest snapshots. `cod4_client` puts it on screen; the
-//! replay gate below runs the same steps headless.
+//! replay gate (`tests`) runs the same steps headless.
 //!
 //! Our own body, or a free spectator's view, is predicted
 //! (`play::cod4_predict`) once [`Cod4Session::set_world`] hands in the

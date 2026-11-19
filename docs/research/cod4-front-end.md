@@ -376,7 +376,7 @@ editor picked).
   the file the main menu reads after the game, once the systeminfo has
   set `fs_game`. A `fs_game` that would leave the profile keeps the
   menu's file. VERIFIED on ours
-  (`play::cod4::tests::cod4_live_a_modded_server_reads_the_mods_stats`).
+  (`play::cod4::tests::join::cod4_live_a_modded_server_reads_the_mods_stats`).
 
 ## 7. Joins, games and errors
 
@@ -393,7 +393,7 @@ editor picked).
   the string's `&&1` (`EXE_SERVER_IS_DIFFERENT_VER\x151.7` reads
   `Server is a different version:` and `1.7` on the next line,
   INFERRED; the string VERIFIED in
-  `localized_code_post_gfx_mp`). vcod: `play::cod4::localize_message`.
+  `localized_code_post_gfx_mp`). vcod: `play::cod4::join::localize_message`.
 - `CL_KeyEvent`'s Esc with no key catcher switches on the connection
   state (iw3mp.exe 0x468125, index byte table 0x46844c, jump table
   0x46843c): `CA_CINEMATIC` and `CA_LOGO` stop the cinematic,

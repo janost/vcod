@@ -3,7 +3,7 @@
 How the client draws a CoD4 session (`play::cod4`, `cod4_client`): the
 time it draws at, the two snapshots it lerps between, when it cuts
 instead, and how it predicts its own body. The gates are
-`play::cod4::tests::walk_capture_view_runs_smooth` and
+`play::cod4::tests::capture_view::walk_capture_view_runs_smooth` and
 `walk_capture_predicts_its_own_body`.
 
 Sources, each claim naming its own:
@@ -120,7 +120,7 @@ as vcod's does (section 5).
 `cod4_viewmodel` draws the drawn playerstate's view weapon (our own body
 or the one we follow; never a free spectator's view), as `CG_AddViewWeapon`
 and `CG_UpdateViewWeaponAnim` do. The gates are
-`play::cod4::tests::shooter_draws_its_view_weapon_and_flashes_on_its_tag`
+`play::cod4::tests::capture_view::shooter_draws_its_view_weapon_and_flashes_on_its_tag`
 and `walker_draws_its_view_weapon`; the zones' census is
 `crates/cod4/tests/view_census.rs`.
 
@@ -566,7 +566,7 @@ weapon scales (`cod4_fly::load` builds them for a watched session).
   packed to read as the server's box gives vcod-server's origin on every
   cmd; the real packing keeps the walker within 1.1 of the server's
   path, all of it after the bodies meet. VERIFIED (the test
-  `play::cod4::tests::predicted_walk_into_a_body_follows_the_server`).
+  `play::cod4::tests::capture_view::predicted_walk_into_a_body_follows_the_server`).
   Before, bodies clipped as boxes.
 - Left out: item pickup prediction, movers carrying the body
   (`CG_AdjustPositionForMover`) and the ADS view error.
@@ -648,7 +648,7 @@ That the predicted view looks right on screen is pending a human's look.
   landing, 102 stance refusals) and the mantle, whose putaway the
   weapon half predicts as retail sends it (`Mantle_IsWeaponInactive`,
   cod4-pmove.md 17.4). VERIFIED (the gate
-  `play::cod4::tests::predicted_own_events_fire_once`).
+  `play::cod4::tests::capture_view::predicted_own_events_fire_once`).
 
 
 ## 6. A capture's view between its cmds
@@ -661,7 +661,7 @@ That the predicted view looks right on screen is pending a human's look.
   16 to 100 ms apart; a frame's own cmd taking the next cmd's view turns
   the view in those steps. So the frame's cmd eases its
   angles from the cmd before it to the next by the frame's time between
-  them, each the short way round in shorts (`play::cod4::eased_cmd`). A
+  them, each the short way round in shorts (`play::cod4::scene::eased_cmd`). A
   gap over 250 ms, or a turn faster than 0.36 degrees a ms (a scripted
   view, or the probe making up a `delta_angles` change: the shooter's
   65 to 155 degree snaps one 19 ms cmd apart), is taken at once. This is
@@ -828,7 +828,7 @@ server's pmove switches to (cod4-combat.md 10.3,
 
 What 1.7's cgame does with an airstrike's jets (`ET_PLANE`, 13) and the
 helicopter (`ET_HELICOPTER`, 12), and what vcod does
-(`cod4_vehicles`, `play::cod4::visual`). The script's own effects and
+(`cod4_vehicles`, `play::cod4::scene::visual`). The script's own effects and
 sounds (`_hardpoints.gsc`, `_helicopter.gsc`) ride the events of
 cod4-effects.md and cod4-sound.md.
 
@@ -916,7 +916,7 @@ cod4-effects.md and cod4-sound.md.
 
 ### 11.2 vcod
 
-- Both types draw their model (`play::cod4::visual`); a helicopter's is
+- Both types draw their model (`play::cod4::scene::visual`); a helicopter's is
   `un2`'s, or `index` from a vcod-server that sends it there.
 - A helicopter is posed: `bh_rotors` (`vcod_cod4::anim::ENTITY_CLIPS`,
   loaded with the player clips) at rate 1.5 from its first drawn frame
@@ -1409,10 +1409,10 @@ INFERRED (their arguments and use).
   height and a camera no farther than 120 from 8 over the eye; 1252 at
   the full range, 1176 nearer, mostly where the walker idles with a
   wall 4 behind the camera's box. VERIFIED (the test
-  `play::cod4::tests::walk_capture_draws_its_own_body_in_third_person`).
+  `play::cod4::tests::capture_view::walk_capture_draws_its_own_body_in_third_person`).
   The kill capture's target, `cg_thirdPerson` 0: 120 dead frames in
   third person facing yaw 245, no own body drawn, first person again in
   the killcam. VERIFIED (the test
-  `play::cod4::tests::kill_capture_dies_into_the_third_person_view`).
+  `play::cod4::tests::capture_view::kill_capture_dies_into_the_third_person_view`).
 - Left out: the vehicle-seat and entity-killcam arms of 16.2. The look
   is pending a hand check.

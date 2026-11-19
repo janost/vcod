@@ -6,7 +6,7 @@ plays for each entity event. Code: `crates/cod4/src/sound.rs` (the
 aliases, `channels.def`, the `.wav` wrap), `crates/client/src/cod4_audio.rs`
 (the client's alias table, the event arms); gates:
 `crates/cod4/tests/sound_census.rs`, the replay gate in
-`crates/client/src/play/cod4.rs` (`spectator_capture_plays_its_sounds_and_effects`,
+`crates/client/src/play/cod4/tests/` (`spectator_capture_plays_its_sounds_and_effects`,
 `kill_captures_play_their_hits`) and `cod4_audio`'s decode test.
 
 ## Sources
@@ -262,7 +262,7 @@ replay gate resolves each it meets).
   captures but one names the surface a trace down from the event's
   origin meets in vcod's clip map (17 `rock`, 22 `asphalt`); the one
   reads caulk at a curb's edge. VERIFIED (the gate
-  `play::cod4::tests::footstep_surfaces_match_the_clip_map`). On a
+  `play::cod4::tests::capture_bullets::footstep_surfaces_match_the_clip_map`). On a
   64-unit grid over mp_crash every floor's surface type is its clip
   material's: `me_floor_concrete` and `me_stonefloor01` 5, `ch_tile_floor03`
   16, `me_woodplanks01` 21, and the trash-strewn interiors'
