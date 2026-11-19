@@ -161,6 +161,9 @@ fn rig() -> Option<Rig> {
     let fs = vcod_common::testing::game_fs_11()?;
     let fs = Rc::new(fs);
     let (mut sv, mut now) = common::Boot {
+        // As retail's run: after the plant the probe unlinks the planter and
+        // puts it on its spawn, off the defender's sightline. Its other two
+        // teleports land before the rig places the clients itself.
         cvars: &[("probe_teleport", "1")],
         script: Some(&read(PROBE_SRC)),
         ..common::Boot::new(MAP, "probe_lookat")

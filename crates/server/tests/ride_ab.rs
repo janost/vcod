@@ -23,7 +23,7 @@ use common::{ADDR, ClientEnd, FRAME_MS, Join, Queues, holding, step_at};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::net::trajectory::Trajectory;
 use vcod_common::net::{NetClient, NetEvent};
@@ -184,16 +184,12 @@ const FIRST_SNAP_AFTER_JOIN_MS: i64 = 400;
 /// mover", and 21). `late_ms` starts the client that much earlier.
 fn run_once(probe: &Probe, late_ms: i64) -> Option<Ours> {
     let fs = vcod_common::testing::game_fs_11()?;
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, probe.name), now);
-    sv.overlay_script(&format!("maps/mp/gametypes/{}", probe.name), probe.source);
-    for (k, v) in probe.cvars {
-        sv.set_cvar(k, v);
+    let (mut sv, mut now) = common::Boot {
+        cvars: probe.cvars,
+        script: Some(probe.source),
+        ..common::Boot::new(MAP, probe.name)
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     let retail_text = std::fs::read_to_string(probe.fixture).unwrap();
     let mut hold = common::ProbeHold {
         base: Some([0.0; 3]),

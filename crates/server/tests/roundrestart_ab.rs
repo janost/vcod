@@ -296,6 +296,7 @@ fn an_sd_round_restart_matches_retail() {
     let retail = [read(SHOOTER), read(TARGET)];
 
     let (mut sv, mut now) = common::Boot {
+        // The fixture headers' two cvars, verbatim.
         cvars: &[("scr_sd_roundlength", "1"), ("scr_friendlyfire", "1")],
         ..common::Boot::new(MAP, "sd")
     }

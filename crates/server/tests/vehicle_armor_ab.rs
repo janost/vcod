@@ -31,7 +31,7 @@ use common::{Join, Queues, step_pair, step_pair_b_first};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::NetClient;
 use vcod_common::net::NetEvent;
 use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, BUTTON_USE, UserCmd};
@@ -234,21 +234,17 @@ fn ours_after_late(
         shooter_ms, cmds, ..
     } = capture;
     let fs = vcod_common::testing::uo_fs()?;
-    let bsp_path = fs.resolve_map(map).expect("map in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_vehicle_armor"), now);
-    sv.set_protocol(&PROTOCOL_V22);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_vehicle_armor",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_vehicle_armor.gsc"),
-    );
-    sv.set_cvar("probe_vehicletype", vehicletype);
-    for (k, v) in cvars {
-        sv.set_cvar(k, v);
+    let mut all_cvars = vec![("probe_vehicletype", vehicletype)];
+    all_cvars.extend_from_slice(cvars);
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&PROTOCOL_V22),
+        cvars: &all_cvars,
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_vehicle_armor.gsc"
+        )),
+        ..common::Boot::new(map, "probe_vehicle_armor")
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     if let Some(spot) = capture.spawn {
         sv.pin_spawns(vec![vec![Some(spot)]]);
     }

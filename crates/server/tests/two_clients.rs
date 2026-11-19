@@ -1469,22 +1469,21 @@ fn the_score_limit_sends_both_clients_to_intermission_and_then_rotates() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
 
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    common::pin_spawns_at(
-        &mut sv,
-        &[&[common::CARENTAN_NORTH], &[common::CARENTAN_SOUTH]],
-    );
-    // One kill ends it, and the rotation has to name a map that is not the
-    // one serving: `map <the map already serving>` is a restart (doc 4.2),
-    // which pushes no gamestate.
-    sv.set_cvar("scr_dm_scorelimit", "1");
-    sv.set_cvar("sv_mapRotation", &format!("map {NEXT} map {MAP}"));
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        // One kill ends it, and the rotation has to name a map that is not the
+        // one serving: `map <the map already serving>` is a restart (doc 4.2),
+        // which pushes no gamestate.
+        cvars: &[
+            ("scr_dm_scorelimit", "1"),
+            ("sv_mapRotation", &format!("map {NEXT} map {MAP}")),
+        ],
+        prep: Some(&|sv: &mut vcod_server::Server| {
+            common::pin_spawns_at(sv, &[&[common::CARENTAN_NORTH], &[common::CARENTAN_SOUTH]]);
+        }),
+        ..common::Boot::on(cfg())
+    }
+    .start(fs);
 
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));

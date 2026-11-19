@@ -7,7 +7,6 @@
 //! Needs `COD_DIR`; without the paks it returns early.
 
 use crate::common;
-use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 const FRAME: Duration = Duration::from_millis(50);
@@ -33,25 +32,22 @@ fn server_from(
     gametype: &str,
     bots: usize,
 ) -> Option<(vcod_server::Server, Instant)> {
-    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let now = Instant::now();
     let cfg = vcod_server::ServerConfig {
         bots,
         // Nobody dies, so the round runs until the bomb settles it.
         bots_shoot: false,
         ..common::cfg(map, gametype)
     };
-    let mut sv = vcod_server::Server::new(cfg, now);
-    if let Some(p) = protocol {
-        sv.set_protocol(p);
-    }
-    // The seed decides the bots' weapons, sites and roam picks; a fixed
-    // one keeps the run the same every time.
-    sv.test_seed_rng(7);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
-    Some((sv, now))
+    Some(
+        common::Boot {
+            proto: Some(protocol.unwrap_or(&vcod_common::net::protocol::PROTOCOL_V1)),
+            // The seed decides the bots' weapons, sites and roam picks; a fixed
+            // one keeps the run the same every time.
+            prep: Some(&|sv: &mut vcod_server::Server| sv.test_seed_rng(7)),
+            ..common::Boot::on(cfg)
+        }
+        .start(fs),
+    )
 }
 
 /// The tick a `logPrint` line ending in `event` (`sd.gsc`'s

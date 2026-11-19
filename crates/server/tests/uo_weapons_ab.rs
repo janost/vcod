@@ -1098,25 +1098,14 @@ fn the_bazooka_rocket_leaves_on_retails_bits() {
 fn ours_direct(probe: &str, src: &str, fixture: &str, secs: i64) -> (Vec<String>, Run) {
     let fs = vcod_common::testing::uo_fs().unwrap();
     let p: &'static Cod1Wire = &PROTOCOL_V22;
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, probe), now);
-    sv.set_protocol(p);
-    sv.overlay_script(&format!("maps/mp/gametypes/{probe}"), src);
-    // The recipe's `+set`s.
-    for l in fixture.lines().filter(|l| l.starts_with('#')) {
-        let mut t = l.split_whitespace();
-        while let Some(w) = t.next() {
-            if w == "+set"
-                && let (Some(name), Some(value)) = (t.next(), t.next())
-            {
-                sv.set_cvar(name, value);
-            }
-        }
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        // The recipe's `+set`s.
+        cvars: &common::recipe_sets(fixture),
+        script: Some(src),
+        ..common::Boot::new(MAP, probe)
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let mut cl =

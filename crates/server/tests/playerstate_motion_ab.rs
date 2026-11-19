@@ -17,7 +17,7 @@ use common::Queues;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::msg::{NULL_USERCMD, PlayerState, UserCmd};
 use vcod_common::net::protocol::{ENTITYNUM_WORLD, PROTOCOL_V1};
 
@@ -336,17 +336,15 @@ const OPEN_SPAWNS: &[(&str, common::SpawnAt)] =
 /// Runs the capture's script against our server and keeps the playerstate at
 /// the end of each pose, the way the probe kept retail's.
 fn ours(map: &str, poses: &[Pose], join: (&str, &str), fs: vcod_common::pk3::Pk3Fs) -> Replay {
-    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
-    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
-    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
-    let fs = Rc::new(fs);
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(map), now);
-    if let Some(&(_, spot)) = OPEN_SPAWNS.iter().find(|(m, _)| *m == map) {
-        common::pin_spawns_at(&mut sv, &[&[spot]]);
+    let (mut sv, mut now) = common::Boot {
+        prep: Some(&|sv: &mut vcod_server::Server| {
+            if let Some(&(_, spot)) = OPEN_SPAWNS.iter().find(|(m, _)| *m == map) {
+                common::pin_spawns_at(sv, &[&[spot]]);
+            }
+        }),
+        ..common::Boot::on(cfg(map))
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    .start(fs);
 
     let q = Rc::new(RefCell::new(Queues::default()));
     let (mut cl, _join) = common::join(&mut sv, &q, &mut now, join.0, join.1);

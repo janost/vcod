@@ -29,14 +29,13 @@ fn cfg(map: &str) -> vcod_server::ServerConfig {
 }
 
 /// A server with `map` loaded on `dm`, exactly as `configstrings_ab` boots one.
-fn booted(map: &str, fs: vcod_common::pk3::Pk3Fs, now: Instant) -> vcod_server::Server {
+fn booted(map: &str, fs: vcod_common::pk3::Pk3Fs) -> vcod_server::Server {
     let fs = Rc::new(fs);
-    let mut sv = vcod_server::server::Server::new(cfg(map), now);
-    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
-    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
-    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    let (sv, _) = common::Boot {
+        proto: Some(&vcod_common::net::protocol::PROTOCOL_V1),
+        ..common::Boot::on(cfg(map))
+    }
+    .start(fs);
     sv
 }
 
@@ -44,7 +43,7 @@ fn check(map: &str) {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
         return;
     };
-    let aborts = booted(map, fs, Instant::now()).script_aborts();
+    let aborts = booted(map, fs).script_aborts();
     assert!(
         aborts.is_empty(),
         "{map}: {} bootstrap thread(s) aborted\n{}",
@@ -62,7 +61,7 @@ fn check_join(map: &str) {
         return;
     };
     let mut now = Instant::now();
-    let mut sv = booted(map, fs, now);
+    let mut sv = booted(map, fs);
     let q = Rc::new(RefCell::new(Queues::default()));
     let (team, weapon) = common::captured_join(map, &cfg(map).gametype);
     let (cl, join) = common::join(&mut sv, &q, &mut now, &team, &weapon);

@@ -604,6 +604,23 @@ impl<'a> Boot<'a> {
     }
 }
 
+/// A capture recipe's `+set name value` pairs, in order, from the
+/// fixture's `#` header lines: the cvars retail's server ran with.
+pub fn recipe_sets(fixture: &str) -> Vec<(&str, &str)> {
+    let mut sets = Vec::new();
+    for l in fixture.lines().filter(|l| l.starts_with('#')) {
+        let mut t = l.split_whitespace();
+        while let Some(w) = t.next() {
+            if w == "+set"
+                && let (Some(name), Some(value)) = (t.next(), t.next())
+            {
+                sets.push((name, value));
+            }
+        }
+    }
+    sets
+}
+
 /// The source of the client probe `name`
 /// (`gsc/tests/fixtures/semantics/client-probes/<name>.gsc`).
 pub fn client_probe(name: &str) -> String {

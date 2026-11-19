@@ -20,7 +20,7 @@ use crate::common;
 use common::{ClientEnd, Join, Queues, step_pair};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::event_ids::EV_SOUND_ALIAS;
 use vcod_common::net::msg::{BUTTON_USE, UserCmd};
 use vcod_common::net::protocol::PROTOCOL_V22;
@@ -67,29 +67,23 @@ fn ours(
     let late_ms = at("PROBE victim ") - common::PROBE_JOIN_MS - VICTIM_PLACED_MS;
     let driver_late_ms = at("PROBE place ") - at("PROBE victim ");
     let p = &PROTOCOL_V22;
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_vehicle_ram"), now);
-    sv.set_protocol(p);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_vehicle_ram",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_vehicle_ram.gsc"),
-    );
-    for (k, v) in [
+    let mut sets = vec![
         ("probe_vehicletype", "horch_mp"),
         ("probe_index", "1"),
         ("probe_ahead", "680"),
         ("probe_victim", victim),
         ("probe_victim_ahead", "150"),
-    ]
-    .iter()
-    .chain(cvars)
-    {
-        sv.set_cvar(k, v);
+    ];
+    sets.extend_from_slice(cvars);
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        cvars: &sets,
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_vehicle_ram.gsc"
+        )),
+        ..common::Boot::new(MAP, "probe_vehicle_ram")
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS + late_ms);
     let (qa, qb) = (
         Rc::new(RefCell::new(Queues::default())),

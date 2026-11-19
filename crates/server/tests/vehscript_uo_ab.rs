@@ -67,6 +67,7 @@ fn ours(case: &str, ms: i64) -> Option<(Vec<String>, Vec<String>)> {
     .expect("the probe");
     let (mut sv, mut now) = common::Boot {
         proto: Some(&vcod_common::net::protocol::PROTOCOL_V22),
+        // run_probe.sh's: an error ends the probe's thread.
         cvars: &[("developer", "1"), ("probe_case", case)],
         script: Some(&src),
         ..common::Boot::new("mp_kharkov", "probe_vehscript")

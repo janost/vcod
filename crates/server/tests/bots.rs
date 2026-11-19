@@ -995,19 +995,19 @@ fn uo_tdm_games_that_stalled_or_never_sprinted() {
 /// One game of [`uo_bots_fight_and_sprint_in_tdm`].
 fn uo_tdm_game(seed: u64, vehicles: bool) {
     let fs = vcod_common::testing::uo_fs().expect("uo/");
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_cassino").unwrap()).unwrap())
-        .expect("parse the bsp");
-    let mut now = Instant::now();
     let mut cfg = cfg(6, true, "tdm");
     cfg.map = "mp_cassino".into();
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.set_protocol(&vcod_common::net::protocol::PROTOCOL_V22);
-    sv.test_seed_rng(seed);
-    if !vehicles {
-        sv.set_cvar("vc_bot_vehicles", "0");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&vcod_common::net::protocol::PROTOCOL_V22),
+        cvars: if vehicles {
+            &[]
+        } else {
+            &[("vc_bot_vehicles", "0")]
+        },
+        prep: Some(&|sv: &mut vcod_server::Server| sv.test_seed_rng(seed)),
+        ..common::Boot::on(cfg)
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     let mut hist: [std::collections::VecDeque<[f32; 3]>; 8] = Default::default();
     // Bot-ticks on foot out of a fight: what a sprint leg is a share of.
     let (mut sprints, mut legs, mut foot) = (0, 0, 0);

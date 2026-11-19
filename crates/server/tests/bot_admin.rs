@@ -21,18 +21,21 @@ const RCON: SocketAddr =
 
 fn server(gametype: &str, max_clients: usize) -> Option<(Server, Instant)> {
     let fs = vcod_common::testing::game_fs_11()?;
-    let bsp_bytes = fs.read(&fs.resolve_map(MAP)?)?;
-    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
-    let now = Instant::now();
-    let mut cfg = common::cfg(MAP, gametype);
-    cfg.max_clients = max_clients;
-    let mut sv = Server::new(cfg, now);
-    sv.set_cvar("rconPassword", "pw");
-    // Peaceful bots: a fight would kill and move them on its own clock.
-    sv.set_cvar("vc_bot_shoot", "0");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
-    Some((sv, now))
+    let cfg = vcod_server::ServerConfig {
+        max_clients,
+        ..common::cfg(MAP, gametype)
+    };
+    Some(
+        common::Boot {
+            cvars: &[
+                ("rconPassword", "pw"),
+                // Peaceful bots: a fight would kill and move them on its own clock.
+                ("vc_bot_shoot", "0"),
+            ],
+            ..common::Boot::on(cfg)
+        }
+        .start(fs),
+    )
 }
 
 struct Human {

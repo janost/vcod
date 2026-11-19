@@ -206,6 +206,7 @@ fn a_dm_map_end_and_rotation_match_retail() {
     let retail = common::collapse_traces(&common::parse_netchan_fixture(&text));
 
     let (mut sv, mut now) = common::Boot {
+        // The fixture header's two cvars, verbatim.
         cvars: &[
             ("scr_dm_timelimit", "1"),
             (

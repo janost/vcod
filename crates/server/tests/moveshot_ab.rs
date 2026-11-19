@@ -250,19 +250,15 @@ fn ours(p: &'static Cod1Wire, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<
     common::steady_weapon(&mut fs, part.weapon);
     let src = format!("../gsc/tests/fixtures/semantics/client-probes/{PROBE}.gsc");
     let probe = std::fs::read_to_string(src).expect("read the probe");
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, PROBE), now);
-    sv.set_protocol(p);
-    sv.overlay_script(&format!("maps/mp/gametypes/{PROBE}"), &probe);
-    sv.set_cvar("probe_teleport", "1");
-    sv.set_cvar("probe_spot", part.spot);
-    for (k, v) in part.cvars {
-        sv.set_cvar(k, v);
+    let mut all_cvars = vec![("probe_teleport", "1"), ("probe_spot", part.spot)];
+    all_cvars.extend_from_slice(part.cvars);
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        cvars: &all_cvars,
+        script: Some(&probe),
+        ..common::Boot::new(MAP, PROBE)
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let mut cl = common::connect(&mut sv, &q, &mut now);

@@ -4,6 +4,7 @@
 //! every tick, on CoD1 (1.1, or UO at a UO install), CoD2 and CoD4. Each
 //! needs its install and returns early without it.
 
+use crate::common;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -80,22 +81,21 @@ fn cod1_match(
     bots: usize,
     ticks: usize,
 ) -> Vec<u64> {
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map(map).unwrap()).unwrap())
-        .expect("parse the bsp");
-    let mut now = Instant::now();
     let cfg = vcod_server::ServerConfig {
         max_clients: bots + 2,
         bots,
         bots_shoot: true,
         ..crate::common::cfg(map, gametype)
     };
-    let mut sv = vcod_server::Server::new(cfg, now);
-    if uo {
-        sv.set_protocol(&vcod_common::net::protocol::PROTOCOL_V22);
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(match uo {
+            true => &vcod_common::net::protocol::PROTOCOL_V22,
+            false => &vcod_common::net::protocol::PROTOCOL_V1,
+        }),
+        cvars: &[("sv_pure", "0")],
+        ..common::Boot::on(cfg)
     }
-    sv.set_cvar("sv_pure", "0");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     (0..ticks)
         .map(|_| {
             now += FRAME;
