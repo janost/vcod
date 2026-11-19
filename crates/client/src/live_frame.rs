@@ -14,15 +14,7 @@ impl App {
         hud_quads: &mut Vec<hud::HudQuad>,
     ) -> renderer::Frame {
         let Tick {
-            dt,
-            time,
-            local_ms,
-            cull,
-            blood,
-            eject_brass,
-            aspect,
-            widescreen,
-            ..
+            time, cull, aspect, ..
         } = *tick;
         let Some(r) = &mut self.renderer else {
             unreachable!()
@@ -61,6 +53,307 @@ impl App {
             turret_sway,
             seat_frac,
         } = &mut **live;
+        let viewer = Viewer::of(net);
+        let Viewer { p, .. } = viewer;
+        let mut cx = LiveCx {
+            fs: &self.fs,
+            shell: &self.shell,
+            session: &self.session,
+            audio: &mut self.audio,
+            fx: &mut self.fx,
+            flame: &mut self.flame,
+            client_bullets: &mut self.client_bullets,
+            hud: &mut self.hud,
+            foreign_events: &mut self.foreign_events,
+            interp_misses: &mut self.interp_misses,
+            build_ms: &mut self.build_ms,
+            viewmodel: &mut self.viewmodel,
+            look_zoom: &mut self.look_zoom,
+            ev_seen: &mut self.ev_seen,
+            ev_unknown: &mut self.ev_unknown,
+            fx_ms: &mut self.fx_ms,
+        };
+        let Posed {
+            mut instances,
+            mut muzzles,
+            mut brass,
+            shot_fallbacks,
+            weapon_flash,
+            entity_pos,
+            entity_angles,
+            vehicle_angles,
+            vehicle_wheels,
+            heads,
+            turret_eye,
+            shadow_marks,
+            mut view_lean,
+            mut feet_z,
+            render_time,
+        } = cx.pose(
+            prof, r, net, cam, input, world, scene, clock, drawn_pos, seat_frac, viewer,
+        );
+
+        let (seat_now, predicted, view_ps, evs) = cx.predict(
+            tick,
+            viewer,
+            prof,
+            r,
+            net,
+            cam,
+            input,
+            ring,
+            predictor,
+            view,
+            join,
+            world,
+            weapons,
+            events,
+            predicted_events,
+            drawn_pos,
+            drawn_vehicle_angles,
+            render_time,
+            &entity_pos,
+            &vehicle_angles,
+            &mut feet_z,
+            &mut view_lean,
+        );
+
+        let (view_roll, shock) = cx.view(
+            tick,
+            viewer,
+            prof,
+            r,
+            net,
+            cam,
+            input,
+            view,
+            join,
+            world,
+            weapons,
+            scene,
+            seat_turn,
+            gunner_sway,
+            turret_sway,
+            seat_frac,
+            &entity_pos,
+            &vehicle_angles,
+            turret_eye,
+            view_lean,
+            feet_z,
+            render_time,
+            seat_now,
+            &predicted,
+            &view_ps,
+        );
+
+        let (local_player, fov, cam_forward, cam_right, cam_up, fx_t0) = cx.gun(
+            tick,
+            viewer,
+            prof,
+            vm,
+            net,
+            cam,
+            view,
+            world,
+            weapons,
+            scene,
+            looped_fx,
+            vehicle_trails,
+            &mut muzzles,
+            &mut brass,
+            &vehicle_wheels,
+            render_time,
+            &predicted,
+            &view_ps,
+            view_roll,
+            shock,
+        );
+
+        prof.next(frame_prof::Stage::Events);
+        let (screen_w, screen_h) = r.screen_size();
+
+        let no_clients = BTreeMap::new();
+        let no_entities = BTreeMap::new();
+        let newest = net.snapshots().newest();
+        let entity_origin = |num: i32| {
+            let num = u32::try_from(num).ok()?;
+            entity_pos.get(&num).map(|v| v.to_array())
+        };
+        // Retail reads `cg_entities[n].currentState`;
+        // the newest snapshot stands in.
+        let turret_weapon = newest.and_then(|s| {
+            let int = |n: &str| s.ps.field_i32(p, n);
+            let num = turret::ridden(
+                int("eFlags"),
+                int("viewlocked"),
+                int("viewlocked_entNum"),
+                p.is_uo(),
+            )?;
+            let w = s.entities.get(&num)?.field_i32(p, "weapon");
+            usize::try_from(w).ok()
+        });
+        // UO's barrel icon turns with the ridden
+        // vehicle's `tag_turret` (uo cgame 0x30031e20).
+        let vehicle_turret_yaw = newest
+            .filter(|s| s.ps.field_i32(p, "eFlags") & net::flags::EF_IN_VEHICLE_V22 != 0)
+            .and_then(|s| {
+                let num = u32::try_from(s.ps.field_i32(p, "viewlocked_entNum")).ok()?;
+                let f = scene.tag_pose(&self.fs, num, "tag_turret")?.axis[0];
+                Some(f.y.atan2(f.x).to_degrees())
+            });
+        let client_cvar = |c: &str| join.cvars.get(c, net.configstrings(), &self.shell);
+        let server_address = net.transport().peer().map(|a| a.to_string());
+        let hud_frame = hud::HudFrame {
+            now: time,
+            screen_w,
+            screen_h,
+            configstrings: net.configstrings(),
+            clients: newest.map_or(&no_clients, |s| &s.clients),
+            protocol: p,
+            // The render clock, so hudelem tweens and
+            // timers move between snapshots.
+            server_time: render_time.unwrap_or(0),
+            snap_time: render_time
+                .and_then(|t| net.snapshots().two_for_time(t))
+                .map_or(0, |(a, _)| a.server_time.raw()),
+            fs: &self.fs,
+            ps: newest.map(|s| &s.ps),
+            entities: newest.map_or(&no_entities, |s| &s.entities),
+            predicted: predicted.as_ref().filter(|_| local_player).map(|v| &v.pred),
+            local_player,
+            weapons,
+            localized: &self.localized,
+            view_yaw: cam.yaw.to_degrees(),
+            eye: cam.pos.to_array(),
+            fov,
+            entity_origin: &entity_origin,
+            turret_weapon,
+            vehicle_turret_yaw,
+            cvar: &client_cvar,
+            bound_key: &|cmd| bound_key(&self.shell, &self.localized, p, cmd),
+            draw: hud::DrawToggles {
+                crosshair: self.shell.cvar_f32("cg_drawCrosshair") as i32 != 0,
+                status: self.shell.cvar_f32("cg_drawStatus") as i32 != 0,
+            },
+            weapon_select: input.selected(),
+            own_client: net
+                .gamestate()
+                .and_then(|g| u32::try_from(g.client_num).ok()),
+            server_address: server_address.as_deref(),
+        };
+
+        cx.events(
+            tick,
+            viewer,
+            vm,
+            net,
+            cam,
+            input,
+            world,
+            weapons,
+            scene,
+            &muzzles,
+            &brass,
+            &shot_fallbacks,
+            &weapon_flash,
+            &entity_pos,
+            &predicted,
+            evs,
+            local_player,
+            newest,
+            &hud_frame,
+        );
+
+        cx.sound(
+            tick,
+            viewer,
+            prof,
+            r,
+            net,
+            view,
+            world,
+            weapons,
+            scene,
+            last_loop_snap,
+            &mut instances,
+            &muzzles,
+            &entity_pos,
+            &entity_angles,
+            render_time,
+            newest,
+        );
+
+        let fdc = cx.flame(
+            tick,
+            viewer,
+            r,
+            net,
+            cam,
+            input,
+            world,
+            weapons,
+            &muzzles,
+            &entity_pos,
+            &heads,
+            &shadow_marks,
+            render_time,
+            cam_right,
+            cam_up,
+            fx_t0,
+            newest,
+        );
+
+        prof.next(frame_prof::Stage::Hud);
+        if let Some(hud) = &mut self.hud {
+            let hud_t0 = Instant::now();
+            hud.set_message_widths(
+                self.shell.cvar_f32("cg_gameMessageWidth") as i32,
+                self.shell.cvar_f32("cg_gameBoldMessageWidth") as i32,
+                screen_w as u32,
+            );
+            hud.set_chat_rules(hud::chat::Rules::read(|c| self.shell.cvar(c), p.is_uo()));
+            *hud_quads = hud.build(&hud_frame);
+            self.hud_ms = hud_t0.elapsed().as_secs_f32() * 1000.0;
+            // The vote draw's `player_talk` on a
+            // changed time or count.
+            if std::mem::take(&mut hud.vote_sound) {
+                self.audio.play_local(&self.fs, "player_talk");
+            }
+        }
+        // After the HUD, which borrows the snapshot ring.
+        if let Some(n) = fdc {
+            net.send_reliable(&format!("fdc {n}"));
+        }
+
+        renderer::Frame {
+            view_proj: camera::view_proj_from(cam.pos, cam.yaw, cam.pitch, view_roll, fov, aspect),
+            eye: cam.pos,
+            fwd: cam_forward,
+            up: Vec3::Z,
+            time,
+            fov_x: fov,
+            cull,
+            hud_lines: Vec::new(),
+        }
+    }
+}
+
+/// The viewer's values every step of the live frame reads.
+#[derive(Clone, Copy)]
+struct Viewer {
+    p: &'static net::protocol::Cod1Wire,
+    client_num: i32,
+    ps_client: i32,
+    demo: bool,
+    following: bool,
+    pm_type: i32,
+    snapshot_view: bool,
+    skip_num: i32,
+}
+
+impl Viewer {
+    /// Off the newest snapshot: who the camera is and how it views.
+    fn of(net: &net::NetClient<net::UdpTransport>) -> Viewer {
         let p = net.protocol();
         let client_num = net.gamestate().map_or(-1, |g| g.client_num);
         // While following, ps.clientNum is the followed
@@ -86,6 +379,88 @@ impl App {
             .map_or(0, |s| s.ps.field_i32(p, "pm_type"));
         let snapshot_view = following || (5..=7).contains(&pm_type);
         let skip_num = if following { ps_client } else { client_num };
+        Viewer {
+            p,
+            client_num,
+            ps_client,
+            demo,
+            following,
+            pm_type,
+            snapshot_view,
+            skip_num,
+        }
+    }
+}
+
+/// A UO seat off the newest snapshot: the seat, the vehicle, its angles.
+type Seated = (play::seat::Seat, u32, [f32; 3]);
+
+/// `LiveCx::pose`'s locals, which the steps after it read.
+struct Posed {
+    instances: Vec<DynamicModelInstance>,
+    muzzles: HashMap<u32, (Vec3, Vec3)>,
+    brass: HashMap<u32, (Vec3, Vec3)>,
+    shot_fallbacks: HashMap<u32, Vec3>,
+    weapon_flash: HashMap<i32, String>,
+    entity_pos: HashMap<u32, Vec3>,
+    entity_angles: HashMap<u32, Vec3>,
+    vehicle_angles: HashMap<u32, [f32; 3]>,
+    vehicle_wheels: Vec<fx::vehicle_trails::Wheels>,
+    heads: HashMap<u32, Vec3>,
+    turret_eye: Option<crate::turret::TurretEye>,
+    shadow_marks: Vec<crate::marks::MarkRequest>,
+    view_lean: f32,
+    feet_z: Option<f32>,
+    render_time: Option<i32>,
+}
+
+/// The App fields the live frame's steps use, borrowed apart from the
+/// mode and the renderer and named as App names them.
+struct LiveCx<'a> {
+    fs: &'a Pk3Fs,
+    shell: &'a console::shell::Shell,
+    session: &'a session::Session,
+    audio: &'a mut audio::AudioSystem,
+    fx: &'a mut fx::sim::FxSystem,
+    flame: &'a mut fx::flame::FlameSystem,
+    client_bullets: &'a mut fx::client_bullet::ClientBullets,
+    hud: &'a mut Option<hud::Hud>,
+    foreign_events: &'a mut HashSet<i32>,
+    interp_misses: &'a mut u64,
+    build_ms: &'a mut f32,
+    viewmodel: &'a mut Arc<[model::Model]>,
+    look_zoom: &'a mut (f32, bool),
+    ev_seen: &'a mut u64,
+    ev_unknown: &'a mut u64,
+    fx_ms: &'a mut f32,
+}
+
+impl LiveCx<'_> {
+    /// Poses the drawn pair's entities and puts the camera on it.
+    #[expect(clippy::too_many_arguments)]
+    fn pose(
+        &mut self,
+        prof: &mut frame_prof::Span,
+        r: &mut Renderer,
+        net: &mut Box<net::NetClient<net::UdpTransport>>,
+        cam: &mut FlyCamera,
+        input: &mut Box<play::input::PlayInput>,
+        world: &mut collision::CollisionWorld,
+        scene: &mut entities::EntityScene,
+        clock: &mut play::clock::ServerClock,
+        drawn_pos: &mut HashMap<u32, Vec3>,
+        seat_frac: &mut f32,
+        viewer: Viewer,
+    ) -> Posed {
+        let Viewer {
+            p,
+            client_num,
+            following,
+            pm_type,
+            snapshot_view,
+            skip_num,
+            ..
+        } = viewer;
         // Rebuilt every frame so absent entities (PVS churn) drop out.
         let mut instances: Vec<DynamicModelInstance> = Vec::new();
         // Per-shooter muzzle transforms for flashes and tracers.
@@ -119,7 +494,7 @@ impl App {
         {
             // No straddling pair: one frame, held.
             if std::ptr::eq(a, b) {
-                self.interp_misses += 1;
+                *self.interp_misses += 1;
             }
             let oa = Vec3::from(a.ps.origin(p));
             let ob = Vec3::from(b.ps.origin(p));
@@ -174,12 +549,12 @@ impl App {
                     .raw(),
                 if seat_body { -1 } else { skip_num },
                 net.configstrings(),
-                &self.fs,
+                self.fs,
                 Some(MoveWorld::new(world, &bodies, u32::MAX)),
                 r,
                 p,
             );
-            self.build_ms = t0.elapsed().as_secs_f32() * 1000.0;
+            *self.build_ms = t0.elapsed().as_secs_f32() * 1000.0;
             prof.next(frame_prof::Stage::Net);
             instances = built.instances;
             muzzles = built.muzzles;
@@ -227,6 +602,66 @@ impl App {
                 cam.pitch = -camera::lerp_angle(va_a[0], va_b[0], f).to_radians();
             }
         }
+        Posed {
+            instances,
+            muzzles,
+            brass,
+            shot_fallbacks,
+            weapon_flash,
+            entity_pos,
+            entity_angles,
+            vehicle_angles,
+            vehicle_wheels,
+            heads,
+            turret_eye,
+            shadow_marks,
+            view_lean,
+            feet_z,
+            render_time,
+        }
+    }
+
+    /// The seat, the prediction, the view's playerstate and the snapshot's events.
+    #[expect(clippy::too_many_arguments)]
+    fn predict(
+        &mut self,
+        tick: &Tick,
+        viewer: Viewer,
+        prof: &mut frame_prof::Span,
+        r: &mut Renderer,
+        net: &mut Box<net::NetClient<net::UdpTransport>>,
+        cam: &mut FlyCamera,
+        input: &mut Box<play::input::PlayInput>,
+        ring: &mut play::cmds::CmdRing,
+        predictor: &mut Box<play::predict::Predictor>,
+        view: &mut Box<play::view::OnlineView>,
+        join: &mut Box<play::join::Join>,
+        world: &mut collision::CollisionWorld,
+        weapons: &[Option<weapon::WeaponDef>],
+        events: &mut net::events::EventTracker,
+        predicted_events: &mut play::events::PredictedEvents,
+        drawn_pos: &mut HashMap<u32, Vec3>,
+        drawn_vehicle_angles: &mut HashMap<u32, [f32; 3]>,
+        render_time: Option<i32>,
+        entity_pos: &HashMap<u32, Vec3>,
+        vehicle_angles: &HashMap<u32, [f32; 3]>,
+        feet_z: &mut Option<f32>,
+        view_lean: &mut f32,
+    ) -> (
+        Option<Seated>,
+        Option<play::predict::PredictedView>,
+        Option<play::view::ViewPs>,
+        Vec<net::events::GameEvent>,
+    ) {
+        let Tick { local_ms, .. } = *tick;
+        let Viewer {
+            p,
+            client_num,
+            ps_client,
+            demo,
+            pm_type,
+            ..
+        } = viewer;
         // A UO vehicle seat (docs/research/coduo-vehicles.md).
         let seat_now = net
             .snapshots()
@@ -239,7 +674,7 @@ impl App {
         // UO's cgame never registers `bg_nofatigue`.
         predictor.bg = pmove::BgCvars {
             nofatigue: false,
-            ..pmove::BgCvars::from_cvars(|c| join.cvars.get(c, net.configstrings(), &self.shell))
+            ..pmove::BgCvars::from_cvars(|c| join.cvars.get(c, net.configstrings(), self.shell))
         };
         if let Some(t) = render_time {
             predictor.set_time(t);
@@ -258,12 +693,12 @@ impl App {
             predictor.reset();
             None
         };
-        drawn_pos.clone_from(&entity_pos);
-        drawn_vehicle_angles.clone_from(&vehicle_angles);
+        drawn_pos.clone_from(entity_pos);
+        drawn_vehicle_angles.clone_from(vehicle_angles);
         if let Some(v) = &predicted {
             cam.pos = v.origin + Vec3::Z * play::view::eye_height(pm_type, v.view_height);
-            feet_z = Some(v.origin.z);
-            view_lean = v.pred.ps.lean;
+            *feet_z = Some(v.origin.z);
+            *view_lean = v.pred.ps.lean;
         }
         if let Some(s) = net.snapshots().newest() {
             let spawn = (s.ps.field_i32(p, "clientNum"), s.ps.arrays.stats[5]);
@@ -294,10 +729,10 @@ impl App {
             })
         });
         if let Some(ps) = &view_ps
-            && let Some(models) = view.sync_rig(&self.fs, net.configstrings(), ps)
+            && let Some(models) = view.sync_rig(self.fs, net.configstrings(), ps)
         {
-            r.set_viewmodel(&self.fs, &models);
-            self.viewmodel = models;
+            r.set_viewmodel(self.fs, &models);
+            *self.viewmodel = models;
         }
         // `CG_TransitionPlayerState` feeds a hit ahead of
         // the snapshot's events and the view, mounted
@@ -366,6 +801,46 @@ impl App {
                 }
             }
         }
+        (seat_now, predicted, view_ps, evs)
+    }
+
+    /// `CG_CalcViewValues`' angles and eye: the kicks, the seat, the gun, the quake and the shellshock.
+    #[expect(clippy::too_many_arguments)]
+    fn view(
+        &mut self,
+        tick: &Tick,
+        viewer: Viewer,
+        prof: &mut frame_prof::Span,
+        r: &mut Renderer,
+        net: &mut Box<net::NetClient<net::UdpTransport>>,
+        cam: &mut FlyCamera,
+        input: &mut Box<play::input::PlayInput>,
+        view: &mut Box<play::view::OnlineView>,
+        join: &mut Box<play::join::Join>,
+        world: &mut collision::CollisionWorld,
+        weapons: &[Option<weapon::WeaponDef>],
+        scene: &mut entities::EntityScene,
+        seat_turn: &mut play::seat::FourWheelTurn,
+        gunner_sway: &mut play::seat::GunnerSway,
+        turret_sway: &mut play::seat::GunnerSway,
+        seat_frac: &mut f32,
+        entity_pos: &HashMap<u32, Vec3>,
+        vehicle_angles: &HashMap<u32, [f32; 3]>,
+        turret_eye: Option<crate::turret::TurretEye>,
+        view_lean: f32,
+        feet_z: Option<f32>,
+        render_time: Option<i32>,
+        seat_now: Option<Seated>,
+        predicted: &Option<play::predict::PredictedView>,
+        view_ps: &Option<play::view::ViewPs>,
+    ) -> (f32, play::shock::ShockFrame) {
+        let Tick { dt, local_ms, .. } = *tick;
+        let Viewer {
+            p,
+            pm_type,
+            snapshot_view,
+            ..
+        } = viewer;
         prof.next(frame_prof::Stage::Vm);
         view.step_recoil(weapons, view_ps.as_ref(), local_ms);
         // Next frame's cmds carry this kick, as
@@ -406,7 +881,7 @@ impl App {
             // server sets through the 140/204 mirror
             // (cod15-movement.md 6).
             hud.bob = if pmove::MoveRules::for_protocol(p).v15() {
-                pmove::BobCvars::from_cvars(|c| join.cvars.get(c, net.configstrings(), &self.shell))
+                pmove::BobCvars::from_cvars(|c| join.cvars.get(c, net.configstrings(), self.shell))
             } else {
                 pmove::BobCvars::default()
             };
@@ -464,7 +939,7 @@ impl App {
                 };
                 [-pt.to_degrees(), y.to_degrees(), 0.0]
             };
-            let mut tag = |name: &str| scene.tag_pose(&self.fs, num, name);
+            let mut tag = |name: &str| scene.tag_pose(self.fs, num, name);
             // 0x30040580: a four-wheel turns its riders by
             // the vehicle's `lerpAngles` (0x3004060f).
             let drawn_angles = vehicle_angles.get(&num).copied().unwrap_or(vang);
@@ -586,7 +1061,7 @@ impl App {
             Some(now) => {
                 if let Some(args) = view.shock_command.take() {
                     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-                    if let Err(e) = view.shock.command(&self.fs, &args, now) {
+                    if let Err(e) = view.shock.command(self.fs, &args, now) {
                         console::log::print(&e);
                     }
                 }
@@ -605,7 +1080,7 @@ impl App {
                     });
                 let cs = net.configstrings();
                 view.shock.frame(
-                    &self.fs,
+                    self.fs,
                     |i| {
                         p.cs.slot(net::protocol::CsRange::ShellShock, i)
                             .and_then(|k| cs.get(k))
@@ -639,9 +1114,52 @@ impl App {
             ]);
         }
         input.set_mouse_caps(dt * 1000.0, [shock.mouse.max_pitch, shock.mouse.max_yaw]);
-        self.audio.set_shellshock(&self.fs, &shock.sound);
+        self.audio.set_shellshock(self.fs, &shock.sound);
         r.set_screen_blend(shock.blend_ms);
+        (view_roll, shock)
+    }
 
+    /// The view weapon, the listener and the muzzles, then the effects' step.
+    #[expect(clippy::too_many_arguments)]
+    fn gun(
+        &mut self,
+        tick: &Tick,
+        viewer: Viewer,
+        prof: &mut frame_prof::Span,
+        vm: &mut Option<renderer::VmDraw>,
+        net: &mut Box<net::NetClient<net::UdpTransport>>,
+        cam: &mut FlyCamera,
+        view: &mut Box<play::view::OnlineView>,
+        world: &mut collision::CollisionWorld,
+        weapons: &[Option<weapon::WeaponDef>],
+        scene: &mut entities::EntityScene,
+        looped_fx: &mut fx::looped::LoopedFx,
+        vehicle_trails: &mut fx::vehicle_trails::VehicleTrails,
+        muzzles: &mut HashMap<u32, (Vec3, Vec3)>,
+        brass: &mut HashMap<u32, (Vec3, Vec3)>,
+        vehicle_wheels: &[fx::vehicle_trails::Wheels],
+        render_time: Option<i32>,
+        predicted: &Option<play::predict::PredictedView>,
+        view_ps: &Option<play::view::ViewPs>,
+        view_roll: f32,
+        shock: play::shock::ShockFrame,
+    ) -> (bool, f32, Vec3, Vec3, Vec3, Instant) {
+        let Tick {
+            dt,
+            time,
+            local_ms,
+            aspect,
+            widescreen,
+            ..
+        } = *tick;
+        let Viewer {
+            p,
+            client_num,
+            ps_client,
+            pm_type,
+            skip_num,
+            ..
+        } = viewer;
         // `0x300371f0` poses the view weapon off the
         // finished view, the gun's aim stepped once for
         // it and the scope (combat doc 17.4).
@@ -668,13 +1186,13 @@ impl App {
             ]);
             Vec3::new(f[2], l[2], u[2])
         };
-        let cg_fov = cg_fov(&self.shell);
+        let cg_fov = cg_fov(self.shell);
         view.draw_gun = play::view::DrawGun::from_cvar(self.shell.cvar_f32("cg_drawGun") as i32);
         let (mut vm_draw, fov) =
             view.frame(cg_fov, weapons, view_ps.as_ref(), local_ms, gun, world_up);
         // `0x30033e97`: the shellshock's sensitivity
         // scale rides the zoom's, on the 4:3 fovs.
-        self.look_zoom = (
+        *self.look_zoom = (
             fov / cg_fov * shock.mouse.sensitivity,
             view_ps.as_ref().is_some_and(|v| v.mounted),
         );
@@ -727,7 +1245,7 @@ impl App {
         let fx_t0 = Instant::now();
         prof.next(frame_prof::Stage::FxStep);
         self.fx.set_view(cam.pos);
-        self.fx.set_bolts(&muzzles);
+        self.fx.set_bolts(muzzles);
         // The `playFxOnTag` tags a live effect rides,
         // posed as drawn (CoDMP.exe 0x49e8d0, a bolt
         // posed once a frame).
@@ -737,22 +1255,22 @@ impl App {
             .into_iter()
             .filter_map(|b| {
                 let tag = fx::registry::bolt_tag(net.configstrings(), &p.cs, b.slot)?;
-                Some((b, scene.tag_pose(&self.fs, b.entity, tag)?))
+                Some((b, scene.tag_pose(self.fs, b.entity, tag)?))
             })
             .collect();
         self.fx.set_tag_bolts(&tag_poses);
         self.fx.step(dt, time, Some(&*world));
         prof.next(frame_prof::Stage::Fx);
-        let chained = self.fx.spawn_chained(&self.fs, time);
+        let chained = self.fx.spawn_chained(self.fs, time);
         // Placed by the wall-clock step (the brass).
-        frame_digest::clocked(|| self.audio.play_fx(&self.fs, chained));
+        frame_digest::clocked(|| self.audio.play_fx(self.fs, chained));
         // UO's wheel dust (uo cgame 0x30020540): the
         // world under each wheel, mask 0x211, then
         // every other vehicle's collmap where drawn.
-        fx::vehicle_trails::place_collmaps(world, &vehicle_wheels);
+        fx::vehicle_trails::place_collmaps(world, vehicle_wheels);
         let trails = vehicle_trails.frame(
             self.shell.cvar_f32("cg_vehicletrails") as i32 != 0,
-            &vehicle_wheels,
+            vehicle_wheels,
             |n, a, b| {
                 let t = fx::vehicle_trails::wheel_trace(world, n, a, b);
                 (t.fraction < 1.0).then_some(t.surface_flags)
@@ -763,8 +1281,8 @@ impl App {
                 pos: play.pos,
                 dir: play.dir,
             };
-            let sounds = self.fx.spawn(&self.fs, play.path, at, time);
-            self.audio.play_fx(&self.fs, sounds);
+            let sounds = self.fx.spawn(self.fs, play.path, at, time);
+            self.audio.play_fx(self.fs, sounds);
         }
         // `ET_FX` off the drawn snapshot (`CG_FX`, cgame
         // 0x3001cf20), on the drawn server time.
@@ -774,84 +1292,50 @@ impl App {
             for play in looped_fx.frame(a, p, t, cam.pos, net.configstrings()) {
                 let sounds = self
                     .fx
-                    .spawn_marked(&self.fs, &play.path, play.at, None, time, true);
-                self.audio.play_fx(&self.fs, sounds);
+                    .spawn_marked(self.fs, &play.path, play.at, None, time, true);
+                self.audio.play_fx(self.fs, sounds);
             }
         }
+        (local_player, fov, cam_forward, cam_right, cam_up, fx_t0)
+    }
 
-        prof.next(frame_prof::Stage::Events);
-        let (screen_w, screen_h) = r.screen_size();
-
-        let no_clients = BTreeMap::new();
-        let no_entities = BTreeMap::new();
-        let newest = net.snapshots().newest();
-        let entity_origin = |num: i32| {
-            let num = u32::try_from(num).ok()?;
-            entity_pos.get(&num).map(|v| v.to_array())
-        };
-        // Retail reads `cg_entities[n].currentState`;
-        // the newest snapshot stands in.
-        let turret_weapon = newest.and_then(|s| {
-            let int = |n: &str| s.ps.field_i32(p, n);
-            let num = turret::ridden(
-                int("eFlags"),
-                int("viewlocked"),
-                int("viewlocked_entNum"),
-                p.is_uo(),
-            )?;
-            let w = s.entities.get(&num)?.field_i32(p, "weapon");
-            usize::try_from(w).ok()
-        });
-        // UO's barrel icon turns with the ridden
-        // vehicle's `tag_turret` (uo cgame 0x30031e20).
-        let vehicle_turret_yaw = newest
-            .filter(|s| s.ps.field_i32(p, "eFlags") & net::flags::EF_IN_VEHICLE_V22 != 0)
-            .and_then(|s| {
-                let num = u32::try_from(s.ps.field_i32(p, "viewlocked_entNum")).ok()?;
-                let f = scene.tag_pose(&self.fs, num, "tag_turret")?.axis[0];
-                Some(f.y.atan2(f.x).to_degrees())
-            });
-        let client_cvar = |c: &str| join.cvars.get(c, net.configstrings(), &self.shell);
-        let server_address = net.transport().peer().map(|a| a.to_string());
-        let hud_frame = hud::HudFrame {
-            now: time,
-            screen_w,
-            screen_h,
-            configstrings: net.configstrings(),
-            clients: newest.map_or(&no_clients, |s| &s.clients),
-            protocol: p,
-            // The render clock, so hudelem tweens and
-            // timers move between snapshots.
-            server_time: render_time.unwrap_or(0),
-            snap_time: render_time
-                .and_then(|t| net.snapshots().two_for_time(t))
-                .map_or(0, |(a, _)| a.server_time.raw()),
-            fs: &self.fs,
-            ps: newest.map(|s| &s.ps),
-            entities: newest.map_or(&no_entities, |s| &s.entities),
-            predicted: predicted.as_ref().filter(|_| local_player).map(|v| &v.pred),
-            local_player,
-            weapons,
-            localized: &self.localized,
-            view_yaw: cam.yaw.to_degrees(),
-            eye: cam.pos.to_array(),
-            fov,
-            entity_origin: &entity_origin,
-            turret_weapon,
-            vehicle_turret_yaw,
-            cvar: &client_cvar,
-            bound_key: &|cmd| bound_key(&self.shell, &self.localized, p, cmd),
-            draw: hud::DrawToggles {
-                crosshair: self.shell.cvar_f32("cg_drawCrosshair") as i32 != 0,
-                status: self.shell.cvar_f32("cg_drawStatus") as i32 != 0,
-            },
-            weapon_select: input.selected(),
-            own_client: net
-                .gamestate()
-                .and_then(|g| u32::try_from(g.client_num).ok()),
-            server_address: server_address.as_deref(),
-        };
-
+    /// The tracers' rules, then each event: its round, the HUD's share, the stance and the weapon, its sound and effects.
+    #[expect(clippy::too_many_arguments)]
+    fn events(
+        &mut self,
+        tick: &Tick,
+        viewer: Viewer,
+        vm: &Option<renderer::VmDraw>,
+        net: &net::NetClient<net::UdpTransport>,
+        cam: &mut FlyCamera,
+        input: &mut Box<play::input::PlayInput>,
+        world: &mut collision::CollisionWorld,
+        weapons: &Vec<Option<weapon::WeaponDef>>,
+        scene: &mut entities::EntityScene,
+        muzzles: &HashMap<u32, (Vec3, Vec3)>,
+        brass: &HashMap<u32, (Vec3, Vec3)>,
+        shot_fallbacks: &HashMap<u32, Vec3>,
+        weapon_flash: &HashMap<i32, String>,
+        entity_pos: &HashMap<u32, Vec3>,
+        predicted: &Option<play::predict::PredictedView>,
+        evs: Vec<net::events::GameEvent>,
+        local_player: bool,
+        newest: Option<&net::snapshot::Snapshot>,
+        hud_frame: &hud::HudFrame,
+    ) {
+        let Tick {
+            dt,
+            time,
+            blood,
+            eject_brass,
+            ..
+        } = *tick;
+        let Viewer {
+            p,
+            client_num,
+            ps_client,
+            ..
+        } = viewer;
         // UO's tracers: the length gate, and `sv_night`
         // off the systeminfo (fx::sim::TracerRules).
         let uo = p.is_uo();
@@ -866,15 +1350,15 @@ impl App {
         // pair; they must not wait out the interp delay.
         if let Some(newest) = newest {
             let ctx = fx::registry::ResolveCtx {
-                brass: &brass,
+                brass,
                 weapons: weapons.as_slice(),
                 eject_brass,
                 configstrings: net.configstrings(),
                 cs: &p.cs,
                 blood,
-                muzzles: &muzzles,
-                shot_fallbacks: &shot_fallbacks,
-                weapon_flash: &weapon_flash,
+                muzzles,
+                shot_fallbacks,
+                weapon_flash,
                 view_flash: vm.is_some().then_some(weapons.as_slice()),
                 view_body: fx::registry::view_body(newest.ps.field_i32(p, "pm_flags"), ps_client),
             };
@@ -884,7 +1368,7 @@ impl App {
             let mut evs: std::collections::VecDeque<_> =
                 evs.into_iter().map(|e| (e, None)).collect();
             let bodies =
-                play::predict::solid_bodies(p, &newest.entities, client_num as u32, &entity_pos);
+                play::predict::solid_bodies(p, &newest.entities, client_num as u32, entity_pos);
             // Brush models and vehicles' collmaps where
             // the newest snapshot has them, as the
             // cgame's entity clip meets them.
@@ -942,7 +1426,7 @@ impl App {
                 };
                 let muzzles = ctx.muzzles;
                 if let Some(round) = fx::registry::client_round(&ev, &ctx)
-                    && let Some(pose) = scene.tag_pose(&self.fs, round.entity, round.tag)
+                    && let Some(pose) = scene.tag_pose(self.fs, round.entity, round.tag)
                 {
                     let def = usize::try_from(round.weapon)
                         .ok()
@@ -964,7 +1448,7 @@ impl App {
                         }) => {
                             // No tag, no tracer (0x30048b60).
                             let tracer: HashMap<u32, (Vec3, Vec3)> = scene
-                                .tag_pose(&self.fs, round.entity, round.tracer_tag)
+                                .tag_pose(self.fs, round.entity, round.tracer_tag)
                                 .map(|t| (round.entity, (t.origin, t.axis[0])))
                                 .into_iter()
                                 .collect();
@@ -983,9 +1467,9 @@ impl App {
                         None => {}
                     }
                 }
-                self.ev_seen += 1;
+                *self.ev_seen += 1;
                 if let Some(hud) = &mut self.hud {
-                    hud.on_game_event(&ev, &hud_frame);
+                    hud.on_game_event(&ev, hud_frame);
                 }
                 if let Some(s) = play::events::forced_stance(
                     &ev,
@@ -1013,7 +1497,7 @@ impl App {
                     input.out_of_ammo();
                 }
                 self.audio.on_game_event(
-                    &self.fs,
+                    self.fs,
                     &ev,
                     net.configstrings(),
                     muzzles,
@@ -1040,9 +1524,9 @@ impl App {
                                     .and_then(|n| scene.drawn_origin(n))
                             };
                             let sounds = self.fx.spawn_marked_from(
-                                &self.fs, &path, at, bolt, time, !nomarks, cull_from,
+                                self.fs, &path, at, bolt, time, !nomarks, cull_from,
                             );
-                            self.audio.play_fx(&self.fs, sounds);
+                            self.audio.play_fx(self.fs, sounds);
                         }
                         fx::registry::Resolved::OnTag {
                             path,
@@ -1060,12 +1544,12 @@ impl App {
                             // `cullrange` from its `lerpOrigin`
                             // (cgame 0x3001db80).
                             let origin = scene.drawn_origin(entity);
-                            if let Some(pose) = scene.tag_pose(&self.fs, entity, &tag) {
+                            if let Some(pose) = scene.tag_pose(self.fs, entity, &tag) {
                                 let bolt = fx::sim::TagBolt { entity, slot };
                                 let sounds = self
                                     .fx
-                                    .spawn_on_tag_from(&self.fs, &path, bolt, pose, time, origin);
-                                self.audio.play_fx(&self.fs, sounds);
+                                    .spawn_on_tag_from(self.fs, &path, bolt, pose, time, origin);
+                                self.audio.play_fx(self.fs, sounds);
                             }
                         }
                         fx::registry::Resolved::Tracer {
@@ -1080,7 +1564,7 @@ impl App {
                         }
                         fx::registry::Resolved::Known => {}
                         fx::registry::Resolved::Unknown => {
-                            self.ev_unknown += 1;
+                            *self.ev_unknown += 1;
                             let foreign = ev.event & net::event_ids::EV_FOREIGN;
                             if foreign != 0 && self.foreign_events.insert(ev.event & !foreign) {
                                 log::info!(
@@ -1095,7 +1579,31 @@ impl App {
                 }
             }
         }
+    }
 
+    /// The effects' shakes, the loop and blend sounds, then the effects' models.
+    #[expect(clippy::too_many_arguments)]
+    fn sound(
+        &mut self,
+        tick: &Tick,
+        viewer: Viewer,
+        prof: &mut frame_prof::Span,
+        r: &mut Renderer,
+        net: &net::NetClient<net::UdpTransport>,
+        view: &mut Box<play::view::OnlineView>,
+        world: &mut collision::CollisionWorld,
+        weapons: &[Option<weapon::WeaponDef>],
+        scene: &mut entities::EntityScene,
+        last_loop_snap: &mut Option<u32>,
+        instances: &mut Vec<DynamicModelInstance>,
+        muzzles: &HashMap<u32, (Vec3, Vec3)>,
+        entity_pos: &HashMap<u32, Vec3>,
+        entity_angles: &HashMap<u32, Vec3>,
+        render_time: Option<i32>,
+        newest: Option<&net::snapshot::Snapshot>,
+    ) {
+        let Tick { dt, time, .. } = *tick;
+        let Viewer { p, .. } = viewer;
         // A UO effect's `CameraShake` feeds the same
         // shake core as an earthquake (uo cgame
         // vmMain 16, 0x3002b0e0).
@@ -1133,9 +1641,9 @@ impl App {
                 })
                 .collect();
             self.audio
-                .set_loop_sounds(&self.fs, net.configstrings(), &loops);
+                .set_loop_sounds(self.fs, net.configstrings(), &loops);
             self.audio.set_projectile_sounds(
-                &self.fs,
+                self.fs,
                 net.configstrings(),
                 &audio::missile_sounds(p, newest),
             );
@@ -1153,27 +1661,27 @@ impl App {
             // on the wall clock.
             frame_digest::clocked(|| {
                 self.audio.step_sound_blends(
-                    &self.fs,
+                    self.fs,
                     p,
                     (a, b, f),
                     (net.configstrings(), weapons),
-                    &entity_pos,
+                    entity_pos,
                 )
             });
         }
 
         // After the drain, so new voices get this frame's positions.
         self.audio
-            .step_fire_loops(&self.fs, dt * 1000.0, &entity_pos, &muzzles);
-        self.audio.step(&entity_pos, &entity_angles, Some(&*world));
+            .step_fire_loops(self.fs, dt * 1000.0, entity_pos, muzzles);
+        self.audio.step(entity_pos, entity_angles, Some(&*world));
 
         prof.next(frame_prof::Stage::Pose);
         // The brass below steps on wall-clock time.
-        frame_digest::models(&instances);
+        frame_digest::models(instances);
         // After the events, so a case ejected this frame
         // draws this frame.
         for m in self.fx.models(time) {
-            if let Some(model) = scene.fx_model(r, &self.fs, &m.model) {
+            if let Some(model) = scene.fx_model(r, self.fs, &m.model) {
                 let [f, l, u] = m.axis;
                 instances.push(DynamicModelInstance {
                     model,
@@ -1191,9 +1699,39 @@ impl App {
         }
         frame_prof::count(frame_prof::Count::Models, instances.len());
         frame_prof::count(frame_prof::Count::Particles, self.fx.counts().0);
-        r.set_dynamic_models(&instances);
+        r.set_dynamic_models(instances);
         prof.next(frame_prof::Stage::FxDraw);
+    }
 
+    /// UO's flame and its report, then the effects' draw; the `fdc` to send.
+    #[expect(clippy::too_many_arguments)]
+    fn flame(
+        &mut self,
+        tick: &Tick,
+        viewer: Viewer,
+        r: &mut Renderer,
+        net: &net::NetClient<net::UdpTransport>,
+        cam: &mut FlyCamera,
+        input: &mut Box<play::input::PlayInput>,
+        world: &mut collision::CollisionWorld,
+        weapons: &[Option<weapon::WeaponDef>],
+        muzzles: &HashMap<u32, (Vec3, Vec3)>,
+        entity_pos: &HashMap<u32, Vec3>,
+        heads: &HashMap<u32, Vec3>,
+        shadow_marks: &[crate::marks::MarkRequest],
+        render_time: Option<i32>,
+        cam_right: Vec3,
+        cam_up: Vec3,
+        fx_t0: Instant,
+        newest: Option<&net::snapshot::Snapshot>,
+    ) -> Option<u32> {
+        let Tick { dt, time, .. } = *tick;
+        let Viewer {
+            p,
+            client_num,
+            ps_client,
+            ..
+        } = viewer;
         // `cg.snap`'s own player and solid bodies, the
         // older of the drawn pair (coduo-diff.md 19):
         // the chunks clip them and the report tests
@@ -1216,7 +1754,7 @@ impl App {
             });
             let bodies = snap
                 .zip(victim)
-                .map(|(s, v)| play::predict::solid_bodies(p, &s.entities, v.client, &entity_pos))
+                .map(|(s, v)| play::predict::solid_bodies(p, &s.entities, v.client, entity_pos))
                 .unwrap_or_default();
             (victim, bodies)
         } else {
@@ -1225,7 +1763,7 @@ impl App {
         // UO's flamethrower streams off each firing
         // body's `tag_flash` (fx::flame).
         let nozzles = newest
-            .map(|s| fx::flame::nozzles(p, s, ps_client, weapons, &muzzles))
+            .map(|s| fx::flame::nozzles(p, s, ps_client, weapons, muzzles))
             .unwrap_or_default();
         if !nozzles.is_empty() || !self.flame.is_empty() {
             let sounds = self.flame.step(
@@ -1250,15 +1788,15 @@ impl App {
                 match s {
                     FlameSound::Start { owner, pos } => {
                         self.audio
-                            .play(&self.fs, cue("flamethrower_start", owner, pos));
+                            .play(self.fs, cue("flamethrower_start", owner, pos));
                     }
                     FlameSound::Fire { owner, pos } => {
-                        self.audio.hold(&self.fs, owner, "flamethrower_fire", pos)
+                        self.audio.hold(self.fs, owner, "flamethrower_fire", pos)
                     }
                     FlameSound::Stop { owner, pos } => {
                         self.audio.release(owner);
                         self.audio
-                            .play(&self.fs, cue("flamethrower_cooldown", owner, pos));
+                            .play(self.fs, cue("flamethrower_cooldown", owner, pos));
                     }
                 }
             }
@@ -1298,23 +1836,23 @@ impl App {
                     viewer: ps_client,
                     own: client_num,
                     eye: cam.pos,
-                    heads: &heads,
-                    entity_pos: &entity_pos,
+                    heads,
+                    entity_pos,
                 },
                 cam_right,
                 cam_up,
             ));
             fx::sim::sort_back_to_front(&mut fx_quads, cam.pos);
         }
-        r.set_fx_quads(&self.fs, fx_quads, time);
+        r.set_fx_quads(self.fs, fx_quads, time);
         // CoD2's snow (fx::cod2_cloud), tested against the map's roofs
         let clouds = self.fx.clouds(cam.pos, cam_right, cam_up, time);
         let map = self.session.map_name();
-        r.set_fx_clouds(&self.fs, map, &clouds, time);
+        r.set_fx_clouds(self.fs, map, &clouds, time);
         r.set_marks(
-            &self.fs,
+            self.fs,
             &self.fx.take_marks(time),
-            &shadow_marks,
+            shadow_marks,
             (time * 1000.0) as i32,
             time,
             self.shell.cvar_f32("cg_marks") != 0.0,
@@ -1324,39 +1862,7 @@ impl App {
             net::FogParams::parse(net.configstring(net.protocol().cs.fog)),
             time,
         );
-        self.fx_ms = fx_t0.elapsed().as_secs_f32() * 1000.0;
-
-        prof.next(frame_prof::Stage::Hud);
-        if let Some(hud) = &mut self.hud {
-            let hud_t0 = Instant::now();
-            hud.set_message_widths(
-                self.shell.cvar_f32("cg_gameMessageWidth") as i32,
-                self.shell.cvar_f32("cg_gameBoldMessageWidth") as i32,
-                screen_w as u32,
-            );
-            hud.set_chat_rules(hud::chat::Rules::read(|c| self.shell.cvar(c), p.is_uo()));
-            *hud_quads = hud.build(&hud_frame);
-            self.hud_ms = hud_t0.elapsed().as_secs_f32() * 1000.0;
-            // The vote draw's `player_talk` on a
-            // changed time or count.
-            if std::mem::take(&mut hud.vote_sound) {
-                self.audio.play_local(&self.fs, "player_talk");
-            }
-        }
-        // After the HUD, which borrows the snapshot ring.
-        if let Some(n) = fdc {
-            net.send_reliable(&format!("fdc {n}"));
-        }
-
-        renderer::Frame {
-            view_proj: camera::view_proj_from(cam.pos, cam.yaw, cam.pitch, view_roll, fov, aspect),
-            eye: cam.pos,
-            fwd: cam_forward,
-            up: Vec3::Z,
-            time,
-            fov_x: fov,
-            cull,
-            hud_lines: Vec::new(),
-        }
+        *self.fx_ms = fx_t0.elapsed().as_secs_f32() * 1000.0;
+        fdc
     }
 }
