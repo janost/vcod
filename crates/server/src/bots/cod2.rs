@@ -44,8 +44,9 @@ use std::sync::Arc;
 use glam::Vec3;
 use vcod_cod2::net::UserCmd2;
 use vcod_cod2::pmove::{button, pm_type, pmf};
-use vcod_common::net::msg::{self, UserCmd};
+use vcod_common::net::msg::UserCmd;
 
+use super::bridge::eye;
 use super::game_bots::{GameBots, OwnBots};
 use super::{Bot, BotView, EnemyView, WeaponMenu};
 use crate::game::cod2::Cod2Level;
@@ -88,16 +89,6 @@ impl Cod2Walk {
     }
 }
 
-/// The CoD2 body a walk carries between cmds ([`Cod2Walk`]), the cmd before
-/// it, and where it left the walk's CoD1 body.
-#[derive(Clone)]
-struct WalkBody {
-    ps: vcod_cod2::pmove::PlayerState,
-    old: UserCmd2,
-    origin: Vec3,
-    velocity: Vec3,
-}
-
 impl crate::nav::WalkStep for Cod2Walk {
     fn step(
         &self,
@@ -110,121 +101,38 @@ impl crate::nav::WalkStep for Cod2Walk {
         weapons: &[Option<vcod_common::weapon::WeaponDef>],
     ) {
         use vcod_common::movetrace::MoveWorld;
-        // The walk's own CoD1 body is the truth when it moved it since.
-        let mut body = carry
-            .take()
-            .and_then(|c| c.downcast::<WalkBody>().ok())
-            .map(Arc::unwrap_or_clone)
-            .filter(|b| b.origin == ps.origin && b.velocity == ps.velocity)
-            .unwrap_or_else(|| WalkBody {
-                ps: cod2_walk_body(ps, from_ms),
-                old: UserCmd2::default(),
-                origin: ps.origin,
-                velocity: ps.velocity,
-            });
-        body.ps.delta_angles = *delta;
         let cmd2 = to_cmd2(cmd);
         let scale = weapons
             .get(ps.weapon as usize)
             .and_then(Option::as_ref)
             .map_or(1.0, |d| d.move_speed_scale);
-        let mw = MoveWorld::bare(world);
-        vcod_cod2::pmove::player_step(&mut body.ps, &cmd2, &mut body.old, mw, self.rules, scale);
-        *delta = body.ps.delta_angles;
-        read_walk_body(&body.ps, ps, cmd2.buttons & button::JUMP != 0, world);
-        body.origin = ps.origin;
-        body.velocity = ps.velocity;
-        *carry = Some(Arc::new(body));
+        super::bridge::walk_cmd(
+            ps,
+            carry,
+            from_ms,
+            |b: &mut vcod_cod2::pmove::PlayerState, old: &mut UserCmd2| {
+                // CoD2 keeps `delta_angles` as shorts, the walk's own.
+                b.delta_angles = *delta;
+                let mw = MoveWorld::bare(world);
+                vcod_cod2::pmove::player_step(b, &cmd2, old, mw, self.rules, scale);
+                *delta = b.delta_angles;
+                cmd2.buttons & button::JUMP != 0
+            },
+            // CoD2's slope test traces the stance's box over the level's
+            // world, as its pmove does.
+            |b, from, to| {
+                let (mins, maxs) = b.stance_box();
+                let mask = vcod_cod2::pmove::MASK_PLAYERSOLID;
+                MoveWorld::bare(world)
+                    .box_trace(from, to, mins, maxs, mask)
+                    .into()
+            },
+        );
     }
 
     fn key(&self) -> String {
         self.key.clone()
     }
-}
-
-/// A walk's first CoD2 body off its CoD1 one, its clock at `time`: moving
-/// as the CoD1 body moves (`old_velocity` its pace, as a body that has run
-/// so for a while), its last jump `since_jump_ms` back.
-fn cod2_walk_body(
-    ps: &vcod_common::pmove::PlayerState,
-    time: i32,
-) -> vcod_cod2::pmove::PlayerState {
-    use vcod_cod2::pmove::{ENTITYNUM_NONE, VIEW_CROUCH, VIEW_PRONE};
-    use vcod_common::pmove::Stance;
-    let mut b = vcod_cod2::pmove::PlayerState::spawn(ps.origin, ps.yaw.to_degrees(), time);
-    b.view_angles[0] = ps.pitch.to_degrees();
-    b.velocity = ps.velocity;
-    b.old_velocity = [ps.velocity.x, ps.velocity.y];
-    b.speed = ps.speed as i32;
-    b.gravity = ps.gravity as i32;
-    b.ground_entity_num = if ps.on_ground {
-        ps.ground_entity as i32
-    } else {
-        ENTITYNUM_NONE
-    };
-    if ps.on_ladder {
-        b.pm_flags |= pmf::LADDER;
-        b.ladder_vec = ps.ladder_normal;
-    }
-    let view = match ps.stance {
-        Stance::Stand => None,
-        Stance::Crouch => Some((pmf::DUCKED, VIEW_CROUCH)),
-        Stance::Prone => Some((pmf::PRONE, VIEW_PRONE)),
-    };
-    if let Some((flag, height)) = view {
-        b.pm_flags |= flag;
-        b.view_height_target = height;
-        b.view_height_current = height as f32;
-    }
-    // `Jump_Check` refuses a jump inside 500 ms of `jumpTime`.
-    b.jump_time = time - ps.since_jump_ms.min(10_000.0) as i32;
-    b.jump_origin_z = ps.jump_origin_z;
-    if ps.jump_penalty {
-        b.pm_flags |= pmf::JUMPING;
-        b.pm_time = ps.knockback_ms as i32;
-    }
-    b
-}
-
-/// What the walk reads off the CoD2 body `b` into its CoD1 body `ps`; a
-/// body off the ground over ground too steep to stand on reads sliding.
-fn read_walk_body(
-    b: &vcod_cod2::pmove::PlayerState,
-    ps: &mut vcod_common::pmove::PlayerState,
-    jump_held: bool,
-    world: &vcod_common::collision::CollisionWorld,
-) {
-    ps.origin = b.origin;
-    ps.velocity = b.velocity;
-    ps.yaw = b.view_angles[1].to_radians();
-    ps.pitch = b.view_angles[0].to_radians();
-    ps.on_ground = b.on_ground();
-    if ps.on_ground {
-        ps.ground_entity = b.ground_entity_num as u32;
-    }
-    ps.on_ladder = b.pm_flags & pmf::LADDER != 0;
-    ps.ladder_normal = b.ladder_vec;
-    ps.stance = b.effective_stance();
-    ps.ducked = b.pm_flags & (pmf::DUCKED | pmf::PRONE) != 0;
-    ps.since_jump_ms = (b.command_time - b.jump_time).max(0) as f32;
-    ps.jump_penalty = b.pm_flags & pmf::JUMPING != 0;
-    ps.knockback_ms = b.pm_time as f32;
-    ps.jump_origin_z = b.jump_origin_z;
-    ps.jump_latched = jump_held;
-    let plane = if ps.on_ground {
-        Some(Vec3::Z)
-    } else {
-        let (mins, maxs) = b.stance_box();
-        let t = vcod_common::movetrace::MoveWorld::bare(world).box_trace(
-            b.origin,
-            b.origin - Vec3::Z * 0.25,
-            mins,
-            maxs,
-            vcod_cod2::pmove::MASK_PLAYERSOLID,
-        );
-        (!t.startsolid && t.fraction < 1.0).then_some(t.normal)
-    };
-    ps.set_ground_plane(plane);
 }
 
 /// CoD2's stock weapon menus (`weapon_<nationality>`), each weapon with
@@ -1399,14 +1307,6 @@ impl Cod2Bots {
     }
 }
 
-/// How far ahead of a node a wall flagged for the mantle is looked for
-/// before the climb is walked: past half the graph's widest pitch.
-const MANTLE_LOOK: f32 = 64.0;
-/// The walk to the wall's ticks, and the whole probe's: the slowest
-/// mantle (`mp_mantle_up_57` and `_over_high`) runs under 1.5 s.
-const MANTLE_WALK_TICKS: usize = 20;
-const MANTLE_TICKS: usize = 70;
-
 /// The graph's mantle probe ([`crate::nav::MantleProbe`]) under the
 /// level's CoD2 movement `rules`: [`mantle_walk`].
 pub fn mantle_probe(rules: vcod_cod2::pmove::Rules) -> crate::nav::MantleProbe {
@@ -1418,66 +1318,42 @@ pub fn mantle_probe(rules: vcod_cod2::pmove::Rules) -> crate::nav::MantleProbe {
 }
 
 /// Where a CoD2 body standing at `from` and run at the wall along `yaw`
-/// stands once it mantles (cod2-movement.md 9): only off a wall flagged
-/// `MANTLE_ON` or `MANTLE_OVER` within [`MANTLE_LOOK`]; the body walks at
-/// it, presses the jump key on the first step pmove offers the climb
-/// (`Mantle_CheckLedge`'s hint), as a bot does, and the climb's end on the
-/// ground is the answer.
+/// stands once it mantles over `world` ([`super::bridge::mantle_walk`],
+/// cod2-movement.md 9).
 pub fn mantle_walk(
     world: &vcod_common::collision::CollisionWorld,
     rules: vcod_cod2::pmove::Rules,
     from: Vec3,
     yaw: f32,
 ) -> Option<Vec3> {
-    use vcod_cod2::collision::{CONTENTS_MANTLE, SURF_MANTLE_ON, SURF_MANTLE_OVER};
-    use vcod_cod2::pmove::mantle::flag;
     use vcod_common::movetrace::MoveWorld;
     if !rules.mantle_enable || rules.mantle_anims.is_none() {
         return None;
     }
-    let (s, c) = yaw.to_radians().sin_cos();
-    let dir = Vec3::new(c, s, 0.0);
-    let r = rules.mantle_check_radius.max(1.0);
-    let t = MoveWorld::bare(world).box_trace(
-        from,
-        from + dir * MANTLE_LOOK,
-        Vec3::new(-r, -r, 0.0),
-        Vec3::new(r, r, 70.0),
-        CONTENTS_MANTLE,
-    );
-    if t.startsolid
-        || t.fraction >= 1.0
-        || t.surface_flags & (SURF_MANTLE_ON | SURF_MANTLE_OVER) == 0
-    {
-        return None;
-    }
-    let mut ps = vcod_cod2::pmove::PlayerState::spawn(from + Vec3::Z * 0.125, yaw, 0);
+    // CoD2's walk truncates its yaw to a short, CoD4's rounds: kept, so
+    // the graphs stay as measured.
     let angle = (yaw * 65536.0 / 360.0) as i32 & 0xffff;
     let mut old = UserCmd2::default();
-    let mut mantled = false;
-    for tick in 0..MANTLE_TICKS {
-        if !mantled && tick >= MANTLE_WALK_TICKS {
-            return None;
-        }
-        let jump = !mantled && ps.mantle.flags & flag::HINT != 0;
-        let cmd = UserCmd2 {
-            server_time: ps.command_time + 50,
-            buttons: if jump { button::JUMP } else { 0 },
-            angles: [0, angle, 0],
-            forward_move: if mantled { 0 } else { 127 },
-            ..Default::default()
-        };
-        vcod_cod2::pmove::player_step(&mut ps, &cmd, &mut old, MoveWorld::bare(world), rules, 1.0);
-        if ps.pm_flags & pmf::MANTLE != 0 {
-            mantled = true;
-        } else if mantled && ps.on_ground() {
-            return Some(ps.origin);
-        } else if !mantled && jump {
-            // The jump key jumped instead.
-            return None;
-        }
-    }
-    None
+    super::bridge::mantle_walk(
+        from,
+        yaw,
+        rules.mantle_check_radius,
+        |a, b, mins, maxs, mask| {
+            MoveWorld::bare(world)
+                .box_trace(a, b, mins, maxs, mask)
+                .into()
+        },
+        |ps: &mut vcod_cod2::pmove::PlayerState, server_time, jump, forward| {
+            let cmd = UserCmd2 {
+                server_time,
+                buttons: if jump { button::JUMP } else { 0 },
+                angles: [0, angle, 0],
+                forward_move: if forward { 127 } else { 0 },
+                ..Default::default()
+            };
+            vcod_cod2::pmove::player_step(ps, &cmd, &mut old, MoveWorld::bare(world), rules, 1.0);
+        },
+    )
 }
 
 /// The nearest `p` comes to the segment `a` to `b`.
@@ -1585,10 +1461,6 @@ fn forced_stance(ps: &vcod_cod2::pmove::PlayerState, from: i32) -> Option<bool> 
         })
 }
 
-fn eye(ps: &vcod_cod2::pmove::PlayerState) -> Vec3 {
-    ps.origin + Vec3::Z * ps.view_height_current
-}
-
 /// The body in `slot` as the driver's team passes read it. A client
 /// killed this frame keeps `pm_type` normal until its end frame; the
 /// vitals already say dead, and the yields walk round no corpse.
@@ -1628,32 +1500,15 @@ pub(crate) fn cover_body(
     })
 }
 
-/// The body in `slot` as the follower reads it ([`cod1_body`]).
+/// The body in `slot` as the follower reads it
+/// ([`super::bridge::follower_body`]).
 pub(crate) fn move_ps(level: &Cod2Level, slot: usize) -> Option<vcod_common::pmove::PlayerState> {
     let p = level.players.get(slot)?.as_ref()?;
-    Some(cod1_body(&p.ps, level.level_time()))
-}
-
-/// The CoD1 body the follower's foot and jump tests read: where the CoD2
-/// body stands and how it moves, its last jump's age off `jump_time`, and
-/// the jump penalty `GRAPH_RULES` jumps under: CoD2's `JUMPING` with its
-/// `pm_time` is 1.5's 0x2000 (cod2-movement.md), as [`Cod2Walk`] maps it.
-fn cod1_body(ps: &vcod_cod2::pmove::PlayerState, now: i32) -> vcod_common::pmove::PlayerState {
-    let mut b = vcod_common::pmove::PlayerState::spawn(ps.origin, ps.view_angles[1]);
-    b.rules = GRAPH_RULES;
-    b.velocity = ps.velocity;
-    b.on_ground = ps.on_ground();
-    b.on_ladder = ps.pm_flags & pmf::LADDER != 0;
-    b.ladder_normal = ps.ladder_vec;
-    b.since_jump_ms = if ps.jump_time > 0 {
-        now.saturating_sub(ps.jump_time).max(0) as f32
-    } else {
-        f32::MAX
-    };
-    b.jump_penalty = ps.pm_flags & pmf::JUMPING != 0;
-    b.knockback_ms = ps.pm_time as f32;
-    b.jump_origin_z = ps.jump_origin_z;
-    b
+    Some(super::bridge::follower_body(
+        &p.ps,
+        level.level_time(),
+        GRAPH_RULES,
+    ))
 }
 
 /// The nearest live frag within [`super::FLEE_REACH`] across and
@@ -1737,45 +1592,37 @@ pub fn offhand_cmd(
     c.weapon = held;
     let trigger = c.buttons & button::ATTACK != 0;
     c.buttons &= !(button::ATTACK | button::ADS);
-    let armed = throwing.unwrap_or(false) || trigger;
-    if trigger || !armed {
+    let (key, armed) = super::bridge::frag_key(trigger, throwing);
+    if key {
         c.buttons |= vcod_cod2::pmove::weapon::key::FRAG;
     }
     c.off_hand_index = g;
     (c, Some(armed))
 }
 
-/// A CoD1 usercmd in CoD2's bits (cod2-movement.md 3, the client's
-/// `CL_CmdButtons` map): the attack, melee, use and sight move to 0x1,
-/// 0x4, 0x8 and 0x1000; reload, the leans and the two stances leave
-/// `wbuttons` for 0x10, 0x40/0x80 and 0x100/0x200; `upmove` is gone, so a
-/// jump is 0x400 and a crouch held through `up` is 0x200.
+/// CoD2's bits for the CoD1 keys (cod2-movement.md 3, the client's
+/// `CL_CmdButtons` map): the attack, melee, use and sight to 0x1, 0x4, 0x8
+/// and 0x1000; reload, the leans and the two stances to 0x10, 0x40/0x80
+/// and 0x100/0x200; a jump is 0x400.
+const BUTTONS: super::bridge::Buttons = super::bridge::Buttons {
+    attack: button::ATTACK as u32,
+    melee: 0x4,
+    use_key: 0x8,
+    ads: button::ADS as u32,
+    reload: 0x10,
+    lean_left: button::LEAN_LEFT as u32,
+    lean_right: button::LEAN_RIGHT as u32,
+    prone: button::PRONE as u32,
+    crouch: button::CROUCH as u32,
+    jump: button::JUMP as u32,
+};
+
+/// A CoD1 usercmd in CoD2's bits ([`BUTTONS`]); the moves and angles go
+/// as they are.
 pub fn to_cmd2(cmd: &UserCmd) -> UserCmd2 {
-    let mut b = 0;
-    let map = [
-        (cmd.buttons & msg::BUTTON_ATTACK, button::ATTACK),
-        (cmd.buttons & msg::BUTTON_MELEE, 0x4),
-        (cmd.buttons & msg::BUTTON_USE, 0x8),
-        (cmd.buttons & msg::BUTTON_ADS, button::ADS),
-        (cmd.wbuttons & msg::WBUTTON_RELOAD, 0x10),
-        (cmd.wbuttons & msg::WBUTTON_LEAN_LEFT, button::LEAN_LEFT),
-        (cmd.wbuttons & msg::WBUTTON_LEAN_RIGHT, button::LEAN_RIGHT),
-        (cmd.wbuttons & msg::WBUTTON_PRONE, button::PRONE),
-        (cmd.wbuttons & msg::WBUTTON_CROUCH, button::CROUCH),
-    ];
-    for (on, bit) in map {
-        if on != 0 {
-            b |= bit;
-        }
-    }
-    if cmd.up > 0 {
-        b |= button::JUMP;
-    } else if cmd.up < 0 && b & button::PRONE == 0 {
-        b |= button::CROUCH;
-    }
     UserCmd2 {
         server_time: cmd.server_time,
-        buttons: b,
+        buttons: super::bridge::cmd_buttons(cmd, &BUTTONS) as i32,
         weapon: cmd.weapon,
         off_hand_index: 0,
         angles: cmd.angles,
@@ -1787,6 +1634,7 @@ pub fn to_cmd2(cmd: &UserCmd) -> UserCmd2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::net::msg;
 
     /// The last forced stance in the ring past the mark wins; events at or
     /// before it, or rolled out of the four slots, are not read again.
