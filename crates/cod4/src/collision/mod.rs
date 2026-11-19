@@ -25,10 +25,15 @@ use crate::assets::model::XModelCollSurf;
 use crate::assets::world;
 use crate::zone::Pointer;
 
+mod static_tree;
+
 pub use vcod_common::clipmap::{
     CONTENTS_BODY, CONTENTS_GLASS, CONTENTS_PLAYERCLIP, CONTENTS_SOLID, MASK_PLAYERSOLID,
-    MASK_SHOT, SURF_LADDER,
+    SURF_LADDER,
 };
+
+/// `Bullet_Trace`'s mask, 0x2806831: CoD2's with 0x4000 (cod4-combat.md 5.3).
+pub const MASK_SHOT: u32 = 0x280_6831;
 
 /// `CM_Trace`'s closing rule: a contact no kernel called walkable is
 /// walkable when its normal climbs at least this steeply.
@@ -84,9 +89,29 @@ pub struct ClipMap {
     /// `cmodels`; index 0 is the world's own and traces as [`Self::world`].
     pub submodels: Vec<Submodel>,
     pub static_models: Vec<StaticModel>,
+    /// [`Self::static_models`]' boxes, which a point trace walks.
+    static_tree: static_tree::StaticTree,
 }
 
 impl ClipMap {
+    /// A clip map from its parts, the static models' box tree built.
+    pub fn new(
+        name: String,
+        checksum: u64,
+        world: clipmap::ClipMap,
+        submodels: Vec<Submodel>,
+        static_models: Vec<StaticModel>,
+    ) -> ClipMap {
+        ClipMap {
+            name,
+            checksum,
+            world,
+            submodels,
+            static_tree: static_tree::StaticTree::build(&static_models),
+            static_models,
+        }
+    }
+
     /// The clip map of a walked map zone (walked with
     /// [`crate::walk::WalkOptions::keep_bulk`]): its one `col_map_mp` or
     /// `col_map_sp`.
@@ -308,9 +333,10 @@ impl ClipMap {
 
     /// `CM_PointTraceStaticModels`: a point sweep against every static
     /// model whose box it can reach before `tr`'s fraction, through
-    /// `XModelTraceLine`. Retail walks them by its world sectors; a flat
-    /// walk finds the same nearest contact but for exact ties. Returns the
-    /// model hit last, the one the trace now reports.
+    /// `XModelTraceLine`. Retail walks them by its world sectors; vcod
+    /// walks the ones a box tree says the segment can reach, in index
+    /// order, which finds the same nearest contact but for exact ties.
+    /// Returns the model hit last, the one the trace now reports.
     pub fn trace_static_models(
         &self,
         start: Vec3,
@@ -319,7 +345,11 @@ impl ClipMap {
         tr: &mut ClipTrace,
     ) -> Option<usize> {
         let mut hit = None;
-        for (i, sm) in self.static_models.iter().enumerate() {
+        let mut near = Vec::new();
+        self.static_tree
+            .candidates(start, end, tr.fraction, &mut near);
+        for i in near.into_iter().map(|i| i as usize) {
+            let sm = &self.static_models[i];
             if sm.no_collision
                 || sm.contents & mask == 0
                 || box_misses(start, end, sm.absmin, sm.absmax, tr.fraction)
@@ -430,6 +460,10 @@ impl WorldClip for ClipMap {
 
     fn point_contents(&self, p: Vec3) -> u32 {
         ClipMap::point_contents(self, p)
+    }
+
+    fn shot_mask(&self) -> u32 {
+        MASK_SHOT
     }
 
     fn ladder_boxes(&self) -> Vec<(Vec3, Vec3)> {
@@ -892,13 +926,13 @@ fn build(c: &world::ClipMap, a: &Assets, refs: &[&Assets]) -> Result<ClipMap> {
         reach: Default::default(),
     };
     world.check_trees()?;
-    Ok(ClipMap {
-        name: c.name.clone(),
-        checksum: content_hash(c),
+    Ok(ClipMap::new(
+        c.name.clone(),
+        content_hash(c),
         world,
         submodels,
         static_models,
-    })
+    ))
 }
 
 #[cfg(test)]

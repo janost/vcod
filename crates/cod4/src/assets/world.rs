@@ -313,24 +313,29 @@ pub struct XModelPieces {
 fn dyn_ent_def<R: BufRead>(w: &mut W<R>, d: &S) -> Result<DynEntityDef> {
     let model = xmodel(w, d.ptr(32), d.slot(32))?;
     let destroy_fx = fx(w, d.ptr(40), d.slot(40))?;
-    let mut pieces = None;
-    if let Follow::Inline = w.follow(d.ptr(44), 4)? {
-        let p = w.load(0xC)?;
-        let mut out = XModelPieces {
-            name: w.xstring(p.ptr(0))?.unwrap_or_default(),
-            pieces: Vec::new(),
-        };
-        if w.inline_only(p.ptr(8), 4)? {
-            let n = p.i32(4).max(0) as usize;
-            let a = w.load(0x10 * n)?;
-            for i in 0..n {
-                let e = a.elem(i, 0x10);
-                let m = xmodel(w, e.ptr(0), e.slot(0))?;
-                out.pieces.push((m, [e.f32(4), e.f32(8), e.f32(12)]));
+    let pieces = match w.follow(d.ptr(44), 4)? {
+        Follow::Null => None,
+        Follow::Inline => {
+            let at = w.here()?;
+            let p = w.load(0xC)?;
+            let mut out = XModelPieces {
+                name: w.xstring(p.ptr(0))?.unwrap_or_default(),
+                pieces: Vec::new(),
+            };
+            if w.inline_only(p.ptr(8), 4)? {
+                let n = p.i32(4).max(0) as usize;
+                let a = w.load(0x10 * n)?;
+                for i in 0..n {
+                    let e = a.elem(i, 0x10);
+                    let m = xmodel(w, e.ptr(0), e.slot(0))?;
+                    out.pieces.push((m, [e.f32(4), e.f32(8), e.f32(12)]));
+                }
             }
+            w.remember("model pieces", at, out.clone());
+            Some(out)
         }
-        pieces = Some(out);
-    }
+        Follow::At(a) => w.recall("model pieces", a),
+    };
     let preset = phys_preset(w, d.ptr(48), d.slot(48))?;
     Ok(DynEntityDef {
         raw: d.b.clone(),

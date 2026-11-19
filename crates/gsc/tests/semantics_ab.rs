@@ -27,7 +27,8 @@ impl ScriptSource for ProbeSource {
     }
 }
 
-/// Only what a probe calls: `logPrint` collects, `isDefined` answers.
+/// Only what a probe calls: `logPrint` collects, `isDefined` answers,
+/// `spawnStruct` makes a struct.
 #[derive(Default)]
 struct ProbeHost {
     lines: Vec<String>,
@@ -50,6 +51,7 @@ impl Host for ProbeHost {
                 }
                 Ok(Value::Undefined)
             }
+            "spawnstruct" => Ok(Value::Struct(cx.new_struct())),
             "isdefined" => Ok(Value::Int(
                 !matches!(args.first(), None | Some(Value::Undefined)) as i32,
             )),

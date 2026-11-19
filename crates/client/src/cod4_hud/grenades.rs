@@ -300,7 +300,7 @@ mod tests {
         for now in [0, 1, 50, 147, 294, 500, 1000, 123_456, 9_999_999] {
             writeln!(s, "# alpha {now} {:?}", pulse_alpha(now)).unwrap();
         }
-        let want = include_str!("../tests/fixtures/cod4_grenades_pins.txt");
+        let want = include_str!("../../tests/fixtures/cod4_grenades_pins.txt");
         assert!(
             s == want,
             "the grenade indicators moved off the pinned ones"

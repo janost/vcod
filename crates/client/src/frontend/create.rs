@@ -15,7 +15,9 @@ use vcod_common::localize::Localized;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::ui_menu::{UiItem, script_commands};
 
-use super::{Painter, SCROLLBAR_SIZE, Ui, UiEffect, listbox, truncate_visible, visible_rows};
+use super::lists::visible_rows;
+use super::paint::{Painter, truncate_visible};
+use super::{SCROLLBAR_SIZE, Ui, UiEffect, listbox};
 use crate::console::shell::bare;
 use crate::hud::HudQuad;
 use winit::keyboard::KeyCode;

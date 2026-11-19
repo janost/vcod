@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 
 use vcod_common::ui_menu::{FEEDER_PLAYER_PROFILES, UiItem};
 
-use super::{HudQuad, Painter, SCROLLBAR_SIZE, Ui, UiEffect, truncate_visible, visible_rows};
+use super::lists::visible_rows;
+use super::paint::{Painter, truncate_visible};
+use super::{HudQuad, SCROLLBAR_SIZE, Ui, UiEffect};
 use crate::console::shell::Shell;
 
 /// `createPlayerProfile` refuses past this many (`uiInfo + 0x280` full).

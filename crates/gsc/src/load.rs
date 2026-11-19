@@ -37,7 +37,26 @@ pub struct LoadError {
 /// One file as the source answered it, and its parse.
 struct SourceFile {
     text: String,
-    parsed: Result<crate::ast::File, crate::parse::ParseError>,
+    parsed: Parsed,
+}
+
+/// A file's parse, or once the file compiled, only its function names:
+/// nothing reads its AST again, and an include reads only the names.
+enum Parsed {
+    Ast(Result<crate::ast::File, crate::parse::ParseError>),
+    Names(Vec<String>),
+}
+
+impl SourceFile {
+    /// The function names an include of this file sees; none for a file
+    /// that did not parse.
+    fn names(&self) -> Vec<String> {
+        match &self.parsed {
+            Parsed::Ast(Ok(f)) => f.funcs.iter().map(|f| f.name.clone()).collect(),
+            Parsed::Ast(Err(_)) => Vec::new(),
+            Parsed::Names(n) => n.clone(),
+        }
+    }
 }
 
 /// What a [`Loader`] has done so far, without its source or builtin
@@ -143,7 +162,7 @@ impl Loader {
             return f.clone();
         }
         let f = self.source.read(path).map(|text| {
-            let parsed = crate::parse::parse_file_dialect(&text, self.dialect);
+            let parsed = Parsed::Ast(crate::parse::parse_file_dialect(&text, self.dialect));
             Rc::new(SourceFile { text, parsed })
         });
         self.files.borrow_mut().insert(path.to_string(), f.clone());
@@ -193,7 +212,21 @@ impl Loader {
                 self.files
                     .borrow_mut()
                     .retain(|p, _| read_before.contains(p));
-            })
+            })?;
+        // Kept only once the whole load stands: a rollback above may
+        // compile these files again.
+        let mut files = self.files.borrow_mut();
+        for p in &visited {
+            if let Some(Some(f)) = files.get_mut(p)
+                && let Parsed::Ast(_) = f.parsed
+            {
+                *f = Rc::new(SourceFile {
+                    text: f.text.clone(),
+                    parsed: Parsed::Names(f.names()),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// `path` and every file it reaches, depth first: a file installs
@@ -255,7 +288,15 @@ impl Loader {
             },
         })?;
 
-        let ast = file.parsed.as_ref().map_err(|e| LoadError {
+        // A compiled file keeps only its names, and it is marked loaded.
+        let Parsed::Ast(parsed) = &file.parsed else {
+            return Err(LoadError {
+                path: path.to_string(),
+                line: 0,
+                msg: "compiled once already, its parse dropped".to_string(),
+            });
+        };
+        let ast = parsed.as_ref().map_err(|e| LoadError {
             path: path.to_string(),
             line: e.line,
             msg: e.msg.clone(),
@@ -267,12 +308,7 @@ impl Loader {
         // that does not parse is reported when it loads below.
         let include_funcs = |p: &str| {
             let file = self.file(p)?;
-            let names = file
-                .parsed
-                .as_ref()
-                .map(|f| f.funcs.iter().map(|f| f.name.clone()).collect())
-                .unwrap_or_default();
-            Some(names)
+            Some(file.names())
         };
         let opts = CompileOptions {
             dialect: self.dialect,
@@ -433,6 +469,35 @@ mod tests {
             e.msg
         );
         assert_eq!(l.loaded_count(), 0);
+    }
+
+    /// A loaded file keeps its text and names, not its AST; a later file
+    /// including it still resolves its functions, and a failed load
+    /// compiles again on retry.
+    #[test]
+    fn a_compiled_file_keeps_its_names_and_drops_its_ast() {
+        let src = Shared::default();
+        src.set("a", "#include c;\nmain() { one(); }");
+        src.set("c", "one() { }");
+        src.set("d", "#include c;\nmain() { one(); missing::x(); }");
+        let mut vm = Vm::new();
+        let mut l = Loader::with_dialect(Box::new(src.clone()), Dialect::Cod2);
+        l.load(&mut vm, "a").unwrap();
+        let asts = |l: &Loader| {
+            l.files
+                .borrow()
+                .values()
+                .flatten()
+                .filter(|f| matches!(f.parsed, Parsed::Ast(_)))
+                .count()
+        };
+        assert_eq!(asts(&l), 0);
+        assert_eq!(l.state().text("c"), Some("one() { }"));
+        assert!(l.load(&mut vm, "d").is_err());
+        src.set("missing", "x() { }");
+        l.load(&mut vm, "d").unwrap();
+        assert_eq!(asts(&l), 0);
+        assert_eq!(l.loaded_count(), 4);
     }
 
     #[test]

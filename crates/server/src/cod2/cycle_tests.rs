@@ -332,6 +332,9 @@ fn the_console_cycles_the_level_and_the_clients_follow() {
     let Some(mut rig) = Rig::new("mp_toujane", "dm", &[]) else {
         return;
     };
+    // A dedicated server builds its world without the lightmap pages.
+    let world = &rig.sv.game.level.as_ref().unwrap().carried_parts().world;
+    assert!(world.lightmaps.is_empty() && world.lightmap_basis.is_empty());
     rig.run(4.0);
     rig.assert_playing("joined");
     assert_eq!(rig.sv.server_id(), 16);

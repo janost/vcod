@@ -321,7 +321,8 @@ mod tests {
         assert_eq!(menus[1].items[0].rect[0], 310.0);
     }
 
-    use super::super::{Painter, Ui, UiEffect, paints_text};
+    use super::super::paint::{Painter, paints_text};
+    use super::super::{Ui, UiEffect};
     use crate::console::shell::Shell;
     use vcod_common::localize::Localized;
     use vcod_common::pk3::Pk3Fs;
@@ -772,6 +773,7 @@ mod flow {
     use super::super::*;
     use crate::console::shell::Shell;
     use vcod_common::localize::Localized;
+    use vcod_common::ui_menu::{ITEM_TYPE_BIND, ITEM_TYPE_DECIMALFIELD, ITEM_TYPE_SLIDER};
 
     fn names(ui: &Ui) -> Vec<String> {
         ui.open.iter().map(|&m| ui.menus[m].name.clone()).collect()

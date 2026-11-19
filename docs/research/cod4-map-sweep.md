@@ -337,10 +337,10 @@ expression error and no problem debug line in any of the 105 pairs.
    resident set by -1262 to +183 MB, with no growth from level to level.
    Retail's client holds `cl.snapshots[PACKET_BACKUP]`, a ring of 32
    (INFERRED, the Q3 lineage's ; not read out of iw3mp.exe).
-   Gate: `play::cod4::tests::cod4_live_session_sheds_old_snapshots_and_plays_on`
+   Gate: `play::cod4::tests::live_session::cod4_live_session_sheds_old_snapshots_and_plays_on`
    (a live join on vcod-server sheds at 80, fires, and the clock, scene
    and own fire events carry on) and
-   `play::cod4::tests::cod4_demo_sheds_old_snapshots_and_plays_on` (a
+   `play::cod4::tests::demo::cod4_demo_sheds_old_snapshots_and_plays_on` (a
    retail demo shed at 80 fires the events it fires unshed).
 2. The fx pass loaded an effect material's images the first frame it
    drew it, and the mark pass built a mark material (images, stage bind

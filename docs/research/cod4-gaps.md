@@ -168,8 +168,8 @@ Ranked by how much a player notices.
   `play::cod4` (cod4-effects.md 12).
 - Low-health overlay (`low health`, owner draw 112) and the
   `hit_direction` icons: `cod4_damage` (cod4-hud.md 19).
-- Cursor hints (owner draw 72): `cod4_hints` (cod4-hud.md 20).
-- Grenade indicators: `cod4_grenades` (cod4-hud.md 21).
+- Cursor hints (owner draw 72): `cod4_hud::hints` (cod4-hud.md 20).
+- Grenade indicators: `cod4_hud::grenades` (cod4-hud.md 21).
 - View recoil (through the cmd's angles), damage kick and landing dip,
   and the view model's recoil spring, damage kick and landing dip:
   `play::cod4_kick` (cod4-client-view.md 14).

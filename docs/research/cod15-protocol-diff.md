@@ -896,7 +896,7 @@ command prints nothing over rcon.
   37.0 on the same spot.
 - 1.5's `CalcMuzzlePoint` (0x7e91f) starts from the unsnapped origin, adds the
   walk bob and never truncates. Shots, rockets, throws and the melee swing all
-  take it (`cod11-combat.md` 2.1, "1.5 and United Offensive"), and so does
+  take it (`cod11-combat.md` 2.1, "United Offensive and 1.5"), and so does
   vcod-server's on protocols 6 and 22.
 
 ### 13.12 Not modelled

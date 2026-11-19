@@ -373,10 +373,13 @@ impl<'a> Compiler<'a> {
                 let slot = self.local_slot(name)?;
                 self.emit(Op::StoreLocal(slot));
             }
+            // The value runs before the target is read, so a value that
+            // replaces the target's object or array writes into the new
+            // one (`probe_assign_order` on 1.1d, 1.5b and UO).
             Expr::Field(obj, name) => {
                 self.check_object(obj)?;
-                self.compile_expr(obj)?;
                 self.compile_expr(value)?;
+                self.compile_expr(obj)?;
                 let a = self.interner.intern_folded(name);
                 self.emit(Op::StoreField(a));
             }
@@ -398,9 +401,9 @@ impl<'a> Compiler<'a> {
             }
             Expr::Index(obj, idx) => {
                 self.check_index_write(obj)?;
+                self.compile_expr(value)?;
                 self.compile_ensure_array(obj)?;
                 self.compile_expr(idx)?;
-                self.compile_expr(value)?;
                 self.emit(Op::StoreIndex);
             }
             _ => return Err(self.err("assignment target must be a variable, field or index")),

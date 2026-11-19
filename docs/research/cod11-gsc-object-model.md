@@ -1568,9 +1568,9 @@ ticks 1758 and 2422 (`bot-combat.md` 12.3).
 So the `spawn` builtin queues `WeaponOp::TakeAll` in call order as the
 memset's emptying, and the spawn pass keeps `ps.ammo` and `ps.ammoclip`; the
 loadout survives whichever pass applies it. VERIFIED (measured, ours):
-`server::tests::a_loadout_applied_before_the_spawn_pass_survives_it` spawns
-and gives a frag inside a damage callback; the frag's clip reads 3 (0 without
-the change).
+`server::frame::tests::a_loadout_applied_before_the_spawn_pass_survives_it`
+spawns and gives a frag inside a damage callback; the frag's clip reads 3 (0
+without the change).
 
 ### `setViewmodel` reaches `ps.viewmodelIndex`
 
@@ -2864,7 +2864,7 @@ A slot a UDP client once held, by a binary read (2026-11-16):
 
 vcod: `Cod1Game::udp_slots` marks each slot a UDP connect took, which
 `addTestClient` reads; `the_first_test_client_is_refused_only_beside_a_never_used_slot`
-(`server.rs`) runs both cases on a two-slot server.
+(`server/connectionless.rs`) runs both cases on a two-slot server.
 
 ## Open, and worth a probe
 

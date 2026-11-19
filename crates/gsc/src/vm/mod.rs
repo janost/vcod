@@ -1867,6 +1867,26 @@ pub(crate) mod tests {
         assert_eq!(v, Value::Float(1.5));
     }
 
+    /// Two ints order as ints past 2^24, where `f32` rounds 16777217 to
+    /// 16777216: the plain ops, the fused compare-and-jump forms (local,
+    /// const, a loop bound) and a mixed pair still as floats.
+    #[test]
+    fn two_ints_order_as_ints_past_f32_precision() {
+        let (v, _, _) = run("main() {
+            a = 16777217; b = 16777216; r = 0;
+            if (a > b) r += 1;
+            if (!(a <= b)) r += 2;
+            if (b < a) r += 4;
+            if (!(b >= a)) r += 8;
+            if (a > 16777216) r += 16;
+            for (i = 16777216; i < 16777217; i++) r += 32;
+            x = a > b; y = b < a;
+            if (a > 16777216.0) r += 512;
+            return r + (x + y) * 64;
+        }");
+        assert_eq!(v, Value::Int(191));
+    }
+
     #[test]
     fn integer_division_truncates_but_float_does_not() {
         let (v, _, _) = run("main() { return 7 / 2; }");

@@ -303,10 +303,16 @@ INFERRED (matched by callees and immediates).
   an asset handle landed in (the list's header slots, alias slots, every
   handle field); the struct address of each asset; shared sub-structs by
   address (techniques, shaders, vertex declarations, texture tables,
-  water, sound files, speaker maps, rigid vertex lists, the sun light);
+  water, sound files, speaker maps, rigid vertex lists, the sun light,
+  material constant tables and state bits, dynamic entities' model
+  pieces);
   and the start and length of every struct and array loaded. Across all
   85 zones every offset token lands on one of these. VERIFIED (the census
-  asserts none is left). On mp_crash, walked with its bulk data kept,
+  asserts none is left, a loaded sound's sample slot counting its own).
+  A physics brush's plane array arrives by offset in every zone with
+  physics models (2 to 34 a zone); the walk pools them as `brush planes`,
+  so one that starts inside another brush's array resolves. VERIFIED (the
+  census, 2026-11-19). On mp_crash, walked with its bulk data kept,
   9579 tokens name data inside another struct's array (a leaf brush
   node's list inside the clipmap's leaf brushes, a cell tree's static
   model list inside an earlier one). VERIFIED. The walk keeps such shared

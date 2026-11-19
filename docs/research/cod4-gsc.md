@@ -2020,7 +2020,7 @@ vcod (`ClipMap::world_solids`, `physics::box_contacts`,
   stayed on the waiter, and `finishAirstrikeUsage` notified it 50 ms
   later), so the next hardpoint's radio stayed in hand until the next
   spawn; an Esc out of the selector did the same. Gate:
-  `play::cod4::tests::cod4_live_airstrike_then_helicopter_in_one_life`.
+  `play::cod4::tests::live_streaks::cod4_live_airstrike_then_helicopter_in_one_life`.
   VERIFIED (ours).
 
 ## 5. Configstrings
@@ -2458,7 +2458,8 @@ So a level ends on a runtime error only at `developer 1`, or with
 `developer` or `logfile` set while the level loads (its spawn's frames and
 the server's first frame after them). Retail 1.7, `war` on mp_crash under
 an `fs_game` whose `mp_crash_fx.gsc` runs `if (undefined > 0)` at a set
-level time (scratch `run_err.sh`, server alone, 15 s):
+level time (a scratch run, not kept: the server alone for 15 s, each row
+its own boot with the `+set`s the table names):
 
 | when | developer | logfile | the level |
 |---|---|---|---|
@@ -2583,9 +2584,12 @@ bot-objectives.md 12).
 
 ### 9.2 Mounted SAWs
 
-Captured on retail with `cod4_probe --script saw` behind mp_backlot's
-crouch SAW 393 (`devmap mp_backlot`, war, `setviewpos -770 68 320 0`,
-`--face 0`): `play-1.7-saw.txt`, uncommitted. Live gate: the client's
+VERIFIED live (capture not kept): every VERIFIED in this section without
+a gate or an address rests on one retail run, `cod4_probe --script saw`
+behind mp_backlot's crouch SAW 393 (`devmap mp_backlot`, war,
+`setviewpos -770 68 320 0`, `--face 0`), whose `play-1.7-saw.txt` was
+never committed, so no A/B gate replays it (cod4-server-gaps.md, Open).
+Live gate: the client's
 `cod4_live_saw_mounts_fires_clamps_and_lets_go`. Port: `game::cod4::turret`
 over the shared `TurretRecord`. Names and order are INFERRED where no
 label says otherwise.
@@ -2799,7 +2803,7 @@ list for the rest of the level, and `isSpeakerInRange` (207) reads
 `teammate.origin` off him. VERIFIED (the stock scripts). Once he leaves,
 his entity is freed and the reference reads as a removed entity.
 
-Retail 1.7 (`war`, mp_crash, scratch `run_dead.sh`) under an `fs_game`
+Retail 1.7 (`war`, mp_crash, a scratch run, not kept) under an `fs_game`
 whose `mp_crash_fx.gsc` keeps a test client in a local array past its kick
 and runs `isSpeakerInRange`'s loop on it: `isDefined` reads 0. At
 `developer 1` the comparison is a "script runtime error" (`pair 'removed

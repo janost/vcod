@@ -11,11 +11,11 @@ pub enum Op {
     StoreLocal(u16),
     /// Pops the object, pushes the field.
     LoadField(Atom),
-    /// Pops the value then the object.
+    /// Pops the object then the value.
     StoreField(Atom),
     /// Pops the key then the object.
     LoadIndex,
-    /// Pops the value, the key, then the object. An undefined value is
+    /// Pops the key, the object, then the value. An undefined value is
     /// kept as a key `.size` counts (`probe_undef_call_into_unset`).
     StoreIndex,
     /// `x[k] = undefined` with the literal: pops the key then the object,

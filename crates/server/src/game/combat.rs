@@ -574,7 +574,7 @@ pub fn muzzle_point(ps: &PlayerState) -> Vec3 {
 /// is `CalcMuzzlePoint` (1.5 game 0x7e91f, UO 0x7b8ea): `ps.origin` plus
 /// the eye (UO: 28 in a vehicle seat), then, unless on a turret, UO's
 /// bipod trace, the walk bob, the lean and a floor 8 over the feet (combat
-/// doc 2.1, "1.5 and United Offensive").
+/// doc 2.1, "United Offensive and 1.5").
 pub fn muzzle_point_in(ps: &PlayerState, world: Option<MuzzleWorld<'_>>) -> Vec3 {
     if !ps.rules.v15() {
         // `G_AddLean`, the offset `PlayerState::view` adds, on the snapped

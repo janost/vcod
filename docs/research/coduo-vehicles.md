@@ -2222,20 +2222,20 @@ hull".
     him on the seat. The jeep's offsets are all zero and its links read
     level in every stint (VERIFIED, `jeep` run).
   - vcod runs the refresh on the rider's turn of the entity pass, his
-    vehicle first (`run_rider_link` in `server.rs`): `r.currentOrigin` and
-    `ps.origin` at the seat tag of the vehicle as it stands, shifted by the
-    offset of the slot `VEH_LinkPlayer` asked for (the seat's
-    `link_offset`), and a link there. The end frame then puts `ps.origin`
-    and `r.currentOrigin` on the seat, as retail's does:
+    vehicle first (`run_rider_link` in `server/sim_ops.rs`): `r.currentOrigin`
+    and `ps.origin` at the seat tag of the vehicle as it stands, shifted by
+    the offset of the slot `VEH_LinkPlayer` asked for (the seat's
+    `link_offset`), and a link there. The end frame then puts `ps.origin` and
+    `r.currentOrigin` on the seat, as retail's does:
     `G_PlayerVehiclePositionAndBlend` copies the offset `ps.origin` into
     `r.currentOrigin` (`ent+0x13c..0x144`, 0x91869..0x91893, after its
-    `BG_PlayerStateToEntityState` at 0x91855) and the seat tag's angles
-    into `r.currentAngles` (`+0x148`) (VERIFIED disassembly). So only what
-    reads him inside the entity pass after his turn (a link to him, a blast
-    or round on a later entity's turn) sees the link. `G_RunFrame`
-    (0x59c21) runs its one `Scr_RunCurrentThreads` ahead of the pass and
-    none between the pass and `ClientEndFrame` (VERIFIED decompile), and
-    the probe's threads read the first-stint driver at 109.08, his seat
+    `BG_PlayerStateToEntityState` at 0x91855) and the seat tag's angles into
+    `r.currentAngles` (`+0x148`) (VERIFIED disassembly). So only what reads
+    him inside the entity pass after his turn (a link to him, a blast or round
+    on a later entity's turn) sees the link. `G_RunFrame` (0x59c21) runs its
+    one `Scr_RunCurrentThreads` ahead of the pass and none between the pass
+    and `ClientEndFrame` (VERIFIED decompile), and the probe's threads read
+    the first-stint driver at 109.08, his seat
     (`mp_cassino-tank-silhouette-uo.txt`'s `PROBE pose`, VERIFIED).
 - **The 400 ms window.** The 400 ms after a seat change: retail's bones
   glide to the new seat over eight frames (VERIFIED, `tank` run). The

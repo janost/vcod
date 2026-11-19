@@ -616,7 +616,7 @@ score, deaths and status icon come from the client's `.score`, `.deaths` and
 `CsRange::StatusIcon`. The team totals are the level's `setTeamScore`
 values, axis then allies. Ping is the link's `cl->ping`, `-1` while
 connecting, capped at 999. With no script running every row is zero
-(`server.rs` `scoreboard`).
+(`server/sim_ops.rs` `scoreboard`).
 
 ### 3.1 How the cgame draws the board
 
@@ -2431,9 +2431,9 @@ vcod draws the snapshot's teammates off their interpolated origins with the
 snapshot's yaw, and the packed one, with the compass turned by the view yaw
 (no spring). vcod-server writes `iCompassFriendInfo` and the `0x100000` bit
 from each playing or dead client's end frame (`crate::compass`,
-`compass_friend` in `server.rs`). Its candidates are the clients whose
-`sessionstate` is `playing` and whose sim is a live player, what the probe
-saw retail answer for. It skips the area check, which stock maps never
+`compass_friend` in `server/snapshots.rs`). Its candidates are the clients
+whose `sessionstate` is `playing` and whose sim is a live player, what the
+probe saw retail answer for. It skips the area check, which stock maps never
 fail.
 
 VERIFIED, `ClientThink_real` (1.1d 0x405c4..0x40606): every cmd writes the

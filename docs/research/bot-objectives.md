@@ -7,10 +7,11 @@ United Offensive server (section 6), UO's own `ctf`, `dom`, `hq` and
 `hq` (section 11), CoD4's `sd`, `sab`, `dom` and `koth` (section
 12), and how a team spreads round an objective in all of them (section
 13). The brain is
-`crates/server/src/bots.rs` (`ObjTarget`, `think_objective`); the server fills
-`BotView::sd` and `BotView::linked` in `crates/server/src/server/bot_world.rs`
-(`bot_sd`, `site_stand`) from `ScriptRuntime::sd_objectives`
-(`crates/server/src/game/script/objectives.rs`). Navigation is in `bot-navigation.md`.
+`crates/server/src/bots/objective.rs` (`ObjTarget`, `think_objective`); the
+server fills `BotView::sd` and `BotView::linked` in
+`crates/server/src/server/bot_world.rs` (`bot_sd`, `site_stand`) from
+`ScriptRuntime::sd_objectives` (`crates/server/src/game/script/objectives.rs`).
+Navigation is in `bot-navigation.md`.
 
 ## 1. What stock `sd.gsc` asks of a player
 
@@ -52,8 +53,8 @@ Line numbers are `maps/MP/gametypes/sd.gsc` in `pak5.pk3`.
   a live teammate's box, grown 8 units (`FRIEND_MARGIN`) for aim error and
   spread, crosses the line from the muzzle point to the enemy's chest short
   of it. The trigger stays up and a running burst ends
-  (`bots::tests::a_teammate_across_the_line_holds_fire`). The enemy is the
-  10 Hz cached one; the teammates' boxes are this tick's. A design choice
+  (`bots::fight::tests::a_teammate_across_the_line_holds_fire`). The enemy is
+  the 10 Hz cached one; the teammates' boxes are this tick's. A design choice
   for vcod's bots, not a retail measurement.
 - `sidestep`, with `friend_in_line` (`NavGraph::sidestep`): the nearest
   graph node one or two level edges (no jump, no drop past a step, no
@@ -62,7 +63,7 @@ Line numbers are `maps/MP/gametypes/sd.gsc` in `pak5.pk3`.
   every teammate's grown box and the world (`shot_trace`). While both are
   set the brain walks to it standing, off its sights, the view on the
   enemy, and the next tick checks the line again
-  (`bots::tests::a_blocked_bot_steps_aside_to_clear_the_line`,
+  (`bots::fight::tests::a_blocked_bot_steps_aside_to_clear_the_line`,
   `nav::graph::tests::a_sidestep_goes_across_the_line_on_level_edges`). No spot,
   and the bot holds as before. The server keeps a bot's spot
   (`BotDriver::sidesteps`, `bots::held_sidestep`) until the body is
@@ -81,7 +82,7 @@ Line numbers are `maps/MP/gametypes/sd.gsc` in `pak5.pk3`.
   wall that covers the chest but not the head no longer eats every round.
   The trigger waits while `eye_settled` is false, the eye still easing
   between stances, since the aim was taken at the tick's start
-  (`bots::tests::a_crouched_bot_aims_from_its_own_eye`,
+  (`bots::fight::tests::a_crouched_bot_aims_from_its_own_eye`,
   `a_chest_behind_cover_is_aimed_over`,
   `the_trigger_waits_for_the_eye_to_settle`). Design choices, not retail
   measurements.
@@ -165,17 +166,16 @@ objective, since its rising edge also picks up weapons and mounts turrets.
   (`BotView::use_takes_weapon`, the hint at or past the protocol's weapon
   base) the lead does not press: it closes in to 16 units of the bomb and
   settles again, and after 5 s of that presses whatever it takes
-  (`bots::tests::a_defuser_closes_in_rather_than_take_a_weapon_by_the_bomb`,
-  2026-10-18). Not seen in a run yet: in 8 six-bot shoot-on `mp_carentan`
-  S&D runs (`ship_stalls`, seeds 1-15 odd, 6000 ticks) no bot killed
-  another, so no weapon lay by a bomb.
-  The `bas` plant and defuse press the same key on the same edge
-  (`bas.gsc` 3184, 3702: `useButtonPressed` while the `trigger_lookat`
-  fires) and keep back the same way, closing in to 16 units of the
-  charge's model (section 7.2; since 2026-10-20). In six four-bot
-  shooting mp_foy rounds no bot settled on a charge with a weapon
-  hint, so it is covered by
-  `bots::tests::a_bas_planter_closes_in_rather_than_take_a_weapon_by_the_charge`
+  (`bots::objective::tests::a_defuser_closes_in_rather_than_take_a_weapon_by_the_bomb`,
+  2026-10-18). Not seen in a run yet: in 8 six-bot shoot-on `mp_carentan` S&D
+  runs (`ship_stalls`, seeds 1-15 odd, 6000 ticks) no bot killed another, so
+  no weapon lay by a bomb. The `bas` plant and defuse press the same key on
+  the same edge (`bas.gsc` 3184, 3702: `useButtonPressed` while the
+  `trigger_lookat` fires) and keep back the same way, closing in to 16 units
+  of the charge's model (section 7.2; since 2026-10-20). In six four-bot
+  shooting mp_foy rounds no bot settled on a charge with a weapon hint, so it
+  is covered by
+  `bots::objective::tests::a_bas_planter_closes_in_rather_than_take_a_weapon_by_the_charge`
   only.
 - A death sits out the round. VERIFIED (`maps/MP/gametypes/sd.gsc`
   `Callback_PlayerKilled` 756, `spawnSpectator` at 856; `re.gsc` 838, 973,
@@ -184,9 +184,9 @@ objective, since its rising edge also picks up weapons and mounts turrets.
   (`bot-navigation.md` section 3, "mp_hurtgen's crease") does not send the
   `kill` it sends elsewhere (`BotView::one_life`): held there it is alive,
   can still shoot what comes into view and keeps its team in the round
-  (`bots::tests::a_body_held_in_the_air_asks_for_a_kill`). `bel` respawns
-  (`bel.gsc` `Callback_PlayerKilled`, `respawn` at 681-757), so it keeps
-  the kill.
+  (`bots::walk::tests::a_body_held_in_the_air_asks_for_a_kill`). `bel`
+  respawns (`bel.gsc` `Callback_PlayerKilled`, `respawn` at 681-757), so it
+  keeps the kill.
 
 VERIFIED (measured, `crates/server/tests/bot_objectives.rs`, 2 bots, shoot
 off, seed 7, `mp_carentan`): the attacker plants at tick 733 of the run,
@@ -280,8 +280,8 @@ teammate was not told it carried and stood outside the goal.
   the holder was tried 2026-11-17 and not kept (below).
 - An escort within 80 units of the carrier it keeps by walks away from
   him instead of holding (`ESCORT_CLEAR`, `Goal::Away`;
-  `bots::tests::an_escort_steps_off_a_carrier_it_stands_on`), so it does
-  not stand on his next node (below).
+  `bots::objective::tests::an_escort_steps_off_a_carrier_it_stands_on`), so it
+  does not stand on his next node (below).
 - Other defenders with one carried: at the carrier while the compass shows
   him (`scr_re_showcarrier` set). Under the default they walk to where the
   objective last lay, once per carry: the carrier set out from there for
@@ -297,12 +297,12 @@ teammate was not told it carried and stood outside the goal.
   units/s to it would outlast the clock, the bot waits where it comes
   back instead: an attacker when it is the only one lying, a defender
   guarding it (`Bot::returns_first`, `outruns`;
-  `bots::tests::a_dropped_objective_out_of_reach_of_its_clock_is_awaited_at_its_start`).
-  `bot_objectives::a_dropped_retrieval_objective_is_picked_up_again`:
-  four bots, shoot off, seed 7, mp_carentan; the first carrier is killed
-  through `kill`, the objective drops, the clock reads 60 s less the
-  frames since, and the other attacker takes it off the floor 39 ticks
-  later. VERIFIED (measured).
+  `bots::objective::tests::a_dropped_objective_out_of_reach_of_its_clock_is_awaited_at_its_start`).
+  `bot_objectives::a_dropped_retrieval_objective_is_picked_up_again`: four
+  bots, shoot off, seed 7, mp_carentan; the first carrier is killed through
+  `kill`, the objective drops, the clock reads 60 s less the frames since, and
+  the other attacker takes it off the floor 39 ticks later. VERIFIED
+  (measured).
 
 VERIFIED (measured, `crates/server/tests/bot_objectives.rs`, 2 bots, shoot
 off, seed 7, `mp_carentan`): the attacker picks up at tick 483 and delivers
@@ -459,7 +459,7 @@ holds there, so the hunter walked at it until it moved. A marker counts
 as stood at once the follower walked out the plan to it
 (`Bot::walked_to`, every game) and the body came no 16 units nearer in
 60 ticks (`Bot::marker_short`;
-`bots::tests::a_hunter_gives_up_a_marker_off_the_graph`). VERIFIED
+`bots::objective::tests::a_hunter_gives_up_a_marker_off_the_graph`). VERIFIED
 (measured, ours, release, 1.1, `bot_match GAMETYPE=bel BOTS=8
 TICKS=6000`, mp_brecourt, mp_carentan and mp_harbor, seeds 1 to 4): every
 count and every match line the same as before; the rule fired on none.
@@ -535,18 +535,19 @@ files):
   once the pullback runs. A UO bot's throw holds the trigger 24 to 33
   ticks and the sight button from the fifth, so it cooks 1.0 to 1.5 s and
   lets go with 2.5 s or more left; a 1.1 bot's hold is 6 to 13 ticks with
-  no sight button (`bots::tests::a_uo_frag_is_spooned_after_the_pullback`).
-- A throw aims (`Bot::lob_angles`, `bots::tests::a_throw_lobs_over_the_enemy`):
-  through the switch, the hold and the switch back the view turns toward
-  the enemy in sight and up over it, 5 to 25 degrees with the range. The
-  grenade stages used to send zero angles, so on 1.1 too the frag went
-  wherever `delta_angles` pointed. No throw goes at an enemy nearer than
-  250: the frag's blast is 350 units, 120 damage at its centre falling to
-  5 at its edge (`fraggrenade_mp`, both patches), so at 250 it still
-  takes 38 from the thrower. VERIFIED (measured, ours, 2026-10-14,
-  `mp_cassino` `tdm`, 6 shooting bots, 120 s, ten seeds, release): before
-  the aim and the minimum, 3 of 8 frag kills over five seeds were the
-  thrower's own; after, 1 of 11 over ten (seed 8).
+  no sight button
+  (`bots::grenade::tests::a_uo_frag_is_spooned_after_the_pullback`).
+-  A throw aims (`Bot::lob_angles`,
+  `bots::grenade::tests::a_throw_lobs_over_the_enemy`): through the switch,
+  the hold and the switch back the view turns toward the enemy in sight and up
+  over it, 5 to 25 degrees with the range. The grenade stages used to send
+  zero angles, so on 1.1 too the frag went wherever `delta_angles` pointed. No
+  throw goes at an enemy nearer than 250: the frag's blast is 350 units, 120
+  damage at its centre falling to 5 at its edge (`fraggrenade_mp`, both
+  patches), so at 250 it still takes 38 from the thrower. VERIFIED (measured,
+  ours, 2026-10-14, `mp_cassino` `tdm`, 6 shooting bots, 120 s, ten seeds,
+  release): before the aim and the minimum, 3 of 8 frag kills over five seeds
+  were the thrower's own; after, 1 of 11 over ten (seed 8).
 - What still killed the thrower (VERIFIED, measured, ours, 2026-10-15,
   same runs, `crates/server/examples/obj_watch.rs` with each throw and
   missile contact logged): over seeds 1 to 19 odd, 3 of 15 frag kills.
@@ -617,7 +618,8 @@ files):
   (read off `Bot::think_grenade` and `think_cook`, whose byte names the
   frag from the start tick on): that merge changed the game's course,
   not the throw. The start tick now aims and records its target
-  like the stages (`bots::tests::the_tick_a_throw_starts_aims_and_records_the_enemy`).
+  like the stages
+  (`bots::grenade::tests::the_tick_a_throw_starts_aims_and_records_the_enemy`).
 
 VERIFIED (measured, ours, 2026-10-14, `mp_cassino` `tdm`, 6 shooting
 bots, seed 1, 90 s, `tests/bots.rs` `uo_bots_fight_and_sprint_in_tdm`):
@@ -901,7 +903,7 @@ first everywhere.
   8 runs end on the tick of the rule off. INFERRED: a frag into those
   rooms has to go from the stair head, a point the rule would need off
   the room's entrance, which the view does not carry.
-  (`bots::tests::a_bas_planter_lobs_a_frag_into_a_held_charge_room`.)
+  (`bots::objective::tests::a_bas_planter_lobs_a_frag_into_a_held_charge_room`.)
 - A standing base is breached with rockets and tank shells (below).
 
 The breach:
@@ -956,7 +958,7 @@ The breach:
   rocket left along (-0.916, -0.420, -0.010) against the aim's (-0.953,
   -0.303, 0.011), 7 degrees off where `spread_clear` clears 4; its splash
   killed it (72, `MOD_PROJECTILE_SPLASH`, tick 15068).
-  (`bots::tests::a_bas_attacker_with_a_rocket_walks_to_a_stand_and_fires`.)
+  (`bots::objective::tests::a_bas_attacker_with_a_rocket_walks_to_a_stand_and_fires`.)
 
 Tanks:
 
@@ -1130,22 +1132,22 @@ Out of rounds:
 - An LMG bot whose target's pitch lies past 45 degrees does not deploy, or
   breaks the bipod down, as for a target past the yaw cap, and draws the
   pistol when it has a round
-  (`bots::tests::an_lmg_target_past_the_pitch_clamp_breaks_the_bipod_down`). A
-  deployed LMG's view stops 45 degrees from level (`PM_UpdateViewAngles`,
+  (`bots::fight::tests::an_lmg_target_past_the_pitch_clamp_breaks_the_bipod_down`).
+  A deployed LMG's view stops 45 degrees from level (`PM_UpdateViewAngles`,
   coduo-movement.md 7). The clamp measures from `proneTorsoPitch`
   (`cap_prone_pitch`), and so does the brain once the body is deployed or
   prone (`BotView::lmg_pitch_from`); standing and not deployed it measures
   from level, the deploy's prone torso not yet laid on the ground (2026-11-17,
-  `bots::tests::an_lmg_pitch_clamp_measures_from_the_prone_torso`: prone with
-  the torso 20 up a target 53 up is fired at, with it 20 down one 35 up
-  breaks the bipod down). VERIFIED (measured,
-  ours, master 447d904f, mp_foy seed 21, `BAS_TRACE=1 BAS_TRACE_EVERY=20`):
-  before it, a planter in the charge room at (3530, -4832, -169) and a
-  defender in the bunker over it (3611 to 3642, -4705, 14), 170 to 260 apart
-  across the hole, both deployed, fired 75 MG34 and 59 .30 cal rounds into the
-  hole's lip (the rounds left under the line, inside the 2-degree trigger
-  cone), drew no `D;` line, hid from each other by the futile-enemy rule, and
-  the defender defused all three plants (ticks 7385 to 11596).
+  `bots::fight::tests::an_lmg_pitch_clamp_measures_from_the_prone_torso`:
+  prone with the torso 20 up a target 53 up is fired at, with it 20 down one
+  35 up breaks the bipod down). VERIFIED (measured, ours, master 447d904f,
+  mp_foy seed 21, `BAS_TRACE=1 BAS_TRACE_EVERY=20`): before it, a planter in
+  the charge room at (3530, -4832, -169) and a defender in the bunker over it
+  (3611 to 3642, -4705, 14), 170 to 260 apart across the hole, both deployed,
+  fired 75 MG34 and 59 .30 cal rounds into the hole's lip (the rounds left
+  under the line, inside the 2-degree trigger cone), drew no `D;` line, hid
+  from each other by the futile-enemy rule, and the defender defused all three
+  plants (ticks 7385 to 11596).
 
 The graph over a breached base:
 

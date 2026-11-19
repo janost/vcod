@@ -70,7 +70,7 @@ VERIFIED live (retail 1.1d dedicated, mp_carentan, two `--net-probe --probe-team
 - tdm, one `allies` and one `axis`: 2 and 1, the same in both clients' snapshots;
 - dm, a client that answered `allies`: `team` 0. `dm.gsc`'s `spawnPlayer` sets `.sessionteam` back to `"none"` on every spawn, so every dm player is team 0.
 
-The client uses `team` for name colour and friend or foe (`hud/killfeed.rs` `team_color`: 1 axis, 2 allies) and the scoreboard groups on it. vcod-server's mapping is `ScriptRuntime::client_team` (`server/src/game/script/clients.rs`), which the roster build in `server.rs` sends.
+The client uses `team` for name colour and friend or foe (`hud/killfeed.rs` `team_color`: 1 axis, 2 allies) and the scoreboard groups on it. vcod-server's mapping is `ScriptRuntime::client_team` (`server/src/game/script/clients.rs`), which the roster build in `server/snapshots.rs` sends.
 
 ## entityState vs clientState
 

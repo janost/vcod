@@ -1168,30 +1168,7 @@ mod tests {
         }
     }
 
-    /// A floor at z 0, solid below, as `vcod_cod4::pmove`'s own tests
-    /// build one.
-    struct Floor;
-
-    impl PmWorld for Floor {
-        fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, _: Vec3, _: u32, _: u32) -> Tr {
-            let (a, b) = (start.z + mins.z, end.z + mins.z);
-            let mut t = Tr::default();
-            if a < 0.0 {
-                t.fraction = 0.0;
-                t.startsolid = true;
-                t.allsolid = b < 0.0;
-            } else if b < 0.125 && b < a {
-                t.fraction = ((a - 0.125) / (a - b)).max(0.0);
-            } else {
-                return t;
-            }
-            t.normal = Vec3::Z;
-            t.walkable = true;
-            t.entity_num = pmove::ENTITYNUM_WORLD as u32;
-            t.contents = 1;
-            t
-        }
-    }
+    use vcod_cod4::pmove::testing::FLOOR;
 
     /// A correction past 0.1 is drawn whole on the frame that finds it
     /// less a frame's decay, and is gone `cg_errordecay` ms later.
@@ -1224,16 +1201,16 @@ mod tests {
         };
         let cut = (0, 0, 0);
         let rules = Rules::default();
-        let a = p.predict(&wire, cut, &cmds, None, &Floor, rules, &w, None, 0.0);
+        let a = p.predict(&wire, cut, &cmds, None, &FLOOR, rules, &w, None, 0.0);
         assert!(a.ps.origin.x > 1.0, "ran {:?}", a.ps.origin);
         // The same snapshot again: no correction.
-        p.predict(&wire, cut, &cmds, None, &Floor, rules, &w, None, 16.0);
+        p.predict(&wire, cut, &cmds, None, &FLOOR, rules, &w, None, 16.0);
         assert_eq!(p.stats.missed, 0);
         // A snapshot that puts the body 5 units aside at the same cmds.
         let mut moved = snap.clone();
         moved.origin.y += 5.0;
         let wire2 = moved.to_wire(&base);
-        let b = p.predict(&wire2, cut, &cmds, None, &Floor, rules, &w, None, 32.0);
+        let b = p.predict(&wire2, cut, &cmds, None, &FLOOR, rules, &w, None, 32.0);
         assert_eq!(p.stats.missed, 1);
         assert!((b.origin.y - b.ps.origin.y + 5.0 * (1.0 - 16.0 / 100.0)).abs() < 1e-3);
         assert!(p.drawn_error(16.0 + 100.0) == 0.0);
@@ -1243,7 +1220,7 @@ mod tests {
             (2, 0, 0),
             &cmds,
             None,
-            &Floor,
+            &FLOOR,
             rules,
             &w,
             None,

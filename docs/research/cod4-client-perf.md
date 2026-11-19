@@ -485,7 +485,7 @@ PC draws the spot at 220-260 fps, with no smoke or fire on the intact car
   every cheat dvar back, then every key is force-set; a demo sets none.
   INFERRED (CoD1's `CL_SystemInfoChanged`; 1.7's at that address not
   re-read). Gate:
-  `play::cod4::cod4_live_cheat_dvars_follow_the_servers_sv_cheats`.
+  `play::cod4::tests::live_play::cod4_live_cheat_dvars_follow_the_servers_sv_cheats`.
   VERIFIED (ours).
 
 ## 21. Draws, binds and the lit pixel on mp_crossfire (P5)

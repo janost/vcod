@@ -159,7 +159,7 @@ client, no camera choice, no write to `level+0x1d50` and no read of a timer.
 The host's `team_scores` (`crates/server/src/game/host.rs`) and each
 client's score field are what the two passes clear. The queued `map_rotate`
 goes through section 1's `console` vector, and `Server::drain_console`
-(`crates/server/src/server.rs`) runs it.
+(`crates/server/src/server/console_cmds.rs`) runs it.
 
 ---
 
@@ -328,10 +328,10 @@ It is in the engine.
 
 ### 3.3 As implemented
 
-- `Server::spawn_server` (`crates/server/src/server.rs`) carries the list:
-  `snap_flag_server_bit` is step 13, the `loadingnewmap` out-of-band step 3,
-  and `Client::reset_for_level` (`crates/server/src/client.rs`) is step 22's
-  effect on each surviving client.
+- `Server::spawn_server` (`crates/server/src/server/map_cycle.rs`) carries the
+  list: `snap_flag_server_bit` is step 13, the `loadingnewmap` out-of-band
+  step 3, and `Client::reset_for_level` (`crates/server/src/client.rs`) is
+  step 22's effect on each surviving client.
 - 3.1's negative is kept by the caller set, not a gate inside one function:
   `send_configstring_update` sends whatever it is handed,
   `broadcast_configstring_changes` is the per-frame half and skips a client
@@ -525,9 +525,9 @@ message unread for every other state.
 
 ### 4.5 As implemented
 
-- `Server::map_restart` (`crates/server/src/server.rs`) carries the numbered
-  list, sharing `console.rs`'s nibble arithmetic with `spawn_server` for
-  step 5. `ScriptRuntime::load`/`load_from` take the carried `game` and
+- `Server::map_restart` (`crates/server/src/server/map_cycle.rs`) carries the
+  numbered list, sharing `console.rs`'s nibble arithmetic with `spawn_server`
+  for step 5. `ScriptRuntime::load`/`load_from` take the carried `game` and
   `pers` tables that 4.1's two `VM_Call`s stand for, and
   `ScriptRuntime::reconnect_client` is step 10.
 - vcod has no VM to free, so 3 step 5's unload against 4.1's reuse shows
@@ -657,7 +657,7 @@ As implemented:
   `set` behind the load (`Server::push_set`), retail's `+map x +set ...`;
   one before it is the `+set ... +map x` case. The configstring gates' motd
   rows push their sets after the load, as `run_server.sh` placed them.
-  `server::tests::a_set_applies_once_and_a_scripts_write_outlives_later_loads`
+  `server::level::tests::a_set_applies_once_and_a_scripts_write_outlives_later_loads`
   and `a_set_after_the_map_outranks_the_scripts_load_time_write` pin both.
 - `sv_hostname` follows the same rule: the config's (`--hostname`) goes
   into the first level's table only, so a script's or an rcon `set` of it
@@ -875,7 +875,7 @@ As implemented:
   and steps after it, so every level, restarts included, draws anew.
   `Server::new` is `with_seed` from the constant `RNG_SEED`: a test's first
   level draws the same every run and every later level draws anew, as on
-  retail. `server.rs`'s `a_restart_reseeds_the_script_draws`, on
+  retail. `server/map_cycle.rs`'s `a_restart_reseeds_the_script_draws`, on
   `Server::new`, fails without the step.
 - No seed reproduces a wall-clock draw, so the UO `gametypes_ab` probes that
   restart (`tdmend`, `ctftime`, `bas`, `bastime`, `basend`) run `with_seed`
@@ -1337,7 +1337,7 @@ whole of intermission in the shipped module.
 - `crates/server/src/spectate.rs` carries 6.2: `PmType::Intermission`, the
   `pm_type` 5 and `eFlags` writes, and the no-pmove arm.
   `ClientSim::become_intermission` zeroes the sim's own health for the bzero
-  above, and `mirror_vitals` (`crates/server/src/server.rs`) skips an
+  above, and `mirror_vitals` (`crates/server/src/server/sim_ops.rs`) skips an
   intermission sim so nothing writes it back.
 - 6.3's drain runs off `ScriptRuntime::take_ranks_dirty` (the host's
   `ranks_dirty`, `level+0x20c`) in `crates/server/src/server/cod1_frame.rs`;

@@ -32,6 +32,17 @@ pub fn from_bytes(data: &[u8]) -> Result<MapWorld> {
 
 /// A parsed map as a [`MapWorld`].
 pub fn from_bsp(b: &D3dBsp) -> MapWorld {
+    from_bsp_with(b, true)
+}
+
+/// [`from_bsp`] without the lightmap pages (`lightmaps` and
+/// `lightmap_basis` empty): a dedicated server draws nothing.
+pub fn from_bsp_unlit(b: &D3dBsp) -> MapWorld {
+    from_bsp_with(b, false)
+}
+
+fn from_bsp_with(b: &D3dBsp, lit: bool) -> MapWorld {
+    let pages = if lit { &b.lightmaps[..] } else { &[] };
     let sun = sun_colour(&b.entities);
     let (collision_verts, collision_indices, terrain) = collision_terrain(b);
     let mut leaf_partitions = Vec::new();
@@ -81,9 +92,8 @@ pub fn from_bsp(b: &D3dBsp) -> MapWorld {
                 content_flags: m.content_flags,
             })
             .collect(),
-        lightmaps: b.lightmaps.iter().map(|p| lightmap_rgb(p, sun)).collect(),
-        lightmap_basis: b
-            .lightmaps
+        lightmaps: pages.iter().map(|p| lightmap_rgb(p, sun)).collect(),
+        lightmap_basis: pages
             .iter()
             .map(|p| LightmapBasis {
                 coeffs: p.rgba.clone(),

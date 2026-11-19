@@ -50,6 +50,13 @@ PROBE arraykey_size_both 2
 PROBE arraykey_read_orig 1
 PROBE arraykey_read_lower 2
 
+# probe_assign_order
+PROBE index_order vk
+PROBE copied_target 3 1
+PROBE cleared_target 1
+PROBE swapped_object new 1
+PROBE self_store 2 1
+
 # probe_attach_badindex
 PROBE at badindex
 PROBE_FATAL bad index

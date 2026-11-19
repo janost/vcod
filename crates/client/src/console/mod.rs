@@ -612,7 +612,7 @@ mod tests {
             t2: 1.0,
             page: 0,
         };
-        // As `cod4_hud::to_font` builds `consoleFont`, 16 px high.
+        // As `cod4_hud::fonts::to_font` builds `consoleFont`, 16 px high.
         let f = Font {
             size: 16,
             glyphs: vec![g; 256],

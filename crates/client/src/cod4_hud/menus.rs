@@ -8,7 +8,10 @@ use vcod_cod4::menuexp;
 use vcod_cod4::net::parse::Snapshot;
 use vcod_cod4::scriptmenu::{ITEM_TYPE_OWNERDRAW, LayoutItem, WINDOW_VISIBLE};
 
-use super::{Cod4Hud, HudEnv, Loaded, MenuAssets, image_of, quad, text};
+use super::assets::{Loaded, MenuAssets};
+use super::env::HudEnv;
+use super::text::text;
+use super::{Cod4Hud, image_of, quad};
 use crate::console::shell::Shell;
 use crate::hud::HudQuad;
 use crate::hud::cod2elem::ScreenPlacement;
