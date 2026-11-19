@@ -1420,14 +1420,14 @@ impl Cod2Level {
     /// `StuckInClient`'s CoD2 form (lnxded 0x80f6e9e) for `slot`: both
     /// players of the first overlapping pair take the push as their x/y
     /// velocity, `pm_time` 300 and `pm_flags` 0x200; `slot` turns to
-    /// contents 0x4000000.
-    fn stuck_in_client(&mut self, slot: usize, eject: f32) {
+    /// contents 0x4000000. `sessions` is each slot's `sessionstate`.
+    fn stuck_in_client(&mut self, slot: usize, eject: f32, sessions: &[Option<String>]) {
         use crate::game::stuck::{Cod2StuckView, stuck_in_client_cod2};
         let views: Vec<Option<Cod2StuckView>> = (0..self.players.len())
             .map(|i| {
                 let p = self.players[i].as_ref()?;
-                let playing = p.ps.pm_flags & PMF_PLAYING != 0
-                    && self.rt.client_field(i, "sessionstate").as_deref() == Some("playing");
+                let playing =
+                    p.ps.pm_flags & PMF_PLAYING != 0 && sessions[i].as_deref() == Some("playing");
                 let (mins, maxs) = p.ps.stance_box();
                 Some(Cod2StuckView {
                     playing,
@@ -1481,6 +1481,14 @@ impl Cod2Level {
         let eject = cvar("g_playerCollisionEjectSpeed", 25) as f32;
         let now = self.level_time;
         let mut spectators = Vec::new();
+        // Each client's session, read once: nothing in the end frame writes
+        // one, and every slot's push test reads them all.
+        let sessions: Vec<Option<String>> = (0..self.players.len())
+            .map(|i| {
+                self.players[i].as_ref()?;
+                self.rt.client_field(i, "sessionstate")
+            })
+            .collect();
         for slot in 0..self.players.len() {
             if self.players[slot].is_none() {
                 continue;
@@ -1491,7 +1499,7 @@ impl Cod2Level {
             // the first snapshot whose client state names one
             // (cod2-player-anims.md 1).
             self.rt.client_attachments(slot);
-            let session = self.rt.client_field(slot, "sessionstate");
+            let session = sessions[slot].clone();
             // `ClientEndFrame` (Mac 0x1a47a8) takes its arm off the
             // session: a playerstate still holding last frame's follow
             // copy (`clientNum` not the client's) whose session left
@@ -1581,7 +1589,7 @@ impl Cod2Level {
             // another is pushed off it and drops to 0x4000000 for the
             // frame (lnxded 0x80f78dc; cod2-turrets.md 14.2).
             if self.rt.client_vitals(slot).health > 0 {
-                self.stuck_in_client(slot, eject);
+                self.stuck_in_client(slot, eject, &sessions);
             }
         }
         let p = crate::tick_profile::phase("end frames/spectators and turrets");
