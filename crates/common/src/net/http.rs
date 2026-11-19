@@ -76,6 +76,14 @@ pub fn read_head(r: &mut impl BufRead) -> anyhow::Result<Vec<String>> {
     }
 }
 
+/// Whitespace and control characters, which would split the request line.
+fn refuse_unsafe(url: &str) -> anyhow::Result<()> {
+    if url.bytes().any(|b| b <= b' ' || b == 0x7f) {
+        bail!("bad URL {url:?}");
+    }
+    Ok(())
+}
+
 /// `http://host[:port]/path` split into its parts.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Url {
@@ -87,9 +95,7 @@ pub struct Url {
 /// Parse an absolute `http://` URL. Whitespace and control characters are
 /// refused: the path goes into a request line verbatim.
 pub fn parse_url(url: &str) -> anyhow::Result<Url> {
-    if url.bytes().any(|b| b <= b' ' || b == 0x7f) {
-        bail!("bad URL {url:?}");
-    }
+    refuse_unsafe(url)?;
     let Some(rest) = url
         .get(..7)
         .filter(|s| s.eq_ignore_ascii_case("http://"))
@@ -238,6 +244,7 @@ fn get(
             301 | 302 | 303 | 307 | 308 => {
                 let to = location.context("redirect without a Location")?;
                 url = if to.starts_with('/') {
+                    refuse_unsafe(&to)?;
                     Url { path: to, ..url }
                 } else {
                     parse_url(&to)?
@@ -375,6 +382,21 @@ mod tests {
         let (port, _h) = serve(vec![b"HTTP/1.0 200 OK\r\n\r\nabcdef".to_vec()]);
         let (res, _) = run(&format!("http://127.0.0.1:{port}/x"), 4);
         assert!(res.is_err());
+    }
+
+    /// A relative Location holding a bare CR or a space is refused, not
+    /// spliced into the next request line.
+    #[test]
+    fn a_relative_location_with_control_bytes_is_refused() {
+        for loc in ["/a\rX-Injected: 1", "/a b"] {
+            let (port, _h) = serve(vec![
+                format!("HTTP/1.0 302 Found\r\nLocation: {loc}\r\n\r\n").into_bytes(),
+                b"HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nhi".to_vec(),
+            ]);
+            let (res, body) = run(&format!("http://127.0.0.1:{port}/x"), 100);
+            assert!(res.unwrap_err().to_string().contains("bad URL"));
+            assert!(body.is_empty());
+        }
     }
 
     /// A head that never ends its line, or never ends at all, fails once it
