@@ -8,8 +8,8 @@
 #   bot_<game>.txt  bot_match's `digest`/`net` lines, seeds 1 and 2, 6000
 #                   ticks, DIGEST and NETDIGEST every 600 (CoD4 has no net)
 #   nav_<game>.txt  nav_build's line per map, build time cut (default maps)
-#   tests_<crate>.txt  every test of `cargo test -p <crate> --lib --bins
-#                   --tests -- --list`, `<target> <name>`, sorted
+#   tests_<crate>.txt  every test of `cargo test -p <crate> --tests --
+#                   list` (lib, bins, integration), `<target> <name>`, sorted
 # A step that fails writes `FAILED (exit n)` into its file, so the compare
 # shows it. Logs go to <out-dir>/log/, the commit to <out-dir>/meta.txt;
 # neither is compared.
@@ -87,7 +87,7 @@ nav=(run --release -p vcod-server --example nav_build)
 [[ -n ${COD4_DIR:-} ]] && step nav_cod4 nav_lines COD4_DIR="$COD4_DIR" GAME=cod4 -- "${nav[@]}"
 for toml in crates/*/Cargo.toml; do
 	crate=$(sed -nE '0,/^name *= *"(.*)"/s//\1/p' "$toml")
-	step "tests_$crate" test_lines -- test -p "$crate" --lib --bins --tests -- --list
+	step "tests_$crate" test_lines -- test -p "$crate" --tests -- --list
 done
 
 echo "baselines: $out in $((SECONDS - start)) s"
