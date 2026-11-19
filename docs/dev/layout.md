@@ -209,6 +209,10 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
   building a `Ui`, `stack.rs` the open menus, `script.rs` the menu scripts
   and `uiScript`, `input.rs` mouse, keys and focus, `lists.rs` the list
   boxes and the browser's poll, `paint.rs` the `Painter` and drawing.
+  `scan.rs` is the socket, master query, LAN broadcast and cache write
+  both server browsers (this one and CoD4's `play/cod4_menus/browser.rs`)
+  run on; `item_rules.rs` the item rules `Ui` and CoD4's `ScriptMenus`
+  share.
 - `play/`: join, input, cmd clock, prediction, events, the replay and
   loopback gates, the soaks and sweeps.
 - `session.rs`: `App`'s game, one call per frame step, input, console
