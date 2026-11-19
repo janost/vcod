@@ -178,11 +178,10 @@ impl Recoil {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     /// `m1carbine_mp`'s kick keys as `pak0.pk3` spells them.
     fn carbine() -> WeaponDef {
-        let mut m = HashMap::new();
+        let mut m = vcod_common::xmodel::WeaponKeys::default();
         for (k, v) in [
             ("aimDownSight", "1"),
             ("gunMaxPitch", "5"),
@@ -214,7 +213,7 @@ mod tests {
             ("hipViewKickYawMax", "15"),
             ("hipViewKickCenterSpeed", "800"),
         ] {
-            m.insert(k.to_string(), v.to_string());
+            m.insert(k, v.to_string());
         }
         WeaponDef::from_map(&m)
     }

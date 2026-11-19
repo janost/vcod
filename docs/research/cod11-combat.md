@@ -159,6 +159,43 @@ spread block at all (grenades, mounted MGs) and 0 in one SP file. INFERRED: an
 absent key reads as 0, since the parsed struct is zeroed and the field table
 only writes keys the file spells.
 
+
+### 0.1 How a value is read
+
+The Windows game modules hold the same table and loader: `game_mp_x86.dll`
+1.1 has the field table at `0x2006add0` (248 records), 1.5 at `0x2006f250`
+(253), UO's `uo_game_mp_x86.dll` at `0x200853a8` (293), each record
+`{ char *name; int offset; int type; }`. VERIFIED (the tables, read by
+pointer off each module's `hipSpreadStandMin` string). The weapon loader
+calls `ParseConfigStringToStruct` with the table in `edx` (1.1 `0x2000e009`
+into `0x2003f070`; 1.5 `0x200422b0`; UO `0x2000ff24` into `0x200589b0`).
+VERIFIED (the call sites).
+
+For each record in table order it looks the key up with `Info_ValueForKey`
+(1.1 `0x2003e960`, 1.5 `0x20041b40`, UO `0x20058170`), which walks the
+pairs in file order, compares each key with `Q_stricmpn` at length 99999
+(`0x1869f`; 1.1 `0x2003e650` folds `a`..`z` to upper case), and returns the
+first match. An empty value skips the record (`cmp cl,bl; je` at 1.1
+`0x2003f0a0`), leaving the field as the def's init left it. Types 0..7 go
+through a jump table (1.1 `0x2003f1cc`): 4 stores the CRT `atol`
+(`0x2003fd2e`, leading blanks, a sign, the digits up to the first
+non-digit), 5 stores `atol(v) != 0` (`neg; sbb; neg` at `0x2003f13c`), 6
+stores the CRT `atof` (`0x2004066e`) as a float (`fstp DWORD` at
+`0x2003f14f`), 7 the `atof` times the float at `0x2005f818` through `_ftol`
+(`0x2003f15d..0x2003f16d`); types from 8 on go to the loader's own
+callback (1.1 `0x2000d990`), which matches each name table with `_stricmp`
+(`0x2004ccf0`). VERIFIED (the instructions, in all three modules: the same
+dispatch at 1.5 `0x200422fd` and UO `0x200589fd`, the same `neg; sbb; neg`
+and `fstp`). INFERRED: the Linux servers' `game.mp.i386.so` build the same
+source, so read alike; their `atoi` saturates where `atol` wraps.
+
+So `damage\40.0` reads 40, `clipSize\30 rounds` 30, `semiAuto\2` true, a
+key matches in any case, and a repeated key keeps its first value, an empty
+first value included. `explosionRadius`, `projectileSpeed`,
+`projectileSpeedUp` and the reticle sizes are type 4, read as ints though
+vcod keeps them as floats. vcod reads them so through
+`vcod_common::xmodel::WeaponKeys` and `weapon::parse_num` (the server's
+`TurretDef::parse` too).
 ---
 
 ## 1. `PM_Weapon`: the states and what moves between them

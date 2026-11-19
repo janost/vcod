@@ -506,7 +506,7 @@ fn turret_sound_aliases(
         &["loopFireSound", "stopFireSound"]
     };
     keys.iter()
-        .filter_map(|k| map.get(*k))
+        .filter_map(|k| map.get(k))
         .filter(|v| !v.is_empty())
         .cloned()
         .collect()

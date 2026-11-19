@@ -285,11 +285,10 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     /// `kar98k_sniper_mp`'s overlay and zoom keys as pak0 spells them.
     fn sniper() -> WeaponDef {
-        let mut m = HashMap::new();
+        let mut m = vcod_common::xmodel::WeaponKeys::default();
         for (k, v) in [
             ("aimDownSight", "1"),
             ("adsZoomFov", "16"),
@@ -300,7 +299,7 @@ mod tests {
             ("adsOverlayWidth", "220"),
             ("adsOverlayHeight", "220"),
         ] {
-            m.insert(k.to_string(), v.to_string());
+            m.insert(k, v.to_string());
         }
         WeaponDef::from_map(&m)
     }

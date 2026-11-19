@@ -612,9 +612,42 @@ pub fn apply_viewhands_placeholder_override(model: &mut Model) {
     materials[3] = "viewhands@vsleeve_whermact.tga".to_string();
 }
 
+/// A weapon file's `\key\value` pairs as `ParseConfigStringToStruct`
+/// reads them through `Info_ValueForKey` (1.1 `game_mp_x86.dll` 0x2003e960,
+/// keys compared by `Q_stricmpn` 0x2003e650): a key in any case, the first
+/// value under it, and an empty value read as no value, which leaves the
+/// field its default (combat doc 0.1).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WeaponKeys(HashMap<String, String>);
+
+impl WeaponKeys {
+    /// The first value under `key` in any case; `None` when absent or
+    /// empty.
+    pub fn get(&self, key: &str) -> Option<&String> {
+        crate::text::with_ascii_lowercase(key, |k| self.0.get(k)).filter(|v| !v.is_empty())
+    }
+
+    /// `key`'s value unless the map holds one already: the first wins.
+    pub fn insert(&mut self, key: impl AsRef<str>, value: impl Into<String>) {
+        self.0
+            .entry(key.as_ref().to_ascii_lowercase())
+            .or_insert_with(|| value.into());
+    }
+}
+
+impl<K: AsRef<str>, V: Into<String>> FromIterator<(K, V)> for WeaponKeys {
+    fn from_iter<I: IntoIterator<Item = (K, V)>>(it: I) -> Self {
+        let mut keys = WeaponKeys::default();
+        for (k, v) in it {
+            keys.insert(k, v);
+        }
+        keys
+    }
+}
+
 /// `\key\value...` weapon file. The shipped files open with a bare
 /// `WEAPONFILE` token that would shift every pair by one; it is dropped.
-pub fn parse_weapon(text: &str) -> HashMap<String, String> {
+pub fn parse_weapon(text: &str) -> WeaponKeys {
     let mut toks = text.trim_start_matches('\\').split('\\').peekable();
     if toks
         .peek()
@@ -622,9 +655,9 @@ pub fn parse_weapon(text: &str) -> HashMap<String, String> {
     {
         toks.next();
     }
-    let mut map = HashMap::new();
+    let mut map = WeaponKeys::default();
     while let (Some(k), Some(v)) = (toks.next(), toks.next()) {
-        map.insert(k.to_string(), v.to_string());
+        map.insert(k, v);
     }
     map
 }

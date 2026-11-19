@@ -17,8 +17,6 @@
 //!   `BG_CalculateWeaponAngles` (Mac 0x7f226) and turns the view weapon by
 //!   it (`play::cod2_gun::GunInput::recoil`).
 
-use std::collections::HashMap;
-
 use vcod_cod2::net::PlayerView;
 use vcod_cod2::net::events as ev;
 use vcod_common::weapon::WeaponDef as KickKeys;
@@ -80,7 +78,7 @@ pub struct KickDef {
 
 impl KickDef {
     pub fn new(def: &vcod_cod2::weapon::WeaponDef) -> KickDef {
-        let map: HashMap<String, String> = KICK_KEYS
+        let map: vcod_common::xmodel::WeaponKeys = KICK_KEYS
             .iter()
             .map(|&k| {
                 let v = if k == "aimDownSight" {

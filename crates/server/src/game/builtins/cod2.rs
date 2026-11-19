@@ -226,7 +226,7 @@ pub fn write_weapon_configstrings(host: &mut GameHost) {
 /// model and of the projectile model. VERIFIED, the calls and their order.
 /// Item 0's bit reads set on both live captures (cod2-protocol.md 15.3);
 /// what sets it is not traced.
-fn g_register_weapon(host: &mut GameHost, keys: &std::collections::HashMap<String, String>) {
+fn g_register_weapon(host: &mut GameHost, keys: &vcod_common::xmodel::WeaponKeys) {
     use crate::configstrings::CsRange;
     let layout = &vcod_cod2::net::PROTOCOL_118.cs;
     for key in ["useHintString", "dropHintString"] {

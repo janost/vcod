@@ -855,8 +855,8 @@ pub fn aim_angles(ps: &PlayerState, st: &mut AimState, input: &AimInput) -> [f32
 mod tests {
     use super::*;
     use crate::pmove::SPEED_RUN;
+    use crate::xmodel::WeaponKeys;
     use glam::Vec3;
-    use std::collections::HashMap;
 
     /// 988.76947 degrees is 179999.993 65536ths: retail's x87 product
     /// truncates to 179999, where an `f32` product rounds onto 180000.
@@ -868,7 +868,7 @@ mod tests {
 
     /// The kar98k sniper's aim keys as `pak0.pk3` spells them.
     fn sniper() -> WeaponDef {
-        let mut m = HashMap::new();
+        let mut m = WeaponKeys::default();
         for (k, v) in [
             ("aimDownSight", "1"),
             ("adsOverlayReticle", "FG42"),
@@ -900,7 +900,7 @@ mod tests {
             ("duckedRotMinSpeed", "20"),
             ("proneRotMinSpeed", "0"),
         ] {
-            m.insert(k.to_string(), v.to_string());
+            m.insert(k, v.to_string());
         }
         WeaponDef::from_map(&m)
     }
@@ -966,7 +966,7 @@ mod tests {
     /// at `duckedOfs` crouched still, and the raised sight takes it away.
     #[test]
     fn the_gun_moves_with_speed_and_stance() {
-        let mut m = HashMap::new();
+        let mut m = WeaponKeys::default();
         for (k, v) in [
             ("standMoveR", "0.6"),
             ("standMoveU", "-1"),
@@ -978,7 +978,7 @@ mod tests {
             ("standMoveMinSpeed", "80"),
             ("duckedMoveMinSpeed", "20"),
         ] {
-            m.insert(k.to_string(), v.to_string());
+            m.insert(k, v.to_string());
         }
         let aim = WeaponDef::from_map(&m).aim;
         let mut ps = still(0.0);
@@ -1012,14 +1012,14 @@ mod tests {
     /// the stance's pose.
     #[test]
     fn the_gun_move_scales_against_the_server_s_speed() {
-        let mut m = HashMap::new();
+        let mut m = WeaponKeys::default();
         for (k, v) in [
             ("standMoveR", "0.6"),
             ("standMoveU", "-1"),
             ("posMoveRate", "4"),
             ("standMoveMinSpeed", "80"),
         ] {
-            m.insert(k.to_string(), v.to_string());
+            m.insert(k, v.to_string());
         }
         let aim = WeaponDef::from_map(&m).aim;
         let mut ps = still(0.0);
@@ -1042,7 +1042,7 @@ mod tests {
     /// pose again once the sprint ends.
     #[test]
     fn a_uo_sprint_swings_the_gun_to_its_sprint_pose() {
-        let mut m = HashMap::new();
+        let mut m = WeaponKeys::default();
         for (k, v) in [
             ("standMoveR", "0.5"),
             ("standMoveU", "-1.2"),
@@ -1053,7 +1053,7 @@ mod tests {
             ("standMoveMinSpeed", "80"),
             ("sprintMoveMinSpeed", "110"),
         ] {
-            m.insert(k.to_string(), v.to_string());
+            m.insert(k, v.to_string());
         }
         let aim = WeaponDef::from_map(&m).aim;
         let mut ps = still(0.0);
@@ -1184,7 +1184,7 @@ mod tests {
     /// spring without a panic or a hang (SEC-048, SEC-062).
     #[test]
     fn hostile_keys_and_fractions_step_the_gun() {
-        let mut m = HashMap::new();
+        let mut m = WeaponKeys::default();
         for (k, v) in [
             ("aimDownSight", "1"),
             ("swayMaxAngle", "-1"),
@@ -1198,7 +1198,7 @@ mod tests {
             ("gunMaxPitch", "10"),
             ("gunMaxYaw", "10"),
         ] {
-            m.insert(k.to_string(), v.to_string());
+            m.insert(k, v.to_string());
         }
         let def = WeaponDef::from_map(&m);
         for frac in [0.0, 0.5, 2.0, -1.0, f32::NAN, f32::INFINITY] {

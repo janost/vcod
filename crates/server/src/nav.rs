@@ -6668,7 +6668,10 @@ impl Sim {
         if move_scale <= 0.0 || move_scale == 1.0 {
             return Sim::default();
         }
-        let map = HashMap::from([("moveSpeedScale".to_string(), move_scale.to_string())]);
+        let map = vcod_common::xmodel::WeaponKeys::from_iter([(
+            "moveSpeedScale",
+            move_scale.to_string(),
+        )]);
         Sim {
             weapons: Some(Arc::new([Some(vcod_common::weapon::WeaponDef::from_map(
                 &map,
