@@ -178,7 +178,7 @@ impl BotWorld for Cod2Server {
     }
 
     fn connected(&self, slot: usize) -> bool {
-        self.core.clients[slot].is_some()
+        self.bot_connected(slot)
     }
 
     fn take_noises(&mut self) -> Vec<Noise> {
@@ -482,6 +482,32 @@ mod tests {
         assert_eq!(said.matches("removed").count(), 4, "{said}");
         sv.tick_frames(now + std::time::Duration::from_millis(100), 1);
         assert_eq!(bots(&sv), 0);
+    }
+
+    /// A dropped bot's zombie slot holds no bot: the driver forgets it as
+    /// CoD4's does. Needs `COD2_DIR`.
+    #[test]
+    fn a_zombie_slot_is_no_bot_s() {
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        let mut sv = Cod2Server::new(
+            super::super::Cod2Config {
+                map: "mp_toujane".into(),
+                gametype: "dm".into(),
+                hostname: "zombie".into(),
+                max_clients: 4,
+                gametype_script: None,
+            },
+            3,
+            now,
+        );
+        sv.load(Some(std::rc::Rc::new(fs))).unwrap();
+        let slot = sv.add_bots(1, false)[0];
+        assert!(BotWorld::connected(&sv, slot));
+        sv.core.clients[slot].as_mut().unwrap().state = State::Zombie;
+        assert!(!BotWorld::connected(&sv, slot));
     }
 
     /// vcod's bots never vote, so they stay out of `numVotingClients`: one

@@ -240,9 +240,7 @@ impl BotWorld for Cod4Server {
     }
 
     fn connected(&self, slot: usize) -> bool {
-        self.core.clients[slot]
-            .as_ref()
-            .is_some_and(|c| c.state != State::Zombie)
+        self.bot_connected(slot)
     }
 
     /// The tick's top: the playerstates read, the hits scored since, then
