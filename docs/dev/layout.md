@@ -146,6 +146,12 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     scripts, the clients' playerstates and their pmove over the map's clip
     map, combat (`combat.rs`, `bullet.rs`), missiles, entity damage,
     corpses, turrets, vehicles, the use key, weapons.
+  - `game/script.rs` + `game/script/`: `ScriptRuntime`, the VM and host
+    of one level. `load.rs` the level load and compile cache, `frame.rs`
+    the frame and entity pass, `damage.rs`, `touch.rs` (the touch and use
+    passes, cursor hints), `turret.rs`, `movers.rs`, `clients.rs` (per-slot
+    mirrors, sessions, client events), `objectives.rs` (what the bots
+    read), `testing.rs` the test seams, `tests.rs`.
   - `game/builtins/`: the script builtins per game.
 - Bots: `bots.rs` + `nav.rs`, and `bots/driver.rs`, the per-tick driver over
   `BotWorld`. CoD1's `impl` and view builders are in `server/bot_world.rs`,
@@ -153,6 +159,13 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
   in `cod4/bots.rs` over `bots/cod4.rs`. `server/bot_admin.rs` is the bot
   admin every server calls (the pass, `addbot`, `removebot`, `listbots`)
   over `AdminHost`.
+  - `nav.rs` + `nav/`: `graph.rs` the graph (nodes, edges, components,
+    lookups, paths), `build.rs` its build passes and ladders, `cache.rs`
+    the per-map cache and `NavJob`, `disk.rs` the disk cache, `search.rs`
+    A*, `follower.rs` the path follower (`follower/reprove.rs` whether the
+    edge under way holds, `follower/yields.rs` giving way), `walk.rs` the
+    pmove walks with their thread-locals and `par_map`, `probe.rs` the
+    world probes round a step.
 - `rcon.rs`, `console.rs`, `stdin_console.rs` (stdin lines into the
   console queue), `tty_console.rs` (CoD1's tty line editor), `cvars/`, `master.rs` (heartbeat), `area.rs`
   (the entity area tree), `tick_trace.rs`, `tick_profile.rs`.

@@ -2220,7 +2220,7 @@ VERIFIED, off `maps/mp/mp_carentan.bsp`: `bombzone_A` (`*4`, origin
 `xmodel/turret_flak88_static_antiairlow_d` with `targetname` `exploder`, which
 `_load.gsc` hides. VERIFIED, off the paks: both carry collision surfaces of
 contents 1. INFERRED, off the plant test in
-`crates/server/src/game/script.rs` reproducing the fixture's slot 0: the
+`crates/server/src/game/script/tests.rs` reproducing the fixture's slot 0: the
 flat plate of that mesh at z -23 is what `getPlant`'s `(+16, +16)` fallback
 trace lands on, where the floor under the planter is clip with no shot
 contents and the two 18-unit traces meet nothing (object-model doc 23.6).
@@ -7047,7 +7047,7 @@ pass (the temp entity rule of 14.7, "Entity numbers") and the second on the
 vcod: `builtins::fx::grenade_explosion_effect` raises the temp entity through
 `GameHost::add_temp_entity` and calls `GameHost::spawn_concussive`.
 `grenade_explosion_effect_takes_a_temp_and_a_concussion_number`
-(`crates/server/src/game/script.rs`) is the probe's table.
+(`crates/server/src/game/script/tests.rs`) is the probe's table.
 
 ### 13.6 The panzerfaust: `Weapon_RocketLauncher_Fire` and `fire_rocket`
 
@@ -8266,7 +8266,7 @@ blast walk and by `grenadeExplosionEffect` (13.5), and freed by
 `ThinkFn::Concussive`.
 `a_temp_entity_takes_a_spawn_number_and_frees_it_past_300_ms` and
 `a_delete_s_free_runs_after_the_threads_of_its_frame`
-(`crates/server/src/game/script.rs`) are the probe's two halves; against
+(`crates/server/src/game/script/tests.rs`) are the probe's two halves; against
 `vcod-server` it reads line for line as retail does, times included
 (`cod11-gsc-language.md`, "The script clock").
 

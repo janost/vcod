@@ -1156,7 +1156,7 @@ VERIFIED (measured, ours, `bot_match`, 2026-10-21): `WARY=alt`, `tdm`,
 ## 11. The walking view and string-pulling (2026-10-21)
 
 `Bot::walk_turn` in `crates/server/src/bots.rs` and `Follower::pull` in
-`crates/server/src/nav.rs`; the follower's side is in
+`crates/server/src/nav/follower.rs`; the follower's side is in
 `bot-navigation.md` section 3, "String-pulling".
 
 Before this a walking bot's waypoint was the plan's next node on the

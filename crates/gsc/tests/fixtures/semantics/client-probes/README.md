@@ -1955,7 +1955,7 @@ COD_LNXDED_HOME=<absolute, no '+'> PORT=29941 SECS=12 \
 Retail, 2026-10-09: `a 1050 299`, `b 1050 302`, then one spawn a frame
 303..309, 300 at +400, 310..315, 301 at +750, 316 on. Against ours the
 table is `grenade_explosion_effect_takes_a_temp_and_a_concussion_number`
-(`crates/server/src/game/script.rs`).
+(`crates/server/src/game/script/tests.rs`).
 
 ## probe_pushorder
 

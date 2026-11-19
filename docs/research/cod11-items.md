@@ -1039,7 +1039,7 @@ taken or freed ends or parks without an error.
 | retail | vcod (`crates/server/src/game/`) |
 |---|---|
 | `Touch_Item` | `pickup::touch_item`, pure over an `Inventory` and the item's `ItemCounts`; `item::touch` builds both off the host's mirrors, runs it and writes the result back |
-| `G_GetActivateEnt` | `item::activate_ent`, called from `ScriptRuntime::item_pass` (`script.rs`) on the use key's rising edge, in the same pass as the walk-over touches |
+| `G_GetActivateEnt` | `item::activate_ent`, called from `ScriptRuntime::item_pass` (`script/touch.rs`) on the use key's rising edge, in the same pass as the walk-over touches |
 | `G_CheckForCursorHints` | `ScriptRuntime::cursor_hint_pass`, beside `ClientEndFrame`'s aim trace |
 | `Drop_Weapon` | `pickup::drop_weapon` and `item::launch_weapon` |
 | `Drop_Item` | `item::drop_item` |

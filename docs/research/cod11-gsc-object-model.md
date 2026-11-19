@@ -1706,7 +1706,7 @@ INFERRED, from absence: no touch path writes the three hint fields
 (`SP_trigger_lookat` installs no touch function, and the trigger touch path
 stores nothing at `ps+0x384`, `+0x388` or `+0x38c`).
 
-VERIFIED, `crates/server/src/game/script.rs` and
+VERIFIED, `crates/server/src/game/script/touch.rs` and
 `crates/server/src/spectate.rs`: vcod writes `serverCursorHint` and
 `serverCursorHintString` from `ScriptRuntime::cursor_hint_pass`, with item,
 turret and `trigger_use` arms (`docs/research/cod11-gametypes-re-bel.md` 4).
@@ -2650,7 +2650,7 @@ through the intermission arm (0x4000a) before it. INFERRED: a planter's
 `self.angles` is his view yaw with the pitch dropped, the first trace's
 direction.
 
-INFERRED, off the plant test in `crates/server/src/game/script.rs`, which runs
+INFERRED, off the plant test in `crates/server/src/game/script/tests.rs`, which runs
 the stock `getPlant` from the fixture's planter origin and yaw against the
 map's collision and matches slot 0 (23.3): on retail's plant neither 18-unit
 trace hits (the floor under the planter is clip with no shot contents), and
@@ -2770,7 +2770,7 @@ tags at `+0x2f2` (script string ids, shorts).
 vcod (`crates/server/src/game/builtins/attach.rs`): the list is the compacted
 slot array, `attach` checks the pair and the count in retail's order, `detach`
 is one builtin for all three protocols, and `client_attachments`
-(`game/script.rs`) indexes a playing or dead client's tags each frame from
+(`game/script/clients.rs`) indexes a playing or dead client's tags each frame from
 `ClientEndFrame`'s pass (`server/cod1_frame.rs`), so the `d` is queued ahead of
 the frame's snapshots. Trap: indexing them in the snapshot build, after the
 frame's writes went out, sends the first snapshot naming a new tag a message
