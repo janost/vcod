@@ -212,9 +212,6 @@ struct Current {
     www: Option<vcod_common::net::http::Fetch>,
 }
 
-/// Largest file a redirect may announce.
-const MAX_WWW_SIZE: u64 = 1 << 31;
-
 /// The client's download queue after a gamestate (`CL_InitDownloads`):
 /// one file at a time, `donedl` once the queue is empty, which has the
 /// server send the gamestate again. A www redirect is fetched over HTTP
@@ -363,11 +360,14 @@ impl Downloads {
         }
         let mut out = vec![DownloadEvent::Command("wwwdl ack".into())];
         let fetch = match (self.www, self.current.as_ref()) {
-            (true, Some(cur)) if (0..MAX_WWW_SIZE as i64).contains(&i64::from(size)) => cur
+            // The UDP cap holds over HTTP too, as on CoD1.
+            (true, Some(cur)) if (0..=MAX_DOWNLOAD_SIZE as i32).contains(&size) => cur
                 .spool
                 .spool()
                 .map_err(anyhow::Error::from)
-                .and_then(|f| vcod_common::net::http::Fetch::spawn(url, f, MAX_WWW_SIZE)),
+                .and_then(|f| {
+                    vcod_common::net::http::Fetch::spawn(url, f, u64::from(MAX_DOWNLOAD_SIZE))
+                }),
             (true, _) => Err(anyhow::anyhow!("{url} announced {size} bytes")),
             (false, _) => Err(anyhow::anyhow!("cl_wwwDownload is off")),
         };
@@ -666,6 +666,23 @@ mod tests {
         let evs = dls.on_message(&DownloadMsg::Redirect {
             url: "http://127.0.0.1:1/main/z.iwd".into(),
             size: 10,
+            flags: 0,
+        });
+        assert_eq!(commands(&evs), ["wwwdl ack", "wwwdl fail"]);
+        assert!(dls.is_done());
+    }
+
+    /// A redirect announcing more than the UDP cap is refused before a
+    /// fetch starts.
+    #[test]
+    fn a_redirect_past_the_cap_falls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let si = "\\sv_referencedIwds\\1 \\sv_referencedIwdNames\\main/z";
+        let mut dls = Downloads::new(dir.path(), si, missing_iwds(si, |_| false)).with_www(true);
+        dls.next_download();
+        let evs = dls.on_message(&DownloadMsg::Redirect {
+            url: "http://127.0.0.1:1/main/z.iwd".into(),
+            size: MAX_DOWNLOAD_SIZE as i32 + 1,
             flags: 0,
         });
         assert_eq!(commands(&evs), ["wwwdl ack", "wwwdl fail"]);

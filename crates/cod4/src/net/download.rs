@@ -539,12 +539,18 @@ impl Downloads {
                 if let Some(s) = size {
                     cur.size = (*s).max(0) as u64;
                 }
-                let limit = cur.limit();
-                if cur.got + data.len() as u64 > limit {
+                // vcod's bound, CoD1's and CoD2's: the announced size, at
+                // most `MAX_DOWNLOAD_BYTES`.
+                let landed = cur.got + data.len() as u64;
+                if cur.size > MAX_DOWNLOAD_BYTES || landed > cur.size {
                     let cur = self.current.take().unwrap();
+                    let why = format!(
+                        "sent {landed} bytes, {} announced (at most {MAX_DOWNLOAD_BYTES})",
+                        cur.size
+                    );
                     return vec![
                         DownloadEvent::Command("stopdl".into()),
-                        self.abandon(cur, format!("more than {limit} bytes")),
+                        self.abandon(cur, why),
                     ];
                 }
                 if let Err(e) = cur.file.write_all(data) {
@@ -897,12 +903,32 @@ mod tests {
         let evs = dls.on_message(&block(1, None, b"de"));
         assert_eq!(evs[0], DownloadEvent::Command("stopdl".into()));
         assert!(
-            matches!(&evs[1], DownloadEvent::Failed(w) if w.contains("more than 4 bytes")),
+            matches!(&evs[1], DownloadEvent::Failed(w) if w.contains("5 bytes, 4 announced")),
             "{evs:?}"
         );
         assert!(dls.is_done());
         assert!(!root.join("mods/m/mod.vcod-dl").exists());
         assert!(!root.join("mods/m/mod.ff").exists());
+    }
+
+    /// An announced size past the cap fails on block 0, before a byte of
+    /// it is written.
+    #[test]
+    fn an_announced_size_past_the_cap_fails_at_once() {
+        let ff = Wanted {
+            remote: "mods/m/mod.ff".into(),
+            checksum: None,
+            size: None,
+        };
+        let (_tmp, mut dls) = queued(ff);
+        let evs = dls.on_message(&DownloadMsg::Block {
+            block: 0,
+            size: Some(MAX_DOWNLOAD_BYTES as i32 + 1),
+            data: vec![7; 10],
+        });
+        assert_eq!(evs[0], DownloadEvent::Command("stopdl".into()));
+        assert!(matches!(&evs[1], DownloadEvent::Failed(_)), "{evs:?}");
+        assert!(dls.is_done());
     }
 
     #[test]
