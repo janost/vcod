@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use vcod_cod4::net::download::{DownloadMsg, safe_rel_path};
+use vcod_cod4::net::download::DownloadMsg;
 use vcod_common::net::codec::MsgWriter;
 
 use super::Cod4Game;
@@ -91,7 +91,7 @@ pub fn servable(root: &Path, name: &str) -> Option<PathBuf> {
     if !lower.ends_with(".iwd") && !lower.ends_with(".ff") {
         return None;
     }
-    Some(root.join(safe_rel_path(name)?))
+    vcod_common::game_dir::confined(root, name)
 }
 
 #[cfg(test)]

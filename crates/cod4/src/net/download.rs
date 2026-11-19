@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use vcod_common::game_dir::confined_rel_path;
 use vcod_common::net::codec::{MsgReader, MsgWriter};
 use vcod_common::net::http::Fetch;
 use vcod_common::net::info_value_for_key;
@@ -145,7 +146,7 @@ pub const MAX_DOWNLOAD_BYTES: u64 = 1 << 30;
 /// own directories is `None` too: nothing is fetched into it.
 pub fn fs_game(systeminfo: &str) -> Option<String> {
     let g = info_value_for_key(systeminfo, "fs_game")?;
-    let rel = vcod_common::game_dir::confined_rel_path(g)?;
+    let rel = confined_rel_path(g)?;
     let top = rel.components().next()?.as_os_str().to_str()?;
     (!STOCK_DIRS.iter().any(|d| top.eq_ignore_ascii_case(d))).then(|| g.to_string())
 }
@@ -166,7 +167,7 @@ pub fn missing_files(
         let in_game = game.as_ref().is_some_and(|g| {
             lower.starts_with(&format!("{}/", g.to_ascii_lowercase().replace('\\', "/")))
         });
-        (in_game || lower.starts_with("usermaps/")) && safe_rel_path(name).is_some()
+        (in_game || lower.starts_with("usermaps/")) && confined_rel_path(name).is_some()
     };
     let mut out = Vec::new();
     for (name, sum) in pairs(systeminfo, "sv_referencedIwdNames", "sv_referencedIwds") {
@@ -209,28 +210,12 @@ pub fn missing_in(root: &Path, systeminfo: &str, map: Option<&str>) -> Vec<Wante
         systeminfo,
         |sum| held.contains(&sum),
         |name| {
-            let rel = safe_rel_path(&format!("{name}.ff"))?;
+            let rel = confined_rel_path(&format!("{name}.ff"))?;
             std::fs::metadata(crate::install::resolve_ci(root, &rel))
                 .ok()
                 .map(|m| m.len())
         },
     )
-}
-
-/// A relative path under the homepath for a referenced name: one or more
-/// components, none empty, `.`, `..`, or holding a backslash, a colon or a
-/// control character.
-pub fn safe_rel_path(name: &str) -> Option<PathBuf> {
-    let parts: Vec<&str> = name.split('/').collect();
-    let ok = |c: &&str| {
-        !c.is_empty()
-            && *c != "."
-            && *c != ".."
-            && !c
-                .bytes()
-                .any(|b| b < b' ' || b == 0x7f || matches!(b, b'\\' | b':'))
-    };
-    (parts.len() >= 2 && parts.iter().all(ok)).then(|| parts.iter().collect())
 }
 
 /// The iwds' unkeyed checksums under `dirs` (as `sv_iwds` lists them).
@@ -453,7 +438,7 @@ impl Downloads {
         use std::io::Write as _;
         let mut out = Vec::new();
         while let Some(wanted) = self.queue.pop_front() {
-            let Some(rel) = safe_rel_path(&wanted.remote) else {
+            let Some(rel) = confined_rel_path(&wanted.remote) else {
                 out.push(DownloadEvent::Skipped(format!(
                     "Could not create {}",
                     wanted.remote
@@ -766,14 +751,28 @@ mod tests {
         assert!(got.is_empty());
     }
 
+    /// Referenced names go through the shared file-name rule: empty
+    /// components fold, `..` anywhere and a drive colon list nothing.
     #[test]
-    fn paths_stay_home() {
-        assert!(safe_rel_path("mods/mw/z.iwd").is_some());
-        assert!(safe_rel_path("usermaps/mp_x/mp_x.ff").is_some());
-        assert!(safe_rel_path("../x.iwd").is_none());
-        assert!(safe_rel_path("x.iwd").is_none());
-        assert!(safe_rel_path("mods//x.iwd").is_none());
-        assert!(safe_rel_path("c:/x.iwd").is_none());
+    fn referenced_names_stay_under_the_install() {
+        let si = "\\sv_referencedFFCheckSums\\1 2 3 \\sv_referencedFFNames\\usermaps/mp_x//mp_x \
+                  usermaps/../zone/common_mp usermaps/c:x";
+        let names: Vec<String> = missing_files(si, |_| true, |_| None)
+            .into_iter()
+            .map(|w| w.remote)
+            .collect();
+        assert_eq!(names, ["usermaps/mp_x//mp_x.ff"]);
+        let (tmp, mut dls) = queued(Wanted {
+            remote: names[0].clone(),
+            checksum: None,
+            size: None,
+        });
+        dls.on_message(&DownloadMsg::Block {
+            block: 0,
+            size: Some(0),
+            data: Vec::new(),
+        });
+        assert!(tmp.path().join("usermaps/mp_x/mp_x.ff").is_file());
     }
 
     /// A redirect to a name holding a colour code (a CoD4x update
