@@ -410,12 +410,13 @@ impl BotGame for super::Cod2Game {
         }
     }
 
-    /// The menu block's slots short of its last, as CoD2's bots have
-    /// always read it (CoD4's read the last too).
+    /// The first `team_` menu in the menu block, all 32 slots of it
+    /// (`CL_OpenScriptMenu_f`'s scan, cod2-protocol.md "Script menus on a
+    /// CoD2 client"), as CoD4's `menu_names` reads its block.
     fn team_menu(e: &Cod2Server) -> Option<usize> {
         use vcod_common::net::protocol::CsRange;
         let (first, last) = vcod_cod2::net::protocol::CS_LAYOUT_118.bounds(CsRange::Menu);
-        (first..last)
+        (first..=last)
             .find(|&i| {
                 e.core
                     .configstrings

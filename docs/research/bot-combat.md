@@ -2018,3 +2018,8 @@ VERIFIED (measured, ours): every refactor commit printed these, every
   and 36 become 47 and 48, throws 22 and 16 become 14 and 13, script
   errors 0 both. INFERRED: bots answer a blast as CoD2's do, walking in
   on the thrower; two seeds tell nothing past that.
+- The team menu on CoD2: `team_menu` scanned configstrings 1246..1277
+  short of 1277. The block is 32 slots, inclusive (cod2-protocol.md,
+  script menus, `CL_OpenScriptMenu_f`), as CoD4's `menu_names` reads its
+  own; it scans all 32 now. Digests unchanged: the stock team menu sits
+  low in the block.
