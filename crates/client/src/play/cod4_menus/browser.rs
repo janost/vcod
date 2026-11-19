@@ -20,7 +20,7 @@ use vcod_cod4::net::browser::{
 };
 use vcod_common::net::master::{GETINFO, GETSTATUS, LAN_PORTS};
 
-use crate::frontend::scan::{MASTER_TIMEOUT, Reply, ServerScan};
+use crate::frontend::scan::{MASTER_TIMEOUT, Reply, ServerScan, write_cache};
 
 /// `CL_UpdateVisiblePings` (0x4703c0) stops once nothing was sent and
 /// 2000 ms passed since the newest ping went out.
@@ -350,7 +350,8 @@ impl Browser {
     }
 
     /// `LAN_SaveServersToCache`'s favourites over the file's old bytes:
-    /// vcod leaves the Internet block as retail last wrote it.
+    /// vcod leaves the Internet block as retail last wrote it. The file is
+    /// replaced whole through a temp file, as CoD1's is.
     pub fn save(&self) {
         let Some(path) = &self.cache else {
             return;
@@ -361,7 +362,7 @@ impl Browser {
             .unwrap_or_else(|| vec![0; vcod_cod4::net::browser::CACHE_LEN]);
         let favorites: Vec<Record> = self.lists[2].iter().map(|s| s.rec.clone()).collect();
         ServerCache::write_favorites(&favorites, &mut file);
-        if let Err(e) = std::fs::write(path, &file) {
+        if let Err(e) = write_cache(path, &file) {
             log::warn!("cod4 browser: cannot write {}: {e}", path.display());
         }
     }
