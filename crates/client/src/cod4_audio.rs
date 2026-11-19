@@ -926,13 +926,14 @@ mod tests {
             fs.overlay(&p, w);
         }
         let shell = crate::console::shell::Shell::new();
-        let mut a = AudioSystem::new(
+        let mut a = AudioSystem::with_aliases(
             &fs,
             AudioOpts {
                 enabled: false,
                 volume: shell.cvar_f32("mss_volume"),
                 rate: bank::mixer_rate(shell.cvar_f32("mss_khz") as i32),
             },
+            Default::default(),
         );
         a.on_gamestate(&map);
         // Each alias the mixer held: its loudest gain and its frames' peak.
@@ -1239,13 +1240,14 @@ mod tests {
         for (p, w) in files {
             fs.overlay(&p, w);
         }
-        let mut a = AudioSystem::new(
+        let mut a = AudioSystem::with_aliases(
             &fs,
             AudioOpts {
                 enabled: false,
                 volume: 1.0,
                 rate: 44100,
             },
+            Default::default(),
         );
         a.on_gamestate("mp_crash");
         a.set_cod4_aliases(sounds.take_table().unwrap());

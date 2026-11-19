@@ -1962,7 +1962,7 @@ mod tests {
                 assert!(fs.read(&path).is_some(), "{alias}: {path}");
             }
         }
-        let mut a = crate::audio::AudioSystem::new(&fs, opts);
+        let mut a = crate::audio::AudioSystem::with_aliases(&fs, opts, Default::default());
         a.set_cod4_aliases(table);
         for alias in ["mouse_over", "mouse_click"] {
             assert!(a.play_local(&fs, alias).is_some(), "{alias}");
