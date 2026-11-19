@@ -450,6 +450,7 @@ impl VoiceInput for Tone {
 pub struct Mic {
     stream: cpal::Stream,
     buf: Arc<Mutex<VecDeque<i16>>>,
+    rate: u32,
 }
 
 impl Mic {
@@ -459,7 +460,9 @@ impl Mic {
         let cfg = dev.default_input_config().ok()?;
         let channels = usize::from(cfg.channels()).max(1);
         let step = f64::from(cfg.sample_rate()) / f64::from(rate);
-        let buf = Arc::new(Mutex::new(VecDeque::new()));
+        // Room for the second kept and a callback past it, so the
+        // callback's extend never grows the buffer.
+        let buf = Arc::new(Mutex::new(VecDeque::with_capacity(2 * rate as usize)));
         let mut down = Downsample::new(channels, step, rate);
         let sink = buf.clone();
         let err = |e| log::warn!("voice: microphone: {e}");
@@ -483,16 +486,19 @@ impl Mic {
         }
         .ok()?;
         stream.play().ok()?;
-        Some(Mic { stream, buf })
+        Some(Mic { stream, buf, rate })
     }
 }
 
 impl VoiceInput for Mic {
     fn take(&mut self) -> Vec<i16> {
-        self.buf
-            .lock()
-            .map(|mut b| b.drain(..).collect())
-            .unwrap_or_default()
+        // Allocated before the lock, so the capture callback never waits on
+        // an allocation; the buffer holds at most two seconds.
+        let mut out = Vec::with_capacity(2 * self.rate as usize);
+        if let Ok(mut b) = self.buf.lock() {
+            out.extend(b.drain(..));
+        }
+        out
     }
 
     fn set_active(&mut self, on: bool) {
@@ -517,6 +523,9 @@ struct Downsample {
     sum: f32,
     n: u32,
     pos: f64,
+    /// One callback's samples, kept so a callback allocates only while it
+    /// grows.
+    out: Vec<i16>,
 }
 
 impl Downsample {
@@ -529,11 +538,12 @@ impl Downsample {
             sum: 0.0,
             n: 0,
             pos: 0.0,
+            out: Vec::new(),
         }
     }
 
     fn push(&mut self, data: impl Iterator<Item = f32>, sink: &Mutex<VecDeque<i16>>) {
-        let mut out = Vec::new();
+        self.out.clear();
         let mut frame = 0.0;
         for (i, s) in data.enumerate() {
             frame += s;
@@ -548,13 +558,13 @@ impl Downsample {
                 self.acc += self.step - self.pos;
                 self.pos = 0.0;
                 let v = self.sum / self.n as f32;
-                out.push((v.clamp(-1.0, 1.0) * 32767.0) as i16);
+                self.out.push((v.clamp(-1.0, 1.0) * 32767.0) as i16);
                 self.sum = 0.0;
                 self.n = 0;
             }
         }
         if let Ok(mut b) = sink.lock() {
-            b.extend(out);
+            b.extend(self.out.iter().copied());
             // A second at most: the rest is stale.
             let over = b.len().saturating_sub(self.rate as usize);
             b.drain(..over);
@@ -581,9 +591,16 @@ struct VoiceStream {
 
 impl kira::sound::Sound for VoiceStream {
     fn process(&mut self, out: &mut [kira::Frame], dt: f64, _: &kira::info::Info) {
-        let mut ring = match self.ring.lock() {
+        // The audio thread never waits on the window's thread: a ring held
+        // there holds this buffer at the last sample.
+        let mut ring = match self.ring.try_lock() {
             Ok(r) => r,
-            Err(_) => return,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                let s = self.next;
+                out.fill(kira::Frame { left: s, right: s });
+                return;
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => return,
         };
         for f in out {
             self.pos += dt * f64::from(self.rate);
@@ -792,7 +809,10 @@ impl VoiceChat {
             let ring = match &self.streams[talker as usize] {
                 Some(r) => r.clone(),
                 None => {
-                    let r: Ring = Arc::new(Mutex::new(VecDeque::new()));
+                    // The half second kept and a frame past it, so the
+                    // extend below never grows the ring under its lock.
+                    let room = self.rate as usize / 2 + FRAME_SAMPLES;
+                    let r: Ring = Arc::new(Mutex::new(VecDeque::with_capacity(room)));
                     if let Some(a) = audio.as_deref_mut() {
                         a.play_custom(VoiceStreamData(r.clone(), self.rate));
                     }
@@ -851,6 +871,48 @@ mod tests {
         assert!(!sound.finished());
         drop(v);
         assert!(sound.finished());
+    }
+
+    /// A second of device audio comes down to the codec's rate, a
+    /// constant level staying constant (TEST-049).
+    #[test]
+    fn the_downsampler_yields_the_codec_rate() {
+        for (device, rate, channels) in [(48000, 8000, 2), (44100, 8192, 1)] {
+            let mut d = Downsample::new(channels, f64::from(device) / f64::from(rate), rate);
+            let sink = Mutex::new(VecDeque::new());
+            // A second in 10 ms callbacks.
+            for _ in 0..100 {
+                let n = device as usize / 100 * channels;
+                d.push(std::iter::repeat_n(0.5, n), &sink);
+            }
+            let got = sink.lock().unwrap();
+            assert!(got.len().abs_diff(rate as usize) <= 1, "{device}: {}", got.len());
+            assert!(got.iter().all(|&s| s == 16383), "{device}");
+        }
+    }
+
+    /// A talker's stream steps its ring at the codec's rate between
+    /// samples, plays silence on an empty ring, and holds the last sample
+    /// while the window's thread has the ring (TEST-049, PERF-069).
+    #[test]
+    fn a_talkers_stream_interpolates_its_ring() {
+        use kira::sound::SoundData;
+        let info = kira::info::MockInfoBuilder::new().build();
+        let ring: Ring = Arc::new(Mutex::new(VecDeque::from([1.0, 0.0, 1.0])));
+        let (mut sound, ()) = VoiceStreamData(ring.clone(), 4).into_sound().unwrap();
+        let mut out = [kira::Frame::ZERO; 6];
+        // Half a codec sample a frame, a sample behind: 0, then 1, 0, 1
+        // lerped through their midpoints.
+        sound.process(&mut out, 0.125, &info);
+        let left: Vec<f32> = out.iter().map(|f| f.left).collect();
+        assert_eq!(left, [0.0, 0.0, 0.5, 1.0, 0.5, 0.0]);
+        assert!(out.iter().all(|f| f.left == f.right));
+        let held = ring.lock().unwrap();
+        sound.process(&mut out, 0.125, &info);
+        assert!(out.iter().all(|f| f.left == 1.0), "held at the last sample");
+        drop(held);
+        sound.process(&mut out, 0.125, &info);
+        assert_eq!(out[5].left, 0.0, "an empty ring runs out to silence");
     }
 
     /// The codec loads only once a frame is sent or heard: a session with
