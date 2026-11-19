@@ -178,7 +178,7 @@ impl Cod4World {
         &mut self,
         fs: &vcod_common::pk3::Pk3Fs,
     ) -> Vec<(String, vcod_cod4::weapon_file::TextWeapon)> {
-        let files = vcod_cod4::weapon_file::load_overlay(fs, self.defs.keys().cloned());
+        let files = vcod_cod4::weapon_file::load_overlay(fs, fs, self.defs.keys().cloned());
         for (name, t) in &files {
             let name = name.clone();
             let w = &t.weapon;

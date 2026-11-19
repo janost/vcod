@@ -43,16 +43,12 @@ const SCRIPT: &str =
 /// Our run of the probe on `map`; with `shooter`, client 0 joins and holds
 /// the trigger from its placement for `ms` past it.
 fn ours(fs: vcod_common::pk3::Pk3Fs, map: &str, uo: bool, shooter: bool, ms: i64) -> Vec<String> {
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_scriptmodel"), now);
-    if uo {
-        sv.set_protocol(&PROTOCOL_V22);
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(if uo { &PROTOCOL_V22 } else { &PROTOCOL_V1 }),
+        script: Some(SCRIPT),
+        ..common::Boot::new(map, "probe_scriptmodel")
     }
-    sv.overlay_script("maps/mp/gametypes/probe_scriptmodel", SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     if !shooter {
         common::run_alone(&mut sv, &mut now, 3000);
         return sv.script_log().to_vec();

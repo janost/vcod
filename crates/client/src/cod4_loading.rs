@@ -61,6 +61,16 @@ pub(crate) struct Status {
     pub message: String,
 }
 
+impl Status {
+    /// A join's start: `server` challenging.
+    fn named(server: String) -> Status {
+        Status {
+            server,
+            ..Status::default()
+        }
+    }
+}
+
 /// The worker's status, shared with the window. A downloader feeds
 /// [`LoadProgress::set_download`] as bytes come.
 #[derive(Clone, Debug, Default)]
@@ -176,10 +186,20 @@ pub(crate) struct Joined {
     pub hud: crate::cod4_hud::LevelZones,
 }
 
-/// The join in flight and the screen's fonts.
-pub(crate) struct Loader {
+/// What a map change's worker hands the window ([`Loader::start_map`]):
+/// the map, its HUD zones and the search path under the level's
+/// `fs_game` and usermap, its sounds overlaid.
+pub(crate) struct MapLoaded {
+    pub map: crate::cod4_fly::Cod4Map,
+    pub name: String,
+    pub hud: crate::cod4_hud::LevelZones,
+    pub fs: vcod_common::pk3::Pk3Fs,
+}
+
+/// The join or map change in flight and the screen's fonts.
+pub(crate) struct Loader<T = Joined> {
     pub progress: LoadProgress,
-    job: Option<JoinHandle<Result<Joined>>>,
+    job: Option<JoinHandle<Result<T>>>,
     hud: Option<JoinHandle<Cod4Hud>>,
     loaded_hud: Option<Cod4Hud>,
     /// The download's time-left estimates.
@@ -207,7 +227,9 @@ impl Loader {
     /// Starts the join, and the connect screen's zones beside it.
     pub fn start(a: JoinArgs) -> Loader {
         let (server, game_dir) = (a.server.clone(), a.game_dir.clone());
-        Self::start_job(server, game_dir, move |p, flag| join(a, p, flag))
+        Self::start_job(Status::named(server), game_dir, move |p, flag| {
+            join(a, p, flag)
+        })
     }
 
     /// [`Self::start`] for a typed `host[:port]`, looked up on the worker
@@ -219,7 +241,7 @@ impl Loader {
         args: impl FnOnce(SocketAddr) -> JoinArgs + Send + 'static,
     ) -> Loader {
         let typed = server.clone();
-        Self::start_job(server, game_dir, move |p, flag| {
+        Self::start_job(Status::named(server), game_dir, move |p, flag| {
             let at = vcod_common::net::master::parse_address(&typed)
                 .ok_or_else(|| anyhow::anyhow!("cannot resolve {typed}"))?;
             join(args(SocketAddr::V4(at)), p, flag)
@@ -231,19 +253,61 @@ impl Loader {
     /// server's place.
     pub fn start_demo(name: String, data: Vec<u8>, timedemo: bool, game_dir: PathBuf) -> Loader {
         let dir = game_dir.clone();
-        Self::start_job(name, game_dir, move |p, flag| {
+        Self::start_job(Status::named(name), game_dir, move |p, flag| {
             let s = Cod4Session::play_demo(data, timedemo)?;
             load_level(s, &dir, p, flag, None)
         })
     }
+}
 
-    fn start_job(
-        server: String,
+impl Loader<MapLoaded> {
+    /// A live session's map change (cod4-map-cycle.md 6): the zones, the
+    /// world and the level's search path read on the worker while the
+    /// window draws the loading screen over `map`; the GPU half waits for
+    /// [`Loader::poll`] on the window's thread.
+    pub fn start_map(
         game_dir: PathBuf,
-        f: impl FnOnce(&LoadProgress, &Arc<AtomicBool>) -> Result<Joined> + Send + 'static,
-    ) -> Loader {
-        let progress = LoadProgress::default();
-        progress.with(|s| s.server = server);
+        map: String,
+        gametype: Option<String>,
+        fs_game: Option<String>,
+        ents: crate::cod4_fly::EntityAssets,
+    ) -> Self {
+        let dir = game_dir.clone();
+        let status = Status {
+            stage: Stage::Loading,
+            map: Some(map.clone()),
+            gametype,
+            ..Status::default()
+        };
+        Self::start_job(status, game_dir, move |p, _| {
+            let t0 = Instant::now();
+            let (mut m, hud) = load_zones(&dir, fs_game.as_deref(), &map, &ents, None, p)?;
+            vcod_common::laps::span(t0, || "cod4 map".into());
+            // The image search path follows the new level's `fs_game` and
+            // usermap, as the zones do (cod4-fastfile.md 13).
+            let mut fs = crate::cod4_fly::open_fs(&dir, fs_game.as_deref(), Some(&map))?;
+            for (path, wav) in std::mem::take(&mut m.sound_files) {
+                fs.overlay(&path, wav);
+            }
+            p.set_loaded(1.0);
+            p.set_stage(Stage::Done);
+            Ok(MapLoaded {
+                map: m,
+                name: map,
+                hud,
+                fs,
+            })
+        })
+    }
+}
+
+impl<T: Send + 'static> Loader<T> {
+    fn start_job(
+        status: Status,
+        game_dir: PathBuf,
+        f: impl FnOnce(&LoadProgress, &Arc<AtomicBool>) -> Result<T> + Send + 'static,
+    ) -> Self {
+        let progress = LoadProgress(Arc::new(Mutex::new(status)));
         let p = progress.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
@@ -282,8 +346,8 @@ impl Loader {
         self.cancel.store(true, Ordering::Relaxed);
     }
 
-    /// The finished join, once.
-    pub fn poll(&mut self) -> Option<Result<Joined>> {
+    /// The finished join or load, once.
+    pub fn poll(&mut self) -> Option<Result<T>> {
         if !self.job.as_ref()?.is_finished() {
             return None;
         }
@@ -389,23 +453,36 @@ fn load_map(
     p.set_level(map_name.clone(), session.gametype());
     let ents = session.entity_assets();
     let fs_game = session.fs_game();
-    let report = p.clone();
-    crate::cod4_fly::set_load_report(Some(Box::new(move |f| report.set_loaded(f))));
-    let loaded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        // The connect screen's levelshot first; the load takes the walk.
-        let load = crate::cod4_fly::walk_load_zone(game_dir, fs_game.as_deref(), &map_name);
-        p.set_levelshot(load.as_ref().and_then(|l| l.levelshot.clone()));
-        let stock = stock.map(|s| s.with_load(load));
-        crate::cod4_fly::load_with_hud(game_dir, fs_game.as_deref(), &map_name, &ents, stock)
-    }))
-    .unwrap_or_else(|_| Err(anyhow::anyhow!("the load panicked")))
-    .with_context(|| format!("cannot load CoD4 map '{map_name}'"));
-    crate::cod4_fly::set_load_report(None);
+    let loaded = load_zones(game_dir, fs_game.as_deref(), &map_name, &ents, stock, p);
     if cancelled() {
         return Err(vcod_cod4::net::conn::Cancelled.into());
     }
     let (map, hud) = loaded?;
     Ok((map, map_name, fs_game, hud))
+}
+
+/// `cod4_fly::load_with_hud` with its progress on `p`'s load bar; a
+/// panic in the load is an error like any other.
+fn load_zones(
+    game_dir: &std::path::Path,
+    fs_game: Option<&str>,
+    map: &str,
+    ents: &crate::cod4_fly::EntityAssets,
+    stock: Option<crate::cod4_fly::StockZones>,
+    p: &LoadProgress,
+) -> Result<(crate::cod4_fly::Cod4Map, crate::cod4_hud::LevelZones)> {
+    let report = p.clone();
+    crate::cod4_fly::set_load_report(Some(Box::new(move |f| report.set_loaded(f))));
+    let loaded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // The connect screen's levelshot first; the load takes the walk.
+        let load = crate::cod4_fly::walk_load_zone(game_dir, fs_game, map);
+        p.set_levelshot(load.as_ref().and_then(|l| l.levelshot.clone()));
+        crate::cod4_fly::load_with_hud(game_dir, fs_game, map, ents, stock, load)
+    }))
+    .unwrap_or_else(|_| Err(anyhow::anyhow!("the load panicked")))
+    .with_context(|| format!("cannot load CoD4 map '{map}'"));
+    crate::cod4_fly::set_load_report(None);
+    loaded
 }
 
 #[cfg(test)]
@@ -490,6 +567,66 @@ mod tests {
             fills.iter().any(|f| *f > 0.0 && *f < 1.0),
             "the bar never filled part way"
         );
+    }
+
+    /// A map change's load runs on the worker: `start_map` returns with
+    /// the loading screen already naming the map, the bar fills while
+    /// this thread watches, and what lands is the load the window's
+    /// thread made before (the same map, models, weapons and search path).
+    #[test]
+    fn cod4_map_change_loads_off_the_window_thread() {
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let dir = install.root().to_path_buf();
+        let ents = crate::cod4_fly::EntityAssets {
+            models: vec!["body_mp_usmc_cqb".into()],
+            weapons: vec!["m16_mp".into()],
+        };
+        let mut l = Loader::start_map(
+            dir.clone(),
+            "mp_crash".into(),
+            Some("war".into()),
+            None,
+            ents.clone(),
+        );
+        assert!(l.poll().is_none(), "start_map returned with the load done");
+        let st = l.progress.status();
+        assert_eq!(
+            (st.stage, st.map.as_deref(), st.gametype.as_deref()),
+            (Stage::Loading, Some("mp_crash"), Some("war"))
+        );
+        let t0 = Instant::now();
+        let mut fills = Vec::new();
+        let done = loop {
+            assert!(t0.elapsed() < Duration::from_secs(120), "no load in 120 s");
+            fills.push(l.progress.status().loaded);
+            if let Some(done) = l.poll() {
+                break done.unwrap();
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        };
+        assert!(
+            fills.iter().any(|f| *f > 0.0 && *f < 1.0),
+            "the bar never filled part way: {fills:?}"
+        );
+        assert_eq!(l.progress.status().stage, Stage::Done);
+        let (want, _) =
+            crate::cod4_fly::load_with_hud(&dir, None, "mp_crash", &ents, None, None).unwrap();
+        let want_fs = crate::cod4_fly::open_fs(&dir, None, Some("mp_crash")).unwrap();
+        let names = |m: &crate::cod4_fly::Cod4Map| {
+            let mut v: Vec<String> = m.models.keys().chain(m.weapons.keys()).cloned().collect();
+            v.sort();
+            v
+        };
+        assert_eq!(done.name, "mp_crash");
+        assert_eq!(names(&done.map), names(&want));
+        assert!(!names(&want).is_empty());
+        assert_eq!(done.map.spawn, want.spawn);
+        assert_eq!(done.map.bsp.materials.len(), want.bsp.materials.len());
+        assert_eq!(done.fs.dirs(), want_fs.dirs());
+        // The zones' sounds went onto the worker's search path.
+        assert!(done.map.sound_files.is_empty());
     }
 
     fn args(addr: std::net::SocketAddr, game_dir: PathBuf) -> JoinArgs {

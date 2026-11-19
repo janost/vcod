@@ -7,27 +7,19 @@
 
 use crate::common;
 
-use std::rc::Rc;
-use std::time::Instant;
-
 #[test]
 fn probe_testclient_matches_retail_on_a_server() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or not a 1.1 install: skipping");
         return;
     };
-    let mut now = Instant::now();
-    let bsp_path = fs
-        .resolve_map("mp_pavlov")
-        .expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut sv = vcod_server::Server::new(common::cfg("mp_pavlov", "probe_testclient"), now);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_testclient",
-        include_str!("../../gsc/tests/fixtures/semantics/probe_testclient.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/probe_testclient.gsc"
+        )),
+        ..common::Boot::new("mp_pavlov", "probe_testclient")
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, 8000);
     let ours: Vec<&str> = sv
         .script_log()
@@ -59,16 +51,13 @@ fn status_lists_test_clients_as_retail() {
         eprintln!("COD_DIR unset or not a 1.1 install: skipping");
         return;
     };
-    let mut now = Instant::now();
-    let bsp_path = fs.resolve_map("mp_pavlov").unwrap();
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut sv = vcod_server::Server::new(common::cfg("mp_pavlov", "probe_testclient"), now);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_testclient",
-        include_str!("../../gsc/tests/fixtures/semantics/probe_testclient.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/probe_testclient.gsc"
+        )),
+        ..common::Boot::new("mp_pavlov", "probe_testclient")
+    }
+    .start(fs);
     sv.set_cvar("rconPassword", "pw");
     common::run_alone(&mut sv, &mut now, 8000);
     sv.take_outgoing();
@@ -120,18 +109,13 @@ fn a_test_client_rejoins_after_a_map_restart_as_on_retail() {
         "PROBE done",
         "PROBE begin 1 t 11150",
     ];
-    let mut now = Instant::now();
-    let bsp_path = fs
-        .resolve_map("mp_pavlov")
-        .expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut sv = vcod_server::Server::new(common::cfg("mp_pavlov", "probe_tcrestart"), now);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_tcrestart",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_tcrestart.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_tcrestart.gsc"
+        )),
+        ..common::Boot::new("mp_pavlov", "probe_tcrestart")
+    }
+    .start(fs);
     // A restart starts a new script log, so the lines are kept per level.
     let mut lines: Vec<String> = Vec::new();
     let mut seen = 0;
@@ -180,22 +164,17 @@ fn a_test_client_reconnects_but_never_begins_after_a_map_change_as_on_retail() {
         "PROBE done",
         "PROBE begin 1 t 11150",
     ];
-    let mut now = Instant::now();
-    let bsp_path = fs
-        .resolve_map("mp_pavlov")
-        .expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut sv = vcod_server::Server::new(common::cfg("mp_pavlov", "probe_tcmapchange"), now);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_tcmapchange",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_tcmapchange.gsc"),
-    );
-    sv.set_cvar(
-        "sv_mapRotation",
-        "gametype probe_tcmapchange map mp_carentan",
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        cvars: &[(
+            "sv_mapRotation",
+            "gametype probe_tcmapchange map mp_carentan",
+        )],
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_tcmapchange.gsc"
+        )),
+        ..common::Boot::new("mp_pavlov", "probe_tcmapchange")
+    }
+    .start(fs);
     // A map change starts a new script log, so the lines are kept per level.
     let mut lines: Vec<String> = Vec::new();
     let mut seen = 0;

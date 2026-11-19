@@ -42,14 +42,12 @@ fn ours(secs: i64) -> Vec<(i32, GameEvent)> {
     let p = &PROTOCOL_V22;
     let src = format!("../gsc/tests/fixtures/semantics/client-probes/{PROBE}.gsc");
     let probe = std::fs::read_to_string(src).expect("read the probe");
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, PROBE), now);
-    sv.set_protocol(p);
-    sv.overlay_script(&format!("maps/mp/gametypes/{PROBE}"), &probe);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        script: Some(&probe),
+        ..common::Boot::new(MAP, PROBE)
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let mut cl = common::connect(&mut sv, &q, &mut now);
@@ -148,14 +146,12 @@ fn the_wrecks_duplicate_takes_the_stuck_kill() {
     let retail: Vec<&str> = fixture.lines().filter(|l| l.starts_with("PROBE")).collect();
     let src = format!("../gsc/tests/fixtures/semantics/client-probes/{probe}.gsc");
     let gsc = std::fs::read_to_string(src).expect("read the probe");
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, probe), now);
-    sv.set_protocol(&PROTOCOL_V22);
-    sv.overlay_script(&format!("maps/mp/gametypes/{probe}"), &gsc);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&PROTOCOL_V22),
+        script: Some(&gsc),
+        ..common::Boot::new(MAP, probe)
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, 14_000);
     let log = sv.script_log();
     let ours: Vec<&str> = log
@@ -238,14 +234,12 @@ fn a_deleted_jeeps_self_destruct_timer_ends_with_it() {
     let retail: Vec<&str> = fixture.lines().filter(|l| l.starts_with("PROBE")).collect();
     let src = format!("../gsc/tests/fixtures/semantics/client-probes/{probe}.gsc");
     let gsc = std::fs::read_to_string(src).expect("read the probe");
-    let bsp_path = fs.resolve_map(map).expect("the map in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, probe), now);
-    sv.set_protocol(&PROTOCOL_V22);
-    sv.overlay_script(&format!("maps/mp/gametypes/{probe}"), &gsc);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&PROTOCOL_V22),
+        script: Some(&gsc),
+        ..common::Boot::new(map, probe)
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, 25_000);
     let log = sv.script_log();
     let ours: Vec<&str> = log

@@ -4,6 +4,7 @@
 //! Needs `COD_DIR`; without the paks it returns early. `BOTS_SEED=<n>`
 //! replaces the server's fixed seed, for sweeping a scenario over many games.
 
+use crate::common;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -11,14 +12,9 @@ const MAP: &str = "mp_carentan";
 
 fn cfg(bots: usize, shoot: bool, gametype: &str) -> vcod_server::ServerConfig {
     vcod_server::ServerConfig {
-        map: MAP.into(),
-        hostname: "vcod test".into(),
-        max_clients: 8,
-        gametype: gametype.into(),
-        test_entities: 0,
-        trace: false,
         bots,
         bots_shoot: shoot,
+        ..common::cfg(MAP, gametype)
     }
 }
 
@@ -354,15 +350,15 @@ fn bots_on_mp_ships_ladders_keep_climbing() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_ship").unwrap()).unwrap())
-        .expect("parse the bsp");
-    let mut now = Instant::now();
     let mut cfg = cfg(6, false, "dm");
     cfg.map = "mp_ship".into();
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.test_seed_rng(1);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        prep: Some(&|sv: &mut vcod_server::Server| {
+            sv.test_seed_rng(1);
+        }),
+        ..common::Boot::on(cfg)
+    }
+    .start(fs);
     let mut hanging = [0usize; 8];
     let mut climbs = 0;
     for _ in 0..2000 {
@@ -395,15 +391,15 @@ fn bots_on_mp_ship_unstick_without_walking_off_the_deck() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_ship").unwrap()).unwrap())
-        .expect("parse the bsp");
-    let mut now = Instant::now();
     let mut cfg = cfg(6, false, "dm");
     cfg.map = "mp_ship".into();
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.test_seed_rng(5);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        prep: Some(&|sv: &mut vcod_server::Server| {
+            sv.test_seed_rng(5);
+        }),
+        ..common::Boot::on(cfg)
+    }
+    .start(fs);
     // Per slot, where the spell under way started, when it started on the
     // ground off a ladder and has touched no ladder since; it is judged
     // where the body first stands once the spell is over.
@@ -460,15 +456,15 @@ fn bots_on_mp_ship_get_off_the_mast_ladder() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_ship").unwrap()).unwrap())
-        .expect("parse the bsp");
-    let mut now = Instant::now();
     let mut cfg = cfg(6, false, "dm");
     cfg.map = "mp_ship".into();
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.test_seed_rng(19);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        prep: Some(&|sv: &mut vcod_server::Server| {
+            sv.test_seed_rng(19);
+        }),
+        ..common::Boot::on(cfg)
+    }
+    .start(fs);
     let mut hist: [std::collections::VecDeque<[f32; 3]>; 8] = Default::default();
     for tick in 0..1300 {
         run(&mut sv, &mut now, 1);
@@ -506,14 +502,9 @@ fn a_bot_held_in_mp_hurtgens_crease_kills_itself() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_hurtgen").unwrap()).unwrap())
-        .expect("parse the bsp");
-    let mut now = Instant::now();
     let mut cfg = cfg(1, false, "dm");
     cfg.map = "mp_hurtgen".into();
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg).start(fs);
     let slot = (0..400)
         .find_map(|_| {
             run(&mut sv, &mut now, 1);
@@ -553,14 +544,9 @@ fn a_bot_in_mp_ships_boat_drops_out_over_its_rim() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_ship").unwrap()).unwrap())
-        .expect("parse the bsp");
-    let mut now = Instant::now();
     let mut cfg = cfg(1, false, "dm");
     cfg.map = "mp_ship".into();
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg).start(fs);
     let slot = (0..400)
         .find_map(|_| {
             run(&mut sv, &mut now, 1);
@@ -595,14 +581,9 @@ fn bots_meeting_head_on_at_a_ladder_take_turns() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_ship").unwrap()).unwrap())
-        .expect("parse the bsp");
-    let mut now = Instant::now();
     let mut cfg = cfg(2, false, "dm");
     cfg.map = "mp_ship".into();
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg).start(fs);
     let playing = |sv: &vcod_server::Server| {
         let s = sv.bot_slots();
         (s.len() == 2 && s.iter().all(|&s| sv.bot_body(s).is_some_and(|b| b.playing))).then_some(s)
@@ -795,15 +776,10 @@ fn a_bot_climbs_down_mp_ships_mast_from_the_spar() {
         return;
     };
     let fs = Rc::new(fs);
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_ship").unwrap()).unwrap())
-        .expect("parse the bsp");
     let (head, foot) = ([3675.0, -95.1, 1147.2], [3675.0, -103.0, 896.2]);
-    let mut now = Instant::now();
     let mut cfg = cfg(1, false, "dm");
     cfg.map = "mp_ship".into();
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs.clone()).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg).start(fs.clone());
     let slot = (0..600)
         .find_map(|_| {
             run(&mut sv, &mut now, 1);
@@ -934,16 +910,14 @@ fn a_uo_bot_in_mp_cassinos_roof_dent_jumps_out() {
         eprintln!("COD_DIR has no uo/: skipping");
         return;
     };
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_cassino").unwrap()).unwrap())
-        .expect("parse the bsp");
-    let mut now = Instant::now();
     let mut cfg = cfg(1, false, "tdm");
     cfg.map = "mp_cassino".into();
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.set_protocol(&vcod_common::net::protocol::PROTOCOL_V22);
-    sv.set_cvar("vc_bot_vehicles", "0");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&vcod_common::net::protocol::PROTOCOL_V22),
+        cvars: &[("vc_bot_vehicles", "0")],
+        ..common::Boot::on(cfg)
+    }
+    .start(fs);
     let goal = [4896.0, -1337.0, 280.0];
     let slot = (0..900)
         .find_map(|_| {
@@ -1021,19 +995,19 @@ fn uo_tdm_games_that_stalled_or_never_sprinted() {
 /// One game of [`uo_bots_fight_and_sprint_in_tdm`].
 fn uo_tdm_game(seed: u64, vehicles: bool) {
     let fs = vcod_common::testing::uo_fs().expect("uo/");
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_cassino").unwrap()).unwrap())
-        .expect("parse the bsp");
-    let mut now = Instant::now();
     let mut cfg = cfg(6, true, "tdm");
     cfg.map = "mp_cassino".into();
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.set_protocol(&vcod_common::net::protocol::PROTOCOL_V22);
-    sv.test_seed_rng(seed);
-    if !vehicles {
-        sv.set_cvar("vc_bot_vehicles", "0");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&vcod_common::net::protocol::PROTOCOL_V22),
+        cvars: if vehicles {
+            &[]
+        } else {
+            &[("vc_bot_vehicles", "0")]
+        },
+        prep: Some(&|sv: &mut vcod_server::Server| sv.test_seed_rng(seed)),
+        ..common::Boot::on(cfg)
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     let mut hist: [std::collections::VecDeque<[f32; 3]>; 8] = Default::default();
     // Bot-ticks on foot out of a fight: what a sprint leg is a share of.
     let (mut sprints, mut legs, mut foot) = (0, 0, 0);
@@ -1177,15 +1151,13 @@ fn uo_bots_leave_their_walled_in_spawns() {
         ),
     ];
     for (map, spot, lo, hi) in cases {
-        let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map(map).unwrap()).unwrap())
-            .expect("parse the bsp");
-        let mut now = Instant::now();
         let mut cfg = cfg(1, false, "tdm");
         cfg.map = map.into();
-        let mut sv = vcod_server::Server::new(cfg, now);
-        sv.set_protocol(&vcod_common::net::protocol::PROTOCOL_V22);
-        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-        sv.load_scripts(fs.clone()).expect("load the scripts");
+        let (mut sv, mut now) = common::Boot {
+            proto: Some(&vcod_common::net::protocol::PROTOCOL_V22),
+            ..common::Boot::on(cfg)
+        }
+        .start(fs.clone());
         let slot = (0..400)
             .find_map(|_| {
                 run(&mut sv, &mut now, 1);
@@ -1307,18 +1279,20 @@ fn bas_round(map: &str, bots: usize, shoot: bool) -> Option<vcod_server::Server>
         eprintln!("COD_DIR has no uo/: skipping");
         return None;
     };
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map(map).unwrap()).unwrap())
-        .expect("parse the bsp");
-    let mut now = Instant::now();
     let mut cfg = cfg(bots, shoot, "bas");
     cfg.map = map.into();
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.set_protocol(&vcod_common::net::protocol::PROTOCOL_V22);
-    sv.test_seed_rng(std::env::var("BOTS_SEED").map_or(7, |v| v.parse().expect("BOTS_SEED")));
     let health = std::env::var("BAS_HEALTH").unwrap_or_else(|_| "3000".into());
-    sv.set_cvar("scr_bas_basehealth", &health);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&vcod_common::net::protocol::PROTOCOL_V22),
+        cvars: &[("scr_bas_basehealth", &health)],
+        prep: Some(&|sv: &mut vcod_server::Server| {
+            sv.test_seed_rng(
+                std::env::var("BOTS_SEED").map_or(7, |v| v.parse().expect("BOTS_SEED")),
+            );
+        }),
+        ..common::Boot::on(cfg)
+    }
+    .start(fs);
     let count = |sv: &vcod_server::Server, event: &str| {
         sv.script_log()
             .iter()
@@ -1476,17 +1450,17 @@ fn a_seeded_bas_match_replays_beside_another() {
 /// then each new script log line.
 fn bas_fingerprint(shoot: bool) -> Vec<String> {
     let fs = vcod_common::testing::uo_fs().expect("a UO install");
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_foy").unwrap()).unwrap())
-        .expect("parse the bsp");
-    let mut now = Instant::now();
     let mut cfg = cfg(4, shoot, "bas");
     cfg.map = "mp_foy".into();
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.set_protocol(&vcod_common::net::protocol::PROTOCOL_V22);
-    sv.test_seed_rng(7);
-    sv.set_cvar("scr_bas_basehealth", "3000");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&vcod_common::net::protocol::PROTOCOL_V22),
+        cvars: &[("scr_bas_basehealth", "3000")],
+        prep: Some(&|sv: &mut vcod_server::Server| {
+            sv.test_seed_rng(7);
+        }),
+        ..common::Boot::on(cfg)
+    }
+    .start(fs);
     let mut out = Vec::new();
     let mut logged = 0;
     for tick in 0..BAS_FINGERPRINT_TICKS {
@@ -1533,15 +1507,13 @@ fn a_bot_in_mp_foys_hollow_kills_itself() {
         eprintln!("COD_DIR has no uo/: skipping");
         return;
     };
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_foy").unwrap()).unwrap())
-        .expect("parse the bsp");
-    let mut now = Instant::now();
     let mut cfg = cfg(1, false, "tdm");
     cfg.map = "mp_foy".into();
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.set_protocol(&vcod_common::net::protocol::PROTOCOL_V22);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&vcod_common::net::protocol::PROTOCOL_V22),
+        ..common::Boot::on(cfg)
+    }
+    .start(fs);
     let slot = (0..2000)
         .find_map(|_| {
             run(&mut sv, &mut now, 1);
@@ -1579,16 +1551,14 @@ fn a_fighting_bot_yells_on(
     protocol: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
 ) {
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map(map).unwrap()).unwrap())
-        .expect("parse the bsp");
-    let mut now = Instant::now();
     let mut cfg = cfg(2, true, "tdm");
     cfg.map = map.into();
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.set_protocol(protocol);
-    sv.set_cvar("vc_bot_vehicles", "0");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(protocol),
+        cvars: &[("vc_bot_vehicles", "0")],
+        ..common::Boot::on(cfg)
+    }
+    .start(fs);
     run(&mut sv, &mut now, 100);
     let slots = sv.bot_slots();
     let pair = [slots[0], slots[1]];
@@ -1670,16 +1640,13 @@ fn a_bas_bot_taps_mp_rhinevalleys_corridor_launcher() {
         [1700.0, -2254.0, 1940.0],
     ] {
         let fs = vcod_common::testing::uo_fs().unwrap();
-        let bsp =
-            vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_rhinevalley").unwrap()).unwrap())
-                .expect("parse the bsp");
-        let mut now = Instant::now();
         let mut c = cfg(1, false, "bas");
         c.map = "mp_rhinevalley".into();
-        let mut sv = vcod_server::Server::new(c, now);
-        sv.set_protocol(&vcod_common::net::protocol::PROTOCOL_V22);
-        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        let (mut sv, mut now) = common::Boot {
+            proto: Some(&vcod_common::net::protocol::PROTOCOL_V22),
+            ..common::Boot::on(c)
+        }
+        .start(fs);
         let schreck = sv
             .defs()
             .weapon_index("panzerschreck_mp")

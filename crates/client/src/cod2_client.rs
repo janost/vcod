@@ -859,7 +859,7 @@ impl Cod2Client {
             // `score` on the down edge, again every 2 s while held
             // (the Cod2 arm), as CoD1's board does.
             Effect::Scores(down) => {
-                let now = (std::time::Instant::now() - start).as_secs_f32();
+                let now = (crate::play::cod2::clock_now() - start).as_secs_f32();
                 let board = &mut self.hud.scoreboard;
                 if !*down {
                     board.release(now);

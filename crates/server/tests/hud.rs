@@ -22,29 +22,16 @@ const TYPE_TEXT: i32 = 1;
 const LOCALIZED_BASE: usize = 1244;
 
 fn cfg(gametype: &str) -> vcod_server::ServerConfig {
-    vcod_server::ServerConfig {
-        map: MAP.into(),
-        hostname: "vcod test".into(),
-        max_clients: 8,
-        gametype: gametype.into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
-    }
+    common::cfg(MAP, gametype)
 }
 
-fn server(now: Instant) -> Option<vcod_server::Server> {
-    server_with("dm", now)
+fn server() -> Option<vcod_server::Server> {
+    server_with("dm")
 }
 
-fn server_with(gametype: &str, now: Instant) -> Option<vcod_server::Server> {
+fn server_with(gametype: &str) -> Option<vcod_server::Server> {
     let fs = vcod_common::testing::game_fs_11()?;
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut sv = vcod_server::Server::new(cfg(gametype), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (sv, _) = common::Boot::on(cfg(gametype)).start(fs);
     Some(sv)
 }
 
@@ -56,7 +43,7 @@ fn server_with(gametype: &str, now: Instant) -> Option<vcod_server::Server> {
 #[test]
 fn the_round_clock_reaches_a_fresh_client() {
     let mut now = Instant::now();
-    let Some(mut sv) = server(now) else {
+    let Some(mut sv) = server() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -104,7 +91,7 @@ fn only_the_killed_client_is_sent_the_respawn_text() {
     use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, UserCmd};
 
     let mut now = Instant::now();
-    let Some(mut sv) = server(now) else {
+    let Some(mut sv) = server() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -288,7 +275,7 @@ fn a_disconnect_frees_the_clients_own_elements() {
     use vcod_common::net::NetClient;
 
     let mut now = Instant::now();
-    let Some(mut sv) = server(now) else {
+    let Some(mut sv) = server() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -372,7 +359,7 @@ fn a_disconnect_frees_the_clients_own_elements() {
 #[test]
 fn two_sd_clients_are_sent_both_bombzone_objectives() {
     let mut now = Instant::now();
-    let Some(mut sv) = server_with("sd", now) else {
+    let Some(mut sv) = server_with("sd") else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };

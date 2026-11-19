@@ -35,8 +35,14 @@ impl App {
             self.unload_world();
             self.mode = Mode::Idle;
         }
-        log::info!("connecting to {addr}");
         vcod_common::laps::begin_load(format!("cod2 connect {addr}"));
+        self.start_cod2_connect(addr);
+    }
+
+    /// [`Self::connect_cod2`]'s handshake started, with no game up; a
+    /// start-up `--connect` keeps the load profile the process start began.
+    pub(crate) fn start_cod2_connect(&mut self, addr: String) {
+        log::info!("connecting to {addr}");
         if let Some(c) = self.session.cod2_mut() {
             c.connecting = Some(Cod2Session::connect_in_background(
                 &addr,

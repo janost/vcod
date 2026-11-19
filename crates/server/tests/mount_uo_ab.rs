@@ -128,19 +128,17 @@ fn ours_run((spot, at): (&str, [f32; 2]), cmds: &[Cmd], fires: bool) -> (Vec<Sta
     let p = &PROTOCOL_V22;
     let src = format!("../gsc/tests/fixtures/semantics/client-probes/{PROBE}.gsc");
     let probe = std::fs::read_to_string(src).expect("read the probe");
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, PROBE), now);
-    sv.set_protocol(p);
-    sv.overlay_script(&format!("maps/mp/gametypes/{PROBE}"), &probe);
-    sv.set_cvar("probe_teleport", "1");
-    sv.set_cvar("probe_spot", spot);
+    let mut cvars = vec![("probe_teleport", "1"), ("probe_spot", spot)];
     if fires {
-        sv.set_cvar("probe_fires", "1");
+        cvars.push(("probe_fires", "1"));
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        cvars: &cvars,
+        script: Some(&probe),
+        ..common::Boot::new(MAP, PROBE)
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let mut cl = common::connect(&mut sv, &q, &mut now);

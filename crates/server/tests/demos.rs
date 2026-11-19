@@ -106,17 +106,15 @@ fn a_recorded_demo_plays_back_the_frames_the_client_parsed() {
         eprintln!("COD_DIR unset: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map("mp_carentan").expect("mp_carentan");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let fs = Rc::new(fs);
-    let mut now = Instant::now();
     let mut cfg = common::cfg("mp_carentan", "dm");
     cfg.bots = 2;
     cfg.bots_shoot = true;
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.set_protocol(p);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs.clone()).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        ..common::Boot::on(cfg)
+    }
+    .start(fs.clone());
     let q = Rc::new(RefCell::new(Queues::default()));
     let (mut cl, _) = common::join(&mut sv, &q, &mut now, "axis", "mp44_mp");
     cl.enable_capture();

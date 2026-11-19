@@ -161,7 +161,7 @@ pub fn load(
     map: &str,
     ents: &EntityAssets,
 ) -> Result<Cod4Map> {
-    load_from(game_dir, fs_game, map, ents, None)
+    load_from(game_dir, fs_game, map, ents, None, None)
 }
 
 /// The stock zones every level's load walks whatever its map:
@@ -170,14 +170,6 @@ pub fn load(
 pub struct StockZones {
     common: vcod_cod4::walk::Walked,
     sound: Vec<vcod_cod4::walk::Walked>,
-    /// The map's `_load` zone, walked ahead for the connect screen.
-    load: Option<LoadZone>,
-}
-
-impl StockZones {
-    pub fn with_load(self, load: Option<LoadZone>) -> StockZones {
-        StockZones { load, ..self }
-    }
 }
 
 /// `<map>_load.ff` walked, and its `$levelbriefing` image name: the
@@ -228,21 +220,19 @@ pub fn walk_stock(game_dir: &Path) -> Result<StockZones> {
     .collect::<Result<Vec<_>>>()?;
     let sound = walked.split_off(1);
     let common = walked.pop().expect("common_mp walked");
-    Ok(StockZones {
-        common,
-        sound,
-        load: None,
-    })
+    Ok(StockZones { common, sound })
 }
 
 /// [`load`] over `stock` walked already, or with none walked beside the
-/// map's zone.
+/// map's zone, and over `load`, the map's `_load` zone the connect screen
+/// walked ([`walk_load_zone`]), or walked here.
 pub fn load_from(
     game_dir: &Path,
     fs_game: Option<&str>,
     map: &str,
     ents: &EntityAssets,
     stock: Option<StockZones>,
+    load: Option<LoadZone>,
 ) -> Result<Cod4Map> {
     let install = Install::at(game_dir)
         .with_context(|| {
@@ -264,11 +254,7 @@ pub fn load_from(
         (Map::load(&install, "english", map), stock)
     });
     let (mut m, walked) = map_zone?;
-    let StockZones {
-        common,
-        sound,
-        load,
-    } = stock?;
+    let StockZones { common, sound } = stock?;
     laps.lap("map and stock zones");
     report_load(0.6);
     let ambient = map_ambient(&walked.assets, map);
@@ -515,8 +501,9 @@ pub fn load_with_hud(
     map: &str,
     ents: &EntityAssets,
     stock: Option<StockZones>,
+    load: Option<LoadZone>,
 ) -> Result<(Cod4Map, crate::cod4_hud::LevelZones)> {
-    let mut m = load_from(game_dir, fs_game, map, ents, stock)?;
+    let mut m = load_from(game_dir, fs_game, map, ents, stock, load)?;
     let t0 = std::time::Instant::now();
     let z =
         crate::cod4_hud::Cod4Hud::read_level(&game_dir.join("main"), map, fs_game, m.hud.take());
@@ -845,7 +832,7 @@ pub fn load_av(game_dir: &Path, map: &str) -> Result<(Av, OverlayFiles)> {
         )
     })?;
     let (mut m, walked) = Map::load(&install, "english", map)?;
-    let StockZones { common, sound, .. } = walk_stock(game_dir)?;
+    let StockZones { common, sound } = walk_stock(game_dir)?;
     sound_and_fx(&mut m, &[&walked.assets, &common.assets], map, &sound)
 }
 
@@ -861,7 +848,7 @@ pub fn load_fly_av(game_dir: &Path, map: &str) -> Result<(FlyAv, OverlayFiles)> 
         )
     })?;
     let (mut m, walked) = Map::load(&install, "english", map)?;
-    let StockZones { common, sound, .. } = walk_stock(game_dir)?;
+    let StockZones { common, sound } = walk_stock(game_dir)?;
     let (av, files) = sound_and_fx(&mut m, &[&walked.assets, &common.assets], map, &sound)?;
     let look = crate::cod4_look::Cod4Look::default();
     Ok((

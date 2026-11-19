@@ -66,12 +66,7 @@ fn the_first_snapshot_after_a_restart_is_the_last_frame_it_owed() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "dm"), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::new(MAP, "dm").start(fs);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl = common::connect(&mut sv, &q, &mut now);
     for _ in 0..40 {

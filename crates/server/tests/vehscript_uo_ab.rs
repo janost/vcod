@@ -61,23 +61,18 @@ const FATAL: &[(&str, Option<&str>)] = &[
 fn ours(case: &str, ms: i64) -> Option<(Vec<String>, Vec<String>)> {
     let fs = vcod_common::testing::uo_fs()?;
     let fs = std::rc::Rc::new(fs);
-    let bsp_path = fs
-        .resolve_map("mp_kharkov")
-        .expect("mp_kharkov in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = std::time::Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg("mp_kharkov", "probe_vehscript"), now);
-    sv.set_protocol(&vcod_common::net::protocol::PROTOCOL_V22);
-    // run_probe.sh's: an error ends the probe's thread.
-    sv.set_cvar("developer", "1");
-    sv.set_cvar("probe_case", case);
     let src = std::fs::read_to_string(
         "../gsc/tests/fixtures/semantics/client-probes/probe_vehscript.gsc",
     )
     .expect("the probe");
-    sv.overlay_script("maps/mp/gametypes/probe_vehscript", &src);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&vcod_common::net::protocol::PROTOCOL_V22),
+        // run_probe.sh's: an error ends the probe's thread.
+        cvars: &[("developer", "1"), ("probe_case", case)],
+        script: Some(&src),
+        ..common::Boot::new("mp_kharkov", "probe_vehscript")
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, ms);
     let lines = sv
         .script_log()

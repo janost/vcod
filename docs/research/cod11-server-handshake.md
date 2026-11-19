@@ -1262,7 +1262,7 @@ The entity line:
   buckets: %d\n` (65535 minus allocated). VERIFIED (strings, loop).
 - Captured: `total memory alloc buckets: 4580 (1158 instances)`, `total memory
   free buckets: 60955`. VERIFIED.
-- vcod has no tree: instances are the VM interner's strings (never freed),
+- vcod has no tree: instances are the VM interner's live strings,
   each four header bytes plus text and NUL rounded as `MT_GetSize` does; free
   buckets list one block per set bit. vcod's own model; 4171 buckets, 1010
   strings on mp_carentan.

@@ -21,7 +21,7 @@ use common::{Join, Queues};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::msg::UserCmd;
 use vcod_common::net::{NetClient, NetEvent};
 
@@ -102,25 +102,14 @@ fn direct_input(tokens: &[String]) -> Option<(u8, u8, i8)> {
 fn ours(fs: vcod_common::pk3::Pk3Fs, c: &Case) -> Vec<String> {
     let proto = vcod_server::server::install_protocol(&fs);
     let map = "mp_carentan";
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_leanhit"), now);
-    sv.set_protocol(proto);
-    sv.overlay_script("maps/mp/gametypes/probe_leanhit", SCRIPT);
-    // The recipe's `+set`s.
-    for l in c.fixture.lines().filter(|l| l.starts_with('#')) {
-        let mut t = l.split_whitespace();
-        while let Some(w) = t.next() {
-            if w == "+set"
-                && let (Some(name), Some(value)) = (t.next(), t.next())
-            {
-                sv.set_cvar(name, value);
-            }
-        }
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        // The recipe's `+set`s.
+        cvars: &common::recipe_sets(c.fixture),
+        script: Some(SCRIPT),
+        ..common::Boot::new(map, "probe_leanhit")
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     sv.pin_script_rand(c.script_seed);
     // The target connects first, into slot 0.
     let pin = |who: &str| spawn_at(c.fixture, who).map(Some).into_iter().collect();

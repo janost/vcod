@@ -16,7 +16,7 @@ use crate::common;
 use common::{ClientEnd, Join, Queues, step_pair};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::NetClient;
 use vcod_common::net::NetEvent;
 use vcod_common::net::msg::UserCmd;
@@ -58,20 +58,15 @@ fn ours(map: &str, cvars: &[(&str, &str)], capture: &str) -> Option<Vec<String>>
     let late_ms = placed(0) - common::PROBE_JOIN_MS - PLACED_MS;
     let gunner_late_ms = placed(1) - placed(0);
     let p = &PROTOCOL_V22;
-    let bsp_path = fs.resolve_map(map).expect("the map in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_vehdie"), now);
-    sv.set_protocol(p);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_vehdie",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_vehdie.gsc"),
-    );
-    for (k, v) in cvars {
-        sv.set_cvar(k, v);
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        cvars,
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_vehdie.gsc"
+        )),
+        ..common::Boot::new(map, "probe_vehdie")
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS + late_ms);
     let (qa, qb) = (
         Rc::new(RefCell::new(Queues::default())),

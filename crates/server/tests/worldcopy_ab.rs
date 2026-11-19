@@ -38,7 +38,7 @@ use common::{ADDR, ClientEnd, FRAME_MS, Join, Queues, holding, step_at};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::{NetClient, NetEvent};
 use vcod_common::pk3::Pk3Fs;
 
@@ -391,14 +391,12 @@ fn run_once(
     known: &BTreeMap<i32, f32>,
 ) -> Option<Ours> {
     let p = vcod_server::server::install_protocol(&fs);
-    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, name), now);
-    sv.set_protocol(p);
-    sv.overlay_script(&format!("maps/mp/gametypes/{name}"), probe);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        script: Some(probe),
+        ..common::Boot::new(map, name)
+    }
+    .start(fs);
     // Each landing's lift is a fresh `rand()` draw, which ours cannot
     // replay. Before the samples start, a landing where the pack rests takes
     // the lift up to retail's first rest. After, a landing takes the lift up

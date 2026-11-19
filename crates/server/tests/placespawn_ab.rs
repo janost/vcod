@@ -23,7 +23,6 @@ use crate::common;
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::Instant;
 
 const BITS_SRC: &str = "../gsc/tests/fixtures/semantics/client-probes/probe_placebits.gsc";
 const BITS_FIXTURE: &str = "tests/fixtures/spawnpoints/placebits-retail.txt";
@@ -56,12 +55,12 @@ fn bits_retail(server: &str) -> BTreeMap<String, Vec<String>> {
 /// install.
 fn bits_ours(fs: &Rc<vcod_common::pk3::Pk3Fs>, probe: &str, map: &str) -> Vec<String> {
     let proto = vcod_server::server::install_protocol(fs);
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map(map).unwrap()).unwrap()).unwrap();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_placebits"), Instant::now());
-    sv.set_protocol(proto);
-    sv.overlay_script("maps/mp/gametypes/probe_placebits", probe);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(fs)));
-    sv.load_scripts(fs.clone()).expect("load the scripts");
+    let (sv, _) = common::Boot {
+        proto: Some(proto),
+        script: Some(probe),
+        ..common::Boot::new(map, "probe_placebits")
+    }
+    .start(fs.clone());
     sv.script_log()
         .iter()
         .filter(|l| l.starts_with("PROBE class ") || l.starts_with("PROBE placebits "))

@@ -15,20 +15,16 @@ use vcod_common::net::protocol::PROTOCOL_V1;
 
 const MAP: &str = "mp_harbor";
 
-fn server(now: Instant) -> Option<vcod_server::Server> {
+fn server() -> Option<vcod_server::Server> {
     let fs = vcod_common::testing::game_fs_11()?;
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "tdm"), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (sv, _) = common::Boot::new(MAP, "tdm").start(fs);
     Some(sv)
 }
 
 #[test]
 fn an_out_of_view_teammate_is_packed_as_retail_packs_it() {
     let mut now = Instant::now();
-    let Some(mut sv) = server(now) else {
+    let Some(mut sv) = server() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -98,7 +94,7 @@ fn an_out_of_view_teammate_is_packed_as_retail_packs_it() {
 fn a_lower_slot_reads_a_higher_ones_end_frame_a_frame_late() {
     for dies_high in [true, false] {
         let mut now = Instant::now();
-        let Some(mut sv) = server(now) else {
+        let Some(mut sv) = server() else {
             return;
         };
         let qa = Rc::new(RefCell::new(Queues::default()));

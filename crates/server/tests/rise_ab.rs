@@ -27,7 +27,7 @@ use common::{Join, Queues};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::msg::{self, PlayerState, UserCmd};
 use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::net::{NetClient, NetEvent};
@@ -162,14 +162,12 @@ fn ours(
     weapon: &str,
 ) -> (Vec<(i32, PlayerState)>, Vec<String>) {
     let p = vcod_server::server::install_protocol(&fs);
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_rise"), now);
-    sv.set_protocol(p);
-    sv.overlay_script("maps/mp/gametypes/probe_rise", SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        script: Some(SCRIPT),
+        ..common::Boot::new(map, "probe_rise")
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl = NetClient::start_with_qport(common::ClientEnd(q.clone()), now, 0x2001);
