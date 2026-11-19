@@ -1,7 +1,8 @@
 # Bot navigation
 
 How vcod's debug bots (`--bots`) find their way around a stock map. The code
-is `crates/server/src/nav.rs` (graph, A*, path follower) and
+is `crates/server/src/nav.rs` and `nav/` (the graph in `graph.rs` and
+`build.rs`, A* in `search.rs`, the path follower in `follower.rs`) and
 `crates/server/src/bots.rs` (the brain's goal and steering).
 
 ## 1. Stock MP maps carry no path nodes
@@ -202,7 +203,7 @@ patch grid moved `mp_brecourt` back to 159.
   (3515.2, -323.1, 630.6) to the ledge node (3487.9, -357.8, 580.1) falls
   in all three gaits, and every bot that took it ran past the ledge to
   the hold floor at 56 (7 of 19 deaths in seeds 1-767 odd once the mast
-  platform's run was fixed, below; `nav::tests::a_drop_no_gait_lands_node_to_node_is_risky`).
+  platform's run was fixed, below; `nav::walk::tests::a_drop_no_gait_lands_node_to_node_is_risky`).
   So is a drop deeper than a fall that kills (480,
   `bg_fallDamageMaxHeight`) from a node more than a half-width (15) off
   every ladder (2026-10-13f): it lands only on a grab of the rungs on the
@@ -210,7 +211,7 @@ patch grid moved `mp_brecourt` back to 159.
   past 480 and the other stock maps none. Four are marked: the two from
   the crow's nest exits (4963.9, 35.5 and 92.5, 1219.1) back off the rim
   into the hatch for the deck node (4929, 68, 692), 26 off the ladder box
-  (`nav::tests::a_drop_that_kills_but_for_the_rungs_is_risky`), the mast
+  (`nav::build::tests::a_drop_that_kills_but_for_the_rungs_is_risky`), the mast
   top's (3301, 128, 1030) to the deck at 480, 251 off any ladder, and the
   back down from (4319, -133, 600) to the hold at 56, 55 off. The crow's
   nest head's own way down the rungs (11 off) is not, and the hold
@@ -221,7 +222,7 @@ patch grid moved `mp_brecourt` back to 159.
   the eight octants, has no floor within 256 (`bg_fallDamageMinHeight`)
   under it, and the forward walk from 4 units aside of its upper node
   falls (2026-10-15f, `nav::beside_a_fall_that_hurts`,
-  `nav::tests::a_walk_down_beside_a_deadly_fall_that_misses_from_aside_is_risky`).
+  `nav::build::tests::a_walk_down_beside_a_deadly_fall_that_misses_from_aside_is_risky`).
   VERIFIED (measured, the `mp_ship` graph): 280 such edges; without the
   floor test, 297 of the edges down more than a step would be (most in
   the hull at 27 to 56, where a slip lands on the floor at -64). The
@@ -243,7 +244,7 @@ patch grid moved `mp_brecourt` back to 159.
   item, a remembered spot, an objective point) on a perch is walked to the
   nearest node off the perches within 128 of it instead, and the walked-out
   path heads at that node, not the point (`NavGraph::goal_node`,
-  2026-10-18; `nav::tests::a_point_goal_on_a_perch_ends_beside_it`).
+  2026-10-18; `nav::follower::tests::a_point_goal_on_a_perch_ends_beside_it`).
   VERIFIED (the graph): both crow's nest rail nodes the test names have such
   a node within 128.
 - New nodes stay within 512 units of the spawns' bounding box. Past it lies
@@ -293,7 +294,7 @@ pass after the flood (`NavGraph::link_ladders`) handles them on their own.
   base `*3`'s), in one component 361 both; mp_foy, mp_kursk, mp_ponyri
   and mp_rhinevalley move by -44 to +504 nodes and keep their counts (324 /
   381, 261 / 282, 219 / 272, 344 / 386). 1.1 has none, so its graphs
-  are unchanged. (`nav::tests::italys_allied_bunker_ladders_are_its_bases`.)
+  are unchanged. (`nav::build::tests::italys_allied_bunker_ladders_are_its_bases`.)
 - The foot is a body dropped 16 units in front of the face's middle, 16
   units above the box's bottom, facing away from it. Facing it, the airborne
   grab hangs the body on the face and it never lands. Where a body does not
@@ -406,7 +407,7 @@ that proved it jumped (`nav::PinJump`, `nav::leap_cue`, `nav::jump_key`):
   the roof lands on, (-673.7, 4131.1, 616.1), runs south into the gutter
   and bobs between z 612 and 630 under the face; a jump from a tick on
   the ground lands on the ledge at (-718.7, 4086.4, 651.6)
-  (`nav::tests::a_run_bobbing_under_a_steep_face_jumps_out_of_the_gutter`).
+  (`nav::walk::tests::a_run_bobbing_under_a_steep_face_jumps_out_of_the_gutter`).
   `jump_clear` allows 2 units over the 39 (`nav::JUMP_SLACK`): that jump
   from z 612.26 stands on the ledge at 652.42, 40.2 up, where a trace to
   exactly 39 is blocked by the ledge's lip.
@@ -440,7 +441,7 @@ that proved it jumped (`nav::PinJump`, `nav::leap_cue`, `nav::jump_key`):
   (4333.2, -91.5), and from there the leap falls. From 4 units off the
   head it falls to the south and arrives to the north and west. Of
   `mp_ship`'s 138 leaps this was the only one from a ladder head
-  (`nav::tests::a_ladder_head_is_no_leaps_foot`).
+  (`nav::walk::tests::a_ladder_head_is_no_leaps_foot`).
 - A bot comes to rest on a leap's foot first: the follower holds the foot
   as its waypoint until the body is within 12 units of it flat, on the
   ground, under 2 units a tick, with the jump off its 500 ms cooldown
@@ -468,14 +469,14 @@ that proved it jumped (`nav::PinJump`, `nav::leap_cue`, `nav::jump_key`):
   planned round, came back by the stack's other jump edges the same way
   and hopped there for 12 s. From the foot with a jump to hand the run
   lands on the rim; with 150 ms on the timer it falls in
-  (`nav::tests::a_jump_edge_waits_on_its_foot_for_the_jump`). Set off
+  (`nav::follower::tests::a_jump_edge_waits_on_its_foot_for_the_jump`). Set off
   from rest on the foot a body moves little on its first tick, so a
   pinned tick counts only with a move key held at the waypoint the tick
   before (`bots::walk::tests::a_bot_set_off_from_rest_is_not_pinned`).
 - A body more than 8 units over the foot, under a step, with the top
   still more than a step over it, waits where it stands instead (one on
   the top's own floor beside a top 16 over its foot, as on mp_cassino's
-  `ctf` at (5065, -1274, 256), still goes back to the foot) (`nav::tests::a_jump_edge_is_waited_on_from_a_ledge_above_its_foot`).
+  `ctf` at (5065, -1274, 256), still goes back to the foot) (`nav::follower::tests::a_jump_edge_is_waited_on_from_a_ledge_above_its_foot`).
   VERIFIED (measured, `uo_bots_fight_and_sprint_in_tdm` `SEED=17`, UO
   rules, 2026-10-21): mp_cassino's edge from (3648, -1249, 111.4) to
   (3698, -1200, 128.1) is a jump edge; the graph's walk steps up 17 onto
@@ -501,13 +502,13 @@ that proved it jumped (`nav::PinJump`, `nav::leap_cue`, `nav::jump_key`):
 - A level edge (both ends within a step) that is no jump, left off its
   side: a body that lands more than a step under both ends plans again
   round the edge from a node a walk or jump reaches (`Follower::follow`,
-  `nav::tests::a_landing_under_a_level_edge_plans_again_round_it`). Every
+  `nav::follower::tests::a_landing_under_a_level_edge_plans_again_round_it`). Every
   stuck replan starts there too. mp_cassino's roof dent took a bot off
   such an edge and held it 4 s (seed 25, bot-objectives.md 10.6).
 - A goal that flickers. A point goal that moves past `RETARGET` and comes
   back within `PARK_TICKS` (1 s) takes up the plan it left, node, closest
   approach and idle count included (`Follower`'s `Parked`,
-  `nav::tests::a_goal_back_within_a_second_takes_up_its_old_plan`).
+  `nav::follower::tests::a_goal_back_within_a_second_takes_up_its_old_plan`).
   VERIFIED (measured, ours, release, stock UO paks, seed 17 `tdm` on
   `feat/bot-aim-footwork` 6b2ab6d1, a per-tick dump of bot 0's goal and
   follower): on mp_cassino's stair from (1440, -725, 13) to (1440, -669,
@@ -528,7 +529,7 @@ that proved it jumped (`nav::PinJump`, `nav::leap_cue`, `nav::jump_key`):
   VERIFIED (measured, `mp_depot`, 2026-10-09): on the step's corner at
   (-63.9, 352, 3.125) a ceiling stops a jump 2.25 units short of 39, and
   the jump lands on the floor at 27.125 the next tick
-  (`nav::tests::a_walk_jumps_onto_a_floor_right_overhead_under_a_ceiling`).
+  (`nav::walk::tests::a_walk_jumps_onto_a_floor_right_overhead_under_a_ceiling`).
 - A jump edge's top counts as reached only within 16 units of its height,
   where any other waypoint passes from up to 48 above or a step below it:
   from the foot of a 32-unit ledge the top is in reach flat. It is never
@@ -556,7 +557,7 @@ that proved it jumped (`nav::PinJump`, `nav::leap_cue`, `nav::jump_key`):
   the body (with the bot's weapons, toward the waypoint) and reads a lip
   when the copy leaves the ground; the leap walk runs the same tick, keeps
   it when it stays down and runs it again with the jump when it does not
-  (`nav::tests::the_lip_reads_on_the_last_tick_on_the_ground`, which fails
+  (`nav::probe::tests::the_lip_reads_on_the_last_tick_on_the_ground`, which fails
   with the projection). Walks the late jump dropped into a gap now land,
   and the builds have more leaps (`examples/nav_build.rs`, master 53bdf043
   then this change): `mp_brecourt` 16 / 21, `mp_carentan` 2 / 13,
@@ -765,7 +766,7 @@ The server:
   instances where they stand, so a rebuild walks round a parked tank. The
   cache keys on those too (`CollisionWorld::placements`) and keeps the
   last 24 graphs; a graph is a function of its key
-  (`nav::tests::the_cache_key_covers_every_placement`). Trap: keyed on the
+  (`nav::cache::tests::the_cache_key_covers_every_placement`). Trap: keyed on the
   links alone, a test got whichever graph another test in the process had
   built round its own vehicles (VERIFIED, measured, UO mp_foy bas, seed 7:
   digest `04c80a17fac01c91` in use against `12e1ab16edbe74f5` fresh).
@@ -848,7 +849,7 @@ under 1.1's. Now:
   1.8 s of the last landing to as little as 15.6 units, where every jump
   edge was proved with the full 39. A bot on a jump edge, or at a leap's
   foot, waits until it has run out as well as the 500 ms cooldown
-  (`nav::jump_ready`, `nav::tests::a_jump_edge_waits_out_the_jump_penalty`).
+  (`nav::jump_ready`, `nav::follower::tests::a_jump_edge_waits_out_the_jump_penalty`).
   INFERRED from the formula; not measured on a bot.
 - UO's vehicle maps filled the old 60 000-node cap before the flood
   reached their far ends. VERIFIED (measured, `nav_build`, UO rules):
@@ -1095,7 +1096,7 @@ lets go 160 short of the straight's end. The sprint leaves the weapon's
 keys are not cut to the graph's pace; the graph's walks ran at 190, so
 the sprint is kept off turns and drops it never proved
 (`bots::walk::tests::a_uo_bot_sprints_a_long_straight_leg`,
-`nav::tests::the_straight_run_stops_at_a_turn_a_rise_and_a_jump`).
+`nav::follower::tests::the_straight_run_stops_at_a_turn_a_rise_and_a_jump`).
 
 VERIFIED (measured, release `ship_stalls` `UO=1`, `tdm`, 6 bots shooting
 off, 2400 ticks, seeds 1 to 31 odd): sprinting bot-ticks, stalled
@@ -1260,7 +1261,7 @@ else a spot it remembers or heard, section 4), `Roam`, or `Away(threat)`
   reached component would let a bot on the main one roam into a pit it
   never leaves; the largest is the main one wherever the start is in it.
   A pick of a perch (section 2) is passed over (2026-10-13f, below:
-  `nav::tests::a_roam_never_ends_over_a_fall_that_kills`).
+  `nav::graph::tests::a_roam_never_ends_over_a_fall_that_kills`).
 - A `To` point is re-planned only once it moves 128 units off the planned
   destination; at the end of the path the bot heads at the point itself.
   A point the graph does not reach is planned for as far as it goes: the
@@ -1476,7 +1477,7 @@ it. It also feels half way between (a point trace, the capsule only where
 that finds no floor) and where the sweep stops short of a wall
 (2026-10-13d), and, against a wall less than 45 degrees off the heading
 within the first 16 units, along the slide
-(`nav::tests::a_drop_ahead_is_felt_along_a_wall_it_slides_on`). The server
+(`nav::probe::tests::a_drop_ahead_is_felt_along_a_wall_it_slides_on`). The server
 runs the probe only on the ticks the brain can read it
 (`Bot::reads_drops`: no waypoint, a spell, guard, or a stall window's last
 tick with the body still in its circle), under 1% of bot-ticks
@@ -1554,7 +1555,7 @@ noted). Every row VERIFIED (measured). The current numbers are the
   3824.9; from there the walk arrives only by jumping, and
   `Follower::edge_holds` took any arrival as proof. A walk that needed a
   jump proves only a jump edge
-  (`nav::tests::an_edge_that_needs_a_jump_from_aside_does_not_hold`).
+  (`nav::follower::reprove::tests::an_edge_that_needs_a_jump_from_aside_does_not_hold`).
   The slide (seed 5): a bot at (6095.8, -303.9, 97.1) against brush 316
   (normal (-0.98, 0.21)) slid off a ledge 41 to the deck at 56; the probe
   due south read nothing, now 41.
@@ -2086,7 +2087,7 @@ against 0 / 3 / 0 (two unstick spells off (276, 3388, -390)).
   than a step, that comes down off the ground under where it set off
   and onto a node where a miss can hurt (`a_miss_hurts`), holds only if
   neither walk 2 units aside falls deeper than a jump
-  (`Follower::edge_holds`, `nav::tests::a_run_on_that_leaves_the_ground_over_a_fall_lands_from_either_side`).
+  (`Follower::edge_holds`, `nav::follower::reprove::tests::a_run_on_that_leaves_the_ground_over_a_fall_lands_from_either_side`).
 - Asked of every run on that left the ground (the second row), it
   turned down mp_ship's 32-unit step-downs at (3315, 508, 352) and
   (3359, -384, 352), the jump onto the crow's nest top from the rim at
@@ -2104,7 +2105,7 @@ against 0 / 3 / 0 (two unstick spells off (276, 3388, -390)).
   the stringer, jumped on its cue (`jump_cue`) and fell back: 155 of
   210 ticks near the stringer in the air. Now a jump edge whose walk on
   from the body arrives without the jump is run without it
-  (`Follower::jump_cued`, `nav::tests::a_jump_edge_walked_on_without_its_jump_cues_no_jump`):
+  (`Follower::jump_cued`, `nav::follower::tests::a_jump_edge_walked_on_without_its_jump_cues_no_jump`):
   on 1080e30d seed 2553 goes from 49 stalled bot-ticks to 0 and 45 of
   115 ticks in the air; the bot stood 16 ticks pinned at (5814.4,
   567.1) and an unstick spell took it off. The 7289 -> 7291 jump to the
@@ -2213,13 +2214,13 @@ merge, the same detector; ship seeds in three blocks of 768):
   `NavGraph::aims` and a bot on it steers there (`NavGraph::aim`,
   `Follower::jump_aim`); one that lands at none is dropped. The pit
   edge (-1569, 2087, 212) -> (-1533.2, 2112, 239.1) lands at none and is
-  dropped (`nav::tests::a_jump_edge_that_lands_only_off_where_a_bot_steers_is_dropped`);
+  dropped (`nav::walk::tests::a_jump_edge_that_lands_only_off_where_a_bot_steers_is_dropped`);
   `mp_depot`'s (-1760, 71, -24) -> (-1731, 32, 11) lands only aside
-  (`nav::tests::a_jump_edge_that_lands_only_aimed_aside_keeps_its_aim`).
+  (`nav::follower::tests::a_jump_edge_that_lands_only_aimed_aside_keeps_its_aim`).
   `mp_dawnville`'s (-96, -15409, -13) -> (-89, -15360, 19), the one way
   to spawns 88 and 154, now lands at its node: the walk with the room
   test pins on the wall at y -15375 and refuses the jump, the bot's
-  jump there lands (`nav::tests::a_jump_edge_is_proved_again_by_the_bots_jump`).
+  jump there lands (`nav::walk::tests::a_jump_edge_is_proved_again_by_the_bots_jump`).
   Aimed jumps after the pass, on the kept row (`examples/nav_build.rs`):
   `mp_brecourt` 44, `mp_carentan` 118, `mp_chateau` 88, `mp_dawnville`
   41, `mp_depot` 81, `mp_harbor` 15, `mp_hurtgen` 71, `mp_pavlov` 87,
@@ -2247,8 +2248,8 @@ merge, the same detector; ship seeds in three blocks of 768):
   the top at (-195, -16833, 138) while it still rose 2 units a tick,
   flew past the floor and fell back to 151; the flood's walk, with no
   floor and no jump under it, ran on to the ramp's head, stalled and
-  jumped onto it (`nav::tests::a_jump_from_a_ramp_waits_for_its_head`;
-  `nav::tests::the_floods_walk_jumps_under_a_top_while_climbing` keeps
+  jumped onto it (`nav::walk::tests::a_jump_from_a_ramp_waits_for_its_head`;
+  `nav::walk::tests::the_floods_walk_jumps_under_a_top_while_climbing` keeps
   the flood's jump). The re-proof also tries the top's column centre,
   where the flood aimed. VERIFIED (measured, walk traces, UO rules).
 - Left: the mast ladder meetings above, and the pit at
@@ -2258,7 +2259,7 @@ merge, the same detector; ship seeds in three blocks of 768):
 
 ### 3.4 String-pulling
 
-`Follower::pull` (`nav.rs`) takes the waypoint one node further along
+`Follower::pull` (`nav/follower.rs`) takes the waypoint one node further along
 the plan a tick, so a bot crossing open floor heads straight for a node
 up to `PULL_STEPS` (3) grid steps off instead of stepping the grid's 45
 degree kinks (bot-combat.md section 11). A pull needs all of:
@@ -2376,8 +2377,8 @@ union, sorted, goes to every follower each tick
   vehicle at (1384, -2659, 5), had no waypoint for 14 s and stalled 84.
   With the kill, both 0.
 
-`nav::tests::a_plan_runs_round_the_nodes_a_parked_vehicle_covers`,
-`nav::tests::a_tank_parked_over_cassinos_stair_blocks_its_nodes` (the
+`nav::follower::tests::a_plan_runs_round_the_nodes_a_parked_vehicle_covers`,
+`nav::follower::tests::a_tank_parked_over_cassinos_stair_blocks_its_nodes` (the
 collmap put at seed 23's pose, yaw only; the stair node (431, -964, 57)
 blocked, the terrace not, hemmed in).
 
@@ -2441,7 +2442,7 @@ the UO pins). VERIFIED (measured, release `ship_stalls`, `dm`, 6 bots,
   `FELL_BELOW` under its waypoint, off a climb, avoids the edge under way
   and plans from a node it walks to, as a landing under the edge already
   did (`Follower::waypoint`,
-  `nav::tests::a_fall_off_the_path_past_its_reach_plans_round_the_edge`).
+  `nav::follower::tests::a_fall_off_the_path_past_its_reach_plans_round_the_edge`).
   In seed 125 the next plan took the ledge node by its other edge, from
   (7225, 253, 150), fell off the same way onto the roof at 104, avoided
   that edge too on the landing, and went west along the hull floor
@@ -2475,7 +2476,7 @@ column, release, 1.1:
   to t2475, then again from t2540). `past` now needs floor all the way to
   the next node (`straight_floor`, the string-pull's probe). Seeds 233,
   1031 and 1227 stall 0;
-  `nav::tests::a_walk_on_that_falls_at_the_weapons_scale_is_not_taken`
+  `nav::follower::tests::a_walk_on_that_falls_at_the_weapons_scale_is_not_taken`
   holds the exit from the same spot. VERIFIED (trace, seed 1031; the
   table below).
 - The crow's nest's risky drops (seed 969's death; part of seeds 1233
@@ -2488,7 +2489,7 @@ column, release, 1.1:
   the hatch at (4957, 59), fell past the rungs to 616 and died. A plan
   that avoids stuck edges now takes no risky edge (`Search::run`); when
   none goes round, the plan through the stuck edge comes next, as before
-  (`nav::tests::a_plan_round_a_stuck_edge_takes_no_risky_drop`). Seed 969
+  (`nav::follower::tests::a_plan_round_a_stuck_edge_takes_no_risky_drop`). Seed 969
   has no death. VERIFIED (traces, seeds 969 and 1233, whose bot turned for
   the drop at t3414; the graph's edges, `nav_build` `EDGES=1`).
 - The stairwell's jump drop (seed 1275). (5402, 321, 344) -> (5404, 354,
@@ -2724,7 +2725,7 @@ release, 1.1, on "Bodies in the way"'s tip (ae407a223):
   side, fell to (4924, -18, 535) and died. VERIFIED (trace). The plan
   round a body is now waited for where the body stands
   (`Follower::rest_point`,
-  `nav::tests::a_body_waits_where_it_stands_for_the_plan_round_a_body`);
+  `nav::follower::tests::a_body_waits_where_it_stands_for_the_plan_round_a_body`);
   the seed has no death.
 - The deck pocket at (3527 to 3581, -165 to -7, 352) (`bot_match` `tdm`
   seeds 4 and 5, 6 and 177 stalled bot-ticks). Its one plain way north is
@@ -2747,7 +2748,7 @@ release, 1.1, on "Bodies in the way"'s tip (ae407a223):
   the follower's avoid and dead lists; `nav_build` `EDGES=1`). Two
   changes: the last plan, round the dead edges only, may take a risky
   drop at `RISK_COST` (`Search::risking`,
-  `nav::tests::a_plan_round_a_dead_edge_takes_a_risky_drop`; the plan
+  `nav::follower::tests::a_plan_round_a_dead_edge_takes_a_risky_drop`; the plan
   round a stuck edge still takes none, as seed 969 needs); and under
   `RECALL_PACE` (66 units/s) the keys keep the path's own run with no
   pre-aim (`Bot::think_wander`,
@@ -2761,7 +2762,7 @@ release, 1.1, on "Bodies in the way"'s tip (ae407a223):
   follower's `dest`). A destination more than a jump off the height of
   the node a plan to the point ends at (`NavGraph::goal_node`) now
   reads as moved, for a parked plan too (`Follower::follow`,
-  `nav::tests::a_goal_a_floor_off_its_destination_is_planned_for_again`).
+  `nav::follower::tests::a_goal_a_floor_off_its_destination_is_planned_for_again`).
 - Two health items a hurt bot flipped between (`tdm` seeds 11 and 24
   on the changes above, 210 and 741 stalled). The item was the nearest
   across, picked afresh each tick: between one on the hold floor at
@@ -2876,7 +2877,7 @@ goal), release, on c6d7e1bd9.
   the goal constant). A point now moves when it lies more than
   `RETARGET` off its destination and the node it maps to does too, or a
   floor off it as before (`Follower::follow`,
-  `nav::tests::a_goal_far_off_the_graph_keeps_its_plan`). A point on
+  `nav::follower::tests::a_goal_far_off_the_graph_keeps_its_plan`). A point on
   the graph reads as before.
 - mp_ship's ladder stalls, `bot_match` 1.1 `tdm` 10 bots, 12 000 ticks,
   seeds 1 to 72, `STALLS=1` (each 12 s window's start). VERIFIED
@@ -3070,7 +3071,7 @@ odd 0 / 3 / 0, 384 given up (all three falls off the pit's rim at
   which no walk presses, the move reads no other field of the held
   weapon's def: the scale in `walk_move`; the rest goes through the sight
   flag, a grenade's cook or an LMG's deploy. INFERRED (`pmove::pmove`'s
-  reads of the def). `nav::tests::a_walk_at_a_weapons_scale_moves_as_the_weapon_held`
+  reads of the def). `nav::walk::tests::a_walk_at_a_weapons_scale_moves_as_the_weapon_held`
   runs every stock weapon held at its own index (owned, its clip full)
   and the scaled body over `mp_depot`'s roof peak at 220 units/s, down
   the far slope and a jump: 32 weapons under 1.1's rules and 63 under

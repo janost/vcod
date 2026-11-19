@@ -396,7 +396,7 @@ fn probe_stale_handles_match_retail() {
 /// The pak-backed source with one probe overlaid on its gametype path, so
 /// the probe's own `main` runs beside the real `mp_pavlov.gsc` closure
 /// rather than beside stubs. `PakScripts` in `crates/server/src/game/
-/// script.rs` is the half this borrows; a private type there cannot be
+/// script/load.rs` is the half this borrows; a private type there cannot be
 /// imported into an integration test.
 struct PakWithProbe {
     fs: Rc<dyn AssetSource>,
@@ -426,7 +426,7 @@ impl ScriptSource for PakWithProbe {
 /// `start_thread` calls in `start_bootstrap` fails here. Nothing else pins
 /// the order: `dm.gsc`'s `main` never reads `game["allies"]` and its
 /// `Callback_StartGameType` defaults the key when unset, so the configstring
-/// assertions in `script.rs` come out the same either way.
+/// assertions in `script/tests.rs` come out the same either way.
 #[test]
 fn probe_bootstrap_matches_retail() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {

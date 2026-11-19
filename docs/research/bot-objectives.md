@@ -10,7 +10,7 @@ United Offensive server (section 6), UO's own `ctf`, `dom`, `hq` and
 `crates/server/src/bots/objective.rs` (`ObjTarget`, `think_objective`); the
 server fills `BotView::sd` and `BotView::linked` in
 `crates/server/src/server/bot_world.rs` (`bot_sd`, `site_stand`) from
-`ScriptRuntime::sd_objectives` (`crates/server/src/game/script.rs`).
+`ScriptRuntime::sd_objectives` (`crates/server/src/game/script/objectives.rs`).
 Navigation is in `bot-navigation.md`.
 
 ## 1. What stock `sd.gsc` asks of a player
@@ -64,7 +64,7 @@ Line numbers are `maps/MP/gametypes/sd.gsc` in `pak5.pk3`.
   set the brain walks to it standing, off its sights, the view on the
   enemy, and the next tick checks the line again
   (`bots::fight::tests::a_blocked_bot_steps_aside_to_clear_the_line`,
-  `nav::tests::a_sidestep_goes_across_the_line_on_level_edges`). No spot,
+  `nav::graph::tests::a_sidestep_goes_across_the_line_on_level_edges`). No spot,
   and the bot holds as before. The server keeps a bot's spot
   (`BotDriver::sidesteps`, `bots::held_sidestep`) until the body is
   within 16 units of it, it no longer clears the line, or 3 s have passed;
@@ -4164,7 +4164,7 @@ waypoint, the follower's plan and the rules that reset it), release,
   drop, which it marks dead for `AVOID_TICKS` (10 s) so the fallback
   search does not take it either; and avoiding an edge drops a parked
   plan through it (`Follower::avoid_edge`)
-  (`nav::tests::a_drop_landed_partway_down_is_not_taken_again`). A body
+  (`nav::follower::tests::a_drop_landed_partway_down_is_not_taken_again`). A body
   standing partway with no fall read keeps the edge, as before. Seed
   1409 of `ship_stalls`, 2026-10-18b's trap for avoiding this drop,
   plays the same with the rule.

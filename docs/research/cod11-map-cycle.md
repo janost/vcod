@@ -114,7 +114,7 @@ both.
   is `level_latch` and the flag `save_persist`, both on the host struct
   (`crates/server/src/game/host.rs`). The console line each queues lands in
   the host's `console` vector, which `ScriptRuntime::take_console`
-  (`crates/server/src/game/script.rs`) drains.
+  (`crates/server/src/game/script/clients.rs`) drains.
 - `Vm::take_game` and `Vm::install_game` (`crates/gsc/src/vm/mod.rs`) and
   the host's `pers_carry` are the two halves of what `savePersist` keeps;
   `spawn_client` (`crates/server/src/game/entity.rs`) takes the carried
