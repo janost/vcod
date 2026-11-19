@@ -972,7 +972,7 @@ pub fn get_weapon_slot_weapon(
 /// own file names. CoD1 gives no rounds: past `BG_GivePlayerWeapon` the
 /// method returns, so the clip and reserve stay what the weapon's clip and
 /// ammo indices held (empty after a spawn), and stock script sets both after
-/// it (coduo-diff.md 22, "Battle rank"). CoD2's gives its `startAmmo`.
+/// it (coduo-diff.md 22.3, "Battle rank"). CoD2's gives its `startAmmo`.
 ///
 /// `"none"` is not a weapon name but weapon index 0, which empties the slot:
 /// retail compares the argument against `"none"` ahead of its name lookup

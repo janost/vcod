@@ -50,19 +50,26 @@ impl Cod2Server {
             true => wire::parse_client(body),
             false => wire::parse_client_pregame(body),
         };
-        for f in &read.map_or_else(Vec::new, |(_, f)| f) {
-            if active {
-                self.broadcast_voice(slot, f);
-            } else {
+        let frames = read.map_or_else(Vec::new, |(_, f)| f);
+        if active {
+            self.broadcast_voice(slot, &frames);
+        } else {
+            for f in &frames {
                 self.pre_game_voice(slot, f);
             }
         }
     }
 
-    /// `SV_UserVoice` (0x809c2ee) into `G_BroadcastVoice` (0x80f9976): the
-    /// talker's `lastVoiceTime` stamped, then each client of the level the
-    /// rules pass ([`hears`]), by number.
-    fn broadcast_voice(&mut self, talker: usize, frame: &[u8]) {
+    /// `SV_UserVoice` (0x809c2ee) into `G_BroadcastVoice` (0x80f9976) for
+    /// each of a packet's frames: the talker's `lastVoiceTime` stamped,
+    /// then each client of the level the rules pass ([`hears`]), by number.
+    /// One packet's frames all meet the same rules and listeners, so the
+    /// table is read once, and past [`wire::MAX_QUEUED`] frames every
+    /// listener's queue is full.
+    fn broadcast_voice(&mut self, talker: usize, frames: &[Vec<u8>]) {
+        if frames.is_empty() {
+            return;
+        }
         let rules = Rules {
             global: self.int("voice_global") != 0,
             local_echo: self.int("voice_localEcho") != 0,
@@ -91,7 +98,9 @@ impl Cod2Server {
                 })
             })
             .collect();
-        self.queue_voice(talker, frame, &rules, &voicers);
+        for frame in frames.iter().take(wire::MAX_QUEUED) {
+            self.queue_voice(talker, frame, &rules, &voicers);
+        }
     }
 
     /// `SV_SendClientVoiceData` (0x809c0a2), after the slot's snapshot (not
@@ -383,6 +392,21 @@ mod tests {
         talk(&mut sv, &mut peers, &mut now, 0xa2);
         assert_eq!(peers[2].heard.len(), 2, "voice_global reaches the enemy");
         sv.set_cvar("voice_global", "0");
+
+        // A packet's 255 frames: the teammate's queue keeps its first
+        // `MAX_QUEUED` (`SV_QueueVoicePacket`), read off one table.
+        for p in peers.iter_mut() {
+            p.heard.clear();
+        }
+        let many: Vec<Vec<u8>> = (0..255u8).map(|i| vec![i, 1]).collect();
+        sv.handle_packet(peers[0].addr, &wire::client_packet(4660, &many), now);
+        for _ in 0..2 {
+            frame(&mut sv, &mut peers, &[], Some(&fs), &mut now);
+        }
+        let first: Vec<(u8, Vec<u8>)> = (0..wire::MAX_QUEUED as u8)
+            .map(|i| (0, vec![i, 1]))
+            .collect();
+        assert_eq!(peers[1].heard, first);
 
         peers[1].cl.add_reliable("muteplayer 0");
         for _ in 0..2 {

@@ -205,7 +205,7 @@ pub fn frametime(msec: i32) -> f32 {
 /// the held-jump latch (`pm_flags` 0x8) it left: while that is set `Pmove`
 /// writes 20 into the cmd's `upmove` (0x344f2-0x344f8, 1.5b 0x28ad5, UO
 /// 0x2e29a), so every later step's air and ladder wish reads 20, not the
-/// key's 127 (cod11-mantle.md, "The jump").
+/// key's 127 (cod11-mantle.md, "The gates").
 pub fn chop(command_time: i32, cmd: &UserCmd, mut step: impl FnMut(&UserCmd, f32) -> bool) {
     let mut cmd = *cmd;
     let dt_ms = cmd.server_time.wrapping_sub(command_time);

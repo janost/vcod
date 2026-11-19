@@ -29,10 +29,7 @@ if [ -z "${OFFLAN_INNER:-}" ]; then
     exec env OFFLAN_INNER=1 unshare -rnm --pid --fork --kill-child --mount-proc \
         --forward-signals bash "$0" "$@"
 fi
-if grep -qE '^ *0 +0 +4294967295$' /proc/self/uid_map; then
-    echo "offlan: the inner half runs only inside its own unshare; unset OFFLAN_INNER" >&2
-    exit 1
-fi
+offlan_inner
 trap 'exit 143' TERM INT
 cd "$(dirname "$0")/.."
 KIND=$1; OUT=$(realpath -m "$2"); shift 2
@@ -43,14 +40,7 @@ mkdir -p "$OUT/home"
 printf '127.0.0.1 localhost\n127.0.0.2 cod4master.activision.com\n' > "$OUT/hosts"
 mount --bind "$OUT/hosts" /etc/hosts
 mount -t tmpfs none /run/systemd/resolve 2>/dev/null
-ip link set lo up
-unshare -n sleep 3600 & BPID=$!
-sleep 0.5
-ip link add veth0 type veth peer name veth1 netns $BPID
-ip addr add 203.0.113.1/24 dev veth0; ip link set veth0 up
-ip route add 198.51.100.0/24 dev veth0
-nsenter -t $BPID -n sh -c 'ip link set lo up; ip addr add 198.51.100.2/24 dev veth1;
-    ip link set veth1 up; ip route add 203.0.113.0/24 dev veth1'
+offlan_veth
 
 # The authorize server: `ipAuthorize <challenge> accept KEY_IS_GOOD 0 <hex>`,
 # the hex the slot holds (SV_AuthorizeIpPacket, 0x816fd62).

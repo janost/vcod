@@ -2710,7 +2710,7 @@ are `crates/server/tests/fixtures/playerstate/*-crouchjump-*.txt`, gated by
 ## probe_moveshot
 
 Shots whose 1.5 or United Offensive muzzle moves (`docs/research/cod11-combat.md`
-2.1, "1.5 and United Offensive"). Stock dm on mp_carentan; under
+2.1, "United Offensive and 1.5"). Stock dm on mp_carentan; under
 `probe_teleport 1` it puts every allied player facing world yaw 0:
 `probe_spot street` is probe_prone's street at (900 1930), the wall 1090
 units ahead; `wall` is the ground 20 units (`probe_walldist`) short of that

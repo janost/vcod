@@ -150,8 +150,12 @@ blanket. The full rule, document defaults and what
 Research docs are cited by section number from code comments and other docs
 (`combat doc 12.4`, `coduo-diff.md 16`). Keep numbered sections and file
 names stable; extend a doc with what you learn instead of leaving the fact
-in a commit message. `crates/common/tests/doc_citations.rs` fails on a
-`<doc>.md <n>` or `<doc>.md, "<title>"` citation that no longer resolves.
+in a commit message. Split a long section by adding numbered subsections
+(12.4.1) under it, never by renumbering. `crates/common/tests/doc_citations.rs`
+checks that every `<doc>.md N` citation names a heading and every quoted
+paragraph name (`<doc>.md N, "The name"`) a heading, bold lead or
+paragraph lead in that section, and that no doc gives two headings one
+section number.
 
 ## Research docs
 

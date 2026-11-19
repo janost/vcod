@@ -1,5 +1,5 @@
 //! How mp_carentan's and mp_toujane's layered world materials compile
-//! (cod2-materials.md 9, "Multiply"): every `effect_multiply*` decal (the
+//! (cod2-materials.md 9, "Multiply decal"): every `effect_multiply*` decal (the
 //! dark stains over roofs and walls, toujane's window shadows) multiplies
 //! by its colour faded by the vertex alpha, and every `phong_blend*` layer
 //! blends SrcAlpha/InvSrcAlpha with the vertex alpha in its source alpha,

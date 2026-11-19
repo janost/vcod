@@ -7,8 +7,8 @@
 #   GDB_OUT=<file> gdb -q -batch -ex 'source tools/re/gdb_radius_damage.py' \
 #       -ex run --args <cod_lnxded> ...
 #
-# Run it as `COD_LNXDED` for tools/run_probe.sh through a wrapper that runs
-# gdb with these arguments. Addresses are game.mp.i386.so 1.1d's:
+# tools/run_probe.sh and tools/run_server.sh run the server this way under
+# `GDB_PY=tools/re/gdb_radius_damage.py`. Addresses are game.mp.i386.so 1.1d's:
 # 0x4a4d3 (the takedamage test), 0x4a606 (past the CanDamage call),
 # 0x4a749 (past the second chance's trap_Trace).
 import gdb, struct, os

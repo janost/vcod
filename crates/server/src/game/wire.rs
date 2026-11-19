@@ -183,7 +183,7 @@ pub fn ps_to_protocol(p: &Cod1Wire, ps: &mut vcod_common::net::msg::PlayerState)
 
 /// The `r.mins`/`r.maxs` an entity's spawn function leaves on it. The clusters
 /// it links with come from this grown by the engine's link epsilon, which is
-/// the caller's business (`crate::world::visible_entities`).
+/// the caller's business (`crate::archive::WorldFrame::entities_for`).
 ///
 /// VERIFIED from the module: `G_SpawnItem` (0x4e6ed) writes (-1, -1, -1) to
 /// (1, 1, 1) for a weapon row (any other row takes (-1, -1, 0) to (1, 1, 2),

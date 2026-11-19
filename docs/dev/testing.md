@@ -401,7 +401,9 @@ only yardstick.
     error the levels raised (docs/bots.md "CoD4").
   - `DIGEST=1` or `DIGEST=<N>` adds a per-tick hash of every bot's cmd and
     body, the check that a refactor moved no bot. `NETDIGEST=<N>` hashes
-    every datagram sent, with an observer client joined.
+    every datagram sent, with an observer client joined. `OBSERVERS=<N>`
+    joins N more (CoD4's in process), whose snapshots the server builds;
+    `OBSERVERS_PLAY=1` (CoD1, CoD4) puts them in the world, walking.
     `VCOD_TICK_TRACE=<dir>` writes the tick's step log (bot-combat.md
     section 1). `SPIKE_MS` logs slow ticks (every game), with the ticking
     thread's instructions where the kernel lets a process count them, the

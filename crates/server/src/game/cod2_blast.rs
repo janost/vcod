@@ -1,7 +1,7 @@
 //! CoD2's `G_RadiusDamage` (lnxded 0x81022a0, Mac 0x1c45b8) and
 //! `CanDamage` (Mac 0x1c3f18) over any clip, and the `radiusDamage`
 //! builtin's walk over the host (`GScr_RadiusDamage`, Mac 0x19947a).
-//! docs/research/cod2-combat.md 7 and 7.1.
+//! docs/research/cod2-combat.md 7.
 //!
 //! The missiles' blast (`Cod2Level::radius_damage`) and the builtin share
 //! the measure; each hands the result to its own `G_Damage`.

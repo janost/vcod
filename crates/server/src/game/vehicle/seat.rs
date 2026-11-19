@@ -698,3 +698,157 @@ pub fn hidden_rider(kind: i32, seat: i32) -> bool {
 pub fn own_weapon(kind: i32, seat: i32) -> bool {
     kind == KIND_FOUR_WHEEL && seat == 3
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::vehicle::info::VehicleInfo;
+    use vcod_gsc::Vm;
+
+    /// A UO host with one live vehicle of `info` in pool slot 0, health
+    /// 100, and client entities in `slots`.
+    fn rig(info: VehicleInfo, slots: &[usize]) -> (Vm, GameHost, EntId) {
+        let mut host = GameHost::new(&crate::game::profile::COD1_UO, vec![String::new(); 2048]);
+        host.vehicles.infos.list.push(Rc::new(info));
+        let mut vm = Vm::new();
+        let id = vm.with_cx(|cx| {
+            for &s in slots {
+                host.ents.spawn_client(cx, s, None).unwrap();
+            }
+            let id = host.ents.spawn(cx).unwrap();
+            let health = cx.intern_folded("health");
+            host.set_field(cx, id, health, Value::Int(100)).unwrap();
+            id
+        });
+        host.vehicles.slots[0] = Some(id);
+        host.vehicles.live.insert(id, Vehicle::for_test(0));
+        (vm, host, id)
+    }
+
+    fn tank() -> VehicleInfo {
+        VehicleInfo {
+            kind: KIND_TANK,
+            has_gunner: true,
+            num_passengers: 0,
+            ..VehicleInfo::default()
+        }
+    }
+
+    fn sent(host: &GameHost, slot: usize, text: &str) -> usize {
+        host.client_commands
+            .iter()
+            .filter(|(s, t)| *s == slot && t == text)
+            .count()
+    }
+
+    /// The search wraps 6 to 1 forward and 1 to 6 back, never lands on
+    /// its start, takes seat 2 only with a gunner's seat and seat n from 3
+    /// only under the passenger count, and passes a taken seat.
+    #[test]
+    fn the_free_seat_search_wraps_both_ways() {
+        let mut v = Vehicle::for_test(0);
+        assert_eq!(next_free_seat(&v, true, 0, 0, false), Some(1));
+        assert_eq!(next_free_seat(&v, true, 0, 1, false), Some(2));
+        assert_eq!(next_free_seat(&v, false, 0, 1, false), None);
+        assert_eq!(next_free_seat(&v, false, 2, 1, false), Some(3));
+        assert_eq!(next_free_seat(&v, false, 2, 4, false), Some(1));
+        assert_eq!(next_free_seat(&v, false, 2, 1, true), Some(4));
+        assert_eq!(next_free_seat(&v, true, 4, 1, true), Some(6));
+        assert_eq!(next_free_seat(&v, true, 0, 2, true), Some(1));
+        v.seats[1] = Some(0);
+        assert_eq!(next_free_seat(&v, true, 0, 0, false), Some(2));
+        assert_eq!(next_free_seat(&v, true, 0, 2, false), None);
+        v.seats[2] = Some(1);
+        assert_eq!(next_free_seat(&v, true, 0, 0, false), None);
+    }
+
+    /// A tank's first entry stamps now, so a use within 1500 ms is the
+    /// exit delay's and a forced exit is not; an entry inside 250 ms of
+    /// the rider's stamp is refused.
+    #[test]
+    fn a_tank_refuses_an_exit_inside_its_delay() {
+        let (mut vm, mut host, id) = rig(tank(), &[3, 4]);
+        vm.with_cx(|cx| {
+            host.level_time_ms = 10_000;
+            board(&mut host, cx, id, 3, true, 0.0);
+            assert_eq!(host.vehicles.seat_of(3), Some((id, 1)));
+            assert_eq!(host.vehicles.riders[&3].stamp, 10_000);
+            assert!(host.vehicles.live[&id].driven);
+            let bounds = PLAYER_BOX;
+            host.level_time_ms = 11_400;
+            assert!(!unlink_player(&mut host, cx, 3, true, [0.0; 3], bounds));
+            assert_eq!(sent(&host, 3, "e \"GMI_GAME_VEHICLE_EXIT_DELAY\""), 1);
+            assert_eq!(host.vehicles.seat_of(3), Some((id, 1)));
+            // A forced exit goes whatever the clock.
+            assert!(unlink_player(&mut host, cx, 3, false, [0.0; 3], bounds));
+            assert_eq!(host.vehicles.seat_of(3), None);
+            assert_eq!(host.vehicles.live[&id].wire.other, NONE);
+            // Inside 250 ms of a stamp no entry is taken.
+            clock(&mut host, 4).stamp = 11_300;
+            board(&mut host, cx, id, 4, true, 0.0);
+            assert_eq!(host.vehicles.seat_of(4), None);
+            host.level_time_ms = 11_551;
+            board(&mut host, cx, id, 4, true, 0.0);
+            assert_eq!(host.vehicles.seat_of(4), Some((id, 1)));
+            assert_eq!(host.vehicles.riders[&4].stamp, 11_551);
+        });
+    }
+
+    /// No boarding while falling past -80 units/s off the ground.
+    #[test]
+    fn a_falling_body_does_not_board() {
+        let (mut vm, mut host, id) = rig(tank(), &[3]);
+        vm.with_cx(|cx| {
+            host.level_time_ms = 5000;
+            board(&mut host, cx, id, 3, false, -81.0);
+            assert_eq!(host.vehicles.seat_of(3), None);
+            board(&mut host, cx, id, 3, false, -80.0);
+            assert_eq!(host.vehicles.seat_of(3), Some((id, 1)));
+        });
+    }
+
+    /// `nextvehslot` inside 250 ms of the stamp says the delay at most once
+    /// per 500 ms and moves nothing; past it the rider goes to the next
+    /// free seat, the count up and the stamp 1500 ms ahead. A tank's first
+    /// cycle clears the stamp, so it is never held.
+    #[test]
+    fn a_cycle_waits_out_the_change_gap() {
+        let info = VehicleInfo {
+            kind: KIND_FOUR_WHEEL,
+            has_gunner: false,
+            num_passengers: 2,
+            ..VehicleInfo::default()
+        };
+        let (mut vm, mut host, id) = rig(info, &[3]);
+        vm.with_cx(|cx| {
+            host.level_time_ms = 10_000;
+            board(&mut host, cx, id, 3, true, 0.0);
+            assert_eq!(host.vehicles.riders[&3].stamp, 11_500);
+            let delay = "e \"GMI_GAME_VEHICLE_DELAY_IGNORE\"";
+            for at in [11_000, 11_200, 11_501] {
+                host.level_time_ms = at;
+                cycle(&mut host, cx, 3, false);
+                assert_eq!(host.vehicles.seat_of(3), Some((id, 1)), "{at}");
+            }
+            assert_eq!(sent(&host, 3, delay), 2);
+            host.level_time_ms = 11_751;
+            cycle(&mut host, cx, 3, false);
+            assert_eq!(host.vehicles.seat_of(3), Some((id, 3)));
+            let c = host.vehicles.riders[&3];
+            assert_eq!((c.cycles, c.stamp), (1, 11_751 + STAMP_AHEAD_MS));
+            // Back from 3 past seat 2, which it has none of, to 1.
+            host.level_time_ms = 14_000;
+            cycle(&mut host, cx, 3, true);
+            assert_eq!(host.vehicles.seat_of(3), Some((id, 1)));
+        });
+
+        let (mut vm, mut host, id) = rig(tank(), &[3]);
+        vm.with_cx(|cx| {
+            host.level_time_ms = 10_000;
+            board(&mut host, cx, id, 3, true, 0.0);
+            host.level_time_ms = 10_010;
+            cycle(&mut host, cx, 3, false);
+            assert_eq!(host.vehicles.seat_of(3), Some((id, 2)));
+        });
+    }
+}

@@ -295,7 +295,7 @@ Joined clients follow.
 
 ### Bots
 
-`--bots N [--bots-shoot]` adds bots that join through the stock menus and
+`--bots N [--bots-peaceful]` adds bots that join through the stock menus and
 play every stock gametype with vcod's shared bot brain
 ([bots.md](../bots.md#cod2)):
 

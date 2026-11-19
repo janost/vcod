@@ -66,7 +66,8 @@ fn read(path: &str) -> String {
 }
 
 // Local copies of `crates/client/src/probe.rs`'s `escape_ctl` and
-// `nonzero_pairs`/`pairs_str`: the client is a binary crate, out of reach.
+// `probe/fixture.rs`'s `nonzero_pairs`/`pairs_str`: the client is a binary
+// crate, out of reach.
 
 fn escape_ctl(s: &str) -> String {
     s.chars()

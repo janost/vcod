@@ -122,6 +122,7 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     `games_mp.log`.
 - CoD1: `server.rs` (the frame), `server/cod1_game.rs` (`Cod1Game`),
   `server/cod1_frame.rs`, `spectate.rs` (usercmds in, playerstate out).
+  `server/test_hooks.rs` holds the `test_*` and `pin_*` seams the gates call.
 - `cod2/`: the CoD2 engine, `Cod2Game` in `cod2/mod.rs`: handshake,
   gamestate, snapshots, spectators. `house.rs`: zombies, downloads,
   heartbeat. `voice.rs`: the voice relay.
@@ -182,4 +183,19 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     hands over to `Session::Cod4` and leaving the game takes back.
 - `voice.rs`: CoD2's and CoD4's voice chat: the session's link, Speex,
   the microphone and the talkers' streams.
-- `probe.rs`: the headless probe client (`docs/dev/retail.md`).
+- `probe.rs`: the headless probe client (`docs/dev/retail.md`): `probe()`'s
+  loop, `Save`, the wire it speaks and the helpers the modes share
+  (`hold_view_yaw`, `aim_at`, `escape_ctl`). Each mode lives in `probe/`:
+  - `fixture.rs` the shared writers (gamestate, snapshots, configstrings,
+    playerstate, scripted, `write_capture`, `tag_suffix`); `watch.rs` the
+    default run's `ProbeWatch`; `join.rs` the menu handshake;
+    `download.rs` `--probe-download`.
+  - `motion.rs`, `combat.rs` (combat, ADS, sway, lean, grenade),
+    `hit.rs` (shooter and target), `mapchange.rs` (map change and round
+    restart), `pickup.rs`, `turret.rs`, `bump.rs`, `sd.rs` (plant and
+    defuse), `triggers.rs`, `pvs.rs` (entities and PVS route), `ladder.rs`
+    (ladder and weapsel): one capture each, with its fixture writer.
+  - `slope.rs` the `--save-slope` capture; `scripts.rs` the walks it runs
+    (`InputStep`, `InputScript`, `moves_script` and the rest).
+  - `observe.rs` the print-only modes: follow, fall, compass, items, ride,
+    killcam.

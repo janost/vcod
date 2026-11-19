@@ -2,6 +2,8 @@
 //! `docs/research/cod2-*.md`. Everything here builds into the engine's
 //! neutral types; nothing CoD1 reads from this crate.
 
+#![forbid(unsafe_code)]
+
 pub mod collision;
 pub mod d3dbsp;
 pub mod efx;

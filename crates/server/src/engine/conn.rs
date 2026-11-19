@@ -98,6 +98,10 @@ pub trait ConnGame: GameModule<Client = Conn<Self::Frame, Self::Extra>> {
     fn ban_client(e: &mut Engine<Self>, slot: usize, out: &mut Redirect);
 }
 
+/// How long a live slot must have been silent before a connect with
+/// another challenge may take it ([`Engine::connect_slot`]).
+const RECONNECT_SILENCE_MS: i32 = 3000;
+
 /// A `connect` [`Engine::connect_slot`] let into a slot, for the game's
 /// `ClientConnect`.
 pub struct Admit {
@@ -690,6 +694,21 @@ impl<G: ConnGame> Engine<G> {
             .position(|c| c.as_ref().is_some_and(same))
         {
             Some(slot) => {
+                // vcod's guard, as CoD1's `direct_connect`: retail hands a
+                // live slot to any challenge issued to the ip, so a host
+                // behind the same NAT could take over a player by his
+                // qport. Only the slot's own challenge replaces a client
+                // heard from in the last 3 s.
+                if self.core.clients[slot].as_ref().is_some_and(|c| {
+                    c.state > State::Zombie
+                        && c.link.netchan.challenge != challenge
+                        && svs.wrapping_sub(c.link.last_packet_ms) < RECONNECT_SILENCE_MS
+                }) {
+                    log::info!(
+                        "{from}: connect with a foreign challenge refused, client {slot} is live"
+                    );
+                    return None;
+                }
                 if self.core.clients[slot]
                     .as_ref()
                     .is_some_and(|c| c.state > State::Zombie)

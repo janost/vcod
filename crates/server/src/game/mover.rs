@@ -467,7 +467,7 @@ struct Mover {
     /// `G_Error` unless a `useBy` moved its state ([`use_binary`]).
     sine: bool,
     /// A sine mover's `moverState` (`ent+0x174`), which only a `useBy`
-    /// moves off `InitMover`'s 0 (cod11-combat.md 5.9, "Use_BinaryMover").
+    /// moves off `InitMover`'s 0 (cod11-combat.md 5.9, "useBy on a gun, a sine mover").
     binary: Binary,
     /// `ReturnToPos1`'s `nextthink`, armed when a 1-to-2 leg ends.
     return_at: Option<i32>,
@@ -1033,7 +1033,7 @@ fn set_mover_state(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId, state:
 /// `pos2` `ReturnToPos1` is put `wait` on. A use during a leg runs
 /// `Blocked_Door`'s reversal, which vcod does not model: a script sees a
 /// leg only for 100 ms after a use. Returns false for anything not a sine
-/// mover (cod11-combat.md 5.9, "Use_BinaryMover").
+/// mover (cod11-combat.md 5.9, "useBy on a gun, a sine mover").
 pub fn use_binary(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> bool {
     let Some(state) = host
         .movers

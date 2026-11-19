@@ -742,6 +742,18 @@ attachments assemble.
   `holdrand`: 9.6's "scripts' own generator" at 0x817e338 is this one.
 - So the bullet spread, the gun spring and the melee's damage roll draw
   from `rand()`; a rocket's wobble does not. VERIFIED, the call sites.
+- A thrower who leaves: `fire_grenade` stores the thrower into
+  `r.ownerNum` (`+0x150`) and `+0x18c` (lnxded 0x810e745, 0x810e751).
+  `ClientDisconnect` (0x80f94ce) frees the client's entity through
+  `G_FreeEntity` (call at 0x80f95f0), whose sweep (0x811eb3e, called at
+  0x811eebf) walks every entity in use and stores 0 into `+0x18c` where
+  it holds the freed entity (0x811eb86..0x811eb97) and 0x3ff into
+  `+0x150` where it holds its number (0x811eba1..0x811ebb2). VERIFIED
+  (the instructions). INFERRED: `+0x18c` is Q3's `parent`, as 1.1d's
+  `+0x198` (cod11-combat.md 13.7), so the next client into the slot is
+  never the grenade's attacker. vcod clears `Missile::owner` in
+  `Cod2Level::disconnect`. Whether `G_ExplodeMissile` then walks the
+  splash with no attacker is not read here; vcod walks none.
 
 ### 2.7 The melee
 

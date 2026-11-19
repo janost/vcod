@@ -346,7 +346,7 @@ pub fn eye_bob(ps: &PlayerState, view: [f32; 3]) -> Vec3 {
 /// 0x7b8ea) add to a shot's or a throw's start: [`eye_bob`]'s two factors
 /// at the game module's precision (`BG_GetBobCycle` 1.5 0x40a05 rounds the
 /// cycle to a float), the side one along the right of `ps.viewangles`
-/// (combat doc 2.1, "1.5 and United Offensive"). Returns `at` with the
+/// (combat doc 2.1, "United Offensive and 1.5"). Returns `at` with the
 /// bob added, up first, in retail's order.
 pub fn add_muzzle_bob(ps: &PlayerState, at: Vec3) -> Vec3 {
     let f = std::f32::consts::PI * (f32::from(ps.bob_cycle) / 255.0);

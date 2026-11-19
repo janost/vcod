@@ -132,10 +132,11 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
 - A bot on a jump edge jumps by the walk's own rule (`nav::PinJump`: two
   pinned ticks, a bob, or right under the top; no `jump_clear` room test;
   pinned off its pace toward the top and, on the ground, off the distance
-  moved too) and steers at `NavGraph::aim`. Every non-leap jump edge is
-  walked again that way, aimed there (`NavGraph::reprove_jumps`,
-  `nav::as_a_bot`). A change to the bot's jump goes in `PinJump` or
-  `as_a_bot`, or the bot and the graph part. What a bot's jump adds (no room
+  moved too) and steers at `NavGraph::aim`. Every non-leap jump edge but
+  `link_pockets'` is walked again that way, aimed there
+  (`NavGraph::reprove_jumps`, `nav::as_a_bot`); the pockets' come after
+  the re-proof (bot-navigation.md, "Other rules"). A change to the bot's
+  jump goes in `PinJump` or `as_a_bot`, or the bot and the graph part. What a bot's jump adds (no room
   test, the ramp wait) stays out of the flood's walks: in them it reshapes
   the graph. A jump edge is run forward whatever its drop: only the forward
   walk jumps, so every jump edge was proved that way.
@@ -511,7 +512,7 @@ otherwise.
 - 1.5's and UO's `ClientSpawn` thinks on the client's last cmd, not 1.1's
   null one (`ClientSim::spawn_cmd`). A client holding prone lies down along
   the spawn point's yaw before the script turns him, and a spectator flies
-  off the spot on his held keys (cod15-movement.md 4, "The spawn's
+  off the spot on his held keys (cod15-movement.md 4.2, "The spawn's
   lie-down"). The think runs twice in vcod, both through
   `ClientSim::spawn_think_on`: on a fresh sim in the `spawn` builtin, for the
   origin the spawning thread reads, and on the real sim in the frame's spawn
@@ -787,7 +788,7 @@ otherwise.
 ### Rendering and sound
 
 - UO's impact tables spell their explode paths with backslashes. `Pk3Fs`
-  reads `\` as `/`, as the engine's lookup does (coduo-diff.md 19,
+  reads `\` as `/`, as the engine's lookup does (coduo-diff.md 19.1,
   "Backslashed rows").
 - A rider poses through the server's `Controllers::rider` and
   `playerpose::seat_inputs` on both sides, but the cgame scales the jeep's

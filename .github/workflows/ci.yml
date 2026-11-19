@@ -28,10 +28,14 @@ env:
   # on purpose, together with nightly.yml's.
   RUST_TOOLCHAIN: "1.100.0"
 
+# Each timeout is about four times a warm-cache run (check 12 min, the
+# Windows suite 24), so a hung test does not hold a runner for the six-hour
+# default.
 jobs:
   check:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -87,6 +91,7 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -112,6 +117,7 @@ jobs:
   msrv:
     if: github.event_name != 'schedule' && github.workflow == 'CI'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -134,6 +140,7 @@ jobs:
   # block an unrelated merge.
   deny:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

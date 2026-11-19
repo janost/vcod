@@ -230,7 +230,7 @@ pub fn body_frame(angles: [f32; 3]) -> Quat {
 /// a bone missing runs the DObj's controller hook, which on 1.5 and UO eases
 /// the controls one more step from where the last build left them, in this
 /// stamp or an earlier one; a stamp nothing builds in eases nothing
-/// (docs/research/coduo-vehicles.md 13, "The glide back"; cod11-movers.md
+/// (docs/research/coduo-vehicles.md 13.7, "The glide back"; cod11-movers.md
 /// 15).
 #[derive(Clone, Default, Debug)]
 pub struct DobjStamps {
@@ -574,7 +574,7 @@ pub fn muzzle_point(ps: &PlayerState) -> Vec3 {
 /// is `CalcMuzzlePoint` (1.5 game 0x7e91f, UO 0x7b8ea): `ps.origin` plus
 /// the eye (UO: 28 in a vehicle seat), then, unless on a turret, UO's
 /// bipod trace, the walk bob, the lean and a floor 8 over the feet (combat
-/// doc 2.1, "1.5 and United Offensive").
+/// doc 2.1, "United Offensive and 1.5").
 pub fn muzzle_point_in(ps: &PlayerState, world: Option<MuzzleWorld<'_>>) -> Vec3 {
     if !ps.rules.v15() {
         // `G_AddLean`, the offset `PlayerState::view` adds, on the snapped
@@ -1367,7 +1367,8 @@ pub struct HitBody {
 /// both anim channels and the controllers' inputs.
 #[derive(Clone, Default, Debug)]
 pub struct BodyPose {
-    pub assembly: crate::game::hitrig::Assembly,
+    /// Shared with the DObj record that built it: a mirror's copy is a count.
+    pub assembly: std::rc::Rc<crate::game::hitrig::Assembly>,
     /// Wire `legsAnim` / `torsoAnim` and each channel's clip clock.
     pub legs: i32,
     pub torso: i32,
@@ -1398,7 +1399,7 @@ pub struct BodyPose {
     /// The entity fields the controllers' hook reads off `s` as the
     /// client's last `BG_PlayerStateToEntityState` wrote them, which runs
     /// after each cmd's move and in `SetClientOrigin` as well as in the end
-    /// frame (docs/research/coduo-vehicles.md 13, "The weapon-swap frame").
+    /// frame (docs/research/coduo-vehicles.md 13.7, "The weapon-swap frame").
     pub es: HookEs,
     /// The record's seat angles (`+0x3f4`): the last seat tag an end frame
     /// placed the rider by, kept past an exit, zero from the connect.
@@ -1473,7 +1474,7 @@ impl BodyPose {
     /// rides, where and armed or not, and the `eFlags` the hook tests (a
     /// turret's use frame reads him mounted), come off the entity as his
     /// last cmd left it, the angles off the record as the end frame wrote it
-    /// (coduo-vehicles.md 13, "The weapon-swap frame"; cod11-turrets.md
+    /// (coduo-vehicles.md 13.7, "The weapon-swap frame"; cod11-turrets.md
     /// 13.9, "The mount's blend in").
     pub fn target_controllers(&self) -> Option<vcod_common::playerpose::Controllers> {
         use vcod_common::playerpose::{BodySeat, Controllers};
@@ -2703,7 +2704,7 @@ mod tests {
 
     /// Each build eases the controls a step on from the last build's, in
     /// its stamp or an earlier one, and a bone the first build posed keeps
-    /// the first's (coduo-vehicles.md 13, "The glide back"; movers doc 15).
+    /// the first's (coduo-vehicles.md 13.7, "The glide back"; movers doc 15).
     #[test]
     fn each_build_eases_the_controls_once_more() {
         use vcod_common::playerpose::Controllers;

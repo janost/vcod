@@ -1523,7 +1523,7 @@ slot before it gives.
 VERIFIED: past `BG_GivePlayerWeapon` the method calls nothing that sets
 ammo, on 1.1 (0x43df4), 1.5 (0x3f93d) and UO (0x480f9), so a weapon set into
 a slot keeps whatever its clip and ammo indices held. UO's rank-3
-`binoculars_mp` reads 0 rounds on retail (coduo-diff.md 22, "Battle rank").
+`binoculars_mp` reads 0 rounds on retail (coduo-diff.md 22.3, "Battle rank").
 
 VERIFIED: `BG_TakePlayerWeapon` returns at once for a weapon not held
 (`Com_BitCheck` at 0x36b92, branch at 0x36b9c) and ends in a `Com_BitClear` of

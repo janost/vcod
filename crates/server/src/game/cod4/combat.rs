@@ -2185,6 +2185,70 @@ pub(super) const CONTENTS_CORPSE_FRESH: u32 = 0x400_4000;
 mod tests {
     use super::*;
 
+    /// `flinchYawAnim` off the blow's yaw less the view's whole degrees:
+    /// 0 from 315 or under 45, 2 to 135, 1 to 225, 3 to 315, and 0 with
+    /// no direction (cod4-combat.md 4).
+    #[test]
+    fn the_flinch_takes_its_bucket_off_the_whole_degrees() {
+        let east = Some([1.0, 0.0, 0.0]);
+        let at = |view: f32| flinch_yaw(east, view);
+        // The view yaw goes into 0..360, then loses its fraction.
+        assert_eq!(at(0.0), 0);
+        assert_eq!(at(-45.0), 2);
+        assert_eq!(at(-135.0), 1);
+        assert_eq!(at(-225.0), 3);
+        assert_eq!(at(45.0), 0);
+        assert_eq!(at(46.0), 3);
+        assert_eq!(at(45.9), 0);
+        assert_eq!(at(-45.5), 2);
+        assert_eq!(flinch_yaw(None, 90.0), 0);
+        assert_eq!(flinch_yaw(Some([0.0, 1.0, 0.0]), 0.0), 2);
+    }
+
+    /// The damage times the ms a point, truncated, added on; past the cap
+    /// the cap itself, truncated.
+    #[test]
+    fn the_damage_timer_adds_and_caps_as_floats() {
+        assert_eq!(damage_timer(0, 10, 50.0, 1000.0), 500);
+        assert_eq!(damage_timer(0, 7, 33.3, 1000.0), 233);
+        assert_eq!(damage_timer(900, 10, 50.0, 1000.0), 1000);
+        assert_eq!(damage_timer(900, 10, 50.0, 999.9), 999);
+        assert_eq!(damage_timer(900, 0, 50.0, 999.9), 900);
+    }
+
+    /// The push's share by stance, truncated and capped at 60, as speed
+    /// `g_knockback` over the 250 of mass; none on a turret or for a push
+    /// that truncates to 0.
+    #[test]
+    fn the_knockback_takes_its_share_by_stance() {
+        use vcod_cod4::pmove::{ef, pmf};
+        let push = |flags: u32, e_flags: u32, damage: i32| {
+            let mut v = [0.0, 0.0, 10.0];
+            let p = knockback(&mut v, flags, e_flags, damage, [1.0, 0.0, 0.0], 1000.0);
+            (p, v)
+        };
+        assert_eq!(push(0, 0, 100), (Some(30), [120.0, 0.0, 10.0]));
+        assert_eq!(push(pmf::DUCKED, 0, 100), (Some(15), [60.0, 0.0, 10.0]));
+        assert_eq!(
+            push(pmf::PRONE | pmf::DUCKED, 0, 100),
+            (Some(2), [8.0, 0.0, 10.0])
+        );
+        assert_eq!(push(0, 0, 1000), (Some(60), [240.0, 0.0, 10.0]));
+        assert_eq!(push(pmf::PRONE, 0, 30), (None, [0.0, 0.0, 10.0]));
+        assert_eq!(push(0, ef::TURRET & 0x100, 100), (None, [0.0, 0.0, 10.0]));
+    }
+
+    /// `damagePitch` and `damageYaw` in 256ths of a turn, 255 both for a
+    /// blow from nowhere.
+    #[test]
+    fn the_damage_direction_packs_256ths_of_a_turn() {
+        assert_eq!(damage_direction(None), [255, 255]);
+        assert_eq!(damage_direction(Some([0.0, 1.0, 0.0])), [0, 64]);
+        assert_eq!(damage_direction(Some([-1.0, 0.0, 0.0])), [0, 128]);
+        assert_eq!(damage_direction(Some([0.0, 0.0, -1.0])), [64, 0]);
+        assert_eq!(damage_direction(Some([0.0, 0.0, 1.0])), [192, 0]);
+    }
+
     #[test]
     fn the_disc_draw_stays_in_the_unit_disc() {
         for t in [1, 47950, 48000, 123_456] {

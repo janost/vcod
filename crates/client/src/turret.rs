@@ -2,7 +2,7 @@
 //! entity's `angles2`, which of its two anims plays, and the first-person eye
 //! a gunner sees from. `cgame_mp_x86.dll` (1.1), docs/research/cod11-turrets.md
 //! section 14; UO's view and barrel (uo cgame 0x30041550, 0x3001e9f0),
-//! coduo-diff.md 19, "The turret view".
+//! coduo-diff.md 19.5, "The turret view".
 
 use glam::Vec3;
 /// On a playerstate: riding a mounted gun, one bit pair per gun stance.

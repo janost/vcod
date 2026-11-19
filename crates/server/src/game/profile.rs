@@ -78,8 +78,6 @@ pub struct HostProfile {
     pub print: PrintRules,
     /// The dvars `setCvar` stores as a colour (CoD2's `g_TeamColor_*`).
     pub color_dvars: &'static [&'static str],
-    /// The scoreboard reply is cut at this many bytes (CoD2's 1024).
-    pub scoreboard_cap: Option<usize>,
     /// `addTestClient` connects the bot as a real client connects and ends
     /// in `SV_ClientEnterWorld` (CoD2's `SV_AddTestClient`, lnxded
     /// 0x80913da): a fresh client state, the roster connecting then active.
@@ -244,7 +242,6 @@ const fn cod1(defs: &'static Defs, builtins: fn() -> &'static BuiltinSet, v1: bo
             plain_packer: false,
         },
         color_dvars: &[],
-        scoreboard_cap: None,
         test_client_enters_world: false,
         loop_sounds_broadcast_time: false,
         broadcast_time_sends: false,
@@ -313,7 +310,6 @@ pub static COD2: HostProfile = HostProfile {
         plain_packer: true,
     },
     color_dvars: crate::game::builtins::cvar::COD2_COLOR_DVARS,
-    scoreboard_cap: Some(1024),
     test_client_enters_world: true,
     loop_sounds_broadcast_time: true,
     broadcast_time_sends: true,
@@ -375,7 +371,6 @@ pub static COD4: HostProfile = HostProfile {
         plain_packer: true,
     },
     color_dvars: crate::game::builtins::cvar::COD4_COLOR_DVARS,
-    scoreboard_cap: Some(1024),
     test_client_enters_world: true,
     loop_sounds_broadcast_time: true,
     broadcast_time_sends: true,

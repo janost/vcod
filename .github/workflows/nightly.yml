@@ -51,6 +51,9 @@ jobs:
             target: aarch64-apple-darwin
             name: macos-arm64
     runs-on: ${{ matrix.os }}
+    # About ten times a warm build's 5 min. publish has none: a cut publish
+    # would leave the release half replaced.
+    timeout-minutes: 60
     # A newer push cancels this build, never a publish in progress.
     concurrency:
       group: nightly-build-${{ matrix.name }}

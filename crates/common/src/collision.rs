@@ -720,7 +720,7 @@ pub struct ModelSurf {
 /// frame, enters its stored bounds before the best fraction so far
 /// (0x805e387, no epsilon). A triangle a later surface carries can then
 /// lose to one found first even where its backed-off fraction is smaller
-/// (docs/research/coduo-vehicles.md 13, "A blast on a hull").
+/// (docs/research/coduo-vehicles.md 13.3, "A blast on a hull").
 pub fn clip_model_surfs(
     start: Vec3,
     end: Vec3,
@@ -1251,7 +1251,7 @@ const AXES: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
 /// A lump-4 brush's sides as clip planes, appended to `out` and offset to
 /// `origin`, plus the brush's axial bounds. Sides 0..6 are the bit-cast axial
 /// bounds and sides 6.. index `MapWorld::planes`
-/// (docs/research/bsp-ibsp59-format.md, "Brushes"). Point p is inside the
+/// (docs/research/bsp-ibsp59-format.md, "Lump 4, brushes"). Point p is inside the
 /// brush iff n·p <= d for every plane returned.
 pub fn brush_side_planes(
     bsp: &MapWorld,
@@ -6182,7 +6182,7 @@ mod tests {
     /// A point sliding down a hull's side onto its deck: the side's
     /// backed-off fraction is under the deck's, but the deck's surface comes
     /// first and the side's bounds start past it, so the posed clip stops on
-    /// the deck (coduo-vehicles.md 13, "A blast on a hull").
+    /// the deck (coduo-vehicles.md 13.3, "A blast on a hull").
     #[test]
     fn a_later_surface_past_the_best_fraction_is_not_clipped() {
         let tri = |a: [f32; 3], b: [f32; 3], c: [f32; 3]| ModelTri {

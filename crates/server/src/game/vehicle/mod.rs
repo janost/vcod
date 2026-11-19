@@ -32,7 +32,8 @@ const NONE: i32 = 1023;
 pub const THINK_MS: i32 = 50;
 
 /// What the vehicle entity carries on the wire beyond its pose
-/// (docs/research/coduo-vehicles.md 12, "The entity").
+/// (docs/research/coduo-vehicles.md 9, as the cgame reads it; 10.4 and
+/// 11.1).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VehicleWire {
     /// Turret pitch and yaw off the hull, the gunner's pitch.
@@ -197,6 +198,10 @@ pub struct Vehicle {
     /// burns until `_tankeffects_gmi`'s second blast deletes it
     /// (coduo-vehicles.md 15.2), what bots keep clear of.
     pub dead: bool,
+    /// `takedamage` (+0x17d): set by the spawn (0x7c935), written by
+    /// `setTakeDamage`; `G_Damage` and `G_RadiusDamage` skip a vehicle
+    /// without it (coduo-vehicles.md 13).
+    pub takedamage: bool,
 }
 
 /// The level's vehicles: the files, the pool and each live vehicle.
@@ -554,6 +559,7 @@ pub fn spawn(
             next_think: host.level_time_ms + THINK_MS,
             initialized: false,
             dead: false,
+            takedamage: true,
         },
     );
     if !loading {
@@ -604,6 +610,7 @@ impl Vehicle {
             next_think: 0,
             initialized: false,
             dead: false,
+            takedamage: true,
         }
     }
 }
@@ -650,7 +657,8 @@ pub fn placed_models(host: &mut GameHost, cx: &mut Cx) -> Vec<crate::game::comba
         if hull.tris.is_empty() {
             continue;
         }
-        let owner = host.vehicles.live[&id].seats[1].map(|s| s as u32);
+        let v = &host.vehicles.live[&id];
+        let (owner, takes_damage) = (v.seats[1].map(|s| s as u32), v.takedamage);
         let model = seat::model_name(host, cx, id);
         let bounds = host
             .model_bounds_of(&model)
@@ -662,7 +670,7 @@ pub fn placed_models(host: &mut GameHost, cx: &mut Cx) -> Vec<crate::game::comba
             tris: hull.tris,
             surfs: hull.surfs,
             owner,
-            takes_damage: true,
+            takes_damage,
             body: false,
             bounds,
         });
@@ -1172,7 +1180,7 @@ pub fn vehicle_damage(
     dflags: i32,
     mod_: &str,
 ) -> Vec<(&'static str, Vec<Value>)> {
-    let Some(v) = host.vehicles.live.get(&id) else {
+    let Some(v) = host.vehicles.live.get(&id).filter(|v| v.takedamage) else {
         return Vec::new();
     };
     let info = host.vehicles.info_of(v).clone();
