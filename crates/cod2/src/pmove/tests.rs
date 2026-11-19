@@ -4,6 +4,7 @@
 use glam::Vec3;
 use vcod_common::collision::{CollisionWorld, ramp_test_world, test_world};
 use vcod_common::movetrace::MoveWorld;
+use vcod_common::net::protocol::ENTITYNUM_WORLD;
 use vcod_common::patch::Arith;
 
 use super::*;

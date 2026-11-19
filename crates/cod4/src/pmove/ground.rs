@@ -3,6 +3,7 @@
 
 use glam::Vec3;
 use vcod_common::clipmap::{SURF_NODAMAGE, SURF_NOSTEPS, SURF_SLICK, surface_material};
+use vcod_common::pmshared::airborne;
 
 use super::fpu::{self, d};
 use super::slide::jump_clear;
@@ -51,13 +52,6 @@ const NUDGES: [[f32; 3]; 26] = [
     [-1.0, 1.0, -1.0],
 ];
 
-fn airborne(pm: &mut Pmove, pml: &mut Pml) {
-    pm.ps.ground_entity_num = ENTITYNUM_NONE;
-    pml.ground_plane = false;
-    pml.almost_ground_plane = false;
-    pml.walking = false;
-}
-
 /// `PM_GroundTrace`.
 pub(crate) fn ground_trace(pm: &mut Pmove, pml: &mut Pml) {
     let o = pm.ps.origin;
@@ -81,7 +75,7 @@ pub(crate) fn ground_trace(pm: &mut Pmove, pml: &mut Pml) {
         start.z = (d(pm.ps.origin.z) - d(RETRY_DOWN)) as f32;
         t = pm.trace(start, end);
         if t.startsolid {
-            airborne(pm, pml);
+            airborne(pm.ps, pml);
             return;
         }
         pml.ground_trace = t;
@@ -96,7 +90,7 @@ pub(crate) fn ground_trace(pm: &mut Pmove, pml: &mut Pml) {
         && fpu::dot(ps.velocity, t.normal) > d(KICK_OFF)
     {
         // Thrown off the plane.
-        airborne(pm, pml);
+        airborne(pm.ps, pml);
         return;
     }
     if !t.walkable {
@@ -115,7 +109,7 @@ pub(crate) fn ground_trace(pm: &mut Pmove, pml: &mut Pml) {
         crash_land(pm, pml);
     }
     pm.ps.ground_entity_num = (t.entity_num & 0xffff) as i32;
-    pm.add_touch(t.entity_num & 0xffff);
+    pm.touch.add(t.entity_num & 0xffff);
 }
 
 /// `PM_CorrectAllSolid`: the first of the nudges that starts clear moves
@@ -134,7 +128,7 @@ fn correct_all_solid(pm: &mut Pmove, pml: &mut Pml) -> Option<Tr> {
         pm.ps.origin = fpu::lerp(p, end, t.fraction);
         return Some(t);
     }
-    airborne(pm, pml);
+    airborne(pm.ps, pml);
     jump_clear(pm.ps);
     None
 }

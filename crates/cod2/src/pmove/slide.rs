@@ -5,6 +5,7 @@ use glam::Vec3;
 
 use super::fpu::{self, d};
 use super::{ENTITYNUM_NONE, Pml, Pmove, ev, pm_type, pmf};
+pub(crate) use vcod_common::pmshared::jump_clear;
 
 /// rodata 0x8154ee0: the clip's 0.001.
 const OVERCLIP: f32 = f32::from_bits(0x3a83_126f);
@@ -112,7 +113,7 @@ pub(crate) fn slide_move(pm: &mut Pmove, pml: &mut Pml, gravity: bool) -> bool {
         if t.fraction == 1.0 {
             break;
         }
-        pm.add_touch(t.entity_num);
+        pm.touch.add(t.entity_num);
         time_left = (d(time_left) - d(time_left) * d(t.fraction)) as f32;
         if planes.len() > MAX_CLIP_PLANES - 1 {
             pm.ps.velocity = Vec3::ZERO;
@@ -169,12 +170,6 @@ pub(crate) fn slide_move(pm: &mut Pmove, pml: &mut Pml, gravity: bool) -> bool {
         pm.ps.velocity = primal;
     }
     bumps != 0
-}
-
-/// `Jump_ClearState` (0x80dc718).
-pub(crate) fn jump_clear(ps: &mut super::PlayerState) {
-    ps.pm_flags &= !pmf::JUMPING;
-    ps.jump_origin_z = 0.0;
 }
 
 /// `Jump_GetStepHeight` (0x80dc73a): a jump below its height steps at most

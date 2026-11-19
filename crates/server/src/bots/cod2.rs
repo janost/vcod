@@ -193,7 +193,6 @@ fn read_walk_body(
     jump_held: bool,
     world: &vcod_common::collision::CollisionWorld,
 ) {
-    use vcod_common::pmove::Stance;
     ps.origin = b.origin;
     ps.velocity = b.velocity;
     ps.yaw = b.view_angles[1].to_radians();
@@ -204,11 +203,7 @@ fn read_walk_body(
     }
     ps.on_ladder = b.pm_flags & pmf::LADDER != 0;
     ps.ladder_normal = b.ladder_vec;
-    ps.stance = match b.effective_stance() {
-        vcod_cod2::pmove::Stance::Stand => Stance::Stand,
-        vcod_cod2::pmove::Stance::Crouch => Stance::Crouch,
-        vcod_cod2::pmove::Stance::Prone => Stance::Prone,
-    };
+    ps.stance = b.effective_stance();
     ps.ducked = b.pm_flags & (pmf::DUCKED | pmf::PRONE) != 0;
     ps.since_jump_ms = (b.command_time - b.jump_time).max(0) as f32;
     ps.jump_penalty = b.pm_flags & pmf::JUMPING != 0;

@@ -31,6 +31,7 @@ pub mod patch;
 pub mod pk3;
 pub mod playerpose;
 pub mod pmove;
+pub mod pmshared;
 pub mod props;
 pub mod rng;
 pub mod shader;

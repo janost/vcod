@@ -1,8 +1,9 @@
 //! CoD4 1.7's player movement: `Pmove` and `PmoveSingle` (docs/research/
 //! cod4-pmove.md), seeded from CoD2's (`vcod_cod2::pmove`), whose descendant
 //! it is, with its own 1.7 playerstate. The two share the collision kernels
-//! (`vcod_common::clipmap`) and nothing else yet: the functions the moves
-//! A/B shows equal fold later.
+//! (`vcod_common::clipmap`), the x87 leaf helpers (`vcod_common::x87`) and
+//! what `vcod_common::pmshared` holds: `pml_t`, the touch list and the
+//! playerstate fields both name alike. Everything else stays forked.
 //!
 //! What differs from CoD2 and why each piece reads as it does is in the
 //! doc; `cod4_moves_ab` replays retail captures through [`player_step`].
@@ -39,6 +40,9 @@ use crate::collision::ClipMap;
 
 pub use slide::clip_velocity;
 pub use stance::lerp_duration as view_height_lerp_duration;
+pub use vcod_common::pmove::Stance;
+pub(crate) use vcod_common::pmshared::leave_ladder;
+use vcod_common::pmshared::{PmState, TouchList};
 
 /// `groundEntityNum` off the ground, and the world's number.
 pub const ENTITYNUM_NONE: i32 = 1023;
@@ -569,11 +573,37 @@ impl PlayerState {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Stance {
-    Stand,
-    Crouch,
-    Prone,
+impl PmState for PlayerState {
+    const PMF_PRONE: u32 = pmf::PRONE;
+    const PMF_DUCKED: u32 = pmf::DUCKED;
+    const PMF_LADDER: u32 = pmf::LADDER;
+    const PMF_LADDER_LEFT: u32 = pmf::LADDER_LEFT;
+    const PMF_JUMPING: u32 = pmf::JUMPING;
+
+    fn command_time(&mut self) -> &mut i32 {
+        &mut self.command_time
+    }
+    fn pm_flags(&mut self) -> &mut u32 {
+        &mut self.pm_flags
+    }
+    fn pm_time(&mut self) -> &mut i32 {
+        &mut self.pm_time
+    }
+    fn origin(&mut self) -> &mut Vec3 {
+        &mut self.origin
+    }
+    fn velocity(&mut self) -> &mut Vec3 {
+        &mut self.velocity
+    }
+    fn ground_entity_num(&mut self) -> &mut i32 {
+        &mut self.ground_entity_num
+    }
+    fn jump_origin_z(&mut self) -> &mut f32 {
+        &mut self.jump_origin_z
+    }
+    fn timers(&mut self) -> [&mut i32; 2] {
+        [&mut self.legs_timer, &mut self.torso_timer]
+    }
 }
 
 /// A trace as 1.7's pmove reads it: no end point, `walkable` kept.
@@ -720,21 +750,8 @@ impl PmWorld for ClipMap {
     }
 }
 
-/// `pml_t`: what one `PmoveSingle` keeps beside the playerstate.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Pml {
-    pub forward: Vec3,
-    pub right: Vec3,
-    pub up: Vec3,
-    pub frametime: f32,
-    pub msec: i32,
-    pub walking: bool,
-    pub ground_plane: bool,
-    pub almost_ground_plane: bool,
-    pub ground_trace: Tr,
-    pub previous_origin: Vec3,
-    pub previous_velocity: Vec3,
-}
+/// `pml_t` over 1.7's trace.
+pub(crate) type Pml = vcod_common::pmshared::Pml<Tr>;
 
 /// The usercmd fields pmove reads (`vcod_cod4::net::clmsg::UserCmd`'s,
 /// angles as the wire's shorts).
@@ -788,8 +805,7 @@ pub struct Pmove<'a> {
     /// The process's `rand()`: an anim script event draws its command off
     /// it (cod4-combat.md 10.9); without it the first command plays.
     pub rand: Option<&'a mut dyn FnMut() -> i32>,
-    /// `touchents`: every entity the cmd met, first meeting first.
-    pub touch: Vec<u32>,
+    pub touch: TouchList,
     /// The horizontal speed `PM_Footsteps` measured.
     pub xyspeed: f32,
     /// Each step `PM_StepSlideMove` took, as `(commandTime, dz)`: what it
@@ -802,8 +818,6 @@ pub struct Pmove<'a> {
     pub(crate) mins: Vec3,
     pub(crate) maxs: Vec3,
 }
-
-const MAX_TOUCH: usize = 32;
 
 impl<'a> Pmove<'a> {
     pub fn new(
@@ -829,23 +843,12 @@ impl<'a> Pmove<'a> {
             defs: None,
             anim: None,
             rand: None,
-            touch: Vec::new(),
+            touch: TouchList::default(),
             xyspeed: 0.0,
             view_steps: Vec::new(),
             mantle_started: None,
             mins: PLAYER_MINS,
             maxs: PLAYER_MAXS,
-        }
-    }
-
-    /// `PM_AddTouchEnt`: once each, never the world.
-    pub(crate) fn add_touch(&mut self, entity: u32) {
-        if entity != ENTITYNUM_WORLD as u32
-            && entity != ENTITYNUM_NONE as u32
-            && self.touch.len() < MAX_TOUCH
-            && !self.touch.contains(&entity)
-        {
-            self.touch.push(entity);
         }
     }
 
@@ -881,7 +884,7 @@ impl<'a> Pmove<'a> {
         if !t.startsolid || t.contents & CONTENTS_BODY == 0 {
             return t;
         }
-        self.add_touch(t.entity_num);
+        self.touch.add(t.entity_num);
         self.tracemask &= !CONTENTS_BODY;
         self.raw_trace(start, end, mins, maxs, mask & !CONTENTS_BODY)
     }
@@ -934,7 +937,7 @@ pub fn player_step_viewed(
     pm.weapon = weapon;
     pmove(&mut pm);
     *oldcmd = *cmd;
-    (pm.touch, pm.view_steps)
+    (pm.touch.into_vec(), pm.view_steps)
 }
 
 /// [`player_step`] with the weapon half: `defs` are the level's weapon defs
@@ -973,7 +976,7 @@ pub fn player_step_animated<'a>(
     pm.rand = rand;
     pmove(&mut pm);
     *oldcmd = *cmd;
-    (pm.touch, pm.mantle_started)
+    (pm.touch.into_vec(), pm.mantle_started)
 }
 
 /// Seconds in a millisecond: `PmoveSingle`'s frametime factor (0x8209640,
@@ -1281,14 +1284,6 @@ fn walking_flag(pm: &mut Pmove) {
     {
         ps.pm_flags |= pmf::SIGHT_WALK;
     }
-}
-
-/// `PM_ClearLadderFlag`: a player taken off the ladder notes it.
-pub(crate) fn leave_ladder(ps: &mut PlayerState) {
-    if ps.pm_flags & pmf::LADDER != 0 {
-        ps.pm_flags |= pmf::LADDER_LEFT;
-    }
-    ps.pm_flags &= !pmf::LADDER;
 }
 
 /// `PM_DropTimers`: `pm_time` runs out, and with it the land, knockback

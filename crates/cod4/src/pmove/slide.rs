@@ -5,6 +5,7 @@ use glam::Vec3;
 
 use super::fpu::{self, d};
 use super::{ENTITYNUM_NONE, MAX_CLIENTS, Pml, Pmove, pm_type, pmf};
+pub(crate) use vcod_common::pmshared::jump_clear;
 
 /// `EQUAL_EPSILON`: the clip's 0.001.
 const OVERCLIP: f32 = f32::from_bits(0x3a83_126f);
@@ -116,7 +117,7 @@ pub(crate) fn slide_move(pm: &mut Pmove, pml: &mut Pml, gravity: bool) -> bool {
         if t.fraction == 1.0 {
             break;
         }
-        pm.add_touch(t.entity_num);
+        pm.touch.add(t.entity_num);
         time_left = (d(time_left) - d(t.fraction) * d(time_left)) as f32;
         if planes.len() >= MAX_CLIP_PLANES {
             pm.ps.velocity = Vec3::ZERO;
@@ -182,12 +183,6 @@ fn crease(a: Vec3, b: Vec3) -> glam::DVec3 {
     let len = ((c.x * c.x + c.y * c.y) + c.z * c.z).sqrt();
     let inv = if -len < 0.0 { 1.0 / len } else { 1.0 };
     c * inv
-}
-
-/// `Jump_ClearState`.
-pub(crate) fn jump_clear(ps: &mut super::PlayerState) {
-    ps.pm_flags &= !pmf::JUMPING;
-    ps.jump_origin_z = 0.0;
 }
 
 /// `Jump_GetStepHeight` (0x805072a): how far a jumping body that met
