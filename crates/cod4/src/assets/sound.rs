@@ -208,7 +208,11 @@ pub fn loaded_sound<R: BufRead>(
         // The samples ride the temp block, aliased like an asset handle.
         w.push(Block::Temp);
         let data = match s.ptr(40) {
-            Pointer::Null | Pointer::Offset { .. } => None,
+            Pointer::Null => None,
+            Pointer::Offset { .. } => {
+                w.unresolved("sound samples");
+                None
+            }
             p => {
                 if p == Pointer::InlineShared {
                     w.alias_slot()?;
