@@ -1896,6 +1896,7 @@ impl Server {
             cvar_overrides: Vec::new(),
             fs: None,
             paks: Default::default(),
+            systeminfo: None,
             pure_check: None,
             rotation: console::Rotation::default(),
             sv_map_rotation: String::new(),
@@ -5296,18 +5297,43 @@ impl Server {
             return;
         };
         let cvars = rt.cvars();
-        self.game.module.fall_heights = FallHeights {
+        let fall = FallHeights {
             min: atof(cvars.get("bg_fallDamageMinHeight")),
             max: atof(cvars.get("bg_fallDamageMaxHeight")),
         };
+        self.game.module.fall_heights = fall;
+        // Rebuilt only when an input moved or something else wrote slot 1.
+        if let Some((_, info)) = self.game.systeminfo.as_ref().filter(|(k, info)| {
+            k.0 == self.game.server_id
+                && k.1 == [fall.min.to_bits(), fall.max.to_bits()]
+                && k.2 == self.game.cheats
+                && k.3 == self.game.paks
+                && k.4 == v6
+                && rt.configstrings().get(1) == Some(info)
+        }) {
+            if let Some(slot) = self.core.configstrings.get_mut(1)
+                && slot != info
+            {
+                slot.clone_from(info);
+            }
+            return;
+        }
         let info = configstrings::systeminfo(
             self.game.server_id,
-            self.game.module.fall_heights,
+            fall,
             self.game.cheats,
             &self.game.paks,
             v6.as_deref(),
         )
         .to_string();
+        let key = (
+            self.game.server_id,
+            [fall.min.to_bits(), fall.max.to_bits()],
+            self.game.cheats,
+            self.game.paks.clone(),
+            v6,
+        );
+        self.game.systeminfo = Some((key, info.clone()));
         rt.host.configstrings.set(1, info.clone());
         if let Some(slot) = self.core.configstrings.get_mut(1) {
             *slot = info;

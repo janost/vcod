@@ -1291,7 +1291,11 @@ CoD4's end frame poses every playing body
 for the next frame's tag reads (`posed_bodies`, 7 M of `frame/end frames`'
 9.6 M at 32 bots) and evaluates the death anim choices twice a cmd and
 frame (1.3 M each); CoD1's per-frame configstring copy, systeminfo and
-serverinfo (0.24 M together). VERIFIED (instrumented runs). CoD1's
+serverinfo (`frame/configstrings`, 0.24 M together). VERIFIED
+(instrumented runs). The systeminfo is now built only when its inputs
+move (0.24 to 0.18 M on stock paks, more where the pak lists are trimmed
+every build); the table copy and the serverinfo compare stay, under 1%
+of a tick. VERIFIED (the runs' logs, 2026-11-19). CoD1's
 snapshot build, with 8 observers in the world (`OBSERVERS_PLAY=1`,
 24 bots, 1.1 mp_carentan): `messages` 13.39 M a tick, of it
 `messages/begin` (the frame's world) 3.42, `messages/snapshot` 7.78 over
