@@ -1177,33 +1177,34 @@ fn draw_ent_stages(
 /// over their joined range rasterizes the same triangles in the same
 /// order. `stops` are the item indices something else happens before
 /// (a split, the dlights), which a run never crosses.
+/// `surfaces` and `skins` are the model's, by surface.
 fn ent_run(
     items: &[SortedItem],
     k: usize,
     draws: &[EntDraw],
-    model: &DynModel,
+    (surfaces, skins): (&[VmSurface], &[Rc<EntSkin>]),
     stops: &[Option<usize>],
 ) -> usize {
     let SortedItem::Model(first) = items[k] else {
         return 1;
     };
     let d = &draws[first];
-    let skin = &model.skins[d.surf as usize];
+    let skin = &skins[d.surf as usize];
     if skin.stages.len() != 1 {
         return 1;
     }
-    let mut end = &model.vm.surfaces[d.surf as usize];
+    let mut end = &surfaces[d.surf as usize];
     let mut n = 1;
     while let Some(&SortedItem::Model(next)) = items.get(k + n) {
         let e = &draws[next];
-        let Some(surf) = model.vm.surfaces.get(e.surf as usize) else {
+        let Some(surf) = surfaces.get(e.surf as usize) else {
             break;
         };
         if e.gun
             || e.inst != d.inst
             || e.surf != d.surf + n as u32
             || stops.contains(&Some(k + n))
-            || !Rc::ptr_eq(&model.skins[e.surf as usize], skin)
+            || !Rc::ptr_eq(&skins[e.surf as usize], skin)
             || surf.bind_group != end.bind_group
             || surf.base_vertex != end.base_vertex
             || surf.first_index != end.first_index + end.index_count
@@ -9821,7 +9822,13 @@ impl Renderer {
                                 bound_model = Some(model_at);
                             }
                             let surf = &vm.surfaces[d.surf as usize];
-                            let n = ent_run(&items, j, &ent_draws, model, &run_stops);
+                            let n = ent_run(
+                                &items,
+                                j,
+                                &ent_draws,
+                                (&vm.surfaces, &model.skins),
+                                &run_stops,
+                            );
                             let last = &vm.surfaces[d.surf as usize + n - 1];
                             let skin = &model.skins[d.surf as usize];
                             let depth = if ent_prepass
@@ -9890,7 +9897,8 @@ impl Renderer {
                         }
                         let surf = &vm.surfaces[d.surf as usize];
                         let stops = [copy_at, split_at, Some(dlight_at)];
-                        let n = ent_run(&items, k, &ent_draws, model, &stops);
+                        let n =
+                            ent_run(&items, k, &ent_draws, (&vm.surfaces, &model.skins), &stops);
                         let last = &vm.surfaces[ent_draws[mi].surf as usize + n - 1];
                         let skin = &model.skins[d.surf as usize];
                         // a run is one skin, so one answer for all of it
@@ -14300,6 +14308,282 @@ mod tests {
             e(SORT_OPAQUE, Some([4, 7])),
         ]);
         assert_eq!(places, [2, 1, 0]);
+    }
+
+    /// 1.7's order inside one sort: the batch whose soup comes first in
+    /// the lit order draws first; a batch no soup reached, and the
+    /// entries past the world's, keep their registration order after.
+    #[test]
+    fn cod4_batches_of_one_sort_draw_in_lit_order() {
+        use vcod_common::mesh::IndexRange;
+        let e = |sort| SortEntry { sort, images: None };
+        let range = |batch| {
+            Some(IndexRange {
+                batch,
+                first: 0,
+                count: 3,
+            })
+        };
+        let entries = [
+            e(SORT_OPAQUE),
+            e(SORT_OPAQUE),
+            e(SORT_BLEND),
+            e(SORT_OPAQUE),
+            e(SORT_OPAQUE),
+            e(SORT_OPAQUE),
+        ];
+        // batch 1's first soup is 2nd in the lit order, batch 0's 5th; a
+        // cell's missing range takes no place
+        let ranges = [range(0), range(1), None, range(0), range(3), range(2)];
+        let order = [4, 1, 0, 7, 9, 3];
+        assert_eq!(cod4_places(&entries, &ranges, &order), [1, 0, 5, 2, 3, 4]);
+    }
+
+    /// A fade lerps every field from where it stood; a change of mode or a
+    /// zero fade snaps; a cleared fog's next target snaps too.
+    #[test]
+    fn fog_fades_within_a_mode_and_snaps_across_one() {
+        let exp = |density: f32, fade_ms| FogParams {
+            near: 0.0,
+            far: 0.0,
+            density,
+            color: [0.0; 3],
+            fade_ms,
+            start: 0.0,
+        };
+        let linear = |far: f32, fade_ms| FogParams {
+            near: 100.0,
+            far,
+            density: 1.0,
+            color: [1.0; 3],
+            fade_ms,
+            start: 0.0,
+        };
+        let mut f = FogState::default();
+        f.set_target(exp(0.2, 1000), 0.0);
+        assert_eq!(f.live.density, 0.2, "the first fog snaps");
+        f.set_target(exp(0.6, 1000), 1.0);
+        f.advance(1.25);
+        assert!((f.live.density - 0.3).abs() < 1e-6, "{}", f.live.density);
+        assert!(f.target.is_some());
+        // a new target mid-fade starts from what is displayed
+        f.set_target(exp(0.0, 1000), 1.25);
+        f.advance(1.75);
+        assert!((f.live.density - 0.15).abs() < 1e-6, "{}", f.live.density);
+        f.set_target(linear(2000.0, 1000), 2.0);
+        assert!(f.live.linear && f.live.far == 2000.0, "a mode change snaps");
+        assert!(f.target.is_none());
+        f.set_target(linear(1000.0, 0), 3.0);
+        assert_eq!(f.live.far, 1000.0, "no fade snaps");
+        f.clear();
+        assert!(!f.set);
+        f.set_target(linear(3000.0, 1000), 4.0);
+        assert_eq!(f.live.far, 3000.0, "the fog after a clear snaps");
+    }
+
+    fn vm_surface(
+        first_index: u32,
+        index_count: u32,
+        base_vertex: i32,
+        bind_group: usize,
+    ) -> VmSurface {
+        VmSurface {
+            first_index,
+            index_count,
+            base_vertex,
+            bind_group,
+            src: 0,
+        }
+    }
+
+    fn ent_skin(stages: usize) -> Rc<EntSkin> {
+        let st = crate::entity_material::EntStageDraw {
+            pipeline: 0,
+            image: crate::entity_material::StageImage::Skin,
+            slot: 0,
+            params: 0,
+            prepass: true,
+            floatz: false,
+            rigid: true,
+        };
+        Rc::new(EntSkin {
+            stages: vec![st; stages],
+            lit: true,
+            sort: SORT_OPAQUE,
+            order: 0,
+            cookie_caster: false,
+            sun_caster: false,
+            sun_cut: None,
+        })
+    }
+
+    /// An entity surface joins the next items while each is the same
+    /// instance's next surface on the same one-stage skin, bind group and
+    /// base vertex with its indices following on, and no stop or gun
+    /// comes between; each broken condition ends the run there.
+    #[test]
+    fn an_entity_run_joins_only_contiguous_surfaces_of_one_skin() {
+        let ent = |inst, surf, gun| EntDraw {
+            inst,
+            surf,
+            sort: SORT_OPAQUE,
+            order: 0,
+            gun,
+        };
+        let skin = ent_skin(1);
+        let base = || {
+            (
+                vec![
+                    vm_surface(0, 6, 0, 0),
+                    vm_surface(6, 3, 0, 0),
+                    vm_surface(9, 12, 0, 0),
+                    vm_surface(21, 3, 0, 0),
+                ],
+                vec![skin.clone(); 4],
+                vec![
+                    ent(0, 0, false),
+                    ent(0, 1, false),
+                    ent(0, 2, false),
+                    ent(0, 3, false),
+                ],
+            )
+        };
+        let items: Vec<SortedItem> = (0..4).map(SortedItem::Model).collect();
+        let run = |(surfs, skins, draws): &(Vec<VmSurface>, Vec<Rc<EntSkin>>, Vec<EntDraw>),
+                   k,
+                   stops: &[Option<usize>]| {
+            ent_run(&items, k, draws, (surfs, skins), stops)
+        };
+        let all = base();
+        assert_eq!(run(&all, 0, &[None]), 4);
+        assert_eq!(run(&all, 1, &[None]), 3);
+        assert_eq!(run(&all, 0, &[Some(2)]), 2, "a stop");
+        let mut c = base();
+        c.2[2].gun = true;
+        assert_eq!(run(&c, 0, &[None]), 2, "the gun");
+        let mut c = base();
+        c.2[2].inst = 1;
+        assert_eq!(run(&c, 0, &[None]), 2, "another instance");
+        let mut c = base();
+        c.2[2].surf = 3;
+        assert_eq!(run(&c, 0, &[None]), 2, "not the next surface");
+        let mut c = base();
+        c.1[2] = ent_skin(1);
+        assert_eq!(run(&c, 0, &[None]), 2, "an equal skin, not the same one");
+        let mut c = base();
+        c.0[2].bind_group = 1;
+        assert_eq!(run(&c, 0, &[None]), 2, "another bind group");
+        let mut c = base();
+        c.0[2].base_vertex = 100;
+        assert_eq!(run(&c, 0, &[None]), 2, "another base vertex");
+        let mut c = base();
+        c.0[2].first_index = 10;
+        assert_eq!(run(&c, 0, &[None]), 2, "a gap in the indices");
+        let mut c = base();
+        c.1 = vec![ent_skin(2); 4];
+        assert_eq!(run(&c, 0, &[None]), 1, "a two-stage skin draws alone");
+        let items = [
+            SortedItem::Model(0),
+            SortedItem::Fx(0),
+            SortedItem::Model(1),
+        ];
+        assert_eq!(
+            ent_run(&items, 0, &all.2, (&all.0, &all.1), &[None]),
+            1,
+            "another kind of item"
+        );
+    }
+
+    /// A run whose commands held from the last frame draws through a
+    /// bundle made once; a changed run replays and drops its bundle; the
+    /// runs past this frame's last go; a new target drops them all.
+    #[test]
+    fn world_runs_bundle_once_their_commands_hold() {
+        let Some((device, queue)) = headless::test_device(headless::Need::Any) else {
+            return;
+        };
+        set_msaa_samples(1);
+        let tex = |format, usage| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: None,
+                    size: wgpu::Extent3d {
+                        width: 64,
+                        height: 64,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        let colour = tex(SCENE_FORMAT, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let depth = tex(DEPTH_FORMAT, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let buf = || {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: 64,
+                usage: wgpu::BufferUsages::VERTEX,
+                mapped_at_creation: false,
+            })
+        };
+        let (a, b) = (buf(), buf());
+        let rec = |v: &wgpu::Buffer| {
+            let mut r = Recording::default();
+            r.vertices(0, v.slice(..));
+            r
+        };
+        let mut wb = WorldBundles::default();
+        let frame = |wb: &mut WorldBundles, runs: &[&wgpu::Buffer]| {
+            let mut enc = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &colour,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations::default(),
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &depth,
+                        depth_ops: Some(wgpu::Operations::default()),
+                        stencil_ops: None,
+                    }),
+                    ..Default::default()
+                });
+                wb.begin(Some(SCENE_FORMAT));
+                for v in runs {
+                    wb.draw(
+                        &mut pass,
+                        &device,
+                        rec(v),
+                        crate::frame_prof::Count::Rebundled,
+                    );
+                }
+                wb.end();
+            }
+            queue.submit([enc.finish()]);
+        };
+        let bundled = |wb: &WorldBundles| wb.runs.iter().map(|r| r.1.is_some()).collect::<Vec<_>>();
+        frame(&mut wb, &[&a, &b]);
+        assert_eq!(bundled(&wb), [false, false], "a new run replays");
+        frame(&mut wb, &[&a, &b]);
+        assert_eq!(bundled(&wb), [true, true], "held runs bundle");
+        frame(&mut wb, &[&a, &a]);
+        assert_eq!(
+            bundled(&wb),
+            [true, false],
+            "a changed run drops its bundle"
+        );
+        frame(&mut wb, &[&a]);
+        assert_eq!(bundled(&wb), [true], "runs past the last go");
+        wb.begin(None);
+        assert!(wb.runs.is_empty(), "a new target drops every run");
     }
 
     #[test]
