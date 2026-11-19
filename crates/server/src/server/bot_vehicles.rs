@@ -512,7 +512,8 @@ pub(super) struct DriveRoute {
 pub(super) struct BotDrives {
     routes: BTreeMap<usize, DriveRoute>,
     fits: HullFits,
-    graph: usize,
+    /// The graph generation the routes were found on (`BotDriver::graph`).
+    graph: u64,
 }
 
 impl BotDrives {
@@ -534,10 +535,10 @@ struct HullFits {
     fit: FitCache,
     /// Each lump-27 model's link when the fits were taken.
     linked: Vec<bool>,
-    /// The warm pass's next node, for the graph it walks; `usize::MAX`
+    /// The warm pass's next node, for the graph generation `warm_graph`; `usize::MAX`
     /// once it has passed every node.
     warm: usize,
-    warm_graph: usize,
+    warm_graph: u64,
 }
 
 impl HullFits {
@@ -616,7 +617,7 @@ impl Server {
     ) -> Option<[f32; 3]> {
         use crate::bots::Goal;
         let g = self.game.module.driver.nav.clone()?;
-        let graph = std::sync::Arc::as_ptr(&g) as usize;
+        let graph = self.game.module.driver.graph;
         let drives = &mut self.game.module.bot_drives;
         if drives.graph != graph {
             drives.graph = graph;
@@ -722,7 +723,7 @@ impl Server {
         }
         let hull = &mut self.game.module.bot_drives.fits;
         hull.relink(&world.collision, &host.model_bounds);
-        let graph = std::sync::Arc::as_ptr(g) as usize;
+        let graph = self.game.module.driver.graph;
         if hull.warm_graph != graph {
             (hull.warm_graph, hull.warm) = (graph, 0);
         }
@@ -926,7 +927,8 @@ struct Wreck {
 /// ([`Self::blocked_at`], bot-objectives.md 10.10).
 #[derive(Default)]
 pub(super) struct ParkedVehicles {
-    graph: usize,
+    /// The graph generation the nodes are on (`BotDriver::graph`).
+    graph: u64,
     each: HashMap<vcod_gsc::EntId, Parked>,
     pub(super) blocked: std::sync::Arc<[u32]>,
     /// [`Self::blocked`] and every burning hull's nodes, sorted.
@@ -998,7 +1000,7 @@ impl Server {
                 linked: host.ents.get(*id).is_some_and(|e| !e.unlinked),
             })
             .collect();
-        let graph = std::sync::Arc::as_ptr(g) as usize;
+        let graph = self.game.module.driver.graph;
         self.game
             .module
             .bot_parked
@@ -1017,14 +1019,14 @@ struct LiveHull {
 }
 
 impl ParkedVehicles {
-    /// One tick of the live vehicles on graph `g` (`graph` its identity): a
+    /// One tick of the live vehicles on graph `g` (`graph` its generation): a
     /// pose held [`PARK_TICKS`] covers the nodes its collmap blocks, a move
     /// past [`PARK_SHOVE`] lets them go, and a dead linked hull burns where
     /// it died.
     fn update(
         &mut self,
         g: &crate::nav::NavGraph,
-        graph: usize,
+        graph: u64,
         collision: &vcod_common::collision::CollisionWorld,
         live: &[LiveHull],
     ) {
