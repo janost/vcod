@@ -1,6 +1,6 @@
 # CoD 1 BSP format (IBSP version 59)
 
-Byte layouts of the map lumps vcod reads, read out of the retail `maps/mp/mp_pavlov.bsp` and cross-checked against the CoD-BSP-Decompiler project (CoDEmanX/Daevius). The parser is `crates/common/src/bsp.rs`; `crates/common/src/collision.rs` builds the clip world from the collision lumps. Where this document and the parser disagree, the parser is right. Its tests pin the census numbers (`parses_mp_pavlov`, `parses_collision_lumps_in_mp_pavlov`). Every claim is VERIFIED unless it carries its own label. All integers are little-endian.
+Byte layouts of the map lumps vcod reads, read out of the retail `maps/mp/mp_pavlov.bsp` and cross-checked against the CoD-BSP-Decompiler project (CoDEmanX/Daevius). The parser is `crates/common/src/bsp.rs`; `crates/common/src/collision/build.rs` builds the clip world from the collision lumps. Where this document and the parser disagree, the parser is right. Its tests pin the census numbers (`parses_mp_pavlov`, `parses_collision_lumps_in_mp_pavlov`). Every claim is VERIFIED unless it carries its own label. All integers are little-endian.
 
 ## Header and lump directory
 
@@ -102,7 +102,7 @@ u32 plane_or_dist       // sides 0..6 of a brush: an f32 bound, bit-cast; sides 
 u32 material            // index into lump 0: the side's own material
 ```
 
-The first six sides of every brush are axial and carry an f32 bound instead of a plane index: 0 = xmin, 1 = xmax, 2 = ymin, 3 = ymax, 4 = zmin, 5 = zmax. As clip planes (`n . p <= d` inside), side `k` with bound `b` on axis `a = k / 2` gives `normal = -axis_a, dist = -b` when `k` is even and `normal = +axis_a, dist = +b` when odd. Sides 6 and up index lump 2. On mp_pavlov every index is in range and every axial pair has `min <= max`. The parser keeps the raw u32; `bsp.rs` and `collision.rs` decode it.
+The first six sides of every brush are axial and carry an f32 bound instead of a plane index: 0 = xmin, 1 = xmax, 2 = ymin, 3 = ymax, 4 = zmin, 5 = zmax. As clip planes (`n . p <= d` inside), side `k` with bound `b` on axis `a = k / 2` gives `normal = -axis_a, dist = -b` when `k` is even and `normal = +axis_a, dist = +b` when odd. Sides 6 and up index lump 2. On mp_pavlov every index is in range and every axial pair has `min <= max`. The parser keeps the raw u32; `bsp.rs` and `collision/build.rs` decode it.
 
 A side's `material` is its own and differs from the brush's (lump 4) on structural brushes. mp_cassino brush 7930 is `textures/common/caulk` (surface flags 0x400a0, no sound surface); its +y side is `textures/italy/walls/plaster@wall_misc-06` (0x1000000, plaster) and its -x and -y sides concrete (VERIFIED, lumps 0, 3 and 4 of UO's `mp_cassino.bsp`).
 
@@ -282,7 +282,7 @@ From the materials lump, per brush via `brush.material`:
 | `0x10000` | playerclip |
 | `0x20000` | monsterclip |
 
-The masks are retail's; `collision.rs` names them.
+The masks are retail's; `collision/masks.rs` names them.
 
 | Trace | Mask | Source | vcod |
 |---|---|---|---|
@@ -294,7 +294,7 @@ The masks are retail's; `collision.rs` names them.
 
 - Of the bits above 0x20000 only 0x800000 and 0x2000000 are in a mask, and no stock material carries either.
 - 0x2000 is in the shot and blast masks and 0x80 in the blast's. Both ride the kerb and floor brushes' 0x2080 word, so a bullet stops on a kerb a player walks over.
-- `collision.rs` (`CLIP_BRUSH`) enters every brush whose word meets one of those masks or the item masks (0x81, 0x491), so the kerbs are in the clip and only the player mask passes them. UO's LMG mount brushes (0x404000) and vehicle clip brushes (0x200) enter too.
+- `collision/masks.rs` (`CLIP_BRUSH`) enters every brush whose word meets one of those masks or the item masks (0x81, 0x491), so the kerbs are in the clip and only the player mask passes them. UO's LMG mount brushes (0x404000) and vehicle clip brushes (0x200) enter too.
 - VERIFIED, `flag_census` over the stock paks: 0x2080 is the only word that meets a mask without SOLID, PLAYERCLIP or GLASS, and no 0x400-only brush exists.
 - The shot mask's 0x20 is water. vcod keeps water as volumes, not clip brushes, so a bullet does not stop at mp_harbor's water as retail's does. Missiles find it through `CollisionWorld::water_hit` and `water_trace`.
 
@@ -551,7 +551,7 @@ VERIFIED (measured 2026-10-18, `nav_build`, release, user time on a loaded machi
 
 ## Movement constants and their provenance
 
-`crates/common/src/pmove.rs` holds the tunables in one block at its top; `SURFACE_CLIP_EPSILON` is in `collision.rs` (and `patch.rs`, `leafwalk.rs`). Each row names its source: retail 1.1 `game.mp.i386.so` rodata, the wire playerstate, or a Q3 GPL header copied unchanged (`code/game/...` in id's Quake III Arena release, `src/game/...` in RTCW-MP).
+`crates/common/src/pmove.rs` holds the shared tunables in one block at its top, and each file under `pmove/` the ones only its seam reads; `SURFACE_CLIP_EPSILON` is in `collision.rs` (and `patch.rs`, `leafwalk.rs`). Each row names its source: retail 1.1 `game.mp.i386.so` rodata, the wire playerstate, or a Q3 GPL header copied unchanged (`code/game/...` in id's Quake III Arena release, `src/game/...` in RTCW-MP).
 
 | Constant | Value | Origin |
 |---|---|---|
@@ -586,7 +586,7 @@ The full rodata table is `cod11-mantle.md`, "Tunables". A row whose origin is a 
 
 - `PM_STOPSPEED` is flat, not stance-scaled. A crawl gains `19 * dt * 100` a frame because of the walk's accel floor; without the floor its `19 * dt * 28.5` = 4.33 loses to the friction's `100 * 5.5 * dt` = 4.40.
 - The wading slowdown is in the walk cmd scale, not the mover: `1 - waterlevel / 3 * 0.5` (`cod11-mantle.md`, "The wish speed"), applied by `pmove::wish`.
-- Water and ladder constants sit in `pmove.rs`'s constant blocks with their sources; the retail ladder constants are in `cod11-mantle.md`.
+- Water and ladder constants sit in `pmove/ground.rs`'s and `pmove/ladder.rs`'s constant blocks with their sources; the retail ladder constants are in `cod11-mantle.md`.
 
 ### Lean
 

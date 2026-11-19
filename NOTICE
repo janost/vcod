@@ -21,6 +21,12 @@ in step):
   crates/client/src/sky.rs
   crates/common/src/animscript.rs
   crates/common/src/collision.rs
+  crates/common/src/collision/build.rs
+  crates/common/src/collision/clip.rs
+  crates/common/src/collision/entities.rs
+  crates/common/src/collision/masks.rs
+  crates/common/src/collision/query.rs
+  crates/common/src/collision/walk.rs
   crates/common/src/leafwalk.rs
   crates/common/src/material.rs
   crates/common/src/net/codec.rs
@@ -33,6 +39,21 @@ in step):
   crates/common/src/net/trajectory.rs
   crates/common/src/patch.rs
   crates/common/src/pmove.rs
+  crates/common/src/pmove/angles.rs
+  crates/common/src/pmove/footsteps.rs
+  crates/common/src/pmove/frame.rs
+  crates/common/src/pmove/ground.rs
+  crates/common/src/pmove/jump.rs
+  crates/common/src/pmove/ladder.rs
+  crates/common/src/pmove/land.rs
+  crates/common/src/pmove/lean.rs
+  crates/common/src/pmove/prone.rs
+  crates/common/src/pmove/slide.rs
+  crates/common/src/pmove/spectator.rs
+  crates/common/src/pmove/stance.rs
+  crates/common/src/pmove/state.rs
+  crates/common/src/pmove/uo.rs
+  crates/common/src/pmove/walk.rs
   crates/server/src/engine/ratelimit.rs
   crates/server/src/game/missile.rs
   crates/server/src/server.rs

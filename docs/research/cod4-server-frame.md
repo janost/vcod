@@ -1021,7 +1021,7 @@ mp_crash are a level's first scripted frames (`frame/scripts`, tick 60).
   passes clear of (a slab test on the box grown by the swept shape, a
   unit, a hundredth of the box for a model triangle's barycentric slack
   and the capsule's sphere offset; `TraceInput::misses` and
-  `TraceInput::tight` in `crates/common/src/collision.rs`); the fraction
+  `TraceInput::tight` in `crates/common/src/collision/walk.rs`); the fraction
   cut stays the box test's. Brushes and patches are never culled: a
   model-0 patch's leaf-walk clip met mp_carentan's patch 9 56 units off
   its box, and a brush notes a near tie (`note_contact`) for a vertical

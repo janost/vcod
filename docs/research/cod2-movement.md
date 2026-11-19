@@ -253,8 +253,8 @@ step says otherwise:
    `oldVelocity += (velocity - oldVelocity) * min(frametime, 1)` in two
    dimensions. The velocity is snapped with libc `rint` per component
    (0x80d5e94). VERIFIED, the calls. `rint` keeps the sign of a zero,
-   where 1.1d's `fistp`/`fild` snap turns -0.0 into 0.0 (`pmove.rs`, the
-   snap). INFERRED.
+   where 1.1d's `fistp`/`fild` snap turns -0.0 into 0.0 (`pmove/frame.rs`,
+   the snap). INFERRED.
 
 ## 5. Friction, accelerate, the walk and the air
 
@@ -287,7 +287,7 @@ step says otherwise:
 - `PM_Accelerate` on a ladder (`pm_flags` 0x20) is Q2's: the velocity
   moves toward `wishdir * wishspeed` by `accel * frametime * wishspeed` at
   most, with no floor. INFERRED. 1.1's ladder accelerates along the wish
-  by a rate floored at 100 (`pmove.rs`, the ladder accelerate).
+  by a rate floored at 100 (`pmove/ladder.rs`, the ladder accelerate).
 - The cmd scales (0x80e1a02, 0x80e1b1e, 0x80e1c58) are `ps.speed * max /
   (127 * len)` (rodata 0x8154f70, 0x8154f80, 0x8154f90: 127). VERIFIED.
   Then:
@@ -456,7 +456,7 @@ step says otherwise:
   3 on the ground (`bobCycle += 7 + 1.25 * min(|step| / 2, 4)`, rodata
   0x8155340, 0x815533c). VERIFIED, the constants. As 1.1, whose base is
   the same 0x3e4ccccc (1.1d rodata 0x70f14, `fadds` at 0x35776). VERIFIED.
-  vcod's `STEP_SCALE_BASE` is 0x3e4ccccc in both `pmove.rs` and
+  vcod's `STEP_SCALE_BASE` is 0x3e4ccccc in both `pmove/slide.rs` and
   `vcod_cod2::pmove::slide`. Trap: `0.2f32` is 0x3e4ccccd, one bit above.
 
 ## 8. Fall damage and landing
@@ -733,7 +733,7 @@ script's cmds through the pmove.
     (`PRONE_BODY_LENGTH`), 1.5 60.
   - `BG_CheckProneValid` (0x80e01f4) samples the hips 48 out (immediate
     0x42400000) with a sill limit `48 + 0.7 h` (rodata 0x8154e00).
-    `vcod_cod2::pmove::stance` uses 48; vcod-common's CoD1 `pmove.rs` uses
+    `vcod_cod2::pmove::stance` uses 48; vcod-common's CoD1 `pmove/prone.rs` uses
     24 for both.
   - The yaw cap is `bg_prone_yawcap` (85) with the 5-degree soft edge
     (rodata 0x815512c) and 55 deg/s swing (0x8155130), the refused-turn
@@ -844,7 +844,7 @@ call sites.
     `AngleDelta(vectoyaw(vLadderVec) + 180, yaw)` truncated, capped at 75
     (immediate 0x4b).
 
-  1.1's ladder press is 500 or 250 every airborne frame (`pmove.rs`);
+  1.1's ladder press is 500 or 250 every airborne frame (`pmove/ladder.rs`);
   CoD2's is the 50, and only on a mostly vertical velocity.
 - The push-off (0x80dcb48), from `Jump_Check` after the takeoff and the
   ladder's jump event (91): vz x0.75 (rodata 0x8153344); the flat forward,

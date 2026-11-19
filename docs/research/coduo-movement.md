@@ -363,12 +363,12 @@ snapshot). Under 1.5's rules the sprint is missed on 156 snapshots. Needs
 
 ## 10. What vcod does
 
-`MoveRules::Uo` (`crates/common/src/pmove.rs`), which the predictor takes
+`MoveRules::Uo` (`crates/common/src/pmove/state.rs`), which the predictor takes
 for protocol 22, implements sections 1 to 7, 11 and 12, the fatigue
 breaths and sprint footstep ids included. The vehicle seat arm is
 `seat_move` (`coduo-vehicles.md` 3).
 
-`bg_nofatigue` and `bg_lmg_yawcap` are `BgCvars` (`crates/common/src/pmove.rs`),
+`bg_nofatigue` and `bg_lmg_yawcap` are `BgCvars` (`crates/common/src/pmove/state.rs`),
 read as each cvar's integer, the way the module reads them:
 
 - `PM_UpdateFatigue` tests `bg_nofatigue.integer` (vmCvar .bss 0x1f28c0,
@@ -891,7 +891,7 @@ floor, and the bend reads -49.7 at y 599.9 to -49.9 at 600.34: inside
 1.5's -50, outside UO's -45. With UO's bound ours refuses the same cmds
 and the pillar run matches all 372 snapshots (`moves_ab.rs`,
 `the_predictor_replays_walks_against_patches`, no gap rows;
-`pmove::tests::a_uo_body_refuses_legs_bent_up_past_45_degrees`).
+`pmove::tests::prone::a_uo_body_refuses_legs_bent_up_past_45_degrees`).
 
 ## 18. The stance box
 
@@ -918,7 +918,7 @@ to 200 ms past the test, so a body that moved under a low ceiling in
 between stands up into it, all solid, held in the air with no ground.
 
 vcod: `PlayerState::maxs` under `MoveRules::Uo` (pinned by
-`pmove::tests::a_uo_rise_sizes_the_box_off_the_flags`). Sizing UO's box
+`pmove::tests::stance::a_uo_rise_sizes_the_box_off_the_flags`). Sizing UO's box
 the 1.5 way is the trap: VERIFIED (measured, ours, `bot_match` UO `tdm`,
 10 bots, mp_cassino seeds 1..=8, master 589516ea), three bots were held
 all solid in a caulk or clip brush for 100 ticks and typed `kill`

@@ -1107,7 +1107,7 @@ The rest of the walk, in 1.5b's `game.mp.i386.so` unless named:
 
   vcod: `pmove::wish`'s `WishArith::Msvc` arm under `Arith::Msvc`, on
   every protocol's client
-  (`pmove::tests::the_windows_walk_scale_stores_the_run_product`: a
+  (`pmove::tests::walk::the_windows_walk_scale_stores_the_run_product`: a
   crouched diagonal run wishes a float step under 1.1d's). VERIFIED
   (measured, `play::replay::the_windows_build_draws_no_new_correction`):
   the springfield 1.1 capture goes from 0 to 2 last-bit corrections,
@@ -1168,7 +1168,7 @@ The rest of the walk, in 1.5b's `game.mp.i386.so` unless named:
   air and ladder moves, `pmove::clip_velocity_msvc` in the walk and the
   air, and the stored `VectorNormalize` and length in `pmove::wish` and
   after the walk's clip on every protocol
-  (`pmove::tests::the_windows_accelerate_stores_the_lack`,
+  (`pmove::tests::walk::the_windows_accelerate_stores_the_lack`,
   `the_windows_walk_clip_takes_the_reciprocal_overclip`). The 1.1 ladder
   keeps 1.1d's wish ahead of the call; its `VectorNormalize2`
   (0x30039ef0) is not read. VERIFIED (measured,
@@ -1225,7 +1225,7 @@ velocity's last bit, so a store that only rounds it differently changes
 an origin once in thousands of frames. The one store that changes what a
 body does is the air accelerate's floor: `pmove::accelerate_stored` for
 1.5's and UO's walk and air, `pmove::air_accelerate` for 1.1's air
-(`pmove::tests::a_wish_under_100_in_the_air_accelerates_at_100s_rate`).
+(`pmove::tests::walk::a_wish_under_100_in_the_air_accelerates_at_100s_rate`).
 
 The slope misses that remained were the ground's z, one or two ulps
 under retail's on the slope; `Arith::Kept` collision drops the moves

@@ -119,7 +119,7 @@ VERIFIED, off the committed captures: every `velocity` in
 What the two changed in the slope replay is under "The walk's accel floor".
 A consequence Q3 players know: at 8 ms a frame's gravity is 6.4 and the snap
 keeps about 6 of it, so a 125 fps jump rises about 36 units where a 20 ms
-one rises 34 (`a_125_fps_jump_goes_higher` in `pmove.rs`).
+one rises 34 (`a_125_fps_jump_goes_higher` in `pmove/tests/jump.rs`).
 
 ## Jumps
 
@@ -1566,7 +1566,7 @@ unmoved with `velocity.z` zeroed, and the step's gate returns, so it holds
 its origin frame after frame, which is the capture. The up trace that
 would have found room above the brush never runs.
 
-vcod: `correct_all_solid` in `crates/common/src/pmove.rs` is
+vcod: `correct_all_solid` in `crates/common/src/pmove/ground.rs` is
 `PM_CorrectAllSolid`, called from `ground_trace` on an allsolid trace, and
 `step_slide_move` keeps retail's gate and revert for a start in solid (it
 does not step out). `a_player_set_down_inside_a_brush_stays_there` pins
@@ -1618,7 +1618,7 @@ body creeping on at air accel with `velocity.z` near 0 (the slide's
 traces start in solid and clip against the face), until the script's
 prone and stand-up bring it out at ct 65444. Standing him on the face
 walks him at full speed and puts 405 of the run's snapshots off. vcod:
-`ground_trace` in `crates/common/src/pmove.rs` retraces and leaves the
+`ground_trace` in `crates/common/src/pmove/ground.rs` retraces and leaves the
 ground as above, and takes the mounted reach; `predict_ab`'s
 `predictor_replays_retail_slope_runs_uo` replays the run exactly and
 `a_body_sunk_in_terrain_finds_no_ground` holds all three rules there.
@@ -1707,7 +1707,7 @@ over 0.99 moves the 1.1 moves capture from 1217 to 1218 of 1222 bit-exact
 origins, the springfield run from 1218 to 1220, 1.5's moves from 1220 to
 1222, UO's sprint from 896 to 897, and lowers no count at either install.
 vcod: `slide_move`,
-`pmove::tests::a_shallow_ramp_met_from_the_floor_is_a_new_plane`.
+`pmove::tests::slide::a_shallow_ramp_met_from_the_floor_is_a_new_plane`.
 
 ### What the collider does to a walker on a terrain seam
 
@@ -1784,7 +1784,7 @@ diagonal edge there, so it drops where retail did (the `run4` capture,
 `commandTime` 285441, `EV_STEP_VIEW` -7 at x 1656-1661); a box's corner
 holds the diagonal until the centre is 21.2 past the straight edge, x 1650.
 
-vcod: `collision.rs` sweeps every brush as that capsule, `Capsule::of` on
+vcod: `collision/clip.rs` sweeps every brush as that capsule, `Capsule::of` on
 the trace box, with its planes pushed out by the radius, Q3's sphere arm of
 `CM_TraceThroughBrush`; the terrain, the patches and the static models each
 take the shape retail gives them, below. A zero box is still a point, so
@@ -2184,7 +2184,7 @@ replay runs no script. mp_depot's `*1` is both an exploder and a
 ### The step event and the velocity scale
 
 The tail of `PM_StepSlideMove`, 0x35659 to 0x35799. Both halves are in
-`crates/common/src/pmove.rs` (`step_view`).
+`crates/common/src/pmove/slide.rs` (`step_view`).
 
 VERIFIED: 0x8F is `EV_STEP_VIEW`, index 143 of the event-name table in
 `cgame_mp_x86.dll` (.data 0x30077040).
@@ -2311,7 +2311,7 @@ capped again; each component is rounded once (0x2f1b0-0x2f1c5). In the air a wis
 walk scale: the sight drops off the ground (`PM_UpdateAimDownSightFlag`),
 so it is the walk key, or 1.5's lean (`cod15-movement.md` 7). vcod:
 `pmove::air_accelerate`
-(`pmove::tests::a_wish_under_100_in_the_air_accelerates_at_100s_rate`).
+(`pmove::tests::walk::a_wish_under_100_in_the_air_accelerates_at_100s_rate`).
 
 VERIFIED, off `mp_carentan-dm-slope-8ms.txt`: a sighted diagonal walk from
 rest reads `vel` -8, -18, -32, -42, -56 and -63 per axis on consecutive
@@ -2424,7 +2424,7 @@ What each of the four does:
   0x100 into `pm_flags` (0x300b4) and scale the velocity (0x300ba-0x300d1).
   INFERRED, off that `jne`: slick ground takes no landing stun.
 
-vcod models all four arms in `pmove.rs` (`on_slick`, reading `SURF_SLICK`
+vcod models all four arms in `pmove/` (`ground.rs`'s `on_slick`, reading `SURF_SLICK`
 off the ground trace's `surface_flags`): friction, accel and gravity in the
 walk, and the stun's skip in `crash_land`.
 

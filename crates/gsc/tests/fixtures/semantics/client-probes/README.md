@@ -2578,7 +2578,7 @@ PORT=<p> SECS=20 COD_DIR=<1.1 install> tools/run_probe.sh client-probes/probe_pa
 PORT=<p> SECS=20 COD_VERSION=1.5 COD_DIR=<1.5 install> tools/run_probe.sh client-probes/probe_patchseams mp_carentan
 ```
 
-`crates/common/src/collision.rs`'s `patch_seams_clip_as_each_retail_build`
+`crates/common/src/collision/tests.rs`'s `patch_seams_clip_as_each_retail_build`
 gates ours against both columns (`bsp-ibsp59-format.md`, "Patch collision
 on 1.5 and UO").
 

@@ -482,7 +482,7 @@ pub struct WeaponDef {
     /// mounted MGs, which reads the same as 0.
     pub aim_down_sight: bool,
     /// `moveSpeedScale`: the walk mover multiplies its wish speed by it
-    /// (`pmove::wish`). 1.18 on the carbine, 1.2 on the frag.
+    /// (`pmove::walk::wish`). 1.18 on the carbine, 1.2 on the frag.
     pub move_speed_scale: f32,
     pub ads_trans_in: f32,
     pub ads_trans_out: f32,

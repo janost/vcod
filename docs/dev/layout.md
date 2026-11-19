@@ -11,6 +11,23 @@ Grep the module header comments for more; each one names its research doc.
   the neutral `Material` the renderer draws.
 - `collision`, `vis`, `pmove` (`pmove/cmd.rs` is the one cmd step), weapons,
   animscript.
+- `pmove.rs` keeps the shared tunables and re-exports the rest, so every
+  `pmove::X` path holds. `pmove/` splits along retail's functions: `state`
+  (the playerstate, cmd input, rules and cvars), `frame` (`PmoveSingle`, its
+  arms and the dead arms), `stance` (`PM_CheckDuck`, `PM_ViewHeightAdjust`),
+  `prone`, `angles` (the angle folds), `lean`, `ground` (`PM_GroundTrace`,
+  water), `walk` (friction, cmd scale, accelerates, `PM_WalkMove`,
+  `PM_AirMove`), `jump`, `ladder`, `slide` (`PM_SlideMove`,
+  `PM_StepSlideMove`), `footsteps`, `land` (`PM_CrashLand`), `spectator`
+  and `uo` (deploy, sprint, fatigue). `aim`, `cmd`, `movers`, `predict` and
+  `weapon` are the client- and server-side steps around them. The tests sit
+  under `pmove/tests/`, one file per seam.
+- `collision.rs` keeps the public types, `CollisionWorld` and the
+  always-compiled test worlds; `collision/` holds `masks` (contents and
+  mask bits), `clip` (the primitive clips, no world state), `build`
+  (`CollisionWorld::build`, the BVH), `entities` (model instances, poses,
+  world copies, links), `query` (the trace and contents entry points) and
+  `walk` (the BVH walk and the leaf-order replay).
 - `clipmap/`: the CoD2-family clip map and its trace kernels.
   `vcod_cod2::collision` builds one from a `.d3dbsp`, `vcod_cod4::collision`
   from a clipMap_t.
