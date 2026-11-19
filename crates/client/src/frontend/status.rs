@@ -3,11 +3,12 @@
 //! ui_mp_x86.dll builds them (0x4000bcc0, 0x4000bbb0;
 //! docs/research/cod11-front-end.md, "Server info").
 
-use std::net::{SocketAddr, SocketAddrV4, UdpSocket};
+use std::net::SocketAddrV4;
 use std::time::{Duration, Instant};
 
-use vcod_common::net::connectionless::{build_oob, parse_oob};
 use vcod_common::net::master::GETSTATUS;
+
+use super::scan::{Reply, ServerScan};
 
 /// `cl_serverStatusResendTime` and `ui_serverStatusTimeOut`'s defaults
 /// (CoDMP.exe 0x566938, ui_mp_x86.dll 0x40036e0c).
@@ -44,7 +45,8 @@ pub type Row = [String; 4];
 /// times out.
 pub struct StatusQuery {
     pub addr: SocketAddrV4,
-    socket: Option<UdpSocket>,
+    /// Its own socket, closed once answered or timed out.
+    scan: ServerScan,
     started: Instant,
     sent: Instant,
     pub rows: Vec<Row>,
@@ -54,19 +56,12 @@ pub struct StatusQuery {
 
 impl StatusQuery {
     pub fn start(addr: SocketAddrV4, now: Instant) -> StatusQuery {
-        let socket = UdpSocket::bind("0.0.0.0:0")
-            .and_then(|s| {
-                s.set_nonblocking(true)?;
-                Ok(s)
-            })
-            .map_err(|e| log::warn!("serverinfo: cannot open a socket: {e}"))
-            .ok();
-        if let Some(s) = &socket {
-            let _ = s.send_to(&build_oob(GETSTATUS), addr);
-        }
+        let mut scan = ServerScan::new("serverinfo");
+        scan.reopen();
+        scan.send(GETSTATUS, addr);
         StatusQuery {
             addr,
-            socket,
+            scan,
             started: now,
             sent: now,
             rows: Vec::new(),
@@ -80,7 +75,7 @@ impl StatusQuery {
         let now = Instant::now();
         StatusQuery {
             addr: SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 28960),
-            socket: None,
+            scan: ServerScan::new("serverinfo"),
             started: now,
             sent: now,
             rows,
@@ -89,23 +84,22 @@ impl StatusQuery {
     }
 
     pub fn poll(&mut self, now: Instant) {
-        let Some(socket) = &self.socket else { return };
-        let mut buf = [0u8; 16384];
-        while let Ok((n, from)) = socket.recv_from(&mut buf) {
-            if from != SocketAddr::V4(self.addr) {
-                continue;
-            }
-            if let Some(("statusResponse", rest)) = parse_oob(&buf[..n]) {
-                let text = vcod_common::text::latin1(rest);
+        if !self.scan.is_open() {
+            return;
+        }
+        for reply in self.scan.recv() {
+            if let Reply::Status(from, text) = reply
+                && from == self.addr
+            {
                 self.rows = status_rows(&self.addr.to_string(), &text);
-                self.socket = None;
+                self.scan.close();
                 return;
             }
         }
         if now - self.started > TIMEOUT {
-            self.socket = None;
+            self.scan.close();
         } else if now - self.sent > RESEND {
-            let _ = socket.send_to(&build_oob(GETSTATUS), self.addr);
+            self.scan.send(GETSTATUS, self.addr);
             self.sent = now;
         }
     }
@@ -171,6 +165,8 @@ pub fn status_rows(addr: &str, body: &str) -> Vec<Row> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{SocketAddr, UdpSocket};
+    use vcod_common::net::connectionless::build_oob;
 
     /// The retail 1.1d server's reply (cod11-server-handshake.md,
     /// `getstatus xyz`), with one player.

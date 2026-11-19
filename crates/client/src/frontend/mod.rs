@@ -19,6 +19,7 @@ mod listbox;
 mod options;
 mod players;
 pub mod profiles;
+pub mod scan;
 mod status;
 
 mod input;
