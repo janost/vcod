@@ -693,9 +693,8 @@ mod tests {
     /// (BUG-147).
     #[test]
     fn each_install_reads_its_own_zones_clips() {
-        let zone = |frames: u16| {
-            let mut a = Assets::default();
-            a.xanims = ANIM_NAMES[1..]
+        let zone = |frames: u16| Assets {
+            xanims: ANIM_NAMES[1..]
                 .iter()
                 .map(|n| XAnim {
                     name: n.to_string(),
@@ -717,8 +716,8 @@ mod tests {
                     indices: Vec::new(),
                     root: None,
                 })
-                .collect();
-            a
+                .collect(),
+            ..Default::default()
         };
         let (stock, modded) = (zone(15), zone(30));
         let a = install(&[&stock]).unwrap();

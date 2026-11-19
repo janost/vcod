@@ -421,8 +421,13 @@ mod tests {
     /// markers: what a test splices into its own shader.
     fn region<'a>(src: &'a str, name: &str) -> &'a str {
         let (open, close) = (format!("// @region {name}\n"), format!("// @end {name}\n"));
-        let a = src.find(&open).unwrap_or_else(|| panic!("no `{open}` in the shader")) + open.len();
-        let b = a + src[a..].find(&close).unwrap_or_else(|| panic!("no `{close}` in the shader"));
+        let a = src
+            .find(&open)
+            .unwrap_or_else(|| panic!("no `{open}` in the shader"))
+            + open.len();
+        let b = a + src[a..]
+            .find(&close)
+            .unwrap_or_else(|| panic!("no `{close}` in the shader"));
         &src[a..b]
     }
 
