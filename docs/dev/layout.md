@@ -31,6 +31,9 @@ Grep the module header comments for more; each one names its research doc.
 - `clipmap/`: the CoD2-family clip map and its trace kernels.
   `vcod_cod2::collision` builds one from a `.d3dbsp`, `vcod_cod4::collision`
   from a clipMap_t.
+- `pmshared`: what CoD2's and CoD4's pmove ports share: `pml_t`, the
+  touch list and the `PmState` playerstate trait. `x87` holds both ports'
+  vector helpers and angle folds, each rounding under its own name.
 - `asset_source`: assets by kind and name (`docs/dev/assets.md`).
 - `net/`: the 1.1 protocol both ways, 1.5 and UO 1.51 as per-connection
   `net::protocol::Cod1Wire` descriptors, plus the master query.
@@ -100,8 +103,8 @@ CoD4 1.7's formats and wire.
   playerstate. `player_step`, `PmWorld` over the clip map, `wire.rs` to the
   netfield words, `weapon.rs` the weapon half with the offhand and the melee,
   `anim.rs` the anim script the server's step runs through
-  `player_step_animated`. It shares the collision kernels with CoD2 and
-  nothing else yet.
+  `player_step_animated`. It shares the collision kernels, the x87 helpers
+  and `vcod_common::pmshared` with CoD2; the rest stays forked.
 
 ## vcod-gsc (`crates/gsc`)
 

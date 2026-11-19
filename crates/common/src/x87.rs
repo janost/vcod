@@ -94,6 +94,158 @@ pub fn normalize2_kept(x: f32, y: f32) -> (f32, f32) {
     ((x64 * inv) as f32, (y64 * inv) as f32)
 }
 
+// The CoD2 and CoD4 pmove's own forms: `_stored` rounds as CoD2 1.3 does,
+// `_kept` as CoD4 1.7 (cod4-pmove.md 1); the angle folds differ in method.
+
+/// CoD2 1.3's `Vec3Normalize` (`cod2_lnxded` 0x80a4424): the length
+/// stored, its reciprocal stored, each component times it stored; a zero
+/// vector is left alone. Returns the normalized vector and the length.
+pub fn vec3_normalize_stored(v: Vec3) -> (Vec3, f32) {
+    let len = length_stored(v);
+    if len == 0.0 {
+        return (v, 0.0);
+    }
+    let inv = (1.0 / f64::from(len)) as f32;
+    (scale_stored(v, inv), len)
+}
+
+/// CoD2 1.3's `Vec3NormalizeTo` (0x80a45fc): [`vec3_normalize_stored`], a
+/// zero vector zeroed.
+pub fn vec3_normalize_to_stored(v: Vec3) -> (Vec3, f32) {
+    let (n, len) = vec3_normalize_stored(v);
+    if len == 0.0 {
+        (Vec3::ZERO, 0.0)
+    } else {
+        (n, len)
+    }
+}
+
+/// CoD4 1.7's `Vec3Normalize` (`cod4_lnxded` 0x81915d8): the squares'
+/// sum, the length and its reciprocal kept on the stack, each component
+/// times it stored; a zero vector is left alone. Returns the normalized
+/// vector and the length as a float.
+pub fn vec3_normalize_kept(v: Vec3) -> (Vec3, f32) {
+    let len = dot(v, v).sqrt();
+    if len == 0.0 {
+        return (v, 0.0);
+    }
+    (scale(v, 1.0 / len), len as f32)
+}
+
+/// CoD4's pmove `Vec3NormalizeTo`: [`vec3_normalize_kept`], a zero vector
+/// zeroed. [`normalize_to`] leaves a zero vector as it went in; the two
+/// differ only in a zero's sign.
+pub fn vec3_normalize_to_kept(v: Vec3) -> (Vec3, f32) {
+    let (n, len) = vec3_normalize_kept(v);
+    if len == 0.0 {
+        (Vec3::ZERO, 0.0)
+    } else {
+        (n, len)
+    }
+}
+
+/// 65536 / 360 as a float: CoD2's rodata 0x8155124, the short grid's
+/// factor and every `delta_angles` push's.
+pub const SHORT_PER_DEG: f32 = f32::from_bits(0x4336_0b61);
+
+/// CoD2 1.3's `AngleNormalize360` through the short grid (`cod2_lnxded`
+/// 0x80a8432): the float argument times [`SHORT_PER_DEG`] truncated,
+/// masked to 16 bits, times 360 / 65536.
+pub fn angle_normalize360_short(a: f32) -> f32 {
+    let short = (f64::from(SHORT_PER_DEG) * f64::from(a)) as i32 & 0xffff;
+    (f64::from(short) * (360.0 / 65536.0)) as f32
+}
+
+/// CoD2 1.3's `AngleNormalize180` (0x80a8476): [`angle_normalize360_short`]
+/// stored, less 360 over 180.
+pub fn angle_normalize180_short(a: f32) -> f32 {
+    let a = angle_normalize360_short(a);
+    if a > 180.0 { a - 360.0 } else { a }
+}
+
+/// CoD2 1.3's `AngleDelta` (0x80a85bc): `AngleNormalize180(a - b)`, the
+/// difference stored as the argument.
+pub fn angle_delta_short(a: f32, b: f32) -> f32 {
+    angle_normalize180_short(a - b)
+}
+
+/// 1 / 360 as the double constant CoD4 1.7's angle helpers multiply by.
+const INV_360: f64 = 0.002777777845039964;
+
+/// CoD4 1.7's `AngleNormalize360`: the turns' fraction off `floor`, 360
+/// taken away once more when the product rounds to a whole turn.
+pub fn angle_normalize360_floor(a: f32) -> f32 {
+    let scaled = (f64::from(a) * INV_360) as f32;
+    let fl = f64::from(scaled).floor() as f32;
+    let r = ((f64::from(scaled) - f64::from(fl)) * 360.0) as f32;
+    if ((f64::from(r) - 360.0) as f32) < 0.0 {
+        r
+    } else {
+        (f64::from(r) - 360.0) as f32
+    }
+}
+
+/// CoD4 1.7's `AngleNormalize180` as the inlined `(x - floor(x + 0.5)) *
+/// 360` of the turns, each step stored.
+pub fn angle_normalize180_floor(a: f32) -> f32 {
+    let scaled = (f64::from(a) * INV_360) as f32;
+    let offset = (f64::from(scaled) + 0.5) as f32;
+    let fl = f64::from(offset).floor() as f32;
+    ((f64::from(scaled) - f64::from(fl)) * 360.0) as f32
+}
+
+/// CoD4 1.7's `AngleDelta`: `AngleNormalize180(a - b)`, the difference
+/// stored.
+pub fn angle_delta_floor(a: f32, b: f32) -> f32 {
+    angle_normalize180_floor((f64::from(a) - f64::from(b)) as f32)
+}
+
+/// CoD2 1.3's `vectopitch` (`cod2_lnxded` 0x80a4e5a): `-180 / pi *
+/// atan2(z, |xy|)` in 0..360, the flat length through [`sqrt_stored`].
+pub fn vectopitch_stored(v: Vec3) -> f32 {
+    if v.x == 0.0 && v.y == 0.0 {
+        return if v.z > 0.0 { 270.0 } else { 90.0 };
+    }
+    let (x, y) = (f64::from(v.x), f64::from(v.y));
+    let flat = sqrt_stored(y * y + x * x);
+    let p = (-180.0 * f64::from(v.z).atan2(f64::from(flat)) / std::f64::consts::PI) as f32;
+    if p < 0.0 { p + 360.0 } else { p }
+}
+
+/// CoD2 1.3's `vectoyaw` (0x80a4d5a): `180 / pi * atan2(y, x)` in 0..360,
+/// 360 added to a negative angle only.
+pub fn vectoyaw_stored(v: Vec3) -> f32 {
+    if v.x == 0.0 && v.y == 0.0 {
+        return 0.0;
+    }
+    let y = (180.0 * f64::from(v.y).atan2(f64::from(v.x)) / std::f64::consts::PI) as f32;
+    if y < 0.0 { y + 360.0 } else { y }
+}
+
+/// CoD4 1.7's `vectopitch` (`cod4_lnxded` 0x8192510): `-180 / pi *
+/// atan2(z, |xy|)` in 0..360, the flat length kept and passed to `atan2`
+/// as a double. The stored angle always takes an add, 360 or 0 (`cmovb`,
+/// 0x8192571), so a level vector's -0 comes back +0.
+pub fn vectopitch_kept(v: Vec3) -> f32 {
+    if v.x == 0.0 && v.y == 0.0 {
+        return if v.z > 0.0 { 270.0 } else { 90.0 };
+    }
+    let (x, y) = (f64::from(v.x), f64::from(v.y));
+    let flat = (x * x + y * y).sqrt();
+    let p = (-180.0 * f64::from(v.z).atan2(flat) / std::f64::consts::PI) as f32;
+    p + if p < 0.0 { 360.0 } else { 0.0 }
+}
+
+/// CoD4 1.7's `vectoyaw` (0x8191c22): `180 / pi * atan2(y, x)` in 0..360,
+/// the add as [`vectopitch_kept`]'s.
+pub fn vectoyaw_kept(v: Vec3) -> f32 {
+    if v.x == 0.0 && v.y == 0.0 {
+        return 0.0;
+    }
+    let y = (180.0 * f64::from(v.y).atan2(f64::from(v.x)) / std::f64::consts::PI) as f32;
+    y + if y < 0.0 { 360.0 } else { 0.0 }
+}
+
 /// CoD4 1.7's `Vec3NormalizeTo` (`cod4_lnxded` 0x8192a64): the squared
 /// length and its root left on the stack, each component times the
 /// reciprocal and rounded once; a zero vector comes out as it went in.

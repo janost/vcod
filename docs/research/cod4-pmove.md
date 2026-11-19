@@ -407,8 +407,9 @@ surface, as on CoD2 (bot-objectives.md 12.15). INFERRED.
   disassembly); the order is INFERRED. `stance::tests` pins it.
 - The calls to `AngleDelta` (0x8190590) and `AngleNormalize360`
   (0x8190540) return on the stack, the difference and the turns unrounded.
-  VERIFIED (the disassembly). `pmove/fpu.rs` stores both, the seed's
-  model, and the prone and gunner arms call it.
+  VERIFIED (the disassembly). `pmove/fpu.rs` (`x87::angle_delta_floor`,
+  `angle_normalize360_floor`) stores both, the seed's model, and the prone
+  and gunner arms call it.
 - The eye's curves are `.data` 0x826b000 (down to the crouch), 0x826b0e0
   (up to the stand), 0x826af60 (down to prone) and 0x826b080 (up from it),
   `{percent, height, posadj}` rows ending at percent -1, every posadj 0.
