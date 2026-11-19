@@ -5,7 +5,7 @@
 //! default arm's tail and the dead arms.
 
 use super::footsteps::footsteps;
-use super::ground::{ground_trace, leave_ground, set_water_level};
+use super::ground::{ground_trace, leave_ground, lose_ground, set_water_level};
 use super::jump::{check_jump, jump_penalty_landing};
 use super::ladder::{cap_ladder_yaw, check_ladder_move, ladder_check_skipped, ladder_move};
 use super::land::{LAND_ANIM_SPEED, crash_land};
@@ -110,9 +110,9 @@ pub fn pmove(
         // `PM_UpdateViewAngles` (0x340fc) runs ahead of the return, so a lean
         // carried onto the gun eases back.
         update_lean(ps, input, true, world, dt);
-        ps.on_ground = false;
-        ps.ground_normal = Vec3::Z;
-        ps.ground_surface_flags = 0;
+        // The arm runs no ground trace (0x341b5..0x34276, turrets doc 5), so
+        // no plane is left from the last one.
+        lose_ground(ps);
         ads_flag(ps, input, weapon_def, world, &mut events);
         ps.walking = walking_flag(ps, input);
         update_sprint_flag(ps, input, weapon_def);

@@ -241,7 +241,7 @@ pub(super) fn ground_trace(ps: &mut PlayerState, world: &MoveWorld, mask: u32, i
 
 /// What a ground trace that cannot stand the body clears: [`leave_ground`]'s
 /// and 1.5's near flag.
-fn lose_ground(ps: &mut PlayerState) {
+pub(super) fn lose_ground(ps: &mut PlayerState) {
     leave_ground(ps);
     ps.near_ground = false;
 }
