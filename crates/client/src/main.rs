@@ -56,6 +56,7 @@ mod legs_probe;
 mod lightmap_blocks;
 mod loading;
 mod marks;
+mod online_frame;
 mod play;
 mod post;
 mod probe;
