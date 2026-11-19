@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use vcod_cod4::xanimcalc::Parts;
 use vcod_cod4::xanimtree::{Clock, FlatTree};
+use vcod_common::fguard::clamp;
 use vcod_common::model::Model;
 use vcod_common::playerpose::Cod4Arith;
 use vcod_common::{skeleton, xanim::XAnim};
@@ -718,7 +719,9 @@ pub(crate) fn notes_crossed(clip: &XAnim, from: f32, to: f32) -> Vec<&str> {
 
 /// The gun's place off the view as the frames carry it: the eased move
 /// offset and turn, the idle drift's scale and clock, the sway
-/// (cod4-client-view.md 4.3).
+/// (cod4-client-view.md 4.3). The routine names on the placement code below
+/// are 4.3's INFERRED ones with no iw3mp.exe address; only the bob's
+/// constants are pinned (0x41b0d0), the others are unverified against it.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct GunState {
     /// Forward, left, up.
@@ -743,7 +746,8 @@ struct Sway {
 }
 
 /// The fastest the move offset and the move turn ease, per ms: 0.1 a
-/// second for the offset, a hair under it for the turn.
+/// second for the offset, a hair under it for the turn. Unverified against
+/// iw3mp.exe.
 const OFFSET_MIN_PER_MS: f32 = 0.1 * 0.001;
 const TURN_MIN_PER_MS: f32 = 0.0001;
 
@@ -768,7 +772,8 @@ fn approach(cur: f32, goal: f32, step: f32) -> f32 {
 }
 
 /// `DiffTrack`: `cur` closes `rate` of the gap a second, landing on
-/// `goal` within 0.001 or when the step would overshoot.
+/// `goal` within 0.001 or when the step would overshoot. No address; the
+/// 0.001 is unverified against iw3mp.exe.
 fn track(goal: f32, cur: f32, rate: f32, dt: f32) -> f32 {
     let gap = goal - cur;
     let step = rate * gap * dt;
@@ -781,7 +786,7 @@ fn track(goal: f32, cur: f32, rate: f32, dt: f32) -> f32 {
 
 /// `DiffTrackAngle`: [`track`] the short way round, wrapped to -180..180.
 fn track_angle(goal: f32, cur: f32, rate: f32, dt: f32) -> f32 {
-    let mut near = goal;
+    let mut near = vcod_common::fguard::near(goal, cur);
     while near - cur > 180.0 {
         near -= 360.0;
     }
@@ -793,7 +798,8 @@ fn track_angle(goal: f32, cur: f32, rate: f32, dt: f32) -> f32 {
 }
 
 /// How much of the move offset and turn shows: all on the hip, fading
-/// out over the sight's first half.
+/// out over the sight's first half (the half is unverified against
+/// iw3mp.exe).
 fn hip_share(frac: f32) -> f32 {
     if frac == 0.0 {
         1.0
@@ -881,7 +887,8 @@ fn bob_turn(ps: &ViewPs, n: &ViewNumbers) -> [f32; 3] {
 impl Sway {
     /// `BG_CalculateWeaponPosition_Sway`: the view's turn since the last
     /// frame, per 60th of a second and capped, tracked into the lag and
-    /// the tilt. Frozen under a scope's overlay and on a 0 ms frame.
+    /// the tilt. Frozen under a scope's overlay and on a 0 ms frame. No
+    /// address; the per-60th scale is unverified against iw3mp.exe.
     fn step(&mut self, ps: &ViewPs, n: &ViewNumbers, frame_ms: i32) {
         let frac = ps.pos_frac;
         let scoped = n.aim_down_sight && n.overlay_reticle && frac > 0.0;
@@ -897,7 +904,7 @@ impl Sway {
         let dt = frame_ms as f32 * 0.001;
         let view = ps.angles.to_array();
         let [pitch, yaw] =
-            [0, 1].map(|k| (angle_diff(view[k], self.view[k]) / (dt * 60.0)).clamp(-cap, cap));
+            [0, 1].map(|k| clamp(angle_diff(view[k], self.view[k]) / (dt * 60.0), -cap, cap));
         self.lag = [
             track(yaw * left_k, self.lag[0], rate, dt),
             track(pitch * up_k, self.lag[1], rate, dt),
@@ -913,7 +920,8 @@ impl Sway {
 impl GunState {
     /// One frame of the gun's place off the eye: the offset (forward,
     /// left, up) and the angles (pitch, yaw, roll), cod4-client-view.md
-    /// 4.3 (the weapon position step, `BG_CalculateWeaponAngles`).
+    /// 4.3 (the weapon position step, `BG_CalculateWeaponAngles`, INFERRED,
+    /// no address). The lean roll's -2 is unverified against iw3mp.exe.
     fn place(&mut self, ps: &ViewPs, n: &ViewNumbers, frame_ms: i32) -> (Vec3, [f32; 3]) {
         self.sway.step(ps, n, frame_ms);
         let slot = stance_slot(ps);
@@ -989,7 +997,9 @@ impl GunState {
     /// `BG_CalculateWeaponPosition_IdleAngles`: the slow drift as (pitch,
     /// yaw, roll), its size the hip's or lerped to the sight's, its scale
     /// easing to the stance's factor at 0.5 a second (held under a
-    /// scope's overlay), its clock running at the idle speed.
+    /// scope's overlay), its clock running at the idle speed. No address;
+    /// the default size 80 and the three waves are unverified against
+    /// iw3mp.exe.
     fn idle_drift(&mut self, ps: &ViewPs, n: &ViewNumbers, slot: usize, frame_ms: i32) -> [f32; 3] {
         let frac = ps.pos_frac;
         let [ads_amount, hip_amount] = n.idle_amount;
@@ -1027,7 +1037,7 @@ fn ease3(cur: &mut [f32; 3], goal: [f32; 3], rate: f32, min_per_ms: f32, frame_m
 }
 
 /// The lean's shift: along the rolled view's right, gone as the sight
-/// comes up.
+/// comes up (cod4-client-view.md 4.3, INFERRED, the 1.6 included).
 fn lean_offset(ps: &ViewPs) -> [f32; 3] {
     if ps.leanf == 0.0 || ps.pos_frac >= 1.0 {
         return [0.0; 3];
@@ -1049,7 +1059,8 @@ fn landing_dip(ps: &ViewPs) -> [f32; 3] {
 /// `CG_GetViewFov`: `cg_fov`, the
 /// sight's zoom eased in over the last `adsZoomInFrac` of the raise
 /// (out over `adsZoomOutFrac` of the drop), 90 at the intermission, 55
-/// on a turret, times `cg_fovScale`, at least `cg_fovMin`.
+/// on a turret, times `cg_fovScale`, at least `cg_fovMin`
+/// (cod4-client-view.md 4.3, INFERRED, no address).
 pub fn view_fov(ps: &ViewPs, n: Option<&ViewNumbers>, to_ads: bool) -> f32 {
     let mut fov = CG_FOV;
     if ps.pm_type == PM_INTERMISSION {
@@ -1121,6 +1132,14 @@ pub struct Cod4View {
 }
 
 impl Cod4View {
+    /// A frame the caller does not draw (third person): the models it
+    /// handed over wait for the next drawn frame, as a scope's do.
+    pub fn undrawn(&mut self, out: Cod4ViewFrame) {
+        if let Some(m) = out.frame.and_then(|f| f.models) {
+            self.pending_models = Some(m);
+        }
+    }
+
     /// The drawn main node and its clock, for the replay gate.
     #[cfg(test)]
     pub fn anim(&self) -> Option<(&str, ViewAnim)> {
@@ -1403,6 +1422,60 @@ pub fn tag_to_world(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A third-person frame's new models wait for the first drawn frame,
+    /// as a scope-hidden frame's do (BUG-118).
+    #[test]
+    fn an_undrawn_frames_models_wait_for_the_next_drawn_one() {
+        let models: ViewModels = Arc::from(Vec::new());
+        let out = Cod4ViewFrame {
+            frame: Some(ViewFrame {
+                models: Some(models),
+                draw: crate::renderer::VmDraw {
+                    transform: glam::Mat4::IDENTITY,
+                    light_origin: Vec3::ZERO,
+                    fov_x: 0.0,
+                    bone_sets: Vec::new(),
+                },
+            }),
+            fov: 65.0,
+            tags: WeaponTags::default(),
+            sounds: Vec::new(),
+            gun_dir: None,
+        };
+        let mut v = Cod4View::default();
+        v.undrawn(out);
+        assert!(v.pending_models.is_some());
+    }
+
+    /// A weapon's negative or NaN `swayMaxAngle`, a huge sway scale and a
+    /// view of 1e30 step the sway without a panic or a hang (SEC-019).
+    #[test]
+    fn hostile_sway_numbers_step() {
+        let n = ViewNumbers {
+            aim_down_sight: true,
+            sway: [
+                [-1.0, 6.0, 1e30, f32::INFINITY, 1.0, 1.0],
+                [f32::NAN, 6.0, 1.0, 1.0, 1.0, 1.0],
+            ],
+            ..ViewNumbers::default()
+        };
+        for pos_frac in [0.0, 0.5, f32::NAN] {
+            let mut sway = Sway::default();
+            for angles in [
+                Vec3::ZERO,
+                Vec3::new(30.0, -60.0, 0.0),
+                Vec3::new(1e30, -1e30, 0.0),
+            ] {
+                let ps = ViewPs {
+                    pos_frac,
+                    angles,
+                    ..ViewPs::default()
+                };
+                sway.step(&ps, &n, 16);
+            }
+        }
+    }
 
     /// The sight's fov eases in over the raise's last `adsZoomInFrac`,
     /// out over the drop's last `adsZoomOutFrac`, and floors at
@@ -1913,8 +1986,10 @@ mod tests {
             },
         ];
         let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        // each value to 1/1024 unit: libm's sin and cos differ in the last
+        // bits between platforms (Windows' CRT against glibc)
         let mut eat = |x: f32| {
-            for b in x.to_bits().to_le_bytes() {
+            for b in ((x * 1024.0).round() as i32).to_le_bytes() {
                 hash = (hash ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
             }
         };
@@ -1988,6 +2063,6 @@ mod tests {
         if let Some(path) = std::env::var_os("GUN_PIN_DUMP") {
             std::fs::write(path, dump).unwrap();
         }
-        assert_eq!(hash, 0x8401_29b8_e657_61f7, "{hash:#x}");
+        assert_eq!(hash, 0xd6c1_8f53_bc89_5368, "{hash:#x}");
     }
 }

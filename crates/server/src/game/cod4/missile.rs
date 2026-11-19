@@ -16,11 +16,11 @@
 //! curvature and guidance, and an unguided one wobbles and bends to the
 //! attractors (docs/research/cod4-gsc.md 3.2, "Missiles under 1.7").
 //!
-//! Left out: water (`missileWaterMaxDepth`, the splash), glass, the live
-//! grenade's pickup (the live grenade pickup and the throw back), damage
-//! to entities other than players, Javelin's climb, and the actors'
-//! grenade danger.
+//! The live grenade's pickup and throw back are `use_key`'s (cod4-gsc.md
+//! 9.3). Left out: water (`missileWaterMaxDepth`, the splash), glass,
+//! Javelin's climb, and the actors' grenade danger.
 
+use crate::game::combat::Parties;
 use glam::Vec3;
 use vcod_cod4::net::delta::EntityState;
 use vcod_cod4::pmove::weapon::{WEAPTYPE_GRENADE, WeaponDef};
@@ -29,7 +29,7 @@ use vcod_gsc::{EntId, Value};
 
 use super::clip::Cod4Clip;
 use super::combat::{BULLET_PRIORITY, WEAPTYPE_PROJECTILE};
-use super::level::{Cod4Level, PsExt};
+use super::level::{Cod4Level, PsExt, ps};
 
 /// `trType`: still, straight (the spin) and the arc.
 pub const TR_STATIONARY: u32 = 0;
@@ -46,8 +46,8 @@ pub(super) const MASK_RADIUS_LOS: u32 = 0x80_2011;
 /// The flashbang's `CanDamage` mask (the flashbang blast).
 const MASK_FLASH_LOS: u32 = 0x801;
 const MASK_EXPLODE_DOWN: u32 = 0x811;
-/// `SURF_NOIMPACT`: a missile meeting it is freed without a burst.
-const SURF_NOIMPACT: u32 = 4;
+/// A missile meeting the sky bit (0x4) is freed without a burst.
+use vcod_common::clipmap::SURF_SKY;
 /// `g_minGrenadeDamageSpeed`.
 const MIN_GRENADE_DAMAGE_SPEED: f32 = 400.0;
 /// The `nextthink` `G_ExplodeMissile` gives a smoke grenade still in the
@@ -192,9 +192,9 @@ pub struct Missile4 {
     /// `missile.team`: the thrower's `sessionteam` at the throw, the
     /// flashbang's fourth `flashbang` argument.
     pub team: String,
-    /// `G_FireRocket`'s missile (handler 9): it flies by
-    /// The missile trajectory step, and its hit and splash read `MOD_PROJECTILE`
-    /// and `MOD_PROJECTILE_SPLASH`.
+    /// `G_FireRocket`'s missile (handler 9): it flies by the missile
+    /// trajectory step (0x8095928), and its hit and splash read
+    /// `MOD_PROJECTILE` and `MOD_PROJECTILE_SPLASH`.
     pub rocket: bool,
     /// The vehicle that fired it (`r.ownerNum`), which its move passes.
     pub launcher: Option<EntId>,
@@ -479,9 +479,9 @@ impl Cod4Level {
         self.g_fire_rocket(id, weapon, d, shot);
         if let Some(p) = self.players[slot].as_mut() {
             for k in 0..3 {
-                let name = format!("velocity[{k}]");
-                let v = f32::from_bits(p.ps.word(&name)) - 64.0 * forward[k];
-                p.ps.set(&name, v.to_bits());
+                let word = ps!(3 "velocity")[k];
+                let v = f32::from_bits(p.ps.word(word)) - 64.0 * forward[k];
+                p.ps.set(word, v.to_bits());
             }
         }
     }
@@ -566,7 +566,6 @@ impl Cod4Level {
 
     /// `G_FireGrenade` (doc 10.2): a grenade from `start` at `dir`, stored
     /// in the missile list; its index there.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn fire_grenade(
         &mut self,
         slot: usize,
@@ -585,10 +584,10 @@ impl Cod4Level {
 
     /// The grenade [`Self::fire_grenade`] stores: the `grenade` entity on
     /// the arc (speed truncated whole, hidden by its untruncated length),
-    /// tumbling when `spin` asks and the weapon spins, its fuse
-    /// (the grenade timer init) and, unless it arms by distance,
+    /// tumbling when `spin` asks and the weapon spins, its fuse (a cooked
+    /// or thrown back grenade's `grenadeTimeLeft`, else `fuse`) and,
+    /// unless it arms by distance,
     /// `grenade_fire` on the thrower.
-    #[allow(clippy::too_many_arguments)]
     fn new_grenade(
         &mut self,
         slot: usize,
@@ -629,7 +628,7 @@ impl Cod4Level {
         let cooked = self.pm_state(slot).map_or(0, |ps| ps.grenade_time_left);
         if timed {
             if let Some(p) = self.players[slot].as_mut() {
-                p.ps.set("grenadeTimeLeft", 0);
+                p.ps.set(ps!("grenadeTimeLeft"), 0);
             }
             self.rt.host.cod4_mut().clients[slot].held_grenade = None;
         }
@@ -748,6 +747,12 @@ impl Cod4Level {
     /// `G_RunFrame`'s missiles, by entity number: each runs its move and
     /// its think; the event entities past their 300 ms are freed.
     pub(super) fn run_missiles(&mut self) {
+        // A script `delete()` frees on retail inside the call: its row goes
+        // with the unlink, not at the deferred free (cod4-combat.md 14).
+        let host = &mut self.rt.host;
+        let mut missiles = std::mem::take(&mut host.cod4_mut().missiles);
+        missiles.retain(|m| host.ents.get(m.id).is_some_and(|e| !e.unlinked));
+        host.cod4_mut().missiles = missiles;
         // `detonate`: `G_ExplodeMissile` with the new parent, if any.
         for (id, parent) in std::mem::take(&mut self.rt.host.cod4_mut().detonations) {
             if let (Some(i), Some(owner)) = (self.missile_index(id), parent) {
@@ -773,7 +778,7 @@ impl Cod4Level {
             if let Some(at) = m.free_at {
                 if now - at > EVENT_VALID_MS {
                     self.rt.host.cod4_mut().missiles.remove(i);
-                    self.rt.host.ents.free(id);
+                    self.rt.host.free_entity(id);
                 }
                 continue;
             }
@@ -796,7 +801,7 @@ impl Cod4Level {
             }
         });
         for id in freed {
-            self.rt.host.ents.free(id);
+            self.rt.host.free_entity(id);
         }
     }
 
@@ -853,7 +858,7 @@ impl Cod4Level {
             return self.store_missile(m);
         }
         self.store_missile(m);
-        if hit.surface_flags & SURF_NOIMPACT != 0 {
+        if hit.surface_flags & SURF_SKY != 0 {
             self.free_missile(id);
         } else {
             let heading = (goal - start).normalize_or_zero();
@@ -1166,8 +1171,10 @@ impl Cod4Level {
         let (id, at) = (m.id, m.origin);
         self.through_callbacks(m, |lvl| {
             lvl.damage_from(
-                owner,
-                victim,
+                Parties {
+                    victim,
+                    attacker: owner,
+                },
                 Some(id),
                 d,
                 d.damage,
@@ -1194,7 +1201,6 @@ impl Cod4Level {
     /// at `endpos`, hides and is freed 300 ms on, `death` notified; an
     /// armed one's splash (players, helicopters, other entities) follows,
     /// then `projectile_impact` on its thrower and a flashbang's blast.
-    #[allow(clippy::too_many_arguments)]
     fn impact_burst(
         &mut self,
         mut m: Missile4,
@@ -1468,7 +1474,7 @@ impl Cod4Level {
     /// radius takes the falloff at his distance times his `CanDamage`
     /// share, radius flags (5), pushed from the blast toward a point 24
     /// over his feet. Slot order here, where retail walks its area list.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn radius_damage(
         &mut self,
         origin: Vec3,
@@ -1502,8 +1508,10 @@ impl Cod4Level {
             self.combat.splashes.push((slot, damage));
             let push = off + Vec3::Z * 24.0;
             self.damage_from(
-                attacker,
-                slot,
+                Parties {
+                    victim: slot,
+                    attacker,
+                },
                 Some(inflictor),
                 d,
                 damage,
@@ -1627,7 +1635,8 @@ impl Cod4Level {
     pub(super) fn missile_entities(&self) -> Vec<EntityState> {
         let c4 = self.rt.host.cod4();
         let mut out = Vec::new();
-        for m in &c4.missiles {
+        let live = |id: EntId| self.rt.host.ents.get(id).is_some_and(|e| !e.unlinked);
+        for m in c4.missiles.iter().filter(|m| live(m.id)) {
             let mut e = EntityState::default();
             e.0[0] = m.id.0;
             e.0[1] = 4;
@@ -1703,6 +1712,7 @@ impl Cod4Level {
     /// bursts with no `owner` and a kill by one aborts in `ch_kills`;
     /// those go through [`Self::rest_grenade_for_test`] and
     /// [`Self::explode_for_test`] a frame apart.
+    #[cfg(any(test, feature = "testing"))]
     pub fn burst_for_test(&mut self, slot: usize, weapon: &str, at: Vec3) -> bool {
         let Some(w) = self.combat.defs.iter().position(|d| d.name == weapon) else {
             return false;
@@ -1723,6 +1733,7 @@ impl Cod4Level {
 impl Cod4Level {
     /// Test-facing: the missile `id` bursts where it is now
     /// (`G_ExplodeMissile`). False when it is gone.
+    #[cfg(any(test, feature = "testing"))]
     pub fn explode_for_test(&mut self, id: EntId) -> bool {
         if !self.rt.host.cod4().missiles.iter().any(|m| m.id == id) {
             return false;
@@ -1736,6 +1747,7 @@ impl Cod4Level {
     /// Test-facing: `slot` lets go of a grenade named `weapon` at `start`
     /// moving at `vel`, with `fuse_ms` on its fuse (`G_FireGrenade`, no
     /// spin); its entity, `None` with no such weapon.
+    #[cfg(any(test, feature = "testing"))]
     pub fn fire_grenade_for_test(
         &mut self,
         slot: usize,
@@ -1753,6 +1765,7 @@ impl Cod4Level {
 
 impl Cod4Level {
     /// Drops a frag from `at` with no throw velocity, for the client's live tests.
+    #[cfg(any(test, feature = "testing"))]
     pub fn drop_frag_for_test(&mut self, slot: usize, at: Vec3, fuse_ms: i32) -> bool {
         let Some(w) = self
             .combat
@@ -1773,6 +1786,7 @@ impl Cod4Level {
     /// `grenade_fire` reaches the script with the frame's notifies, so a
     /// claymore or C4 bursting a frame later carries the `owner`
     /// `_weapons.gsc` gives it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn rest_grenade_for_test(
         &mut self,
         slot: usize,
@@ -1874,7 +1888,8 @@ fn draw_spin(rand: &mut GlibcRand, facing: Vec3) -> Traj {
 }
 
 /// When a grenade bursts: `fuse_ms` past `now` for a timed one, else (or
-/// at a deadline of 0) 30 s on; never past 60 s.
+/// at a deadline of 0) 30 s on; never past 60 s. The 30 s and 60 s are
+/// vcod's, unverified against retail (cod4-combat.md 10.2 has no rule).
 fn grenade_deadline(now: i32, fuse_ms: Option<i32>) -> i32 {
     let at = fuse_ms
         .map(|ms| now + ms)
@@ -2559,5 +2574,116 @@ mod tests {
         let share = f64::from((1.0f64.atan() * f64::from(TWO_OVER_PI)) as f32);
         assert_eq!(down, [0.0, 0.0, -((share - 1.0) * falloff)]);
         assert!(pull(&repulsor, Vec3::new(-10.0, 0.0, 0.0), Vec3::X, 1500.0).is_none());
+    }
+
+    /// glibc's `srand(1)` stream opens 1804289383, 846930886, 1681692777,
+    /// 1714636915: the draws below are those, not vcod's own numbers.
+    fn seed_1() -> GlibcRand {
+        GlibcRand::new(1)
+    }
+
+    /// `G_flrand` scales by the negative float at 0x8214ac4, so a draw
+    /// lands at or under `min`; `G_irand(0, 2)`'s wrapped product makes it
+    /// 0 for these draws, as for any but 2^30 (10.2).
+    #[test]
+    fn the_cod4_draws_fall_as_the_disassembly_reads() {
+        let mut r = seed_1();
+        assert_eq!(g_flrand(&mut r, 320.0, 800.0), -83.29011);
+        assert_eq!(g_irand(&mut r, 0, 2), 0);
+        assert_eq!(g_flrand(&mut r, 180.0, 540.0), -101.91572);
+        assert_eq!(g_irand(&mut r, 0, 2), 0);
+    }
+
+    /// The tumble's two rates off the coin that comes up -1: both turn
+    /// backwards, the pitch tipped back 120 and wrapped (10.2; the walk
+    /// capture's -296.36 and -102.30 are in these ranges).
+    #[test]
+    fn the_grenade_spin_draws_its_rates_turned_by_the_coin() {
+        let t = draw_spin(&mut seed_1(), Vec3::new(10.0, 20.0, 0.0));
+        assert_eq!(t.tr_type, TR_LINEAR);
+        assert_eq!(t.base, Vec3::new(250.0, 20.0, 0.0));
+        assert_eq!(t.delta, Vec3::new(83.29011, 0.0, 101.91572));
+    }
+
+    #[test]
+    fn a_grenade_bursts_at_its_fuse_or_30_s_never_past_60() {
+        assert_eq!(grenade_deadline(1000, Some(3500)), 4500);
+        assert_eq!(grenade_deadline(1000, None), 31_000);
+        assert_eq!(grenade_deadline(1000, Some(-1000)), 31_000);
+        assert_eq!(grenade_deadline(1000, Some(90_000)), 61_000);
+    }
+
+    /// `BounceMissile`'s `hitTime`: the frame's ms times the fraction,
+    /// stored as a float and truncated.
+    #[test]
+    fn the_contact_time_truncates_inside_the_frame() {
+        assert_eq!(contact_time(66_500, 66_550, 0.5), 66_525);
+        assert_eq!(contact_time(66_500, 66_550, 0.999), 66_549);
+        assert_eq!(contact_time(66_500, 66_550, 1.0), 66_550);
+    }
+
+    /// The dot's first two products stored as floats and the third kept:
+    /// the sum all in doubles lands the mirror's z a unit in the fifth
+    /// place off (-193.14177 against -193.14175).
+    #[test]
+    fn the_mirror_stores_the_dot_as_the_disassembly_does() {
+        let v = Vec3::new(-366.84952, 61.920914, -182.06276);
+        let n = Vec3::new(-0.47727776, -0.36360133, 0.8);
+        let (m, dot) = mirror(v, n);
+        assert_eq!(m, Vec3::new(-360.2398, 66.95634, -193.14175));
+        assert_eq!(dot, 6.924375);
+    }
+
+    /// `(perp - par) cos + par` on the surface type's two factors; a move
+    /// away from the surface or a still one takes none.
+    #[test]
+    fn the_bounce_mixes_its_two_factors_by_the_strike() {
+        let mut d = WeaponDef::default();
+        d.parallel_bounce[5] = 0.5;
+        d.perpendicular_bounce[5] = 0.25;
+        let v = Vec3::new(3.0, 0.0, -4.0);
+        // Straight down onto the floor: the cosine is 1.
+        assert_eq!(
+            bounce_factor(&d, 5, Vec3::new(0.0, 0.0, -4.0), -4.0),
+            Some(0.25)
+        );
+        // At 3-4-5: 0.5 - 0.25 * 0.8.
+        assert_eq!(bounce_factor(&d, 5, v, -4.0), Some(0.5 - 0.25 * 0.8));
+        assert_eq!(bounce_factor(&d, 5, v, 1.0), None);
+        assert_eq!(bounce_factor(&d, 5, Vec3::ZERO, 0.0), None);
+        // A surface type past the table's 29 reads 0 for both.
+        assert_eq!(bounce_factor(&d, 40, v, -4.0), Some(0.0));
+    }
+
+    /// A tenth of the normal off the surface, its upward part dropped.
+    #[test]
+    fn the_push_off_drops_the_normal_s_upward_tenth() {
+        let at = Vec3::new(10.0, 20.0, 30.0);
+        assert_eq!(push_off(at, Vec3::Z), at);
+        let p = push_off(at, Vec3::new(0.6, 0.0, -0.8));
+        assert_eq!(p, Vec3::new(10.06, 20.0, 29.92));
+    }
+
+    /// Off a wall a bounce turns the pitch rate by `(rand() & 0x7f) - 63`:
+    /// 1804289383's low seven bits less 63 is 40. A rest draws nothing.
+    #[test]
+    fn a_wall_bounce_turns_the_pitch_rate_by_a_seven_bit_draw() {
+        let spin = Traj {
+            tr_type: TR_LINEAR,
+            time: 0,
+            base: Vec3::ZERO,
+            delta: Vec3::new(100.0, 0.0, 0.0),
+        };
+        let wall = Vec3::new(1.0, 0.0, 0.0);
+        let mut apos = spin;
+        let mut r = seed_1();
+        tumble_on_contact(&mut apos, 0, wall, Landing::Bounce, &mut r);
+        assert_eq!(apos.delta.x, 140.0);
+        assert_eq!(r.next_u31(), 846_930_886);
+        let mut apos = spin;
+        let mut r = seed_1();
+        tumble_on_contact(&mut apos, 0, wall, Landing::Rest, &mut r);
+        assert_eq!(apos.delta.x, 100.0);
+        assert_eq!(r.next_u31(), 1_804_289_383);
     }
 }

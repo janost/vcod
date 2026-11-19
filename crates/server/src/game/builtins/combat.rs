@@ -5,12 +5,13 @@ use crate::game::builtins::client::client_receiver;
 use crate::game::combat::{DFLAG_NO_KNOCKBACK, DFLAG_RADIUS};
 use crate::game::host::{GameHost, SimOp};
 use crate::game::script::CALLBACK_SETUP;
+use crate::game::slot::ClientSlot;
 use crate::game::temp_entity::{Scope, TempEntity};
 use glam::Vec3;
 use vcod_common::net::protocol::ENTITYNUM_WORLD;
 use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("bullettrace", bullet_trace),
@@ -31,8 +32,8 @@ use vcod_common::net::event_ids::EV_OBITUARY;
 /// `self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags,
 /// sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc)` (`.so` 0x4376c), where a
 /// player's damage lands (combat doc, section 4.5): the health comes off the
-/// host's vitals here, and everything the sim does with it -- knockback,
-/// the feedback fields, `EV_PAIN` or `EV_DEATH` -- goes out as one `SimOp`.
+/// host's vitals here, and everything the sim does with it (knockback,
+/// the feedback fields, `EV_PAIN` or `EV_DEATH`) goes out as one `SimOp`.
 /// A killing hit runs `player_die` (5.1): a grenade still cooking is dropped
 /// live, and the callback into
 /// `CodeCallback_PlayerKilled` is spawned so it runs before this builtin's
@@ -49,7 +50,7 @@ pub fn finish_player_damage(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let [
         inflictor,
         attacker,
@@ -73,16 +74,16 @@ pub fn finish_player_damage(
         return Ok(Value::Undefined);
     }
     let attacker_slot = match attacker {
-        Value::Entity(a) if host.ents.get(*a).is_some_and(|e| e.client.is_some()) => {
-            Some(a.0 as usize)
-        }
+        Value::Entity(a) => ClientSlot::of_entity(&host.ents, *a).map(ClientSlot::index),
         _ => None,
     };
     let dir = match dir {
         // `VectorNormalize2` into the knockback's copy (1.1d 0x43922 into
         // 0x3da68; 1.5b 0x3ee76, UO 0x47634; cod11-combat.md 4.5).
-        Value::Vector(d) if host.speaks_1_1() => vcod_common::x87::normalize(Vec3::from(*d)).into(),
-        Value::Vector(d) => vcod_common::x87::normalize2_stored(Vec3::from(*d)).into(),
+        Value::Vector(d) if host.profile.combat.stored_damage_dir => {
+            vcod_common::x87::normalize2_stored(Vec3::from(*d)).into()
+        }
+        Value::Vector(d) => vcod_common::x87::normalize(Vec3::from(*d)).into(),
         _ => [0.0; 3],
     };
     let point = match point {
@@ -120,7 +121,7 @@ pub fn finish_player_damage(
         _ => None,
     };
     let dead_yaw = dead_yaw(host, cx, slot, inflictor_ent, attacker_ent);
-    let v = &mut host.client_vitals[slot];
+    let v = &mut host.clients[slot].vitals;
     // A client `player_die` already ran on (a blast that reaches it before
     // its end frame, 14.5) loses health as any other, clamped at -999
     // (0x43c5c), and dies no second time: `player_die` cleared `die`.
@@ -218,11 +219,11 @@ const DEATH_DROP_SPEED: f32 = 160.0;
 /// inside the dying player's own cmd, the unsnapped `ps.origin` everywhere
 /// else (5.5). The fuse is the one `Server::replay_moves` mirrored.
 fn drop_cooking_grenade(host: &mut GameHost, cx: &mut Cx, slot: usize) {
-    let fuse = host.client_grenade_ms.get(slot).copied().unwrap_or(0);
+    let fuse = host.clients.get(slot).map(|c| c.grenade_ms).unwrap_or(0);
     if fuse == 0 {
         return;
     }
-    host.client_grenade_ms[slot] = 0;
+    host.clients[slot].grenade_ms = 0;
     let Some(player) = host.ents.handle(slot as u32) else {
         return;
     };
@@ -233,7 +234,7 @@ fn drop_cooking_grenade(host: &mut GameHost, cx: &mut Cx, slot: usize) {
     let origin = Vec3::from(at) + Vec3::Z * DEATH_DROP_LIFT;
     // `self->s.weapon`: the grenade still in hand, since the drop runs ahead
     // of everything the death callback takes away.
-    let weapon = host.client_weapons[slot].current;
+    let weapon = host.clients[slot].weapons.current;
     let weapons = host.weapons.clone();
     let Some(def) = weapons.get(weapon as usize) else {
         return;
@@ -297,7 +298,7 @@ pub fn obituary(
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    if host.defs.proto.is_uo() && super::cvar::atoi(host.cvars.get("sv_obituary")) == 0 {
+    if host.profile.combat.obituary_cvar && super::cvar::atoi(host.cvars.get("sv_obituary")) == 0 {
         return Ok(Value::Undefined);
     }
     let (
@@ -328,7 +329,7 @@ pub fn obituary(
     let origin_atom = cx.intern_folded("origin");
     let origin = match host.get_field(cx, victim, origin_atom) {
         // UO's raises it at `vec3_origin` (0x6a819).
-        _ if host.defs.proto.is_uo() => [0.0; 3],
+        _ if host.profile.combat.obituary_at_origin => [0.0; 3],
         Value::Vector(v) => v,
         _ => [0.0; 3],
     };
@@ -389,7 +390,7 @@ pub(crate) fn dead_yaw(
 /// The three effects a suicide has, for the two callers that need them: the
 /// `suicide` builtin and `Cmd_Kill_f`. Writes the vitals, queues the sim's
 /// `Damaged` op and returns the `CodeCallback_PlayerKilled` argument vector,
-/// leaving only the invocation to the caller -- a builtin spawns the thread
+/// leaving only the invocation to the caller: a builtin spawns the thread
 /// so it runs before its own next instruction, while the client command has
 /// nothing waiting on it and starts one.
 ///
@@ -399,7 +400,7 @@ pub(crate) fn dead_yaw(
 /// inflictor and attacker, damage 100000, weapon 0 (`"none"`), no direction
 /// and hit location 0 (5.1), so the dead yaw is his own `angles` yaw.
 pub fn suicide_effects(host: &mut GameHost, cx: &mut Cx, slot: usize) -> Option<Vec<Value>> {
-    if host.client_vitals.get(slot)?.dead {
+    if host.clients.get(slot).map(|c| &c.vitals)?.dead {
         return None;
     }
     host.die(slot);
@@ -442,7 +443,7 @@ pub fn suicide(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(args) = suicide_effects(host, cx, slot) else {
         return Ok(Value::Undefined);
     };
@@ -463,10 +464,6 @@ fn notify_death(cx: &mut Cx, victim: Option<Target>, attacker: Value) {
         let death = cx.intern_folded("death");
         cx.notify(victim, death, vec![attacker]);
     }
-}
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
 }
 
 fn as_f32(v: &Value) -> Result<f32, ErrorKind> {
@@ -526,7 +523,7 @@ pub fn radius_damage(
     // the world when absent, the inflictor NULL (coduo-vehicles.md 11.2).
     // CoD4 1.7's (0x80bdab0) takes the attacker fifth and makes the method
     // form's entity the inflictor (cod4-combat.md 10.10).
-    let uo = host.defs.proto.is_uo();
+    let uo = host.profile.combat.radius_damage_attacker_args;
     let cod4 = matches!(host.ext, crate::game::host::HostExt::Cod4(_));
     let entity = |v: Option<&Value>| match v {
         Some(Value::Entity(e)) if uo || cod4 => Some(*e),
@@ -542,8 +539,8 @@ pub fn radius_damage(
         (entity(args.get(4)), entity(args.get(5)))
     };
     let candidates = blast_candidates(host, cx, &blast);
-    let by = attacker.filter(|&e| host.ents.get(e).is_some_and(|e| e.client.is_some()));
-    host.blast_noises.push((*origin, by.map(|e| e.0 as usize)));
+    let by = attacker.and_then(|e| ClientSlot::of_entity(&host.ents, e));
+    host.blast_noises.push((*origin, by.map(ClientSlot::index)));
     host.radius_ignore_active = host.ignore_radius_damage;
     host.blasts.push(ScriptBlast {
         blast,
@@ -602,21 +599,19 @@ pub fn blast_step(host: &mut GameHost, cx: &mut Cx) {
             return;
         }
         let id = walk.candidates.remove(0);
-        let slot = id.0 as usize;
-        let Some(ent) = host.ents.get(id) else {
+        let Some(slot) = ClientSlot::of_entity(&host.ents, id).map(ClientSlot::index) else {
+            if host.ents.get(id).is_some() {
+                blast_entity(host, cx, id);
+            }
             continue;
         };
-        if ent.client.is_none() {
-            blast_entity(host, cx, id);
-            continue;
-        }
-        if !host.client_vitals[slot].takedamage || host.radius_ignore_active {
+        if !host.clients[slot].vitals.takedamage || host.radius_ignore_active {
             continue;
         }
         let Value::Vector(stands) = host.get_field(cx, id, origin_field) else {
             continue;
         };
-        let link = Vec3::from(host.client_link_origin[slot]);
+        let link = Vec3::from(host.clients[slot].link_origin);
         let victim = standing_victim(slot, Vec3::from(stands), link);
         let bodies = blast_bodies(host, cx);
         let world = host.world.clone();
@@ -691,12 +686,19 @@ pub fn blast_step(host: &mut GameHost, cx: &mut Cx) {
 fn blast_bodies(host: &mut GameHost, cx: &mut Cx) -> Vec<crate::game::combat::HitBody> {
     let origin_field = cx.intern_folded("origin");
     let mut bodies = Vec::new();
-    if !host.bodies_shield_blasts() {
+    if !host.profile.combat.bodies_shield_blasts {
         return bodies;
     }
-    for (other, body) in host.client_bodies.clone().into_iter().enumerate() {
+    for (other, body) in host
+        .clients
+        .iter()
+        .map(|c| c.body.clone())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .enumerate()
+    {
         let Some(mut body) = body else { continue };
-        if host.client_vitals[other].dead {
+        if host.clients[other].vitals.dead {
             continue;
         }
         let Some(handle) = host.ents.handle(other as u32) else {
@@ -966,9 +968,9 @@ fn body_hit(
     limit: f32,
 ) -> Option<(usize, f32)> {
     let bodies: Vec<crate::game::combat::HitBody> = host
-        .client_bodies
+        .clients
         .iter()
-        .flatten()
+        .filter_map(|c| c.body.as_ref())
         // The relink a death makes lands at once, ahead of the mirror.
         .filter(|b| {
             host.area
@@ -1114,7 +1116,7 @@ mod tests {
             name: "victim".into(),
         });
         rt.run_frame(0);
-        rt.host.client_vitals[0] = Vitals {
+        rt.host.clients[0].vitals = Vitals {
             health: 100,
             max_health: 100,
             dead: false,
@@ -1164,7 +1166,7 @@ mod tests {
                 });
             }
             rt.run_frame(0);
-            rt.host.client_vitals[0] = Vitals {
+            rt.host.clients[0].vitals = Vitals {
                 health: 100,
                 max_health: 100,
                 dead: false,
@@ -1237,7 +1239,7 @@ mod tests {
         rec.busy = 1;
         rt.host.turrets.insert(vcod_gsc::EntId(298, 0), rec);
         for health in [100, 10] {
-            rt.host.client_vitals[0] = Vitals {
+            rt.host.clients[0].vitals = Vitals {
                 health,
                 max_health: 100,
                 dead: false,
@@ -1263,7 +1265,7 @@ mod tests {
     #[test]
     fn a_fatal_finishplayerdamage_runs_the_killed_callback_first() {
         let mut rt = two_clients();
-        rt.host.client_vitals[0] = Vitals {
+        rt.host.clients[0].vitals = Vitals {
             health: 10,
             max_health: 100,
             dead: false,
@@ -1306,7 +1308,7 @@ mod tests {
     #[test]
     fn a_surviving_hit_takes_health_and_a_dead_player_only_until_its_end_frame() {
         let mut rt = two_clients();
-        rt.host.client_vitals[0] = Vitals {
+        rt.host.clients[0].vitals = Vitals {
             health: 100,
             max_health: 100,
             dead: false,
@@ -1435,7 +1437,7 @@ mod tests {
         });
         rt.run_frame(50);
         for slot in [0, 1] {
-            rt.host.client_vitals[slot] = Vitals {
+            rt.host.clients[slot].vitals = Vitals {
                 health: 100,
                 max_health: 100,
                 dead: false,
@@ -1528,7 +1530,7 @@ mod tests {
         rt.run_frame(50);
         let feet = [[100.0, 0.0, 0.0], [300.0, 300.0, 0.0]];
         for slot in [0, 1] {
-            rt.host.client_vitals[slot] = Vitals {
+            rt.host.clients[slot].vitals = Vitals {
                 health: 100,
                 max_health: 100,
                 dead: false,
@@ -1611,7 +1613,7 @@ mod tests {
             for slot in [0, 1] {
                 let x = if slot == front { 50.0 } else { 100.0 };
                 let health = if slot == front { 100 } else { 1000 };
-                rt.host.client_vitals[slot] = Vitals {
+                rt.host.clients[slot].vitals = Vitals {
                     health,
                     max_health: 100,
                     dead: false,
@@ -1727,7 +1729,7 @@ mod tests {
         }
         rt.run_frame(50);
         for (slot, x) in [(0, 50.0), (1, 100.0)] {
-            rt.host.client_vitals[slot] = Vitals {
+            rt.host.clients[slot].vitals = Vitals {
                 health: 1000,
                 max_health: 100,
                 dead: false,
@@ -1817,7 +1819,7 @@ mod tests {
         rt.run_frame(50);
         // In play at the far end of the map, as sd's spawns left them.
         for slot in 0..4 {
-            rt.host.client_vitals[slot] = Vitals {
+            rt.host.clients[slot].vitals = Vitals {
                 health: 1000,
                 max_health: 100,
                 dead: false,
@@ -1859,7 +1861,7 @@ mod tests {
         }
         rt.run_frame(50);
         for slot in [0, 1] {
-            rt.host.client_vitals[slot] = Vitals {
+            rt.host.clients[slot].vitals = Vitals {
                 health: 100,
                 max_health: 100,
                 dead: false,
@@ -1954,7 +1956,7 @@ mod tests {
             name: "victim".into(),
         });
         rt.run_frame(50);
-        rt.host.client_vitals[0] = Vitals {
+        rt.host.clients[0].vitals = Vitals {
             health: 100,
             max_health: 100,
             dead: false,
@@ -2191,7 +2193,7 @@ mod tests {
     /// `suicide` is a death with no attacker but the player itself: the
     /// vitals go to zero, the sim gets a fatal `Damaged` with no damage and
     /// no knockback, and `CodeCallback_PlayerKilled` runs before the calling
-    /// thread continues -- the same ordering a fatal `finishPlayerDamage`
+    /// thread continues: the same ordering a fatal `finishPlayerDamage`
     /// gets. The callback sees `player_die`'s arguments from the builtin's
     /// call (0x453e5): damage 100000, `MOD_SUICIDE`, weapon 0 as `"none"`,
     /// no direction and hit location `"none"`, whatever the player holds.
@@ -2216,7 +2218,7 @@ mod tests {
             }
         "#;
         let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
-        rt.host.client_vitals[0] = Vitals {
+        rt.host.clients[0].vitals = Vitals {
             health: 100,
             max_health: 100,
             dead: false,

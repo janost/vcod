@@ -34,6 +34,8 @@ which resolves the sort (section 5), the polygon offset, the dlight draw
 (section 3) and the sorting stage's images, and keeps the stages as parsed.
 `renderer/material_keys.rs` pins what the renderer derives from every stock
 block and `.stype` template.
+`cargo run -p vcod-common --example dump_shader -- <shader>...` prints the
+parsed stages of named blocks from the install `COD_DIR` names.
 
 ## 2. Census
 
@@ -913,17 +915,18 @@ is INFERRED from assets, not disassembled; retail's evaluation order is
 unread, but the kept and dropped stages on stock assets are deterministic
 under it and match the fallback shapes.
 
-## 8. Deliberately not implemented
+## 8. What vcod leaves out, and what it draws past the grammar
 
-Each omission with its census justification:
+What vcod leaves out or substitutes, each with its census justification,
+first; then what it draws beyond section 3's keywords: vertex deforms
+(8.1), model skin scripts (8.2), world shader types (8.3), the sun (8.4),
+coronas (8.5), `r_flares` (8.6) and `vc_sunShafts` (8.7).
 
 - NV/ATI hardware-path stage contents (`waterMap`, register combiners,
   nv_texshader tcGens, sunHalfAngle). Every occurrence but stalin_1wet sits
   behind a `requires` gate this profile fails, so dropping them reproduces
   retail on fallback hardware. The ungated `tcGen environment` stages
   (stalin_1wet, mp_ship's doors and windows) draw (§3).
-- Vertex deforms, model skin scripts and the sun: the three subsections
-  at the end of this section.
 - Fog: the script keywords stay inert, but stock MP fog does not come from
   them. `fogvars` / `skyfogvars` occur only in SP sky blocks (pak4/pak9
   `sky.shader`), `waterfogvars` nowhere at all. `nofog` sits only on fx,
@@ -969,7 +972,7 @@ Each omission with its census justification:
   traced. `portal` sorts but draws no portal view. The stage `detail` flag
   and `fog on|off` are consumed inertly.
 
-### Vertex deforms
+### 8.1 Vertex deforms
 
 The 1.1 stage parser hands `deformVertexes` to 0x4f9d20, which stores up to
 three deforms per shader in 0x34-byte records and warns
@@ -1125,7 +1128,7 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   undeformed normal.
 - Inert: syncNormal, projectionShadow, text0-7. None has a stock user.
 
-### Model skin scripts
+### 8.2 Model skin scripts
 
 - VERIFIED: the xmodel loader formats `"skins/%s"` (0x54650c, pushed at
   0x504352 and 0x504838) with the surface's skin name and calls
@@ -1145,6 +1148,23 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   shader named `@` plus the type's directory (`model/` for a skin,
   `world/` and `2d/` beside it at 0x546c00) and the type (0x4fbe80); on
   a miss it loads the `.stype` (0x4fbf20) and returns 0 when that fails.
+- VERIFIED, 0x4fbf20 (asm and decompile): a type name past the buffer
+  warns `shader type '%s' too long` and a missing file `could not shader
+  file '%s'`, each returning 0, so the skin draws the default shader. A
+  file that opens goes to `ParseShader` (0x4fa950); when that fails
+  0x4fbf20 frees the file and calls the renderer's `ri.Error` (0x16d8924,
+  `Com_Error` 0x435ad0 in the import table `CL_InitRef` fills at
+  0x41196b) with 1 and `ERROR: invalid shader type in file '%s'`
+  (0x546c48). Code 1 is the drop: `Com_Error` longjmps (0x435ad0's tail)
+  rather than quit. `ParseShader` fails on its closing brace when no stage
+  was parsed and the shader has no sky (0x4fb071: the stage count at
+  `esp+0x18`, zeroed at 0x4fa983 and bumped at 0x4faae9 per stage, then
+  bit 8 of the flags at 0x11e67c4), as well as on a missing brace
+  (`expecting '{'`, `no concluding '}'`) or a bad stage. So a `.stype`
+  with no stage drops the game where a missing one draws the default
+  shader. INFERRED, off the two paths. A sky `.stype` with no stage
+  parses, and `FinishShader` (0x4fba30) gives a shader of no stage sort 9
+  and the count 0 at `+0x150`, which 0x4fc0c0's image loop skips.
   It then loads the skin's image (0x4eed80, by the cut name) for every
   bundle whose image slot holds the `$texturename` marker (`+0x50 ==
   10`), and returns 0 with "WARNING: shadertype '%s' couldn't load image
@@ -1160,7 +1180,11 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   `entity_material::load` draws `shader::default_shader` (the
   `*default` image under `identityLighting`) for a typed skin whose
   template is missing, has no stage, or names `$texturename` without the
-  skin's image, and so does a static prop (`prop_skin_draw`). VERIFIED,
+  skin's image, and so does a static prop (`prop_skin_draw`). For the
+  stageless template that departs from retail, which drops the game.
+  VERIFIED, census 2026-11-17 of every `shadertypes/**/*.stype` in the
+  stock paks (129 files in 1.1's `pak*.pk3`, 159 in 1.5's and UO's): each
+  has a stage, so only a mod's template can take that path. VERIFIED,
   census (`a_typed_skin_retail_cannot_build_draws_the_default_shader`):
   the 5171 typed skin slots of the 1012 stock 1.1 xmodels all build, so
   no stock model draws it. Drawing the implicit skin there would be
@@ -1322,7 +1346,7 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   no shader carries 0x1000 and the remap has nothing to act on; the
   `not precached` error is not ported either.
 
-### World shader types
+### 8.3 World shader types
 
 - VERIFIED, CoDMP.exe: the shader-type path (0x4fc0c0) builds
   `shadertypes/` (0x546cd4, loaded at 0x4fbf3c) + `world/` (0x546c00,
@@ -1353,7 +1377,7 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   mp_depot's `glass@window2a` opaque. Blended types (`cloth_blend`,
   `glass_blend_in`) still cut rather than blend.
 
-### The sun: disc, flare, blind and glare
+### 8.4 The sun: disc, flare, blind and glare
 
 - VERIFIED: worldspawn `sundirection` (string 0x54d1c8) is read with
   `"%f %f %f"` (0x564c44) and passed through AngleVectors (0x42e660, forward
@@ -1495,7 +1519,7 @@ with the stock flare stage hard-coded and the image of the named block's
 first stage. A missing `.sun` file draws no sun at all, as retail does,
 so the seven stock MP skies above draw no disc, flare or wash.
 
-### Coronas
+### 8.5 Coronas
 
 The world's `corona` entities are sprites the renderer adds itself, not
 flares. None of the 1.1 flare machinery draws them.
@@ -1544,7 +1568,7 @@ never draws). The cull is the frustum and
 the visited cells' bounds (`Vis::prop_visible`), not retail's portal
 planes.
 
-### r_flares
+### 8.6 r_flares
 
 - VERIFIED, registrations: `r_flares` "1" CVAR_CHEAT (0x4b386b);
   `r_flareSize` "96", `r_flareFadeIn` and `r_flareFadeOut` "0.2", all
@@ -1569,7 +1593,7 @@ planes.
   and its washes stepping and drawing. The dlight flares (`r_flares` 2 or
   3, cheat only) are not implemented.
 
-### vc_sunShafts (vcod only)
+### 8.7 vc_sunShafts (vcod only)
 
 Not retail: `crate::sun_shafts`. Its sun is the flare's direction (the
 lump-30 sun light), so it needs a sun flare: a loaded `.sun` file with a
@@ -1584,8 +1608,7 @@ out between the sun's NDC reaching the screen edge and 1.6.
 
 - `stock_shaders_parse_without_warnings` (`shader_corpus.rs`) parses every
   stock `.shader` and `.stype` of the install `COD_DIR` names (1.1, 1.5, or
-  UO's `uo/` over `main/`) and fails on any warning: 0 on each (65 unique on
-  1.1 and 207 on UO before the line-bound arguments and keyword fixes).
+  UO's `uo/` over `main/`) and fails on any warning: 0 on each.
 - Corpus tests (`crates/common/tests/shader_corpus.rs`, needs `COD_DIR`):
   >500-block library pin, 250..350 world-reference band, the every-MP-map-has-a-sky
   pin, and every stage image of every authored MP material resolving through
@@ -1597,12 +1620,11 @@ out between the sun's NDC reaching the screen edge and 1.6.
 - Live fly-throughs on a 1.5/UO install: mp_pavlov (night sky), mp_harbor,
   mp_bocage (overcast hedgerow sky, fence and foliage cutouts, terrain
   detail blends), noville (dusk cloud dome, scrolling cloud stage visible),
-  burnville. Zero missing textures on stock main maps; 94-145 fps during the
-  passes.
+  burnville. Zero missing textures on stock main maps.
 - PENDING HUMAN REVIEW: pixel-truth against the retail renderer. The above
   shows surfaces render as authored; only a side-by-side with the real game
   settles the last percent of blending and sky shading.
-- Known divergences, all in §8: NV/ATI hw-path stages dropped (retail
+- Known divergences, in §8 and 8.1: NV/ATI hw-path stages dropped (retail
   fallback parity), `deformVertexes` syncNormal, projectionShadow and
   text0-7 inert, script fog keywords inert (no stock MP map sets fog from a
   script; the fog every map shows arrives in configstring 12 and is

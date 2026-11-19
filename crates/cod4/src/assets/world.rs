@@ -6,10 +6,16 @@ use super::material::{Image, Material, image, material};
 use super::misc::{LightDef, PhysPreset, light_def, phys_preset};
 use super::model::{XModel, brush_sides, xmodel};
 use super::{Id, asset, push};
-use crate::walk::{Follow, Handle, S, W, u16s};
+use crate::walk::{Follow, Handle, S, W, product, u16s};
 use crate::zone::{Block, Pointer};
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 use std::io::BufRead;
+
+/// Inline cells a portal chain may nest (no stock map inlines one) and
+/// splits a path tree may stack: the walk recurses once per level, and a
+/// hostile zone nests thousands deep in a few compressed kilobytes.
+const MAX_INLINE_CELL_DEPTH: usize = 8;
+const MAX_PATH_TREE_DEPTH: usize = 64;
 
 /// Raw bytes kept under [`crate::walk::WalkOptions::keep_bulk`].
 pub type Bulk = Option<Vec<u8>>;
@@ -233,7 +239,7 @@ fn clip_map_t<R: BufRead>(w: &mut W<R>) -> Result<ClipMap> {
         }
         c.brushes = w.keep_bulk().then_some(a.b);
     }
-    c.visibility = array(w, &s, 156, 1, n(148) * n(152))?;
+    c.visibility = array(w, &s, 156, 1, product(&[n(148), n(152)])?)?;
     c.map_ents = map_ents(w, s.ptr(164), s.slot(164))?;
     match w.follow(s.ptr(168), 16)? {
         Follow::Inline => {
@@ -267,7 +273,7 @@ fn clip_map_t<R: BufRead>(w: &mut W<R>) -> Result<ClipMap> {
 fn runtime<R: BufRead>(w: &mut W<R>, s: &S, o: usize, align: u32, n: usize) -> Result<()> {
     w.push(Block::Runtime);
     if w.inline_only(s.ptr(o), align)? {
-        w.bulk(align, n)?;
+        w.reserve(align, n)?;
     }
     w.pop()
 }
@@ -307,24 +313,29 @@ pub struct XModelPieces {
 fn dyn_ent_def<R: BufRead>(w: &mut W<R>, d: &S) -> Result<DynEntityDef> {
     let model = xmodel(w, d.ptr(32), d.slot(32))?;
     let destroy_fx = fx(w, d.ptr(40), d.slot(40))?;
-    let mut pieces = None;
-    if let Follow::Inline = w.follow(d.ptr(44), 4)? {
-        let p = w.load(0xC)?;
-        let mut out = XModelPieces {
-            name: w.xstring(p.ptr(0))?.unwrap_or_default(),
-            pieces: Vec::new(),
-        };
-        if w.inline_only(p.ptr(8), 4)? {
-            let n = p.i32(4).max(0) as usize;
-            let a = w.load(0x10 * n)?;
-            for i in 0..n {
-                let e = a.elem(i, 0x10);
-                let m = xmodel(w, e.ptr(0), e.slot(0))?;
-                out.pieces.push((m, [e.f32(4), e.f32(8), e.f32(12)]));
+    let pieces = match w.follow(d.ptr(44), 4)? {
+        Follow::Null => None,
+        Follow::Inline => {
+            let at = w.here()?;
+            let p = w.load(0xC)?;
+            let mut out = XModelPieces {
+                name: w.xstring(p.ptr(0))?.unwrap_or_default(),
+                pieces: Vec::new(),
+            };
+            if w.inline_only(p.ptr(8), 4)? {
+                let n = p.i32(4).max(0) as usize;
+                let a = w.load(0x10 * n)?;
+                for i in 0..n {
+                    let e = a.elem(i, 0x10);
+                    let m = xmodel(w, e.ptr(0), e.slot(0))?;
+                    out.pieces.push((m, [e.f32(4), e.f32(8), e.f32(12)]));
+                }
             }
+            w.remember("model pieces", at, out.clone());
+            Some(out)
         }
-        pieces = Some(out);
-    }
+        Follow::At(a) => w.recall("model pieces", a),
+    };
     let preset = phys_preset(w, d.ptr(48), d.slot(48))?;
     Ok(DynEntityDef {
         raw: d.b.clone(),
@@ -456,7 +467,7 @@ pub fn game_world_sp<R: BufRead>(
             let n = s.u32(36) as usize;
             let a = w.load(0x10 * n)?;
             for i in 0..n {
-                path_tree(w, &a.elem(i, 0x10))?;
+                path_tree(w, &a.elem(i, 0x10), 0)?;
             }
         }
         w.pop()?;
@@ -471,13 +482,14 @@ pub fn game_world_sp<R: BufRead>(
 }
 
 /// `pathnode_tree_t`, 0x10: a split (`axis >= 0`, two child slots) or a
-/// leaf (a u16 node list).
-fn path_tree<R: BufRead>(w: &mut W<R>, t: &S) -> Result<()> {
+/// leaf (a u16 node list). `depth` is the split count above it.
+fn path_tree<R: BufRead>(w: &mut W<R>, t: &S, depth: usize) -> Result<()> {
     if t.i32(0) >= 0 {
+        ensure!(depth < MAX_PATH_TREE_DEPTH, "path tree deeper than {depth}");
         for o in [8, 12] {
             if let Follow::Inline = w.follow(t.ptr(o), 4)? {
                 let c = w.load(0x10)?;
-                path_tree(w, &c)?;
+                path_tree(w, &c, depth + 1)?;
             }
         }
     } else if w.inline_only(t.ptr(12), 2)? {
@@ -656,7 +668,7 @@ fn gfx_world_body<R: BufRead>(w: &mut W<R>, s: &S) -> Result<GfxWorld> {
     if w.inline_only(s.ptr(260), 4)? {
         let a = w.load(0x38 * cells)?;
         for i in 0..cells {
-            let c = gfx_cell(w, &a.elem(i, 0x38), a.at, cells)?;
+            let c = gfx_cell(w, &a.elem(i, 0x38), a.at, cells, 0)?;
             g.cells.push(c);
         }
     }
@@ -679,8 +691,11 @@ fn gfx_world_body<R: BufRead>(w: &mut W<R>, s: &S) -> Result<GfxWorld> {
     lg.row_axis = s.u32(292);
     lg.col_axis = s.u32(296);
     if row_axis < 3 {
-        let span = s.u16(286 + 2 * row_axis) as usize + 1 - s.u16(280 + 2 * row_axis) as usize;
-        lg.row_data_start = array(w, s, 300, 2, 2 * span)?;
+        let (lo, hi) = (lg.mins[row_axis], lg.maxs[row_axis]);
+        let span = hi
+            .checked_sub(lo)
+            .with_context(|| format!("light grid row axis maxs {hi} below mins {lo}"))?;
+        lg.row_data_start = array(w, s, 300, 2, 2 * (usize::from(span) + 1))?;
     }
     lg.raw_row_data = array(w, s, 308, 1, n(304))?;
     lg.entries = array(w, s, 316, 4, 4 * n(312))?;
@@ -702,12 +717,12 @@ fn gfx_world_body<R: BufRead>(w: &mut W<R>, s: &S) -> Result<GfxWorld> {
     g.outdoor_image = image(w, s.ptr(540), s.slot(540))?;
     let dyn_count = [n(692), n(696)];
     let shadowed = n(220).saturating_sub(n(216) + 1);
-    runtime(w, s, 544, 4, 4 * cells * cells.div_ceil(32))?;
+    runtime(w, s, 544, 4, product(&[4, cells, cells.div_ceil(32)])?)?;
     runtime(w, s, 548, 4, 6 * dyn_count[0])?;
     runtime(w, s, 552, 4, 4 * dyn_count[1])?;
-    runtime(w, s, 556, 4, 4 * shadowed * 4096)?;
-    runtime(w, s, 560, 4, 4 * dyn_count[0] * shadowed)?;
-    runtime(w, s, 564, 4, 4 * dyn_count[1] * shadowed)?;
+    runtime(w, s, 556, 4, product(&[4, shadowed, 4096])?)?;
+    runtime(w, s, 560, 4, product(&[4, dyn_count[0], shadowed])?)?;
+    runtime(w, s, 564, 4, product(&[4, dyn_count[1], shadowed])?)?;
     runtime(w, s, 568, 1, dyn_count[0])?;
     let lights = n(220);
     if w.inline_only(s.ptr(572), 4)? {
@@ -784,8 +799,8 @@ fn gfx_world_body<R: BufRead>(w: &mut W<R>, s: &S) -> Result<GfxWorld> {
     runtime(w, &d, 96, 128, 4 * d.u32(40) as usize)?;
     // GfxWorldDpvsDynamic at 684.
     let words = [n(684), n(688)];
-    runtime(w, s, 700, 4, 4 * words[0] * cells)?;
-    runtime(w, s, 704, 4, 4 * words[1] * cells)?;
+    runtime(w, s, 700, 4, product(&[4, words[0], cells])?)?;
+    runtime(w, s, 704, 4, product(&[4, words[1], cells])?)?;
     for (k, words) in words.iter().enumerate() {
         for j in 0..3 {
             runtime(w, s, 708 + 12 * k + 4 * j, 16, 32 * words)?;
@@ -838,7 +853,13 @@ pub struct GfxPortal {
 /// `GfxCell`, 0x38: its AABB trees, portals (each naming a cell of
 /// `cells_at`'s array, or carrying one inline), cull groups and probe
 /// indices.
-fn gfx_cell<R: BufRead>(w: &mut W<R>, c: &S, cells_at: u32, cells: usize) -> Result<GfxCell> {
+fn gfx_cell<R: BufRead>(
+    w: &mut W<R>,
+    c: &S,
+    cells_at: u32,
+    cells: usize,
+    depth: usize,
+) -> Result<GfxCell> {
     let mut out = GfxCell {
         mins: c.vec3(0),
         maxs: c.vec3(12),
@@ -870,8 +891,12 @@ fn gfx_cell<R: BufRead>(w: &mut W<R>, c: &S, cells_at: u32, cells: usize) -> Res
             let p = a.elem(i, 0x44);
             let cell = match w.follow(p.ptr(32), 4)? {
                 Follow::Inline => {
+                    ensure!(
+                        depth < MAX_INLINE_CELL_DEPTH,
+                        "inline cells nest past {depth}"
+                    );
                     let cell = w.load(0x38)?;
-                    gfx_cell(w, &cell, cells_at, cells)?;
+                    gfx_cell(w, &cell, cells_at, cells, depth + 1)?;
                     None
                 }
                 Follow::At(at) => {
@@ -908,4 +933,147 @@ fn gfx_cell<R: BufRead>(w: &mut W<R>, c: &S, cells_at: u32, cells: usize) -> Res
         out.reflection_probes = w.bytes(1, c.u8(48) as usize)?;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::walk::{WalkOptions, walk};
+    use crate::zone::Zone;
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
+    use std::io::Write;
+
+    const INLINE: u32 = u32::MAX;
+
+    fn le(words: &[u32]) -> Vec<u8> {
+        words.iter().flat_map(|w| w.to_le_bytes()).collect()
+    }
+
+    /// A zone of one `GameWorldSp` whose one path tree is a chain of
+    /// `splits` splits, each inlining the next as its first child.
+    fn path_chain(splits: usize) -> Vec<u8> {
+        let mut body = le(&[0, 0, 1, INLINE, 0x0D, INLINE]);
+        body.extend(le(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, INLINE]));
+        for _ in 0..splits {
+            body.extend(le(&[0, 0, INLINE, 0]));
+        }
+        body.extend(le(&[-1i32 as u32, 0, 0, 0]));
+        zone(body)
+    }
+
+    /// A zone of one `GfxWorld` with one cell whose portal inlines a cell,
+    /// whose portal inlines the next, `depth` cells deep.
+    fn cell_chain(depth: usize) -> Vec<u8> {
+        let mut body = le(&[0, 0, 1, INLINE, 0x10, INLINE]);
+        let mut world = vec![0u8; 0x2DC];
+        world[240..244].copy_from_slice(&1u32.to_le_bytes());
+        world[260..264].copy_from_slice(&INLINE.to_le_bytes());
+        body.extend(world);
+        let mut cell = vec![0u8; 0x38];
+        cell[32..36].copy_from_slice(&1u32.to_le_bytes());
+        cell[36..40].copy_from_slice(&INLINE.to_le_bytes());
+        let mut portal = vec![0u8; 0x44];
+        portal[32..36].copy_from_slice(&INLINE.to_le_bytes());
+        for _ in 0..=depth {
+            body.extend(&cell);
+            body.extend(&portal);
+        }
+        body.extend(vec![0u8; 0x38]);
+        zone(body)
+    }
+
+    fn zone(body: Vec<u8>) -> Vec<u8> {
+        let mut inflated = le(&[
+            body.len() as u32,
+            0,
+            0x1000,
+            1 << 16,
+            0,
+            0,
+            1 << 24,
+            0,
+            0,
+            0,
+            0,
+        ]);
+        inflated.extend(body);
+        let mut z = ZlibEncoder::new(Vec::new(), Compression::fast());
+        z.write_all(&inflated).unwrap();
+        let mut out = b"IWffu100".to_vec();
+        out.extend(5u32.to_le_bytes());
+        out.extend(z.finish().unwrap());
+        out
+    }
+
+    fn walks(data: &[u8]) -> anyhow::Result<()> {
+        walk(Zone::open(data)?, WalkOptions::default()).map(|_| ())
+    }
+
+    /// A zone of one `GfxWorld` with no cells, `set` writing its struct.
+    fn gfx_world(set: impl FnOnce(&mut [u8])) -> Vec<u8> {
+        let mut body = le(&[0, 0, 1, INLINE, 0x10, INLINE]);
+        let mut world = vec![0u8; 0x2DC];
+        set(&mut world);
+        body.extend(world);
+        zone(body)
+    }
+
+    fn put(b: &mut [u8], o: usize, v: u32) {
+        b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+    }
+
+    /// Both walk options refuse `data` with an error holding `want`.
+    fn refused(data: &[u8], want: &str) {
+        for keep_bulk in [false, true] {
+            let r = walk(Zone::open(data).unwrap(), WalkOptions { keep_bulk });
+            let e = format!("{:#}", r.err().expect("walked"));
+            assert!(e.contains(want), "{e}");
+        }
+    }
+
+    #[test]
+    fn a_light_grid_with_maxs_below_mins_is_refused() {
+        walks(&gfx_world(|_| {})).unwrap();
+        refused(
+            &gfx_world(|b| {
+                b[280..282].copy_from_slice(&5u16.to_le_bytes());
+                put(b, 300, INLINE);
+            }),
+            "maxs 0 below mins 5",
+        );
+    }
+
+    #[test]
+    fn a_runtime_array_past_its_block_is_refused_unallocated() {
+        // 4 * 2^30 primary lights * 4096: 2^44 bytes of shadow bits.
+        refused(
+            &gfx_world(|b| {
+                put(b, 220, 1 << 30);
+                put(b, 556, INLINE);
+            }),
+            "pass the block's size",
+        );
+        // 4 * 2^31 * (2^32 - 2): the product overflows.
+        refused(
+            &gfx_world(|b| {
+                put(b, 220, u32::MAX);
+                put(b, 692, 1 << 31);
+                put(b, 560, INLINE);
+            }),
+            "overflows",
+        );
+    }
+
+    #[test]
+    fn a_path_tree_past_the_depth_cap_is_refused() {
+        walks(&path_chain(super::MAX_PATH_TREE_DEPTH)).unwrap();
+        let e = format!("{:#}", walks(&path_chain(100_000)).unwrap_err());
+        assert!(e.contains("path tree deeper"), "{e}");
+    }
+
+    #[test]
+    fn inline_cells_past_the_depth_cap_are_refused() {
+        let e = format!("{:#}", walks(&cell_chain(100_000)).unwrap_err());
+        assert!(e.contains("inline cells nest"), "{e}");
+    }
 }

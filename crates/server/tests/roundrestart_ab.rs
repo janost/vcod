@@ -14,8 +14,8 @@
 //! the restart's own frame, the length of the round that ran its timer out
 //! and the wait from the death that ended the other round to its restart
 //! (both frame for frame on the server clock), plus the vitals either side of the respawn. Not a command-for-command
-//! diff -- the burst carries slots ours pins to constants
-//! (`mapchange_ab::CMD_GAPS`) -- but the *set* of configstring slots each
+//! diff (`mapchange_ab` compares the restart's `d` burst slot for slot),
+//! but the *set* of configstring slots each
 //! half is sent an update for is compared whole: a restart keeps the
 //! engine's table, so the incoming level's registrations land where the
 //! outgoing level's did and nothing is re-broadcast (map-cycle doc, 4.6).
@@ -30,7 +30,7 @@ use crate::common;
 use common::{NetchanEvent, NetchanKind};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::NetEvent;
 
 const MAP: &str = "mp_carentan";
@@ -43,8 +43,8 @@ const TARGET: &str = "tests/fixtures/netchan/mp_carentan-sd-roundrestart-target.
 const KILL_AT_MS: i64 = 20_000;
 
 /// Configstring slots whose updates are left out of the slot-set comparison:
-/// the restart burst's own (`mapchange_ab::CMD_GAPS` says why 12 and 13
-/// are ours to miss; 1 and 3 are compared as the burst).
+/// the restart burst's own (`mapchange_ab` compares 12 and 13 slot for
+/// slot; 1 and 3 are compared as the burst).
 const CS_BURST_SLOTS: &[usize] = &[1, 3, 12, 13];
 
 /// How often the target half asks for the scoreboard. The shooter half asks
@@ -134,7 +134,7 @@ fn vitals(k: &NetchanKind) -> Vitals {
 }
 
 /// Compares one field of the respawn against retail, unless [`RESTART_GAPS`]
-/// suppresses it -- in which case the divergence itself is what is asserted,
+/// suppresses it, in which case the divergence itself is what is asserted,
 /// so a gap that starts matching fails and has to be deleted.
 fn compare(half: &str, what: &str, retail: i32, ours: i32) {
     match RESTART_GAPS.iter().find(|(w, _)| *w == what) {
@@ -207,9 +207,6 @@ fn restarts(who: &str, events: &[NetchanEvent]) -> Vec<Restart> {
     out
 }
 
-/// The connect-time gamestate's serverId, and a check that nothing sent
-/// another one from the first restart onwards: a restart pushes none
-/// (map-cycle doc 3.1).
 /// Every slot a half was sent a `d <slot>` for over the run, as a sorted set
 /// minus [`CS_BURST_SLOTS`]. A set rather than a sequence: what it proves is
 /// which slots moved at all, and retail's run has one more elimination round
@@ -227,6 +224,9 @@ fn updated_slots(events: &[NetchanEvent]) -> Vec<usize> {
     slots
 }
 
+/// The connect-time gamestate's serverId, and a check that nothing sent
+/// another one from the first restart onwards: a restart pushes none
+/// (map-cycle doc 3.1).
 fn one_gamestate(who: &str, events: &[NetchanEvent], from_ms: i64) {
     let late = events
         .iter()
@@ -295,15 +295,12 @@ fn an_sd_round_restart_matches_retail() {
     };
     let retail = [read(SHOOTER), read(TARGET)];
 
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "sd"), now);
-    // The fixture headers' two cvars, verbatim.
-    sv.set_cvar("scr_sd_roundlength", "1");
-    sv.set_cvar("scr_friendlyfire", "1");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        // The fixture headers' two cvars, verbatim.
+        cvars: &[("scr_sd_roundlength", "1"), ("scr_friendlyfire", "1")],
+        ..common::Boot::new(MAP, "sd")
+    }
+    .start(fs);
     // Retail ran a while before either probe joined (the target's gamestate
     // reads serverTime 24950), so the first round's own `sayMoveIn` had
     // played to nobody before the match-start restart; a join on the load

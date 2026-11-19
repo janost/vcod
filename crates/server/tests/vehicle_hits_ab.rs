@@ -16,7 +16,7 @@ use common::{Join, Queues, step};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::NetClient;
 use vcod_common::net::NetEvent;
 use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, UserCmd};
@@ -35,21 +35,17 @@ const SETTLE_MS: i64 = 1000;
 fn ours(map: &str, vehicletype: &str, cvars: &[(&str, &str)]) -> Option<Vec<String>> {
     let _ = env_logger::builder().is_test(true).try_init();
     let fs = vcod_common::testing::uo_fs()?;
-    let bsp_path = fs.resolve_map(map).expect("map in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_vehicle_hits"), now);
-    sv.set_protocol(&PROTOCOL_V22);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_vehicle_hits",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_vehicle_hits.gsc"),
-    );
-    sv.set_cvar("probe_vehicletype", vehicletype);
-    for (k, v) in cvars {
-        sv.set_cvar(k, v);
+    let mut all_cvars = vec![("probe_vehicletype", vehicletype)];
+    all_cvars.extend_from_slice(cvars);
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&PROTOCOL_V22),
+        cvars: &all_cvars,
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_vehicle_hits.gsc"
+        )),
+        ..common::Boot::new(map, "probe_vehicle_hits")
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl = NetClient::start_with_qport(common::ClientEnd(q.clone()), now, 0x2001);
@@ -85,7 +81,7 @@ fn ours(map: &str, vehicletype: &str, cvars: &[(&str, &str)]) -> Option<Vec<Stri
             // `setPlayerAngles` left, the rest along the held view the cmd
             // rebases back to, and every sixth cmd fires on the press's
             // phase: retail's rounds left along the held view
-            // (coduo-vehicles.md 13, "The shooter's phase").
+            // (coduo-vehicles.md 13.9, "The shooter's phase").
             if settled && !pressed {
                 if let Some(c) = cmds.first_mut() {
                     c.buttons = 0;

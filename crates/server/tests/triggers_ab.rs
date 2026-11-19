@@ -19,7 +19,7 @@
 //! What it does not cover: mp_pavlov's one `trigger_hurt` never fired. Its
 //! brush is the kill volume under the floor and a walking player never reaches
 //! it, so every fire line is a `trigger_multiple` and the hurt half of the
-//! touch pass -- the cadence, the damage, the slow spawnflag -- has no retail
+//! touch pass (the cadence, the damage, the slow spawnflag) has no retail
 //! evidence behind it here (`hurtfall_ab.rs` lifts it into a falling
 //! player's path on mp_carentan and gates the kill and the corpse). Entity 72 is pinned as existing and as surviving
 //! the gametype's deletion pass, and no further. Nor does any other trigger
@@ -37,7 +37,7 @@
 //!
 //! A second one, and it is the one that let a live bug through. The probe's
 //! walker steers at brush centres, so every station the fixture sampled sits
-//! well inside the real brush -- and inside the brush a bounding-box test and
+//! well inside the real brush, and inside the brush a bounding-box test and
 //! a brush contact agree. The gate stayed green for as long as ours tested
 //! the bounding box, while a player standing in the bulge of a wedge-shaped
 //! minefield died meters clear of the mines. Nothing here samples that bulge;
@@ -45,8 +45,8 @@
 //! (`a_wedge_is_touched_by_its_brush_and_not_by_the_bulge_of_its_box` and the
 //! mp_pavlov one beside it).
 //!
-//! A capture cannot be replayed as a walk -- the route is not reproducible and
-//! a retail spawn is random -- so the gate replays each recorded origin, the
+//! A capture cannot be replayed as a walk (the route is not reproducible and
+//! a retail spawn is random), so the gate replays each recorded origin, the
 //! way `entities_ab.rs` does (docs/protocol-1.1.md, "Which entities a client
 //! is sent").
 //!
@@ -57,13 +57,12 @@ use crate::common;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use vcod_common::net::msg::NULL_USERCMD;
 
 /// The probe script both sides run, as the gametype. Overlaid onto the pak
 /// path a gametype is loaded from, since it ships in no pak.
-const PROBE_PATH: &str = "maps/mp/gametypes/probe_trigger";
 const PROBE_SRC: &str = "../gsc/tests/fixtures/semantics/client-probes/probe_trigger.gsc";
 
 const MAP: &str = "mp_pavlov";
@@ -73,7 +72,7 @@ const JOIN: (&str, &str) = ("allies", "mosin_nagant_mp");
 const FIXTURE: &str = "tests/fixtures/triggers/mp_pavlov-dm-triggers.txt";
 
 /// One `PROBE fire` record: which trigger fired, its classname, and where the
-/// toucher stood. The toucher's own entity number is dropped -- it is the
+/// toucher stood. The toucher's own entity number is dropped: it is the
 /// client slot on both sides and says nothing about the touch.
 #[derive(Debug, Clone, PartialEq)]
 struct Fire {
@@ -170,18 +169,16 @@ fn the_touch_pass_matches_retail_on_mp_pavlov() {
 
     let probe =
         std::fs::read_to_string(PROBE_SRC).unwrap_or_else(|e| panic!("read the probe: {e}"));
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("the bsp");
     let fs = Rc::new(fs);
 
-    let mut now = Instant::now();
     // `g_gametype` is the probe, exactly as retail ran it: the probe's own
     // `main()` is what calls the real gametype's, and `_gameobjects` deletes
     // by the list that gametype registered either way.
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_trigger"), now);
-    sv.overlay_script(PROBE_PATH, &probe);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(&probe),
+        ..common::Boot::new(MAP, "probe_trigger")
+    }
+    .start(fs);
 
     let q = Rc::new(RefCell::new(common::Queues::default()));
     // The join is what puts a player in the world; it also spends the four

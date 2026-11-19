@@ -37,7 +37,7 @@
 //! `-legs-client-torso-1.5.txt` and `-torso-uo.txt` are the torso walk's
 //! client half on 1.5b and UO, compared for the anim selection alone: there
 //! `PM_Footsteps` runs ahead of `PM_Weapon` (player-model-anim-system.md,
-//! "the main arm calls `PM_Footsteps`, then `PM_Weapon`").
+//! "The speed it compares").
 //!
 //! `LEGS_REPORT=1` prints every compared frame; `LEGS_IDLE_MS` sweeps the
 //! 1.5 and UO join.
@@ -52,9 +52,9 @@ use common::{ADDR, ClientEnd, FRAME_MS, Join, Queues, holding, step_at};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6};
 use vcod_common::net::{NetClient, NetEvent};
 
 const MAP: &str = "mp_carentan";
@@ -146,7 +146,7 @@ const STOPGO_SPAWN_UO: [f32; 2] = [776.0, 3488.0];
 /// starts connecting on a fresh server (900 on 1.5 and 1050 on UO, whose
 /// gametypes open `serverinfo_<gametype>` before the team menu), so the
 /// client starts this many frames in for an idle set at `idle_ms`.
-fn join_frames(idle_ms: i32, proto: &Protocol) -> u32 {
+fn join_frames(idle_ms: i32, proto: &Cod1Wire) -> u32 {
     let join_ms = match proto.transport.version {
         v if v == PROTOCOL_V1.transport.version => 800,
         v if v == PROTOCOL_V6.transport.version => 900,
@@ -448,14 +448,12 @@ fn run_ours(
             ),
         );
     }
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, gametype), now);
-    sv.set_protocol(proto);
-    sv.overlay_script(&format!("maps/mp/gametypes/{gametype}"), script);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        script: Some(script),
+        ..common::Boot::new(MAP, gametype)
+    }
+    .start(fs);
     if spawn.is_some() {
         sv.pin_spawns(vec![vec![spawn]]);
     }
@@ -473,7 +471,7 @@ fn run_ours(
     let mut next_cmd = 0;
     let mut last_st = i32::MIN;
     loop {
-        let newest = cl.snapshots().newest().map(|s| s.server_time);
+        let newest = cl.snapshots().newest().map(|s| s.server_time.raw());
         let t = newest.map_or(0, |t| t + FRAME_MS as i32);
         if t > last {
             break;
@@ -527,13 +525,13 @@ fn run_ours(
                 let l = s.ps.field_i32(p, "legsAnim");
                 let retail = walk.spawned.unwrap_or(idle_ms);
                 assert!(
-                    l == 0 || s.server_time == retail,
+                    l == 0 || s.server_time.raw() == retail,
                     "ours set the spawn idle at {}, not retail's {retail}",
-                    s.server_time
+                    s.server_time.raw()
                 );
             }
             legs.insert(
-                s.server_time,
+                s.server_time.raw(),
                 (
                     s.ps.field_i32(p, "legsAnim"),
                     s.ps.field_i32(p, "movementDir"),
@@ -578,13 +576,9 @@ fn a_walking_body_is_posed_like_retail() {
 /// at 1.5's spread phase (cod11-movers.md 15, "The phase on 1.5 and UO").
 #[test]
 fn a_walking_body_is_posed_like_retail_on_15() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     let run = ours_walk(fs, CLIENT_15, SPAWN_15, SPAWN_MSG).unwrap();
     check_walk(&run, SERVER_15, CLIENT_15);
 }
@@ -676,11 +670,7 @@ const STOPGO_TAKEN_BACK: &[&str] = &["back_go", "go2", "go3", "go4", "strafe_rig
 /// The 1.5b stop-and-go walk: every go inside a blend keeps the run's time.
 #[test]
 fn a_body_stopping_and_going_is_posed_like_retail_on_15() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
-        return;
-    };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
+    if vcod_common::testing::game_fs_15().is_none() {
         return;
     }
     check_stop_and_go(
@@ -1005,13 +995,9 @@ fn check_torso_selection(fs: vcod_common::pk3::Pk3Fs, client: &str) -> usize {
 /// clauses are empty (1.5b 0x28889, 0x2888e).
 #[test]
 fn a_body_firing_on_the_move_selects_retails_anims_on_15() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     assert!(check_torso_selection(fs, TORSO_CLIENT_15) > 500);
 }
 

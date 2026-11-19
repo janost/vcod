@@ -365,12 +365,12 @@ Live runs against vcod-server:
   lets a command another thread of that frame queued after the death go out
   ahead of the `b`, and the rows read the frame's end. VERIFIED, vcod:
   `a_script_death_sends_its_followers_the_scoreboard_when_the_callback_returns`
-  (`crates/server/src/server.rs`) has a script `suicide()` a followed
-  player whose callback queues a line and writes its score, then starts a
-  thread that writes the score again and queues another; the follower reads
-  the callback's line, the `b` with the callback's score, then the thread's
-  line. INFERRED, from section 4's addresses: that is retail's order. No run
-  has measured a script-frame death's `b` on retail.
+  (`crates/server/src/server/follow_frame.rs`) has a script `suicide()` a
+  followed player whose callback queues a line and writes its score, then
+  starts a thread that writes the score again and queues another; the follower
+  reads the callback's line, the `b` with the callback's score, then the
+  thread's line. INFERRED, from section 4's addresses: that is retail's order.
+  No run has measured a script-frame death's `b` on retail.
 
 Where it is not retail's:
 

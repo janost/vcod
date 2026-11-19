@@ -478,15 +478,7 @@ fn cylinder_props_dropped_edge_first_rest_clear_of_steps() {
     let (Some(install), Some(common)) = (cod4_install(), zone("common_mp")) else {
         return;
     };
-    let mut maps: Vec<String> = std::fs::read_dir(install.zone_dir("english"))
-        .unwrap()
-        .filter_map(|e| {
-            let name = e.ok()?.file_name().into_string().ok()?;
-            let map = name.strip_suffix(".ff")?;
-            (map.starts_with("mp_") && !map.ends_with("_load")).then(|| map.to_string())
-        })
-        .collect();
-    maps.sort();
+    let maps = vcod_cod4::testing::stock_maps(&install);
     let mut seen = std::collections::BTreeMap::new();
     for map in &maps {
         let Some(walked) = zone(map) else { continue };

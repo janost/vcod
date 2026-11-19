@@ -93,7 +93,11 @@ impl PixelConsts {
         let floats = |a: &[f32; 4], b: &[f32; 4]| {
             a.iter()
                 .zip(b)
-                .map(|(x, y)| x.partial_cmp(y).unwrap_or(Ordering::Equal))
+                // NaN sorts last, so the order stays total.
+                .map(|(x, y)| {
+                    x.partial_cmp(y)
+                        .unwrap_or_else(|| x.is_nan().cmp(&y.is_nan()))
+                })
                 .find(|c| c.is_ne())
                 .unwrap_or(Ordering::Equal)
         };
@@ -265,6 +269,19 @@ pub fn soup_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A NaN literal sorts after every number, so the order stays total.
+    #[test]
+    fn a_nan_literal_keeps_the_order_total() {
+        let c = |v: f32| PixelConsts {
+            code: vec![],
+            literal: vec![(0, [v; 4])],
+        };
+        assert_eq!(c(f32::NAN).cmp(&c(1.0)), Ordering::Greater);
+        assert_eq!(c(1.0).cmp(&c(f32::NAN)), Ordering::Less);
+        assert_eq!(c(f32::NAN).cmp(&c(f32::NAN)), Ordering::Equal);
+        assert_eq!(c(-0.0).cmp(&c(0.0)), Ordering::Equal);
+    }
 
     /// A soup key sorts by sort key, then list, then (world) surface or
     /// (the other lists) primary light ahead of the material.

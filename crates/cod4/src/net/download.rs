@@ -5,8 +5,13 @@
 
 use std::path::{Path, PathBuf};
 
+use vcod_common::game_dir::confined_rel_path;
 use vcod_common::net::codec::{MsgReader, MsgWriter};
+use vcod_common::net::download::{Block, Download, UdpFile};
+use vcod_common::net::http::Fetch;
 use vcod_common::net::info_value_for_key;
+pub use vcod_common::pak_checksum::fs_iw_iwd;
+use vcod_common::text::latin1_bytes;
 
 pub const SVC_DOWNLOAD: u8 = 5;
 
@@ -34,10 +39,6 @@ pub enum DownloadMsg {
 
 fn latin1(b: &[u8]) -> String {
     b.iter().map(|&c| c as char).collect()
-}
-
-fn latin1_bytes(s: &str) -> Vec<u8> {
-    s.chars().map(|c| c as u32 as u8).collect()
 }
 
 impl DownloadMsg {
@@ -100,23 +101,6 @@ impl DownloadMsg {
     }
 }
 
-/// `FS_iwIwd(name, base)` (0x81286c2): `<base>/iw_00` .. `<base>/iw_24`
-/// compared whole, or a name whose part up to `localized_` is
-/// `<base>/localized_` and whose rest holds `_iw00` .. `_iw24`.
-pub fn fs_iw_iwd(name: &str, base: &str) -> bool {
-    let fold = |s: &str| s.to_ascii_lowercase().replace('\\', "/");
-    let name = fold(name);
-    let base = fold(base);
-    if (0..25).any(|n| name == format!("{base}/iw_{n:02}")) {
-        return true;
-    }
-    let Some(at) = name.find("localized_") else {
-        return false;
-    };
-    let (head, rest) = name.split_at(at + "localized_".len());
-    head == format!("{base}/localized_") && (0..25).any(|n| rest.contains(&format!("_iw{n:02}")))
-}
-
 /// A file a 1.7 client fetches.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Wanted {
@@ -138,12 +122,34 @@ fn pairs(systeminfo: &str, names: &str, sums: &str) -> Vec<(String, i64)> {
         .collect()
 }
 
+/// An install's own directories, which a server's `fs_game` may not name:
+/// a download never lands in them.
+const STOCK_DIRS: [&str; 8] = [
+    "main",
+    "main_shared",
+    "zone",
+    "players",
+    "usermaps",
+    "miles",
+    "video",
+    "docs",
+];
+
+/// libwww's event timeout for an `http` URL, 30000 ms (iw3mp.exe 0x500b61).
+const WWW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The most bytes one download takes, on either transport: vcod's cap,
+/// past any mod's iwd or fastfile.
+pub const MAX_DOWNLOAD_BYTES: u64 = 1 << 30;
+
 /// The directory a server's own files sit in: `fs_game` when set, else
-/// `None` (stock `main`).
+/// `None` (stock `main`). One that leaves the install or names one of its
+/// own directories is `None` too: nothing is fetched into it.
 pub fn fs_game(systeminfo: &str) -> Option<String> {
-    info_value_for_key(systeminfo, "fs_game")
-        .filter(|g| !g.is_empty() && !g.eq_ignore_ascii_case("main"))
-        .map(str::to_string)
+    let g = info_value_for_key(systeminfo, "fs_game")?;
+    let rel = confined_rel_path(g)?;
+    let top = rel.components().next()?.as_os_str().to_str()?;
+    (!STOCK_DIRS.iter().any(|d| top.eq_ignore_ascii_case(d))).then(|| g.to_string())
 }
 
 /// What `FS_CompareWithServerFiles` puts on the download list: every
@@ -162,7 +168,7 @@ pub fn missing_files(
         let in_game = game.as_ref().is_some_and(|g| {
             lower.starts_with(&format!("{}/", g.to_ascii_lowercase().replace('\\', "/")))
         });
-        (in_game || lower.starts_with("usermaps/")) && safe_rel_path(name).is_some()
+        (in_game || lower.starts_with("usermaps/")) && confined_rel_path(name).is_some()
     };
     let mut out = Vec::new();
     for (name, sum) in pairs(systeminfo, "sv_referencedIwdNames", "sv_referencedIwds") {
@@ -205,28 +211,12 @@ pub fn missing_in(root: &Path, systeminfo: &str, map: Option<&str>) -> Vec<Wante
         systeminfo,
         |sum| held.contains(&sum),
         |name| {
-            let rel = safe_rel_path(&format!("{name}.ff"))?;
+            let rel = confined_rel_path(&format!("{name}.ff"))?;
             std::fs::metadata(crate::install::resolve_ci(root, &rel))
                 .ok()
                 .map(|m| m.len())
         },
     )
-}
-
-/// A relative path under the homepath for a referenced name: one or more
-/// components, none empty, `.`, `..`, or holding a backslash, a colon or a
-/// control character.
-pub fn safe_rel_path(name: &str) -> Option<PathBuf> {
-    let parts: Vec<&str> = name.split('/').collect();
-    let ok = |c: &&str| {
-        !c.is_empty()
-            && *c != "."
-            && *c != ".."
-            && !c
-                .bytes()
-                .any(|b| b < b' ' || b == 0x7f || matches!(b, b'\\' | b':'))
-    };
-    (parts.len() >= 2 && parts.iter().all(ok)).then(|| parts.iter().collect())
 }
 
 /// The iwds' unkeyed checksums under `dirs` (as `sv_iwds` lists them).
@@ -254,17 +244,6 @@ pub fn iwd_file_checksum(path: &Path) -> Option<i32> {
     let f = std::fs::File::open(path).ok()?;
     let crcs = vcod_common::pak_checksum::entry_crcs(std::io::BufReader::new(f)).ok()?;
     Some(super::pure::iwd_checksum(&crcs, 0))
-}
-
-/// `SV_WriteDownloadToClient`'s blocks a message: the client's rate (capped
-/// by `sv_maxRate` when that is 1000 or more) over its snapshot interval in
-/// 2 KiB units, rounded up past a whole one (0x816fa21..0x816fa93); 1 at
-/// rate 0.
-pub fn blocks_per_message(rate: i32, snapshot_msec: i32) -> u32 {
-    if rate == 0 {
-        return 1;
-    }
-    ((rate * snapshot_msec / 1000 + 0x800) >> 11).max(1) as u32
 }
 
 /// The file in flight for the connect screen: its referenced name, the
@@ -307,22 +286,17 @@ pub enum DownloadEvent {
 /// One file in flight.
 struct Current {
     wanted: Wanted,
-    dest: PathBuf,
-    tmp: PathBuf,
-    file: std::fs::File,
-    /// `clc.downloadBlock` (0xc5b28c): the block expected next.
-    block: i32,
-    size: u64,
-    got: u64,
+    /// The spool, `clc.downloadBlock` (0xc5b28c) and the announced size.
+    udp: UdpFile,
     /// The HTTP fetch after a redirect (the client's www download flag, 0xc5b6a4).
-    www: Option<super::http::HttpFetch>,
+    www: Option<Fetch>,
 }
 
 /// The client's queue after a gamestate (`CL_InitDownloads`, `CL_NextDownload`,
 /// `CL_ParseDownload` at iw3mp.exe 0x474440): one file at a time into
 /// `root` at its referenced path, `donedl` once the queue is empty, which
 /// has the server send the gamestate again (VERIFIED live, section 11).
-/// A www redirect is fetched over HTTP ([`super::http::HttpFetch`]),
+/// A www redirect is fetched over HTTP ([`Fetch`], with libwww's 30 s),
 /// driven by [`Downloads::poll`]; `wwwdl fail` falls back to UDP on the
 /// gamestate it brings ([`Downloads::on_gamestate`]).
 pub struct Downloads {
@@ -375,8 +349,8 @@ impl Downloads {
         let c = self.current.as_ref()?;
         Some(DownloadProgress {
             file: c.wanted.remote.clone(),
-            bytes: c.www.as_ref().map_or(c.got, |f| f.bytes()),
-            total: c.size,
+            bytes: c.www.as_ref().map_or(c.udp.spool.received, Fetch::received),
+            total: c.udp.size,
         })
     }
 
@@ -403,16 +377,21 @@ impl Downloads {
             return Vec::new();
         };
         let mut cur = self.current.take().unwrap();
-        cur.www = None;
+        let got = cur.www.take().map_or(0, |f| f.received());
         match done {
-            Ok(got) => {
-                cur.got = got;
+            Ok(()) => {
+                cur.udp.spool.received = got;
                 let mut out = Vec::new();
                 if !self.disconnected {
                     out.push(DownloadEvent::Command("wwwdl done".into()));
                 }
-                out.push(cur.finish());
-                if self.disconnected {
+                let landed = cur.finish();
+                let failed = matches!(landed, DownloadEvent::Failed(_));
+                out.push(landed);
+                if failed {
+                    self.queue.clear();
+                    self.started = false;
+                } else if self.disconnected {
                     self.queue.clear();
                     self.started = false;
                     out.push(DownloadEvent::Reconnect);
@@ -426,8 +405,6 @@ impl Downloads {
                     "cod4: Download failure while getting '{}': {e}",
                     cur.wanted.remote
                 );
-                drop(cur.file);
-                let _ = std::fs::remove_file(&cur.tmp);
                 if self.disconnected {
                     self.queue.clear();
                     self.started = false;
@@ -452,10 +429,9 @@ impl Downloads {
     /// `CL_NextDownload`: the next file's `download`, or `donedl` once
     /// every file came (only when one was asked for).
     pub fn next_download(&mut self) -> Vec<DownloadEvent> {
-        use std::io::Write as _;
         let mut out = Vec::new();
         while let Some(wanted) = self.queue.pop_front() {
-            let Some(rel) = safe_rel_path(&wanted.remote) else {
+            let Some(rel) = confined_rel_path(&wanted.remote) else {
                 out.push(DownloadEvent::Skipped(format!(
                     "Could not create {}",
                     wanted.remote
@@ -470,35 +446,21 @@ impl Downloads {
                 // listed one lands beside it.
                 dest.set_extension(format!("{:08x}.iwd", sum as u32));
             }
-            let tmp = dest.with_extension("vcod-dl");
-            let file = dest
-                .parent()
-                .map_or(Ok(()), std::fs::create_dir_all)
-                .and_then(|()| std::fs::File::create(&tmp))
-                .and_then(|mut f| f.flush().map(|()| f));
-            match file {
-                Ok(file) => {
+            match Download::replacing(&wanted.remote, &dest) {
+                Ok(spool) => {
                     out.push(DownloadEvent::Command(format!(
                         "download {}",
                         wanted.remote
                     )));
                     self.current = Some(Current {
                         wanted,
-                        dest,
-                        tmp,
-                        file,
-                        block: 0,
-                        size: 0,
-                        got: 0,
+                        udp: UdpFile::new(spool),
                         www: None,
                     });
                     self.started = true;
                     return out;
                 }
-                Err(e) => out.push(DownloadEvent::Skipped(format!(
-                    "Could not create {}: {e}",
-                    dest.display()
-                ))),
+                Err(e) => out.push(DownloadEvent::Skipped(format!("{e:#}"))),
             }
         }
         if self.started {
@@ -510,7 +472,6 @@ impl Downloads {
 
     /// `CL_ParseDownload` for one message.
     pub fn on_message(&mut self, msg: &DownloadMsg) -> Vec<DownloadEvent> {
-        use std::io::Write as _;
         let Some(cur) = self.current.as_mut() else {
             // 0x474545: blocks nobody asked for are stopped.
             return match msg {
@@ -518,46 +479,42 @@ impl Downloads {
                 _ => Vec::new(),
             };
         };
-        match msg {
-            DownloadMsg::Redirect { url, size, flags } => self.redirect(url, *size, *flags),
+        let (block, size, data) = match msg {
+            DownloadMsg::Redirect { url, size, flags } => {
+                return self.redirect(url, *size, *flags);
+            }
             DownloadMsg::Refused(reason) => {
-                let cur = self.current.take().unwrap();
-                drop(cur.file);
-                let _ = std::fs::remove_file(&cur.tmp);
+                self.current = None;
                 self.queue.clear();
                 self.started = false;
-                vec![DownloadEvent::Failed(reason.clone())]
+                return vec![DownloadEvent::Failed(reason.clone())];
             }
-            DownloadMsg::Block { block, .. } if *block != cur.block => {
-                // 0x4744fb: a block past the one due asks for it again; an
-                // older one is a resend already written.
-                if *block > cur.block {
-                    vec![DownloadEvent::Command(format!("retransdl {}", cur.block))]
-                } else {
-                    Vec::new()
-                }
+            DownloadMsg::Block { block, size, data } => (*block, *size, data),
+        };
+        // 0x4744fb: a block past the one due asks for it again; an older
+        // one is a resend already written. vcod's bound is CoD1's and
+        // CoD2's: the announced size, at most `MAX_DOWNLOAD_BYTES`.
+        match cur.udp.take(block, size, data, MAX_DOWNLOAD_BYTES) {
+            Block::Old => Vec::new(),
+            Block::Ahead(due) => vec![DownloadEvent::Command(format!("retransdl {due}"))],
+            Block::TooBig(why) => {
+                self.current = None;
+                vec![DownloadEvent::Command("stopdl".into()), self.abandon(why)]
             }
-            DownloadMsg::Block { block, size, data } => {
-                if let Some(s) = size {
-                    cur.size = (*s).max(0) as u64;
-                }
-                if let Err(e) = cur.file.write_all(data) {
-                    let cur = self.current.take().unwrap();
-                    let _ = std::fs::remove_file(&cur.tmp);
-                    let mut out = vec![
-                        DownloadEvent::Command("stopdl".into()),
-                        DownloadEvent::Skipped(format!("cannot write {}: {e}", cur.tmp.display())),
-                    ];
-                    out.extend(self.next_download());
-                    return out;
-                }
-                cur.got += data.len() as u64;
-                cur.block += 1;
+            Block::Unwritable(why) => {
+                self.current = None;
+                let mut out = vec![
+                    DownloadEvent::Command("stopdl".into()),
+                    DownloadEvent::Skipped(why),
+                ];
+                out.extend(self.next_download());
+                out
+            }
+            Block::Took { block, eof } => {
                 let mut out = vec![DownloadEvent::Command(format!("nextdl {block}"))];
-                if data.is_empty() {
+                if eof {
                     let cur = self.current.take().unwrap();
-                    out.push(cur.finish());
-                    out.extend(self.next_download());
+                    out.extend(self.land(cur));
                 }
                 out
             }
@@ -566,14 +523,37 @@ impl Downloads {
 }
 
 impl Downloads {
+    /// The file renamed into place and the next one asked for; a file
+    /// that fails its check ends the queue.
+    fn land(&mut self, cur: Current) -> Vec<DownloadEvent> {
+        match cur.finish() {
+            e @ DownloadEvent::Failed(_) => {
+                self.queue.clear();
+                self.started = false;
+                vec![e]
+            }
+            e => {
+                let mut out = vec![e];
+                out.extend(self.next_download());
+                out
+            }
+        }
+    }
+
+    /// The file in flight given up for `why`, its spool gone with it: the
+    /// queue ended.
+    fn abandon(&mut self, why: String) -> DownloadEvent {
+        self.queue.clear();
+        self.started = false;
+        DownloadEvent::Failed(why)
+    }
+
     /// `CL_ParseDownload`'s block -1 (iw3mp.exe 0x474270..0x474439).
     fn redirect(&mut self, url: &str, size: i32, flags: i32) -> Vec<DownloadEvent> {
         let mut cur = self.current.take().unwrap();
         if flags & DL_FLAG_URL != 0 {
             // 0x474311: the URL opened in a browser, `wwwdl bbl8r` and
             // `quit`.
-            drop(cur.file);
-            let _ = std::fs::remove_file(&cur.tmp);
             self.queue.clear();
             self.started = false;
             return vec![
@@ -581,13 +561,19 @@ impl Downloads {
                 DownloadEvent::Failed(format!("The server sends its files from {url}")),
             ];
         }
-        cur.size = size.max(0) as u64;
+        cur.udp.size = size.max(0) as u64;
         log::info!("cod4: Server redirected download: {url}");
         let mut out = vec![DownloadEvent::Command("wwwdl ack".into())];
         let fetch = if self.www {
-            super::http::HttpFetch::start(url, &cur.tmp)
+            // libwww sends a space in the path as `%20`.
+            let url = url.replace(' ', "%20");
+            cur.udp
+                .spool
+                .spool()
+                .map_err(anyhow::Error::from)
+                .and_then(|f| Fetch::spawn_timed(&url, f, cur.limit(), WWW_TIMEOUT))
         } else {
-            Err("cl_wwwDownload is off".into())
+            Err(anyhow::anyhow!("cl_wwwDownload is off"))
         };
         match fetch {
             Ok(f) => {
@@ -598,8 +584,6 @@ impl Downloads {
                 // 0x4743e7: `wwwdl fail` and `Failed to initialize
                 // download for '%s'`.
                 log::warn!("cod4: Failed to initialize download for '{url}': {e}");
-                drop(cur.file);
-                let _ = std::fs::remove_file(&cur.tmp);
                 out.extend(self.fall_back(cur.wanted));
                 return out;
             }
@@ -613,17 +597,48 @@ impl Downloads {
 }
 
 impl Current {
-    /// The spool renamed into place, unchecked, as both of 1.7's ends of a
-    /// file do (`CL_WWWDownload` 0x472a4b, `CL_ParseDownload` 0x474614):
-    /// the next gamestate's `CL_InitDownloads` compares it again.
+    /// The most bytes an HTTP fetch may take: the announced size, under
+    /// [`MAX_DOWNLOAD_BYTES`].
+    fn limit(&self) -> u64 {
+        match self.udp.size {
+            0 => MAX_DOWNLOAD_BYTES,
+            s => s.min(MAX_DOWNLOAD_BYTES),
+        }
+    }
+
+    /// Why the landed spool is not the file the server listed: short of
+    /// its announced size, a fastfile off its listed size, an iwd off its
+    /// listed checksum.
+    fn check(&self) -> Option<String> {
+        let (got, size) = (self.udp.spool.received, self.udp.size);
+        if size > 0 && got != size {
+            return Some(format!("{got} of {size} bytes"));
+        }
+        if let Some(listed) = self.wanted.size
+            && got as i64 != listed
+        {
+            return Some(format!("{got} bytes, the server lists {listed}"));
+        }
+        if let Some(sum) = self.wanted.checksum
+            && iwd_file_checksum(self.udp.spool.spooled()) != Some(sum)
+        {
+            return Some(format!("not the iwd of checksum {sum}"));
+        }
+        None
+    }
+
+    /// The spool renamed into place once it is the file the server listed
+    /// ([`Self::check`]); 1.7 renames it unchecked (`CL_WWWDownload`
+    /// 0x472a4b, `CL_ParseDownload` 0x474614) and compares it on the next
+    /// gamestate. A spool that fails is removed and ends the queue.
     fn finish(self) -> DownloadEvent {
-        drop(self.file);
-        match std::fs::rename(&self.tmp, &self.dest) {
-            Ok(()) => DownloadEvent::Finished(self.wanted.remote, self.dest, self.size),
-            Err(e) => {
-                let _ = std::fs::remove_file(&self.tmp);
-                DownloadEvent::Skipped(format!("cannot rename into {}: {e}", self.dest.display()))
-            }
+        if let Some(why) = self.check() {
+            return DownloadEvent::Failed(format!("{}: {why}", self.wanted.remote));
+        }
+        let (dest, size) = (self.udp.spool.dest().to_path_buf(), self.udp.size);
+        match self.udp.spool.land() {
+            Ok(()) => DownloadEvent::Finished(self.wanted.remote, dest, size),
+            Err(e) => DownloadEvent::Skipped(format!("{e:#}")),
         }
     }
 }
@@ -688,25 +703,39 @@ mod tests {
         assert!(got.is_empty());
     }
 
+    /// Referenced names go through the shared file-name rule: empty
+    /// components fold, `..` anywhere and a drive colon list nothing.
     #[test]
-    fn paths_stay_home() {
-        assert!(safe_rel_path("mods/mw/z.iwd").is_some());
-        assert!(safe_rel_path("usermaps/mp_x/mp_x.ff").is_some());
-        assert!(safe_rel_path("../x.iwd").is_none());
-        assert!(safe_rel_path("x.iwd").is_none());
-        assert!(safe_rel_path("mods//x.iwd").is_none());
-        assert!(safe_rel_path("c:/x.iwd").is_none());
+    fn referenced_names_stay_under_the_install() {
+        let si = "\\sv_referencedFFCheckSums\\1 2 3 \\sv_referencedFFNames\\usermaps/mp_x//mp_x \
+                  usermaps/../zone/common_mp usermaps/c:x";
+        let names: Vec<String> = missing_files(si, |_| true, |_| None)
+            .into_iter()
+            .map(|w| w.remote)
+            .collect();
+        assert_eq!(names, ["usermaps/mp_x//mp_x.ff"]);
+        let (tmp, mut dls) = queued(Wanted {
+            remote: names[0].clone(),
+            checksum: None,
+            size: None,
+        });
+        dls.on_message(&DownloadMsg::Block {
+            block: 0,
+            size: Some(0),
+            data: Vec::new(),
+        });
+        assert!(tmp.path().join("usermaps/mp_x/mp_x.ff").is_file());
     }
 
     /// A redirect to a name holding a colour code (a CoD4x update
     /// backend's `mods/cod4i/^7mod.ff`): the GET carries the `^` raw, as
-    /// libwww sends the path, and the file lands under that name with no
-    /// size check, as 1.7 renames its spool (cod4-handshake.md 11, 13).
+    /// libwww sends the path, and the file lands under that name
+    /// (cod4-handshake.md 11, 13).
     #[test]
     fn a_colour_coded_name_is_fetched_raw_and_kept() {
         use std::io::{BufRead, Write};
-        let root = std::env::temp_dir().join(format!("vcod-dl-caret-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
         let body: Vec<u8> = (0..5000u32).map(|i| (i * 7) as u8).collect();
@@ -733,8 +762,7 @@ mod tests {
         let wanted = Wanted {
             remote: "mods/cod4i/^7mod.ff".into(),
             checksum: None,
-            // Not the served size: the file is kept all the same.
-            size: Some(body.len() as i64 + 1),
+            size: Some(body.len() as i64),
         };
         let mut dls = Downloads::new(&root, vec![wanted]);
         assert_eq!(
@@ -772,7 +800,111 @@ mod tests {
             ]
         );
         assert_eq!(std::fs::read(&dest).unwrap(), body);
-        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fs_game_names_no_stock_directory() {
+        assert_eq!(fs_game("\\fs_game\\mods/mw").as_deref(), Some("mods/mw"));
+        for bad in [
+            "",
+            "main",
+            "Zone",
+            "zone/english",
+            "players",
+            "usermaps",
+            "../x",
+            "/x",
+            "c:/x",
+        ] {
+            assert_eq!(fs_game(&format!("\\fs_game\\{bad}")), None, "{bad}");
+        }
+        // A server naming the install's own zones fetches nothing.
+        let si = "\\fs_game\\zone\\sv_referencedFFCheckSums\\5 \\sv_referencedFFNames\\zone/english/common_mp";
+        assert!(missing_files(si, |_| false, |_| None).is_empty());
+    }
+
+    /// A scratch root, removed on drop, and one queued file, its `download` sent.
+    fn queued(wanted: Wanted) -> (tempfile::TempDir, Downloads) {
+        let root = tempfile::tempdir().unwrap();
+        let mut dls = Downloads::new(root.path(), vec![wanted]);
+        assert!(
+            matches!(&dls.next_download()[..], [DownloadEvent::Command(c)] if c.starts_with("download "))
+        );
+        (root, dls)
+    }
+
+    #[test]
+    fn a_transfer_past_its_announced_size_aborts_and_removes_its_spool() {
+        let ff = Wanted {
+            remote: "mods/m/mod.ff".into(),
+            checksum: None,
+            size: Some(4),
+        };
+        let (tmp, mut dls) = queued(ff);
+        let root = tmp.path();
+        let block = |block, size, data: &[u8]| DownloadMsg::Block {
+            block,
+            size,
+            data: data.to_vec(),
+        };
+        assert_eq!(
+            dls.on_message(&block(0, Some(4), b"abc")),
+            [DownloadEvent::Command("nextdl 0".into())]
+        );
+        let evs = dls.on_message(&block(1, None, b"de"));
+        assert_eq!(evs[0], DownloadEvent::Command("stopdl".into()));
+        assert!(
+            matches!(&evs[1], DownloadEvent::Failed(w) if w.contains("5 bytes, 4 announced")),
+            "{evs:?}"
+        );
+        assert!(dls.is_done());
+        assert!(!root.join("mods/m/mod.ff.tmp").exists());
+        assert!(!root.join("mods/m/mod.ff").exists());
+    }
+
+    /// An announced size past the cap fails on block 0, before a byte of
+    /// it is written.
+    #[test]
+    fn an_announced_size_past_the_cap_fails_at_once() {
+        let ff = Wanted {
+            remote: "mods/m/mod.ff".into(),
+            checksum: None,
+            size: None,
+        };
+        let (_tmp, mut dls) = queued(ff);
+        let evs = dls.on_message(&DownloadMsg::Block {
+            block: 0,
+            size: Some(MAX_DOWNLOAD_BYTES as i32 + 1),
+            data: vec![7; 10],
+        });
+        assert_eq!(evs[0], DownloadEvent::Command("stopdl".into()));
+        assert!(matches!(&evs[1], DownloadEvent::Failed(_)), "{evs:?}");
+        assert!(dls.is_done());
+    }
+
+    #[test]
+    fn an_iwd_off_its_listed_checksum_is_removed() {
+        let iwd = Wanted {
+            remote: "mods/m/z.iwd".into(),
+            checksum: Some(1234),
+            size: None,
+        };
+        let (tmp, mut dls) = queued(iwd);
+        let root = tmp.path();
+        let block = |block, size, data: &[u8]| DownloadMsg::Block {
+            block,
+            size,
+            data: data.to_vec(),
+        };
+        dls.on_message(&block(0, Some(3), b"zip"));
+        let evs = dls.on_message(&block(1, None, b""));
+        assert!(
+            matches!(&evs[1], DownloadEvent::Failed(w) if w.contains("checksum 1234")),
+            "{evs:?}"
+        );
+        assert_eq!(evs.len(), 2);
+        assert!(!root.join("mods/m/z.iwd.tmp").exists());
+        assert!(!root.join("mods/m/z.iwd").exists());
     }
 
     #[test]

@@ -129,6 +129,49 @@ fn a_dud_at_rest_changes_to_a_dud() {
 
 const DUD_RINGS: &str = "[(0, [0, 0, 0, 0], [0, 0, 0, 0]), (1, [51, 0, 0, 0], [5, 0, 0, 0])]";
 
+/// A frag a script `delete()`s goes with the call's unlink: its row leaves
+/// the missile list at once, and its fuse runs out with no burst and no
+/// splash (cod4-combat.md 14).
+#[test]
+fn a_deleted_frag_neither_flies_nor_bursts() {
+    let mut id = None;
+    let mut rows_after = Vec::new();
+    let mut bursts = 0;
+    let mut health = 0;
+    let done = run(&mut |level, svs| {
+        if svs == ACT_MS {
+            let ps = level.pm_state(0).unwrap();
+            id = level.fire_grenade_for_test(
+                1,
+                "frag_grenade_mp",
+                ps.origin + Vec3::new(0.0, 0.0, 30.0),
+                Vec3::ZERO,
+                1000,
+            );
+            assert!(id.is_some());
+        }
+        let Some(id) = id else { return };
+        if svs == ACT_MS + 50 {
+            // `delete()` less its `death` notify, which needs a thread's Cx.
+            crate::game::builtins::entity::unlink_and_free(&mut level.rt.host, id);
+        }
+        if svs > ACT_MS + 50 {
+            let c4 = level.rt.host.cod4();
+            rows_after.extend(c4.missiles.iter().filter(|m| m.id == id).map(|_| svs));
+            bursts = bursts.max(c4.bursts.len());
+        }
+        if svs <= ACT_MS + 2000 {
+            health = level.rt.client_vitals(0).health;
+        }
+    });
+    if done.is_none() {
+        return;
+    }
+    assert!(rows_after.is_empty(), "the row stayed at {rows_after:?}");
+    assert_eq!(bursts, 0);
+    assert_eq!(health, 100);
+}
+
 /// A frag thrown into the target's chest bounces off him as off flesh:
 /// `EV_GRENADE_BOUNCE` with surface type 7.
 #[test]
@@ -424,4 +467,27 @@ fn a_claymore_kill_runs_the_kill_scripts_clean() {
         "{splash:?}"
     );
     assert!(health <= 0, "{health}");
+}
+
+/// A frame leaves neither the blast noises (a script `radiusDamage`'s)
+/// nor the weapon ops (the spawns' `TakeAll`s) the shared builtins queue
+/// for CoD1's engine: both are gone past every frame.
+#[test]
+fn a_cod4_frame_keeps_no_blast_noise_or_weapon_op() {
+    let mut most = (0, 0);
+    let mut heard = false;
+    let ran = run(&mut |level, _| {
+        let h = &mut level.rt.host;
+        most = (
+            most.0.max(h.blast_noises.len()),
+            most.1.max(h.client_weapon_ops.len()),
+        );
+        if !std::mem::replace(&mut heard, true) {
+            h.blast_noises.push(([0.0; 3], Some(1)));
+        }
+    });
+    if ran.is_none() {
+        return;
+    }
+    assert_eq!(most, (0, 0));
 }

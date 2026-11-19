@@ -8,7 +8,7 @@ use super::entity::entity_receiver;
 use crate::game::host::{GameHost, SimOp};
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("getfullclipammo", get_full_clip_ammo),
@@ -32,10 +32,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("spawntriggermount", spawn_trigger_mount),
 ];
 
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
-
 /// `getFullClipAmmo(weapon)` (0x6782e): the weapon file's `clipSize`.
 pub fn get_full_clip_ammo(
     host: &mut GameHost,
@@ -54,9 +50,9 @@ pub fn get_full_clip_ammo(
     Ok(Value::Int(size))
 }
 
-/// `spawnTriggerMount(mins, maxs, crouch)` (0x77974): a `trigger_mount`
+/// `spawnTriggerMount(mins, maxs, crouch)` (0x67974): a `trigger_mount`
 /// over the absolute box the two corners span, each axis sorted, at origin 0,
-/// linked by `SP_trigger_mount_no_brush` (0x87754) with contents 0x4000, or
+/// linked by `SP_trigger_mount_no_brush` (0x77754) with contents 0x4000, or
 /// 0x400000 and spawnflag 1 when `crouch` is true. An LMG deploys on it
 /// (docs/research/coduo-movement.md 11).
 pub fn spawn_trigger_mount(
@@ -138,11 +134,11 @@ pub fn iprint_line_bold(
     match recv {
         Some(_) => {
             let slot = client_receiver(host, recv)?;
-            host.client_commands.push((slot, cmd));
+            host.client_commands.push(slot, cmd);
         }
         None => {
             for slot in host.client_slots() {
-                host.client_commands.push((slot, cmd.clone()));
+                host.client_commands.push(slot, cmd.clone());
             }
         }
     }
@@ -157,7 +153,7 @@ fn slot_weapon(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<(usize, usize), ErrorKind> {
-    let client = client_receiver(host, recv)?;
+    let client = client_receiver(host, recv)?.index();
     let Some(Value::String(name)) = args.first() else {
         return Err(ErrorKind::BadType("that builtin takes a weapon slot name"));
     };
@@ -171,7 +167,7 @@ fn slot_weapon(
                 cx.resolve(*name)
             ))
         })?;
-    Ok((client, host.client_weapons[client].slots[slot] as usize))
+    Ok((client, host.clients[client].weapons.slots[slot] as usize))
 }
 
 /// `self getWeaponSlotAmmo(slot)` (0x4838a): the reserve of the slot's
@@ -186,7 +182,7 @@ pub fn get_weapon_slot_ammo(
     let Some(def) = host.weapons.get(weapon) else {
         return Ok(Value::Int(0));
     };
-    let a = &host.client_ammo[client];
+    let a = &host.clients[client].ammo;
     let rounds = if def.clip_only {
         a.clip[def.clip_index]
     } else {
@@ -207,7 +203,7 @@ pub fn get_weapon_slot_clip_ammo(
         return Ok(Value::Int(0));
     };
     Ok(Value::Int(i32::from(
-        host.client_ammo[client].clip[def.clip_index],
+        host.clients[client].ammo.clip[def.clip_index],
     )))
 }
 
@@ -219,8 +215,8 @@ pub fn attack_button_pressed(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
-    let held = host.client_buttons[slot] & vcod_common::net::msg::BUTTON_ATTACK != 0;
+    let slot = client_receiver(host, recv)?.index();
+    let held = host.clients[slot].buttons & vcod_common::net::msg::BUTTON_ATTACK != 0;
     Ok(Value::Int(i32::from(held)))
 }
 
@@ -235,7 +231,7 @@ pub fn is_in_vehicle(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let seated =
         host.vehicles.seat_of(slot).is_some() || host.vehicles.stale_seated.contains(&slot);
     Ok(Value::Int(i32::from(seated)))
@@ -252,7 +248,7 @@ pub fn view_kick(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let (Some(force), Some(Value::Vector(from))) = (args.first(), args.get(1)) else {
         return Err(ErrorKind::Custom(
             "USAGE: <player> viewkick <force 0-127> <source position>\n".into(),
@@ -273,8 +269,9 @@ pub fn view_kick(
 
 /// `setTakeDamage(bool)` (0x691d2): `ent->takedamage` (+0x17d). A script
 /// entity with it set takes `G_Damage` from blasts and `doDamage`
-/// (`GameHost::damage_nonclient`); a client's lives on the sim and is not
-/// moved here.
+/// (`GameHost::damage_nonclient`); a vehicle's is its record's
+/// (`Vehicle::takedamage`); a client's lives on the sim and is not moved
+/// here.
 pub fn set_take_damage(
     host: &mut GameHost,
     _cx: &mut Cx,
@@ -285,7 +282,9 @@ pub fn set_take_damage(
     let [v] = args else {
         return Err(ErrorKind::Custom("SetTakeDamage true/false\n".into()));
     };
-    if host.ents.get(id).is_some_and(|e| e.client.is_none()) {
+    if let Some(veh) = host.vehicles.live.get_mut(&id) {
+        veh.takedamage = v.as_bool()?;
+    } else if host.ents.get(id).is_some_and(|e| e.client.is_none()) {
         if v.as_bool()? {
             host.script_takedamage.insert(id);
         } else {
@@ -453,7 +452,7 @@ pub fn play_local_announcer_sound(
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
     let idx = super::sound::alloc_alias(host, cx, args)? - super::sound::sounds_base(host);
-    host.client_commands.push((slot, format!("S {idx}")));
+    host.client_commands.push(slot, format!("S {idx}"));
     Ok(Value::Undefined)
 }
 
@@ -476,7 +475,7 @@ pub fn rewind_fx(
     };
     let slot = client_receiver(host, Some(Target::Entity(*id)))?;
     host.client_commands
-        .push((slot, format!("F {}", secs.wrapping_mul(1000))));
+        .push(slot, format!("F {}", secs.wrapping_mul(1000)));
     Ok(Value::Undefined)
 }
 
@@ -492,8 +491,9 @@ pub fn get_stance(
 ) -> Result<Value, ErrorKind> {
     use vcod_common::pmove::Stance;
     let slot = client_receiver(host, recv)
-        .map_err(|_| ErrorKind::Custom("GetStance is only defined for players.".into()))?;
-    let stance = match host.client_stance[slot] {
+        .map_err(|_| ErrorKind::Custom("GetStance is only defined for players.".into()))?
+        .index();
+    let stance = match host.clients[slot].stance {
         Stance::Prone => "prone",
         Stance::Crouch => "crouch",
         Stance::Stand => "stand",
@@ -601,12 +601,151 @@ mod tests {
         });
     }
 
+    /// `setTakeDamage` on a vehicle writes its record's `takedamage`: off,
+    /// `G_Damage` and the blast walk pass it by; on, the blast lists it
+    /// once, as a vehicle (coduo-vehicles.md 13).
+    #[test]
+    fn set_take_damage_gates_a_vehicle() {
+        use crate::game::vehicle::{Vehicle, info::VehicleInfo, vehicle_damage};
+        let mut host = GameHost::new(&crate::game::profile::COD1_UO, vec![String::new(); 2048]);
+        let mut vm = vcod_gsc::Vm::new();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            let health = cx.intern_folded("health");
+            host.set_field(cx, e, health, Value::Int(100)).unwrap();
+            host.vehicles
+                .infos
+                .list
+                .push(std::rc::Rc::new(VehicleInfo::default()));
+            host.vehicles.slots[0] = Some(e);
+            host.vehicles.live.insert(e, Vehicle::for_test(0));
+            let recv = Some(Target::Entity(e));
+            let hit = |host: &mut GameHost, cx: &mut Cx| {
+                vehicle_damage(
+                    host,
+                    cx,
+                    e,
+                    None,
+                    None,
+                    [0.0, 0.0, 1.0],
+                    [0.0; 3],
+                    50,
+                    0,
+                    "MOD_EXPLOSIVE",
+                )
+            };
+            let listed = |host: &mut GameHost, cx: &mut Cx| {
+                host.blast_entities(cx).iter().filter(|v| v.id == e).count()
+            };
+            set_take_damage(&mut host, cx, recv, &[Value::Int(0)]).unwrap();
+            assert!(hit(&mut host, cx).is_empty());
+            assert_eq!(host.get_field(cx, e, health), Value::Int(100));
+            assert_eq!(listed(&mut host, cx), 0);
+            set_take_damage(&mut host, cx, recv, &[Value::Int(1)]).unwrap();
+            assert!(host.script_takedamage.is_empty());
+            assert_eq!(listed(&mut host, cx), 1);
+            assert_eq!(hit(&mut host, cx)[0].0, "damage");
+            assert!(matches!(host.get_field(cx, e, health), Value::Int(h) if h < 100));
+        });
+    }
+
+    /// The weapon slot builtins take the slot names but `none` (slot 0);
+    /// an empty slot's weapon reads 0 rounds.
+    #[test]
+    fn a_weapon_slot_builtin_refuses_none_and_unknown_names() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn_client(cx, 1, None).unwrap();
+            let t = Some(Target::Entity(e));
+            let ask = |host: &mut GameHost, cx: &mut Cx, name: &str| {
+                let n = Value::String(cx.intern_exact(name));
+                get_weapon_slot_ammo(host, cx, t, &[n])
+            };
+            assert_eq!(ask(&mut host, cx, "primaryb"), Ok(Value::Int(0)));
+            assert_eq!(ask(&mut host, cx, "smokegrenade"), Ok(Value::Int(0)));
+            for bad in ["none", "Primary", "rifle"] {
+                assert!(
+                    matches!(ask(&mut host, cx, bad), Err(ErrorKind::Custom(m)) if m.starts_with("Unknown weaponslot name")),
+                    "{bad}"
+                );
+            }
+            assert!(get_weapon_slot_ammo(&mut host, cx, t, &[Value::Int(1)]).is_err());
+            let not_a_player = Some(Target::Entity(host.ents.spawn(cx).unwrap()));
+            let n = Value::String(cx.intern_exact("primary"));
+            assert!(get_weapon_slot_ammo(&mut host, cx, not_a_player, &[n]).is_err());
+        });
+    }
+
+    /// `doDamage` with no attacker names the world as both attacker and
+    /// inflictor; with an attacker alone the attacker is the inflictor too
+    /// (coduo-diff.md 22). Read off the `damage` notify's second and sixth
+    /// arguments.
+    #[test]
+    fn dodamage_defaults_its_attacker_and_inflictor() {
+        let src = "hit(e, by) {\n\
+                       e thread watch();\n\
+                       if (isDefined(by)) e doDamage(5, (0, 0, 0), by);\n\
+                       else e doDamage(5, (0, 0, 0));\n\
+                   }\n\
+                   watch() {\n\
+                       self waittill(\"damage\", d, a, dir, p, m, i);\n\
+                       self.seen_a = a getEntityNumber();\n\
+                       self.seen_i = i getEntityNumber();\n\
+                   }\n";
+        let mut vm = vcod_gsc::Vm::new();
+        let ast = vcod_gsc::parse::parse_file(src).unwrap();
+        let fns = vcod_gsc::compile::compile_file(&ast, "maps/mp/t", vm.interner_mut()).unwrap();
+        vm.install(fns).unwrap();
+        let mut host = GameHost::new(&crate::game::profile::COD1_UO, vec![String::new(); 2048]);
+        let (e, by) = vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            let classname = cx.intern_folded("classname");
+            let model = Value::String(cx.intern_exact("script_model"));
+            host.set_field(cx, e, classname, model).unwrap();
+            let origin = cx.intern_folded("origin");
+            host.set_field(cx, e, origin, Value::Vector([0.0, 0.0, 64.0]))
+                .unwrap();
+            host.script_takedamage.insert(e);
+            (e, host.ents.spawn(cx).unwrap())
+        });
+        let hit = vm.func_ref("maps/mp/t", "hit");
+        let seen = |vm: &mut vcod_gsc::Vm, host: &mut GameHost| {
+            vm.with_cx(|cx| {
+                let a = cx.intern_folded("seen_a");
+                let i = cx.intern_folded("seen_i");
+                (host.get_field(cx, e, a), host.get_field(cx, e, i))
+            })
+        };
+        vm.start_thread(
+            &mut host,
+            hit,
+            None,
+            vec![Value::Entity(e), Value::Undefined],
+        );
+        vm.run_frame(&mut host, 50);
+        let world = vm.with_cx(|cx| host.ents.world(cx)).0 as i32;
+        assert_eq!(
+            seen(&mut vm, &mut host),
+            (Value::Int(world), Value::Int(world))
+        );
+        vm.start_thread(
+            &mut host,
+            hit,
+            None,
+            vec![Value::Entity(e), Value::Entity(by)],
+        );
+        vm.run_frame(&mut host, 100);
+        let by = by.0 as i32;
+        assert_eq!(seen(&mut vm, &mut host), (Value::Int(by), Value::Int(by)));
+        assert!(vm.aborts().is_empty(), "{:?}", vm.aborts());
+    }
+
     #[test]
     fn getstance_reads_the_mirrored_stance() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
             let e = host.ents.spawn_client(cx, 2, None).unwrap();
-            host.client_stance[2] = vcod_common::pmove::Stance::Prone;
+            host.clients[2].stance = vcod_common::pmove::Stance::Prone;
             let v = get_stance(&mut host, cx, Some(Target::Entity(e)), &[]).unwrap();
             assert!(matches!(v, Value::String(a) if cx.resolve(a) == "prone"));
             let other = host.ents.spawn(cx).unwrap();

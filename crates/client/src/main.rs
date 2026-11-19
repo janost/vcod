@@ -86,6 +86,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 use vcod_common::asset_source::{AssetSource, RawFile};
+use vcod_common::net::Msec;
 use vcod_common::text::atoi_msvc;
 use winit::application::ApplicationHandler;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseScrollDelta, WindowEvent};
@@ -107,6 +108,26 @@ const TITLE: &str = concat!("vcod ", env!("VCOD_VERSION"));
 
 /// The GPU backend the renderer picked, once it has one.
 static BACKEND: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// The language check (CoDMP.exe 0x4a9b10) at start-up and each
+/// `vid_restart`: `cl_languagesavailable`, and a `cl_language` whose strings
+/// load (front-end doc 1). CoD 1 only.
+fn check_language(shell: &mut console::shell::Shell, fs: &Pk3Fs) {
+    if fs.game() != vcod_common::game::Game::Cod1 {
+        return;
+    }
+    let chosen = shell.cvar("cl_language").unwrap_or("").to_string();
+    let (count, set) = vcod_common::ui_menu::check_language(fs, &chosen);
+    if count == 0 {
+        console::log::print(
+            "^1ERROR: No languages available because no localized assets were found",
+        );
+    }
+    shell.force_set("cl_languagesavailable", &count.to_string());
+    if let Some(v) = set {
+        shell.force_set("cl_language", &v);
+    }
+}
 
 /// [`TITLE`] with the GPU backend, for the window title and the main menu.
 fn version_tag() -> String {
@@ -222,8 +243,8 @@ struct Args {
     /// player, which leaves every field the client predicts at zero.
     #[arg(long)]
     save_motion: bool,
-    /// Join a team, then run a scripted weapon sequence -- single shot,
-    /// sustained fire, reload, fire crouched and prone -- and write the retail
+    /// Join a team, then run a scripted weapon sequence (single shot,
+    /// sustained fire, reload, fire crouched and prone) and write the retail
     /// playerstate to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-combat.txt.
     /// Separate from --save-motion because that one samples a settled state
@@ -238,9 +259,9 @@ struct Args {
     /// sequence takes about 40 s, inside the default --probe-secs.
     #[arg(long)]
     save_combat: bool,
-    /// Join a team, then run the sight script -- sight held, released, held
+    /// Join a team, then run the sight script (sight held, released, held
     /// through a reload, through a shot and while walking, plus a hip shot
-    /// and a walk to kick the spread counter -- and write every snapshot's
+    /// and a walk to kick the spread counter) and write every snapshot's
     /// fWeaponPosFrac and aimSpreadScale to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-ads.txt.
     /// The same machine as --save-combat with another script; the two are
@@ -248,9 +269,9 @@ struct Args {
     /// never hold still for.
     #[arg(long)]
     save_ads: bool,
-    /// Join a team, then run the grenade script -- one melee swing on the
+    /// Join a team, then run the grenade script (one melee swing on the
     /// rifle, a switch to the frag, a cooked throw, a cook held past the pin,
-    /// a cook cancelled by a weapon switch and a throw at the ground -- and
+    /// a cook cancelled by a weapon switch and a throw at the ground) and
     /// write every snapshot's grenadeTimeLeft and weaponDelay, plus a !missile
     /// line per snapshot that had one on the wire, to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-grenade.txt.
@@ -1251,7 +1272,7 @@ impl ViewTail<'_> {
 
 /// F3 overlay text, top line first. A free function because the caller holds
 /// the renderer borrowed out of `App`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn hud_lines(
     mode: &Mode,
     // `Mode::Cod2`'s camera tag: the game the session plays.
@@ -1734,6 +1755,7 @@ fn main() -> Result<()> {
     }
     // `cl_language` registers after the config ran, taking its value.
     shell.apply_latched();
+    check_language(&mut shell, &fs);
     // vcod's old defaults a config still holds go (cod11-console.md 8).
     let (reset, upgraded) = shell.upgrade_config(game);
     for name in &reset {
@@ -1757,32 +1779,6 @@ fn main() -> Result<()> {
         }
     }
 
-    let mut cod2_fs_game = None;
-    let cod2_session = match &args.connect {
-        Some(addr) if cod2_connect => {
-            let t0 = Instant::now();
-            let mut s = play::cod2::Cod2Session::connect(
-                addr,
-                &cod2_front::connect_opts(&shell, &fs),
-                std::time::Duration::from_secs(15),
-            )?;
-            // The gamestate's `fs_game` and downloads, before the map loads.
-            if s.take_reopen(None) {
-                cod2_fs_game = s.fs_game().map(str::to_string);
-                if let Some(g) = &cod2_fs_game {
-                    shell.force("fs_game", g);
-                }
-                fs = play::cod2::open_search(&args.game_dir, cod2_fs_game.as_deref())?;
-            }
-            s.join = args.team.clone().map(|team| play::cod2::Join {
-                team,
-                weapon: args.weapon.clone(),
-            });
-            vcod_common::laps::span(t0, || "cod2 handshake to the gamestate".into());
-            Some(Box::new(s))
-        }
-        _ => None,
-    };
     // A live CoD4 join runs beside the window, which draws the connect
     // screen meanwhile (`cod4_loading`).
     let mut cod4_loading = None;
@@ -1834,21 +1830,13 @@ fn main() -> Result<()> {
     // Fly and walk need their map up front; online learns it from the
     // server inside the loop and loads through the same path as a map change.
     // With neither, the window opens on the console.
-    // A CoD2 server names its map in the gamestate the session waited for.
-    let map_arg = match &cod2_session {
-        _ if let Some(s) = &cod4_session => {
-            Some(s.map_name().context("cod4: no mapname in serverinfo")?)
-        }
-        Some(s) => Some(
-            s.map_name()
-                .context("cod2: no mapname in serverinfo")?
-                .to_string(),
-        ),
+    // A CoD2 `--connect` loads its map once the window's connect has the
+    // gamestate (`App::connect_cod2`).
+    let map_arg = match &cod4_session {
+        Some(s) => Some(s.map_name().context("cod4: no mapname in serverinfo")?),
+        None if cod2_connect => None,
         None => args.map.clone(),
     };
-    // The session is read on its own thread until the window's first frame
-    // takes it back (play::cod2::Pump): the load can outlast `sv_timeout`.
-    let cod2_pump = cod2_session.map(|s| s.pump());
     let mut cod4_map = None;
     let local = if (cod4_fly || cod4_watch)
         && let Some(map) = map_arg.as_deref()
@@ -2018,9 +2006,8 @@ fn main() -> Result<()> {
                     FlyCamera::new(center, 0.0)
                 }
             };
-            // `--connect` to a CoD2 server: the session is on its pump. A
-            // watched CoD4 session drives the camera the same way.
-            match cod2_pump.is_some() || cod4_session.is_some() {
+            // A watched CoD4 session drives the camera.
+            match cod4_session.is_some() {
                 true => Mode::Cod2(cam),
                 false => Mode::Fly(cam),
             }
@@ -2069,7 +2056,7 @@ fn main() -> Result<()> {
         fs,
         game_dir: args.game_dir.clone(),
         mod_dir: args.mod_dir.clone(),
-        fs_game: cod2_fs_game,
+        fs_game: None,
         fs_pure: None,
         connect_addr: args.connect.clone(),
         team: args.team.clone(),
@@ -2078,6 +2065,8 @@ fn main() -> Result<()> {
         shell,
         config_path,
         grab_before_console: false,
+        keys_down: Vec::new(),
+        key_releases: Vec::new(),
         mode,
         viewmodel,
         input: InputState::default(),
@@ -2144,9 +2133,7 @@ fn main() -> Result<()> {
                 cod4_ents.4,
                 cod4_ents.5,
             ))),
-            (true, None) => {
-                session::Session::Cod2(Box::new(cod2_client::Cod2Client::new(cod2_pump)))
-            }
+            (true, None) => session::Session::Cod2(Box::new(cod2_client::Cod2Client::new(None))),
             (false, None) if cod4_menu => session::Session::Cod4Menu(Box::new(
                 cod4_front::Cod4Front::new(args.game_dir.clone()),
             )),
@@ -2154,7 +2141,11 @@ fn main() -> Result<()> {
         },
         wheel: console::keys::WheelNotches::default(),
     };
-    if matches!(app.mode, Mode::Idle) && app.cod4_loading.is_none() {
+    // A CoD2 `--connect` runs the handshake and its downloads beside the
+    // window, as the console's `connect` does, under the connect screen.
+    if let Some(addr) = args.connect.clone().filter(|_| cod2_connect) {
+        app.start_cod2_connect(addr);
+    } else if matches!(app.mode, Mode::Idle) && app.cod4_loading.is_none() {
         app.enter_menu(None);
     }
     let ran = event_loop.run_app(&mut app);
@@ -2310,8 +2301,6 @@ fn exec_after_queue(args: &[String]) -> std::collections::VecDeque<(f32, String)
         .collect()
 }
 
-/// A switch cvar, on unless set to 0 (on when unregistered: the CoD4
-/// Options dvars exist only on a CoD4 install).
 /// The CoD4 renderer's dvars, read every frame.
 pub(crate) fn cod4_options(shell: &console::shell::Shell) -> renderer::Cod4Options {
     renderer::Cod4Options {
@@ -2328,6 +2317,8 @@ pub(crate) fn cod4_options(shell: &console::shell::Shell) -> renderer::Cod4Optio
     }
 }
 
+/// A switch cvar, on unless set to 0 (on when unregistered: the CoD4
+/// Options dvars exist only on a CoD4 install).
 fn cvar_on(shell: &console::shell::Shell, name: &str) -> bool {
     shell
         .cvar(name)
@@ -2484,21 +2475,30 @@ fn chat_field_key(
     None
 }
 
+/// `exec`'s file: the search path's, else the one under `config_dir`
+/// (vcod's own fallback), which a rooted, `..` or drive name never reaches.
+fn exec_text(fs: &Pk3Fs, config_dir: Option<&std::path::Path>, file: &str) -> Option<Vec<u8>> {
+    fs.read(file)
+        .or_else(|| std::fs::read(vcod_common::game_dir::confined(config_dir?, file)?).ok())
+}
+
 /// `record [name]` on `net` (CoDMP.exe 0x40e540): the file in `dir`, its
 /// refusals and progress printed as retail prints them.
-fn start_record(
-    net: &mut net::NetClient<net::UdpTransport>,
+fn start_record<T: net::Transport>(
+    net: &mut net::NetClient<T>,
     dir: &std::path::Path,
     name: Option<&str>,
 ) {
-    let (path, name) = play::demos::record_path(dir, name, net.protocol());
-    let file = std::fs::create_dir_all(dir).and_then(|_| std::fs::File::create(&path));
     // Refused before the file is made, as retail checks first.
     if net.is_recording() {
         console::log::print("Already recording.");
         return;
     }
-    let file = match file {
+    let Some((path, name)) = play::demos::record_path(dir, name, net.protocol()) else {
+        console::log::print("ERROR: couldn't open.");
+        return;
+    };
+    let file = match std::fs::create_dir_all(dir).and_then(|_| std::fs::File::create(&path)) {
         Ok(f) => f,
         Err(e) => {
             console::log::print(&format!("ERROR: couldn't open {}: {e}", path.display()));
@@ -2639,7 +2639,7 @@ fn view_muzzle(cam_pos: Vec3, forward: Vec3, right: Vec3, up: Vec3) -> (Vec3, Ve
 /// Leave the live map and enter Loading for the server's new map: drop the
 /// GPU world and per-map state, reset what a gamestate invalidates, and list
 /// the paks the client is missing.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn start_loading(
     net: &net::NetClient<net::UdpTransport>,
     hud: &mut Option<hud::Hud>,
@@ -2765,8 +2765,21 @@ fn couldnt_load(map: &str) -> String {
 /// The front end off `fs`, with the favourites file and the Mods menu's
 /// directory listing under `game_dir`.
 fn new_ui(fs: &Pk3Fs, game_dir: &std::path::Path, mod_dir: &str, language: &str) -> frontend::Ui {
-    let mut ui =
-        frontend::Ui::new(fs, language).with_server_cache(game_dir.join("servercache.dat"));
+    use vcod_common::net::server_cache::Layout;
+    // Each game's own cache file and shape (cod11-front-end.md 8).
+    let layout = match fs.game() {
+        vcod_common::game::Game::Cod2 => Layout::Cod2,
+        _ => match vcod_common::net::protocol::install_protocol(fs)
+            .transport
+            .version
+        {
+            6 => Layout::Cod15,
+            22 => Layout::Uo,
+            _ => Layout::Cod11,
+        },
+    };
+    let mut ui = frontend::Ui::new(fs, language)
+        .with_server_cache(game_dir.join(layout.file_name()), layout);
     if fs.game() == vcod_common::game::Game::Cod2 {
         ui.set_profiles_dir(game_dir.join(mod_dir).join("players"));
     }
@@ -2806,7 +2819,7 @@ fn allow_download(shell: &console::shell::Shell) -> bool {
 /// one is read again or dropped to reload lazily, since a new pak may carry
 /// files the old ones lacked or replace one under the same name. The GPU
 /// half is `Renderer::reopen`, the viewmodel rig `OnlineView::reopen`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn reopen_fs(
     base: &std::path::Path,
     game: Option<&std::path::Path>,
@@ -2840,8 +2853,6 @@ fn reopen_fs(
     Ok(())
 }
 
-/// `maps/mp/<map>.bsp` off the search path, parsed ([`MapWorld`]'s asset
-/// kind): what `CM_LoadMap` (CoDMP.exe 0x419c90) and `R_LoadWorldMap` read.
 /// A map argument's base name, as the renderer's world keeps it: no
 /// folder, no extension (`maps/mp/mp_carentan.bsp` -> `mp_carentan`).
 fn map_base_name(map: &str) -> String {
@@ -2851,6 +2862,8 @@ fn map_base_name(map: &str) -> String {
         .to_string()
 }
 
+/// `maps/mp/<map>.bsp` off the search path, parsed ([`MapWorld`]'s asset
+/// kind): what `CM_LoadMap` (CoDMP.exe 0x419c90) and `R_LoadWorldMap` read.
 fn read_map(fs: &dyn AssetSource, map: &str) -> Result<MapWorld> {
     mapworld::find(fs, map).with_context(|| format!("cannot load map '{map}'"))
 }
@@ -2873,7 +2886,6 @@ fn reread_live_map(
 /// starts over as `CL_InitCGame` (CoDMP.exe 0x4049c0) loads a fresh cgame
 /// (docs/research/cod11-front-end.md section 17, "The cgame restart").
 /// False, touching nothing, before the game is live.
-#[allow(clippy::too_many_arguments)]
 fn restart_live_cgame(
     phase: &mut Phase,
     view: &mut play::view::OnlineView,
@@ -2949,7 +2961,6 @@ fn leave_server_hud(hud: &mut hud::Hud) {
 }
 
 /// Parse the map, upload it to the GPU and hand back the live phase.
-#[allow(clippy::too_many_arguments)]
 fn load_map(
     map: &str,
     net: &net::NetClient<net::UdpTransport>,
@@ -2990,7 +3001,7 @@ fn load_map(
 
 /// The between-maps frame: the status text over an empty view, with chat
 /// still flowing through the normal HUD build (no snapshot clients).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn loading_frame(
     r: &mut Renderer,
     fs: &Pk3Fs,
@@ -3164,6 +3175,12 @@ struct App {
     /// Whether the mouse was captured when the console opened; closing it
     /// captures it again.
     grab_before_console: bool,
+    /// Bound keys whose press reached the binds and that are still down:
+    /// what `Key_ClearStates` lets go ([`Self::clear_held_keys`]).
+    keys_down: Vec<String>,
+    /// The release commands a [`Self::clear_held_keys`] ran, applied at
+    /// the next `about_to_wait`.
+    key_releases: Vec<console::shell::Effect>,
     mode: Mode,
     viewmodel: Arc<[model::Model]>,
     /// Fly-mode keys; walk keeps its own in `Mode::Walk`.
@@ -3278,7 +3295,6 @@ impl App {
         event_loop.exit();
     }
 
-    /// Gives the mouse to the view (`grabbed`) or takes it back.
     /// `CL_AdjustAngles` (CoDMP.exe 0x40ade0) online, then `CL_MouseMove`
     /// (0x40b240) once a frame: the motion since the last frame, or with
     /// `m_filter` its mean with the last frame's, turns the view or,
@@ -3343,6 +3359,7 @@ impl App {
         }
     }
 
+    /// Gives the mouse to the view (`grabbed`) or takes it back.
     fn set_grab(&mut self, grabbed: bool) {
         if self.window.is_none() {
             return;
@@ -3452,6 +3469,15 @@ impl App {
             hud.scoreboard.hide();
         }
         self.session.hide_scoreboard();
+        // `Key_ClearStates` (CoDMP.exe 0x40e260): each held key's release
+        // goes through `CL_KeyEvent` in key number order, so a `+` bind's
+        // `-` half runs.
+        let mut down = std::mem::take(&mut self.keys_down);
+        down.sort_by_key(|k| console::keys::number(k));
+        for key in down {
+            let effects = self.shell.key_event(&key, false);
+            self.key_releases.extend(effects);
+        }
     }
 
     /// The chat field's keys while it is open, online only. Enter sends
@@ -3479,7 +3505,6 @@ impl App {
         true
     }
 
-    /// Whether keys go to the console: it is down, or there is nothing else.
     /// Keys, mouse buttons and the wheel go through the binds: online,
     /// a CoD2 session included (`Mode::Cod2`,
     /// `play::cod2_input`).
@@ -3487,6 +3512,7 @@ impl App {
         matches!(self.mode, Mode::Online { .. }) || self.session.live()
     }
 
+    /// Whether keys go to the console: it is down, or there is nothing else.
     fn console_active(&self) -> bool {
         self.console.open
             || (matches!(self.mode, Mode::Idle)
@@ -3766,6 +3792,10 @@ impl App {
                 }
                 _ => {}
             }
+        }
+        self.keys_down.retain(|k| k != key);
+        if pressed {
+            self.keys_down.push(key.to_string());
         }
         let effects = self.shell.key_event(key, pressed);
         self.apply(event_loop, effects);
@@ -4081,6 +4111,7 @@ impl App {
         if !matches!(self.mode, Mode::Online { .. }) {
             self.switch_fs_game(self.fs_game_cvar());
         }
+        check_language(&mut self.shell, &self.fs);
         self.vid_restart_ui();
         self.ignore_hw_gamma = ignore_hw_gamma(&self.shell);
         // Retail's `vid_restart` reloads every image; vcod rebuilds
@@ -4260,10 +4291,7 @@ impl App {
     /// `localized_english_pak0.pk3`) or else beside the config, run as
     /// console text. A file that execs itself stops at a fixed depth.
     fn exec_file(&mut self, event_loop: &ActiveEventLoop, file: &str) {
-        let text = self.fs.read(file).or_else(|| {
-            let dir = self.config_path.parent()?;
-            std::fs::read(dir.join(file)).ok()
-        });
+        let text = exec_text(&self.fs, self.config_path.parent(), file);
         let Some(text) = text else {
             console::log::print(&format!("couldn't exec {file}"));
             return;
@@ -4361,7 +4389,7 @@ impl App {
         let path = self
             .demo_dirs()
             .into_iter()
-            .map(|d| d.join(&file))
+            .filter_map(|d| vcod_common::game_dir::confined(&d, &file))
             .find(|p| p.is_file());
         if self.in_game() || self.session.busy() {
             self.disconnect(None);
@@ -4684,22 +4712,20 @@ impl App {
         running
     }
 
-    /// The Mods menu's `RunMod` (and `Quake3` with `None`): `fs_game` and a
-    /// `vid_restart`, which brings the main menu back up off the mod's
-    /// paks. In a game, `vid_restart` keeps the connection: the search path
-    /// reopens under the server's pure list, the UI reloads closed and the
-    /// cgame half sends `cp` again (CoDMP.exe 0x40fbe0,
-    /// docs/research/cod11-front-end.md section 17).
     /// CoD2's `Com_ChangePlayerProfile` (Mac 0x111936): `players/active.txt`
     /// names the profile, `com_playerProfile` holds it and its config file
     /// takes over, run when it has one, else written from what is set now.
     /// Retail resets every dvar first; vcod keeps what the file does not set.
     fn load_profile(&mut self, name: &str) {
         let players = self.game_dir.join(&self.mod_dir).join("players");
+        let Some(dir) = vcod_common::game_dir::confined_component(&players, name) else {
+            log::warn!("player profile {name:?} refused");
+            return;
+        };
         if let Err(e) = std::fs::write(players.join("active.txt"), name) {
             log::warn!("cannot write {}: {e}", players.join("active.txt").display());
         }
-        self.config_path = players.join(name).join(CONFIG_FILE);
+        self.config_path = dir.join(CONFIG_FILE);
         self.shell
             .execute(&format!("set com_playerProfile \"{name}\""));
         match std::fs::read_to_string(&self.config_path) {
@@ -4720,6 +4746,12 @@ impl App {
         log::info!("player profile {name}: {}", self.config_path.display());
     }
 
+    /// The Mods menu's `RunMod` (and `Quake3` with `None`): `fs_game` and a
+    /// `vid_restart`, which brings the main menu back up off the mod's
+    /// paks. In a game, `vid_restart` keeps the connection: the search path
+    /// reopens under the server's pure list, the UI reloads closed and the
+    /// cgame half sends `cp` again (CoDMP.exe 0x40fbe0,
+    /// docs/research/cod11-front-end.md section 17).
     fn run_mod(&mut self, game: Option<String>) {
         log::info!("fs_game {}", game.as_deref().unwrap_or("(none)"));
         self.shell.force("fs_game", game.as_deref().unwrap_or(""));
@@ -4885,30 +4917,29 @@ impl App {
     }
 
     /// A CoD4 session's map change, before the frame: a gamestate naming
-    /// another map loads it as the start-up does (`cod4_fly::load` over the
-    /// gamestate's models and weapons) and hands the session its parts.
+    /// another map starts its load on a worker under the loading screen
+    /// (`Cod4Client::start_map_load`, the zones over the gamestate's models
+    /// and weapons); once it lands the session takes its parts and the
+    /// world and the prewarm go to the GPU here.
     fn cod4_level(&mut self) -> Result<()> {
         let Some(c) = self.session.cod4_mut() else {
             return Ok(());
         };
-        let Some(map) = c.session.take_map_change() else {
+        if let Some(map) = c.session.take_map_change() {
+            vcod_common::laps::begin_load(format!("cod4 map change {map}"));
+            c.start_map_load(&self.game_dir, map);
+        }
+        let Some(done) = c.take_map_load() else {
             return Ok(());
         };
-        vcod_common::laps::begin_load(format!("cod4 map change {map}"));
-        let t0 = Instant::now();
-        let ents = c.session.entity_assets();
-        let fs_game = c.session.fs_game();
-        let (mut m, hud) =
-            cod4_fly::load_with_hud(&self.game_dir, fs_game.as_deref(), &map, &ents, None)
-                .with_context(|| format!("cannot load CoD4 map '{map}'"))?;
+        let cod4_loading::MapLoaded {
+            map: mut m,
+            name: map,
+            hud,
+            fs,
+        } = done?;
         c.install_hud(hud);
-        vcod_common::laps::span(t0, || "cod4 map".into());
-        // The image search path follows the new level's `fs_game` and
-        // usermap, as the zones do (cod4-fastfile.md 13).
-        self.fs = cod4_fly::open_fs(&self.game_dir, fs_game.as_deref(), Some(&map))?;
-        for (path, wav) in std::mem::take(&mut m.sound_files) {
-            self.fs.overlay(&path, wav);
-        }
+        self.fs = fs;
         c.new_map(
             std::mem::take(&mut m.models),
             std::mem::take(&mut m.parts),
@@ -5330,6 +5361,8 @@ impl ApplicationHandler for App {
         }
         let pending = std::mem::take(&mut self.ui_pending);
         self.ui_effects(event_loop, pending);
+        let releases = std::mem::take(&mut self.key_releases);
+        self.apply(event_loop, releases);
         self.sync_menu_mouse();
         self.sync_capture();
     }
@@ -6123,7 +6156,8 @@ impl ApplicationHandler for App {
                                     // `CG_MapRestart` (cgame 0x3002ca60) frees
                                     // the local entities, the marks and every
                                     // effect, stops all sounds, restarts the
-                                    // ambient and stands the player up running
+                                    // ambient, stands the player up running,
+                                    // closes the menus and re-pegs the clock
                                     // (events doc 9.8).
                                     if play::join::is_map_restart(tokens) {
                                         join.on_restart();
@@ -6142,6 +6176,23 @@ impl ApplicationHandler for App {
                                             net::info_value_for_key(net.configstring(3), "n"),
                                         );
                                         input.force_stance(play::input::Stance::Stand);
+                                        let closes = play::join::RestartCloses::for_command(
+                                            tokens,
+                                            net.protocol().is_v1(),
+                                            net.protocol().is_uo(),
+                                        );
+                                        let out = self.ui.map_restart(closes, &self.shell);
+                                        self.ui_pending.extend(out);
+                                        // the last syscall re-pegs the clock,
+                                        // unless the snapshot is `SNAPFLAG_NOT_ACTIVE`
+                                        if let Phase::Live(live) = &mut *phase
+                                            && net
+                                                .snapshots()
+                                                .newest()
+                                                .is_some_and(|s| s.snap_flags & 2 == 0)
+                                        {
+                                            live.clock.map_restart();
+                                        }
                                     }
                                     // UO's `F <ms>`, `rewindFx` (uo cgame
                                     // 0x3003ac90, trap 0xf0).
@@ -6427,7 +6478,7 @@ impl ApplicationHandler for App {
                             let nudge = self.shell.cvar_f32("cl_timeNudge") as i32;
                             live.clock.update_demo(
                                 local_ms as i32,
-                                s.server_time,
+                                s.server_time.raw(),
                                 nudge,
                                 demo_clock,
                             );
@@ -6445,11 +6496,11 @@ impl ApplicationHandler for App {
                                     let nudge = self.shell.cvar_f32("cl_timeNudge") as i32;
                                     live.clock.update(
                                         realtime,
-                                        s.server_time,
+                                        s.server_time.raw(),
                                         s.message_num,
                                         nudge,
                                     );
-                                    live.clock.cmd_time(s.server_time)
+                                    live.clock.cmd_time(s.server_time.raw())
                                 }
                                 _ => net.server_clock_ms(),
                             };
@@ -6790,7 +6841,8 @@ impl ApplicationHandler for App {
                                         }
                                         let oa = Vec3::from(a.ps.origin(p));
                                         let ob = Vec3::from(b.ps.origin(p));
-                                        let f = ((render_time - a.server_time) as f32
+                                        let f = ((Msec::from_raw(render_time) - a.server_time)
+                                            as f32
                                             / (b.server_time - a.server_time).max(1) as f32)
                                             .clamp(0.0, 1.0);
                                         let t0 = Instant::now();
@@ -6851,7 +6903,8 @@ impl ApplicationHandler for App {
                                             render_time,
                                             net.snapshots()
                                                 .newest()
-                                                .map_or(b.server_time, |s| s.server_time),
+                                                .map_or(b.server_time, |s| s.server_time)
+                                                .raw(),
                                             if seat_body { -1 } else { skip_num },
                                             net.configstrings(),
                                             &self.fs,
@@ -6946,7 +6999,7 @@ impl ApplicationHandler for App {
                                                     p,
                                                     &s.entities,
                                                 ),
-                                                s.server_time,
+                                                s.server_time.raw(),
                                             );
                                             predictor.predict(
                                                 p, &s.ps, ring, world, &bodies, &movers, weapons,
@@ -7007,16 +7060,24 @@ impl ApplicationHandler for App {
                                     }
                                     // `CG_TransitionPlayerState` feeds a hit ahead of
                                     // the snapshot's events and the view, mounted
-                                    // or not (hud doc "Damage direction").
-                                    if let (Some(hud), Some(s)) =
+                                    // or not (hud doc "Damage direction"): off the
+                                    // prediction's newest playerstate, or a followed
+                                    // player's at `cg.snap`'s transition, stamped
+                                    // with `cg.snap`'s time either way.
+                                    if let (Some(hud), Some(newest)) =
                                         (&mut self.hud, net.snapshots().newest())
                                     {
-                                        let own = pmove::predict::on_foot(pm_type);
+                                        let own =
+                                            pmove::predict::on_foot(pm_type) && predicted.is_some();
+                                        let cg_snap = render_time
+                                            .and_then(|t| net.snapshots().two_for_time(t))
+                                            .map_or(newest, |(a, _)| a);
+                                        let fed = if own { newest } else { cg_snap };
                                         hud.feed_damage(
                                             p,
-                                            &s.ps,
-                                            predicted.as_ref().filter(|_| own).map(|v| &v.pred),
+                                            &fed.ps,
                                             render_time.unwrap_or(0),
+                                            cg_snap.server_time.raw(),
                                         );
                                     }
                                     // Retail runs a snapshot's events in
@@ -7626,7 +7687,7 @@ impl ApplicationHandler for App {
                                         server_time: render_time.unwrap_or(0),
                                         snap_time: render_time
                                             .and_then(|t| net.snapshots().two_for_time(t))
-                                            .map_or(0, |(a, _)| a.server_time),
+                                            .map_or(0, |(a, _)| a.server_time.raw()),
                                         fs: &self.fs,
                                         ps: newest.map(|s| &s.ps),
                                         entities: newest.map_or(&no_entities, |s| &s.entities),
@@ -7711,7 +7772,7 @@ impl ApplicationHandler for App {
                                             p,
                                             &newest.entities,
                                         );
-                                        movers.place(world, newest.server_time);
+                                        movers.place(world, newest.server_time.raw());
                                         let round_trace = |s: Vec3, e: Vec3, skip: u32| {
                                             let w = MoveWorld::new(world, &bodies, skip);
                                             let t = w.box_trace(
@@ -8030,7 +8091,7 @@ impl ApplicationHandler for App {
                                     if let Some(t) = render_time
                                         && let Some((a, b)) = net.snapshots().two_for_time(t)
                                     {
-                                        let f = ((t - a.server_time) as f32
+                                        let f = ((Msec::from_raw(t) - a.server_time) as f32
                                             / (b.server_time - a.server_time).max(1) as f32)
                                             .clamp(0.0, 1.0);
                                         // A blend restarts when its voice ran out,
@@ -8867,7 +8928,7 @@ impl ApplicationHandler for App {
 fn bound_key(
     shell: &console::shell::Shell,
     loc: &vcod_common::localize::Localized,
-    p: &net::protocol::Protocol,
+    p: &net::protocol::Cod1Wire,
     cmd: &str,
 ) -> Option<String> {
     hud::bind_commands(p)
@@ -8950,6 +9011,31 @@ fn cookie_settings(shell: &console::shell::Shell) -> renderer::CookieSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `exec`'s disk fallback reads a file beside the config, in a
+    /// subdirectory too, and nothing a rooted, `..` or drive name points at.
+    #[test]
+    fn exec_reads_only_under_the_config_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let main = root.path().join("main");
+        std::fs::create_dir_all(main.join("cfgs")).unwrap();
+        std::fs::write(main.join("mine.cfg"), "a").unwrap();
+        std::fs::write(main.join("cfgs/sub.cfg"), "b").unwrap();
+        std::fs::write(root.path().join("secret"), "s").unwrap();
+        let fs = Pk3Fs::empty();
+        let read = |f: &str| exec_text(&fs, Some(&main), f);
+        assert_eq!(read("mine.cfg").as_deref(), Some(&b"a"[..]));
+        assert_eq!(read("cfgs/sub.cfg").as_deref(), Some(&b"b"[..]));
+        let abs = root.path().join("secret");
+        for bad in [
+            "../secret",
+            "cfgs/../../secret",
+            "C:secret",
+            abs.to_str().unwrap(),
+        ] {
+            assert_eq!(read(bad), None, "{bad}");
+        }
+    }
 
     /// A CoD2 session's `vid_restart` stops its sounds as retail's
     /// `SND_StopSounds(1)` does; the offline fly camera keeps them.

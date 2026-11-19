@@ -1,6 +1,8 @@
 //! `PM_GroundTrace` and the landing (docs/research/cod2-movement.md 7, 8).
 
 use glam::Vec3;
+use vcod_common::clipmap::{SURF_NODAMAGE, SURF_NOSTEPS, SURF_SLICK, surface_material};
+use vcod_common::pmshared::airborne;
 
 use super::anim::Event;
 use super::fpu::{self, d};
@@ -50,13 +52,6 @@ const NUDGES: [[f32; 3]; 26] = [
     [-1.0, 1.0, -1.0],
 ];
 
-fn airborne(pm: &mut Pmove, pml: &mut Pml) {
-    pm.ps.ground_entity_num = ENTITYNUM_NONE;
-    pml.ground_plane = false;
-    pml.almost_ground_plane = false;
-    pml.walking = false;
-}
-
 /// `PM_GroundTrace` (0x80e38a2).
 pub(crate) fn ground_trace(pm: &mut Pmove, pml: &mut Pml) {
     let o = pm.ps.origin;
@@ -80,7 +75,7 @@ pub(crate) fn ground_trace(pm: &mut Pmove, pml: &mut Pml) {
         start.z = pm.ps.origin.z - RETRY_DOWN;
         t = pm.trace(start, end);
         if t.startsolid {
-            airborne(pm, pml);
+            airborne(pm.ps, pml);
             return;
         }
         pml.ground_trace = t;
@@ -96,7 +91,7 @@ pub(crate) fn ground_trace(pm: &mut Pmove, pml: &mut Pml) {
     {
         // Thrown off the plane: the jump anim, unforced, in the air.
         super::anim::event(pm, Event::takeoff(pm.cmd.forward_move), false, false);
-        airborne(pm, pml);
+        airborne(pm.ps, pml);
         return;
     }
     if t.normal.z < MIN_WALK_NORMAL {
@@ -115,7 +110,7 @@ pub(crate) fn ground_trace(pm: &mut Pmove, pml: &mut Pml) {
         crash_land(pm, pml);
     }
     pm.ps.ground_entity_num = (t.entity_num & 0xffff) as i32;
-    pm.add_touch(t.entity_num & 0xffff);
+    pm.touch.add(t.entity_num & 0xffff);
 }
 
 /// `PM_CorrectAllSolid` (0x80e34c6): the first of the nudges that starts
@@ -134,7 +129,7 @@ fn correct_all_solid(pm: &mut Pmove, pml: &mut Pml) -> Option<Tr> {
         pm.ps.origin = fpu::lerp(p, end, t.fraction);
         return Some(t);
     }
-    airborne(pm, pml);
+    airborne(pm.ps, pml);
     jump_clear(pm.ps);
     None
 }
@@ -168,10 +163,10 @@ fn ground_trace_missed(pm: &mut Pmove, pml: &mut Pml) {
 /// `PM_GroundSurfaceType` (0x80e2220): `surfaceFlags` bits 20..24, 0 under
 /// the no-sound flag 0x2000.
 pub(crate) fn surface_type(t: &Tr) -> i32 {
-    if t.surface_flags & 0x2000 != 0 {
+    if t.surface_flags & SURF_NOSTEPS != 0 {
         0
     } else {
-        ((t.surface_flags & 0x1f0_0000) >> 20) as i32
+        surface_material(t.surface_flags) as i32
     }
 }
 
@@ -208,7 +203,7 @@ pub(crate) fn crash_land(pm: &mut Pmove, pml: &mut Pml) {
         log::warn!("bg_fallDamageMaxHeight must be greater than bg_fallDamageMinHeight");
         0
     } else if height <= lo
-        || pml.ground_trace.surface_flags & 1 != 0
+        || pml.ground_trace.surface_flags & SURF_NODAMAGE != 0
         || ps.pm_type > pm_type::INTERMISSION
     {
         0
@@ -254,7 +249,7 @@ pub(crate) fn crash_land(pm: &mut Pmove, pml: &mut Pml) {
             }
         }
     } else {
-        if damage < 100 && pml.ground_trace.surface_flags & 2 == 0 {
+        if damage < 100 && pml.ground_trace.surface_flags & SURF_SLICK == 0 {
             let stun = (damage * 35 + 500).min(2000);
             ps.pm_time = stun;
             ps.pm_flags |= super::pmf::TIME_LAND;

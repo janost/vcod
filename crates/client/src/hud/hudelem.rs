@@ -12,7 +12,7 @@ use vcod_common::net::msg::{HudElem, hud_field as f};
 
 use vcod_common::net::protocol::CsLayout;
 #[cfg(test)]
-pub use vcod_common::net::protocol::{CS_LOCALIZED, CS_SHADERS};
+pub use vcod_common::net::protocol::{CS_LOCALIZED_V1, CS_SHADERS_V1};
 
 /// Retail's 640x480 virtual screen, scaled to fit the window and centred,
 /// so a wider window pillarboxes it to 4:3 and a narrower one letterboxes
@@ -175,7 +175,6 @@ impl Virtual {
     }
 
     /// `uvs` in the quad's ring order: TL, TR, BR, BL.
-    #[allow(clippy::too_many_arguments)]
     pub fn quad_uv(
         &self,
         x: f32,
@@ -319,7 +318,7 @@ fn shadow_alpha(quads: &mut [HudQuad], alpha: f32) {
 
 /// Draws `elems` in retail's order: sorted by `sort`, stably, so pass the
 /// archived array first and the current one after it.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn build(
     elems: &[HudElem],
     configstrings: &[String],
@@ -331,13 +330,7 @@ pub fn build(
     v: &Virtual,
     out: &mut Vec<HudQuad>,
 ) {
-    let mut order: Vec<&HudElem> = elems.iter().collect();
-    order.sort_by(|a, b| {
-        a.get_f32(f::SORT)
-            .partial_cmp(&b.get_f32(f::SORT))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    for e in order {
+    for e in draw_order(elems) {
         draw(
             e,
             configstrings,
@@ -352,7 +345,23 @@ pub fn build(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// `elems` stably sorted by `sort`. A NaN key, which no stock server
+/// sends, sorts as 0 so the comparator stays a total order.
+fn draw_order(elems: &[HudElem]) -> Vec<&HudElem> {
+    let key = |e: &HudElem| {
+        let k = e.get_f32(f::SORT);
+        if k.is_nan() { 0.0 } else { k }
+    };
+    let mut order: Vec<&HudElem> = elems.iter().collect();
+    order.sort_by(|a, b| {
+        key(a)
+            .partial_cmp(&key(b))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    order
+}
+
+#[expect(clippy::too_many_arguments)]
 fn draw(
     e: &HudElem,
     cs: &[String],
@@ -476,10 +485,12 @@ fn place(e: &HudElem, now: i32, w: f32, h: f32) -> (f32, f32) {
 /// `to` once `time` ms from `start` have passed or when `time` is 0, `from`
 /// before `start`.
 fn lerp_over(from: f32, to: f32, now: i32, start: i32, time: i32) -> f32 {
-    if time <= 0 || now - start >= time {
+    // Server times wrap the way retail's C ints do.
+    let since = now.wrapping_sub(start);
+    if time <= 0 || since >= time {
         return to;
     }
-    let t = ((now - start) as f32 / time as f32).clamp(0.0, 1.0);
+    let t = (since as f32 / time as f32).clamp(0.0, 1.0);
     from + (to - from) * t
 }
 
@@ -539,10 +550,10 @@ pub fn unpack_color(rgba: i32) -> [f32; 4] {
 /// The ms a timer or clock element (types 4 to 9) shows, never below 0.
 fn timer_ms(ty: i32, time: i32, now: i32) -> i32 {
     let ms = match ty {
-        4 => time - now + 999,
-        6 => time - now + 99,
-        8 => time - now,
-        5 | 7 | 9 => now - time,
+        4 => time.wrapping_sub(now).wrapping_add(999),
+        6 => time.wrapping_sub(now).wrapping_add(99),
+        8 => time.wrapping_sub(now),
+        5 | 7 | 9 => now.wrapping_sub(time),
         _ => 0,
     };
     ms.max(0)
@@ -700,8 +711,30 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_nan_sort_key_sorts_as_zero() {
+        let keyed = |k: f32| {
+            let mut e = elem(&[(f::TYPE, 1)]);
+            e.set_f32(f::SORT, k);
+            e
+        };
+        let mut keys = vec![6.0];
+        keys.extend([5.0; 10]);
+        keys.push(f32::NAN);
+        keys.extend([1.0; 12]);
+        keys.extend([f32::NAN, -0.0, 2.0, f32::NAN, 0.0].repeat(4));
+        let elems: Vec<HudElem> = keys.iter().map(|&k| keyed(k)).collect();
+        let sorted: Vec<f32> = draw_order(&elems)
+            .iter()
+            .map(|e| e.get_f32(f::SORT))
+            .map(|k| if k.is_nan() { 0.0 } else { k })
+            .collect();
+        assert!(sorted.windows(2).all(|w| w[0] <= w[1]), "{sorted:?}");
+        run(&elems, &cs_with(&[]), 0, (640.0, 480.0));
+    }
+
+    #[test]
     fn text_centres_on_its_point_both_ways() {
-        let cs = cs_with(&[(CS_LOCALIZED + 1, "HELLO")]);
+        let cs = cs_with(&[(CS_LOCALIZED_V1 + 1, "HELLO")]);
         let e = elem(&[
             (f::TYPE, 1),
             (f::TEXT, 1),
@@ -723,7 +756,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_fixed_slot_centres_each_glyph_in_its_cell() {
-        let cs = cs_with(&[(CS_LOCALIZED + 1, "^1AB")]);
+        let cs = cs_with(&[(CS_LOCALIZED_V1 + 1, "^1AB")]);
         let fixed = |font: i32| {
             elem(&[
                 (f::TYPE, 1),
@@ -782,7 +815,7 @@ pub(crate) mod tests {
 
     #[test]
     fn shader_element_fills_its_rect() {
-        let cs = cs_with(&[(CS_SHADERS + 5, "white")]);
+        let cs = cs_with(&[(CS_SHADERS_V1 + 5, "white")]);
         let e = elem(&[
             (f::TYPE, 3),
             (f::SHADER, 5),
@@ -807,7 +840,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_shader_shorter_than_its_font_aligns_by_its_own_height() {
-        let cs = cs_with(&[(CS_SHADERS + 5, "white")]);
+        let cs = cs_with(&[(CS_SHADERS_V1 + 5, "white")]);
         let e = elem(&[
             (f::TYPE, 3),
             (f::SHADER, 5),
@@ -823,7 +856,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_shader_label_leads_it_inside_the_aligned_box() {
-        let cs = cs_with(&[(CS_SHADERS + 5, "white"), (CS_LOCALIZED + 2, "AB")]);
+        let cs = cs_with(&[(CS_SHADERS_V1 + 5, "white"), (CS_LOCALIZED_V1 + 2, "AB")]);
         let e = elem(&[
             (f::TYPE, 3),
             (f::SHADER, 5),
@@ -849,6 +882,17 @@ pub(crate) mod tests {
         assert!(run(&[e, e], &cs, 0, (640.0, 480.0)).is_empty());
     }
 
+    /// Server times at the i32 limits wrap as retail's ints do instead of
+    /// overflowing (SEC-100).
+    #[test]
+    fn timers_and_tweens_wrap_at_the_i32_limits() {
+        assert_eq!(timer_ms(4, i32::MAX, i32::MIN), 998);
+        assert_eq!(timer_ms(5, i32::MIN, i32::MAX), 0);
+        assert_eq!(timer_ms(8, i32::MIN, i32::MAX), 1);
+        assert_eq!(lerp_over(0.0, 1.0, i32::MIN, i32::MAX, 100), 0.01);
+        assert_eq!(lerp_over(0.0, 1.0, i32::MAX, i32::MIN, 100), 0.0);
+    }
+
     #[test]
     fn countdown_reads_whole_seconds_and_stops_at_zero() {
         let now = 100_000;
@@ -861,7 +905,7 @@ pub(crate) mod tests {
 
     #[test]
     fn progress_bar_scale_tween_is_halfway_at_half_time() {
-        let cs = cs_with(&[(CS_SHADERS + 2, "white")]);
+        let cs = cs_with(&[(CS_SHADERS_V1 + 2, "white")]);
         let bar = |from_w: i32| {
             elem(&[
                 (f::TYPE, 3),
@@ -892,7 +936,7 @@ pub(crate) mod tests {
 
     #[test]
     fn fade_tween_is_halfway_at_half_time() {
-        let cs = cs_with(&[(CS_SHADERS + 2, "white")]);
+        let cs = cs_with(&[(CS_SHADERS_V1 + 2, "white")]);
         let e = elem(&[
             (f::TYPE, 3),
             (f::SHADER, 2),
@@ -920,9 +964,9 @@ pub(crate) mod tests {
     #[test]
     fn sorted_by_sort_stably_across_both_arrays() {
         let cs = cs_with(&[
-            (CS_SHADERS + 1, "a"),
-            (CS_SHADERS + 2, "b"),
-            (CS_SHADERS + 3, "c"),
+            (CS_SHADERS_V1 + 1, "a"),
+            (CS_SHADERS_V1 + 2, "b"),
+            (CS_SHADERS_V1 + 3, "c"),
         ]);
         let sh = |shader: i32, sort: f32| {
             let mut e = elem(&[
@@ -1017,7 +1061,7 @@ pub(crate) mod tests {
     /// the middle.
     #[test]
     fn hud_elems_stretch_full_width_and_keep_to_their_edge() {
-        let cs = cs_with(&[(CS_SHADERS + 1, "black"), (CS_LOCALIZED + 1, "9")]);
+        let cs = cs_with(&[(CS_SHADERS_V1 + 1, "black"), (CS_LOCALIZED_V1 + 1, "9")]);
         let bar = elem(&[
             (f::TYPE, 3),
             (f::SHADER, 1),

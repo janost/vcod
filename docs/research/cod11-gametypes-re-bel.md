@@ -247,7 +247,7 @@ one snapshot, as retail's frame loop catches up (cod11-map-cycle.md 4.7).
 VERIFIED, the `re` attacker capture: the three restarts' first snapshots
 came 450, 1350 and 850 ms after their level starts (13850, 91450, 106600),
 so 100, 1000 and 500 ms owed; no view moved with them. The UO `bas` runs
-are where it shows (coduo-diff.md 22, "Gaps").
+are where it shows (coduo-diff.md 22.5, "Gaps").
 
 The script, after the match-start restart. Round 1 puts the attacker on
 the objective's spot (`setOrigin(trigger.origin)`,
@@ -318,7 +318,27 @@ In `game.mp.i386.so`:
   `iHeadIconTeam` `+152` (0x98), so both setters write the wire fields
   directly.
 
-INFERRED, off the fall-through at 0x41cfe: any other team string stores 3.
+VERIFIED, `client-probes/probe_noclass` on all three servers
+(`fixtures/noclass/mp_carentan*.txt`, 2026-11-17): after `none`, `allies`
+and `axis` the getter reads each name back. On 1.1d and 1.5b `"foo"`,
+`"Axis"`, `""` and `"ALLIES"` each read back `spectator`, so the
+fall-through at 0x41cfe stores 3 for any other string, case and all
+(`scr_const` compares canonical string ids). 1.1d's `"spectator"` raised
+the error above and the server died (`run_probe.sh`'s `developer 1`).
+VERIFIED, 1.5b's setter (0x3bb58) runs 1.1d's compares in the same order
+with the same `scr_const` slots (`GScr_LoadConsts` 0x5a78e stores
+`allies` at `+0x4`, `axis` `+0x8`, `spectator` `+0x7c`, `none` `+0xf8`),
+yet its `"spectator"` run went on to the next `logPrint`, read
+`spectator` (the 3 the last write left), and the console then printed
+`WARNING: Server should have crashed here!` and dropped the client.
+VERIFIED, UO's setter (0x43e4c): `none` (`scr_const+0x124`) 0, `allies`
+2, `axis` 1, `spectator` (`+0x98`) 3, at `es+0x9c`; anything else
+branches to the same `Scr_Error` (0x43f3d, string 0x9e000). VERIFIED,
+the UO run: the first write past the three names, `"foo"`, aborted the
+server with nothing logged after `axis`. vcod: `host::head_icon_team`
+takes UO's set on protocol 22 and 1.1d's otherwise; `noclass_ab` runs
+1.1d and UO at `developer 1` and 1.5b at 0, where ours runs on past the
+error as 1.5b did.
 
 VERIFIED, `GScr_GetHeadIconIndex`: `""` answers 0. Otherwise configstrings
 `0x1d..0x2b` are compared with `Q_stricmp` and the first match answers its
@@ -422,21 +442,14 @@ VERIFIED: `objective_position` (0x5e128) opens with the same detach
 at the top of the `retrieval_think` it restarts pins the marker where the
 book fell.
 
-### 7.5 What ours got wrong, and the fixes
+### 7.5 Head icons and the model index on the wire, and the drop's landing
 
-Each was a difference the gate showed. All are fixed; `gametypes_ab`'s
-`GAPS` is empty.
-
-- No head icon on the wire. `.headicon` and `.headiconteam` are indices in
-  the client store, the getters answer as 7.3 says, and
-  `ClientSim::to_entity` writes `iHeadIcon` / `iHeadIconTeam`, mirrored at
-  the end frame. Unset, they read `""` and `"none"` (not `undefined`), and
-  `.statusicon` `""`.
-- `objective_position` must detach (7.4), or the dropped book's marker
-  stays on the carrier's entity number.
-- A client that never had a model sends `modelindex` 0, not the first
-  empty model slot (`client_model_index` must not match `""` against the
-  table).
+vcod's `ClientSim::to_entity` writes `.headicon` and `.headiconteam` into
+`iHeadIcon` and `iHeadIconTeam`, mirrored at the end frame, with 7.3's
+unset reads (`""`, `"none"`, and `""` for `.statusicon`). VERIFIED,
+`gametypes_ab` against the retail capture: a client that never had a model
+sends `modelindex` 0, not the first empty model slot, so vcod's
+`client_model_index` never matches `""` against the table.
 
 Left alone. VERIFIED, the log fixture and ours: the landing after
 `setOrigin` 1.66 units over the 1.8-degree grade at the drop point settles
@@ -445,6 +458,24 @@ coordinates to the unit. VERIFIED, two retail runs that set the player
 down 32 units up (not committed): one settled 22 units off in y, the next
 0.03. The fall does not repeat on retail itself, so the probe sets the
 player down on the ground.
+
+### 7.6 Configstring slots and the order of `d`
+
+`gametypes_ab` compares, besides the names, every `s`/`S` alias index,
+every `t` menu index and every `d` into the alias or menu block by number
+(its `slots` view). VERIFIED, the re attacker's capture
+(`mp_brecourt-re-attacker.txt`): `d 528 american_move_in`, `s 4`, `d 529
+german_move_in`: the axis team's alias is allocated after the allied
+team's `s` went out, and its `d` follows that `s`. The UO ctf captures
+read the same pattern (`d 735`, `s 74`, `d 736`). INFERRED, off
+`SV_SetConfigstring`'s per-client loop (1.1d 0x8089c6c..0x8089d0f, the
+`d` at 0x8089d0f) and `SV_GameSendServerCommand`: each `d` is queued at
+its write and each command at its call, so the two interleave in the
+game's call order. vcod sent every `d` of a frame ahead of the frame's
+commands; `Server::send_frame_writes` now sends a write made after the
+frame's first command between the commands it fell between (each write
+and command stamped by `configstrings::next_write_seq`). The slot numbers
+themselves already matched on re, bel and the fourteen UO runs.
 
 ## 8. Behind Enemy Lines: the team swap
 
@@ -514,18 +545,13 @@ whose connecting client reads "player" lists it with `pers["team"]`
 undefined. `cod11-items.md`'s `PROBE other 0 noclass` reading is the same
 fact.
 
-### 8.4 What ours got wrong, and the fixes
+### 8.4 What a spawn resets
 
-- A client is `classname` "noclass" from its connect until
-  `self spawn(...)` (`client_spawn`), so `getentarray("player",
-  "classname")` agrees with retail through the connect callback.
-- A spawn clears the client's objective copy. `ClientSpawn` zeroes the
-  whole `gclient_t` (0x42804, 0x22c4 bytes), the copy at `client+0x3e8`
-  with it; `client_spawn` resets the copy
-  (`GameHost::reset_client_objectives`).
-
-VERIFIED, the gate without these two fixes: the swap itself, the menus,
-the HUD, the roster, the scores and the log already matched retail.
+VERIFIED: `ClientSpawn` zeroes the whole `gclient_t` (0x42804, 0x22c4
+bytes), the objective copy at `client+0x3e8` with it, and moves
+`classname` from "noclass" to "player" (8.3). vcod's `client_spawn` does
+both (`GameHost::reset_client_objectives`), so `getentarray("player",
+"classname")` agrees with retail through the connect callback.
 
 The marker's origin is its own view (`marker`). INFERRED, off `bel.gsc`'s
 `make_obj_marker`: it reads the allied player's origin inside
@@ -706,4 +732,4 @@ follow a killcam or a swap with no non-playing snapshot go uncounted.
   view (`common::ProbeHold`, `framed` and `aim`), every marker row matches
   on both roles and no other row of the gate moves, at 1.1d and UO: the
   slide off a `setOrigin` onto the grade moves only on a cmd's own time
-  (AGENTS.md, "A fall onto a slope").
+  (`docs/dev/traps.md`, "Movement and collision", "A fall onto a slope").

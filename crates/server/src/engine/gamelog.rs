@@ -10,6 +10,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use vcod_common::game_dir::confined_rel_path;
 
 /// The separator `G_InitGame` and `G_ShutdownGame` write (0x821ae48).
 pub const SEPARATOR: &str = "------------------------------------------------------------\n";
@@ -26,16 +27,24 @@ impl GameLog {
     /// `FS_FOpenFileByMode` of `g_log` in the write directory: the home
     /// path's `game` directory (`fs_game`, else the base game's), `main/`
     /// when `game` is empty.
-    /// `None`, with retail's warning, when it cannot be opened.
+    /// `None`, with retail's warning, when it cannot be opened or `game`
+    /// or `name` would leave `home` ([`confined_rel_path`]).
     pub fn open(home: &Path, game: &str, name: &str, sync: bool) -> Option<GameLog> {
-        let dir = home.join(if game.is_empty() { "main" } else { game });
-        let path = dir.join(name);
-        let file = std::fs::create_dir_all(&dir).and_then(|_| {
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)
-        });
+        let game = if game.is_empty() { "main" } else { game };
+        let (Some(game), Some(rel)) = (confined_rel_path(game), confined_rel_path(name)) else {
+            log::warn!("WARNING: Couldn't open logfile: {name} (outside the home path)");
+            return None;
+        };
+        let path = home.join(&game).join(rel);
+        let file = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|_| {
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+            });
         match file {
             Ok(f) => Some(GameLog {
                 out: std::io::BufWriter::new(f),
@@ -156,8 +165,8 @@ mod tests {
 
     #[test]
     fn opens_under_the_mod_or_main_and_appends() {
-        let home = std::env::temp_dir().join(format!("vcod-gamelog-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&home);
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().to_path_buf();
         for _ in 0..2 {
             let mut log = GameLog::open(&home, "", "games_mp.log", false).unwrap();
             log.print(1000, "x\n");
@@ -166,6 +175,34 @@ mod tests {
         assert_eq!(text, "  0:01 x\n  0:01 x\n");
         let log = GameLog::open(&home, "mods/m", "games_mp.log", true).unwrap();
         assert_eq!(log.path, home.join("mods/m/games_mp.log"));
-        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// A `g_log` or `fs_game` a script or rcon set cannot move the log
+    /// out of `<home>/<game>`.
+    #[test]
+    fn refuses_a_log_outside_the_home_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("root");
+        let home = dir.join("a/b/home");
+        let abs = dir.join("abs.log").to_string_lossy().into_owned();
+        for name in [
+            "../x.log",
+            "sub/../../x.log",
+            "../../out/esc.log",
+            &abs,
+            "C:x.log",
+        ] {
+            assert!(GameLog::open(&home, "", name, false).is_none(), "{name}");
+        }
+        for game in ["..", "../out", "/tmp", "C:"] {
+            assert!(
+                GameLog::open(&home, game, "games_mp.log", false).is_none(),
+                "{game}"
+            );
+        }
+        // Each refusal comes before any directory is made.
+        assert!(!dir.exists());
+        let log = GameLog::open(&home, "", "logs/games_mp.log", false).unwrap();
+        assert_eq!(log.path, home.join("main/logs/games_mp.log"));
     }
 }

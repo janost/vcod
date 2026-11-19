@@ -1,7 +1,7 @@
 //! IBSP 59 (CoD 1) loader into a [`MapWorld`]. Layouts:
 //! docs/research/bsp-ibsp59-format.md.
 
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 
 /// The IBSP 59 records are the [`MapWorld`]'s; they stay reachable here.
 pub use crate::mapworld::{
@@ -11,6 +11,11 @@ pub use crate::mapworld::{
 };
 
 const LUMP_COUNT: usize = 33;
+/// How many times over the leaf lists may list their lumps (stock: once).
+const LEAF_RUN_FOLD: u64 = 4;
+/// How many times over the cull groups or the aabb nodes may list the soups
+/// (stock: at most 5.4 for the nodes, a parent's run holding its children's).
+const SOUP_RUN_FOLD: u64 = 64;
 const LUMP_MATERIALS: usize = 0;
 const LUMP_LIGHTMAPS: usize = 1;
 const LUMP_PLANES: usize = 2;
@@ -581,6 +586,18 @@ pub fn parse(data: &[u8]) -> Result<MapWorld> {
         leaf_brushes.iter().all(|&b| (b as usize) < brushes.len()),
         "a leaf brush past lump 4"
     );
+    // Runs may overlap, and the walks copy or fold each one: every stock and
+    // third-party map's leaf runs tile their lumps once and its node soup
+    // runs fold each soup at most 5.4 times (bsp-ibsp59-format.md, lumps 16
+    // and 21).
+    let total = |runs: &mut dyn Iterator<Item = u32>| runs.map(u64::from).sum::<u64>();
+    ensure!(
+        total(&mut leaf_lists.iter().map(|l| l.brushes.1))
+            <= LEAF_RUN_FOLD * leaf_brushes.len() as u64
+            && total(&mut leaf_lists.iter().map(|l| l.partitions.1))
+                <= LEAF_RUN_FOLD * leaf_partitions.len() as u64,
+        "leaf lists overlap past {LEAF_RUN_FOLD} times their lumps"
+    );
 
     let soup_count = soups.len() as u64;
     let in_soups = |first: u32, count: u32| first as u64 + count as u64 <= soup_count;
@@ -596,6 +613,11 @@ pub fn parse(data: &[u8]) -> Result<MapWorld> {
             "cull index {i} out of bounds"
         );
     }
+    ensure!(
+        total(&mut cull_groups.iter().map(|g| g.soup_count)) <= SOUP_RUN_FOLD * soup_count
+            && total(&mut aabb_nodes.iter().map(|n| n.soup_count)) <= SOUP_RUN_FOLD * soup_count,
+        "soup runs overlap past {SOUP_RUN_FOLD} times the soups"
+    );
     for (i, n) in aabb_nodes.iter().enumerate() {
         ensure!(
             in_soups(n.first_soup, n.soup_count),
@@ -648,6 +670,8 @@ pub fn parse(data: &[u8]) -> Result<MapWorld> {
             ensure!(ok, "node {i} child {c} out of bounds");
         }
     }
+    crate::treecheck::check_bsp(nodes.len(), leafs.len(), |n| nodes[n].children)
+        .context("bsp nodes")?;
     for (i, l) in leafs.iter().enumerate() {
         ensure!(l.cell < cells.len() as i32, "leaf {i} cell out of bounds");
     }
@@ -695,6 +719,12 @@ pub fn parse(data: &[u8]) -> Result<MapWorld> {
         ensure!(
             list.end <= occluder_indices.len(),
             "cell {i} occluders out of range"
+        );
+    }
+    for &oi in &occluder_indices {
+        ensure!(
+            (oi as usize) < occluders.len(),
+            "occluder index {oi} out of range"
         );
     }
 
@@ -870,7 +900,7 @@ pub fn sun_direction(entities: &str) -> [f32; 3] {
 }
 
 /// A `corona` entity as the renderer's world load keeps it (CoDMP.exe
-/// 0x4dbcd0, docs/research/cod11-shader-scripts.md section 8, "Coronas").
+/// 0x4dbcd0, docs/research/cod11-shader-scripts.md section 8.5, "Coronas").
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Corona {
     pub origin: [f32; 3],
@@ -1016,6 +1046,65 @@ mod tests {
         assert!(parse(&soup_bsp(&[0, 1, 2])).is_ok());
         let err = parse(&soup_bsp(&[0, 1, 3])).unwrap_err().to_string();
         assert!(err.contains("index"), "got: {err}");
+    }
+
+    /// A leaf may list its lump's runs only so many times over: listing the
+    /// whole lump in every leaf multiplies the walks' copies.
+    #[test]
+    fn rejects_runs_folded_over_their_lumps() {
+        let leafs = |runs: &[(u32, u32)]| -> Vec<u8> {
+            runs.iter()
+                .flat_map(|&(first, count)| {
+                    let mut l = [0u8; 36];
+                    l[16..20].copy_from_slice(&first.to_le_bytes());
+                    l[20..24].copy_from_slice(&count.to_le_bytes());
+                    l[24..28].copy_from_slice(&(-1i32).to_le_bytes()); // no cell
+                    l
+                })
+                .collect()
+        };
+        let with_leafs = |l: &[u8]| {
+            build_bsp(&[
+                (LUMP_MATERIALS, &[0u8; 72]),
+                (LUMP_MODELS, &[0u8; 48]),
+                (LUMP_BRUSHES, &[6, 0, 0, 0]),
+                (LUMP_BRUSHSIDES, &[0u8; 6 * 8]),
+                (LUMP_LEAF_BRUSHES, &[0u8; 8]),
+                (LUMP_LEAFS, l),
+            ])
+        };
+        parse(&with_leafs(&leafs(&[(0, 1), (1, 1), (0, 2)]))).unwrap();
+        let err = parse(&with_leafs(&leafs(&[(0, 2); 5])))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("overlap"), "got: {err}");
+
+        // One soup that 64 nodes may each list, 65 may not.
+        let mut soup = Vec::new();
+        soup.extend(0u32.to_le_bytes()); // material, lightmap
+        soup.extend(0u32.to_le_bytes()); // first_vertex
+        soup.extend(3u16.to_le_bytes()); // vertex_count
+        soup.extend(3u16.to_le_bytes()); // index_count
+        soup.extend(0u32.to_le_bytes()); // first_index
+        let idx: Vec<u8> = [0u16, 1, 2].iter().flat_map(|i| i.to_le_bytes()).collect();
+        let with_nodes = |n: usize| {
+            let nodes: Vec<u8> = [0u32, 1, 0]
+                .repeat(n)
+                .iter()
+                .flat_map(|w| w.to_le_bytes())
+                .collect();
+            build_bsp(&[
+                (LUMP_MATERIALS, &[0u8; 72]),
+                (LUMP_SOUPS, &soup),
+                (LUMP_MODELS, &[0u8; 48]),
+                (LUMP_DRAWVERTS, &[0u8; 3 * 44]),
+                (LUMP_DRAWINDICES, &idx),
+                (LUMP_AABB_NODES, &nodes),
+            ])
+        };
+        parse(&with_nodes(64)).unwrap();
+        let err = parse(&with_nodes(65)).unwrap_err().to_string();
+        assert!(err.contains("overlap"), "got: {err}");
     }
 
     #[test]
@@ -1205,9 +1294,7 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let Some(data) = fs.read("maps/MP/mp_ship.bsp") else {
-            return;
-        };
+        let data = crate::testing::stock_file(&fs, "maps/MP/mp_ship.bsp");
         let c = coronas(&parse(&data).unwrap().entities);
         assert_eq!(c.len(), 36);
         assert!(c.iter().all(|c| (c.radius - 7.65).abs() < 1e-4));
@@ -1218,9 +1305,7 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let Some(data) = fs.read("maps/MP/mp_ship.bsp") else {
-            return;
-        };
+        let data = crate::testing::stock_file(&fs, "maps/MP/mp_ship.bsp");
         let bsp = parse(&data).unwrap();
         // `-45 110 0` as angles; the compiler's lump-30 sun (words 7..9)
         // points the same way, which a vector reading of the key would not
@@ -1387,5 +1472,104 @@ mod tests {
         data[off + 8..off + 12].copy_from_slice(&u32::MAX.to_le_bytes());
         let err = parse(&data).unwrap_err().to_string();
         assert!(err.contains("portal"), "{err}");
+    }
+
+    /// One plane, two solid leafs and `children` as lump 20.
+    fn tree_bsp(children: &[[i32; 2]]) -> Vec<u8> {
+        let nodes: Vec<u8> = children
+            .iter()
+            .flat_map(|c| {
+                let mut n = vec![0u8; 36];
+                n[4..8].copy_from_slice(&c[0].to_le_bytes());
+                n[8..12].copy_from_slice(&c[1].to_le_bytes());
+                n
+            })
+            .collect();
+        let mut leaf = [0u8; 36];
+        leaf[24..28].copy_from_slice(&(-1i32).to_le_bytes());
+        build_bsp(&[
+            (LUMP_MATERIALS, &[0u8; 72]),
+            (LUMP_MODELS, &[0u8; 48]),
+            (LUMP_PLANES, &[0u8; 16]),
+            (LUMP_NODES, &nodes),
+            (LUMP_LEAFS, &[leaf, leaf].concat()),
+        ])
+    }
+
+    #[test]
+    fn rejects_a_node_tree_that_is_not_a_tree() {
+        assert!(parse(&tree_bsp(&[[1, -1], [-1, -2]])).is_ok());
+        let err = |children: &[[i32; 2]]| format!("{:#}", parse(&tree_bsp(children)).unwrap_err());
+        let e = err(&[[0, -1]]);
+        assert!(e.contains("reached twice"), "{e}");
+        let e = err(&[[1, 2], [2, -1], [-1, -2]]);
+        assert!(e.contains("reached twice"), "{e}");
+    }
+
+    #[test]
+    fn rejects_an_occluder_index_past_lump_12() {
+        let occ = |index: u16| {
+            build_bsp(&[
+                (LUMP_MATERIALS, &[0u8; 72]),
+                (LUMP_MODELS, &[0u8; 48]),
+                (LUMP_OCCLUDERS, &[0u8; 20]),
+                (LUMP_OCCLUDER_INDICES, &index.to_le_bytes()),
+            ])
+        };
+        assert!(parse(&occ(0)).is_ok());
+        let err = parse(&occ(1)).unwrap_err().to_string();
+        assert!(err.contains("occluder index"), "{err}");
+    }
+
+    /// A two-leaf tree beside a soup of three verts, mutated, through the
+    /// parse and what a loaded map runs first: the collision build, a trace
+    /// and the vis walk. Each returns on every input.
+    #[test]
+    fn a_hostile_bsp_never_panics_its_first_users() {
+        use crate::collision::{CollisionWorld, MASK_PLAYERSOLID};
+        use crate::vis::{Frustum, WorldVis};
+        use glam::Vec3;
+        let tree = parse(&tree_bsp(&[[-1, -2]])).unwrap();
+        let mut soup = Vec::new();
+        soup.extend(0u16.to_le_bytes());
+        soup.extend(0u16.to_le_bytes());
+        soup.extend(0u32.to_le_bytes());
+        soup.extend(3u16.to_le_bytes());
+        soup.extend(3u16.to_le_bytes());
+        soup.extend(0u32.to_le_bytes());
+        let mut leaf = [0u8; 36];
+        leaf[24..28].copy_from_slice(&(-1i32).to_le_bytes());
+        let mut node = vec![0u8; 36];
+        node[4..8].copy_from_slice(&(-1i32).to_le_bytes());
+        node[8..12].copy_from_slice(&(-2i32).to_le_bytes());
+        let mut plane = 1f32.to_le_bytes().to_vec();
+        plane.extend([0u8; 12]);
+        let good = build_bsp(&[
+            (LUMP_MATERIALS, &[0u8; 72]),
+            (LUMP_PLANES, &plane),
+            (LUMP_SOUPS, &soup),
+            (LUMP_DRAWVERTS, &[0u8; 3 * 44]),
+            (LUMP_DRAWINDICES, &[0, 0, 1, 0, 2, 0]),
+            (LUMP_NODES, &node),
+            (LUMP_LEAFS, &[leaf, leaf].concat()),
+            (LUMP_MODELS, &[0u8; 48]),
+        ]);
+        assert!(parse(&good).is_ok() && tree.nodes.len() == 1);
+        let frustum = Frustum::from_view_proj(glam::Mat4::IDENTITY);
+        crate::testing::fuzz("ibsp 59", &good, 1500, |b| {
+            let Ok(bsp) = parse(b) else {
+                return;
+            };
+            let world = CollisionWorld::build(&bsp, &[]);
+            let (a, z) = (Vec3::new(-64.0, 0.0, 32.0), Vec3::new(64.0, 0.0, -32.0));
+            world.move_trace(
+                a,
+                z,
+                Vec3::splat(-15.0),
+                Vec3::splat(15.0),
+                MASK_PLAYERSOLID,
+            );
+            WorldVis::build(&bsp).visible(Vec3::ZERO, &frustum, None);
+        });
     }
 }

@@ -23,10 +23,10 @@ use crate::common;
 use common::Queues;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::animtree::PlayerAnims;
 use vcod_common::net::msg::{BUTTON_USE, NULL_USERCMD, UserCmd};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::pk3::Pk3Fs;
 
 /// One `!kill` with the death frame retail sent behind it.
@@ -90,16 +90,14 @@ fn retail(path: &str, anims: &PlayerAnims) -> Vec<Death> {
 /// The same kills on ours: alive two seconds, then `kill` and its cmds in
 /// one frame, one message each as the probe sent them, and a frame with no
 /// cmd at all; then the use press until the respawn.
-fn ours(proto: &'static Protocol, fs: Pk3Fs, kills: &[usize], timers: bool) -> Vec<Death> {
+fn ours(proto: &'static Cod1Wire, fs: Pk3Fs, kills: &[usize], timers: bool) -> Vec<Death> {
     let anims = PlayerAnims::load(&fs).expect("the player anims");
-    let bsp_path = fs.resolve_map("mp_carentan").expect("map");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let fs = Rc::new(fs);
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg("mp_carentan", "dm"), now);
-    sv.set_protocol(proto);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        ..common::Boot::new("mp_carentan", "dm")
+    }
+    .start(fs);
     let q = Rc::new(RefCell::new(Queues::default()));
     let (mut cl, join) = common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp");
     assert!(join.findings().is_empty(), "{}", join.summary());
@@ -170,7 +168,7 @@ fn ours(proto: &'static Protocol, fs: Pk3Fs, kills: &[usize], timers: bool) -> V
     out
 }
 
-fn check(proto: &'static Protocol, fs: Pk3Fs, fixture: &str) {
+fn check(proto: &'static Cod1Wire, fs: Pk3Fs, fixture: &str) {
     let anims = PlayerAnims::load(&fs).expect("the player anims");
     let retail = retail(fixture, &anims);
     assert!(
@@ -197,14 +195,10 @@ fn a_kills_death_frame_matches_11d_by_its_cmds() {
 
 #[test]
 fn a_kills_death_frame_matches_15b_by_its_cmds() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    // UO's `main/` is 1.5's, so this one runs at a UO install too.
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    // UO's `main/` is 1.5's, so this one runs at a UO install too.
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     check(
         &PROTOCOL_V6,
         fs,
@@ -241,13 +235,9 @@ fn a_kills_death_timers_match_11d_by_its_cmds() {
 
 #[test]
 fn a_kills_death_timers_match_15b_by_its_cmds() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     check(
         &PROTOCOL_V6,
         fs,

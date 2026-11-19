@@ -339,7 +339,6 @@ struct Outcome {
 }
 
 /// `trace_row`: (resynced, row) whose cmds to print.
-#[allow(clippy::too_many_arguments)]
 fn replay(
     cap: &Capture,
     world: &CollisionWorld,

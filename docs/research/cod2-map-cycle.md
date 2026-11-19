@@ -10,7 +10,8 @@ behaviour is checked against retail captures. CoD1's counterpart is
 
 ### 1.1 `SV_SpawnServer` (0x8093520)
 
-On a running server, for every client past `CS_PRIMED` (state above 2) it
+On a running server, for every client past `CS_CONNECTED` (state above 2:
+`CS_PRIMED` and `CS_ACTIVE`) it
 sends the OOB `loadingnewmap\n<map>\n<g_gametype>` and then sleeps 250 ms
 (`NET_Sleep(0xfa)`). VERIFIED (the format string, the `2 <` test, the
 constant). It reads `G_GetSavePersist()` before `SV_ShutdownGameProgs` and
@@ -161,6 +162,10 @@ implemented; the dvar table is one (a level's `setCvar` survives the
 boundary), `default_mp.cfg` is exec'd at startup
 (`Cod2Server::exec_default_cfg`), `--set g_gametype=` picks the load's
 gametype, and `--gametype-script` overlays a gametype off disk as on CoD1.
+A spawn into a gametype with no script is refused before the teardown and
+the level serving stays; a load that fails after the teardown ends the
+process (`GameModule::take_fatal`), where retail raises `Com_Error`. vcod's
+choice, as CoD1's (`cod11-map-cycle.md`).
 
 The in-process gates (`crates/server/src/cod2/cycle_tests.rs`, `COD2_DIR`)
 run two vcod clients through section 2's sequences and assert the ids,
@@ -193,7 +198,7 @@ Retail rules section 2 exposed, and vcod's match for each:
   the squash. vcod squashes `d` by index the same way.
 - `setTeamScore` sends `H`/`G` through `SV_GameSendServerCommand(-1, ..)`
   (`GScr_SetTeamScore` 0x8115dda), the engine's clients, not the level's.
-  VERIFIED. vcod queues it to `ALL_CLIENTS`, which the engine fans out, so
+  VERIFIED. vcod queues it to `Recipient::All`, which the engine fans out, so
   the restart's `resetScores` reaches the clients the restarted level has
   not yet connected.
 - Configstring 0 and 1 go out at the head of `SV_Frame` (0x80969b0, the

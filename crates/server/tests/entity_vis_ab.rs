@@ -1,11 +1,11 @@
 //! The entity list a client is sent from one spot, diffed against the retail
-//! trace sample taken at that spot. Stage 5's visibility gate.
+//! trace sample taken at that spot. The visibility gate.
 //!
 //! `entities_ab.rs` pins what the map puts on the wire; this one pins who is
 //! shown it. Retail culls by the client's PVS cluster
 //! (`docs/protocol-1.1.md`, "Which entities a client is sent"), so a sample is
-//! a position and the set that position was sent, and the replay puts our own
-//! cull at the same position.
+//! a position and the set that position was sent, and the replay runs the
+//! server's own cull (`WorldFrame::entities_for`) at the same position.
 //!
 //! Exact set match, not a subset: a gate that only asked "do we send at least
 //! what retail sends" would pass a server that sends everything to everybody,
@@ -23,21 +23,12 @@ use std::time::Instant;
 use vcod_common::net::msg::EntityState;
 use vcod_common::net::protocol::PROTOCOL_V1;
 
-/// Samples stage 5 knowingly does not reproduce, as `(map, label, reason)`.
+/// Samples vcod knowingly does not reproduce, as `(map, label, reason)`.
 /// Empty is the goal, and the guard below fails on one that starts matching.
 const GAPS: &[(&str, &str, &str)] = &[];
 
 fn cfg(map: &str) -> vcod_server::ServerConfig {
-    vcod_server::ServerConfig {
-        map: map.into(),
-        hostname: "vcod test".into(),
-        max_clients: 8,
-        gametype: "dm".into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
-    }
+    common::cfg(map, "dm")
 }
 
 /// One station of the trace: where the probe stood, and the entity numbers it
@@ -104,15 +95,21 @@ fn retail(map: &str) -> (Vec<Sample>, String, String, String) {
     (out, head("joined"), head("weapon"), path)
 }
 
-/// Our full entity list, before any culling: what the samples are filtered out
-/// of. Built the way `entities_ab.rs` builds it, through a real join.
+/// Our full entity list, before any culling, and the frame the server's
+/// snapshots cull it from, with the joined client's number: what the
+/// samples are filtered out of. Built the way `entities_ab.rs` builds it,
+/// through a real join.
 fn ours(
     map: &str,
     team: &str,
     weapon: &str,
     fs: vcod_common::pk3::Pk3Fs,
     bsp: &vcod_common::mapworld::MapWorld,
-) -> BTreeMap<u32, EntityState> {
+) -> (
+    BTreeMap<u32, EntityState>,
+    vcod_server::archive::WorldFrame,
+    usize,
+) {
     let fs = Rc::new(fs);
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(map), now);
@@ -120,13 +117,13 @@ fn ours(
     sv.load_scripts(fs).expect("load the scripts");
     let q = Rc::new(RefCell::new(Queues::default()));
     let (cl, _join) = common::join(&mut sv, &q, &mut now, team, weapon);
-    assert!(
-        cl.snapshots().newest().is_some(),
-        "the server sent no snapshot at all"
-    );
+    let Some(snap) = cl.snapshots().newest() else {
+        panic!("the server sent no snapshot at all");
+    };
+    let slot = snap.ps.field_i32(&PROTOCOL_V1, "clientNum") as usize;
     // Not the snapshot's list: that one is already culled to where this client
     // happens to stand.
-    sv.all_entities()
+    (sv.all_entities(), sv.world_frame(), slot)
 }
 
 fn check(map: &str) {
@@ -138,15 +135,17 @@ fn check(map: &str) {
     let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
     let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
     let (samples, team, weapon, path) = retail(map);
-    let all = ours(map, &team, &weapon, fs, &bsp);
+    let (all, frame, slot) = ours(map, &team, &weapon, fs, &bsp);
     let vis = bsp.visibility();
     let p = &PROTOCOL_V1;
 
     let mut findings: Vec<String> = Vec::new();
     let mut gaps_hit: BTreeSet<&str> = BTreeSet::new();
     for s in &samples {
-        // Nothing in the gate's entity list moves, so any time evaluates it.
-        let got: BTreeSet<u32> = vcod_server::world::visible_entities(&vis, s.origin, &all, 0, p)
+        // The server's own cull, as each snapshot runs it, from the sample's
+        // spot: the links, the broadcast split and the scopes with it.
+        let got: BTreeSet<u32> = frame
+            .entities_for(slot, s.origin, Some(&vis), 0, p)
             .keys()
             .copied()
             .collect();

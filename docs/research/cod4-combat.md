@@ -70,6 +70,20 @@ live.
   (registered 0.2, VERIFIED): `weaponTime` after the third round reads
   0xb8, 0xc8, counting to 0; the gate fails at 0.25. VERIFIED (the gate).
   `weapFlags` 0x100 is the fresh trigger pull. VERIFIED live.
+- A burst whose clip runs dry with no reserve stays mid-burst, on 1.7 as in
+  vcod: the gun clicks every 500 ms and takes no sprint, offhand, change,
+  reload or melee request until ammo for it, a use-key swap or death.
+  INFERRED (the branches): `PM_Weapon` tests `weaponShotCount` (ps+0xf0)
+  against `fireType` 2..4 at 0x80630a4..0x80630c0 and, mid-burst, jumps
+  past the requests to 0x8063574; the trigger test at
+  0x8063802..0x8063827 fires mid-burst with no key; the shot's empty clip
+  (0x806409c) with no reserve raises `EV_NOAMMO` (0x80649c1) and adds 500
+  to `weaponTime` (0x8064a1e) without touching the count; the time-out
+  skips its reset mid-burst (0x806454b..0x806460f).
+- The only stores to ps+0xf0 in 0x8050000..0x8070000 are 0x80612d4 (the
+  reload start, zero), 0x80641a3 (the shot's increment), 0x806460f (the
+  time-out, zero) and 0x8065106 (the held-trigger reload arm, zero).
+  VERIFIED (the disassembly).
 - An empty clip with reserve reloads: 58900 reads `weaponstate` 7,
   `weaponTime` 2365, `weaponDelay` 1500 (empty reload, add time), with
   `EV_RELOAD_START_NOTIFY` (19), `EV_RESET_ADS` (14),
@@ -125,7 +139,7 @@ the shot's start (`PM_Weapon_StartFiring`, inlined at 0x80640af).
   under round-down, truncating `fistp` (0x80645c8..0x80645ed,
   0x80636f0..0x806372b). VERIFIED (the disassembly). A multiplier of 0
   steps by the larger timer (0x806394f). INFERRED (the branch). vcod:
-  `pmove::weapon::time_adjust`, `perk_msec`.
+  `pmove::weapon::run_clocks`, `clock_step`, `perk_msec`.
 - A timer stepped to 0 or below is set to 0 (`weaponTime` 0x8064592,
   `weaponDelay` 0x80645b5): the overshoot is dropped, never carried.
   INFERRED (the branches into both stores).
@@ -849,9 +863,11 @@ of the body's box along its yaw at `g_dropForwardSpeed` (10) and up at
 and `G_RunItem`'s fall and rest are 6.1.
 `itemWeaponSetAmmo(clip, stock)` keeps the counts. A living player whose
 box meets an item at rest and who holds the same weapon takes clip and
-stock into the reserve up to `maxAmmo` (+820), gets `EV_AMMO_PICKUP` (9),
-and the item goes (`Touch_Item`, `WeaponPickup_Touch`, `Add_Ammo`).
-INFERRED. `a_dropped_rifle_hands_its_ammo_over` runs it on the kill
+stock into the reserve up to `maxAmmo` (+820) and the item goes
+(`Touch_Item`, `WeaponPickup_Touch`, `Add_Ammo`). INFERRED. The touch's
+event is `EV_ITEM_PICKUP` (9, not `EV_AMMO_PICKUP`'s 10): the lunge
+capture (`play-1.7-lunge.txt`, t=52450) has event 9 parm 27 on an attacker
+already holding weapon 27. VERIFIED. `a_dropped_rifle_hands_its_ammo_over` runs it on the kill
 capture's rifle. VERIFIED (the gate). The use key's swap for a weapon not
 held is cod4-gsc.md 9.1. Not run: the compatible-weapon rule, the pickup
 prints.
@@ -1461,8 +1477,8 @@ VERIFIED (`strings`). Whether 1.7's `kill` asks `CheatsOk` is unmeasured.
 
 ### 10.6 Live
 
-A scratch script (`live.sh frag|melee`, uncommitted): vcod-server `--game
-cod4 mp_crash` with `sv_cheats`; `cod4_probe` `target` (allies, `idle`,
+A scratch run, not kept, whose parts were: vcod-server `--game cod4
+mp_crash` with `sv_cheats`; `cod4_probe` `target` (allies, `idle`,
 `--goto 207 2291 296`) and `attacker` (axis, `--script frag` from 123 2110
 300, or `--script melee` from 180 2260 300). The frag hit the target in
 flight (15, `MOD_IMPACT`, `torso_lower`) and burst 3.3 s after the throw,
@@ -1486,7 +1502,7 @@ behind it (each shot rewound, section 9). VERIFIED (the gates
 `cod4_damage_survives_every_transition` and `..._on_a_lagged_link`).
 Every stock map poses both teams' heads with each class's body (urban,
 desert, woodland). VERIFIED (`cod4_every_map_poses_both_teams`, ignored:
-21 map loads, about 50 s).
+21 map loads, 29 s of test in release on 2026-11-18).
 
 Two steps follow the stock script's rules. The team menu's answer and the
 class's in one packet lose the class, on ours and on retail
@@ -1580,8 +1596,8 @@ flashbang 40 units before the target's eye gives the `flashbang` shock for
 gives `concussion_grenade_mp` for the distance's time. VERIFIED (the gates
 `a_flashbang_in_the_face_shocks_for_six_seconds`,
 `a_concussion_grenade_shocks_by_its_distance`,
-`a_slowing_shellshock_walks_at_four_tenths`). Live, scratch `live.sh
-flash` (uncommitted: vcod-server `--game cod4 mp_crash`, a `cod4_probe`
+`a_slowing_shellshock_walks_at_four_tenths`). Live, a scratch run, not
+kept (vcod-server `--game cod4 mp_crash`, a `cod4_probe`
 `target` on allies at 207 2291 296, an axis `attacker` with `--script
 flash` (secondary offhand key 0x8000) from 123 2110 300, both
 `assault_mp,0`): the target shocked for 5286 ms (configstring slot 15)
@@ -1693,12 +1709,12 @@ those anims.
 ## 12. Open
 
 - A rocket's flight, the live grenade's throw back, a prone death's torso
-  and a `killcamentity` killcam are gated against retail captures (15);
-  what those gates still tolerate is 15's open list: the dropped weapon's
-  start on a prone body, a grenade's strike on a body, the second rocket's
-  number and a killcam's archived view.
+  and a `killcamentity` killcam are gated against retail captures (15),
+  which tolerate nothing: their `GAPS` are empty. The tag and trace read
+  gates' few rows are cod4-server-gaps.md's Open list.
 - The use key's weapon swap is gated live on ours (cod4-gsc.md 9.1); its
-  retail capture is uncommitted, so no A/B gate.
+  retail capture was not kept, so no A/B gate (cod4-server-gaps.md,
+  Open).
 - The terrain triangle normal's last bit.
 - The corpse's drag uses CoD2's yaw turn shape; no 1.7 capture of a death
   anim whose root turns. No retail capture holds a shellshock's torso
@@ -1881,8 +1897,16 @@ From the `cod4_lnxded` 1.7 disassembly, checked against the kill capture.
 - What a script sees of a deleted entity inside the frame is unmeasured on
   1.7. `Scr_FreeEntityNum` likely only marks the object dead and leaves
   its threads for later. INFERRED. vcod keeps CoD1's 100 ms.
-- The two refusals are not ported: no stock script deletes a client or an
-  entity from its own think.
+- A deleted grenade's missile row goes with `delete()`'s unlink, at the
+  next missile pass and from the next snapshot, so it neither bursts nor
+  is sent in the 100 ms (`Cod4Level::run_missiles`, `missile_entities`).
+  The module's own frees go through `GameHost::free_entity`, which drops
+  the row and the entity's `setCanDamage` entry.
+- The client refusal is ported as a script error
+  (`HostProfile::delete_refuses_client`); the think refusal is not, as no
+  stock script deletes an entity from its own think. On CoD1 and CoD2 vcod
+  notifies `death` on a deleted client and keeps his entity: retail's
+  client arm there is unread.
 
 ## 15. The capture gates
 
@@ -1924,10 +1948,10 @@ VERIFIED (the gates).
   `killCamEntity` 315, the model's number, and carry it. VERIFIED live.
 - The corpse runs (`play-1.7-csb0corpse-*`, `-csb0drag-*`, 5.3) under
   `sv_clientSideBullets 0`: `cod4_corpse_rounds_ab` and
-  `cod4_corpse_drag_ab` match every corpse word and every impact; their
-  `GAPS` hold the killcam's pitch, the target's second spawn and the
-  floor run's dropped rifle (cod4-server-gaps.md, Ranked 8). VERIFIED
-  (the gates).
+  `cod4_corpse_drag_ab` match every corpse word and every impact, with
+  empty `GAPS`. VERIFIED (the gates). What closed the killcam's pitch,
+  the target's second spawn and the floor run's dropped rifle:
+  cod4-server-gaps.md, Closed.
 
 What the captures fixed on ours:
 

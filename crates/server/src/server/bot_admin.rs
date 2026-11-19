@@ -1,9 +1,10 @@
-//! Bot management for both servers (`crate::botmgmt` holds the rules):
+//! Bot management for every server (`crate::botmgmt` holds the rules):
 //! the `addbot`, `removebot` and `listbots` console commands, and the pass
 //! that keeps the bot count, the names and the teams where the
 //! `vc_bot_*` cvars say. The pass and the commands are written once over
-//! [`AdminHost`]; CoD1's `Server` implements it here, `Cod2Server` in
-//! `cod2/bots.rs`. docs/research/bot-objectives.md, "Bot management".
+//! [`AdminHost`]; CoD1's `Server` implements it here, `Cod2Server` and
+//! `Cod4Server` once in `engine/bots.rs`. docs/research/bot-objectives.md,
+//! "Bot management".
 
 use super::*;
 use crate::botmgmt::{self, Action, Member, Settings, Side, cvar};
@@ -12,8 +13,8 @@ use crate::botmgmt::{self, Action, Member, Settings, Side, cvar};
 /// for one sooner.
 const PASS_MS: i32 = 500;
 
-/// The admin state both servers keep between passes (CoD1's [`BotAdmin`],
-/// CoD2's `Cod2Bots::admin`).
+/// The admin state every server keeps between passes (CoD1's
+/// [`BotAdmin`], CoD2's and CoD4's `GameBots::admin`).
 #[derive(Debug, Default)]
 pub struct Ledger {
     /// The bots asked for by count: `--bots`, `addbot`, `removebot`.
@@ -85,13 +86,13 @@ pub(super) fn seed_stream(seed: u64) -> u64 {
 /// replies), which this stage keeps as it was.
 pub(crate) trait AdminHost {
     /// Where a command's reply goes: CoD1's `Com_Printf` needs nothing,
-    /// CoD2's takes the rcon `Redirect`.
+    /// CoD2's and CoD4's take the rcon `Redirect`.
     type Out;
     fn say(&mut self, out: &mut Self::Out, msg: &str);
     /// A level with a script is running.
     fn level_running(&self) -> bool;
     /// The pass may run: a level is up and the server keeps admin state
-    /// (CoD2 makes its state here once a floor asks for bots).
+    /// (CoD2 and CoD4 make their state here once a floor asks for bots).
     fn admin_ready(&mut self) -> bool;
     /// The level clock the pass is timed on.
     fn admin_now(&self) -> i32;
@@ -99,19 +100,34 @@ pub(crate) trait AdminHost {
     /// The ledger, made if the server had none yet.
     fn ledger_or_new(&mut self) -> &mut Ledger;
     fn bot_settings(&self) -> Settings;
-    /// Applies a changed `vc_bot_shoot` and `vc_bot_skill` to the bots.
+    /// Applies a changed `vc_bot_shoot` and `vc_bot_skill`, and
+    /// `vc_bot_retreat`, to the bots.
     fn apply_settings(&mut self, s: Settings);
     /// Whether the running gametype has two sides to balance.
     fn bot_teamed(&self) -> bool;
+    /// The brains by slot, `None` before the server keeps any.
+    fn brains(&self) -> Option<&BTreeMap<usize, crate::bots::Bot>>;
+    /// The public slots no client holds.
+    fn free_slots(&self) -> usize;
     /// The free public slots plus those bots hold: what bots may fill.
-    fn bot_room(&self) -> usize;
-    fn bot_count(&self) -> usize;
+    fn bot_room(&self) -> usize {
+        self.free_slots() + self.bot_count()
+    }
+    fn bot_count(&self) -> usize {
+        self.brains().map_or(0, |b| b.len())
+    }
     /// Every connected client as the planner sees it.
     fn bot_roster(&mut self) -> Vec<Member>;
     /// A bot's name, `""` for no bot.
-    fn bot_name(&self, slot: usize) -> String;
+    fn bot_name(&self, slot: usize) -> String {
+        self.brains()
+            .and_then(|b| b.get(&slot))
+            .map_or(String::new(), |b| b.name.clone())
+    }
     /// A bot's skill level, `None` for no bot or a hand-set `Skill`.
-    fn bot_level(&self, slot: usize) -> Option<u8>;
+    fn bot_level(&self, slot: usize) -> Option<u8> {
+        self.brains()?.get(&slot)?.skill.level_of()
+    }
     /// Connects one bot asking for `side`, at `level` (pinned) or the
     /// cvar's; the slot taken.
     fn admit_bot(&mut self, side: Side, s: Settings, level: Option<u8>) -> Option<usize>;
@@ -318,7 +334,7 @@ pub(crate) fn list_bots<H: AdminHost>(h: &mut H, out: &mut H::Out) {
         .count();
     let manual = h.ledger().map_or(0, |l| l.manual);
     text.push_str(&format!(
-        "{} bot(s), {humans} human player(s); manual {manual}, {} {}, {} {}, {} {}, {} {}\n",
+        "{} bot(s), {humans} human player(s); manual {manual}, {} {}, {} {}, {} {}, {} {}, {} {}\n",
         roster.iter().filter(|m| m.bot).count(),
         cvar::MIN_PLAYERS,
         s.min_players,
@@ -328,6 +344,8 @@ pub(crate) fn list_bots<H: AdminHost>(h: &mut H, out: &mut H::Out) {
         u8::from(s.shoot),
         cvar::SKILL,
         s.skill,
+        cvar::RETREAT,
+        u8::from(s.retreat),
     ));
     h.say(out, &text);
 }
@@ -454,6 +472,7 @@ impl AdminHost for Server {
             autobalance: on(cvar::AUTOBALANCE, "1"),
             shoot: on(cvar::SHOOT, "1"),
             names: on(cvar::NAMES, "1"),
+            retreat: on(cvar::RETREAT, "1"),
             skill: self
                 .live_int_cvar(cvar::SKILL)
                 .clamp(0, i32::from(crate::bots::MAX_LEVEL)) as u8,
@@ -471,6 +490,10 @@ impl AdminHost for Server {
         }
         let admin = &mut self.game.module.bot_admin;
         let bots = &mut self.game.module.driver.bots;
+        // Every pass, so a bot joined since takes it too.
+        for b in bots.values_mut() {
+            b.allow_retreat(s.retreat);
+        }
         admin
             .ledger
             .skills
@@ -496,17 +519,16 @@ impl AdminHost for Server {
         )
     }
 
-    /// A zombie holds its slot until the zombie pass frees it.
-    fn bot_room(&self) -> usize {
-        let private = self.private_clients().max(0) as usize;
-        let free = (private..self.core.clients.len())
-            .filter(|&i| self.core.clients[i].is_none() && self.game.zombies[i].is_none())
-            .count();
-        free + self.game.module.driver.bots.len()
+    fn brains(&self) -> Option<&BTreeMap<usize, crate::bots::Bot>> {
+        Some(&self.game.module.driver.bots)
     }
 
-    fn bot_count(&self) -> usize {
-        self.game.module.driver.bots.len()
+    /// A zombie holds its slot until the zombie pass frees it.
+    fn free_slots(&self) -> usize {
+        let private = self.private_clients().max(0) as usize;
+        (private..self.core.clients.len())
+            .filter(|&i| self.core.clients[i].is_none() && self.game.zombies[i].is_none())
+            .count()
     }
 
     /// Logs each bot's `pers["team"]` once it lands: on `bel` the script,
@@ -551,19 +573,6 @@ impl AdminHost for Server {
         out
     }
 
-    fn bot_name(&self, slot: usize) -> String {
-        self.game
-            .module
-            .driver
-            .bots
-            .get(&slot)
-            .map_or(String::new(), |b| b.name.clone())
-    }
-
-    fn bot_level(&self, slot: usize) -> Option<u8> {
-        self.bot_skill(slot)
-    }
-
     fn admit_bot(&mut self, side: Side, s: Settings, level: Option<u8>) -> Option<usize> {
         self.add_bot(side, s, level)
     }
@@ -572,7 +581,6 @@ impl AdminHost for Server {
         self.game.module.bot_admin.ledger.pinned.remove(&slot);
         self.game.module.bot_admin.landed.remove(&slot);
         self.drop_client(slot, "EXE_PLAYERKICKED");
-        self.game.module.driver.bots.remove(&slot);
     }
 
     /// The stock handlers switch a dead or spectating player and reopen the
@@ -628,6 +636,31 @@ mod tests {
             sv.game.module.driver.bots[&a].rng,
             sv.game.module.driver.bots[&b].rng
         );
+    }
+
+    /// A bot kicked outside `removebot` loses its brain with its slot, so
+    /// a client that takes the slot before the next bot step is not
+    /// driven by it (BUG-040).
+    #[test]
+    fn a_kicked_bot_takes_its_brain_with_it() {
+        let cfg = ServerConfig {
+            map: "mp_carentan".into(),
+            hostname: "vcod test".into(),
+            max_clients: 4,
+            gametype: "dm".into(),
+            test_entities: 0,
+            trace: false,
+            bots: 0,
+            bots_shoot: false,
+        };
+        let now = Instant::now();
+        let mut sv = Server::new(cfg, now);
+        let s = sv.bot_settings();
+        let slot = sv.add_bot(Side::Axis, s, None).expect("a slot");
+        sv.kick_slot(slot, now);
+        assert!(sv.core.clients[slot].is_none() && sv.game.zombies[slot].is_none());
+        assert!(!sv.game.module.driver.bots.contains_key(&slot));
+        assert_eq!(sv.bot_count(), 0);
     }
 
     /// On `bel` every bot answers the team menu with axis and the script

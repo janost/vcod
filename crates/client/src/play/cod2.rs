@@ -54,6 +54,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+use vcod_common::net::Msec;
 
 use anyhow::{Context, bail};
 use glam::Vec3;
@@ -77,13 +78,59 @@ use crate::play::cod2_fx::{Cod2Fx, FxPlay};
 use crate::play::cod2_input::Cod2Input;
 use crate::play::cod2_net::{Lagometer, LerpStats, NetMeter};
 use crate::play::cod2_predict::{CMD_BACKUP, Cod2Predictor, Predicted2};
-use crate::play::cod2_recoil::{Cod2Recoil, KickDef};
+use crate::play::cod2_recoil::Cod2Recoil;
 use crate::play::cod2_sound::{Cod2Sounds, LoopSounds, SoundCommand};
+use crate::play::cod2_weapons::LevelWeapons;
 use crate::play::input::Action;
 use std::collections::{HashMap, VecDeque};
 use vcod_cod2::net::{PlayerView, SnapshotView};
 use vcod_common::collision::CollisionWorld;
 use vcod_common::net::protocol::CsRange;
+
+mod connect;
+mod demo;
+use demo::DemoPlay;
+mod probe;
+pub use connect::{ConnectOpts, Connecting, Join, home_of};
+pub use probe::{demo_probe, probe};
+
+/// Now for a session's waits, send pacing and timeouts: the wall's, or the
+/// clock a live test shares with its in-process server on this thread
+/// (`play::cod4::tests::sim`, the CoD2 server through `tests::run_held`).
+pub(crate) fn clock_now() -> Instant {
+    #[cfg(test)]
+    if let Some(t) = crate::play::cod4::tests::sim::now() {
+        return t;
+    }
+    Instant::now()
+}
+
+/// [`Instant::elapsed`] on [`clock_now`].
+fn since(t: Instant) -> Duration {
+    clock_now().saturating_duration_since(t)
+}
+
+/// A wait between two socket reads: `d` of the wall, or on a test's clock
+/// a frame of it, which is what lets its server answer.
+fn clock_sleep(d: Duration) {
+    #[cfg(test)]
+    if crate::play::cod4::tests::sim::sleep(Duration::from_millis(16)) {
+        return;
+    }
+    if !d.is_zero() {
+        std::thread::sleep(d);
+    }
+}
+
+/// [`clock_now`] on the client's frame clock (`cls.realtime`, which
+/// `cl_avidemo` steps) where no test clock runs.
+fn frame_now() -> Instant {
+    #[cfg(test)]
+    if let Some(t) = crate::play::cod4::tests::sim::now() {
+        return t;
+    }
+    crate::frame_clock::now()
+}
 
 /// `ANGLE2SHORT`.
 fn angle_to_short(deg: f32) -> i32 {
@@ -124,175 +171,6 @@ const TIMEOUT_FRAMES: u32 = 6;
 /// long passed without a sequenced message (`CL_ConnectionlessPacket`,
 /// Mac 0x14c4c4).
 const OOB_DISCONNECT_QUIET: Duration = Duration::from_millis(3000);
-
-/// What the session answers the stock script menus with
-/// (`maps/mp/gametypes/_menus.gsc`'s `menuresponse` loop).
-#[derive(Clone, Debug)]
-pub struct Join {
-    /// `allies`, `axis`, `autoassign` or `spectator`.
-    pub team: String,
-    /// A weapon file name the weapon menu allows; `None` takes the
-    /// nation's bolt-action rifle.
-    pub weapon: Option<String>,
-}
-
-impl Join {
-    /// The response to script menu `menu` (its configstring name), or
-    /// `None` for one a joining player leaves alone.
-    pub fn response(&self, menu: &str) -> Option<String> {
-        if menu.starts_with("serverinfo_") {
-            return Some("close".into());
-        }
-        if menu.starts_with("team_") {
-            return Some(self.team.clone());
-        }
-        let nation = menu.strip_prefix("weapon_")?;
-        if let Some(w) = &self.weapon {
-            return Some(w.clone());
-        }
-        Some(
-            match nation {
-                "german" => "kar98k_mp",
-                "british" => "enfield_mp",
-                "american" => "m1garand_mp",
-                "russian" => "mosin_nagant_mp",
-                _ => return None,
-            }
-            .into(),
-        )
-    }
-}
-
-/// A connect running on its own thread ([`Cod2Session::connect_in_background`]).
-pub struct Connecting {
-    pub addr: String,
-    rx: std::sync::mpsc::Receiver<anyhow::Result<Cod2Session>>,
-    progress: Arc<std::sync::Mutex<Option<Progress>>>,
-}
-
-/// What the client sends and fetches on a connect: its name, and where
-/// and whether it downloads the server's iwds (`cl_allowDownload`,
-/// `cl_wwwDownload`).
-#[derive(Clone, Debug)]
-pub struct ConnectOpts {
-    pub name: String,
-    /// `fs_homepath`, which on the Windows and Mac clients is the install
-    /// (`Sys_DefaultHomePath` returns nothing, cod2-protocol.md 17.5):
-    /// `main/` and the mod directories sit in it. `None` downloads nothing.
-    pub home: Option<PathBuf>,
-    pub allow_download: bool,
-    pub www_download: bool,
-    /// The `rate` and `snaps` userinfo dvars, and `password` (left out
-    /// when empty).
-    pub rate: String,
-    pub snaps: String,
-    pub password: String,
-    /// `cl_voice` (default 1, flags 0x1003: archived, userinfo;
-    /// `CL_InitOnceForAllClients`, Mac 0x1485e2): the server relays voice
-    /// only to a client sending it on (cod2-voice.md 3).
-    pub voice: bool,
-}
-
-impl ConnectOpts {
-    /// Retail's defaults (both cvars 1) with `fs`'s install as the homepath.
-    pub fn new(name: &str, fs: &Pk3Fs) -> Self {
-        ConnectOpts {
-            name: name.to_string(),
-            home: home_of(fs),
-            ..Self::default()
-        }
-    }
-
-    /// The userinfo string: CoD2's stock keys (cod2-protocol.md 1.2), the
-    /// values stripped of `\`, `;` and `"`, which an info string cannot
-    /// carry. `connect` adds `protocol`, `challenge` and `qport`.
-    pub fn userinfo(&self) -> String {
-        let clean = |v: &str| -> String {
-            v.chars()
-                .filter(|c| !matches!(c, '\\' | ';' | '"'))
-                .collect()
-        };
-        let mut ui = format!(
-            "\\name\\{}\\rate\\{}\\snaps\\{}\\cl_punkbuster\\0\\cl_voice\\{}\\cl_wwwDownload\\{}",
-            clean(&self.name),
-            clean(&self.rate),
-            clean(&self.snaps),
-            u8::from(self.voice),
-            u8::from(self.www_download)
-        );
-        if !self.password.is_empty() {
-            ui.push_str(&format!("\\password\\{}", clean(&self.password)));
-        }
-        ui
-    }
-}
-
-impl ConnectOpts {
-    /// These options with the console's userinfo dvars; an empty `rate` or
-    /// `snaps` keeps the default.
-    pub fn with_userinfo(self, info: &vcod_common::net::Userinfo) -> Self {
-        let or = |v: &str, d: String| if v.is_empty() { d } else { v.to_string() };
-        let d = ConnectOpts::default();
-        ConnectOpts {
-            name: info.name.clone(),
-            rate: or(&info.rate, d.rate),
-            snaps: or(&info.snaps, d.snaps),
-            password: info.password.clone(),
-            www_download: info
-                .www_download
-                .trim()
-                .parse::<f32>()
-                .is_ok_and(|v| v != 0.0),
-            ..self
-        }
-    }
-}
-
-impl Default for ConnectOpts {
-    fn default() -> Self {
-        ConnectOpts {
-            name: String::new(),
-            home: None,
-            allow_download: true,
-            www_download: true,
-            rate: "25000".into(),
-            snaps: "20".into(),
-            password: String::new(),
-            voice: true,
-        }
-    }
-}
-
-/// The install `fs`'s `main/` sits in.
-pub fn home_of(fs: &Pk3Fs) -> Option<PathBuf> {
-    fs.dirs()
-        .iter()
-        .find(|d| {
-            d.file_name()
-                .is_some_and(|n| n.eq_ignore_ascii_case("main"))
-        })
-        .and_then(|d| d.parent())
-        .map(Path::to_path_buf)
-}
-
-impl Connecting {
-    /// The file the connect is downloading, for the connect screen.
-    pub fn progress(&self) -> Option<Progress> {
-        self.progress.lock().ok()?.clone()
-    }
-
-    /// The session once the gamestate is in, or why the connect failed;
-    /// `None` while it runs.
-    pub fn poll(&self) -> Option<anyhow::Result<Cod2Session>> {
-        match self.rx.try_recv() {
-            Ok(r) => Some(r),
-            Err(std::sync::mpsc::TryRecvError::Empty) => None,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                Some(Err(anyhow::anyhow!("the connect thread ended")))
-            }
-        }
-    }
-}
 
 /// What the session counted; `--net-probe` prints it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -436,11 +314,12 @@ pub struct Cod2Session {
     pub predict_bodies: bool,
     /// The map's collision world the prediction runs over, and its map.
     world: Option<(String, CollisionWorld)>,
-    /// `moveSpeedScale` by weapon name.
-    move_scales: HashMap<String, f32>,
-    /// The level's weapon table the prediction's `PM_Weapon` reads, and
-    /// the `CS_WEAPONS` it was built off.
-    weapon_defs: (String, Vec<Option<vcod_cod2::pmove::weapon::WeaponParams>>),
+    /// The map whose collision failed to build and the gamestate count it
+    /// failed under: not tried again until a new gamestate.
+    world_failed: Option<(String, u32)>,
+    /// The level's weapon files, which every reader below takes its keys
+    /// from; dropped at a gamestate and a search-path reopen.
+    weapons: LevelWeapons,
     /// This frame's prediction and the newest snapshot with its
     /// playerstate replaced by the predicted one.
     predicted: Option<(Predicted2, SnapshotView)>,
@@ -451,8 +330,6 @@ pub struct Cod2Session {
     /// Each ridden gun model's `tag_aim` and `tag_player` bind positions,
     /// the gunner's eye (`None`: the model or a tag did not load).
     gun_tags: HashMap<String, Option<(Vec3, Vec3)>>,
-    /// Each gun weapon's `vertViewJitter` and `horizViewJitter`, by name.
-    gun_jitters: HashMap<String, [f32; 2]>,
     /// This frame's view jitter on a firing gun, pitch and yaw degrees.
     jitter: [f32; 2],
     jitter_rng: crate::fx::sim::Rng,
@@ -460,8 +337,6 @@ pub struct Cod2Session {
     /// client they run for.
     recoil: Cod2Recoil,
     recoil_for: (u32, i32),
-    /// Each weapon's kick keys by name (`None`: the file did not load).
-    kick_defs: HashMap<String, Option<KickDef>>,
     /// The own body's last landing and this frame's dips of the eye and
     /// the gun (`play::cod2_view::Land`).
     land: crate::play::cod2_view::Land,
@@ -484,95 +359,9 @@ pub struct PredictLog {
 }
 
 impl Cod2Session {
-    /// Challenge, plain-text connect, then wait for the gamestate and its
-    /// downloads; the `cp` waits for the first [`Self::fly`], over the
-    /// search path the map loads from (`CL_DownloadsComplete` sends it
-    /// after `CL_InitCGame`). Blocks for at most `timeout` until the
-    /// gamestate.
-    pub fn connect(addr: &str, opts: &ConnectOpts, timeout: Duration) -> anyhow::Result<Self> {
-        Self::connect_with(addr, opts, timeout, None)
-    }
-
-    /// [`Self::connect`] on a thread of its own, for the front end's
-    /// `connect`; [`Connecting::progress`] follows its downloads.
-    pub fn connect_in_background(addr: &str, opts: ConnectOpts, timeout: Duration) -> Connecting {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let a = addr.to_string();
-        let progress = Arc::new(std::sync::Mutex::new(None));
-        let shown = progress.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send(Self::connect_with(&a, &opts, timeout, Some(shown)));
-        });
-        Connecting {
-            addr: addr.to_string(),
-            rx,
-            progress,
-        }
-    }
-
-    /// The handshake, then the gamestate and every download it asks for:
-    /// the session comes back once the map can load (`CL_DownloadsComplete`).
-    fn connect_with(
-        addr: &str,
-        opts: &ConnectOpts,
-        timeout: Duration,
-        progress: Option<Arc<std::sync::Mutex<Option<Progress>>>>,
-    ) -> anyhow::Result<Self> {
-        let sock = UdpSocket::bind("0.0.0.0:0")?;
-        sock.connect(addr)
-            .with_context(|| format!("cannot reach {addr}"))?;
-        sock.set_read_timeout(Some(Duration::from_millis(5)))?;
-        let key = KeyAuth {
-            key: cdkey::lookup(KeyGame::Cod2),
-            server: sock.peer_addr().ok(),
-        };
-        let hash = key.key.as_ref().map(|k| k.hash(KeyGame::Cod2));
-        let challenge = ask_keyed(
-            &sock,
-            &oob::getchallenge(hash.as_deref()),
-            Some(&key),
-            |r| match r {
-                Reply::Challenge(c) => Some(*c),
-                _ => None,
-            },
-        )?;
-        // Below 0x8000: retail's `SV_VoicePacket` reads the qport signed and
-        // never matches a higher one (cod2-voice.md 3).
-        let qport = std::process::id() as u16 & 0x7fff;
-        // `cl_wwwDownload` is a userinfo dvar (flags 0x1003,
-        // `CL_InitOnceForAllClients`, Mac 0x1485e2).
-        let ui = opts.userinfo();
-        ask(&sock, &oob::connect(&ui, challenge, qport), |r| {
-            matches!(r, Reply::Connect).then_some(())
-        })?;
-        log::info!("cod2: connected to {addr}, challenge {challenge}");
-        let mut s = Cod2Session::new(Some(sock), Client::new(qport, challenge));
-        s.opts = opts.clone();
-        s.progress = progress;
-        let until = Instant::now() + timeout;
-        // Past the first gamestate only `cl_timeout` gives up: a download
-        // takes as long as it takes.
-        while !s.settled() {
-            if s.view.gamestates == 0 && Instant::now() > until {
-                bail!("no gamestate from {addr}");
-            }
-            s.poll(None);
-            if let Some(why) = s.dropped.take() {
-                // `Com_Error`'s `CL_Disconnect`: the server hears of it.
-                s.disconnect();
-                return Err(ServerError(why).into());
-            }
-            s.send_due()?;
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        s.level_gamestates = s.view.gamestates;
-        s.loaded_map = s.map_name().unwrap_or_default().to_string();
-        Ok(s)
-    }
-
     /// A session on `sock` past `connectResponse`, before the gamestate.
     fn new(sock: Option<UdpSocket>, client: Client) -> Self {
-        let now = Instant::now();
+        let now = clock_now();
         Cod2Session {
             sock: sock.and_then(|s| UdpTransport::from_socket(s).ok()),
             demo: None,
@@ -627,25 +416,23 @@ impl Cod2Session {
             talking: false,
             voice: crate::voice::VoiceLink::cod2(),
             muted: [false; 64],
-            epoch: crate::frame_clock::now(),
+            epoch: frame_now(),
             clock: ServerClock::cod2(),
             cmd_clock: CmdClock::default(),
             sent: VecDeque::new(),
             predictor: Cod2Predictor::default(),
             predict_bodies: true,
             world: None,
-            move_scales: HashMap::new(),
-            weapon_defs: Default::default(),
+            world_failed: None,
+            weapons: LevelWeapons::default(),
             predicted: None,
             predicted_events: Vec::new(),
             predict_log: PredictLog::default(),
             gun_tags: HashMap::new(),
-            gun_jitters: HashMap::new(),
             jitter: [0.0; 2],
             jitter_rng: crate::fx::sim::Rng::new(0x6a69_7474),
             recoil: Cod2Recoil::default(),
             recoil_for: (0, -1),
-            kick_defs: HashMap::new(),
             land: Default::default(),
             land_dips: (0.0, 0.0),
             step: Default::default(),
@@ -764,8 +551,18 @@ impl Cod2Session {
     /// counted and logged, and the next one tried. A gamestate's `cp` is
     /// queued here when `fs` is given, else on the next call that gives it.
     pub fn poll(&mut self, fs: Option<&Pk3Fs>) {
+        self.poll_at_most(fs, vcod_common::net::MAX_PACKETS_PER_PUMP);
+    }
+
+    /// [`Self::poll`] reading at most `max` datagrams, so a flood cannot
+    /// hold the frame.
+    fn poll_at_most(&mut self, fs: Option<&Pk3Fs>, max: usize) {
         let mut buf = vec![0u8; 0x10000];
-        while let Some(n) = self.sock.as_mut().and_then(|s| s.try_recv(&mut buf)) {
+        let mut read = 0;
+        while read < max
+            && let Some(n) = self.sock.as_mut().and_then(|s| s.try_recv(&mut buf))
+        {
+            read += 1;
             let d = &buf[..n];
             if let Some(pl) = oob::payload(d) {
                 // `CL_ConnectionlessPacket`'s `v` (Mac 0x14c4c4) into
@@ -779,7 +576,7 @@ impl Cod2Session {
                 }
                 match oob::parse_reply(pl) {
                     Reply::Error(e) => self.dropped = Some(e),
-                    Reply::Disconnect if self.last_msg.elapsed() >= OOB_DISCONNECT_QUIET => {
+                    Reply::Disconnect if since(self.last_msg) >= OOB_DISCONNECT_QUIET => {
                         self.dropped = Some("EXE_SERVER_DISCONNECTED".into())
                     }
                     // `CL_ConnectionlessPacket` prints a `print` from any
@@ -804,7 +601,7 @@ impl Cod2Session {
             let lost = self.client.netchan.total_dropped;
             let got = self.client.receive(d);
             let lost = self.client.netchan.total_dropped - lost;
-            self.meter.packet(fragment, lost as u32, Instant::now());
+            self.meter.packet(fragment, lost as u32, clock_now());
             match got {
                 Ok(Some(p)) => self.on_message(p),
                 Ok(None) => {}
@@ -828,7 +625,7 @@ impl Cod2Session {
         }
         // `CL_Frame` (Mac 0x14b182): six frames in a row past `cl_timeout`
         // without a sequenced packet drop the connection.
-        if self.last_msg.elapsed() > self.timeout {
+        if since(self.last_msg) > self.timeout {
             self.timeout_frames += 1;
             if self.timeout_frames >= TIMEOUT_FRAMES && self.dropped.is_none() {
                 self.dropped = Some("EXE_ERR_SERVER_TIMEOUT".into());
@@ -857,7 +654,7 @@ impl Cod2Session {
 
     /// What one parsed server message brings, off the socket or a demo.
     fn on_message(&mut self, p: vcod_cod2::net::Parsed) {
-        self.last_msg = Instant::now();
+        self.last_msg = clock_now();
         self.stats.messages += 1;
         self.stats.commands += p.commands.len();
         if p.gamestate && self.view.gamestates > 0 {
@@ -875,7 +672,7 @@ impl Cod2Session {
             self.predicted = None;
             self.cg_time = None;
             self.input.reset();
-            self.move_scales.clear();
+            self.weapons.clear();
             self.answered.clear();
         }
         if let Some(n) = p.snapshot {
@@ -888,14 +685,14 @@ impl Cod2Session {
             {
                 self.stats.deltas += 1;
             }
-            self.snap_at = Instant::now();
+            self.snap_at = clock_now();
         }
         self.view.update(&self.client.parser, &p);
-        self.meter.message(Instant::now());
+        self.meter.message(clock_now());
         if p.snapshot.is_some()
             && let Some(s) = &self.view.snap
         {
-            self.meter.snapshot(s.ps.command_time, Instant::now());
+            self.meter.snapshot(s.ps.command_time.raw(), clock_now());
             self.lagometer
                 .parsed(s.message_num, self.meter.ping, s.snap_flags);
         }
@@ -1212,22 +1009,22 @@ impl Cod2Session {
             .prev
             .as_ref()
             .map_or(0, |p| snap.server_time - p.server_time);
-        Some(snap.server_time - gap + self.snap_at.elapsed().as_millis() as i32)
+        Some((snap.server_time - gap + since(self.snap_at).as_millis() as i32).raw())
     }
 
     /// The server time a cmd made now carries.
     fn cmd_time(&self) -> i32 {
-        let snap = self.view.snap.as_ref().map_or(0, |s| s.server_time);
+        let snap = self.view.snap.as_ref().map_or(0, |s| s.server_time.raw());
         if self.clock.started() {
             return self.clock.cmd_time(snap);
         }
-        snap + self.snap_at.elapsed().as_millis() as i32
+        snap + since(self.snap_at).as_millis() as i32
     }
 
     /// Local ms since the session started, on the client's frame clock
     /// (`cls.realtime`, which `cl_avidemo` steps).
     fn real_ms(&self) -> f64 {
-        crate::frame_clock::now()
+        frame_now()
             .saturating_duration_since(self.epoch)
             .as_secs_f64()
             * 1000.0
@@ -1237,9 +1034,9 @@ impl Cod2Session {
     fn advance_clock(&mut self) {
         let real = self.real_ms() as i32;
         if let Some(s) = &self.view.snap {
-            let prev = self.view.prev.as_ref().map(|p| p.server_time);
+            let prev = self.view.prev.as_ref().map(|p| p.server_time.raw());
             self.clock
-                .update_cod2(real, s.server_time, prev, s.message_num as u32);
+                .update_cod2(real, s.server_time.raw(), prev, s.message_num as u32);
         }
     }
 
@@ -1257,7 +1054,7 @@ impl Cod2Session {
         let Some(newest) = &self.view.snap else {
             return;
         };
-        self.lagometer.latest = newest.server_time;
+        self.lagometer.latest = newest.server_time.raw();
         self.cg_time = Some(time);
         if let Some(c) = self.view.cursor()
             && let Some(f) = self.view.frame(time)
@@ -1270,8 +1067,12 @@ impl Cod2Session {
                 .prev
                 .as_ref()
                 .map_or(newest.server_time, |p| p.server_time);
-            self.lerp
-                .frame(t, time, (cur, next), (prev, newest.server_time));
+            self.lerp.frame(
+                t,
+                time,
+                (cur.raw(), next.raw()),
+                (prev.raw(), newest.server_time.raw()),
+            );
         }
     }
 
@@ -1374,18 +1175,17 @@ impl Cod2Session {
                 return [0.0; 2];
             }
             let gun = f.snap.entity(ps.raw.i32("viewlocked_entNum") as u32);
-            match gun.and_then(|e| f.configstrings.weapon_name(e.weapon)) {
-                Some(n) => n.to_string(),
+            match gun.filter(|e| f.configstrings.weapon_name(e.weapon).is_some()) {
+                Some(e) => e.weapon,
                 None => return [0.0; 2],
             }
         };
-        let [v, h] = *self.gun_jitters.entry(weapon).or_insert_with_key(|n| {
-            vcod_cod2::weapon::load(fs, n).map_or([0.0; 2], |w| {
-                [
-                    w.def.float("vertViewJitter"),
-                    w.def.float("horizViewJitter"),
-                ]
-            })
+        self.weapons.ensure(fs, &self.view.configstrings);
+        let [v, h] = self.weapons.get(weapon).map_or([0.0; 2], |w| {
+            [
+                w.def.float("vertViewJitter"),
+                w.def.float("horizViewJitter"),
+            ]
         });
         let mut crandom = || 2.0 * self.jitter_rng.next_f32() - 1.0;
         [crandom() * v, crandom() * h]
@@ -1428,7 +1228,7 @@ impl Cod2Session {
         // `cg.snap`: the older of the two the frame draws between.
         let ps = &f.prev.unwrap_or(f.snap).ps;
         let oldest = self.sent[self.sent.len() - CMD_BACKUP].server_time;
-        ps.command_time < oldest && oldest <= t
+        ps.command_time < Msec::from_raw(oldest) && oldest <= t
     }
 
     /// The F3 overlay's link lines: ping, the last second's snapshots,
@@ -1436,7 +1236,7 @@ impl Cod2Session {
     /// frames held or extrapolated ([`LerpStats`]); the prediction's
     /// corrections.
     pub fn debug_lines(&mut self) -> Vec<String> {
-        let r = self.meter.rates(Instant::now());
+        let r = self.meter.rates(clock_now());
         let lan = self.sock.as_ref().is_some_and(UdpTransport::is_lan);
         let mut lines = vec![format!(
             "net: ping {:3}  snaps {:2}/s  msgs {:2}/s  out {:2}/s  lost {} ({})  frag {}/s ({})  rate {} snaps {}{}",
@@ -1487,12 +1287,18 @@ impl Cod2Session {
     }
 
     /// The map's collision world, built on first use of each map unless
-    /// the load handed it over ([`Self::install_world`]).
+    /// the load handed it over ([`Self::install_world`]). A failed build
+    /// waits for a new gamestate, and a map change the caller has yet to
+    /// take ([`Self::take_map_change`]) is left to its load.
     fn ensure_world(&mut self, fs: &Pk3Fs) {
         let Some(map) = self.map_name().map(str::to_string) else {
             return;
         };
-        if self.world.as_ref().is_some_and(|(m, _)| *m == map) {
+        let gamestates = self.view.gamestates;
+        if self.world.as_ref().is_some_and(|(m, _)| *m == map)
+            || self.world_failed.as_ref() == Some(&(map.clone(), gamestates))
+            || (gamestates != self.level_gamestates && map != self.loaded_map)
+        {
             return;
         }
         let t0 = Instant::now();
@@ -1522,28 +1328,22 @@ impl Cod2Session {
                     t0.elapsed().as_secs_f64() * 1000.0
                 );
                 self.world = Some((map.to_string(), cw));
+                self.world_failed = None;
             }
             Err(e) => {
                 log::warn!("cod2: no collision for {map}, not predicting: {e:#}");
                 self.world = None;
+                self.world_failed = Some((map.to_string(), self.view.gamestates));
             }
         }
     }
 
     /// The held weapon's `moveSpeedScale`, 0 (none) when its file is
     /// missing.
-    fn move_scale(&mut self, weapon: i32, fs: &Pk3Fs) -> f32 {
-        let Some(name) = self.view.configstrings.weapon_name(weapon) else {
-            return 0.0;
-        };
-        if let Some(&s) = self.move_scales.get(name) {
-            return s;
-        }
-        let s = vcod_cod2::weapon::load(fs, name)
-            .map(|p| p.def.float("moveSpeedScale"))
-            .unwrap_or(0.0);
-        self.move_scales.insert(name.to_string(), s);
-        s
+    fn move_scale(&self, weapon: i32) -> f32 {
+        self.weapons
+            .get(weapon)
+            .map_or(0.0, |w| w.def.float("moveSpeedScale"))
     }
 
     /// One cmd at `time` from the keys and `view`, the view kick added to
@@ -1595,9 +1395,9 @@ impl Cod2Session {
         self.advance_clock();
         if self.view.gamestates > 0
             && !self.cp_owed
-            && self.last_cmd.elapsed() >= Duration::from_millis(CMD_MS)
+            && since(self.last_cmd) >= Duration::from_millis(CMD_MS)
         {
-            self.last_cmd = Instant::now();
+            self.last_cmd = clock_now();
             let mut cmd = self.client.idle_cmd(self.cmd_time());
             if self
                 .sent
@@ -1636,7 +1436,7 @@ impl Cod2Session {
         } else {
             PACKET_MS
         };
-        if self.last_packet.elapsed() < Duration::from_millis(wait) {
+        if since(self.last_packet) < Duration::from_millis(wait) {
             return Ok(());
         }
         // No new cmd: the clock stands (a cmd is held within 5 s of the
@@ -1646,8 +1446,7 @@ impl Cod2Session {
         if self.view.gamestates > 0
             && self.pending.is_empty()
             && !self.cp_owed
-            && (self.sent.is_empty()
-                || self.last_packet.elapsed() < Duration::from_millis(PACKET_MS))
+            && (self.sent.is_empty() || since(self.last_packet) < Duration::from_millis(PACKET_MS))
         {
             return Ok(());
         }
@@ -1655,7 +1454,7 @@ impl Cod2Session {
             self.pending.clear();
             return Ok(());
         };
-        self.last_packet = Instant::now();
+        self.last_packet = clock_now();
         let new = std::mem::take(&mut self.pending).len();
         let n =
             packet_cmds(new, &self.dup, self.sent.len()).max(usize::from(!self.sent.is_empty()));
@@ -1735,7 +1534,7 @@ impl Cod2Session {
         }
         self.predict(fs, draw_cmd);
         self.jitter = self.gun_jitter(fs);
-        let log_due = self.last_log.elapsed() >= Duration::from_secs(10);
+        let log_due = since(self.last_log) >= Duration::from_secs(10);
         if let Some((eye, _)) = self.view() {
             cam.pos = eye;
         } else if let Some(f) = self.frame() {
@@ -1756,7 +1555,7 @@ impl Cod2Session {
             );
         }
         if log_due {
-            self.last_log = Instant::now();
+            self.last_log = clock_now();
         }
     }
 
@@ -1769,15 +1568,8 @@ impl Cod2Session {
         let Some(weapon) = self.view.snap.as_ref().map(|s| s.ps.weapon) else {
             return;
         };
-        let scale = self.move_scale(weapon, fs);
-        let cs7 = self
-            .view
-            .configstrings
-            .get(vcod_cod2::net::protocol::CS_WEAPONS);
-        if self.weapon_defs.0 != cs7 || self.weapon_defs.1.is_empty() {
-            let names: Vec<&str> = cs7.split(' ').collect();
-            self.weapon_defs = (cs7.to_string(), vcod_cod2::pmove::weapon::table(fs, &names));
-        }
+        self.weapons.ensure(fs, &self.view.configstrings);
+        let scale = self.move_scale(weapon);
         let now = self.real_ms();
         // `cg.nextSnap`'s solid entities where this frame draws them
         // (`CG_CalcEntityLerpPositions` runs before `CG_PredictPlayerState`).
@@ -1800,7 +1592,7 @@ impl Cod2Session {
             draw_cmd.as_ref(),
             world,
             &bodies,
-            Some(&self.weapon_defs.1),
+            Some(self.weapons.params()),
             scale,
             now,
         ) else {
@@ -1845,7 +1637,11 @@ impl Cod2Session {
             return None;
         }
         self.fx_for = self.view.gamestates;
-        Some(self.fx.level_effects(&self.view.configstrings, fs))
+        self.weapons.ensure(fs, &self.view.configstrings);
+        Some(
+            self.fx
+                .level_effects(&self.view.configstrings, &self.weapons, fs),
+        )
     }
 
     /// The events of the snapshot that became current since the last call
@@ -1855,7 +1651,6 @@ impl Cod2Session {
         if self.events_for != self.view.gamestates {
             self.events_for = self.view.gamestates;
             self.events = EventTracker::default();
-            self.sounds.clear();
             self.fx = Cod2Fx::default();
         }
         // The move's own events come off the prediction instead.
@@ -1883,6 +1678,7 @@ impl Cod2Session {
     /// carry the view kick ([`Self::play_cmd`]); [`Self::gun_kick`] turns
     /// the view weapon.
     pub fn recoil_frame(&mut self, events: &[Event2], fs: &Pk3Fs) {
+        self.weapons.ensure(fs, &self.view.configstrings);
         let Some(t) = self.render_time() else {
             return;
         };
@@ -1914,18 +1710,7 @@ impl Cod2Session {
         self.land_dips = (eye, self.land.gun(f.time_ms));
         self.step_dip = self.step.eye(f.time_ms);
         let weapon = crate::play::cod2_recoil::kick_weapon(ps);
-        let def = f.configstrings.weapon_name(weapon).and_then(|name| {
-            self.kick_defs
-                .entry(name.to_string())
-                .or_insert_with(|| match vcod_cod2::weapon::load(fs, name) {
-                    Ok(p) => Some(KickDef::new(&p.def)),
-                    Err(e) => {
-                        log::warn!("cod2 recoil: {e:#}");
-                        None
-                    }
-                })
-                .as_ref()
-        });
+        let def = self.weapons.get(weapon).map(|w| &w.kick);
         self.recoil.frame(events, ps, def, f.time_ms);
     }
 
@@ -1952,13 +1737,14 @@ impl Cod2Session {
         muzzles: &HashMap<u32, Vec3>,
     ) -> (Vec<Cue>, (String, Option<String>, i32)) {
         self.sounds.muzzles.clone_from(muzzles);
+        self.weapons.ensure(fs, &self.view.configstrings);
         let cur = self
             .render_time()
             .and_then(|t| self.view.frame(t))
             .map(|f| f.snap);
         let ambient = crate::play::cod2_sound::ambient(
             &self.view.configstrings,
-            cur.map_or(0, |s| s.server_time),
+            cur.map_or(0, |s| s.server_time.raw()),
         );
         let Some(cur) = cur else {
             return (Vec::new(), ambient);
@@ -1967,7 +1753,7 @@ impl Cod2Session {
             .iter()
             .flat_map(|e| {
                 self.sounds
-                    .cues(e, cur, &self.view.configstrings, Some(fs), view)
+                    .cues(e, cur, &self.view.configstrings, &self.weapons, view)
             })
             .collect();
         (cues, ambient)
@@ -1976,11 +1762,12 @@ impl Cod2Session {
     /// The loop sounds and the missiles' projectile sounds at the render
     /// time ([`Cod2Sounds::loops`]).
     pub fn loop_sounds(&mut self, fs: &Pk3Fs) -> (LoopSounds, LoopSounds) {
+        self.weapons.ensure(fs, &self.view.configstrings);
         let Some(t) = self.render_time() else {
             return Default::default();
         };
         match self.view.frame(t) {
-            Some(f) => self.sounds.loops(&f, Some(fs)),
+            Some(f) => self.sounds.loops(&f, &self.weapons),
             None => Default::default(),
         }
     }
@@ -2011,11 +1798,14 @@ impl Cod2Session {
         view: Vec3,
         scene: crate::play::cod2_fx::FxScene,
     ) -> Vec<FxPlay> {
+        self.weapons.ensure(fs, &self.view.configstrings);
         let Some(t) = self.render_time() else {
             return Vec::new();
         };
         match self.view.frame(t) {
-            Some(f) => self.fx.frame(&f, events, view, Some(fs), scene),
+            Some(f) => self
+                .fx
+                .frame(&f, events, view, Some(fs), &self.weapons, scene),
             None => Vec::new(),
         }
     }
@@ -2023,7 +1813,19 @@ impl Cod2Session {
     /// The `viewFlashEffect` of CS 7 weapon `weapon`, what a held view
     /// flash plays on the gun placed (`play::cod2_fx::Play::ViewFlash`).
     pub fn view_flash_effect(&mut self, weapon: i32, fs: &dyn AssetSource) -> Option<String> {
-        self.fx.view_flash(&self.view.configstrings, fs, weapon)
+        self.weapons.ensure(fs, &self.view.configstrings);
+        self.weapons.get(weapon)?.fx.view_flash.clone()
+    }
+
+    /// The level's weapon files, read off `fs` unless held already
+    /// ([`LevelWeapons::ensure`]).
+    pub fn ensure_weapons(&mut self, fs: &dyn AssetSource) {
+        self.weapons.ensure(fs, &self.view.configstrings);
+    }
+
+    /// The level's weapon files as [`Self::ensure_weapons`] last read them.
+    pub fn weapons(&self) -> &LevelWeapons {
+        &self.weapons
     }
 
     /// A userinfo dvar changed (`name`, `rate`, `snaps`, `password`,
@@ -2078,324 +1880,6 @@ impl Cod2Session {
     }
 }
 
-/// `demo` / `timedemo` on a CoD2 install (docs/research/cod2-demos.md):
-/// `CL_PlayDemo_f`'s `clc` fields (Mac 0x14c288) and `CL_SetCGameTime`'s
-/// clock (0x17ba76).
-struct DemoPlay {
-    reader: vcod_common::net::demo::DemoReader,
-    /// `clc.firstDemoFrameSkipped` (+0x40194): only a new playback clears it.
-    skipped: bool,
-    /// `timedemo` (+0x4018c) and its count, kept for the whole demo.
-    timedemo: Option<crate::play::demos::TimeDemo>,
-    /// `timedemo`'s csv, when the caller asked for one
-    /// ([`Cod2Session::write_timedemo_csv`]).
-    csv: Option<TimedemoCsv>,
-    /// `cl_freezeDemo`: the clock holds.
-    freeze: bool,
-    /// `CA_ACTIVE`: a snapshot since the last gamestate seeded the clock.
-    active: bool,
-    /// `cl.serverTimeDelta`, `cl.serverTime`, `cl.oldServerTime`.
-    delta: i32,
-    server_time: i32,
-    old_server_time: i32,
-    /// `clc.timeDemoBaseTime` (+0x401ac): the first snapshot's time.
-    base: i32,
-    /// The file ran out (or was cut short).
-    ended: bool,
-}
-
-/// `timedemo`'s csv (`CL_SetCGameTime`, Mac 0x17ba76): `clc` +0x4019c, the
-/// file, and +0x401a8, the last timed frame's `Sys_Milliseconds`.
-struct TimedemoCsv {
-    dir: PathBuf,
-    r_mode: i32,
-    out: Option<std::io::BufWriter<std::fs::File>>,
-    last_ms: i32,
-}
-
-impl TimedemoCsv {
-    /// One timed frame, before it counts: the file is opened while it is
-    /// not (`FS_FOpenFileWrite`, so every frame until one opens), then each
-    /// frame after the first writes `<frames counted>,<ms since the last>`.
-    fn frame(&mut self, map: &str, td: &crate::play::demos::TimeDemo, now_ms: i32) {
-        use std::io::Write;
-        if self.out.is_none() {
-            let path = self.dir.join(timedemo_csv_name(map, self.r_mode));
-            let file =
-                std::fs::create_dir_all(&self.dir).and_then(|_| std::fs::File::create(&path));
-            match file {
-                Ok(f) => self.out = Some(std::io::BufWriter::new(f)),
-                Err(e) => log::warn!("timedemo: {}: {e}", path.display()),
-            }
-        }
-        if td.started()
-            && let Some(out) = self.out.as_mut()
-        {
-            let _ = writeln!(out, "{},{}", td.frames(), now_ms - self.last_ms);
-        }
-        self.last_ms = now_ms;
-    }
-}
-
-/// `timedemo_<map>_mode_<r_mode>.csv`: the map is `cl.mapname`
-/// (`maps/mp/<mapname>.d3dbsp`, `CL_InitCGame`, Mac 0x17b412) past its last
-/// slash and short of its last dot (`CL_SetCGameTime`, 0x17ba76).
-fn timedemo_csv_name(map: &str, r_mode: i32) -> String {
-    let full = format!("maps/mp/{map}.d3dbsp");
-    let base = full.rsplit(['/', '\\']).next().unwrap_or("");
-    let base = base.rsplit_once('.').map_or(base, |(b, _)| b);
-    format!("timedemo_{base}_mode_{r_mode}.csv")
-}
-
-impl Cod2Session {
-    /// `demo <name>` / `timedemo <name>` (`CL_PlayDemo_f`, Mac 0x14c288):
-    /// a session over the file's bytes, read up to its gamestate. The
-    /// caller loads the map and draws it as a live session's.
-    pub fn play_demo(data: Vec<u8>, timedemo: bool) -> anyhow::Result<Self> {
-        let mut s = Cod2Session::new(None, Client::new(0, 0));
-        s.demo = Some(Box::new(DemoPlay {
-            reader: vcod_cod2::net::demo::reader(data),
-            skipped: false,
-            timedemo: timedemo.then(Default::default),
-            csv: None,
-            freeze: false,
-            active: false,
-            delta: 0,
-            server_time: 0,
-            old_server_time: 0,
-            base: 0,
-            ended: false,
-        }));
-        while s.view.gamestates == 0 {
-            if !s.read_demo_message() {
-                if let Some(why) = s.dropped.take() {
-                    bail!("{why}");
-                }
-                bail!("the demo ends before its gamestate");
-            }
-        }
-        s.level_gamestates = s.view.gamestates;
-        s.loaded_map = s.map_name().unwrap_or_default().to_string();
-        Ok(s)
-    }
-
-    /// Under `timedemo`, write its csv into `dir` (the game's `demos/`)
-    /// with `r_mode`'s index in its name.
-    pub fn write_timedemo_csv(&mut self, dir: PathBuf, r_mode: i32) {
-        if let Some(d) = self.demo.as_mut().filter(|d| d.timedemo.is_some()) {
-            d.csv = Some(TimedemoCsv {
-                dir,
-                r_mode,
-                out: None,
-                last_ms: 0,
-            });
-        }
-    }
-
-    /// Whether this session plays a demo.
-    pub fn is_demo(&self) -> bool {
-        self.demo.is_some()
-    }
-
-    /// `cl_freezeDemo` for the next frames.
-    pub fn set_freeze_demo(&mut self, freeze: bool) {
-        if let Some(d) = self.demo.as_mut() {
-            d.freeze = freeze;
-        }
-    }
-
-    /// The demo ran out: the caller runs `CL_DemoCompleted` (Mac
-    /// 0x14c096): [`Self::timedemo_report`], the disconnect, `nextdemo`.
-    pub fn demo_over(&self) -> bool {
-        self.demo.as_ref().is_some_and(|d| d.ended)
-    }
-
-    /// `CL_DemoCompleted`'s `%i frames, %3.1f seconds: %3.1f fps` under
-    /// `timedemo`, when any time passed.
-    pub fn timedemo_report(&self) -> Option<String> {
-        let td = self.demo.as_ref()?.timedemo.as_ref()?;
-        td.report(self.real_ms() as i32)
-    }
-
-    /// `CL_ReadDemoMessage` (Mac 0x14c132): one record parsed; false once
-    /// the file has none, `Demo file was truncated.` printed for a cut
-    /// record and a record past `MAX_MSGLEN` dropping the session.
-    fn read_demo_message(&mut self) -> bool {
-        use vcod_common::net::demo::DemoEnd;
-        let Some(d) = self.demo.as_mut() else {
-            return false;
-        };
-        if d.ended {
-            return false;
-        }
-        match d.reader.next_message() {
-            Ok((seq, msg)) => {
-                match self.client.demo_message(seq as i32, &msg) {
-                    Ok(Some(p)) => self.on_message(p),
-                    Ok(None) => {}
-                    Err(e) => {
-                        self.stats.parse_errors += 1;
-                        log::warn!("cod2: demo message parse failed: {e:#}");
-                    }
-                }
-                true
-            }
-            Err(end) => {
-                d.ended = true;
-                // `CL_DemoCompleted` closes the csv (the drop flushes it).
-                d.csv = None;
-                match end {
-                    DemoEnd::Completed => {}
-                    DemoEnd::Truncated => crate::console::log::print("Demo file was truncated."),
-                    DemoEnd::TooLong(_) => {
-                        self.dropped = Some("CL_ReadDemoMessage: demoMsglen > MAX_MSGLEN".into())
-                    }
-                }
-                false
-            }
-        }
-    }
-
-    /// `CL_SetCGameTime`'s demo arm (Mac 0x17ba76). Primed, the first
-    /// frame is skipped, then one message a frame until a snapshot not
-    /// flagged 2 seeds the clock and the base; active, the clock runs on
-    /// the wall clock (held under `cl_freezeDemo`, never adjusted:
-    /// `CL_AdjustTimeDelta` returns, 0x17b544) or, under `timedemo`, 50 ms
-    /// a frame past the base, and messages are read while the newest
-    /// snapshot is no later than it. A gamestate primes it again.
-    fn demo_frame(&mut self) {
-        let real = self.real_ms() as i32;
-        let gamestates = self.view.gamestates;
-        let Some(d) = self.demo.as_mut() else {
-            return;
-        };
-        if d.ended {
-            return;
-        }
-        if !d.active {
-            if !d.skipped {
-                d.skipped = true;
-                return;
-            }
-            let snaps = self.stats.snapshots;
-            if !self.read_demo_message() {
-                return;
-            }
-            let fresh = self.stats.snapshots > snaps;
-            let Some((time, flags)) = self
-                .client
-                .parser
-                .snapshot()
-                .map(|s| (s.server_time, s.snap_flags))
-            else {
-                return;
-            };
-            if !fresh || flags & 2 != 0 || self.view.gamestates != gamestates {
-                return;
-            }
-            let d = self.demo.as_mut().expect("playing");
-            d.active = true;
-            d.delta = time - real;
-            d.old_server_time = time;
-            d.server_time = time;
-            d.base = time;
-        }
-        let d = self.demo.as_mut().expect("playing");
-        if !d.freeze {
-            d.server_time = (real + d.delta).max(d.old_server_time);
-            d.old_server_time = d.server_time;
-        }
-        if let Some(td) = d.timedemo.as_mut() {
-            if let Some(csv) = d.csv.as_mut() {
-                let map = self.view.configstrings.map_name().unwrap_or_default();
-                csv.frame(map, td, real);
-            }
-            d.server_time = d.base + td.step(real) * 50;
-        }
-        let until = d.server_time;
-        while self
-            .client
-            .parser
-            .snapshot()
-            .is_some_and(|s| s.server_time <= until)
-        {
-            if !self.read_demo_message() {
-                return;
-            }
-            if self.view.gamestates != gamestates {
-                if let Some(d) = self.demo.as_mut() {
-                    d.active = false;
-                }
-                return;
-            }
-        }
-    }
-
-    /// A demo's frame: read on its clock, the camera on the recorder's
-    /// eye, which [`Self::frame`] lerps between the snapshots. Nothing is
-    /// predicted or sent (`cg.demoPlayback`, Mac 0x1ddafa).
-    fn demo_fly(&mut self, cam: &mut FlyCamera) {
-        self.demo_frame();
-        if let Some(f) = self.frame() {
-            cam.pos = self.snapshot_eye(&f);
-            let [pitch, yaw, _] = f.snap.ps.viewangles;
-            cam.pitch = -pitch.to_radians();
-            cam.yaw = yaw.to_radians();
-        }
-    }
-
-    /// `record [name]` (`CL_Record_f`, Mac 0x149856) into `dir` (the
-    /// game's `demos/`): `<name>.dm_1`, or the first free `demoNNNN`.
-    /// Returns the console line.
-    pub fn start_recording(&mut self, dir: &Path, name: Option<&str>) -> String {
-        use vcod_cod2::net::demo::EXTENSION;
-        if self.is_recording() {
-            return "Already recording.".into();
-        }
-        // `cls.state` 8, `CA_ACTIVE`: a snapshot is in.
-        if self.view.snap.is_none() {
-            return "You must be in a level to record.".into();
-        }
-        let file = |n: &str| dir.join(format!("{n}.dm_{EXTENSION}"));
-        // `clc.demoName` holds 63 characters.
-        let name = match name {
-            Some(n) => n.chars().take(63).collect(),
-            None => vcod_common::net::demo::auto_name(|n| file(n).exists()),
-        };
-        let qpath = format!("demos/{name}.dm_{EXTENSION}");
-        let out = std::fs::create_dir_all(dir).and_then(|_| std::fs::File::create(file(&name)));
-        let Ok(out) = out else {
-            return "ERROR: couldn't open.".into();
-        };
-        match self.client.start_recording(
-            Box::new(std::io::BufWriter::new(out)),
-            &name,
-            self.view.configstrings.all(),
-        ) {
-            Ok(()) => format!("recording to {qpath}."),
-            Err(e) => format!("{e:#}"),
-        }
-    }
-
-    /// `stoprecord` (`CL_StopRecord_f`, Mac 0x14724e); the console line.
-    pub fn stop_recording(&mut self) -> String {
-        match self.client.stop_recording() {
-            None => "Not recording a demo.".into(),
-            Some(Ok(_)) => "Stopped demo.".into(),
-            Some(Err(e)) => format!("ERROR: {e}"),
-        }
-    }
-
-    pub fn is_recording(&self) -> bool {
-        self.client.recording_status().is_some()
-    }
-
-    /// The demo's name and its bytes so far, for the `RECORDING` line.
-    pub fn recording_status(&self) -> Option<(&str, u64)> {
-        self.client.recording_status()
-    }
-}
-
 /// A session read and kept alive on a thread of its own while the main
 /// thread loads: the map's materials can take longer than `sv_timeout` on a
 /// software renderer. [`Pump::finish`] hands the session back.
@@ -2410,7 +1894,15 @@ impl Cod2Session {
     pub fn pump(self: Box<Self>) -> Pump {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
+        // A live test's clock holds while the map loads: this thread reads
+        // it but sleeps on the wall.
+        #[cfg(test)]
+        let clock = crate::play::cod4::tests::sim::current();
         let handle = std::thread::spawn(move || {
+            #[cfg(test)]
+            if clock.is_some() {
+                crate::play::cod4::tests::sim::install(clock);
+            }
             let mut s = self;
             let (start, messages) = (Instant::now(), s.stats.messages);
             while !flag.load(Ordering::Relaxed) {
@@ -2502,202 +1994,12 @@ impl Cod2Session {
             (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
             (a, b) => a.is_none() && b.is_none(),
         };
-        fetched || !same
-    }
-}
-
-/// The CD key a `getchallenge` goes out beside, and the server it asks.
-struct KeyAuth {
-    key: Option<CdKey>,
-    server: Option<std::net::SocketAddr>,
-}
-
-impl KeyAuth {
-    /// `CL_RequestAuthorization` (CoD2MP_s.exe 0x40d130), fire and forget.
-    fn request(&self) {
-        if let (Some(key), Some(server)) = (&self.key, self.server) {
-            cdkey::request_authorization(KeyGame::Cod2, key, server);
+        let reopen = fetched || !same;
+        // The files came off the old search path.
+        if reopen {
+            self.weapons.clear();
         }
-    }
-}
-
-/// Send `p` until an out-of-band reply `want` accepts comes back.
-fn ask<T>(sock: &UdpSocket, p: &[u8], want: impl Fn(&Reply) -> Option<T>) -> anyhow::Result<T> {
-    ask_keyed(sock, p, None, want)
-}
-
-/// [`ask`], each send after the key's authorization when `auth` is given
-/// (`CL_CheckForResend`, CoD2MP_s.exe 0x40e316). A `needcdkey` without a
-/// key ends it with `EXE_ERR_INVALID_CD_KEY`, where retail stops before it
-/// sends; with one it sends the key again and keeps asking (0x40f07b),
-/// and a timeout then reads `EXE_AWAITINGCDKEYAUTH`, the connect
-/// screen's line.
-fn ask_keyed<T>(
-    sock: &UdpSocket,
-    p: &[u8],
-    auth: Option<&KeyAuth>,
-    want: impl Fn(&Reply) -> Option<T>,
-) -> anyhow::Result<T> {
-    let mut buf = vec![0u8; 0x10000];
-    let mut awaiting_key = false;
-    for _ in 0..5 {
-        if let Some(a) = auth {
-            a.request();
-        }
-        sock.send(p)?;
-        let until = Instant::now() + Duration::from_secs(1);
-        while Instant::now() < until {
-            let Ok(n) = sock.recv(&mut buf) else {
-                continue;
-            };
-            let Some(pl) = oob::payload(&buf[..n]) else {
-                continue;
-            };
-            let r = oob::parse_reply(pl);
-            if let Reply::Error(e) = &r {
-                return Err(ServerError(e.clone()).into());
-            }
-            if let (Reply::NeedCdKey, Some(a)) = (&r, auth) {
-                if a.key.is_none() {
-                    cdkey::warn_no_key();
-                    return Err(ServerError("EXE_ERR_INVALID_CD_KEY".into()).into());
-                }
-                awaiting_key = true;
-                a.request();
-            }
-            if let Some(t) = want(&r) {
-                return Ok(t);
-            }
-        }
-    }
-    if awaiting_key {
-        return Err(ServerError("EXE_AWAITINGCDKEYAUTH".into()).into());
-    }
-    bail!("no answer")
-}
-
-/// The scripted player of `vcod --net-probe ADDR --game cod2 --probe-team
-/// T`: a 16 s loop of a walk, a strafe while turning, a jump, a back-up, a
-/// crouched walk, a stand, three semi-automatic taps, a sighted tap, a
-/// weapon switch and back, a reload and a still second, through the same
-/// binds a player presses ([`Cod2Input`]); the switch presses 2, the way
-/// back turns the wheel up, both through CoD2's stock binds. With
-/// `VCOD_PROBE_REWEAPON=<weapon>` it presses X (`openscriptmenu ingame
-/// changeweapon`) 17 s in and answers the weapon menu that opens with it.
-/// `VCOD_PROBE_INGAME=<response>` instead answers the `ingame` menu's
-/// button with that response 17 s in, as its click does. Every `t`, `u`,
-/// `K` and `v` left to the player prints as a `cod2: menu command` line.
-struct ProbeScript {
-    /// The impulses already sent this loop, by their time.
-    done: Vec<u32>,
-    lap: u32,
-    shell: crate::console::shell::Shell,
-    reweapon: Option<String>,
-    reweapon_asked: bool,
-    ingame: Option<String>,
-}
-
-impl Default for ProbeScript {
-    fn default() -> Self {
-        let mut shell = crate::console::shell::Shell::new();
-        shell.use_cod2_binds();
-        Self {
-            done: Vec::new(),
-            lap: 0,
-            shell,
-            reweapon: std::env::var("VCOD_PROBE_REWEAPON").ok(),
-            reweapon_asked: false,
-            ingame: std::env::var("VCOD_PROBE_INGAME").ok(),
-        }
-    }
-}
-
-impl ProbeScript {
-    fn step(&mut self, s: &mut Cod2Session, cam: &mut FlyCamera, t: f32) {
-        let lap = (t / 16.0) as u32;
-        if lap != self.lap {
-            self.lap = lap;
-            self.done.clear();
-        }
-        let p = t % 16.0;
-        let within = |a: f32, b: f32| p >= a && p < b;
-        let held = [
-            (Action::Forward, within(0.0, 4.5) || within(6.0, 7.5)),
-            (Action::Right, within(3.0, 4.5)),
-            (Action::Back, within(5.0, 6.0)),
-            (Action::Jump, within(4.5, 4.6) || within(7.5, 7.6)),
-            (
-                Action::Attack,
-                within(8.0, 8.1) || within(8.6, 8.7) || within(9.2, 9.3) || within(10.6, 10.7),
-            ),
-            (Action::Reload, within(13.0, 13.1)),
-        ];
-        for (a, down) in held {
-            s.input.key(a, down);
-        }
-        if within(3.0, 4.5) {
-            cam.look([0.0, 0.3]);
-        }
-        let ps = s.view.snap.as_ref().map(|v| v.ps.raw.clone());
-        for (at, a) in [
-            (6.0, Action::Crouch),
-            (10.0, Action::ToggleAds),
-            (11.0, Action::ToggleAds),
-        ] {
-            let key = (at * 10.0) as u32;
-            if p >= at && !self.done.contains(&key) {
-                self.done.push(key);
-                s.input.impulse(a, ps.as_ref());
-            }
-        }
-        // The keys as `main.rs` routes them: bind, effect, input.
-        for (at, k) in [(14.5, "2"), (15.5, "MWHEELUP")] {
-            let key = (at * 10.0) as u32;
-            if p >= at && !self.done.contains(&key) {
-                self.done.push(key);
-                let ps = s.frame().map(|f| f.snap.ps.raw.clone());
-                for e in self.shell.key_event(k, true) {
-                    s.input.effect(&e, ps.as_ref());
-                }
-                println!("cod2: pressed {k}, selected {}", s.input.weapons().0);
-            }
-        }
-        if self.reweapon.is_some() && !self.reweapon_asked && t >= 17.0 {
-            self.reweapon_asked = true;
-            for e in self.shell.key_event("X", true) {
-                if let Effect::OpenScriptMenu { menu, response } = e {
-                    s.menu_response(&menu, &response);
-                }
-            }
-        }
-        if !self.reweapon_asked
-            && t >= 17.0
-            && let Some(response) = self.ingame.clone()
-        {
-            self.reweapon_asked = true;
-            s.menu_response("ingame", &response);
-        }
-        // The weapon menu the X opened, answered as a player clicks it.
-        for words in s.take_menu_commands() {
-            println!("cod2: menu command {}", words.join(" "));
-            if let (["t", n, ..], Some(w)) = (
-                words
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-                &self.reweapon,
-            ) && let Some(menu) = n
-                .parse()
-                .ok()
-                .and_then(|n| s.view.configstrings.script_menu(n))
-                .filter(|m| m.starts_with("weapon_"))
-                .map(str::to_string)
-            {
-                println!("cod2: the player's {menu}: {w}");
-                s.menu_response(&menu, &w.clone());
-            }
-        }
+        reopen
     }
 }
 
@@ -2710,613 +2012,6 @@ pub fn prediction_world(
     let cw = vcod_cod2::collision::collision_world(w, clip, &[]);
     cw.set_arith(vcod_common::patch::Arith::Stored);
     cw
-}
-
-/// Reads `map`'s world with `s` on the pump, as the windowed client
-/// loads; `stall` seconds are added to the load. Prints how it went.
-fn probe_load(s: Box<Cod2Session>, map: &str, fs: &Pk3Fs, stall: u64) -> Box<Cod2Session> {
-    let pump = s.pump();
-    let t0 = Instant::now();
-    // the map parsed once, the prediction's collision built off it
-    let world = vcod_cod2::map::MapFile::find(fs, map).ok().map(|f| {
-        let w = f.world();
-        let cw = f.clip().map(|c| prediction_world(&w, Arc::new(c)));
-        (w, cw)
-    });
-    std::thread::sleep(Duration::from_secs(stall));
-    let mut s = pump.finish();
-    println!(
-        "cod2: loaded {map} ({}) under the pump in {:.1} s",
-        if world.is_some() { "ok" } else { "failed" },
-        t0.elapsed().as_secs_f32()
-    );
-    if let Some((_, cw)) = world {
-        s.install_world(fs, map, cw, t0);
-    }
-    s
-}
-
-/// `vcod --game cod2 --probe-demo FILE [--probe-timedemo]`: play a `.dm_1`
-/// headless through the session's demo path (the same parse, clock, view,
-/// events, cues, effects and scene builders as the window's), a line a
-/// second, then the totals. Fails on a parse error or a demo with no
-/// snapshot.
-pub fn demo_probe(path: &Path, fs: &Pk3Fs, timedemo: bool) -> anyhow::Result<()> {
-    let data = std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
-    let bytes = data.len();
-    let s = Cod2Session::play_demo(data, timedemo)?;
-    let map = s.map_name().unwrap_or("?").to_string();
-    println!(
-        "cod2: demo {} ({bytes} bytes): gamestate for {map}, client {}, {} configstrings, {} baselines",
-        path.display(),
-        s.view.client_num,
-        s.view
-            .configstrings
-            .all()
-            .iter()
-            .filter(|c| !c.is_empty())
-            .count(),
-        s.client
-            .parser
-            .gamestate
-            .as_ref()
-            .map_or(0, |g| g.baselines.len()),
-    );
-    let mut s = probe_load(Box::new(s), &map, fs, 0);
-    let mut draw = crate::cod2_scene::Cod2Draw::new();
-    let mut cam = FlyCamera::new(Vec3::ZERO, 0.0);
-    let start = Instant::now();
-    let mut last_print = start;
-    let mut last = s.stats;
-    let (mut events_all, mut cues_all, mut fx_all, mut frames) = (0usize, 0usize, 0usize, 0u64);
-    let (mut first_time, mut last_time, mut most_ents) = (None, 0, 0);
-    while !s.demo_over() {
-        s.fly(&mut cam, fs);
-        frames += 1;
-        if let Some(why) = s.dropped.take() {
-            bail!("{why}");
-        }
-        if let Some(m) = s.take_map_change() {
-            println!("cod2: map change to {m}");
-            s = probe_load(s, &m, fs, 0);
-            draw = crate::cod2_scene::Cod2Draw::new();
-        }
-        let events = s.take_events();
-        let (cues, _) = s.sound_cues(&events, fs, cam.pos, draw.muzzles());
-        let plays = s.effects(&events, fs, cam.pos, draw.fx_scene(true));
-        events_all += events.len();
-        cues_all += cues.len();
-        fx_all += plays.len();
-        if let Some(f) = s.frame() {
-            first_time.get_or_insert(f.time_ms);
-            last_time = f.time_ms;
-            most_ents = most_ents.max(f.snap.entities.len());
-        }
-        if last_print.elapsed() >= Duration::from_secs(1)
-            && let Some(f) = s.frame()
-        {
-            last_print = Instant::now();
-            let st = s.stats;
-            let c = draw.count(&f, fs);
-            println!(
-                "t={:>3}s time {} snap {} msgs {} snaps {} delta {} ents {} clients {} \
-                 drawn models {} bodies {} eye {:?} weapon {} parse errors {}",
-                start.elapsed().as_secs(),
-                f.time_ms,
-                f.snap.server_time,
-                st.messages - last.messages,
-                st.snapshots - last.snapshots,
-                st.deltas - last.deltas,
-                f.snap.entities.len(),
-                f.snap.clients.len(),
-                c.models,
-                c.players,
-                f.eye(),
-                f.configstrings.weapon_name(f.snap.ps.weapon).unwrap_or("-"),
-                st.parse_errors,
-            );
-            last = st;
-        }
-        if !timedemo {
-            std::thread::sleep(Duration::from_millis(2));
-        }
-    }
-    let st = s.stats;
-    println!(
-        "cod2: demo done: {} messages, {} snapshots ({} deltas), {} parse errors, \
-         {} gamestates, server time {:?}..{last_time}, most entities {most_ents}, \
-         {frames} frames in {:.1} s",
-        st.messages,
-        st.snapshots,
-        st.deltas,
-        st.parse_errors,
-        s.gamestates(),
-        first_time,
-        start.elapsed().as_secs_f32(),
-    );
-    println!("cod2: events {events_all} sound cues {cues_all} effects started {fx_all}");
-    if let Some(line) = s.timedemo_report() {
-        println!("cod2: {line}");
-    }
-    if st.parse_errors > 0 {
-        bail!("{} messages failed to parse", st.parse_errors);
-    }
-    if st.snapshots == 0 {
-        bail!("the demo holds no snapshot");
-    }
-    Ok(())
-}
-
-/// `vcod --net-probe ADDR --game cod2`: spectate for `secs`, or with
-/// `join` answer the script menus and play, walking forward on a slow
-/// circle through usercmds; print a line a second (messages, snapshots,
-/// deltas, entities, the eye, `pm_type`, parse errors, and what the scene
-/// and the player poser built off the frame, CPU side:
-/// `cod2_scene::Cod2Draw::count`). The map is read under
-/// [`Cod2Session::pump`] as the windowed client does, and so is the map of
-/// a map change; `VCOD_COD2_LOAD_STALL=<secs>` stretches the first load,
-/// to check the pump against a short `sv_timeout`, and
-/// `VCOD_COD2_TIMEOUT=<secs>` shortens `cl_timeout`. Fails on a parse
-/// error or a drop.
-pub fn probe(addr: &str, secs: u64, fs: &Pk3Fs, join: Option<Join>) -> anyhow::Result<()> {
-    let name = if join.is_some() {
-        "vcodplay"
-    } else {
-        "vcodspec"
-    };
-    let mut s = Cod2Session::connect(addr, &ConnectOpts::new(name, fs), Duration::from_secs(15))?;
-    let reopened;
-    let fs = match (s.take_reopen(fs_game_of(fs).as_deref()), home_of(fs)) {
-        (true, Some(home)) => {
-            reopened = open_search(&home, s.fs_game())?;
-            println!(
-                "cod2: search path opened again, fs_game {:?}",
-                s.fs_game().unwrap_or("")
-            );
-            &reopened
-        }
-        _ => fs,
-    };
-    s.join = join;
-    s.predict_bodies = std::env::var_os("VCOD_PROBE_NO_BODIES").is_none();
-    if let Some(t) = std::env::var("VCOD_COD2_TIMEOUT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-    {
-        s.timeout = Duration::from_secs(t);
-    }
-    let map = s.map_name().unwrap_or("?").to_string();
-    println!("cod2: gamestate for {map}, client {}", s.view.client_num);
-    let stall: u64 = std::env::var("VCOD_COD2_LOAD_STALL")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
-    let mut s = probe_load(Box::new(s), &map, fs, stall);
-    let mut draw = crate::cod2_scene::Cod2Draw::new();
-    let mut most = crate::cod2_scene::DrawCounts::default();
-    let start = Instant::now();
-    let mut last_print = Instant::now();
-    let mut last = s.stats;
-    let mut cam = FlyCamera::new(Vec3::ZERO, 0.0);
-    let scripted = s.join.is_some();
-    let still = std::env::var_os("VCOD_PROBE_STILL").is_some();
-    let mut script = ProbeScript::default();
-    let mut first_eye = None;
-    let mut first_origin = None;
-    let mut playing_since: Option<u64> = None;
-    // The events' sounds and effects, CPU side: cues counted (no audio
-    // device), effects spawned into an fx system nothing draws.
-    let mut fx = crate::fx::sim::FxSystem::new();
-    let mut fx_last = start;
-    let (mut cues_sec, mut fx_sec, mut events_sec) = (0usize, 0usize, 0usize);
-    let (mut cues_all, mut fx_all, mut events_all) = (0usize, 0usize, 0usize);
-    let mut predict_all = PredictLog::default();
-    // The obituaries as the HUD resolves them.
-    let mut hud = crate::cod2_hud::Cod2Hud::default();
-    let loc = vcod_common::localize::Localized::load(fs);
-    let hud_dump = std::env::var("VCOD_COD2_HUD_DUMP").ok();
-    let mut hud_at: Vec<f32> = std::env::var("VCOD_COD2_HUD_AT")
-        .unwrap_or_default()
-        .split(',')
-        .filter_map(|t| t.trim().parse().ok())
-        .collect();
-    // A player asks for the board 15 s and 25 s in, as Tab does, and with
-    // `VCOD_PROBE_KILL=<secs>` sends `kill` that far in.
-    let mut score_asked = 0;
-    let mut kill_at = std::env::var("VCOD_PROBE_KILL")
-        .ok()
-        .and_then(|v| v.parse::<f32>().ok());
-    // `VCOD_PROBE_CMDS="<secs>:<command>|..."` sends each command that far
-    // in and prints every server command that comes back.
-    let mut cmds: Vec<(f32, String)> = std::env::var("VCOD_PROBE_CMDS")
-        .map(|v| {
-            v.split('|')
-                .filter_map(|c| c.split_once(':'))
-                .filter_map(|(t, c)| Some((t.trim().parse().ok()?, c.to_string())))
-                .collect()
-        })
-        .unwrap_or_default();
-    if !cmds.is_empty() {
-        s.command_log = Some(Vec::new());
-    }
-    // `VCOD_COD2_TRACE_WEAPON=1`: a line per snapshot with the weapon's
-    // state, the clip and the reserve.
-    let trace_weapon = std::env::var_os("VCOD_COD2_TRACE_WEAPON").is_some();
-    let mut traced_time = 0;
-    // What the HUD's ammo counter reads, off the level's weapon table.
-    let mut player_hud = crate::cod2_player_hud::PlayerHud::default();
-    // `VCOD_COD2_RECORD=<dir>/<name>`: `record <name>` into `<dir>` once
-    // the first snapshot is in, `stoprecord` as the probe ends.
-    let mut record = std::env::var_os("VCOD_COD2_RECORD").map(PathBuf::from);
-    let mut first_fly_ms = None;
-    let mut first_count = true;
-    // `VCOD_PROBE_SNAPS_AT=<secs>:<snaps>`: change the `snaps` userinfo
-    // mid-game, as the console's `snaps` does.
-    let mut snaps_at = std::env::var("VCOD_PROBE_SNAPS_AT").ok().and_then(|v| {
-        let (t, n) = v.split_once(':')?;
-        Some((t.parse::<u64>().ok()?, n.to_string()))
-    });
-    while start.elapsed() < Duration::from_secs(secs) {
-        if let Some((_, n)) = snaps_at.take_if(|(t, _)| start.elapsed().as_secs() >= *t) {
-            let info = vcod_common::net::Userinfo {
-                name: s.opts.name.clone(),
-                rate: s.opts.rate.clone(),
-                snaps: n,
-                password: s.opts.password.clone(),
-                www_download: u8::from(s.opts.www_download).to_string(),
-            };
-            println!(
-                "cod2: snaps {} at t={}s",
-                info.snaps,
-                start.elapsed().as_secs()
-            );
-            s.set_userinfo(&info);
-        }
-        if s.view.snap.is_some()
-            && let Some(path) = record.take()
-        {
-            let dir = path.parent().unwrap_or(Path::new("."));
-            let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
-            let name = name.as_deref().map(|n| n.trim_end_matches(".dm_1"));
-            println!("cod2: {}", s.start_recording(dir, name));
-        }
-        if still {
-            // `VCOD_PROBE_STILL`: a body that stands where it spawned.
-        } else if scripted {
-            script.step(&mut s, &mut cam, start.elapsed().as_secs_f32());
-        } else {
-            s.input.key(Action::Forward, true);
-            // About 30 degrees a second, so the spectator circles.
-            cam.look([0.0, 0.06]);
-        }
-        let fly_t0 = Instant::now();
-        s.fly(&mut cam, fs);
-        if first_fly_ms.is_none() && s.frame().is_some() {
-            let ms = fly_t0.elapsed().as_secs_f64() * 1000.0;
-            first_fly_ms = Some(ms);
-            println!("cod2: first frame's fly in {ms:.1} ms");
-        }
-        for path in s.take_fetched() {
-            println!("cod2: downloaded {}", path.display());
-        }
-        let events = s.take_events();
-        if let (Some(_), Some(f)) = (&hud_dump, s.frame()) {
-            hud.on_events(&events, &f, fs, &loc, f.time_ms);
-        }
-        if let Some(f) = s.frame() {
-            for ev in events
-                .iter()
-                .filter(|e| e.event == vcod_cod2::net::events::EV_OBITUARY)
-            {
-                match hud.obit(ev, &f, fs) {
-                    Some(o) => println!(
-                        "cod2: obituary {} parm {:#x}: {:?} [{}] {:?} center {:?}",
-                        ev.other_entity,
-                        ev.parm,
-                        o.line.attacker.as_ref().map(|a| &a.0),
-                        o.line.icon,
-                        o.line.victim.0,
-                        o.center.map(|c| loc.message(&c)),
-                    ),
-                    None => println!("cod2: obituary {} unresolved", ev.other_entity),
-                }
-            }
-        }
-        // `VCOD_COD2_HUD_DUMP=<prefix>` with `VCOD_COD2_HUD_AT=<secs>,...`:
-        // the HUD a 1280 x 720 window would draw that far in, world sprites
-        // first, as `<prefix>-<secs>.quads` for `renderer/hud_shot.rs`.
-        if let (Some(prefix), Some(f)) = (&hud_dump, s.frame())
-            && let Some(i) = hud_at
-                .iter()
-                .position(|&t| start.elapsed().as_secs_f32() >= t)
-        {
-            let t = hud_at.remove(i);
-            draw.count(&f, fs);
-            let size = (1280.0, 720.0);
-            let (eye, [pitch, yaw, roll]) = s
-                .view()
-                .unwrap_or_else(|| (Vec3::from(f.eye()), crate::cod2_viewmodel::view_angles(&f)));
-            let (yaw, pitch, roll) = (yaw.to_radians(), -pitch.to_radians(), roll.to_radians());
-            let fov = crate::camera::view_fov_x(crate::camera::DEFAULT_FOV_DEG, 16.0 / 9.0, true);
-            let view_proj = crate::camera::view_proj_from(eye, yaw, pitch, roll, fov, 16.0 / 9.0);
-            let up = crate::camera::up_hint(yaw, pitch, roll);
-            let fwd = crate::camera::basis(yaw, pitch).0;
-            let right = fwd.cross(up).normalize();
-            let view = crate::cod2_world_hud::WorldView {
-                view_proj,
-                right,
-                up: right.cross(fwd),
-                size,
-            };
-            let mut quads = crate::cod2_world_hud::build(&f, draw.heads(), &view, f.time_ms);
-            hud.crosshair_hit = s.crosshair_entity();
-            quads.extend(hud.build(&f, fs, &loc, size, f.time_ms, start.elapsed().as_secs_f32()));
-            let path = format!("{prefix}-{t}.quads");
-            std::fs::write(&path, crate::cod2_hud::dump_quads(&quads))?;
-            println!(
-                "cod2: hud dump {path}: {} quads, pm_type {} pm_flags {:#x} team {:?}",
-                quads.len(),
-                f.snap.ps.pm_type,
-                f.snap.ps.pm_flags,
-                f.snap
-                    .clients
-                    .iter()
-                    .find(|c| c.number as i32 == f.snap.ps.client_num)
-                    .map(|c| c.f[vcod_cod2::net::delta::field_index(
-                        &vcod_cod2::net::fields::CLIENT_STATE_FIELDS,
-                        "team"
-                    )]),
-            );
-        }
-        let (cues, _) = s.sound_cues(&events, fs, cam.pos, draw.muzzles());
-        let plays = s.effects(&events, fs, cam.pos, draw.fx_scene(true));
-        let now = start.elapsed().as_secs_f32();
-        fx.set_view(cam.pos);
-        for p in &plays {
-            p.spawn(&mut fx, fs, now);
-        }
-        fx.step(fx_last.elapsed().as_secs_f32(), now, None);
-        fx.spawn_chained(fs, now);
-        fx_last = Instant::now();
-        events_sec += events.len();
-        cues_sec += cues.len();
-        fx_sec += plays.len();
-        if let Some(why) = &s.dropped {
-            bail!("dropped: {why}");
-        }
-        if let Some(m) = s.take_map_change() {
-            println!("cod2: map change to {m}");
-            s = probe_load(s, &m, fs, 0);
-            draw = crate::cod2_scene::Cod2Draw::new();
-        }
-        if s.take_restart() {
-            println!("cod2: fast_restart, serverId {}", s.client.server_id());
-            fx.clear();
-        }
-        while cmds.first().is_some_and(|(t, _)| now >= *t) {
-            let (_, c) = cmds.remove(0);
-            println!("cod2: t={now:.1} sending {c:?}");
-            s.send_command(&c);
-        }
-        if let Some(log) = s.command_log.as_mut() {
-            for c in log.drain(..) {
-                println!("cod2: t={now:.1} server command {c:?}");
-            }
-        }
-        if scripted && kill_at.is_some_and(|t| now >= t) {
-            s.send_command("kill");
-            kill_at = None;
-        }
-        if scripted && score_asked < 2 && now >= [15.0, 25.0][score_asked] {
-            s.send_command("score");
-            score_asked += 1;
-        }
-        if let Some(b) = s.take_scores() {
-            println!("cod2: score reply {:?}", b.join(" "));
-            match crate::hud::scoreboard::parse_scores(&b) {
-                Ok(m) => {
-                    // Each row's name and team as the drawn board resolves it.
-                    let frame = s.frame();
-                    let named = |c: u32| {
-                        frame
-                            .as_ref()
-                            .and_then(|f| crate::cod2_hud::board_client(&f.snap.clients, c))
-                    };
-                    println!(
-                        "cod2: scores rows {} axis {} allies {} {:?}",
-                        m.entries.len(),
-                        m.axis,
-                        m.allies,
-                        m.entries
-                            .iter()
-                            .map(|e| (e.client, e.score, e.ping, e.deaths, named(e.client)))
-                            .collect::<Vec<_>>()
-                    )
-                }
-                Err(e) => println!("cod2: bad scores {e}: {b:?}"),
-            }
-        }
-        if trace_weapon
-            && let Some(snap) = &s.view.snap
-            && snap.server_time != traced_time
-        {
-            traced_time = snap.server_time;
-            let ps = &snap.ps;
-            let nz = |a: &[i32]| -> Vec<(usize, i32)> {
-                a.iter()
-                    .enumerate()
-                    .filter(|e| *e.1 != 0)
-                    .map(|(i, &v)| (i, v))
-                    .collect()
-            };
-            let shown = s
-                .frame()
-                .and_then(|f| player_hud.counter(&f, fs, s.input.weapons().0));
-            println!(
-                "weap t={} weapon {} weaponstate {} weapAnim {:#x} weaponTime {} clip {:?} ammo {:?} buttons {:#x} hud {:?}",
-                snap.server_time,
-                ps.weapon,
-                ps.raw.i32("weaponstate"),
-                ps.raw.i32("weapAnim"),
-                ps.raw.i32("weaponTime"),
-                nz(&ps.raw.ammoclip),
-                nz(&ps.raw.ammo),
-                s.sent.back().map_or(0, |c| c.buttons),
-                shown,
-            );
-        }
-        if last_print.elapsed() >= Duration::from_secs(1) {
-            last_print = Instant::now();
-            let st = s.stats;
-            let pl = s.take_predict_stats();
-            println!(
-                "link t={:>3}s {} | interrupted {}",
-                start.elapsed().as_secs(),
-                s.debug_lines().join(" | "),
-                s.interrupted()
-            );
-            if let Some(f) = s.frame() {
-                let eye = f.eye();
-                first_eye.get_or_insert(eye);
-                let count_t0 = Instant::now();
-                let c = draw.count(&f, fs);
-                if std::mem::take(&mut first_count) {
-                    println!(
-                        "cod2: first scene count in {:.1} ms",
-                        count_t0.elapsed().as_secs_f64() * 1000.0
-                    );
-                }
-                most.models = most.models.max(c.models);
-                most.submodels = most.submodels.max(c.submodels);
-                most.players = most.players.max(c.players);
-                most.player_parts = most.player_parts.max(c.player_parts);
-                most.guns_posed = most.guns_posed.max(c.guns_posed);
-                let ps = &f.snap.ps;
-                // pm_type 0: PM_NORMAL, the client's own body in the world.
-                if ps.pm_type == 0 && ps.followed().is_none() {
-                    playing_since.get_or_insert(start.elapsed().as_secs());
-                    first_origin.get_or_insert(ps.origin);
-                }
-                println!(
-                    "t={:>3}s serverTime {} msgs {} snaps {} delta {} cmds-sent {} ents {} clients {} \
-                     drawn models {} submodels {} bodies {} body-parts {} guns {} \
-                     events {} sound-cues {} effects {} fx-particles {} \
-                     eye ({:.1} {:.1} {:.1}) origin ({:.1} {:.1} {:.1}) pm_type {} weapon {} ({}) \
-                     follow {:?} map {} serverId {} parse-errors {} \
-                     predict frames {} misses {} corrected {} over-0.1 {} max-error {:.4} \
-                     selected {} pm_flags {:#x} weaponstate {} rounds {} buttons {:#x}",
-                    start.elapsed().as_secs(),
-                    f.snap.server_time,
-                    st.messages - last.messages,
-                    st.snapshots - last.snapshots,
-                    st.deltas - last.deltas,
-                    st.packets_sent - last.packets_sent,
-                    f.snap.entities.len(),
-                    f.snap.clients.len(),
-                    c.models,
-                    c.submodels,
-                    c.players,
-                    c.player_parts,
-                    c.guns_posed,
-                    events_sec,
-                    cues_sec,
-                    fx_sec,
-                    fx.counts().0,
-                    eye[0],
-                    eye[1],
-                    eye[2],
-                    ps.origin[0],
-                    ps.origin[1],
-                    ps.origin[2],
-                    ps.pm_type,
-                    ps.weapon,
-                    f.configstrings.weapon_name(ps.weapon).unwrap_or("-"),
-                    ps.followed(),
-                    f.configstrings.map_name().unwrap_or("?"),
-                    s.client.server_id(),
-                    st.parse_errors,
-                    pl.frames,
-                    pl.misses,
-                    pl.corrected,
-                    pl.missed,
-                    pl.max_correction,
-                    s.input.weapons().0,
-                    ps.pm_flags,
-                    ps.raw.i32("weaponstate"),
-                    ps.raw.ammoclip.iter().sum::<i32>() + ps.raw.ammo.iter().sum::<i32>(),
-                    s.sent.back().map_or(0, |c| c.buttons),
-                );
-                predict_all.frames += pl.frames;
-                predict_all.misses += pl.misses;
-                predict_all.missed += pl.missed;
-                predict_all.corrected += pl.corrected;
-                predict_all.max_correction = predict_all.max_correction.max(pl.max_correction);
-            }
-            last = st;
-            events_all += events_sec;
-            cues_all += cues_sec;
-            fx_all += fx_sec;
-            (events_sec, cues_sec, fx_sec) = (0, 0, 0);
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    }
-    if let Some((name, bytes)) = s.recording_status() {
-        println!("cod2: RECORDING {name}: {}k", bytes >> 10);
-        println!("cod2: {}", s.stop_recording());
-    }
-    s.disconnect();
-    let st = s.stats;
-    println!(
-        "cod2: {} messages, {} snapshots ({} deltas), {} packets sent, {} parse errors, \
-         {} new gamestates, {} fast_restarts, {} menu replies",
-        st.messages,
-        st.snapshots,
-        st.deltas,
-        st.packets_sent,
-        st.parse_errors,
-        st.new_gamestates,
-        st.restarts,
-        st.menu_replies
-    );
-    println!(
-        "cod2: most drawn in a frame: models {} submodels {} bodies {} body-parts {} guns {}",
-        most.models, most.submodels, most.players, most.player_parts, most.guns_posed
-    );
-    println!(
-        "cod2: events {} sound cues {} effects started {}",
-        events_all + events_sec,
-        cues_all + cues_sec,
-        fx_all + fx_sec
-    );
-    println!(
-        "cod2: predicted frames {} misses {} snapshots corrected {} past 0.1 {} \
-         longest correction {:.4}",
-        predict_all.frames,
-        predict_all.misses,
-        predict_all.corrected,
-        predict_all.missed,
-        predict_all.max_correction
-    );
-    if st.parse_errors > 0 {
-        bail!("{} messages failed to parse", st.parse_errors);
-    }
-    if st.deltas == 0 {
-        bail!("no delta snapshot applied");
-    }
-    let moved = first_eye
-        .zip(s.frame().map(|f| f.eye()))
-        .is_some_and(|(a, b)| a != b);
-    println!("cod2: eye moved: {moved}");
-    if s.join.is_some() {
-        let walked = first_origin
-            .zip(s.frame().map(|f| f.snap.ps.origin))
-            .map(|(a, b)| Vec3::from(a).distance(Vec3::from(b)));
-        println!(
-            "cod2: playing from t={:?}s, walked {:?} units",
-            playing_since, walked
-        );
-    }
-    Ok(())
 }
 
 /// What Enter on the `messagemode` / `messagemode2` field sends: `say` or
@@ -3334,138 +2029,217 @@ pub fn chat_command(team: bool, line: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// `timedemo_<map>_mode_<r_mode>.csv`, the map short of its directory
-    /// and last extension.
+    /// A map whose collision failed is not read again until a new
+    /// gamestate, and a map change the caller has yet to take is left to
+    /// its load. Needs `COD2_DIR`.
     #[test]
-    fn the_timedemo_csv_is_named_for_the_map_and_mode() {
-        assert_eq!(
-            timedemo_csv_name("mp_toujane", 3),
-            "timedemo_mp_toujane_mode_3.csv"
+    fn prediction_builds_a_maps_collision_once_per_gamestate() {
+        let Some(stock) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let bsp = stock.read("maps/mp/mp_toujane.d3dbsp").unwrap();
+        let mut s = Cod2Session::new(None, Client::new(0, 0));
+        let gs = |map: &str| vcod_cod2::net::Gamestate2 {
+            server_command_sequence: 0,
+            configstrings: [(0u16, format!("\\mapname\\{map}"))].into_iter().collect(),
+            baselines: Default::default(),
+            client_num: 0,
+            checksum_feed: 0,
+        };
+        s.view.configstrings = vcod_cod2::net::ConfigStrings::from_gamestate(&gs("mp_x"));
+        s.view.gamestates = 1;
+        s.level_gamestates = 1;
+        s.loaded_map = "mp_x".into();
+        // Not in the search path: the build fails.
+        let mut fs = Pk3Fs::empty();
+        s.ensure_world(&fs);
+        assert!(s.world.is_none());
+        // There now, but the same gamestate does not read it again.
+        fs.overlay("maps/mp/mp_x.d3dbsp", bsp);
+        s.ensure_world(&fs);
+        assert!(s.world.is_none());
+        // A new gamestate for another map waits for the caller's load.
+        s.view.configstrings = vcod_cod2::net::ConfigStrings::from_gamestate(&gs("mp_y"));
+        s.view.gamestates = 2;
+        s.ensure_world(&fs);
+        assert!(s.world.is_none());
+        // Back on mp_x, a new gamestate builds it.
+        s.view.configstrings = vcod_cod2::net::ConfigStrings::from_gamestate(&gs("mp_x"));
+        s.ensure_world(&fs);
+        assert!(s.world.as_ref().is_some_and(|(m, _)| m == "mp_x"));
+    }
+
+    /// A front-end connect dropped once vcod-server holds its slot and has
+    /// sent the gamestate (Esc, or a second `connect`) says `disconnect`:
+    /// the slot frees at once instead of timing out. One dropped before
+    /// the gamestate carries no `sv_serverid`, and the server reads
+    /// nothing of it, as retail's does. Needs `COD2_DIR`.
+    #[test]
+    fn cod2_live_a_dropped_connect_frees_the_server_slot() {
+        use vcod_server::cod2::{Cod2Config, Cod2Server};
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let fs = std::rc::Rc::new(fs);
+        let mut sv = Cod2Server::new(
+            Cod2Config {
+                map: "mp_toujane".into(),
+                gametype: "dm".into(),
+                hostname: "drop".into(),
+                max_clients: 4,
+                gametype_script: None,
+            },
+            7,
+            Instant::now(),
         );
-        assert_eq!(timedemo_csv_name("a.b", -1), "timedemo_a.b_mode_-1.csv");
-        assert_eq!(timedemo_csv_name("x/y", 0), "timedemo_y_mode_0.csv");
-        assert_eq!(timedemo_csv_name("", 0), "timedemo__mode_0.csv");
-    }
+        sv.exec_default_cfg(&*fs);
+        sv.set_cvar("sv_pure", "0");
+        sv.load(Some(fs)).unwrap();
+        let opts = ConnectOpts {
+            name: "dropper".into(),
+            allow_download: false,
+            www_download: false,
+            ..ConnectOpts::default()
+        };
+        // The server's client count at each frame.
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = count.clone();
+        let (connected, freed) = crate::play::cod4::tests::run_held(
+            &mut sv,
+            move |addr| {
+                let mut connecting = Some(Cod2Session::connect_in_background(
+                    &addr.to_string(),
+                    opts,
+                    Duration::from_secs(15),
+                ));
+                let t0 = clock_now();
+                let mut joined = None;
+                while since(t0) < Duration::from_secs(30) {
+                    let n = seen.load(Ordering::Relaxed);
+                    if joined.is_none() && n == 1 {
+                        joined = Some(clock_now());
+                    }
 
-    /// Retail's own demo under `timedemo`: the csv opens on the first timed
-    /// frame and takes `<frame>,<ms>` from the second, the frames counted
-    /// before it, one up a row, and is whole once the demo ends; a plain
-    /// `demo` writes none.
-    #[test]
-    fn timedemo_writes_a_row_a_frame_after_the_first() {
-        let data = include_bytes!("../../../cod2/tests/fixtures/demos/mp_toujane-retail.dm_1");
-        let dir = std::env::temp_dir().join(format!("vcod-timedemo-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let fs = Pk3Fs::empty();
-        let mut cam = FlyCamera::new(Vec3::ZERO, 0.0);
-        let mut plain = Cod2Session::play_demo(data.to_vec(), false).unwrap();
-        plain.write_timedemo_csv(dir.clone(), 3);
-        assert!(plain.demo.as_ref().unwrap().csv.is_none());
-        let mut s = Cod2Session::play_demo(data.to_vec(), true).unwrap();
-        s.write_timedemo_csv(dir.clone(), 3);
-        // A fixed 16 ms frame on the frame clock (`cl_avidemo`'s step), so
-        // no run packs several frames into the first millisecond.
-        let step = Some(std::time::Duration::from_millis(16));
-        let mut frames = 0;
-        while !s.demo_over() && frames < 5000 {
-            crate::frame_clock::tick(std::time::Instant::now(), step);
-            s.fly(&mut cam, &fs);
-            frames += 1;
-        }
-        crate::frame_clock::tick(std::time::Instant::now(), None);
-        assert!(s.demo_over(), "the demo never ended");
-        let counted = s.demo.as_ref().unwrap().timedemo.as_ref().unwrap().frames();
-        let text = std::fs::read_to_string(dir.join("timedemo_mp_toujane_mode_3.csv")).unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-        let rows: Vec<(i32, i32)> = text
-            .lines()
-            .map(|l| {
-                let (f, ms) = l.split_once(',').unwrap();
-                (f.parse().unwrap(), ms.parse().unwrap())
-            })
-            .collect();
-        // A start stamped at 0 ms reads as none, so a frame in the
-        // session's first millisecond writes no row.
-        assert!(counted > 800, "{counted} frames");
-        assert!(rows.len() as i32 >= counted - 3, "{} rows", rows.len());
-        assert_eq!(rows.last().map(|r| r.0), Some(counted - 1));
-        for w in rows.windows(2) {
-            assert_eq!(w[1].0, w[0].0 + 1);
-        }
-        assert!(rows.iter().all(|r| r.1 >= 0));
-    }
-
-    /// A demo's eye is `CG_CalcViewValues`' first-person arm over the lerped
-    /// playerstate (Mac 0x1d3b28 has no demo test): retail's recorder, a
-    /// free spectator standing with `viewHeightCurrent` 0, sees from the
-    /// arm's floor 8 over its origin, where the snapshots' plain eye is the
-    /// origin itself.
-    #[test]
-    fn a_demo_eye_is_the_first_person_arms() {
-        let data = include_bytes!("../../../cod2/tests/fixtures/demos/mp_toujane-retail.dm_1");
-        let fs = Pk3Fs::empty();
-        let mut cam = FlyCamera::new(Vec3::ZERO, 0.0);
-        let mut s = Cod2Session::play_demo(data.to_vec(), true).unwrap();
-        let mut frames = 0;
-        while !s.demo_over() && frames < 5000 {
-            s.fly(&mut cam, &fs);
-            let Some(f) = s.frame() else { continue };
-            frames += 1;
-            let ps = crate::play::cod2_predict::interpolated(&f);
-            assert_eq!(ps.view_height_current, 0.0);
-            assert_eq!(cam.pos, ps.origin + Vec3::Z * 8.0, "at {}", f.time_ms);
-            assert_eq!(Vec3::from(f.eye()), ps.origin);
-        }
-        assert!(frames > 800, "{frames} frames");
-    }
-
-    /// A loopback server answering each `getchallenge` with `reply`: what
-    /// the challenge ask comes back with, with and without a key.
-    fn challenge_with(reply: &'static str, key: Option<CdKey>) -> anyhow::Result<i32> {
-        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
-        let addr = server.local_addr().unwrap();
-        std::thread::spawn(move || {
-            let mut buf = [0u8; 256];
-            server
-                .set_read_timeout(Some(Duration::from_secs(6)))
-                .unwrap();
-            while let Ok((n, from)) = server.recv_from(&mut buf) {
-                if buf[..n].starts_with(b"\xff\xff\xff\xffgetchallenge") {
-                    let _ = server.send_to(&oob::packet(reply), from);
+                    // The gamestate is a few frames out on loopback.
+                    if joined.is_some_and(|t| since(t) > Duration::from_millis(500)) {
+                        connecting = None;
+                    }
+                    if connecting.is_none() && n == 0 {
+                        return (true, true);
+                    }
+                    // One thread moves the clock at a time: the join while
+                    // it runs, this one after.
+                    if connecting.as_ref().is_some_and(Connecting::running) {
+                        std::thread::sleep(Duration::from_millis(1));
+                    } else {
+                        crate::play::cod4::tests::clk_sleep(Duration::from_millis(16));
+                    }
                 }
-            }
-        });
-        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
-        sock.connect(addr).unwrap();
-        sock.set_read_timeout(Some(Duration::from_millis(5)))
-            .unwrap();
-        let auth = KeyAuth {
-            server: sock.peer_addr().ok(),
-            key,
-        };
-        ask_keyed(&sock, &oob::getchallenge(None), Some(&auth), |r| match r {
-            Reply::Challenge(c) => Some(*c),
-            _ => None,
-        })
+                (connecting.is_none(), false)
+            },
+            |sv, _, _| {
+                count.store(sv.client_count(), Ordering::Relaxed);
+                true
+            },
+        );
+        assert!(connected, "the connect never took a slot");
+        assert!(freed, "the server kept the dropped connect's slot");
     }
 
+    /// `vcod --connect` on CoD2 joins through `connect_in_background`, as
+    /// the console's `connect` does: the call returns before the server
+    /// has read a packet, and the session it hands over stands where the
+    /// blocking connect left one. Needs `COD2_DIR`.
     #[test]
-    fn a_key_leaves_a_loopback_challenge_unchanged() {
-        let key = || CdKey::parse("AAAA-AAAA-AAAA-AAAA");
-        assert_eq!(challenge_with("challengeResponse 9", None).unwrap(), 9);
-        assert_eq!(challenge_with("challengeResponse 9", key()).unwrap(), 9);
-        let why = |r: anyhow::Result<i32>| match r.unwrap_err().downcast::<ServerError>() {
-            Ok(ServerError(w)) => w,
-            Err(e) => format!("{e:#}"),
+    fn cod2_live_a_background_connect_hands_over_the_blocking_connects_session() {
+        const CONNECT_SECS: Duration = Duration::from_secs(15);
+        use vcod_server::cod2::{Cod2Config, Cod2Server, FRAME_MS};
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
         };
-        assert_eq!(
-            why(challenge_with("needcdkey", None)),
-            "EXE_ERR_INVALID_CD_KEY"
+        let fs = std::rc::Rc::new(fs);
+        let mut sv = Cod2Server::new(
+            Cod2Config {
+                map: "mp_toujane".into(),
+                gametype: "dm".into(),
+                hostname: "bg".into(),
+                max_clients: 4,
+                gametype_script: None,
+            },
+            7,
+            Instant::now(),
         );
+        sv.exec_default_cfg(&*fs);
+        sv.set_cvar("sv_pure", "0");
+        sv.load(Some(fs)).unwrap();
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_nonblocking(true).unwrap();
+        let addr = sock.local_addr().unwrap().to_string();
+        let opts = ConnectOpts {
+            name: "joiner".into(),
+            allow_download: false,
+            www_download: false,
+            ..ConnectOpts::default()
+        };
+        let mut next = Instant::now();
+        // Serves the server until `done` holds, at most 30 s.
+        let mut serve = |sv: &mut Cod2Server, done: &mut dyn FnMut(&Cod2Server) -> bool| {
+            let mut buf = [0u8; 4096];
+            let t0 = Instant::now();
+            while !done(sv) {
+                assert!(t0.elapsed() < Duration::from_secs(30), "served 30 s");
+                while let Ok((n, from)) = sock.recv_from(&mut buf) {
+                    sv.handle_packet(from, &buf[..n], Instant::now());
+                }
+                let now = Instant::now();
+                if now >= next {
+                    next = now + Duration::from_millis(FRAME_MS as u64);
+                    sv.tick_frames(now, 1);
+                }
+                for (to, p) in sv.take_outgoing() {
+                    let _ = sock.send_to(&p, to);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        let state = |s: &Cod2Session| {
+            (
+                s.settled(),
+                s.map_name().map(str::to_string),
+                s.view.gamestates,
+                s.level_gamestates,
+                s.loaded_map.clone(),
+                s.fs_game().map(str::to_string),
+            )
+        };
+        let (a, o) = (addr.clone(), opts.clone());
+        let blocking = std::thread::spawn(move || Cod2Session::connect(&a, &o, CONNECT_SECS));
+        serve(&mut sv, &mut |_| blocking.is_finished());
+        let mut first = blocking.join().unwrap().unwrap();
+        let want = state(&first);
+        first.disconnect();
+        serve(&mut sv, &mut |sv| sv.client_count() == 0);
+        let connecting = Cod2Session::connect_in_background(&addr, opts, CONNECT_SECS);
+        assert!(connecting.poll().is_none(), "the connect ran on the caller");
+        let mut got = None;
+        serve(&mut sv, &mut |_| {
+            got = got.take().or_else(|| connecting.poll());
+            got.is_some()
+        });
+        let mut s = got.unwrap().unwrap();
+        assert_eq!(state(&s), want);
         assert_eq!(
-            why(challenge_with("needcdkey", key())),
-            "EXE_AWAITINGCDKEYAUTH"
+            want,
+            (
+                true,
+                Some("mp_toujane".into()),
+                1,
+                1,
+                "mp_toujane".into(),
+                None
+            )
         );
+        s.disconnect();
     }
 
     /// Voice on the session's socket: the systeminfo's `sv_voice` and
@@ -3603,6 +2377,22 @@ mod tests {
         );
     }
 
+    /// A flood of datagrams is read `max` at a time; the rest wait.
+    #[test]
+    fn a_poll_reads_a_bounded_number_of_datagrams() {
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let me = sock.local_addr().unwrap();
+        let mut s = Cod2Session::new(Some(sock), Client::new(1, 2));
+        let flood = UdpSocket::bind("127.0.0.1:0").unwrap();
+        for _ in 0..50 {
+            flood.send_to(b"x", me).unwrap();
+        }
+        s.poll_at_most(None, 8);
+        let mut buf = [0u8; 16];
+        let left = std::iter::from_fn(|| s.sock.as_mut().unwrap().try_recv(&mut buf)).count();
+        assert_eq!(left, 42);
+    }
+
     fn session(join: Option<Join>) -> Cod2Session {
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
         let mut s = Cod2Session::new(Some(sock), Client::new(1, 2));
@@ -3642,7 +2432,7 @@ mod tests {
         let mut s = session(None);
         s.view.snap = Some(SnapshotView {
             message_num: 1,
-            server_time: 1000,
+            server_time: Msec::from_raw(1000),
             snap_flags: 0,
             ps: PlayerView::new(&vcod_cod2::net::PlayerState2::default(), 0),
             entities: Vec::new(),
@@ -3873,10 +2663,10 @@ mod tests {
     fn interrupted_once_the_oldest_kept_cmd_is_unrun() {
         let mut s = session(None);
         let mut ps = PlayerView::new(&vcod_cod2::net::PlayerState2::default(), 0);
-        ps.command_time = 980;
+        ps.command_time = Msec::from_raw(980);
         s.view.snap = Some(SnapshotView {
             message_num: 1,
-            server_time: 1000,
+            server_time: Msec::from_raw(1000),
             snap_flags: 0,
             ps,
             entities: Vec::new(),

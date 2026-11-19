@@ -230,7 +230,7 @@ pub fn body_frame(angles: [f32; 3]) -> Quat {
 /// a bone missing runs the DObj's controller hook, which on 1.5 and UO eases
 /// the controls one more step from where the last build left them, in this
 /// stamp or an earlier one; a stamp nothing builds in eases nothing
-/// (docs/research/coduo-vehicles.md 13, "The glide back"; cod11-movers.md
+/// (docs/research/coduo-vehicles.md 13.7, "The glide back"; cod11-movers.md
 /// 15).
 #[derive(Clone, Default, Debug)]
 pub struct DobjStamps {
@@ -364,6 +364,14 @@ pub struct Hit {
     pub hitloc: &'static str,
 }
 
+/// The two clients a damage call names, by field so a caller cannot swap
+/// them. CoD2's ownerless missile charges `ENTITYNUM_NONE` (1023).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Parties {
+    pub victim: usize,
+    pub attacker: usize,
+}
+
 /// One thing an attack does to the frame.
 pub enum Effect {
     /// A wall impact or a swing's hit or miss event. A bullet's flesh
@@ -454,23 +462,15 @@ use vcod_common::net::event_ids::EV_BULLET_HIT_LARGE;
 use vcod_common::net::event_ids::EV_BULLET_HIT_SMALL;
 /// The flesh `surfType` `finishPlayerDamage` hardcodes (combat doc, 4.5).
 const SURF_FLESH: i32 = 7;
-/// The surface flag that suppresses the impact effect (combat doc, 2.3).
-const SURF_NO_IMPACT: u32 = 0x4;
+/// A bullet raises no impact on the sky bit (combat doc, 2.3); melee tests
+/// `SURF_NOIMPACT`.
+use vcod_common::clipmap::{SURF_NOIMPACT, SURF_SKY};
 /// How far a bullet travels on 1.1 and 1.5: `muzzle + forward * 8192`
 /// (combat doc, 2.2).
 pub const BULLET_RANGE: f32 = 8192.0;
 /// UO's `BG_Bullet_Endpos` (game.mp.uo 0x3011c) runs 10000 out, for every
 /// `Bullet_Fire` and the artillery strike (combat doc, 2.2).
 pub const UO_BULLET_RANGE: f32 = 10_000.0;
-
-/// How far a protocol's server traces a bullet.
-pub fn bullet_range(p: &vcod_common::net::protocol::Protocol) -> f32 {
-    if p.is_uo() {
-        UO_BULLET_RANGE
-    } else {
-        BULLET_RANGE
-    }
-}
 
 /// The deepest `Bullet_Fire_Extended` recursion that still traces; the
 /// first call is depth 0 (combat doc, 2.3).
@@ -573,7 +573,7 @@ pub fn muzzle_point(ps: &PlayerState) -> Vec3 {
 /// is `CalcMuzzlePoint` (1.5 game 0x7e91f, UO 0x7b8ea): `ps.origin` plus
 /// the eye (UO: 28 in a vehicle seat), then, unless on a turret, UO's
 /// bipod trace, the walk bob, the lean and a floor 8 over the feet (combat
-/// doc 2.1, "1.5 and United Offensive").
+/// doc 2.1, "United Offensive and 1.5").
 pub fn muzzle_point_in(ps: &PlayerState, world: Option<MuzzleWorld<'_>>) -> Vec3 {
     if !ps.rules.v15() {
         // `G_AddLean`, the offset `PlayerState::view` adds, on the snapped
@@ -650,7 +650,7 @@ fn bipod_muzzle(ps: &PlayerState, world: Option<MuzzleWorld<'_>>, muzzle: Vec3) 
 /// through the hit-location table with no distance term (2.4), halved at
 /// each player a rifle round passes through (2.4, step 5). `muzzle_boxes`
 /// is what a UO bipod's muzzle trace meets besides `world`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn bullet_fire(
     shooter: usize,
     def: &WeaponDef,
@@ -711,7 +711,6 @@ pub fn bullet_fire(
 /// and where a round with the weapon's spread ends, `range` out.
 /// `world` is what a UO LMG on its bipod traces its muzzle against; no
 /// rocket or strike is fired from one.
-#[allow(clippy::too_many_arguments)]
 pub fn aim_end(
     me: &ClientSim,
     def: &WeaponDef,
@@ -839,7 +838,7 @@ fn bullet_end(muzzle: Vec3, forward: Vec3, range: f32) -> Vec3 {
 /// `pass` is the trace's pass entity: the gunner on a turret, the vehicle
 /// for a UO vehicle's gun, whose riders it then passes too; `falloff` a UO
 /// weapon's `Damage_Falloff`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn bullet_fire_from(
     shooter: usize,
     pass: Pass,
@@ -879,7 +878,7 @@ pub fn bullet_fire_from(
 
 /// [`bullet_fire_from`] to an end point already worked out: a UO vehicle
 /// gun's `BG_Bullet_Endpos` with its spread (`vehicle::fire::prepare`).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn bullet_fire_to(
     shooter: usize,
     pass: Pass,
@@ -1023,7 +1022,7 @@ pub(crate) fn located_damage(damage: i32, multiplier: f32) -> i32 {
 /// the leg, and its halving halves that (game.mp.uo 0x7a920); a UO model
 /// it meets (a vehicle) takes `G_Damage` and stops it. A UO round rolls its
 /// tracer off `rng` on each leg that may draw one (coduo-diff.md 21).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn fire_round(
     shooter: usize,
     pass: Pass,
@@ -1167,10 +1166,10 @@ fn fire_round(
                 takes_damage,
             } => {
                 let point = start + (end - start) * fraction;
-                if surface_flags & SURF_NO_IMPACT != 0 && from_shooter {
+                if surface_flags & SURF_SKY != 0 && from_shooter {
                     out.effects.extend(tracer(start, point));
                 }
-                if surface_flags & SURF_NO_IMPACT == 0 && draws_impact(&pass) {
+                if surface_flags & SURF_SKY == 0 && draws_impact(&pass) {
                     out.effects
                         .push(impact(point, normal, surface_flags, start));
                 }
@@ -1193,10 +1192,10 @@ fn fire_round(
                 break;
             }
             Traced::World(t) => {
-                if t.surface_flags & SURF_NO_IMPACT != 0 && from_shooter {
+                if t.surface_flags & SURF_SKY != 0 && from_shooter {
                     out.effects.extend(tracer(start, t.endpos));
                 }
-                if t.surface_flags & SURF_NO_IMPACT == 0 && draws_impact(&pass) {
+                if t.surface_flags & SURF_SKY == 0 && draws_impact(&pass) {
                     out.effects
                         .push(impact(t.endpos, t.normal, t.surface_flags, start));
                 }
@@ -1367,7 +1366,8 @@ pub struct HitBody {
 /// both anim channels and the controllers' inputs.
 #[derive(Clone, Default, Debug)]
 pub struct BodyPose {
-    pub assembly: crate::game::hitrig::Assembly,
+    /// Shared with the DObj record that built it: a mirror's copy is a count.
+    pub assembly: std::rc::Rc<crate::game::hitrig::Assembly>,
     /// Wire `legsAnim` / `torsoAnim` and each channel's clip clock.
     pub legs: i32,
     pub torso: i32,
@@ -1398,7 +1398,7 @@ pub struct BodyPose {
     /// The entity fields the controllers' hook reads off `s` as the
     /// client's last `BG_PlayerStateToEntityState` wrote them, which runs
     /// after each cmd's move and in `SetClientOrigin` as well as in the end
-    /// frame (docs/research/coduo-vehicles.md 13, "The weapon-swap frame").
+    /// frame (docs/research/coduo-vehicles.md 13.7, "The weapon-swap frame").
     pub es: HookEs,
     /// The record's seat angles (`+0x3f4`): the last seat tag an end frame
     /// placed the rider by, kept past an exit, zero from the connect.
@@ -1473,7 +1473,7 @@ impl BodyPose {
     /// rides, where and armed or not, and the `eFlags` the hook tests (a
     /// turret's use frame reads him mounted), come off the entity as his
     /// last cmd left it, the angles off the record as the end frame wrote it
-    /// (coduo-vehicles.md 13, "The weapon-swap frame"; cod11-turrets.md
+    /// (coduo-vehicles.md 13.7, "The weapon-swap frame"; cod11-turrets.md
     /// 13.9, "The mount's blend in").
     pub fn target_controllers(&self) -> Option<vcod_common::playerpose::Controllers> {
         use vcod_common::playerpose::{BodySeat, Controllers};
@@ -1498,7 +1498,7 @@ impl BodyPose {
 /// The trace a bullet and a swing both make (combat doc, sections 2.2, 2.5
 /// and 3): the world, every placed model and shootable box, then every live
 /// player's body, each entity under `pass`'s rule.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn trace_attack(
     muzzle: Vec3,
     end: Vec3,
@@ -1533,11 +1533,13 @@ fn trace_attack(
         limit = f;
         model_hit = None;
     }
+    let p = crate::tick_profile::phase("trace/hit bodies");
     let bodies: Vec<HitBody> = sims
         .iter()
         .filter(|(s, sim)| !pass.skips(*s as u32, sim.seat.map(|seat| seat.vehicle)))
         .filter_map(|(s, sim)| sim.hit_body(*s))
         .collect();
+    drop(p);
     let arith = bones.as_ref().map_or(Arith::Kept, |b| b.arith);
     if let Some((slot, fraction, hitloc)) =
         trace_bodies(muzzle, end, usize::MAX, &bodies, limit, priority, bones)
@@ -1601,14 +1603,10 @@ fn box_normal(p: Vec3, lo: Vec3, hi: Vec3) -> Vec3 {
     best.1
 }
 
-/// `SURF_SKY`, which a strike's trace refunds on.
-const SURF_SKY: u32 = 0x4;
-
 /// `Weapon_ArtilleryStrike_Fire`'s locational trace (game.mp.uo 0x7b758,
 /// mask 0x2802031 with `bulletPriorityMap`): where the aim from `muzzle` to
 /// `end` stops, on the world, a live body or a shootable grenade, and
 /// whether it struck a sky face. `None` when it met nothing.
-#[allow(clippy::too_many_arguments)]
 pub fn strike_point(
     muzzle: Vec3,
     end: Vec3,
@@ -1751,7 +1749,9 @@ pub fn trace_bodies_faced(
         let angles = stamps.as_deref().map_or([0.0; 3], DobjStamps::angles);
         let frame = body_frame(angles);
         let axis_stored = vcod_common::x87::angles_to_axis(angles.into());
+        let p = crate::tick_profile::phase("trace/pose");
         let pose = stamped_pose(&skel, body, anims, rigs, fs, *now_ms, stamps);
+        drop(p);
         // Into the body's own frame: its `tag_origin` sits at the feet.
         let (ls, le) = match arith {
             Arith::Stored => (
@@ -1811,7 +1811,7 @@ fn stamped_pose(
     now_ms: i32,
     stamps: Option<&mut DobjStamps>,
 ) -> vcod_common::skeleton::PoseBuffer {
-    let Some(stamps) = stamps else {
+    let Some(stamps) = stamps.filter(|_| !skel.bones().is_empty()) else {
         let inputs = body.pose.pose_inputs(anims, now_ms);
         return pose_player(skel, &inputs, |name| rigs.clip(fs, name));
     };
@@ -1845,12 +1845,14 @@ pub const MELEE_RANGE: f32 = 64.0;
 
 /// `Weapon_Melee` (combat doc, 2.5): a 64-unit trace along the view with the
 /// bullet mask and `bulletPriorityMap` whatever the weapon, a hit or miss
-/// temp entity carrying the swinger's weapon -- the hit's parm is
-/// `DirToByte(-forward)`, the miss's the surface normal -- and on a
+/// temp entity carrying the swinger's weapon (the hit's parm is
+/// `DirToByte(-forward)`, the miss's the surface normal), and on a
 /// player a `MOD_MELEE` hit for `meleeDamage + rand()%5`. The hit-location
 /// multiplier is `G_Damage`'s, the same one a bullet goes through (4.2):
 /// retail's melee capture read 81 and 79 off a 50-damage swing at `head`.
-#[allow(clippy::too_many_arguments)]
+/// `damageable` are the brush entities with `takedamage`, whose brushes a
+/// swing stops on with no glass test (a door's, movers doc 26.9).
+#[expect(clippy::too_many_arguments)]
 pub fn melee_fire(
     attacker: usize,
     def: &WeaponDef,
@@ -1859,6 +1861,7 @@ pub fn melee_fire(
     aim: [f32; 2],
     sims: &[(usize, &ClientSim)],
     targets: &[ShotTarget],
+    damageable: &[EntId],
     world: Option<&CollisionWorld>,
     models: &[PlacedModel],
     hitlocs: &HitLocTable,
@@ -2002,9 +2005,25 @@ pub fn melee_fire(
                 effects: vec![miss(normal, 0, id.0, muzzle + (end - muzzle) * fraction)],
                 struck: vec![id],
             },
-            Traced::World(t) if t.surface_flags & crate::game::missile::SURF_NOIMPACT == 0 => {
+            // A brush entity's face names it, and `G_Damage` runs on one with
+            // `takedamage`: a door at rest opens (movers doc 26.6).
+            Traced::World(t) if t.surface_flags & SURF_NOIMPACT == 0 => {
+                let other = world.map_or(ENTITYNUM_WORLD, |w| w.entity_num(&t));
+                let mut effects = vec![miss(t.normal, t.surface_flags, other, t.endpos)];
+                if let Some(&target) = damageable.iter().find(|id| id.0 == other) {
+                    effects.push(Effect::EntityHit(EntityHit {
+                        target,
+                        attacker,
+                        inflictor: None,
+                        damage: def.melee_damage + (vcod_common::rng::xorshift(rng) % 5) as i32,
+                        dflags: 0,
+                        mod_: "MOD_MELEE",
+                        point: t.endpos.into(),
+                        dir: forward.into(),
+                    }));
+                }
                 ShotResult {
-                    effects: vec![miss(t.normal, t.surface_flags, ENTITYNUM_WORLD, t.endpos)],
+                    effects,
                     struck: Vec::new(),
                 }
             }
@@ -2272,7 +2291,6 @@ pub struct Blast {
 }
 
 impl Blast {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         at: Vec3,
         radius: f32,
@@ -2421,11 +2439,51 @@ impl Blast {
     }
 }
 
+/// Whether the segment `start..start + (end - start) * limit` meets the
+/// box `lo..hi`: the broad box a hit-box trace meets before the body is
+/// posed (CoD2, CoD4).
+pub(crate) fn segment_meets_box(start: Vec3, end: Vec3, lo: Vec3, hi: Vec3, limit: f32) -> bool {
+    let d = end - start;
+    let (mut t0, mut t1) = (0.0f32, limit);
+    for a in 0..3 {
+        if d[a].abs() < 1e-9 {
+            if start[a] < lo[a] || start[a] > hi[a] {
+                return false;
+            }
+            continue;
+        }
+        let (mut x, mut y) = ((lo[a] - start[a]) / d[a], (hi[a] - start[a]) / d[a]);
+        if x > y {
+            std::mem::swap(&mut x, &mut y);
+        }
+        t0 = t0.max(x);
+        t1 = t1.min(y);
+        if t0 > t1 {
+            return false;
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_segment_meets_a_box_only_inside_its_limit() {
+        let (lo, hi) = (Vec3::new(-15.0, -15.0, 0.0), Vec3::new(15.0, 15.0, 70.0));
+        let (s, e) = (Vec3::new(-100.0, 0.0, 40.0), Vec3::new(100.0, 0.0, 40.0));
+        assert!(segment_meets_box(s, e, lo, hi, 1.0));
+        assert!(!segment_meets_box(s, e, lo, hi, 0.3));
+        assert!(!segment_meets_box(
+            s,
+            e + Vec3::Z * 200.0,
+            lo,
+            hi + Vec3::Z * 0.0,
+            0.2
+        ));
+    }
     use crate::game::trigger::{PLAYER_MAXS, PLAYER_MINS};
-    use std::collections::HashMap;
 
     fn ps_on(rules: MoveRules, origin: Vec3) -> PlayerState {
         let mut ps = PlayerState::spawn(origin, 45.0);
@@ -2686,7 +2744,7 @@ mod tests {
 
     /// Each build eases the controls a step on from the last build's, in
     /// its stamp or an earlier one, and a bone the first build posed keeps
-    /// the first's (coduo-vehicles.md 13, "The glide back"; movers doc 15).
+    /// the first's (coduo-vehicles.md 13.7, "The glide back"; movers doc 15).
     #[test]
     fn each_build_eases_the_controls_once_more() {
         use vcod_common::playerpose::Controllers;
@@ -2775,7 +2833,7 @@ mod tests {
     }
 
     /// Every victim of one blast with nothing changing between them.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn radius_damage(
         at: Vec3,
         radius: f32,
@@ -2928,10 +2986,10 @@ mod tests {
     }
 
     fn zero_spread_carbine() -> WeaponDef {
-        let mut m = HashMap::new();
-        m.insert("damage".to_string(), "45".to_string());
-        m.insert("rifleBullet".to_string(), "1".to_string());
-        m.insert("weaponClass".to_string(), "rifle".to_string());
+        let mut m = vcod_common::xmodel::WeaponKeys::default();
+        m.insert("damage", "45".to_string());
+        m.insert("rifleBullet", "1".to_string());
+        m.insert("weaponClass", "rifle".to_string());
         WeaponDef::from_map(&m)
     }
 
@@ -3444,6 +3502,7 @@ mod tests {
             [0.0, 0.0],
             &sims[..1],
             &[],
+            &[],
             Some(&world),
             std::slice::from_ref(&model),
             &table,
@@ -3553,8 +3612,8 @@ mod tests {
         // A pistol round names the pistol means of death and passes nothing.
         b.dead = false;
         b.update_contents();
-        let mut m = HashMap::new();
-        m.insert("damage".to_string(), "30".to_string());
+        let mut m = vcod_common::xmodel::WeaponKeys::default();
+        m.insert("damage", "30".to_string());
         let colt = WeaponDef::from_map(&m);
         let r = fire(&colt, &[(0, &a), (1, &b)], &open, &mut rng);
         let hit = only(r.hits(), "the colt round");
@@ -3564,10 +3623,6 @@ mod tests {
         );
     }
 
-    /// Combat doc 2.4, step 5: a rifle round goes on from the hit point past
-    /// the player it hit, at half its damage, into the next player and then
-    /// the wall behind; a pistol round stops on the first player, and so
-    /// does a rifle round whose halving leaves nothing.
     /// A UO round rolls its tracer on every leg that may draw one
     /// (coduo-diff.md 21): through B into C both player hits draw, each from
     /// its own leg's start, and the miss past B draws none, its pass entity
@@ -3629,6 +3684,10 @@ mod tests {
         assert!(got[0].1 > 1000.0, "{got:?}");
     }
 
+    /// Combat doc 2.4, step 5: a rifle round goes on from the hit point past
+    /// the player it hit, at half its damage, into the next player and then
+    /// the wall behind; a pistol round stops on the first player, and so
+    /// does a rifle round whose halving leaves nothing.
     #[test]
     fn a_rifle_round_passes_through_a_player_at_half_damage_and_a_pistol_round_stops() {
         let a = new_for_test([0.0, 0.0, 0.0], 0.0);
@@ -3661,8 +3720,8 @@ mod tests {
         assert_eq!(te.event, 174);
         assert!((te.origin[0] - 300.0).abs() < 0.2, "{:?}", te.origin);
 
-        let mut m = HashMap::new();
-        m.insert("damage".to_string(), "30".to_string());
+        let mut m = vcod_common::xmodel::WeaponKeys::default();
+        m.insert("damage", "30".to_string());
         let r = fire(&WeaponDef::from_map(&m), &sims, &wall, &mut rng);
         assert_eq!(only(r.hits(), "the colt round").victim, 1);
         assert!(r.impacts().next().is_none(), "the pistol round ends in B");
@@ -3714,8 +3773,8 @@ mod tests {
         assert!((at[0].0 - 40.0).abs() < 0.2 && at[0].1 == 9, "{at:?}");
         assert!((at[1].0 - 300.0).abs() < 0.2, "the wall behind B, {at:?}");
 
-        let mut m = HashMap::new();
-        m.insert("damage".to_string(), "30".to_string());
+        let mut m = vcod_common::xmodel::WeaponKeys::default();
+        m.insert("damage", "30".to_string());
         let r = fire(
             &WeaponDef::from_map(&m),
             &[(0, &a), (1, &b)],
@@ -3777,8 +3836,8 @@ mod tests {
     }
 
     fn melee_carbine() -> WeaponDef {
-        let mut m = HashMap::new();
-        m.insert("meleeDamage".to_string(), "50".to_string());
+        let mut m = vcod_common::xmodel::WeaponKeys::default();
+        m.insert("meleeDamage", "50".to_string());
         WeaponDef::from_map(&m)
     }
 
@@ -3802,6 +3861,7 @@ mod tests {
                 12,
                 sims[0].1.aim_angles(),
                 sims,
+                &[],
                 &[],
                 Some(&world),
                 &[],
@@ -3879,6 +3939,7 @@ mod tests {
                 a.aim_angles(),
                 &[(0, &a)],
                 targets,
+                &[],
                 Some(&world),
                 models,
                 &table,
@@ -3939,6 +4000,7 @@ mod tests {
             12,
             a.aim_angles(),
             &[(0, &a), (1, &near)],
+            &[],
             &[],
             Some(&world),
             &[],
@@ -4139,6 +4201,28 @@ mod tests {
             "{:?}",
             hits.iter().map(|h| h.damage).collect::<Vec<_>>()
         );
+    }
+
+    /// A rig with no bones poses empty under the host's stamps instead of
+    /// panicking on the first trace near it.
+    #[test]
+    fn a_boneless_rig_poses_empty_under_stamps() {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
+            return;
+        };
+        let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
+        let skel = vcod_common::skeleton::Skeleton::build(&[]);
+        let mut stamps = DobjStamps::default();
+        let pose = stamped_pose(
+            &skel,
+            &box_body(1, 0.0),
+            &anims,
+            &mut HitRigs::default(),
+            &fs,
+            1000,
+            Some(&mut stamps),
+        );
+        assert!(pose.bone_worlds(&skel).is_empty());
     }
 
     /// A standing box body for the no-paks path, where the link box is the

@@ -10,7 +10,7 @@ pub fn print_line(host: &mut GameHost, cx: &Cx, args: &[Value]) -> Result<Value,
     // Retail's log splits a multi-line string into separate log lines; a
     // capture diff reads it the same way.
     for l in line.lines() {
-        host.script_log.push(l.to_string());
+        host.keep_script_line(l.to_string());
     }
     Ok(Value::Undefined)
 }
@@ -42,11 +42,11 @@ pub fn iprint_line(
     match recv {
         Some(_) => {
             let slot = super::client::client_receiver(host, recv)?;
-            host.client_commands.push((slot, cmd));
+            host.client_commands.push(slot, cmd);
         }
         None => {
             for slot in host.client_slots() {
-                host.client_commands.push((slot, cmd.clone()));
+                host.client_commands.push(slot, cmd.clone());
             }
         }
     }
@@ -102,11 +102,11 @@ pub fn announcement(
     match to {
         Some(_) => {
             let slot = super::client::client_receiver(host, to)?;
-            host.client_commands.push((slot, cmd));
+            host.client_commands.push(slot, cmd);
         }
         None => {
             for slot in host.client_slots() {
-                host.client_commands.push((slot, cmd.clone()));
+                host.client_commands.push(slot, cmd.clone());
             }
         }
     }
@@ -133,6 +133,7 @@ pub(crate) fn render(cx: &Cx, args: &[Value]) -> String {
 #[cfg(test)]
 mod iprintln_tests {
     use super::*;
+    use crate::game::commands::one;
     use crate::game::host::GameHost;
 
     /// The two forms, against the retail capture's own lines: the global
@@ -174,9 +175,9 @@ mod iprintln_tests {
         assert_eq!(
             host.client_commands,
             vec![
-                (0, "f \"MPSCRIPT_CONNECTED\u{15}vcod^7\"".to_string()),
-                (1, "f \"MPSCRIPT_CONNECTED\u{15}vcod^7\"".to_string()),
-                (1, "f \"MPSCRIPT_CONNECTED\u{15}\"".to_string()),
+                (one(0), "f \"MPSCRIPT_CONNECTED\u{15}vcod^7\"".to_string()),
+                (one(1), "f \"MPSCRIPT_CONNECTED\u{15}vcod^7\"".to_string()),
+                (one(1), "f \"MPSCRIPT_CONNECTED\u{15}\"".to_string()),
             ]
         );
     }
@@ -207,7 +208,7 @@ mod iprintln_tests {
         let cmd = "c \"RE_MATCHSTARTING\u{15}\" 2".to_string();
         assert_eq!(
             host.client_commands,
-            vec![(0, cmd.clone()), (1, cmd.clone()), (1, cmd)]
+            vec![(one(0), cmd.clone()), (one(1), cmd.clone()), (one(1), cmd)]
         );
     }
 }
@@ -249,6 +250,8 @@ mod tests {
         ) -> Result<(), ErrorKind> {
             unreachable!("not exercised by this test")
         }
+
+        fn roots(&self, _out: &mut Vec<Value>) {}
     }
 
     /// `f32::to_string` and `Cx::format_number`'s `%g` renderer diverge for

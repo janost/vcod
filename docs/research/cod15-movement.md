@@ -35,7 +35,7 @@ flow.
 ## The captures
 
 `crates/server/tests/fixtures/playerstate/mp_carentan-dm-slope-8ms-moves-1.1.txt`
-and `...-moves-1.5.txt`: `moves_script` (`crates/client/src/probe.rs`,
+and `...-moves-1.5.txt`: `moves_script` (`crates/client/src/probe/scripts.rs`,
 `--probe-moves`) on the street placement of `client-probes/probe_prone`,
 run against `tools/run_probe.sh` on each server, cmds every 8 ms, every
 snapshot's decoded playerstate logged. They show, all VERIFIED:
@@ -281,7 +281,7 @@ stance, so the target and `eFlags` step to the gun's stance on the mount
   The constants and trace counts are VERIFIED. The order is INFERRED.
 - `PM_UpdatePronePitch` is 1.1's in effect (VERIFIED constants).
 
-### The airborne prone body
+### 4.1 The airborne prone body
 
 VERIFIED, `game.mp.i386.so` 1.5b: `PM_UpdatePronePitch` (0x26d80) calls
 `BG_CheckProne` (0x26ed6) only when `groundEntityNum` (ps `+0x54`) is
@@ -346,7 +346,7 @@ rounding the difference first gives -0.9885349; the flat lie-down at
 spawn on mp_carentan reads 0.0004427433 on the wire, not 0.00044250488.
 vcod: `pmove::check_prone` takes the difference in `f64`.
 
-### The spawn's lie-down
+### 4.2 The spawn's lie-down
 
 VERIFIED, `game.mp.i386.so` 1.5b `ClientSpawn` (0x3c9a8): after the
 `gclient_t` memset it reads the client's last usercmd into `pers.cmd`
@@ -410,7 +410,7 @@ vcod:
 
 - The sim moves in the frame's spawn pass, after the spawning thread, so
   the `spawn` builtin runs the same think on a fresh sim (the client's
-  last cmd mirrored into `GameHost::client_last_cmd`) and writes and
+  last cmd mirrored into `HostClient::last_cmd`) and writes and
   links that origin.
 - `ClientSim::spawn_cmd` runs the client's last cmd under 1.5's and UO's
   rules, a 1.5 spawn starts with the body on the ground, and
@@ -597,7 +597,7 @@ script's `setOrigin` (cod11-combat.md 2.1, "The thrower's slide").
 - `PM_Weapon` 0x30643: 1.1's 255 store for a prone body with move keys or
   a swing (`cod11-combat.md` 2.1). VERIFIED.
 
-### ps.speed
+### 5.1 ps.speed
 
 - Every mover reads `ps.speed` (int, `ps+0x44`, UO `ps+0x48`): 1.1d's
   `PM_CmdScale` (0x2e5bc), the walk's scale (0x2e690) and `PM_Footsteps`'
@@ -628,7 +628,7 @@ script's `setOrigin` (cod11-combat.md 2.1, "The thrower's slide").
   spawn; the predictor reads it off the wire (`predict::from_wire`), a
   spectator's 400 included (`predict::predictable` takes `pm_type` 4).
 
-### The fly move
+### 5.2 The fly move
 
 - 1.5b's and UO's `PM_FlyMove` (1.5 0x1fcf9, UO 0x24838) runs
   `PM_Friction` (1.5 0x1eab3, UO 0x234ef), whose `pm_type` 4 term adds
@@ -655,7 +655,7 @@ script's `setOrigin` (cod11-combat.md 2.1, "The thrower's slide").
   origin, velocity and eye, 311 of them moving. Under 1.1's unstored
   arithmetic 155 of the 439 differ.
 
-### ps.gravity
+### 5.3 ps.gravity
 
 - Every mover reads the int `ps.gravity` (`ps+0x3c`, UO `ps+0x40`), never
   a constant. 1.1d's eight loads, each `fildl 0x3c(...)` off `pm->ps`:
@@ -774,7 +774,7 @@ kerb (ct 62946) rides the capsule tie fixes.
 - `PM_Weapon`'s other states, the ADS flag, the walking flag and the
   spread are 1.1's (side-by-side decompile, INFERRED).
 
-### The server's gun kick
+### 6.1 The server's gun kick
 
 1.1d's game module never kicks the gun-kick spring of `cod11-combat.md`
 15.2, so a 1.1 server's aim block adds nothing for it. 1.5b's does, and
@@ -919,6 +919,8 @@ and keeps the rest, at 53-bit precision. vcod predicts with it
 `uo_cgame_mp_x86.dll`. Addresses are VAs (exe base 0x400000, cgame
 0x30000000).
 
+### 8.1 The Windows build
+
 - Precision: 1.5's exe calls `_controlfp(0x10000, 0x30000)` (`_PC_53`) at
   0x569040, UO's at 0x5783fc; no game code loads a control word of its
   own, and the CRT's trig wrappers test for 0x27f (1.5 0x5728a4).
@@ -1005,6 +1007,8 @@ test, and the facet walk that answers only whether a facet stops a trace
 (1.5 0x41ee90, stores `d1`). Not modelled: the Windows dot products'
 order, `(z n2 + y n1) + x n0` in `CM_FindPlane` (0x41cf00), where vcod
 sums x first.
+
+### 8.2 The rest of the walk on Linux
 
 The rest of the walk, in 1.5b's `game.mp.i386.so` unless named:
 
@@ -1103,7 +1107,7 @@ The rest of the walk, in 1.5b's `game.mp.i386.so` unless named:
 
   vcod: `pmove::wish`'s `WishArith::Msvc` arm under `Arith::Msvc`, on
   every protocol's client
-  (`pmove::tests::the_windows_walk_scale_stores_the_run_product`: a
+  (`pmove::tests::walk::the_windows_walk_scale_stores_the_run_product`: a
   crouched diagonal run wishes a float step under 1.1d's). VERIFIED
   (measured, `play::replay::the_windows_build_draws_no_new_correction`):
   the springfield 1.1 capture goes from 0 to 2 last-bit corrections,
@@ -1164,7 +1168,7 @@ The rest of the walk, in 1.5b's `game.mp.i386.so` unless named:
   air and ladder moves, `pmove::clip_velocity_msvc` in the walk and the
   air, and the stored `VectorNormalize` and length in `pmove::wish` and
   after the walk's clip on every protocol
-  (`pmove::tests::the_windows_accelerate_stores_the_lack`,
+  (`pmove::tests::walk::the_windows_accelerate_stores_the_lack`,
   `the_windows_walk_clip_takes_the_reciprocal_overclip`). The 1.1 ladder
   keeps 1.1d's wish ahead of the call; its `VectorNormalize2`
   (0x30039ef0) is not read. VERIFIED (measured,
@@ -1207,6 +1211,8 @@ The rest of the walk, in 1.5b's `game.mp.i386.so` unless named:
   each component's change; `VectorNormalize` (0x32f73) stores the squared
   length, the length and its reciprocal. VERIFIED.
 
+### 8.3 The stores against the captures
+
 **Which stores move a snapshot.** `moves_ab`'s `MOVES_EXACT=1` counts how
 many snapshots' predicted origins are retail's to the bit, past the
 gate's 0.05 tolerance. Before the slope work below: the 1.5 moves capture
@@ -1219,7 +1225,7 @@ velocity's last bit, so a store that only rounds it differently changes
 an origin once in thousands of frames. The one store that changes what a
 body does is the air accelerate's floor: `pmove::accelerate_stored` for
 1.5's and UO's walk and air, `pmove::air_accelerate` for 1.1's air
-(`pmove::tests::a_wish_under_100_in_the_air_accelerates_at_100s_rate`).
+(`pmove::tests::walk::a_wish_under_100_in_the_air_accelerates_at_100s_rate`).
 
 The slope misses that remained were the ground's z, one or two ulps
 under retail's on the slope; `Arith::Kept` collision drops the moves

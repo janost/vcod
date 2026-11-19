@@ -176,8 +176,10 @@ ends on its block's last byte. VERIFIED live.
   the command the one `reliableAcknowledge` names: `SV_UserMove`
   (0x8172560) XORs the word at 0x13e77f94, the client's +0x20e5c and the
   hash (0x8197b80, length 32) of its command slot `+0x20e54 & 127`
-  (0x81725eb..0x8172633), after refusing a count past 32 (0x81725c3).
-  INFERRED (the fields' meaning off the code).
+  (0x81725eb..0x8172633), after refusing a count past 32 (0x81725c3,
+  `cmdCount > MAX_PACKET_USERCMDS`) or under 1 (0x81725bd, `cmdCount <
+  1`): each prints and returns before a cmd is read, after the delta
+  message is set. INFERRED (the fields' meaning off the code).
 - The op block is compressed with the same static tree and scrambled from
   byte 9 with key `challenge ^ serverId ^ messageAcknowledge`, walking the
   newest server command's text. INFERRED. The capture's 50
@@ -306,7 +308,8 @@ client command each re-encode only that way. VERIFIED live.
 `play-1.7-walk.txt` and `play-1.7-spec.txt`: three probes on `cod4_lnxded
 +set g_gametype war +set sv_pure 0 ... +map mp_crash` in the namespace of
 `cod4-handshake.md` 7, the probe's recipe in its header. `mate` (an idle
-allies teammate, not committed) and `spec` start together; `walker`
+allies teammate, its capture not kept: nothing is read off it) and
+`spec` start together; `walker`
 joins a second later on allies, picks `assault_mp,0`, and plays its
 script from the spawn for 42 s. `walker`: 842 server and 438 client
 messages; `spec`: 902 and 469. VERIFIED live.
@@ -493,7 +496,8 @@ The client sends 0x2000 bytes in seven `stats` packets
 
 vcod keeps its own stats file,
 `players/profiles/<profile>/[<fs_game>/]vcod_mpdata`, the 0x2000-byte
-block stored plain (`play::cod4_profile`): read at each join, sent in
+block stored plain (`play::cod4_profile`): read at each join under the
+`fs_game` the server's `connectResponse` names (cod4-front-end.md 6), sent in
 the `stats` packets, written back two seconds after the server's `N`
 commands change it and at the disconnect. Retail's `mpdata` is neither
 read nor written.

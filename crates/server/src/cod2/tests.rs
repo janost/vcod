@@ -61,7 +61,7 @@ fn run(sv: &mut Cod2Server, cl: &mut Client, fs: Option<&Pk3Fs>, secs: u32) -> S
     let mut now = Instant::now();
     for _ in 0..secs * 20 {
         let pkt = if cl.parser.gamestate.is_some() {
-            let base = cl.parser.snapshot().map_or(0, |s| s.server_time);
+            let base = cl.parser.snapshot().map_or(0, |s| s.server_time.raw());
             let mut cmd: UserCmd2 = cl.idle_cmd(base + FRAME_MS);
             cmd.forward_move = 127;
             cl.build_packet(&[cmd]).unwrap()
@@ -151,7 +151,7 @@ fn a_cod2_spectator_joins_a_bare_server_and_takes_delta_snapshots() {
     assert_eq!(snap.clients.len(), 1);
     assert_eq!(snap.clients[0].name(), "vcodspec");
     // No world: the cmds advance the clock and nothing else.
-    assert_eq!(snap.ps.i32("commandTime"), snap.server_time);
+    assert_eq!(snap.ps.i32("commandTime"), snap.server_time.raw());
 
     let Reply::Status { info, players } = ask(&mut sv, &oob::getstatus("s"), now) else {
         panic!("no statusResponse");
@@ -162,6 +162,194 @@ fn a_cod2_spectator_joins_a_bare_server_and_takes_delta_snapshots() {
     cl.add_reliable("disconnect");
     sv.handle_packet(addr(), &cl.build_packet(&[]).unwrap(), now);
     assert_eq!(sv.client_count(), 0);
+}
+
+/// The status reply's challenge goes in as `Info_SetValueForKey` stores a
+/// value, its `\`, `;` and `"` dropped: a challenge cannot add keys
+/// (cod2-protocol.md 1.5; BUG-103).
+#[test]
+fn a_cod2_status_challenge_cannot_add_keys() {
+    let now = Instant::now();
+    let mut sv = Cod2Server::new(cfg("mp_toujane"), 7, now);
+    sv.load(None).unwrap();
+    let Reply::Status { info, .. } = ask(&mut sv, &oob::getstatus("x\\sv_hostname\\Fake"), now)
+    else {
+        panic!("no statusResponse");
+    };
+    assert!(
+        info.contains("\\challenge\\xsv_hostnameFake\\pswrd\\0"),
+        "{info}"
+    );
+    assert!(!info.contains("\\sv_hostname\\Fake"), "{info}");
+}
+
+/// A `clc_move` of one idle cmd under the header's `message_ack` and
+/// `reliable_ack`, keyed as the client keys it.
+fn move_packet(cl: &mut Client, sv: &Cod2Server, message_ack: i32, reliable_ack: i32) -> Vec<u8> {
+    use vcod_cod2::net::usercmd::write_delta_usercmd;
+    use vcod_common::net::huffman::Huffman;
+    let huff = Huffman::new();
+    let server_cmd = cl
+        .parser
+        .server_command(cl.parser.server_command_sequence)
+        .to_vec();
+    let key = (sv.core.checksum_feed ^ message_ack ^ com_hash_key_bytes(&server_cmd, 32)) as u32;
+    let snap = cl.parser.snapshot().unwrap();
+    let from = default_usercmd(&snap.ps);
+    let cmd = cl.idle_cmd((snap.server_time + FRAME_MS).raw());
+    let mut w = MsgWriter::new(&huff);
+    w.write_bits(Clc::Move as i32, CLC_BITS);
+    w.write_byte(1);
+    write_delta_usercmd(&mut w, key, &from, &cmd);
+    w.write_bits(Clc::Eof as i32, CLC_BITS);
+    let ops = w.into_ops();
+    cl.netchan
+        .build_out_keyed(
+            sv.server_id(),
+            message_ack,
+            reliable_ack,
+            &server_cmd,
+            &ops,
+            &huff,
+        )
+        .unwrap()
+}
+
+/// A message whose reliableAcknowledge is i32::MIN, or a `clc_move` whose
+/// messageAcknowledge is, is dropped whole: the server takes neither ack
+/// nor a delta base from it and its next frames go out as before.
+#[test]
+fn a_cod2_message_with_an_acknowledge_near_i32_min_is_ignored() {
+    let now = Instant::now();
+    let mut sv = Cod2Server::new(cfg("mp_toujane"), 7, now);
+    sv.load(None).unwrap();
+    let mut cl = connect(&mut sv, now);
+    let seen = run(&mut sv, &mut cl, None, 2);
+    assert!(seen.deltas > 0, "{seen:?}");
+    let good_ack = cl.netchan.incoming_sequence as i32;
+    let rel_ack = cl.parser.server_command_sequence;
+    let mut later = Instant::now() + Duration::from_secs(5);
+    for (message_ack, reliable_ack) in [(good_ack, i32::MIN), (i32::MIN, rel_ack)] {
+        let state = |sv: &Cod2Server| {
+            let c = sv.core.clients[0].as_ref().unwrap();
+            (
+                c.link.netchan.incoming_sequence,
+                c.link.reliable_ack,
+                c.delta_message,
+            )
+        };
+        let before = state(&sv);
+        let pkt = move_packet(&mut cl, &sv, message_ack, reliable_ack);
+        sv.handle_packet(addr(), &pkt, later);
+        assert_eq!(state(&sv), before, "acks ({message_ack}, {reliable_ack})");
+        later += Duration::from_millis(FRAME_MS as u64);
+        sv.tick_frames(later, 1);
+        assert!(!sv.take_outgoing().is_empty());
+    }
+    // The same move under good acks is taken.
+    let pkt = move_packet(&mut cl, &sv, good_ack, rel_ack);
+    sv.handle_packet(addr(), &pkt, later);
+    assert_eq!(sv.core.clients[0].as_ref().unwrap().delta_message, good_ack);
+}
+
+/// `SV_ClientThink` (0x8090dac) runs `ClientThink` only for an active
+/// client: a move from a client sent back to connected (a map change's
+/// state) is stored and not thought (cod2-protocol.md 14.1; BUG-110).
+#[test]
+fn a_cod2_move_from_a_client_not_active_is_not_thought() {
+    let now = Instant::now();
+    let mut sv = Cod2Server::new(cfg("mp_toujane"), 7, now);
+    sv.load(None).unwrap();
+    let mut cl = connect(&mut sv, now);
+    run(&mut sv, &mut cl, None, 2);
+    let good_ack = cl.netchan.incoming_sequence as i32;
+    let rel_ack = cl.parser.server_command_sequence;
+    let thought = |sv: &Cod2Server| sv.core.clients[0].as_ref().unwrap().extra.ps.command_time;
+    sv.core.clients[0].as_mut().unwrap().state = State::Connected;
+    let before = thought(&sv);
+    let pkt = move_packet(&mut cl, &sv, good_ack, rel_ack);
+    sv.handle_packet(addr(), &pkt, Instant::now() + Duration::from_secs(1));
+    let c = sv.core.clients[0].as_ref().unwrap();
+    assert_eq!(c.delta_message, good_ack, "the move was read");
+    assert_eq!(thought(&sv), before);
+}
+
+/// A message that does not read to its end (a move of no cmds), and one
+/// acknowledging a message the server never sent, are dropped before the
+/// netchan takes them: from another port of the client's address under
+/// its qport they move neither the sequence nor the address, and the
+/// client's own next move is taken.
+#[test]
+fn a_cod2_message_that_does_not_read_leaves_the_client_untouched() {
+    use vcod_common::net::huffman::Huffman;
+    let now = Instant::now();
+    let mut sv = Cod2Server::new(cfg("mp_toujane"), 7, now);
+    sv.load(None).unwrap();
+    let mut cl = connect(&mut sv, now);
+    run(&mut sv, &mut cl, None, 2);
+    let state = |sv: &Cod2Server| {
+        let c = sv.core.clients[0].as_ref().unwrap();
+        let l = &c.link;
+        (l.netchan.incoming_sequence, l.reliable_ack, l.addr)
+    };
+    let before = state(&sv);
+    let good_ack = cl.netchan.incoming_sequence as i32;
+    let rel_ack = cl.parser.server_command_sequence;
+    let forger = SocketAddr::from(([127, 0, 0, 1], 40000));
+
+    let huff = Huffman::new();
+    let mut w = MsgWriter::new(&huff);
+    w.write_bits(Clc::Move as i32, CLC_BITS);
+    w.write_byte(0);
+    let ops = w.into_ops();
+    let server_cmd = cl.parser.server_command(rel_ack).to_vec();
+    let seq = cl.netchan.outgoing_sequence;
+    cl.netchan.outgoing_sequence = 1_000_000;
+    let pkt = cl
+        .netchan
+        .build_out_keyed(sv.server_id(), good_ack, rel_ack, &server_cmd, &ops, &huff)
+        .unwrap();
+    cl.netchan.outgoing_sequence = seq;
+    sv.handle_packet(forger, &pkt, now);
+    assert_eq!(state(&sv), before, "a move of no cmds");
+
+    let never = sv.core.clients[0]
+        .as_ref()
+        .unwrap()
+        .link
+        .netchan
+        .outgoing_sequence as i32;
+    let pkt = move_packet(&mut cl, &sv, never, rel_ack);
+    sv.handle_packet(forger, &pkt, now);
+    assert_eq!(state(&sv), before, "an acknowledge of message {never}");
+
+    let pkt = move_packet(&mut cl, &sv, good_ack, rel_ack);
+    sv.handle_packet(addr(), &pkt, now);
+    let c = sv.core.clients[0].as_ref().unwrap();
+    assert_eq!((c.delta_message, c.link.addr), (good_ack, addr()));
+}
+
+/// Fifty `donedl`s in one message build one gamestate, not fifty: another
+/// waits until a message went out after it.
+#[test]
+fn a_cod2_donedl_flood_sends_one_gamestate() {
+    let now = Instant::now();
+    let mut sv = Cod2Server::new(cfg("mp_toujane"), 7, now);
+    sv.load(None).unwrap();
+    let mut cl = connect(&mut sv, now);
+    run(&mut sv, &mut cl, None, 2);
+    let sent = |sv: &Cod2Server| {
+        let c = sv.core.clients[0].as_ref().unwrap();
+        c.link.netchan.outgoing_sequence
+    };
+    let before = sent(&sv);
+    for _ in 0..50 {
+        cl.add_reliable("donedl");
+    }
+    sv.handle_packet(addr(), &cl.build_packet(&[]).unwrap(), now);
+    assert_eq!(sent(&sv), before + 1);
+    let c = sv.core.clients[0].as_ref().unwrap();
+    assert_eq!(c.gamestate_message, before as i32);
 }
 
 /// `heartbeat COD-2` to cod.pm's CoD2 port at `dedicated 2` only, every
@@ -357,9 +545,15 @@ fn cod2_console_replies_read_as_retail() {
         ),
         ("banana", ""),
         ("say \"hi all\"", ""),
+        // Read off 1.3's dvar set, not run live (cod2-protocol.md 17.5).
+        ("set fs_homepath /", "fs_homepath is write protected.\n"),
+        ("set FS_BASEPATH /", "FS_BASEPATH is write protected.\n"),
+        ("seta fs_game ../x", "fs_game is write protected.\n"),
     ] {
         assert_eq!(exec(&mut sv, line), format!("print\n{reply}"), "{line}");
     }
+    assert_eq!(sv.cvar("fs_homepath"), "");
+    assert_eq!(sv.cvar("fs_game"), "");
     connect(&mut sv, now);
     let status = exec(&mut sv, "status");
     let row = status.lines().nth(4).unwrap_or_default();
@@ -471,7 +665,7 @@ fn two_cod2_players_join_spawn_and_see_each_other_on_mp_toujane() {
         }
         for p in players.iter_mut() {
             let pkt = if p.cl.parser.gamestate.is_some() {
-                let base = p.cl.parser.snapshot().map_or(0, |s| s.server_time);
+                let base = p.cl.parser.snapshot().map_or(0, |s| s.server_time.raw());
                 let mut cmd: UserCmd2 = p.cl.idle_cmd(base + FRAME_MS);
                 // Ten seconds to join, then run, turning slowly.
                 if frame > 200 {
@@ -859,7 +1053,7 @@ fn a_cod2_test_client_joins_and_thinks_on_random_cmds() {
     };
     assert_eq!(slot, "0");
     let c = sv.core.clients[0].as_ref().expect("an engine client");
-    assert!(c.test && c.bot && c.state == State::Active);
+    assert!(c.extra.test && c.bot && c.state == State::Active);
     // Nothing is queued for it, or its unacked ring would overflow.
     assert_eq!(c.link.netchan.reliable_sequence, 0);
     let origin = |sv: &Cod2Server| {
@@ -904,12 +1098,12 @@ fn a_cod2_frame_runs_in_retails_order() {
     let now = Instant::now();
     let mut sv = Cod2Server::new(cfg("mp_toujane"), 7, now);
     sv.load(Some(Rc::new(fs))).unwrap();
-    let path = std::env::temp_dir().join(format!("vcod-cod2-order-{}.trace", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("order.trace");
     crate::tick_trace::install(&path).unwrap();
     sv.tick_frames(now, 2);
     crate::tick_trace::finish().unwrap();
     let trace = std::fs::read_to_string(&path).unwrap();
-    let _ = std::fs::remove_file(&path);
     let steps: Vec<&str> = trace
         .lines()
         .filter_map(|l| {
@@ -954,8 +1148,8 @@ fn a_cod2_server_writes_games_mp_log() {
     let Some(fs) = vcod_common::testing::cod2_fs() else {
         return;
     };
-    let home = std::env::temp_dir().join(format!("vcod-cod2-log-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&home);
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().to_path_buf();
     let now = Instant::now();
     let mut sv = Cod2Server::new(cfg("mp_toujane"), 7, now);
     sv.set_cvar("fs_homepath", &home.display().to_string());
@@ -979,7 +1173,6 @@ fn a_cod2_server_writes_games_mp_log() {
         want.extend([sep.as_str(), "InitGame:", "ShutdownGame:", &sep]);
     }
     assert_eq!(lines, want, "{text}");
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// A tag `attach` names takes its configstring in the frame
@@ -1022,7 +1215,7 @@ fn a_cod2_attachments_tag_reaches_the_client_before_its_snapshot() {
     let mut carried = 0;
     for _ in 0..6 * 20 {
         let pkt = if cl.parser.gamestate.is_some() {
-            let base = cl.parser.snapshot().map_or(0, |s| s.server_time);
+            let base = cl.parser.snapshot().map_or(0, |s| s.server_time.raw());
             cl.build_packet(&[cl.idle_cmd(base + FRAME_MS)]).unwrap()
         } else {
             cl.build_packet(&[]).unwrap()
@@ -1070,4 +1263,79 @@ fn a_cod2_attachments_tag_reaches_the_client_before_its_snapshot() {
     assert!(carried > 20, "{carried} snapshots carried the flag");
     let aborts = sv.game.level.as_ref().unwrap().rt.aborts();
     assert!(aborts.is_empty(), "{}", aborts.join("\n"));
+}
+
+/// A `stopLoopSound` keeps a `script_origin` on the wire 300 ms of frame
+/// time (cod2-protocol.md 15.7), however long the server took to start
+/// (BUG-021: the stamp expired against the wall clock).
+#[test]
+fn a_cod2_broadcast_stamp_expires_on_the_frame_clock() {
+    let Some(fs) = vcod_common::testing::cod2_fs() else {
+        return;
+    };
+    let mut cfg = cfg("mp_toujane");
+    cfg.gametype_script = Some((
+        "maps/mp/gametypes/dm".into(),
+        "main() { maps\\mp\\gametypes\\_callbacksetup::SetupCallbacks(); \
+         level.callbackStartGameType = ::start; }\n\
+         start() { level.o = spawn(\"script_origin\", (0, 0, 0)); \
+         level.onum = level.o getEntityNumber(); }\n"
+            .into(),
+    ));
+    let now = Instant::now();
+    let mut sv = Cod2Server::new(cfg, 7, now);
+    sv.load(Some(Rc::new(fs))).unwrap();
+    sv.tick_frames(now, 2);
+    // A slow start: the wall clock is a minute ahead of the frame clock.
+    sv.game.start = now - Duration::from_secs(60);
+    let level = sv.game.level.as_mut().unwrap();
+    let n: u32 = level.rt.level_field_str("onum").parse().unwrap();
+    let id = level.rt.host.ents.handle(n).unwrap();
+    let stamp = level.rt.host.level_time_ms + 300;
+    level.rt.host.ents.get_mut(id).unwrap().broadcast_time = stamp;
+    for _ in 0..6 {
+        assert!(
+            sv.world_entities().contains_key(&n),
+            "at {}",
+            sv.core.sv_time_ms
+        );
+        sv.tick_frames(now, 1);
+    }
+    assert_eq!(sv.core.sv_time_ms, stamp);
+    assert!(sv.world_entities().contains_key(&n));
+    sv.tick_frames(now, 1);
+    assert!(!sv.world_entities().contains_key(&n));
+}
+
+/// `addTestClient` searches `sv_maxclients` slots, not the level's 64: with
+/// two slots the third call is undefined (BUG-041: slot 2 panicked the
+/// engine's install).
+#[test]
+fn a_cod2_test_client_past_sv_maxclients_is_undefined() {
+    let Some(fs) = vcod_common::testing::cod2_fs() else {
+        return;
+    };
+    let mut cfg = cfg("mp_toujane");
+    cfg.max_clients = 2;
+    cfg.gametype_script = Some((
+        "maps/mp/gametypes/dm".into(),
+        "main() { maps\\mp\\gametypes\\_callbacksetup::SetupCallbacks(); \
+         level.callbackStartGameType = ::start; \
+         level.callbackPlayerConnect = ::nop; \
+         level.callbackPlayerDisconnect = ::nop; }\n\
+         start() { level thread add(); }\n\
+         add() { wait 4; a = addTestClient(); b = addTestClient(); \
+         c = addTestClient(); level.third = isDefined(c); \
+         level.second = isDefined(b); }\n\
+         nop() {}\n"
+            .into(),
+    ));
+    let now = Instant::now();
+    let mut sv = Cod2Server::new(cfg, 7, now);
+    sv.load(Some(Rc::new(fs))).unwrap();
+    sv.tick_frames(now, 100);
+    let level = sv.game.level.as_mut().unwrap();
+    assert_eq!(level.rt.level_field_str("second"), "1");
+    assert_eq!(level.rt.level_field_str("third"), "0");
+    assert!(sv.core.clients.iter().all(Option::is_some));
 }

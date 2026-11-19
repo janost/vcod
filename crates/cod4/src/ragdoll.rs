@@ -19,6 +19,13 @@ use vcod_common::skeleton::Skeleton;
 
 /// `ragdollDefs[2]`.
 pub const RAGDOLL_DEFS: usize = 2;
+/// vcod's caps on a def's bones, joints, self pairs and base lerp bones,
+/// above the stock def's 12, 11, 33 and 9: building a body walks every
+/// pair of bones.
+const MAX_BONES: usize = 32;
+const MAX_JOINTS: usize = 32;
+const MAX_SELF_PAIRS: usize = 64;
+const MAX_BASE_LERP: usize = 32;
 /// The def a corpse binds (`Ragdoll_CreateRagdollForDObj` binds 1 whatever
 /// it is asked).
 pub const MP_DEF: usize = 1;
@@ -76,12 +83,12 @@ pub struct JointDef {
     pub limits: [Option<Limit>; 3],
 }
 
-/// `ragdoll_baselerp_bone <def> <bone> <msec> [<ragdoll bone>]`.
+/// `ragdoll_baselerp_bone <def> <bone> <msec> [<ragdoll bone>]`; nothing
+/// reads the optional ragdoll bone, so it is not kept.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BaseLerp {
     pub bone: String,
     pub msec: i32,
-    pub body: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -131,9 +138,17 @@ fn apply(defs: &mut [RagdollDef; RAGDOLL_DEFS], cmd: &str, a: &[&str]) -> Result
         .filter(|&d| d < RAGDOLL_DEFS)
         .ok_or("no such def")?;
     let def = &mut defs[d];
+    let full = |what: &str, n: usize, max: usize| {
+        if n >= max {
+            Err(format!("more than {max} {what}"))
+        } else {
+            Ok(())
+        }
+    };
     match cmd.as_str() {
         "ragdoll_clear" => *def = RagdollDef::default(),
         "ragdoll_bone" => {
+            full("bones", def.bones.len(), MAX_BONES)?;
             let parent = int(7)?;
             let parent = match usize::try_from(parent) {
                 Ok(p) if p < def.bones.len() => Some(p),
@@ -155,6 +170,7 @@ fn apply(defs: &mut [RagdollDef; RAGDOLL_DEFS], cmd: &str, a: &[&str]) -> Result
             });
         }
         "ragdoll_selfpair" => {
+            full("self pairs", def.self_pairs.len(), MAX_SELF_PAIRS)?;
             let (x, y) = (int(1)?, int(2)?);
             let ok = |v: i32| usize::try_from(v).ok().filter(|&v| v < def.bones.len());
             match (ok(x), ok(y)) {
@@ -163,6 +179,7 @@ fn apply(defs: &mut [RagdollDef; RAGDOLL_DEFS], cmd: &str, a: &[&str]) -> Result
             }
         }
         "ragdoll_joint" => {
+            full("joints", def.joints.len(), MAX_JOINTS)?;
             let bone = usize::try_from(int(1)?)
                 .ok()
                 .filter(|&b| b < def.bones.len() && def.bones[b].parent.is_some())
@@ -199,11 +216,13 @@ fn apply(defs: &mut [RagdollDef; RAGDOLL_DEFS], cmd: &str, a: &[&str]) -> Result
                 max: float(5)?,
             });
         }
-        "ragdoll_baselerp_bone" => def.base_lerp.push(BaseLerp {
-            bone: arg(1)?.to_string(),
-            msec: int(2)?,
-            body: a.get(3).and_then(|s| s.parse().ok()),
-        }),
+        "ragdoll_baselerp_bone" => {
+            full("base lerp bones", def.base_lerp.len(), MAX_BASE_LERP)?;
+            def.base_lerp.push(BaseLerp {
+                bone: arg(1)?.to_string(),
+                msec: int(2)?,
+            })
+        }
         // `ragdoll_pin_bone` is a single-player def's; MP's cfg has none.
         _ => {}
     }
@@ -446,7 +465,8 @@ pub struct Ragdoll {
     msec: f32,
     still_ms: f32,
     /// Each step's end (ms run) and its fastest point's speed as the sleep
-    /// test reads it.
+    /// test reads it. Kept for the tests only.
+    #[cfg(any(test, feature = "testing"))]
     speeds: Vec<(f32, f32)>,
     acc_ms: f32,
     /// The last step's length, ms: a point's `pos - prev` moved over it.
@@ -800,7 +820,8 @@ impl Ragdoll {
                 t.startsolid || t.fraction < 1.0
             })
             .collect();
-        // The anim's last move starts each point, scaled to one step.
+        // The anim's last move starts each point, scaled to one step and
+        // capped at 400 units a second (unverified on 1.7, no address).
         if let Some((before, ms)) = before.filter(|(b, ms)| b.len() == n && *ms > 0.0) {
             let scale = STEP_MS / ms;
             for (bone, i) in point_of.iter().enumerate() {
@@ -826,6 +847,7 @@ impl Ragdoll {
             state: State::Running,
             msec: 0.0,
             still_ms: 0.0,
+            #[cfg(any(test, feature = "testing"))]
             speeds: Vec::new(),
             acc_ms: 0.0,
             last_ms: STEP_MS,
@@ -943,12 +965,15 @@ impl Ragdoll {
             .points
             .iter()
             .all(|p| (p.pos - p.prev).length() / dt < self.dvars.sleep_speed);
-        let fastest = self
-            .points
-            .iter()
-            .map(|p| (p.pos - p.prev).length() / dt)
-            .fold(0.0f32, f32::max);
-        self.speeds.push((self.msec, fastest));
+        #[cfg(any(test, feature = "testing"))]
+        {
+            let fastest = self
+                .points
+                .iter()
+                .map(|p| (p.pos - p.prev).length() / dt)
+                .fold(0.0f32, f32::max);
+            self.speeds.push((self.msec, fastest));
+        }
         if still {
             self.still_ms += ms;
         } else {
@@ -1241,6 +1266,7 @@ impl Ragdoll {
 
     /// Each step it ran: the ms run at its end and its fastest point's speed,
     /// units a second, as the sleep test reads it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn step_speeds(&self) -> &[(f32, f32)] {
         &self.speeds
     }
@@ -1290,8 +1316,29 @@ ragdoll_baselerp_bone 1 j_hiptwist_le 1000 8
         assert_eq!(d.joints[0].kind, JointKind::Swivel);
         assert_eq!(d.joints[0].limits[0].unwrap().max, 50.0);
         assert_eq!(d.joints[1].limits[2].unwrap().min, -120.0);
-        assert_eq!(d.base_lerp[1].body, Some(8));
         assert_eq!(d.base_lerp[0].msec, 2000);
+    }
+
+    #[test]
+    fn a_def_past_its_caps_stops_growing() {
+        let mut cfg = String::from("ragdoll_bone 1 r r 1 1 1 1 -1 0 capsule\n");
+        for i in 0..10_000 {
+            let p0 = if i % 2 == 0 { "a" } else { "b" };
+            cfg += &format!("ragdoll_bone 1 {p0} c 1 1 1 1 0 {} capsule\n", i % 2);
+            cfg += "ragdoll_selfpair 1 0 1\nragdoll_joint 1 1 hinge\n";
+            cfg += "ragdoll_baselerp_bone 1 j_head 1000\n";
+        }
+        let d = &parse_cfg(&cfg)[1];
+        let counts = (
+            d.bones.len(),
+            d.joints.len(),
+            d.self_pairs.len(),
+            d.base_lerp.len(),
+        );
+        assert_eq!(
+            counts,
+            (MAX_BONES, MAX_JOINTS, MAX_SELF_PAIRS, MAX_BASE_LERP)
+        );
     }
 
     /// The stock `ragdoll.cfg`: MP's def 1, and def 0 beside it.

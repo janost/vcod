@@ -300,7 +300,7 @@ fn a_helicopter_flies_its_path_and_fires() {
         .flat_map(|f| {
             of_type(f, ET_HELICOPTER)
                 .into_iter()
-                .map(move |e| (f.server_time, e))
+                .map(move |e| (f.server_time.raw(), e))
         })
         .collect();
     assert!(!helis.is_empty(), "no helicopter reached the target");
@@ -321,7 +321,7 @@ fn a_helicopter_flies_its_path_and_fires() {
     // Its loop done (`scr_heli_loopmax` 1), `heli_leave` flies it off and
     // deletes it: the last snapshots carry none.
     let last = helis.last().unwrap().0;
-    let end = seen.snaps.last().unwrap().server_time;
+    let end = seen.snaps.last().unwrap().server_time.raw();
     assert!(last + 10_000 < end, "still there at {last} of {end}");
 }
 
@@ -371,7 +371,7 @@ fn a_helicopter_shot_down_crashes() {
             let eye = mid - Vec3::Z * 400.0 + right * 300.0;
             let a = crate::game::builtins::math::vectoangles((mid - eye).to_array());
             level.set_view_pos(0, eye.to_array(), [a[0], a[1], 0.0]);
-            level.rt.host.client_vitals[0].health = 100;
+            level.rt.host.clients[0].vitals.health = 100;
             let Some(ps) = level.pm_state(0) else {
                 return;
             };
@@ -405,7 +405,7 @@ fn a_helicopter_shot_down_crashes() {
         .flat_map(|f| {
             of_type(f, ET_HELICOPTER)
                 .into_iter()
-                .map(move |e| (f.server_time, word(&e, "un1.helicopterStage")))
+                .map(move |e| (f.server_time.raw(), word(&e, "un1.helicopterStage")))
         })
         .collect();
     let mut order: Vec<u32> = Vec::new();
@@ -418,7 +418,7 @@ fn a_helicopter_shot_down_crashes() {
     assert!(order.contains(&1), "{order:?}");
     assert_eq!(order.last(), Some(&0), "{order:?}");
     let last = stages.last().unwrap().0;
-    let end = seen.snaps.last().unwrap().server_time;
+    let end = seen.snaps.last().unwrap().server_time.raw();
     assert!(last + 10_000 < end, "still there at {last} of {end}");
 }
 
@@ -555,7 +555,7 @@ fn rpg_at_heli(cvars: &[(&str, &str)], off: f32) -> Option<RpgFlight> {
         }
         // Held in the air where it fired from.
         level.set_view_pos(0, held.0.to_array(), held.1);
-        level.rt.host.client_vitals[0].health = 100;
+        level.rt.host.clients[0].vitals.health = 100;
         let Some(ps) = level.pm_state(0) else {
             return;
         };
@@ -649,13 +649,13 @@ fn the_helicopter_pulls_a_wide_rpg_in() {
     assert!(near + 20.0 < far, "{near} {far}");
 }
 
+/// A flight's frames: the rocket's origin and velocity.
+type Flight = Vec<(Vec3, Vec3)>;
+
 /// One `hind_FFAR_mp` from the helicopter's `fire_missile("ffar", 1,
 /// target)` once ground 4000 ahead of it is in its sight, the allied
 /// target held there (`guided` false: no target given). Each frame's
 /// rocket (origin, velocity) and the target's eye.
-/// A flight's frames: the rocket's origin and velocity.
-type Flight = Vec<(Vec3, Vec3)>;
-
 fn ffar(guided: bool) -> Option<(Flight, Vec3, Vec<String>)> {
     let mut rows = Vec::new();
     let mut spot: Option<Vec3> = None;
@@ -664,7 +664,7 @@ fn ffar(guided: bool) -> Option<(Flight, Vec3, Vec<String>)> {
         let Some(h) = level.rt.host.cod4().helis.first().cloned() else {
             return;
         };
-        level.rt.host.client_vitals[0].health = 100;
+        level.rt.host.clients[0].vitals.health = 100;
         if let Some(eye) = spot {
             level.set_view_pos(0, eye.to_array(), [0.0, 0.0, 0.0]);
             let c4 = level.rt.host.cod4();

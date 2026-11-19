@@ -1,6 +1,6 @@
 # CoD 1 BSP format (IBSP version 59)
 
-Byte layouts of the map lumps vcod reads, read out of the retail `maps/mp/mp_pavlov.bsp` and cross-checked against the CoD-BSP-Decompiler project (CoDEmanX/Daevius). The parser is `crates/common/src/bsp.rs`; `crates/common/src/collision.rs` builds the clip world from the collision lumps. Where this document and the parser disagree, the parser is right. Its tests pin the census numbers (`parses_mp_pavlov`, `parses_collision_lumps_in_mp_pavlov`). Every claim is VERIFIED unless it carries its own label. All integers are little-endian.
+Byte layouts of the map lumps vcod reads, read out of the retail `maps/mp/mp_pavlov.bsp` and cross-checked against the CoD-BSP-Decompiler project (CoDEmanX/Daevius). The parser is `crates/common/src/bsp.rs`; `crates/common/src/collision/build.rs` builds the clip world from the collision lumps. Where this document and the parser disagree, the parser is right. Its tests pin the census numbers (`parses_mp_pavlov`, `parses_collision_lumps_in_mp_pavlov`). Every claim is VERIFIED unless it carries its own label. All integers are little-endian.
 
 ## Header and lump directory
 
@@ -102,7 +102,7 @@ u32 plane_or_dist       // sides 0..6 of a brush: an f32 bound, bit-cast; sides 
 u32 material            // index into lump 0: the side's own material
 ```
 
-The first six sides of every brush are axial and carry an f32 bound instead of a plane index: 0 = xmin, 1 = xmax, 2 = ymin, 3 = ymax, 4 = zmin, 5 = zmax. As clip planes (`n . p <= d` inside), side `k` with bound `b` on axis `a = k / 2` gives `normal = -axis_a, dist = -b` when `k` is even and `normal = +axis_a, dist = +b` when odd. Sides 6 and up index lump 2. On mp_pavlov every index is in range and every axial pair has `min <= max`. The parser keeps the raw u32; `bsp.rs` and `collision.rs` decode it.
+The first six sides of every brush are axial and carry an f32 bound instead of a plane index: 0 = xmin, 1 = xmax, 2 = ymin, 3 = ymax, 4 = zmin, 5 = zmax. As clip planes (`n . p <= d` inside), side `k` with bound `b` on axis `a = k / 2` gives `normal = -axis_a, dist = -b` when `k` is even and `normal = +axis_a, dist = +b` when odd. Sides 6 and up index lump 2. On mp_pavlov every index is in range and every axial pair has `min <= max`. The parser keeps the raw u32; `bsp.rs` and `collision/build.rs` decode it.
 
 A side's `material` is its own and differs from the brush's (lump 4) on structural brushes. mp_cassino brush 7930 is `textures/common/caulk` (surface flags 0x400a0, no sound surface); its +y side is `textures/italy/walls/plaster@wall_misc-06` (0x1000000, plaster) and its -x and -y sides concrete (VERIFIED, lumps 0, 3 and 4 of UO's `mp_cassino.bsp`).
 
@@ -216,6 +216,8 @@ i32 child_count            // children follow in preorder
 
 Nodes carry no bounds; the engine computes them from the surfaces at load (INFERRED from the record, as in CoD2). A node with `child_count == 0` is a leaf. Leaves cover each cell-tree soup exactly once. The root node of a cell spans the cell's whole soup range.
 
+A parent's run holds its children's, so the nodes' runs sum to more than the soups: at most 5.38 times them, on `stalingrad.bsp` (VERIFIED, lump 16 of the 173 IBSP maps in the 1.1, 1.5, UO and third-party paks, 2026-11-18). `bsp::parse` refuses a map whose node or cull group runs sum past 64 times the soups, vcod's bound.
+
 ### Lump 9, cull groups (32 bytes), lump 10, indices
 
 A cull group is a bounding box over a contiguous soup range at the front of lump 6, shared between cells through lump 10 (mp_pavlov: 122 groups, 125 references). Every soup of a group lies inside the group's bounds (checked with a 1-unit margin on every map). Ranges are monotone and disjoint; on mp_powcamp and mp_rocket they are not sorted by cell.
@@ -243,6 +245,8 @@ leaf: i32 cluster; i32 area; i32 first_leaf_surface, leaf_surface_count;
 
 VERIFIED: every plane, child, brush and lump-24 reference is in range; `cluster` runs to `cluster_count - 1` of lump 28 (665 on mp_pavlov), `cell` to the cell count minus one, -1 for solid leafs. The tree reaches leafs 0..1753 on mp_pavlov; the 34 leafs after them belong to the 34 submodels, as in Q3. `area` is -1 exactly where `cluster` is -1, and -1 or 0 on every stock 1.1 MP map; UO's mp_berlin, mp_ponyri, mp_rhinevalley and mp_uo_stanjel and 1.5's mp_bocage hold a few leafs in areas 1 to 7, as do several 1.1 single-player maps (VERIFIED, lump 21 of every stock map). The snapshot cull reads it (`docs/protocol-1.1.md`, "Which entities a client is sent").
 
+Each leaf's brush run and partition run is its own: on all 173 IBSP maps in the 1.1, 1.5, UO and third-party paks the runs never overlap and sum to exactly the lengths of lumps 22 and 23 (VERIFIED, 2026-11-18). A brush in two leafs is listed twice. `bsp::parse` refuses runs that sum past 4 times their lump, vcod's bound: `LeafWalk` copies each leaf's run.
+
 ### Lump 28, PVS
 
 `i32 cluster_count; i32 row_bytes;` then `cluster_count` rows of `row_bytes` bytes; bit `c` of row `r` is set when cluster `c` is visible from `r` (Q3 `visData`). mp_pavlov: 666 clusters, 88 bytes per row, lump length exactly `8 + 666 * 88`. mp_neuville ships no PVS (lump length 0), so a reader needs a fallback. The client renderer never reads it (below); the server's snapshot visibility does.
@@ -262,6 +266,7 @@ Bevel planes, `0x4e19b0`: with `r_portalbevels > 0`, the clipped portal polygon'
 - Static models (`misc_model`) hang off a per-cell linked list walked in `0x4e4440` and tested by bounds (`0x4e42b0`, `r_showCullSModels`). Entities (xmodels) are box-walked through the BSP each frame (`0x4e39d0`) and linked into a per-cell reference list (`0x4e3940`, "Max xmodel refs (%i) exceeded", 4096), re-tested when the cell is visited (`0x4e3560`); `r_cullXModels` and a size threshold gate that path. Which lump feeds the static-model list was not located; INFERRED to be the entity lump at load.
 - The PVS is not consulted: `r_lockpvs` only freezes the frustum setup in `0x4e4610`, and no code reads lump 28's bit rows.
 - Runtime portals hold their vertices as plain `f32 xyz` arrays, matching lump 11's 12-byte records.
+- vcod's walk (`common/src/vis.rs`, `WorldVis::visible`) marks more than retail's on CoD1 maps; CoD2 and CoD4 (`walk_queued`) do not run these passes. After the portal walk, every cell whose top sits under the eye is tested against the camera frustum alone, and then, to a fixpoint, every unvisited, unsealed cell sharing a portal with a visited cell whose box meets the camera frustum is marked under the camera frustum. They were added for sightlines over low geometry, mp_ship's deck over the ocean and a high flight over mp_brecourt (`mp_ship_ocean_visible_from_the_deck`, `high_flight_over_mp_brecourt_does_not_pop`, `a_cell_below_the_eye_is_seen_from_above`). Their cost in soups marked, summed over 16 yaws at 60 units over every spawn of six 1.1 maps (2026-11-19, 15,000 views), the walk alone, then with the below-eye pass, then with the flood: mp_carentan 687k, 702k, 832k (+21%); mp_harbor 362k, 380k, 885k (+145%); mp_brecourt 317k, 344k, 398k (+26%); mp_depot 1020k, 1030k, 1481k (+45%); mp_ship 475k, 489k, 656k (+38%); mp_pavlov 1444k, 1473k, 1687k (+17%). The flood is most of it. VERIFIED (the sweep; vcod's numbers, not retail's).
 
 ## Content flags
 
@@ -277,7 +282,7 @@ From the materials lump, per brush via `brush.material`:
 | `0x10000` | playerclip |
 | `0x20000` | monsterclip |
 
-The masks are retail's; `collision.rs` names them.
+The masks are retail's; `collision/masks.rs` names them.
 
 | Trace | Mask | Source | vcod |
 |---|---|---|---|
@@ -289,7 +294,7 @@ The masks are retail's; `collision.rs` names them.
 
 - Of the bits above 0x20000 only 0x800000 and 0x2000000 are in a mask, and no stock material carries either.
 - 0x2000 is in the shot and blast masks and 0x80 in the blast's. Both ride the kerb and floor brushes' 0x2080 word, so a bullet stops on a kerb a player walks over.
-- `collision.rs` (`CLIP_BRUSH`) enters every brush whose word meets one of those masks or the item masks (0x81, 0x491), so the kerbs are in the clip and only the player mask passes them. UO's LMG mount brushes (0x404000) and vehicle clip brushes (0x200) enter too.
+- `collision/masks.rs` (`CLIP_BRUSH`) enters every brush whose word meets one of those masks or the item masks (0x81, 0x491), so the kerbs are in the clip and only the player mask passes them. UO's LMG mount brushes (0x404000) and vehicle clip brushes (0x200) enter too.
 - VERIFIED, `flag_census` over the stock paks: 0x2080 is the only word that meets a mask without SOLID, PLAYERCLIP or GLASS, and no 0x400-only brush exists.
 - The shot mask's 0x20 is water. vcod keeps water as volumes, not clip brushes, so a bullet does not stop at mp_harbor's water as retail's does. Missiles find it through `CollisionWorld::water_hit` and `water_trace`.
 
@@ -374,7 +379,7 @@ VERIFIED, the epsilons in `.rodata`, Q3's values stored as doubles: the plane co
 
 CoD's differences from Q3, INFERRED from the code at each address:
 
-- **The subdivision tolerance is the record's.** `CM_SubdivideGridColumns` loads the +8 word with `fild` (0x804c11d) and splits a column where `0.25 * |p0 + p2 - 2 p1|` (0.25 at 0x80ccba0) is above it; Q3 compares against the constant 16. VERIFIED, vcod census of the 15636 patch records of the 45 stock maps (2026-10-07): the word runs 1 to 61, 4 on 8181 records and 8 on 5264.
+- **The subdivision tolerance is the record's.** `CM_SubdivideGridColumns` loads the +8 word with `fild` (0x804c11d) and splits a column where `0.25 * |p0 + p2 - 2 p1|` (0.25 at 0x80ccba0) is above it; Q3 compares against the constant 16. VERIFIED, vcod census of the 15636 patch records of the 45 stock maps (2026-10-07): the word runs 1 to 61, 4 on 8181 records and 8 on 5264. vcod's `PatchCollide::generate` refuses a patch whose subdivision would pass the 129-column grid or whose build overflows the 0x1000-plane or 0x400-facet pool, as a failed map load; whether 1.1's routine keeps Q3's grid-size check is not read, and no stock tolerance comes near it.
 - **A column that needs no split keeps its approximating point.** CoD steps two columns (`add [ebp-0x2c], 2` at 0x804c17b) where Q3 removes the middle column and steps one, so a flat 3x3 patch stays a 3x3 grid of four facets where Q3 collapses it to one. `CM_RemoveDegenerateColumns` removes only a column equal to its neighbour.
 - **An edge bevel needs a point behind it.** `CM_AddFacetBevels` keeps an edge-by-axis bevel when no winding point is more than 0.1 in front of it and at least one is more than 0.1 behind it (0x804d490-0x804d4f9). Q3 skips a bevel equal to the surface plane instead, and CoD has no such test for the edge bevels; its axial bevels keep it (0x804d0dc).
 - **`CM_ValidateFacet` rejects a facet wider than 131072** (0x80cccc4) rather than 65535.
@@ -461,9 +466,11 @@ VERIFIED, `cod_lnxded` 1.1d. `CM_TraceThroughTree` (0x8055fe0) is Q3's:
 - it sends a leaf to 0x8055608;
 - otherwise it splits the segment at the node's plane, offset by the box's extent on an axial plane, 0 for a point and 2048 (0x80cd434) for anything else on a slanted one. The near side goes first, each side pushed 0.125 (0x80cd438) past the plane.
 
-0x8055608 clips the brushes the leaf lists (lump 22), each once by its check count, stopping when the fraction reaches 0. Then, unless the cvar at 0x831b180 is set, it clips the lump-24 partitions the leaf lists (lump 23) the same way. 1.5b's leaf function (0x8059a41) has the same shape.
+0x8055608 clips the brushes the leaf lists (lump 22), each once by its check count, stopping when the fraction reaches 0. Then, unless the cvar at 0x831b180 is set, it clips the lump-24 partitions the leaf lists (lump 23) the same way. That cvar is `cm_noCurves`, default `0` (VERIFIED, the registration storing 0x831b180 pushes the strings at 0x80cca5d and 0x80cca5b). 1.5b's leaf function (0x8059a41) has the same shape.
 
-VERIFIED, UO's `coduo_lnxded`: its leaf function (0x8059875) is the same loop, `CM_TraceThroughBrush` (0x8058f0a) per brush and a break once the fraction (`tw+0xc4`) is 0. Its box trace (0x805a9d5) sends a moving sweep on a submodel there with the model's own leaf. So a submodel's or a vehicle collmap's brushes clip in lump order and a contact at fraction 0 ends them: a later brush holding the whole sweep never reads it all solid (`CollisionWorld::clip_model`, coduo-vehicles.md 11.7).
+VERIFIED, UO's `coduo_lnxded`: its leaf function (0x8059875) is the same loop, `CM_TraceThroughBrush` (0x8058f0a) per brush and a break once the fraction (`tw+0xc4`) is 0.
+
+VERIFIED, `coduo_lnxded` 1.51b against 1.5b, instruction for instruction with absolute addresses and branch targets masked (2026-11-17): `CM_TraceThroughTree` 0x805a58f matches 1.5b's 0x805a75b (364 instructions), the leaf function 0x8059875 matches 0x8059a41 (114) and the brush clip 0x8058f0a matches 0x80590d6 (779). UO's tree walk returns when the trace's fraction is at or below the entry fraction (0x805a5a6), hands a leaf (a negative node, 16-byte records at 0x84598ec) to 0x8059875 (0x805a5cd) and recurses at 0x805a71c and 0x805a781; the box trace (0x805a9d5) calls it at 0x805b0d8. The leaf function's brush loop calls 0x8058f0a (0x8059904); unless `cm_noCurves` (pointer at 0x8459860, registered at 0x804b48f with the strings at 0x80dc0d7 and 0x80dc0d5) is set, its partition loop calls 0x8058e30 (0x80599bf), each loop leaving at fraction 0. So UO clips only what a walked leaf lists, as 1.1d and 1.5b do, and retail UO's unlisted terrain (`terrainleaf-uo.txt`) falls through for that reason (INFERRED). Its box trace (0x805a9d5) sends a moving sweep on a submodel there with the model's own leaf. So a submodel's or a vehicle collmap's brushes clip in lump order and a contact at fraction 0 ends them: a later brush holding the whole sweep never reads it all solid (`CollisionWorld::clip_model`, coduo-vehicles.md 11.7).
 
 INFERRED: a partition no leaf lists is never clipped, and a listed one is clipped only when the walk enters a leaf that lists it.
 
@@ -544,7 +551,7 @@ VERIFIED (measured 2026-10-18, `nav_build`, release, user time on a loaded machi
 
 ## Movement constants and their provenance
 
-`crates/common/src/pmove.rs` holds the tunables in one block at its top; `SURFACE_CLIP_EPSILON` is in `collision.rs` (and `patch.rs`, `leafwalk.rs`). Each row names its source: retail 1.1 `game.mp.i386.so` rodata, the wire playerstate, or a Q3 GPL header copied unchanged (`code/game/...` in id's Quake III Arena release, `src/game/...` in RTCW-MP).
+`crates/common/src/pmove.rs` holds the shared tunables in one block at its top, and each file under `pmove/` the ones only its seam reads; `SURFACE_CLIP_EPSILON` is in `collision.rs` (and `patch.rs`, `leafwalk.rs`). Each row names its source: retail 1.1 `game.mp.i386.so` rodata, the wire playerstate, or a Q3 GPL header copied unchanged (`code/game/...` in id's Quake III Arena release, `src/game/...` in RTCW-MP).
 
 | Constant | Value | Origin |
 |---|---|---|
@@ -568,18 +575,18 @@ VERIFIED (measured 2026-10-18, `nav_build`, release, user time on a loaded machi
 | `MIN_WALK_NORMAL` | 0.7 | `bg_local.h` (steeper than about 45.6 degrees is not ground) |
 | `MAX_CLIP_PLANES` | 8 | game.mp 0x34a1c: `PM_SlideMove` clears the velocity once `numplanes > 7`; Q3 has 5, and four bumps from two starting planes never reach 8 |
 | `SURFACE_CLIP_EPSILON` | 0.125 | `qcommon/cm_local.h` |
-| `MAX_FRAME_MS` | 66 | `bg_pmove.c` pmove msec clamp |
+| `MAX_FRAME_MS` | 66 | `bg_pmove.c` pmove msec clamp; retail's chop at 0x344d3 (`../protocol-1.1.md`, "How long a cmd is simulated for") |
 | `HALF_WIDTH` | 15 | CoD bbox `(-15, -15, 0)..(15, 15, height)` |
 | `HEIGHT_STAND / CROUCH / PRONE` | 70 / 50 / 30 | CoD |
-| `VIEW_STAND / CROUCH / PRONE` | 60 / 40 / 11 | CoD viewheights; `standViewHeight = 60` is corroborated in `player-model-anim-system.md` |
+| `VIEW_STAND / CROUCH / PRONE` | 60 / 40 / 11 | CoD viewheights; retail's `bg_viewheight_standing`, `_crouched`, `_prone` defaults in the server cvar mirror (`cod11-server-handshake.md`, CS 150-152); `standViewHeight = 60` is corroborated in `player-model-anim-system.md` |
 | `LEAN_TIME_TO_MS` | 350 | game.mp rodata 0x70c60, `PM_UpdateLean`'s ramp out ("Lean" below). The 2026-09-01 live capture reads `leanf` climbing 0.1429 a snapshot, 50/350 |
 | `LEAN_TIME_FROM_MS` | 280 | game.mp rodata 0x70c5c, the ramp back ("Lean" below). The retail server eases `leanf` back to 0: the 2026-10-09 `probe_freeze` motion run reads -1, 0, 1 across `lean_left`, `center`, `lean_right` |
 
-The full rodata table is `cod11-mantle.md`, "Tunables".
+The full rodata table is `cod11-mantle.md`, "Tunables". A row whose origin is a Q3 or RTCW-MP header, or bare "CoD", with no retail address is not read out of retail: INFERRED, from the source shape and the gates that pass with it.
 
 - `PM_STOPSPEED` is flat, not stance-scaled. A crawl gains `19 * dt * 100` a frame because of the walk's accel floor; without the floor its `19 * dt * 28.5` = 4.33 loses to the friction's `100 * 5.5 * dt` = 4.40.
 - The wading slowdown is in the walk cmd scale, not the mover: `1 - waterlevel / 3 * 0.5` (`cod11-mantle.md`, "The wish speed"), applied by `pmove::wish`.
-- Water and ladder constants sit in `pmove.rs`'s constant blocks with their sources; the retail ladder constants are in `cod11-mantle.md`.
+- Water and ladder constants sit in `pmove/ground.rs`'s and `pmove/ladder.rs`'s constant blocks with their sources; the retail ladder constants are in `cod11-mantle.md`.
 
 ### Lean
 

@@ -14,7 +14,7 @@ use vcod_cod4::sunshadow::{self, PARTITION, SunShadow, View};
 use wgpu::util::DeviceExt;
 
 /// The caster shaders.
-const CAST_WGSL: &str = include_str!("cod4_sunshadow.wgsl");
+pub(crate) const CAST_WGSL: &str = include_str!("cod4_sunshadow.wgsl");
 /// The camera group's bindings of the atlas and its uniform.
 pub(crate) const ATLAS_BINDING: u32 = 18;
 pub(crate) const UNIFORM_BINDING: u32 = 19;
@@ -337,59 +337,119 @@ fn draw_entities(
     pass.set_bind_group(1, e.bones, &[]);
     pass.set_vertex_buffer(1, e.instance_buf.slice(..));
     let mut calls = 0;
-    let mut tested = None;
-    let mut image: Option<*const wgpu::BindGroup> = None;
-    let mut buffers: Option<(*const wgpu::Buffer, *const wgpu::Buffer)> = None;
-    // the draw being joined: indices, base vertex, instance, and its key
-    let mut open: Option<(std::ops::Range<u32>, i32, u32)> = None;
-    let flush = |pass: &mut wgpu::RenderPass<'_>, open: &mut Option<_>, calls: &mut usize| {
-        if let Some((r, base, inst)) = open.take() {
-            pass.draw_indexed(r, base, inst..inst + 1);
-            *calls += 1;
+    let keys = e
+        .draws
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| keep(d))
+        .map(|(i, d)| {
+            (
+                i,
+                CasterKey {
+                    instance: d.instance,
+                    base_vertex: d.base_vertex,
+                    indices: d.indices.clone(),
+                    buffers: (
+                        std::ptr::from_ref(d.vertex_buf),
+                        std::ptr::from_ref(d.index_buf),
+                    ),
+                    image: d.cut.map(std::ptr::from_ref),
+                },
+            )
+        });
+    plan_draws(keys, |op| match op {
+        ShadowOp::Pipeline { cut: c } => pass.set_pipeline(if c { cut } else { solid }),
+        ShadowOp::Image(i) => {
+            if let Some(bg) = e.draws[i].cut {
+                pass.set_bind_group(2, bg, &[]);
+            }
         }
-    };
-    for d in e.draws.iter().filter(|d| keep(d)) {
-        let bufs = (
-            std::ptr::from_ref(d.vertex_buf),
-            std::ptr::from_ref(d.index_buf),
-        );
-        let img = d.cut.map(std::ptr::from_ref);
+        ShadowOp::Buffers(i) => {
+            let d = &e.draws[i];
+            pass.set_vertex_buffer(0, d.vertex_buf.slice(..));
+            pass.set_index_buffer(d.index_buf.slice(..), wgpu::IndexFormat::Uint16);
+        }
+        ShadowOp::Draw(r, base, inst) => {
+            pass.draw_indexed(r, base, inst..inst + 1);
+            calls += 1;
+        }
+    });
+    calls
+}
+
+/// What [`plan_draws`] joins an entity caster's draw on: its instance,
+/// base vertex, index range, buffers and (alpha-tested) colour map.
+#[derive(Clone, Debug)]
+struct CasterKey<B, I> {
+    instance: u32,
+    base_vertex: i32,
+    indices: std::ops::Range<u32>,
+    buffers: B,
+    image: Option<I>,
+}
+
+/// One step of [`draw_entities`]' replay; `Image` and `Buffers` name the
+/// caster whose state to bind.
+#[derive(Clone, Debug, PartialEq)]
+enum ShadowOp {
+    Pipeline { cut: bool },
+    Image(usize),
+    Buffers(usize),
+    Draw(std::ops::Range<u32>, i32, u32),
+}
+
+/// [`draw_entities`]' state changes and joined draws over `keys` (each
+/// caster's index and key, in draw order): state only where it changes,
+/// and a caster on the open draw's instance, base vertex, buffers and
+/// image whose indices follow on extends it.
+fn plan_draws<B: PartialEq + Copy, I: PartialEq + Copy>(
+    keys: impl Iterator<Item = (usize, CasterKey<B, I>)>,
+    mut emit: impl FnMut(ShadowOp),
+) {
+    let mut tested = None;
+    let mut image: Option<I> = None;
+    let mut buffers: Option<B> = None;
+    // the draw being joined: indices, base vertex, instance
+    let mut open: Option<(std::ops::Range<u32>, i32, u32)> = None;
+    for (i, d) in keys {
         if let Some((r, base, inst)) = &mut open
             && *inst == d.instance
             && *base == d.base_vertex
             && r.end == d.indices.start
-            && buffers == Some(bufs)
-            && tested == Some(img.is_some())
-            && (img.is_none() || image == img)
+            && buffers == Some(d.buffers)
+            && tested == Some(d.image.is_some())
+            && (d.image.is_none() || image == d.image)
         {
             r.end = d.indices.end;
             continue;
         }
-        flush(pass, &mut open, &mut calls);
-        if tested != Some(img.is_some()) {
-            pass.set_pipeline(if img.is_some() { cut } else { solid });
-            tested = Some(img.is_some());
+        if let Some((r, base, inst)) = open.take() {
+            emit(ShadowOp::Draw(r, base, inst));
         }
-        if let Some(bg) = d.cut
-            && image != img
-        {
-            pass.set_bind_group(2, bg, &[]);
-            image = img;
+        if tested != Some(d.image.is_some()) {
+            emit(ShadowOp::Pipeline {
+                cut: d.image.is_some(),
+            });
+            tested = Some(d.image.is_some());
         }
-        if buffers != Some(bufs) {
-            pass.set_vertex_buffer(0, d.vertex_buf.slice(..));
-            pass.set_index_buffer(d.index_buf.slice(..), wgpu::IndexFormat::Uint16);
-            buffers = Some(bufs);
+        if d.image.is_some() && image != d.image {
+            emit(ShadowOp::Image(i));
+            image = d.image;
         }
-        open = Some((d.indices.clone(), d.base_vertex, d.instance));
+        if buffers != Some(d.buffers) {
+            emit(ShadowOp::Buffers(i));
+            buffers = Some(d.buffers);
+        }
+        open = Some((d.indices, d.base_vertex, d.instance));
     }
-    flush(pass, &mut open, &mut calls);
-    calls
+    if let Some((r, base, inst)) = open {
+        emit(ShadowOp::Draw(r, base, inst));
+    }
 }
 
 /// Copies a spot tile's cached static depth into the atlas (a fullscreen
 /// triangle under the tile's viewport, writing its depth as it stands).
-const SPOT_BLIT_WGSL: &str = "
+pub(crate) const SPOT_BLIT_WGSL: &str = "
 @group(0) @binding(0) var t_static: texture_depth_2d;
 @vertex fn vs_blit(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
     let q = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
@@ -492,16 +552,18 @@ pub(crate) struct SunShadowPass {
     spot_static: [(wgpu::TextureView, wgpu::BindGroup); crate::cod4_spotshadow::MAX_LIGHTS],
     spot_static_key: [Option<(SpotStatic, Picked)>; crate::cod4_spotshadow::MAX_LIGHTS],
     spot_blit: wgpu::RenderPipeline,
-    /// Static tiles redrawn since the map's start.
+    /// Static tiles redrawn since the pass was built (a process total: no
+    /// map change resets it).
     spot_redraws: u32,
     /// Each sun partition's static casters' depth, redrawn only when the
     /// partition's matrix, viewport, offset, cull planes or casters change
-    /// (the origin is snapped to its texels, so a still or slow view keeps
-    /// them), copied into the atlas every frame before the entities.
+    /// (the origin is snapped to its texels, so a still view keeps them;
+    /// `docs/research/cod4-client-perf.md` 10), copied into the atlas every frame before the entities.
     sun_static: [(wgpu::TextureView, wgpu::BindGroup); 2],
     sun_static_key: [Option<(SunStatic, Picked)>; 2],
     sun_blit: wgpu::RenderPipeline,
-    /// Partition static layers redrawn since the map's start.
+    /// Partition static layers redrawn since the pass was built (a process
+    /// total, like `spot_redraws`).
     sun_redraws: u32,
     /// Each caster static model's LOD this frame ([`Self::pick_smodel_lods`]).
     picks: Vec<Option<u8>>,
@@ -1019,7 +1081,7 @@ impl SunShadowPass {
     /// `fwd`, near plane `z_near`) under a sun toward `to_sun`, draws the
     /// casters over their world's vertex buffer into the atlas and points
     /// the receivers at it. `None` for `casters` turns the receivers off.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn encode(
         &mut self,
         device: &wgpu::Device,
@@ -1207,7 +1269,7 @@ impl SunShadowPass {
     /// [`Self::encode`], whose clear it keeps) and points the receivers at
     /// them; with `settings.on` false or no casters the history empties
     /// and the receivers read none.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn encode_spot(
         &mut self,
         device: &wgpu::Device,
@@ -1502,5 +1564,79 @@ impl Timer {
             mapped: Arc::new(AtomicBool::new(false)),
             period_ns: queue.get_timestamp_period(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(
+        instance: u32,
+        base: i32,
+        r: std::ops::Range<u32>,
+        bufs: u8,
+        image: Option<u8>,
+    ) -> CasterKey<u8, u8> {
+        CasterKey {
+            instance,
+            base_vertex: base,
+            indices: r,
+            buffers: bufs,
+            image,
+        }
+    }
+
+    fn plan(keys: &[CasterKey<u8, u8>]) -> Vec<ShadowOp> {
+        let mut ops = Vec::new();
+        plan_draws(keys.iter().cloned().enumerate(), |op| ops.push(op));
+        ops
+    }
+
+    /// Abutting ranges of one instance on the same buffers and image join;
+    /// a gap, another base vertex, instance, buffer, image or a solid cut
+    /// starts a draw (TEST-051, cod4-client-perf.md 38).
+    #[test]
+    fn entity_caster_draws_join_only_on_the_same_state() {
+        use ShadowOp::*;
+        let joined = plan(&[key(0, 0, 0..6, 1, None), key(0, 0, 6..12, 1, None)]);
+        assert_eq!(
+            joined,
+            [Pipeline { cut: false }, Buffers(0), Draw(0..12, 0, 0)]
+        );
+        for (second, why) in [
+            (key(0, 0, 9..12, 1, None), "a gap"),
+            (key(0, 4, 6..12, 1, None), "another base vertex"),
+            (key(1, 0, 6..12, 1, None), "another instance"),
+            (key(0, 0, 6..12, 2, None), "other buffers"),
+        ] {
+            let ops = plan(&[key(0, 0, 0..6, 1, None), second.clone()]);
+            let draws = ops.iter().filter(|o| matches!(o, Draw(..))).count();
+            assert_eq!(draws, 2, "{why}: {ops:?}");
+        }
+        let cut = plan(&[key(0, 0, 0..6, 1, Some(7)), key(0, 0, 6..12, 1, Some(8))]);
+        assert_eq!(
+            cut,
+            [
+                Pipeline { cut: true },
+                Image(0),
+                Buffers(0),
+                Draw(0..6, 0, 0),
+                Image(1),
+                Draw(6..12, 0, 0),
+            ]
+        );
+        let mixed = plan(&[key(0, 0, 0..6, 1, Some(7)), key(0, 0, 6..12, 1, None)]);
+        assert_eq!(
+            mixed,
+            [
+                Pipeline { cut: true },
+                Image(0),
+                Buffers(0),
+                Draw(0..6, 0, 0),
+                Pipeline { cut: false },
+                Draw(6..12, 0, 0),
+            ]
+        );
     }
 }

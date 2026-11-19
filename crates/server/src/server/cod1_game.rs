@@ -5,12 +5,23 @@
 //! `ClientThink`, `G_RunFrame`, the script callbacks).
 
 use super::*;
+use crate::game::commands::Recipient;
+
+/// What `configstrings::systeminfo` reads: the server id, the fall
+/// bounds' bits, `sv_cheats`, the paks and 1.5's rows.
+pub(super) type SystemInfoKey = (
+    u8,
+    [u32; 2],
+    bool,
+    configstrings::PakLists,
+    Option<Vec<(String, String)>>,
+);
 
 /// CoD1 behind the engine: its game module ([`Cod1Module`]) and the engine
 /// state CoD1 keeps itself, beside [`crate::engine::EngineCore`].
 pub struct Cod1Game {
     pub(super) cfg: ServerConfig,
-    pub(super) proto: &'static Protocol,
+    pub(super) proto: &'static Cod1Wire,
     /// `sv_serverid`, `0x10` per map load plus the restart count in the low
     /// nibble. u8 because the client echoes it in a one-byte header field.
     pub(super) server_id: u8,
@@ -19,7 +30,6 @@ pub struct Cod1Game {
     /// The game has already disconnected it, so it lives beside `clients`
     /// rather than in it; a slot is free only when both are `None`.
     pub(super) zombies: Vec<Option<Client>>,
-    pub(super) limiter: RateLimiter,
     /// [`Server::pin_stuck_rand`]'s generator.
     pub(super) stuck_rand: Option<vcod_common::rng::GlibcRand>,
     /// The map's collision and spawn, loaded by the binary; tests run
@@ -31,7 +41,8 @@ pub struct Cod1Game {
     /// section 12). Always 0 on 1.1.
     pub(super) paused_ms: i32,
     /// Gamestate entity baselines a delta frame may omit an unchanged entity
-    /// against; empty when `test_entities` is off.
+    /// against: every linked script entity's, plus the test entities'
+    /// (`Server::rebuild_baselines`).
     pub(super) baselines: HashMap<u32, msg::EntityState>,
     /// Wall clock of the previous tick, for the trace's send-interval column.
     pub(super) last_tick: Option<Instant>,
@@ -56,6 +67,9 @@ pub struct Cod1Game {
     pub(super) fs: Option<Rc<vcod_common::pk3::Pk3Fs>>,
     /// The pak cvars of the mounted search path, systeminfo's lists.
     pub(super) paks: configstrings::PakLists,
+    /// The last systeminfo `refresh_fall_heights` built and what it was
+    /// built from: the same inputs build the same string, pak trim and all.
+    pub(super) systeminfo: Option<(SystemInfoKey, String)>,
     /// The pure checksums a `cp` is checked against, keyed with this
     /// level's `checksumFeed`; `None` until a level loads.
     pub(super) pure_check: Option<PureCheck>,
@@ -121,11 +135,11 @@ pub struct Cod1Game {
     /// The game module's state.
     pub(super) module: Cod1Module,
     /// The moves the tick's first frame replayed, by slot, for its
-    /// snapshots; the frame being run's, from `replay_moves` to
-    /// `run_frame`; `--trace`'s wall gap since the last tick and the frames
-    /// it was owed.
+    /// snapshots.
     pub(super) tick_moved: Option<Vec<MoveSummary>>,
+    /// The frame being run's moves, from `replay_moves` to `run_frame`.
     pub(super) frame_moved: Vec<MoveSummary>,
+    /// `--trace`'s wall gap since the last tick and the frames it was owed.
     pub(super) tick_wall: (Option<f32>, u32),
 }
 
@@ -198,6 +212,9 @@ pub struct Cod1Module {
     /// Each `bas` base's origin and the graph's spots a rocket fired from
     /// bursts at it (`breach_stands`), for the life of the nav graph.
     pub(super) bot_breach_stands: Vec<([f32; 3], Vec<[f32; 3]>)>,
+    /// Each dropped `re` objective's start and the level time it was first
+    /// seen lying away from it (`crate::bots::ReObjView::returns`).
+    pub(super) bot_re_drops: Vec<([f32; 3], i32)>,
     /// [`Server::test_script_set_origin`]'s ops, queued once the tick's
     /// moves have run.
     pub(super) test_sim_ops: Vec<(usize, crate::game::host::SimOp)>,
@@ -229,6 +246,7 @@ impl Cod1Module {
             bot_drives: Default::default(),
             bot_parked: Default::default(),
             bot_breach_stands: Vec::new(),
+            bot_re_drops: Vec::new(),
             test_sim_ops: Vec::new(),
         }
     }
@@ -241,7 +259,7 @@ pub(super) struct Lend<'a> {
     pub(super) clients: &'a mut Vec<Option<Client>>,
     pub(super) world: &'a Option<Rc<World>>,
     pub(super) fs: &'a Option<Rc<vcod_common::pk3::Pk3Fs>>,
-    pub(super) proto: &'static Protocol,
+    pub(super) proto: &'static Cod1Wire,
     /// `level.time` of the frame being run.
     pub(super) sv_time_ms: i32,
     /// `svs.time`, the network clock (`Server::svs_time_ms`).
@@ -268,8 +286,9 @@ pub(super) struct FrameOut {
     pub(super) timeout_written: bool,
     /// `trap_SendConsoleCommand`'s `EXEC_APPEND` lines.
     pub(super) console_lines: Vec<String>,
-    /// Server commands for single clients, by slot.
-    pub(super) client_commands: Vec<(usize, String)>,
+    /// Server commands for single clients, by slot, each with its write
+    /// stamp (`configstrings::next_write_seq`).
+    pub(super) client_commands: Vec<(u64, Recipient, String)>,
     /// A score moved: the scoreboard goes to every client in intermission.
     pub(super) ranks_dirty: bool,
 }
@@ -279,10 +298,10 @@ pub(super) struct FrameOut {
 /// does not print them.
 impl crate::engine::GameModule for Cod1Game {
     type Client = Client;
-    type Wire = Protocol;
+    type Wire = Cod1Wire;
     type Snapshots = Cod1Snapshots;
 
-    fn wire(e: &Server) -> &'static Protocol {
+    fn wire(e: &Server) -> &'static Cod1Wire {
         e.game.proto
     }
     fn status(
@@ -320,6 +339,18 @@ impl crate::engine::GameModule for Cod1Game {
     }
     fn client_packet(e: &mut Server, from: SocketAddr, pkt: &[u8], at: crate::engine::Arrival) {
         e.handle_client_packet(from, pkt, at.now);
+    }
+    fn drop_sender(e: &mut Server, from: SocketAddr, pkt: &[u8], reason: &str) {
+        let Some(qport) = pkt.get(4..6).map(|q| u16::from_le_bytes([q[0], q[1]])) else {
+            return;
+        };
+        let slot = e.core.clients.iter().position(|c| {
+            c.as_ref()
+                .is_some_and(|c| c.link.addr.ip() == from.ip() && c.link.netchan.qport == qport)
+        });
+        if let Some(slot) = slot {
+            e.drop_client(slot, reason);
+        }
     }
     fn drain_console(e: &mut Server, now: Instant) {
         e.drain_console(now);

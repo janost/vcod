@@ -196,7 +196,7 @@ fn probe_ents_matches_retail() {
 /// `getEntArray`/`getEntityNumber` right away, then again after a `wait
 /// 0.15`; a second delete-then-wait pair follows. Two `wait`s means the
 /// callback suspends, so it needs `start_thread` plus stepped frames rather
-/// than `probe_ents`' single `call_now` — the same fallback
+/// than `probe_ents`' single `call_now`: the same fallback
 /// `crates/gsc/tests/semantics_ab.rs::run_probe` uses for a probe built
 /// around `wait`. Each stepped frame runs the VM step before the entity
 /// think pass, the order `ScriptRuntime::run_frame` uses, so a deferred
@@ -267,7 +267,7 @@ fn probe_delete_matches_retail() {
 
 /// `probe_cvar` measures `getCvar`/`setCvar`/`getCvarInt`/`getCvarFloat`/
 /// `getTime`/`randomInt` against retail. It spawns no entities and reads no
-/// map data — every cvar it touches it also registers itself — so a bare
+/// map data (every cvar it touches it also registers itself), so a bare
 /// `GameHost` reproduces it.
 #[test]
 fn probe_cvar_matches_retail() {
@@ -396,7 +396,7 @@ fn probe_stale_handles_match_retail() {
 /// The pak-backed source with one probe overlaid on its gametype path, so
 /// the probe's own `main` runs beside the real `mp_pavlov.gsc` closure
 /// rather than beside stubs. `PakScripts` in `crates/server/src/game/
-/// script.rs` is the half this borrows; a private type there cannot be
+/// script/load.rs` is the half this borrows; a private type there cannot be
 /// imported into an integration test.
 struct PakWithProbe {
     fs: Rc<dyn AssetSource>,
@@ -424,9 +424,9 @@ impl ScriptSource for PakWithProbe {
 /// This runs the production bootstrap rather than a copy of it: the probe is
 /// the gametype `ScriptRuntime::load_from` loads, so swapping the two
 /// `start_thread` calls in `start_bootstrap` fails here. Nothing else pins
-/// the order — `dm.gsc`'s `main` never reads `game["allies"]` and its
+/// the order: `dm.gsc`'s `main` never reads `game["allies"]` and its
 /// `Callback_StartGameType` defaults the key when unset, so the configstring
-/// assertions in `script.rs` come out the same either way.
+/// assertions in `script/tests.rs` come out the same either way.
 #[test]
 fn probe_bootstrap_matches_retail() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
@@ -461,9 +461,9 @@ fn probe_bootstrap_matches_retail() {
 /// The three `probe_persist_*` probes measure what a level boundary leaves
 /// behind: `game[]`, `level` and an entity handle held in `game[]`, across
 /// `map_restart(true)`, `exitLevel(false)` and `exitLevel(true)`. Nothing
-/// short of the whole server reproduces that — the two builtins queue a
+/// short of the whole server reproduces that: the two builtins queue a
 /// console line, `engine::tick` drains it, and the level that comes back is
-/// what prints the after-half — so they are claimed here rather than in
+/// what prints the after-half. So they are claimed here rather than in
 /// `crates/gsc`, where the VM has no host that can restart a level.
 ///
 /// Each runs as the gametype script of mp_pavlov, overlaid on the paks the
@@ -485,14 +485,8 @@ fn run_persist_probe(name: &str, rotation: Option<&str>) -> Vec<String> {
 
     let mut now = std::time::Instant::now();
     let cfg = vcod_server::ServerConfig {
-        map: "mp_pavlov".into(),
         hostname: "vcod probe".into(),
-        max_clients: 8,
-        gametype: name.into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
+        ..crate::common::cfg("mp_pavlov", name)
     };
     let mut sv = vcod_server::Server::new(cfg, now);
     sv.overlay_script(&format!("maps/mp/gametypes/{name}"), &text);

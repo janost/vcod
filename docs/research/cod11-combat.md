@@ -159,6 +159,43 @@ spread block at all (grenades, mounted MGs) and 0 in one SP file. INFERRED: an
 absent key reads as 0, since the parsed struct is zeroed and the field table
 only writes keys the file spells.
 
+
+### 0.1 How a value is read
+
+The Windows game modules hold the same table and loader: `game_mp_x86.dll`
+1.1 has the field table at `0x2006add0` (248 records), 1.5 at `0x2006f250`
+(253), UO's `uo_game_mp_x86.dll` at `0x200853a8` (293), each record
+`{ char *name; int offset; int type; }`. VERIFIED (the tables, read by
+pointer off each module's `hipSpreadStandMin` string). The weapon loader
+calls `ParseConfigStringToStruct` with the table in `edx` (1.1 `0x2000e009`
+into `0x2003f070`; 1.5 `0x200422b0`; UO `0x2000ff24` into `0x200589b0`).
+VERIFIED (the call sites).
+
+For each record in table order it looks the key up with `Info_ValueForKey`
+(1.1 `0x2003e960`, 1.5 `0x20041b40`, UO `0x20058170`), which walks the
+pairs in file order, compares each key with `Q_stricmpn` at length 99999
+(`0x1869f`; 1.1 `0x2003e650` folds `a`..`z` to upper case), and returns the
+first match. An empty value skips the record (`cmp cl,bl; je` at 1.1
+`0x2003f0a0`), leaving the field as the def's init left it. Types 0..7 go
+through a jump table (1.1 `0x2003f1cc`): 4 stores the CRT `atol`
+(`0x2003fd2e`, leading blanks, a sign, the digits up to the first
+non-digit), 5 stores `atol(v) != 0` (`neg; sbb; neg` at `0x2003f13c`), 6
+stores the CRT `atof` (`0x2004066e`) as a float (`fstp DWORD` at
+`0x2003f14f`), 7 the `atof` times the float at `0x2005f818` through `_ftol`
+(`0x2003f15d..0x2003f16d`); types from 8 on go to the loader's own
+callback (1.1 `0x2000d990`), which matches each name table with `_stricmp`
+(`0x2004ccf0`). VERIFIED (the instructions, in all three modules: the same
+dispatch at 1.5 `0x200422fd` and UO `0x200589fd`, the same `neg; sbb; neg`
+and `fstp`). INFERRED: the Linux servers' `game.mp.i386.so` build the same
+source, so read alike; their `atoi` saturates where `atol` wraps.
+
+So `damage\40.0` reads 40, `clipSize\30 rounds` 30, `semiAuto\2` true, a
+key matches in any case, and a repeated key keeps its first value, an empty
+first value included. `explosionRadius`, `projectileSpeed`,
+`projectileSpeedUp` and the reticle sizes are type 4, read as ints though
+vcod keeps them as floats. vcod reads them so through
+`vcod_common::xmodel::WeaponKeys` and `weapon::parse_num` (the server's
+`TurretDef::parse` too).
 ---
 
 ## 1. `PM_Weapon`: the states and what moves between them
@@ -326,8 +363,8 @@ INFERRED: that is the whole semi-automatic edge. Nothing latches the button in
 `weaponTime == 0` while the trigger stays down, and the fire path is gated on
 `weaponTime` having reached 0. INFERRED: releasing the trigger lets the next
 frame take the `else` and store 0, after which the weapon can fire again. The
-net probe taps the bit for that reason (`Pulse`, AGENTS.md "The probe
-client").
+net probe taps the bit for that reason (`Pulse`, `docs/dev/retail.md`, "The
+probe client").
 
 VERIFIED, same block (`.so` 0x38842-0x388c4): after the store of 1 it
 compares `weaponstate` against 4, then against 3, 4, 10 and 11. Both arms
@@ -910,8 +947,10 @@ INFERRED: `eFlags 0xC000` marks a player on a mounted MG, since `FireWeapon`
 tests the same mask before taking its turret branch and the fire path skips the
 clip decrement when it is set.
 
-UNVERIFIED: what sets `pm_flags 0x800`, and what `pm_flags 0x400` and `0x4000`
-mean. VERIFIED: `BG_GetMinSpreadForWeapon` tests `pm_flags & 1` and
+`pm_flags` 0x800 is `PMF_RESPAWNED` (16.5; `cod11-mantle.md`, State
+reference) and 0x4000 has its own section in `cod11-mantle.md`; what 0x400
+means is open (section 10). VERIFIED: `BG_GetMinSpreadForWeapon` tests
+`pm_flags & 1` and
 `pm_flags & 2` and loads `hipSpreadProneMin`, `hipSpreadDuckedMin` and
 `hipSpreadStandMin` off those tests, and the weapon-change check tests
 `pm_flags & 0x10` and holds a store of weapon 0. INFERRED: the prone minimum
@@ -1310,7 +1349,7 @@ VERIFIED, vcod measurement 2026-11-14. On our own clock (about 13.7 s
 behind) the offsets read up to 1.03 apart, the sway model's and the two
 snaps' error.
 
-#### 1.5 and United Offensive
+#### United Offensive and 1.5
 
 Neither truncates. VERIFIED, 1.5b `game.mp.i386.so` `CalcMuzzlePoint`
 (0x7e91f; Ghidra's addresses, image base 0x10000): the muzzle is
@@ -1735,7 +1774,7 @@ VERIFIED, United Offensive's `BG_Bullet_Endpos` (`game.mp.uo.i386.so`
 0x3011c): the same cone, 10000 units out (0x461c4000), with the forward
 product on the x87 stack. 1.5b's `Bullet_Endpos` (0x6de56) keeps 8192.
 Every UO `Bullet_Fire` and the artillery strike go through it
-(cod11-turrets.md 13.8). vcod: `combat::bullet_range`.
+(cod11-turrets.md 13.8). vcod: `CombatRules::bullet_range`.
 
 **The rounding.** VERIFIED, 1.1d `Bullet_Endpos` (0x69624): `fptan` of
 `spread * pi / 180` (.rodata 0x79cf8, 0x79d00) is stored as a double and
@@ -2076,7 +2115,8 @@ the PVS anyway.
 ### 2.6 `Bullet_Endpos`
 
 VERIFIED: `Bullet_Endpos` is `0x69624`, 0xcf bytes, and nothing in the
-combat path above calls it. UNVERIFIED: what does, and what it is for.
+combat path above calls it. Its arithmetic is the spread cone's end point
+(2.2, "The rounding"); which 1.1d function calls it is open.
 
 ### 2.7 What a `bulletTrace` clips
 
@@ -2180,7 +2220,7 @@ VERIFIED, off `maps/mp/mp_carentan.bsp`: `bombzone_A` (`*4`, origin
 `xmodel/turret_flak88_static_antiairlow_d` with `targetname` `exploder`, which
 `_load.gsc` hides. VERIFIED, off the paks: both carry collision surfaces of
 contents 1. INFERRED, off the plant test in
-`crates/server/src/game/script.rs` reproducing the fixture's slot 0: the
+`crates/server/src/game/script/tests.rs` reproducing the fixture's slot 0: the
 flat plate of that mesh at z -23 is what `getPlant`'s `(+16, +16)` fallback
 trace lands on, where the floor under the planter is clip with no shot
 contents and the two 18-unit traces meet nothing (object-model doc 23.6).
@@ -3085,7 +3125,7 @@ table reads as full damage; retail has no such state.
 
 #### What the sweep measured
 
-`--probe-sweep` (`crates/client/src/probe.rs`) taps once per entry of a
+`--probe-sweep` (`crates/client/src/probe/hit.rs`) taps once per entry of a
 table of pitch offsets around the aim at the target's eye and echoes the
 offset on its `!trace` line; the retail server logs `sHitLoc` per hit in its
 `games_mp.log`, a `D;` record for a wound and a `K;` record for the kill, and
@@ -3099,6 +3139,8 @@ playerstate's `viewangles`, which the server echoes a snapshot late at
 times, so a height is good to one table step (1 to 4 units at these ranges)
 plus the 1.5 degree hip cone. VERIFIED, the labels and the numbers;
 INFERRED, the pairing of each hit with a tap.
+`tools/pair_sweep.py <shooter.log> <target.log> <labels.txt>` does the
+pairing and prints each crossing height.
 
 The first hit of each life, the victim idle in `legsAnim` 634 and not yet
 knocked back:
@@ -3282,7 +3324,7 @@ the lean:
 - The clock the grid poses at. VERIFIED, `game.mp.i386.so`: `G_RunFrame`'s
   first `Scr_RunCurrentThreads` (0x50653) runs before
   `trap_DObjInitServerTime` and `G_DObjUpdateServerTime` (0x5069f,
-  0x506ed; cod11-movers.md 15, "A bone asked for before anim update").
+  0x506ed; cod11-movers.md 15, "A bone asked for before the anim update").
   VERIFIED, `cod_lnxded`: the time step 0x080bbab0 adds `dtime * rate *
   frequency` to a node's old time (`+0x2c`, copied from the time by the
   weight step 0x080bb130 first) for every node whose weight is not 0,
@@ -3413,7 +3455,7 @@ replays on the `PROBE_IN` lines rather than the logged inputs.
   vcod measurement: with the spawn pin taking the placed spawnpoint's own
   float (unpinned, the think left (10, 5, -1)), ours leaves (6, 3, -1) and
   the eye rows match
-  without an offset (cod15-movement.md 4, "The think on a slope,
+  without an offset (cod15-movement.md 4.2, "The think on a slope,
   standing").
 
 VERIFIED, live (retail 1.1d, 1.5b and UO 1.51b, the same
@@ -3551,7 +3593,7 @@ vcod measurement: every grid cell of the six captures sits within 0.0001
 median of retail's, and with the read order every round of the `-turn`
 captures matches, with no gap.
 
-**One ease a build.** VERIFIED, game.mp.uo (coduo-vehicles.md 13, "The
+**One ease a build.** VERIFIED, game.mp.uo (coduo-vehicles.md 13.7, "The
 glide back"): each skeleton build that finds a bone unbuilt under the
 current stamp runs the controller hook, which steps every control 18
 degrees toward its target from where the last build left it, and
@@ -4164,7 +4206,8 @@ cmd-path death's comes due after 200. Ours matches on all three
 
 INFERRED: nothing frees a clone on a timer. It lives until the eighth
 subsequent death reuses its slot, which is the eight-body behaviour the
-project already observed live (`AGENTS.md`, "Netcode debugging").
+project already observed live (`docs/dev/traps.md`, "Combat and items", "The
+body queue is eight entities").
 
 **As implemented** (`crates/server/src/game/bodies.rs` and the `cloneplayer`
 builtin in `crates/server/src/game/builtins/client.rs`). The clone is written
@@ -4181,7 +4224,7 @@ free.
 
 Where the state comes from is a two-step arrangement retail does not need.
 A builtin cannot reach a client's sim, so `Server::replay_moves` mirrors each
-player's entity state onto `GameHost::client_entity_states` before the script
+player's entity state onto `HostClient::entity_state` before the script
 frame, and `cloneplayer` copies the slot's entry. That copy is one step stale
 by construction: the gametype clones the player before the death animation is
 raised. So the queue records which client each body was born from, and
@@ -4475,11 +4518,11 @@ mirrored entity state's `trBase` is `ps.origin`, unsnapped on the
 (`crates/server/tests/combat.rs`), which stands the player off the unit grid
 and holds the `kill` drop to the unsnapped origin plus 40, and
 `a_trigger_hurt_death_drops_and_clones_at_the_snapped_origin`
-(`crates/server/src/server.rs`), which holds a `trigger_hurt` death's grenade,
-weapon and corpse to the truncated one. `cloneplayer` places the body at the
-`origin` field, as retail's `G_SetOrigin(body, self->r.currentOrigin)` (5.2)
-does, so a `trigger_hurt` corpse lies at the truncated origin and a bullet's
-at the unsnapped one. Fall damage (`fall_damage`, `deliver_fall` in
+(`crates/server/src/server/frame.rs`), which holds a `trigger_hurt` death's
+grenade, weapon and corpse to the truncated one. `cloneplayer` places the body
+at the `origin` field, as retail's `G_SetOrigin(body, self->r.currentOrigin)`
+(5.2) does, so a `trigger_hurt` corpse lies at the truncated origin and a
+bullet's at the unsnapped one. Fall damage (`fall_damage`, `deliver_fall` in
 `crates/server/src/server/cod1_think.rs`) and the weapon drop's tag sweep
 (`item::launch_weapon`, `cod11-items.md` 11) are modelled; no capture checks
 either against a snapped origin.
@@ -4866,7 +4909,7 @@ the entity is. `mover::use_binary` is `Use_BinaryMover` at `pos1` and
 `SetMoverState`; the start and stop sounds (alias 0) and the area portal
 are not modelled, nor a use during a leg. `turret::use_by` runs
 `turret_use`'s record half on the spot from the host's mirrors (origin,
-stance, `client_aim`), writes the player's `angles` and queues
+stance, `HostClient::aim`), writes the player's `angles` and queues
 `SimOp::Mount` for the sim half; a user that is no player notifies alone,
 where retail segfaults, a crash vcod keeps out on purpose.
 `item::spawn_misc_spawner` gives a map spawner with a `spawnitem` its use,
@@ -5244,7 +5287,7 @@ VERIFIED, the shooter's single shot on `mp_carentan`: `weaponstate` 3,
 as retail's shooter capture. `torsoAnim` reads 765 (512 | 253), the number
 the retaken `combat` fixtures measure; the retail `dm` shooter fixture's 0
 predates the `cmd.weapon` fix (`player-model-anim-system.md`, "The
-`jump_takeoff` torso index is gone") and is not evidence.
+`jump_takeoff` torso 720 was a holstered weapon") and is not evidence.
 
 VERIFIED, `mp_ship` `dm`, the kill by a bullet: `health` 0, `pm_type` 6,
 `torsoAnim` 512, the dead view height lerping 60 -> 50.8 -> 42 -> 32.8 -> 24
@@ -5259,7 +5302,7 @@ truncated). `damageEvent` stays 0 through the fatal hit (INFERRED: 6's step
 respawns on use with the full loadout, and the killer's score goes 0 to 1 the
 frame after the kill.
 
-### 9.2 What differs
+### 9.2 What differed: the closed divergences and their pins
 
 Every divergence these runs found is closed. Retail facts and the traps they
 set, each with its pin:
@@ -5755,18 +5798,17 @@ server ran.
   sweep against a target with more than two hits of health at a fixed short
   range, with the pitch read off the cmd rather than the echo, would settle
   it.
-- UNVERIFIED: what sets `pm_flags 0x800`, which stops `PM_Weapon` outright,
-  and what `pm_flags 0x400` and `0x4000` mean. INFERRED for `0x400`: set
+- UNVERIFIED: what `pm_flags 0x400` means. (0x800, which stops `PM_Weapon`
+  outright, is `PMF_RESPAWNED`: 16.5 and `cod11-mantle.md`'s State
+  reference give its set and clear; 0x4000 is `cod11-mantle.md`,
+  "`pm_flags` 0x4000".) INFERRED for `0x400`: set
   whenever a fire, a melee finish or a weapon change happens while
   `pm_flags & 1`, and ORed in by the ADS flag update's prone arm (1.13), so
   it is prone-specific.
 - UNVERIFIED: the meaning of bit `0x10` of the trace word at offset 32, which
   makes a bullet continue through a surface at full damage.
-- UNVERIFIED: what `Bullet_Endpos` (`0x69624`) is for; nothing on this path
-  calls it.
-- UNVERIFIED: the hit-location partition itself. It is decided inside
-  `trap_LocationalTrace`, in the engine binary, so nothing above pins how a
-  point on a player maps to one of the 19 names.
+- UNVERIFIED: which 1.1d function calls `Bullet_Endpos` (`0x69624`). Its
+  arithmetic is the spread cone's end point (2.2, "The rounding").
 - Settled: every jump adds 64 to `ps.aimSpreadScale`, capped at 255
   (`PM_CheckJump` 0x2edc6-0x2edf3, `cod11-mantle.md`, "Jumps"; the 255 once
   attributed to the ground jump was the prone dive's block). VERIFIED: both
@@ -6017,8 +6059,8 @@ swing as well as the throw. Pinned by
 capture's two throws stood and holds `trTime`, `trBase` exactly and
 `trDelta` to within two units of it, and
 `a_throw_leaves_from_its_own_cmd_not_the_tick_s_last`
-(`crates/server/src/server.rs`), a run queued behind the release in the same
-tick.
+(`crates/server/src/server/frame.rs`), a run queued behind the release in the
+same tick.
 
 ---
 
@@ -6314,7 +6356,7 @@ arm keeps 1.1's 0.125 (0x7b1a8), and the reflection's -2.0 (0x7b198), the
 0.7 ground test (0x7b1a0, a double), the rest speed 20.0 (0x7b1b0), the
 0.1 nudge (0x7b1b4) and the 100.0 event gate (0x7b1bc) are 1.1's. 1.5
 has no tangential and normal split. United Offensive scales the same way
-by 0.4 and 0.1 (coduo-diff.md 21, "Missiles"). VERIFIED, live (retail
+by 0.4 and 0.1 (coduo-diff.md 21.1, "Missiles"). VERIFIED, live (retail
 1.5b, mp_carentan, `mp_carentan-scriptmodel-prone-rest-1.5.txt`
 and `mp_carentan-scriptmodel-prone-1.5.txt`): the frag that falls off the
 prone target (12.6) strikes the floor at z -22.375 and is airborne two
@@ -6514,6 +6556,12 @@ stack.
   takes `z - dt * 400 * dt` (400 at `.rodata 0x74e9c`) off the stored `z`
   and stores it again (0x1bade-0x1baf0). The line arm (0x1b8da) is the
   first half alone.
+- VERIFIED (the instructions): the line arm's `dt` (0x1b8e6..0x1b8f5) is
+  `fildl` of the ms, `fmulp` by the float at `.rodata 0x74e8c` (0x3a83126f,
+  read through `%ebx` at `.got` 0x88d98 less 0x13f0c) and `fstps`: the exact
+  product rounded once, the ms never a float first. vcod's `secs_stored`
+  (`net::trajectory`) computes it so; casting the ms to a float first parts
+  from it past 2^24 ms.
 - VERIFIED: `BG_EvaluateTrajectoryDelta`'s gravity arm (0x1c002) stores
   `dt` the same way (0x1c01d), then `delta.z - dt * 800`, rounded once
   (0x1c053-0x1c062).
@@ -6624,7 +6672,7 @@ with 0; the snapshot after the script moves him it reads `trType` 5 with
 its base unchanged and ground still 0, and it falls to the floor and rests
 there with 1022. The same capture's throws leave from z 36.148 where
 1.1's leave from 37.0 on the same spot: 1.1 truncates the muzzle point and
-1.5 does not (2.1, "1.5 and United Offensive").
+1.5 does not (2.1, "United Offensive and 1.5").
 
 vcod: `Missile::falls`, set for 1.5 and UO, runs the test through the
 missile's own trace (`a_frag_left_hanging_falls_on_15_and_uo_only`). Ours'
@@ -6910,7 +6958,7 @@ VERIFIED: on the committed take the first traces of `cook_release`
 it the other way round, `pin_out` alone opening on the pullback).
 VERIFIED: `to_frag`'s last trace is `serverTime` 16700 at `weaponstate` 0,
 so no snapshot is missing between the two steps. INFERRED, off
-`CombatProbe::step` in `crates/client/src/probe.rs`: a step's clock starts
+`CombatProbe::step` in `crates/client/src/probe/combat.rs`: a step's clock starts
 on the probe's first iteration after the step before it ended, and a
 snapshot already traced is not traced again, so a step's first trace is
 whichever snapshot arrives next, before or after its first cmd reached the
@@ -7005,7 +7053,7 @@ pass (the temp entity rule of 14.7, "Entity numbers") and the second on the
 vcod: `builtins::fx::grenade_explosion_effect` raises the temp entity through
 `GameHost::add_temp_entity` and calls `GameHost::spawn_concussive`.
 `grenade_explosion_effect_takes_a_temp_and_a_concussion_number`
-(`crates/server/src/game/script.rs`) is the probe's table.
+(`crates/server/src/game/script/tests.rs`) is the probe's table.
 
 ### 13.6 The panzerfaust: `Weapon_RocketLauncher_Fire` and `fire_rocket`
 
@@ -7581,7 +7629,7 @@ and probed at its unsnapped origin, and the second chance's midpoint is
 taken at `BlastVictim::link_origin`: `ClientSim::link_origin` for a
 grenade's blast, the truncated origin unless the client is linked or its last
 link was a `setOrigin` or `TeleportPlayer` with no cmd since, and for the
-builtin's the same value mirrored onto `GameHost::client_link_origin`, which
+builtin's the same value mirrored onto `HostClient::link_origin`, which
 the `setOrigin` builtin moves to its own unsnapped origin at once. Pinned by
 `a_set_origin_links_unsnapped_until_the_next_cmd`
 (`crates/server/src/spectate.rs`). INFERRED, off `TeleportPlayer`'s
@@ -7692,7 +7740,7 @@ body (`HitBody`, through the same `trace_bodies` a bullet uses), posed at
 the tick's clock; the second chance traces the world alone with mask 0x11 and
 no static models. A grenade's blast takes its bodies from the sims; the
 `radiusDamage` builtin takes the pose `Server` mirrors onto the host before
-the script frame (`GameHost::client_bodies`) at the script `origin` of each
+the script frame (`HostClient::body`) at the script `origin` of each
 client, so a `setOrigin` earlier in the frame moves the body.
 The replay column above holds at every anim phase the test pose was tried
 at but one: at yaw 135 one of nine phases reads 6 where retail read none,
@@ -7817,7 +7865,7 @@ as retail did, and since the walk took the area tree's order (14.7) and
 the player set down inside the flak88 clip stays there (mantle doc, "A
 start inside a solid") every line-2 row too. A grenade blast reads victims
 and bodies off the sims, except a client whose link a callback of the walk
-moved (`setOrigin`, `client_link_origin`), which it measures and stands at
+moved (`setOrigin`, `HostClient::link_origin`), which it measures and stands at
 that link with the sim's box. `probe_blastmove` against `vcod-server` read
 every builtin row above as retail did;
 `a_callback_reaches_the_rest_of_its_walk`
@@ -7885,7 +7933,7 @@ the turret's waiters:
 
 INFERRED: the notifies wake their waiters after the builtin's caller has
 moved on, and the later notify's waiter runs first, the newest-first resume
-order of AGENTS.md's script notes. Where the turret falls in the walk
+order (`cod11-gsc-language.md` 9). Where the turret falls in the walk
 relative to slot 1 is not visible here, since its notifies are deferred.
 
 **As implemented.** `GameHost::blast_entities` lists the turrets with
@@ -8224,7 +8272,7 @@ blast walk and by `grenadeExplosionEffect` (13.5), and freed by
 `ThinkFn::Concussive`.
 `a_temp_entity_takes_a_spawn_number_and_frees_it_past_300_ms` and
 `a_delete_s_free_runs_after_the_threads_of_its_frame`
-(`crates/server/src/game/script.rs`) are the probe's two halves; against
+(`crates/server/src/game/script/tests.rs`) are the probe's two halves; against
 `vcod-server` it reads line for line as retail does, times included
 (`cod11-gsc-language.md`, "The script clock").
 
@@ -8429,7 +8477,7 @@ The other walks and links:
   writes `r.currentOrigin` from the seat link, the tag of the vehicle as it
   stands shifted by the link's offset, then links him (coduo-vehicles.md
   13). vcod runs it on the rider's turn of the pass, his vehicle first
-  (`run_rider_link` in `server.rs`), with the offset `VEH_LinkPlayer`
+  (`run_rider_link` in `server/sim_ops.rs`), with the offset `VEH_LinkPlayer`
   asked for (`Seat::link_offset`).
 - VERIFIED, `cod_lnxded` `SV_LinkEntity`: the unlink at 0x8090c84 runs
   when `CM_BoxLeafnums` (0x8053d94) returns 0. INFERRED: that walk ends in
@@ -9310,7 +9358,7 @@ calls `Com_EventLoop` in the loop at 0x806cfe0..0x806d001 and then
 never inside one. `Com_EventLoop` hands each received datagram to
 `SV_PacketEvent` as it takes it off the queue, and its only callers are
 `Com_Frame`'s loop and, on a non-dedicated process only, a second call after
-`SV_Frame` (cod11-server-handshake.md, "The read schedule"). INFERRED: so
+`SV_Frame` (cod11-server-handshake.md, "Pings", "The read schedule"). INFERRED: so
 within a server frame every client's cmds, and the shots in them, run in
 packet arrival order, and `G_RunFrame`'s `ClientEndFrame` pass runs after all
 of them.
@@ -9444,9 +9492,9 @@ timer already dropped.
 VERIFIED, by capture: under the timer `PM_SlideMove` leaves a push into a
 wall in the velocity (`cod11-player-clip.md` 8.5, `probe_slide`).
 
-### 16.2 As implemented
+### 16.2 vcod's port, and a retail read
 
-`Server::replay_moves` (`crates/server/src/server.rs`) runs every packet
+`Server::replay_moves` (`crates/server/src/server/frame.rs`) runs every packet
 since the last tick in the order the server executed it: `handle_packet`
 numbers each client packet, a bot's cmd is a packet of its own numbered
 after the real ones, each queued cmd and `kill` carries its packet's number,
@@ -9532,10 +9580,10 @@ weight 0, so it reads the same from either slot,
 `a_stance_change_blends_in_whatever_the_slot_order`, movers doc 15; the same `probe_pose` run against
 `vcod-server` switched hit location at k+1 with the target in slot 1 and at
 k0 with it in slot 0), and delivered there by
-`deliver_turret_rounds` (`crates/server/src/server.rs`): the callback, the
-weapon and sim ops it queued, the vitals mirror, a higher victim's end frame
-again for its feedback, and every body refreshed for the later slots' aim
-traces. A victim below the gunner takes its feedback on the next frame.
+`deliver_turret_rounds` (`crates/server/src/server/sim_ops.rs`): the callback,
+the weapon and sim ops it queued, the vitals mirror, a higher victim's end
+frame again for its feedback, and every body refreshed for the later slots'
+aim traces. A victim below the gunner takes its feedback on the next frame.
 
 - A higher-slot gunner the round kills is dead on its own turn, so
   `turret_think_client` releases instead of firing (0x5236b, turrets doc 8)

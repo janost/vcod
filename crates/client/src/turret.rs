@@ -2,7 +2,7 @@
 //! entity's `angles2`, which of its two anims plays, and the first-person eye
 //! a gunner sees from. `cgame_mp_x86.dll` (1.1), docs/research/cod11-turrets.md
 //! section 14; UO's view and barrel (uo cgame 0x30041550, 0x3001e9f0),
-//! coduo-diff.md 19, "The turret view".
+//! coduo-diff.md 19.5, "The turret view".
 
 use glam::Vec3;
 /// On a playerstate: riding a mounted gun, one bit pair per gun stance.
@@ -41,9 +41,13 @@ pub fn gun_anim(ridden: bool, eflags: i32, anim_movetype: i32) -> GunAnim {
 
 /// The turret a playerstate rides, by the fields 0x30033220 tests. UO's
 /// cgame never reads `viewlocked` (0x30041550, 0x3001e9f0, the reticle's
-/// 0x30019ba0 caller), which its server leaves 0 on a gunner.
-pub fn ridden(eflags: i32, viewlocked: i32, viewlocked_ent: i32, uo: bool) -> Option<u32> {
-    if eflags & EF_MOUNTED == 0 || (viewlocked == 0 && !uo) || viewlocked_ent == ENTITYNUM_NONE {
+/// 0x30019ba0 caller), which its server leaves 0 on a gunner, and 1.5's
+/// gun controller (0x3001c2b0) does not either: `any_lock` skips the test.
+pub fn ridden(eflags: i32, viewlocked: i32, viewlocked_ent: i32, any_lock: bool) -> Option<u32> {
+    if eflags & EF_MOUNTED == 0
+        || (viewlocked == 0 && !any_lock)
+        || viewlocked_ent == ENTITYNUM_NONE
+    {
         return None;
     }
     u32::try_from(viewlocked_ent).ok()
@@ -209,7 +213,7 @@ pub fn v15_eye(
 
 /// `AngleSubtract` (uo cgame 0x3004bd70): `a - b` folded into -180..180.
 fn angle_subtract(a: f32, b: f32) -> f32 {
-    let mut d = a - b;
+    let mut d = vcod_common::fguard::turns(a - b);
     while d > 180.0 {
         d -= 360.0;
     }
@@ -299,6 +303,20 @@ mod tests {
     fn capture_arcs() -> UoArcs {
         let at = [45.0, -40.0, -45.0, 40.0];
         UoArcs::lerp(at, at, 0.5)
+    }
+
+    /// A 1.5 or UO server's huge or infinite gun angle folds at once and
+    /// still lands inside the arcs (BUG-008).
+    #[test]
+    fn a_hostile_base_angle_folds_inside_the_arcs() {
+        let arcs = capture_arcs();
+        for base in [1e30, -1e30, f32::INFINITY, f32::NAN] {
+            let [p, y] = arcs.barrel([10.0, 20.0, 0.0], [base, base]);
+            assert!(
+                (-40.0..=40.0).contains(&p) && (-45.0..=45.0).contains(&y),
+                "{base}"
+            );
+        }
     }
 
     #[test]

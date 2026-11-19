@@ -758,7 +758,7 @@ fn main() -> anyhow::Result<()> {
                 continue;
             }
             let Some(p) = cl.receive(&d)? else { continue };
-            let last_time = cl.parser.snapshot().map_or(0, |f| f.server_time);
+            let last_time = cl.parser.snapshot().map_or(0, |f| f.server_time.raw());
             for (_, text) in &p.commands {
                 let text = vcod_cod2::net::latin1(text);
                 let _ = writeln!(out, "# cmd {last_time} {text}");
@@ -784,7 +784,7 @@ fn main() -> anyhow::Result<()> {
             // The spawn: playing (pm_type 0) with the rifle in hand.
             if anchor.is_none() && snap.ps.i32("pm_type") == 0 && snap.ps.i32("weapon") != 0 {
                 let held = default_usercmd(&snap.ps);
-                anchor = Some((snap.server_time, snap_at, held));
+                anchor = Some((snap.server_time.raw(), snap_at, held));
                 let o = snap.ps.origin();
                 let _ = writeln!(
                     out,
@@ -814,7 +814,7 @@ fn main() -> anyhow::Result<()> {
             // Not spawned yet: an idle cmd every 33 ms, as the spectator does.
             if cl.parser.gamestate.is_some() && last_send.elapsed() >= Duration::from_millis(33) {
                 last_send = Instant::now();
-                let base = cl.parser.snapshot().map_or(0, |f| f.server_time);
+                let base = cl.parser.snapshot().map_or(0, |f| f.server_time.raw());
                 let cmd = cl.idle_cmd(base + snap_at.elapsed().as_millis() as i32);
                 let pkt = cl.build_packet(&[cmd])?;
                 s.send(&pkt)?;

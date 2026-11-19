@@ -12,6 +12,7 @@
 //! lost the fractional part that decides the phase.
 
 use super::{PlayerState, Stance};
+use crate::fguard::{clamp, near};
 use crate::patch::Arith;
 use crate::weapon::{AimDef, WeaponDef};
 use crate::x87;
@@ -133,7 +134,6 @@ impl GunKick {
 
 /// One axis of the spring (cgame `0x30012910`). True, with both zeroed,
 /// once the angle is under 0.25 and the speed under 1.
-#[allow(clippy::too_many_arguments)]
 fn spring_axis(
     angle: &mut f32,
     speed: &mut f32,
@@ -172,42 +172,21 @@ fn spring_axis(
     } else {
         *speed = (*speed + dt * static_decay).min(0.0);
     }
-    *speed = speed.clamp(-speed_max, speed_max);
+    *speed = clamp(*speed, -speed_max, speed_max);
     false
 }
 
 const PI64: f64 = std::f64::consts::PI;
 
-/// `AngleNormalize360` (`0x3eb30`), 65536ths truncated toward zero (the
-/// `fldcw` there sets `0xc00`). A lag the sway eases toward zero reaches it
-/// only because of the truncation: rounded to nearest, it stalls a few
-/// 65536ths out once a step is under half of one, which a run against
-/// ours measured as a constant 0.022 degrees of yaw (combat doc, 15.4).
-/// The product stays on the x87 stack into the `fistp` (1.1d 0x3eb30, UO
-/// alike), so an angle a hair under a 65536th truncates down where an `f32`
-/// product would round it up onto the unit (combat doc 12.7).
-pub fn angle_normalize_360(a: f32) -> f32 {
-    ((f64::from(a) * f64::from(65536.0f32 / 360.0)) as i32 & 0xffff) as f32 * (360.0 / 65536.0)
-}
-
-/// `AngleNormalize180` (`0x3eb70`).
-pub fn angle_normalize_180(a: f32) -> f32 {
-    let a = angle_normalize_360(a);
-    if a > 180.0 { a - 360.0 } else { a }
-}
-
-/// `AngleSubtract` (`0x3e968`): the difference wrapped into -180..180 by
-/// repeated 360s, no rounding.
-pub fn angle_subtract(a: f32, b: f32) -> f32 {
-    let mut d = a - b;
-    while d > 180.0 {
-        d -= 360.0;
-    }
-    while d < -180.0 {
-        d += 360.0;
-    }
-    d
-}
+// `AngleNormalize360` (`0x3eb30`) and `AngleNormalize180` (`0x3eb70`) take
+// a float and keep the product into the truncating `fistp` (fldcw 0xc00). A
+// lag the sway eases toward zero reaches it only because of the
+// truncation: rounded to nearest, it stalls a few 65536ths out once a step
+// is under half of one (combat doc 15.4). `AngleSubtract` is 0x3e968.
+pub use crate::x87::{
+    angle_normalize180_short as angle_normalize_180,
+    angle_normalize360_short as angle_normalize_360, angle_subtract,
+};
 
 /// `GetLeanFraction` (`0x6ba64`): `(2 - |f|) * f`, the ease every kick
 /// curve and the lean roll go through.
@@ -346,7 +325,7 @@ pub fn eye_bob(ps: &PlayerState, view: [f32; 3]) -> Vec3 {
 /// 0x7b8ea) add to a shot's or a throw's start: [`eye_bob`]'s two factors
 /// at the game module's precision (`BG_GetBobCycle` 1.5 0x40a05 rounds the
 /// cycle to a float), the side one along the right of `ps.viewangles`
-/// (combat doc 2.1, "1.5 and United Offensive"). Returns `at` with the
+/// (combat doc 2.1, "United Offensive and 1.5"). Returns `at` with the
 /// bob added, up first, in retail's order.
 pub fn add_muzzle_bob(ps: &PlayerState, at: Vec3) -> Vec3 {
     let f = std::f32::consts::PI * (f32::from(ps.bob_cycle) / 255.0);
@@ -397,15 +376,23 @@ fn sway(
     let horiz_scale = pick(aim.sway_horiz_scale);
     let vert_scale = pick(aim.sway_vert_scale);
 
-    let dp = angle_subtract(view[0], st.last_view[0]).clamp(-max_angle, max_angle);
-    let dy = angle_subtract(view[1], st.last_view[1]).clamp(-max_angle, max_angle);
+    let dp = clamp(
+        angle_subtract(view[0], st.last_view[0]),
+        -max_angle,
+        max_angle,
+    );
+    let dy = clamp(
+        angle_subtract(view[1], st.last_view[1]),
+        -max_angle,
+        max_angle,
+    );
     let k = lerp_speed * msec as f32 * 0.001;
 
     st.sway_offset[1] = approach(st.sway_offset[1], horiz_scale * dy * scale, k);
     st.sway_offset[2] = approach(st.sway_offset[2], dp * vert_scale * scale, k);
 
-    let mut ta0 = dp * pitch_scale * scale;
-    let mut ta1 = dy * yaw_scale * scale;
+    let mut ta0 = near(dp * pitch_scale * scale, st.sway_angles[0]);
+    let mut ta1 = near(dy * yaw_scale * scale, st.sway_angles[1]);
     while ta0 - st.sway_angles[0] > 180.0 {
         ta0 -= 360.0;
     }
@@ -461,7 +448,23 @@ fn movement_rot(
     } else {
         aim.pos_rot_rate
     };
-    for (cur, &target) in st.rot.iter_mut().zip(&target) {
+    ease_toward(&mut st.rot, target, rate, dt);
+    let k = if frac == 0.0 {
+        1.0
+    } else if frac < 0.5 {
+        1.0 - 2.0 * frac
+    } else {
+        return;
+    };
+    for (o, r) in out.iter_mut().zip(&st.rot) {
+        *o += r * k;
+    }
+}
+
+/// Each axis of `cur` a step of `dt * gap * rate` toward `target`, at least
+/// a tenth a second, and never past it.
+fn ease_toward(cur: &mut [f32; 3], target: [f32; 3], rate: f32, dt: f32) {
+    for (cur, &target) in cur.iter_mut().zip(&target) {
         if target == *cur {
             continue;
         }
@@ -473,16 +476,6 @@ fn movement_rot(
             step = step.min(dt * -0.1);
             *cur = (*cur + step).max(target);
         }
-    }
-    let k = if frac == 0.0 {
-        1.0
-    } else if frac < 0.5 {
-        1.0 - 2.0 * frac
-    } else {
-        return;
-    };
-    for (o, r) in out.iter_mut().zip(&st.rot) {
-        *o += r * k;
     }
 }
 
@@ -540,19 +533,7 @@ impl GunMove {
             aim.pos_move_rate
         };
         let dt = msec as f32 * 0.001;
-        for (cur, &target) in self.pos.iter_mut().zip(&target) {
-            if target == *cur {
-                continue;
-            }
-            let mut step = dt * (target - *cur) * rate;
-            if *cur < target {
-                step = step.max(dt * 0.1);
-                *cur = (*cur + step).min(target);
-            } else {
-                step = step.min(dt * -0.1);
-                *cur = (*cur + step).max(target);
-            }
-        }
+        ease_toward(&mut self.pos, target, rate, dt);
         let frac = ps.weapon_pos_frac;
         let k = if frac == 0.0 {
             1.0
@@ -847,8 +828,8 @@ pub fn aim_angles(ps: &PlayerState, st: &mut AimState, input: &AimInput) -> [f32
 mod tests {
     use super::*;
     use crate::pmove::SPEED_RUN;
+    use crate::xmodel::WeaponKeys;
     use glam::Vec3;
-    use std::collections::HashMap;
 
     /// 988.76947 degrees is 179999.993 65536ths: retail's x87 product
     /// truncates to 179999, where an `f32` product rounds onto 180000.
@@ -860,7 +841,7 @@ mod tests {
 
     /// The kar98k sniper's aim keys as `pak0.pk3` spells them.
     fn sniper() -> WeaponDef {
-        let mut m = HashMap::new();
+        let mut m = WeaponKeys::default();
         for (k, v) in [
             ("aimDownSight", "1"),
             ("adsOverlayReticle", "FG42"),
@@ -892,7 +873,7 @@ mod tests {
             ("duckedRotMinSpeed", "20"),
             ("proneRotMinSpeed", "0"),
         ] {
-            m.insert(k.to_string(), v.to_string());
+            m.insert(k, v.to_string());
         }
         WeaponDef::from_map(&m)
     }
@@ -951,14 +932,12 @@ mod tests {
         );
     }
 
-    /// Off the sight the gun's angles never enter the aim: a hip shot goes
-    /// where the view points however the gun sways.
     /// The kar98k's position under movement: at a run the gun eases
     /// toward `standMove` (0, 0.6, -1) at `posMoveRate` 4 a second, sits
     /// at `duckedOfs` crouched still, and the raised sight takes it away.
     #[test]
     fn the_gun_moves_with_speed_and_stance() {
-        let mut m = HashMap::new();
+        let mut m = WeaponKeys::default();
         for (k, v) in [
             ("standMoveR", "0.6"),
             ("standMoveU", "-1"),
@@ -970,7 +949,7 @@ mod tests {
             ("standMoveMinSpeed", "80"),
             ("duckedMoveMinSpeed", "20"),
         ] {
-            m.insert(k.to_string(), v.to_string());
+            m.insert(k, v.to_string());
         }
         let aim = WeaponDef::from_map(&m).aim;
         let mut ps = still(0.0);
@@ -1004,14 +983,14 @@ mod tests {
     /// the stance's pose.
     #[test]
     fn the_gun_move_scales_against_the_server_s_speed() {
-        let mut m = HashMap::new();
+        let mut m = WeaponKeys::default();
         for (k, v) in [
             ("standMoveR", "0.6"),
             ("standMoveU", "-1"),
             ("posMoveRate", "4"),
             ("standMoveMinSpeed", "80"),
         ] {
-            m.insert(k.to_string(), v.to_string());
+            m.insert(k, v.to_string());
         }
         let aim = WeaponDef::from_map(&m).aim;
         let mut ps = still(0.0);
@@ -1034,7 +1013,7 @@ mod tests {
     /// pose again once the sprint ends.
     #[test]
     fn a_uo_sprint_swings_the_gun_to_its_sprint_pose() {
-        let mut m = HashMap::new();
+        let mut m = WeaponKeys::default();
         for (k, v) in [
             ("standMoveR", "0.5"),
             ("standMoveU", "-1.2"),
@@ -1045,7 +1024,7 @@ mod tests {
             ("standMoveMinSpeed", "80"),
             ("sprintMoveMinSpeed", "110"),
         ] {
-            m.insert(k.to_string(), v.to_string());
+            m.insert(k, v.to_string());
         }
         let aim = WeaponDef::from_map(&m).aim;
         let mut ps = still(0.0);
@@ -1070,6 +1049,8 @@ mod tests {
         assert_eq!(g.step(&ps, &aim, 50), [0.0, 0.5, -1.2], "back at a run");
     }
 
+    /// Off the sight the gun's angles never enter the aim: a hip shot goes
+    /// where the view points however the gun sways.
     #[test]
     fn a_hip_shot_aims_the_raw_view() {
         let def = sniper();
@@ -1169,5 +1150,44 @@ mod tests {
         assert_eq!(at(&sighted, Some(&scope), 1100), [-7.5, 0.0, 3.0]);
         let never = DamageKick::default();
         assert_eq!(view_angles(&hip, None, &never, 50), [0.0; 3]);
+    }
+
+    /// A weapon file's crossed sway and kick maxima, a NaN or out-of-range
+    /// sight fraction and a view of 1e30 or infinity step the sway and the
+    /// spring without a panic or a hang (SEC-048, SEC-062).
+    #[test]
+    fn hostile_keys_and_fractions_step_the_gun() {
+        let mut m = WeaponKeys::default();
+        for (k, v) in [
+            ("aimDownSight", "1"),
+            ("swayMaxAngle", "-1"),
+            ("adsSwayMaxAngle", "nan"),
+            ("swayPitchScale", "1e30"),
+            ("swayYawScale", "inf"),
+            ("swayLerpSpeed", "6"),
+            ("hipGunKickSpeedMax", "-5"),
+            ("adsGunKickSpeedMax", "nan"),
+            ("hipGunKickAccel", "100"),
+            ("gunMaxPitch", "10"),
+            ("gunMaxYaw", "10"),
+        ] {
+            m.insert(k, v.to_string());
+        }
+        let def = WeaponDef::from_map(&m);
+        for frac in [0.0, 0.5, 2.0, -1.0, f32::NAN, f32::INFINITY] {
+            let ps = still(frac);
+            let mut st = AimState::default();
+            for view in [
+                [0.0, 0.0, 0.0],
+                [1e30, -1e30, 0.0],
+                [f32::INFINITY, f32::NAN, 0.0],
+            ] {
+                gun_angles(&ps, &mut st, &input(&def, view, 1000));
+                aim_angles(&ps, &mut st, &input(&def, view, 1050));
+            }
+            let mut kick = GunKick::default();
+            kick.kick(30.0, -30.0);
+            kick.step(&def, frac, 0.1);
+        }
     }
 }

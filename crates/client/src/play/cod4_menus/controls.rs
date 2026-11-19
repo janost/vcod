@@ -18,7 +18,12 @@ use vcod_cod4::scriptmenu::{
 
 use super::{ScriptMenus, placed};
 use crate::console::keys;
+use crate::console::shell::{bare, quotable};
+use crate::frontend::item_rules::{
+    SLIDER_H, SLIDER_W, THUMB_INSET, THUMB_TRAVEL, enum_index, slider_value, step, thumb_x,
+};
 use crate::hud::cod2elem::ScreenPlacement;
+use crate::hud::hudelem::format_g;
 
 /// The CoD4 dvars an option control sets and the vcod cvar each is: the
 /// mouse's (`main.rs`'s `mouse_frame`), `r_gamma` (the gamma pass),
@@ -148,13 +153,6 @@ pub struct Slider {
     pub thumb: f32,
 }
 
-/// The bar's size, the thumb's travel and inset, and the thumb's size.
-pub const SLIDER_W: f32 = 96.0;
-pub const SLIDER_H: f32 = 16.0;
-const THUMB_TRAVEL: f32 = 84.0;
-const THUMB_INSET: f32 = 6.0;
-pub const THUMB_W: f32 = 10.0;
-pub const THUMB_H: f32 = 20.0;
 /// A list box scroll bar's width, and each arrow's and the thumb's side.
 pub const SCROLL: f32 = 16.0;
 
@@ -170,7 +168,9 @@ pub struct ScrollBar {
 /// The thumb's path down a vertical list box of grid rect `r` whose first
 /// row runs 0..=`max` (cod4-hud.md 12.6): its top starts a unit under the
 /// up arrow, each first row moves it an equal share of the travel, and its
-/// bottom stays two units clear of the down arrow.
+/// bottom stays two units clear of the down arrow. Not CoD1's
+/// `frontend/listbox.rs` maths, which truncates the thumb's top and scrolls
+/// one row past a full last page.
 struct ThumbPath {
     top: f32,
     travel: f32,
@@ -236,8 +236,9 @@ impl ScriptMenus {
     pub(super) fn set_dvar(&mut self, name: &str, value: &str) {
         match self.host_cvar(name) {
             Some(c) => {
+                let value = quotable(value);
                 self.console.push(format!("set {c} \"{value}\""));
-                self.host.cvars.insert(c.to_string(), value.to_string());
+                self.host.cvars.insert(c.to_string(), value);
             }
             None => {
                 self.ui
@@ -369,7 +370,8 @@ impl ScriptMenus {
         }
         let dvar = it.dvar.clone().unwrap_or_default();
         match it.kind {
-            // `Item_YesNo_HandleKey`: `va("%i", atoi(value) == 0)`.
+            // `Item_YesNo_HandleKey`: `va("%i", atoi(value) == 0)`. Not
+            // shared with CoD1's, which reads the value as a float.
             ITEM_TYPE_YESNO => {
                 let on = atoi(&self.dvar(&dvar).unwrap_or_default()) != 0;
                 self.set_dvar(&dvar, if on { "0" } else { "1" });
@@ -380,14 +382,9 @@ impl ScriptMenus {
             ITEM_TYPE_DVARENUM => {
                 let n = self.enum_entries(&it).len();
                 let cur = self.enum_index(&it);
-                let next = match key {
-                    _ if n == 0 => return false,
-                    ItemKey::Left => (cur + n - 1) % n,
-                    _ => (cur + 1) % n,
-                };
-                if next == cur {
+                let Some(next) = step(cur, n, key == ItemKey::Left).filter(|&to| to != cur) else {
                     return false;
-                }
+                };
                 self.set_dvar(&dvar, &next.to_string());
                 true
             }
@@ -397,14 +394,9 @@ impl ScriptMenus {
                 };
                 let n = m.labels.len();
                 let cur = self.multi_index(&dvar, m);
-                let next = match key {
-                    _ if n == 0 => return false,
-                    ItemKey::Left => (cur + n - 1) % n,
-                    _ => (cur + 1) % n,
-                };
-                if next == cur {
+                let Some(next) = step(cur, n, key == ItemKey::Left).filter(|&to| to != cur) else {
                     return false;
-                }
+                };
                 let v = if m.str_def {
                     m.strings[next].clone()
                 } else {
@@ -584,7 +576,7 @@ impl ScriptMenus {
                     ([s.x + THUMB_INSET, s.y, THUMB_TRAVEL, SLIDER_H], align),
                 );
                 let frac = ((c[0] - x) / w).clamp(0.0, 1.0);
-                self.set_dvar(d, &format_g(frac * (e.max - e.min) + e.min));
+                self.set_dvar(d, &format_g(slider_value(frac, e.min, e.max)));
             }
             ITEM_TYPE_LISTBOX => {
                 let Some(bar) = self.scroll_bar(i) else {
@@ -699,6 +691,8 @@ impl ScriptMenus {
             _ => 255,
         };
         let mut v = self.dvar(d).unwrap_or_default();
+        // Not shared with CoD1's filter, which takes any character but a
+        // control or `"`.
         let takes = |c: char| match it.kind {
             ITEM_TYPE_NUMERICFIELD => c.is_ascii_digit(),
             ITEM_TYPE_DECIMALFIELD => c.is_ascii_digit() || c == '.',
@@ -773,7 +767,8 @@ impl ScriptMenus {
 
     /// `Item_Bind_HandleKey` while waiting, `key` vcod's key name: Escape
     /// cancels; Backspace, or a command that already has two keys, unbinds
-    /// them; any key but Backspace then takes the command.
+    /// them; any key but Backspace then takes the command. Not shared with
+    /// CoD1's, which takes the pressed key off the two before it counts.
     pub fn bind_key(&mut self, key: &str) {
         let Some(i) = self.waiting.take() else {
             return;
@@ -792,6 +787,7 @@ impl ScriptMenus {
             }
         }
         if key != "BACKSPACE" {
+            let cmd = quotable(&cmd);
             self.console.push(format!("bind {key} \"{cmd}\""));
             self.host.binds.retain(|(b, _)| b != key);
             self.host.binds.push((key.to_string(), cmd));
@@ -844,7 +840,8 @@ impl ScriptMenus {
                 .get(self.enum_index(it))
                 .cloned()
                 .unwrap_or_default(),
-            // `Item_TextField_Paint`: a decimal field's float to two places.
+            // `Item_TextField_Paint`: a decimal field's float to two places;
+            // unlike CoD2's, a value that is no float shows as typed.
             ITEM_TYPE_DECIMALFIELD => {
                 let v = value();
                 match v.trim().parse::<f32>() {
@@ -898,22 +895,17 @@ impl ScriptMenus {
     /// `Item_DvarEnum_EnumIndex`: the item's dvar as an index
     /// in range, else the entry it names in any case, else 0.
     fn enum_index(&self, it: &LayoutItem) -> usize {
-        let entries = self.enum_entries(it);
         let v = it
             .dvar
             .as_deref()
             .and_then(|d| self.dvar(d))
             .unwrap_or_default();
-        match usize::try_from(atoi(&v)) {
-            Ok(i) if i < entries.len() => i,
-            _ => entries
-                .iter()
-                .position(|e| e.eq_ignore_ascii_case(&v))
-                .unwrap_or(0),
-        }
+        enum_index(self.enum_entries(it), &v, atoi)
     }
 
-    /// `Item_Multi_FindDvarByValue`: the entry the dvar holds, else 0.
+    /// `Item_Multi_FindDvarByValue`: the entry the dvar holds, else 0. Not
+    /// shared with CoD1's, which reads a float list without `atof` and paints
+    /// no match blank.
     fn multi_index(&self, dvar: &str, m: &MultiDef) -> usize {
         let v = self.dvar(dvar).unwrap_or_default();
         if m.str_def {
@@ -956,11 +948,12 @@ impl ScriptMenus {
             .map_or(0.0, |v| atof(&v) as f32)
             .clamp(e.min.min(e.max), e.max.max(e.min));
         let span = e.max - e.min;
+        // A reversed range moves the thumb too; CoD1's pins it at the inset.
         let frac = if span != 0.0 { (v - e.min) / span } else { 0.0 };
         Some(Slider {
             x,
             y,
-            thumb: x + THUMB_INSET + frac * THUMB_TRAVEL,
+            thumb: thumb_x(x, frac),
         })
     }
 
@@ -1084,19 +1077,19 @@ impl ScriptMenus {
             usize::try_from(at)
                 .ok()
                 .and_then(|m| self.lists.maps.get(m))
-                .map(|a| a.map.clone())
+                .map(|a| bare(&a.map))
         };
         let gametype = || {
             let at = atoi(&self.dvar("ui_netGameType").unwrap_or_default());
             usize::try_from(at)
                 .ok()
                 .and_then(|g| self.lists.gametypes.get(g))
-                .map(|(g, _)| g.clone())
+                .map(|(g, _)| bare(g))
         };
         let player = || {
             self.player_index
                 .and_then(|i| self.host.players.get(i))
-                .map(|(n, name)| (*n, clean(name)))
+                .map(|(n, name)| (*n, quotable(&clean(name))))
         };
         let line = match name.to_ascii_lowercase().as_str() {
             "update" => {
@@ -1135,16 +1128,27 @@ impl ScriptMenus {
 
     /// Whether a chat line is a muted player's: its speaker, the text
     /// before the first `": "` with the colour codes and the message
-    /// bytes out, ends with a muted player's cleaned name. vcod's own
-    /// rule: retail's mute holds the voice back only.
+    /// bytes out, is a muted player's whole cleaned name, after any team or
+    /// dead prefix (a blank, `)` or `]` before it). A speaker that is
+    /// another player's whole name is that player's. vcod's own rule:
+    /// retail's mute holds the voice back only.
     pub fn chat_muted(&self, line: &str) -> bool {
         let line = clean(line);
         let Some((speaker, _)) = line.split_once(": ") else {
             return false;
         };
-        self.host.players.iter().any(|(n, name)| {
-            let name = clean(name);
-            self.muted.contains(n) && !name.is_empty() && speaker.ends_with(&name)
+        let names: Vec<(u32, String)> = (self.host.players.iter())
+            .map(|(n, name)| (*n, clean(name)))
+            .collect();
+        if let Some((n, _)) = names.iter().find(|(_, name)| name == speaker) {
+            return self.muted.contains(n);
+        }
+        names.iter().any(|(n, name)| {
+            self.muted.contains(n)
+                && !name.is_empty()
+                && speaker
+                    .strip_suffix(name.as_str())
+                    .is_some_and(|before| before.ends_with([' ', ')', ']']))
         })
     }
 }
@@ -1152,13 +1156,18 @@ impl ScriptMenus {
 /// How many rows a list box of height `h` draws (`Item_ListBox_Paint`:
 /// `h - 2` less a row each until a row no longer fits).
 pub fn list_rows(lb: &ListBox, h: f32) -> usize {
-    if lb.element_height <= 0.0 {
+    // A hostile fastfile's NaN, infinite or tiny height would never end the loop.
+    const MAX_ROWS: usize = 1024;
+    if lb.element_height.is_nan() || lb.element_height <= 0.0 || !h.is_finite() {
         return 0;
     }
     let mut size = h - 2.0;
     let mut n = 0;
     loop {
         n += 1;
+        if n == MAX_ROWS {
+            return n;
+        }
         size -= lb.element_height;
         if lb.element_height > size {
             return n;
@@ -1182,22 +1191,6 @@ pub fn clean(s: &str) -> String {
     out
 }
 
-/// C's `%g` for the menus' values: six significant digits, trailing zeros
-/// dropped.
-pub fn format_g(v: f32) -> String {
-    if v == 0.0 || !v.is_finite() {
-        return "0".into();
-    }
-    let digits = (v.abs() as f64).log10().floor() as i32 + 1;
-    let decimals = (6 - digits).clamp(0, 6) as usize;
-    let s = format!("{:.*}", decimals, v);
-    if s.contains('.') {
-        s.trim_end_matches('0').trim_end_matches('.').to_string()
-    } else {
-        s
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1209,7 +1202,24 @@ mod tests {
         assert_eq!(format_g(-0.022), "-0.022");
         assert_eq!(format_g(15.5), "15.5");
         assert_eq!(format_g(65535.0), "65535");
+        assert_eq!(format_g(0.00001), "1e-05");
+        assert_eq!(format_g(0.012345678), "0.0123457");
         assert_eq!(clean("\u{15}\u{15}^9walker^7: ^7hi"), "walker: hi");
+    }
+
+    /// A mute matches the speaker's whole name, with or without the
+    /// server's team or dead prefix: muting `a` keeps Anna's lines (BUG-120).
+    #[test]
+    fn a_mute_matches_the_whole_name() {
+        let mut m = crate::play::cod4_menus::ScriptMenus::default();
+        m.host.players = vec![(0, "a".into()), (1, "Anna".into()), (2, "^1b^7a".into())];
+        m.muted.insert(0);
+        assert!(m.chat_muted("a: hi"));
+        assert!(m.chat_muted("\u{15}\u{15}^9a^7: ^7hi"));
+        assert!(m.chat_muted("(Team) a: hi"));
+        assert!(m.chat_muted("[DEAD] a: hi"));
+        assert!(!m.chat_muted("Anna: hi"));
+        assert!(!m.chat_muted("^1b^7a: hi"), "another player's whole name");
     }
 
     #[test]
@@ -1221,6 +1231,19 @@ mod tests {
         // 268 units: rows while one still fits after it.
         assert_eq!(list_rows(&lb, 270.0), 11);
         assert_eq!(list_rows(&lb, 300.0), 12);
+    }
+
+    /// Heights out of a hostile fastfile end: NaN, infinite and tiny.
+    #[test]
+    fn a_list_box_with_a_broken_height_ends() {
+        let lb = |element_height| ListBox {
+            element_height,
+            ..ListBox::default()
+        };
+        assert_eq!(list_rows(&lb(f32::NAN), 300.0), 0);
+        assert_eq!(list_rows(&lb(24.0), f32::NAN), 0);
+        assert_eq!(list_rows(&lb(24.0), f32::INFINITY), 0);
+        assert_eq!(list_rows(&lb(1e-30), 300.0), 1024);
     }
 
     /// A held thumb's centre picks the first row by its share of the

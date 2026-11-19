@@ -5,7 +5,7 @@
 use crate::server::ServerConfig;
 use vcod_common::net::connectionless::Info;
 use vcod_common::net::protocol::{
-    CS_LEVEL_START_TIME, CS_SERVERINFO, CS_SYSTEMINFO, CsLayout, PROTOCOL_V1, Protocol,
+    CS_LEVEL_START_TIME_V1, CS_SERVERINFO, CS_SYSTEMINFO, Cod1Wire, CsLayout, PROTOCOL_V1,
 };
 use vcod_common::pk3::PakInfo;
 use vcod_common::pmove::FallHeights;
@@ -14,18 +14,8 @@ use vcod_gsc::ErrorKind;
 /// `BG_SetupWeaponInfo`'s list, configstring 7, 1-based on the wire.
 pub const WEAPON_LIST: &str = "bar_mp bar_slow_mp bren_mp colt_mp enfield_mp fg42_mp fg42_semi_mp fraggrenade_mp kar98k_mp kar98k_sniper_mp luger_mp m1carbine_mp m1garand_mp mg42_bipod_duck_mp mg42_bipod_prone_mp mg42_bipod_stand_mp mk1britishfrag_mp mosin_nagant_mp mosin_nagant_sniper_mp mp40_mp mp44_mp mp44_semi_mp panzerfaust_mp ppsh_mp ppsh_semi_mp ptrs41_antitank_rifle_mp rgd-33russianfrag_mp springfield_mp sten_mp stielhandgranate_mp thompson_mp thompson_semi_mp";
 
-/// A weapon's 1-based position in [`WEAPON_LIST`], which is what every
-/// weapon-shaped index on the wire and in the item table means. The lookup is
-/// case-sensitive, matching retail's `strcmp` (`BG_FindItem` 0x2e214).
-pub fn weapon_index(name: &str) -> Option<usize> {
-    WEAPON_LIST
-        .split(' ')
-        .position(|w| w == name)
-        .map(|i| i + 1)
-}
-
-/// Map-independent configstrings the engine itself sets. Everything else
-/// this table used to carry is script output and is earned back at load:
+/// Map-independent configstrings the engine itself sets. These slots are
+/// script output instead, written at load:
 /// 21/22 from `precacheStatusIcon`, 29 from `precacheHeadIcon`,
 /// 140..180 / 204..244 from the cvar mirror, 1180..1187 from
 /// `precacheMenu`, 1245/1246 from `precacheString` and 1501..1505 from
@@ -36,7 +26,7 @@ pub fn weapon_index(name: &str) -> Option<usize> {
 pub const STATIC: &[(usize, &str)] = &[
     (2, "cod"),
     (7, WEAPON_LIST),
-    (CS_LEVEL_START_TIME, "0"),
+    (CS_LEVEL_START_TIME_V1, "0"),
     (20, "\\winner\\0"),
     (1212, "CGAME_USEMG42"),
     (1213, "CGAME_USEPTRS41"),
@@ -61,7 +51,7 @@ pub const STATIC_V22: &[(usize, &str)] = &[
 ];
 
 /// The static table a server speaking `p` starts from.
-pub fn static_table(p: &Protocol) -> &'static [(usize, &'static str)] {
+pub fn static_table(p: &Cod1Wire) -> &'static [(usize, &'static str)] {
     if p.is_uo() { STATIC_V22 } else { STATIC }
 }
 
@@ -115,7 +105,7 @@ impl PakLists {
     pub fn of<'a>(
         pure: bool,
         paks: impl IntoIterator<Item = (&'a PakInfo, bool)>,
-        p: &Protocol,
+        p: &Cod1Wire,
         basegame: &str,
     ) -> Self {
         let mut lists = PakLists {
@@ -139,7 +129,7 @@ impl PakLists {
 /// lists every pak, 1.5 a pak a file was read from or one outside `main`,
 /// UO one read from or outside both `main` and `fs_basegame`. Each
 /// directory test is `Q_stricmpn` over the other name's length.
-fn lists_referenced(p: &Protocol, pak: &PakInfo, read: bool, basegame: &str) -> bool {
+fn lists_referenced(p: &Cod1Wire, pak: &PakInfo, read: bool, basegame: &str) -> bool {
     let under = |dir: &str| {
         pak.game
             .get(..dir.len())
@@ -244,13 +234,13 @@ pub fn systeminfo(
         if i.to_string().len() <= bound || (paks.referenced.is_empty() && paks.paks.is_empty()) {
             return i;
         }
-        // Rebuilt every frame the fall bounds are read: say it once.
+        // Rebuilt whenever an input moves (a restart's server id): say it once.
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| log::warn!("systeminfo over {bound} chars: trimming the pak lists"));
         // A stock pak is never downloaded, so its referenced entry is the
         // cheapest to lose; `sv_paks` is what a pure client keeps loaded.
         // 1.5's rows ride a UO table too; its stock paks are either's.
-        let stock: &[&Protocol] = if v6.is_some() {
+        let stock: &[&Cod1Wire] = if v6.is_some() {
             &[
                 &vcod_common::net::protocol::PROTOCOL_V6,
                 &vcod_common::net::protocol::PROTOCOL_V22,
@@ -280,7 +270,7 @@ pub fn static_configstrings(
     cheats: bool,
     paks: &PakLists,
     v6: Option<&[(String, String)]>,
-    p: &Protocol,
+    p: &Cod1Wire,
 ) -> Vec<String> {
     let mut cs = vec![String::new(); p.transport.max_configstrings];
     let table = static_table(p);
@@ -399,6 +389,7 @@ pub struct Allocators {
 /// the constants rule stores names from here on lowercased.
 const CASE_INSENSITIVE_FROM: usize = 821;
 
+#[cfg(test)]
 impl Default for Allocators {
     fn default() -> Self {
         Allocators::new(&PROTOCOL_V1.cs)
@@ -510,6 +501,22 @@ impl Allocators {
             .map(|&(s, _)| s as usize)
             .or_else(|| (lo..=hi).find(|&i| empty(i) && !is_constant(i)))
             .or_else(|| (lo..=hi).find(|&i| empty(i)))
+    }
+
+    fn next(&self, range: CsRange) -> usize {
+        match range {
+            CsRange::StatusIcon => self.status_icon,
+            CsRange::HeadIcon => self.head_icon,
+            CsRange::Tag => self.tag,
+            CsRange::Model => self.model,
+            CsRange::SoundAlias => self.sound_alias,
+            CsRange::Effect => self.effect,
+            CsRange::FxTag => self.fx_tag,
+            CsRange::ShellShock => self.shell_shock,
+            CsRange::Menu => self.menu,
+            CsRange::Localized => self.localized,
+            CsRange::Shader => self.shader,
+        }
     }
 
     fn next_mut(&mut self, range: CsRange) -> &mut usize {
@@ -647,17 +654,12 @@ impl Allocators {
     }
 
     /// A filled slot of `range` holding `name` under `strcasecmp`.
-    pub(crate) fn find_folded(
-        &mut self,
-        cs: &[String],
-        range: CsRange,
-        name: &str,
-    ) -> Option<usize> {
+    pub(crate) fn find_folded(&self, cs: &[String], range: CsRange, name: &str) -> Option<usize> {
         let (lo, hi) = self.layout.bounds(range);
         let end = if self.constants.is_some() {
             hi + 1
         } else {
-            *self.next_mut(range)
+            self.next(range)
         };
         (lo..end).find(|&s| cs[s].eq_ignore_ascii_case(name))
     }
@@ -759,6 +761,74 @@ pub fn script_menu_name<'a>(cs: &'a [String], layout: &CsLayout, index: usize) -
 mod tests {
     use super::*;
 
+    /// CoD4's allocators over 1.7's constants, on an empty table.
+    fn cod4() -> (Allocators, ConfigStrings) {
+        let a = Allocators::with_constants(
+            &crate::game::cod4::CS_LAYOUT_COD4,
+            vcod_cod4::net::constant_cs::CONSTANT_CONFIGSTRINGS,
+        );
+        (a, ConfigStrings::new(vec![String::new(); 2400]))
+    }
+
+    /// The slots `with_constants`'s comment gives off the 1.7 capture: a
+    /// shellshock on its constant, one with no constant in its range on
+    /// the first slot no constant names, a menu on its block's first empty
+    /// slot whatever its constant.
+    #[test]
+    fn cod4_names_take_their_constant_slots() {
+        let (mut a, mut cs) = cod4();
+        let mut at = |r, n: &str| a.index(&mut cs, r, n).unwrap();
+        assert_eq!(at(CsRange::ShellShock, "default"), 1968);
+        assert_eq!(at(CsRange::ShellShock, "concussion_grenade_mp"), 1969);
+        // flashbang's constant, 1970, is the menus' first slot.
+        assert_eq!(at(CsRange::ShellShock, "flashbang"), 1955);
+        assert_eq!(
+            at(CsRange::Menu, "scoreboard"),
+            1970,
+            "not its constant 1986"
+        );
+        assert_eq!(at(CsRange::Localized, "PLATFORM_HOLD_TO_DROP"), 351);
+    }
+
+    /// New localized strings fill around the constants' slots, 350 and
+    /// 351 left to theirs; from the ambient slot 821 on names keep in
+    /// lower case, but a sound alias's.
+    #[test]
+    fn cod4_new_names_skip_the_constant_slots_and_fold_from_821() {
+        let (mut a, mut cs) = cod4();
+        for i in 0..40 {
+            a.index(&mut cs, CsRange::Localized, &format!("S_{i}"))
+                .unwrap();
+        }
+        assert_eq!(a.index(&mut cs, CsRange::Localized, "S_40"), Ok(352));
+        assert_eq!((cs[350].as_str(), cs[351].as_str()), ("", ""));
+        assert_eq!(cs[352], "S_40");
+        let s = a.index(&mut cs, CsRange::ShellShock, "Default").unwrap();
+        assert_eq!((s, cs[s].as_str()), (1968, "default"));
+        let s = a
+            .index(&mut cs, CsRange::SoundAlias, "US_1mc_team")
+            .unwrap();
+        assert_eq!(cs[s], "US_1mc_team");
+        let s = a.index(&mut cs, CsRange::Menu, "Class").unwrap();
+        assert_eq!(cs[s], "class");
+    }
+
+    /// A range whose free slots are all constants' takes them in order, so
+    /// a later name with that constant finds its slot taken and writes over
+    /// it. vcod's reading of the rule (cod4-gsc.md 5); no capture reaches
+    /// a full range.
+    #[test]
+    fn cod4_a_constant_slot_another_name_took_is_written_over() {
+        let (mut a, mut cs) = cod4();
+        for i in 0..13 {
+            a.index(&mut cs, CsRange::ShellShock, &format!("s{i}"))
+                .unwrap();
+        }
+        assert_eq!(a.index(&mut cs, CsRange::ShellShock, "s13"), Ok(1968));
+        assert_eq!(a.index(&mut cs, CsRange::ShellShock, "default"), Ok(1968));
+        assert_eq!(cs[1968], "default");
+    }
+
     fn pak(name: &str, game: &str, checksum: i32) -> PakInfo {
         PakInfo {
             path: format!("{game}/{name}.pk3").into(),
@@ -770,9 +840,6 @@ mod tests {
         }
     }
 
-    /// The pak half of the retail capture under `sv_pure 1` (2026-10-09,
-    /// 1.1d on a stock 1.1 install, docs/research/cod11-server-handshake.md,
-    /// "Pak checksums"), trimmed to three paks.
     /// Past initializing a name in the range is found in any case and a new
     /// one is the indexer's error with nothing taken; while initializing
     /// it is allocated.
@@ -799,6 +866,9 @@ mod tests {
         assert_eq!(a.localized_index(&mut cs, "", false), Ok(0));
     }
 
+    /// The pak half of the retail capture under `sv_pure 1` (2026-10-09,
+    /// 1.1d on a stock 1.1 install, docs/research/cod11-server-handshake.md,
+    /// "Pak checksums"), trimmed to three paks.
     #[test]
     fn systeminfo_carries_the_pak_lists_as_retail_does() {
         let paks = [
@@ -848,7 +918,7 @@ mod tests {
             (pak("pak0", "main", 4), false),
             (pak("localized_english_pak0", "main", 5), true),
         ];
-        let names = |p: &Protocol, basegame: &str| -> Vec<String> {
+        let names = |p: &Cod1Wire, basegame: &str| -> Vec<String> {
             let lists = PakLists::of(false, paks.iter().map(|(p, r)| (p, *r)), p, basegame);
             lists.referenced.into_iter().map(|(_, n)| n).collect()
         };
@@ -965,9 +1035,7 @@ mod tests {
             );
             seen.push((lo, hi));
             // 0 and 1 are set by `static_configstrings` outside the
-            // `STATIC` list (serverinfo, systeminfo). 179/243/1501 used to
-            // be as well, but the layout-image write is gone now that
-            // `Shader` genuinely starts at 1501.
+            // `STATIC` list (serverinfo, systeminfo).
             for i in STATIC.iter().map(|&(i, _)| i).chain([0, 1]) {
                 assert!(
                     i < lo || i > hi,

@@ -54,7 +54,7 @@ copied on purpose.
 - **The server** runs Activision's own gametype scripts on vcod's own
   `.gsc` VM, so the stock modes play by the stock rules. Retail clients
   can join it.
-- **Bots** (`--bots N --bots-shoot`) join through the menus, find their way
+- **Bots** (`--bots N`) join through the menus, find their way
   around the map, play the objectives and fight back. They're bad at it.
   So am I. rcon's `addbot` and `removebot` manage them on a running server
   ([docs/bots.md](docs/bots.md)).
@@ -73,16 +73,19 @@ copied on purpose.
 2. **Get vcod.** Grab the archive for your OS from the
    [nightly release](https://github.com/janost/vcod/releases/tag/nightly)
    (or [build it](#building-from-source)) and put `vcod` and `vcod-server`
-   in the game's directory. Each binary tells the games apart by the
-   install. Elsewhere, point `COD_DIR` or `--game-dir` at it.
+   in the game's directory. The Linux build needs glibc 2.35 or newer
+   (Ubuntu 22.04, Fedora 36). The nightly is rebuilt from master once CI
+   passes; `SHA256SUMS` beside the archives holds their checksums. Each
+   binary tells the games apart by the install. Elsewhere, point `COD_DIR`
+   or `--game-dir` at it.
 3. **Play against bots**:
 
    | Game | Server |
    |---|---|
-   | CoD 1 | `vcod-server mp_carentan --bots 6 --bots-shoot --gametype tdm` |
-   | UO | `vcod-server mp_cassino --mod-dir uo --bots 6 --bots-shoot --gametype tdm` |
-   | CoD 2 | `vcod-server mp_toujane --bots 6 --bots-shoot --gametype tdm` |
-   | CoD 4 | `vcod-server mp_crash --bots 6 --bots-shoot --gametype war` |
+   | CoD 1 | `vcod-server mp_carentan --bots 6 --gametype tdm` |
+   | UO | `vcod-server mp_cassino --mod-dir uo --bots 6 --gametype tdm` |
+   | CoD 2 | `vcod-server mp_toujane --bots 6 --gametype tdm` |
+   | CoD 4 | `vcod-server mp_crash --bots 6 --gametype war` |
 
    Then `vcod --connect 127.0.0.1:28960` (add `--mod-dir uo` for UO). Pick
    a team, pick a weapon, go get shot.
@@ -119,7 +122,7 @@ asphalt. Twenty-three years late, Infinity Ward, you're welcome.
 
 ## Building from source
 
-Rust 1.90 or newer. The client needs a GPU with BC (DXT) texture
+Rust 1.95 or newer. The client needs a GPU with BC (DXT) texture
 compression, and wgpu picks the backend (`WGPU_BACKEND=vulkan|gl|dx12|metal`
 narrows it). The server needs no GPU.
 
@@ -135,9 +138,6 @@ because it can't ship the game either. A build outside a git checkout reads
 its sha from `VCOD_GIT_SHA`, or calls itself `unknown`.
 
 ## How I know it's right (when it is)
-
-The retail dedicated servers are the oracle. When vcod and retail disagree,
-retail wins and the disagreement goes into a research doc.
 
 - A headless probe client (`vcod --net-probe`) joins a server and records
   what it sees, with a few dozen scripted modes: shoot someone, throw a
@@ -166,8 +166,11 @@ human squinting at a screen, which is where you come in.
   movement, combat, vehicles, sound, scripts, bots and the rest. Every claim
   names the binary address it rests on and says whether it was verified or
   inferred. I'd call this the most useful part of the repo.
-- [AGENTS.md](AGENTS.md): the contributor guide. Layout, measuring against
-  retail, and the traps I already paid for.
+- [AGENTS.md](AGENTS.md): the contributor guide. Layout, workflow, the
+  evidence rules and the research doc index.
+- [docs/dev/](docs/dev/): the contributor's reference. The module map, the
+  server tick, testing, running and debugging, measuring against retail,
+  reverse engineering, and the traps I already paid for.
 
 The code is six crates. `vcod-common` holds CoD 1's formats, collision,
 movement and protocol and what every game shares, with no GPU or audio.
@@ -177,11 +180,11 @@ the script VM, which depends on nothing else here.
 
 ## Some numbers, for fun
 
-As of the end of October 2026:
+As of November 2026, rounded:
 
-- about 630,000 lines of Rust, for four games that shipped in less,
-- about 5,600 tests, and 91 of them replay a retail capture and refuse to
-  pass until vcod agrees with it,
+- about 700,000 lines of Rust, for four games that shipped in less,
+- about 6,000 tests, and over 90 of them replay a retail capture and refuse
+  to pass until vcod agrees with it,
 - close to a million words of protocol and research notes, four and a half
   Moby-Dicks with a worse plot, except the twist where grenade cooking
   turned out not to exist until United Offensive,
@@ -253,11 +256,16 @@ closely, I had it audited function by function and rewritten from the retail
 vcod is not affiliated with or endorsed by Activision or Infinity Ward. Call
 of Duty is a trademark of Activision Publishing, Inc. This repository
 contains no game assets, game code or binaries; it reads the files of a copy
-you own. The reverse engineering was done to interoperate with the game's own
-files and servers. The research notes document file formats and the network
+you own. The test fixtures under `crates/*/tests/fixtures/` are recordings of
+retail server output that I made (wire captures, configstring tables,
+debugger readings, log lines, one retail client demo) beside probe scripts and
+pinned outputs written for the tests, and hold no game assets; each fixture
+root's README says how they were made. The reverse engineering was done to
+interoperate with the game's own files and servers. The research notes document file formats and the network
 protocol for that purpose: layouts and addresses recovered from the
 binaries, no copied code. The projects under "Consulted, not copied" were
-read as references, and no code from them is included. The screenshots show art owned by Activision.
+read as references, and no code from them is included. The screenshots show
+art owned by Activision.
 
 Quake III Arena and Return to Castle Wolfenstein are trademarks of id
 Software. Their GPL sources, and the other ported code, are credited in

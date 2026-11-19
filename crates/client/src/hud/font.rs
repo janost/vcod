@@ -99,6 +99,8 @@ pub fn parse_font_dat(bytes: &[u8], size: u32) -> Result<Font, String> {
                 }
             }
         };
+        let page = u8::try_from(page)
+            .map_err(|_| format!("bad fontImage_{size}.dat: more than 256 pages"))?;
         glyphs.push(Glyph {
             height: i32_at(o),
             width: i32_at(o + 4),
@@ -112,16 +114,21 @@ pub fn parse_font_dat(bytes: &[u8], size: u32) -> Result<Font, String> {
             s2: f32_at(o + 36),
             t2: f32_at(o + 40),
             // +44 glyph handle: skipped.
-            page: page as u8,
+            page,
         });
     }
 
-    let glyph_scale = f32_at(GLYPH_BLOCK);
+    // `unit_scale` divides by both, so they are kept positive as `to_font`
+    // keeps CoD4's; a broken scale takes Q3's `48 / pointSize`.
+    let glyph_scale = Some(f32_at(GLYPH_BLOCK))
+        .filter(|s| s.is_finite() && *s > 0.0)
+        .unwrap_or(48.0 / size.max(1) as f32);
     let line_advance = f32_at(GLYPH_BLOCK + 4);
     let max_height = (0x20u8..=0x7e)
         .map(|b| glyphs[b as usize].height)
         .max()
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .max(1);
 
     Ok(Font {
         size,
@@ -425,7 +432,6 @@ fn glyph_index(c: char) -> usize {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn push_quad(
     out: &mut Vec<HudQuad>,
     x: f32,
@@ -491,7 +497,6 @@ pub fn char_count(text: &str) -> usize {
 
 /// [`layout`] on a fixed pitch: every glyph centred in a `cell`-wide cell,
 /// window px, however wide its own advance. Returns the advance.
-#[allow(clippy::too_many_arguments)]
 pub fn layout_fixed(
     font: &Font,
     text: &str,
@@ -529,7 +534,6 @@ pub fn layout_fixed(
 }
 
 /// [`layout_fixed`] without the shadow, as the console draws its text.
-#[allow(clippy::too_many_arguments)]
 pub fn layout_cells(
     font: &Font,
     text: &str,
@@ -569,6 +573,23 @@ mod tests {
         assert_eq!(out[1], (": hi".to_string(), default));
         assert_eq!(split_color_codes("a^", default)[0].0, "a^");
         assert_eq!(split_color_codes("^8x", default)[0].0, "^8x");
+    }
+
+    /// A `.dat` of zeros keeps a finite unit scale; one whose glyphs name
+    /// more atlases than a byte indexes is refused.
+    #[test]
+    fn a_font_dat_of_zeros_scales_and_too_many_pages_are_refused() {
+        let mut b = vec![0u8; FILE_SIZE];
+        let f = parse_font_dat(&b, 16).unwrap();
+        assert_eq!((f.glyph_scale, f.max_height), (3.0, 1));
+        assert!(f.unit_scale().is_finite() && f.line_height(1.0).is_finite());
+        for i in 0..GLYPH_COUNT - 1 {
+            let name = format!("p{i}");
+            b[i * RECORD_SIZE + 48..][..name.len()].copy_from_slice(name.as_bytes());
+        }
+        assert_eq!(parse_font_dat(&b, 16).unwrap().pages.len(), 256);
+        b[(GLYPH_COUNT - 1) * RECORD_SIZE + 48..][..4].copy_from_slice(b"last");
+        assert!(parse_font_dat(&b, 16).is_err());
     }
 
     #[test]

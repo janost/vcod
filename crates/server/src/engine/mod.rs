@@ -7,12 +7,17 @@
 
 pub mod archive;
 pub mod bans;
+pub mod bots;
 pub mod challenge;
 pub mod commands;
+pub mod conn;
+pub mod contain;
 pub mod core;
+pub mod download;
 pub mod game;
 pub mod gamelog;
 pub mod link;
+pub mod ratelimit;
 pub mod rotation;
 pub mod slot;
 

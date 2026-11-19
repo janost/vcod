@@ -212,6 +212,8 @@ fn parse_parts(data: &[u8], model_type: u8) -> Result<Vec<Bone>> {
     let num_bones = r.u16()? as usize; // non-root
     let num_root = r.u16()? as usize;
     let total = num_root + num_bones;
+    // Every stock and third-party part file holds a bone; a pose needs one.
+    ensure!(total > 0, "xmodelparts with no bones");
 
     let mut locals: Vec<(i32, Vec3, Quat)> = Vec::with_capacity(total);
     locals.resize(num_root, (-1, Vec3::ZERO, Quat::IDENTITY));
@@ -298,8 +300,6 @@ fn decode_tri_strip(r: &mut Reader, triangle_count: usize) -> Result<Vec<u16>> {
     Ok(tris)
 }
 
-/// Bakes every vertex into model space through its primary bone; `bones`
-/// must hold composed world binds.
 /// One vertex as stored: every weight carries its own bone-local position.
 struct RawVert {
     normal: [f32; 3],
@@ -419,7 +419,8 @@ fn recover_viewhands_bind(bones: &mut [Bone], surfaces: &[RawSurface]) {
     }
 }
 
-/// Bakes each vertex into model space through its primary bone's bind.
+/// Bakes each vertex into model space through its primary bone's bind;
+/// `bones` must hold composed world binds.
 fn bake_surfs(raw: Vec<RawSurface>, bones: &[Bone]) -> Result<Vec<Surface>> {
     let mut surfaces = Vec::with_capacity(raw.len());
     for (si, rs) in raw.into_iter().enumerate() {
@@ -611,9 +612,42 @@ pub fn apply_viewhands_placeholder_override(model: &mut Model) {
     materials[3] = "viewhands@vsleeve_whermact.tga".to_string();
 }
 
+/// A weapon file's `\key\value` pairs as `ParseConfigStringToStruct`
+/// reads them through `Info_ValueForKey` (1.1 `game_mp_x86.dll` 0x2003e960,
+/// keys compared by `Q_stricmpn` 0x2003e650): a key in any case, the first
+/// value under it, and an empty value read as no value, which leaves the
+/// field its default (combat doc 0.1).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WeaponKeys(HashMap<String, String>);
+
+impl WeaponKeys {
+    /// The first value under `key` in any case; `None` when absent or
+    /// empty.
+    pub fn get(&self, key: &str) -> Option<&String> {
+        crate::text::with_ascii_lowercase(key, |k| self.0.get(k)).filter(|v| !v.is_empty())
+    }
+
+    /// `key`'s value unless the map holds one already: the first wins.
+    pub fn insert(&mut self, key: impl AsRef<str>, value: impl Into<String>) {
+        self.0
+            .entry(key.as_ref().to_ascii_lowercase())
+            .or_insert_with(|| value.into());
+    }
+}
+
+impl<K: AsRef<str>, V: Into<String>> FromIterator<(K, V)> for WeaponKeys {
+    fn from_iter<I: IntoIterator<Item = (K, V)>>(it: I) -> Self {
+        let mut keys = WeaponKeys::default();
+        for (k, v) in it {
+            keys.insert(k, v);
+        }
+        keys
+    }
+}
+
 /// `\key\value...` weapon file. The shipped files open with a bare
 /// `WEAPONFILE` token that would shift every pair by one; it is dropped.
-pub fn parse_weapon(text: &str) -> HashMap<String, String> {
+pub fn parse_weapon(text: &str) -> WeaponKeys {
     let mut toks = text.trim_start_matches('\\').split('\\').peekable();
     if toks
         .peek()
@@ -621,9 +655,9 @@ pub fn parse_weapon(text: &str) -> HashMap<String, String> {
     {
         toks.next();
     }
-    let mut map = HashMap::new();
+    let mut map = WeaponKeys::default();
     while let (Some(k), Some(v)) = (toks.next(), toks.next()) {
-        map.insert(k.to_string(), v.to_string());
+        map.insert(k, v);
     }
     map
 }
@@ -634,6 +668,13 @@ mod tests {
 
     fn load(fs: &dyn AssetSource, name: &str) -> Result<Model> {
         crate::model::load(fs, name)
+    }
+
+    /// A part file with no bones would build a skeleton nothing can pose.
+    #[test]
+    fn a_part_file_with_no_bones_is_refused() {
+        let parts = [14u8, 0, 0, 0, 0, 0];
+        assert!(parse_parts(&parts, b'0').is_err());
     }
 
     /// Encodes a triangle the way the descriptor does and decodes it back.
@@ -1136,5 +1177,21 @@ mod tests {
         let before3 = m3.materials().to_vec();
         apply_viewhands_placeholder_override(&mut m3);
         assert_eq!(m3.materials(), before3);
+    }
+
+    /// The synthetic model's three files, each mutated in turn: the parse
+    /// returns on every input.
+    #[test]
+    fn a_hostile_model_never_panics() {
+        let (desc, parts, surfs) = synthetic_model([0, 1, 2]);
+        crate::testing::fuzz("xmodel", &desc, 1000, |d| {
+            let _ = parse_model(d, &parts, &[&surfs]);
+        });
+        crate::testing::fuzz("xmodelparts", &parts, 1000, |p| {
+            let _ = parse_model(&desc, p, &[&surfs]);
+        });
+        crate::testing::fuzz("xmodelsurfs", &surfs, 1000, |s| {
+            let _ = parse_model(&desc, &parts, &[s]);
+        });
     }
 }

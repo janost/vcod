@@ -18,9 +18,9 @@ use crate::common;
 use common::{Queues, step};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::NetClient;
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 
 const SCRIPT: &str =
     include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_menuclock.gsc");
@@ -80,16 +80,14 @@ fn retail_plays(capture: &str) -> Vec<(i64, i32)> {
 }
 
 /// Ours: the script log and every snapshot's `(serverTime, pm_type)`.
-fn ours(fs: vcod_common::pk3::Pk3Fs, proto: &'static Protocol) -> (Vec<String>, Vec<(i64, i32)>) {
+fn ours(fs: vcod_common::pk3::Pk3Fs, proto: &'static Cod1Wire) -> (Vec<String>, Vec<(i64, i32)>) {
     let map = "mp_pavlov";
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_menuclock"), now);
-    sv.set_protocol(proto);
-    sv.overlay_script("maps/mp/gametypes/probe_menuclock", SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        script: Some(SCRIPT),
+        ..common::Boot::new(map, "probe_menuclock")
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl = NetClient::start_with_qport(common::ClientEnd(q.clone()), now, 0x2001);
@@ -111,7 +109,7 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, proto: &'static Protocol) -> (Vec<String>, 
         cl.send_frame(&vcod_common::net::msg::NULL_USERCMD);
         step(&mut sv, &q, &mut cl, now);
         if let Some(s) = cl.snapshots().newest() {
-            let t = i64::from(s.server_time);
+            let t = i64::from(s.server_time.raw());
             if plays.last().is_none_or(|&(last, _)| last < t) {
                 plays.push((t, s.ps.field_i32(cl.protocol(), "pm_type")));
             }
@@ -120,7 +118,7 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, proto: &'static Protocol) -> (Vec<String>, 
     (sv.script_log().to_vec(), plays)
 }
 
-fn check(fs: vcod_common::pk3::Pk3Fs, proto: &'static Protocol, log: &str, capture: &str) {
+fn check(fs: vcod_common::pk3::Pk3Fs, proto: &'static Cod1Wire, log: &str, capture: &str) {
     let log: Vec<String> = log.lines().map(str::to_string).collect();
     let retail = summary(&log, &retail_plays(capture));
     let (our_log, plays) = ours(fs, proto);
@@ -147,13 +145,9 @@ fn a_menu_answers_spawn_runs_on_retails_clock() {
 
 #[test]
 fn a_menu_answers_spawn_runs_on_retails_clock_on_1_5() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     check(
         fs,
         &PROTOCOL_V6,

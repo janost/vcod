@@ -9,8 +9,8 @@ use crate::movetrace::MoveWorld;
 use crate::net::msg::{self, UserCmd};
 use crate::weapon::WeaponDef;
 
-/// ANGLE2SHORT units per degree (codextended shared.h).
-pub const ANGLE2SHORT: f32 = 65536.0 / 360.0;
+/// ANGLE2SHORT units per degree.
+pub const ANGLE2SHORT: f32 = crate::x87::SHORT_PER_DEG;
 /// `Pmove`'s catch-up (`game.mp.i386.so` 0x34492): a client further in arrears
 /// than this has the excess dropped rather than simulated, which also bounds
 /// the chop to 16 steps per cmd. `docs/protocol-1.1.md`, "How long a cmd is
@@ -97,9 +97,7 @@ pub fn view_angles(cmd_angles: [i32; 3], delta_angles: [i32; 3]) -> [f32; 3] {
 /// camera's convention (positive up). Returns the wire-convention view.
 pub fn apply_view(ps: &mut PlayerState, cmd_angles: [i32; 3], delta_angles: [i32; 3]) -> [f32; 3] {
     let view = view_angles(cmd_angles, delta_angles);
-    // `AngleVectors` takes each angle to radians by the double pi / 180 and
-    // rounds it to a float (game.mp 0x3b234).
-    let rad = |deg: f32| (f64::from(deg) * (std::f64::consts::PI / 180.0)) as f32;
+    let rad = super::angles::view_rad;
     ps.prev_yaw = ps.yaw;
     ps.yaw = rad(view[1]);
     ps.pitch = -rad(view[0]);
@@ -147,7 +145,7 @@ fn clamp_view(
         }
     }
     if changed {
-        let rad = |deg: f32| (f64::from(deg) * (std::f64::consts::PI / 180.0)) as f32;
+        let rad = super::angles::view_rad;
         ps.yaw = rad(view[1]);
         ps.pitch = -rad(view[0]);
     }
@@ -205,20 +203,20 @@ pub fn frametime(msec: i32) -> f32 {
 /// the held-jump latch (`pm_flags` 0x8) it left: while that is set `Pmove`
 /// writes 20 into the cmd's `upmove` (0x344f2-0x344f8, 1.5b 0x28ad5, UO
 /// 0x2e29a), so every later step's air and ladder wish reads 20, not the
-/// key's 127 (cod11-mantle.md, "The jump").
+/// key's 127 (cod11-mantle.md, "The gates").
 pub fn chop(command_time: i32, cmd: &UserCmd, mut step: impl FnMut(&UserCmd, f32) -> bool) {
     let mut cmd = *cmd;
     let dt_ms = cmd.server_time.wrapping_sub(command_time);
     let mut base = if dt_ms <= 0 {
         cmd.server_time
     } else if dt_ms > MAX_PMOVE_ARREARS_MS {
-        cmd.server_time - MAX_PMOVE_ARREARS_MS
+        cmd.server_time.wrapping_sub(MAX_PMOVE_ARREARS_MS)
     } else {
         command_time
     };
     while base != cmd.server_time {
-        let msec = (cmd.server_time - base).min(MAX_FRAME_MS as i32);
-        base += msec;
+        let msec = cmd.server_time.wrapping_sub(base).min(MAX_FRAME_MS as i32);
+        base = base.wrapping_add(msec);
         let at = UserCmd {
             server_time: base,
             ..cmd
@@ -297,7 +295,7 @@ pub fn dead_step(
     weapon::adjust_aim_spread_scale(
         ps,
         &input,
-        weapons.get(ps.weapon as usize).and_then(Option::as_ref),
+        super::weapon::weapon_def(weapons, ps.weapon),
         dt,
     );
     ps.linked = linked;

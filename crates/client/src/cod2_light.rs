@@ -146,6 +146,18 @@ impl Cod2Lighting {
             wanted[props.vert_placement[i] as usize] = true;
         }
         let todo: Vec<usize> = (0..wanted.len()).filter(|&pi| wanted[pi]).collect();
+        // The xmodel flag matters only under `gndLt`: read once per model
+        // that some such placement names.
+        let mut ground_models = std::collections::HashMap::new();
+        for b in todo.iter().filter_map(|&pi| blocks.get(pi)) {
+            if StaticModelKeys::of(b).ground.is_some()
+                && let Some(m) = b.get("model")
+            {
+                ground_models
+                    .entry(m.as_str())
+                    .or_insert_with(|| ground_lit(fs, m));
+            }
+        }
         let sample = |&pi: &usize| {
             let block = blocks.get(pi);
             let keys = block.map_or(
@@ -157,8 +169,8 @@ impl Cod2Lighting {
                 StaticModelKeys::of,
             );
             let ground_lit = block
-                .and_then(|b| b.get("model"))
-                .is_some_and(|m| ground_lit(fs, m));
+                .and_then(|b| ground_models.get(b.get("model")?.as_str()))
+                .is_some_and(|&g| g);
             let (lo, hi) = props.bounds[pi];
             let blocked =
                 |a: Vec3, b: Vec3| self.clip.point_trace(a, b, SIGHT_MASK, false).fraction < 1.0;
@@ -402,28 +414,32 @@ mod tests {
     /// A device off a headless adapter (Vulkan or Metal), `None` where the
     /// machine has none.
     fn headless() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
-            compatible_surface: None,
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        }))
-        .ok()?;
-        let info = adapter.get_info();
-        eprintln!("adapter: {} {:?}", info.name, info.backend);
-        if info.backend == wgpu::Backend::Gl {
-            return None;
-        }
-        pollster::block_on(adapter.request_device(&Default::default())).ok()
+        crate::renderer::headless::test_device(crate::renderer::headless::Need::NotGl)
     }
 
-    /// `src` between the line holding `from` and the one holding `to`.
-    fn cut<'a>(src: &'a str, from: &str, to: &str) -> &'a str {
-        let a = src.find(from).unwrap();
-        let b = a + src[a..].find(to).unwrap();
+    /// The lines between `src`'s `// @region <name>` and `// @end <name>`
+    /// markers: what a test splices into its own shader.
+    fn region<'a>(src: &'a str, name: &str) -> &'a str {
+        let (open, close) = (format!("// @region {name}\n"), format!("// @end {name}\n"));
+        let a = src
+            .find(&open)
+            .unwrap_or_else(|| panic!("no `{open}` in the shader"))
+            + open.len();
+        let b = a + src[a..]
+            .find(&close)
+            .unwrap_or_else(|| panic!("no `{close}` in the shader"));
         &src[a..b]
+    }
+
+    /// Every region the GPU tests splice is marked, so they fail here on a
+    /// machine with no adapter rather than nowhere (TEST-060).
+    #[test]
+    fn the_spliced_shader_regions_are_marked() {
+        let dm = include_str!("dynamic_model.wgsl");
+        for name in ["ent_light", "stage_params", "light_model", "stage_colour"] {
+            assert!(!region(dm, name).is_empty(), "{name}");
+        }
+        assert!(!region(include_str!("cod2_model.wgsl"), "probe_grid").is_empty());
     }
 
     const W: u32 = 128;
@@ -472,14 +488,10 @@ mod tests {
         let src = include_str!("dynamic_model.wgsl");
         let wgsl = format!(
             "{}{}\n@group(0) @binding(0) var<storage, read> light_sets: array<LightSet>;\n{}{}{}",
-            cut(src, "struct EntLight", "// The frame's light sets"),
-            cut(src, "const F_AF_GT0", "// GL_LIGHTING's vertex colour"),
-            cut(
-                include_str!("cod2_model.wgsl"),
-                "fn probe_grid",
-                "// The texcoords `TexScroll`"
-            ),
-            cut(src, "fn stage_colour", "// alphaFunc decode"),
+            region(src, "ent_light"),
+            region(src, "light_model"),
+            region(include_str!("cod2_model.wgsl"), "probe_grid"),
+            region(src, "stage_colour"),
             r#"
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -930,12 +942,8 @@ fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
         let src = include_str!("dynamic_model.wgsl");
         let wgsl = format!(
             "{}\n@group(0) @binding(0) var<storage, read> light_sets: array<LightSet>;\n{}{}",
-            cut(src, "struct EntLight", "// The frame's light sets"),
-            cut(
-                include_str!("cod2_model.wgsl"),
-                "fn probe_grid",
-                "// The texcoords `TexScroll`"
-            ),
+            region(src, "ent_light"),
+            region(include_str!("cod2_model.wgsl"), "probe_grid"),
             r#"
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
@@ -1213,7 +1221,6 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
     /// texel would blend its neighbours across the seams), and the entity
     /// volume holding `blocks` from block 0 on; binding 7 the light grid
     /// weight cubes.
-    #[allow(clippy::too_many_arguments)]
     fn draw_harness_probes(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -1450,12 +1457,8 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
         let dm = include_str!("dynamic_model.wgsl");
         format!(
             "{}{}\n@group(0) @binding(0) var<storage, read> light_sets: array<LightSet>;\n{}\n{}{}{}{}",
-            cut(dm, "struct EntLight", "// The frame's light sets"),
-            cut(
-                dm,
-                "// The stage's `renderer::StageParams`",
-                "const F_AF_GT0"
-            ),
+            region(dm, "ent_light"),
+            region(dm, "stage_params"),
             "@group(1) @binding(0) var t_unused: texture_2d<f32>;",
             concat!(
                 include_str!("cod2_model.wgsl"),
@@ -2259,17 +2262,6 @@ fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
 
     /// [`headless`] with BC textures, which CoD2's colour maps are.
     fn headless_bc() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
-        let bc = wgpu::Features::TEXTURE_COMPRESSION_BC;
-        if adapter.get_info().backend == wgpu::Backend::Gl || !adapter.features().contains(bc) {
-            return None;
-        }
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_features: bc,
-            ..Default::default()
-        }))
-        .ok()
+        crate::renderer::headless::test_device(crate::renderer::headless::Need::Bc)
     }
 }

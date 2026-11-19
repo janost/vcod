@@ -7,11 +7,11 @@
 //! 0x8000 and `mantleState.flags` 0x10.
 //!
 //! The clips are the engine's `PLAYER_MANTLE` set (`Mantle_CreateAnims`
-//! 0x8050fa4) out of `common_mp`, installed once per process
+//! 0x8050fa4) out of the level's zones, read again for each level
 //! ([`install`]); [`Rules::mantle_anims`](super::Rules) carries them, and
 //! without them no mantle starts.
 
-use std::sync::OnceLock;
+use std::sync::Mutex;
 
 use glam::Vec3;
 
@@ -22,9 +22,7 @@ use crate::assets::model::XAnim;
 
 /// `MANTLE_ON` and `MANTLE_OVER` surface flags, and the contents the
 /// surface probe traces (`CONTENTS_MANTLE`).
-pub const SURF_MANTLE_ON: u32 = 0x200_0000;
-pub const SURF_MANTLE_OVER: u32 = 0x400_0000;
-pub const CONTENTS_MANTLE: u32 = 0x100_0000;
+pub use vcod_common::clipmap::{CONTENTS_MANTLE, SURF_MANTLE_ON, SURF_MANTLE_OVER};
 /// `eFlags` 0x8000: mantling.
 pub const EF_MANTLE: u32 = 0x8000;
 
@@ -187,7 +185,7 @@ pub struct MantleAnims {
 }
 
 impl MantleAnims {
-    /// The clips off the zones, first zone first; `None` names the
+    /// The clips off the zones, first zone first; the error names the
     /// missing clip.
     pub fn from_zones(zones: &[&Assets]) -> Result<MantleAnims, String> {
         let mut clips = vec![Clip::default()];
@@ -243,36 +241,82 @@ impl MantleAnims {
     }
 }
 
-static ANIMS: OnceLock<MantleAnims> = OnceLock::new();
-
-/// Reads the mantle clips off `zones` the first time they hold them and
-/// keeps them for the process, as retail keeps one `s_mantleAnims`.
-pub fn install(zones: &[&Assets]) -> Option<&'static MantleAnims> {
-    if let Some(a) = ANIMS.get() {
-        return Some(a);
+#[cfg(any(test, feature = "testing"))]
+impl MantleAnims {
+    /// Stand-in clips for the pak-free tests: each a straight two-key line
+    /// to the end the engine's load check wants (16 along and the row's
+    /// rise up, or 31 along and 18 down), `up_ms` and `over_ms` long.
+    pub(crate) fn synthetic(up_ms: i32, over_ms: i32) -> MantleAnims {
+        let line = |length_ms: i32, end: Vec3| {
+            let mins = end.min(Vec3::ZERO).to_array();
+            let size = end.abs().to_array();
+            let q = |v: [f32; 3]| {
+                std::array::from_fn(|i| {
+                    if size[i] == 0.0 {
+                        0
+                    } else {
+                        ((v[i] - mins[i]) / size[i]) as u16
+                    }
+                })
+            };
+            Clip {
+                length_ms,
+                numframes: 10,
+                frames: vec![0, 10],
+                quant: vec![q([0.0; 3]), q(end.to_array())],
+                mins,
+                size,
+                frame0: Vec3::ZERO,
+            }
+        };
+        let mut clips = vec![Clip::default(); ANIM_NAMES.len()];
+        for (up, over, rise) in TRANSITIONS {
+            clips[up] = line(up_ms, Vec3::new(16.0, 0.0, rise));
+            clips[over] = line(over_ms, Vec3::new(31.0, 0.0, -18.0));
+        }
+        MantleAnims { clips }
     }
-    match MantleAnims::from_zones(zones) {
-        Ok(a) => Some(ANIMS.get_or_init(|| a)),
+}
+
+/// Every clip set [`install`] has read, each kept once for the process,
+/// and the last one read.
+static ANIMS: Mutex<(Vec<&'static MantleAnims>, Option<&'static MantleAnims>)> =
+    Mutex::new((Vec::new(), None));
+
+/// Reads the mantle clips off `zones`, as `G_InitGame` runs
+/// `Mantle_CreateAnims` for each level (`cod4_lnxded` 0x80b5834,
+/// cod4-pmove.md 17): a mod's zone that replaces them wins on its level.
+/// An equal set read before is shared, so each distinct one is kept once.
+pub fn install(zones: &[&Assets]) -> Option<&'static MantleAnims> {
+    let kept = read(zones)?;
+    ANIMS.lock().unwrap_or_else(|p| p.into_inner()).1 = Some(kept);
+    Some(kept)
+}
+
+/// [`install`]'s read: the clips off `zones`, an equal set's kept copy.
+fn read(zones: &[&Assets]) -> Option<&'static MantleAnims> {
+    let read = match MantleAnims::from_zones(zones) {
+        Ok(a) => a,
         Err(e) => {
             log::warn!("cod4: no mantle: {e}");
-            None
+            return None;
         }
-    }
+    };
+    let mut g = ANIMS.lock().unwrap_or_else(|p| p.into_inner());
+    Some(match g.0.iter().find(|a| ***a == read) {
+        Some(a) => *a,
+        None => {
+            let a: &'static MantleAnims = Box::leak(Box::new(read));
+            g.0.push(a);
+            a
+        }
+    })
 }
 
-/// The clips [`install`] kept, if any zone held them yet.
+/// The clips [`install`] read last, if any zone held them yet: what
+/// [`Rules::default`](super::Rules) takes.
 pub fn installed() -> Option<&'static MantleAnims> {
-    ANIMS.get()
-}
-
-/// `pmove_t`'s `mantleEndPos` and `mantleDuration` for a mantle under way:
-/// where the clips end it and their whole length in ms.
-pub fn end_and_duration(anims: &MantleAnims, ps: &PlayerState) -> (Vec3, i32) {
-    let st = &ps.mantle;
-    let (up, over) = anims.lengths(st);
-    let total = up + over;
-    let left = sub(anims.delta(st, total), anims.delta(st, st.timer));
-    (add(ps.origin, left), total)
+    ANIMS.lock().unwrap_or_else(|p| p.into_inner()).1
 }
 
 fn row(st: &MantleState) -> (usize, usize, f32) {
@@ -544,7 +588,7 @@ pub(crate) fn mantle_move(pm: &mut Pmove, pml: &Pml) {
     let (up, over) = anims.lengths(&ps.mantle);
     let total = up + over;
     let old = ps.mantle.timer;
-    ps.mantle.timer = (old + pml.msec).min(total);
+    ps.mantle.timer = old.wrapping_add(pml.msec).min(total);
     let now = ps.mantle.timer;
     let d0 = anims.delta(&ps.mantle, old);
     let d1 = anims.delta(&ps.mantle, now);
@@ -555,7 +599,7 @@ pub(crate) fn mantle_move(pm: &mut Pmove, pml: &Pml) {
     let kept: [f64; 3] = std::array::from_fn(|i| d(d1[i]) - d(d0[i]));
     let step = Vec3::from_array(kept.map(|k| k as f32));
     ps.origin = Vec3::from_array(std::array::from_fn(|i| (kept[i] + d(ps.origin[i])) as f32));
-    let per_sec = 1.0 / (d(MSEC_TO_SEC) * f64::from(now - old));
+    let per_sec = 1.0 / (d(MSEC_TO_SEC) * f64::from(now.wrapping_sub(old)));
     ps.velocity = Vec3::from_array(std::array::from_fn(|i| (d(step[i]) * per_sec) as f32));
     if now == total {
         ps.pm_flags &= !pmf::MANTLE;
@@ -572,6 +616,9 @@ pub(crate) fn mantle_move(pm: &mut Pmove, pml: &Pml) {
     }
 }
 
+/// The most turns of the cap [`cap_view`] takes off the delta.
+const CAP_VIEW_STEPS: u32 = 1 << 16;
+
 /// `Mantle_CapView` (0x8050dc6): a view more than `mantle_view_yawcap` off
 /// the mantle's yaw is set back to the cap; the difference, wrapped into the
 /// cap and kept, goes into `delta_angles[1]`.
@@ -585,11 +632,16 @@ pub(crate) fn cap_view(pm: &mut Pmove) {
     if !(delta < -cap || cap < delta) {
         return;
     }
-    while delta < -cap {
+    // Retail's loops never end on a cap of 0 or less or on a huge delta;
+    // a cap of 0.003 or more over a delta in -180..180 stays under the bound.
+    let mut steps = 0u32;
+    while delta < -cap && steps < CAP_VIEW_STEPS {
         delta += cap;
+        steps += 1;
     }
-    while cap < delta {
+    while cap < delta && steps < CAP_VIEW_STEPS {
         delta -= cap;
+        steps += 1;
     }
     let edge = if delta <= 0.0 { cap } else { -cap };
     ps.delta_angles[1] = (delta + d(ps.delta_angles[1])) as f32;
@@ -639,6 +691,44 @@ mod tests {
         assert_eq!(c.abs_delta(0.2), Vec3::new(2.0, 0.0, 4.0));
         assert_eq!(c.abs_delta(0.7), Vec3::new(7.0, 0.0, 8.0));
         assert_eq!(c.abs_delta(1.0), Vec3::new(10.0, 0.0, 8.0));
+    }
+
+    /// Each level's zones give their own clips, and the stock set read
+    /// again is the kept one (BUG-147). `read`, not `install`: the default
+    /// rules the other tests run take the installed set.
+    #[test]
+    fn each_install_reads_its_own_zones_clips() {
+        let zone = |frames: u16| Assets {
+            xanims: ANIM_NAMES[1..]
+                .iter()
+                .map(|n| XAnim {
+                    name: n.to_string(),
+                    num_frames: frames,
+                    looped: false,
+                    delta: true,
+                    bone_count: [0; 10],
+                    framerate: 30.0,
+                    frequency: 0.0,
+                    asset_type: 0,
+                    names: Vec::new(),
+                    notify: Vec::new(),
+                    data_byte: Vec::new(),
+                    data_short: Vec::new(),
+                    data_int: Vec::new(),
+                    random_data_short: Vec::new(),
+                    random_data_byte: Vec::new(),
+                    random_data_int: Vec::new(),
+                    indices: Vec::new(),
+                    root: None,
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let (stock, modded) = (zone(15), zone(30));
+        let a = read(&[&stock]).unwrap();
+        let b = read(&[&modded]).unwrap();
+        assert_eq!((a.length_ms(1), b.length_ms(1)), (500, 1000));
+        assert!(std::ptr::eq(read(&[&stock]).unwrap(), a));
     }
 
     #[test]

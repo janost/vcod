@@ -3,7 +3,7 @@
 //! the riders read back (docs/research/coduo-vehicles.md 12 and 13).
 
 use super::info::KIND_FOUR_WHEEL;
-use super::{Gun, MAX_SEATS, physics};
+use super::{MAX_SEATS, physics};
 use crate::game::host::GameHost;
 use vcod_gsc::{Cx, EntId};
 
@@ -60,7 +60,11 @@ pub fn rider_inputs(
         if sim.seat.is_none() {
             continue;
         }
-        let health = host.client_vitals.get(slot).map_or(0, |v| v.health);
+        let health = host
+            .clients
+            .get(slot)
+            .map(|c| &c.vitals)
+            .map_or(0, |v| v.health);
         inputs[slot] = Some(RiderInput {
             forward: sim.pers_cmd.forward,
             right: sim.pers_cmd.right,
@@ -101,7 +105,7 @@ pub fn run_undriven(
     true
 }
 
-/// `G_VehicleClientThink` (0x9b0ce), after the entity pass: every driven
+/// `G_VehicleClientThink` (0x8b0ce), after the entity pass: every driven
 /// vehicle steps once a server frame, in pool-slot order, so a vehicle a
 /// driver pushes moves on its own next think, the frame after
 /// (docs/research/coduo-vehicles.md 12). `inputs` is each client slot's
@@ -131,8 +135,9 @@ fn think(host: &mut GameHost, cx: &mut Cx, id: EntId, inputs: &[Option<RiderInpu
         .collect();
     for r in riders {
         if host
-            .client_vitals
+            .clients
             .get(r)
+            .map(|c| &c.vitals)
             .is_none_or(|v| v.health < 1 || v.dead)
         {
             super::seat::unlink_player(host, cx, r, false, [0.0; 3], ([0.0; 3], [0.0; 3]));
@@ -144,6 +149,10 @@ fn think(host: &mut GameHost, cx: &mut Cx, id: EntId, inputs: &[Option<RiderInpu
     };
     let health = crate::game::builtins::vehicle::health_of(host, cx, id);
     let capturing = script_int(host, cx, id, "capturing") != 0;
+    // The entity's own `closespeed` (+0x1f4) and `harc` (+0x2bc), which
+    // nothing stock writes (coduo-vehicles.md 17).
+    let closespeed = script_float(host, cx, id, "closespeed");
+    let harc = script_float(host, cx, id, "harc");
     let world = host.world.clone();
     let tex_scroll = crate::game::builtins::cvar::atof(host.cvars.get("g_vehicleTexScrollScale"));
     let horns = host.cvars.get("g_vehicleHorns") != "0";
@@ -162,9 +171,9 @@ fn think(host: &mut GameHost, cx: &mut Cx, id: EntId, inputs: &[Option<RiderInpu
     // The bodies the probes can strike: every live player but the riders.
     let riders_now = host.vehicles.live[&id].seats;
     let bodies: Vec<(u32, glam::Vec3, glam::Vec3, glam::Vec3)> = host
-        .client_bodies
+        .clients
         .iter()
-        .flatten()
+        .filter_map(|c| c.body.as_ref())
         .filter(|b| !riders_now.contains(&Some(b.slot)))
         .filter(|b| host.vehicles.seat_of(b.slot).is_none())
         .map(|b| (b.slot as u32, b.origin, b.mins, b.maxs))
@@ -202,8 +211,8 @@ fn think(host: &mut GameHost, cx: &mut Cx, id: EntId, inputs: &[Option<RiderInpu
         driven: v.driven,
         health,
         capturing,
-        closespeed: 0.0,
-        harc: 0.0,
+        closespeed,
+        harc,
         bmodel,
         bounds_maxs,
         max_clients: crate::server::MAX_CLIENTS as u32,
@@ -595,13 +604,13 @@ fn sync(v: &mut super::Vehicle) {
     v.velocity = p.s.velocity.to_array();
 }
 
-/// A script field read as an int, 0 when unset.
 /// The script holds the vehicle for a capture (`capturing`, set by stock
 /// `_tankdrive_gmi::tank_capture_think`): no driver input moves it.
 pub fn capturing(host: &mut GameHost, cx: &mut Cx, id: EntId) -> bool {
     script_int(host, cx, id, "capturing") != 0
 }
 
+/// A script field read as an int, 0 when unset.
 fn script_int(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> i32 {
     use vcod_gsc::Host;
     let atom = cx.intern_folded(name);
@@ -609,6 +618,16 @@ fn script_int(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> i32 {
         vcod_gsc::Value::Int(i) => i,
         vcod_gsc::Value::Float(f) => f as i32,
         _ => 0,
+    }
+}
+
+fn script_float(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> f32 {
+    use vcod_gsc::Host;
+    let atom = cx.intern_folded(name);
+    match host.get_field(cx, id, atom) {
+        vcod_gsc::Value::Float(f) => f,
+        vcod_gsc::Value::Int(i) => i as f32,
+        _ => 0.0,
     }
 }
 
@@ -637,16 +656,6 @@ pub fn riders(host: &GameHost, id: EntId) -> [Option<usize>; MAX_SEATS + 1] {
         .map_or([None; MAX_SEATS + 1], |v| v.seats)
 }
 
-/// Which gun a `turret_*` notify names.
-pub fn gun_of(event: &str) -> Option<Gun> {
-    match event {
-        "turret_fire" => Some(Gun::Main),
-        "turret_alt_fire" => Some(Gun::Alt),
-        "turret_gunner_fire" => Some(Gun::Gunner),
-        _ => None,
-    }
-}
-
 /// The collision world with the players' bodies in it: a trace whose mask
 /// holds `CONTENTS_BODY` (0x2000000) also meets each body's box. The other
 /// vehicles' collmaps are the world's own model instances; what the step
@@ -667,7 +676,7 @@ struct OtherVehicle {
     jolting: bool,
 }
 
-const CONTENTS_BODY: u32 = 0x0200_0000;
+use vcod_common::clipmap::CONTENTS_BODY;
 
 impl physics::VehicleWorld for BodiesWorld<'_> {
     fn trace(
@@ -755,6 +764,45 @@ impl physics::VehicleWorld for BodiesWorld<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A sweep with `CONTENTS_BODY` in its mask meets a body's box grown by
+    /// the swept box, by the face it entered; a start inside the grown box
+    /// is startsolid at 0; a mask without it passes the bodies.
+    #[test]
+    fn the_vehicle_s_sweep_meets_the_bodies_only_under_their_mask() {
+        use glam::Vec3;
+        let collision = vcod_common::collision::test_world(&[]);
+        let bodies = [(
+            3,
+            Vec3::ZERO,
+            Vec3::new(-15.0, -15.0, 0.0),
+            Vec3::new(15.0, 15.0, 70.0),
+        )];
+        let w = BodiesWorld {
+            inner: physics::CollisionVehicleWorld {
+                world: &collision,
+                skip: None,
+            },
+            bodies: &bodies,
+            vehicles: &[],
+        };
+        use physics::VehicleWorld;
+        let (lo, hi) = (Vec3::splat(-8.0), Vec3::splat(8.0));
+        let (a, b) = (Vec3::new(-200.0, 0.0, 50.0), Vec3::new(200.0, 0.0, 50.0));
+        let t = w.trace(a, b, lo, hi, CONTENTS_BODY);
+        assert_eq!(t.entity, 3);
+        assert!((t.fraction - 177.0 / 400.0).abs() < 1e-6, "{}", t.fraction);
+        assert_eq!(t.normal, Vec3::new(-1.0, 0.0, 0.0));
+        assert!(!t.startsolid);
+        let t = w.trace(a, b, lo, hi, vcod_common::collision::CONTENTS_SOLID);
+        assert_eq!(t.fraction, 1.0);
+        let inside = Vec3::new(10.0, 0.0, 50.0);
+        let t = w.trace(inside, b, lo, hi, CONTENTS_BODY);
+        assert_eq!((t.fraction, t.entity, t.endpos), (0.0, 3, inside));
+        assert!(t.startsolid && !t.allsolid);
+        let t = w.trace(inside, inside, lo, hi, CONTENTS_BODY);
+        assert!(t.allsolid);
+    }
 
     /// The retail overheat capture (`snapshots-uo-overheat.bin`): a tank
     /// gunner holding `mg42_turret_mp` (`fireHeat` 0.04, `cooldownRate`

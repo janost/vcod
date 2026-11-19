@@ -25,7 +25,7 @@ VERIFIED (the operands of `Cmd_CallVote_f` 1.1 0x47888 and `CheckVote` 0x501f0),
 
 INFERRED from the memset: `G_InitGame` zeroes `level`, so a map load or a `map_restart` drops a running vote without a word. VERIFIED: the 1.1d run (section 6) shows no `e` line at a restart.
 
-The voted flag is `ps.eFlags` 0x20000, byte `+0x82` bit 2 of the client (VERIFIED, `or BYTE PTR [eax+0x82],0x2` at 1.1 0x4800b and 0x482ab). VERIFIED: `ClientSpawn` keeps `eFlags & 0x20008` across a spawn (1.1 0x427d1), and only `Cmd_CallVote_f` clears it, on every slot below `level+0x1e0` (0x47fe6). VERIFIED live (the 1.1d run's `ps.eFlags vote bit` lines): the caller's and a voter's playerstate carry 0x20000 from the snapshot after the command, through a `kill` and the respawn, until the next call clears it. vcod mirrors `GameHost::client_voted` into the sim at end frame.
+The voted flag is `ps.eFlags` 0x20000, byte `+0x82` bit 2 of the client (VERIFIED, `or BYTE PTR [eax+0x82],0x2` at 1.1 0x4800b and 0x482ab). VERIFIED: `ClientSpawn` keeps `eFlags & 0x20008` across a spawn (1.1 0x427d1), and only `Cmd_CallVote_f` clears it, on every slot below `level+0x1e0` (0x47fe6). VERIFIED live (the 1.1d run's `ps.eFlags vote bit` lines): the caller's and a voter's playerstate carry 0x20000 from the snapshot after the command, through a `kill` and the respawn, until the next call clears it. vcod mirrors `HostClient::voted` into the sim at end frame.
 
 VERIFIED (0x50c71..0x50cc9): `CalculateRanks` (0x50c60) counts `numVotingClients`, every client with `connected == 2` whose `sessionTeam` (`client+0x217c`, 1.5 `+0x2184`) is not 3, the spectator team. VERIFIED (relocations): `CalculateRanks` is called from `ClientConnect`, `ClientBegin`, `ClientDisconnect` and the two script client-field setters at 0x418ef and 0x41b07. INFERRED: vcod counts the same clients at each check, so the number matches, except that vcod skips its own bots (`--bots`, `voting_clients`), which never vote and would hold every vote short of a pass. Retail has no bots; the divergence is vcod's choice.
 
@@ -39,7 +39,7 @@ The tests (1.1 0x47888, 1.5 0x43c00). Each string is VERIFIED at its address or 
 2. A vote running: `e "GAME_VOTEALREADYINPROGRESS"`.
 3. `client+0x215c` at 3 or more: `e "GAME_MAXVOTESCALLED"`. VERIFIED (an `objdump` of both modules finds only this compare, 1.1 0x478cf, 1.5 0x43cab): no instruction writes `+0x215c`, so this never goes.
 4. A spectator: `e "GAME_NOSPECTATORCALLVOTE"`.
-5. `;` in `argv[1]` or `argv[2]`: `e "GAME_INVALIDVOTESTRING"`.
+5. `;` in `argv[1]` or `argv[2]`: `e "GAME_INVALIDVOTESTRING"`. vcod also gives it for a byte below 0x20 in `argv[1..=3]` (`vote::holds_control_byte`): a quoted argument keeps a newline, and the console would run what follows it as a second command once the vote passed. Retail tests only the `;`.
 6. An unknown kind: `e "GAME_INVALIDVOTESTRING"` then the list. VERIFIED, both captures: 1.1's is `e "GAME_VOTECOMMANDSARE\x15 map_restart, map_rotate, map <mapname>, g_gametype <typename>, typemap <typename> <mapname>, kick <player>, clientkick <clientnum>"` (1.1 0x73c40); 1.5's adds `tempBanUser <player>, tempBanClient <clientNum>, drawfriend <value>, killcam <value>, friendlyfire <value>` (1.5 file 0x78a40).
 7. 1.5 only: the kind's own `g_allowVote<Kind>` at 0 gives `e "GAME_VOTINGNOTENABLED"`. VERIFIED: the gates by name in the decompile, and the 1.5b run's `clientkick` under `g_allowVoteClientKick 0`.
 8. A passed vote still waiting runs now: `voteExecuteTime` cleared and `voteString` sent to the console (VERIFIED, 1.1 0x47a45).
@@ -129,7 +129,7 @@ United Offensive 1.51 (`game.mp.uo.i386.so`, file addresses) has the same three 
 
 INFERRED: UO's `Cmd_Vote_f` adds one step, a second test of the offender's local-client flag (`+0x4554`) before the drop, which can never fail there since step 2 returned on it.
 
-vcod's `complaints_about_gone` clears the lowest slot only, with 1.1's rule or 1.5's (`patch_1_5`, which UO sets too).
+vcod's `complaints_about_gone` clears the lowest slot only, with 1.1's rule or 1.5's (`VoteRules::complaints_connected_only`, which UO's profile sets too).
 
 The retail run: 1.1d, `tools/run_probe.sh client-probes/probe_complaint mp_carentan` and two `--net-probe` clients (recipe in that directory's `README.md`), `g_complaintlimit` 3. VERIFIED, what the clients printed:
 
@@ -161,7 +161,7 @@ VERIFIED (decompile): the clock is `level.time` on 1.1 and `trap_Milliseconds` o
 The 1.5 engine commands a 1.5 pass runs (`cod_lnxded` 1.5b registrations at 0x80887f5..0x808896d, VERIFIED):
 
 - `setdrawfriend`, `setfriendlyfire`, `setkillcam` (0x808863e, 0x80886a9, 0x8088714) print `Usage: %s <integer>\n` without an argument, and otherwise `Cvar_Set` `scr_<x>` and `ui_<x>` to it (VERIFIED, the strings at 0x80ddd23..0x80ddd82; the 1.5b run's `scr_friendlyfire` read `2` after the pass).
-- `tempBanUser` and `tempBanClient` are registered beside them (0x80887f5, 0x8088809, VERIFIED names). `sv_kickBanTime` defaults to 300 (VERIFIED, cvar capture). They kick the client and ban its guid for `sv_kickBanTime` seconds (`cod11-server-handshake.md`, "1.5 temporary bans").
+- `tempBanUser` and `tempBanClient` are registered beside them (0x80887f5, 0x8088809, VERIFIED names). `sv_kickBanTime` defaults to 300 (VERIFIED, cvar capture). They kick the client and ban its guid for `sv_kickBanTime` seconds (`cod11-server-handshake.md`, "Temporary bans on 1.5").
 
 ## 5. The client
 
@@ -192,7 +192,7 @@ VERIFIED (pak0): the stock `ui_mp/scriptmenus/callvote.menu` sends `cmd callvote
 - VERIFIED (asm): `UI_FeederCount` for feeder 7 (0x4000c65e) rebuilds the list when `realTime` is past 0x401e3500 and sets that to `realTime + 3000`, so rows are at most 3 s old and are rebuilt only while the list is asked for. `UI_FeederSelection` (0x4000cdd9) stores the picked row at 0x401e3504. INFERRED from that lone store: before any pick it is the zeroed `uiInfo`'s 0, and OK kicks the first row.
 - VERIFIED (asm): `voteKick` (0x4000afc7) checks that index against the count and sends `callvote kick "<row>"`.
 
-vcod builds the same rows from the newest snapshot's client states (`frontend/players.rs`) on the same 3 s clock, rebuilt each frame a menu is up rather than only while the list draws.
+vcod builds the same rows from the newest snapshot's client states (`frontend/players.rs`) on the same 3 s clock, rebuilt each frame a menu is up rather than only while the list draws. It drops `"`, CR and LF from the name, and `;` too from a map or game type, before it builds the line, so a server-sent name runs no console command of its own (`console::shell::quotable`, `bare`); vcod's rule.
 
 ## 6. The retail runs
 

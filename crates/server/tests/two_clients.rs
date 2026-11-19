@@ -1,4 +1,4 @@
-//! Two clients on one server, each seeing the other. Stage 5's own gate for
+//! Two clients on one server, each seeing the other. The gate for
 //! the half no capture of a single client can reach: retail sends a client no
 //! entity for itself, so the entity-list gates say nothing about what one
 //! client is told about another.
@@ -18,30 +18,15 @@ use vcod_common::net::protocol::PROTOCOL_V1;
 const MAP: &str = "mp_carentan";
 
 fn cfg() -> vcod_server::ServerConfig {
-    vcod_server::ServerConfig {
-        map: MAP.into(),
-        hostname: "vcod test".into(),
-        max_clients: 8,
-        gametype: "dm".into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
-    }
+    common::cfg(MAP, "dm")
 }
 
 /// Both clients joined, spawned and stepped far enough that each has a
 /// snapshot describing the other.
 fn two_joined() -> Option<(EntityState, EntityState, [f32; 3], [f32; 3])> {
     let fs = vcod_common::testing::game_fs_11()?;
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
-    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
 
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg()).start(fs);
 
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
@@ -159,14 +144,8 @@ fn the_scripts_can_find_both_players_by_classname() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
-    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
 
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg()).start(fs);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
     let (mut ca, mut cb) = common::join_pair(
@@ -235,7 +214,7 @@ fn a_player_entity_carries_the_fields_retail_sets() {
     let p = &PROTOCOL_V1;
     // The union over the capture's player entities: a field set in any
     // sample. Whole blocks, because `eType` sits in the middle of one and the
-    // fields above it -- the whole trajectory -- belong to the same entity.
+    // fields above it (the whole trajectory) belong to the same entity.
     let mut retail_sets: BTreeSet<&str> = BTreeSet::new();
     for block in text.split("[ent ").skip(1) {
         let body = block.split_once(']').map(|(_, b)| b).unwrap_or(block);
@@ -302,15 +281,12 @@ fn a_player_entity_carries_the_fields_retail_sets() {
 /// fields are legitimately zero and would read as missing.
 fn a_moving_player() -> Option<Vec<EntityState>> {
     let fs = vcod_common::testing::game_fs_11()?;
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
-    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
 
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    common::pin_carentan_pair(&mut sv);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        prep: Some(&common::pin_carentan_pair),
+        ..common::Boot::on(cfg())
+    }
+    .start(fs);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
     let (mut ca, mut cb) = common::join_pair(
@@ -444,14 +420,8 @@ fn a_spectator_is_sent_to_nobody() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
-    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
 
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg()).start(fs);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
     let (mut ca, mut cb) = common::join_pair(
@@ -525,13 +495,7 @@ fn a_spectator_is_sent_to_nobody() {
 /// One client's snapshot and the other's slot, both joined and spawned.
 fn a_roster_view() -> Option<(vcod_common::net::snapshot::Snapshot, u32)> {
     let fs = vcod_common::testing::game_fs_11()?;
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
-    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg()).start(fs);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
     let (mut ca, mut cb) = common::join_pair(
@@ -598,16 +562,10 @@ fn opposite_teams_carry_different_roster_team_values() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
-    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
 
-    let mut now = Instant::now();
     let mut cfg = cfg();
     cfg.gametype = "tdm".into();
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg).start(fs);
 
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
@@ -667,12 +625,7 @@ fn a_client_is_told_where_the_other_is_this_frame() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg()).start(fs);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
     let (mut ca, mut cb) = common::join_pair(
@@ -765,19 +718,13 @@ fn a_weapon_switch_off_the_usercmd_byte_happens_once() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp =
-        vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("parse the bsp");
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg()).start(fs);
     let q = Rc::new(RefCell::new(Queues::default()));
     let (mut cl, _join) = common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp");
 
     let p = &PROTOCOL_V1;
-    let carbine = vcod_server::configstrings::weapon_index("m1carbine_mp").unwrap() as i32;
-    let colt = vcod_server::configstrings::weapon_index("colt_mp").unwrap() as u8;
+    let carbine = vcod_server::defs::V1.weapon_index("m1carbine_mp").unwrap() as i32;
+    let colt = vcod_server::defs::V1.weapon_index("colt_mp").unwrap() as u8;
     assert_eq!(
         cl.snapshots().newest().unwrap().ps.field_i32(p, "weapon"),
         carbine,
@@ -860,20 +807,21 @@ fn a_client_out_of_grenades_gets_its_rifle_back() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp =
-        vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("parse the bsp");
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    common::pin_spawns_at(&mut sv, &[&[common::CARENTAN_EAST]]);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        prep: Some(&|sv: &mut vcod_server::Server| {
+            common::pin_spawns_at(sv, &[&[common::CARENTAN_EAST]]);
+        }),
+        ..common::Boot::on(cfg())
+    }
+    .start(fs);
     let q = Rc::new(RefCell::new(Queues::default()));
     let (mut cl, _join) = common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp");
 
     let p = &PROTOCOL_V1;
-    let carbine = vcod_server::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
-    let frag = vcod_server::configstrings::weapon_index("fraggrenade_mp").unwrap() as u8;
+    let carbine = vcod_server::defs::V1.weapon_index("m1carbine_mp").unwrap() as u8;
+    let frag = vcod_server::defs::V1
+        .weapon_index("fraggrenade_mp")
+        .unwrap() as u8;
     let run = |sv: &mut vcod_server::Server,
                cl: &mut vcod_common::net::NetClient<common::ClientEnd>,
                now: &mut Instant,
@@ -994,14 +942,8 @@ fn a_body_reaches_both_the_dead_client_and_the_other_one() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
-    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
 
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg()).start(fs);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
     let (mut ca, mut cb) = common::join_pair(
@@ -1088,14 +1030,8 @@ fn a_broadcast_temp_entity_skips_the_cull_and_a_scoped_one_does_not() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
-    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
 
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg()).start(fs);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
     let (mut ca, mut cb) = common::join_pair(
@@ -1212,14 +1148,8 @@ fn a_map_command_reloads_the_level_on_the_live_netchan() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
-    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
 
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg()).start(fs);
 
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
@@ -1376,14 +1306,8 @@ fn map_restart_re_inits_the_level_without_a_gamestate() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
-    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
 
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg()).start(fs);
 
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
@@ -1531,8 +1455,8 @@ fn map_restart_re_inits_the_level_without_a_gamestate() {
 
 /// The score limit ends the map (map-cycle doc 6, and section 2's
 /// `exitLevel`): `dm` with `scr_dm_scorelimit 1`, A kills B, and the stock
-/// `endMap` puts both clients at the intermission camera -- `pm_type` 5, a
-/// scoreboard and the winner's `cg_objectiveText` -- then ten seconds later
+/// `endMap` puts both clients at the intermission camera (`pm_type` 5, a
+/// scoreboard and the winner's `cg_objectiveText`), then ten seconds later
 /// calls `exitLevel(false)`, whose `map_rotate` loads the next map in
 /// `sv_mapRotation` on the live netchan.
 #[test]
@@ -1545,22 +1469,21 @@ fn the_score_limit_sends_both_clients_to_intermission_and_then_rotates() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
 
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
-    common::pin_spawns_at(
-        &mut sv,
-        &[&[common::CARENTAN_NORTH], &[common::CARENTAN_SOUTH]],
-    );
-    // One kill ends it, and the rotation has to name a map that is not the
-    // one serving: `map <the map already serving>` is a restart (doc 4.2),
-    // which pushes no gamestate.
-    sv.set_cvar("scr_dm_scorelimit", "1");
-    sv.set_cvar("sv_mapRotation", &format!("map {NEXT} map {MAP}"));
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        // One kill ends it, and the rotation has to name a map that is not the
+        // one serving: `map <the map already serving>` is a restart (doc 4.2),
+        // which pushes no gamestate.
+        cvars: &[
+            ("scr_dm_scorelimit", "1"),
+            ("sv_mapRotation", &format!("map {NEXT} map {MAP}")),
+        ],
+        prep: Some(&|sv: &mut vcod_server::Server| {
+            common::pin_spawns_at(sv, &[&[common::CARENTAN_NORTH], &[common::CARENTAN_SOUTH]]);
+        }),
+        ..common::Boot::on(cfg())
+    }
+    .start(fs);
 
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
@@ -1775,13 +1698,8 @@ fn a_round_restart_leaves_both_clients_armed_and_flips_the_teleport_bit() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).expect("parse the bsp");
 
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "sd"), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::new(MAP, "sd").start(fs);
 
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
@@ -1905,8 +1823,6 @@ fn an_attachments_tag_reaches_the_client_before_its_snapshot() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let probe = format!(
         "main() {{ maps\\mp\\gametypes\\_callbacksetup::SetupCallbacks(); \
          level.callbackStartGameType = ::start; \
@@ -1919,12 +1835,12 @@ fn an_attachments_tag_reaches_the_client_before_its_snapshot() {
          wait 2; self attach(\"{model}\", \"TAG_HELMETSIDE\", true); }}\n\
          nop() {{}}\n"
     );
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_tagattach"), now);
-    sv.set_protocol(p);
-    sv.overlay_script("maps/mp/gametypes/probe_tagattach", &probe);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        script: Some(&probe),
+        ..common::Boot::new(map, "probe_tagattach")
+    }
+    .start(fs);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl = common::connect(&mut sv, &q, &mut now);
     let tags = p.cs.tags();

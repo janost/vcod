@@ -3,26 +3,28 @@
 //! broadcast to 28960..28963), Internet (the master's `getserversResponse`)
 //! and Favorites (`servercache.dat`); every listed server pinged with
 //! `getinfo xxx` a few a frame; `getstatus` for the server info popup.
-//! Nothing blocks a frame: the master's name resolves on a helper thread
-//! and the socket is non-blocking.
+//! Nothing blocks a frame: the socket, the master's resolve and the
+//! broadcast are the front end's [`ServerScan`].
 
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddrV4};
+#[cfg(test)]
+use std::net::{SocketAddr, UdpSocket};
 use std::path::PathBuf;
+#[cfg(test)]
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use vcod_cod4::net::browser::{
     MAX_FAVORITES, MAX_GLOBAL, MAX_LOCAL, NO_PING, PROTOCOL, Record, ServerCache, ServerInfo,
-    Status, getservers, info_protocol, parse_servers_response,
+    Status, info_protocol, parse_servers_response,
 };
-use vcod_common::net::connectionless::{build_oob, parse_oob};
-use vcod_common::net::master::{GETINFO, GETSTATUS, LAN_PORTS, LAN_ROUNDS, master_send_allowed};
+use vcod_common::net::master::{GETINFO, GETSTATUS, LAN_PORTS};
+
+use crate::frontend::scan::{MASTER_TIMEOUT, Reply, ServerScan, write_cache};
 
 /// `CL_UpdateVisiblePings` (0x4703c0) stops once nothing was sent and
 /// 2000 ms passed since the newest ping went out.
 const PING_WAIT: Duration = Duration::from_millis(2000);
-/// How long the master gets before an Internet refresh gives up on it.
-const MASTER_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long the status popup's `getstatus` waits before it is sent again.
 const STATUS_RESEND: Duration = Duration::from_secs(1);
 
@@ -75,12 +77,8 @@ pub enum AddFavorite {
 }
 
 pub struct Browser {
-    socket: Option<UdpSocket>,
-    resolve: Option<mpsc::Receiver<Option<SocketAddr>>>,
-    /// The master's address, waiting on the rate limit until its
-    /// `getservers` goes, then the address its answers come from.
-    master_due: Option<SocketAddr>,
-    master: Option<SocketAddr>,
+    /// One socket for the session, opened on the first send.
+    scan: ServerScan,
     /// `masterServerName` and `masterPort` as the last refresh read them.
     pub master_name: String,
     pub master_port: u16,
@@ -106,10 +104,7 @@ pub struct Browser {
 impl Default for Browser {
     fn default() -> Self {
         Browser {
-            socket: None,
-            resolve: None,
-            master_due: None,
-            master: None,
+            scan: ServerScan::lazy("cod4 browser"),
             master_name: vcod_common::net::master::COD4_MASTER.host.into(),
             master_port: vcod_common::net::master::COD4_MASTER.port,
             lists: Default::default(),
@@ -127,17 +122,6 @@ impl Default for Browser {
             status_sent: None,
         }
     }
-}
-
-fn open_socket() -> Option<UdpSocket> {
-    UdpSocket::bind("0.0.0.0:0")
-        .and_then(|s| {
-            s.set_nonblocking(true)?;
-            s.set_broadcast(true)?;
-            Ok(s)
-        })
-        .map_err(|e| log::warn!("cod4 browser: cannot open a socket: {e}"))
-        .ok()
 }
 
 impl Browser {
@@ -166,13 +150,6 @@ impl Browser {
         &self.lists[source as usize]
     }
 
-    fn socket(&mut self) -> Option<&UdpSocket> {
-        if self.socket.is_none() {
-            self.socket = open_socket();
-        }
-        self.socket.as_ref()
-    }
-
     /// `UI_StartServerRefresh` (0x54aaf0): a full refresh marks every
     /// server of the source and forgets its pings (`LAN_ResetPings`), then
     /// Local broadcasts (`localservers`, clearing the list first), Internet
@@ -180,7 +157,7 @@ impl Browser {
     /// added to), and Favorites only pings. A quick refresh
     /// (`full` false) only forgets the pings.
     pub fn refresh(&mut self, source: Source, full: bool) {
-        let now = Instant::now();
+        let now = browser_now();
         self.source = source;
         self.refreshing = true;
         self.started = Some(now);
@@ -195,32 +172,11 @@ impl Browser {
         match source {
             Source::Local => {
                 self.lists[0].clear();
-                let targets = self.lan_targets.clone();
-                if let Some(sock) = self.socket() {
-                    for _ in 0..LAN_ROUNDS {
-                        for &to in &targets {
-                            if let Err(e) = sock.send_to(&build_oob(GETINFO), to) {
-                                log::debug!("cod4 browser: broadcast to {to}: {e}");
-                            }
-                        }
-                    }
-                }
+                self.scan.broadcast(&self.lan_targets, log::Level::Debug);
                 // The broadcast's answers are timed from the broadcast.
                 self.last_ping = Some(now);
             }
-            Source::Internet => {
-                let (tx, rx) = mpsc::channel();
-                let (host, port) = (self.master_name.clone(), self.master_port);
-                std::thread::spawn(move || {
-                    let addr = (host.as_str(), port)
-                        .to_socket_addrs()
-                        .ok()
-                        .and_then(|mut a| a.find(SocketAddr::is_ipv4));
-                    let _ = tx.send(addr);
-                });
-                self.resolve = Some(rx);
-                self.master = None;
-            }
+            Source::Internet => self.scan.ask_master(&self.master_name, self.master_port),
             Source::Favorites => {}
         }
     }
@@ -228,42 +184,22 @@ impl Browser {
     /// `closeJoin`: the refresh stops; the lists stay.
     pub fn stop(&mut self) {
         self.refreshing = false;
-        self.resolve = None;
-        self.master_due = None;
+        self.scan.stop_master();
     }
 
     /// Reads the replies and sends the next pings; once a frame.
     pub fn pump(&mut self, now: Instant) {
-        if let Some(rx) = &self.resolve
-            && let Ok(addr) = rx.try_recv()
-        {
-            self.resolve = None;
-            match addr {
-                Some(a) => self.master_due = Some(a),
-                None => {
-                    log::warn!("cod4 browser: cannot resolve {}", self.master_name);
-                    self.refreshing = false;
-                }
-            }
-        }
-        if let Some(addr) = self.master_due
-            && master_send_allowed(addr.ip())
-            && let Some(sock) = self.socket()
-        {
-            log::info!("cod4 browser: requesting protocol {PROTOCOL} servers from {addr}");
-            let _ = sock.send_to(&build_oob(&getservers()), addr);
-            self.master_due = None;
-            self.master = Some(addr);
+        if !self.scan.poll_master(Some(PROTOCOL)) {
+            self.refreshing = false;
         }
         self.receive(now);
         self.status_resend(now);
         if !self.refreshing {
             return;
         }
-        let waiting_master = self.resolve.is_some()
-            || self.master_due.is_some()
+        let waiting_master = self.scan.master_pending()
             || (self.source == Source::Internet
-                && self.master.is_some()
+                && self.scan.asked_master()
                 && self.lists[1].is_empty()
                 && self.started.is_some_and(|t| now - t < MASTER_TIMEOUT));
         let sent = self.send_pings(now);
@@ -288,15 +224,12 @@ impl Browser {
         if targets.is_empty() {
             return 0;
         }
-        let Some(sock) = self.socket() else {
+        if !self.scan.ensure() {
             return 0;
-        };
-        let sock = sock.try_clone().ok();
+        }
         for &i in &targets {
             let s = &mut self.lists[src][i];
-            if let Some(sock) = &sock {
-                let _ = sock.send_to(&build_oob(GETINFO), s.rec.addr);
-            }
+            self.scan.send(GETINFO, s.rec.addr);
             s.sent = Some(now);
         }
         self.last_ping = Some(now);
@@ -313,35 +246,22 @@ impl Browser {
     }
 
     fn receive(&mut self, now: Instant) {
-        let Some(sock) = self.socket.take() else {
-            return;
-        };
-        let mut buf = [0u8; 16384];
-        while let Ok((n, from)) = sock.recv_from(&mut buf) {
-            let SocketAddr::V4(from) = from else {
-                continue;
-            };
-            let Some((cmd, rest)) = parse_oob(&buf[..n]) else {
-                continue;
-            };
-            match cmd {
-                "getserversResponse" if Some(SocketAddr::V4(from)) == self.master => {
+        for reply in self.scan.recv() {
+            match reply {
+                Reply::Servers(body) => {
                     let list = &mut self.lists[1];
-                    for addr in parse_servers_response(rest) {
+                    for addr in parse_servers_response(&body) {
                         if list.len() < MAX_GLOBAL && !list.iter().any(|s| s.rec.addr == addr) {
                             list.push(Server::new(addr));
                         }
                     }
                 }
-                "infoResponse" => {
-                    let text = vcod_common::text::latin1(rest);
-                    self.info_response(from, &text, now);
-                }
-                "statusResponse" => {
+                Reply::Info(from, text) => self.info_response(from, &text, now),
+                Reply::Status(from, text) => {
                     if let Some((addr, st)) = &mut self.status
                         && *addr == from
                     {
-                        let status = Status::parse(&vcod_common::text::latin1(rest));
+                        let status = Status::parse(&text);
                         if status.is_cod4x() {
                             for s in self.lists.iter_mut().flatten() {
                                 s.rec.info.cod4x |= s.rec.addr == from;
@@ -350,10 +270,8 @@ impl Browser {
                         *st = Some(status);
                     }
                 }
-                _ => {}
             }
         }
-        self.socket = Some(sock);
     }
 
     /// `CL_ServerInfoPacket` (0x470ce0): another protocol is dropped; the
@@ -392,7 +310,7 @@ impl Browser {
     pub fn ask_status(&mut self, addr: SocketAddrV4) {
         self.status = Some((addr, None));
         self.status_sent = None;
-        self.status_resend(Instant::now());
+        self.status_resend(browser_now());
     }
 
     fn status_resend(&mut self, now: Instant) {
@@ -402,9 +320,7 @@ impl Browser {
         if self.status_sent.is_some_and(|t| now - t < STATUS_RESEND) {
             return;
         }
-        if let Some(sock) = self.socket() {
-            let _ = sock.send_to(&build_oob(GETSTATUS), addr);
-        }
+        self.scan.send(GETSTATUS, addr);
         self.status_sent = Some(now);
     }
 
@@ -434,7 +350,8 @@ impl Browser {
     }
 
     /// `LAN_SaveServersToCache`'s favourites over the file's old bytes:
-    /// vcod leaves the Internet block as retail last wrote it.
+    /// vcod leaves the Internet block as retail last wrote it. The file is
+    /// replaced whole through a temp file, as CoD1's is.
     pub fn save(&self) {
         let Some(path) = &self.cache else {
             return;
@@ -445,7 +362,7 @@ impl Browser {
             .unwrap_or_else(|| vec![0; vcod_cod4::net::browser::CACHE_LEN]);
         let favorites: Vec<Record> = self.lists[2].iter().map(|s| s.rec.clone()).collect();
         ServerCache::write_favorites(&favorites, &mut file);
-        if let Err(e) = std::fs::write(path, &file) {
+        if let Err(e) = write_cache(path, &file) {
             log::warn!("cod4 browser: cannot write {}: {e}", path.display());
         }
     }
@@ -575,6 +492,13 @@ pub struct Display {
     pub join: Option<JoinRequest>,
 }
 
+/// A sort column's key: a number or a text, one kind per column.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum SortCol {
+    Number(i64),
+    Text(String),
+}
+
 use super::ScriptMenus;
 use vcod_cod4::menuexp::atoi;
 use vcod_cod4::net::parse::Gamestate;
@@ -679,39 +603,38 @@ impl ScriptMenus {
             })
             .collect();
         if let Some(col) = self.display.sort {
-            rows.sort_by(|&a, &b| {
-                let o = self.compare(&list[a], &list[b], col);
-                if self.display.reverse { o.reverse() } else { o }
-            });
+            // Each row's key is built once, not twice a comparison.
+            if self.display.reverse {
+                rows.sort_by_cached_key(|&i| std::cmp::Reverse(self.sort_key(&list[i], col)));
+            } else {
+                rows.sort_by_cached_key(|&i| self.sort_key(&list[i], col));
+            }
         }
         self.display.rows = rows;
     }
 
-    /// `LAN_CompareServers` (0x475b20): the column's key, then the ping,
-    /// the game type and the host name.
-    fn compare(&self, a: &Server, b: &Server, col: i32) -> std::cmp::Ordering {
-        let (ia, ib) = (a.info(), b.info());
-        let host = |s: &Server| super::controls::clean(&s.info().hostname).to_lowercase();
-        let ping = |s: &Server| s.rec.ping as i16;
+    /// `LAN_CompareServers` (0x475b20) as a key: the column's, then the
+    /// ping, the game type and the host name.
+    fn sort_key(&self, s: &Server, col: i32) -> (SortCol, i16, String, String) {
+        let i = s.info();
+        let ping = s.rec.ping as i16;
+        let host = || super::controls::clean(&i.hostname).to_lowercase();
+        let n = |v: i64| SortCol::Number(v);
         let key = match col {
-            0 => ia.password.cmp(&ib.password),
+            0 => n(i.password.into()),
             // A `hw` of 0 sorts last.
-            1 => (ia.hw == 0, ia.hw).cmp(&(ib.hw == 0, ib.hw)),
-            2 => host(a).cmp(&host(b)),
-            3 => self.map_name(&ia.mapname).cmp(&self.map_name(&ib.mapname)),
-            4 => ia.clients.cmp(&ib.clients),
-            5 => self
-                .gametype_name(&ia.gametype)
-                .cmp(&self.gametype_name(&ib.gametype)),
-            6 => ia.voice.cmp(&ib.voice),
-            7 => ia.pure.cmp(&ib.pure),
-            8 => ia.modded.cmp(&ib.modded),
-            9 => ia.pb.cmp(&ib.pb),
-            _ => ping(a).cmp(&ping(b)),
+            1 => n(i64::from(i.hw == 0) << 8 | i64::from(i.hw)),
+            2 => SortCol::Text(host()),
+            3 => SortCol::Text(self.map_name(&i.mapname)),
+            4 => n(i.clients.into()),
+            5 => SortCol::Text(self.gametype_name(&i.gametype)),
+            6 => n(i.voice.into()),
+            7 => n(i.pure.into()),
+            8 => n(i.modded.into()),
+            9 => n(i.pb.into()),
+            _ => n(ping.into()),
         };
-        key.then(ping(a).cmp(&ping(b)))
-            .then_with(|| ia.gametype.cmp(&ib.gametype))
-            .then_with(|| host(a).cmp(&host(b)))
+        (key, ping, i.gametype.clone(), host())
     }
 
     fn localized(&self, key: &str) -> String {
@@ -1071,18 +994,29 @@ impl ScriptMenus {
 impl Browser {
     /// Waiting on the master's name or its first answer.
     pub fn waiting_master(&self) -> bool {
-        self.resolve.is_some()
-            || self.master_due.is_some()
+        self.scan.master_pending()
             || (self.source == Source::Internet
-                && self.master.is_some()
+                && self.scan.asked_master()
                 && self.lists[1].is_empty())
     }
+}
+
+/// Now for the browser's ping clock: the wall's, or the clock a live test
+/// runs its server on (`play::cod4::tests::sim`).
+pub(crate) fn browser_now() -> Instant {
+    #[cfg(test)]
+    if let Some(t) = crate::play::cod4::tests::sim::now() {
+        return t;
+    }
+    Instant::now()
 }
 
 /// vcod-server's CoD4 `war` on mp_crash on a loopback port, served on a
 /// thread for tests (the browser's, the front end's) until it is dropped:
 /// `password` its `g_password`; [`TestServer::command`] sends client 0 a
-/// server command.
+/// server command. The server runs on a `sim` clock the starting thread
+/// is put on, so only that thread's sleeps (`clk_sleep`) move it and a
+/// loaded machine cannot starve the server past a client's wait.
 #[cfg(test)]
 pub(crate) struct TestServer {
     pub(crate) addr: SocketAddrV4,
@@ -1094,14 +1028,17 @@ pub(crate) struct TestServer {
 #[cfg(test)]
 impl TestServer {
     pub(crate) fn start(password: &str) -> Option<TestServer> {
+        use crate::play::cod4::tests::{serve_until, sim};
         use std::sync::atomic::{AtomicBool, Ordering};
-        use vcod_server::cod4::{Cod4Config, Cod4Server, FRAME_MS};
+        use vcod_server::cod4::{Cod4Config, Cod4Server};
         let install = vcod_cod4::testing::cod4_install()?;
         let run = std::sync::Arc::new(AtomicBool::new(true));
         let flag = run.clone();
         let password = password.to_string();
         let (tx, rx) = mpsc::channel();
         let (cmd_tx, cmd_rx) = mpsc::channel::<String>();
+        let clock = sim::Clock::new();
+        let served = clock.clone();
         // The server is built on its own thread: it is not `Send`.
         let h = std::thread::spawn(move || {
             let mut sv = Cod4Server::new(
@@ -1118,29 +1055,18 @@ impl TestServer {
             let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
             sock.set_nonblocking(true).unwrap();
             tx.send(sock.local_addr().unwrap()).unwrap();
-            let mut next = Instant::now();
-            let mut buf = [0u8; 4096];
-            while flag.load(Ordering::Relaxed) {
-                while let Ok((n, from)) = sock.recv_from(&mut buf) {
-                    sv.handle_packet(from, &buf[..n], Instant::now());
-                }
+            let finished = || !flag.load(Ordering::Relaxed);
+            serve_until(&mut sv, &sock, &served, finished, |sv, _, _| {
                 while let Ok(c) = cmd_rx.try_recv() {
                     sv.send_server_command(0, &c);
                 }
-                let now = Instant::now();
-                if now >= next {
-                    sv.tick_frames(now, 1);
-                    next += Duration::from_millis(FRAME_MS as u64);
-                }
-                for (to, p) in sv.take_outgoing() {
-                    let _ = sock.send_to(&p, to);
-                }
-                std::thread::sleep(Duration::from_millis(1));
-            }
+                true
+            });
         });
         let SocketAddr::V4(addr) = rx.recv().ok()? else {
             return None;
         };
+        sim::install(Some(clock));
         Some(TestServer {
             addr,
             run,
@@ -1161,6 +1087,7 @@ impl Drop for TestServer {
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
+        crate::play::cod4::tests::sim::install(None);
     }
 }
 
@@ -1209,12 +1136,19 @@ mod tests {
     /// Pumps the browser a frame at a time until `done` or 5 s pass, the
     /// frame's sleep first: a Local reply read in the broadcast's own
     /// millisecond has ping 0, which the display list hides (retail's
-    /// `time - start` at 0x470df3 has no `+ 1` either).
+    /// `time - start` at 0x470df3 has no `+ 1` either). The 5 s are on a
+    /// [`TestServer`]'s clock where one runs, and on the wall too: a
+    /// loopback helper thread (a fake master, the resolve) answers in
+    /// wall time.
     fn pump_until(m: &mut ScriptMenus, done: impl Fn(&ScriptMenus) -> bool) -> bool {
-        let t0 = Instant::now();
-        while t0.elapsed() < Duration::from_secs(5) {
-            std::thread::sleep(Duration::from_millis(16));
-            m.pump_browser(Instant::now());
+        use crate::play::cod4::tests::{clk_now, clk_sleep};
+        let (t0, wall) = (clk_now(), Instant::now());
+        let budget = Duration::from_secs(5);
+        while clk_now() - t0 < budget || wall.elapsed() < budget {
+            clk_sleep(Duration::from_millis(16));
+            // the helpers' turn
+            std::thread::sleep(Duration::from_millis(1));
+            m.pump_browser(browser_now());
             if done(m) {
                 return true;
             }
@@ -1347,10 +1281,8 @@ mod tests {
         hud.load(&install.root().join("main"), "ui_mp");
         let a = hud.menu_assets().unwrap();
         let gs = Gamestate::default();
-        let dir = std::env::temp_dir().join(format!("vcod-cod4-browser-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let cache = dir.join(vcod_cod4::net::browser::CACHE_FILE);
-        let _ = std::fs::remove_file(&cache);
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join(vcod_cod4::net::browser::CACHE_FILE);
         let mut m = front_end(&hud);
         m.browser = Browser::with_cache(cache.clone());
         m.browser.lan_targets.clear();
@@ -1425,7 +1357,6 @@ mod tests {
             Some(&b"\xff\xff\xff\xffgetservers 6 full empty"[..])
         );
         drop(server);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A fake server on loopback: it answers `getinfo` with `info` until
@@ -1645,15 +1576,14 @@ mod tests {
     /// namespace): Local with its broadcast sent to that address's
     /// `COD4_BROWSER_BROADCAST` (a broadcast address, ports 28960..28963)
     /// or to the server itself finds it; Server Info lists its status.
-    /// Prints both lists. Skipped without the variable.
+    /// Prints both lists.
     #[test]
+    #[ignore = "tool: set COD4_BROWSER_SERVER=ip:port"]
     fn cod4_browser_against_a_named_server() {
-        let Some(addr) = std::env::var("COD4_BROWSER_SERVER")
+        let addr = std::env::var("COD4_BROWSER_SERVER")
             .ok()
             .and_then(|a| a.parse::<SocketAddrV4>().ok())
-        else {
-            return;
-        };
+            .expect("set COD4_BROWSER_SERVER=ip:port");
         let Some(install) = vcod_cod4::testing::cod4_install() else {
             return;
         };

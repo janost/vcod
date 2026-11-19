@@ -2,13 +2,15 @@
 //! threads"): how many, and a map over per-bot work run on them under the
 //! ticking thread's walk rules.
 
+#![allow(unsafe_code)]
+
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// The most threads a pass runs on unless `VCOD_BOT_THREADS` says more:
 /// a dozen bots' pass took as long on eight, its slowest bot's plan the
-/// floor (bot-navigation.md section 3, "The pass on threads").
+/// floor (bot-navigation.md section 3.11, "The pass on threads").
 const MAX_THREADS: usize = 4;
 
 thread_local! {
@@ -187,13 +189,12 @@ impl Pool {
         while s.busy.load(Ordering::SeqCst) > 0 {
             std::hint::spin_loop();
         }
+        // Taken before a re-raise, so a caught panic leaves the next run clean.
+        let worker = s.panicked.swap(false, Ordering::Relaxed);
         if let Err(e) = here {
             std::panic::resume_unwind(e);
         }
-        assert!(
-            !s.panicked.swap(false, Ordering::Relaxed),
-            "a bots' worker panicked"
-        );
+        assert!(!worker, "a bots' worker panicked");
     }
 }
 
@@ -226,7 +227,9 @@ impl PoolState {
                 // the count drains, which this worker's leaving comes
                 // after.
                 let job = unsafe { *self.job.load(Ordering::Acquire).cast::<JobRef>() };
-                let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).is_ok();
+                let ok = crate::engine::contain::caught_scope(|| {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).is_ok()
+                });
                 self.panicked.fetch_or(!ok, Ordering::Relaxed);
             }
             self.busy.fetch_sub(1, Ordering::SeqCst);
@@ -242,5 +245,66 @@ impl Drop for Pool {
             w.thread().unpark();
             let _ = w.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn workers() -> usize {
+        POOL.with_borrow(|p| p.as_ref().map_or(0, |p| p.workers.len()))
+    }
+
+    /// Results come back in item order on one thread and on four, pass
+    /// after pass, many items or few.
+    #[test]
+    fn map_keeps_item_order_pass_after_pass() {
+        for n in [1, 4] {
+            with_threads(n, || {
+                for pass in 0..2000usize {
+                    let items: Vec<usize> = (0..pass % 41).collect();
+                    let got = map(&items, |&i| i * i + pass);
+                    assert!(got.iter().enumerate().all(|(i, &v)| v == i * i + pass));
+                }
+            });
+        }
+    }
+
+    /// A panic in `f` reaches the caller whichever thread ran the item,
+    /// and the pool runs the next pass whole.
+    #[test]
+    fn a_panic_in_a_pass_reaches_the_caller_and_the_pool_goes_on() {
+        with_threads(4, || {
+            let items: Vec<usize> = (0..64).collect();
+            for bad in [0, 63] {
+                let r = std::panic::catch_unwind(|| {
+                    map(&items, |&i| {
+                        assert!(i != bad, "item {bad}");
+                        i
+                    })
+                });
+                assert!(r.is_err(), "item {bad}'s panic was lost");
+                assert_eq!(map(&items, |&i| i + 1), (1..65).collect::<Vec<_>>());
+            }
+        });
+    }
+
+    /// `with_threads` sizes this thread's pool to its count less the
+    /// ticking thread, and restores the outer count after.
+    #[test]
+    fn with_threads_resizes_the_pool() {
+        let items: Vec<u32> = (0..16).collect();
+        with_threads(4, || {
+            map(&items, |&i| i);
+            assert_eq!((threads(), workers()), (4, 3));
+            with_threads(2, || {
+                assert_eq!(map(&items, |&i| i * 2)[15], 30);
+                assert_eq!((threads(), workers()), (2, 1));
+            });
+            assert_eq!(threads(), 4);
+            map(&items, |&i| i);
+            assert_eq!(workers(), 3);
+        });
     }
 }

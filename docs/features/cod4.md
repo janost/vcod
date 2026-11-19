@@ -303,7 +303,7 @@ shot holds the frame before `r_gamma`, as 1.7's front buffer read does.
   (`sv_allowDownload`) or `sv_wwwBaseURL` (11). `--script-dir` reads
   loose `.gsc` files over the zones'.
 - `--set dedicated=2` heartbeats `master.cod.pm` (or the master
-  `sv_master1` names) every 180 s.
+  `sv_master1` names, plus any in `sv_master2`..`5`) every 180 s.
 
 **Scripts** ([cod4-gsc.md](../research/cod4-gsc.md)). The stock gsc runs
 on vcod's VM. Every builtin the stock scripts of the 21 stock maps call
@@ -422,7 +422,7 @@ stale player in the scripts.
 
 ### Bots
 
-`--bots N [--bots-shoot]` adds bots that join through the team and class
+`--bots N [--bots-peaceful]` adds bots that join through the team and class
 menus and play with vcod's shared bot brain
 ([bots.md](../bots.md#cod4)):
 

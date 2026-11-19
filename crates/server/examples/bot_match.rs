@@ -32,7 +32,8 @@
 //! a fight broken off with both alive.
 //! Run: COD_DIR=<install> cargo run --release -p vcod-server --example bot_match [seed...]
 //! `MAPS=` a comma list (`MAP=` alias; mp_carentan), `GAMETYPE=` (tdm),
-//! `BOTS=` (6), `TICKS=` (12000, ten minutes), `JOBS=` (4, matches run in
+//! `BOTS=` (6), `TICKS=` (12000, ten minutes), `LEVELS=` (1, the
+//! `exitLevel`s a match runs through), `JOBS=` (4, matches run in
 //! parallel), `SET=name=value,...` cvars, `UO=1` a United Offensive
 //! server. `AXIS_SKILL=` / `ALLIES_SKILL=` add the bots per side at those
 //! `vc_bot_skill` levels, half each (dm: `SKILLS=a,b,...`, one bot per
@@ -69,17 +70,20 @@
 //! 64 printed as `net@<tick>` every N ticks and `net <map> <gametype> seed
 //! <s> ticks <n> <hex>` per match. The observer is a client, so it changes
 //! the match: compare `NETDIGEST` runs only with `NETDIGEST` runs. CoD2's
-//! `svs.time` reads the wall clock, which keys the challenge and so every
-//! netchan byte; under `NETDIGEST` the CoD2 server runs it on the frame
-//! clock (`Cod2Server::test_frame_clock`). `NETDUMP=<dir>` writes the
+//! challenge is salted with the wall clock, which keys every netchan byte;
+//! under `NETDIGEST` the CoD2 server salts it with the frame clock
+//! (`Cod2Server::test_frame_clock`). `NETDUMP=<dir>` writes the
 //! datagrams themselves, a line each (`<tick> <to> <len> <hex>`), to
 //! `<dir>/<game>_<map>_<gametype>_s<seed>.net`, to find the bytes behind a
 //! `net@` window that parted.
 //!
-//! `OBSERVERS=<N>` (CoD1 and CoD2) joins N more such spectators, each at
-//! its own address, whose datagrams no digest folds: a server with N
-//! human clients to build snapshots for. They change the match as the
-//! `NETDIGEST` one does.
+//! `OBSERVERS=<N>` joins N more such spectators, each at its own address,
+//! whose datagrams no digest folds: a server with N human clients to build
+//! snapshots for. They change the match as the `NETDIGEST` one does. On
+//! CoD4 they are in-process 1.7 clients (`cod4::Spectator4`). With
+//! `OBSERVERS_PLAY=1` (CoD1 and CoD4) they answer the team and weapon
+//! menus and walk a canned circle, firing every other second: clients
+//! in the world, whose snapshots carry the entities they see.
 //!
 //! `VCOD_TICK_TRACE=<dir>` writes each match's tick step log
 //! (`vcod_server::tick_trace`) to `<dir>/<game>_<map>_<gametype>_s<seed>.trace`,
@@ -170,7 +174,6 @@ impl CtfCarries {
     }
 
     /// `bodies`: each playing body's client, team and feet.
-    #[allow(clippy::too_many_arguments)]
     fn step(
         &mut self,
         tick: usize,
@@ -339,6 +342,8 @@ struct Opts {
     gametype: String,
     bots: usize,
     ticks: usize,
+    /// `LEVELS=`: the `exitLevel`s a match runs through before it stops.
+    levels: u32,
     uo: bool,
     set: Vec<(String, String)>,
     /// Console lines run once the level is up (the per-side `addbot`s).
@@ -653,9 +658,13 @@ impl Tally {
 /// `tickstats <map> <gametype> seed <s>: ticks N p50 p90 p99 max` and a
 /// line per phase (mean, p50, p99 and max ms a tick, longest mean first). Tick 0,
 /// which waits on the nav graph, is left out. Run with `JOBS=1`: matches
-/// beside each other share the CPUs.
+/// beside each other share the CPUs. `TICKSTATS=insns` counts each phase's
+/// user-space instructions instead (`tick_profile::enable_insns`), printed
+/// in the same columns as millions, and a tick as the sum of its top-level
+/// phases: the number to compare on a loaded machine.
 #[derive(Default)]
 struct TickStats {
+    insns: bool,
     ms: Vec<f32>,
     /// Each phase's time per counted tick, 0 where it did not run.
     phases: BTreeMap<&'static str, Vec<f32>>,
@@ -665,16 +674,35 @@ struct TickStats {
 
 impl TickStats {
     fn from_env() -> Option<TickStats> {
-        (std::env::var("TICKSTATS").as_deref() == Ok("1")).then(|| {
-            vcod_server::tick_profile::enable();
-            TickStats::default()
-        })
+        match std::env::var("TICKSTATS").as_deref() {
+            Ok("1") => {
+                vcod_server::tick_profile::enable();
+                Some(TickStats::default())
+            }
+            Ok("insns") => {
+                vcod_server::tick_profile::enable_insns();
+                Some(TickStats {
+                    insns: true,
+                    ..TickStats::default()
+                })
+            }
+            _ => None,
+        }
     }
 
     fn add(&mut self, tick: usize, ms: f32, phases: &[vcod_server::tick_profile::PhaseTime]) {
         if tick == 0 {
             return;
         }
+        let ms = if self.insns {
+            phases
+                .iter()
+                .filter(|p| !p.0.contains('/'))
+                .map(|p| p.1.as_secs_f32() * 1000.0)
+                .sum()
+        } else {
+            ms
+        };
         let n = self.ms.len();
         self.ms.push(ms);
         for (name, d, _) in phases {
@@ -697,6 +725,9 @@ impl TickStats {
 
     fn print(&self, map: &str, gametype: &str, seed: u64) {
         let n = self.ms.len();
+        if self.insns {
+            eprintln!("tickstats {map} {gametype} seed {seed}: the ms columns are M insns");
+        }
         eprintln!(
             "tickstats {map} {gametype} seed {seed}: ticks {n} p50 {:.2} p90 {:.2} p99 {:.2} max {:.1} ms (tick {}: {})",
             Self::pct(&self.ms, 0.5),
@@ -923,16 +954,35 @@ impl vcod_common::net::Transport for PipeEnd {
 }
 
 /// A CoD1 spectator client that joins and stays in the team menu,
-/// acknowledging every snapshot.
+/// acknowledging every snapshot; under [`play_from_env`] it answers the
+/// menus and walks instead ([`Play`]).
 struct Observer {
     pipe: Rc<std::cell::RefCell<Pipe>>,
     cl: vcod_common::net::NetClient<PipeEnd>,
     addr: SocketAddr,
+    play: Option<Play>,
+}
+
+/// An `OBSERVERS_PLAY=1` client's menus: `autoassign` on the team menu,
+/// the team's bolt rifle on the weapon menu, then a canned walk: forward
+/// along a yaw that turns a degree a tick, the attack held every other
+/// second, so it fires and respawns.
+#[derive(Default)]
+struct Play {
+    main_menu: String,
+    answered: Vec<i32>,
+    ticks: i32,
 }
 
 /// `OBSERVERS=`' count, 0 without it.
 fn observers_from_env() -> usize {
     std::env::var("OBSERVERS").map_or(0, |v| v.parse().expect("OBSERVERS"))
+}
+
+/// `OBSERVERS_PLAY=1`: the `OBSERVERS` clients join a team and walk, so the
+/// server builds them snapshots in the world.
+fn play_from_env() -> bool {
+    std::env::var("OBSERVERS_PLAY").as_deref() == Ok("1")
 }
 
 /// The `i`th observer's address and qport: [`OBSERVER`] and 4660 for the
@@ -949,7 +999,7 @@ fn observer_addr(i: usize) -> (SocketAddr, u16) {
 }
 
 impl Observer {
-    fn new(proto: &'static vcod_common::net::protocol::Protocol, now: Instant, i: usize) -> Self {
+    fn new(proto: &'static vcod_common::net::protocol::Cod1Wire, now: Instant, i: usize) -> Self {
         let (addr, qport) = observer_addr(i);
         let pipe = Rc::new(std::cell::RefCell::new(Pipe::default()));
         let cl = vcod_common::net::NetClient::start_with_protocol(
@@ -958,7 +1008,24 @@ impl Observer {
             qport,
             proto,
         );
-        Observer { pipe, cl, addr }
+        Observer {
+            pipe,
+            cl,
+            addr,
+            play: None,
+        }
+    }
+
+    /// [`Self::new`], a [`Play`] client.
+    fn player(
+        proto: &'static vcod_common::net::protocol::Cod1Wire,
+        now: Instant,
+        i: usize,
+    ) -> Self {
+        Observer {
+            play: Some(Play::default()),
+            ..Self::new(proto, now, i)
+        }
     }
 
     /// The client's packets since the last tick, into the server.
@@ -977,8 +1044,72 @@ impl Observer {
             }
         }
         self.cl.pump_at(now);
-        self.cl
-            .send_frame(&vcod_common::net::msg::UserCmd::default());
+        let cmd = match self.play.as_mut() {
+            Some(p) => p.step(&mut self.cl),
+            None => vcod_common::net::msg::UserCmd::default(),
+        };
+        self.cl.send_frame(&cmd);
+    }
+}
+
+impl Play {
+    /// The menus' answers, then this tick's cmd.
+    fn step(
+        &mut self,
+        cl: &mut vcod_common::net::NetClient<PipeEnd>,
+    ) -> vcod_common::net::msg::UserCmd {
+        let first = cl
+            .protocol()
+            .cs
+            .bounds(vcod_common::net::protocol::CsRange::Menu)
+            .0;
+        for line in cl.take_server_commands() {
+            let t: Vec<&str> = line
+                .split_whitespace()
+                .map(|t| t.trim_matches('"'))
+                .collect();
+            match t.as_slice() {
+                ["v", "g_scriptMainMenu", menu, ..] => self.main_menu = menu.to_string(),
+                ["t", idx, ..] => {
+                    let Ok(idx) = idx.parse::<i32>() else {
+                        continue;
+                    };
+                    if self.answered.contains(&idx) {
+                        continue;
+                    }
+                    let named = cl.configstring(first + idx.max(0) as usize).to_string();
+                    let menu = if named.is_empty() {
+                        self.main_menu.clone()
+                    } else {
+                        named
+                    };
+                    let reply = if menu.starts_with("serverinfo_") {
+                        "close"
+                    } else if menu.starts_with("team_") {
+                        "autoassign"
+                    } else if let Some(nation) = menu.strip_prefix("weapon_") {
+                        match nation {
+                            n if n.starts_with("german") => "kar98k_mp",
+                            n if n.starts_with("british") => "enfield_mp",
+                            n if n.starts_with("russian") => "mosin_nagant_mp",
+                            _ => "m1garand_mp",
+                        }
+                    } else {
+                        continue;
+                    };
+                    cl.send_reliable(&format!("mr {} {idx} {reply}", cl.server_id()));
+                    self.answered.push(idx);
+                }
+                _ => {}
+            }
+        }
+        self.ticks += 1;
+        vcod_common::net::msg::UserCmd {
+            forward: 127,
+            angles: [0, (self.ticks * 182) & 0xffff, 0],
+            buttons: u8::from(self.ticks % 40 < 20),
+            ..Default::default()
+        }
     }
 }
 
@@ -1171,8 +1302,11 @@ struct Match {
     map: String,
     seed: u64,
     ticks: usize,
-    /// Whether the map ended inside `TICKS`.
+    /// Whether the map ended inside `TICKS`: with `LEVELS`, every level.
     ended: bool,
+    /// The `exitLevel`s run, and the team scores each zeroed.
+    levels: u32,
+    banked: [i32; 2],
     /// `W;` lines by winning team (or, in `dm`, player name).
     wins: BTreeMap<String, u32>,
     /// The tick of each `W;` line: when each round ended (`bas` logs it
@@ -1236,6 +1370,7 @@ fn main() {
         gametype,
         bots,
         ticks: env("TICKS", "12000").parse().expect("TICKS"),
+        levels: env("LEVELS", "1").parse::<u32>().expect("LEVELS").max(1),
         uo,
         set: env("SET", "")
             .split(',')
@@ -1313,15 +1448,16 @@ fn main() {
             a
         });
         println!(
-            "{} seed {}: ticks {} ended {} wins {:?} at {:?} score axis {} allies {} stalled {} held {} edges {} by a body {} {} actions {:?} to objective {}",
+            "{} seed {}: ticks {} ended {} levels {} wins {:?} at {:?} score axis {} allies {} stalled {} held {} edges {} by a body {} {} actions {:?} to objective {}",
             m.map,
             m.seed,
             m.ticks,
             m.ended,
+            m.levels,
             m.wins,
             m.win_ticks,
-            m.scores[0],
-            m.scores[1],
+            m.scores[0] + m.banked[0],
+            m.scores[1] + m.banked[1],
             m.stalled,
             m.held,
             m.edges[0],
@@ -1402,8 +1538,8 @@ fn summarize(what: &str, results: &[&Match]) {
         edges[0] += m.edges[0];
         edges[1] += m.edges[1];
         to_obj.extend(&m.to_objective);
-        scores[0] += i64::from(m.scores[0]);
-        scores[1] += i64::from(m.scores[1]);
+        scores[0] += i64::from(m.scores[0] + m.banked[0]);
+        scores[1] += i64::from(m.scores[1] + m.banked[1]);
     }
     println!("{what} over {} matches:", results.len());
     let rows = |kind: &str, map: &BTreeMap<String, Tally>| {
@@ -1498,7 +1634,10 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
         .is_some()
         .then(|| Observer::new(sv.protocol(), now, 0));
     let mut crowd: Vec<Observer> = (1..=observers_from_env())
-        .map(|i| Observer::new(sv.protocol(), now, i))
+        .map(|i| match play_from_env() {
+            true => Observer::player(sv.protocol(), now, i),
+            false => Observer::new(sv.protocol(), now, i),
+        })
         .collect();
     let mut dump = net_dump(game, map, &o.gametype, seed);
     let mut seen = 0;
@@ -1936,7 +2075,19 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                     (round_start, acted) = (tick, false);
                 }
                 // `exitLevel`'s own line; it has zeroed the team scores.
-                "ExitLevel: executed" => m.ended = true,
+                // Under `LEVELS` the script's `map_rotate` loads the next
+                // level (the same map with no `sv_mapRotation`).
+                "ExitLevel: executed" => {
+                    m.levels += 1;
+                    if m.levels >= o.levels {
+                        m.ended = true;
+                    } else {
+                        for (b, s) in m.banked.iter_mut().zip(m.scores) {
+                            *b += s;
+                        }
+                        m.scores = [0; 2];
+                    }
+                }
                 _ => {}
             }
         }
@@ -2079,6 +2230,22 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
     ObjSpread::add_cues(&mut m.obj, sv.bot_cue_tally());
     if let Some(st) = &stats {
         st.print(map, &o.gametype, seed);
+    }
+    if !crowd.is_empty() {
+        // `pm_type` 0: a body in the world, as its own last snapshot holds it.
+        let playing = crowd
+            .iter()
+            .filter(|ob| {
+                ob.cl
+                    .snapshots()
+                    .newest()
+                    .is_some_and(|s| s.ps.field_i32(sv.protocol(), "pm_type") == 0)
+            })
+            .count();
+        eprintln!(
+            "{map} seed {seed}: observers {} playing {playing}",
+            crowd.len()
+        );
     }
     Some(m)
 }
@@ -2640,7 +2807,7 @@ mod cod2 {
             }
             if let Observer2::Joined { cl, out } = self {
                 let pkt = if cl.parser.gamestate.is_some() {
-                    let base = cl.parser.snapshot().map_or(0, |s| s.server_time);
+                    let base = cl.parser.snapshot().map_or(0, |s| s.server_time.raw());
                     let cmd = cl.idle_cmd(base + super::TICK_MS as i32);
                     cl.build_packet(&[cmd])
                 } else {
@@ -2987,7 +3154,7 @@ mod cod2 {
         let mut level_of: HashMap<usize, u8> = HashMap::new();
         if let Some(b) = sv.bots_mut() {
             b.wait_for_graph();
-            b.man_guns = std::env::var("GUNS").map_or(true, |v| v != "0");
+            b.own.man_guns = std::env::var("GUNS").map_or(true, |v| v != "0");
             for (i, &slot) in slots.iter().enumerate() {
                 let l = if !list.is_empty() {
                     Some(list[i % list.len()])
@@ -3541,12 +3708,232 @@ mod cod2 {
 mod cod4 {
     use std::collections::{BTreeMap, HashMap, VecDeque};
     use std::time::{Duration, Instant};
+    use vcod_common::net::Msec;
 
     use vcod_server::cod4::{Cod4Config, Cod4Server};
     use vcod_server::engine::GameModule;
     use vcod_server::game::cod4::bot_feed::Cod4Objectives;
 
     use super::{Digest, RADIUS, TICK_MS, WINDOW, install_trace};
+
+    /// `OBSERVERS`' CoD4 client: the join `vcod_cod4::net::conn` makes
+    /// (challenge, connect, the seven stats packets, `cp` per gamestate),
+    /// over the server's own calls instead of a socket, then a message a
+    /// tick acknowledging what came. With `play` it answers the team and
+    /// class menus (`war`'s indices) and walks a canned circle.
+    struct Spectator4 {
+        addr: std::net::SocketAddr,
+        qport: u16,
+        challenge: i32,
+        chan: vcod_common::net::netchan::Netchan,
+        parser: vcod_cod4::net::parse::Client,
+        seq: u32,
+        ack: i32,
+        commands: Vec<Vec<u8>>,
+        commands_acked: i32,
+        last_cmd: vcod_cod4::net::clmsg::UserCmd,
+        cp_feed: Option<i32>,
+        stats_due: bool,
+        play: bool,
+        /// The menu answers sent since the last gamestate.
+        answered: usize,
+        first_snap: Option<i32>,
+        ticks: i32,
+    }
+
+    impl Spectator4 {
+        fn new(i: usize, play: bool) -> Self {
+            let (addr, qport) = super::observer_addr(i);
+            Spectator4 {
+                addr,
+                qport,
+                challenge: 0,
+                chan: vcod_common::net::netchan::Netchan::with_params(
+                    0,
+                    0,
+                    vcod_common::net::netchan::NetchanParams::COD2,
+                ),
+                parser: vcod_cod4::net::parse::Client::new(),
+                seq: 1,
+                ack: 0,
+                commands: Vec::new(),
+                commands_acked: 0,
+                last_cmd: Default::default(),
+                cp_feed: None,
+                stats_due: false,
+                play,
+                answered: 0,
+                first_snap: None,
+                ticks: 0,
+            }
+        }
+
+        fn oob(&self, sv: &mut Cod4Server, text: &[u8], now: Instant) -> Vec<Vec<u8>> {
+            let mut d = vec![0xff; 4];
+            d.extend_from_slice(text);
+            sv.handle_packet(self.addr, &d, now);
+            sv.take_outgoing()
+                .into_iter()
+                .filter(|(to, _)| *to == self.addr)
+                .map(|(_, p)| p)
+                .collect()
+        }
+
+        fn send_stats(&self, sv: &mut Cod4Server, now: Instant) {
+            let stats = vcod_cod4::net::stats::Stats::fresh();
+            for idx in 0..vcod_cod4::net::stats::STAT_PACKETS {
+                let mut p = b"stats\0".to_vec();
+                p.extend_from_slice(&self.qport.to_le_bytes());
+                p.push(idx as u8);
+                p.extend_from_slice(stats.packet(idx));
+                self.oob(sv, &p, now);
+            }
+        }
+
+        /// Challenge, connect and the stats, on an otherwise quiet server.
+        fn join(&mut self, sv: &mut Cod4Server, now: Instant) {
+            let hash = vcod_cod4::net::conn::KEY_HASH;
+            let reply = self.oob(sv, format!("getchallenge 0 \"{hash}\"").as_bytes(), now);
+            let text = String::from_utf8_lossy(&reply[0][4..]).into_owned();
+            self.challenge = text.split_whitespace().nth(1).unwrap().parse().unwrap();
+            let ui = format!(
+                "\\cg_predictItems\\1\\cl_punkbuster\\0\\cl_anonymous\\0\\snaps\\20\\rate\\25000\\name\\observer{}\\protocol\\6\\challenge\\{}\\qport\\{}",
+                self.qport, self.challenge, self.qport
+            );
+            self.oob(sv, format!("connect \"{ui}\"").as_bytes(), now);
+            self.send_stats(sv, now);
+            self.chan = vcod_common::net::netchan::Netchan::with_params(
+                self.qport,
+                self.challenge,
+                vcod_common::net::netchan::NetchanParams::COD2,
+            );
+        }
+
+        /// This tick's message: the unacked commands and a cmd once the
+        /// gamestate is in.
+        fn deliver(&mut self, sv: &mut Cod4Server, now: Instant) {
+            use vcod_cod4::net::clmsg::{self, ClOp, CmdWire, UserCmd};
+            if std::mem::take(&mut self.stats_due) {
+                self.send_stats(sv, now);
+            }
+            let mut pkt = self.seq.to_le_bytes().to_vec();
+            self.seq += 1;
+            pkt.extend_from_slice(&self.qport.to_le_bytes());
+            let Some(gs) = &self.parser.gamestate else {
+                pkt.push(0);
+                pkt.extend_from_slice(&self.ack.to_le_bytes());
+                pkt.extend_from_slice(&0i32.to_le_bytes());
+                sv.handle_packet(self.addr, &pkt, now);
+                return;
+            };
+            let server_id: i32 = gs
+                .systeminfo("sv_serverid")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let last = self.parser.last_server_command().to_vec();
+            let key = clmsg::usercmd_key(gs.checksum_feed, self.ack, &last);
+            let mut ops: Vec<ClOp> = (self.commands_acked as usize..self.commands.len())
+                .map(|i| ClOp::Command {
+                    sequence: i as i32 + 1,
+                    text: self.commands[i].clone(),
+                })
+                .collect();
+            let snap = self.parser.snapshots.last().map(|s| s.server_time);
+            self.ticks += 1;
+            let walk = self.play && self.answered >= 2;
+            let cmd = UserCmd {
+                server_time: snap
+                    .map_or(sv.core.sv_time_ms, |t| (t + 10).raw())
+                    .max(self.last_cmd.server_time + 1),
+                forwardmove: if walk { 127 } else { 0 },
+                angles: [0, if walk { (self.ticks * 182) as u16 } else { 0 }, 0],
+                buttons: u32::from(walk && self.ticks % 40 < 20),
+                ..self.last_cmd
+            };
+            self.last_cmd = cmd;
+            ops.push(ClOp::Move {
+                delta: snap.is_some(),
+                cmds: vec![(cmd, CmdWire::full(&UserCmd::default(), &cmd))],
+                origin: [1.0e6f32.to_bits(); 3],
+                origin_time: 0,
+            });
+            ops.push(ClOp::Eof);
+            let mut comp = clmsg::compress_ops(&self.parser.huff, &ops, key, &UserCmd::default());
+            let seed = self.challenge as u32 ^ server_id as u32 ^ self.ack as u32;
+            vcod_common::net::netchan::scramble_client_ops(seed as u8, &last, &mut comp);
+            pkt.push(server_id as u8);
+            pkt.extend_from_slice(&self.ack.to_le_bytes());
+            pkt.extend_from_slice(&self.parser.server_command_sequence.to_le_bytes());
+            pkt.extend_from_slice(&comp);
+            sv.handle_packet(self.addr, &pkt, now);
+        }
+
+        /// The tick's datagrams to it: the netchan, the parse, a `cp` per
+        /// gamestate and the menu answers.
+        fn receive(&mut self, sent: &[(std::net::SocketAddr, Vec<u8>)]) {
+            use vcod_cod4::net::parse::Op;
+            for (to, d) in sent {
+                if *to != self.addr || d.len() < 4 {
+                    continue;
+                }
+                if d[..4] == [0xff; 4] {
+                    self.stats_due |= d[4..].starts_with(b"requeststats");
+                    continue;
+                }
+                let Ok(Some((s, mut msg))) = self.chan.frame(d) else {
+                    continue;
+                };
+                if msg.len() < 4 {
+                    continue;
+                }
+                let rack = i32::from_le_bytes(msg[..4].try_into().unwrap());
+                let key = match rack {
+                    1.. => self
+                        .commands
+                        .get(rack as usize - 1)
+                        .cloned()
+                        .unwrap_or_default(),
+                    _ => Vec::new(),
+                };
+                self.chan.decode(s, &key, &mut msg);
+                self.commands_acked = self.commands_acked.max(rack);
+                let Ok(parsed) = self.parser.parse(s, &msg[4..]) else {
+                    continue;
+                };
+                self.ack = s as i32;
+                if parsed.ops.iter().any(|o| matches!(o, Op::Gamestate)) {
+                    let feed = self.parser.gamestate.as_ref().map(|g| g.checksum_feed);
+                    if self.cp_feed != feed {
+                        self.cp_feed = feed;
+                        let cp = vcod_cod4::net::pure::cp_command(&[], feed.unwrap_or(0));
+                        self.commands.push(cp.into_bytes());
+                        (self.answered, self.first_snap) = (0, None);
+                    }
+                }
+            }
+            self.parser.shed(0);
+            let newest = self.parser.snapshots.last().map(|s| s.server_time);
+            let first = *self
+                .first_snap
+                .get_or_insert_with(|| newest.unwrap_or(Msec::MAX).raw());
+            let sid = self
+                .parser
+                .gamestate
+                .as_ref()
+                .and_then(|g| g.systeminfo("sv_serverid"));
+            // `war`'s team menu, then its class menu, as `wire_ab`'s probes
+            // answer them.
+            let answers = ["mr {sid} 8 autoassign", "mr {sid} 15 assault_mp,0"];
+            if let (true, Some(newest), Some(sid)) = (self.play, newest, sid)
+                && self.answered < answers.len()
+                && newest >= Msec::from_raw(first + 1000 + 1500 * self.answered as i32)
+            {
+                let text = answers[self.answered].replace("{sid}", &sid);
+                self.commands.push(text.into_bytes());
+                self.answered += 1;
+            }
+        }
+    }
 
     #[derive(Default)]
     struct Cod4Match {
@@ -3792,7 +4179,7 @@ mod cod4 {
                 map: map.to_string(),
                 gametype: gametype.to_string(),
                 hostname: "match".into(),
-                max_clients: (bots + 2).max(8),
+                max_clients: (bots + 2 + super::observers_from_env()).max(8),
             },
             seed * 2 + 1,
         );
@@ -3800,12 +4187,18 @@ mod cod4 {
             sv.set_cvar(k, v);
         }
         sv.load(Some(&install)).expect("load the level");
+        let mut crowd: Vec<Spectator4> = (1..=super::observers_from_env())
+            .map(|i| Spectator4::new(i, super::play_from_env()))
+            .collect();
+        for ob in &mut crowd {
+            ob.join(&mut sv, now);
+        }
         let slots = sv.add_bots(bots, true);
         if let Some(b) = sv.bots_mut() {
             b.wait_for_graph();
-            b.objectives = std::env::var("OBJ").as_deref() != Ok("0");
-            b.man_guns = std::env::var("GUNS").as_deref() != Ok("0");
-            b.throw_back = std::env::var("THROWBACK").as_deref() != Ok("0");
+            b.own.objectives = std::env::var("OBJ").as_deref() != Ok("0");
+            b.own.man_guns = std::env::var("GUNS").as_deref() != Ok("0");
+            b.own.throw_back = std::env::var("THROWBACK").as_deref() != Ok("0");
         }
         let mut last_obj = None;
         // `STALLS=1`: every 20th tick of a stalled sample to stderr.
@@ -3899,6 +4292,9 @@ mod cod4 {
             if leave.contains(&tick) {
                 sv.core.console.push_back("removebot 1".into());
             }
+            for ob in &mut crowd {
+                ob.deliver(&mut sv, now);
+            }
             let sched = spike_ms.and_then(|_| vcod_server::tick_profile::sched());
             let t0 = Instant::now();
             <vcod_server::cod4::Cod4Game as GameModule>::drain_console(&mut sv, now);
@@ -3915,7 +4311,10 @@ mod cod4 {
                     vcod_server::tick_profile::format(&phases, 1.0)
                 );
             }
-            sv.take_outgoing();
+            let sent = sv.take_outgoing();
+            for ob in &mut crowd {
+                ob.receive(&sent);
+            }
             m.ticks = tick + 1;
             if tick == 0
                 && let Some(g) = sv.bots_mut().and_then(|b| b.graph())
@@ -4167,6 +4566,21 @@ mod cod4 {
         }
         if let Some(st) = &stats {
             st.print(map, gametype, seed);
+        }
+        if !crowd.is_empty() {
+            let playing = crowd
+                .iter()
+                .filter(|ob| {
+                    ob.parser
+                        .snapshots
+                        .last()
+                        .is_some_and(|s| s.ps.get("pm_type") == Some(0))
+                })
+                .count();
+            eprintln!(
+                "{map} seed {seed}: observers {} playing {playing}",
+                crowd.len()
+            );
         }
         Some(m)
     }

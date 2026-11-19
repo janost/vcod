@@ -3,22 +3,8 @@
 //! drops the client with `EXE_CANNOTVALIDATEPURECLIENT`.
 
 use vcod_common::net::info_value_for_key;
+pub use vcod_common::pak_checksum::{iwd_cp_command as cp_command, verify_iwd_cp as verify_cp};
 use vcod_common::pk3::Pk3Fs;
-
-/// `FS_ReferencedIwdPureChecksums` (cod2_lnxded 0x8065c36) behind the `cp `
-/// the client prefixes: `@`, each pure checksum, then `checksumFeed` XOR all
-/// of them XOR their count, every number `"%i "`. Unlike 1.1 there are no
-/// module checksums ahead of the `@`.
-pub fn cp_command(sums: &[i32], checksum_feed: i32) -> String {
-    let mut s = String::from("cp @ ");
-    let mut key = checksum_feed;
-    for &c in sums {
-        s.push_str(&format!("{c} "));
-        key ^= c;
-    }
-    s.push_str(&format!("{} ", key ^ sums.len() as i32));
-    s
-}
 
 /// `sv_iwds`: the unkeyed checksums of the server's non-localized iwds,
 /// `None` when the server is not pure (the list is empty or absent).
@@ -46,34 +32,6 @@ pub fn pure_command(fs: &Pk3Fs, checksum_feed: i32, systeminfo: &str) -> String 
         .map(|p| p.pure_checksum(checksum_feed))
         .collect();
     cp_command(&sums, checksum_feed)
-}
-
-/// `SV_VerifyIwds_f` (cod2_lnxded 0x8090534) on a `cp` command's arguments
-/// (`args[0]` is `cp`): `@`, sums that are distinct and each among the
-/// server's `loaded` pure checksums, then the key. True is retail's
-/// `pureAuthentic` 1.
-pub fn verify_cp(args: &[&str], loaded: &[i32], checksum_feed: i32) -> bool {
-    if args.len() < 3 || !args[1].starts_with('@') {
-        return false;
-    }
-    // `atoi`: a leading number, anything else 0.
-    let num = |s: &str| -> i32 {
-        let t = s.trim_start();
-        let end = t
-            .char_indices()
-            .find(|&(i, c)| !(c.is_ascii_digit() || (i == 0 && (c == '-' || c == '+'))))
-            .map_or(t.len(), |(i, _)| i);
-        t[..end].parse::<i64>().map_or(0, |v| v as i32)
-    };
-    let tail: Vec<i32> = args[2..].iter().map(|a| num(a)).collect();
-    let (sums, key) = tail.split_at(tail.len() - 1);
-    for (i, s) in sums.iter().enumerate() {
-        if sums[..i].contains(s) || !loaded.contains(s) {
-            return false;
-        }
-    }
-    let k = sums.iter().fold(checksum_feed, |k, s| k ^ s);
-    (k ^ sums.len() as i32) == key[0]
 }
 
 #[cfg(test)]

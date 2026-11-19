@@ -14,11 +14,12 @@ use vcod_common::text::atoi;
 const SIZE: usize = 0x878;
 
 /// A weapon file's struct: the [`Weapon`] its numbers, strings, sound
-/// aliases and anims fill, and the xmodels it names, which a zone would
-/// carry as ids, by the struct's field name.
+/// aliases and anims fill, and the xmodels and materials it names, which a
+/// zone would carry as ids, by the struct's field name.
 pub struct TextWeapon {
     pub weapon: Weapon,
     pub models: HashMap<&'static str, String>,
+    pub materials: HashMap<&'static str, String>,
     /// `gunModel` and `worldModel`, sixteen each.
     pub model_lists: HashMap<&'static str, Vec<Option<String>>>,
 }
@@ -136,6 +137,7 @@ pub fn parse(name: &str, text: &[u8], anim_types: &[&str]) -> Result<TextWeapon>
     }
     weapon.strings.insert("name", name.to_string());
     let mut models = HashMap::new();
+    let mut materials = HashMap::new();
     let mut model_lists: HashMap<&'static str, Vec<Option<String>>> = HashMap::new();
     let put = |raw: &mut [u8], at: usize, v: u32| raw[at..at + 4].copy_from_slice(&v.to_le_bytes());
     for &(key, at, ty) in FIELDS.iter() {
@@ -167,13 +169,20 @@ pub fn parse(name: &str, text: &[u8], anim_types: &[&str]) -> Result<TextWeapon>
                 Some((SlotKind::Sound, field, _)) => {
                     weapon.sounds.insert(field, v.to_string());
                 }
-                // Effects and materials the server never registers.
+                Some((SlotKind::Material, field, _)) => {
+                    materials.insert(field, v.to_string());
+                }
+                // Effects, which the server never registers.
                 _ => {}
             },
             4 => put(&mut raw, at, atoi(v) as u32),
             5 => put(&mut raw, at, u32::from(atoi(v) != 0)),
-            6 => put(&mut raw, at, (atof(v) as f32).to_bits()),
-            7 => put(&mut raw, at, stored_ms(atof(v) as f32) as u32),
+            6 => put(&mut raw, at, (vcod_common::text::atof(v) as f32).to_bits()),
+            7 => put(
+                &mut raw,
+                at,
+                stored_ms(vcod_common::text::atof(v) as f32) as u32,
+            ),
             20 => {
                 let i = lookup(anim_types.iter().copied(), v)
                     .ok_or_else(|| anyhow!("unknown weapon player anim type {v} in {name}"))?;
@@ -202,6 +211,7 @@ pub fn parse(name: &str, text: &[u8], anim_types: &[&str]) -> Result<TextWeapon>
     Ok(TextWeapon {
         weapon,
         models,
+        materials,
         model_lists,
     })
 }
@@ -271,6 +281,44 @@ pub fn load(fs: &(impl AssetSource + ?Sized), name: &str) -> Option<Result<TextW
     Some(parse(name, &text, &types))
 }
 
+/// Under a set `fs_game`, the weapons `BG_LoadWeaponDef` reads off `fs`'s
+/// weapon files in place of the zones' structs (cod4-fastfile.md 13):
+/// every name in `zone` and every `weapons/mp/` file in `iwds`, lowercased;
+/// a missing or broken file takes `defaultweapon_mp`'s under its own name.
+/// A name left out (that fails too) keeps its zone struct. `fs` is `iwds`
+/// itself or a source over it (the server's `Cod4Source`).
+pub fn load_overlay(
+    fs: &(impl AssetSource + ?Sized),
+    iwds: &vcod_common::pk3::Pk3Fs,
+    zone: impl IntoIterator<Item = String>,
+) -> Vec<(String, TextWeapon)> {
+    let mut names: Vec<String> = zone.into_iter().map(|n| n.to_ascii_lowercase()).collect();
+    for path in iwds.list_prefix("weapons/mp/") {
+        let name = &path["weapons/mp/".len()..];
+        if !name.is_empty() && !name.contains('/') {
+            names.push(name.to_ascii_lowercase());
+        }
+    }
+    names.sort();
+    names.dedup();
+    let text = |name: &str| match load(fs, name)? {
+        Ok(t) => Some(t),
+        Err(e) => {
+            log::warn!("cod4: weapons/mp/{name}: {e:#}");
+            None
+        }
+    };
+    names
+        .into_iter()
+        .filter_map(|name| {
+            let mut t = text(&name).or_else(|| text("defaultweapon_mp"))?;
+            t.weapon.name = name.clone();
+            t.weapon.strings.insert("name", name.clone());
+            Some((name, t))
+        })
+        .collect()
+}
+
 /// `stricmp` against each name; the first match's index.
 fn lookup<'a>(mut names: impl Iterator<Item = &'a str>, v: &str) -> Option<usize> {
     names.position(|n| n.eq_ignore_ascii_case(v))
@@ -285,10 +333,6 @@ fn info_pairs(s: &str) -> Vec<(&str, &str)> {
         out.push((k, it.next().unwrap_or("")));
     }
     out
-}
-
-fn atof(s: &str) -> f64 {
-    crate::menuexp::atof(s)
 }
 
 /// Field type 7, seconds to milliseconds as 1.7's parser stores them
@@ -808,3 +852,105 @@ pub const FIELDS: [(&str, u16, u8); 502] = [
     ("adsDofStart", 2160, 6),
     ("adsDofEnd", 2164, 6),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pmove::anim::PLAYER_ANIM_TYPES;
+
+    fn word(raw: &[u8], at: usize) -> u32 {
+        u32::from_le_bytes(raw[at..at + 4].try_into().unwrap())
+    }
+
+    fn file(body: &str) -> Vec<u8> {
+        format!("WEAPONFILE{body}").into_bytes()
+    }
+
+    fn parsed(body: &str) -> TextWeapon {
+        parse("t_mp", &file(body), &PLAYER_ANIM_TYPES).unwrap()
+    }
+
+    /// One field of each kind lands at its offset: an int, a bool, a
+    /// float, seconds as stored milliseconds, a name table's index, the
+    /// anim type list's, a string; keys in any case, the first value
+    /// under a key, an empty value leaving the zero.
+    #[test]
+    fn each_field_type_lands_at_its_offset() {
+        let w = parsed(
+            "\\displayName\\WEAPON_T\\FIRETIME\\0.065\\fireTime\\9\\impactType\\BULLET_AP\
+             \\fireType\\3-Round Burst\\playerAnimType\\smg\\maxDamageRange\\1500\
+             \\clipSize\\\\ammoName\\Ammo_T",
+        );
+        let raw = &w.weapon.raw;
+        assert_eq!(word(raw, 876), 65, "fireTime: 0.065 s stores as 65 ms");
+        assert_eq!(word(raw, 312), 3, "impactType bullet_ap");
+        assert_eq!(word(raw, 320), 3, "fireType 3-Round Burst");
+        assert_eq!(word(raw, 296), 3, "playerAnimType smg");
+        assert_eq!(f32::from_bits(word(raw, 2056)), 1500.0);
+        assert_eq!(w.weapon.strings["displayName"], "WEAPON_T");
+        assert_eq!(w.weapon.strings["ammoName"], "ammo_t", "lowercased");
+        assert_eq!(w.weapon.strings["name"], "t_mp");
+    }
+
+    /// The loader's last steps: stock sound aliases, the inverse sight
+    /// times' fallbacks for no time, the range fallbacks for none.
+    #[test]
+    fn finish_fills_what_the_file_left_out() {
+        let w = parsed("\\adsTransInTime\\0.25");
+        let raw = &w.weapon.raw;
+        assert_eq!(w.weapon.sounds["raiseSound"], "weap_raise");
+        assert_eq!(f32::from_bits(word(raw, 0x7f8)), 1.0 / 250.0);
+        assert_eq!(word(raw, 0x7fc), 0x3b03_126f, "1/500 for no out time");
+        assert_eq!(word(raw, 0x808), 0x4974_23f0);
+        assert_eq!(word(raw, 0x80c), 0x4974_23f2);
+        let own = parsed("\\raiseSound\\my_raise");
+        assert_eq!(own.weapon.sounds["raiseSound"], "my_raise");
+    }
+
+    #[test]
+    fn a_bounce_sound_names_one_alias_a_surface() {
+        let w = parsed("\\bounceSound\\grenade_bounce");
+        assert_eq!(w.weapon.bounce_sounds.len(), crate::sound::SURFACES.len());
+        let first = format!("grenade_bounce_{}", crate::sound::SURFACES[0]);
+        assert_eq!(w.weapon.bounce_sounds[0].as_deref(), Some(first.as_str()));
+    }
+
+    /// What the loader refuses, in its words: no tag, 0x2800 bytes or
+    /// more past it, a name no table holds, an anim type off the list.
+    #[test]
+    fn a_bad_weapon_file_is_refused() {
+        let err = |text: &[u8]| {
+            parse("t_mp", text, &PLAYER_ANIM_TYPES)
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default()
+        };
+        assert!(err(b"\\fireTime\\1").contains("does not appear"));
+        let long = file(&"x".repeat(0x2800));
+        assert!(err(&long).contains("too long"));
+        assert!(parse("t_mp", &file(&"x".repeat(0x27ff)), &PLAYER_ANIM_TYPES).is_ok());
+        assert!(err(&file("\\impactType\\laser")).contains("unknown impactType laser"));
+        assert!(err(&file("\\playerAnimType\\sword")).contains("anim type sword"));
+    }
+
+    /// Field type 7's store: the float product, truncated.
+    #[test]
+    fn stored_ms_truncates_the_stored_product() {
+        assert_eq!(stored_ms(0.065), 65);
+        assert_eq!(stored_ms(0.1), 100);
+        assert_eq!(stored_ms(1.3), 1300);
+        assert_eq!(stored_ms(0.0), 0);
+    }
+
+    /// A mod's weapon file is untrusted: mutated, it parses or is refused.
+    #[test]
+    fn a_hostile_weapon_file_never_panics() {
+        let good = file(
+            "\\displayName\\W\\fireTime\\0.1\\impactType\\shotgun\\playerAnimType\\smg\
+             \\bounceSound\\b\\gunModel3\\m\\idleAnim\\a\\clipSize\\30",
+        );
+        vcod_common::testing::fuzz("weapon file", &good, 3000, |b| {
+            let _ = parse("t_mp", b, &PLAYER_ANIM_TYPES);
+        });
+    }
+}

@@ -6,6 +6,8 @@
 //! `tty_Show`). CoD2 1.3 and CoD4 1.7 force `ttycon` off. Addresses and
 //! the quirks kept: cod11-server-handshake.md, "The stdin console".
 
+#![allow(unsafe_code)]
+
 use std::collections::VecDeque;
 
 /// `tty_con`'s 256-byte buffer less its NUL. Retail writes past it.

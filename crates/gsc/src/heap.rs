@@ -1,8 +1,12 @@
 //! Struct and array storage for script values.
 //!
-//! No garbage collection: a script allocates a bounded number of structs
-//! and arrays over a map's lifetime, and the whole heap is dropped when the
-//! map changes. Anything requiring reclamation mid-map is a later project.
+//! Retail frees a variable when its reference count drops to zero. vcod's
+//! values are plain ids, so the heap is swept instead: between frames the VM
+//! marks what its threads, its globals and the host still hold
+//! ([`Heap::collect`]) and frees the rest for the next allocation to reuse.
+//! [`Heap::vars`] counts what is allocated, and the VM ends a thread that
+//! takes it past its ceiling (`interp::MAX_VARIABLES`), as retail's variable
+//! pool runs out.
 
 use std::collections::BTreeMap;
 
@@ -14,10 +18,11 @@ use crate::value::{ArrayId, StructId, Value};
 /// An array index: gsc arrays are associative, keyed by either a string
 /// (`a["allies"]`) or an integer (`a[0]`). Ordered so iteration over an
 /// array is deterministic. The derived `Ord` puts every `Int` before every
-/// `Str`, and orders `Str(Atom)` by interning order, not lexicographically
-/// by the text it names — deterministic, which is all iteration needs
-/// today, but it will not match retail's enumeration order once a
-/// key-listing builtin (e.g. `getarraykeys`) exists.
+/// `Str`, and orders `Str(Atom)` by atom number, not lexicographically by
+/// the text it names: deterministic, which is all iteration needs, though a
+/// string built after a sweep may take a freed, lower number.
+/// `getArrayKeys` does not read this order; it takes insertion order
+/// ([`Heap::array_keys_newest_first`]).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum ArrayKey {
     Int(i32),
@@ -127,6 +132,10 @@ impl Elems {
         self.dense.len() + self.sparse.len()
     }
 
+    fn values_mut(&mut self) -> impl Iterator<Item = &mut Value> {
+        self.dense.iter_mut().chain(self.sparse.values_mut())
+    }
+
     /// Every element in `ArrayKey` order.
     fn iter(&self) -> impl Iterator<Item = (ArrayKey, Value)> + '_ {
         let below = self.sparse.range(..ArrayKey::Int(0));
@@ -154,6 +163,13 @@ impl Elems {
     }
 }
 
+/// How many objects may be allocated past the last sweep's survivors before
+/// [`Heap::collect_due`] asks for the next: a sweep costs a walk of the live
+/// heap, so it waits for as many new objects as survived, and for at least
+/// this many: about two and a half minutes of stock CoD4 `war` with 12 bots
+/// (cod2-gsc-diff.md 3.7).
+const COLLECT_FLOOR: usize = 16_384;
+
 #[derive(Default)]
 pub struct Heap {
     structs: Vec<FxHashMap<Atom, Value>>,
@@ -161,6 +177,15 @@ pub struct Heap {
     /// Arrays a second place may hold ([`Heap::share`]): a write through
     /// one copies it first ([`Heap::own`]).
     shared: Vec<bool>,
+    /// The slots the last sweep freed, the lowest last: what the next
+    /// allocations take.
+    free_structs: Vec<u32>,
+    free_arrays: Vec<u32>,
+    /// Objects allocated since the last sweep, and how many it kept.
+    allocated: usize,
+    survivors: usize,
+    /// [`Heap::vars`].
+    vars: u64,
 }
 
 impl Heap {
@@ -169,22 +194,204 @@ impl Heap {
     }
 
     pub fn new_struct(&mut self) -> StructId {
+        self.allocated += 1;
+        self.vars += 1;
+        if let Some(i) = self.free_structs.pop() {
+            return StructId(i);
+        }
         let id = StructId(self.structs.len() as u32);
         self.structs.push(FxHashMap::default());
         id
     }
 
     pub fn new_array(&mut self) -> ArrayId {
+        self.alloc_array(Elems::default())
+    }
+
+    /// A slot for `elems`, a freed one first, unshared.
+    fn alloc_array(&mut self, elems: Elems) -> ArrayId {
+        self.allocated += 1;
+        self.vars += 1 + elems.len() as u64;
+        if let Some(i) = self.free_arrays.pop() {
+            self.arrays[i as usize] = elems;
+            return ArrayId(i);
+        }
         let id = ArrayId(self.arrays.len() as u32);
-        self.arrays.push(Elems::default());
+        self.arrays.push(elems);
         self.shared.push(false);
         id
+    }
+
+    /// Every struct and array allocated, plus their fields and elements:
+    /// what the last sweep kept and everything allocated since. One per
+    /// variable retail's pool would hold for them, plus the garbage since
+    /// the sweep.
+    pub fn vars(&self) -> u64 {
+        self.vars
+    }
+
+    /// The array and the struct slots, the freed ones included: the heap's
+    /// footprint.
+    pub fn objects(&self) -> (usize, usize) {
+        (self.arrays.len(), self.structs.len())
+    }
+
+    /// Whether enough has been allocated since the last sweep for the VM
+    /// to run the next ([`COLLECT_FLOOR`]).
+    pub(crate) fn collect_due(&self) -> bool {
+        self.allocated >= self.survivors.max(COLLECT_FLOOR)
+    }
+
+    /// Frees every struct and array `roots` cannot reach, at any depth, for
+    /// the next allocations to reuse, and recounts [`Heap::vars`] over what
+    /// is left. `roots` must name every value held outside the heap: a
+    /// thread's locals and operand stack, the globals, and the host's. The
+    /// same walk counts each array's holders, retail's `refCount` plus one,
+    /// so an array one place holds is no longer [`Heap::share`]d and its
+    /// next write goes to it in place, as retail's does. Every atom a value,
+    /// an array key or a field name reached names is set in `atoms`, for
+    /// the interner's sweep.
+    pub fn collect(&mut self, roots: impl IntoIterator<Item = Value>, atoms: &mut [bool]) {
+        let mut struct_live = vec![false; self.structs.len()];
+        let mut holders = vec![0u8; self.arrays.len()];
+        let mut todo = Vec::new();
+        let mut mark = |a: Atom| {
+            if let Some(m) = atoms.get_mut(a.0 as usize) {
+                *m = true;
+            }
+        };
+        let mut visit = |v: Value, todo: &mut Vec<Value>, mark: &mut dyn FnMut(Atom)| match v {
+            Value::Array(a) => {
+                if let Some(n) = holders.get_mut(a.0 as usize) {
+                    *n = n.saturating_add(1);
+                    if *n == 1 {
+                        todo.push(v);
+                    }
+                }
+            }
+            Value::Struct(s) => {
+                if let Some(live) = struct_live.get_mut(s.0 as usize)
+                    && !*live
+                {
+                    *live = true;
+                    todo.push(v);
+                }
+            }
+            Value::String(a) | Value::Localized(a) | Value::Anim(a) => mark(a),
+            _ => {}
+        };
+        for v in roots {
+            visit(v, &mut todo, &mut mark);
+        }
+        while let Some(v) = todo.pop() {
+            match v {
+                Value::Array(a) => {
+                    for (k, e) in self.arrays[a.0 as usize].iter() {
+                        if let ArrayKey::Str(k) = k {
+                            mark(k);
+                        }
+                        visit(e, &mut todo, &mut mark);
+                    }
+                }
+                Value::Struct(s) => {
+                    for (&f, &e) in &self.structs[s.0 as usize] {
+                        mark(f);
+                        visit(e, &mut todo, &mut mark);
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.vars = 0;
+        self.survivors = 0;
+        self.free_arrays.clear();
+        for (i, n) in holders.iter().enumerate().rev() {
+            if *n == 0 {
+                self.arrays[i] = Elems::default();
+                self.free_arrays.push(i as u32);
+            } else {
+                self.vars += 1 + self.arrays[i].len() as u64;
+                self.survivors += 1;
+            }
+            self.shared[i] = *n > 1;
+        }
+        self.free_structs.clear();
+        for (i, live) in struct_live.iter().enumerate().rev() {
+            if *live {
+                self.vars += 1 + self.structs[i].len() as u64;
+                self.survivors += 1;
+            } else {
+                self.structs[i] = FxHashMap::default();
+                self.free_structs.push(i as u32);
+            }
+        }
+        self.allocated = 0;
+    }
+
+    /// Whether `to` is `from` or an array `from` holds, at any depth through
+    /// arrays.
+    pub fn reaches(&self, from: ArrayId, to: ArrayId) -> bool {
+        if from == to {
+            return true;
+        }
+        let mut seen = std::collections::HashSet::<u32, crate::fxhash::FxBuildHasher>::default();
+        let mut todo = vec![from];
+        while let Some(a) = todo.pop() {
+            let Some(elems) = self.arrays.get(a.0 as usize) else {
+                continue;
+            };
+            for (_, v) in elems.iter() {
+                if let Value::Array(b) = v {
+                    if b == to {
+                        return true;
+                    }
+                    if seen.insert(b.0) {
+                        todo.push(b);
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// A copy of `a` and of every array it holds, at any depth, none of them
+    /// sharing storage with what they copy; structs and other values are
+    /// held as they are. What `a[0] = a` stores: the array as it stood,
+    /// not a cycle through it.
+    pub fn snapshot(&mut self, a: ArrayId) -> ArrayId {
+        let root = self.new_array();
+        let mut copies = FxHashMap::default();
+        copies.insert(a.0, root);
+        let mut todo = vec![(a, root)];
+        while let Some((src, dst)) = todo.pop() {
+            let mut elems = self.arrays.get(src.0 as usize).cloned().unwrap_or_default();
+            for v in elems.values_mut() {
+                if let Value::Array(b) = *v {
+                    let copy = match copies.get(&b.0) {
+                        Some(&c) => c,
+                        None => {
+                            let c = self.new_array();
+                            copies.insert(b.0, c);
+                            todo.push((b, c));
+                            c
+                        }
+                    };
+                    // A copy two elements hold is shared, as `own`'s are.
+                    self.shared[copy.0 as usize] = true;
+                    *v = Value::Array(copy);
+                }
+            }
+            self.vars += elems.len() as u64;
+            self.arrays[dst.0 as usize] = elems;
+        }
+        root
     }
 
     /// An array value stored somewhere new (a variable, a field, an
     /// element, an argument): from here on two places may hold it. Retail
     /// counts the references (`Scr_EvalArrayRef`'s `refCount`); vcod keeps
-    /// the flag for good, which only costs a copy nobody could tell apart.
+    /// the flag until the next sweep counts the holders ([`Heap::collect`]),
+    /// which only costs a copy nobody could tell apart.
     pub fn share(&mut self, v: Value) {
         if let Value::Array(a) = v
             && let Some(f) = self.shared.get_mut(a.0 as usize)
@@ -217,10 +424,7 @@ impl Heap {
         for (_, v) in elems.iter() {
             self.share(v);
         }
-        let id = ArrayId(self.arrays.len() as u32);
-        self.arrays.push(elems);
-        self.shared.push(false);
-        id
+        self.alloc_array(elems)
     }
 
     /// Reading an unset field yields `Undefined`, matching gsc semantics; so
@@ -238,7 +442,9 @@ impl Heap {
     /// for the same reason as `get_field`.
     pub fn set_field(&mut self, s: StructId, f: Atom, v: Value) {
         if let Some(fields) = self.structs.get_mut(s.0 as usize) {
-            fields.insert(f, v);
+            if fields.insert(f, v).is_none() {
+                self.vars += 1;
+            }
         } else {
             log::warn!("dropped a write to struct {} (out of range)", s.0);
         }
@@ -246,15 +452,20 @@ impl Heap {
 
     /// `f` as an undefined field unless `s` has one (`Cx::touch_field`).
     pub fn touch_field(&mut self, s: StructId, f: Atom) {
-        if let Some(fields) = self.structs.get_mut(s.0 as usize) {
-            fields.entry(f).or_insert(Value::Undefined);
+        if let Some(fields) = self.structs.get_mut(s.0 as usize)
+            && let std::collections::hash_map::Entry::Vacant(e) = fields.entry(f)
+        {
+            e.insert(Value::Undefined);
+            self.vars += 1;
         }
     }
 
     /// Removes `f` from `s` (`Cx::clear_field`).
     pub fn clear_field(&mut self, s: StructId, f: Atom) {
-        if let Some(fields) = self.structs.get_mut(s.0 as usize) {
-            fields.remove(&f);
+        if let Some(fields) = self.structs.get_mut(s.0 as usize)
+            && fields.remove(&f).is_some()
+        {
+            self.vars -= 1;
         }
     }
 
@@ -271,7 +482,9 @@ impl Heap {
     /// dropped rather than panicking.
     pub fn set_index(&mut self, a: ArrayId, k: ArrayKey, v: Value) {
         if let Some(elems) = self.arrays.get_mut(a.0 as usize) {
-            elems.insert(k, v);
+            if elems.insert(k, v) {
+                self.vars += 1;
+            }
         } else {
             log::warn!("dropped a write to array {} (out of range)", a.0);
         }
@@ -282,8 +495,10 @@ impl Heap {
     /// An undefined value from anywhere else is stored by [`Self::set_index`]
     /// and counted (`probe_undef_call_into_unset`).
     pub fn clear_index(&mut self, a: ArrayId, k: ArrayKey) {
-        if let Some(elems) = self.arrays.get_mut(a.0 as usize) {
-            elems.remove(k);
+        if let Some(elems) = self.arrays.get_mut(a.0 as usize)
+            && elems.remove(k)
+        {
+            self.vars -= 1;
         }
     }
 
@@ -316,7 +531,7 @@ impl Heap {
     /// How many struct fields and array elements hold each array, by id:
     /// the heap's share of retail's `refCount` plus one, which
     /// `scriptUsage` divides an array's usage by (`Vm::thread_usage`).
-    /// Garbage the heap never frees counts too.
+    /// Garbage since the last sweep counts too.
     pub fn array_holders(&self) -> FxHashMap<u32, u32> {
         let mut n = FxHashMap::default();
         let values = self

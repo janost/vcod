@@ -1,6 +1,6 @@
 //! CoD1's `G_RunFrame` and each slot's `ClientEndFrame`, run by
 //! `Server::game_frame`. The order is retail's
-//! (AGENTS.md, "The server tick"); the engine runs the clock and the
+//! (docs/dev/server-tick.md, "CoD1's frame"); the engine runs the clock and the
 //! client moves ahead of it and the configstring, command and scoreboard
 //! traffic after it.
 
@@ -56,6 +56,7 @@ impl Cod1Module {
             }
             mirror_roster(clients, rt);
             crate::tick_trace::step!("Scr_RunThreads");
+            let mut _p = crate::tick_profile::phase("frame/scripts");
             rt.run_threads(sv_time_ms);
             *test_client_counter = rt.host.test_clients.counter;
             // 1.1's `G_DObjUpdateServerTime` lands each gunner's last
@@ -92,6 +93,7 @@ impl Cod1Module {
             // because a spawn resets the playerstate; the ammo arrays are
             // the weapon ops' alone, so the loadout survives the reset
             // whichever pass applied it.
+            _p = crate::tick_profile::phase("frame/spawns and ops");
             for s in rt.take_client_spawns() {
                 crate::tick_trace::step!("ClientSpawn slot {}", s.slot);
                 let Some(c) = clients.get_mut(s.slot).and_then(Option::as_mut) else {
@@ -131,7 +133,7 @@ impl Cod1Module {
                             ([0.0; 3], [0.0; 3]),
                         )
                     });
-                    rt.host.vehicles.seat_ops.clear();
+                    rt.host.vehicles.drop_seat_ops(s.slot);
                     sim.leave_seat(None, None);
                 }
                 if s.mode == SpawnMode::Player {
@@ -146,7 +148,7 @@ impl Cod1Module {
                 match s.mode {
                     SpawnMode::Player => {
                         sim.become_player(s.origin, s.yaw_deg, cmd_angles);
-                        // UO's `G_DObjUpdate` (0x87df9) rebuilds a client's
+                        // UO's `G_DObjUpdate` (0x77df9) rebuilds a client's
                         // DObj when the spawning thread sets his model.
                         sim.dobj_ahead = sim.ps.rules == vcod_common::pmove::MoveRules::Uo;
                         // The builtin's think on its fresh sim already ran
@@ -214,9 +216,9 @@ impl Cod1Module {
             }
             // What the client holds comes across the same way the
             // configstrings do: re-read every frame, because any thread can
-            // have changed them. The held bits have to be among them --
+            // have changed them. The held bits have to be among them, since
             // `PM_Weapon` disarms a player who no longer owns `ps.weapon`
-            // (combat doc, section 1.8) -- and `ps.weapon` with them, so a
+            // (combat doc, section 1.8). `ps.weapon` comes with them, so a
             // sim reset outside a move comes back armed. The write-back
             // above is what makes that safe: the host's copy already carries
             // whatever the machine switched to this tick.
@@ -283,7 +285,7 @@ impl Cod1Module {
             // at once, combat doc 14.7), and the walk measures it there.
             let set_down =
                 |rt: &script::ScriptRuntime, slot: usize, s: &crate::spectate::ClientSim| {
-                    let link = glam::Vec3::from(rt.host.client_link_origin[slot]);
+                    let link = glam::Vec3::from(rt.host.clients[slot].link_origin);
                     (link != s.link_origin()).then_some(link)
                 };
             let victim =
@@ -323,6 +325,7 @@ impl Cod1Module {
                 })
                 .collect();
             crate::tick_trace::step!("G_RunFrame entities");
+            _p = crate::tick_profile::phase("frame/entities");
             let mut pass = rt.begin_entity_pass(client_links);
             loop {
                 let sims: Vec<(usize, &crate::spectate::ClientSim)> = clients
@@ -498,7 +501,7 @@ impl Cod1Module {
                 // stops nothing.
                 let live_bodies =
                     |rt: &script::ScriptRuntime| -> Vec<crate::game::combat::HitBody> {
-                        if !rt.host.bodies_shield_blasts() {
+                        if !rt.host.profile.combat.bodies_shield_blasts {
                             return Vec::new();
                         }
                         sims.iter()
@@ -631,9 +634,10 @@ impl Cod1Module {
             // spectator reads the own-view bit a lower slot took this frame
             // and a higher slot's from the last one, as retail's loop does.
             let collision = world.as_ref().map(|w| &w.collision);
+            _p = crate::tick_profile::phase("frame/end frames");
             for slot in 0..clients.len() {
                 crate::tick_trace::step!("ClientEndFrame slot {slot}");
-                follow_end_frame(clients, slot, rt, archive, collision, sv_time_ms);
+                follow_end_frame(clients, proto, slot, rt, archive, collision, sv_time_ms);
                 // `takedamage` off the session state (0x40ed9, 0x40f93,
                 // 0x4107c, and `SpectatorClientEndFrame` 0x40788).
                 let session = rt.client_session(slot);
@@ -696,13 +700,14 @@ impl Cod1Module {
             let broadcast: Vec<bool> = (0..clients.len())
                 .map(|slot| rt.in_snapshot_broadcast(slot as u32))
                 .collect();
+            let mut friend_links = vec![None; clients.len()];
             for slot in 0..clients.len() {
                 let Some(sim) = clients[slot].as_mut().and_then(|c| c.sim.as_mut()) else {
                     continue;
                 };
                 crate::tick_trace::step!("ClientEndFrame compass slot {slot}");
-                sim.ping = rt.host.client_ping_until[slot] > rt.host.level_time_ms;
-                sim.voted = rt.host.client_voted[slot];
+                sim.ping = rt.host.clients[slot].ping_until > rt.host.level_time_ms;
+                sim.voted = rt.host.clients[slot].voted;
                 let found = compass_friend(
                     clients,
                     slot,
@@ -712,6 +717,7 @@ impl Cod1Module {
                     world.as_ref().map(|w| (&w.vis, fog)),
                     sv_time_ms,
                     proto,
+                    &mut friend_links,
                 );
                 let sim = clients[slot].as_mut().unwrap().sim.as_mut().unwrap();
                 sim.compass_candidate = sessions[slot] == Some(follow::SessionState::Playing)
@@ -945,7 +951,7 @@ impl Cod1Module {
                     shot.pass(),
                     shot.muzzle,
                     shot.dir,
-                    crate::game::combat::bullet_range(proto),
+                    rt.host.profile.combat.bullet_range,
                     shot.damage,
                     shot.rifle_bullet,
                     falloff,
@@ -1003,10 +1009,11 @@ impl Cod1Module {
             // the end of 1.5's `G_RunFrame`, on `trap_Milliseconds`.
             mirror_roster(clients, rt);
             crate::tick_trace::step!("CheckVote");
+            _p = crate::tick_profile::phase("frame/vote");
             vote_lines = rt.check_vote(svs_ms).0;
-            timeout_written = rt.host.patch_1_5 && rt.host.check_match_timeout(svs_ms);
+            timeout_written = rt.host.profile.match_timeout && rt.host.check_match_timeout(svs_ms);
             console_lines = rt.take_console();
-            client_commands = rt.take_client_commands();
+            client_commands = rt.take_client_commands_stamped();
             ranks_dirty = rt.take_ranks_dirty();
         }
         Ok(FrameOut {

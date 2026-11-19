@@ -633,8 +633,14 @@ impl Lexer<'_> {
 /// `GPGroup::Parse` (Mac 0xac080): `key {` opens a subgroup, `key [`
 /// a list of one value a line up to `]`, anything else is a pair whose
 /// value is the rest of the line. A group ends at `}` or the text's end;
-/// a list left open fails the parse.
-fn parse_group(lx: &mut Lexer, name: String) -> Result<Group, ParseError> {
+/// a list left open fails the parse, and so does a group nested past
+/// [`MAX_GROUP_DEPTH`].
+fn parse_group(lx: &mut Lexer, name: String, depth: u32) -> Result<Group, ParseError> {
+    if depth > MAX_GROUP_DEPTH {
+        return err(format!(
+            "group '{name}' nested past {MAX_GROUP_DEPTH} levels"
+        ));
+    }
     let mut g = Group {
         name,
         ..Group::default()
@@ -646,7 +652,7 @@ fn parse_group(lx: &mut Lexer, name: String) -> Result<Group, ParseError> {
         }
         let v = lx.rest_of_line();
         if v == "{" {
-            let sub = parse_group(lx, key)?;
+            let sub = parse_group(lx, key, depth + 1)?;
             g.groups.push(sub);
         } else if v == "[" {
             let mut items = Vec::new();
@@ -670,8 +676,12 @@ fn parse_group(lx: &mut Lexer, name: String) -> Result<Group, ParseError> {
 /// The file as `GenericParser2` reads it, its top level a group.
 pub fn parse_tree(text: &[u8]) -> Result<Group, ParseError> {
     let mut lx = Lexer { s: text, pos: 0 };
-    parse_group(&mut lx, "Top Level".into())
+    parse_group(&mut lx, "Top Level".into(), 0)
 }
+
+/// How deep groups may nest. A stock effect nests a primitive's channel
+/// under the top level; the cap keeps a hostile file off the native stack.
+const MAX_GROUP_DEPTH: u32 = 16;
 
 // ---------------------------------------------------------------------
 // The primitive's keys.
@@ -689,10 +699,46 @@ fn floats(s: &str) -> Vec<f32> {
     out
 }
 
-/// `%f` on one word: the longest leading float, `None` without one.
+/// `%f` on one word: the longest leading float, `None` without one. One
+/// scan finds the longest prefix `str::parse::<f32>` takes (sign, digits
+/// with an optional point, exponent; or `inf`, `infinity`, `nan`).
 fn lead_float(w: &str) -> Option<f32> {
-    let ends: Vec<usize> = w.char_indices().map(|(i, c)| i + c.len_utf8()).collect();
-    ends.iter().rev().find_map(|&e| w[..e].parse::<f32>().ok())
+    let b = w.as_bytes();
+    let digits = |mut i: usize| {
+        while b.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+        i
+    };
+    let mut i = usize::from(matches!(b.first(), Some(b'+' | b'-')));
+    for word in ["infinity", "inf", "nan"] {
+        if b[i..]
+            .get(..word.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(word.as_bytes()))
+        {
+            return w[..i + word.len()].parse().ok();
+        }
+    }
+    let int_end = digits(i);
+    let mut seen = int_end > i;
+    i = int_end;
+    if b.get(i) == Some(&b'.') {
+        let frac_end = digits(i + 1);
+        seen |= frac_end > i + 1;
+        i = frac_end;
+    }
+    if !seen {
+        return None;
+    }
+    let mut end = i;
+    if matches!(b.get(i), Some(b'e' | b'E')) {
+        let start = i + 1 + usize::from(matches!(b.get(i + 1), Some(b'+' | b'-')));
+        let exp_end = digits(start);
+        if exp_end > start {
+            end = exp_end;
+        }
+    }
+    w[..end].parse().ok()
 }
 
 /// `atoi`.
@@ -1289,6 +1335,58 @@ mod tests {
 
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-5
+    }
+
+    #[test]
+    fn a_group_nested_past_the_cap_is_refused() {
+        let text = "a {\n".repeat(10_000);
+        let e = parse_tree(text.as_bytes()).unwrap_err();
+        assert!(e.0.contains("nested past"), "{e}");
+        let ok = format!("{}{}", "a {\n".repeat(16), "}\n".repeat(16));
+        assert!(parse_tree(ok.as_bytes()).is_ok());
+    }
+
+    /// The scan answers as the longest prefix `parse` takes, and a long
+    /// junk tail after digits costs one pass.
+    #[test]
+    fn lead_float_takes_the_longest_numeric_prefix() {
+        let slow = |w: &str| {
+            let ends: Vec<usize> = w.char_indices().map(|(i, c)| i + c.len_utf8()).collect();
+            ends.iter().rev().find_map(|&e| w[..e].parse::<f32>().ok())
+        };
+        for w in [
+            "1",
+            "-2.5",
+            "+.5",
+            "5.",
+            ".",
+            "-",
+            "1e5",
+            "1e",
+            "1e+",
+            "1E-3x",
+            "2.5e+2junk",
+            "abc",
+            "inf",
+            "-Infinityx",
+            "nanq",
+            "0x10",
+            "1.2.3",
+            "3,4",
+            "é1",
+            "1é",
+            "",
+        ] {
+            assert_eq!(
+                lead_float(w).map(f32::to_bits),
+                slow(w).map(f32::to_bits),
+                "{w:?}"
+            );
+        }
+        let long = format!("{}{}", "1".repeat(500_000), "x".repeat(500_000));
+        let start = std::time::Instant::now();
+        assert!(lead_float(&long).is_some());
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
     }
 
     /// Three keys: 0 -> 10 over the first quarter, then down to 2.

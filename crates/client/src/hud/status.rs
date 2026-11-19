@@ -51,7 +51,7 @@ pub fn read_status(
         .get(layout.level_start)
         .and_then(|s| s.parse::<i32>().ok())
         .map(|start| {
-            let elapsed_s = (server_time_ms - start).max(0) / 1000;
+            let elapsed_s = server_time_ms.wrapping_sub(start).max(0) / 1000;
             format!("{:02}:{:02}", elapsed_s / 60, elapsed_s % 60)
         });
     Status {
@@ -83,6 +83,19 @@ mod tests {
     use super::*;
     use vcod_common::net::protocol::{CS_LAYOUT_V1, PROTOCOL_V22};
 
+    /// A hostile level start wraps against the server time instead of
+    /// overflowing (SEC-100).
+    #[test]
+    fn a_level_start_at_the_i32_limit_wraps() {
+        let mut cs = vec![String::new(); CS_LAYOUT_V1.level_start + 1];
+        cs[CS_LAYOUT_V1.level_start] = i32::MIN.to_string();
+        let s = read_status(&cs, &CS_LAYOUT_V1, i32::MAX, None);
+        assert_eq!(s.timer.as_deref(), Some("00:00"));
+        cs[CS_LAYOUT_V1.level_start] = i32::MAX.to_string();
+        let s = read_status(&cs, &CS_LAYOUT_V1, i32::MIN, None);
+        assert_eq!(s.timer.as_deref(), Some("00:00"));
+    }
+
     /// Retail UO's gamestate holds the fog at 13 and the start time at 14
     /// (`setWind` took 12), so the header reads 14 there (coduo-diff.md 7).
     #[test]
@@ -91,7 +104,7 @@ mod tests {
         let gs = vcod_common::testing::fixture_gamestate(p, "net/gamestate-uo.bin");
         let frames =
             vcod_common::testing::fixture_frames(p, "net/gamestate-uo.bin", "net/snapshots-uo.bin");
-        let now = frames[0].snapshot.server_time;
+        let now = frames[0].snapshot.server_time.raw();
         let start: i32 = gs.configstrings[14].parse().unwrap();
         let elapsed = (now - start) / 1000;
         let want = format!("{:02}:{:02}", elapsed / 60, elapsed % 60);

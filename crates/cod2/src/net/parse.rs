@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, bail, ensure};
+use vcod_common::net::Msec;
 use vcod_common::net::codec::MsgReader;
 
 use super::delta::{
@@ -47,7 +48,7 @@ impl Gamestate2 {
 pub struct Snapshot2 {
     /// The netchan sequence that carried it.
     pub message_num: i32,
-    pub server_time: i32,
+    pub server_time: Msec,
     /// The frame it deltas from, -1 for none.
     pub delta_num: i32,
     pub snap_flags: u8,
@@ -76,6 +77,19 @@ pub struct Parsed {
     /// byte holds padding bits the Huffman decode reads as up to one symbol.
     pub consumed: usize,
     pub plain_len: usize,
+}
+
+/// What one `Parser::parse` changed, to put back when the message fails.
+#[derive(Default)]
+struct Undo {
+    server_command_sequence: i32,
+    last_snapshot: Option<i32>,
+    /// Command ring slots written, with their old text.
+    commands: Vec<(usize, Vec<u8>)>,
+    /// Frame ring slots written, with their old frame.
+    frames: Vec<(usize, Option<Snapshot2>)>,
+    /// The gamestate and frame ring a gamestate op replaced.
+    gamestate: Option<(Option<Gamestate2>, Vec<Option<Snapshot2>>)>,
 }
 
 /// The client's parse state: gamestate, command ring and frame ring.
@@ -122,8 +136,44 @@ impl Parser {
         &self.server_commands[seq as usize % MAX_RELIABLE_COMMANDS]
     }
 
-    /// Parse one decompressed message carried by netchan `sequence`.
+    /// Parse one decompressed message carried by netchan `sequence`. A
+    /// message that fails leaves the parser as it was, so the command
+    /// sequence the next packet acknowledges still names only commands a
+    /// caller received.
     pub fn parse(&mut self, sequence: i32, plain: &[u8]) -> anyhow::Result<Parsed> {
+        let mut undo = Undo {
+            server_command_sequence: self.server_command_sequence,
+            last_snapshot: self.last_snapshot,
+            ..Undo::default()
+        };
+        let parsed = self.parse_ops(sequence, plain, &mut undo);
+        if parsed.is_err() {
+            self.roll_back(undo);
+        }
+        parsed
+    }
+
+    fn roll_back(&mut self, undo: Undo) {
+        for (slot, text) in undo.commands.into_iter().rev() {
+            self.server_commands[slot] = text;
+        }
+        for (slot, frame) in undo.frames.into_iter().rev() {
+            self.frames[slot] = frame;
+        }
+        if let Some((gamestate, frames)) = undo.gamestate {
+            self.gamestate = gamestate;
+            self.frames = frames;
+        }
+        self.server_command_sequence = undo.server_command_sequence;
+        self.last_snapshot = undo.last_snapshot;
+    }
+
+    fn parse_ops(
+        &mut self,
+        sequence: i32,
+        plain: &[u8],
+        undo: &mut Undo,
+    ) -> anyhow::Result<Parsed> {
         let mut r = MsgReader::from_plain(plain.to_vec());
         let mut out = Parsed {
             plain_len: plain.len(),
@@ -140,16 +190,30 @@ impl Parser {
                     let text = r.read_string_bytes();
                     if seq > self.server_command_sequence {
                         self.server_command_sequence = seq;
-                        self.server_commands[seq as usize % MAX_RELIABLE_COMMANDS] = text.clone();
+                        let slot = seq as usize % MAX_RELIABLE_COMMANDS;
+                        let old = std::mem::replace(&mut self.server_commands[slot], text.clone());
+                        undo.commands.push((slot, old));
                         out.commands.push((seq, text));
                     }
                 }
                 Some(Svc::Gamestate) => {
+                    if undo.gamestate.is_none() {
+                        let frames = vec![None; PACKET_BACKUP];
+                        undo.gamestate = Some((
+                            self.gamestate.take(),
+                            std::mem::replace(&mut self.frames, frames),
+                        ));
+                        // The ring rolls back whole: slot undos would land
+                        // on the new ring.
+                        undo.frames.clear();
+                    }
                     self.parse_gamestate(&mut r).context("gamestate")?;
                     out.gamestate = true;
                 }
                 Some(Svc::Snapshot) => {
-                    let s = self.parse_snapshot(&mut r, sequence).context("snapshot")?;
+                    let s = self
+                        .parse_snapshot(&mut r, sequence, undo)
+                        .context("snapshot")?;
                     out.snapshot = Some(s);
                 }
                 Some(Svc::Download) => {
@@ -206,8 +270,13 @@ impl Parser {
     /// the result, which vcod does when the slot holds a different frame.
     /// Retail's 0x780-entity age check has no analogue: frames hold their
     /// own entity lists.
-    fn parse_snapshot(&mut self, r: &mut MsgReader, message_num: i32) -> anyhow::Result<i32> {
-        let server_time = r.read_long();
+    fn parse_snapshot(
+        &mut self,
+        r: &mut MsgReader,
+        message_num: i32,
+        undo: &mut Undo,
+    ) -> anyhow::Result<i32> {
+        let server_time = Msec::from_raw(r.read_long());
         let back = i32::from(r.read_byte());
         let snap_flags = r.read_byte();
         let delta_num = if back == 0 { -1 } else { message_num - back };
@@ -229,12 +298,17 @@ impl Parser {
         let old_ents: &[EntityState2] = from.map_or(&[], |f| &f.entities);
         let mut entities = Vec::with_capacity(old_ents.len() + 8);
         let mut oi = 0;
+        // A stock server writes each list ascending (3.3); that also caps
+        // it at 1023 entities and 64 clients.
+        let mut last = None;
         loop {
             let n = r.read_bits(GENTITYNUM_BITS) as u32;
             ensure!(!r.is_overflowed(), "packet entities: end of message");
             if n == ENTITYNUM_NONE {
                 break;
             }
+            ensure!(last < Some(n), "packet entities: {n} after {last:?}");
+            last = Some(n);
             while oi < old_ents.len() && old_ents[oi].number < n {
                 entities.push(old_ents[oi]);
                 oi += 1;
@@ -260,9 +334,12 @@ impl Parser {
         let old_cls: &[ClientState2] = from.map_or(&[], |f| &f.clients);
         let mut clients = Vec::with_capacity(old_cls.len() + 1);
         let mut oi = 0;
+        let mut last = None;
         while r.read_bits(1) == 1 {
             let n = r.read_bits(CLIENTNUM_BITS) as u32;
             ensure!(!r.is_overflowed(), "packet clients: end of message");
+            ensure!(last < Some(n), "packet clients: {n} after {last:?}");
+            last = Some(n);
             while oi < old_cls.len() && old_cls[oi].number < n {
                 clients.push(old_cls[oi]);
                 oi += 1;
@@ -291,7 +368,11 @@ impl Parser {
             entities,
             clients,
         };
-        self.frames[message_num as usize % PACKET_BACKUP] = Some(snap);
+        let slot = message_num as usize % PACKET_BACKUP;
+        let old = self.frames[slot].replace(snap);
+        if undo.gamestate.is_none() {
+            undo.frames.push((slot, old));
+        }
         if valid {
             self.last_snapshot = Some(message_num);
         }

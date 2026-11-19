@@ -1,8 +1,7 @@
 //! CoD4 1.7's level on the shared host: its zones as the asset source, its
 //! scripts off the zones' rawfiles, its configstring layout and the state
 //! its game module keeps beside the shared tables (docs/research/cod4-gsc.md).
-//! The server does not serve CoD4 yet; [`load`] builds the host and runs the
-//! bootstrap.
+//! [`load`] builds the host and runs the bootstrap.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -128,8 +127,8 @@ pub const CS_ITEMS: usize = 2314;
 pub const MAX_WEAPONS: usize = 128;
 
 /// The host's CoD1-shaped protocol for a CoD4 level: CoD2's shim with 1.7's
-/// configstring blocks. Nothing goes on a wire through it yet (S-C4-1 adds
-/// `Cod4Wire`); the host reads only its `cs`.
+/// configstring blocks. The host builds its entities in these fields and
+/// [`wire::ent4`] moves them into 1.7's `entityState_t`.
 pub static COD4_HOST_PROTO: Cod1Wire = {
     use vcod_cod2::net::PROTOCOL_118 as P;
     let shim = P.as_cod1_shim();
@@ -162,8 +161,8 @@ pub static COD4_HOST_PROTO: Cod1Wire = {
     }
 };
 
-/// 1.7's tables. The weapon list is the level's (placeholder: none yet);
-/// `modNames` in the order `cod4_lnxded` registers them (0x80a4109).
+/// 1.7's tables. The weapon list is empty here: the level's weapons are
+/// [`Cod4HostState::weapons`] and `table`. `modNames` in the order `cod4_lnxded` registers them (0x80a4109).
 pub static COD4_DEFS: Defs = Defs {
     proto: &COD4_HOST_PROTO,
     weapons: "",
@@ -230,6 +229,8 @@ pub struct Cod4Zones {
     /// indexes every file again, 60 ms of each round's restart
     /// (cod4-server-frame.md 9).
     pub iwds: std::cell::OnceCell<Rc<vcod_common::pk3::Pk3Fs>>,
+    /// The mantle clips out of these zones, the mod's first.
+    pub mantle: Option<&'static vcod_cod4::pmove::mantle::MantleAnims>,
 }
 
 impl Cod4Zones {
@@ -360,7 +361,7 @@ impl Cod4Zones {
             .map(|a| a.as_ref())
             .collect();
         // `Mantle_CreateAnims`: the clips pmove's `Rules` take.
-        vcod_cod4::pmove::mantle::install(&refs);
+        let mantle = vcod_cod4::pmove::mantle::install(&refs);
         let bodies = vcod_cod4::anim::BodySource::from_zones(&refs, skeletons)
             .inspect(|b| log::info!("cod4: {} player clips for the hit poses", b.clip_count()))
             .inspect_err(|e| log::warn!("cod4: player anims: {e:#}, shots meet no body"))
@@ -436,6 +437,7 @@ impl Cod4Zones {
             clip,
             bodies,
             iwds: Default::default(),
+            mantle,
         })
     }
 }
@@ -517,61 +519,31 @@ impl WeaponFile {
 
 /// Under a set `fs_game` `BG_LoadWeaponDef` reads `weapons/mp/<name>` off
 /// the search path, not the zone's struct (cod4-fastfile.md 13), a mod's
-/// iwd over `main/`'s: every weapon the zones carry and every file
-/// there. A weapon whose file is missing or fails to parse takes
-/// `defaultweapon_mp`'s under its own name, as `BG_LoadWeaponDef_LoadObj`
-/// does; the zone's struct only when that fails too.
+/// iwd over `main/`'s: [`vcod_cod4::weapon_file::load_overlay`]'s files,
+/// and the zone's struct for a name whose file and `defaultweapon_mp`'s
+/// both fail.
 fn weapon_files_on_disk(
     source: &Cod4Source,
-    zone: HashMap<String, Rc<WeaponFile>>,
+    mut zone: HashMap<String, Rc<WeaponFile>>,
 ) -> HashMap<String, Rc<WeaponFile>> {
-    let mut names: Vec<String> = zone.keys().cloned().collect();
-    for path in source.iwds().list_prefix("weapons/mp/") {
-        let name = &path["weapons/mp/".len()..];
-        if !name.is_empty() && !name.contains('/') {
-            names.push(name.to_string());
-        }
-    }
-    names.sort();
-    names.dedup();
-    let text = |name: &str| match vcod_cod4::weapon_file::load(source, name)? {
-        Ok(t) => Some(t),
-        Err(e) => {
-            log::warn!("cod4: weapons/mp/{name}: {e:#}");
-            None
-        }
-    };
-    let file = |t: vcod_cod4::weapon_file::TextWeapon, name: &str| {
-        let mut w = t.weapon;
-        w.name = name.to_string();
-        w.strings.insert("name", name.to_string());
+    let files = vcod_cod4::weapon_file::load_overlay(source, source.iwds(), zone.keys().cloned());
+    let mut out = HashMap::new();
+    for (name, t) in files {
         let world = t
             .model_lists
             .get("worldModel")
             .cloned()
             .unwrap_or_else(|| vec![None; 16]);
         let projectile = t.models.get("projectileModel").cloned();
-        let mut f = WeaponFile::of(&w, world, projectile);
+        let mut f = WeaponFile::of(&t.weapon, world, projectile);
         if let Some(guns) = t.model_lists.get("gunModel") {
             f.def.gun_models = weapons::gun_bits(guns.iter().map(Option::is_some));
         }
-        Rc::new(f)
-    };
-    let mut out = HashMap::new();
-    for name in names {
-        let disk = text(&name).or_else(|| text("defaultweapon_mp"));
-        match disk {
-            Some(t) => {
-                out.insert(name.clone(), file(t, &name));
-            }
-            None => {
-                if let Some(z) = zone.get(&name) {
-                    out.insert(name, z.clone());
-                }
-            }
-        }
+        zone.remove(&name);
+        out.insert(name, Rc::new(f));
     }
     log::info!("cod4: {} weapon files read off the search path", out.len());
+    out.extend(zone);
     out
 }
 
@@ -593,7 +565,8 @@ impl ScriptSource for Cod4Scripts {
     fn read(&self, canonical: &str) -> Option<String> {
         let path = format!("{canonical}.gsc");
         if let Some(dir) = &self.overrides
-            && let Ok(text) = std::fs::read(dir.join(&path))
+            && let Some(rel) = vcod_common::game_dir::confined_rel_path(&path)
+            && let Ok(text) = std::fs::read(dir.join(rel))
         {
             return Some(String::from_utf8_lossy(&text).into_owned());
         }
@@ -618,8 +591,8 @@ pub struct Cod4HostState {
     /// Each slot's stats block (`getStat`/`setStat`): the client's own
     /// once its `stats` packets are in, a fresh profile's before.
     pub stats: Vec<vcod_cod4::net::stats::Stats>,
-    /// The weapons the level named, index 1 first (placeholder until the
-    /// weapon defs land; configstring [`CS_WEAPONFILES`]).
+    /// The weapons the level named, index 1 first (configstring
+    /// [`CS_WEAPONFILES`]).
     pub weapons: Vec<String>,
     /// The same weapons' defs and ammo slots, by number.
     pub table: weapons::Cod4Weapons,
@@ -827,7 +800,11 @@ pub fn log_printf(host: &mut crate::game::host::GameHost, text: String) {
 /// A client's `I_CleanStr`'d name and GUID, as `G_Say` and the weapon
 /// pickup's log lines read them (`pers.netname`, `SV_GetGuid`).
 pub fn log_client(host: &crate::game::host::GameHost, slot: usize) -> (String, String) {
-    let name = host.client_names.get(slot).map_or("", String::as_str);
+    let name = host
+        .clients
+        .get(slot)
+        .map(|c| &c.name)
+        .map_or("", String::as_str);
     let guid = match &host.ext {
         crate::game::host::HostExt::Cod4(c) => c.clients.get(slot).map(|c| c.guid.clone()),
         _ => None,
@@ -1010,7 +987,6 @@ impl Default for Cod4HostState {
 /// its first wait. `overrides` is the probe directory [`Cod4Scripts`]
 /// reads first. `fresh_mirror` starts 1.7's dvar mirror empty; the server
 /// hands in its cvars with the engine's mirrored dvars already in it.
-#[allow(clippy::too_many_arguments)]
 pub fn load(
     zones: &Cod4Zones,
     install: &Install,
@@ -1063,7 +1039,7 @@ fn brush_models(entities: String, clip: Option<&vcod_cod4::collision::ClipMap>) 
 /// [`load`] across a level boundary: `carry`'s `game[]`, `pers[]`, compiled
 /// scripts and seed, and on a `fast_restart` the last level's
 /// configstrings, which `SV_RestartGameProgs` keeps (cod4-map-cycle.md 2).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn load_with(
     zones: &Cod4Zones,
     install: &Install,
@@ -1179,5 +1155,56 @@ mod layout_tests {
             MAX_CONFIGSTRINGS,
             vcod_cod4::net::parse::MAX_CONFIGSTRINGS as usize
         );
+    }
+}
+
+#[cfg(test)]
+mod weapon_file_tests {
+    use super::*;
+
+    fn file(clip: u32) -> Vec<u8> {
+        format!("WEAPONFILE\\clipSize\\{clip}").into_bytes()
+    }
+
+    /// `weapon_files_on_disk` over a temp install whose `fs_game` iwd
+    /// holds `entries`, with a zone carrying `M16_MP` at clip 1.
+    fn on_disk(entries: &[(&str, &[u8])]) -> HashMap<String, i32> {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("zone")).unwrap();
+        std::fs::create_dir_all(root.path().join("main")).unwrap();
+        let mod_dir = root.path().join("mods/mixed");
+        std::fs::create_dir_all(&mod_dir).unwrap();
+        let iwd = vcod_common::testing::pk3_with(entries);
+        std::fs::write(mod_dir.join("z_mod.iwd"), iwd).unwrap();
+        let install = vcod_cod4::install::Install::at(root.path())
+            .unwrap()
+            .with_fs_game(Some("mods/mixed"));
+        let source = Cod4Source::open(&install).unwrap();
+        let types = vcod_cod4::pmove::anim::PLAYER_ANIM_TYPES;
+        let t = vcod_cod4::weapon_file::parse("M16_MP", &file(1), &types).unwrap();
+        let zone = Rc::new(WeaponFile::of(&t.weapon, vec![None; 16], None));
+        let zone = HashMap::from([("m16_mp".to_string(), zone)]);
+        weapon_files_on_disk(&source, zone)
+            .into_iter()
+            .map(|(k, f)| (k, f.def.clip_size))
+            .collect()
+    }
+
+    /// A mod's mixed-case `weapons/mp/My_Gun_MP` reads under its
+    /// lowercased name; a broken file takes `defaultweapon_mp`'s, and the
+    /// zone's struct stays only when the default is gone too.
+    #[test]
+    fn a_mods_weapon_files_replace_the_zones_by_lowercased_name() {
+        let gun = file(30);
+        let default = file(7);
+        let out = on_disk(&[
+            ("weapons/mp/My_Gun_MP", &gun),
+            ("weapons/mp/M16_mp", b"not a weapon file"),
+            ("weapons/mp/defaultweapon_mp", &default),
+        ]);
+        let want = [("defaultweapon_mp", 7), ("m16_mp", 7), ("my_gun_mp", 30)];
+        assert_eq!(out, want.map(|(k, v)| (k.to_string(), v)).into());
+        let out = on_disk(&[("weapons/mp/M16_mp", b"not a weapon file")]);
+        assert_eq!(out, [("m16_mp".to_string(), 1)].into());
     }
 }

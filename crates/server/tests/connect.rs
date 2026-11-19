@@ -20,14 +20,10 @@ fn server() -> Server {
 fn server_with_entities(test_entities: usize) -> Server {
     Server::new(
         ServerConfig {
-            map: "mp_carentan".into(),
             hostname: "loop".into(),
             max_clients: 2,
-            gametype: "dm".into(),
             test_entities,
-            trace: false,
-            bots: 0,
-            bots_shoot: false,
+            ..common::cfg("mp_carentan", "dm")
         },
         Instant::now(),
     )
@@ -215,8 +211,8 @@ fn frames_delta_against_the_acked_base_and_fall_back_when_acks_stop() {
     // A single mid-stream lost reply, well before the long ack silence below.
     // The client's ack the tick after this jumps straight past the sequence
     // it never received, so the base the server picks must line up with the
-    // packet's real netchan sequence rather than any renumbering of its own
-    // — a uniform off-by-one between the two cancels on every other frame in
+    // packet's real netchan sequence rather than any renumbering of its own:
+    // a uniform off-by-one between the two cancels on every other frame in
     // this test, but not across this gap. See `step_dropping_reply`.
     // Keep this inside 0..40 (acking) and away from the acking/silence
     // boundary at 40 and the loop's end at 80; ticks 38-40 and 78-79 are dead
@@ -349,7 +345,7 @@ fn scripted_entities_move_cycle_out_and_return() {
 /// fills `name[4]` and `name[8]` (the name packs 4 bytes per netfield), then
 /// "robertson" -> "abcd" clears them again. A base that only ever compares
 /// against null cannot tell "always zero" from "just cleared", so shrinking
-/// the name is what actually exercises a wrong base — a single short-to-short
+/// the name is what actually exercises a wrong base: a single short-to-short
 /// rename (e.g. "vcod" -> "bob") never leaves the null-compared and
 /// true-base-compared writers disagreeing, since both names live entirely in
 /// `name[0]`, which is non-zero either way.
@@ -405,7 +401,7 @@ fn a_renamed_client_deltas_against_its_roster_base() {
 
 /// The retail client never sends `begin`. It is not in the engine's client
 /// command table (CoDExtended, `src/sv_client.c`, `ucmds`), and Quake III
-/// Arena's table -- which CoD inherited -- does not have it either. Entry
+/// Arena's table (which CoD inherited) does not have it either. Entry
 /// into the world is the first usercmd after the gamestate (Quake III Arena,
 /// `code/server/sv_client.c`, `SV_UserMove`), so a client that only acks and
 /// moves must be promoted and start receiving snapshots. Without that
@@ -430,23 +426,134 @@ fn a_client_that_never_sends_begin_enters_the_world_on_its_first_usercmd() {
     );
 }
 
+/// Steps until the client is in the world and holding snapshots.
+fn enter(
+    sv: &mut Server,
+    q: &Rc<RefCell<Queues>>,
+    cl: &mut NetClient<ClientEnd>,
+    now: &mut Instant,
+) {
+    for _ in 0..8 {
+        *now += Duration::from_millis(50);
+        cl.send_frame(&NULL_USERCMD);
+        step(sv, q, cl, *now);
+    }
+    assert!(cl.snapshots().newest().is_some());
+}
+
+/// Whether the client parsed a valid frame out of the last message it took.
+fn last_frame_valid(cl: &NetClient<ClientEnd>) -> bool {
+    cl.snapshots().get(cl.incoming_sequence()).is_some()
+}
+
+/// A client reads a server command's `%` as `.` (protocol-1.1.md,
+/// divergence 14) and keys its moves on that copy, so the server's ring
+/// keys on the same: the yaw a move carries after the ack lands.
+#[test]
+fn a_move_after_a_percent_server_command_decodes() {
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let mut sv = server();
+    let mut now = Instant::now();
+    let mut cl = connect(&mut sv, &q, &mut now);
+    enter(&mut sv, &q, &mut cl, &mut now);
+    sv.push_console("say a%b");
+    let mut cmd = NULL_USERCMD;
+    let mut acked_at = None;
+    for i in 0..12 {
+        now += Duration::from_millis(50);
+        if acked_at.is_some_and(|at| i > at + 1) {
+            cmd.angles[1] = 0x4000; // 90 degrees
+        }
+        cl.send_frame(&cmd);
+        let events = step(&mut sv, &q, &mut cl, now);
+        if events
+            .iter()
+            .any(|e| matches!(e, NetEvent::Chat { text, .. } if text.ends_with("a.b")))
+        {
+            acked_at = Some(i);
+        }
+    }
+    assert!(acked_at.is_some_and(|at| at < 6), "the say never came");
+    let s = cl.snapshots().newest().expect("a frame");
+    assert!(last_frame_valid(&cl));
+    assert!((s.ps.viewangles(&PROTOCOL_V1)[1] - 90.0).abs() < 0.1);
+}
+
+/// A reliable command keeps the byte the wire carried: a 0x92 inside a
+/// UTF-8 char goes out as `.`, which is what the server keys its messages
+/// on, so the client decodes them on `.` too.
+#[test]
+fn messages_after_a_command_with_byte_0x92_decode() {
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let mut sv = server();
+    let mut now = Instant::now();
+    let mut cl = connect(&mut sv, &q, &mut now);
+    enter(&mut sv, &q, &mut cl, &mut now);
+    // U+0412 is D0 92 in UTF-8.
+    cl.send_reliable("say \u{412}");
+    for _ in 0..6 {
+        now += Duration::from_millis(50);
+        cl.send_frame(&NULL_USERCMD);
+        let events = step(&mut sv, &q, &mut cl, now);
+        assert!(!events.iter().any(|e| matches!(e, NetEvent::Dropped(_))));
+        assert!(last_frame_valid(&cl), "message {}", cl.incoming_sequence());
+    }
+}
+
+/// A snapshot the client cannot parse is never a base: its next move goes
+/// out as `clc_moveNoDelta` (cod11-demos.md 4), the server answers with a
+/// full frame and the deltas resume from there.
+#[test]
+fn a_lost_frame_is_followed_by_a_no_delta_move_and_a_full_frame() {
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let mut sv = server();
+    let mut now = Instant::now();
+    let mut cl = connect(&mut sv, &q, &mut now);
+    enter(&mut sv, &q, &mut cl, &mut now);
+    assert!(cl.snapshots().newest().unwrap().delta_num > 0);
+
+    // One message cut in half on its way to the client.
+    now += Duration::from_millis(50);
+    cl.send_frame(&NULL_USERCMD);
+    let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
+    for p in pending {
+        sv.handle_packet(common::ADDR, &p, now);
+    }
+    sv.tick(now);
+    for (_, mut p) in sv.take_outgoing() {
+        p.truncate(8 + (p.len() - 8) / 2);
+        q.borrow_mut().to_client.push_back(p);
+    }
+    cl.pump_at(now);
+    assert!(!last_frame_valid(&cl));
+
+    let mut kinds = Vec::new();
+    for _ in 0..4 {
+        now += Duration::from_millis(50);
+        cl.send_frame(&NULL_USERCMD);
+        step(&mut sv, &q, &mut cl, now);
+        assert!(last_frame_valid(&cl), "message {}", cl.incoming_sequence());
+        kinds.push(cl.snapshots().newest().unwrap().delta_num > 0);
+    }
+    assert_eq!(kinds, [false, true, true, true]);
+}
+
 /// `client-probes/<probe>` on ours, mp_carentan, the install's protocol.
 /// `None` without paks.
 fn probe_server(probe: &str) -> Option<Server> {
     let fs = vcod_common::testing::game_fs()?;
     let proto = vcod_server::server::install_protocol(&fs);
     let fs = Rc::new(fs);
-    let bsp_path = fs.resolve_map("mp_carentan").expect("mp_carentan");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut sv = Server::new(common::cfg("mp_carentan", probe), Instant::now());
-    sv.set_protocol(proto);
     let src = std::fs::read_to_string(format!(
         "../gsc/tests/fixtures/semantics/client-probes/{probe}.gsc"
     ))
     .expect("the probe");
-    sv.overlay_script(&format!("maps/mp/gametypes/{probe}"), &src);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    let (sv, _) = common::Boot {
+        proto: Some(proto),
+        script: Some(&src),
+        ..common::Boot::new("mp_carentan", probe)
+    }
+    .start(fs);
     Some(sv)
 }
 

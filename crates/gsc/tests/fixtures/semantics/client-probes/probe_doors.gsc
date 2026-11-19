@@ -19,7 +19,8 @@
 //	(the PVS test of its sounds), radiusDamage on door_r, door_b, door_h
 //	shut and door_h moving, and a script spawn of each classname at the world
 //	origin. Then he shoots door_h at rest from 80 units south (a round's
-//	G_Damage; door_b's brushes stop no bulletTrace). Ahead of all that, door_h takes a radiusDamage at 550 and
+//	G_Damage; door_b's brushes stop no bulletTrace), then swings at it from 50 units
+//	south (a melee's G_Damage, which has no glass test). Ahead of all that, door_h takes a radiusDamage at 550 and
 //	another at 4000, inside the level's first 4000 ms of silent door uses.
 //	Every frame from 1000 logs each mover and the player:
 //
@@ -78,8 +79,9 @@ early()
 	radiusDamage((1053, 1611, 82), 100, 50, 50);
 }
 
-// Stands the player at `spot` looking at `target` and fires one round.
-shoot(spot, target, name)
+// Stands the player at `spot` looking at `target` and taps `buttons` (1
+// fires one round, 32 swings).
+shoot(spot, target, name, buttons)
 {
 	eye = spot + (0, 0, 60);
 	place(spot, vectortoangles(target - eye));
@@ -93,7 +95,7 @@ shoot(spot, target, name)
 	}
 	logPrint("PROBE aim " + name + " " + eye + " " + target + " " + what + " " + tr["position"] + "\n");
 	wait 0.5;
-	in(1);
+	in(buttons);
 	wait 0.1;
 	in(0);
 }
@@ -161,6 +163,7 @@ run()
 	spot_e = ground_at((195, 2137, 400), "e");
 	spot_far = ground_at((296, -1280, 100), "far");
 	spot_h = ground_at((1053, 1531, 120), "h");
+	spot_k = ground_at((1053, 1561, 120), "k");
 	for (;;)
 	{
 		pl = getentarray("player", "classname");
@@ -247,7 +250,11 @@ run()
 	}
 
 	logPrint("PROBE phase shoot " + gettime() + "\n");
-	shoot(spot_h, (1053, 1611, 82), "h");
+	shoot(spot_h, (1053, 1611, 82), "h", 1);
+	wait 3;
+
+	logPrint("PROBE phase knife " + gettime() + "\n");
+	shoot(spot_k, (1053, 1611, 82), "k", 32);
 	wait 3;
 	logPrint("PROBE done\n");
 }

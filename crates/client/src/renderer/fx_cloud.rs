@@ -21,7 +21,7 @@ use wgpu::util::DeviceExt;
 const MAX_CLOUDS: usize = 512;
 
 /// The `fx.wgsl` pass plus the cloud vertex and fragment entries.
-const FX_CLOUD_WGSL: &str = concat!(
+pub(super) const FX_CLOUD_WGSL: &str = concat!(
     include_str!("../fx.wgsl"),
     include_str!("../fx_cloud.wgsl"),
     include_str!("../tex_samplers.wgsl")
@@ -89,6 +89,8 @@ pub(super) struct CloudPass {
     outdoor: Outdoor,
     /// The loaded level's, until the next load.
     source: Option<OutdoorSource>,
+    /// The map the cap was last warned on, so it warns once a map.
+    cap_warned: Option<String>,
 }
 
 /// The buffer `R_CreateParticleCloudBuffer` fills at renderer start, from
@@ -303,6 +305,7 @@ impl CloudPass {
             bind_group,
             outdoor: Outdoor::None,
             source: None,
+            cap_warned: None,
         }
     }
 
@@ -470,18 +473,23 @@ impl Renderer {
         let mut spheres: Vec<(Vec3, f32)> = Vec::new();
         let mut runs: Vec<FxRun> = Vec::new();
         let mut rest = &clouds.list[..];
-        'runs: while let Some(first) = rest.first() {
+        let mut capped = false;
+        while let Some(first) = rest.first() {
             let name = first.shader.as_str();
             let len = rest.iter().take_while(|c| c.shader == name).count();
             let (group, tail) = rest.split_at(len);
             rest = tail;
             let sh = self.shader_lib.get(name);
             let sort = sh.map_or(SORT_BLEND, |sh| sh.sort);
-            for draw in fx_stage_draws(sh, name, time) {
-                if instances.len() + group.len() > MAX_CLOUDS {
-                    log::warn!("fx: clouds exceed the {MAX_CLOUDS} cap, truncating");
-                    break 'runs;
-                }
+            let draws = fx_stage_draws(sh, name, time);
+            // The group's near end with every stage, as many as fit.
+            let fit = fits(MAX_CLOUDS - instances.len(), group.len(), draws.len());
+            capped |= fit < group.len();
+            let group = &group[group.len() - fit..];
+            if group.is_empty() {
+                continue;
+            }
+            for draw in draws {
                 if !self.fx.textures.contains_key(draw.image) {
                     let no_map = HashMap::new();
                     let images = if draw.stage.is_some() {
@@ -529,6 +537,10 @@ impl Renderer {
                 });
             }
         }
+        if capped && self.fx.clouds.cap_warned.as_deref() != Some(map.unwrap_or("")) {
+            log::warn!("fx: clouds exceed the {MAX_CLOUDS} cap, the farthest left out");
+            self.fx.clouds.cap_warned = Some(map.unwrap_or("").to_string());
+        }
         self.fx
             .clouds
             .upload(&self.queue, &instances, clouds.right, clouds.up);
@@ -539,6 +551,12 @@ impl Renderer {
             self.fx.runs.insert(at, run);
         }
     }
+}
+
+/// How many of a group's `len` clouds fit in `room` instances with all
+/// `stages` of each: the group draws every stage or none.
+fn fits(room: usize, len: usize, stages: usize) -> usize {
+    len.min(room / stages.max(1))
 }
 
 /// A cloud's instance for one stage draw: its colour through the stage's
@@ -579,16 +597,20 @@ mod tests {
     use crate::fx::cod2_cloud::FxCloud;
     use glam::{Vec2, Vec4};
 
+    /// Past the cap a group keeps the part that fits with all its stages,
+    /// the far end left out, and later groups still get what room is
+    /// left (BUG-094).
+    #[test]
+    fn a_group_past_the_cap_keeps_what_fits_with_every_stage() {
+        assert_eq!(fits(512, 600, 1), 512);
+        assert_eq!(fits(10, 5, 2), 5);
+        assert_eq!(fits(9, 5, 2), 4);
+        assert_eq!(fits(0, 5, 1), 0);
+        assert_eq!(fits(7, 3, 0), 3);
+    }
+
     fn headless() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
-        let info = adapter.get_info();
-        eprintln!("adapter: {} {:?}", info.name, info.backend);
-        if info.backend == wgpu::Backend::Gl {
-            return None;
-        }
-        pollster::block_on(adapter.request_device(&Default::default())).ok()
+        crate::renderer::headless::test_device(crate::renderer::headless::Need::NotGl)
     }
 
     const N: u32 = 128;

@@ -13,10 +13,13 @@
 //!
 //! The sniper's breath hold is [`update_hold_breath`].
 //!
-//! Not here: the weapon slots' alt-weapon bookkeeping (`ps+0x555`), `PM_SetProneMovementOverride`,
-//! and the jump and prone stance's effects on the sight. The torso events
-//! (`BG_AnimScriptEvent` for the fire, reload, melee, drop and raise) run
-//! when the caller hands [`WeaponCmd::anim`] the script.
+//! Not ported: the weapon slots' alt-weapon bookkeeping (`ps+0x555`).
+//! Elsewhere in pmove: the prone sight flag (`pm_flags` 0x800) is set by
+//! [`update_sight_flag`] and cleared by `PmoveSingle`'s prone check
+//! (cod2-movement.md 17.3); the jump's `jump_spreadAdd` is `moves.rs`'s
+//! jump start. The torso events (`BG_AnimScriptEvent` for the fire,
+//! reload, melee, drop and raise) run when the caller hands
+//! [`WeaponCmd::anim`] the script.
 
 use crate::net::UserCmd2;
 use crate::pmove::anim::{self, AnimInput, AnimTable, Event};
@@ -927,7 +930,7 @@ pub fn adjust_aim_spread(
 
 /// `AngleSubtract`: `a - b` folded into (-180, 180].
 fn angle_subtract(a: f32, b: f32) -> f32 {
-    let mut d = a - b;
+    let mut d = vcod_common::fguard::turns(a - b);
     while d > 180.0 {
         d -= 360.0;
     }
@@ -1226,7 +1229,7 @@ pub fn pm_weapon(ps: &mut PlayerState, ws: &mut WeaponState, c: &WeaponCmd, defs
     if ws.restrict_kick_time > 0 {
         ws.restrict_kick_time = (ws.restrict_kick_time - msec).max(0);
     }
-    let cur = defs.get(ws.weapon).cloned();
+    let cur = defs.get(ws.weapon);
     if ws.weapon_time != 0 {
         ws.weapon_time -= msec;
         if ws.weapon_time < 1 {
@@ -1336,7 +1339,7 @@ pub fn pm_weapon(ps: &mut PlayerState, ws: &mut WeaponState, c: &WeaponCmd, defs
             begin_change(ps, ws, 0, c, defs);
         }
     }
-    let cur = defs.get(ws.weapon).cloned();
+    let cur = defs.get(ws.weapon);
     // The reload key, an empty clip, and a segmented reload's interrupt.
     if !(state::OFFHAND_INIT..=state::OFFHAND).contains(&ws.state)
         && !in_binoculars(ws.state)
@@ -1411,7 +1414,7 @@ pub fn pm_weapon(ps: &mut PlayerState, ws: &mut WeaponState, c: &WeaponCmd, defs
         }
     }
     // A bolt-action rifle's rechamber after its shot.
-    if let Some(w) = defs.get(ws.weapon).cloned()
+    if let Some(w) = defs.get(ws.weapon)
         && !(state::OFFHAND_INIT..=state::OFFHAND).contains(&ws.state)
         && !in_binoculars(ws.state)
         && w.bolt_action
@@ -1462,14 +1465,14 @@ pub fn pm_weapon(ps: &mut PlayerState, ws: &mut WeaponState, c: &WeaponCmd, defs
     run_state(ps, ws, c, defs, delay_fired);
 }
 
-/// The quick drop's end, or an empty hand's offhand key: the grenade comes
-/// up and the pin comes out (state 13).
 /// `Mantle_IsWeaponInactive`, the ladder or `pm_flags` 0x4000000: the
 /// weapon stays down.
 fn holstered(ps: &PlayerState) -> bool {
     super::mantle::weapon_inactive(ps) || ps.pm_flags & (pmf::LADDER | wpf::DISABLED) != 0
 }
 
+/// The quick drop's end, or an empty hand's offhand key: the grenade comes
+/// up and the pin comes out (state 13).
 fn prepare_offhand(ps: &mut PlayerState, ws: &mut WeaponState, defs: &dyn Weapons) {
     let hold = defs.get(ws.offhand).map_or(0, |o| o.hold_fire_time);
     ws.state = state::OFFHAND_PREPARE;
@@ -1526,11 +1529,11 @@ fn run_state(
             }
         }
         state::RELOADING | state::RELOADING_INTERRUPTED => {
-            let Some(w) = defs.get(ws.weapon).cloned() else {
+            let Some(w) = defs.get(ws.weapon) else {
                 return to_ready(ps, ws);
             };
             if delay_fired {
-                reload_delayed_action(ps, ws, &w);
+                reload_delayed_action(ps, ws, w);
             }
             if ws.weapon_time != 0 {
                 return;
@@ -1539,28 +1542,28 @@ fn run_state(
             if !w.segmented_reload {
                 return to_ready(ps, ws);
             }
-            if ws.state != state::RELOADING_INTERRUPTED && allow_reload(ws, &w) {
-                return set_reloading_state(ps, ws, &w);
+            if ws.state != state::RELOADING_INTERRUPTED && allow_reload(ws, w) {
+                return set_reloading_state(ps, ws, w);
             }
-            end_reload(ps, ws, &w);
+            end_reload(ps, ws, w);
         }
         state::RELOAD_START | state::RELOAD_START_INTERRUPTED => {
-            let Some(w) = defs.get(ws.weapon).cloned() else {
+            let Some(w) = defs.get(ws.weapon) else {
                 return to_ready(ps, ws);
             };
             if delay_fired {
-                reload_delayed_action(ps, ws, &w);
+                reload_delayed_action(ps, ws, w);
             }
             if ws.weapon_time != 0 {
                 return;
             }
-            if (ws.state != state::RELOAD_START_INTERRUPTED || ws.clip_of(&w) == 0)
-                && allow_reload(ws, &w)
+            if (ws.state != state::RELOAD_START_INTERRUPTED || ws.clip_of(w) == 0)
+                && allow_reload(ws, w)
             {
-                return set_reloading_state(ps, ws, &w);
+                return set_reloading_state(ps, ws, w);
             }
             ws.set_rechamber(ws.weapon, false);
-            end_reload(ps, ws, &w);
+            end_reload(ps, ws, w);
         }
         state::MELEE_INIT => {
             if let Some(w) = defs.get(ws.weapon) {
@@ -1580,7 +1583,7 @@ fn run_state(
         state::OFFHAND_HOLD => {
             const KEYS: i32 = key::FRAG | key::SMOKE;
             if c.oldcmd.buttons & KEYS == 0 || buttons & KEYS == 0 {
-                let o = defs.get(ws.offhand).cloned();
+                let o = defs.get(ws.offhand);
                 ws.state = state::OFFHAND_START;
                 ws.weapon_time = o.as_ref().map_or(0, |o| o.fire_time);
                 ws.weapon_delay = 0;
@@ -1596,7 +1599,7 @@ fn run_state(
                 }
                 torso_event(ps, ws, c, defs, Event::FireWeapon, true);
                 if let Some(o) = o
-                    && ws.ammo_of(&o) + ws.clip_of(&o) == 0
+                    && ws.ammo_of(o) + ws.clip_of(o) == 0
                 {
                     ps.add_event(ev::EMPTY_OFFHAND, 0);
                 }
@@ -1634,12 +1637,6 @@ fn run_state(
 /// States 17..22.
 pub fn in_binoculars(st: i32) -> bool {
     (state::BINOCULARS_ADS_EXIT..=state::BINOCULARS_RAISE_WEAPON).contains(&st)
-}
-
-/// `PM_IsBinocularsADS` (Mac 0x7a04a): states 19 and 20, where the client
-/// sends the sight bit on its own (cod2-protocol.md, the button bits).
-pub fn is_binoculars_ads(ws: &WeaponState) -> bool {
-    matches!(ws.state, state::BINOCULARS_RAISE | state::BINOCULARS_HOLD)
 }
 
 /// The first weapon whose `weaponType` is binoculars (3), the loop
@@ -1849,13 +1846,13 @@ fn fire(
         ws.state = state::READY;
         return;
     }
-    let Some(w) = defs.get(ws.weapon).cloned() else {
+    let Some(w) = defs.get(ws.weapon) else {
         return;
     };
     // 0x80ef1ac: the times, the pullback of a grenade.
     if w.is_grenade() {
         if !delay_fired {
-            if ws.clip_of(&w) != 0 {
+            if ws.clip_of(w) != 0 {
                 ws.grenade_time_left = w.fuse_time;
                 start_anim(ps, ws, 0x13);
                 ps.add_event(ev::PULLBACK_WEAPON, 0);
@@ -1886,8 +1883,8 @@ fn fire(
     }
     ws.state = state::FIRING;
     // 0x80ef380: an empty clip reloads or clicks.
-    if ws.clip_of(&w) < 1 {
-        let dry = ws.ammo_of(&w) < 1;
+    if ws.clip_of(w) < 1 {
+        let dry = ws.ammo_of(w) < 1;
         if !w.is_grenade() && dry {
             ps.add_event(ev::NOAMMO, 0);
         }
@@ -1896,7 +1893,7 @@ fn fire(
             idle_anim(ps, ws);
             ws.weapon_time += 500;
         } else {
-            begin_reload(ps, ws, &w, c, defs);
+            begin_reload(ps, ws, w, c, defs);
         }
         return;
     }
@@ -1909,7 +1906,7 @@ fn fire(
     if w.is_grenade() {
         ws.weapon_time = w.fire_time;
     }
-    let last = ws.clip_of(&w) == 0;
+    let last = ws.clip_of(w) == 0;
     // 0x80ef496: the sighted or hip fire anim, the last shot's own.
     let n = match (ws.pos_frac > 0.75, last) {
         (true, true) => 6,
@@ -1932,7 +1929,7 @@ fn fire(
         ps.aim_spread_scale = (ps.aim_spread_scale + 255.0 * w.hip_spread_fire_add).min(255.0);
     }
     // 0x80ee95e: a clip-only weapon with nothing left is taken.
-    if w.clip_only && ws.clip_of(&w) == 0 && ws.ammo_of(&w) == 0 {
+    if w.clip_only && ws.clip_of(w) == 0 && ws.ammo_of(w) == 0 {
         ws.held &= !(1u128 << ws.weapon);
         ps.add_event(ev::NOAMMO, 0);
     }
@@ -1947,17 +1944,22 @@ pub fn table(
     fs: &(impl vcod_common::asset_source::AssetSource + ?Sized),
     names: &[&str],
 ) -> Vec<Option<WeaponParams>> {
-    let defs: Vec<Option<WeaponDef>> = names
-        .iter()
-        .map(|n| crate::weapon::load(fs, n).ok().map(|p| p.def))
+    let defs: Vec<Option<WeaponDef>> = crate::weapon::load_all(fs, names)
+        .into_iter()
+        .map(|p| p.ok().map(|p| p.def))
         .collect();
-    let index_of = |key: &str| {
-        crate::weapon::clip_indices(defs.iter().map(|d| d.as_ref().map_or("", |d| d.str(key))))
-    };
+    let defs: Vec<Option<&WeaponDef>> = defs.iter().map(Option::as_ref).collect();
+    table_of(names, &defs)
+}
+
+/// [`table`] over defs already loaded, `defs[k]` being `names[k]`'s.
+pub fn table_of(names: &[&str], defs: &[Option<&WeaponDef>]) -> Vec<Option<WeaponParams>> {
+    let index_of =
+        |key: &str| crate::weapon::clip_indices(defs.iter().map(|d| d.map_or("", |d| d.str(key))));
     let (ammo, clip) = (index_of("ammoName"), index_of("clipName"));
     let mut out = vec![None];
     for (k, d) in defs.iter().enumerate() {
-        out.push(d.as_ref().map(|d| {
+        out.push(d.map(|d| {
             let alt = names
                 .iter()
                 .position(|n| *n == d.str("altWeapon"))
@@ -1968,12 +1970,13 @@ pub fn table(
     out
 }
 
-/// One cmd of `PmoveSingle` with its weapon half, as vcod-server's
-/// `client_think` runs it: `EF_FIRING`, the sight flag and the aim spread,
+/// One cmd of `PmoveSingle` with its weapon half: `EF_FIRING`, the sight flag and the aim spread,
 /// the move at the held weapon's `moveSpeedScale`, then `PM_Weapon` and
 /// `ClientEvents`' zeroing of a thrown grenade's fuse (cod2-combat.md 2.6).
 /// Only a living or dead body runs the weapon. The client predicts with
 /// it; the movement A/B replays retail's captures through it.
+/// vcod-server's `client_think` (`game::cod2`) runs its own copy of this
+/// order.
 pub fn armed_step(
     ps: &mut PlayerState,
     ws: &mut WeaponState,
@@ -2163,6 +2166,119 @@ mod tests {
         assert_eq!((ws.clip[2], ws.ammo[2]), (30, 30));
         run(&mut ps, &mut ws, &defs, 0, 1000, &mut old);
         assert_eq!(ws.state, state::READY);
+    }
+
+    /// The stock trench gun's reload (`weapons/mp/shotgun_mp`) in slot 1:
+    /// an 800 ms start whose round lands at its end (`reloadStartAddTime`
+    /// 1.3 s capped by the start), 600 ms segments landing one round each
+    /// at their end (`reloadAddTime` 0.8 s capped by the segment), an
+    /// 800 ms end.
+    fn with_pump(clip: i32, reserve: i32) -> (Vec<Option<WeaponParams>>, WeaponState) {
+        let pump = WeaponParams {
+            name: "pump".into(),
+            ammo_index: 1,
+            clip_index: 1,
+            clip_size: 6,
+            fire_time: 900,
+            segmented_reload: true,
+            reload_start_time: 800,
+            reload_start_add_time: 1300,
+            reload_start_add: 1,
+            reload_time: 600,
+            reload_empty_time: 600,
+            reload_add_time: 800,
+            reload_ammo_add: 1,
+            reload_end_time: 800,
+            ..Default::default()
+        };
+        let mut defs = table();
+        defs[1] = Some(pump);
+        let mut ws = holding(1);
+        ws.clip[1] = clip;
+        ws.ammo[1] = reserve;
+        (defs, ws)
+    }
+
+    /// cod2-combat.md 1: the start lands `reloadStartAdd`, each segment
+    /// `reloadAmmoAdd`, until the clip is full; then the end.
+    #[test]
+    fn a_segmented_reload_loops_until_the_clip_is_full() {
+        let (defs, mut ws) = with_pump(3, 10);
+        let mut ps = PlayerState::default();
+        let mut old = UserCmd2::default();
+        let mut evs = run(&mut ps, &mut ws, &defs, key::RELOAD, 50, &mut old);
+        assert_eq!(ws.state, state::RELOAD_START);
+        evs.extend(run(&mut ps, &mut ws, &defs, 0, 800, &mut old));
+        assert_eq!((ws.clip[1], ws.ammo[1]), (4, 9), "the start's round");
+        evs.extend(run(&mut ps, &mut ws, &defs, 0, 4000, &mut old));
+        assert_eq!(
+            evs,
+            [
+                ev::RESET_ADS,
+                ev::RELOAD_START,
+                ev::RELOAD,
+                ev::RELOAD,
+                ev::RELOAD_END
+            ]
+        );
+        assert_eq!((ws.clip[1], ws.ammo[1], ws.state), (6, 7, state::READY));
+    }
+
+    /// The reserve running dry ends the loop with the clip short.
+    #[test]
+    fn a_segmented_reload_ends_when_the_reserve_runs_out() {
+        let (defs, mut ws) = with_pump(3, 2);
+        let mut ps = PlayerState::default();
+        let mut old = UserCmd2::default();
+        let mut evs = run(&mut ps, &mut ws, &defs, key::RELOAD, 50, &mut old);
+        evs.extend(run(&mut ps, &mut ws, &defs, 0, 4000, &mut old));
+        assert_eq!(
+            evs,
+            [ev::RESET_ADS, ev::RELOAD_START, ev::RELOAD, ev::RELOAD_END]
+        );
+        assert_eq!((ws.clip[1], ws.ammo[1], ws.state), (5, 0, state::READY));
+    }
+
+    /// A fire press during a segment marks it interrupted: its round still
+    /// lands, then the reload ends instead of looping.
+    #[test]
+    fn a_fire_press_ends_a_segmented_reload_after_its_segment() {
+        let (defs, mut ws) = with_pump(1, 10);
+        let mut ps = PlayerState::default();
+        let mut old = UserCmd2::default();
+        run(&mut ps, &mut ws, &defs, key::RELOAD, 50, &mut old);
+        run(&mut ps, &mut ws, &defs, 0, 850, &mut old);
+        assert_eq!(ws.state, state::RELOADING);
+        run(&mut ps, &mut ws, &defs, button::ATTACK, 50, &mut old);
+        assert_eq!(ws.state, state::RELOADING_INTERRUPTED);
+        let evs = run(&mut ps, &mut ws, &defs, 0, 2000, &mut old);
+        assert_eq!(evs, [ev::RELOAD_END]);
+        assert_eq!((ws.clip[1], ws.ammo[1], ws.state), (3, 8, state::READY));
+    }
+
+    /// Interrupted in its start, the reload ends when the start left rounds
+    /// in the clip; a start that lands none (`reloadStartAdd` 0) on an
+    /// empty clip runs one segment first.
+    #[test]
+    fn an_interrupted_start_segments_only_on_a_clip_still_empty() {
+        for (clip, start_add, segments, want) in [(2, 1, 0, (3, 9)), (0, 0, 1, (1, 9))] {
+            let (mut defs, mut ws) = with_pump(clip, 10);
+            defs[1].as_mut().unwrap().reload_start_add = start_add;
+            let mut ps = PlayerState::default();
+            let mut old = UserCmd2::default();
+            run(&mut ps, &mut ws, &defs, key::RELOAD, 50, &mut old);
+            assert_eq!(ws.state, state::RELOAD_START, "clip {clip}");
+            run(&mut ps, &mut ws, &defs, button::ATTACK, 50, &mut old);
+            assert_eq!(ws.state, state::RELOAD_START_INTERRUPTED, "clip {clip}");
+            let evs = run(&mut ps, &mut ws, &defs, 0, 3000, &mut old);
+            let reloads = evs
+                .iter()
+                .filter(|&&e| e == ev::RELOAD || e == ev::RELOAD_FROM_EMPTY)
+                .count();
+            assert_eq!(reloads, segments, "clip {clip}: {evs:?}");
+            assert_eq!((ws.clip[1], ws.ammo[1]), want, "clip {clip}");
+            assert_eq!(ws.state, state::READY);
+        }
     }
 
     #[test]

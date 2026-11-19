@@ -1,6 +1,6 @@
 //! A CoD4 1.7 server message, decompressed: server commands, the gamestate
 //! (configstrings, baselines, clientNum, checksumFeed) and snapshots
-//! (docs/research/cod4-netfields.md, "Server messages"), and the writer that
+//! (docs/research/cod4-netfields.md 4 and 5), and the writer that
 //! puts a parsed message back together byte for byte.
 
 use super::constant_cs;
@@ -11,6 +11,7 @@ use super::delta::{
 use super::huffman::Huffman;
 use anyhow::{Context, Result, bail, ensure};
 use std::collections::BTreeMap;
+use vcod_common::net::Msec;
 use vcod_common::net::codec::{MsgReader, MsgWriter};
 use vcod_common::net::huffman::Huffman as Cod1Huffman;
 
@@ -36,17 +37,30 @@ pub const CS_SYSTEMINFO: u16 = 1;
 pub const CS_MAPCENTER: u16 = 12;
 /// Snapshots a delta can reach back over.
 const PACKET_BACKUP: usize = 32;
+/// Server commands [`Client::server_commands`] keeps below the newest: twice
+/// the 128-command reliable ring.
+const KEPT_SERVER_COMMANDS: i32 = 256;
 
-/// `MSG_ReadString`: the bytes up to the NUL, as they are (no `%` or
-/// 0x92 mapping on 1.7's client, INFERRED).
+/// `MSG_ReadString`: the bytes up to the NUL, as they are, no `%` or 0x92
+/// mapping (INFERRED, no 1.7 address recorded).
+/// [`super::download::DownloadMsg::read`] maps 0x92 through CoD2's reader
+/// instead; which one 1.7 does is unread.
 pub fn read_raw_string(r: &mut MsgReader) -> Vec<u8> {
+    read_string_capped(r, usize::MAX)
+}
+
+/// [`read_raw_string`] keeping at most `max` bytes, the rest read to the
+/// NUL and dropped, as a fixed buffer's read does.
+pub fn read_string_capped(r: &mut MsgReader, max: usize) -> Vec<u8> {
     let mut out = Vec::new();
     loop {
         let c = r.read_byte();
         if c == 0 || r.is_overflowed() {
             return out;
         }
-        out.push(c);
+        if out.len() < max {
+            out.push(c);
+        }
     }
 }
 
@@ -90,15 +104,8 @@ impl Gamestate {
 
     /// A key of the systeminfo string (`sv_serverid`).
     pub fn systeminfo(&self, key: &str) -> Option<String> {
-        let s = String::from_utf8_lossy(self.configstring(CS_SYSTEMINFO)).into_owned();
-        let parts: Vec<&str> = s.split('\\').collect();
-        parts
-            .iter()
-            .skip(1)
-            .step_by(2)
-            .zip(parts.iter().skip(2).step_by(2))
-            .find(|(k, _)| **k == key)
-            .map(|(_, v)| v.to_string())
+        let s = String::from_utf8_lossy(self.configstring(CS_SYSTEMINFO));
+        vcod_common::net::info_value_for_key(&s, key).map(str::to_string)
     }
 }
 
@@ -115,7 +122,7 @@ pub struct SnapshotWire {
 pub struct Snapshot {
     /// The netchan sequence of the message that carried it.
     pub message_num: i32,
-    pub server_time: i32,
+    pub server_time: Msec,
     /// 0 for a snapshot from nothing, else the message it deltas from.
     pub delta_num: i32,
     /// Index into [`Client::snapshots`] of the snapshot it deltas from.
@@ -233,6 +240,16 @@ impl Client {
                     self.server_commands
                         .entry(seq)
                         .or_insert_with(|| text.clone());
+                    // Older than two reliable rings: nothing keys or walks it.
+                    let floor = self
+                        .server_command_sequence
+                        .saturating_sub(KEPT_SERVER_COMMANDS);
+                    while let Some(e) = self.server_commands.first_entry() {
+                        if *e.key() > floor {
+                            break;
+                        }
+                        e.remove();
+                    }
                     ops.push(Op::ServerCommand {
                         sequence: seq,
                         text,
@@ -276,7 +293,7 @@ impl Client {
             .gamestate
             .as_ref()
             .context("snapshot before the gamestate")?;
-        let server_time = r.read_long();
+        let server_time = Msec::from_raw(r.read_long());
         let delta = r.read_byte() as i32;
         let snap_flags = r.read_byte();
         let base = if delta == 0 {
@@ -405,7 +422,7 @@ impl Client {
             map_center: gs.map_center,
         };
         w.write_byte(SVC_SNAPSHOT);
-        w.write_long(s.server_time);
+        w.write_long(s.server_time.raw());
         w.write_byte(s.delta_num as u8);
         w.write_byte(s.snap_flags);
         delta::write_delta_playerstate(w, &ctx, old.map(|o| &o.ps), &s.ps, &s.wire.ps);
@@ -481,14 +498,14 @@ pub fn parse_gamestate(r: &mut MsgReader) -> Result<Gamestate> {
                     sent.push((i as u16, s));
                     last = i;
                 }
-                gs.map_center = parse_map_center(gs.configstring(CS_MAPCENTER));
+                gs.map_center = super::wire::map_center(gs.configstring(CS_MAPCENTER));
                 gs.ops.push(GamestateOp::Configstrings(sent));
             }
             SVC_BASELINE => {
                 let num = delta::read_entity_index(r, &mut last_entity, GENTITYNUM_BITS)?;
                 ensure!(num < 1024, "baseline {num}");
                 let ctx = Ctx {
-                    time: 0,
+                    time: Msec::ZERO,
                     map_center: gs.map_center,
                 };
                 let (e, wire) = delta::read_delta_entity(r, &ctx, &EntityState::default(), num)?;
@@ -514,7 +531,7 @@ pub fn write_gamestate(w: &mut MsgWriter, gs: &Gamestate) {
     w.write_long(gs.server_command_sequence);
     let mut last_entity = -1;
     let ctx = Ctx {
-        time: 0,
+        time: Msec::ZERO,
         map_center: gs.map_center,
     };
     for op in &gs.ops {
@@ -548,15 +565,46 @@ pub fn write_gamestate(w: &mut MsgWriter, gs: &Gamestate) {
     w.write_long(gs.checksum_feed);
 }
 
-/// `CL_ParseMapCenter`: `sscanf("%f %f %f")`, unread axes 0.
-fn parse_map_center(s: &[u8]) -> [f32; 3] {
-    let s = String::from_utf8_lossy(s);
-    let mut out = [0.0; 3];
-    for (o, v) in out.iter_mut().zip(s.split_whitespace()) {
-        match v.parse() {
-            Ok(f) => *o = f,
-            Err(_) => break,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A long connection keeps a bounded window of server commands, and a
+    /// `d` past the configstring table changes nothing.
+    #[test]
+    fn server_commands_and_configstrings_stay_bounded() {
+        let mut c = Client::new();
+        c.gamestate = Some(Gamestate::default());
+        let mut applied = 0;
+        for seq in 1..=100_000 {
+            let parsed = Parsed {
+                ops: vec![Op::ServerCommand {
+                    sequence: seq,
+                    text: Vec::new(),
+                }],
+                eof_at: 0,
+                exact: true,
+            };
+            let block = c.huff.compress(&c.write(&parsed).unwrap());
+            let parsed = c.parse(seq as u32, &block).unwrap();
+            super::super::conn::apply_configstrings(&mut c, &mut applied, &parsed);
         }
+        assert_eq!(c.server_command_sequence, 100_000);
+        assert!(c.server_commands.len() <= KEPT_SERVER_COMMANDS as usize);
+        assert!(c.server_commands.contains_key(&100_000));
+
+        let d = |seq: i32, text: &str| Parsed {
+            ops: vec![Op::ServerCommand {
+                sequence: seq,
+                text: text.as_bytes().to_vec(),
+            }],
+            eof_at: 0,
+            exact: true,
+        };
+        super::super::conn::apply_configstrings(&mut c, &mut applied, &d(100_001, "d 65535 x"));
+        super::super::conn::apply_configstrings(&mut c, &mut applied, &d(100_002, "d 2441 y"));
+        let gs = c.gamestate.as_ref().unwrap();
+        assert!(!gs.configstrings.contains_key(&65535));
+        assert_eq!(gs.configstring(2441), b"y");
     }
-    out
 }

@@ -139,7 +139,13 @@ scripts call.
   831. VERIFIED (capture). Model order follows `G_RegisterWeapon`.
   INFERRED. 2314: four bits per lowercase hex digit, weapon 0 and each
   registered weapon set; 113 weapons read
-  `ffffffffffffffffffffffffffff3000`. VERIFIED (capture).
+  `ffffffffffffffffffffffffffff3000`. VERIFIED (capture). 2314's 128
+  bits end at weapon 127; vcod refuses a 128th registration with its own
+  script error, as the held bits and the 128-slot ammo arrays hold no
+  more. Retail's limit is not recorded.
+- `isMantling` (0x80c4fc8) and `isOnLadder` (0x80c5040) answer
+  `ps.pm_flags` bit 0x4 and bit 0x8 of the receiver's `gclient_t`
+  (`gentity+0x15c`, `pm_flags` at +0xc). VERIFIED (objdump).
 - INFERRED: `hidePart` keeps `partBits` (`Cod4HostState::part_bits`) and a
   hidden bone's collision stops clipping rounds
   (`entity_damage::ModelPart`); `setCanDamage` is UO's `setTakeDamage`;
@@ -2014,7 +2020,7 @@ vcod (`ClipMap::world_solids`, `physics::box_contacts`,
   stayed on the waiter, and `finishAirstrikeUsage` notified it 50 ms
   later), so the next hardpoint's radio stayed in hand until the next
   spawn; an Esc out of the selector did the same. Gate:
-  `play::cod4::tests::cod4_live_airstrike_then_helicopter_in_one_life`.
+  `play::cod4::tests::live_streaks::cod4_live_airstrike_then_helicopter_in_one_life`.
   VERIFIED (ours).
 
 ## 5. Configstrings
@@ -2452,7 +2458,8 @@ So a level ends on a runtime error only at `developer 1`, or with
 `developer` or `logfile` set while the level loads (its spawn's frames and
 the server's first frame after them). Retail 1.7, `war` on mp_crash under
 an `fs_game` whose `mp_crash_fx.gsc` runs `if (undefined > 0)` at a set
-level time (scratch `run_err.sh`, server alone, 15 s):
+level time (a scratch run, not kept: the server alone for 15 s, each row
+its own boot with the `+set`s the table names):
 
 | when | developer | logfile | the level |
 |---|---|---|---|
@@ -2523,8 +2530,8 @@ bot-objectives.md 12).
 `Player_GetUseList` is inlined in `Player_UpdateCursorHints` at
 `cod4_lnxded` 0x80d2c30 (called from 0x80a6cea), with `compare_use` at
 0x80d2c10 passed to `qsort` four times (0x80d3271, 0x80d33ad, 0x80d3700,
-0x80d3720). Port: `game::cod4::use_key` (`use_list`, `use_hint`,
-`use_entity`).
+0x80d3720). Port: `game::cod4::use_key` (`use_list`, `entry_hint`,
+`update_cursor_hints`, `use_entity`).
 
 - Constants, each read by an `fsubs` or `fadds` at 0x80d3655..0x80d36c4:
   0.76 (0x822094c, the `requireLookAt` dot); 512 (0x8211e70) off a
@@ -2577,9 +2584,12 @@ bot-objectives.md 12).
 
 ### 9.2 Mounted SAWs
 
-Captured on retail with `cod4_probe --script saw` behind mp_backlot's
-crouch SAW 393 (`devmap mp_backlot`, war, `setviewpos -770 68 320 0`,
-`--face 0`): `play-1.7-saw.txt`, uncommitted. Live gate: the client's
+VERIFIED live (capture not kept): every VERIFIED in this section without
+a gate or an address rests on one retail run, `cod4_probe --script saw`
+behind mp_backlot's crouch SAW 393 (`devmap mp_backlot`, war,
+`setviewpos -770 68 320 0`, `--face 0`), whose `play-1.7-saw.txt` was
+never committed, so no A/B gate replays it (cod4-server-gaps.md, Open).
+Live gate: the client's
 `cod4_live_saw_mounts_fires_clamps_and_lets_go`. Port: `game::cod4::turret`
 over the shared `TurretRecord`. Names and order are INFERRED where no
 label says otherwise.
@@ -2774,8 +2784,10 @@ vcod copies at the write, with a flag for the count (`Heap::share`,
 `Heap::own`): an array stored into a variable, field, element, argument or
 a `waittill`'s bound locals is flagged, and the `EnsureArray*` and
 `OwnLocal` ops that resolve an index write's target copy a flagged array
-and store the copy back. The flag is never cleared, which costs a copy
-retail would skip and no script can see. A write through `game` itself
+and store the copy back. The flag stays until a sweep between frames
+counts each array's holders (`Heap::collect`, cod2-gsc-diff.md 3.7) and
+clears it on an array one place holds; until then it costs a copy retail
+would skip and no script can see. A write through `game` itself
 (`game["k"] = v` after `g = game`) still reaches `g`. INFERRED
 (unmeasured on retail). Gates: `semantics_ab`'s `probe_array_copy`,
 `cod4::disconnect_tests::an_autoassigned_player_beside_bots_times_out_without_script_errors`
@@ -2791,7 +2803,7 @@ list for the rest of the level, and `isSpeakerInRange` (207) reads
 `teammate.origin` off him. VERIFIED (the stock scripts). Once he leaves,
 his entity is freed and the reference reads as a removed entity.
 
-Retail 1.7 (`war`, mp_crash, scratch `run_dead.sh`) under an `fs_game`
+Retail 1.7 (`war`, mp_crash, a scratch run, not kept) under an `fs_game`
 whose `mp_crash_fx.gsc` keeps a test client in a local array past its kick
 and runs `isSpeakerInRange`'s loop on it: `isDefined` reads 0. At
 `developer 1` the comparison is a "script runtime error" (`pair 'removed
@@ -2834,9 +2846,14 @@ VERIFIED (both consoles, 8.1's table).
   `updateClientNames`. VERIFIED (the zone's scripts). So on `sd` a rename
   shows from the next map on.
 - vcod: `Cod4Level::userinfo_changed` writes the name the scripts, chat
-  and snapshots' client states read (`GameHost::client_names`), under
+  and snapshots' client states read (`HostClient::name`), under
   `auto_change`, or under `manual_change` for a client not yet in the
-  game. It does not clean the name. The engine's copy (`status`, the log)
-  follows the userinfo at once, as retail's. The client sends its userinfo
+  game, cleaned as above (`cod4::game_name`). The engine's copy (`status`,
+  the log, the drop print) follows the userinfo at once, as retail's, cut
+  to 15 characters: `SV_UserinfoChanged` copies the `name` into 0x10
+  bytes at client +0x21290 (0x8170341..0x8170356). VERIFIED (the code).
+  vcod keeps at most 1023 bytes of a `userinfo` command's argument, as
+  `SV_UpdateUserinfo_f`'s 0x400-byte copy (0x817055e), and of any client
+  command. The client sends its userinfo
   on every change, so a `name` takes effect in the game, not only at the
   next connect.

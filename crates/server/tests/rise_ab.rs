@@ -22,14 +22,15 @@
 //! paks it returns early.
 
 use crate::common;
+use vcod_common::net::Msec;
 
 use common::{Join, Queues};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::msg::{self, PlayerState, UserCmd};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::net::{NetClient, NetEvent};
 
 const SCRIPT: &str =
@@ -73,7 +74,7 @@ fn phases(lines: &[String]) -> Vec<(i32, String)> {
 }
 
 /// The capture's `!snap` lines as `(serverTime, playerstate)`.
-fn retail_snaps(text: &str, p: &Protocol) -> Vec<(i32, PlayerState)> {
+fn retail_snaps(text: &str, p: &Cod1Wire) -> Vec<(i32, PlayerState)> {
     let mut out = Vec::new();
     for line in text.lines().filter(|l| l.starts_with("!snap ")) {
         let kv: BTreeMap<&str, &str> = line
@@ -97,7 +98,7 @@ fn retail_snaps(text: &str, p: &Protocol) -> Vec<(i32, PlayerState)> {
 fn rows(
     snaps: &[(i32, PlayerState)],
     phases: &[(i32, String)],
-    p: &Protocol,
+    p: &Cod1Wire,
 ) -> BTreeMap<String, Row> {
     let at = |t: i32| snaps.iter().find(|s| s.0 == t).map(|s| &s.1);
     let mut out = BTreeMap::new();
@@ -162,14 +163,12 @@ fn ours(
     weapon: &str,
 ) -> (Vec<(i32, PlayerState)>, Vec<String>) {
     let p = vcod_server::server::install_protocol(&fs);
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_rise"), now);
-    sv.set_protocol(p);
-    sv.overlay_script("maps/mp/gametypes/probe_rise", SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        script: Some(SCRIPT),
+        ..common::Boot::new(map, "probe_rise")
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl = NetClient::start_with_qport(common::ClientEnd(q.clone()), now, 0x2001);
@@ -192,7 +191,7 @@ fn ours(
             .as_ref()
             .is_some_and(|(_, ps)| ps.field_i32(p, "pm_type") == 0);
         match newest {
-            Some((t, ps)) if spawned && t > last_cmd => {
+            Some((t, ps)) if spawned && t > Msec::from_raw(last_cmd) => {
                 // The view as the snapshot has it, rebased on `delta_angles`.
                 let view = ps.viewangles(p);
                 let angles = std::array::from_fn(|i| {
@@ -200,7 +199,7 @@ fn ours(
                     ((view[i] * 65536.0 / 360.0).round() as i32 - da) & 0xffff
                 });
                 cl.send_cmds(&[UserCmd {
-                    server_time: t,
+                    server_time: t.raw(),
                     angles,
                     buttons: input.0,
                     wbuttons: input.1,
@@ -208,7 +207,7 @@ fn ours(
                     weapon: ps.field_i32(p, "weapon") as u8,
                     ..msg::NULL_USERCMD
                 }]);
-                last_cmd = t;
+                last_cmd = t.raw();
             }
             _ if !spawned => {
                 cl.send_frame(&UserCmd::default());
@@ -232,9 +231,9 @@ fn ours(
             }
         }
         if let Some(s) = cl.snapshots().newest()
-            && snaps.last().is_none_or(|l| l.0 != s.server_time)
+            && snaps.last().is_none_or(|l| l.0 != s.server_time.raw())
         {
-            snaps.push((s.server_time, s.ps.clone()));
+            snaps.push((s.server_time.raw(), s.ps.clone()));
         }
     }
     (snaps, sv.script_log().to_vec())
@@ -275,14 +274,6 @@ fn check(fs: Option<vcod_common::pk3::Pk3Fs>, fixture: &str, map: &str, weapon: 
     );
 }
 
-/// The 1.5b install's paks, `None` elsewhere (a UO install's `main/` is
-/// 1.5's, so this runs there too).
-fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    let v6 = vcod_common::net::protocol::PROTOCOL_V6.transport.version;
-    (vcod_server::server::install_protocol(&fs).transport.version == v6).then_some(fs)
-}
-
 #[test]
 fn a_rise_under_a_low_ceiling_is_refused_as_on_retail() {
     let fs = vcod_common::testing::game_fs_11();
@@ -297,12 +288,22 @@ fn a_climber_s_stance_keys_are_stripped_as_on_retail() {
 
 #[test]
 fn a_rise_under_a_low_ceiling_is_refused_as_on_15() {
-    check(fs_15(), CARENTAN_15, "mp_carentan", "m1carbine_mp");
+    check(
+        vcod_common::testing::game_fs_15(),
+        CARENTAN_15,
+        "mp_carentan",
+        "m1carbine_mp",
+    );
 }
 
 #[test]
 fn a_climber_s_stance_keys_are_stripped_as_on_15() {
-    check(fs_15(), SHIP_15, "mp_ship", "enfield_mp");
+    check(
+        vcod_common::testing::game_fs_15(),
+        SHIP_15,
+        "mp_ship",
+        "enfield_mp",
+    );
 }
 
 #[test]

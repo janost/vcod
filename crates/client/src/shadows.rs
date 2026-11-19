@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use vcod_common::static_light::{RegionKeep, Sun};
 
 /// shadow_cut.wgsl with the deforms its staged casters run.
-const SHADOW_CUT_WGSL: &str = concat!(
+pub(crate) const SHADOW_CUT_WGSL: &str = concat!(
     include_str!("shadow_cut.wgsl"),
     include_str!("noise.wgsl"),
     include_str!("deform.wgsl")
@@ -576,6 +576,9 @@ struct Timer {
     readback: wgpu::Buffer,
     /// A readback is in flight; set again by its callback when mapped.
     pending: bool,
+    /// `map_async` was asked for and its callback has not run yet: a
+    /// second call on a buffer whose map is pending is wgpu's error.
+    mapping: bool,
     mapped: Arc<AtomicBool>,
     period_ns: f32,
     /// The in-flight frame's static redraw: its pieces and triangles, and
@@ -611,6 +614,7 @@ impl Timer {
                 mapped_at_creation: false,
             }),
             pending: false,
+            mapping: false,
             mapped: Arc::new(AtomicBool::new(false)),
             period_ns: queue.get_timestamp_period(),
             static_ran: None,
@@ -1388,7 +1392,7 @@ impl ShadowPass {
     /// (`renderer::CAMERA_FLOATS`), whose fog tail the mask copies; `moved`
     /// the poses of the brush models off their spawn pose; `keep` the map's
     /// measured [`RegionKeep`] once known.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn prepare(
         &mut self,
         queue: &wgpu::Queue,
@@ -1551,7 +1555,6 @@ impl ShadowPass {
     /// pieces when the window or the world changed, the dynamic layer every
     /// frame.
     /// `cut` resolves an alpha-tested caster's batch to its bindings.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn encode_maps<'a>(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1763,9 +1766,10 @@ impl ShadowPass {
         let Some(t) = self.timer.as_mut().filter(|t| t.pending) else {
             return;
         };
-        if t.mapped.load(Ordering::Acquire) {
+        if t.mapped.load(Ordering::Acquire) || t.mapping {
             return;
         }
+        t.mapping = true;
         let flag = t.mapped.clone();
         t.readback.map_async(wgpu::MapMode::Read, .., move |r| {
             if r.is_ok() {
@@ -1788,6 +1792,7 @@ impl ShadowPass {
         t.readback.unmap();
         t.mapped.store(false, Ordering::Release);
         t.pending = false;
+        t.mapping = false;
         let ms = |i: usize| ticks[i + 1].wrapping_sub(ticks[i]) as f32 * t.period_ns / 1e6;
         let smooth = |old: &mut f32, new: f32| {
             *old = if *old == 0.0 {
@@ -2164,24 +2169,5 @@ mod tests {
             ..k
         };
         assert!(keep_texels(&wide).is_none());
-    }
-
-    #[test]
-    fn mask_and_cast_shaders_validate() {
-        use wgpu::naga;
-        for src in [
-            include_str!("shadow_cast.wgsl"),
-            SHADOW_CUT_WGSL,
-            include_str!("shadow_mask.wgsl"),
-        ] {
-            let module = naga::front::wgsl::parse_str(src)
-                .unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
-            naga::valid::Validator::new(
-                naga::valid::ValidationFlags::all(),
-                naga::valid::Capabilities::default(),
-            )
-            .validate(&module)
-            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
-        }
     }
 }

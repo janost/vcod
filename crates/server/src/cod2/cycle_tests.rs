@@ -99,7 +99,7 @@ impl Rig {
                     continue;
                 }
                 let pkt = if p.cl.parser.gamestate.is_some() {
-                    let base = p.cl.parser.snapshot().map_or(0, |s| s.server_time);
+                    let base = p.cl.parser.snapshot().map_or(0, |s| s.server_time.raw());
                     let mut cmd = p.cl.idle_cmd(base + FRAME_MS);
                     cmd.buttons = p.buttons;
                     p.cl.build_packet(&[cmd]).unwrap()
@@ -332,6 +332,9 @@ fn the_console_cycles_the_level_and_the_clients_follow() {
     let Some(mut rig) = Rig::new("mp_toujane", "dm", &[]) else {
         return;
     };
+    // A dedicated server builds its world without the lightmap pages.
+    let world = &rig.sv.game.level.as_ref().unwrap().carried_parts().world;
+    assert!(world.lightmaps.is_empty() && world.lightmap_basis.is_empty());
     rig.run(4.0);
     rig.assert_playing("joined");
     assert_eq!(rig.sv.server_id(), 16);
@@ -591,11 +594,6 @@ fn a_gametype_script_from_disk_runs() {
     assert_eq!(probe(&mut sv), "mp_carentan");
 }
 
-/// A map change resumes the gametype's compile from the last level's
-/// instead of compiling it again, and lands where compiling afresh does:
-/// the compile a first load of the map makes, and the configstrings and
-/// baselines of the same map change with nothing carried. A changed
-/// gametype script is compiled afresh.
 /// A `map_restart` or a `fast_restart` takes the level's map parts instead
 /// of reading them again, and still references the iwds a fresh load
 /// does; another map reads its own.
@@ -619,6 +617,11 @@ fn a_reload_of_the_map_reuses_its_parts_and_references_the_same_iwds() {
     assert!(!Rc::ptr_eq(&first, &parts(&rig)));
 }
 
+/// A map change resumes the gametype's compile from the last level's
+/// instead of compiling it again, and lands where compiling afresh does:
+/// the compile a first load of the map makes, and the configstrings and
+/// baselines of the same map change with nothing carried. A changed
+/// gametype script is compiled afresh.
 #[test]
 fn a_map_change_resumes_the_gametype_compile_where_a_fresh_one_lands() {
     let Some(fs) = vcod_common::testing::cod2_fs() else {
@@ -861,4 +864,44 @@ fn a_voted_map_change_keeps_a_slow_loading_client() {
         );
     }
     rig.assert_playing("callvote map");
+}
+
+/// A restart or rotation into a gametype with no script is refused before
+/// the teardown: the level serving stays and nothing is fatal. One whose
+/// script fails to compile after the teardown leaves the fatal the loop
+/// ends the process on.
+#[test]
+fn a_failed_load_keeps_the_level_or_reports_fatal() {
+    let Some(fs) = vcod_common::testing::cod2_fs() else {
+        return;
+    };
+    let fs = Rc::new(fs);
+    let mut cfg = super::tests::cfg("mp_toujane");
+    cfg.gametype = "dm".into();
+    let mut sv = Cod2Server::new(cfg, 7, Instant::now());
+    sv.load(Some(fs)).unwrap();
+    let id = sv.game.server_id;
+    let fatal = |sv: &mut Cod2Server| <Cod2Game as crate::engine::GameModule>::take_fatal(sv);
+    for line in [
+        "g_gametype bogus",
+        "map_restart",
+        "map_rotate",
+        "map mp_toujane",
+    ] {
+        sv.push_console(line);
+    }
+    sv.drain_console(Instant::now());
+    assert!(sv.game.level.is_some());
+    assert_eq!(sv.game.server_id, id, "the level was torn down");
+    assert!(fatal(&mut sv).is_none());
+
+    sv.game.cfg.gametype_script = Some((
+        "maps/mp/gametypes/broken".into(),
+        "main() { level.x = ; }\n".into(),
+    ));
+    sv.push_console("g_gametype broken");
+    sv.push_console("map_restart");
+    sv.drain_console(Instant::now());
+    assert!(sv.game.level.is_none());
+    assert!(fatal(&mut sv).is_some(), "no fatal");
 }

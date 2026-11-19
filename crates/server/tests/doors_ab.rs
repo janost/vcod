@@ -19,7 +19,7 @@
 use crate::common;
 use std::collections::BTreeMap;
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::pk3::Pk3Fs;
 
 const MAP: &str = "mp_carentan";
@@ -27,6 +27,10 @@ const BULLET_HITS: [i32; 3] = [
     vcod_common::net::event_ids::EV_BULLET_HIT_SMALL,
     vcod_common::net::event_ids::EV_BULLET_HIT_LARGE,
     vcod_common::net::event_ids::EV_UO_BULLET_HIT,
+];
+const MELEE: [i32; 2] = [
+    vcod_common::net::event_ids::EV_MELEE_HIT,
+    vcod_common::net::event_ids::EV_MELEE_MISS,
 ];
 const BLOCKS: &str = include_str!("fixtures/doors/mp_carentan-doors.ent");
 
@@ -47,10 +51,7 @@ fn fs_11() -> Option<Pk3Fs> {
 }
 
 fn fs_15() -> Option<Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    let v6 = PROTOCOL_V6.transport.version;
-    let fs = (vcod_server::server::install_protocol(&fs).transport.version == v6).then_some(fs);
-    with_doors(fs)
+    with_doors(vcod_common::testing::game_fs_15())
 }
 
 fn fs_uo() -> Option<Pk3Fs> {
@@ -66,7 +67,7 @@ fn to_done(mut lines: Vec<String>) -> Vec<String> {
     lines
 }
 
-fn check(fs: fn() -> Option<Pk3Fs>, proto: &'static Protocol, fixture: &str, tag: &str) {
+fn check(fs: fn() -> Option<Pk3Fs>, proto: &'static Cod1Wire, fixture: &str, tag: &str) {
     if fs().is_none() {
         eprintln!("COD_DIR unset or not the capture's install: skipping");
         return;
@@ -165,7 +166,7 @@ fn doors_run_as_on_retail_uo() {
 /// <surfType>` for each bullet impact's temp entity as it first comes
 /// (the round on door_h: one on the door, one on the wall behind it).
 pub fn wire_lines<'a>(
-    p: &Protocol,
+    p: &Cod1Wire,
     frames: impl IntoIterator<Item = (i32, &'a BTreeMap<u32, EntityState>)>,
 ) -> Vec<String> {
     let mover = vcod_common::net::cod1::flags::ET_MOVER;
@@ -180,6 +181,19 @@ pub fn wire_lines<'a>(
             if let Some(ev) = p.event_of(etype).filter(|ev| BULLET_HITS.contains(ev)) {
                 if !prev_hits.contains_key(&n) {
                     out.push(format!("W {t} hit {ev} {}", e.field_i32(p, "surfType")));
+                }
+                hits.insert(n, ());
+                continue;
+            }
+            if let Some(ev) = p.event_of(etype).filter(|ev| MELEE.contains(ev)) {
+                if !prev_hits.contains_key(&n) {
+                    let f = |name: &str| e.field_i32(p, name);
+                    out.push(format!(
+                        "W {t} melee {ev} {} {} {}",
+                        f("otherEntityNum"),
+                        f("eventParm"),
+                        f("surfType")
+                    ));
                 }
                 hits.insert(n, ());
                 continue;
@@ -222,7 +236,7 @@ pub fn wire_lines<'a>(
 }
 
 /// [`wire_lines`] off a committed capture pair `net/*-<tag>.bin`.
-fn retail_wire(p: &Protocol, tag: &str) -> Vec<String> {
+fn retail_wire(p: &Cod1Wire, tag: &str) -> Vec<String> {
     let frames = vcod_common::testing::fixture_frames(
         p,
         &format!("net/gamestate-{tag}.bin"),
@@ -232,6 +246,6 @@ fn retail_wire(p: &Protocol, tag: &str) -> Vec<String> {
         p,
         frames
             .iter()
-            .map(|f| (f.snapshot.server_time, &f.snapshot.entities)),
+            .map(|f| (f.snapshot.server_time.raw(), &f.snapshot.entities)),
     )
 }

@@ -43,16 +43,12 @@ const SCRIPT: &str =
 /// Our run of the probe on `map`; with `shooter`, client 0 joins and holds
 /// the trigger from its placement for `ms` past it.
 fn ours(fs: vcod_common::pk3::Pk3Fs, map: &str, uo: bool, shooter: bool, ms: i64) -> Vec<String> {
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_scriptmodel"), now);
-    if uo {
-        sv.set_protocol(&PROTOCOL_V22);
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(if uo { &PROTOCOL_V22 } else { &PROTOCOL_V1 }),
+        script: Some(SCRIPT),
+        ..common::Boot::new(map, "probe_scriptmodel")
     }
-    sv.overlay_script("maps/mp/gametypes/probe_scriptmodel", SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     if !shooter {
         common::run_alone(&mut sv, &mut now, 3000);
         return sv.script_log().to_vec();
@@ -286,7 +282,6 @@ fn ours_pair_on(
 /// both clients join on the capture's clock and the target sends the
 /// capture's cmds (`ProbeHold::times`): where his drop onto the grade
 /// settles, and the prone body it leaves, rides them.
-#[allow(clippy::too_many_arguments)]
 fn ours_pair_in(
     fs: vcod_common::pk3::Pk3Fs,
     map: &str,
@@ -325,7 +320,7 @@ fn ours_pair_in(
 /// [`TARGET_PLAYS_AFTER_JOIN_MS`] says, and the target's first playing
 /// snapshot time. `part` is `probe_part`'s value, then any more of the
 /// probe's cvars as `name value` words.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn ours_pair_run(
     fs: Rc<vcod_common::pk3::Pk3Fs>,
     map: &str,
@@ -485,7 +480,7 @@ fn ours_pair_run(
             send(ca, &mut ha, buttons, selected);
         }
         if prone && live(&cb) {
-            played.get_or_insert(cb.snapshots().newest().unwrap().server_time as i64);
+            played.get_or_insert(cb.snapshots().newest().unwrap().server_time.raw() as i64);
             let mut cmds = hb.cmds(&cb, 0);
             for c in &mut cmds {
                 c.wbuttons |= vcod_common::net::msg::WBUTTON_PRONE;
@@ -531,7 +526,7 @@ fn ours_pair_run(
                 if i("eType") == 4 {
                     missiles.push(format!(
                         "VEH {} missile {num} type {} bits {:#x} {:#x} {:#x} ground {}",
-                        snap.server_time,
+                        snap.server_time.raw(),
                         i("pos.trType"),
                         i("pos.trBase[0]"),
                         i("pos.trBase[1]"),
@@ -998,13 +993,9 @@ fn a_frag_rolls_down_terrain_like_retail() {
 /// install.
 #[test]
 fn a_frag_rolls_up_terrain_like_retail_on_15() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     compare_rolls(
         fs,
         include_str!("fixtures/scriptmodel/mp_brecourt-scriptmodel-roll-1.5.txt"),
@@ -1128,20 +1119,16 @@ fn shooter_origins(lines: &[String]) -> Vec<[f32; 3]> {
 
 /// mp_carentan on 1.5b: each frag leaves from the thrower's unsnapped
 /// origin plus the eye's 60, untruncated, where 1.1d truncates the origin
-/// and the point (docs/research/cod11-combat.md 2.1, "1.5 and United
-/// Offensive"). The thrower spawns where retail's did, lands on its grade
+/// and the point (docs/research/cod11-combat.md 2.1, "United Offensive and
+/// 1.5"). The thrower spawns where retail's did, lands on its grade
 /// moving and slides off the site to retail's float (2.1, "The thrower's
 /// slide"), so both frags leave from retail's point. Each frag rests with
 /// retail's ground (12.6). Runs only with `COD_DIR` at a 1.5 install.
 #[test]
 fn a_frag_leaves_15s_untruncated_muzzle() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     compare_throw_starts(
         fs,
         include_str!("fixtures/scriptmodel/mp_carentan-scriptmodel-throw-1.5.txt"),
@@ -1160,7 +1147,7 @@ const LEVEL_SPAWN_15: [f32; 3] = [1080.0, 3488.0, -23.875];
 const LEVEL_SPAWN_UO: [f32; 3] = [1800.0, 2696.0, -23.875];
 
 /// mp_carentan on 1.5b, the target lying still with the body his drop
-/// left (cod15-movement.md 4, "The airborne prone body"): the first frag
+/// left (cod15-movement.md 4.1, "The airborne prone body"): the first frag
 /// strikes his back and comes to rest on it, his number its ground, each
 /// on retail's bits, not snapped 1.5 up onto his bones
 /// as 1.1's would be (12.2); moved off, he leaves it to 1.5's fall test,
@@ -1199,13 +1186,9 @@ fn a_frag_rests_on_a_prone_players_back_on_15() {
 /// ground and base bits, the strike on him too.
 #[test]
 fn a_frag_rests_on_a_prone_players_back_like_retail_on_15() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     let fixture =
         include_str!("fixtures/scriptmodel/mp_carentan-scriptmodel-prone-rest-1.5-cmds.txt");
     prone_back_gate(fs, fixture, landed(fixture), true);

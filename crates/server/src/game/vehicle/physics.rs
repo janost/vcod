@@ -19,7 +19,7 @@ pub const ENTITYNUM_WORLD: u32 = 1022;
 pub const ENTITYNUM_NONE: u32 = 1023;
 /// `ent+0x1a0` at spawn: what the hull's ground trace and slide clip.
 pub const CLIPMASK: u32 = 0x201;
-const CONTENTS_BODY: u32 = 0x2000000;
+use vcod_common::clipmap::CONTENTS_BODY;
 const CONTENTS_VEHICLE: u32 = 0x800000;
 /// The wheel traces' masks, driven and not (0x81331).
 const WHEEL_MASK_DRIVEN: u32 = 0x10211;
@@ -401,8 +401,11 @@ impl Physics {
         }
     }
 
-    /// The record as `G_SpawnVehicle` leaves it.
+    /// The record as `G_SpawnVehicle` leaves it. An `angles` key past
+    /// [`vcod_common::fguard::FOLD_LIMIT`] is reduced, or the step's 360
+    /// folds would never end.
     pub fn spawn(origin: Vec3, angles: Vec3, model: VehicleModel) -> Physics {
+        let angles = Vec3::from(<[f32; 3]>::from(angles).map(vcod_common::fguard::turns));
         let s = State {
             origin,
             prev_origin: origin,
@@ -694,12 +697,15 @@ impl Physics {
             0.0
         };
         tv.z = lv.z;
-        let pf = if s.angles.x < 0.0 {
-            1.0 - s.angles.x / -90.0
+        // The pitch factor stays on the x87 stack into the product, rounded
+        // to a float once (0x7da19..0x7da63).
+        let ax = f64::from(s.angles.x);
+        let pf = if ax < 0.0 {
+            1.0 - ax / -90.0
         } else {
-            1.0 + s.angles.x / 90.0
+            1.0 + ax / 90.0
         };
-        vmax *= pf;
+        vmax = (f64::from(vmax) * pf) as f32;
         if vmax != 0.0 {
             let l = len(tv);
             if l != 0.0 && vmax < l {
@@ -2097,7 +2103,7 @@ mod tests {
     use super::*;
 
     /// The yaw truncates to 65536ths, toward zero: a coasting hull's rate
-    /// bleeds on it (physics.md 3.5).
+    /// bleeds on it (coduo-vehicles.md 12).
     #[test]
     fn an180_truncates_to_16_bit_units() {
         let unit = 360.0 / 65536.0;
@@ -2263,6 +2269,28 @@ mod tests {
         );
         assert!(push.velocity.x > 0.0, "{:?}", push.velocity);
         assert!(ours.x < 0.8 * info.max_speed, "{ours}");
+    }
+
+    /// A `script_vehicle` whose `angles` key reads 9e9 drives: its spawn
+    /// reduces the angles, so the suspension's 360 folds end.
+    #[test]
+    fn a_vehicle_spawned_at_a_huge_angle_drives() {
+        let info = panzer();
+        let mut p = Physics::spawn(Vec3::new(0.0, 0.0, 0.125), Vec3::splat(9e9), wheels());
+        assert!(p.s.angles.abs().max_element() < 360.0, "{}", p.s.angles);
+        p.init(&info, &FloorAndTank, false);
+        for k in 0..10 {
+            let input = StepInput {
+                now: 1000 + 50 * k,
+                driver: Some(DriveInput {
+                    forward: 127,
+                    ..DriveInput::default()
+                }),
+                driven: true,
+                ..StepInput::default()
+            };
+            p.think(&info, &FloorAndTank, &input);
+        }
     }
 
     /// [`Floor`] with another vehicle's hull, entity 300, all round the
@@ -2455,7 +2483,7 @@ mod tests {
 
     /// From rest under full throttle the Panzer gains `0.05 * accel` a
     /// step up to `0.8 * maxSpeed` (211.2), and the tracks scroll
-    /// `trunc(1.5625 * v)` a step (physics.md 3.2, entity `time`).
+    /// `trunc(1.5625 * v)` a step (entity `time`).
     #[test]
     fn full_throttle_ramps_to_four_fifths_of_max_speed() {
         let info = panzer();

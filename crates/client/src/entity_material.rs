@@ -4,7 +4,7 @@
 //! (the S&D bomb's timer face), else the implicit model skin, one opaque
 //! `lightingDiffuse` stage (0x4fc440). Every model resolves its skins the
 //! same way, props included (docs/research/cod11-shader-scripts.md, section
-//! 8, "Model skin scripts"). Only `lightingDiffuse` stages take the light grid; the
+//! 8.2, "Model skin scripts"). Only `lightingDiffuse` stages take the light grid; the
 //! rest draw their constant or wave colour
 //! (docs/research/cod11-light-grid-and-leaf-lights.md, section 13).
 
@@ -166,8 +166,10 @@ pub fn lit_stages(m: &Material) -> Material {
 /// A `<type>@<image>` skin's `shadertypes/model/<type>.stype`, its
 /// `$texturename` still unbound. `None`, for which retail draws its default
 /// shader (0x4fc0c0 returns 0), without an `@`, with a slash after it,
-/// without the file or a stage, or when a `$texturename` stage's image is
-/// missing ("shadertype '%s' couldn't load image for '%s'").
+/// without the file, or when a `$texturename` stage's image is missing
+/// ("shadertype '%s' couldn't load image for '%s'"). A file with no stage
+/// is `None` too, where retail drops the game (shader doc, "Model skin
+/// scripts"); no stock template has none.
 pub fn template(fs: &dyn AssetSource, skin: &str, warns: &mut WarnSet) -> Option<Shader> {
     let sh = skin_type(skin)
         .and_then(|kind| {
@@ -315,6 +317,14 @@ pub(crate) struct EntSkin {
 /// widest uniform offset alignment so no device limit is needed.
 pub(crate) const ENT_STAGE_STRIDE: u64 = 512;
 const MAX_ENT_STAGES: u32 = 1024;
+
+/// The slots a skin of `stages` stages takes from `next` under `cap`, all
+/// or none: a skin that does not fit draws as the implicit one and takes
+/// no slot.
+fn stage_slots(next: u32, stages: usize, cap: u32) -> Option<std::ops::Range<u32>> {
+    let end = next.checked_add(u32::try_from(stages).ok()?)?;
+    (end <= cap).then_some(next..end)
+}
 const _: () = assert!(STAGE_PARAMS_SIZE <= ENT_STAGE_STRIDE);
 
 /// A stage's blend pair, depth write, depth test and whether a world
@@ -434,7 +444,6 @@ pub(crate) struct PassLayouts<'a> {
 impl EntityMaterials {
     /// Group 3's params buffer and both passes' pipeline layouts. Builds the
     /// opaque pipeline pair up front so both shaders validate at startup.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -633,6 +642,12 @@ impl EntityMaterials {
     /// Forgets every material and stage image, for a map change (retail
     /// reloads them too).
     pub(crate) fn clear(&mut self) {
+        if self.next_slot > 1 {
+            log::info!(
+                "entity materials: {} of {MAX_ENT_STAGES} stage slots used",
+                self.next_slot
+            );
+        }
         self.by_skin.clear();
         self.animated.clear();
         self.images.truncate(1);
@@ -695,7 +710,6 @@ impl EntityMaterials {
         }
     }
 
-    /// The pipeline pairs built so far.
     /// The pipeline keys [`Self::skin`] would build for `skins` not
     /// built yet, read off their materials as it reads them, for
     /// [`Self::prewarm`] to build at once.
@@ -712,11 +726,11 @@ impl EntityMaterials {
             .filter(|s| !self.by_skin.contains_key(s.as_str()))
         {
             let sh = load(fs, lib, skin, &mut self.warns);
+            let Some(slots) = stage_slots(slot, sh.stages.len(), MAX_ENT_STAGES) else {
+                continue;
+            };
+            slot = slots.end;
             for (i, st) in sh.stages.iter().enumerate() {
-                if slot == MAX_ENT_STAGES {
-                    return keys;
-                }
-                slot += 1;
                 let depth_write = sh.classify_stage(i).is_some_and(|c| c.depth_write);
                 keys.push((
                     st.blend.clone(),
@@ -729,6 +743,7 @@ impl EntityMaterials {
         keys
     }
 
+    /// The pipeline pairs built so far.
     #[cfg(test)]
     pub(crate) fn pipeline_count(&self) -> usize {
         self.pipelines.len()
@@ -862,7 +877,6 @@ fn ent_pipeline_to(
 impl EntityMaterials {
     /// A stage image the material names, loaded on first use through the
     /// world's resolution and texture gamma.
-    #[allow(clippy::too_many_arguments)]
     fn own_image(
         &mut self,
         device: &wgpu::Device,
@@ -929,17 +943,14 @@ impl EntityMaterials {
         let mut lit = is_lit(&sh);
         let mut sort = sh.sort;
         let mut stages = Vec::with_capacity(sh.stages.len());
-        for (i, st) in sh.stages.iter().enumerate() {
-            if self.next_slot == MAX_ENT_STAGES {
-                static FULL: std::sync::Once = std::sync::Once::new();
-                FULL.call_once(|| {
-                    log::warn!(
-                        "more than {MAX_ENT_STAGES} entity material stages; the rest draw plain"
-                    )
-                });
-                stages.clear();
-                break;
-            }
+        let fits = stage_slots(self.next_slot, sh.stages.len(), MAX_ENT_STAGES).is_some();
+        if !fits {
+            static FULL: std::sync::Once = std::sync::Once::new();
+            FULL.call_once(|| {
+                log::warn!("more than {MAX_ENT_STAGES} entity material stages; the rest draw plain")
+            });
+        }
+        for (i, st) in sh.stages.iter().enumerate().filter(|_| fits) {
             let b0 = &st.bundles[0];
             let image = match &b0.image {
                 ImageRef::White => StageImage::Own(0),
@@ -1011,14 +1022,15 @@ impl EntityMaterials {
             lit = true;
             sort = SORT_OPAQUE;
         }
-        // `stages` is the material's, one for one (or the fallback alone)
+        // `stages` is the material's, one for one, or the fallback, which
+        // cuts nothing
         let sun_cut = sh
             .stages
             .iter()
             .zip(&stages)
             .find(|(st, _)| st.alpha_func.is_some())
             .map(|(_, d)| d.image)
-            .filter(|_| sh.cookie.sun_caster);
+            .filter(|_| fits && sh.cookie.sun_caster);
         let out = Rc::new(EntSkin {
             stages,
             lit,
@@ -1267,7 +1279,9 @@ fn probe_array(
 ) -> wgpu::TextureView {
     let levels_of = |p: &vcod_common::mapworld::ProbeCube| p.faces.first().map_or(1, Vec::len);
     let first = probes.iter().find(|p| p.size > 0 && p.faces.len() == 6);
-    let (size, levels) = first.map_or((1, 1), |p| (p.size, levels_of(p)));
+    let (size, chain) = first.map_or((1, 1), |p| (p.size, levels_of(p)));
+    // A chain longer than the size allows fails validation: cut it.
+    let levels = chain.min(size.ilog2() as usize + 1);
     // A cube array holds six layers a probe; mp_cargoship has more probes
     // than wgpu's default 256 layers hold (cod4-world.md 9.7). Probes past
     // the device's limit stay unbound.
@@ -1290,11 +1304,11 @@ fn probe_array(
         view_formats: &[],
     });
     let fits = |p: &&vcod_common::mapworld::ProbeCube| {
-        p.size == size && p.faces.len() == 6 && p.faces.iter().all(|f| f.len() == levels)
+        p.size == size && p.faces.len() == 6 && p.faces.iter().all(|f| f.len() == chain)
     };
     for (i, p) in probes.iter().enumerate().filter(|(_, p)| fits(p)) {
         for (face, chain) in p.faces.iter().enumerate() {
-            for (level, px) in chain.iter().enumerate() {
+            for (level, px) in chain.iter().take(levels).enumerate() {
                 let side = (size >> level).max(1);
                 if px.len() != (4 * side * side) as usize {
                     continue;
@@ -1408,6 +1422,17 @@ pub(crate) fn wgpu_blend_factor(f: &BlendFactor) -> wgpu::BlendFactor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A skin takes all its stage slots or none: past the cap it draws the
+    /// implicit stage and leaves the slots for a smaller skin (TEST-045).
+    #[test]
+    fn a_skin_takes_all_its_stage_slots_or_none() {
+        assert_eq!(stage_slots(1, 3, 8), Some(1..4));
+        assert_eq!(stage_slots(6, 2, 8), Some(6..8));
+        assert_eq!(stage_slots(6, 3, 8), None);
+        assert_eq!(stage_slots(7, 0, 8), Some(7..7));
+        assert_eq!(stage_slots(u32::MAX, 1, u32::MAX), None);
+    }
     use vcod_common::shader::{AlphaFunc, BlendFactor, WaveForm};
 
     const OBJECTIVE: &str = "{ { map $texturename rgbGen lightingDiffuse } \
@@ -1640,14 +1665,8 @@ mod tests {
     /// (the map sweep's 2012 validation errors).
     #[test]
     fn probes_past_the_layer_limit_leave_a_valid_array() {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
-            eprintln!("no adapter; skipped");
-            return;
-        };
-        let Ok((device, queue)) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        let Some((device, queue)) =
+            crate::renderer::headless::test_device(crate::renderer::headless::Need::Any)
         else {
             return;
         };
@@ -1658,6 +1677,27 @@ mod tests {
         let n = device.limits().max_texture_array_layers as usize / 6 + 5;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let _view = probe_array(&device, &queue, &vec![cube; n]);
+        let err = pollster::block_on(scope.pop());
+        assert!(err.is_none(), "{err:?}");
+    }
+
+    /// A probe whose chain runs past what its size holds (a non-square
+    /// cube's) uploads its first levels, not an invalid texture.
+    #[test]
+    fn a_probe_with_too_many_levels_leaves_a_valid_array() {
+        let Some((device, queue)) =
+            crate::renderer::headless::test_device(crate::renderer::headless::Need::Any)
+        else {
+            return;
+        };
+        // A 2x2 cube holds 2 levels; this one carries 4.
+        let chain = vec![vec![9; 16], vec![9; 4], vec![9; 4], vec![9; 4]];
+        let cube = vcod_common::mapworld::ProbeCube {
+            size: 2,
+            faces: vec![chain; 6],
+        };
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let _view = probe_array(&device, &queue, &[cube]);
         let err = pollster::block_on(scope.pop());
         assert!(err.is_none(), "{err:?}");
     }

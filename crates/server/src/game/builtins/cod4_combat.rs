@@ -6,12 +6,13 @@
 //! lands on what the scripts read at once. `cod4_combat_ab` and
 //! `cod4::capture_ab` check it against retail captures.
 
+use crate::game::slot::ClientSlot;
 use vcod_cod4::pmove::anim::EventAnim;
 use vcod_gsc::{Cx, EntId, ErrorKind, Target, Value};
 
+use super::Builtin;
 use super::client::client_receiver;
 use super::cod4_client::{weapon_arg, with_loadout};
-use super::score::Builtin;
 use crate::game::cod4::combat::{Damage4, HITLOC_NAMES, Item4, ev};
 use crate::game::host::GameHost;
 use crate::game::temp_entity::{Scope, TempEntity};
@@ -40,7 +41,7 @@ fn get_player_angles(
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     Ok(Value::Vector(
         host.cod4()
             .view_angles
@@ -172,8 +173,10 @@ impl Hit {
             _ => None,
         };
         let attacker = entity_or_world(&args[1]);
-        let is_player = matches!(args[1], Value::Entity(a)
-            if host.ents.get(a).is_some_and(|e| e.client.is_some()));
+        let attacker_slot = match args[1] {
+            Value::Entity(a) => ClientSlot::of_entity(&host.ents, a).map(ClientSlot::index),
+            _ => None,
+        };
         let weapon_num = string(cx, &args[5])
             .and_then(|w| host.cod4().table.index(&w))
             .unwrap_or(0);
@@ -184,7 +187,7 @@ impl Hit {
         Ok(Hit {
             inflictor: entity_or_world(&args[0]),
             attacker,
-            attacker_slot: is_player.then_some(attacker.0 as usize),
+            attacker_slot,
             damage,
             dflags: number(&args[3])?,
             means: args[4],
@@ -257,7 +260,7 @@ fn finish_player_damage(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     if args.len() < 9 {
         return Err(ErrorKind::BadType("finishPlayerDamage takes ten arguments"));
     }
@@ -269,7 +272,7 @@ fn finish_player_damage(
         return Ok(Value::Undefined);
     }
     let hit = Hit::read(host, cx, args, damage)?;
-    if host.client_vitals[slot].dead {
+    if host.clients[slot].vitals.dead {
         return Err(ErrorKind::Custom(
             "Trying to do damage to a client that is already dead".into(),
         ));
@@ -277,7 +280,7 @@ fn finish_player_damage(
     push_mirrors(host, slot, &hit);
     let outcome = {
         let client = &host.cod4().clients[slot];
-        if host.client_vitals[slot].health > damage {
+        if host.clients[slot].vitals.health > damage {
             Outcome::Hurt
         } else if !client.last_stand && client.perks & PERK_PISTOL_DEATH != 0 {
             Outcome::Down
@@ -286,7 +289,7 @@ fn finish_player_damage(
         }
     };
     flesh_events(host, cx, slot, &hit, outcome == Outcome::Killed);
-    host.client_vitals[slot].health -= damage;
+    host.clients[slot].vitals.health -= damage;
     if let Some(r) = recv {
         let event = cx.intern_folded("damage");
         cx.notify(
@@ -402,7 +405,7 @@ fn kill(host: &mut GameHost, cx: &mut Cx, slot: usize, recv: Option<Target>, hit
     }
     host.cod4_mut().damage_ops.push(op);
     host.die(slot);
-    host.client_vitals[slot].health = 0;
+    host.clients[slot].vitals.health = 0;
     host.cod4_mut().callback = crate::game::host::Cod2CallbackArgs {
         time_offset: hit.time_offset,
         death_anim_duration: death.map_or(0, |d| d.duration),
@@ -475,8 +478,13 @@ fn suicide(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
-    if host.client_vitals.get(slot).is_none_or(|v| v.dead) {
+    let slot = client_receiver(host, recv)?.index();
+    if host
+        .clients
+        .get(slot)
+        .map(|c| &c.vitals)
+        .is_none_or(|v| v.dead)
+    {
         return Ok(Value::Undefined);
     }
     death_grenades(host, cx, slot, recv, "MOD_SUICIDE");
@@ -492,7 +500,7 @@ fn suicide(
         dead_yaw: None,
     });
     host.die(slot);
-    host.client_vitals[slot].health = 0;
+    host.clients[slot].vitals.health = 0;
     let Some(me) = host.ents.handle(slot as u32) else {
         return Ok(Value::Undefined);
     };
@@ -673,7 +681,7 @@ fn clone_player(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let p = &crate::game::cod4::COD4_HOST_PROTO;
     // The clone's think, `BodyEnd`, takes the fresh bit out
     // `deathAnimDuration` after its birth (cod4-combat.md 5).
@@ -757,7 +765,7 @@ fn drop_item(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(weapon) = weapon_arg(host, cx, args.first())? else {
         return Ok(Value::Undefined);
     };
@@ -959,7 +967,7 @@ fn hold_dropped(host: &mut GameHost, cx: &mut Cx, id: EntId, taking: Option<EntI
         );
         if let Some(e) = host.cod4().dropped_weapons[k] {
             host.cod4_mut().items.retain(|i| i.id != e);
-            host.ents.free(e);
+            host.free_entity(e);
         }
         k
     });
@@ -996,7 +1004,7 @@ fn any_ammo_for_weapon_modes(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(weapon) = weapon_arg(host, cx, args.first())? else {
         return Ok(Value::Int(0));
     };
@@ -1017,34 +1025,56 @@ fn any_ammo_for_weapon_modes(
     Ok(Value::Int(i32::from(any)))
 }
 
-/// `self isOnLadder()`: `pm_flags`' ladder bit as the last cmd left it.
+/// `self isOnLadder()` (0x80c5040): `pm_flags`' ladder bit as the last cmd left it.
 fn is_on_ladder(
     host: &mut GameHost,
     _: &mut Cx,
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let pm = host.cod4().pm_flags.get(slot).copied().unwrap_or(0);
     Ok(Value::Int(i32::from(
         pm & vcod_cod4::pmove::pmf::LADDER != 0,
     )))
 }
 
-/// `self isMantling()`: never; the mantle is not modelled.
+/// `self isMantling()` (0x80c4fc8): `pm_flags`' mantle bit as the last cmd
+/// left it.
 fn is_mantling(
     host: &mut GameHost,
     _: &mut Cx,
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    client_receiver(host, recv)?;
-    Ok(Value::Int(0))
+    let slot = client_receiver(host, recv)?.index();
+    let pm = host.cod4().pm_flags.get(slot).copied().unwrap_or(0);
+    Ok(Value::Int(i32::from(
+        pm & vcod_cod4::pmove::pmf::MANTLE != 0,
+    )))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `isMantling` reads `pm_flags`' 0x4 as `isOnLadder` reads 0x8
+    /// (BUG-023: it answered 0 always).
+    #[test]
+    fn is_mantling_reads_the_mantle_bit() {
+        let mut vm = vcod_gsc::Vm::new();
+        let mut host = GameHost::new(&crate::game::profile::COD4, vec![String::new(); 2048]);
+        vm.with_cx(|cx| {
+            host.connect_client(cx, 0, "a").unwrap();
+            let me = Some(Target::Entity(host.ents.handle(0).unwrap()));
+            host.cod4_mut().pm_flags = vec![vcod_cod4::pmove::pmf::MANTLE; 1];
+            assert_eq!(is_mantling(&mut host, cx, me, &[]), Ok(Value::Int(1)));
+            assert_eq!(is_on_ladder(&mut host, cx, me, &[]), Ok(Value::Int(0)));
+            host.cod4_mut().pm_flags[0] = vcod_cod4::pmove::pmf::LADDER;
+            assert_eq!(is_mantling(&mut host, cx, me, &[]), Ok(Value::Int(0)));
+            assert_eq!(is_on_ladder(&mut host, cx, me, &[]), Ok(Value::Int(1)));
+        });
+    }
 
     /// An M16 item (weapon 27) at `x` on the level's list.
     fn item(host: &mut GameHost, cx: &mut Cx, x: f32) -> EntId {

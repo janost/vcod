@@ -8,8 +8,7 @@ use std::time::Instant;
 use vcod_cod4::net::stats::{STAT_CHUNK, STAT_PACKETS, STATS_BYTES};
 
 use super::{Cod4Server, State};
-use crate::engine::link;
-use crate::rcon::{Redirect, Verdict};
+use crate::rcon::Redirect;
 
 /// The engine dvars the info strings read, at the values the 1.7 captures
 /// carry (VERIFIED live, `handshake-1.7.txt`'s configstrings 0 and 1 and
@@ -52,8 +51,10 @@ pub(super) const ENGINE_CVARS: &[(&str, &str)] = &[
     // (cod4-server-frame.md 5). An empty `sv_master1` beats master.cod.pm.
     ("dedicated", "1"),
     ("sv_master1", ""),
-    // Registered defaults; `sv_timeout`'s
-    // 240 is Q3's.
+    // The timeout and ban defaults here are unverified on 1.7. `sv_timeout`,
+    // `sv_zombietime`, `sv_reconnectlimit` and `sv_kickBanTime` are CoD2
+    // 1.3's `SV_Init` values (cod2-protocol.md 17.1, 17.3, 17.7);
+    // `sv_connectTimeout`'s 45 has no source in the docs.
     ("sv_timeout", "240"),
     // `SV_Init`'s int dvar (0x81735c8): 20, 10..1000, read every frame
     // (cod4-server-frame.md 8).
@@ -361,7 +362,13 @@ impl Cod4Server {
             return;
         };
         let arg = |i: usize| args.get(i).map_or("", String::as_str);
-        match cmd.to_ascii_lowercase().as_str() {
+        let cmd = cmd.to_ascii_lowercase();
+        // vcod's own limiter (`engine::ratelimit`); retail answers every query.
+        if self.core.limiter.limited(&cmd, from.ip(), now) {
+            log::debug!("cod4: {from}: {cmd} rate limited");
+            return;
+        }
+        match cmd.as_str() {
             "getstatus" => {
                 crate::engine::answer_status(self, from, crate::engine::StatusQuery::Status, arg(1))
             }
@@ -369,7 +376,7 @@ impl Cod4Server {
                 crate::engine::answer_status(self, from, crate::engine::StatusQuery::Info, arg(1))
             }
             "getchallenge" => self.get_challenge(from, arg(2)),
-            "connect" => self.direct_connect(from, arg(1), now),
+            "connect" => self.direct_connect(from, arg(1)),
             "stats" => self.receive_stats(from, &payload[text.len().min(payload.len())..]),
             "rcon" => self.remote_command(from, &args, now),
             // `v\0` and the binary rest (0x81776e9).
@@ -384,7 +391,9 @@ impl Cod4Server {
     /// authorize server first and answers only on its `accept` or after it
     /// has been silent 20 min (cod4-handshake.md 15); vcod skips that round
     /// trip and answers every address as retail answers the LAN. The hex
-    /// is kept as the GUID the connect takes.
+    /// goes into the slot as the GUID the connect takes. With no authorize
+    /// tying the hex to a key, an off-LAN address is banned beside it
+    /// ([`address_guid`]).
     fn get_challenge(&mut self, from: SocketAddr, guid: &str) {
         let svs = self.core.sv_time_ms;
         // Two draws off the process's `rand()` (0x816f394), the level's
@@ -402,12 +411,17 @@ impl Cod4Server {
             .challenges
             .issue(from, svs, || (draw() << 16) ^ draw() ^ svs);
         drop(draw);
-        let kind = if self.core.bans.lists_guid(guid) {
+        let addr = address_guid(from);
+        let kind = if self.core.bans.lists_guid(guid)
+            || addr
+                .as_deref()
+                .is_some_and(|a| self.core.bans.lists_guid(a))
+        {
             "permanently"
-        } else if self.temp_banned(guid) {
+        } else if self.temp_banned(guid, addr.as_deref()) {
             "temporarily"
         } else {
-            self.game.guids.insert(from, guid.to_string());
+            self.core.challenges.keep_guid(from, guid);
             self.send_oob(from, &format!("challengeResponse {challenge}"));
             return;
         };
@@ -421,92 +435,21 @@ impl Cod4Server {
     }
 
     /// `SV_DirectConnect` on a plain-text `connect "<userinfo>"`: the
-    /// protocol (`EXE_SERVER_IS_DIFFERENT_VER\x151.7`, VERIFIED live), the
-    /// reconnect limit, the challenge, a slot, `g_password`, then
+    /// engine's checks and slot ([`crate::engine::conn`]; the refusal
+    /// `EXE_SERVER_IS_DIFFERENT_VER\x151.7`, VERIFIED live), the GUID the
+    /// challenge kept (the connect reads no ban), `ClientConnect`, then
     /// `connectResponse ` with `fs_game` after the space (VERIFIED live).
-    fn direct_connect(&mut self, from: SocketAddr, userinfo: &str, _now: Instant) {
-        let svs = self.core.sv_time_ms;
-        let key = |k: &str| vcod_common::net::info_value_for_key(userinfo, k).unwrap_or("");
-        let atoi = crate::game::builtins::cvar::atoi;
-        if atoi(key("protocol")) != PROTOCOL as i32 {
-            self.send_oob(from, "error\nEXE_SERVER_IS_DIFFERENT_VER\u{15}1.7\n");
-            return;
-        }
-        let challenge = atoi(key("challenge"));
-        let qport = atoi(key("qport")) as u16;
-        let same = |c: &super::Client| {
-            c.link.addr.ip() == from.ip()
-                && (c.link.netchan.qport == qport || c.link.addr.port() == from.port())
-        };
-        let limit = self.int("sv_reconnectlimit") * 1000;
-        if self
-            .core
-            .clients
-            .iter()
-            .flatten()
-            .find(|c| same(c))
-            .is_some_and(|c| svs - c.last_connect_ms < limit)
-        {
-            log::debug!("cod4: {from}: reconnect rejected: too soon");
-            return;
-        }
-        let Some((ci, ping)) = self.core.challenges.connect(from, challenge, svs) else {
-            self.send_oob(from, "error\nEXE_BAD_CHALLENGE");
+    fn direct_connect(&mut self, from: SocketAddr, userinfo: &str) {
+        let Some(a) = self.connect_slot(from, userinfo) else {
             return;
         };
-        log::info!("Client {ci} connecting with {ping} challenge ping from {from}");
-        // `sv_minPing` and `sv_maxPing` hold off-LAN clients only
-        // (0x8171847..0x8171a1e), past the slot's `connected` mark.
-        if !link::Lan::Cod2.is_lan(from.ip()) {
-            let (min, max) = (self.int("sv_minPing"), self.int("sv_maxPing"));
-            if min != 0 && ping < min {
-                self.send_oob(from, "error\nEXE_ERR_HIGH_PING_ONLY");
-                return;
-            }
-            if max != 0 && ping > max {
-                self.send_oob(from, "error\nEXE_ERR_LOW_PING_ONLY");
-                return;
-            }
-        }
-        let slot = match self
-            .core
-            .clients
-            .iter()
-            .position(|c| c.as_ref().is_some_and(same))
-        {
-            // A reconnect into a live slot frees the old client first
-            // (`SV_FreeClient`, so `ClientDisconnect`); a zombie's ran at
-            // its drop (cod4-handshake.md, "Reconnects").
-            Some(slot) => {
-                if self.core.clients[slot]
-                    .as_ref()
-                    .is_some_and(|c| c.state > State::Zombie)
-                    && let Some(level) = self.game.level.as_mut()
-                {
-                    level.disconnect(slot);
-                }
-                slot
-            }
-            None => match self.core.clients.iter().position(Option::is_none) {
-                Some(slot) => slot,
-                None => {
-                    self.send_oob(from, "error\nEXE_SERVERISFULL");
-                    return;
-                }
-            },
-        };
-        let gp = self.game.cvars().get("g_password");
-        if !gp.is_empty() && gp != key("password") {
-            self.send_oob(from, "error\nGAME_INVALIDPASSWORD");
-            return;
-        }
-        // The bans were read at `getchallenge`; the connect reads none.
-        let guid = self.game.guids.get(&from).cloned().unwrap_or_default();
-        self.admit(slot, from, qport, challenge, guid.clone(), userinfo);
-        self.core.challenges.taken(ci);
+        let guid = self.core.challenges.guid(a.ci).to_string();
+        self.admit(a.slot, from, a.qport, a.challenge, guid.clone(), userinfo);
+        self.core.challenges.taken(a.ci);
+        let name = vcod_common::net::info_value_for_key(userinfo, "name").unwrap_or("");
         log::info!(
-            "cod4: {from} connected as client {slot} ({}, guid {guid:?})",
-            key("name")
+            "cod4: {from} connected as client {} ({name}, guid {guid:?})",
+            a.slot
         );
         let fs_game = self.game.cvars().get("fs_game").to_string();
         self.send_oob(from, &format!("connectResponse {fs_game}"));
@@ -526,8 +469,12 @@ impl Cod4Server {
         let qport = u16::from_le_bytes([body[0], body[1]]);
         let idx = usize::from(body[2]);
         let data = &body[3..];
-        let Some(slot) = self.slot_of(from, qport) else {
-            log::warn!("Received stats packet from unknown remote client {from}");
+        // vcod takes the slot's own address only, and logs a miss at debug:
+        // the line is retail's, but anyone can send the packet.
+        let Some(slot) = crate::engine::conn::slot_of(&self.core, from, qport)
+            .filter(|&s| self.core.clients[s].as_ref().unwrap().link.addr == from)
+        else {
+            log::debug!("Received stats packet from unknown remote client {from}");
             return;
         };
         if idx >= STAT_PACKETS {
@@ -542,126 +489,27 @@ impl Cod4Server {
         }
         let svs = self.core.sv_time_ms;
         let c = self.core.clients[slot].as_mut().unwrap();
-        log::debug!("Received packet {idx} of stats data");
-        c.stats.0[start..start + len].copy_from_slice(&data[..len]);
-        c.stat_packets |= 1 << idx;
-        c.link.last_packet_ms = svs;
-        let left = !c.stat_packets & 0x7f;
-        if left == 0
-            && let Some(level) = self.game.level.as_mut()
-        {
-            level.set_stats(slot, &c.stats);
+        // Only a slot waiting for its gamestate (after `connect`, or after
+        // a map change's `requeststats`) takes stats; any other answers
+        // with its mask and keeps its block (vcod's, cod4-handshake.md 3).
+        if c.state == State::Connected {
+            log::debug!("Received packet {idx} of stats data");
+            c.extra.stats.0[start..start + len].copy_from_slice(&data[..len]);
+            c.extra.stat_packets |= 1 << idx;
+            c.link.last_packet_ms = svs;
+            if c.extra.stat_packets == 0x7f
+                && let Some(level) = self.game.level.as_mut()
+            {
+                level.set_stats(slot, &c.extra.stats);
+            }
         }
+        let left = !c.extra.stat_packets & 0x7f;
         self.send_oob(from, &format!("statResponse {left}"));
     }
 
-    /// `SVC_Info`, its keys in their order (VERIFIED live; 1.7's `hw` is
-    /// 1).
-    pub(super) fn svc_info(&mut self, challenge: &str) -> String {
-        let int = |s: &Self, n: &str| s.int(n);
-        let mut i = vcod_common::net::connectionless::Info::new();
-        i.set("challenge", challenge);
-        i.set("protocol", PROTOCOL);
-        i.set("hostname", &self.game.cfg.hostname);
-        i.set("mapname", &self.game.cfg.map);
-        let clients = self.client_count();
-        if clients > 0 {
-            i.set("clients", clients);
-        }
-        i.set("sv_maxclients", self.core.clients.len());
-        i.set("gametype", &self.game.cfg.gametype);
-        if self.pure() {
-            i.set("pure", 1);
-        }
-        for (key, cvar) in [("minPing", "sv_minPing"), ("maxPing", "sv_maxPing")] {
-            let v = int(self, cvar);
-            if v != 0 {
-                i.set(key, v);
-            }
-        }
-        i.set("game", self.game.cvars().get("fs_game"));
-        for (key, cvar) in [
-            ("sv_allowAnonymous", "sv_allowAnonymous"),
-            ("con_disabled", "sv_disableClientConsole"),
-        ] {
-            let v = int(self, cvar);
-            if v != 0 {
-                i.set(key, v);
-            }
-        }
-        if !self.game.cvars().get("g_password").is_empty() {
-            i.set("pswrd", 1);
-        }
-        for (key, cvar) in [("ff", "scr_team_fftype"), ("kc", "scr_game_allowkillcam")] {
-            let v = int(self, cvar);
-            if v != 0 {
-                i.set(key, v);
-            }
-        }
-        i.set("hw", 1);
-        i.set("mod", u8::from(self.modded()));
-        i.set("voice", int(self, "sv_voice"));
-        i.set("pb", int(self, "sv_punkbuster"));
-        format!("infoResponse\n{i}")
-    }
-
     /// `mod`: 1 off pure or with `fs_game`.
-    fn modded(&self) -> bool {
+    pub(super) fn modded(&self) -> bool {
         !self.pure() || !self.game.cvars().get("fs_game").is_empty()
-    }
-
-    /// `SVC_Status`: the serverinfo with `challenge`, `pswrd` and `mod`
-    /// appended, then a `score ping "name"` line for each client past
-    /// `CS_ZOMBIE`, the score `G_GetClientScore`'s (0x81764a2;
-    /// cod4-handshake.md 14).
-    pub(super) fn svc_status(&mut self, challenge: &str) -> String {
-        let mut info = self.core.configstrings[0].clone();
-        let mut add = |k: &str, v: String| {
-            if !v.is_empty() {
-                info.push_str(&format!("\\{k}\\{v}"));
-            }
-        };
-        add("challenge", challenge.to_string());
-        add(
-            "pswrd",
-            u8::from(!self.game.cvars().get("g_password").is_empty()).to_string(),
-        );
-        add("mod", u8::from(self.modded()).to_string());
-        let mut text = format!("statusResponse\n{info}\n");
-        for slot in 0..self.core.clients.len() {
-            let score = self.client_score(slot);
-            let Some(c) = self.core.clients[slot].as_ref() else {
-                continue;
-            };
-            if c.state >= State::Connected {
-                let name = super::client_name(&c.link.userinfo);
-                text.push_str(&format!("{score} {} \"{name}\"\n", c.link.ping));
-            }
-        }
-        text
-    }
-
-    /// `SVC_RemoteCommand` (`cod4_lnxded` 0x817818a): `rcon_password`, the
-    /// output as `print` packets, 1.7's refusals (cod4-handshake.md 14.2).
-    fn remote_command(&mut self, from: SocketAddr, args: &[String], now: Instant) {
-        let password = self.game.cvars().get("rcon_password").to_string();
-        let mut out = Redirect::default();
-        let verdict = self.core.rcon.check(&password, args, now);
-        match verdict {
-            Verdict::Limited => return,
-            Verdict::NoPassword | Verdict::BadPassword => {
-                out.print(verdict.login_refusal(args).unwrap_or_default())
-            }
-            Verdict::Run(None) => {}
-            Verdict::Run(Some(line)) => self.exec(&line, &mut out),
-        }
-        // `killserver` ends the redirect with the server: nothing answers.
-        if self.game.killed {
-            return;
-        }
-        for text in out.finish() {
-            self.send_oob(from, &text);
-        }
     }
 
     /// The console: `status`, `serverinfo`, `systeminfo`, `clientkick`,
@@ -699,7 +547,7 @@ impl Cod4Server {
                     let line = format!(
                         "{slot:3} {:5} {ping}{:>32} {name}^7{:pad$}{:7} {:<22}{:5} {:5}\n",
                         score,
-                        c.guid,
+                        c.extra.guid,
                         "",
                         self.core.sv_time_ms - c.link.last_packet_ms,
                         c.link.addr.to_string(),
@@ -710,16 +558,9 @@ impl Cod4Server {
                     out.print(&line);
                 }
             }
-            "serverinfo" | "systeminfo" => {
-                let (info, head) = if cmd.eq_ignore_ascii_case("serverinfo") {
-                    (&self.core.configstrings[0], "Server")
-                } else {
-                    (&self.core.configstrings[1], "System")
-                };
-                out.print(&format!("{head} info settings:\n"));
-                for (k, v) in vcod_common::net::connectionless::info_pairs(info) {
-                    out.print(&format!("{k:<20}{v}\n"));
-                }
+            "serverinfo" | "systeminfo" | "dumpuser" | "tell" | "banuser" | "banclient"
+            | "unbanuser" => {
+                self.console_common(&args, out);
             }
             "clientkick" => {
                 let n = crate::game::builtins::cvar::atoi(arg(1));
@@ -733,44 +574,23 @@ impl Cod4Server {
             }
             "map" | "devmap" => {
                 let devmap = cmd.eq_ignore_ascii_case("devmap");
-                if let Err(e) = self.map_command(arg(1), devmap, out) {
-                    log::error!("cod4: {cmd} {}: {e:#}", arg(1));
-                }
+                let r = self.map_command(arg(1), devmap, out);
+                self.load_failed(&format!("{cmd} {}", arg(1)), r);
             }
             "map_restart" | "fast_restart" => {
-                if let Err(e) = self.map_restart(cmd.eq_ignore_ascii_case("fast_restart")) {
-                    log::error!("cod4: {cmd}: {e:#}");
-                }
+                let r = self.map_restart(cmd.eq_ignore_ascii_case("fast_restart"));
+                self.load_failed(cmd, r);
             }
             "map_rotate" => {
-                if let Err(e) = self.map_rotate(out) {
-                    log::error!("cod4: map_rotate: {e:#}");
-                }
+                let r = self.map_rotate(out);
+                self.load_failed("map_rotate", r);
             }
             "tempbanclient" | "tempbanuser" | "kick" | "onlykick" => {
                 self.kick_command(cmd, &args, out);
             }
-            // `SV_DumpUser_f` (0x816cc0a): `userinfo`, a rule, then the
-            // pairs as `Info_Print` lays them (VERIFIED live).
-            "dumpuser" => {
-                if args.len() != 2 {
-                    out.print("Usage: info <userid>\n");
-                } else if let Some(slot) = self.find_client(true, arg(1), out) {
-                    let info = self.core.clients[slot]
-                        .as_ref()
-                        .unwrap()
-                        .link
-                        .userinfo
-                        .clone();
-                    out.print("userinfo\n--------\n");
-                    for (k, v) in vcod_common::net::connectionless::info_pairs(&info) {
-                        out.print(&format!("{k:<20}{v}\n"));
-                    }
-                }
-            }
             // `SV_Heartbeat_f` (0x816c180): the next heartbeat is due at
             // once (`svs.nextHeartbeatTime` to INT_MIN).
-            "heartbeat" => self.game.last_beat_ms = None,
+            "heartbeat" => self.core.masters.force(),
             // `SV_KillServer_f` (0x816c2f2): `SV_Shutdown("EXE_SERVERKILLED")`.
             "killserver" => self.kill_server("EXE_SERVERKILLED"),
             // `SV_ConSay_f` (0x816d328) and `SV_ConTell_f` (0x816cca6): the
@@ -778,51 +598,13 @@ impl Cod4Server {
             // chat line `h "\x15console: <text>"` (`%c "\x15%s"`,
             // 0x82300c7) to everyone, or to one client in the world.
             "say" if args.len() > 1 => {
-                let text = args[1..].join(" ");
-                let line = format!("h \"\u{15}console: {}\"", unquote(&text));
+                let line = format!(
+                    "h \"\u{15}console: {}\"",
+                    crate::engine::conn::console_args(&args[1..])
+                );
                 self.send_to_all(&line);
             }
-            "tell" if args.len() > 2 => {
-                let n = crate::game::builtins::cvar::atoi(arg(1));
-                if let Some(slot) = usize::try_from(n).ok().filter(|&s| {
-                    self.core
-                        .clients
-                        .get(s)
-                        .is_some_and(|c| c.as_ref().is_some_and(|c| c.state == State::Active))
-                }) {
-                    let text = args[2..].join(" ");
-                    let line = format!("h \"\u{15}console: {}\"", unquote(&text));
-                    self.send_server_command(slot, &line);
-                }
-            }
-            "say" | "tell" => {}
-            // `banUser` (0x816cbaa) and `banClient` (0x816d012) into
-            // `SV_BanClient` (0x8171360).
-            "banuser" | "banclient" => {
-                let by_name = cmd.eq_ignore_ascii_case("banuser");
-                if args.len() != 2 {
-                    out.print(if by_name {
-                        "Usage: banUser <player name>\n"
-                    } else {
-                        "Usage: banClient <client number>\n"
-                    });
-                } else if let Some(slot) = self.find_client(by_name, arg(1), out) {
-                    self.ban_client(slot, out);
-                }
-            }
-            // `unbanUser` into `SV_UnbanClient` (0x816ea9c).
-            "unbanuser" => {
-                if args.len() != 2 {
-                    out.print("Usage: unban <client name>\n");
-                } else {
-                    let name = crate::game::say::clean_name(arg(1));
-                    match self.core.bans.unban(&name) {
-                        None => {}
-                        Some(0) => out.print(&format!("no banned user has name {name}\n")),
-                        Some(n) => out.print(&format!("unbanned {n} user(s) named {name}\n")),
-                    }
-                }
-            }
+            "say" => {}
             // vcod's bot management (`server/bot_admin.rs`, docs/bots.md).
             "addbot" => crate::server::bot_admin::add_bot_command(self, &args[1..], out),
             "removebot" | "kickbot" => {
@@ -839,7 +621,9 @@ impl Cod4Server {
             }
             "set" | "seta" | "sets" | "setu" => {
                 if args.len() >= 3 {
-                    self.set_cvar(arg(1), &args[2..].join(" "));
+                    if !self.console_set(arg(1), &args[2..].join(" "), out) {
+                        return;
+                    }
                     // `seta` archives the dvar, a registered one too
                     // (VERIFIED live: `seta g_inactivity 5` reached the
                     // next `writeconfig`).
@@ -860,7 +644,7 @@ impl Cod4Server {
                 _ if args.len() != 2 => out.print("USAGE: reset <variable>\n"),
                 Some((n, _, d)) => {
                     let (n, d) = (n.to_string(), d.to_string());
-                    self.set_cvar(&n, &d);
+                    self.console_set(&n, &d, out);
                 }
                 None => {}
             },
@@ -868,7 +652,7 @@ impl Cod4Server {
                 _ if args.len() != 3 => out.print("USAGE: setfromdvar <dest_dvar> <source_dvar>\n"),
                 Some((_, v, _)) => {
                     let v = v.to_string();
-                    self.set_cvar(arg(1), &v);
+                    self.console_set(arg(1), &v, out);
                 }
                 None => out.print(&format!("dvar '{}' doesn't exist\n", arg(2))),
             },
@@ -895,7 +679,7 @@ impl Cod4Server {
             "setdvartotime" => {
                 if args.len() == 2 {
                     let now = self.core.sv_time_ms.to_string();
-                    self.set_cvar(arg(1), &now);
+                    self.console_set(arg(1), &now, out);
                 } else {
                     out.print("USAGE: set <variable>\n");
                 }
@@ -927,7 +711,9 @@ impl Cod4Server {
                                 dom.describe()
                             ));
                         }
-                        _ => self.set_cvar(name, &value),
+                        _ => {
+                            self.console_set(name, &value, out);
+                        }
                     }
                 }
                 // `Dvar_Command`'s print; a dvar a `set` made is a string
@@ -973,9 +759,10 @@ impl Cod4Server {
             return;
         };
         let c = self.core.clients[slot].as_ref().unwrap();
-        let (name, guid) = (
+        let (name, guid, addr) = (
             crate::game::say::clean_name(&super::client_name(&c.link.userinfo)),
-            c.guid.clone(),
+            c.extra.guid.clone(),
+            address_guid(c.link.addr),
         );
         self.kick_slot(slot, out);
         if !cmd.eq_ignore_ascii_case("onlykick") {
@@ -983,17 +770,19 @@ impl Cod4Server {
                 "{name} (guid \"{guid}\") was kicked for cheating\n"
             ));
             let now = self.core.sv_time_ms;
-            self.game.temp_bans.retain(|(g, _)| *g != guid);
+            self.game
+                .temp_bans
+                .retain(|(g, a, _)| *g != guid || *a != addr);
             if self.game.temp_bans.len() == 16 {
                 self.game.temp_bans.remove(0);
             }
-            self.game.temp_bans.push((guid, now));
+            self.game.temp_bans.push((guid, addr, now));
         }
     }
 
     /// `G_GetClientScore` (0x80b384e): the script's `score` (`sess.score`),
     /// 0 for a slot with no entity.
-    fn client_score(&mut self, slot: usize) -> i32 {
+    pub(super) fn client_score(&mut self, slot: usize) -> i32 {
         self.game
             .level
             .as_mut()
@@ -1005,7 +794,12 @@ impl Cod4Server {
     /// `SV_GetPlayerByName` (0x816c1b6), a name as sent or cleaned of
     /// colours, case folded; or by number, a client past `CS_ZOMBIE`. A
     /// miss prints why.
-    fn find_client(&self, by_name: bool, who: &str, out: &mut Redirect) -> Option<usize> {
+    pub(super) fn find_client(
+        &self,
+        by_name: bool,
+        who: &str,
+        out: &mut Redirect,
+    ) -> Option<usize> {
         let found = if by_name {
             (0..self.core.clients.len()).find(|&s| {
                 self.core.clients[s].as_ref().is_some_and(|c| {
@@ -1035,21 +829,32 @@ impl Cod4Server {
 
     /// `SV_BanClient` (0x8171360): a client with no GUID, or one already
     /// in `ban.txt`, is refused with a print; otherwise `%s %s\r\n` (GUID,
-    /// cleaned name) is appended and the client kicked.
-    fn ban_client(&mut self, slot: usize, out: &mut Redirect) {
+    /// cleaned name) is appended and the client kicked. vcod also appends
+    /// an off-LAN client's [`address_guid`], so a client with no GUID can
+    /// be banned and one with a new hex stays out.
+    pub(super) fn ban_client(&mut self, slot: usize, out: &mut Redirect) {
         let Some(c) = self.core.clients[slot].as_ref() else {
             return;
         };
-        let (guid, name) = (
-            c.guid.clone(),
+        let (guid, name, addr) = (
+            c.extra.guid.clone(),
             crate::game::say::clean_name(&super::client_name(&c.link.userinfo)),
+            address_guid(c.link.addr),
         );
-        if guid.is_empty() {
+        let keys: Vec<String> = [Some(guid).filter(|g| !g.is_empty()), addr]
+            .into_iter()
+            .flatten()
+            .collect();
+        if keys.is_empty() {
             out.print("Can't ban user, GUID is unknown\n");
-        } else if self.core.bans.lists_guid(&guid) {
-            out.print(&format!("This GUID ({guid}) is already banned\n"));
+        } else if keys.iter().all(|k| self.core.bans.lists_guid(k)) {
+            out.print(&format!("This GUID ({}) is already banned\n", keys[0]));
         } else {
-            self.core.bans.append_line(&guid, &name);
+            for k in keys {
+                if !self.core.bans.lists_guid(&k) {
+                    self.core.bans.append_line(&k, &name);
+                }
+            }
             self.kick_slot(slot, out);
         }
     }
@@ -1073,16 +878,24 @@ impl Cod4Server {
     }
 
     /// `SV_IsTempBannedGuid`: a GUID a ban named within
-    /// `sv_kickBanTime` seconds.
-    pub(super) fn temp_banned(&self, guid: &str) -> bool {
+    /// `sv_kickBanTime` seconds; vcod's address guid the same.
+    pub(super) fn temp_banned(&self, guid: &str, addr: Option<&str>) -> bool {
         let secs = crate::game::builtins::cvar::atof(self.game.cvars().get("sv_kickBanTime"));
         let now = self.core.sv_time_ms;
-        !guid.is_empty()
-            && self
-                .game
-                .temp_bans
-                .iter()
-                .any(|(g, t)| g == guid && f64::from(secs) * 1000.0 >= f64::from(now - t))
+        self.game.temp_bans.iter().any(|(g, a, t)| {
+            let named = (!guid.is_empty() && g == guid) || (addr.is_some() && a.as_deref() == addr);
+            named && f64::from(secs) * 1000.0 >= f64::from(now - t)
+        })
+    }
+}
+
+/// vcod's stand-in for the authorize server's tie of a GUID to a key: an
+/// off-LAN client's IPv4 address as a signed integer, as CoD1 and CoD2 ban
+/// ([`crate::engine::bans::guid_of`]); `None` on the LAN.
+fn address_guid(addr: SocketAddr) -> Option<String> {
+    match crate::engine::bans::guid_of(crate::engine::Lan::Cod2, addr) {
+        0 => None,
+        g => Some(g.to_string()),
     }
 }
 
@@ -1116,17 +929,32 @@ impl Cod4Server {
             ));
             return;
         };
-        self.set_cvar(&name, &next);
+        if !self.console_set(&name, &next, out) {
+            return;
+        }
         if print {
             out.print(&format!("{name} toggled to {next}\n"));
         }
+    }
+
+    /// A console write of a dvar: `set_cvar`, but a file root
+    /// (`crate::cvars::FILE_ROOTS`) prints the dvar set's refusal
+    /// (0x81a0653) and keeps its value. `false` when refused.
+    fn console_set(&mut self, name: &str, value: &str, out: &mut Redirect) -> bool {
+        if crate::cvars::is_file_root(name) {
+            out.print(&format!("{name} is write protected.\n"));
+            return false;
+        }
+        self.set_cvar(name, value);
+        true
     }
 
     /// `Com_WriteConfig_f` (`writeconfig`, file 0x1db56b): `<name>`
     /// (`.cfg` added when it has no extension) under the home path's
     /// `players/`, the header, a `seta` line per archived dvar (its latched
     /// value when one waits) and the console channel line (VERIFIED live:
-    /// `players/vtest.cfg`, `players/sub/vw3.cfg`).
+    /// `players/vtest.cfg`, `players/sub/vw3.cfg`). A name that would
+    /// leave `players/` writes nothing (`confined_rel_path`).
     fn write_config(&mut self, args: &[String], out: &mut Redirect) {
         if args.len() != 2 {
             out.print("Usage: writeconfig <filename>\n");
@@ -1138,7 +966,11 @@ impl Cod4Server {
         if home.is_empty() {
             return;
         }
-        let path = std::path::Path::new(&home).join("players").join(&name);
+        let Some(rel) = vcod_common::game_dir::confined_rel_path(&name) else {
+            out.print(&format!("Couldn't write {name}.\n"));
+            return;
+        };
+        let path = std::path::Path::new(&home).join("players").join(rel);
         let text = self.config_text();
         let wrote = path
             .parent()
@@ -1336,19 +1168,97 @@ fn default_cfg(name: &str) -> String {
     }
 }
 
-/// The console chat's text: a leading quote cut with the last character.
-fn unquote(text: &str) -> &str {
-    match text.strip_prefix('"') {
-        Some(rest) => {
-            let mut end = rest.len();
-            if let Some(c) = rest.chars().last() {
-                end -= c.len_utf8();
-            }
-            &rest[..end]
-        }
-        None => text,
+/// `PROTOCOL_VERSION`, 6 for 1.6 and 1.7 alike (cod4-handshake.md 3).
+pub(super) const PROTOCOL: u32 = 6;
+
+#[cfg(test)]
+mod query_tests {
+    use super::*;
+    use crate::cod4::Cod4Config;
+    use crate::engine::ratelimit::{ADDR_BURST, ADDR_PERIOD, GLOBAL_BURST, GLOBAL_PERIOD};
+
+    fn bare() -> Cod4Server {
+        let cfg = Cod4Config {
+            map: "mp_crash".into(),
+            gametype: "war".into(),
+            hostname: "CoD4Host".into(),
+            max_clients: 8,
+        };
+        let mut sv = Cod4Server::new(cfg, 7);
+        sv.load(None).unwrap();
+        sv
+    }
+
+    /// The out-of-band replies `text` from `from` gets.
+    fn ask(sv: &mut Cod4Server, from: SocketAddr, text: &str, now: Instant) -> Vec<String> {
+        let mut pkt = vec![0xff; 4];
+        pkt.extend_from_slice(text.as_bytes());
+        sv.handle_packet(from, &pkt, now);
+        sv.take_outgoing()
+            .into_iter()
+            .filter(|(to, _)| *to == from)
+            .filter_map(|(_, p)| p.strip_prefix(&[0xff; 4][..]).map(<[u8]>::to_vec))
+            .map(|t| String::from_utf8_lossy(&t).into_owned())
+            .collect()
+    }
+
+    /// `engine::ratelimit`: one address's burst of status queries gets the
+    /// address's burst of replies, then one a second; many addresses share
+    /// the global bucket, which does not hold a challenge off.
+    #[test]
+    fn cod4_query_bursts_are_rate_limited() {
+        let mut sv = bare();
+        let now = Instant::now();
+        let a = SocketAddr::from(([198, 51, 100, 2], 5000));
+        let answered: usize = (0..ADDR_BURST + 5)
+            .map(|i| {
+                let q = if i % 2 == 0 {
+                    "getstatus x"
+                } else {
+                    "GETINFO x"
+                };
+                ask(&mut sv, a, q, now).len()
+            })
+            .sum();
+        assert_eq!(answered, ADDR_BURST as usize);
+        assert_eq!(ask(&mut sv, a, "getinfo x", now + ADDR_PERIOD).len(), 1);
+        assert_eq!(ask(&mut sv, a, "getinfo x", now + ADDR_PERIOD).len(), 0);
+
+        let t = now + ADDR_PERIOD * 10;
+        let answered: usize = (0..GLOBAL_BURST + 5)
+            .map(|i| {
+                ask(
+                    &mut sv,
+                    SocketAddr::from(([10, 1, 0, i as u8], 5)),
+                    "getstatus",
+                    t,
+                )
+                .len()
+            })
+            .sum();
+        assert_eq!(answered, GLOBAL_BURST as usize);
+        let joiner = SocketAddr::from(([10, 2, 0, 1], 5));
+        let reply = ask(&mut sv, joiner, "getchallenge 0 \"ab\"", t);
+        assert!(reply[0].starts_with("challengeResponse "), "{reply:?}");
+        let late = SocketAddr::from(([10, 2, 0, 2], 5));
+        assert_eq!(ask(&mut sv, late, "getinfo x", t + GLOBAL_PERIOD).len(), 1);
+    }
+
+    /// The `getchallenge` hex lives in the challenge slot, cut to 32 chars
+    /// as retail's `Q_strncpyz(.., 0x21)` cuts it, and the connect takes it
+    /// from there (cod4-handshake.md 15).
+    #[test]
+    fn cod4_the_connect_takes_the_slots_hex() {
+        let mut sv = bare();
+        let now = Instant::now();
+        let from = SocketAddr::from(([127, 0, 0, 1], 4660));
+        let hex = "0123456789abcdef".repeat(3);
+        let reply = ask(&mut sv, from, &format!("getchallenge 0 \"{hex}\""), now);
+        let challenge = reply[0].strip_prefix("challengeResponse ").unwrap();
+        let ui = format!("\\protocol\\6\\challenge\\{challenge}\\qport\\1\\name\\a");
+        let reply = ask(&mut sv, from, &format!("connect \"{ui}\""), now);
+        assert!(reply[0].starts_with("connectResponse"), "{reply:?}");
+        let client = sv.core.clients.iter().flatten().next().unwrap();
+        assert_eq!(client.extra.guid, hex[..32]);
     }
 }
-
-/// `PROTOCOL_VERSION`, 6 for 1.6 and 1.7 alike (cod4-handshake.md 3).
-const PROTOCOL: u32 = 6;

@@ -3,9 +3,12 @@
 //! bone's `DObjAnimMat`, and `DObjCalcSkel` (0x80b9dfa) composing them,
 //! each float rounded where the binary stores it, its x87 stack at the
 //! 64-bit precision the process runs at ([`F80`]; cod2-player-anims.md 11).
+//! The walk and its folds are CoD4's too ([`dobjanim`]); the leaf's sums
+//! are CoD2's own.
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
+use vcod_common::dobjanim;
 use vcod_common::skeleton::Skeleton;
 use vcod_common::x87::F80;
 use vcod_common::xanim::XAnim;
@@ -291,36 +294,73 @@ fn st<T: Ar>(x: T) -> f32 {
     x.st()
 }
 
-/// A model's quat shorts as `DObjCalcAnim` gives an unreached bone
-/// (0x80c3b90): each short times [`SCALE`], stored.
-pub fn base_quat(shorts: [i16; 4]) -> [f32; 4] {
-    // The product is exact in an `f64`: one rounding, as the store.
-    let q = |s: i16| (f64::from(s) * f64::from(SCALE)) as f32;
-    shorts.map(q)
+/// A node of the anim tree as the walk meets it, a leaf over its clip.
+pub type Tree<'a> = dobjanim::Tree<'a, XAnim>;
+
+/// `cod2_lnxded`'s arithmetic for the shared walk: every value on a `T`
+/// stack, every factor the folds pass on stored.
+struct Cod2<T>(std::marker::PhantomData<T>);
+
+impl<T> Clone for Cod2<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
-/// A node of the anim tree as the walk meets it: a leaf's clip at its
-/// node time and weight, or a node's weight and children in index order.
-pub enum Tree<'a> {
-    Leaf {
-        clip: &'a XAnim,
-        /// The clip's track to the skeleton's bone, `None` a bone the
-        /// models lack.
-        remap: &'a [Option<usize>],
-        time: f32,
-        weight: f32,
-    },
-    Node {
-        weight: f32,
-        children: Vec<Tree<'a>>,
-    },
+impl<T> Copy for Cod2<T> {}
+
+impl<T: Ar> Cod2<T> {
+    const ON: Cod2<T> = Cod2(std::marker::PhantomData);
 }
 
-impl Tree<'_> {
-    fn weight(&self) -> f32 {
-        match self {
-            Tree::Leaf { weight, .. } | Tree::Node { weight, .. } => *weight,
-        }
+impl dobjanim::Mat for Mat {
+    const ZERO: Mat = Mat::ZERO;
+
+    fn parts(&mut self) -> (&mut [f32; 4], &mut [f32; 3], &mut f32) {
+        (&mut self.quat, &mut self.trans, &mut self.weight)
+    }
+}
+
+impl<T: Ar> dobjanim::Calc for Cod2<T> {
+    type V = T;
+    type Mat = Mat;
+    type Clip = XAnim;
+
+    #[inline(always)]
+    fn ld(self, x: f32) -> T {
+        d(x)
+    }
+
+    #[inline(always)]
+    fn ext(self, x: f64) -> T {
+        ext(x)
+    }
+
+    #[inline(always)]
+    fn st(self, v: T) -> f32 {
+        st(v)
+    }
+
+    #[inline(always)]
+    fn pass(self, v: T) -> T {
+        d(st(v))
+    }
+
+    #[inline(always)]
+    fn is_zero(self, v: T) -> bool {
+        st(v) == 0.0
+    }
+
+    fn leaf(
+        self,
+        clip: &XAnim,
+        remap: &[Option<usize>],
+        t: f32,
+        w: f32,
+        mats: &mut [Mat],
+        need: &[bool],
+    ) {
+        leaf::<T>(clip, remap, t, w, mats, need);
     }
 }
 
@@ -433,9 +473,8 @@ fn leaf<T: Ar>(
     }
 }
 
-/// `DObjCalcAnim`'s walk from the root (weight 1, the bones cleared, its
-/// children's sums divided by their weight): the locals of `bones` bones
-/// and which a leaf reached.
+/// `DObjCalcAnim`'s walk from the root ([`dobjanim::calc`]): the locals
+/// of `bones` bones and which a leaf reached.
 ///
 /// Only the bones `need` holds are summed and folded (all without it):
 /// each bone's words are its own, so the rest read as retail's whatever is
@@ -444,147 +483,9 @@ pub fn calc(root: &Tree, bones: usize, need: Option<&[bool]>) -> (Vec<Mat>, Vec<
     let all = vec![true; bones];
     let need = need.unwrap_or(&all);
     exactly(
-        || calc_in::<Bounded>(root, bones, need),
-        || calc_in::<F80>(root, bones, need),
+        || dobjanim::calc(Cod2::<Bounded>::ON, root, bones, need),
+        || dobjanim::calc(Cod2::<F80>::ON, root, bones, need),
     )
-}
-
-fn calc_in<T: Ar>(root: &Tree, bones: usize, need: &[bool]) -> (Vec<Mat>, Vec<bool>) {
-    let mut mats = vec![Mat::ZERO; bones];
-    let mut reached = vec![false; bones];
-    walk::<T>(root, 1.0, true, false, &mut mats, &mut reached, need);
-    (mats, reached)
-}
-
-/// 0x80bfc04: `node` at weight `w`; `clear` zeroes the bones first,
-/// `nested` marks a child of a fold, whose own fold normalizes its quats
-/// rather than dividing by its weight.
-fn walk<T: Ar>(
-    node: &Tree,
-    w: f32,
-    clear: bool,
-    nested: bool,
-    mats: &mut [Mat],
-    reached: &mut [bool],
-    need: &[bool],
-) {
-    match node {
-        Tree::Leaf {
-            clip, remap, time, ..
-        } => {
-            if clear {
-                mats.fill(Mat::ZERO);
-            }
-            for &b in remap.iter().flatten() {
-                reached[b] = true;
-            }
-            leaf::<T>(clip, remap, *time, w, mats, need);
-        }
-        Tree::Node { children, .. } => {
-            let live: Vec<&Tree> = children.iter().filter(|c| c.weight() != 0.0).collect();
-            match live.len() {
-                0 => {
-                    if clear {
-                        mats.fill(Mat::ZERO);
-                    }
-                }
-                1 => walk::<T>(live[0], w, clear, nested, mats, reached, need),
-                _ if clear => {
-                    for (i, c) in live.iter().enumerate() {
-                        walk::<T>(c, c.weight(), i == 0, true, mats, reached, need);
-                    }
-                    match nested {
-                        false => divide::<T>(mats, need),
-                        true => normalize::<T>(mats, w, need),
-                    }
-                }
-                _ => {
-                    let mut scratch = vec![Mat::ZERO; mats.len()];
-                    for (i, c) in live.iter().enumerate() {
-                        walk::<T>(c, c.weight(), i == 0, true, &mut scratch, reached, need);
-                    }
-                    add_normalized::<T>(mats, &scratch, w, need);
-                }
-            }
-        }
-    }
-}
-
-/// The root's fold: each bone of non-zero weight times `1 / weight`, the
-/// factor passed as a float, each word stored; the weight stays.
-fn divide<T: Ar>(mats: &mut [Mat], need: &[bool]) {
-    let (d, ext) = (d::<T>, ext::<T>);
-    for m in mats
-        .iter_mut()
-        .zip(need)
-        .filter_map(|(m, &n)| n.then_some(m))
-        .filter(|m| m.weight != 0.0)
-    {
-        let r = d(st(ext(1.0) / d(m.weight)));
-        m.quat = m.quat.map(|c| st(d(c) * r));
-        m.trans = m.trans.map(|c| st(d(c) * r));
-    }
-}
-
-/// `|q|^2` (0x80c38e6, `((x^2 + y^2) + z^2) + w^2` on the stack) stored,
-/// and 0x80c34fe's `0x5f3759df` step off its bits with one Newton step
-/// (0.5 at 0x815042c, 1.5 at 0x8150428), its half and result stored;
-/// `None` for a zero quat.
-fn rsqrt<T: Ar>(q: [f32; 4]) -> Option<T> {
-    let (d, ext) = (d::<T>, ext::<T>);
-    let [x, y, z, w] = q.map(d);
-    let s = st(((x * x + y * y) + z * z) + w * w);
-    if s == 0.0 {
-        return None;
-    }
-    let h = d(st(d(s) * ext(0.5)));
-    let y0 = d(f32::from_bits(0x5f37_59df - (s.to_bits() >> 1)));
-    Some(d(st((ext(1.5) - (h * y0) * y0) * y0)))
-}
-
-/// A clearing child's fold in place: the quat times `rsqrt * w`, the
-/// shift times `w / weight`, both factors passed as floats, the weight
-/// then `w`.
-fn normalize<T: Ar>(mats: &mut [Mat], w: f32, need: &[bool]) {
-    let d = d::<T>;
-    let w = d(w);
-    for m in mats
-        .iter_mut()
-        .zip(need)
-        .filter_map(|(m, &n)| n.then_some(m))
-    {
-        if let Some(r) = rsqrt::<T>(m.quat) {
-            let s = d(st(r * w));
-            m.quat = m.quat.map(|c| st(d(c) * s));
-        }
-        if m.weight != 0.0 {
-            let g = d(st(w / d(m.weight)));
-            m.trans = m.trans.map(|c| st(d(c) * g));
-            m.weight = st(w);
-        }
-    }
-}
-
-/// A later child's fold out of scratch: its quat times `rsqrt * w` and its
-/// shift times `w / weight` added, `w` added to the weight.
-fn add_normalized<T: Ar>(mats: &mut [Mat], src: &[Mat], w: f32, need: &[bool]) {
-    let d = d::<T>;
-    let w = d(w);
-    for ((m, s), _) in mats.iter_mut().zip(src).zip(need).filter(|(_, n)| **n) {
-        if let Some(r) = rsqrt::<T>(s.quat) {
-            let k = d(st(r * w));
-            for c in 0..4 {
-                m.quat[c] = st(k * d(s.quat[c]) + d(m.quat[c]));
-            }
-        }
-        if s.weight != 0.0 {
-            let g = d(st(w / d(s.weight)));
-            for c in 0..3 {
-                m.trans[c] = st(g * d(s.trans[c]) + d(m.trans[c]));
-            }
-            m.weight = st(w + d(m.weight));
-        }
-    }
 }
 
 /// `a * b` as 0x80bc452 composes a bone's quat onto its parent's (`a` the
@@ -916,4 +817,174 @@ fn traceline_in<T: Ar>(
         start_solid: false,
         normal: rows[axis].map(|r| st(d(r) * d(face_sign))),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vcod_common::rng::xorshift;
+
+    /// A float off `seed`: mostly a unit-range value, sometimes one a
+    /// rounding from a tie, zero, a denormal or a wide one.
+    fn float(seed: &mut u64) -> f32 {
+        let r = xorshift(seed);
+        let unit = (r >> 40) as f32 / (1u64 << 24) as f32 * 2.0 - 1.0;
+        match r % 16 {
+            0 => 0.0,
+            1 => f32::from_bits((r >> 32) as u32 & 0x007f_ffff),
+            2 => unit * 4096.0,
+            3 => (unit * 64.0).round() / 64.0 + f32::EPSILON * unit,
+            4 => 0.5 + f32::EPSILON / 2.0 * ((r >> 8) % 3) as f32,
+            _ => unit,
+        }
+    }
+
+    fn floats<const N: usize>(seed: &mut u64) -> [f32; N] {
+        std::array::from_fn(|_| float(seed))
+    }
+
+    /// Both arms over one input: when the fast arm proved every store, its
+    /// words are the 64-bit stack's. Returns whether it proved them. A
+    /// result past the float range is left out: [`F80`] models no
+    /// infinities or NaNs.
+    fn agree(what: &str, fast: impl Fn() -> Vec<f32>, wide: impl Fn() -> Vec<f32>) -> bool {
+        DOUBT.set(false);
+        let f = fast();
+        if DOUBT.get() || f.iter().any(|x| !x.is_finite()) {
+            return false;
+        }
+        let bits = |v: Vec<f32>| v.into_iter().map(f32::to_bits).collect::<Vec<_>>();
+        assert_eq!(bits(f), bits(wide()), "{what}");
+        true
+    }
+
+    /// The fast arm's error bounds against the 64-bit stack over seeded
+    /// inputs, near ties, zero quats and denormals among them, through
+    /// every generic step but the tree walks (cod2-player-anims.md 11).
+    #[test]
+    fn the_bounded_arm_stores_the_wide_arms_words_whenever_it_is_sure() {
+        let mut seed = 0x0d0b_1a5e_u64;
+        let mut proved = 0;
+        const N: usize = 3000;
+        for i in 0..N {
+            let m = Mat {
+                quat: floats(&mut seed),
+                trans: floats(&mut seed),
+                weight: float(&mut seed).abs() * 2.0,
+            };
+            let (b, v): ([f32; 4], [f32; 3]) = (floats(&mut seed), floats(&mut seed));
+            let angles = floats::<3>(&mut seed).map(|a| a * 360.0);
+            let w = float(&mut seed).abs();
+            let flat = |r: [[f32; 3]; 3]| r.concat();
+            let packed = |m: Mat| [&m.quat[..], &m.trans, &[m.weight]].concat();
+            let fold = |ms: Vec<Mat>| ms.into_iter().flat_map(packed).collect::<Vec<_>>();
+            proved += [
+                agree(
+                    &format!("{i} axis {m:?}"),
+                    || flat(m.axis_in::<Bounded>()),
+                    || flat(m.axis_in::<F80>()),
+                ),
+                agree(
+                    &format!("{i} place {m:?} {v:?}"),
+                    || m.place_in::<Bounded>(v).to_vec(),
+                    || m.place_in::<F80>(v).to_vec(),
+                ),
+                agree(
+                    &format!("{i} mul {:?} {b:?}", m.quat),
+                    || mul::<Bounded>(m.quat, b).to_vec(),
+                    || mul::<F80>(m.quat, b).to_vec(),
+                ),
+                agree(
+                    &format!("{i} weigh {m:?}"),
+                    || {
+                        let mut m = m;
+                        weigh::<Bounded>(&mut m);
+                        packed(m)
+                    },
+                    || {
+                        let mut m = m;
+                        weigh::<F80>(&mut m);
+                        packed(m)
+                    },
+                ),
+                agree(
+                    &format!("{i} rsqrt {:?}", m.quat),
+                    || {
+                        dobjanim::rsqrt(Cod2::<Bounded>::ON, m.quat)
+                            .map(st)
+                            .into_iter()
+                            .collect()
+                    },
+                    || {
+                        dobjanim::rsqrt(Cod2::<F80>::ON, m.quat)
+                            .map(st)
+                            .into_iter()
+                            .collect()
+                    },
+                ),
+                agree(
+                    &format!("{i} normalize {m:?} {w}"),
+                    || {
+                        let mut ms = vec![m];
+                        dobjanim::normalize(Cod2::<Bounded>::ON, &mut ms, w, &[true]);
+                        dobjanim::divide(Cod2::<Bounded>::ON, &mut ms, &[true]);
+                        fold(ms)
+                    },
+                    || {
+                        let mut ms = vec![m];
+                        dobjanim::normalize(Cod2::<F80>::ON, &mut ms, w, &[true]);
+                        dobjanim::divide(Cod2::<F80>::ON, &mut ms, &[true]);
+                        fold(ms)
+                    },
+                ),
+                agree(
+                    &format!("{i} angles {angles:?}"),
+                    || angles_quat_in::<Bounded>(angles).to_vec(),
+                    || angles_quat_in::<F80>(angles).to_vec(),
+                ),
+            ]
+            .iter()
+            .filter(|&&p| p)
+            .count();
+        }
+        // Doubt is the exception: a sweep that proves little checks little.
+        assert!(proved > N * 7 * 9 / 10, "{proved} of {} proved", N * 7);
+    }
+
+    /// Products of three floats (inexact in an `f64`), sums, a quotient, a
+    /// root and a difference of them.
+    fn chain<T: Ar>(x: [f32; 6]) -> [T; 5] {
+        let (d, ext) = (d::<T>, ext::<T>);
+        let p = d(x[0]) * d(x[1]) * d(x[2]);
+        let s = p + d(x[3]) * d(x[4]) * d(x[5]);
+        let q = s / (d(x[3]) * d(x[3]) + ext(1.0));
+        let r = (s * s + ext(1.0)).sqrt();
+        [p, s, q, r, q - r * p]
+    }
+
+    /// Every bound holds: both arms sit within their bound of the exact
+    /// value, so the fast arm's value is within twice it of the 64-bit
+    /// stack's, and a value it calls exact is the stack's to the bit.
+    #[test]
+    fn every_bound_covers_the_wide_arms_value() {
+        let mut seed = 0xb0_u64 << 20 | 0x5eed;
+        let mut inexact = 0;
+        for i in 0..20000 {
+            let x = floats::<6>(&mut seed);
+            DOUBT.set(false);
+            let fast = chain::<Bounded>(x);
+            if DOUBT.get() {
+                continue;
+            }
+            for (k, (Bounded(v, e), w)) in fast.into_iter().zip(chain::<F80>(x)).enumerate() {
+                let off = (F80::from_f64(v) - w).to_f64().abs();
+                assert!(
+                    off <= 2.0 * e,
+                    "{i} {x:?} step {k}: {v} off {off} past bound {e}"
+                );
+                inexact += usize::from(e != 0.0);
+            }
+        }
+        assert!(inexact > 20000, "{inexact} inexact steps");
+    }
 }

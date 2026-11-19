@@ -241,9 +241,82 @@ fn set(i: usize, a: &mut u32, b: &mut u32, c: &mut u32, d: &mut u32, n: u32) {
     }
 }
 
+/// CoD2's and CoD4's `cp` (`FS_ReferencedIwdPureChecksums` behind the
+/// `cp ` the client prefixes; CoD2 cod2_lnxded 0x8065c36, CoD4
+/// `CL_SendPureChecksums` iw3mp.exe 0x46a0f0): `@`, each pure checksum,
+/// then `checksumFeed` XOR all of them XOR their count, every number
+/// `"%i "`. Unlike 1.1 there are no module checksums ahead of the `@`.
+pub fn iwd_cp_command(sums: &[i32], checksum_feed: i32) -> String {
+    let mut s = String::from("cp @ ");
+    let mut key = checksum_feed;
+    for &c in sums {
+        s.push_str(&format!("{c} "));
+        key ^= c;
+    }
+    s.push_str(&format!("{} ", key ^ sums.len() as i32));
+    s
+}
+
+/// `SV_VerifyIwds_f` (cod2_lnxded 0x8090534, cod4_lnxded 0x817059c) on a
+/// `cp` command's arguments (`args[0]` is `cp`): `@`, sums that are
+/// distinct and each among the server's `loaded` pure checksums, then the
+/// key, every number through `atoi` (`strtol`, cod4_lnxded 0x8170634).
+/// True is retail's `pureAuthentic` 1.
+pub fn verify_iwd_cp(args: &[&str], loaded: &[i32], checksum_feed: i32) -> bool {
+    if args.len() < 3 || !args[1].starts_with('@') {
+        return false;
+    }
+    let tail: Vec<i32> = args[2..].iter().map(|a| crate::text::atoi(a)).collect();
+    let (sums, key) = tail.split_at(tail.len() - 1);
+    for (i, s) in sums.iter().enumerate() {
+        if sums[..i].contains(s) || !loaded.contains(s) {
+            return false;
+        }
+    }
+    let k = sums.iter().fold(checksum_feed, |k, s| k ^ s);
+    (k ^ sums.len() as i32) == key[0]
+}
+
+/// `FS_iwIwd(name, base)` (cod2_lnxded 0x8065324, cod4_lnxded 0x81286c2):
+/// `<base>/iw_00` .. `<base>/iw_24` compared whole (case and slash folded,
+/// so a name with `.iwd` never matches), or a name whose part up to
+/// `localized_` is `<base>/localized_` and whose rest holds `_iw00` ..
+/// `_iw24`.
+pub fn fs_iw_iwd(name: &str, base: &str) -> bool {
+    let fold = |s: &str| s.to_ascii_lowercase().replace('\\', "/");
+    let name = fold(name);
+    let base = fold(base);
+    if (0..25).any(|n| name == format!("{base}/iw_{n:02}")) {
+        return true;
+    }
+    let Some(at) = name.find("localized_") else {
+        return false;
+    };
+    let (head, rest) = name.split_at(at + "localized_".len());
+    head == format!("{base}/localized_") && (0..25).any(|n| rest.contains(&format!("_iw{n:02}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The server reads a `cp`'s numbers through `atoi`: trailing junk
+    /// after a sum still counts it (cod4_lnxded 0x8170634).
+    #[test]
+    fn a_cp_number_reads_as_atoi() {
+        let feed = 0x1234;
+        let key = feed ^ 77 ^ 1;
+        assert!(verify_iwd_cp(
+            &["cp", "@", "77x", &key.to_string()],
+            &[77],
+            feed
+        ));
+        assert!(!verify_iwd_cp(
+            &["cp", "@", "x77", &key.to_string()],
+            &[77],
+            feed
+        ));
+    }
 
     fn hex(s: [u32; 4]) -> String {
         s.iter()

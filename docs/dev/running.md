@@ -9,7 +9,9 @@ debug overlays and env vars. The player-facing flags are in
 - Both binaries expect to sit next to `CoDMP.exe` and read `main/`. With
   `--mod-dir uo`, `uo/` sits over `main/`: any base other than `main` sits
   over its sibling `main/` (`pk3::base_dirs`).
-- `COD_DIR` overrides the install; `--game-dir` overrides both.
+- `COD_DIR` overrides the install for every game; `--game-dir` overrides
+  both. `COD2_DIR`, `COD4_DIR` and `COD4_LNXDED_DIR` are read by tests and
+  tools only (`docs/dev/testing.md`).
 - `--vanilla` keeps only the install patch's stock paks on the search path
   (`pk3::is_vanilla_pak`, `Pk3Fs::vanilla`).
 - `--game cod1|cod2|cod4` overrides `game::Game::detect`: CoD4 by `zone/` or
@@ -61,8 +63,9 @@ The game is the detected install's (or `--game`'s).
   its configstring blocks `proto.cs`, never the 1.1 constants.
 - `dedicated` defaults to 1 (no heartbeat, unlike retail's 2). `--set
   dedicated=2` opts in.
-- There is no stdin console. Admin commands go through rcon, refused until
-  `--set rconPassword=...`.
+- Admin commands go through the stdin console (`--no-console` turns it
+  off; CoD1's line editor is `tty_console.rs`) or rcon once `--set
+  rconPassword=...` is set (`docs/usage.md`, "Stdin console").
 
 ## Logs and env vars
 
@@ -86,6 +89,56 @@ The game is the detected install's (or `--game`'s).
 - `RUST_LOG=vcod::shadows=debug` logs each timed static shadow redraw's GPU
   ms (`start-over` marks the square) and every 120 readbacks the smoothed
   dynamic, mask and CPU ms.
+
+### Every env var
+
+`env_vars_documented` (`crates/common/tests`) fails on a `VCOD_*` or
+`VC_*` name in `crates/` that this table lacks. The A/B gates' `*_REPORT`,
+`*_TRACE` and `*_DUMP` knobs are [retail.md](retail.md)'s; `bot_match`'s
+are its header's.
+
+| Variable | Read by | Does |
+|---|---|---|
+| `VCOD_FRAME_PROFILE=<path>` | `vcod` | Per-frame CPU and GPU stage times (`frame_prof`, [testing.md](testing.md#performance)). |
+| `VCOD_GPU_GROUPS=0` | `vcod` | With the frame profile, no per-pass-group GPU stamps (cod4-client-perf.md). |
+| `VCOD_FRAG_STATS` | `vcod` | Per-frame fragment counters read back (cod11-client-perf.md, cod4-client-perf.md). |
+| `VCOD_FRAME_DIGEST=<path>` | `vcod` | A line per drawn game frame, its parts hashed: two `timedemo` runs must match (`frame_digest.rs` header). |
+| `VCOD_LOAD_PROFILE=<path>` | `vcod` | Appends each map load's profile, start to first frame, to the file (`vcod_common::laps`). |
+| `VCOD_NETSIM="ping=,jitter=,loss="` | `vcod` | A simulated bad link (`net::netsim`). |
+| `VCOD_CDKEY=<key>` | `vcod` | Overrides the install's CD key ([usage.md](../usage.md#cd-keys)). |
+| `VCOD_VOICE_INPUT=tone` | `vcod` | A 440 Hz tone in place of the microphone (cod2-voice.md). |
+| `VCOD_NO_DYNENTS=1` | `vcod` | CoD4 dynamic entities not drawn, for a frame time A/B (cod4-client-perf.md 41); F3's `cod4 dynents` line counts them. |
+| `VCOD_PERF_TURN=<deg/s>` | `vcod` | Turns a CoD4 spectator's view on its own (`tools/cod4_perf.sh`'s `TURN`). |
+| `VCOD_C4_DRAW_ORDER=0`, `VCOD_C4_ENTITY_CULL=0`, `VCOD_C4_FLOATZ=0`, `VCOD_WORLD_BUNDLES=0`, `VCOD_ENT_BUNDLES=0` | `vcod` | CoD4 renderer A/B switches back to the older path, each named in cod4-client-perf.md. |
+| `VCOD_LIT_SPLIT=0` | `vcod` | CoD2 lit draws not split by light kind (cod2-client-perf.md). |
+| `VCOD_SOAK=<path>`, `VCOD_SOAK_SEED=<n>` | `vcod` | The CoD1 soak player and its seed (`play::cod1_soak`, `tools/cod1_soak.sh`). |
+| `VCOD_COD2_RECORD=<dir>/<name>` | `vcod --net-probe --game cod2` | Records the run as `<name>.dm_1` ([usage.md](../usage.md)). |
+| `VCOD_COD2_TIMEOUT=<secs>`, `VCOD_COD2_LOAD_STALL=<ms>` | CoD2 probe | The join's timeout; a stall before the map load (cod2-protocol.md). |
+| `VCOD_COD2_TRACE_WEAPON=1` | CoD2 probe | A line per snapshot with the weapon's state, clip and reserve. |
+| `VCOD_PROBE_CMDS="<secs>:<cmd>\|..."` | CoD2 probe | Sends each command that far in and prints the server commands back. |
+| `VCOD_PROBE_KILL=<secs>` | CoD2 probe | Sends `kill` that far in. |
+| `VCOD_PROBE_SNAPS_AT=<secs>:<snaps>` | CoD2 probe | Changes the `snaps` userinfo mid-game. |
+| `VCOD_PROBE_REWEAPON=<weapon>`, `VCOD_PROBE_INGAME=<response>` | CoD2 probe | Answers the weapon menu, or the `ingame` menu, 17 s in (`ProbeScript`). |
+| `VCOD_PROBE_NO_BODIES`, `VCOD_PROBE_STILL` | CoD2 probe | No body prediction; no scripted movement (cod2-movement.md). |
+| `VCOD_COD2_HUD_DUMP=<prefix>`, `VCOD_COD2_HUD_AT=<secs>,...` | CoD2 probe | Writes the HUD's quads at those times as `<prefix>-<secs>.quads` for `VCOD_HUD_QUADS`. |
+| `VCOD_TICK_TRACE=<path or dir>` | `vcod-server`, `bot_match` | The tick's step log ([server-tick.md](server-tick.md#tracing-a-tick)). |
+| `VCOD_TICK_PROFILE_MS=<ms>` | `vcod-server` | Logs each tick past it with its phases. |
+| `VCOD_BOT_THREADS=<n>` | `vcod-server` | The threads the bots' pass plans on, `1` serial ([server-tick.md](server-tick.md#the-bots-threads)). |
+| `VC_NAV_COD4=1` | `vcod-server` | CoD4 bots walk the nav graph's CoD4 step ([bots.md](../bots.md), traps.md). |
+| `VCOD_REQUIRE_INSTALL=<names>` | tests | Turns an install skip into a failure ([testing.md](testing.md)). |
+| `VCOD_REQUIRE_GPU=1` | tests | Turns a headless render test's adapter skip into a failure ([testing.md](testing.md#headless-render-pipeline_check)). |
+| `VCOD_LIVE_SLOTS=<n>` | CoD4 live tests | How many test servers run at once, 3 by default ([testing.md](testing.md#cod4-live-tests)). |
+| `VCOD_LIVE_NET=1` | `master_list_live`, `lan_scan_live` | Lets the two ignored tests that contact a public master or the LAN run. |
+| `VCOD_C4_SHOTS=<dir>` | CoD4 live tests | Writes their frames ([testing.md](testing.md#cod4-live-tests)). |
+| `VCOD_SWEEP_MAPS`, `VCOD_SWEEP_GAMETYPES`, `VCOD_SWEEP_JOBS`, `VCOD_SWEEP_LEVEL_SECS`, `VCOD_SWEEP_OUT` | `cod4_map_sweep`, the soaks | Which maps and gametypes, how many at once, each level's length, the output directory (`play/cod4_sweep.rs`). |
+| `VCOD_SOAK_MINUTES`, `VCOD_SOAK_RENDER_HZ`, `VCOD_SOAK_TICK_LOG_MS`, `VCOD_SOAK_CLIENT_LOG_MS`, `VCOD_SOAK_TICK_WATCH` | CoD4 and CoD2 soaks | `tools/cod4_soak.sh`'s header. |
+| `VCOD_CENSUS_MAPS`, `VCOD_CENSUS_SECS`, `VCOD_CENSUS_OUT`, `VCOD_CENSUS_FRAMES=0` | `cod2_map_census` | Its maps, time a map, output directory; no headless frame (`play/cod2_census.rs`). |
+| `VCOD_CENSUS_VIEWS` | `renderer/cod4_draws_live.rs` | The views the joined-draws test holds byte for byte. |
+| `VCOD_PROFILE_MAPS`, `VCOD_WALK_SPAWNS=<n>` | `cod2_cull_profile`, `cod2_cell_walks_draw_alike`, `cell_walks_side_by_side` | Maps to measure; spawns a map (default 8). |
+| `VCOD_HUD_SHOT`, `VCOD_MENU_SHOT`, `VCOD_MENU_SHOT_CLICKS`, `VCOD_MENU_SHOT_WAIT`, `VCOD_HUD_QUADS`, `VCOD_UI_SHOT` | `renderer/hud_shot.rs` | Write CoD2 HUD, menu and scoreboard frames to look at; each test's doc comment says what. |
+| `VCOD_FRONT_PPM=<path>` | `cod4_front` test | Saves the drawn Start New Server frame. |
+| `VCOD_BODY_TGA`, `VCOD_LIGHTGRID_TGA`, `VCOD_PROBE_STAGE_TGA` | `cod2_light.rs` tests | Save the lit body, the light grid and the probe stage images. |
+| `VCOD_VERSION`, `VCOD_GIT_SHA` | the build (`crates/version.rs`) | The version string; `VCOD_GIT_SHA` stands in for `git` where there is none. |
 
 ## The F3 overlay
 

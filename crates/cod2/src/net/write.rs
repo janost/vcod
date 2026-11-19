@@ -3,6 +3,7 @@
 //! gamestate and snapshot bodies built on them. A retail capture's messages
 //! re-encode byte for byte through these (`tests::retail_*`).
 
+use vcod_common::net::Msec;
 use vcod_common::net::codec::{MsgWriter, write_delta_field, write_delta_struct, write_ps_value};
 
 use super::delta::{ClientState2, EntityState2, HUD_FIELDS, HudElem2, PlayerState2, field_index};
@@ -186,10 +187,7 @@ pub fn write_delta_playerstate(w: &mut MsgWriter, from: Option<&PlayerState2>, t
     }
 }
 
-/// A Latin-1 string's bytes, one per char (the inverse of `super::latin1`).
-pub fn latin1_bytes(s: &str) -> Vec<u8> {
-    s.chars().map(|c| c as u32 as u8).collect()
-}
+pub use vcod_common::text::latin1_bytes;
 
 /// `svc_serverCommand`: the sequence and the text as its bytes.
 pub fn write_server_command(w: &mut MsgWriter, seq: i32, text: &[u8]) {
@@ -221,7 +219,7 @@ pub fn write_gamestate(w: &mut MsgWriter, gs: &Gamestate2) {
 /// One snapshot frame as the server keeps it for deltas.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Frame2 {
-    pub server_time: i32,
+    pub server_time: Msec,
     pub ps: PlayerState2,
     /// Ascending by number.
     pub entities: Vec<EntityState2>,
@@ -243,7 +241,7 @@ pub fn write_snapshot(
     nops: usize,
 ) {
     w.write_byte(Svc::Snapshot as u8);
-    w.write_long(to.server_time);
+    w.write_long(to.server_time.raw());
     w.write_byte(if from.is_some() { delta_num } else { 0 });
     w.write_byte(snap_flags);
     write_delta_playerstate(w, from.map(|f| &f.ps), &to.ps);
@@ -451,7 +449,7 @@ mod tests {
         let mut e = b;
         e.f[1] = 7;
         let f1 = Frame2 {
-            server_time: 1000,
+            server_time: Msec::from_raw(1000),
             ps: ps.clone(),
             entities: vec![e],
             clients: vec![cs],
@@ -460,7 +458,7 @@ mod tests {
         ps2.f[field_index(&PLAYER_STATE_FIELDS, "origin[0]")] = (-12.5f32).to_bits();
         ps2.hud_current[0] = [0; HUD_FIELDS];
         let f2 = Frame2 {
-            server_time: 1050,
+            server_time: Msec::from_raw(1050),
             ps: ps2,
             entities: vec![],
             clients: vec![cs],
@@ -503,5 +501,150 @@ mod tests {
             (&s.ps, &s.entities, &s.clients),
             (&f2.ps, &f2.entities, &f2.clients)
         );
+    }
+
+    /// Frames at `i32::MAX` and, one delta on, `i32::MIN`: the parser reads
+    /// both times back and the frames re-encode byte for byte.
+    #[test]
+    fn frames_at_the_ends_of_int_round_trip() {
+        let huff = Huffman::new();
+        let gs = Gamestate2 {
+            server_command_sequence: 0,
+            configstrings: Default::default(),
+            baselines: Default::default(),
+            client_num: 0,
+            checksum_feed: 0,
+        };
+        let mut parser = Parser::new();
+        let mut w = MsgWriter::new(&huff);
+        write_gamestate(&mut w, &gs);
+        w.write_byte(Svc::Eof as u8);
+        parser.parse(1, &w.into_ops()).unwrap();
+        let mut ps = PlayerState2::default();
+        ps.f[field_index(&PLAYER_STATE_FIELDS, "pm_type")] = 4;
+        let f1 = Frame2 {
+            server_time: Msec::MAX,
+            ps,
+            entities: vec![],
+            clients: vec![],
+        };
+        let f2 = Frame2 {
+            server_time: Msec::MAX + 50,
+            ..f1.clone()
+        };
+        assert_eq!(f2.server_time, Msec::MIN + 49);
+        let mut prev = None;
+        for (n, f) in [(2, &f1), (3, &f2)] {
+            let mut w = MsgWriter::new(&huff);
+            write_snapshot(&mut w, prev, 1, 4, f, |_| None, 0);
+            w.write_byte(Svc::Eof as u8);
+            let ops = w.into_ops();
+            parser.parse(n, &ops).unwrap();
+            let s = parser.frame(n).unwrap();
+            assert_eq!(s.server_time, f.server_time);
+            let back = Frame2 {
+                server_time: s.server_time,
+                ps: s.ps.clone(),
+                entities: s.entities.clone(),
+                clients: s.clients.clone(),
+            };
+            let mut w = MsgWriter::new(&huff);
+            write_snapshot(&mut w, prev, 1, 4, &back, |_| None, 0);
+            w.write_byte(Svc::Eof as u8);
+            assert_eq!(w.into_ops(), ops);
+            prev = Some(f);
+        }
+    }
+
+    /// A message that fails after a server command, a gamestate or a
+    /// snapshot leaves the parser as it was: the next packet acknowledges
+    /// no command the caller never got.
+    #[test]
+    fn a_message_that_fails_late_changes_nothing() {
+        let huff = Huffman::new();
+        let gs = Gamestate2 {
+            server_command_sequence: 4,
+            configstrings: Default::default(),
+            baselines: Default::default(),
+            client_num: 0,
+            checksum_feed: 0,
+        };
+        let frame = Frame2 {
+            server_time: Msec::from_raw(1000),
+            ps: PlayerState2::default(),
+            entities: vec![],
+            clients: vec![],
+        };
+        let mut parser = Parser::new();
+        let mut w = MsgWriter::new(&huff);
+        write_server_command(&mut w, 1, b"first");
+        w.write_byte(Svc::Eof as u8);
+        parser.parse(1, &w.into_ops()).unwrap();
+
+        let mut w = MsgWriter::new(&huff);
+        write_server_command(&mut w, 2, b"lost");
+        write_gamestate(&mut w, &gs);
+        write_snapshot(&mut w, None, 0, 0, &frame, |_| None, 0);
+        w.write_byte(0xee);
+        assert!(parser.parse(2, &w.into_ops()).is_err());
+        assert_eq!(parser.server_command_sequence, 1);
+        assert_eq!(parser.server_command(2), b"");
+        assert_eq!(parser.server_command(1), b"first");
+        assert!(parser.gamestate.is_none());
+        assert!(parser.frame(2).is_none() && parser.last_snapshot.is_none());
+
+        // A snapshot under the kept gamestate rolls back the same way.
+        let mut w = MsgWriter::new(&huff);
+        write_gamestate(&mut w, &gs);
+        w.write_byte(Svc::Eof as u8);
+        parser.parse(3, &w.into_ops()).unwrap();
+        let mut w = MsgWriter::new(&huff);
+        write_snapshot(&mut w, None, 0, 0, &frame, |_| None, 0);
+        w.write_byte(0xee);
+        assert!(parser.parse(4, &w.into_ops()).is_err());
+        assert!(parser.frame(4).is_none() && parser.last_snapshot.is_none());
+        assert_eq!(parser.server_command_sequence, 4);
+    }
+
+    /// A packet entity or client list that repeats or goes back a number
+    /// is refused: a stock server writes them ascending (3.3).
+    #[test]
+    fn a_list_out_of_order_is_refused() {
+        let huff = Huffman::new();
+        let gs = Gamestate2 {
+            server_command_sequence: 0,
+            configstrings: Default::default(),
+            baselines: Default::default(),
+            client_num: 0,
+            checksum_feed: 0,
+        };
+        let mut e = EntityState2::null(5);
+        e.f[1] = 7;
+        let mut f = e;
+        f.number = 4;
+        let cs = ClientState2::null(3);
+        let frames = [
+            (vec![e, e], vec![]),
+            (vec![e, f], vec![]),
+            (vec![e], vec![cs, cs]),
+        ];
+        for (entities, clients) in frames {
+            let mut parser = Parser::new();
+            let mut w = MsgWriter::new(&huff);
+            write_gamestate(&mut w, &gs);
+            w.write_byte(Svc::Eof as u8);
+            parser.parse(1, &w.into_ops()).unwrap();
+            let to = Frame2 {
+                server_time: Msec::from_raw(1000),
+                ps: PlayerState2::default(),
+                entities,
+                clients,
+            };
+            let mut w = MsgWriter::new(&huff);
+            write_snapshot(&mut w, None, 0, 0, &to, |_| None, 0);
+            w.write_byte(Svc::Eof as u8);
+            assert!(parser.parse(2, &w.into_ops()).is_err());
+            assert!(parser.frame(2).is_none());
+        }
     }
 }

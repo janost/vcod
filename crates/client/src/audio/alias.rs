@@ -101,9 +101,12 @@ pub struct AliasRow {
     pub secondary: Option<String>,
     /// CoD2's `startdelay`, ms.
     pub start_delay_ms: u32,
-    /// The csv a CoD2 row came from, which settles a duplicate sequence;
-    /// empty for CoD 1.
+    /// The csv a row came from, as the file list names it, which settles a
+    /// duplicate sequence; empty for CoD4.
     pub csv: String,
+    /// CoD 1: the row's place in load order, csvs in `FS_GetFileList`'s
+    /// order and rows in file order ([`AliasTable::for_map`]).
+    pub order: u32,
     /// CoD2's `subtitle`: a `subtitle.str` key the cgame prints when the
     /// row starts (docs/research/cod2-sound.md 7.11).
     pub subtitle: Option<String>,
@@ -127,6 +130,9 @@ pub struct AliasTable {
     /// CoD2's table: `for_map` applies CoD2's loadspec rule and drops
     /// duplicate sequences ([`crate::audio::cod2`]).
     pub(crate) cod2: bool,
+    /// CoD 1's table (`parse_csv`): `for_map` sorts as the 1.1, 1.5 and UO
+    /// loaders do ([`sort_cod1`]).
+    pub(crate) cod1: bool,
     /// What CoD2's loader would print as `^1ERROR` lines, one per message.
     pub errors: Vec<String>,
 }
@@ -204,22 +210,65 @@ pub(super) fn split_csv(line: &str) -> Vec<String> {
     out
 }
 
-/// (`sequence`, `file` case-insensitive), the engine's merge-sort order
-/// (research doc, section 1e); `pick`'s no-repeat index refers to it.
+/// By `sequence`, load order on a tie: the unfiltered table's order.
+/// [`AliasTable::for_map`] sorts what a level loads as the engine does.
 fn sort_group(rows: &mut [AliasRow]) {
-    rows.sort_by(|a, b| {
-        a.sequence.cmp(&b.sequence).then_with(|| {
-            a.file
-                .to_ascii_lowercase()
-                .cmp(&b.file.to_ascii_lowercase())
-        })
-    });
+    rows.sort_by_key(|r| (r.sequence, r.order));
+}
+
+/// `Q_stricmpn` with no limit: ASCII case folded, the sign only.
+fn stricmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let fold = |s: &str| {
+        s.bytes()
+            .map(|c| c.to_ascii_lowercase())
+            .collect::<Vec<u8>>()
+    };
+    fold(a).cmp(&fold(b))
+}
+
+/// The CoD 1 loaders' merge sort (1.1 CoDMP.exe 0x433750, 1.5 0x435970, UO
+/// CoDUOMP.exe 0x4375d0) over the rows a level loads, in the engine's list
+/// order (each row pushed on the front, so the last row loaded leads). Rows
+/// sort by name, then `sequence`; two of one name and sequence from two
+/// csvs drop the one whose csv name sorts first, from one csv keep both,
+/// the right half's first (research doc, section 1e).
+fn sort_cod1(mut rows: Vec<AliasRow>) -> Vec<AliasRow> {
+    use std::cmp::Ordering::*;
+    if rows.len() <= 1 {
+        return rows;
+    }
+    let right = sort_cod1(rows.split_off(rows.len() / 2));
+    let left = sort_cod1(rows);
+    let mut out = Vec::with_capacity(left.len() + right.len());
+    let (mut l, mut r) = (left.into_iter().peekable(), right.into_iter().peekable());
+    while let (Some(a), Some(b)) = (l.peek(), r.peek()) {
+        let by_key = stricmp(&a.name, &b.name)
+            .then((a.sequence as i32).wrapping_sub(b.sequence as i32).cmp(&0));
+        match (by_key, stricmp(&a.csv, &b.csv)) {
+            (Less, _) => out.extend(l.next()),
+            (Greater, _) => out.extend(r.next()),
+            (Equal, Less) => drop(l.next()),
+            (Equal, Greater) => drop(r.next()),
+            (Equal, Equal) => {
+                log::debug!("sound alias file {}: duplicate alias '{}'", a.csv, a.name);
+                out.extend(r.next());
+            }
+        }
+    }
+    out.extend(l);
+    out.extend(r);
+    out
 }
 
 impl AliasTable {
-    /// `source` labels warnings.
+    /// `source` labels warnings and names the rows' csv.
     pub fn parse_csv(text: &str, source: &str) -> AliasTable {
-        let mut table = AliasTable::default();
+        let mut table = AliasTable {
+            cod1: true,
+            ..AliasTable::default()
+        };
+        let csv = source.rsplit('/').next().unwrap_or(source);
+        let mut order = 0;
         let mut cols: Option<HashMap<String, usize>> = None;
         let mut warned_channel = false;
         for raw in text.lines() {
@@ -298,7 +347,7 @@ impl AliasTable {
                 other => MasterSlave::Slave(other.parse::<f32>().unwrap_or(0.0)),
             };
 
-            // Clamped so a group's weights sum in u32; NaN falls to 1 via max.
+            // Clamped so up to 4294 rows' weights sum in u32; NaN falls to 1 via max.
             let probability = cell("probability")
                 .parse::<f32>()
                 .map(|p| p.round().max(1.0).min(MAX_PROBABILITY as f32) as u32)
@@ -321,10 +370,12 @@ impl AliasTable {
                 curve: None,
                 secondary: None,
                 start_delay_ms: 0,
-                csv: String::new(),
+                csv: csv.to_string(),
+                order,
                 subtitle: None,
                 no_wet: false,
             };
+            order += 1;
             table.rows.entry(name).or_default().push(row);
         }
         for rows in table.rows.values_mut() {
@@ -333,22 +384,30 @@ impl AliasTable {
         table
     }
 
+    /// Appends `other`'s rows after this table's in load order.
     pub fn merge(&mut self, other: AliasTable) {
+        let base = self.rows.values().map(Vec::len).sum::<usize>() as u32;
+        self.cod1 |= other.cod1;
         for (name, rows) in other.rows {
             let entry = self.rows.entry(name).or_default();
-            entry.extend(rows);
+            entry.extend(rows.into_iter().map(|r| AliasRow {
+                order: base + r.order,
+                ..r
+            }));
             sort_group(entry);
         }
         self.skipped += other.skipped;
         self.errors.extend(other.errors);
     }
 
-    /// Every `soundaliases/*.csv`. The listing dedups paths with the later
-    /// pak winning; a duplicate name across files adds rows to the group
-    /// (research doc, section 1a).
+    /// Every `soundaliases/*.csv` in `FS_GetFileList`'s order, a name in
+    /// two paks read from the later one (research doc, section 1a).
     pub fn load(fs: &(impl AssetSource + ?Sized)) -> AliasTable {
-        let mut table = AliasTable::default();
-        for path in fs.list("soundaliases", ".csv") {
+        let mut table = AliasTable {
+            cod1: true,
+            ..AliasTable::default()
+        };
+        for path in fs.file_list("soundaliases", ".csv") {
             match fs.read(&path) {
                 Some(bytes) => {
                     let t = AliasTable::parse_csv(&String::from_utf8_lossy(&bytes), &path);
@@ -392,6 +451,20 @@ impl AliasTable {
             skipped: self.skipped,
             ..AliasTable::default()
         };
+        if self.cod1 {
+            let mut loaded: Vec<AliasRow> = self
+                .rows
+                .values()
+                .flatten()
+                .filter(|r| loadspec_admits(&r.loadspec, &map))
+                .cloned()
+                .collect();
+            loaded.sort_by_key(|r| std::cmp::Reverse(r.order));
+            for r in sort_cod1(loaded) {
+                out.rows.entry(r.name.clone()).or_default().push(r);
+            }
+            return out;
+        }
         for (name, rows) in &self.rows {
             let kept: Vec<AliasRow> = rows
                 .iter()
@@ -451,11 +524,12 @@ impl AliasTable {
 /// A `probability`-weighted row of `rows` among those `open` lets in, off
 /// `roll` uniform in `[0, 1)`, with its index.
 fn draw(rows: &[AliasRow], roll: f32, open: impl Fn(usize) -> bool) -> (Pick<'_>, Option<usize>) {
-    let total: u32 = rows
+    // In u64: a CoD4 zone's weights reach u32::MAX each.
+    let total: u64 = rows
         .iter()
         .enumerate()
         .filter(|&(i, _)| open(i))
-        .map(|(_, r)| r.probability)
+        .map(|(_, r)| u64::from(r.probability))
         .sum();
     if total == 0 {
         // No row admits the distance: retail's pick comes back empty
@@ -463,12 +537,12 @@ fn draw(rows: &[AliasRow], roll: f32, open: impl Fn(usize) -> bool) -> (Pick<'_>
         // `probability` parses to at least 1.
         return (Pick::Silent, None);
     }
-    let mut target = (roll.clamp(0.0, 0.999_999) * total as f32) as u32;
+    let mut target = (roll.clamp(0.0, 0.999_999) * total as f32) as u64;
     for (i, r) in rows.iter().enumerate() {
         if !open(i) {
             continue;
         }
-        if target < r.probability {
+        if target < u64::from(r.probability) {
             let pick = if is_null_file(&r.file) {
                 Pick::Silent
             } else {
@@ -476,7 +550,7 @@ fn draw(rows: &[AliasRow], roll: f32, open: impl Fn(usize) -> bool) -> (Pick<'_>
             };
             return (pick, Some(i));
         }
-        target -= r.probability;
+        target -= u64::from(r.probability);
     }
     (Pick::Unknown, None)
 }
@@ -546,8 +620,6 @@ mod tests {
         assert_eq!(x.loadspec, "! airfield");
     }
 
-    /// `weap_mg42_loop`'s two rows in UO's `gmi_mp_vehicles_ge.csv`: the
-    /// near file inside 1800 units, the distant one past it.
     /// UO's no-repeat rule counts only the admitted rows (0x438300): two
     /// near rows of a four-row group may repeat, three may not, and a far
     /// pick between leaves the near rows' counters alone.
@@ -578,6 +650,8 @@ mod tests {
         assert_eq!(file(&three, &mut counts, 10.0), "n0.wav");
     }
 
+    /// `weap_mg42_loop`'s two rows in UO's `gmi_mp_vehicles_ge.csv`: the
+    /// near file inside 1800 units, the distant one past it.
     #[test]
     fn a_lod_pick_takes_the_row_for_the_distance() {
         let text = "name,sequence,file,vol_min,vol_max,pitch_min,pitch_max,dist_min,dist_max,lod_min,lod_max,channel,type,probability,loop\n\
@@ -651,6 +725,20 @@ mod tests {
         assert!(matches!(t.pick("big", 0.75, None).0, Pick::Row(r) if r.file == "b.wav"));
     }
 
+    /// Weights the CoD4 builder makes can reach u32::MAX; the sum does not
+    /// overflow and the draw still picks by weight (BUG-078).
+    #[test]
+    fn two_rows_at_u32_max_weight_pick_without_overflow() {
+        let text = format!("{HEADER}\nbig,1,a.wav,,,,,,,,,1,,,,\nbig,2,b.wav,,,,,,,,,1,,,,\n");
+        let t = AliasTable::parse_csv(&text, "test");
+        let mut rows = t.get("big").unwrap().to_vec();
+        for r in &mut rows {
+            r.probability = u32::MAX;
+        }
+        assert!(matches!(draw(&rows, 0.0, |_| true).0, Pick::Row(r) if r.file == "a.wav"));
+        assert!(matches!(draw(&rows, 0.75, |_| true).0, Pick::Row(r) if r.file == "b.wav"));
+    }
+
     #[test]
     fn merge_appends_rows_for_the_same_name() {
         let mut a = AliasTable::parse_csv(&format!("{HEADER}\nn,1,a.wav,,,,,,,,,,,,,\n"), "test");
@@ -676,6 +764,33 @@ mod tests {
         let rows = a.get("n").unwrap();
         assert_eq!(rows[0].sequence, 1);
         assert_eq!(rows[1].sequence, 2);
+    }
+
+    /// 1.1's merge sort (CoDMP.exe 0x433750): a name and sequence in two
+    /// csvs keeps the later-sorting csv's rows only, case folded; rows tied
+    /// within one csv stay in file order.
+    #[test]
+    fn a_level_keeps_one_csvs_rows_for_a_name_and_sequence() {
+        let mut t = AliasTable::parse_csv(
+            &format!("{HEADER}\nfire,,a1.wav,,,,,,,,,,,,,\nfire,1,a3.wav,,,,,,,,,,,,,\n"),
+            "soundaliases/Zed.csv",
+        );
+        t.merge(AliasTable::parse_csv(
+            &format!("{HEADER}\nfire,,b1.wav,,,,,,,,,,,,,\nfire,,b2.wav,,,,,,,,,,,,,\nfire,,b3.wav,,,,,,,,,,,,,\n"),
+            "soundaliases/zoo.csv",
+        ));
+        t.merge(AliasTable::parse_csv(
+            &format!("{HEADER}\nfire,,c1.wav,,,,,,,,,,,,,\nfire,1,c3.wav,,,,,,,,,,,,,\n"),
+            "soundaliases/a_mod.csv",
+        ));
+        let files: Vec<_> = t
+            .for_map("mp_carentan")
+            .get("fire")
+            .unwrap()
+            .iter()
+            .map(|r| r.file.clone())
+            .collect();
+        assert_eq!(files, ["b1.wav", "b2.wav", "b3.wav", "a3.wav"]);
     }
 
     #[test]
@@ -800,5 +915,15 @@ mod tests {
         assert_eq!(rows[0].dist, (7.0, 7800.0));
         let af = t.for_map("airfield");
         assert_eq!(af.get("weap_mp40_fire").unwrap()[0].dist, (7.0, 3000.0));
+    }
+
+    #[test]
+    fn a_hostile_alias_table_never_panics() {
+        let good = format!(
+            "{HEADER}\nweap_fire,1,weapons/a.wav,1.25,1.35,0.9,1.05,7,7800,weapon,streamed,2,looping,master,mp_x,\nweap_fire,2,weapons/b.wav,1,1,1,1,0,0,body,,,,slave,,\n"
+        );
+        vcod_common::testing::fuzz("aliases", good.as_bytes(), 3000, |b| {
+            AliasTable::parse_csv(&String::from_utf8_lossy(b), "test");
+        });
     }
 }

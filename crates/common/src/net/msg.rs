@@ -1,14 +1,10 @@
 //! Contains routines ported from the RTCW-MP GPL source, Copyright (C) 1999-2010 id Software LLC, a ZeniMax Media company.
 //! See NOTICE.
 //!
-//! Message reader/writer and the delta codecs, ported from RTCW-MP
-//! `qcommon/msg.c` and corrected against cod_lnxded 1.1d. Wire layout:
-//! `docs/protocol-1.1.md`, "The message-block model" and "Delta field encoding".
-//!
-//! The body is block-decompressed up front and read as plain bytes with two
-//! cursors, `readcount` for whole bytes and `bit` for bit fields, as `msg_t`
-//! does. A raw byte read in the middle of a run of bit fields lands after the
-//! byte those bits are still filling.
+//! CoD1's delta codecs over [`super::codec`]'s reader and writer: entity,
+//! client, playerstate and usercmd, ported from RTCW-MP `qcommon/msg.c` and
+//! corrected against cod_lnxded 1.1d. Wire layout: `docs/protocol-1.1.md`,
+//! "Delta field encoding".
 
 use super::codec::{
     ANGLE_BITS, FieldCodec, NetField, write_delta_field, write_delta_struct, write_ps_value,
@@ -155,6 +151,11 @@ pub struct ClientState {
     pub fields: Vec<i32>,
 }
 
+/// `clientState_t.name`'s eight words' netfield names.
+const NAME_WORDS: [&str; 8] = [
+    "name[0]", "name[4]", "name[8]", "name[12]", "name[16]", "name[20]", "name[24]", "name[28]",
+];
+
 impl ClientState {
     pub fn null(p: &Cod1Wire) -> Self {
         ClientState {
@@ -176,7 +177,7 @@ impl ClientState {
     pub fn name(&self, p: &Cod1Wire) -> String {
         let mut bytes = Vec::with_capacity(32);
         for off in (0..32).step_by(4) {
-            let v = self.field_i32(p, &format!("name[{off}]")) as u32;
+            let v = self.field_i32(p, NAME_WORDS[off / 4]) as u32;
             bytes.extend_from_slice(&v.to_le_bytes());
         }
         bytes
@@ -197,7 +198,7 @@ impl ClientState {
         let mut bytes: Vec<u8> = name.bytes().take(31).collect();
         bytes.resize(32, 0);
         for (chunk, off) in bytes.chunks(4).zip((0..32).step_by(4)) {
-            let Some(idx) = Self::field_index(p, &format!("name[{off}]")) else {
+            let Some(idx) = Self::field_index(p, NAME_WORDS[off / 4]) else {
                 break;
             };
             let mut word = [0u8; 4];
@@ -516,12 +517,12 @@ fn read_delta_field(r: &mut MsgReader, from_val: i32, bits: i32) -> i32 {
     FieldCodec::COD1.read_delta_field(r, from_val, bits)
 }
 
-/// `MSG_ReadDeltaPlayerstate` (cod_lnxded 0x807e2f0). No per-field zero flag,
-/// unlike the entity delta; the trailing array blocks are consumed only to
-/// stay aligned. docs/protocol-1.1.md, "PlayerState delta".
 /// `pm_flags`' slot in every protocol's playerState table.
 const PM_FLAGS_INDEX: usize = 12;
 
+/// `MSG_ReadDeltaPlayerstate` (cod_lnxded 0x807e2f0). No per-field zero flag,
+/// unlike the entity delta; the trailing array blocks are consumed only to
+/// stay aligned. docs/protocol-1.1.md, "PlayerState delta".
 pub fn read_delta_playerstate(r: &mut MsgReader, p: &Cod1Wire, from: &PlayerState) -> PlayerState {
     let mut to = PlayerState {
         fields: from.fields.clone(),
@@ -917,7 +918,7 @@ pub const WBUTTON_SHELLSHOCK: u8 = 0x04;
 pub const WBUTTON_RELOAD: u8 = 0x08;
 /// United Offensive: held while the cgame's flame chunks reach the
 /// player (uo cgame trap 0x58, CoDUOMP.exe 0x40c89b); the server burns
-/// only a client whose cmd carries it (docs/research/coduo-diff.md 19,
+/// only a client whose cmd carries it (docs/research/coduo-diff.md 19.3,
 /// "The flame report").
 pub const WBUTTON_IN_FLAME_V22: u8 = 0x01;
 pub const WBUTTON_LEAN_LEFT: u8 = 0x10;
@@ -2152,8 +2153,6 @@ mod tests {
         );
     }
 
-    /// The count byte after a 2-bit clc op lands at the byte cursor, alone and
-    /// behind a reliable `clc_clientCommand`.
     /// The serverTime must survive a decode against a base the server never
     /// received (a dropped usercmd): we send absolute time, so it reconstructs
     /// correctly regardless of the server's stored base. An 8-bit delta anchored
@@ -2181,6 +2180,43 @@ mod tests {
         assert_eq!(got.forward, 127);
     }
 
+    /// A cmd clock at either end of `int`: the absolute branch round-trips
+    /// byte for byte, and the 8-bit delta wraps past `i32::MAX` as
+    /// `MSG_ReadDeltaUsercmdKey`'s `int` add does (0x807b7f8).
+    #[test]
+    fn usercmd_clock_wraps_at_the_ends_of_int() {
+        let h = Huffman::new();
+        let key = 0x1122_3344i32;
+        for t in [i32::MAX, i32::MIN] {
+            let to = UserCmd {
+                server_time: t,
+                forward: 127,
+                ..NULL_USERCMD
+            };
+            let mut w = MsgWriter::new(&h);
+            write_delta_usercmd(&mut w, key, &NULL_USERCMD, &to);
+            let d = w.finish();
+            let got = read_delta_usercmd(&mut MsgReader::new(&d, &h), key, &NULL_USERCMD).unwrap();
+            assert_eq!(got, to);
+            let mut w = MsgWriter::new(&h);
+            write_delta_usercmd(&mut w, key, &NULL_USERCMD, &got);
+            assert_eq!(w.finish(), d);
+        }
+        // The delta branch: one byte on a base 5 ms short of `i32::MAX`.
+        let base = UserCmd {
+            server_time: i32::MAX - 5,
+            ..NULL_USERCMD
+        };
+        let mut w = MsgWriter::new(&h);
+        w.write_bits(1, 1);
+        w.write_byte(10);
+        w.write_bits(key & 1, 1); // unchanged
+        let got = read_delta_usercmd(&mut MsgReader::new(&w.finish(), &h), key, &base).unwrap();
+        assert_eq!(got.server_time, i32::MIN + 4);
+    }
+
+    /// The count byte after a 2-bit clc op lands at the byte cursor, alone and
+    /// behind a reliable `clc_clientCommand`.
     #[test]
     fn move_ops_count_reads_back() {
         let h = Huffman::new();

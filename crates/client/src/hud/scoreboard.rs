@@ -243,8 +243,8 @@ pub struct Scoreboard {
     next_request: f32,
     warned_malformed: bool,
     warned_truncated: bool,
-    /// Gates [`Self::totals`] so an unrequested board does not override the
-    /// header with `(0, 0)`.
+    /// A `b` reply came since the last gamestate; gates [`Self::totals`] so
+    /// an unrequested board does not override the header with `(0, 0)`.
     received: bool,
     /// Items (banners and rows) scrolled off the top (`0x3020c03c`).
     scroll: i32,
@@ -288,11 +288,11 @@ impl Scoreboard {
         self.rows_drawn
     }
 
-    /// Latest (axis, allies), or `None` before the first reply. `Hud::build`
-    /// prefers these over CS 5/6, which can lag (doc section 5, "Header vs.
-    /// scoreboard totals").
+    /// Latest (axis, allies) while the board is up and its replies keep
+    /// coming, else `None`. `Hud::build` prefers these over CS 5/6, which
+    /// can lag (doc section 5, "Header vs. scoreboard totals").
     pub fn totals(&self) -> Option<(i32, i32)> {
-        self.received
+        (self.received && (self.held || self.intermission))
             .then_some((self.axis_score, self.allies_score))
     }
 
@@ -371,9 +371,11 @@ impl Scoreboard {
         self.next_request = now + REQUEST_INTERVAL;
     }
 
-    /// Drop the rows; the totals, visibility and request timer stay.
+    /// Drop the rows and the reply's totals; visibility and the request
+    /// timer stay.
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.received = false;
     }
 
     /// The board's alpha at `now`, `None` when it is not drawn: 1 while
@@ -457,16 +459,11 @@ impl Scoreboard {
         let count = |t: i32| rows.iter().filter(|(e, _)| e.team == t).count();
         let counts = [count(0), count(1), count(2), count(3)];
         let ping = |t: i32| {
-            let sum: i32 = rows
+            let pings = rows
                 .iter()
                 .filter(|(e, _)| e.team == t)
-                .map(|(e, _)| e.ping)
-                .sum();
-            if counts[t as usize] < 1 || sum < 1 {
-                0
-            } else {
-                sum / counts[t as usize] as i32
-            }
+                .map(|(e, _)| e.ping);
+            team_ping(pings, counts[t as usize])
         };
         let teams = counts[1] != 0 || counts[2] != 0;
 
@@ -562,7 +559,6 @@ impl Draw<'_> {
     }
 
     /// Text trap 0x36 in font 0 at a baseline.
-    #[allow(clippy::too_many_arguments)]
     fn text(&self, s: &str, x: f32, y: f32, scale: f32, rgb: [f32; 3], out: &mut Vec<HudQuad>) {
         let rgba = [rgb[0], rgb[1], rgb[2], self.alpha];
         menu_text_rgba(self.font(scale), s, (x, y), scale, rgba, self.v, out);
@@ -570,7 +566,6 @@ impl Draw<'_> {
 
     /// [`Self::text`] in `UI_DrawText`'s style 0, no shadow: CoD2's row
     /// cell once it shrank below 0.16 (cod2-hud.md 13).
-    #[allow(clippy::too_many_arguments)]
     fn text_plain(
         &self,
         s: &str,
@@ -642,7 +637,7 @@ impl Cursor {
     /// `0x3002a970`: the team's banner, its name and player count in the
     /// team's colour, and for axis and allies the team's score and average
     /// ping in their columns. Returns the y the rows start at.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn banner(
         &mut self,
         d: &Draw,
@@ -736,7 +731,7 @@ impl Cursor {
     }
 
     /// `0x3002ace0`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn row(
         &mut self,
         d: &Draw,
@@ -808,6 +803,17 @@ impl Cursor {
 
 /// The smallest scale a CoD2 row cell keeps its shadow at (0x326398).
 const SHADOW_MIN_SCALE: f32 = 0.16;
+
+/// A team's mean ping, 0 without players or a positive sum; the sum wraps
+/// as retail's int does.
+fn team_ping(pings: impl Iterator<Item = i32>, count: usize) -> i32 {
+    let sum = pings.fold(0i32, i32::wrapping_add);
+    if count < 1 || sum < 1 {
+        0
+    } else {
+        sum / count as i32
+    }
+}
 
 /// CoD2's `CG_DrawClientScore` (Mac 0x1c51b2): the scale less 0.02 at a
 /// time until `s` fits `w`.
@@ -1069,12 +1075,37 @@ mod tests {
         assert_eq!(b.entries.len(), before);
     }
 
+    /// Server-sent pings near the i32 limit wrap instead of panicking
+    /// (SEC-100).
+    #[test]
+    fn team_pings_wrap_like_retail() {
+        assert_eq!(team_ping([50, 70].into_iter(), 2), 60);
+        assert_eq!(team_ping([i32::MAX, 1].into_iter(), 2), 0);
+        assert_eq!(team_ping([].into_iter(), 0), 0);
+    }
+
     #[test]
     fn rows_keep_the_servers_order() {
         let mut b = Scoreboard::new();
         b.on_server_command(&toks("b 2 0 0 1 5 40 0 0 2 9 60 0 0"));
         let rows = b.rows_for_team(0);
         assert_eq!(rows.iter().map(|e| e.client).collect::<Vec<_>>(), [1, 2]);
+    }
+
+    /// The header takes a `b` reply's totals only while the board is up:
+    /// once it is down or a gamestate came, CS 5/6 speak again.
+    #[test]
+    fn totals_last_only_while_the_board_is_up() {
+        let mut b = Scoreboard::new();
+        b.press(0.0);
+        b.on_server_command(&toks("b 0 50 40"));
+        assert_eq!(b.totals(), Some((50, 40)));
+        b.release(1.0);
+        assert_eq!(b.totals(), None);
+        b.intermission = true;
+        assert_eq!(b.totals(), Some((50, 40)));
+        b.clear();
+        assert_eq!(b.totals(), None);
     }
 
     #[test]

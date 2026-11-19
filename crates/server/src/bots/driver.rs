@@ -26,11 +26,48 @@ const ENEMY_REFRESH_MS: i32 = 100;
 const COVER_REFRESH_MS: i32 = 250;
 
 /// What the driver keeps per bot and per level, inside the game that owns
-/// the bots.
+/// the bots. The fields are grouped by how long they live; the three
+/// resets ([`Self::forget`], [`Self::new_graph`], [`Self::new_level`])
+/// are the only places a game clears them.
 #[derive(Default)]
 pub(crate) struct BotDriver {
+    // For the match: the brains, the build's mode, the counts `bot_match`
+    // reads.
     /// The brains, by slot. An entry whose client is gone goes with it.
     pub(crate) bots: BTreeMap<usize, Bot>,
+    /// Whether the tick waits for the build of [`Self::nav`] or ticks on
+    /// with the bots off the graph until it lands.
+    pub(crate) nav_background: bool,
+    /// Edges the followers gave up on ([`Follower::gave_up`]), and those
+    /// of them with another body within [`STALL_NEAR`]: the measure of
+    /// stalls on a body (`bot_match`, `ship_stalls`).
+    pub(crate) edge_stalls: [u32; 2],
+    /// The generation of [`Self::nav`]: [`Self::new_graph`] steps it, and
+    /// [`super::posts::Posts`] keeps its surveys only under the one they
+    /// were made in.
+    pub(crate) graph: u64,
+
+    // For the graph: kept across a level on the same map.
+    /// The level's navigation graph, built on the first tick with bots.
+    pub(crate) nav: Option<Arc<NavGraph>>,
+    /// The build of `nav` under way.
+    pub(crate) nav_job: Option<NavJob>,
+    /// Each zone's `(mins, maxs)` and the stand picked in it, for the life
+    /// of the nav graph.
+    pub(crate) sites: Vec<([f32; 3], [f32; 3], [f32; 3])>,
+    /// Each headquarters radio's point and the stand picked for it, as
+    /// [`Self::sites`].
+    pub(crate) radios: Vec<([f32; 3], [f32; 3])>,
+
+    // For the world: kept across a level on the same map.
+    /// The drop probe's crease verdicts on the loaded world.
+    pub(crate) creases: std::cell::RefCell<Creases>,
+    /// The drop and wall probes by the feet they were felt from, on a
+    /// game whose world holds still ([`BotWorld::STILL_WORLD`]); kept as
+    /// long as [`Self::creases`].
+    pub(crate) probes: std::cell::RefCell<Probes>,
+
+    // For the level, per bot: [`Self::forget`] drops a bot's entries.
     /// Per bot, `(sv_time of the last look, the enemy that look found)`.
     /// A fresh LOS trace per bot per tick was the other half of the 24-bot
     /// CPU load; a bot does not need a new verdict every 50 ms.
@@ -47,36 +84,17 @@ pub(crate) struct BotDriver {
     /// Per hunting bot, `(the lost enemy's spot, its vantage)`
     /// ([`super::BotView::hunt`]).
     pub(crate) hunts: BTreeMap<usize, ([f32; 3], Option<[f32; 3]>)>,
-    /// The level's navigation graph, built on the first tick with bots.
-    pub(crate) nav: Option<Arc<NavGraph>>,
-    /// The build of `nav` under way, and whether the tick waits for it or
-    /// ticks on with the bots off the graph until it lands.
-    pub(crate) nav_job: Option<NavJob>,
-    pub(crate) nav_background: bool,
-    /// The drop probe's crease verdicts on the loaded world.
-    pub(crate) creases: std::cell::RefCell<Creases>,
-    /// The drop and wall probes by the feet they were felt from, on a
-    /// game whose world holds still ([`BotWorld::STILL_WORLD`]); kept as
-    /// long as [`Self::creases`].
-    pub(crate) probes: std::cell::RefCell<Probes>,
-    /// Per bot, its walk along `nav`.
+    /// Per bot, its walk along `nav`; a new graph drops them too.
     pub(crate) paths: BTreeMap<usize, Follower>,
-    /// Each zone's `(mins, maxs)` and the stand picked in it, for the life
-    /// of the nav graph.
-    pub(crate) sites: Vec<([f32; 3], [f32; 3], [f32; 3])>,
-    /// Each headquarters radio's point and the stand picked for it, as
-    /// [`Self::sites`].
-    pub(crate) radios: Vec<([f32; 3], [f32; 3])>,
+
+    // For the level.
     /// The shots and blasts since the bots last listened, in sim order;
     /// the tick takes them at its top.
     pub(crate) noises: Vec<Noise>,
     /// Who may yell now, and who was alive last tick (`super::yell`).
     pub(crate) yells: super::yell::Gate,
-    /// Edges the followers gave up on ([`Follower::gave_up`]), and those
-    /// of them with another body within [`STALL_NEAR`]: the measure of
-    /// stalls on a body (`bot_match`, `ship_stalls`).
-    pub(crate) edge_stalls: [u32; 2],
-    /// The guards' posts round their objectives ([`super::posts`]).
+    /// The guards' posts round their objectives ([`super::posts`]); its
+    /// cue counts run over the match, its surveys over the graph.
     pub(crate) posts: super::posts::Posts,
     /// Each side's sightings of enemies on a `ctf` level, `(team, where,
     /// sv_time)`, kept [`ctf::DANGER_MS`] ([`ctf::sightings`]).
@@ -91,6 +109,97 @@ pub(crate) struct BotDriver {
 }
 
 impl BotDriver {
+    /// Drops what the driver keeps for `slot`'s bot: its brain and every
+    /// entry by its slot. Every field is named, so a new one is placed.
+    pub(crate) fn forget(&mut self, slot: usize) {
+        let BotDriver {
+            bots,
+            enemies,
+            sidesteps,
+            covers,
+            hunts,
+            paths,
+            yells,
+            posts,
+            nav_background: _,
+            edge_stalls: _,
+            graph: _,
+            nav: _,
+            nav_job: _,
+            sites: _,
+            radios: _,
+            creases: _,
+            probes: _,
+            noises: _,
+            ctf_seen: _,
+            ctf_home: _,
+            ctf_base: _,
+            ctf_take: _,
+        } = self;
+        bots.remove(&slot);
+        enemies.remove(&slot);
+        sidesteps.remove(&slot);
+        covers.remove(&slot);
+        hunts.remove(&slot);
+        paths.remove(&slot);
+        yells.forget(slot);
+        posts.forget(slot);
+    }
+
+    /// The graph is gone (a new map, a world built again): the walks, the
+    /// stands picked on it and, by the next [`Self::graph`], the posts'
+    /// surveys go with it, for the next tick to build it again.
+    pub(crate) fn new_graph(&mut self) {
+        self.nav = None;
+        self.nav_job = None;
+        self.sites.clear();
+        self.radios.clear();
+        self.paths.clear();
+        self.graph = self.graph.wrapping_add(1);
+    }
+
+    /// A graph rebuilt over the same world replaces the one the bots walk:
+    /// what rested on the old one goes ([`Self::new_graph`]).
+    pub(crate) fn swap_graph(&mut self, g: Arc<NavGraph>) {
+        self.new_graph();
+        self.nav = Some(g);
+    }
+
+    /// The world under the bots changed: its probes' verdicts go with the
+    /// graph built over it.
+    pub(crate) fn new_world(&mut self) {
+        self.new_graph();
+        self.creases = Default::default();
+        self.probes = Default::default();
+    }
+
+    /// A new level under the bots: everything the level kept starts over
+    /// but the brains, the match's counts and the build's mode; on
+    /// `same_map` the graph and the world built over it stay too. A field
+    /// not named here starts over.
+    pub(crate) fn new_level(&mut self, same_map: bool) {
+        let mut old = std::mem::take(self);
+        *self = BotDriver {
+            bots: old.bots,
+            nav_background: old.nav_background,
+            edge_stalls: old.edge_stalls,
+            graph: old.graph,
+            ..Default::default()
+        };
+        self.posts.tally = old.posts.tally;
+        if same_map {
+            self.nav = old.nav;
+            self.nav_job = old.nav_job;
+            self.sites = old.sites;
+            self.radios = old.radios;
+            self.creases = old.creases;
+            self.probes = old.probes;
+            self.posts.carry_surveys(&mut old.posts);
+        } else {
+            self.new_world();
+        }
+    }
+
     /// [`NavGraph::zone_stand`], cached per zone in [`Self::sites`]; the
     /// middle of the zone's floor until the graph lands.
     pub(crate) fn zone_stand(&mut self, mins: [f32; 3], maxs: [f32; 3]) -> [f32; 3] {
@@ -164,7 +273,7 @@ pub(crate) enum Joining {
 
 /// What a game lends the driver for one tick. Each method is a read or a
 /// write the driver makes at one point of the tick, and the driver keeps
-/// that order (AGENTS.md, "Bots"): a call moved across another changes
+/// that order (docs/dev/traps.md, "Bots"): a call moved across another changes
 /// what the bots draw and see.
 pub(crate) trait BotWorld {
     /// The game's objective state, read once a tick before the views and
@@ -266,22 +375,28 @@ pub(crate) trait BotWorld {
     /// The hit the bot in `slot` felt, read every tick ahead of its enemy
     /// lookup, cached or not; [`Self::enemy`] and [`Self::view`] read it.
     fn feel(&mut self, _slot: usize) {}
-    /// The health packs lying about, for the retreat's heal.
-    fn health_packs(&mut self) -> Vec<[f32; 3]>;
+    /// The health packs lying about, for the retreat's heal; none by
+    /// default (CoD2's and CoD4's stock levels place none).
+    fn health_packs(&mut self) -> Vec<[f32; 3]> {
+        Vec::new()
+    }
     fn body(&self, slot: usize) -> Option<Body>;
     /// The enemy the bot in `slot` fights, looked for afresh.
     fn enemy(&self, slot: usize, teams: &[i32]) -> Option<EnemyView>;
     /// The body in `slot` as the brain reads it; `None` with no body.
     fn view(&self, slot: usize, enemy: Option<EnemyView>) -> Option<BotView>;
     /// [`BotView::friend_in_line`] and [`BotView::sidestep`] against
-    /// `target`, `held` the sidestep under way.
+    /// `target`, `held` the sidestep under way; by default no teammate is
+    /// in the line and no sidestep is picked (CoD1's alone).
     fn friend_in_line(
         &self,
-        slot: usize,
-        target: [f32; 3],
-        teams: &[i32],
-        held: Option<([f32; 3], i32)>,
-    ) -> (bool, Option<[f32; 3]>);
+        _slot: usize,
+        _target: [f32; 3],
+        _teams: &[i32],
+        _held: Option<([f32; 3], i32)>,
+    ) -> (bool, Option<[f32; 3]>) {
+        (false, None)
+    }
     fn cover_body(&self, slot: usize, threat: usize) -> Option<CoverBody>;
     /// Pass 2's objective roles over every view.
     fn deal(
@@ -313,17 +428,33 @@ pub(crate) trait BotWorld {
     /// playerstate).
     fn move_ps(&self, slot: usize) -> Option<vcod_common::pmove::PlayerState>;
     /// The fall that kills the body in `slot` now
-    /// ([`crate::nav::fall_that_kills`]).
-    fn fall_kills(&self, slot: usize) -> Option<f32>;
-    /// The graph nodes the follower of the bot in `slot` keeps off.
-    fn blocked_nodes(&self, slot: usize) -> Arc<[u32]>;
-    /// The weapon table the edge probes step pmove with.
-    fn weapon_defs(&self) -> &[Option<vcod_common::weapon::WeaponDef>];
+    /// ([`crate::nav::fall_that_kills`]); none known by default.
+    fn fall_kills(&self, _slot: usize) -> Option<f32> {
+        None
+    }
+    /// The graph nodes the follower of the bot in `slot` keeps off; none
+    /// by default (only UO's parked vehicles block nodes).
+    fn blocked_nodes(&self, _slot: usize) -> Arc<[u32]> {
+        Arc::default()
+    }
+    /// The weapon table the edge probes step pmove with; read only under
+    /// [`Self::PMOVE_PROBES`], so empty by default.
+    fn weapon_defs(&self) -> &[Option<vcod_common::weapon::WeaponDef>] {
+        &[]
+    }
     /// The driver's seat's waypoint toward `goal`; marks
-    /// [`SeatView::short`] when the route ran out short of it.
-    fn drive_waypoint(&mut self, slot: usize, goal: Goal, seat: &mut SeatView) -> Option<[f32; 3]>;
+    /// [`SeatView::short`] when the route ran out short of it. No seats
+    /// by default.
+    fn drive_waypoint(
+        &mut self,
+        _slot: usize,
+        _goal: Goal,
+        _seat: &mut SeatView,
+    ) -> Option<[f32; 3]> {
+        None
+    }
     /// The bot in `slot` is out of a driver's seat.
-    fn forget_drive(&mut self, slot: usize);
+    fn forget_drive(&mut self, _slot: usize) {}
     /// [`BotView::lob`]: the throw of grenade `weapon` that bursts nearest
     /// `target`.
     fn lob_probe(
@@ -334,8 +465,11 @@ pub(crate) trait BotWorld {
         teams: &[i32],
     ) -> Option<[f32; 2]>;
 
-    /// Client commands queued for the bots outside the tick.
-    fn take_orders(&mut self) -> Vec<(usize, String)>;
+    /// Client commands queued for the bots outside the tick; none by
+    /// default (CoD2's and CoD4's admin answers at once).
+    fn take_orders(&mut self) -> Vec<(usize, String)> {
+        Vec::new()
+    }
     /// One client command from the bot in `slot`.
     fn bot_command(&mut self, slot: usize, text: String);
     /// The index of the script menu `name` among the menu configstrings,
@@ -348,16 +482,19 @@ pub(crate) trait BotWorld {
     fn killer(&self, _slot: usize) -> Option<usize> {
         None
     }
-    /// The joined bot's gamestate.
-    fn begin(&mut self, slot: usize);
+    /// The joined bot's gamestate; called only for a bot
+    /// [`Self::read_commands`] returned [`Joining::Joined`] for.
+    fn begin(&mut self, _slot: usize) {}
     /// The bots' cmds are one packet: stamped once before them.
     fn bot_packet(&mut self);
     /// The bot's cmd for the tick, `climbing` on the rungs.
     fn send_cmd(&mut self, slot: usize, cmd: Self::Cmd, climbing: bool);
-    /// The entering cmd of a primed bot.
-    fn enter(&mut self, slot: usize);
-    /// The bot read every reliable command sent.
-    fn ack(&mut self, slot: usize);
+    /// The entering cmd of a bot [`Self::read_commands`] returned
+    /// [`Joining::Entering`] for.
+    fn enter(&mut self, _slot: usize) {}
+    /// The bot read every reliable command sent; a game that acknowledges
+    /// them as it reads them ([`Self::manage`]) leaves this empty.
+    fn ack(&mut self, _slot: usize) {}
     /// The tick's last step, after the acks.
     fn tick_done(&mut self) {}
 }
@@ -513,6 +650,7 @@ fn deal_posts<W: BotWorld>(
             })
         })
         .collect();
+    let graph = w.driver().graph;
     let mut kept = std::mem::take(&mut w.driver_mut().posts);
     let Some(world) = w.world() else {
         w.driver_mut().posts = kept;
@@ -532,7 +670,7 @@ fn deal_posts<W: BotWorld>(
     for want in &wants {
         let (slot, team, a) = (want.slot, want.team, want.anchor);
         let key = a.key();
-        let survey = kept.survey(&g, &clear, &a);
+        let survey = kept.survey(graph, &g, &clear, &a);
         let Some(i) = views.iter().position(|(s, _)| *s == slot) else {
             continue;
         };
@@ -607,8 +745,10 @@ fn deal_posts<W: BotWorld>(
         let centre = a.centre();
         let mut posted: Vec<(usize, posts::Post, Option<[f32; 3]>)> = Vec::new();
         let far = match want.hold {
-            super::GuardHold::Far => Some(kept.outer(&g, &clear, a, &posts::OUT_BAND)),
-            super::GuardHold::FarNear => Some(kept.outer(&g, &clear, a, &posts::CTF_NEAR_BAND)),
+            super::GuardHold::Far => Some(kept.outer(graph, &g, &clear, a, &posts::OUT_BAND)),
+            super::GuardHold::FarNear => {
+                Some(kept.outer(graph, &g, &clear, a, &posts::CTF_NEAR_BAND))
+            }
             _ => None,
         };
         match far.filter(|o| !o.posts.is_empty()) {
@@ -755,7 +895,7 @@ fn cue_at(
 /// in ([`super::posts::OUTER`]), leaving one an enemy saw or shot them on.
 /// A cue pulls back [`super::posts::COLLAPSE_SHARE`] of the outposted,
 /// nearest it first, their starts staggered; a cue again holds them there.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn deal_far(
     kept: &mut super::posts::Posts,
     tick: &Tick,
@@ -1244,10 +1384,7 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
         .collect();
     let d = w.driver_mut();
     for slot in gone {
-        d.bots.remove(&slot);
-        d.enemies.remove(&slot);
-        d.sidesteps.remove(&slot);
-        d.paths.remove(&slot);
+        d.forget(slot);
     }
     replies.append(&mut w.take_orders());
     for (slot, r) in replies {
@@ -1331,7 +1468,7 @@ fn yell<W: BotWorld>(
 
 /// Pass 2 for one bot: its view, with the enemy (cached), the noise it
 /// answers, the heal and the sidestep round a friend in the line; and the
-/// enemy its cover spot is looked for against ([`covers`]).
+/// enemy its cover spot is looked for against ([`look_covers`]).
 fn sense<W: BotWorld>(
     w: &mut W,
     slot: usize,
@@ -1499,8 +1636,8 @@ fn stand_room<W: BotWorld>(w: &W, feet: [f32; 3]) -> bool {
 /// [`BotView::cover`] for the bot in `slot` fighting `enemy`: the spot it
 /// holds while that still hides and peeks, else the nearest that does
 /// ([`super::cover::find`]), looked at every [`COVER_REFRESH_MS`]: `Ok`
-/// with the spot, or `Err` with the look to take, whose spot [`covers`]
-/// keeps.
+/// with the spot, or `Err` with the look to take, whose spot
+/// [`BotDriver::covers`] keeps.
 fn cover<W: BotWorld>(
     w: &mut W,
     slot: usize,
@@ -1693,7 +1830,7 @@ const MATE_HOLD_TICKS: u32 = 200;
 /// [`MATE_HOLD_TICKS`]. A guard who
 /// held a door left a queue of teammates behind him, each walking into
 /// his back (bot-objectives.md 12.7). Empty otherwise.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn mates_in_way(
     follower: &mut crate::nav::Follower,
     g: &NavGraph,
@@ -1923,7 +2060,6 @@ struct RoutePlan {
 /// a search's slice ([`crate::nav::PLAN_SLICE`]): then the search it ran
 /// from a full budget took the slice it takes here and stopped where it
 /// stops here.
-#[allow(clippy::too_many_arguments)]
 fn route<W: BotWorld>(
     w: &mut W,
     slot: usize,
@@ -1984,6 +2120,10 @@ fn route<W: BotWorld>(
         b.rng = rng;
         b.heal_walked = matches!(goal, Goal::To(p)
             if follower.walked_out() && view.survive.heal == Some(p));
+        b.walked_to = match goal {
+            Goal::To(p) if follower.walked_out() => Some(p),
+            _ => None,
+        };
         if W::GIVES_UP_GOALS {
             b.arrived_goal = match goal {
                 Goal::To(p) if follower.walked_out() => Some(p),
@@ -2001,7 +2141,7 @@ fn route<W: BotWorld>(
 /// `oncoming` the bodies the bot gives way to, read only when needed.
 /// `Some` when the follower gave up an edge (`gave_up` before), `true`
 /// with another body near ([`BotDriver::edge_stalls`]).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn route_core<W: BotWorld>(
     input: &RouteIn,
     follower: &mut Follower,
@@ -2478,6 +2618,53 @@ mod tests {
     use super::*;
     use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
     use crate::nav::Footing;
+
+    /// A bot gone takes every entry by its slot with it, its cover, hunt
+    /// and post too (QUAL-019).
+    #[test]
+    fn forget_drops_every_entry_of_the_slot() {
+        let mut d = BotDriver::default();
+        d.bots.insert(3, Bot::new("axis", true, 1));
+        d.covers.insert(3, (0, None));
+        d.hunts.insert(3, ([0.0; 3], None));
+        d.posts.exposure.insert(3, 0.5);
+        d.posts.exposure.insert(4, 0.5);
+        d.forget(3);
+        assert!(d.bots.is_empty() && d.covers.is_empty() && d.hunts.is_empty());
+        assert_eq!(d.posts.exposure.keys().collect::<Vec<_>>(), [&4]);
+    }
+
+    /// A level on a new map keeps the brains and the match's counts and
+    /// drops the rest, the posts' record of who was alive included; on
+    /// the same map it keeps the graph and its generation (QUAL-019).
+    #[test]
+    fn a_new_level_keeps_the_match_and_on_the_same_map_the_graph() {
+        let g = Arc::new(NavGraph::from_parts(vec![Vec3::ZERO], vec![Vec::new()]));
+        let fill = || {
+            let mut d = BotDriver::default();
+            d.bots.insert(3, Bot::new("axis", true, 1));
+            d.nav = Some(g.clone());
+            d.edge_stalls = [2, 1];
+            d.posts.tally[0].cues = 5;
+            d.posts.alive.insert(7, (TEAM_AXIS, [0.0; 3]));
+            d.noises.push(Noise {
+                at: [0.0; 3],
+                source: 1,
+                radius: 1.0,
+            });
+            d
+        };
+        let mut d = fill();
+        d.new_level(true);
+        assert!(d.nav.is_some() && d.graph == 0);
+        assert!(d.posts.alive.is_empty() && d.noises.is_empty());
+        let mut d = fill();
+        d.new_level(false);
+        assert!(d.nav.is_none() && d.graph == 1);
+        assert!(d.bots.contains_key(&3));
+        assert_eq!((d.edge_stalls, d.posts.tally[0].cues), ([2, 1], 5));
+        assert!(d.posts.alive.is_empty() && d.noises.is_empty());
+    }
 
     /// With the game's `PARTS_MATES_BOX` the way round a still teammate
     /// standing between two nodes 32 apart keeps off both, the nodes a

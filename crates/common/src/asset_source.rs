@@ -12,8 +12,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-/// The asset kinds [`Asset`] is implemented for. More join as their
-/// consumers move onto [`load`].
+/// The asset kinds [`Asset`] is implemented for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AssetKind {
     /// A weapon file, by its configstring 7 name (`kar98k_mp`).
@@ -86,6 +85,20 @@ pub trait AssetSource: Send + Sync {
     /// (`".csv"`; `""` for all): lowercased full paths, sorted, each once.
     /// A `dir` of `""` lists the whole source.
     fn list(&self, dir: &str, ext: &str) -> Vec<String>;
+
+    /// `FS_GetFileList(dir, ext)`: the files directly under `dir/` ending in
+    /// `ext`, in the engine's search order where the order matters (a list
+    /// whose ties it settles); [`Self::list`]'s order elsewhere.
+    fn file_list(&self, dir: &str, ext: &str) -> Vec<String> {
+        self.list(dir, ext)
+            .into_iter()
+            .filter(|p| {
+                !p[dir.trim_end_matches('/').len()..]
+                    .trim_start_matches('/')
+                    .contains('/')
+            })
+            .collect()
+    }
 
     /// Where [`load`] keeps what it loaded.
     fn cache(&self) -> &AssetCache;
@@ -216,6 +229,10 @@ impl AssetSource for Pk3Fs {
         names
     }
 
+    fn file_list(&self, dir: &str, ext: &str) -> Vec<String> {
+        Pk3Fs::file_list(self, dir, ext)
+    }
+
     fn cache(&self) -> &AssetCache {
         self.asset_cache()
     }
@@ -224,12 +241,12 @@ impl AssetSource for Pk3Fs {
 /// `game`'s search path over `base` (the install's `main/`), `game_dir`'s
 /// archives on top: CoD1's pk3s (UO's `uo/` over its sibling `main/`,
 /// [`crate::pk3::base_dirs`]), CoD2's iwds. CoD4 has no path-based
-/// storage, so it fails.
+/// storage, so it fails; its assets come through `vcod_cod4`'s source.
 pub fn open_game_fs(game: Game, base: &Path, game_dir: Option<&Path>) -> Result<Pk3Fs> {
     match game {
         Game::Cod1 => Pk3Fs::open_layered(base, game_dir),
         Game::Cod2 => Pk3Fs::open_iwd(base, game_dir),
-        Game::Cod4 => bail!("CoD4 assets live in fastfiles, which vcod cannot read yet"),
+        Game::Cod4 => bail!("CoD4 assets live in fastfiles, not on a pak search path"),
     }
 }
 

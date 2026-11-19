@@ -23,16 +23,7 @@ fn hlsl_alpha(sprite: f32, scene: f32, feather: f32) -> f32 {
 }
 
 fn headless() -> Option<(wgpu::Device, wgpu::Queue)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
-    let info = adapter.get_info();
-    eprintln!("adapter: {} {:?}", info.name, info.backend);
-    // sample_image's per-mode samplers need more than GL gives a texture
-    if info.backend == wgpu::Backend::Gl {
-        return None;
-    }
-    pollster::block_on(adapter.request_device(&Default::default())).ok()
+    crate::renderer::headless::test_device(crate::renderer::headless::Need::NotGl)
 }
 
 /// A quad with corners `c` (in order round the edge), white, opaque.

@@ -25,7 +25,7 @@ a map without), on a port clear of `run_server.sh`'s 28960 and
 cp client-probes/probe_pers.gsc "$COD_LNXDED_HOME/main/maps/mp/gametypes/"
 printf '"PROBE_PERS"\r\n' > "$COD_LNXDED_HOME/main/maps/mp/gametypes/probe_pers.txt"
 rm -f "$COD_LNXDED_HOME/main/games_mp.log"
-private/reference/cod-lnxded-1.1d/cod_lnxded \
+"$COD_LNXDED" \
     +set dedicated 1 +set developer 1 +set logfile 2 \
     +set g_log games_mp.log +set g_logSync 1 \
     +set fs_basepath "$COD_DIR" +set fs_homepath "$COD_LNXDED_HOME" \
@@ -1502,8 +1502,8 @@ cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-secs 25 \
 Against ours: `vcod-server mp_pavlov --gametype-script
 crates/gsc/tests/fixtures/semantics/client-probes/probe_menuresponse.gsc`.
 Retail and ours, 2026-10-13, log the same fourteen `PROBE` lines; the doc's
-table quotes them. `server::tests::mr_answers_each_shape_as_retail` pins
-the parse.
+table quotes them. `server::client_msg::tests::mr_answers_each_shape_as_retail`
+pins the parse.
 
 
 ## probe_say
@@ -1955,7 +1955,7 @@ COD_LNXDED_HOME=<absolute, no '+'> PORT=29941 SECS=12 \
 Retail, 2026-10-09: `a 1050 299`, `b 1050 302`, then one spawn a frame
 303..309, 300 at +400, 310..315, 301 at +750, 316 on. Against ours the
 table is `grenade_explosion_effect_takes_a_temp_and_a_concussion_number`
-(`crates/server/src/game/script.rs`).
+(`crates/server/src/game/script/tests.rs`).
 
 ## probe_pushorder
 
@@ -2371,8 +2371,8 @@ PROBE wait1 1050
 PROBE wait1b 2050
 ```
 
-`crates/server/src/server.rs`'s `the_script_clock_matches_probe_startclock`
-replays it on ours.
+`crates/server/src/server/frame.rs`'s
+`the_script_clock_matches_probe_startclock` replays it on ours.
 
 ```
 COD_LNXDED_HOME=<absolute, no '+'> PORT=29931 SECS=12 \
@@ -2578,7 +2578,7 @@ PORT=<p> SECS=20 COD_DIR=<1.1 install> tools/run_probe.sh client-probes/probe_pa
 PORT=<p> SECS=20 COD_VERSION=1.5 COD_DIR=<1.5 install> tools/run_probe.sh client-probes/probe_patchseams mp_carentan
 ```
 
-`crates/common/src/collision.rs`'s `patch_seams_clip_as_each_retail_build`
+`crates/common/src/collision/tests.rs`'s `patch_seams_clip_as_each_retail_build`
 gates ours against both columns (`bsp-ibsp59-format.md`, "Patch collision
 on 1.5 and UO").
 
@@ -2710,7 +2710,7 @@ are `crates/server/tests/fixtures/playerstate/*-crouchjump-*.txt`, gated by
 ## probe_moveshot
 
 Shots whose 1.5 or United Offensive muzzle moves (`docs/research/cod11-combat.md`
-2.1, "1.5 and United Offensive"). Stock dm on mp_carentan; under
+2.1, "United Offensive and 1.5"). Stock dm on mp_carentan; under
 `probe_teleport 1` it puts every allied player facing world yaw 0:
 `probe_spot street` is probe_prone's street at (900 1930), the wall 1090
 units ahead; `wall` is the ground 20 units (`probe_walldist`) short of that
@@ -3025,5 +3025,5 @@ The logs are `crates/common/tests/fixtures/patch/pointarm-1.1.txt` and
 known, under stock tdm on mp_brecourt (`docs/research/cod11-server-handshake.md`,
 "Console commands over rcon"). No client needed; the capture is the rcon
 reply 4 s after the load, `crates/server/tests/fixtures/usage/mp_brecourt-probe_usage.txt`
-(recipe in its header). `crates/server/src/server.rs`'s
+(recipe in its header). `crates/server/src/server/console_cmds.rs`'s
 `script_usage_counts_as_retail` replays it on ours.

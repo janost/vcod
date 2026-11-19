@@ -1,8 +1,8 @@
 //! The engine state both servers embed: what retail's `svs` and `sv` hold
 //! that no game module reads by its own layout. `Server` (CoD1) and
 //! `Cod2Server` are each an `Engine` with one as its `core`, `C` being the
-//! game's client slot; both drive it through `engine::tick` (AGENTS.md,
-//! "The server tick").
+//! game's client slot; both drive it through `engine::tick`
+//! (docs/dev/server-tick.md, "One skeleton for every game").
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -11,7 +11,7 @@ use vcod_common::net::wire::Transport;
 
 pub struct EngineCore<C> {
     /// The wire's transport: version, netchan framing, codec, paks. CoD1
-    /// keeps it in step with its `Protocol` (`Server::set_protocol`).
+    /// keeps it in step with its `Cod1Wire` (`Server::set_protocol`).
     pub transport: &'static Transport,
     pub huff: Huffman,
     /// The datagrams this frame or packet produced, drained by the binary.
@@ -33,6 +33,8 @@ pub struct EngineCore<C> {
     /// `drain_console` (docs/research/cod11-map-cycle.md section 5.2).
     pub console: VecDeque<String>,
     pub challenges: super::challenge::Challenges,
+    /// The `getinfo`, `getstatus` and `getchallenge` limiter.
+    pub limiter: super::ratelimit::RateLimiter,
     /// `ban.txt` and the stand-ins for the authorize server's list.
     pub bans: super::bans::BanFile,
     /// The temporary bans, stamped on each game's clock (1.5's `tempBan*`
@@ -51,6 +53,8 @@ pub struct EngineCore<C> {
     /// A `quit` ran: the flatline is in the outbox and the binary exits once
     /// it has flushed it.
     pub quit: bool,
+    /// The panics the boundaries caught (`engine::contain`).
+    pub panics: super::contain::Panics,
 }
 
 impl<C> EngineCore<C> {
@@ -71,6 +75,7 @@ impl<C> EngineCore<C> {
             clients: (0..max_clients).map(|_| None).collect(),
             console: VecDeque::new(),
             challenges: Default::default(),
+            limiter: Default::default(),
             bans: Default::default(),
             temp_bans: Default::default(),
             masters,
@@ -78,6 +83,7 @@ impl<C> EngineCore<C> {
             rcon: Default::default(),
             sv_time_ms: 0,
             quit: false,
+            panics: Default::default(),
         }
     }
 }

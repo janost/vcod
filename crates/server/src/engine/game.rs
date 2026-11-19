@@ -17,9 +17,25 @@ pub struct Engine<G: GameModule> {
 /// What every server answers the same over its core: the binary's loop
 /// and the tests drive both games through these.
 impl<G: GameModule> Engine<G> {
-    /// `SV_Frame` for `frames` owed game frames ([`tick`]).
+    /// `SV_Frame` for `frames` owed game frames ([`tick`]). A panic in it
+    /// loads the level again ([`Self::level_panicked`]).
     pub fn tick_frames(&mut self, now: Instant, frames: u32) {
-        tick(self, now, frames);
+        let ran = super::contain::catch(false, || {
+            tick(self, now, frames);
+            #[cfg(test)]
+            super::contain::inject::fire(super::contain::inject::Site::Frame);
+        });
+        if let Err(msg) = ran {
+            self.level_panicked("the frame", &msg, now);
+        }
+    }
+
+    /// `Cbuf_Execute` as the loop runs it ([`GameModule::drain_console`]),
+    /// a panic in it handled as a frame's.
+    pub fn exec_console(&mut self, now: Instant) {
+        if let Err(msg) = super::contain::catch(false, || G::drain_console(self, now)) {
+            self.level_panicked("the console", &msg, now);
+        }
     }
 
     /// `SV_PacketEvent` for a packet handled the moment it arrived
@@ -181,6 +197,10 @@ pub trait GameModule: Sized {
     /// A netchan packet: the slot it is from, then
     /// `SV_ExecuteClientMessage`.
     fn client_packet(e: &mut Engine<Self>, from: SocketAddr, pkt: &[u8], at: Arrival);
+    /// A packet's handler panicked: `SV_DropClient` with `reason` for the
+    /// slot `SV_PacketEvent` finds by the packet's address and qport, if
+    /// any holds them.
+    fn drop_sender(e: &mut Engine<Self>, from: SocketAddr, pkt: &[u8], reason: &str);
     /// `Cbuf_Execute`: the queued console lines. The loop runs it ahead
     /// of counting the frames owed (`Com_Frame`).
     fn drain_console(e: &mut Engine<Self>, now: Instant);
@@ -247,7 +267,7 @@ pub trait GameModule: Sized {
     fn heartbeat(e: &mut Engine<Self>);
 
     /// A level load failed with the level already torn down: the loop
-    /// ends the process, as retail's `Com_Error` does.
+    /// ends the process (vcod's choice, `Server::take_fatal`).
     fn take_fatal(_e: &mut Engine<Self>) -> Option<anyhow::Error> {
         None
     }
@@ -255,15 +275,31 @@ pub trait GameModule: Sized {
     fn frame_sent(_e: &mut Engine<Self>, _at: Instant) {}
 }
 
-/// `SV_PacketEvent`: a connectionless packet or a client's.
+/// `SV_PacketEvent`: a connectionless packet or a client's. A panic in
+/// the handler costs the packet, and a client's packet its slot too
+/// (`engine::contain`).
 pub fn packet<G: GameModule>(e: &mut Engine<G>, from: SocketAddr, pkt: &[u8], at: Arrival) {
+    use super::contain::{PANIC_DROP_REASON, catch};
     if !G::accepts_packets(e) {
         return;
     }
     if G::is_connectionless(pkt) {
-        G::connectionless(e, from, pkt, at);
-    } else {
+        let quiet = e.core.panics.oob_quiet(at.now);
+        if let Err(msg) = catch(quiet, || G::connectionless(e, from, pkt, at)) {
+            e.core.panics.oob_panicked(from, &msg, at.now);
+        }
+        return;
+    }
+    let read = catch(false, || {
         G::client_packet(e, from, pkt, at);
+        #[cfg(test)]
+        super::contain::inject::fire(super::contain::inject::Site::ClientPacket);
+    });
+    if let Err(msg) = read {
+        log::error!("packet from {from} panicked ({msg}); dropping its client");
+        if let Err(msg) = catch(false, || G::drop_sender(e, from, pkt, PANIC_DROP_REASON)) {
+            e.level_panicked("a client's drop", &msg, at.now);
+        }
     }
 }
 
@@ -316,7 +352,8 @@ pub fn send_messages<G: GameModule>(e: &mut Engine<G>) {
 /// `SV_Frame` for `frames` owed game frames (at least
 /// [`GameModule::MIN_FRAMES`]), then one round of timeouts and messages,
 /// or one after each frame under [`GameModule::POST_EACH_FRAME`]
-/// (AGENTS.md, "The server tick"). `now` is the tick's moment.
+/// (docs/dev/server-tick.md, "One skeleton for every game"). `now` is the
+/// tick's moment.
 pub fn tick<G: GameModule>(e: &mut Engine<G>, now: Instant, frames: u32) {
     crate::tick_trace::step!("SV_Frame frames {frames} svs {}", G::svs_time_ms(e));
     if !G::frame_head(e, now, frames) {
@@ -331,6 +368,7 @@ pub fn tick<G: GameModule>(e: &mut Engine<G>, now: Instant, frames: u32) {
         let step = G::frame_step_ms(e);
         e.core.sv_time_ms = e.core.sv_time_ms.wrapping_add(step);
         if G::THINK == ThinkTiming::InFrame {
+            let _p = crate::tick_profile::phase("cmds");
             G::replay_moves(e);
         }
         let ran = {
@@ -445,6 +483,7 @@ mod tests {
         }
         fn connectionless(_e: &mut Engine<Self>, _f: SocketAddr, _p: &[u8], _a: Arrival) {}
         fn client_packet(_e: &mut Engine<Self>, _f: SocketAddr, _p: &[u8], _a: Arrival) {}
+        fn drop_sender(_e: &mut Engine<Self>, _f: SocketAddr, _p: &[u8], _r: &str) {}
         fn drain_console(_e: &mut Engine<Self>, _now: Instant) {}
         fn configstrings_head(e: &mut Engine<Self>) {
             e.game.0.push("cs");
@@ -503,6 +542,32 @@ mod tests {
         }
         assert_eq!(e.game.0, want);
         assert_eq!(e.core.sv_time_ms, 100);
+    }
+
+    /// A panic in the frame loads the map again through the console; the
+    /// fourth in a minute is fatal (`engine::contain`).
+    #[test]
+    fn a_panicking_frame_loads_the_map_again_until_it_repeats() {
+        use crate::engine::contain::{self, inject};
+        let mut e = engine();
+        e.core.configstrings = vec!["\\mapname\\mp_x".into()];
+        contain::enable();
+        let t = Instant::now();
+        for k in 0..3 {
+            inject::arm(inject::Site::Frame);
+            e.tick_frames(t, 1);
+            assert_eq!(e.core.console.pop_front().as_deref(), Some("map mp_x"));
+            assert!(e.fatal().is_none(), "{k}");
+        }
+        e.tick_frames(t, 1);
+        assert!(
+            e.fatal().is_none(),
+            "a frame that does not panic counts nothing"
+        );
+        inject::arm(inject::Site::Frame);
+        e.tick_frames(t, 1);
+        assert!(e.core.console.is_empty());
+        assert!(e.fatal().is_some());
     }
 
     #[test]

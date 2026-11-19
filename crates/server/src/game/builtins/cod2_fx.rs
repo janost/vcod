@@ -10,9 +10,9 @@ use vcod_common::net::event_ids::EV_PLAY_FX;
 use vcod_common::net::events::dir_to_byte;
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
+use super::Builtin;
 use super::fx::{LoopedFx, spawn_looped_fx};
 use super::math::vectoangles;
-use super::score::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[("playfx", play_fx), ("playloopedfx", play_looped_fx)];
 

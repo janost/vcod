@@ -704,10 +704,8 @@ fn report(path: &str, rows: &[Row], world: &CollisionWorld) {
 
 /// What the walks may read, measured 2026-11-13: both runs, free and
 /// rebased, land on retail's origin to the bit on every snapshot of the 8 ms
-/// and 25 ms captures. The history: 2026-09-23 read |dz| max 0.125 and dxy
-/// max 4.5 rebased, with up to 12 rows past a unit, before the velocity snap
-/// and the walk's accel floor (docs/research/cod11-mantle.md, "The tail of
-/// the default arm" and "The walk's accel floor").
+/// and 25 ms captures (docs/research/cod11-mantle.md, "The tail of the
+/// default arm" and "The walk's accel floor").
 const SLOPE: Tolerance = Tolerance {
     origin: 0.0,
     view: None,
@@ -719,13 +717,8 @@ const SLOPE: Tolerance = Tolerance {
 /// yaw and `delta_angles` exact; the mound exact throughout; the street's
 /// prone pitches within 3.1e-5 degrees and its view yaw within 1.6e-5 (two
 /// `AngleDelta` folds off a short; cod11-mantle.md, "`AngleDelta` and the
-/// angle folds at every call site"), measured 2026-11-14. The street's rebased run read dxy max 0.71 until it carried
-/// our weapon state across the rebase. The history: 2026-09-27 read |dz| max
-/// 0.173 and dxy max 0.52, both prone pitches 1.42 degrees off, before the
-/// dive, the landing damp, the body swing, the pitch cap, the fit trace at 24
-/// and the eye's legs (cod11-mantle.md, "Prone" and "The eye through a stance
-/// change"); 2026-10-09 the body's bend up to 8 units and 19.3 degrees off
-/// before `BG_CheckProneValid`'s ground samples.
+/// angle folds at every call site"), measured 2026-11-14. How the gap closed
+/// is in cod11-mantle.md, "What the prone crawl capture measured".
 const PRONE: Tolerance = Tolerance {
     origin: 0.0,
     view: Some(ViewTolerance {

@@ -36,11 +36,6 @@ pub enum Target {
     Struct(StructId),
 }
 
-/// How deep a carried array may nest before the copy stops. gsc arrays are
-/// reference-typed, so `a[0] = a` is expressible and would otherwise recurse
-/// forever; anything past this reads `undefined` on the far side.
-const MAX_CARRY_DEPTH: u32 = 32;
-
 /// An array key with its text rather than an `Atom`, since atoms are per-`Vm`.
 #[derive(Clone, Debug)]
 enum CarryKey {
@@ -52,24 +47,84 @@ enum CarryKey {
 /// the object, one per defined variable, and an array's own usage over its
 /// holders.
 fn object_usage(heap: &Heap, holders: &crate::fxhash::FxHashMap<u32, u32>, vars: &[Value]) -> f64 {
+    let mut memo = crate::fxhash::FxHashMap::default();
+    usage_of(heap, holders, vars, &mut memo)
+}
+
+/// [`object_usage`] over `vars`, each array's own usage read from `memo`.
+fn usage_of(
+    heap: &Heap,
+    holders: &crate::fxhash::FxHashMap<u32, u32>,
+    vars: &[Value],
+    memo: &mut crate::fxhash::FxHashMap<u32, f64>,
+) -> f64 {
+    for v in vars {
+        if let Value::Array(a) = v {
+            array_usage(heap, holders, *a, memo);
+        }
+    }
     1.0 + vars
         .iter()
         .filter(|v| !matches!(v, Value::Undefined))
         .map(|v| match v {
             Value::Array(a) => {
-                let elems: Vec<Value> =
-                    heap.array_entries(*a).into_iter().map(|(_, v)| v).collect();
                 let n = holders.get(&a.0).copied().unwrap_or(1).max(1);
-                1.0 + object_usage(heap, holders, &elems) / f64::from(n)
+                // An array still open below is a cycle: counted as empty.
+                1.0 + memo.get(&a.0).copied().unwrap_or(1.0) / f64::from(n)
             }
             _ => 1.0,
         })
         .sum::<f64>()
 }
 
+/// Fills `memo` with the usage of `root`'s elements and of every array
+/// under it, each array once however many hold it, deepest first.
+fn array_usage(
+    heap: &Heap,
+    holders: &crate::fxhash::FxHashMap<u32, u32>,
+    root: ArrayId,
+    memo: &mut crate::fxhash::FxHashMap<u32, f64>,
+) {
+    let mut open = std::collections::HashSet::<u32, crate::fxhash::FxBuildHasher>::default();
+    let mut todo = vec![(root, false)];
+    while let Some((a, expanded)) = todo.pop() {
+        if memo.contains_key(&a.0) {
+            continue;
+        }
+        let elems: Vec<Value> = heap.array_entries(a).into_iter().map(|(_, v)| v).collect();
+        if expanded {
+            let u = 1.0
+                + elems
+                    .iter()
+                    .filter(|v| !matches!(v, Value::Undefined))
+                    .map(|v| match v {
+                        Value::Array(b) => {
+                            let n = holders.get(&b.0).copied().unwrap_or(1).max(1);
+                            1.0 + memo.get(&b.0).copied().unwrap_or(1.0) / f64::from(n)
+                        }
+                        _ => 1.0,
+                    })
+                    .sum::<f64>();
+            memo.insert(a.0, u);
+            open.remove(&a.0);
+        } else if open.insert(a.0) {
+            todo.push((a, true));
+            for v in elems {
+                if let Value::Array(b) = v
+                    && !memo.contains_key(&b.0)
+                    && !open.contains(&b.0)
+                {
+                    todo.push((b, false));
+                }
+            }
+        }
+    }
+}
+
 /// One value lifted out of a `Vm`'s heap in a form the next one can rebuild:
-/// every atom carried as text and every nested array or struct by contents,
-/// because both the interner and the heap ids die with the old `Vm`.
+/// every atom carried as text, an array or struct as the index of its
+/// [`CarryNode`], because both the interner and the heap ids die with the
+/// old `Vm`.
 #[derive(Clone, Debug)]
 enum CarryValue {
     /// `Undefined`, `Int`, `Float` and `Vector`: no heap or interner reach.
@@ -81,6 +136,14 @@ enum CarryValue {
         file: String,
         name: String,
     },
+    Array(usize),
+    Struct(usize),
+}
+
+/// One array or struct lifted out, once however many places hold it, so
+/// a shared or cyclic graph carries as the same graph.
+#[derive(Debug)]
+enum CarryNode {
     Array(Vec<(CarryKey, CarryValue)>),
     Struct(Vec<(String, CarryValue)>),
 }
@@ -94,84 +157,155 @@ enum CarryValue {
 pub struct GameCarry(ArrayCarry);
 
 /// One client's `pers[]` across the same handover, lifted and rebuilt the
-/// same way.
+/// same way. Node 0 is the array itself.
 #[derive(Default, Debug)]
 pub struct ArrayCarry {
-    entries: Vec<(CarryKey, CarryValue)>,
+    nodes: Vec<CarryNode>,
 }
 
-/// `id`'s contents, deep-copied out of `heap` with every atom resolved
-/// through `interner`.
-fn lift_array(heap: &Heap, interner: &Interner, id: ArrayId, depth: u32) -> ArrayCarry {
-    let entries = heap
-        .array_entries(id)
-        .into_iter()
-        .map(|(k, v)| {
-            let key = match k {
-                ArrayKey::Int(i) => CarryKey::Int(i),
-                ArrayKey::Str(a) => CarryKey::Str(interner.resolve(a).to_string()),
-            };
-            (key, lift_value(heap, interner, v, depth))
+/// `root` and everything it reaches, lifted out of `heap` with every atom
+/// resolved through `interner`.
+fn lift_array(heap: &Heap, interner: &Interner, root: ArrayId) -> ArrayCarry {
+    let mut lift = Lift {
+        interner,
+        arrays: Default::default(),
+        structs: Default::default(),
+        todo: Vec::new(),
+        count: 0,
+    };
+    lift.value(Value::Array(root));
+    let mut nodes: Vec<Option<CarryNode>> = Vec::new();
+    while let Some((n, v)) = lift.todo.pop() {
+        let node = match v {
+            Value::Array(id) => CarryNode::Array(
+                heap.array_entries(id)
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let key = match k {
+                            ArrayKey::Int(i) => CarryKey::Int(i),
+                            ArrayKey::Str(a) => CarryKey::Str(interner.resolve(a).to_string()),
+                        };
+                        (key, lift.value(v))
+                    })
+                    .collect(),
+            ),
+            Value::Struct(id) => {
+                let mut fields: Vec<(String, CarryValue)> = heap
+                    .struct_fields(id)
+                    .into_iter()
+                    .map(|(f, v)| (interner.resolve(f).to_string(), lift.value(v)))
+                    .collect();
+                // `struct_fields` walks a `HashMap`; sorted so a carry is
+                // reproducible run to run.
+                fields.sort_by(|a, b| a.0.cmp(&b.0));
+                CarryNode::Struct(fields)
+            }
+            _ => unreachable!("only arrays and structs are queued"),
+        };
+        if nodes.len() <= n {
+            nodes.resize_with(n + 1, || None);
+        }
+        nodes[n] = Some(node);
+    }
+    ArrayCarry {
+        nodes: nodes
+            .into_iter()
+            .map(|n| n.expect("every node queued is lifted"))
+            .collect(),
+    }
+}
+
+/// [`lift_array`]'s walk: each array and struct numbered on first sight
+/// and queued for its contents.
+struct Lift<'a> {
+    interner: &'a Interner,
+    arrays: crate::fxhash::FxHashMap<u32, usize>,
+    structs: crate::fxhash::FxHashMap<u32, usize>,
+    todo: Vec<(usize, Value)>,
+    count: usize,
+}
+
+impl Lift<'_> {
+    fn value(&mut self, v: Value) -> CarryValue {
+        let interner = self.interner;
+        match v {
+            Value::Undefined | Value::Int(_) | Value::Float(_) | Value::Vector(_) => {
+                CarryValue::Plain(v)
+            }
+            Value::String(a) => CarryValue::Str(interner.resolve(a).to_string()),
+            Value::Localized(a) => CarryValue::Localized(interner.resolve(a).to_string()),
+            Value::Anim(a) => CarryValue::Anim(interner.resolve(a).to_string()),
+            Value::Function(f) => CarryValue::Function {
+                file: interner.resolve(f.file).to_string(),
+                name: interner.resolve(f.name).to_string(),
+            },
+            // The entity table is the level's; a handle into it means nothing
+            // to the next one.
+            Value::Entity(_) => CarryValue::Plain(Value::Undefined),
+            Value::Array(id) => CarryValue::Array(self.node(v, id.0, true)),
+            Value::Struct(id) => CarryValue::Struct(self.node(v, id.0, false)),
+        }
+    }
+
+    fn node(&mut self, v: Value, id: u32, array: bool) -> usize {
+        let seen = if array {
+            &mut self.arrays
+        } else {
+            &mut self.structs
+        };
+        if let Some(&n) = seen.get(&id) {
+            return n;
+        }
+        let n = self.count;
+        self.count += 1;
+        seen.insert(id, n);
+        self.todo.push((n, v));
+        n
+    }
+}
+
+/// The inverse of `lift_array`, into an array `id` this `Vm` already owns:
+/// node 0 lands in `id`, every other node in a new array or struct, and
+/// each lands once however many places name it.
+fn plant_array(heap: &mut Heap, interner: &mut Interner, id: ArrayId, carry: &ArrayCarry) {
+    let ids: Vec<Value> = carry
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(n, node)| match node {
+            CarryNode::Array(_) if n == 0 => Value::Array(id),
+            CarryNode::Array(_) => Value::Array(heap.new_array()),
+            CarryNode::Struct(_) => Value::Struct(heap.new_struct()),
         })
         .collect();
-    ArrayCarry { entries }
-}
-
-fn lift_value(heap: &Heap, interner: &Interner, v: Value, depth: u32) -> CarryValue {
-    match v {
-        Value::Undefined | Value::Int(_) | Value::Float(_) | Value::Vector(_) => {
-            CarryValue::Plain(v)
-        }
-        Value::String(a) => CarryValue::Str(interner.resolve(a).to_string()),
-        Value::Localized(a) => CarryValue::Localized(interner.resolve(a).to_string()),
-        Value::Anim(a) => CarryValue::Anim(interner.resolve(a).to_string()),
-        Value::Function(f) => CarryValue::Function {
-            file: interner.resolve(f.file).to_string(),
-            name: interner.resolve(f.name).to_string(),
-        },
-        // The entity table is the level's; a handle into it means nothing
-        // to the next one.
-        Value::Entity(_) => CarryValue::Plain(Value::Undefined),
-        Value::Array(id) if depth < MAX_CARRY_DEPTH => {
-            CarryValue::Array(lift_array(heap, interner, id, depth + 1).entries)
-        }
-        Value::Struct(id) if depth < MAX_CARRY_DEPTH => {
-            let mut fields: Vec<(String, CarryValue)> = heap
-                .struct_fields(id)
-                .into_iter()
-                .map(|(f, v)| {
-                    (
-                        interner.resolve(f).to_string(),
-                        lift_value(heap, interner, v, depth + 1),
-                    )
-                })
-                .collect();
-            // `struct_fields` walks a `HashMap`; sorted so a carry is
-            // reproducible run to run.
-            fields.sort_by(|a, b| a.0.cmp(&b.0));
-            CarryValue::Struct(fields)
-        }
-        Value::Array(_) | Value::Struct(_) => {
-            log::warn!("carried value past {MAX_CARRY_DEPTH} levels of nesting, dropped");
-            CarryValue::Plain(Value::Undefined)
+    for (node, at) in carry.nodes.iter().zip(&ids) {
+        match (node, *at) {
+            (CarryNode::Array(entries), Value::Array(a)) => {
+                for (k, v) in entries {
+                    // Array keys intern exact, field names fold (atom.rs).
+                    let key = match k {
+                        CarryKey::Int(i) => ArrayKey::Int(*i),
+                        CarryKey::Str(s) => ArrayKey::Str(interner.intern_exact(s)),
+                    };
+                    let value = plant_value(interner, v, &ids);
+                    heap.share(value);
+                    heap.set_index(a, key, value);
+                }
+            }
+            (CarryNode::Struct(fields), Value::Struct(s)) => {
+                for (name, v) in fields {
+                    let f = interner.intern_folded(name);
+                    let value = plant_value(interner, v, &ids);
+                    heap.share(value);
+                    heap.set_field(s, f, value);
+                }
+            }
+            _ => unreachable!("each node planted as its own kind"),
         }
     }
 }
 
-/// The inverse of `lift_array`, into an array `id` this `Vm` already owns.
-fn plant_array(heap: &mut Heap, interner: &mut Interner, id: ArrayId, carry: &ArrayCarry) {
-    for (k, v) in &carry.entries {
-        // Array keys intern exact, field names fold (atom.rs).
-        let key = match k {
-            CarryKey::Int(i) => ArrayKey::Int(*i),
-            CarryKey::Str(s) => ArrayKey::Str(interner.intern_exact(s)),
-        };
-        let value = plant_value(heap, interner, v);
-        heap.set_index(id, key, value);
-    }
-}
-
-fn plant_value(heap: &mut Heap, interner: &mut Interner, v: &CarryValue) -> Value {
+fn plant_value(interner: &mut Interner, v: &CarryValue, ids: &[Value]) -> Value {
     match v {
         CarryValue::Plain(v) => *v,
         CarryValue::Str(s) => Value::String(interner.intern_exact(s)),
@@ -181,52 +315,84 @@ fn plant_value(heap: &mut Heap, interner: &mut Interner, v: &CarryValue) -> Valu
             file: interner.intern_folded(file),
             name: interner.intern_folded(name),
         }),
-        CarryValue::Array(entries) => {
-            let id = heap.new_array();
-            plant_array(
-                heap,
-                interner,
-                id,
-                &ArrayCarry {
-                    entries: entries.clone(),
-                },
-            );
-            Value::Array(id)
-        }
-        CarryValue::Struct(fields) => {
-            let id = heap.new_struct();
-            for (name, v) in fields {
-                let f = interner.intern_folded(name);
-                let value = plant_value(heap, interner, v);
-                heap.set_field(id, f, value);
-            }
-            Value::Struct(id)
-        }
+        CarryValue::Array(n) | CarryValue::Struct(n) => ids[*n],
     }
 }
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum ErrorKind {
     /// The host has no such builtin. Kills the thread that reached it and
-    /// nothing else. `Loader::missing_builtins` lists the statically
-    /// visible ones at load time so this is not the first place a host gap
+    /// nothing else. The server's `BuiltinSet::unknown_calls` (and, for
+    /// tests, `Loader::missing_builtins`) lists the statically visible ones
+    /// at load time so this is not the first place a host gap
     /// shows up, but it is still reachable for every one of them.
     MissingBuiltin(Atom),
     BadType(&'static str),
     /// Per-frame instruction cap (`Vm::budget`).
     Budget,
+    /// A call or a thread past `interp::MAX_FRAMES` frames: retail's
+    /// `script stack overflow (too many embedded function calls)`.
+    StackOverflow,
     /// A `wait` or `waittill` reached inside `call_now`.
     SuspendedInImmediateCall,
     Custom(String),
     /// The host's `G_Error` inside a builtin: the thread dies, the pass
     /// ends there, and the host drops the level.
     GameError(&'static str),
+    /// The level's script variables or interned strings past vcod's
+    /// ceiling (`interp::MAX_VARIABLES`): retail's `exceeded maximum number
+    /// of script variables`. Ends the thread whose op allocated.
+    TooManyVariables,
+    /// A builtin panicked, with the panic's text, under
+    /// [`contain_builtin_panics`]: the thread dies; what the builtin had
+    /// done before the panic stands.
+    Panic(String),
+}
+
+thread_local! {
+    static CONTAIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Turns a builtin's panic on this thread into [`ErrorKind::Panic`] for
+/// the thread that called it. Off by default, so a test sees the panic.
+pub fn contain_builtin_panics(on: bool) {
+    CONTAIN.set(on);
+}
+
+/// `host.builtin`, its panic caught under [`contain_builtin_panics`].
+/// The arguments' strings turn permanent first, the host may keep them,
+/// unless it says this builtin only reads their text
+/// ([`Host::reads_text_only`]).
+pub(crate) fn call_builtin(
+    host: &mut dyn Host,
+    cx: &mut Cx,
+    name: Atom,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    if args.iter().any(|&v| cx.interner.holds_temporary(v)) && !host.reads_text_only(cx, name) {
+        for &v in args {
+            cx.interner.pin(v);
+        }
+    }
+    if !CONTAIN.get() {
+        return host.builtin(cx, name, recv, args);
+    }
+    let call = std::panic::AssertUnwindSafe(|| host.builtin(cx, name, recv, args));
+    std::panic::catch_unwind(call).unwrap_or_else(|p| {
+        let text = p
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| p.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "a non-text panic".into());
+        Err(ErrorKind::Panic(text))
+    })
 }
 
 impl ErrorKind {
     /// Whether retail below `developer 1` runs on past it: every error but
-    /// vcod's own (a builtin it lacks, the instruction cap, a wait inside
-    /// `call_now`), which stand for retail's terminal ones.
+    /// vcod's own (a builtin it lacks, the instruction cap, the frame cap, a
+    /// wait inside `call_now`), which stand for retail's terminal ones.
     pub fn recoverable(&self) -> bool {
         matches!(self, ErrorKind::BadType(_) | ErrorKind::Custom(_))
     }
@@ -273,6 +439,17 @@ pub struct ScriptError {
     pub func: Atom,
     pub line: u32,
     pub kind: ErrorKind,
+}
+
+/// What [`Vm::record_error`] dedups on: where, how the thread fared and
+/// which kind of error, never its text, which may carry script values.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ErrorKey {
+    file: Atom,
+    func: Atom,
+    line: u32,
+    recovered: bool,
+    kind: std::mem::Discriminant<ErrorKind>,
 }
 
 /// Why `Vm::install` rejected a batch of functions.
@@ -360,12 +537,9 @@ impl Cx<'_> {
     }
 
     pub fn get_field(&self, s: StructId, f: Atom) -> Value {
-        self.heap.get_field(s, f)
-    }
-
-    /// How many fields the struct holds.
-    pub fn field_count(&self, s: StructId) -> usize {
-        self.heap.struct_fields(s).len()
+        let v = self.heap.get_field(s, f);
+        self.interner.pin(v);
+        v
     }
 
     pub fn set_field(&mut self, s: StructId, f: Atom, v: Value) {
@@ -386,7 +560,9 @@ impl Cx<'_> {
     }
 
     pub fn get_index(&self, a: ArrayId, k: ArrayKey) -> Value {
-        self.heap.get_index(a, k)
+        let v = self.heap.get_index(a, k);
+        self.interner.pin(v);
+        v
     }
 
     pub fn set_index(&mut self, a: ArrayId, k: ArrayKey, v: Value) {
@@ -400,14 +576,20 @@ impl Cx<'_> {
     /// An array's keys, the most recently added first, for a builtin that
     /// lists them (CoD4's `getArrayKeys`).
     pub fn array_keys_newest_first(&self, a: ArrayId) -> Vec<ArrayKey> {
-        self.heap.array_keys_newest_first(a)
+        let keys = self.heap.array_keys_newest_first(a);
+        for k in &keys {
+            if let ArrayKey::Str(a) = *k {
+                self.interner.pin(Value::String(a));
+            }
+        }
+        keys
     }
 
     /// One array's contents, lifted out of this heap for another `Vm`
     /// (`ArrayCarry`). A host carrying a client's `pers[]` across a level
     /// boundary takes it here.
     pub fn take_array(&self, a: ArrayId) -> ArrayCarry {
-        lift_array(self.heap, self.interner, a, 0)
+        lift_array(self.heap, self.interner, a)
     }
 
     /// `take_array`'s inverse, into an array this `Vm` owns. Keys and
@@ -548,6 +730,23 @@ pub trait Host {
     /// The other half of a `Cx::spawn_then`, with its token. A spawn queued
     /// here starts before the builtin's remaining queued threads.
     fn spawn_returned(&mut self, _cx: &mut Cx, _token: u32) {}
+
+    /// Whether builtin `name` only reads its arguments' text while it runs
+    /// and keeps no `Atom` of theirs (a print, a log line). The VM leaves
+    /// a string built at run time among them temporary, for a sweep to free
+    /// once nothing names it ([`Vm::collect`]); for any other builtin it
+    /// turns permanent, so whatever the host keeps stays valid.
+    fn reads_text_only(&mut self, _cx: &Cx, _name: Atom) -> bool {
+        false
+    }
+
+    /// Pushes every struct and array value the host holds between frames
+    /// (an entity's script struct, an engine field, a queued notify's
+    /// arguments) onto `out`. [`Vm::run_frame`] sweeps the heap at its end
+    /// ([`Vm::collect`]) and frees whatever neither the VM nor this names,
+    /// so a value left out reads as an emptied slot another allocation
+    /// takes.
+    fn roots(&self, out: &mut Vec<Value>);
 }
 
 impl From<EntId> for Target {
@@ -598,7 +797,7 @@ pub struct Vm {
     /// fail it (`probe_level_bracket_read`).
     struct_index_reads_undefined: bool,
     /// `.size` on an array or string, interned once here rather than per
-    /// `LoadField` — `_load.gsc` reads it inside three loops.
+    /// `LoadField`: `_load.gsc` reads it inside three loops.
     size_atom: Atom,
     /// Kept in start order so a `run_frame` walk, and a `notify` wake, are
     /// both deterministic.
@@ -609,21 +808,27 @@ pub struct Vm {
     next_seq: u64,
     /// Instructions a thread may run in one scheduling step before it is
     /// aborted with `ErrorKind::Budget`. Every instruction counts against
-    /// it, `Call`/`CallPtr` included, so unbounded recursion is caught the
-    /// same as an unbounded loop.
+    /// it, `Call`/`CallPtr` included, and so does every instruction of the
+    /// threads it spawns and runs mid-step (`pool`). The heaviest stock
+    /// step, a CoD4 map's load with the threads it starts, runs 394,000.
     budget: u32,
+    /// What the step running a thread call or a builtin's spawns has left,
+    /// for the spawned thread's immediate run to draw on and hand back.
+    pool: Option<u32>,
+    /// Instructions the outermost steps have run, for a pass's ceiling
+    /// (`sched::MAX_PASS_INSTRUCTIONS`).
+    spent: u64,
+    /// The frames of the threads under the running one on the native
+    /// stack, each waiting on a thread it spawned to suspend. Retail's one
+    /// script call stack holds them all (`interp::MAX_FRAMES`).
+    outer_frames: u32,
     /// The script clock every `wait` counts from (`Vm::time`): the last
     /// frame's `level.time` between frames, a thread's own due time while
     /// `run_frame` walks it forward. Only `set_time` and `run_frame` move it.
     now_ms: i32,
     /// How many `spawn` calls are currently nested on the native Rust
     /// stack (a thread whose immediate run itself spawns a thread, whose
-    /// immediate run spawns another, ...). `budget` bounds a single
-    /// thread's own instructions, including its `Call`s, but not this: a
-    /// `Call` only grows `Frame`s on a `Vec`, while a nested `spawn` grows
-    /// the native call stack (`spawn` -> `step_thread` -> `step_frames` ->
-    /// `spawn` -> ...), which overflows long before any instruction
-    /// budget would. See `spawn`'s `MAX_SPAWN_DEPTH` check.
+    /// immediate run spawns another, ...); `outer_frames` bounds it.
     spawn_depth: u32,
     /// The threads that have died of an error, in the order they died, up
     /// to `MAX_RECORDED_ABORTS`; with `recover_errors` on, every runtime
@@ -636,9 +841,10 @@ pub struct Vm {
     /// How many threads have died in total, including the ones `aborts`
     /// stopped recording, so a truncated list cannot pass for a whole one.
     aborts_seen: u32,
-    /// Each logged error's text: when it was last logged and how often it
-    /// came again since ([`Vm::record_error`]).
-    error_log: HashMap<String, (std::time::Instant, u32)>,
+    /// Each logged error's place and kind, its payload aside: the text it
+    /// was first logged with, when it was last logged and how often it came
+    /// again since ([`Vm::record_error`]).
+    error_log: HashMap<ErrorKey, (String, std::time::Instant, u32)>,
     /// Retail's mode below `developer 1`: a runtime error leaves the failed
     /// instruction's results undefined and the thread runs on
     /// (`step_frames`). Off, as at `developer 1`, the thread dies.
@@ -673,6 +879,13 @@ pub struct Vm {
     notify_index: sched::NotifyIndex,
     /// The threads the scheduler may pick next ([`sched::ReadyIndex`]).
     ready: sched::ReadyIndex,
+    /// The threads still due when a pass stopped at a cap, in pick order,
+    /// each under its queue stamp: the next pass runs them first.
+    deferred: std::collections::VecDeque<(sched::ThreadId, u64)>,
+    /// `interp::MAX_VARIABLES` and `interp::MAX_STRING_BYTES`; a test lowers
+    /// them.
+    max_vars: u64,
+    max_string_bytes: usize,
 }
 
 impl Default for Vm {
@@ -713,6 +926,9 @@ impl Vm {
             next_thread: 0,
             next_seq: 0,
             budget: 1_000_000,
+            pool: None,
+            spent: 0,
+            outer_frames: 0,
             now_ms: 0,
             spawn_depth: 0,
             aborts: Vec::new(),
@@ -731,6 +947,9 @@ impl Vm {
             frame_pool: Vec::new(),
             notify_index: Default::default(),
             ready: Default::default(),
+            deferred: Default::default(),
+            max_vars: interp::MAX_VARIABLES,
+            max_string_bytes: interp::MAX_STRING_BYTES,
         }
     }
 
@@ -740,12 +959,6 @@ impl Vm {
         self.recover_errors = on;
     }
 
-    /// CoD2's notify wake order: the waiter whose `waittill` parked last
-    /// resumes first. Live on mp_toujane, the stock gametypes' `connecting`
-    /// waiters (`_teams`, `_weapons`, `_grenadeindicators`, parked in that
-    /// order at init) answered the first connect newest first and the
-    /// second, after each had parked again in that wake order, oldest
-    /// first (cod2-protocol.md 15.5).
     /// CoD2's `x = thread f()`: the value `f` returned when it ran to its end
     /// without suspending, else undefined. VERIFIED live on retail 1.3
     /// (cod2-protocol.md 15.7); CoD1's reads undefined (not measured).
@@ -761,6 +974,12 @@ impl Vm {
         self.struct_index_reads_undefined = on;
     }
 
+    /// CoD2's notify wake order: the waiter whose `waittill` parked last
+    /// resumes first. Live on mp_toujane, the stock gametypes' `connecting`
+    /// waiters (`_teams`, `_weapons`, `_grenadeindicators`, parked in that
+    /// order at init) answered the first connect newest first and the
+    /// second, after each had parked again in that wake order, oldest
+    /// first (cod2-protocol.md 15.5).
     pub fn set_newest_waiter_first(&mut self, on: bool) {
         self.newest_waiter_first = on;
     }
@@ -814,6 +1033,60 @@ impl Vm {
     /// a thread on to its next suspend (cod11-gsc-language.md section 10).
     pub fn set_kill_mid_step(&mut self, on: bool) {
         self.kill_mid_step = on;
+    }
+
+    /// Whether the heap and the threads, or the interned strings, are past
+    /// the level's ceiling.
+    pub(crate) fn over_ceiling(&self) -> bool {
+        self.heap.vars() + self.threads.len() as u64 > self.max_vars
+            || self.interner.bytes() > self.max_string_bytes
+    }
+
+    /// Frees every struct and array neither the VM nor `host` holds
+    /// ([`Heap::collect`]), and every temporary string none of them names
+    /// ([`Interner::sweep`]). Only between frames: a thread being stepped
+    /// has its frames off the thread list. [`Vm::run_frame`] calls it once
+    /// enough has been allocated since the last sweep.
+    pub fn collect(&mut self, host: &dyn Host) {
+        debug_assert!(self.spawn_depth == 0 && self.pool.is_none());
+        let target = |t: &Target| match *t {
+            Target::Struct(s) => Value::Struct(s),
+            Target::Entity(_) => Value::Undefined,
+        };
+        let mut roots = vec![
+            Value::Struct(self.level),
+            Value::Array(self.game),
+            Value::Struct(self.anim),
+        ];
+        roots.extend(self.thread_returned);
+        let mut atoms = self.interner.marks();
+        for t in &self.threads {
+            // The event names a thread waits on or ends on.
+            for e in &t.endons {
+                atoms[e.1.0 as usize] = true;
+            }
+            if let sched::ThreadState::WaitingNotify { event, .. } = t.state {
+                atoms[event.0 as usize] = true;
+            }
+            for f in &t.frames {
+                roots.extend_from_slice(&f.locals);
+                roots.extend_from_slice(&f.stack[..f.sp as usize]);
+                roots.extend(f.recv.as_ref().map(target));
+            }
+            roots.extend(t.endons.iter().map(|e| target(&e.0)));
+            if let sched::ThreadState::WaitingNotify {
+                target: on,
+                matches,
+                ..
+            } = &t.state
+            {
+                roots.push(target(on));
+                roots.extend_from_slice(matches);
+            }
+        }
+        host.roots(&mut roots);
+        self.heap.collect(roots, &mut atoms);
+        self.interner.sweep(atoms);
     }
 
     pub fn set_budget(&mut self, budget: u32) {
@@ -942,7 +1215,8 @@ impl Vm {
     }
 
     /// The length of every string the VM holds, for the `stringUsage`
-    /// console command. vcod's interner never frees one.
+    /// console command: the permanent ones, and the temporary ones the last
+    /// sweep kept or built since.
     pub fn string_lengths(&self) -> Vec<usize> {
         self.interner.texts().map(str::len).collect()
     }
@@ -958,6 +1232,11 @@ impl Vm {
     /// How often a repeating error's count is logged.
     const REPEAT_LOG: std::time::Duration = std::time::Duration::from_secs(10);
 
+    /// Places [`Self::record_error`] tracks before it starts over. vcod's;
+    /// the key is a source position, so only a script with this many
+    /// failing lines reaches it.
+    const MAX_ERROR_PLACES: usize = 4096;
+
     /// Logs a dead thread, counts it, and keeps it in `aborts` up to the cap.
     fn record_abort(&mut self, e: &ScriptError) {
         self.record_error(e, false);
@@ -966,7 +1245,8 @@ impl Vm {
     /// Logs a runtime error, counts it, and keeps it in `aborts` up to the
     /// cap, whether the thread died of it or ran on (`recovered`).
     /// An error a loop hits every frame logs once, then its count every
-    /// [`Self::REPEAT_LOG`]. Retail prints every one, and only under
+    /// [`Self::REPEAT_LOG`]; one place and kind count as one error whatever
+    /// script value its text names. Retail prints every one, and only under
     /// `developer` or `logfile` (cod11-gsc-language.md, "Runtime errors
     /// below developer 1"); a line a frame buries a dedicated server's log,
     /// so this divergence is in the log only.
@@ -977,16 +1257,26 @@ impl Vm {
             format!("thread aborted in {}", self.describe(e))
         };
         let now = std::time::Instant::now();
-        match self.error_log.get_mut(&text) {
+        let key = ErrorKey {
+            file: e.file,
+            func: e.func,
+            line: e.line,
+            recovered,
+            kind: std::mem::discriminant(&e.kind),
+        };
+        match self.error_log.get_mut(&key) {
             None => {
                 log::warn!("gsc: {text}");
-                self.error_log.insert(text, (now, 0));
+                if self.error_log.len() >= Self::MAX_ERROR_PLACES {
+                    self.error_log.clear();
+                }
+                self.error_log.insert(key, (text, now, 0));
             }
-            Some((at, n)) => {
+            Some((first, at, n)) => {
                 *n += 1;
                 if now.duration_since(*at) >= Self::REPEAT_LOG {
                     log::warn!(
-                        "gsc: {text} (again {n} times in {} s)",
+                        "gsc: {first} (again {n} times in {} s)",
                         now.duration_since(*at).as_secs()
                     );
                     *at = now;
@@ -1018,7 +1308,7 @@ impl Vm {
     /// One error as `file::func:line: Kind`.
     ///
     /// `ErrorKind`'s own `Debug` prints `MissingBuiltin`'s `Atom` as a bare
-    /// index (`MissingBuiltin(Atom(43))`) -- useless as the work list this
+    /// index (`MissingBuiltin(Atom(43))`): useless as the work list this
     /// exists to be, since nothing else here names the builtin. `ErrorKind`
     /// keeps the `Atom` for its callers, which match on it; only the
     /// rendered text resolves it.
@@ -1048,8 +1338,10 @@ impl Vm {
     /// The struct/array store, for a host that needs to allocate an array
     /// or struct (`getentarray`, `spawnstruct`) or read/write a field or
     /// element from outside the instruction loop. `Heap`'s own methods are
-    /// the API — bounds-checked, so an id the host mishandles reads
-    /// `Undefined` or drops a write rather than panicking.
+    /// the API: bounds-checked, so an id the host mishandles reads
+    /// `Undefined` or drops a write rather than panicking. A string read
+    /// here is not pinned (`Interner::pin`): a host that keeps one reads it
+    /// through `Cx` instead.
     pub fn heap(&self) -> &Heap {
         &self.heap
     }
@@ -1066,12 +1358,9 @@ impl Vm {
     }
 
     /// `level`'s struct id. `level()` returns a `Target` for notify and call
-    /// receivers; this is for the host's own heap reads.
-    ///
-    /// Unused outside this file's tests, and it will stay that way until
-    /// `Cx` grows the same pair: a host reading `level.<field>` from inside
-    /// a builtin holds a `Cx`, not a `Vm`. Reachable today only from a host
-    /// that owns the `Vm` between frames.
+    /// receivers; this is for the host's own heap reads between frames (the
+    /// server's script host). A builtin holds a `Cx`, which has no such
+    /// pair.
     pub fn level_id(&self) -> StructId {
         self.level
     }
@@ -1097,7 +1386,7 @@ impl Vm {
     /// One array's contents, for a host carrying something other than
     /// `game[]` across the same boundary (a client's `pers[]`).
     pub fn take_array(&self, a: ArrayId) -> ArrayCarry {
-        lift_array(&self.heap, &self.interner, a, 0)
+        lift_array(&self.heap, &self.interner, a)
     }
 
     /// `take_game`'s inverse: the carried table into this `Vm`'s own
@@ -1134,7 +1423,7 @@ impl Vm {
     /// stack walk instead of installing it. That check is the only thing
     /// standing between a compiler bug and a panic in `step_frames` (which
     /// trusts the stack discipline it proves), so it has to run here, on
-    /// every function this ever accepts — not just in the compiler's own
+    /// every function this ever accepts, not just in the compiler's own
     /// test suite, which is the only place it ran before. Also rejects a
     /// function whose `FuncRef` collides with one already installed, rather
     /// than silently overwriting it. Both checks run over the whole batch
@@ -1247,6 +1536,8 @@ pub(crate) mod tests {
                     _ => Err(ErrorKind::BadType("double wants an int")),
                 },
                 "isdefined" => Ok(Value::Int((args[0] != Value::Undefined) as i32)),
+                "spawnstruct" => Ok(Value::Struct(cx.new_struct())),
+                "boom" => panic!("boom"),
                 _ => Ok(Value::Undefined),
             }
         }
@@ -1263,6 +1554,10 @@ pub(crate) mod tests {
         fn set_field(&mut self, cx: &mut Cx, e: EntId, f: Atom, v: Value) -> Result<(), ErrorKind> {
             self.fields.insert((e.0, cx.resolve(f).to_string()), v);
             Ok(())
+        }
+
+        fn roots(&self, out: &mut Vec<Value>) {
+            out.extend(self.fields.values());
         }
     }
 
@@ -1291,6 +1586,275 @@ pub(crate) mod tests {
             .kind
     }
 
+    /// A script that keeps allocating ends at the level's ceiling with
+    /// `TooManyVariables`, in both error modes, instead of growing the heap,
+    /// the thread list or the interner until the host runs out of memory.
+    /// The ceilings are lowered here so each case stays small.
+    #[test]
+    fn a_leaking_script_ends_at_the_variable_ceiling() {
+        for src in [
+            "main() { for (i = 0; ; i++) a[i] = i; }",
+            "main() { a[0] = 1; for (;;) { b = a; b[1] = 2; } }",
+            "main() { for (;;) thread f(); } f() { wait 1; }",
+            "main() { for (i = 0; ; i++) s = \"x\" + i; }",
+        ] {
+            for recover in [false, true] {
+                let ast = crate::parse::parse_file(src).unwrap();
+                let mut vm = Vm::new();
+                let fns =
+                    crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+                vm.install(fns).unwrap();
+                vm.set_recover_errors(recover);
+                vm.max_vars = vm.heap.vars() + 5_000;
+                vm.max_string_bytes = vm.interner.bytes() + 50_000;
+                let main = vm.func_ref("test/script", "main");
+                let e = vm
+                    .call_now(&mut TestHost::default(), main, None, vec![])
+                    .unwrap_err();
+                assert_eq!(e.kind, ErrorKind::TooManyVariables, "{src}");
+                assert!(vm.heap.vars() + (vm.thread_count() as u64) < vm.max_vars + 10);
+                assert!(vm.interner.bytes() < vm.max_string_bytes + 100);
+            }
+        }
+    }
+
+    /// Runs `src`'s `main` as a thread on entity 1 over `frames` 50 ms
+    /// frames, every frame free of errors; with `sweep`, a sweep after each.
+    fn run_frames(src: &str, frames: i32, sweep: bool) -> (TestHost, Vm) {
+        let mut host = TestHost::default();
+        let vm = run_frames_on(&mut host, src, frames, sweep);
+        (host, vm)
+    }
+
+    /// [`run_frames`] on a host of the test's own.
+    fn run_frames_on(host: &mut dyn Host, src: &str, frames: i32, sweep: bool) -> Vm {
+        let ast = crate::parse::parse_file(src).unwrap();
+        let mut vm = Vm::new();
+        let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+        vm.install(fns).unwrap();
+        let main = vm.func_ref("test/script", "main");
+        let me = Some(Target::Entity(EntId(1, 0)));
+        vm.start_thread(host, main, me, vec![]);
+        for frame in 1..=frames {
+            let errors = vm.run_frame(host, frame * 50);
+            assert!(errors.is_empty(), "frame {frame}: {errors:?}");
+            if sweep {
+                vm.collect(host);
+            }
+        }
+        vm
+    }
+
+    fn level_value(vm: &Vm, name: &str) -> Value {
+        let f = vm.interner().get_folded(name).unwrap();
+        vm.heap().get_field(vm.level_id(), f)
+    }
+
+    /// A thread that builds and drops arrays every frame, through a helper
+    /// that copies at the write as stock `add_to_array` does, leaves the
+    /// heap flat: what its locals drop is freed and the slots reused.
+    #[test]
+    fn arrays_a_thread_drops_are_freed_and_the_heap_stays_flat() {
+        let src = "main() { for (;;) { for (i = 0; i < 100; i++) { \
+             a = []; a[0] = i; a = add(a, i); level.last = a; } wait 0.05; } } \
+             add(arr, v) { arr[arr.size] = v; return arr; }";
+        let (_, vm) = run_frames(src, 1000, false);
+        let (arrays, _) = vm.heap().objects();
+        assert!(arrays < 40_000, "{arrays} array slots for 300,000 arrays");
+        let Value::Array(a) = level_value(&vm, "last") else {
+            panic!("level.last is not an array");
+        };
+        let got: Vec<_> = vm.heap().array_entries(a);
+        let want: Vec<_> = (0..2).map(|i| (ArrayKey::Int(i), Value::Int(99))).collect();
+        assert_eq!(got, want);
+    }
+
+    /// What a sweep keeps reads as it did, and the slots it frees go to
+    /// new objects: two locals' array stays two arrays, an array a field
+    /// alone holds still copies for a new holder, `a[0] = a` stores the old
+    /// value, an entity field's array (the host's root) and a notify's
+    /// argument survive, and a struct only an endon or a `waittill` names
+    /// is not reused for another struct's notify.
+    #[test]
+    fn a_sweep_between_frames_keeps_what_a_script_can_still_reach() {
+        let src = r#"main() {
+             a = []; a[0] = 1; b = a;
+             level.f = []; level.f[0] = 1;
+             c = []; c[1] = 5;
+             self.list = []; self.list[0] = 7;
+             s = spawnstruct();
+             thread waiter(s);
+             thread guarded();
+             thread parked();
+             wait 0.05;
+             for (i = 0; i < 10; i++) { x = []; x[0] = i; y = spawnstruct(); y notify("die"); }
+             b[1] = 2;
+             g = level.f; g[1] = 2; g[2] = 3;
+             c[0] = c;
+             arg = []; arg[0] = 3;
+             wait 0.05;
+             s notify("go", arg);
+             wait 0.3;
+             level.copies = a.size * 10 + b.size;
+             level.field = level.f.size * 10 + g.size;
+             level.self = isdefined(c[0][0]) * 10 + c[0][1];
+             level.ent = self.list[0];
+           }
+           waiter(s) { s waittill("go", got); level.got = got[0]; }
+           guarded() {
+             level.k = spawnstruct(); level.k endon("die"); level.k = undefined;
+             wait 0.2; level.alive = 1;
+           }
+           parked() { level.p = spawnstruct(); thread unset(); level.p waittill("die"); level.woke = 1; }
+           unset() { wait 0.01; level.p = undefined; }"#;
+        let (_, vm) = run_frames(src, 20, true);
+        let want = [
+            ("copies", 12),
+            ("field", 13),
+            ("self", 5),
+            ("ent", 7),
+            ("got", 3),
+            ("alive", 1),
+        ];
+        for (name, v) in want {
+            assert_eq!(level_value(&vm, name), Value::Int(v), "level.{name}");
+        }
+        assert_eq!(vm.thread_count(), 1, "the parked thread still waits");
+        // The garbage went: what is left is a handful of objects.
+        assert!(vm.heap().vars() < 40, "{} vars", vm.heap().vars());
+    }
+
+    /// A thread that builds a new string every iteration, as stock CoD4's
+    /// `logPrint` lines do, leaves the interner flat: the strings nothing
+    /// names any more are freed between frames.
+    #[test]
+    fn strings_a_thread_drops_are_freed_and_the_interner_stays_flat() {
+        let src = "main() { level.n = 0; for (;;) { for (i = 0; i < 100; i++) { \
+             s = \"line \" + level.n + \" of a log that never rotates\"; level.n++; } \
+             level.last = s; wait 0.05; } }";
+        let (_, vm) = run_frames(src, 1000, false);
+        let bytes = vm.interner().bytes();
+        assert!(
+            bytes < 2 << 20,
+            "{bytes} bytes of strings for 100,000 lines"
+        );
+        let Value::String(last) = level_value(&vm, "last") else {
+            panic!("level.last is not a string");
+        };
+        assert_eq!(
+            vm.interner().resolve(last),
+            "line 99999 of a log that never rotates"
+        );
+    }
+
+    /// Keeps `keep(s)`'s atom in a Rust field, as a server's attach table
+    /// does, and only reads `log(s)`'s text.
+    #[derive(Default)]
+    struct KeepHost {
+        kept: Vec<Atom>,
+        logged: usize,
+    }
+
+    impl Host for KeepHost {
+        fn builtin(
+            &mut self,
+            cx: &mut Cx,
+            name: Atom,
+            _: Option<Target>,
+            args: &[Value],
+        ) -> Result<Value, ErrorKind> {
+            match (cx.resolve_folded(name), args.first()) {
+                ("keep", Some(&Value::String(a))) => self.kept.push(a),
+                ("log", Some(&Value::String(a))) => self.logged += cx.resolve(a).len(),
+                ("spawnstruct", _) => return Ok(Value::Struct(cx.new_struct())),
+                _ => {}
+            }
+            Ok(Value::Undefined)
+        }
+
+        fn get_field(&mut self, _: &mut Cx, _: EntId, _: Atom) -> Value {
+            Value::Undefined
+        }
+
+        fn set_field(&mut self, _: &mut Cx, _: EntId, _: Atom, _: Value) -> Result<(), ErrorKind> {
+            Ok(())
+        }
+
+        fn reads_text_only(&mut self, cx: &Cx, name: Atom) -> bool {
+            cx.resolve_folded(name) == "log"
+        }
+
+        fn roots(&self, _: &mut Vec<Value>) {}
+    }
+
+    /// What a sweep frees is only what nothing can name: a built string
+    /// handed to a builtin that may keep it, one held as an array key, a
+    /// field, a `waittill`'s event or an `endon`'s all survive sweeps under
+    /// a flood of garbage strings, while what `log` only read is freed.
+    #[test]
+    fn a_sweep_frees_no_string_the_host_or_a_script_can_still_name() {
+        let src = r#"main() {
+             keep("kept " + 1);
+             level.a["k" + 7] = 70;
+             level.s = spawnstruct(); level.s.name = "name " + 2;
+             thread waiter(); thread ender();
+             for (n = 0; n < 200; n++) {
+               for (i = 0; i < 20; i++) log("garbage " + n + " " + i);
+               wait 0.05;
+             }
+             level notify("ev" + 5);
+             level notify("stop" + 1);
+             wait 0.05;
+             level.key = level.a["k" + (3 + 4)];
+             level.field = level.s.name == "name " + (1 + 1);
+           }
+           waiter() { level waittill("ev" + 5); level.woke = 1; }
+           ender() { level endon("stop" + 1); level.ended = 0; wait 100; level.ended = 1; }"#;
+        let mut host = KeepHost::default();
+        let vm = run_frames_on(&mut host, src, 205, true);
+        assert_eq!(level_value(&vm, "key"), Value::Int(70));
+        assert_eq!(level_value(&vm, "field"), Value::Int(1));
+        assert_eq!(level_value(&vm, "woke"), Value::Int(1));
+        assert_eq!(level_value(&vm, "ended"), Value::Int(0));
+        assert_eq!(vm.thread_count(), 0, "the ender's endon ended it");
+        assert_eq!(host.kept.len(), 1);
+        assert_eq!(vm.interner().resolve(host.kept[0]), "kept 1");
+        assert!(host.logged > 40_000);
+        let garbage = vm
+            .interner()
+            .texts()
+            .filter(|t| t.starts_with("garbage"))
+            .count();
+        assert!(garbage <= 20, "{garbage} garbage strings left");
+    }
+
+    /// `s = s + s` stops at `MAX_STRING_LEN` with a script error, in both
+    /// error modes, the interner holding kilobytes rather than gigabytes.
+    #[test]
+    fn a_doubling_string_stops_at_the_length_cap() {
+        for recover in [false, true] {
+            let src = r#"main() { s = "x"; for (;;) s = s + s; }"#;
+            let ast = crate::parse::parse_file(src).unwrap();
+            let mut vm = Vm::new();
+            let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+            vm.install(fns).unwrap();
+            vm.set_recover_errors(recover);
+            let main = vm.func_ref("test/script", "main");
+            let e = vm
+                .call_now(&mut TestHost::default(), main, None, vec![])
+                .unwrap_err();
+            let want = if recover {
+                ErrorKind::Budget
+            } else {
+                ErrorKind::BadType("string too long")
+            };
+            assert_eq!(e.kind, want);
+            let texts = || vm.interner().texts();
+            assert!(texts().all(|t| t.len() <= interp::MAX_STRING_LEN));
+            assert!(texts().map(str::len).sum::<usize>() < 64 * 1024);
+        }
+    }
+
     #[test]
     fn arithmetic_and_precedence() {
         let (v, _, _) = run("main() { return 1 + 2 * 3; }");
@@ -1301,6 +1865,26 @@ pub(crate) mod tests {
     fn int_and_float_mix_promotes_to_float() {
         let (v, _, _) = run("main() { return 1 + 0.5; }");
         assert_eq!(v, Value::Float(1.5));
+    }
+
+    /// Two ints order as ints past 2^24, where `f32` rounds 16777217 to
+    /// 16777216: the plain ops, the fused compare-and-jump forms (local,
+    /// const, a loop bound) and a mixed pair still as floats.
+    #[test]
+    fn two_ints_order_as_ints_past_f32_precision() {
+        let (v, _, _) = run("main() {
+            a = 16777217; b = 16777216; r = 0;
+            if (a > b) r += 1;
+            if (!(a <= b)) r += 2;
+            if (b < a) r += 4;
+            if (!(b >= a)) r += 8;
+            if (a > 16777216) r += 16;
+            for (i = 16777216; i < 16777217; i++) r += 32;
+            x = a > b; y = b < a;
+            if (a > 16777216.0) r += 512;
+            return r + (x + y) * 64;
+        }");
+        assert_eq!(v, Value::Int(191));
     }
 
     #[test]
@@ -1335,6 +1919,21 @@ pub(crate) mod tests {
         ] {
             let (v, _, _) = run(&format!("main() {{ return {src}; }}"));
             assert_eq!(v, want, "{src}");
+        }
+    }
+
+    /// A vertical tab is a `strtol` blank like the other `isspace` bytes
+    /// (BUG-101).
+    #[test]
+    fn a_vertical_tab_before_a_cast_number_is_a_blank() {
+        for (src, want) in [
+            ("(int)\"\u{b}7\"", Value::Int(7)),
+            ("(int)\"\u{b}-7\"", Value::Int(-7)),
+            ("(float)\"\u{b}2.5\"", Value::Float(2.5)),
+            ("!\"\u{b}7\"", Value::Int(0)),
+        ] {
+            let (v, _, _) = run(&format!("main() {{ return {src}; }}"));
+            assert_eq!(v, want, "{src:?}");
         }
     }
 
@@ -1708,7 +2307,7 @@ pub(crate) mod tests {
 
     /// Before `Target`, `WaitTill` accepted only `Value::Entity` and a
     /// `level`/`game` receiver was a `BadType` script error, not a
-    /// suspend — every stock gametype's round-end wait would have failed
+    /// suspend: every stock gametype's round-end wait would have failed
     /// outright rather than blocking.
     #[test]
     fn level_waittill_suspends_rather_than_failing_on_receiver_type() {
@@ -1722,10 +2321,8 @@ pub(crate) mod tests {
         assert!(matches!(e.kind, ErrorKind::SuspendedInImmediateCall));
     }
 
-    /// `Notify`/`EndOn` used to pop and discard their receiver with no
-    /// type check at all, so this was silently accepted either way. Now
-    /// that the receiver is resolved to a `Target`, a `level`/`game`
-    /// receiver must still be accepted, not newly rejected.
+    /// `Notify`/`EndOn` resolve their receiver to a `Target`, and a
+    /// `level`/`game` receiver must be accepted there, not rejected.
     #[test]
     fn level_notify_and_endon_accept_a_struct_receiver() {
         let (v, _, _) = run(r#"main() { level notify("go"); level endon("stop"); return 1; }"#);
@@ -2143,6 +2740,114 @@ pub(crate) mod tests {
         assert_eq!(n, 1);
     }
 
+    /// A struct two fields hold, itself among them, carries as one struct:
+    /// each object is lifted and planted once, so sharing and the cycle
+    /// survive and the lift stays linear.
+    #[test]
+    fn a_shared_and_cyclic_struct_carries_as_one_struct() {
+        let mut a = Vm::new();
+        let game = a.game_id();
+        a.with_cx(|cx| {
+            let s = cx.new_struct();
+            let (fa, fb) = (cx.intern_folded("a"), cx.intern_folded("b"));
+            cx.set_field(s, fa, Value::Struct(s));
+            cx.set_field(s, fb, Value::Struct(s));
+            let key = ArrayKey::Str(cx.intern_exact("s"));
+            cx.set_index(game, key, Value::Struct(s));
+        });
+        let carry = a.take_game();
+        let mut b = Vm::new();
+        b.install_game(&carry);
+        let game = b.game_id();
+        b.with_cx(|cx| {
+            let key = ArrayKey::Str(cx.intern_exact("s"));
+            let s = cx.get_index(game, key);
+            let (fa, fb) = (cx.intern_folded("a"), cx.intern_folded("b"));
+            let Value::Struct(id) = s else {
+                panic!("game[\"s\"] is {s:?}");
+            };
+            assert_eq!(cx.get_field(id, fa), s);
+            assert_eq!(cx.get_field(id, fb), s);
+        });
+    }
+
+    /// Forty levels of an array held twice by the level above: 2^40 paths,
+    /// 41 arrays. The carry takes each once and keeps the whole depth.
+    #[test]
+    fn a_doubled_deep_array_carries_in_linear_time_and_whole() {
+        let mut a = Vm::new();
+        let game = a.game_id();
+        a.with_cx(|cx| {
+            let mut inner = cx.new_array();
+            cx.set_index(inner, ArrayKey::Int(0), Value::Int(7));
+            for _ in 0..40 {
+                let outer = cx.new_array();
+                cx.set_index(outer, ArrayKey::Int(0), Value::Array(inner));
+                cx.set_index(outer, ArrayKey::Int(1), Value::Array(inner));
+                inner = outer;
+            }
+            cx.set_index(game, ArrayKey::Int(0), Value::Array(inner));
+        });
+        let carry = a.take_game();
+        assert_eq!(carry.0.nodes.len(), 42);
+        let mut b = Vm::new();
+        b.install_game(&carry);
+        let mut at = b.game_id();
+        for k in std::iter::once(0).chain([1; 40]) {
+            let Value::Array(next) = b.heap().get_index(at, ArrayKey::Int(k)) else {
+                panic!("the chain ends early");
+            };
+            at = next;
+        }
+        assert_eq!(b.heap().get_index(at, ArrayKey::Int(0)), Value::Int(7));
+    }
+
+    /// An array stored into itself takes the array as it stood: retail's
+    /// arrays are values, so `a[0][0]` is undefined, and neither a carry
+    /// nor `scriptUsage` meets a cycle.
+    #[test]
+    fn an_array_stored_into_itself_stores_its_old_value() {
+        let (v, _, _) = run("main() { a = []; a[0] = a; return isdefined(a[0][0]); }");
+        assert_eq!(v, Value::Int(0));
+        let (v, _, _) = run("main() { a = []; a[0] = a; return a[0].size; }");
+        assert_eq!(v, Value::Int(0));
+        let (v, _, _) = run("main() { a = []; a[0] = []; a[0][0] = a; \
+             return isdefined(a[0][0][0]) * 10 + isdefined(a[0][0][0][0]); }");
+        assert_eq!(v, Value::Int(10));
+        let (v, _, _) = run(r#"main() { game["g"] = game; return isdefined(game["g"]["g"]); }"#);
+        assert_eq!(v, Value::Int(0));
+    }
+
+    /// `scriptUsage`'s walk takes each array once: a cyclic array a host
+    /// built returns, and a doubled deep array costs its size, not its
+    /// paths, with the acyclic arithmetic unchanged.
+    #[test]
+    fn script_usage_walks_each_array_once() {
+        let mut heap = Heap::new();
+        let a = heap.new_array();
+        heap.set_index(a, ArrayKey::Int(0), Value::Array(a));
+        let holders = heap.array_holders();
+        assert!(object_usage(&heap, &holders, &[Value::Array(a)]).is_finite());
+
+        let mut heap = Heap::new();
+        let mut inner = heap.new_array();
+        for _ in 0..40 {
+            let outer = heap.new_array();
+            heap.set_index(outer, ArrayKey::Int(0), Value::Array(inner));
+            heap.set_index(outer, ArrayKey::Int(1), Value::Array(inner));
+            inner = outer;
+        }
+        let holders = heap.array_holders();
+        let u = object_usage(&heap, &holders, &[Value::Array(inner)]);
+        // Each level: 1 for the object, two elements of 1 + half the level
+        // below; the empty bottom array is 1.
+        let mut want = 1.0f64;
+        for _ in 0..40 {
+            want = 1.0 + 2.0 * (1.0 + want / 2.0);
+        }
+        assert_eq!(u, 1.0 + 1.0 + want);
+    }
+
     /// The G1 blocker: a builtin needs to allocate and populate a heap array
     /// during the call, which `&Interner` could not express (E0499 against the
     /// `&mut Vm` `run_frame` holds).
@@ -2175,6 +2880,7 @@ pub(crate) mod tests {
             ) -> Result<(), ErrorKind> {
                 Ok(())
             }
+            fn roots(&self, _out: &mut Vec<Value>) {}
         }
 
         let src = "main() { a = getentarray(\"x\", \"classname\"); return a[1]; }";

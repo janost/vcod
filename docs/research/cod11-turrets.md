@@ -725,7 +725,10 @@ which key a second translation at frame 5, (-15.99, 5.62) against (-15.33,
   `n / 2 - yaw / animHorRotateInc`, clamped to the row and split between the
   two columns either side. With 7 columns and 15 degrees the gun's yaw 0
   lands halfway between `forward` and `15left`, not on `forward`: the 0.5
-  multiplies `n`, not `n - 1`.
+  multiplies `n`, not `n - 1`. Every stock turret file sets
+  `animHorRotateInc`; vcod places no gunner on a gun whose value is 0 or
+  less (`turretpose::place_gunner_at`), where the division gives NaN. What
+  retail does with 0 is unread.
 - INFERRED, 7.1's control flow: the barrel's pitch is not read. The row is
   found by height: the target is the player's height above the gun minus
   `tag_weapon`'s height in the gun's frame, which the barrel's pitch moves
@@ -1082,8 +1085,8 @@ the callback `inflictor->s.weapon` on all three. VERIFIED,
 `mp_carentan-dm-turret-spawn-uo-script.txt` and
 `-hitfine-uo-script.txt`: the `D;` line names `mg42_bipod_stand_mp`,
 where 1.1d's and 1.5b's name `m1carbine_mp`. vcod: on UO the turret
-round's hits carry the gun as inflictor and its weapon (`server.rs`, the
-end-frame turret pass); `turret_ab`'s spawn gates compare the `D;` and
+round's hits carry the gun as inflictor and its weapon (`server/sim_ops.rs`,
+the end-frame turret pass); `turret_ab`'s spawn gates compare the `D;` and
 `K;` records on all three servers.
 
 Not determined from the bytes: the means of death and the hit location a
@@ -1431,7 +1434,7 @@ retail behaviour; the lines still serve as D2 samples.
 The release view: 12.7 cannot separate the angle the release sets from the
 one the probe's cmds asked for.
 
-## 13. As implemented
+## 13. The A/B runs: what retail measured, and vcod's port
 
 The mounted frame is `ScriptRuntime::turret_think_client` over
 `game::turret`'s `aim`, `fire_tick`, `loop_tick` and `muzzle`, run once per
@@ -2183,7 +2186,7 @@ module after the fire's muzzle stores (0x5aa90).
   captures lands on retail's bits; the knockback kills do once the 1.5b
   and UO muzzle reads the gun's own skeleton (13.6).
 
-vcod: `combat::bullet_range` (`UO_BULLET_RANGE` on UO), `combat::bullet_end`,
+vcod: `CombatRules::bullet_range` (`UO_BULLET_RANGE` on UO), `combat::bullet_end`,
 `turret::AimRule::fire_angles`, `turret::muzzle` (1.1d) and
 `turret::muzzle_stored` (1.5b and UO: `tag_flash` and `tag_player` off
 the gun's skeleton, `turretpose::GunSkel`, and the reach and the start in
@@ -2860,6 +2863,13 @@ damage kick on top (`TurretEye::kicks`), the jitter on `viewlocked` 2 off
 the gun's `vertViewJitter`/`horizViewJitter`, and the held or jittered
 view handed to the cmd (`TurretEye::snap`). vcod-server sends the arcs on
 protocol 6 and 22 from a gun's first aim (`TurretRecord::aimed`).
+VERIFIED, disassembly 1.5 0x3001c2b0..0x3001c55c: the controller reads
+`eFlags` (0x3020af94), `viewlocked_entNum` (0x3020b28c) and 0x3020af10
+twice each and never `viewlocked` (0x3020b288). vcod's entity pass picks
+the ridden gun on 1.5 without the `viewlocked` test too
+(`turret::ridden`'s `any_lock`), so a mounted frame with `viewlocked` 0
+turns the gun by the unheld view's clamp, where the eye (0x300348c0) is
+not the gun's.
 
 UO's manned aim is the same clamp. VERIFIED decompile, `game.mp.uo.i386.so`
 0x6b950 (called first from the fire tick 0x6bb49, which
@@ -2976,7 +2986,7 @@ carried one (section 4.4).
 `crates/client/src/turret.rs` holds the controller, the anim pick, the
 `tag_player` eye and the shake; `entities::build_instances` draws each
 `eType` 11 entity through them, and `hud::player::turret_reticle` draws the
-reticle. UO's gate, view and drawn barrel differ (coduo-diff.md 19, "The
+reticle. UO's gate, view and drawn barrel differ (coduo-diff.md 19.5, "The
 turret view"). Where vcod differs:
 
 - The control rotation is composed onto the bone's local after the anim, in

@@ -259,22 +259,16 @@ fn assert_clean(errors: &Errors, what: &str) {
     );
 }
 
-/// mp_carentan through the app's path: the world, its submodels, a player
-/// body bind-posed and skinned, the kar98k viewmodel, a smoke and an
-/// impact sprite, a bullet hole and the HUD, every cvar pass on.
 /// The headless device asks for the window's limits: with the default
 /// 256 MB buffer size mp_creek's and mp_killhouse's every-LOD vertices
 /// were an invalid buffer and the map sweep's client panicked at load.
 #[test]
 fn headless_device_has_the_window_limits() {
     let Some((r, errors)) = Renderer::headless(&vcod_common::pk3::Pk3Fs::empty(), false, 1) else {
-        eprintln!("no adapter with BC textures; skipped");
         return;
     };
     assert_clean(&errors, "renderer build");
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let adapter = super::headless::test_adapter(super::headless::Need::Bc).unwrap();
     let have = r.device.limits();
     let want = device_limits(&adapter);
     assert_eq!(have.max_buffer_size, want.max_buffer_size);
@@ -286,6 +280,9 @@ fn headless_device_has_the_window_limits() {
     );
 }
 
+/// mp_carentan through the app's path: the world, its submodels, a player
+/// body bind-posed and skinned, the kar98k viewmodel, a smoke and an
+/// impact sprite, a bullet hole and the HUD, every cvar pass on.
 #[test]
 fn cod1_renderer_builds_and_draws_without_validation_errors() {
     let Some(fs) = vcod_common::testing::game_fs() else {
@@ -540,6 +537,142 @@ fn cod4_renderer_builds_and_draws_without_validation_errors() {
     let after = sum(&r);
     eprintln!("glow: pixel sum {before} -> {after}");
     assert!(after > before + before / 100, "{before} -> {after}");
+    // A vision set with neither film nor glow runs no post pass; a
+    // flashbang and a shellshock still leave the scene pass for the 2D.
+    r.set_level_look(Some(LevelLook::default()));
+    use crate::play::cod4_shock::Screen;
+    for screen in [
+        Screen::Save,
+        Screen::Flash {
+            white: 128.0,
+            grab: 128.0,
+        },
+        Screen::Blur { decay_ms: 500 },
+        Screen::Off,
+    ] {
+        r.set_cod4_shock(Some(screen));
+        draw_frames(&mut r, &fs, above, &[], || None);
+        assert_clean(
+            &errors,
+            &format!("CoD4 mp_crash frame, no post pass, {screen:?}"),
+        );
+    }
+}
+
+/// Every frame shape a session asks for, drawn under the error sink: no
+/// pass after the scene (CoD4's `r_vc_film 0` under a vision set without
+/// a glow; CoD2 keeps its default glow), then the post pass alone; under
+/// each, no shellshock, then each screen the game's shock draws (CoD4's
+/// `Screen`s, CoD1's and CoD2's blend). [`draw_frames`] adds the HUD quads
+/// and the debug line.
+fn draw_shapes(
+    r: &mut Renderer,
+    (fs, errors): (&Pk3Fs, &Errors),
+    at: (Vec3, f32),
+    cod4: bool,
+    what: &str,
+) {
+    use crate::play::cod4_shock::Screen;
+    r.set_bloom(0.0, 0.5);
+    r.set_sun_shafts(0.0);
+    if cod4 {
+        r.set_level_look(Some(LevelLook::default()));
+    }
+    let post = crate::post::PostSettings {
+        grade: 1.0,
+        vignette: 1.0,
+        grain: 1.0,
+    };
+    let screens = [
+        Screen::Save,
+        Screen::Flash {
+            white: 128.0,
+            grab: 128.0,
+        },
+        Screen::Blur { decay_ms: 500 },
+        Screen::Off,
+    ];
+    for (shape, settings) in [("no post pass", Default::default()), ("post only", post)] {
+        r.set_post(settings);
+        r.set_screen_blend(None);
+        draw_frames(r, fs, at, &[], || None);
+        assert_clean(errors, &format!("{what}, {shape}, no shock"));
+        if cod4 {
+            for screen in screens {
+                r.set_cod4_shock(Some(screen));
+                draw_frames(r, fs, at, &[], || None);
+                assert_clean(errors, &format!("{what}, {shape}, {screen:?}"));
+            }
+        } else {
+            r.set_screen_blend(Some(500));
+            draw_frames(r, fs, at, &[], || None);
+            assert_clean(errors, &format!("{what}, {shape}, the shock blend"));
+        }
+    }
+    r.set_screen_blend(None);
+}
+
+/// [`draw_shapes`] over mp_carentan at one sample and at four.
+#[test]
+fn cod1_frame_shapes_draw_without_validation_errors() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    let data = fs.read("maps/mp/mp_carentan.bsp").expect("mp_carentan");
+    let bsp = vcod_common::mapworld::load(&data).unwrap();
+    for samples in [1, 4] {
+        let Some((mut r, errors)) = Renderer::headless(&fs, false, samples) else {
+            return;
+        };
+        r.load_world(&bsp, &fs).unwrap();
+        let what = format!("CoD1 mp_carentan {samples}x");
+        draw_shapes(&mut r, (&fs, &errors), spawn_eye(&bsp), false, &what);
+    }
+}
+
+/// [`draw_shapes`] over mp_toujane at one sample and at four.
+#[test]
+fn cod2_frame_shapes_draw_without_validation_errors() {
+    let Some(fs) = vcod_common::testing::cod2_fs() else {
+        return;
+    };
+    vcod_cod2::model::register();
+    let data = fs.read("maps/mp/mp_toujane.d3dbsp").expect("mp_toujane");
+    let bsp = vcod_cod2::world::from_bytes(&data).unwrap();
+    for samples in [1, 4] {
+        let Some((mut r, errors)) = Renderer::headless(&fs, false, samples) else {
+            return;
+        };
+        r.load_world(&bsp, &fs).unwrap();
+        let what = format!("CoD2 mp_toujane {samples}x");
+        draw_shapes(&mut r, (&fs, &errors), spawn_eye(&bsp), false, &what);
+    }
+}
+
+/// [`draw_shapes`] over mp_crash at one sample and at four.
+#[test]
+fn cod4_frame_shapes_draw_without_validation_errors() {
+    let Some(install) = vcod_cod4::testing::cod4_install() else {
+        return;
+    };
+    let dir = install.root().to_path_buf();
+    let fs = crate::cod4_fly::open_fs(&dir, None, None).unwrap();
+    let ents = crate::cod4_fly::EntityAssets {
+        models: Vec::new(),
+        weapons: Vec::new(),
+    };
+    let map = crate::cod4_fly::load(&dir, None, "mp_crash", &ents).unwrap();
+    let (o, yaw) = map.spawn;
+    for samples in [1, 4] {
+        let Some((mut r, errors)) = Renderer::headless(&fs, false, samples) else {
+            return;
+        };
+        r.set_material_lib(map.materials.clone());
+        r.load_world(&map.bsp, &fs).unwrap();
+        let what = format!("CoD4 mp_crash {samples}x");
+        let at = (Vec3::from(o) + Vec3::Z * 60.0, yaw);
+        draw_shapes(&mut r, (&fs, &errors), at, true, &what);
+    }
 }
 
 /// mp_toujane through the CoD2 session's draw: the retail capture's frame

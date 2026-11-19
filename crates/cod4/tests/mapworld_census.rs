@@ -124,21 +124,7 @@ fn every_stock_map_converts_with_its_indices_in_range() {
     let Some(install) = cod4_install() else {
         return;
     };
-    let filter: Vec<String> = std::env::var("COD4_MAPS")
-        .map(|v| v.split(',').map(str::to_owned).collect())
-        .unwrap_or_default();
-    let mut maps: Vec<String> = install
-        .zones("english")
-        .unwrap()
-        .iter()
-        .filter_map(|p| p.file_stem()?.to_str().map(str::to_owned))
-        .filter(|n| n.starts_with("mp_") && !n.ends_with("_load"))
-        .filter(|n| filter.is_empty() || filter.iter().any(|f| n.contains(f.as_str())))
-        .collect();
-    maps.sort();
-    if filter.is_empty() {
-        assert_eq!(maps.len(), 21, "{maps:?}");
-    }
+    let maps = vcod_cod4::testing::stock_maps(&install);
     let mut src = Cod4Source::open(&install).unwrap();
     for name in &maps {
         let (map, walked) = Map::load(&install, "english", name).unwrap();

@@ -61,14 +61,14 @@ fn the_prematch_hud_matches_retail() {
         "pre",
         0,
         28961,
-        first,
+        first.raw(),
         &[
             (1000, "mr {sid} 8 allies"),
             (2550, "mr {sid} 15 assault_mp,0"),
         ],
     );
     let mut now = Instant::now();
-    while sv.core.sv_time_ms < run_ms {
+    while sv.core.sv_time_ms < run_ms.raw() {
         let svs = sv.core.sv_time_ms;
         if !p.joined && svs >= p.connect_at {
             p.join(&mut sv, now);

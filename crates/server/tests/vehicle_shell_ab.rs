@@ -17,7 +17,7 @@ use crate::common;
 use common::{Join, Queues, step};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::NetEvent;
 use vcod_common::net::event_ids::EV_ROCKET_EXPLODE_NOMARKS;
 use vcod_common::net::events::{EventTracker, GameEvent};
@@ -38,18 +38,15 @@ type Explodes = Vec<(i32, GameEvent)>;
 fn ours() -> Option<(Vec<String>, Explodes)> {
     let fs = vcod_common::testing::uo_fs()?;
     let p = &PROTOCOL_V22;
-    let bsp_path = fs.resolve_map(MAP).expect("map in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_vehicle_shell"), now);
-    sv.set_protocol(&PROTOCOL_V22);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_vehicle_shell",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_vehicle_shell.gsc"),
-    );
-    sv.set_cvar("probe_vehicletype", "panzeriv_mp");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&PROTOCOL_V22),
+        cvars: &[("probe_vehicletype", "panzeriv_mp")],
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_vehicle_shell.gsc"
+        )),
+        ..common::Boot::new(MAP, "probe_vehicle_shell")
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl =
@@ -87,14 +84,14 @@ fn ours() -> Option<(Vec<String>, Explodes)> {
             }
         }
         if let Some(s) = cl.snapshots().newest()
-            && s.server_time != seen_time
+            && s.server_time.raw() != seen_time
         {
-            seen_time = s.server_time;
+            seen_time = s.server_time.raw();
             for ev in tracker.drain(s, p) {
                 if ev.event == EV_ROCKET_EXPLODE_NOMARKS
                     || ev.event == vcod_common::net::event_ids::EV_GRENADE_EXPLODE
                 {
-                    explodes.push((s.server_time, ev));
+                    explodes.push((s.server_time.raw(), ev));
                 }
             }
         }
@@ -120,7 +117,7 @@ fn retail_explodes() -> Explodes {
             if ev.event == EV_ROCKET_EXPLODE_NOMARKS
                 || ev.event == vcod_common::net::event_ids::EV_GRENADE_EXPLODE
             {
-                out.push((f.snapshot.server_time, ev));
+                out.push((f.snapshot.server_time.raw(), ev));
             }
         }
     }
@@ -230,7 +227,7 @@ fn a_shell_strikes_a_vehicle_as_on_uo() {
 
 /// One vehicle's notifies, retail's against ours. The splash's point is the
 /// blast 4 off the struck face, which ours puts up to a unit off retail's
-/// (docs/research/coduo-vehicles.md 13, "The firing vehicle's own splash").
+/// (docs/research/coduo-vehicles.md 13.3, "The firing vehicle's own splash").
 fn compare(rn: &[Notify], on: &[Notify], tag: &str) {
     assert_eq!(on.len(), rn.len(), "{tag}: retail {rn:?}, ours {on:?}");
     for (o, r) in on.iter().zip(rn) {

@@ -1,6 +1,6 @@
 //! CoD2's `Cloud` element: one particle that draws 1024 flakes out of one
 //! shared vertex buffer, each a quad facing the view, through
-//! `particle_cloud*.hlsl` (docs/research/cod2-efx.md 5.1). The sim keeps
+//! `particle_cloud*.hlsl` (docs/research/cod2-efx.md 5, cod2-materials.md 9.14). The sim keeps
 //! the particle; this module turns it into the draw's constants
 //! ([`FxCloud`]) and builds the buffer (`R_CreateParticleCloudBuffer`).
 //! The renderer's `fx_cloud` pass draws it.
@@ -95,7 +95,6 @@ impl FxCloud {
     /// `width` is `size2` under `nonUniformScale`, else `size`; `length`
     /// is the `length` channel under `useLength`, else `width`
     /// (`Cloud::Update`, Mac 0x000a6638).
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pos: Vec3,
         vel: Vec3,

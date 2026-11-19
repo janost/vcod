@@ -31,6 +31,42 @@ fn radius_damage_reaches_a_cod2_body() {
     assert_no_script_errors(&mut f);
 }
 
+/// `hit-rocket-cover`'s spots (cod2-combat.md 9.7): the target behind
+/// mp_toujane's static panzer, the blast where the rocket struck it. On
+/// retail every `CanDamage` probe meets the static model and the target
+/// takes nothing; the builtin's walk clips the same blockers (7).
+#[test]
+fn radius_damage_stops_on_a_static_model() {
+    let Some(mut f) = fight() else {
+        return;
+    };
+    for (slot, at) in [
+        (0, Vec3::new(-113.0, 1229.0, -0.75)),
+        (1, Vec3::new(44.3, 861.4, -16.5)),
+    ] {
+        let p = f.level.players[slot].as_mut().unwrap();
+        p.ps.origin = at;
+        p.ps.velocity = Vec3::ZERO;
+    }
+    f.frames(10);
+    let victim = f.level.players[1].as_ref().unwrap().ps.origin;
+    assert!(
+        victim.distance(Vec3::new(44.3, 861.4, -16.5)) < 2.0,
+        "{victim}"
+    );
+    f.level
+        .rt
+        .install_for_test("probe_blast() { radiusDamage(level.probe_at, 200, 300, 50); }\n");
+    f.level
+        .rt
+        .set_level_field_for_test("probe_at", Value::Vector([-14.0, 997.0, 37.0]));
+    let ent = f.level.rt.client_entity(1).unwrap();
+    f.level.rt.start_thread_for_test(ent, "probe_blast");
+    f.frame();
+    assert_eq!(f.health(1), 100);
+    assert_no_script_errors(&mut f);
+}
+
 const ADS: i32 = vcod_cod2::pmove::button::ADS;
 
 /// The shooter down the sight, then one round.
@@ -73,7 +109,7 @@ fn a_round_fires_a_damage_trigger() {
     f.level.rt.start_thread_for_test(id, "probe_trigger");
     fire_once(&mut f);
     f.frames(2);
-    let weapon = f.level.rt.host.client_weapons[0].current;
+    let weapon = f.level.rt.host.clients[0].weapons.current;
     let damage = f.level.combat.weapons[usize::from(weapon)]
         .as_ref()
         .unwrap()
@@ -260,15 +296,15 @@ fn a_dead_players_weapon_drops_and_is_swapped_up() {
         (i, d.clip_index, d.ammo_index, d.clip_size)
     });
     let h = &mut f.level.rt.host;
-    let held = h.client_weapons[1].current;
-    h.client_weapons[1].take(usize::from(held));
-    h.client_weapons[1].give(index, 1);
-    h.client_weapons[1].current = index as u8;
-    h.client_ammo[1].clip[clip_index] = clip_size as i16;
-    h.client_ammo[1].ammo[ammo_index] = 64;
+    let held = h.clients[1].weapons.current;
+    h.clients[1].weapons.take(usize::from(held));
+    h.clients[1].weapons.give(index, 1);
+    h.clients[1].weapons.current = index as u8;
+    h.clients[1].ammo.clip[clip_index] = clip_size as i16;
+    h.clients[1].ammo.ammo[ammo_index] = 64;
     f.face_off();
-    let victim_weapon = f.level.rt.host.client_weapons[1].current;
-    let own = f.level.rt.host.client_weapons[0].current;
+    let victim_weapon = f.level.rt.host.clients[1].weapons.current;
+    let own = f.level.rt.host.clients[0].weapons.current;
     assert_ne!(victim_weapon, own);
     fire_once(&mut f);
     f.frames(2);
@@ -294,7 +330,7 @@ fn a_dead_players_weapon_drops_and_is_swapped_up() {
         items(&mut f).iter().any(|i| i.0 == id),
         "a full player takes nothing by touch"
     );
-    assert_eq!(f.level.rt.host.client_weapons[0].current, own);
+    assert_eq!(f.level.rt.host.clients[0].weapons.current, own);
     let eye = super::cod2::Cod2Level::view_origin(&f.level.players[0].as_ref().unwrap().ps);
     let ang = crate::game::builtins::math::vectoangles((at - eye).to_array());
     f.aim[0] = [ang[0], ang[1]];
@@ -303,7 +339,7 @@ fn a_dead_players_weapon_drops_and_is_swapped_up() {
     f.frame();
     f.buttons[0] = 0;
     f.frames(2);
-    let w = f.level.rt.host.client_weapons[0];
+    let w = f.level.rt.host.clients[0].weapons;
     assert!(
         w.holds(usize::from(victim_weapon)),
         "the swap gave the weapon"

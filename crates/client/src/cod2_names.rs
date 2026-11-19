@@ -161,6 +161,7 @@ fn health_rgb(health: i32) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::net::Msec;
 
     #[test]
     fn health_runs_red_through_yellow_to_green() {
@@ -215,7 +216,7 @@ mod tests {
         vcod_cod2::net::SnapshotView::new(
             &Snapshot2 {
                 message_num: 1,
-                server_time: 1000,
+                server_time: Msec::from_raw(1000),
                 delta_num: -1,
                 snap_flags: 0,
                 valid: true,

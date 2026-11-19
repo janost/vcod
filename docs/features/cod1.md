@@ -336,7 +336,7 @@ Game:
 
 ### Bots
 
-`--bots N [--bots-shoot]` and rcon's `addbot`, `removebot`, `listbots`
+`--bots N [--bots-peaceful]` and rcon's `addbot`, `removebot`, `listbots`
 ([bots.md](../bots.md)).
 
 - They join through the stock menus and roam a nav graph built from
@@ -344,7 +344,7 @@ Game:
 - Objectives: S&D plants and defuses, Retrieval carries and escorts,
   Behind Enemy Lines hunts. Only the two teammates nearest a shot go to
   it.
-- With `--bots-shoot` they fight: a reaction delay, a turn cap, aim that
+- Unless `--bots-peaceful`, they fight: a reaction delay, a turn cap, aim that
   settles and trails a crossing target, strafing on their sights. They
   spot enemies in a sight cone, keep their target and turn on whoever
   shoots them.
@@ -455,7 +455,10 @@ Server:
 - Asphalt footsteps play. Retail's engine asks for `asphalt` and the sound
   table spells it `asphault`, so retail's are silent. vcod uses the
   table's spelling, typo and all.
-- Wall occlusion on sounds.
+- Wall occlusion on sounds: in play, a sound with world geometry between
+  it and the listener plays at a quarter of its gain (about -12 dB).
+  Always on, with no cvar yet; retail has none
+  ([cod11-sound-system.md](../research/cod11-sound-system.md) 11).
 - Visibility draws a little more than retail on purpose. Retail assumes
   nobody looks over a cell's walls, and the mp_ship decks disagree.
 - Dynamic lights add on top of a prop's vertex lighting with retail's

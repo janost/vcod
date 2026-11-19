@@ -6,29 +6,7 @@ use glam::Vec3;
 
 use super::*;
 
-/// A floor at z 0, solid below.
-struct Floor;
-
-impl PmWorld for Floor {
-    fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, _maxs: Vec3, _pass: u32, _mask: u32) -> Tr {
-        let (a, b) = (start.z + mins.z, end.z + mins.z);
-        let mut t = Tr::default();
-        if a < 0.0 {
-            t.fraction = 0.0;
-            t.startsolid = true;
-            t.allsolid = b < 0.0;
-        } else if b < 0.125 && b < a {
-            t.fraction = ((a - 0.125) / (a - b)).max(0.0);
-        } else {
-            return t;
-        }
-        t.normal = Vec3::Z;
-        t.walkable = true;
-        t.entity_num = ENTITYNUM_WORLD as u32;
-        t.contents = 1;
-        t
-    }
-}
+use super::testing::FLOOR;
 
 fn cmd(time: i32, buttons: u32, forward: i8) -> Cmd {
     Cmd {
@@ -44,7 +22,7 @@ fn run(ps: &mut PlayerState, n: usize, buttons: u32, forward: i8, weapon: Weapon
     let mut old = cmd(ps.command_time, 0, 0);
     for _ in 0..n {
         let c = cmd(ps.command_time + 50, buttons, forward);
-        player_step(ps, &c, &mut old, &Floor, Rules::default(), weapon);
+        player_step(ps, &c, &mut old, &FLOOR, Rules::default(), weapon);
     }
 }
 
@@ -86,7 +64,7 @@ fn a_slowing_shellshock_walks_at_four_tenths() {
         let mut old = cmd(ps.command_time, 0, 0);
         for _ in 0..40 {
             let c = cmd(ps.command_time + 50, 0, 127);
-            player_step(&mut ps, &c, &mut old, &Floor, rules, WeaponMove::NONE);
+            player_step(&mut ps, &c, &mut old, &FLOOR, rules, WeaponMove::NONE);
         }
         ps.velocity.x
     };
@@ -150,7 +128,7 @@ fn a_held_sprint_forces_the_stand_on_every_cmd() {
     let mut seq = None;
     for _ in 0..40 {
         let c = cmd(ps.command_time + 50, button::SPRINT, 127);
-        player_step(&mut ps, &c, &mut old, &Floor, Rules::default(), RIFLE);
+        player_step(&mut ps, &c, &mut old, &FLOOR, Rules::default(), RIFLE);
         assert!(ps.pm_flags & pmf::SPRINTING != 0);
         let s = seq.get_or_insert(ps.event_sequence - 1);
         *s += 1;
@@ -272,7 +250,7 @@ mod weapon_pins {
                     ..Default::default()
                 };
                 let seq = ps.event_sequence;
-                let mut pm = Pmove::new(ps, cmd, old, &Floor, Rules::default());
+                let mut pm = Pmove::new(ps, cmd, old, &FLOOR, Rules::default());
                 pm.defs = Some(&defs);
                 let pml = Pml {
                     msec,
@@ -1344,7 +1322,7 @@ mod weapon_pins {
                         ..tmpl
                     };
                     let seq = ps.event_sequence;
-                    let mut pm = Pmove::new(ps, cmd, old, &Floor, arm.rules);
+                    let mut pm = Pmove::new(ps, cmd, old, &FLOOR, arm.rules);
                     pm.defs = Some(&defs);
                     let pml = Pml {
                         msec,
@@ -2692,7 +2670,7 @@ impl PmWorld for Brush {
             }
             return t;
         }
-        Floor.trace(start, end, mins, maxs, pass, mask)
+        FLOOR.trace(start, end, mins, maxs, pass, mask)
     }
 }
 
@@ -2705,47 +2683,38 @@ fn hold(n: usize, buttons: u32, forward: i8) -> Script {
 
 /// An FNV-1a digest of every field the frame's head, the sprint, the
 /// foliage and the tail write, after each cmd of `script`.
-fn digest(mut ps: PlayerState, script: &Script, rules: Rules, weapon: WeaponMove) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut eat = |v: u32| {
-        for b in v.to_le_bytes() {
-            h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
-        }
-    };
+fn digest(mut ps: PlayerState, script: &Script, rules: Rules, weapon: WeaponMove) -> pin::Pin {
+    let mut p = pin::Pin::bytes();
     let mut old = cmd(ps.command_time, 0, 0);
     for &(buttons, forward) in script {
         let mut c = cmd(ps.command_time + 50, buttons, forward);
         c.right_move = if buttons & 0x8_0000 != 0 { 64 } else { 0 };
         player_step(&mut ps, &c, &mut old, &Brush, rules, weapon);
         let s = ps.sprint;
-        for v in [
-            ps.pm_flags,
-            ps.e_flags,
-            ps.pm_time as u32,
-            ps.event_sequence as u32,
-            ps.events[0],
-            ps.events[1],
-            ps.events[2],
-            ps.events[3],
-            ps.foliage_sound_time as u32,
-            s.last_start as u32,
-            s.last_end as u32,
-            s.start_max_length as u32,
+        p.step();
+        p.u32("pm_flags", ps.pm_flags);
+        p.u32("e_flags", ps.e_flags);
+        p.i32("pm_time", ps.pm_time);
+        p.i32("event_sequence", ps.event_sequence);
+        for e in ps.events {
+            p.u32("event", e);
+        }
+        p.i32("foliage_sound_time", ps.foliage_sound_time);
+        p.i32("sprint_last_start", s.last_start);
+        p.i32("sprint_last_end", s.last_end);
+        p.i32("sprint_start_max_length", s.start_max_length);
+        p.u32(
+            "sprint_delay_up",
             u32::from(s.delay) | u32::from(s.button_up_required) << 1,
-            ps.ground_entity_num as u32,
-            ps.view_height_target as u32,
-        ] {
-            eat(v);
-        }
-        for v in [ps.origin, ps.velocity] {
-            for x in v.to_array() {
-                eat(x.to_bits());
-            }
-        }
-        eat(ps.old_velocity[0].to_bits());
-        eat(ps.old_velocity[1].to_bits());
+        );
+        p.i32("ground", ps.ground_entity_num);
+        p.i32("view_height_target", ps.view_height_target);
+        p.vec("origin", ps.origin);
+        p.vec("velocity", ps.velocity);
+        p.f32("old_velocity_x", ps.old_velocity[0]);
+        p.f32("old_velocity_y", ps.old_velocity[1]);
     }
-    h
+    p
 }
 
 /// Pins `PmoveSingle`'s head, every arm's call order, the sprint and the
@@ -3051,9 +3020,40 @@ fn pmove_single_and_the_sprint_hold_their_pinned_traces() {
     let mut wrong = Vec::new();
     for (name, ps, script, rules, weapon, want) in cases {
         let got = digest(ps, &script, rules, weapon);
-        if got != want {
-            wrong.push(format!("(\"{name}\", {got:#018x})"));
+        if let Some(m) = got.miss(&format!("pmove_single_{name}"), want) {
+            wrong.push(m);
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// A mantle cap of 0, -1 or 1e-30 off the server's dvar mirror, and a
+/// mantle yaw of 1e30 or infinity off its playerstate, step without a hang
+/// in `Mantle_CapView`'s loops (SEC-046).
+#[test]
+fn hostile_mantle_caps_and_yaws_step() {
+    for (cap, yaw) in [
+        (0.0, 0.0),
+        (-1.0, 0.0),
+        (1e-30, 0.0),
+        (60.0, 1e30),
+        (60.0, 1e20),
+        (0.0, f32::INFINITY),
+    ] {
+        let mut ps = standing();
+        ps.pm_flags |= pmf::MANTLE;
+        ps.mantle.yaw = yaw;
+        ps.view_angles[1] = 90.0;
+        let mut ps = PlayerState::from_wire(&ps.to_wire(&Default::default()));
+        let rules = Rules {
+            mantle_view_yawcap: cap,
+            ..Rules::default()
+        };
+        let mut old = cmd(ps.command_time, 0, 0);
+        for _ in 0..2 {
+            let mut c = cmd(ps.command_time + 50, 0, 0);
+            c.angles[1] = 0x4000;
+            player_step(&mut ps, &c, &mut old, &FLOOR, rules, RIFLE);
+        }
+    }
 }

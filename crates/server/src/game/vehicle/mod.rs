@@ -32,7 +32,8 @@ const NONE: i32 = 1023;
 pub const THINK_MS: i32 = 50;
 
 /// What the vehicle entity carries on the wire beyond its pose
-/// (docs/research/coduo-vehicles.md 12, "The entity").
+/// (docs/research/coduo-vehicles.md 9, as the cgame reads it; 10.4 and
+/// 11.1).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VehicleWire {
     /// Turret pitch and yaw off the hull, the gunner's pitch.
@@ -197,6 +198,10 @@ pub struct Vehicle {
     /// burns until `_tankeffects_gmi`'s second blast deletes it
     /// (coduo-vehicles.md 15.2), what bots keep clear of.
     pub dead: bool,
+    /// `takedamage` (+0x17d): set by the spawn (0x7c935), written by
+    /// `setTakeDamage`; `G_Damage` and `G_RadiusDamage` skip a vehicle
+    /// without it (coduo-vehicles.md 13).
+    pub takedamage: bool,
 }
 
 /// The level's vehicles: the files, the pool and each live vehicle.
@@ -205,6 +210,9 @@ pub struct Vehicles {
     pub infos: VehicleInfos,
     pub slots: [Option<EntId>; MAX_VEHICLES],
     pub live: HashMap<EntId, Vehicle>,
+    /// `freeVehicle`'s corpses by their new handle: the record as the free
+    /// left it, for the wire and the collmap (section 17).
+    pub corpses: HashMap<EntId, Vehicle>,
     /// `fireTurret`, `fireAltTurret` and `fireGunner` calls on a bullet gun
     /// this frame, for the server to trace (it holds the bodies); a shell
     /// gun fires inside the call (`fire::launch_shell`).
@@ -236,6 +244,9 @@ pub struct Vehicles {
     /// Each vehicle model's skeleton and collision, for its tags and the
     /// locational trace.
     pub rigs: HashMap<String, Option<std::rc::Rc<seat::Rig>>>,
+    /// Each vehicle's posed collision as the last trace met it
+    /// ([`seat::hull_collision`]).
+    pub hulls: HashMap<EntId, seat::HullCollision>,
     /// Stuck kills landed since the level loaded, for the bot gates.
     pub stuck_kills: u32,
 }
@@ -246,6 +257,7 @@ impl Default for Vehicles {
             infos: VehicleInfos::default(),
             slots: [None; MAX_VEHICLES],
             live: HashMap::new(),
+            corpses: HashMap::new(),
             fire_ops: Vec::new(),
             deaths: Vec::new(),
             dying: Vec::new(),
@@ -258,13 +270,21 @@ impl Default for Vehicles {
             overheated_gunners: Vec::new(),
             seat_ops: Vec::new(),
             rigs: HashMap::new(),
+            hulls: HashMap::new(),
             stuck_kills: 0,
         }
     }
 }
 
 impl Vehicles {
-    pub fn info_of(&self, v: &Vehicle) -> &VehicleInfo {
+    /// Drops the seat ops pending for `slot` alone: a spawn or a disconnect
+    /// settles that client's seat itself, and the other riders' ops still
+    /// land.
+    pub fn drop_seat_ops(&mut self, slot: usize) {
+        self.seat_ops.retain(|op| op.slot() != slot);
+    }
+
+    pub fn info_of(&self, v: &Vehicle) -> &std::rc::Rc<VehicleInfo> {
         &self.infos.list[v.info]
     }
 
@@ -340,7 +360,7 @@ pub fn rider_damage(
 /// then their aliases ahead of every other alias of the level. United
 /// Offensive only.
 pub fn load_level(host: &mut GameHost) {
-    if !host.defs.proto.is_uo() {
+    if !host.profile.vehicles {
         return;
     }
     let Some(fs) = host.fs.clone() else {
@@ -539,6 +559,7 @@ pub fn spawn(
             next_think: host.level_time_ms + THINK_MS,
             initialized: false,
             dead: false,
+            takedamage: true,
         },
     );
     if !loading {
@@ -589,6 +610,7 @@ impl Vehicle {
             next_think: 0,
             initialized: false,
             dead: false,
+            takedamage: true,
         }
     }
 }
@@ -629,26 +651,26 @@ pub fn placed_models(host: &mut GameHost, cx: &mut Cx) -> Vec<crate::game::comba
         {
             continue;
         }
-        let Some(posed) = seat::posed(host, cx, id) else {
+        let Some((origin, rot, hull)) = seat::hull_collision(host, cx, id) else {
             continue;
         };
-        let (tris, surfs) = posed.collision();
-        if tris.is_empty() {
+        if hull.tris.is_empty() {
             continue;
         }
-        let owner = host.vehicles.live[&id].seats[1].map(|s| s as u32);
+        let v = &host.vehicles.live[&id];
+        let (owner, takes_damage) = (v.seats[1].map(|s| s as u32), v.takedamage);
         let model = seat::model_name(host, cx, id);
         let bounds = host
             .model_bounds_of(&model)
             .map(|(lo, hi)| (glam::Vec3::from(lo), glam::Vec3::from(hi)));
         out.push(crate::game::combat::PlacedModel {
             id,
-            origin: posed.origin,
-            axis: glam::Mat3::from_quat(posed.rot),
-            tris: std::sync::Arc::from(tris),
-            surfs: std::sync::Arc::from(surfs),
+            origin,
+            axis: glam::Mat3::from_quat(rot),
+            tris: hull.tris,
+            surfs: hull.surfs,
             owner,
-            takes_damage: true,
+            takes_damage,
             body: false,
             bounds,
         });
@@ -757,31 +779,101 @@ pub fn pair_collmap(host: &mut GameHost, cx: &mut Cx, id: EntId) {
 /// `G_FreeVehicle` (0x8ad7d) ahead of the vehicle's own `G_FreeEntity`:
 /// the blend entities go first, in order, then the slot.
 pub fn free(host: &mut GameHost, id: EntId) {
-    let Some(v) = host.vehicles.live.remove(&id) else {
-        return;
+    let v = match host.vehicles.corpses.remove(&id) {
+        Some(v) => v,
+        None => match free_record(host, id) {
+            Some(v) => v,
+            None => return,
+        },
     };
-    host.vehicles.slots[v.slot] = None;
     if let (Some(n), Some(w)) = (v.collmap, host.world.as_ref()) {
         w.collision.set_model_instance(id.0, n as usize, None);
+    }
+}
+
+/// `G_FreeVehicle`'s record half: the pool slot and the sound blends go.
+/// Each rider is put out where he sits, so his sim does not keep a seat on
+/// a freed number (coduo-vehicles.md 17.4).
+fn free_record(host: &mut GameHost, id: EntId) -> Option<Vehicle> {
+    let v = host.vehicles.live.remove(&id)?;
+    host.vehicles.slots[v.slot] = None;
+    for slot in v.seats.into_iter().flatten() {
+        host.vehicles.stale_seated.remove(&slot);
+        host.vehicles.riders.remove(&slot);
+        host.vehicles.seat_ops.push(seat::SeatOp::Exit {
+            slot,
+            origin: None,
+            velocity: None,
+        });
     }
     for b in v.blends.into_iter().flatten() {
         host.free_entity(b);
     }
+    Some(v)
+}
+
+/// `freeVehicle` (0x8e72f, section 17): `G_FreeVehicle` (health 0, the
+/// blends freed, think and `speed` cleared, `eFlags` and both trTypes 0),
+/// `eType` 13 and classname `script_vehicle_corpse`, `death` with no
+/// argument, then `Scr_FreeEntityNum`: every handle out goes dead, the
+/// threads whose `self` it was with it, and the entity stays where it
+/// stands with its collmap, under a new handle.
+pub fn free_to_corpse(host: &mut GameHost, cx: &mut Cx, id: EntId) {
+    set_field(host, cx, id, "health", Value::Int(0));
+    let Some(mut v) = free_record(host, id) else {
+        return;
+    };
+    set_field(host, cx, id, "speed", Value::Float(0.0));
+    v.wire.driven_flag = false;
+    v.wire.loop_sound = 0;
+    if let (Some(e), crate::game::fields::Route::Engine { slot, .. }) = (
+        host.ents.get_mut(id),
+        crate::game::fields::route_entity("classname"),
+    ) {
+        e.engine[slot] = Value::String(cx.intern_exact("script_vehicle_corpse"));
+    }
+    let death = cx.intern_folded("death");
+    cx.notify(vcod_gsc::Target::Entity(id), death, Vec::new());
+    // UO's own entity fields (`vehicletype` +0x314, `capturing` +0x318,
+    // `vehicle_owner` +0x31c) are gentity storage there and outlive the
+    // object; vcod keeps them with the script's.
+    let kept: Vec<(vcod_gsc::Atom, Value)> = ["vehicletype", "capturing", "vehicle_owner"]
+        .iter()
+        .map(|n| {
+            let a = cx.intern_folded(n);
+            (a, host.get_field(cx, id, a))
+        })
+        .collect();
+    let Some(new) = host.ents.reissue(cx, id) else {
+        return;
+    };
+    for (a, value) in kept {
+        if value != Value::Undefined {
+            let _ = host.set_field(cx, new, a, value);
+        }
+    }
+    host.vehicles.corpses.insert(new, v);
 }
 
 /// The vehicle entity's own fields on the wire (0x7c935, the think's
 /// writes; docs/research/coduo-vehicles.md 12). Its pose rides `pos` and
 /// `apos` at `TR_INTERPOLATE`.
 pub fn write_wire(host: &GameHost, id: EntId, model: i32, set: &mut dyn FnMut(&str, i32)) {
-    let Some(v) = host.vehicles.live.get(&id) else {
-        return;
+    let (v, corpse) = match host.vehicles.live.get(&id) {
+        Some(v) => (v, false),
+        None => match host.vehicles.corpses.get(&id) {
+            Some(v) => (v, true),
+            None => return,
+        },
     };
     let info = host.vehicles.info_of(v);
     let f = |x: f32| x.to_bits() as i32;
-    set(
-        "eType",
-        crate::game::wire::ET_RAW | vcod_common::net::flags::ET_VEHICLE_V22,
-    );
+    let et = if corpse {
+        vcod_common::net::flags::ET_VEHICLE_CORPSE_V22
+    } else {
+        vcod_common::net::flags::ET_VEHICLE_V22
+    };
+    set("eType", crate::game::wire::ET_RAW | et);
     set(
         "eFlags",
         if v.wire.driven_flag {
@@ -790,8 +882,11 @@ pub fn write_wire(host: &GameHost, id: EntId, model: i32, set: &mut dyn FnMut(&s
             0
         },
     );
-    set("pos.trType", TR_INTERPOLATE);
-    set("apos.trType", TR_INTERPOLATE);
+    // A corpse stands still: `G_FreeVehicle` zeroes both trTypes.
+    if !corpse {
+        set("pos.trType", TR_INTERPOLATE);
+        set("apos.trType", TR_INTERPOLATE);
+    }
     set("xmodel", model);
     if let Some(n) = v.collmap {
         set("index", n as i32);
@@ -847,8 +942,9 @@ pub fn inflictor_weapon(host: &GameHost, id: Option<EntId>) -> usize {
     }
     if host.ents.get(id).is_some_and(|e| e.client.is_some()) {
         return host
-            .client_weapons
+            .clients
             .get(id.0 as usize)
+            .map(|c| &c.weapons)
             .map_or(0, |w| w.current as usize);
     }
     0
@@ -968,7 +1064,7 @@ pub fn occupant_radius_scale(kind: i32) -> f32 {
 /// `builtins::uo::do_damage` sends every other entity down the generic arm.
 /// A missing attacker is the world's entity for a vehicle and undefined in
 /// a player's callback.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn g_damage(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -1010,7 +1106,12 @@ pub fn g_damage(
         return;
     }
     let slot = target.0 as usize;
-    if !host.client_vitals.get(slot).is_some_and(|v| v.takedamage) {
+    if !host
+        .clients
+        .get(slot)
+        .map(|c| &c.vitals)
+        .is_some_and(|v| v.takedamage)
+    {
         return;
     }
     let Some(damage) = host
@@ -1072,7 +1173,7 @@ pub fn die_next(host: &mut GameHost, cx: &mut Cx) {
 /// six arguments, and at 0 `death` and `Scr_Vehicle_Die`, queued: a builtin
 /// walks it at once ([`die_next`]), the frame's other paths at
 /// `ScriptRuntime::vehicle_deaths`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn vehicle_damage(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -1085,7 +1186,7 @@ pub fn vehicle_damage(
     dflags: i32,
     mod_: &str,
 ) -> Vec<(&'static str, Vec<Value>)> {
-    let Some(v) = host.vehicles.live.get(&id) else {
+    let Some(v) = host.vehicles.live.get(&id).filter(|v| v.takedamage) else {
         return Vec::new();
     };
     let info = host.vehicles.info_of(v).clone();
@@ -1161,7 +1262,7 @@ pub fn vehicle_damage(
         // or no direction when the vehicle is its own attacker. The op skips
         // a slot with no sim.
         let driver = host.vehicles.live.get(&id).map_or(-1, |v| v.wire.other);
-        if (0..host.client_bodies.len() as i32).contains(&driver) {
+        if (0..host.clients.len() as i32).contains(&driver) {
             let from = (attacker != id).then(|| std::array::from_fn(|i| origin[i] - point[i]));
             host.client_sim_ops.push((
                 driver as usize,
@@ -1193,7 +1294,7 @@ pub fn position_clear(host: &mut GameHost, cx: &mut Cx, id: EntId) -> bool {
     let Some(me) = vehicle_box(host, id, origin) else {
         return true;
     };
-    for body in host.client_bodies.iter().flatten() {
+    for body in host.clients.iter().filter_map(|c| c.body.as_ref()) {
         let o = body.origin;
         let b = ((o + body.mins).to_array(), (o + body.maxs).to_array());
         if boxes_touch(me, b) {
@@ -1306,9 +1407,9 @@ pub fn dismount_spot(
     ff = ff.clamp(-len, len);
     let (pmins, pmaxs) = (Vec3::from(mins), Vec3::from(maxs));
     let body_at = |p: Vec3| {
-        host.client_bodies
+        host.clients
             .iter()
-            .flatten()
+            .filter_map(|c| c.body.as_ref())
             .filter(|b| Some(b.slot) != rider)
             .any(|b| {
                 let (lo, hi) = (b.origin + b.mins, b.origin + b.maxs);
@@ -1402,6 +1503,30 @@ mod tests {
             rider_damage(KIND_FOUR_WHEEL, 1, TANK, Some(SHOOTER), 40, 0),
             Some(40)
         );
+    }
+
+    /// Freeing an occupied vehicle puts each rider out where he sits: his
+    /// sim gets a forced exit and no seat clock or stale seat bit stays.
+    #[test]
+    fn freeing_a_vehicle_puts_its_riders_out() {
+        let mut host = GameHost::new(&crate::game::profile::COD1_UO, vec![String::new(); 2048]);
+        let mut v = Vehicle::for_test(0);
+        v.seats[1] = Some(3);
+        v.seats[2] = Some(5);
+        host.vehicles.slots[0] = Some(TANK);
+        host.vehicles.live.insert(TANK, v);
+        host.vehicles.riders.insert(3, seat::RiderClock::default());
+        host.vehicles.stale_seated.insert(5);
+        free(&mut host, TANK);
+        let exit = |slot| seat::SeatOp::Exit {
+            slot,
+            origin: None,
+            velocity: None,
+        };
+        assert_eq!(host.vehicles.seat_ops, vec![exit(3), exit(5)]);
+        assert!(host.vehicles.riders.is_empty());
+        assert!(host.vehicles.stale_seated.is_empty());
+        assert_eq!(host.vehicles.seat_of(3), None);
     }
 
     #[test]

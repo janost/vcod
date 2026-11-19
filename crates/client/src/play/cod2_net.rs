@@ -49,6 +49,7 @@ impl NetMeter {
             self.out.pop_front();
         }
         self.sent.push_back(now);
+        self.prune(now);
     }
 
     /// A datagram of a sequenced message came in; `fragment` when it is one
@@ -62,11 +63,13 @@ impl NetMeter {
             self.lost_total += u64::from(lost);
             self.lost.push_back((now, lost));
         }
+        self.prune(now);
     }
 
     /// A whole message was parsed.
     pub fn message(&mut self, now: Instant) {
         self.messages.push_back(now);
+        self.prune(now);
     }
 
     /// A snapshot came in whose playerstate ran the cmds up to
@@ -81,26 +84,36 @@ impl NetMeter {
             .rev()
             .find(|(t, _)| *t <= command_time)
             .map_or(NO_PING, |(_, at)| (now - *at).as_millis() as i32);
+        self.prune(now);
     }
 
-    /// The counts of the second before `now`.
-    pub fn rates(&mut self, now: Instant) -> Rates {
+    /// Drops the events older than a second before `now`; each push runs
+    /// it, so the queues hold one second whether or not anyone reads them.
+    fn prune(&mut self, now: Instant) {
         let since = now.checked_sub(Duration::from_secs(1)).unwrap_or(now);
         let prune = |q: &mut VecDeque<Instant>| {
             while q.front().is_some_and(|t| *t < since) {
                 q.pop_front();
             }
-            q.len()
         };
+        prune(&mut self.snaps);
+        prune(&mut self.messages);
+        prune(&mut self.sent);
+        prune(&mut self.frags);
         while self.lost.front().is_some_and(|(t, _)| *t < since) {
             self.lost.pop_front();
         }
+    }
+
+    /// The counts of the second before `now`.
+    pub fn rates(&mut self, now: Instant) -> Rates {
+        self.prune(now);
         Rates {
-            snaps: prune(&mut self.snaps),
-            messages: prune(&mut self.messages),
-            sent: prune(&mut self.sent),
+            snaps: self.snaps.len(),
+            messages: self.messages.len(),
+            sent: self.sent.len(),
             lost: self.lost.iter().map(|(_, n)| n).sum(),
-            fragments: prune(&mut self.frags),
+            fragments: self.frags.len(),
         }
     }
 }
@@ -221,6 +234,30 @@ impl LerpStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ten seconds of traffic with no one reading the rates leave about
+    /// one second in each queue.
+    #[test]
+    fn unread_queues_hold_one_second() {
+        let t0 = Instant::now();
+        let mut m = NetMeter::default();
+        for i in 0..1000u64 {
+            let now = t0 + Duration::from_millis(i * 10);
+            m.sent(Some(i as i32), now);
+            m.packet(true, 1, now);
+            m.message(now);
+            m.snapshot(i as i32, now);
+        }
+        for len in [
+            m.snaps.len(),
+            m.messages.len(),
+            m.sent.len(),
+            m.lost.len(),
+            m.frags.len(),
+        ] {
+            assert!(len <= 101, "{len}");
+        }
+    }
 
     #[test]
     fn ping_is_the_newest_packet_the_snapshot_ran() {

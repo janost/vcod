@@ -17,19 +17,14 @@ python3 tools/re/dump_script_fields.py game.mp.i386.so all
 python3 tools/re/dump_builtins.py     game.mp.i386.so all
 ```
 
-## 1. One trap that cost the previous pass three wrong claims
+## 1. Pointers in `.data` read as zero in the file
 
 Pointers stored in `.data` read as zero in the file. The module is a shared
 object, so every address in a static table (`SP_info_null`,
 `ScriptEnt_MoveTo`, ...) is an `R_386_32` relocation in `.rel.data` with the
-in-place word left at 0.
-
-Read raw, that produced three wrong claims in `cod11-gsc-language.md` section 7
-(corrected there): some builtin records carry a null function pointer,
-`getent` and `getentarray` among them, and the `move*`/`rotate*` builtins sit
-in a `.rodata` whitelist with a zero second field. Nothing has a null function
-pointer; the movers are an ordinary dispatch table in `.data`. Both dumpers
-resolve `.rel.data` and print the symbol.
+in-place word left at 0. Read raw, builtin records seem to carry null function
+pointers and the movers seem to be a `.rodata` whitelist; neither is true
+(section 9). Both dumpers resolve `.rel.data` and print the symbol.
 
 ## 2. Struct sizes, VERIFIED
 
@@ -577,8 +572,6 @@ function (`hurt_touch`'s `+0x171` byte included) is an inner gate.
 
 ## 9. Builtins are five tables, VERIFIED
 
-`cod11-gsc-language.md` section 7 points here for the record struct.
-
 | table | address | stride | count | walked by | 1.5b address, count | UO 1.51b address, count |
 |---|---|---|---|---|---|---|
 | `functions` | 0x7e508 | 12 | 106 | `Scr_GetFunction` 0x5c15c | 0x83c40, 110 | 0xadde0, 120 |
@@ -684,23 +677,13 @@ its classname is not `worldspawn`, runs `SP_worldspawn` on it, then loops
 `G_ParseSpawnVars` plus `G_CallSpawn` over the rest. The world is not
 allocated through `G_Spawn` and takes no number in the 72-and-up range.
 
-## 12. What stage 2 takes from this
+## 12. Summary
 
-The rules the host follows:
-
-- Four object kinds; the field id discriminates two of them: a plain index for
-  entity, `| 0xC000` for client, a plain index in its own namespace for HUD
-  elements.
-- Field lookup by name is case-insensitive, at script level and for Radiant
-  keys at map load. Field ids are dense small integers (`u16`).
-- `getentarray` sees case-four entities in ascending entity number (BSP lump
-  order), numbered from 72. Five classnames free the entity their `SP_`
-  function was handed and the slot is reused at once, so those blocks take no
-  number (sections 13, 14).
-- A Radiant key that is neither an engine field nor in `radiant/keys.txt` is
-  dropped at load; stashing it would show scripts fields retail lacks.
-- 216 builtin names is the dispatch ceiling, in the five-table split and
-  lookup order of section 9. The 37 names `mp_pavlov` needs are a subset.
+The field id names the object kind (section 5), name lookups fold case
+(section 7), `getEntArray` order and entity numbers follow sections 10, 11, 13
+and 14, and builtin dispatch is section 9's five tables in its lookup order. A
+Radiant key that is neither an engine field nor in `radiant/keys.txt` is
+dropped at load (section 7).
 
 ## 13. Five classnames consume their block without an entity, VERIFIED
 
@@ -1540,7 +1523,7 @@ slot before it gives.
 VERIFIED: past `BG_GivePlayerWeapon` the method calls nothing that sets
 ammo, on 1.1 (0x43df4), 1.5 (0x3f93d) and UO (0x480f9), so a weapon set into
 a slot keeps whatever its clip and ammo indices held. UO's rank-3
-`binoculars_mp` reads 0 rounds on retail (coduo-diff.md 22, "Battle rank").
+`binoculars_mp` reads 0 rounds on retail (coduo-diff.md 22.3, "Battle rank").
 
 VERIFIED: `BG_TakePlayerWeapon` returns at once for a weapon not held
 (`Com_BitCheck` at 0x36b92, branch at 0x36b9c) and ends in a `Com_BitClear` of
@@ -1585,9 +1568,9 @@ ticks 1758 and 2422 (`bot-combat.md` 12.3).
 So the `spawn` builtin queues `WeaponOp::TakeAll` in call order as the
 memset's emptying, and the spawn pass keeps `ps.ammo` and `ps.ammoclip`; the
 loadout survives whichever pass applies it. VERIFIED (measured, ours):
-`server::tests::a_loadout_applied_before_the_spawn_pass_survives_it` spawns
-and gives a frag inside a damage callback; the frag's clip reads 3 (0 without
-the change).
+`server::frame::tests::a_loadout_applied_before_the_spawn_pass_survives_it`
+spawns and gives a frag inside a damage callback; the frag's clip reads 3 (0
+without the change).
 
 ### `setViewmodel` reaches `ps.viewmodelIndex`
 
@@ -1723,7 +1706,7 @@ INFERRED, from absence: no touch path writes the three hint fields
 (`SP_trigger_lookat` installs no touch function, and the trigger touch path
 stores nothing at `ps+0x384`, `+0x388` or `+0x38c`).
 
-VERIFIED, `crates/server/src/game/script.rs` and
+VERIFIED, `crates/server/src/game/script/touch.rs` and
 `crates/server/src/spectate.rs`: vcod writes `serverCursorHint` and
 `serverCursorHintString` from `ScriptRuntime::cursor_hint_pass`, with item,
 turret and `trigger_use` arms (`docs/research/cod11-gametypes-re-bel.md` 4).
@@ -1984,7 +1967,7 @@ and `pm.maxs`, which `PM_CheckDuck` sizes to the stance
   prone row starts from standing.
 
 VERIFIED, `crates/server/src/game/trigger.rs`: vcod holds the height per
-client (`GameHost::client_height`, mirrored off the sim after each cmd and set
+client (`HostClient::height`, mirrored off the sim after each cmd and set
 by the `spawn` builtin's think; `ClientSim::box_height`:
 `PlayerState::box_height` alive, 70 once a cmd ran dead, `player_die`'s 30
 until then, which `GameHost::die` also links with) and builds
@@ -2204,7 +2187,7 @@ this capture's probe teleports the planter away for that reason.
 
 vcod: `trigger::aim_trace` takes the world with the second mask's world bits
 (0x802001) and the static models, the lookat the segment enters first, then
-every other live, playing client's body (`GameHost::client_bodies`, refreshed
+every other live, playing client's body (`HostClient::body`, refreshed
 from the sims just before the pass, so a `setOrigin` or re-anchor that frame
 moves it) through the `trace_bodies` a bullet and a blast use, with the aimer
 as pass entity and the held weapon's priority map. A body whose bones the
@@ -2611,8 +2594,8 @@ VERIFIED, the plant fixture against the wire: these elements travel in the
 playerstate's archived HUD array, not the current one; reading `hud_current`
 alone shows an empty column through a whole plant at `pm_type` 1. Both
 committed client fixtures head their `hud=` column "unarchived HUD array", the
-probe's old label (writer corrected in 17e43b0); a recapture's header reads
-differently.
+probe's old label; the probe now writes `archived|current`, with `-` for an
+empty half.
 
 VERIFIED, `maps/MP/gametypes/sd.gsc` in `pak5.pk3`: `bomb_think` creates the
 defuse icon on any `"trigger"` notify from a defender who `isOnGround()`, its
@@ -2667,7 +2650,7 @@ through the intermission arm (0x4000a) before it. INFERRED: a planter's
 `self.angles` is his view yaw with the pitch dropped, the first trace's
 direction.
 
-INFERRED, off the plant test in `crates/server/src/game/script.rs`, which runs
+INFERRED, off the plant test in `crates/server/src/game/script/tests.rs`, which runs
 the stock `getPlant` from the fixture's planter origin and yaw against the
 map's collision and matches slot 0 (23.3): on retail's plant neither 18-unit
 trace hits (the floor under the planter is clip with no shot contents), and
@@ -2787,7 +2770,7 @@ tags at `+0x2f2` (script string ids, shorts).
 vcod (`crates/server/src/game/builtins/attach.rs`): the list is the compacted
 slot array, `attach` checks the pair and the count in retail's order, `detach`
 is one builtin for all three protocols, and `client_attachments`
-(`game/script.rs`) indexes a playing or dead client's tags each frame from
+(`game/script/clients.rs`) indexes a playing or dead client's tags each frame from
 `ClientEndFrame`'s pass (`server/cod1_frame.rs`), so the `d` is queued ahead of
 the frame's snapshots. Trap: indexing them in the snapshot build, after the
 frame's writes went out, sends the first snapshot naming a new tag a message
@@ -2881,13 +2864,10 @@ A slot a UDP client once held, by a binary read (2026-11-16):
 
 vcod: `Cod1Game::udp_slots` marks each slot a UDP connect took, which
 `addTestClient` reads; `the_first_test_client_is_refused_only_beside_a_never_used_slot`
-(`server.rs`) runs both cases on a two-slot server.
+(`server/connectionless.rs`) runs both cases on a two-slot server.
 
 ## Open, and worth a probe
 
-- Answered: same-deadline waits resume newest-queued first
-  (`cod11-gsc-language.md`, `probe_wait0_yield`), which 23.7's thread order
-  needed.
 - Whether `Scr_FindField` searches only the radiant fields (section 7).
 - Whether `Scr_AddFields` really reads `radiant/keys.txt` (section 6).
 - The name-to-index direction of the three HUD enum tables (section 5). The

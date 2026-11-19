@@ -5,6 +5,7 @@ use glam::Vec3;
 
 use super::fpu::{self, d};
 use super::{ENTITYNUM_NONE, Pml, Pmove, ev, pm_type, pmf};
+pub(crate) use vcod_common::pmshared::jump_clear;
 
 /// rodata 0x8154ee0: the clip's 0.001.
 const OVERCLIP: f32 = f32::from_bits(0x3a83_126f);
@@ -55,6 +56,28 @@ pub(crate) fn permute_planes(v: Vec3, planes: &[Vec3]) -> ([usize; MAX_CLIP_PLAN
     (order, dots[order[0]])
 }
 
+/// The slide's clip planes on the stack: at most `MAX_CLIP_PLANES` are
+/// ever pushed.
+#[derive(Default)]
+struct Planes {
+    buf: [Vec3; MAX_CLIP_PLANES + 1],
+    n: usize,
+}
+
+impl Planes {
+    fn push(&mut self, p: Vec3) {
+        self.buf[self.n] = p;
+        self.n += 1;
+    }
+}
+
+impl std::ops::Deref for Planes {
+    type Target = [Vec3];
+    fn deref(&self) -> &[Vec3] {
+        &self.buf[..self.n]
+    }
+}
+
 /// `PM_SlideMove` (0x80e9c42): four bumps along the velocity, each hit
 /// placed by the lerp; returns whether anything was met.
 pub(crate) fn slide_move(pm: &mut Pmove, pml: &mut Pml, gravity: bool) -> bool {
@@ -70,7 +93,7 @@ pub(crate) fn slide_move(pm: &mut Pmove, pml: &mut Pml, gravity: bool) -> bool {
         }
     }
     let mut time_left = pml.frametime;
-    let mut planes: Vec<Vec3> = Vec::with_capacity(MAX_CLIP_PLANES + 1);
+    let mut planes = Planes::default();
     if pml.ground_plane {
         planes.push(pml.ground_trace.normal);
     }
@@ -90,7 +113,7 @@ pub(crate) fn slide_move(pm: &mut Pmove, pml: &mut Pml, gravity: bool) -> bool {
         if t.fraction == 1.0 {
             break;
         }
-        pm.add_touch(t.entity_num);
+        pm.touch.add(t.entity_num);
         time_left = (d(time_left) - d(time_left) * d(t.fraction)) as f32;
         if planes.len() > MAX_CLIP_PLANES - 1 {
             pm.ps.velocity = Vec3::ZERO;
@@ -107,9 +130,6 @@ pub(crate) fn slide_move(pm: &mut Pmove, pml: &mut Pml, gravity: bool) -> bool {
             planes.push(t.normal);
             let (order, least) = permute_planes(pm.ps.velocity, &planes);
             if least < MEETS {
-                if pml.impact_speed < -least {
-                    pml.impact_speed = -least;
-                }
                 let first = planes[order[0]];
                 let mut clip = clip_velocity(pm.ps.velocity, first);
                 let mut end_clip = clip_velocity(end_velocity, first);
@@ -150,12 +170,6 @@ pub(crate) fn slide_move(pm: &mut Pmove, pml: &mut Pml, gravity: bool) -> bool {
         pm.ps.velocity = primal;
     }
     bumps != 0
-}
-
-/// `Jump_ClearState` (0x80dc718).
-pub(crate) fn jump_clear(ps: &mut super::PlayerState) {
-    ps.pm_flags &= !pmf::JUMPING;
-    ps.jump_origin_z = 0.0;
 }
 
 /// `Jump_GetStepHeight` (0x80dc73a): a jump below its height steps at most

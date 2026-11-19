@@ -1,7 +1,6 @@
 //! Pins what the renderer derives from every stock material: pipeline
-//! variants, stage params, fx and dlight draws, sort entries. The digest was
-//! taken before the renderer moved from `Shader` to `Material`; a change in
-//! it is a change in pixels. `MATERIAL_KEYS_DUMP=<path>` writes the text the
+//! variants, stage params, fx and dlight draws, sort entries. A change in
+//! the digest is a change in pixels. `MATERIAL_KEYS_DUMP=<path>` writes the text the
 //! digest covers, for a diff against a dump from the base commit.
 
 use super::*;

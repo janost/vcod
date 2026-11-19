@@ -136,10 +136,11 @@ fn minimal_map_decodes() {
     assert!(vis.sees(0, 0));
     assert!(!vis.sees(0, 1));
     assert_eq!(b.entities, "{\n\"classname\" \"worldspawn\"\n}\n");
-    let (list, trees) = b.leaf_brush_trees().unwrap();
-    assert_eq!(list, [0, 0]);
-    assert!(trees[0].is_none());
-    assert_eq!(trees[1].as_ref().unwrap().nodes.len(), 1);
+    let clip = crate::map::clip_map(&b).unwrap();
+    assert_eq!(clip.leaf_brush_list, [0, 0]);
+    assert_eq!(clip.leafs[0].brush_node, 0);
+    assert_eq!(clip.leafs[1].brush_node, 1);
+    assert_eq!(clip.brush_nodes.len(), 2);
 }
 
 #[test]
@@ -336,22 +337,110 @@ fn validation_errors() {
     assert!(e.contains("leaves lump 22"), "{e}");
 }
 
-/// Garbage after the header never panics.
+/// Cells that all name one deep render AABB tree validate in one pass over
+/// it, not one walk per cell.
+#[test]
+fn cells_sharing_one_aabb_tree_validate_in_linear_time() {
+    let n = 30_000u32;
+    let tree: Vec<u32> = (0..n).flat_map(|i| [0, 0, u32::from(i + 1 < n)]).collect();
+    let cells: Vec<u32> = (0..n).flat_map(|_| [0u32; 13]).collect();
+    let m = Map::minimal()
+        .with(lump::CELLS, le(&cells))
+        .with(lump::AABB_TREES, le(&tree));
+    let start = std::time::Instant::now();
+    let b = m.parse().unwrap();
+    assert_eq!(b.cells.len(), n as usize);
+    assert!(start.elapsed() < std::time::Duration::from_secs(1));
+}
+
+/// A node cycle, a node with two parents and a lump-34 node listed by two
+/// parents are refused at parse, before any walker follows them.
+#[test]
+fn trees_that_are_not_trees_are_refused() {
+    let m = Map::minimal();
+    let node = |c0: i32, c1: i32| le(&[0, c0 as u32, c1 as u32, 0, 0, 0, 0, 0, 0]);
+    let e = err(&m.clone().with(lump::NODES, node(0, -2)));
+    assert!(e.contains("reached twice"), "{e}");
+    let shared = [node(1, 1), node(-2, -2)].concat();
+    let e = err(&m.clone().with(lump::NODES, shared));
+    assert!(e.contains("reached twice"), "{e}");
+
+    let mut tri = le(&[f(0.0), f(0.0), f(1.0), f(0.0)]);
+    tri.extend(le(&[0; 8]));
+    tri.extend(le(&[-1i32 as u32; 6]));
+    let part = [vec![0, 0, 1, 0], le(&[0, 0])].concat();
+    let aabb = |children: u8, first: u32| {
+        let mut a = le(&[0, 0, 0, f(1.0), f(1.0), f(1.0)]);
+        a.extend([0, 0, children, 0]);
+        a.extend(le(&[first]));
+        a
+    };
+    let with_aabbs = |trees: Vec<u8>| {
+        m.clone()
+            .with(lump::COLL_TRIS, tri.clone())
+            .with(lump::COLL_PARTITIONS, part.clone())
+            .with(lump::COLL_AABB_TREES, trees)
+    };
+    let tree = [aabb(2, 1), aabb(0, 0), aabb(0, 0)].concat();
+    assert!(with_aabbs(tree).parse().is_ok());
+    // node 0 lists 1 and 2, node 1 lists 2 again
+    let dag = [aabb(2, 1), aabb(1, 2), aabb(0, 0)].concat();
+    let e = err(&with_aabbs(dag));
+    assert!(e.contains("two parents"), "{e}");
+}
+
+/// The minimal map, mutated, through the parse and what a level builds
+/// off it first: the neutral world, the clip map and a trace.
 #[test]
 fn noise_never_panics() {
     let good = Map::minimal().bytes();
-    let mut x = 0x1234_5678u32;
-    for _ in 0..2000 {
-        let mut b = good.clone();
-        for _ in 0..8 {
-            x ^= x << 13;
-            x ^= x >> 17;
-            x ^= x << 5;
-            let at = (x as usize) % b.len();
-            b[at] = (x >> 8) as u8;
+    vcod_common::testing::fuzz("d3dbsp", &good, 2000, |b| {
+        let Ok(bsp) = D3dBsp::parse(b) else {
+            return;
+        };
+        crate::world::from_bsp(&bsp);
+        if let Ok(clip) = crate::map::clip_map(&bsp) {
+            let (a, z) = (glam::Vec3::splat(-64.0), glam::Vec3::splat(64.0));
+            clip.trace(a, z, glam::Vec3::splat(-15.0), glam::Vec3::splat(15.0), !0);
         }
-        if let Ok(bsp) = D3dBsp::parse(&b) {
-            let _ = bsp.leaf_brush_trees();
-        }
-    }
+    });
+}
+
+/// `CMod_LoadLeafs` keeps a leaf's collision AABB run as `u16` words and
+/// its cluster as an `i16`; `CMod_LoadNodes` keeps each child as an `i16`.
+/// Values past them are the loaders' errors (BUG-125).
+#[test]
+fn leaf_and_node_words_past_their_runtime_width_are_refused() {
+    let leaf = |cluster: i32, first: u32, count: u32| {
+        let mut l = le(&[-1i32 as u32, 0, 0, 0, 0, 0, -1i32 as u32, 0, 0]);
+        l.extend(le(&[
+            cluster as u32,
+            0,
+            first,
+            count,
+            0,
+            1,
+            -1i32 as u32,
+            0,
+            0,
+        ]));
+        l
+    };
+    let m = Map::minimal().with(lump::LEAFS, leaf(0, 0x1_0000, 0));
+    assert!(
+        err(&m).contains("firstCollAabbIndex exceeded"),
+        "{}",
+        err(&m)
+    );
+    let m = Map::minimal().with(lump::LEAFS, leaf(0, 0, 0x1_0000));
+    assert!(err(&m).contains("collAabbCount exceeded"), "{}", err(&m));
+    let m = Map::minimal()
+        .with(lump::VISIBILITY, Vec::new())
+        .with(lump::LEAFS, leaf(0x8000, 0, 0));
+    assert!(err(&m).contains("cluster exceeded"), "{}", err(&m));
+    let m = Map::minimal().with(
+        lump::NODES,
+        le(&[0, -2i32 as u32, 0x8000, 0, 0, 0, 0, 0, 0]),
+    );
+    assert!(err(&m).contains("children exceeded"), "{}", err(&m));
 }

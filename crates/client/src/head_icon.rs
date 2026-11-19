@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use glam::Vec3;
 use vcod_common::net::flags::{EF_NODRAW, EF_TALK, ET_PLAYER};
 use vcod_common::net::msg::{ClientState, EntityState};
-use vcod_common::net::protocol::{CsRange, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, CsRange};
 
 use crate::fx::sim::FxQuad;
 
@@ -109,7 +109,7 @@ fn sized_sprite(centre: Vec3, radius: f32, right: Vec3, up: Vec3, shader: &str) 
 
 /// Everything a frame needs to place head icons.
 pub struct Scene<'a> {
-    pub protocol: &'a Protocol,
+    pub protocol: &'a Cod1Wire,
     pub entities: &'a BTreeMap<u32, EntityState>,
     pub clients: &'a BTreeMap<u32, ClientState>,
     pub configstrings: &'a [String],

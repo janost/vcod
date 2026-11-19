@@ -3,8 +3,6 @@
 
 pub mod centerprint;
 pub mod chat;
-// Nothing feeds it yet: CoD2 runs fly mode only, with no server to send hudelems.
-#[allow(dead_code)]
 pub mod cod2elem;
 pub mod font;
 pub mod friends;
@@ -30,7 +28,7 @@ use vcod_common::net::NetEvent;
 use vcod_common::net::events::GameEvent;
 use vcod_common::net::flags::{PM_DEAD, PMF_FOLLOW, PMF_PRONE_BLOCKED};
 use vcod_common::net::msg::{ClientState, EntityState, HudElem, PlayerState};
-use vcod_common::net::protocol::{CsRange, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, CsRange};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::Stance;
 use vcod_common::pmove::predict::Predicted;
@@ -124,7 +122,7 @@ pub struct HudFrame<'a> {
     pub screen_h: f32,
     pub configstrings: &'a [String],
     pub clients: &'a BTreeMap<u32, ClientState>,
-    pub protocol: &'a Protocol,
+    pub protocol: &'a Cod1Wire,
     /// Server-clock ms.
     pub server_time: i32,
     /// The serverTime of the snapshot the render clock interpolates from,
@@ -196,8 +194,13 @@ impl Default for DrawToggles {
 
 impl Hud {
     pub fn new(fs: &Pk3Fs) -> Result<Hud, String> {
-        Ok(Hud {
-            fonts: UiFonts::load(fs)?,
+        Ok(Hud::with_fonts(UiFonts::load(fs)?, fs))
+    }
+
+    /// [`Hud::new`] over fonts already loaded.
+    fn with_fonts(fonts: UiFonts, fs: &Pk3Fs) -> Hud {
+        Hud {
+            fonts,
             chat: Chat::new(),
             game_messages: messages::Window::new(messages::Kind::Game),
             bold_messages: messages::Window::new(messages::Kind::Bold),
@@ -216,7 +219,7 @@ impl Hud {
             unknown: 0,
             bob: Default::default(),
             drawn_view: None,
-        })
+        }
     }
 
     /// A download reopened the search path: reload the fonts and `hud.menu`,
@@ -345,13 +348,18 @@ impl Hud {
         self.spawn = None;
     }
 
-    /// A fresh cgame, on a map load or an in-game `vid_restart`: a
-    /// gamestate's resets, and the chat ring, which lives in the cgame
-    /// (cod11-chat.md 3.2) and goes with it (cod11-front-end.md section
-    /// 17, "The cgame restart").
+    /// A fresh cgame, on a map load, an in-game `vid_restart` or a
+    /// disconnect: a gamestate's resets, and the chat ring and the rest of
+    /// the cgame's statics, which go with the freed DLL (cod11-chat.md 3.2,
+    /// cod11-front-end.md section 17, "The cgame restart").
     pub fn restart_cgame(&mut self) {
         self.on_gamestate();
         self.chat = Chat::new();
+        self.player = PlayerHud::default();
+        self.vote = vote::Vote::default();
+        self.complaint = vote::Complaint::default();
+        self.vote_sound = false;
+        self.drawn_view = None;
     }
 
     /// `EV_OBITUARY` to a kill line in the game message window. Entity
@@ -398,6 +406,12 @@ impl Hud {
         self.game_messages.push_kill(line, (f.now * 1000.0) as i32);
     }
 
+    /// The shellshock's time left at this frame's clock, which scales the
+    /// view weapon's turn sway ([`crate::play::shock::sway_scale`]).
+    pub fn set_shock_left(&mut self, ms: i32) {
+        self.player.gun.shock_left_ms = ms;
+    }
+
     /// Steps the gun's aim once for this frame, as `0x300371f0` does before
     /// the 2D pass: the view weapon draws off the result and the scope
     /// overlay centres on it (combat doc 17.4). `gun_kick` is this frame's
@@ -405,15 +419,9 @@ impl Hud {
     /// dead (`cg.renderingThirdPerson`, `[0x30207158]`, set at `0x30033d39`
     /// for a snapshot pm_type of 6 or more) or on a mounted gun
     /// (`0x30037210`-`0x30037274`).
-    /// The shellshock's time left at this frame's clock, which scales the
-    /// view weapon's turn sway ([`crate::play::shock::sway_scale`]).
-    pub fn set_shock_left(&mut self, ms: i32) {
-        self.player.gun.shock_left_ms = ms;
-    }
-
     pub fn step_gun(
         &mut self,
-        p: &Protocol,
+        p: &Cod1Wire,
         ps: &PlayerState,
         predicted: Option<&Predicted>,
         server_time: i32,
@@ -425,7 +433,7 @@ impl Hud {
             return None;
         }
         let (gun_ps, gun_ms) = gun_clock(p, ps, predicted, server_time, self.bob);
-        let kick = self.player.damage.kick();
+        let kick = self.player.damage.kick_on(gun_ms - server_time);
         let gun = &mut self.player.gun;
         gun.gun_kick = gun_kick;
         let def = weapons
@@ -710,7 +718,7 @@ pub fn bind_keys(text: &str, bound: &dyn Fn(&str) -> Option<String>) -> String {
 /// The cgame's bind table (1.1 0x3006f150, 1.5 0x30071150, UO
 /// 0x3008adb8, 24-byte rows): the only commands its key lookup
 /// (0x30046860) names. Anything else reads unbound.
-pub fn bind_commands(p: &Protocol) -> &'static [&'static str] {
+pub fn bind_commands(p: &Cod1Wire) -> &'static [&'static str] {
     match p.transport.version {
         6 => BIND_COMMANDS_15,
         22 => BIND_COMMANDS_UO,
@@ -777,7 +785,7 @@ fn steps_gun(pm_type: i32, e_flags: i32) -> bool {
 /// the replay at its own clock, or a followed player's snapshot at the
 /// render clock. Retail runs both on whichever playerstate it draws.
 fn gun_clock(
-    p: &Protocol,
+    p: &Cod1Wire,
     ps: &PlayerState,
     predicted: Option<&Predicted>,
     server_time: i32,
@@ -801,18 +809,19 @@ impl Hud {
     /// adds a hit icon. Runs every frame ahead of the view, mounted, dead
     /// or HUD hidden alike; the kick splits along last frame's
     /// [`Self::drawn_view`] (the refdef's axis), the playerstate's view
-    /// before the first. `predicted` is the replay when it is ours.
+    /// before the first. `server_time` is the render clock (`cg.time`),
+    /// `snap_time` `cg.snap`'s `serverTime`, which stamps the kick
+    /// (`0x30028a58`).
     pub fn feed_damage(
         &mut self,
-        p: &Protocol,
+        p: &Cod1Wire,
         ps: &PlayerState,
-        predicted: Option<&Predicted>,
         server_time: i32,
+        snap_time: i32,
     ) {
         let view = self.drawn_view.unwrap_or_else(|| ps.viewangles(p));
-        let kick_ms = predicted.map_or(server_time, |pred| pred.command_time);
         let fb = DamageFeedback::from_ps(p, ps);
-        let _ = self.player.damage.feed(fb, view, server_time, kick_ms);
+        let _ = self.player.damage.feed(fb, view, server_time, snap_time);
     }
 
     /// The damage kick and the sight's walk bob on the drawn view, wire
@@ -822,7 +831,7 @@ impl Hud {
     /// [`Self::feed_damage`]'s.
     pub fn view_kick(
         &mut self,
-        p: &Protocol,
+        p: &Cod1Wire,
         ps: &PlayerState,
         predicted: Option<&Predicted>,
         server_time: i32,
@@ -832,7 +841,7 @@ impl Hud {
             return [0.0; 3];
         }
         let (gun_ps, gun_ms) = gun_clock(p, ps, predicted, server_time, self.bob);
-        let kick = self.player.damage.kick();
+        let kick = self.player.damage.kick_on(gun_ms - server_time);
         let def = weapons
             .get(usize::from(gun_ps.weapon))
             .and_then(Option::as_ref);
@@ -854,7 +863,7 @@ impl Hud {
     /// `view` is the kicked view, wire degrees.
     pub fn eye_bob(
         &self,
-        p: &Protocol,
+        p: &Cod1Wire,
         ps: &PlayerState,
         predicted: Option<&Predicted>,
         server_time: i32,
@@ -941,7 +950,7 @@ fn player_view<'a>(
                 lerp_target: f32::from(int("viewHeightLerpTarget") as u8 as i8),
                 lerp_down: int("viewHeightLerpDown") != 0,
                 dive: pm_flags & 0x4 != 0,
-                into_leg_ms: (lerp_time != 0).then(|| f.snap_time - lerp_time),
+                into_leg_ms: (lerp_time != 0).then(|| f.snap_time.wrapping_sub(lerp_time)),
             };
             (
                 int("weapon") as usize,
@@ -1165,6 +1174,12 @@ mod tests {
         assert!(!steps_gun(0, 0x4000) && !steps_gun(0, 0x8000));
     }
 
+    /// A HUD over in-memory fonts and no paks: no `hud.menu`, no game
+    /// types. The state a HUD keeps across frames needs nothing more.
+    fn bare_hud() -> Hud {
+        Hud::with_fonts(hudelem::tests::test_fonts(), &Pk3Fs::empty())
+    }
+
     fn frame<'a>(
         ps: &'a PlayerState,
         predicted: Option<&'a Predicted>,
@@ -1342,6 +1357,18 @@ mod tests {
             (own.ammoclip[10], own.aim_spread_scale, own.eflags),
             (4, 50.0, 0x10 | EF_CROUCH)
         );
+
+        // A hostile lerp time wraps as retail's int does (SEC-100).
+        ps.fields[PlayerState::field_index(p, "viewHeightLerpTime").unwrap()] = i32::MIN;
+        let wrapped = player_view(
+            &ps,
+            &[],
+            &HudFrame {
+                snap_time: i32::MAX,
+                ..frame(&ps, None, &fs, &loc, &clients)
+            },
+        );
+        assert_eq!(wrapped.spread_stance.into_leg_ms, Some(-1));
     }
 
     #[test]
@@ -1358,8 +1385,8 @@ mod tests {
         bar.set(msg_field::HEIGHT, 10);
         bar.set(msg_field::COLOR, -1);
         ps.arrays.hud_current.push(bar);
-        let mut cs = vec![String::new(); hudelem::CS_SHADERS + 2];
-        cs[hudelem::CS_SHADERS + 1] = "white".into();
+        let mut cs = vec![String::new(); hudelem::CS_SHADERS_V1 + 2];
+        cs[hudelem::CS_SHADERS_V1 + 1] = "white".into();
         let (loc, clients) = (Localized::default(), BTreeMap::new());
         let pm_type = PlayerState::field_index(&PROTOCOL_V1, "pm_type").expect("pm_type");
         let mut drawn = |pm: i32, local_player: bool| -> Vec<String> {
@@ -1405,8 +1432,8 @@ mod tests {
         bar.set(msg_field::HEIGHT, 10);
         bar.set(msg_field::COLOR, -1);
         ps.arrays.hud_current.push(bar);
-        let mut cs = vec![String::new(); hudelem::CS_SHADERS + 2];
-        cs[hudelem::CS_SHADERS + 1] = "white".into();
+        let mut cs = vec![String::new(); hudelem::CS_SHADERS_V1 + 2];
+        cs[hudelem::CS_SHADERS_V1 + 1] = "white".into();
         let (loc, clients) = (Localized::default(), BTreeMap::new());
         let mut drawn = |status: bool| -> Vec<String> {
             let f = HudFrame {
@@ -1490,10 +1517,7 @@ mod tests {
     /// the hit icons but not the centre print.
     #[test]
     fn a_restart_clears_the_hud_words_and_rearms_the_respawn_reset() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
-            return;
-        };
-        let mut hud = Hud::new(&fs).expect("hud");
+        let mut hud = bare_hud();
         let hit = |event| DamageFeedback {
             event,
             yaw: 0,
@@ -1538,11 +1562,8 @@ mod tests {
     /// the playerstate's.
     #[test]
     fn a_hit_feeds_the_kick_and_the_flash_on_a_mounted_gun() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
-            return;
-        };
         let p = &PROTOCOL_V1;
-        let mut hud = Hud::new(&fs).expect("hud");
+        let mut hud = bare_hud();
         let ps = |event: i32| {
             let mut ps = PlayerState::null(p);
             let mut set = |name: &str, v: i32| {
@@ -1554,17 +1575,20 @@ mod tests {
             set("damageCount", 100);
             ps
         };
-        hud.feed_damage(p, &ps(1), None, 1_000);
+        hud.feed_damage(p, &ps(1), 1_000, 1_000);
         assert_eq!(hud.player.damage.kick(), Default::default(), "baseline");
         hud.player.hidden();
-        hud.feed_damage(p, &ps(2), None, 1_050);
-        assert_eq!(hud.player.damage.kick().time_ms, 1_050);
+        // Stamped with `cg.snap`'s time, not the render clock's.
+        hud.feed_damage(p, &ps(2), 1_050, 1_000);
+        assert_eq!(hud.player.damage.kick().time_ms, 1_000);
+        // A gun clock 8 ms past the render clock reads the kick 8 ms later.
+        assert_eq!(hud.player.damage.kick_on(8).time_ms, 1_008);
         assert!((hud.player.damage.kick().pitch - 20.0).abs() < 1e-4);
         assert!(hud.player.damage.flash_alpha(1_100).is_some());
 
         // The drawn view looks down +y: the same hit comes from the side.
         hud.drawn_view = Some([0.0, 90.0, 0.0]);
-        hud.feed_damage(p, &ps(3), None, 2_000);
+        hud.feed_damage(p, &ps(3), 2_000, 2_000);
         let k = hud.player.damage.kick();
         assert!(
             k.pitch.abs() < 1e-4 && (k.side.abs() - 20.0).abs() < 1e-4,
@@ -1572,12 +1596,41 @@ mod tests {
         );
     }
 
+    /// A fresh cgame after a session whose clock ran past the next one's
+    /// (a reconnect, a demo played again): the old hit's flash, its damage
+    /// baseline and the weapon name's stamp are gone.
+    #[test]
+    fn a_fresh_cgame_forgets_the_last_sessions_statics() {
+        let p = &PROTOCOL_V1;
+        let mut hud = bare_hud();
+        let ps = |event: i32| {
+            let mut ps = PlayerState::null(p);
+            let mut set = |name: &str, v: i32| {
+                ps.fields[PlayerState::field_index(p, name).expect(name)] = v;
+            };
+            set("damageEvent", event);
+            set("damageCount", 100);
+            ps
+        };
+        hud.feed_damage(p, &ps(1), 1_000_000, 1_000_000);
+        hud.feed_damage(p, &ps(2), 1_000_000, 1_000_000);
+        assert!(hud.player.damage.flash_alpha(1_000_100).is_some());
+        hud.player.weapon_name.step((0, 1), 1_000_000);
+
+        hud.restart_cgame();
+
+        assert_eq!(hud.player.damage.flash_alpha(1_000), None);
+        hud.feed_damage(p, &ps(3), 1_000, 1_000);
+        assert_eq!(hud.player.damage.kick(), Default::default(), "baseline");
+        // The same spawn pair stamps the name on the new clock.
+        assert_eq!(hud.player.weapon_name.step((0, 1), 1_000), Some(1.0));
+        assert_eq!(hud.player.weapon_name.step((0, 1), 3_000), None);
+        assert!(hud.player.weapon_name.cycle_allowed(200));
+    }
+
     #[test]
     fn on_gamestate_forgets_the_map_but_keeps_chat() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
-            return;
-        };
-        let mut hud = Hud::new(&fs).expect("hud");
+        let mut hud = bare_hud();
         hud.kill_icons.insert(3, None);
         hud.game_messages.push_kill(
             messages::KillLine {
@@ -1613,10 +1666,7 @@ mod tests {
     /// `n` and `B` empty both message windows, kill lines included.
     #[test]
     fn a_restart_empties_the_message_windows() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
-            return;
-        };
-        let mut hud = Hud::new(&fs).expect("hud");
+        let mut hud = bare_hud();
         let loc = Localized::default();
         for restart in ["n", "B"] {
             let cmd =
@@ -1635,10 +1685,8 @@ mod tests {
     #[test]
     fn an_obituary_goes_to_the_game_message_window() {
         use vcod_common::net::events::GameEvent;
-        let Some(fs) = vcod_common::testing::game_fs() else {
-            return;
-        };
-        let mut hud = Hud::new(&fs).expect("hud");
+        let fs = Pk3Fs::empty();
+        let mut hud = bare_hud();
         let p = &vcod_common::net::protocol::PROTOCOL_V1;
         let ps = PlayerState::null(p);
         let clients: BTreeMap<u32, ClientState> = [(2, 1, "^1Me"), (3, 2, "Bob")]
@@ -1702,7 +1750,7 @@ mod tests {
             e_type: 0,
             eflags: 0,
         };
-        let printed = |p: &Protocol, ev: &GameEvent, pm_flags: i32| {
+        let printed = |p: &Cod1Wire, ev: &GameEvent, pm_flags: i32| {
             let mut ps = PlayerState::null(p);
             ps.fields[PlayerState::field_index(p, "clientNum").unwrap()] = 2;
             ps.fields[PlayerState::field_index(p, "pm_flags").unwrap()] = pm_flags;

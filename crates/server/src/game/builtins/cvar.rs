@@ -6,7 +6,7 @@
 use crate::game::host::{GameHost, LevelLatch};
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("getcvar", get_cvar),
@@ -22,30 +22,12 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("setclientnamemode", set_client_name_mode),
 ];
 
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
-
 /// C `atoi` as the Linux servers read it (`strtol`).
 pub(crate) use vcod_common::text::atoi;
 
-/// C `atof`: the longest numeric prefix, a decimal point and an exponent
-/// included, 0 when there is none.
+/// C `atof` ([`vcod_common::text::atof`]) stored as a float.
 pub fn atof(s: &str) -> f32 {
-    let s = s.trim_start();
-    let mut end = 0;
-    for (i, c) in s.char_indices() {
-        let ok = c.is_ascii_digit()
-            || (i == 0 && (c == '-' || c == '+'))
-            || (c == '.' && !s[..i].contains('.'))
-            || ((c == 'e' || c == 'E') && i > 0 && !s[..i].contains(['e', 'E']))
-            || ((c == '-' || c == '+') && matches!(s.as_bytes().get(i - 1), Some(b'e' | b'E')));
-        if !ok {
-            break;
-        }
-        end = i + c.len_utf8();
-    }
-    s[..end].parse().unwrap_or(0.0)
+    vcod_common::text::atof(s) as f32
 }
 
 /// `getCvar(name)`: an empty string for a name that is not set, which is
@@ -113,6 +95,12 @@ pub fn set_cvar(
         return Err(ErrorKind::BadType("setCvar takes a name and a value"));
     };
     let name = cx.resolve(*name).to_string();
+    // A script cannot move the file roots `writeconfig`, `exec` and
+    // `games_mp.log` resolve under.
+    if crate::cvars::is_file_root(&name) {
+        log::warn!("setCvar: {name} is write protected");
+        return Ok(Value::Undefined);
+    }
     let rendered = match value {
         Value::Localized(_) => super::message::construct(host, cx, &[value]),
         _ => cx
@@ -257,10 +245,10 @@ pub enum ClientNameMode {
 /// 0x58550), stores 0 or 1 in `level+0x210`, and raises `Scr_Error("Unknown
 /// mode")` on anything else.
 ///
-/// The store and the error are faithful; the two readers are not reachable
-/// yet. `ClientUserinfoChanged` (0x421eb) and the name-change path at
-/// 0x5ba99 are both client code, which arrives in a later stage, so
-/// `GameHost::client_name_mode` is recorded and nothing reads it.
+/// `GameHost::client_name_mode` holds it. Retail's readers are
+/// `ClientUserinfoChanged` (0x421eb) and the name-change path at 0x5ba99;
+/// vcod's one reader is CoD4's userinfo change (cod4-gsc.md 12), so on
+/// CoD1 and CoD2 the mode is stored and not read.
 pub fn set_client_name_mode(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -282,7 +270,7 @@ pub fn set_client_name_mode(
 }
 
 /// `exitLevel([savePersist])` (map-cycle doc, sections 1 and 2): the shared
-/// one-shot latch, then `ExitLevel` itself -- the queued `map_rotate`, both
+/// one-shot latch, then `ExitLevel` itself: the queued `map_rotate`, both
 /// team scores and every connected client's score back to 0, and the log
 /// line. Nothing else: no intermission state, no camera and no timer.
 pub fn exit_level(
@@ -295,7 +283,7 @@ pub fn exit_level(
     host.console.push("map_rotate".to_string());
     host.team_scores = [0, 0];
     host.zero_client_scores();
-    host.script_log.push("ExitLevel: executed".to_string());
+    host.keep_script_line("ExitLevel: executed".to_string());
     // CoD4's `ExitLevel` (0x80b4585) writes the same line to games_mp.log.
     crate::game::cod4::log_printf(host, "ExitLevel: executed\n".to_string());
     Ok(Value::Undefined)
@@ -399,7 +387,7 @@ mod tests {
 
     /// `ExitLevel`'s two passes and its log line (map-cycle doc, section 2):
     /// both team scores and every connected client's score back to 0, and
-    /// no scoreboard pushed for it -- the passes write the field rather
+    /// no scoreboard pushed for it: the passes write the field rather
     /// than calling the setter, so the ranks stay clean.
     #[test]
     fn exitlevel_zeroes_the_team_scores_and_every_client_score() {
@@ -519,6 +507,24 @@ mod tests {
             set_cvar(&mut host, cx, None, &[third, Value::Float(1.0 / 3.0)]).unwrap();
             assert_eq!(host.cvars.get("probe_third"), "0.333333");
         });
+    }
+
+    /// A script's `setCvar` leaves the file roots alone, so a map cannot
+    /// point `games_mp.log` outside the home path through `fs_homepath`.
+    #[test]
+    fn setcvar_leaves_the_file_roots_alone() {
+        let (mut vm, mut host) = fixture();
+        host.cvars.set("fs_homepath", "/srv/cod");
+        vm.with_cx(|cx| {
+            for root in ["fs_homepath", "FS_BASEPATH", "fs_game"] {
+                let name = Value::String(cx.intern_exact(root));
+                let to = Value::String(cx.intern_exact("/"));
+                set_cvar(&mut host, cx, None, &[name, to]).unwrap();
+            }
+        });
+        assert_eq!(host.cvars.get("fs_homepath"), "/srv/cod");
+        assert_eq!(host.cvars.get("fs_basepath"), "");
+        assert_eq!(host.cvars.get("fs_game"), "");
     }
 
     /// `makeCvarServerInfo` puts the cvar in the 140/204 mirror and leaves an

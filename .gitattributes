@@ -1,0 +1,5 @@
+# LF everywhere, Windows checkouts included: tests compare text fixtures
+# byte for byte (include_str!), which CRLF breaks.
+* text=auto eol=lf
+# Fixtures are bytes as captured; two server usage logs hold mixed endings.
+crates/*/tests/fixtures/** -text

@@ -6,7 +6,7 @@ plays for each entity event. Code: `crates/cod4/src/sound.rs` (the
 aliases, `channels.def`, the `.wav` wrap), `crates/client/src/cod4_audio.rs`
 (the client's alias table, the event arms); gates:
 `crates/cod4/tests/sound_census.rs`, the replay gate in
-`crates/client/src/play/cod4.rs` (`spectator_capture_plays_its_sounds_and_effects`,
+`crates/client/src/play/cod4/tests/` (`spectator_capture_plays_its_sounds_and_effects`,
 `kill_captures_play_their_hits`) and `cod4_audio`'s decode test.
 
 ## Sources
@@ -262,7 +262,7 @@ replay gate resolves each it meets).
   captures but one names the surface a trace down from the event's
   origin meets in vcod's clip map (17 `rock`, 22 `asphalt`); the one
   reads caulk at a curb's edge. VERIFIED (the gate
-  `play::cod4::tests::footstep_surfaces_match_the_clip_map`). On a
+  `play::cod4::tests::capture_bullets::footstep_surfaces_match_the_clip_map`). On a
   64-unit grid over mp_crash every floor's surface type is its clip
   material's: `me_floor_concrete` and `me_stonefloor01` 5, `ch_tile_floor03`
   16, `me_woodplanks01` 21, and the trash-strewn interiors'
@@ -378,7 +378,7 @@ replay gate resolves each it meets).
   well (INFERRED, the code before). Gates: `audio::tests::a_loops_secondary_ends_with_it`,
   `audio::tests::cod4_reaps_the_loops_nothing_refreshed` and the live
   `cod4_vehicles::tests::cod4_live_hardpoints_draw_smoke_and_sound`,
-  which keeps the silent mixer's loops (`AudioSystem::keep_silent_loops`)
+  which plays its sounds on kira's mock backend (`AudioSystem::mock_mixer`)
   and finds none but the ambient 25 s after the strike. VERIFIED (ours).
 
 - A looping voice tied to an entity stops once the entity is freed,

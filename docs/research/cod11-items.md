@@ -1034,12 +1034,12 @@ console, and the watchers on item 170, spawned mid-run, logged its `touch`
 and `trigger` lines. INFERRED: a watcher's `endon("death")` on an item that is
 taken or freed ends or parks without an error.
 
-## 13. As implemented
+## 13. The A/B runs: what retail measured, and vcod's port
 
 | retail | vcod (`crates/server/src/game/`) |
 |---|---|
 | `Touch_Item` | `pickup::touch_item`, pure over an `Inventory` and the item's `ItemCounts`; `item::touch` builds both off the host's mirrors, runs it and writes the result back |
-| `G_GetActivateEnt` | `item::activate_ent`, called from `ScriptRuntime::item_pass` (`script.rs`) on the use key's rising edge, in the same pass as the walk-over touches |
+| `G_GetActivateEnt` | `item::activate_ent`, called from `ScriptRuntime::item_pass` (`script/touch.rs`) on the use key's rising edge, in the same pass as the walk-over touches |
 | `G_CheckForCursorHints` | `ScriptRuntime::cursor_hint_pass`, beside `ClientEndFrame`'s aim trace |
 | `Drop_Weapon` | `pickup::drop_weapon` and `item::launch_weapon` |
 | `Drop_Item` | `item::drop_item` |
@@ -1054,8 +1054,8 @@ A swap's drop is placed exactly where the replaced item lay
 than the world's 1022 (section 9).
 
 The pickup arithmetic never touches a player entity's fields directly.
-`item::inventory` copies the host's `client_weapons`, `client_ammo` and
-`client_vitals` mirrors into an `Inventory`, `touch_item` mutates a copy, and
+`item::inventory` copies the host's `HostClient::weapons`, `HostClient::ammo` and
+`HostClient::vitals` mirrors into an `Inventory`, `touch_item` mutates a copy, and
 `write_back` copies weapons and health onto the host at once and queues every
 changed ammo or clip count as a `WeaponOp` and the event as a `SimOp`.
 `GameHost::weapon_op` moves the host's ammo mirror as it queues, so a
@@ -1123,7 +1123,7 @@ vitals mirrored (`apply_callback_ops`, the hit's own path), so a hit's
 lands there too. The trap: ops applied after the script frame instead reach
 the sim a tick late, or at a later hit on the toucher in the same tick, so
 one pickup lands at different points from tick to tick. Pinned by
-`a_walk_over_pickup_lands_before_the_next_cmd` (`crates/server/src/server.rs`),
+`a_walk_over_pickup_lands_before_the_next_cmd` (`crates/server/src/server/frame.rs`),
 which reads the ammo and a 148 ahead of the next cmd's shot on the ring
 straight after the move pass.
 
@@ -1218,7 +1218,7 @@ VERIFIED, found by this run and not by the gate, none of it item pickup:
   retail's `PROBE time0` after the same `wait 1` from `main` also reads 1050.
   Ruling: closed. VERIFIED, the gate: ours logs every census line as retail
   does, `getTime()` 1050 and origin included (the script clock's `wait` from
-  `Callback_StartGameType`, AGENTS.md), and the gate compares the whole line.
+  `Callback_StartGameType`, `docs/dev/traps.md`, "Script"), and the gate compares the whole line.
 - Retail's log carries `PROBE other 0 noclass 23650`, the probe's own slot
   seen before its first spawn (12.6); ours had none. Ruling: closed. VERIFIED,
   `crates/server/src/game/entity.rs`: ours gives a client `classname` "player" from
@@ -1565,9 +1565,9 @@ of the `origin` and `angles` fields. `CollisionWorld::item_trace` is the
 capsule sweep with the static models, and the loader keeps world brushes
 carrying 0x80000000 as volumes for `point_contents`.
 
-`dropItem`'s weapon arm poses the dropper's rig off the `client_dobjs`
-mirror, which `Server` refreshes beside `client_bodies` and before every
-damage callback, and which, unlike `client_bodies`, keeps a dead player's
+`dropItem`'s weapon arm poses the dropper's rig off the `HostClient::dobj`
+mirror, which `Server` refreshes beside `HostClient::body` and before every
+damage callback, and which, unlike `HostClient::body`, keeps a dead player's
 pose, so a death drop leaves from the hand. Without the rig, the animtree or
 the paks, the drop leaves from mid-height, `Drop_Weapon`'s own fallback.
 

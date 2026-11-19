@@ -227,7 +227,7 @@ impl Live {
             (0, 0.0)
         } else {
             let start = match p.sequence_start_frame_mode {
-                0 => (p.sequence_fixed_frame - 1).max(0) as u32,
+                0 => p.sequence_fixed_frame.saturating_sub(1).max(0) as u32,
                 1 => ((rng.next_f32() * frames as f32) as u32).min(frames - 1),
                 _ => index,
             };
@@ -345,11 +345,14 @@ impl Live {
             return None;
         }
         let p = &self.el.prim;
-        let mut f = (age_ms * self.rate) as u32 + self.frame0;
+        let mut f = ((age_ms * self.rate) as u32).saturating_add(self.frame0);
         if f >= self.frames {
             f = if p.sequence_loop_mode == 1
                 && (p.sequence_loop_times < 1
-                    || (p.sequence_loop_times as u32 + 1) * self.frames <= f)
+                    || (p.sequence_loop_times as u32)
+                        .saturating_add(1)
+                        .saturating_mul(self.frames)
+                        <= f)
             {
                 self.frames - 1
             } else {
@@ -565,6 +568,37 @@ mod tests {
         println!("{drew} effects drew quads, {lit} lit");
         assert!(drew > 300, "{drew}");
         assert!(lit > 20, "{lit}");
+    }
+
+    /// The level preload caches every effect a stock effect chains to under
+    /// the key its spawn looks it up by: playing all of them afterwards on
+    /// an empty search path, chains included, adds no cache entry.
+    #[test]
+    fn preloaded_stock_effects_chain_without_reading_a_file() {
+        use crate::fx::sim::{FxSystem, SpawnAt};
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let names: Vec<String> = fs
+            .names_with_suffix(".efx")
+            .into_iter()
+            .filter(|n| n.starts_with("fx/"))
+            .collect();
+        let mut fx = FxSystem::new();
+        fx.preload(&fs, names.iter().map(String::as_str));
+        let cached = fx.cached_paths();
+        let empty = vcod_common::pk3::Pk3Fs::empty();
+        let mut now = 1.0;
+        for n in &names {
+            fx.spawn(&empty, n, SpawnAt::Point { pos: Vec3::ZERO }, now);
+        }
+        for _ in 0..80 {
+            now += 0.05;
+            fx.step(0.05, now, None);
+            fx.spawn_chained(&empty, now);
+        }
+        let read: Vec<_> = fx.cached_paths().difference(&cached).cloned().collect();
+        assert!(read.is_empty(), "read in play: {read:?}");
     }
 
     /// mp_downtown's snow: each `Cloud` particle draws as a cloud of

@@ -18,7 +18,7 @@ use common::{ADDR, ClientEnd, FRAME_MS, Join, Queues, holding, step_at};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::trajectory::Trajectory;
 use vcod_common::net::{NetClient, NetEvent};
@@ -27,9 +27,22 @@ const MAP: &str = "mp_carentan";
 const FIXTURE: &str = "tests/fixtures/movers/mp_carentan-dm-push.txt";
 const ET_ITEM: i32 = 3;
 
-/// Float formatting, and the landing's random lift: `G_BounceItem` rests an
-/// item up to half a unit above its sweep's end (items doc, section 14).
+/// The landing's random lift: `G_BounceItem` rests an item up to half a
+/// unit above its sweep's end (items doc, section 14), on z alone, and the
+/// print's two decimals. Measured 2026-11-18 at 1.1: 0.28 at most, item b.
 const TOL: f32 = 0.55;
+
+/// Everything else the probe prints, to its two decimals: the items across
+/// and the mover's own origin. Measured 2026-11-18 at 1.1: no miss.
+const PRINT_TOL: f32 = 0.01;
+
+/// `ours` within [`PRINT_TOL`] of `retail` across, and up within the rest
+/// lift for an item, the print step for the mover.
+fn within(retail: [f32; 3], ours: [f32; 3], item: bool) -> bool {
+    let across = (retail[0] - ours[0]).abs().max((retail[1] - ours[1]).abs());
+    let up = (retail[2] - ours[2]).abs();
+    across <= PRINT_TOL && up <= if item { TOL } else { PRINT_TOL }
+}
 
 /// The rider's known drift: after the `rotateyaw` pair retail's slab keeps a
 /// yaw residual, and a rider it carries from `push_y` on creeps +x about
@@ -105,6 +118,18 @@ fn diff(a: [f32; 3], b: [f32; 3]) -> f32 {
     (0..3).map(|i| (a[i] - b[i]).abs()).fold(0.0, f32::max)
 }
 
+/// The worst miss per column, across and up: what the tolerances rest on.
+#[derive(Default)]
+struct Worst(BTreeMap<String, (f32, f32)>);
+
+impl Worst {
+    fn see(&mut self, column: &str, a: [f32; 3], b: [f32; 3]) {
+        let w = self.0.entry(column.to_string()).or_default();
+        w.0 = w.0.max((a[0] - b[0]).abs()).max((a[1] - b[1]).abs());
+        w.1 = w.1.max((a[2] - b[2]).abs());
+    }
+}
+
 /// An item entity as one snapshot carried it: its ground and `pos.trBase`.
 type Sent = (i32, [f32; 3]);
 
@@ -119,16 +144,13 @@ struct Ours {
 /// `PROBE done`.
 fn run_ours() -> Option<Ours> {
     let fs = vcod_common::testing::game_fs_11()?;
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_push"), now);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_push",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_push.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_push.gsc"
+        )),
+        ..common::Boot::new(MAP, "probe_push")
+    }
+    .start(fs);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl = NetClient::start_with_qport(ClientEnd(q.clone()), now, 0x2001);
     let mut join = Join::new("allies", "m1carbine_mp");
@@ -149,7 +171,7 @@ fn run_ours() -> Option<Ours> {
                 if e.field_i32(p, "eType") == ET_ITEM {
                     let pos = Trajectory::read(e, p, "pos");
                     items.entry(*num).or_default().insert(
-                        s.server_time,
+                        s.server_time.raw(),
                         (e.field_i32(p, "groundEntityNum"), pos.base.into()),
                     );
                 }
@@ -197,6 +219,7 @@ fn a_brush_model_mover_pushes_and_carries_items_like_retail() {
         bm(&mut retail_text.lines())
     );
     let mut bad = Vec::new();
+    let mut worst = Worst::default();
     for (name, r) in &retail {
         let o = ours_phases
             .get(name)
@@ -205,11 +228,17 @@ fn a_brush_model_mover_pushes_and_carries_items_like_retail() {
         for (k, (rf, of)) in r.frames.iter().zip(&o.frames).enumerate() {
             let t = r.start.unwrap() + k as i32 * FRAME_MS as i32;
             for (what, i) in [("a", 0), ("b", 1), ("c", 2), ("mover", 3)] {
-                let tol = if i == 0 { rider_tol(t, push_y) } else { TOL };
                 if report() {
                     println!("{name} {k} {what} retail {:?} ours {:?}", rf[i], of[i]);
                 }
-                if diff(rf[i], of[i]) > tol {
+                if i != 0 {
+                    worst.see(what, rf[i], of[i]);
+                }
+                let ok = match i {
+                    0 => diff(rf[i], of[i]) <= rider_tol(t, push_y),
+                    _ => within(rf[i], of[i], i != 3),
+                };
+                if !ok {
                     bad.push(format!(
                         "{name} frame {k}: {what} retail {:?} ours {:?}",
                         rf[i], of[i]
@@ -251,18 +280,26 @@ fn a_brush_model_mover_pushes_and_carries_items_like_retail() {
         if report() {
             println!("wire {num} t={t} retail {ground} {base:?} ours {og} {ob:?}");
         }
-        let tol = if num == probe_items[0] {
-            rider_tol(t, push_y)
+        if num != probe_items[0] {
+            worst.see("wire", base, *ob);
+        }
+        let ok = if num == probe_items[0] {
+            diff(*ob, base) <= rider_tol(t, push_y)
         } else {
-            TOL
+            within(base, *ob, true)
         };
-        if *og != ground || diff(*ob, base) > tol {
+        if *og != ground || !ok {
             bad.push(format!(
                 "item {num} t={t}: retail ground {ground} base {base:?} ours {og} {ob:?}"
             ));
         }
     }
     assert!(compared > 300, "only {compared} item snapshots compared");
+    if report() {
+        for (column, (across, up)) in &worst.0 {
+            println!("worst {column}: across {across} up {up}");
+        }
+    }
     assert!(
         bad.is_empty(),
         "{} rows differ:\n{}",

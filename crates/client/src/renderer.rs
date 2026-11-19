@@ -157,7 +157,11 @@ impl Default for Cod4Options {
 /// A shader's multisampled depth binding, single-sampled when the scene is:
 /// `textureLoad(t, p, 0)` reads sample 0 or mip 0 alike.
 pub(crate) fn depth_wgsl(src: &str) -> std::borrow::Cow<'_, str> {
-    if msaa_samples() > 1 {
+    depth_wgsl_at(src, msaa_samples())
+}
+
+fn depth_wgsl_at(src: &str, samples: u32) -> std::borrow::Cow<'_, str> {
+    if samples > 1 {
         src.into()
     } else {
         src.replace("texture_depth_multisampled_2d", "texture_depth_2d")
@@ -566,7 +570,14 @@ enum Bound {
     Stage(StageVariant, bool, bool),
     /// CoD2's lit pipeline (`cod2::Cod2World`), then a static prop's and
     /// a water's, and which of the depth prepass's pipelines.
-    Lit(StageVariant, bool, bool, cod2::FsKey, bool, Depth),
+    Lit(
+        StageVariant,
+        bool,
+        Option<vcod_common::material::PolygonOffset>,
+        cod2::FsKey,
+        bool,
+        Depth,
+    ),
     /// A CoD4 feathered or distortion stage (`cod4_worldfx`).
     Fx(cod4_worldfx::WorldFx, StageVariant, bool, bool),
 }
@@ -1065,10 +1076,6 @@ impl SceneTargets<'_> {
     }
 }
 
-/// Where the SSAO multiply goes in the merged list: after the last draw
-/// that sorts up to decal, so it darkens the opaque surfaces and the
-/// polygonOffset layers and impact marks blended onto them and none of the
-/// blends after.
 /// Where the depth copy a CoD2 feather reads goes: before the first
 /// entity or view weapon surface, so the copy holds the world (props
 /// included) and not the models, as retail's `floatZ` under
@@ -1081,6 +1088,10 @@ fn feather_copy_at(items: &[SortedItem], split: usize) -> usize {
         .map_or(split, |m| m.min(split))
 }
 
+/// Where the SSAO multiply goes in the merged list: after the last draw
+/// that sorts up to decal, so it darkens the opaque surfaces and the
+/// polygonOffset layers and impact marks blended onto them and none of the
+/// blends after.
 fn ssao_split(
     items: &[SortedItem],
     world: &[f32],
@@ -1117,7 +1128,7 @@ struct EntBound {
 /// iterator does, over `indices` (the surface's own, or a run of its
 /// neighbours' from [`ent_run`]). `bound` tracks the bound pipeline across
 /// calls.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn draw_ent_stages(
     pass: &mut impl DrawSink,
     mats: &EntityMaterials,
@@ -1184,33 +1195,34 @@ fn draw_ent_stages(
 /// over their joined range rasterizes the same triangles in the same
 /// order. `stops` are the item indices something else happens before
 /// (a split, the dlights), which a run never crosses.
+/// `surfaces` and `skins` are the model's, by surface.
 fn ent_run(
     items: &[SortedItem],
     k: usize,
     draws: &[EntDraw],
-    model: &DynModel,
+    (surfaces, skins): (&[VmSurface], &[Rc<EntSkin>]),
     stops: &[Option<usize>],
 ) -> usize {
     let SortedItem::Model(first) = items[k] else {
         return 1;
     };
     let d = &draws[first];
-    let skin = &model.skins[d.surf as usize];
+    let skin = &skins[d.surf as usize];
     if skin.stages.len() != 1 {
         return 1;
     }
-    let mut end = &model.vm.surfaces[d.surf as usize];
+    let mut end = &surfaces[d.surf as usize];
     let mut n = 1;
     while let Some(&SortedItem::Model(next)) = items.get(k + n) {
         let e = &draws[next];
-        let Some(surf) = model.vm.surfaces.get(e.surf as usize) else {
+        let Some(surf) = surfaces.get(e.surf as usize) else {
             break;
         };
         if e.gun
             || e.inst != d.inst
             || e.surf != d.surf + n as u32
             || stops.contains(&Some(k + n))
-            || !Rc::ptr_eq(&model.skins[e.surf as usize], skin)
+            || !Rc::ptr_eq(&skins[e.surf as usize], skin)
             || surf.bind_group != end.bind_group
             || surf.base_vertex != end.base_vertex
             || surf.first_index != end.first_index + end.index_count
@@ -1221,6 +1233,15 @@ fn ent_run(
         n += 1;
     }
     n
+}
+
+/// The uploaded surfaces [`Renderer::dynamic_model_hiding`] draws, by
+/// index: those whose source surface (`VmSurface::src`) `keep` does not set
+/// false. A surface past `keep`'s end stays.
+fn kept_surfaces(surfaces: &[VmSurface], keep: &[bool]) -> Vec<usize> {
+    (0..surfaces.len())
+        .filter(|&i| keep.get(surfaces[i].src as usize).copied().unwrap_or(true))
+        .collect()
 }
 
 /// The emission order of `draws`, into `out`: by the batch's place in the
@@ -1707,7 +1728,7 @@ impl FogLive {
         }
     }
 
-    /// 1 = GL_EXP, 2 = GL_LINEAR — the WGSL Camera mode encoding; the off
+    /// 1 = GL_EXP, 2 = GL_LINEAR: the WGSL Camera mode encoding; the off
     /// state is carried by [`FogState::set`], not here.
     fn mode(&self) -> f32 {
         if self.linear { 2.0 } else { 1.0 }
@@ -1716,8 +1737,9 @@ impl FogLive {
 
 /// Global fog from configstring 12, faded toward each new target. Same-mode
 /// transitions lerp over the script's fade time; cross-mode changes snap and
-/// linear fog clears to the fog colour — RTCW-MP tr_main.c R_SetFog /
-/// R_AddFogInterpolation.
+/// linear fog clears to the fog colour (docs/protocol-1.1.md, configstring
+/// 12: the clear is VERIFIED there; the fade and snap follow RTCW-MP's
+/// R_SetFog and are unverified against retail).
 #[derive(Default)]
 struct FogState {
     set: bool,
@@ -1730,10 +1752,17 @@ struct FogState {
     from: FogLive,
     /// target params, transition start (frame seconds), duration (s)
     target: Option<(FogParams, f32, f32)>,
+    /// The last fog asked for: CoD1's frame sets it every frame, and only a
+    /// new one starts a fade.
+    asked: Option<FogParams>,
 }
 
 impl FogState {
     fn set_target(&mut self, p: FogParams, now: f32) {
+        if self.set && self.asked == Some(p) {
+            return;
+        }
+        self.asked = Some(p);
         // No fade, first fog, or a mode change snaps like retail.
         let snap = !self.set || p.fade_ms == 0 || self.live.linear != p.is_linear();
         self.from = self.live;
@@ -1747,6 +1776,7 @@ impl FogState {
     fn clear(&mut self) {
         self.set = false;
         self.target = None;
+        self.asked = None;
     }
 
     fn finish(&mut self) {
@@ -1782,6 +1812,42 @@ impl FogState {
         if k >= 1.0 {
             self.target = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod fog_state_tests {
+    use super::*;
+
+    fn fog(far: f32, fade_ms: u32) -> FogParams {
+        FogParams {
+            near: 0.0,
+            far,
+            density: 1.0,
+            color: [0.5; 3],
+            fade_ms,
+            start: 0.0,
+        }
+    }
+
+    /// CoD1's frame asks for the same fog every frame: the fade still runs
+    /// to its end, and the repeat starts no new one.
+    #[test]
+    fn a_fog_asked_for_every_frame_fades_to_its_end() {
+        let mut f = FogState::default();
+        f.set_target(fog(1000.0, 0), 0.0);
+        f.advance(0.0);
+        let to = fog(2000.0, 500);
+        for i in 1..=40 {
+            let t = i as f32 * 0.016;
+            f.set_target(to, t);
+            f.advance(t);
+        }
+        assert_eq!(f.live.far, 2000.0);
+        assert!(f.target.is_none());
+        f.set_target(to, 1.0);
+        f.advance(1.0);
+        assert!(f.target.is_none());
     }
 }
 
@@ -1826,7 +1892,7 @@ mod fx_lights_uniform_tests {
     }
 }
 
-// ---- shader-script stage machinery (consumed by Tasks 7-8) ----
+// ---- shader-script stage machinery ----
 
 pub const STAGE_FLAG_VERTEX_RGB: u32 = 1;
 pub const STAGE_FLAG_VERTEX_ALPHA: u32 = 2;
@@ -1841,10 +1907,10 @@ pub const STAGE_FLAG_BUNDLE1_VECTOR: u32 = 128;
 /// Sky dome draws only: add the view origin (StageParams.eye_off) to vertices.
 pub const STAGE_FLAG_EYE_OFFSET: u32 = 256;
 /// Sky dome draws only: fog applies in exp mode, never in linear mode
-/// (RTCW-MP tr_main.c R_SetFog sets drawsky per mode).
+/// (docs/protocol-1.1.md, configstring 12, VERIFIED live on mp_ship).
 pub const STAGE_FLAG_SKY: u32 = 512;
 /// `rgbGen vertex` scales the vertex rgb by identityLight; `exactVertex`
-/// stays raw (RTCW-MP tr_shade.c CGEN_VERTEX vs CGEN_EXACT_VERTEX).
+/// stays raw (0x4ffa60's rgbGen switch, cod11-shader-scripts.md 3).
 pub const STAGE_FLAG_VERTEX_RGB_HALF: u32 = 1024;
 /// The stage blends onto `GL_ONE`: GL_State loads a black fog colour for
 /// it (CoDMP.exe 0x4d2ad0), so fog fades it instead of greying it.
@@ -2102,7 +2168,9 @@ pub(crate) fn stage_params(shader: &Material, idx: usize, t: f32) -> Option<Stag
             let tb1 = b1.map_or([0.0; 4], |b| bundle_turb(&b.tcmods, t));
             [tb0[0], tb0[1], tb1[0], tb1[1]]
         },
-        // Retail writes these as colour bytes (Q3's EvalWaveFormClamped).
+        // Retail writes a table wave as colour bytes clamped after the
+        // identityLight scale (cod11-shader-scripts.md 4, 0x514c00); the
+        // other clamps follow Q3 and are unverified against retail.
         tint: [
             rgb[0].clamp(0.0, rgb_max),
             rgb[1].clamp(0.0, rgb_max),
@@ -2570,8 +2638,6 @@ fn stage_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
-/// A pipeline over shader.wgsl's world vertex layout into the scene target:
-/// the world, layer, overlay and stage pipelines, and the marks'.
 /// `f(0..n)` on scoped threads, in index order. Pipeline creation is
 /// thread safe, and a driver that compiles on the calling thread (lavapipe)
 /// takes seconds a pipeline for `shader.wgsl`'s stage entries.
@@ -2617,7 +2683,9 @@ pub(crate) fn par_build_on<T: Send>(
         .collect()
 }
 
-#[allow(clippy::too_many_arguments)]
+/// A pipeline over shader.wgsl's world vertex layout into the scene target:
+/// the world, layer, overlay and stage pipelines, and the marks'.
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn scene_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
@@ -2736,7 +2804,7 @@ pub(crate) fn stage_animated(sh: &Material, idx: usize) -> bool {
 /// Group(1) and group(2) bind groups for one authored stage, shared by the
 /// world stage-batch loop and the cloud dome. `lm` is the batch's
 /// lightmap page (bundle-0 `$lightmap` samples it through the flag).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn stage_bind_groups(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -2876,7 +2944,8 @@ struct HudTextPass {
 }
 
 /// On-screen HUD (chat, killfeed, scoreboard, status). Same lazy texture
-/// cache and run pattern as [`FxPass`], straight alpha only, no depth test.
+/// cache and run pattern as [`FxPass`]; straight alpha, plus additive for
+/// [`hud::ADDITIVE`] quads; no depth test.
 struct HudPass {
     pipeline: wgpu::RenderPipeline,
     pipeline_1x: wgpu::RenderPipeline,
@@ -3204,8 +3273,9 @@ struct DomeLayer {
 }
 
 /// The farbox cube. Absent from [`SkyRender`] when the env art is missing:
-/// retail gates the whole box on `outerbox[0]` having loaded
-/// (RB_StageIteratorSky tr_sky.c :994) and draws nothing otherwise.
+/// RTCW-MP gates the whole box on `outerbox[0]` having loaded
+/// (RB_StageIteratorSky tr_sky.c :994, cod11-shader-scripts.md 6) and draws
+/// nothing otherwise; unverified against retail.
 struct SkyBox {
     pipeline: wgpu::RenderPipeline,
     vertex_buf: wgpu::Buffer,
@@ -3279,8 +3349,9 @@ fn encode_world_sprites(
 }
 
 /// Builds the farbox for the block's env name. Missing non-rt sides draw
-/// tr.defaultImage flat white (tr_shader.c:1170), warned per load.
-#[allow(clippy::too_many_arguments)]
+/// flat white, warned per load: RTCW-MP's tr.defaultImage (tr_shader.c:1170),
+/// unverified against retail.
+#[expect(clippy::too_many_arguments)]
 fn build_sky_box(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -3451,7 +3522,7 @@ const SUN_SPRITE_SCALE: f32 = 0.001_311_092_9;
 
 /// Builds the sunfile sprite for a parsed `.sun` file along the sun
 /// direction. `None` when the sprite image does not resolve.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn build_sun_sprite(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -3770,7 +3841,7 @@ pub struct Renderer {
     /// Kept past map load so later inline submodels resolve `textures/...`
     /// names the same way the world did.
     shaders: assets::Shaders,
-    /// Parsed shader scripts; Task 7 classifies map materials against it.
+    /// Parsed shader scripts; map materials are classified against it.
     shader_lib: MaterialLib,
     /// The map's active sky (farbox + optional cloud dome); `None` without a
     /// matching sky block.
@@ -3778,6 +3849,8 @@ pub struct Renderer {
     /// Global fog from configstring 12; the F3 `fog:` line.
     fog: FogState,
     hud_quad_cap_warned: bool,
+    /// The fx quad and stage-draw caps warn once, not every frame.
+    fx_cap_warned: bool,
     /// `vc_shadows`; built when it turns on, dropped when it turns off.
     shadows: Option<shadows::ShadowPass>,
     /// CoD2's shadow cookies, drawn on a CoD2 map while `sc_enable` is set.
@@ -3932,6 +4005,20 @@ impl Renderer {
             caps.formats
         );
         surface.configure(&device, &config);
+        let _ = crate::frontend::GPU_INFO.set(crate::frontend::GpuInfo {
+            vendor: info.driver.clone(),
+            version: info.driver_info.clone(),
+            renderer: info.name.clone(),
+            color_bits: config.format.block_copy_size(None).unwrap_or(4) * 8,
+            depth_bits: DEPTH_FORMAT.block_copy_size(None).unwrap_or(4) * 8,
+            stencil_bits: 0,
+            extensions: adapter
+                .features()
+                .iter_names()
+                .map(|(n, _)| n)
+                .collect::<Vec<_>>()
+                .join(" "),
+        });
         Ok(Self::build(
             device,
             queue,
@@ -3947,7 +4034,7 @@ impl Renderer {
 
     /// Everything past the device: the passes, pipelines and layouts every
     /// frame uses, drawing into `target` sized by `config`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn build(
         device: wgpu::Device,
         queue: wgpu::Queue,
@@ -4202,7 +4289,7 @@ impl Renderer {
             cull_back,
         );
         // Overlays are pulled toward the viewer like the engine's polygon
-        // offset (Q3 defaults -1/-2); their alpha drives MSAA coverage.
+        // offset (`depth_bias`); their alpha drives MSAA coverage.
         let overlay_pipeline = make_pipeline(
             "overlay pipeline",
             &pipeline_layout,
@@ -4215,7 +4302,7 @@ impl Renderer {
             cull_back,
         );
         // One twin pair per variant, [back-culled, two-sided], picked per
-        // StageBatch by ClassedStage in Task 7.
+        // StageBatch from its ClassedStage.
         // The stage table and the dlight pass compile on their own threads
         // while this one builds the entity pass (`par_build`).
         let (stage_pipelines, dlight, vm_pass, dynamic) = std::thread::scope(|s| {
@@ -4409,6 +4496,7 @@ impl Renderer {
             water_time: 0.0,
             dlight_quality: true,
             hud_quad_cap_warned: false,
+            fx_cap_warned: false,
             shadows: None,
             cookies,
             dyn_shadows,
@@ -4435,6 +4523,8 @@ impl Renderer {
     pub fn set_material_lib(&mut self, lib: MaterialLib) {
         self.shader_lib = lib;
         self.lib_warn_count = self.shader_lib.warn_count();
+        // The mark shaders resolved through the old lib and search path.
+        self.marks.reopen();
     }
 
     /// Builds the map's GPU state; a previous map is dropped first.
@@ -4827,7 +4917,7 @@ impl Renderer {
 
         laps.lap("prop skins");
         let count = |p: fn(Pass) -> bool| batch_draws.iter().filter(|d| p(d.pass)).count();
-        println!(
+        log::info!(
             "{} batches ({} opaque, {} prop, {} layer, {} overlay), {} draw indices, {} vertices",
             batch_draws.len(),
             count(|p| matches!(p, Pass::Opaque | Pass::Solid)),
@@ -4837,7 +4927,7 @@ impl Renderer {
             indices.len(),
             vertices.len()
         );
-        println!(
+        log::info!(
             "{} textures loaded, {} missing, {} lightmap pages",
             loaded,
             fallbacks,
@@ -4859,7 +4949,7 @@ impl Renderer {
         }
         // A prop skin with a `skins/<name>` block, or a template the prop
         // path cannot draw, goes through its stages like a map material,
-        // slotted after them (shader doc 8).
+        // slotted after them (shader doc 8.2).
         // A lit CoD2 prop's stages read its baked light as `lightingDiffuse`,
         // rescaled from identityLight 0.5 as `vs_prop` does, never raw.
         let cod2_lit: HashMap<&str, Material> = props
@@ -4989,7 +5079,7 @@ impl Renderer {
                 );
             }
         }
-        println!(
+        log::info!(
             "stage params: {} slots x {STAGE_PARAMS_SIZE} B (stride {stage_params_stride})",
             stage_slots.len()
         );
@@ -5300,13 +5390,13 @@ impl Renderer {
                 stage: AnimFrames::static_(implicit_stage_bg.groups[0].clone()),
             });
         }
-        println!(
+        log::info!(
             "dlight pass: {} stage draws over {} batches",
             dlight_batches.len(),
             dlights_of_batch.iter().filter(|d| !d.is_empty()).count()
         );
         self.shader_dropped = dropped_stages;
-        println!(
+        log::info!(
             "shader scripts: {} stage batches, {} dropped stages, {} lib warnings",
             stage_batches.len(),
             dropped_stages,
@@ -5331,7 +5421,7 @@ impl Renderer {
                 parms.cloud_height,
                 sh.stages.len()
             );
-            // retail skips the whole box when outerbox[0] fails to load
+            // no box when outerbox[0] fails to load (`SkyBox`)
             let mut farbox = None;
             if cod2 {
                 farbox = cod2::build_sky_cube(
@@ -5681,6 +5771,13 @@ impl Renderer {
                     .then(|| (r.first, vcod_common::vis::soup_bounds(bsp, si)))
             })
             .collect();
+        // A material over several lightmaps or lights pushed its slot once
+        // per batch; the frame writes each slot once, with the last push's
+        // params as the repeated writes left it.
+        let mut written = HashSet::new();
+        animated.reverse();
+        animated.retain(|(_, _, slot)| written.insert(*slot));
+        animated.reverse();
         self.world = Some(WorldGpu {
             sun_casters,
             vertex_buf,
@@ -5816,6 +5913,9 @@ impl Renderer {
     /// from the old map can index a new upload.
     pub fn unload_world(&mut self) {
         self.world = None;
+        // The recorded runs hold the old map's buffers and bind groups.
+        self.world_bundles.runs.clear();
+        self.prepass_bundles.runs.clear();
         self.marks.unload();
         self.coronas.clear();
         self.sky = None;
@@ -5835,10 +5935,6 @@ impl Renderer {
         self.vis_counts = VisCounts::default();
     }
 
-    /// Quads in draw order (already back-to-front); `time` is the shader
-    /// clock in seconds (tcMod, animMap, wave gens). Unseen images resolve
-    /// lazily; an unresolvable one warns once and is cached as `None`. Each
-    /// run draws once per stage (`fx_stage_draws`).
     /// An fx material's image as the fx pass binds it: a scripted stage
     /// names its image file, a material without a script resolves through
     /// the image map.
@@ -5896,14 +5992,20 @@ impl Renderer {
         self.fx.textures.len()
     }
 
+    /// Quads in draw order (already back-to-front); `time` is the shader
+    /// clock in seconds (tcMod, animMap, wave gens). Unseen images resolve
+    /// lazily; an unresolvable one warns once and is cached as `None`. Each
+    /// run draws once per stage (`fx_stage_draws`).
     pub fn set_fx_quads(&mut self, fs: &dyn AssetSource, quads: Vec<FxQuad>, time: f32) {
         // build_quads is capped by construction; the vertex buffer is sized
         // exactly, so truncate anyway.
         let quads = if quads.len() > MAX_FX_QUADS {
-            log::warn!(
-                "fx: {} quads exceeds the {MAX_FX_QUADS} cap, truncating",
-                quads.len()
-            );
+            if !std::mem::replace(&mut self.fx_cap_warned, true) {
+                log::warn!(
+                    "fx: {} quads exceeds the {MAX_FX_QUADS} cap, truncating",
+                    quads.len()
+                );
+            }
             &quads[..MAX_FX_QUADS]
         } else {
             &quads[..]
@@ -5943,7 +6045,11 @@ impl Renderer {
             let sh = fx_material(&self.shader_lib, name);
             for draw in fx_stage_draws(sh, name, time) {
                 if verts.len() / 4 + group.len() > MAX_FX_DRAWN {
-                    log::warn!("fx: stage draws exceed the {MAX_FX_DRAWN} quad cap, truncating");
+                    if !std::mem::replace(&mut self.fx_cap_warned, true) {
+                        log::warn!(
+                            "fx: stage draws exceed the {MAX_FX_DRAWN} quad cap, truncating"
+                        );
+                    }
                     break 'runs;
                 }
                 if !self.fx.textures.contains_key(draw.image) {
@@ -6003,7 +6109,6 @@ impl Renderer {
     /// cgame's clock), the pool expired, faded and uploaded after this
     /// frame's `temporary` marks (`crate::blob_shadow`). `enabled` is
     /// `cg_marks`.
-    #[allow(clippy::too_many_arguments)]
     pub fn set_marks(
         &mut self,
         fs: &Pk3Fs,
@@ -6355,28 +6460,14 @@ impl Renderer {
         let d = &mut self.dynamic;
         let full = d.handles.get(h.0)?;
         let lod0 = &d.models[(*full.lods.first()?)?];
-        let kept = |src: u32| keep.get(src as usize).copied().unwrap_or(true);
-        let (surfaces, skins): (Vec<_>, Vec<_>) = lod0
-            .vm
-            .surfaces
-            .iter()
-            .zip(&lod0.skins)
-            .filter(|(s, _)| kept(s.src))
-            .map(|(s, k)| (s.clone(), k.clone()))
-            .unzip();
-        if surfaces.is_empty() {
+        let shown = kept_surfaces(&lod0.vm.surfaces, keep);
+        if shown.is_empty() {
             return None;
         }
+        let skins: Vec<_> = shown.iter().map(|&i| lod0.skins[i].clone()).collect();
         let vm = VmModel {
-            skins: lod0
-                .vm
-                .surfaces
-                .iter()
-                .zip(&lod0.vm.skins)
-                .filter(|(s, _)| kept(s.src))
-                .map(|(_, k)| k.clone())
-                .collect(),
-            surfaces,
+            skins: shown.iter().map(|&i| lod0.vm.skins[i].clone()).collect(),
+            surfaces: shown.iter().map(|&i| lod0.vm.surfaces[i].clone()).collect(),
             ..lod0.vm.clone()
         };
         let lit = skins.iter().any(|s| s.lit);
@@ -6388,7 +6479,7 @@ impl Renderer {
             lod0_surfaces
                 .iter()
                 .enumerate()
-                .filter(|(i, _)| kept(*i as u32))
+                .filter(|(i, _)| keep.get(*i).copied().unwrap_or(true))
                 .map(|(_, s)| s),
         );
         let view_boxes = full.view_boxes.clone();
@@ -6617,12 +6708,7 @@ impl Renderer {
         let Some(lighting) = d.lighting.as_mut() else {
             return vec![GpuLightSet::default()];
         };
-        let mut scene = d.scene_lights.clone();
-        scene.extend_from_slice(&d.entity_scene_lights);
-        scene.truncate(crate::fx::sim::MAX_SCENE_LIGHTS);
-        if !lights_models(self.dynamic_light) {
-            scene.clear();
-        }
+        let scene = model_scene_lights(&d.scene_lights, &d.entity_scene_lights, self.dynamic_light);
         let mut sets = Vec::new();
         let mut seen: HashMap<[u32; 3], u32> = HashMap::new();
         for ((model, raw), origin) in d.instances.iter_mut().zip(&d.light_origins) {
@@ -6893,8 +6979,6 @@ impl Renderer {
         }
     }
 
-    /// The `r_gamma` textures bake in from the next `load_world` (retail
-    /// reloads every image per map), or `None` with device gamma.
     /// `r_swapInterval`, read every frame (`GLimp_EndFrame` 0x50a610 calls
     /// `wglSwapIntervalEXT` when it changes): 0 presents without waiting
     /// for the vertical blank.
@@ -6929,7 +7013,6 @@ impl Renderer {
         self.frame_writes.borrow().clone()
     }
 
-    /// `r_vc_depthprepass` (cod4-client-perf.md 12).
     /// Whether a CoD4 feather's `floatZ` comes from the depth prepass
     /// ([`Self::floatz_prepass`]) or the copy at the split.
     #[cfg(test)]
@@ -6944,6 +7027,7 @@ impl Renderer {
         self.cookies_on_prepass = on;
     }
 
+    /// `r_vc_depthprepass` (cod4-client-perf.md 12).
     pub fn set_depth_prepass(&mut self, on: bool) {
         self.depth_prepass = on;
     }
@@ -6960,8 +7044,9 @@ impl Renderer {
         self.dlight_quality = quality;
     }
 
-    /// The texture gamma of the next world load. HUD images reload under
-    /// a new one, as retail reloads every image at a map load.
+    /// The `r_gamma` textures bake in from the next `load_world`, or `None`
+    /// with device gamma. HUD images reload under a new one, as retail
+    /// reloads every image at a map load.
     pub fn set_image_gamma(&mut self, gamma: Option<f32>) {
         let table = gamma.map(|g| crate::gamma::ramp(g, 0));
         if table != self.image_gamma {
@@ -7018,8 +7103,8 @@ impl Renderer {
         &self.vis_counts
     }
 
-    /// (stage draws emitted last frame, stages dropped at load, unique
-    /// shader-lib warnings) for the F3 `shader:` line.
+    /// (stage draws emitted last frame, dlight draws last frame, stages
+    /// dropped at load, unique shader-lib warnings) for the F3 `shader:` line.
     pub fn shader_stats(&self) -> (usize, usize, usize, usize) {
         (
             self.world.as_ref().map_or(0, |w| w.stage_draws_last),
@@ -7121,7 +7206,6 @@ impl Renderer {
         })
     }
 
-    /// `[variant][two_sided][bias]`.
     /// The world's draw sets: the world under the shared camera, then each
     /// moved brush model under its own.
     fn world_sets<'a>(
@@ -7163,7 +7247,7 @@ impl Renderer {
     /// `fx_ready` says whether this frame's depth and colour copies are
     /// taken for a `cod4_worldfx` stage: without its copy a feathered one
     /// draws as its plain stage, a distortion one not at all.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn emit_world_draw(
         &self,
         pass: &mut impl DrawSink,
@@ -7263,7 +7347,7 @@ impl Renderer {
                 let key = Bound::Lit(
                     sb.variant,
                     sb.two_sided,
-                    sb.bias,
+                    lit.offset,
                     c2.fs_key(&lit),
                     lit.water,
                     depth,
@@ -7275,10 +7359,8 @@ impl Renderer {
                     // the groups and tangents bound stay
                     let kept = !lit.water && matches!(*bound, Some(Bound::Lit(.., false, _)));
                     pass.pipeline(match (water, depth) {
-                        (Some(w), _) => w.pipeline(sb.variant, sb.two_sided, sb.bias),
-                        (None, Depth::Plain) => {
-                            c2.pipeline(sb.variant, sb.two_sided, sb.bias, &lit)
-                        }
+                        (Some(w), _) => w.pipeline(sb.variant, sb.two_sided, lit.offset),
+                        (None, Depth::Plain) => c2.pipeline(sb.variant, sb.two_sided, &lit),
                         (None, Depth::Prepass) => c2.prepass_pipeline(sb.two_sided, None),
                         (None, Depth::FloatZ) => c2.floatz_pipeline(
                             sb.two_sided,
@@ -8808,7 +8890,12 @@ impl Renderer {
                     }
                     (Some(c2), _) => c2.entity_set(draw.light_origin, self.identity_light),
                     (None, Some(l)) => {
-                        let picked = l.entity_lights(draw.light_origin, &self.dynamic.scene_lights);
+                        let scene = model_scene_lights(
+                            &self.dynamic.scene_lights,
+                            &self.dynamic.entity_scene_lights,
+                            self.dynamic_light,
+                        );
+                        let picked = l.entity_lights(draw.light_origin, &scene);
                         entity_light::pack(&picked, Some(to_view), self.identity_light)
                     }
                     (None, None) => GpuLightSet::default(),
@@ -8982,7 +9069,8 @@ impl Renderer {
             sp.idle(&self.queue);
         }
         {
-            // Linear fog clears to the fog colour (RTCW clearscreen=true);
+            // Linear fog clears to the fog colour (docs/protocol-1.1.md,
+            // configstring 12);
             // otherwise the fixed steel blue stands in until the sky draws.
             let clear = if self.fog.set && self.fog.live.linear {
                 wgpu::Color {
@@ -9071,7 +9159,7 @@ impl Renderer {
                     )
                 );
             let gamma_direct = post && swap_direct;
-            // Shafts need a sun flare's direction (shader doc 8).
+            // Shafts need a sun flare's direction (shader doc 8.7).
             let shafts = self
                 .sky
                 .as_ref()
@@ -9764,7 +9852,13 @@ impl Renderer {
                                 bound_model = Some(model_at);
                             }
                             let surf = &vm.surfaces[d.surf as usize];
-                            let n = ent_run(&items, j, &ent_draws, model, &run_stops);
+                            let n = ent_run(
+                                &items,
+                                j,
+                                &ent_draws,
+                                (&vm.surfaces, &model.skins),
+                                &run_stops,
+                            );
                             let last = &vm.surfaces[d.surf as usize + n - 1];
                             let skin = &model.skins[d.surf as usize];
                             let depth = if ent_prepass
@@ -9833,7 +9927,8 @@ impl Renderer {
                         }
                         let surf = &vm.surfaces[d.surf as usize];
                         let stops = [copy_at, split_at, Some(dlight_at)];
-                        let n = ent_run(&items, k, &ent_draws, model, &stops);
+                        let n =
+                            ent_run(&items, k, &ent_draws, (&vm.surfaces, &model.skins), &stops);
                         let last = &vm.surfaces[ent_draws[mi].surf as usize + n - 1];
                         let skin = &model.skins[d.surf as usize];
                         // a run is one skin, so one answer for all of it
@@ -10108,10 +10203,21 @@ impl Renderer {
                     )
                 })
                 .flatten();
+            // A CoD4 shellshock's capture and blends run single-sampled
+            // with no depth, as the CoD1 and CoD2 one does.
+            let cod4_screen = matches!(
+                cod4_shock,
+                Some(
+                    crate::play::cod4_shock::Screen::Save
+                        | crate::play::cod4_shock::Screen::Blur { .. }
+                        | crate::play::cod4_shock::Screen::Flash { .. }
+                )
+            );
             let after = bloom
                 || shafts
                 || post
                 || shock.is_some()
+                || cod4_screen
                 || glow.is_some()
                 || world_blur.is_some();
             if after {
@@ -10464,7 +10570,6 @@ fn single_pass<'e>(
 /// The camera group (`camera_layout`): the Camera block, the fx lights,
 /// `vc_shadows`' receiver inputs, `r_textureMode`'s samplers, CoD2's
 /// dynamic shadow and CoD4's sun shadow map.
-#[allow(clippy::too_many_arguments)]
 fn camera_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -10516,13 +10621,8 @@ fn camera_bind_group(
     })
 }
 
-/// Whether a script-less `<type>@<image>` world material's
-/// `shadertypes/world/<type>.stype` draws opaque: no stage alpha-tests and
-/// the first one does not blend. Its image's alpha is then read by nothing
-/// (wood@chateau_exteriordoor's is a gloss mask; docs/research/
-/// cod11-shader-scripts.md, "World shader types").
 /// How a static prop's skin draws when it has no `skins/` block, by its
-/// `type@` template as the entity path resolves it (shader doc 8).
+/// `type@` template as the entity path resolves it (shader doc 8.2).
 enum PropSkinDraw {
     /// More than one stage, or a blend: the stage path, `$texturename`
     /// bound to the skin.
@@ -10575,6 +10675,11 @@ fn uploads_cutout(img: &Image, levels: &[Vec<u8>]) -> bool {
             .any(|l| l.iter().skip(3).step_by(4).any(|&a| a < 128))
 }
 
+/// Whether a script-less `<type>@<image>` world material's
+/// `shadertypes/world/<type>.stype` draws opaque: no stage alpha-tests and
+/// the first one does not blend. Its image's alpha is then read by nothing
+/// (wood@chateau_exteriordoor's is a gloss mask; docs/research/
+/// cod11-shader-scripts.md, "World shader types").
 fn world_type_draws_opaque(fs: &dyn AssetSource, name: &str) -> bool {
     crate::entity_material::skin_type(name)
         .and_then(|kind| {
@@ -10921,7 +11026,6 @@ struct FxImage<'a> {
 /// `upload_levels` handles both RGBA sprites and BC `.dds` mip chains (many
 /// effect textures are DXT5). Unresolvable names warn once; the caller
 /// caches the `None`.
-#[allow(clippy::too_many_arguments)]
 fn resolve_fx_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -11173,47 +11277,55 @@ impl HudUpload<'_> {
         let (w, h) = self.size;
         let mut verts: Vec<HudVert> = Vec::with_capacity(quads.len() * 4);
         let mut runs: Vec<(String, usize, bool)> = Vec::new();
+        // The texture the last quad named and what it resolved to: a run of
+        // glyphs on one font page asks the same of every quad.
+        let mut last: Option<(&str, bool, f32)> = None;
         for quad in quads {
             let (key, add) = match quad.texture.strip_prefix(hud::ADDITIVE) {
                 Some(k) => (k, true),
                 None => (quad.texture.as_str(), false),
             };
-            // A default-if-missing quad that resolves draws as its own name.
-            let name = default_shader_fallback(key).unwrap_or(key);
-            if !pass.textures.contains_key(key) {
-                let how = hud_image(name, self.lib.get(name), &pass.mip_names);
-                let tex = resolve_hud_texture(
-                    self.device,
-                    self.queue,
-                    &pass.texture_layout,
-                    self.samplers,
-                    fs,
-                    self.image_map,
-                    cod2_hud_image(fs, self.lib, name),
-                    key,
-                    how,
-                    self.textures.world_picmip(!how.picmip),
-                    self.image_gamma,
-                    self.textures.store(),
-                );
-                pass.textures.insert(key.to_string(), tex);
-            }
+            let (default, scale) = match last {
+                Some((t, default, scale)) if t == quad.texture => (default, scale),
+                _ => {
+                    // A default-if-missing quad that resolves draws as its own name.
+                    let name = default_shader_fallback(key).unwrap_or(key);
+                    if !pass.textures.contains_key(key) {
+                        let how = hud_image(name, self.lib.get(name), &pass.mip_names);
+                        let tex = resolve_hud_texture(
+                            self.device,
+                            self.queue,
+                            &pass.texture_layout,
+                            self.samplers,
+                            fs,
+                            self.image_map,
+                            cod2_hud_image(fs, self.lib, name),
+                            key,
+                            how,
+                            self.textures.world_picmip(!how.picmip),
+                            self.image_gamma,
+                            self.textures.store(),
+                        );
+                        pass.textures.insert(key.to_string(), tex);
+                    }
+                    let default = matches!(
+                        pass.textures.get(key),
+                        Some(Some(t)) if t.default
+                    );
+                    let scale = colour_scale(self.lib.get(name), self.identity_light);
+                    last = Some((quad.texture.as_str(), default, scale));
+                    (default, scale)
+                }
+            };
 
             // `black` shares `white`'s 1x1 texture; force the rgb here so it
             // draws black regardless of the element colour, alpha untouched.
-            let default = matches!(
-                pass.textures.get(key),
-                Some(Some(t)) if t.default
-            );
             let rgba = if key == "black" {
                 [0.0, 0.0, 0.0, quad.rgba[3]]
             } else if default {
                 [1.0; 4]
             } else {
-                hud_colour(
-                    quad.rgba,
-                    colour_scale(self.lib.get(name), self.identity_light),
-                )
+                hud_colour(quad.rgba, scale)
             };
 
             for i in 0..4 {
@@ -11390,8 +11502,6 @@ enum HudTex {
     Missing,
 }
 
-/// A material name (`hudStanceStand`, `hintHealth`) resolves through the
-/// shader-script image map, same as fx; anything else is a bare pk3 path.
 /// The material a prop skin draws with: CoD1's `skins/<name>` script
 /// block, or the CoD2 material the model names.
 fn prop_material<'a>(lib: &'a MaterialLib, cod2: bool, skin: &str) -> Option<&'a Material> {
@@ -11497,6 +11607,8 @@ fn material_lib(fs: &dyn AssetSource) -> MaterialLib {
     }
 }
 
+/// A material name (`hudStanceStand`, `hintHealth`) resolves through the
+/// shader-script image map, same as fx; anything else is a bare pk3 path.
 /// `ShaderLib::load` folds every material name to lowercase, so the lookup
 /// does too before falling back to the name as given.
 fn hud_texture_path(
@@ -11669,7 +11781,7 @@ fn hud_bind_group(
 /// with `picmip` levels dropped, `gamma` baked as retail's upload bakes it
 /// and stored as `store` says. Unresolvable names warn once; the caller
 /// caches the `None`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn resolve_hud_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -11824,11 +11936,6 @@ fn vm_uniform_group(
     })
 }
 
-/// Group 0 is the camera, group 1 the viewmodel skin layout (the uploaded
-/// models' bind groups are built against it), group 2 the bone storage
-/// buffer, group 3 the stage's `StageParams`. Vertex buffer 1 is
-/// instance-step `InstanceRaw`. The entity materials also build the
-/// viewmodel's pipelines over `vm`'s layouts.
 /// [`DynHandle::bone_boxes`] of `model`'s LOD 0.
 fn bone_boxes(model: &model::Model) -> Vec<(u8, glam::Vec3, glam::Vec3)> {
     bone_boxes_of(model.lods.first().into_iter().flat_map(|l| &l.surfaces))
@@ -11914,6 +12021,11 @@ fn instance_seen(d: &DynamicPass, k: usize, frustum: &vcod_common::vis::Frustum)
     frustum.intersects_aabb(lo - grow, hi + grow)
 }
 
+/// Group 0 is the camera, group 1 the viewmodel skin layout (the uploaded
+/// models' bind groups are built against it), group 2 the bone storage
+/// buffer, group 3 the stage's `StageParams`. Vertex buffer 1 is
+/// instance-step `InstanceRaw`. The entity materials also build the
+/// viewmodel's pipelines over `vm`'s layouts.
 fn create_dynamic_pass(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -12463,6 +12575,20 @@ fn lights_models(mode: i32) -> bool {
     mode != 0
 }
 
+/// The scene lights the model light pick reads, the view weapon's
+/// included: the cgame's then the entities' (`constantLight`, the
+/// projectiles'), capped at the scene's count, and none under
+/// `r_dynamiclight 0` (light grid doc, the model pick count).
+fn model_scene_lights(scene: &[SceneLight], entity: &[SceneLight], mode: i32) -> Vec<SceneLight> {
+    if !lights_models(mode) {
+        return Vec::new();
+    }
+    let mut out = scene.to_vec();
+    out.extend_from_slice(entity);
+    out.truncate(crate::fx::sim::MAX_SCENE_LIGHTS);
+    out
+}
+
 /// Shader-stage images uploaded during one world load, and the texture
 /// gamma they load through (`r_ignorehwgamma 1`, `gamma::bake_image`).
 struct BundleViews<'a> {
@@ -12658,6 +12784,33 @@ mod tests {
         assert_eq!(
             draw("{ map a.tga rgbGen vertex alphaGen vertex alphaFunc GE128 depthWrite }"),
             (FxBlend::Opaque, FX_VERT_ALPHA_GE128)
+        );
+    }
+
+    /// The view weapon's light pick reads the same list as every other
+    /// model's: the cgame's and the entities' lights, capped, and none
+    /// under `r_dynamiclight 0` (BUG-123).
+    #[test]
+    fn the_model_light_pick_takes_both_lists_under_the_cvar() {
+        let light = |x: f32| SceneLight {
+            origin: glam::Vec3::new(x, 0.0, 0.0),
+            color: glam::Vec3::ONE,
+            intensity: 1.0,
+        };
+        let scene = vec![light(1.0)];
+        let ents = vec![light(2.0), light(3.0)];
+        assert!(model_scene_lights(&scene, &ents, 0).is_empty());
+        for mode in [1, 2] {
+            let got = model_scene_lights(&scene, &ents, mode);
+            assert_eq!(
+                got.iter().map(|l| l.origin.x).collect::<Vec<_>>(),
+                [1.0, 2.0, 3.0]
+            );
+        }
+        let many = vec![light(0.0); crate::fx::sim::MAX_SCENE_LIGHTS + 5];
+        assert_eq!(
+            model_scene_lights(&many, &ents, 1).len(),
+            crate::fx::sim::MAX_SCENE_LIGHTS
         );
     }
 
@@ -12912,10 +13065,6 @@ mod tests {
         }
     }
 
-    /// `white` and `$whiteimage` are the engine built-in; `black` shares its
-    /// texture (pak4 `scripts/hud.shader`: both stage `map $whiteimage`,
-    /// `black` differs only by `rgbGen const 0`, which `set_hud_quads`
-    /// applies to the quad colour).
     /// A CoD2 font's material draws its colour map, not the loose
     /// `fonts/gamefonts.tga` beside the font files.
     #[test]
@@ -12931,6 +13080,10 @@ mod tests {
         assert_eq!(cod2_hud_image(&fs, &lib, "fonts/no_such_material"), None);
     }
 
+    /// `white` and `$whiteimage` are the engine built-in; `black` shares its
+    /// texture (pak4 `scripts/hud.shader`: both stage `map $whiteimage`,
+    /// `black` differs only by `rgbGen const 0`, which `set_hud_quads`
+    /// applies to the quad colour).
     #[test]
     fn hud_texture_path_resolves_the_white_and_black_built_ins() {
         let Some(fs) = vcod_common::testing::game_fs() else {
@@ -13716,10 +13869,13 @@ mod tests {
         assert!(hud_mip_names(&[]).contains("gfx/2d/net"));
     }
 
+    /// Every module the client builds, as its `create_shader_module` site
+    /// builds it, parses and validates with no GPU; every `.wgsl` file under
+    /// src is part of one of them.
     #[test]
     fn wgsl_modules_validate() {
         use wgpu::naga;
-        for (name, src) in [
+        let modules = [
             ("shader", WORLD_WGSL),
             ("dynamic_model", crate::entity_material::DYNAMIC_WGSL),
             ("viewmodel", crate::entity_material::VIEWMODEL_WGSL),
@@ -13738,16 +13894,48 @@ mod tests {
             ("sun_flare", include_str!("sun_flare.wgsl")),
             ("sun_shafts", include_str!("sun_shafts.wgsl")),
             ("soft_particles", include_str!("soft_particles.wgsl")),
-        ] {
-            let module = naga::front::wgsl::parse_str(src)
-                .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
-            naga::valid::Validator::new(
-                naga::valid::ValidationFlags::all(),
-                naga::valid::Capabilities::default(),
-            )
-            .validate(&module)
-            .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
+            ("cod4_dof", include_str!("cod4_dof.wgsl")),
+            ("cod4_sunshadow", crate::cod4_sunshadow::CAST_WGSL),
+            ("cod4_spot_blit", crate::cod4_sunshadow::SPOT_BLIT_WGSL),
+            ("cod2_glow", include_str!("cod2_glow.wgsl")),
+            ("cod2_cookie", cod2_cookie::COOKIE_WGSL),
+            ("fx_cloud", fx_cloud::FX_CLOUD_WGSL),
+            ("scene_copy", include_str!("scene_copy.wgsl")),
+            ("shadow_cast", include_str!("shadow_cast.wgsl")),
+            ("shadow_cut", crate::shadows::SHADOW_CUT_WGSL),
+            ("shadow_mask", include_str!("shadow_mask.wgsl")),
+        ];
+        for (name, src) in modules {
+            for (samples, src) in [(4, depth_wgsl_at(src, 4)), (1, depth_wgsl_at(src, 1))] {
+                let module = naga::front::wgsl::parse_str(&src)
+                    .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(&src)));
+                naga::valid::Validator::new(
+                    naga::valid::ValidationFlags::all(),
+                    naga::valid::Capabilities::default(),
+                )
+                .validate(&module)
+                .unwrap_or_else(|e| panic!("{name} at {samples}x: {}", e.emit_to_string(&src)));
+            }
         }
+        let mut dirs = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut files = 0;
+        while let Some(dir) = dirs.pop() {
+            for e in std::fs::read_dir(&dir).unwrap() {
+                let path = e.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|x| x == "wgsl") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    assert!(
+                        modules.iter().any(|(_, src)| src.contains(&text)),
+                        "{} is in no module this test validates",
+                        path.display()
+                    );
+                    files += 1;
+                }
+            }
+        }
+        assert!(files > 0, "no .wgsl file found");
     }
 
     #[test]
@@ -14183,6 +14371,299 @@ mod tests {
             e(SORT_OPAQUE, Some([4, 7])),
         ]);
         assert_eq!(places, [2, 1, 0]);
+    }
+
+    /// 1.7's order inside one sort: the batch whose soup comes first in
+    /// the lit order draws first; a batch no soup reached, and the
+    /// entries past the world's, keep their registration order after.
+    #[test]
+    fn cod4_batches_of_one_sort_draw_in_lit_order() {
+        use vcod_common::mesh::IndexRange;
+        let e = |sort| SortEntry { sort, images: None };
+        let range = |batch| {
+            Some(IndexRange {
+                batch,
+                first: 0,
+                count: 3,
+            })
+        };
+        let entries = [
+            e(SORT_OPAQUE),
+            e(SORT_OPAQUE),
+            e(SORT_BLEND),
+            e(SORT_OPAQUE),
+            e(SORT_OPAQUE),
+            e(SORT_OPAQUE),
+        ];
+        // batch 1's first soup is 2nd in the lit order, batch 0's 5th; a
+        // cell's missing range takes no place
+        let ranges = [range(0), range(1), None, range(0), range(3), range(2)];
+        let order = [4, 1, 0, 7, 9, 3];
+        assert_eq!(cod4_places(&entries, &ranges, &order), [1, 0, 5, 2, 3, 4]);
+    }
+
+    /// A fade lerps every field from where it stood; a change of mode or a
+    /// zero fade snaps; a cleared fog's next target snaps too.
+    #[test]
+    fn fog_fades_within_a_mode_and_snaps_across_one() {
+        let exp = |density: f32, fade_ms| FogParams {
+            near: 0.0,
+            far: 0.0,
+            density,
+            color: [0.0; 3],
+            fade_ms,
+            start: 0.0,
+        };
+        let linear = |far: f32, fade_ms| FogParams {
+            near: 100.0,
+            far,
+            density: 1.0,
+            color: [1.0; 3],
+            fade_ms,
+            start: 0.0,
+        };
+        let mut f = FogState::default();
+        f.set_target(exp(0.2, 1000), 0.0);
+        assert_eq!(f.live.density, 0.2, "the first fog snaps");
+        f.set_target(exp(0.6, 1000), 1.0);
+        f.advance(1.25);
+        assert!((f.live.density - 0.3).abs() < 1e-6, "{}", f.live.density);
+        assert!(f.target.is_some());
+        // a new target mid-fade starts from what is displayed
+        f.set_target(exp(0.0, 1000), 1.25);
+        f.advance(1.75);
+        assert!((f.live.density - 0.15).abs() < 1e-6, "{}", f.live.density);
+        f.set_target(linear(2000.0, 1000), 2.0);
+        assert!(f.live.linear && f.live.far == 2000.0, "a mode change snaps");
+        assert!(f.target.is_none());
+        f.set_target(linear(1000.0, 0), 3.0);
+        assert_eq!(f.live.far, 1000.0, "no fade snaps");
+        f.clear();
+        assert!(!f.set);
+        f.set_target(linear(3000.0, 1000), 4.0);
+        assert_eq!(f.live.far, 3000.0, "the fog after a clear snaps");
+    }
+
+    fn vm_surface(
+        first_index: u32,
+        index_count: u32,
+        base_vertex: i32,
+        bind_group: usize,
+    ) -> VmSurface {
+        VmSurface {
+            first_index,
+            index_count,
+            base_vertex,
+            bind_group,
+            src: 0,
+        }
+    }
+
+    fn ent_skin(stages: usize) -> Rc<EntSkin> {
+        let st = crate::entity_material::EntStageDraw {
+            pipeline: 0,
+            image: crate::entity_material::StageImage::Skin,
+            slot: 0,
+            params: 0,
+            prepass: true,
+            floatz: false,
+            rigid: true,
+        };
+        Rc::new(EntSkin {
+            stages: vec![st; stages],
+            lit: true,
+            sort: SORT_OPAQUE,
+            order: 0,
+            cookie_caster: false,
+            sun_caster: false,
+            sun_cut: None,
+        })
+    }
+
+    /// An entity surface joins the next items while each is the same
+    /// instance's next surface on the same one-stage skin, bind group and
+    /// base vertex with its indices following on, and no stop or gun
+    /// comes between; each broken condition ends the run there.
+    #[test]
+    fn an_entity_run_joins_only_contiguous_surfaces_of_one_skin() {
+        let ent = |inst, surf, gun| EntDraw {
+            inst,
+            surf,
+            sort: SORT_OPAQUE,
+            order: 0,
+            gun,
+        };
+        let skin = ent_skin(1);
+        let base = || {
+            (
+                vec![
+                    vm_surface(0, 6, 0, 0),
+                    vm_surface(6, 3, 0, 0),
+                    vm_surface(9, 12, 0, 0),
+                    vm_surface(21, 3, 0, 0),
+                ],
+                vec![skin.clone(); 4],
+                vec![
+                    ent(0, 0, false),
+                    ent(0, 1, false),
+                    ent(0, 2, false),
+                    ent(0, 3, false),
+                ],
+            )
+        };
+        let items: Vec<SortedItem> = (0..4).map(SortedItem::Model).collect();
+        let run = |(surfs, skins, draws): &(Vec<VmSurface>, Vec<Rc<EntSkin>>, Vec<EntDraw>),
+                   k,
+                   stops: &[Option<usize>]| {
+            ent_run(&items, k, draws, (surfs, skins), stops)
+        };
+        let all = base();
+        assert_eq!(run(&all, 0, &[None]), 4);
+        assert_eq!(run(&all, 1, &[None]), 3);
+        assert_eq!(run(&all, 0, &[Some(2)]), 2, "a stop");
+        let mut c = base();
+        c.2[2].gun = true;
+        assert_eq!(run(&c, 0, &[None]), 2, "the gun");
+        let mut c = base();
+        c.2[2].inst = 1;
+        assert_eq!(run(&c, 0, &[None]), 2, "another instance");
+        let mut c = base();
+        c.2[2].surf = 3;
+        assert_eq!(run(&c, 0, &[None]), 2, "not the next surface");
+        let mut c = base();
+        c.1[2] = ent_skin(1);
+        assert_eq!(run(&c, 0, &[None]), 2, "an equal skin, not the same one");
+        let mut c = base();
+        c.0[2].bind_group = 1;
+        assert_eq!(run(&c, 0, &[None]), 2, "another bind group");
+        let mut c = base();
+        c.0[2].base_vertex = 100;
+        assert_eq!(run(&c, 0, &[None]), 2, "another base vertex");
+        let mut c = base();
+        c.0[2].first_index = 10;
+        assert_eq!(run(&c, 0, &[None]), 2, "a gap in the indices");
+        let mut c = base();
+        c.1 = vec![ent_skin(2); 4];
+        assert_eq!(run(&c, 0, &[None]), 1, "a two-stage skin draws alone");
+        let items = [
+            SortedItem::Model(0),
+            SortedItem::Fx(0),
+            SortedItem::Model(1),
+        ];
+        assert_eq!(
+            ent_run(&items, 0, &all.2, (&all.0, &all.1), &[None]),
+            1,
+            "another kind of item"
+        );
+    }
+
+    /// `keep` is by the model's surfaces, and an empty one uploads no
+    /// surface, so the filter reads each uploaded surface's `src`.
+    #[test]
+    fn a_hidden_surface_is_picked_by_its_source_index() {
+        let surfs: Vec<VmSurface> = [0, 2, 3, 5]
+            .into_iter()
+            .map(|src| VmSurface {
+                src,
+                ..vm_surface(0, 3, 0, 0)
+            })
+            .collect();
+        assert_eq!(kept_surfaces(&surfs, &[]), [0, 1, 2, 3]);
+        assert_eq!(kept_surfaces(&surfs, &[true, true, false, true]), [0, 2, 3]);
+        assert_eq!(kept_surfaces(&surfs, &[false, false, true, false]), [1, 3]);
+        assert!(kept_surfaces(&surfs, &[false; 6]).is_empty());
+    }
+
+    /// A run whose commands held from the last frame draws through a
+    /// bundle made once; a changed run replays and drops its bundle; the
+    /// runs past this frame's last go; a new target drops them all.
+    #[test]
+    fn world_runs_bundle_once_their_commands_hold() {
+        let Some((device, queue)) = headless::test_device(headless::Need::Any) else {
+            return;
+        };
+        set_msaa_samples(1);
+        let tex = |format, usage| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: None,
+                    size: wgpu::Extent3d {
+                        width: 64,
+                        height: 64,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        let colour = tex(SCENE_FORMAT, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let depth = tex(DEPTH_FORMAT, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let buf = || {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: 64,
+                usage: wgpu::BufferUsages::VERTEX,
+                mapped_at_creation: false,
+            })
+        };
+        let (a, b) = (buf(), buf());
+        let rec = |v: &wgpu::Buffer| {
+            let mut r = Recording::default();
+            r.vertices(0, v.slice(..));
+            r
+        };
+        let mut wb = WorldBundles::default();
+        let frame = |wb: &mut WorldBundles, runs: &[&wgpu::Buffer]| {
+            let mut enc = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &colour,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations::default(),
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &depth,
+                        depth_ops: Some(wgpu::Operations::default()),
+                        stencil_ops: None,
+                    }),
+                    ..Default::default()
+                });
+                wb.begin(Some(SCENE_FORMAT));
+                for v in runs {
+                    wb.draw(
+                        &mut pass,
+                        &device,
+                        rec(v),
+                        crate::frame_prof::Count::Rebundled,
+                    );
+                }
+                wb.end();
+            }
+            queue.submit([enc.finish()]);
+        };
+        let bundled = |wb: &WorldBundles| wb.runs.iter().map(|r| r.1.is_some()).collect::<Vec<_>>();
+        frame(&mut wb, &[&a, &b]);
+        assert_eq!(bundled(&wb), [false, false], "a new run replays");
+        frame(&mut wb, &[&a, &b]);
+        assert_eq!(bundled(&wb), [true, true], "held runs bundle");
+        frame(&mut wb, &[&a, &a]);
+        assert_eq!(
+            bundled(&wb),
+            [true, false],
+            "a changed run drops its bundle"
+        );
+        frame(&mut wb, &[&a]);
+        assert_eq!(bundled(&wb), [true], "runs past the last go");
+        wb.begin(None);
+        assert!(wb.runs.is_empty(), "a new target drops every run");
     }
 
     #[test]

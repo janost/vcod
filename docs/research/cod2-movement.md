@@ -253,8 +253,8 @@ step says otherwise:
    `oldVelocity += (velocity - oldVelocity) * min(frametime, 1)` in two
    dimensions. The velocity is snapped with libc `rint` per component
    (0x80d5e94). VERIFIED, the calls. `rint` keeps the sign of a zero,
-   where 1.1d's `fistp`/`fild` snap turns -0.0 into 0.0 (`pmove.rs`, the
-   snap). INFERRED.
+   where 1.1d's `fistp`/`fild` snap turns -0.0 into 0.0 (`pmove/frame.rs`,
+   the snap). INFERRED.
 
 ## 5. Friction, accelerate, the walk and the air
 
@@ -287,7 +287,7 @@ step says otherwise:
 - `PM_Accelerate` on a ladder (`pm_flags` 0x20) is Q2's: the velocity
   moves toward `wishdir * wishspeed` by `accel * frametime * wishspeed` at
   most, with no floor. INFERRED. 1.1's ladder accelerates along the wish
-  by a rate floored at 100 (`pmove.rs`, the ladder accelerate).
+  by a rate floored at 100 (`pmove/ladder.rs`, the ladder accelerate).
 - The cmd scales (0x80e1a02, 0x80e1b1e, 0x80e1c58) are `ps.speed * max /
   (127 * len)` (rodata 0x8154f70, 0x8154f80, 0x8154f90: 127). VERIFIED.
   Then:
@@ -456,7 +456,7 @@ step says otherwise:
   3 on the ground (`bobCycle += 7 + 1.25 * min(|step| / 2, 4)`, rodata
   0x8155340, 0x815533c). VERIFIED, the constants. As 1.1, whose base is
   the same 0x3e4ccccc (1.1d rodata 0x70f14, `fadds` at 0x35776). VERIFIED.
-  vcod's `STEP_SCALE_BASE` is 0x3e4ccccc in both `pmove.rs` and
+  vcod's `STEP_SCALE_BASE` is 0x3e4ccccc in both `pmove/slide.rs` and
   `vcod_cod2::pmove::slide`. Trap: `0.2f32` is 0x3e4ccccd, one bit above.
 
 ## 8. Fall damage and landing
@@ -679,7 +679,8 @@ linked. Its think (handler 0x13, `G_FreeEntity` 0x811ee50) is due
   INFERRED.
 
 vcod-server spawns and frees it on that clock (`Cod2Level::
-spawn_mantle_block`, `run_mantle_blocks`), so later entity numbers match,
+spawn_mantle_block`, `game::mantle_block::MantleBlocks`), so later entity
+numbers match,
 and hands each cmd's pmove the blocks as `movetrace::ClipBox`es
 (`MoveWorld::with_clip_boxes`), the climber's own passed. No capture has a
 second player walk into one. The bots' walks and the client's prediction
@@ -733,7 +734,7 @@ script's cmds through the pmove.
     (`PRONE_BODY_LENGTH`), 1.5 60.
   - `BG_CheckProneValid` (0x80e01f4) samples the hips 48 out (immediate
     0x42400000) with a sill limit `48 + 0.7 h` (rodata 0x8154e00).
-    `vcod_cod2::pmove::stance` uses 48; vcod-common's CoD1 `pmove.rs` uses
+    `vcod_cod2::pmove::stance` uses 48; vcod-common's CoD1 `pmove/prone.rs` uses
     24 for both.
   - The yaw cap is `bg_prone_yawcap` (85) with the 5-degree soft edge
     (rodata 0x815512c) and 55 deg/s swing (0x8155130), the refused-turn
@@ -775,6 +776,20 @@ script's cmds through the pmove.
   and 280 back (rodata 0x8155110, 0x815510c). `AddLeanToPosition` takes 16
   and 20 (immediates 0x80e6c95, 0x80e6c8c). The wall box is ±8 under
   0x2810011. VERIFIED.
+- What a prone view flick costs vcod-server. `pmove::stance::prone_view`'s
+  turn loop steps the view a degree toward the body a pass, each pass a
+  swing test and most a turned-body test, so a cmd that swings the view
+  180 degrees beside a wall runs some 170 passes. INFERRED (the loop). On
+  mp_toujane, every spawn, the body crawled into whatever lies ahead, 32
+  one-millisecond cmds swinging 180 degrees each take 1.9 ms mean and 8 ms
+  at worst, 32 still cmds 0.17 ms and 0.8 ms (dev profile,
+  `pmove_walk::a_prone_view_flick_costs`, ignored; 2026-11-18). VERIFIED
+  (the run). The loop stays as it is. The cmd clock bounds the cost: a cmd
+  runs only when it moves `commandTime` on, and `serverTime` stops 200 ms
+  past `level.time` (section 21), so a client gets about 1000 such cmds
+  thought a second, some 60 ms of server CPU a second on average and 250
+  ms at worst. INFERRED (the arithmetic). vcod adds no think budget: one
+  counted in cmds would drop cmds retail thinks.
 
 ## 11. Ladder
 
@@ -830,7 +845,7 @@ call sites.
     `AngleDelta(vectoyaw(vLadderVec) + 180, yaw)` truncated, capped at 75
     (immediate 0x4b).
 
-  1.1's ladder press is 500 or 250 every airborne frame (`pmove.rs`);
+  1.1's ladder press is 500 or 250 every airborne frame (`pmove/ladder.rs`);
   CoD2's is the 50, and only on a mostly vertical velocity.
 - The push-off (0x80dcb48), from `Jump_Check` after the takeoff and the
   ladder's jump event (91): vz x0.75 (rodata 0x8153344); the flat forward,
@@ -860,7 +875,8 @@ call sites.
   passes through them to the wall behind: the `ladder` capture's rung
   steps are event 17 (material 16). VERIFIED, the brush and its material
   off the `.d3dbsp`, the events off the capture.
-- vcod: `vcod_cod2::pmove`'s `ladder.rs`. The `ladder` capture (17.1)
+- vcod: `vcod_common::pmladder`, shared with CoD4 (cod4-pmove.md 7), with
+  CoD2's hooks in `vcod_cod2::pmove`'s `ladder.rs`. The `ladder` capture (17.1)
   replays it, with the weapon half, in every row of both runs. VERIFIED
   (`moves_ab`). The gun goes down on the rungs and comes back off them
   (`PM_Weapon`'s, `cod2-combat.md` 1.7). `game::cod2_ladder`
@@ -1538,3 +1554,34 @@ cgame's box gives away, on both servers. VERIFIED. So vcod-server stops a
 run into a player where retail's does, to the probe's resolution.
 VERIFIED. Retail's own client would correct the same unit on every
 snapshot. INFERRED, from the same rule.
+
+## 21. The server's cmd clock
+
+`SV_ClientThink` (0x8090dac) copies the cmd into the client, and for an
+active client (state 4) hands its `serverTime` as sent to the lag time
+(0x80f5614), then calls `ClientThink` (0x80f65f8). VERIFIED, the calls.
+`ClientThink` copies `pers.cmd` (client +0x26c8) to `pers.oldcmd`
+(+0x26e4), fetches the new cmd into `pers.cmd`, stores `level.time` at
++0x27b8 and, unless `g_synchronousClients`, calls `ClientThink_real`
+(0x80f5d2e) on `&pers.cmd`. VERIFIED.
+
+`ClientThink_real` returns at once unless `pers.connected` (+0x26c4) is 2,
+then, on `pers.cmd` in place:
+
+| step | what | where |
+|---|---|---|
+| clamp the clock ahead | `serverTime = min(serverTime, level.time + 200)` | 0x80f5d57-0x80f5d72, `add $0xc8` |
+| clamp it behind | `serverTime = max(serverTime, level.time - 1000)` | 0x80f5d77-0x80f5d92, `sub $0x3e8` |
+| the span | `msec = serverTime - ps.commandTime` | 0x80f5d94-0x80f5da0 |
+| drop a stale cmd | `msec < 1` returns unless `ps.clientNum` (+0xcc) is another client's | 0x80f5da6-0x80f5dcb |
+| clamp the span | `msec = min(msec, 200)` | 0x80f5dd0-0x80f5ddc |
+
+VERIFIED, every immediate, with `level.time` at 0x864c56c. The clamps are
+1.1's (`docs/protocol-1.1.md`, "How long a cmd is simulated for") and so
+are CoD4 1.7's (`ClientThink_real` 0x80a5c1a: `add $0xc8` at 0x80a5c51,
+`sub $0x3e8` at 0x80a5c61; VERIFIED). A client stamping its cmds ahead
+moves at most 200 ms past `level.time`; `Pmove`'s own 1000 ms pull-up
+(section 4) is the bound behind. A stale cmd still took `pers.oldcmd`'s
+place in `ClientThink`. vcod: `Cod2Level::client_think`, whose
+`cmds_stamped_ahead_run_no_further_than_level_time_allows` sends 32 cmds a
+frame stamped a second apart.

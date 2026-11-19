@@ -139,7 +139,7 @@ fn holding(cl: &NetClient<ClientEnd>, buttons: u8) -> UserCmd {
     let da =
         ["delta_angles[0]", "delta_angles[1]", "delta_angles[2]"].map(|n| s.ps.field_i32(p, n));
     UserCmd {
-        server_time: s.server_time,
+        server_time: s.server_time.raw(),
         angles: std::array::from_fn(|i| ((v[i] * 65536.0 / 360.0).round() as i32 - da[i]) & 0xffff),
         buttons,
         weapon: s.ps.field_i32(p, "weapon") as u8,
@@ -208,7 +208,7 @@ fn board(map: &str, vehicletype: &str, cvars: &[(&str, &str)]) -> Option<Boarded
 /// `mp_teamdeathmatch_spawn`, whose think starts the idle on the spawn
 /// frame, where the seeded draw's sloped point slides and sets a walk
 /// first. Every mp_cassino capture's `legsAnim` toggle reads the flat
-/// spawn's (coduo-vehicles.md 13, "The driver's idle"); on mp_peaks the
+/// spawn's (coduo-vehicles.md 13.7, "The driver's idle"); on mp_peaks the
 /// seeded draw already reads retail's, `JEEP_GUN`'s aside ([`JEEP_GUN_PIN`]).
 const FLAT_SPAWNS: &[(&str, Spot)] = &[("mp_cassino", ([64.0, 152.0, 0.125], [0.0, 270.0, 0.0]))];
 
@@ -281,7 +281,7 @@ fn board_with(
     // after it, and wait for the seat. The probe settles 2 s from the
     // placed snapshot and its use lands a frame later: every retail
     // capture's `PROBE activated` is 2050 past its `PROBE place`
-    // (coduo-vehicles.md 13, "The driver's idle").
+    // (coduo-vehicles.md 13.7, "The driver's idle").
     for i in 0..2000i64 {
         now += frame;
         let noboard = std::env::var("VEHICLE_NOBOARD").is_ok();
@@ -374,7 +374,7 @@ fn replay_with(
         Line::Snap(s) => Some(s.delta_angles()),
         _ => None,
     })?;
-    let seated_at = cl.snapshots().newest()?.server_time;
+    let seated_at = cl.snapshots().newest()?.server_time.raw();
     let mut ours_first = seated_at;
     while ours_first < seated_at + CAPTURE_LAG_MS {
         now += frame;
@@ -383,7 +383,7 @@ fn replay_with(
         last_sent = cmd.server_time;
         cl.send_cmds(&[cmd]);
         step(&mut sv, &q, &mut cl, now);
-        ours_first = cl.snapshots().newest()?.server_time;
+        ours_first = cl.snapshots().newest()?.server_time.raw();
     }
     let offset = ours_first - first;
     // One rebase a seat: retail's `delta_angles` onto ours at the capture's
@@ -439,7 +439,7 @@ fn replay_with(
                     if cl
                         .snapshots()
                         .newest()
-                        .is_some_and(|n| n.server_time >= want)
+                        .is_some_and(|n| n.server_time.raw() >= want)
                     {
                         break;
                     }
@@ -844,6 +844,52 @@ fn the_jeep_drive_replays_on_ours() {
     tally(&lines, &ours).assert_within(&[]);
 }
 
+const JEEP_CLOSESPEED: &str =
+    "tests/fixtures/playerstate/mp_peaks-tdm-slope-8ms-jeep-closespeed-uo.txt";
+
+/// The jeep drive with the script's `closespeed` 0.5 on every vehicle
+/// (`probe_closespeed`): the step's speed cap halves, and the first 119
+/// snapshots match retail's field for field (coduo-vehicles.md 17).
+#[test]
+fn the_jeep_drive_under_closespeed_replays_on_ours() {
+    let text = std::fs::read_to_string(JEEP_CLOSESPEED).unwrap();
+    let lines = parse(&text);
+    let cvars = [
+        ("probe_side", "75"),
+        ("probe_pitch", "15"),
+        ("probe_closespeed", "0.5"),
+    ];
+    let Some(ours) = ours("mp_peaks", "willyjeep_mp", &cvars, &lines) else {
+        return;
+    };
+    tally(&lines, &ours).assert_within(&[Gap {
+        field: "",
+        snaps: 120..=usize::MAX,
+        why: "coduo-vehicles.md 17: retail's front-left probe meets a face ours clears at 18500",
+    }]);
+}
+
+const TANK_CLOSESPEED: &str =
+    "tests/fixtures/playerstate/mp_cassino-tdm-slope-8ms-tank-closespeed-uo.txt";
+
+/// The tank drive under `closespeed` 0.5 and `harc` 10 (`probe_harc`):
+/// half the cap, and the turret held 10 degrees off the hull
+/// (coduo-vehicles.md 17).
+#[test]
+fn the_tank_drive_under_closespeed_and_harc_replays_on_ours() {
+    let text = std::fs::read_to_string(TANK_CLOSESPEED).unwrap();
+    let lines = parse(&text);
+    let cvars = [("probe_closespeed", "0.5"), ("probe_harc", "10")];
+    let Some(ours) = ours("mp_cassino", "panzeriv_mp", &cvars, &lines) else {
+        return;
+    };
+    tally(&lines, &ours).assert_within(&[Gap {
+        field: "",
+        snaps: 284..=usize::MAX,
+        why: "coduo-vehicles.md 17: the track clock parts at 27200, unread",
+    }]);
+}
+
 const JEEP_DIE: &str = "tests/fixtures/playerstate/mp_peaks-tdm-slope-8ms-jeep-die-uo.txt";
 
 /// The jeep's driver killed in his seat 3.5 s into retail's drive
@@ -966,7 +1012,7 @@ const JEEP_GUN: &str = "tests/fixtures/playerstate/mp_peaks-tdm-slope-8ms-jeep-g
 /// 94): a spawn whose think lands sliding sets a walk before the idle.
 /// Retail's [`JEEP_GUN_SPAWN`] run spawned on tdm spawnpoint 277 and reads
 /// 606 too. Of the map's 32 tdm spawns pinned, 277 and (-1328, -160) match
-/// every field here; the other 30 miss the toggle (coduo-vehicles.md 13,
+/// every field here; the other 30 miss the toggle (coduo-vehicles.md 13.7,
 /// "The driver's idle").
 const JEEP_GUN_PIN: Spot = ([-3872.0, 3064.0, -25.528], [0.0, 255.0, 0.0]);
 
@@ -1050,7 +1096,7 @@ fn the_tank_gun_replays_on_ours() {
 /// The same run's marks linked to the rider's bones, every frame of both
 /// stints. Through the first, a driver boarded by use is linked with no
 /// seat offset, so every mark reads 20 above the seat until the
-/// `nextvehslot` (coduo-vehicles.md 13, "The tank driver's link offset").
+/// `nextvehslot` (coduo-vehicles.md 13.7, "The tank driver's link offset").
 #[test]
 fn the_tank_rider_s_bones_follow_retail_s_in_both_seats() {
     let text = std::fs::read_to_string(TANK_GUN).unwrap();
@@ -1239,7 +1285,7 @@ fn a_driver_spawned_out_of_the_seat_reads_retail_s_origin() {
 
 /// What the entity pass finds of a tank driver boarded by use: his turn
 /// links him with no seat offset, 20 above the seat his end frame puts
-/// `ps.origin` on (coduo-vehicles.md 13, "The tank driver's link offset"),
+/// `ps.origin` on (coduo-vehicles.md 13.7, "The tank driver's link offset"),
 /// so the area tree a later entity's blast or missile queries, and the body
 /// such a round traces, sit at the link through the first stint, and on
 /// the seat once a `nextvehslot` has asked for the slot it takes.

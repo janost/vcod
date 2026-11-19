@@ -1,6 +1,5 @@
 //! Download-and-load state machine for one map. Pure: the caller pumps the
 //! net client, feeds the events in, and performs the returned `Action`.
-//! Replaces the blocking loops that ran before the window existed.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -32,7 +31,7 @@ pub enum Action {
     Failed(String),
 }
 
-/// The retail client gives up on a stalled download after this long.
+/// A download with no progress for this long fails. vcod's own value.
 const STALL: Duration = Duration::from_secs(30);
 /// How long to wait for the re-sent gamestate after `donedl`.
 const REGAMESTATE: Duration = Duration::from_secs(10);

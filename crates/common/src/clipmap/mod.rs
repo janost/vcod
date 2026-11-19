@@ -56,6 +56,13 @@ pub const SURF_NOSTEPS: u32 = 0x2000;
 pub const SURF_NONSOLID: u32 = 0x4000;
 pub const SURF_MANTLE_ON: u32 = 0x200_0000;
 pub const SURF_MANTLE_OVER: u32 = 0x400_0000;
+/// The sound material's bits.
+pub const SURF_MATERIAL_MASK: u32 = 0x1f0_0000;
+
+/// The sound material a surface's flags carry (bits 20-24).
+pub const fn surface_material(flags: u32) -> u32 {
+    (flags & SURF_MATERIAL_MASK) >> 20
+}
 
 /// A live player's `pm->tracemask` (`ClientThink_real`, Mac 1.3): SOLID,
 /// GLASS, PLAYERCLIP, BODY and 0x800000, which no material carries.
@@ -285,6 +292,54 @@ impl IndexedMesh {
 }
 
 impl ClipMap {
+    /// What the kernels take on trust, checked once by the loaders: the
+    /// BSP nodes, the AABB trees and the brush trees are trees
+    /// ([`crate::treecheck`]) whose links stay in their arrays. A brush
+    /// node's straddler subtree and children lie past it; offset 0 would
+    /// name itself.
+    pub fn check_trees(&self) -> anyhow::Result<()> {
+        use crate::treecheck::{check_bsp, check_forest};
+        use anyhow::{Context, ensure};
+        ensure!(!self.nodes.is_empty(), "clip map has no nodes");
+        check_bsp(self.nodes.len(), self.leafs.len(), |n| {
+            self.nodes[n].children
+        })
+        .context("bsp nodes")?;
+        for (i, l) in self.leafs.iter().enumerate() {
+            ensure!(
+                usize::from(l.first_aabb) + usize::from(l.aabb_count) <= self.aabbs.len()
+                    && (l.brush_node == 0 || (l.brush_node as usize) < self.brush_nodes.len()),
+                "leaf {i}: aabb trees or brush node out of range"
+            );
+        }
+        check_forest(self.aabbs.len(), |n| {
+            let first = i64::from(self.aabbs[n].child_or_partition);
+            first..first + i64::from(self.aabbs[n].child_count)
+        })
+        .context("collision aabb trees")?;
+        check_forest(self.brush_nodes.len(), |n| {
+            let k = n as i64;
+            match self.brush_nodes[n] {
+                // CoD4's placeholder node 0 links to itself: its zero
+                // contents stop the kernels, and the other walks skip root 0.
+                BrushNode::Split { contents: 0, .. } if n == 0 => [None; 3],
+                BrushNode::Split {
+                    straddlers,
+                    children,
+                    ..
+                } => [
+                    straddlers.then_some(k + 1),
+                    Some(k + i64::from(children[0])),
+                    Some(k + i64::from(children[1])),
+                ],
+                BrushNode::Leaf { .. } => [None; 3],
+            }
+            .into_iter()
+            .flatten()
+        })
+        .context("brush trees")
+    }
+
     /// Per BSP node, the union of its leaves' brush boxes (`CLeaf::mins`,
     /// `maxs`) and AABB tree roots: the leaf tests a sweep runs under it
     /// ([`trace::Cx`]'s brush box cull and `CM_CullBox`) pass only for a
@@ -421,13 +476,6 @@ impl ClipMap {
             .map(|b| (b.mins, b.maxs))
             .collect()
     }
-
-    /// The brush contents bits [`trace`](Self::trace) and
-    /// [`point_contents`](Self::point_contents) read: the material's word
-    /// with 0x4 and 0x20000000 cleared (`CMod_LoadBrushes`).
-    pub fn brush_contents(&self, brush: usize) -> u32 {
-        self.brushes[brush].contents
-    }
 }
 
 impl WorldClip for ClipMap {
@@ -445,6 +493,10 @@ impl WorldClip for ClipMap {
 
     fn point_contents(&self, p: Vec3) -> u32 {
         ClipMap::point_contents(self, p)
+    }
+
+    fn shot_mask(&self) -> u32 {
+        MASK_SHOT
     }
 
     fn ladder_boxes(&self) -> Vec<(Vec3, Vec3)> {

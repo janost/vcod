@@ -35,13 +35,13 @@ pub struct RigCache {
 /// failed read or parse is remembered as `None`.
 #[derive(Default)]
 struct Parts {
-    weapons: HashMap<String, Option<Arc<HashMap<String, String>>>>,
+    weapons: HashMap<String, Option<Arc<xmodel::WeaponKeys>>>,
     models: HashMap<String, Option<Arc<model::Model>>>,
     anims: HashMap<String, Option<Arc<xanim::XAnim>>>,
 }
 
 impl Parts {
-    fn weapon(&mut self, fs: &dyn AssetSource, name: &str) -> Option<Arc<HashMap<String, String>>> {
+    fn weapon(&mut self, fs: &dyn AssetSource, name: &str) -> Option<Arc<xmodel::WeaponKeys>> {
         self.weapons
             .entry(name.to_string())
             .or_insert_with(|| {
@@ -160,7 +160,7 @@ fn load_with(
 fn load_anims(
     parts: &mut Parts,
     fs: &dyn AssetSource,
-    weapon: &HashMap<String, String>,
+    weapon: &xmodel::WeaponKeys,
     models: &[model::Model],
 ) -> Option<ViewWeapon> {
     let [hands, gun] = models else {

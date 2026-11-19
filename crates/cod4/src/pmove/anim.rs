@@ -706,7 +706,6 @@ mod tests {
             ground_plane: grounded,
             almost_ground_plane: grounded,
             ground_trace: Tr::default(),
-            impact_speed: 0.0,
             previous_origin: glam::Vec3::ZERO,
             previous_velocity: glam::Vec3::ZERO,
         };
@@ -726,21 +725,17 @@ mod tests {
             player_anim_type: 4,
             weapon_class: 0,
         };
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut p = crate::pmove::pin::Pin::bytes();
         let mut seen = std::collections::BTreeSet::new();
         let mut eat = |ps: &PlayerState| {
             seen.insert((ps.anim_movetype, ps.anim_strafing));
-            let words = [
-                u32::from(ps.anim_movetype),
-                u32::from(ps.anim_strafing),
-                ps.legs_anim,
-                ps.torso_anim,
-                ps.legs_timer as u32,
-                ps.torso_timer as u32,
-            ];
-            for b in words.iter().flat_map(|w| w.to_le_bytes()) {
-                h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
-            }
+            p.step();
+            p.u32("movetype", u32::from(ps.anim_movetype));
+            p.u32("strafing", u32::from(ps.anim_strafing));
+            p.u32("legs_anim", ps.legs_anim);
+            p.u32("torso_anim", ps.torso_anim);
+            p.i32("legs_timer", ps.legs_timer);
+            p.i32("torso_timer", ps.torso_timer);
         };
         let base = PlayerState {
             client_num: 1,
@@ -810,7 +805,7 @@ mod tests {
         // 63 (movetype, strafing) pairs: every walk, run, climb, sprint,
         // flinch and stumble the table names.
         assert_eq!(seen.len(), 63, "{seen:?}");
-        assert_eq!(h, 0xc22e_8d7d_3ea8_4bd1, "digest {h:#x}");
+        p.check("anim_footsteps_legs", 0xc22e_8d7d_3ea8_4bd1);
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! (`the_predictor_replays_uo_sprint_and_bipod`, below) under UO's rules.
 //!
 //! The fixtures are `--save-slope --probe-moves` runs of one movement script
-//! (`moves_script` in `crates/client/src/probe.rs`: jumps inside and past
+//! (`moves_script` in `crates/client/src/probe/scripts.rs`: jumps inside and past
 //! 1.5's jump penalty, crouch, prone, the prone press while running,
 //! strafes, hip and sighted shots) against the retail 1.1d server and the
 //! retail 1.5b server, tagged `moves-1.1` and `moves-1.5`, and two
@@ -23,17 +23,21 @@
 //! snapshots' origins match retail's to the bit, and `MOVES_INEXACT=1`
 //! each one that does not.
 //!
-//! Needs `COD_DIR`; without the paks it returns early.
+//! Needs `COD_DIR`; without the paks it returns early, save the taped
+//! replays at the end (docs/dev/testing.md, "Trace tapes").
 
 use std::collections::{BTreeMap, HashMap};
 use vcod_common::collision::CollisionWorld;
 use vcod_common::movetrace::MoveWorld;
 use vcod_common::net::msg::{self, NULL_USERCMD, UserCmd};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::patch::Arith;
 use vcod_common::pmove::predict::{self, Predicted};
 use vcod_common::pmove::{MoveRules, Stance};
 use vcod_common::testing::SlopeLine;
+use vcod_common::tracetape::Tape;
+
+use crate::common::tapes;
 use vcod_common::weapon::WeaponDef;
 
 const FIXTURE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/playerstate");
@@ -61,7 +65,7 @@ enum Line {
     Snap(Box<msg::PlayerState>, Option<[f32; 3]>),
 }
 
-fn parse(p: &Protocol, text: &str) -> Vec<Line> {
+fn parse(p: &Cod1Wire, text: &str) -> Vec<Line> {
     vcod_common::testing::parse_slope(p, text)
         .into_iter()
         .map(|l| match l {
@@ -224,7 +228,7 @@ impl Report {
 /// which `PM_UpdateViewAngles` composed them from, and its sight bit is
 /// `fWeaponPosFrac != 0`, as `SV_UserMove`'s base cmd (docs/protocol-1.1.md,
 /// "The base cmd is built from the playerstate").
-fn base_cmd(p: &Protocol, w: &msg::PlayerState) -> UserCmd {
+fn base_cmd(p: &Cod1Wire, w: &msg::PlayerState) -> UserCmd {
     let view = w.viewangles(p);
     let short = |i: usize| {
         let delta = w.field_i32(p, &format!("delta_angles[{i}]"));
@@ -241,10 +245,22 @@ fn base_cmd(p: &Protocol, w: &msg::PlayerState) -> UserCmd {
 
 /// Each snapshot rebuilt and predicted to the next one under `rules`.
 fn replay(
-    p: &Protocol,
+    p: &Cod1Wire,
     rules: MoveRules,
     lines: &[Line],
     world: &CollisionWorld,
+    weapons: &[Option<WeaponDef>],
+) -> Report {
+    replay_taped(p, rules, lines, world, None, weapons)
+}
+
+/// [`replay`], its traces recorded on or answered from `tape`.
+fn replay_taped(
+    p: &Cod1Wire,
+    rules: MoveRules,
+    lines: &[Line],
+    world: &CollisionWorld,
+    tape: Option<&Tape>,
     weapons: &[Option<WeaponDef>],
 ) -> Report {
     let cmds: Vec<UserCmd> = lines
@@ -284,6 +300,7 @@ fn replay(
         Arith::Kept
     });
     let mw = MoveWorld::bare(world);
+    let mw = tape.map_or(mw, |t| mw.with_tape(t));
     let mut report = Report {
         compared: 0,
         exact: 0,
@@ -387,7 +404,7 @@ fn print(name: &str, r: &Report) {
 
 struct Capture {
     file: &'static str,
-    protocol: &'static Protocol,
+    protocol: &'static Cod1Wire,
     rules: MoveRules,
 }
 
@@ -475,14 +492,14 @@ const SPEEDGRAV_1_1: &str = "mp_carentan-dm-slope-8ms-speedgrav-1.1.txt";
 const SPEEDGRAV_1_5: &str = "mp_carentan-dm-slope-8ms-speedgrav-1.5.txt";
 const SPEEDGRAV_UO: &str = "mp_carentan-dm-slope-8ms-speedgrav-uo.txt";
 /// The talk script (`--probe-talk`, `talk_script` in
-/// `crates/client/src/probe.rs`): the talk bit over the sight, a run, a
+/// `crates/client/src/probe/scripts.rs`): the talk bit over the sight, a run, a
 /// shot, a jump, a crouch and a prone crawl. 1.1 drops the sight under it,
 /// 1.5 and UO keep it (cod15-movement.md 5, "The talk button").
 const TALK_1_1: &str = "mp_carentan-dm-slope-8ms-talk-1.1.txt";
 const TALK_1_5: &str = "mp_carentan-dm-slope-8ms-talk-1.5.txt";
 const TALK_UO: &str = "mp_carentan-dm-slope-8ms-talk-uo.txt";
 /// The prone move key (`--probe-pronemove rifle`, `pronemove_script` in
-/// `crates/client/src/probe.rs`, springfield_mp): pressed prone under the
+/// `crates/client/src/probe/scripts.rs`, springfield_mp): pressed prone under the
 /// sight, in a rechamber and in a swing's windup, which
 /// `PM_InteruptWeaponWithProneMove` answers per patch (cod11-combat.md
 /// 1.13), then a prone press from a crouched walk back.
@@ -505,7 +522,7 @@ const PRONEMOVE_DEPLOY_CROUCH_UO: &str = "mp_carentan-dm-slope-8ms-pronemove-dep
 /// Fields a capture's replay may miss, with how many snapshots and why.
 /// The 1.5 captures replay under 1.5b's stored arithmetic
 /// (cod15-movement.md 7).
-const GAPS: &[(&str, &str, usize)] = &[];
+const GAPS: &[(&str, &str, &[i32])] = &[];
 
 fn setup() -> Option<(CollisionWorld, Vec<Option<WeaponDef>>)> {
     let fs = vcod_common::testing::game_fs()?;
@@ -557,15 +574,12 @@ fn the_predictor_replays_each_patch_under_its_own_rules() {
             c.file,
             r.compared
         );
-        for (field, misses) in &r.misses {
-            let allowed = GAPS
-                .iter()
-                .find(|(f, name, _)| *f == c.file && name == field)
-                .map_or(0, |g| g.2);
-            if misses.len() > allowed {
-                failures.push(format!("{}: {field} {} wrong", c.file, misses.len()));
-            }
-        }
+        let gaps = gaps_of(GAPS, c.file);
+        failures.extend(
+            over(&r, &gaps)
+                .into_iter()
+                .map(|f| format!("{}: {f}", c.file)),
+        );
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
@@ -667,11 +681,7 @@ fn the_predictor_replays_uo_prone_moves() {
         );
         print(file, &r);
         assert!(r.compared > 400, "{file}: only {} snapshots", r.compared);
-        let gaps: Vec<(&str, usize)> = PRONEMOVE_GAPS
-            .iter()
-            .filter(|(f, _, _)| *f == file)
-            .map(|&(_, name, n)| (name, n))
-            .collect();
+        let gaps = gaps_of(PRONEMOVE_GAPS, file);
         failures.extend(over(&r, &gaps).into_iter().map(|f| format!("{file}: {f}")));
     }
     assert!(failures.is_empty(), "{failures:#?}");
@@ -688,14 +698,30 @@ fn the_predictor_replays_uo_prone_moves() {
 ///   miss and the standing one misses the mirror image. The second deploy
 ///   comes as a turn's cone decays, and the stood body decays it at the
 ///   standing rate: `aimSpreadScale` off with the stance.
-const PRONEMOVE_GAPS: &[(&str, &str, usize)] = &[
-    (PRONEMOVE_DEPLOY_CROUCH_UO, "ducked", 2),
-    (PRONEMOVE_DEPLOY_CROUCH_UO, "stance", 2),
-    (PRONEMOVE_DEPLOY_CROUCH_UO, "viewHeightCurrent", 2),
-    (PRONEMOVE_DEPLOY_CROUCH_UO, "viewHeightLerpTarget", 2),
-    (PRONEMOVE_DEPLOY_CROUCH_UO, "viewHeightLerpTime", 2),
-    (PRONEMOVE_DEPLOY_CROUCH_UO, "viewHeightTarget", 2),
-    (PRONEMOVE_DEPLOY_CROUCH_UO, "aimSpreadScale", 1),
+const PRONEMOVE_GAPS: &[(&str, &str, &[i32])] = &[
+    (PRONEMOVE_DEPLOY_CROUCH_UO, "ducked", &[23490, 39491]),
+    (PRONEMOVE_DEPLOY_CROUCH_UO, "stance", &[23490, 39491]),
+    (
+        PRONEMOVE_DEPLOY_CROUCH_UO,
+        "viewHeightCurrent",
+        &[23490, 39491],
+    ),
+    (
+        PRONEMOVE_DEPLOY_CROUCH_UO,
+        "viewHeightLerpTarget",
+        &[23490, 39491],
+    ),
+    (
+        PRONEMOVE_DEPLOY_CROUCH_UO,
+        "viewHeightLerpTime",
+        &[23490, 39491],
+    ),
+    (
+        PRONEMOVE_DEPLOY_CROUCH_UO,
+        "viewHeightTarget",
+        &[23490, 39491],
+    ),
+    (PRONEMOVE_DEPLOY_CROUCH_UO, "aimSpreadScale", &[39491]),
 ];
 
 /// United Offensive's talk mask (`TALK_UO`), which keeps the sight as
@@ -717,7 +743,7 @@ fn the_predictor_replays_uo_talk() {
 const SPRINT_UO: &str = "mp_carentan-dm-slope-8ms-sprint-uo.txt";
 
 /// United Offensive's sprint and bipod (`--probe-sprint`, `sprint_script`
-/// in `crates/client/src/probe.rs`, docs/research/coduo-movement.md): a
+/// in `crates/client/src/probe/scripts.rs`, docs/research/coduo-movement.md): a
 /// sprint to exhaustion, its regeneration, sprint with every other gait,
 /// the bipod deployed prone, swung past its yaw cap, moved and fired, and
 /// broken down. The weapon defs are UO's, so this runs only with `COD_DIR`
@@ -744,7 +770,7 @@ fn the_predictor_replays_uo_sprint_and_bipod() {
 }
 
 /// The windows out of United Offensive's walled-in spawn rooms
-/// (`--probe-crouchjump`, `crouchjump_script` in `crates/client/src/probe.rs`,
+/// (`--probe-crouchjump`, `crouchjump_script` in `crates/client/src/probe/scripts.rs`,
 /// `client-probes/probe_crouchjump`, bot-navigation.md "Walled-in spawns"):
 /// a run at the wall under the window, a jump, crouch held in the air for
 /// a second (none in the `-stand` controls), then on through the window and
@@ -816,7 +842,7 @@ fn the_predictor_replays_uo_jumps_through_low_windows() {
 const AUTOFIRE_UO: &str = "mp_carentan-dm-slope-8ms-autofire-uo.txt";
 
 /// United Offensive's automatic fire (`--probe-autofire`, `autofire_script`
-/// in `crates/client/src/probe.rs`, docs/research/coduo-movement.md): the
+/// in `crates/client/src/probe/scripts.rs`, docs/research/coduo-movement.md): the
 /// mp44 held from the hip, held down the sight, then tapped. Needs
 /// `COD_DIR` at a UO install, as the sprint gate does.
 #[test]
@@ -868,19 +894,8 @@ fn the_predictor_replays_uo_seats() {
         assert!(seated > 400, "{file}: only {seated} seated snapshots");
         let r = replay(&PROTOCOL_V22, MoveRules::Uo, &lines, &world, &weapons);
         print(file, &r);
-        let failures: Vec<String> = r
-            .misses
-            .iter()
-            .filter(|(field, misses)| {
-                let allowed = SEAT_GAPS
-                    .iter()
-                    .find(|(f, name, _)| *f == file && name == *field)
-                    .map_or(0, |g| g.2);
-                misses.len() > allowed
-            })
-            .map(|(field, misses)| format!("{file}: {field} {} wrong", misses.len()))
-            .collect();
-        assert!(failures.is_empty(), "{failures:#?}");
+        let failures = over(&r, &gaps_of(SEAT_GAPS, file));
+        assert!(failures.is_empty(), "{file}: {failures:#?}");
 
         // The same capture with every seat taken off the playerstate must
         // miss the clamps and the sight: that is what shows the seat is
@@ -911,23 +926,19 @@ fn the_predictor_replays_uo_seats() {
 /// - `delta_angles` at each `nextvehslot`: the new seat's
 ///   `SetClientViewAngle` (game 0x8998d). `vehicle_ab` cannot compare it:
 ///   its absolute value rides the replaying client's own cmd angles.
-/// - `origin.z` and `velocity` on the exit's snapshot: `VEH_UnlinkPlayer`
-///   sets the body down at the dismount spot (`vehicle_ab`: origin, velocity).
 /// - On the tank, `aimSpreadScale` and `eventSequence` on the main gun's
 ///   snapshot: the driver's damage feedback from `Scr_Vehicle_Pain`
 ///   (`P_DamageFeedback`: count 44 onto the cone, `EV_PAIN` 100)
 ///   (`vehicle_ab`: `eventSequence`, `damageEvent`, `damageCount`).
 ///
 /// See docs/research/coduo-vehicles.md 7.
-const SEAT_GAPS: &[(&str, &str, usize)] = &[
-    (TANK_SEATS_UO, "delta_angles[0]", 2),
-    (TANK_SEATS_UO, "delta_angles[1]", 2),
-    (TANK_SEATS_UO, "origin.z", 1),
-    (TANK_SEATS_UO, "velocity", 1),
-    (TANK_SEATS_UO, "aimSpreadScale", 1),
-    (TANK_SEATS_UO, "eventSequence", 1),
-    (JEEP_SEATS_UO, "delta_angles[0]", 2),
-    (JEEP_SEATS_UO, "delta_angles[1]", 2),
+const SEAT_GAPS: &[(&str, &str, &[i32])] = &[
+    (TANK_SEATS_UO, "delta_angles[0]", &[33536, 41042]),
+    (TANK_SEATS_UO, "delta_angles[1]", &[33536, 41042]),
+    (TANK_SEATS_UO, "aimSpreadScale", &[32433]),
+    (TANK_SEATS_UO, "eventSequence", &[32433]),
+    (JEEP_SEATS_UO, "delta_angles[0]", &[32241, 39741]),
+    (JEEP_SEATS_UO, "delta_angles[1]", &[32241, 39741]),
 ];
 
 /// What the server makes of a driver's cmd bytes, off the tank capture
@@ -997,18 +1008,36 @@ fn uo_setup(text: &str, map: &str) -> Option<(CollisionWorld, Vec<Option<WeaponD
     Some((world, weapons))
 }
 
-/// The fields of `r` past what `gaps` allows them.
-fn over(r: &Report, gaps: &[(&str, usize)]) -> Vec<String> {
-    r.misses
-        .iter()
-        .filter(|(field, misses)| {
-            let allowed = gaps
-                .iter()
-                .find(|(name, _)| name == *field)
-                .map_or(0, |g| g.1);
-            misses.len() > allowed
-        })
-        .map(|(field, misses)| format!("{field} {} wrong", misses.len()))
+/// A gap: a field a replay misses and the commandTimes it misses it on.
+type Gap = (&'static str, &'static [i32]);
+
+/// Where `r` and `gaps` disagree: a miss off the list, or a listed one the
+/// replay no longer misses (drop it from the list).
+fn over(r: &Report, gaps: &[Gap]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (field, misses) in &r.misses {
+        let cts: Vec<i32> = misses
+            .iter()
+            .map(|m| m[3..m.find(':').unwrap()].parse().unwrap())
+            .collect();
+        let listed = gaps.iter().find(|g| g.0 == *field).map_or(&[][..], |g| g.1);
+        if cts != listed {
+            out.push(format!("{field} wrong at ct {cts:?}, listed {listed:?}"));
+        }
+    }
+    for (field, listed) in gaps {
+        if !r.misses.contains_key(field) {
+            out.push(format!("{field} listed at ct {listed:?} matches: drop it"));
+        }
+    }
+    out
+}
+
+/// The gaps `list` holds for the capture `file`, which names its key.
+fn gaps_of(list: &[(&str, &'static str, &'static [i32])], file: &str) -> Vec<Gap> {
+    list.iter()
+        .filter(|(f, _, _)| file.contains(f))
+        .map(|&(_, field, cts)| (field, cts))
         .collect()
 }
 
@@ -1019,7 +1048,7 @@ const UOFOOT: [&str; 3] = [
 ];
 
 /// United Offensive's mounts and grenade cook (`--probe-uofoot`,
-/// `uofoot_script` in `crates/client/src/probe.rs`, `client-probes/
+/// `uofoot_script` in `crates/client/src/probe/scripts.rs`, `client-probes/
 /// probe_uofoot`, docs/research/coduo-movement.md 11 and 12) on mp_foy: the
 /// mg30cal deployed standing on an `hmgstanding` brush, crouched on an
 /// `hmgcrouching` one and crouched at a script `trigger_mount` the client
@@ -1038,11 +1067,7 @@ fn the_predictor_replays_uo_mounts_and_cook() {
         let r = replay(&PROTOCOL_V22, MoveRules::Uo, &lines, &world, &weapons);
         print(file, &r);
         assert!(r.compared > 500, "{file}: only {} snapshots", r.compared);
-        let gaps: Vec<(&str, usize)> = UOFOOT_GAPS
-            .iter()
-            .filter(|(f, _, _)| file.contains(f))
-            .map(|&(_, name, n)| (name, n))
-            .collect();
+        let gaps = gaps_of(UOFOOT_GAPS, file);
         failures.extend(over(&r, &gaps).into_iter().map(|f| format!("{file}: {f}")));
     }
     assert!(failures.is_empty(), "{failures:#?}");
@@ -1055,24 +1080,24 @@ fn the_predictor_replays_uo_mounts_and_cook() {
 ///   `serverCursorHintVal` 0, which the predictor (and, by the same code,
 ///   the retail cgame) reads as a standing mount. The next snapshot puts
 ///   the stance right (coduo-movement.md, 11).
-const UOFOOT_GAPS: &[(&str, &str, usize)] = &[
-    ("mount", "ducked", 2),
-    ("mount", "stance", 2),
-    ("mount", "viewHeightCurrent", 2),
-    ("mount", "viewHeightLerpTarget", 2),
-    ("mount", "viewHeightLerpTime", 2),
-    ("mount", "viewHeightTarget", 2),
+const UOFOOT_GAPS: &[(&str, &str, &[i32])] = &[
+    ("mount", "ducked", &[21042, 36542]),
+    ("mount", "stance", &[21042, 36542]),
+    ("mount", "viewHeightCurrent", &[21042, 36542]),
+    ("mount", "viewHeightLerpTarget", &[21042, 36542]),
+    ("mount", "viewHeightLerpTime", &[21042, 36542]),
+    ("mount", "viewHeightTarget", &[21042, 36542]),
 ];
 
 /// Runs at, along and over mp_carentan's patches (`--probe-patchwalk`,
-/// `patchwalk_script` in `crates/client/src/probe.rs`, `client-probes/
+/// `patchwalk_script` in `crates/client/src/probe/scripts.rs`, `client-probes/
 /// probe_patchwalk`): a pole (patch 4), a pillar on terrain (11) and the
 /// row of posts round the square (97, 98, 133, 136 and their neighbours),
 /// on each server build, replayed under that build's rules and patch
 /// arithmetic (bsp-ibsp59-format.md, "Patch collision on 1.5 and UO").
 /// The 1.1 and 1.5 runs need `COD_DIR` at the 1.1 install, as the moves
 /// gate does; the UO ones at a UO install.
-const PATCHWALK: [(&str, &Protocol, MoveRules); 9] = [
+const PATCHWALK: [(&str, &Cod1Wire, MoveRules); 9] = [
     (
         "mp_carentan-dm-slope-8ms-patchwalk-pole-1.1.txt",
         &PROTOCOL_V1,
@@ -1145,7 +1170,7 @@ fn the_predictor_replays_walks_against_patches() {
 
 /// `lines` with every snapshot's `speed` and `gravity` put back to the
 /// stock 190 and 800.
-fn at_stock_speed_and_gravity(p: &Protocol, mut lines: Vec<Line>) -> Vec<Line> {
+fn at_stock_speed_and_gravity(p: &Cod1Wire, mut lines: Vec<Line>) -> Vec<Line> {
     let speed = msg::PlayerState::field_index(p, "speed").unwrap();
     let gravity = msg::PlayerState::field_index(p, "gravity").unwrap();
     for l in &mut lines {
@@ -1203,4 +1228,118 @@ fn the_predictor_replays_uo_at_maxspeed_and_gravity() {
     print("UO speedgrav at stock", &r);
     let off = r.count("origin.xy") + r.count("origin.z") + r.count("velocity");
     assert!(off > 100, "{off}");
+}
+
+/// The 1.1 captures replayed off trace tapes (docs/dev/testing.md, "Trace
+/// tapes"), with the gate's snapshot floor: the moves script's ground,
+/// air, crouch, prone and strafes, and the kerb patch walk's steps up and
+/// slides along the kerb.
+const TAPED: &[(&str, usize)] = &[
+    (MOVES_1_1, 500),
+    ("mp_carentan-dm-slope-8ms-patchwalk-kerb-1.1.txt", 300),
+];
+const TAPED_WEAPONS: &str = "weapons-moves-1.1.txt";
+
+/// A report as the tape's header keeps it: the replay must give it back.
+fn summary(r: &Report) -> Vec<String> {
+    let mut out = vec![format!("report compared {} exact {}", r.compared, r.exact)];
+    for (field, misses) in &r.misses {
+        out.extend(misses.iter().map(|m| format!("miss {field} {m}")));
+    }
+    out
+}
+
+/// `RECORD_TAPES=1` with `COD_DIR` at the 1.1 install: replays each taped
+/// capture against mp_carentan, writes its tape and the weapon list.
+fn record_tapes() {
+    let Some((world, weapons)) = setup().filter(|_| vcod_common::testing::game_fs_11().is_some())
+    else {
+        panic!("RECORD_TAPES needs COD_DIR at the 1.1 install");
+    };
+    let mut carried = std::collections::BTreeSet::new();
+    for &(file, _) in TAPED {
+        let text = std::fs::read_to_string(format!("{FIXTURE_DIR}/{file}")).unwrap();
+        let lines = parse(&PROTOCOL_V1, &text);
+        for l in &lines {
+            if let Line::Snap(w, _) = l {
+                carried.insert(w.field_i32(&PROTOCOL_V1, "weapon") as usize);
+            }
+        }
+        let tape = Tape::record();
+        let r = replay_taped(
+            &PROTOCOL_V1,
+            MoveRules::V1_1,
+            &lines,
+            &world,
+            Some(&tape),
+            &weapons,
+        );
+        let mut header = vec![
+            format!("{file} replayed under V1_1 on mp_carentan by moves_ab.rs"),
+            "RECORD_TAPES=1 rewrites it (docs/dev/testing.md, \"Trace tapes\")".to_owned(),
+        ];
+        header.extend(summary(&r));
+        std::fs::write(tapes::tape_path(file), tape.text(&header)).unwrap();
+        println!("{file}: {} queries", tape.len());
+    }
+    let fs = vcod_common::testing::game_fs_11().unwrap();
+    tapes::write_weapons(&fs, retail_cs7(), &carried, TAPED_WEAPONS);
+}
+
+/// The taped 1.1 captures replayed with no install: every trace and point
+/// contents pmove asks is answered off the capture's tape, and the replay
+/// must give the report the live gate gave when the tape was recorded, and
+/// pass the gate's own checks. A query off the tape stops the replay
+/// there: a change that moves what pmove traces needs `RECORD_TAPES=1`.
+#[test]
+fn the_taped_captures_replay_without_the_paks() {
+    if tapes::recording() {
+        record_tapes();
+    }
+    let weapons = tapes::read_weapons(TAPED_WEAPONS);
+    // The tape answers every query; this world only carries the arithmetic.
+    let world = vcod_common::collision::test_world(&[]);
+    let mut failures = Vec::new();
+    for &(file, floor) in TAPED {
+        let text = std::fs::read_to_string(format!("{FIXTURE_DIR}/{file}")).unwrap();
+        let tape_text = std::fs::read_to_string(tapes::tape_path(file)).unwrap();
+        let tape = Tape::replay(&tape_text);
+        let r = replay_taped(
+            &PROTOCOL_V1,
+            MoveRules::V1_1,
+            &parse(&PROTOCOL_V1, &text),
+            &world,
+            Some(&tape),
+            &weapons,
+        );
+        print(file, &r);
+        assert_eq!(tape.remaining(), 0, "{file}: queries left on the tape");
+        assert_eq!(
+            summary(&r),
+            tapes::recorded(&tape_text, &["report ", "miss "]),
+            "{file}: not the recorded report"
+        );
+        assert!(r.compared > floor, "{file}: only {} snapshots", r.compared);
+        failures.extend(over(&r, &[]).into_iter().map(|f| format!("{file}: {f}")));
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// The moves capture replayed on the kerb walk's tape stops at the first
+/// query, the one the two runs ask differently.
+#[test]
+#[should_panic(expected = "trace tape: query 1 (line")]
+fn a_tape_from_another_capture_stops_at_the_first_query() {
+    let weapons = tapes::read_weapons(TAPED_WEAPONS);
+    let world = vcod_common::collision::test_world(&[]);
+    let text = std::fs::read_to_string(format!("{FIXTURE_DIR}/{MOVES_1_1}")).unwrap();
+    let tape = Tape::replay(&std::fs::read_to_string(tapes::tape_path(TAPED[1].0)).unwrap());
+    replay_taped(
+        &PROTOCOL_V1,
+        MoveRules::V1_1,
+        &parse(&PROTOCOL_V1, &text),
+        &world,
+        Some(&tape),
+        &weapons,
+    );
 }

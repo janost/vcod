@@ -298,7 +298,6 @@ impl SunShafts {
 }
 
 impl Targets {
-    #[allow(clippy::too_many_arguments)]
     fn new(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,

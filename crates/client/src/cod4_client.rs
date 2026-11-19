@@ -1,12 +1,12 @@
 //! A watched or played CoD4 session on screen, `App`'s `Session::Cod4`:
 //! the session's clock, its view on the camera, its entities as dynamic
 //! models and brush models, its events and obituaries on the console, the
-//! binds into its cmds and the server's script menus as a list
+//! binds into its cmds and the server's script menus (`cod4_menu::quads`)
 //! (`play::cod4` holds the session; this draws it and feeds it keys).
 //!
-//! A player or corpse is posed (`play::cod4_players`); any other entity
-//! whose xmodel a zone holds draws it in its bind pose, one with none its
-//! type's box.
+//! A player or corpse is posed (`play::cod4_players`), a mounted gun or a
+//! vehicle by `cod4_vehicles`; any other entity whose xmodel a zone holds
+//! draws in its bind pose, one with none its type's box.
 
 use glam::{Mat4, Quat, Vec3};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -22,6 +22,7 @@ use crate::cod4_audio::{self, Cod4Sounds};
 use crate::cod4_fly::WeaponModels;
 use crate::cod4_fx::{self, Cod4Effects};
 use crate::cod4_hud::Cod4Hud;
+use crate::cod4_loading::{Loader, MapLoaded};
 use crate::cod4_vehicles::Cod4Vehicles;
 use crate::cod4_viewmodel::{Cod4View, tag_to_world};
 use crate::console;
@@ -64,8 +65,8 @@ pub(crate) struct Cod4Client {
     /// What the bodies are posed from; `None` leaves them in the bind pose.
     bodies: Option<BodySource>,
     players: Cod4Players,
-    /// The last frame's drawn counts (models, brush models, bodies posed)
-    /// and server time, for F3.
+    /// The last frame's drawn counts (models, brush models, bodies posed),
+    /// for F3.
     drawn: (usize, usize, usize),
     /// The last frame's drawn angles by entity, the axes its voices turn
     /// with ([`Self::entity_angles`]).
@@ -142,6 +143,9 @@ pub(crate) struct Cod4Client {
     /// Voice chat's codec, microphone and talker streams, made on the
     /// first live frame (`crate::voice`).
     voice: Option<crate::voice::VoiceChat>,
+    /// A map change loading on its worker ([`Self::start_map_load`]), and
+    /// when it started (the loading screen's dots).
+    map_load: Option<(Loader<MapLoaded>, Instant)>,
     /// Each fire event's client-side rounds as the effects took them, for
     /// the tests.
     #[cfg(test)]
@@ -192,7 +196,6 @@ impl FlyKeys {
 /// The fired events' sounds, each player shot's fire sound's length then
 /// holding the shooter's compass ping (`CG_FireWeapon`,
 /// cod4-hud.md 15.9), placed by `at` (`cod4_audio::place`).
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn play_event_cues(
     audio: &mut crate::audio::AudioSystem,
     fs: &vcod_common::pk3::Pk3Fs,
@@ -216,8 +219,6 @@ pub(crate) fn play_event_cues(
     }
 }
 
-/// The client of a player's `EV_FIRE_WEAPON` or `_LASTSHOT`, the shots
-/// whose fire sound `CG_CompassAddWeaponPingInfo` takes the length of.
 /// `VCOD_PERF_TURN`'s yaw rate, degrees a second; read once.
 fn perf_turn() -> Option<f32> {
     static RATE: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
@@ -231,6 +232,8 @@ fn no_dynents() -> bool {
     *OFF.get_or_init(|| std::env::var("VCOD_NO_DYNENTS").is_ok_and(|v| v == "1"))
 }
 
+/// The client of a player's `EV_FIRE_WEAPON` or `_LASTSHOT`, the shots
+/// whose fire sound `CG_CompassAddWeaponPingInfo` takes the length of.
 fn shot_client(f: &Fired) -> Option<usize> {
     let e = f.state.as_ref()?;
     (matches!(f.name, "EV_FIRE_WEAPON" | "EV_FIRE_WEAPON_LASTSHOT")
@@ -239,7 +242,6 @@ fn shot_client(f: &Fired) -> Option<usize> {
 }
 
 impl Cod4Client {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         session: Cod4Session,
         models: HashMap<String, Model>,
@@ -309,16 +311,45 @@ impl Cod4Client {
             dof: Default::default(),
             ads_dof: None,
             voice: None,
+            map_load: None,
             #[cfg(test)]
             rounds_seen: Vec::new(),
         }
+    }
+
+    /// The map a new gamestate names
+    /// ([`crate::play::cod4::Cod4Session::take_map_change`]) loads on a
+    /// worker under the loading screen. The session is not read until
+    /// [`Self::take_map_load`] hands the load over, as when the window's
+    /// thread loaded it: the same packets go out once it lands.
+    pub(crate) fn start_map_load(&mut self, game_dir: &std::path::Path, map: String) {
+        let l = Loader::start_map(
+            game_dir.to_path_buf(),
+            map,
+            self.session.gametype(),
+            self.session.fs_game(),
+            self.session.entity_assets(),
+        );
+        self.map_load = Some((l, Instant::now()));
+    }
+
+    /// The map change's load, once it lands; the session runs again.
+    pub(crate) fn take_map_load(&mut self) -> Option<anyhow::Result<MapLoaded>> {
+        let done = self.map_load.as_mut()?.0.poll()?;
+        self.map_load = None;
+        Some(done)
+    }
+
+    /// The loading screen while a map change loads.
+    pub(crate) fn map_load_quads(&mut self, size: (f32, f32)) -> Option<Vec<crate::hud::HudQuad>> {
+        let (l, t0) = self.map_load.as_mut()?;
+        Some(l.quads(size, t0.elapsed().as_millis() as i32))
     }
 
     /// A map change (`play::cod4::Cod4Session::take_map_change`): the new
     /// map's entity models, weapons, bodies, sounds and effects,
     /// prediction world and look in place of the last map's; every
     /// renderer handle and the zones' menus start over.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_map(
         &mut self,
         models: HashMap<String, Model>,
@@ -399,13 +430,6 @@ impl Cod4Client {
         }
     }
 
-    /// A key while a script menu is up: the arrows and Tab move the
-    /// focus, Enter runs it, Esc the menu's `onEsc`, a character its
-    /// `execKey` (on the list, 1-9 pick); the rest go on to the binds,
-    /// which the cmds leave out while the menu is up (`talking`). With
-    /// none up, Esc opens the team menu (`g_scriptMainMenu`) and goes on
-    /// to free the mouse. `None` when the session has no menus to show (a
-    /// capture).
     /// A key with the chat field open: Enter sends `say <line>` or
     /// `say_team <line>` as `CL_KeyEvent`'s chat arm does,
     /// Escape drops it; with none open the script menus take it
@@ -428,6 +452,13 @@ impl Cod4Client {
         Some(true)
     }
 
+    /// A key while a script menu is up: the arrows and Tab move the
+    /// focus, Enter runs it, Esc the menu's `onEsc`, a character its
+    /// `execKey` (on the list, 1-9 pick); the rest go on to the binds,
+    /// which the cmds leave out while the menu is up (`talking`). With
+    /// none up, Esc opens the team menu (`g_scriptMainMenu`) and goes on
+    /// to free the mouse. `None` when the session has no menus to show (a
+    /// capture).
     pub(crate) fn menu_key(&mut self, code: winit::keyboard::KeyCode) -> Option<bool> {
         use crate::play::cod4_menus::MenuKey;
         use winit::keyboard::KeyCode;
@@ -541,6 +572,10 @@ impl Cod4Client {
     /// snapshot yet (the camera flies).
     pub(crate) fn pump(&mut self, cx: &mut Cod2Frame, cam: &mut FlyCamera) -> bool {
         use crate::frame_prof::{Stage, span};
+        // The camera holds behind the loading screen (`Session::scene`).
+        if self.map_load.is_some() {
+            return true;
+        }
         let mut prof = span(Stage::Net);
         let now = self.now_ms(cx.dt);
         if let Some(fx) = &mut self.effects {
@@ -898,7 +933,7 @@ impl Cod4Client {
             .client()
             .snapshots
             .last()
-            .map_or(0, |s| s.server_time);
+            .map_or(0, |s| s.server_time.raw());
         self.hud
             .update(&mut self.session, &fired, at.max(self.render_time));
         // `playLocalSound`'s `s`: the leader dialog, the announcer.
@@ -1078,6 +1113,7 @@ impl Cod4Client {
         // `CG_AddViewWeapon` draws nothing in third person (0x45704e): the
         // own shots flash and leave from the body's gun.
         if scene.third_person.is_some() {
+            self.view_weapon.undrawn(out);
             return;
         }
         // `CG_PlayClientSoundAliasByName`: the clip's mapped notetracks.
@@ -1129,7 +1165,6 @@ impl Cod4Client {
         cx.r.set_cod4_dof(dof);
     }
 
-    /// This frame's view weapon, once.
     /// Whether a snapshot's view has been drawn, the game frame
     /// `--exec-in-game` waits for.
     pub(crate) fn in_game(&self) -> bool {
@@ -1142,6 +1177,7 @@ impl Cod4Client {
         self.view_ps.as_ref()
     }
 
+    /// This frame's view weapon, once.
     pub(crate) fn take_view(&mut self) -> Option<ViewFrame> {
         self.vm.take()
     }
@@ -1655,8 +1691,15 @@ impl Cod4Client {
         };
         for &(i, origin, rot) in &scene.dynents {
             let name = &w.dynents[i as usize].model;
-            let model = self.models.get(name).cloned();
-            let Some(handle) = self.upload(cx, name, || model) else {
+            // Checked first: a model clone for an uploaded name is only dropped.
+            let handle = match self.uploaded.get(name) {
+                Some(h) => *h,
+                None => {
+                    let model = self.models.get(name).cloned();
+                    self.upload(cx, name, || model)
+                }
+            };
+            let Some(handle) = handle else {
                 continue;
             };
             out.push(DynamicModelInstance {
@@ -1851,8 +1894,7 @@ impl Cod4Client {
             .filter_map(|d| Some((d.number, d.body.as_ref()?)))
             .collect();
         if let Some(gs) = self.session.gamestate() {
-            self.players.lean =
-                crate::play::cod4_predict::lean_from_mirror(|i| gs.configstring(i).to_vec());
+            self.players.lean = crate::play::cod4_predict::lean_from_mirror(|i| gs.configstring(i));
         }
         // Each gunner's gun as drawn: its model's two tags at the bind and
         // its weapon's column step.
@@ -2005,6 +2047,9 @@ impl Cod4Client {
         (yaw, pitch, roll): (f32, f32, f32),
         size: (f32, f32),
     ) {
+        if self.map_load.is_some() {
+            return;
+        }
         let up = crate::camera::up_hint(yaw, pitch, roll);
         let fwd = crate::camera::basis(yaw, pitch).0;
         let right = fwd.cross(up).normalize();
@@ -2174,7 +2219,6 @@ impl Cod4Client {
         Some(self.effects.as_ref()?.named.clone())
     }
 
-    /// The fire events' rounds so far ([`RoundsSeen`]).
     /// The model keys uploaded so far, and the bodies the last pump posed.
     #[cfg(test)]
     pub(crate) fn uploads(&self) -> (BTreeSet<String>, usize) {
@@ -2187,6 +2231,7 @@ impl Cod4Client {
         self.menus_loaded
     }
 
+    /// The fire events' rounds so far ([`RoundsSeen`]).
     #[cfg(test)]
     pub(crate) fn take_rounds_seen(&mut self) -> Vec<RoundsSeen> {
         std::mem::take(&mut self.rounds_seen)
@@ -2875,5 +2920,56 @@ mod saw_tests {
             log::warn!("wgpu: {e}");
         }
         (Some(seen), watch.finish())
+    }
+}
+
+#[cfg(test)]
+mod new_map_tests {
+    use super::*;
+
+    const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../cod4/tests/fixtures/net");
+
+    /// A map change keeps no renderer handle, menu load, camera turn or
+    /// view weapon tags of the last map, and takes the new map's parts and
+    /// bodies' movetypes (none here) in place of the last's.
+    #[test]
+    fn a_new_map_drops_the_last_maps_handles_and_takes_its_parts() {
+        let text =
+            std::fs::read_to_string(format!("{FIXTURES}/play-1.7-csb0-shooter.txt")).unwrap();
+        let s = Cod4Session::open_capture(&text).unwrap();
+        let parts = |name: &str| crate::cod4_fly::Parts::from([(name.to_string(), vec![[1; 4]])]);
+        let mut c = Cod4Client::new(
+            s,
+            HashMap::new(),
+            parts("old"),
+            HashMap::new(),
+            None,
+            None,
+            None,
+            Default::default(),
+        );
+        c.uploaded.insert("xmodel/old".into(), None);
+        c.menus_loaded = true;
+        c.cam_left = Some((10.0, 20.0));
+        c.view_tags = Some((3, Default::default()));
+        c.session.legs_movetypes = Some(std::sync::Arc::from([1u64]));
+        c.new_map(
+            HashMap::new(),
+            parts("new"),
+            HashMap::new(),
+            None,
+            None,
+            None,
+            Default::default(),
+        );
+        assert!(c.uploaded.is_empty(), "the last map's handles");
+        assert!(!c.menus_loaded, "the zones' menus load again");
+        assert_eq!(c.cam_left, None);
+        assert!(c.view_tags.is_none());
+        assert_eq!(c.parts.keys().collect::<Vec<_>>(), ["new"]);
+        assert!(
+            c.session.legs_movetypes.is_none(),
+            "no bodies, no movetypes"
+        );
     }
 }

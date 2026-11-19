@@ -3,11 +3,21 @@
 //! through as `print\n` packets. Numbers and captures are in
 //! docs/research/cod11-server-handshake.md, "rcon".
 
+use std::collections::HashMap;
+use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
-/// One rcon of any verdict per this window, server-wide (`cmp eax,0x1f3`
-/// at 0x808c423). A dropped request does not restart it.
+/// One rcon of any verdict per this window (`cmp eax,0x1f3` at 0x808c423).
+/// Retail keeps one window for the whole server; vcod keeps one per source
+/// address. A dropped request does not restart it.
 pub const INTERVAL: Duration = Duration::from_millis(500);
+/// vcod's: wrong passwords an address may send before it is dropped.
+const FAIL_BURST: f32 = 8.0;
+/// vcod's: how fast an address's wrong-password count drains.
+const FAIL_DRAIN: Duration = Duration::from_secs(30);
+/// vcod's: addresses tracked at once. Past it, a request whose password is
+/// wrong from an address not tracked is dropped without a reply.
+const MAX_TRACKED: usize = 4096;
 /// `SV_OUTPUTBUF_LENGTH` (`push 0x3ff0` at 0x808c526).
 pub const OUTPUT_BUF: usize = 0x3ff0;
 /// The rebuilt command line's buffer (`0x400` at 0x808c5c7).
@@ -48,10 +58,13 @@ pub enum Verdict {
     Run(Option<String>),
 }
 
-/// The global `lasttime`.
+/// `lasttime`, per source address, and each address's wrong passwords.
 #[derive(Default)]
 pub struct Rcon {
-    last: Option<Instant>,
+    last: HashMap<IpAddr, Instant>,
+    /// A leaky bucket: one per wrong password, draining one per
+    /// [`FAIL_DRAIN`]; at [`FAIL_BURST`] the address gets no answer.
+    fails: HashMap<IpAddr, (f32, Instant)>,
 }
 
 impl Verdict {
@@ -71,22 +84,77 @@ impl Verdict {
 
 impl Rcon {
     /// `args` is the packet tokenized whole: `rcon`, the password, then the
-    /// command's own tokens.
-    pub fn check(&mut self, password: &str, args: &[String], now: Instant) -> Verdict {
+    /// command's own tokens. `from` is the sender's address.
+    pub fn check(
+        &mut self,
+        password: &str,
+        args: &[String],
+        from: IpAddr,
+        now: Instant,
+    ) -> Verdict {
         if self
             .last
-            .is_some_and(|t| now.saturating_duration_since(t) < INTERVAL)
+            .get(&from)
+            .is_some_and(|&t| now.saturating_duration_since(t) < INTERVAL)
+            || self.fail_level(from, now) >= FAIL_BURST
         {
             return Verdict::Limited;
         }
-        self.last = Some(now);
         let given = args.get(1).map_or("", String::as_str);
-        if password.is_empty() {
+        let verdict = if password.is_empty() {
             Verdict::NoPassword
         } else if given != password {
             Verdict::BadPassword
         } else {
             Verdict::Run(command_line(args.get(2..).unwrap_or(&[])))
+        };
+        if self.last.len() >= MAX_TRACKED || self.fails.len() >= MAX_TRACKED {
+            self.prune(now);
+        }
+        let tracked = self.last.contains_key(&from) || self.fails.contains_key(&from);
+        let full = self.last.len() >= MAX_TRACKED || self.fails.len() >= MAX_TRACKED;
+        if full && !tracked && !matches!(verdict, Verdict::Run(_)) {
+            return Verdict::Limited;
+        }
+        self.last.insert(from, now);
+        if verdict == Verdict::BadPassword {
+            let level = self.fail_level(from, now);
+            self.fails.insert(from, (level + 1.0, now));
+        }
+        verdict
+    }
+
+    /// `from`'s wrong passwords, drained to `now`.
+    fn fail_level(&self, from: IpAddr, now: Instant) -> f32 {
+        self.fails.get(&from).map_or(0.0, |&(n, at)| {
+            let drained =
+                now.saturating_duration_since(at).as_secs_f32() / FAIL_DRAIN.as_secs_f32();
+            (n - drained).max(0.0)
+        })
+    }
+
+    /// Forgets the addresses whose window has passed and whose bucket is
+    /// empty.
+    fn prune(&mut self, now: Instant) {
+        self.last
+            .retain(|_, t| now.saturating_duration_since(*t) < INTERVAL);
+        let drained = |&(n, at): &(f32, Instant)| {
+            n - now.saturating_duration_since(at).as_secs_f32() / FAIL_DRAIN.as_secs_f32() > 0.0
+        };
+        self.fails.retain(|_, v| drained(v));
+    }
+}
+
+/// The line every game logs before it answers: `Rcon from %s:\n%s` or
+/// `Bad rcon from %s:\n%s` with the third token (1.1d 0x80d5ae3 and
+/// 0x80d5acd, CoD4 1.7 cod4-handshake.md 14.2); none for a dropped request.
+pub fn log_line(verdict: &Verdict, from: std::net::SocketAddr, args: &[String]) -> Option<String> {
+    let shown = args.get(2).map_or("", String::as_str);
+    match verdict {
+        Verdict::Limited => None,
+        Verdict::Run(_) => Some(format!("Rcon from {from}:\n{shown}")),
+        Verdict::NoPassword | Verdict::BadPassword => {
+            Some(format!("Bad rcon from {from}:\n{shown}"))
         }
     }
 }
@@ -155,24 +223,100 @@ mod tests {
         let t = Instant::now();
         let mut r = Rcon::default();
         let a = args(&["rcon", "wrong", "status"]);
-        assert_eq!(r.check("secret", &a, t), Verdict::BadPassword);
+        assert_eq!(r.check("secret", &a, A, t), Verdict::BadPassword);
         assert_eq!(
-            r.check("secret", &a, t + Duration::from_millis(499)),
+            r.check("secret", &a, A, t + Duration::from_millis(499)),
             Verdict::Limited
         );
         // The dropped one did not move the window.
         let good = args(&["rcon", "secret", "status"]);
         assert_eq!(
-            r.check("secret", &good, t + INTERVAL),
+            r.check("secret", &good, A, t + INTERVAL),
             Verdict::Run(Some("status ".into()))
         );
+    }
+
+    const A: IpAddr = IpAddr::V4(std::net::Ipv4Addr::new(198, 51, 100, 2));
+    const B: IpAddr = IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 9));
+
+    #[test]
+    fn a_flood_of_bad_passwords_from_one_address_leaves_another_s_window() {
+        let t = Instant::now();
+        let mut r = Rcon::default();
+        let bad = args(&["rcon", "guess", "status"]);
+        let good = args(&["rcon", "secret", "status"]);
+        for ms in (0..2000).step_by(5) {
+            let at = t + Duration::from_millis(ms);
+            r.check("secret", &bad, A, at);
+            if ms % 600 == 0 {
+                assert_eq!(
+                    r.check("secret", &good, B, at),
+                    Verdict::Run(Some("status ".into())),
+                    "{ms} ms"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_burst_of_wrong_passwords_drops_the_address_until_it_drains() {
+        let t = Instant::now();
+        let mut r = Rcon::default();
+        let bad = args(&["rcon", "guess", "status"]);
+        let good = args(&["rcon", "secret", "status"]);
+        let mut at = t;
+        // The bucket drains a little between the tries, so the last fills it.
+        for _ in 0..=FAIL_BURST as u32 {
+            assert_eq!(r.check("secret", &bad, A, at), Verdict::BadPassword);
+            at += INTERVAL;
+        }
+        assert_eq!(r.check("secret", &good, A, at), Verdict::Limited);
+        assert_eq!(r.check("secret", &bad, A, at + INTERVAL), Verdict::Limited);
+        let later = at + FAIL_DRAIN * 2;
+        assert_eq!(
+            r.check("secret", &good, A, later),
+            Verdict::Run(Some("status ".into()))
+        );
+    }
+
+    #[test]
+    fn spoofed_sources_stay_bounded_and_the_password_still_gets_in() {
+        let t = Instant::now();
+        let mut r = Rcon::default();
+        let bad = args(&["rcon", "guess", "status"]);
+        for i in 0..20_000u32 {
+            let ip = IpAddr::V4(std::net::Ipv4Addr::from(0x0a00_0000 + i));
+            r.check("secret", &bad, ip, t);
+        }
+        assert!(r.last.len() <= MAX_TRACKED && r.fails.len() <= MAX_TRACKED);
+        assert_eq!(
+            r.check("secret", &args(&["rcon", "secret", "status"]), B, t),
+            Verdict::Run(Some("status ".into()))
+        );
+    }
+
+    #[test]
+    fn every_answered_request_logs_its_verdict_and_third_token() {
+        let from: std::net::SocketAddr = "198.51.100.2:28960".parse().unwrap();
+        let a = args(&["rcon", "pw", "status"]);
+        assert_eq!(
+            log_line(&Verdict::Run(None), from, &a).as_deref(),
+            Some("Rcon from 198.51.100.2:28960:\nstatus")
+        );
+        for v in [Verdict::BadPassword, Verdict::NoPassword] {
+            assert_eq!(
+                log_line(&v, from, &a).as_deref(),
+                Some("Bad rcon from 198.51.100.2:28960:\nstatus")
+            );
+        }
+        assert_eq!(log_line(&Verdict::Limited, from, &a), None);
     }
 
     #[test]
     fn an_empty_password_refuses_everything() {
         let mut r = Rcon::default();
         assert_eq!(
-            r.check("", &args(&["rcon", "", "status"]), Instant::now()),
+            r.check("", &args(&["rcon", "", "status"]), A, Instant::now()),
             Verdict::NoPassword
         );
     }

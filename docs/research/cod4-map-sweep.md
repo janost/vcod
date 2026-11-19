@@ -331,14 +331,17 @@ expression error and no problem debug line in any of the 105 pairs.
    level after the first (mp_backlot 3332 -> 3562, mp_bog 3147 -> 3890
    over four levels). Fixed: a live session sheds down to the newest 1200
    (one minute at 20 snapshots a second) once it holds 2400
-   (`Client::shed`, `KEEP_SNAPSHOTS`). A capture or a demo keeps all of
-   its snapshots. After the fix, a level after the first moves the
+   (`Client::shed`, `KEEP_SNAPSHOTS`); a demo sheds the same way (it
+   only reads forward), and a capture keeps all of its snapshots, which
+   tests index by number. After the fix, a level after the first moves the
    resident set by -1262 to +183 MB, with no growth from level to level.
    Retail's client holds `cl.snapshots[PACKET_BACKUP]`, a ring of 32
    (INFERRED, the Q3 lineage's ; not read out of iw3mp.exe).
-   Gate: `play::cod4::tests::cod4_live_session_sheds_old_snapshots_and_plays_on`
+   Gate: `play::cod4::tests::live_session::cod4_live_session_sheds_old_snapshots_and_plays_on`
    (a live join on vcod-server sheds at 80, fires, and the clock, scene
-   and own fire events carry on).
+   and own fire events carry on) and
+   `play::cod4::tests::demo::cod4_demo_sheds_old_snapshots_and_plays_on` (a
+   retail demo shed at 80 fires the events it fires unshed).
 2. The fx pass loaded an effect material's images the first frame it
    drew it, and the mark pass built a mark material (images, stage bind
    groups, a pipeline per blend) the first frame a mark of it landed. A

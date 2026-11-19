@@ -37,7 +37,6 @@ use common::{ADDR, ClientEnd, FRAME_MS, Join, Queues, holding, step_at};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use vcod_common::net::protocol::PROTOCOL_V6;
 use vcod_common::net::{NetClient, NetEvent};
 use vcod_common::pk3::Pk3Fs;
 
@@ -76,17 +75,13 @@ fn run_once(
 ) -> Option<Ours> {
     let (name, source) = probe;
     let p = vcod_server::server::install_protocol(&fs);
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, name), now);
-    sv.set_protocol(p);
-    sv.overlay_script(&format!("maps/mp/gametypes/{name}"), source);
-    for (k, v) in cvars {
-        sv.set_cvar(k, v);
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        cvars,
+        script: Some(source),
+        ..common::Boot::new(MAP, name)
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     let mut hold = common::ProbeHold {
         base: Some([0.0; 3]),
         framed: true,
@@ -125,7 +120,7 @@ fn run_once(
             }
         }
         if let Some(s) = cl.snapshots().newest() {
-            first_snap.get_or_insert(s.server_time);
+            first_snap.get_or_insert(s.server_time.raw());
         }
         if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
             break;
@@ -144,13 +139,6 @@ fn probe_lines<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<String> {
         .filter(|l| !l.starts_with('#'))
         .filter_map(|l| l.find("PROBE ").map(|i| l[i..].trim_end().to_string()))
         .collect()
-}
-
-/// A 1.5 install's paks, `None` at any other.
-fn fs_15() -> Option<Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    (vcod_server::server::install_protocol(&fs).transport.version == PROTOCOL_V6.transport.version)
-        .then_some(fs)
 }
 
 /// Replays `fixture` on ours under `cvars` and holds every `PROBE` line to
@@ -247,17 +235,17 @@ fn a_trigger_hurt_kill_before_a_hard_landing_matches_retail() {
 #[test]
 fn a_trigger_hurt_corpse_falls_like_retail_15() {
     replay_on(
-        fs_15,
+        vcod_common::testing::game_fs_15,
         "tests/fixtures/triggers/mp_carentan-dm-hurtfall-1.5.txt",
         &[],
     );
     replay_on(
-        fs_15,
+        vcod_common::testing::game_fs_15,
         "tests/fixtures/triggers/mp_carentan-dm-hurtlow-1.5.txt",
         &[("probe_late_lift", "203")],
     );
     replay_on(
-        fs_15,
+        vcod_common::testing::game_fs_15,
         "tests/fixtures/triggers/mp_carentan-dm-hurtland-1.5.txt",
         &[("probe_lift", "120")],
     );
@@ -321,17 +309,17 @@ fn a_once_trigger_hurt_hurts_once_without_a_sound() {
 #[test]
 fn a_trigger_hurt_cadence_matches_retail_15() {
     replay_on(
-        fs_15,
+        vcod_common::testing::game_fs_15,
         "tests/fixtures/triggers/mp_carentan-dm-hurtrate-1.5.txt",
         RATE,
     );
     replay_on(
-        fs_15,
+        vcod_common::testing::game_fs_15,
         "tests/fixtures/triggers/mp_carentan-dm-hurtslow-1.5.txt",
         SLOW,
     );
     replay_on(
-        fs_15,
+        vcod_common::testing::game_fs_15,
         "tests/fixtures/triggers/mp_carentan-dm-hurtonce-1.5.txt",
         ONCE,
     );
@@ -394,12 +382,12 @@ fn a_trigger_hurt_refuses_a_write_of_its_read_only_fields() {
 #[test]
 fn a_trigger_hurt_use_and_write_match_retail_15() {
     replay_on(
-        fs_15,
+        vcod_common::testing::game_fs_15,
         "tests/fixtures/triggers/mp_carentan-dm-hurtuse-1.5.txt",
         USE,
     );
     replay_with(
-        fs_15,
+        vcod_common::testing::game_fs_15,
         HURTFALL,
         "tests/fixtures/triggers/mp_carentan-dm-hurtwrite-1.5.txt",
         WRITE,
@@ -444,7 +432,7 @@ const FAR: &[(&str, &str)] = &[
 fn a_script_spawned_trigger_hurt_touches_through_its_world_copy() {
     replay("tests/fixtures/triggers/mp_carentan-dm-hurtfar.txt", FAR);
     replay_on(
-        fs_15,
+        vcod_common::testing::game_fs_15,
         "tests/fixtures/triggers/mp_carentan-dm-hurtfar-1.5.txt",
         FAR,
     );
@@ -530,7 +518,7 @@ fn use_by_runs_each_entity_s_use_like_retail() {
         unpatched,
     );
     replay_alone(
-        fs_15,
+        vcod_common::testing::game_fs_15,
         "tests/fixtures/triggers/mp_carentan-dm-useby-1.5.txt",
         &[],
         unpatched,
@@ -570,7 +558,7 @@ fn a_used_trigger_hurt_with_a_life_is_freed_like_retail() {
         hurtlife_bsp,
     );
     replay_alone(
-        fs_15,
+        vcod_common::testing::game_fs_15,
         "tests/fixtures/triggers/mp_carentan-dm-hurtlife-1.5.txt",
         LIFE,
         hurtlife_bsp,
@@ -597,7 +585,7 @@ fn use_by_on_a_sine_mover_runs_use_binary_mover_like_retail() {
         unpatched,
     );
     replay_alone(
-        fs_15,
+        vcod_common::testing::game_fs_15,
         "tests/fixtures/triggers/mp_carentan-dm-usesine-1.5.txt",
         SINE,
         unpatched,
@@ -724,7 +712,7 @@ fn use_by_on_a_misc_spawner_drops_its_item_like_retail() {
         prep(true),
     );
     replay_alone_with(
-        fs_15,
+        vcod_common::testing::game_fs_15,
         "tests/fixtures/triggers/mp_carentan-dm-usespawner-1.5.txt",
         SPAWNER,
         spawner_bsp,
@@ -757,7 +745,7 @@ fn use_by_on_a_turret_mounts_the_player_like_retail() {
         Hold::All,
     );
     replay_with(
-        fs_15,
+        vcod_common::testing::game_fs_15,
         USEBY,
         &format!("{fixture}-1.5.txt"),
         TURRET,

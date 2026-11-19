@@ -28,6 +28,8 @@ pub const DEFAULT_MASTER: Master = COD1_MASTER;
 pub const HEARTBEAT_GAME: &str = "COD-1";
 /// CoD2's `SV_MasterHeartbeat("COD-2")` (cod2_lnxded 0x8096ed6).
 pub const HEARTBEAT_GAME_COD2: &str = "COD-2";
+/// CoD4's `SV_MasterHeartbeat("COD-4")` (cod4_lnxded 0x81780e4).
+pub const HEARTBEAT_GAME_COD4: &str = "COD-4";
 pub const FLATLINE: &str = "flatline";
 pub const MAX_MASTERS: usize = 5;
 
@@ -128,6 +130,26 @@ impl Masters {
         if self.names[i] != name {
             self.names[i] = name.to_string();
             self.dirty[i] = true;
+        }
+    }
+
+    /// CoD2 and CoD4, whose retail servers have no `sv_master` dvars: reads
+    /// `sv_master1..5` through `get` before each beat, an empty
+    /// `sv_master1` standing for `default`. A name that failed to resolve
+    /// comes back from its cvar and is tried again at the next beat.
+    pub fn sync_cvars<'a>(&mut self, default: &str, get: impl Fn(&str) -> &'a str) {
+        const NAMES: [&str; MAX_MASTERS] = [
+            "sv_master1",
+            "sv_master2",
+            "sv_master3",
+            "sv_master4",
+            "sv_master5",
+        ];
+        for (i, name) in NAMES.into_iter().enumerate() {
+            match get(name) {
+                "" if i == 0 => self.set(i, default),
+                v => self.set(i, v),
+            }
         }
     }
 

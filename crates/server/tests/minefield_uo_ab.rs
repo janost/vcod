@@ -14,7 +14,7 @@ use crate::common;
 use common::{ADDR, ADDR_B, ClientEnd, Queues};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::NetClient;
 use vcod_common::net::event_ids::EV_SOUND_ALIAS;
 use vcod_common::net::events::EventTracker;
@@ -48,7 +48,7 @@ impl Seen {
             .filter(|e| e.field_i32(p, "eType") == 1)
         {
             let base = [0, 1, 2].map(|i| e.field_f32(p, &format!("pos.trBase[{i}]")));
-            self.victim.push((s.server_time, base));
+            self.victim.push((s.server_time.raw(), base));
         }
         for ev in tracker.drain(s, p) {
             let model = ev.entity_num != VICTIM && ev.entity_num != u32::MAX;
@@ -87,15 +87,13 @@ fn ours() -> Seen {
     let fs = vcod_common::testing::uo_fs().unwrap();
     let src = format!("../gsc/tests/fixtures/semantics/client-probes/{PROBE}.gsc");
     let probe = std::fs::read_to_string(src).expect("read the probe");
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, PROBE), now);
-    sv.set_protocol(&PROTOCOL_V22);
-    sv.set_cvar("probe_field", "1");
-    sv.overlay_script(&format!("maps/mp/gametypes/{PROBE}"), &probe);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&PROTOCOL_V22),
+        cvars: &[("probe_field", "1")],
+        script: Some(&probe),
+        ..common::Boot::new(MAP, PROBE)
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
@@ -130,7 +128,7 @@ fn ours() -> Seen {
                 .newest()
                 .filter(|s| s.ps.field_i32(&PROTOCOL_V22, "pm_type") == 0);
             if let (None, Some(s)) = (&hold, live) {
-                let shift = spawned - s.server_time;
+                let shift = spawned - s.server_time.raw();
                 hold = Some(common::ProbeHold {
                     aim: true,
                     framed: true,
@@ -174,9 +172,9 @@ fn ours() -> Seen {
             v.pump_at(now);
         }
         if let Some(s) = watcher.snapshots().newest()
-            && last != Some(s.server_time)
+            && last != Some(s.server_time.raw())
         {
-            last = Some(s.server_time);
+            last = Some(s.server_time.raw());
             seen.take(&mut tracker, s);
         }
     }

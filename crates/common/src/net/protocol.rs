@@ -8,11 +8,11 @@
 //! the HUD block.
 
 pub use super::cod1::{
-    CS_ALLIES_SCORE, CS_AXIS_SCORE, CS_CVAR_NAMES, CS_CVAR_VALUES, CS_EFFECTS, CS_FOG_V1,
-    CS_FX_TAGS, CS_HINT_STRINGS, CS_LAYOUT_V1, CS_LAYOUT_V22, CS_LEVEL_START_TIME, CS_LOCALIZED,
-    CS_MATCH_TIMEOUT_TEXT_V6, CS_MATCH_TIMEOUT_V6, CS_MODELS_V1, CS_NORTHYAW, CS_SHADERS,
-    CS_SOUNDS, CS_TAGS_V1, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, install_protocol,
-    install_protocol_of,
+    CS_ALLIES_SCORE, CS_AXIS_SCORE, CS_CVAR_NAMES_V1, CS_CVAR_VALUES_V1, CS_EFFECTS_V1, CS_FOG_V1,
+    CS_FX_TAGS_V1, CS_HINT_STRINGS_V1, CS_LAYOUT_V1, CS_LAYOUT_V22, CS_LEVEL_START_TIME_V1,
+    CS_LOCALIZED_V1, CS_MATCH_TIMEOUT_TEXT_V6, CS_MATCH_TIMEOUT_V6, CS_MODELS_V1, CS_NORTHYAW,
+    CS_SHADERS_V1, CS_SOUNDS_V1, CS_TAGS_V1, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22,
+    install_protocol, install_protocol_of, patch_warning_of,
 };
 pub use super::cod1::{Cod1Wire, CursorHints};
 pub use super::codec::{ANGLE_BITS, FieldCodec, NetField};
@@ -29,10 +29,6 @@ pub struct HudWire {
     /// the widest protocol's.
     pub fields: usize,
 }
-
-/// CoD1's descriptor under its old name, for the call sites that predate
-/// [`Cod1Wire`].
-pub type Protocol = Cod1Wire;
 
 /// `<near> <far> <density> <r> <g> <b> <fadeTime ms>`. `density > 1`
 /// selects linear farclip fog across near..far; otherwise GL_EXP at that
@@ -133,7 +129,8 @@ impl CsRange {
         CsRange::Shader,
     ];
 
-    /// Inclusive, in 1.1's layout (the one vcod's server writes).
+    /// Inclusive, in 1.1's layout ([`CS_LAYOUT_V1`]); another version's are
+    /// its own layout's ([`CsLayout::bounds`]).
     pub const fn bounds(self) -> (usize, usize) {
         CS_LAYOUT_V1.bounds(self)
     }

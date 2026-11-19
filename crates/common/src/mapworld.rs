@@ -14,7 +14,7 @@ pub const NO_LIGHTMAP: u16 = 65535;
 #[derive(Debug, Clone)]
 pub struct Material {
     pub name: String,
-    /// Unused; surfaces are skipped by material name.
+    /// `SURF_*` bits; the client's impact marks read `SURF_NOMARKS`.
     #[allow(dead_code)]
     pub surface_flags: u32,
     pub content_flags: u32,
@@ -49,7 +49,7 @@ pub struct Plane {
 #[derive(Debug, Clone)]
 pub struct BrushSide {
     /// Sides 0..6: f32 axial bound, bit-cast. Sides 6..: index into
-    /// `MapWorld::planes`. Decoded in collision.rs.
+    /// `MapWorld::planes`. Decoded in collision/build.rs.
     pub plane_or_dist: u32,
     /// Index into `MapWorld::materials`: the side's own material, whose surface
     /// flags a trace stopping on this side reports.
@@ -237,7 +237,7 @@ impl Pvs {
     }
 
     /// Whether a viewer in `from` can be shown something in `to`. A cluster
-    /// outside the table -- which is what a solid leaf's -1 is -- is visible,
+    /// outside the table (which is what a solid leaf's -1 is) is visible,
     /// matching the engine: its own test only ever runs on real clusters.
     pub fn visible(&self, from: i32, to: i32) -> bool {
         let (Ok(f), Ok(t)) = (usize::try_from(from), usize::try_from(to)) else {
@@ -682,7 +682,10 @@ impl Visibility {
 
     /// The leaf a point falls in, by walking the tree from node 0. The engine
     /// descends the same way for its camera cell (`0x4e2be0`): a point on the
-    /// plane takes the back child.
+    /// plane takes the back child. That address is the client renderer's;
+    /// the dedicated server's snapshot cull calls this too, and the server's
+    /// own tie rule is unread ([`crate::leafwalk::LeafWalk::leaf_at`] takes
+    /// Q3's front child).
     pub fn leaf_at(&self, p: [f32; 3]) -> Option<&Leaf> {
         if self.nodes.is_empty() {
             return self.leafs.first();
@@ -1068,9 +1071,7 @@ mod pvs_tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let Some(bytes) = fs.read("maps/mp/mp_pavlov.bsp") else {
-            return;
-        };
+        let bytes = crate::testing::stock_file(&fs, "maps/mp/mp_pavlov.bsp");
         let b = parse(&bytes).expect("parse the bsp");
         let pvs = b.pvs.as_ref().expect("mp_pavlov ships a pvs");
         let highest = b.leafs.iter().map(|l| l.cluster).max().unwrap_or(-1);

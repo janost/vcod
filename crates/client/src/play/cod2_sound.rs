@@ -7,15 +7,17 @@
 //! `p`, `q`, `r` and `D`.
 
 use std::collections::HashMap;
+use vcod_common::net::Msec;
 
+use crate::audio::cod2::atof;
 use glam::Vec3;
 use vcod_cod2::net::events as ev;
 use vcod_cod2::net::{ConfigStrings, Frame, SnapshotView};
-use vcod_common::pk3::Pk3Fs;
 
 use crate::audio::blend::BlendSource;
 use crate::audio::cues::{Cue, Source};
 use crate::play::cod2_events::{Event2, surface_name};
+use crate::play::cod2_weapons::LevelWeapons;
 
 /// `ps.pm_flags` bits under which the cgame plays the `_plr` (first
 /// person) aliases for the playerstate's own entity (`CG_EntityEvent`,
@@ -77,16 +79,6 @@ pub enum SoundCommand {
 fn wire_ms(s: &str) -> i32 {
     let v = (atof(s) * 1000.0 + 0.5).floor() as i32;
     v.max(0)
-}
-
-/// C's `atof` over a server command's word: the longest leading number.
-fn atof(s: &str) -> f32 {
-    let s = s.trim_start();
-    (1..=s.len())
-        .rev()
-        .filter(|&n| s.is_char_boundary(n))
-        .find_map(|n| s[..n].parse::<f32>().ok())
-        .unwrap_or(0.0)
 }
 
 /// `CG_ServerCommand`'s sound arms, keyed like the rest on the first
@@ -162,7 +154,7 @@ pub(crate) fn muzzle_point(snap: &SnapshotView, shooter: i32, view: Vec3) -> Opt
         return Some(view);
     }
     let e = snap.entity(u32::try_from(shooter).ok()?)?;
-    let origin = e.pos.evaluate(snap.server_time);
+    let origin = e.pos.evaluate_f32(snap.server_time.raw());
     if shooter >= 64 {
         return Some(origin);
     }
@@ -174,74 +166,33 @@ pub(crate) fn muzzle_point(snap: &SnapshotView, shooter: i32, view: Vec3) -> Opt
     Some(origin + Vec3::Z * up)
 }
 
-/// The `*Sound` keys of the weapon files, by 1-based weapon index; `None`
-/// when the file did not read.
+/// What the sounds keep across frames; the weapon files' `*Sound` keys
+/// come off the session's [`LevelWeapons`].
 #[derive(Default)]
 pub struct Cod2Sounds {
-    weapons: HashMap<i32, Option<HashMap<String, String>>>,
     /// The drawn bodies' world `tag_flash` by entity
     /// (`cod2_scene::Cod2Draw::muzzles`), where a fire sound and a
     /// whizby start.
     pub muzzles: HashMap<u32, Vec3>,
 }
 
+/// Weapon `index`'s string key `key`, trimmed, `None` when blank or the
+/// file did not load.
+fn key(weapons: &LevelWeapons, index: i32, key: &str) -> Option<String> {
+    Some(weapons.get(index)?.def.str(key).trim())
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
+/// The first of `keys` set in weapon `index`'s file.
+fn first_key(weapons: &LevelWeapons, index: i32, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|k| key(weapons, index, k))
+}
+
 impl Cod2Sounds {
-    /// Forget the weapon files: a new gamestate's list may differ.
-    pub fn clear(&mut self) {
-        self.weapons.clear();
-    }
-
-    /// Weapon `index`'s file under `weapons/mp/`, read once.
-    fn weapon(
-        &mut self,
-        fs: Option<&Pk3Fs>,
-        cs: &ConfigStrings,
-        index: i32,
-    ) -> Option<&HashMap<String, String>> {
-        if index <= 0 {
-            return None;
-        }
-        let fs = fs?;
-        self.weapons
-            .entry(index)
-            .or_insert_with(|| {
-                let name = cs.weapon_name(index)?;
-                let text = fs.read(&format!("weapons/mp/{name}"))?;
-                Some(vcod_common::xmodel::parse_weapon(&String::from_utf8_lossy(
-                    &text,
-                )))
-            })
-            .as_ref()
-    }
-
-    /// A weapon key's alias, `None` when blank.
-    fn key(
-        &mut self,
-        fs: Option<&Pk3Fs>,
-        cs: &ConfigStrings,
-        index: i32,
-        key: &str,
-    ) -> Option<String> {
-        self.weapon(fs, cs, index)?
-            .get(key)
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-    }
-
-    /// The first of `keys` set in the weapon file.
-    fn first_key(
-        &mut self,
-        fs: Option<&Pk3Fs>,
-        cs: &ConfigStrings,
-        index: i32,
-        keys: &[&str],
-    ) -> Option<String> {
-        keys.iter().find_map(|k| self.key(fs, cs, index, k))
-    }
-
     /// `CG_EntityEvent`'s sounds (Mac 0x1e4650) for `e` on the snapshot
-    /// `snap`, heard at `view` (the whizby's eye). `fs` reads the weapon
-    /// files; without it the weapon sounds are skipped. An alias the table
+    /// `snap`, heard at `view` (the whizby's eye). `weapons` holds the
+    /// weapon files; without one the weapon's sounds are skipped. An alias the table
     /// lacks is left for the audio system to count as a miss, as
     /// `Com_FindSoundAlias` leaves a null.
     pub fn cues(
@@ -249,7 +200,7 @@ impl Cod2Sounds {
         e: &Event2,
         snap: &SnapshotView,
         cs: &ConfigStrings,
-        fs: Option<&Pk3Fs>,
+        weapons: &LevelWeapons,
         view: Vec3,
     ) -> Vec<Cue> {
         let on_ent = |alias: String| Cue {
@@ -296,79 +247,68 @@ impl Cod2Sounds {
         if !out.is_empty() {
             return out;
         }
-        let pick = |me: &mut Self, keys: &[&str]| me.first_key(fs, cs, w, keys);
+        let pick = |keys: &[&str]| first_key(weapons, w, keys);
         let alias = match e.event {
             ev::EV_FOLIAGE_SOUND => Some("movement_foliage".to_string()),
             // The item index is the weapon's (`CG_RegisterWeapon`).
-            ev::EV_ITEM_PICKUP => Some(
-                self.key(fs, cs, e.parm, "pickupSound")
-                    .unwrap_or_else(|| "weap_pickup".into()),
-            ),
+            ev::EV_ITEM_PICKUP => {
+                Some(key(weapons, e.parm, "pickupSound").unwrap_or_else(|| "weap_pickup".into()))
+            }
             ev::EV_AMMO_PICKUP => Some(
-                self.key(fs, cs, e.parm, "ammoPickupSound")
+                key(weapons, e.parm, "ammoPickupSound")
                     .unwrap_or_else(|| "weap_ammo_pickup".into()),
             ),
             ev::EV_NOAMMO => {
-                let clip_only = self.key(fs, cs, w, "clipOnly").is_some_and(|v| v != "0");
+                let clip_only = weapons.get(w).is_some_and(|d| d.def.flag("clipOnly"));
                 (!clip_only).then(|| "player_out_of_ammo".to_string())
             }
-            ev::EV_RELOAD if plr => pick(
-                self,
-                &[
-                    "reloadSoundPlayer",
-                    "reloadEmptySoundPlayer",
-                    "reloadSound",
-                    "reloadEmptySound",
-                ],
-            ),
-            ev::EV_RELOAD => pick(self, &["reloadSound", "reloadEmptySound"]),
-            ev::EV_RELOAD_FROM_EMPTY if plr => pick(
-                self,
-                &[
-                    "reloadEmptySoundPlayer",
-                    "reloadSoundPlayer",
-                    "reloadEmptySound",
-                    "reloadSound",
-                ],
-            ),
-            ev::EV_RELOAD_FROM_EMPTY => pick(self, &["reloadEmptySound", "reloadSound"]),
-            ev::EV_RELOAD_START if plr => {
-                pick(self, &["reloadStartSoundPlayer", "reloadStartSound"])
-            }
-            ev::EV_RELOAD_START => pick(self, &["reloadStartSound"]),
-            ev::EV_RELOAD_END if plr => pick(self, &["reloadEndSoundPlayer", "reloadEndSound"]),
-            ev::EV_RELOAD_END => pick(self, &["reloadEndSound"]),
+            ev::EV_RELOAD if plr => pick(&[
+                "reloadSoundPlayer",
+                "reloadEmptySoundPlayer",
+                "reloadSound",
+                "reloadEmptySound",
+            ]),
+            ev::EV_RELOAD => pick(&["reloadSound", "reloadEmptySound"]),
+            ev::EV_RELOAD_FROM_EMPTY if plr => pick(&[
+                "reloadEmptySoundPlayer",
+                "reloadSoundPlayer",
+                "reloadEmptySound",
+                "reloadSound",
+            ]),
+            ev::EV_RELOAD_FROM_EMPTY => pick(&["reloadEmptySound", "reloadSound"]),
+            ev::EV_RELOAD_START if plr => pick(&["reloadStartSoundPlayer", "reloadStartSound"]),
+            ev::EV_RELOAD_START => pick(&["reloadStartSound"]),
+            ev::EV_RELOAD_END if plr => pick(&["reloadEndSoundPlayer", "reloadEndSound"]),
+            ev::EV_RELOAD_END => pick(&["reloadEndSound"]),
             ev::EV_RAISE_WEAPON => {
-                Some(pick(self, &["raiseSound"]).unwrap_or_else(|| "weap_raise".into()))
+                Some(pick(&["raiseSound"]).unwrap_or_else(|| "weap_raise".into()))
             }
             ev::EV_PUTAWAY_WEAPON => {
-                Some(pick(self, &["putawaySound"]).unwrap_or_else(|| "weap_putaway".into()))
+                Some(pick(&["putawaySound"]).unwrap_or_else(|| "weap_putaway".into()))
             }
-            ev::EV_WEAPON_ALT => pick(self, &["altSwitchSound"]),
-            ev::EV_PULLBACK_WEAPON => pick(self, &["pullbackSound"]),
-            ev::EV_RECHAMBER_WEAPON if plr => {
-                pick(self, &["rechamberSoundPlayer", "rechamberSound"])
-            }
-            ev::EV_RECHAMBER_WEAPON => pick(self, &["rechamberSound"]),
-            ev::EV_MELEE_SWIPE => pick(self, &["meleeSwipeSound"]),
+            ev::EV_WEAPON_ALT => pick(&["altSwitchSound"]),
+            ev::EV_PULLBACK_WEAPON => pick(&["pullbackSound"]),
+            ev::EV_RECHAMBER_WEAPON if plr => pick(&["rechamberSoundPlayer", "rechamberSound"]),
+            ev::EV_RECHAMBER_WEAPON => pick(&["rechamberSound"]),
+            ev::EV_MELEE_SWIPE => pick(&["meleeSwipeSound"]),
             _ => None,
         };
         if let Some(a) = alias {
             return vec![on_ent(a)];
         }
-        let fire = |me: &mut Self, last: bool| {
+        let fire = |last: bool| {
             let fire = match plr {
-                true => pick(me, &["fireSoundPlayer", "fireSound"]),
-                false => pick(me, &["fireSound"]),
+                true => pick(&["fireSoundPlayer", "fireSound"]),
+                false => pick(&["fireSound"]),
             };
             let last_shot = match plr {
-                true => pick(me, &["lastShotSoundPlayer", "lastShotSound"]),
-                false => pick(me, &["lastShotSound"]),
+                true => pick(&["lastShotSoundPlayer", "lastShotSound"]),
+                false => pick(&["lastShotSound"]),
             };
             if last { last_shot.or(fire) } else { fire }
         };
         let surf = surface_name(e.surf);
-        let explosion = |me: &mut Self| pick(me, &["projExplosionSound"]);
+        let explosion = || pick(&["projExplosionSound"]);
         // `CG_FireWeapon` (Mac 0x1d823c) plays on the entity from its world
         // `tag_flash`, carried with it; the first-person body's is the
         // view weapon's, and a body without the tag plays at its
@@ -384,12 +324,12 @@ impl Cod2Sounds {
         };
         match e.event {
             ev::EV_FIRE_WEAPON | ev::EV_FIRE_WEAPONB | ev::EV_FIRE_WEAPON_MG42 => {
-                out.extend(fire(self, false).map(at_flash));
+                out.extend(fire(false).map(at_flash));
             }
-            ev::EV_FIRE_WEAPON_LASTSHOT => out.extend(fire(self, true).map(at_flash)),
+            ev::EV_FIRE_WEAPON_LASTSHOT => out.extend(fire(true).map(at_flash)),
             ev::EV_FIRE_QUADBARREL_1 | ev::EV_FIRE_QUADBARREL_2 => {
                 for _ in 0..2 {
-                    out.extend(fire(self, false).map(at_flash));
+                    out.extend(fire(false).map(at_flash));
                 }
             }
             ev::EV_MELEE_HIT => out.push(Cue {
@@ -448,16 +388,19 @@ impl Cod2Sounds {
             ev::EV_GRENADE_BOUNCE => out.push(at_point(format!("grenade_bounce_{surf}"))),
             ev::EV_GRENADE_EXPLODE => {
                 out.push(at_point(format!("grenade_explode_{surf}")));
-                out.extend(explosion(self).map(at_point));
+                out.extend(explosion().map(at_point));
             }
             ev::EV_ROCKET_EXPLODE | ev::EV_ROCKET_EXPLODE_NOMARKS => {
                 out.push(at_point(format!("rocket_explode_{surf}")));
-                out.extend(explosion(self).map(at_point));
+                out.extend(explosion().map(at_point));
             }
             // Played unless the entity carries eFlags 0x10000 and the
             // blast is 50 ms old or more.
-            ev::EV_CUSTOM_EXPLODE if e.eflags & 0x10000 == 0 || snap.server_time - e.time < 50 => {
-                out.extend(explosion(self).map(at_point));
+            ev::EV_CUSTOM_EXPLODE
+                if e.eflags & 0x10000 == 0
+                    || snap.server_time.since(Msec::from_raw(e.time)) < 50 =>
+            {
+                out.extend(explosion().map(at_point));
             }
             ev::EV_GRENADE_SUICIDE => out.push(at_point("grenade_explode_default".into())),
             _ => {}
@@ -478,7 +421,7 @@ impl Cod2Sounds {
     /// `es.time` is reached, unless `eFlags` 0x20. The engine's looping
     /// dedupe keeps one voice each. Returns the loop sounds keyed by
     /// index and the missiles' keyed by weapon.
-    pub fn loops(&mut self, frame: &Frame, fs: Option<&Pk3Fs>) -> (LoopSounds, LoopSounds) {
+    pub fn loops(&self, frame: &Frame, weapons: &LevelWeapons) -> (LoopSounds, LoopSounds) {
         let cs = frame.configstrings;
         let (mut loops, mut missiles) = (HashMap::new(), HashMap::new());
         for e in &frame.snap.entities {
@@ -497,7 +440,7 @@ impl Cod2Sounds {
                 loops.insert(e.number, (idx, alias, pos));
             }
             if missile {
-                let alias = self.key(fs, cs, e.weapon, "projectileSound");
+                let alias = key(weapons, e.weapon, "projectileSound");
                 missiles.insert(e.number, (e.weapon, alias, pos));
             }
         }
@@ -590,6 +533,14 @@ mod tests {
     use vcod_cod2::net::delta::EntityState2;
     use vcod_cod2::net::oob::{self, Reply};
     use vcod_cod2::net::{Client, NetView};
+    use vcod_common::pk3::Pk3Fs;
+
+    /// The weapon files `fs` gives `cs`'s CS 7.
+    fn weapons_of(fs: &Pk3Fs, cs: &ConfigStrings) -> LevelWeapons {
+        let mut w = LevelWeapons::default();
+        w.ensure(fs, cs);
+        w
+    }
 
     const FIXTURE: &[u8] = include_bytes!("../../../cod2/tests/fixtures/mp_toujane-spectate.bin");
 
@@ -612,6 +563,7 @@ mod tests {
         let mut view = NetView::default();
         let mut tracker = EventTracker::default();
         let mut sounds = Cod2Sounds::default();
+        let mut weapons = LevelWeapons::default();
         let mut events = Vec::new();
         let mut cues = Vec::new();
         for (dir, p) in &cap.packets {
@@ -641,9 +593,18 @@ mod tests {
             let Some(cur) = view.prev.as_ref().or(view.snap.as_ref()) else {
                 continue;
             };
+            if let Some(fs) = fs {
+                weapons.ensure(fs, &view.configstrings);
+            }
             for e in tracker.transition(cur) {
-                for c in sounds.cues(&e, cur, &view.configstrings, fs, Vec3::from(cur.ps.eye())) {
-                    cues.push((cur.server_time, e.entity, c.alias));
+                for c in sounds.cues(
+                    &e,
+                    cur,
+                    &view.configstrings,
+                    &weapons,
+                    Vec3::from(cur.ps.eye()),
+                ) {
+                    cues.push((cur.server_time.raw(), e.entity, c.alias));
                 }
                 events.push((e.entity, ev::event_name(e.event).unwrap_or("?")));
             }
@@ -677,7 +638,7 @@ mod tests {
     fn bullet_hits_play_their_rows_aliases() {
         let snap = vcod_cod2::net::SnapshotView {
             message_num: 1,
-            server_time: 100,
+            server_time: Msec::from_raw(100),
             snap_flags: 0,
             ps: vcod_cod2::net::PlayerView::new(&Default::default(), 0),
             entities: Vec::new(),
@@ -702,7 +663,7 @@ mod tests {
                 angles: Vec3::ZERO,
                 from_ps: false,
             };
-            let c = sounds.cues(&e, &snap, &cs, None, Vec3::ZERO);
+            let c = sounds.cues(&e, &snap, &cs, &LevelWeapons::default(), Vec3::ZERO);
             assert_eq!(c.len(), 1);
             c[0].alias.clone()
         };
@@ -749,7 +710,7 @@ mod tests {
             weapon,
             surf,
             other_entity: 1,
-            time: cur.server_time,
+            time: cur.server_time.raw(),
             scale: 0,
             angles2: [0.0; 2],
             pos: Vec3::ZERO,
@@ -760,6 +721,7 @@ mod tests {
         let frag = weapon("frag_grenade_german_mp");
         let dirt = 6;
         let mut heard = Vec::new();
+        let weapons = weapons_of(&fs, cs);
         for e in [
             at(ev::EV_FIRE_WEAPON, kar, 0),
             at(ev::EV_RECHAMBER_WEAPON, kar, 0),
@@ -774,7 +736,7 @@ mod tests {
             at(ev::EV_SHOTGUN_HIT, kar, dirt),
             at(ev::EV_BULLET_HIT_CLIENT_SMALL, kar, 7),
         ] {
-            let c = sounds.cues(&e, cur, cs, Some(&fs), Vec3::ZERO);
+            let c = sounds.cues(&e, cur, cs, &weapons, Vec3::ZERO);
             assert!(!c.is_empty(), "{:?}", ev::event_name(e.event));
             heard.extend(c.into_iter().map(|c| c.alias));
         }
@@ -816,7 +778,7 @@ mod tests {
     fn snap_of(ents: &[EntityState2], t: i32) -> SnapshotView {
         SnapshotView {
             message_num: t,
-            server_time: t,
+            server_time: Msec::from_raw(t),
             snap_flags: 0,
             ps: vcod_cod2::net::PlayerView::new(&Default::default(), 0),
             entities: ents.iter().map(vcod_cod2::net::EntityView::new).collect(),
@@ -867,7 +829,7 @@ mod tests {
         let mut sounds = Cod2Sounds::default();
         let mut heard = |e: Event2, snap: &SnapshotView| -> Vec<(String, u32)> {
             sounds
-                .cues(&e, snap, &cs, None, Vec3::ZERO)
+                .cues(&e, snap, &cs, &LevelWeapons::default(), Vec3::ZERO)
                 .into_iter()
                 .map(|c| {
                     let num = match c.source {
@@ -1011,7 +973,13 @@ mod tests {
         e.pos = hit;
         let mut sounds = Cod2Sounds::default();
         let cs = ConfigStrings::default();
-        let c = sounds.cues(&e, &snap, &cs, None, Vec3::new(500.0, 100.0, 0.0));
+        let c = sounds.cues(
+            &e,
+            &snap,
+            &cs,
+            &LevelWeapons::default(),
+            Vec3::new(500.0, 100.0, 0.0),
+        );
         let got: Vec<_> = c
             .iter()
             .map(|c| (c.alias.as_str(), c.source.pos()))
@@ -1027,7 +995,13 @@ mod tests {
         let mut own = snap_of(&[], 100);
         own.ps.pm_flags = PMF_FIRST_PERSON;
         own.ps.client_num = 2;
-        let c = sounds.cues(&e, &own, &cs, None, Vec3::new(500.0, 100.0, 0.0));
+        let c = sounds.cues(
+            &e,
+            &own,
+            &cs,
+            &LevelWeapons::default(),
+            Vec3::new(500.0, 100.0, 0.0),
+        );
         assert_eq!(c.len(), 1);
     }
 
@@ -1085,7 +1059,7 @@ mod tests {
             frac: 1.0,
             configstrings: &cs,
         };
-        let (loops, missiles) = Cod2Sounds::default().loops(&frame, None);
+        let (loops, missiles) = Cod2Sounds::default().loops(&frame, &LevelWeapons::default());
         assert_eq!(
             loops.get(&80),
             Some(&(7, Some("bomb_tick".to_string()), Vec3::new(1.0, 2.0, 3.0)))
@@ -1117,12 +1091,13 @@ mod tests {
         first.ps.pm_flags = PMF_FIRST_PERSON;
         first.ps.client_num = 3;
         let mut sounds = Cod2Sounds::default();
+        let weapons = weapons_of(&fs, &cs);
         let mut heard = |ev_num: i32, weapon: i32, snap: &SnapshotView| -> Vec<String> {
             let mut e = event(3, ev_num, 6);
             e.weapon = weapon;
             e.parm = weapon;
             sounds
-                .cues(&e, snap, &cs, Some(&fs), Vec3::ZERO)
+                .cues(&e, snap, &cs, &weapons, Vec3::ZERO)
                 .into_iter()
                 .map(|c| c.alias)
                 .collect()
@@ -1512,11 +1487,12 @@ mod tests {
         first.ps.client_num = 3;
         let flash = Vec3::new(10.0, 20.0, 50.0);
         let mut sounds = Cod2Sounds::default();
+        let weapons = weapons_of(&fs, &cs);
         let mut e = event(3, ev::EV_FIRE_WEAPON, 0);
         e.weapon = 1;
         e.pos = Vec3::new(10.0, 0.0, 0.0);
         let source = |sounds: &mut Cod2Sounds, snap: &SnapshotView| {
-            let c = sounds.cues(&e, snap, &cs, Some(&fs), Vec3::ZERO);
+            let c = sounds.cues(&e, snap, &cs, &weapons, Vec3::ZERO);
             assert_eq!(c.len(), 1, "{c:?}");
             c[0].source
         };
@@ -1546,7 +1522,7 @@ mod tests {
         let mut sounds = Cod2Sounds::default();
         let whiz = |sounds: &mut Cod2Sounds| {
             sounds
-                .cues(&e, &snap, &cs, None, view)
+                .cues(&e, &snap, &cs, &LevelWeapons::default(), view)
                 .into_iter()
                 .find(|c| c.alias == "whizby")
                 .map(|c| c.source.pos())

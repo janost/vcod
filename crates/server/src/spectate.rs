@@ -12,15 +12,22 @@ pub use vcod_common::net::flags::{
     EF_TELEPORT_BIT, PM_DEAD, PM_DEAD_LINKED, PM_INTERMISSION, PM_NORMAL_LINKED, PM_SPECTATOR,
 };
 use vcod_common::net::msg::{self, UserCmd};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::net::trajectory;
 use vcod_common::pmove::cmd::{self, ANGLE2SHORT, EventRing, view_angles};
 use vcod_common::pmove::{self, PmEvent};
 use vcod_common::weapon::WeaponDef;
-
-/// `ET_PLAYER`, what another client sees a player as
-/// (`crates/client/src/entities.rs` carries the table).
+// Event ids: docs/research/cod11-events-and-fx.md.
+use vcod_common::net::event_ids::{
+    EV_DEATH, EV_PAIN, EV_PLAYER_TELEPORT_IN, EV_PLAYER_TELEPORT_OUT,
+};
+// `ET_PLAYER`, what another client sees a player as
+// (`crates/client/src/entities.rs` carries the table).
 use vcod_common::net::flags::ET_PLAYER;
+use vcod_common::net::flags::{EF_FIRING, EF_TALK};
+// `pingPlayer`'s bits (docs/research/cod11-hud-protocol.md, "Compass
+// friendlies").
+use vcod_common::net::flags::{EF_FRIEND_PING, EF_PING};
 
 /// A player entity's `eFlags` and `pos.trDuration`, transcribed from the
 /// retail two-probe capture rather than derived.
@@ -30,14 +37,6 @@ const PLAYER_TR_DURATION: i32 = 50;
 /// How far behind the frame `ClientSpawn` puts `commandTime` before its own
 /// think runs the client up to it (0x42a48).
 const SPAWN_THINK_MS: f32 = 100.0;
-
-/// `docs/research/cod11-events-and-fx.md`.
-use vcod_common::net::event_ids::EV_PLAYER_TELEPORT_IN;
-use vcod_common::net::event_ids::EV_PLAYER_TELEPORT_OUT;
-use vcod_common::net::flags::{EF_FIRING, EF_TALK};
-/// `pingPlayer`'s bit (docs/research/cod11-hud-protocol.md, "Compass
-/// friendlies").
-use vcod_common::net::flags::{EF_FRIEND_PING, EF_PING};
 
 /// What `linkTo` left on a client: the parent it follows, the gap it stood
 /// at when it linked and the velocity it had then. `Server` re-applies all
@@ -101,21 +100,19 @@ pub struct Seat {
     pub overheated: bool,
     /// The offset `VEH_LinkPlayer` linked the player at, in the seat tag's
     /// axes: `BG_GetVehiclePosOffset` of the slot it asked for, which a use
-    /// asks as 0 (coduo-vehicles.md 13, "The tank driver's link offset").
+    /// asks as 0 (coduo-vehicles.md 13.7, "The tank driver's link offset").
     pub link_offset: [f32; 3],
 }
-use vcod_common::net::event_ids::EV_DEATH;
-/// `EV_PAIN` and `EV_DEATH` (`docs/research/cod11-events-and-fx.md`).
-use vcod_common::net::event_ids::EV_PAIN;
+
 /// One `EV_PAIN` per 700 ms (combat doc, section 6, step 9).
 const PAIN_DEBOUNCE_MS: i32 = 700;
 /// `finishPlayerDamage`'s knockback (combat doc, 4.5): the stance scales,
-/// the cap, and `g_knockback / 250` at the cvar's stock 1000.
+/// the cap, and `g_knockback / 250` ([`ClientSim::knockback`]).
 const KNOCKBACK_STAND: f32 = 0.3;
 const KNOCKBACK_DUCKED: f32 = 0.15;
 const KNOCKBACK_PRONE: f32 = 0.02;
 const KNOCKBACK_MAX: i32 = 60;
-const KNOCKBACK_UNITS: f32 = 1000.0 / 250.0;
+const KNOCKBACK_MASS: f32 = 250.0;
 
 /// `finishPlayerDamage`'s per-frame accumulator (combat doc, 4.5): what the
 /// frame's hits added up to and where the last one came from, which
@@ -178,9 +175,6 @@ pub enum PmType {
     Intermission,
 }
 
-/// One client's simulated state. `pm_type` selects the movement path, the way
-/// retail's own `playerState_t` does: a client is a spectator before the menu
-/// and a player after, within one connection.
 /// The end frame [`ClientSim::commit_pose`] runs in.
 #[derive(Clone, Copy, Debug)]
 pub struct EndFrame {
@@ -213,6 +207,9 @@ pub type TurretLegs = (
     Option<(usize, Vec<vcod_common::turretpose::TurretRow>)>,
 );
 
+/// One client's simulated state. `pm_type` selects the movement path, the way
+/// retail's own `playerState_t` does: a client is a spectator before the menu
+/// and a player after, within one connection.
 pub struct ClientSim {
     pub ps: pmove::PlayerState,
     pub pm_type: PmType,
@@ -224,7 +221,7 @@ pub struct ClientSim {
     /// mirrored from the script host every frame the way the weapons are.
     pub viewmodel_index: i32,
     /// `ps.shellshockIndex`, `shellshockTime`, `shellshockDuration`, from
-    /// `GameHost::client_shellshock`.
+    /// `HostClient::shellshock`.
     pub shellshock: [i32; 3],
     /// The body, head and helmet the character script dressed this client in,
     /// mirrored the same way: the locational trace poses the grafted rig they
@@ -426,10 +423,10 @@ pub struct ClientSim {
     /// talk bit (1.1 0x33f6a, 1.5b 0x281d4; UO's 0x20000 at 0x2d8af).
     pub talking: bool,
     /// `eFlags` 0x80000, `pingPlayer`'s chat flash on teammates' compasses,
-    /// held until the stamp the builtin left (`GameHost::client_ping_until`).
+    /// held until the stamp the builtin left (`HostClient::ping_until`).
     pub ping: bool,
     /// `eFlags` 0x20000, this client's vote in on the running vote
-    /// (`GameHost::client_voted`, docs/research/cod11-votes.md).
+    /// (`HostClient::voted`, docs/research/cod11-votes.md).
     pub voted: bool,
     /// `ps.iCompassFriendInfo`, the out-of-view teammate the end frame packs
     /// (`crate::compass`), 0 for none.
@@ -492,6 +489,10 @@ pub struct ClientSim {
     /// `(int)g_gravity`, mirrored off the host every frame
     /// (cod15-movement.md, "ps.gravity").
     pub gravity: i32,
+    /// `g_knockback.value`, mirrored off the host every frame: the
+    /// knockback's velocity is `knockback * g_knockback / 250`
+    /// (cod11-combat.md 4.5).
+    pub knockback: f32,
     /// The last frame a follow sent this spectator, the copy with its flags
     /// patched: the playerstate `StopFollowing` writes over.
     pub follow_wire: Option<msg::PlayerState>,
@@ -635,7 +636,7 @@ impl ClientSim {
     /// A client entering the world: the spectator fly
     /// ([`pmove::spectator_move`]), angles straight off the latest cmd.
     /// `cmd_angles` are the angles of the usercmd that brought the client in
-    /// -- `SV_ClientEnterWorld`'s `cmds[0]`, zero when there is none -- so
+    /// (`SV_ClientEnterWorld`'s `cmds[0]`, zero when there is none), so
     /// the view it already had survives entry instead of snapping.
     pub fn spectator(origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) -> Self {
         let view = view_angles(cmd_angles, spawn_delta_angles(yaw_deg, cmd_angles));
@@ -733,6 +734,7 @@ impl ClientSim {
             stance_window_ms: 0,
             max_speed: pmove::SPEED_RUN as i32,
             gravity: pmove::GRAVITY as i32,
+            knockback: 1000.0,
             follow_wire: None,
             residue: None,
             end_frame_wire: None,
@@ -744,7 +746,7 @@ impl ClientSim {
 
     /// The mode change `spawnPlayer()` makes: the same sim, restarted at the
     /// spawn point the script chose. `cmd_angles` is the client's last-known
-    /// cmd angles going into the spawn -- a spectator can have turned freely
+    /// cmd angles going into the spawn: a spectator can have turned freely
     /// before answering the weapon menu, unlike a fresh connect, so the
     /// caller must supply the real value rather than assume zero.
     pub fn become_player(&mut self, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
@@ -892,106 +894,95 @@ impl ClientSim {
         }
     }
 
+    /// `ClientSpawn`: its memset is the connect's sim ([`Self::spectator`]),
+    /// with what the spawn carries across it or writes after it named here.
+    /// A field left out is cleared.
     fn respawn(&mut self, mode: PmType, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
-        let (rules, bg) = (self.ps.rules, self.ps.bg);
-        self.ps = pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg);
-        self.ps.rules = rules;
-        self.ps.bg = bg;
-        // The turret rows live in the DObj's anim info, which outlives a
-        // dismount; a spawn's `G_DObjUpdate` builds a fresh one.
-        self.gunner_tree = Default::default();
+        // A fresh sim holds the place until the memset below replaces it.
+        let old = std::mem::replace(self, Self::spectator(origin, yaw_deg, cmd_angles));
+        let rules = old.ps.rules;
+        let mut ps = pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg);
+        ps.rules = rules;
+        ps.bg = old.ps.bg;
         // The spawn's `ClientEndFrame` stores a player's speed ahead of its
         // think (0x42a75); a spectator's think is `SpectatorThink`'s 400.
-        self.ps.speed = match mode {
+        ps.speed = match mode {
             PmType::Spectator => pmove::SPEED_SPECTATOR,
-            _ => self.max_speed as f32,
+            _ => old.max_speed as f32,
         };
-        self.ps.gravity = self.gravity as f32;
+        ps.gravity = old.gravity as f32;
         // `ClientSpawn`'s memset leaves `groundEntityNum` 0, not 0x3ff, and
         // `PM_CheckDuck` runs ahead of the ground trace (1.5 0x28814,
         // 0x28819): the think's first step takes 1.5's prone press, which
         // it drops for a body in the air (0x237d6). 1.1's think has no keys.
-        self.ps.on_ground = rules.v15();
-        self.pm_type = mode;
-        self.delta_angles = spawn_delta_angles(yaw_deg, cmd_angles);
-        self.view_angles = view_angles(cmd_angles, self.delta_angles);
-        // `ClientSpawn`'s memset clears the aim block's state with the rest
-        // of the client.
-        self.aim_state = Default::default();
-        self.spread_frac = 0.0;
-        self.spawn_view = [0.0, yaw_deg, 0.0];
-        self.kick = Default::default();
-        self.gun_kick = Default::default();
-        self.aim = [self.view_angles[0], self.view_angles[1]];
-        self.gun_offset = [0.0; 2];
-        // `ClientSpawn` calls `G_EntUnlink` on the spawning client
-        // (object-model doc, 23.2).
-        self.link_to = None;
-        self.unseated = false;
-        // The memset takes the seat's `vehType` and `vehMotion`, which an
-        // exit or a death in the seat left (coduo-vehicles.md 11.7).
-        self.veh_type = 0;
-        self.veh_motion = 0;
-        // `ClientSpawn`'s memset. Only a playing client's end frame writes
-        // the hint again, so a spectator and the intermission camera keep 0.
-        self.set_cursor_hint(0, 0);
-        self.cursor_hint_string = -1;
-        // A respawned player does not resume the anim it died in.
-        self.anim = Default::default();
-        self.was_airborne = false;
-        self.strafing = None;
-        self.jumped = None;
-        self.torso_cmds.clear();
-        self.jump_time = 0;
-        self.land_anim = None;
-        // `ClientSpawn`'s memset: the damage fields read 0 again after a
-        // respawn (combat doc, 8.4), and so does the dead yaw.
-        self.dead = false;
-        self.pm_dead = false;
-        self.died_box = false;
-        self.dead_eye = false;
-        self.damage = DamageAccum::default();
-        self.feedback = DamageFeedback::default();
-        self.last_hit = None;
-        self.dead_yaw = 0;
-        self.pain_after_ms = 0;
-        self.spawn_count = self.spawn_count.wrapping_add(1);
-        // The memset again: the capture's first trace, after a spawn, reads
-        // `viewlocked_entNum` 0 (turrets doc, 12.7). `ps.mounted` went with
-        // the fresh `ps` above.
-        self.viewlocked = 0;
-        self.viewlocked_ent = 0;
-        self.gunfx = 0;
-        self.mounted_on = None;
-        self.firing = false;
-        self.attacking = false;
-        self.talking = false;
-        // The memset again; nothing after it in `ClientSpawn` rewrites them.
-        self.compass_friend = 0;
-        self.last_friend = 0;
-        self.friend_ping = false;
-        self.last_cmd_angles = cmd_angles;
-        // Retail's respawn frame reads an empty ring at sequence 0
-        // (combat doc, 9.2).
-        self.ring.clear();
-        // The memset again, which keeps only `sess` and writes -1 to the
-        // follow target after it (0x4282c).
-        self.follow = Default::default();
-        self.last_buttons = 0;
-        // Every spawn consumes a flip, a spectator's and the intermission
-        // camera's included: retail's capture reads 16 on a respawn's
-        // spectator frame and 24 on the next one (map-cycle doc, 8.2).
-        self.teleport_bit = !self.teleport_bit;
-        self.respawned = true;
-        self.follow_wire = None;
-        self.residue = None;
-        self.end_frame_wire = None;
-        self.frozen_command_time = None;
-        // `G_SetClientContents`, then the spawn's link.
-        self.contents = if mode == PmType::Normal {
-            CONTENTS_BODY
-        } else {
-            0
+        ps.on_ground = rules.v15();
+        // What the memset clears, and the connect's values say so: the aim
+        // block's state, the anims a respawned player does not resume, the
+        // damage fields (combat doc 8.4) and the dead yaw, `G_EntUnlink`'s
+        // link (object-model doc 23.2), the seat's `vehType` and `vehMotion`
+        // (coduo-vehicles.md 11.7), the cursor hint, which only a playing
+        // client's end frame writes again, `viewlocked_entNum` 0 (turrets
+        // doc 12.7), the compass, the empty ring at sequence 0 (combat doc
+        // 9.2), the follow, to which the spawn writes -1 after (0x4282c),
+        // and the turret rows, whose DObj a spawn's `G_DObjUpdate` rebuilds.
+        *self = ClientSim {
+            ps,
+            pm_type: mode,
+            // `SetClientViewAngle`'s view for the think's aim block.
+            spawn_view: [0.0, yaw_deg, 0.0],
+            spawn_count: old.spawn_count.wrapping_add(1),
+            // Every spawn consumes a flip, a spectator's and the intermission
+            // camera's included: retail's capture reads 16 on a respawn's
+            // spectator frame and 24 on the next one (map-cycle doc, 8.2).
+            teleport_bit: !old.teleport_bit,
+            respawned: true,
+            // `G_SetClientContents`, then the spawn's link below.
+            contents: if mode == PmType::Normal {
+                CONTENTS_BODY
+            } else {
+                0
+            },
+            // Mirrored off the script host every frame or end frame.
+            viewmodel_index: old.viewmodel_index,
+            shellshock: old.shellshock,
+            assembly: old.assembly,
+            head_icon: old.head_icon,
+            head_icon_team: old.head_icon_team,
+            health: old.health,
+            max_health: old.max_health,
+            session: old.session,
+            ping: old.ping,
+            voted: old.voted,
+            max_speed: old.max_speed,
+            gravity: old.gravity,
+            knockback: old.knockback,
+            // vcod's caches, rebuilt off the models and the next end frame.
+            dobj: old.dobj,
+            pose: old.pose,
+            // `pers.cmd`, which the spawn keeps.
+            pers_cmd: old.pers_cmd,
+            // What the last end frame left, read before the next one.
+            compass_candidate: old.compass_candidate,
+            own_view: old.own_view,
+            spectate_flags: old.spectate_flags,
+            hud_cleared: old.hud_cleared,
+            dobj_ahead: old.dobj_ahead,
+            ring_before_pain: old.ring_before_pain,
+            end_frame_entity: old.end_frame_entity,
+            // Kept as they always were; whether the memset takes them is
+            // unmeasured (QUAL-044).
+            view_lerp_start: old.view_lerp_start,
+            movetype: old.movetype,
+            footsteps_movetype: old.footsteps_movetype,
+            stance_window_ms: old.stance_window_ms,
+            gunner_leaves: old.gunner_leaves,
+            gunner_left: old.gunner_left,
+            hook_es: old.hook_es,
+            ci_seat_angles: old.ci_seat_angles,
+            seat: old.seat,
+            seat_angles: old.seat_angles,
+            seat_steer: old.seat_steer,
+            ..Self::spectator(origin, yaw_deg, cmd_angles)
         };
         self.relink();
     }
@@ -1155,7 +1146,7 @@ impl ClientSim {
     /// so the spawn frame's `viewangles` read 0. 1.5's and UO's is the
     /// client's last cmd (`trap_GetUsercmd`, 1.5b 0x3cce6, UO 0x45162), keys
     /// and stance included, at the spawn's view: a client holding prone lies
-    /// down along the spawn's yaw (cod15-movement.md 4, "The spawn's
+    /// down along the spawn's yaw (cod15-movement.md 4.2, "The spawn's
     /// lie-down").
     pub fn spawn_cmd(&self, last: &UserCmd, now_ms: i32) -> UserCmd {
         if self.ps.rules.v15() {
@@ -1366,7 +1357,6 @@ impl ClientSim {
     /// `no_spectate` is 1.5's `allowSpectateTeam` mask: without free flight
     /// the sight edge keeps the follow and the spectator does not fly
     /// (1.5 game.mp 0x389eb).
-    #[allow(clippy::too_many_arguments)]
     pub fn spectator_think(
         &mut self,
         forced: i32,
@@ -1443,7 +1433,7 @@ impl ClientSim {
 
     /// `G_SetFixedLink`'s write of a seated UO rider's `ps.origin` and
     /// `r.currentOrigin` in `G_RunClient`, which relinks there unsnapped
-    /// (coduo-vehicles.md 13, "The tank driver's link offset").
+    /// (coduo-vehicles.md 13.7, "The tank driver's link offset").
     pub fn seat_linked_at(&mut self, origin: Vec3) {
         self.ps.origin = origin;
         self.linked_unsnapped = true;
@@ -1536,6 +1526,10 @@ impl ClientSim {
     ) -> Vec<PmEvent> {
         // `pers.cmd` takes every cmd, ahead of the dead and intermission returns.
         self.last_cmd_angles = cmd.angles;
+        // Pmove's per-cmd torso requests: a cmd that runs no pmove (dead,
+        // intermission) raises none, whatever the last live one left.
+        self.ps.prone_flip_clears_torso = false;
+        self.ps.breakdown_continue = false;
         // `PmoveSingle` clears the bit on every cmd and sets it again ahead
         // of the move and the weapon, off the state the cmd starts from. Its
         // only `pm_type` test is against 5, so a dead body's first cmd, which
@@ -1946,9 +1940,9 @@ impl ClientSim {
         for (t, c) in torso_cmds {
             self.torso_cmd(c, (now_ms, t), &conditions, inputs);
         }
-        // Nothing is selected while off the ground -- retail returns before
+        // Nothing is selected while off the ground: retail returns before
         // the selection unless the ladder flag is set (@0x323a2), which is
-        // what gives a climber its `climbup`/`climbdown` -- so a jump owns
+        // what gives a climber its `climbup`/`climbdown`, so a jump owns
         // the legs until the landing. A mounted player is also off the
         // ground (`ps.mounted` clears `on_ground` in pmove) but the 0x322c8
         // mounted arm runs ahead of that early-out (turrets doc, section 10).
@@ -1974,19 +1968,6 @@ impl ClientSim {
         }
     }
 
-    /// One event clause on the two channels. A `both` clause is the whole
-    /// body: retail puts the anim on the legs and restarts the torso on no
-    /// anim at all, which is the same 0 every settled pose reads. The
-    /// capture's grenade throws are the evidence -- `legsAnim` 575, index 63,
-    /// with a bare toggle flip on the torso.
-    ///
-    /// The rule is general and the measurement is not: it also reaches
-    /// `fireweapon`'s pistol-ADS clause and `jump`'s two run clauses, neither
-    /// of which any capture covers (combat doc 1.14). It is kept general
-    /// because it is the convention the continuous selection already follows.
-    /// The landing is the one clause measured to break it -- its `weaponclass
-    /// pistol AND grenade` arm is a `both` one and writes the legs alone --
-    /// and its caller clears the torso of the selection before it gets here.
     /// One [`TorsoCmd`] at `at` on the hold clock. The breakdown continue
     /// restarts the torso only where its clause's anim differs from the one
     /// playing; on the same anim it sets the timer again when the clip
@@ -2026,6 +2007,19 @@ impl ClientSim {
         }
     }
 
+    /// One event clause on the two channels. A `both` clause is the whole
+    /// body: retail puts the anim on the legs and restarts the torso on no
+    /// anim at all, which is the same 0 every settled pose reads. The
+    /// capture's grenade throws are the evidence: `legsAnim` 575, index 63,
+    /// with a bare toggle flip on the torso.
+    ///
+    /// The rule is general and the measurement is not: it also reaches
+    /// `fireweapon`'s pistol-ADS clause and `jump`'s two run clauses, neither
+    /// of which any capture covers (combat doc 1.14). It is kept general
+    /// because it is the convention the continuous selection already follows.
+    /// The landing is the one clause measured to break it: its `weaponclass
+    /// pistol AND grenade` arm is a `both` one and writes the legs alone,
+    /// and its caller clears the torso of the selection before it gets here.
     fn play_event(
         anim: &mut vcod_common::animscript::AnimState,
         sel: &vcod_common::animscript::Selection,
@@ -2115,14 +2109,15 @@ impl ClientSim {
             };
             let kb = ((damage as f32 * scale) as i32).min(KNOCKBACK_MAX);
             if kb > 0 && has_dir {
-                let kvel = dir * (kb as f32 * KNOCKBACK_UNITS);
+                let units = self.knockback * kb as f32 / KNOCKBACK_MASS;
+                let kvel = dir * units;
                 let x = self.ps.velocity.x;
                 self.ps.velocity += kvel;
                 // 1.1d keeps x's product on the stack into its add
                 // (0x439e7..0x439fb); 1.5b and UO store it (cod11-combat.md
                 // 4.5).
                 if self.ps.rules == pmove::MoveRules::V1_1 {
-                    let s = f64::from(kb as f32 * KNOCKBACK_UNITS);
+                    let s = f64::from(units);
                     self.ps.velocity.x = (f64::from(x) + f64::from(dir.x) * s) as f32;
                 }
             }
@@ -2152,8 +2147,8 @@ impl ClientSim {
         self.dead_yaw = dead_yaw;
         // The death anim on the legs, and the torso restarted on 0: both
         // retail deaths read `torsoAnim` 512 beside the death `legsAnim`
-        // (combat doc, 8.1 and 8.4). Nothing selects for this sim again --
-        // `update_anims` returns on a dead one -- so the drawn index is what
+        // (combat doc, 8.1 and 8.4). Nothing selects for this sim again
+        // (`update_anims` returns on a dead one), so the drawn index is what
         // the corpse clone carries.
         if let (Some(inputs), Some(c)) = (anims, &conditions) {
             let mut sel = inputs.anims.script.select_event_random("death", c, rng);
@@ -2239,13 +2234,6 @@ impl ClientSim {
         self.damage.taken = 0;
     }
 
-    /// The wire playerstate. Fields the two modes disagree about are measured
-    /// on both sides: the spectator's from the retail capture in
-    /// `crates/common/tests/fixtures/net/snapshots.bin`, whose zeros
-    /// `parses_captured_snapshot_run` pins, the player's from
-    /// `crates/server/tests/fixtures/playerstate/*.txt`, which the
-    /// `playerstate_ab` gate diffs against. `commandTime` mirrors the last
-    /// processed cmd's server time.
     /// Where the player is: the sim owns it, the script mirrors it.
     pub fn origin(&self) -> [f32; 3] {
         self.ps.origin.into()
@@ -2310,7 +2298,7 @@ impl ClientSim {
     /// reads off the entity: whether and where he rides, and his weapon.
     /// `ClientThink_real` runs it after each cmd's move (game.mp.uo
     /// 0x40c91), `SetClientOrigin` (0x44210) and `ClientEndFrame` too
-    /// (coduo-vehicles.md 13, "The weapon-swap frame").
+    /// (coduo-vehicles.md 13.7, "The weapon-swap frame").
     pub fn write_entity(&mut self) {
         self.hook_es = crate::game::combat::HookEs {
             seat: self.seat.map(|s| (s.kind, s.pos)),
@@ -2413,7 +2401,7 @@ impl ClientSim {
     pub fn update_dobj(
         &mut self,
         now: &crate::game::hitrig::Assembly,
-    ) -> &crate::game::hitrig::Assembly {
+    ) -> &std::rc::Rc<crate::game::hitrig::Assembly> {
         use vcod_common::net::flags::{EF_IN_VEHICLE_V22, EF_MOUNTED};
         let rides = self.entity_eflags() & (EF_MOUNTED | EF_IN_VEHICLE_V22) != 0;
         let armed_seat = self.seat.is_some_and(|s| s.kind == 1 && s.pos == 3);
@@ -2508,7 +2496,9 @@ impl ClientSim {
         angles.step(&input, frametime_ms, swing_speed);
         angles.update_conditions(&input);
         let (eased, mut seat_ramp) = (self.pose.eased, self.pose.seat_ramp.clone());
-        let assembly = self.update_dobj(&self.assembly.clone()).clone();
+        let now = std::mem::take(&mut self.assembly);
+        let assembly = self.update_dobj(&now).clone();
+        self.assembly = now;
         self.pose = crate::game::combat::BodyPose {
             assembly,
             legs,
@@ -2664,10 +2654,10 @@ impl ClientSim {
     }
 
     /// What other clients are sent about this one. Retail sends a client no
-    /// entity for itself -- the playerstate carries it -- so this is only ever
+    /// entity for itself (the playerstate carries it), so this is only ever
     /// built for somebody else (`docs/protocol-1.1.md`, "Which entities a
     /// client is sent"). The body model is not here either: it rides the
-    /// `clientState` roster's `modelindex`, which stage 4 already sends.
+    /// `clientState` roster's `modelindex`.
     ///
     /// Measured against a retail capture of one probe watching another
     /// (`crates/server/tests/fixtures/entities/mp_carentan-dm-players.txt`).
@@ -2677,7 +2667,7 @@ impl ClientSim {
     ///
     /// The event ring rides here as well as on the playerstate: it is how
     /// another client hears this one's shots and footsteps.
-    pub fn to_entity(&self, p: &Protocol, slot: usize, command_time: i32) -> msg::EntityState {
+    pub fn to_entity(&self, p: &Cod1Wire, slot: usize, command_time: i32) -> msg::EntityState {
         let mut e = msg::EntityState::null(p);
         e.number = slot as u32;
         let mut set = |name: &str, v: i32| {
@@ -2691,8 +2681,8 @@ impl ClientSim {
         // Packed at link time: docs/research/cod11-player-clip.md.
         set("solid", self.linked_solid);
         set("legsAnim", self.anim.legs());
-        // The torso does travel: the shoot, reload and putaway poses are the
-        // weapon's, and the next task is what gives it a value.
+        // The torso travels too: the shoot, reload and putaway poses are the
+        // weapon's.
         set("torsoAnim", self.anim.torso());
         set("weapon", i32::from(self.ps.weapon));
         set("iHeadIcon", self.head_icon);
@@ -2782,7 +2772,14 @@ impl ClientSim {
             });
     }
 
-    pub fn to_wire(&self, p: &Protocol, client_num: i32, command_time: i32) -> msg::PlayerState {
+    /// The wire playerstate. Fields the two modes disagree about are measured
+    /// on both sides: the spectator's from the retail capture in
+    /// `crates/common/tests/fixtures/net/snapshots.bin`, whose zeros
+    /// `parses_captured_snapshot_run` pins, the player's from
+    /// `crates/server/tests/fixtures/playerstate/*.txt`, which the
+    /// `playerstate_ab` gate diffs against. `commandTime` mirrors the last
+    /// processed cmd's server time.
+    pub fn to_wire(&self, p: &Cod1Wire, client_num: i32, command_time: i32) -> msg::PlayerState {
         let player = self.pm_type == PmType::Normal;
         let mut w = msg::PlayerState::null(p);
         // A field the protocol lacks (UO dropped `gunfx`, 1.1 has no sprint
@@ -2832,10 +2829,10 @@ impl ClientSim {
             set("groundEntityNum", self.ps.ground_entity_num() as i32);
             // All three come out of one `ClientEndFrame` block a spectator
             // never reaches. Its guards are `sessionstate` playing,
-            // `ps.clientNum == self` and, for the hint, `health > 0`;
-            // nothing follows another client and nothing dies yet, so
-            // `Normal` is the whole of that condition today. The hint is the
-            // one that peels off first, at `health` 0.
+            // `ps.clientNum == self` and, for the hint, `health > 0`. This
+            // arm tests `Normal` alone, which a dead player still is; whether
+            // a follow or a death should peel any of the three off here is
+            // unchecked.
             let stance_pmflags = if self.ps.ducked { PMF_DUCKED } else { 0 }
                 | if self.ps.stance == pmove::Stance::Prone {
                     PMF_PRONE
@@ -3113,8 +3110,9 @@ impl ClientSim {
         w.set_health(self.health);
         w.set_max_health(self.max_health);
         w.arrays.stats[1] = self.dead_yaw;
-        // `stats[3]` is six raw bits, so "nobody" travels as 63; the compass
-        // has no teammate to name until `TeamplayInfoMessage` exists.
+        // `stats[3]` is six raw bits, so "nobody" travels as 63. vcod's CoD1
+        // runs no `TeamplayInfoMessage` (protocol-1.1.md, "Block 1"), so it
+        // always names nobody.
         w.arrays.stats[3] = NO_TEAMMATE;
         w.arrays.stats[5] = i32::from(self.spawn_count);
         match &self.residue {
@@ -3129,7 +3127,7 @@ impl Residue {
     /// `pm_type` and `speed` once a cmd has flown, its `pm_flags` less the
     /// follow and ADS bits (0x46bb1), and its `eFlags` with the mount bits
     /// cleared (0x46b8c) and the teleport bit the sim flips.
-    fn under(&self, own: msg::PlayerState, p: &Protocol) -> msg::PlayerState {
+    fn under(&self, own: msg::PlayerState, p: &Cod1Wire) -> msg::PlayerState {
         let idx = |name| msg::PlayerState::field_index(p, name).unwrap();
         let mut w = self.wire.clone();
         w.fields[idx("pm_flags")] &= !(crate::follow::PMF_FOLLOW | pmove::weapon::PMF_ADS);
@@ -3178,7 +3176,7 @@ mod tests {
     /// `gunfx`, and the lookup used to panic there.
     #[test]
     fn a_stopped_follow_rebuilds_on_every_protocol() {
-        for p in Protocol::ALL {
+        for p in Cod1Wire::ALL {
             let mut own = msg::PlayerState::null(p);
             let at = |name| msg::PlayerState::field_index(p, name).unwrap();
             own.fields[at("clientNum")] = 3;
@@ -3415,7 +3413,7 @@ mod tests {
     /// One frame of the anim machine with the state set by hand, for the
     /// clauses the retail capture cannot reach: it was taken with one rifle,
     /// never held two axes at once and never strafed crouched. Names rather
-    /// than indices -- `animtree.rs` is what pins the index order.
+    /// than indices: `animtree.rs` is what pins the index order.
     #[test]
     fn the_conditions_pick_the_clause_the_script_names() {
         let Some(fs) = vcod_common::testing::game_fs() else {
@@ -4006,9 +4004,9 @@ mod tests {
     }
 
     /// A spectator carries the captured spectator constants; a player does
-    /// not. The values `to_wire` used to pin unconditionally are the ones the
-    /// retail player capture disagrees with once the client is alive, which is
-    /// why they move behind the mode instead of staying literals.
+    /// not. The retail player capture disagrees with those values once the
+    /// client is alive, so `to_wire` takes them from the mode rather than
+    /// from literals.
     #[test]
     fn the_wire_constants_follow_the_mode() {
         let p = &PROTOCOL_V1;
@@ -4101,9 +4099,9 @@ mod tests {
     /// `SHORT2ANGLE(cmd.angles + delta_angles)` per axis, retail's
     /// `PM_UpdateViewAngles`.
     ///
-    /// The numbers here are this test's own -- `become_player` at 225 degrees
+    /// The numbers here are this test's own: `become_player` at 225 degrees
     /// puts 40960 in `delta_angles[1]`, and a cmd yaw of 0 makes the sum
-    /// -135.0 -- chosen so the two are not the same word and a write that
+    /// -135.0, chosen so the two are not the same word and a write that
     /// echoed the delta instead of summing would fail. The relation they
     /// check is the retail one, measured off the `--save-ads` capture taken
     /// on `mp_carentan` under `tdm` with `kar98k_sniper_mp`, which reads
@@ -4113,7 +4111,7 @@ mod tests {
     /// and docs/protocol-1.1.md, "View angles", carries the derivation.
     ///
     /// The relation holds in every other retail player capture too, including
-    /// the two whose `viewangles` reads 0 -- there the probe subtracts
+    /// the two whose `viewangles` reads 0: there the probe subtracts
     /// `delta_angles` when it builds each cmd, so the sum is zero and the
     /// field is not evidence of an unwritten one (`playerstate_ab.rs`,
     /// `check_spawn_shape`).
@@ -4137,8 +4135,8 @@ mod tests {
         assert_eq!(view(&ps, 2), 0.0);
 
         // Spawned facing 225 and turning 45 to the right: -135 + 45. The
-        // angles are the shorts that land on a whole degree -- 8192 is 45 and
-        // 4096 is 22.5 -- since ANGLE2SHORT truncates and a 60 would leave the
+        // angles are the shorts that land on a whole degree (8192 is 45 and
+        // 4096 is 22.5) since ANGLE2SHORT truncates and a 60 would leave the
         // assert chasing the rounding rather than the sum.
         sim.step(&cmd(0, 0, 8192), 0.05, None, &[]);
         assert_eq!(view(&sim.to_wire(p, 0, 0), 1), -90.0);
@@ -4311,6 +4309,22 @@ mod tests {
         assert_eq!(w.field_i32(p, "damagePitch"), 249);
     }
 
+    /// `g_knockback` scales the push: 0 leaves the velocity alone, the
+    /// stock 1000 is the measured push, 2000 doubles it (BUG-143).
+    #[test]
+    fn g_knockback_scales_the_push() {
+        let push = |g: f32| {
+            let mut sim = target();
+            sim.knockback = g;
+            sim.take_damage(&hit_op(40, false), None, &mut 1, (1000, 1000));
+            sim.ps.velocity
+        };
+        assert_eq!(push(0.0), Vec3::ZERO);
+        let stock = push(1000.0);
+        assert_ne!(stock, Vec3::ZERO);
+        assert!((push(2000.0) - stock * 2.0).length() < 1e-3);
+    }
+
     /// One surviving hit writes the four feedback fields, the pain event
     /// and the knockback the capture measured; a second within 700 ms
     /// counts but raises no second `EV_PAIN`; one after does.
@@ -4364,10 +4378,6 @@ mod tests {
         assert_eq!(w.field_i32(p, "damageYaw"), 64);
     }
 
-    /// The killing hit: `EV_DEATH` with parm 0, `pm_type` 6, the dead yaw
-    /// toward the attacker in `stats[1]`, and the feedback left as the last
-    /// surviving hit wrote it (combat doc, 8.4). Then the body: no input
-    /// moves it, and the eye drops 9 units a frame to `deadViewHeight`.
     /// A killing hit is `player_die`'s CORPSE write at once, so the body
     /// stops blocking before the end frame zeroes it: a turret's kill lands
     /// after that frame's end-frame pass.
@@ -4386,6 +4396,10 @@ mod tests {
         assert_eq!(sim.body(3), None);
     }
 
+    /// The killing hit: `EV_DEATH` with parm 0, `pm_type` 6, the dead yaw
+    /// toward the attacker in `stats[1]`, and the feedback left as the last
+    /// surviving hit wrote it (combat doc, 8.4). Then the body: no input
+    /// moves it, and the eye drops 9 units a frame to `deadViewHeight`.
     #[test]
     fn a_fatal_hit_kills_freezes_the_feedback_and_drops_the_eye() {
         let p = &PROTOCOL_V1;
@@ -4719,6 +4733,23 @@ mod tests {
         assert!(!sim.attacking);
     }
 
+    /// A body killed on the cmd that flipped its prone queues no torso cmd
+    /// on the dead cmds that follow (BUG-024: one a cmd until respawn).
+    #[test]
+    fn a_dead_body_queues_no_torso_cmd() {
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        sim.become_player([0.0; 3], 0.0, [0; 3]);
+        sim.ps.prone_flip_clears_torso = true;
+        sim.ps.breakdown_continue = true;
+        sim.die();
+        sim.pm_dead = true;
+        for _ in 0..3 {
+            sim.step(&NULL_USERCMD, 0.008, None, &[]);
+            sim.note_footsteps(&NULL_USERCMD);
+        }
+        assert!(sim.torso_cmds.is_empty());
+    }
+
     /// The bit rides the entity and the playerstate both, off the last cmd
     /// of the frame.
     #[test]
@@ -4784,10 +4815,6 @@ mod tests {
         assert_eq!(sim.to_entity(p, 3, 0).field_i32(p, "otherEntityNum"), 0);
     }
 
-    /// `TeleportPlayer` (turrets doc, section 8 and 12.7): 200 at the old
-    /// origin and 199 at the destination on temp entities naming the
-    /// client, the origin a unit above the destination, the bit flipped and
-    /// the view set.
     /// `setOrigin` links at the unsnapped origin, and that link holds until
     /// the next cmd relinks at the snapped one (combat doc 14.3).
     #[test]
@@ -4801,6 +4828,10 @@ mod tests {
         assert_eq!(sim.link_origin(), sim.ps.origin.trunc());
     }
 
+    /// `TeleportPlayer` (turrets doc, section 8 and 12.7): 200 at the old
+    /// origin and 199 at the destination on temp entities naming the
+    /// client, the origin a unit above the destination, the bit flipped and
+    /// the view set.
     #[test]
     fn teleport_player_raises_out_and_in_and_flips_the_bit() {
         use crate::game::temp_entity::Scope;
@@ -4887,5 +4918,466 @@ mod tests {
         let r = sim.ring;
         let step = vcod_common::net::event_ids::EV_STEP_VIEW;
         assert_eq!((r.seq, r.events[0], r.parms[0]), (1, step, 136));
+    }
+
+    /// A sim with every field off both its default and its connect value, so
+    /// a spawn's reset and a field it keeps read apart. The literal names
+    /// every field: a new one fails to compile here until it has a marker.
+    fn marked() -> ClientSim {
+        use crate::game::hitrig::{Assembly, PlayerDObj};
+        use vcod_common::animscript::{AnimRef, Movetype, Selection, Side};
+        let assembly = Assembly {
+            body: "body".into(),
+            ..Default::default()
+        };
+        let mut dobj = PlayerDObj::default();
+        dobj.update(&assembly, 3, 4);
+        let mut ps = pmove::PlayerState::spawn(Vec3::new(1.0, 2.0, 3.0), 45.0);
+        ps.rules = pmove::MoveRules::V1_5;
+        ps.bg.ladder_yawcap = 7;
+        ps.velocity = Vec3::splat(9.0);
+        let mut ring = EventRing::default();
+        ring.add(5, 6);
+        let mut anim = vcod_common::animscript::AnimState::default();
+        let legs = AnimRef {
+            name: "legs".into(),
+            duration_ms: None,
+            blend_ms: None,
+            turret: false,
+            both: false,
+        };
+        let sel = Selection {
+            legs: Some(legs),
+            torso: None,
+        };
+        anim.set(&sel, 0, 0, |_| Some(5));
+        let mut gunner_tree = vcod_common::turretpose::GunnerTree::default();
+        gunner_tree.place(
+            &vcod_common::turretpose::GunnerPlacement {
+                origin: Vec3::ZERO,
+                rot: glam::Quat::IDENTITY,
+                rows: Vec::new(),
+                passed: Vec::new(),
+                walked: Vec::new(),
+                layout: Vec::new(),
+                node: 7,
+                frequency: 0.0,
+                looping: false,
+            },
+            50,
+        );
+        let mut aim_state = pmove::aim::AimState::default();
+        pmove::aim::aim_angles(
+            &ps,
+            &mut aim_state,
+            &pmove::aim::AimInput {
+                def: None,
+                view: [10.0, 20.0, 0.0],
+                msec: 50,
+                now_ms: 1000,
+                kick: Default::default(),
+                gun_kick: [0.0; 2],
+                sway_scale: 1.0,
+            },
+        );
+        let p = &PROTOCOL_V1;
+        ClientSim {
+            ps,
+            pm_type: PmType::Intermission,
+            ring,
+            viewmodel_index: 11,
+            shellshock: [1, 2, 3],
+            assembly: assembly.clone(),
+            dobj,
+            pose: crate::game::combat::BodyPose {
+                legs: 12,
+                ..Default::default()
+            },
+            delta_angles: [1, 2, 3],
+            view_angles: [4.0, 5.0, 6.0],
+            view_lerp_start: Some(13),
+            anim,
+            was_airborne: true,
+            strafing: Some(Side::Left),
+            movetype: Movetype::Walk,
+            footsteps_movetype: Movetype::IdleCr,
+            gunner_leaves: Some((14, vec![(0.5, vec![(1, 0.5)])])),
+            gunner_left: Some((15, Vec::new())),
+            gunner_tree,
+            jumped: Some((
+                pmove::Takeoff {
+                    forced: true,
+                    back: true,
+                    before_timers: true,
+                },
+                16,
+                Movetype::Walk,
+            )),
+            torso_cmds: vec![(17, TorsoCmd::ProneFlipClear)],
+            jump_time: 18,
+            land_anim: Some(19),
+            health: 20,
+            max_health: 21,
+            dead: true,
+            pm_dead: true,
+            died_box: true,
+            session: Some(crate::follow::SessionState::Dead),
+            dead_eye: true,
+            link_to: Some(Link {
+                parent: vcod_gsc::EntId(1, 2),
+                offset: [1.0; 3],
+                velocity: [2.0; 3],
+            }),
+            seat: Some(Seat {
+                vehicle: 22,
+                pos: 1,
+                kind: 2,
+                motion: 3,
+                angles: [1.0; 3],
+                hull_view: true,
+                overheated: true,
+                link_offset: [2.0; 3],
+            }),
+            seat_angles: Some([3.0; 3]),
+            seat_steer: 0.5,
+            hook_es: crate::game::combat::HookEs {
+                weapon: 23,
+                ..Default::default()
+            },
+            ci_seat_angles: [4.0; 3],
+            veh_type: 24,
+            veh_motion: 25,
+            pers_cmd: UserCmd {
+                server_time: 26,
+                ..NULL_USERCMD
+            },
+            linked_unsnapped: true,
+            unseated: true,
+            cursor_hint: 27,
+            cursor_hint_val: 28,
+            cursor_hint_string: 29,
+            head_icon: 30,
+            head_icon_team: 31,
+            damage: DamageAccum {
+                taken: 32,
+                from: Some(Vec3::ONE),
+            },
+            feedback: DamageFeedback {
+                event: 1,
+                count: 2,
+                yaw: 3,
+                pitch: 4,
+            },
+            last_hit: Some((1, 33, [1.0; 3])),
+            dead_yaw: 34,
+            pain_after_ms: 35,
+            aim_state,
+            spawn_view: [7.0; 3],
+            kick: pmove::aim::DamageKick {
+                time_ms: 36,
+                pitch: 1.0,
+                side: 2.0,
+            },
+            gun_kick: pmove::aim::GunKick {
+                angles: [1.0, 2.0],
+                speed: [3.0, 4.0],
+            },
+            aim: [8.0, 9.0],
+            gun_offset: [1.0, 2.0],
+            teleport_bit: true,
+            spawn_count: 255,
+            viewlocked: 2,
+            viewlocked_ent: 37,
+            gunfx: 1,
+            mounted_on: Some((38, TurretStance::Duck)),
+            firing: true,
+            attacking: true,
+            talking: true,
+            ping: true,
+            voted: true,
+            compass_friend: 39,
+            last_friend: 40,
+            friend_ping: true,
+            compass_candidate: true,
+            last_cmd_angles: [41, 42, 43],
+            contents: CONTENTS_CORPSE,
+            linked_solid: 44,
+            follow: crate::follow::Follow {
+                target: Some(2),
+                on: true,
+                forced: true,
+                copied: None,
+            },
+            own_view: true,
+            spectate_flags: 45,
+            last_buttons: 46,
+            hud_cleared: true,
+            respawned: false,
+            dobj_ahead: true,
+            spread_frac: 0.5,
+            stance_window_ms: 47,
+            max_speed: 48,
+            gravity: 49,
+            knockback: 50.0,
+            follow_wire: Some(msg::PlayerState::null(p)),
+            residue: Some(Residue {
+                wire: msg::PlayerState::null(p),
+                moved: true,
+            }),
+            end_frame_wire: Some(msg::PlayerState::null(p)),
+            ring_before_pain: Some(EventRing::default()),
+            end_frame_entity: Some((51, msg::EntityState::null(p))),
+            frozen_command_time: Some(52),
+        }
+    }
+
+    /// `ClientSpawn`'s memset, field by field: each field a spawn keeps reads
+    /// as it was, each it clears reads as the connect's constructor left it,
+    /// and the rest as the spawn writes them. The destructure names every
+    /// field, so a new one fails to compile here until it is sorted.
+    #[test]
+    fn a_spawn_clears_what_the_memset_clears_and_keeps_the_rest() {
+        let (origin, yaw, cmd_angles) = ([10.0, 20.0, 30.0], 90.0, [100, 200, 0]);
+        for mode in [PmType::Normal, PmType::Spectator] {
+            let (marked, mut after) = (marked(), marked());
+            let fresh = ClientSim::spectator(origin, yaw, cmd_angles);
+            after.respawn(mode, origin, yaw, cmd_angles);
+            let ClientSim {
+                ps,
+                pm_type,
+                ring,
+                viewmodel_index,
+                shellshock,
+                assembly,
+                dobj,
+                pose,
+                delta_angles,
+                view_angles,
+                view_lerp_start,
+                anim,
+                was_airborne,
+                strafing,
+                movetype,
+                footsteps_movetype,
+                gunner_leaves,
+                gunner_left,
+                gunner_tree,
+                jumped,
+                torso_cmds,
+                jump_time,
+                land_anim,
+                health,
+                max_health,
+                dead,
+                pm_dead,
+                died_box,
+                session,
+                dead_eye,
+                link_to,
+                seat,
+                seat_angles,
+                seat_steer,
+                hook_es,
+                ci_seat_angles,
+                veh_type,
+                veh_motion,
+                pers_cmd,
+                linked_unsnapped,
+                unseated,
+                cursor_hint,
+                cursor_hint_val,
+                cursor_hint_string,
+                head_icon,
+                head_icon_team,
+                damage,
+                feedback,
+                last_hit,
+                dead_yaw,
+                pain_after_ms,
+                aim_state,
+                spawn_view,
+                kick,
+                gun_kick,
+                aim,
+                gun_offset,
+                teleport_bit,
+                spawn_count,
+                viewlocked,
+                viewlocked_ent,
+                gunfx,
+                mounted_on,
+                firing,
+                attacking,
+                talking,
+                ping,
+                voted,
+                compass_friend,
+                last_friend,
+                friend_ping,
+                compass_candidate,
+                last_cmd_angles,
+                contents,
+                linked_solid,
+                follow,
+                own_view,
+                spectate_flags,
+                last_buttons,
+                hud_cleared,
+                respawned,
+                dobj_ahead,
+                spread_frac,
+                stance_window_ms,
+                max_speed,
+                gravity,
+                knockback,
+                follow_wire,
+                residue,
+                end_frame_wire,
+                ring_before_pain,
+                end_frame_entity,
+                frozen_command_time,
+            } = after;
+            // `$view` reads a field into something comparable; the marker
+            // must differ from the connect's value for the check to bite.
+            macro_rules! check {
+                ($kept:literal, $f:ident) => {
+                    check!($kept, $f, |v| format!("{v:?}"))
+                };
+                ($kept:literal, $f:ident, $view:expr) => {{
+                    let view = $view;
+                    let (m, f, a) = (view(&marked.$f), view(&fresh.$f), view(&$f));
+                    let name = stringify!($f);
+                    assert_ne!(m, f, "{name}: the marker reads as the connect's value");
+                    if $kept {
+                        assert_eq!(a, m, "{name} survives a spawn ({mode:?})");
+                    } else {
+                        assert_eq!(a, f, "{name} is cleared by a spawn ({mode:?})");
+                    }
+                }};
+            }
+            macro_rules! kept {
+                ($($f:ident),* $(,)?) => { $(check!(true, $f);)* };
+            }
+            macro_rules! cleared {
+                ($($f:ident),* $(,)?) => { $(check!(false, $f);)* };
+            }
+            kept!(
+                viewmodel_index,
+                shellshock,
+                assembly,
+                dobj,
+                view_lerp_start,
+                movetype,
+                footsteps_movetype,
+                gunner_leaves,
+                gunner_left,
+                health,
+                max_health,
+                session,
+                seat,
+                seat_angles,
+                seat_steer,
+                hook_es,
+                ci_seat_angles,
+                pers_cmd,
+                head_icon,
+                head_icon_team,
+                ping,
+                voted,
+                compass_candidate,
+                own_view,
+                spectate_flags,
+                hud_cleared,
+                dobj_ahead,
+                stance_window_ms,
+                max_speed,
+                gravity,
+                knockback,
+                ring_before_pain,
+                end_frame_entity,
+            );
+            check!(true, pose, |p: &crate::game::combat::BodyPose| p.legs);
+            cleared!(
+                ring,
+                delta_angles,
+                view_angles,
+                was_airborne,
+                strafing,
+                gunner_tree,
+                jumped,
+                torso_cmds,
+                jump_time,
+                land_anim,
+                dead,
+                pm_dead,
+                died_box,
+                dead_eye,
+                link_to,
+                veh_type,
+                veh_motion,
+                unseated,
+                cursor_hint,
+                cursor_hint_val,
+                cursor_hint_string,
+                last_hit,
+                dead_yaw,
+                pain_after_ms,
+                aim_state,
+                kick,
+                gun_kick,
+                aim,
+                gun_offset,
+                viewlocked,
+                viewlocked_ent,
+                gunfx,
+                mounted_on,
+                firing,
+                attacking,
+                talking,
+                compass_friend,
+                last_friend,
+                friend_ping,
+                last_cmd_angles,
+                follow,
+                last_buttons,
+                spread_frac,
+                follow_wire,
+                end_frame_wire,
+                frozen_command_time,
+            );
+            check!(false, anim, |a: &vcod_common::animscript::AnimState| {
+                (a.legs(), a.torso(), a.timers(0))
+            });
+            check!(false, damage, |d: &DamageAccum| (d.taken, d.from));
+            check!(false, feedback, |d: &DamageFeedback| {
+                (d.event, d.count, d.yaw, d.pitch)
+            });
+            check!(false, residue, |r: &Option<Residue>| r.is_some());
+            // What the spawn writes rather than clears.
+            let mut want = pmove::PlayerState::spawn(Vec3::from(origin), yaw);
+            want.rules = marked.ps.rules;
+            want.bg = marked.ps.bg;
+            want.speed = match mode {
+                PmType::Spectator => pmove::SPEED_SPECTATOR,
+                _ => marked.max_speed as f32,
+            };
+            want.gravity = marked.gravity as f32;
+            want.on_ground = marked.ps.rules.v15();
+            assert_eq!(ps, want, "ps ({mode:?})");
+            assert_eq!(pm_type, mode);
+            assert_eq!(spawn_view, [0.0, yaw, 0.0]);
+            assert_eq!(spawn_count, marked.spawn_count.wrapping_add(1));
+            assert_eq!(teleport_bit, !marked.teleport_bit);
+            assert!(respawned);
+            let body = mode == PmType::Normal;
+            assert_eq!(contents, if body { CONTENTS_BODY } else { 0 });
+            let solid = if body {
+                Body::pack_solid(ps.mins(), ps.maxs())
+            } else {
+                0
+            };
+            assert_eq!(linked_solid, solid);
+            assert!(!linked_unsnapped);
+        }
     }
 }

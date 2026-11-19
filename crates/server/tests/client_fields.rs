@@ -6,9 +6,9 @@
 //! and a lone client sees nobody else's, so there is nothing on the wire to
 //! diff the client-tagged fields against. Every expectation below is read out
 //! of `pak5.pk3:maps/mp/gametypes/dm.gsc` with the line named, so it proves
-//! that our VM ran those lines and stored what they say — not that a retail
+//! that our VM ran those lines and stored what they say, not that a retail
 //! server holds the same values. What a second client sees of the first is
-//! stage 5's gate, and that is the A/B this cannot be.
+//! `two_clients.rs`'s gate, and that is the A/B this cannot be.
 //!
 //! Needs `COD_DIR`; without the paks it returns early.
 
@@ -17,19 +17,9 @@ use crate::common;
 use common::Queues;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::Instant;
 
 fn cfg(map: &str) -> vcod_server::ServerConfig {
-    vcod_server::ServerConfig {
-        map: map.into(),
-        hostname: "vcod test".into(),
-        max_clients: 8,
-        gametype: "dm".into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
-    }
+    common::cfg(map, "dm")
 }
 
 /// `spawnPlayer` ends with these, in `dm.gsc` line order. `.sessionteam` is
@@ -47,15 +37,9 @@ fn check(map: &str) {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
         return;
     };
-    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
-    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
-    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
 
     let fs = Rc::new(fs);
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(map), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::on(cfg(map)).start(fs);
 
     let q = Rc::new(RefCell::new(Queues::default()));
     let (team, weapon) = common::captured_join(map, &cfg(map).gametype);

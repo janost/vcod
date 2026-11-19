@@ -1,4 +1,4 @@
-//! The entity list, diffed against a retail trace. Stage 5's content gate:
+//! The entity list, diffed against a retail trace. The content gate:
 //! every entity the trace shows retail sending has to exist in ours with the
 //! same fields.
 //!
@@ -25,17 +25,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::time::Instant;
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::{PROTOCOL_V1, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1};
 
-/// Entities stage 5 knowingly does not reproduce, each with the reason. Empty
+/// Entities vcod knowingly does not reproduce, each with the reason. Empty
 /// is the goal, and a listed gap that starts matching fails the guard below,
 /// so the list cannot rot into a lie.
 const GAPS: &[(&str, &str)] = &[];
 
-/// Fields stage 5 knowingly does not reproduce, as `(map, field, reason)`.
+/// Fields vcod knowingly does not reproduce, as `(map, field, reason)`.
 /// Same rule as `GAPS`: a listed field that stops differing on its own map
 /// fails the guard, so this cannot rot either. Scoped to a map because a gap
-/// only exists where the entity that carries it does -- pavlov places no
+/// only exists where the entity that carries it does: pavlov places no
 /// turret, so a turret's field matches there by having nothing to differ on.
 const FIELD_GAPS: &[(&str, &str, &str)] = &[];
 
@@ -45,7 +45,7 @@ const FIELD_GAPS: &[(&str, &str, &str)] = &[];
 /// we box-trace, so its resting z and the surface normal it aligns to are a
 /// little different. Measured maxima across both maps are 0.024 units of z and
 /// 0.035 degrees of angle; this bound is twice that, and it is far under the
-/// errors the gate exists to catch -- an item floating at the mapper's z is
+/// errors the gate exists to catch: an item floating at the mapper's z is
 /// five units out and an unwrapped roll is 360 degrees out.
 ///
 /// It also covers `+0.0` against `-0.0`, which is what a flat floor's pitch
@@ -60,16 +60,10 @@ const EXTRAS_ALLOWED: &[(&str, &str)] = &[];
 
 fn cfg(map: &str) -> vcod_server::ServerConfig {
     vcod_server::ServerConfig {
-        map: map.into(),
-        hostname: "vcod test".into(),
         // The captures were taken at 8, and each fixture header is checked
         // against this.
         max_clients: 8,
-        gametype: "dm".into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
+        ..common::cfg(map, "dm")
     }
 }
 
@@ -254,8 +248,8 @@ fn ours(
 // ------------------------------------------------------------------- the diff
 
 /// What matches an entity across two servers. Never the slot: the number comes
-/// out of each server's own spawn order. Stage 2 pinned ours against a retail
-/// capture and they agreed, so the numbers are checked separately, as a
+/// out of each server's own spawn order. Ours agrees with a retail capture,
+/// and the numbers are checked separately, as a
 /// finding rather than as the key.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
 struct Key {
@@ -266,7 +260,7 @@ struct Key {
     origin: [i32; 3],
 }
 
-fn key(p: &Protocol, e: &EntityState) -> Key {
+fn key(p: &Cod1Wire, e: &EntityState) -> Key {
     let at = |axis: usize| e.field_f32(p, &format!("pos.trBase[{axis}]")).round() as i32;
     Key {
         etype: e.field_i32(p, "eType"),
@@ -275,7 +269,7 @@ fn key(p: &Protocol, e: &EntityState) -> Key {
     }
 }
 
-fn describe(p: &Protocol, num: u32, e: &EntityState) -> String {
+fn describe(p: &Cod1Wire, num: u32, e: &EntityState) -> String {
     let k = key(p, e);
     format!(
         "ent {num} eType {} index {} at [{}, {}, {}]",

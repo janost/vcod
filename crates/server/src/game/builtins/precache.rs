@@ -17,7 +17,7 @@ use crate::configstrings::CsRange;
 use crate::game::host::GameHost;
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("precachemodel", precache_model),
@@ -29,10 +29,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("precachestatusicon", precache_status_icon),
     ("precacheitem", precache_item),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// The name argument, accepting both a plain string and a localized
 /// literal: `precacheString(&"MPSCRIPT_KILLCAM")` passes `Value::Localized`

@@ -13,7 +13,15 @@ Sources, each claim naming its own:
   `COD4_LNXDED_DIR`).
 - `cod4_lnxded-bin`, the 1.7 Linux dedicated server (md5
   `6b9995fa2e800664644da1c067779414`), stripped. Addresses are its virtual
-  addresses (first `LOAD` at file offset 0 maps to 0x08048000).
+  addresses (first `LOAD` at file offset 0 maps to 0x08048000). It is not
+  the `cod4_lnxded` the other CoD4 docs read (md5
+  `bf8448740b3f4cb74c2254f01af14cdd`, `docs/dev/reverse-engineering.md`):
+  its build date string reads `May 20 2008` against that one's `Jun 28
+  2008`, its text segment is 0x1a0 bytes shorter, and none of the 55
+  `0x081.....`/`0x082.....` addresses this doc cites holds the same bytes
+  in both. VERIFIED (md5s, the date strings, a byte compare at each cited
+  address). So this doc's addresses apply to `cod4_lnxded-bin` only; the
+  two files sit side by side in the dedicated server install.
 VERIFIED means read out of a 1.7 zone or the 1.7 server binary; INFERRED
 means read off control flow. A claim labelled INFERRED that names no 1.7
 address is not yet confirmed on 1.7.
@@ -295,10 +303,16 @@ INFERRED (matched by callees and immediates).
   an asset handle landed in (the list's header slots, alias slots, every
   handle field); the struct address of each asset; shared sub-structs by
   address (techniques, shaders, vertex declarations, texture tables,
-  water, sound files, speaker maps, rigid vertex lists, the sun light);
+  water, sound files, speaker maps, rigid vertex lists, the sun light,
+  material constant tables and state bits, dynamic entities' model
+  pieces);
   and the start and length of every struct and array loaded. Across all
   85 zones every offset token lands on one of these. VERIFIED (the census
-  asserts none is left). On mp_crash, walked with its bulk data kept,
+  asserts none is left, a loaded sound's sample slot counting its own).
+  A physics brush's plane array arrives by offset in every zone with
+  physics models (2 to 34 a zone); the walk pools them as `brush planes`,
+  so one that starts inside another brush's array resolves. VERIFIED (the
+  census, 2026-11-19). On mp_crash, walked with its bulk data kept,
   9579 tokens name data inside another struct's array (a leaf brush
   node's list inside the clipmap's leaf brushes, a cell tree's static
   model list inside an earlier one). VERIFIED. The walk keeps such shared
@@ -512,6 +526,15 @@ VERIFIED:
   sharing 181 techniques, 181 passes carrying vertex shader bytecode, 124
   images. One material, `,$levelbriefing`, has a null techset slot.
 
+vcod holds a walk to the same bounds before it allocates anything: a
+`blockSize` over 0x0FFFFFFF (an offset token's 28 bits), an `XFile.size`
+or a `blockSize` sum over 1 GiB (stock tops out at 181 MB and 101 MB,
+VERIFIED: the 72 client zones' headers),
+any data past its block's `blockSize`, a string running past it and
+inflated bytes past `size` are refused, and runtime arrays take block 1
+space without an allocation (`walk::W::advance`, `zone::ZoneStream`).
+The 85 stock zones pass unchanged.
+
 ## 12. Not walked or not decoded yet
 
 - No stock zone carries xmodelpieces, ui_map, aitype, mptype, character
@@ -547,7 +570,11 @@ VERIFIED:
   the 1.7 client only `mod.ff` comes from the `fs_game` directory, no other
   referenced zone. `vcod_cod4::install` follows
   the 1.7 rule, the directory names matched case-blind (`mods/ModWarfare`
-  on a disk holding `Mods/ModWarfare`, as Windows opens it).
+  on a disk holding `Mods/ModWarfare`, as Windows opens it). vcod also
+  refuses a zone name that is not one plain path component
+  (`install::is_zone_name`: no separator, `..`, drive or control byte), so
+  a server's `mapname` never opens a file outside these directories; the
+  1.7 client's own check on it is not read.
 - `DB_ModFileExists` builds mode 1's `mod` path and only answers when `fs_game`
   is set; `DB_AddUserMapDir` adds `usermaps/<map>` to the iwd search
   (`FS_AddUserMapDirIWDs`) only under a set `fs_game` too. INFERRED. The
@@ -679,13 +706,16 @@ VERIFIED:
   `changeclass_mw` and `ocd_*` menus reach the game, and load again when
   the server's `fs_game` changes.
 - The client reads the weapon files too: under a set `fs_game` its
-  prediction's weapon defs come off `weapons/mp/<name>` on the search
-  path, as the server's do (`Cod4World::overlay_weapon_files`). A weapon
+  prediction's weapon defs and its HUD's weapon fields (ammo and clip
+  slots, clip size, icons, kill icon, crosshair) come off
+  `weapons/mp/<name>` on the search path, as the server's do
+  (`vcod_cod4::weapon_file::load_overlay`, `Cod4World::overlay_weapon_files`,
+  `HudAssets::overlay_weapon_files`). A weapon
   file's model field, when set, reads as a set pointer in the struct, so
   `knifeModel`'s test (`WeaponDef::knife_model`, offset 772) holds off a
   file as off the zone. VERIFIED (`cod4_weapon_files_replace_the_zone_defs_under_a_mod`:
   under ModWarfare, which carries no weapon files, `main/`'s stock files
-  give the zone's defs).
+  give the zone's defs, and the HUD's slots match prediction's).
 - Downloads: `cod4-handshake.md` 11.
 - Not done: the HUD's other map-dependent
   assets on a map change under one `fs_game`.

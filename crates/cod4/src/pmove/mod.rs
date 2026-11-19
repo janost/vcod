@@ -1,8 +1,9 @@
 //! CoD4 1.7's player movement: `Pmove` and `PmoveSingle` (docs/research/
 //! cod4-pmove.md), seeded from CoD2's (`vcod_cod2::pmove`), whose descendant
 //! it is, with its own 1.7 playerstate. The two share the collision kernels
-//! (`vcod_common::clipmap`) and nothing else yet: the functions the moves
-//! A/B shows equal fold later.
+//! (`vcod_common::clipmap`), the x87 leaf helpers (`vcod_common::x87`) and
+//! what `vcod_common::pmshared` holds: `pml_t`, the touch list and the
+//! playerstate fields both name alike. Everything else stays forked.
 //!
 //! What differs from CoD2 and why each piece reads as it does is in the
 //! doc; `cod4_moves_ab` replays retail captures through [`player_step`].
@@ -14,8 +15,8 @@
 //! The weapon half ([`weapon`]: the aim spread, the sight, `PM_Weapon`)
 //! runs when the caller hands the level's weapon defs in ([`Pmove::defs`]);
 //! without them only the breath runs. The mantle ([`mantle`]) runs when
-//! [`Rules::mantle_anims`] holds the clips. Not here: the anim script calls
-//! and the melee charge.
+//! [`Rules::mantle_anims`] holds the clips. The anim script calls are
+//! [`anim`], the melee charge's lunge [`charge`] (cod4-pmove.md 3).
 
 pub mod aim;
 pub mod anim;
@@ -29,6 +30,7 @@ pub mod mantle;
 mod moves;
 mod slide;
 mod stance;
+pub mod tape;
 pub mod weapon;
 pub mod wire;
 
@@ -39,6 +41,9 @@ use crate::collision::ClipMap;
 
 pub use slide::clip_velocity;
 pub use stance::lerp_duration as view_height_lerp_duration;
+pub use vcod_common::pmove::Stance;
+pub(crate) use vcod_common::pmshared::leave_ladder;
+use vcod_common::pmshared::{PmState, TouchList};
 
 /// `groundEntityNum` off the ground, and the world's number.
 pub const ENTITYNUM_NONE: i32 = 1023;
@@ -160,11 +165,8 @@ pub mod ev {
 }
 
 /// `ClientThink_real`'s `pm.tracemask`: alive, dead and spectating.
-pub const MASK_PLAYERSOLID: u32 = 0x2810011;
-pub const MASK_DEADSOLID: u32 = 0x810011;
+pub use vcod_common::clipmap::{CONTENTS_BODY, MASK_DEADSOLID, MASK_PLAYERSOLID};
 pub const MASK_SPECTATOR: u32 = 0x800811;
-/// `CONTENTS_BODY`.
-pub const CONTENTS_BODY: u32 = 0x200_0000;
 /// `otherFlags` 4: a player in the world (`POF_PLAYER`).
 pub const POF_PLAYER: u32 = 4;
 
@@ -316,7 +318,7 @@ impl WeaponMove {
     };
 
     /// The fields off a weapon asset's raw `WeaponDef` (offsets in
-    /// cod4-pmove.md, "The weapon's scales").
+    /// cod4-pmove.md 6).
     pub fn from_raw(raw: &[u8]) -> Option<WeaponMove> {
         let f = |o: usize| Some(f32::from_le_bytes(raw.get(o..o + 4)?.try_into().ok()?));
         Some(WeaponMove {
@@ -572,11 +574,61 @@ impl PlayerState {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Stance {
-    Stand,
-    Crouch,
-    Prone,
+impl PmState for PlayerState {
+    const PMF_PRONE: u32 = pmf::PRONE;
+    const PMF_DUCKED: u32 = pmf::DUCKED;
+    const PMF_LADDER: u32 = pmf::LADDER;
+    const PMF_LADDER_LEFT: u32 = pmf::LADDER_LEFT;
+    const PMF_JUMPING: u32 = pmf::JUMPING;
+    const PMF_TIME_LAND: u32 = pmf::TIME_LAND;
+    const PMF_TIME_KNOCKBACK: u32 = pmf::TIME_KNOCKBACK;
+    const PM_DEAD: i32 = pm_type::DEAD;
+
+    fn command_time(&mut self) -> &mut i32 {
+        &mut self.command_time
+    }
+    fn pm_flags(&mut self) -> &mut u32 {
+        &mut self.pm_flags
+    }
+    fn pm_time(&mut self) -> &mut i32 {
+        &mut self.pm_time
+    }
+    fn origin(&mut self) -> &mut Vec3 {
+        &mut self.origin
+    }
+    fn velocity(&mut self) -> &mut Vec3 {
+        &mut self.velocity
+    }
+    fn ground_entity_num(&mut self) -> &mut i32 {
+        &mut self.ground_entity_num
+    }
+    fn jump_origin_z(&mut self) -> &mut f32 {
+        &mut self.jump_origin_z
+    }
+    fn timers(&mut self) -> [&mut i32; 2] {
+        [&mut self.legs_timer, &mut self.torso_timer]
+    }
+    fn pm_type(&mut self) -> &mut i32 {
+        &mut self.pm_type
+    }
+    fn gravity(&mut self) -> &mut i32 {
+        &mut self.gravity
+    }
+    fn jump_time(&mut self) -> &mut i32 {
+        &mut self.jump_time
+    }
+    fn ladder_vec(&mut self) -> &mut Vec3 {
+        &mut self.ladder_vec
+    }
+    fn view_angles(&mut self) -> &mut [f32; 3] {
+        &mut self.view_angles
+    }
+    fn movement_dir(&mut self) -> &mut i32 {
+        &mut self.movement_dir
+    }
+    fn effective_stance(&self) -> Stance {
+        PlayerState::effective_stance(self)
+    }
 }
 
 /// A trace as 1.7's pmove reads it: no end point, `walkable` kept.
@@ -603,6 +655,22 @@ impl Default for Tr {
             startsolid: false,
             allsolid: false,
             walkable: false,
+        }
+    }
+}
+
+impl Tr {
+    /// Folds one entity's trace over the same sweep into the running one,
+    /// as the entity pass's cumulative trace keeps it: a nearer contact
+    /// replaces it, and a start in solid is kept from either side
+    /// (cod4-pmove.md 15).
+    pub fn fold(&mut self, c: Tr) {
+        if c.fraction < self.fraction {
+            let startsolid = self.startsolid || c.startsolid;
+            *self = c;
+            self.startsolid = startsolid;
+        } else if c.startsolid {
+            self.startsolid = true;
         }
     }
 }
@@ -635,28 +703,80 @@ pub fn world_tr(t: &ClipTrace) -> Tr {
     }
 }
 
+impl Tr {
+    /// Folds in a client's body (`body.entity` below [`MAX_CLIENTS`]):
+    /// `CM_TempBoxModel`'s model 0xfff takes `CM_Trace`'s capsule arm
+    /// (`cod4_lnxded` 0x811d29c, iw3mp.exe 0x4f5080), so a body met at an
+    /// angle stops on its round side (cod4-pmove.md 15,
+    /// cod4-client-view.md 5.1). The server and the predictor both clip
+    /// through it.
+    pub fn fold_capsule(
+        &mut self,
+        start: Vec3,
+        end: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+        body: &vcod_common::movetrace::Body,
+    ) {
+        let mut c = vcod_common::collision::Trace::clear(end);
+        c.fraction = self.fraction;
+        vcod_common::movetrace::clip_body_kept(&mut c, start, end, mins, maxs, body);
+        self.fold_body(&c, body.contents, body.entity);
+    }
+
+    /// Folds in a sweep `c` that met entity `entity`'s `contents`.
+    pub fn fold_body(&mut self, c: &vcod_common::collision::Trace, contents: u32, entity: u32) {
+        self.fold(Tr {
+            fraction: c.fraction,
+            normal: c.normal,
+            surface_flags: 0,
+            contents,
+            entity_num: entity,
+            startsolid: c.startsolid,
+            allsolid: c.allsolid,
+            walkable: c.normal.z >= crate::collision::WALKABLE_NORMAL_Z,
+        });
+    }
+
+    /// Folds in brush entity `b`: `CM_TransformedBoxTrace`, the sweep in
+    /// its inline model's frame and the normal turned back.
+    pub fn fold_brush(
+        &mut self,
+        clip: &ClipMap,
+        b: &Brush,
+        start: Vec3,
+        end: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+        mask: u32,
+    ) {
+        let q = vcod_common::turretpose::angles_quat(b.angles.to_array());
+        let local = |p: Vec3| q.inverse() * (p - b.origin);
+        let c = clip.trace_model(b.model, local(start), local(end), mins, maxs, mask);
+        let mut w = world_tr(&c);
+        w.normal = q * c.normal;
+        w.entity_num = b.entity;
+        self.fold(w);
+    }
+}
+
+/// A brush entity linked to inline model `model`, as it stands.
+#[derive(Clone, Copy, Debug)]
+pub struct Brush {
+    pub entity: u32,
+    pub model: usize,
+    pub origin: Vec3,
+    pub angles: Vec3,
+}
+
 impl PmWorld for ClipMap {
     fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, _pass: u32, mask: u32) -> Tr {
         world_tr(&ClipMap::trace(self, start, end, mins, maxs, mask))
     }
 }
 
-/// `pml_t`: what one `PmoveSingle` keeps beside the playerstate.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Pml {
-    pub forward: Vec3,
-    pub right: Vec3,
-    pub up: Vec3,
-    pub frametime: f32,
-    pub msec: i32,
-    pub walking: bool,
-    pub ground_plane: bool,
-    pub almost_ground_plane: bool,
-    pub ground_trace: Tr,
-    pub impact_speed: f32,
-    pub previous_origin: Vec3,
-    pub previous_velocity: Vec3,
-}
+/// `pml_t` over 1.7's trace.
+pub(crate) type Pml = vcod_common::pmshared::Pml<Tr>;
 
 /// The usercmd fields pmove reads (`vcod_cod4::net::clmsg::UserCmd`'s,
 /// angles as the wire's shorts).
@@ -710,9 +830,7 @@ pub struct Pmove<'a> {
     /// The process's `rand()`: an anim script event draws its command off
     /// it (cod4-combat.md 10.9); without it the first command plays.
     pub rand: Option<&'a mut dyn FnMut() -> i32>,
-    /// `touchents`: every entity the cmd met, first meeting first.
-    pub touch: Vec<u32>,
-    pub prone_change: bool,
+    pub touch: TouchList,
     /// The horizontal speed `PM_Footsteps` measured.
     pub xyspeed: f32,
     /// Each step `PM_StepSlideMove` took, as `(commandTime, dz)`: what it
@@ -725,8 +843,6 @@ pub struct Pmove<'a> {
     pub(crate) mins: Vec3,
     pub(crate) maxs: Vec3,
 }
-
-const MAX_TOUCH: usize = 32;
 
 impl<'a> Pmove<'a> {
     pub fn new(
@@ -752,24 +868,12 @@ impl<'a> Pmove<'a> {
             defs: None,
             anim: None,
             rand: None,
-            touch: Vec::new(),
-            prone_change: false,
+            touch: TouchList::default(),
             xyspeed: 0.0,
             view_steps: Vec::new(),
             mantle_started: None,
             mins: PLAYER_MINS,
             maxs: PLAYER_MAXS,
-        }
-    }
-
-    /// `PM_AddTouchEnt`: once each, never the world.
-    pub(crate) fn add_touch(&mut self, entity: u32) {
-        if entity != ENTITYNUM_WORLD as u32
-            && entity != ENTITYNUM_NONE as u32
-            && self.touch.len() < MAX_TOUCH
-            && !self.touch.contains(&entity)
-        {
-            self.touch.push(entity);
         }
     }
 
@@ -805,7 +909,7 @@ impl<'a> Pmove<'a> {
         if !t.startsolid || t.contents & CONTENTS_BODY == 0 {
             return t;
         }
-        self.add_touch(t.entity_num);
+        self.touch.add(t.entity_num);
         self.tracemask &= !CONTENTS_BODY;
         self.raw_trace(start, end, mins, maxs, mask & !CONTENTS_BODY)
     }
@@ -858,7 +962,7 @@ pub fn player_step_viewed(
     pm.weapon = weapon;
     pmove(&mut pm);
     *oldcmd = *cmd;
-    (pm.touch, pm.view_steps)
+    (pm.touch.into_vec(), pm.view_steps)
 }
 
 /// [`player_step`] with the weapon half: `defs` are the level's weapon defs
@@ -878,7 +982,7 @@ pub fn player_step_armed(
 /// [`player_step_armed`] with the anim script picking the legs and torso
 /// anims (the server's step), each event's command drawn off `rand`.
 /// Returns the touch list and [`Pmove::mantle_started`].
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn player_step_animated<'a>(
     ps: &'a mut PlayerState,
     cmd: &Cmd,
@@ -897,7 +1001,7 @@ pub fn player_step_animated<'a>(
     pm.rand = rand;
     pmove(&mut pm);
     *oldcmd = *cmd;
-    (pm.touch, pm.mantle_started)
+    (pm.touch.into_vec(), pm.mantle_started)
 }
 
 /// Seconds in a millisecond: `PmoveSingle`'s frametime factor (0x8209640,
@@ -1207,14 +1311,6 @@ fn walking_flag(pm: &mut Pmove) {
     }
 }
 
-/// `PM_ClearLadderFlag`: a player taken off the ladder notes it.
-pub(crate) fn leave_ladder(ps: &mut PlayerState) {
-    if ps.pm_flags & pmf::LADDER != 0 {
-        ps.pm_flags |= pmf::LADDER_LEFT;
-    }
-    ps.pm_flags &= !pmf::LADDER;
-}
-
 /// `PM_DropTimers`: `pm_time` runs out, and with it the land, knockback
 /// and jump timers' flags (the jump's state cleared); the legs and torso
 /// timers run down to 0.
@@ -1402,7 +1498,7 @@ const FOLIAGE_RESET_MS: i32 = 500;
 /// tall (0x820df28).
 const FOLIAGE_BOX_SCALE: f32 = 0.75;
 const FOLIAGE_BOX_HEIGHT: f32 = f32::from_bits(0x3f66_6666);
-const CONTENTS_FOLIAGE: u32 = 2;
+use vcod_common::clipmap::CONTENTS_FOLIAGE;
 
 /// `PM_FoliageSounds` (inlined at 0x805d05e): a body moving at 40 or more
 /// raises `EV_FOLIAGE_SOUND` each time its interval (1.5 s slow, down to
@@ -1463,5 +1559,9 @@ fn settle_velocity(ps: &mut PlayerState, pml: &Pml) {
     ps.velocity = ps.velocity.map(f32::round_ties_even);
 }
 
+#[cfg(test)]
+mod pin;
+#[doc(hidden)]
+pub mod testing;
 #[cfg(test)]
 mod tests;

@@ -11,11 +11,11 @@ pub enum Op {
     StoreLocal(u16),
     /// Pops the object, pushes the field.
     LoadField(Atom),
-    /// Pops the value then the object.
+    /// Pops the object then the value.
     StoreField(Atom),
     /// Pops the key then the object.
     LoadIndex,
-    /// Pops the value, the key, then the object. An undefined value is
+    /// Pops the key, the object, then the value. An undefined value is
     /// kept as a key `.size` counts (`probe_undef_call_into_unset`).
     StoreIndex,
     /// `x[k] = undefined` with the literal: pops the key then the object,
@@ -35,7 +35,7 @@ pub enum Op {
     /// `EnsureArrayLocal`, but writes the new array back to the field.
     EnsureArrayField(Atom),
     /// Pops the key then the array; same auto-vivification as
-    /// `EnsureArrayLocal`, but writes the new array back to that element --
+    /// `EnsureArrayLocal`, but writes the new array back to that element:
     /// the `array[i][j] = v` case.
     EnsureArrayIndex,
     LoadSelf,
@@ -211,7 +211,7 @@ pub enum Op {
     },
 }
 
-/// `Debug` only, for `Frame`'s derive (`vm/interp.rs`) -- nothing formats a
+/// `Debug` only, for `Frame`'s derive (`vm/interp.rs`): nothing formats a
 /// `Function` directly.
 #[derive(Debug)]
 pub struct Function {
@@ -508,7 +508,7 @@ fn visit(
 /// fallthrough edge, and confirms the operand stack depth on entry to each
 /// one agrees no matter which edge reached it, and never goes negative.
 /// This is the check that catches a miscompile that leaves a value behind
-/// on one path but not another — exactly the shape of bug a jump-target or
+/// on one path but not another: exactly the shape of bug a jump-target or
 /// terminator error produces, and the reason to run it on every function a
 /// loader accepts, not just in the compiler's own tests. Answers the
 /// deepest the operand stack gets.

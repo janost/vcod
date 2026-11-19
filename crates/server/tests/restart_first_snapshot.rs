@@ -49,10 +49,10 @@ fn snaps_after(cl: &NetClient<ClientEnd>, after: i32) -> Vec<(i32, i32, u32)> {
     };
     (newest.saturating_sub(31)..=newest)
         .filter_map(|n| cl.snapshots().get(n))
-        .filter(|s| s.server_time > after)
+        .filter(|s| s.server_time.raw() > after)
         .map(|s| {
             (
-                s.server_time,
+                s.server_time.raw(),
                 s.ps.field_i32(p, "commandTime"),
                 s.snap_flags,
             )
@@ -66,12 +66,7 @@ fn the_first_snapshot_after_a_restart_is_the_last_frame_it_owed() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "dm"), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot::new(MAP, "dm").start(fs);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl = common::connect(&mut sv, &q, &mut now);
     for _ in 0..40 {
@@ -86,7 +81,7 @@ fn the_first_snapshot_after_a_restart_is_the_last_frame_it_owed() {
             .snapshots()
             .newest()
             .expect("snapshots before the restart");
-        let (t, flags) = (last.server_time, last.snap_flags);
+        let (t, flags) = (last.server_time.raw(), last.snap_flags);
         sv.push_console("map_restart");
         now += Duration::from_millis(50) * owed;
         cl.send_frame(&NULL_USERCMD);

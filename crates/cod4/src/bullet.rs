@@ -62,17 +62,39 @@ pub fn random_dir(mut seed: i32) -> (f32, f32) {
     (r * t.cos(), r * t.sin())
 }
 
-/// `BG_GetSpreadForWeapon` (iw3mp.exe calls it at 0x4566bb):
-/// the hip spread's two ends by the eye's height between prone (11),
-/// crouched (40) and standing (60), the script's override, Steady Aim's
-/// 0.65.
+/// `perk_weapSpreadMultiplier`'s default, 0.65 (the float at `iw3mp.exe`
+/// 0x70b390 its registration at 0x40dd48 loads).
+pub const PERK_SPREAD_MULTIPLIER: f32 = 0.65;
+
+/// `BG_GetSpreadForWeapon` (iw3mp.exe calls it at 0x4566bb, and
+/// `CG_CalcReticleSpread` at 0x430e40) off `ps`: see [`hip_spread`].
 pub fn spread_for_weapon(ps: &PlayerState, d: &WeaponDef) -> (f32, f32) {
-    if ps.spread_override_state == 2 {
-        let s = ps.spread_override as f32;
-        return (s, s);
-    }
-    let h = ps.view_height_current;
-    let (min, mut max) = if h <= 40.0 {
+    hip_spread(
+        d,
+        ps.view_height_current,
+        ps.perks,
+        ps.spread_override_state,
+        ps.spread_override,
+    )
+}
+
+/// `BG_GetSpreadForWeapon` (`iw3mp.exe` 0x416c70): the hip spread's two
+/// ends by the eye's height between prone (11), crouched (40) and
+/// standing (60); a `spreadOverride` of state 2 pins both, of state 1 the
+/// max; then Steady Aim (`perks` bit 1) scales both by
+/// [`PERK_SPREAD_MULTIPLIER`], a pinned spread too (state 2 jumps to the
+/// store at 0x416d35, ahead of the perk test at 0x416d45).
+pub fn hip_spread(
+    d: &WeaponDef,
+    view_height: f32,
+    perks: u32,
+    override_state: i32,
+    override_value: i32,
+) -> (f32, f32) {
+    let h = view_height;
+    let (min, mut max) = if override_state == 2 {
+        (override_value as f32, override_value as f32)
+    } else if h <= 40.0 {
         let f = (h - 11.0) / 29.0;
         (
             (d.hip_spread_ducked_min - d.hip_spread_prone_min) * f + d.hip_spread_prone_min,
@@ -85,11 +107,11 @@ pub fn spread_for_weapon(ps: &PlayerState, d: &WeaponDef) -> (f32, f32) {
             (d.hip_spread_stand_max - d.hip_spread_ducked_max) * f + d.hip_spread_ducked_max,
         )
     };
-    if ps.spread_override_state == 1 {
-        max = ps.spread_override as f32;
+    if override_state == 1 {
+        max = override_value as f32;
     }
-    if ps.perks & 2 != 0 {
-        return (min * 0.65, max * 0.65);
+    if perks & 2 != 0 {
+        return (min * PERK_SPREAD_MULTIPLIER, max * PERK_SPREAD_MULTIPLIER);
     }
     (min, max)
 }
@@ -115,8 +137,9 @@ pub fn shots_and_range(d: &WeaponDef) -> (i32, f32) {
     }
 }
 
-/// `CG_BulletEndpos` / `Bullet_Endpos` (iw3mp.exe 0x456470,
-/// The spread disc draw at 0x4a66e0): `range` along `axis[0]` from `start`,
+/// `CG_BulletEndpos` / `Bullet_Endpos` (`iw3mp.exe` 0x456470, which draws
+/// the spread disc at 0x4a66e0; cod4-effects.md 12.2): `range` along
+/// `axis[0]` from `start`,
 /// pushed along the right and up axes by the disc's point times
 /// `tan(spread) * range`.
 pub fn bullet_end(seed: i32, spread: f32, start: Vec3, axis: &[Vec3; 3], range: f32) -> Vec3 {
@@ -148,6 +171,21 @@ mod tests {
         let e = bullet_end(77, 3.0, Vec3::ZERO, &axis, 100.0);
         let off = (e - Vec3::X * 100.0).length();
         assert!(off > 0.0 && off <= (3.0f32).to_radians().tan() * 100.0 + 1e-3);
+    }
+
+    /// The pinned spread of `spreadOverride` state 2 still takes Steady
+    /// Aim's scale; state 1 pins only the max.
+    #[test]
+    fn steady_aim_scales_a_pinned_spread() {
+        let d = WeaponDef {
+            hip_spread_stand_min: 2.0,
+            hip_spread_stand_max: 6.0,
+            ..Default::default()
+        };
+        assert_eq!(hip_spread(&d, 60.0, 0, 2, 10), (10.0, 10.0));
+        assert_eq!(hip_spread(&d, 60.0, 2, 2, 10), (6.5, 6.5));
+        assert_eq!(hip_spread(&d, 60.0, 0, 1, 10), (2.0, 10.0));
+        assert_eq!(hip_spread(&d, 60.0, 2, 0, 0), (2.0 * 0.65, 6.0 * 0.65));
     }
 
     /// FNV-1a over a stream of words: the pins below hash every output's bits.

@@ -16,6 +16,36 @@ pub enum SayMode {
     Squad,
 }
 
+/// Chat text as `games_mp.log` and the server log take it: each control
+/// character a space, so a quoted LF cannot start a forged record. vcod's
+/// own; retail writes the bytes (cod11-chat.md 1). The chat line keeps them.
+pub fn log_text(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.chars().any(char::is_control) {
+        text.chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect::<String>()
+            .into()
+    } else {
+        text.into()
+    }
+}
+
+/// `Cmd_Tell_f`'s log line (`crate::server::Server`'s `log_tell`): 1.1's
+/// `tell: %s to %s: %s`, else `tell;%d;%d;%s;%d;%d;%s;%s` with GUID 0.
+pub fn tell_line(
+    logs_1_1: bool,
+    (slot, from): (usize, &str),
+    (to, to_name): (usize, &str),
+    text: &str,
+) -> String {
+    let text = log_text(text);
+    if logs_1_1 {
+        format!("tell: {from} to {to_name}: {text}\n")
+    } else {
+        format!("tell;0;{slot};{from};0;{to};{to_name};{text}\n")
+    }
+}
+
 /// `Q_strncpyz(text, 0x96)`: the message keeps 149 bytes.
 const MAX_SAY_TEXT: usize = 149;
 
@@ -33,7 +63,7 @@ impl GameHost {
     ) {
         let team = self.client_field(cx, speaker, "sessionteam");
         let team = team.as_deref().unwrap_or("");
-        let squad = self.client_squad.get(speaker).copied().unwrap_or(0);
+        let squad = self.clients.get(speaker).map(|c| c.squad).unwrap_or(0);
         let mode = match mode {
             SayMode::Team if !matches!(team, "axis" | "allies") => SayMode::All,
             // 1.5's `G_Say` (0x42dc9) sends a squad say from a speaker in
@@ -41,7 +71,12 @@ impl GameHost {
             SayMode::Squad if squad == 0 => SayMode::Team,
             m => m,
         };
-        let name = clean_name(self.client_names.get(speaker).map_or("", String::as_str));
+        let name = clean_name(
+            self.clients
+                .get(speaker)
+                .map(|c| &c.name)
+                .map_or("", String::as_str),
+        );
         // CoD4's `G_Say` (0x80ae962) logs a plain or team line before it
         // sends anything (`say;` 0x821957d, `sayteam;` 0x821958e); a tell
         // writes none (VERIFIED live, games_mp.log).
@@ -51,19 +86,23 @@ impl GameHost {
             SayMode::Squad => "saysquad",
             SayMode::Tell => "",
         };
+        let logged = log_text(text);
         if mode == SayMode::Tell {
         } else if self.profile.game == vcod_common::game::Game::Cod4 {
             let (who, guid) = crate::game::cod4::log_client(self, speaker);
-            crate::game::cod4::log_printf(self, format!("{word};{guid};{speaker};{who};{text}\n"));
+            crate::game::cod4::log_printf(
+                self,
+                format!("{word};{guid};{speaker};{who};{logged}\n"),
+            );
         } else if self.logs_1_1() {
             // 1.1's `G_Say` (0x46c14): `say: %s: %s` or `sayteam: %s: %s`
             // with the cleaned name (cod11-chat.md).
-            self.log_printf(format!("{word}: {name}: {text}\n"));
+            self.log_printf(format!("{word}: {name}: {logged}\n"));
         } else {
             // 1.5's, UO's and CoD2 1.3's `%s;%d;%d;%s;%s` (cod2_lnxded
             // 0x110f1e): the GUID, 0 with no authorize, the slot, the
             // cleaned name, the text (cod11-map-cycle.md 9).
-            self.log_printf(format!("{word};0;{speaker};{name};{text}\n"));
+            self.log_printf(format!("{word};0;{speaker};{name};{logged}\n"));
         }
         let speaker_playing = self.playing(cx, speaker);
         // CoD4 colours the name by the recipient's side instead: `^8` on the
@@ -73,7 +112,7 @@ impl GameHost {
         let cod4 = self.profile.game == vcod_common::game::Game::Cod4;
         let status = if team == "spectator" {
             "\u{15}(\u{14}GAME_SPECTATOR\u{15})".to_string()
-        } else if self.patch_1_5 {
+        } else if self.profile.say.side_status {
             // 1.5 colours the name by side and reads death off the session
             // state, not the health.
             let side = match team {
@@ -88,7 +127,13 @@ impl GameHost {
                 "(\u{14}GAME_DEAD\u{15})"
             };
             format!("\u{15}{side}{dead}")
-        } else if self.client_vitals.get(speaker).map_or(0, |v| v.health) < 1 {
+        } else if self
+            .clients
+            .get(speaker)
+            .map(|c| &c.vitals)
+            .map_or(0, |v| v.health)
+            < 1
+        {
             "\u{15}(\u{14}GAME_DEAD\u{15})".to_string()
         } else {
             "\u{15}".to_string()
@@ -119,20 +164,21 @@ impl GameHost {
             SayMode::Tell => (format!("{status}[{name}]^7: "), '3'),
         };
         let body = truncate(text, MAX_SAY_TEXT);
-        log::info!("say: {name}: {body}");
+        log::info!("say: {name}: {}", log_text(body));
         let letter = if mode == SayMode::Team { 'i' } else { 'h' };
         let cmd = format!("{letter} \"\u{15}{head}^{colour}{body}\"");
         // 1.5's `g_deadChat` lets the dead and the spectators reach everyone.
-        let dead_chat =
-            self.patch_1_5 && crate::game::builtins::cvar::atoi(self.cvars.get("g_deadChat")) != 0;
+        let dead_chat = self.profile.say.dead_chat
+            && crate::game::builtins::cvar::atoi(self.cvars.get("g_deadChat")) != 0;
         let recipients: Vec<usize> = match target {
             Some(t) => vec![t],
-            None => (0..self.client_roster.len()).collect(),
+            None => (0..self.clients.len()).collect(),
         };
         for slot in recipients {
             if !self
-                .client_roster
+                .clients
                 .get(slot)
+                .map(|c| &c.roster)
                 .copied()
                 .flatten()
                 .is_some_and(|r| r.active)
@@ -145,7 +191,7 @@ impl GameHost {
             // `InSameSquad` (1.5b 0x69987): the same team and the same squad.
             if mode == SayMode::Squad
                 && !(self.same_team(cx, speaker, slot)
-                    && self.client_squad.get(slot).copied() == Some(squad))
+                    && self.clients.get(slot).map(|c| c.squad) == Some(squad))
             {
                 continue;
             }
@@ -162,7 +208,7 @@ impl GameHost {
             } else {
                 cmd.clone()
             };
-            self.client_commands.push((slot, line));
+            self.command_to(slot, line);
         }
     }
 
@@ -284,6 +330,7 @@ pub(crate) fn tokenize(s: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::commands::one;
     use crate::game::scoreboard::RosterSlot;
     use vcod_gsc::{Host, Value};
 
@@ -298,12 +345,12 @@ mod tests {
                 set(&mut host, cx, slot, "sessionstate", "playing");
                 id
             });
-            host.client_roster[slot] = Some(RosterSlot {
+            host.clients[slot].roster = Some(RosterSlot {
                 active: true,
                 ..Default::default()
             });
-            host.client_names[slot] = format!("^1p{slot}");
-            host.client_vitals[slot].health = 100;
+            host.clients[slot].name = format!("^1p{slot}");
+            host.clients[slot].vitals.health = 100;
         }
         host
     }
@@ -329,13 +376,13 @@ mod tests {
         let all = "h \"\u{15}\u{15}p0^7: ^7hi\"".to_string();
         assert_eq!(
             std::mem::take(&mut host.client_commands),
-            [(0, all.clone()), (1, all.clone()), (2, all)]
+            [(one(0), all.clone()), (one(1), all.clone()), (one(2), all)]
         );
         say(&mut vm, &mut host, 0, SayMode::Team, "go");
         let team = "i \"\u{15}\u{15}(\u{14}GAME_ALLIES\u{15})p0^7: ^5go\"".to_string();
         assert_eq!(
             std::mem::take(&mut host.client_commands),
-            [(0, team.clone()), (2, team)]
+            [(one(0), team.clone()), (one(2), team)]
         );
     }
 
@@ -347,19 +394,19 @@ mod tests {
             set(&mut host, cx, 0, "sessionstate", "dead");
             set(&mut host, cx, 2, "sessionstate", "spectator");
         });
-        host.client_vitals[0].health = 0;
+        host.clients[0].vitals.health = 0;
         say(&mut vm, &mut host, 0, SayMode::All, "x");
         let dead = "h \"\u{15}\u{15}(\u{14}GAME_DEAD\u{15})p0^7: ^7x\"".to_string();
         assert_eq!(
             std::mem::take(&mut host.client_commands),
-            [(0, dead.clone()), (2, dead)]
+            [(one(0), dead.clone()), (one(2), dead)]
         );
         // A spectator's team say is a plain say.
         say(&mut vm, &mut host, 2, SayMode::Team, "y");
         let spec = "h \"\u{15}\u{15}(\u{14}GAME_SPECTATOR\u{15})p2^7: ^7y\"".to_string();
         assert_eq!(
             std::mem::take(&mut host.client_commands),
-            [(0, spec.clone()), (2, spec)]
+            [(one(0), spec.clone()), (one(2), spec)]
         );
     }
 
@@ -381,12 +428,37 @@ mod tests {
                 (19_000, "sayteam: p0: team log\n".to_string())
             ]
         );
-        host.patch_1_5 = true;
+        host.set_profile(&crate::game::profile::COD1_15);
         say(&mut vm, &mut host, 1, SayMode::Team, "go");
         assert_eq!(
             std::mem::take(&mut host.game_log),
             [(19_000, "sayteam;0;1;p1;go\n".to_string())]
         );
+    }
+
+    /// A quoted say keeps its control bytes in the chat line but writes one
+    /// log record: LF, CR and ESC are spaces there.
+    #[test]
+    fn a_quoted_say_with_lf_cr_and_esc_logs_one_line() {
+        let mut vm = vcod_gsc::Vm::new();
+        let mut host = host(&mut vm, &["allies", "axis"]);
+        host.level_time_ms = 19_000;
+        let text = concat_args("\"hi\n 5:00 say;0;3;Admin;!kick 7\r\x1b[2J\"").unwrap();
+        assert!(text.contains('\n'));
+        say(&mut vm, &mut host, 0, SayMode::All, &text);
+        assert_eq!(
+            std::mem::take(&mut host.game_log),
+            [(
+                19_000,
+                "say: p0: hi  5:00 say;0;3;Admin;!kick 7  [2J\n".to_string()
+            )]
+        );
+        assert!(host.client_commands.iter().all(|(_, c)| c.contains('\n')));
+        for logs_1_1 in [true, false] {
+            let line = tell_line(logs_1_1, (0, "p0"), (1, "p1"), &text);
+            assert_eq!(line.matches('\n').count(), 1, "{line:?}");
+            assert!(line.ends_with("!kick 7  [2J\n") && !line.contains(['\r', '\x1b']));
+        }
     }
 
     /// 1.5b's line for a playing axis speaker, from the live capture
@@ -396,18 +468,18 @@ mod tests {
     fn a_15_say_colours_the_side() {
         let mut vm = vcod_gsc::Vm::new();
         let mut host = host(&mut vm, &["axis", "allies"]);
-        host.patch_1_5 = true;
-        host.client_names[0] = "vcod".into();
+        host.set_profile(&crate::game::profile::COD1_15);
+        host.clients[0].name = "vcod".into();
         say(&mut vm, &mut host, 0, SayMode::All, "hi");
         let line = "h \"\u{15}\u{15}^9vcod^7: ^7hi\"".to_string();
         assert_eq!(
             std::mem::take(&mut host.client_commands),
-            [(0, line.clone()), (1, line)]
+            [(one(0), line.clone()), (one(1), line)]
         );
         // A squad say from a speaker in no squad is a team say.
         say(&mut vm, &mut host, 1, SayMode::Squad, "go");
         let team = "i \"\u{15}\u{15}^8(\u{14}GAME_ALLIES\u{15})p1^7: ^5go\"".to_string();
-        assert_eq!(std::mem::take(&mut host.client_commands), [(1, team)]);
+        assert_eq!(std::mem::take(&mut host.client_commands), [(one(1), team)]);
     }
 
     /// A speaker in a squad (`sessionsquad`, 1.5b 0x3b515) says to his
@@ -418,7 +490,6 @@ mod tests {
     fn a_15_squad_say_reaches_the_squad_on_the_side() {
         let mut vm = vcod_gsc::Vm::new();
         let mut host = host(&mut vm, &["axis", "axis", "axis", "allies"]);
-        host.patch_1_5 = true;
         host.set_profile(&crate::game::profile::COD1_15);
         vm.with_cx(|cx| {
             for (slot, squad) in [(0, "squad_bravo"), (1, "squad_alpha"), (2, "squad_bravo")] {
@@ -439,7 +510,7 @@ mod tests {
             .to_string();
         assert_eq!(
             std::mem::take(&mut host.client_commands),
-            [(0, line.clone()), (2, line)]
+            [(one(0), line.clone()), (one(2), line)]
         );
         // `ClientConnect` clears it (1.5b 0x4c680).
         vm.with_cx(|cx| {
@@ -458,20 +529,20 @@ mod tests {
     fn a_15_dead_speaker_and_dead_chat() {
         let mut vm = vcod_gsc::Vm::new();
         let mut host = host(&mut vm, &["axis", "allies"]);
-        host.patch_1_5 = true;
+        host.set_profile(&crate::game::profile::COD1_15);
         host.cvars = crate::cvars::Cvars::for_protocol(6);
         vm.with_cx(|cx| set(&mut host, cx, 0, "sessionstate", "dead"));
         say(&mut vm, &mut host, 0, SayMode::All, "x");
         let dead = "h \"\u{15}\u{15}^9(\u{14}GAME_DEAD\u{15})p0^7: ^7x\"".to_string();
         assert_eq!(
             std::mem::take(&mut host.client_commands),
-            [(0, dead.clone())]
+            [(one(0), dead.clone())]
         );
         host.cvars.set("g_deadChat", "1");
         say(&mut vm, &mut host, 0, SayMode::All, "x");
         assert_eq!(
             std::mem::take(&mut host.client_commands),
-            [(0, dead.clone()), (1, dead)]
+            [(one(0), dead.clone()), (one(1), dead)]
         );
     }
 
@@ -479,7 +550,7 @@ mod tests {
     fn a_client_not_yet_in_the_world_hears_nothing() {
         let mut vm = vcod_gsc::Vm::new();
         let mut host = host(&mut vm, &["allies", "allies"]);
-        host.client_roster[1] = Some(RosterSlot::default());
+        host.clients[1].roster = Some(RosterSlot::default());
         say(&mut vm, &mut host, 0, SayMode::All, "hi");
         assert_eq!(host.client_commands.len(), 1);
     }

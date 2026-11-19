@@ -12,7 +12,8 @@
 //! The older captures log no `vLadderVec`, so a rebased run on the rungs takes the
 //! normal the probe faced, square into the rungs. Set
 //! `LADDER_REPORT=1` to print every snapshot's delta. Needs `COD_DIR`;
-//! without the paks the replay returns early.
+//! without the paks the replay returns early, save the taped one at the
+//! end (docs/dev/testing.md, "Trace tapes").
 
 use glam::Vec3;
 use std::collections::BTreeMap;
@@ -23,7 +24,10 @@ use vcod_common::net::protocol::ENTITYNUM_NONE;
 use vcod_common::patch::Arith;
 use vcod_common::pmove::cmd;
 use vcod_common::pmove::{MoveRules, PlayerState, pmove};
+use vcod_common::tracetape::Tape;
 use vcod_common::weapon::WeaponDef;
+
+use crate::common::tapes;
 
 /// Each capture, the world yaw it faced the rungs at and the patch whose
 /// server it ran on.
@@ -193,6 +197,18 @@ fn replay(
     world: &CollisionWorld,
     weapons: &[Option<WeaponDef>],
 ) -> Vec<Row> {
+    replay_taped(lines, yaw, rules, world, None, weapons)
+}
+
+/// [`replay`], its traces recorded on or answered from `tape`.
+fn replay_taped(
+    lines: &[Line],
+    yaw: f32,
+    rules: MoveRules,
+    world: &CollisionWorld,
+    tape: Option<&Tape>,
+    weapons: &[Option<WeaponDef>],
+) -> Vec<Row> {
     let cmds: Vec<UserCmd> = lines
         .iter()
         .filter_map(|l| match l {
@@ -202,6 +218,7 @@ fn replay(
         .collect();
     let climb_weapon = cmds.iter().map(|c| c.weapon).find(|&w| w != 0).unwrap_or(0);
     let mw = MoveWorld::new(world, &[], u32::MAX);
+    let mw = tape.map_or(mw, |t| mw.with_tape(t));
     let mut next_cmd = 0usize;
     let mut rows = Vec::new();
     let mut phase = String::new();
@@ -351,8 +368,8 @@ fn the_ladder_mover_climbs_where_retail_does() {
             _ => &weapons,
         };
         println!("{name}");
-        // 1.5b's and UO's servers store their floats (AGENTS.md, "Movement
-        // and collision").
+        // 1.5b's and UO's servers store their floats (docs/dev/traps.md,
+        // "Movement and collision").
         world.set_arith(if rules.v15() {
             Arith::Stored
         } else {
@@ -506,4 +523,64 @@ fn a_15_grab_waits_for_the_trace_along_the_normal() {
         ran += 1;
     }
     println!("{ran} grab captures");
+}
+
+const TAPED_WEAPONS: &str = "weapons-ladder-1.1.txt";
+
+/// Rows as the tape's header keeps them: the replay must give them back.
+fn summary(rows: &[Row]) -> Vec<String> {
+    rows.iter()
+        .map(|r| {
+            format!(
+                "row {} {} free {:?} rebased {:?}",
+                r.phase, r.retail.ct, r.free, r.rebased
+            )
+        })
+        .collect()
+}
+
+/// The 1.1 hold ladder capture replayed off its trace tape with no install
+/// (docs/dev/testing.md, "Trace tapes"): every row must be the one the live
+/// gate gave when the tape was recorded, and pass its check.
+/// `RECORD_TAPES=1` with `COD_DIR` at the 1.1 install records it first.
+#[test]
+fn the_taped_ladder_climbs_without_the_paks() {
+    let (name, yaw, rules) = FIXTURES[0];
+    let lines = fixture(name);
+    if tapes::recording() {
+        let fs = vcod_common::testing::game_fs_11().expect("RECORD_TAPES needs COD_DIR at 1.1");
+        let (world, weapons) = load().unwrap();
+        world.set_arith(Arith::Kept);
+        let tape = Tape::record();
+        let rows = replay_taped(&lines, yaw, rules, &world, Some(&tape), weapons.defs());
+        let mut header = vec![
+            format!("{name} replayed under V1_1 on mp_ship by ladder_ab.rs"),
+            "RECORD_TAPES=1 rewrites it (docs/dev/testing.md, \"Trace tapes\")".to_owned(),
+        ];
+        header.extend(summary(&rows));
+        std::fs::write(tapes::tape_path(name), tape.text(&header)).unwrap();
+        let carried = lines
+            .iter()
+            .filter_map(|l| match l {
+                Line::Cmd(c) => Some(usize::from(c.weapon)),
+                Line::Snap(s) => Some(usize::from(s.weapon)),
+                Line::Phase(_) => None,
+            })
+            .collect();
+        tapes::write_weapons(&fs, vcod_server::defs::V1.weapons, &carried, TAPED_WEAPONS);
+        println!("{name}: {} queries", tape.len());
+    }
+    let weapons = tapes::read_weapons(TAPED_WEAPONS);
+    let world = vcod_common::collision::test_world(&[]);
+    world.set_arith(Arith::Kept);
+    let text = std::fs::read_to_string(tapes::tape_path(name)).unwrap();
+    let tape = Tape::replay(&text);
+    let rows = replay_taped(&lines, yaw, rules, &world, Some(&tape), &weapons);
+    assert_eq!(tape.remaining(), 0, "{name}: queries left on the tape");
+    assert_eq!(
+        summary(&rows),
+        tapes::recorded(&text, &["row "]),
+        "{name}: not the recorded rows"
+    );
+    check(name, &rows);
 }

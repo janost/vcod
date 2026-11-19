@@ -322,7 +322,7 @@ fn main() -> anyhow::Result<()> {
         if !silent && last_send.elapsed() >= Duration::from_millis(interval) {
             last_send = Instant::now();
             let pkt = if have_gs {
-                let base = cl.parser.snapshot().map_or(0, |f| f.server_time);
+                let base = cl.parser.snapshot().map_or(0, |f| f.server_time.raw());
                 let t = base + snap_at.elapsed().as_millis() as i32;
                 let mut cmd = cl.idle_cmd(t);
                 let dead = cl

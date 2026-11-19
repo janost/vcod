@@ -168,7 +168,7 @@ impl LeafWalk {
 
     /// Whether every leaf the box `lo..hi` reaches lists partition `item`.
     pub fn box_lists(&self, lo: [f32; 3], hi: [f32; 3], item: Item) -> bool {
-        let mut stack = vec![0i32];
+        let mut stack = WalkStack::<i32>::new(0);
         while let Some(num) = stack.pop() {
             if num < 0 {
                 if !self.lists((-(num + 1)) as u32, item) {
@@ -196,7 +196,9 @@ impl LeafWalk {
         true
     }
 
-    /// The leaf holding point `p` (Q3's `CM_PointLeafnum`).
+    /// The leaf holding point `p` (Q3's `CM_PointLeafnum`): a point on a
+    /// plane takes the front child, unlike
+    /// [`crate::mapworld::Visibility::leaf_at`]. Retail's rule is unread.
     pub fn leaf_at(&self, p: [f32; 3]) -> u32 {
         let mut num = 0i32;
         while num >= 0 {
@@ -226,7 +228,7 @@ impl LeafWalk {
         mut fraction: f32,
         mut visit: impl FnMut(u32, f32) -> f32,
     ) {
-        let mut stack = vec![(0i32, 0.0f32, 1.0f32, start, end)];
+        let mut stack = WalkStack::new((0i32, 0.0f32, 1.0f32, start, end));
         while let Some((mut num, p1f, p2f, p1, p2)) = stack.pop() {
             if fraction <= p1f {
                 continue;
@@ -334,6 +336,45 @@ impl LeafWalk {
             1.0
         });
         out
+    }
+}
+
+/// A tree walk's node stack: on the stack up to 64 frames, which
+/// covers the depth of any stock tree, and on the heap past that.
+pub(crate) struct WalkStack<T: Copy + Default> {
+    inline: [T; 64],
+    n: usize,
+    spill: Vec<T>,
+}
+
+impl<T: Copy + Default> WalkStack<T> {
+    const INLINE: usize = 64;
+
+    pub(crate) fn new(first: T) -> Self {
+        let mut s = WalkStack {
+            inline: [T::default(); 64],
+            n: 0,
+            spill: Vec::new(),
+        };
+        s.push(first);
+        s
+    }
+
+    pub(crate) fn push(&mut self, v: T) {
+        if self.n < Self::INLINE {
+            self.inline[self.n] = v;
+            self.n += 1;
+        } else {
+            self.spill.push(v);
+        }
+    }
+
+    pub(crate) fn pop(&mut self) -> Option<T> {
+        if let Some(v) = self.spill.pop() {
+            return Some(v);
+        }
+        self.n = self.n.checked_sub(1)?;
+        Some(self.inline[self.n])
     }
 }
 

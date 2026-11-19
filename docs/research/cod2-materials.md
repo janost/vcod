@@ -399,6 +399,8 @@ The 34 types, in table order, with STABS enum names (VERIFIED):
   renderer's fog mode stands for the offset. Every CoD2 draw (lit, stage,
   model, effect) measures the radial distance; a CoD2 model also honours
   `nofog` and the black fog of an additive blend.
+- Retail's per-vertex fog in the compiled shaders, and vcod's match:
+  `cod2-client-perf.md` 9.
 
 ## 5. Techniques (dx9)
 
@@ -1698,6 +1700,12 @@ fallback; only the visible ones log a warning (9.13). The rest:
   the CPU at each pixel centre: 99.7% of channels within 4 of 255 with
   and without exp fog, off cube seams, the rest where MSAA samples
   straddle a face edge (worst 108).
+- vcod's guard, not retail's: `water::texture_side` clamps `textureWidth`
+  to 4..256 and refuses a side that is not a power of two (the FFT's
+  256-entry bit reversal and radix-4 first stage); such a material draws
+  its colour map alone, and a CoD4 spectrum of such a width draws no
+  height map. Stock widths are 64 (mp_harbor) and, on CoD4, square powers
+  of two (cod4-world.md 9.8).
 
 ### 9.13 The menu blur
 

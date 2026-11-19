@@ -63,7 +63,7 @@ Vector component reads: `_utility.gsc:178` `vectorScale`, `_utility.gsc:250` `or
 
 Switch fallthrough on empty cases is common: `dm.gsc:249-251` stacks `case "allies": case "axis": case "autoassign":` before one body. Field access tolerates spaces around the dot (`animscripts/init.gsc:129` `self . ramboChance *= 2;`).
 
-## 3. What is absent — and two corrections to the design's absence list
+## 3. Absent constructs, `do`/`while` and the bitwise operators
 
 VERIFIED by census, zero hits: `#include`, `foreach`, ternary `?:`, `&=`, `^=`, `<<=`, `>>=`.
 
@@ -78,7 +78,7 @@ VERIFIED by census, zero hits: `#include`, `foreach`, ternary `?:`, `&=`, `^=`, 
 
 Every `^` is a colour code in a string or sits in a comment; `<<`/`>>`/`~` appear only in `//` comments (dividers, arrows). A plain `grep -c` overcounts all four.
 
-Correction 1: `do`/`while` exists, once, in `animscripts/predict.gsc:103-114`, inside `tumbleWall()`:
+`do`/`while` exists, once, in `animscripts/predict.gsc:103-114`, inside `tumbleWall()`:
 
 ```
 do
@@ -90,14 +90,14 @@ do
 
 `grep -rn '} while' pak0 pak4 pak5` returns only this. Re-verified: `parse_file` accepts it (`StmtKind::DoWhile`), and the compile census finds that one site.
 
-Correction 2: two bitwise operators are required.
+Two bitwise operators are in use.
 
 - Binary `&` tests `spawnflags` bits. VERIFIED in 11 files, e.g. `_utility.gsc:65` `if (self.spawnflags & 1)`, `_load.gsc` `if (trigger.spawnflags & 8)` (three sites), `stalingrad.gsc` `if (ai[i].spawnflags & 4)`, `_scripted.gsc` `if (bitflags & level.teleport)`. Every map's `maps\mp\_load::main()` reaches `_load.gsc`'s.
 - `|=` accumulates damage flags in all five stock gametypes: `dm.gsc`, `tdm.gsc`, `sd.gsc`, `re.gsc` and `bel.gsc` each have `iDFlags |= level.iDFLAGS_NO_KNOCKBACK;`. The constants come from `_callbacksetup.gsc`'s `SetupCallbacks()`: `level.iDFLAGS_RADIUS=1`, `iDFLAGS_NO_ARMOR=2`, `iDFLAGS_NO_KNOCKBACK=4`, `iDFLAGS_NO_TEAM_PROTECTION=8`, `iDFLAGS_NO_PROTECTION=16`, `iDFLAGS_PASSTHRU=32`.
 
 Absent: `&=`, `^=`, `<<=`, `>>=`, and any standalone `|` outside `||`/`|=`. Re-verified: `parse_file` accepts both (`BinOp::BitAnd`; `|=` desugars to `BinOp::BitOr`, see its comment in `crates/gsc/src/ast.rs`). Compile census: 11 files, 24 sites for binary `&`; 5 files, 5 sites for `|=`, one per stock gametype. A VM with no bitwise operators cannot compile `_load.gsc`, `_utility.gsc`, `_scripted.gsc`, `stalingrad.gsc` or any stock gametype.
 
-## 4. The complete operator set (corrected)
+## 4. The complete operator set
 
 `+ - * / %`, binary `&` (section 3), `= += -= *= /= |=`, `++ --`, `== != < > <= >=`, `&& || !`, unary `-`. No ternary, no shifts, no `~`, no `&=`/`^=`/`<<=`/`>>=`.
 
@@ -182,19 +182,13 @@ VERIFIED, `client-probes/probe_menuresponse.gsc` on retail 1.1d (one `--net-prob
 
 A client's `noop` and `bad` both reach the script as menu `""`, response `"bad"`. VERIFIED (`maps/mp/gametypes/*.gsc`, pak5): no stock `menuresponse` loop compares either against `""`.
 
-vcod: `parse_menu_response` (`crates/server/src/server.rs`) tokenizes with quotes (`game::say::tokenize`), reads both numbers with a saturating `strtol` and hands `ScriptRuntime::menu_response` a `MenuRef`. VERIFIED: the probe against `vcod-server --gametype-script` logged the same fourteen lines.
+vcod: `parse_menu_response` (`crates/server/src/server/client_msg.rs`) tokenizes with quotes (`game::say::tokenize`), reads both numbers with a saturating `strtol` and hands `ScriptRuntime::menu_response` a `MenuRef`. VERIFIED: the probe against `vcod-server --gametype-script` logged the same fourteen lines. The host interns a client's text, and what the host interns stays until the level ends, so one client's answers and vote arguments may add at most 64 KiB of strings the scripts do not already hold in a level (`CLIENT_STRING_BUDGET`); past it an answer or vote with new text is dropped and logged once. Retail has no such limit; stock menus answer with names the scripts hold, which cost nothing.
 
 The script side: `dm.gsc:142` builds `game["menu_team"] = "team_" + game["allies"] + game["axis"];`, `"team_americangerman"` for the stock pairing, the configstring slot 1180 string `configstrings.rs` writes. `dm.gsc:240`, in a `for(;;)`, is `self waittill("menuresponse", menu, response);`, with a `continue` for `response == "open"` or `"close"` and a `switch(response)` on `case "allies": case "axis": case "autoassign":` before checking `menu == game["menu_team"]`. The join on the wire is one `mr <serverId> <menuIndex> allies` (or `axis`/`autoassign`/`spectator`), landing as `notify("menuresponse", menu, response)` on the player's entity.
 
 ## 7. The engine's script-function name table
 
-Superseded by `cod11-gsc-object-model.md` section 9, which dumps every builtin table with `tools/re/dump_builtins.py`. Summary:
-
-- Count 216, VERIFIED, in five tables. `functions` (0x7e508, 106 entries) holds the free functions. `Scr_GetMethod` searches player (0x733dc, 46), scriptent (0x78d40, 12) and hudelem (0x749b4, 14) methods in that order and falls back to the generic entity methods (0x7ea00, 38). Every walk is a linear `strcmp` over a hardcoded count.
-- Records, VERIFIED: `functions` rows are 12 bytes `{char *name; void (*fn)(); int developer;}`, method rows 8 bytes `{char *name; void (*fn)();}`. `developer` is 1 on `print`, `println` and `assert`, 0 elsewhere, as in CoDExtended's `SCRIPTFUNCTION { name, function, developer }` (`src/script.c`).
-- Trap: a pointer stored in `.data` reads as 0 in the file, since the module is a shared object and `.rel.data` supplies the address. Read raw, every function pointer looks null. So no record has a null function (`getent` is `Scr_GetEnt`, `getentarray` `Scr_GetEntArray`); an earlier count of 144 was 106 plus 38 under a uniform 8-byte stride, which does not hold; and the `move*`/`rotate*` builtins are the scriptent method table in `.data` with real code pointers (`ScriptEntCmd_MoveTo`, `ScriptEntCmd_GravityMove`, `ScriptEntCmd_RotateVelocity` and the rest), not a `.rodata` whitelist.
-
-`Scr_GetFunction` writes the table's spelling back through its `char **` first argument (0x5c199), so the engine canonicalises a builtin name on lookup, consistent with section 8.
+The five builtin tables, their record layouts, lookup order and the `.rel.data` trap that hides their pointers are in `cod11-gsc-object-model.md` section 9 (216 builtins in 1.1).
 
 ## 8. Atom identity and case folding
 
@@ -246,7 +240,7 @@ Four retail facts shape every probe:
 
 **Equality, VERIFIED.** `1 == 1.0` true; `"abc" == "abc"` true; `"ABC" == "abc"` false; `"5" == 5` true, but `"5.0" == 5`, `"05" == 5` and `"abc" == 0` false. A number against a string is rendered with `%g` and compared as text. `undefined == 0` is fatal: `pair has unmatching types 'undefined' and 'int'`.
 
-**Ordering: numbers only, VERIFIED.** `"a" < "b"` is fatal: `pair has unmatching types 'string' and 'string'`. No string collation.
+**Ordering: numbers only, VERIFIED.** `"a" < "b"` is fatal: `pair has unmatching types 'string' and 'string'`. No string collation. VERIFIED (the instructions): CoDMP.exe 1.1's `VM_Execute` arms for `<`, `>`, `<=` and `>=` (0x478b98..0x478cd8) cast the pair to one type through 0x476090 (an int beside a float becomes a float), then compare two ints (type 5) with `cmp` and `setl`/`setg`/`setle`/`setge` and two floats (type 4) with `fcomps`, so `16777217 > 16777216` is 1 where an `f32` compare reads 0. INFERRED: 1.1d's arms have the same shape (the CoD2 handler below does). vcod: `num_pair` in `crates/gsc/src/vm/interp.rs`, for the plain and the fused compares.
 
 **Case folding is per role, VERIFIED.** Field names fold; array keys and string values do not (section 8).
 
@@ -269,7 +263,7 @@ Four retail facts shape every probe:
 - A notify does not run its waiters inside the notifying statement: `probe_notify_frame`'s notifier logs past its `notify` first. The waiters resume in the same frame after the notifier's step, in start order, whether started before or after the notifier (`probe_notify` agrees). A waiter that then does `wait 0` resumes at once, before the next waiter.
 - INFERRED: a killcam therefore lasts exactly its age, and its skip respawns with no dead frame between (`cod11-spectator-follow.md` 12.7). `waitKillcamTime`'s notify resumes `killcam`, which started it, on the same frame, and `waitRespawnButton`'s opening `wait 0` resumes on the frame it was reached.
 
-vcod's `Vm::step_runnable` is that pick: a `wait` stamps the thread with a queue number, a notify stamps its waiters newest first, and the pass takes earliest due, highest stamp, until nothing is due. Divergence, not measured: the pass stops after `MAX_THREADS_PER_FRAME` (10,000) steps and leaves the rest for the next frame, where retail stalls for good.
+vcod's `Vm::step_runnable` is that pick: a `wait` stamps the thread with a queue number, a notify stamps its waiters newest first, and the pass takes earliest due, highest stamp, until nothing is due. Divergence, not measured: the pass stops after `MAX_THREADS_PER_FRAME` (10,000) steps or `MAX_PASS_INSTRUCTIONS` (10,000,000) instructions and the threads still due run first in the next pass, where retail stalls for good (cod2-gsc-diff.md 3.7).
 
 **The packet pass: nothing runs between frames but the callbacks, VERIFIED (`client-probes/probe_threadorder`, retail 1.1d on mp_pavlov).** One client sent client commands in pairs, both in one packet: `mr` alone, `mr` then `kill`, `kill` then `mr`, two `mr`s. Three threads wait on the player's `menuresponse` (started w1, w2, w4), one on a level `"killed"` that `Callback_PlayerKilled` notifies (w3, started between w2 and w4). The callback starts a thread (`kt`), and each logs, takes a `wait 0` and logs again. A ticker on each frame's `wait 0.05` records its last `getTime()`. With T the frame the packet landed after, retail printed:
 
@@ -385,7 +379,7 @@ Every probe capture in this section was taken at `developer 1` (`tools/run_probe
 - VERIFIED (decompile): below that, `VM_Execute`'s error arm (the switch on the failed opcode after 0x80ab5ac's dispatch) frees the instruction's operands, leaves its result undefined, steps past its operand bytes, and the loop runs on; a conditional jump pops its condition and is not taken. INFERRED, read off the arms: every arm has this shape.
 - VERIFIED (`client-probes/probe_undef_if` at `developer 0`, 1.1d on mp_carentan and UO 1.51b on mp_cassino): `if (level.unset)` and `if (!level.unset)` both take their branch, the statements after run, `level.unset + 1`, `!level.unset` and `level.unset_struct.field` read undefined, `wait level.unset` returns at once (0 ms), and that thread and another run on. A builtin's own error (`distance(undefined, ...)`) reads undefined on 1.1d and aborts the process (SIGABRT) on UO 1.51b. At `developer 1` the same probe dies on the first `if` with `cannot cast undefined to bool` and `ERROR: script runtime error` (VERIFIED, UO).
 
-vcod takes the mode from `developer` at the load (`Vm::set_recover_errors`, `ScriptRuntime::load_from`). On, a failed instruction leaves `stack_effect`'s results undefined and the thread runs on (`Vm::step_frames`); the error is still recorded in `Vm::aborts`. vcod's own errors (a builtin it lacks, its instruction cap, a wait in `call_now`) still end the thread, and a builtin's error recovers on UO as on 1.1d instead of ending the process. A gate replaying a `run_probe.sh` capture runs at `developer 1` (`semantics_ents.rs`'s `probe_cvars`, `linkto_ab.rs`). Stock UO `tdm.gsc` 815 shows it in play: a death to no player (a tank its own attacker, coduo-vehicles.md 11.6) reads the unset `level.teamkill_penalty`, takes the branch, and costs the victim's team a point.
+vcod takes the mode from `developer` at the load (`Vm::set_recover_errors`, `ScriptRuntime::load_from`). On, a failed instruction leaves `stack_effect`'s results undefined and the thread runs on (`Vm::step_frames`); the error is still recorded in `Vm::aborts`. vcod's own errors (a builtin it lacks, its instruction cap, its frame cap, its variable ceiling, a wait in `call_now`) still end the thread, and a builtin's error recovers on UO as on 1.1d instead of ending the process. Retail prints every error, and only under `developer` or `logfile`; vcod logs each one the first time and then a count every 10 s, keyed on its file, function, line and kind, never on its text, which can name a script value (`Vm::record_error`). A gate replaying a `run_probe.sh` capture runs at `developer 1` (`semantics_ents.rs`'s `probe_cvars`, `linkto_ab.rs`). Stock UO `tdm.gsc` 815 shows it in play: a death to no player (a tank its own attacker, coduo-vehicles.md 11.6) reads the unset `level.teamkill_penalty`, takes the branch, and costs the victim's team a point.
 
 ### The map-cycle builtins, and the `sd` connect race
 
@@ -415,7 +409,9 @@ vcod: `crates/server/src/game/builtins/precache.rs` and `Allocators::index`'s ca
 
 ### Arrays are values
 
-VERIFIED (`probe_array_copy`, 1.1d on mp_pavlov): after `b = a`, a write through either leaves the other's size alone (`local_copy_write 1 2`, `local_orig_write 2 1`). Likewise a string key written into a copy of a `level` field (`field_copy_strkey 1 2`), a write through an argument (`arg_write 1`), into a copy of an outer array's nested array (`nested_write 1 2`), into a copy of an element (`element_copy_write 1 2`) and into a field assigned from another field (`field_to_field 1 2`). CoD4 1.7 prints the same lines, and there a struct an array holds is shared (cod4-gsc.md 10). vcod flags an array stored a second time and copies it at the next write (`Heap::share`, `Heap::own`). INFERRED: no 1.1 stock script depends on shared arrays, since vcod ran the corpus with them shared before this.
+VERIFIED (`probe_array_copy`, 1.1d on mp_pavlov): after `b = a`, a write through either leaves the other's size alone (`local_copy_write 1 2`, `local_orig_write 2 1`). Likewise a string key written into a copy of a `level` field (`field_copy_strkey 1 2`), a write through an argument (`arg_write 1`), into a copy of an outer array's nested array (`nested_write 1 2`), into a copy of an element (`element_copy_write 1 2`) and into a field assigned from another field (`field_to_field 1 2`). CoD4 1.7 prints the same lines, and there a struct an array holds is shared (cod4-gsc.md 10). vcod flags an array stored a second time and copies it at the next write (`Heap::share`, `Heap::own`); the sweep between frames that frees unreachable arrays recounts each one's holders and unflags an array one place holds (`Heap::collect`, cod2-gsc-diff.md 3.7). INFERRED: no 1.1 stock script depends on shared arrays, since vcod ran the corpus with them shared before this.
+
+VERIFIED (`probe_assign_order`, 1.1d, 1.5b and UO 1.51b on mp_pavlov, 2026-11-19): an index assignment runs its value before its key (`a[side("k")] = side("v")` logs `vk`), and both before it reads the target, so a value that changes the target writes into what the target is afterwards. A value that copies `level.arr` and writes `level.arr[1]` leaves all three keys in `level.arr` (`copied_target 3 1`); a value that clears `level.brr` leaves it vivified with the key (`cleared_target 1`); a field write whose value replaces `level.o` lands on the new struct (`swapped_object new 1`); `c[1] = c` stores `c` as it stood (`self_store 2 1`). vcod compiles the value first (`Compiler::compile_assign`; `StoreIndex` and `StoreField` pop the value last).
 
 ### Indexing past the first wait
 
@@ -434,7 +430,7 @@ Which builtins index a configstring at run time comes from the relocations again
 - INFERRED, from `ClientSpawn`'s `bzero` of the `gclient_t` (0x42804, 0x22c4 bytes, the session block at +0x20d0 saved around it): a spawn clears the shellshock.
 - The client effect is cgame's: `cod11-shellshock.md` has the `.shock` files, the 27 `cg_shock_*` cvars, the screen blend, view kick, mouse damping, sound mix and the `wbuttons` 0x4 slowdown, and notes no stock MP script calls `shellshock`.
 
-vcod: `Allocators::index_precached` (`crates/server/src/configstrings.rs`) gates `setModel`, `attach`, `setViewModel`, `setShader`, `objective_add`, `objective_icon`, `setText`, `label` and `loadFx`; `setModel` and `attach` keep the precached spelling. The `statusicon` setter refuses an icon not precached and keeps the precached spelling. `shellShock` and `stopShellShock` (`builtins/client.rs`) write `GameHost::client_shellshock`, which the sim sends as the three playerstate fields; the client half is `play::shock` (`cod11-shellshock.md`). A/B: `probe_late_index_matches_retail` in `crates/server/tests/semantics_ents.rs`.
+vcod: `Allocators::index_precached` (`crates/server/src/configstrings.rs`) gates `setModel`, `attach`, `setViewModel`, `setShader`, `objective_add`, `objective_icon`, `setText`, `label` and `loadFx`; `setModel` and `attach` keep the precached spelling. The `statusicon` setter refuses an icon not precached and keeps the precached spelling. `shellShock` and `stopShellShock` (`builtins/client.rs`) write `HostClient::shellshock`, which the sim sends as the three playerstate fields; the client half is `play::shock` (`cod11-shellshock.md`). A/B: `probe_late_index_matches_retail` in `crates/server/tests/semantics_ents.rs`.
 
 ### `vectorToAngles`
 
@@ -469,7 +465,7 @@ UO's stock `maps/mp/_birdbush.gsc` (pakuo01) adds `(int) self.script_noteworthy`
 
 ## 10. Divergences kept as documentation, not code
 
-Deliberate choices the corpus cannot settle. Closed since: `delete()` deferring the free (`cod11-gsc-object-model.md` section 14, `probe_delete`), stale handles reading as retail's dead entity (`probe_stale_handle`), `game.foo` and `level["k"]` refused at compile time (`probe_game_dotwrite`), the second of two notifies in one step being lost (`probe_notify_twice`), and the `SP_` spawn layer (last entry).
+Deliberate choices the corpus cannot settle.
 
 - **A thread killed by *another* thread's `endon` notify mid-step keeps executing to its next suspend.** A thread's own `notify` never kills it (`probe_endon_self`, `Vm::notify_from`). The remaining case is a nested spawn's notify: `main`'s `self thread killer();` runs `killer` synchronously (`Vm::spawn`); if `killer` notifies the event `main` registered with `endon`, `Vm::notify` removes `main` from `self.threads` while `main`'s own `step_frames` is still running up the call stack. `main` runs on to its next `wait`/`waittill`/return; only then does `step_thread` find its entry gone and drop the frames. Example: `main() { self endon("die"); self thread killer(); sideEffectA(); sideEffectB(); wait 5; done(); }` ends with `threads=0`, both side effects run, `done()` never does. Pinned by `sched::tests::a_thread_killed_by_its_own_endon_mid_step_still_runs_to_its_next_suspend`. CoD2's stock tdm relies on the other rule, and retail 1.3 stops the thread at once (cod2-protocol.md 16.8): a CoD2 level turns on `Vm::set_kill_mid_step` (a list of threads a notify ended, checked before each instruction). 1.1 is unmeasured and keeps the old rule.
 - **A bare local is accepted as a statement.** vcod compiles `x;` (and so `waittillframeend;`, which 1.1 has no keyword for) as a local read and a pop. VERIFIED, a 1.1d probe: retail refuses both as `bad syntax` (cod2-gsc-diff.md 3.2). No stock 1.1 script has one; CoD2's `waittillframeend` lives behind `Dialect::Cod2`.
@@ -483,4 +479,4 @@ Deliberate choices the corpus cannot settle. Closed since: `delete()` deferring 
   - **The victim walk.** VERIFIED: retail walks `trap_EntitiesInBox` over a `radius * sqrt(2)` box, and the loop body reads `takedamage` and the entity's own bounds (14.1). INFERRED, the skip being a branch: it takes anything with `takedamage` and measures a brush model to the nearest point of its bounds. vcod (`builtins::combat::blast_candidates`) walks `entities_in_box` in the area tree's order (14.7), keeping clients and turrets; a client is tested for `takedamage` on its turn and measured at its script `origin` field, a turret takes `G_Damage`'s entity arm (14.6). `func_static` and `trigger_damage` are walked (`cod11-combat.md` 14.6, 14.8). Doors have `takedamage` on retail and no spawn here; no stock MP map places one.
   - **The victim's box and eye are the standing ones.** VERIFIED: retail's probe points come off the entity's bounds and its `client+0xD0` eye height (14.3). vcod's host carries no stance for the builtin, so a crouched or prone player is measured standing. That moves the five probe points, not the distance (origin to origin either way). The second chance's box midpoint is taken at the origin of the client's last link, mirrored from the sim: its last cmd's truncated origin, or the unsnapped one after a `setOrigin` with no cmd since, or on a linked client (14.3).
   - **Not a divergence: a fifth argument is ignored.** VERIFIED: retail reads its four arguments by index, `Scr_GetVector(0)` and `Scr_GetFloat(1)` to `(3)` (14.2). INFERRED, from the absence of an arity check: a fifth argument is ignored, not refused, as in vcod. No 1.1 call passes one. UO's builtin takes an attacker and an inflictor after the four (`coduo-vehicles.md` 11.2).
-- **Of the `SP_` layer, only what the wire can see runs.** Mostly closed. `spawn_entities_from_string` (`crates/server/src/game/spawn.rs`) reproduces `G_CallSpawn`'s third case for the five classnames whose `SP_` is an unconditional `G_FreeEntity(self)` (`SPAWN_FREES`; entity numbering, `cod11-gsc-object-model.md` section 13), the spawn-time configstring writes (`SP_worldspawn`'s `northyaw`, `SP_trigger_hurt`'s alias, the item and two aliases a mounted mg42 registers through `SP_turret`; object-model sections 17 and 19), and the trigger, script entity, item and turret `SP_` functions, plus `func_bobbing`/`func_pendulum` (`mover::spawn_sine`). Still absent: the engine setup of `func_door`, `func_door_rotating` and `func_rotating`. They are live and script-visible with every Radiant key applied, but a script that asks a `func_door` to move is the case that would show it.
+- **Of the `SP_` layer, only what the wire can see runs.** `spawn_entities_from_string` (`crates/server/src/game/spawn.rs`) reproduces `G_CallSpawn`'s third case for the five classnames whose `SP_` is an unconditional `G_FreeEntity(self)` (`SPAWN_FREES`; entity numbering, `cod11-gsc-object-model.md` section 13), the spawn-time configstring writes (`SP_worldspawn`'s `northyaw`, `SP_trigger_hurt`'s alias, the item and two aliases a mounted mg42 registers through `SP_turret`; object-model sections 17 and 19), and the trigger, script entity, item and turret `SP_` functions, plus `func_bobbing`/`func_pendulum` (`mover::spawn_sine`). Still absent: the engine setup of `func_door`, `func_door_rotating` and `func_rotating`. They are live and script-visible with every Radiant key applied, but a script that asks a `func_door` to move is the case that would show it.

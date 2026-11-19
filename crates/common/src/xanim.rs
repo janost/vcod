@@ -21,7 +21,7 @@ pub struct XAnim {
     pub tracks: Vec<Track>,
     /// Header flag 0x2's nameless root-motion track, yaw-only rotations.
     pub root: Option<Track>,
-    /// Notetracks, no runtime consumer yet.
+    /// Notetracks, `(name, frame)`; the view weapon's sounds read them.
     pub notes: Vec<(String, u16)>,
 }
 
@@ -816,5 +816,12 @@ mod tests {
         }
         let ads = load(&fs, "viewmodel_kar98mp_ADS_up").unwrap();
         assert_eq!(ads.tracks[0].bone, "tag_torso");
+    }
+
+    #[test]
+    fn a_hostile_anim_never_panics() {
+        crate::testing::fuzz("xanim", &fixture(), 3000, |d| {
+            let _ = parse("t", d);
+        });
     }
 }

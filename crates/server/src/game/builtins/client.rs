@@ -1,6 +1,8 @@
-//! The per-client builtins the stock join sequence reaches: the two server
-//! commands it sends, the three that arm a spawning player's weapons, and
-//! the spawn-point test `_spawnlogic` filters candidates with.
+//! The per-player builtins (`NAMES`): the server commands a join sends
+//! (`setClientCvar`, the menus), the weapon and ammo calls, the spawn-point
+//! test `_spawnlogic` filters candidates with, the view, movement and input
+//! queries, shellshock, chat, `cloneplayer`, `addTestClient` and 1.5's auto
+//! demo and screenshot calls.
 //!
 //! `setClientCvar` and `openMenu` write no game state: each renders one
 //! reliable command and queues it on `GameHost::client_commands`, which
@@ -15,10 +17,11 @@ use crate::configstrings::{CsRange, script_menu_index};
 use crate::game::builtins::entity::entity_receiver;
 use crate::game::host::{GameHost, SimOp, WeaponOp};
 use crate::game::say::SayMode;
+use crate::game::slot::ClientSlot;
 use vcod_common::pmove;
 use vcod_gsc::{Cx, ErrorKind, Host, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("setclientcvar", set_client_cvar),
@@ -80,8 +83,16 @@ pub fn add_test_client(
     _recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
+    // The fresh `gclient_t` below is CoD2's client state.
+    let enters_world = host.profile.test_client_enters_world;
+    if enters_world && host.as_cod2().is_none() {
+        return Err(crate::game::host::wrong_game("addtestclient"));
+    }
     let taken = |host: &GameHost, slot: usize| {
-        host.client_roster.get(slot).is_some_and(Option::is_some)
+        host.clients
+            .get(slot)
+            .map(|c| &c.roster)
+            .is_some_and(Option::is_some)
             || host.test_clients.added.iter().any(|(s, _, _)| *s == slot)
             || host
                 .ents
@@ -89,24 +100,29 @@ pub fn add_test_client(
                 .and_then(|id| host.ents.get(id))
                 .is_some_and(|e| e.client.is_some())
     };
-    let Some(slot) = (0..host.client_roster.len()).find(|&s| !taken(host, s)) else {
+    // `SV_AddTestClient` searches `sv_maxclients` slots, capped at the
+    // engine's (`GameHost::engine_slots`).
+    let slots = match host.cvars.get("sv_maxclients").parse::<usize>() {
+        Ok(n) if n > 0 => n.min(host.engine_slots),
+        _ => host.engine_slots,
+    };
+    let Some(slot) = (0..slots).find(|&s| !taken(host, s)) else {
         return Ok(Value::Undefined);
     };
     let port = host.test_clients.counter;
     host.test_clients.counter += 1;
     // `sv_reconnectlimit`'s 3 s default, against `lastConnectTime` 0.
     let udp = host.test_clients.udp_slots;
-    let never_used = (0..host.client_roster.len()).any(|s| udp & (1 << s) == 0);
+    let never_used = (0..slots).any(|s| udp & (1 << s) == 0);
     if port == 0 && host.test_clients.svs_time_ms < 3000 && never_used {
         return Ok(Value::Undefined);
     }
     let name = format!("bot{port}");
-    let enters_world = host.profile.test_client_enters_world;
-    if enters_world {
+    if let Some(c2) = host.as_cod2_mut().filter(|_| enters_world) {
         // `ClientConnect`'s fresh `gclient_t` and `pers.connected` 1, as
         // `Cod2Level::connect_at` gives a real client.
-        host.cod2_mut().clients[slot] = Default::default();
-        host.client_roster[slot] = Some(crate::game::scoreboard::RosterSlot {
+        c2.clients[slot] = Default::default();
+        host.clients[slot].roster = Some(crate::game::scoreboard::RosterSlot {
             connecting: true,
             ..Default::default()
         });
@@ -124,7 +140,7 @@ pub fn add_test_client(
     if enters_world {
         // CoD2's `SV_AddTestClient` (lnxded 0x80913da) ends in
         // `SV_ClientEnterWorld`: `ClientBegin`'s `pers.connected` 2.
-        if let Some(r) = host.client_roster[slot].as_mut() {
+        if let Some(r) = host.clients[slot].roster.as_mut() {
             r.connecting = false;
             r.active = true;
         }
@@ -160,7 +176,7 @@ pub fn disable_weapon(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     host.client_sim_ops
         .push((slot, SimOp::WeaponDisabled(true)));
     Ok(Value::Undefined)
@@ -173,7 +189,7 @@ pub fn enable_weapon(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     host.client_sim_ops
         .push((slot, SimOp::WeaponDisabled(false)));
     Ok(Value::Undefined)
@@ -189,7 +205,7 @@ pub fn allow_spectate_team(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let bit = match args.first() {
         Some(Value::String(s)) => match cx.resolve(*s) {
             "none" => 1,
@@ -211,7 +227,7 @@ pub fn allow_spectate_team(
             "allowSpectateTeam takes a team and a bool",
         ))?
         .as_bool()?;
-    let mask = &mut host.client_no_spectate[slot];
+    let mask = &mut host.clients[slot].no_spectate;
     if allowed {
         *mask &= !bit;
     } else {
@@ -238,7 +254,7 @@ fn auto_capture(
     if super::cvar::atoi(host.cvars.get(cvar)) == 0 {
         return Ok(Value::Undefined);
     }
-    host.client_commands.push((slot, command.to_string()));
+    host.client_commands.push(slot, command.to_string());
     Ok(Value::Int(1))
 }
 
@@ -287,8 +303,8 @@ pub fn use_button_pressed(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
-    let held = host.client_buttons[slot] & vcod_common::net::msg::BUTTON_USE != 0;
+    let slot = client_receiver(host, recv)?.index();
+    let held = host.clients[slot].buttons & vcod_common::net::msg::BUTTON_USE != 0;
     Ok(Value::Int(i32::from(held)))
 }
 
@@ -302,7 +318,7 @@ pub fn set_player_origin(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(&Value::Vector([x, y, z])) = args.first() else {
         return Err(ErrorKind::BadType("setOrigin takes a vector"));
     };
@@ -314,9 +330,9 @@ pub fn set_player_origin(
     // the node it left (combat doc 14.7).
     let contents = host.area.contents(slot as u32);
     host.area.unlink(slot as u32);
-    let playing = !host.client_vitals[slot].dead;
+    let playing = !host.clients[slot].vitals.dead;
     host.link_client(slot, origin, host.client_box(slot), contents, playing);
-    host.client_link_origin[slot] = origin;
+    host.clients[slot].link_origin = origin;
     host.move_client_body(slot, Some(origin));
     host.client_sim_ops
         .push((slot, SimOp::SetOrigin { origin }));
@@ -334,11 +350,13 @@ pub fn set_player_angles(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(&Value::Vector(angles)) = args.first() else {
         return Err(ErrorKind::BadType("setPlayerAngles takes a vector"));
     };
-    let held = host.client_prone_cone[slot].map_or(angles, |cone| cone.hold(angles));
+    let held = host.clients[slot]
+        .prone_cone
+        .map_or(angles, |cone| cone.hold(angles));
     let field = cx.intern_folded("angles");
     host.set_field(cx, entity_receiver(recv)?, field, Value::Vector(held))?;
     host.client_sim_ops
@@ -348,15 +366,15 @@ pub fn set_player_angles(
 
 /// `self isOnGround()` (`PlayerCmd_isOnGround`, 0x45014): `ps.groundEntityNum
 /// != 0x3ff` (docs/research/cod11-gsc-object-model.md, 23.5). `Server`
-/// mirrors `ps.on_ground` onto the host alongside `client_pm_type`.
+/// mirrors `ps.on_ground` onto the host alongside `HostClient::pm_type`.
 pub fn is_on_ground(
     host: &mut GameHost,
     _cx: &mut Cx,
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
-    Ok(Value::Int(host.client_on_ground[slot] as i32))
+    let slot = client_receiver(host, recv)?.index();
+    Ok(Value::Int(host.clients[slot].on_ground as i32))
 }
 
 /// `self isLookingAt(ent)` (0x4576c): whether `ent` is what the last aim
@@ -368,9 +386,9 @@ pub fn is_looking_at(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let looking = match args.first() {
-        Some(Value::Entity(id)) => host.client_lookat[slot] == Some(*id),
+        Some(Value::Entity(id)) => host.clients[slot].lookat == Some(*id),
         _ => false,
     };
     Ok(Value::Int(i32::from(looking)))
@@ -388,8 +406,8 @@ pub fn get_current_weapon(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
-    let index = host.client_weapons[slot].current as usize;
+    let slot = client_receiver(host, recv)?.index();
+    let index = host.clients[slot].weapons.current as usize;
     let name = crate::items::item_name(host.defs, index).unwrap_or("none");
     Ok(Value::String(cx.intern_exact(name)))
 }
@@ -412,8 +430,8 @@ pub fn clone_player(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
-    let Some(mut state) = host.client_entity_states[slot].clone() else {
+    let slot = client_receiver(host, recv)?.index();
+    let Some(mut state) = host.clients[slot].entity_state.clone() else {
         // A client with no sim: connected, never entered the world.
         return Ok(Value::Undefined);
     };
@@ -457,7 +475,7 @@ pub fn drop_item(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(Value::String(name)) = args.first() else {
         return Err(ErrorKind::BadType("dropItem takes an item name"));
     };
@@ -518,7 +536,7 @@ fn script_say(
     args: &[Value],
     mode: SayMode,
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let mut text = format!("\u{14}{}", super::message::construct(host, cx, args));
     // The 0x3ff-byte buffer behind the leading byte.
     while text.len() > 0x3ff {
@@ -537,10 +555,10 @@ pub fn ping_player(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let until = host.level_time_ms + 3000;
-    if let Some(p) = host.client_ping_until.get_mut(slot) {
-        *p = until;
+    if let Some(c) = host.clients.get_mut(slot) {
+        c.ping_until = until;
     }
     Ok(Value::Undefined)
 }
@@ -566,7 +584,7 @@ pub fn allow_complaint(
 }
 
 /// `self closeMenu()` (`.so` 0x45574): the reliable command `u`, with no
-/// argument -- the whole format string at 0x73204 is the one letter. The
+/// argument: the whole format string at 0x73204 is the one letter. The
 /// client's handler is `0x3002de60`, "close script menus"
 /// (`docs/research/cod11-hud-protocol.md` section 0).
 pub fn close_menu(
@@ -576,7 +594,7 @@ pub fn close_menu(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
-    host.client_commands.push((slot, "u".to_string()));
+    host.client_commands.push(slot, "u".to_string());
     Ok(Value::Undefined)
 }
 
@@ -598,10 +616,6 @@ pub fn freeze_controls(
     Ok(Value::Undefined)
 }
 
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
-
 /// The model configstring slot `ps.viewmodelIndex` counts from. `G_ModelIndex`
 /// (0x66ed8) hands out 1-based offsets from it, so index 1 is the first slot
 /// of `CsRange::Model`.
@@ -613,12 +627,12 @@ fn model_index_base(host: &GameHost) -> usize {
 /// entity with a `gclient_t`, which is retail's own `entity %i is not a
 /// player` check (0x44703, 0x45413). The client's slot is its entity number,
 /// and that is what a reliable command is addressed to.
-pub(crate) fn client_receiver(host: &GameHost, recv: Option<Target>) -> Result<usize, ErrorKind> {
-    let id = entity_receiver(recv)?;
-    match host.ents.get(id) {
-        Some(e) if e.client.is_some() => Ok(id.0 as usize),
-        _ => Err(ErrorKind::BadType("that entity is not a player")),
-    }
+pub(crate) fn client_receiver(
+    host: &GameHost,
+    recv: Option<Target>,
+) -> Result<ClientSlot, ErrorKind> {
+    ClientSlot::of_entity(&host.ents, entity_receiver(recv)?)
+        .ok_or(ErrorKind::BadType("that entity is not a player"))
 }
 
 /// `self setClientCvar(name, value [, args...])`: the reliable command
@@ -649,7 +663,7 @@ pub fn set_client_cvar(
     }
     .replace('"', "'");
     host.client_commands
-        .push((slot, format!("v {name} \"{value}\"")));
+        .push(slot, format!("v {name} \"{value}\""));
     Ok(Value::Undefined)
 }
 
@@ -692,8 +706,7 @@ fn send_menu(
     let menu = cx.resolve(*menu).to_string();
     let index = script_menu_index(&host.configstrings, host.allocators.layout(), &menu)
         .ok_or(ErrorKind::BadType("that menu was not precached"))?;
-    host.client_commands
-        .push((slot, format!("t {index}{tail}")));
+    host.client_commands.push(slot, format!("t {index}{tail}"));
     Ok(Value::Int(1))
 }
 
@@ -732,7 +745,7 @@ fn register_given(
     name: &str,
     index: usize,
 ) -> Result<(), ErrorKind> {
-    if host.client_weapons[slot].holds(index) || never_given(host, index) {
+    if host.clients[slot].weapons.holds(index) || never_given(host, index) {
         return Ok(());
     }
     host.register_item(name)
@@ -766,12 +779,14 @@ pub fn give_weapon(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let (name, index) = weapon_argument(host, cx, args)?;
     register_given(host, slot, &name, index)?;
     let weapons = host.weapons.clone();
     if !never_given(host, index) {
-        host.client_weapons[slot].give_chain(&weapons, index, weapons.slot(index));
+        host.clients[slot]
+            .weapons
+            .give_chain(&weapons, index, weapons.slot(index));
     }
     if let Some(def) = weapons.get(index) {
         host.weapon_op(
@@ -805,18 +820,19 @@ pub fn give_max_ammo(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let (_, index) = weapon_argument(host, cx, args)?;
     let weapons = host.weapons.clone();
     if host.profile.game == vcod_common::game::Game::Cod2 {
         // CoD2's `PlayerCmd_giveMaxAmmo` (Mac 0x1c2a02): a held weapon's
         // reserve topped up to `maxAmmo` through `Add_Ammo`, the clip left.
         if let Some(def) = weapons.get(index)
-            && host.client_weapons[slot].holds(index)
+            && host.clients[slot].weapons.holds(index)
         {
             let held = host
-                .client_ammo
+                .clients
                 .get(slot)
+                .map(|c| &c.ammo)
                 .and_then(|a| a.ammo.get(def.ammo_index))
                 .copied()
                 .map_or(0, i32::from);
@@ -852,7 +868,7 @@ pub fn give_max_ammo(
 }
 
 /// `self setSpawnWeapon(name)` (0x452a4): `ps.weapon = index`, for a weapon
-/// the player already holds, with `ps.weaponstate` -- retail's other store --
+/// the player already holds, with `ps.weaponstate` (retail's other store)
 /// back to ready. Object model doc, section 20.
 pub fn set_spawn_weapon(
     host: &mut GameHost,
@@ -860,9 +876,9 @@ pub fn set_spawn_weapon(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let (_, index) = weapon_argument(host, cx, args)?;
-    let w = &mut host.client_weapons[slot];
+    let w = &mut host.clients[slot].weapons;
     if w.holds(index) {
         w.current = index as u8;
         host.weapon_op(slot, WeaponOp::SetCurrent(index as u8));
@@ -881,12 +897,13 @@ pub fn switch_to_weapon(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let to = client_receiver(host, recv)?;
+    let slot = to.index();
     let (_, index) = weapon_argument(host, cx, args)?;
-    if !host.client_weapons[slot].holds(index) {
+    if !host.clients[slot].weapons.holds(index) {
         return Ok(Value::Int(0));
     }
-    host.client_commands.push((slot, format!("a {index}")));
+    host.client_commands.push(to, format!("a {index}"));
     Ok(Value::Int(1))
 }
 
@@ -902,7 +919,7 @@ pub fn take_weapon(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(Value::String(name)) = args.first() else {
         return Err(ErrorKind::BadType("takeWeapon takes a weapon name"));
     };
@@ -927,7 +944,7 @@ pub fn take_weapon(
             },
         );
     }
-    host.client_weapons[slot].take_chain(&weapons, index);
+    host.clients[slot].weapons.take_chain(&weapons, index);
     Ok(Value::Undefined)
 }
 
@@ -940,8 +957,8 @@ pub fn take_all_weapons(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
-    host.client_weapons[slot] = crate::weapons::PlayerWeapons::default();
+    let slot = client_receiver(host, recv)?.index();
+    host.clients[slot].weapons = crate::weapons::PlayerWeapons::default();
     host.weapon_op(slot, WeaponOp::TakeAll);
     Ok(Value::Undefined)
 }
@@ -956,9 +973,9 @@ pub fn get_weapon_slot_weapon(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let client = client_receiver(host, recv)?;
+    let client = client_receiver(host, recv)?.index();
     let slot = slot_argument(cx, args)?;
-    let index = host.client_weapons[client].slots[slot] as usize;
+    let index = host.clients[client].weapons.slots[slot] as usize;
     let name = crate::items::item_name(host.defs, index).unwrap_or("none");
     Ok(Value::String(cx.intern_exact(name)))
 }
@@ -968,12 +985,12 @@ pub fn get_weapon_slot_weapon(
 /// own file names. CoD1 gives no rounds: past `BG_GivePlayerWeapon` the
 /// method returns, so the clip and reserve stay what the weapon's clip and
 /// ammo indices held (empty after a spawn), and stock script sets both after
-/// it (coduo-diff.md 22, "Battle rank"). CoD2's gives its `startAmmo`.
+/// it (coduo-diff.md 22.3, "Battle rank"). CoD2's gives its `startAmmo`.
 ///
 /// `"none"` is not a weapon name but weapon index 0, which empties the slot:
 /// retail compares the argument against `"none"` ahead of its name lookup
 /// (0x43ebd), and stock script feeds `getWeaponSlotWeapon`'s own `"none"`
-/// straight back in -- `sd.gsc`'s `spawnPlayer` re-gives the `pers["weapon2"]`
+/// straight back in: `sd.gsc`'s `spawnPlayer` re-gives the `pers["weapon2"]`
 /// `endRound` stashed, which is `"none"` for a player carrying one primary.
 /// Either way whatever stood in the slot is taken first (0x43f6b).
 pub fn set_weapon_slot_weapon(
@@ -982,7 +999,7 @@ pub fn set_weapon_slot_weapon(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let client = client_receiver(host, recv)?;
+    let client = client_receiver(host, recv)?.index();
     let slot = slot_argument(cx, args)?;
     let rest = args.get(1..).unwrap_or_default();
     let index = match rest.first() {
@@ -990,16 +1007,18 @@ pub fn set_weapon_slot_weapon(
         _ => weapon_argument(host, cx, rest)?.1,
     };
     let weapons = host.weapons.clone();
-    let standing = host.client_weapons[client].slots[slot] as usize;
-    host.client_weapons[client].take_chain(&weapons, standing);
+    let standing = host.clients[client].weapons.slots[slot] as usize;
+    host.clients[client].weapons.take_chain(&weapons, standing);
     if index == 0 {
         return Ok(Value::Undefined);
     }
     let name = host.weapon_name(index).unwrap_or_default();
-    let held_before = host.client_weapons[client].holds(index);
+    let held_before = host.clients[client].weapons.holds(index);
     register_given(host, client, &name, index)?;
     if !never_given(host, index) {
-        host.client_weapons[client].give_chain(&weapons, index, slot);
+        host.clients[client]
+            .weapons
+            .give_chain(&weapons, index, slot);
     }
     if host.profile.game == vcod_common::game::Game::Cod2
         && let Some(def) = weapons.get(index)
@@ -1020,8 +1039,9 @@ fn cod2_start_ammo(
     new: bool,
 ) {
     let held = host
-        .client_ammo
+        .clients
         .get(client)
+        .map(|c| &c.ammo)
         .and_then(|a| a.ammo.get(def.ammo_index))
         .copied()
         .map_or(0, i32::from);
@@ -1042,7 +1062,7 @@ fn cod2_add_ammo(
     add: i32,
     fill: bool,
 ) {
-    let a = host.client_ammo.get(client).copied().unwrap_or_default();
+    let a = host.clients.get(client).map(|c| c.ammo).unwrap_or_default();
     let (ai, ci) = (def.ammo_index, def.clip_index);
     let mut ammo = a.ammo.get(ai).copied().map_or(0, i32::from) + add;
     let mut clip = a.clip.get(ci).copied().map_or(0, i32::from);
@@ -1089,7 +1109,7 @@ pub fn set_weapon_slot_ammo(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let (client, slot, rounds) = slot_and_rounds(host, cx, recv, args)?;
-    let index = host.client_weapons[client].slots[slot] as usize;
+    let index = host.clients[client].weapons.slots[slot] as usize;
     if let Some(def) = host.weapons.get(index) {
         let op = if def.clip_only {
             WeaponOp::SetClip {
@@ -1120,7 +1140,7 @@ pub fn set_weapon_slot_clip_ammo(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let (client, slot, rounds) = slot_and_rounds(host, cx, recv, args)?;
-    let index = host.client_weapons[client].slots[slot] as usize;
+    let index = host.clients[client].weapons.slots[slot] as usize;
     if let Some(def) = host.weapons.get(index) {
         let op = WeaponOp::SetClip {
             clip_index: def.clip_index,
@@ -1132,8 +1152,8 @@ pub fn set_weapon_slot_clip_ammo(
 }
 
 /// The two setters' shared clamp: never below 0, never above `cap`.
-fn clamp_rounds(rounds: i16, cap: u32) -> i16 {
-    rounds.max(0).min(cap.min(i16::MAX as u32) as i16)
+fn clamp_rounds(rounds: i32, cap: u32) -> i16 {
+    rounds.max(0).min(cap.min(i16::MAX as u32) as i32) as i16
 }
 
 /// The receiver, slot and round count the two setters share.
@@ -1142,12 +1162,13 @@ fn slot_and_rounds(
     cx: &Cx,
     recv: Option<Target>,
     args: &[Value],
-) -> Result<(usize, usize, i16), ErrorKind> {
-    let client = client_receiver(host, recv)?;
+) -> Result<(usize, usize, i32), ErrorKind> {
+    let client = client_receiver(host, recv)?.index();
     let slot = slot_argument(cx, args)?;
+    // Clamped as the int it is (0x444d7, 0x444ed), not cut to 16 bits first.
     let rounds = match args.get(1) {
-        Some(Value::Int(n)) => *n as i16,
-        Some(Value::Float(f)) => *f as i16,
+        Some(Value::Int(n)) => *n,
+        Some(Value::Float(f)) => *f as i32,
         _ => return Err(ErrorKind::BadType("that builtin takes a round count")),
     };
     Ok((client, slot, rounds))
@@ -1208,7 +1229,7 @@ pub fn position_would_telefrag(
                     .ents
                     .handle(n)
                     .is_some_and(|id| host.ents.get(id).is_some_and(|e| e.client.is_some()))
-                && host.client_pm_type.get(n as usize).copied().unwrap_or(0) < dead
+                && host.clients.get(n as usize).map(|c| c.pm_type).unwrap_or(0) < dead
         });
     Ok(Value::Int(hit.into()))
 }
@@ -1223,13 +1244,13 @@ pub fn set_view_model(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let Some(Value::String(name)) = args.first() else {
         return Err(ErrorKind::BadType("setViewmodel takes a model name"));
     };
     let name = cx.resolve(*name).to_string();
     // `G_ModelIndex("")` is 0 (0x66ee8).
-    host.client_viewmodel[slot] = if name.is_empty() {
+    host.clients[slot].viewmodel = if name.is_empty() {
         0
     } else {
         let cs = host.allocators.index_precached(
@@ -1256,7 +1277,7 @@ pub fn shell_shock(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let [Value::String(a), duration] = args else {
         return Err(ErrorKind::Custom(
             "USAGE: <player> shellshock(<shellshockname>, <duration>)\n".into(),
@@ -1287,7 +1308,7 @@ pub fn shell_shock(
             "duration {shown} should be >= 0 and <= 60"
         )));
     }
-    host.client_shellshock[slot] = [index as i32 + 1, host.level_time_ms, ms];
+    host.clients[slot].shellshock = [index as i32 + 1, host.level_time_ms, ms];
     Ok(Value::Undefined)
 }
 
@@ -1299,13 +1320,13 @@ pub fn stop_shell_shock(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     if !args.is_empty() {
         return Err(ErrorKind::Custom(
             "USAGE: <player> stopshellshock()\n".into(),
         ));
     }
-    host.client_shellshock[slot] = [0; 3];
+    host.clients[slot].shellshock = [0; 3];
     Ok(Value::Undefined)
 }
 
@@ -1319,8 +1340,8 @@ pub fn get_view_model(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
-    let name = match host.client_viewmodel[slot] {
+    let slot = client_receiver(host, recv)?.index();
+    let name = match host.clients[slot].viewmodel {
         0 => "",
         i => host.configstrings[model_index_base(host) + i as usize].as_str(),
     };
@@ -1331,7 +1352,20 @@ pub fn get_view_model(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::configstrings::{CsRange, weapon_index};
+    use crate::game::commands::one;
+
+    /// The slot setters clamp the script's int as an int: 40000 is the
+    /// cap, not a 16-bit -25536 floored to 0 (BUG-113).
+    #[test]
+    fn a_round_count_past_i16_clamps_to_the_cap() {
+        assert_eq!(clamp_rounds(40000, 999), 999);
+        assert_eq!(clamp_rounds(66535, 999), 999);
+        assert_eq!(clamp_rounds(-5, 999), 0);
+        assert_eq!(clamp_rounds(50, 999), 50);
+        assert_eq!(clamp_rounds(i32::MAX, u32::MAX), i16::MAX);
+    }
+    use crate::configstrings::CsRange;
+    use crate::defs::V1;
     use crate::game::entity::ThinkFn;
     use crate::game::testing::fixture;
     use vcod_gsc::EntId;
@@ -1357,11 +1391,11 @@ mod tests {
                 rounds: 15,
             },
         );
-        assert_eq!(host.client_ammo[0].ammo[10], 400);
-        assert_eq!(host.client_ammo[0].clip[10], 15);
+        assert_eq!(host.clients[0].ammo.ammo[10], 400);
+        assert_eq!(host.clients[0].ammo.clip[10], 15);
         assert_eq!(host.client_weapon_ops.len(), 2);
         host.weapon_op(0, WeaponOp::TakeAll);
-        assert_eq!(host.client_ammo[0], AmmoArrays::default());
+        assert_eq!(host.clients[0].ammo, AmmoArrays::default());
     }
 
     fn set_origin(host: &mut GameHost, cx: &mut Cx, id: EntId, at: [f32; 3]) {
@@ -1406,7 +1440,7 @@ mod tests {
             let name = Value::String(cx.intern_exact("xmodel/viewmodel_hands_us"));
             set_view_model(&mut host, cx, recv, &[name]).unwrap();
 
-            assert_eq!(host.client_viewmodel[0], 1);
+            assert_eq!(host.clients[0].viewmodel, 1);
             let (first, _) = CsRange::Model.bounds();
             assert_eq!(host.configstrings[first], "xmodel/viewmodel_hands_us");
             match get_view_model(&mut host, cx, recv, &[]).unwrap() {
@@ -1434,10 +1468,10 @@ mod tests {
             let s = |cx: &mut Cx, t: &str| Value::String(cx.intern_exact(t));
             let args = [s(cx, "GROGGY"), Value::Float(1.5)];
             shell_shock(&mut host, cx, recv, &args).unwrap();
-            assert_eq!(host.client_shellshock[0], [2, 1250, 1500]);
+            assert_eq!(host.clients[0].shellshock, [2, 1250, 1500]);
             let args = [s(cx, ""), Value::Int(0)];
             shell_shock(&mut host, cx, recv, &args).unwrap();
-            assert_eq!(host.client_shellshock[0], [3, 1250, 0]);
+            assert_eq!(host.clients[0].shellshock, [3, 1250, 0]);
 
             let args = [s(cx, "default"), Value::Int(61)];
             assert_eq!(
@@ -1458,7 +1492,7 @@ mod tests {
             );
 
             stop_shell_shock(&mut host, cx, recv, &[]).unwrap();
-            assert_eq!(host.client_shellshock[0], [0; 3]);
+            assert_eq!(host.clients[0].shellshock, [0; 3]);
         });
     }
 
@@ -1484,12 +1518,12 @@ mod tests {
         vm.with_cx(|cx| {
             let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let recv = Some(Target::Entity(c));
-            host.client_on_ground[0] = true;
+            host.clients[0].on_ground = true;
             assert_eq!(
                 is_on_ground(&mut host, cx, recv, &[]).unwrap(),
                 Value::Int(1)
             );
-            host.client_on_ground[0] = false;
+            host.clients[0].on_ground = false;
             assert_eq!(
                 is_on_ground(&mut host, cx, recv, &[]).unwrap(),
                 Value::Int(0)
@@ -1512,14 +1546,14 @@ mod tests {
             let recv = Some(Target::Entity(c));
             let zone = host.ents.spawn(cx).unwrap();
             let other = host.ents.spawn(cx).unwrap();
-            host.client_lookat[0] = Some(zone);
+            host.clients[0].lookat = Some(zone);
             let ask = |host: &mut GameHost, cx: &mut Cx, args: &[Value]| {
                 is_looking_at(host, cx, recv, args).unwrap()
             };
             assert_eq!(ask(&mut host, cx, &[Value::Entity(zone)]), Value::Int(1));
             assert_eq!(ask(&mut host, cx, &[Value::Entity(other)]), Value::Int(0));
             assert_eq!(ask(&mut host, cx, &[Value::Int(3)]), Value::Int(0));
-            host.client_lookat[0] = None;
+            host.clients[0].lookat = None;
             assert_eq!(ask(&mut host, cx, &[Value::Entity(zone)]), Value::Int(0));
 
             let non_client = Some(Target::Entity(other));
@@ -1572,7 +1606,7 @@ mod tests {
             assert_eq!(ask(&mut host, cx, [512.0, 512.0, 0.0]), Value::Int(0));
             // `c`'s origin says it stands here, but it never linked.
             assert_eq!(ask(&mut host, cx, [0.0, 512.0, 0.0]), Value::Int(0));
-            host.client_pm_type[0] = 6;
+            host.clients[0].pm_type = 6;
             assert_eq!(ask(&mut host, cx, [0.0, 0.0, 0.0]), Value::Int(0));
         });
     }
@@ -1612,13 +1646,13 @@ mod tests {
             }
             let carbine = named(cx, "m1carbine_mp");
             set_spawn_weapon(&mut host, cx, t, &[carbine]).unwrap();
-            assert_eq!(host.client_weapons[0].held as u32 as i32, 4368);
-            assert_eq!(host.client_weapons[0].current, 12);
+            assert_eq!(host.clients[0].weapons.held as u32 as i32, 4368);
+            assert_eq!(host.clients[0].weapons.current, 12);
 
             // Never given, so never selected.
             let sten = named(cx, "sten_mp");
             set_spawn_weapon(&mut host, cx, t, &[sten]).unwrap();
-            assert_eq!(host.client_weapons[0].current, 12);
+            assert_eq!(host.clients[0].weapons.current, 12);
 
             // And a name no weapon file backs is an error, not a silent zero.
             let bogus = named(cx, "not_a_weapon_mp");
@@ -1657,13 +1691,16 @@ mod tests {
             assert_eq!(
                 host.client_commands,
                 vec![
-                    (3, "v g_scriptMainMenu \"team_russiangerman\"".to_string()),
-                    (3, "v scr_showweapontab \"0\"".to_string()),
                     (
-                        3,
+                        one(3),
+                        "v g_scriptMainMenu \"team_russiangerman\"".to_string()
+                    ),
+                    (one(3), "v scr_showweapontab \"0\"".to_string()),
+                    (
+                        one(3),
                         "v cg_objectiveText \"DM_KILL_OTHER_PLAYERS\u{15}\"".to_string()
                     ),
-                    (3, "t 1".to_string()),
+                    (one(3), "t 1".to_string()),
                 ]
             );
         });
@@ -1682,7 +1719,7 @@ mod tests {
             let menu = Value::String(cx.intern_exact("weapon_russian"));
             let r = open_menu_no_mouse(&mut host, cx, Some(Target::Entity(e)), &[menu]);
             assert!(matches!(r, Ok(Value::Int(1))));
-            assert_eq!(host.client_commands, vec![(2, "t 0 1".to_string())]);
+            assert_eq!(host.client_commands, vec![(one(2), "t 0 1".to_string())]);
         });
     }
 
@@ -1712,7 +1749,7 @@ mod tests {
             assert_eq!(
                 host.client_commands,
                 vec![(
-                    0,
+                    one(0),
                     "v cg_objectiveText \"MPSCRIPT_WINS\u{15}vcod^7\"".to_string()
                 )]
             );
@@ -1734,7 +1771,7 @@ mod tests {
             set_client_cvar(&mut host, cx, Some(Target::Entity(e)), &[name, value]).unwrap();
             assert_eq!(
                 host.client_commands,
-                vec![(0, "v cg_objectiveText \"say 'hi' now\"".to_string())]
+                vec![(one(0), "v cg_objectiveText \"say 'hi' now\"".to_string())]
             );
         });
     }
@@ -1759,8 +1796,8 @@ mod tests {
         });
     }
 
-    /// The weapon name comes out of the host's own `client_weapons`, and a
-    /// slot holding nothing reads `"none"` -- which is what a player on a
+    /// The weapon name comes out of the host's own `HostClient::weapons`, and a
+    /// slot holding nothing reads `"none"`, which is what a player on a
     /// ladder reports, the holster having written 0 into `ps.weapon`.
     #[test]
     fn getcurrentweapon_names_what_the_client_holds() {
@@ -1776,7 +1813,7 @@ mod tests {
                     v => panic!("{v:?}"),
                 };
             assert_eq!(name(&mut host, cx), "none");
-            host.client_weapons[0].current = weapon_index("m1carbine_mp").unwrap() as u8;
+            host.clients[0].weapons.current = V1.weapon_index("m1carbine_mp").unwrap() as u8;
             assert_eq!(name(&mut host, cx), "m1carbine_mp");
         });
     }
@@ -1790,7 +1827,7 @@ mod tests {
         vm.with_cx(|cx| {
             let c = host.ents.spawn_client(cx, 3, None).unwrap();
             close_menu(&mut host, cx, Some(Target::Entity(c)), &[]).unwrap();
-            assert_eq!(host.client_commands, vec![(3, "u".to_string())]);
+            assert_eq!(host.client_commands, vec![(one(3), "u".to_string())]);
             let prop = host.ents.spawn(cx).unwrap();
             assert!(close_menu(&mut host, cx, Some(Target::Entity(prop)), &[]).is_err());
         });
@@ -1805,14 +1842,14 @@ mod tests {
         let (mut vm, mut host) = fixture();
         host.weapons = std::rc::Rc::new(crate::game::pickup::tests_table());
         host.level_time_ms = 5_000;
-        let carbine = weapon_index("m1carbine_mp").unwrap();
+        let carbine = V1.weapon_index("m1carbine_mp").unwrap();
         let (clip_index, ammo_index) = {
             let d = host.weapons.get(carbine).unwrap();
             (d.clip_index, d.ammo_index)
         };
-        host.client_weapons[0].give(carbine, 1);
-        host.client_ammo[0].ammo[ammo_index] = 400;
-        host.client_ammo[0].clip[clip_index] = 12;
+        host.clients[0].weapons.give(carbine, 1);
+        host.clients[0].ammo.ammo[ammo_index] = 400;
+        host.clients[0].ammo.clip[clip_index] = 12;
         vm.with_cx(|cx| {
             let c = host.ents.spawn_client(cx, 0, None).unwrap();
             set_origin(&mut host, cx, c, [16.0, -32.0, 8.0]);
@@ -1835,9 +1872,9 @@ mod tests {
             assert_eq!(e.think, Some(ThinkFn::ClearOwner));
             assert_eq!(e.nextthink, 6_000);
         });
-        assert!(!host.client_weapons[0].holds(carbine));
-        assert_eq!(host.client_ammo[0].ammo[ammo_index], 0);
-        assert_eq!(host.client_ammo[0].clip[clip_index], 0);
+        assert!(!host.clients[0].weapons.holds(carbine));
+        assert_eq!(host.clients[0].ammo.ammo[ammo_index], 0);
+        assert_eq!(host.clients[0].ammo.clip[clip_index], 0);
         assert!(host.ents.run_thinks(6_000).is_empty());
         let (id, _) = host
             .ents
@@ -1853,9 +1890,9 @@ mod tests {
     fn dropitem_of_a_weapon_not_held_drops_nothing() {
         let (mut vm, mut host) = fixture();
         host.weapons = std::rc::Rc::new(crate::game::pickup::tests_table());
-        let carbine = weapon_index("m1carbine_mp").unwrap();
-        host.client_weapons[0].give(carbine, 1);
-        let held = host.client_weapons[0];
+        let carbine = V1.weapon_index("m1carbine_mp").unwrap();
+        host.clients[0].weapons.give(carbine, 1);
+        let held = host.clients[0].weapons;
         vm.with_cx(|cx| {
             let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let name = Value::String(cx.intern_exact("fg42_mp"));
@@ -1866,7 +1903,7 @@ mod tests {
         });
         assert_eq!(host.ents.iter_inuse().count(), 1);
         assert!(host.client_weapon_ops.is_empty());
-        assert_eq!(host.client_weapons[0], held);
+        assert_eq!(host.clients[0].weapons, held);
     }
 
     /// A name neither a weapon file nor `bg_itemlist` backs drops nothing
@@ -1891,7 +1928,7 @@ mod tests {
     #[test]
     fn dropitem_of_health_launches_it_without_a_spin() {
         let (mut vm, mut host) = fixture();
-        let held = host.client_weapons[0];
+        let held = host.clients[0].weapons;
         vm.with_cx(|cx| {
             let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let name = Value::String(cx.intern_exact("item_health"));
@@ -1909,7 +1946,7 @@ mod tests {
             };
             assert_eq!(cx.resolve(s), "item_health");
         });
-        assert_eq!(host.client_weapons[0], held);
+        assert_eq!(host.clients[0].weapons, held);
     }
 
     /// `"none"` is what `getCurrentWeapon` reports for a holstered player,
@@ -1959,7 +1996,7 @@ mod tests {
             });
         }
         rt.run_frame(0);
-        rt.host.client_vitals[0] = Vitals {
+        rt.host.clients[0].vitals = Vitals {
             health: 10,
             max_health: 100,
             dead: false,
@@ -1982,8 +2019,8 @@ mod tests {
     }
 
     /// `cloneplayer` copies the mirror `Server::replay_moves` wrote into the
-    /// body queue's next slot. A client with no mirror -- connected but never
-    /// in the world -- clones nothing.
+    /// body queue's next slot. A client with no mirror (connected but never
+    /// in the world) clones nothing.
     #[test]
     fn cloneplayer_pushes_the_mirrored_state_into_the_body_queue() {
         let p = &vcod_common::net::protocol::PROTOCOL_V1;
@@ -2004,7 +2041,7 @@ mod tests {
             };
             set(&mut state, "clientNum", 2);
             set(&mut state, "legsAnim", 700);
-            host.client_entity_states[2] = Some(state);
+            host.clients[2].entity_state = Some(state);
             let Value::Entity(id) = clone_player(&mut host, cx, recv, &[]).unwrap() else {
                 panic!("the corpse comes back as an entity");
             };
@@ -2047,7 +2084,7 @@ mod tests {
             let colt = Value::String(cx.intern_exact("colt_mp"));
             give_weapon(&mut host, cx, t, &[colt]).unwrap();
             host.initializing = false;
-            host.client_weapons[0] = Default::default();
+            host.clients[0].weapons = Default::default();
             give_weapon(&mut host, cx, t, &[colt]).unwrap();
             let mp40 = Value::String(cx.intern_exact("mp40_mp"));
             assert_eq!(
@@ -2057,7 +2094,11 @@ mod tests {
                         .into()
                 ))
             );
-            assert!(!host.client_weapons[0].holds(weapon_index("mp40_mp").unwrap()));
+            assert!(
+                !host.clients[0]
+                    .weapons
+                    .holds(V1.weapon_index("mp40_mp").unwrap())
+            );
         });
     }
 
@@ -2069,7 +2110,7 @@ mod tests {
         let Some((mut vm, mut host)) = armed_fixture() else {
             return;
         };
-        let mg = weapon_index("mg42_bipod_stand_mp").unwrap();
+        let mg = V1.weapon_index("mg42_bipod_stand_mp").unwrap();
         assert_eq!(host.weapons.get(mg).unwrap().weapon_class, "turret");
         host.initializing = false;
         vm.with_cx(|cx| {
@@ -2080,8 +2121,8 @@ mod tests {
             let slot = Value::String(cx.intern_exact("primary"));
             set_weapon_slot_weapon(&mut host, cx, t, &[slot, arg]).unwrap();
         });
-        assert!(!host.client_weapons[0].holds(mg));
-        assert_eq!(host.client_weapons[0].slots[1], 0);
+        assert!(!host.clients[0].weapons.holds(mg));
+        assert_eq!(host.clients[0].weapons.slots[1], 0);
     }
 
     /// The stock allies loadout on client 0, with the ops it pushed dropped:
@@ -2118,7 +2159,7 @@ mod tests {
         let Some((mut vm, mut host)) = armed_fixture() else {
             return;
         };
-        let carbine = weapon_index("m1carbine_mp").unwrap();
+        let carbine = V1.weapon_index("m1carbine_mp").unwrap();
         let (ammo_index, clip_index) = {
             let def = host.weapons.get(carbine).expect("the carbine");
             (def.ammo_index, def.clip_index)
@@ -2182,7 +2223,7 @@ mod tests {
         let Some((mut vm, mut host)) = armed_fixture() else {
             return;
         };
-        let thompson = weapon_index("thompson_mp").unwrap();
+        let thompson = V1.weapon_index("thompson_mp").unwrap();
         vm.with_cx(|cx| {
             let e = loadout(&mut host, cx);
             let t = Some(Target::Entity(e));
@@ -2199,11 +2240,11 @@ mod tests {
                 Value::String(a) => assert_eq!(cx.resolve(a), "thompson_mp"),
                 v => panic!("{v:?}"),
             }
-            assert!(host.client_weapons[0].holds(thompson));
+            assert!(host.clients[0].weapons.holds(thompson));
             // `BG_GivePlayerWeapon` holds the select-fire mode beside it.
-            let semi = weapon_index("thompson_semi_mp").unwrap();
-            assert!(host.client_weapons[0].holds(semi));
-            assert!(!host.client_weapons[0].slots.contains(&(semi as u8)));
+            let semi = V1.weapon_index("thompson_semi_mp").unwrap();
+            assert!(host.clients[0].weapons.holds(semi));
+            assert!(!host.clients[0].weapons.slots.contains(&(semi as u8)));
             switch_to_weapon(&mut host, cx, t, &[name]).unwrap();
 
             // A bad slot name and a weapon no file backs are both errors.
@@ -2225,18 +2266,18 @@ mod tests {
         let Some((mut vm, mut host)) = armed_fixture() else {
             return;
         };
-        let thompson = weapon_index("thompson_mp").unwrap();
+        let thompson = V1.weapon_index("thompson_mp").unwrap();
         vm.with_cx(|cx| {
             let e = loadout(&mut host, cx);
             let t = Some(Target::Entity(e));
             let primary = Value::String(cx.intern_exact("primary"));
             let name = Value::String(cx.intern_exact("thompson_mp"));
             set_weapon_slot_weapon(&mut host, cx, t, &[primary, name]).unwrap();
-            assert!(host.client_weapons[0].holds(thompson));
+            assert!(host.clients[0].weapons.holds(thompson));
 
             let none = Value::String(cx.intern_exact("none"));
             set_weapon_slot_weapon(&mut host, cx, t, &[primary, none]).unwrap();
-            assert!(!host.client_weapons[0].holds(thompson));
+            assert!(!host.clients[0].weapons.holds(thompson));
             match get_weapon_slot_weapon(&mut host, cx, t, &[primary]).unwrap() {
                 Value::String(a) => assert_eq!(cx.resolve(a), "none"),
                 v => panic!("{v:?}"),
@@ -2259,7 +2300,7 @@ mod tests {
             take_all_weapons(&mut host, cx, Some(Target::Entity(e)), &[]).unwrap();
         });
         assert_eq!(
-            host.client_weapons[0],
+            host.clients[0].weapons,
             crate::weapons::PlayerWeapons::default()
         );
         assert_eq!(host.client_weapon_ops, vec![(0, WeaponOp::TakeAll)]);
@@ -2268,8 +2309,8 @@ mod tests {
         sim.ps.ammo[3] = 56;
         sim.ps.ammoclip[10] = 15;
         // The mirror `Server` runs before the ops, then the op itself.
-        sim.ps.weapons_held = host.client_weapons[0].held;
-        sim.ps.weapon_slots = host.client_weapons[0].slots;
+        sim.ps.weapons_held = host.clients[0].weapons.held;
+        sim.ps.weapon_slots = host.clients[0].weapons.slots;
         crate::server::apply_weapon_op(&mut sim, host.client_weapon_ops[0].1);
         assert_eq!(sim.ps.weapons_held, 0);
         assert_eq!(sim.ps.weapon_slots, [0; crate::weapons::NUM_SLOTS]);
@@ -2280,7 +2321,7 @@ mod tests {
     /// `switchToWeapon` sends the client `a <colt>` and queues nothing for
     /// the sim: the cmds that then name the colt put the carbine away and
     /// raise the colt, `ps.weapon` reading it only from the raise on. The
-    /// host's own copy is left alone -- the mirror would otherwise force the
+    /// host's own copy is left alone: the mirror would otherwise force the
     /// target weapon in ahead of the putaway.
     #[test]
     fn switchtoweapon_goes_through_the_putaway_and_the_raise() {
@@ -2289,8 +2330,8 @@ mod tests {
             return;
         };
         let (carbine, colt) = (
-            weapon_index("m1carbine_mp").unwrap(),
-            weapon_index("colt_mp").unwrap(),
+            V1.weapon_index("m1carbine_mp").unwrap(),
+            V1.weapon_index("colt_mp").unwrap(),
         );
         vm.with_cx(|cx| {
             let e = loadout(&mut host, cx);
@@ -2307,10 +2348,10 @@ mod tests {
                 Ok(Value::Int(0))
             ));
         });
-        assert_eq!(host.client_commands, vec![(0, format!("a {colt}"))]);
+        assert_eq!(host.client_commands, vec![(one(0), format!("a {colt}"))]);
         assert!(host.client_weapon_ops.is_empty());
         assert_eq!(
-            host.client_weapons[0].current, carbine as u8,
+            host.clients[0].weapons.current, carbine as u8,
             "the machine picks the weapon up, not the builtin"
         );
 
@@ -2322,9 +2363,9 @@ mod tests {
             ..vcod_common::net::msg::NULL_USERCMD
         };
         let mut sim = player_sim();
-        sim.ps.weapons_held = host.client_weapons[0].held;
-        sim.ps.weapon_slots = host.client_weapons[0].slots;
-        sim.ps.weapon = host.client_weapons[0].current;
+        sim.ps.weapons_held = host.clients[0].weapons.held;
+        sim.ps.weapon_slots = host.clients[0].weapons.slots;
+        sim.ps.weapon = host.clients[0].weapons.current;
         let events = sim.step(&cmd, 0.05, Some(world), host.weapons.defs());
         assert_eq!(events[0].event, EV_PUTAWAY_WEAPON);
         assert_eq!(sim.ps.weapon, carbine as u8, "still the carbine, mid-drop");
@@ -2521,9 +2562,9 @@ mod tests {
             for team in ["allies", "axis", "freelook", "none"] {
                 call(&mut host, team, false).unwrap();
             }
-            assert_eq!(host.client_no_spectate[0], 0x17);
+            assert_eq!(host.clients[0].no_spectate, 0x17);
             call(&mut host, "allies", true).unwrap();
-            assert_eq!(host.client_no_spectate[0], 0x13);
+            assert_eq!(host.clients[0].no_spectate, 0x13);
             assert!(call(&mut host, "spectator", true).is_err());
         });
     }
@@ -2549,7 +2590,10 @@ mod tests {
             );
             auto_demo_stop(&mut host, cx, recv, &[]).unwrap();
             auto_screenshot(&mut host, cx, recv, &[]).unwrap();
-            assert_eq!(host.client_commands, [(2, "C".into()), (2, "D".into())]);
+            assert_eq!(
+                host.client_commands,
+                [(one(2), "C".into()), (one(2), "D".into())]
+            );
             disable_weapon(&mut host, cx, recv, &[]).unwrap();
             enable_weapon(&mut host, cx, recv, &[]).unwrap();
             assert!(matches!(

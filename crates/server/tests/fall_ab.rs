@@ -143,7 +143,7 @@ fn parse_fall(l: &str) -> FallLine {
     }
 }
 
-/// The probe client's `FALL` line for a snapshot (`crates/client/src/probe.rs`,
+/// The probe client's `FALL` line for a snapshot (`crates/client/src/probe/observe.rs`,
 /// `FallProbe::observe`).
 fn fall_line(s: &Snapshot) -> FallLine {
     let p = &PROTOCOL_V1;
@@ -154,7 +154,7 @@ fn fall_line(s: &Snapshot) -> FallLine {
     let line = format!(
         "FALL t={} ct={} origin={:.3},{:.3},{:.3} vel={},{},{} ground={} pm_type={} pm_flags=0x{:x} pm_time={} \
 health={} seq={} events=[{},{},{},{}] parms=[{},{},{},{}]",
-        s.server_time,
+        s.server_time.raw(),
         i("commandTime"),
         f("origin[0]"),
         f("origin[1]"),
@@ -395,7 +395,6 @@ const RETAIL_CMDS_BEFORE_DROP_MS: i32 = 1000;
 /// unset it returns at the first drop, which names it: the script drops off
 /// the spawn's clock, which the cmds never move, so the run that knows the
 /// shift drops on the same frame.
-#[allow(clippy::too_many_arguments)]
 fn run_ours(
     gametype: &str,
     fs: vcod_common::pk3::Pk3Fs,
@@ -453,7 +452,7 @@ fn run_ours(
     let mut falls = BTreeMap::new();
     // 100 s of server time at most; the probe is done in about 60.
     for _ in 0..2000 {
-        let Some(t) = cl.snapshots().newest().map(|s| s.server_time) else {
+        let Some(t) = cl.snapshots().newest().map(|s| s.server_time.raw()) else {
             panic!("no snapshot after the join");
         };
         let next = t + FRAME_MS;
@@ -550,7 +549,7 @@ fn run_ours(
         }
         common::step(&mut sv, &q, &mut cl, now);
         if let Some(s) = cl.snapshots().newest() {
-            falls.insert(s.server_time, fall_line(s));
+            falls.insert(s.server_time.raw(), fall_line(s));
         }
         if shift.is_none() {
             let log: Vec<String> = sv.script_log().iter().map(|l| l.to_string()).collect();
@@ -582,10 +581,9 @@ fn run_ours(
         }
         // Past the probe's end too, as far as retail's client logged.
         let logged = shift.is_some_and(|sh| {
-            retail
-                .falls
-                .last()
-                .is_none_or(|l| cl.snapshots().newest().map(|s| s.server_time) >= Some(l.t + sh))
+            retail.falls.last().is_none_or(|l| {
+                cl.snapshots().newest().map(|s| s.server_time.raw()) >= Some(l.t + sh)
+            })
         });
         if logged && sv.script_log().iter().any(|l| l.starts_with("PROBE done")) {
             break;

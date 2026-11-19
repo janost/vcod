@@ -7,6 +7,11 @@ use crate::assets::misc::RawFile;
 use std::collections::HashMap;
 use vcod_common::net::FogParams;
 
+/// C's `atof`, stored as a float.
+fn atof(s: &str) -> f32 {
+    vcod_common::text::atof(s) as f32
+}
+
 /// `setExpFog`'s configstring.
 pub const CS_FOG: u16 = 9;
 /// `visionSetNaked`'s `"<name>" <ms>`.
@@ -84,28 +89,6 @@ pub fn parse_fog(cs: &str) -> FogCs {
         color,
         transition_ms,
     })
-}
-
-/// C's `atof`: the longest leading number, 0 when there is none.
-fn atof(s: &str) -> f32 {
-    let s = s.trim_start();
-    let end = s
-        .char_indices()
-        .take_while(|&(i, c)| c.is_ascii_digit() || c == '.' || ((c == '-' || c == '+') && i == 0))
-        .last()
-        .map_or(0, |(i, c)| i + c.len_utf8());
-    let mut end = end;
-    // an exponent, if one follows
-    if let Some(rest) = s.get(end..)
-        && let Some(e) = rest.strip_prefix(['e', 'E'])
-    {
-        let sign = usize::from(e.starts_with(['-', '+']));
-        let digits = e[sign..].chars().take_while(char::is_ascii_digit).count();
-        if digits > 0 {
-            end += 1 + sign + digits;
-        }
-    }
-    s[..end].parse().unwrap_or(0.0)
 }
 
 /// The first live `setExpFog(start, halfway, r, g, b, time)` of a map
@@ -475,8 +458,8 @@ impl VisionBlend {
     /// What draws at `now_ms`.
     pub fn at(&self, now_ms: i32) -> Vision {
         match self.fade {
-            Some((start, ms)) if start + ms >= now_ms => {
-                let frac = (now_ms - start) as f32 / ms as f32;
+            Some((start, ms)) if start.saturating_add(ms) >= now_ms => {
+                let frac = now_ms.wrapping_sub(start) as f32 / ms as f32;
                 Vision::lerp(&self.from, &self.to, frac.max(0.0))
             }
             _ => self.to,
@@ -613,6 +596,17 @@ mod tests {
         assert_eq!(b.at(3001), map);
         b.set(intro, 0, 4000);
         assert_eq!(b.at(4000), intro);
+    }
+
+    /// A configstring fade near i32::MAX holds the fade instead of
+    /// overflowing its end time (BUG-150).
+    #[test]
+    fn a_fade_past_i32_max_does_not_overflow() {
+        let mut b = VisionBlend::default();
+        b.set(Vision::default(), 1, 0);
+        b.set(Vision::parse(MP_CRASH), i32::MAX, 100);
+        let c = b.at(200).film.contrast;
+        assert!((c - Vision::default().film.contrast).abs() < 1e-3, "{c}");
     }
 
     /// FNV-1a over a stream of words: the pins below hash every output's bits.

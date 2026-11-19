@@ -2,18 +2,56 @@
 //! 0x8086290) and the `nextdl` / `retransdl` handlers
 //! (docs/research/cod11-server-handshake.md, "Serving a download"), and on
 //! protocols 6 and 22 the www redirect (docs/research/cod15-protocol-diff.md
-//! 14).
+//! 14). The window, `nextdl`, `retransdl` and the `wwwdl` ladder are the
+//! engine's (`crate::engine::download`); this is CoD1's first write.
 
 use vcod_common::net::msg::MsgWriter;
 
+use crate::engine::download::{BLOCK, DownloadWire, Transfer};
+pub use crate::engine::download::{DownloadFile, NextDl, WwwReply, WwwState};
+
 /// `svc_download`.
 const SVC_DOWNLOAD: u8 = 6;
-/// lnxded 1.1d reads its blocks 0x800 bytes at a time.
-pub const BLOCK: usize = 2048;
-/// Blocks in flight before an ack.
-const WINDOW: u32 = 8;
-/// Unacked blocks go again after this long.
-const RETRANSMIT_MS: i32 = 1000;
+
+/// CoD1's `svc_download` shapes and its `wwwdl` drops (UO 0x808c298; 1.5b
+/// has the same strings).
+pub struct Cod1Download;
+
+impl DownloadWire for Cod1Download {
+    const UNEXPECTED: &'static str = "GMI_EXE_UNEXPECTEDWWWDOWLOADMESSAGE";
+    const DISCONNECTED: &'static str = "GMI_EXE_DOWNLOADDISCONNECTED";
+
+    /// The block number as a short, block 0's size, the length and bytes.
+    fn write_block(w: &mut MsgWriter, block: u32, size: Option<i32>, data: Vec<u8>) {
+        w.write_byte(SVC_DOWNLOAD);
+        w.write_short(block as i16);
+        if let Some(size) = size {
+            w.write_long(size);
+        }
+        w.write_short(data.len() as i16);
+        for b in data {
+            w.write_byte(b);
+        }
+    }
+
+    /// Block 0, size -1, the text.
+    fn write_refusal(w: &mut MsgWriter, text: String) {
+        w.write_byte(SVC_DOWNLOAD);
+        w.write_short(0);
+        w.write_long(-1);
+        w.write_string(&text);
+    }
+
+    /// Block -1, `<base>/<name>`, the file's size and the flags, bit 0 the
+    /// disconnected mode (UO 0x808c559).
+    fn write_redirect(w: &mut MsgWriter, url: String, size: i32, flags: i32) {
+        w.write_byte(SVC_DOWNLOAD);
+        w.write_short(-1);
+        w.write_string(&url);
+        w.write_long(size);
+        w.write_long(flags);
+    }
+}
 
 /// Why a download is refused, the localized key the client shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,107 +85,17 @@ pub struct WwwConfig {
     pub udp_fallback: bool,
 }
 
-/// One client's www state (UO coduo_lnxded client +0x10c08, +0x10c0c,
-/// +0x10c10). Retail keeps it on the client, across transfers.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct WwwState {
-    /// A redirect went out; `wwwdl` is refused before one.
-    pub redirected: bool,
-    /// `wwwdl ack` came back: nothing more is written for the transfer.
-    pub acked: bool,
-    /// The last www transfer failed (`wwwdl fail`, `chkfail`): the next one
-    /// goes over UDP, or on UO waits a message ([`WwwConfig::udp_fallback`]).
-    pub fallback: bool,
-}
-
-/// What a `wwwdl` subcommand does (`SV_WWWDownload`, UO 0x808c298).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum WwwReply {
-    /// Nothing more to do.
-    None,
-    /// The transfer is over; close it.
-    Close,
-    /// Close it and resend the gamestate (`fail`, `chkfail`).
-    CloseAndGamestate,
-    /// Drop the client with this reason.
-    Drop(&'static str),
-}
-
-/// `SV_WWWDownload` (UO coduo_lnxded 0x808c298; 1.5b has the same strings):
-/// any subcommand before a redirect, an unknown one, or anything but
-/// `ack` and `bbl8r` before the ack drops the client.
+/// `SV_WWWDownload` (UO coduo_lnxded 0x808c298) on CoD1's strings.
 pub fn wwwdl(state: &mut WwwState, sub: &str, client: &str, download: &str) -> WwwReply {
-    const UNEXPECTED: &str = "GMI_EXE_UNEXPECTEDWWWDOWLOADMESSAGE";
-    if !state.redirected {
-        log::warn!("SV_WWWDownload: unexpected wwwdl '{sub}' for client '{client}'");
-        return WwwReply::Drop(UNEXPECTED);
-    }
-    let is = |s: &str| sub.eq_ignore_ascii_case(s);
-    if is("ack") {
-        if state.acked {
-            log::warn!("WARNING: dupe wwwdl ack from client '{client}'");
-        }
-        state.acked = true;
-        return WwwReply::None;
-    }
-    if is("bbl8r") {
-        return WwwReply::Drop("GMI_EXE_DOWNLOADDISCONNECTED");
-    }
-    if !state.acked {
-        log::warn!("SV_WWWDownload: unexpected wwwdl '{sub}' for client '{client}'");
-        return WwwReply::Drop(UNEXPECTED);
-    }
-    if is("done") {
-        state.acked = false;
-        return WwwReply::Close;
-    }
-    if is("chkfail") {
-        log::warn!(
-            "WARNING: client '{client}' reports that the redirect download for '{download}' \
-             had wrong checksum.\n         you should check your download redirect configuration."
-        );
-    } else if !is("fail") {
-        log::warn!("SV_WWWDownload: unknown wwwdl subcommand '{sub}' for client '{client}'");
-        return WwwReply::Drop(UNEXPECTED);
-    }
-    state.acked = false;
-    state.fallback = true;
-    WwwReply::CloseAndGamestate
+    crate::engine::download::wwwdl::<Cod1Download>(state, sub, client, download)
 }
 
-/// The redirect: `svc_download`, block -1, `<base>/<name>`, the file's size
-/// and the flags, bit 0 the disconnected mode (UO 0x808c559).
-fn write_redirect(w: &mut MsgWriter, url: &str, size: i32, disconnected: bool) {
-    w.write_byte(SVC_DOWNLOAD);
-    w.write_short(-1);
-    w.write_string(url);
-    w.write_long(size);
-    w.write_long(i32::from(disconnected));
-}
-
-/// What a `nextdl` did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NextDl {
-    Acked,
-    /// The empty end block was acked; the transfer is over.
-    Completed,
-    /// Any block but the one due, which retail drops as `broken download`.
-    Broken,
-}
-
-/// One client's transfer. Block `i` is bytes `i * BLOCK ..` of the file, and
-/// the block past the last byte is the empty one that ends it.
+/// One client's transfer.
 pub struct ServerDownload {
     /// As the client asked, e.g. `main/foo.pk3`.
     pub name: String,
-    /// `None` until the first write opens it.
-    data: Option<Vec<u8>>,
-    /// `downloadClientBlock`: the next block the client has to ack.
-    acked: u32,
-    /// `downloadCurrentBlock`: the next block to put on the wire.
-    current: u32,
-    /// `downloadSendTime`, the server clock of the last send or ack.
-    send_time: i32,
+    /// Its file opens on the first write.
+    transfer: Transfer,
     /// Blocks have started going out over UDP; no redirect follows.
     streaming: bool,
 }
@@ -157,30 +105,15 @@ impl ServerDownload {
     pub fn new(name: &str) -> Self {
         ServerDownload {
             name: name.chars().take(63).collect(),
-            data: None,
-            acked: 0,
-            current: 0,
-            send_time: 0,
+            transfer: Transfer::default(),
             streaming: false,
         }
     }
 
-    fn blocks(&self) -> u32 {
-        self.data
-            .as_ref()
-            .map_or(0, |d| d.len().div_ceil(BLOCK) as u32 + 1)
-    }
-
-    fn block(&self, i: u32) -> &[u8] {
-        let d = self.data.as_deref().unwrap_or_default();
-        let start = (i as usize * BLOCK).min(d.len());
-        &d[start..(start + BLOCK).min(d.len())]
-    }
-
     /// `SV_WriteDownloadToClient`: opens the file on the first call (`open`
-    /// answers with its bytes or the refusal), then writes up to `budget`
-    /// blocks inside the send window. False when the transfer is over
-    /// (refused), so the caller drops it.
+    /// answers with it or the refusal), then writes up to `budget` blocks
+    /// inside the send window. False when the transfer is over (refused, or
+    /// the file failed a read), so the caller drops it.
     ///
     /// With `www` set and a client that sent `cl_wwwDownload 1`, the
     /// redirect goes out instead, on every message until `wwwdl ack`, and
@@ -188,13 +121,12 @@ impl ServerDownload {
     /// 1.5b's order, which opens the pak before the www branch (UO's
     /// stalls; cod15-protocol-diff.md 14). One whose last www transfer
     /// failed gets the blocks on 1.5b and the redirect again on UO.
-    #[allow(clippy::too_many_arguments)]
     pub fn write(
         &mut self,
         w: &mut MsgWriter,
         now_ms: i32,
         budget: u32,
-        open: impl FnOnce(&str) -> Result<Vec<u8>, Refusal>,
+        open: impl FnOnce(&str) -> Result<DownloadFile, Refusal>,
         www: Option<&WwwConfig>,
         wants_www: bool,
         state: &mut WwwState,
@@ -202,15 +134,12 @@ impl ServerDownload {
         if state.acked {
             return true;
         }
-        if self.data.is_none() {
+        if self.transfer.file().is_none() {
             match open(&self.name) {
-                Ok(bytes) => self.data = Some(bytes),
+                Ok(file) => self.transfer.start(file),
                 Err(why) => {
                     log::info!("clientDownload: {:?} refused: {why:?}", self.name);
-                    w.write_byte(SVC_DOWNLOAD);
-                    w.write_short(0);
-                    w.write_long(-1);
-                    w.write_string(&format!("{}\x15{}", why.key(), self.name));
+                    Cod1Download::write_refusal(w, format!("{}\x15{}", why.key(), self.name));
                     return false;
                 }
             }
@@ -222,8 +151,8 @@ impl ServerDownload {
                     if !state.redirected {
                         log::info!("Redirecting client to {url}");
                     }
-                    let size = self.data.as_ref().map_or(0, |d| d.len() as i32);
-                    write_redirect(w, &url, size, www.disconnected);
+                    let size = self.transfer.file().map_or(0, DownloadFile::size);
+                    Cod1Download::write_redirect(w, url, size, i32::from(www.disconnected));
                     state.redirected = true;
                     return true;
                 }
@@ -239,54 +168,35 @@ impl ServerDownload {
             log::info!("clientDownload: beginning {:?}", self.name);
             state.redirected = false;
             self.streaming = true;
-            self.send_time = now_ms;
         }
-        let in_flight = (self.acked + WINDOW).min(self.blocks());
-        for _ in 0..budget.max(1) {
-            if self.acked == in_flight {
-                break;
+        match self
+            .transfer
+            .write::<Cod1Download>(w, now_ms, budget.max(1))
+        {
+            Ok(()) => true,
+            Err(e) => {
+                log::warn!("clientDownload: {:?} read failed: {e}", self.name);
+                false
             }
-            if self.current == in_flight {
-                if now_ms.wrapping_sub(self.send_time) <= RETRANSMIT_MS {
-                    break;
-                }
-                self.current = self.acked;
-            }
-            let block = self.block(self.current);
-            w.write_byte(SVC_DOWNLOAD);
-            w.write_short(self.current as i16);
-            if self.current == 0 {
-                w.write_long(self.data.as_ref().map_or(0, |d| d.len() as i32));
-            }
-            w.write_short(block.len() as i16);
-            for &b in block {
-                w.write_byte(b);
-            }
-            self.current += 1;
-            self.send_time = now_ms;
         }
-        true
     }
 
-    /// `SV_NextDownload_f` (0x8086168) for `nextdl <block>`.
+    /// `SV_NextDownload_f` (0x8086168) for `nextdl <block>`; any block
+    /// before the file opened is broken too.
     pub fn next_dl(&mut self, block: i32, now_ms: i32) -> NextDl {
-        if block != self.acked as i32 || self.data.is_none() {
+        if self.transfer.file().is_none() {
             return NextDl::Broken;
         }
-        if self.block(self.acked).is_empty() {
+        let next = self.transfer.next_dl(block, now_ms);
+        if next == NextDl::Completed {
             log::info!("clientDownload: {:?} completed", self.name);
-            return NextDl::Completed;
         }
-        self.acked += 1;
-        self.send_time = now_ms;
-        NextDl::Acked
+        next
     }
 
     /// `SV_RetransmitDownload_f` (0x8087a2c): start over from the block due.
     pub fn retransmit(&mut self, block: i32) {
-        if block == self.acked as i32 {
-            self.current = self.acked;
-        }
+        self.transfer.retransmit(block);
     }
 }
 
@@ -299,6 +209,8 @@ pub fn blocks_per_message(rate: i32, snapshot_ms: i32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Seek, SeekFrom};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use vcod_common::net::huffman::Huffman;
     use vcod_common::net::msg::MsgReader;
 
@@ -308,7 +220,7 @@ mod tests {
         w: &mut MsgWriter,
         now: i32,
         budget: u32,
-        open: impl FnOnce(&str) -> Result<Vec<u8>, Refusal>,
+        open: impl FnOnce(&str) -> Result<DownloadFile, Refusal>,
     ) -> bool {
         dl.write(w, now, budget, open, None, false, &mut WwwState::default())
     }
@@ -336,7 +248,9 @@ mod tests {
         let file: Vec<u8> = (0..5000).map(|i| i as u8).collect();
         let mut dl = ServerDownload::new("main/foo.pk3");
         let mut w = MsgWriter::new(&huff);
-        assert!(udp(&mut dl, &mut w, 0, 8, |_| Ok(file.clone())));
+        assert!(udp(&mut dl, &mut w, 0, 8, |_| Ok(
+            DownloadFile::from_bytes(file.clone())
+        )));
         let got = blocks(&w.finish(), &huff);
         assert_eq!(got.len(), 4);
         assert_eq!((got[0].0, got[0].1, got[0].2.len()), (0, 5000, BLOCK));
@@ -350,21 +264,51 @@ mod tests {
         assert_eq!(dl.next_dl(3, 10), NextDl::Completed);
     }
 
+    /// A source that counts the bytes read off it.
+    struct Counting(
+        std::io::Cursor<std::sync::Arc<[u8]>>,
+        std::sync::Arc<AtomicUsize>,
+    );
+
+    impl Read for Counting {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.0.read(buf)?;
+            self.1.fetch_add(n, Ordering::Relaxed);
+            Ok(n)
+        }
+    }
+
+    impl Seek for Counting {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.0.seek(pos)
+        }
+    }
+
+    /// A transfer reads the blocks it sends off the handle: a `download`
+    /// sent again and again costs a block a message, never the whole file,
+    /// and a full window waits without reading.
     #[test]
-    fn the_window_waits_for_acks_and_retransmits_after_a_second() {
+    fn a_transfer_reads_only_the_blocks_it_sends() {
         let huff = Huffman::new();
+        let bytes: std::sync::Arc<[u8]> = vec![7u8; 1 << 20].into();
+        let read = std::sync::Arc::new(AtomicUsize::new(0));
+        let open = |_: &str| {
+            let src = Counting(std::io::Cursor::new(bytes.clone()), read.clone());
+            Ok(DownloadFile::from_reader(src, bytes.len() as u64))
+        };
+        for n in 0..100 {
+            let mut dl = ServerDownload::new("main/big.pk3");
+            let mut w = MsgWriter::new(&huff);
+            assert!(udp(&mut dl, &mut w, n * 50, 1, open));
+            assert_eq!(blocks(&w.finish(), &huff).len(), 1);
+        }
+        assert_eq!(read.swap(0, Ordering::Relaxed), 100 * BLOCK);
         let mut dl = ServerDownload::new("main/big.pk3");
-        let mut w = MsgWriter::new(&huff);
-        udp(&mut dl, &mut w, 0, 20, |_| Ok(vec![0; 20 * BLOCK]));
-        assert_eq!(blocks(&w.finish(), &huff).len(), 8, "one window");
-        let mut w = MsgWriter::new(&huff);
-        udp(&mut dl, &mut w, 500, 20, |_| unreachable!());
-        assert!(blocks(&w.finish(), &huff).is_empty(), "nothing acked yet");
-        let mut w = MsgWriter::new(&huff);
-        udp(&mut dl, &mut w, 1600, 2, |_| unreachable!());
-        let again = blocks(&w.finish(), &huff);
-        assert_eq!(again.iter().map(|b| b.0).collect::<Vec<_>>(), [0, 1]);
-        assert_eq!(dl.next_dl(5, 1600), NextDl::Broken, "out of order");
+        for now in [0, 50, 100] {
+            let mut w = MsgWriter::new(&huff);
+            assert!(udp(&mut dl, &mut w, now, 20, open));
+        }
+        assert_eq!(read.load(Ordering::Relaxed), 8 * BLOCK, "one window");
     }
 
     #[test]
@@ -409,7 +353,7 @@ mod tests {
             let mut dl = ServerDownload::new("main/nsf_mp_j5outpost.pk3");
             let mut state = WwwState::default();
             let mut w = MsgWriter::new(&huff);
-            let open = |_: &str| Ok(vec![0; 953499]);
+            let open = |_: &str| Ok(DownloadFile::from_bytes(vec![0; 953499]));
             assert!(dl.write(
                 &mut w,
                 0,
@@ -437,7 +381,7 @@ mod tests {
                 &mut w,
                 0,
                 4,
-                |_| Ok(vec![1; 10]),
+                |_| Ok(DownloadFile::from_bytes(vec![1; 10])),
                 Some(&cfg),
                 true,
                 &mut state,
@@ -480,7 +424,7 @@ mod tests {
             &mut w,
             0,
             4,
-            |_| Ok(vec![1; 10]),
+            |_| Ok(DownloadFile::from_bytes(vec![1; 10])),
             Some(&cfg),
             false,
             &mut state,
@@ -505,7 +449,7 @@ mod tests {
             &mut w,
             0,
             4,
-            |_| Ok(vec![1; 10]),
+            |_| Ok(DownloadFile::from_bytes(vec![1; 10])),
             Some(&cfg),
             true,
             &mut state,
@@ -541,7 +485,7 @@ mod tests {
             (r.read_byte(), r.read_short())
         };
         let mut w = MsgWriter::new(&huff);
-        let open = |_: &str| Ok(vec![1; 10]);
+        let open = |_: &str| Ok(DownloadFile::from_bytes(vec![1; 10]));
         assert!(dl.write(&mut w, 0, 4, open, Some(&cfg), true, &mut state));
         assert_ne!(first_op(w).0, SVC_DOWNLOAD, "the first message is empty");
         let mut w = MsgWriter::new(&huff);

@@ -32,7 +32,6 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::movetrace::{Body, CONTENTS_BODY};
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
-use vcod_common::net::protocol::PROTOCOL_V6;
 use vcod_common::net::{NetClient, NetEvent};
 use vcod_common::pk3::Pk3Fs;
 use vcod_server::Server;
@@ -393,27 +392,18 @@ type Client = NetClient<ClientEnd>;
 
 const MAP: &str = "mp_carentan";
 
-/// The 1.5b install's paks, `None` elsewhere (a UO install's `main/` is
-/// 1.5's, so this runs there too).
-fn fs_15() -> Option<Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    (vcod_server::server::install_protocol(&fs).transport.version == PROTOCOL_V6.transport.version)
-        .then_some(fs)
-}
-
 /// A dm server on `fs`'s protocol, its pushes drawn from glibc's `rand()`
 /// under `seed` when given (`Server::pin_stuck_rand`).
 fn server(fs: Pk3Fs, seed: Option<(u32, usize)>) -> (Server, Instant) {
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let now = Instant::now();
-    let mut sv = Server::new(common::cfg(MAP, "dm"), now);
-    sv.set_protocol(vcod_server::server::install_protocol(&fs));
-    if let Some((seed, skip)) = seed {
-        sv.pin_stuck_rand(seed, skip);
+    let (sv, now) = common::Boot {
+        prep: Some(&|sv: &mut vcod_server::Server| {
+            if let Some((seed, skip)) = seed {
+                sv.pin_stuck_rand(seed, skip);
+            }
+        }),
+        ..common::Boot::new(MAP, "dm")
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     (sv, now)
 }
 
@@ -718,7 +708,7 @@ fn push_vels(frames: &[Frame]) -> Vec<Vec2> {
 /// is held to the band only.
 #[test]
 fn ours_15_pushes_the_still_pair_beside_a_spectator_in_slot_0() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         eprintln!("COD_DIR unset or not 1.5's: skipping");
         return;
     };
@@ -737,7 +727,7 @@ fn ours_15_pushes_the_still_pair_beside_a_spectator_in_slot_0() {
 /// overlap's eight give other directions.
 #[test]
 fn ours_15_pushes_only_the_walker_beside_a_spectator_in_slot_0() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         eprintln!("COD_DIR unset or not 1.5's: skipping");
         return;
     };

@@ -1,6 +1,6 @@
 //! The usercmd clock and the outgoing ring
-//! (docs/protocol-1.1.md, "How long a cmd is simulated for"; AGENTS.md, "66
-//! ms is a pmove chop").
+//! (docs/protocol-1.1.md, "How long a cmd is simulated for"; docs/dev/traps.md,
+//! "Movement and collision", "One cmd step for every caller").
 
 use std::collections::VecDeque;
 use vcod_common::net::MAX_MOVE_CMDS;
@@ -37,23 +37,25 @@ impl CmdClock {
             self.last = Some(server_now);
             return vec![server_now];
         };
-        if server_now - last <= -1000 {
+        // Server times wrap as retail's ints do: steps are differences.
+        let since = server_now.wrapping_sub(last);
+        if since <= -1000 {
             self.last = Some(server_now);
             return vec![server_now];
         }
-        if server_now < last {
+        if since < 0 {
             return Vec::new();
         }
-        let k_max = (server_now - last) / CMD_MS;
+        let k_max = since / CMD_MS;
         if k_max == 0 {
             return Vec::new();
         }
-        let newest = last + CMD_MS * k_max;
+        let newest = last.wrapping_add(CMD_MS * k_max);
         self.last = Some(newest);
         if CMD_MS * k_max > MAX_FRAME_MS {
             return vec![newest];
         }
-        (1..=k_max).map(|k| last + CMD_MS * k).collect()
+        (1..=k_max).map(|k| last.wrapping_add(CMD_MS * k)).collect()
     }
 
     pub fn reset(&mut self) {
@@ -135,6 +137,14 @@ impl CmdRing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The cmd clock across the i32 wrap paces as before (BUG-119).
+    #[test]
+    fn the_cmd_clock_paces_across_the_i32_wrap() {
+        let mut c = CmdClock::default();
+        c.due(i32::MAX - 3);
+        assert!(!c.due(i32::MIN + 20).is_empty());
+    }
 
     #[test]
     fn first_call_builds_one_cmd_now() {

@@ -408,13 +408,20 @@ jobs, each run pinned to cores 0-7 (`taskset`) under a memory cap.
   `frame/touch triggers`, `frame/scripts`, `frame/script ops`,
   `frame/entities`, `frame/trace bodies`, `frame/mantle and hud`,
   `frame/end frames`, `frame/vote and archive`, `frame/flush` with the
-  `game log` write; on CoD2 `frame/drops`, `frame/scripts`,
+  `game log` write; on CoD1 `cmds` (the packets' cmds, thought in the
+  frame) ahead of it and `frame/scripts`, `frame/spawns and ops`,
+  `frame/entities`, `frame/end frames`, `frame/vote`,
+  `frame/configstrings` (the table copy, the cvar mirror, systeminfo and
+  serverinfo) and `frame/commands`; on CoD2 `frame/drops`, `frame/scripts`,
   `frame/test clients`, `frame/mantle and weapons`, `frame/missiles`,
   `frame/corpses`, `frame/spawns`, `frame/script ops`, `frame/end frames`
   with `end frames/animate`, `end frames/look at`, `end frames/spectators
   and turrets` and `end frames/entity states`, `frame/identify`,
   `frame/vote`), `frame out`, `timeouts`, `messages` (`messages/snapshot`,
-  `messages/snapshot world`), `archive`, `heartbeat`. Every game's script
+  `messages/snapshot world`; on CoD1 `messages/begin`, the frame's world,
+  and each entered client's `messages/snapshot` with
+  `messages/snapshot/cull` and `messages/snapshot/write`), `archive`,
+  `heartbeat`. Every game's script
   pass splits into `scripts/threads` (`threads/client events`,
   `threads/notifies`, `threads/triggers`, which runs the woken threads,
   and `threads/vm`) and `scripts/entity pass`; a script trace into
@@ -959,9 +966,13 @@ wait) left out.
 
 `bot_match TICKSTATS=1` (any game) prints each match's tick time (p50,
 p90, p99, max and the slowest tick's phases) and every
-`tick_profile` phase's mean and p99 a tick. `OBSERVERS=N` (CoD1 and
-CoD2) joins N spectator clients at their own non-LAN addresses, for a
-server with humans to build snapshots for. The probe pass splits into
+`tick_profile` phase's mean and p99 a tick. `OBSERVERS=N` joins N
+spectator clients at their own non-LAN addresses, for a server with
+humans to build snapshots for: CoD1's and CoD2's over their clients'
+wire code, CoD4's an in-process 1.7 client (`bot_match`'s `Spectator4`,
+the join `vcod_cod4::net::conn` makes). With `OBSERVERS_PLAY=1` (CoD1,
+CoD4) they answer the team and weapon menus and walk a canned circle,
+so their snapshots are those of a body in the world. The probe pass splits into
 `probes/pre-think`, `probes/drops and walls` and `probes/lob`.
 
 Live, the same phases on a running server:
@@ -1010,7 +1021,7 @@ mp_crash are a level's first scripted frames (`frame/scripts`, tick 60).
   passes clear of (a slab test on the box grown by the swept shape, a
   unit, a hundredth of the box for a model triangle's barycentric slack
   and the capsule's sphere offset; `TraceInput::misses` and
-  `TraceInput::tight` in `crates/common/src/collision.rs`); the fraction
+  `TraceInput::tight` in `crates/common/src/collision/walk.rs`); the fraction
   cut stays the box test's. Brushes and patches are never culled: a
   model-0 patch's leaf-walk clip met mp_carentan's patch 9 56 units off
   its box, and a brush notes a near tie (`note_contact`) for a vertical
@@ -1208,3 +1219,90 @@ acknowledged message 70 or 71. VERIFIED live.
   `holdrand` (`Cod4Game::hold`), so the gaps differ and the bounds hold;
   `cod4_an_unacking_client_backs_off` checks the bounds, the exponent and
   the reset.
+
+## 13. Counted in instructions
+
+Section 10's and 11's tables are wall time on a shared machine, where two
+runs of one binary part by 15%. `bot_match TICKSTATS=insns` counts each
+phase's user-space instructions instead (`tick_profile::enable_insns`, a
+`perf_event_open` counter per thread): two runs of one binary give the
+same count to three places. vcod's own tick; retail has no counterpart.
+Runs: seed 1, 2400 ticks, `JOBS=1`, `tdm` (CoD4 `war`), 24 bots (CoD4 32),
+8 observers where named. Each pair's `DIGEST=1` line is the same, and
+`NETDIGEST=600` over 1200 ticks too on 1.1 mp_carentan, UO mp_cassino and
+CoD2 mp_toujane. VERIFIED (the runs' logs).
+
+M instructions a tick, mean (tick p50), before and after:
+
+| game, map | phase | before | after |
+|---|---|---|---|
+| 1.1 mp_carentan, 8 observers | `frame` | 12.16 | 3.57 |
+| 1.1 mp_carentan, 8 observers | tick p50 | 35.6 | 26.7 |
+| CoD2 mp_toujane | `archive` | 6.34 | 2.49 |
+| CoD2 mp_toujane | tick p50 | 27.4 | 23.1 |
+| CoD2 mp_toujane, 8 observers | `messages` | 11.66 | 4.61 |
+| CoD2 mp_toujane, 8 observers | `archive` | 6.47 | 1.28 |
+| CoD4 mp_crossfire | `bots/moves` | 37.1 | 31.6 |
+| CoD4 mp_crossfire | tick p50 | 89.6 | 81.3 |
+| UO mp_kursk | `models/vehicles` | 2.26 | 0.69 |
+| UO mp_kursk | `frame` | 9.13 | 7.77 |
+
+What cost what:
+
+- CoD1: `aim_trace` traced 8192 units through the world for every client
+  each end frame before it looked for a `trigger_lookat`, which most stock
+  maps lack (`frame` 12.16 to 8.85); the compass scan built and relinked
+  an entity for every teammate of every slot (8.85 to 3.57; each
+  teammate's link now built once a frame). VERIFIED (the runs' logs).
+- CoD2: the playerstate, body entity and HUD element words were found by
+  name (`vcod_cod2::field!` now); the archive rebuilt the world the
+  snapshot round had built; each client's cull converted and linked every
+  entity and placed its own viewer per entity. VERIFIED (the runs' logs).
+- CoD4: playerstate words by name (`ps!`), `ent4`'s per-field `String`
+  and table scan, and every leg of every round rebuilding each script
+  model's bounds (`bots/moves` p99 79.8 to 59.0). VERIFIED (the runs'
+  logs).
+- CoD4's killcam history kept 64 inline playerstate slots a frame, present
+  or not, plus a second copy: peak resident 523 to 448 MB at 32 bots.
+  VERIFIED (the runs' `getrusage`).
+- UO: every traced round and every blast victim posed each vehicle's
+  hull and copied out all its collision triangles
+  (`vehicle::placed_models`); a hull now poses again only when its model
+  or the controls `apply_hull` reads change (`seat::hull_collision`,
+  `vehiclepose::hull_key`). `models/vehicles` p99 30.4 to 7.3 on
+  mp_kursk, 1.18 to 0.43 on mp_cassino. VERIFIED (the runs' logs,
+  `DIGEST=1` and `NETDIGEST=600` the same; 2026-11-19).
+- S&D round starts in CoD2 and CoD4 redid every guard-post survey (143 M
+  instructions in one tick on mp_crash); the surveys now outlive a round
+  on the same map. VERIFIED (the runs' logs).
+
+Left, measured and not changed: the CoD1 locational trace. Its bodies'
+pose copies (`trace/hit bodies`) cost 0.013 M a tick on 1.1 mp_carentan
+and UO mp_cassino, and posing the crossed skeletons (`trace/pose`) 0.073
+M on mp_carentan, 0.051 on mp_cassino, 0.015 on mp_kursk; of that, a
+pose of a body the stamp had already posed every bone of took 0.010 M on
+mp_carentan and none on mp_kursk. A pose kept per stamp would save under
+0.1% of a 23 M tick. VERIFIED (instrumented runs, 2026-11-19). The two
+phases stay. The `head` phase's `bots/plans` moves about 10% between
+runs of one binary with the same digests: its plans run on threads.
+VERIFIED (the runs' logs).
+
+CoD4's end frame poses every playing body
+for the next frame's tag reads (`posed_bodies`, 7 M of `frame/end frames`'
+9.6 M at 32 bots) and evaluates the death anim choices twice a cmd and
+frame (1.3 M each); CoD1's per-frame configstring copy, systeminfo and
+serverinfo (`frame/configstrings`, 0.24 M together). VERIFIED
+(instrumented runs). The systeminfo is now built only when its inputs
+move (0.24 to 0.18 M on stock paks, more where the pak lists are trimmed
+every build); the table copy and the serverinfo compare stay, under 1%
+of a tick. VERIFIED (the runs' logs, 2026-11-19). CoD1's
+snapshot build, with 8 observers in the world (`OBSERVERS_PLAY=1`,
+24 bots, 1.1 mp_carentan): `messages` 13.39 M a tick, of it
+`messages/begin` (the frame's world) 3.42, `messages/snapshot` 7.78 over
+the 8 (`/cull` 3.95, `/write` 2.70). Writing against the delta base in
+place of a copy of it took `messages/snapshot` to 7.25 (tick p50 35.4 to
+35.0), `DIGEST=1` and `NETDIGEST=600` the same. VERIFIED (the runs'
+logs, 2026-11-19). The cull's entity copies stay: `Snapshot` owns its
+entity states, and the 1.5/UO conversion reads the culled copy.
+CoD4 at 32 bots with 8 in-process observers walking: `messages` 2.98 M
+a tick, `messages/snapshot world` 1.30 of it. VERIFIED (the run's log).

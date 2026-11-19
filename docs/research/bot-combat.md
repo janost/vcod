@@ -32,6 +32,7 @@ Knobs:
 | `GAMETYPE=` | tdm | |
 | `BOTS=` | 6 | |
 | `TICKS=`, `JOBS=` | 12000, 4 | |
+| `LEVELS=` | 1 | the `exitLevel`s a match runs through: past each the script's `map_rotate` loads the next level (the same map with no `sv_mapRotation`), the team scores add up over the levels, and `ended` means every level ended; the match line prints `levels` |
 | `SET=name=value,...` | | any cvar, e.g. `scr_tdm_timelimit=5` |
 | `UO=1` | | a United Offensive server (`COD_DIR` at a UO install) |
 | `VERBOSE=1` | | every kill line |
@@ -256,6 +257,16 @@ than a fight lasts; the gap shows head to head against normal (3 : 1
 kills at hard, 3.4 : 1 at expert). Nothing here is tuned against a human;
 how a level feels to play against is pending a hand check.
 
+The levels set numbers only: what the bot chooses (cover, a retreat, a
+frag, an objective's route) is the same at every level. INFERRED
+(sections 4.5 and 5): cover and the retreat each move a side's deaths by
+less than the seed spread at one level, so a level that took them less
+often would not show in `bot_match` either; no decision rule is tied to
+the level yet. `bot_match`'s `LEVELS=` (section 1) runs a match past its
+first `exitLevel`, for a level's play over a rotation (2026-11-17,
+mp_carentan `tdm`, 4 bots, `scr_tdm_timelimit 1`, `LEVELS=2`: two levels,
+one `W;` each, the scores of both summed). VERIFIED (measured).
+
 ## 4. Cover and lean
 
 The brain is `crates/server/src/bots/cover.rs`; the server fills
@@ -409,7 +420,14 @@ On by default; `RETREAT=` in `bot_match`.
   to a site, a guard, an `re` defender chasing, a `bas` breacher, both
   `bel` sides. On a ladder or with an LMG's bipod down nothing starts.
 - `BotBody::retreating` reads 1 (hurt), 2 (dry), 3 (at the cover) or 0;
-  `Server::test_bot_retreat` turns it off per bot.
+  `Server::test_bot_retreat` turns it off per bot, and the cvar
+  `vc_bot_retreat 0` (`Bot::allow_retreat`, applied every bot pass, half
+  a second, on all four games) for every bot, with the health detour;
+  a retreat under way ends.
+- Health items are picked by straight-line distance (`nearest_pack`,
+  1200 across and 200 up or down), not by the graph's way to them; one
+  the plan reaches no nearer is passed over (bot-objectives.md 14.8).
+  Open.
 
 ### Measured (2026-10-20)
 
@@ -431,6 +449,7 @@ one side retreating. VERIFIED (measured):
 - 1150 to 1440 hurt and 40 to 100 dry starts in 64 matches with one side
   on; 28 to 32% reach the cover. The rest die on the way, or the retreat
   ends first (a dry clip refilled, or no cover left from a moved threat).
+  Not split by cause yet; open (2026-11-17).
 
 ## 6. One table on `bot_match` (2026-10-21)
 
@@ -834,7 +853,9 @@ Before (`AWARE=none`): the nearest enemy in line of sight within
 full reaction and `error_start` on every slot change, hits ignored; a bot
 between two enemies swapped targets and paid the delay each time.
 
-Now (`crates/server/src/bots.rs`, `server.rs`, `spectate.rs`):
+Now (`crates/server/src/bots/sight.rs`, `bots/fight.rs`, `server/sim_ops.rs`,
+`server/bot_world.rs`,
+`spectate.rs`):
 
 - `ClientSim::last_hit`: each `SimOp::Damaged` with another client as
   attacker and damage above 0 records his slot, the frame's `sv_time` and
@@ -937,7 +958,7 @@ VERIFIED (measured, ours, `bot_match`, 2026-10-21): `AWARE=alt`, `tdm`,
 ## 9. Aim and footwork
 
 `Bot::engage`, `Bot::trigger` and `Bot::footwork` in
-`crates/server/src/bots.rs`; measured in 6.6.
+`crates/server/src/bots/fight.rs`; measured in 6.6.
 
 Before: the error only shrank with time on target and the trigger waited
 for the 10-unit cone, so a bot paused about a second on a fresh target
@@ -1136,8 +1157,8 @@ VERIFIED (measured, ours, `bot_match`, 2026-10-21): `WARY=alt`, `tdm`,
 
 ## 11. The walking view and string-pulling (2026-10-21)
 
-`Bot::walk_turn` in `crates/server/src/bots.rs` and `Follower::pull` in
-`crates/server/src/nav.rs`; the follower's side is in
+`Bot::walk_turn` in `crates/server/src/bots/walk.rs` and `Follower::pull` in
+`crates/server/src/nav/follower.rs`; the follower's side is in
 `bot-navigation.md` section 3, "String-pulling".
 
 Before this a walking bot's waypoint was the plan's next node on the
@@ -1155,7 +1176,8 @@ of 45 degree kinks, and at every node the view jumped to the next one.
 - Only on a plain run: on the ground, off the rungs, level view, full
   forward key and nothing else held, no leap's or creep's foot, no jump,
   run off, push off or unpin, no creep. Those keep the view the walk
-  that proved them had (AGENTS.md, "Bots").
+  that proved them had (`docs/dev/traps.md`, "Bots", "The follower pulls
+  its waypoint").
 - A fight, a launcher on a vehicle, a bipod's linger, a hurt look, a
   cover peek, a recalled spot and a retreat's look set the view after
   the walk, by their own rules, from the tick they take it. The tick
@@ -1242,7 +1264,7 @@ With the hand-back (VERIFIED, measured, same dumps): stalled 3 240 and
 The same pair again within 10 s still read 385 and 405 against master's
 226 and 189; section 13 measures it on eight seeds, where it does not
 rise. Without the hand-back
-`bots::tests::the_walking_view_takes_the_path_at_once_after_a_fight`
+`bots::walk::tests::the_walking_view_takes_the_path_at_once_after_a_fight`
 fails.
 
 ## 12. Frags that leave the hand and land where thrown (2026-10-21)
@@ -1585,7 +1607,7 @@ VERIFIED (measured, ours, release):
 
 CoD2's graph is flooded and proved under 1.5's rules
 (`bots::cod2::GRAPH_RULES`), while its bots move by CoD2's pmove. A seam
-in the walks (`nav::WalkStep`, `nav::with_step`, bot-navigation.md 2,
+in the walks (`nav::WalkStep`, `nav::with_step`, bot-navigation.md 2.6,
 "Other rules") takes a CoD2 step (`bots::cod2::Cod2Walk`): each walk's
 body is a CoD2 playerstate stepped by `vcod_cod2::pmove::player_step` over
 the level's `Rules`, the cmd through `to_cmd2`, read back into the CoD1
@@ -1630,11 +1652,12 @@ Two bugs, fixed:
    `NavGraph::moving` (rules and step), `GRAPH_RULES` until the graph
    lands, as `engine::tick` runs CoD1's under the server's rules
    (`fix1`).
-2. `bots::cod2::cod1_body` never set `jump_penalty`, so `nav::jump_ready`
-   never waited out CoD2's penalty and the rest-jump test jumped full
-   height. It now copies CoD2's `JUMPING` (`pm_flags` 0x80000) and
-   `pm_time` into 1.5's `jump_penalty` and `knockback_ms`, with
-   `jump_origin_z`, as `Cod2Walk` maps them (`fix2`, on top of `fix1`).
+2. `bots::cod2::cod1_body` (now `bots::bridge::follower_body`) never set
+   `jump_penalty`, so `nav::jump_ready` never waited out CoD2's penalty
+   and the rest-jump test jumped full height. It now copies CoD2's
+   `JUMPING` (`pm_flags` 0x80000) and `pm_time` into 1.5's `jump_penalty`
+   and `knockback_ms`, with `jump_origin_z`, as `Cod2Walk` maps them
+   (`fix2`, on top of `fix1`).
 
 VERIFIED (measured, ours, release; section 15's runs; `bm2_tdm` 12
 matches, `bm2_dm_skills` 8):
@@ -1955,3 +1978,49 @@ The UO, 1.5 and CoD2 bots take the same aim. On 1.1 the gun's offset
 is the sight's sway and its turn lag; the recoil pull matters most on
 1.5, UO and CoD2, whose gun kick lands in it (combat doc 15.7). Not
 measured there.
+
+## 19. CoD2's and CoD4's copies of the senses made one (2026-11-19)
+
+The enemy pick, the frag watch, the gunfire watch, the hit latch, the
+CoD2 and CoD4 lob and the mounted-gun helpers are written once
+(`bots/sight.rs`, `bots/grenade.rs`, `bots/gun.rs`); each game fills them
+from its playerstates. Where the copies had drifted, each fix below is
+its own commit, the safer copy kept. The digests are `bot_match`'s
+(`DIGEST=600 NETDIGEST=600 TICKS=6000`, seeds 1 and 2, release; mp_carentan
+`tdm` at 1.1 and UO, mp_toujane `dm` on CoD2, mp_crash `war` on CoD4) from
+master c18dbac5d:
+
+| Game | Seed 1 digest, net | Seed 2 digest, net |
+|---|---|---|
+| 1.1 | 9a0e5a128cf3d94d, abe8a25686f42204 | 36b6669071e27300, a75b24e46edb3c9b |
+| UO | e0e7b28367445185, c91e1e6aecab692a | d49a1183a4e17ce8, bc7289e7488545c0 |
+| CoD2 | 5b8d8a4c7958c90a, 6b91884a1ede5dd4 | 78035394d7485316, afdbb35e667470dd |
+| CoD4 | 4d2a3aa189a9404f | 81b603d7e7819583 |
+
+VERIFIED (measured, ours): every refactor commit printed these, every
+`digest@` line too.
+
+- The tie-break: none to fix. CoD2's and CoD1's pick sorted stably over
+  their clients in slot order, which is CoD4's nearest-then-slot; the
+  shared pick sorts that way for all three, the digests unchanged.
+- `connected()` and a zombie: CoD2 took a dropped client's zombie slot
+  for a held one, so the driver kept its brain until the slot freed;
+  both now ask `Engine::bot_connected`, as CoD4 did. Digests unchanged:
+  no bot drops in these matches.
+- The fuse: CoD4's lob flew at least 1000 ms of a frag's flight whatever
+  its `fuseTime`, CoD2's the fuse itself; a fuse shorter than the
+  clamp could pass the probe and go off in the air by the thrower. The
+  shared lob flies the fuse. Digests unchanged: 1.7's frag fuses 3500.
+- Blasts on CoD4: its bots heard gunfire only. 1.7's fuse burst carries
+  no thrower, so it is laid to the missile of its weapon, nearest it,
+  gone since the last tick; an impact's spent missile is heard where it
+  struck; smoke is not heard. CoD4's digests move from tick 1200 on, to
+  2b2bffc3935d12e9 (seed 1) and d1428bb5e367aacd (seed 2); kills 38
+  and 36 become 47 and 48, throws 22 and 16 become 14 and 13, script
+  errors 0 both. INFERRED: bots answer a blast as CoD2's do, walking in
+  on the thrower; two seeds tell nothing past that.
+- The team menu on CoD2: `team_menu` scanned configstrings 1246..1277
+  short of 1277. The block is 32 slots, inclusive (cod2-protocol.md,
+  script menus, `CL_OpenScriptMenu_f`), as CoD4's `menu_names` reads its
+  own; it scans all 32 now. Digests unchanged: the stock team menu sits
+  low in the block.

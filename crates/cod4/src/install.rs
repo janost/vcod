@@ -6,7 +6,7 @@
 //! from `zone/<language>/` is looked for under `usermaps/`. The search
 //! rules are `docs/research/cod4-fastfile.md` 13.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use std::path::{Path, PathBuf};
 
 /// The environment variable that names a CoD4 1.7 install.
@@ -21,6 +21,8 @@ pub struct Install {
     /// The level being loaded, whose `usermaps/<map>/` iwds join the
     /// search path under an `fs_game`.
     map: Option<String>,
+    /// The `zone/<language>/` the install holds ([`zone_language`]).
+    language: String,
 }
 
 /// The `allocFlags` each zone loads with. A later zone's asset replaces
@@ -62,7 +64,8 @@ impl Install {
     /// The install at `root`, if it has a `zone/` directory.
     pub fn at(root: impl Into<PathBuf>) -> Option<Self> {
         let root = root.into();
-        root.join("zone").is_dir().then_some(Self {
+        root.join("zone").is_dir().then(|| Self {
+            language: zone_language(&root),
             root,
             fs_game: None,
             map: None,
@@ -113,6 +116,9 @@ impl Install {
     /// `usermaps/<map>/<name>.ff` (iw3mp.exe 0x48a7a0). `None` when none
     /// of those holds it.
     pub fn zone_file(&self, language: &str, name: &str) -> Option<ZoneFile> {
+        if !is_zone_name(name) {
+            return None;
+        }
         if name.eq_ignore_ascii_case("mod") {
             return self.mod_zone().map(|path| ZoneFile {
                 path,
@@ -136,9 +142,12 @@ impl Install {
     }
 
     /// [`Self::zone_file`]'s path, else the stock path (for the error).
-    pub fn zone_path(&self, language: &str, name: &str) -> PathBuf {
-        self.zone_file(language, name)
-            .map_or_else(|| self.zone(language, name), |z| z.path)
+    /// A name that is no plain zone name ([`is_zone_name`]) is refused.
+    pub fn zone_path(&self, language: &str, name: &str) -> Result<PathBuf> {
+        ensure!(is_zone_name(name), "zone name {name:?} refused");
+        Ok(self
+            .zone_file(language, name)
+            .map_or_else(|| self.zone(language, name), |z| z.path))
     }
 
     /// The zones `Com_StartupLoad` loads ahead of any map, in load order
@@ -175,18 +184,25 @@ impl Install {
         out
     }
 
-    /// The install `$COD4_DIR` names; `None` when unset or not an install.
-    pub fn from_env() -> Option<Self> {
-        Self::at(std::env::var_os(ENV)?)
-    }
-
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    /// `zone/<language>/`, where the stock fastfiles sit (`english`).
+    /// The language of the install's stock zones (`english`, `german`).
+    pub fn language(&self) -> &str {
+        &self.language
+    }
+
+    /// `zone/<language>/`, where the stock fastfiles sit. A localized
+    /// install ships only its own language's directory, so a `language` it
+    /// lacks (every caller asks for `english`) reads the one it has.
     pub fn zone_dir(&self, language: &str) -> PathBuf {
-        self.root.join("zone").join(language)
+        let dir = self.root.join("zone").join(language);
+        if dir.is_dir() {
+            dir
+        } else {
+            self.root.join("zone").join(&self.language)
+        }
     }
 
     /// Every `.ff` in `zone/<language>/`, sorted by name.
@@ -233,6 +249,12 @@ impl Install {
     }
 }
 
+/// Whether `name` (a server's `mapname`, a zone list's entry) can name a
+/// zone: one path component, no `..`, root, drive or control byte.
+pub fn is_zone_name(name: &str) -> bool {
+    vcod_common::game_dir::confined_component(Path::new(""), name).is_some()
+}
+
 /// `base/rel` with each component of `rel` matched case-blind where the
 /// exact name is missing; `None` when a component is not there.
 fn resolve_dir(base: &Path, rel: &str) -> Option<PathBuf> {
@@ -265,28 +287,72 @@ pub fn resolve_ci(base: &Path, rel: &Path) -> PathBuf {
     at
 }
 
-/// The entry of `dir` named `name`, exactly or else case-blind.
+/// The entry of `dir` named `name`, exactly or else case-blind, spelled as
+/// the listing has it: on a case-folding file system `mods` exists too,
+/// under the wrong name.
 fn find_ci(dir: &Path, name: &str) -> Option<std::ffi::OsString> {
-    if dir.join(name).exists() {
-        return Some(name.into());
+    let Ok(list) = std::fs::read_dir(dir) else {
+        return dir.join(name).exists().then(|| name.into());
+    };
+    let mut hit = None;
+    for n in list.filter_map(|e| e.ok()).map(|e| e.file_name()) {
+        match n.to_str() {
+            Some(s) if s == name => return Some(n),
+            Some(s) if s.eq_ignore_ascii_case(name) => {
+                hit.get_or_insert(n);
+            }
+            _ => {}
+        }
     }
-    std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name())
-        .find(|n| n.to_str().is_some_and(|n| n.eq_ignore_ascii_case(name)))
+    hit
+}
+
+/// The language directory under `root/zone/`: `english` when there is
+/// one, else the first by name that holds `common_mp.ff`, else `english`.
+fn zone_language(root: &Path) -> String {
+    let zone = root.join("zone");
+    if zone.join("english").is_dir() {
+        return "english".into();
+    }
+    let mut langs: Vec<String> = std::fs::read_dir(&zone)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().join("common_mp.ff").is_file())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    langs.sort();
+    langs.into_iter().next().unwrap_or_else(|| "english".into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Install, ZoneOrigin, zone_flags};
 
+    /// A localized install holds only `zone/<its language>/`: the zones
+    /// load from there whatever language a caller names.
+    #[test]
+    fn a_localized_install_reads_its_own_zone_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("zone/german")).unwrap();
+        for f in ["zone/german/common_mp.ff", "zone/german/mp_crash.ff"] {
+            std::fs::write(root.join(f), b"").unwrap();
+        }
+        let i = Install::at(root).unwrap();
+        assert_eq!(i.language(), "german");
+        assert_eq!(i.zone_dir("english"), root.join("zone/german"));
+        let z = i.zone_file("english", "mp_crash").unwrap();
+        assert_eq!(z.path, root.join("zone/german/mp_crash.ff"));
+        assert_eq!(i.zones("english").unwrap().len(), 2);
+    }
+
     /// A fake install: a stock map zone, a mod with `mod.ff` under `Mods/`
     /// and a usermap with its `_load` zone.
     #[test]
     fn zone_search_follows_db_build_os_path() {
-        let root = std::env::temp_dir().join(format!("vcod-cod4-install-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
         for d in ["zone/english", "main", "Mods/Demo", "usermaps/mp_x"] {
             std::fs::create_dir_all(root.join(d)).unwrap();
         }
@@ -324,6 +390,23 @@ mod tests {
             )
         );
         assert!(i.zone_file("english", "mp_y").is_none());
+        // A server's mapname is one plain name, never a path.
+        std::fs::write(root.join("zone/x.ff"), b"").unwrap();
+        for bad in [
+            "../x",
+            "/x",
+            "//h/s/x",
+            "english/../x",
+            "\\\\h\\s\\x",
+            "C:x",
+        ] {
+            assert!(i.zone_file("english", bad).is_none(), "{bad}");
+            assert!(i.zone_path("english", bad).is_err(), "{bad}");
+        }
+        assert_eq!(
+            i.zone_path("english", "mp_crash").unwrap(),
+            root.join("zone/english/mp_crash.ff")
+        );
         // `usermaps/<map>/`'s iwds sit between `main/`'s and the mod's,
         // and only under an `fs_game`.
         assert_eq!(
@@ -340,12 +423,11 @@ mod tests {
         );
         assert!(i.clone().with_fs_game(Some("../x")).game_dir().is_none());
         assert!(i.with_fs_game(Some("")).fs_game().is_none());
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn code_strings_hold_the_cd_key_refusals() {
-        let Some(install) = super::Install::from_env() else {
+        let Some(install) = crate::testing::cod4_install() else {
             return;
         };
         let s = install.code_strings("english").unwrap();

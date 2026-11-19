@@ -7,33 +7,10 @@
 
 use glam::Vec3;
 
+use super::super::pin::Pin;
 use super::super::*;
 
-/// A floor at z 0, solid below.
-struct Floor;
-
-impl PmWorld for Floor {
-    fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, _maxs: Vec3, _pass: u32, _mask: u32) -> Tr {
-        let (a, b) = (start.z + mins.z, end.z + mins.z);
-        let mut t = Tr::default();
-        if a < 0.0 {
-            t.fraction = 0.0;
-            t.startsolid = true;
-            t.allsolid = b < 0.0;
-        } else if b < 0.125 && b < a {
-            t.fraction = ((a - 0.125) / (a - b)).max(0.0);
-        } else {
-            return t;
-        }
-        t.normal = Vec3::Z;
-        t.walkable = true;
-        t.entity_num = ENTITYNUM_WORLD as u32;
-        t.contents = 1;
-        // Asphalt, so the footsteps carry a surface.
-        t.surface_flags = 22 << 20;
-        t
-    }
-}
+use super::super::testing::ASPHALT;
 
 const RIFLE: WeaponMove = WeaponMove {
     move_speed_scale: 0.95,
@@ -41,39 +18,19 @@ const RIFLE: WeaponMove = WeaponMove {
     sprint_duration_scale: 1.0,
 };
 
-/// FNV-1a over 32-bit words.
-#[derive(Default)]
-struct Digest(u64);
-
-impl Digest {
-    fn word(&mut self, w: u32) {
-        let h = if self.0 == 0 {
-            0xcbf2_9ce4_8422_2325
-        } else {
-            self.0
-        };
-        self.0 = (h ^ u64::from(w)).wrapping_mul(0x0100_0000_01b3);
-    }
-
-    fn state(&mut self, ps: &PlayerState) {
-        for v in [ps.origin, ps.velocity] {
-            for c in v.to_array() {
-                self.word(c.to_bits());
-            }
-        }
-        for w in [
-            ps.bob_cycle as u32,
-            ps.movement_dir as u32,
-            ps.damage_timer as u32,
-            ps.pm_flags,
-            ps.event_sequence as u32,
-        ] {
-            self.word(w);
-        }
-        for i in 0..4 {
-            self.word(ps.events[i]);
-            self.word(ps.event_parms[i]);
-        }
+/// The state after one cmd, onto `p`'s next step.
+fn state(p: &mut Pin, ps: &PlayerState) {
+    p.step();
+    p.vec("origin", ps.origin);
+    p.vec("velocity", ps.velocity);
+    p.i32("bob_cycle", ps.bob_cycle);
+    p.i32("movement_dir", ps.movement_dir);
+    p.i32("damage_timer", ps.damage_timer);
+    p.u32("pm_flags", ps.pm_flags);
+    p.i32("event_sequence", ps.event_sequence);
+    for i in 0..4 {
+        p.u32("event", ps.events[i]);
+        p.u32("parm", ps.event_parms[i]);
     }
 }
 
@@ -98,8 +55,8 @@ const fn key(n: usize, buttons: u32, forward: i8, right: i8) -> Key {
 }
 
 /// Runs `keys` as 50 ms cmds and digests the state after each.
-fn play(ps: &mut PlayerState, keys: &[Key], rules: Rules, weapon: WeaponMove) -> u64 {
-    let mut d = Digest::default();
+fn play(ps: &mut PlayerState, keys: &[Key], rules: Rules, weapon: WeaponMove) -> Pin {
+    let mut d = Pin::words();
     let mut old = Cmd {
         server_time: ps.command_time,
         ..Default::default()
@@ -114,11 +71,11 @@ fn play(ps: &mut PlayerState, keys: &[Key], rules: Rules, weapon: WeaponMove) ->
                 angles: [0, k.yaw, 0],
                 ..Default::default()
             };
-            player_step(ps, &c, &mut old, &Floor, rules, weapon);
-            d.state(ps);
+            player_step(ps, &c, &mut old, &ASPHALT, rules, weapon);
+            state(&mut d, ps);
         }
     }
-    d.0
+    d
 }
 
 fn armed() -> PlayerState {
@@ -143,7 +100,7 @@ fn a_damage_timer_slows_the_walk_until_it_runs_out() {
     play(&mut whole, &keys[..], rules, RIFLE);
     assert_eq!(hurt.damage_timer, 0);
     assert!(hurt.origin.x < whole.origin.x);
-    assert_eq!(pin, 0x34f7_0ba1_be41_c5a0);
+    pin.check("moves_damage_timer", 0x34f7_0ba1_be41_c5a0);
 }
 
 #[test]
@@ -156,7 +113,7 @@ fn a_crouched_back_strafe_pins() {
         key(10, 0, 0, -127),
     ];
     let pin = play(&mut ps, &keys, Rules::default(), RIFLE);
-    assert_eq!(pin, 0xd6cc_84c1_7b4d_b7bf);
+    pin.check("moves_back_strafe", 0xd6cc_84c1_7b4d_b7bf);
 }
 
 #[test]
@@ -169,13 +126,16 @@ fn going_prone_and_back_up_blends_the_stance_scale() {
         key(8, 0, 127, 0),
     ];
     let mut prone = false;
-    let mut pin = 0;
+    let mut pin = Pin::words();
     for (i, k) in keys.iter().enumerate() {
-        pin ^= play(&mut ps, &keys[i..=i], Rules::default(), RIFLE).rotate_left(i as u32);
+        pin.xor(
+            play(&mut ps, &keys[i..=i], Rules::default(), RIFLE),
+            i as u32,
+        );
         prone |= k.buttons == button::PRONE && ps.pm_flags & pmf::PRONE != 0;
     }
     assert!(prone);
-    assert_eq!(pin, 0x28a1_12fe_b1a8_991d);
+    pin.check("moves_prone_blend", 0x28a1_12fe_b1a8_991d);
 }
 
 #[test]
@@ -188,7 +148,7 @@ fn a_sprint_bobs_at_the_camera_bob_and_steps_as_a_sprint() {
     ];
     let pin = play(&mut ps, &keys, Rules::default(), RIFLE);
     assert!(ps.events.contains(&ev::FOOTSTEP_SPRINT));
-    assert_eq!(pin, 0x271d_96a1_8b74_f364);
+    pin.check("moves_sprint", 0x271d_96a1_8b74_f364);
 }
 
 #[test]
@@ -202,13 +162,13 @@ fn the_sighted_walk_and_the_lean_walk_pin() {
         key(12, button::LEAN_LEFT, 127, -60),
         key(8, 0, 127, 0),
     ];
-    let pin = play(&mut ps, &keys[..1], Rules::default(), RIFLE);
+    let mut pin = play(&mut ps, &keys[..1], Rules::default(), RIFLE);
     assert!(ps.pm_flags & pmf::SIGHT_WALK != 0);
-    let pin = pin ^ play(&mut ps, &keys[1..2], Rules::default(), RIFLE).rotate_left(1);
+    pin.xor(play(&mut ps, &keys[1..2], Rules::default(), RIFLE), 1);
     assert!(ps.leanf != 0.0);
     ps.pm_flags &= !pmf::SIGHT;
-    let pin = pin ^ play(&mut ps, &keys[2..], Rules::default(), RIFLE).rotate_left(2);
-    assert_eq!(pin, 0xf5cf_440d_5a00_34de);
+    pin.xor(play(&mut ps, &keys[2..], Rules::default(), RIFLE), 2);
+    pin.check("moves_sighted_lean", 0xf5cf_440d_5a00_34de);
 }
 
 #[test]
@@ -226,8 +186,8 @@ fn a_reversal_past_inertia_angle_is_clamped() {
     let mut free = armed();
     let unclamped = play(&mut free, &keys, Rules::default(), RIFLE);
     let pin = play(&mut ps, &keys, rules, RIFLE);
-    assert_ne!(pin, unclamped);
-    assert_eq!(pin, 0x5a3f_4e7d_cfd5_ca63);
+    assert_ne!(pin.h, unclamped.h);
+    pin.check("moves_inertia", 0x5a3f_4e7d_cfd5_ca63);
 }
 
 #[test]
@@ -246,14 +206,14 @@ fn a_spectator_flies_on_its_keys_and_leans() {
         key(6, button::LEAN_LEFT | button::LEAN_RIGHT, -127, 0),
     ];
     let pin = play(&mut ps, &keys, Rules::default(), WeaponMove::NONE);
-    assert_eq!(pin, 0xaecb_2678_7ea8_5b36);
+    pin.check("moves_spectator", 0xaecb_2678_7ea8_5b36);
 }
 
 /// The ladder's bob, run straight through `PM_Footsteps` with a climber
 /// off the ground: a rung footstep each quarter of the cycle.
 #[test]
 fn a_climber_bobs_off_his_vertical_speed() {
-    let mut d = Digest::default();
+    let mut d = Pin::words();
     for (walking, vz) in [(false, 100.0), (true, 100.0), (false, -63.0), (true, 37.5)] {
         let mut ps = armed();
         ps.ground_entity_num = ENTITYNUM_NONE;
@@ -269,23 +229,23 @@ fn a_climber_bobs_off_his_vertical_speed() {
                 server_time: 2000 + 33 * i,
                 ..Default::default()
             };
-            let mut pm = Pmove::new(&mut ps, c, c, &Floor, Rules::default());
+            let mut pm = Pmove::new(&mut ps, c, c, &ASPHALT, Rules::default());
             let pml = Pml {
                 msec: 33,
                 ..Default::default()
             };
             super::super::footsteps::footsteps(&mut pm, &pml);
-            d.state(&ps);
+            state(&mut d, &ps);
         }
         assert!(ps.events.contains(&ev::FOOTSTEP_RUN));
     }
-    assert_eq!(d.0, 0xea0f_ad92_aa9f_c8cf);
+    d.check("moves_ladder_bob", 0xea0f_ad92_aa9f_c8cf);
 }
 
 /// `PM_SetMovementDir`'s prone and ladder arms, which no walk reaches here.
 #[test]
 fn the_movement_dir_follows_the_prone_heading_and_the_ladder() {
-    let mut d = Digest::default();
+    let mut d = Pin::words();
     for yaw in [-170.0f32, -95.0, -30.0, 0.0, 45.0, 89.5, 135.0, 179.0] {
         for arm in [pmf::PRONE, pmf::LADDER] {
             let mut ps = armed();
@@ -294,10 +254,11 @@ fn the_movement_dir_follows_the_prone_heading_and_the_ladder() {
             ps.prone_direction = 20.0;
             ps.ladder_vec = Vec3::new(0.6, -0.8, 0.0);
             let c = Cmd::default();
-            let mut pm = Pmove::new(&mut ps, c, c, &Floor, Rules::default());
+            let mut pm = Pmove::new(&mut ps, c, c, &ASPHALT, Rules::default());
             super::update_movement_dir(&mut pm, &Pml::default());
-            d.word(ps.movement_dir as u32);
+            d.step();
+            d.i32("movement_dir", ps.movement_dir);
         }
     }
-    assert_eq!(d.0, 0x7242_e734_9db5_bc4a);
+    d.check("moves_movement_dir", 0x7242_e734_9db5_bc4a);
 }

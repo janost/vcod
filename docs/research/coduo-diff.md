@@ -31,7 +31,7 @@ systeminfo.
 
 Paks: `uo/pakuo00..07.pk3`, `uo/localized_english_pakuo00..02.pk3` and
 `uo/uomappack00.pk3`, layered over a 1.5 `main/` (section 1). The 1.1 and
-1.5 counterparts are in `AGENTS.md` and `cod15-protocol-diff.md`.
+1.5 counterparts are in `cod11-events-and-fx.md` and `cod15-protocol-diff.md`.
 
 Addresses in `coduo_lnxded` and `game.mp.uo.i386.so` are `nm` / ELF virtual
 addresses. Ghidra's import of the `.so` sits 0x10000 higher; Ghidra labels
@@ -98,7 +98,7 @@ loaders (bsp, xmodel, xanim, shader, efx, weapon, menu, sound alias, gsc).
   client connects with its install's protocol (22 on a UO install) and
   refuses a server of the other game (`Transport::same_game`,
   `NetClient::connect_from`); the net probe still switches to 1.51 through
-  `Protocol::by_short_version` (`net::other_version`).
+  `Cod1Wire::by_short_version` (`net::other_version`).
 - `challengeResponse <n>` is one integer, as on 1.1 and 1.5 (live,
   VERIFIED).
 
@@ -288,7 +288,7 @@ Live gamestates (VERIFIED, each item):
 
 ## 8. Entity types, events, server commands
 
-### Entity types
+### 8.1 Entity types
 
 Read off the `CG_AddCEntity` switch (`uo_cgame_mp_x86.dll` 0x30022170), the
 `eType` stores in `game.mp.uo.i386.so` and its `ET_*` debug names. vcod's
@@ -339,7 +339,7 @@ A seated player's own entity:
   driver; the driver saw the gunner in every frame after the climb in;
   VERIFIED, capture).
 
-### Events
+### 8.2 Events
 
 `evtab.py` runs unchanged on `uo_cgame_mp_x86.dll` (table 0x30082428, 211
 entries) and `uo_game_mp_x86.dll` (0x20083428, identical); 1.1 and 1.5 have
@@ -371,7 +371,7 @@ Every projectile explode rides 185/186 with the kind in the weapon's
 `projExplosionType` (INFERRED from the names; `G_ExplodeSmokeGrenade`
 0x5eb72 raises 185 with a direction byte, VERIFIED decompile).
 
-### Server and client commands
+### 8.3 Server and client commands
 
 - `CG_ServerCommand` (`uo_cgame_mp_x86.dll` 0x3003ac90) handles 1.5's set
   (`a`..`v`, `B`..`E`) and adds `F <ms>` (`rewindFx`, cgame trap 0xf0) and
@@ -762,7 +762,7 @@ down by the frame msec for a grenade with `cookOffHold`, raises
 (event 163, plus 210 when `explosionInnerDamage` is non-zero), and
 `fire_grenade` (0x5f7ad) fuses with what is left (VERIFIED decompile). Every
 stock UO grenade, smoke, flash and satchel has `cookOffHold 1` (VERIFIED).
-1.1 MP has no cook (`AGENTS.md`), so shared code gates it by version
+1.1 MP has no cook (`docs/dev/traps.md`, "Combat and items"), so shared code gates it by version
 (`pmove::weapon::cooking`). The cook starts only on the sight button's edge;
 `coduo-movement.md` 12 measures it.
 
@@ -1031,7 +1031,7 @@ stock UO grenade, smoke, flash and satchel has `cookOffHold 1` (VERIFIED).
     (`audio::AudioSystem::pick_counts`);
     `a_lod_pick_repeats_by_the_admitted_rows_alone` pins it.
 
-### Sound blend entities
+### 16.1 Sound blend entities
 
 What the cgame's case 9 and syscall 199 do with an `ET_SOUND_BLEND` entity
 (section 8). Addresses are `uo_cgame_mp_x86.dll`'s unless named.
@@ -1198,8 +1198,8 @@ The client side: vcod watches and plays on a UO server.
   and puts the camera where `CG_VehicleView` does, the local gunner's view
   on its gun included (`coduo-vehicles.md`).
 - **The net probe.** Every scripted mode reads through protocol 22 and
-  prints 1.1's event ids and means of death (AGENTS.md, "The probe
-  client"). Against retail 1.51b on mp_cassino and mp_carentan dm (live,
+  prints 1.1's event ids and means of death (`docs/dev/retail.md`, "On 1.5
+  and UO"). Against retail 1.51b on mp_cassino and mp_carentan dm (live,
   VERIFIED): the combat script saw its shots (`weaponstate` 3,
   `EV_FIRE_WEAPON` 163 printed as 1.1's 159); a suicide obituary's parm 149
   (MOD 21) printed as 150; the weapon-select probe read `EV_PUTAWAY_WEAPON`
@@ -1215,7 +1215,7 @@ What the UO cgame (`uo_cgame_mp_x86.dll`, base 0x30000000) does with section
 unless named. Live rows come from `client-probes/probe_uofx.gsc` on the
 retail server (recipe at the end).
 
-### Event dispatch
+### 19.1 Event dispatch
 
 `CG_EntityEvent` is 0x30022810. Events 139..210 jump through the table at
 0x30023564 indexed by `event - 0x8b`; the slots for the events marked so
@@ -1228,7 +1228,7 @@ registered in 0x3002b560 (VERIFIED, strings).
 | UO id | Event | What the cgame does | Label |
 |---|---|---|---|
 | 140 | `EV_FATIGUE_LAST_SOUND` | `fatigue_breath` (handle 0x3044c1f4) on the entity, case 0x30022b3c | VERIFIED |
-| 141 | `EV_FATIGUE_SOUND` | `sprint_breath_last` (0x3044c1f8), an alias no stock csv has; the game raises only 140 (`PM_PlayFatigueSound` 0x3a968, `PM_UpdateFatigue` 0x3aa22 in `game.mp.uo.i386.so`) | VERIFIED |
+| 141 | `EV_FATIGUE_SOUND` | `sprint_breath_last` (0x3044c1f8), an alias no stock csv has; the game raises only 140 (`PM_PlayFatigueSound` 0x2a968, `PM_UpdateFatigue` 0x2aa22 in `game.mp.uo.i386.so`) | VERIFIED |
 | 160, 161 | `EV_DEPLOY_WEAPON`, `EV_BREAKDOWN_WEAPON` | the weapon's `deploySound` / `breakdownSound` (weaponInfo +0x110 / +0x114, base 0x30413580 stride 0x1c4) on the entity | VERIFIED |
 | 163..166, 173..175 | the fire events | `CG_FireWeapon` 0x30047d20: the weapon is the parm's low seven bits when set, else `es.weapon`; bit 7 has the client trace the bullet itself (0x30045550). On a vehicle (`eType` 12) the flash plays on `tag_altfire` for 164, `tag_secondary_flash` for 165 (the gunner), else `tag_flash`; a `gas` weapon (`weaponType` 4) returns before flash and sound | VERIFIED |
 | 176 | `EV_BULLET_TRACER` | case 0x30023172: a tracer from `trBase` to `origin2` through 0x30048260, the weapon in `eventParm`, no chance roll (the server rolled `g_tracerChance` or `g_tracerChanceLMG`, `Bullet_Fire_Extended`); 1.1's cgame has no case for it and no 1.1 game raises it | VERIFIED |
@@ -1236,11 +1236,11 @@ registered in 0x3002b560 (VERIFIED, strings).
 | 181 | `EV_GRENADE_BOUNCE` | `satchel_bounce` (0x3044c200) for a weapon with `cloth` set (weaponDef +0x33c, the satchel), else `grenade_bounce_<surface>`; then the `grenade_bounce` effect row | VERIFIED |
 | 182 | `EV_GRENADE_SPOON` | `us_grenade_lever` (0x3044c1fc) at the position | VERIFIED |
 | 183, 184 | `EV_PROJECTILE_LAUNCH`, `_INCOMING` | parm = explosion type; only artillery (4) and mortar (5) register a sound: `shell_flash`, `barrage_incoming` | VERIFIED |
-| 185, 186 | `EV_PROJECTILE_EXPLODE(_NOMARKS)` | case 0x30023355: explosion type in `es.scale` (offset 0xdc), 8 `none` skips the row; smoke (1) bolts its row's effect to the grenade's `g_body`; else the row's 24th column (`vehicle`) when `eFlags` 0x100000 (a vehicle hit, `G_MissileImpact` 0x6db67) and it has one, else the surface's; the sound table 0x3044bc30 (`type * 23 + surface`) registers grenade, rocket, artillery, mortar and tank rows only; then the weapon's `projExplosionEffect` and `projExplosionSound` | VERIFIED |
+| 185, 186 | `EV_PROJECTILE_EXPLODE(_NOMARKS)` | case 0x30023355: explosion type in `es.scale` (offset 0xdc), 8 `none` skips the row; smoke (1) bolts its row's effect to the grenade's `g_body`; else the row's 24th column (`vehicle`) when `eFlags` 0x100000 (a vehicle hit, `G_MissileImpact` 0x5db67) and it has one, else the surface's; the sound table 0x3044bc30 (`type * 23 + surface`) registers grenade, rocket, artillery, mortar and tank rows only; then the weapon's `projExplosionEffect` and `projExplosionSound` | VERIFIED |
 | 187, 188, 190, 198, 199 | molotov explodes, `EV_BULLET`, `EV_PLAY_FX_ON_PLAYER`, `EV_STOP_ATTACHED_FX` | `CG_Error`; no `game.mp.uo.i386.so` code raises 198 or 199, and `playFxOnPlayer` sets the client's `cg_atmos`, which nothing reads | VERIFIED |
 | 201 | `EV_EARTHQUAKE` | pre-event 0x30023866: scale `angles2[0]`, radius `angles2[1]`, duration in ms as a float in `angles2[2]` (1.1: `es.time`) | VERIFIED, live: `earthquake(0.4, 1.5, origin, 600)` arrives as `[0.4, 600, 1500]` |
 | 202, 210 | `EV_REMOVE_WEAPON_ATTACHMENTS`, `EV_GRENADE_SUICIDE` | nothing | VERIFIED |
-| 208 | `EV_OVERHEATING` | `mg_overheat_vehicle` when the carrier's `eType & 0xc` (a turret, a vehicle) else `mg_overheat`, at the origin; raised by `turret_think` 0x6c1f2 and the vehicle MGs | VERIFIED |
+| 208 | `EV_OVERHEATING` | `mg_overheat_vehicle` when the carrier's `eType & 0xc` (a turret, a vehicle) else `mg_overheat`, at the origin; raised by `turret_think` 0x5c1f2 and the vehicle MGs | VERIFIED |
 
 - **Impact tables.** `CG_RegisterImpactEffects` 0x3001dfb0 reads every
   `fx/*.csv` in name order, a later file's row replacing an earlier one's
@@ -1264,8 +1264,14 @@ registered in 0x3002b560 (VERIFIED, strings).
   - The engine's pak lookup reads a backslash as a slash: `FS_HashFileName`
     (coduo_lnxded 0x806077a, `cmpl $0x5c` then `movl $0x2f`) and
     `FS_FilenameCompare` (0x806161e, `\` and `:` to `/`) (VERIFIED,
-    disassembly of the dedicated server). The client's filesystem is the
-    same qcommon code (INFERRED).
+    disassembly of the dedicated server). The client reads one the same
+    way (VERIFIED, `CoDUOMP.exe` disassembly): `FS_FOpenFileRead`
+    (0x42d760) hashes the name at 0x42d7dd with 0x42c990, which lowers
+    each byte (0x56d1fd), stops at `.`, reads `\` (`cmp $0x5c`) as `/`,
+    sums `c * (i + 119)` and folds `h ^ h >> 10 ^ h >> 20` under the table
+    size, and compares the chain's names at 0x42d805 with 0x42d440, which
+    upper-cases `a`..`z` and reads `\` and `:` as `/`. A `:` takes another
+    hash than a `/`, so only the backslash finds the file. INFERRED.
   - vcod's `Pk3Fs` keys a lookup the same way. Without it every UO explode
     row misses its file, and a tank shell, artillery or mortar round or frag
     draws only the weapon's own `projExplosionEffect`
@@ -1329,7 +1335,7 @@ registered in 0x3002b560 (VERIFIED, strings).
   The server's `rewindFx(player, seconds)` sends it to that player only
   (VERIFIED, live: the shooter got it, the spectator did not).
 
-### Client-traced rounds
+### 19.2 Client-traced rounds
 
 A vehicle MG's round (`CMD_VEH_FireTurret` 0x8ee02, `CMD_VEH_FireAltTurret`
 0x8f57e in `game.mp.uo.i386.so`) and a mounted MG's (0x5aaa9) fire through
@@ -1426,7 +1432,7 @@ The cgame side, `uo_cgame_mp_x86.dll`:
   `cod11-combat.md` 2.1). A server's `EV_BULLET_TRACER` draws from its own
   `trBase`, that server muzzle.
 
-### The flame report
+### 19.3 The flame report
 
 The server never traces a flame: the victim's cgame tests its own flame
 chunks against its own box and reports the burn (section 21,
@@ -1652,7 +1658,7 @@ so and the nozzle sits 16 units ahead of the eye. The same pair on vcod-server
 (`--gametype-script` the probe) burns the victim the same way, 8 with
 `MOD_FLAME` a frame while the bit rides, and no bullet hit (section 21).
 
-### HUD
+### 19.4 HUD
 
 `CG_OwnerDraw` 0x300320e0 returns at once under `cg_drawStatus 0` and
 switches on the owner draw id through 0x300326e8 / 0x30032648 (VERIFIED).
@@ -1701,7 +1707,7 @@ switches on the owner draw id through 0x300326e8 / 0x30032648 (VERIFIED).
   (`adsOverlayShader`); no artillery marker or range readout exists
   (VERIFIED).
 
-### The turret view
+### 19.5 The turret view
 
 Read off the UO cgame disassembly over 0x30041550..0x30041a2c, called from
 the view setup 0x30041a30 after the playerstate copy and before the
@@ -1829,7 +1835,7 @@ vcod:
   of them with the playerstate's view past an arc (its pitch reads 60 at
   28250 against a top arc of 40), and 44 shake.
 
-### Captures
+### 19.6 Captures
 
 Retail UO 1.51b, mp_cassino, each a `--probe-follow` spectator's
 `--save-snapshots` (fixtures in `crates/common/tests/fixtures/net/`, recipe
@@ -1918,7 +1924,7 @@ wire's, as `event_dump` prints them.
   the server's ints differed above the field's width (VERIFIED, the gates;
   `docs/protocol-1.1.md`, "PlayerState delta").
 
-### What vcod does
+### 19.7 What vcod does
 
 - Events: the UO-only ids keep their numbers as `EV_UO_*` (`EV_FOREIGN |
   id`), and `EV_BULLET_HIT` and the projectile explodes join them; each
@@ -1974,7 +1980,7 @@ wire's, as `event_dump` prints them.
   so the `vehicle` column and the server's 0x100000 rest on the decompiles
   (coduo-vehicles.md 14).
 
-### Capture recipe
+### 19.8 Capture recipe
 
 `probe_uofx.gsc` precaches the flamethrower and the artillery binoculars,
 hands the first player the weapon `probe_weapon` names (none: its own), a
@@ -2066,7 +2072,7 @@ Other facts from these runs:
 (`cod15-protocol-diff.md` 13). Measured against the retail 1.51b server on
 loopback (`COD_VERSION=uo tools/run_server.sh`, mp_cassino dm).
 
-### What the server writes as UO's
+### 20.1 What the server writes as UO's
 
 - **Queries and connect.** `getinfo` is 1.5's builder with `jps` and `tnk`
   after `timeoutsAllowed`; `getstatus` is 1.5's. Both replies, and the
@@ -2140,7 +2146,7 @@ loopback (`COD_VERSION=uo tools/run_server.sh`, mp_cassino dm).
   | `viewKick` | 0x6db55 | damage feedback of `force` from the given point |
   | `setContents` | 0x696b9 | |
   | `setTakeDamage` | 0x691d2 | writes the entity's `takedamage` (section 22) |
-| `setBounds` | | sets the link box and relinks |
+  | `setBounds` | | sets the link box and relinks |
 
   `weaponSlot` gains `satchel` and `binocular` (strings 0x9bc21, 0x9bc29,
   VERIFIED).
@@ -2149,13 +2155,13 @@ loopback (`COD_VERSION=uo tools/run_server.sh`, mp_cassino dm).
   The server's torso anims under the kar98k match retail's
   (`playerstate_combat_ab`'s UO capture, VERIFIED).
 
-### Vehicles
+### 20.2 Vehicles
 
 `vcod-server` spawns, seats, drives, fires and damages UO's vehicles as
 retail does: `coduo-vehicles.md` 10 to 14 carry the addresses, captures and
 gates.
 
-### Measured
+### 20.3 Measured
 
 - `configstrings_uo_ab`: the whole table against `gamestate-uo.bin`, start
   time included. UO's level clock starts at the server's uptime (3's `t`
@@ -2195,7 +2201,7 @@ gates.
 - The vcod client (`--net-probe`, protocol 22) joins ours, answers
   `serverinfo_dm`, the team and weapon menus and spawns.
 
-### Not done (stage 1)
+### 20.4 Not done (stage 1)
 
 Stage 1's list is mostly closed: the gametypes are section 22; artillery,
 smoke, the satchel and the flamethrower's `fdc` damage section 21; the mount
@@ -2218,7 +2224,7 @@ shooter where the retail capture's stood, drives `--probe-uo-weapon`'s step
 scripts at the probe client's 60 Hz cmd cadence and compares the events and
 carriers against the section 19 captures.
 
-### Missiles
+### 21.1 Missiles
 
 - **Bounce.** `G_BounceMissile` (0x5d6e5) reflects the velocity at the
   impact time and scales all of it by 0.4 (.rodata 0xa17a4), 0.1 (0xa17a0)
@@ -2368,7 +2374,7 @@ carriers against the section 19 captures.
     satchelcharge_mp`, `--capture-tag uo-satchel` and `--probe-uo-weapon
     smoke`, port 31021 (run 75 s, spectator 55, shooter 48, 3 s apart).
 
-### Artillery
+### 21.2 Artillery
 
 - `FireWeapon` (0x7bd05) sends type 3 (`spotter`) to
   `Weapon_ArtilleryStrike_Fire` (0x7b758): `BG_Bullet_Endpos` 10000 out with
@@ -2428,7 +2434,7 @@ carriers against the section 19 captures.
   (VERIFIED, the gate). There is no terrain at those spots, so no
   terrain-against-brush tie decides them.
 
-### Bullets and turrets
+### 21.3 Bullets and turrets
 
 - `Bullet_Fire_Extended` (0x7a920) raises the world impact (178) only when
   the pass entity is the attacker, with the weapon (+0xcc) and the round's
@@ -2513,7 +2519,7 @@ carriers against the section 19 captures.
   round, the first round after it and the mark (VERIFIED). The overheat tank
   capture's vehicle gunner is section 9's, not this path.
 
-### Flamethrower
+### 21.4 Flamethrower
 
 - `weaponType gas` does nothing in `FireWeapon` (0x7bd05: types 0 to 3 have
   an arm, 4 falls through the `!= 4` error test; VERIFIED). A pulse deals no
@@ -2547,7 +2553,7 @@ carriers against the section 19 captures.
 - `eFlags` 0x200 (1.1's 0x400) rides every fire while the trigger is held
   (the flame capture), which vcod's sim sets for any held trigger.
 
-### Not done
+### 21.5 Not done
 
 - A live run of a retail UO client burning on vcod-server.
 - The bipod deploy's entity bit is not a gap: `BG_PlayerStateToEntityState`
@@ -2584,7 +2590,7 @@ a UO install:
   entity numbers, which the vehicles shift by about 40. `gametypes_ab::GAPS`
   is empty.
 
-### What each probe drives
+### 22.1 What each probe drives
 
 - **ctf** (mp_cassino, 75 s). The first level ends in ctf's own match start:
   once both teams hold a weapon, `CheckMatchStart` calls `endRound("reset")`,
@@ -2619,7 +2625,7 @@ a UO install:
   `MOD_PROJECTILE*` or `MOD_ARTILLERY*` (INFERRED from bas.gsc 3954). The
   gate matches every view ("Gaps" below).
 
-### Round and map ends
+### 22.2 Round and map ends
 
 Four more probes play each gametype to its end (ports 31111-31117) under the
 same two `--save-scripted` clients; `gametypes_ab`'s `uo_*_end` tests compare
@@ -2680,7 +2686,7 @@ the scores in the game, not the configstring, and the new level's
 `setTeamScore("allies", 0)` changes it), `d 3` (the ambient) (VERIFIED,
 every `*end*-uo.txt` capture at the `B`). Their order is `G_InitGame`'s, the
 gametype's and the level script's writes (INFERRED). vcod's restart sends
-the same burst in write order (cod11-map-cycle.md 4.5, "Gaps" below).
+the same burst in write order (cod11-map-cycle.md 4.5; 22.5 below).
 
 Four more probes (ports 32531-32539), the same two clients and
 `gametypes_ab` tests (`uo_*_time*`, `uo_team_deathmatch_*`), cover the clock
@@ -2760,10 +2766,10 @@ and measures `doDamage` on a client and the killcam skipped by use:
   client `G_Damage` (0x4fedb) goes straight to `G_DamageClient` (0x4fd4b),
   which skips the world substitution the generic arm makes: it returns
   without `takedamage` (+0x17d), with client +0x461c or +0x4620 set, or
-  unless client +0x4520 is 2, then calls `Scr_PlayerDamage` (0x7eef5) with
+  unless client +0x4520 is 2, then calls `Scr_PlayerDamage` (0x6eef5) with
   the damage times `g_fHitLocDamageMult[0]`, the weapon at the inflictor's
   +0xcc (`s.weapon`; the attacker's with no inflictor, 0 with neither) and
-  `GScr_AddEntity`/`GScr_AddVector` (0x7e92d, 0x7e8fd), which push
+  `GScr_AddEntity`/`GScr_AddVector` (0x6e92d, 0x6e8fd), which push
   `undefined` for NULL (VERIFIED decompile). +0x461c and +0x4620 are the
   flags the `GAME_NOCLIPON` and `GAME_UFOON` toggles flip, and +0x4520 is
   `pers.connected` (INFERRED, the toggles' strings and the score sort's
@@ -2820,7 +2826,7 @@ One more (port 32711, the same clients, `gametypes_ab`'s
   dom's team score is the flag count (`d 6 1`, then `d 6 0` at the
   restart). vcod-server matches.
 
-### Battle rank
+### 22.3 Battle rank
 
 `_rank_gmi` (`pakuo01.pk3`) is UO's battle rank, shared by the stock
 gametypes. `client-probes/probe_tdmrank` runs stock `tdm` on mp_cassino
@@ -2904,7 +2910,7 @@ compares every view. Ranks below are the icons' 1..5, `pers["rank"]` 0..4.
   `startAmmo`, which gave rank 3's binoculars 10 rounds against retail's
   0; it now gives none on CoD1. vcod-server matches every view.
 
-### Engine facts the gametypes reach
+### 22.4 Engine facts the gametypes reach
 
 - **Model entities send `xmodel`.** UO's `G_DObjUpdate` (0x77df9) writes the
   model index into `s.xmodel` (entity +0x90) for `eType` 0, 8, 11, 12, 13
@@ -3020,7 +3026,7 @@ compares every view. Ranks below are the icons' 1..5, `pers["rank"]` 0..4.
   `M_PI` (VERIFIED, 1.1 disassembly; the UO rows by name,
   `tools/re/dump_builtins.py`). `probe_basend` calls `cos` and `sin`.
 
-### Gaps
+### 22.5 Gaps
 
 All closed; `gametypes_ab::GAPS` is empty.
 

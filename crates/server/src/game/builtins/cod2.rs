@@ -3,11 +3,12 @@
 //! not. Addresses are cod2_lnxded's (cod2-gsc-diff.md section 1).
 
 use crate::game::host::{GameHost, WeaponOp};
-use vcod_gsc::{Cx, EntId, ErrorKind, Target, Value};
+use crate::game::slot::ClientSlot;
+use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
+use super::Builtin;
 use super::client::client_receiver;
 use super::precache::{before_any_wait, name_arg};
-use super::score::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("assert", developer_statement),
@@ -107,7 +108,7 @@ fn is_talking(
     recv: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let window = crate::game::builtins::cvar::atoi(host.cvars.get("g_voiceChatTalkingDuration"));
     let now = host.level_time_ms;
     let on = host.cod2().clients[slot]
@@ -115,6 +116,12 @@ fn is_talking(
         .is_some_and(|t| (0..window).contains(&(now - t)));
     Ok(Value::Int(i32::from(on)))
 }
+
+/// vcod's cap on a level's CoD2 weapons. The held mask is two words
+/// (`weapons[0..1]`, bit 0 the empty hand) and the ammo and clip arrays 64
+/// slots (cod2-protocol.md 5.3, 14.1); each weapon adds at most one slot, so
+/// 63 weapons keep every index in range. `bg_itemlist` holds 128 rows.
+pub const COD2_MAX_WEAPONS: usize = 63;
 
 /// CoD2's weapon index for `name`, registering it on first use: CoD2 has no
 /// fixed weapon list, `BG_FindWeaponIndexForName` misses and 0x80ebc24
@@ -129,15 +136,16 @@ pub fn register_weapon(host: &mut GameHost, name: &str) -> Option<usize> {
     if name.is_empty() || name.eq_ignore_ascii_case("none") {
         return None;
     }
-    if let Some(i) = host
-        .cod2()
-        .weapons
-        .iter()
-        .position(|w| w.eq_ignore_ascii_case(name))
-    {
+    // Shared code reaches here under `WeaponNumbering::Registered`.
+    let weapons = &host.as_cod2()?.weapons;
+    if let Some(i) = weapons.iter().position(|w| w.eq_ignore_ascii_case(name)) {
         return Some(i + 1);
     }
     if !host.initializing {
+        return None;
+    }
+    if weapons.len() >= COD2_MAX_WEAPONS {
+        log::warn!("{name}: more than {COD2_MAX_WEAPONS} weapons registered, not registered");
         return None;
     }
     let fs = host.fs.clone()?;
@@ -189,7 +197,7 @@ const COD2_ITEMS: usize = 131;
 /// VERIFIED, the calls and the dirty words. A restart that registers the
 /// same list writes nothing (no `d 7`, cod2-map-cycle.md 3).
 pub fn write_weapon_configstrings(host: &mut GameHost) {
-    if host.cod2().weapons.is_empty() {
+    if host.as_cod2().is_none_or(|c2| c2.weapons.is_empty()) {
         return;
     }
     host.configstrings.set(
@@ -216,7 +224,7 @@ pub fn write_weapon_configstrings(host: &mut GameHost) {
 /// model and of the projectile model. VERIFIED, the calls and their order.
 /// Item 0's bit reads set on both live captures (cod2-protocol.md 15.3);
 /// what sets it is not traced.
-fn g_register_weapon(host: &mut GameHost, keys: &std::collections::HashMap<String, String>) {
+fn g_register_weapon(host: &mut GameHost, keys: &vcod_common::xmodel::WeaponKeys) {
     use crate::configstrings::CsRange;
     let layout = &vcod_cod2::net::PROTOCOL_118.cs;
     for key in ["useHintString", "dropHintString"] {
@@ -363,7 +371,7 @@ fn close_in_game_menu(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
-    host.client_commands.push((slot, "K".to_string()));
+    host.client_commands.push(slot, "K".to_string());
     Ok(Value::Undefined)
 }
 
@@ -376,7 +384,7 @@ fn get_ammo_count(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let name = string_arg(cx, args, 0, "getAmmoCount takes a weapon name")?;
     let Some(index) = host.weapon_index(&name) else {
         return Ok(Value::Int(0));
@@ -384,7 +392,7 @@ fn get_ammo_count(
     let Some(def) = host.weapons.get(index) else {
         return Ok(Value::Int(0));
     };
-    let a = &host.client_ammo[slot];
+    let a = &host.clients[slot].ammo;
     Ok(Value::Int(
         i32::from(a.ammo[def.ammo_index]) + i32::from(a.clip[def.clip_index]),
     ))
@@ -399,7 +407,7 @@ fn get_current_offhand(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let offhand = host.cod2().clients[slot].offhand as usize;
     let name = if host.playing(cx, slot) && offhand > 0 {
         host.weapon_name(offhand)
@@ -417,8 +425,8 @@ fn get_current_weapon(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
-    let index = host.client_weapons[slot].current as usize;
+    let slot = client_receiver(host, recv)?.index();
+    let index = host.clients[slot].weapons.current as usize;
     let name = host
         .weapon_name(index)
         .unwrap_or_else(|| "none".to_string());
@@ -433,7 +441,7 @@ fn get_player_angles(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     Ok(Value::Vector(host.cod2().clients[slot].view_angles))
 }
 
@@ -532,7 +540,8 @@ fn set_stable_missile(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)
-        .map_err(|_| ErrorKind::Custom("Type should be a player".into()))?;
+        .map_err(|_| ErrorKind::Custom("Type should be a player".into()))?
+        .index();
     let on = int_arg(args, 0, "setStableMissile takes a number")?;
     let flags = &mut host.cod2_mut().clients[slot].flags;
     if on != 0 {
@@ -578,11 +587,9 @@ fn set_normal_health(
     use vcod_gsc::Host;
     let id = super::entity::entity_receiver(recv)?;
     let f = float_arg(args, 0, "setNormalHealth takes a number")?.min(1.0);
-    let is_client = host.ents.get(id).is_some_and(|e| e.client.is_some());
-    let health = if is_client {
-        let slot = id.0 as usize;
-        let max = host.client_vitals[slot].max_health;
-        host.client_commands.push((slot, "I \"0\"".to_string()));
+    let health = if let Some(to) = ClientSlot::of_entity(&host.ents, id) {
+        let max = host.clients[to.index()].vitals.max_health;
+        host.client_commands.push(to, "I \"0\"".to_string());
         (0.5 + max as f32 * f).floor() as i32
     } else {
         let field = cx.intern_folded("maxhealth");
@@ -629,8 +636,10 @@ fn set_team_score(
     // `SV_GameSendServerCommand(-1, ..)`: the engine's clients, so a
     // restart's `resetScores` reaches the clients its level has not yet
     // connected (cod2-map-cycle.md 2, sd).
-    host.client_commands
-        .push((crate::game::commands::ALL_CLIENTS, format!("{letter} {n}")));
+    host.client_commands.push(
+        crate::game::commands::Recipient::All,
+        format!("{letter} {n}"),
+    );
     host.ranks_dirty = true;
     Ok(Value::Undefined)
 }
@@ -666,7 +675,7 @@ fn set_weapon_clip_ammo(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     let name = string_arg(cx, args, 0, "setWeaponClipAmmo takes a weapon name")?;
     let rounds = int_arg(args, 1, "setWeaponClipAmmo takes a round count")?;
     let Some(index) = host.weapon_index(&name) else {
@@ -690,15 +699,16 @@ fn switch_to_offhand(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let to = client_receiver(host, recv)?;
+    let slot = to.index();
     let name = string_arg(cx, args, 0, "switchToOffhand takes a weapon name")?;
     let Some(index) = host.weapon_index(&name) else {
         return Err(ErrorKind::Custom(format!("unknown weapon '{name}'")));
     };
-    if !host.client_weapons[slot].holds(index) {
+    if !host.clients[slot].weapons.holds(index) {
         return Ok(Value::Int(0));
     }
-    host.client_commands.push((slot, format!("C {index}")));
+    host.client_commands.push(to, format!("C {index}"));
     Ok(Value::Int(1))
 }
 
@@ -710,11 +720,10 @@ fn update_scores(
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let id: EntId = super::entity::entity_receiver(recv)?;
-    let slot = id.0 as usize;
+    let slot = super::client::client_receiver(host, recv)?;
     let [axis, allies] = host.team_scores;
-    host.client_commands.push((slot, format!("H {allies}")));
-    host.client_commands.push((slot, format!("G {axis}")));
+    host.client_commands.push(slot, format!("H {allies}"));
+    host.client_commands.push(slot, format!("G {axis}"));
     Ok(Value::Undefined)
 }
 
@@ -762,20 +771,21 @@ fn give_weapon(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
+    let to = client_receiver(host, recv)?;
+    let slot = to.index();
     let name = string_arg(cx, args, 0, "giveWeapon takes a weapon name")?;
     let had = host
         .weapon_index(&name)
-        .is_some_and(|i| host.client_weapons[slot].holds(i));
-    let before = host.client_weapons[slot];
-    let rounds = host.client_ammo[slot];
+        .is_some_and(|i| host.clients[slot].weapons.holds(i));
+    let before = host.clients[slot].weapons;
+    let rounds = host.clients[slot].ammo;
     super::client::give_weapon(host, cx, recv, args)?;
     let Some(index) = host.weapon_index(&name) else {
         return Ok(Value::Undefined);
     };
     let offhand = host.cod2().offhands.get(index - 1).copied().unwrap_or(0) != 0;
     let weapons = host.weapons.clone();
-    let w = &mut host.client_weapons[slot];
+    let w = &mut host.clients[slot].weapons;
     w.slots = before.slots;
     if !had
         && !offhand
@@ -825,8 +835,8 @@ fn give_weapon(
     }
     // A weapon the player lacked: `I "1"` after the give (0x80f9b8c,
     // cod2-protocol.md 15.5).
-    if !had && host.client_weapons[slot].holds(index) {
-        host.client_commands.push((slot, "I \"1\"".to_string()));
+    if !had && host.clients[slot].weapons.holds(index) {
+        host.client_commands.push(to, "I \"1\"".to_string());
     }
     Ok(Value::Undefined)
 }
@@ -847,12 +857,15 @@ pub(crate) fn give_offhand(host: &mut GameHost, slot: usize, index: usize) {
         first_available_offhand(host, slot, class).unwrap_or(index)
     };
     host.cod2_mut().clients[slot].offhand = next as u8;
-    host.client_commands.push((slot, format!("C {next}")));
+    host.command_to(slot, format!("C {next}"));
 }
 
 /// `BG_WeaponAmmo` (Mac 0x7a8f4): the weapon's reserve and clip together.
 fn weapon_ammo(host: &GameHost, slot: usize, weapon: usize) -> i32 {
-    let (Some(def), Some(a)) = (host.weapons.get(weapon), host.client_ammo.get(slot)) else {
+    let (Some(def), Some(a)) = (
+        host.weapons.get(weapon),
+        host.clients.get(slot).map(|c| &c.ammo),
+    ) else {
         return 0;
     };
     i32::from(a.ammo[def.ammo_index]) + i32::from(a.clip[def.clip_index])
@@ -864,7 +877,7 @@ fn first_available_offhand(host: &GameHost, slot: usize, class: i32) -> Option<u
     let offhands = &host.cod2().offhands;
     (1..=offhands.len()).find(|&i| {
         offhands[i - 1] == class
-            && host.client_weapons[slot].holds(i)
+            && host.clients[slot].weapons.holds(i)
             && weapon_ammo(host, slot, i) != 0
     })
 }
@@ -899,7 +912,7 @@ fn finish_player_damage(
 ) -> Result<Value, ErrorKind> {
     use crate::game::host::SimOp;
     use crate::game::temp_entity::{Scope, TempEntity};
-    let slot = client_receiver(host, recv)?;
+    let slot = client_receiver(host, recv)?.index();
     if args.len() < 9 {
         return Err(ErrorKind::BadType("finishPlayerDamage takes ten arguments"));
     }
@@ -921,9 +934,7 @@ fn finish_player_damage(
         _ => [0.0; 3],
     };
     let attacker_slot = match attacker {
-        Value::Entity(a) if host.ents.get(*a).is_some_and(|e| e.client.is_some()) => {
-            Some(a.0 as usize)
-        }
+        Value::Entity(a) => ClientSlot::of_entity(&host.ents, *a).map(ClientSlot::index),
         _ => None,
     };
     let world = host.ents.world(cx);
@@ -996,7 +1007,7 @@ fn finish_player_damage(
             );
         }
     }
-    let v = &mut host.client_vitals[slot];
+    let v = &mut host.clients[slot].vitals;
     // A demigod keeps one point.
     let damage = if flags & crate::game::cod2_cmds::FL_DEMI_GODMODE != 0 && v.health <= damage {
         v.health - 1
@@ -1118,7 +1129,7 @@ fn dead_yaw(host: &GameHost, slot: usize, attacker: Option<usize>) -> i32 {
     };
     let origin = |s: usize| -> Option<[f32; 3]> {
         let p = vcod_cod2::net::PROTOCOL_118.as_cod1_shim();
-        let e = host.client_entity_states.get(s)?.as_ref()?;
+        let e = host.clients.get(s).map(|c| &c.entity_state)?.as_ref()?;
         Some([0, 1, 2].map(|k| f32::from_bits(e.field_i32(p, &format!("pos.trBase[{k}]")) as u32)))
     };
     let (Some(to), Some(from)) = (origin(a), origin(slot)) else {
@@ -1142,8 +1153,8 @@ fn clone_player(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
-    let Some(state) = host.client_entity_states[slot].clone() else {
+    let slot = client_receiver(host, recv)?.index();
+    let Some(state) = host.clients[slot].entity_state.clone() else {
         return Ok(Value::Undefined);
     };
     let p = vcod_cod2::net::PROTOCOL_118.as_cod1_shim();
@@ -1292,7 +1303,38 @@ fn drop_item(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::commands::one;
     use crate::game::testing::fixture;
+
+    /// Past 63 weapons a level's registration is refused before any file
+    /// is read, and 63 weapons with distinct ammo and clip names keep every
+    /// slot inside the 64-slot arrays.
+    #[test]
+    fn a_cod2_level_registers_at_most_63_weapons() {
+        let mut host = GameHost::new(&crate::game::profile::COD2, vec![String::new(); 2048]);
+        host.initializing = true;
+        host.cod2_mut().weapons = (1..=COD2_MAX_WEAPONS).map(|i| format!("w{i}")).collect();
+        assert_eq!(register_weapon(&mut host, "w5"), Some(5));
+        assert_eq!(register_weapon(&mut host, "one_too_many_mp"), None);
+        assert_eq!(host.cod2().weapons.len(), COD2_MAX_WEAPONS);
+        let defs = (1..=COD2_MAX_WEAPONS)
+            .map(|i| {
+                Some(vcod_common::weapon::WeaponDef {
+                    ammo_name: format!("a{i}"),
+                    clip_name: format!("c{i}"),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        let t = crate::weapons::WeaponTable::cod2(&host.cod2().weapons, defs);
+        let n = vcod_common::pmove::weapon::NUM_AMMO;
+        assert!(
+            t.defs()
+                .iter()
+                .flatten()
+                .all(|d| d.ammo_index < n && d.clip_index < n)
+        );
+    }
 
     #[test]
     fn int_truncates_parses_and_refuses() {
@@ -1331,11 +1373,36 @@ mod tests {
             let allies = Value::String(cx.intern_exact("allies"));
             set_team_score(&mut host, cx, None, &[allies, Value::Int(4)]).unwrap();
             assert_eq!(host.team_scores, [0, 4]);
-            let all = crate::game::commands::ALL_CLIENTS;
+            let all = crate::game::commands::Recipient::All;
             assert_eq!(host.client_commands, [(all, "H 4".to_string())]);
             assert_eq!(host.configstrings[6], "");
             let bad = Value::String(cx.intern_exact("spectator"));
             assert!(set_team_score(&mut host, cx, None, &[bad, Value::Int(1)]).is_err());
+        });
+    }
+
+    /// `updateScores` goes to a player only; on any other entity it is a
+    /// script error and queues nothing (BUG-022: it queued for slot >= 64).
+    #[test]
+    fn update_scores_refuses_a_non_player() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            host.connect_client(cx, 0, "a").unwrap();
+            let cls = Value::String(cx.intern_exact("script_model"));
+            let Value::Entity(ent) =
+                super::super::entity::spawn(&mut host, cx, None, &[cls, Value::Vector([0.0; 3])])
+                    .unwrap()
+            else {
+                panic!("spawn returns the entity");
+            };
+            assert!(update_scores(&mut host, cx, Some(Target::Entity(ent)), &[]).is_err());
+            assert!(host.client_commands.is_empty());
+            let player = host.ents.handle(0).unwrap();
+            update_scores(&mut host, cx, Some(Target::Entity(player)), &[]).unwrap();
+            assert_eq!(
+                host.client_commands,
+                [(one(0), "H 0".to_string()), (one(0), "G 0".to_string())]
+            );
         });
     }
 

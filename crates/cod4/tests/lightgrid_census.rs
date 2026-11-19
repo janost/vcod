@@ -17,14 +17,7 @@ fn light_grid_rows_cover_the_entries_and_light_every_static_model() {
     let Some(install) = cod4_install() else {
         return;
     };
-    let mut maps: Vec<String> = install
-        .zones("english")
-        .unwrap()
-        .iter()
-        .filter_map(|p| p.file_stem()?.to_str().map(str::to_owned))
-        .filter(|n| n.starts_with("mp_") && !n.ends_with("_load"))
-        .collect();
-    maps.sort();
+    let maps = vcod_cod4::testing::stock_maps(&install);
     assert_eq!(maps.len(), 21);
     let mut outside = std::collections::BTreeSet::new();
     for name in &maps {

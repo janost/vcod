@@ -52,7 +52,10 @@ vcod writes `demos/` under the server's `fs_game` directory, else under
 the player's mod directory, else under the base directory its config sits
 in, and reads from the same list. Its `demo` plays all three: a bare name
 takes the first of `.dm_1`, `.dm_2`, `.dm_3` that exists, and the number
-picks the protocol the file is parsed under.
+picks the protocol the file is parsed under. A `record` or `demo` name
+that is rooted, names a drive or holds `..` reaches no file:
+`record` prints `ERROR: couldn't open.`, `demo` finds nothing. vcod's
+CoD2 and CoD4 `record` and `demo` refuse the same.
 
 ## 2. The file
 
@@ -117,7 +120,10 @@ table (VERIFIED, `CoDUOMP.exe` `0x40fb80`); 1.5's is 1.1's (VERIFIED,
 vcod builds it with `gamestate::write` and the trailing `svc_EOF`. Its ops
 are byte for byte the retail server's gamestate past that message's
 leading empty `svc_serverCommand` (VERIFIED, the committed
-`gamestate.bin` in `demo.rs`'s test).
+`gamestate.bin` in `demo.rs`'s test). The client holds a baseline's
+`eFlags` in 1.1's layout, so `gamestate_message` maps it back through the
+protocol's `eflags_from_v1` first: UO's `hide()` bit goes out as 0x80, as
+the server sent it (`demo.rs`'s `a_uo_demo_writes_baseline_eflags_in_uo_layout`).
 
 ## 4. Waiting for a full frame
 
@@ -528,7 +534,9 @@ the same in all three unless a bullet says otherwise. vcod:
   (`0x558824`) whatever `silent` says (VERIFIED).
 - INFERRED (Q3's `FS_WriteFile`): the path is under `fs_homepath` and the
   game folder, the mod's under `fs_game`. vcod writes
-  `<install>/<fs_game or main or uo>/screenshots/`.
+  `<install>/<fs_game or main or uo>/screenshots/`. A shot's or a save
+  game's name that is rooted, names a drive or holds `..`
+  writes nothing and prints the lines a failed write prints.
 
 ### 10.3 Format
 

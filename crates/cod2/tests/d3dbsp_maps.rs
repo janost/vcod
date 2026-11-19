@@ -161,13 +161,15 @@ fn stock_maps_match_the_census() {
         assert_eq!(counts(&b), want, "{map}");
         assert!(b.entities.contains("worldspawn"), "{map}");
 
-        // Every leaf's tree: built, and on the stock maps each leaf's run
-        // stays a permutation of its lump-27 list (no brush listed twice).
-        let (list, trees) = b
-            .leaf_brush_trees()
-            .unwrap_or_else(|e| panic!("{map}: {e:#}"));
-        assert_eq!(list.len(), b.leaf_brushes.len() + 1);
-        for (l, t) in b.leafs.iter().zip(&trees) {
+        // Every leaf's tree and every model's: built, and on the stock maps
+        // each leaf's run stays a permutation of its lump-27 list (no brush
+        // listed twice).
+        let (clip, _) =
+            vcod_cod2::collision::build_with_submodels(&vcod_cod2::map::clip_lumps(&b), &b.models)
+                .unwrap_or_else(|e| panic!("{map}: {e:#}"));
+        let list = &clip.leaf_brush_list;
+        assert!(list.len() > b.leaf_brushes.len());
+        for (l, c) in b.leafs.iter().zip(&clip.leafs) {
             let run =
                 l.first_leaf_brush as usize..(l.first_leaf_brush + l.leaf_brush_count) as usize;
             let mut got: Vec<u16> = list[run.clone()].to_vec();
@@ -175,11 +177,7 @@ fn stock_maps_match_the_census() {
             got.sort_unstable();
             orig.sort_unstable();
             assert_eq!(got, orig, "{map}");
-            assert_eq!(t.is_some(), l.leaf_brush_count > 0);
-        }
-        for m in 1..b.models.len() {
-            b.model_brush_tree(m)
-                .unwrap_or_else(|e| panic!("{map}: {e:#}"));
+            assert_eq!(c.brush_node != 0, l.leaf_brush_count > 0);
         }
     }
 }

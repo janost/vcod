@@ -8,6 +8,7 @@
 //! (0x809fbd6). Its collision and tags pose the turret and barrel as its
 //! controller does (0x80bab1e).
 
+use crate::game::combat::Parties;
 use std::collections::BTreeMap;
 
 use super::combat::WEAPTYPE_PROJECTILE;
@@ -1194,7 +1195,7 @@ impl Cod4Level {
     /// location multiplier applies to an entity. `Helicopter_Pain`'s jolt
     /// scales by the file's `maxBodyPitch` and `maxBodyRoll`, 0 on
     /// `cobra_mp`, so it moves nothing and is left out.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn damage_heli(
         &mut self,
         id: EntId,
@@ -1289,7 +1290,7 @@ impl Cod4Level {
             .cloned()
         else {
             if let Some(m) = s.missile {
-                self.rt.host.ents.free(m);
+                self.rt.host.free_entity(m);
             }
             return;
         };
@@ -1363,8 +1364,10 @@ impl Cod4Level {
             "MOD_PISTOL_BULLET"
         };
         self.damage_from(
-            h.owner,
-            victim,
+            Parties {
+                victim,
+                attacker: h.owner,
+            },
             Some(s.heli),
             &d,
             damage,

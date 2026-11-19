@@ -427,7 +427,7 @@ impl ScriptMenus {
         };
         let slot = menu_slot(gs, name).or(slot).unwrap_or(0);
         let layout = def.layout.clone().filter(|l| self.evaluates(&def.name, l));
-        self.push_open(&def.name, gs, out);
+        self.push_open(&def.name, gs, out, depth);
         let on_open = layout.as_ref().map(|l| l.on_open.clone());
         self.open = Some(OpenMenu {
             name: def.name.clone(),
@@ -456,8 +456,8 @@ impl ScriptMenus {
     /// `Menus_Open` on a stack: the open menu loses the focus (its focused
     /// item's `leaveFocus`) and goes under the one opening, which leaves
     /// the stack first if it was on it (`Menus_AddToStack`).
-    fn push_open(&mut self, name: &str, gs: &Gamestate, out: &mut Vec<String>) {
-        self.clear_focus(gs, out);
+    fn push_open(&mut self, name: &str, gs: &Gamestate, out: &mut Vec<String>, depth: u32) {
+        self.clear_focus(gs, out, depth);
         self.below.retain(|o| !o.name.eq_ignore_ascii_case(name));
         if let Some(cur) = self.open.take()
             && !cur.name.eq_ignore_ascii_case(name)
@@ -648,7 +648,7 @@ impl ScriptMenus {
         for _ in 0..n {
             i = (i + if next { 1 } else { -1 }).rem_euclid(n);
             if self.can_focus(&layout.items[i as usize]) {
-                self.set_focus(i as usize, gs, out);
+                self.set_focus(i as usize, gs, out, 0);
                 return;
             }
         }
@@ -674,14 +674,17 @@ impl ScriptMenus {
 
     /// `Item_SetFocus`: the old focus's `leaveFocus` (`Menu_ClearFocus`),
     /// then item `i`'s `onFocus`.
-    fn set_focus(&mut self, i: usize, gs: &Gamestate, out: &mut Vec<String>) {
+    fn set_focus(&mut self, i: usize, gs: &Gamestate, out: &mut Vec<String>, depth: u32) {
+        if depth > MAX_DEPTH {
+            return;
+        }
         let Some(open) = &self.open else {
             return;
         };
         if open.focus == Some(i) {
             return;
         }
-        self.clear_focus(gs, out);
+        self.clear_focus(gs, out, depth);
         let Some(open) = &mut self.open else {
             return;
         };
@@ -693,11 +696,14 @@ impl ScriptMenus {
             .and_then(|l| l.items.get(i))
             .map(|it| it.on_focus.clone())
             .unwrap_or_default();
-        self.run(&name, Some(i), &cmds, gs, out, 0);
+        self.run(&name, Some(i), &cmds, gs, out, depth);
     }
 
     /// `Menu_ClearFocus`: the focused item's `leaveFocus`.
-    fn clear_focus(&mut self, gs: &Gamestate, out: &mut Vec<String>) {
+    fn clear_focus(&mut self, gs: &Gamestate, out: &mut Vec<String>, depth: u32) {
+        if depth > MAX_DEPTH {
+            return;
+        }
         let Some(open) = &mut self.open else {
             return;
         };
@@ -711,7 +717,7 @@ impl ScriptMenus {
             .and_then(|l| l.items.get(old))
             .map(|it| it.leave_focus.clone())
             .unwrap_or_default();
-        self.run(&name, Some(old), &cmds, gs, out, 0);
+        self.run(&name, Some(old), &cmds, gs, out, depth);
     }
 
     /// Item `i` of the open menu, with that menu's name and the item's
@@ -805,7 +811,7 @@ impl ScriptMenus {
                     self.run(&name, Some(i), &it.mouse_enter, gs, out, 0);
                 }
                 if !focus_set && self.can_focus(it) {
-                    self.set_focus(i, gs, out);
+                    self.set_focus(i, gs, out, 0);
                     focus_set = true;
                 }
             } else if over {
@@ -819,7 +825,7 @@ impl ScriptMenus {
             && let Some(it) = layout.items.get(f)
             && !contains(placed(&sp, self.rect(it, &layout)), c)
         {
-            self.clear_focus(gs, out);
+            self.clear_focus(gs, out, 0);
         }
     }
 
@@ -940,7 +946,7 @@ impl ScriptMenus {
                                 .as_ref()
                                 .is_some_and(|o| o.name.eq_ignore_ascii_case(menu)) =>
                         {
-                            self.set_focus(i, gs, out);
+                            self.set_focus(i, gs, out, depth + 1);
                             self.begin_edit(i);
                         }
                         _ => log::debug!("cod4 menu {menu}: setFocus {name}: no such item"),
@@ -994,6 +1000,13 @@ impl ScriptMenus {
     /// console's `updategamerprofile`, which 1.7's PC build does not
     /// register) is not run.
     fn exec(&mut self, line: &str) {
+        self.exec_at(line, 0);
+    }
+
+    /// [`Self::exec`] inside `depth` nested menu cfgs.
+    fn exec_at(&mut self, line: &str, depth: u32) {
+        // A script token keeps a newline; the console would run what follows.
+        let line = line.split(['\r', '\n']).next().unwrap_or("");
         for part in line.split(';') {
             let w: Vec<&str> = part.split_whitespace().collect();
             match w.as_slice() {
@@ -1061,7 +1074,10 @@ impl ScriptMenus {
                 {
                     let text = self.cfgs.get(&file.to_ascii_lowercase()).cloned();
                     match text {
-                        Some(t) => t.lines().for_each(|l| self.exec(l)),
+                        _ if depth >= MAX_DEPTH => {
+                            log::warn!("cod4 menu exec {file}: nested too deep")
+                        }
+                        Some(t) => t.lines().for_each(|l| self.exec_at(l, depth + 1)),
                         None => log::debug!("cod4 menu exec {file}: not in the iwds"),
                     }
                 }
@@ -1193,7 +1209,6 @@ pub(crate) fn contains(r: [f32; 4], p: [f32; 2]) -> bool {
     p[0] > r[0] && p[0] < r[0] + r[2] && p[1] > r[1] && p[1] < r[1] + r[3]
 }
 
-/// What the expressions read.
 /// An item's `action` held across its key (`ScriptMenus::action_of`).
 struct Action {
     menu: String,
@@ -1201,6 +1216,7 @@ struct Action {
     cmds: Vec<Cmd>,
 }
 
+/// What the expressions read.
 struct Ctx<'a>(&'a ScriptMenus);
 
 impl Env for Ctx<'_> {
@@ -1338,6 +1354,7 @@ pub fn label(response: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::console::shell::{Effect, Shell};
 
     fn gamestate() -> Gamestate {
         let mut gs = Gamestate::default();
@@ -1394,5 +1411,90 @@ mod tests {
             .collect();
         assert_eq!(read, [190, 1, 0, 0, 0]);
         assert_eq!(Stats::fresh().get(3000), Some(9));
+    }
+
+    /// The console lines the menus ran, through the client's shell.
+    fn console_effects(m: &mut ScriptMenus, shell: &mut Shell) -> Vec<Effect> {
+        m.take_console()
+            .iter()
+            .flat_map(|l| shell.execute(l))
+            .collect()
+    }
+
+    /// A server-sent name holding a quote and `;` stays one forwarded
+    /// `callvote`.
+    #[test]
+    fn cod4_a_kicked_players_name_runs_no_command_of_its_own() {
+        let mut m = ScriptMenus::front_end();
+        m.host.players = vec![(3, "\";quit;".into())];
+        m.player_index = Some(0);
+        m.ui_script("votekick", &[], &gamestate());
+        let mut shell = Shell::new();
+        let effects = console_effects(&mut m, &mut shell);
+        assert_eq!(
+            effects,
+            [Effect::Unknown {
+                word: "callvote".into(),
+                line: "callvote kick \";quit;\"".into(),
+            }]
+        );
+    }
+
+    /// A menu `exec`'s newline ends it: nothing after it is forwarded or run.
+    #[test]
+    fn cod4_a_menu_exec_stops_at_its_newline() {
+        let mut m = ScriptMenus::front_end();
+        m.exec("cmd x\nrecord /abs/p");
+        m.exec("cmd y\r\ncmd z; quit");
+        assert_eq!(m.take_console(), ["cmd x", "cmd y"]);
+    }
+
+    /// Two items whose `onFocus` focus each other, and a menu cfg that
+    /// execs itself, both end (a hostile mod's menus).
+    #[test]
+    fn cod4_focus_ping_pong_and_a_self_exec_end() {
+        let item = |name: &str, other: &str| LayoutItem {
+            name: name.into(),
+            kind: 1,
+            on_focus: vec![Cmd::SetFocus(other.into())],
+            ..LayoutItem::default()
+        };
+        let menu = ScriptMenu {
+            name: "loop".into(),
+            layout: Some(Layout {
+                on_open: vec![Cmd::SetFocus("a".into())],
+                items: vec![item("a", "b"), item("b", "a")],
+                ..Layout::default()
+            }),
+            ..ScriptMenu::default()
+        };
+        let mut m = ScriptMenus::front_end();
+        m.set_defs(HashMap::from([("loop".into(), menu)]), HashMap::new());
+        m.open_by_name("loop", &gamestate());
+        assert_eq!(m.open().map(|o| o.name.as_str()), Some("loop"));
+
+        m.cfgs.insert(
+            "options_graphics.cfg".into(),
+            "set ui_loop 1\nexec options_graphics.cfg".into(),
+        );
+        m.exec("exec options_graphics.cfg");
+        assert_eq!(m.dvar("ui_loop").as_deref(), Some("1"));
+    }
+
+    /// A `setdvar` value holding a newline sets the one cvar and runs
+    /// nothing else.
+    #[test]
+    fn cod4_a_setdvar_newline_sets_one_cvar() {
+        let mut m = ScriptMenus::front_end();
+        m.set_dvar("sensitivity", "5\nquit");
+        let mut shell = Shell::new();
+        let effects = console_effects(&mut m, &mut shell);
+        assert!(
+            effects
+                .iter()
+                .all(|e| matches!(e, Effect::Print(_) | Effect::SaveConfig)),
+            "{effects:?}"
+        );
+        assert_eq!(shell.cvar("sensitivity"), Some("5quit"));
     }
 }

@@ -44,8 +44,10 @@ use std::sync::Arc;
 use glam::Vec3;
 use vcod_cod2::net::UserCmd2;
 use vcod_cod2::pmove::{button, pm_type, pmf};
-use vcod_common::net::msg::{self, UserCmd};
+use vcod_common::net::msg::UserCmd;
 
+use super::bridge::eye;
+use super::game_bots::{GameBots, OwnBots};
 use super::{Bot, BotView, EnemyView, WeaponMenu};
 use crate::game::cod2::Cod2Level;
 use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
@@ -87,16 +89,6 @@ impl Cod2Walk {
     }
 }
 
-/// The CoD2 body a walk carries between cmds ([`Cod2Walk`]), the cmd before
-/// it, and where it left the walk's CoD1 body.
-#[derive(Clone)]
-struct WalkBody {
-    ps: vcod_cod2::pmove::PlayerState,
-    old: UserCmd2,
-    origin: Vec3,
-    velocity: Vec3,
-}
-
 impl crate::nav::WalkStep for Cod2Walk {
     fn step(
         &self,
@@ -109,126 +101,38 @@ impl crate::nav::WalkStep for Cod2Walk {
         weapons: &[Option<vcod_common::weapon::WeaponDef>],
     ) {
         use vcod_common::movetrace::MoveWorld;
-        // The walk's own CoD1 body is the truth when it moved it since.
-        let mut body = carry
-            .take()
-            .and_then(|c| c.downcast::<WalkBody>().ok())
-            .map(Arc::unwrap_or_clone)
-            .filter(|b| b.origin == ps.origin && b.velocity == ps.velocity)
-            .unwrap_or_else(|| WalkBody {
-                ps: cod2_walk_body(ps, from_ms),
-                old: UserCmd2::default(),
-                origin: ps.origin,
-                velocity: ps.velocity,
-            });
-        body.ps.delta_angles = *delta;
         let cmd2 = to_cmd2(cmd);
         let scale = weapons
             .get(ps.weapon as usize)
             .and_then(Option::as_ref)
             .map_or(1.0, |d| d.move_speed_scale);
-        let mw = MoveWorld::bare(world);
-        vcod_cod2::pmove::player_step(&mut body.ps, &cmd2, &mut body.old, mw, self.rules, scale);
-        *delta = body.ps.delta_angles;
-        read_walk_body(&body.ps, ps, cmd2.buttons & button::JUMP != 0, world);
-        body.origin = ps.origin;
-        body.velocity = ps.velocity;
-        *carry = Some(Arc::new(body));
+        super::bridge::walk_cmd(
+            ps,
+            carry,
+            from_ms,
+            |b: &mut vcod_cod2::pmove::PlayerState, old: &mut UserCmd2| {
+                // CoD2 keeps `delta_angles` as shorts, the walk's own.
+                b.delta_angles = *delta;
+                let mw = MoveWorld::bare(world);
+                vcod_cod2::pmove::player_step(b, &cmd2, old, mw, self.rules, scale);
+                *delta = b.delta_angles;
+                cmd2.buttons & button::JUMP != 0
+            },
+            // CoD2's slope test traces the stance's box over the level's
+            // world, as its pmove does.
+            |b, from, to| {
+                let (mins, maxs) = b.stance_box();
+                let mask = vcod_cod2::pmove::MASK_PLAYERSOLID;
+                MoveWorld::bare(world)
+                    .box_trace(from, to, mins, maxs, mask)
+                    .into()
+            },
+        );
     }
 
     fn key(&self) -> String {
         self.key.clone()
     }
-}
-
-/// A walk's first CoD2 body off its CoD1 one, its clock at `time`: moving
-/// as the CoD1 body moves (`old_velocity` its pace, as a body that has run
-/// so for a while), its last jump `since_jump_ms` back.
-fn cod2_walk_body(
-    ps: &vcod_common::pmove::PlayerState,
-    time: i32,
-) -> vcod_cod2::pmove::PlayerState {
-    use vcod_cod2::pmove::{ENTITYNUM_NONE, VIEW_CROUCH, VIEW_PRONE};
-    use vcod_common::pmove::Stance;
-    let mut b = vcod_cod2::pmove::PlayerState::spawn(ps.origin, ps.yaw.to_degrees(), time);
-    b.view_angles[0] = ps.pitch.to_degrees();
-    b.velocity = ps.velocity;
-    b.old_velocity = [ps.velocity.x, ps.velocity.y];
-    b.speed = ps.speed as i32;
-    b.gravity = ps.gravity as i32;
-    b.ground_entity_num = if ps.on_ground {
-        ps.ground_entity as i32
-    } else {
-        ENTITYNUM_NONE
-    };
-    if ps.on_ladder {
-        b.pm_flags |= pmf::LADDER;
-        b.ladder_vec = ps.ladder_normal;
-    }
-    let view = match ps.stance {
-        Stance::Stand => None,
-        Stance::Crouch => Some((pmf::DUCKED, VIEW_CROUCH)),
-        Stance::Prone => Some((pmf::PRONE, VIEW_PRONE)),
-    };
-    if let Some((flag, height)) = view {
-        b.pm_flags |= flag;
-        b.view_height_target = height;
-        b.view_height_current = height as f32;
-    }
-    // `Jump_Check` refuses a jump inside 500 ms of `jumpTime`.
-    b.jump_time = time - ps.since_jump_ms.min(10_000.0) as i32;
-    b.jump_origin_z = ps.jump_origin_z;
-    if ps.jump_penalty {
-        b.pm_flags |= pmf::JUMPING;
-        b.pm_time = ps.knockback_ms as i32;
-    }
-    b
-}
-
-/// What the walk reads off the CoD2 body `b` into its CoD1 body `ps`; a
-/// body off the ground over ground too steep to stand on reads sliding.
-fn read_walk_body(
-    b: &vcod_cod2::pmove::PlayerState,
-    ps: &mut vcod_common::pmove::PlayerState,
-    jump_held: bool,
-    world: &vcod_common::collision::CollisionWorld,
-) {
-    use vcod_common::pmove::Stance;
-    ps.origin = b.origin;
-    ps.velocity = b.velocity;
-    ps.yaw = b.view_angles[1].to_radians();
-    ps.pitch = b.view_angles[0].to_radians();
-    ps.on_ground = b.on_ground();
-    if ps.on_ground {
-        ps.ground_entity = b.ground_entity_num as u32;
-    }
-    ps.on_ladder = b.pm_flags & pmf::LADDER != 0;
-    ps.ladder_normal = b.ladder_vec;
-    ps.stance = match b.effective_stance() {
-        vcod_cod2::pmove::Stance::Stand => Stance::Stand,
-        vcod_cod2::pmove::Stance::Crouch => Stance::Crouch,
-        vcod_cod2::pmove::Stance::Prone => Stance::Prone,
-    };
-    ps.ducked = b.pm_flags & (pmf::DUCKED | pmf::PRONE) != 0;
-    ps.since_jump_ms = (b.command_time - b.jump_time).max(0) as f32;
-    ps.jump_penalty = b.pm_flags & pmf::JUMPING != 0;
-    ps.knockback_ms = b.pm_time as f32;
-    ps.jump_origin_z = b.jump_origin_z;
-    ps.jump_latched = jump_held;
-    let plane = if ps.on_ground {
-        Some(Vec3::Z)
-    } else {
-        let (mins, maxs) = b.stance_box();
-        let t = vcod_common::movetrace::MoveWorld::bare(world).box_trace(
-            b.origin,
-            b.origin - Vec3::Z * 0.25,
-            mins,
-            maxs,
-            vcod_cod2::pmove::MASK_PLAYERSOLID,
-        );
-        (!t.startsolid && t.fraction < 1.0).then_some(t.normal)
-    };
-    ps.set_ground_plane(plane);
 }
 
 /// CoD2's stock weapon menus (`weapon_<nationality>`), each weapon with
@@ -318,18 +222,13 @@ const SMOKE_TICKS: u32 = 60;
 /// comes up.
 const SMOKE_AIMED_DEG: f32 = 2.0;
 
-/// The CoD2 server's bots: the shared driver's state ([`Self::driver`])
-/// and what CoD2's hooks keep beside it (the throws, guns, hits heard and
-/// smoke).
-pub struct Cod2Bots {
-    /// The brains, the graph and what the shared driver keeps per bot.
-    pub(crate) driver: super::driver::BotDriver,
-    shoot: bool,
-    /// The management's state (`crate::server::bot_admin`), shared with
-    /// CoD1's.
-    pub admin: crate::server::bot_admin::Ledger,
-    /// The `vc_bot_shoot` and `vc_bot_skill` values last applied.
-    pub applied: Option<(bool, u8)>,
+/// The CoD2 server's bots: the shared state ([`GameBots`]) and what
+/// CoD2's hooks keep beside it ([`Cod2Own`]).
+pub type Cod2Bots = GameBots<Cod2Own>;
+
+/// What CoD2's hooks keep beside the shared bot state: the throws, guns,
+/// hits heard and smoke.
+pub struct Cod2Own {
     /// Whether bots man the mounted guns ([`gun`]); `bot_match`'s
     /// `GUNS=0` turns it off for a before and after.
     pub man_guns: bool,
@@ -354,7 +253,7 @@ pub struct Cod2Bots {
     smokes: u32,
     /// Each bot's `damageEvent` last read and the hit it reported: the
     /// attacker, the level time read, the direction it came along.
-    hits: HashMap<usize, (i32, Option<HitFelt>)>,
+    hits: HashMap<usize, (i32, Option<super::HitFelt>)>,
     /// Every client's `eventSequence` last read, and the gunfire and blasts
     /// of the frame since the last tick.
     heard: HashMap<usize, i32>,
@@ -367,12 +266,8 @@ pub struct Cod2Bots {
     pass: Pass,
 }
 
-/// A hit a bot felt: the attacker, the level time, the direction.
-type HitFelt = (usize, i32, [f32; 3]);
-
 /// A smoke grenade on its way out: the throw's (pitch, yaw), the smoke
-/// weapon, whether the pullback has reached the hold, and the ticks
-/// since the ask.
+/// weapon and the ticks since the ask.
 #[derive(Clone, Copy, Debug)]
 pub struct SmokeThrow {
     aim: [f32; 2],
@@ -407,16 +302,9 @@ enum Objectives {
     Uo(crate::game::script::UoObjectives),
 }
 
-impl Cod2Bots {
-    pub fn new(shoot: bool) -> Cod2Bots {
-        Cod2Bots {
-            driver: super::driver::BotDriver {
-                nav_background: true,
-                ..Default::default()
-            },
-            shoot,
-            admin: Default::default(),
-            applied: None,
+impl OwnBots for Cod2Own {
+    fn new() -> Self {
+        Cod2Own {
             man_guns: true,
             throwing: HashMap::new(),
             mantling: HashMap::new(),
@@ -436,68 +324,21 @@ impl Cod2Bots {
         }
     }
 
-    /// A brain for the client in `slot`, answering the team menu with
-    /// `team` (`autoassign`, `allies` or `axis`).
-    pub fn add(&mut self, slot: usize, name: &str, team: &str, seed: u64) {
-        let mut bot = Bot::new(team, self.shoot, seed);
-        bot.name = name.to_string();
+    fn dress(bot: &mut Bot) {
         bot.menus = &WEAPON_MENUS_COD2;
-        self.driver.bots.insert(slot, bot);
     }
 
-    /// A new level under the bots (`map`, `map_restart`, `fast_restart`,
-    /// `map_rotate`): every brain forgets the menus it answered, as the
-    /// level reopens them under the same indices (CoD1's `Bot::rearm` on a
-    /// gamestate), and what the old level left (paths, enemies, hits,
-    /// heard events, guns, smoke) is dropped. `new_map` drops the graph
-    /// too, for the next tick to build the new map's.
-    pub fn new_level(&mut self, new_map: bool) {
-        let mut fresh = Cod2Bots::new(self.shoot);
-        fresh.admin = std::mem::take(&mut self.admin);
-        fresh.applied = self.applied;
-        fresh.driver.nav_background = self.driver.nav_background;
-        fresh.man_guns = self.man_guns;
-        fresh.smokes = self.smokes;
-        // `bot_match`'s cue counts run over the whole match.
-        fresh.driver.posts.tally = self.driver.posts.tally;
-        if !new_map {
-            fresh.driver.nav_job = self.driver.nav_job.take();
-            fresh.driver.nav = self.driver.nav.take();
-            fresh.driver.creases = std::mem::take(&mut self.driver.creases);
-            fresh.driver.sites = std::mem::take(&mut self.driver.sites);
-            fresh.driver.radios = std::mem::take(&mut self.driver.radios);
-        }
-        fresh.driver.bots = std::mem::take(&mut self.driver.bots);
-        for bot in fresh.driver.bots.values_mut() {
-            bot.rearm();
-        }
-        *self = fresh;
+    /// The hits, heard events, guns and smoke of the old level go; the
+    /// smoke count and `GUNS=0` stay for the match.
+    fn new_level(&mut self, _: bool) {
+        *self = Cod2Own {
+            man_guns: self.man_guns,
+            smokes: self.smokes,
+            ..Cod2Own::new()
+        };
     }
 
-    /// Whether new bots fight, and `vc_bot_shoot`'s change for every bot.
-    pub fn set_shoot(&mut self, shoot: bool) {
-        self.shoot = shoot;
-        for b in self.driver.bots.values_mut() {
-            b.set_shoot(shoot);
-        }
-    }
-
-    pub fn shoots(&self) -> bool {
-        self.shoot
-    }
-
-    /// Smoke grenades the bots threw this game (`bot_match`).
-    pub fn smokes(&self) -> u32 {
-        self.smokes
-    }
-
-    pub fn remove(&mut self, slot: usize) {
-        self.admin.pinned.remove(&slot);
-        self.admin.skills.remove(&slot);
-        self.driver.bots.remove(&slot);
-        self.driver.paths.remove(&slot);
-        self.driver.enemies.remove(&slot);
-        self.driver.hunts.remove(&slot);
+    fn forget(&mut self, slot: usize) {
         self.throwing.remove(&slot);
         self.mantling.remove(&slot);
         self.crouched.remove(&slot);
@@ -506,35 +347,16 @@ impl Cod2Bots {
         self.fetches.remove(&slot);
         self.last_views.remove(&slot);
         self.hits.remove(&slot);
-        self.driver.covers.remove(&slot);
         self.heard.remove(&slot);
         self.smoking.remove(&slot);
         self.retreats.remove(&slot);
     }
+}
 
-    /// The brains, by slot.
-    pub fn bots(&self) -> &BTreeMap<usize, Bot> {
-        &self.driver.bots
-    }
-
-    pub fn bots_mut(&mut self) -> &mut BTreeMap<usize, Bot> {
-        &mut self.driver.bots
-    }
-
-    /// `bot_match`'s cue counts (`Server::bot_cue_tally`).
-    pub fn cue_tally(&self) -> [(u32, u32, u64); 2] {
-        self.driver.posts.cue_tally()
-    }
-
-    /// Block the tick on the graph's build rather than let the bots wander
-    /// until it lands: the in-process measuring runs set it.
-    pub fn wait_for_graph(&mut self) {
-        self.driver.nav_background = false;
-    }
-
-    /// The graph once its build has landed.
-    pub fn graph(&self) -> Option<&Arc<NavGraph>> {
-        self.driver.nav.as_ref()
+impl Cod2Bots {
+    /// Smoke grenades the bots threw this game (`bot_match`).
+    pub fn smokes(&self) -> u32 {
+        self.own.smokes
     }
 
     /// The graph's build under CoD2's movement and mantle probe, polled
@@ -559,13 +381,13 @@ impl Cod2Bots {
     /// [`Self::read_commands`]; the weapon spread reads every bot's pick as
     /// it stood here.
     pub(crate) fn inbox(&mut self, inbox: BTreeMap<usize, Vec<String>>) {
-        self.pass.loadouts = self
+        self.own.pass.loadouts = self
             .driver
             .bots
             .iter()
             .filter_map(|(s, b)| Some((*s, b.loadout()?.1)))
             .collect();
-        self.pass.inbox = inbox;
+        self.own.pass.inbox = inbox;
     }
 
     /// The `t` menus the bot in `slot` was sent, named off their
@@ -587,13 +409,13 @@ impl Cod2Bots {
         let allowed = |name: &str| {
             crate::game::builtins::cvar::atof(cvars.get(name)) != 0.0 || name.is_empty()
         };
-        let Some(texts) = self.pass.inbox.get(&slot) else {
+        let Some(texts) = self.own.pass.inbox.get(&slot) else {
             return;
         };
         let Some(bot) = self.driver.bots.get_mut(&slot) else {
             return;
         };
-        let loadouts = &mut self.pass.loadouts;
+        let loadouts = &mut self.own.pass.loadouts;
         let mut named: Vec<(i32, String)> = Vec::new();
         for (seq, text) in texts.iter().enumerate() {
             let menu = text
@@ -655,24 +477,24 @@ impl Cod2Bots {
             _ => None,
         };
         // The guns only where no objective deals out roles.
-        self.pass.guns = if objectives.is_none() && self.man_guns {
+        self.own.pass.guns = if objectives.is_none() && self.own.man_guns {
             level.gun_list()
         } else {
             Vec::new()
         };
-        self.pass.now = level.level_time();
-        self.pass.dm = gametype == "dm";
+        self.own.pass.now = level.level_time();
+        self.own.pass.dm = gametype == "dm";
         Cod2Frame(objectives)
     }
 
     /// The hit the bot in `slot` felt this tick ([`Self::hurt`]).
     pub(crate) fn feel(&mut self, level: &Cod2Level, slot: usize) {
-        let hurt = self.hurt(level, slot, self.pass.now);
-        self.pass.felt = Some((slot, hurt));
+        let hurt = self.hurt(level, slot, self.own.pass.now);
+        self.own.pass.felt = Some((slot, hurt));
     }
 
     fn felt(&self, slot: usize) -> Option<super::Hurt> {
-        self.pass.felt.filter(|f| f.0 == slot).and_then(|f| f.1)
+        self.own.pass.felt.filter(|f| f.0 == slot).and_then(|f| f.1)
     }
 
     /// The enemy the bot in `slot` fights, the one that just hit it seen
@@ -680,7 +502,14 @@ impl Cod2Bots {
     pub(crate) fn sight(&self, level: &Cod2Level, slot: usize, teams: &[i32]) -> Option<EnemyView> {
         let aware = self.driver.bots.get(&slot).is_none_or(|b| b.aware);
         let attacker = self.felt(slot).map(|h| h.slot).filter(|_| aware);
-        self.enemy(level, slot, teams, self.pass.dm, attacker, self.pass.now)
+        self.enemy(
+            level,
+            slot,
+            teams,
+            self.own.pass.dm,
+            attacker,
+            self.own.pass.now,
+        )
     }
 
     /// [`Self::view`] with the hit felt.
@@ -724,12 +553,12 @@ impl Cod2Bots {
         if smoke.is_some() {
             view.grenade = None;
         }
-        self.pass.smoke = smoke.map(|t| (slot, t));
+        self.own.pass.smoke = smoke.map(|t| (slot, t));
     }
 
     /// The bots following a mantle edge (`BotWorld::routed`).
     pub(crate) fn routed(&mut self, slot: usize, follower: &crate::nav::Follower, g: &NavGraph) {
-        self.mantling.insert(slot, follower.mantling(g));
+        self.own.mantling.insert(slot, follower.mantling(g));
     }
 
     /// The walk to a gun, else to a dropped one, over the route's waypoint.
@@ -740,22 +569,26 @@ impl Cod2Bots {
         view: &mut BotView,
         teams: &[i32],
     ) {
-        let guns = std::mem::take(&mut self.pass.guns);
-        let gun_step = self.gun_step(level, slot, view, &guns, teams, self.pass.dm);
-        self.pass.guns = guns;
+        let guns = std::mem::take(&mut self.own.pass.guns);
+        let gun_step = self.gun_step(level, slot, view, &guns, teams, self.own.pass.dm);
+        self.own.pass.guns = guns;
         let fetch_step = if gun_step.is_none() {
             self.fetch_step(level, slot, view)
         } else {
             None
         };
         let fetching = self.fetching(slot);
-        self.pass.steps = Some((slot, gun_step, fetch_step, fetching));
+        self.own.pass.steps = Some((slot, gun_step, fetch_step, fetching));
     }
 
     /// A dry bot on its way to a gun lying near holds off the brain's
     /// respawn.
     pub(crate) fn keeps_alive(&self, slot: usize) -> bool {
-        self.pass.steps.as_ref().is_some_and(|s| s.0 == slot && s.3)
+        self.own
+            .pass
+            .steps
+            .as_ref()
+            .is_some_and(|s| s.0 == slot && s.3)
     }
 
     /// The brain's `cmd` in CoD2's bits, with the frag, the smoke, the
@@ -770,15 +603,21 @@ impl Cod2Bots {
     ) -> Option<Vec<UserCmd2>> {
         let turn_deg = self.driver.bots.get(&slot)?.skill.turn_deg;
         let p = level.players[slot].as_ref()?;
-        let smoke = self.pass.smoke.take().filter(|s| s.0 == slot).map(|s| s.1);
-        let (gun_step, fetch_step) = match self.pass.steps.take() {
+        let smoke = self
+            .own
+            .pass
+            .smoke
+            .take()
+            .filter(|s| s.0 == slot)
+            .map(|s| s.1);
+        let (gun_step, fetch_step) = match self.own.pass.steps.take() {
             Some((s, g, f, _)) if s == slot => (g, f),
             _ => (None, None),
         };
-        let throwing = self.throwing.remove(&slot);
+        let throwing = self.own.throwing.remove(&slot);
         let (mut c2, armed) = offhand_cmd(&cmd, view.grenade, p.ws.weapon, throwing);
         if let Some(armed) = armed {
-            self.throwing.insert(slot, armed);
+            self.own.throwing.insert(slot, armed);
         }
         if let Some(t) = smoke {
             self.smoke_cmd(slot, t, view, p, &mut c2);
@@ -786,7 +625,7 @@ impl Cod2Bots {
         // A mantle edge: on to the ledge with the jump key once pmove
         // offers the climb (`Mantle_CheckLedge`'s hint); a jump short
         // of it would leave the ground and lose the hint.
-        if self.mantling.get(&slot).copied().unwrap_or(false) {
+        if self.own.mantling.get(&slot).copied().unwrap_or(false) {
             c2.buttons &= !button::JUMP;
             if p.ps.mantle.flags & vcod_cod2::pmove::mantle::flag::HINT != 0 {
                 c2.buttons |= button::JUMP;
@@ -815,11 +654,12 @@ impl Cod2Bots {
         if hold_breath(breath, sighted && view.enemy.is_some()) {
             c2.buttons |= vcod_cod2::pmove::weapon::key::HOLD_BREATH;
         }
-        self.last_views
+        self.own
+            .last_views
             .insert(slot, [p.ps.view_angles[0], p.ps.view_angles[1]]);
         let climbing = view.on_ladder && !view.on_ground;
         Some(
-            crate::nav::tick_times(self.pass.now, climbing)
+            crate::nav::tick_times(self.own.pass.now, climbing)
                 .map(|t| UserCmd2 {
                     server_time: t,
                     ..c2
@@ -848,21 +688,21 @@ impl Cod2Bots {
             return false;
         };
         let seq = ps.event_sequence;
-        let from = self.stance_seq.insert(slot, seq).unwrap_or(seq);
+        let from = self.own.stance_seq.insert(slot, seq).unwrap_or(seq);
         if ps.pm_type != pm_type::NORMAL {
-            self.crouched.remove(&slot);
+            self.own.crouched.remove(&slot);
             return false;
         }
         match forced_stance(ps, from) {
             Some(true) => {
-                self.crouched.insert(slot);
+                self.own.crouched.insert(slot);
             }
             Some(false) => {
-                self.crouched.remove(&slot);
+                self.own.crouched.remove(&slot);
             }
             None => {}
         }
-        if self.crouched.contains(&slot)
+        if self.own.crouched.contains(&slot)
             && ps.on_ground()
             && !vcod_common::movetrace::MoveWorld::bare(&level.world.collision)
                 .box_trace(
@@ -874,15 +714,15 @@ impl Cod2Bots {
                 )
                 .startsolid
         {
-            self.crouched.remove(&slot);
+            self.own.crouched.remove(&slot);
         }
-        self.crouched.contains(&slot)
+        self.own.crouched.contains(&slot)
     }
 
     /// The tick's end: the missiles burst since now are the next tick's.
     pub(crate) fn tick_done(&mut self) {
-        self.last_tick = self.pass.now;
-        self.pass = Pass::default();
+        self.own.last_tick = self.own.pass.now;
+        self.own.pass = Pass::default();
     }
 
     /// The S&D view off `sd.gsc`'s state, as the CoD1 driver deals it
@@ -1080,67 +920,44 @@ impl Cod2Bots {
         attacker: Option<usize>,
         now: i32,
     ) -> Option<EnemyView> {
-        if !self.shoot || !playing(level, slot) {
+        if !self.shoots() || !playing(level, slot) {
             return None;
         }
         let me = level.players[slot].as_ref()?;
-        let bot = self.driver.bots.get(&slot);
         let mine = teams.get(slot).copied().unwrap_or(0);
-        let tracked = bot
-            .and_then(|b| b.target_slot())
-            .filter(|_| bot.is_none_or(|b| b.aware));
-        let fov = bot.map_or(super::Skill::default().fov_deg, |b| b.skill.fov_deg);
+        let (tracked, fov) = super::tracked_and_fov(self.driver.bots.get(&slot));
         let my_eye = eye(&me.ps);
-        let mut candidates: Vec<(f32, Vec3, EnemyView)> = Vec::new();
-        for (i, p) in level.players.iter().enumerate() {
-            let Some(p) = p.as_ref().filter(|_| i != slot && playing(level, i)) else {
-                continue;
-            };
-            let theirs = teams.get(i).copied().unwrap_or(0);
-            let foe = dm
-                || !(mine == TEAM_AXIS || mine == TEAM_ALLIES)
-                || (theirs != mine && (theirs == TEAM_AXIS || theirs == TEAM_ALLIES));
-            if !foe {
-                continue;
-            }
-            let d = super::dist_sq(me.ps.origin.into(), p.ps.origin.into());
-            if d > super::SHOOT_RANGE * super::SHOOT_RANGE {
-                continue;
-            }
-            let chest = super::chest(p.ps.origin.into(), p.ps.view_height_current);
-            let known = Some(i) == tracked || Some(i) == attacker;
-            if !known && !super::in_sight_cone(my_eye, me.ps.view_angles, chest.into(), fov) {
-                continue;
-            }
-            candidates.push((
-                d,
-                eye(&p.ps),
-                EnemyView {
-                    slot: i,
-                    origin: chest,
-                    velocity: p.ps.velocity.into(),
-                },
-            ));
-        }
-        candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let w = &level.world.collision;
-        let sighted = |i: usize| {
-            let (_, their_eye, e) = &candidates[i];
-            let clear = |to: [f32; 3]| {
-                w.shot_trace(my_eye, to.into()).fraction >= 1.0
-                    && !self.smoked(my_eye, to.into(), now)
-            };
-            let origin = super::aim_point(e.origin, (*their_eye).into(), clear)?;
-            Some(EnemyView { origin, ..*e })
+        let looker = super::Looker {
+            origin: me.ps.origin,
+            eye: my_eye,
+            view: me.ps.view_angles,
+            fov,
+            tracked,
+            attacker,
         };
-        let order: Vec<(f32, usize)> = candidates.iter().map(|c| (c.0, c.2.slot)).collect();
-        super::pick_enemy(&order, attacker, tracked, sighted)
+        let foes = (level.players.iter().enumerate())
+            .filter(|&(i, _)| i != slot && playing(level, i))
+            .filter(|&(i, _)| super::foe(dm, mine, teams.get(i).copied().unwrap_or(0)))
+            .filter_map(|(i, p)| {
+                let p = p.as_ref()?;
+                Some(super::Seen {
+                    slot: i,
+                    origin: p.ps.origin,
+                    eye: eye(&p.ps),
+                    view_height: p.ps.view_height_current,
+                    velocity: p.ps.velocity.into(),
+                })
+            });
+        let w = &level.world.collision;
+        super::sight_enemy(&looker, foes, |to| {
+            w.shot_trace(my_eye, to.into()).fraction >= 1.0 && !self.smoked(my_eye, to.into(), now)
+        })
     }
 
     /// Whether the segment `a` to `b` passes through a smoke cloud thick
     /// at `now` ([`SMOKE_FORM_MS`]).
     fn smoked(&self, a: Vec3, b: Vec3, now: i32) -> bool {
-        self.clouds.iter().any(|&(at, t)| {
+        self.own.clouds.iter().any(|&(at, t)| {
             let age = now.wrapping_sub(t);
             (SMOKE_FORM_MS..SMOKE_GONE_MS).contains(&age)
                 && segment_dist(a, b, at + Vec3::Z * SMOKE_LIFT) < SMOKE_RADIUS
@@ -1159,26 +976,25 @@ impl Cod2Bots {
         let mut noises = Vec::new();
         for (i, p) in level.players.iter().enumerate() {
             let Some(p) = p.as_ref().filter(|_| playing(level, i)) else {
-                self.heard.remove(&i);
+                self.own.heard.remove(&i);
                 continue;
             };
-            let seq = p.ps.event_sequence;
-            let prev = self.heard.insert(i, seq).unwrap_or(seq);
-            let fired = (prev.max(seq - 4)..seq).any(|k| {
-                matches!(
-                    p.ps.events[(k & 3) as usize],
-                    ev::FIRE_WEAPON | ev::FIRE_WEAPON_LASTSHOT
-                )
-            });
-            if fired {
-                noises.push(super::Noise {
-                    at: super::chest(p.ps.origin.into(), p.ps.view_height_current),
-                    source: i,
-                    radius: super::HEAR_GUNFIRE,
-                });
+            let fire = [ev::FIRE_WEAPON, ev::FIRE_WEAPON_LASTSHOT];
+            if super::fired(
+                &mut self.own.heard,
+                i,
+                p.ps.event_sequence,
+                &p.ps.events,
+                &fire,
+            ) {
+                noises.push(super::gunfire(
+                    i,
+                    p.ps.origin.into(),
+                    p.ps.view_height_current,
+                ));
             }
         }
-        let since = self.last_tick;
+        let since = self.own.last_tick;
         for m in &level.combat.missiles {
             let Some(t) = m.exploded_at.filter(|&t| t.wrapping_sub(since) > 0) else {
                 continue;
@@ -1189,18 +1005,15 @@ impl Cod2Bots {
                 .get(usize::from(m.weapon))
                 .and_then(Option::as_ref);
             if def.is_some_and(|d| d.offhand_class == OFFHAND_SMOKE) {
-                self.clouds.push((m.origin, t));
+                self.own.clouds.push((m.origin, t));
             } else if let Some(owner) = m.owner
                 && def.is_some_and(|d| d.explosion_radius > 0)
             {
-                noises.push(super::Noise {
-                    at: m.origin.into(),
-                    source: owner,
-                    radius: super::HEAR_BLAST,
-                });
+                noises.push(super::blast(owner, m.origin.into()));
             }
         }
-        self.clouds
+        self.own
+            .clouds
             .retain(|&(_, t)| (0..SMOKE_GONE_MS).contains(&now.wrapping_sub(t)));
         noises
     }
@@ -1213,24 +1026,10 @@ impl Cod2Bots {
     /// driver's `bot_hurt`.
     fn hurt(&mut self, level: &Cod2Level, slot: usize, now: i32) -> Option<super::Hurt> {
         let p = level.players.get(slot)?.as_ref()?;
-        let seen = self.hits.entry(slot).or_insert((p.damage_event, None));
-        if seen.0 != p.damage_event {
-            seen.0 = p.damage_event;
-            seen.1 = p
-                .last_attacker
-                .filter(|&(_, t)| p.damage_event != 0 && (0..1000).contains(&now.wrapping_sub(t)))
-                .map(|(a, _)| (a, now, p.damage_dir().unwrap_or(Vec3::ZERO).to_array()));
-        }
-        let (a, at, dir) = seen.1?;
-        let ago_ms = now.wrapping_sub(at);
-        if !(0..super::HURT_MS).contains(&ago_ms) || !playing(level, a) {
-            return None;
-        }
-        Some(super::Hurt {
-            slot: a,
-            ago_ms,
-            dir,
-        })
+        let latch = self.own.hits.entry(slot).or_insert((p.damage_event, None));
+        let attacker = p.last_attacker.filter(|_| p.damage_event != 0);
+        let hit = super::feel_hit(latch, p.damage_event, attacker, || p.damage_dir(), now);
+        super::hurt_of(hit, now, |a| playing(level, a))
     }
 
     /// The smoke throw the bot in `slot` is under way with, or the one it
@@ -1248,17 +1047,18 @@ impl Cod2Bots {
         teams: &[i32],
     ) -> Option<SmokeThrow> {
         let retreat = self.driver.bots.get(&slot).map_or(0, |b| b.retreating());
-        let was = self.retreats.insert(slot, retreat).unwrap_or(0);
+        let was = self.own.retreats.insert(slot, retreat).unwrap_or(0);
         if !view.playing {
-            self.smoking.remove(&slot);
+            self.own.smoking.remove(&slot);
             return None;
         }
-        if let Some(t) = self.smoking.get(&slot) {
+        if let Some(t) = self.own.smoking.get(&slot) {
             return Some(*t);
         }
         let p = level.players.get(slot)?.as_ref()?;
         let e = view.enemy?;
-        if self.throwing.contains_key(&slot) || !view.on_ground || view.on_ladder || view.linked {
+        if self.own.throwing.contains_key(&slot) || !view.on_ground || view.on_ladder || view.linked
+        {
             return None;
         }
         let range = super::dist_sq(view.origin, e.origin).sqrt();
@@ -1299,7 +1099,7 @@ impl Cod2Bots {
             weapon,
             ticks: 0,
         };
-        self.smoking.insert(slot, t);
+        self.own.smoking.insert(slot, t);
         Some(t)
     }
 
@@ -1340,17 +1140,17 @@ impl Cod2Bots {
         t.ticks += 1;
         if hold && aimed {
             // The key comes up: the throw.
-            self.smoking.remove(&slot);
-            self.smokes += 1;
+            self.own.smoking.remove(&slot);
+            self.own.smokes += 1;
             return;
         }
         if t.ticks > SMOKE_TICKS {
             // Let go wherever the view is rather than hold the grenade.
-            self.smoking.remove(&slot);
+            self.own.smoking.remove(&slot);
             return;
         }
         c2.buttons |= key::SMOKE;
-        self.smoking.insert(slot, t);
+        self.own.smoking.insert(slot, t);
     }
 
     /// The body in `slot` as the brain reads it.
@@ -1401,14 +1201,15 @@ impl Cod2Bots {
         // trigger; on CoD2 the frag key does both ([`offhand_cmd`]), so
         // the frag reads as in hand from the cmd that asked for it.
         let weapon = match grenade {
-            Some(g) if self.throwing.contains_key(&slot) => g,
+            Some(g) if self.own.throwing.contains_key(&slot) => g,
             _ => ws.weapon,
         };
         let vitals = level
             .rt
             .host
-            .client_vitals
+            .clients
             .get(slot)
+            .map(|c| &c.vitals)
             .copied()
             .unwrap_or_default();
         let dead = vitals.dead || ps.pm_type >= pm_type::DEAD;
@@ -1441,10 +1242,6 @@ impl Cod2Bots {
             automatic: held.is_some_and(|d| !d.semi_auto && !d.bolt_action),
             has_ads: held.is_some_and(|d| d.aim_down_sight),
             sniper: held.is_some_and(|d| d.name.contains("sniper") || d.name.contains("scope")),
-            lmg: false,
-            deployed: false,
-            deploy_yaw: 0.0,
-            lmg_pitch_from: 0.0,
             ads_frac: ws.pos_frac,
             spread_scale: ps.aim_spread_scale,
             speed: ps.velocity.truncate().length(),
@@ -1452,31 +1249,11 @@ impl Cod2Bots {
             dead,
             playing: playing(level, slot) && !dead,
             enemy,
-            hurt: None,
-            friend_in_line: false,
-            sidestep: None,
-            cover: None,
-            hunt: None,
-            use_takes_weapon: false,
             grenade,
             grenade_cooks: grenade.and_then(def).is_some_and(|d| d.cook_off_hold),
             grenade_ready: ws.state == vcod_cod2::pmove::weapon::state::OFFHAND_HOLD,
             frag_near: frag_near(level, slot),
-            wrecks: Vec::new(),
-            fallen: Vec::new(),
-            post: None,
-            give_way: None,
-            guard_post: None,
-            lane: None,
             stand_room: true,
-            exposure: None,
-            lob: None,
-            waypoint: None,
-            hazard_ahead: [false; 8],
-            drop_ahead: [None; 8],
-            // Felt by the driver, on the ticks the brain reads it.
-            wall_ahead: [false; 8],
-            noise: None,
             linked: ps.pm_type == pm_type::NORMAL_LINKED,
             stranded: nav.is_some_and(|g| g.dead_end(origin) || g.pit(origin, &w.spawn_points)),
             on_ladder,
@@ -1486,43 +1263,18 @@ impl Cod2Bots {
                 .filter(|_| on_ladder)
                 .and_then(|g| g.ladder_middle(ps.origin))
                 .map(Into::into),
-            back_face: None,
             on_ground,
-            jump: false,
-            sliding: false,
-            leap: false,
-            lip: false,
-            crouch_jump: false,
-            stop: false,
-            mate_ahead: false,
-            squad: Default::default(),
-            run_off: false,
-            back_drop: false,
-            rungs_hold: false,
-            mantle: false,
             // `client_think` steps pmove at the held weapon's scale.
             move_scale: held
                 .map(|d| d.move_speed_scale)
                 .filter(|&m| m > 0.0)
                 .unwrap_or(1.0),
-            fatigue: None,
-            sprinting: false,
-            sprint_room: 0.0,
-            push_off: None,
-            unpin: None,
-            detour: false,
             pistol,
-            rocket: None,
             primaries: [0; 2],
-            launchers: 0,
             gun,
             reload_ms,
             draw_ms,
             loaded,
-            sd: None,
-            re: None,
-            bel: None,
-            uo: None,
             one_life: level.rt.cvars().get("g_gametype") == "sd",
             survive: super::retreat::Vitals {
                 health: vitals.health,
@@ -1532,9 +1284,7 @@ impl Cod2Bots {
                 heal: None,
                 cover: None,
             },
-            vehicles: Vec::new(),
-            seat: None,
-            armor: None,
+            ..Default::default()
         })
     }
 
@@ -1543,7 +1293,7 @@ impl Cod2Bots {
     /// spring over the view) off the view that cmd started from, the one
     /// the last tick read. The brain aims by it as by CoD1's reticle.
     fn gun_offset(&self, slot: usize, p: &crate::game::cod2::Cod2Player) -> [f32; 2] {
-        let Some(v) = self.last_views.get(&slot) else {
+        let Some(v) = self.own.last_views.get(&slot) else {
             return [0.0; 2];
         };
         let d = |a: f32, b: f32| (a - b + 180.0).rem_euclid(360.0) - 180.0;
@@ -1557,14 +1307,6 @@ impl Cod2Bots {
     }
 }
 
-/// How far ahead of a node a wall flagged for the mantle is looked for
-/// before the climb is walked: past half the graph's widest pitch.
-const MANTLE_LOOK: f32 = 64.0;
-/// The walk to the wall's ticks, and the whole probe's: the slowest
-/// mantle (`mp_mantle_up_57` and `_over_high`) runs under 1.5 s.
-const MANTLE_WALK_TICKS: usize = 20;
-const MANTLE_TICKS: usize = 70;
-
 /// The graph's mantle probe ([`crate::nav::MantleProbe`]) under the
 /// level's CoD2 movement `rules`: [`mantle_walk`].
 pub fn mantle_probe(rules: vcod_cod2::pmove::Rules) -> crate::nav::MantleProbe {
@@ -1576,66 +1318,42 @@ pub fn mantle_probe(rules: vcod_cod2::pmove::Rules) -> crate::nav::MantleProbe {
 }
 
 /// Where a CoD2 body standing at `from` and run at the wall along `yaw`
-/// stands once it mantles (cod2-movement.md 9): only off a wall flagged
-/// `MANTLE_ON` or `MANTLE_OVER` within [`MANTLE_LOOK`]; the body walks at
-/// it, presses the jump key on the first step pmove offers the climb
-/// (`Mantle_CheckLedge`'s hint), as a bot does, and the climb's end on the
-/// ground is the answer.
+/// stands once it mantles over `world` ([`super::bridge::mantle_walk`],
+/// cod2-movement.md 9).
 pub fn mantle_walk(
     world: &vcod_common::collision::CollisionWorld,
     rules: vcod_cod2::pmove::Rules,
     from: Vec3,
     yaw: f32,
 ) -> Option<Vec3> {
-    use vcod_cod2::collision::{CONTENTS_MANTLE, SURF_MANTLE_ON, SURF_MANTLE_OVER};
-    use vcod_cod2::pmove::mantle::flag;
     use vcod_common::movetrace::MoveWorld;
     if !rules.mantle_enable || rules.mantle_anims.is_none() {
         return None;
     }
-    let (s, c) = yaw.to_radians().sin_cos();
-    let dir = Vec3::new(c, s, 0.0);
-    let r = rules.mantle_check_radius.max(1.0);
-    let t = MoveWorld::bare(world).box_trace(
-        from,
-        from + dir * MANTLE_LOOK,
-        Vec3::new(-r, -r, 0.0),
-        Vec3::new(r, r, 70.0),
-        CONTENTS_MANTLE,
-    );
-    if t.startsolid
-        || t.fraction >= 1.0
-        || t.surface_flags & (SURF_MANTLE_ON | SURF_MANTLE_OVER) == 0
-    {
-        return None;
-    }
-    let mut ps = vcod_cod2::pmove::PlayerState::spawn(from + Vec3::Z * 0.125, yaw, 0);
+    // CoD2's walk truncates its yaw to a short, CoD4's rounds: kept, so
+    // the graphs stay as measured.
     let angle = (yaw * 65536.0 / 360.0) as i32 & 0xffff;
     let mut old = UserCmd2::default();
-    let mut mantled = false;
-    for tick in 0..MANTLE_TICKS {
-        if !mantled && tick >= MANTLE_WALK_TICKS {
-            return None;
-        }
-        let jump = !mantled && ps.mantle.flags & flag::HINT != 0;
-        let cmd = UserCmd2 {
-            server_time: ps.command_time + 50,
-            buttons: if jump { button::JUMP } else { 0 },
-            angles: [0, angle, 0],
-            forward_move: if mantled { 0 } else { 127 },
-            ..Default::default()
-        };
-        vcod_cod2::pmove::player_step(&mut ps, &cmd, &mut old, MoveWorld::bare(world), rules, 1.0);
-        if ps.pm_flags & pmf::MANTLE != 0 {
-            mantled = true;
-        } else if mantled && ps.on_ground() {
-            return Some(ps.origin);
-        } else if !mantled && jump {
-            // The jump key jumped instead.
-            return None;
-        }
-    }
-    None
+    super::bridge::mantle_walk(
+        from,
+        yaw,
+        rules.mantle_check_radius,
+        |a, b, mins, maxs, mask| {
+            MoveWorld::bare(world)
+                .box_trace(a, b, mins, maxs, mask)
+                .into()
+        },
+        |ps: &mut vcod_cod2::pmove::PlayerState, server_time, jump, forward| {
+            let cmd = UserCmd2 {
+                server_time,
+                buttons: if jump { button::JUMP } else { 0 },
+                angles: [0, angle, 0],
+                forward_move: if forward { 127 } else { 0 },
+                ..Default::default()
+            };
+            vcod_cod2::pmove::player_step(ps, &cmd, &mut old, MoveWorld::bare(world), rules, 1.0);
+        },
+    )
 }
 
 /// The nearest `p` comes to the segment `a` to `b`.
@@ -1743,10 +1461,6 @@ fn forced_stance(ps: &vcod_cod2::pmove::PlayerState, from: i32) -> Option<bool> 
         })
 }
 
-fn eye(ps: &vcod_cod2::pmove::PlayerState) -> Vec3 {
-    ps.origin + Vec3::Z * ps.view_height_current
-}
-
 /// The body in `slot` as the driver's team passes read it. A client
 /// killed this frame keeps `pm_type` normal until its end frame; the
 /// vitals already say dead, and the yields walk round no corpse.
@@ -1755,8 +1469,9 @@ pub(crate) fn body(level: &Cod2Level, slot: usize) -> Option<super::driver::Body
     let dead = level
         .rt
         .host
-        .client_vitals
+        .clients
         .get(slot)
+        .map(|c| &c.vitals)
         .is_some_and(|v| v.dead);
     Some(super::driver::Body {
         origin: p.ps.origin,
@@ -1785,32 +1500,15 @@ pub(crate) fn cover_body(
     })
 }
 
-/// The body in `slot` as the follower reads it ([`cod1_body`]).
+/// The body in `slot` as the follower reads it
+/// ([`super::bridge::follower_body`]).
 pub(crate) fn move_ps(level: &Cod2Level, slot: usize) -> Option<vcod_common::pmove::PlayerState> {
     let p = level.players.get(slot)?.as_ref()?;
-    Some(cod1_body(&p.ps, level.level_time()))
-}
-
-/// The CoD1 body the follower's foot and jump tests read: where the CoD2
-/// body stands and how it moves, its last jump's age off `jump_time`, and
-/// the jump penalty `GRAPH_RULES` jumps under: CoD2's `JUMPING` with its
-/// `pm_time` is 1.5's 0x2000 (cod2-movement.md), as [`Cod2Walk`] maps it.
-fn cod1_body(ps: &vcod_cod2::pmove::PlayerState, now: i32) -> vcod_common::pmove::PlayerState {
-    let mut b = vcod_common::pmove::PlayerState::spawn(ps.origin, ps.view_angles[1]);
-    b.rules = GRAPH_RULES;
-    b.velocity = ps.velocity;
-    b.on_ground = ps.on_ground();
-    b.on_ladder = ps.pm_flags & pmf::LADDER != 0;
-    b.ladder_normal = ps.ladder_vec;
-    b.since_jump_ms = if ps.jump_time > 0 {
-        now.saturating_sub(ps.jump_time).max(0) as f32
-    } else {
-        f32::MAX
-    };
-    b.jump_penalty = ps.pm_flags & pmf::JUMPING != 0;
-    b.knockback_ms = ps.pm_time as f32;
-    b.jump_origin_z = ps.jump_origin_z;
-    b
+    Some(super::bridge::follower_body(
+        &p.ps,
+        level.level_time(),
+        GRAPH_RULES,
+    ))
 }
 
 /// The nearest live frag within [`super::FLEE_REACH`] across and
@@ -1819,13 +1517,9 @@ fn cod1_body(ps: &vcod_cod2::pmove::PlayerState, now: i32) -> vcod_common::pmove
 /// [`BotView::frag_near`].
 fn frag_near(level: &Cod2Level, slot: usize) -> Option<[f32; 3]> {
     let p = level.players.get(slot)?.as_ref()?;
-    let at = p.ps.origin;
     let eye = eye(&p.ps);
     let w = &level.world.collision;
-    level
-        .combat
-        .missiles
-        .iter()
+    let frags = (level.combat.missiles.iter())
         .filter(|m| !m.rocket && m.exploded_at.is_none())
         .filter(|m| {
             level
@@ -1835,30 +1529,17 @@ fn frag_near(level: &Cod2Level, slot: usize) -> Option<[f32; 3]> {
                 .and_then(Option::as_ref)
                 .is_some_and(|d| d.explosion_radius > 0 && d.explosion_inner_damage > 0)
         })
-        .filter(|m| {
-            m.owner == Some(slot)
-                || super::notices_frag(eye, p.ps.view_angles[1], m.origin, |a, b| {
-                    w.shot_trace(a, b).fraction >= 1.0
-                })
+        .map(|m| (m.origin, m.owner == Some(slot)));
+    super::frag_near(p.ps.origin, frags, |o| {
+        super::notices_frag(eye, p.ps.view_angles[1], o, |a, b| {
+            w.shot_trace(a, b).fraction >= 1.0
         })
-        .map(|m| m.origin)
-        .filter(|o| {
-            (o.z - at.z).abs() < super::FLEE_HEIGHT
-                && (*o - at).truncate().length() < super::FLEE_REACH
-        })
-        .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
-        .map(Into::into)
+    })
 }
 
 /// [`BotView::lob`] for the bot in `slot` throwing frag `weapon` at
-/// `target`: of the throws from 10 degrees down to 85 up, every 5, the
-/// one whose frag comes down nearest `target`, within
-/// [`super::LOB_MISS`], and not within its `explosionRadius` of the
-/// thrower. The flight is `weapon_grenadelauncher_fire`'s
-/// (`projectileSpeed` along the view plus `projectileSpeedUp` up, from the
-/// eye) under `TR_GRAVITY`'s 800, up to where it first meets the world: a
-/// bounce is not flown. With friendly fire on, none while a live teammate
-/// stands within the radius of `target`.
+/// `target`, flown by [`super::lob`]. With friendly fire on, none while a
+/// live teammate stands within the radius of `target`.
 pub(crate) fn lob_probe(
     level: &Cod2Level,
     slot: usize,
@@ -1866,60 +1547,27 @@ pub(crate) fn lob_probe(
     target: [f32; 3],
     teams: &[i32],
 ) -> Option<[f32; 2]> {
-    const STEP_S: f32 = 0.05;
     let p = level.players.get(slot)?.as_ref()?;
     let def = level.combat.weapons.get(usize::from(weapon))?.as_ref()?;
     let radius = def.explosion_radius as f32;
     let target = Vec3::from(target);
-    let mine = teams.get(slot).copied().unwrap_or(0);
-    let teamplay = (mine == TEAM_AXIS || mine == TEAM_ALLIES)
-        && crate::game::builtins::cvar::atoi(level.rt.cvars().get("scr_friendlyfire")) != 0;
-    let mate_near = level.players.iter().enumerate().any(|(i, o)| {
-        teamplay
-            && i != slot
-            && teams.get(i).copied() == Some(mine)
-            && playing(level, i)
-            && o.as_ref()
-                .is_some_and(|o| o.ps.origin.distance(target) < radius)
-    });
-    if mate_near {
+    let friendly_fire =
+        crate::game::builtins::cvar::atoi(level.rt.cvars().get("scr_friendlyfire")) != 0;
+    let mates = (level.players.iter().enumerate())
+        .filter(|&(i, _)| i != slot && playing(level, i))
+        .filter_map(|(i, o)| Some((*teams.get(i)?, o.as_ref()?.ps.origin)));
+    if friendly_fire && super::mate_in_blast(teams.get(slot).copied(), mates, target, radius) {
         return None;
     }
-    let w = &level.world.collision;
-    let from = eye(&p.ps);
-    let to = target - from;
-    let yaw = to.y.atan2(to.x).to_degrees();
-    let fuse_s = def.fuse_time as f32 / 1000.0;
-    let mut best: Option<([f32; 2], f32)> = None;
-    for up in (-2..=17).map(|i| i as f32 * 5.0) {
-        let (sp, cp) = up.to_radians().sin_cos();
-        let (sy, cy) = yaw.to_radians().sin_cos();
-        let mut v = Vec3::new(cp * cy, cp * sy, sp) * def.projectile_speed as f32;
-        v.z += def.projectile_speed_up as f32;
-        let mut at = from;
-        let mut t = 0.0;
-        let mut landed = None;
-        while t < fuse_s {
-            let next = at + v * STEP_S - Vec3::Z * 400.0 * STEP_S * STEP_S;
-            v.z -= 800.0 * STEP_S;
-            let tr = w.shot_trace(at, next);
-            if tr.fraction < 1.0 {
-                landed = Some(at + (next - at) * tr.fraction);
-                break;
-            }
-            at = next;
-            t += STEP_S;
-        }
-        let burst = landed.unwrap_or(at);
-        if burst.distance(p.ps.origin) <= radius {
-            continue;
-        }
-        let miss = burst.distance(target);
-        if miss < super::LOB_MISS && best.is_none_or(|(_, m)| miss < m) {
-            best = Some(([-up, yaw], miss));
-        }
-    }
-    best.map(|(aim, _)| aim)
+    let throw = super::Lob {
+        from: eye(&p.ps),
+        thrower: p.ps.origin,
+        speed: def.projectile_speed as f32,
+        speed_up: def.projectile_speed_up as f32,
+        fuse_ms: def.fuse_time,
+        radius,
+    };
+    super::lob(&level.world.collision, &throw, target)
 }
 
 /// The cmd the brain's asks for, in CoD2's bits, and the frag throw's
@@ -1944,45 +1592,37 @@ pub fn offhand_cmd(
     c.weapon = held;
     let trigger = c.buttons & button::ATTACK != 0;
     c.buttons &= !(button::ATTACK | button::ADS);
-    let armed = throwing.unwrap_or(false) || trigger;
-    if trigger || !armed {
+    let (key, armed) = super::bridge::frag_key(trigger, throwing);
+    if key {
         c.buttons |= vcod_cod2::pmove::weapon::key::FRAG;
     }
     c.off_hand_index = g;
     (c, Some(armed))
 }
 
-/// A CoD1 usercmd in CoD2's bits (cod2-movement.md 3, the client's
-/// `CL_CmdButtons` map): the attack, melee, use and sight move to 0x1,
-/// 0x4, 0x8 and 0x1000; reload, the leans and the two stances leave
-/// `wbuttons` for 0x10, 0x40/0x80 and 0x100/0x200; `upmove` is gone, so a
-/// jump is 0x400 and a crouch held through `up` is 0x200.
+/// CoD2's bits for the CoD1 keys (cod2-movement.md 3, the client's
+/// `CL_CmdButtons` map): the attack, melee, use and sight to 0x1, 0x4, 0x8
+/// and 0x1000; reload, the leans and the two stances to 0x10, 0x40/0x80
+/// and 0x100/0x200; a jump is 0x400.
+const BUTTONS: super::bridge::Buttons = super::bridge::Buttons {
+    attack: button::ATTACK as u32,
+    melee: 0x4,
+    use_key: 0x8,
+    ads: button::ADS as u32,
+    reload: 0x10,
+    lean_left: button::LEAN_LEFT as u32,
+    lean_right: button::LEAN_RIGHT as u32,
+    prone: button::PRONE as u32,
+    crouch: button::CROUCH as u32,
+    jump: button::JUMP as u32,
+};
+
+/// A CoD1 usercmd in CoD2's bits ([`BUTTONS`]); the moves and angles go
+/// as they are.
 pub fn to_cmd2(cmd: &UserCmd) -> UserCmd2 {
-    let mut b = 0;
-    let map = [
-        (cmd.buttons & msg::BUTTON_ATTACK, button::ATTACK),
-        (cmd.buttons & msg::BUTTON_MELEE, 0x4),
-        (cmd.buttons & msg::BUTTON_USE, 0x8),
-        (cmd.buttons & msg::BUTTON_ADS, button::ADS),
-        (cmd.wbuttons & msg::WBUTTON_RELOAD, 0x10),
-        (cmd.wbuttons & msg::WBUTTON_LEAN_LEFT, button::LEAN_LEFT),
-        (cmd.wbuttons & msg::WBUTTON_LEAN_RIGHT, button::LEAN_RIGHT),
-        (cmd.wbuttons & msg::WBUTTON_PRONE, button::PRONE),
-        (cmd.wbuttons & msg::WBUTTON_CROUCH, button::CROUCH),
-    ];
-    for (on, bit) in map {
-        if on != 0 {
-            b |= bit;
-        }
-    }
-    if cmd.up > 0 {
-        b |= button::JUMP;
-    } else if cmd.up < 0 && b & button::PRONE == 0 {
-        b |= button::CROUCH;
-    }
     UserCmd2 {
         server_time: cmd.server_time,
-        buttons: b,
+        buttons: super::bridge::cmd_buttons(cmd, &BUTTONS) as i32,
         weapon: cmd.weapon,
         off_hand_index: 0,
         angles: cmd.angles,
@@ -1994,6 +1634,7 @@ pub fn to_cmd2(cmd: &UserCmd) -> UserCmd2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::net::msg;
 
     /// The last forced stance in the ring past the mark wins; events at or
     /// before it, or rolled out of the four slots, are not read again.
@@ -2056,9 +1697,9 @@ mod tests {
             sv.tick_frames(now + std::time::Duration::from_millis(50 * tick), 1);
             // A hit felt names another bot and a direction.
             let bots = sv.bots_mut().unwrap();
-            for (slot, (_, hit)) in &bots.hits {
+            for (slot, (_, hit)) in &bots.own.hits {
                 if let Some((a, at, dir)) = hit
-                    && *at == bots.last_tick
+                    && *at == bots.own.last_tick
                 {
                     assert_ne!(a, slot);
                     assert!(slots.contains(a));
@@ -2316,7 +1957,7 @@ mod tests {
         assert_eq!(at, [300.0, 0.0, 0.0]);
         assert_eq!(smoke_point([0.0; 3], [400.0, 0.0, 0.0]), [250.0, 0.0, 0.0]);
         let mut b = Cod2Bots::new(true);
-        b.clouds.push((Vec3::from(at), 1000));
+        b.own.clouds.push((Vec3::from(at), 1000));
         let (eye, far) = (Vec3::new(0.0, 0.0, 60.0), Vec3::new(900.0, 0.0, 60.0));
         assert!(!b.smoked(eye, far, 1000 + SMOKE_FORM_MS - 50));
         assert!(b.smoked(eye, far, 1000 + SMOKE_FORM_MS));

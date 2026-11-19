@@ -10,7 +10,7 @@
 //! The fixtures are retail UO 1.51b's: the probe's log
 //! (`fixtures/vehicles/*-blast-*-uo.txt`, recipe in each header) and the
 //! shooter's snapshots (`*-uo-blasttank.bin` and kin, the explodes).
-//! docs/research/coduo-vehicles.md 13, "A blast on a hull".
+//! docs/research/coduo-vehicles.md 13.3, "A blast on a hull".
 //!
 //! `BLAST_REPORT=1` prints both sides. Needs `COD_DIR` at a UO install;
 //! without one it returns early.
@@ -20,7 +20,7 @@ use crate::common;
 use common::{Join, Queues, step};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::NetEvent;
 use vcod_common::net::event_ids::{
     EV_GRENADE_BOUNCE, EV_UO_PROJECTILE_EXPLODE, EV_UO_PROJECTILE_EXPLODE_NOMARKS,
@@ -154,7 +154,7 @@ fn print_missiles(side: &str, s: &vcod_common::net::snapshot::Snapshot) {
         if i("eType") == 4 {
             eprintln!(
                 "{side} {} missile {num} tr {} time {} base {:.2} {:.2} {:.2} delta {:.1} {:.1} {:.1} ground {}",
-                s.server_time,
+                s.server_time.raw(),
                 i("pos.trType"),
                 i("pos.trTime"),
                 f("pos.trBase[0]"),
@@ -179,7 +179,7 @@ fn print_ps(side: &str, s: &vcod_common::net::snapshot::Snapshot) {
     let f = |n: &str| s.ps.field_f32(p, n);
     eprintln!(
         "{side} {} ps o {:.3} {:.3} {:.3} v {:.2} {:.2} {:.2} ground {} pmf {:#x} pmt {} ct {}",
-        s.server_time,
+        s.server_time.raw(),
         f("origin[0]"),
         f("origin[1]"),
         f("origin[2]"),
@@ -207,25 +207,14 @@ fn ours(c: &Case) -> Option<(Vec<String>, Explodes)> {
     let _ = env_logger::builder().is_test(true).try_init();
     let fs = vcod_common::testing::uo_fs()?;
     let p = &PROTOCOL_V22;
-    let bsp_path = fs.resolve_map(c.map).expect("map in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(c.map, "probe_vehblast"), now);
-    sv.set_protocol(p);
-    sv.overlay_script("maps/mp/gametypes/probe_vehblast", SCRIPT);
-    // The recipe's `+set`s.
-    for l in c.fixture.lines().filter(|l| l.starts_with('#')) {
-        let mut t = l.split_whitespace();
-        while let Some(w) = t.next() {
-            if w == "+set"
-                && let (Some(name), Some(value)) = (t.next(), t.next())
-            {
-                sv.set_cvar(name, value);
-            }
-        }
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        // The recipe's `+set`s.
+        cvars: &common::recipe_sets(c.fixture),
+        script: Some(SCRIPT),
+        ..common::Boot::new(c.map, "probe_vehblast")
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     if c.spread {
         sv.pin_rocket_deltas(retail_deltas(c));
     }
@@ -278,14 +267,14 @@ fn ours(c: &Case) -> Option<(Vec<String>, Explodes)> {
             }
         }
         if let Some(s) = cl.snapshots().newest()
-            && s.server_time != seen_time
+            && s.server_time.raw() != seen_time
         {
-            seen_time = s.server_time;
+            seen_time = s.server_time.raw();
             print_missiles("ours  ", s);
             print_ps("ours  ", s);
             for ev in tracker.drain(s, p) {
                 if is_held(&ev) {
-                    explodes.push((s.server_time, ev));
+                    explodes.push((s.server_time.raw(), ev));
                 }
             }
         }
@@ -308,7 +297,7 @@ fn retail_explodes(tag: &str) -> Explodes {
         print_ps("retail", &f.snapshot);
         for ev in tracker.drain(&f.snapshot, p) {
             if is_held(&ev) {
-                out.push((f.snapshot.server_time, ev));
+                out.push((f.snapshot.server_time.raw(), ev));
             }
         }
     }

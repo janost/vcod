@@ -6,7 +6,7 @@
 //! `legs_ab.rs` replays cmd for cmd beside the gsc's bone log. Under a
 //! `--capture-tag` starting `torso` it runs [`TORSO_SCRIPT`] instead, firing,
 //! reloading and aiming on the move beside `client-probes/probe_torso`, for
-//! `torso_ab.rs`. Under one starting `stopgo` it runs [`STOPGO_SCRIPT`],
+//! `legs_ab.rs`. Under one starting `stopgo` it runs [`STOPGO_SCRIPT`],
 //! whose short stops and swaps take a legs clip back while it still blends
 //! out, beside the same `probe_legs`.
 
@@ -65,7 +65,7 @@ const fn ads(s: Step) -> Step {
 const TAP_MS: u128 = 32;
 const FIRE_PERIOD_MS: u128 = 300;
 
-/// From the snapshot that showed the placement. The street is clear 680
+/// From the snapshot that showed the placement. The floor is clear 680
 /// units either side of the mark, and each run is paired with its way back.
 const SCRIPT: &[Step] = &[
     step("settle", 1500, 0, 0, false),
@@ -118,7 +118,7 @@ const TORSO_SCRIPT: &[Step] = &[
 /// while it still has weight (`legs_ab.rs`, cod11-combat.md 3.1, "The
 /// setter on a weighted node"); the strafe swap does the same in one
 /// 150 ms step. Each long stop lets every node settle first. Forward runs
-/// 3 s and backward 1.7 s, inside the street's 680 units.
+/// 3 s and backward 1.7 s, inside the floor's 680 units.
 const STOPGO_SCRIPT: &[Step] = &[
     step("settle", 1500, 0, 0, false),
     step("run", 1000, 127, 0, false),
@@ -276,17 +276,8 @@ impl LegsProbe {
         }
         let line = |head: &str| {
             format!(
-                "{head} st={} buttons={} wbuttons={} weapon={} up={} forward={} right={} angles={},{},{} world={},{},{}",
-                sent.server_time,
-                sent.buttons,
-                sent.wbuttons,
-                sent.weapon,
-                sent.up,
-                sent.forward,
-                sent.right,
-                sent.angles[0],
-                sent.angles[1],
-                sent.angles[2],
+                "{head} {} world={},{},{}",
+                crate::probe::cmd_fields(&sent),
                 world[0],
                 world[1],
                 world[2],
@@ -315,7 +306,7 @@ impl LegsProbe {
             && (o[0] - LEGS_SPOT[0]).abs() < 0.5
             && (o[1] - LEGS_SPOT[1]).abs() < 0.5
         {
-            self.placed = Some((now, s.server_time));
+            self.placed = Some((now, s.server_time.raw()));
             println!("legs: placed at serverTime {}", s.server_time);
             pre = self.before.past(s.ps.field_i32(p, "commandTime")).collect();
         }
@@ -426,14 +417,12 @@ impl LegsProbe {
             out.push_str(l);
             out.push('\n');
         }
-        let path = format!(
-            "{path_dir}/{map}-dm-legs-client{}.txt",
-            crate::probe::tag_suffix(tag)
-        );
-        if !overwrite && std::path::Path::new(&path).exists() {
-            anyhow::bail!("{path} already exists; pass --overwrite-fixture to replace it");
-        }
-        std::fs::write(&path, out)?;
+        let path = crate::probe::write_fixture_file(
+            path_dir,
+            &crate::probe::tagged_name(&format!("{map}-dm-legs-client"), tag),
+            &out,
+            overwrite,
+        )?;
         println!("legs: {} lines -> {path}", self.lines.len());
         Ok(())
     }

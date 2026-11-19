@@ -24,6 +24,13 @@ vcod draws it in `crates/client/src/cod2_player_hud.rs`, called from
   (the HUD menus), the foreground hudelems, the scoreboard, a red damage
   flash and the damage direction icons.
 
+A value hudelem (type 2) prints its float at `+0x70` through `va("%g")`:
+`CoD2MP_s.exe` 0x4dd6b8 loads it, widens it to a double and pushes
+`"%g"` (0x5a85f4) before the `va` call at 0x4dd6c6; the timers' arms of the
+same switch call 0x4dcc20 and 0x4dcca0, one of which formats `%i:%02i`
+(0x5b6a50, at 0x4dcc86). VERIFIED (the instructions and the strings). vcod:
+`cod2_hud::elem_body`, `hud::hudelem::format_g`.
+
 `ui_mp/hud.txt` loads `ui_mp/hud.menu` only. VERIFIED (the stock file). Its
 visible menus and their owner draws, numbered by `ui/menudefinition.h`.
 VERIFIED (the stock menu). `CG_OwnerDraw` (0x18cc30) switches on the
@@ -605,7 +612,7 @@ Against 1.1's 27 cvars (cod11-shellshock.md 3, 4), VERIFIED:
 `CG_DrawActiveFrame` (0x1d4a50) picks the record of `ps.shellshockIndex`
 (+0x5e4) with `shellshockTime` and `shellshockDuration` off `cg.snap` and
 runs `CG_UpdateShellShock` (0x1d7528). VERIFIED. Its formulas are 1.1's
-(cod11-shellshock.md 5..9): the sound fades, loop blend and end cue; the
+(cod11-shellshock.md 5): the sound fades, loop blend and end cue; the
 mouse scale and fade; `CL_SetUserCmdInShellshock` (button 0x800 in
 `CL_CmdButtons`, 0x188ee2, while `elapsed < duration`); and the kick off
 `_cg_perturbations` (`.data` 0x33c1a0), byte for byte 1.1's 131-point
@@ -722,7 +729,7 @@ rise over 100 ms and an eased fall over 400. VERIFIED (0x326350 100,
 ### 17.2 The shake
 
 `CG_ShakeCamera` (0x1cea88) and `CG_StartShakeCamera` (0x1d0138) are
-1.1's four-slot quake (cod11-combat.md, "The earthquake shake"): the
+1.1's four-slot quake (cod11-combat.md 17.2): the
 600 ms clock, the 18, 16 and 10 degree gains and the 8, 15 and 12 pi
 frequencies. VERIFIED (0x3263bc, 0x326280, 0x326260, 0x32626c,
 0x340d58..0x340d68). `CG_EntityEvent` starts one on `EV_FIRE_WEAPON_MG42`

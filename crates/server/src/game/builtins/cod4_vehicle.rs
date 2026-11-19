@@ -6,11 +6,12 @@
 //! set (`game::cod4::vehicle`). Semantics are INFERRED
 //! (`GScr_SpawnPlane`, `GScr_SpawnHelicopter`, `CMD_VEH_*`).
 
+use crate::game::slot::ClientSlot;
 use glam::Vec3;
 use vcod_gsc::{Cx, ErrorKind, Host, Target, Value};
 
+use super::Builtin;
 use super::entity::entity_receiver;
-use super::score::Builtin;
 use crate::game::cod4::vehicle::{Heli4, MPH, TurretTarget, VehInfo, VehShot};
 use crate::game::host::GameHost;
 use crate::game::temp_entity::{Scope, TempEntity};
@@ -96,9 +97,9 @@ fn owner(host: &mut GameHost, cx: &mut Cx, v: Option<&Value>) -> Result<(usize, 
     let Some(&Value::Entity(id)) = v else {
         return Err(ErrorKind::Custom("Owner entity is not a player".into()));
     };
-    if host.ents.get(id).is_none_or(|e| e.client.is_none()) {
+    let Some(slot) = ClientSlot::of_entity(&host.ents, id) else {
         return Err(ErrorKind::Custom("Owner entity is not a player".into()));
-    }
+    };
     let f = cx.intern_folded("sessionteam");
     let team = match host.get_field(cx, id, f) {
         Value::String(t) => match cx.resolve(t) {
@@ -109,7 +110,7 @@ fn owner(host: &mut GameHost, cx: &mut Cx, v: Option<&Value>) -> Result<(usize, 
         },
         _ => 0,
     };
-    Ok((id.0 as usize, team))
+    Ok((slot.index(), team))
 }
 
 /// `spawnPlane(owner, classname, origin[, spawnflags])`: the classname's
@@ -903,4 +904,182 @@ fn physics_explosion(
         },
     );
     Ok(Value::Undefined)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::cod4::missile::MAX_ATTRACTORS;
+    use vcod_gsc::Vm;
+
+    fn fixture() -> (Vm, GameHost) {
+        let host = GameHost::new(&crate::game::profile::COD4, vec![String::new(); 2048]);
+        (Vm::new(), host)
+    }
+
+    /// A helicopter on a fresh entity, its receiver.
+    fn heli_on(host: &mut GameHost, cx: &mut Cx) -> Option<Target> {
+        let id = host.ents.spawn(cx).unwrap();
+        host.cod4_mut()
+            .helis
+            .push(Heli4::new(id, 0, 0, Vec3::ZERO, Vec3::ZERO));
+        Some(Target::Entity(id))
+    }
+
+    fn pace(host: &GameHost) -> crate::game::cod4::vehicle::Pace {
+        host.cod4().helis[0].pace
+    }
+
+    /// `setSpeed` stores the speed before it tests the rates: a zero
+    /// acceleration errors with the speed kept and both rates back at one
+    /// mph. A negative speed errors before it stores anything.
+    #[test]
+    fn set_speed_stores_before_it_raises() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let h = heli_on(&mut host, cx);
+            set_speed(&mut host, cx, h, &[Value::Int(10), Value::Int(4)]).unwrap();
+            let p = pace(&host);
+            assert_eq!(
+                (p.speed, p.accel, p.decel),
+                (10.0 * MPH, 4.0 * MPH, 2.0 * MPH)
+            );
+            assert!(set_speed(&mut host, cx, h, &[Value::Int(20), Value::Int(0)]).is_err());
+            let p = pace(&host);
+            assert_eq!((p.speed, p.accel, p.decel), (20.0 * MPH, MPH, MPH));
+            assert!(set_speed(&mut host, cx, h, &[Value::Int(-1)]).is_err());
+            assert_eq!(pace(&host).speed, 20.0 * MPH);
+        });
+    }
+
+    /// Speeding up caps the acceleration at the speed; the deceleration is
+    /// half of what is left unless given.
+    #[test]
+    fn set_speed_caps_the_acceleration_at_the_speed() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let h = heli_on(&mut host, cx);
+            set_speed(&mut host, cx, h, &[Value::Int(5), Value::Int(50)]).unwrap();
+            let p = pace(&host);
+            assert_eq!((p.accel, p.decel), (5.0 * MPH, 2.5 * MPH));
+            set_speed(
+                &mut host,
+                cx,
+                h,
+                &[Value::Int(5), Value::Int(3), Value::Int(1)],
+            )
+            .unwrap();
+            assert_eq!(pace(&host).decel, MPH);
+        });
+    }
+
+    /// `setYawSpeed` stores all three rates, then the overshoot's range
+    /// test, then the sign test: each error leaves what came before it.
+    #[test]
+    fn set_yaw_speed_stores_before_it_raises() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let h = heli_on(&mut host, cx);
+            let yaw = |host: &GameHost| {
+                let y = host.cod4().helis[0].yaw;
+                (y.top, y.up, y.down, y.overshoot)
+            };
+            let f = Value::Float;
+            set_yaw_speed(&mut host, cx, h, &[f(40.0), f(10.0)]).unwrap();
+            assert_eq!(yaw(&host), (40.0, 10.0, 10.0, 0.1));
+            let bad = [f(50.0), f(20.0), f(5.0), f(1.5)];
+            assert!(set_yaw_speed(&mut host, cx, h, &bad).is_err());
+            assert_eq!(yaw(&host), (50.0, 20.0, 5.0, 0.1));
+            assert!(set_yaw_speed(&mut host, cx, h, &[f(-30.0), f(5.0), f(5.0), f(0.5)]).is_err());
+            assert_eq!(yaw(&host), (-30.0, 5.0, 5.0, 0.5));
+        });
+    }
+
+    /// The 32 slots fill in order and the 33rd errors; a deleted slot is
+    /// the next one taken, and so is a slot whose entity was freed.
+    #[test]
+    fn attractors_reuse_the_first_free_of_32_slots() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let at = |p: f32| {
+                [
+                    Value::Vector([p, 0.0, 0.0]),
+                    Value::Float(1.0),
+                    Value::Float(100.0),
+                ]
+            };
+            for n in 0..MAX_ATTRACTORS {
+                let v =
+                    missile_create_attractor_origin(&mut host, cx, None, &at(n as f32)).unwrap();
+                assert_eq!(v, Value::Int(n as i32));
+            }
+            assert!(missile_create_repulsor_origin(&mut host, cx, None, &at(0.0)).is_err());
+            missile_delete_attractor(&mut host, cx, None, &[Value::Int(7)]).unwrap();
+            let v = missile_create_repulsor_origin(&mut host, cx, None, &at(0.0)).unwrap();
+            assert_eq!(v, Value::Int(7));
+            assert!(!host.cod4().attractors[7].unwrap().attract);
+            // A slot on an entity that is gone is cleared on the next look.
+            missile_delete_attractor(&mut host, cx, None, &[Value::Int(3)]).unwrap();
+            let e = host.ents.spawn(cx).unwrap();
+            let on = [Value::Entity(e), Value::Float(1.0), Value::Float(100.0)];
+            assert_eq!(
+                missile_create_attractor_ent(&mut host, cx, None, &on).unwrap(),
+                Value::Int(3)
+            );
+            host.free_entity(e);
+            assert_eq!(
+                missile_create_attractor_origin(&mut host, cx, None, &at(1.0)).unwrap(),
+                Value::Int(3)
+            );
+            assert!(missile_delete_attractor(&mut host, cx, None, &[Value::Int(32)]).is_err());
+            assert!(missile_delete_attractor(&mut host, cx, None, &[Value::Int(-1)]).is_err());
+        });
+    }
+
+    /// A reach of 0 or less errors and takes no slot.
+    #[test]
+    fn an_attractor_needs_a_reach() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let a = [
+                Value::Vector([0.0; 3]),
+                Value::Float(1.0),
+                Value::Float(0.0),
+            ];
+            assert!(missile_create_attractor_origin(&mut host, cx, None, &a).is_err());
+            assert!(host.cod4().attractors.iter().all(Option::is_none));
+        });
+    }
+
+    /// `physicsJitter` compares the inner radius with the outer one read
+    /// as unsigned (`fild qword`, 0x80bcea9): a negative outer is past
+    /// any inner, so it passes; the outer rides the parm as its int.
+    #[test]
+    fn physics_jitter_compares_the_outer_radius_unsigned() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let args = |outer: f32, inner: f32, min: f32, max: f32| {
+                [
+                    Value::Vector([0.0; 3]),
+                    Value::Float(outer),
+                    Value::Float(inner),
+                    Value::Float(min),
+                    Value::Float(max),
+                ]
+            };
+            physics_jitter(&mut host, cx, None, &args(-10.0, 50.0, 1.0, 2.0)).unwrap();
+            assert_eq!(host.temp_entities.last().unwrap().te.parm, -10);
+            assert!(physics_jitter(&mut host, cx, None, &args(40.0, 50.0, 1.0, 2.0)).is_err());
+            assert!(physics_jitter(&mut host, cx, None, &args(40.0, -1.0, 1.0, 2.0)).is_err());
+            assert!(physics_jitter(&mut host, cx, None, &args(40.0, 10.0, 3.0, 2.0)).is_err());
+            assert!(physics_jitter(&mut host, cx, None, &args(40.0, 10.0, 1.0, 2.0)[..4]).is_err());
+            let live = host.temp_entities.len();
+            physics_jitter(&mut host, cx, None, &args(40.0, 40.0, 2.0, 2.0)).unwrap();
+            let te = &host.temp_entities[live].te;
+            assert_eq!(
+                (te.event, te.origin2),
+                (EV_PHYS_JITTER, Some([40.0, 2.0, 2.0]))
+            );
+        });
+    }
 }

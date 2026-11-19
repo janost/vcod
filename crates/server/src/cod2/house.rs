@@ -2,8 +2,11 @@
 //! timeouts and the UDP download with its www redirect. The rate, pacing,
 //! ping and LAN test both servers share are `crate::engine::link`.
 
-use vcod_cod2::net::download::{DownloadMsg, fs_iw_iwd};
+use vcod_cod2::net::download::DownloadMsg;
 use vcod_common::net::codec::MsgWriter;
+
+use super::Cod2Game;
+use crate::engine::download::{DownloadFile, DownloadWire};
 
 /// `sv_timeout`, `sv_zombietime` and `sv_reconnectlimit` defaults, seconds
 /// (`SV_Init` 0x8093adc).
@@ -12,139 +15,35 @@ pub const ZOMBIETIME_S: &str = "2";
 pub const RECONNECT_LIMIT_S: &str = "3";
 /// `SV_CheckTimeouts` drops a client on its sixth stale frame.
 pub const TIMEOUT_FRAMES: u32 = 5;
-/// `SV_WriteDownloadToClient`'s block size and window.
-const BLOCK: usize = 0x800;
-const WINDOW: u32 = 8;
-/// A window's blocks go again after this long without an ack (`< 0x3e9`).
-const RETRANSMIT_MS: i32 = 1000;
-
-/// The www dvars `SV_WriteDownloadToClient` reads.
-#[derive(Clone, Debug, Default)]
-pub struct DownloadCvars {
-    pub allow: bool,
-    pub pure: bool,
-    pub www: bool,
-    pub www_base_url: String,
-    pub www_disconnected: bool,
-}
+pub use crate::engine::download::{DownloadCvars, Www};
 
 /// One client's transfer state (client +0x20c68 .. +0x20e14).
-#[derive(Default)]
-pub struct Download {
-    /// `downloadName`; empty when none.
-    pub name: String,
-    /// The file, read whole on open; `None` until opened.
-    data: Option<Vec<u8>>,
-    /// `downloadClientBlock`: the next block the client acks.
-    acked: u32,
-    /// `downloadCurrentBlock`: the next block written.
-    current: u32,
-    /// `downloadSendTime`.
-    send_time: i32,
-    /// A redirect went out (+0x20e0c).
-    pub redirected: bool,
-    /// `wwwdl ack` came (+0x20e10): nothing more is written.
-    pub www_acked: bool,
-    /// The last www transfer failed (+0x20e14): the next goes over UDP.
-    pub www_fallback: bool,
-}
+pub type Download = crate::engine::download::Download<Cod2Game>;
 
-/// What a `wwwdl` asks of the server (`SV_WWWDownload_f` 0x808f97c).
-#[derive(Debug, PartialEq, Eq)]
-pub enum Www {
-    None,
-    /// `fail` / `chkfail`: the gamestate again.
-    Gamestate,
-    Drop(&'static str),
+/// CoD2's `svc_download` shapes (0x808fd64) and its `wwwdl` drops
+/// (`SV_WWWDownload_f` 0x808f97c).
+impl DownloadWire for Cod2Game {
+    const UNEXPECTED: &'static str = "PC_PATCH_1_1_UNEXPECTEDDOWLOADMESSAGE";
+    const DISCONNECTED: &'static str = "PC_PATCH_1_1_DOWNLOADDISCONNECTED";
+
+    fn write_block(w: &mut MsgWriter, block: u32, size: Option<i32>, data: Vec<u8>) {
+        let block = block as i32;
+        DownloadMsg::Block { block, size, data }.write(w);
+    }
+
+    fn write_refusal(w: &mut MsgWriter, text: String) {
+        DownloadMsg::Refused(text).write(w);
+    }
+
+    fn write_redirect(w: &mut MsgWriter, url: String, size: i32, flags: i32) {
+        DownloadMsg::Redirect { url, size, flags }.write(w);
+    }
 }
 
 impl Download {
-    /// Blocks in the file, the empty one that ends it included.
-    fn blocks(&self) -> u32 {
-        self.data
-            .as_ref()
-            .map_or(0, |d| d.len().div_ceil(BLOCK) as u32 + 1)
-    }
-
-    fn block(&self, i: u32) -> &[u8] {
-        let d = self.data.as_deref().unwrap_or_default();
-        let start = (i as usize * BLOCK).min(d.len());
-        &d[start..(start + BLOCK).min(d.len())]
-    }
-
-    /// `SV_CloseDownload` (0x808f6f6).
-    pub fn close(&mut self) {
-        self.name.clear();
-        self.data = None;
-    }
-
-    /// The `download <name>` command: a new name, the old transfer closed.
-    pub fn begin(&mut self, name: &str) {
-        self.close();
-        self.name = name.chars().take(63).collect();
-    }
-
-    /// `SV_NextDownload_f` (0x808f83c). False for any block but the one
-    /// due: the caller drops the client with `broken download`.
-    pub fn next_dl(&mut self, block: i32, svs_ms: i32) -> bool {
-        if block != self.acked as i32 {
-            return false;
-        }
-        if self.data.is_some() && self.block(self.acked).is_empty() {
-            log::info!("clientDownload: file {:?} completed", self.name);
-            self.close();
-        } else {
-            self.send_time = svs_ms;
-            self.acked += 1;
-        }
-        true
-    }
-
-    /// `retransdl <n>` (0x808f7fc): start over from the block due.
-    pub fn retransmit(&mut self, block: i32) {
-        if block == self.acked as i32 {
-            self.current = self.acked;
-        }
-    }
-
-    /// `SV_WWWDownload_f` (0x808f97c).
-    pub fn wwwdl(&mut self, sub: &str) -> Www {
-        const UNEXPECTED: &str = "PC_PATCH_1_1_UNEXPECTEDDOWLOADMESSAGE";
-        let is = |s: &str| sub.eq_ignore_ascii_case(s);
-        if !self.redirected {
-            return Www::Drop(UNEXPECTED);
-        }
-        if is("ack") {
-            self.www_acked = true;
-            return Www::None;
-        }
-        if is("bbl8r") {
-            return Www::Drop("PC_PATCH_1_1_DOWNLOADDISCONNECTED");
-        }
-        if !self.www_acked {
-            return Www::Drop(UNEXPECTED);
-        }
-        let failed = if is("done") {
-            false
-        } else if is("fail") || is("chkfail") {
-            true
-        } else {
-            return Www::Drop(UNEXPECTED);
-        };
-        self.data = None;
-        self.name.clear();
-        self.www_acked = false;
-        if failed {
-            self.www_fallback = true;
-            Www::Gamestate
-        } else {
-            Www::None
-        }
-    }
-
     /// `SV_WriteDownloadToClient` (0x808fdc2): opens the file on the first
     /// call, the www redirect first when the server and the client want it,
-    /// then up to `budget` blocks inside the window. `open` reads a file
+    /// then up to `budget` blocks inside the window. `open` opens a file
     /// as [`open_download`] does, `None` when there is none.
     pub fn write(
         &mut self,
@@ -153,120 +52,61 @@ impl Download {
         budget: u32,
         cvars: &DownloadCvars,
         wants_www: bool,
-        open: &dyn Fn(&str) -> Option<Vec<u8>>,
+        open: &dyn Fn(&str) -> Option<DownloadFile>,
     ) {
-        if self.name.is_empty() || self.www_acked {
+        if self.name.is_empty() || self.www.acked {
             return;
         }
-        if self.data.is_none() {
+        if self.transfer.file().is_none() {
             if cvars.www && wants_www {
-                if !self.www_fallback {
+                if !self.www.fallback {
                     // `SV_WWWRedirectClient`: only when the file opens.
-                    if let Some(bytes) = open(&self.name) {
-                        let url = format!("{}/{}", cvars.www_base_url, self.name);
-                        log::info!("Redirecting client to {url}");
-                        self.redirected = true;
-                        DownloadMsg::Redirect {
-                            url,
-                            size: bytes.len() as i32,
-                            flags: i32::from(cvars.www_disconnected),
-                        }
-                        .write(w);
-                        self.name.clear();
+                    if let Some(file) = open(&self.name) {
+                        self.redirect(w, cvars, &file);
                         return;
                     }
                 } else {
-                    self.www_fallback = false;
+                    self.www.fallback = false;
                 }
             }
-            self.redirected = false;
-            let refuse = |w: &mut MsgWriter, key: &str, name: &str| {
-                DownloadMsg::Refused(format!("{key}\x15{name}")).write(w);
+            self.www.redirected = false;
+            let Some(file) = self.open_checked(w, cvars, open) else {
+                return;
             };
-            if !cvars.allow {
-                let key = if cvars.pure {
-                    "EXE_AUTODL_SERVERDISABLED_PURE"
-                } else {
-                    "EXE_AUTODL_SERVERDISABLED"
-                };
-                refuse(w, key, &self.name);
-                self.name.clear();
-                return;
-            }
-            if fs_iw_iwd(&self.name, "main") {
-                log::info!(
-                    "clientDownload: {:?} cannot download IW iwd files",
-                    self.name
-                );
-                refuse(w, "EXE_CANTAUTODLGAMEPAK", &self.name);
-                self.name.clear();
-                return;
-            }
-            match open(&self.name).filter(|d| !d.is_empty()) {
-                Some(bytes) => {
-                    log::info!("clientDownload: beginning {:?}", self.name);
-                    self.data = Some(bytes);
-                    self.acked = 0;
-                    self.current = 0;
-                }
-                None => {
-                    refuse(w, "EXE_AUTODL_FILENOTONSERVER", &self.name);
-                    self.name.clear();
-                    return;
-                }
-            }
+            log::info!("clientDownload: beginning {:?}", self.name);
+            self.transfer.start(file);
         }
-        let window = (self.acked + WINDOW).min(self.blocks());
-        for _ in 0..budget {
-            if self.acked == window {
-                break;
-            }
-            if self.current == window {
-                if svs_ms - self.send_time <= RETRANSMIT_MS {
-                    return;
-                }
-                self.current = self.acked;
-            }
-            let block = self.current;
-            DownloadMsg::Block {
-                block: block as i32,
-                size: (block == 0).then(|| self.data.as_ref().map_or(0, |d| d.len() as i32)),
-                data: self.block(block).to_vec(),
-            }
-            .write(w);
-            self.current += 1;
-            self.send_time = svs_ms;
-        }
+        self.write_blocks(w, svs_ms, budget);
     }
-}
-
-/// `SV_WriteDownloadToClient`'s blocks a message: the rate over one
-/// snapshot interval in 2 KiB units, rounded up past a whole one; 1 at
-/// rate 0.
-pub fn blocks_per_message(rate: i32, snapshot_msec: i32) -> u32 {
-    if rate == 0 {
-        return 1;
-    }
-    ((rate * snapshot_msec / 1000 + 0x800) >> 11).max(1) as u32
 }
 
 /// `FS_SV_FOpenFileRead` (0x8064558) for a download: `<fs_homepath>/<name>`,
 /// then `<fs_basepath>/<name>` when the two differ, every run of `/` and
 /// `\` folded to one `/` (`FS_BuildOSPath` 0x809eab0), so a leading `/`
 /// stays under the root. vcod's own rules beyond retail's (cod2-protocol.md
-/// 17.5): a name with a `..` component opens nothing, where retail serves
+/// 17.5): only an `.iwd` opens, where retail serves any file (a client asks
+/// for referenced iwds alone); a name holding `..`, a colon (a Windows drive
+/// prefix) or a control character opens nothing, where retail serves
 /// `<root>/../<file>`; retail's third root, `fs_cdpath` (empty, so the
 /// filesystem root) when the two paths match, is never tried; an empty path
 /// is no root; a directory opens nothing.
-pub fn open_download(homepath: &str, basepath: &str, name: &str) -> Option<Vec<u8>> {
+pub fn open_download(homepath: &str, basepath: &str, name: &str) -> Option<DownloadFile> {
+    DownloadFile::open(&download_path(homepath, basepath, name)?)
+}
+
+/// The file [`open_download`] opens.
+fn download_path(homepath: &str, basepath: &str, name: &str) -> Option<std::path::PathBuf> {
     let parts: Vec<&str> = name
         .split(['/', '\\'])
         .filter(|c| !c.is_empty() && *c != ".")
         .collect();
-    if parts.is_empty() || parts.contains(&"..") {
+    let rel = vcod_common::game_dir::confined_rel_path(&parts.join("/"))?;
+    if !rel
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("iwd"))
+    {
         return None;
     }
-    let rel: std::path::PathBuf = parts.iter().collect();
     let base = (!basepath.eq_ignore_ascii_case(homepath)).then_some(basepath);
     [Some(homepath), base]
         .into_iter()
@@ -274,60 +114,62 @@ pub fn open_download(homepath: &str, basepath: &str, name: &str) -> Option<Vec<u
         .filter(|root| !root.is_empty())
         .map(|root| std::path::Path::new(root).join(&rel))
         .find(|path| path.is_file())
-        .and_then(|path| std::fs::read(path).ok())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn blocks_per_message_rounds_past_a_whole_block() {
-        assert_eq!(blocks_per_message(25000, 50), 1);
-        assert_eq!(blocks_per_message(90000, 33), 2);
-        assert_eq!(blocks_per_message(0, 50), 1);
-    }
-
-    /// `open_download` against retail's live answers (cod2-protocol.md
-    /// 17.5): any file under the home path, then the base path, separators
-    /// folded; and vcod's own refusals of `..`, directories and the
-    /// filesystem root.
+    /// `download_path` against retail's live answers (cod2-protocol.md
+    /// 17.5): a file under the home path, then the base path, separators
+    /// folded; and vcod's own refusals of anything but an iwd, `..`,
+    /// directories and the filesystem root.
     #[test]
     fn download_names_open_as_retail_bar_vcod_s_refusals() {
-        let dir = std::env::temp_dir().join(format!("vcod-cod2-open-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let (home, base) = (dir.join("home"), dir.join("base"));
         std::fs::create_dir_all(home.join("main")).unwrap();
         std::fs::create_dir_all(base.join("main")).unwrap();
-        std::fs::write(home.join("main/zz_ok.txt"), b"inside main").unwrap();
-        std::fs::write(base.join("main/only_base.cfg"), b"base").unwrap();
-        std::fs::write(dir.join("secret.txt"), b"outside").unwrap();
+        std::fs::write(home.join("main/zz_ok.iwd"), b"inside main").unwrap();
+        std::fs::write(base.join("main/only_base.IWD"), b"base").unwrap();
+        std::fs::write(dir.join("secret.iwd"), b"outside").unwrap();
+        for other in ["zz_ok.txt", "server.cfg", "games_mp.log"] {
+            std::fs::write(home.join("main").join(other), b"not an iwd").unwrap();
+        }
         let (h, b) = (home.to_string_lossy(), base.to_string_lossy());
-        let open = |name: &str| open_download(&h, &b, name);
+        let read = |p: std::path::PathBuf| std::fs::read(p).unwrap();
+        let open = |name: &str| download_path(&h, &b, name).map(read);
         let served = Some(b"inside main".to_vec());
-        // Retail serves these (live: `main/zz_ok.txt`, `main\zz_ok.txt`).
-        assert_eq!(open("main/zz_ok.txt"), served);
-        assert_eq!(open("main\\zz_ok.txt"), served);
-        assert_eq!(open("/main//zz_ok.txt"), served);
-        assert_eq!(open("main/./zz_ok.txt"), served);
-        assert_eq!(open("main/only_base.cfg"), Some(b"base".to_vec()));
-        assert_eq!(open("main/nothere.txt"), None);
+        // Retail's folding (live on `main/zz_ok.txt` and `main\zz_ok.txt`).
+        assert_eq!(open("main/zz_ok.iwd"), served);
+        assert_eq!(open("main\\zz_ok.iwd"), served);
+        assert_eq!(open("/main//zz_ok.iwd"), served);
+        assert_eq!(open("main/./zz_ok.iwd"), served);
+        assert_eq!(open("main/only_base.IWD"), Some(b"base".to_vec()));
+        assert_eq!(open("main/nothere.iwd"), None);
         // An empty home path is no root: the base serves.
         assert_eq!(
-            open_download("", &b, "main/only_base.cfg"),
+            download_path("", &b, "main/only_base.IWD").map(read),
             Some(b"base".to_vec())
         );
-        // vcod's: retail serves `../secret.txt` and, with the two paths
-        // equal, any file from the filesystem root.
-        assert_eq!(open("../secret.txt"), None);
-        assert_eq!(open("main/../../secret.txt"), None);
-        assert_eq!(open("..\\secret.txt"), None);
-        let abs = dir.join("secret.txt").to_string_lossy().into_owned();
+        // vcod's: retail serves any file, `../secret.iwd` and, with the two
+        // paths equal, any file from the filesystem root.
+        assert_eq!(open("main/zz_ok.txt"), None);
+        assert_eq!(open("main/server.cfg"), None);
+        assert_eq!(open("main/games_mp.log"), None);
+        assert_eq!(open("../secret.iwd"), None);
+        assert_eq!(open("main/../../secret.iwd"), None);
+        assert_eq!(open("..\\secret.iwd"), None);
+        let abs = dir.join("secret.iwd").to_string_lossy().into_owned();
         assert_eq!(open(&abs), None);
-        assert_eq!(open_download(&h, &h, &abs), None);
+        assert_eq!(download_path(&h, &h, &abs), None);
+        // A drive prefix would replace the root on Windows.
+        assert_eq!(open("C:main/zz_ok.iwd"), None);
+        assert_eq!(open("D:\\Users\\x.iwd"), None);
+        assert_eq!(open("main/zz_ok.iwd:s"), None);
         assert_eq!(open("main"), None);
         assert_eq!(open(""), None);
         assert_eq!(open("."), None);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

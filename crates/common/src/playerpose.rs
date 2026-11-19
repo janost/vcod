@@ -118,7 +118,7 @@ pub struct BodyInput {
 /// UO's seat test in the angle updater (game.mp.uo 0x1dbac, uo cgame
 /// 0x30004550): `BG_AllowPlayerWeaponAtVehiclePos` on the entity's seat
 /// (`s+0x88`: a four-wheel's seat 3) and the entity's `weapon` (`s+0xcc`).
-/// coduo-vehicles.md 13, "The angle updater on a rider".
+/// coduo-vehicles.md 13.7, "The angle updater on a rider".
 #[derive(Clone, Copy, Default, Debug, PartialEq)]
 pub enum SeatWeapon {
     /// On foot, on a turret, or in a seat that holds no weapon: a rider
@@ -805,7 +805,7 @@ pub fn seat_inputs(
 /// ramp"). The cgame's copy sets its goals over one frame, so a drawn rider
 /// plays the goal weights. The node a legs change leaves keeps its leaves:
 /// nothing clears them, the old legs clip fades out on them
-/// (coduo-vehicles.md 13, "The glide back"), and they wait on their goals
+/// (coduo-vehicles.md 13.7, "The glide back"), and they wait on their goals
 /// for a return to it ([`Self::fade_held`]; coduo-vehicles.md 14, "The
 /// seat blend's ramp").
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1118,7 +1118,6 @@ impl Controllers {
     /// The lean and the spine's split of the torso and head angles, off the
     /// legs' `l`; `legs_off` is the view yaw `tag_origin`'s yaw is taken
     /// off, `None` for a dead body or a rider.
-    #[allow(clippy::too_many_arguments)]
     fn split(
         split: Split,
         mut t: [f32; 3],

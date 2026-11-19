@@ -728,6 +728,11 @@ fn objectives_without_entnum(o: &str) -> String {
 /// origins (bel's go to `marker`) ([`objectives_without_origin`]); a UO run drops the entity
 /// numbers its unspawned vehicles shift ([`objectives_without_entnum`]).
 fn views(lines: &[String], gametype: &str, uo: bool) -> Vec<(&'static str, Vec<String>)> {
+    let cs = if uo {
+        &PROTOCOL_V22.cs
+    } else {
+        &vcod_common::net::protocol::PROTOCOL_V1.cs
+    };
     let cmds = || lines.iter().filter_map(|l| cmd_text(l));
     let traces = || lines.iter().filter(|l| l.starts_with("!trace"));
     let tf = |k: &'static str| dedup(traces().filter_map(move |l| field(l, k).map(str::to_string)));
@@ -769,6 +774,25 @@ fn views(lines: &[String], gametype: &str, uo: bool) -> Vec<(&'static str, Vec<S
                 .iter()
                 .filter_map(|l| l.strip_prefix("!sound "))
                 .filter_map(|l| field(l, "alias").map(str::to_string))
+                .collect(),
+        ),
+        // The configstring slots behind the names: each `s`/`S` alias
+        // index, each `t` menu index, and each `d` into the alias or menu
+        // block, so ours must allocate as retail does (gametypes doc 7.6).
+        (
+            "slots",
+            cmds()
+                .filter(|t| {
+                    let mut w = t.split(' ');
+                    match (w.next(), w.next().and_then(|n| n.parse::<usize>().ok())) {
+                        (Some("s" | "S" | "t"), Some(_)) => true,
+                        (Some("d"), Some(n)) => [CsRange::SoundAlias, CsRange::Menu]
+                            .iter()
+                            .any(|&r| (cs.bounds(r).0..cs.bounds(r).1).contains(&n)),
+                        _ => false,
+                    }
+                })
+                .map(str::to_string)
                 .collect(),
         ),
         (
@@ -1127,7 +1151,7 @@ fn uo_headquarters_matches_retail() {
 }
 
 // The endings: each probe plays its gametype to a map end and through the
-// restart exitLevel(false) falls back to with no rotation (coduo-diff.md 22,
+// restart exitLevel(false) falls back to with no rotation (coduo-diff.md 22.2,
 // "Round and map ends").
 
 #[test]

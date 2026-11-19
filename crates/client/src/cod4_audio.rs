@@ -11,7 +11,7 @@ use vcod_cod4::assets::Assets;
 use vcod_cod4::map::stub_name;
 use vcod_cod4::sound::{Alias, ChannelDef, SURFACES, SoundSet};
 
-use crate::audio::alias::{AliasRow, AliasTable, Channel, MasterSlave};
+use crate::audio::alias::{AliasRow, AliasTable, Channel, MAX_PROBABILITY, MasterSlave};
 use crate::audio::cod2::{PROBABILITY_SCALE, VfCurve};
 use crate::audio::cues::{Cue, Source};
 use crate::play::cod4::{Fired, ent_u32};
@@ -217,7 +217,7 @@ fn row(a: &Alias, channels: &[ChannelDef]) -> AliasRow {
         channel: channel(c),
         streamed: a.streamed(),
         looping: a.looping(),
-        probability: ((a.probability * PROBABILITY_SCALE) as u32).max(1),
+        probability: ((a.probability * PROBABILITY_SCALE) as u32).clamp(1, MAX_PROBABILITY),
         master_slave: if a.master() {
             MasterSlave::Master
         } else if a.slave() {
@@ -236,6 +236,7 @@ fn row(a: &Alias, channels: &[ChannelDef]) -> AliasRow {
         secondary: a.secondary.clone(),
         start_delay_ms: a.start_delay_ms.max(0) as u32,
         csv: String::new(),
+        order: 0,
         subtitle: None,
         no_wet: a.flags & vcod_cod4::sound::FLAG_NO_WET != 0,
     }
@@ -925,13 +926,14 @@ mod tests {
             fs.overlay(&p, w);
         }
         let shell = crate::console::shell::Shell::new();
-        let mut a = AudioSystem::new(
+        let mut a = AudioSystem::with_aliases(
             &fs,
             AudioOpts {
                 enabled: false,
                 volume: shell.cvar_f32("mss_volume"),
                 rate: bank::mixer_rate(shell.cvar_f32("mss_khz") as i32),
             },
+            Default::default(),
         );
         a.on_gamestate(&map);
         // Each alias the mixer held: its loudest gain and its frames' peak.
@@ -1238,13 +1240,14 @@ mod tests {
         for (p, w) in files {
             fs.overlay(&p, w);
         }
-        let mut a = AudioSystem::new(
+        let mut a = AudioSystem::with_aliases(
             &fs,
             AudioOpts {
                 enabled: false,
                 volume: 1.0,
                 rate: 44100,
             },
+            Default::default(),
         );
         a.on_gamestate("mp_crash");
         a.set_cod4_aliases(sounds.take_table().unwrap());
@@ -1431,7 +1434,7 @@ mod tests {
         let mut probe = AudioSystem::with_aliases(&fs, opts(), Default::default());
         probe.on_gamestate("mp_crash");
         probe.set_cod4_aliases(sounds.take_table().unwrap());
-        probe.keep_silent_loops();
+        probe.mock_mixer();
         let mut fx = crate::fx::sim::FxSystem::new();
         let mut c = crate::cod4_client::Cod4Client::new(
             s,
@@ -1549,7 +1552,7 @@ mod tests {
             Default::default(),
         );
         audio.on_gamestate("mp_crash");
-        audio.keep_silent_loops();
+        audio.mock_mixer();
         let mut fx = crate::fx::sim::FxSystem::new();
         let mut c = crate::cod4_client::Cod4Client::new(
             s,
@@ -1592,6 +1595,7 @@ mod tests {
                 .filter(|(row, _)| row.looping)
                 .map(|(row, _)| row.name)
                 .collect();
+            audio.pump_mixer(f64::from(dt));
             audio.step(&c.entity_positions(), &HashMap::new(), None);
             if !frames.is_empty() || looping.iter().any(|n| n == "mp_cobra_helicopter") {
                 frames.push(looping);

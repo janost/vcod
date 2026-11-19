@@ -119,10 +119,12 @@ impl Stats {
         self.0[..4].copy_from_slice(&c.to_le_bytes());
     }
 
-    /// The bytes `stats` packet `idx` carries.
+    /// The bytes `stats` packet `idx` carries; empty past the block.
     pub fn packet(&self, idx: usize) -> &[u8] {
-        let start = STAT_CHUNK * idx;
-        &self.0[start..STATS_BYTES.min(start + STAT_CHUNK)]
+        let start = STAT_CHUNK.saturating_mul(idx);
+        self.0
+            .get(start..STATS_BYTES.min(start.saturating_add(STAT_CHUNK)))
+            .unwrap_or(&[])
     }
 }
 
@@ -149,5 +151,13 @@ mod tests {
         assert_eq!(lens, [1240, 1240, 1240, 1240, 1240, 1240, 752]);
         assert_eq!(stat_slot(3497), Some((7992, 4)));
         assert_eq!(stat_slot(3498), None);
+    }
+
+    #[test]
+    fn a_packet_index_past_the_block_is_empty() {
+        let s = Stats::fresh();
+        assert!(s.packet(STAT_PACKETS).is_empty());
+        assert!(s.packet(31).is_empty());
+        assert!(s.packet(usize::MAX).is_empty());
     }
 }

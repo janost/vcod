@@ -11,9 +11,10 @@ use crate::configstrings::CsRange;
 use crate::game::builtins::client::client_receiver;
 use crate::game::builtins::entity::entity_receiver;
 use crate::game::host::{GameHost, SimOp};
+use crate::game::slot::ClientSlot;
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("playsound", play_sound),
@@ -24,10 +25,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("musicstop", music_stop),
     ("soundfade", sound_fade),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// The alias's configstring slot, allocated on first use the way retail's
 /// `G_SoundAliasIndex` allocates it.
@@ -80,10 +77,9 @@ pub fn play_sound(
     } else {
         ent.broadcast_time = now.wrapping_add(BROADCAST_MS);
     }
-    let is_client = ent.client.is_some();
-    if is_client {
+    if let Some(slot) = ClientSlot::of_entity(&host.ents, id) {
         host.client_sim_ops.push((
-            id.0 as usize,
+            slot.index(),
             SimOp::Event {
                 event: EV_SOUND_ALIAS,
                 parm,
@@ -167,7 +163,7 @@ pub fn play_local_sound(
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
     let idx = alloc_alias(host, cx, args)? - sounds_base(host);
-    host.client_commands.push((slot, format!("s {idx}")));
+    host.client_commands.push(slot, format!("s {idx}"));
     Ok(Value::Undefined)
 }
 
@@ -182,7 +178,7 @@ fn number(v: &Value) -> Result<f64, ErrorKind> {
 /// `trap_SendServerCommand(-1, 1, cmd)`: every client.
 fn broadcast(host: &mut GameHost, cmd: String) {
     for slot in host.client_slots() {
-        host.client_commands.push((slot, cmd.clone()));
+        host.client_commands.push(slot, cmd.clone());
     }
 }
 
@@ -246,8 +242,9 @@ pub fn sound_fade(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::commands::one;
     use crate::game::testing::fixture;
-    use vcod_common::net::protocol::CS_SOUNDS;
+    use vcod_common::net::protocol::CS_SOUNDS_V1;
     use vcod_gsc::Host;
 
     /// `playSound` allocates a sound-alias configstring, mirroring
@@ -317,7 +314,10 @@ mod tests {
                 .iter()
                 .position(|s| s == "Explo_plant_no_tick")
                 .unwrap();
-            assert_eq!(es.field_i32(p, "eventParms[0]"), (alias - CS_SOUNDS) as i32);
+            assert_eq!(
+                es.field_i32(p, "eventParms[0]"),
+                (alias - CS_SOUNDS_V1) as i32
+            );
         });
     }
 
@@ -451,7 +451,7 @@ mod tests {
             let to_two: Vec<&str> = host
                 .client_commands
                 .iter()
-                .filter(|(slot, _)| *slot == 2)
+                .filter(|(slot, _)| *slot == one(2))
                 .map(|(_, c)| c.as_str())
                 .collect();
             assert_eq!(
@@ -481,11 +481,11 @@ mod tests {
             let a = Value::String(cx.intern_exact("MP_announcer_allies_win"));
             play_local_sound(&mut host, cx, Some(Target::Entity(e)), &[a]).unwrap();
             assert_eq!(host.configstrings[525], "MP_announcer_allies_win");
-            assert_eq!(host.client_commands, vec![(3, "s 1".to_string())]);
+            assert_eq!(host.client_commands, vec![(one(3), "s 1".to_string())]);
             // A second call on the same alias reuses the slot.
             play_local_sound(&mut host, cx, Some(Target::Entity(e)), &[a]).unwrap();
             assert_eq!(host.client_commands.len(), 2);
-            assert_eq!(host.client_commands[1], (3, "s 1".to_string()));
+            assert_eq!(host.client_commands[1], (one(3), "s 1".to_string()));
             // Not a player: retail's own `ent->client` check.
             let plain = host.ents.spawn(cx).unwrap();
             assert!(play_local_sound(&mut host, cx, Some(Target::Entity(plain)), &[a]).is_err());

@@ -5,52 +5,52 @@ use glam::Vec3;
 
 use super::{PlayerState, SprintState};
 use crate::net::delta;
-use crate::net::fields::PLAYER_STATE;
+use crate::net::fields::{ENTITY_PLAYER, PLAYER_STATE};
 
-/// `name`'s word in a wire playerstate, looked up at compile time
-/// through [`ix!`]: a name `PLAYER_STATE` lacks fails the build.
-const fn index(name: &str) -> usize {
-    let mut i = 0;
-    while i < PLAYER_STATE.len() {
-        let (a, b) = (PLAYER_STATE[i].name.as_bytes(), name.as_bytes());
-        if a.len() == b.len() {
-            let mut k = 0;
-            while k < a.len() && a[k] == b[k] {
-                k += 1;
-            }
-            if k == a.len() {
-                return PLAYER_STATE[i].offset as usize / 4;
-            }
-        }
-        i += 1;
-    }
-    panic!("no such playerstate field")
+/// `name`'s word in a table of wire fields, looked up at compile time
+/// through [`ix!`] and [`ex!`]: a name the table lacks fails the build.
+const fn index(table: &[delta::Field], name: &str) -> usize {
+    delta::word_named(table, name)
 }
 
-/// A field's word, or an array field's words (`ix!(3 "origin")` for
-/// `origin[0..3]`), as constants.
+/// A field's word, or an array field's words (`(3 "origin")` for
+/// `origin[0..3]`), in `$table`, as constants.
+macro_rules! words {
+    ($table:expr, $name:literal) => {
+        const { index(&$table, $name) }
+    };
+    ($table:expr, 3 $name:literal) => {
+        const {
+            [
+                index(&$table, concat!($name, "[0]")),
+                index(&$table, concat!($name, "[1]")),
+                index(&$table, concat!($name, "[2]")),
+            ]
+        }
+    };
+    ($table:expr, 4 $name:literal) => {
+        const {
+            [
+                index(&$table, concat!($name, "[0]")),
+                index(&$table, concat!($name, "[1]")),
+                index(&$table, concat!($name, "[2]")),
+                index(&$table, concat!($name, "[3]")),
+            ]
+        }
+    };
+}
+
+/// A playerstate field's word or words ([`words!`] over `PLAYER_STATE`).
 macro_rules! ix {
-    ($name:literal) => {
-        const { index($name) }
+    ($($t:tt)*) => {
+        words!(PLAYER_STATE, $($t)*)
     };
-    (3 $name:literal) => {
-        const {
-            [
-                index(concat!($name, "[0]")),
-                index(concat!($name, "[1]")),
-                index(concat!($name, "[2]")),
-            ]
-        }
-    };
-    (4 $name:literal) => {
-        const {
-            [
-                index(concat!($name, "[0]")),
-                index(concat!($name, "[1]")),
-                index(concat!($name, "[2]")),
-                index(concat!($name, "[3]")),
-            ]
-        }
+}
+
+/// A player entity's field word or words ([`words!`] over `ENTITY_PLAYER`).
+macro_rules! ex {
+    ($($t:tt)*) => {
+        words!(ENTITY_PLAYER, $($t)*)
     };
 }
 
@@ -62,8 +62,9 @@ fn int(w: &delta::PlayerState, i: usize) -> i32 {
     word(w, i) as i32
 }
 
+/// A NaN or infinite float is no retail state: 0.
 fn float(w: &delta::PlayerState, i: usize) -> f32 {
-    f32::from_bits(word(w, i))
+    vcod_common::fguard::finite(f32::from_bits(word(w, i)))
 }
 
 fn vec3(w: &delta::PlayerState, i: [usize; 3]) -> Vec3 {
@@ -114,7 +115,7 @@ impl PlayerState {
             client_num: word(w, ix!("clientNum")),
             weapon: word(w, ix!("weapon")),
             weapon_state: int(w, ix!("weaponstate")),
-            weapon_pos_frac: float(w, ix!("fWeaponPosFrac")),
+            weapon_pos_frac: float(w, ix!("fWeaponPosFrac")).clamp(0.0, 1.0),
             view_angles: ix!(3 "viewangles").map(|i| float(w, i)),
             view_height_target: int(w, ix!("viewHeightTarget")),
             view_height_current: float(w, ix!("viewHeightCurrent")),
@@ -182,7 +183,7 @@ impl PlayerState {
             ammo: w.ammo,
             ammoclip: w.ammoclip,
             mantle: super::mantle::MantleState {
-                yaw: float(w, ix!("mantleState.yaw")),
+                yaw: vcod_common::fguard::turns(float(w, ix!("mantleState.yaw"))),
                 timer: int(w, ix!("mantleState.timer")),
                 trans_index: int(w, ix!("mantleState.transIndex")),
                 flags: word(w, ix!("mantleState.flags")),
@@ -190,170 +191,137 @@ impl PlayerState {
         }
     }
 
-    /// `base` with every field pmove owns written from `self`: what a
-    /// server sends and a predictor rebuilds from.
+    /// `base` with every field pmove owns written from `self`: what the
+    /// server sends and the predictor rebuilds from ([`Self::write_wire`]).
     pub fn to_wire(&self, base: &delta::PlayerState) -> delta::PlayerState {
         let mut w = base.clone();
-        set(&mut w, ix!("commandTime"), self.command_time as u32);
-        set(&mut w, ix!("pm_type"), self.pm_type as u32);
-        set(&mut w, ix!("bobCycle"), self.bob_cycle as u32);
-        set(&mut w, ix!("pm_flags"), self.pm_flags);
-        set(&mut w, ix!("pm_time"), self.pm_time as u32);
-        set_vec3(&mut w, ix!(3 "origin"), self.origin);
-        set_vec3(&mut w, ix!(3 "velocity"), self.velocity);
-        set(&mut w, ix!("gravity"), self.gravity as u32);
-        set_f(&mut w, ix!("leanf"), self.leanf);
-        set(&mut w, ix!("speed"), self.speed as u32);
+        self.write_wire(&mut w);
+        w
+    }
+
+    /// Writes every field pmove owns from `self` into `w`, leaving the rest
+    /// alone: the fields the game owns (`tests::not_written`), the HUD,
+    /// objectives and stats.
+    pub fn write_wire(&self, w: &mut delta::PlayerState) {
+        set(w, ix!("commandTime"), self.command_time as u32);
+        set(w, ix!("pm_type"), self.pm_type as u32);
+        set(w, ix!("bobCycle"), self.bob_cycle as u32);
+        set(w, ix!("pm_flags"), self.pm_flags);
+        set(w, ix!("pm_time"), self.pm_time as u32);
+        set_vec3(w, ix!(3 "origin"), self.origin);
+        set_vec3(w, ix!(3 "velocity"), self.velocity);
+        set(w, ix!("gravity"), self.gravity as u32);
+        set_f(w, ix!("leanf"), self.leanf);
+        set(w, ix!("speed"), self.speed as u32);
         for i in 0..3 {
-            set_f(&mut w, ix!(3 "delta_angles")[i], self.delta_angles[i]);
-            set_f(&mut w, ix!(3 "viewangles")[i], self.view_angles[i]);
+            set_f(w, ix!(3 "delta_angles")[i], self.delta_angles[i]);
+            set_f(w, ix!(3 "viewangles")[i], self.view_angles[i]);
         }
-        set(
-            &mut w,
-            ix!("groundEntityNum"),
-            self.ground_entity_num as u32,
-        );
-        set_vec3(&mut w, ix!(3 "vLadderVec"), self.ladder_vec);
-        set(&mut w, ix!("jumpTime"), self.jump_time as u32);
-        set_f(&mut w, ix!("jumpOriginZ"), self.jump_origin_z);
-        set(&mut w, ix!("movementDir"), self.movement_dir as u32);
-        set(&mut w, ix!("eFlags"), self.e_flags);
-        set(&mut w, ix!("eventSequence"), self.event_sequence as u32);
+        set(w, ix!("groundEntityNum"), self.ground_entity_num as u32);
+        set_vec3(w, ix!(3 "vLadderVec"), self.ladder_vec);
+        set(w, ix!("jumpTime"), self.jump_time as u32);
+        set_f(w, ix!("jumpOriginZ"), self.jump_origin_z);
+        set(w, ix!("movementDir"), self.movement_dir as u32);
+        set(w, ix!("eFlags"), self.e_flags);
+        set(w, ix!("eventSequence"), self.event_sequence as u32);
         for i in 0..4 {
-            set(&mut w, ix!(4 "events")[i], self.events[i]);
-            set(&mut w, ix!(4 "eventParms")[i], self.event_parms[i]);
+            set(w, ix!(4 "events")[i], self.events[i]);
+            set(w, ix!(4 "eventParms")[i], self.event_parms[i]);
         }
+        set(w, ix!("viewHeightTarget"), self.view_height_target as u32);
+        set_f(w, ix!("viewHeightCurrent"), self.view_height_current);
         set(
-            &mut w,
-            ix!("viewHeightTarget"),
-            self.view_height_target as u32,
-        );
-        set_f(&mut w, ix!("viewHeightCurrent"), self.view_height_current);
-        set(
-            &mut w,
+            w,
             ix!("viewHeightLerpTime"),
             self.view_height_lerp_time as u32,
         );
         set(
-            &mut w,
+            w,
             ix!("viewHeightLerpTarget"),
             self.view_height_lerp_target as u32,
         );
         set(
-            &mut w,
+            w,
             ix!("viewHeightLerpDown"),
             u32::from(self.view_height_lerp_down),
         );
-        set(&mut w, ix!("damageTimer"), self.damage_timer as u32);
-        set_f(&mut w, ix!("proneDirection"), self.prone_direction);
-        set_f(
-            &mut w,
-            ix!("proneDirectionPitch"),
-            self.prone_direction_pitch,
-        );
-        set_f(&mut w, ix!("proneTorsoPitch"), self.prone_torso_pitch);
-        set_f(&mut w, ix!("fTorsoPitch"), self.torso_pitch);
-        set_f(&mut w, ix!("fWaistPitch"), self.waist_pitch);
-        set_f(&mut w, ix!("aimSpreadScale"), self.aim_spread_scale);
-        set(
-            &mut w,
-            ix!("foliageSoundTime"),
-            self.foliage_sound_time as u32,
-        );
-        set(&mut w, ix!("legsTimer"), self.legs_timer as u32);
-        set(&mut w, ix!("torsoTimer"), self.torso_timer as u32);
-        set(&mut w, ix!("legsAnim"), self.legs_anim);
-        set(&mut w, ix!("torsoAnim"), self.torso_anim);
+        set(w, ix!("damageTimer"), self.damage_timer as u32);
+        set_f(w, ix!("proneDirection"), self.prone_direction);
+        set_f(w, ix!("proneDirectionPitch"), self.prone_direction_pitch);
+        set_f(w, ix!("proneTorsoPitch"), self.prone_torso_pitch);
+        set_f(w, ix!("fTorsoPitch"), self.torso_pitch);
+        set_f(w, ix!("fWaistPitch"), self.waist_pitch);
+        set_f(w, ix!("aimSpreadScale"), self.aim_spread_scale);
+        set(w, ix!("foliageSoundTime"), self.foliage_sound_time as u32);
+        set(w, ix!("legsTimer"), self.legs_timer as u32);
+        set(w, ix!("torsoTimer"), self.torso_timer as u32);
+        set(w, ix!("legsAnim"), self.legs_anim);
+        set(w, ix!("torsoAnim"), self.torso_anim);
         let s = &self.sprint;
         set(
-            &mut w,
+            w,
             ix!("sprintState.sprintButtonUpRequired"),
             u32::from(s.button_up_required),
         );
-        set(&mut w, ix!("sprintState.sprintDelay"), u32::from(s.delay));
+        set(w, ix!("sprintState.sprintDelay"), u32::from(s.delay));
+        set(w, ix!("sprintState.lastSprintStart"), s.last_start as u32);
+        set(w, ix!("sprintState.lastSprintEnd"), s.last_end as u32);
         set(
-            &mut w,
-            ix!("sprintState.lastSprintStart"),
-            s.last_start as u32,
-        );
-        set(&mut w, ix!("sprintState.lastSprintEnd"), s.last_end as u32);
-        set(
-            &mut w,
+            w,
             ix!("sprintState.sprintStartMaxLength"),
             s.start_max_length as u32,
         );
-        set(&mut w, ix!("weapFlags"), self.weap_flags);
-        set_f(&mut w, ix!("holdBreathScale"), self.hold_breath_scale);
+        set(w, ix!("weapFlags"), self.weap_flags);
+        set_f(w, ix!("holdBreathScale"), self.hold_breath_scale);
+        set(w, ix!("holdBreathTimer"), self.hold_breath_timer as u32);
+        set(w, ix!("weapon"), self.weapon);
+        set(w, ix!("weaponstate"), self.weapon_state as u32);
+        set_f(w, ix!("fWeaponPosFrac"), self.weapon_pos_frac);
+        set(w, ix!("weaponTime"), self.weapon_time as u32);
+        set(w, ix!("weaponDelay"), self.weapon_delay as u32);
+        set_f(w, ix!("meleeChargeYaw"), self.melee_charge_yaw);
+        set(w, ix!("meleeChargeDist"), self.melee_charge_dist as u32);
+        set(w, ix!("meleeChargeTime"), self.melee_charge_time as u32);
+        set(w, ix!("weaponShotCount"), self.weapon_shot_count as u32);
+        set(w, ix!("weapAnim"), self.weap_anim);
         set(
-            &mut w,
-            ix!("holdBreathTimer"),
-            self.hold_breath_timer as u32,
-        );
-        set(&mut w, ix!("weapon"), self.weapon);
-        set(&mut w, ix!("weaponstate"), self.weapon_state as u32);
-        set_f(&mut w, ix!("fWeaponPosFrac"), self.weapon_pos_frac);
-        set(&mut w, ix!("weaponTime"), self.weapon_time as u32);
-        set(&mut w, ix!("weaponDelay"), self.weapon_delay as u32);
-        set_f(&mut w, ix!("meleeChargeYaw"), self.melee_charge_yaw);
-        set(
-            &mut w,
-            ix!("meleeChargeDist"),
-            self.melee_charge_dist as u32,
-        );
-        set(
-            &mut w,
-            ix!("meleeChargeTime"),
-            self.melee_charge_time as u32,
-        );
-        set(
-            &mut w,
-            ix!("weaponShotCount"),
-            self.weapon_shot_count as u32,
-        );
-        set(&mut w, ix!("weapAnim"), self.weap_anim);
-        set(
-            &mut w,
+            w,
             ix!("weaponRestrictKickTime"),
             self.weapon_restrict_kick_time as u32,
         );
         set(
-            &mut w,
+            w,
             ix!("spreadOverrideState"),
             self.spread_override_state as u32,
         );
-        set(&mut w, ix!("adsDelayTime"), self.ads_delay_time as u32);
+        set(w, ix!("adsDelayTime"), self.ads_delay_time as u32);
+        set(w, ix!("grenadeTimeLeft"), self.grenade_time_left as u32);
+        set(w, ix!("offHandIndex"), self.off_hand_index);
         set(
-            &mut w,
-            ix!("grenadeTimeLeft"),
-            self.grenade_time_left as u32,
-        );
-        set(&mut w, ix!("offHandIndex"), self.off_hand_index);
-        set(
-            &mut w,
+            w,
             ix!("throwBackGrenadeOwner"),
             self.throw_back_grenade_owner as u32,
         );
         set(
-            &mut w,
+            w,
             ix!("throwBackGrenadeTimeLeft"),
             self.throw_back_grenade_time_left as u32,
         );
         for i in 0..4 {
-            set(&mut w, ix!(4 "weapons")[i], self.weapons[i]);
-            set(&mut w, ix!(4 "weaponold")[i], self.weaponold[i]);
-            set(&mut w, ix!(4 "weaponrechamber")[i], self.weaponrechamber[i]);
+            set(w, ix!(4 "weapons")[i], self.weapons[i]);
+            set(w, ix!(4 "weaponold")[i], self.weaponold[i]);
+            set(w, ix!(4 "weaponrechamber")[i], self.weaponrechamber[i]);
         }
         w.ammo = self.ammo;
         w.ammoclip = self.ammoclip;
-        set_f(&mut w, ix!("mantleState.yaw"), self.mantle.yaw);
-        set(&mut w, ix!("mantleState.timer"), self.mantle.timer as u32);
+        set_f(w, ix!("mantleState.yaw"), self.mantle.yaw);
+        set(w, ix!("mantleState.timer"), self.mantle.timer as u32);
         set(
-            &mut w,
+            w,
             ix!("mantleState.transIndex"),
             self.mantle.trans_index as u32,
         );
-        set(&mut w, ix!("mantleState.flags"), self.mantle.flags);
-        w
+        set(w, ix!("mantleState.flags"), self.mantle.flags);
     }
 }
 
@@ -411,30 +379,24 @@ pub fn player_entity(slot: usize, ps: &delta::PlayerState) -> delta::EntityState
     let mut e = delta::EntityState::default();
     e.0[0] = slot as u32;
     e.0[1] = 1;
-    let mut put = |name: &str, v: u32| {
-        if let Some(f) = delta::EntityState::table(1).iter().find(|f| f.name == name) {
-            e.0[f.word()] = v;
-        }
-    };
+    let mut put = |word: usize, v: u32| e.0[word] = v;
     let origin = ix!(3 "origin");
     let angles = ix!(3 "viewangles");
+    let (pos, apos) = (ex!(3 "lerp.pos.trBase"), ex!(3 "lerp.apos.trBase"));
     for i in 0..3 {
-        put(
-            &format!("lerp.pos.trBase[{i}]"),
-            float(ps, origin[i]).trunc().to_bits(),
-        );
-        put(
-            &format!("lerp.apos.trBase[{i}]"),
-            float(ps, angles[i]).trunc().to_bits(),
-        );
+        put(pos[i], float(ps, origin[i]).trunc().to_bits());
+        put(apos[i], float(ps, angles[i]).trunc().to_bits());
     }
-    put("lerp.u.player.leanf", word(ps, ix!("leanf")));
+    put(ex!("lerp.u.player.leanf"), word(ps, ix!("leanf")));
     let (torso, waist) = prone_pitches(ps);
-    put("fTorsoPitch", torso.to_bits());
-    put("fWaistPitch", waist.to_bits());
-    put("lerp.u.player.movementDir", word(ps, ix!("movementDir")));
-    put("lerp.pos.trType", 3);
-    put("lerp.apos.trType", 1);
+    put(ex!("fTorsoPitch"), torso.to_bits());
+    put(ex!("fWaistPitch"), waist.to_bits());
+    put(
+        ex!("lerp.u.player.movementDir"),
+        word(ps, ix!("movementDir")),
+    );
+    put(ex!("lerp.pos.trType"), 3);
+    put(ex!("lerp.apos.trType"), 1);
     // 0x20000 for a dead body (`pm_type` past 6), 0x40000 for one down
     // its sights (`PMF_SIGHT` 0x10), each cleared otherwise
     // (0x8052a54..0x8052a82, 0x8052ca2, 0x8052cb1).
@@ -446,33 +408,69 @@ pub fn player_entity(slot: usize, ps: &delta::PlayerState) -> delta::EntityState
     if word(ps, ix!("pm_flags")) & 0x10 != 0 {
         e_flags |= 0x4_0000;
     }
-    put("lerp.eFlags", e_flags);
+    put(ex!("lerp.eFlags"), e_flags);
     let held = word(ps, ix!("weapon"));
-    put("weapon", held);
+    put(ex!("weapon"), held);
     // The held weapon's camo, `weaponmodels[weapon]` (0x8052af5..0x8052b03).
     put(
-        "weaponModel",
+        ex!("weaponModel"),
         ps.weapon_models
             .get(held as usize)
             .map_or(0, |&m| u32::from(m)),
     );
-    put("legsAnim", word(ps, ix!("legsAnim")));
-    put("torsoAnim", word(ps, ix!("torsoAnim")));
-    put("groundEntityNum", word(ps, ix!("groundEntityNum")));
+    put(ex!("legsAnim"), word(ps, ix!("legsAnim")));
+    put(ex!("torsoAnim"), word(ps, ix!("torsoAnim")));
+    put(ex!("groundEntityNum"), word(ps, ix!("groundEntityNum")));
     // A gunner names his gun: `eFlags & 0x300` copies `viewlocked_entNum`
     // (ps+0x59c) into `otherEntityNum` (0x8052ab9; cod4-gsc.md 9.2).
     if own & 0x300 != 0 {
-        put("otherEntityNum", word(ps, ix!("viewlocked_entNum")));
+        put(ex!("otherEntityNum"), word(ps, ix!("viewlocked_entNum")));
     }
-    put("clientNum", slot as u32);
+    put(ex!("clientNum"), slot as u32);
     let h = body_height(word(ps, ix!("pm_flags"))) as u32;
-    put("solid", 15 | (1 << 8) | ((h + 32) << 16));
+    put(ex!("solid"), 15 | (1 << 8) | ((h + 32) << 16));
     e
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fields `from_wire` reads that pmove never sets, zeroed: the game
+    /// and the HUD own them, so `write_wire` leaves them to the base.
+    fn not_written(ps: &mut PlayerState) {
+        ps.client_num = 0;
+        ps.damage_duration = 0;
+        ps.view_angle_clamp_base = [0.0; 2];
+        ps.view_angle_clamp_range = [0.0; 2];
+        ps.flinch_yaw_anim = 0;
+        ps.move_speed_scale_multiplier = 0.0;
+        ps.shellshock_index = 0;
+        ps.perks = 0;
+        ps.spread_override = 0;
+        ps.other_flags = 0;
+        ps.offhand_secondary = 0;
+        ps.cursor_hint_ent_index = 0;
+    }
+
+    /// Every field `from_wire` reads comes back through `write_wire` but
+    /// the ones [`not_written`] lists: a field added to one side alone
+    /// fails here.
+    #[test]
+    fn write_wire_writes_back_what_from_wire_reads() {
+        let mut w = delta::PlayerState::default();
+        for (i, word) in w.words.iter_mut().enumerate() {
+            *word = (0.5 + i as f32).to_bits();
+        }
+        for (i, a) in w.ammo.iter_mut().chain(w.ammoclip.iter_mut()).enumerate() {
+            *a = i as i32 + 1;
+        }
+        let mut want = PlayerState::from_wire(&w);
+        let mut back = delta::PlayerState::default();
+        want.write_wire(&mut back);
+        not_written(&mut want);
+        assert_eq!(PlayerState::from_wire(&back), want);
+    }
 
     fn set_named(ps: &mut delta::PlayerState, name: &str, v: u32) {
         let f = PLAYER_STATE.iter().find(|f| f.name == name).unwrap();

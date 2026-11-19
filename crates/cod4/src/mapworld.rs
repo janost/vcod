@@ -161,7 +161,13 @@ pub fn to_mapworld(map: &Map, lightmaps: &[LightmapImages]) -> Result<(MapWorld,
     let mut tile_pages: HashMap<Tile, u16> = HashMap::new();
     let mut tiles: Vec<Tile> = Vec::new();
     let mut blocks: Vec<TriangleSoup> = Vec::with_capacity(map.surfaces.len());
-    for s in &map.surfaces {
+    for (si, s) in map.surfaces.iter().enumerate() {
+        // A soup counts its indices in a u16, as the static models' do.
+        ensure!(
+            3 * usize::from(s.tri_count) <= usize::from(u16::MAX),
+            "surface {si}: {} triangles",
+            s.tri_count
+        );
         let tris = s.base_index as usize..s.base_index as usize + 3 * s.tri_count as usize;
         let (lo, hi) = indices[tris.clone()]
             .iter()
@@ -190,8 +196,12 @@ pub fn to_mapworld(map: &Map, lightmaps: &[LightmapImages]) -> Result<(MapWorld,
             shift = (x as f32, y as f32, wide as f32, high as f32);
         }
         let first_vertex = verts.len() as u32;
-        let span =
-            s.first_vertex as usize + usize::from(lo)..=s.first_vertex as usize + usize::from(hi);
+        let first = s.first_vertex as usize;
+        let span = if s.tri_count == 0 {
+            first..first
+        } else {
+            first + usize::from(lo)..first + usize::from(hi) + 1
+        };
         for v in &map.vertices[span] {
             verts.push(DrawVert {
                 pos: v.pos,
@@ -274,13 +284,14 @@ pub fn to_mapworld(map: &Map, lightmaps: &[LightmapImages]) -> Result<(MapWorld,
     let mut reached = vec![false; map.sorted_surfaces.len()];
     for c in &map.cells {
         for t in c.aabb_trees.iter().filter(|t| t.child_count == 0) {
-            let r = t.start_surf_index as usize..(t.start_surf_index + t.surface_count) as usize;
-            reached[r].fill(true);
+            let start = usize::from(t.start_surf_index);
+            reached[start..start + usize::from(t.surface_count)].fill(true);
         }
     }
-    for g in &map.cull_groups {
-        let r = g.start_surf_index as usize..(g.start_surf_index + g.surface_count) as usize;
-        reached[r].fill(true);
+    // An empty group's start may lie past the list (Map::from_assets).
+    for g in map.cull_groups.iter().filter(|g| g.surface_count > 0) {
+        let start = g.start_surf_index as usize;
+        reached[start..start + g.surface_count as usize].fill(true);
     }
     let mut seen = vec![false; map.surfaces.len()];
     for (k, &si) in map.sorted_surfaces.iter().enumerate() {
@@ -834,4 +845,142 @@ fn cell_tree(map: &Map) -> Result<(Vec<Node>, Vec<Leaf>)> {
         }
     }
     Ok((nodes, leafs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assets::world::{GfxAabbTree, GfxCell};
+    use crate::map::{CullGroup, MapMaterial, Surface};
+
+    fn surface(tri_count: u16, first_vertex: u32) -> Surface {
+        Surface {
+            material: 0,
+            lightmap: NO_LIGHTMAP,
+            reflection_probe: 0,
+            primary_light: 0,
+            flags: 0,
+            first_vertex,
+            vertex_count: 0,
+            tri_count,
+            base_index: 0,
+            mins: [0.0; 3],
+            maxs: [0.0; 3],
+        }
+    }
+
+    fn map(surfaces: Vec<Surface>) -> Map {
+        Map {
+            surfaces,
+            materials: vec![MapMaterial::default()],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_empty_cull_group_past_the_sorted_list_converts() {
+        let mut m = map(vec![]);
+        m.cull_groups.push(CullGroup {
+            mins: [0.0; 3],
+            maxs: [0.0; 3],
+            surface_count: 0,
+            start_surf_index: 1000,
+        });
+        to_mapworld(&m, &[]).unwrap();
+    }
+
+    #[test]
+    fn a_surface_with_no_triangles_at_the_vertex_end_converts() {
+        to_mapworld(&map(vec![surface(0, 0)]), &[]).unwrap();
+    }
+
+    #[test]
+    fn a_leaf_range_past_u16_converts() {
+        let mut m = map(vec![surface(0, 0)]);
+        m.sorted_surfaces = vec![0; 0x10001];
+        m.cells.push(GfxCell {
+            aabb_trees: vec![GfxAabbTree {
+                start_surf_index: u16::MAX,
+                surface_count: 2,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        to_mapworld(&m, &[]).unwrap();
+    }
+
+    #[test]
+    fn a_world_surface_past_a_u16_of_indices_is_refused() {
+        let e = to_mapworld(&map(vec![surface(21846, 0)]), &[]).unwrap_err();
+        assert!(format!("{e:#}").contains("21846 triangles"), "{e:#}");
+    }
+
+    fn cells(m: &mut Map, n: usize) {
+        m.cells = vec![GfxCell::default(); n];
+    }
+
+    /// A root entry naming a cell is a one-leaf tree: one node whose sides
+    /// both reach that leaf.
+    #[test]
+    fn a_one_leaf_cell_tree_is_one_node() {
+        let mut m = map(vec![]);
+        cells(&mut m, 2);
+        m.dpvs_nodes = vec![2];
+        let (nodes, leafs) = cell_tree(&m).unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].children, [-1, -1]);
+        assert_eq!(leafs[0].cell, 1);
+    }
+
+    /// One plane node over two cell leaves: entry `cells + 1 + plane`, the
+    /// offset to its back child, then the front child's entry. An offset
+    /// back onto itself is refused, not walked for ever.
+    #[test]
+    fn a_three_entry_cell_tree_splits_two_cells() {
+        let mut m = map(vec![]);
+        cells(&mut m, 2);
+        m.dpvs_planes = vec![crate::map::Plane {
+            normal: [1.0, 0.0, 0.0],
+            dist: 0.0,
+        }];
+        m.dpvs_nodes = vec![3, 3, 1, 2];
+        let (nodes, leafs) = cell_tree(&m).unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].plane, 0);
+        assert_eq!(nodes[0].children, [-1, -2]);
+        assert_eq!(leafs.iter().map(|l| l.cell).collect::<Vec<_>>(), [0, 1]);
+
+        m.dpvs_nodes = vec![3, 0];
+        assert!(cell_tree(&m).is_err());
+        m.dpvs_nodes = vec![4, 2, 1, 2];
+        assert!(cell_tree(&m).is_err(), "plane 1 of 1");
+    }
+
+    /// A cell's surface tree flattens in preorder, a leaf keeping its
+    /// surfaces; a chain past 128 deep is refused.
+    #[test]
+    fn a_cell_surface_tree_flattens_in_preorder_and_stops_past_128() {
+        let node = |child_count, children_offset| GfxAabbTree {
+            child_count,
+            children_offset,
+            ..Default::default()
+        };
+        let leaf = |start_surf_index, surface_count| GfxAabbTree {
+            start_surf_index,
+            surface_count,
+            ..Default::default()
+        };
+        let trees = [node(2, 0x2C), leaf(4, 2), leaf(6, 1)];
+        let mut out = Vec::new();
+        preorder(&trees, 0, &mut out, 0).unwrap();
+        let got: Vec<_> = out
+            .iter()
+            .map(|n| (n.first_soup, n.soup_count, n.child_count))
+            .collect();
+        assert_eq!(got, [(0, 0, 2), (4, 2, 0), (6, 1, 0)]);
+
+        let mut chain: Vec<GfxAabbTree> = (0..129).map(|_| node(1, 0x2C)).collect();
+        chain.push(leaf(0, 1));
+        assert!(preorder(&chain, 0, &mut Vec::new(), 0).is_err());
+    }
 }

@@ -37,7 +37,26 @@ pub struct LoadError {
 /// One file as the source answered it, and its parse.
 struct SourceFile {
     text: String,
-    parsed: Result<crate::ast::File, crate::parse::ParseError>,
+    parsed: Parsed,
+}
+
+/// A file's parse, or once the file compiled, only its function names:
+/// nothing reads its AST again, and an include reads only the names.
+enum Parsed {
+    Ast(Result<crate::ast::File, crate::parse::ParseError>),
+    Names(Vec<String>),
+}
+
+impl SourceFile {
+    /// The function names an include of this file sees; none for a file
+    /// that did not parse.
+    fn names(&self) -> Vec<String> {
+        match &self.parsed {
+            Parsed::Ast(Ok(f)) => f.funcs.iter().map(|f| f.name.clone()).collect(),
+            Parsed::Ast(Err(_)) => Vec::new(),
+            Parsed::Names(n) => n.clone(),
+        }
+    }
 }
 
 /// What a [`Loader`] has done so far, without its source or builtin
@@ -143,7 +162,7 @@ impl Loader {
             return f.clone();
         }
         let f = self.source.read(path).map(|text| {
-            let parsed = crate::parse::parse_file_dialect(&text, self.dialect);
+            let parsed = Parsed::Ast(crate::parse::parse_file_dialect(&text, self.dialect));
             Rc::new(SourceFile { text, parsed })
         });
         self.files.borrow_mut().insert(path.to_string(), f.clone());
@@ -167,7 +186,7 @@ impl Loader {
         self.loaded.len()
     }
 
-    /// Loads `path` and, recursively, every file it references by a static
+    /// Loads `path` and, transitively, every file it references by a static
     /// call target or a bare `::name` function pointer. `path` need not be
     /// canonical; every path discovered from compiled output already is
     /// (the compiler canonicalizes both halves of a `FuncRef`).
@@ -176,14 +195,14 @@ impl Loader {
     /// load, every function this call installed is removed again and every
     /// path it newly marked loaded is unmarked, so a failed load leaves the
     /// `Vm` exactly as it found it (a half-loaded gametype that still looks
-    /// loaded is worse than a clean refusal) and a retry — e.g. once a
-    /// missing file exists — does not silently no-op on a path this call
+    /// loaded is worse than a clean refusal) and a retry (e.g. once a
+    /// missing file exists) does not silently no-op on a path this call
     /// already gave up on.
     pub fn load(&mut self, vm: &mut Vm, path: &str) -> Result<(), LoadError> {
         let mut installed = Vec::new();
         let mut visited = Vec::new();
         let read_before: HashSet<String> = self.files.borrow().keys().cloned().collect();
-        self.load_one(vm, &canonical(path), None, &mut installed, &mut visited)
+        self.load_one(vm, &canonical(path), &mut installed, &mut visited)
             .inspect_err(|_| {
                 vm.uninstall(&installed);
                 for p in &visited {
@@ -193,26 +212,69 @@ impl Loader {
                 self.files
                     .borrow_mut()
                     .retain(|p, _| read_before.contains(p));
-            })
+            })?;
+        // Kept only once the whole load stands: a rollback above may
+        // compile these files again.
+        let mut files = self.files.borrow_mut();
+        for p in &visited {
+            if let Some(Some(f)) = files.get_mut(p)
+                && let Parsed::Ast(_) = f.parsed
+            {
+                *f = Rc::new(SourceFile {
+                    text: f.text.clone(),
+                    parsed: Parsed::Names(f.names()),
+                });
+            }
+        }
+        Ok(())
     }
 
-    /// `referrer` is the canonical path that named `path`, for the missing-
-    /// file error message; `None` at the top-level call. `installed` and
-    /// `visited` accumulate across the whole recursion so `load` can undo
-    /// exactly what this call did, and nothing older.
+    /// `path` and every file it reaches, depth first: a file installs
+    /// before the files it names, which load in sorted order. A stack of
+    /// each open file's remaining references stands in for recursion, so a
+    /// long reference chain costs no native stack. `installed` and
+    /// `visited` accumulate across the walk so `load` can undo exactly what
+    /// this call did, and nothing older.
     fn load_one(
+        &mut self,
+        vm: &mut Vm,
+        path: &str,
+        installed: &mut Vec<FuncRef>,
+        visited: &mut Vec<String>,
+    ) -> Result<(), LoadError> {
+        let mut open = Vec::new();
+        if let Some(refs) = self.load_file(vm, path, None, installed, visited)? {
+            open.push((path.to_string(), refs.into_iter()));
+        }
+        while let Some((referrer, refs)) = open.last_mut() {
+            let Some(r) = refs.next() else {
+                open.pop();
+                continue;
+            };
+            let referrer = referrer.clone();
+            if let Some(refs) = self.load_file(vm, &r, Some(&referrer), installed, visited)? {
+                open.push((r, refs.into_iter()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Compiles and installs one file; the files it references, or `None`
+    /// when it was already loaded. `referrer` is the canonical path that
+    /// named `path`, for the missing-file error message; `None` at the top.
+    fn load_file(
         &mut self,
         vm: &mut Vm,
         path: &str,
         referrer: Option<&str>,
         installed: &mut Vec<FuncRef>,
         visited: &mut Vec<String>,
-    ) -> Result<(), LoadError> {
+    ) -> Result<Option<BTreeSet<String>>, LoadError> {
         // Marked loaded before compiling, not after: two stock scripts
         // referencing each other is ordinary, and marking after would
-        // recurse forever on the cycle.
+        // loop forever on the cycle.
         if !self.loaded.insert(path.to_string()) {
-            return Ok(());
+            return Ok(None);
         }
         visited.push(path.to_string());
 
@@ -226,7 +288,15 @@ impl Loader {
             },
         })?;
 
-        let ast = file.parsed.as_ref().map_err(|e| LoadError {
+        // A compiled file keeps only its names, and it is marked loaded.
+        let Parsed::Ast(parsed) = &file.parsed else {
+            return Err(LoadError {
+                path: path.to_string(),
+                line: 0,
+                msg: "compiled once already, its parse dropped".to_string(),
+            });
+        };
+        let ast = parsed.as_ref().map_err(|e| LoadError {
             path: path.to_string(),
             line: e.line,
             msg: e.msg.clone(),
@@ -238,12 +308,7 @@ impl Loader {
         // that does not parse is reported when it loads below.
         let include_funcs = |p: &str| {
             let file = self.file(p)?;
-            let names = file
-                .parsed
-                .as_ref()
-                .map(|f| f.funcs.iter().map(|f| f.name.clone()).collect())
-                .unwrap_or_default();
-            Some(names)
+            Some(file.names())
         };
         let opts = CompileOptions {
             dialect: self.dialect,
@@ -263,8 +328,8 @@ impl Loader {
         // pointer lowers to a `Value::Function` constant instead, since
         // `Expr::FuncRef` is an AST node compilation resolves away. Both
         // already carry a canonical file, resolved at compile time.
-        // A `BTreeSet`, not a `HashSet`: this drives the recursive load
-        // below, so hash iteration order would make which file a broken
+        // A `BTreeSet`, not a `HashSet`: this drives the load order in
+        // `load_one`, so hash iteration order would make which file a broken
         // reference gets blamed on, and which spelling of a folded key
         // `resolve` keeps (`atom.rs`'s "whichever the compiler saw first"),
         // nondeterministic run to run.
@@ -299,14 +364,17 @@ impl Loader {
         vm.install(fns).map_err(|e| LoadError {
             path: path.to_string(),
             line: 0,
-            msg: e.to_string(),
+            msg: match e {
+                crate::vm::InstallError::Duplicate(r) => format!(
+                    "duplicate function {}::{}",
+                    vm.interner().resolve(r.file),
+                    vm.interner().resolve(r.name)
+                ),
+                e => e.to_string(),
+            },
         })?;
         installed.extend(new_funcs);
-
-        for r in refs {
-            self.load_one(vm, &r, Some(path), installed, visited)?;
-        }
-        Ok(())
+        Ok(Some(refs))
     }
 
     /// Every distinct builtin name an installed function calls, for which
@@ -373,6 +441,63 @@ mod tests {
             s.1 += 1;
             s.0.get(canonical).cloned()
         }
+    }
+
+    /// A reference chain thousands of files long loads off the native
+    /// stack; a missing link names the file that referenced it.
+    #[test]
+    fn a_long_reference_chain_loads() {
+        let n = 5_000;
+        let mut files: Vec<(String, String)> = (0..n)
+            .map(|i| (format!("f{i}"), format!("main() {{ f{}::main(); }}", i + 1)))
+            .collect();
+        files.push((format!("f{n}"), "main() { }".into()));
+        let refs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect();
+        let mut l = Loader::new(Box::new(source(&refs)));
+        l.load(&mut Vm::new(), "f0").unwrap();
+        assert_eq!(l.loaded_count(), n + 1);
+
+        let mut l = Loader::new(Box::new(source(&refs[..n])));
+        let e = l.load(&mut Vm::new(), "f0").unwrap_err();
+        assert_eq!(e.path, format!("f{n}"));
+        assert!(
+            e.msg.contains(&format!("referenced from f{}", n - 1)),
+            "{}",
+            e.msg
+        );
+        assert_eq!(l.loaded_count(), 0);
+    }
+
+    /// A loaded file keeps its text and names, not its AST; a later file
+    /// including it still resolves its functions, and a failed load
+    /// compiles again on retry.
+    #[test]
+    fn a_compiled_file_keeps_its_names_and_drops_its_ast() {
+        let src = Shared::default();
+        src.set("a", "#include c;\nmain() { one(); }");
+        src.set("c", "one() { }");
+        src.set("d", "#include c;\nmain() { one(); missing::x(); }");
+        let mut vm = Vm::new();
+        let mut l = Loader::with_dialect(Box::new(src.clone()), Dialect::Cod2);
+        l.load(&mut vm, "a").unwrap();
+        let asts = |l: &Loader| {
+            l.files
+                .borrow()
+                .values()
+                .flatten()
+                .filter(|f| matches!(f.parsed, Parsed::Ast(_)))
+                .count()
+        };
+        assert_eq!(asts(&l), 0);
+        assert_eq!(l.state().text("c"), Some("one() { }"));
+        assert!(l.load(&mut vm, "d").is_err());
+        src.set("missing", "x() { }");
+        l.load(&mut vm, "d").unwrap();
+        assert_eq!(asts(&l), 0);
+        assert_eq!(l.loaded_count(), 4);
     }
 
     #[test]
@@ -501,7 +626,7 @@ mod tests {
     }
 
     /// A bare `::name` pointer with no call around it (`x = file::fn;`)
-    /// lowers to a `Value::Function` constant, not an `Op::Call` — the shape
+    /// lowers to a `Value::Function` constant, not an `Op::Call`: the shape
     /// every stock gametype uses to register its engine callbacks. Deleting
     /// the constant-pool scan in `load_one` would still pass every other
     /// test in this file; only this one would catch it.
@@ -544,9 +669,9 @@ mod tests {
         assert_eq!(l.loaded_count(), 2);
     }
 
-    /// `refs` (the set driving recursive loading) is a `BTreeSet`, so with
+    /// `refs` (the set driving the load order) is a `BTreeSet`, so with
     /// several broken references from one file, the one reported is always
-    /// the alphabetically first — deterministic run to run, not whichever a
+    /// the alphabetically first: deterministic run to run, not whichever a
     /// `HashSet`'s hash-seed-dependent iteration order happened to visit
     /// first.
     #[test]

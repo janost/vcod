@@ -12,7 +12,7 @@ use common::{ClientEnd, Queues};
 use std::cell::RefCell;
 use std::net::SocketAddr;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::protocol::PROTOCOL_V6;
 use vcod_common::net::{NetClient, NetEvent, Userinfo};
 
@@ -36,13 +36,9 @@ fn escaped(letter: &str, text: &str) -> String {
 
 #[test]
 fn squad_says_reach_retail_s_listeners_on_15b() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     let text = include_str!("fixtures/chat/mp_carentan-squad-1.5.txt");
     let says: Vec<(usize, &str)> = text
         .lines()
@@ -58,17 +54,14 @@ fn squad_says_reach_retail_s_listeners_on_15b() {
         want[n.parse::<usize>().unwrap()].push(line.to_string());
     }
 
-    let bsp_path = fs.resolve_map("mp_carentan").expect("the map");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg("mp_carentan", PROBE), now);
-    sv.set_protocol(&PROTOCOL_V6);
-    sv.overlay_script(
-        &format!("maps/mp/gametypes/{PROBE}"),
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_squad.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&PROTOCOL_V6),
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_squad.gsc"
+        )),
+        ..common::Boot::new("mp_carentan", PROBE)
+    }
+    .start(fs);
 
     let addrs: [SocketAddr; 4] =
         std::array::from_fn(|i| SocketAddr::from(([127, 0, 0, 1], 31400 + i as u16)));

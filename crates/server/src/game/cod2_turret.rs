@@ -27,18 +27,7 @@ const FRAME_MS: i32 = 50;
 /// origin (rodata 0x815ac4c), mask 0x2810011 (lnxded 0x810aa50). VERIFIED.
 const PLACE_DROP: f32 = 60.0;
 
-/// A gun as the bots read it ([`Cod2Level::gun_list`]).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct GunInfo {
-    pub id: EntId,
-    pub origin: Vec3,
-    pub yaw: f32,
-    /// [min, max] off the gun's angles: pitch [-top, bottom], yaw [-right,
-    /// left] (`TurretRecord`).
-    pub yaw_range: [f32; 2],
-    pub pitch_range: [f32; 2],
-    pub owner: Option<usize>,
-}
+pub use crate::game::turret::GunInfo;
 
 /// What a client's turret use keeps beside its playerstate.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -156,31 +145,12 @@ impl Cod2Level {
     /// Every gun with its pose, arcs and gunner, for the bots
     /// (`bots::cod2::gun`).
     pub fn gun_list(&mut self) -> Vec<GunInfo> {
-        let ids: Vec<EntId> = self.rt.host.turrets.keys().copied().collect();
-        ids.into_iter()
-            .filter_map(|id| {
-                let (origin, angles) = self.gun_pose(id)?;
-                let rec = self.rt.host.turrets.get(&id)?;
-                Some(GunInfo {
-                    id,
-                    origin: Vec3::from(origin),
-                    yaw: angles[1],
-                    yaw_range: rec.yaw_range,
-                    pitch_range: rec.pitch_range,
-                    owner: rec.owner,
-                })
-            })
-            .collect()
+        self.rt.gun_list()
     }
 
     /// The gun `slot` mans, if any.
     pub fn manned_gun(&self, slot: usize) -> Option<EntId> {
-        self.rt
-            .host
-            .turrets
-            .iter()
-            .find(|(_, r)| r.owner == Some(slot))
-            .map(|(id, _)| *id)
+        self.rt.host.manned_gun(slot)
     }
 
     /// `G_IsTurretUsable` (lnxded 0x810c358) with 0x810c1be's arc test:
@@ -259,14 +229,25 @@ impl Cod2Level {
     /// gunner `turret_think_client` (0x810bb0a). Runs after the frame's
     /// `pm_flags` 0x800000 is set.
     pub fn turret_end_frame(&mut self) {
-        // A gunner gone or respawned off the gun lets it go (`ClientSpawn`
-        // and the entity's free call `G_ClientStopUsingTurret`, lnxded
-        // 0x80f910e). INFERRED, which of the two vcod's respawn stands for.
+        // A gun the script freed under its gunner (`G_FreeTurret`): the
+        // record half ran in `GameHost::free_entity`.
+        for op in std::mem::take(&mut self.rt.host.turret_ops) {
+            if let crate::game::turret::TurretOp::Release {
+                slot,
+                origin,
+                stance,
+            } = op
+            {
+                self.release_gunner(slot, origin, stance);
+            }
+        }
+        // A gunner gone lets the gun go (the entity's free calls
+        // `G_ClientStopUsingTurret`, lnxded 0x80f910e); a spawn releases
+        // before its placement (`Cod2Level::run_frame`).
         let stale: Vec<EntId> = (self.rt.host.turrets.iter())
             .filter_map(|(id, r)| {
                 let p = self.players.get(r.owner?).and_then(Option::as_ref);
-                p.is_none_or(|p| p.ps.e_flags & ef::TURRET == 0)
-                    .then_some(*id)
+                p.is_none().then_some(*id)
             })
             .collect();
         for id in stale {
@@ -507,6 +488,17 @@ impl Cod2Level {
         if let Some(ent) = self.rt.host.ents.get_mut(id) {
             ent.loop_sound = 0;
         }
+        self.release_gunner(slot, origin, stance);
+    }
+
+    /// `G_ClientStopUsingTurret`'s player half: the stance event,
+    /// `TeleportPlayer` to the mount spot and the lock let go.
+    fn release_gunner(
+        &mut self,
+        slot: usize,
+        origin: [f32; 3],
+        stance: Option<vcod_common::pmove::Stance>,
+    ) {
         let Some(p) = self.players.get_mut(slot).and_then(Option::as_mut) else {
             return;
         };
@@ -550,7 +542,8 @@ fn aim_barrel(rec: &mut TurretRecord, ps: &PlayerState, angles: [f32; 3]) {
 }
 
 /// `AngleNormalize360Accurate`.
-fn normalize360(mut a: f32) -> f32 {
+fn normalize360(a: f32) -> f32 {
+    let mut a = vcod_common::fguard::turns(a);
     while a < 0.0 {
         a += 360.0;
     }
@@ -563,6 +556,15 @@ fn normalize360(mut a: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A gun angle of 1e30 or an infinity folds at once (SEC-080).
+    #[test]
+    fn a_hostile_angle_folds_at_once() {
+        for a in [1e30f32, -1e30, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!((0.0..360.0).contains(&normalize360(a)), "{a}");
+        }
+        assert_eq!(normalize360(-90.0), 270.0);
+    }
 
     #[test]
     fn the_hint_strings_take_the_first_free_slots_in_order() {

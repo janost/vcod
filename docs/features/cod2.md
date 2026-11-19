@@ -209,7 +209,8 @@ levelshot` writes a resampled 128 x 128 `levelshots/<map>.tga`,
   dir, over UDP (`sv_allowDownload`; stock paks refused as retail does),
   or redirects to `sv_wwwBaseURL` (`sv_wwwDownload`).
 - `--set dedicated=2` heartbeats `master.cod.pm:20710` every three
-  minutes.
+  minutes, or the master `sv_master1` names, plus any in
+  `sv_master2`..`5`. Retail has no `sv_master` dvars.
 - `g_log` writes 1.3's `games_mp.log`
   ([cod11-map-cycle.md](../research/cod11-map-cycle.md) 9).
 - Retail `CoD2MP_s.exe` 1.3 joins it, pure or not: menus, spawn, move,
@@ -294,7 +295,7 @@ Joined clients follow.
 
 ### Bots
 
-`--bots N [--bots-shoot]` adds bots that join through the stock menus and
+`--bots N [--bots-peaceful]` adds bots that join through the stock menus and
 play every stock gametype with vcod's shared bot brain
 ([bots.md](../bots.md#cod2)):
 
@@ -358,6 +359,9 @@ a GPU, and sound and voice chat have not been compared by ear.
 - The browser asks `master.cod.pm` for its Internet list.
 - `VCOD_NETSIM`, the F3 net and prediction lines, and the headless
   `--net-probe` and `--probe-demo` clients.
+- `vc_widescreen 1` (default): Hor+ past 4:3, as on CoD1. `cg_fov` is a
+  4:3 view's width and a wider window sees more at the sides; `0` keeps
+  retail's fixed horizontal fov.
 - `r_vc_depthprepass` (default 1 on CoD2): a depth-only pass before the
   lit world, same pixels, faster on most GPUs.
 

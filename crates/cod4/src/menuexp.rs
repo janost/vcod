@@ -7,6 +7,7 @@
 //! comes from an [`Env`].
 
 use crate::assets::ui::ExpEntry;
+pub use vcod_common::text::atof;
 
 /// An operand: `expDataType` 0 int, 1 float, 2 string.
 #[derive(Clone, Debug, PartialEq)]
@@ -101,13 +102,16 @@ pub struct ScoreRow {
     pub kills: i32,
 }
 
+/// The highest stat index [`Env::stat`] may answer non-zero.
+pub const STAT_INDEX_MAX: i32 = u16::MAX as i32;
+
 /// What an expression reads.
 pub trait Env {
     /// A dvar's value as a string, `None` when it does not exist.
     fn dvar(&self, name: &str) -> Option<String>;
     /// A UI local variable (`setLocalVarInt` and kin).
     fn local(&self, name: &str) -> Option<Value>;
-    /// `stat(n)`: the profile's stat `n`.
+    /// `stat(n)`: the profile's stat `n`, 0 outside `0..=STAT_INDEX_MAX`.
     fn stat(&self, index: i32) -> i32;
     /// The local player's `team_t`: 0 free, 1 axis, 2 allies, 3
     /// spectator.
@@ -431,12 +435,23 @@ impl Stacks<'_> {
         match top {
             op::NOOP | op::OPEN => {}
             // A `)` runs everything down to and including the `(` or the
-            // call it closes.
+            // call it closes. A `)` met on the way closes its own first,
+            // counted here rather than run nested, so a run of `)`s costs
+            // no native stack.
             op::CLOSE => {
-                while let Some(&next) = self.pending.last() {
+                let mut open = 1u32;
+                while open > 0 {
+                    let Some(&next) = self.pending.last() else {
+                        break;
+                    };
+                    if next == op::CLOSE {
+                        self.pending.pop();
+                        open += 1;
+                        continue;
+                    }
                     self.run_top();
                     if next == op::OPEN || next >= op::SIN {
-                        break;
+                        open -= 1;
                     }
                 }
             }
@@ -616,8 +631,10 @@ fn call_value(env: &dyn Env, call: i32, args: &[Value]) -> Value {
         }),
         STAT_RANGE_ANY_BITS_SET => flag(match args {
             [from, to, mask] => {
+                // Every stat past the block reads 0 ([`Env::stat`]).
                 let mask = mask.int();
-                (from.int()..=to.int()).any(|i| env.stat(i) & mask != 0)
+                let (from, to) = (from.int().max(0), to.int().min(STAT_INDEX_MAX));
+                (from..=to).any(|i| env.stat(i) & mask != 0)
             }
             _ => false,
         }),
@@ -625,7 +642,7 @@ fn call_value(env: &dyn Env, call: i32, args: &[Value]) -> Value {
         ACTION_SLOT_USABLE => {
             let slot = arg().int();
             let usable = game.is_some_and(|g| {
-                usize::try_from(slot - 1)
+                usize::try_from(slot.wrapping_sub(1))
                     .ok()
                     .and_then(|i| g.action_slots.get(i))
                     .copied()
@@ -850,41 +867,6 @@ pub fn atoi(s: &str) -> i32 {
     (if neg { -v } else { v }) as i32
 }
 
-/// C's `atof`: the longest leading decimal number; 0 for none.
-pub fn atof(s: &str) -> f64 {
-    let t = s.trim_start();
-    let b = t.as_bytes();
-    let mut end = 0;
-    if matches!(b.first(), Some(b'-' | b'+')) {
-        end = 1;
-    }
-    let digits = |end: &mut usize| {
-        while b.get(*end).is_some_and(u8::is_ascii_digit) {
-            *end += 1;
-        }
-    };
-    digits(&mut end);
-    if b.get(end) == Some(&b'.') {
-        end += 1;
-        digits(&mut end);
-    }
-    let mut best = t[..end].parse::<f64>().unwrap_or(0.0);
-    if matches!(b.get(end), Some(b'e' | b'E')) {
-        let mut e = end + 1;
-        if matches!(b.get(e), Some(b'-' | b'+')) {
-            e += 1;
-        }
-        let start = e;
-        digits(&mut e);
-        if e > start
-            && let Ok(v) = t[..e].parse::<f64>()
-        {
-            best = v;
-        }
-    }
-    best
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1097,6 +1079,8 @@ mod tests {
         assert_eq!(call(0x4b, s("+actionslot 1")), Some(Value::Str("N".into())));
         assert_eq!(call(0x4c, I(1)), Some(Value::Int(1)));
         assert_eq!(call(0x4c, I(5)), Some(Value::Int(0)));
+        // A slot of i32::MIN is no slot, not an overflow (BUG-150).
+        assert_eq!(call(0x4c, I(i32::MIN)), Some(Value::Int(0)));
         assert_eq!(call(0x4d, s("weapon")), Some(Value::Float(0.5)));
         assert_eq!(
             eval(&[Op(16), Op(0x3e), Op(1)], &g),
@@ -1160,6 +1144,57 @@ mod tests {
             eval(&[Op(81), s("x"), Op(1)], &E),
             Err(Unsupported("operator 81".into()))
         );
+    }
+
+    /// `statRangeAnyBitsSet` over the whole int range reads only the stats
+    /// block: one call, at once, no bit of 2 set in stat 201's 25.
+    #[test]
+    fn a_huge_stat_range_reads_only_the_block() {
+        let start = std::time::Instant::now();
+        let range = |mask| {
+            eval(
+                &[
+                    Op(op::STAT_RANGE_ANY_BITS_SET),
+                    I(i32::MIN),
+                    Op(op::COMMA),
+                    I(i32::MAX),
+                    Op(op::COMMA),
+                    I(mask),
+                    Op(op::CLOSE),
+                ],
+                &E,
+            )
+        };
+        assert_eq!(range(2), Ok(Some(Value::Int(0))));
+        assert_eq!(range(1), Ok(Some(Value::Int(1))));
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    /// A run of 100,000 `)`s, with and without their `(`s, closes in a
+    /// loop, not one native frame each.
+    #[test]
+    fn a_long_run_of_closes_returns() {
+        let n = 100_000;
+        let mut nested = vec![Op(op::OPEN); n];
+        nested.push(I(1));
+        nested.extend(std::iter::repeat_n(Op(op::CLOSE), n));
+        assert_eq!(eval(&nested, &E), Ok(Some(Value::Int(1))));
+        let mut bare = vec![I(1)];
+        bare.extend(std::iter::repeat_n(Op(op::CLOSE), n));
+        assert_eq!(eval(&bare, &E), Ok(Some(Value::Int(1))));
+        // `(1 + (2)) * 3`: a `)` inside another still closes only its own.
+        let mixed = [
+            Op(op::OPEN),
+            I(1),
+            Op(op::ADD),
+            Op(op::OPEN),
+            I(2),
+            Op(op::CLOSE),
+            Op(op::CLOSE),
+            Op(2),
+            I(3),
+        ];
+        assert_eq!(eval(&mixed, &E), Ok(Some(Value::Int(9))));
     }
 
     /// Operator edges no stock menu reaches, pinned on their values.

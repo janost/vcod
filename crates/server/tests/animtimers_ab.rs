@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::pk3::Pk3Fs;
 
 const MAP: &str = "mp_carentan";
@@ -125,26 +125,22 @@ fn retail(text: &str) -> Capture {
 /// placement's: `commandTime` to the two timers, `legsAnim` and
 /// `torsoAnim`, one entry per snapshot.
 fn ours(
-    p: &'static Protocol,
+    p: &'static Cod1Wire,
     fs: Pk3Fs,
     cap: &Capture,
     cvars: &[(&str, &str)],
 ) -> BTreeMap<i32, [i32; 4]> {
     let src = format!("../gsc/tests/fixtures/semantics/client-probes/{PROBE}.gsc");
     let probe = std::fs::read_to_string(src).expect("read the probe");
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, PROBE), now);
-    sv.set_protocol(p);
-    sv.overlay_script(&format!("maps/mp/gametypes/{PROBE}"), &probe);
-    sv.set_cvar("probe_teleport", "1");
-    sv.set_cvar("probe_spot", "street");
-    for (k, v) in cvars {
-        sv.set_cvar(k, v);
+    let mut all_cvars = vec![("probe_teleport", "1"), ("probe_spot", "street")];
+    all_cvars.extend_from_slice(cvars);
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        cvars: &all_cvars,
+        script: Some(&probe),
+        ..common::Boot::new(MAP, PROBE)
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let mut cl = common::connect(&mut sv, &q, &mut now);
@@ -199,7 +195,7 @@ fn ours(
         let t = cl
             .snapshots()
             .newest()
-            .map_or(0, |s| s.server_time + common::FRAME_MS as i32);
+            .map_or(0, |s| (s.server_time + common::FRAME_MS as i32).raw());
         if t > last {
             break;
         }
@@ -250,12 +246,12 @@ fn ours(
 /// Retail's timers against ours on every snapshot both reached, and with
 /// `anims` the two channels' anim indices too; returns how many non-zero
 /// retail timers were compared.
-fn check(p: &'static Protocol, fs: Pk3Fs, tag: &str) -> usize {
+fn check(p: &'static Cod1Wire, fs: Pk3Fs, tag: &str) -> usize {
     check_with(p, fs, tag, &[], false)
 }
 
 fn check_with(
-    p: &'static Protocol,
+    p: &'static Cod1Wire,
     fs: Pk3Fs,
     tag: &str,
     cvars: &[(&str, &str)],
@@ -333,13 +329,9 @@ fn the_springfield_timers_run_like_retail_on_1_1() {
 
 #[test]
 fn the_anim_timers_run_like_retail_on_1_5() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     let live = check(&PROTOCOL_V6, fs, "moves-1.5");
     assert!(live > 50, "{live}");
 }
@@ -368,13 +360,9 @@ fn the_prone_move_anims_run_like_retail_on_1_1() {
 
 #[test]
 fn the_prone_move_anims_run_like_retail_on_1_5() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     let live = check_with(&PROTOCOL_V6, fs, "pronemove-rifle-1.5", &[], true);
     assert!(live > 20, "{live}");
 }

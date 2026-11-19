@@ -751,8 +751,8 @@ mod tests {
             Default::default(),
         );
         audio.on_gamestate("mp_crash");
-        // Its loops ring on until stopped, as a device's would.
-        audio.keep_silent_loops();
+        // Its loops ring on until stopped, as a device's do.
+        audio.mock_mixer();
         let mut fx = crate::fx::sim::FxSystem::new();
         let mut c = crate::cod4_client::Cod4Client::new(
             s,
@@ -854,6 +854,7 @@ mod tests {
             // system's voices.
             seen.sounds
                 .extend(audio.mix().into_iter().map(|(row, _)| row.name));
+            audio.pump_mixer(f64::from(dt));
             audio.step(&positions, &HashMap::new(), None);
             let snap = c.session.client().snapshots.last().cloned();
             if let (Some(sn), Some(gs)) = (&snap, c.session.gamestate()) {

@@ -1,10 +1,9 @@
-//! The shared host's entities as CoD4 1.7 sends them (`Ent4`, design
-//! decision D4 a): the host builds an entity in CoD2's field names
+//! The shared host's entities as CoD4 1.7 sends them: the host builds an entity in CoD2's field names
 //! ([`super::COD4_HOST_PROTO`]), and [`ent4`] moves each field into the
 //! word of CoD4's `entityState_t` of the same meaning (`lerp.` before the
 //! trajectories and `eFlags`, `leanf` in the player union). The types 1.7
-//! shares with CoD2's numbering (0 general .. 9 loop fx) go through; any
-//! other is left out until its own stage builds it.
+//! shares with CoD2's numbering (0 general .. 9 loop fx) go through; the
+//! level builds its other types' entities itself.
 
 use vcod_cod4::net::delta::{EntityState, HudElem, MAX_HUDELEMS};
 use vcod_cod4::net::fields::HUDELEM;
@@ -37,8 +36,8 @@ const COD2_ET_TURRET: i32 = 9;
 /// One host entity in CoD4's words, `None` for a type 1.7 numbers
 /// otherwise.
 pub fn ent4(e: &msg::EntityState) -> Option<EntityState> {
-    let p = &super::COD4_HOST_PROTO;
-    let etype = e.field_i32(p, "eType");
+    let words = host_words();
+    let etype = words.etype.map_or(0, |i| e.fields[i]);
     if !(0..=LAST_SHARED_TYPE).contains(&etype) {
         return None;
     }
@@ -52,24 +51,51 @@ pub fn ent4(e: &msg::EntityState) -> Option<EntityState> {
     let mut out = EntityState::default();
     out.0[0] = e.number;
     out.0[1] = etype;
-    let table = EntityState::table(etype);
-    for (f, &v) in p.entity_fields.iter().zip(&e.fields) {
+    let map = &words.by_type[etype as usize];
+    for (to, &v) in map.iter().zip(&e.fields) {
+        let Some((word, tr_type)) = *to else {
+            continue;
+        };
         if v == 0 {
             continue;
         }
-        let Some(name) = cod4_name(f.name) else {
-            continue;
-        };
-        let v = if name.ends_with(".trType") {
-            tr_type4(v)
-        } else {
-            v
-        };
-        if let Some(t) = table.iter().find(|t| t.name == name) {
-            out.0[t.word()] = v as u32;
-        }
+        let v = if tr_type { tr_type4(v) } else { v };
+        out.0[word] = v as u32;
     }
     Some(out)
+}
+
+/// [`ent4`]'s field moves, found by name once: per CoD4 `eType` that
+/// [`ent4`] builds, each host field's CoD4 word and whether it is a
+/// `trType`.
+struct HostWords {
+    etype: Option<usize>,
+    by_type: Vec<Vec<Option<(usize, bool)>>>,
+}
+
+fn host_words() -> &'static HostWords {
+    static WORDS: std::sync::OnceLock<HostWords> = std::sync::OnceLock::new();
+    WORDS.get_or_init(|| {
+        let p = &super::COD4_HOST_PROTO;
+        let last = (LAST_SHARED_TYPE as u32).max(super::turret::ET_MG42);
+        let by_type = (0..=last)
+            .map(|etype| {
+                let table = EntityState::table(etype);
+                p.entity_fields
+                    .iter()
+                    .map(|f| {
+                        let name = cod4_name(f.name)?;
+                        let t = table.iter().find(|t| t.name == name)?;
+                        Some((t.word(), name.ends_with(".trType")))
+                    })
+                    .collect()
+            })
+            .collect();
+        HostWords {
+            etype: msg::EntityState::field_index(p, "eType"),
+            by_type,
+        }
+    })
 }
 
 /// A host `trType` (CoD2's numbering) as 1.7 numbers it: CoD4 has no

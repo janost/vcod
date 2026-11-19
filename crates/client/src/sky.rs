@@ -1,3 +1,6 @@
+//! Contains routines ported from the RTCW-MP GPL source, Copyright (C) 1999-2010 id Software LLC, a ZeniMax Media company.
+//! See NOTICE.
+//!
 //! Sky geometry: the farbox cube sides and the cloud-dome grid, transcribed
 //! from RTCW-MP `src/renderer/tr_sky.c`. Pure math; the GPU side lives in
 //! `renderer.rs` (`SkyRender`) and `sky.wgsl`.

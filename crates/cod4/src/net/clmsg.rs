@@ -1,7 +1,7 @@
 //! A CoD4 1.7 client message: its ops (client commands, a move with its
 //! usercmds) and their writer, the mirror image the probe builds its
 //! packets with and the capture gate re-encodes against
-//! (docs/research/cod4-netfields.md, "The client's answer").
+//! (docs/research/cod4-netfields.md 5).
 //!
 //! The usercmd's fields, widths and keys follow `cod4_lnxded` 1.7's reader
 //! (0x813928e) and the choice of branch `iw3mp.exe`'s writer (0x505c60);
@@ -9,10 +9,17 @@
 //! through it is the check (section 8).
 
 use super::huffman::Huffman;
-use super::parse::{UNUSED_HUFF, read_raw_string};
+use super::parse::{UNUSED_HUFF, read_string_capped};
+
+/// The most bytes of a client command the server keeps: the Q3 lineage's
+/// 1024-byte string buffer, as the 0x400-byte userinfo copy
+/// (`SV_UpdateUserinfo_f` 0x8170536).
+pub const MAX_CLIENT_COMMAND: usize = 1023;
 use anyhow::{Result, bail};
 use vcod_common::net::codec::{MsgReader, MsgWriter};
 
+/// The most usercmds a move message may carry (`SV_UserMove` 0x81725c3).
+pub const MAX_PACKET_USERCMDS: usize = 32;
 pub const CLC_MOVE: u32 = 0;
 pub const CLC_MOVE_NO_DELTA: u32 = 1;
 pub const CLC_CLIENT_COMMAND: u32 = 2;
@@ -423,9 +430,6 @@ pub fn usercmd_key(checksum_feed: i32, message_ack: i32, server_command: &[u8]) 
     checksum_feed ^ message_ack ^ vcod_common::net::com_hash_key_bytes(server_command, 32)
 }
 
-/// The ops of a decompressed client block (`SV_ExecuteClientMessage`): 3-bit
-/// op codes, commands until the move. `base` is the first cmd's base;
-/// fields a cmd leaves unsent read off it.
 /// The commands that open a message, up to its first other op: what
 /// `SV_ProcessClientCommands` reads of a message from before a
 /// map change, whose usercmds are keyed to the last level's feed.
@@ -434,7 +438,7 @@ pub fn read_commands(plain: Vec<u8>) -> Vec<ClOp> {
     let mut ops = Vec::new();
     while r.read_bits(3) as u32 == CLC_CLIENT_COMMAND && !r.is_overflowed() {
         let sequence = r.read_long();
-        let text = read_raw_string(&mut r);
+        let text = read_string_capped(&mut r, MAX_CLIENT_COMMAND);
         if r.is_overflowed() {
             break;
         }
@@ -443,6 +447,9 @@ pub fn read_commands(plain: Vec<u8>) -> Vec<ClOp> {
     ops
 }
 
+/// The ops of a decompressed client block (`SV_ExecuteClientMessage`): 3-bit
+/// op codes, commands until the move. `base` is the first cmd's base;
+/// fields a cmd leaves unsent read off it.
 pub fn read_ops(plain: Vec<u8>, key: i32, base: &UserCmd) -> Result<Vec<ClOp>> {
     let mut r = MsgReader::from_plain(plain);
     let mut ops = Vec::new();
@@ -458,7 +465,7 @@ pub fn read_ops(plain: Vec<u8>, key: i32, base: &UserCmd) -> Result<Vec<ClOp>> {
             }
             CLC_CLIENT_COMMAND => {
                 let sequence = r.read_long();
-                let text = read_raw_string(&mut r);
+                let text = read_string_capped(&mut r, MAX_CLIENT_COMMAND);
                 ops.push(ClOp::Command { sequence, text });
             }
             CLC_MOVE | CLC_MOVE_NO_DELTA => {
@@ -587,6 +594,36 @@ mod tests {
         assert_eq!(read_ops(plain, key, &base).unwrap(), ops);
     }
 
+    /// A client command keeps its first 1023 bytes; the rest is read to
+    /// its NUL and the ops after it still parse.
+    #[test]
+    fn a_long_client_command_keeps_1023_bytes() {
+        let base = UserCmd::default();
+        let ops = vec![
+            ClOp::Command {
+                sequence: 3,
+                text: vec![b'a'; 100_000],
+            },
+            ClOp::Command {
+                sequence: 4,
+                text: b"say hi".to_vec(),
+            },
+            ClOp::Eof,
+        ];
+        let got = read_ops(write_ops(&ops, 0, &base), 0, &base).unwrap();
+        assert_eq!(
+            got,
+            [
+                ClOp::Command {
+                    sequence: 3,
+                    text: vec![b'a'; MAX_CLIENT_COMMAND],
+                },
+                ops[1].clone(),
+                ClOp::Eof,
+            ]
+        );
+    }
+
     /// Pins the wire bytes of every branch: the long one with the location
     /// and melee fields, a short one, an unchanged one and a long time.
     #[test]
@@ -643,5 +680,35 @@ mod tests {
             "81058813000039e2efd10e87e287639dd1f0944d85a3c801107e6487711115a4f04611282300005812dd0c07000000080000000900000028230000"
         );
         assert_eq!(read_ops(plain, key, &base).unwrap(), ops);
+    }
+
+    /// A cmd clock at either end of `int`: the one-byte step wraps past
+    /// `i32::MAX` as retail's `int` add does; the whole-clock branches
+    /// carry both ends.
+    #[test]
+    fn the_clock_wraps_at_the_ends_of_int() {
+        let base = UserCmd::default();
+        let key = 0x5a5a_1234u32 as i32;
+        let (a, b) = (cmd(i32::MAX - 5), cmd(i32::MIN + 3));
+        let short = CmdWire::natural(&a, &b);
+        assert_ne!(short.branch, Branch::Long);
+        let (lo, hi) = (cmd(i32::MIN), cmd(i32::MAX));
+        let ops = vec![
+            ClOp::Move {
+                delta: true,
+                cmds: vec![
+                    (a, CmdWire::full(&base, &a)),
+                    (b, short),
+                    (lo, CmdWire::natural(&b, &lo)),
+                    (hi, CmdWire::natural(&lo, &hi)),
+                ],
+                origin: [0, 0, 0],
+                origin_time: i32::MAX,
+            },
+            ClOp::Eof,
+        ];
+        let plain = write_ops(&ops, key, &base);
+        assert_eq!(read_ops(plain.clone(), key, &base).unwrap(), ops);
+        assert_eq!(write_ops(&ops, key, &base), plain);
     }
 }

@@ -68,14 +68,14 @@ fn hud_assets_come_out_of_the_ui_zones() {
     assert_eq!((stance.owner_draw, stance.rect.rect[0]), (20, -1000.0));
     let m16 = &a.weapon_hud["m16_gl_mp"];
     assert_eq!(
-        (m16.ammo_name.as_str(), m16.offhand_class),
+        (m16.ammo_name.as_str(), m16.def.offhand_class),
         ("5.56 × 45 mm nato", 0)
     );
-    assert_eq!(a.weapon_hud["frag_grenade_mp"].offhand_class, 1);
+    assert_eq!(a.weapon_hud["frag_grenade_mp"].def.offhand_class, 1);
     // The clip graphic's kind and the clip's size (cod4-hud.md 9).
     let clip = |w: &str| {
         let d = &a.weapon_hud[w];
-        (d.ammo_counter_clip, d.clip_size)
+        (d.ammo_counter_clip, d.def.clip_size)
     };
     assert_eq!(clip("m16_gl_mp"), (1, 30));
     assert_eq!(clip("beretta_mp"), (1, 15));

@@ -192,7 +192,7 @@ impl GameHost {
         );
         for slot in self.client_slots() {
             self.client_commands
-                .push((slot, "e \"PATCH_1_5_TIMEOUT_EXPIRED\"".to_string()));
+                .push(slot, "e \"PATCH_1_5_TIMEOUT_EXPIRED\"".to_string());
         }
         true
     }
@@ -200,13 +200,19 @@ impl GameHost {
     /// The caller's name as the banner line names it: `Q_CleanStr` of the
     /// session name.
     fn timeout_name(&self, slot: usize) -> String {
-        crate::game::say::clean_name(self.client_names.get(slot).map_or("", String::as_str))
+        crate::game::say::clean_name(
+            self.clients
+                .get(slot)
+                .map(|c| &c.name)
+                .map_or("", String::as_str),
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::commands::one;
     use vcod_gsc::{Host, Value};
 
     fn host(vm: &mut vcod_gsc::Vm, teams: &[&str]) -> GameHost {
@@ -226,7 +232,7 @@ mod tests {
                     host.set_field(cx, ent, atom, v).unwrap();
                 }
             });
-            host.client_names[slot] = format!("^2p{slot}");
+            host.clients[slot].name = format!("^2p{slot}");
         }
         host
     }
@@ -321,7 +327,7 @@ mod tests {
         assert_eq!(host.configstrings[CS_TIMEOUT_MS], "5000");
         assert_eq!(
             host.client_commands,
-            [(0, "e \"PATCH_1_5_TIMEOUT_EXPIRED\"".to_string())]
+            [(one(0), "e \"PATCH_1_5_TIMEOUT_EXPIRED\"".to_string())]
         );
         assert!(host.check_match_timeout(21_001));
         assert_eq!(

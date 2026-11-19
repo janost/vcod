@@ -12,7 +12,7 @@
 //!   `TR_INTERPOLATE` one, or a client's `TR_LINEAR_STOP` (players), lerps
 //!   between the two snapshots as `CG_CalcEntityLerpPositions` does; every
 //!   other one evaluates its trajectory at the render time
-//!   ([`Trajectory2::evaluate`]), riding the script mover under it. An
+//!   ([`Trajectory2::evaluate_f32`]), riding the script mover under it. An
 //!   entity new in the snapshot or whose teleport bit flipped starts from
 //!   its newer state ([`teleported`]).
 //! - [`EntityView`] carries what a draw needs: `etype`, `model_index` (a
@@ -39,6 +39,7 @@ use super::flags::EF_TELEPORT_BIT;
 use super::parse::{Gamestate2, Parsed, Parser, Snapshot2};
 use super::protocol::{CS_LAYOUT_118, CS_WEAPONS};
 use crate::trajectory::{TR_INTERPOLATE, TR_LINEAR_STOP, Trajectory2};
+use vcod_common::net::Msec;
 use vcod_common::net::protocol::CsRange;
 
 /// One entity of a snapshot.
@@ -85,7 +86,7 @@ impl EntityView {
 /// The local client's playerstate.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlayerView {
-    pub command_time: i32,
+    pub command_time: Msec,
     pub origin: [f32; 3],
     pub velocity: [f32; 3],
     pub viewangles: [f32; 3],
@@ -108,7 +109,7 @@ impl PlayerView {
     pub fn new(ps: &PlayerState2, own_client_num: i32) -> Self {
         let v = |k: &str| [0, 1, 2].map(|i| ps.f32(&format!("{k}[{i}]")));
         PlayerView {
-            command_time: ps.i32("commandTime"),
+            command_time: Msec::from_raw(ps.i32("commandTime")),
             origin: ps.origin(),
             velocity: v("velocity"),
             viewangles: ps.viewangles(),
@@ -141,7 +142,7 @@ impl PlayerView {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SnapshotView {
     pub message_num: i32,
-    pub server_time: i32,
+    pub server_time: Msec,
     pub snap_flags: u8,
     pub ps: PlayerView,
     /// Ascending by number.
@@ -168,6 +169,9 @@ impl SnapshotView {
             .map(|i| &self.entities[i])
     }
 }
+
+/// The most an `x`..`z` join holds.
+const BIG_JOIN: usize = 8192;
 
 /// The configstring table, kept live.
 #[derive(Clone, Debug, Default)]
@@ -222,6 +226,12 @@ impl ConfigStrings {
             _ => {
                 let (bi, s) = self.big.as_mut().filter(|(bi, _)| *bi == i)?;
                 s.push_str(val);
+                // vcod's bound, the gamestate's `BIG_INFO_STRING`.
+                if s.len() >= BIG_JOIN {
+                    log::warn!("configstring {i}: chunked update past {BIG_JOIN} bytes");
+                    self.big = None;
+                    return None;
+                }
                 if letter == 'y' {
                     return None;
                 }
@@ -275,9 +285,8 @@ impl ConfigStrings {
     }
 }
 
-/// `cl.snapshots`' depth (`PACKET_BACKUP`): `CL_GetSnapshot` (Mac
-/// 0x17a02c) refuses a snapshot 32 messages behind the newest.
-const PACKET_BACKUP: i32 = 32;
+/// `CG_AddLagometerSnapshotInfo`'s ring (cod2-protocol.md 18.6).
+const LAGOMETER: i32 = 128;
 /// The parse rings' depth: `CL_GetSnapshot` refuses a snapshot whose
 /// entities or clients the 2048-slot rings have since overwritten.
 const MAX_PARSE: u64 = 0x800;
@@ -403,7 +412,7 @@ impl NetView {
             .is_none_or(|&(_, ents, clients)| {
                 self.parsed.0 - ents < MAX_PARSE && self.parsed.1 - clients < MAX_PARSE
             });
-        newest.message_num - s.message_num < PACKET_BACKUP && rings
+        newest.message_num.wrapping_sub(s.message_num) < super::ops::PACKET_BACKUP as i32 && rings
     }
 
     fn by_num(&self, n: i32) -> Option<&SnapshotView> {
@@ -428,7 +437,7 @@ impl NetView {
     /// (`CG_SetInitialSnapshot`), and with none to read the time is held at
     /// least at `cg.snap`'s. Otherwise it is done once `t` sits in
     /// `[cg.snap, cg.nextSnap)`, else `cg.nextSnap` becomes `cg.snap`.
-    fn select(&self, from: Option<Cursor>, t: i32) -> Option<(Cursor, i32)> {
+    fn select(&self, from: Option<Cursor>, t: Msec) -> Option<(Cursor, Msec)> {
         let mut c = match from.filter(|c| self.by_num(c.cur).is_some()) {
             Some(c) => c,
             None => {
@@ -478,17 +487,24 @@ impl NetView {
     /// `CG_AddLagometerSnapshotInfo` records). Message numbers no
     /// snapshot was kept for (lost, or refused as invalid) count as refused.
     pub fn process(&mut self, t: i32) -> (i32, Vec<(i32, bool)>) {
-        let Some((c, time)) = self.select(self.cgame, t) else {
+        let Some((c, time)) = self.select(self.cgame, Msec::from_raw(t)) else {
             return (t, Vec::new());
         };
         // The first process reports every kept message from the oldest.
         let first = self.chain().next().map_or(c.processed, |s| s.message_num);
-        let from = self.cgame.map_or(first, |o| o.processed + 1);
-        let read = (from..=c.processed)
-            .map(|n| (n, self.by_num(n).is_some()))
-            .collect();
+        let from = self
+            .cgame
+            .map_or(Some(first), |o| o.processed.checked_add(1));
+        // The server picks the numbers: no more than the lagometer's ring
+        // keeps is listed (cod2-protocol.md 18.6).
+        let read = from.map_or(Vec::new(), |from| {
+            let from = from.max(c.processed.saturating_sub(LAGOMETER - 1));
+            (from..=c.processed)
+                .map(|n| (n, self.by_num(n).is_some()))
+                .collect()
+        });
         self.cgame = Some(c);
-        (time, read)
+        (time.raw(), read)
     }
 
     /// The cgame's cursor, `None` before [`Self::process`] ran.
@@ -501,12 +517,13 @@ impl NetView {
     /// Before any process it starts as the cgame would. With no readable
     /// snapshot to start on, the newest alone.
     pub fn frame(&self, t: i32) -> Option<Frame<'_>> {
+        let t = Msec::from_raw(t);
         let newest = self.snap.as_ref()?;
         let Some((c, time)) = self.select(self.cgame, t) else {
             return Some(Frame {
                 snap: newest,
                 prev: None,
-                time_ms: t.max(newest.server_time),
+                time_ms: t.max(newest.server_time).raw(),
                 frac: 0.0,
                 configstrings: &self.configstrings,
             });
@@ -523,7 +540,7 @@ impl NetView {
         Some(Frame {
             snap: next,
             prev: (c.next != c.cur).then_some(cur),
-            time_ms: time,
+            time_ms: time.raw(),
             frac,
             configstrings: &self.configstrings,
         })
@@ -553,13 +570,13 @@ fn lerp3(a: [f32; 3], b: [f32; 3], f: f32) -> [f32; 3] {
     [0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * f)
 }
 
-/// Angles lerped the short way round, degrees.
 /// Whether two states of one entity straddle a teleport: their
 /// [`EF_TELEPORT_BIT`]s differ, and the client snaps to the newer.
 pub fn teleported(older_eflags: i32, newer_eflags: i32) -> bool {
     (older_eflags ^ newer_eflags) & EF_TELEPORT_BIT != 0
 }
 
+/// Angles lerped the short way round, degrees.
 fn lerp_angles(a: Vec3, b: Vec3, f: f32) -> Vec3 {
     Vec3::from_array([0, 1, 2].map(|i| {
         let d = (b[i] - a[i] + 180.0).rem_euclid(360.0) - 180.0;
@@ -580,7 +597,7 @@ impl Frame<'_> {
     }
 
     /// The older snapshot's time, `cg.snap->serverTime`.
-    fn older_ms(&self) -> i32 {
+    fn older_ms(&self) -> Msec {
         self.prev.map_or(self.snap.server_time, |p| p.server_time)
     }
 
@@ -604,19 +621,19 @@ impl Frame<'_> {
         let cur = self.current(e);
         if Self::interpolates(cur) {
             let (pos, ang) = (
-                e.pos.evaluate(self.snap.server_time),
-                e.apos.evaluate(self.snap.server_time),
+                e.pos.evaluate_f32(self.snap.server_time.raw()),
+                e.apos.evaluate_f32(self.snap.server_time.raw()),
             );
             if std::ptr::eq(cur, e) {
                 return (pos, ang);
             }
-            let from = self.older_ms();
+            let from = self.older_ms().raw();
             return (
-                cur.pos.evaluate(from).lerp(pos, self.frac),
-                lerp_angles(cur.apos.evaluate(from), ang, self.frac),
+                cur.pos.evaluate_f32(from).lerp(pos, self.frac),
+                lerp_angles(cur.apos.evaluate_f32(from), ang, self.frac),
             );
         }
-        let mut origin = cur.pos.evaluate(self.time_ms);
+        let mut origin = cur.pos.evaluate_f32(self.time_ms);
         let ground = cur.ground_entity;
         if (1..=1021).contains(&ground)
             && let Some(mover) = self
@@ -625,9 +642,9 @@ impl Frame<'_> {
                 .filter(|m| m.etype == ET_SCRIPTMOVER)
         {
             let mover = self.current(mover).pos;
-            origin += mover.evaluate(self.time_ms) - mover.evaluate(self.older_ms());
+            origin += mover.evaluate_f32(self.time_ms) - mover.evaluate_f32(self.older_ms().raw());
         }
-        (origin, cur.apos.evaluate(self.time_ms))
+        (origin, cur.apos.evaluate_f32(self.time_ms))
     }
 
     /// [`Self::entity_place`]'s origin.
@@ -675,6 +692,24 @@ mod tests {
         assert_eq!(cs.get(1), "");
     }
 
+    /// A run of `y` chunks is dropped once it passes 8192 bytes.
+    #[test]
+    fn a_chunked_configstring_is_bounded() {
+        let mut cs = ConfigStrings {
+            strings: vec![String::new(); 2048],
+            big: None,
+        };
+        let piece = format!("y 1 {}", "a".repeat(1000));
+        assert_eq!(cs.apply_command(b"x 1 a"), None);
+        for _ in 0..100 {
+            assert_eq!(cs.apply_command(piece.as_bytes()), None);
+            assert!(cs.big.as_ref().map_or(0, |(_, s)| s.len()) < BIG_JOIN);
+        }
+        assert_eq!(cs.big, None);
+        assert_eq!(cs.apply_command(b"z 1 b"), None);
+        assert_eq!(cs.get(1), "");
+    }
+
     /// A player entity (lerped, number under 64) at `x` with `eflags`.
     fn body(x: f32, eflags: i32) -> EntityView {
         let mut es = EntityState2::null(3);
@@ -689,7 +724,7 @@ mod tests {
     fn snap(time: i32, entities: Vec<EntityView>) -> SnapshotView {
         SnapshotView {
             message_num: 0,
-            server_time: time,
+            server_time: Msec::from_raw(time),
             snap_flags: 0,
             ps: PlayerView::new(&PlayerState2::default(), 0),
             entities,
@@ -724,6 +759,25 @@ mod tests {
         assert_eq!(at(vec![], body(100.0, 0)), 100.0);
         assert!(teleported(0x42, 0x40));
         assert!(!teleported(0x42, 0x2));
+    }
+
+    /// Snapshots at both ends of `int`: `CG_SetFrameInterpolation`'s two
+    /// `int` differences wrap as retail's do (to `i32::MIN` over -1).
+    #[test]
+    fn frac_wraps_at_the_ends_of_int() {
+        let mut v = NetView::default();
+        for (n, t) in [(1, i32::MIN), (2, i32::MAX)] {
+            let mut s = snap(t, vec![body(0.0, 0)]);
+            s.message_num = n;
+            v.push(s, (0, 0));
+        }
+        let (time, _) = v.process(0);
+        let f = v.frame(time).unwrap();
+        assert_eq!(
+            (f.prev.map(|p| p.message_num), f.snap.message_num),
+            (Some(1), 2)
+        );
+        assert_eq!(f.frac, i32::MIN as f32 / -1.0);
     }
 
     /// Message `n` at `50 * n` ms, one body at x `n`.
@@ -798,6 +852,22 @@ mod tests {
         let v = view_of(&(1..=40).map(|n| (n, 0)).collect::<Vec<_>>());
         assert_eq!(v.chain().next().unwrap().message_num, 9);
         assert_eq!(v.frame(460).unwrap().prev.unwrap().message_num, 9);
+    }
+
+    /// A jump in message numbers lists at most the lagometer's ring.
+    #[test]
+    fn a_sequence_jump_lists_a_short_range() {
+        let mut v = view_of(&[(100, 0)]);
+        v.process(5000);
+        for n in [0x4000_0000, i32::MAX] {
+            let mut s = snap(6000, vec![body(0.0, 0)]);
+            s.message_num = n;
+            v.push(s, (0, 0));
+            let (_, read) = v.process(6000);
+            assert_eq!(read.len(), LAGOMETER as usize, "{n:#x}");
+            assert_eq!(read.last(), Some(&(n, true)));
+        }
+        assert_eq!(v.process(6000).1, []);
     }
 
     #[test]

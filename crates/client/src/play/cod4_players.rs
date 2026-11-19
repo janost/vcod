@@ -256,12 +256,6 @@ impl Cod4Players {
             .as_mut()
     }
 
-    /// Steps and poses `bodies` (entity number, its view) at
-    /// `render_time`; `snapshot_ms` is the newest snapshot's time, the
-    /// clock a body's anim rate reads. Each posed body comes back with its
-    /// index in `bodies`; one whose rig does not build is left out. Bodies
-    /// not in `bodies` are forgotten. A gunner's gun in `guns` (parallel
-    /// to `bodies`) puts his body on it.
     /// Body `n`'s rig, its pose at `render_time` under `frame` and its
     /// controls, as [`Self::posed`] last stepped it: what a test sets the
     /// server's arithmetic against.
@@ -289,7 +283,12 @@ impl Cod4Players {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Steps and poses `bodies` (entity number, its view) at
+    /// `render_time`; `snapshot_ms` is the newest snapshot's time, the
+    /// clock a body's anim rate reads. Each posed body comes back with its
+    /// index in `bodies`; one whose rig does not build is left out. Bodies
+    /// not in `bodies` are forgotten. A gunner's gun in `guns` (parallel
+    /// to `bodies`) puts his body on it.
     pub fn posed(
         &mut self,
         src: &BodySource,
@@ -554,7 +553,6 @@ pub(crate) struct BodyPose {
 /// 11), over the bind pose. A gunner's legs, whose turret rows that tree
 /// does not carry, or a clip the zones lack keep the shared sampler's
 /// pose.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn drawn_locals(
     body: &PlayerBody,
     rig: &PlayerRig,
@@ -611,7 +609,6 @@ fn posed_worlds(
 /// `ragdoll_max_simulating` running), steps by the frame time and poses
 /// every bone; a corpse whose entity goes back to another type drops it.
 /// `None` draws the death anim's pose.
-#[allow(clippy::too_many_arguments)]
 fn ragdolled(
     body: &mut Body,
     rag: Option<&RagdollWorld>,

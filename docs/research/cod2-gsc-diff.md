@@ -47,7 +47,7 @@ compile-time row below was read.
   and hudelem lookups in that order. INFERRED from its control flow: it calls
   all four and keeps the first non-null, and only the generic lookup writes
   the developer out-parameter. 1.1 searched player, scriptent, hudelem, then
-  generic (`cod11-gsc-language.md` section 7); 1.5's order is CoD2's. No
+  generic (`cod11-gsc-object-model.md` section 9); 1.5's order is CoD2's. No
   method name sits in two CoD2 tables (VERIFIED, the dump), so the order
   decides nothing for stock names.
 - VERIFIED: a `developer` 1 record in CoD2: `print`, `println`, `print3d`,
@@ -510,6 +510,11 @@ refusal of both (VERIFIED,
   gunner capture's `wait 1500 / 1000` waited 1.5 s on retail
   (cod2-turrets.md 14). vcod: `Op::DivFloat`, which the compiler emits
   for `/` and `/=` under `Dialect::Cod2`.
+- VERIFIED (the instructions), lnxded 0x807dd52: `<` casts the pair
+  through 0x807d7aa, then compares two ints (type 6) with `cmp`/`setl`
+  and two floats (type 5) with `fucompp`; `>` at 0x807de00 has the same
+  shape with `setg`/`seta`. Two ints order exactly past 2^24, as on 1.1
+  (cod11-gsc-language.md 9, "Ordering").
 - VERIFIED, `Scr_EvalMultiply` (lnxded 0x807e290): `*` takes two numbers
   only, an int promoted to a float beside a float (0x807d7aa); a vector
   operand is `pair '(1, 0, -0)' and '200' has unmatching types 'vector'
@@ -559,6 +564,119 @@ unresolved (`UNKNOWN` lines: none in MP), so `abs`, `array_levelthread`,
 `UNKNOWN` lines are SP builtins (`getnode`, `getaiarray`, `setgoalnode`,
 ...) the MP table lacks. No stock script trips vcod's definite-assignment
 pass or the `not an lvalue` rule.
+
+### 3.7 VM limits: the call stack, the loop check, string length
+
+Read off `cod2_lnxded` 1.3's disassembly (`objdump -d`; addresses are the
+binary's own).
+
+- VERIFIED: every script-call arm of the op loop (0x8081128, 0x8081194,
+  0x8081231, 0x80812ac, 0x808133c, 0x80813d7, 0x808149b, 0x8081545) does
+  `cmpl $0x1e,0x83d8a88` and on `jg` pushes 0x8145000, `script stack
+  overflow (too many embedded function calls)`, to the error call at
+  0x80853fc.
+- VERIFIED: 0x83d8a88 is incremented at 0x80820ec, 0x8082c1e and
+  0x8082c80, each beside `addl $0x18,0x83d8a8c`, and decremented at
+  0x8080203, 0x80802a7, 0x80821c0, 0x8082b34 and 0x8082b94. The init at
+  0x807fe8a stores 0 into 0x83d8a88, 0x83d8aa0 into 0x83d8a8c and 0x83d8da0
+  into 0x83d8a90.
+- INFERRED, from the init and the stride: 0x83d8a88 counts the frames in
+  flight on one 0x18-byte frame stack of 32 entries (0x83d8aa0 to
+  0x83d8da0), and a call is refused once 31 are in use. The increments at
+  0x8082c1e and 0x8082c80 sit at a thread's entry, so a thread a running
+  one starts with `thread` counts its spawner's frames too.
+- VERIFIED: the loop check at 0x8081759 calls 0x80d5d98, subtracts
+  0x83dce9c and compares against 0x9c3; past it, the warning 0x8145060
+  (`script runtime warning: potential infinite loop in script.`) when
+  0x83dce94 is set, the error 0x81450a0 (`script runtime error: potential
+  infinite loop in script - killing thread.`) when 0x83d8a95 is clear.
+  0x8085628 stores 0x80d5d98's answer into 0x83dce9c and is called at
+  0x8080f83, 0x80817ce, 0x8081808 and 0x8082d7a among others. INFERRED:
+  0x80d5d98 is the millisecond clock, so the check is 2.5 s of wall time
+  since the run last resumed, as 1.1's (cod11-gsc-language.md, "The script
+  clock").
+- VERIFIED: `string too long` (0x815c0ee) is pushed only from one
+  function's 0x3ff-byte copy loop (0x81144a9..0x81146e3). INFERRED: that
+  function is a builtin copying a substring, not the VM's `+`; no length
+  limit on a concatenated string was found.
+
+vcod (all three games):
+
+- A call or a `thread` call with 31 frames in flight, the thread's own and
+  those of every thread under it on the native stack, ends the thread with
+  `ErrorKind::StackOverflow` (`interp::MAX_FRAMES`). Stock scripts reach 12,
+  every CoD4 map's load included.
+- A step's instruction budget (`Vm::budget`, 1,000,000) covers the threads
+  it spawns and runs mid-step: each draws on what its spawner has left and
+  hands back what it did not use. The heaviest stock step, a CoD4 map's
+  load with the threads it starts, runs 394,000. A pass stops taking steps
+  past `MAX_PASS_INSTRUCTIONS` (10,000,000; the heaviest stock pass runs
+  1.43 million) or `MAX_THREADS_PER_FRAME`. Every thread still due then
+  turns runnable and the next pass runs those first, in the order this one
+  would have picked them (`Vm::deferred`), so a `wait 0` spin cannot
+  starve the other threads due beside it; the clock moves on to
+  `level.time` as usual. Retail has neither ceiling; a count, not wall time, keeps the replays deterministic.
+- A concatenation past 8192 bytes is a script error (`string too long`,
+  `interp::MAX_STRING_LEN`); stock scripts build at most 138.
+- Retail counts references and frees a variable at zero (INFERRED,
+  cod4-gsc.md 10); vcod sweeps instead. At the end of a frame, once as
+  many objects as the last sweep kept (and at least 16,384) have been
+  allocated since, `Vm::collect` marks what the threads' locals and stacks, their endon and `waittill`
+  targets, `level`, `game`, `anim` and the host (`Host::roots`: each
+  object's script struct and engine fields, the queued notifies) reach, and
+  frees the rest for the next allocations (`Heap::collect`), the built
+  strings too (below). The level is
+  still capped: past 64,000,000 variables (every struct and array the last
+  sweep kept or allocated since, with their fields and elements,
+  `Heap::vars`, plus the live threads; `interp::MAX_VARIABLES`) or 256 MiB
+  of interned strings (`MAX_STRING_BYTES`), the op that allocates ends its
+  thread with `ErrorKind::TooManyVariables`. Retail's counterpart is its
+  fixed pool's terminal `exceeded maximum number of script variables`
+  (cod11-gsc-language.md, "Runtime errors below developer 1"). Measured
+  on vcod-server before the sweep, CoD4 `war` on mp_crash with 12 shooting
+  bots, one 5.8-minute round: 97,340 variables (37,788 arrays, 3,616
+  structs), 852 threads at most, 379,460 bytes of strings: about 60 hours
+  to the ceiling for a level that never rotates. VERIFIED, vcod
+  measurement 2026-11-19 (`bot_match`, `GAME=cod4`, mp_crash `war`, 12
+  bots, `scr_war_timelimit` and `scr_war_scorelimit` 0, 14,400 ticks, seed
+  1): without the sweep the heap ended at 80,189 array and 7,169 struct
+  slots and 194,749 variables, about 6,500 arrays more a minute; with it
+  the slots held at 17,135 and 2,202 from tick 7,200 on and the variables
+  ran between 19,000 and 48,000. Both runs printed the same `DIGEST=1`
+  line. In both runs the interner's strings grew from 159,483 bytes at
+  tick 1,200 to 630,845 at 14,400, about 43 KB a minute, which reaches
+  `MAX_STRING_BYTES` after about 100 hours. A script allocating in one
+  step reaches the variable ceiling within seconds, since no sweep runs
+  inside a frame.
+- The growth was strings built with `+`. The 7,465 atoms added after
+  tick 1,200 were nearly all `_globallogic`'s `D;` and `K;` `logPrint`
+  lines, the `logString` damage lines and every prefix the left-to-right
+  `+` built on the way. VERIFIED, vcod measurement 2026-11-19 (the same
+  run, the interner's texts dumped). So
+  the sweep frees strings too, the built ones only. A concatenation takes
+  a temporary atom (`Interner::intern_temp`); the compiler's atoms, and
+  every one the host interns, are permanent. A temporary atom turns
+  permanent the moment the host is handed it (`Interner::pin`): as a
+  builtin's argument, an entity field's new value, a value or key read
+  through `Cx`, or `call_now`'s result. The server keeps atoms in Rust
+  structs (attachments, trigger origins, per-atom caches keyed on
+  `Interner::id`), and none of them can then name a freed atom. The one
+  exception is a builtin the host lists in `Host::reads_text_only`
+  (GameHost: the print, log and assert names and `isDefined`, whose
+  handlers only render their arguments). `Vm::collect` marks the atoms
+  the walk reaches (values, array keys, field names, the events threads
+  wait on or end on, and the atom owning each one's folded key), frees
+  the unmarked temporary ones and reuses their numbers. It also runs once
+  1 MiB of temporary text, or as much as the last sweep kept, has been
+  built since (`Interner::collect_due`). Same run, 2026-11-19: the
+  strings ran between 107,259 and 247,115 bytes, 141,838 at tick 8,400
+  and 159,881 at 14,400, with the same `DIGEST=1` line
+  (`35f679116907ed0d`). VERIFIED, vcod measurement. What still turns
+  permanent there is a bounded set: dvar, tag, weapon, sound and table
+  names (`precacheItem`, `toLower`, `getDvar`, `playLocalSound`, about
+  4 KB). A built string's atom number is no longer its interning order,
+  so `ArrayKey`'s `Str` order is not either. It stays deterministic.
+  Retail frees a string at a zero `refCount` (INFERRED, cod4-gsc.md 10).
 
 ## 4. Callbacks, engine notifies, script loading
 
@@ -715,8 +833,9 @@ The level runs on CoD2's tables where vcod has them:
   keys onto the struct (typed by the Radiant list, INFERRED). mp_toujane
   spawns its ten `trigger_radius` and three `trigger_use_touch`.
   `func_bobbing`, `func_pendulum` and `misc_spawner` have no arm on CoD2.
-- 1.1's rules everywhere else: `HostProfile::speaks_1_1` is true in
-  `profile::COD2`, so every 1.5-or-UO arm stays off.
+- 1.1's rules everywhere else: `profile::COD2` sets each `HostProfile`
+  rule 1.5 or UO turns on (`speed_off_maxspeed`, `maxspeed_and_squads`,
+  `say`, the vote's, `missiles.falls` and the rest) to 1.1's value.
 
 The fourteen builtins later frames call, and what else a joining client
 reached, each row read off its handler (VERIFIED):

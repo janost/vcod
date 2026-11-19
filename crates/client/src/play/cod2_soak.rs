@@ -24,6 +24,8 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+
+use crate::play::cod4::tests::{clk_now, clk_sleep, since};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -330,6 +332,8 @@ fn rig(map: &str, addr: SocketAddr) -> anyhow::Result<Rig> {
         },
     );
     audio.on_gamestate(map);
+    // the soak's sounds start, play out and reap as on a device
+    audio.mock_mixer();
     let (origin, yaw) = vcod_common::bsp::find_spawn(&bsp.entities).unwrap_or(([0.0; 3], 0.0));
     let cam = crate::camera::FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw);
     Ok(Rig {
@@ -404,6 +408,7 @@ fn step(
     let t2 = Instant::now();
     if pumped {
         let events = sess.events(&mut cx);
+        cx.audio.pump_mixer(f64::from(dt));
         sess.audio(&mut cx, &events, cam.pos);
         sess.effects(&mut cx, &events, cam.pos);
         view_fx = sess.view(&mut cx, &events, cam);
@@ -533,79 +538,44 @@ fn play_soak(map: &str, addr: SocketAddr, shared: &Shared, opts: SoakOpts) -> an
     Ok(())
 }
 
-/// vcod-server `--game cod2` on `map` under dm, no bots, on a thread
-/// until the flag is set: its address.
-fn serve_bare(
-    map: &str,
-) -> (
-    std::thread::JoinHandle<()>,
-    SocketAddr,
-    Arc<std::sync::atomic::AtomicBool>,
-) {
-    let (handle, addr, done, _) = serve_rotating(map, "");
-    (handle, addr, done)
-}
-
-/// [`serve_bare`] with `sv_mapRotation` set to `rotation`; each line sent
-/// down the channel runs on the server's console (`map_rotate`,
+/// vcod-server `--game cod2` on `map` under dm, no bots, with
+/// `sv_mapRotation` set to `rotation`, under `client` on one test clock
+/// (`play::cod4::tests::run_held`): `client` gets its address and a
+/// channel whose lines run on the server's console (`map_rotate`,
 /// `addbot`).
-fn serve_rotating(
+fn held<T: Send + 'static>(
     map: &str,
     rotation: &str,
-) -> (
-    std::thread::JoinHandle<()>,
-    SocketAddr,
-    Arc<std::sync::atomic::AtomicBool>,
-    std::sync::mpsc::Sender<String>,
-) {
-    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    client: impl FnOnce(SocketAddr, std::sync::mpsc::Sender<String>) -> T + Send + 'static,
+) -> T {
+    use vcod_server::cod2::{Cod2Config, Cod2Server};
+    let fs = Rc::new(vcod_common::testing::cod2_fs().unwrap());
+    let mut sv = Cod2Server::new(
+        Cod2Config {
+            map: map.into(),
+            gametype: "dm".into(),
+            hostname: "marks".into(),
+            max_clients: 4,
+            gametype_script: None,
+        },
+        7,
+        Instant::now(),
+    );
+    sv.exec_default_cfg(&*fs);
+    sv.set_cvar("sv_pure", "0");
+    sv.set_cvar("sv_mapRotation", rotation);
+    sv.load(Some(fs)).unwrap();
     let (console, lines) = std::sync::mpsc::channel::<String>();
-    let (tx, rx) = std::sync::mpsc::channel();
-    let (map, stop) = (map.to_string(), done.clone());
-    let rotation = rotation.to_string();
-    let handle = std::thread::spawn(move || {
-        use vcod_server::cod2::{Cod2Config, Cod2Server, FRAME_MS};
-        let fs = Rc::new(vcod_common::testing::cod2_fs().unwrap());
-        let mut sv = Cod2Server::new(
-            Cod2Config {
-                map,
-                gametype: "dm".into(),
-                hostname: "marks".into(),
-                max_clients: 4,
-                gametype_script: None,
-            },
-            7,
-            Instant::now(),
-        );
-        sv.exec_default_cfg(&*fs);
-        sv.set_cvar("sv_pure", "0");
-        sv.set_cvar("sv_mapRotation", &rotation);
-        sv.load(Some(fs)).unwrap();
-        let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        sock.set_nonblocking(true).unwrap();
-        tx.send(sock.local_addr().unwrap()).unwrap();
-        let mut buf = [0u8; 4096];
-        let mut next = Instant::now();
-        while !stop.load(Ordering::Relaxed) {
+    crate::play::cod4::tests::run_held(
+        &mut sv,
+        move |addr| client(addr, console),
+        |sv, _, _| {
             while let Ok(line) = lines.try_recv() {
                 sv.push_console(&line);
             }
-            while let Ok((n, from)) = sock.recv_from(&mut buf) {
-                sv.handle_packet(from, &buf[..n], Instant::now());
-            }
-            let now = Instant::now();
-            if now >= next {
-                next = now + Duration::from_millis(FRAME_MS as u64);
-                SoakServer::tick(&mut sv, now);
-            }
-            for (to, p) in sv.take_outgoing() {
-                let _ = sock.send_to(&p, to);
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-    });
-    let addr = rx.recv_timeout(Duration::from_secs(300)).unwrap();
-    (handle, addr, done, console)
+            true
+        },
+    )
 }
 
 /// The soak's first-use builds: a surface's first bullet mark built its
@@ -618,68 +588,67 @@ fn serve_rotating(
 /// material registered and no fx image loaded past the spawn. Needs
 /// `COD2_DIR` and an adapter (lavapipe will do).
 #[test]
+#[ignore = "a headless renderer each; COD2_DIR and a Vulkan adapter"]
 fn cod2_live_level_effects_and_models_build_nothing_in_play() {
     if vcod_common::testing::cod2_fs().is_none() {
         return;
     }
-    let (server, addr, done) = serve_bare("mp_toujane");
-    let mut rig = match rig("mp_toujane", addr) {
-        Ok(r) => r,
-        Err(e) => {
-            done.store(true, Ordering::Relaxed);
-            server.join().unwrap();
-            // No adapter: nothing to measure.
-            assert!(format!("{e:#}").contains("no adapter"), "{e:#}");
-            return;
-        }
-    };
-    let start = Instant::now();
-    let mut last = start;
-    let mut fx_ms = 0.0;
-    // (mark materials, fx images) at the first spawn, marks seen
-    let mut warm: Option<(usize, usize)> = None;
-    let mut marks = 0;
-    while start.elapsed() < Duration::from_secs(120) && marks == 0 {
-        let now = Instant::now();
-        let dt = now.duration_since(last).as_secs_f32();
-        last = now;
-        let time = start.elapsed().as_secs_f32();
-        let spawned = rig.pilot(start).spawned();
-        if spawned {
-            if warm.is_none() {
-                let c = rig.sess.cod2().unwrap();
-                let s = c.session.as_deref().unwrap();
-                let f = s.frame().unwrap();
-                let named: Vec<&str> = (1..256).map_while(|i| f.configstrings.model(i)).collect();
-                let missing: Vec<&&str> =
-                    named.iter().filter(|n| !c.draw.model_loaded(n)).collect();
-                assert!(named.len() > 10, "{} configstring models", named.len());
-                assert!(missing.is_empty(), "not loaded by the spawn: {missing:?}");
+    held("mp_toujane", "", |addr, _| {
+        let mut rig = match rig("mp_toujane", addr) {
+            Ok(r) => r,
+            Err(e) => {
+                // No adapter: nothing to measure.
+                assert!(format!("{e:#}").contains("no adapter"), "{e:#}");
+                return;
             }
-            warm.get_or_insert_with(|| Tally::warm(&rig.r));
-            // Down at the ground ahead, in bursts.
-            rig.cam.pitch = -1.2;
-            let want = (time * 1000.0) as u32 % 800 < 200;
-            rig.pilot(start).key(Action::Attack, want);
+        };
+        let start = clk_now();
+        let mut last = start;
+        let mut fx_ms = 0.0;
+        // (mark materials, fx images) at the first spawn, marks seen
+        let mut warm: Option<(usize, usize)> = None;
+        let mut marks = 0;
+        while since(start) < Duration::from_secs(120) && marks == 0 {
+            let now = clk_now();
+            let dt = now.duration_since(last).as_secs_f32();
+            last = now;
+            let time = since(start).as_secs_f32();
+            let spawned = rig.pilot(start).spawned();
+            if spawned {
+                if warm.is_none() {
+                    let c = rig.sess.cod2().unwrap();
+                    let s = c.session.as_deref().unwrap();
+                    let f = s.frame().unwrap();
+                    let named: Vec<&str> =
+                        (1..256).map_while(|i| f.configstrings.model(i)).collect();
+                    let missing: Vec<&&str> =
+                        named.iter().filter(|n| !c.draw.model_loaded(n)).collect();
+                    assert!(named.len() > 10, "{} configstring models", named.len());
+                    assert!(missing.is_empty(), "not loaded by the spawn: {missing:?}");
+                }
+                warm.get_or_insert_with(|| Tally::warm(&rig.r));
+                // Down at the ground ahead, in bursts.
+                rig.cam.pitch = -1.2;
+                let want = (time * 1000.0) as u32 % 800 < 200;
+                rig.pilot(start).key(Action::Attack, want);
+            }
+            step(&mut rig, time, dt, false, &mut fx_ms).unwrap();
+            if warm.is_some() {
+                marks = rig.r.mark_count();
+            }
+            clk_sleep(Duration::from_millis(16));
         }
-        step(&mut rig, time, dt, false, &mut fx_ms).unwrap();
-        if warm.is_some() {
-            marks = rig.r.mark_count();
-        }
-        std::thread::sleep(Duration::from_millis(16).saturating_sub(now.elapsed()));
-    }
-    rig.sess.shutdown();
-    done.store(true, Ordering::Relaxed);
-    server.join().unwrap();
-    let warm = warm.expect("the client never spawned");
-    assert!(marks > 0, "no impact mark landed");
-    assert_eq!(
-        rig.r.mark_shaders(),
-        warm.0,
-        "a mark material built in play"
-    );
-    assert_eq!(rig.r.fx_images(), warm.1, "an fx image loaded in play");
-    assert!(warm.0 > 0 && warm.1 > 0, "nothing built with the level");
+        rig.sess.shutdown();
+        let warm = warm.expect("the client never spawned");
+        assert!(marks > 0, "no impact mark landed");
+        assert_eq!(
+            rig.r.mark_shaders(),
+            warm.0,
+            "a mark material built in play"
+        );
+        assert_eq!(rig.r.fx_images(), warm.1, "an fx image loaded in play");
+        assert!(warm.0 > 0 && warm.1 > 0, "nothing built with the level");
+    });
 }
 
 /// sd's first frame: a gamestate for the map already loaded (the rotation
@@ -692,61 +661,63 @@ fn cod2_live_level_effects_and_models_build_nothing_in_play() {
 /// gamestate and its models (cod2-client-perf.md, "The sd level's first
 /// frame"). Needs `COD2_DIR` and an adapter (lavapipe will do).
 #[test]
+#[ignore = "a headless renderer each; COD2_DIR and a Vulkan adapter"]
 fn cod2_live_same_map_gamestate_builds_no_model_pipeline() {
     if vcod_common::testing::cod2_fs().is_none() {
         return;
     }
-    let (server, addr, done, console) = serve_rotating("mp_toujane", "gametype sd map mp_toujane");
-    let mut rig = match rig("mp_toujane", addr) {
-        Ok(r) => r,
-        Err(e) => {
-            done.store(true, Ordering::Relaxed);
-            server.join().unwrap();
-            assert!(format!("{e:#}").contains("no adapter"), "{e:#}");
-            return;
-        }
-    };
-    let start = Instant::now();
-    let mut last = start;
-    let mut fx_ms = 0.0;
-    // pipelines at the first spawn; the sd gamestate's arrival
-    let mut warm: Option<usize> = None;
-    let mut sd_at: Option<Instant> = None;
-    let mut worst = 0.0f32;
-    while start.elapsed() < Duration::from_secs(150)
-        && sd_at.is_none_or(|t| t.elapsed() < Duration::from_secs(3))
-    {
-        let now = Instant::now();
-        let dt = now.duration_since(last).as_secs_f32();
-        last = now;
-        let time = start.elapsed().as_secs_f32();
-        if warm.is_none() && rig.pilot(start).spawned() {
-            warm = Some(rig.r.entity_pipelines());
-            console.send("map_rotate".into()).unwrap();
-        }
-        let gamestates = rig
-            .sess
-            .cod2()
-            .and_then(|c| c.session.as_deref())
-            .map_or(0, |s| s.gamestates());
-        let (parts, _) = step(&mut rig, time, dt, false, &mut fx_ms).unwrap();
-        if gamestates >= 2 {
-            sd_at.get_or_insert(now);
-            worst = worst.max(parts.iter().map(|p| p.1).sum());
-        }
-        std::thread::sleep(Duration::from_millis(16).saturating_sub(now.elapsed()));
-    }
-    let c = rig.sess.cod2().unwrap();
-    let bomb = c.draw.model_loaded("xmodel/mp_tntbomb_obj");
-    let built = rig.r.entity_pipelines();
-    rig.sess.shutdown();
-    done.store(true, Ordering::Relaxed);
-    server.join().unwrap();
-    let warm = warm.expect("the client never spawned");
-    assert!(sd_at.is_some(), "no sd gamestate");
-    assert!(bomb, "the sd level's mp_tntbomb_obj never loaded");
-    eprintln!("sd gamestate: worst frame {worst:.1} ms");
-    assert_eq!(built, warm, "a model pipeline built after the spawn");
+    held(
+        "mp_toujane",
+        "gametype sd map mp_toujane",
+        |addr, console| {
+            let mut rig = match rig("mp_toujane", addr) {
+                Ok(r) => r,
+                Err(e) => {
+                    assert!(format!("{e:#}").contains("no adapter"), "{e:#}");
+                    return;
+                }
+            };
+            let start = clk_now();
+            let mut last = start;
+            let mut fx_ms = 0.0;
+            // pipelines at the first spawn; the sd gamestate's arrival
+            let mut warm: Option<usize> = None;
+            let mut sd_at: Option<Instant> = None;
+            let mut worst = 0.0f32;
+            while since(start) < Duration::from_secs(150)
+                && sd_at.is_none_or(|t| since(t) < Duration::from_secs(3))
+            {
+                let now = clk_now();
+                let dt = now.duration_since(last).as_secs_f32();
+                last = now;
+                let time = since(start).as_secs_f32();
+                if warm.is_none() && rig.pilot(start).spawned() {
+                    warm = Some(rig.r.entity_pipelines());
+                    console.send("map_rotate".into()).unwrap();
+                }
+                let gamestates = rig
+                    .sess
+                    .cod2()
+                    .and_then(|c| c.session.as_deref())
+                    .map_or(0, |s| s.gamestates());
+                let (parts, _) = step(&mut rig, time, dt, false, &mut fx_ms).unwrap();
+                if gamestates >= 2 {
+                    sd_at.get_or_insert(now);
+                    worst = worst.max(parts.iter().map(|p| p.1).sum());
+                }
+                clk_sleep(Duration::from_millis(16));
+            }
+            let c = rig.sess.cod2().unwrap();
+            let bomb = c.draw.model_loaded("xmodel/mp_tntbomb_obj");
+            let built = rig.r.entity_pipelines();
+            rig.sess.shutdown();
+            let warm = warm.expect("the client never spawned");
+            assert!(sd_at.is_some(), "no sd gamestate");
+            assert!(bomb, "the sd level's mp_tntbomb_obj never loaded");
+            eprintln!("sd gamestate: worst frame {worst:.1} ms");
+            assert_eq!(built, warm, "a model pipeline built after the spawn");
+        },
+    );
 }
 
 /// The view weapon's first draw: a weapon's first showing (the spawn's
@@ -759,80 +730,78 @@ fn cod2_live_same_map_gamestate_builds_no_model_pipeline() {
 /// "The view weapon's first draw"). Needs `COD2_DIR` and an adapter
 /// (lavapipe will do).
 #[test]
+#[ignore = "a headless renderer each; COD2_DIR and a Vulkan adapter"]
 fn cod2_live_view_weapons_build_nothing_in_play() {
     if vcod_common::testing::cod2_fs().is_none() {
         return;
     }
-    let (server, addr, done) = serve_bare("mp_toujane");
-    let mut rig = match rig("mp_toujane", addr) {
-        Ok(r) => r,
-        Err(e) => {
-            done.store(true, Ordering::Relaxed);
-            server.join().unwrap();
-            assert!(format!("{e:#}").contains("no adapter"), "{e:#}");
-            return;
-        }
-    };
-    let start = Instant::now();
-    let mut last = start;
-    let mut fx_ms = 0.0;
-    let mut spawned_at: Option<f32> = None;
-    let mut drawn: Vec<String> = Vec::new();
-    // the worst `view weapon` and `hud` parts past the first spawn
-    let (mut worst_vw, mut worst_hud) = (0.0f32, 0.0f32);
-    let mut rigs_at_spawn = 0;
-    while start.elapsed() < Duration::from_secs(120)
-        && spawned_at.is_none_or(|t| start.elapsed().as_secs_f32() - t < 9.0)
-    {
-        let now = Instant::now();
-        let dt = now.duration_since(last).as_secs_f32();
-        last = now;
-        let time = start.elapsed().as_secs_f32();
-        if spawned_at.is_none() && rig.pilot(start).spawned() {
-            spawned_at = Some(time);
-            rigs_at_spawn = rig.sess.cod2().unwrap().view.rigs_loaded();
-        }
-        if let Some(at) = spawned_at {
-            // the other slot at 1 s and 6 s, a frag at 3 s
-            let t = time - at;
-            let mut pilot = rig.pilot(start);
-            for edge in [1.0, 6.0] {
-                if t >= edge && t - dt < edge {
-                    pilot
-                        .c
-                        .apply(&Effect::Impulse(Action::NextWeapon), pilot.shell, start);
-                }
+    held("mp_toujane", "", |addr, _| {
+        let mut rig = match rig("mp_toujane", addr) {
+            Ok(r) => r,
+            Err(e) => {
+                assert!(format!("{e:#}").contains("no adapter"), "{e:#}");
+                return;
             }
-            pilot.key(Action::Frag, (3.0..3.3).contains(&t));
-        }
-        let (parts, _) = step(&mut rig, time, dt, false, &mut fx_ms).unwrap();
-        if let Some(w) = rig.sess.cod2().unwrap().view.drawn()
-            && drawn.last().is_none_or(|l| l != w)
+        };
+        let start = clk_now();
+        let mut last = start;
+        let mut fx_ms = 0.0;
+        let mut spawned_at: Option<f32> = None;
+        let mut drawn: Vec<String> = Vec::new();
+        // the worst `view weapon` and `hud` parts past the first spawn
+        let (mut worst_vw, mut worst_hud) = (0.0f32, 0.0f32);
+        let mut rigs_at_spawn = 0;
+        while since(start) < Duration::from_secs(120)
+            && spawned_at.is_none_or(|t| since(start).as_secs_f32() - t < 9.0)
         {
-            drawn.push(w.to_string());
+            let now = clk_now();
+            let dt = now.duration_since(last).as_secs_f32();
+            last = now;
+            let time = since(start).as_secs_f32();
+            if spawned_at.is_none() && rig.pilot(start).spawned() {
+                spawned_at = Some(time);
+                rigs_at_spawn = rig.sess.cod2().unwrap().view.rigs_loaded();
+            }
+            if let Some(at) = spawned_at {
+                // the other slot at 1 s and 6 s, a frag at 3 s
+                let t = time - at;
+                let mut pilot = rig.pilot(start);
+                for edge in [1.0, 6.0] {
+                    if t >= edge && t - dt < edge {
+                        pilot
+                            .c
+                            .apply(&Effect::Impulse(Action::NextWeapon), pilot.shell, start);
+                    }
+                }
+                pilot.key(Action::Frag, (3.0..3.3).contains(&t));
+            }
+            let (parts, _) = step(&mut rig, time, dt, false, &mut fx_ms).unwrap();
+            if let Some(w) = rig.sess.cod2().unwrap().view.drawn()
+                && drawn.last().is_none_or(|l| l != w)
+            {
+                drawn.push(w.to_string());
+            }
+            if spawned_at.is_some() {
+                worst_vw = worst_vw.max(parts[3].1);
+                worst_hud = worst_hud.max(parts[1].1);
+            }
+            clk_sleep(Duration::from_millis(16));
         }
-        if spawned_at.is_some() {
-            worst_vw = worst_vw.max(parts[3].1);
-            worst_hud = worst_hud.max(parts[1].1);
-        }
-        std::thread::sleep(Duration::from_millis(16).saturating_sub(now.elapsed()));
-    }
-    let c = rig.sess.cod2().unwrap();
-    let rigs = c.view.rigs_loaded();
-    let first_uses = rig.r.viewmodel_first_uses();
-    rig.sess.shutdown();
-    done.store(true, Ordering::Relaxed);
-    server.join().unwrap();
-    assert!(spawned_at.is_some(), "the client never spawned");
-    eprintln!(
-        "view weapons drawn {drawn:?}: worst view weapon {worst_vw:.1} ms, hud {worst_hud:.1} ms; \
+        let c = rig.sess.cod2().unwrap();
+        let rigs = c.view.rigs_loaded();
+        let first_uses = rig.r.viewmodel_first_uses();
+        rig.sess.shutdown();
+        assert!(spawned_at.is_some(), "the client never spawned");
+        eprintln!(
+            "view weapons drawn {drawn:?}: worst view weapon {worst_vw:.1} ms, hud {worst_hud:.1} ms; \
          rigs {rigs_at_spawn} at the spawn, {rigs} at the end; {first_uses} first uses in the draw"
-    );
-    let mut kinds = drawn.clone();
-    kinds.sort();
-    kinds.dedup();
-    assert!(kinds.len() >= 3, "three view weapons not drawn: {drawn:?}");
-    assert_eq!(first_uses, 0, "a view model uploaded in the draw");
+        );
+        let mut kinds = drawn.clone();
+        kinds.sort();
+        kinds.dedup();
+        assert!(kinds.len() >= 3, "three view weapons not drawn: {drawn:?}");
+        assert_eq!(first_uses, 0, "a view model uploaded in the draw");
+    });
 }
 
 /// Muzzle flashes and brass on the guns, live: a client on vcod-server's
@@ -844,105 +813,104 @@ fn cod2_live_view_weapons_build_nothing_in_play() {
 /// while its brass still flies (cod2-efx.md 6.8). Needs `COD2_DIR` and an
 /// adapter (lavapipe will do).
 #[test]
+#[ignore = "a headless renderer each; COD2_DIR and a Vulkan adapter"]
 fn cod2_live_shots_flash_and_eject_on_their_guns() {
     use crate::play::cod2_fx::ViewTag;
     if vcod_common::testing::cod2_fs().is_none() {
         return;
     }
-    let (server, addr, done, console) = serve_rotating("mp_toujane", "");
-    let mut rig = match rig("mp_toujane", addr) {
-        Ok(r) => r,
-        Err(e) => {
-            done.store(true, Ordering::Relaxed);
-            server.join().unwrap();
-            assert!(format!("{e:#}").contains("no adapter"), "{e:#}");
-            return;
-        }
-    };
-    let start = Instant::now();
-    let mut last = start;
-    let mut fx_ms = 0.0;
-    let (mut own_flash, mut own_brass, mut bot_flash) = (0, 0, 0);
-    // under `cg_drawGun 0`: the view flashes, the brass, frames the gun drew
-    let mut hidden: Option<(u32, u32, u32)> = None;
-    let mut bots = false;
-    while start.elapsed() < Duration::from_secs(180) && hidden.is_none_or(|(_, brass, _)| brass < 3)
-    {
-        if hidden.is_none() && own_flash > 0 && own_brass > 0 && bot_flash > 0 {
-            rig.shell.force("cg_drawGun", "0");
-            hidden = Some((0, 0, 0));
-        }
-        let now = Instant::now();
-        let dt = now.duration_since(last).as_secs_f32();
-        last = now;
-        let time = start.elapsed().as_secs_f32();
-        if rig.pilot(start).spawned() {
-            if !bots {
-                console.send("addbot 3".into()).unwrap();
-                bots = true;
+    held("mp_toujane", "", |addr, console| {
+        let mut rig = match rig("mp_toujane", addr) {
+            Ok(r) => r,
+            Err(e) => {
+                assert!(format!("{e:#}").contains("no adapter"), "{e:#}");
+                return;
             }
-            let want = (time * 1000.0) as u32 % 1200 < 300;
-            rig.pilot(start).key(Action::Attack, want);
-        }
-        step(&mut rig, time, dt, false, &mut fx_ms).unwrap();
-        let eye = rig.cam.pos;
-        let forward = crate::camera::basis(rig.cam.yaw, rig.cam.pitch).0;
-        let c = rig.sess.cod2_mut().unwrap();
-        if let Some((flash, brass, drawn)) = hidden.as_mut() {
-            *drawn += u32::from(c.gun_drawn(None));
-            for (_, tag, _) in c.view_spawned.drain(..) {
+        };
+        let start = clk_now();
+        let mut last = start;
+        let mut fx_ms = 0.0;
+        let (mut own_flash, mut own_brass, mut bot_flash) = (0, 0, 0);
+        // under `cg_drawGun 0`: the view flashes, the brass, frames the gun drew
+        let mut hidden: Option<(u32, u32, u32)> = None;
+        let mut bots = false;
+        while since(start) < Duration::from_secs(180)
+            && hidden.is_none_or(|(_, brass, _)| brass < 3)
+        {
+            if hidden.is_none() && own_flash > 0 && own_brass > 0 && bot_flash > 0 {
+                rig.shell.force("cg_drawGun", "0");
+                hidden = Some((0, 0, 0));
+            }
+            let now = clk_now();
+            let dt = now.duration_since(last).as_secs_f32();
+            last = now;
+            let time = since(start).as_secs_f32();
+            if rig.pilot(start).spawned() {
+                if !bots {
+                    console.send("addbot 3".into()).unwrap();
+                    bots = true;
+                }
+                let want = (time * 1000.0) as u32 % 1200 < 300;
+                rig.pilot(start).key(Action::Attack, want);
+            }
+            step(&mut rig, time, dt, false, &mut fx_ms).unwrap();
+            let eye = rig.cam.pos;
+            let forward = crate::camera::basis(rig.cam.yaw, rig.cam.pitch).0;
+            let c = rig.sess.cod2_mut().unwrap();
+            if let Some((flash, brass, drawn)) = hidden.as_mut() {
+                *drawn += u32::from(c.gun_drawn(None));
+                for (_, tag, _) in c.view_spawned.drain(..) {
+                    match tag {
+                        ViewTag::Flash => *flash += 1,
+                        ViewTag::Brass => *brass += 1,
+                    }
+                }
+            }
+            for (path, tag, pose) in c.view_spawned.drain(..) {
+                let d = pose.origin - eye;
                 match tag {
-                    ViewTag::Flash => *flash += 1,
-                    ViewTag::Brass => *brass += 1,
+                    ViewTag::Flash => {
+                        assert!(
+                            d.length() < 60.0 && d.dot(forward) > 5.0,
+                            "{path}: the view flash {d} off the eye"
+                        );
+                        own_flash += 1;
+                    }
+                    ViewTag::Brass => {
+                        assert!(d.length() < 40.0, "{path}: the view brass {d} off the eye");
+                        own_brass += 1;
+                    }
                 }
             }
-        }
-        for (path, tag, pose) in c.view_spawned.drain(..) {
-            let d = pose.origin - eye;
-            match tag {
-                ViewTag::Flash => {
-                    assert!(
-                        d.length() < 60.0 && d.dot(forward) > 5.0,
-                        "{path}: the view flash {d} off the eye"
-                    );
-                    own_flash += 1;
+            let f = c.session.as_deref().and_then(|s| s.frame());
+            for (path, bolt, pose) in c.tag_spawned.drain(..) {
+                if bolt.slot != ViewTag::Flash.slot() {
+                    continue;
                 }
-                ViewTag::Brass => {
-                    assert!(d.length() < 40.0, "{path}: the view brass {d} off the eye");
-                    own_brass += 1;
-                }
+                let Some(e) = f
+                    .as_ref()
+                    .and_then(|f| f.snap.entities.iter().find(|e| e.number == bolt.entity))
+                else {
+                    continue;
+                };
+                let off = pose.origin - f.as_ref().unwrap().entity_origin(e);
+                assert!(
+                    off.truncate().length() < 80.0 && (5.0..75.0).contains(&off.z),
+                    "{path}: entity {}'s flash {off} off his origin",
+                    bolt.entity
+                );
+                bot_flash += 1;
             }
+            clk_sleep(Duration::from_millis(16));
         }
-        let f = c.session.as_deref().and_then(|s| s.frame());
-        for (path, bolt, pose) in c.tag_spawned.drain(..) {
-            if bolt.slot != ViewTag::Flash.slot() {
-                continue;
-            }
-            let Some(e) = f
-                .as_ref()
-                .and_then(|f| f.snap.entities.iter().find(|e| e.number == bolt.entity))
-            else {
-                continue;
-            };
-            let off = pose.origin - f.as_ref().unwrap().entity_origin(e);
-            assert!(
-                off.truncate().length() < 80.0 && (5.0..75.0).contains(&off.z),
-                "{path}: entity {}'s flash {off} off his origin",
-                bolt.entity
-            );
-            bot_flash += 1;
-        }
-        std::thread::sleep(Duration::from_millis(16).saturating_sub(now.elapsed()));
-    }
-    rig.sess.shutdown();
-    done.store(true, Ordering::Relaxed);
-    server.join().unwrap();
-    eprintln!(
-        "own flashes {own_flash}, own brass {own_brass}, bot flashes {bot_flash}; \
+        rig.sess.shutdown();
+        eprintln!(
+            "own flashes {own_flash}, own brass {own_brass}, bot flashes {bot_flash}; \
          under cg_drawGun 0 (flashes, brass, frames drawn) {hidden:?}"
-    );
-    assert!(own_flash > 0, "no view flash");
-    assert!(own_brass > 0, "no view brass");
-    assert!(bot_flash > 0, "no bot's world flash");
-    assert_eq!(hidden.map(|(f, b, d)| (f, b >= 3, d)), Some((0, true, 0)));
+        );
+        assert!(own_flash > 0, "no view flash");
+        assert!(own_brass > 0, "no view brass");
+        assert!(bot_flash > 0, "no bot's world flash");
+        assert_eq!(hidden.map(|(f, b, d)| (f, b >= 3, d)), Some((0, true, 0)));
+    });
 }

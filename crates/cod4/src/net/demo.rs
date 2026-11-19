@@ -9,6 +9,7 @@
 
 use std::io::{self, Write};
 
+use vcod_common::net::Msec;
 use vcod_common::net::codec::MsgWriter;
 
 use super::constant_cs;
@@ -34,7 +35,7 @@ pub const ARCHIVE_ROWS: usize = 256;
 /// The `time` `CL_Record_f` hands `MSG_WriteDeltaEntity` for the
 /// baselines (the `push 0xfffea070` at 0x468cce): every time field goes
 /// out whole.
-pub const BASELINE_TIME: i32 = -90000;
+pub const BASELINE_TIME: Msec = Msec::from_raw(-90000);
 
 const REC_MESSAGE: u8 = 0;
 const REC_ARCHIVE: u8 = 1;
@@ -209,7 +210,14 @@ impl DemoReader {
 
     /// The next record, or why there is none.
     pub fn next_record(&mut self) -> Result<Record, DemoEnd> {
-        let kind = self.take(1).ok_or(DemoEnd::Completed)?[0];
+        // Any other byte reads nothing and stops nothing (the switch at
+        // 0x4690f0 falls out); retail reads the next byte on the next call.
+        let kind = loop {
+            let k = self.take(1).ok_or(DemoEnd::Completed)?[0];
+            if matches!(k, REC_ARCHIVE | REC_MESSAGE) {
+                break k;
+            }
+        };
         match kind {
             REC_ARCHIVE => {
                 let index = self.long().ok_or(DemoEnd::Completed)? as u32 as usize;
@@ -252,10 +260,7 @@ impl DemoReader {
                 };
                 Ok(Record::Message(seq as u32, msg))
             }
-            // Any other byte reads nothing and stops nothing (the switch at
-            // 0x4690f0 falls out); retail reads the next byte on the next
-            // call.
-            _ => self.next_record(),
+            _ => unreachable!("only the two record kinds leave the loop"),
         }
     }
 }
@@ -379,6 +384,13 @@ mod tests {
         assert!(big_string(&[b'a'; 0x2000]).is_empty());
     }
 
+    /// Unknown record bytes are skipped in a loop, not one call deep each.
+    #[test]
+    fn a_long_run_of_unknown_record_bytes_ends_the_demo() {
+        let mut rd = DemoReader::new(vec![0x02; 8 << 20]);
+        assert_eq!(rd.next_record(), Err(DemoEnd::Completed));
+    }
+
     #[test]
     fn a_name_takes_the_extension_once() {
         assert_eq!(file_name("demo0003"), "demo0003.dm_1");
@@ -469,5 +481,30 @@ mod tests {
             DemoReader::new(b).next_record(),
             Err(DemoEnd::TooLong(MAX_MSGLEN + 1))
         );
+    }
+
+    /// Two message records and the end marker, mutated: the reader ends
+    /// on every input without a panic.
+    #[test]
+    fn a_hostile_demo_never_panics() {
+        let mut b = Vec::new();
+        for seq in [5i32, 6] {
+            b.push(0);
+            b.extend(seq.to_le_bytes());
+            b.extend(5i32.to_le_bytes());
+            b.extend([9, 9, 9, 9, 1]);
+        }
+        b.push(0);
+        b.extend((-1i32).to_le_bytes());
+        b.extend((-1i32).to_le_bytes());
+        vcod_common::testing::fuzz("cod4 demo", &b, 3000, |m| {
+            let mut rd = DemoReader::new(m.to_vec());
+            for _ in 0..m.len() + 1 {
+                if rd.next_record().is_err() {
+                    return;
+                }
+            }
+            panic!("more records than bytes");
+        });
     }
 }

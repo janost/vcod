@@ -27,7 +27,7 @@ use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, BUTTON_USE, UserCmd};
 
 /// A mounted gun's `eType` (11 on both protocols).
 const ET_TURRET_V22: i32 = 11;
-use vcod_common::net::protocol::{PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V22};
 use vcod_common::net::snapshot::Snapshot;
 
 const MAP: &str = "mp_cassino";
@@ -121,19 +121,19 @@ struct Flight {
 }
 
 impl Run {
-    fn record(&mut self, tracker: &mut EventTracker, s: &Snapshot, p: &Protocol) {
+    fn record(&mut self, tracker: &mut EventTracker, s: &Snapshot, p: &Cod1Wire) {
         for ev in tracker.drain(s, p) {
             self.seen.push(Seen {
-                t: s.server_time,
+                t: s.server_time.raw(),
                 ev,
             });
         }
         for (&n, e) in &s.entities {
-            self.last_seen.insert(n, s.server_time);
+            self.last_seen.insert(n, s.server_time.raw());
             if e.field_i32(p, "eType") == 4 {
                 let f = |name: &str| e.field_f32(p, name);
                 self.missiles.push((
-                    s.server_time,
+                    s.server_time.raw(),
                     n,
                     Flight {
                         tr_type: e.field_i32(p, "pos.trType"),
@@ -204,18 +204,16 @@ fn ours_with(
     setup: impl FnOnce(&mut vcod_server::Server),
 ) -> Run {
     let fs = vcod_common::testing::uo_fs().unwrap();
-    let p: &'static Protocol = &PROTOCOL_V22;
+    let p: &'static Cod1Wire = &PROTOCOL_V22;
     let src = format!("../gsc/tests/fixtures/semantics/client-probes/{PROBE}.gsc");
     let probe = std::fs::read_to_string(src).expect("read the probe");
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, PROBE), now);
-    sv.set_protocol(p);
-    sv.overlay_script(&format!("maps/mp/gametypes/{PROBE}"), &probe);
-    sv.set_cvar("probe_weapon", weapon);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        cvars: &[("probe_weapon", weapon)],
+        script: Some(&probe),
+        ..common::Boot::new(MAP, PROBE)
+    }
+    .start(fs);
     setup(&mut sv);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(common::Queues::default()));
@@ -563,7 +561,7 @@ fn the_mounted_mg_overheats_and_cools_as_on_uo() {
     let Some(fs) = vcod_common::testing::uo_fs() else {
         return;
     };
-    let p: &'static Protocol = &PROTOCOL_V22;
+    let p: &'static Cod1Wire = &PROTOCOL_V22;
     let frames = vcod_common::testing::fixture_frames(
         p,
         "net/gamestate-uo-turret.bin",
@@ -581,7 +579,7 @@ fn the_mounted_mg_overheats_and_cools_as_on_uo() {
                     gun = Some(n);
                 }
                 if e.field_i32(p, "animMovetype") == 1 && retail_mark.is_none() {
-                    retail_mark = Some(f.snapshot.server_time);
+                    retail_mark = Some(f.snapshot.server_time.raw());
                 }
             }
         }
@@ -591,15 +589,13 @@ fn the_mounted_mg_overheats_and_cools_as_on_uo() {
     let map = "mp_carentan";
     let src = "../gsc/tests/fixtures/semantics/client-probes/probe_turret.gsc";
     let probe = std::fs::read_to_string(src).expect("read the probe");
-    let bsp_path = fs.resolve_map(map).expect("mp_carentan in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_turret"), now);
-    sv.set_protocol(p);
-    sv.overlay_script("maps/mp/gametypes/probe_turret", &probe);
-    sv.set_cvar("probe_teleport", "1");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        cvars: &[("probe_teleport", "1")],
+        script: Some(&probe),
+        ..common::Boot::new(map, "probe_turret")
+    }
+    .start(fs);
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let (mut cl, _join) = common::join(&mut sv, &q, &mut now, "allies", "m1garand_mp");
     let mut ours = Run::default();
@@ -653,7 +649,7 @@ fn the_mounted_mg_overheats_and_cools_as_on_uo() {
                         our_gun = Some(n);
                     }
                     if e.field_i32(p, "animMovetype") == 1 && ours_mark.is_none() {
-                        ours_mark = Some(s.server_time);
+                        ours_mark = Some(s.server_time.raw());
                     }
                 }
             }
@@ -692,14 +688,12 @@ fn a_reported_flame_burns_every_frame_while_the_bit_is_held() {
     let Some(fs) = vcod_common::testing::uo_fs() else {
         return;
     };
-    let p: &'static Protocol = &PROTOCOL_V22;
-    let bsp_path = fs.resolve_map(MAP).unwrap();
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "dm"), now);
-    sv.set_protocol(p);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let p: &'static Cod1Wire = &PROTOCOL_V22;
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        ..common::Boot::new(MAP, "dm")
+    }
+    .start(fs);
     let (qa, qb) = (
         Rc::new(RefCell::new(common::Queues::default())),
         Rc::new(RefCell::new(common::Queues::default())),
@@ -768,18 +762,16 @@ fn a_flamethrower_pulse_deals_no_bullet_damage() {
     let Some(fs) = vcod_common::testing::uo_fs() else {
         return;
     };
-    let p: &'static Protocol = &PROTOCOL_V22;
+    let p: &'static Cod1Wire = &PROTOCOL_V22;
     let src = format!("../gsc/tests/fixtures/semantics/client-probes/{PROBE}.gsc");
     let probe = std::fs::read_to_string(src).expect("read the probe");
-    let bsp_path = fs.resolve_map(MAP).unwrap();
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, PROBE), now);
-    sv.set_protocol(p);
-    sv.overlay_script(&format!("maps/mp/gametypes/{PROBE}"), &probe);
-    sv.set_cvar("probe_weapon", "flamethrower_mp");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        cvars: &[("probe_weapon", "flamethrower_mp")],
+        script: Some(&probe),
+        ..common::Boot::new(MAP, PROBE)
+    }
+    .start(fs);
     let (qa, qb) = (
         Rc::new(RefCell::new(common::Queues::default())),
         Rc::new(RefCell::new(common::Queues::default())),
@@ -920,7 +912,7 @@ fn the_bazooka_rocket_flies_and_explodes_as_on_uo() {
     let view = frames
         .iter()
         .map(|f| &f.snapshot)
-        .take_while(|s| s.server_time < fire_t)
+        .take_while(|s| s.server_time.raw() < fire_t)
         .last()
         .expect("a snapshot before the fire")
         .ps
@@ -1057,7 +1049,7 @@ fn the_bazooka_rocket_leaves_on_retails_bits() {
     let view = frames
         .iter()
         .map(|f| &f.snapshot)
-        .take_while(|s| s.server_time < fire_t)
+        .take_while(|s| s.server_time.raw() < fire_t)
         .last()
         .expect("a snapshot before the fire")
         .ps
@@ -1105,26 +1097,15 @@ fn the_bazooka_rocket_leaves_on_retails_bits() {
 /// lines. The script's log and every event the probe's snapshots carried.
 fn ours_direct(probe: &str, src: &str, fixture: &str, secs: i64) -> (Vec<String>, Run) {
     let fs = vcod_common::testing::uo_fs().unwrap();
-    let p: &'static Protocol = &PROTOCOL_V22;
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, probe), now);
-    sv.set_protocol(p);
-    sv.overlay_script(&format!("maps/mp/gametypes/{probe}"), src);
-    // The recipe's `+set`s.
-    for l in fixture.lines().filter(|l| l.starts_with('#')) {
-        let mut t = l.split_whitespace();
-        while let Some(w) = t.next() {
-            if w == "+set"
-                && let (Some(name), Some(value)) = (t.next(), t.next())
-            {
-                sv.set_cvar(name, value);
-            }
-        }
+    let p: &'static Cod1Wire = &PROTOCOL_V22;
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        // The recipe's `+set`s.
+        cvars: &common::recipe_sets(fixture),
+        script: Some(src),
+        ..common::Boot::new(MAP, probe)
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let mut cl =
@@ -1178,9 +1159,9 @@ fn ours_direct(probe: &str, src: &str, fixture: &str, secs: i64) -> (Vec<String>
             }
         }
         if let Some(s) = cl.snapshots().newest()
-            && s.server_time != seen_time
+            && s.server_time.raw() != seen_time
         {
-            seen_time = s.server_time;
+            seen_time = s.server_time.raw();
             out.record(&mut tracker, s, p);
         }
     }

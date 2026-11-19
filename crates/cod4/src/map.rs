@@ -93,7 +93,7 @@ pub const NO_LIGHTMAP: u8 = 31;
 
 /// A material as the map uses it: its technique set by name and class,
 /// and each texture's image by name.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct MapMaterial {
     pub name: String,
     /// `None` only for a material whose techset slot is null. Names here
@@ -194,8 +194,7 @@ pub struct ModelMesh {
     /// `lodInfo[i].dist` for each of the model's `numLods`, LOD 0 first:
     /// LOD `i` draws below its distance.
     pub lod_dists: Vec<f32>,
-    /// LODs 1 and on, in model space as `surfaces` is. Kept for static
-    /// models only; [`Map::add_model`] leaves it empty.
+    /// LODs 1 and on, in model space as `surfaces` is.
     pub coarser: Vec<Vec<ModelSurface>>,
 }
 
@@ -374,7 +373,7 @@ pub struct ClipMaterial {
 
 /// One map: what the client draws and what the server needs to know is
 /// there. Built from the map zone's walk ([`Map::from_assets`]).
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Map {
     /// The gfx world's name, `maps/mp/<map>.d3dbsp`.
     pub bsp_name: String,
@@ -427,7 +426,7 @@ impl Map {
     /// [`Install::zone_file`]) with the bulk data kept and builds the map;
     /// the walk is returned too, for its images.
     pub fn load(install: &Install, language: &str, name: &str) -> Result<(Map, Walked)> {
-        let path = install.zone_path(language, name);
+        let path = install.zone_path(language, name)?;
         let zone = Zone::open_path(&path).with_context(|| path.display().to_string())?;
         let walked = walk(zone, WalkOptions { keep_bulk: true })?;
         ensure!(
@@ -547,23 +546,6 @@ impl Map {
             planes: self.dpvs_planes.clone(),
             origins: self.reflection_probe_origins.clone(),
         }
-    }
-
-    /// `x`'s first LOD in model space, its materials appended to
-    /// [`Map::materials`] (each name once): an entity's model, drawn where
-    /// its entity stands. `None` for a model with no geometry kept.
-    pub fn add_model(
-        &mut self,
-        a: &Assets,
-        x: &crate::assets::model::XModel,
-    ) -> Result<Option<ModelMesh>> {
-        let surfaces = model_surfaces(x, 0, &mut |id| self.add_material(a, id))?;
-        Ok((!surfaces.is_empty()).then(|| ModelMesh {
-            name: x.name.clone(),
-            surfaces,
-            lod_dists: lod_dists(x),
-            coarser: Vec::new(),
-        }))
     }
 
     /// Zone material `id` in [`Map::materials`], appended once by name.
@@ -889,9 +871,6 @@ fn render_world(a: &Assets, g: &GfxWorld) -> Result<Map> {
     })
 }
 
-/// An xmodel's first LOD's surfaces, each with its material added to the
-/// map's through `add`. A surface whose geometry the walk did not keep is
-/// left out.
 /// `x`'s `lodInfo[].dist`, its `numLods` of them.
 fn lod_dists(x: &crate::assets::model::XModel) -> Vec<f32> {
     x.lods
@@ -901,7 +880,9 @@ fn lod_dists(x: &crate::assets::model::XModel) -> Vec<f32> {
         .collect()
 }
 
-/// LOD `lod`'s surfaces of `x` in model space.
+/// LOD `lod`'s surfaces of `x` in model space, each with its material
+/// added to the map's through `add`. A surface whose geometry the walk did
+/// not keep is left out.
 fn model_surfaces(
     x: &crate::assets::model::XModel,
     lod: usize,
@@ -1001,6 +982,12 @@ fn check_cells(g: &GfxWorld, surfaces: usize, sorted: usize, smodels: usize) -> 
                 );
             }
         }
+        vcod_common::treecheck::check_forest(c.aabb_trees.len(), |ti| {
+            let t = &c.aabb_trees[ti];
+            let first = ti as i64 + i64::from(t.children_offset) / 0x2C;
+            first..first + i64::from(t.child_count)
+        })
+        .with_context(|| format!("cell {ci} trees"))?;
         for &cg in &c.cull_groups {
             ensure!(
                 (0..g.cull_group_count as i32).contains(&cg),
@@ -1352,6 +1339,31 @@ mod tests {
             .flat_map(|h| unpack_tex_coords(h << 16 | (h ^ 0x8001)).map(f32::to_bits));
         assert_eq!(fnv(bits), PIN_TEX);
     }
+    /// A cell tree listed by two parents would make the client's preorder
+    /// copy it once per path.
+    #[test]
+    fn check_cells_refuses_a_tree_with_two_parents() {
+        let tree = |child_count, children_offset| crate::assets::world::GfxAabbTree {
+            child_count,
+            children_offset,
+            ..Default::default()
+        };
+        let world = |aabb_trees| GfxWorld {
+            cell_count: 1,
+            cells: vec![GfxCell {
+                aabb_trees,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let ok = world(vec![tree(2, 0x2C), tree(0, 0), tree(0, 0)]);
+        assert!(check_cells(&ok, 0, 0, 0).is_ok());
+        // tree 0 lists 1 and 2, tree 1 lists 2 again
+        let dag = world(vec![tree(2, 0x2C), tree(1, 0x2C), tree(0, 0)]);
+        let e = format!("{:#}", check_cells(&dag, 0, 0, 0).unwrap_err());
+        assert!(e.contains("two parents"), "{e}");
+    }
+
     const PIN_UNIT: u64 = 3097659338910776972;
     const PIN_TEX: u64 = 5623642612305634085;
 }

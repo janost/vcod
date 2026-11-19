@@ -18,7 +18,7 @@ use vcod_common::net::msg::{
     BUTTON_ADS, BUTTON_ATTACK, BUTTON_SPRINT_V22, NULL_USERCMD, PlayerState, UserCmd,
     WBUTTON_CROUCH, WBUTTON_LEAN_LEFT, WBUTTON_PRONE, WBUTTON_RELOAD,
 };
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V22};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::movers::SnapshotMovers;
 use vcod_common::pmove::predict;
@@ -158,7 +158,7 @@ struct Outcome {
 }
 
 /// The paks and protocol: UO's when `COD_DIR` is a UO install, else 1.1's.
-fn setup() -> Option<(Pk3Fs, &'static Protocol)> {
+fn setup() -> Option<(Pk3Fs, &'static Cod1Wire)> {
     match vcod_common::testing::uo_fs() {
         Some(fs) => Some((fs, &PROTOCOL_V22)),
         None => Some((vcod_common::testing::game_fs()?, &PROTOCOL_V1)),
@@ -187,7 +187,7 @@ fn run(c: Conditions, weapon: &str) -> Option<Outcome> {
     sv.load_scripts(fs.clone()).expect("load the scripts");
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let (mut net, _) = common::join(&mut sv, &q, &mut now, "axis", weapon);
-    let weapons = vcod_common::weapon_table::from_configstring(&fs, net.configstring(7));
+    let weapons = vcod_common::weapon_table::from_configstring(&*fs, net.configstring(7));
     let ps0 = net.snapshots().newest().unwrap().ps.clone();
     let held = ps0.field_i32(p, "weapon") as u8;
     assert_eq!(
@@ -270,9 +270,9 @@ fn run(c: Conditions, weapon: &str) -> Option<Outcome> {
         }
         let snap = net.snapshots().newest().unwrap().clone();
         let realtime = local as i32;
-        clock.update(realtime, snap.server_time, snap.message_num, 0);
+        clock.update(realtime, snap.server_time.raw(), snap.message_num, 0);
         let kick = recoil.view_kick();
-        for t in cmd_clock.due(clock.cmd_time(snap.server_time)) {
+        for t in cmd_clock.due(clock.cmd_time(snap.server_time.raw())) {
             ring.push(UserCmd {
                 server_time: t,
                 buttons: if uo {
@@ -298,7 +298,7 @@ fn run(c: Conditions, weapon: &str) -> Option<Outcome> {
             let bodies = solid_bodies(p, &snap.entities, client_num as u32, &HashMap::new());
             let movers = (
                 SnapshotMovers::from_entities(p, &snap.entities),
-                snap.server_time,
+                snap.server_time.raw(),
             );
             predictor.predict(
                 p, &snap.ps, &ring, &world, &bodies, &movers, &weapons, local,
@@ -393,7 +393,7 @@ fn switch_run(weapon: &str, give: &[&str], binds: &[super::input::Action]) -> Op
     sv.load_scripts(fs.clone()).expect("load the scripts");
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let (mut net, _) = common::join(&mut sv, &q, &mut now, "axis", weapon);
-    let weapons = vcod_common::weapon_table::from_configstring(&fs, net.configstring(7));
+    let weapons = vcod_common::weapon_table::from_configstring(&*fs, net.configstring(7));
     let mut input = PlayInput::default();
     input.new_gamestate();
     let mut name = WeaponNameFade::default();
@@ -406,7 +406,7 @@ fn switch_run(weapon: &str, give: &[&str], binds: &[super::input::Action]) -> Op
             now += Duration::from_millis(50);
             let s = net.snapshots().newest().unwrap();
             let spawn = (s.ps.field_i32(p, "clientNum"), s.ps.arrays.stats[5]);
-            name.step(spawn, s.server_time);
+            name.step(spawn, s.server_time.raw());
             let cmd = input.build(0, &Held::from_ps(&s.ps, p, &weapons));
             net.send_frame(&cmd);
             common::step(sv, &q, net, now);
@@ -560,7 +560,7 @@ fn each_thrown_frag_explodes_once() {
     sv.load_scripts(fs.clone()).expect("load the scripts");
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let (mut net, _) = common::join(&mut sv, &q, &mut now, "axis", "kar98k_mp");
-    let weapons = vcod_common::weapon_table::from_configstring(&fs, net.configstring(7));
+    let weapons = vcod_common::weapon_table::from_configstring(&*fs, net.configstring(7));
     let ps = &net.snapshots().newest().unwrap().ps;
     let frag = Held::from_ps(ps, p, &weapons).slots[4] as usize;
     let frag = net
@@ -630,7 +630,7 @@ fn a_key_catcher_lights_the_talk_flag() {
     sv.load_scripts(fs.clone()).expect("load the scripts");
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let (mut net, _) = common::join(&mut sv, &q, &mut now, "axis", "kar98k_mp");
-    let weapons = vcod_common::weapon_table::from_configstring(&fs, net.configstring(7));
+    let weapons = vcod_common::weapon_table::from_configstring(&*fs, net.configstring(7));
     let mut input = PlayInput::default();
     input.new_gamestate();
     let mut talk = |talking: bool| {
@@ -647,4 +647,43 @@ fn a_key_catcher_lights_the_talk_flag() {
     assert_eq!(talk(false), 0, "no catcher, no talk flag");
     assert_eq!(talk(true), EF_TALK, "a catcher up lights the talk flag");
     assert_eq!(talk(false), 0, "the flag clears once it is down");
+}
+
+/// `record` while recording is refused before any file is made: the live
+/// demo is not truncated and no empty `demoNNNN` appears (CoDMP.exe
+/// 0x40e540). Needs no paks.
+#[test]
+fn record_while_recording_makes_no_file() {
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(common::cfg("mp_carentan", "dm"), now);
+    let q = Rc::new(RefCell::new(common::Queues::default()));
+    let mut net = common::connect(&mut sv, &q, &mut now);
+    let step = |sv: &mut vcod_server::Server, net: &mut _, now: &mut Instant| {
+        for _ in 0..4 {
+            *now += Duration::from_millis(50);
+            vcod_common::net::NetClient::send_frame(net, &NULL_USERCMD);
+            common::step(sv, &q, net, *now);
+        }
+    };
+    step(&mut sv, &mut net, &mut now);
+    let dir = tempfile::tempdir().unwrap();
+    crate::start_record(&mut net, dir.path(), Some("live"));
+    assert!(net.is_recording());
+    step(&mut sv, &mut net, &mut now);
+    crate::start_record(&mut net, dir.path(), Some("live"));
+    crate::start_record(&mut net, dir.path(), None);
+    step(&mut sv, &mut net, &mut now);
+    assert!(net.stop_recording().unwrap());
+    let mut files: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    files.sort();
+    assert_eq!(files, ["live.dm_1"]);
+    let demo = std::fs::read(dir.path().join("live.dm_1")).unwrap();
+    let mut r = vcod_common::net::demo::DemoReader::new(demo, &PROTOCOL_V1);
+    assert!(
+        r.next_message().is_ok(),
+        "the live demo opens on its gamestate"
+    );
 }

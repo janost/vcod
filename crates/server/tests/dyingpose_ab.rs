@@ -22,7 +22,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::NetEvent;
 use vcod_common::net::msg::{BUTTON_ATTACK, EntityState, UserCmd};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6};
 
 const SCRIPT: &str =
     include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_dyingpose.gsc");
@@ -95,7 +95,7 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, seed: u64) -> (Vec<String>, Option<EntitySt
             let i = |n: &str| s.ps.field_i32(cl.protocol(), n);
             eprintln!(
                 "SNAP t={} pm_type={} legs={} torso={} view={:?} eflags={:#x}",
-                s.server_time,
+                s.server_time.raw(),
                 i("pm_type"),
                 i("legsAnim"),
                 i("torsoAnim"),
@@ -104,9 +104,9 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, seed: u64) -> (Vec<String>, Option<EntitySt
             );
         }
         if let Some(s) = cl.snapshots().newest()
-            && last_snap != Some(s.server_time)
+            && last_snap != Some(s.server_time.raw())
         {
-            last_snap = Some(s.server_time);
+            last_snap = Some(s.server_time.raw());
             if let Some(t) = dead_timers(cl.protocol(), &s.ps) {
                 timers.push(t);
             }
@@ -125,13 +125,13 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, seed: u64) -> (Vec<String>, Option<EntitySt
 }
 
 /// A dead (`pm_type` 6) playerstate's timers.
-fn dead_timers(p: &Protocol, ps: &vcod_common::net::msg::PlayerState) -> Option<Timers> {
+fn dead_timers(p: &Cod1Wire, ps: &vcod_common::net::msg::PlayerState) -> Option<Timers> {
     let i = |n: &str| ps.field_i32(p, n);
     (i("pm_type") == 6).then(|| (i("commandTime"), i("legsTimer"), i("torsoTimer")))
 }
 
 /// Retail's dead snapshots' timers out of a capture pair.
-fn retail_timers(p: &Protocol, tag: &str) -> Vec<Timers> {
+fn retail_timers(p: &Cod1Wire, tag: &str) -> Vec<Timers> {
     vcod_common::testing::fixture_frames(
         p,
         &format!("net/gamestate-{tag}.bin"),
@@ -146,7 +146,7 @@ fn retail_timers(p: &Protocol, tag: &str) -> Vec<Timers> {
 /// on the first dead snapshot, counted from the last cmd's serverTime, then
 /// run down by every cmd's msec, so each reaches 0 at one serverTime
 /// (combat doc 16.4, "The dying body").
-fn check_timers(fs: vcod_common::pk3::Pk3Fs, p: &Protocol, tag: &str, seed: u64) {
+fn check_timers(fs: vcod_common::pk3::Pk3Fs, p: &Cod1Wire, tag: &str, seed: u64) {
     let retail = retail_timers(p, tag);
     let (_, _, ours) = ours(fs, seed);
     let ends = |v: &[Timers]| -> Vec<(i32, i32)> {
@@ -214,14 +214,6 @@ fn retail_log(fixture: &str) -> Vec<String> {
         .collect()
 }
 
-/// The 1.5b install's paks, `None` elsewhere (a UO install's `main/` is
-/// 1.5's, so these run there too).
-fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    (vcod_server::server::install_protocol(&fs).transport.version == PROTOCOL_V6.transport.version)
-        .then_some(fs)
-}
-
 /// Every frame's bones within [`POSE_NEAR`] of retail's `fixture`.
 fn check_pose(fs: vcod_common::pk3::Pk3Fs, fixture: &str, seed: u64) {
     let retail = retail_log(fixture);
@@ -246,7 +238,7 @@ fn check_pose(fs: vcod_common::pk3::Pk3Fs, fixture: &str, seed: u64) {
 }
 
 /// Retail's corpse as the capture pair first sent entity 64.
-fn retail_corpse(p: &Protocol, tag: &str) -> EntityState {
+fn retail_corpse(p: &Cod1Wire, tag: &str) -> EntityState {
     let frames = vcod_common::testing::fixture_frames(
         p,
         &format!("net/gamestate-{tag}.bin"),
@@ -268,7 +260,13 @@ fn retail_corpse(p: &Protocol, tag: &str) -> EntityState {
             if last != Some(now) {
                 eprintln!(
                     "RETAIL t={} pm_type={} legs={} torso={} eflags={:#x} timers={} {}",
-                    s.server_time, now.0, now.1, now.2, now.3, now.4, now.5
+                    s.server_time.raw(),
+                    now.0,
+                    now.1,
+                    now.2,
+                    now.3,
+                    now.4,
+                    now.5
                 );
                 last = Some(now);
             }
@@ -281,7 +279,7 @@ fn retail_corpse(p: &Protocol, tag: &str) -> EntityState {
 }
 
 /// Our corpse's ring, flags and yaw against retail's first one.
-fn check_corpse(fs: vcod_common::pk3::Pk3Fs, p: &Protocol, tag: &str, seed: u64) {
+fn check_corpse(fs: vcod_common::pk3::Pk3Fs, p: &Cod1Wire, tag: &str, seed: u64) {
     let retail = retail_corpse(p, tag);
     let (log, corpse, _) = ours(fs, seed);
     assert!(
@@ -325,7 +323,7 @@ fn a_dying_body_poses_like_retail() {
 /// 1.5b's: the same hook and an ease with no dead test (16.4).
 #[test]
 fn a_dying_body_poses_like_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check_pose(fs, FIXTURE_15, SEED_15);
@@ -358,7 +356,7 @@ fn a_sound_played_on_a_corpse_rides_its_ring() {
 
 #[test]
 fn a_sound_played_on_a_corpse_rides_its_ring_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check_corpse(fs, &PROTOCOL_V6, "dyingpose-1.5", SEED_15);
@@ -383,7 +381,7 @@ fn a_death_runs_its_timers_down_like_retail() {
 
 #[test]
 fn a_death_runs_its_timers_down_like_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check_timers(fs, &PROTOCOL_V6, "dyingpose-1.5", SEED_15);
@@ -403,7 +401,7 @@ fn a_death_runs_its_timers_down_like_uo() {
 type CorpseClock = (Option<i32>, Option<i32>);
 
 fn corpse_clock<'a>(
-    p: &Protocol,
+    p: &Cod1Wire,
     snaps: impl Iterator<Item = &'a vcod_common::net::snapshot::Snapshot>,
 ) -> CorpseClock {
     let (mut seen, mut cleared) = (None, None);
@@ -411,9 +409,9 @@ fn corpse_clock<'a>(
         let Some(e) = s.entities.get(&64) else {
             continue;
         };
-        seen.get_or_insert(s.server_time);
+        seen.get_or_insert(s.server_time.raw());
         if cleared.is_none() && e.field_i32(p, "eFlags") & 0x800 == 0 {
-            cleared = Some(s.server_time);
+            cleared = Some(s.server_time.raw());
         }
     }
     (seen, cleared)
@@ -424,14 +422,12 @@ fn corpse_clock<'a>(
 fn ours_blast(fs: vcod_common::pk3::Pk3Fs) -> (Vec<String>, CorpseClock) {
     let map = "mp_carentan";
     let proto = vcod_server::server::install_protocol(&fs);
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_corpseblast"), now);
-    sv.set_protocol(proto);
-    sv.overlay_script("maps/mp/gametypes/probe_corpseblast", BLAST_SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        script: Some(BLAST_SCRIPT),
+        ..common::Boot::new(map, "probe_corpseblast")
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl =
@@ -498,7 +494,7 @@ fn ours_blast(fs: vcod_common::pk3::Pk3Fs) -> (Vec<String>, CorpseClock) {
 /// on, so the clone's 250 ms think clears 0x800 250 ms after the corpse
 /// first rides a snapshot where a cmd-path death's clears it after 200
 /// (combat doc 5.2).
-fn check_blast(fs: vcod_common::pk3::Pk3Fs, p: &Protocol, tag: &str, fixture: &str) {
+fn check_blast(fs: vcod_common::pk3::Pk3Fs, p: &Cod1Wire, tag: &str, fixture: &str) {
     let frames = vcod_common::testing::fixture_frames(
         p,
         &format!("net/gamestate-{tag}.bin"),
@@ -542,7 +538,7 @@ fn a_blast_corpse_keeps_its_fresh_flag_like_retail() {
 
 #[test]
 fn a_blast_corpse_keeps_its_fresh_flag_like_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check_blast(

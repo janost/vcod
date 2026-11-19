@@ -1,6 +1,7 @@
 //! A client between its connect and its first spawn, ours against retail's.
 //! `client-probes/probe_noclass` logs the client's fields at the connect
-//! callback, 3 s later and straight after a `spawn`; the fixtures are its
+//! callback, 3 s later and straight after a `spawn`, then what
+//! `.headiconteam` reads after each of eight writes; the fixtures are its
 //! `games_mp.log` and the probe client's snapshot origins on 1.1d, 1.5b and
 //! UO 1.51b (cod11-gametypes-re-bel.md 8.3).
 //!
@@ -12,10 +13,9 @@ use crate::common;
 use common::{Queues, step};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::NetClient;
 use vcod_common::net::msg::NULL_USERCMD;
-use vcod_common::net::protocol::PROTOCOL_V6;
 
 const SCRIPT: &str =
     include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_noclass.gsc");
@@ -28,17 +28,17 @@ fn probe_lines<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<String> {
         .collect()
 }
 
-fn check(fs: vcod_common::pk3::Pk3Fs, fixture: &str) {
-    let proto = vcod_server::server::install_protocol(&fs);
-    let map = "mp_carentan";
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_noclass"), now);
-    sv.set_protocol(proto);
-    sv.overlay_script("maps/mp/gametypes/probe_noclass", SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+/// `developer` for the run. Each fixture ends on `.headiconteam`'s first
+/// illegal string: retail 1.1d and UO died there (`run_probe.sh`'s
+/// `developer 1`), while 1.5b ran on to the next line and dropped the
+/// client after (gametypes doc 7.3), as ours runs on below 1.
+fn check(fs: vcod_common::pk3::Pk3Fs, fixture: &str, developer: &str) {
+    let (mut sv, mut now) = common::Boot {
+        script: Some(SCRIPT),
+        cvars: &[("developer", developer)],
+        ..common::Boot::new("mp_carentan", "probe_noclass")
+    }
+    .start(fs);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl = NetClient::start_with_qport(common::ClientEnd(q.clone()), now, 0x2001);
     let frame = Duration::from_millis(common::FRAME_MS as u64);
@@ -78,19 +78,19 @@ fn a_connected_client_reads_as_retail_11() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
         return;
     };
-    check(fs, include_str!("fixtures/noclass/mp_carentan.txt"));
+    check(fs, include_str!("fixtures/noclass/mp_carentan.txt"), "1");
 }
 
 #[test]
 fn a_connected_client_reads_as_retail_15() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
-    check(fs, include_str!("fixtures/noclass/mp_carentan-1.5.txt"));
+    check(
+        fs,
+        include_str!("fixtures/noclass/mp_carentan-1.5.txt"),
+        "0",
+    );
 }
 
 #[test]
@@ -98,5 +98,5 @@ fn a_connected_client_reads_as_retail_uo() {
     let Some(fs) = vcod_common::testing::uo_fs() else {
         return;
     };
-    check(fs, include_str!("fixtures/noclass/mp_carentan-uo.txt"));
+    check(fs, include_str!("fixtures/noclass/mp_carentan-uo.txt"), "1");
 }

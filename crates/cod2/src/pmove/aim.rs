@@ -161,15 +161,13 @@ pub struct AimInput<'a> {
     pub msec: i32,
 }
 
-impl AimInput<'_> {
-    fn keys(&self, weapon: u8) -> AimKeys {
-        self.defs
-            .get(weapon)
-            .map(|w| w.aim.clone())
-            .unwrap_or_default()
+impl<'a> AimInput<'a> {
+    fn keys(&self, weapon: u8) -> &'a AimKeys {
+        static NONE: std::sync::LazyLock<AimKeys> = std::sync::LazyLock::new(AimKeys::default);
+        self.defs.get(weapon).map_or(&NONE, |w| &w.aim)
     }
 
-    fn view_keys(&self) -> AimKeys {
+    fn view_keys(&self) -> &'a AimKeys {
         self.keys(super::weapon::view_weapon(self.ps, self.ws, self.defs))
     }
 
@@ -252,7 +250,8 @@ fn diff_track(target: f32, cur: f32, rate: f32, dt: f32) -> f32 {
 
 /// `DiffTrackAngle` (0x80a3d66): [`diff_track`] the short way round, then
 /// `AngleNormalize180`.
-fn diff_track_angle(mut target: f32, cur: f32, rate: f32, dt: f32) -> f32 {
+fn diff_track_angle(target: f32, cur: f32, rate: f32, dt: f32) -> f32 {
+    let mut target = vcod_common::fguard::near(target, cur);
     while target - cur > 180.0 {
         target -= 360.0;
     }
@@ -377,12 +376,12 @@ impl AimState {
         if k.ads {
             out[0] = (d(out[0]) + d(pos) * d(k.ads_aim_pitch)) as f32;
         }
-        self.tilt(inp, &k, xyspeed, dt, &mut out);
-        self.idle(inp, &k, dt, &mut out);
-        walk_bob(ps, &k, pos, xyspeed, &mut out);
-        self.damage_kick(inp, &k, &mut out);
+        self.tilt(inp, k, xyspeed, dt, &mut out);
+        self.idle(inp, k, dt, &mut out);
+        walk_bob(ps, k, pos, xyspeed, &mut out);
+        self.damage_kick(inp, k, &mut out);
         if k.ads {
-            self.spring_step(&k, pos, dt);
+            self.spring_step(k, pos, dt);
             out[0] = (d(out[0]) + d(self.spring[0])) as f32;
             out[1] = (d(out[1]) + d(self.spring[1])) as f32;
             out[2] = (d(out[2]) + d(self.spring[2])) as f32;

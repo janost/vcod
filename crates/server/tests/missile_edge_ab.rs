@@ -21,7 +21,7 @@ use crate::common;
 use common::{Join, Queues, step};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, BUTTON_MELEE, UserCmd};
 use vcod_common::net::{NetClient, NetEvent};
 
@@ -87,7 +87,7 @@ fn ours(
 /// [`ours`] with the missile pool's first draws pinned
 /// (`Server::pin_missile_draws`), and the first rockets' `trDelta`
 /// (`Server::pin_rocket_deltas`).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn ours_pinned(
     fs: vcod_common::pk3::Pk3Fs,
     map: &str,
@@ -99,17 +99,12 @@ fn ours_pinned(
     draws: Vec<f64>,
     rocket_deltas: Vec<[f32; 3]>,
 ) -> Vec<String> {
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, name), now);
-    sv.set_protocol(vcod_server::server::install_protocol(&fs));
-    sv.overlay_script(&format!("maps/mp/gametypes/{name}"), script);
-    for (k, v) in cvars {
-        sv.set_cvar(k, v);
+    let (mut sv, mut now) = common::Boot {
+        cvars,
+        script: Some(script),
+        ..common::Boot::new(map, name)
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     sv.pin_missile_draws(draws);
     sv.pin_rocket_deltas(rocket_deltas);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
@@ -585,15 +580,6 @@ fn a_swing_at_the_floor_raises_the_miss() {
     }
 }
 
-/// The install's `main/` when it is 1.5's (a UO install's is): the 1.5b
-/// fixtures' paks.
-fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
-    vcod_common::testing::game_fs().filter(|fs| {
-        vcod_server::server::install_protocol(fs).transport.version
-            == vcod_common::net::protocol::PROTOCOL_V6.transport.version
-    })
-}
-
 /// The shooter on mp_harbor's south sea wall over open water, looking
 /// along yaw 90 and `pitch` degrees down (`probe_skyshot`'s spot part),
 /// his rockets leaving with `rocket_deltas`.
@@ -673,7 +659,7 @@ fn a_frag_into_water_splashes() {
             include_str!("fixtures/missiles/mp_harbor-water-frag.txt"),
         ),
         (
-            fs_15(),
+            vcod_common::testing::game_fs_15(),
             include_str!("fixtures/missiles/mp_harbor-water-frag-15.txt"),
         ),
         (
@@ -704,7 +690,7 @@ fn a_frag_into_water_splashes() {
         assert_eq!(os.0 - o[0].0, rs.0 - r[0].0, "retail {rs:?}, ours {os:?}");
         // The fuse runs out on the harbor floor, 70 under the water: 1.1d
         // and 1.5b go off there, UO's `G_ExplodeMissile` (0x5e2b5) moves
-        // the explode up to the surface (coduo-diff.md 21, "Explode").
+        // the explode up to the surface (coduo-diff.md 21.1, "Explode").
         let (rx, ox) = (
             explode(&fixture).expect("retail's went off"),
             explode(&log).unwrap_or_else(|| panic!("ours did not go off: {log:?}")),
@@ -730,7 +716,7 @@ fn a_rocket_into_water_splashes() {
             "panzerfaust_mp",
         ),
         (
-            fs_15(),
+            vcod_common::testing::game_fs_15(),
             include_str!("fixtures/missiles/mp_harbor-water-rocket-15.txt"),
             "panzerfaust_mp",
         ),
@@ -838,7 +824,7 @@ fn a_rocket_fired_inside_a_kerb_brush_goes_off_at_once() {
             "panzerfaust_mp",
         ),
         (
-            fs_15(),
+            vcod_common::testing::game_fs_15(),
             include_str!("fixtures/missiles/mp_carentan-kerb-rocket-15.txt"),
             "panzerfaust_mp",
         ),

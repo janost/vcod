@@ -70,8 +70,16 @@ impl Flick {
 
 /// A pair of standard normals (Box-Muller) off the bot's generator.
 pub(super) fn gauss2(rng: &mut u64) -> [f32; 2] {
-    let mut u = || crate::game::host::rand_int(rng) as f32 / 2_147_483_648.0;
-    let (u1, u2) = (1.0 - u(), u());
+    let a = crate::game::host::rand_int(rng);
+    box_muller(a, crate::game::host::rand_int(rng))
+}
+
+/// [`gauss2`] off its two draws.
+fn box_muller(a: i32, b: i32) -> [f32; 2] {
+    let u = |d: i32| d as f32 / 2_147_483_648.0;
+    // The top 64 draws round to 1.0 as f32: keep `ln` off 0, at the
+    // smallest step under 1 any other draw makes.
+    let (u1, u2) = ((1.0 - u(a)).max(f32::EPSILON / 2.0), u(b));
     let r = (-2.0 * u1.ln()).sqrt();
     let (s, c) = (std::f32::consts::TAU * u2).sin_cos();
     [r * c, r * s]
@@ -252,6 +260,16 @@ pub(super) fn pulled(kept: &[[f32; 2]; RECOIL_KEEP], skill: &Skill) -> [f32; 2] 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The top 64 draws round to 1.0 as f32; the pair stays finite
+    /// (BUG-105).
+    #[test]
+    fn the_top_draw_gives_a_finite_pair() {
+        for a in [0x7fff_ffff, 0x7fff_ffc0, 0] {
+            let g = box_muller(a, 0x1234_5678);
+            assert!(g.iter().all(|x| x.is_finite()), "{a:#x}: {g:?}");
+        }
+    }
 
     fn e(origin: [f32; 3], velocity: [f32; 3]) -> EnemyView {
         EnemyView {

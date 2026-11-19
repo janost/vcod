@@ -11,22 +11,6 @@ use vcod_common::pk3::Pk3Fs;
 use super::{Cod2Server, State};
 use crate::game::cod2::{Cod2Init, Cod2Level};
 
-/// `sv_serverid` after `SV_SpawnServer` (0x8093520): the high nibble steps,
-/// and steps again past a wrap to 0, the low nibble kept. VERIFIED.
-pub fn spawn_server_id(id: i32) -> i32 {
-    let mut b = (id as u8).wrapping_add(0x10);
-    if b & 0xf0 == 0 {
-        b = b.wrapping_add(0x10);
-    }
-    i32::from(b)
-}
-
-/// `sv_serverid` after a `fast_restart` (`SV_MapRestart` 0x808be3e): the
-/// low nibble steps, the high one kept. VERIFIED.
-pub fn restart_server_id(id: i32) -> i32 {
-    ((id + 1) & 0xf) + (id & 0xf0)
-}
-
 /// What `SV_MapRotate_f` (0x808c132) does with `sv_mapRotationCurrent`
 /// (refilled from `sv_mapRotation` when empty or used up): the gametypes it
 /// sets on the way and the map it ends in, `None` for a `fast_restart`.
@@ -87,6 +71,16 @@ impl Cod2Server {
     /// through `ClientConnect`. Each gets its gamestate when its next
     /// message carries the old id (`client_packet`).
     pub(super) fn spawn_server(&mut self, map: &str) -> anyhow::Result<()> {
+        // A gametype with no script fails before the teardown, so the
+        // level serving stays (as CoD1's `LoadFailure::KeptLevel`).
+        let gametype = match self.game.level.as_ref() {
+            Some(level) => level.rt.host.cvars.get("g_gametype"),
+            None => self.game.cvars.get("g_gametype"),
+        };
+        if self.game.level.is_some() && !self.gametype_script_exists(gametype) {
+            log::error!("cod2: no script for gametype {gametype}; the level stays");
+            return Ok(());
+        }
         let p = crate::tick_profile::phase("load/carry");
         let (carry, rigs, parts) = match self.game.level.as_ref() {
             Some(level) => {
@@ -157,7 +151,7 @@ impl Cod2Server {
             self.connect_level(slot);
         }
         if let Some(b) = self.game.bots.as_mut() {
-            b.new_level(new_map);
+            b.new_level(!new_map);
         }
         Ok(())
     }
@@ -193,7 +187,7 @@ impl Cod2Server {
         let rigs = level.carried_rigs(self.game.fs.as_ref());
         let parts = Some(level.carried_parts());
         let configstrings = level.rt.configstrings().to_vec();
-        self.game.server_id = restart_server_id(self.game.server_id);
+        self.game.server_id = crate::engine::conn::restart_server_id(self.game.server_id);
         self.game.snap_flags ^= 4;
         self.shutdown_game_log();
         self.game.retired = self.game.level.take();
@@ -213,7 +207,7 @@ impl Cod2Server {
         // `H 0`, `G 0`, `n`).
         self.flush_game_commands();
         if let Some(b) = self.game.bots.as_mut() {
-            b.new_level(false);
+            b.new_level(true);
         }
         let cmd = if persist { "n" } else { "B" };
         for slot in 0..self.core.clients.len() {
@@ -235,6 +229,32 @@ impl Cod2Server {
         }
         self.write_engine_configstrings();
         Ok(())
+    }
+
+    /// Whether `gametype`'s script reads: `maps/mp/gametypes/<g>.gsc` in
+    /// the search path or the configured overlay. True on a bare server.
+    fn gametype_script_exists(&self, gametype: &str) -> bool {
+        let stem = format!("maps/mp/gametypes/{}", gametype.to_ascii_lowercase());
+        let overlay = (self.game.cfg.gametype_script.as_ref())
+            .is_some_and(|(s, _)| s.eq_ignore_ascii_case(&stem));
+        overlay
+            || self
+                .game
+                .fs
+                .as_ref()
+                .is_none_or(|fs| fs.contains(&format!("{stem}.gsc")))
+    }
+
+    /// A map cycle command's result: logged, and with the level torn down
+    /// kept as the fatal that ends the process, as retail's `Com_Error`
+    /// stops its server.
+    pub(super) fn load_failed(&mut self, what: &str, r: anyhow::Result<()>) {
+        let Err(e) = r else { return };
+        if self.game.level.is_none() && self.game.fs.is_some() {
+            self.game.fatal = Some(e.context(format!("cod2: {what}")));
+        } else {
+            log::error!("cod2: {what}: {e:#}");
+        }
     }
 
     /// `map_rotate` (`SV_MapRotate_f`): the rotation's gametype into
@@ -305,7 +325,7 @@ impl Cod2Server {
             .to_string();
         let bot = c.bot;
         if let Some(level) = self.game.level.as_mut() {
-            level.rt.host.client_names[slot] = name.clone();
+            level.rt.host.clients[slot].name = name.clone();
             level.connect_at(slot, &name, origin, angles);
             if bot {
                 level.mark_bot(slot);
@@ -381,15 +401,6 @@ impl Cod2Server {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_server_id_steps_as_retail_s() {
-        assert_eq!(spawn_server_id(0), 16);
-        assert_eq!(spawn_server_id(17), 33);
-        assert_eq!(spawn_server_id(0xf3), 0x13);
-        assert_eq!(restart_server_id(16), 17);
-        assert_eq!(restart_server_id(0x1f), 0x10);
-    }
 
     #[test]
     fn the_rotation_walks_gametypes_to_a_map() {

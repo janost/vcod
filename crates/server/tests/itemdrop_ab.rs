@@ -29,6 +29,7 @@
 //! `main/` is 1.5's) the 1.5b and UO ones; without the paks they return.
 
 use crate::common;
+use vcod_common::net::Msec;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -37,7 +38,7 @@ use std::time::{Duration, Instant};
 
 use glam::Vec3;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::net::trajectory::{TR_GRAVITY, TR_LINEAR, TR_STATIONARY, Trajectory};
 use vcod_server::game::item::{LAUNCH_CLIPMASK, RUN_CLIPMASK, Ran, bounds, run_flight};
 
@@ -76,7 +77,7 @@ const SPIN: [f64; 3] = [50.0, 40.0, 60.0];
 /// One patch's capture and the draws its module makes.
 struct Patch {
     fixture: &'static str,
-    proto: &'static Protocol,
+    proto: &'static Cod1Wire,
     /// `crandom()`'s sign: 1.1d's reads `2 * rand() * -2^-31 - 1`, (-3, -1];
     /// 1.5b's and UO's `2 * rand() / 2^31 - 1`, [-1, 1) (items doc 14.2).
     negative: bool,
@@ -114,10 +115,7 @@ impl Patch {
             return vcod_common::testing::uo_fs();
         }
         // A UO install's `main/` is 1.5's.
-        vcod_common::testing::game_fs().filter(|fs| {
-            vcod_server::server::install_protocol(fs).transport.version
-                == PROTOCOL_V6.transport.version
-        })
+        vcod_common::testing::game_fs_15()
     }
 
     /// `G_BounceItem`'s lift, `0.5 + 0.5 * u`: (0, 0.5] on 1.1d, [0.5, 1)
@@ -302,7 +300,7 @@ fn retail(patch: &Patch) -> Run {
     Run::new(probe, lines)
 }
 
-fn world(fs: &vcod_common::pk3::Pk3Fs, proto: &'static Protocol) -> vcod_server::world::World {
+fn world(fs: &vcod_common::pk3::Pk3Fs, proto: &'static Cod1Wire) -> vcod_server::world::World {
     let bsp_path = fs.resolve_map(MAP).expect("the map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("bsp");
     let w = vcod_server::world::World::from_bsp(&bsp, Some(fs));
@@ -367,7 +365,7 @@ fn flights_land(patch: &Patch) {
         };
         let weapon = launch.index <= patch.proto.max_weapons as i32;
         let mut pos = launch.pos;
-        let mut origin = pos.evaluate(pos.tr_time);
+        let mut origin = pos.evaluate_f32(pos.tr_time);
         let mut now = pos.tr_time;
         let mut nudges = Vec::new();
         let landed = loop {
@@ -618,9 +616,9 @@ fn run_ours(patch: &Patch, fs: vcod_common::pk3::Pk3Fs, retail: &Run) -> Run {
             }
         }
         if let Some(s) = cl.snapshots().newest()
-            && s.server_time != seen_time
+            && s.server_time != Msec::from_raw(seen_time)
         {
-            seen_time = s.server_time;
+            seen_time = s.server_time.raw();
             let mut here = BTreeMap::new();
             for (&num, e) in &s.entities {
                 if e.field_i32(p, "eType") != ET_ITEM {
@@ -628,7 +626,7 @@ fn run_ours(patch: &Patch, fs: vcod_common::pk3::Pk3Fs, retail: &Run) -> Run {
                 }
                 let i = |n: &str| e.field_i32(p, n);
                 let item = Item {
-                    t: s.server_time,
+                    t: s.server_time.raw(),
                     num,
                     index: i("index"),
                     client_num: i("clientNum"),
@@ -651,7 +649,7 @@ fn run_ours(patch: &Patch, fs: vcod_common::pk3::Pk3Fs, retail: &Run) -> Run {
             }
             for &num in last.keys().filter(|n| !here.contains_key(n)) {
                 lines.push(Line::Gone {
-                    t: s.server_time,
+                    t: s.server_time.raw(),
                     num,
                 });
             }
@@ -803,7 +801,6 @@ fn probe_runs(patch: &Patch) {
 }
 
 /// One item's lines, both sides, timed from each side's `PROBE start`.
-#[allow(clippy::too_many_arguments)]
 fn compare_item(
     patch: &Patch,
     tag: &str,

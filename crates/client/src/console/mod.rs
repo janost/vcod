@@ -194,7 +194,12 @@ impl Console {
         if word.is_empty() || word.contains(' ') {
             return;
         }
-        let matches = names(word);
+        // The field is ASCII, its cursor a byte index: a name a server or a
+        // config made with other characters is never completed into it.
+        let matches: Vec<String> = names(word)
+            .into_iter()
+            .filter(|n| n.bytes().all(|b| (b' '..=b'~').contains(&b)))
+            .collect();
         let prefix = if slash { &self.field[..1] } else { "" };
         match matches.as_slice() {
             [] => return,
@@ -466,6 +471,24 @@ mod tests {
         c.key(KeyCode::Enter, None, |_| Vec::new())
     }
 
+    /// The field is ASCII and its cursor counts bytes: Tab never puts a
+    /// name with a multi-byte character in it (BUG-079).
+    #[test]
+    fn tab_completes_no_name_outside_ascii() {
+        let mut c = console();
+        c.key(KeyCode::KeyA, Some("ab"), |_| Vec::new());
+        c.key(KeyCode::Tab, None, |_| vec!["ab\u{e9}".to_string()]);
+        c.key(KeyCode::Backspace, None, |_| Vec::new());
+        c.key(KeyCode::Backspace, None, |_| Vec::new());
+        assert!(c.field.is_ascii());
+        let mut c = console();
+        c.key(KeyCode::KeyA, Some("a"), |_| Vec::new());
+        c.key(KeyCode::Tab, None, |_| {
+            vec!["a\u{e9}".to_string(), "a\u{e8}".to_string()]
+        });
+        assert_eq!(c.field, "a");
+    }
+
     #[test]
     fn enter_submits_and_history_recalls() {
         let mut c = console();
@@ -589,7 +612,7 @@ mod tests {
             t2: 1.0,
             page: 0,
         };
-        // As `cod4_hud::to_font` builds `consoleFont`, 16 px high.
+        // As `cod4_hud::fonts::to_font` builds `consoleFont`, 16 px high.
         let f = Font {
             size: 16,
             glyphs: vec![g; 256],

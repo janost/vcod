@@ -8,15 +8,8 @@
 //! precision: an `f64` between the binary's stores. [`FlatTree::tree`]
 //! hands the walk ([`crate::xanimcalc`]) its leaves.
 
+use crate::skel::{d, f};
 use crate::xanimcalc::{Parts, Tree};
-
-fn d(x: f32) -> f64 {
-    f64::from(x)
-}
-
-fn f(x: f64) -> f32 {
-    x as f32
-}
 
 /// The float 0.001 widened (0x70af98): a weight starting from 0 starts at
 /// this share of its goal.
@@ -218,7 +211,7 @@ impl FlatTree {
                 .filter_map(|i| {
                     let (parts, remap) = leaf(i.node)?;
                     Some(Tree::Leaf {
-                        parts,
+                        clip: parts,
                         remap,
                         time: i.state.time,
                         weight: i.state.weight,
@@ -262,21 +255,31 @@ fn goal(s: &mut LeafState, weight: f32, goal_time: f32, rate: f32) {
     s.rate = rate;
 }
 
+/// The most whole turns [`step_time`] takes off one at a time.
+const LOOP_TURNS_MAX: f32 = 65536.0;
+
 /// A leaf's time step (0x5822c0): `rate * frequency * dt` stored, added to
 /// the time before the step; a looping clip wraps, one that does not holds
 /// just short of 1 for a frame, then at 1.
 fn step_time(s: &mut LeafState, c: Clock, dt: f32) {
     let step = f(d(s.rate) * d(c.frequency) * d(dt));
-    if step == 0.0 {
+    // A zone's infinite or NaN frequency or rate: no step.
+    if step == 0.0 || !step.is_finite() {
         return;
     }
     let mut t = f(d(step) + d(s.old_time));
     let mut cycle = s.cycle;
     if t >= 1.0 {
         if c.looped {
+            // From 2^24 `t - 1` rounds back to `t`: a step past any clip's
+            // drops its whole turns at once.
+            if t >= LOOP_TURNS_MAX {
+                cycle = cycle.wrapping_add(t.trunc() as i64 as i16);
+                t = t.fract();
+            }
             while t >= 1.0 {
                 t = f(d(t) - 1.0);
-                cycle += 1;
+                cycle = cycle.wrapping_add(1);
             }
         } else {
             let x = f(d(s.old_time) - d(NEAR_END));
@@ -284,7 +287,7 @@ fn step_time(s: &mut LeafState, c: Clock, dt: f32) {
         }
     }
     // 0x58238c..0x5823a8: a time set past the step keeps.
-    if d(s.time) - d(t) > f64::from(cycle - s.cycle) {
+    if d(s.time) - d(t) > f64::from(cycle.wrapping_sub(s.cycle)) {
         return;
     }
     s.time = t;
@@ -328,6 +331,27 @@ mod tests {
         assert_eq!(t.state(2).unwrap().weight, 0.9999999);
         t.update(0.01, |_| LOOP);
         assert_eq!(t.state(2).unwrap().weight, 1.0);
+    }
+
+    /// A zone's infinite, NaN or huge frequency steps a looping leaf at
+    /// once (SEC-030).
+    #[test]
+    fn a_hostile_frequency_steps_at_once() {
+        for frequency in [f32::INFINITY, f32::NAN, 1e12, 1.05e9, -1e12] {
+            let mut t = FlatTree::default();
+            t.set_goal_weight(1, 1.0, 0.0, 1.0, false);
+            for _ in 0..3 {
+                t.update(0.016, |_| Clock {
+                    frequency,
+                    looped: true,
+                });
+            }
+            let s = t.state(1).unwrap();
+            assert!(
+                s.time.is_nan() || (0.0..1.0).contains(&s.time),
+                "{frequency}: {s:?}"
+            );
+        }
     }
 
     /// A clip that does not loop holds short of 1 for a frame, then reads

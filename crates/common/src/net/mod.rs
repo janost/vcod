@@ -1,5 +1,5 @@
-//! CoD 1.1 network client, headless (no wgpu/winit types). Wire reference:
-//! docs/protocol-1.1.md.
+//! CoD1's network client (1.1, 1.5 and United Offensive), headless: play,
+//! demos, UDP and HTTP downloads. Wire reference: docs/protocol-1.1.md.
 
 pub mod capture;
 pub mod cdkey;
@@ -16,6 +16,8 @@ pub mod http;
 pub mod huffman;
 pub mod lan;
 pub mod master;
+pub mod msec;
+pub use msec::Msec;
 pub mod msg;
 pub mod netchan;
 pub mod netsim;
@@ -35,7 +37,7 @@ use msg::{
     UserCmd, write_delta_usercmd_in,
 };
 use netchan::Netchan;
-use protocol::{PROTOCOL_V1, Protocol};
+use protocol::{Cod1Wire, PROTOCOL_V1};
 use snapshot::SnapshotRing;
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
@@ -44,8 +46,7 @@ use std::time::{Duration, Instant};
 /// copies into a 16 KiB stack buffer (docs/protocol-1.1.md, svc_download).
 const MAX_DOWNLOAD_BLKSIZE: usize = 0x4000;
 
-/// Largest pk3 a server may announce; the biggest stock pak is under 300 MiB.
-const MAX_DOWNLOAD_SIZE: u32 = 512 << 20;
+use download::MAX_DOWNLOAD_SIZE;
 
 /// The www redirect's flag bits (`DL_FLAG_DISCON`, `DL_FLAG_URL`): the
 /// server drops the client for the transfer; the URL is a page to open.
@@ -53,8 +54,8 @@ const WWW_FLAG_DISCON: i32 = 1;
 const WWW_FLAG_URL: i32 = 2;
 
 /// Packets read per `pump`, matching the server's `MAX_PACKETS_PER_FRAME`, so a
-/// flood cannot stall the caller's frame.
-const MAX_PACKETS_PER_PUMP: usize = 256;
+/// flood cannot stall the caller's frame. CoD2's and CoD4's polls take it too.
+pub const MAX_PACKETS_PER_PUMP: usize = 256;
 
 const CONNECT_RESEND: Duration = Duration::from_secs(2);
 const CONNECT_TRIES: u32 = 5;
@@ -91,9 +92,13 @@ pub struct UdpTransport {
 }
 
 impl UdpTransport {
+    /// `addr` is `host[:port]`, the port 28960 when left out, as the
+    /// browser's and `rcon`'s ([`master::parse_address`]).
     pub fn connect(addr: &str) -> anyhow::Result<Self> {
+        let to =
+            master::parse_address(addr).ok_or_else(|| anyhow::anyhow!("cannot resolve {addr}"))?;
         let sock = UdpSocket::bind("0.0.0.0:0")?;
-        sock.connect(addr)?;
+        sock.connect(to)?;
         Self::from_socket(sock)
     }
 
@@ -275,11 +280,9 @@ fn process_qport() -> u16 {
     0x2000 | (std::process::id() as u16 & 0x0fff)
 }
 
-/// The protocol an `error` refusing the connect for its version names:
-/// `\nEXE_SERVER_IS_DIFFERENT_VER\x15<shortversion>\n`.
 /// Whose CD key a connection speaking `proto` sends: 1.1 and 1.5 share
 /// one, United Offensive has its own.
-fn key_game(proto: &Protocol) -> cdkey::KeyGame {
+fn key_game(proto: &Cod1Wire) -> cdkey::KeyGame {
     if proto.is_uo() {
         cdkey::KeyGame::Uo
     } else {
@@ -287,12 +290,14 @@ fn key_game(proto: &Protocol) -> cdkey::KeyGame {
     }
 }
 
-fn other_version(rest: &[u8]) -> Option<&'static Protocol> {
+/// The protocol an `error` refusing the connect for its version names:
+/// `\nEXE_SERVER_IS_DIFFERENT_VER\x15<shortversion>\n`.
+fn other_version(rest: &[u8]) -> Option<&'static Cod1Wire> {
     let text = String::from_utf8_lossy(rest);
     let v = text
         .trim()
         .strip_prefix("EXE_SERVER_IS_DIFFERENT_VER\u{15}")?;
-    Protocol::by_short_version(v.trim())
+    Cod1Wire::by_short_version(v.trim())
 }
 
 /// CoD 1.1 spectate client, generic over its [`Transport`] so the state
@@ -300,13 +305,13 @@ fn other_version(rest: &[u8]) -> Option<&'static Protocol> {
 pub struct NetClient<T: Transport> {
     transport: T,
     huff: Huffman,
-    proto: &'static Protocol,
+    proto: &'static Cod1Wire,
     /// The handshake already switched protocol once; a second refusal ends it.
     proto_switched: bool,
     /// The install's protocol ([`NetClient::connect_from`]): a server of
     /// another game ([`Transport::same_game`](crate::net::wire::Transport::same_game)) ends the handshake instead of
     /// switching. `None` switches to any.
-    install: Option<&'static Protocol>,
+    install: Option<&'static Cod1Wire>,
 
     state: NetState,
     challenge: i32,
@@ -319,8 +324,9 @@ pub struct NetClient<T: Transport> {
     gamestate: Option<Gamestate>,
     snapshots: SnapshotRing,
     configstrings: Vec<String>,
-    /// `bigConfigString`: an `x`..`z` update being put together.
-    big_configstring: String,
+    /// `bigConfigString`: the index and value of an `x`..`z` update being
+    /// put together.
+    big_configstring: Option<(usize, String)>,
     server_id: i32,
     checksum_feed: i32,
     client_num: i32,
@@ -331,7 +337,7 @@ pub struct NetClient<T: Transport> {
     commands_taken: Option<i32>,
 
     /// Server clock estimate and the pump time it was taken.
-    server_time: i32,
+    server_time: Msec,
     server_time_at: Instant,
 
     /// The last usercmd put on the wire; the delta base for the next move
@@ -449,7 +455,7 @@ impl NetClient<UdpTransport> {
 
     /// Connects speaking the install's protocol, and refuses a server of
     /// another game rather than playing it on the wrong assets.
-    pub fn connect_from(addr: &str, install: &'static Protocol) -> anyhow::Result<Self> {
+    pub fn connect_from(addr: &str, install: &'static Cod1Wire) -> anyhow::Result<Self> {
         let transport = UdpTransport::connect(addr)?;
         Ok(Self::start_from(transport, Instant::now(), install))
     }
@@ -465,7 +471,7 @@ impl<T: Transport> NetClient<T> {
     }
 
     /// [`NetClient::connect_from`] over any transport.
-    pub fn start_from(transport: T, now: Instant, install: &'static Protocol) -> Self {
+    pub fn start_from(transport: T, now: Instant, install: &'static Cod1Wire) -> Self {
         let mut c = Self::start_with_protocol(transport, now, process_qport(), install);
         c.install = Some(install);
         c
@@ -478,7 +484,7 @@ impl<T: Transport> NetClient<T> {
         transport: T,
         now: Instant,
         qport: u16,
-        proto: &'static Protocol,
+        proto: &'static Cod1Wire,
     ) -> Self {
         let mut c = Self::idle(transport, now, qport, proto);
         c.send_getchallenge();
@@ -491,14 +497,14 @@ impl<T: Transport> NetClient<T> {
     /// `demo <name>` (CoDMP.exe 0x40eb40): plays `data`, a demo file
     /// recorded under `proto`, through the parse a connection runs. Nothing
     /// goes out on `transport`; [`Self::pump_demo`] reads it.
-    pub fn play_demo(transport: T, now: Instant, proto: &'static Protocol, data: Vec<u8>) -> Self {
+    pub fn play_demo(transport: T, now: Instant, proto: &'static Cod1Wire, data: Vec<u8>) -> Self {
         let mut c = Self::idle(transport, now, 0, proto);
         c.state = NetState::LoadingGamestate;
         c.demo = Some(demo::DemoReader::new(data, proto));
         c
     }
 
-    fn idle(transport: T, now: Instant, qport: u16, proto: &'static Protocol) -> Self {
+    fn idle(transport: T, now: Instant, qport: u16, proto: &'static Cod1Wire) -> Self {
         NetClient {
             transport,
             huff: Huffman::new(),
@@ -514,13 +520,13 @@ impl<T: Transport> NetClient<T> {
             gamestate: None,
             snapshots: SnapshotRing::new(),
             configstrings: vec![String::new(); proto.transport.max_configstrings],
-            big_configstring: String::new(),
+            big_configstring: None,
             server_id: 0,
             checksum_feed: 0,
             client_num: 0,
             command_sequence: 0,
             commands_taken: None,
-            server_time: 0,
+            server_time: Msec::ZERO,
             server_time_at: now,
             last_sent_cmd: NULL_USERCMD,
             now,
@@ -567,7 +573,10 @@ impl<T: Transport> NetClient<T> {
             let want = match (&self.gamestate, until) {
                 (None, _) => true,
                 (Some(_), None) => false,
-                (Some(_), Some(t)) => self.snapshots.newest().is_none_or(|s| s.server_time <= t),
+                (Some(_), Some(t)) => self
+                    .snapshots
+                    .newest()
+                    .is_none_or(|s| s.server_time <= Msec::from_raw(t)),
             };
             if !want {
                 break;
@@ -687,7 +696,7 @@ impl<T: Transport> NetClient<T> {
 
     /// The protocol this connection speaks; it can change once, while the
     /// handshake runs, when the server turns out to be the other version.
-    pub fn protocol(&self) -> &'static Protocol {
+    pub fn protocol(&self) -> &'static Cod1Wire {
         self.proto
     }
 
@@ -744,8 +753,10 @@ impl<T: Transport> NetClient<T> {
     pub fn take_server_commands(&mut self) -> Vec<String> {
         let cap = self.netchan.server_commands.len();
         let from = *self.commands_taken.get_or_insert(self.command_sequence);
-        let first = (self.command_sequence - cap as i32 + 1).max(from + 1);
-        let out = (first..=self.command_sequence)
+        // i64: the sequence is the server's, any i32 at all.
+        let last = self.command_sequence as i64;
+        let first = (last - cap as i64 + 1).max(from as i64 + 1);
+        let out = (first..=last)
             .map(|seq| self.netchan.server_commands[seq as usize & (cap - 1)].clone())
             .collect();
         self.commands_taken = Some(self.command_sequence);
@@ -873,7 +884,8 @@ impl<T: Transport> NetClient<T> {
         }
         self.netchan.reliable_sequence += 1;
         let slot = self.netchan.reliable_sequence as usize & (self.netchan.reliable.len() - 1);
-        self.netchan.reliable[slot] = cmd.to_string();
+        // The copy the server reads, which keys its scramble of our messages.
+        self.netchan.reliable[slot] = codec::wire_string(cmd).into_owned();
         if !["team ", "score ", "mr "]
             .iter()
             .any(|x| cmd.starts_with(x))
@@ -1186,7 +1198,9 @@ impl<T: Transport> NetClient<T> {
                 self.state = NetState::LoadingGamestate;
                 self.last_packet = Some(self.now);
                 self.connect_deadline = self.now + GAMESTATE_TIMEOUT;
-                self.last_send = self.now - GAMESTATE_POKE; // poke immediately
+                // Poke at once; `checked_sub` because an `Instant` minus a
+                // `Duration` panics on a clock younger than it.
+                self.last_send = self.now.checked_sub(GAMESTATE_POKE).unwrap_or(self.now);
             }
             // `CL_DisconnectPacket` (CoDMP.exe 0x410620): honoured only
             // while connecting or connected, and only once the server has
@@ -1390,7 +1404,7 @@ impl<T: Transport> NetClient<T> {
             cap.triples.extend_from_slice(msg);
             cap.count += 1;
             if let Some(s) = self.snapshots.newest() {
-                cap.times.push(s.server_time);
+                cap.times.push(s.server_time.raw());
             }
         }
     }
@@ -1672,6 +1686,7 @@ impl<T: Transport> NetClient<T> {
         self.gamestate = None;
         self.snapshots.clear();
         self.configstrings = vec![String::new(); self.proto.transport.max_configstrings];
+        self.big_configstring = None;
         self.server_id = 0;
         self.command_sequence = 0;
         self.commands_taken = None;
@@ -1687,6 +1702,7 @@ impl<T: Transport> NetClient<T> {
 
     fn on_gamestate(&mut self, gs: Gamestate) {
         self.configstrings = gs.configstrings.clone();
+        self.big_configstring = None;
         self.snapshots.clear();
         self.snapshots.set_baselines(gs.baselines.clone());
         self.server_id = server_id_from_gamestate(&gs);
@@ -1764,18 +1780,27 @@ impl<T: Transport> NetClient<T> {
             // opening it, `z` closing it (cod11-server-handshake.md,
             // "Configstring 1, systeminfo"; CoDMP.exe 0x4014e0, CoDUOMP.exe
             // 0x401630).
+            // The join is bounded as retail's 8192-byte buffer is; a `y` or
+            // `z` with no `x` open, or one past the bound, is dropped.
             Some("x") => {
-                if let Some((i, chunk)) = parse_configstring_update(&cmd) {
-                    self.big_configstring = format!("d {i} {chunk}");
-                }
+                self.big_configstring = parse_configstring_update(&cmd);
             }
             Some("y") | Some("z") => {
+                let Some((i, mut whole)) = self.big_configstring.take() else {
+                    return;
+                };
                 if let Some((_, chunk)) = parse_configstring_update(&cmd) {
-                    self.big_configstring.push_str(&chunk);
+                    whole.push_str(&chunk);
                 }
-                if tokens[0] == "z" {
-                    let whole = std::mem::take(&mut self.big_configstring);
-                    self.apply_configstring(&whole);
+                if whole.len() >= codec::BIG_INFO_STRING {
+                    log::warn!(
+                        "configstring {i}: chunked update past {} bytes",
+                        codec::BIG_INFO_STRING
+                    );
+                } else if tokens[0] == "z" {
+                    self.apply_configstring(&format!("d {i} {whole}"));
+                } else {
+                    self.big_configstring = Some((i, whole));
                 }
             }
             _ => {
@@ -1804,6 +1829,12 @@ impl<T: Transport> NetClient<T> {
     /// Client message: unacked reliables, `cmds` as one `clc_move` (skipped
     /// when empty), `clc_EOF`. Each cmd is written full-branch, chained from
     /// the one before it under the same key, the first from `last_sent_cmd`.
+    ///
+    /// Retail fragments a message past `FRAGMENT_SIZE`; vcod does not, so an
+    /// oversized one carries the oldest unacked reliables that fit beside the
+    /// newest cmd, then as many of the newest cmds as still fit. The rest
+    /// wait for the server's ack: resending a prefix keeps the server's
+    /// in-order rule, where skipping ahead past a lost packet would not.
     fn send_message(&mut self, cmds: &[UserCmd]) {
         // `CL_WritePacket` sends nothing while a demo plays.
         if self.demo.is_some() {
@@ -1811,29 +1842,108 @@ impl<T: Transport> NetClient<T> {
         }
         let message_ack = self.netchan.incoming_sequence as i32;
         let reliable_ack = self.command_sequence;
-
-        let mut w = MsgWriter::new(&self.huff);
         // `reliable_acknowledge` comes off the wire; an all-ones ack must not
         // overflow the add.
         let from = self.netchan.reliable_acknowledge.wrapping_add(1);
-        for seq in from..=self.netchan.reliable_sequence {
-            let slot = seq as usize & (self.netchan.reliable.len() - 1);
-            let s = self.netchan.reliable[slot].clone();
-            if s.is_empty() {
-                continue;
+        let pending: Vec<u32> = (from..=self.netchan.reliable_sequence)
+            .filter(|&seq| !self.reliable_at(seq).is_empty())
+            .collect();
+        let (r, c) = match self.message_fit(&pending, cmds, message_ack, reliable_ack) {
+            Ok(rc) => rc,
+            Err(why) => {
+                self.drop(&why);
+                return;
             }
+        };
+        let m = cmds.len();
+        let cmds = &cmds[m - c..];
+        let ops = self.message_ops(&pending[..r], cmds, message_ack, reliable_ack);
+        match self
+            .netchan
+            .build_out(self.server_id, message_ack, reliable_ack, &ops, &self.huff)
+        {
+            Ok(pkt) => {
+                self.transport.send(&pkt);
+                if let Some(to) = cmds.last() {
+                    self.last_sent_cmd = *to;
+                }
+            }
+            Err(e) => log::warn!("client message not sent: {e:#}"),
+        }
+    }
+
+    /// How many of `pending` (oldest first) and of `cmds` (newest last)
+    /// [`Self::send_message`] sends; all of both when they fit. `Err` when
+    /// the oldest reliable, or with none pending one cmd, cannot fit alone.
+    fn message_fit(
+        &self,
+        pending: &[u32],
+        cmds: &[UserCmd],
+        message_ack: i32,
+        reliable_ack: i32,
+    ) -> Result<(usize, usize), String> {
+        let (n, m) = (pending.len(), cmds.len());
+        let fits = |r: usize, c: usize| {
+            let ops = self.message_ops(&pending[..r], &cmds[m - c..], message_ack, reliable_ack);
+            netchan::fits(&ops, &self.huff)
+        };
+        if fits(n, m) {
+            return Ok((n, m));
+        }
+        let mut beside = m.min(1);
+        let mut r = largest_fitting(n, |r| fits(r, beside));
+        if r == 0 && n > 0 && beside == 1 {
+            beside = 0;
+            r = largest_fitting(1, |r| fits(r, 0));
+        }
+        if n > 0 && r == 0 {
+            return Err(format!(
+                "reliable command {} does not fit in a packet",
+                pending[0]
+            ));
+        }
+        if !fits(r, beside) {
+            return Err("a usercmd does not fit in a packet".into());
+        }
+        let c = beside + largest_fitting(m - beside, |k| fits(r, beside + k));
+        log::debug!(
+            "client message past {} bytes: {r} of {n} reliables, {c} of {m} cmds",
+            netchan::FRAGMENT_SIZE
+        );
+        Ok((r, c))
+    }
+
+    /// The reliable command ringed at `seq`.
+    fn reliable_at(&self, seq: u32) -> &str {
+        &self.netchan.reliable[seq as usize & (self.netchan.reliable.len() - 1)]
+    }
+
+    /// The op block of [`Self::send_message`]: the `reliables` by sequence,
+    /// `cmds` as one `clc_move` when there are any, `clc_EOF`.
+    fn message_ops(
+        &self,
+        reliables: &[u32],
+        cmds: &[UserCmd],
+        message_ack: i32,
+        reliable_ack: i32,
+    ) -> Vec<u8> {
+        let mut w = MsgWriter::new(&self.huff);
+        for &seq in reliables {
             w.write_bits(CLC_CLIENT_COMMAND, CLC_BITS);
             w.write_long(seq as i32);
-            w.write_string(&s);
+            w.write_string(self.reliable_at(seq));
         }
         if !cmds.is_empty() {
             let key = self.usercmd_key(message_ack, reliable_ack);
-            // clc_moveNoDelta sets our deltaMessage to -1 and every snapshot back
-            // is a full keyframe; once we hold a snapshot, clc_move lets the server
-            // delta-compress. Keyframes on a populated server fragment and drop.
-            // A recording waits on a full frame (CoDMP.exe 0x40bc5a).
+            // clc_moveNoDelta sets our deltaMessage to -1 and the next snapshot
+            // back is a full keyframe; clc_move lets the server delta from the
+            // message we ack. That message has to hold a valid frame: one that
+            // failed to parse or lacked its base would be every later frame's
+            // base. A recording waits on a full frame too (CoDMP.exe
+            // 0x40bc44..0x40bc6f, cod11-demos.md 4).
             let waiting = self.recording.as_ref().is_some_and(|r| r.waiting);
-            let clc = if self.snapshots.newest().is_some() && !waiting {
+            let acked_valid = self.snapshots.get(self.netchan.incoming_sequence).is_some();
+            let clc = if acked_valid && !waiting {
                 CLC_MOVE
             } else {
                 CLC_MOVE_NO_DELTA
@@ -1847,17 +1957,7 @@ impl<T: Transport> NetClient<T> {
             }
         }
         w.write_bits(CLC_EOF, CLC_BITS);
-        let ops = w.into_ops();
-
-        if let Ok(pkt) =
-            self.netchan
-                .build_out(self.server_id, message_ack, reliable_ack, &ops, &self.huff)
-        {
-            self.transport.send(&pkt);
-            if let Some(to) = cmds.last() {
-                self.last_sent_cmd = *to;
-            }
-        }
+        w.into_ops()
     }
 
     /// `SV_UserMove`'s delta key (cod_lnxded 0x8086fa4, the mask at 0x8087060).
@@ -1871,8 +1971,23 @@ impl<T: Transport> NetClient<T> {
     /// by wall-clock elapsed since it arrived.
     pub fn server_clock_ms(&self) -> i32 {
         let elapsed = self.now.duration_since(self.server_time_at).as_millis() as i32;
-        self.server_time.wrapping_add(elapsed)
+        (self.server_time + elapsed).raw()
     }
+}
+
+/// The largest `k` in `0..=max` with `fits(k)`, `fits` growing false with
+/// `k`; 0 when none does.
+fn largest_fitting(max: usize, fits: impl Fn(usize) -> bool) -> usize {
+    let (mut lo, mut hi) = (0, max + 1);
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if fits(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
 }
 
 /// Cmds in one `clc_move`, the cap on both ends: `send_cmds` keeps the most
@@ -2334,8 +2449,8 @@ mod tests {
 
     #[test]
     fn download_happy_path() {
-        let dir = std::env::temp_dir().join(format!("vcod-dl-happy-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let dest = dir.join("main/foo.pk3");
 
         let mut c = active_client();
@@ -2377,14 +2492,12 @@ mod tests {
         let gs = crate::testing::fixture("net/gamestate.bin");
         c.handle_message(&gs);
         assert_eq!(c.state(), NetState::Active);
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn download_takes_blocks_past_8192() {
-        let dir = std::env::temp_dir().join(format!("vcod-dl-big-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let dest = dir.join("main/foo.pk3");
 
         let mut c = active_client();
@@ -2408,13 +2521,12 @@ mod tests {
         }));
 
         assert_eq!(std::fs::read(&dest).unwrap(), zip);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn download_refusal_drops_with_reason() {
-        let dir = std::env::temp_dir().join(format!("vcod-dl-refuse-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let dest = dir.join("main/foo.pk3");
 
         let mut c = active_client();
@@ -2439,14 +2551,12 @@ mod tests {
                 .next()
                 .is_none()
         );
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn download_ignores_out_of_order_and_duplicate_blocks() {
-        let dir = std::env::temp_dir().join(format!("vcod-dl-order-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let dest = dir.join("main/foo.pk3");
 
         let mut c = active_client();
@@ -2474,14 +2584,12 @@ mod tests {
         c.handle_message(&block0);
         assert_eq!(c.download_progress(), Some((6, 11)));
         assert_eq!(reliable_count(&c, "nextdl 0"), 1);
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn download_of_garbage_drops_and_leaves_no_pak() {
-        let dir = std::env::temp_dir().join(format!("vcod-dl-garbage-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let dest = dir.join("main/foo.pk3");
 
         let mut c = active_client();
@@ -2510,14 +2618,12 @@ mod tests {
                 .next()
                 .is_none()
         );
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn download_exceeding_the_announced_size_drops() {
-        let dir = std::env::temp_dir().join(format!("vcod-dl-oversize-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let dest = dir.join("main/foo.pk3");
 
         let mut c = active_client();
@@ -2546,14 +2652,12 @@ mod tests {
                 .next()
                 .is_none()
         );
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn download_with_an_absurd_announced_size_drops() {
-        let dir = std::env::temp_dir().join(format!("vcod-dl-absurd-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let dest = dir.join("main/foo.pk3");
 
         let mut c = active_client();
@@ -2579,8 +2683,6 @@ mod tests {
                 .next()
                 .is_none()
         );
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -2635,14 +2737,9 @@ mod tests {
         assert_eq!(c.state(), NetState::Disconnected);
     }
 
-    /// Unscramble and decompress packet `i` the way the server would, and
-    /// walk to its clc_move: returns the usercmd key, a reader positioned
-    /// right after the cmd count, and the count itself.
-    fn sent_move(
-        c: &NetClient<FakeTransport>,
-        h: &Huffman,
-        i: usize,
-    ) -> Option<(i32, MsgReader, u8)> {
+    /// Unscramble and decompress packet `i` the way the server would:
+    /// returns the usercmd key and a reader at the first op.
+    fn sent_ops(c: &NetClient<FakeTransport>, h: &Huffman, i: usize) -> (i32, MsgReader) {
         let pkt = &c.transport.sent[i];
         let body = &pkt[6..];
         let server_id = body[0] as i32;
@@ -2661,8 +2758,20 @@ mod tests {
             *b ^= key;
         }
         // MsgReader::new block-decompresses; the body only needed unscrambling.
-        let key = c.usercmd_key(message_ack, reliable_ack);
-        let mut r = MsgReader::new(&comp, h);
+        (
+            c.usercmd_key(message_ack, reliable_ack),
+            MsgReader::new(&comp, h),
+        )
+    }
+
+    /// Walk packet `i` to its clc_move: returns the usercmd key, a reader
+    /// positioned right after the cmd count, and the count itself.
+    fn sent_move(
+        c: &NetClient<FakeTransport>,
+        h: &Huffman,
+        i: usize,
+    ) -> Option<(i32, MsgReader, u8)> {
+        let (key, mut r) = sent_ops(c, h, i);
         loop {
             match r.read_bits(CLC_BITS) {
                 CLC_MOVE | CLC_MOVE_NO_DELTA => {
@@ -2676,6 +2785,107 @@ mod tests {
                 _ => return None,
             }
         }
+    }
+
+    /// Packet `i`'s clc_clientCommands, `(sequence, text)`.
+    fn sent_reliables(c: &NetClient<FakeTransport>, h: &Huffman, i: usize) -> Vec<(u32, String)> {
+        let (_, mut r) = sent_ops(c, h, i);
+        let mut out = Vec::new();
+        while r.read_bits(CLC_BITS) == CLC_CLIENT_COMMAND {
+            let seq = r.read_long() as u32;
+            out.push((seq, r.read_string()));
+        }
+        out
+    }
+
+    /// Reliables past one packet go out as the oldest that fit beside the
+    /// newest cmd, resent until acked, then the next: the server sees every
+    /// command, in order, with a move in each packet.
+    #[test]
+    fn oversized_reliables_go_out_over_several_packets() {
+        let mut c = active_client();
+        let h = Huffman::new();
+        // ~3 KiB of text Huffman cannot squeeze much.
+        let mut x = 12345u32;
+        let queued: Vec<String> = (0..12)
+            .map(|i| {
+                let tail: String = (0..250)
+                    .map(|_| {
+                        x = x.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                        match b'!' + (x >> 16) as u8 % 90 {
+                            b'%' => 'x',
+                            b => b as char,
+                        }
+                    })
+                    .collect();
+                format!("say {i} {tail}")
+            })
+            .collect();
+        for q in &queued {
+            c.send_reliable(q);
+        }
+        let first_seq = c.netchan.reliable_acknowledge + 1;
+        let mut got: Vec<(u32, String)> = Vec::new();
+        for frame in 0..12 {
+            let at = c.transport.sent.len();
+            let cmd = UserCmd {
+                server_time: 1000 + 8 * frame,
+                forward: 127,
+                ..Default::default()
+            };
+            let base = c.last_sent_cmd;
+            c.send_cmds(&[cmd]);
+            assert_eq!(c.transport.sent.len(), at + 1, "frame {frame} sent nothing");
+            assert!(c.transport.sent[at].len() < 6 + netchan::FRAGMENT_SIZE);
+            assert_eq!(decoded_move_cmds(&c, &h, at, &base), Some(vec![cmd]));
+            let sent = sent_reliables(&c, &h, at);
+            if sent.is_empty() {
+                break;
+            }
+            // The server runs those past its last; its ack retires them.
+            for (seq, text) in &sent {
+                if got.last().is_none_or(|(s, _)| seq > s) {
+                    got.push((*seq, text.clone()));
+                }
+            }
+            c.netchan.reliable_acknowledge = got.last().unwrap().0;
+        }
+        let want: Vec<(u32, String)> = (first_seq..).zip(queued.iter().cloned()).collect();
+        assert_eq!(got, want);
+        assert_ne!(c.state(), NetState::Disconnected);
+    }
+
+    /// A reliable that fills a packet by itself goes out without the move;
+    /// the cmds wait for its ack.
+    #[test]
+    fn a_reliable_too_big_to_share_a_packet_goes_out_alone() {
+        let mut c = active_client();
+        let h = Huffman::new();
+        // As long as a string goes, of the ASCII byte with the longest code.
+        let rare = (1u8..128)
+            .max_by_key(|&b| h.compress_block(&[b; 64]).len())
+            .unwrap();
+        let huge = (rare as char).to_string().repeat(1023);
+        c.send_reliable(&huge);
+        let seq = c.netchan.reliable_sequence;
+        let base = c.last_sent_cmd;
+        let cmd = |t| UserCmd {
+            server_time: t,
+            forward: 127,
+            ..Default::default()
+        };
+
+        let at = c.transport.sent.len();
+        c.send_cmds(&[cmd(1000)]);
+        assert_eq!(c.transport.sent.len(), at + 1);
+        assert_eq!(sent_reliables(&c, &h, at), vec![(seq, huge)]);
+        assert!(sent_move(&c, &h, at).is_none(), "no room for the move");
+
+        c.netchan.reliable_acknowledge = seq;
+        let at = c.transport.sent.len();
+        c.send_cmds(&[cmd(1008)]);
+        assert!(sent_reliables(&c, &h, at).is_empty());
+        assert_eq!(decoded_move_cmds(&c, &h, at, &base), Some(vec![cmd(1008)]));
     }
 
     /// Decode packet `i`'s clc_move's first cmd against `base`.
@@ -3032,6 +3242,16 @@ mod tests {
         panic!("never dropped");
     }
 
+    /// `connect 127.0.0.1` goes to the default port instead of failing as
+    /// an invalid socket address.
+    #[test]
+    fn connect_without_a_port_uses_28960() {
+        let t = UdpTransport::connect("127.0.0.1").unwrap();
+        let peer = t.sock.as_ref().unwrap().peer_addr().unwrap();
+        assert_eq!(peer.to_string(), "127.0.0.1:28960");
+        assert!(UdpTransport::connect("127.0.0.1:x").is_err());
+    }
+
     /// Over real UDP on loopback, a server that checks no key answers the
     /// same handshake with a key set as without: the key stays home.
     #[test]
@@ -3217,6 +3437,27 @@ mod tests {
         assert_eq!(c.configstrings[1], info);
         assert_eq!(c.server_id, 7);
         assert_eq!(c.events, vec![NetEvent::ConfigstringChanged(1)]);
+    }
+
+    /// A `y` with no `x` open joins nothing, and a run of them is bounded
+    /// at retail's 8192 bytes, then dropped.
+    #[test]
+    fn a_chunked_configstring_is_bounded() {
+        let t0 = Instant::now();
+        let mut c = NetClient::start(FakeTransport::default(), t0);
+        let piece = "a".repeat(999);
+        for seq in 1..=100 {
+            c.handle_server_command(seq, format!("y 1 {piece}"));
+        }
+        assert_eq!(c.big_configstring, None);
+        c.handle_server_command(101, format!("x 1 {piece}"));
+        for seq in 102..=200 {
+            c.handle_server_command(seq, format!("y 1 {piece}"));
+            let held = c.big_configstring.as_ref().map_or(0, |(_, s)| s.len());
+            assert!(held < codec::BIG_INFO_STRING, "{held}");
+        }
+        c.handle_server_command(201, format!("z 1 {piece}"));
+        assert_eq!(c.configstrings[1], "");
     }
 
     #[test]
@@ -3645,11 +3886,14 @@ mod tests {
             let mut got = Vec::new();
             let mut ended = false;
             while !ended {
-                let until = c.snapshots().newest().map_or(i32::MIN, |s| s.server_time);
+                let until = c
+                    .snapshots()
+                    .newest()
+                    .map_or(i32::MIN, |s| s.server_time.raw());
                 let evs = c.pump_demo(now, Some(until));
                 ended = evs.contains(&NetEvent::DemoEnded(demo::DemoEnd::Completed));
                 if let Some(s) = c.snapshots().newest()
-                    && s.server_time > until
+                    && s.server_time.raw() > until
                 {
                     got.push(format!("{s:?}"));
                 }
@@ -3845,10 +4089,13 @@ mod tests {
             assert!(d.pump_demo(now, None).contains(&NetEvent::GamestateReady));
             let mut got = Vec::new();
             loop {
-                let until = d.snapshots().newest().map_or(i32::MIN, |s| s.server_time);
+                let until = d
+                    .snapshots()
+                    .newest()
+                    .map_or(i32::MIN, |s| s.server_time.raw());
                 let evs = d.pump_demo(now, Some(until));
                 if let Some(s) = d.snapshots().newest()
-                    && s.server_time > until
+                    && s.server_time.raw() > until
                 {
                     got.push(format!("{s:?}"));
                 }
@@ -3914,10 +4161,13 @@ mod tests {
         assert!(c.pump_demo(now, None).contains(&NetEvent::GamestateReady));
         let mut times = Vec::new();
         loop {
-            let until = c.snapshots().newest().map_or(i32::MIN, |s| s.server_time);
+            let until = c
+                .snapshots()
+                .newest()
+                .map_or(i32::MIN, |s| s.server_time.raw());
             let evs = c.pump_demo(now, Some(until));
             if let Some(s) = c.snapshots().newest()
-                && s.server_time > until
+                && s.server_time.raw() > until
             {
                 times.push(s.server_time);
             }
@@ -3935,5 +4185,109 @@ mod tests {
         assert_eq!(times.len(), records.len() - 1, "a snapshot a record");
         assert!(times.windows(2).all(|t| t[0] < t[1]));
         assert!(c.transport.sent.is_empty());
+    }
+
+    /// The captured gamestate and the first snapshot messages, each fed
+    /// whole and then mutated through an active client's message parse
+    /// and its server command cursor: nothing panics.
+    #[test]
+    fn hostile_server_messages_never_panic() {
+        use crate::testing::fuzz;
+        // A dropped client is put back in play rather than built again: a
+        // new one's Huffman tree costs 30 ms in the test profile.
+        let feed = |c: &mut NetClient<FakeTransport>, msg: &[u8]| {
+            c.handle_message(msg);
+            c.take_server_commands();
+            c.state = NetState::Active;
+        };
+        let mut c = active_client();
+        let gs = crate::testing::fixture("net/gamestate.bin");
+        fuzz("cod1 gamestate", &gs, 400, |m| feed(&mut c, m));
+        let data = crate::testing::fixture("net/snapshots.bin");
+        let mut c = active_client();
+        let mut off = 0;
+        while off + 8 <= data.len() {
+            let num = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
+            let len = u32::from_le_bytes(data[off + 4..off + 8].try_into().unwrap()) as usize;
+            let msg = &data[off + 8..off + 8 + len];
+            off += 8 + len;
+            c.netchan.incoming_sequence = num;
+            feed(&mut c, msg);
+            fuzz("cod1 snapshot", msg, 100, |m| {
+                c.netchan.incoming_sequence = num;
+                feed(&mut c, m);
+            });
+        }
+    }
+
+    /// A server command sequence at either end of i32 keeps the cursor
+    /// arithmetic in range.
+    #[test]
+    fn take_server_commands_at_the_ends_of_the_sequence() {
+        for seq in [i32::MIN, i32::MIN + 1, i32::MAX] {
+            let mut c = active_client();
+            c.command_sequence = seq;
+            c.commands_taken = None;
+            assert!(c.take_server_commands().is_empty());
+            c.commands_taken = Some(seq.wrapping_sub(1));
+            c.take_server_commands();
+        }
+    }
+
+    /// Connectionless replies and netchan packets, mutated, through the
+    /// client's packet path, and client packets through the server's
+    /// netchan; `connect`'s Huffman decode and the master's list too.
+    #[test]
+    fn hostile_packets_never_panic() {
+        use crate::testing::fuzz;
+        let mut c = active_client();
+        for (cmd, tail) in [
+            ("challengeResponse", " 7"),
+            ("print", "\nhello\n"),
+            ("statusResponse", "\n\\sv_hostname\\x\n0 50 \"a\"\n"),
+            ("infoResponse", "\n\\protocol\\1\\hostname\\x"),
+            ("error", "\nEXE_X"),
+        ] {
+            fuzz(cmd, &oob(cmd, tail), 300, |p| {
+                c.handle_packet(p);
+                c.state = NetState::Active;
+            });
+        }
+        let mut frag = (5u32 | 1 << 31).to_le_bytes().to_vec();
+        frag.extend_from_slice(&0u16.to_le_bytes());
+        frag.extend_from_slice(&8u16.to_le_bytes());
+        frag.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        let mut nc = netchan::Netchan::new(1234, 0);
+        fuzz("netchan fragment", &frag, 2000, |p| {
+            let _ = nc.frame(p);
+        });
+
+        let mut c = NetClient::start_with_qport(FakeTransport::default(), Instant::now(), 77);
+        c.transport
+            .incoming
+            .push_back(oob("challengeResponse", " 100"));
+        c.pump_at(Instant::now());
+        let connect = c.transport.sent.last().unwrap().clone();
+        fuzz("connect", &connect, 2000, |p| {
+            let _ = connectionless::parse_connect(p);
+        });
+        let mut c = active_client();
+        c.send_frame(&UserCmd::default());
+        c.send_reliable("say hello");
+        c.send_frame(&UserCmd::default());
+        let moved = c.transport.sent.last().unwrap().clone();
+        let sv = netchan::ServerNetchan::new(c.qport, 100);
+        fuzz("client move", &moved, 2000, |p| {
+            let _ = sv.process_in(p);
+        });
+
+        let mut list = b"getserversResponse\n\0".to_vec();
+        for i in 0..8u8 {
+            list.extend_from_slice(&[b'\\', 10, 0, 0, i, 0x6d, 0x60]);
+        }
+        list.extend_from_slice(b"\\EOT");
+        fuzz("servers", &list, 2000, |b| {
+            master::parse_servers_response(b);
+        });
     }
 }

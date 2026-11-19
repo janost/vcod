@@ -28,6 +28,11 @@ pub const BLOCK_COUNT: usize = 9;
 /// More than any stock zone holds by two orders; a count past it is a
 /// corrupt file, not an allocation to make.
 const MAX_LIST: u32 = 1 << 20;
+/// A block's size: an offset token carries 28 bits of offset.
+pub const MAX_BLOCK_SIZE: u32 = 0x0FFF_FFFF;
+/// vcod's budget for `XFile.size` and for the sum of `blockSize`: stock
+/// zones top out near 181 MB inflated and 101 MB of blocks.
+pub const MAX_ZONE_SIZE: u32 = 1 << 30;
 
 /// The nine stream blocks, in `blockSize` order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -261,6 +266,8 @@ pub struct AssetEntry {
 pub struct ZoneStream<R: BufRead> {
     inner: BufReader<ZlibDecoder<R>>,
     pos: u64,
+    /// The `XFile`'s end (`0x2C + size`): nothing past it is read.
+    limit: u64,
 }
 
 impl<R: BufRead> ZoneStream<R> {
@@ -269,7 +276,18 @@ impl<R: BufRead> ZoneStream<R> {
         self.pos
     }
 
+    /// Inflated bytes left before the `XFile`'s end.
+    pub fn left(&self) -> u64 {
+        self.limit - self.pos
+    }
+
     pub fn read_bytes(&mut self, buf: &mut [u8]) -> Result<()> {
+        ensure!(
+            buf.len() as u64 <= self.left(),
+            "{} bytes at inflated offset {:#x} pass the XFile size",
+            buf.len(),
+            self.pos
+        );
         self.inner
             .read_exact(buf)
             .with_context(|| format!("zone truncated at inflated offset {:#x}", self.pos))?;
@@ -283,19 +301,52 @@ impl<R: BufRead> ZoneStream<R> {
         Ok(u32::from_le_bytes(b))
     }
 
-    /// A NUL-terminated string, the NUL consumed but not returned.
-    pub fn read_cstr(&mut self) -> Result<Vec<u8>> {
+    /// `n` bytes into a vector grown as they inflate (doubling from 1 MiB,
+    /// ending at exactly `n`), so a short stream fails before `n` is
+    /// allocated.
+    pub fn read_vec(&mut self, n: usize) -> Result<Vec<u8>> {
+        ensure!(
+            n as u64 <= self.left(),
+            "{n} bytes at inflated offset {:#x} pass the XFile size",
+            self.pos
+        );
         let mut out = Vec::new();
-        let n = self.inner.read_until(0, &mut out)?;
+        while out.len() < n {
+            let start = out.len();
+            let more = (n - start).min(start.max(1 << 20));
+            out.reserve_exact(more);
+            out.resize(start + more, 0);
+            self.read_bytes(&mut out[start..])?;
+        }
+        Ok(out)
+    }
+
+    /// A NUL-terminated string of at most `max` bytes before its NUL, the
+    /// NUL consumed but not returned.
+    pub fn read_cstr(&mut self, max: u64) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        let cap = max.saturating_add(1).min(self.left());
+        let n = (&mut self.inner).take(cap).read_until(0, &mut out)?;
         self.pos += n as u64;
-        ensure!(out.pop() == Some(0), "zone ends inside a string");
+        ensure!(
+            out.pop() == Some(0),
+            "no NUL in the {cap} bytes a string may take at inflated offset {:#x}",
+            self.pos - n as u64
+        );
         Ok(out)
     }
 
     /// Inflates what is left, returning the total inflated length; fails
-    /// on compressed bytes past the end of the zlib stream.
+    /// on inflated data past the `XFile`'s end and on compressed bytes
+    /// past the end of the zlib stream.
     fn finish(mut self) -> Result<u64> {
-        self.pos += std::io::copy(&mut self.inner, &mut std::io::sink())?;
+        let left = self.left();
+        self.pos += std::io::copy(&mut (&mut self.inner).take(left + 1), &mut std::io::sink())?;
+        ensure!(
+            self.pos <= self.limit,
+            "inflated data runs past the XFile size ({:#x})",
+            self.limit
+        );
         let mut rest = self.inner.into_inner().into_inner();
         ensure!(rest.fill_buf()?.is_empty(), "bytes after the zlib stream");
         Ok(self.pos)
@@ -344,6 +395,7 @@ impl<R: BufRead> Zone<R> {
         let mut stream = ZoneStream {
             inner: BufReader::with_capacity(1 << 16, ZlibDecoder::new(reader)),
             pos: 0,
+            limit: XFILE_SIZE,
         };
         let size = stream.read_u32()?;
         let external_size = stream.read_u32()?;
@@ -351,6 +403,18 @@ impl<R: BufRead> Zone<R> {
         for b in &mut block_size {
             *b = stream.read_u32()?;
         }
+        // Retail allocates every block from blockSize before loading
+        // (cod4-fastfile.md 3); the walk holds each block to it.
+        ensure!(size <= MAX_ZONE_SIZE, "XFile size {size:#x}");
+        for (i, &b) in block_size.iter().enumerate() {
+            ensure!(b <= MAX_BLOCK_SIZE, "block {i} size {b:#x}");
+        }
+        let blocks: u64 = block_size.iter().map(|&b| u64::from(b)).sum();
+        ensure!(
+            blocks <= u64::from(MAX_ZONE_SIZE),
+            "blocks total {blocks:#x} bytes"
+        );
+        stream.limit = XFILE_SIZE + u64::from(size);
         let header = XFileHeader {
             size,
             external_size,
@@ -384,7 +448,8 @@ impl<R: BufRead> Zone<R> {
                 let s = match Pointer::from_token(token) {
                     Pointer::Null => None,
                     Pointer::Inline | Pointer::InlineShared => {
-                        let bytes = stream.read_cstr()?;
+                        let room = block_size[Block::Virtual as usize].saturating_sub(vpos);
+                        let bytes = stream.read_cstr(u64::from(room.saturating_sub(1)))?;
                         at.insert(vpos, i);
                         vpos += bytes.len() as u32 + 1;
                         Some(latin1(&bytes))
@@ -417,6 +482,11 @@ impl<R: BufRead> Zone<R> {
             }
             vpos += 8 * asset_count;
         }
+        let vsize = block_size[Block::Virtual as usize];
+        ensure!(
+            vpos <= vsize,
+            "the asset list takes {vpos:#x} virtual bytes, the block {vsize:#x}"
+        );
 
         Ok(Self {
             header,

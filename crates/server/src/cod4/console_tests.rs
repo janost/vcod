@@ -69,6 +69,45 @@ fn cod4_status_lastmsg_reads_the_server_clock() {
     assert_eq!(after.split_whitespace().next(), Some("4321"), "{row}");
 }
 
+/// A `userinfo` past 0x400 bytes keeps 1023 of them, the game's name is
+/// cleaned to 15 characters and the drop print carries the engine's 15
+/// (cod4-gsc.md 12).
+#[test]
+fn cod4_a_long_userinfo_is_cut_and_its_name_cleaned() {
+    let Some((mut sv, mut probes, mut now)) = two_playing() else {
+        return;
+    };
+    let long = "x".repeat(100_000);
+    let text = format!("userinfo \"\\name\\   {long}\"");
+    let seq = sv.core.clients[0]
+        .as_ref()
+        .unwrap()
+        .link
+        .last_client_command
+        + 1;
+    assert!(sv.client_command(0, seq, text.as_bytes(), false));
+    // The probe never sent it: it stops here, its acks out of step.
+    probes[0].joined = false;
+    probes[0].connect_at = i32::MAX;
+    let c = sv.core.clients[0].as_ref().unwrap();
+    assert_eq!(c.link.userinfo.len(), 1023);
+    assert_eq!(
+        client_name(&c.link.userinfo),
+        format!("   {}", "x".repeat(12))
+    );
+    let level = sv.game.level.as_ref().unwrap();
+    assert_eq!(level.rt.host.clients[0].name, "x".repeat(15));
+    assert_eq!(game_name("\\name\\  "), "UnnamedPlayer");
+    sv.drop_client(0, "EXE_DISCONNECTED");
+    run_ms(&mut sv, &mut probes, &mut now, 300);
+    let seen = probes[1].server_commands();
+    let left = seen
+        .iter()
+        .find(|c| c.starts_with("e \""))
+        .expect("the drop print");
+    assert!(left.len() < 64, "{left}");
+}
+
 /// `say` reaches both clients as a console chat line, `tell` only its
 /// client; `kick` with no name prints the usage, and `kick all` drops
 /// everyone, the bot and both players, each with `SV_DropClient`'s line
@@ -165,6 +204,52 @@ fn cod4_ban_user_refuses_the_guid_until_unbanned() {
     assert!(!sv.core.bans.lists_guid(&guid));
 }
 
+/// Off the LAN no authorize ties the hex to a key, so `banClient` also
+/// writes the address's guid and a `tempBanClient` holds it: the client
+/// back with another hex, or none, from another port is refused.
+#[test]
+fn cod4_an_off_lan_ban_holds_the_address_whatever_the_hex() {
+    let Some((mut sv, _, now)) = two_playing() else {
+        return;
+    };
+    let ip = std::net::Ipv4Addr::new(203, 0, 113, 7);
+    let addr_guid = (u32::from(ip) as i32).to_string();
+    let join = |sv: &mut Cod4Server, slot: u32, port: u16| {
+        let mut p = super::wire_ab::Probe::new("far", slot, port, 0, &[]);
+        p.addr = std::net::SocketAddr::from((ip, port));
+        p.join(sv, now);
+        p
+    };
+    let challenge = |sv: &mut Cod4Server, p: &mut super::wire_ab::Probe, hex: &str| {
+        let replies = p.oob(sv, format!("getchallenge 0 \"{hex}\"").as_bytes(), now);
+        String::from_utf8_lossy(&replies[0][4..]).into_owned()
+    };
+    join(&mut sv, 2, 28990);
+    assert_eq!(console(&mut sv, "banClient 2"), "2:far EXE_PLAYERKICKED\n");
+    assert!(sv.core.bans.lists_guid(&addr_guid));
+    let mut back = super::wire_ab::Probe::new("far", 2, 28991, 0, &[]);
+    back.addr = std::net::SocketAddr::from((ip, 28991));
+    for hex in ["0123456789abcdef0123456789abcdef", ""] {
+        assert_eq!(
+            challenge(&mut sv, &mut back, hex),
+            "error\n\u{15}You are permanently banned from this server",
+            "{hex:?}"
+        );
+    }
+    assert_eq!(
+        console(&mut sv, "unbanUser far"),
+        "unbanned 2 user(s) named far\n"
+    );
+    join(&mut sv, 3, 28992);
+    assert!(sv.core.clients[3].is_some());
+    let out = console(&mut sv, "tempBanClient 3");
+    assert!(out.contains("was kicked for cheating"), "{out}");
+    assert_eq!(
+        challenge(&mut sv, &mut back, ""),
+        "error\n\u{15}You are temporarily banned from this server"
+    );
+}
+
 /// A bot has no GUID, as 1.7's test clients (`Connecting player #1 has an
 /// unknown GUID`): `status` leaves its column blank and `banUser` refuses
 /// it with `Can't ban user, GUID is unknown` (retail 1.7 live,
@@ -193,15 +278,9 @@ fn cod4_a_bot_has_no_guid_to_ban() {
     assert!(sv.core.clients[bot].is_some());
 }
 
-/// A scratch home path of this process's.
-fn scratch(tag: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("vcod-cod4-console-{tag}-{}", std::process::id()))
-}
-
 /// A bare server named and sized as the retail run's (`CoD4Host`, 8
 /// slots), its home path a scratch directory.
 fn bare(home: &std::path::Path) -> Cod4Server {
-    let _ = std::fs::remove_dir_all(home);
     std::fs::create_dir_all(home).unwrap();
     let mut sv = Cod4Server::new(
         Cod4Config {
@@ -221,8 +300,8 @@ fn bare(home: &std::path::Path) -> Cod4Server {
 /// dvar, a registered one too.
 #[test]
 fn cod4_writeconfig_matches_retail() {
-    let home = scratch("wc");
-    let mut sv = bare(home.as_path());
+    let home = tempfile::tempdir().unwrap();
+    let mut sv = bare(home.path());
     assert_eq!(
         console(&mut sv, "writeconfig"),
         "Usage: writeconfig <filename>\n"
@@ -232,7 +311,7 @@ fn cod4_writeconfig_matches_retail() {
         "Writing vtest.cfg.\n"
     );
     let retail = include_str!("../../../cod4/tests/fixtures/net/writeconfig-1.7.cfg");
-    let ours = std::fs::read_to_string(home.as_path().join("players/vtest.cfg")).unwrap();
+    let ours = std::fs::read_to_string(home.path().join("players/vtest.cfg")).unwrap();
     assert_eq!(ours, retail);
     console(&mut sv, "seta g_inactivity 5");
     console(&mut sv, "seta vnew 7");
@@ -241,7 +320,7 @@ fn cod4_writeconfig_matches_retail() {
         console(&mut sv, "writeconfig sub/vw3"),
         "Writing sub/vw3.cfg.\n"
     );
-    let text = std::fs::read_to_string(home.as_path().join("players/sub/vw3.cfg")).unwrap();
+    let text = std::fs::read_to_string(home.path().join("players/sub/vw3.cfg")).unwrap();
     assert!(
         text.contains("\nseta g_inactivity \"5\"\nseta g_log "),
         "{text}"
@@ -253,13 +332,78 @@ fn cod4_writeconfig_matches_retail() {
     assert!(!text.contains("vplain"), "{text}");
 }
 
+/// `writeconfig` and `exec` names stay under the home path: `..`, an
+/// absolute name and a drive prefix write and read nothing, and the
+/// console cannot move the home path (cod4-handshake.md 14.1).
+#[test]
+fn cod4_file_commands_stay_under_the_home_path() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("a/home");
+    let mut sv = bare(&home);
+    let abs = root.path().join("abs.cfg").display().to_string();
+    for (name, shown) in [
+        ("../x.cfg", "../x.cfg"),
+        ("../../x", "../../x.cfg"),
+        ("sub/../../x.cfg", "sub/../../x.cfg"),
+        (&abs, &abs),
+        ("C:x.cfg", "C:x.cfg"),
+    ] {
+        assert_eq!(
+            console(&mut sv, &format!("writeconfig {name}")),
+            format!("Writing {shown}.\nCouldn't write {shown}.\n"),
+            "{name}"
+        );
+    }
+    let mut written = Vec::new();
+    let mut stack = vec![root.path().to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            if e.path().is_dir() {
+                stack.push(e.path());
+            } else {
+                written.push(e.path());
+            }
+        }
+    }
+    assert!(written.is_empty(), "{written:?}");
+    std::fs::create_dir_all(home.join("main")).unwrap();
+    std::fs::write(root.path().join("a/out.cfg"), "set vesc 1\n").unwrap();
+    std::fs::write(root.path().join("abs.cfg"), "set vesc 1\n").unwrap();
+    for name in ["../../out.cfg", "..\\..\\out.cfg", &abs] {
+        assert_eq!(
+            console(&mut sv, &format!("exec {name}")),
+            format!("^1Error: couldn't exec {name}\n")
+        );
+    }
+    assert_eq!(sv.cvar("vesc"), "");
+    let before = sv.cvar("fs_homepath").to_string();
+    for line in ["set fs_homepath /", "seta FS_HOMEPATH /", "fs_homepath /"] {
+        let word = line.split(' ').rev().nth(1).unwrap();
+        assert_eq!(
+            console(&mut sv, line),
+            format!("{word} is write protected.\n")
+        );
+    }
+    assert_eq!(
+        console(&mut sv, "set fs_game ../x"),
+        "fs_game is write protected.\n"
+    );
+    assert_eq!(sv.cvar("fs_homepath"), before);
+    assert_eq!(sv.cvar("fs_game"), "");
+    assert_eq!(
+        console(&mut sv, "writeconfig sub/ok"),
+        "Writing sub/ok.cfg.\n"
+    );
+    assert!(home.join("players/sub/ok.cfg").is_file());
+}
+
 /// `dvar_bool`, `dvar_int` and `dvar_float` make a dvar the query prints
 /// with its domain; `setdvartotime` and `touchFile` print their usage
 /// (VERIFIED live).
 #[test]
 fn cod4_typed_dvar_commands() {
-    let home = scratch("dv");
-    let mut sv = bare(home.as_path());
+    let home = tempfile::tempdir().unwrap();
+    let mut sv = bare(home.path());
     assert_eq!(
         console(&mut sv, "dvar_bool vb2 0 extra"),
         "USAGE: dvar_bool <name> <default>\n"
@@ -294,9 +438,9 @@ fn cod4_typed_dvar_commands() {
 /// alone, a miss printed as typed (the retail run's answers).
 #[test]
 fn cod4_exec_reads_fastfiles_then_the_disk() {
-    let home = scratch("ex");
-    let mut sv = bare(home.as_path());
-    let main = home.as_path().join("main");
+    let home = tempfile::tempdir().unwrap();
+    let mut sv = bare(home.path());
+    let main = home.path().join("main");
     std::fs::create_dir_all(&main).unwrap();
     std::fs::write(main.join("vt_loose.cfg"), "set vtl loose\n").unwrap();
     std::fs::write(main.join("ragdoll.cfg"), "set vtr loose\n").unwrap();
@@ -359,7 +503,10 @@ fn cod4_min_ping_refuses_only_off_the_lan() {
         connect(&mut probes[0], &mut sv),
         "error\nEXE_ERR_HIGH_PING_ONLY"
     );
+    // A qport of its own: under the live client's, another challenge is
+    // refused while he is heard from (vcod's guard, cod4-handshake.md 9).
     probes[0].addr = std::net::SocketAddr::from(([127, 0, 0, 1], 28970));
+    probes[0].qport = 4970;
     assert!(connect(&mut probes[0], &mut sv).starts_with("connectResponse"));
 }
 
@@ -400,7 +547,7 @@ fn cod4_an_unacking_client_backs_off() {
     c.delta_message = c.link.netchan.outgoing_sequence as i32 - 28;
     sv.transmit(0, Vec::new());
     let c = sv.core.clients[0].as_ref().unwrap();
-    assert_eq!((c.link.next_message_ms, c.stall_exp), (svs - 1, 0));
+    assert_eq!((c.link.next_message_ms, c.extra.stall_exp), (svs - 1, 0));
     let msec = c.rates.snapshot_msec;
     let mut longest = 0;
     for n in 0..12u32 {
@@ -408,7 +555,7 @@ fn cod4_an_unacking_client_backs_off() {
         let c = sv.core.clients[0].as_ref().unwrap();
         let wait = c.link.next_message_ms - svs;
         assert!((0..msec << n.min(8)).contains(&wait), "{n}: {wait}");
-        assert_eq!((wait % msec, c.stall_exp), (0, (n + 1).min(8)));
+        assert_eq!((wait % msec, c.extra.stall_exp), (0, (n + 1).min(8)));
         longest = longest.max(wait);
     }
     assert!(longest >= 2 * msec, "{longest}");
@@ -416,5 +563,5 @@ fn cod4_an_unacking_client_backs_off() {
     c.delta_message = c.link.netchan.outgoing_sequence as i32 - 1;
     sv.transmit(0, Vec::new());
     let c = sv.core.clients[0].as_ref().unwrap();
-    assert_eq!((c.link.next_message_ms, c.stall_exp), (svs - 1, 0));
+    assert_eq!((c.link.next_message_ms, c.extra.stall_exp), (svs - 1, 0));
 }

@@ -9,7 +9,7 @@ by deploying a bipod, and a grenade that cooks.
 Contents: 1 call order, 2 sprint flag, 3 speed, 4 fatigue, 5 jump,
 6 weapon while sprinting, 7 LMG bipod, 8 buttons and binds, 9 the
 capture, 10 what vcod does, 11 mounts and cursor hint, 12 grenade cook,
-13 weapon times and the sighted prone hold, 14 client sounds and sprint
+13 two questions: weapon times and the sighted prone hold, 14 client sounds and sprint
 pose, 15 automatic fire and the view kick, 16 lean footstep cadence,
 17 prone check, 18 stance box.
 
@@ -309,7 +309,7 @@ writes above).
 A deployed LMG's rounds start from the eye pushed up to 19 forward along
 `proneDirection` by an 8-unit box trace, `CalcMuzzlePoint` 0x7b8ea
 (VERIFIED; addresses and the rest of UO's muzzle in `cod11-combat.md` 2.1,
-"1.5 and United Offensive").
+"United Offensive and 1.5").
 
 ## 8. Buttons and binds
 
@@ -343,7 +343,7 @@ names).
 
 `crates/server/tests/fixtures/playerstate/mp_carentan-dm-slope-8ms-sprint-uo.txt`
 (2026-10-14). Recipe: `sprint_script` (`--probe-sprint` in
-`crates/client/src/probe.rs`) from `client-probes/probe_prone`'s street
+`crates/client/src/probe/scripts.rs`) from `client-probes/probe_prone`'s street
 placement on `COD_VERSION=uo tools/run_probe.sh`, `--probe-weapon
 mg30cal_mp`, cmds every 8 ms, every snapshot's whole playerstate.
 
@@ -363,13 +363,12 @@ snapshot). Under 1.5's rules the sprint is missed on 156 snapshots. Needs
 
 ## 10. What vcod does
 
-`MoveRules::Uo` (`crates/common/src/pmove.rs`), which the predictor takes
+`MoveRules::Uo` (`crates/common/src/pmove/state.rs`), which the predictor takes
 for protocol 22, implements sections 1 to 7, 11 and 12, the fatigue
 breaths and sprint footstep ids included. The vehicle seat arm is
-`seat_move` (`coduo-vehicles.md` 3). Left out:
+`seat_move` (`coduo-vehicles.md` 3).
 
-
-`bg_nofatigue` and `bg_lmg_yawcap` are `BgCvars` (`crates/common/src/pmove.rs`),
+`bg_nofatigue` and `bg_lmg_yawcap` are `BgCvars` (`crates/common/src/pmove/state.rs`),
 read as each cvar's integer, the way the module reads them:
 
 - `PM_UpdateFatigue` tests `bg_nofatigue.integer` (vmCvar .bss 0x1f28c0,
@@ -419,7 +418,7 @@ Every stock UO map has both mount brushes (VERIFIED, the material lumps).
 Captures (VERIFIED, 2026-10-14):
 `crates/server/tests/fixtures/playerstate/mp_foy-dm-slope-8ms-uofoot-{stand,crouch,mount}.txt`.
 Recipe: `--save-slope --probe-uofoot <yaw>` (`uofoot_script` in
-`crates/client/src/probe.rs`) on `COD_VERSION=uo tools/run_probe.sh
+`crates/client/src/probe/scripts.rs`) on `COD_VERSION=uo tools/run_probe.sh
 client-probes/probe_uofoot mp_foy +set probe_teleport 1 +set probe_spot
 <spot>`, `--probe-weapon mg30cal_mp`, cmds every 8 ms.
 
@@ -463,12 +462,12 @@ short.
   weapon's `useHintString` (weapon def +0x494) is not empty, its index
   (+0x498) is the string.
 - The activate-entity loop runs after; the first usable entity's hint
-  replaces the 7 and the value stays (stores at 0x67c37).
+  replaces the 7 and the value stays (stores at 0x57c37).
 
 No stock LMG file sets `useHintString` (VERIFIED, the `pakuo` weapon
 files), so the string stays -1.
 
-`G_CheckPointInsideTriggerMount` (0x8780f, VERIFIED decompile) asks
+`G_CheckPointInsideTriggerMount` (0x7780f, VERIFIED decompile) asks
 `trap_EntitiesInBox` for the point grown 0.1 under mask 0x405c0008 and
 takes the first entity whose classname is `trigger_mount`; the value is
 its spawnflag 1. The query walks linked boxes, which `SV_LinkEntity` grows
@@ -480,7 +479,7 @@ it does the entities' is not read out of the server binary. vcod masks
 both (INFERRED: otherwise every wall 15 ahead would hint 7, and the
 captures show no hint away from the mounts).
 
-`spawnTriggerMount(mins, maxs, crouch)` (0x77974, VERIFIED decompile)
+`spawnTriggerMount(mins, maxs, crouch)` (0x67974, VERIFIED decompile)
 reads two vectors and `Scr_GetBool`, sorts each axis, `G_Spawn`s, sets
 classname `trigger_mount` and `r.mins`/`r.maxs` to the sorted corners at
 origin 0, and calls `SP_trigger_mount_no_brush`:
@@ -491,7 +490,7 @@ origin 0, and calls `SP_trigger_mount_no_brush`:
 - `r.svFlags` 1 (no client sees it), `eFlags` |= 2, linked;
 - returns the entity.
 
-`SP_trigger_mount` (0x876d5), the map's, ORs the same bit into
+`SP_trigger_mount` (0x776d5), the map's, ORs the same bit into
 `InitTrigger`'s contents.
 
 vcod-server:
@@ -665,7 +664,7 @@ the predicted sprint flag.
 ## 15. Automatic fire and the view kick
 
 Capture: `mp_carentan-dm-slope-8ms-autofire-uo.txt`, `--probe-autofire`
-(`autofire_script` in `crates/client/src/probe.rs`) with `mp44_mp` on
+(`autofire_script` in `crates/client/src/probe/scripts.rs`) with `mp44_mp` on
 retail 1.51b, from `probe_prone`'s street placement. `moves_ab.rs`
 (`the_predictor_replays_uo_automatic_fire`) replays it under UO's rules.
 
@@ -892,7 +891,7 @@ floor, and the bend reads -49.7 at y 599.9 to -49.9 at 600.34: inside
 1.5's -50, outside UO's -45. With UO's bound ours refuses the same cmds
 and the pillar run matches all 372 snapshots (`moves_ab.rs`,
 `the_predictor_replays_walks_against_patches`, no gap rows;
-`pmove::tests::a_uo_body_refuses_legs_bent_up_past_45_degrees`).
+`pmove::tests::prone::a_uo_body_refuses_legs_bent_up_past_45_degrees`).
 
 ## 18. The stance box
 
@@ -919,7 +918,7 @@ to 200 ms past the test, so a body that moved under a low ceiling in
 between stands up into it, all solid, held in the air with no ground.
 
 vcod: `PlayerState::maxs` under `MoveRules::Uo` (pinned by
-`pmove::tests::a_uo_rise_sizes_the_box_off_the_flags`). Sizing UO's box
+`pmove::tests::stance::a_uo_rise_sizes_the_box_off_the_flags`). Sizing UO's box
 the 1.5 way is the trap: VERIFIED (measured, ours, `bot_match` UO `tdm`,
 10 bots, mp_cassino seeds 1..=8, master 589516ea), three bots were held
 all solid in a caulk or clip brush for 100 ticks and typed `kill`

@@ -19,7 +19,7 @@ use crate::game::mover::Ramp;
 use glam::Vec3;
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Target, Value};
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("moveto", move_to),
@@ -33,10 +33,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("rotateroll", rotate_roll),
     ("rotatevelocity", rotate_velocity),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// The classnames retail's own handlers accept. Anything else is the fatal
 /// `entity N is not a script_brushmodel, script_model, or script_origin`
@@ -426,6 +422,35 @@ mod tests {
             }
             assert_eq!(done.len(), 1, "one movedone: {done:?}");
             assert_eq!(done[0].event, crate::game::mover::MOVEDONE);
+        });
+    }
+
+    /// A script `.origin` write after a finished `moveTo` stands: the next
+    /// passes read it and the wire carries it (BUG-074).
+    #[test]
+    fn an_origin_write_after_a_move_stands() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = mover(&mut host, cx, [100.0, 0.0, 100.0]);
+            let t = Some(Target::Entity(e));
+            let dest = Value::Vector([600.0, 0.0, 100.0]);
+            move_to(&mut host, cx, t, &[dest, Value::Int(1)]).unwrap();
+            host.level_time_ms = 1050;
+            crate::game::mover::run(&mut host, cx);
+            assert!((field_vec(&mut host, cx, e, "origin").x - 600.0).abs() < 0.01);
+            let origin = cx.intern_folded("origin");
+            let b = [0.0, 300.0, 50.0];
+            host.set_field(cx, e, origin, Value::Vector(b)).unwrap();
+            let angles = cx.intern_folded("angles");
+            host.set_field(cx, e, angles, Value::Vector([0.0, 45.0, 0.0]))
+                .unwrap();
+            for frame in 22..26 {
+                host.level_time_ms = frame * 50;
+                crate::game::mover::run(&mut host, cx);
+                assert_eq!(field_vec(&mut host, cx, e, "origin"), Vec3::from(b));
+            }
+            let (pos, _) = host.movers.wire(e, host.level_time_ms).unwrap();
+            assert_eq!(pos.base, Vec3::from(b));
         });
     }
 

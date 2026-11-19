@@ -158,7 +158,7 @@ pub fn primitive(
     };
     let mut p = Primitive::new(kind, e_index);
     p.name = fx.name.clone();
-    let range_i = |(base, amp): (i32, i32)| (base as f32, (base + amp) as f32);
+    let range_i = |(base, amp): (i32, i32)| (base as f32, base.saturating_add(amp) as f32);
     p.life = range_i(d.life_span_msec);
     p.delay = range_i(d.spawn_delay_msec);
     match (role, looping) {
@@ -171,7 +171,7 @@ pub fn primitive(
             let (interval, count) = (d.spawn.0.max(1), d.spawn.1.max(1));
             let n = count.min(LOOP_SPAWNS);
             p.count = (n as f32, n as f32);
-            p.delay = (p.delay.0, p.delay.0 + (n * interval) as f32);
+            p.delay = (p.delay.0, p.delay.0 + n.saturating_mul(interval) as f32);
             p.spawn_flags |= spawn::EVEN_DISTRIBUTION;
         }
     }
@@ -537,10 +537,13 @@ pub fn parts(a: &Assets, fx: &Fx) -> Parts {
             let spec = LoopSpec {
                 interval_ms: d.spawn.0.max(1),
                 count: d.spawn.1.max(0),
-                reach_ms: d.spawn_delay_msec.0.max(0)
-                    + d.spawn_delay_msec.1.max(0)
-                    + d.life_span_msec.0.max(0)
-                    + d.life_span_msec.1.max(0),
+                reach_ms: d
+                    .spawn_delay_msec
+                    .0
+                    .max(0)
+                    .saturating_add(d.spawn_delay_msec.1.max(0))
+                    .saturating_add(d.life_span_msec.0.max(0))
+                    .saturating_add(d.life_span_msec.1.max(0)),
             };
             out.loops.push((
                 Effect {
@@ -962,7 +965,8 @@ impl Cod4Effects {
         self.ents.retain(|n, _| seen.contains(n));
         self.loopers
             .retain(|l| l.owner.is_none_or(|o| seen.contains(&o)));
-        let at_ms = |t: i32| now + f64::from(t - render_ms) / 1000.0;
+        // Snapshot times wrap as retail's ints do.
+        let at_ms = |t: i32| now + f64::from(t.wrapping_sub(render_ms)) / 1000.0;
         for e in ents {
             let (etype, num) = (e.etype(), e.number());
             if !matches!(etype, ET_FX | ET_LOOP_FX) {
@@ -992,7 +996,8 @@ impl Cod4Effects {
                 Some(s) if render_ms >= s.trigger => {
                     // Only the last of several due retriggers outlives the
                     // frame.
-                    Some(s.trigger + (render_ms - s.trigger) / period * period)
+                    let since = render_ms.wrapping_sub(s.trigger);
+                    Some(s.trigger.wrapping_add(since / period * period))
                 }
                 Some(_) => None,
             };
@@ -1001,7 +1006,7 @@ impl Cod4Effects {
                 self.ents.insert(
                     num,
                     EntFx {
-                        trigger: t + period,
+                        trigger: t.wrapping_add(period),
                     },
                 );
                 sounds.extend(self.start(fx, fs, &play, at_ms(t), Some(num)));
@@ -1997,7 +2002,6 @@ pub fn client_bullets(
 /// ([`client_bullets`]), none under `sv_clientSideBullets` 0, where
 /// `CG_FireWeapon` skips `DrawBulletImpacts` (0x457cec); and its
 /// [`ServerRound`], its shooter looked up in `entities`, the snapshot's.
-#[allow(clippy::too_many_arguments)]
 pub fn frame_rounds(
     fired: &[Fired],
     weapons: &[String],
@@ -2167,8 +2171,8 @@ impl Cod4Effects {
     /// pellets too (`DrawBulletImpacts`, 0x4567f2..0x456816), and each
     /// round draws one when it passed, contact or not. Another's round
     /// rolls `cg_tracerchance` on each contact it plays, the penetration's
-    /// too, and draws to it (`CG_BulletHitEvent`'s
-    /// The trajectory effects, 0x458bcd; the tracer test, 0x458720):
+    /// too, and draws to it (`CG_BulletHitEvent`'s trajectory effects,
+    /// 0x458bcd; the tracer test, 0x458720):
     /// none for a miss, none for a round into a player (the server's
     /// `EV_BULLET_HIT` plays it). The gun we man draws none: the caller
     /// skips it (0x458749..0x458758). The number spawned.
@@ -2203,7 +2207,7 @@ impl Cod4Effects {
                 } else {
                     0
                 };
-                fx.spawn_cod4_tracer(hit.muzzle, end, now, back);
+                fx.spawn_local_tracer(crate::fx::cod2_tracer::COD4, hit.muzzle, end, now, back);
                 spawned += 1;
             }
         }
@@ -2232,7 +2236,7 @@ impl Cod4Effects {
         } else {
             0
         };
-        fx.spawn_cod4_tracer(r.muzzle, r.end, now, back);
+        fx.spawn_local_tracer(crate::fx::cod2_tracer::COD4, r.muzzle, r.end, now, back);
         self.tracers += 1;
     }
 
@@ -2962,6 +2966,36 @@ mod tests {
         frame(&mut e, &[], 3200);
         assert_eq!(e.loopers(), 0);
         assert_eq!(e.loop_spawns, 31);
+    }
+
+    /// A snapshot's 32-bit period and `time2` at their edges wrap as
+    /// retail's ints do; no frame overflows (BUG-116).
+    #[test]
+    fn extreme_effect_entity_times_do_not_overflow() {
+        let fs = vcod_common::pk3::Pk3Fs::empty();
+        let spec = LoopSpec {
+            interval_ms: 125,
+            count: i32::MAX,
+            reach_ms: 10_000,
+        };
+        let cs = |n: u16| {
+            if n == CS_EFFECT_NAMES + 3 {
+                "t".to_string()
+            } else {
+                String::new()
+            }
+        };
+        let (mut e, mut fx) = looping(&[spec]);
+        let looped = ent(
+            ET_LOOP_FX,
+            40,
+            &[("un1", 3), ("lerp.u.loopFx.period", 0x7fff_ffff)],
+        );
+        let spot = ent(ET_FX, 42, &[("un1", 3), ("time2", 0x8000_0000)]);
+        for ms in [1000, 2000, i32::MAX - 10] {
+            let now = f64::from(ms) / 1000.0;
+            e.entity_fx(&mut fx, &fs, &[looped, spot], &cs, (ms, now), Vec3::ZERO);
+        }
     }
 
     /// mp_crash's createfx ambience through the fx system

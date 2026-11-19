@@ -854,8 +854,9 @@ pub struct Falling {
 /// made on, and each guard's post.
 #[derive(Default)]
 pub struct Posts {
-    /// The graph the surveys were made on (`Arc::as_ptr`).
-    graph: usize,
+    /// The generation of the graph the surveys were made on
+    /// (`BotDriver::graph`), `None` before the first.
+    graph: Option<u64>,
     pub surveys: Vec<(Key, Arc<Survey>)>,
     /// The outposts, as [`Self::surveys`].
     pub outers: Vec<(Key, Arc<Outer>)>,
@@ -890,25 +891,44 @@ impl Posts {
         self.tally.map(|t| (t.cues, t.back, t.back_ms))
     }
 
-    /// Forgets every survey made on another graph than `g`.
-    fn on_graph(&mut self, g: &Arc<NavGraph>) {
-        let ptr = Arc::as_ptr(g) as usize;
-        if ptr != self.graph {
-            self.graph = ptr;
+    /// Takes `old`'s surveys and outposts, for a level on the same map and
+    /// graph: they rest only on the graph and the world, which a restart
+    /// keeps. Everything else a level resets.
+    pub fn carry_surveys(&mut self, old: &mut Posts) {
+        self.graph = old.graph;
+        self.surveys = std::mem::take(&mut old.surveys);
+        self.outers = std::mem::take(&mut old.outers);
+    }
+
+    /// Drops what the posts keep for `slot`'s bot.
+    pub fn forget(&mut self, slot: usize) {
+        self.held.remove(&slot);
+        self.exposure.remove(&slot);
+        self.lanes.remove(&slot);
+        self.collapse.remove(&slot);
+    }
+
+    /// Forgets every survey made under another graph generation than
+    /// `graph`.
+    fn on_graph(&mut self, graph: u64) {
+        if self.graph != Some(graph) {
+            self.graph = Some(graph);
             self.surveys.clear();
             self.outers.clear();
             self.held.clear();
         }
     }
 
-    /// The survey of `a` on `g`, made now if it is new; `clear` traces.
+    /// The survey of `a` on `g`, generation `graph`, made now if it is
+    /// new; `clear` traces.
     pub fn survey(
         &mut self,
+        graph: u64,
         g: &Arc<NavGraph>,
         clear: &dyn Fn(Vec3, Vec3) -> bool,
         a: &Anchor,
     ) -> Arc<Survey> {
-        self.on_graph(g);
+        self.on_graph(graph);
         let key = a.key();
         if let Some((_, s)) = self.surveys.iter().find(|(k, _)| *k == key) {
             return s.clone();
@@ -927,12 +947,13 @@ impl Posts {
     /// in its eighth word.
     pub fn outer(
         &mut self,
+        graph: u64,
         g: &Arc<NavGraph>,
         clear: &dyn Fn(Vec3, Vec3) -> bool,
         a: &Anchor,
         band: &Band,
     ) -> Arc<Outer> {
-        self.on_graph(g);
+        self.on_graph(graph);
         let mut key = a.key();
         if *band != OUT_BAND {
             key[8] = band.far_max.to_bits();
@@ -1034,6 +1055,28 @@ mod tests {
             }
         }
         NavGraph::from_parts(nodes, edges)
+    }
+
+    /// A survey goes with the graph generation it was made under, though
+    /// the next graph sits where the last one did: CoD1 frees the old graph
+    /// before it builds the new one, so an address can repeat (QUAL-019).
+    #[test]
+    fn surveys_go_with_their_graph_generation() {
+        let g = std::sync::Arc::new(plus());
+        let a = Anchor::Ring {
+            at: [0.0, 0.0, 0.0],
+            inner: 48.0,
+            outer: 400.0,
+        };
+        let mut p = Posts::default();
+        let first = p.survey(1, &g, &|_, _| true, &a);
+        assert!(std::sync::Arc::ptr_eq(
+            &first,
+            &p.survey(1, &g, &|_, _| true, &a)
+        ));
+        let again = p.survey(2, &g, &|_, _| true, &a);
+        assert!(!std::sync::Arc::ptr_eq(&first, &again), "made again");
+        assert_eq!(p.surveys.len(), 1);
     }
 
     /// Outposts stand out on each corridor between `OUT_NEAR` and the band's

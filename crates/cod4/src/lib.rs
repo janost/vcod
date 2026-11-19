@@ -1,6 +1,8 @@
 //! Call of Duty 4 1.7: asset formats, each module grounded in its
 //! `docs/research/cod4-*.md`. Nothing CoD1 or CoD2 reads from this crate.
 
+#![forbid(unsafe_code)]
+
 pub mod anim;
 pub mod assets;
 pub mod bullet;
@@ -31,6 +33,7 @@ pub mod source;
 pub mod state;
 pub mod sunshadow;
 pub mod techset;
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod walk;
 pub mod weapon_file;

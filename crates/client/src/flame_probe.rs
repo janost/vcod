@@ -6,7 +6,7 @@
 //! holds `wbuttons` 0x1 while the report does and sends the `fdc` it names.
 //! Prints every `fdc`, every flag change and every health change; pairs
 //! with `client-probes/probe_flame` (recipe in
-//! docs/research/coduo-diff.md 19, "The flame report"). Writes no fixture.
+//! docs/research/coduo-diff.md 19.3, "The flame report"). Writes no fixture.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -14,7 +14,7 @@ use std::time::Instant;
 use glam::Vec3;
 use vcod_common::collision::CollisionWorld;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd, WBUTTON_IN_FLAME_V22};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::net::snapshot::Snapshot;
 use vcod_common::weapon::WeaponDef;
 
@@ -80,7 +80,7 @@ impl FlameProbe {
     pub fn frame(
         &mut self,
         now: Instant,
-        p: &Protocol,
+        p: &Cod1Wire,
         snap: &Snapshot,
         flood_open: bool,
         (fs, configstrings): (Option<&vcod_common::pk3::Pk3Fs>, &[String]),
@@ -95,7 +95,7 @@ impl FlameProbe {
         let muzzles = match (&mut self.scene, fs) {
             (Some((r, scene)), Some(fs)) => {
                 let view = || SnapView { snap, own: None };
-                let t = snap.server_time;
+                let t = snap.server_time.raw();
                 let built = build_instances(
                     scene,
                     (view(), view(), 1.0),
@@ -197,7 +197,7 @@ impl FlameProbe {
 
 /// Every entity's nozzle at its eye along its view, for a run with no
 /// adapter to pose `tag_flash` on.
-fn eye_muzzles(p: &Protocol, snap: &Snapshot) -> HashMap<u32, (Vec3, Vec3)> {
+fn eye_muzzles(p: &Cod1Wire, snap: &Snapshot) -> HashMap<u32, (Vec3, Vec3)> {
     let mut muzzles = HashMap::new();
     for (&num, ent) in &snap.entities {
         let [pitch, yaw, _] = ent.angles(p).map(f32::to_radians);

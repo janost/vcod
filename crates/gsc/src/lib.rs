@@ -1,11 +1,13 @@
 //! A virtual machine for Call of Duty 1.1 script (`.gsc`), and CoD2 1.3's
-//! dialect of it.
+//! and CoD4 1.7's dialects of it.
 //!
 //! Language surface and the evidence behind it:
 //! docs/research/cod11-gsc-language.md; CoD2's changes,
 //! docs/research/cod2-gsc-diff.md section 3. What the interpreter does
 //! for speed, and the numbers: docs/research/cod4-server-frame.md 9 ("The
 //! spawn wave"); `tests/bench.rs` is its microbench.
+
+#![forbid(unsafe_code)]
 
 pub mod ast;
 pub mod atom;
@@ -35,8 +37,8 @@ pub use vm::{
     ThreadUsage, UsagePos, Vm,
 };
 
-/// Which game's compiler a script goes through. The VM runs both; only the
-/// front end differs (docs/research/cod2-gsc-diff.md section 3).
+/// Which game's compiler a script goes through. The VM runs all three; only
+/// the front end differs (docs/research/cod2-gsc-diff.md section 3).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Dialect {
     /// CoD 1.1, 1.5 and United Offensive.

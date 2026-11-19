@@ -12,8 +12,8 @@ use super::*;
 /// Runs `probes` against a fresh `war` level until `run_ms`, each probe
 /// going silent from its `(index, ms)` in `leave` on (its `disconnect`
 /// sent a half second earlier through its answers) and joining again,
-/// from the same address and qport, at each `rejoin`. Returns the script
-/// errors.
+/// from the same address and qport, at each `rejoin` after 3.5 s of
+/// silence. Returns the script errors.
 fn run(
     map: &str,
     cvars: &[(&str, &str)],
@@ -60,7 +60,12 @@ fn run(
                 p.connect_at = -1;
                 continue;
             }
-            if p.joined {
+            // A rejoin is a client whose game went down: silent the 3.5 s
+            // before it, past vcod's guard on a live slot.
+            let rejoining = rejoin
+                .iter()
+                .any(|&(s, at)| s == i && (at - 3_500..at).contains(&svs));
+            if p.joined && !rejoining {
                 let pkt = p.packet(svs);
                 p.log("c2s", svs, &pkt);
                 sv.handle_packet(p.addr, &pkt, now);
@@ -129,7 +134,7 @@ fn players_leave_a_war_level_without_script_errors() {
 }
 
 /// A client whose `connect` comes again from its own address and qport
-/// while it is in the world: `SV_DirectConnect` frees the old client first
+/// while its slot is in the world: `SV_DirectConnect` frees the old client first
 /// (`ClientDisconnect`, cod4-handshake.md 9), so the scripts see one
 /// player leave and one join, not a second `level.players` entry.
 #[test]
@@ -249,8 +254,8 @@ fn citystreets_runs_two_players_without_script_errors() {
 }
 
 /// One player beside four shooting bots, as `--bots 4 --bots-shoot` runs
-/// it, who takes the team menu's auto-assign and then leaves after
-/// `leave_ms`, with a `disconnect` first when `clean`.
+/// it, who takes the team menu's auto-assign and then leaves 14 s in, with
+/// a `disconnect` first when `clean`.
 /// `_teams::CountPlayers` writes `"allies"` and `"axis"` into its copy of
 /// `level.players`; were the copy the same array, `level.players.size`
 /// would count both keys and `spawnPerFrameUpdate` would read an

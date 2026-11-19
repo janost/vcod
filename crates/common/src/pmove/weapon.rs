@@ -4,10 +4,11 @@
 //! document's; the behaviour the two combat captures measured is in
 //! docs/research/player-model-anim-system.md, "The weapon channel".
 //!
-//! Not modelled yet: retail's `BG_TakePlayerWeapon` on a spent `clipOnly`
-//! weapon (the host owns the held bits, so pmove cannot clear one), and the
-//! three stops of 1.12, whose `pm_flags`/`pm_type`/`eFlags` this
-//! `PlayerState` does not carry.
+//! Not modelled: retail's `BG_TakePlayerWeapon` on a spent `clipOnly`
+//! weapon (the host owns the held bits, so pmove cannot clear one). The
+//! three stops of 1.12 run outside this module: the mounted gun in
+//! `pmove`'s mounted arm, the dead and respawned cases in
+//! `pmove::cmd::dead_step`.
 //!
 //! `cmd.weapon` is read as retail reads it: a 0 under a held weapon is a
 //! request to holster (1.8), so every caller sends the weapon it holds or
@@ -20,6 +21,7 @@ use crate::net::event_ids::{
 };
 use crate::net::flags::ANIM_TOGGLEBIT;
 use crate::weapon::WeaponDef;
+use crate::weapon_table::alt_chain;
 
 /// `ps.weaponstate`, the twelve values of section 1.1.
 pub const WEAPON_READY: u8 = 0;
@@ -40,7 +42,7 @@ pub const WEAPON_DEPLOY: u8 = 12;
 pub const WEAPON_BREAKDOWN: u8 = 13;
 
 /// The wire `EV_*` ids pmove raises. `EV_EMPTYCLIP` (150) is not among them:
-/// docs/research/cod11-events-and-fx.md section 1.5 found no site that raises it.
+/// docs/research/cod11-combat.md section 1.5 found no site that raises it.
 pub use crate::net::event_ids::{
     EV_EJECT_BRASS, EV_FIRE_MELEE, EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT, EV_MELEE_SWIPE,
     EV_NOAMMO, EV_PULLBACK_WEAPON, EV_PUTAWAY_WEAPON, EV_RAISE_WEAPON, EV_RECHAMBER_WEAPON,
@@ -116,7 +118,7 @@ fn ms(seconds: f32) -> i32 {
     crate::weapon::stored_ms(seconds)
 }
 
-fn weapon_def(weapons: &[Option<WeaponDef>], index: u8) -> Option<&WeaponDef> {
+pub(super) fn weapon_def(weapons: &[Option<WeaponDef>], index: u8) -> Option<&WeaponDef> {
     weapons.get(index as usize).and_then(Option::as_ref)
 }
 
@@ -249,13 +251,7 @@ fn advance_ads(ps: &mut PlayerState, def: &WeaponDef, dt_ms: i32) {
     let reloading = reloading && !(ps.rules == MoveRules::Uo && def.is_lmg());
     let want = (ps.ads_active && !reloading && !rechambering)
         || (def.ads_fire && ps.weapon_delay_ms != 0 && ps.weaponstate == WEAPON_FIRING);
-    let step = dt_ms as f32
-        / if want {
-            trans_ms(def.ads_trans_in, ADS_TRANS_IN_DEFAULT_MS)
-        } else {
-            -trans_ms(def.ads_trans_out, ADS_TRANS_OUT_DEFAULT_MS)
-        };
-    ps.weapon_pos_frac = (ps.weapon_pos_frac + step).clamp(0.0, 1.0);
+    ads_ramp(ps, def, want, dt_ms);
 }
 
 /// UO's `PM_UpdateAimDownSightLerp` (game 0x3349e, cgame 0x30011f50) in
@@ -276,6 +272,12 @@ pub fn seat_ads_lerp(
     let Some(def) = def else {
         return;
     };
+    ads_ramp(ps, def, want, dt_ms);
+}
+
+/// The sight's fraction a frame toward 1 by `msec / adsTransInTime`, or
+/// back toward 0 by `msec / adsTransOutTime`.
+fn ads_ramp(ps: &mut PlayerState, def: &WeaponDef, want: bool, dt_ms: i32) {
     let step = dt_ms as f32
         / if want {
             trans_ms(def.ads_trans_in, ADS_TRANS_IN_DEFAULT_MS)
@@ -392,7 +394,7 @@ impl SpreadStance {
             dive: ps.prone_dive,
             into_leg_ms: ps
                 .view_lerp_ms
-                .map(|_| time - ps.view_lerp_stamp(command_time)),
+                .map(|_| time.wrapping_sub(ps.view_lerp_stamp(command_time))),
         }
     }
 }
@@ -509,8 +511,8 @@ fn pm_weapon_step(
     }
     if begin_change(ps, input, weapons, events) {
         // The pickup half runs later in the same `PM_Weapon` (section 1.8), so
-        // a putaway that left no drop time -- the cancelled pullback, a weapon
-        // gone from under the player -- raises on this frame and never shows
+        // a putaway that left no drop time (the cancelled pullback, a weapon
+        // gone from under the player) raises on this frame and never shows
         // `weaponstate` 2.
         if ps.weaponstate == WEAPON_DROPPING && ps.weapon_time_ms == 0 {
             pickup(ps, input, weapons, events);
@@ -729,7 +731,7 @@ pub fn prone_move_key(
     if !grew(ps.last_cmd_moves[0], cmd.forward) && !grew(ps.last_cmd_moves[1], cmd.right) {
         return;
     }
-    let def = weapons.get(ps.weapon as usize).and_then(Option::as_ref);
+    let def = weapon_def(weapons, ps.weapon);
     if interrupt_with_prone_move(ps, def, cmd.weapon) {
         ps.ads_active = false;
     }
@@ -986,13 +988,12 @@ fn putaway(
     ps.weaponstate = WEAPON_DROPPING;
     // The short branch of section 1.8: a weapon that is gone from under the
     // player, and a grenade still on its pin, go without a drop time, an anim
-    // or an event. Retail ORs `pm_flags` 0x400 in only for a prone player;
-    // this flag is set on every cancel, since nothing reads it either way.
+    // or an event. Retail also ORs `pm_flags` 0x400 in for a prone player;
+    // nothing reads that bit.
     if ps.weapon == 0 || !holds(ps, ps.weapon) || ps.grenade_time_left_ms > 0 {
         ps.weapon_time_ms = 0;
         if ps.grenade_time_left_ms > 0 {
             ps.grenade_time_left_ms = 0;
-            ps.grenade_cancelled = true;
         }
         // UO's short branch raises `EV_REMOVE_WEAPON_ATTACHMENTS` with the
         // weapon going down (game.mp.uo 0x448ee; coduo-diff.md 21).
@@ -1033,29 +1034,20 @@ fn putaway(
 fn alt_slot_swap(ps: &mut PlayerState, weapons: &[Option<WeaponDef>], target: u8) {
     let slot_type = |w: u8| weapon_def(weapons, w).map_or(0, WeaponDef::slot_type);
     let from = ps.weapon;
-    let mut w = from;
-    let slot = loop {
+    let alt_of = |w: u8| weapon_def(weapons, w).map_or(0, |d| d.alt_index as u8);
+    let mut slot = None;
+    for w in std::iter::once(from).chain(alt_chain(from, alt_of)) {
         match slot_type(w) {
-            0 => return,
-            1 | 2 => {
-                if let Some(s) = [1, 2].into_iter().find(|&s| ps.weapon_slots[s] == w) {
-                    break s;
-                }
-            }
-            t @ 3..=5 => {
-                if ps.weapon_slots[t] == w {
-                    break t;
-                }
-            }
+            1 | 2 => slot = [1, 2].into_iter().find(|&s| ps.weapon_slots[s] == w),
+            t @ 3..=5 => slot = (ps.weapon_slots[t] == w).then_some(t),
             _ => return,
         }
-        let next = weapon_def(weapons, w).map_or(0, |d| d.alt_index as u8);
-        if next != 0 {
-            w = next;
+        if slot.is_some() {
+            break;
         }
-        if w == from {
-            return;
-        }
+    }
+    let Some(slot) = slot else {
+        return;
     };
     if !holds(ps, target) {
         return;
@@ -1388,7 +1380,6 @@ const WEAPON_TYPE_GAS: &str = "gas";
 /// `holdFireTime`.
 fn pullback(ps: &mut PlayerState, def: &WeaponDef, events: &mut Vec<PmEvent>) {
     ps.grenade_time_left_ms = ms(def.fuse_time);
-    ps.grenade_cancelled = false;
     set_anim(ps, WEAP_GRENADE_PULLBACK);
     push(events, EV_PULLBACK_WEAPON);
     ps.weapon_delay_ms = ms(def.hold_fire_time);
@@ -1632,6 +1623,34 @@ mod tests {
         step(ps, weapons, &input, frames)
     }
 
+    /// The wire carries 64 clip slots: a table naming more clips drops the
+    /// weapons past them, so holding the last one cannot index past
+    /// `ammoclip`.
+    #[test]
+    fn a_weapon_past_the_clip_slots_is_dropped_not_indexed() {
+        let mut w: Vec<Option<WeaponDef>> = std::iter::once(None)
+            .chain((0..70).map(|i| {
+                Some(WeaponDef {
+                    ammo_name: "a".into(),
+                    clip_name: format!("clip{i}"),
+                    ..carbine()
+                })
+            }))
+            .collect();
+        crate::weapon_table::assign_indices(&mut w);
+        assert_eq!(w[63].as_ref().unwrap().clip_index, NUM_AMMO - 1);
+        assert!(w[64].is_none() && w[70].is_none());
+        let mut ps = PlayerState::spawn(glam::Vec3::ZERO, 0.0);
+        give(&mut ps, 70, 1);
+        ps.weapon = 70;
+        let input = PmInput {
+            weapon: 70,
+            attack: true,
+            ..Default::default()
+        };
+        step(&mut ps, &w, &input, 40);
+    }
+
     /// The frag's own numbers, off `weapons/mp/fraggrenade_mp` in `pak0.pk3`.
     fn frag() -> WeaponDef {
         let mut d = def(1.0, 0.0, 2.0, 0.25, 3, false);
@@ -1826,8 +1845,8 @@ mod tests {
     }
 
     /// The `cancel` step of `mp_carentan-tdm-grenade.txt`: a weapon change
-    /// during a pullback drops the grenade with no putaway at all -- no
-    /// `EV_PUTAWAY_WEAPON`, no drop time, no round spent -- and the raise
+    /// during a pullback drops the grenade with no putaway at all (no
+    /// `EV_PUTAWAY_WEAPON`, no drop time, no round spent), and the raise
     /// lands on the same frame.
     #[test]
     fn a_weapon_change_cancels_a_cooking_grenade() {
@@ -1853,7 +1872,6 @@ mod tests {
         );
         assert_eq!(ev, vec![EV_RAISE_WEAPON]);
         assert_eq!(ps.grenade_time_left_ms, 0);
-        assert!(ps.grenade_cancelled);
         assert_eq!(ps.weaponstate, WEAPON_RAISING);
         assert_eq!(ps.weapon, 2);
         assert_eq!(ps.ammoclip[1], 3);
@@ -1976,8 +1994,8 @@ mod tests {
         assert_eq!(ps.weaponstate, WEAPON_READY);
     }
 
-    /// 1.10: the melee bit swings once per press -- the swipe, the hit event
-    /// when `meleeDelay` runs out, and idle when `meleeTime` does.
+    /// 1.10: the melee bit swings once per press (the swipe, the hit event
+    /// when `meleeDelay` runs out, and idle when `meleeTime` does).
     #[test]
     fn the_melee_bit_swings_once_per_press() {
         let (mut ps, w) = armed(&with_melee(carbine()));
@@ -2289,7 +2307,7 @@ mod tests {
         assert_eq!(ps.weapon_pos_frac, 0.0, "500 ms down");
     }
 
-    /// A weapon with `aimDownSight 0` -- the grenades and the mounted MGs --
+    /// A weapon with `aimDownSight 0` (the grenades and the mounted MGs)
     /// holds the fraction at 0 whatever the button does.
     #[test]
     fn a_weapon_with_no_sight_never_leaves_the_hip() {
@@ -2388,7 +2406,7 @@ mod tests {
         // no sight, so the hold does not apply to it.
         step(&mut ps, &w, &crawl, 1);
         assert!(ps.ads_active);
-        // A gap in the flag -- a jump, a weapon raise -- is not recovered
+        // A gap in the flag (a jump, a weapon raise) is not recovered
         // while it crawls with the sight already held.
         ps.ads_active = false;
         step(&mut ps, &w, &crawl, 3);
@@ -2527,8 +2545,8 @@ mod tests {
         );
     }
 
-    /// A weapon with no decay rate at all -- and a weapon index with no file
-    /// behind it -- empties the counter in one frame, which is what retail's
+    /// A weapon with no decay rate at all (and a weapon index with no file
+    /// behind it) empties the counter in one frame, which is what retail's
     /// `decay = 1.0` with no frame-time scaling does.
     #[test]
     fn a_weapon_with_no_decay_rate_slams_the_spread_shut() {
@@ -2803,6 +2821,30 @@ mod tests {
         w.push(Some(semi));
         ps.weapons_held |= 1 << 2;
         (ps, w)
+    }
+
+    /// The held mode in no slot and a chain that never leads back to it:
+    /// a loop skipping it (`A B B` in configstring 7) or a one-way link.
+    /// The swap gives up and leaves the slots alone.
+    #[test]
+    fn an_alt_swap_ends_on_a_chain_that_skips_the_held_weapon() {
+        let (mut ps, mut w) = select_fire();
+        w.push(Some(WeaponDef {
+            alt_index: 1,
+            ..carbine()
+        }));
+        w[3].as_mut().unwrap().weapon_slot = "primary".into();
+        ps.weapon = 3;
+        ps.weapons_held |= 1 << 3;
+        ps.weapon_slots = [0; NUM_SLOTS];
+        alt_slot_swap(&mut ps, &w, 2);
+        assert_eq!(ps.weapon_slots, [0; NUM_SLOTS]);
+
+        w[1].as_mut().unwrap().alt_index = 2;
+        w[2].as_mut().unwrap().alt_index = 0;
+        ps.weapon = 1;
+        alt_slot_swap(&mut ps, &w, 2);
+        assert_eq!(ps.weapon_slots, [0; NUM_SLOTS]);
     }
 
     /// The switch to a weapon's `altWeapon` is the alt arm on both halves:

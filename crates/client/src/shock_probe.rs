@@ -1,17 +1,17 @@
 //! `--save-shock`: the client half of the shellshock capture. Waits for
-//! `client-probes/probe_shock` to put the player on mp_carentan's street
+//! `client-probes/probe_shock` to put the player on mp_carentan's floor
 //! mark, then runs forward and back along world x, a second each way, and
 //! holds `wbuttons` 0x4 while the playerstate's shellshock runs, as the
 //! retail cgame does (docs/research/cod11-shellshock.md, "Movement"). Writes
 //! every usercmd and every snapshot's shellshock and movement fields to
-//! `crates/server/tests/fixtures/shellshock/<map>-dm-shock-client.txt`.
+//! `crates/server/tests/fixtures/shellshock/<map>-dm-shock-client[-<tag>].txt`.
 
 use std::time::Instant;
 use vcod_common::net;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd, WBUTTON_SHELLSHOCK};
 use vcod_common::net::snapshot::Snapshot;
 
-/// `probe_shock.gsc`'s mark, `probe_legs`'s street spot.
+/// `probe_shock.gsc`'s mark, `probe_legs`'s floor spot.
 pub const SHOCK_SPOT: [f32; 3] = crate::legs_probe::LEGS_SPOT;
 
 /// Each leg of the walk, alternating forward and back from forward.
@@ -64,6 +64,7 @@ impl ShockProbe {
         }
         let line = |ms: u128| {
             format!(
+                // forward, right, up: the shellshock gate reads this order, not cmd_fields's.
                 "!cmd ms={ms} st={} buttons={} wbuttons={} weapon={} forward={} right={} up={} angles={},{},{}",
                 sent.server_time,
                 sent.buttons,
@@ -87,14 +88,18 @@ impl ShockProbe {
     /// snapshot after it. True once the script has run out and a second has
     /// passed.
     pub fn observe(&mut self, now: Instant, s: &Snapshot) -> bool {
-        let p = &net::protocol::PROTOCOL_V1;
+        let p = crate::probe::wire();
         let f = |name: &str| s.ps.field_i32(p, name);
-        self.shock = (s.server_time, f("shellshockTime"), f("shellshockDuration"));
+        self.shock = (
+            s.server_time.raw(),
+            f("shellshockTime"),
+            f("shellshockDuration"),
+        );
         let o = s.ps.origin(p);
         let mut pre = Vec::new();
         if self.placed.is_none() {
             if (o[0] - SHOCK_SPOT[0]).abs() < 0.5 && (o[1] - SHOCK_SPOT[1]).abs() < 0.5 {
-                self.placed = Some((now, s.server_time));
+                self.placed = Some((now, s.server_time.raw()));
                 println!("shock: placed at serverTime {}", s.server_time);
                 pre = self.before.past(f("commandTime")).collect();
             } else {
@@ -133,15 +138,17 @@ impl ShockProbe {
         configstrings: &[String],
         team: &str,
         weapon: &str,
+        tag: Option<&str>,
         overwrite: bool,
     ) -> anyhow::Result<()> {
         let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
         let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
         let map = key("mapname");
         let mut out = String::new();
-        out.push_str(
-            "# Retail CoD 1.1d dedicated server: the client half of the shellshock capture.\n",
-        );
+        out.push_str(&format!(
+            "# Retail CoD {} dedicated server: the client half of the shellshock capture.\n",
+            crate::probe::retail_build()
+        ));
         out.push_str(&format!(
             "# map {map}, gametype {}, team={team} weapon={weapon}\n",
             key("g_gametype")
@@ -168,14 +175,35 @@ impl ShockProbe {
             out.push_str(l);
             out.push('\n');
         }
-        let dir = "crates/server/tests/fixtures/shellshock";
-        std::fs::create_dir_all(dir)?;
-        let path = format!("{dir}/{map}-dm-shock-client.txt");
-        if !overwrite && std::path::Path::new(&path).exists() {
-            anyhow::bail!("{path} already exists; pass --overwrite-fixture to replace it");
-        }
-        std::fs::write(&path, out)?;
+        let dir = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../server/tests/fixtures/shellshock"
+        );
+        let path = crate::probe::write_fixture_file(
+            dir,
+            &crate::probe::tagged_name(&format!("{map}-dm-shock-client"), tag),
+            &out,
+            overwrite,
+        )?;
         println!("shock: {} lines -> {path}", self.lines.len());
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `wbuttons` 0x4 is held from the shock's start for its duration only.
+    #[test]
+    fn the_shock_button_holds_for_the_shock() {
+        let mut s = ShockProbe::default();
+        let held = |s: &ShockProbe| s.cmd(Instant::now()).wbuttons & WBUTTON_SHELLSHOCK != 0;
+        for (t, want) in [(499, false), (500, true), (999, true), (1000, false)] {
+            s.shock = (t, 500, 500);
+            assert_eq!(held(&s), want, "at {t}");
+        }
+        s.shock = (100, 0, 500);
+        assert!(!held(&s), "no shock while its start is 0");
     }
 }

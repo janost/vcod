@@ -6,7 +6,7 @@
 //!
 //! Needs `COD_DIR`; without the paks it returns early.
 
-use std::rc::Rc;
+use crate::common;
 use std::time::{Duration, Instant};
 
 const FRAME: Duration = Duration::from_millis(50);
@@ -27,35 +27,27 @@ fn server_on(map: &str, gametype: &str, bots: usize) -> Option<(vcod_server::Ser
 
 fn server_from(
     fs: vcod_common::pk3::Pk3Fs,
-    protocol: Option<&'static vcod_common::net::protocol::Protocol>,
+    protocol: Option<&'static vcod_common::net::protocol::Cod1Wire>,
     map: &str,
     gametype: &str,
     bots: usize,
 ) -> Option<(vcod_server::Server, Instant)> {
-    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let now = Instant::now();
     let cfg = vcod_server::ServerConfig {
-        map: map.into(),
-        hostname: "vcod test".into(),
-        max_clients: 8,
-        gametype: gametype.into(),
-        test_entities: 0,
-        trace: false,
         bots,
         // Nobody dies, so the round runs until the bomb settles it.
         bots_shoot: false,
+        ..common::cfg(map, gametype)
     };
-    let mut sv = vcod_server::Server::new(cfg, now);
-    if let Some(p) = protocol {
-        sv.set_protocol(p);
-    }
-    // The seed decides the bots' weapons, sites and roam picks; a fixed
-    // one keeps the run the same every time.
-    sv.test_seed_rng(7);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
-    Some((sv, now))
+    Some(
+        common::Boot {
+            proto: Some(protocol.unwrap_or(&vcod_common::net::protocol::PROTOCOL_V1)),
+            // The seed decides the bots' weapons, sites and roam picks; a fixed
+            // one keeps the run the same every time.
+            prep: Some(&|sv: &mut vcod_server::Server| sv.test_seed_rng(7)),
+            ..common::Boot::on(cfg)
+        }
+        .start(fs),
+    )
 }
 
 /// The tick a `logPrint` line ending in `event` (`sd.gsc`'s
@@ -119,6 +111,53 @@ fn an_attacker_bot_carries_a_retrieval_objective_home() {
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
 }
 
+/// The carrier killed with the objective: it drops where he fell
+/// (`drop_objective_on_disconnect_or_death`, `re.gsc` 2617), the bots'
+/// view counts down its 60 s return, and another attacker picks it up off
+/// the floor before then (bot-objectives.md 4.2).
+#[test]
+fn a_dropped_retrieval_objective_is_picked_up_again() {
+    let Some((mut sv, mut now)) = server_on("mp_carentan", "re", 4) else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let pickups = |sv: &vcod_server::Server| -> Vec<String> {
+        sv.script_log()
+            .iter()
+            .filter_map(|l| {
+                let f: Vec<&str> = l.trim_end().split(';').collect();
+                (f.last() == Some(&"re_pickup")).then(|| f.get(1).map(|s| s.to_string()))?
+            })
+            .collect()
+    };
+    wait_for(&mut sv, &mut now, "re_pickup", 2400).expect("nothing picked up in 120 s");
+    let carrier = pickups(&sv)[0].clone();
+    let slot = carrier.parse::<usize>().expect("the carrier's client num");
+    sv.test_bot_command(slot, "kill");
+    let mut dropped = None;
+    for tick in 0..2400 {
+        now += FRAME;
+        sv.tick(now);
+        let clocks = sv.re_returns();
+        match dropped {
+            None => dropped = clocks.iter().position(Option::is_some).map(|i| (i, tick)),
+            // Taken off the floor: the clock goes with it.
+            Some((i, _)) if clocks.get(i).is_some_and(Option::is_none) => {
+                eprintln!("dropped at tick {dropped:?}, taken at {tick}");
+                assert!(pickups(&sv).iter().skip(1).any(|n| *n != carrier));
+                assert_eq!(sv.script_aborts(), Vec::<String>::new());
+                return;
+            }
+            Some((i, at)) => {
+                let left = clocks[i].unwrap().1;
+                let want = 60.0 - (tick - at) as f32 * 0.05;
+                assert!((left - want).abs() < 0.1, "clock {left} at {want}");
+            }
+        }
+    }
+    panic!("dropped {dropped:?}, not taken again in 120 s");
+}
+
 /// mp_depot's documents lie on a crate top a jump across a gap from the
 /// step below it: the attacker gets there only by the graph's leap, coming
 /// to rest at its foot and jumping at the lip (bot-navigation.md, "Jumps").
@@ -177,27 +216,20 @@ fn uo_server(
         return None;
     };
     let p = &vcod_common::net::protocol::PROTOCOL_V22;
-    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let now = Instant::now();
     let cfg = vcod_server::ServerConfig {
-        map: map.into(),
-        hostname: "vcod test".into(),
-        max_clients: 8,
-        gametype: gametype.into(),
-        test_entities: 0,
-        trace: false,
         bots: 2,
         bots_shoot: shoot,
+        ..common::cfg(map, gametype)
     };
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.set_protocol(p);
-    sv.test_seed_rng(seed);
-    for (k, v) in cvars {
-        sv.set_cvar(k, v);
+    let (sv, now) = common::Boot {
+        proto: Some(p),
+        cvars,
+        prep: Some(&|sv: &mut vcod_server::Server| {
+            sv.test_seed_rng(seed);
+        }),
+        ..common::Boot::on(cfg)
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     Some((sv, now))
 }
 

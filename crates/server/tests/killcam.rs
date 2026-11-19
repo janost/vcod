@@ -7,6 +7,7 @@
 //! Needs `COD_DIR`; without the paks it returns early.
 
 use crate::common;
+use vcod_common::net::Msec;
 
 use common::{ClientEnd, Queues};
 use std::cell::RefCell;
@@ -46,13 +47,11 @@ impl Rig {
     fn new() -> Option<Self> {
         let fs = vcod_common::testing::game_fs_11()?;
         let p = &PROTOCOL_V1;
-        let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-        let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-        let mut now = Instant::now();
-        let mut sv = vcod_server::Server::new(common::cfg(MAP, "dm"), now);
-        common::pin_carentan_pair(&mut sv);
-        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        let (mut sv, mut now) = common::Boot {
+            prep: Some(&common::pin_carentan_pair),
+            ..common::Boot::new(MAP, "dm")
+        }
+        .start(fs);
         let qa = Rc::new(RefCell::new(Queues::default()));
         let qb = Rc::new(RefCell::new(Queues::default()));
         let (ca, cb) = common::join_pair(
@@ -107,7 +106,8 @@ impl Rig {
             self.now,
         );
         let s = self.ca.snapshots().newest().unwrap();
-        self.trail.insert(s.server_time, s.ps.origin(&PROTOCOL_V1));
+        self.trail
+            .insert(s.server_time.raw(), s.ps.origin(&PROTOCOL_V1));
         self.cb.snapshots().newest().unwrap().clone()
     }
 
@@ -142,7 +142,7 @@ impl Rig {
             let sb = self.step(a, &FACING_A);
             if sb.ps.field_i32(&PROTOCOL_V1, "pm_type") == PM_DEAD {
                 assert_eq!(self.sv.script_aborts(), Vec::<String>::new());
-                return sb.server_time;
+                return sb.server_time.raw();
             }
         }
         panic!("B was not killed");
@@ -177,12 +177,12 @@ fn a_kill_replays_the_killer_from_nine_seconds_back_then_returns() {
         }
     }
     let first = replay.first().expect("B never saw a killcam");
-    assert_eq!(first.server_time - killed_at, 2000);
+    assert_eq!(first.server_time - killed_at, Msec::from_raw(2000));
     for s in &replay {
         assert_eq!(s.ps.field_i32(p, "clientNum"), rig.na as i32);
         assert_eq!(s.ps.field_i32(p, "pm_flags") & 0x70000, 0x30000);
         assert_eq!(s.ps.field_i32(p, "deltaTime"), 9000);
-        let then = rig.trail[&(s.server_time - 9000)];
+        let then = rig.trail[&(s.server_time - 9000).raw()];
         assert_eq!(s.ps.origin(p), then, "at {}", s.server_time);
         assert!(!s.entities.contains_key(&(rig.na as u32)));
     }
@@ -260,6 +260,6 @@ fn a_use_press_skips_the_killcam_straight_to_the_respawn() {
     assert_eq!(back.ps.health(), 100);
     // `ClientSpawn`'s own think runs the new life up to the frame's clock
     // (the retail follow run's respawn frame reads `commandTime` = serverTime).
-    assert_eq!(back.ps.field_i32(p, "commandTime"), back.server_time);
+    assert_eq!(back.ps.field_i32(p, "commandTime"), back.server_time.raw());
     assert_eq!(rig.sv.script_aborts(), Vec::<String>::new());
 }

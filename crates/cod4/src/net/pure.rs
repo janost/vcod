@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use vcod_common::net::info_value_for_key;
 use vcod_common::pak_checksum::entry_crcs;
+pub use vcod_common::pak_checksum::{iwd_cp_command as cp_command, verify_iwd_cp as verify_cp};
 
 /// `Com_BlockChecksumKey32`: the reflected CRC-32 (polynomial 0xedb88320)
 /// seeded with `!key` and inverted at the end, so key 0 is plain CRC-32.
@@ -28,20 +29,6 @@ pub fn block_checksum_key32(data: &[u8], key: u32) -> u32 {
 pub fn iwd_checksum(crcs: &[u32], checksum_feed: i32) -> i32 {
     let words: Vec<u8> = crcs.iter().flat_map(|c| c.to_le_bytes()).collect();
     block_checksum_key32(&words, checksum_feed as u32) as i32
-}
-
-/// `CL_SendPureChecksums` (iw3mp.exe 0x46a0f0) over
-/// `FS_ReferencedIwdPureChecksums`: `cp @`, each pure checksum, then
-/// `checksumFeed` XOR all of them XOR their count, every number `"%i "`.
-pub fn cp_command(sums: &[i32], checksum_feed: i32) -> String {
-    let mut s = String::from("cp @ ");
-    let mut key = checksum_feed;
-    for &c in sums {
-        s.push_str(&format!("{c} "));
-        key ^= c;
-    }
-    s.push_str(&format!("{} ", key ^ sums.len() as i32));
-    s
 }
 
 /// `sv_iwds`: the unkeyed checksums of the server's non-localized iwds.
@@ -77,28 +64,6 @@ pub fn pure_command(main: &Path, systeminfo: &str, checksum_feed: i32) -> Result
         .filter_map(|l| ours.iter().find(|(c, _)| c == l).map(|&(_, p)| p))
         .collect();
     Ok(cp_command(&sums, checksum_feed))
-}
-
-/// `SV_VerifyIwds_f` (cod4_lnxded 0x817059c) on a `cp` command's arguments
-/// (`args[0]` is `cp`): `@`, sums that are distinct and each among the
-/// server's `loaded` pure checksums, then the key. True is retail's
-/// `pureAuthentic` 1.
-pub fn verify_cp(args: &[&str], loaded: &[i32], checksum_feed: i32) -> bool {
-    if args.len() < 3 || !args[1].starts_with('@') {
-        return false;
-    }
-    let tail: Vec<i32> = args[2..]
-        .iter()
-        .map(|a| a.parse::<i64>().map_or(0, |v| v as i32))
-        .collect();
-    let (sums, key) = tail.split_at(tail.len() - 1);
-    for (i, s) in sums.iter().enumerate() {
-        if sums[..i].contains(s) || !loaded.contains(s) {
-            return false;
-        }
-    }
-    let k = sums.iter().fold(checksum_feed, |k, s| k ^ s);
-    (k ^ sums.len() as i32) == key[0]
 }
 
 #[cfg(test)]

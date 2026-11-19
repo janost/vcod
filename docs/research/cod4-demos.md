@@ -10,7 +10,7 @@ against a retail capture written in that layout (section 8).
 vcod's code: `crates/cod4/src/net/demo.rs`
 (the format, `Recording`, `DemoReader`, `gamestate_message`),
 `vcod_cod4::net::conn::{Received::msg, Conn::no_delta}` (the bytes a
-record holds, `demowaiting`'s move), and `crates/client/src/play/cod4.rs`
+record holds, `demowaiting`'s move), and `crates/client/src/play/cod4/demo.rs`
 (`Cod4Session::{start_recording, stop_recording, play_demo}`,
 `DemoPlay`, the demo clock).
 
@@ -282,7 +282,7 @@ INFERRED (1.7's `CL_KeyEvent` not read).
 
 ## 6. Live run
 
-`play::cod4::tests::cod4_live_recorded_demo_plays_back_what_the_session_saw`:
+`play::cod4::tests::demo::cod4_live_recorded_demo_plays_back_what_the_session_saw`:
 a spectator on vcod-server's mp_crash `war` beside four
 shooting bots records 13 s, then plays the file in process: 76 KB, 260
 messages (the gamestate, then 259 snapshots, the first a full frame), 0
@@ -306,10 +306,10 @@ count within two. VERIFIED live.
 The one `.dm_1` in the 1.7 install was recorded by vcod: its gamestate's
 `sv_hostname` is `vcod`, and its records skip the message after the
 gamestate, as vcod's `demowaiting` does (VERIFIED, `cargo run -p
-vcod-cod4 --example demo_dump -- <file>`, which prints a file record by
+vcod-cod4 --example cod4_demo_dump -- <file>`, which prints a file record by
 record). So no retail-recorded demo exists to read, and the gate builds
 one from a retail capture instead:
-`play::cod4::tests::cod4_retail_framed_demo_plays_and_vcod_writes_it_alike`.
+`play::cod4::tests::demo::cod4_retail_framed_demo_plays_and_vcod_writes_it_alike`.
 
 - Retail to vcod: `play-1.7-spec.txt` (a spectator on retail
   `cod4_lnxded`) walked message by message and written by a writer of its

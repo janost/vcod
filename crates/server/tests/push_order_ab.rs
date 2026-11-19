@@ -15,7 +15,7 @@ use crate::common;
 use common::{Queues, holding, join_pair, step_pair};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const MAP: &str = "mp_carentan";
 const FIXTURE: &str = "tests/fixtures/movers/mp_carentan-dm-pushorder.txt";
@@ -39,16 +39,13 @@ fn a_push_leaves_its_players_in_retails_tree_order() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_pushorder"), now);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_pushorder",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_pushorder.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_pushorder.gsc"
+        )),
+        ..common::Boot::new(MAP, "probe_pushorder")
+    }
+    .start(fs);
     let (qa, qb) = (
         Rc::new(RefCell::new(Queues::default())),
         Rc::new(RefCell::new(Queues::default())),

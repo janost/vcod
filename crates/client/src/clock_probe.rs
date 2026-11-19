@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use vcod_common::net::msg::UserCmd;
 use vcod_common::net::{NetClient, NetState};
 
-/// The render clock this branch replaced: newest snapshot time plus local
+/// The render clock `ServerClock` replaced: newest snapshot time plus local
 /// time since it arrived, 100 ms back, re-anchored on every snapshot and
 /// never stepped back.
 struct OldClock {
@@ -149,7 +149,7 @@ pub fn run(addr: &str, secs: u64, frame_ms: u64) -> anyhow::Result<()> {
             client.send_frame(&UserCmd::default());
         }
         if let Some(s) = client.snapshots().newest() {
-            let snap = s.server_time;
+            let snap = s.server_time.raw();
             if newest.is_none_or(|(t, _)| t != snap) {
                 if let Some((t, at)) = newest {
                     for a in [&mut arrivals, &mut total_arrivals] {

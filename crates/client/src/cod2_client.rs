@@ -1,7 +1,7 @@
 //! A CoD2 session's client state, `App`'s `Session::Cod2`: the session
 //! (or its load-time pump), the connect in flight, and what is drawn or
 //! read off it, with the frame's steps over them. Field order is drop
-//! order and matches the fields' old order in `App`.
+//! order.
 
 use anyhow::{Result, bail};
 use glam::{Mat4, Vec3};
@@ -94,6 +94,19 @@ impl Cod2Client {
             tag_spawned: Vec::new(),
             voice: None,
         }
+    }
+
+    /// Ends the session, or the connect still running, with `disconnect`
+    /// to the server, and starts the client over as a new connection
+    /// finds it, as retail builds a new cgame on every connect.
+    pub(crate) fn leave(&mut self) {
+        if let Some(p) = self.pump.take() {
+            self.session = Some(p.finish());
+        }
+        if let Some(mut s) = self.session.take() {
+            s.disconnect();
+        }
+        *self = Self::new(None);
     }
 }
 
@@ -445,6 +458,7 @@ impl Cod2Client {
     ) -> Option<play::cod2_view::ViewOut> {
         let s = self.session.as_deref_mut()?;
         let _prof = crate::frame_prof::span(crate::frame_prof::Stage::Scene);
+        s.ensure_weapons(cx.fs);
         let f = s.frame()?;
         let dt = cx.dt;
         let audio = &mut *cx.audio;
@@ -462,6 +476,7 @@ impl Cod2Client {
         let out = self.view_fx.frame(
             &f,
             cx.fs,
+            s.weapons(),
             events,
             &kick,
             view,
@@ -758,6 +773,13 @@ impl Cod2Client {
         self.models_for = 0;
     }
 
+    /// What the draw and the view weapon parsed came off the old search
+    /// path, misses included.
+    pub(crate) fn search_path_reopened(&mut self) {
+        self.draw = cod2_scene::Cod2Draw::new();
+        self.view = cod2_viewmodel::Cod2View::default();
+    }
+
     /// No key stays held in the session's input.
     pub(crate) fn release_keys(&mut self) {
         if let Some(s) = self.session.as_deref_mut() {
@@ -839,7 +861,7 @@ impl Cod2Client {
             // `score` on the down edge, again every 2 s while held
             // (the Cod2 arm), as CoD1's board does.
             Effect::Scores(down) => {
-                let now = (std::time::Instant::now() - start).as_secs_f32();
+                let now = (crate::play::cod2::clock_now() - start).as_secs_f32();
                 let board = &mut self.hud.scoreboard;
                 if !*down {
                     board.release(now);
@@ -1029,5 +1051,23 @@ impl Cod2Client {
             ui.set_server_cvars(self.menus.cvars.all(s.configstrings(), shell));
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Leaving starts the client over: the next connection preloads its
+    /// level's models and parses its view effects afresh.
+    #[test]
+    fn leaving_starts_the_client_over() {
+        let mut c = Cod2Client::new(None);
+        c.models_for = 1;
+        c.menus_for = 1;
+        c.view_fx.shock_command = Some(vec!["shellshock".into()]);
+        c.leave();
+        assert_eq!((c.models_for, c.menus_for), (0, 0));
+        assert!(c.view_fx.shock_command.is_none());
     }
 }

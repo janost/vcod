@@ -282,7 +282,7 @@ fn set_channel(
 
 /// `BG_ExecuteCommand` for the clause's `n`-th command: a `both` line puts
 /// its anim on the legs and no anim (0) on the torso. The duration is the
-/// line's `duration`, else the anim's own (`BG_ParseCommands` copies the
+/// line's `duration`, else the anim's own: `BG_ParseCommands` copies the
 /// record's +0x48, the clip's ms floored at 500 (INFERRED from
 /// `BG_LoadAnim`'s store), plus 50. Returns the duration.
 fn execute(

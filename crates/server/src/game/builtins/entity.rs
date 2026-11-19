@@ -1,12 +1,12 @@
 //! Entity builtins the map-load and spawn paths reach: lookup, spawn (both
 //! the map-entity form and `ClientSpawn`), delete, visibility/solidity and
-//! setModel. Per-family dispatch: `NAMES`/`lookup` is matched against
-//! `Cx::resolve_folded`, same shape `host.rs` uses for the env/io names, and
-//! Task 9 adds more families beside this one.
+//! setModel. [`NAMES`] joins every game's set through
+//! `builtins::set::implementations`.
 
 use crate::configstrings::CsRange;
 use crate::game::entity::{FIRST_HUD_ELEM, ThinkFn};
 use crate::game::host::{GameHost, LinkOp, SpawnMode, SpawnRequest};
+use crate::game::slot::ClientSlot;
 use crate::game::trigger::{PLAYER_MAXS, PLAYER_MINS};
 use crate::server::MAX_CLIENTS;
 use glam::Vec3;
@@ -22,7 +22,7 @@ use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
 /// (docs/research/cod11-combat.md 14.7, "The pass runs after the threads").
 const DELETE_DEFER_MS: i32 = 100;
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("getent", get_ent),
@@ -50,10 +50,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("sethintstring", set_hint_string),
     ("useby", use_by),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// `getEntArray`'s equality. String atoms are interned exactly
 /// (`Cx::intern_exact`), so two spellings of one text are two different
@@ -292,10 +288,9 @@ fn client_spawn(
     id: EntId,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = match host.ents.get(id) {
-        Some(e) if e.client.is_some() => id.0 as usize,
-        _ => return Err(ErrorKind::BadType("that entity is not a player")),
-    };
+    let slot = ClientSlot::of_entity(&host.ents, id)
+        .ok_or(ErrorKind::BadType("that entity is not a player"))?
+        .index();
     let [Value::Vector(origin), Value::Vector(angles)] = args else {
         return Err(ErrorKind::BadType("spawn takes an origin and angles"));
     };
@@ -337,7 +332,7 @@ fn client_spawn(
     for (notified, other) in host.impacts(slot, &touched) {
         cx.notify(Target::Entity(notified), touch, vec![other]);
     }
-    host.client_prone_cone[slot] = cone;
+    host.clients[slot].prone_cone = cone;
     let origin_field = cx.intern_folded("origin");
     host.set_field(cx, id, origin_field, Value::Vector(moved))?;
     // `SetClientViewAngle` writes the spot's angles (0x4209f); a playing
@@ -351,15 +346,15 @@ fn client_spawn(
     let angles_field = cx.intern_folded("angles");
     host.set_field(cx, id, angles_field, Value::Vector(read))?;
 
-    host.client_weapons[slot] = crate::weapons::PlayerWeapons::default();
-    if host.profile.game == vcod_common::game::Game::Cod4 {
-        host.cod4_mut().clients[slot].spawned();
+    host.clients[slot].weapons = crate::weapons::PlayerWeapons::default();
+    if let Some(c4) = host.as_cod4_mut() {
+        c4.clients[slot].spawned();
         // 1.7's `ClientSpawn` writes the playerstate's `pm_type` in the call,
         // so the next spawn's `positionWouldTelefrag` sees this body; the
         // copy here was the last move's, a dead body's 7 at a round's start
         // (bot-objectives.md 12.4).
         if mode == SpawnMode::Player {
-            host.client_pm_type[slot] = 0;
+            host.clients[slot].pm_type = 0;
         }
     }
     // The `gclient_t` memset (0x42804) takes the client's objective copy
@@ -368,8 +363,8 @@ fn client_spawn(
     host.reset_client_objectives(slot);
     // CoD2's `ClientSpawn` stores 0x1000 in `ent->flags` (0x80f9202), in the
     // call: a `setStableMissile` after the spawn holds.
-    if host.profile.game == vcod_common::game::Game::Cod2 {
-        host.cod2_mut().clients[slot].flags = crate::game::cod2_cmds::FL_SPAWN;
+    if let Some(c2) = host.as_cod2_mut() {
+        c2.clients[slot].flags = crate::game::cod2_cmds::FL_SPAWN;
     }
     // `ClientSpawn`'s memset empties the ammo here, in the call, and the
     // script's gives that follow land on it. It goes in the weapon op queue
@@ -378,12 +373,12 @@ fn client_spawn(
     // the loadout, which the spawn pass then keeps (cod11-gsc-object-model.md
     // 20, "The spawn's memset and the weapon op queue").
     host.weapon_op(slot, crate::game::host::WeaponOp::TakeAll);
-    host.client_shellshock[slot] = [0; 3];
+    host.clients[slot].shellshock = [0; 3];
     // `ClientSpawn` never writes `ent->health` (combat doc 5.6): a spawn in
     // any mode keeps what the entity held, a spectator spawned after a death
     // its negative health, until the gametype writes it. `player_die` is
     // the `die` pointer again (0x42753).
-    let v = &mut host.client_vitals[slot];
+    let v = &mut host.clients[slot].vitals;
     v.dead = false;
     // `ClientSpawn` clears `takedamage` (0x4273c) and its own
     // `ClientEndFrame` call sets it again for a playing client.
@@ -400,7 +395,7 @@ fn client_spawn(
     let playing = mode == SpawnMode::Player;
     // `ClientSpawn` writes the standing `playerMaxs` (0x427a5) and its think
     // copies pmove's box over it (gsc object model doc 22.3).
-    host.client_height[slot] = height;
+    host.clients[slot].height = height;
     host.link_client(slot, moved, host.client_box(slot), contents, playing);
     host.move_client_body(slot, playing.then_some(moved));
     host.client_spawns.push(SpawnRequest {
@@ -461,7 +456,7 @@ fn spawn_think(
     f32,
     Vec<u32>,
 ) {
-    let last = host.client_last_cmd[slot];
+    let last = host.clients[slot].last_cmd;
     let mut sim = crate::spectate::ClientSim::spectator(origin, yaw_deg, last.angles);
     sim.ps.rules = vcod_common::pmove::MoveRules::for_protocol(host.defs.proto);
     match mode {
@@ -608,6 +603,10 @@ pub fn delete(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = entity_receiver(recv)?;
+    let client = host.ents.get(id).is_some_and(|e| e.client.is_some());
+    if client && host.profile.delete_refuses_client {
+        return Err(ErrorKind::Custom("Cannot delete a client entity".into()));
+    }
     let death = cx.intern_folded("death");
     cx.notify(Target::Entity(id), death, vec![Value::Entity(id)]);
     if host.profile.delete_queues_number {
@@ -617,15 +616,20 @@ pub fn delete(
     Ok(Value::Undefined)
 }
 
-/// `delete()`'s unlink, and its free armed [`DELETE_DEFER_MS`] out.
-fn unlink_and_free(host: &mut GameHost, id: EntId) {
+/// `delete()`'s unlink, and its free armed [`DELETE_DEFER_MS`] out. A
+/// client keeps his entity: its slot is the connection's until the drop.
+pub(crate) fn unlink_and_free(host: &mut GameHost, id: EntId) {
     link_submodel(host, id, false);
     // The unlink (0x5da81) is now; the slot's reuse waits.
-    if let Some(e) = host.ents.get_mut(id).filter(|e| e.client.is_none()) {
+    let client = host.ents.get(id).is_some_and(|e| e.client.is_some());
+    if let Some(e) = host.ents.get_mut(id).filter(|_| !client) {
         e.unlinked = true;
         host.area.unlink(id.0);
     }
     host.unlink_world_copy(id);
+    if client {
+        return;
+    }
     host.ents
         .schedule(id, ThinkFn::Free, host.level_time_ms + DELETE_DEFER_MS);
 }
@@ -701,7 +705,7 @@ fn set_solid(host: &mut GameHost, recv: Option<Target>, solid: bool) -> Result<V
 
 /// `hide()`/`show()` and `solid()`/`notSolid()` flip real flags on the
 /// entity, not script-struct keys: `_load.gsc` hides every exploder model
-/// at load and stage 5 reads these when it builds entity states.
+/// at load, and a hidden entity goes out with `EF_NODRAW`.
 pub fn hide(
     host: &mut GameHost,
     _cx: &mut Cx,
@@ -886,11 +890,11 @@ pub fn placed_origin(
 const CEILING_CHECK: f32 = 128.0;
 const DROP_DISTANCE: f32 = 262144.0;
 
-/// `isPlayer(ent)` reads the entity number against `MAX_CLIENTS`, which is
-/// what makes it answerable before stage 4 gives clients any state. Retail's
-/// `isPlayer` reads `ent->client`; stage 4 replaces this with the real check.
+/// `isPlayer(ent)`: whether `ent` is a live client's entity, retail's
+/// `ent->client` read; a handle to a client who left is the VM's dead
+/// entity type there and reads 0.
 pub fn is_player(
-    _host: &mut GameHost,
+    host: &mut GameHost,
     _cx: &mut Cx,
     _recv: Option<Target>,
     args: &[Value],
@@ -904,7 +908,8 @@ pub fn is_player(
     let Some(Value::Entity(id)) = args.first() else {
         return Ok(Value::Int(0));
     };
-    Ok(Value::Int((id.0 < MAX_CLIENTS as u32) as i32))
+    let live = host.ents.get(*id).is_some_and(|e| e.client.is_some());
+    Ok(Value::Int(i32::from(live)))
 }
 
 /// `isAlive(ent)` (`.so` 0x5cf8c): 0 for an argument that is not an entity,
@@ -921,21 +926,20 @@ pub fn is_alive(
         return Ok(Value::Int(0));
     };
     let id = *id;
-    let alive = match host.ents.get(id) {
-        Some(e) if e.client.is_some() => host.client_vitals[id.0 as usize].health > 0,
-        Some(_) => {
+    let alive = match (host.ents.get(id), ClientSlot::of_entity(&host.ents, id)) {
+        (_, Some(slot)) => host.clients[slot.index()].vitals.health > 0,
+        (Some(_), None) => {
             let health = cx.intern_folded("health");
             matches!(host.get_field(cx, id, health), Value::Int(n) if n > 0)
         }
-        None => false,
+        (None, None) => false,
     };
     Ok(Value::Int(alive as i32))
 }
 
 /// `isDefined(x)`: false for a missing argument, `undefined` itself, and a
-/// handle whose slot is free. A reused slot reads live again, where retail's
-/// entity generation counter would not; the S&D gate hit the HUD element case
-/// at `sd.gsc:1850`/`2019` (gsc-language doc, section 10).
+/// handle whose slot is free or reused, as on retail: a handle carries its
+/// slot's generation (`ObjectTable`; gsc-language doc, section 9).
 pub fn is_defined(
     host: &mut GameHost,
     _cx: &mut Cx,
@@ -988,8 +992,8 @@ pub fn link_to(
     let Some(&Value::Entity(parent)) = args.first() else {
         return Err(ErrorKind::BadType("linkTo needs an entity to link to"));
     };
-    if host.ents.get(child).is_some_and(|e| e.client.is_some()) {
-        return link_client(host, cx, child, parent);
+    if let Some(slot) = ClientSlot::of_entity(&host.ents, child) {
+        return link_client(host, cx, slot, child, parent);
     }
     let classname = super::super::link::classname(host, cx, child);
     if !super::super::link::has_link_bit(host, child, &classname) {
@@ -1019,10 +1023,10 @@ pub fn link_to(
 fn link_client(
     host: &mut GameHost,
     cx: &mut Cx,
+    slot: ClientSlot,
     child: EntId,
     parent: EntId,
 ) -> Result<Value, ErrorKind> {
-    let slot = child.0 as usize;
     let origin = cx.intern_folded("origin");
     let at = |host: &mut GameHost, cx: &mut Cx, id| match host.get_field(cx, id, origin) {
         Value::Vector(v) => v,
@@ -1041,7 +1045,7 @@ fn link_client(
     let axis = vcod_common::x87::angles_to_axis(parent_angles.into());
     let offset = [d.dot(axis[0]), d.dot(axis[1]), d.dot(axis[2])];
     host.client_link_ops
-        .push((slot, LinkOp::Link { parent, offset }));
+        .push((slot.index(), LinkOp::Link { parent, offset }));
     Ok(Value::Undefined)
 }
 
@@ -1055,8 +1059,8 @@ pub fn unlink(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = entity_receiver(recv)?;
-    if host.ents.get(id).is_some_and(|e| e.client.is_some()) {
-        host.client_link_ops.push((id.0 as usize, LinkOp::Unlink));
+    if let Some(slot) = ClientSlot::of_entity(&host.ents, id) {
+        host.client_link_ops.push((slot.index(), LinkOp::Unlink));
     } else {
         super::super::link::unlink(host, id);
     }
@@ -1163,7 +1167,7 @@ mod tests {
             let state = cx.intern_folded("sessionstate");
             let playing = Value::String(cx.intern_exact("playing"));
             host.set_field(cx, e, state, playing).unwrap();
-            host.client_weapons[2].give(4, 3);
+            host.clients[2].weapons.give(4, 3);
 
             let at = Value::Vector([10.0, 20.0, 30.0]);
             let angles = Value::Vector([0.0, 90.0, 0.0]);
@@ -1176,7 +1180,7 @@ mod tests {
                 (2, [10.0, 20.0, 30.0], 90.0, SpawnMode::Player)
             );
             assert_eq!(
-                host.client_weapons[2],
+                host.clients[2].weapons,
                 crate::weapons::PlayerWeapons::default()
             );
             let origin = cx.intern_folded("origin");
@@ -1186,7 +1190,7 @@ mod tests {
             // `sessionstate` string is the whole of what tells them apart
             // (map-cycle doc, 6.1). None of the three writes health
             // (`probe_victims`, combat doc 5.6).
-            host.client_vitals[2].health = -20;
+            host.clients[2].vitals.health = -20;
             for (state_name, mode) in [
                 ("spectator", SpawnMode::Spectator),
                 ("intermission", SpawnMode::Intermission),
@@ -1195,7 +1199,7 @@ mod tests {
                 host.set_field(cx, e, state, v).unwrap();
                 spawn(&mut host, cx, t, &[at, angles]).unwrap();
                 assert_eq!(host.client_spawns.last().unwrap().mode, mode);
-                assert_eq!(host.client_vitals[2].health, -20);
+                assert_eq!(host.clients[2].vitals.health, -20);
             }
 
             // No receiver is still the free function.
@@ -1423,7 +1427,7 @@ mod tests {
     }
 
     /// An entity whose `model` is an xmodel name owns no brushes, so
-    /// `notSolid()` on one must not unlink submodel 1 -- or any script model
+    /// `notSolid()` on one must not unlink submodel 1, or any script model
     /// standing near a door would take the door out of the clip.
     #[test]
     fn notsolid_on_an_xmodel_entity_leaves_the_submodels_alone() {
@@ -1663,7 +1667,7 @@ mod tests {
 
     /// `hide`/`show` and `solid`/`notSolid` flip real flags on the entity, not
     /// script-struct keys: `_load.gsc` hides every exploder model at load and
-    /// stage 5 reads these when it builds entity states.
+    /// a hidden entity goes out with `EF_NODRAW`.
     #[test]
     fn hide_and_notsolid_flip_entity_flags() {
         let (mut vm, mut host) = fixture();
@@ -1680,21 +1684,25 @@ mod tests {
         });
     }
 
-    /// `isPlayer` reads the entity number against `MAX_CLIENTS`, which is
-    /// what makes it answerable before stage 4 gives clients any state.
+    /// `isPlayer` answers for a live client's entity only: a map entity
+    /// and a handle to a client who left (the VM's dead entity type on
+    /// retail) read 0 (BUG-114).
     #[test]
-    fn is_player_reads_the_entity_number() {
+    fn is_player_reads_the_live_client() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
+            let ask = |host: &mut GameHost, cx: &mut Cx, v: Value| {
+                is_player(host, cx, None, &[v]).unwrap()
+            };
             let map_ent = Value::Entity(host.ents.spawn(cx).unwrap());
+            assert_eq!(ask(&mut host, cx, map_ent), Value::Int(0));
+            let player = host.ents.spawn_client(cx, 3, None).unwrap();
+            assert_eq!(ask(&mut host, cx, Value::Entity(player)), Value::Int(1));
+            host.ents.free_client(3);
+            assert_eq!(ask(&mut host, cx, Value::Entity(player)), Value::Int(0));
             assert_eq!(
-                is_player(&mut host, cx, None, &[map_ent]).unwrap(),
+                ask(&mut host, cx, Value::Entity(EntId(5, 0))),
                 Value::Int(0)
-            );
-            let client = Value::Entity(EntId(3, 0));
-            assert_eq!(
-                is_player(&mut host, cx, None, &[client]).unwrap(),
-                Value::Int(1)
             );
         });
     }
@@ -1707,12 +1715,12 @@ mod tests {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
             let player = host.ents.spawn_client(cx, 0, None).unwrap();
-            host.client_vitals[0].health = 100;
+            host.clients[0].vitals.health = 100;
             assert_eq!(
                 is_alive(&mut host, cx, None, &[Value::Entity(player)]).unwrap(),
                 Value::Int(1)
             );
-            host.client_vitals[0].health = 0;
+            host.clients[0].vitals.health = 0;
             assert_eq!(
                 is_alive(&mut host, cx, None, &[Value::Entity(player)]).unwrap(),
                 Value::Int(0)
@@ -2089,7 +2097,7 @@ mod tests {
             assert_eq!(touching(&mut host, cx, zone), Ok(Value::Int(1)), "standing");
             assert_eq!(touching(&mut host, cx, b), Ok(Value::Int(1)), "standing");
             for stance in [Stance::Crouch, Stance::Prone] {
-                host.client_height[0] = stance.height();
+                host.clients[0].height = stance.height();
                 assert_eq!(
                     touching(&mut host, cx, zone),
                     Ok(Value::Int(0)),
@@ -2097,7 +2105,7 @@ mod tests {
                 );
                 assert_eq!(touching(&mut host, cx, b), Ok(Value::Int(0)), "{stance:?}");
             }
-            host.client_height[0] = HEIGHT_STAND;
+            host.clients[0].height = HEIGHT_STAND;
             assert_eq!(touching(&mut host, cx, zone), Ok(Value::Int(1)));
         });
     }

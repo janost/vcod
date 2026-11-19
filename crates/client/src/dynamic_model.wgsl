@@ -42,6 +42,7 @@ fn screen_coords(clip: vec4<f32>) -> vec4<f32> {
 @group(2) @binding(0) var<storage, read> bones: array<mat4x4<f32>>;
 
 // One GL light; `entity_light::GpuLight`.
+// @region ent_light
 struct EntLight {
     pos: vec4<f32>,      // w 0: xyz is the unit vector towards the light
     diffuse: vec4<f32>,  // w spot exponent
@@ -53,9 +54,11 @@ struct LightSet {
     ambient: vec4<f32>,  // light model ambient; w the light count, -1 a CoD2 probe
     lights: array<EntLight, 8>,
 };
+// @end ent_light
 // The frame's light sets; an instance names its own.
 @group(2) @binding(1) var<storage, read> light_sets: array<LightSet>;
 
+// @region stage_params
 // The stage's `renderer::StageParams`; only the fields read here are named.
 struct StageParams {
     uv0: mat3x2<f32>,
@@ -77,6 +80,8 @@ struct StageParams {
 };
 @group(3) @binding(0) var<uniform> stage: StageParams;
 
+// @end stage_params
+// @region light_model
 const F_AF_GT0: u32 = 16u;
 const F_AF_LT128: u32 = 32u;
 const F_AF_GE128: u32 = 48u;
@@ -98,6 +103,7 @@ const ATEST128: f32 = 0.5019607843137255;
 // reads: a CoD2 `lprobe_flag*` stage (cod2_model.wgsl's `cod2_flap`)
 const COD2_FLAG: u32 = 1u;
 
+// @end light_model
 // GL_LIGHTING's vertex colour: the light model ambient plus each light's
 // attenuated ambient and diffuse, clamped to 1. White material, no
 // specular, one-sided. A CoD2 probe set takes probe_lighting instead.
@@ -298,6 +304,7 @@ fn fog_amount(world_pos: vec3<f32>) -> f32 {
 // too: `lprobe*.hlsl` light `colour map * vertex colour` (cod2-materials.md
 // 9.2). `rgbGen vertex` (the half) stays the tint: no CoD1 model stores a
 // colour.
+// @region stage_colour
 fn stage_colour(tex: vec4<f32>, light: vec3<f32>, vcol: vec4<f32>, flags: u32, tint: vec4<f32>, identity: f32) -> vec4<f32> {
     var c: vec3<f32>;
     if ((flags & F_LIT) != 0u) {
@@ -318,6 +325,7 @@ fn stage_colour(tex: vec4<f32>, light: vec3<f32>, vcol: vec4<f32>, flags: u32, t
     return vec4<f32>(tex.rgb * c, a);
 }
 
+// @end stage_colour
 // alphaFunc decode, as shader.wgsl's; GE128 carries both low bits.
 fn alphafunc_pass(a: f32) -> bool {
     if ((stage.flags & F_AF_GE128) == F_AF_GE128) {

@@ -11,15 +11,16 @@
 //! install; without one it returns early.
 
 use crate::common;
+use vcod_common::net::Msec;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::NetEvent;
 use vcod_common::net::event_ids::{EV_FIRE_WEAPONB, EV_UO_BULLET_HIT, EV_UO_FIRE_WEAPONC};
 use vcod_common::net::events::{EventTracker, GameEvent};
 use vcod_common::net::msg::{BUTTON_ATTACK, BUTTON_MELEE, BUTTON_USE, UserCmd};
-use vcod_common::net::protocol::{PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V22};
 
 const MAP: &str = "mp_cassino";
 const PROBE: &str = "probe_vehicle";
@@ -54,7 +55,7 @@ fn report(side: &str, seen: &[Seen]) {
 
 /// `VEHFIRE_ENTS=1`: every entity a snapshot carries but bodies, sound
 /// blends and vehicles.
-fn dump_ents(side: &str, s: &vcod_common::net::snapshot::Snapshot, p: &Protocol) {
+fn dump_ents(side: &str, s: &vcod_common::net::snapshot::Snapshot, p: &Cod1Wire) {
     if std::env::var_os("VEHFIRE_ENTS").is_none() {
         return;
     }
@@ -88,7 +89,7 @@ fn retail(tag: &str) -> Vec<Seen> {
         dump_ents("retail", &f.snapshot, p);
         for ev in tracker.drain(&f.snapshot, p) {
             out.push(Seen {
-                t: f.snapshot.server_time,
+                t: f.snapshot.server_time.raw(),
                 ev,
             });
         }
@@ -113,19 +114,16 @@ fn ours_run() -> &'static [Seen] {
 /// snapshots carried.
 fn ours(pitch: f32, secs: i64) -> Vec<Seen> {
     let fs = vcod_common::testing::uo_fs().unwrap();
-    let p: &'static Protocol = &PROTOCOL_V22;
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, PROBE), now);
-    sv.set_protocol(p);
-    sv.overlay_script(
-        &format!("maps/mp/gametypes/{PROBE}"),
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_vehicle.gsc"),
-    );
-    sv.set_cvar("probe_vehicletype", "panzeriv_mp");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let p: &'static Cod1Wire = &PROTOCOL_V22;
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        cvars: &[("probe_vehicletype", "panzeriv_mp")],
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_vehicle.gsc"
+        )),
+        ..common::Boot::new(MAP, PROBE)
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let mut cl = common::connect(&mut sv, &q, &mut now);
@@ -141,7 +139,7 @@ fn ours(pitch: f32, secs: i64) -> Vec<Seen> {
         now += frame;
         let since = |at: Option<i64>| at.map(|a| (i - a) * common::FRAME_MS);
         // Retail's `PROBE activated` is 2050 past its `PROBE place`
-        // (coduo-vehicles.md 13, "The driver's idle").
+        // (coduo-vehicles.md 13.7, "The driver's idle").
         let tap =
             since(placed_at).is_some_and(|ms| (2050..2200).contains(&ms)) && seated_at.is_none();
         let seated = since(seated_at);
@@ -165,7 +163,7 @@ fn ours(pitch: f32, secs: i64) -> Vec<Seen> {
                 None => v,
             };
             let cmd = UserCmd {
-                server_time: s.server_time.max(last_sent + 1),
+                server_time: s.server_time.max(Msec::from_raw(last_sent + 1)).raw(),
                 angles: std::array::from_fn(|k| (deg_to_short(want[k]) - da[k]) & 0xffff),
                 buttons,
                 weapon: s.ps.field_i32(p, "weapon") as u8,
@@ -194,7 +192,7 @@ fn ours(pitch: f32, secs: i64) -> Vec<Seen> {
             dump_ents("ours", s, p);
             for ev in tracker.drain(s, p) {
                 out.push(Seen {
-                    t: s.server_time,
+                    t: s.server_time.raw(),
                     ev,
                 });
             }

@@ -10,13 +10,79 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// A read that waits longer than this fails the transfer.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// Location hops followed before giving up.
 const MAX_REDIRECTS: usize = 5;
+/// The most a response's status line and headers may take, and how long.
+const MAX_HEAD: u64 = 64 * 1024;
+const HEAD_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// A socket whose reads fail once `cancel` is set or, while reading the
+/// head, once `deadline` passes: a host dripping bytes no longer holds the
+/// thread past the read timeout's reach.
+pub struct Guarded<'a> {
+    pub sock: TcpStream,
+    pub deadline: Option<Instant>,
+    pub cancel: &'a AtomicBool,
+}
+
+impl Read for Guarded<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.cancel.load(Ordering::Relaxed) {
+            return Err(std::io::Error::other("cancelled"));
+        }
+        if self.deadline.is_some_and(|d| Instant::now() > d) {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+        self.sock.read(buf)
+    }
+}
+
+impl<'a> Guarded<'a> {
+    /// `sock` with the head's deadline from now.
+    pub fn head(sock: TcpStream, cancel: &'a AtomicBool) -> Self {
+        Guarded {
+            sock,
+            deadline: Some(Instant::now() + HEAD_TIMEOUT),
+            cancel,
+        }
+    }
+}
+
+/// The status line and the header lines up to the blank one, line ends
+/// trimmed; at most [`MAX_HEAD`] bytes of them.
+pub fn read_head(r: &mut impl BufRead) -> anyhow::Result<Vec<String>> {
+    let mut left = MAX_HEAD;
+    let mut lines = Vec::new();
+    loop {
+        let mut line = String::new();
+        let n = Read::take(&mut *r, left).read_line(&mut line)?;
+        left -= n as u64;
+        if !line.ends_with('\n') {
+            if left == 0 {
+                bail!("HTTP head over {MAX_HEAD} bytes");
+            }
+            bail!("connection closed inside the HTTP head");
+        }
+        let l = line.trim_end();
+        if l.is_empty() && !lines.is_empty() {
+            return Ok(lines);
+        }
+        lines.push(l.to_string());
+    }
+}
+
+/// Whitespace and control characters, which would split the request line.
+fn refuse_unsafe(url: &str) -> anyhow::Result<()> {
+    if url.bytes().any(|b| b <= b' ' || b == 0x7f) {
+        bail!("bad URL {url:?}");
+    }
+    Ok(())
+}
 
 /// `http://host[:port]/path` split into its parts.
 #[derive(Debug, PartialEq, Eq)]
@@ -29,9 +95,7 @@ pub struct Url {
 /// Parse an absolute `http://` URL. Whitespace and control characters are
 /// refused: the path goes into a request line verbatim.
 pub fn parse_url(url: &str) -> anyhow::Result<Url> {
-    if url.bytes().any(|b| b <= b' ' || b == 0x7f) {
-        bail!("bad URL {url:?}");
-    }
+    refuse_unsafe(url)?;
     let Some(rest) = url
         .get(..7)
         .filter(|s| s.eq_ignore_ascii_case("http://"))
@@ -73,6 +137,17 @@ impl Fetch {
     /// Start fetching `url` into `out`. A body longer than `limit` bytes, or
     /// shorter than its `Content-Length`, fails the transfer.
     pub fn spawn(url: &str, out: File, limit: u64) -> anyhow::Result<Fetch> {
+        Self::spawn_timed(url, out, limit, CONNECT_TIMEOUT)
+    }
+
+    /// [`Self::spawn`] with `connect` for the connect timeout (CoD4's
+    /// libwww waits 30 s, cod4-handshake.md 11).
+    pub fn spawn_timed(
+        url: &str,
+        out: File,
+        limit: u64,
+        connect: Duration,
+    ) -> anyhow::Result<Fetch> {
         let first = parse_url(url)?;
         let received = Arc::new(AtomicU64::new(0));
         let cancel = Arc::new(AtomicBool::new(false));
@@ -80,7 +155,7 @@ impl Fetch {
         let url = url.to_string();
         let handle = std::thread::Builder::new()
             .name("www-download".into())
-            .spawn(move || get(&url, first, out, &counter, &stop, limit))
+            .spawn(move || get(&url, first, out, &counter, &stop, limit, connect))
             .context("cannot start the download thread")?;
         Ok(Fetch {
             received,
@@ -119,6 +194,7 @@ fn get(
     received: &AtomicU64,
     cancel: &AtomicBool,
     limit: u64,
+    connect: Duration,
 ) -> anyhow::Result<()> {
     for _ in 0..=MAX_REDIRECTS {
         let addr = (url.host.as_str(), url.port)
@@ -126,7 +202,7 @@ fn get(
             .with_context(|| format!("cannot resolve {}", url.host))?
             .next()
             .with_context(|| format!("no address for {}", url.host))?;
-        let mut sock = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
+        let mut sock = TcpStream::connect_timeout(&addr, connect)
             .with_context(|| format!("cannot connect to {addr}"))?;
         sock.set_read_timeout(Some(READ_TIMEOUT))?;
         sock.set_write_timeout(Some(READ_TIMEOUT))?;
@@ -143,25 +219,17 @@ fn get(
             url.path
         );
         sock.write_all(req.as_bytes())?;
-        let mut r = BufReader::new(sock);
-        let mut line = String::new();
-        r.read_line(&mut line)?;
-        let status: u16 = line
+        let mut r = BufReader::new(Guarded::head(sock, cancel));
+        let head = read_head(&mut r)?;
+        r.get_mut().deadline = None;
+        let status: u16 = head[0]
             .split_whitespace()
             .nth(1)
             .and_then(|s| s.parse().ok())
-            .with_context(|| format!("bad HTTP status line {:?}", line.trim_end()))?;
+            .with_context(|| format!("bad HTTP status line {:?}", head[0]))?;
         let mut length = None;
         let mut location = None;
-        loop {
-            line.clear();
-            if r.read_line(&mut line)? == 0 {
-                bail!("connection closed inside the HTTP headers");
-            }
-            let h = line.trim_end();
-            if h.is_empty() {
-                break;
-            }
+        for h in &head[1..] {
             if let Some((k, v)) = h.split_once(':') {
                 let v = v.trim();
                 if k.eq_ignore_ascii_case("content-length") {
@@ -176,6 +244,7 @@ fn get(
             301 | 302 | 303 | 307 | 308 => {
                 let to = location.context("redirect without a Location")?;
                 url = if to.starts_with('/') {
+                    refuse_unsafe(&to)?;
                     Url { path: to, ..url }
                 } else {
                     parse_url(&to)?
@@ -261,7 +330,7 @@ mod tests {
                 }
                 seen.push(req);
                 let mut s = s;
-                s.write_all(&resp).unwrap();
+                let _ = s.write_all(&resp);
             }
             seen
         });
@@ -313,5 +382,39 @@ mod tests {
         let (port, _h) = serve(vec![b"HTTP/1.0 200 OK\r\n\r\nabcdef".to_vec()]);
         let (res, _) = run(&format!("http://127.0.0.1:{port}/x"), 4);
         assert!(res.is_err());
+    }
+
+    /// A relative Location holding a bare CR or a space is refused, not
+    /// spliced into the next request line.
+    #[test]
+    fn a_relative_location_with_control_bytes_is_refused() {
+        for loc in ["/a\rX-Injected: 1", "/a b"] {
+            let (port, _h) = serve(vec![
+                format!("HTTP/1.0 302 Found\r\nLocation: {loc}\r\n\r\n").into_bytes(),
+                b"HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nhi".to_vec(),
+            ]);
+            let (res, body) = run(&format!("http://127.0.0.1:{port}/x"), 100);
+            assert!(res.unwrap_err().to_string().contains("bad URL"));
+            assert!(body.is_empty());
+        }
+    }
+
+    /// A head that never ends its line, or never ends at all, fails once it
+    /// passes 64 KiB instead of growing with what the host sends.
+    #[test]
+    fn an_endless_head_fails_bounded() {
+        let endless_line = [b"HTTP/1.0 200 OK\r\nX: ".as_slice(), &[b'a'; 1 << 20]].concat();
+        let endless_head = [
+            b"HTTP/1.0 200 OK\r\n".as_slice(),
+            &b"X: a\r\n".repeat(1 << 17),
+        ]
+        .concat();
+        for resp in [vec![b'a'; 1 << 20], endless_line, endless_head] {
+            let (port, _h) = serve(vec![resp]);
+            let (res, body) = run(&format!("http://127.0.0.1:{port}/x"), 100);
+            let e = res.unwrap_err().to_string();
+            assert!(e.contains("over 65536"), "{e}");
+            assert!(body.is_empty());
+        }
     }
 }

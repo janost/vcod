@@ -64,6 +64,9 @@ pub struct ServerClock {
     extrapolated: bool,
     /// `clc.timeDemoBaseTime` (0x15ef01c): the first snapshot's time.
     demo_base: i32,
+    /// A map restart's `CL_FirstSnapshot`, run at the end of the next frame
+    /// ([`Self::map_restart`]).
+    restart: bool,
     server_time: i32,
     pub stats: ClockStats,
 }
@@ -121,16 +124,35 @@ impl ServerClock {
         let delta = self.delta.expect("seeded above");
         self.old_frame_snap = snap;
         let nudge = nudge.clamp(-MAX_NUDGE, MAX_NUDGE);
-        self.server_time = (realtime + delta - nudge).max(self.old_server_time);
+        // Snapshot times are the server's ints, and wrap as retail's do.
+        let at = realtime.wrapping_add(delta);
+        self.server_time = at.wrapping_sub(nudge).max(self.old_server_time);
         self.old_server_time = self.server_time;
-        if realtime + delta >= snap - 5 {
+        if at >= snap.wrapping_sub(5) {
             self.extrapolated = true;
             self.stats.extrapolated += 1;
         }
         if new_snapshot {
             self.adjust_delta(realtime, snap);
         }
+        self.end_frame(realtime, snap);
         self.server_time
+    }
+
+    /// `CG_MapRestart`'s last syscall (1.1 cgame 0xf1, 1.5 0xf3, UO 0xf8)
+    /// runs `CL_FirstSnapshot` again while `cls.state` is 6 (CoDMP.exe
+    /// 0x4041b6): the delta re-pegs to the newest snapshot. The cgame makes
+    /// it after the frame's time is set, so it lands at the end of the next
+    /// [`Self::frame`], off that frame's local time and snapshot (events doc
+    /// 9.8).
+    pub fn map_restart(&mut self) {
+        self.restart = true;
+    }
+
+    fn end_frame(&mut self, realtime: i32, snap: i32) {
+        if std::mem::take(&mut self.restart) {
+            self.first_snapshot(realtime, snap);
+        }
     }
 
     /// [`Self::frame`], telling a new snapshot by its message number, as
@@ -153,11 +175,12 @@ impl ServerClock {
                 self.first_snapshot(realtime, snap);
             }
             self.old_frame_snap = snap;
+            self.end_frame(realtime, snap);
         } else {
             self.frame(realtime, snap, false, nudge);
         }
         if let Some(n) = how.timedemo_frames {
-            self.server_time = self.demo_base + n * TIMEDEMO_MS;
+            self.server_time = self.demo_base.wrapping_add(n.wrapping_mul(TIMEDEMO_MS));
         }
         self.server_time
     }
@@ -173,18 +196,23 @@ impl ServerClock {
     pub fn time_at(&self, realtime: i32, nudge: i32, how: DemoClock) -> Option<i32> {
         let delta = self.delta?;
         if let Some(n) = how.timedemo_frames {
-            return Some(self.demo_base + n * TIMEDEMO_MS);
+            return Some(self.demo_base.wrapping_add(n.wrapping_mul(TIMEDEMO_MS)));
         }
         if how.freeze {
             return Some(self.server_time);
         }
         let nudge = nudge.clamp(-MAX_NUDGE, MAX_NUDGE);
-        Some((realtime + delta - nudge).max(self.old_server_time))
+        Some(
+            realtime
+                .wrapping_add(delta)
+                .wrapping_sub(nudge)
+                .max(self.old_server_time),
+        )
     }
 
     /// `CL_FirstSnapshot` (CoDMP.exe 0x404d00).
     fn first_snapshot(&mut self, realtime: i32, snap: i32) {
-        self.delta = Some(snap - realtime);
+        self.delta = Some(snap.wrapping_sub(realtime));
         self.old_server_time = snap;
         self.demo_base = snap;
         self.extrapolated = false;
@@ -196,8 +224,8 @@ impl ServerClock {
             return self.adjust_delta_cod2(realtime, snap);
         }
         let Some(delta) = self.delta else { return };
-        let new_delta = snap - realtime;
-        let off = (new_delta - delta).abs();
+        let new_delta = snap.wrapping_sub(realtime);
+        let off = new_delta.wrapping_sub(delta).wrapping_abs();
         let delta = if off > RESET_TIME {
             self.stats.resets += 1;
             self.server_time = snap;
@@ -205,14 +233,14 @@ impl ServerClock {
             new_delta
         } else if off > FAST_ADJUST {
             self.stats.fast += 1;
-            (delta + new_delta) >> 1
+            delta.wrapping_add(new_delta) >> 1
         } else if self.extrapolated {
             self.extrapolated = false;
             self.stats.back += 1;
-            delta - 2
+            delta.wrapping_sub(2)
         } else {
             self.stats.ahead += 1;
-            delta + 1
+            delta.wrapping_add(1)
         };
         self.delta = Some(delta);
     }
@@ -226,15 +254,15 @@ impl ServerClock {
     fn adjust_delta_cod2(&mut self, realtime: i32, snap: i32) {
         let Some(delta) = self.delta else { return };
         let prev = self.prev_snap.unwrap_or(snap);
-        let interval = snap - prev;
-        let new_delta = prev - realtime - 5;
-        let short = new_delta - delta;
+        let interval = snap.wrapping_sub(prev);
+        let new_delta = prev.wrapping_sub(realtime).wrapping_sub(5);
+        let short = new_delta.wrapping_sub(delta);
         let off = if short < 1 {
-            Some(-short)
+            Some(short.wrapping_neg())
         } else if interval > 500 {
             Some(short)
-        } else if short - interval >= 0 {
-            Some(short - interval)
+        } else if short.wrapping_sub(interval) >= 0 {
+            Some(short.wrapping_sub(interval))
         } else {
             None
         };
@@ -244,24 +272,24 @@ impl ServerClock {
                 self.server_time = snap;
                 self.old_server_time = snap;
                 if self.cod4 {
-                    snap - realtime - 5
+                    snap.wrapping_sub(realtime).wrapping_sub(5)
                 } else {
                     new_delta
                 }
             }
             Some(off) if off > FAST_ADJUST => {
                 self.stats.fast += 1;
-                (delta + new_delta) >> 1
+                delta.wrapping_add(new_delta) >> 1
             }
             _ if self.extrapolated => {
                 self.extrapolated = false;
                 self.stats.back += 1;
-                delta - 2
+                delta.wrapping_sub(2)
             }
             _ => {
                 self.stats.ahead += u32::from(delta < new_delta);
                 self.stats.back += u32::from(delta > new_delta);
-                delta + (new_delta - delta).signum()
+                delta.wrapping_add(new_delta.wrapping_sub(delta).signum())
             }
         };
         self.delta = Some(delta);
@@ -274,7 +302,7 @@ impl ServerClock {
 
     /// The time a cmd built now carries, held within 5 s of the snapshot.
     pub fn cmd_time(&self, snap: i32) -> i32 {
-        self.server_time.min(snap + MAX_CMD_AHEAD)
+        self.server_time.min(snap.wrapping_add(MAX_CMD_AHEAD))
     }
 
     /// `cl.serverTimeDelta`, for the overlay.
@@ -287,12 +315,56 @@ impl ServerClock {
 mod tests {
     use super::*;
 
+    /// A snapshot clock at the ends of an i32 wraps as retail's does: no
+    /// frame or adjust overflows, for CoD1, CoD2 and CoD4 (BUG-119).
+    #[test]
+    fn a_snapshot_time_at_the_i32_edges_does_not_overflow() {
+        for mut c in [
+            ServerClock::default(),
+            ServerClock::cod2(),
+            ServerClock::cod4(),
+        ] {
+            let mut n = 0;
+            for (rt, snap) in [
+                (0, i32::MIN),
+                (10, i32::MAX),
+                (20, i32::MIN),
+                (30, i32::MAX - 2),
+            ] {
+                n += 1;
+                c.update(rt, snap, n, 0);
+                let _ = c.cmd_time(snap);
+            }
+            let _ = c.time_at(40, 0, DemoClock::default());
+        }
+    }
+
     #[test]
     fn first_snapshot_pegs_the_delta() {
         let mut c = ServerClock::default();
         assert_eq!(c.frame(1000, 50_000, true, 0), 50_000);
         assert_eq!(c.delta(), Some(49_000));
         assert_eq!(c.frame(1016, 50_000, false, 0), 50_016);
+    }
+
+    #[test]
+    fn a_map_restart_repegs_the_delta_after_the_frame() {
+        let mut c = ServerClock::default();
+        c.frame(1000, 50_000, true, 0);
+        // settled 30 ms behind the newest snapshot
+        c.delta = Some(48_970);
+        c.map_restart();
+        // this frame's time and adjust stand; the delta re-pegs after them
+        assert_eq!(c.frame(1100, 50_100, true, 0), 50_070);
+        assert_eq!(c.delta(), Some(49_000));
+        assert_eq!(c.frame(1116, 50_100, false, 0), 50_116);
+        // once only
+        assert_eq!(c.frame(1132, 50_150, true, 0), 50_132);
+        assert_eq!(
+            c.delta(),
+            Some(48_998),
+            "an extrapolated frame steps back 2"
+        );
     }
 
     #[test]

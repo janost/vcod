@@ -106,7 +106,7 @@ Vehicles:
 - Battle rank matches retail from rank 1 to 5: promotions and demotions,
   status and head icons, the HUD rank icon, each rank's ammo, grenades,
   satchel and binoculars, rank 5's artillery round, and the reset at a map
-  end (coduo-diff.md 22, "Battle rank").
+  end (coduo-diff.md 22.3, "Battle rank").
 - `sv_wwwDownload` redirects again after a failed www transfer, as UO's
   server does.
 

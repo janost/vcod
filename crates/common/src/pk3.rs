@@ -274,16 +274,32 @@ fn archives_in(dir: &Path, kind: ArchiveKind) -> Result<Vec<PathBuf>> {
 /// highest priority first: each directory's archives (`localized_*`
 /// aside), then its loose file; then every directory's `localized_*`
 /// archives. CoD4 1.7's `path` lists a home path's iwds, its directory,
-/// then the base path's (docs/research/cod4-handshake.md 14.1).
+/// then the base path's (docs/research/cod4-handshake.md 14.1). A loose
+/// file is read only when `name` stays under its directory; an archive
+/// member that inflates past `MAX_ENTRY_BYTES` reads as missing.
 pub fn read_search(dirs: &[PathBuf], kind: ArchiveKind, name: &str) -> Option<Vec<u8>> {
+    read_search_limited(dirs, kind, name, MAX_ENTRY_BYTES)
+}
+
+fn read_search_limited(
+    dirs: &[PathBuf],
+    kind: ArchiveKind,
+    name: &str,
+    limit: u64,
+) -> Option<Vec<u8>> {
     let key = path_key(name);
+    let loose = crate::game_dir::confined_rel_path(name);
     let member = |pak: &Path| -> Option<Vec<u8>> {
         let mut zip = zip::ZipArchive::new(std::fs::File::open(pak).ok()?).ok()?;
-        let entry = zip.file_names().find(|n| path_key(n) == key)?.to_string();
-        let mut f = zip.by_name(&entry).ok()?;
+        let entry = zip
+            .file_names()
+            .flatten()
+            .find(|n| path_key(n) == key)?
+            .into_owned();
+        let f = zip.by_name(&entry).ok()?;
         let mut out = Vec::new();
-        std::io::Read::read_to_end(&mut f, &mut out).ok()?;
-        Some(out)
+        f.take(limit + 1).read_to_end(&mut out).ok()?;
+        (out.len() as u64 <= limit).then_some(out)
     };
     let localized = |p: &PathBuf| {
         p.file_name().is_some_and(|n| {
@@ -301,7 +317,9 @@ pub fn read_search(dirs: &[PathBuf], kind: ArchiveKind, name: &str) -> Option<Ve
         {
             return Some(data);
         }
-        if let Ok(data) = std::fs::read(dir.join(name)) {
+        if let Some(rel) = &loose
+            && let Ok(data) = std::fs::read(dir.join(rel))
+        {
             return Some(data);
         }
     }
@@ -380,17 +398,9 @@ pub fn is_vanilla_pak(pak: &PakInfo, t: &crate::net::wire::Transport) -> bool {
 /// A stock iwd by its qualified name (`main/iw_07`): `FS_iwIwd(name,
 /// "main")`, the same test in CoD2 1.3 (lnxded 0x8065324) and CoD4 1.7
 /// (0x81286c2), `iw_00` .. `iw_24` or `localized_*` holding `_iw00` ..
-/// `_iw24` (`vcod_cod2::net::download::fs_iw_iwd`).
+/// `_iw24`.
 pub fn is_stock_iwd(qualified: &str) -> bool {
-    let name = qualified.to_ascii_lowercase().replace('\\', "/");
-    let Some(base) = name.strip_prefix("main/") else {
-        return false;
-    };
-    if (0..25).any(|n| base == format!("iw_{n:02}")) {
-        return true;
-    }
-    base.strip_prefix("localized_")
-        .is_some_and(|rest| (0..25).any(|n| rest.contains(&format!("_iw{n:02}"))))
+    crate::pak_checksum::fs_iw_iwd(qualified, "main")
 }
 
 /// `base` and what sits under it, lowest priority first: a base other than
@@ -470,7 +480,11 @@ impl Pk3Fs {
         vanilla: bool,
     ) -> Result<Self> {
         if !base.is_dir() {
-            bail!("cannot read mod dir {}", base.display());
+            bail!(
+                "cannot read mod dir {}: {}",
+                base.display(),
+                crate::game_dir::INSTALL_HINT
+            );
         }
         let mut dirs = base_dirs(base);
         if let Some(g) = game.filter(|g| g.is_dir()) {
@@ -504,7 +518,11 @@ impl Pk3Fs {
 
     fn open_iwd_dirs(base: &Path, game: Option<&Path>, stock: bool) -> Result<Self> {
         if !base.is_dir() {
-            bail!("cannot read game dir {}", base.display());
+            bail!(
+                "cannot read game dir {}: {}",
+                base.display(),
+                crate::game_dir::INSTALL_HINT
+            );
         }
         // the wavelet .iwi tables live only in the install's render DLL
         if let Some(root) = base.parent() {
@@ -519,7 +537,11 @@ impl Pk3Fs {
     /// over the last (CoD4's `usermaps/<map>/` then `fs_game`).
     pub fn open_iwd_layers(base: &Path, over: &[PathBuf]) -> Result<Self> {
         if !base.is_dir() {
-            bail!("cannot read game dir {}", base.display());
+            bail!(
+                "cannot read game dir {}: {}",
+                base.display(),
+                crate::game_dir::INSTALL_HINT
+            );
         }
         if let Some(root) = base.parent() {
             crate::iwi::load_wavelet_tables(root);
@@ -586,8 +608,8 @@ impl Pk3Fs {
                 }
             };
             let i = readable.len();
-            for name in zip.file_names() {
-                let key = path_key(name);
+            for name in zip.file_names().flatten() {
+                let key = path_key(&name);
                 if key.contains('@') {
                     alias_index.insert(key.replace('@', "_"), (i, name.to_string()));
                 }
@@ -698,7 +720,7 @@ impl Pk3Fs {
     /// The `cp` command `CL_SendPureChecksums` sends after a map load, keyed
     /// with the gamestate's `checksumFeed` (`crate::pak_checksum::pure_command`),
     /// opening with the paks of `dlls`, the protocol's client game and UI
-    /// modules (`Protocol::pure_dlls`). The general list is every referenced
+    /// modules (`Cod1Wire::pure_dlls`). The general list is every referenced
     /// pak but the `localized_*` ones.
     pub fn pure_command(&self, checksum_feed: i32, dlls: [&str; 2]) -> String {
         let dll = |name: &str| {
@@ -819,6 +841,23 @@ impl Pk3Fs {
         Some(buf)
     }
 
+    /// `path`'s size and the CRC-32 its archive's central directory keeps
+    /// for its bytes, `size << 32 | crc`, read without inflating it; `None`
+    /// for an overlaid or missing entry.
+    pub fn entry_checksum(&self, path: &str) -> Option<u64> {
+        let key = path_key(path);
+        if self.overlay.contains_key(&key) {
+            return None;
+        }
+        let (ai, entry) = self
+            .index
+            .get(&key)
+            .or_else(|| self.alias_index.get(&key))?;
+        let mut zip = self.archive(*ai)?;
+        let f = zip.by_name(entry).ok()?;
+        Some(f.size() << 32 | u64::from(f.crc32()))
+    }
+
     /// Archive `ai` off the open cache, its central directory parsed once
     /// per `Pk3Fs`. A poisoned lock still holds a usable cache; `by_name`
     /// re-seeks from the central directory.
@@ -876,7 +915,7 @@ impl Pk3Fs {
                 continue;
             };
             for i in 0..zip.len() {
-                let Some(name) = zip.name_for_index(i) else {
+                let Some(Ok(name)) = zip.name_for_index(i) else {
                     continue;
                 };
                 let Some(rest) = name
@@ -963,6 +1002,11 @@ impl Pk3Fs {
         }
         None
     }
+
+    /// [`Self::entry_checksum`] of the map [`Self::resolve_map`] finds.
+    pub fn map_checksum(&self, name: &str) -> Option<u64> {
+        self.entry_checksum(&self.resolve_map(name)?)
+    }
 }
 
 impl Pk3Fs {
@@ -1043,6 +1087,37 @@ mod tests {
         assert_eq!(read("b.cfg").as_deref(), Some("base iwd"));
         assert_eq!(read("c.cfg").as_deref(), Some("base loose"));
         assert_eq!(read("nothere.cfg"), None);
+    }
+
+    /// A loose read stays under each directory: `..` and an absolute name
+    /// find nothing beside or above it.
+    #[test]
+    fn read_search_reads_no_loose_file_outside_its_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home/main");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(dir.path().join("secret.cfg"), "outside").unwrap();
+        std::fs::write(home.join("ok.cfg"), "inside").unwrap();
+        let dirs = [home];
+        let read = |p: &str| read_search(&dirs, ArchiveKind::Iwd, p);
+        assert_eq!(read("ok.cfg").as_deref(), Some(&b"inside"[..]));
+        assert_eq!(read("../../secret.cfg"), None);
+        let abs = dir.path().join("secret.cfg");
+        assert_eq!(read(&abs.to_string_lossy()), None);
+    }
+
+    /// An archive member past the cap reads as missing; the stream is
+    /// bounded, not the declared size.
+    #[test]
+    fn read_search_drops_a_member_past_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("main");
+        std::fs::create_dir_all(&home).unwrap();
+        make_pk3(&home, "a.iwd", &[("big.cfg", "12345"), ("ok.cfg", "1234")]);
+        let dirs = [home];
+        let read = |p: &str| read_search_limited(&dirs, ArchiveKind::Iwd, p, 4);
+        assert_eq!(read("ok.cfg").as_deref(), Some(&b"1234"[..]));
+        assert_eq!(read("big.cfg"), None);
     }
 
     #[test]
@@ -1209,7 +1284,7 @@ mod tests {
         let uo_dlls = [("uo_cgame_mp_x86.dll", "C"), ("uo_ui_mp_x86.dll", "U")];
         make_pk3(&uo, "pakuo07.pk3", &uo_dlls);
         let fs = Pk3Fs::open(&uo).unwrap();
-        let opens = |p: &crate::net::protocol::Protocol, pak: &str| {
+        let opens = |p: &crate::net::protocol::Cod1Wire, pak: &str| {
             let sum = fs.paks().find(|i| i.name == pak).unwrap().pure_checksum(5);
             fs.pure_command(5, p.pure_dlls)
                 .starts_with(&format!("cp {sum} {sum} @"))
@@ -1407,7 +1482,7 @@ mod tests {
     }
 
     #[test]
-    fn read_stops_when_the_stream_outgrows_its_declared_size() {
+    fn read_refuses_a_stream_longer_than_its_declared_size() {
         let dir = tempfile::tempdir().unwrap();
         let body = "x".repeat(100);
         make_pk3(dir.path(), "pak0.pk3", &[("lie.txt", &body)]);
@@ -1415,7 +1490,8 @@ mod tests {
         patch_central_size(&dir.path().join("pak0.pk3"), 10);
         let fs = Pk3Fs::open(dir.path()).unwrap();
         assert!(fs.read_limited("lie.txt", 50).is_none());
-        assert_eq!(fs.read_limited("lie.txt", 100).unwrap().len(), 100);
+        // zip stops the stream one byte past the declared size, whatever our limit
+        assert!(fs.read_limited("lie.txt", 100).is_none());
     }
 
     #[test]

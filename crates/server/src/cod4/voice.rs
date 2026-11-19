@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use vcod_cod4::net::voice as wire;
 
 use super::{Cod4Server, State};
-use crate::voice::{Rules, Voicer, hears, session_of, team_of};
+use crate::voice::{Rules, Voicer, session_of, team_of};
 
 pub(super) use crate::voice::ClientVoice;
 
@@ -33,12 +33,14 @@ impl Cod4Server {
     /// `SV_VoicePacket` (0x817771f): the slot by address and qport, a
     /// zombie's ignored, `lastPacketTime` refreshed; before the world
     /// `SV_PreGameUserVoice`, in it `SV_UserVoice`, both only with
-    /// `sv_voice` on.
+    /// `sv_voice` on. vcod refreshes `lastPacketTime` only for the slot's
+    /// own port: a sender on the IP that walks the qport cannot keep a
+    /// slot alive (cod4-voice.md 1).
     pub(super) fn voice_packet(&mut self, from: SocketAddr, body: &[u8]) {
         let Some(qport) = body.get(..2).map(|q| u16::from_le_bytes([q[0], q[1]])) else {
             return;
         };
-        let Some(slot) = self.slot_of(from, qport) else {
+        let Some(slot) = crate::engine::conn::slot_of(&self.core, from, qport) else {
             return;
         };
         let svs = self.core.sv_time_ms;
@@ -46,7 +48,9 @@ impl Cod4Server {
         if c.state == State::Zombie {
             return;
         }
-        c.link.last_packet_ms = svs;
+        if c.link.addr == from {
+            c.link.last_packet_ms = svs;
+        }
         let active = c.state == State::Active;
         if self.int("sv_voice") == 0 {
             return;
@@ -61,19 +65,6 @@ impl Cod4Server {
                 self.broadcast_voice(slot, f);
             } else {
                 self.pre_game_voice(slot, f);
-            }
-        }
-    }
-
-    /// `SV_PreGameUserVoice` (0x817bc58): to every other client past
-    /// `CS_CONNECTED`'s start that has not muted the talker and wants
-    /// voice, the frames read with short lengths
-    /// ([`wire::parse_client_pregame`]).
-    fn pre_game_voice(&mut self, talker: usize, frame: &[u8]) {
-        for (n, c) in self.core.clients.iter_mut().enumerate() {
-            let Some(c) = c.as_mut() else { continue };
-            if n != talker && c.state > State::Zombie && !c.voice.muted[talker] && c.voice.send {
-                c.voice.queue(talker, frame);
             }
         }
     }
@@ -122,20 +113,7 @@ impl Cod4Server {
                 wants: c.voice.send,
             });
         }
-        let Some(t) = voicers[talker] else {
-            return;
-        };
-        for (i, l) in voicers.iter().enumerate() {
-            if let Some(l) = l
-                && hears(&rules, &t, l, i == talker)
-            {
-                self.core.clients[i]
-                    .as_mut()
-                    .unwrap()
-                    .voice
-                    .queue(talker, frame);
-            }
-        }
+        self.queue_voice(talker, frame, &rules, &voicers);
     }
 
     /// `SV_SendClientVoiceData` (0x817bab2), after the slot's message: an

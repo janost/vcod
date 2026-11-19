@@ -6,6 +6,8 @@
 //! itself (`tty_console`). Retail's reads and their addresses:
 //! cod11-server-handshake.md, "The stdin console".
 
+#![allow(unsafe_code)]
+
 use crate::engine::{Engine, GameModule};
 use std::io::BufRead;
 use std::sync::mpsc::{Receiver, Sender, SyncSender, channel};
@@ -33,6 +35,19 @@ impl StdinConsole {
         ignore_tty_signals();
         let (tx, lines) = channel();
         std::thread::spawn(move || read_lines(input, &tx));
+        StdinConsole { lines }
+    }
+
+    /// [`Self::spawn`] for a server the client started (`--quit-on-eof`):
+    /// stdin is the client's pipe, and its EOF, the client gone, runs
+    /// `quit`. vcod's own; retail has no such mode.
+    pub fn spawn_child<R: BufRead + Send + 'static>(input: R) -> Self {
+        ignore_tty_signals();
+        let (tx, lines) = channel();
+        std::thread::spawn(move || {
+            read_lines(input, &tx);
+            let _ = tx.send(Input::Line("quit".into()));
+        });
         StdinConsole { lines }
     }
 
@@ -138,6 +153,24 @@ mod tests {
                 Input::Names(_) => unreachable!("a pipe never completes"),
             })
             .collect()
+    }
+
+    /// The client's pipe closing is a `quit`, after the lines it sent.
+    #[test]
+    fn a_child_server_quits_when_its_client_pipe_closes() {
+        let (r, mut w) = std::io::pipe().unwrap();
+        let console = StdinConsole::spawn_child(std::io::BufReader::new(r));
+        w.write_all(b"status\n").unwrap();
+        drop(w);
+        let got: Vec<String> = console
+            .lines
+            .iter()
+            .map(|i| match i {
+                Input::Line(l) => l,
+                Input::Names(_) => unreachable!(),
+            })
+            .collect();
+        assert_eq!(got, ["status", "quit"]);
     }
 
     /// One command a line, CR LF or LF, blank lines dropped, a last line

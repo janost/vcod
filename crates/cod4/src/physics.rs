@@ -238,8 +238,9 @@ impl Shape {
                 let (lo, hi) = (Vec3::from(b.mins), Vec3::from(b.maxs));
                 let (c, h) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
                 sweep_half = brush_sweep_half(lo, hi);
-                // A brush no side cuts is its bounds' box.
-                let cut = (!b.planes.is_empty())
+                // A brush no side cuts is its bounds' box, as is one
+                // with more sides than corners are worth finding.
+                let cut = (!b.planes.is_empty() && b.planes.len() + 6 <= MAX_BRUSH_PLANES)
                     .then(|| brush_corners(b))
                     .filter(|cut| {
                         let at_bounds = |p: &Vec3| ((*p - c).abs() - h).abs().max_element() < 0.01;
@@ -400,6 +401,11 @@ fn brush_corners(b: &PhysBrush) -> Vec<Vec3> {
     plane_corners(&planes)
 }
 
+/// The most planes [`plane_corners`] takes: its cost is cubic to quartic
+/// in them, and the stock maps' brushes have at most 38 (6 axial and 32
+/// sides).
+const MAX_BRUSH_PLANES: usize = 64;
+
 /// Where three of `planes` (`n . p <= d` inside) meet inside all of them,
 /// each corner once.
 fn plane_corners(planes: &[(Vec3, f32)]) -> Vec<Vec3> {
@@ -445,9 +451,13 @@ pub struct Solid {
 pub type Solids<'a> = dyn FnMut(Vec3, Vec3) -> Vec<Solid> + 'a;
 
 impl Solid {
-    /// A brush of `planes`; `None` when they bound nothing.
+    /// A brush of `planes`; `None` when they bound nothing or number
+    /// past [`MAX_BRUSH_PLANES`].
     pub fn brush(planes: &[(Vec3, f32)]) -> Option<Solid> {
         const EPS: f32 = 0.01;
+        if planes.len() > MAX_BRUSH_PLANES {
+            return None;
+        }
         let verts = plane_corners(planes);
         let mut faces = Vec::new();
         for &(n, d) in planes {
@@ -1336,7 +1346,7 @@ impl Body {
             sweep_half: shape.sweep_half,
             state: 0,
             bounce: preset.bounce.min(1.0),
-            friction: preset.friction,
+            friction: vcod_common::fguard::finite(preset.friction).max(0.0),
             idle: 0.0,
             asleep: false,
             sim_ms: now,
@@ -1428,11 +1438,13 @@ impl Body {
     /// `Phys_RunFrame`'s clock (0x5a6e02): up to `time`, in at most two
     /// steps of at least `step_ms`, each at least half what is left, so
     /// the body runs up to a step ahead and [`Self::pose`] lerps.
+    #[cfg(any(test, feature = "testing"))]
     pub fn advance(&mut self, time: i32, trace: &mut Trace, d: &Dvars) {
         self.advance_in(time, trace, &mut |_, _| Vec::new(), d);
     }
 
     /// [`Self::advance`] with the body's boxes meeting `solids` as well.
+    #[cfg(any(test, feature = "testing"))]
     pub fn advance_in(&mut self, time: i32, trace: &mut Trace, solids: &mut Solids, d: &Dvars) {
         if time.wrapping_sub(self.sim_ms) <= 0 {
             return;
@@ -1528,12 +1540,14 @@ impl Body {
     /// A frame of one step of `dt` seconds: gravity, the corners' contacts
     /// solved as impulses with Coulomb friction and the preset's bounce,
     /// the move, the drag, the sleep test, then the post-step sweep.
+    #[cfg(any(test, feature = "testing"))]
     pub fn step(&mut self, dt: f32, trace: &mut Trace, d: &Dvars) {
         self.step_in(dt, trace, &mut |_, _| Vec::new(), d);
     }
 
     /// [`Self::step`] with the boxes' contacts with `solids` among the
     /// points'.
+    #[cfg(any(test, feature = "testing"))]
     pub fn step_in(&mut self, dt: f32, trace: &mut Trace, solids: &mut Solids, d: &Dvars) {
         let old = self.pos;
         self.integrate(dt, trace, solids, d);
@@ -1855,7 +1869,7 @@ impl Body {
     /// when it closes fast enough to meet the surface this step, at what
     /// closes the gap otherwise, and inside pushed out at
     /// `phys_contact_erp` up to `phys_mcv`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn contact(
         &self,
         r: Vec3,
@@ -1913,7 +1927,7 @@ impl Body {
                 for k in 0..2 {
                     let vt = vrel(self).dot(c.t[k]);
                     let cap = mu * c.lambda;
-                    let next = (c.lambda_t[k] - vt / c.k_t[k]).clamp(-cap, cap);
+                    let next = vcod_common::fguard::clamp(c.lambda_t[k] - vt / c.k_t[k], -cap, cap);
                     let dl = next - c.lambda_t[k];
                     c.lambda_t[k] = next;
                     self.impulse(r, c.t[k] * dl);
@@ -2373,6 +2387,22 @@ mod tests {
         assert!(o.distance(b.origin()) < 1e-3);
     }
 
+    /// A preset's negative, NaN or infinite friction lands a body on the
+    /// floor without a panic in the friction clamp (SEC-029).
+    #[test]
+    fn a_hostile_friction_lands_on_the_floor() {
+        let (shape, preset) = door();
+        let floor = [(Vec3::Z, 0.0)];
+        let d = Dvars::default();
+        for friction in [-1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let preset = Preset { friction, ..preset };
+            let mut trace = planes(&floor);
+            let mut b = Body::new(Vec3::Z * 30.0, Vec3::ZERO, &shape, &preset, 0);
+            b.vel = Vec3::new(100.0, 0.0, 0.0);
+            run(&mut b, 2000, &mut trace, &d);
+        }
+    }
+
     #[test]
     fn a_fast_part_into_a_corner_stays_out_of_the_world() {
         let (shape, preset) = door();
@@ -2449,6 +2479,39 @@ mod tests {
         // A 300 ms frame: two steps of 150.
         b.advance(417, &mut none, &d);
         assert_eq!((b.steps, b.sim_ms), (3, 417));
+    }
+
+    #[test]
+    fn a_brush_of_5000_sides_falls_back_at_once() {
+        // Planes in general position: every triple meets.
+        let planes: Vec<[f32; 4]> = (0..5000)
+            .map(|i| {
+                let (a, b) = (i as f32 * 0.37, i as f32 * 0.11);
+                [a.cos() * b.sin(), a.sin() * b.sin(), b.cos(), 10.0]
+            })
+            .collect();
+        let list = PhysGeomList {
+            geoms: vec![crate::assets::model::PhysGeom {
+                brush: Some(PhysBrush {
+                    mins: [-10.0; 3],
+                    maxs: [10.0; 3],
+                    planes: planes.clone(),
+                }),
+                kind: 0,
+                orientation: [[0.0; 3]; 3],
+                offset: [0.0; 3],
+                half_lengths: [0.0; 3],
+            }],
+            ..Default::default()
+        };
+        let s = Shape::of_geoms(&list).unwrap();
+        // The bounds' box: 8 corners, 12 edges, 6 faces.
+        assert_eq!(s.points.len(), 26);
+        let world: Vec<(Vec3, f32)> = planes
+            .iter()
+            .map(|p| (Vec3::new(p[0], p[1], p[2]), p[3]))
+            .collect();
+        assert!(Solid::brush(&world).is_none());
     }
 
     #[test]

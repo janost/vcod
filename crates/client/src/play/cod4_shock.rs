@@ -138,7 +138,8 @@ pub(crate) fn of_session(s: &super::cod4::Cod4Session) -> (Option<ShockParms>, i
 /// `CG_DrawDamageDirectionIndicators`): a shock still running at `now`
 /// whose record blends the screen (cod4-hud.md 19).
 pub(crate) fn flashbanged(parms: Option<&ShockParms>, start: i32, duration: i32, now: i32) -> bool {
-    start - now + duration > 0 && parms.is_some_and(|p| p.screen != ScreenType::None)
+    start.wrapping_sub(now).wrapping_add(duration) > 0
+        && parms.is_some_and(|p| p.screen != ScreenType::None)
 }
 
 /// What `cg.shellshock` carries from frame to frame.
@@ -161,12 +162,14 @@ struct Span {
 
 impl Span {
     fn elapsed(self) -> i32 {
-        self.now - self.start
+        self.now.wrapping_sub(self.start)
     }
 
     /// Ms to the shock's end (negative past it).
     fn left(self) -> i32 {
-        self.start + self.duration - self.now
+        self.start
+            .wrapping_add(self.duration)
+            .wrapping_sub(self.now)
     }
 }
 
@@ -347,6 +350,20 @@ fn look(p: &ShockParms, span: Span) -> Look {
         max_pitch: p.max_pitch_speed / share,
         max_yaw: p.max_yaw_speed / share,
     }
+}
+
+/// A snapshot's 32-bit shock time at the ends of an i32 wraps as retail's
+/// does: no overflow before the parms check or in the span (BUG-122).
+#[cfg(test)]
+#[test]
+fn shock_times_at_the_i32_edges_do_not_overflow() {
+    assert!(!flashbanged(None, i32::MIN, 100, 1000));
+    let s = Span {
+        start: i32::MIN,
+        duration: i32::MAX,
+        now: 1000,
+    };
+    let _ = (s.elapsed(), s.left());
 }
 
 #[cfg(test)]

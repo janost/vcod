@@ -738,6 +738,7 @@ fn main() -> Result<()> {
             voice: false,
             notes: None,
             stats: None,
+            stats_for: None,
         },
     )?;
 
@@ -819,7 +820,7 @@ fn main() -> Result<()> {
             let snap = conn.client.snapshots.last();
             let ps = snap.map(|s| s.ps.clone()).unwrap_or_default();
             let now_time = snap.map_or(0, |s| {
-                s.server_time + last_snap_at.elapsed().as_millis() as i32
+                (s.server_time + last_snap_at.elapsed().as_millis() as i32).raw()
             });
             let spawn_s = spawned.map(|s| s.elapsed().as_secs_f32());
             let target = snap.and_then(|s| aim_at(&s.ps, &s.entities, aim_z, corpse_z));
@@ -877,7 +878,8 @@ fn main() -> Result<()> {
                         if let Some(cp) = conn.commands().iter().position(|c| c.starts_with(b"cp "))
                         {
                             let text = String::from_utf8_lossy(&conn.commands()[cp]);
-                            eprintln!("command {}: {text}", cp + 1);
+                            let first = conn.reliable_sequence() as usize - conn.commands().len();
+                            eprintln!("command {}: {text}", first + cp + 1);
                         }
                     }
                     Op::ServerCommand { sequence, text } => {

@@ -2,7 +2,7 @@
 //! world, each client's CoD2 `playerState` and its `ClientThink`, the
 //! engine notifies only CoD2 raises, and the callback arguments CoD2 adds.
 //!
-//! [`Cod2Level`] is the game half `server.rs` will drive for a CoD2 level:
+//! [`Cod2Level`] is the game half `crate::cod2` drives for a CoD2 level:
 //! it owns the [`ScriptRuntime`] (`load_cod2_in`) and one
 //! [`vcod_cod2::pmove`] state per client, and takes the engine's calls in
 //! retail's order (connect, begin, menu responses, one `client_think` per
@@ -70,8 +70,9 @@ pub struct Cod2ClientState {
 /// behind `level_time` counts as 1000 behind, and the stored time moves
 /// only forward, or to a time at or past `level_time`. VERIFIED.
 pub fn lag_time(stored: i32, cmd_time: i32, level_time: i32) -> i32 {
-    let t = if level_time - cmd_time > 1000 {
-        level_time - 1000
+    // Retail's 32-bit arithmetic: a hostile cmd time wraps, it never traps.
+    let t = if level_time.wrapping_sub(cmd_time) > 1000 {
+        level_time.wrapping_sub(1000)
     } else {
         cmd_time
     };
@@ -80,17 +81,6 @@ pub fn lag_time(stored: i32, cmd_time: i32, level_time: i32) -> i32 {
     } else {
         stored
     }
-}
-
-/// A bullet's `timeOffset`: `G_Damage`'s tenth argument from the bullet
-/// path is `level.time` minus the shot's time (0x811fe90's caller passes
-/// `DAT_0864c56c - param_9`), and `FireWeaponAntiLag` (0x8120870) is
-/// handed the client's [`lag_time`] under `g_antilag` 1, its default
-/// (`Dvar_RegisterBool("g_antilag", 1, ..)`, 0x8111842..), else
-/// `level.time`. Every other `G_Damage` caller (melee, blasts, falls,
-/// triggers, `finishPlayerDamage`) passes 0. VERIFIED, the call sites.
-pub fn time_offset(level_time: i32, lag_time: i32, antilag: bool) -> i32 {
-    if antilag { level_time - lag_time } else { 0 }
 }
 
 /// The notify CoD2's `ClientEvents` (0x80f52da) raises on the player for a
@@ -105,6 +95,20 @@ pub fn binocular_notify(event: i32) -> Option<&'static str> {
         EV_BINOCULAR_DROP => "binocular_drop",
         _ => return None,
     })
+}
+
+/// The events and parms a cmd raised since `old`, oldest first, as
+/// `ClientEvents` (lnxded 0x80f52da) walks them: from `eventSequence - 4` at
+/// the earliest, so the 4-slot ring is never read past a lap.
+pub fn cmd_events(ps: &PlayerState, old: i32) -> Vec<(i32, i32)> {
+    (old.max(ps.event_sequence - 4)..ps.event_sequence)
+        .map(|i| {
+            (
+                ps.events[(i & 3) as usize],
+                ps.event_parms[(i & 3) as usize],
+            )
+        })
+        .collect()
 }
 
 /// A CoD2 map's server world: the engine's collision through
@@ -442,7 +446,7 @@ pub struct Cod2Level {
     pub archive: crate::game::cod2_archive::Cod2Archive,
     /// Each mantle's block entity, the level time its think frees it
     /// (lnxded 0x80f5c34) and the box other players' moves clip.
-    mantle_blocks: Vec<(vcod_gsc::EntId, i32, vcod_common::movetrace::ClipBox)>,
+    mantle_blocks: crate::game::mantle_block::MantleBlocks<vcod_common::movetrace::ClipBox>,
     /// `addTestClient`'s slots given a `Cod2Player`, each with its bot
     /// port and name, for the engine to give a client.
     test_clients: Vec<(usize, u16, String)>,
@@ -517,7 +521,7 @@ impl Cod2Level {
             let file = vcod_cod2::map::MapFile::find(&**fs, map)?;
             drop(p);
             let p = crate::tick_profile::phase("load/world");
-            let world = file.world();
+            let world = file.world_unlit();
             drop(p);
             let _p = crate::tick_profile::phase("load/clip");
             Ok((world, std::sync::Arc::new(file.clip()?)))
@@ -533,7 +537,6 @@ impl Cod2Level {
 
     /// The level over the map's parts, which the engine's collision and the
     /// combat's traces share.
-    #[allow(clippy::too_many_arguments)]
     pub fn load_level(
         fs: Rc<Pk3Fs>,
         parts: PartsSource,
@@ -555,7 +558,7 @@ impl Cod2Level {
         // The static models' collision builds beside the world and the
         // script, which don't need it.
         let pak: &Pk3Fs = &fs;
-        let (rt, statics, world, rules) = std::thread::scope(|sc| {
+        let (mut rt, statics, world, rules) = std::thread::scope(|sc| {
             // The static models' collision for the bullets (`CM_LoadStaticModels`
             // off the `misc_model` blocks); nothing else clips it.
             let statics = match &parts {
@@ -577,12 +580,16 @@ impl Cod2Level {
                 }
             };
             let p = crate::tick_profile::phase("load/collision world");
-            let world = Rc::new(level_world(&map_world, clip.clone(), parts.spots()));
+            let mut world = level_world(&map_world, clip.clone(), parts.spots());
+            world
+                .collision
+                .set_source(pak.map_checksum(map).unwrap_or(0));
+            let world = Rc::new(world);
             drop(p);
             laps.lap("collision world");
             let p = crate::tick_profile::phase("load/mantle anims");
             let rules = Rules {
-                mantle_anims: vcod_cod2::pmove::mantle::anims(&fs),
+                mantle_anims: vcod_cod2::pmove::mantle::anims(&*fs),
                 ..Rules::default()
             };
             drop(p);
@@ -646,6 +653,10 @@ impl Cod2Level {
                 })
             }
         };
+        rt.host.cod2_mut().blockers = crate::game::cod2_blast::Blockers {
+            clip: Some(clip.clone()),
+            statics: parts.statics.clone(),
+        };
         let mut combat = crate::game::cod2_combat::Combat::with_parts(
             Some(clip),
             parts.statics.clone(),
@@ -656,6 +667,7 @@ impl Cod2Level {
             combat.set_rigs(rigs);
         }
         combat.rand = rt.host.cod2().rand.clone();
+        rt.host.cod2_mut().hitloc_none = parts.hitloc_mult[0];
         let anims = parts.anims.clone();
         drop(p);
         laps.lap("combat and anims");
@@ -670,7 +682,7 @@ impl Cod2Level {
             parts,
             anims,
             archive: Default::default(),
-            mantle_blocks: Vec::new(),
+            mantle_blocks: Default::default(),
             test_clients: Vec::new(),
             level_time: now_ms,
             frametime_ms: 50,
@@ -707,7 +719,7 @@ impl Cod2Level {
         self.rt.host.cod2_mut().clients[slot] = Cod2ClientState::default();
         // `pers.connected` CON_CONNECTING (gclient+0x26c4 = 1) until
         // `ClientBegin`; the scoreboard and the chat recipients read it.
-        self.rt.host.client_roster[slot] = Some(RosterSlot {
+        self.rt.host.clients[slot].roster = Some(RosterSlot {
             connecting: true,
             ..Default::default()
         });
@@ -730,7 +742,7 @@ impl Cod2Level {
                     ..Default::default()
                 },
             ));
-            self.rt.host.client_names[slot] = name.clone();
+            self.rt.host.clients[slot].name = name.clone();
             self.combat.reset_body(slot);
             self.test_clients.push((slot, port, name));
         }
@@ -749,8 +761,7 @@ impl Cod2Level {
     /// at 0.5, forward and right each 127 at 0.33 or else -127 at 0.5,
     /// then each view angle moved `360 * G_crandom()` at 0.33. VERIFIED,
     /// the calls and the constants at 0x814b8f8. The cmd's time is 0,
-    /// which `ClientThink_real` lifts to a second behind `level.time`
-    /// (the store at 0x80f5614 VERIFIED; the cmd's clamp INFERRED, Q3's).
+    /// which [`Self::client_think`] lifts to a second behind `level.time`.
     pub fn test_client_cmd(&mut self, slot: usize) -> Option<UserCmd2> {
         let weapon = self.players.get(slot)?.as_ref()?.ws.weapon;
         if self.rt.client_archive_ms(slot) != 0 {
@@ -758,7 +769,7 @@ impl Cod2Level {
         }
         let r = |l: &Self| l.combat.g_random();
         let mut cmd = UserCmd2 {
-            server_time: self.level_time - 1000,
+            server_time: 0,
             weapon,
             ..Default::default()
         };
@@ -789,7 +800,7 @@ impl Cod2Level {
 
     /// `ClientBegin`: `pers.connected` CON_CONNECTED (2).
     pub fn begin(&mut self, slot: usize) {
-        if let Some(r) = self.rt.host.client_roster[slot].as_mut() {
+        if let Some(r) = self.rt.host.clients[slot].roster.as_mut() {
             r.connecting = false;
             r.active = true;
         }
@@ -800,14 +811,14 @@ impl Cod2Level {
     /// `numVotingClients` leaves out (`game::vote`); retail has no such
     /// clients, and its `addTestClient` ones still count.
     pub fn mark_bot(&mut self, slot: usize) {
-        if let Some(r) = self.rt.host.client_roster[slot].as_mut() {
+        if let Some(r) = self.rt.host.clients[slot].roster.as_mut() {
             r.bot = true;
         }
     }
 
     /// `cl->ping` as `SV_CalcPings` left it, which the scoreboard sends.
     pub fn set_ping(&mut self, slot: usize, ping: i32) {
-        if let Some(r) = self.rt.host.client_roster[slot].as_mut() {
+        if let Some(r) = self.rt.host.clients[slot].roster.as_mut() {
             r.ping = ping;
         }
     }
@@ -862,9 +873,16 @@ impl Cod2Level {
         // the script's lines go out ahead of the drop's `J`
         // (cod2-protocol.md 15.5).
         self.rt.client_disconnect(slot);
-        self.rt.host.client_roster[slot] = None;
+        self.rt.host.clients[slot].roster = None;
         self.rt.host.cod2_mut().clients[slot].body = None;
         self.players[slot] = None;
+        // `G_FreeEntity`'s reference sweep: no missile keeps the slot as
+        // its thrower (cod2-combat.md 2.6).
+        for m in &mut self.combat.missiles {
+            if m.owner == Some(slot) {
+                m.owner = None;
+            }
+        }
     }
 
     /// The `mr` client command.
@@ -880,6 +898,27 @@ impl Cod2Level {
     pub fn client_think(&mut self, slot: usize, cmd: &UserCmd2) {
         crate::tick_trace::step!("ClientThink slot {slot} cmd {}", cmd.server_time);
         let level_time = self.level_time;
+        // `SV_ClientThink` (0x8090dac) takes the lag time off the cmd as sent.
+        if self.players.get(slot).is_some_and(Option::is_some) {
+            let state = &mut self.rt.host.cod2_mut().clients[slot];
+            state.lag_time = lag_time(state.lag_time, cmd.server_time, level_time);
+        }
+        // `ClientThink_real` (0x80f5d2e) holds the cmd's clock within 1000 ms
+        // behind and 200 ms ahead of `level.time`, then drops a cmd no newer
+        // than `commandTime` unless the view follows another client
+        // (cod2-movement.md 21).
+        let cmd = &UserCmd2 {
+            server_time: super::hold_cmd_time(cmd.server_time, level_time),
+            ..*cmd
+        };
+        if let Some(p) = self.players.get_mut(slot).and_then(Option::as_mut)
+            && cmd.server_time - p.ps.command_time < 1
+            && p.ps.client_num == slot as u32
+        {
+            // `ClientThink` already rotated it into `pers.oldcmd`'s place.
+            p.oldcmd = *cmd;
+            return;
+        }
         // Before any arm, as each of `ClientThink_real`'s stores them (Mac
         // 0x1a3d00): a killcam's follower skips it on use.
         if let Some(p) = self.players.get_mut(slot).and_then(Option::as_mut) {
@@ -904,13 +943,11 @@ impl Cod2Level {
             return;
         }
         self.combat.sync_weapons(&self.rt.host);
-        let blocks: Vec<_> = self.mantle_blocks.iter().map(|b| b.2).collect();
+        let blocks: Vec<_> = self.mantle_blocks.boxes().collect();
         let bodies = self.move_bodies();
         let Some(p) = self.players.get_mut(slot).and_then(Option::as_mut) else {
             return;
         };
-        let state = &mut self.rt.host.cod2_mut().clients[slot];
-        state.lag_time = lag_time(state.lag_time, cmd.server_time, level_time);
         let seq = p.ps.event_sequence;
         sync_weapons_in(&self.rt.host, slot, &mut p.ws);
         let defs = &self.combat.weapons;
@@ -1000,7 +1037,8 @@ impl Cod2Level {
             p.ps.weapon_state = p.ws.state;
         }
         sync_weapons_out(&mut self.rt.host, slot, &p.ws);
-        let fired = (seq..p.ps.event_sequence).map(|i| p.ps.events[(i & 3) as usize]);
+        let events = cmd_events(&p.ps, seq);
+        let fired = events.iter().map(|&(e, _)| e);
         self.combat.fire_recoil(&mut p.aim, &p.ps, &p.ws, fired);
         if let Some((end, duration)) = mantle {
             let (mins, maxs) = (p.ps.mins, p.ps.maxs);
@@ -1017,14 +1055,6 @@ impl Cod2Level {
         state.body = playing.then(|| crate::game::cod2_blast::BlastBody::of(ps));
         let origin = ps.origin.to_array();
         let eye = [origin[0], origin[1], origin[2] + ps.view_height_current];
-        let events: Vec<(i32, i32)> = (seq..ps.event_sequence)
-            .map(|i| {
-                (
-                    ps.events[(i & 3) as usize],
-                    ps.event_parms[(i & 3) as usize],
-                )
-            })
-            .collect();
         let aim = [ps.view_angles[0], ps.view_angles[1]];
         self.rt.set_client_pm_type(slot, pm);
         self.rt.set_client_on_ground(slot, on_ground);
@@ -1109,7 +1139,7 @@ impl Cod2Level {
         self.install_test_clients();
         crate::tick_trace::step!("G_RunFrame entities");
         _p = crate::tick_profile::phase("frame/mantle and weapons");
-        self.run_mantle_blocks();
+        self.mantle_blocks.run(&mut self.rt, self.level_time);
         crate::game::builtins::cod2::write_weapon_configstrings(&mut self.rt.host);
         self.combat.sync_weapons(&self.rt.host);
         _p = crate::tick_profile::phase("frame/missiles");
@@ -1119,6 +1149,11 @@ impl Cod2Level {
         _p = crate::tick_profile::phase("frame/spawns");
         for s in self.rt.take_client_spawns() {
             crate::tick_trace::step!("ClientSpawn slot {}", s.slot);
+            // `ClientSpawn` lets a manned gun go before it places the body,
+            // so the release's teleport lands under the spawn's.
+            if let Some(id) = self.manned_gun(s.slot) {
+                self.stop_using_turret(id);
+            }
             let Some(p) = self.players.get_mut(s.slot).and_then(Option::as_mut) else {
                 continue;
             };
@@ -1241,8 +1276,10 @@ impl Cod2Level {
         self.apply_sim_ops();
         self.apply_link_ops();
         // The ammo arrays the weapon builtins write are the host's own
-        // (`GameHost::client_ammo`), which the playerstate is built from.
+        // (`HostClient::ammo`), which the playerstate is built from.
         self.rt.take_weapon_ops();
+        // CoD1's bots hear the blasts off this list; CoD2's read the level.
+        self.rt.take_blast_noises();
         _p = crate::tick_profile::phase("frame/end frames");
         self.end_frame();
         crate::tick_trace::step!("identify_clients");
@@ -1271,42 +1308,16 @@ impl Cod2Level {
         duration: i32,
         now: i32,
     ) {
-        let buffer = self
-            .rt
-            .host
-            .cvars
-            .get("g_mantleBlockTimeBuffer")
-            .trim()
-            .parse::<i32>()
-            .unwrap_or(500)
-            .clamp(0, 60000);
-        let id = self.rt.with_host(|h, cx| h.ents.spawn(cx));
-        match id {
-            Ok(id) => {
-                let block = vcod_common::movetrace::ClipBox {
-                    entity: id.0,
+        self.mantle_blocks
+            .spawn(&mut self.rt, now, duration, |entity| {
+                vcod_common::movetrace::ClipBox {
+                    entity,
                     owner: slot as u32,
                     mins: end + mins,
                     maxs: end + maxs,
                     contents: 0x10000,
-                };
-                self.mantle_blocks
-                    .push((id, duration + now + buffer, block));
-            }
-            Err(e) => log::warn!("mantle block dropped: {e:?}"),
-        }
-    }
-
-    /// The mantle blocks whose think is due, freed (`G_FreeEntity`).
-    fn run_mantle_blocks(&mut self) {
-        let now = self.level_time;
-        let (due, kept) = std::mem::take(&mut self.mantle_blocks)
-            .into_iter()
-            .partition(|&(_, at, _)| at <= now);
-        self.mantle_blocks = kept;
-        for (id, _, _) in due {
-            self.rt.host.free_entity(id);
-        }
+                }
+            });
     }
 
     /// A player's `linkTo` and `unlink` onto its playerstate: `pm_type` 1
@@ -1390,14 +1401,14 @@ impl Cod2Level {
     /// `StuckInClient`'s CoD2 form (lnxded 0x80f6e9e) for `slot`: both
     /// players of the first overlapping pair take the push as their x/y
     /// velocity, `pm_time` 300 and `pm_flags` 0x200; `slot` turns to
-    /// contents 0x4000000.
-    fn stuck_in_client(&mut self, slot: usize, eject: f32) {
+    /// contents 0x4000000. `sessions` is each slot's `sessionstate`.
+    fn stuck_in_client(&mut self, slot: usize, eject: f32, sessions: &[Option<String>]) {
         use crate::game::stuck::{Cod2StuckView, stuck_in_client_cod2};
         let views: Vec<Option<Cod2StuckView>> = (0..self.players.len())
             .map(|i| {
                 let p = self.players[i].as_ref()?;
-                let playing = p.ps.pm_flags & PMF_PLAYING != 0
-                    && self.rt.client_field(i, "sessionstate").as_deref() == Some("playing");
+                let playing =
+                    p.ps.pm_flags & PMF_PLAYING != 0 && sessions[i].as_deref() == Some("playing");
                 let (mins, maxs) = p.ps.stance_box();
                 Some(Cod2StuckView {
                     playing,
@@ -1451,6 +1462,14 @@ impl Cod2Level {
         let eject = cvar("g_playerCollisionEjectSpeed", 25) as f32;
         let now = self.level_time;
         let mut spectators = Vec::new();
+        // Each client's session, read once: nothing in the end frame writes
+        // one, and every slot's push test reads them all.
+        let sessions: Vec<Option<String>> = (0..self.players.len())
+            .map(|i| {
+                self.players[i].as_ref()?;
+                self.rt.client_field(i, "sessionstate")
+            })
+            .collect();
         for slot in 0..self.players.len() {
             if self.players[slot].is_none() {
                 continue;
@@ -1461,7 +1480,7 @@ impl Cod2Level {
             // the first snapshot whose client state names one
             // (cod2-player-anims.md 1).
             self.rt.client_attachments(slot);
-            let session = self.rt.client_field(slot, "sessionstate");
+            let session = sessions[slot].clone();
             // `ClientEndFrame` (Mac 0x1a47a8) takes its arm off the
             // session: a playerstate still holding last frame's follow
             // copy (`clientNum` not the client's) whose session left
@@ -1551,7 +1570,7 @@ impl Cod2Level {
             // another is pushed off it and drops to 0x4000000 for the
             // frame (lnxded 0x80f78dc; cod2-turrets.md 14.2).
             if self.rt.client_vitals(slot).health > 0 {
-                self.stuck_in_client(slot, eject);
+                self.stuck_in_client(slot, eject, &sessions);
             }
         }
         let p = crate::tick_profile::phase("end frames/spectators and turrets");
@@ -1603,6 +1622,9 @@ impl Cod2Level {
                 None => return,
             },
         };
+        if let Some(id) = self.manned_gun(slot) {
+            self.stop_using_turret(id);
+        }
         let now = self.level_time;
         let p = self.players[slot].as_mut().unwrap();
         p.spectator_client = -1;
@@ -1641,8 +1663,8 @@ impl Cod2Level {
         self.rt.engine_client_spawn(slot, origin.to_array(), yaw);
     }
 
-    /// Whether `slot` is a client playing in the world (not a spectator or
-    /// at the intermission).
+    /// Whether `slot` is a client playing in the world: not a spectator, at
+    /// the intermission or dead (`pm_type` below `SPECTATOR`).
     pub fn playing(&self, slot: usize) -> bool {
         self.players
             .get(slot)
@@ -1673,9 +1695,6 @@ impl Cod2Level {
         self.rt.host.save_persist
     }
 
-    /// What the next level keeps of this one: `game[]` and every `pers[]`
-    /// under `savePersist`, and on a restart of the same map the compiled
-    /// closures (`restart`).
     /// The hit rigs for the next level over `fs` ([`Cod2Init::rigs`]),
     /// when it is this level's.
     pub fn carried_rigs(
@@ -1692,6 +1711,9 @@ impl Cod2Level {
         self.parts.clone()
     }
 
+    /// What the next level keeps of this one: `game[]` and every `pers[]`
+    /// under `savePersist`, and on a restart of the same map the compiled
+    /// closures (`restart`).
     pub fn take_carry(&self, restart: bool) -> crate::game::script::Carry {
         let all = self.rt.take_carry();
         let keep = self.save_persist();
@@ -1759,11 +1781,15 @@ fn damage_feedback(p: &mut Cod2Player, max_health: i32, level_time: i32) {
 /// weapons, the weapon in hand, the offhand, the rounds. They are the
 /// truth between cmds, which the weapon builtins write.
 fn sync_weapons_in(host: &GameHost, slot: usize, ws: &mut vcod_cod2::pmove::weapon::WeaponState) {
-    let w = host.client_weapons.get(slot).copied().unwrap_or_default();
+    let w = host
+        .clients
+        .get(slot)
+        .map(|c| c.weapons)
+        .unwrap_or_default();
     ws.held = u128::from(w.held);
     ws.weapon = w.current;
     ws.offhand = host.cod2().clients[slot].offhand;
-    if let Some(a) = host.client_ammo.get(slot) {
+    if let Some(a) = host.clients.get(slot).map(|c| &c.ammo) {
         for i in 0..a.ammo.len() {
             ws.ammo[i] = i32::from(a.ammo[i]);
             ws.clip[i] = i32::from(a.clip[i]);
@@ -1773,12 +1799,12 @@ fn sync_weapons_in(host: &GameHost, slot: usize, ws: &mut vcod_cod2::pmove::weap
 
 /// The weapon state's cmd back into the script's tables.
 fn sync_weapons_out(host: &mut GameHost, slot: usize, ws: &vcod_cod2::pmove::weapon::WeaponState) {
-    if let Some(w) = host.client_weapons.get_mut(slot) {
+    if let Some(w) = host.clients.get_mut(slot).map(|c| &mut c.weapons) {
         w.current = ws.weapon;
         w.held &= ws.held as u64;
     }
     host.cod2_mut().clients[slot].offhand = ws.offhand;
-    if let Some(a) = host.client_ammo.get_mut(slot) {
+    if let Some(a) = host.clients.get_mut(slot).map(|c| &mut c.ammo) {
         for i in 0..a.ammo.len() {
             a.ammo[i] = ws.ammo[i].clamp(i16::MIN.into(), i16::MAX.into()) as i16;
             a.clip[i] = ws.clip[i].clamp(i16::MIN.into(), i16::MAX.into()) as i16;
@@ -1881,14 +1907,29 @@ mod tests {
         assert_eq!(body.events[2], ev::EV_FIRE_WEAPON);
     }
 
+    /// Six events in one cmd: the ring holds the newest four once each, and
+    /// `ClientEvents` handles each of those once, not the two oldest twice.
+    #[test]
+    fn a_cmd_s_event_walk_stops_at_the_ring_s_four() {
+        let mut ps = PlayerState::default();
+        let old = ps.event_sequence;
+        for parm in 1..=6 {
+            ps.add_event(100 + parm, parm);
+        }
+        assert_eq!(
+            cmd_events(&ps, old),
+            vec![(103, 3), (104, 4), (105, 5), (106, 6)]
+        );
+        assert_eq!(cmd_events(&ps, old + 5), vec![(106, 6)]);
+    }
+
     #[test]
     fn the_lag_time_moves_forward_and_trails_by_a_second_at_most() {
         assert_eq!(lag_time(0, 950, 1000), 950);
         assert_eq!(lag_time(950, 900, 1000), 950);
         assert_eq!(lag_time(950, 1000, 1000), 1000);
         assert_eq!(lag_time(950, 100, 5000), 4000);
-        assert_eq!(time_offset(1000, 950, true), 50);
-        assert_eq!(time_offset(1000, 950, false), 0);
+        assert_eq!(lag_time(950, i32::MIN, 1000), 950);
     }
 
     /// `script_struct` blocks become `level.struct` entries in lump order,
@@ -2018,9 +2059,78 @@ mod tests {
             blocked.length() < 31.0 && blocked.length() > 25.0,
             "stopped at the block: {blocked}"
         );
-        level.mantle_blocks[0].2.owner = 0;
+        level.mantle_blocks.list[0].2.owner = 0;
         let own = strafe(&mut level);
         assert!((own - free).length() < 1.0, "{own} vs {free}");
+    }
+
+    /// `ClientThink_real` holds a cmd's clock to 200 ms past `level.time`:
+    /// 32 cmds a frame stamped a second apart from a second ahead run no
+    /// farther than an honest walk plus those 200 ms. Needs `COD2_DIR`.
+    #[test]
+    fn cmds_stamped_ahead_run_no_further_than_level_time_allows() {
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let gsc = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../cod2/tests/fixtures/moves/probe_moves.gsc"
+        ))
+        .unwrap();
+        let mut cvars = crate::cvars::Cvars::new();
+        for (k, v) in [
+            ("probe_x", "-299"),
+            ("probe_y", "997"),
+            ("probe_z", "43"),
+            ("probe_yaw", "90"),
+        ] {
+            cvars.set(k, v);
+        }
+        let script = ("maps/mp/gametypes/probe_moves".to_string(), gsc);
+        let mut level =
+            Cod2Level::load_with_script(Rc::new(fs), "mp_toujane", "probe_moves", script, cvars, 0)
+                .unwrap();
+        level.connect(0, "runner");
+        let mut now = 0;
+        let mut frame = |level: &mut Cod2Level, times: &dyn Fn(i32) -> Vec<i32>, walk: bool| {
+            for server_time in times(now) {
+                let cmd = UserCmd2 {
+                    server_time,
+                    forward_move: if walk { 127 } else { 0 },
+                    ..Default::default()
+                };
+                level.client_think(0, &cmd);
+            }
+            now += 50;
+            level.run_frame(now);
+        };
+        let honest = |now: i32| (1..=4).map(|k| now + 12 * k).collect();
+        let ahead = |now: i32| (1..=32).map(|k| now + 1000 * k).collect();
+        frame(&mut level, &honest, false);
+        level.begin(0);
+        for _ in 0..20 {
+            frame(&mut level, &honest, false);
+        }
+        let start = level.players[0].as_ref().unwrap().ps.clone();
+        assert_eq!(start.pm_type, pm_type::NORMAL);
+        let mut run = |level: &mut Cod2Level, times: &dyn Fn(i32) -> Vec<i32>| {
+            let at = level.level_time;
+            let p = level.players[0].as_mut().unwrap();
+            p.ps = start.clone();
+            p.ps.command_time = at;
+            for _ in 0..20 {
+                frame(level, times, true);
+                let ps = &level.players[0].as_ref().unwrap().ps;
+                assert!(ps.command_time <= level.level_time + 200);
+            }
+            let ps = &level.players[0].as_ref().unwrap().ps;
+            (ps.origin - start.origin).truncate().length()
+        };
+        let walked = run(&mut level, &honest);
+        let flood = run(&mut level, &ahead);
+        assert!(walked > 100.0, "the walk is clear: {walked}");
+        let allowed = walked + start.speed as f32 * 0.25;
+        assert!(flood <= allowed, "flood {flood}, walk {walked}");
     }
 
     /// A blow latched while dead (`P_DamageFeedback` skips `pm_type` 6)
@@ -2064,5 +2174,47 @@ mod tests {
         assert_eq!(binocular_notify(168), Some("binocular_enter"));
         assert_eq!(binocular_notify(172), Some("binocular_drop"));
         assert_eq!(binocular_notify(173), None);
+    }
+
+    /// A grenade whose thrower left goes off with no thrower, even after
+    /// another client took his slot (`G_FreeEntity`'s sweep, lnxded
+    /// 0x811eb3e). Needs `COD2_DIR`.
+    #[test]
+    fn a_thrower_who_left_is_not_his_successor() {
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let gsc = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../cod2/tests/fixtures/moves/probe_moves.gsc"
+        ))
+        .unwrap();
+        let script = ("maps/mp/gametypes/probe_moves".to_string(), gsc);
+        let mut level = Cod2Level::load_with_script(
+            Rc::new(fs),
+            "mp_toujane",
+            "probe_moves",
+            script,
+            crate::cvars::Cvars::new(),
+            0,
+        )
+        .unwrap();
+        level.connect(0, "thrower");
+        level.connect(1, "bystander");
+        let at = Vec3::new(0.0, 1000.0, 100.0);
+        let mine = level
+            .fire_grenade(Some(0), 1, at, Vec3::ZERO, 3000)
+            .unwrap();
+        let theirs = level
+            .fire_grenade(Some(1), 1, at, Vec3::ZERO, 3000)
+            .unwrap();
+        level.disconnect(0);
+        level.connect(0, "successor");
+        assert_eq!(level.combat.missiles[mine].owner, None);
+        assert_eq!(level.combat.missiles[theirs].owner, Some(1));
+        // Nothing reads the blast list on CoD2: a frame drops it.
+        level.rt.host.blast_noises.push(([0.0; 3], None));
+        level.run_frame(50);
+        assert!(level.rt.host.blast_noises.is_empty());
     }
 }

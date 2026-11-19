@@ -12,6 +12,7 @@ use vcod_cod2::net::oob::{self, Reply};
 use vcod_cod2::net::{Client, EntityState2, EntityView, NetView, SnapshotView};
 use vcod_cod2::trajectory::TR_LINEAR_STOP;
 use vcod_cod2::trajectory::{TR_INTERPOLATE, TR_LINEAR, TR_STATIONARY};
+use vcod_common::net::Msec;
 
 const FIXTURE: &[u8] = include_bytes!("fixtures/mp_toujane-spectate.bin");
 
@@ -86,14 +87,14 @@ fn retail_session_through_the_snapshot_view() {
 
     // Half way between the two snapshots, the walking body and the eye sit
     // half way between their two states.
-    let f = view.frame(prev.server_time + 25).unwrap();
+    let f = view.frame((prev.server_time + 25).raw()).unwrap();
     assert_eq!(f.frac, 0.5);
     let (a, b) = (prev.entity(0).unwrap(), snap.entity(0).unwrap());
     let mid = f.entity_origin(b);
     for i in 0..3 {
         let (pa, pb) = (
-            a.pos.evaluate(prev.server_time),
-            b.pos.evaluate(snap.server_time),
+            a.pos.evaluate_f32(prev.server_time.raw()),
+            b.pos.evaluate_f32(snap.server_time.raw()),
         );
         assert!((mid[i] - (pa[i] + pb[i]) * 0.5).abs() < 1e-3);
     }
@@ -101,11 +102,11 @@ fn retail_session_through_the_snapshot_view() {
     assert!((eye[2] - (prev.ps.eye()[2] + snap.ps.eye()[2]) * 0.5).abs() < 1e-3);
     // Past the newest snapshot the view holds it: nothing to lerp to, the
     // time runs on (`CG_ProcessSnapshots`, `CG_SetFrameInterpolation`).
-    let f = view.frame(snap.server_time + 500).unwrap();
+    let f = view.frame((snap.server_time + 500).raw()).unwrap();
     assert_eq!((f.frac, f.prev.is_none()), (0.0, true));
     assert_eq!(
         (f.snap.message_num, f.time_ms),
-        (snap.message_num, snap.server_time + 500)
+        (snap.message_num, (snap.server_time + 500).raw())
     );
 }
 
@@ -125,7 +126,7 @@ fn ent(number: u32, tr_type: i32, at: [f32; 3]) -> EntityState2 {
 /// The capture's newest snapshot holding `entities` at `server_time`.
 fn snap(base: &SnapshotView, server_time: i32, entities: &[EntityState2]) -> SnapshotView {
     let mut s = base.clone();
-    s.server_time = server_time;
+    s.server_time = Msec::from_raw(server_time);
     s.message_num = server_time / 50;
     s.entities = entities.iter().map(EntityView::new).collect();
     s.entities.sort_by_key(|e| e.number);

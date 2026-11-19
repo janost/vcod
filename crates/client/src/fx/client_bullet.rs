@@ -88,7 +88,7 @@ impl Default for ClientBullets {
 
 /// `AngleSubtract` (0x3004bd70): `a - b` into (-180, 180].
 fn angle_sub(a: f32, b: f32) -> f32 {
-    let mut d = a - b;
+    let mut d = vcod_common::fguard::turns(a - b);
     while d > 180.0 {
         d -= 360.0;
     }
@@ -133,7 +133,6 @@ impl ClientBullets {
     /// The coaxial gun's `tag_altfire` aims off `view`: toward where the
     /// view's line meets the world, turned at most [`ALTFIRE_TURN`] off the
     /// tag (0x30045638..0x30045806).
-    #[allow(clippy::too_many_arguments)]
     pub fn fire(
         &mut self,
         frame: u32,
@@ -497,7 +496,7 @@ mod tests {
             "net/snapshots-uo-tank.bin",
         );
         let s = &frames.last().unwrap().snapshot;
-        SnapshotMovers::from_entities(p, &s.entities).place(&world, s.server_time);
+        SnapshotMovers::from_entities(p, &s.entities).place(&world, s.server_time.raw());
         let tanks: Vec<_> = s
             .entities
             .iter()

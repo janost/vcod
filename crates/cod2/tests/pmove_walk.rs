@@ -120,3 +120,80 @@ fn a_body_walks_mp_toujane_from_every_spawn() {
         "{grounded} of {n} spawns ended on the ground"
     );
 }
+
+/// What a prone client flicking its view costs (cod2-movement.md 10):
+/// from every mp_toujane spawn a body crawls into whatever is ahead, then
+/// sends 32 cmds whose yaw swings 180 degrees each, a cmd a millisecond,
+/// one packet's worth. Prints the slowest packet. A measurement, not a
+/// gate: `--ignored --nocapture`.
+#[test]
+#[ignore = "a measurement"]
+fn a_prone_view_flick_costs() {
+    let Some(fs) = testing::cod2_fs() else {
+        return;
+    };
+    let data = fs.read("maps/mp/mp_toujane.d3dbsp").expect("mp_toujane");
+    let map = vcod_cod2::world::from_bytes(&data).unwrap();
+    let col = CollisionWorld::build(&map, &[]);
+    col.set_arith(Arith::Stored);
+    let world = || MoveWorld::bare(&col);
+    let short = |deg: f32| (deg * 65536.0 / 360.0) as i32 & 0xffff;
+    let (mut worst, mut total, mut packets) = (std::time::Duration::ZERO, 0.0, 0);
+    let (mut still_worst, mut still_total) = (std::time::Duration::ZERO, 0.0);
+    for (spot, yaw) in spawns(&map.entities) {
+        let mut ps = PlayerState::spawn(spot + Vec3::Z * 0.125, yaw, 1000);
+        ps.delta_angles[1] = short(yaw);
+        let mut old = UserCmd2 {
+            server_time: 1000,
+            ..Default::default()
+        };
+        let cmd = |ps: &PlayerState, dt: i32, forward: i8, turn: f32| UserCmd2 {
+            server_time: ps.command_time + dt,
+            buttons: button::PRONE,
+            forward_move: forward,
+            angles: [0, short(turn), 0],
+            ..Default::default()
+        };
+        for forward in [0, 127] {
+            for _ in 0..200 {
+                let c = cmd(&ps, 50, forward, 0.0);
+                pmove::player_step(&mut ps, &c, &mut old, world(), Rules::default(), 1.0);
+            }
+        }
+        let t0 = std::time::Instant::now();
+        for _ in 0..32 {
+            let c = cmd(&ps, 1, 0, 0.0);
+            pmove::player_step(&mut ps, &c, &mut old, world(), Rules::default(), 1.0);
+        }
+        still_worst = still_worst.max(t0.elapsed());
+        still_total += t0.elapsed().as_secs_f64();
+        for round in 0..4 {
+            let t0 = std::time::Instant::now();
+            for i in 0..32 {
+                let c = cmd(
+                    &ps,
+                    1,
+                    0,
+                    if (round * 32 + i) % 2 == 0 {
+                        180.0
+                    } else {
+                        0.0
+                    },
+                );
+                pmove::player_step(&mut ps, &c, &mut old, world(), Rules::default(), 1.0);
+            }
+            let dt = t0.elapsed();
+            worst = worst.max(dt);
+            total += dt.as_secs_f64();
+            packets += 1;
+        }
+    }
+    eprintln!(
+        "mp_toujane: {packets} flick packets, mean {:.2} ms, worst {:.2} ms; \
+         still: mean {:.2} ms, worst {:.2} ms",
+        total * 1e3 / f64::from(packets),
+        worst.as_secs_f64() * 1e3,
+        still_total * 4e3 / f64::from(packets),
+        still_worst.as_secs_f64() * 1e3
+    );
+}

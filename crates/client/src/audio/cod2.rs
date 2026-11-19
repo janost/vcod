@@ -153,7 +153,7 @@ fn tokens(text: &str) -> Vec<String> {
 
 /// C's `atof` over the forms the stock files use: the longest leading
 /// number, 0 without one.
-fn atof(s: &str) -> f32 {
+pub(crate) fn atof(s: &str) -> f32 {
     let s = s.trim_start();
     (1..=s.len())
         .rev()
@@ -474,6 +474,7 @@ fn parse_row(cells: &[String], cols: &[usize], source: &str, ctx: &Ctx) -> Row {
         secondary,
         start_delay_ms,
         csv: source.to_string(),
+        order: 0,
         subtitle,
         no_wet,
     })

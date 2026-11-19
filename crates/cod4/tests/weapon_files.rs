@@ -1,7 +1,7 @@
 //! Every stock `weapons/mp/*` file of the install's iwds read through the
 //! 1.7 loader's field table (`vcod_cod4::weapon_file`) against the
 //! `common_mp` zone's compiled weapon of the same name: every number,
-//! string, sound alias and model the struct carries must match, which
+//! string, sound alias, model and material the struct carries must match, which
 //! proves the table, the name tables and the post-load steps. A
 //! millisecond field (type 7) is computed both ways off the file's
 //! seconds: the zone must hold the compiler's product truncated unstored,
@@ -135,6 +135,16 @@ fn stock_weapon_files_read_as_the_zone_compiled_them() {
         for (k, id) in &w.models {
             let z = a.xmodels[id.index()].name.trim_start_matches(',');
             if !t.models.get(k).is_some_and(|f| f.eq_ignore_ascii_case(z)) {
+                misses.entry((*k).into()).or_default().push(w.name.clone());
+            }
+        }
+        for (k, id) in &w.materials {
+            let z = vcod_cod4::map::stub_name(&a.materials[id.index()].name);
+            if !t
+                .materials
+                .get(k)
+                .is_some_and(|f| f.eq_ignore_ascii_case(z))
+            {
                 misses.entry((*k).into()).or_default().push(w.name.clone());
             }
         }

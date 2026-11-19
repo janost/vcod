@@ -140,7 +140,7 @@ per-frame origins. A two-second move is two snapshot updates, one at each end.
 |---|---|---|---|
 | `moveto`/`movex`/`movey`/`movez`, no ramps | `pos` | `trType` 3 (`TR_LINEAR_STOP`), `trTime` = call time, `trDuration` = ms, `trBase` = start, `trDelta` = velocity u/s | `trType` 0, `trBase` = end, `trTime` = completion time; `trDelta`, `trDuration` stale |
 | the same with ramps | `pos` | one trajectory per segment: `trType` 9 (`TR_ACCELERATE`) for `ta` ms, 3 for the cruise, 10 (`TR_DECCELERATE`) for `td` ms; each with `trDelta` = cruise `v` and `trBase` at its own start | `trType` 0 at the end origin |
-| `movegravity` | `pos` | `trType` 5 (`TR_GRAVITY`), `trDuration` = ms, `trDelta` = initial velocity | not observed (probe deleted the entity first) |
+| `movegravity` | `pos` | `trType` 5 (`TR_GRAVITY`), `trDuration` = ms, `trDelta` = initial velocity | stationary where it fell to (section 5) |
 | `rotateto`/`rotatepitch`/`rotateyaw`/`rotateroll`/`rotatevelocity` | `apos` | `trType` 3, `trDelta` = deg/s | `trType` 0, `trBase` = angle reached, unnormalized: a full turn read `(0, 360, 0)` |
 
 Measured: `movez(96, 2, 0.5, 0.5)` from `z = 592` sent
@@ -484,7 +484,7 @@ vcod: `mover::run_one` keeps `.angles` as `r.currentAngles`, takes the push's
 `amove` off it, snaps it (`mover::snap_angles`) and quantizes it when a
 rotate ends. The verbs start a stationary rotate from it and snap it in their
 link; a link reads it, not the trajectory. Linear trajectories evaluate as the
-x87 does, `delta * dt + base` rounded once (`mover::bg_evaluate`). VERIFIED,
+x87 does, `delta * dt + base` rounded once (`Trajectory::evaluate_kept`). VERIFIED,
 vcod measurement: `ride_ab.rs`'s
 `a_rotated_brush_model_keeps_retails_quantized_angles` matches every capture
 row to the digit; the ride push and the linkto children match to 0.05 and
@@ -3351,8 +3351,8 @@ there are more than two and three arguments, as on every other verb.
 vcod: `builtins::mover::rotate_to` folds the target; `rotate_velocity` takes
 two arguments; `mover::run_one` writes a moving group's `prev + (eval - prev)`
 unless its segment ended that frame; the plan's `finish` stops a
-`movegravity` at the frame's evaluation; `bg_evaluate` takes a gravity arc
-through `Trajectory::evaluate_kept` (`evaluate_stored` on 1.5 and UO).
+`movegravity` at the frame's evaluation; `mover::bg_evaluate` takes every
+arm through `Trajectory::evaluate_kept` (`evaluate_stored` on 1.5 and UO).
 
 **1.5b and UO.** VERIFIED, two captures off the same probe on mp_carentan,
 2026-10-20: `mp_carentan-dm-moverreads-1.5.txt` (retail 1.5b) and
@@ -3367,6 +3367,16 @@ INFERRED: the one row is the stored `dt` and stored `base + delta * dt` of
 `G_MoverTeam`; with 1.1d's `evaluate_kept` ours reads 1.1d's value there.
 `ride_ab.rs`'s `mover_script_reads_match_retail_on_1_5` and `_on_uo` replay
 both, every line exact.
+
+**A script write over a settled plan.** `Scr_SetOrigin` runs `G_SetOrigin`,
+which writes `pos.trBase` and zeroes `trType`, `trTime`, `trDuration` and
+`trDelta` (combat doc, the `G_SetOrigin` 0x67D38 note). INFERRED, that a
+write after the move's `movedone` leaves the mover standing at the written
+point. vcod: `Movers::set_origin` and `set_angles` put a settled group's plan
+stationary at the write, its clip pose with it. A write during a move is
+not measured: retail's `Reached_ScriptMover` still runs at the segment's
+end, and what it does over a stationary `trType` needs a probe; vcod leaves
+the running plan alone there.
 
 ## 24. Segments to the last bit
 
@@ -3461,8 +3471,8 @@ segment's value at `level.time`, a frame past the row before.
 
 vcod: `game::mover::Plan` holds the setup's fields (`Segs`);
 `Plan::start_toward` and `Plan::start_velocity` are the two setups,
-`Plan::step` the helper, one step a frame; `ramp_kept` and `ramp_stored` the
-ramp arms; `Ramp::check` the argument errors. VERIFIED, vcod measurement
+`Plan::step` the helper, one step a frame; `Trajectory::ramp_kept` and
+`ramp_stored` the ramp arms; `Ramp::check` the argument errors. VERIFIED, vcod measurement
 2026-11-14: the replay failed on the old model (segments chained at their
 own end, `rotatevelocity` scaled to `v * T`, durations rounded, overrunning
 ramps trimmed); on the port every row of the three captures matches.
@@ -3529,7 +3539,8 @@ stands under it as it shuts, `useBy`s `door_r` from two spots, then twice
 more with a teleport to the far south spawn and back while it turns shut;
 the script then `radiusDamage`s `door_r`, `door_b` and `door_h`, and
 `door_h` again 100 ms later, spawns one of each classname, and has the
-client fire one kar98k round at `door_h` from 80 units south. Before the
+client fire one kar98k round at `door_h` from 80 units south and swing
+at it from 50. Before the
 client is in, `door_h` takes a `radiusDamage` at 550 and another at 4000
 (`crates/server/tests/fixtures/doors/mp_carentan-dm-doors*.txt`, recipes in
 their headers). The client wrote its snapshots as the
@@ -3735,10 +3746,6 @@ Not modelled:
 - Area portals (`trap_AdjustAreaPortalState` in `Use_BinaryMover` and
   `Reached_BinaryMover`): no stock MP map has one, and mp_carentan's lump
   is one area, so nothing here measures them.
-- A knife's `G_Damage` on a door: the melee trace has no glass test
-  (cod11-combat.md 2.5), so a swing at a door at rest would open it;
-  vcod's melee names the world on any brush hit and deals no damage.
-  Unmeasured.
 - A round through a `func_static`, `func_bobbing` or `func_pendulum`,
   also linked at -1 (26.9's rule): ported with the doors, measured only on
   a door.
@@ -3826,6 +3833,19 @@ entity linked at -1 as past a pane, after its impact, and skips step 4's
 the wire on all three: two impacts in the shot's snapshot, `surfType` 0 on
 the door's face and 5 on the wall behind it; `door_h` never moved and no
 `"trigger"` came.
+
+VERIFIED, the runs on all three, knife phase (2026-11-17 captures): a
+kar98k swing at `door_h` at rest from (1053, 1561), the eye's
+`bulletTrace` meeting the door's face at (1053, 1604.10, 77.88), raised
+one `EV_MELEE_MISS` (167) naming entity 298, `door_h`, with `surfType` 0
+and parm 104 on 1.1d, 84 on 1.5b and UO; the door's `"trigger"` came in
+the event's frame (56.4 s on 1.1d, 57.35 s on 1.5b, 57.6 s on UO) and its
+origin first read moved 100 ms on. INFERRED, off `Weapon_Melee`'s tests (cod11-combat.md
+2.5): the swing has no glass test, so the door's -1 contents stop it, and
+its `G_Damage` reaches 26.9's `eType` 5 arm. vcod: `combat::melee_fire`
+names the brush entity `CollisionWorld::entity_num` reports and deals
+its `G_Damage` to one in `GameHost::damageable_brushes`; `doors_ab`
+compares the swing's event (`W <time> melee`) and the door's frames.
 
 ### 26.10 A script spawn
 

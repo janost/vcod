@@ -23,7 +23,7 @@ use common::{Join, Queues};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::event_ids;
 use vcod_common::net::msg::UserCmd;
 use vcod_common::net::protocol::PROTOCOL_V22;
@@ -162,14 +162,12 @@ fn rows(snaps: &[Snap], lines: &[String]) -> BTreeMap<String, Vec<String>> {
 fn ours(fs: vcod_common::pk3::Pk3Fs, fixture: &str, lead: i32) -> (Vec<Snap>, Vec<String>) {
     let p = vcod_server::server::install_protocol(&fs);
     let map = "mp_carentan";
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_pronecrouch"), now);
-    sv.set_protocol(p);
-    sv.overlay_script("maps/mp/gametypes/probe_pronecrouch", SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        script: Some(SCRIPT),
+        ..common::Boot::new(map, "probe_pronecrouch")
+    }
+    .start(fs);
     let (times, pressed, ran) = retail_cmds(fixture);
     // Join so that our first phase starts on retail's frame: the cmds run
     // on retail's clock.
@@ -227,7 +225,7 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, fixture: &str, lead: i32) -> (Vec<Snap>, Ve
             }
         }
         if let Some(s) = cl.snapshots().newest()
-            && snaps.last().is_none_or(|l| l.0 < s.server_time)
+            && snaps.last().is_none_or(|l| l.0 < s.server_time.raw())
         {
             let z = s.ps.origin(p)[2];
             let bits = s.ps.field_i32(p, "pm_flags") & 3;
@@ -243,7 +241,7 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, fixture: &str, lead: i32) -> (Vec<Snap>, Ve
                 )
                 .collect();
             last_seq = Some(seq);
-            snaps.push((s.server_time, bits, z, events));
+            snaps.push((s.server_time.raw(), bits, z, events));
         }
     }
     let log = sv
@@ -294,14 +292,6 @@ fn check(fs: fn() -> Option<vcod_common::pk3::Pk3Fs>, fixture: &str) {
     );
 }
 
-/// The 1.5b install's paks, `None` elsewhere (a UO install's `main/` is
-/// 1.5's, too).
-fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    let v6 = vcod_common::net::protocol::PROTOCOL_V6.transport.version;
-    (vcod_server::server::install_protocol(&fs).transport.version == v6).then_some(fs)
-}
-
 #[test]
 fn prone_from_a_crouch_and_a_held_body_s_landing_match_retail() {
     check(
@@ -313,7 +303,7 @@ fn prone_from_a_crouch_and_a_held_body_s_landing_match_retail() {
 #[test]
 fn prone_from_a_crouch_and_a_held_body_s_landing_match_15() {
     check(
-        fs_15,
+        vcod_common::testing::game_fs_15,
         include_str!("fixtures/pronecrouch/mp_carentan-1.5.txt"),
     );
 }

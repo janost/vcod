@@ -19,7 +19,7 @@ use crate::value::{FuncRef, Value};
 use super::interp::{Frame, Step, Suspend};
 use super::{ErrorKind, Host, ScriptError, Target, Vm};
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct ThreadId(pub u32);
 
 /// The script clock and every `wait` deadline are 24-bit: they wrap every
@@ -166,7 +166,7 @@ impl Vm {
     /// Starts a new thread running `func` from its first instruction and
     /// returns its id. The function must already be installed. Runs the
     /// thread immediately, to its own suspend/return/error, before
-    /// returning -- see `spawn`. A `wait` the new thread's first
+    /// returning (see `spawn`). A `wait` the new thread's first
     /// instructions hit counts from the script clock ([`Vm::time`]), which
     /// between frames is the last frame's `level.time`, not the caller's.
     ///
@@ -199,34 +199,19 @@ impl Vm {
         self.spawn(host, func, f, recv, args, &mut errors)
     }
 
-    /// A thread whose immediate run itself spawns a thread nested this
-    /// deep runs the native Rust stack out (`spawn` -> `step_thread` ->
-    /// `step_frames` -> `spawn` -> ...) long before `budget` would catch
-    /// it, since each level only costs one `Call`-equivalent instruction
-    /// against its *own* fresh budget. No corpus script nests a `thread`
-    /// statement inside another spawned thread's own immediate execution
-    /// more than one or two levels deep; this is purely a backstop against
-    /// a spawn bomb (a thread whose first act is spawning another), not a
-    /// limit real scripts should ever approach.
-    const MAX_SPAWN_DEPTH: u32 = 64;
-
     /// Pushes a new `Runnable` thread and immediately steps it to its own
-    /// suspend, return, or error — never leaving it merely `Runnable` for
+    /// suspend, return, or error, never leaving it merely `Runnable` for
     /// a later scheduling pass to discover cold. Retail scripts pair a
     /// `thread` statement with a `notify` a line or two later expecting
     /// the spawned thread to have already reached its `waittill`
     /// (`animscripts/predict.gsc:102-108`; 246 corpus sites do this within
     /// three lines): a deferred spawn would let the notify fire before the
     /// thread registers for it, dropping the event and hanging the
-    /// `waittill` forever. Spawning is therefore recursive — the spawned
+    /// `waittill` forever. Spawning is therefore recursive: the spawned
     /// thread's own immediate run may itself spawn and immediately run a
-    /// further thread — bounded by `MAX_SPAWN_DEPTH`, since each nesting
-    /// level costs Rust native stack, not `budget` (see its doc comment).
-    /// Past that depth the new thread is left merely `Runnable`, the
-    /// pre-immediate-run behavior, for the next `run_frame` to pick up
-    /// instead of stepping it here: still correct (nothing hangs, nothing
-    /// panics), it just loses "runs before its spawner continues" at a
-    /// depth no real script reaches.
+    /// further thread, each level on the native stack. A spawn from a
+    /// running step counts the spawner's frames against `interp::MAX_FRAMES`
+    /// first, which bounds that nesting, and runs on the step's budget.
     pub(crate) fn spawn(
         &mut self,
         host: &mut dyn Host,
@@ -251,26 +236,10 @@ impl Vm {
         });
         self.queue_ready(id);
         self.thread_returned = None;
-        if self.spawn_depth < Self::MAX_SPAWN_DEPTH {
-            self.spawn_depth += 1;
-            let returned = self.step_thread(host, id, errors);
-            self.spawn_depth -= 1;
-            self.thread_returned = returned;
-        } else {
-            // Silent otherwise, this degrades into exactly the deadlock
-            // that running a spawned thread immediately (rather than
-            // merely `Runnable`, see this function's doc comment) exists
-            // to prevent: two threads left waiting on each other with
-            // nothing to say why. A named constant and the function that
-            // tripped it is enough to spot "a script nests `thread` this
-            // deep" during triage.
-            log::warn!(
-                "gsc: MAX_SPAWN_DEPTH ({}) exceeded spawning {}::{}; thread left runnable for the next scheduling pass instead of running immediately",
-                Self::MAX_SPAWN_DEPTH,
-                self.interner.resolve(func.file),
-                self.interner.resolve(func.name)
-            );
-        }
+        self.spawn_depth += 1;
+        let returned = self.step_thread(host, id, errors);
+        self.spawn_depth -= 1;
+        self.thread_returned = returned;
         id
     }
 
@@ -289,9 +258,10 @@ impl Vm {
     /// Kills every thread endon-registered against `(target, event)`, then
     /// wakes every thread waiting on it, binding `args` into the locals the
     /// `waittill` recorded (a missing argument writes `Undefined`). Both
-    /// passes walk `threads` in start order, so two waiters on the same
-    /// event always wake oldest first, and every endon kill lands before
-    /// any notify wake. Waking only flips a thread's state to `Runnable`;
+    /// passes read the threads `NotifyIndex` holds for `(target, event)`.
+    /// Every endon kill lands before any notify wake, and waiters resume in
+    /// start order (newest `waittill` first under
+    /// `Vm::set_newest_waiter_first`). Waking only flips a thread's state to `Runnable`;
     /// it does not run here, so a notify can never reenter the VM.
     ///
     /// The event folds first: `waittill`/`endon` store the folded atom, and
@@ -303,7 +273,7 @@ impl Vm {
     /// [`Vm::notify`] knowing which thread executed the `notify`, which its
     /// own endons do not kill: a thread that notifies an event it is itself
     /// registered against runs on and resumes past its next `wait`
-    /// (`probe_endon_self`). Stock `dm.gsc`'s `endMap` depends on it -- it
+    /// (`probe_endon_self`). Stock `dm.gsc`'s `endMap` depends on it: it
     /// runs inside a `Callback_PlayerKilled` thread that opened with
     /// `self endon("spawned")`, calls `spawnIntermission` (which notifies
     /// "spawned") on every player including that one, and only then waits
@@ -540,8 +510,8 @@ impl Vm {
         thread_index_in(&self.threads, id)
     }
 
-    /// Steps the thread `id` -- assumed `Runnable`, a no-op otherwise or if
-    /// it no longer exists (see below) -- until it suspends, returns, or
+    /// Steps the thread `id`, assumed `Runnable`, a no-op otherwise or if
+    /// it no longer exists (see below), until it suspends, returns, or
     /// errors, then updates its stored state or removes it, and flushes
     /// any notify a builtin queued along the way (`Op::Notify` resolves
     /// where it executes; neither runs a thread, so a notify can't reenter
@@ -551,7 +521,7 @@ impl Vm {
     /// back here `self.threads` may have gained, lost, or reordered
     /// entries; every write-back below re-resolves `id` to its current
     /// index rather than trusting the one taken before the step, and
-    /// tolerates it having vanished -- a thread killed by an endon fired
+    /// tolerates it having vanished: a thread killed by an endon fired
     /// from a thread it itself spawned, mid-step, is simply gone by the
     /// time we look again, and there is nothing left to write back to.
     /// Errors, whether this thread's own or a nested spawn's, are pushed
@@ -579,8 +549,22 @@ impl Vm {
 
         let mut frames = std::mem::take(&mut self.threads[idx].frames);
         let mut notifies = Vec::new();
-        let budget = self.budget;
-        let result = self.step_frames(host, &mut frames, budget, Some(id), &mut notifies, errors);
+        // A thread spawned mid-step runs on what its spawner has left, and
+        // hands back what it did not use; any other step gets the budget.
+        let nested = self.pool.take();
+        let mut left = nested.unwrap_or(self.budget);
+        let result = self.step_frames(
+            host,
+            &mut frames,
+            &mut left,
+            Some(id),
+            &mut notifies,
+            errors,
+        );
+        match nested {
+            Some(_) => self.pool = Some(left),
+            None => self.spent += u64::from(self.budget - left),
+        }
         if self.spawn_depth == 0 {
             self.killed.clear();
         }
@@ -695,11 +679,19 @@ impl Vm {
     /// `WARNING: potential infinite loop in script.` about once a second
     /// (`cod_lnxded` 0x80a5b8c; docs/research/cod11-gsc-language.md). The
     /// cap keeps a server here alive through such a script, and a spawn
-    /// bomb, at the cost of leaving the rest of the frame's threads for the
-    /// next one. It sits well above what a real frame steps: the stock
+    /// bomb, at the cost of moving the rest of the frame's threads to the
+    /// head of the next pass (`Vm::deferred`). It sits well above what a real frame steps: the stock
     /// scripts step a few hundred at most, and `probe_wait0_loop`'s
     /// thousand `wait 0` turns in one frame have to fit.
     const MAX_THREADS_PER_FRAME: u32 = 10_000;
+
+    /// A ceiling on the instructions one pass runs, its threads' nested
+    /// spawns counted, past which the threads still due run first in the
+    /// next pass, as past [`Self::MAX_THREADS_PER_FRAME`]. A step may still run
+    /// its whole budget once the pass is past the ceiling, so a pass stops
+    /// within `MAX_PASS_INSTRUCTIONS + budget`. The heaviest stock pass the
+    /// tests run, CoD4's included, runs 1.43 million.
+    const MAX_PASS_INSTRUCTIONS: u64 = 10_000_000;
 
     fn queue_seq(&mut self) -> u64 {
         let seq = self.next_seq;
@@ -728,7 +720,8 @@ impl Vm {
     /// itself waits for the next frame. A thread a notify woke runs on the
     /// clock of the moment. The errors are collected and returned rather
     /// than propagated, so one bad thread never stops the rest of the
-    /// server.
+    /// server. Once enough has been allocated it ends with a sweep of the
+    /// heap and the temporary strings ([`Vm::collect`]).
     ///
     /// The clock is 24-bit. On the frame `level.time` wraps it the walk's
     /// target is behind the clock, so the clock jumps there and only the
@@ -737,8 +730,11 @@ impl Vm {
     pub fn run_frame(&mut self, host: &mut dyn Host, level_ms: i32) -> Vec<ScriptError> {
         let errors = self.step_runnable(host, level_ms & CLOCK_MASK);
         // `Scr_SetTime` leaves the clock on `level.time` whether or not it
-        // walked forward.
+        // walked forward; a pass a cap cut short deferred what it left.
         self.now_ms = level_ms & CLOCK_MASK;
+        if self.heap.collect_due() || self.interner.collect_due() {
+            self.collect(host);
+        }
         errors
     }
 
@@ -764,16 +760,41 @@ impl Vm {
     /// both join that pass's pick with the threads due on the clock
     /// (`client-probes/probe_threadorder`, cod11-gsc-language.md, "The
     /// packet pass").
+    ///
+    /// The threads a capped pass left (`Vm::deferred`) run first, in the
+    /// order it would have picked them, on the clock as it stands.
     fn step_runnable(&mut self, host: &mut dyn Host, level: i32) -> Vec<ScriptError> {
         let mut errors = Vec::new();
         let mut steps = 0;
-        while steps < Self::MAX_THREADS_PER_FRAME {
-            let now = self.now_ms;
-            let next = self.next_ready(now, level);
-            let Some((at, _, tid)) = next else {
-                return errors;
+        let start = self.spent;
+        loop {
+            let cap = if steps >= Self::MAX_THREADS_PER_FRAME {
+                Some((
+                    "MAX_THREADS_PER_FRAME",
+                    u64::from(Self::MAX_THREADS_PER_FRAME),
+                ))
+            } else if self.spent - start >= Self::MAX_PASS_INSTRUCTIONS {
+                Some(("MAX_PASS_INSTRUCTIONS", Self::MAX_PASS_INSTRUCTIONS))
+            } else {
+                None
             };
-            self.now_ms = at;
+            if let Some((name, n)) = cap {
+                log::warn!(
+                    "gsc: {name} ({n}) reached in one pass; the threads still due run first in the next"
+                );
+                self.defer_due(level);
+                return errors;
+            }
+            let tid = match self.take_deferred() {
+                Some(tid) => tid,
+                None => {
+                    let Some((at, _, tid)) = self.next_ready(self.now_ms, level) else {
+                        return errors;
+                    };
+                    self.now_ms = at;
+                    tid
+                }
+            };
             let Some(idx) = self.thread_index(tid) else {
                 continue;
             };
@@ -797,13 +818,41 @@ impl Vm {
                 return errors;
             }
         }
-        // Was silent before: a frame past the cap just stopped simulating the
-        // rest with nothing in the log to say why.
-        log::warn!(
-            "gsc: MAX_THREADS_PER_FRAME ({}) reached in one pass; the threads still due wait for the next",
-            Self::MAX_THREADS_PER_FRAME
-        );
-        errors
+    }
+
+    /// The next thread a capped pass left, its runnable key taken out of
+    /// the index; one that died or ran since is skipped.
+    fn take_deferred(&mut self) -> Option<ThreadId> {
+        while let Some((id, seq)) = self.deferred.pop_front() {
+            let live = self.thread_index(id).is_some_and(|i| {
+                let t = &self.threads[i];
+                matches!(t.state, ThreadState::Runnable) && t.seq == seq
+            });
+            if live {
+                self.ready.runnable.remove(&(Reverse(seq), id));
+                return Some(id);
+            }
+        }
+        None
+    }
+
+    /// Every thread still due this pass, in pick order, behind any an
+    /// earlier capped pass left: runnable now, so the clock can move past
+    /// their due times without stranding them.
+    fn defer_due(&mut self, level: i32) {
+        let now = self.now_ms;
+        let mut queued: std::collections::HashSet<ThreadId, crate::fxhash::FxBuildHasher> =
+            self.deferred.iter().map(|&(id, _)| id).collect();
+        while let Some((_, _, id)) = self.next_ready(now, level) {
+            let Some(i) = self.thread_index(id) else {
+                continue;
+            };
+            if queued.insert(id) {
+                let t = &mut self.threads[i];
+                t.state = ThreadState::Runnable;
+                self.deferred.push_back((id, t.seq));
+            }
+        }
     }
 
     /// Runs `func` to completion on a fresh one-frame stack. A `wait` or
@@ -811,7 +860,7 @@ impl Vm {
     /// a hang: there is no scheduler here to come back to it later. But a
     /// threaded call inside `func` spawns and immediately runs a real,
     /// independent thread (`spawn`), and that thread's own `wait` is not
-    /// an error -- it's an ordinary suspend, resolved into a
+    /// an error: it's an ordinary suspend, resolved into a
     /// `WaitingUntil` deadline the same way `run_frame`/`start_thread`
     /// would, counted from the script clock ([`Vm::time`]).
     pub fn call_now(
@@ -838,16 +887,26 @@ impl Vm {
         // <Value, ScriptError>` either; they are still logged as they
         // happen (`step_thread`), same as `start_thread`.
         let mut errors = Vec::new();
-        let budget = self.budget;
+        let mut left = self.budget;
         // No real thread to register an `endon` against here (`None`); a
         // one-shot `call_now` script that calls `endon` simply drops it.
-        let result = self.step_frames(host, &mut frames, budget, None, &mut notifies, &mut errors);
+        let result = self.step_frames(
+            host,
+            &mut frames,
+            &mut left,
+            None,
+            &mut notifies,
+            &mut errors,
+        );
         // A notify fired before the failure below still had its effect.
         for (target, event, args) in notifies {
             self.notify(target, event, &args);
         }
         match result? {
-            Step::Returned(v) => Ok(v),
+            Step::Returned(v) => {
+                self.interner.pin(v);
+                Ok(v)
+            }
             Step::Suspend(_) => {
                 let top = frames
                     .last()
@@ -975,6 +1034,28 @@ mod tests {
         }
         assert_eq!(vm.aborts().len(), Vm::MAX_RECORDED_ABORTS);
         assert_eq!(vm.abort_count() as usize, n);
+    }
+
+    /// A cast error whose text names a new script string each time is one
+    /// error to the log: the dedup keys on its place and kind.
+    #[test]
+    fn a_loop_of_distinct_cast_errors_logs_as_one() {
+        let mut vm = vm_with(
+            r#"main() {
+                for (i = 0; i < 5000; i++) { x = (int)("a" + i); }
+                mark("end");
+            }"#,
+        );
+        vm.set_recover_errors(true);
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, f, None, vec![]);
+        assert!(host.calls.iter().any(|(n, _)| n == "mark"));
+        assert_eq!(vm.abort_count(), 5000);
+        assert_eq!(vm.error_log.len(), 1);
+        let (first, _, again) = vm.error_log.values().next().unwrap();
+        assert!(first.contains("a0") && !first.contains("a1"), "{first}");
+        assert_eq!(*again, 4999);
     }
 
     /// CoD4's frame-counted `wait` against CoD1's milliseconds, taken at
@@ -1166,7 +1247,7 @@ mod tests {
     /// The same rule from the host side: a host interning an event name
     /// case-sensitively still reaches a `waittill` and an `endon` spelled
     /// the other way. `dier`'s `"PLAYERCONNECT"` is deliberately not the
-    /// canonical spelling -- `waiter` compiles first and claims it -- so the
+    /// canonical spelling (`waiter` compiles first and claims it), so the
     /// kill below lands only if `Op::EndOn` folds.
     #[test]
     fn a_host_notify_folds_the_event_name_it_was_given() {
@@ -1230,25 +1311,62 @@ mod tests {
         assert_eq!(vm.thread_count(), 0, "aborted, not left runnable");
     }
 
+    /// Under `contain_builtin_panics` a builtin's panic ends the thread
+    /// that called it as a runtime error, in both error modes; a thread
+    /// beside it runs on, this frame and the next.
     #[test]
-    fn unbounded_recursion_aborts_its_thread_instead_of_overflowing_the_stack() {
-        // Plain (non-`thread`) recursion: `recurse()` calling itself pushes
-        // a new `Frame` onto the same thread's frame stack on every call,
-        // never the native Rust stack, so this terminates via the budget
-        // rather than a stack overflow. `main`'s leading `wait 0;` is the
-        // same trick as above, to get the budget error into `run_frame`'s
-        // returned errors instead of a discarded `start_thread` one — the
-        // wait has to be outside the recursion itself, since a `wait`
-        // inside `recurse` would just suspend on the second call instead
-        // of ever exhausting the budget.
-        let mut vm = vm_with("main() { wait 0; recurse(); } recurse() { recurse(); }");
-        vm.set_budget(10_000);
+    fn a_panicking_builtin_ends_only_its_thread() {
+        for recover in [false, true] {
+            let mut vm = vm_with(
+                r#"main() { wait 0; boom(); mark("after"); }
+                other() { wait 0; mark("b"); wait 0.05; mark("b2"); }"#,
+            );
+            vm.set_recover_errors(recover);
+            crate::vm::contain_builtin_panics(true);
+            let mut host = TestHost::default();
+            for f in ["main", "other"] {
+                let f = vm.func_ref("test/script", f);
+                vm.start_thread(&mut host, f, None, vec![]);
+            }
+            let errs = vm.run_frame(&mut host, 0);
+            assert_eq!(errs.len(), 1, "{errs:?}");
+            assert_eq!(errs[0].kind, ErrorKind::Panic("boom".into()));
+            assert_eq!(vm.thread_count(), 1, "only the panicking thread ended");
+            assert!(vm.run_frame(&mut host, 50).is_empty());
+            assert!(vm.run_frame(&mut host, 100).is_empty());
+            crate::vm::contain_builtin_panics(false);
+            let marks: Vec<Value> = host
+                .calls
+                .iter()
+                .filter(|(n, _)| n == "mark")
+                .map(|(_, a)| a[0])
+                .collect();
+            let text = |v: &Value| match v {
+                Value::String(a) => vm.interner().resolve(*a).to_string(),
+                v => format!("{v:?}"),
+            };
+            let marks: Vec<String> = marks.iter().map(text).collect();
+            assert_eq!(marks, ["b", "b2"], "recover {recover}");
+        }
+    }
+
+    /// Plain recursion stops at the frame cap with retail's stack overflow,
+    /// whatever the budget, even with a thousand locals a frame: the frames
+    /// it held stay within `MAX_FRAMES`. `main`'s leading `wait 0;` is the
+    /// same trick as above, to get the error into `run_frame`'s returned
+    /// errors.
+    #[test]
+    fn unbounded_recursion_ends_its_thread_at_the_frame_cap() {
+        let locals: String = (0..1000).map(|i| format!("x{i} = 0; ")).collect();
+        let src = format!("main() {{ wait 0; recurse(); }} recurse() {{ recurse(); {locals} }}");
+        let mut vm = vm_with(&src);
+        vm.set_budget(u32::MAX);
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
         vm.start_thread(&mut host, f, None, vec![]);
         let errs = vm.run_frame(&mut host, 0);
         assert_eq!(errs.len(), 1);
-        assert!(matches!(errs[0].kind, crate::vm::ErrorKind::Budget));
+        assert_eq!(errs[0].kind, crate::vm::ErrorKind::StackOverflow);
         assert_eq!(vm.thread_count(), 0, "aborted, not left runnable");
     }
 
@@ -1343,8 +1461,8 @@ later() { wait 0.05; return 9; }"#;
     /// (246 corpus sites pair a `thread` statement with a `notify` within
     /// three lines): a spawned thread must reach its own `waittill` before
     /// its spawner's `notify` two lines later, or the notify is missed and
-    /// the spawned thread's `waittill` — and its spawner's own later wait
-    /// for the reply — hang forever. `main` spawns `getNotetrack`, which
+    /// the spawned thread's `waittill` (and its spawner's own later wait
+    /// for the reply) hang forever. `main` spawns `getNotetrack`, which
     /// must register its `waittill("go")` before `main`'s `notify("go")`
     /// runs; `getNotetrack` then wakes and replies, and `main` must
     /// eventually see that reply too. If either registration lost the
@@ -1384,9 +1502,9 @@ later() { wait 0.05; return 9; }"#;
     /// Pins the id-watermark rescan in `run_frame` together with kill-
     /// before-wake ordering and the notify-flush boundary: `killer`'s
     /// in-script `notify` (not a host-driven one between frames, like
-    /// every other notify test here) kills `victim` — an *earlier* id
-    /// than `killer`'s own — mid-`run_frame`-pass, and `witness` — a
-    /// *later* id than either — must still run in that same pass rather
+    /// every other notify test here) kills `victim` (an *earlier* id
+    /// than `killer`'s own) mid-`run_frame`-pass, and `witness` (a
+    /// *later* id than either) must still run in that same pass rather
     /// than being skipped because `victim`'s removal shifted indices out
     /// from under a cached one.
     #[test]
@@ -1462,24 +1580,61 @@ later() { wait 0.05; return 9; }"#;
 
     /// A thread whose first act is spawning another, unboundedly, recurses
     /// through the native Rust stack (`spawn` -> `step_thread` ->
-    /// `step_frames` -> `spawn` -> ...), not the `Vec<Frame>` a plain
-    /// recursive `Call` grows, and each nested spawn gets its own fresh
-    /// `budget`, so the instruction budget alone would never catch this —
-    /// only `spawn`'s own `MAX_SPAWN_DEPTH` cap does. If this test doesn't
-    /// crash the process outright, the cap is working; the assertions
-    /// pin exactly how it degrades: the infinite nest nonetheless unwinds
-    /// (everything below the cap runs to completion), leaving one
-    /// dangling thread for the next scheduling pass to continue the chain
-    /// from, so the live thread count never grows past that.
+    /// `step_frames` -> `spawn` -> ...). Every spawner's frame counts
+    /// against `MAX_FRAMES`, so the thread call at the cap is a stack
+    /// overflow, the nest unwinds and nothing is left running.
     #[test]
-    fn a_spawn_bomb_is_capped_by_native_stack_depth_not_left_to_overflow_it() {
+    fn a_spawn_bomb_stops_at_the_frame_cap() {
         let mut vm = vm_with("main() { thread main(); }");
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
         vm.start_thread(&mut host, f, None, vec![]);
-        assert_eq!(vm.thread_count(), 1);
-        vm.run_frame(&mut host, 0);
-        assert_eq!(vm.thread_count(), 1, "still bounded after another pass");
+        assert_eq!(vm.thread_count(), 0);
+        assert_eq!(vm.abort_count(), 1);
+        assert_eq!(vm.aborts()[0].kind, crate::vm::ErrorKind::StackOverflow);
+    }
+
+    /// A spawn runs on what its spawner's step has left, so a loop of
+    /// spawns whose threads each loop, or a spawn tree as deep as the frame
+    /// cap allows, ends within one step's budget instead of each spawn
+    /// drawing a fresh one.
+    #[test]
+    fn spawned_threads_share_their_spawners_budget() {
+        for src in [
+            "main() { for (;;) thread g(); } g() { for (i = 0; i < 150000; i++) {} }",
+            "main() { f(); } f() { for (i = 0; i < 100000; i++) thread f(); }",
+        ] {
+            let mut vm = vm_with(src);
+            vm.set_budget(200_000);
+            let mut host = TestHost::default();
+            let f = vm.func_ref("test/script", "main");
+            vm.start_thread(&mut host, f, None, vec![]);
+            assert_eq!(vm.thread_count(), 0, "{src}");
+            assert_eq!(vm.spent, 200_000, "{src}");
+        }
+    }
+
+    /// A pass stops taking steps once its threads have run
+    /// `MAX_PASS_INSTRUCTIONS`, leaving the rest due for the next pass.
+    #[test]
+    fn a_pass_stops_at_its_instruction_ceiling() {
+        let mut vm = vm_with(
+            "main() { level.ran = 0; for (n = 0; n < 200; n++) thread spin(); } \
+             spin() { wait 0.05; for (i = 0; i < 20000; i++) {} level.ran++; }",
+        );
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, f, None, vec![]);
+        let before = vm.spent;
+        vm.run_frame(&mut host, 100);
+        let pass = vm.spent - before;
+        assert!(pass >= Vm::MAX_PASS_INSTRUCTIONS, "{pass}");
+        assert!(pass < Vm::MAX_PASS_INSTRUCTIONS + 1_000_000, "{pass}");
+        assert_ne!(level_string(&mut vm, "ran"), "Int(200)");
+        for t in 1..4 {
+            vm.run_frame(&mut host, 100 + 50 * t);
+        }
+        assert_eq!(level_string(&mut vm, "ran"), "Int(200)");
     }
 
     /// An `endon` registered earlier in a step must be visible to a notify
@@ -1530,8 +1685,8 @@ later() { wait 0.05; return 9; }"#;
     }
 
     /// A plain (non-threaded) call whose callee suspends on `wait` leaves
-    /// the caller's frame mid-call across the suspend -- exactly the case
-    /// `Frame::stack_effect_check` (vm.rs, test-only) has to survive rather
+    /// the caller's frame mid-call across the suspend: exactly the case
+    /// `Frame::stack_effect_check` (vm/interp.rs, test-only) has to survive rather
     /// than lose track of, since the caller and callee frames persist
     /// through separate `step_frames` invocations on either side of the
     /// wait. This would panic on a wrong `stack_effect` entry or a bug in
@@ -1695,7 +1850,7 @@ later() { wait 0.05; return 9; }"#;
     /// `main`'s own step ever returns to the outer loop), then still runs
     /// both side effects and reaches its own `wait 5` before the outer
     /// `step_thread` looks for `main`'s entry again to write back the
-    /// suspended frames -- finds it already gone -- and simply drops them:
+    /// suspended frames, finds it already gone, and simply drops them:
     /// the side effects already ran for real, but `main` never resumes to
     /// call `done()`.
     #[test]
@@ -1766,6 +1921,29 @@ later() { wait 0.05; return 9; }"#;
         vm.start_thread(&mut host, spin, None, vec![]);
         vm.run_frame(&mut host, 100);
         assert!(!host.calls.iter().any(|(n, _)| n == "done"));
+        assert_eq!(vm.thread_count(), 2);
+    }
+
+    /// The threads a capped pass did not reach run first in the next pass,
+    /// so a `wait 0.05` loop beside a `wait 0` spin keeps counting, and the
+    /// clock keeps up with `level.time`.
+    #[test]
+    fn a_capped_pass_defers_the_threads_still_due() {
+        let mut vm = vm_with(
+            r#"main() { level.n = 0; for (;;) { wait 0.05; level.n++; } }
+            spin() { wait 0.05; for (;;) wait 0; }"#,
+        );
+        let mut host = TestHost::default();
+        let main = vm.func_ref("test/script", "main");
+        let spin = vm.func_ref("test/script", "spin");
+        vm.start_thread(&mut host, main, None, vec![]);
+        vm.start_thread(&mut host, spin, None, vec![]);
+        for t in 1..=10 {
+            vm.run_frame(&mut host, 50 * t + 50);
+        }
+        assert_eq!(vm.time(), 550);
+        let n = level_string(&mut vm, "n");
+        assert!(matches!(n.as_str(), "Int(4)" | "Int(5)"), "{n}");
         assert_eq!(vm.thread_count(), 2);
     }
 
@@ -1887,7 +2065,7 @@ later() { wait 0.05; return 9; }"#;
     /// A thread spawned by a `call_now`-driven script (a host callback
     /// like `CodeCallback_PlayerConnect`, say) is a real, independent
     /// thread, not the throwaway one-shot stack `call_now` itself runs
-    /// on -- its own `wait` is an ordinary suspend, not an immediate-call
+    /// on: its own `wait` is an ordinary suspend, not an immediate-call
     /// error, and counts from the script clock. `f`'s `wait 1` taken at
     /// 5_000 is due at 6_000 and runs on the frame after it.
     #[test]
@@ -1997,6 +2175,10 @@ later() { wait 0.05; return 9; }"#;
         ) -> Result<(), ErrorKind> {
             self.0.set_field(cx, ent, field, value)
         }
+
+        fn roots(&self, out: &mut Vec<Value>) {
+            self.0.roots(out);
+        }
     }
 
     /// Reads `level.<name>` back as a string.
@@ -2065,20 +2247,18 @@ later() { wait 0.05; return 9; }"#;
 
     /// A builtin that spawns a thread whose first act is the same builtin is
     /// a spawn bomb reached through `Cx::spawn` rather than a `thread`
-    /// statement; `MAX_SPAWN_DEPTH` has to bound that path too, leaving a
-    /// warning and a runnable thread instead of overflowing the native
+    /// statement; the frame cap bounds that path too, refusing the spawn at
+    /// the cap with a stack overflow instead of overflowing the native
     /// stack.
     #[test]
-    fn a_builtin_spawn_bomb_hits_the_depth_guard() {
+    fn a_builtin_spawn_bomb_stops_at_the_frame_cap() {
         let mut vm = vm_with("main() { level again(); } bomb() { level again(); }");
         let mut host = SpawnHost::default();
         let main = vm.func_ref("test/script", "main");
         vm.start_thread(&mut host, main, None, vec![]);
-        assert!(
-            vm.thread_count() > 0,
-            "the capped spawn is left runnable for the next pass"
-        );
-        assert_eq!(vm.abort_count(), 0, "nothing errored on the way down");
+        assert_eq!(vm.thread_count(), 0);
+        assert_eq!(vm.abort_count(), 1);
+        assert_eq!(vm.aborts()[0].kind, crate::vm::ErrorKind::StackOverflow);
     }
 
     /// A `FuncRef` no installed function answers is a recorded abort naming

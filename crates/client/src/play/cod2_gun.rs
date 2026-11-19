@@ -7,6 +7,7 @@
 //! [`GunInput::recoil`].
 
 use vcod_cod2::weapon::WeaponDef;
+use vcod_common::fguard::clamp;
 
 use crate::play::cod2_view::{DamageKick, IdleState};
 
@@ -16,8 +17,7 @@ const WEAPON_RELOADING: i32 = 5;
 const EF_CROUCH: i32 = 0x4;
 const EF_PRONE: i32 = 0x8;
 /// `viewHeightTarget` of a crouched and a prone body: the offset's stance.
-const VIEW_CROUCH: i32 = 40;
-const VIEW_PRONE: i32 = 11;
+use vcod_cod2::pmove::{VIEW_CROUCH, VIEW_PRONE};
 /// `bg_bobAmplitudeStanding`, `Ducked`, `Prone` (cod2-movement.md 13).
 const BOB_AMPLITUDE: [f32; 3] = [0.007, 0.0075, 0.03];
 
@@ -150,7 +150,8 @@ pub(crate) fn diff_track(target: f32, cur: f32, rate: f32, dt: f32) -> f32 {
 
 /// `DiffTrackAngle` (Mac 0x2ce40): [`diff_track`] the short way round,
 /// then truncated to 65536ths into -180..180.
-fn diff_track_angle(mut target: f32, cur: f32, rate: f32, dt: f32) -> f32 {
+fn diff_track_angle(target: f32, cur: f32, rate: f32, dt: f32) -> f32 {
+    let mut target = vcod_common::fguard::near(target, cur);
     while target - cur > 180.0 {
         target -= 360.0;
     }
@@ -169,7 +170,7 @@ fn diff_track_angle(mut target: f32, cur: f32, rate: f32, dt: f32) -> f32 {
 }
 
 fn angle_subtract(a: f32, b: f32) -> f32 {
-    let mut d = a - b;
+    let mut d = vcod_common::fguard::turns(a - b);
     while d > 180.0 {
         d -= 360.0;
     }
@@ -241,8 +242,16 @@ impl GunState {
         let [max, rate, pitch_s, yaw_s, horiz_s, vert_s] = s;
         let dt = msec as f32 * 0.001;
         let per = 1.0 / (dt * 60.0);
-        let dp = (angle_subtract(ps.view[0], self.last_view[0]) * per).clamp(-max, max);
-        let dy = (angle_subtract(ps.view[1], self.last_view[1]) * per).clamp(-max, max);
+        let dp = clamp(
+            angle_subtract(ps.view[0], self.last_view[0]) * per,
+            -max,
+            max,
+        );
+        let dy = clamp(
+            angle_subtract(ps.view[1], self.last_view[1]) * per,
+            -max,
+            max,
+        );
         self.sway_offset[1] = diff_track(dy * horiz_s * scale, self.sway_offset[1], rate, dt);
         self.sway_offset[2] = diff_track(vert_s * scale * dp, self.sway_offset[2], rate, dt);
         self.sway_angles[0] = diff_track_angle(pitch_s * scale * dp, self.sway_angles[0], rate, dt);
@@ -547,6 +556,33 @@ mod tests {
         assert!(a > 171.9 && a < 172.0, "{a}");
         let units = a / (360.0 / 65536.0);
         assert!((units - units.round()).abs() < 1e-2);
+    }
+
+    /// A weapon file's negative or NaN `swayMaxAngle`, a sway scale of
+    /// 1e30 or an infinity, and a view as large return a pose (SEC-019).
+    #[test]
+    fn hostile_sway_keys_return_a_pose() {
+        let mut k = rifle();
+        k.sway = [-1.0, 6.0, 1e30, f32::INFINITY, 0.1, 0.1];
+        k.ads_sway = [f32::NAN, 3.0, 0.1, 1e30, 0.1, 0.1];
+        for pos_frac in [0.0, 0.5, f32::NAN] {
+            let mut st = GunState::default();
+            for view in [[0.0, 0.0, 0.0], [30.0, -60.0, 0.0], [1e30, -1e30, 0.0]] {
+                let ps = GunPs {
+                    view,
+                    pos_frac,
+                    leanf: 0.0,
+                    eflags: 0,
+                    weaponstate: 0,
+                    view_height_target: 60,
+                    view_height_current: 60.0,
+                    speed: 190.0,
+                    xyspeed: 0.0,
+                    bob_cycle: 0,
+                };
+                run(&ps, &k, 3, &mut st);
+            }
+        }
     }
 
     /// A turn swings the gun's angles and offset against it, eased back

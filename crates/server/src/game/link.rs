@@ -245,7 +245,7 @@ fn vector(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> [f32; 3] {
 /// and `tag_origin`'s local tag turns the body from there by the legs' yaw
 /// off the view (`docs/research/cod11-combat.md` 16.4).
 pub fn client_bone(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Vec3, Quat)> {
-    let body = host.client_dobjs.get(slot)?.clone()?;
+    let body = host.clients.get(slot).map(|c| &c.dobj)?.clone()?;
     let anims = host.anims.clone()?;
     let fs = host.fs.clone()?;
     let skel = host.hit_rigs.rig(&*fs, &body.pose.assembly)?;
@@ -283,7 +283,7 @@ pub fn client_bone(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Vec3,
 /// matrix's axes, each bone of the chain from the build that first posed
 /// it. `None` where the pose kept no engine records.
 fn client_bone_stored(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Vec3, [Vec3; 3])> {
-    let body = host.client_dobjs.get(slot)?.clone()?;
+    let body = host.clients.get(slot).map(|c| &c.dobj)?.clone()?;
     let anims = host.anims.clone()?;
     let fs = host.fs.clone()?;
     let skel = host.hit_rigs.rig(&*fs, &body.pose.assembly)?;
@@ -322,7 +322,7 @@ fn client_bone_stored(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Ve
 /// a link holds in the parent entity's `angles` (`G_CalcTagParentAxis`
 /// multiplies the tag's model-space matrix by the parent's axis).
 fn client_bone_local(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Vec3, Quat)> {
-    host.client_dobjs.get(slot)?.as_ref()?;
+    host.clients.get(slot).map(|c| &c.dobj)?.as_ref()?;
     let frame = host.dobj_posed.get(slot)?.frame().inverse();
     let (o, r) = client_bone(host, slot, tag)?;
     Some((frame * o, frame * r))
@@ -330,7 +330,7 @@ fn client_bone_local(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Vec
 
 /// Whether the client's body has `tag`, without posing it.
 fn client_has_bone(host: &mut GameHost, slot: usize, tag: &str) -> bool {
-    let Some(body) = host.client_dobjs.get(slot).cloned().flatten() else {
+    let Some(body) = host.clients.get(slot).map(|c| &c.dobj).cloned().flatten() else {
         return false;
     };
     let Some(fs) = host.fs.clone() else {
@@ -431,7 +431,7 @@ pub(crate) fn cod4_model_tag(
     tag: &str,
 ) -> Option<(Vec3, Quat)> {
     use crate::game::hitrig::model_name;
-    let tags = &host.cod4().model_tags;
+    let tags = &host.as_cod4()?.model_tags;
     let find = |model: &str, name: &str| {
         let t = tags.get(&model_name(model).to_ascii_lowercase())?;
         t.iter()
@@ -666,7 +666,7 @@ fn angle_set(host: &mut GameHost, id: EntId) {
 /// (0x87df9), which `GameHost::dobj_updates` queues for the sim.
 pub fn model_changed(host: &mut GameHost, cx: &mut Cx, parent: EntId) {
     if let Some(slot) = client_slot(host, parent) {
-        if host.defs.proto.is_uo()
+        if host.profile.model_change_updates_client
             && let Some(now) = crate::game::script::wear(host, cx, parent)
         {
             host.dobj_updates.push((slot, now));
@@ -722,37 +722,38 @@ pub fn has_link_bit(host: &GameHost, id: EntId, classname: &str) -> bool {
         )
 }
 
-/// `G_RunFrame`'s entity loop, the link half: every linked entity re-anchored
-/// off its parent, ascending by entity number, each one's parent run first
-/// (0x50939..0x50955). A parent's parent is not, so a chain whose parents
-/// sit above their children in number lags a frame per level. Runs after
-/// the threads, like retail's pass; the result is what script reads on the
-/// next frame and what this frame's snapshot carries.
+/// Whether `id`'s parent has had its turn in the entity pass under way,
+/// `ran` holding every entity that has: the `fresh` of [`run_linked`]. The
+/// pass runs a child's parent first but not the parent's parent, so a chain
+/// whose parents number above their children lags a frame per level
+/// (0x50939..0x50955; movers doc 15).
+pub fn fresh(host: &GameHost, ran: &HashSet<EntId>, id: EntId) -> bool {
+    host.links.get(id).is_some_and(|l| ran.contains(&l.parent))
+}
+
+/// The entity pass's link arm alone, for tests with no `ScriptRuntime`:
+/// the same walk as `ScriptRuntime::run_entities` (ascending by number,
+/// each child's parent first), each turn through [`run_linked`] and
+/// [`fresh`].
+#[cfg(test)]
 pub fn run(host: &mut GameHost, cx: &mut Cx) {
     prune(host);
-    let level_ms = host.level_time_ms;
-    let links = std::mem::take(&mut host.links);
-    let children: Vec<EntId> = links.rows.keys().copied().collect();
-    // Every entity the loop has run this frame, below `child.0` or not.
     let mut ran: HashSet<EntId> = HashSet::new();
-    for child in children {
-        let Some(parent) = links.rows.get(&child).map(|l| l.parent) else {
+    for n in 0..host.ents.num_entities() {
+        let Some(id) = host.ents.handle(n) else {
             continue;
         };
-        // The parent first. Its own parent is current only if the loop
-        // has already passed it.
-        let current = |g: EntId, ran: &HashSet<EntId>| g.0 < child.0 || ran.contains(&g);
-        if links.contains(parent) && !ran.contains(&parent) {
-            let grand = links.rows[&parent].parent;
-            let fresh = current(grand, &ran);
-            run_one(host, cx, &links, parent, fresh, level_ms);
+        if let Some(parent) = host.links.get(id).map(|l| l.parent)
+            && ran.insert(parent)
+        {
+            let f = fresh(host, &ran, parent);
+            run_linked(host, cx, parent, f);
         }
-        ran.insert(parent);
-        if ran.insert(child) {
-            run_one(host, cx, &links, child, true, level_ms);
+        if ran.insert(id) {
+            let f = fresh(host, &ran, id);
+            run_linked(host, cx, id, f);
         }
     }
-    host.links = links;
 }
 
 /// Drops the rows of freed children, and unlinks where they stand the
@@ -1070,7 +1071,7 @@ mod tests {
         let tags = |t: &[(&str, Vec3, Quat)]| {
             std::rc::Rc::new(t.iter().map(|&(n, p, r)| (n.to_string(), p, r)).collect())
         };
-        let c4 = host.cod4_mut();
+        let c4 = host.as_cod4_mut().unwrap();
         c4.model_tags.insert(
             "car".into(),
             tags(&[

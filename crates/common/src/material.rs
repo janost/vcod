@@ -1,3 +1,6 @@
+//! Contains routines ported from the RTCW-MP GPL source, Copyright (C) 1999-2010 id Software LLC, a ZeniMax Media company.
+//! See NOTICE.
+//!
 //! The game-neutral material the renderer draws: sort key, surface bits,
 //! cull, depth bias, per-stage blend, depth and alpha-test state, texture
 //! bindings by semantic, the colour and texture-coordinate generators and
@@ -241,7 +244,7 @@ pub struct Flap {
 
 /// `deformVertexes bulge`: a sine along the base `s` coordinate, travelling
 /// at `speed`, pushes each vertex out along its normal by up to `height`
-/// (CoDMP.exe 0x513ad0; shader doc 8).
+/// (CoDMP.exe 0x513ad0; shader doc 8.1).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bulge {
     pub width: f32,
@@ -250,7 +253,7 @@ pub struct Bulge {
 }
 
 /// `deformVertexes normal`: each normal is nudged by `amp` times the noise
-/// at the vertex and renormalized (CoDMP.exe 0x513990; shader doc 8).
+/// at the vertex and renormalized (CoDMP.exe 0x513990; shader doc 8.1).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DeformNormal {
     pub amp: f32,
@@ -501,14 +504,14 @@ pub struct Material {
     pub dropped_stages: usize,
     /// Set by the renderer on a static prop's batch: the model's left and
     /// up axes in the world, so `tcGen environment` reflects in the model's
-    /// frame on world-baked vertices (shader doc 8, "Static props").
+    /// frame on world-baked vertices (shader doc 8.2, "Static props").
     pub model_axes: Option<[[f32; 3]; 2]>,
     /// A CoD2 `lmap*` technique: the renderer's CoD2 world pipeline draws
     /// a lightmapped surface with it in place of `stages`. `None` on CoD1.
     pub phong: Option<PhongLit>,
     /// A CoD2 `vertcol_mul*` decal (`effect_multiply`): the stage multiplies
     /// the framebuffer by `lerp(1, colour * vertex rgb, vertex alpha)`
-    /// (cod2-materials.md 9, "Multiply"). Always false on CoD1.
+    /// (cod2-materials.md 9, "Multiply decal"). Always false on CoD1.
     pub vertex_multiply: bool,
     /// How a CoD2 model surface takes the map's light. Always
     /// [`ModelLight::None`] on CoD1.
@@ -896,29 +899,29 @@ pub fn noise_get4f(x: f32, y: f32, z: f32, t: f32) -> f32 {
     let (iy, fy) = split(y);
     let (iz, fz) = split(z);
     let (it, ft) = split(t);
+    // Only each sum's low byte indexes, so the adds wrap as the x86 ones
+    // do: a floor of a huge float is i32::MAX here.
     let val = |a: i32| NOISE_PERM[(a & 0xff) as usize] as i32;
     let get = |x: i32, y: i32, z: i32, t: i32| {
-        NOISE_TABLE[val(x + val(y + val(z + val(t)))) as usize] as f64
+        NOISE_TABLE[val(x.wrapping_add(val(y.wrapping_add(val(z.wrapping_add(val(t))))))) as usize]
+            as f64
     };
+    let (ix1, iy1, iz1) = (ix.wrapping_add(1), iy.wrapping_add(1), iz.wrapping_add(1));
     let lerp = |a: f64, b: f64, f: f64| a * (1.0 - f) + b * f;
     let at = |t: i32| {
         let front = lerp(
-            lerp(get(ix, iy, iz, t), get(ix + 1, iy, iz, t), fx),
-            lerp(get(ix, iy + 1, iz, t), get(ix + 1, iy + 1, iz, t), fx),
+            lerp(get(ix, iy, iz, t), get(ix1, iy, iz, t), fx),
+            lerp(get(ix, iy1, iz, t), get(ix1, iy1, iz, t), fx),
             fy,
         );
         let back = lerp(
-            lerp(get(ix, iy, iz + 1, t), get(ix + 1, iy, iz + 1, t), fx),
-            lerp(
-                get(ix, iy + 1, iz + 1, t),
-                get(ix + 1, iy + 1, iz + 1, t),
-                fx,
-            ),
+            lerp(get(ix, iy, iz1, t), get(ix1, iy, iz1, t), fx),
+            lerp(get(ix, iy1, iz1, t), get(ix1, iy1, iz1, t), fx),
             fy,
         );
         lerp(front, back, fz)
     };
-    lerp(at(it), at(it + 1), ft) as f32
+    lerp(at(it), at(it.wrapping_add(1)), ft) as f32
 }
 
 /// WAVEVALUE (tr_shade_calc.c:34): base + table[idx]*amp with

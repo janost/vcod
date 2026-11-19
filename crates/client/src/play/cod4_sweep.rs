@@ -31,6 +31,8 @@
 //! in the suite on `run_held`'s clock (docs/dev/testing.md, CoD4 live
 //! tests).
 
+#![allow(unsafe_code)]
+
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::net::SocketAddr;
@@ -1116,6 +1118,8 @@ fn rig(root: &Path, map: &str, addr: std::net::SocketAddr) -> anyhow::Result<Rig
         Default::default(),
     );
     audio.on_gamestate(map);
+    // the sweep's sounds start, play out and reap as on a device
+    audio.mock_mixer();
     let mut fx = crate::fx::sim::FxSystem::new();
     let mut c = crate::cod4_client::Cod4Client::new(
         s,
@@ -1223,6 +1227,7 @@ fn play(root: &Path, map: &str, addr: std::net::SocketAddr, shared: &Shared) -> 
             audio.set_listener(cam.pos, f, rt, u, u32::MAX);
             fx.step(dt, time, None);
             let positions = c.entity_positions();
+            audio.pump_mixer(f64::from(dt));
             audio.step(&positions, &HashMap::new(), None);
         } else {
             c.session.step(time as f64 * 1000.0)?;

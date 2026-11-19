@@ -52,7 +52,7 @@ pub struct PlayerDObj {
     /// update; an empty slot clears its names without counting as a change.
     names: Assembly,
     /// What the DObj was built from: the hit walk's assembly.
-    built: Assembly,
+    built: Rc<Assembly>,
     /// The weapon it was built with, 0 for a rider without one.
     weapon: i32,
     /// The client info's rebuild flag (1.5b `+0x3f8`, UO `+0x404`).
@@ -69,16 +69,18 @@ impl PlayerDObj {
     /// rebuilds it, reading the bits as they are. Then `BG_PlayerAnimation`:
     /// a new torso anim other than 0, toggle bit aside, sets the flag for the
     /// next update (`BG_SetNewAnimation`, 1.5b 0x1908f, UO 0x1d201).
-    pub fn update(&mut self, now: &Assembly, weapon: i32, torso: i32) -> &Assembly {
+    pub fn update(&mut self, now: &Assembly, weapon: i32, torso: i32) -> &Rc<Assembly> {
         let changed = now.body != self.names.body
             || now
                 .attachments
                 .iter()
                 .enumerate()
                 .any(|(i, a)| self.names.attachments.get(i) != Some(a));
-        self.names = now.clone();
+        if self.names != *now {
+            self.names = now.clone();
+        }
         if changed || weapon != self.weapon || self.rebuild {
-            self.built = now.clone();
+            self.built = Rc::new(now.clone());
             self.weapon = weapon;
             self.rebuild = false;
         }
@@ -98,8 +100,9 @@ pub fn model_name(raw: &str) -> String {
         .to_string()
 }
 
-/// Grafted skeletons and anim clips, loaded on first use and kept for the
-/// map. A shot is rare next to a frame, so nothing here is warmed up front.
+/// Grafted skeletons and anim clips, loaded on first use and kept while the
+/// owner lives (the CoD1 server's for the whole process). A shot is rare
+/// next to a frame, so nothing here is warmed up front.
 #[derive(Default)]
 pub struct HitRigs {
     rigs: HashMap<String, Option<Rc<Skeleton>>>,
@@ -164,8 +167,8 @@ impl HitRigs {
         self.roots
             .entry(name.to_string())
             .or_insert_with(|| {
-                let model = model::load(fs, name).ok()?;
-                model.bones.first().map(|b| b.name.clone())
+                let bones = model::load_bones(fs, name).ok()?;
+                bones.first().map(|b| b.name.clone())
             })
             .clone()
     }
@@ -187,16 +190,27 @@ impl HitRigs {
     }
 }
 
+/// A model's skeleton alone: a rig reads the bones and the name, never the
+/// surfaces, so no `xmodelsurfs` is parsed or baked.
+fn bones_only(fs: &dyn AssetSource, name: &str) -> anyhow::Result<model::Model> {
+    Ok(model::Model {
+        name: name.to_string(),
+        bones: model::load_bones(fs, name)?,
+        lods: Vec::new(),
+        collision: Vec::new(),
+    })
+}
+
 /// An attachment that will not load is left out, the way the client leaves it
 /// undrawn; a body that will not load has no rig at all.
 fn build(fs: &dyn AssetSource, assembly: &Assembly) -> Option<Rc<Skeleton>> {
-    let body = model::load(fs, &assembly.body).ok()?;
+    let body = bones_only(fs, &assembly.body).ok()?;
     let parts: Vec<(model::Model, Option<&str>)> = assembly
         .attachments
         .iter()
         .enumerate()
         .filter_map(|(i, (name, tag))| {
-            let mut model = model::load(fs, name).ok()?;
+            let mut model = bones_only(fs, name).ok()?;
             // The engine's hit-box walk skips a flagged model's boxes
             // (docs/research/cod15-protocol-diff.md, `getAttachIgnoreCollision`).
             if assembly.ignore_collision >> i & 1 != 0 {
@@ -277,12 +291,12 @@ mod tests {
         let mut head = both.clone();
         head.attachments.pop();
         d.update(&both, 0, 0);
-        assert_eq!(d.update(&head, 0, 0), &both);
+        assert_eq!(**d.update(&head, 0, 0), both);
         let mut flagged = both.clone();
         flagged.ignore_collision = 2;
-        assert_eq!(d.update(&flagged, 0, 0), &flagged);
+        assert_eq!(**d.update(&flagged, 0, 0), flagged);
         d.update(&head, 0, 0);
-        assert_eq!(d.update(&head, 4, 0), &head);
+        assert_eq!(**d.update(&head, 4, 0), head);
     }
 
     #[test]

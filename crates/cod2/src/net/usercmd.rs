@@ -4,6 +4,7 @@
 //! 0x80689a6.
 
 use super::delta::PlayerState2;
+use super::flags::{EF_CROUCHING, EF_PRONE, PMF_CMD_STANCE};
 use vcod_common::net::codec::{MsgReader, MsgWriter};
 
 /// `usercmd_s`. Angles are 16-bit (`ANGLE2SHORT`) values held in the low half.
@@ -201,13 +202,13 @@ pub fn default_usercmd(ps: &PlayerState2) -> UserCmd2 {
         let a = ((v * (65536.0f32 / 360.0)) as i32) as i16;
         c.angles[i] = i32::from(a.wrapping_sub(delta) as u16);
     }
-    if ps.i32("pm_flags") & 0x80_0000 == 0 {
+    if ps.i32("pm_flags") & PMF_CMD_STANCE == 0 {
         return c;
     }
     let eflags = ps.i32("eFlags");
-    if eflags & 8 != 0 {
+    if eflags & EF_PRONE != 0 {
         c.buttons |= 0x100;
-    } else if eflags & 4 != 0 {
+    } else if eflags & EF_CROUCHING != 0 {
         c.buttons |= 0x200;
     }
     let lean = ps.f32("leanf");
@@ -277,5 +278,30 @@ mod tests {
             right_move: -127,
         };
         assert_eq!(roundtrip(key, from, f), f);
+    }
+
+    /// A cmd clock at either end of `int`: the one-byte step wraps past
+    /// `i32::MAX` as retail's `int` add does, and a step past 255 or
+    /// backwards goes out whole.
+    #[test]
+    fn the_clock_wraps_at_the_ends_of_int() {
+        let key = 0xdead_beef;
+        let from = UserCmd2 {
+            server_time: i32::MAX - 5,
+            ..UserCmd2::default()
+        };
+        let to = UserCmd2 {
+            server_time: i32::MIN + 3,
+            ..from
+        };
+        assert_eq!(roundtrip(key, from, to), to);
+        for t in [i32::MAX, i32::MIN] {
+            let to = UserCmd2 {
+                server_time: t,
+                ..from
+            };
+            assert_eq!(roundtrip(key, UserCmd2::default(), to), to);
+            assert_eq!(roundtrip(key, to, from), from);
+        }
     }
 }

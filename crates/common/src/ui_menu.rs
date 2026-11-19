@@ -1,9 +1,9 @@
 //! The front end's menu files: `ui_mp/*.menu` and `ui/*.menu`, the full
 //! `menuDef` / `itemDef` grammar the UI module reads, as far as the main menu
 //! the server browser and the options screens use it
-//! (docs/research/cod11-front-end.md). Unlike
-//! [`crate::menu`], which keeps only what a script menu needs, this keeps the
-//! layout: rects, colours, styles, text placement and the item scripts.
+//! (docs/research/cod11-front-end.md): rects, colours, styles, text
+//! placement and the item scripts. [`crate::menu`] holds the tokenizer and
+//! the item cvar test.
 
 use crate::asset_source::{Asset, AssetKind, AssetSource};
 use crate::game::Game;
@@ -403,6 +403,62 @@ const LANGUAGES: [&str; 14] = [
 /// through `atoi`, else none. English is 0, so stock installs never try it
 /// (docs/research/cod11-front-end.md, section 1).
 pub fn localized_menu_path(path: &str, cl_language: &str) -> Option<String> {
+    let index = language_index(cl_language);
+    if index == 0 {
+        return None;
+    }
+    let language = language_name(index);
+    let split = path.rfind('/').map_or(0, |i| i + 1);
+    let (dir, file) = path.split_at(split);
+    Some(format!("{dir}{language}/{file}"))
+}
+
+/// The language `cl_language`'s index names: [`LANGUAGES`], English past
+/// the table.
+fn language_name(index: i32) -> &'static str {
+    usize::try_from(index)
+        .ok()
+        .and_then(|i| LANGUAGES.get(i))
+        .unwrap_or(&LANGUAGES[0])
+}
+
+/// The language check (CoDMP.exe 0x4a9b10, run at start-up, `FS_Restart`
+/// and `vid_restart`): how many languages a `localized_<language>_*` pak
+/// carries, and the `cl_language` it forces when the chosen language's
+/// strings do not load: the first such language in table order whose do,
+/// else English (`"0"`). `None` keeps the value. A table loads when
+/// `localizedstrings/<language>/` holds a `.str` (0x4a9d00; front-end doc
+/// 1).
+pub fn check_language(fs: &crate::pk3::Pk3Fs, cl_language: &str) -> (usize, Option<String>) {
+    let flagged: Vec<usize> = (0..LANGUAGES.len())
+        .filter(|&i| {
+            fs.paks().any(|p| {
+                p.localized
+                    && p.name.len() > "localized_".len()
+                    && p.name["localized_".len()..]
+                        .split('_')
+                        .next()
+                        .is_some_and(|l| l.eq_ignore_ascii_case(LANGUAGES[i]))
+            })
+        })
+        .collect();
+    let loads = |name: &str| {
+        !fs.file_list(&format!("localizedstrings/{name}"), ".str")
+            .is_empty()
+    };
+    if loads(language_name(language_index(cl_language))) {
+        return (flagged.len(), None);
+    }
+    let pick = flagged
+        .iter()
+        .find(|&&i| loads(LANGUAGES[i]))
+        .copied()
+        .unwrap_or(0);
+    (flagged.len(), Some(pick.to_string()))
+}
+
+/// `atoi` of `cl_language`.
+fn language_index(cl_language: &str) -> i32 {
     let t = cl_language.trim_start();
     let (neg, digits) = match t.as_bytes().first() {
         Some(b'-') => (true, &t[1..]),
@@ -415,17 +471,16 @@ pub fn localized_menu_path(path: &str, cl_language: &str) -> Option<String> {
         .fold(0i32, |n, d| {
             n.wrapping_mul(10).wrapping_add(i32::from(d - b'0'))
         });
-    let index = if neg { n.wrapping_neg() } else { n };
-    if index == 0 {
-        return None;
-    }
-    let language = usize::try_from(index)
-        .ok()
-        .and_then(|i| LANGUAGES.get(i))
-        .unwrap_or(&LANGUAGES[0]);
-    let split = path.rfind('/').map_or(0, |i| i + 1);
-    let (dir, file) = path.split_at(split);
-    Some(format!("{dir}{language}/{file}"))
+    if neg { n.wrapping_neg() } else { n }
+}
+
+/// `listBoxDef_t`'s `columnInfo` slots: a larger `columns` count is cut to
+/// this (Q3's `MAX_LB_COLUMNS`; CoD4's `listBoxDef_s` holds 16, cod4-hud.md).
+const MAX_LB_COLUMNS: usize = 16;
+
+/// The column count a `columns` token gives, cut to [`MAX_LB_COLUMNS`].
+fn column_count(t: Option<&String>) -> usize {
+    (num(t) as usize).min(MAX_LB_COLUMNS)
 }
 
 /// Q3's `atof`/`atoi` plus the `0x` hex `menudef.h` uses for flags.
@@ -636,7 +691,7 @@ fn parse_item(tokens: &[String], game: Game, errors: &mut Vec<String>) -> UiItem
             "feeder" => item.feeder = Some(num(tokens.get(i + 1)) as i32),
             "elementheight" => item.element_height = num(tokens.get(i + 1)),
             "columns" => {
-                let n = num(tokens.get(i + 1)) as usize;
+                let n = column_count(tokens.get(i + 1));
                 item.columns = (0..n)
                     .map(|c| {
                         let at = i + 2 + c * 3;
@@ -882,7 +937,7 @@ mod cod2 {
             }
             Some(Rect) => *i += super::rect_align(tokens, *i - 1, &mut [0; 2]) - 1,
             Some(Columns) => {
-                let n = super::num(tokens.get(*i)) as usize;
+                let n = super::column_count(tokens.get(*i));
                 *i += 1 + n * 3;
             }
         }
@@ -896,7 +951,7 @@ mod cod2 {
             0..=12 => t,
             14 => super::ITEM_TYPE_BIND,
             16 => super::ITEM_TYPE_EDITFIELD,
-            _ => 100 + t,
+            _ => t.saturating_add(100),
         }
     }
 }
@@ -1348,6 +1403,18 @@ mod tests {
         );
     }
 
+    /// An English install: one language, and a `cl_language` naming one
+    /// with no strings falls back to English.
+    #[test]
+    fn the_language_check_falls_back_to_a_language_with_strings() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        assert_eq!(check_language(&fs, "0"), (1, None));
+        assert_eq!(check_language(&fs, "2"), (1, Some("0".into())));
+        assert_eq!(check_language(&fs, "99"), (1, None));
+    }
+
     #[test]
     fn game_types_list_the_scripts_without_an_underscore_named_by_their_txt() {
         let mut fs = crate::pk3::Pk3Fs::empty();
@@ -1384,6 +1451,21 @@ mod tests {
         let fs = crate::pk3::Pk3Fs::open(dir.path()).unwrap();
         let got: Vec<String> = game_types(&fs).into_iter().map(|g| g.script).collect();
         assert_eq!(got, ["tdm", "dm", "sd"]);
+    }
+
+    #[test]
+    fn a_huge_column_count_or_item_type_is_cut() {
+        for n in ["1e30", "4000000000", "-5"] {
+            let text = format!("menuDef {{ itemDef {{ type 6 columns {n} 1 2 3 visible 1 }} }}");
+            for game in [Game::Cod1, Game::Cod2] {
+                let file = parse_menu_file_in(game, &text, &|_| None);
+                let cols = file.menus[0].items[0].columns.len();
+                assert!(cols <= MAX_LB_COLUMNS, "{n}: {cols}");
+            }
+        }
+        let text = "menuDef { itemDef { type 2147483647 } }";
+        let file = parse_menu_file_in(Game::Cod2, text, &|_| None);
+        assert_eq!(file.menus[0].items[0].kind, i32::MAX);
     }
 
     #[test]
@@ -1450,5 +1532,12 @@ mod tests {
             checked += 1;
         }
         assert!(checked >= 15, "{checked}");
+    }
+
+    #[test]
+    fn a_hostile_menu_never_panics() {
+        crate::testing::fuzz("menu", MENU.as_bytes(), 1500, |b| {
+            parse(&String::from_utf8_lossy(b));
+        });
     }
 }

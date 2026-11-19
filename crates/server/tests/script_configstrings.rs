@@ -5,14 +5,8 @@
 
 fn cfg(map: &str) -> vcod_server::ServerConfig {
     vcod_server::ServerConfig {
-        map: map.into(),
-        hostname: "vcod test".into(),
         max_clients: 4,
-        gametype: "dm".into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
+        ..crate::common::cfg(map, "dm")
     }
 }
 
@@ -35,7 +29,7 @@ fn the_map_script_writes_the_fog_and_ambient_configstrings() {
 /// and `projectileModel` out of its weapon file, and `ScriptRuntime::load`
 /// is the only place that sets it. Drop that one line and every
 /// weapon-file-sourced model silently leaves the model block while every
-/// other test stays green -- `precacheItem`'s own test uses `item_health`,
+/// other test stays green: `precacheItem`'s own test uses `item_health`,
 /// whose model is compiled into the binary, and the spawn-side test mounts
 /// its own filesystem. These two names can come from nowhere else on
 /// mp_pavlov: `weapon_MP40` is no entity's `model` key and no script

@@ -5,9 +5,11 @@ the three connectionless replies, the gamestate framing and the whole
 configstring table for two stock maps. vcod-server copies its constants from
 these captures.
 
-Everything here is **VERIFIED live 2026-08-25** against `cod_lnxded` (1.1d)
-with `game.mp.i386.so` (`gamedate: Nov 13 2003`) and the 1.5 install's assets,
-unless a line says otherwise.
+Everything from "Setup" through "What a minimal server has to set" is
+**VERIFIED live 2026-08-25** against `cod_lnxded` (1.1d) with
+`game.mp.i386.so` (`gamedate: Nov 13 2003`) and the 1.5 install's assets,
+unless a line says otherwise. From "Retail client check" on, each section
+names its own runs and binaries and each claim carries its own label.
 
 Contents: setup; connectionless replies; the gamestate message; configstrings
 at gamestate; what a minimal server has to set; retail client check;
@@ -395,23 +397,8 @@ an op) and disconnects (server: `dropped: EXE_DISCONNECTED`). vcod's client
 never reads past the gamestate body, so only retail's catches it.
 `ServerNetchan::transmit` appends it; the byte-exact test pins it.
 
-Two shells:
-
-```
-RUST_LOG=debug cargo run -p vcod-server -- mp_carentan
-CoDMP.exe +set r_fullscreen 0 +connect 127.0.0.1:28960     # from the 1.1 install
-```
-
-Pass: the server logs `connected`, `gamestate, N bytes` and `sent its first
-move`, with no `usercmd not parsed` at debug level; the client loads the map;
-neither side prints `EXE_SERVER_IS_DIFFERENT_VER`.
-
-| Symptom | Suspect |
-|---|---|
-| `usercmd not parsed` at debug level | the full-field usercmd branch, INFERRED from disassembly only; table in `tools/re/net-notes.md` |
-| `Illegible server message N` right after the map loads | the missing `svc_EOF` terminator (`ServerNetchan::transmit`) |
-| the client disconnects right after the gamestate with another error | the configstring table in `crates/server/src/configstrings.rs` |
-| no `connectResponse` | `parse_connect` (`crates/common/src/net/connectionless.rs`) |
+The run's recipe, pass line and symptom table: `docs/dev/retail.md`, "A
+retail client against vcod-server".
 
 ## Housekeeping: master heartbeat, rcon, zombie slots, private slots
 
@@ -495,6 +482,13 @@ a second.
   (Q3's `Com_Milliseconds`). INFERRED (shape).
 - With the 5 ms socket read ("Pings"): 505 ms apart answered 20/20, 490 ms
   0/10. VERIFIED (live, 1.1d, 2026-10-17).
+- vcod keeps the 500 ms window per source address, so a flood from one
+  address cannot hold the admin's requests out, and drops an address that
+  sends 8 wrong passwords in a burst, its count draining one per 30 s
+  (`rcon::Rcon`, the same on CoD2 and CoD4). It tracks 4096 addresses at
+  once; past that a wrong password from a new address gets no answer. From
+  one address the timing above is unchanged. vcod's own: retail has one
+  window for the whole server and no count.
 - vcod-server rebuilds that moment (`handle_queued` in `main.rs`,
   `engine::Arrival::read`): the arrival, or the end of the previous packet's
   handling when later (an rcon `map_restart`); the tick is not counted, as
@@ -653,6 +647,7 @@ A zombie never active:
 
 All three servers send a frame's messages in one slot-order pass, whatever
 each slot's state; zombies and unentered clients get no pass of their own.
+INFERRED (control flow of the three `SV_SendClientMessages` below).
 
 | | 1.1d | 1.5b | UO 1.51b |
 |---|---|---|---|
@@ -980,9 +975,9 @@ Map commands:
   VERIFIED.
 - `fast_restart` answered an empty `print\n`. VERIFIED.
 - vcod prints the head of the block before the script load
-  (`restart_game_banner`, `game_init_head` in `server.rs`, with 1.5's and
-  UO's name and date) and `G_FindTeams`' line and the dashes after the
-  spawn (`game_init_tail`, off `game::teams::find_teams`).
+  (`restart_game_banner`, `game_init_head` in `server/map_cycle.rs`, with
+  1.5's and UO's name and date) and `G_FindTeams`' line and the dashes after
+  the spawn (`game_init_tail`, off `game::teams::find_teams`).
 - `G_FindTeams` (1.1d 0x4f9c4), Q3's: VERIFIED, the disassembly. Over
   entities 1 up to `level.num_entities` it takes one in use (`+0x160`), with
   a `team` key (`+0x1d8`, a string index) and not yet a slave (`+0x17c` bit
@@ -1069,7 +1064,7 @@ Map commands:
 - vcod prints the same lines off its own search path, a pak's count from
   the end of central directory record (`pak_checksum::entry_count`), with no
   `Hunk_Clear` or `Sys_LoadDll` line: it has no hunk and loads no module
-  (`spawn_server_banner` in `server.rs`;
+  (`spawn_server_banner` in `server/map_cycle.rs`;
   `a_map_change_over_rcon_prints_the_spawn_and_the_search_path`). Against
   the same install its search path lines matched retail's install half line
   for line. VERIFIED (capture).
@@ -1147,7 +1142,7 @@ probe in the game, a socket on 127.0.0.1:20510 as the master.
   per endon.
 - vcod (`Vm::thread_usage`, `game::usage`) counts the same over its frames:
   a frame's defined locals, an array's holders counted over every frame,
-  struct field and array element (garbage the heap keeps too), and `1 + n`
+  struct field and array element (garbage since the last sweep too), and `1 + n`
   for `n` endons; `script_usage_counts_as_retail` matches the capture byte
   for byte, the entity and HUD element lines included.
 - Order: a thread's record is its code positions innermost first (current,
@@ -1267,7 +1262,7 @@ The entity line:
   buckets: %d\n` (65535 minus allocated). VERIFIED (strings, loop).
 - Captured: `total memory alloc buckets: 4580 (1158 instances)`, `total memory
   free buckets: 60955`. VERIFIED.
-- vcod has no tree: instances are the VM interner's strings (never freed),
+- vcod has no tree: instances are the VM interner's live strings,
   each four header bytes plus text and NUL rounded as `MT_GetSize` does; free
   buckets list one block per set bit. vcod's own model; 4171 buckets, 1010
   strings on mp_carentan.
@@ -1420,9 +1415,9 @@ keep the line reader, as their `ttycon` is forced off (cod2-protocol.md
 
 Gates: `stdin_console::tests` (a pipe's line arrives, its EOF stops only
 the reading, a line reaches CoD2's and CoD4's servers),
-`server::tests::a_stdin_line_runs_on_the_console` (CoD1),
+`server::console_cmds::tests::a_stdin_line_runs_on_the_console` (CoD1),
 `tty_console::tests` (keys to line, history, flushes and completion) and
-`server::tests::a_tab_gets_the_commands_and_cvars`.
+`server::console_cmds::tests::a_tab_gets_the_commands_and_cvars`.
 
 ### Pings (`SV_CalcPings`, 0x808cab8)
 
@@ -1493,7 +1488,7 @@ The read schedule:
 
 Q3's `EF_CONNECTION` rule survives in all three game modules but never reaches
 the wire: the entity's `eFlags` are overwritten from the playerstate right
-after.
+after. INFERRED, from the store order the table's addresses give.
 
 | module | stamp | `ClientEndFrame` | bit set | copies (`eFlags` source) |
 |---|---|---|---|---|
@@ -1606,7 +1601,7 @@ resolves `COMPUTERNAME` as retail does.
   `getchallenge` gets `error\nEXE_ERR_BAD_CDKEY`; a LAN client has no guid and
   is never refused, as on retail. No `Resolving` lines.
 
-### 1.5 temporary bans (`tempBanUser` 0x8087f2a, `tempBanClient` 0x8088087)
+### Temporary bans on 1.5 (`tempBanUser` 0x8087f2a, `tempBanClient` 0x8088087)
 
 cod_lnxded 1.5b, from the asm.
 
@@ -1644,7 +1639,7 @@ cod_lnxded 1.5b, from the asm.
   `getGuid` stays 0. The table runs on the game clock as retail's (the
   unscaled clock would age a ban through a match timeout).
 
-### 1.5 permanent bans (`banUser` 0x8087f73, `banClient` 0x8087fc7, `unbanUser` 0x808801b)
+### Permanent bans on 1.5 (`banUser` 0x8087f73, `banClient` 0x8087fc7, `unbanUser` 0x808801b)
 
 cod_lnxded 1.5b, from the asm. UO matches it instruction for instruction.
 VERIFIED (`coduo_lnxded` 1.51b, jumps relative, absolute addresses masked):
@@ -1819,12 +1814,13 @@ case alike. VERIFIED (captures).
   and go on: a 1000-byte `getinfo` came back `\challenge\<1000>\protocol\6`
   alone; a 1000-byte `getstatus` as the serverinfo without `challenge`,
   `\pswrd\0\mod\1` still at the end. VERIFIED.
-- vcod (`oob_argv` and `Server::info_pairs` in `crates/server/src/server.rs`,
-  `Info::set_value_for_key` in `crates/common/src/net/connectionless.rs`)
-  reads, tokenizes and strips the same, skips an overflowing pair on 1.5/UO,
-  and on 1.1 sends no reply and keeps its level. A loopback A/B of these cases
-  matched retail byte for byte on all three protocols, except 1.5b's archived
-  `g_timeoutsAllowed 2` from its homepath config.
+- vcod (`oob_argv` and `Server::info_pairs` in
+  `crates/server/src/server/connectionless.rs`, `Info::set_value_for_key` in
+  `crates/common/src/net/connectionless.rs`) reads, tokenizes and strips the
+  same, skips an overflowing pair on 1.5/UO, and on 1.1 sends no reply and
+  keeps its level. A loopback A/B of these cases matched retail byte for byte
+  on all three protocols, except 1.5b's archived `g_timeoutsAllowed 2` from
+  its homepath config.
 
 ### `fs_restrict`
 
@@ -2210,10 +2206,11 @@ with chosen userinfo) and `vcod --net-probe` for the level-boundary drops.
   rcon set `secret`, and both `map_restart` and `map mp_harbor` dropped it
   with `w "GAME_INVALIDPASSWORD"`; the restart also printed `SV_MapRestart_f:
   dropped client 3 - denied!` per client).
-- vcod (`Server::password_denied`, `crates/server/src/server.rs`) reads
-  `g_password` from the level's cvar table and tests in `svc_direct_connect`
-  after the full-server check and at both level boundaries before the script's
-  reconnect; its bots are exempt like retail's test clients.
+- vcod (`Server::password_denied`,
+  `crates/server/src/server/connectionless.rs`) reads `g_password` from the
+  level's cvar table and tests in `svc_direct_connect` after the full-server
+  check and at both level boundaries before the script's reconnect; its bots
+  are exempt like retail's test clients.
 
 ## Pak checksums and pure servers
 
@@ -2428,6 +2425,12 @@ Defaults and order:
   name), `nextdl` (`0x8086168`), `stopdl` (`0x8087960`), `donedl`
   (`0x80879fc`: `SV_SendClientGameState`), `retransdl` (`0x8087a2c`).
   VERIFIED.
+- vcod builds no second gamestate for a `donedl` (or a redirect's
+  `wwwdl done`) while the gamestate is still the last message it sent the
+  client (`Client::gamestate_last`): one message of pipelined `donedl`s
+  would otherwise queue a whole gamestate each. A client's single `donedl`
+  after its download never meets it. vcod's own, as CoD2's and CoD4's
+  (cod2-protocol.md 14).
 - `SV_WriteDownloadToClient` (`0x8086290`) opens the file on the next message.
   A refusal is `svc_download`, block 0, size -1, the string with the name
   after `\x15`. VERIFIED (strings `0x80d4838`, `0x80d48c2`, `0x80d48a0`,
@@ -2490,7 +2493,8 @@ Defaults and order:
 - Downloads (`crates/server/src/download.rs`) are limited on purpose to
   mounted paks listed in `sv_referencedPakNames`: those are all a retail
   client asks for (`FS_ComparePaks` lists from them), and retail's open path
-  serves any file. Blocks go in the per-client message at `nextSnapshotTime`,
+  serves any file. A transfer holds the pak's open file and reads each block
+  off it as it goes out (`DownloadFile`), never the whole pak. Blocks go in the per-client message at `nextSnapshotTime`,
   alone before the world and after the snapshot once in it, with no server
   commands until active; a fragmented message goes a fragment a turn.
 - The client sends a packet every 50 ms during a download (`NetClient`); the

@@ -265,13 +265,24 @@ fn holds(ps: &PlayerView, w: i32) -> bool {
     (0..2).contains(&word) && w > 0 && (ps.raw.i32(&format!("weapons[{word}]")) >> b) & 1 != 0
 }
 
+/// `ps.ammoclip[slot]`. The wire carries 64 slots; a weapon list with more
+/// clip names (a mod's) reads 0 past them.
+fn clip_in(ps: &PlayerView, slot: usize) -> i32 {
+    ps.raw.ammoclip.get(slot).copied().unwrap_or(0)
+}
+
+/// `ps.ammo[slot]`, as [`clip_in`].
+fn ammo_in(ps: &PlayerView, slot: usize) -> i32 {
+    ps.raw.ammo.get(slot).copied().unwrap_or(0)
+}
+
 /// `BG_GetTotalAmmoReserve` (Mac 0x7a9d0) without shared ammo caps (no
 /// stock weapon has one): a clip-only weapon's clip, else its ammo.
 fn reserve(ps: &PlayerView, w: &Weap) -> i32 {
     if w.def.flag("clipOnly") {
-        ps.raw.ammoclip[w.clip]
+        clip_in(ps, w.clip)
     } else {
-        ps.raw.ammo[w.ammo]
+        ammo_in(ps, w.ammo)
     }
 }
 
@@ -286,7 +297,7 @@ fn low_ammo(ps: &PlayerView, w: &Weap) -> bool {
 /// size or under.
 fn low_clip(ps: &PlayerView, w: &Weap) -> bool {
     let size = w.def.int("clipSize");
-    let clip = ps.raw.ammoclip[w.clip];
+    let clip = clip_in(ps, w.clip);
     !w.def.flag("clipOnly") && clip >= 0 && size >= 1 && clip.min(999) as f32 <= size as f32 * 0.33
 }
 
@@ -317,7 +328,7 @@ fn angle_normalize_180(a: f32) -> f32 {
 
 /// `AngleSubtract`: `a - b` into -180..180.
 fn angle_subtract(a: f32, b: f32) -> f32 {
-    let mut d = a - b;
+    let mut d = vcod_common::fguard::turns(a - b);
     while d > 180.0 {
         d -= 360.0;
     }
@@ -758,7 +769,6 @@ impl Ctx<'_> {
     }
 
     /// `UI_DrawText`: `s` with its baseline at grid `(x, y)` under `align`.
-    #[allow(clippy::too_many_arguments)]
     fn text(
         &self,
         s: &str,
@@ -815,7 +825,7 @@ fn rgba(rgb: [f32; 4], a: f32) -> [f32; 4] {
 
 impl PlayerHud {
     /// The HUD for `frame` on a `w` x `h` window at cgame time `now`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn build(
         &mut self,
         frame: &Frame,
@@ -885,7 +895,6 @@ impl PlayerHud {
     /// `CG_DrawCrosshairNames`' line (Mac 0x1cddb4): `s` in font 0 at
     /// 1/3, aligned (0, 0), at `cg_drawCrosshairNamesPosX` and 16 under
     /// `cg_drawCrosshairNamesPosY`, without the style 3 shadow.
-    #[allow(clippy::too_many_arguments)]
     pub fn crosshair_name(
         &self,
         s: &str,
@@ -918,7 +927,6 @@ impl PlayerHud {
     /// and the followed name centred at y 40 and 65, font 0 at 1/3.
     /// `keys` are the bound keys of `+attack`, `toggleads` (else
     /// `+speed`) and `+melee` (else `+melee_breath`), empty when unbound.
-    #[allow(clippy::too_many_arguments)]
     pub fn follow(
         &self,
         frame: &Frame,
@@ -1234,7 +1242,7 @@ impl PlayerHud {
                 pitch,
                 ps.raw.i32("damageCount"),
                 axis,
-                frame.snap.server_time,
+                frame.snap.server_time.raw(),
                 now,
             );
             if (yaw, pitch) != (255, 255) {
@@ -1244,7 +1252,7 @@ impl PlayerHud {
                 self.rng = self.rng.wrapping_mul(1_103_515_245).wrapping_add(12345);
                 let r = (self.rng >> 16 & 0x7fff) as f32 / 32768.0;
                 self.damage[slot] = DamageIcon {
-                    start: frame.snap.server_time,
+                    start: frame.snap.server_time.raw(),
                     ms: DAMAGE_ICON_MS,
                     yaw: angle_normalize_360(yaw as f32 / 255.0 * 360.0 + (r - 0.5) * 20.0),
                 };
@@ -1275,7 +1283,7 @@ impl PlayerHud {
         let clip = if weap.def.flag("clipOnly") {
             -1
         } else {
-            ps.raw.ammoclip[weap.clip]
+            clip_in(ps, weap.clip)
         };
         Some((clip, reserve(ps, weap)))
     }
@@ -1491,7 +1499,7 @@ impl PlayerHud {
         let [x, y, w, _] = item.rect;
         let (al, sc) = (item.align, item.text_scale);
         let clip = (!weap.def.flag("clipOnly"))
-            .then(|| ps.raw.ammoclip[weap.clip])
+            .then(|| clip_in(ps, weap.clip))
             .filter(|&c| c >= 0)
             .map(|c| format!("{:2}", c.min(999)));
         let rsv = Some(reserve(ps, weap))
@@ -1556,7 +1564,7 @@ impl PlayerHud {
                 .all()
                 .filter(move |(i, w)| w.def.int("offhandClass") == class && holds(ps, *i))
         };
-        let available = held().find(|(_, w)| ps.raw.ammo[w.ammo] + ps.raw.ammoclip[w.clip] != 0);
+        let available = held().find(|(_, w)| ammo_in(ps, w.ammo) + clip_in(ps, w.clip) != 0);
         let Some(first) = available.or_else(|| held().next()) else {
             return;
         };
@@ -1575,7 +1583,7 @@ impl PlayerHud {
                 }
             }
             Offhand::Count => {
-                let n: i32 = held().map(|(_, w)| ps.raw.ammoclip[w.clip]).sum();
+                let n: i32 = held().map(|(_, w)| clip_in(ps, w.clip)).sum();
                 let c = if n == 0 {
                     rgba(
                         [LOW_AMMO_RGB[0], LOW_AMMO_RGB[1], LOW_AMMO_RGB[2], 0.0],
@@ -1594,9 +1602,6 @@ impl PlayerHud {
         }
     }
 
-    /// `CG_DrawCursorhint` (Mac 0x18a7a6) at `cg_cursorHints` 4: a use
-    /// trigger's string (`&&1` its key) left of `hint_usable`, the health
-    /// and pickup hints, or a weapon on the ground's icon.
     /// `CG_DrawPlayerStance`'s hint prints under `cg_hudStanceHintPrints`
     /// (Mac 0x18bbbc): for 3 s after a stance change, beside the icon, a
     /// line for each other stance with a bound command
@@ -1655,6 +1660,9 @@ impl PlayerHud {
         }
     }
 
+    /// `CG_DrawCursorhint` (Mac 0x18a7a6) at `cg_cursorHints` 4: a use
+    /// trigger's string (`&&1` its key) left of `hint_usable`, the health
+    /// and pickup hints, or a weapon on the ground's icon.
     fn cursor_hint(
         &self,
         item: &Item,
@@ -2089,6 +2097,25 @@ fn slot_weapon(ps: &PlayerView, slot: usize) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::net::Msec;
+
+    /// A mod's weapon list can hand out clip and ammo slots past the
+    /// wire's 64; the HUD reads 0 there.
+    #[test]
+    fn a_slot_past_the_wire_arrays_reads_zero() {
+        let def = weapon::parse("w", b"WEAPONFILE\\clipSize\\30\\maxAmmo\\90", &[])
+            .unwrap()
+            .def;
+        let w = Weap {
+            params: WeaponParams::from_def(&def, 70, 90, 0),
+            def,
+            ammo: 70,
+            clip: 90,
+        };
+        let ps = PlayerView::new(&vcod_cod2::net::delta::PlayerState2::default(), 0);
+        assert_eq!(reserve(&ps, &w), 0);
+        assert!(low_clip(&ps, &w));
+    }
 
     #[test]
     fn fade_holds_then_falls() {
@@ -2186,6 +2213,401 @@ mod tests {
         assert_eq!(radius_frac(0.0), 0.0);
         assert_eq!(radius_frac(750.0), 0.5);
         assert_eq!(radius_frac(4000.0), 1.0);
+    }
+
+    use vcod_cod2::net::SnapshotView;
+    use vcod_cod2::net::delta::{ClientState2, EntityState2, PlayerState2};
+    use vcod_cod2::net::fields::{ENTITY_STATE_FIELDS, PLAYER_STATE_FIELDS};
+    use vcod_cod2::net::parse::{Gamestate2, Snapshot2};
+
+    fn set_ps(ps: &mut PlayerState2, name: &str, v: u32) {
+        ps.f[field_index(&PLAYER_STATE_FIELDS, name)] = v;
+    }
+
+    /// Configstrings with `entries` set.
+    fn configstrings(entries: &[(u16, &str)]) -> ConfigStrings {
+        let mut gs = Gamestate2 {
+            server_command_sequence: 0,
+            configstrings: Default::default(),
+            baselines: Default::default(),
+            client_num: 0,
+            checksum_feed: 0,
+        };
+        for &(i, v) in entries {
+            gs.configstrings.insert(i, v.into());
+        }
+        ConfigStrings::from_gamestate(&gs)
+    }
+
+    /// A snapshot at `t` with players `0..teams.len()` on those teams and
+    /// a live player entity for each but the viewer, client 0.
+    fn snap(ps: &PlayerState2, t: i32, teams: &[u32]) -> SnapshotView {
+        let team = field_index(&CLIENT_STATE_FIELDS, "team");
+        let clients = (0..teams.len() as u32)
+            .map(|n| {
+                let mut c = ClientState2::null(n);
+                c.f[team] = teams[n as usize];
+                c
+            })
+            .collect();
+        let entities = (1..teams.len() as u32)
+            .map(|n| {
+                let mut e = EntityState2::null(n);
+                e.f[field_index(&ENTITY_STATE_FIELDS, "eType")] = 1;
+                e
+            })
+            .collect();
+        SnapshotView::new(
+            &Snapshot2 {
+                message_num: 1,
+                server_time: Msec::from_raw(t),
+                delta_num: -1,
+                snap_flags: 0,
+                valid: true,
+                ps_lc: 0,
+                ps: ps.clone(),
+                entities,
+                clients,
+            },
+            0,
+        )
+    }
+
+    fn frame<'a>(snap: &'a SnapshotView, cs: &'a ConfigStrings) -> Frame<'a> {
+        Frame {
+            snap,
+            prev: None,
+            time_ms: snap.server_time.raw(),
+            frac: 1.0,
+            configstrings: cs,
+        }
+    }
+
+    fn input<'a>(stance_keys: Option<&'a KeyLookup>, voice: &'a VoiceShown) -> HudInput<'a> {
+        HudInput {
+            selected: 0,
+            use_key: "F",
+            mantle_hint: true,
+            draw_gun: true,
+            stance_keys,
+            hint_fade_ms: 300,
+            voice,
+        }
+    }
+
+    fn item(ownerdraw: i32) -> Item {
+        Item {
+            ownerdraw,
+            rect: [0.0, 0.0, 64.0, 32.0],
+            align: [0, 0],
+            fore: [1.0; 4],
+            background: None,
+            text_scale: 0.5,
+        }
+    }
+
+    /// Draws `f` under a 640 by 480 context at `now` over the test fonts,
+    /// shadows left out.
+    fn draw(now: i32, f: impl FnOnce(&Ctx, &mut Vec<HudQuad>)) -> Vec<HudQuad> {
+        let fonts = crate::hud::hudelem::tests::test_fonts();
+        let loc = Localized::default();
+        let cx = Ctx {
+            fonts: &fonts,
+            slot: Slot::Default,
+            sp: ScreenPlacement::new(640.0, 480.0),
+            k: 1.0,
+            screen_w: 640.0,
+            screen_h: 480.0,
+            loc: &loc,
+            now,
+        };
+        let mut out = Vec::new();
+        f(&cx, &mut out);
+        // the text's drop shadows
+        out.retain(|q| q.rgba != [0.0, 0.0, 0.0, 0.8]);
+        out
+    }
+
+    /// A rifle, weapon 1: clip slot 1, ammo slot 1.
+    fn rifle(extra: &str) -> Weap {
+        let text = format!("WEAPONFILE\\clipSize\\30\\maxAmmo\\90{extra}");
+        let def = weapon::parse("w", text.as_bytes(), &[]).unwrap().def;
+        Weap {
+            params: WeaponParams::from_def(&def, 1, 1, 0),
+            def,
+            ammo: 1,
+            clip: 1,
+        }
+    }
+
+    fn holding(clip: i32, ammo: i32) -> PlayerState2 {
+        let mut ps = PlayerState2::default();
+        set_ps(&mut ps, "weapon", 1);
+        set_ps(&mut ps, "weapons[0]", 0b10);
+        ps.ammoclip[1] = clip;
+        ps.ammo[1] = ammo;
+        ps
+    }
+
+    /// `CG_UpdateCompassOrientation` steps the spring 5 ms at a time, so
+    /// one long frame lands where many short ones do; the face springs
+    /// toward its target, settles on it, and snaps there when the clock
+    /// runs back or more than 500 ms went unseen.
+    #[test]
+    fn the_compass_spring_steps_5ms_at_a_time_and_snaps_past_500ms() {
+        let start = CompassSpring {
+            last: 1000,
+            angle: 0.0,
+            speed: 0.0,
+        };
+        let mut long = start;
+        long.step(90.0, 1050);
+        let mut short = start;
+        for t in (1005..=1050).step_by(5) {
+            short.step(90.0, t);
+        }
+        assert!(
+            (long.angle - short.angle).abs() < 1e-3,
+            "{long:?} {short:?}"
+        );
+        assert!(
+            (long.speed - short.speed).abs() < 1e-2,
+            "{long:?} {short:?}"
+        );
+        assert!(long.angle > 0.0 && long.angle < 90.0, "{long:?}");
+        let mut s = long;
+        // it overshoots and rings for about 3.5 s
+        for t in (1066..6000).step_by(16) {
+            s.step(90.0, t);
+        }
+        assert_eq!((s.angle, s.speed), (90.0, 0.0), "settled");
+        let mut s = start;
+        s.step(90.0, 1500);
+        assert_ne!(s.angle, 90.0, "500 ms still springs");
+        let mut s = start;
+        s.step(90.0, 1501);
+        assert_eq!((s.angle, s.speed), (90.0, 0.0), "past 500 ms snaps");
+        let mut s = long;
+        s.step(45.0, 1040);
+        assert_eq!(
+            (s.angle, s.speed, s.last),
+            (45.0, 0.0, 1040),
+            "a clock back snaps"
+        );
+    }
+
+    /// The reserve is low at a fifth of `maxAmmo`, the clip at a third of
+    /// its size; a clip-only weapon's reserve is its clip and its clip is
+    /// never low.
+    #[test]
+    fn low_ammo_is_a_fifth_of_max_and_low_clip_a_third_of_the_clip() {
+        let w = rifle("");
+        let view = |clip, ammo| PlayerView::new(&holding(clip, ammo), 0);
+        assert!(low_ammo(&view(30, 18), &w));
+        assert!(!low_ammo(&view(30, 19), &w));
+        assert!(low_clip(&view(9, 90), &w));
+        assert!(!low_clip(&view(10, 90), &w));
+        let pistol = rifle("\\clipOnly\\1");
+        assert_eq!(reserve(&view(4, 90), &pistol), 4);
+        assert!(!low_clip(&view(1, 0), &pistol));
+    }
+
+    /// `CG_DrawPlayerAmmoValue`: the clip, a bar and the reserve; a low
+    /// clip draws a second copy in the warning red at the 800 ms pulse's
+    /// alpha, a low reserve draws the reserve and the bar red; a clip-only
+    /// weapon shows its reserve alone.
+    #[test]
+    fn the_ammo_counter_reddens_what_runs_low() {
+        let mut hud = PlayerHud::default();
+        hud.weapons.list = vec![None, Some(Arc::new(rifle("")))];
+        let red = |q: &HudQuad| q.rgba[..3] == LOW_AMMO_RGB;
+        let shown = |hud: &PlayerHud, clip, ammo, now| {
+            let ps = PlayerView::new(&holding(clip, ammo), 0);
+            let voice = VoiceShown::default();
+            draw(now, |cx, out| {
+                hud.ammo_value(&item(od::AMMO_VALUE), &ps, cx, &input(None, &voice), out)
+            })
+        };
+        // "25", "|", " 90"
+        let full = shown(&hud, 25, 90, 200);
+        assert_eq!(full.len(), 6, "{}", full.len());
+        assert!(!full.iter().any(red));
+        let low_clip = shown(&hud, 5, 90, 200);
+        let reds: Vec<_> = low_clip.iter().filter(|q| red(q)).collect();
+        assert_eq!(reds.len(), 2, "the clip's pulse copy");
+        assert!(reds.iter().all(|q| q.rgba[3] == 0.75), "{:?}", reds[0].rgba);
+        let low_reserve = shown(&hud, 25, 10, 200);
+        assert_eq!(
+            low_reserve.iter().filter(|q| red(q)).count(),
+            4,
+            "the bar and reserve"
+        );
+        hud.weapons.list = vec![None, Some(Arc::new(rifle("\\clipOnly\\1")))];
+        // " 25", the clip as the reserve
+        assert_eq!(shown(&hud, 25, 90, 200).len(), 3, "the reserve alone");
+    }
+
+    /// A cursor hint in the playerstate is latched with its time and
+    /// `cg_hintFadeTime`: drawn whole until the last 100 ms of that span
+    /// past its last frame, then fading out.
+    #[test]
+    fn a_cursor_hint_outlives_the_playerstate_by_the_fade_time() {
+        let cs = configstrings(&[(0x4fe, "Open")]);
+        let voice = VoiceShown::default();
+        let mut hud = PlayerHud::default();
+        let mut ps = PlayerState2::default();
+        set_ps(&mut ps, "cursorHint", 2);
+        let s = snap(&ps, 1000, &[2]);
+        hud.track(&frame(&s, &cs), 1000, &input(None, &voice));
+        let s = snap(&PlayerState2::default(), 1100, &[2]);
+        hud.track(&frame(&s, &cs), 1100, &input(None, &voice));
+        assert_eq!(hud.cursor_hint, (2, 0, 1000, 300), "the latch holds");
+        let icon = |now| {
+            let s = snap(&PlayerState2::default(), now, &[2]);
+            let q = draw(now, |cx, out| {
+                hud.cursor_hint(
+                    &item(od::CURSORHINT),
+                    &frame(&s, &cs),
+                    cx,
+                    &input(None, &voice),
+                    out,
+                )
+            });
+            q.iter()
+                .find(|q| q.texture == "gfx/icons/hint_usable")
+                .map(|q| q.rgba[3])
+        };
+        assert_eq!(icon(1199), Some(1.0));
+        assert_eq!(icon(1250), Some(0.5));
+        assert_eq!(icon(1300), None);
+    }
+
+    /// `CG_DrawPlayerStance`'s hints: none with the prints off; after a
+    /// stance change a line per other stance with a bound command, whole
+    /// for 2 s and gone at 3 s, never above the icon's fade.
+    #[test]
+    fn stance_hints_show_for_three_seconds_after_a_stance_change() {
+        let cs = configstrings(&[]);
+        let voice = VoiceShown::default();
+        let keys: &KeyLookup = &|c: &str| (c == "goprone").then(|| "Z".to_string());
+        let mut hud = PlayerHud::default();
+        let s = snap(&PlayerState2::default(), 1000, &[2]);
+        hud.track(&frame(&s, &cs), 1000, &input(Some(keys), &voice));
+        let mut ps = PlayerState2::default();
+        set_ps(&mut ps, "pm_flags", PMF_CROUCH as u32);
+        let s = snap(&ps, 2000, &[2]);
+        hud.track(&frame(&s, &cs), 2000, &input(Some(keys), &voice));
+        assert_eq!(hud.stance_hint_at, 2000);
+        let alpha = |now, fade, keys: Option<&KeyLookup>| {
+            let q = draw(now, |cx, out| {
+                hud.stance_hints(&item(od::STANCE), fade, cx, &input(keys, &voice), out)
+            });
+            q.first().map(|q| q.rgba[3])
+        };
+        assert_eq!(alpha(3999, 1.0, Some(keys)), Some(1.0));
+        assert_eq!(alpha(4500, 1.0, Some(keys)), Some(0.5));
+        assert_eq!(alpha(3000, 0.25, Some(keys)), Some(0.25));
+        assert_eq!(alpha(5000, 1.0, Some(keys)), None);
+        assert_eq!(alpha(3000, 1.0, None), None);
+    }
+
+    fn fire(entity: u32, event: i32, parm: i32, pos: glam::Vec3) -> Event2 {
+        Event2 {
+            entity,
+            event,
+            parm,
+            etype: 1,
+            eflags: 0,
+            weapon: 0,
+            surf: 0,
+            other_entity: 0,
+            time: 0,
+            scale: 0,
+            pos,
+            angles: glam::Vec3::ZERO,
+            angles2: [0.0; 2],
+            from_ps: false,
+        }
+    }
+
+    /// `CG_CompassAddWeaponPingInfo`: an enemy's shot pings where he fired
+    /// and fades over 2 s; a teammate's keeps no spot; a spectator, the
+    /// viewer and the viewer's own shots ping nothing. A turret pings its
+    /// gunner for 50 ms.
+    #[test]
+    fn fire_pings_latch_an_enemys_spot_and_fade_over_two_seconds() {
+        use vcod_cod2::net::events::{EV_FIRE_WEAPON, EV_FIRE_WEAPON_MG42};
+        let cs = configstrings(&[]);
+        // viewer allies; 1 allies, 2 axis, 3 spectator
+        let s = snap(&PlayerState2::default(), 1000, &[2, 2, 1, 3]);
+        let f = frame(&s, &cs);
+        let mut hud = PlayerHud::default();
+        let at = glam::Vec3::new(300.0, 0.0, 0.0);
+        let mut own = fire(0, EV_FIRE_WEAPON, 0, at);
+        own.from_ps = true;
+        hud.on_events(
+            &[
+                fire(1, EV_FIRE_WEAPON, 0, at),
+                fire(2, EV_FIRE_WEAPON, 0, at),
+                fire(3, EV_FIRE_WEAPON, 0, at),
+                own,
+            ],
+            &f,
+            1000,
+        );
+        assert_eq!(
+            (hud.pings[1].until, hud.pings[1].enemy, hud.pings[1].pos),
+            (1000, false, [0.0; 2])
+        );
+        assert_eq!(
+            (hud.pings[2].until, hud.pings[2].enemy, hud.pings[2].pos),
+            (1000, true, [300.0, 0.0])
+        );
+        assert_eq!(hud.pings[3].until, 0, "a spectator");
+        assert_eq!(hud.pings[0].until, 0, "the viewer");
+        hud.on_events(&[fire(9, EV_FIRE_WEAPON_MG42, 2, at)], &f, 1500);
+        assert_eq!(hud.pings[2].until, 1500 + MG42_PING_MS, "the gunner");
+        hud.pings[2].until = 1000;
+        let enemy = |now| {
+            let q = draw(now, |cx, out| {
+                hud.compass_friends(&item(od::COMPASS_FRIENDS), &f, cx, out)
+            });
+            q.iter()
+                .find(|q| q.texture == "compassping_enemyfiring")
+                .map(|q| q.rgba[3])
+        };
+        assert_eq!(enemy(1000), Some(1.0));
+        assert_eq!(enemy(2000), Some(0.5));
+        assert_eq!(enemy(3001), None);
+    }
+
+    /// `CG_DamageFeedback` puts a new damage icon in the slot that started
+    /// longest ago, timed from the snapshot.
+    #[test]
+    fn a_new_damage_icon_takes_the_oldest_slot() {
+        let cs = configstrings(&[]);
+        let voice = VoiceShown::default();
+        let mut hud = PlayerHud::default();
+        let mut ps = PlayerState2::default();
+        ps.stats[0] = 50;
+        ps.stats[2] = 100;
+        set_ps(&mut ps, "damageCount", 10);
+        set_ps(&mut ps, "damageYaw", 64);
+        let s = snap(&ps, 1000, &[2]);
+        hud.track(&frame(&s, &cs), 1000, &input(None, &voice));
+        for (d, start) in hud
+            .damage
+            .iter_mut()
+            .zip([500, 300, 800, 100, 900, 700, 600, 400])
+        {
+            d.start = start;
+        }
+        set_ps(&mut ps, "damageEvent", 1);
+        let s = snap(&ps, 1050, &[2]);
+        hud.track(&frame(&s, &cs), 1060, &input(None, &voice));
+        let starts: Vec<i32> = hud.damage.iter().map(|d| d.start).collect();
+        assert_eq!(starts, [500, 300, 800, 1050, 900, 700, 600, 400]);
+        assert_eq!(hud.damage[3].ms, DAMAGE_ICON_MS);
     }
 
     /// The stock `hud.menu` gives the owner draws this module paints, with

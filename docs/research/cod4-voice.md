@@ -43,7 +43,8 @@ Both directions ride out of band (`FF FF FF FF`), never the netchan.
   zombie (state 1), sets `lastPacketTime` to `svs.time` (0x8177a47), then
   calls `SV_PreGameUserVoice` (0x817bc58) for a state up to 3 and
   `SV_UserVoice` (0x817b95e) for an active client. INFERRED (the branches
-  at 0x8177a39..0x8177b26).
+  at 0x8177a39..0x8177b26). vcod refreshes `lastPacketTime` only for a packet
+  from the slot's own port, and takes no new port (`Cod4Server::voice_packet`).
 - `SV_UserVoice` returns at once with `sv_voice` (dvar 0x13ed7c78) off,
   reads the count, then per packet a length byte, refuses one outside
   1..256 with `Received invalid voice packet of size %i from %s`
@@ -224,7 +225,7 @@ At the default 180 the angle test always passes, so Eavesdrop is a
   (`Shell::register_cod4_options`); the voice page's record level slider
   sets `winvoice_mic_reclevel`, and the capture applies the level and the
   scaler as CoD2's does (section 4, `voice::mic_gain`).
-- Not done: the compass's voice fade for a talking friendly
-  (`beginVoiceFadeTime`), `winvoice_mic_mute` (the mixer's playback mute,
+- The compass pings a talking friendly (`cod4_radar`, cod4-hud.md 15.9).
+- Not done: `winvoice_mic_mute` (the mixer's playback mute,
   registered and unread), `winvoice_save_voice` (`voice.wav`), and the
   options page's record level meter.

@@ -343,21 +343,23 @@ pub(crate) fn brush_wrapper<R: BufRead>(w: &mut W<R>) -> Result<PhysBrush> {
     if w.inline_only(b.ptr(48), 1)? {
         w.bulk(1, b.u32(72) as usize)?;
     }
-    let mut planes = Vec::new();
-    if let Follow::Inline = w.follow(b.ptr(76), 4)? {
-        let p = w.bulk_kept(4, 0x14 * sides)?;
-        let f = |o: usize| f32::from_le_bytes(p[o..o + 4].try_into().unwrap());
-        planes = (0..sides)
-            .map(|i| {
-                [
-                    f(i * 0x14),
-                    f(i * 0x14 + 4),
-                    f(i * 0x14 + 8),
-                    f(i * 0x14 + 12),
-                ]
-            })
-            .collect();
-    }
+    // A shared plane array may start inside another brush's.
+    let planes = w
+        .shared(b.ptr(76), 4, 0x14 * sides, "brush planes", false)?
+        .map(|p| {
+            let f = |o: usize| f32::from_le_bytes(p[o..o + 4].try_into().unwrap());
+            (0..sides)
+                .map(|i| {
+                    [
+                        f(i * 0x14),
+                        f(i * 0x14 + 4),
+                        f(i * 0x14 + 8),
+                        f(i * 0x14 + 12),
+                    ]
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     Ok(PhysBrush {
         mins: b.vec3(0),
         maxs: b.vec3(16),

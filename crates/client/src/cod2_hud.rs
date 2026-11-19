@@ -152,8 +152,9 @@ pub struct Cod2Hud {
     /// Sound alias subtitles (`CL_SubtitlePrint`, cod2-sound.md 7.11).
     pub subtitles: Window,
     pub center: CenterPrint,
-    /// `killIcon`, `wideKillIcon` and `flipKillIcon` by weapon index.
-    kill_icons: std::collections::HashMap<i32, Option<(String, bool, bool)>>,
+    /// `killIcon`, `wideKillIcon` and `flipKillIcon` by weapon name: an
+    /// index means another weapon once configstring 7 changes.
+    kill_icons: std::collections::HashMap<String, Option<(String, bool, bool)>>,
     /// Configstrings 15..18 as `CG_ConfigStringModified` keeps them.
     pub vote: crate::hud::vote::Vote,
     /// `cg_objectiveText`, which `CG_SetClientDvarFromServer` keeps for the
@@ -364,6 +365,28 @@ pub struct Obit {
     pub center: Option<String>,
 }
 
+/// Weapon `index`'s kill icon, wide and flip flags off configstring 7,
+/// each weapon file read once.
+fn kill_icon(
+    icons: &mut std::collections::HashMap<String, Option<(String, bool, bool)>>,
+    cs: &vcod_cod2::net::ConfigStrings,
+    index: i32,
+    fs: &dyn AssetSource,
+) -> Option<(String, bool, bool)> {
+    let name = cs.weapon_name(index)?;
+    icons
+        .entry(name.to_ascii_lowercase())
+        .or_insert_with(|| {
+            let def = vcod_cod2::weapon::load(fs, name).ok()?.def;
+            Some((
+                def.str("killIcon").to_string(),
+                def.int("wideKillIcon") != 0,
+                def.int("flipKillIcon") != 0,
+            ))
+        })
+        .clone()
+}
+
 /// `CG_Obituary` (inline in `CG_EntityEvent`, Mac 0x1e4650, event 198) over
 /// a temp entity's `otherEntityNum` (the victim), `attackerEntityNum` (64
 /// and up: none) and `parm` (`0x80 | mod`, or the weapon's index), with
@@ -460,6 +483,17 @@ pub fn board_client(clients: &[ClientState2], n: u32) -> Option<(String, i32)> {
     Some((c.name(), team))
 }
 
+/// A hudelem's text before its label merges in: a value prints as `%g`
+/// (`CoD2MP_s.exe` 0x4dd6b8, cod2-hud.md).
+fn elem_body(e: &HudElem, text: impl FnOnce() -> String, now: i32) -> String {
+    match e.kind {
+        1 => text(),
+        2 => crate::hud::hudelem::format_g(e.value),
+        7..=10 => timer(e, now),
+        _ => String::new(),
+    }
+}
+
 /// `m:ss` of a timer element at `now`: counting down to `time` (7, 9) or
 /// up from it (8, 10), whole seconds.
 fn timer(e: &HudElem, now: i32) -> String {
@@ -519,20 +553,7 @@ impl Cod2Hud {
             ev.parm,
             own,
             &frame.snap.clients,
-            |weapon| {
-                icons
-                    .entry(weapon)
-                    .or_insert_with(|| {
-                        let name = frame.configstrings.weapon_name(weapon)?;
-                        let def = vcod_cod2::weapon::load(fs, name).ok()?.def;
-                        Some((
-                            def.str("killIcon").to_string(),
-                            def.int("wideKillIcon") != 0,
-                            def.int("flipKillIcon") != 0,
-                        ))
-                    })
-                    .clone()
-            },
+            |weapon| kill_icon(icons, frame.configstrings, weapon, fs),
             |team| team_rgb(cs, team),
         )
     }
@@ -604,12 +625,7 @@ impl Cod2Hud {
         let sp = ScreenPlacement::new(w, h);
         let text_of = |e: &HudElem| {
             let label = localized(frame, loc, e.label).unwrap_or_default();
-            let body = match e.kind {
-                1 => localized(frame, loc, e.text).unwrap_or_default(),
-                2 => format!("{}", e.value),
-                7..=10 => timer(e, now),
-                _ => String::new(),
-            };
+            let body = elem_body(e, || localized(frame, loc, e.text).unwrap_or_default(), now);
             match label.find("&&1") {
                 Some(i) => format!("{}{body}{}", &label[..i], &label[i + 3..]),
                 None => format!("{label}{body}"),
@@ -769,6 +785,7 @@ pub fn load_quads(text: &str) -> Vec<HudQuad> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::net::Msec;
 
     /// A client state named `name` on `team`, as a snapshot carries it.
     fn client(number: u32, name: &str, team: u32) -> ClientState2 {
@@ -785,6 +802,21 @@ mod tests {
 
     /// The HUD dvars: a vec2 dvar's two numbers, the stance prints' keys
     /// only while they are on, defaults for what is missing.
+    #[test]
+    fn a_value_hudelem_prints_as_percent_g() {
+        let e = HudElem {
+            kind: 2,
+            value: 100.0 / 3.0,
+            ..Default::default()
+        };
+        assert_eq!(elem_body(&e, String::new, 0), "33.3333");
+        let e = HudElem {
+            value: 1_234_567.5,
+            ..e
+        };
+        assert_eq!(elem_body(&e, String::new, 0), "1.23457e+06");
+    }
+
     #[test]
     fn hud_dvars_read_the_positions_and_the_hint_keys() {
         let off = HudDvars::read(|_| None, |_| Some("X".into()));
@@ -869,6 +901,30 @@ mod tests {
         assert_eq!(map_display_name(&arenas, "MP_Toujane"), "Toujane, Tunisia");
         assert_eq!(map_display_name(&arenas, "maps/mp/mp_custom"), "mp_custom");
         assert_eq!(map_display_name(&arenas, "mp_custom"), "mp_custom");
+    }
+
+    /// Configstring 7 is per level: after a map change an index names the
+    /// new list's weapon, and so does its kill icon.
+    #[test]
+    fn a_kill_icon_follows_the_weapon_list() {
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let cs = |list: &str| {
+            vcod_cod2::net::ConfigStrings::from_gamestate(&vcod_cod2::net::Gamestate2 {
+                server_command_sequence: 0,
+                configstrings: [(7, list.to_string())].into(),
+                baselines: Default::default(),
+                client_num: 0,
+                checksum_feed: 0,
+            })
+        };
+        let mut icons = Default::default();
+        let first = kill_icon(&mut icons, &cs("kar98k_mp mp44_mp"), 1, &fs).unwrap();
+        let second = kill_icon(&mut icons, &cs("mp44_mp kar98k_mp"), 1, &fs).unwrap();
+        let mp44 = kill_icon(&mut icons, &cs("kar98k_mp mp44_mp"), 2, &fs).unwrap();
+        assert_ne!(first.0, second.0);
+        assert_eq!(second, mp44);
     }
 
     /// A weapon's `flipKillIcon` mirrors its icon; a means of death's icon
@@ -982,7 +1038,7 @@ mod tests {
             let snap = vcod_cod2::net::SnapshotView::new(
                 &vcod_cod2::net::Snapshot2 {
                     message_num: 1,
-                    server_time: 1000,
+                    server_time: Msec::from_raw(1000),
                     delta_num: -1,
                     snap_flags: 0,
                     valid: true,

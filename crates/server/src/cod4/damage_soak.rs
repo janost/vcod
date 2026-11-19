@@ -645,7 +645,7 @@ fn soak_run(plan: &'static [Act], cvars: &[(&str, &str)], lag_ms: i32) -> SoakRu
         now += Duration::from_millis(FRAME_MS as u64);
         // `main.rs`'s console ahead of the frame: the script's `exitLevel`
         // and `map_restart` lines.
-        sv.drain_console();
+        sv.run_console();
         sv.tick_frames(now, 1);
         let svs = sv.core.sv_time_ms;
         for (to, pkt) in sv.take_outgoing() {
@@ -776,7 +776,7 @@ fn cod4_damage_survives_the_time_limit_restarted() {
         return;
     }
     assert!(levels.len() >= 2, "no restart: {levels:?}");
-    assert_eq!(levels[1], super::cycle::restart_server_id(levels[0]));
+    assert_eq!(levels[1], crate::engine::conn::restart_server_id(levels[0]));
 }
 
 /// [`PLAN`] with each client's cmds a link behind the server's clock, so
@@ -812,13 +812,7 @@ fn cod4_every_map_poses_both_teams() {
     let Some(install) = vcod_cod4::testing::cod4_install() else {
         return;
     };
-    let mut maps: Vec<String> = install
-        .zones("english")
-        .unwrap()
-        .iter()
-        .filter_map(|p| p.file_stem()?.to_str().map(str::to_string))
-        .filter(|n| n.starts_with("mp_") && !n.ends_with("_load"))
-        .collect();
+    let mut maps = vcod_cod4::testing::stock_maps(&install);
     if let Ok(only) = std::env::var("SOAK_MAPS") {
         maps.retain(|m| only.split(',').any(|o| o == m));
     }

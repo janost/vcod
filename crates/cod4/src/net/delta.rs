@@ -8,6 +8,7 @@
 
 use super::fields;
 use anyhow::{Result, bail, ensure};
+use vcod_common::net::Msec;
 use vcod_common::net::codec::{MsgReader, MsgWriter};
 
 /// One netfield row: `{name, offset, bits, changeHints}`.
@@ -31,16 +32,57 @@ impl Field {
         }
     }
 
-    pub fn word(&self) -> usize {
+    pub const fn word(&self) -> usize {
         self.offset as usize / 4
     }
+}
+
+/// `name`'s word in `table`. Meant for a `const` block, where a name the
+/// table lacks fails the build.
+pub const fn word_named(table: &[Field], name: &str) -> usize {
+    let mut i = 0;
+    while i < table.len() {
+        let (a, b) = (table[i].name.as_bytes(), name.as_bytes());
+        if a.len() == b.len() {
+            let mut k = 0;
+            while k < a.len() && a[k] == b[k] {
+                k += 1;
+            }
+            if k == a.len() {
+                return table[i].word();
+            }
+        }
+        i += 1;
+    }
+    panic!("no such field")
+}
+
+/// `base[k]`'s word in `table` (`k` under 10), as [`word_named`].
+pub const fn word_at(table: &[Field], base: &str, k: usize) -> usize {
+    assert!(k < 10);
+    let b = base.as_bytes();
+    let mut i = 0;
+    while i < table.len() {
+        let a = table[i].name.as_bytes();
+        if a.len() == b.len() + 3 && a[b.len()] == b'[' && a[b.len() + 1] == b'0' + k as u8 {
+            let mut j = 0;
+            while j < b.len() && a[j] == b[j] {
+                j += 1;
+            }
+            if j == b.len() && a[b.len() + 2] == b']' {
+                return table[i].word();
+            }
+        }
+        i += 1;
+    }
+    panic!("no such field")
 }
 
 /// What a field read needs besides the bits: the snapshot's time (the
 /// `-97` delta times) and `CS_MAPCENTER` (the `-92..-90` origins).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Ctx {
-    pub time: i32,
+    pub time: Msec,
     pub map_center: [f32; 3],
 }
 
@@ -266,7 +308,7 @@ impl Code {
                 if bit(r) {
                     r.read_long() as u32
                 } else {
-                    ctx.time.wrapping_sub(bits(r, 8) as i32) as u32
+                    (ctx.time - bits(r, 8) as i32).raw() as u32
                 }
             }
             Code::Ground => {
@@ -342,7 +384,7 @@ impl Code {
             }
             Code::Time => {
                 // Up to 255 ms before the snapshot (0x813e789).
-                let ago = ctx.time.wrapping_sub(to as i32);
+                let ago = ctx.time.since(Msec::from_raw(to as i32));
                 if (0..256).contains(&ago) {
                     put_bit(w, false);
                     put_bits(w, ago as u32, 8);
@@ -569,7 +611,8 @@ impl Origin {
         let base = f32::from_bits(from);
         let units = if bit(r) {
             let v = bits(r, 16) as i32 ^ self.biased(cvtt(base));
-            f64::from(v - 0x8000 + self.centre)
+            // Wrapping, as the x86 add: a hostile CS_MAPCENTER can put the centre anywhere.
+            f64::from(v.wrapping_sub(0x8000).wrapping_add(self.centre))
         } else {
             f64::from(base) + f64::from(bits(r, 7) as i32 - 64)
         };
@@ -828,7 +871,11 @@ pub fn read_delta_entity(
 ) -> Result<(Option<EntityState>, Wire)> {
     let lc = match read_wire_head(r, min_bits(ENTITY_LC_FIELDS)) {
         Err(Wire::Removed) => return Ok((None, Wire::Removed)),
-        Err(wire) => return Ok((Some(*from), wire)),
+        Err(wire) => {
+            let mut to = *from;
+            to.0[0] = number;
+            return Ok((Some(to), wire));
+        }
         Ok(lc) => lc,
     };
     let mut to = *from;
@@ -906,7 +953,11 @@ pub fn read_delta_client(
     let table = &fields::CLIENT_STATE;
     let lc = match read_wire_head(r, min_bits(table.len() as u32)) {
         Err(Wire::Removed) => return Ok((None, Wire::Removed)),
-        Err(wire) => return Ok((Some(*from), wire)),
+        Err(wire) => {
+            let mut to = *from;
+            to.0[0] = number;
+            return Ok((Some(to), wire));
+        }
         Ok(lc) => lc,
     };
     ensure!(
@@ -1115,6 +1166,11 @@ fn objective_rows(from: &Objective, to: &Objective) -> Option<Sent> {
         .then_some(Sent(rows))
 }
 
+/// The all-zero base a delta with no old playerstate reads against, built
+/// once: a `PlayerState` is about 13.6 KB.
+pub static ZERO_PS: std::sync::LazyLock<PlayerState> =
+    std::sync::LazyLock::new(PlayerState::default);
+
 /// `MSG_ReadDeltaPlayerstate` (`predictedFieldsIgnoreXor` set, as
 /// `CL_ParseSnapshot` calls it).
 pub fn read_delta_playerstate(
@@ -1122,8 +1178,7 @@ pub fn read_delta_playerstate(
     ctx: &Ctx,
     from: Option<&PlayerState>,
 ) -> Result<(PlayerState, PsWire)> {
-    let zero = PlayerState::default();
-    let from = from.unwrap_or(&zero);
+    let from = from.unwrap_or(&ZERO_PS);
     let mut to = from.clone();
     let mut wire = PsWire::default();
     let table = &fields::PLAYER_STATE;
@@ -1221,8 +1276,7 @@ pub fn write_delta_playerstate(
     to: &PlayerState,
     wire: &PsWire,
 ) {
-    let zero = PlayerState::default();
-    let from = from.unwrap_or(&zero);
+    let from = from.unwrap_or(&ZERO_PS);
     let table = &fields::PLAYER_STATE;
     put_bit(w, to.origin_sent);
     put_bits(w, wire.fields.lc() as u32, min_bits(table.len() as u32));
@@ -1314,6 +1368,38 @@ pub fn write_delta_playerstate(
 mod tests {
     use super::*;
 
+    /// An entity or client sent unchanged against the zero state still
+    /// carries its own number (BUG-096).
+    #[test]
+    fn an_unchanged_delta_keeps_its_own_number() {
+        let ctx = Ctx {
+            time: Msec::ZERO,
+            map_center: [0.0; 3],
+        };
+        let mut w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
+        write_delta_entity(
+            &mut w,
+            &ctx,
+            &EntityState::default(),
+            &EntityState::default(),
+            &Wire::Unchanged,
+        );
+        write_delta_client(
+            &mut w,
+            &ctx,
+            &ClientState::default(),
+            &ClientState::default(),
+            &Wire::Unchanged,
+        );
+        let mut r = MsgReader::from_plain(w.into_ops());
+        let (e, wire) = read_delta_entity(&mut r, &ctx, &EntityState::default(), 37).unwrap();
+        assert!(matches!(wire, Wire::Unchanged));
+        assert_eq!(e.unwrap().number(), 37);
+        let (c, wire) = read_delta_client(&mut r, &ctx, &ClientState::default(), 5).unwrap();
+        assert!(matches!(wire, Wire::Unchanged));
+        assert_eq!(c.unwrap().0[0], 5);
+    }
+
     #[test]
     fn min_bits_matches_the_table_widths() {
         assert_eq!(min_bits(61), 6);
@@ -1325,6 +1411,30 @@ mod tests {
         v.to_bits()
     }
 
+    /// The `-97` time code at either end of `int`: a word up to 255 ms
+    /// before the snapshot rides one byte across the wrap, and one the
+    /// wrapped difference puts after it goes out whole.
+    #[test]
+    fn the_time_code_wraps_at_the_ends_of_int() {
+        let field = Field::new("pin", 0, -97, 0);
+        for (now, to, bytes) in [
+            (Msec::MIN + 5, (i32::MAX - 4) as u32, 2),
+            (Msec::MAX, i32::MIN as u32, 5),
+            (Msec::MIN, i32::MAX as u32, 2),
+        ] {
+            let ctx = Ctx {
+                time: now,
+                map_center: [0.0; 3],
+            };
+            let mut w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
+            write_field(&mut w, &ctx, 0, to, &field, Change::Sent);
+            let plain = w.into_ops();
+            let mut r = MsgReader::from_plain(plain.clone());
+            assert_eq!(read_field(&mut r, &ctx, 0, &field), (to, Change::Sent));
+            assert_eq!(plain.len(), bytes, "{now} -> {to:#x}");
+        }
+    }
+
     /// One case per field code form: the plain bits `write_field` puts
     /// out and the word `read_field` takes back from them. Pinned before
     /// the codec's rewrite; the capture re-encodes in `net_decode` check
@@ -1332,7 +1442,7 @@ mod tests {
     #[test]
     fn every_field_form_writes_and_reads_as_pinned() {
         let ctx = Ctx {
-            time: 50_000,
+            time: Msec::from_raw(50_000),
             map_center: [429.0, 126.5, 137.0],
         };
         let toggle_from = u32::from_le_bytes([10, 20, 30, 0xff]);
@@ -1572,5 +1682,19 @@ mod tests {
             "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkskkkksss stats=0xa obj=Some(\"-,-,-,-,-,skkkkk,-,-,-,-,-,-,-,-,-,-\") hud=Some(\"|kkkkskkkkkkkkkkks,kkkks\")",
         ];
         assert_eq!(got, expected);
+    }
+
+    /// A long-form origin read off a centre at the end of i32's range
+    /// wraps as the x86 add does instead of overflowing.
+    #[test]
+    fn an_origin_off_a_centre_at_i32_min_wraps() {
+        let o = Origin { centre: i32::MIN };
+        let mut w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
+        put_bit(&mut w, true);
+        // 0x8000 XOR the base's biased 0x8000: 0, less 0x8000, plus i32::MIN.
+        put_bits(&mut w, 0x8000, 16);
+        let mut r = MsgReader::from_plain(w.into_ops());
+        let units = f32::from_bits(o.read(&mut r, 1e30f32.to_bits()));
+        assert_eq!(units, i32::MIN.wrapping_sub(0x8000) as f32);
     }
 }

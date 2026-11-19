@@ -36,8 +36,8 @@ use crate::common;
 use common::{Join, Queues, step};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use std::time::Duration;
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::net::{NetClient, NetEvent};
 
 const SCRIPT: &str =
@@ -109,18 +109,16 @@ fn rests(lines: &[String]) -> Vec<[f32; 3]> {
 /// the lifts come back beside the log.
 fn ours(
     fs: vcod_common::pk3::Pk3Fs,
-    proto: &'static Protocol,
+    proto: &'static Cod1Wire,
     retail: &[[f32; 3]],
 ) -> (Vec<String>, Vec<f32>) {
     let map = "mp_pavlov";
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_touchorder"), now);
-    sv.set_protocol(proto);
-    sv.overlay_script("maps/mp/gametypes/probe_touchorder", SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        script: Some(SCRIPT),
+        ..common::Boot::new(map, "probe_touchorder")
+    }
+    .start(fs);
     let lifts = Rc::new(RefCell::new(Vec::new()));
     let (seen, retail) = (lifts.clone(), retail.to_vec());
     sv.test_item_lifts(Box::new(move |_, floor| {
@@ -163,7 +161,7 @@ fn ours(
 }
 
 /// Ours against one retail log of the probe.
-fn check(fs: vcod_common::pk3::Pk3Fs, proto: &'static Protocol, retail: &str) {
+fn check(fs: vcod_common::pk3::Pk3Fs, proto: &'static Cod1Wire, retail: &str) {
     let retail: Vec<String> = retail.lines().map(str::to_string).collect();
     let (ours, lifts) = ours(fs, proto, &rests(&retail));
     if std::env::var_os("TO_REPORT").is_some() {
@@ -221,13 +219,9 @@ fn the_touch_pass_wakes_its_threads_in_retails_order() {
 /// Retail 1.5b's run: the same lines as 1.1d's.
 #[test]
 fn the_touch_pass_wakes_its_threads_in_retails_order_on_1_5() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     check(
         fs,
         &PROTOCOL_V6,
@@ -249,19 +243,16 @@ fn the_touch_pass_wakes_its_threads_in_retails_order_on_uo() {
 }
 
 /// `client-probes/probe_trigqueue` on ours, no client, on mp_carentan.
-fn trigqueue(fs: vcod_common::pk3::Pk3Fs, proto: &'static Protocol) -> Vec<String> {
+fn trigqueue(fs: vcod_common::pk3::Pk3Fs, proto: &'static Cod1Wire) -> Vec<String> {
     let map = "mp_carentan";
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_trigqueue"), now);
-    sv.set_protocol(proto);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_trigqueue",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_trigqueue.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_trigqueue.gsc"
+        )),
+        ..common::Boot::new(map, "probe_trigqueue")
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, 8000);
     sv.script_log()
         .iter()
@@ -276,7 +267,7 @@ fn trigqueue(fs: vcod_common::pk3::Pk3Fs, proto: &'static Protocol) -> Vec<Strin
 /// spot, its waiter running after the step; a thread off the frame grid
 /// queues after the rounds, so its entries are handed out next frame, 256
 /// rounds of one.
-fn check_trigqueue(fs: vcod_common::pk3::Pk3Fs, proto: &'static Protocol) {
+fn check_trigqueue(fs: vcod_common::pk3::Pk3Fs, proto: &'static Cod1Wire) {
     let retail: Vec<&str> = include_str!("fixtures/touchorder/trigqueue.txt")
         .lines()
         .filter(|l| l.starts_with("PROBE"))
@@ -298,13 +289,9 @@ fn a_full_trigger_queue_notifies_on_the_spot_on_1_1() {
 
 #[test]
 fn a_full_trigger_queue_notifies_on_the_spot_on_1_5() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     check_trigqueue(fs, &PROTOCOL_V6);
 }
 

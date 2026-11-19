@@ -8,9 +8,10 @@ use std::rc::Rc;
 
 use vcod_gsc::{Cx, ErrorKind, Host, Target, Value};
 
+use super::Builtin;
 use super::cvar;
-use super::score::Builtin;
 use crate::game::host::GameHost;
+use crate::game::slot::ClientSlot;
 use vcod_common::net::protocol::CsRange;
 
 pub const NAMES: &[(&str, Builtin)] = &[
@@ -97,7 +98,7 @@ fn get_guid(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = super::client::client_receiver(host, recv)?;
+    let slot = super::client::client_receiver(host, recv)?.index();
     if !args.is_empty() {
         return Err(ErrorKind::BadType("USAGE: self getGuid()"));
     }
@@ -341,11 +342,11 @@ fn get_stat(
     let Some(&Value::Int(i)) = a.first() else {
         return Err(ErrorKind::BadType("getStat takes an int"));
     };
-    let slot = stat_player(host, id, "getstat")?;
+    let slot = stat_player(host, id, "getstat")?.index();
     if !(0..=3499).contains(&i) {
         return Err(ErrorKind::Custom(format!("getstat: invalid index {i}")));
     }
-    if host.client_roster[slot].is_none() {
+    if host.clients[slot].roster.is_none() {
         return Err(ErrorKind::Custom(
             "getstat: called on a disconnected player".into(),
         ));
@@ -357,13 +358,9 @@ fn get_stat(
 
 /// The slot of `getStat`'s or `setStat`'s receiver, or `<name>: entity
 /// must be a player entity` (0x821f090, 0x821ee1c).
-fn stat_player(host: &GameHost, id: vcod_gsc::EntId, name: &str) -> Result<usize, ErrorKind> {
-    match host.ents.get(id) {
-        Some(e) if e.client.is_some() => Ok(id.0 as usize),
-        _ => Err(ErrorKind::Custom(format!(
-            "{name}: entity must be a player entity"
-        ))),
-    }
+fn stat_player(host: &GameHost, id: vcod_gsc::EntId, name: &str) -> Result<ClientSlot, ErrorKind> {
+    ClientSlot::of_entity(&host.ents, id)
+        .ok_or_else(|| ErrorKind::Custom(format!("{name}: entity must be a player entity")))
 }
 
 /// `self setStat(index, value)` (`GScr_SetStat` 0x80c5490): a receiver
@@ -383,7 +380,8 @@ fn set_stat(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = super::entity::entity_receiver(recv)?;
-    let slot = stat_player(host, id, "setstat")?;
+    let to = stat_player(host, id, "setstat")?;
+    let slot = to.index();
     if host
         .cvars
         .get("developer_script")
@@ -416,7 +414,7 @@ fn set_stat(
     // 3498 and 3499 pass the builtin's check and `SV_SetClientStat` drops.
     if stats.get(i as u16).is_some_and(|old| old != v as u32) {
         stats.set(i as u16, v as u32);
-        host.client_commands.push((slot, format!("N {i} {v}")));
+        host.client_commands.push(to, format!("N {i} {v}"));
     }
     Ok(Value::Undefined)
 }
@@ -641,6 +639,15 @@ pub fn register_weapon(host: &mut GameHost, name: &str) -> Result<usize, ErrorKi
     let c4 = host.cod4_mut();
     if let Some(i) = c4.weapons.iter().position(|w| w == name) {
         return Ok(i + 1);
+    }
+    // The held bits and the 128-slot ammo arrays end at weapon 127; past
+    // it vcod refuses with its own error (retail's limit is not recorded).
+    if c4.weapons.len() + 1 >= crate::game::cod4::MAX_WEAPONS {
+        return Err(ErrorKind::Custom(format!(
+            "too many weapons registered: {name} would be weapon {}, the limit is {}",
+            c4.weapons.len() + 1,
+            crate::game::cod4::MAX_WEAPONS - 1
+        )));
     }
     c4.weapons.push(name.to_string());
     let index = c4.weapons.len();
@@ -1016,4 +1023,209 @@ pub fn placed_spawn(
     let down = start - glam::Vec3::new(0.0, 0.0, 262_144.0);
     let placed = lerp(start, down, trace(start, down).fraction);
     (placed, trace(placed, placed).startsolid)
+}
+
+#[cfg(test)]
+pub(super) mod tests {
+    use super::*;
+
+    /// A CoD4 host with no zones, and a player in slot 0.
+    pub(crate) fn cod4_host(cx: &mut Cx) -> (GameHost, Option<Target>) {
+        let mut host = GameHost::new(
+            &crate::game::profile::COD4,
+            vec![String::new(); crate::game::cod4::MAX_CONFIGSTRINGS],
+        );
+        host.connect_client(cx, 0, "a").unwrap();
+        host.clients[0].roster = Some(Default::default());
+        let me = Some(Target::Entity(host.ents.handle(0).unwrap()));
+        (host, me)
+    }
+
+    fn s(cx: &mut Cx, t: &str) -> Value {
+        Value::String(cx.intern_exact(t))
+    }
+
+    fn text(cx: &Cx, v: Value) -> String {
+        match v {
+            Value::String(a) | Value::Localized(a) => cx.resolve(a).to_string(),
+            v => panic!("{v:?} is no string"),
+        }
+    }
+
+    /// `getSubStr`'s byte bounds clamp into the string and an end before
+    /// the start is empty; `strTok` drops the empty runs between any of
+    /// its delimiters.
+    #[test]
+    fn substrings_and_tokens_slice_by_bytes_and_delimiters() {
+        let mut vm = vcod_gsc::Vm::new();
+        vm.with_cx(|cx| {
+            let (mut host, _) = cod4_host(cx);
+            let abc = s(cx, "abcdef");
+            let mut sub = |a: &[Value]| get_substr(&mut host, cx, None, a).map(|v| text(cx, v));
+            let i = Value::Int;
+            assert_eq!(sub(&[abc, i(1), i(4)]).unwrap(), "bcd");
+            assert_eq!(sub(&[abc, i(4)]).unwrap(), "ef");
+            assert_eq!(sub(&[abc, i(-2), i(3)]).unwrap(), "abc");
+            assert_eq!(sub(&[abc, i(3), i(100)]).unwrap(), "def");
+            assert_eq!(sub(&[abc, i(4), i(2)]).unwrap(), "");
+            assert!(sub(&[abc, Value::Float(1.0)]).is_err());
+
+            let (line, delims) = (s(cx, ",a,,b c,"), s(cx, ", "));
+            let Value::Array(arr) = str_tok(&mut host, cx, None, &[line, delims]).unwrap() else {
+                panic!("strTok gave no array");
+            };
+            let toks: Vec<String> = (0..cx.array_len(arr) as i32)
+                .map(|k| text(cx, cx.get_index(arr, vcod_gsc::ArrayKey::Int(k))))
+                .collect();
+            assert_eq!(toks, ["a", "b", "c"]);
+        });
+    }
+
+    fn table(rows: &[[&str; 3]]) -> Rc<vcod_cod4::assets::misc::StringTable> {
+        Rc::new(vcod_cod4::assets::misc::StringTable {
+            name: "mp/t.csv".into(),
+            columns: 3,
+            rows: rows.len() as u32,
+            values: rows.iter().flatten().map(|c| Some(c.to_string())).collect(),
+        })
+    }
+
+    /// `tableLookup`: the first row whose search column matches case-blind,
+    /// a number value matched as its text, `""` for no row or a column off
+    /// the table, an error for a table not loaded; and a table loaded anew
+    /// under the same name rebuilds the column's index.
+    #[test]
+    fn table_lookup_finds_the_first_row_and_follows_a_reloaded_table() {
+        let mut vm = vcod_gsc::Vm::new();
+        vm.with_cx(|cx| {
+            let (mut host, _) = cod4_host(cx);
+            let t = table(&[["1", "M16", "5"], ["2", "ak47", "6"], ["2", "dup", "7"]]);
+            host.cod4_mut().string_tables.insert("mp/t.csv".into(), t);
+            let name = s(cx, "MP/T.csv");
+            let i = Value::Int;
+            let (m16, gone) = (s(cx, "m16"), s(cx, "mp/none.csv"));
+            let mut look = |col: i32, v: Value, out: i32| {
+                table_lookup(&mut host, cx, None, &[name, i(col), v, i(out)]).map(|v| text(cx, v))
+            };
+            assert_eq!(look(1, m16, 0).unwrap(), "1");
+            assert_eq!(look(0, i(2), 1).unwrap(), "ak47");
+            assert_eq!(look(0, i(2), 3).unwrap(), "");
+            assert_eq!(look(3, i(2), 1).unwrap(), "");
+            assert_eq!(look(0, i(9), 1).unwrap(), "");
+            assert!(table_lookup(&mut host, cx, None, &[gone, i(0), i(1), i(1)]).is_err());
+
+            let t = table(&[["2", "g3", "8"]]);
+            host.cod4_mut().string_tables.insert("mp/t.csv".into(), t);
+            let found = table_lookup(&mut host, cx, None, &[name, i(0), i(2), i(1)]).unwrap();
+            assert_eq!(text(cx, found), "g3");
+            let loc = table_lookup_istring(&mut host, cx, None, &[name, i(0), i(2), i(2)]);
+            assert!(matches!(loc, Ok(Value::Localized(_))));
+        });
+    }
+
+    /// `setStat` writes a changed stat and tells the client `N <i> <v>`; a
+    /// byte stat past 255, an index past 3499, a third argument and
+    /// `developer_script` on are errors; 3498 and 3499 read 0 and keep
+    /// nothing. `getStat` refuses a slot no longer connected.
+    #[test]
+    fn stats_keep_their_bounds_and_tell_the_client() {
+        let mut vm = vcod_gsc::Vm::new();
+        vm.with_cx(|cx| {
+            let (mut host, me) = cod4_host(cx);
+            let i = Value::Int;
+            let mut set = |host: &mut GameHost, a: &[Value]| set_stat(host, cx, me, a);
+            assert_eq!(set(&mut host, &[i(5), i(200)]), Ok(Value::Undefined));
+            assert_eq!(set(&mut host, &[i(5), i(200)]), Ok(Value::Undefined));
+            assert_eq!(set(&mut host, &[i(2500), i(100_000)]), Ok(Value::Undefined));
+            assert_eq!(set(&mut host, &[i(3498), i(7)]), Ok(Value::Undefined));
+            assert!(set(&mut host, &[i(5), i(256)]).is_err());
+            assert!(set(&mut host, &[i(1999), i(-1)]).is_err());
+            assert!(set(&mut host, &[i(3500), i(1)]).is_err());
+            assert!(set(&mut host, &[i(5), i(1), i(1)]).is_err());
+            let sent: Vec<&str> = host.client_commands.iter().map(|c| c.1.as_str()).collect();
+            assert_eq!(sent, ["N 5 200", "N 2500 100000"]);
+            let mut get = |host: &mut GameHost, n: i32| get_stat(host, cx, me, &[i(n)]);
+            assert_eq!(get(&mut host, 5), Ok(i(200)));
+            assert_eq!(get(&mut host, 2500), Ok(i(100_000)));
+            assert_eq!(get(&mut host, 3498), Ok(i(0)));
+            assert!(get(&mut host, -1).is_err());
+            assert!(get(&mut host, 3500).is_err());
+            host.clients[0].roster = None;
+            assert!(get(&mut host, 5).is_err());
+            host.cvars.set("developer_script", "1");
+            assert!(set_stat(&mut host, cx, me, &[i(6), i(1)]).is_err());
+        });
+    }
+
+    /// Configstring 2314's weapon bits: the capture's 113 weapons, and
+    /// weapon 0 alone.
+    #[test]
+    fn the_registered_bits_read_as_the_capture() {
+        assert_eq!(registered_bits(113), "ffffffffffffffffffffffffffff3000");
+        assert_eq!(registered_bits(0), format!("1{}", "0".repeat(31)));
+        assert_eq!(registered_bits(127), "f".repeat(32));
+    }
+
+    /// `setExpFog`'s density is `ln 2` over the halfway distance (the
+    /// capture's `0.000198042` for 3500) and its time is in ms;
+    /// `visionSetNaked` writes `"<name>" <ms>`, a missing time a second.
+    #[test]
+    fn fog_and_vision_sets_write_the_capture_formats() {
+        let mut vm = vcod_gsc::Vm::new();
+        vm.with_cx(|cx| {
+            let (mut host, _) = cod4_host(cx);
+            let f = Value::Float;
+            let fog = [f(500.0), f(3500.0), f(0.5), f(0.25), f(0.75), f(2.0)];
+            set_exp_fog(&mut host, cx, None, &fog).unwrap();
+            let slot = host.allocators.layout().fog;
+            assert_eq!(
+                host.configstrings[slot],
+                "500 0.000198042 0.5 0.25 0.75 2000"
+            );
+            let mut bad = fog;
+            bad[1] = f(0.0);
+            assert!(set_exp_fog(&mut host, cx, None, &bad).is_err());
+            bad = fog;
+            bad[0] = f(-1.0);
+            assert!(set_exp_fog(&mut host, cx, None, &bad).is_err());
+            assert!(set_exp_fog(&mut host, cx, None, &fog[..5]).is_err());
+
+            let crash = s(cx, "mp_crash");
+            vision_set_naked(&mut host, cx, None, &[crash, f(2.5)]).unwrap();
+            let night = s(cx, "default_night");
+            vision_set_night(&mut host, cx, None, &[night]).unwrap();
+            use crate::game::cod4::{CS_VISIONSET_NAKED, CS_VISIONSET_NIGHT};
+            assert_eq!(host.configstrings[CS_VISIONSET_NAKED], "\"mp_crash\" 2500");
+            assert_eq!(
+                host.configstrings[CS_VISIONSET_NIGHT],
+                "\"default_night\" 1000"
+            );
+        });
+    }
+
+    /// Weapon 127 is the last the held bits and the 128-slot ammo arrays
+    /// hold: the 128th registration is a script error, and 127 can be
+    /// given and counted.
+    #[test]
+    fn a_cod4_level_registers_at_most_127_weapons() {
+        let mut host = GameHost::new(
+            &crate::game::profile::COD4,
+            vec![String::new(); crate::game::cod4::MAX_CONFIGSTRINGS],
+        );
+        let max = crate::game::cod4::MAX_WEAPONS - 1;
+        for i in 1..=max {
+            assert_eq!(register_weapon(&mut host, &format!("w{i}_mp")), Ok(i));
+        }
+        assert!(matches!(
+            register_weapon(&mut host, "one_too_many_mp"),
+            Err(ErrorKind::Custom(_))
+        ));
+        assert_eq!(register_weapon(&mut host, "w7_mp"), Ok(7));
+        let c4 = host.cod4();
+        let d = c4.table.get(max).unwrap();
+        assert!(d.ammo_slot < 128 && d.clip_slot < 128);
+        let mut l = crate::game::cod4::weapons::Loadout::default();
+        assert!(l.give(&c4.table, max, 0).is_some());
+        assert!(l.has(max));
+    }
 }

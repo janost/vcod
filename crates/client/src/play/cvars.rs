@@ -9,6 +9,10 @@ use std::collections::{HashMap, HashSet};
 use crate::console::shell::{Effect, Shell};
 use vcod_common::net::protocol::{CS_LAYOUT_V1, CsLayout};
 
+/// Retail's cvar table size: `Cvar_Get` stops at 1024 (CoDMP.exe 0x4394bb,
+/// `MAX_CVARS` 0x562368). The server makes at most this many new names.
+const MAX_CVARS: usize = 1024;
+
 /// The names the server set this connection, keyed lowercase; their
 /// values are the console's. A name not yet written reads the 140/204
 /// mirror, which CoD2's menus look through.
@@ -45,8 +49,16 @@ impl ClientCvars {
     /// `Cvar_Set2` with `force` (`Shell::force`), so a server-set cvar
     /// lands in the console's store whatever its flags. Returns what the
     /// set asks of the caller (a userinfo push, a config save).
+    /// A name the console lacks, once the server set [`MAX_CVARS`] names,
+    /// is dropped: retail's table would be full (it errors), and the store
+    /// stays bounded.
     fn server_set(&mut self, shell: &mut Shell, name: &str, value: &str) -> Vec<Effect> {
-        self.set.insert(name.to_lowercase());
+        let key = name.to_lowercase();
+        if !self.set.contains(&key) && self.set.len() >= MAX_CVARS && shell.cvar(name).is_none() {
+            log::warn!("cvars: the server's cvar {name:?} is past {MAX_CVARS}, dropped");
+            return Vec::new();
+        }
+        self.set.insert(key);
         shell.force(name, value)
     }
 
@@ -163,6 +175,23 @@ mod tests {
 
     fn toks(s: &str) -> Vec<String> {
         s.split(' ').map(str::to_string).collect()
+    }
+
+    /// A server making cvar after cvar stops at retail's table size; the
+    /// names it made, and the console's own, still take a `v` (SEC-111).
+    #[test]
+    fn the_server_makes_at_most_max_cvars_names() {
+        let mut c = ClientCvars::default();
+        let mut shell = Shell::new();
+        for i in 0..MAX_CVARS + 50 {
+            c.on_server_command(&toks(&format!("v junk{i} 1")), &mut shell);
+        }
+        assert_eq!(shell.cvar(&format!("junk{}", MAX_CVARS - 1)), Some("1"));
+        assert_eq!(shell.cvar(&format!("junk{MAX_CVARS}")), None);
+        c.on_server_command(&toks("v junk0 2"), &mut shell);
+        c.on_server_command(&toks("v cg_drawGun 0"), &mut shell);
+        assert_eq!(shell.cvar("junk0"), Some("2"));
+        assert_eq!(shell.cvar("cg_drawGun"), Some("0"));
     }
 
     #[test]

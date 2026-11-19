@@ -8,7 +8,7 @@ use common::{Queues, connect, step};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use vcod_common::net::protocol::{PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::net::{NetEvent, NetState};
 use vcod_server::Server;
 
@@ -36,8 +36,8 @@ fn http_server(body: Vec<u8>) -> (u16, std::sync::Arc<std::sync::Mutex<Vec<Strin
 
 #[test]
 fn a_redirected_download_lands_over_http_and_the_gamestate_follows() {
-    let scratch = std::env::temp_dir().join(format!("vcod-www-e2e-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&scratch);
+    let tmp = tempfile::tempdir().unwrap();
+    let scratch = tmp.path().to_path_buf();
     let served = scratch.join("server/main");
     std::fs::create_dir_all(&served).unwrap();
     let pak = vcod_common::testing::pk3_bytes();
@@ -99,12 +99,8 @@ fn a_redirected_download_lands_over_http_and_the_gamestate_follows() {
     }
     assert!(again, "no gamestate after donedl");
     assert_ne!(cl.state(), NetState::Disconnected);
-    let _ = std::fs::remove_dir_all(&scratch);
 }
 
-/// A server on `proto` holding `zzz_www.pk3` with `sv_wwwDownload` on and
-/// another pak of that name behind its `sv_wwwBaseURL`, and a connected
-/// client asking for it. Returns the HTTP request log too.
 /// What [`wrong_pak_at_the_url`] sets up.
 struct WrongPak {
     sv: Server,
@@ -112,13 +108,15 @@ struct WrongPak {
     cl: vcod_common::net::NetClient<common::ClientEnd>,
     now: Instant,
     requests: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    scratch: std::path::PathBuf,
+    scratch: tempfile::TempDir,
 }
 
-fn wrong_pak_at_the_url(proto: &'static Protocol, tag: &str) -> WrongPak {
-    let scratch = std::env::temp_dir().join(format!("vcod-www-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&scratch);
-    let served = scratch.join("server/main");
+/// A server on `proto` holding `zzz_www.pk3` with `sv_wwwDownload` on and
+/// another pak of that name behind its `sv_wwwBaseURL`, and a connected
+/// client asking for it. Returns the HTTP request log too.
+fn wrong_pak_at_the_url(proto: &'static Cod1Wire) -> WrongPak {
+    let scratch = tempfile::tempdir().unwrap();
+    let served = scratch.path().join("server/main");
     std::fs::create_dir_all(&served).unwrap();
     std::fs::write(
         served.join("zzz_www.pk3"),
@@ -141,7 +139,7 @@ fn wrong_pak_at_the_url(proto: &'static Protocol, tag: &str) -> WrongPak {
     let mut now = Instant::now();
     let mut cl = connect(&mut sv, &q, &mut now);
     assert_eq!(cl.protocol().transport.version, proto.transport.version);
-    let dest = scratch.join("client/main/zzz_www.pk3");
+    let dest = scratch.path().join("client/main/zzz_www.pk3");
     cl.begin_download("main/zzz_www.pk3", &dest).unwrap();
     WrongPak {
         sv,
@@ -166,7 +164,7 @@ fn a_chkfail_on_1_5_falls_back_to_udp() {
         mut now,
         requests,
         scratch,
-    } = wrong_pak_at_the_url(&PROTOCOL_V6, "chkfail15");
+    } = wrong_pak_at_the_url(&PROTOCOL_V6);
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
     let mut landed = false;
     while !landed {
@@ -184,7 +182,7 @@ fn a_chkfail_on_1_5_falls_back_to_udp() {
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    let dest = scratch.join("client/main/zzz_www.pk3");
+    let dest = scratch.path().join("client/main/zzz_www.pk3");
     assert_eq!(
         std::fs::read(&dest).unwrap(),
         vcod_common::testing::pk3_bytes(),
@@ -195,7 +193,6 @@ fn a_chkfail_on_1_5_falls_back_to_udp() {
         ["GET /main/zzz_www.pk3 HTTP/1.0"],
         "one www fetch"
     );
-    let _ = std::fs::remove_dir_all(&scratch);
 }
 
 /// United Offensive, connected (`sv_wwwDlDisconnected 0`), the wrong pak
@@ -214,7 +211,7 @@ fn a_refused_redirect_on_uo_is_redirected_again_until_the_client_leaves() {
         mut now,
         requests,
         scratch,
-    } = wrong_pak_at_the_url(&PROTOCOL_V22, "refuseuo");
+    } = wrong_pak_at_the_url(&PROTOCOL_V22);
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
     let reason = loop {
         assert!(
@@ -243,6 +240,5 @@ fn a_refused_redirect_on_uo_is_redirected_again_until_the_client_leaves() {
         ["GET /main/zzz_www.pk3 HTTP/1.0"],
         "one www fetch; the refused redirect fetches nothing"
     );
-    assert!(!scratch.join("client/main/zzz_www.pk3").exists());
-    let _ = std::fs::remove_dir_all(&scratch);
+    assert!(!scratch.path().join("client/main/zzz_www.pk3").exists());
 }

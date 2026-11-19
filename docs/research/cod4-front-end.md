@@ -141,8 +141,10 @@ confirmed on 1.7.
   does not set keeps its value. With no profile on disk the main menu
   asks for one as 1.7's does; vcod has no stand-in profile. A deleted
   profile that held the config sends the config back to
-  `main/vcod_mp.cfg` until another loads. A name with a path separator
-  is refused (the file field cannot type one).
+  `main/vcod_mp.cfg` until another loads. Create, delete and load
+  refuse a name that is not one plain directory name (a separator, `.`,
+  `..`, a `:`), and load takes only a listed name (the file field cannot
+  type one).
 - vcod's config for a CoD4 install with an active profile is
   `players/profiles/<name>/vcod_mp.cfg`, read from 1.7's `config_mp.cfg`
   there until vcod has written its own; with none, `main/vcod_mp.cfg`.
@@ -357,6 +359,24 @@ editor picked).
   cod4-fastfile.md 13). `fs_game` is the session's only: vcod does not
   write it to a config. `mods_menu`'s Launch Without Mods row is visible
   only under a mod. VERIFIED (the walk, its `visible when`).
+- A server's systeminfo `fs_game` that is rooted, names a drive or holds
+  `..` names no directory for vcod's demos or the profile's
+  stats; they go where they would with none.
+- The stats a join sends are the server's `fs_game`'s. The
+  `connectResponse` arm of `CL_ConnectionlessPacket` (0x46b70f) takes the
+  reply's argument, or `""` (0x6bfea7) without one, compares it with the
+  `fs_game` dvar's string (`Q_stricmp`, 0x46b94c) and, when they differ,
+  calls 0x579900 with it before the client state goes to 6, the stats
+  phase (0x46b98a). 0x579900 keeps that `fs_game` (0xcc1ac98) and builds
+  the file name from it and `mpdata` (0x6f5c64, through 0x4faf90), or
+  `mpdata` alone for an empty one. VERIFIED (the disassembly); that
+  0xcb199a4 is the `fs_game` dvar is INFERRED (the compare's use).
+- vcod loads the profile's `vcod_mpdata` under the `connectResponse`'s
+  `fs_game` before the stats packets, and the session writes back there:
+  the file the main menu reads after the game, once the systeminfo has
+  set `fs_game`. A `fs_game` that would leave the profile keeps the
+  menu's file. VERIFIED on ours
+  (`play::cod4::tests::join::cod4_live_a_modded_server_reads_the_mods_stats`).
 
 ## 7. Joins, games and errors
 
@@ -373,7 +393,7 @@ editor picked).
   the string's `&&1` (`EXE_SERVER_IS_DIFFERENT_VER\x151.7` reads
   `Server is a different version:` and `1.7` on the next line,
   INFERRED; the string VERIFIED in
-  `localized_code_post_gfx_mp`). vcod: `play::cod4::localize_message`.
+  `localized_code_post_gfx_mp`). vcod: `play::cod4::join::localize_message`.
 - `CL_KeyEvent`'s Esc with no key catcher switches on the connection
   state (iw3mp.exe 0x468125, index byte table 0x46844c, jump table
   0x46843c): `CA_CINEMATIC` and `CA_LOGO` stop the cinematic,

@@ -5,6 +5,7 @@
 //! docs/research/cod11-votes.md.
 
 use crate::game::host::GameHost;
+use crate::game::slot::ClientSlot;
 use vcod_common::asset_source::RawFile;
 use vcod_common::text::atoi;
 use vcod_gsc::Cx;
@@ -88,7 +89,7 @@ pub type Sends = Vec<(Option<usize>, String)>;
 /// `Cmd_Vote_f`'s yes test, which reads the second character for two of
 /// its three cases: `y` first, or `Y` or `1` second. `vote Yes` and
 /// `vote 1` count as no on both servers (measured).
-fn is_yes(arg: &str) -> bool {
+pub(crate) fn is_yes(arg: &str) -> bool {
     let b = arg.as_bytes();
     b.first() == Some(&b'y') || matches!(b.get(1), Some(b'Y' | b'1'))
 }
@@ -148,20 +149,29 @@ const COMMANDS_COD2: &str = "e \"GAME_VOTECOMMANDSARE\u{15} map_restart, map_rot
 pub struct VoteRules {
     /// `;` in the third argument refuses the call too (CoD2's).
     pub checks_third_arg: bool,
-    /// One kind list behind `g_allowVote` and its usage line; `None` runs
-    /// 1.1's or 1.5's off `patch_1_5`.
-    pub own_kinds: Option<(&'static [&'static str], &'static str)>,
-    /// `typemap` with no map still asks for one (CoD2's, as 1.5's).
+    /// The kinds a call may name, their gates and the usage line.
+    pub kinds: VoteKinds,
+    /// `typemap` with no map still asks for one (1.5's and CoD2's).
     pub typemap_needs_map: bool,
+    /// The vote runs on `trap_Milliseconds` (`svs_ms`), which a match
+    /// timeout does not stop (1.5's); else on the level time.
+    pub svs_clock: bool,
     /// The command a passed `map_restart` runs (CoD2's `fast_restart`);
     /// `None` runs the kind as called.
     pub restart_command: Option<&'static str>,
     /// `Cmd_Vote_f` has the complaint arm (CoD2's, lnxded 0x8100960, has
     /// none).
     pub complaints: bool,
+    /// `ClientDisconnect`'s complaint pass skips the slots not connected
+    /// (1.5b's and UO's, [`GameHost::complaints_about_gone`]).
+    pub complaints_connected_only: bool,
     /// The vote ends on a running majority and weighs the abstainers at
     /// its end (`cod2_vote_verdict`).
     pub running_majority: bool,
+    /// Short of a running majority, a vote fails once no more than
+    /// `n - (n / 2 + 1)` noes would be needed against it (1.5b 0x4fd1b);
+    /// 1.1's fails at `n / 2` noes.
+    pub fails_out_of_reach: bool,
     /// Under `g_oldVoting` 0 the script runs the votes
     /// (`ScriptRuntime::cod2_script_vote`).
     pub script_votes: bool,
@@ -174,56 +184,106 @@ pub struct VoteRules {
     pub min_connected: usize,
     /// Every map passes (CoD4's fastfile build asks for none).
     pub maps_unchecked: bool,
-    /// Configstring 15's time is `<voteTime> <sv_serverId>` (CoD4's).
-    pub time_with_server_id: bool,
+    /// What configstring 15's time holds.
+    pub time: VoteTime,
     /// The gametypes are `maps/mp/gametypes/_gametypes.txt`'s, read off
     /// the zones (CoD4's `Scr_ParseGameTypeList_FastFile`).
     pub gametype_list: bool,
 }
 
+/// [`VoteRules::kinds`].
+#[derive(Clone, Copy)]
+pub enum VoteKinds {
+    /// 1.1's, all behind `g_allowVote`.
+    V1,
+    /// 1.5's, each behind its own `g_allowVote*` gate.
+    V6,
+    /// One list behind `g_allowVote` and its usage line.
+    Own(&'static [&'static str], &'static str),
+}
+
+/// [`VoteRules::time`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum VoteTime {
+    /// The vote's end on its clock (1.1's).
+    End,
+    /// The vote's length, `VOTE_MS` (1.5's).
+    Length,
+    /// `<voteTime> <sv_serverId>` (CoD4's).
+    EndAndServerId,
+}
+
 impl VoteRules {
+    /// 1.1's.
     pub const COD1: VoteRules = VoteRules {
         checks_third_arg: false,
-        own_kinds: None,
+        kinds: VoteKinds::V1,
         typemap_needs_map: false,
+        svs_clock: false,
         restart_command: None,
         complaints: true,
+        complaints_connected_only: false,
         running_majority: false,
+        fails_out_of_reach: false,
         script_votes: false,
         queues_lines: false,
         min_connected: 0,
         maps_unchecked: false,
-        time_with_server_id: false,
+        time: VoteTime::End,
         gametype_list: false,
+    };
+
+    /// 1.5's and UO's (cod11-votes.md).
+    pub const COD1_15: VoteRules = VoteRules {
+        kinds: VoteKinds::V6,
+        typemap_needs_map: true,
+        svs_clock: true,
+        complaints_connected_only: true,
+        fails_out_of_reach: true,
+        time: VoteTime::Length,
+        ..VoteRules::COD1
     };
 
     /// CoD2's engine vote (cod2-protocol.md 3.4.2).
     pub const COD2: VoteRules = VoteRules {
         checks_third_arg: true,
-        own_kinds: Some((KINDS_COD2, COMMANDS_COD2)),
+        kinds: VoteKinds::Own(KINDS_COD2, COMMANDS_COD2),
         typemap_needs_map: true,
+        svs_clock: false,
         restart_command: Some("fast_restart"),
         complaints: false,
+        complaints_connected_only: false,
         running_majority: true,
+        fails_out_of_reach: false,
         script_votes: true,
         queues_lines: true,
         min_connected: 0,
         maps_unchecked: false,
-        time_with_server_id: false,
+        time: VoteTime::End,
         gametype_list: false,
     };
 
     /// CoD4 1.7's (`Cmd_CallVote_f` 0x80adbf2, `Cmd_Vote_f` 0x80ada2a,
     /// `CheckVote` 0x80b423a; cod4-map-cycle.md 4): CoD2's kinds, strings,
     /// verdict and `g_oldVoting`, two clients connected, no map check,
-    /// and the server id beside the vote's end.
+    /// and the server id beside the vote's end. Its complaint pass takes
+    /// 1.5's rule, off the `protocol` dvar 1.7 shares with 1.5
+    /// (unmeasured).
     pub const COD4: VoteRules = VoteRules {
         min_connected: 2,
         maps_unchecked: true,
-        time_with_server_id: true,
+        time: VoteTime::EndAndServerId,
         gametype_list: true,
+        complaints_connected_only: true,
         ..VoteRules::COD2
     };
+}
+
+/// A newline or other control byte in a vote argument. vcod's addition to
+/// retail's `;` test: the console splits a passed vote's command on `\n` and
+/// `\r`, so the argument would run as a command of its own.
+pub(crate) fn holds_control_byte(args: &[&str]) -> bool {
+    args.iter().any(|a| a.bytes().any(|b| b < b' '))
 }
 
 const NO_MAP: &str = "e \"\u{15}the server doesn't have that map\"";
@@ -232,9 +292,8 @@ impl GameHost {
     /// The clock the vote runs on: 1.1's level time, 1.5's
     /// `trap_Milliseconds` (`svs_ms`), which a match timeout does not stop.
     fn vote_clock(&self, svs_ms: i32) -> i32 {
-        // CoD4's host reads as 1.5 (its `protocol` is 6 too); its vote runs
-        // on `level.time` (0x836f8ac).
-        if self.patch_1_5 && !self.profile.votes.time_with_server_id {
+        // CoD4's vote runs on `level.time` (0x836f8ac).
+        if self.profile.votes.svs_clock {
             svs_ms
         } else {
             self.level_time_ms
@@ -247,8 +306,9 @@ impl GameHost {
 
     /// A slot the game counts as `CON_CONNECTED`: in the world.
     fn in_world(&self, slot: usize) -> bool {
-        self.client_roster
+        self.clients
             .get(slot)
+            .map(|c| &c.roster)
             .and_then(Option::as_ref)
             .is_some_and(|r| r.active)
     }
@@ -260,8 +320,8 @@ impl GameHost {
     /// bots, which never vote and would hold every vote short of a pass.
     fn voting_clients(&mut self, cx: &mut Cx) -> i32 {
         let mut n = 0;
-        for slot in 0..self.client_roster.len() {
-            let bot = self.client_roster[slot].is_some_and(|r| r.bot);
+        for slot in 0..self.clients.len() {
+            let bot = self.clients[slot].roster.is_some_and(|r| r.bot);
             if self.in_world(slot) && !bot && !self.is_spectator(cx, slot) {
                 n += 1;
             }
@@ -270,7 +330,10 @@ impl GameHost {
     }
 
     fn netname(&self, slot: usize) -> &str {
-        self.client_names.get(slot).map_or("", String::as_str)
+        self.clients
+            .get(slot)
+            .map(|c| &c.name)
+            .map_or("", String::as_str)
     }
 
     /// `Scr_GetGameTypeNameForScript` for a name `Scr_IsValidGameType`
@@ -356,7 +419,11 @@ impl GameHost {
         if crate::game::builtins::cvar::atoi(self.cvars.get("g_allowVote")) == 0 {
             return reply("e \"GAME_VOTINGNOTENABLED\"");
         }
-        let connected = self.client_roster.iter().flatten().count();
+        let connected = self
+            .clients
+            .iter()
+            .filter_map(|c| c.roster.as_ref())
+            .count();
         if connected < self.profile.votes.min_connected {
             return reply("e \"GAME_VOTINGNOTENOUGHPLAYERS\"");
         }
@@ -374,32 +441,29 @@ impl GameHost {
         if kind.contains(';')
             || arg2.contains(';')
             || (rules.checks_third_arg && arg(3).contains(';'))
+            || holds_control_byte(&[&kind, &arg2, arg(3)])
         {
             return reply("e \"GAME_INVALIDVOTESTRING\"");
         }
-        let gate = if let Some((kinds, _)) = rules.own_kinds {
-            kinds
+        let gate = match rules.kinds {
+            VoteKinds::Own(kinds, _) => kinds
                 .iter()
                 .any(|k| k.eq_ignore_ascii_case(&kind))
-                .then_some("g_allowVote")
-        } else if self.patch_1_5 {
-            KINDS_V6
+                .then_some("g_allowVote"),
+            VoteKinds::V6 => KINDS_V6
                 .iter()
                 .find(|(k, _)| k.eq_ignore_ascii_case(&kind))
-                .map(|(_, cvar)| *cvar)
-        } else {
-            KINDS_V1
+                .map(|(_, cvar)| *cvar),
+            VoteKinds::V1 => KINDS_V1
                 .iter()
                 .any(|k| k.eq_ignore_ascii_case(&kind))
-                .then_some("g_allowVote")
+                .then_some("g_allowVote"),
         };
         let Some(gate) = gate else {
-            let list = if let Some((_, commands)) = rules.own_kinds {
-                commands
-            } else if self.patch_1_5 {
-                COMMANDS_V6
-            } else {
-                COMMANDS_V1
+            let list = match rules.kinds {
+                VoteKinds::Own(_, commands) => commands,
+                VoteKinds::V6 => COMMANDS_V6,
+                VoteKinds::V1 => COMMANDS_V1,
             };
             return vec![
                 (Some(slot), "e \"GAME_INVALIDVOTESTRING\"".into()),
@@ -423,17 +487,17 @@ impl GameHost {
         self.vote.end_ms = now.wrapping_add(VOTE_MS);
         self.vote.yes = 1;
         self.vote.no = 0;
-        self.client_voted.fill(false);
-        if let Some(v) = self.client_voted.get_mut(slot) {
-            *v = true;
+        self.clients.iter_mut().for_each(|c| c.voted = false);
+        if let Some(c) = self.clients.get_mut(slot) {
+            c.voted = true;
         }
-        let time = if self.profile.votes.time_with_server_id {
-            let id = crate::game::builtins::cvar::atoi(self.cvars.get("sv_serverid"));
-            format!("{} {id}", self.vote.end_ms)
-        } else if self.patch_1_5 {
-            VOTE_MS.to_string()
-        } else {
-            self.vote.end_ms.to_string()
+        let time = match self.profile.votes.time {
+            VoteTime::EndAndServerId => {
+                let id = crate::game::builtins::cvar::atoi(self.cvars.get("sv_serverid"));
+                format!("{} {id}", self.vote.end_ms)
+            }
+            VoteTime::Length => VOTE_MS.to_string(),
+            VoteTime::End => self.vote.end_ms.to_string(),
         };
         self.set_vote_cs(CS_VOTE_TIME, time);
         self.set_vote_cs(CS_VOTE_STRING, display);
@@ -460,8 +524,7 @@ impl GameHost {
             };
             // 1.1's typemap without a map keeps the map (`GAME_TYPEMAP_NOCHANGE`
             // in the 1.1d capture); 1.5 and CoD2 ask for it even then.
-            if (self.patch_1_5 || self.profile.votes.typemap_needs_map || !arg3.is_empty())
-                && !self.map_exists(arg3)
+            if (self.profile.votes.typemap_needs_map || !arg3.is_empty()) && !self.map_exists(arg3)
             {
                 return Err(NO_MAP.into());
             }
@@ -574,13 +637,17 @@ impl GameHost {
     /// victim may answer `vote` about `attacker` for 20.5 s, and is told
     /// with `m <attacker>`. Nothing when the two are one. Retail's `m -4`
     /// for a listen server's own client never goes: vcod has none.
-    pub fn allow_complaint(&mut self, victim: usize, attacker: usize) {
+    pub fn allow_complaint(&mut self, victim: ClientSlot, attacker: ClientSlot) {
         if victim == attacker {
             return;
         }
-        self.client_commands.push((victim, format!("m {attacker}")));
-        if let Some(c) = self.client_complaints.get_mut(victim) {
-            c.against = attacker as i32;
+        self.client_commands.push(victim, format!("m {attacker}"));
+        if let Some(c) = self
+            .clients
+            .get_mut(victim.index())
+            .map(|c| &mut c.complaint)
+        {
+            c.against = attacker.index() as i32;
             c.end_ms = self.level_time_ms.wrapping_add(COMPLAINT_MS);
         }
     }
@@ -591,16 +658,21 @@ impl GameHost {
     /// not connected, 1.1 does not, so there a stale window on a slot
     /// since left can take the clear.
     pub fn complaints_about_gone(&mut self, gone: usize) {
-        let v15 = self.patch_1_5;
-        let hit = (0..self.client_complaints.len()).find(|&slot| {
-            self.client_complaints[slot].against == gone as i32
-                && (!v15 || self.client_roster.get(slot).is_some_and(Option::is_some))
+        let v15 = self.profile.votes.complaints_connected_only;
+        let hit = (0..self.clients.len()).find(|&slot| {
+            self.clients[slot].complaint.against == gone as i32
+                && (!v15
+                    || self
+                        .clients
+                        .get(slot)
+                        .map(|c| &c.roster)
+                        .is_some_and(Option::is_some))
         });
         if let Some(slot) = hit {
-            let c = &mut self.client_complaints[slot];
+            let c = &mut self.clients[slot].complaint;
             c.against = -1;
             c.end_ms = 0;
-            self.client_commands.push((slot, "m -2".into()));
+            self.command_to(slot, "m -2".into());
         }
     }
 
@@ -610,7 +682,7 @@ impl GameHost {
     /// (`complaint_drop`); short of it they are warned with the count
     /// left. `None` when the window is shut, which `vote` then closes.
     fn complain(&mut self, slot: usize, arg: &str) -> Option<Sends> {
-        let c = *self.client_complaints.get(slot)?;
+        let c = *self.clients.get(slot).map(|c| &c.complaint)?;
         if c.end_ms.wrapping_sub(self.level_time_ms) <= 0 {
             return None;
         }
@@ -622,15 +694,15 @@ impl GameHost {
         let Some(target) = target else {
             return Some(Vec::new());
         };
-        self.client_complaints[slot].against = -1;
-        self.client_complaints[slot].end_ms = -1;
+        self.clients[slot].complaint.against = -1;
+        self.clients[slot].complaint.end_ms = -1;
         let arg: String = arg.chars().take(63).collect();
         if !is_yes(&arg) {
             return Some(vec![(Some(slot), "m -2".into())]);
         }
-        self.client_complaints[target].count += 1;
+        self.clients[target].complaint.count += 1;
         let limit = atoi(self.cvars.get("g_complaintlimit"));
-        let left = limit.wrapping_sub(self.client_complaints[target].count);
+        let left = limit.wrapping_sub(self.clients[target].complaint.count);
         if left <= 0 {
             self.complaint_drop = Some(target);
             return Some(vec![(Some(slot), "m -1".into())]);
@@ -655,7 +727,7 @@ impl GameHost {
         {
             return sends;
         }
-        if let Some(c) = self.client_complaints.get_mut(slot) {
+        if let Some(c) = self.clients.get_mut(slot).map(|c| &mut c.complaint) {
             c.against = -1;
             c.end_ms = -1;
         }
@@ -663,14 +735,14 @@ impl GameHost {
         if self.vote.end_ms == 0 {
             return reply("GAME_NOVOTEINPROGRESS");
         }
-        if self.client_voted.get(slot).copied().unwrap_or(false) {
+        if self.clients.get(slot).map(|c| c.voted).unwrap_or(false) {
             return reply("GAME_VOTEALREADYCAST");
         }
         if self.is_spectator(cx, slot) {
             return reply("GAME_NOSPECTATORVOTE");
         }
-        if let Some(v) = self.client_voted.get_mut(slot) {
-            *v = true;
+        if let Some(c) = self.clients.get_mut(slot) {
+            c.voted = true;
         }
         // `trap_Argv` into a 64-byte buffer.
         let arg: String = arg.chars().take(63).collect();
@@ -739,7 +811,7 @@ impl GameHost {
             }
         } else if now.wrapping_sub(self.vote.end_ms) >= 0 {
             "e \"GAME_VOTEFAILED\""
-        } else if self.patch_1_5 {
+        } else if self.profile.votes.fails_out_of_reach {
             // 1.5 (0x4fd1b): a majority of `n / 2 + 1` passes, and fails
             // once no more than `n - majority` would be needed against it.
             let majority = n / 2 + 1;
@@ -762,8 +834,8 @@ impl GameHost {
         }
         self.vote.end_ms = 0;
         let lines = if self.profile.votes.queues_lines {
-            let all = crate::game::commands::ALL_CLIENTS;
-            self.client_commands.push((all, line.to_string()));
+            let all = crate::game::commands::Recipient::All;
+            self.client_commands.push(all, line.to_string());
             Vec::new()
         } else {
             vec![line.to_string()]
@@ -776,6 +848,7 @@ impl GameHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::commands::one;
     use crate::game::scoreboard::RosterSlot;
     use vcod_gsc::{Host, Value};
 
@@ -791,11 +864,11 @@ mod tests {
                 let value = Value::String(cx.intern_exact(team));
                 host.set_field(cx, ent, atom, value).unwrap();
             });
-            host.client_roster[slot] = Some(RosterSlot {
+            host.clients[slot].roster = Some(RosterSlot {
                 active: true,
                 ..Default::default()
             });
-            host.client_names[slot] = ["Able", "Baker", "Charlie", "Dog"][slot].into();
+            host.clients[slot].name = ["Able", "Baker", "Charlie", "Dog"][slot].into();
         }
         host
     }
@@ -819,6 +892,43 @@ mod tests {
 
     fn to(slot: usize, m: &str) -> (Option<usize>, String) {
         (Some(slot), format!("e \"{m}\""))
+    }
+
+    /// A newline, carriage return or other control byte in any argument
+    /// refuses the call, on every game's rules: a passed vote's command is
+    /// one console line.
+    #[test]
+    fn a_control_byte_in_a_vote_argument_refuses_the_call() {
+        use crate::game::profile::{COD1_15, COD2, COD4};
+        for (profile, line) in [
+            (&COD4, "callvote map \"mp_crash\nquit\""),
+            (&COD4, "callvote typemap war \"mp_crash\rquit\""),
+            (&COD2, "callvote map \"mp_toujane\nquit\""),
+            (&COD1_15, "callvote drawfriend \"1\nquit\""),
+            (&COD1_15, "callvote killcam \"0\rkillserver\""),
+            (&COD1_15, "callvote \"map_restart\nquit\""),
+        ] {
+            let mut vm = vcod_gsc::Vm::new();
+            let mut h = host(&mut vm, &["axis", "allies"]);
+            h.profile = profile;
+            for name in ["g_allowVoteDrawFriend", "g_allowVoteKillCam"] {
+                h.cvars.set(name, "1");
+            }
+            h.cvars.set("scr_drawfriend", "0");
+            h.cvars.set("scr_killcam", "1");
+            assert_eq!(
+                call(&mut vm, &mut h, 0, line),
+                [to(0, "GAME_INVALIDVOTESTRING")],
+                "{line:?}"
+            );
+            assert_eq!((h.vote.end_ms, h.vote.command.as_str()), (0, ""));
+        }
+        // The same map vote without the newline runs one command.
+        let mut vm = vcod_gsc::Vm::new();
+        let mut h = host(&mut vm, &["axis", "allies"]);
+        h.profile = &COD4;
+        call(&mut vm, &mut h, 0, "callvote map mp_crash");
+        assert_eq!(h.vote.command, "map mp_crash");
     }
 
     /// CoD2's engine vote (cod2-protocol.md 3.4.2): the third argument's
@@ -1003,7 +1113,7 @@ mod tests {
         let mut vm = vcod_gsc::Vm::new();
         let mut host = host(&mut vm, &["axis", "allies", "axis"]);
         for slot in 1..3 {
-            host.client_roster[slot].as_mut().unwrap().bot = true;
+            host.clients[slot].roster.as_mut().unwrap().bot = true;
         }
         call(&mut vm, &mut host, 0, "callvote map_restart");
         assert_eq!(check(&mut vm, &mut host), ["e \"GAME_VOTEPASSED\""]);
@@ -1028,12 +1138,12 @@ mod tests {
             )
         };
         let m = |s: &str| vec![(Some(1), s.to_string())];
-        host.allow_complaint(1, 1);
+        host.allow_complaint(ClientSlot::at(1), ClientSlot::at(1));
         assert!(host.client_commands.is_empty());
-        host.allow_complaint(1, 0);
+        host.allow_complaint(ClientSlot::at(1), ClientSlot::at(0));
         assert_eq!(
             std::mem::take(&mut host.client_commands),
-            [(1, "m 0".into())]
+            [(one(1), "m 0".into())]
         );
         assert_eq!(vote(&mut vm, &mut host, 1, "no"), m("m -2"));
         assert_eq!(
@@ -1041,28 +1151,28 @@ mod tests {
             [to(1, "GAME_NOVOTEINPROGRESS")]
         );
         for left in [2, 1] {
-            host.allow_complaint(1, 0);
+            host.allow_complaint(ClientSlot::at(1), ClientSlot::at(0));
             assert_eq!(
                 vote(&mut vm, &mut host, 1, "yes"),
                 [warn(left), (Some(1), "m -1".into())]
             );
         }
-        host.allow_complaint(1, 0);
+        host.allow_complaint(ClientSlot::at(1), ClientSlot::at(0));
         assert_eq!(vote(&mut vm, &mut host, 1, "yes"), m("m -1"));
         assert_eq!(host.complaint_drop, Some(0));
 
         // The window shuts 20.5 s on, and goes with the offender.
         host.client_commands.clear();
-        host.allow_complaint(1, 0);
+        host.allow_complaint(ClientSlot::at(1), ClientSlot::at(0));
         host.level_time_ms += 20_500;
         assert_eq!(
             vote(&mut vm, &mut host, 1, "yes"),
             [to(1, "GAME_NOVOTEINPROGRESS")]
         );
-        host.allow_complaint(1, 0);
+        host.allow_complaint(ClientSlot::at(1), ClientSlot::at(0));
         host.client_commands.clear();
         host.complaints_about_gone(0);
-        assert_eq!(host.client_commands, [(1, "m -2".into())]);
+        assert_eq!(host.client_commands, [(one(1), "m -2".into())]);
         assert_eq!(
             vote(&mut vm, &mut host, 1, "yes"),
             [to(1, "GAME_NOVOTEINPROGRESS")]
@@ -1077,20 +1187,22 @@ mod tests {
         for v15 in [false, true] {
             let mut vm = vcod_gsc::Vm::new();
             let mut host = host(&mut vm, &["axis", "allies", "allies", "allies"]);
-            host.patch_1_5 = v15;
-            for slot in 1..4 {
-                host.allow_complaint(slot, 0);
+            if v15 {
+                host.set_profile(&crate::game::profile::COD1_15);
             }
-            host.client_roster[1] = None;
+            for slot in 1..4 {
+                host.allow_complaint(ClientSlot::at(slot), ClientSlot::at(0));
+            }
+            host.clients[1].roster = None;
             host.client_commands.clear();
             host.complaints_about_gone(0);
             let cleared = if v15 { 2 } else { 1 };
             assert_eq!(
                 host.client_commands,
-                [(cleared, "m -2".into())],
+                [(one(cleared), "m -2".into())],
                 "1.5 {v15}"
             );
-            assert_eq!(host.client_complaints[3].against, 0, "1.5 {v15}");
+            assert_eq!(host.clients[3].complaint.against, 0, "1.5 {v15}");
         }
     }
 
@@ -1100,7 +1212,9 @@ mod tests {
         for (v15, after_one_no) in [(false, true), (true, false)] {
             let mut vm = vcod_gsc::Vm::new();
             let mut host = host(&mut vm, &["axis", "allies", "axis"]);
-            host.patch_1_5 = v15;
+            if v15 {
+                host.set_profile(&crate::game::profile::COD1_15);
+            }
             call(&mut vm, &mut host, 0, "callvote map_restart");
             vote(&mut vm, &mut host, 1, "no");
             assert_eq!(
@@ -1117,7 +1231,7 @@ mod tests {
     fn a_15_vote_reads_its_own_gate() {
         let mut vm = vcod_gsc::Vm::new();
         let mut host = host(&mut vm, &["axis", "allies"]);
-        host.patch_1_5 = true;
+        host.set_profile(&crate::game::profile::COD1_15);
         for (name, value) in [
             ("g_allowVoteClientKick", "0"),
             ("g_allowVoteKillCam", "1"),

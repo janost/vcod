@@ -58,10 +58,8 @@ impl Server {
             && let Some(g) = job.poll(!self.game.module.driver.nav_background)
         {
             log::info!("bots: navigation graph rebuilt over the script's brushes");
-            self.game.module.driver.nav = Some(g);
+            self.game.module.driver.swap_graph(g);
             self.game.module.nav_rebuild = None;
-            self.game.module.driver.paths.clear();
-            self.game.module.driver.sites.clear();
             self.game.module.bot_breach_stands.clear();
         }
     }
@@ -533,11 +531,6 @@ impl Server {
             playing: sim.pm_type == crate::spectate::PmType::Normal && !sim.dead,
             enemy,
             hurt: self.bot_hurt(sim),
-            // Checked in pass 2 against this tick's teammates.
-            friend_in_line: false,
-            sidestep: None,
-            cover: None,
-            hunt: None,
             use_takes_weapon: sim.cursor_hint >= self.game.proto.cursor_hints.weapon,
             grenade,
             grenade_cooks: grenade
@@ -545,10 +538,8 @@ impl Server {
                 .is_some_and(|d| d.cook_off_hold),
             grenade_ready: sim.ps.grenade_time_left_ms > 0 && sim.ps.weapon_delay_ms <= 1,
             frag_near: self.game.module.script.as_ref().and_then(|rt| {
-                let at = sim.ps.origin;
                 let eye = glam::Vec3::from(sim.eye_origin());
-                rt.missiles()
-                    .armed()
+                let frags = (rt.missiles().armed())
                     .filter(|(_, w, _, _)| {
                         weapons.get(*w as usize).is_some_and(|d| {
                             d.explosion_radius > 0.0 && d.explosion_inner_damage > 0
@@ -557,39 +548,21 @@ impl Server {
                     // A cook dropped by a thrower killed holding it is seen
                     // fall: one went off by a teammate 3.5 s on and killed
                     // him (bot-combat.md 12).
-                    .filter(|(o, _, owner, dropped)| {
-                        *owner == Some(slot)
-                            || *dropped
-                            || self.game.world.as_ref().is_none_or(|w| {
-                                crate::bots::notices_frag(eye, sim.view_angles()[1], *o, |a, b| {
-                                    w.collision.shot_trace(a, b).fraction >= 1.0
-                                })
-                            })
+                    .map(|(o, _, owner, dropped)| (o, owner == Some(slot) || dropped));
+                crate::bots::frag_near(sim.ps.origin, frags, |o| {
+                    self.game.world.as_ref().is_none_or(|w| {
+                        crate::bots::notices_frag(eye, sim.view_angles()[1], o, |a, b| {
+                            w.collision.shot_trace(a, b).fraction >= 1.0
+                        })
                     })
-                    .map(|(o, _, _, _)| o)
-                    .filter(|o| {
-                        (o.z - at.z).abs() < crate::bots::FLEE_HEIGHT
-                            && (*o - at).truncate().length() < crate::bots::FLEE_REACH
-                    })
-                    .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
-                    .map(Into::into)
+                })
             }),
             wrecks: if sim.seat.is_none() {
                 self.game.module.bot_parked.wrecks()
             } else {
                 Vec::new()
             },
-            // Dealt with the posts (`driver::deal_posts`).
-            fallen: Vec::new(),
-            post: None,
-            give_way: None,
-            guard_post: None,
-            lane: None,
             stand_room: true,
-            exposure: None,
-            // Probed in pass 3, on the ticks the brain throws.
-            lob: None,
-            waypoint: None,
             hazard_ahead: std::array::from_fn(|i| {
                 self.game.world.as_ref().is_some_and(|w| {
                     let (s, c) = (i as f32 * 45.0).to_radians().sin_cos();
@@ -597,10 +570,6 @@ impl Server {
                     crate::nav::hazard(&w.hazards, sim.ps.origin + ahead)
                 })
             }),
-            // Felt in pass 3, on the ticks the brain reads it.
-            drop_ahead: [None; 8],
-            // Felt in pass 3, on the ticks the brain reads it.
-            wall_ahead: [false; 8],
             linked: sim.link_to.is_some(),
             stranded: self.game.module.driver.nav.as_ref().is_some_and(|g| {
                 let at = sim.ps.origin.into();
@@ -629,30 +598,14 @@ impl Server {
                 .filter(|_| sim.ps.on_ladder)
                 .and_then(|g| g.ladder_middle(sim.ps.origin))
                 .map(Into::into),
-            back_face: None,
             on_ground: sim.ps.on_ground,
-            jump: false,
             sliding: sim.ps.sliding(),
-            leap: false,
-            lip: false,
-            crouch_jump: false,
-            stop: false,
-            mate_ahead: false,
-            squad: Default::default(),
-            run_off: false,
-            back_drop: false,
-            rungs_hold: false,
-            mantle: false,
             move_scale: def
                 .map(|d| d.move_speed_scale)
                 .filter(|&m| m > 0.0)
                 .unwrap_or(1.0),
             fatigue: (sim.ps.rules == vcod_common::pmove::MoveRules::Uo).then_some(sim.ps.fatigue),
             sprinting: sim.ps.sprinting,
-            sprint_room: 0.0,
-            push_off: None,
-            unpin: None,
-            detour: false,
             pistol,
             rocket,
             primaries: [sim.ps.weapon_slots[1], sim.ps.weapon_slots[2]],
@@ -661,11 +614,6 @@ impl Server {
             reload_ms,
             draw_ms,
             loaded,
-            sd: None,
-            re: None,
-            bel: None,
-            uo: None,
-            noise: None,
             // Stock `sd.gsc` and `re.gsc` spawn the dead as spectators.
             one_life: self
                 .game
@@ -683,10 +631,9 @@ impl Server {
                 heal: None,
                 cover: None,
             },
-            // Filled for the level's vehicles in pass 2.
-            vehicles: Vec::new(),
-            seat: None,
-            armor: None,
+            // The rest starts empty; the driver's later passes fill what
+            // the tick needs.
+            ..Default::default()
         })
     }
 
@@ -936,6 +883,23 @@ impl Server {
             "allies" => script::TEAM_ALLIES,
             _ => -1,
         };
+        // `objective_timeout`'s wait (`re.gsc` 2425), from the first frame
+        // an objective lies away from its start.
+        const RE_TIMEOUT_S: f32 = 60.0;
+        let now = self.core.sv_time_ms;
+        let mut drops = std::mem::take(&mut self.game.module.bot_re_drops);
+        drops.retain(|(start, _)| {
+            o.objectives
+                .iter()
+                .any(|r| r.dropped.is_some_and(|d| d.0 == *start))
+        });
+        for r in &o.objectives {
+            if let Some((start, _)) = r.dropped
+                && !drops.iter().any(|d| d.0 == start)
+            {
+                drops.push((start, now));
+            }
+        }
         let objectives = o
             .objectives
             .iter()
@@ -943,6 +907,16 @@ impl Server {
                 let mid = |(lo, hi): ([f32; 3], [f32; 3])| -> [f32; 3] {
                     std::array::from_fn(|i| (lo[i] + hi[i]) * 0.5)
                 };
+                // The trigger's middle back at its start.
+                let returns = r.pickup.zip(r.dropped).and_then(|(b, (start, at))| {
+                    let since = drops.iter().find(|d| d.0 == start)?.1;
+                    let m = mid(b);
+                    let left = RE_TIMEOUT_S - now.wrapping_sub(since) as f32 / 1000.0;
+                    Some((
+                        std::array::from_fn(|i| start[i] + m[i] - at[i]),
+                        left.max(0.0),
+                    ))
+                });
                 let (lo, hi) = r.goal;
                 let goal = self.site_stand(lo, hi);
                 // The farthest corner, flat, and a body's half width past it.
@@ -963,10 +937,12 @@ impl Server {
                     mine: false,
                     carrier_at,
                     laid: r.laid,
+                    returns,
                 };
                 (view, r.carrier, r.shown_to)
             })
             .collect();
+        self.game.module.bot_re_drops = drops;
         Some((team(&o.attackers), team(&o.defenders), objectives))
     }
 
@@ -1035,64 +1011,35 @@ impl Server {
             Some(_) => 360.0,
             None => crate::bots::Skill::default().fov_deg,
         };
-        let view = me.view_angles();
-        // In-range candidates nearest first: the tracked target and the
-        // attacker wherever they stand, the rest only inside the cone.
-        let mut candidates: Vec<(f32, glam::Vec3, crate::bots::EnemyView)> = Vec::new();
-        for (i, c) in self.core.clients.iter().enumerate() {
-            if i == slot {
-                continue;
-            }
-            let Some(s) = c.as_ref().and_then(|c| c.sim.as_ref()) else {
-                continue;
-            };
-            if s.pm_type != crate::spectate::PmType::Normal || s.dead {
-                continue;
-            }
-            if !team_enemy(teams.get(i).copied().unwrap_or(0)) {
-                continue;
-            }
+        let looker = crate::bots::Looker {
+            origin: me.ps.origin,
+            eye: my_eye,
+            view: me.view_angles(),
+            fov,
+            tracked,
+            attacker,
+        };
+        let foes = (self.core.clients.iter().enumerate())
+            .filter(|&(i, _)| i != slot)
+            .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
+            .filter(|(_, s)| s.pm_type == crate::spectate::PmType::Normal && !s.dead)
+            .filter(|&(i, _)| team_enemy(teams.get(i).copied().unwrap_or(0)))
             // A tank's driver is out of every client's sight and every
             // round's reach (docs/research/coduo-vehicles.md 13).
-            if self
-                .game
-                .module
-                .script
-                .as_ref()
-                .is_some_and(|rt| rt.host.vehicles.drives_tank(i))
-            {
-                continue;
-            }
-            let d = crate::bots::dist_sq(me.ps.origin.into(), s.ps.origin.into());
-            if d > crate::bots::SHOOT_RANGE * crate::bots::SHOOT_RANGE {
-                continue;
-            }
-            let chest = crate::bots::chest(s.ps.origin.into(), s.ps.view_height());
-            let known = Some(i) == tracked || Some(i) == attacker;
-            if !known && !crate::bots::in_sight_cone(my_eye, view, chest.into(), fov) {
-                continue;
-            }
-            candidates.push((
-                d,
-                s.ps.view().eye,
-                crate::bots::EnemyView {
-                    slot: i,
-                    origin: chest,
-                    velocity: s.ps.velocity.into(),
-                },
-            ));
-        }
-        candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let sighted = |(_, eye, enemy): &(f32, glam::Vec3, crate::bots::EnemyView)| {
-            let Some(w) = world else {
-                return Some(*enemy);
-            };
-            let clear = |to: glam::Vec3| w.shot_trace(my_eye, to).fraction >= 1.0;
-            let origin = crate::bots::aim_point(enemy.origin, (*eye).into(), |p| clear(p.into()))?;
-            Some(crate::bots::EnemyView { origin, ..*enemy })
-        };
-        let order: Vec<(f32, usize)> = candidates.iter().map(|c| (c.0, c.2.slot)).collect();
-        crate::bots::pick_enemy(&order, attacker, tracked, |i| sighted(&candidates[i]))
+            .filter(|&(i, _)| {
+                !(self.game.module.script.as_ref())
+                    .is_some_and(|rt| rt.host.vehicles.drives_tank(i))
+            })
+            .map(|(i, s)| crate::bots::Seen {
+                slot: i,
+                origin: s.ps.origin,
+                eye: s.ps.view().eye,
+                view_height: s.ps.view_height(),
+                velocity: s.ps.velocity.into(),
+            });
+        crate::bots::sight_enemy(&looker, foes, |to| {
+            world.is_none_or(|w| w.shot_trace(my_eye, to.into()).fraction >= 1.0)
+        })
     }
 
     /// [`crate::bots::BotView::hurt`] for the body `sim`: its last hit by
@@ -1118,15 +1065,17 @@ impl Server {
     /// [`crate::bots::BotView::friend_in_line`] for the body in `slot`
     /// shooting at `target`: its live axis or allies teammates' boxes this
     /// tick (the enemy is cached, the friends are not); and when one is in
-    /// the line, [`crate::bots::BotView::sidestep`], a graph node near
-    /// whose eye clears it: `held`, the spot and pick time the bot is
-    /// already walking to, while it still clears and is not yet reached.
+    /// the line and `step` asks for it, [`crate::bots::BotView::sidestep`],
+    /// a graph node near whose eye clears it: `held`, the spot and pick time
+    /// the bot is already walking to, while it still clears and is not yet
+    /// reached.
     pub(super) fn bot_friend_in_line(
         &self,
         slot: usize,
         target: [f32; 3],
         teams: &[i32],
         held: Option<([f32; 3], i32)>,
+        step: bool,
     ) -> (bool, Option<[f32; 3]>) {
         let my_team = teams.get(slot).copied().unwrap_or(0);
         if my_team != script::TEAM_AXIS && my_team != script::TEAM_ALLIES {
@@ -1156,6 +1105,9 @@ impl Server {
         let target = glam::Vec3::from(target);
         if !crate::bots::friend_in_line(eye, target, &friends) {
             return (false, None);
+        }
+        if !step {
+            return (true, None);
         }
         let (Some(g), Some(w)) = (
             self.game.module.driver.nav.as_ref(),
@@ -1410,7 +1362,7 @@ impl crate::bots::driver::BotWorld for Server {
         teams: &[i32],
         held: Option<([f32; 3], i32)>,
     ) -> (bool, Option<[f32; 3]>) {
-        self.bot_friend_in_line(slot, target, teams, held)
+        self.bot_friend_in_line(slot, target, teams, held, true)
     }
 
     fn cover_body(&self, slot: usize, threat: usize) -> Option<crate::bots::driver::CoverBody> {
@@ -1830,7 +1782,7 @@ mod tests {
             .expect("a spawned bot")
             .ps
             .origin;
-        let frag = crate::configstrings::weapon_index("fraggrenade_mp").unwrap() as u8;
+        let frag = crate::defs::V1.weapon_index("fraggrenade_mp").unwrap() as u8;
         let (yaw, target) = (0..16)
             .find_map(|i| {
                 let yaw = i as f32 * 22.5;

@@ -81,9 +81,9 @@ pub fn step(host: &mut GameHost, cx: &mut Cx) -> Option<Callback> {
         let Some(victim) = host.ents.handle(slot as u32) else {
             continue;
         };
-        let health = host.client_vitals[slot].health;
+        let health = host.clients[slot].vitals.health;
         walk.probing = Some((slot, health));
-        host.client_vitals[slot].health = health + PROBE_PAD;
+        host.clients[slot].vitals.health = health + PROBE_PAD;
         if let Some(args) = probe_args(host, cx, death.attacker, victim, slot) {
             return Some((victim, args));
         }
@@ -101,7 +101,7 @@ fn probe_args(
     victim: EntId,
     slot: usize,
 ) -> Option<Vec<Value>> {
-    if !host.client_vitals[slot].takedamage || host.client_vitals[slot].dead {
+    if !host.clients[slot].vitals.takedamage || host.clients[slot].vitals.dead {
         return None;
     }
     let damage = host
@@ -128,8 +128,8 @@ fn probe_args(
 /// spot for him (a blocked search leaves him seated), the rest get out in
 /// place. Then `G_SetOrigin` lifts his `r.currentOrigin` [`LIFT`] units.
 fn finish_rider(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, health: i32) {
-    let shielded = host.client_vitals[slot].health == health + PROBE_PAD;
-    host.client_vitals[slot].health = health;
+    let shielded = host.clients[slot].vitals.health == health + PROBE_PAD;
+    host.clients[slot].vitals.health = health;
     let Some(player) = host.ents.handle(slot as u32) else {
         return;
     };
@@ -195,4 +195,109 @@ pub fn drain(host: &mut GameHost, cx: &mut Cx) -> Option<Callback> {
         begin(host, death);
     }
     step(host, cx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::vehicle::Vehicle;
+    use crate::game::vehicle::info::{KIND_FOUR_WHEEL, VehicleInfo};
+    use vcod_gsc::{Host, Vm};
+
+    /// A four-wheel's two riders: the driver's probe hurts him, so he is
+    /// put out where he sits; the passenger's does not, so he looks for a
+    /// dismount spot (none without a world) and stays seated. Each gets
+    /// his health back, padded by 10 for his own callback only
+    /// (coduo-vehicles.md 11.2).
+    #[test]
+    fn the_die_walk_pads_each_rider_and_puts_out_the_hurt_one() {
+        let mut host = GameHost::new(&crate::game::profile::COD1_UO, vec![String::new(); 2048]);
+        host.vehicles.infos.list.push(std::rc::Rc::new(VehicleInfo {
+            kind: KIND_FOUR_WHEEL,
+            num_passengers: 1,
+            ..VehicleInfo::default()
+        }));
+        let mut vm = Vm::new();
+        vm.with_cx(|cx| {
+            for slot in [3, 5] {
+                host.ents.spawn_client(cx, slot, None).unwrap();
+                host.clients[slot].vitals.health = 50;
+                host.clients[slot].vitals.takedamage = true;
+            }
+            let id = host.ents.spawn(cx).unwrap();
+            let mut v = Vehicle::for_test(0);
+            v.seats[1] = Some(3);
+            v.seats[3] = Some(5);
+            host.vehicles.slots[0] = Some(id);
+            host.vehicles.live.insert(id, v);
+            let world = host.ents.world(cx);
+            begin(
+                &mut host,
+                Death {
+                    id,
+                    attacker: world,
+                    dir: [0.0, 0.0, 1.0],
+                },
+            );
+            let (victim, args) = step(&mut host, cx).expect("the driver's callback");
+            assert_eq!(victim.0, 3);
+            assert_eq!(args[0], Value::Entity(world));
+            assert_eq!(args[2], Value::Int(PROBE_DAMAGE));
+            assert_eq!(host.clients[3].vitals.health, 60);
+            assert_eq!(host.clients[5].vitals.health, 50);
+            // His callback took the 5.
+            host.clients[3].vitals.health = 55;
+            let (victim, _) = step(&mut host, cx).expect("the passenger's callback");
+            assert_eq!(victim.0, 5);
+            assert_eq!(host.clients[3].vitals.health, 50);
+            assert_eq!(host.vehicles.seat_of(3), None);
+            assert_eq!(host.clients[5].vitals.health, 60);
+            // His did not: shielded, a dismount search, blocked.
+            assert!(step(&mut host, cx).is_none());
+            assert_eq!(host.clients[5].vitals.health, 50);
+            assert_eq!(host.vehicles.seat_of(5), Some((id, 3)));
+            assert!(host.vehicles.dying.is_empty());
+            // Both are lifted 32 off where they sat.
+            assert!(host.vehicles.lifted.contains_key(&3));
+            assert!(host.vehicles.lifted.contains_key(&5));
+            let origin = cx.intern_folded("origin");
+            let p = host.ents.handle(3).unwrap();
+            assert_eq!(
+                host.get_field(cx, p, origin),
+                Value::Vector([0.0, 0.0, LIFT])
+            );
+        });
+    }
+
+    /// A rider who cannot be hurt (no `takedamage`) runs no callback: the
+    /// walk goes straight on to finish him, shielded.
+    #[test]
+    fn a_rider_without_takedamage_runs_no_callback() {
+        let mut host = GameHost::new(&crate::game::profile::COD1_UO, vec![String::new(); 2048]);
+        host.vehicles
+            .infos
+            .list
+            .push(std::rc::Rc::new(VehicleInfo::default()));
+        let mut vm = Vm::new();
+        vm.with_cx(|cx| {
+            host.ents.spawn_client(cx, 2, None).unwrap();
+            host.clients[2].vitals.health = 40;
+            let id = host.ents.spawn(cx).unwrap();
+            let mut v = Vehicle::for_test(0);
+            v.seats[1] = Some(2);
+            host.vehicles.live.insert(id, v);
+            let world = host.ents.world(cx);
+            begin(
+                &mut host,
+                Death {
+                    id,
+                    attacker: world,
+                    dir: [0.0; 3],
+                },
+            );
+            assert!(step(&mut host, cx).is_none());
+            assert_eq!(host.clients[2].vitals.health, 40);
+            assert!(host.vehicles.dying.is_empty());
+        });
+    }
 }

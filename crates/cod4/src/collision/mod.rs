@@ -25,10 +25,15 @@ use crate::assets::model::XModelCollSurf;
 use crate::assets::world;
 use crate::zone::Pointer;
 
+mod static_tree;
+
 pub use vcod_common::clipmap::{
     CONTENTS_BODY, CONTENTS_GLASS, CONTENTS_PLAYERCLIP, CONTENTS_SOLID, MASK_PLAYERSOLID,
-    MASK_SHOT, SURF_LADDER,
+    SURF_LADDER,
 };
+
+/// `Bullet_Trace`'s mask, 0x2806831: CoD2's with 0x4000 (cod4-combat.md 5.3).
+pub const MASK_SHOT: u32 = 0x280_6831;
 
 /// `CM_Trace`'s closing rule: a contact no kernel called walkable is
 /// walkable when its normal climbs at least this steeply.
@@ -77,13 +82,36 @@ pub struct WorldSolids {
 #[derive(Clone, Debug)]
 pub struct ClipMap {
     pub name: String,
+    /// A hash of the clip map's arrays as the zone holds them
+    /// ([`content_hash`]): what the server's bots key their graph on disk by.
+    pub checksum: u64,
     pub world: clipmap::ClipMap,
     /// `cmodels`; index 0 is the world's own and traces as [`Self::world`].
     pub submodels: Vec<Submodel>,
     pub static_models: Vec<StaticModel>,
+    /// [`Self::static_models`]' boxes, which a point trace walks.
+    static_tree: static_tree::StaticTree,
 }
 
 impl ClipMap {
+    /// A clip map from its parts, the static models' box tree built.
+    pub fn new(
+        name: String,
+        checksum: u64,
+        world: clipmap::ClipMap,
+        submodels: Vec<Submodel>,
+        static_models: Vec<StaticModel>,
+    ) -> ClipMap {
+        ClipMap {
+            name,
+            checksum,
+            world,
+            submodels,
+            static_tree: static_tree::StaticTree::build(&static_models),
+            static_models,
+        }
+    }
+
     /// The clip map of a walked map zone (walked with
     /// [`crate::walk::WalkOptions::keep_bulk`]): its one `col_map_mp` or
     /// `col_map_sp`.
@@ -305,9 +333,10 @@ impl ClipMap {
 
     /// `CM_PointTraceStaticModels`: a point sweep against every static
     /// model whose box it can reach before `tr`'s fraction, through
-    /// `XModelTraceLine`. Retail walks them by its world sectors; a flat
-    /// walk finds the same nearest contact but for exact ties. Returns the
-    /// model hit last, the one the trace now reports.
+    /// `XModelTraceLine`. Retail walks them by its world sectors; vcod
+    /// walks the ones a box tree says the segment can reach, in index
+    /// order, which finds the same nearest contact but for exact ties.
+    /// Returns the model hit last, the one the trace now reports.
     pub fn trace_static_models(
         &self,
         start: Vec3,
@@ -316,7 +345,11 @@ impl ClipMap {
         tr: &mut ClipTrace,
     ) -> Option<usize> {
         let mut hit = None;
-        for (i, sm) in self.static_models.iter().enumerate() {
+        let mut near = Vec::new();
+        self.static_tree
+            .candidates(start, end, tr.fraction, &mut near);
+        for i in near.into_iter().map(|i| i as usize) {
+            let sm = &self.static_models[i];
             if sm.no_collision
                 || sm.contents & mask == 0
                 || box_misses(start, end, sm.absmin, sm.absmax, tr.fraction)
@@ -427,6 +460,10 @@ impl WorldClip for ClipMap {
 
     fn point_contents(&self, p: Vec3) -> u32 {
         ClipMap::point_contents(self, p)
+    }
+
+    fn shot_mask(&self) -> u32 {
+        MASK_SHOT
     }
 
     fn ladder_boxes(&self) -> Vec<(Vec3, Vec3)> {
@@ -557,6 +594,43 @@ fn i16_at(b: &[u8], o: usize) -> i16 {
 
 fn vec3_at(b: &[u8], o: usize) -> Vec3 {
     Vec3::new(f32_at(b, o), f32_at(b, o + 4), f32_at(b, o + 8))
+}
+
+/// A hash of every array of `c` the clip reads, each led by its length.
+/// `DefaultHasher::new()` hashes alike within one binary, the only place
+/// a value is compared.
+fn content_hash(c: &world::ClipMap) -> u64 {
+    use std::hash::Hasher;
+    let bulks = [
+        &c.planes,
+        &c.brush_sides,
+        &c.brush_edges,
+        &c.nodes,
+        &c.leafs,
+        &c.leaf_brushes,
+        &c.leaf_brush_nodes,
+        &c.leaf_surfaces,
+        &c.verts,
+        &c.tri_indices,
+        &c.tri_edge_walkable,
+        &c.borders,
+        &c.partitions,
+        &c.aabb_trees,
+        &c.cmodels,
+        &c.brushes,
+    ];
+    let models = c.static_models.iter().map(|(_, b)| b.as_slice());
+    let mut h = std::hash::DefaultHasher::new();
+    for a in bulks
+        .into_iter()
+        .map(|b| b.as_deref().unwrap_or_default())
+        .chain([c.materials.as_slice()])
+        .chain(models)
+    {
+        h.write_usize(a.len());
+        h.write(a);
+    }
+    h.finish()
 }
 
 fn bulk<'a>(b: &'a Option<Vec<u8>>, what: &str) -> Result<&'a [u8]> {
@@ -830,32 +904,35 @@ fn build(c: &world::ClipMap, a: &Assets, refs: &[&Assets]) -> Result<ClipMap> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(ClipMap {
-        name: c.name.clone(),
-        world: clipmap::ClipMap {
-            planes,
-            nodes,
-            leafs,
-            brush_nodes,
-            leaf_brush_list,
-            brushes,
-            materials,
-            verts: Vec::new(),
-            edges: Vec::new(),
-            tris: Vec::new(),
-            borders,
-            partitions,
-            aabbs,
-            indexed: Some(IndexedMesh {
-                verts,
-                tris,
-                walkable: bulk(&c.tri_edge_walkable, "walkable bits")?.to_vec(),
-            }),
-            reach: Default::default(),
-        },
+    let world = clipmap::ClipMap {
+        planes,
+        nodes,
+        leafs,
+        brush_nodes,
+        leaf_brush_list,
+        brushes,
+        materials,
+        verts: Vec::new(),
+        edges: Vec::new(),
+        tris: Vec::new(),
+        borders,
+        partitions,
+        aabbs,
+        indexed: Some(IndexedMesh {
+            verts,
+            tris,
+            walkable: bulk(&c.tri_edge_walkable, "walkable bits")?.to_vec(),
+        }),
+        reach: Default::default(),
+    };
+    world.check_trees()?;
+    Ok(ClipMap::new(
+        c.name.clone(),
+        content_hash(c),
+        world,
         submodels,
         static_models,
-    })
+    ))
 }
 
 #[cfg(test)]

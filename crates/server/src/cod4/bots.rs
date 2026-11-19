@@ -5,137 +5,41 @@
 //! and moves by its cmds through the level's `ClientThink`, once per frame
 //! in `SV_PreFrame`'s bot slot, as a client's packet between two frames
 //! would. The management pass (`vc_bot_*`) is the shared
-//! `server/bot_admin.rs`; this file holds the CoD4 server's hooks, as
-//! `cod2/bots.rs` holds CoD2's.
+//! `server/bot_admin.rs` over `engine/bots.rs`, which CoD2 shares; this
+//! file holds what CoD4 does its own way, as `cod2/bots.rs` holds CoD2's.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use vcod_cod4::net::clmsg::UserCmd as UserCmd4;
 use vcod_common::net::msg::UserCmd;
 use vcod_common::net::protocol::CsRange;
 
-use super::{Cod4Server, MAX_RELIABLE_COMMANDS, State};
-use crate::botmgmt::{self, Member, Settings, Side, cvar};
-use crate::bots::cod4::{self, Cod4Bots};
+use super::{Cod4Server, State};
+use crate::botmgmt::Side;
+use crate::bots::cod4::{self, Cod4Bots, Cod4Own};
 use crate::bots::driver::{Body, BotDriver, BotWorld, CoverBody, Joining};
-use crate::bots::{BotView, EnemyView, Goal, Noise, SeatView};
+use crate::bots::{BotView, EnemyView, Noise};
+use crate::engine::bots::{BotGame, read_reliable};
 use crate::nav::{Follower, NavGraph};
-use crate::rcon::Redirect;
-use crate::server::bot_admin::{self, AdminHost, Ledger};
+use crate::server::bot_admin;
 use crate::world::World;
 
 /// Every one of the seven stats packets in.
 const ALL_STATS: u8 = (1 << vcod_cod4::net::stats::STAT_PACKETS) - 1;
 
 impl Cod4Server {
-    /// `count` bots, each in a free slot; `shoot` lets them fight. A team
-    /// game alternates them between `allies` and `axis`, `dm` autoassigns.
-    /// Returns the slots taken; they count toward the bots the management
-    /// pass keeps.
-    pub fn add_bots(&mut self, count: usize, shoot: bool) -> Vec<usize> {
-        let mut taken = Vec::new();
-        for _ in 0..count {
-            let n = self.game.bots.as_ref().map_or(0, |b| b.bots().len());
-            let side = match self.game.cfg.gametype.as_str() {
-                "dm" => Side::None,
-                _ if n.is_multiple_of(2) => Side::Allies,
-                _ => Side::Axis,
-            };
-            let Some(slot) = self.add_bot(side, shoot, None) else {
-                break;
-            };
-            taken.push(slot);
-        }
-        if let Some(b) = self.game.bots.as_mut() {
-            b.admin.manual = b.admin.manual.max(b.bots().len());
-        }
-        taken
-    }
-
     /// Test-facing: one bot on axis (else allies) that holds still: its
     /// cmds carry no move and no button, and the view its first one took,
     /// so a body put somewhere stands there as put. Its slot.
+    #[cfg(any(test, feature = "testing"))]
     pub fn add_held_bot_for_test(&mut self, axis: bool) -> Option<usize> {
         let side = if axis { Side::Axis } else { Side::Allies };
         let slot = self.add_bot(side, false, None)?;
         let bots = self.game.bots.as_mut()?;
-        bots.held.insert(slot, None);
+        bots.own.held.insert(slot, None);
         bots.admin.manual = bots.admin.manual.max(bots.bots().len());
         Some(slot)
-    }
-
-    /// One bot in the first free public slot asking for `side`, at skill
-    /// `level` or `vc_bot_skill`'s.
-    fn add_bot(&mut self, side: Side, shoot: bool, level: Option<u8>) -> Option<usize> {
-        let private = (self.int("sv_privateClients").max(0) as usize).min(self.core.clients.len());
-        let Some(slot) =
-            (private..self.core.clients.len()).find(|&i| self.core.clients[i].is_none())
-        else {
-            log::warn!("cod4: no free slot for a bot");
-            return None;
-        };
-        let n = self.game.bots.as_ref().map_or(0, |b| b.bots().len());
-        let name = if self.game.cvars().get(cvar::NAMES) == "0" {
-            format!("bot{n}")
-        } else {
-            let taken: Vec<String> = self
-                .game
-                .bots
-                .as_ref()
-                .map(|b| b.bots().values().map(|b| b.name.clone()).collect())
-                .unwrap_or_default();
-            botmgmt::draw_name(&taken, &mut |k| self.rand() as usize % k)
-        };
-        let team = match (side, self.game.cfg.gametype.as_str()) {
-            (Side::None, "dm") => "autoassign",
-            (Side::Axis, _) => "axis",
-            _ => "allies",
-        };
-        let userinfo = format!("\\name\\{name}\\rate\\25000\\snaps\\20");
-        self.admit(
-            slot,
-            SocketAddr::from(([0, 0, 0, 0], 0)),
-            0,
-            0,
-            String::new(),
-            &userinfo,
-        );
-        if let Some(c) = self.core.clients[slot].as_mut() {
-            c.bot = true;
-            // A fresh profile's stats, as a new player's client sends them:
-            // `Callback_PlayerConnect` kicks a client whose class stats read
-            // 0 (`_globallogic.gsc`'s stat integrity check), and a
-            // `fast_restart` hands the level the slot's own block.
-            c.stats = vcod_cod4::net::stats::Stats::fresh();
-            c.stat_packets = ALL_STATS;
-        }
-        if let Some(r) = self
-            .game
-            .level
-            .as_mut()
-            .and_then(|l| l.rt.host.client_roster[slot].as_mut())
-        {
-            r.bot = true;
-        }
-        let seed = self.rand() as u64;
-        let skill = self.skill_cvar();
-        let bots = self.game.bots.get_or_insert_with(|| Cod4Bots::new(shoot));
-        bots.add(slot, &name, team, seed);
-        if let Some(b) = bots.bots_mut().get_mut(&slot) {
-            b.skill = crate::bots::Skill::level(level.unwrap_or(skill));
-        }
-        if let Some(l) = level {
-            bots.admin.skills.insert(slot, l);
-        }
-        log::info!("cod4: bot {name} in slot {slot}");
-        Some(slot)
-    }
-
-    fn skill_cvar(&self) -> u8 {
-        crate::game::builtins::cvar::atoi(self.game.cvars().get(cvar::SKILL))
-            .clamp(0, i32::from(crate::bots::MAX_LEVEL)) as u8
     }
 
     pub fn bots_mut(&mut self) -> Option<&mut Cod4Bots> {
@@ -188,7 +92,7 @@ impl Cod4Server {
         };
         for at in times {
             if let Some(b) = self.game.bots.as_mut() {
-                b.think_at = Some(at);
+                b.own.think_at = Some(at);
             }
             match self.game.bots.as_ref().and_then(|b| b.graph().cloned()) {
                 Some(g) => g.moving(|| crate::bots::driver::step(self)),
@@ -198,7 +102,7 @@ impl Cod4Server {
             }
         }
         if let Some(b) = self.game.bots.as_mut() {
-            b.think_at = None;
+            b.own.think_at = None;
         }
     }
 
@@ -217,7 +121,7 @@ impl Cod4Server {
         let loaded = match (self.game.level.as_ref(), self.game.bots.as_mut()) {
             (Some(level), Some(b)) => {
                 let now = level.level_time();
-                now - *b.level_start.get_or_insert(now) >= crate::bots::cod4::BOT_LOAD_MS
+                now - *b.own.level_start.get_or_insert(now) >= crate::bots::cod4::BOT_LOAD_MS
             }
             _ => true,
         };
@@ -236,20 +140,12 @@ impl Cod4Server {
                     continue;
                 }
                 c.state = State::Active;
-                c.stat_packets = ALL_STATS;
+                c.extra.stat_packets = ALL_STATS;
                 if let Some(level) = self.game.level.as_mut() {
                     level.begin(slot);
                 }
             }
-            let seq = c.link.netchan.reliable_sequence as i32;
-            let texts = (c.link.reliable_ack + 1..=seq)
-                .map(|s| c.link.netchan.reliable[s as usize & (MAX_RELIABLE_COMMANDS - 1)].clone())
-                .collect();
-            // Read is sent: `SV_AddServerCommand` squashes only commands not
-            // yet sent, and a bot's are never written to a message.
-            c.link.reliable_ack = seq;
-            c.link.reliable_sent = seq;
-            inbox.insert(slot, texts);
+            inbox.insert(slot, read_reliable(c));
         }
         if let Some(b) = self.game.bots.as_mut() {
             b.inbox(inbox);
@@ -283,7 +179,7 @@ impl BotWorld for Cod4Server {
     const YIELDS: bool = false;
     const SPREADS: bool = true;
     /// Off: not measured here; `PARTS_MATES` plans round a still
-    /// teammate (bot-navigation.md section 3, "Bodies in the way").
+    /// teammate (bot-navigation.md section 3.8, "Bodies in the way").
     const SHUNS_BODIES: bool = false;
     /// On: a guard standing in a door held his teammates in a queue
     /// behind him (bot-objectives.md 12.7). CoD2's is on too (11.5).
@@ -344,9 +240,7 @@ impl BotWorld for Cod4Server {
     }
 
     fn connected(&self, slot: usize) -> bool {
-        self.core.clients[slot]
-            .as_ref()
-            .is_some_and(|c| c.state != State::Zombie)
+        self.bot_connected(slot)
     }
 
     /// The tick's top: the playerstates read, the hits scored since, then
@@ -421,11 +315,6 @@ impl BotWorld for Cod4Server {
         }
     }
 
-    /// No health packs on CoD4.
-    fn health_packs(&mut self) -> Vec<[f32; 3]> {
-        Vec::new()
-    }
-
     fn body(&self, slot: usize) -> Option<Body> {
         self.cod4_bots().body(self.game.level.as_ref()?, slot)
     }
@@ -438,17 +327,6 @@ impl BotWorld for Cod4Server {
     fn view(&self, slot: usize, enemy: Option<EnemyView>) -> Option<BotView> {
         self.cod4_bots()
             .view(self.game.level.as_ref()?, slot, enemy)
-    }
-
-    /// No sidestep on CoD4, as on CoD2.
-    fn friend_in_line(
-        &self,
-        _: usize,
-        _: [f32; 3],
-        _: &[i32],
-        _: Option<([f32; 3], i32)>,
-    ) -> (bool, Option<[f32; 3]>) {
-        (false, None)
     }
 
     fn cover_body(&self, slot: usize, threat: usize) -> Option<CoverBody> {
@@ -490,7 +368,7 @@ impl BotWorld for Cod4Server {
     fn cmd(&mut self, slot: usize, cmd: UserCmd, view: &BotView) -> Option<Vec<UserCmd4>> {
         let bots = self.game.bots.as_mut()?;
         let mut out = bots.cmd(slot, cmd, view)?;
-        if let Some(view) = bots.held.get_mut(&slot) {
+        if let Some(view) = bots.own.held.get_mut(&slot) {
             for c in &mut out {
                 let angles = *view.get_or_insert(c.angles);
                 *c = UserCmd4 {
@@ -508,32 +386,15 @@ impl BotWorld for Cod4Server {
         self.cod4_bots().move_ps(slot)
     }
 
-    fn fall_kills(&self, _: usize) -> Option<f32> {
-        None
-    }
-
-    fn blocked_nodes(&self, _: usize) -> Arc<[u32]> {
-        Arc::default()
-    }
-
-    /// Read only by the CoD1 pmove probes CoD4's route goes without.
-    fn weapon_defs(&self) -> &[Option<vcod_common::weapon::WeaponDef>] {
-        &[]
-    }
-
-    fn drive_waypoint(&mut self, _: usize, _: Goal, _: &mut SeatView) -> Option<[f32; 3]> {
-        None
-    }
-
-    fn forget_drive(&mut self, _: usize) {}
-
-    fn lob_probe(&self, slot: usize, weapon: u8, target: [f32; 3], _: &[i32]) -> Option<[f32; 2]> {
+    fn lob_probe(
+        &self,
+        slot: usize,
+        weapon: u8,
+        target: [f32; 3],
+        teams: &[i32],
+    ) -> Option<[f32; 2]> {
         self.cod4_bots()
-            .lob_probe(self.game.level.as_ref()?, slot, weapon, target)
-    }
-
-    fn take_orders(&mut self) -> Vec<(usize, String)> {
-        Vec::new()
+            .lob_probe(self.game.level.as_ref()?, slot, weapon, target, teams)
     }
 
     fn bot_command(&mut self, slot: usize, text: String) {
@@ -545,9 +406,6 @@ impl BotWorld for Cod4Server {
         };
         self.client_command(slot, seq, text.as_bytes(), false);
     }
-
-    /// Never called: [`Self::read_commands`] joins no bot.
-    fn begin(&mut self, _: usize) {}
 
     fn bot_packet(&mut self) {}
 
@@ -562,18 +420,12 @@ impl BotWorld for Cod4Server {
                 continue;
             }
             c.last_cmd_time = cmd.server_time;
-            c.command_time = cmd.server_time;
+            c.extra.command_time = cmd.server_time;
             if let Some(level) = self.game.level.as_mut() {
                 level.client_think(slot, &cmd);
             }
         }
     }
-
-    /// Never called: [`Self::read_commands`] primes no bot.
-    fn enter(&mut self, _: usize) {}
-
-    /// Acknowledged as read ([`Self::manage`]).
-    fn ack(&mut self, _: usize) {}
 
     fn tick_done(&mut self) {
         if let Some(b) = self.game.bots.as_mut() {
@@ -583,198 +435,52 @@ impl BotWorld for Cod4Server {
     }
 }
 
-/// The CoD4 server's hooks for the shared bot admin
-/// (`server/bot_admin.rs`), as CoD2's.
-impl AdminHost for Cod4Server {
-    type Out = Redirect;
+/// What CoD4's bot glue does its own way (`engine/bots.rs`).
+impl BotGame for super::Cod4Game {
+    type Own = Cod4Own;
+    const TAG: &'static str = "cod4";
 
-    fn say(&mut self, out: &mut Redirect, msg: &str) {
-        out.print(msg);
+    fn bots(&self) -> Option<&Cod4Bots> {
+        self.bots.as_ref()
+    }
+
+    fn bots_slot(&mut self) -> &mut Option<Cod4Bots> {
+        &mut self.bots
     }
 
     fn level_running(&self) -> bool {
-        self.game.level.is_some()
+        self.level.is_some()
     }
 
-    /// No bot yet: only a floor brings the bots' state in.
-    fn admin_ready(&mut self) -> bool {
-        if self.game.level.is_none() {
-            return false;
-        }
-        if self.game.bots.is_none() {
-            let s = self.bot_settings();
-            if s.min_players == 0 {
-                return false;
-            }
-            self.game.bots = Some(Cod4Bots::new(s.shoot));
-        }
-        true
+    fn gametype(&self) -> &str {
+        &self.cfg.gametype
     }
 
-    fn admin_now(&self) -> i32 {
-        self.core.sv_time_ms
-    }
-
-    fn ledger(&mut self) -> Option<&mut Ledger> {
-        self.game.bots.as_mut().map(|b| &mut b.admin)
-    }
-
-    fn ledger_or_new(&mut self) -> &mut Ledger {
-        let shoot = self
-            .game
-            .bots
-            .as_ref()
-            .map_or(self.bot_settings().shoot, |b| b.shoots());
-        &mut self
-            .game
-            .bots
-            .get_or_insert_with(|| Cod4Bots::new(shoot))
-            .admin
-    }
-
-    fn bot_settings(&self) -> Settings {
-        let on = |name: &str| crate::game::builtins::cvar::atoi(self.game.cvars().get(name)) != 0;
-        Settings {
-            min_players: self.int(cvar::MIN_PLAYERS).max(0) as usize,
-            autobalance: on(cvar::AUTOBALANCE),
-            shoot: on(cvar::SHOOT),
-            names: on(cvar::NAMES),
-            skill: self.skill_cvar(),
-        }
-    }
-
-    /// `--bots-shoot` and the cvar's default stand until the cvar moves.
-    fn apply_settings(&mut self, s: Settings) {
-        let Some(b) = self.game.bots.as_mut() else {
-            return;
-        };
-        match b.applied {
-            None => b.applied = Some((s.shoot, s.skill)),
-            Some((shoot, skill)) => {
-                if shoot != s.shoot {
-                    b.set_shoot(s.shoot);
-                }
-                if skill != s.skill {
-                    let pinned = b.admin.skills.clone();
-                    for (slot, bot) in b.bots_mut().iter_mut() {
-                        if !pinned.contains_key(slot) {
-                            bot.skill = crate::bots::Skill::level(s.skill);
-                        }
-                    }
-                }
-                b.applied = Some((s.shoot, s.skill));
-            }
-        }
-    }
-
-    fn bot_teamed(&self) -> bool {
-        self.game.cfg.gametype != "dm"
-    }
-
-    fn bot_room(&self) -> usize {
-        let private = (self.int("sv_privateClients").max(0) as usize).min(self.core.clients.len());
-        let free = (private..self.core.clients.len())
-            .filter(|&i| self.core.clients[i].is_none())
-            .count();
-        free + self.bot_count()
-    }
-
-    fn bot_count(&self) -> usize {
-        self.game.bots.as_ref().map_or(0, |b| b.bots().len())
-    }
-
-    /// Zombies are left out.
-    fn bot_roster(&mut self) -> Vec<Member> {
-        let mut out = Vec::new();
-        for slot in 0..self.core.clients.len() {
-            if self.core.clients[slot]
-                .as_ref()
-                .is_none_or(|c| c.state == State::Zombie)
-            {
-                continue;
-            }
-            let bot = self.game.bots.as_ref().and_then(|b| b.bots().get(&slot));
-            let (team, state, score) = match self.game.level.as_mut() {
-                Some(l) => (
-                    l.rt.client_pers(slot, "team").unwrap_or_default(),
-                    l.rt.client_field(slot, "sessionstate").unwrap_or_default(),
-                    l.rt.client_field(slot, "score").unwrap_or_default(),
-                ),
-                None => Default::default(),
-            };
-            let joining = !matches!(state.as_str(), "playing" | "dead");
-            out.push(Member {
-                slot,
-                bot: bot.is_some(),
-                side: bot_admin::roster_side(&team, bot.map(|b| b.team()), joining),
-                score: score.parse().unwrap_or(0),
-                playing: !matches!(state.as_str(), "dead" | "spectator"),
-                pinned: self
-                    .game
-                    .bots
-                    .as_ref()
-                    .is_some_and(|b| b.admin.pinned.contains(&slot)),
-            });
-        }
-        out
-    }
-
-    fn bot_name(&self, slot: usize) -> String {
-        self.game
-            .bots
-            .as_ref()
-            .and_then(|b| b.bots().get(&slot))
-            .map_or(String::new(), |b| b.name.clone())
-    }
-
-    fn bot_level(&self, slot: usize) -> Option<u8> {
-        self.game
-            .bots
-            .as_ref()
-            .and_then(|b| b.bots().get(&slot))
-            .and_then(|b| b.skill.level_of())
-    }
-
-    fn admit_bot(&mut self, side: Side, _: Settings, level: Option<u8>) -> Option<usize> {
-        let shoot = self.game.bots.as_ref().is_none_or(|b| b.shoots());
-        self.add_bot(side, shoot, level)
-    }
-
-    fn remove_bot(&mut self, slot: usize) {
-        self.drop_client(slot, "EXE_PLAYERKICKED");
-        if let Some(b) = self.game.bots.as_mut() {
-            b.remove(slot);
-        }
-    }
-
-    /// The team menu's answer from the bot, as its button sends it; the
-    /// class menu it reopens is answered again.
-    fn move_bot(&mut self, slot: usize, side: Side) {
-        let Some(bot) = self
-            .game
-            .bots
-            .as_mut()
-            .and_then(|b| b.bots_mut().get_mut(&slot))
-        else {
-            return;
-        };
-        bot.set_team(side.response());
-        log::info!(
-            "cod4: bot {slot} {:?} moves to {}",
-            bot.name,
-            side.response()
+    /// With a fresh profile's stats, as a new player's client sends them:
+    /// `Callback_PlayerConnect` kicks a client whose class stats read 0
+    /// (`_globallogic.gsc`'s stat integrity check), and a `fast_restart`
+    /// hands the level the slot's own block.
+    fn admit_bot(e: &mut Cod4Server, slot: usize, userinfo: &str) {
+        e.admit(
+            slot,
+            SocketAddr::from(([0, 0, 0, 0], 0)),
+            0,
+            0,
+            String::new(),
+            userinfo,
         );
-        let menu = self
-            .menu_names()
-            .iter()
-            .position(|m| m.starts_with("team_"));
-        if let Some(i) = menu {
-            let seq = self.core.clients[slot]
-                .as_ref()
-                .map_or(0, |c| c.link.last_client_command + 1);
-            let reply = format!("mr {} {i} {}", self.game.server_id, side.response());
-            self.client_command(slot, seq, reply.as_bytes(), false);
+        if let Some(c) = e.core.clients[slot].as_mut() {
+            c.bot = true;
+            c.extra.stats = vcod_cod4::net::stats::Stats::fresh();
+            c.extra.stat_packets = ALL_STATS;
         }
+        if let Some(l) = e.game.level.as_mut() {
+            l.mark_bot(slot);
+        }
+    }
+
+    fn team_menu(e: &Cod4Server) -> Option<usize> {
+        e.menu_names().iter().position(|m| m.starts_with("team_"))
     }
 }
 
@@ -784,7 +490,52 @@ mod tests {
     use crate::engine::GameModule;
     use crate::game::cod4::bot_feed::Cod4Objectives;
     use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
+    use crate::rcon::Redirect;
+    use std::rc::Rc;
     use std::time::{Duration, Instant};
+
+    /// A round restart under the same gametype keeps the bots' world (and
+    /// the graph over it); another gametype on the same map, whose brush
+    /// entities differ, builds it again (BUG-057). Needs `COD4_DIR`.
+    #[test]
+    fn cod4_bots_rebuild_their_world_for_another_gametype_on_the_map() {
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let mut sv = Cod4Server::new(
+            super::super::Cod4Config {
+                map: "mp_crash".into(),
+                gametype: "war".into(),
+                hostname: "bots".into(),
+                max_clients: 8,
+            },
+            5,
+        );
+        sv.set_cvar("sv_pure", "0");
+        sv.load(Some(&install)).unwrap();
+        sv.add_bots(1, false);
+        let mut now = Instant::now();
+        let mut run = |sv: &mut Cod4Server, frames: usize| {
+            for _ in 0..frames {
+                now += Duration::from_millis(50);
+                super::super::Cod4Game::drain_console(sv, now);
+                sv.tick_frames(now, 1);
+                sv.take_outgoing();
+            }
+        };
+        let world = |sv: &Cod4Server| sv.game.bots.as_ref().unwrap().world_rc();
+        run(&mut sv, 20);
+        let war = world(&sv).expect("no world built");
+        sv.push_console("fast_restart");
+        run(&mut sv, 20);
+        let kept = world(&sv).expect("no world after the restart");
+        assert!(Rc::ptr_eq(&kept, &war), "a round restart rebuilt the world");
+        sv.push_console("g_gametype sd");
+        sv.push_console("map_restart");
+        run(&mut sv, 20);
+        let sd = world(&sv).expect("no world after the change");
+        assert!(!Rc::ptr_eq(&sd, &war), "the war world stayed under sd");
+    }
 
     /// Two bots on a fresh mp_crash `koth` level enter it as a loading
     /// client would ([`crate::bots::cod4::BOT_LOAD_MS`]): by their first
@@ -825,6 +576,38 @@ mod tests {
         assert_eq!(spawned.len(), 2, "spawned {spawned:?}");
         let aborts = sv.game.level.as_mut().unwrap().rt.aborts();
         assert!(aborts.is_empty(), "script errors:\n{}", aborts.join("\n"));
+    }
+
+    /// The roster's bot flag, which keeps a bot out of `numVotingClients`,
+    /// survives `fast_restart` and a map change (BUG-042: each level's
+    /// `ClientConnect` cleared it).
+    #[test]
+    fn cod4_bots_stay_marked_across_restarts_and_map_changes() {
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let mut sv = Cod4Server::new(
+            super::super::Cod4Config {
+                map: "mp_crash".into(),
+                gametype: "war".into(),
+                hostname: "bots".into(),
+                max_clients: 8,
+            },
+            5,
+        );
+        sv.load(Some(&install)).unwrap();
+        let slots = sv.add_bots(2, false);
+        let marked = |sv: &Cod4Server| {
+            let clients = &sv.game.level.as_ref().unwrap().rt.host.clients;
+            slots
+                .iter()
+                .all(|&s| clients[s].roster.is_some_and(|r| r.bot))
+        };
+        assert!(marked(&sv));
+        sv.map_restart(true).unwrap();
+        assert!(marked(&sv), "after fast_restart");
+        sv.spawn_server("mp_crash").unwrap();
+        assert!(marked(&sv), "after the map change");
     }
 
     /// Four shooting bots on mp_crash `war` for 100 s: every one comes

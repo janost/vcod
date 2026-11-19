@@ -7,7 +7,7 @@ use vcod_common::collision::CollisionWorld;
 use vcod_common::net::flags::PMF_OWN_VIEW;
 pub use vcod_common::net::flags::{PMF_FOLLOW, PMF_FORCED_FOLLOW};
 use vcod_common::net::msg;
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 /// The one `eFlags` bit the spectator keeps from its own word across the copy.
 const EF_KEPT_ACROSS_FOLLOW: i32 = 0x20000;
 
@@ -95,7 +95,7 @@ pub fn cycle(
     current: Option<usize>,
     dir: i32,
     max_clients: usize,
-    followable: impl Fn(usize) -> bool,
+    mut followable: impl FnMut(usize) -> bool,
 ) -> Option<usize> {
     let n = max_clients as i32;
     if n == 0 {
@@ -128,17 +128,26 @@ pub fn stop_spot(
     eye: [f32; 3],
     view: [f32; 3],
 ) -> ([f32; 3], [f32; 3]) {
-    let axis = vcod_common::x87::angles_to_axis(view.into());
-    let eye = Vec3::from(eye);
-    let end = eye + axis[0] * -40.0 + axis[2] * 10.0;
-    let spot = match collision {
+    stop_spot_by(eye, view, |eye, end| match collision {
         Some(w) => {
             w.box_trace(eye, end, Vec3::splat(-8.0), Vec3::splat(8.0))
                 .endpos
         }
         None => end,
-    };
-    (spot.into(), [view[0] + 15.0, view[1], view[2]])
+    })
+}
+
+/// [`stop_spot`] with the game's own sweep: `sweep(eye, end)` is where the
+/// 8 capsule from the eye stops on its way to `end`.
+pub fn stop_spot_by(
+    eye: [f32; 3],
+    view: [f32; 3],
+    sweep: impl FnOnce(Vec3, Vec3) -> Vec3,
+) -> ([f32; 3], [f32; 3]) {
+    let axis = vcod_common::x87::angles_to_axis(view.into());
+    let eye = Vec3::from(eye);
+    let end = eye + axis[0] * -40.0 + axis[2] * 10.0;
+    (sweep(eye, end).into(), [view[0] + 15.0, view[1], view[2]])
 }
 
 /// The playerstate fields `ClientEndFrame`'s playing and dead arm writes
@@ -162,7 +171,7 @@ const END_FRAME_FIELDS: &[&str] = &[
 
 /// A copy taken ahead of the target's own end frame: `last`'s
 /// [`END_FRAME_FIELDS`] over `ps`.
-pub fn before_end_frame(ps: &mut msg::PlayerState, last: &msg::PlayerState, p: &Protocol) {
+pub fn before_end_frame(ps: &mut msg::PlayerState, last: &msg::PlayerState, p: &Cod1Wire) {
     for name in END_FRAME_FIELDS {
         let i = msg::PlayerState::field_index(p, name).unwrap();
         ps.fields[i] = last.fields[i];
@@ -172,7 +181,7 @@ pub fn before_end_frame(ps: &mut msg::PlayerState, last: &msg::PlayerState, p: &
 /// The flag patch `SpectatorClientEndFrame` puts on the copied playerstate
 /// (0x408e0..0x40910): own view off, follow on, forced as asked, and
 /// `eFlags` 0x20000 from the spectator's own word.
-pub fn patch_wire(ps: &mut msg::PlayerState, p: &Protocol, forced: bool, own_eflags: i32) {
+pub fn patch_wire(ps: &mut msg::PlayerState, p: &Cod1Wire, forced: bool, own_eflags: i32) {
     let idx = |name| msg::PlayerState::field_index(p, name).unwrap();
     let (pm, ef) = (idx("pm_flags"), idx("eFlags"));
     ps.fields[pm] =
@@ -188,7 +197,7 @@ mod tests {
     /// or UO never looks up a name its table lacks.
     #[test]
     fn the_end_frame_fields_are_on_every_protocol() {
-        for p in vcod_common::net::protocol::Protocol::ALL {
+        for p in vcod_common::net::protocol::Cod1Wire::ALL {
             for name in END_FRAME_FIELDS {
                 assert!(
                     msg::PlayerState::field_index(p, name).is_some(),

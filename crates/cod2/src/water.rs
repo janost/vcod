@@ -126,15 +126,23 @@ pub struct WaterSetup {
     omega: Vec<f32>,
 }
 
+/// The side a water def's `textureWidth` gives vcod: clamped to 4..=256,
+/// `None` when not a power of two. The bit reversal table holds 256 and the
+/// first FFT stage reads four, so that is what [`fft`] takes; retail's own
+/// limit is not known (cod2-materials.md 9.12).
+pub fn texture_side(width: i32) -> Option<usize> {
+    let side = width.clamp(4, 256) as usize;
+    side.is_power_of_two().then_some(side)
+}
+
 impl WaterSetup {
     /// `R_CreateWaterSetup` (mac 0x109c00) over the def `R_LoadWaterSetup`'s
     /// caller fills (mac 0x10459e): both sizes `textureWidth`, x length
     /// `horizontalWorldLength` on the rows, `verticalWorldLength` on the
     /// columns, [`GRAVITY`]. One Gaussian pair is drawn per texel, also
-    /// where the wind zeroes it.
-    pub fn new(w: &WaterLit, rng: &mut GlibcRand) -> Self {
-        let side = w.width.clamp(4, 256) as usize;
-        assert!(side.is_power_of_two(), "water width {side}");
+    /// where the wind zeroes it. `None` for a width [`texture_side`] refuses.
+    pub fn new(w: &WaterLit, rng: &mut GlibcRand) -> Option<Self> {
+        let side = texture_side(w.width)?;
         let (cols, rows) = (side as i32, side as i32);
         let [dir_x, dir_y] = w.wind_direction;
         let v2 = w.wind_speed * w.wind_speed;
@@ -162,12 +170,12 @@ impl WaterSetup {
                 omega.push((k2.sqrt() * g).sqrt());
             }
         }
-        WaterSetup {
+        Some(WaterSetup {
             width: side,
             height: side,
             h0,
             omega,
-        }
+        })
     }
 
     /// The complex field at `time` seconds (`backEnd + 0x3bc`, the view's
@@ -182,14 +190,15 @@ impl WaterSetup {
 
     /// The setup of a spectrum a CoD4 zone stores (`water_t`'s `H0` and
     /// `wTerm`, `width` square, row-major as [`Self::new`] lays it out).
-    pub fn from_spectrum(width: usize, h0: Vec<[f32; 2]>, omega: Vec<f32>) -> Self {
-        assert!(width.is_power_of_two() && h0.len() == width * width && omega.len() == h0.len());
-        WaterSetup {
+    /// `None` for a width outside [`texture_side`]'s or arrays of another size.
+    pub fn from_spectrum(width: usize, h0: Vec<[f32; 2]>, omega: Vec<f32>) -> Option<Self> {
+        let side = texture_side(i32::try_from(width).ok()?).filter(|&s| s == width)?;
+        (h0.len() == side * side && omega.len() == h0.len()).then_some(WaterSetup {
             width,
             height: width,
             h0,
             omega,
-        }
+        })
     }
 
     /// CoD4 1.7's field at `time` seconds (iw3mp.exe 0x616240): the time
@@ -302,7 +311,7 @@ mod tests {
         let mut omega = vec![0.0f32; 16];
         h0[5] = [9.0, 5.0];
         omega[5] = 3.3;
-        let w = WaterSetup::from_spectrum(4, h0, omega);
+        let w = WaterSetup::from_spectrum(4, h0, omega).unwrap();
         let t = 1.234f32;
         let scaled = (f64::from(t) * 162.974_655_151_367_2) as f32;
         let p = ((f64::from(3.3f32) * f64::from(scaled)) as i64 & 0x3ff) as usize;
@@ -402,7 +411,7 @@ mod tests {
     /// motion follows `omega = sqrt(g |k|)`.
     #[test]
     fn the_spectrum_follows_the_wind() {
-        let s = WaterSetup::new(&harbor(), &mut GlibcRand::new(1));
+        let s = WaterSetup::new(&harbor(), &mut GlibcRand::new(1)).unwrap();
         assert_eq!((s.width, s.height, s.h0.len()), (64, 64, 4096));
         for r in 0..64 {
             for c in 0..64 {
@@ -424,7 +433,7 @@ mod tests {
     /// mean of the one above.
     #[test]
     fn levels_move_and_mip_down() {
-        let s = WaterSetup::new(&harbor(), &mut GlibcRand::new(1));
+        let s = WaterSetup::new(&harbor(), &mut GlibcRand::new(1)).unwrap();
         let a = s.levels(10.0);
         let b = s.levels(10.5);
         assert_eq!(a.len(), 7);
@@ -437,5 +446,22 @@ mod tests {
         let (t, l1) = (&a[0], &a[1]);
         let m = (u32::from(t[0]) + u32::from(t[1]) + u32::from(t[64]) + u32::from(t[65])) >> 2;
         assert_eq!(u32::from(l1[0]), m);
+    }
+
+    /// A width the FFT cannot take is refused, not run.
+    #[test]
+    fn a_width_off_the_fft_is_refused() {
+        let w = WaterLit {
+            width: 100,
+            ..harbor()
+        };
+        assert!(WaterSetup::new(&w, &mut GlibcRand::new(1)).is_none());
+        for n in [1, 2, 3, 100, 512] {
+            let s = WaterSetup::from_spectrum(n, vec![[0.0; 2]; n * n], vec![0.0; n * n]);
+            assert!(s.is_none(), "{n}");
+        }
+        assert!(WaterSetup::from_spectrum(8, vec![[0.0; 2]; 8], vec![0.0; 8]).is_none());
+        assert_eq!(texture_side(1000), Some(256));
+        assert_eq!(texture_side(-3), Some(4));
     }
 }

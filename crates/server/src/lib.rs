@@ -1,5 +1,6 @@
-//! The CoD 1.1 dedicated server. Transport lives in `main.rs`, so the same
-//! `Server` drives the UDP loop and the tests.
+//! The dedicated server for CoD1 1.1 and 1.5, United Offensive, CoD2 1.3 and
+//! CoD4 1.7. Transport lives in `main.rs`, so the same engines drive the UDP
+//! loop and the tests.
 
 /// `<package version>-<git short sha>`, set by `crates/version.rs`.
 pub const VERSION: &str = env!("VCOD_VERSION");
@@ -21,6 +22,7 @@ pub mod engine;
 pub mod follow;
 pub mod game;
 pub mod items;
+pub mod logfmt;
 pub mod master;
 pub mod nav;
 pub mod push;

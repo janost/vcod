@@ -11,16 +11,17 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use glam::Vec3;
 use vcod_cod4::collision::ClipMap;
-use vcod_cod4::pmove::{self, Cmd, Rules};
+use vcod_cod4::pmove::{self, Cmd, Rules, pm_type};
 
 use vcod_cod4::install::Install;
 use vcod_cod4::net::clmsg::UserCmd;
 use vcod_cod4::net::delta::{ClientState, ENTITYNUM_NONE, EntityState, PlayerState};
-use vcod_cod4::net::fields::{CLIENT_STATE, PLAYER_STATE};
+use vcod_cod4::net::fields::CLIENT_STATE;
 use vcod_cod4::net::stats::Stats;
 use vcod_cod4::pmove::wire::{body_height, player_entity};
 
@@ -28,27 +29,22 @@ use super::Cod4Zones;
 use super::clip::{Body4, Brush4, Cod4Clip};
 use crate::follow::SessionState;
 use crate::game::host::{ClientEvent, SpawnMode};
-use crate::game::script::{MenuRef, ScriptRuntime};
+use crate::game::script::{
+    MenuRef, ScriptRuntime, TEAM_ALLIES, TEAM_AXIS, TEAM_NONE, TEAM_SPECTATOR,
+};
 use vcod_gsc::Value;
 
 /// How far back the killcam may look: 10 s of frames (200 at `sv_fps` 20).
-const HISTORY_MS: i32 = 10_000;
-
-/// `pm_type`s: the walk capture's spectator reads 4, a playing
-/// client 0. VERIFIED live.
-pub const PM_NORMAL: u32 = 0;
-/// A player `linkTo` holds (a plant or defuse), alive and dead.
-pub const PM_NORMAL_LINKED: u32 = 1;
-pub const PM_DEAD_LINKED: u32 = 8;
-pub const PM_SPECTATOR: u32 = 4;
-pub const PM_INTERMISSION: u32 = 5;
-/// `PM_LASTSTAND`: Last Stand's down state, a body still in play.
-pub const PM_LASTSTAND: u32 = 6;
-pub const PM_DEAD: u32 = 7;
+/// vcod's bound; retail's archive lookup stops at 1200 frames back
+/// (cod4-combat.md 7.1).
+const KILLCAM_HISTORY_MS: i32 = 10_000;
 
 /// A body in play: `pm_type` normal (linked or not) or last stand.
-pub fn in_play(pm_type: u32) -> bool {
-    matches!(pm_type, PM_NORMAL | PM_NORMAL_LINKED | PM_LASTSTAND)
+pub fn in_play(pm: i32) -> bool {
+    matches!(
+        pm,
+        pm_type::NORMAL | pm_type::NORMAL_LINKED | pm_type::LASTSTAND
+    )
 }
 
 /// `otherFlags`: following someone (2), a player in the world
@@ -62,31 +58,60 @@ const EF_PING: u32 = 0x40_0000;
 const POF_SPECTATE_TEAM: u32 = 8;
 const POF_SPECTATE_FREE: u32 = 0x10;
 
-/// `TEAM_*` and the no-spectate bits `allowSpectateTeam` sets: bit `team`,
-/// `freelook` bit 4 (`TEAM_NUM_TEAMS`), as vcod's shared builtin keeps them
-/// (`GameHost::client_no_spectate`).
-const TEAM_FREE: u32 = 0;
-const TEAM_AXIS: u32 = 1;
-const TEAM_ALLIES: u32 = 2;
-const TEAM_SPECTATOR: u32 = 3;
-const NO_SPECTATE_FREELOOK: u8 = 1 << 4;
+/// The no-spectate bit `allowSpectateTeam` sets for `freelook`
+/// (`TEAM_NUM_TEAMS`), as vcod's shared builtin keeps them
+/// (`HostClient::no_spectate`); bit `team` refuses that team.
+const NO_SPECTATE_FREELOOK: u8 = 1 << crate::follow::FREELOOK;
 
-/// A playerstate word by field name, the index looked up once.
-fn ps_word(name: &str) -> usize {
-    PLAYER_STATE
+/// A playerstate word by its literal field name, resolved at compile time:
+/// a name `PLAYER_STATE` lacks fails the build.
+macro_rules! ps {
+    ($name:literal) => {
+        const { vcod_cod4::net::delta::word_named(&vcod_cod4::net::fields::PLAYER_STATE, $name) }
+    };
+    ($n:literal $name:literal) => {
+        const {
+            let mut words = [0usize; $n];
+            let mut k = 0;
+            while k < $n {
+                words[k] =
+                    vcod_cod4::net::delta::word_at(&vcod_cod4::net::fields::PLAYER_STATE, $name, k);
+                k += 1;
+            }
+            words
+        }
+    };
+}
+pub(super) use ps;
+
+/// A playerstate word by a field name known only at run time (tests).
+#[cfg(test)]
+pub(super) fn ps_word(name: &str) -> usize {
+    vcod_cod4::net::fields::PLAYER_STATE
         .iter()
         .find(|f| f.name == name)
         .unwrap_or_else(|| panic!("no playerstate field {name}"))
         .word()
 }
 
-fn cs_word(name: &str) -> usize {
-    CLIENT_STATE
-        .iter()
-        .find(|f| f.name == name)
-        .unwrap_or_else(|| panic!("no client field {name}"))
-        .word()
+/// A client state word by field name; call it in a `const` block.
+const fn cs_word(name: &str) -> usize {
+    vcod_cod4::net::delta::word_named(&CLIENT_STATE, name)
 }
+
+/// `attachModelIndex[k]` and `attachTagIndex[k]`'s client state words.
+const CS_ATTACH: [[usize; 2]; 6] = {
+    let mut words = [[0; 2]; 6];
+    let mut k = 0;
+    while k < 6 {
+        words[k] = [
+            vcod_cod4::net::delta::word_at(&CLIENT_STATE, "attachModelIndex", k),
+            vcod_cod4::net::delta::word_at(&CLIENT_STATE, "attachTagIndex", k),
+        ];
+        k += 1;
+    }
+    words
+};
 
 fn ent_word(etype: u32, name: &str) -> Option<usize> {
     EntityState::table(etype)
@@ -107,8 +132,8 @@ pub(super) fn ent_u32(e: &EntityState, name: &str) -> u32 {
 struct Refused(u8);
 
 impl Refused {
-    fn team(self, team: u32) -> bool {
-        self.0 & (1 << team) != 0
+    fn team(self, team: i32) -> bool {
+        !crate::follow::can_spectate(self.0, team)
     }
 
     fn free_flight(self) -> bool {
@@ -116,7 +141,7 @@ impl Refused {
     }
 
     fn every_team(self) -> bool {
-        [TEAM_FREE, TEAM_AXIS, TEAM_ALLIES]
+        [TEAM_NONE, TEAM_AXIS, TEAM_ALLIES]
             .into_iter()
             .all(|t| self.team(t))
     }
@@ -127,24 +152,32 @@ impl Refused {
 /// the walker following its mate keeps its own 0x100000 (cod4-gsc.md 7).
 fn followed_eflags(own: &PlayerState, theirs: &PlayerState) -> u32 {
     const OWN: u32 = 0x10_0000;
-    theirs.word("eFlags") & !OWN | own.word("eFlags") & OWN
+    theirs.word(ps!("eFlags")) & !OWN | own.word(ps!("eFlags")) & OWN
 }
 
-/// Field-name access on a playerstate.
+/// Word access on a playerstate, the index from [`ps!`] or [`ps_word`].
 pub(super) trait PsExt {
-    fn set(&mut self, name: &str, v: u32);
-    fn setf(&mut self, name: &str, v: f32) {
-        self.set(name, v.to_bits());
+    fn set(&mut self, word: usize, v: u32);
+    fn setf(&mut self, word: usize, v: f32) {
+        self.set(word, v.to_bits());
     }
-    fn word(&self, name: &str) -> u32;
+    fn word(&self, word: usize) -> u32;
+    /// `pm_type` (`vcod_cod4::pmove::pm_type`; the walk capture's
+    /// spectator reads 4, a playing client 0, VERIFIED live).
+    fn pm_type(&self) -> i32 {
+        self.word(ps!("pm_type")) as i32
+    }
+    fn set_pm_type(&mut self, t: i32) {
+        self.set(ps!("pm_type"), t as u32);
+    }
 }
 
 impl PsExt for PlayerState {
-    fn set(&mut self, name: &str, v: u32) {
-        self.words[ps_word(name)] = v;
+    fn set(&mut self, word: usize, v: u32) {
+        self.words[word] = v;
     }
-    fn word(&self, name: &str) -> u32 {
-        self.words[ps_word(name)]
+    fn word(&self, word: usize) -> u32 {
+        self.words[word]
     }
 }
 
@@ -219,17 +252,17 @@ impl BodyEvents {
     /// fresh playerstate). Event and parm are read as bytes; the hidden
     /// events are skipped without a slot.
     fn take(&mut self, ps: &PlayerState) {
-        let newest = ps.word("eventSequence") as i32;
+        let newest = ps.word(ps!("eventSequence")) as i32;
         let from = self.taken.max(newest.saturating_sub(4)).min(newest);
         for n in from..newest {
             let ring = (n & 3) as usize;
-            let event = ps.word(&format!("events[{ring}]")) & 0xff;
+            let event = ps.word(ps!(4 "events")[ring]) & 0xff;
             let hidden = SERVER_ONLY_EVENTS
                 .iter()
                 .chain(&SINGLE_CLIENT_EVENTS)
                 .any(|&e| e == event);
             if !hidden {
-                self.push(event, ps.word(&format!("eventParms[{ring}]")) & 0xff);
+                self.push(event, ps.word(ps!(4 "eventParms")[ring]) & 0xff);
             }
         }
         self.taken = newest;
@@ -263,10 +296,11 @@ pub struct Cod4Level {
     /// Each client's playerstate as the last frame left it: what a
     /// follower copies (`SV_GetArchivedClientInfo` at archive time 0, the
     /// newest archived frame).
-    archive: Vec<Option<PlayerState>>,
+    archive: Vec<Option<Rc<PlayerState>>>,
     /// Every frame's playerstates, newest first, for the killcam's look
-    /// back (`SV_GetArchivedClientInfo` at an `archivetime`).
-    history: std::collections::VecDeque<(i32, Vec<Option<PlayerState>>)>,
+    /// back (`SV_GetArchivedClientInfo` at an `archivetime`). A row shares
+    /// its states with that frame's `archive`.
+    history: std::collections::VecDeque<(i32, Vec<Option<Rc<PlayerState>>>)>,
     level_time: i32,
     /// `level.previousTime`: the last frame's `level.time` (`G_RunFrame`,
     /// 0x80b6212).
@@ -277,6 +311,9 @@ pub struct Cod4Level {
     pub(super) clip: Option<Arc<ClipMap>>,
     /// The shots' state (`combat`).
     pub(super) combat: super::combat::Combat4,
+    /// Each model and attachment set's box ([`Self::shot_boxes`]): its
+    /// surfaces, tags and the level's collision never change.
+    pub(super) box_bounds: super::entity_damage::BoxBounds,
     /// The movement dvars (`Rules::default`, what the mirror carries on
     /// every stock 1.7 level, cod4-pmove.md 12).
     pub rules: Rules,
@@ -293,14 +330,13 @@ pub struct Cod4Level {
     )>,
     /// The mantles' blockages ([`Self::spawn_mantle_block`]): the entity,
     /// its think's time and its box.
-    mantle_blocks: Vec<(vcod_gsc::EntId, i32, Body4)>,
+    mantle_blocks: crate::game::mantle_block::MantleBlocks<Body4>,
     /// Each gun's own event ring (`EV_FIRE_WEAPON_MG42`).
     pub(super) gun_events: std::collections::HashMap<vcod_gsc::EntId, super::turret::GunEvents>,
 }
 
 impl Cod4Level {
     /// The zones' level: `game::cod4::load`'s bootstrap at `now_ms`.
-    #[allow(clippy::too_many_arguments)]
     pub fn load(
         zones: &Cod4Zones,
         install: &Install,
@@ -328,7 +364,7 @@ impl Cod4Level {
 
     /// [`Self::load`] with what the last level handed on
     /// ([`super::load_with`], [`Self::take_carry`]).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn load_with(
         zones: &Cod4Zones,
         install: &Install,
@@ -375,6 +411,7 @@ impl Cod4Level {
         };
         let rules = Rules {
             shock_slows: vcod_cod4::shock::movement_bits(&names, &read),
+            mantle_anims: zones.mantle,
             ..Rules::default()
         };
         let sv_fps = super::sv_fps(&rt.host.cvars);
@@ -389,9 +426,10 @@ impl Cod4Level {
             sv_fps,
             clip: zones.clip.clone(),
             combat: super::combat::Combat4::new(zones.bodies.clone(), n),
+            box_bounds: Default::default(),
             rules,
             brushes: Vec::new(),
-            mantle_blocks: Vec::new(),
+            mantle_blocks: Default::default(),
             gun_events: Default::default(),
             entity_history: std::collections::VecDeque::new(),
         })
@@ -436,9 +474,9 @@ impl Cod4Level {
         self.rt.set_frame_ms(self.frame_ms());
     }
 
-    /// How many frames [`HISTORY_MS`] holds at this `sv_fps`.
+    /// How many frames [`KILLCAM_HISTORY_MS`] holds at this `sv_fps`.
     fn history_frames(&self) -> usize {
-        (HISTORY_MS / self.frame_ms()) as usize
+        (KILLCAM_HISTORY_MS / self.frame_ms()) as usize
     }
 
     /// Slot `slot`'s `lastVoiceTime` (cod4-voice.md 3), `None` before
@@ -464,12 +502,21 @@ impl Cod4Level {
         }
     }
 
+    /// Marks `slot` as one of vcod's own bots (`--bots`, `addbot`), which
+    /// `numVotingClients` leaves out (`game::vote`). A fresh level's
+    /// [`Self::connect`] clears it, so each level change marks again.
+    pub fn mark_bot(&mut self, slot: usize) {
+        if let Some(r) = self.rt.host.clients[slot].roster.as_mut() {
+            r.bot = true;
+        }
+    }
+
     /// `ClientConnect` (`SV_DirectConnect` runs it): the slot's state
     /// cleared, the client's entity and `CodeCallback_PlayerConnect` on the
     /// next frame's packet pass, a spectator floating at `spot` until the
     /// script spawns it.
     pub fn connect(&mut self, slot: usize, name: &str, spot: ([f32; 3], [f32; 3])) {
-        self.rt.host.client_names[slot] = name.to_string();
+        self.rt.host.clients[slot].name = name.to_string();
         let c4 = self.rt.host.cod4_mut();
         c4.clients[slot] = Default::default();
         c4.stats[slot] = Stats::fresh();
@@ -477,17 +524,17 @@ impl Cod4Level {
             slot,
             name: name.to_string(),
         });
-        self.rt.host.client_roster[slot] = Some(crate::game::scoreboard::RosterSlot {
+        self.rt.host.clients[slot].roster = Some(crate::game::scoreboard::RosterSlot {
             connecting: true,
             ..Default::default()
         });
         let mut ps = PlayerState::default();
-        ps.set("clientNum", slot as u32);
-        ps.set("commandTime", self.level_time as u32);
-        ps.setf("moveSpeedScaleMultiplier", 1.0);
-        ps.set("throwBackGrenadeOwner", ENTITYNUM_NONE);
-        ps.set("viewlocked_entNum", ENTITYNUM_NONE);
-        ps.set("pm_type", PM_SPECTATOR);
+        ps.set(ps!("clientNum"), slot as u32);
+        ps.set(ps!("commandTime"), self.level_time as u32);
+        ps.setf(ps!("moveSpeedScaleMultiplier"), 1.0);
+        ps.set(ps!("throwBackGrenadeOwner"), ENTITYNUM_NONE);
+        ps.set(ps!("viewlocked_entNum"), ENTITYNUM_NONE);
+        ps.set_pm_type(pm_type::SPECTATOR);
         place(&mut ps, spot.0, spot.1, None);
         self.players[slot] = Some(Player4 {
             ps,
@@ -509,17 +556,12 @@ impl Cod4Level {
     }
 
     /// `ClientInactivityTimer` (0x80a4d56), from `ClientThink_real` for a
-    /// playing or dead client (0x80a5ccf; a spectator or one at the
-    /// intermission is never timed). `g_inactivity` 0 keeps the deadline a
-    /// minute ahead; a cmd with a move key or the 0x401 buttons
-    /// (`forwardmove`/`rightmove` as one word at 0x80a4d91, the buttons at
-    /// 0x80a4dcd) puts it `g_inactivity` seconds ahead. Past the deadline
-    /// the client goes; ten seconds before, it is warned once. 1.7 has no
-    /// `g_inactivitySpectator` (no such string in `cod4_lnxded`). The
-    /// engine calls this for its network clients only: `pers.localClient`
-    /// (a bot or loopback address, 0x813b1b0) exempts the rest. VERIFIED
-    /// live: an idle axis probe at `g_inactivity 30` was warned 20 s and
-    /// dropped 30 s after its spawn, a spectator beside it kept.
+    /// playing or dead client; a spectator or one at the intermission is
+    /// never timed. `g_inactivity` 0 keeps the deadline a minute ahead; a
+    /// cmd with a move key or the 0x401 buttons puts it `g_inactivity`
+    /// seconds ahead. Past the deadline the client goes; ten seconds
+    /// before, it is warned once. Network clients only: `pers.localClient`
+    /// exempts bots and loopback (cod4-server-gaps.md, "g_inactivity").
     pub fn inactivity_timer(&mut self, slot: usize, cmd: &UserCmd) -> Inactivity {
         let state = self.rt.client_session(slot).map(|s| s.state);
         if !matches!(state, Some(SessionState::Playing | SessionState::Dead)) {
@@ -567,12 +609,12 @@ impl Cod4Level {
 
     /// `ClientBegin`: `pers.connected` CON_CONNECTED and the `begin` notify.
     pub fn begin(&mut self, slot: usize) {
-        if let Some(r) = self.rt.host.client_roster[slot].as_mut() {
+        if let Some(r) = self.rt.host.clients[slot].roster.as_mut() {
             r.connecting = false;
             r.active = true;
         }
         if let Some(p) = self.players[slot].as_mut() {
-            p.ps.set("pm_type", PM_SPECTATOR);
+            p.ps.set_pm_type(pm_type::SPECTATOR);
         }
         self.rt.push_client_event(ClientEvent::Begin(slot));
     }
@@ -590,7 +632,7 @@ impl Cod4Level {
         if host.client_name_mode == ClientNameMode::Manual && in_game {
             return false;
         }
-        let Some(n) = host.client_names.get_mut(slot) else {
+        let Some(n) = host.clients.get_mut(slot).map(|c| &mut c.name) else {
             return false;
         };
         let changed = n != name;
@@ -602,15 +644,16 @@ impl Cod4Level {
     pub fn client_name(&self, slot: usize) -> &str {
         self.rt
             .host
-            .client_names
+            .clients
             .get(slot)
+            .map(|c| &c.name)
             .map_or("", String::as_str)
     }
 
     /// `ClientDisconnect`, inside the drop.
     pub fn disconnect(&mut self, slot: usize) {
         self.rt.client_disconnect(slot);
-        self.rt.host.client_roster[slot] = None;
+        self.rt.host.clients[slot].roster = None;
         self.players[slot] = None;
         self.archive[slot] = None;
     }
@@ -629,12 +672,12 @@ impl Cod4Level {
     /// it on every client and sets it on the caller, a vote on the voter;
     /// a spawn keeps it.
     fn sync_voted(&mut self) {
-        let voted = self.rt.host.client_voted.clone();
+        let voted: Vec<bool> = self.rt.host.clients.iter().map(|c| c.voted).collect();
         for (slot, p) in self.players.iter_mut().enumerate() {
             let Some(p) = p.as_mut() else { continue };
             let on = voted.get(slot).copied().unwrap_or(false);
-            let e = p.ps.word("eFlags") & !0x10_0000;
-            p.ps.set("eFlags", e | if on { 0x10_0000 } else { 0 });
+            let e = p.ps.word(ps!("eFlags")) & !0x10_0000;
+            p.ps.set(ps!("eFlags"), e | if on { 0x10_0000 } else { 0 });
         }
     }
 
@@ -644,7 +687,7 @@ impl Cod4Level {
         self.players
             .get(slot)
             .and_then(Option::as_ref)
-            .is_some_and(|p| p.ps.word("pm_type") == PM_INTERMISSION)
+            .is_some_and(|p| p.ps.pm_type() == pm_type::INTERMISSION)
     }
 
     pub fn menu_response(&mut self, slot: usize, menu: &MenuRef, response: &str) {
@@ -682,13 +725,13 @@ impl Cod4Level {
         let mut cmd = *cmd;
         let held = |w: u8| {
             let i = usize::from(w);
-            i < 128 && p.ps.word(&format!("weapons[{}]", i / 32)) >> (i % 32) & 1 != 0
+            i < 128 && p.ps.word(ps!(4 "weapons")[i / 32]) >> (i % 32) & 1 != 0
         };
         if !held(cmd.weapon) {
-            cmd.weapon = p.ps.word("weapon") as u8;
+            cmd.weapon = p.ps.word(ps!("weapon")) as u8;
         }
         if !held(cmd.offhand) {
-            cmd.offhand = p.ps.word("offHandIndex") as u8;
+            cmd.offhand = p.ps.word(ps!("offHandIndex")) as u8;
         }
         let cmd = &cmd;
         // `ClientThink` (0x80a6810) takes every cmd into `sess.cmd`
@@ -696,7 +739,7 @@ impl Cod4Level {
         // a killcam's too, which the next spawn's view is put off
         // (cod4-gsc.md 7); a follower moves nothing.
         p.cmd = *cmd;
-        if p.ps.word("otherFlags") & POF_FOLLOW != 0 {
+        if p.ps.word(ps!("otherFlags")) & POF_FOLLOW != 0 {
             return;
         }
         let selected = cmd.selected_location;
@@ -738,7 +781,7 @@ impl Cod4Level {
         if forced >= 0 {
             return;
         }
-        let no_spectate = self.rt.host.client_no_spectate[slot];
+        let no_spectate = self.rt.host.clients[slot].no_spectate;
         let free = no_spectate & NO_SPECTATE_FREELOOK == 0;
         let following = self.players[slot]
             .as_ref()
@@ -754,7 +797,7 @@ impl Cod4Level {
         } else {
             return;
         };
-        let can = |team: u32| no_spectate & (1 << team) == 0;
+        let can = |team: i32| crate::follow::can_spectate(no_spectate, team);
         if let Some(t) = self.follow_cycle(slot, dir, &can) {
             self.players[slot].as_mut().unwrap().spectator_client = t as i32;
         }
@@ -773,15 +816,16 @@ impl Cod4Level {
             return;
         };
         p.spectator_client = -1;
-        if p.ps.word("otherFlags") & POF_FOLLOW == 0 {
+        if p.ps.word(ps!("otherFlags")) & POF_FOLLOW == 0 {
             return;
         }
         let ps = pmove::PlayerState::from_wire(&p.ps);
         let eye = super::combat::view_origin(&ps, self.level_time);
-        let [forward, _, up] = vcod_common::x87::angle_vectors(Vec3::from(ps.view_angles));
-        let end = eye - 40.0 * forward + 10.0 * up;
-        let pos = match self.clip.as_deref() {
-            Some(clip) => {
+        let (pos, angles) =
+            crate::follow::stop_spot_by(eye.to_array(), ps.view_angles, |eye, end| {
+                let Some(clip) = self.clip.as_deref() else {
+                    return end;
+                };
                 let bodies = Vec::new();
                 let world = Cod4Clip {
                     clip,
@@ -791,28 +835,28 @@ impl Cod4Level {
                 let r = Vec3::splat(8.0);
                 let tr = pmove::PmWorld::trace(&world, eye, end, -r, r, ENTITYNUM_NONE, 0x81_0011);
                 eye + (end - eye) * tr.fraction
-            }
-            None => end,
-        };
-        let mut angles = ps.view_angles;
-        angles[0] += 15.0;
+            });
         let p = self.players[slot].as_mut().unwrap();
-        p.ps.set("clientNum", slot as u32);
-        let w = |p: &mut Player4, f: &str, clear: u32| {
+        p.ps.set(ps!("clientNum"), slot as u32);
+        let w = |p: &mut Player4, f: usize, clear: u32| {
             let v = p.ps.word(f) & !clear;
             p.ps.set(f, v);
         };
-        w(p, "eFlags", 0x300);
-        w(p, "pm_flags", 0x1_0010);
-        w(p, "weapFlags", 0x40);
-        w(p, "otherFlags", POF_FOLLOW);
-        p.ps.set("viewlocked", 0);
-        p.ps.set("viewlocked_entNum", ENTITYNUM_NONE);
-        p.ps.setf("fWeaponPosFrac", 0.0);
-        for f in ["shellshockIndex", "shellshockTime", "shellshockDuration"] {
+        w(p, ps!("eFlags"), 0x300);
+        w(p, ps!("pm_flags"), 0x1_0010);
+        w(p, ps!("weapFlags"), 0x40);
+        w(p, ps!("otherFlags"), POF_FOLLOW);
+        p.ps.set(ps!("viewlocked"), 0);
+        p.ps.set(ps!("viewlocked_entNum"), ENTITYNUM_NONE);
+        p.ps.setf(ps!("fWeaponPosFrac"), 0.0);
+        for f in [
+            ps!("shellshockIndex"),
+            ps!("shellshockTime"),
+            ps!("shellshockDuration"),
+        ] {
             p.ps.set(f, 0);
         }
-        place(&mut p.ps, pos.to_array(), angles, cmd);
+        place(&mut p.ps, pos, angles, cmd);
     }
 
     /// The player animtree's names by wire index, for `getCorpseAnim`,
@@ -873,7 +917,7 @@ impl Cod4Level {
         in_game
             && self.players[slot]
                 .as_ref()
-                .is_some_and(|p| p.ps.word("locationSelectionInfo") != 0)
+                .is_some_and(|p| p.ps.word(ps!("locationSelectionInfo")) != 0)
     }
 
     /// `ClientThink_real`: the cmd's clock held within
@@ -883,6 +927,7 @@ impl Cod4Level {
     /// else 0, no `oldcmd`); a player walks at `g_speed`. Then the body is
     /// relinked where the move left it (`SV_LinkEntity`), a spectator
     /// unlinked. Without a clip map only the clock and the view move.
+    ///
     /// One cmd's `ClientThink_real` up to the link. A playing or dead
     /// client's returns the event sequence before the move, the cmd's time
     /// and the move's touch list, for [`Self::after_think`].
@@ -892,19 +937,19 @@ impl Cod4Level {
             .client_session(slot)
             .map_or(SessionState::Spectator, |s| s.state);
         let level_time = self.level_time;
-        let freelook = self.rt.host.client_no_spectate[slot] & NO_SPECTATE_FREELOOK == 0;
+        let freelook = self.rt.host.clients[slot].no_spectate & NO_SPECTATE_FREELOOK == 0;
         let g_speed = crate::game::builtins::cvar::atoi(self.rt.host.cvars.get("g_speed"));
         let bodies = self.bodies(slot);
         self.combat.anims();
         self.sync_anim_names();
         let p = self.players[slot].as_mut()?;
-        cmd.server_time = cmd.server_time.clamp(level_time - 1000, level_time + 200);
-        let command_time = p.ps.word("commandTime") as i32;
-        if cmd.server_time - command_time < 1 && p.ps.word("clientNum") == slot as u32 {
+        cmd.server_time = crate::game::hold_cmd_time(cmd.server_time, level_time);
+        let command_time = p.ps.word(ps!("commandTime")) as i32;
+        if cmd.server_time - command_time < 1 && p.ps.word(ps!("clientNum")) == slot as u32 {
             return None;
         }
         let Some(clip) = self.clip.as_deref() else {
-            p.ps.set("commandTime", cmd.server_time as u32);
+            p.ps.set(ps!("commandTime"), cmd.server_time as u32);
             view_only(&mut p.ps, &cmd);
             return None;
         };
@@ -912,22 +957,22 @@ impl Cod4Level {
         match state {
             SessionState::Intermission => return None,
             SessionState::Spectator => {
-                if p.ps.word("otherFlags") & POF_FOLLOW != 0 {
+                if p.ps.word(ps!("otherFlags")) & POF_FOLLOW != 0 {
                     return None;
                 }
-                p.ps.set("pm_type", PM_SPECTATOR);
-                p.ps.set("speed", if freelook { 400 } else { 0 });
+                p.ps.set_pm_type(pm_type::SPECTATOR);
+                p.ps.set(ps!("speed"), if freelook { 400 } else { 0 });
                 oldcmd = Cmd::default();
             }
             SessionState::Playing | SessionState::Dead => {
-                p.ps.set("speed", g_speed as u32);
+                p.ps.set(ps!("speed"), g_speed as u32);
                 // `ClientThink_real`: a shellshock past its end
                 // lets the walk go.
-                let end =
-                    p.ps.word("shellshockTime") as i32 + p.ps.word("shellshockDuration") as i32;
+                let end = p.ps.word(ps!("shellshockTime")) as i32
+                    + p.ps.word(ps!("shellshockDuration")) as i32;
                 if end - level_time <= 0 {
-                    let f = p.ps.word("pm_flags") & !pmove::pmf::SHELLSHOCKED;
-                    p.ps.set("pm_flags", f);
+                    let f = p.ps.word(ps!("pm_flags")) & !pmove::pmf::SHELLSHOCKED;
+                    p.ps.set(ps!("pm_flags"), f);
                 }
             }
         }
@@ -951,7 +996,7 @@ impl Cod4Level {
         };
         let armed = state != SessionState::Spectator;
         // `r.maxs` as the last cmd left them, what a blockage copies.
-        let box_before = Vec3::new(15.0, 15.0, body_height(p.ps.word("pm_flags")));
+        let box_before = Vec3::new(15.0, 15.0, body_height(p.ps.word(ps!("pm_flags"))));
         let mut mantle = None;
         let touched;
         if armed {
@@ -998,7 +1043,7 @@ impl Cod4Level {
         } else {
             touched = pmove::player_step(&mut ps, &cmd, &mut oldcmd, &world, self.rules, weapon);
         }
-        p.ps = ps.to_wire(&p.ps);
+        ps.write_wire(&mut p.ps);
         p.old_velocity = ps.old_velocity;
         p.anim_conditions = (ps.anim_movetype, ps.anim_strafing);
         if state != SessionState::Spectator {
@@ -1032,42 +1077,16 @@ impl Cod4Level {
     /// `mantleDuration + g_mantleBlockTimeBuffer` ms on (the dvar 500, 0 to
     /// 60000). Every other player's pmove clips it (cod4-pmove.md 17.4).
     fn spawn_mantle_block(&mut self, slot: usize, end: Vec3, maxs: Vec3, duration: i32) {
-        let buffer = self
-            .rt
-            .host
-            .cvars
-            .get("g_mantleBlockTimeBuffer")
-            .trim()
-            .parse::<i32>()
-            .unwrap_or(500)
-            .clamp(0, 60000);
-        match self.rt.with_host(|h, cx| h.ents.spawn(cx)) {
-            Ok(id) => {
-                let block = Body4 {
-                    entity: id.0,
-                    origin: end,
-                    mins: pmove::PLAYER_MINS,
-                    maxs,
-                    contents: 0x10000,
-                    owner: Some(slot as u32),
-                };
-                let at = self.level_time + duration + buffer;
-                self.mantle_blocks.push((id, at, block));
-            }
-            Err(e) => log::warn!("cod4: mantle block dropped: {e:?}"),
-        }
-    }
-
-    /// The mantle blocks whose think is due, freed (`G_FreeEntity`).
-    fn run_mantle_blocks(&mut self) {
         let now = self.level_time;
-        let (due, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.mantle_blocks)
-            .into_iter()
-            .partition(|&(_, at, _)| at <= now);
-        self.mantle_blocks = kept;
-        for (id, _, _) in due {
-            self.rt.host.free_entity(id);
-        }
+        self.mantle_blocks
+            .spawn(&mut self.rt, now, duration, |entity| Body4 {
+                entity,
+                origin: end,
+                mins: pmove::PLAYER_MINS,
+                maxs,
+                contents: 0x10000,
+                owner: Some(slot as u32),
+            });
     }
 
     /// After a player's cmd: the loadout follows what its weapon half did,
@@ -1132,7 +1151,7 @@ impl Cod4Level {
         }
         if playing {
             let h = body_height(ps.pm_flags);
-            host.client_height[slot] = h;
+            host.clients[slot].height = h;
             let contents = vcod_common::movetrace::CONTENTS_BODY as i32;
             host.link_client(slot, origin, host.client_box(slot), contents, true);
         } else {
@@ -1149,23 +1168,23 @@ impl Cod4Level {
             .filter(|&(i, _)| i != slot)
             .filter_map(|(i, p)| {
                 let ps = &p.as_ref()?.ps;
-                (ps.word("otherFlags") & POF_PLAYER != 0
-                    && in_play(ps.word("pm_type"))
-                    && ps.word("clientNum") == i as u32)
+                (ps.word(ps!("otherFlags")) & POF_PLAYER != 0
+                    && in_play(ps.pm_type())
+                    && ps.word(ps!("clientNum")) == i as u32)
                     .then(|| Body4 {
                         entity: i as u32,
                         origin: Vec3::new(
-                            f32::from_bits(ps.word("origin[0]")),
-                            f32::from_bits(ps.word("origin[1]")),
-                            f32::from_bits(ps.word("origin[2]")),
+                            f32::from_bits(ps.word(ps!("origin[0]"))),
+                            f32::from_bits(ps.word(ps!("origin[1]"))),
+                            f32::from_bits(ps.word(ps!("origin[2]"))),
                         ),
                         mins: pmove::PLAYER_MINS,
-                        maxs: Vec3::new(15.0, 15.0, body_height(ps.word("pm_flags"))),
+                        maxs: Vec3::new(15.0, 15.0, body_height(ps.word(ps!("pm_flags")))),
                         contents: pmove::CONTENTS_BODY,
                         owner: None,
                     })
             })
-            .chain(self.mantle_blocks.iter().map(|b| b.2))
+            .chain(self.mantle_blocks.boxes())
             .collect()
     }
 
@@ -1186,7 +1205,7 @@ impl Cod4Level {
         self.apply_link_ops();
         self.per_frame_notifies();
         for id in std::mem::take(&mut self.rt.host.cod4_mut().free_next) {
-            self.rt.host.ents.free(id);
+            self.rt.host.free_entity(id);
         }
         // The script's `finishPlayerDamage`s and `suicide`s wrote their
         // victims' playerstates inside the call, ahead of any `spawn` after.
@@ -1215,7 +1234,7 @@ impl Cod4Level {
         c4.trace_bodies = bodies;
         c4.trace_brushes = self.brushes.clone();
         _p = crate::tick_profile::phase("frame/mantle and hud");
-        self.run_mantle_blocks();
+        self.mantle_blocks.run(&mut self.rt, self.level_time);
         // `G_UpdateHudElemsToClients`, ahead of the end frames:
         // both arrays into every client's playerstate; a follower's
         // `ClientEndFrame` copies the followed one's and puts its own
@@ -1240,7 +1259,7 @@ impl Cod4Level {
         // -1 for every client not following; the wire's 6 bits read 63
         // (VERIFIED live, the spawn frame).
         for p in self.players.iter_mut().flatten() {
-            if p.ps.word("otherFlags") & POF_FOLLOW == 0 {
+            if p.ps.word(ps!("otherFlags")) & POF_FOLLOW == 0 {
                 p.ps.stats[3] = 63;
             }
         }
@@ -1259,11 +1278,16 @@ impl Cod4Level {
             *a = p.as_ref().map(|p| {
                 let mut ps = p.ps.clone();
                 ps.sent_angles();
-                ps
+                Rc::new(ps)
             });
         }
         self.history.push_front((now_ms, self.archive.clone()));
         self.history.truncate(self.history_frames());
+        // What the shared builtins queue for CoD1's engine: the playerstate
+        // here is the level's own, and its bots read the level, not the
+        // blast list.
+        self.rt.take_weapon_ops();
+        self.rt.take_blast_noises();
     }
 
     /// A player's `setOrigin` (`SetClientOrigin`, INFERRED):
@@ -1281,8 +1305,7 @@ impl Cod4Level {
                 // `setPlayerAngles`' `SetClientViewAngle`: the view
                 // and `delta_angles` off the last cmd, where it stands.
                 SimOp::SetViewAngles { angles } => {
-                    let o =
-                        std::array::from_fn(|k| f32::from_bits(p.ps.word(&format!("origin[{k}]"))));
+                    let o = std::array::from_fn(|k| f32::from_bits(p.ps.word(ps!(3 "origin")[k])));
                     let cmd = p.cmd;
                     place(&mut p.ps, o, angles, Some(&cmd));
                     continue;
@@ -1290,10 +1313,10 @@ impl Cod4Level {
                 _ => continue,
             };
             for (k, v) in origin.into_iter().enumerate() {
-                p.ps.setf(&format!("origin[{k}]"), v);
+                p.ps.setf(ps!(3 "origin")[k], v);
             }
-            let e = p.ps.word("eFlags") ^ 2;
-            p.ps.set("eFlags", e);
+            let e = p.ps.word(ps!("eFlags")) ^ 2;
+            p.ps.set(ps!("eFlags"), e);
             let ps = pmove::PlayerState::from_wire(&p.ps);
             self.relink(slot, &ps);
         }
@@ -1354,12 +1377,12 @@ impl Cod4Level {
         let now = self.level_time;
         let cvar = |name: &str| crate::game::builtins::cvar::atoi(self.rt.host.cvars.get(name));
         let (idle_secs, gravity) = (cvar("g_inactivity"), cvar("g_gravity"));
-        let max_health = self.rt.host.client_vitals[slot].max_health;
+        let max_health = self.rt.host.clients[slot].vitals.max_health;
         // A gunner still on a gun lets go first, so the release's
         // teleport lands before the spawn spot (0x80a7b8c..0x80a7ecf).
         if let Some(p) = self.players[slot].as_ref()
-            && p.ps.word("otherFlags") & POF_PLAYER != 0
-            && p.ps.word("eFlags") & vcod_cod4::pmove::ef::TURRET != 0
+            && p.ps.word(ps!("otherFlags")) & POF_PLAYER != 0
+            && p.ps.word(ps!("eFlags")) & vcod_cod4::pmove::ef::TURRET != 0
             && let Some(gun) = self.manned_gun(slot)
         {
             self.stop_using_turret(gun);
@@ -1369,8 +1392,8 @@ impl Cod4Level {
         };
         let mut ps = spawn_playerstate(&p.ps, slot, max_health, mode);
         place(&mut ps, origin, angles, Some(&p.cmd));
-        ps.set("gravity", gravity as u32);
-        ps.set("commandTime", now.wrapping_sub(100) as u32);
+        ps.set(ps!("gravity"), gravity as u32);
+        ps.set(ps!("commandTime"), now.wrapping_sub(100) as u32);
         p.ps = ps;
         p.linked = false;
         p.spectator_client = -1;
@@ -1392,37 +1415,45 @@ impl Cod4Level {
             self.rt.client_impacts(slot, &touched);
         }
         if let Some(p) = self.players[slot].as_mut() {
-            p.ps.set("commandTime", now as u32);
+            p.ps.set(ps!("commandTime"), now as u32);
         }
     }
 
     /// The brush entities pmove clips: every entity linked with an inline
     /// model, solid (`es.solid` `SOLID_BMODEL` and no `EF_NONSOLID_BMODEL`).
     fn brush_entities(&mut self) -> Vec<Brush4> {
-        let word = |e: &EntityState, n: &str| ent_word(e.etype(), n).map_or(0, |w| e.0[w]);
-        let f = |e: &EntityState, n: &str| f32::from_bits(word(e, n));
+        const NAMES: [&str; 9] = [
+            "solid",
+            "lerp.eFlags",
+            "index",
+            "lerp.pos.trBase[0]",
+            "lerp.pos.trBase[1]",
+            "lerp.pos.trBase[2]",
+            "lerp.apos.trBase[0]",
+            "lerp.apos.trBase[1]",
+            "lerp.apos.trBase[2]",
+        ];
+        // Each type's words for `NAMES`, looked up once.
+        static WORDS: std::sync::OnceLock<Vec<[Option<usize>; 9]>> = std::sync::OnceLock::new();
+        let words = WORDS.get_or_init(|| {
+            (0..vcod_cod4::net::fields::ENTITY_BY_TYPE.len() as u32)
+                .map(|t| NAMES.map(|n| ent_word(t, n)))
+                .collect()
+        });
+        let word = |e: &EntityState, k: usize| {
+            words[(e.etype() as usize).min(words.len() - 1)][k].map_or(0, |w| e.0[w])
+        };
+        let f = |e: &EntityState, k: usize| f32::from_bits(word(e, k));
         self.rt
             .packet_entities(&super::COD4_HOST_PROTO)
             .values()
             .filter_map(super::wire::ent4)
-            .filter(|e| {
-                word(e, "solid") == 0xff_ffff
-                    && word(e, "lerp.eFlags") & 1 == 0
-                    && word(e, "index") != 0
-            })
+            .filter(|e| word(e, 0) == 0xff_ffff && word(e, 1) & 1 == 0 && word(e, 2) != 0)
             .map(|e| Brush4 {
                 entity: e.number(),
-                model: word(&e, "index") as usize,
-                origin: Vec3::new(
-                    f(&e, "lerp.pos.trBase[0]"),
-                    f(&e, "lerp.pos.trBase[1]"),
-                    f(&e, "lerp.pos.trBase[2]"),
-                ),
-                angles: Vec3::new(
-                    f(&e, "lerp.apos.trBase[0]"),
-                    f(&e, "lerp.apos.trBase[1]"),
-                    f(&e, "lerp.apos.trBase[2]"),
-                ),
+                model: word(&e, 2) as usize,
+                origin: Vec3::new(f(&e, 3), f(&e, 4), f(&e, 5)),
+                angles: Vec3::new(f(&e, 6), f(&e, 7), f(&e, 8)),
             })
             .collect()
     }
@@ -1442,7 +1473,7 @@ impl Cod4Level {
         // snapshot of `play-1.7-svfps40.txt`; cod4-server-frame.md 8).
         let scale = self.rt.host.cod4().clients[slot].loadout.move_speed_scale;
         if let Some(p) = self.players[slot].as_mut() {
-            p.ps.setf("moveSpeedScaleMultiplier", scale);
+            p.ps.setf(ps!("moveSpeedScaleMultiplier"), scale);
         }
         let session = self.rt.client_session(slot);
         let state = session
@@ -1458,10 +1489,10 @@ impl Cod4Level {
             SessionState::Spectator => self.spectator_end_frame(slot),
             SessionState::Intermission => {
                 let p = self.players[slot].as_mut().unwrap();
-                let of = p.ps.word("otherFlags") & !0x1c;
-                p.ps.set("otherFlags", of);
-                p.ps.set("pm_type", PM_INTERMISSION);
-                p.ps.set("viewmodelIndex", 0);
+                let of = p.ps.word(ps!("otherFlags")) & !0x1c;
+                p.ps.set(ps!("otherFlags"), of);
+                p.ps.set_pm_type(pm_type::INTERMISSION);
+                p.ps.set(ps!("viewmodelIndex"), 0);
             }
         }
     }
@@ -1486,12 +1517,12 @@ impl Cod4Level {
         };
         if let Some(d) = dof {
             for (name, v) in [
-                "dofNearStart",
-                "dofNearEnd",
-                "dofFarStart",
-                "dofFarEnd",
-                "dofNearBlur",
-                "dofFarBlur",
+                ps!("dofNearStart"),
+                ps!("dofNearEnd"),
+                ps!("dofFarStart"),
+                ps!("dofFarEnd"),
+                ps!("dofNearBlur"),
+                ps!("dofFarBlur"),
             ]
             .into_iter()
             .zip(d)
@@ -1500,18 +1531,18 @@ impl Cod4Level {
             }
         }
         if let Some(l) = loc {
-            p.ps.set("locationSelectionInfo", l);
+            p.ps.set(ps!("locationSelectionInfo"), l);
         }
-        p.ps.set("radarEnabled", u32::from(radar));
+        p.ps.set(ps!("radarEnabled"), u32::from(radar));
     }
 
     fn player_end_frame(&mut self, slot: usize, state: SessionState) {
         let host = &self.rt.host;
         let c4 = &host.cod4().clients[slot];
         let l = &c4.loadout;
-        let health = host.client_vitals[slot].health;
-        let max_health = host.client_vitals[slot].max_health;
-        let viewmodel = host.client_viewmodel[slot] as u32;
+        let health = host.clients[slot].vitals.health;
+        let max_health = host.clients[slot].vitals.max_health;
+        let viewmodel = host.clients[slot].viewmodel as u32;
         let speed = crate::game::builtins::cvar::atoi(host.cvars.get("g_speed")) as u32;
         let gravity = crate::game::builtins::cvar::atoi(host.cvars.get("g_gravity")) as u32;
         let perks = c4.perks;
@@ -1519,7 +1550,7 @@ impl Cod4Level {
         let frozen = c4.frozen;
         let last_stand = c4.last_stand;
         let (c4_ping_until, host_time) = (c4.compass_ping_until, host.level_time_ms);
-        let shock = host.client_shellshock[slot];
+        let shock = host.clients[slot].shellshock;
         let l = l.clone();
         let shock_pmf = self.rt.host.cod4_mut().clients[slot].shock_pmf.take();
         let pinged = c4_ping_until > host_time;
@@ -1528,34 +1559,32 @@ impl Cod4Level {
         }
         let p = self.players[slot].as_mut().unwrap();
         let ps = &mut p.ps;
-        let of = (ps.word("otherFlags") | POF_PLAYER) & !(POF_SPECTATE_TEAM | POF_SPECTATE_FREE);
-        ps.set("otherFlags", of);
-        ps.set("viewmodelIndex", viewmodel);
+        let of =
+            (ps.word(ps!("otherFlags")) | POF_PLAYER) & !(POF_SPECTATE_TEAM | POF_SPECTATE_FREE);
+        ps.set(ps!("otherFlags"), of);
+        ps.set(ps!("viewmodelIndex"), viewmodel);
         // `ClientEndFrame`: linked or not by `tagInfo`; Last
         // Stand's down state is its own `pm_type`.
-        ps.set(
-            "pm_type",
-            match (state == SessionState::Dead, p.linked) {
-                (true, false) => PM_DEAD,
-                (true, true) => PM_DEAD_LINKED,
-                (false, _) if last_stand => PM_LASTSTAND,
-                (false, false) => PM_NORMAL,
-                (false, true) => PM_NORMAL_LINKED,
-            },
-        );
+        ps.set_pm_type(match (state == SessionState::Dead, p.linked) {
+            (true, false) => pm_type::DEAD,
+            (true, true) => pm_type::DEAD_LINKED,
+            (false, _) if last_stand => pm_type::LASTSTAND,
+            (false, false) => pm_type::NORMAL,
+            (false, true) => pm_type::NORMAL_LINKED,
+        });
         ps.stats[0] = health;
         ps.stats[2] = max_health;
         // The think's own writes (`ClientThink_real`): the
         // spawn frame's 190 and 800 (VERIFIED live).
-        ps.set("speed", speed);
-        ps.set("gravity", gravity);
-        ps.setf("moveSpeedScaleMultiplier", l.move_speed_scale);
-        ps.set("perks", perks);
+        ps.set(ps!("speed"), speed);
+        ps.set(ps!("gravity"), gravity);
+        ps.setf(ps!("moveSpeedScaleMultiplier"), l.move_speed_scale);
+        ps.set(ps!("perks"), perks);
         // `disableWeapons`' bit is the script's; the rest are pmove's.
-        let wf = ps.word("weapFlags");
-        ps.set("weapFlags", (wf & !0x80) | (weap_flags & 0x80));
+        let wf = ps.word(ps!("weapFlags"));
+        ps.set(ps!("weapFlags"), (wf & !0x80) | (weap_flags & 0x80));
         // The frozen flag as `PMF_FROZEN`.
-        let pmf = ps.word("pm_flags");
+        let pmf = ps.word(ps!("pm_flags"));
         let mut pmf = if frozen {
             pmf | vcod_cod4::pmove::pmf::FROZEN
         } else {
@@ -1568,22 +1597,25 @@ impl Cod4Level {
             Some(false) => pmf &= !vcod_cod4::pmove::pmf::SHELLSHOCKED,
             None => {}
         }
-        ps.set("pm_flags", pmf);
+        ps.set(ps!("pm_flags"), pmf);
         // `pingPlayer`'s flash, cleared once its time is up (0x80a6c9f).
-        let ef = ps.word("eFlags");
-        ps.set("eFlags", if pinged { ef | EF_PING } else { ef & !EF_PING });
-        ps.set("shellshockIndex", shock[0] as u32);
-        ps.set("shellshockTime", shock[1] as u32);
-        ps.set("shellshockDuration", shock[2] as u32);
+        let ef = ps.word(ps!("eFlags"));
+        ps.set(
+            ps!("eFlags"),
+            if pinged { ef | EF_PING } else { ef & !EF_PING },
+        );
+        ps.set(ps!("shellshockIndex"), shock[0] as u32);
+        ps.set(ps!("shellshockTime"), shock[1] as u32);
+        ps.set(ps!("shellshockDuration"), shock[2] as u32);
         loadout_into(ps, &l);
         let source = crate::game::builtins::cod4_combat::CorpseSource {
-            origin: [0, 1, 2].map(|k| f32::from_bits(ps.word(&format!("origin[{k}]")))),
-            velocity: [0, 1, 2].map(|k| f32::from_bits(ps.word(&format!("velocity[{k}]")))),
-            height: body_height(ps.word("pm_flags")),
-            yaw: f32::from_bits(ps.word("viewangles[1]")),
-            e_flags: ps.word("eFlags"),
-            legs_anim: ps.word("legsAnim"),
-            torso_anim: ps.word("torsoAnim"),
+            origin: [0, 1, 2].map(|k| f32::from_bits(ps.word(ps!(3 "origin")[k]))),
+            velocity: [0, 1, 2].map(|k| f32::from_bits(ps.word(ps!(3 "velocity")[k]))),
+            height: body_height(ps.word(ps!("pm_flags"))),
+            yaw: f32::from_bits(ps.word(ps!("viewangles[1]"))),
+            e_flags: ps.word(ps!("eFlags")),
+            legs_anim: ps.word(ps!("legsAnim")),
+            torso_anim: ps.word(ps!("torsoAnim")),
         };
         // `ClientEndFrame` runs the hint pass dead or alive; a dead player's
         // only clears `cursorHint` (cod4-hud.md 20).
@@ -1633,7 +1665,7 @@ impl Cod4Level {
         // A torso-only line reads -1 (the legs took nothing) yet plays.
         pmove::anim::script_event(&mut ps, buttons, &input, "shellshock", pick, (false, true));
         let p = self.players[slot].as_mut().unwrap();
-        p.ps = ps.to_wire(&p.ps);
+        ps.write_wire(&mut p.ps);
     }
 
     /// The `death` event's commands as `slot` stands now, for a kill this
@@ -1667,7 +1699,7 @@ impl Cod4Level {
         if self.killcam_end_frame(slot) {
             return;
         }
-        let refused = Refused(self.rt.host.client_no_spectate[slot]);
+        let refused = Refused(self.rt.host.clients[slot].no_spectate);
         match self.spectate_target(slot, refused) {
             Some((target, theirs)) => self.watch(slot, target, theirs, refused),
             None => self.float(slot, refused),
@@ -1688,9 +1720,9 @@ impl Cod4Level {
             }
             Err(_) => return None,
         };
-        let theirs = self.archive.get(target)?.clone()?;
-        let is_player = theirs.word("otherFlags") & POF_PLAYER != 0;
-        let team = self.rt.client_team(target) as u32;
+        let theirs = PlayerState::clone(self.archive.get(target)?.as_ref()?);
+        let is_player = theirs.word(ps!("otherFlags")) & POF_PLAYER != 0;
+        let team = self.rt.client_team(target);
         (is_player && !refused.team(team)).then_some((target, theirs))
     }
 
@@ -1707,14 +1739,14 @@ impl Cod4Level {
         } else {
             POF_SPECTATE_FREE
         };
-        let other = theirs.word("otherFlags") & !(POF_PLAYER | POF_SPECTATE_FREE)
+        let other = theirs.word(ps!("otherFlags")) & !(POF_PLAYER | POF_SPECTATE_FREE)
             | POF_FOLLOW
             | POF_SPECTATE_TEAM
             | free;
         let e_flags = followed_eflags(&p.ps, &theirs);
         p.ps = theirs;
-        p.ps.set("eFlags", e_flags);
-        p.ps.set("otherFlags", other);
+        p.ps.set(ps!("eFlags"), e_flags);
+        p.ps.set(ps!("otherFlags"), other);
         p.spectator_client = target as i32;
         self.hud_into(slot, false);
     }
@@ -1727,12 +1759,12 @@ impl Cod4Level {
         let Some(p) = self.players[slot].as_ref() else {
             return;
         };
-        if p.ps.word("otherFlags") & POF_FOLLOW != 0 {
+        if p.ps.word(ps!("otherFlags")) & POF_FOLLOW != 0 {
             let cmd = p.cmd;
             self.stop_following(slot, Some(&cmd));
             let p = self.players[slot].as_mut().unwrap();
-            p.ps.set("otherFlags", 0);
-            p.ps.set("pm_type", PM_SPECTATOR);
+            p.ps.set(ps!("otherFlags"), 0);
+            p.ps.set_pm_type(pm_type::SPECTATOR);
         }
         let p = self.players[slot].as_mut().unwrap();
         p.spectator_client = -1;
@@ -1741,9 +1773,10 @@ impl Cod4Level {
         } else {
             POF_SPECTATE_TEAM
         };
-        let other = p.ps.word("otherFlags") & !(POF_PLAYER | POF_SPECTATE_FREE | POF_SPECTATE_TEAM);
-        p.ps.set("otherFlags", other | team);
-        p.ps.set("viewmodelIndex", 0);
+        let other =
+            p.ps.word(ps!("otherFlags")) & !(POF_PLAYER | POF_SPECTATE_FREE | POF_SPECTATE_TEAM);
+        p.ps.set(ps!("otherFlags"), other | team);
+        p.ps.set(ps!("viewmodelIndex"), 0);
     }
 
     /// The killcam: a spectator whose script set `spectatorclient` and an
@@ -1786,7 +1819,8 @@ impl Cod4Level {
                 .find(|(t, _)| *t >= at)
                 .and_then(|(t, f)| {
                     let ps = f.get(target as usize)?.as_ref()?;
-                    (ps.word("otherFlags") & POF_PLAYER != 0).then(|| (*t, ps.clone()))
+                    (ps.word(ps!("otherFlags")) & POF_PLAYER != 0)
+                        .then(|| (*t, PlayerState::clone(ps)))
                 });
             if hit.is_some() || archive == 0 {
                 break hit;
@@ -1813,9 +1847,9 @@ impl Cod4Level {
         let e_flags = followed_eflags(&p.ps, &theirs);
         p.ps = theirs;
         shift_archived(&mut p.ps, back, now);
-        p.ps.set("eFlags", e_flags);
-        p.ps.set("otherFlags", POF_FOLLOW);
-        p.ps.set("killCamEntity", kill_cam);
+        p.ps.set(ps!("eFlags"), e_flags);
+        p.ps.set(ps!("otherFlags"), POF_FOLLOW);
+        p.ps.set(ps!("killCamEntity"), kill_cam);
         // `SV_BuildClientSnapshot` takes the entities `archivetime` back,
         // without `psoffsettime` (0x817a2f4..0x817a335).
         p.killcam_at = Some(entities_at);
@@ -1833,22 +1867,16 @@ impl Cod4Level {
         let Some(p) = self.players[slot].as_mut() else {
             return;
         };
-        let h = f32::from_bits(p.ps.word("viewHeightCurrent"));
+        let h = f32::from_bits(p.ps.word(ps!("viewHeightCurrent")));
         let o = [origin[0], origin[1], origin[2] - h + 1.0];
-        let e = p.ps.word("eFlags") ^ 2;
-        p.ps.set("eFlags", e);
+        let e = p.ps.word(ps!("eFlags")) ^ 2;
+        p.ps.set(ps!("eFlags"), e);
         let cmd = p.cmd;
         place(&mut p.ps, o, angles, Some(&cmd));
         let ps = pmove::PlayerState::from_wire(&p.ps);
         self.relink(slot, &ps);
     }
 
-    /// `Cmd_Kill_f`: a playing client under `sv_cheats` (with
-    /// health, `CheatsOk`) dies by its own hand: `player_die` as
-    /// `MOD_SUICIDE` with 100000 damage, the `death` notify, the death anim
-    /// and `CodeCallback_PlayerKilled`. Otherwise the refusal `CheatsOk`
-    /// prints, both strings in 1.7's `cod4_lnxded` (VERIFIED). The reply
-    /// to send, if any.
     /// Reseeds the scripts' `randomInt` / `randomFloat` state, so a test
     /// replays a stock script's draws (an airstrike's path) the same on
     /// every run; for tests.
@@ -1898,8 +1926,9 @@ impl Cod4Level {
     /// script's health writes clamp to it), more than any one frame's
     /// rounds take: the cmds of two packets can both run between two
     /// frames, and two head hits kill.
+    #[cfg(any(test, feature = "testing"))]
     pub fn heal_for_test(&mut self, slot: usize) {
-        if let Some(v) = self.rt.host.client_vitals.get_mut(slot)
+        if let Some(v) = self.rt.host.clients.get_mut(slot).map(|c| &mut c.vitals)
             && v.health > 0
         {
             v.max_health = 1100;
@@ -1910,6 +1939,7 @@ impl Cod4Level {
     /// Test-facing: `slot` takes `damage` without knockback along `dir`
     /// (`None`: from no direction), his health left alone, as a script's
     /// `finishPlayerDamage` followed by a heal.
+    #[cfg(any(test, feature = "testing"))]
     pub fn hurt_for_test(&mut self, slot: usize, damage: i32, dir: Option<[f32; 3]>) {
         self.rt
             .host
@@ -1927,6 +1957,12 @@ impl Cod4Level {
             });
     }
 
+    /// `Cmd_Kill_f`: a playing client under `sv_cheats` (with
+    /// health, `CheatsOk`) dies by its own hand: `player_die` as
+    /// `MOD_SUICIDE` with 100000 damage, the `death` notify, the death anim
+    /// and `CodeCallback_PlayerKilled`. Otherwise the refusal `CheatsOk`
+    /// prints, both strings in 1.7's `cod4_lnxded` (VERIFIED). The reply
+    /// to send, if any.
     pub fn kill_command(&mut self, slot: usize) -> Option<String> {
         let playing = self
             .rt
@@ -1953,7 +1989,7 @@ impl Cod4Level {
         });
         let host = &mut self.rt.host;
         host.die(slot);
-        host.client_vitals[slot].health = 0;
+        host.clients[slot].vitals.health = 0;
         let choices = host.cod4().death_anims[slot].clone();
         let death = (!choices.is_empty()).then(|| {
             let k = host.cod4_mut().rand() as usize % choices.len();
@@ -2011,32 +2047,17 @@ impl Cod4Level {
     /// slots, back to the start, the first other client playing on a
     /// team `can` allows. VERIFIED (the instructions); "playing" stands
     /// for `SV_GetArchivedClientInfo` finding it. INFERRED.
-    fn follow_cycle(&mut self, slot: usize, dir: i32, can: &dyn Fn(u32) -> bool) -> Option<usize> {
-        let n = self.players.len() as i32;
-        let start = self.players[slot].as_ref()?.spectator_client.max(0);
-        let mut t = start;
-        loop {
-            t += dir;
-            if t >= n {
-                t = 0;
-            }
-            if t < 0 {
-                t = n - 1;
-            }
-            let u = t as usize;
-            let playing = u != slot
+    fn follow_cycle(&mut self, slot: usize, dir: i32, can: &dyn Fn(i32) -> bool) -> Option<usize> {
+        let current = usize::try_from(self.players[slot].as_ref()?.spectator_client).ok();
+        crate::follow::cycle(current, dir, self.players.len(), |u| {
+            u != slot
                 && self.players[u].is_some()
                 && self
                     .rt
                     .client_session(u)
-                    .is_some_and(|s| s.state == SessionState::Playing);
-            if playing && can(self.rt.client_team(u) as u32) {
-                return Some(u);
-            }
-            if t == start {
-                return None;
-            }
-        }
+                    .is_some_and(|s| s.state == SessionState::Playing)
+                && can(self.rt.client_team(u))
+        })
     }
 
     /// The scoreboard reply for a `score` command: `b <rows> <team 1>
@@ -2057,7 +2078,7 @@ impl Cod4Level {
         let mut rows = Vec::new();
         for (slot, ping) in pings.iter().enumerate() {
             let Some(ping) = *ping else { continue };
-            let Some(r) = self.rt.host.client_roster.get(slot).copied().flatten() else {
+            let Some(r) = self.rt.host.clients.get(slot).and_then(|c| c.roster) else {
                 continue;
             };
             let num = |v: Option<String>| v.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
@@ -2116,32 +2137,32 @@ impl Cod4Level {
         let team = match self.rt.client_entity(slot) {
             Some(_) => match self.rt.client_team(slot) {
                 t if t < 0 => TEAM_SPECTATOR,
-                t => t as u32,
+                t => t,
             },
             None => TEAM_SPECTATOR,
         };
-        cs.0[cs_word("team")] = team;
-        cs.0[cs_word("attachedVehEntNum")] = ENTITYNUM_NONE;
+        cs.0[const { cs_word("team") }] = team as u32;
+        cs.0[const { cs_word("attachedVehEntNum") }] = ENTITYNUM_NONE;
         let mut bytes = [0u8; 16];
         for (d, s) in bytes.iter_mut().zip(name.bytes().take(15)) {
             *d = s;
         }
-        let at = cs_word("name[0]");
+        let at = const { cs_word("name[0]") };
         for k in 0..4 {
             cs.0[at + k] = u32::from_le_bytes(bytes[k * 4..k * 4 + 4].try_into().unwrap());
         }
         let c4 = &self.rt.host.cod4().clients[slot];
-        cs.0[cs_word("rank")] = u32::from(c4.rank);
-        cs.0[cs_word("prestige")] = u32::from(c4.prestige);
+        cs.0[const { cs_word("rank") }] = u32::from(c4.rank);
+        cs.0[const { cs_word("prestige") }] = u32::from(c4.prestige);
         if let Some(p) = self.players[slot].as_ref()
-            && p.ps.word("otherFlags") & POF_FOLLOW == 0
+            && p.ps.word(ps!("otherFlags")) & POF_FOLLOW == 0
         {
-            cs.0[cs_word("perks")] = p.ps.word("perks");
+            cs.0[const { cs_word("perks") }] = p.ps.word(ps!("perks"));
         }
         // The body: `setModel` and `attach` (`client_attachments`, a model
         // configstring index and a tag index per attachment).
         let model = self.rt.client_model_index(slot);
-        cs.0[cs_word("modelindex")] = model as u32;
+        cs.0[const { cs_word("modelindex") }] = model as u32;
         for (k, (m, t)) in self
             .rt
             .client_attachments(slot)
@@ -2149,8 +2170,8 @@ impl Cod4Level {
             .take(6)
             .enumerate()
         {
-            cs.0[cs_word(&format!("attachModelIndex[{k}]"))] = m as u32;
-            cs.0[cs_word(&format!("attachTagIndex[{k}]"))] = t as u32;
+            cs.0[CS_ATTACH[k][0]] = m as u32;
+            cs.0[CS_ATTACH[k][1]] = t as u32;
         }
         cs
     }
@@ -2180,7 +2201,7 @@ impl Cod4Level {
         for (slot, p) in self.players.iter().enumerate() {
             let Some(p) = p else { continue };
             out.remove(&(slot as u32));
-            if p.ps.word("otherFlags") & POF_PLAYER != 0 && in_play(p.ps.word("pm_type")) {
+            if p.ps.word(ps!("otherFlags")) & POF_PLAYER != 0 && in_play(p.ps.pm_type()) {
                 let mut e = player_entity(slot, &p.ps);
                 p.body_events.write(&mut e);
                 out.insert(slot as u32, e);
@@ -2259,7 +2280,7 @@ impl Cod4Level {
     pub fn killcam_entities(&self, slot: usize) -> Option<BTreeMap<u32, EntityState>> {
         let p = self.players.get(slot)?.as_ref()?;
         let t = p.killcam_at?;
-        let followed = p.ps.word("clientNum") as usize;
+        let followed = p.ps.word(ps!("clientNum")) as usize;
         let (at, w, scopes) = self.entity_history.iter().find(|(at, _, _)| *at <= t)?;
         let back = (self.level_time - at) as u32;
         let mut world = (**w).clone();
@@ -2325,27 +2346,27 @@ fn spawn_playerstate(
     max_health: i32,
     mode: SpawnMode,
 ) -> PlayerState {
-    let pm_type = match mode {
-        SpawnMode::Player => PM_NORMAL,
-        SpawnMode::Spectator => PM_SPECTATOR,
-        SpawnMode::Intermission => PM_INTERMISSION,
+    let pm = match mode {
+        SpawnMode::Player => pm_type::NORMAL,
+        SpawnMode::Spectator => pm_type::SPECTATOR,
+        SpawnMode::Intermission => pm_type::INTERMISSION,
     };
     let mut ps = PlayerState::default();
     for (word, v) in [
-        ("eFlags", (old.word("eFlags") & 0x10_0002) ^ 0x2),
-        ("clientNum", slot as u32),
-        ("viewlocked_entNum", ENTITYNUM_NONE),
-        ("throwBackGrenadeOwner", ENTITYNUM_NONE),
-        ("viewHeightTarget", 60),
-        ("pm_type", pm_type),
-        ("pm_flags", pmove::pmf::RESPAWNED),
+        (ps!("eFlags"), (old.word(ps!("eFlags")) & 0x10_0002) ^ 0x2),
+        (ps!("clientNum"), slot as u32),
+        (ps!("viewlocked_entNum"), ENTITYNUM_NONE),
+        (ps!("throwBackGrenadeOwner"), ENTITYNUM_NONE),
+        (ps!("viewHeightTarget"), 60),
+        (ps!("pm_type"), pm as u32),
+        (ps!("pm_flags"), pmove::pmf::RESPAWNED),
     ] {
         ps.set(word, v);
     }
     for (word, v) in [
-        ("viewHeightCurrent", 60.0),
-        ("dofNearBlur", 6.0),
-        ("dofFarBlur", 1.8),
+        (ps!("viewHeightCurrent"), 60.0),
+        (ps!("dofNearBlur"), 6.0),
+        (ps!("dofFarBlur"), 1.8),
     ] {
         ps.setf(word, v);
     }
@@ -2367,13 +2388,13 @@ fn place(ps: &mut PlayerState, origin: [f32; 3], angles: [f32; 3], cmd: Option<&
     const SHORT_TO_ANGLE: f64 = -0.005_493_164_062_5;
     let per_turn = f64::from(f32::from_bits(0x3b36_0b61));
     for i in 0..3 {
-        ps.setf(&format!("origin[{i}]"), origin[i]);
+        ps.setf(ps!(3 "origin")[i], origin[i]);
         let cmd_angle = cmd.map_or(0, |c| i32::from(c.angles[i]));
         let turns = (f64::from(cmd_angle) * SHORT_TO_ANGLE + f64::from(angles[i])) * per_turn;
         let whole = f64::from((turns + 0.5).floor() as f32);
         let delta = ((turns - whole) * 360.0) as f32;
-        ps.setf(&format!("delta_angles[{i}]"), delta);
-        ps.setf(&format!("viewangles[{i}]"), angles[i]);
+        ps.setf(ps!(3 "delta_angles")[i], delta);
+        ps.setf(ps!(3 "viewangles")[i], angles[i]);
     }
 }
 
@@ -2391,27 +2412,24 @@ pub(super) fn place_player(
 /// `PM_UpdateViewAngles` sums them.
 fn view_only(ps: &mut PlayerState, cmd: &Cmd) {
     for i in 0..3 {
-        let delta = ps.word(&format!("delta_angles[{i}]"));
+        let delta = ps.word(ps!(3 "delta_angles")[i]);
         let view =
             (f64::from(cmd.angles[i]) * 0.0054931640625 + f64::from(f32::from_bits(delta))) as f32;
-        ps.setf(&format!("viewangles[{i}]"), view);
+        ps.setf(ps!(3 "viewangles")[i], view);
     }
 }
 
 /// The loadout's playerstate fields.
 fn loadout_into(ps: &mut PlayerState, l: &super::weapons::Loadout) {
     for i in 0..4 {
-        ps.set(&format!("weapons[{i}]"), l.weapons[i]);
-        ps.set(&format!("weaponold[{i}]"), l.weaponold[i]);
-        ps.set(
-            &format!("actionSlotType[{i}]"),
-            u32::from(l.action_slot_type[i]),
-        );
-        ps.set(&format!("actionSlotParam[{i}]"), l.action_slot_param[i]);
+        ps.set(ps!(4 "weapons")[i], l.weapons[i]);
+        ps.set(ps!(4 "weaponold")[i], l.weaponold[i]);
+        ps.set(ps!(4 "actionSlotType")[i], u32::from(l.action_slot_type[i]));
+        ps.set(ps!(4 "actionSlotParam")[i], l.action_slot_param[i]);
     }
-    ps.set("weapon", l.weapon as u32);
-    ps.set("offHandIndex", l.offhand as u32);
-    ps.set("offhandSecondary", l.offhand_secondary);
+    ps.set(ps!("weapon"), l.weapon as u32);
+    ps.set(ps!("offHandIndex"), l.offhand as u32);
+    ps.set(ps!("offhandSecondary"), l.offhand_secondary);
     let n = ps.ammo.len();
     ps.ammo.copy_from_slice(&l.ammo[..n]);
     let m = ps.ammoclip.len();
@@ -2422,13 +2440,13 @@ fn loadout_into(ps: &mut PlayerState, l: &super::weapons::Loadout) {
 /// The playerstate clocks an archived frame carries (`commandTime`,
 /// `pm_time`, `foliageSoundTime`, `jumpTime`, `viewHeightLerpTime`,
 /// `shellshockTime`: +0, +0x18, +0x54, +0x80, +0x11c, +0x630).
-const ARCHIVED_CLOCKS: [&str; 6] = [
-    "commandTime",
-    "pm_time",
-    "foliageSoundTime",
-    "jumpTime",
-    "viewHeightLerpTime",
-    "shellshockTime",
+const ARCHIVED_CLOCKS: [usize; 6] = [
+    ps!("commandTime"),
+    ps!("pm_time"),
+    ps!("foliageSoundTime"),
+    ps!("jumpTime"),
+    ps!("viewHeightLerpTime"),
+    ps!("shellshockTime"),
 ];
 
 /// A `hudelem_s`'s words: its type, and the clocks it runs on (`time`
@@ -2462,13 +2480,58 @@ fn shift_archived(ps: &mut PlayerState, back: i32, now: i32) {
             elem.0[HE_FADE_START] = fade.min(now) as u32;
         }
     }
-    let delta = ps.word("deltaTime").wrapping_add(back as u32);
-    ps.set("deltaTime", delta);
+    let delta = ps.word(ps!("deltaTime")).wrapping_add(back as u32);
+    ps.set(ps!("deltaTime"), delta);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `SetClientViewAngle`'s `delta_angles`: the spot's view less the last
+    /// cmd's, wrapped to -180..180 on the turns; the view itself as given.
+    #[test]
+    fn a_placed_view_keeps_the_cmd_s_angles_out_of_delta_angles() {
+        let cmd = |yaw: u16| UserCmd {
+            angles: [0, yaw, 0],
+            ..UserCmd::default()
+        };
+        let delta = |angles: [f32; 3], c: Option<&UserCmd>| {
+            let mut ps = PlayerState::default();
+            place(&mut ps, [1.0, 2.0, 3.0], angles, c);
+            assert_eq!(f32::from_bits(ps.word(ps!(3 "origin")[0])), 1.0);
+            assert_eq!(f32::from_bits(ps.word(ps!(3 "viewangles")[1])), angles[1]);
+            f32::from_bits(ps.word(ps!(3 "delta_angles")[1]))
+        };
+        assert_eq!(delta([0.0, 65.0, 0.0], None), 65.0);
+        assert_eq!(delta([0.0, 65.0, 0.0], Some(&cmd(0x4000))), -25.0);
+        assert_eq!(delta([0.0, 200.0, 0.0], None), -160.0);
+        assert_eq!(delta([0.0, 10.0, 0.0], Some(&cmd(60_000))), 40.41015);
+    }
+
+    /// A spawn keeps of the old playerstate only `eFlags` 0x100002 (0x2
+    /// flipped) and the spawn count, stepped; the rest is the fresh
+    /// player's (cod4-gsc.md 7).
+    #[test]
+    fn a_spawn_keeps_only_the_eflags_bits_and_the_spawn_count() {
+        let mut old = PlayerState::default();
+        old.set(ps!("eFlags"), 0x10_0006);
+        old.set(ps!("commandTime"), 5000);
+        old.stats[4] = 3;
+        let ps = spawn_playerstate(&old, 7, 100, SpawnMode::Player);
+        assert_eq!(ps.word(ps!("eFlags")), 0x10_0000);
+        assert_eq!(ps.word(ps!("commandTime")), 0);
+        assert_eq!(ps.word(ps!("clientNum")), 7);
+        assert_eq!(ps.pm_type(), pm_type::NORMAL);
+        assert_eq!(ps.word(ps!("pm_flags")), pmove::pmf::RESPAWNED);
+        assert_eq!(ps.word(ps!("viewlocked_entNum")), ENTITYNUM_NONE);
+        assert_eq!(f32::from_bits(ps.word(ps!("viewHeightCurrent"))), 60.0);
+        assert_eq!((ps.stats[2], ps.stats[4]), (100, 4));
+        old.set(ps!("eFlags"), 0x4);
+        let ps = spawn_playerstate(&old, 7, 100, SpawnMode::Spectator);
+        assert_eq!(ps.word(ps!("eFlags")), 0x2);
+        assert_eq!(ps.pm_type(), pm_type::SPECTATOR);
+    }
 
     /// The killcam's shift: the six playerstate clocks and the archival
     /// hudelems' four move up by the look back only where set, a fade's
@@ -2477,11 +2540,11 @@ mod tests {
     #[test]
     fn an_archived_playerstate_moves_its_clocks_up_by_the_look_back() {
         let mut ps = PlayerState::default();
-        ps.set("commandTime", 46_900);
-        ps.set("pm_time", 0);
-        ps.set("jumpTime", 46_000);
-        ps.set("shellshockTime", 45_000);
-        ps.set("deltaTime", 100);
+        ps.set(ps!("commandTime"), 46_900);
+        ps.set(ps!("pm_time"), 0);
+        ps.set(ps!("jumpTime"), 46_000);
+        ps.set(ps!("shellshockTime"), 45_000);
+        ps.set(ps!("deltaTime"), 100);
         ps.hud_archival[0].0[0] = 1;
         ps.hud_archival[0].0[11] = 46_950;
         ps.hud_archival[0].0[28] = 40_000;
@@ -2492,12 +2555,12 @@ mod tests {
         ps.hud_archival[3].0[0] = 1;
         ps.hud_archival[3].0[28] = 1_000;
         shift_archived(&mut ps, 3_100, 50_000);
-        assert_eq!(ps.word("commandTime"), 50_000);
-        assert_eq!(ps.word("pm_time"), 0);
-        assert_eq!(ps.word("jumpTime"), 49_100);
-        assert_eq!(ps.word("shellshockTime"), 48_100);
-        assert_eq!(ps.word("foliageSoundTime"), 0);
-        assert_eq!(ps.word("deltaTime"), 3_200);
+        assert_eq!(ps.word(ps!("commandTime")), 50_000);
+        assert_eq!(ps.word(ps!("pm_time")), 0);
+        assert_eq!(ps.word(ps!("jumpTime")), 49_100);
+        assert_eq!(ps.word(ps!("shellshockTime")), 48_100);
+        assert_eq!(ps.word(ps!("foliageSoundTime")), 0);
+        assert_eq!(ps.word(ps!("deltaTime")), 3_200);
         let h = &ps.hud_archival;
         assert_eq!((h[0].0[11], h[0].0[28], h[0].0[20]), (50_000, 43_100, 0));
         assert_eq!(
@@ -2516,9 +2579,9 @@ mod tests {
         let mut ps = PlayerState::default();
         let mut ring = BodyEvents::default();
         let fire = |ps: &mut PlayerState, seq: u32, event: u32, parm: u32| {
-            ps.set(&format!("events[{}]", seq & 3), event);
-            ps.set(&format!("eventParms[{}]", seq & 3), parm);
-            ps.set("eventSequence", seq + 1);
+            ps.set(ps!(4 "events")[(seq & 3) as usize], event);
+            ps.set(ps!(4 "eventParms")[(seq & 3) as usize], parm);
+            ps.set(ps!("eventSequence"), seq + 1);
         };
         fire(&mut ps, 0, 25, 0x1ff);
         fire(&mut ps, 1, 31, 7);
@@ -2538,7 +2601,7 @@ mod tests {
         assert_eq!(ring.events, [55, 52, 53, 54]);
         assert_eq!(ring.parms, [5, 2, 3, 4]);
         // A sequence behind the ring's (a fresh playerstate): nothing.
-        ps.set("eventSequence", 2);
+        ps.set(ps!("eventSequence"), 2);
         ring.take(&ps);
         assert_eq!((ring.taken, ring.seq), (2, 5));
         // The ring's sequence wraps at 256.
@@ -2584,24 +2647,24 @@ mod tests {
         level.rt.set_client_team_for_test(slot, team);
         let p = level.players[slot].as_mut().unwrap();
         if state == "playing" {
-            p.ps.set("otherFlags", POF_PLAYER);
-            p.ps.set("eFlags", 0x22);
-            p.ps.set("clientNum", slot as u32);
+            p.ps.set(ps!("otherFlags"), POF_PLAYER);
+            p.ps.set(ps!("eFlags"), 0x22);
+            p.ps.set(ps!("clientNum"), slot as u32);
         }
-        level.archive[slot] = Some(p.ps.clone());
+        level.archive[slot] = Some(Rc::new(p.ps.clone()));
     }
 
     /// What a spectator's end frame leaves: `otherFlags`, the slot
     /// followed, the playerstate's `clientNum` and `eFlags`.
     fn watch(level: &mut Cod4Level, slot: usize, refused: u8) -> (u32, i32, u32, u32) {
-        level.rt.host.client_no_spectate[slot] = refused;
+        level.rt.host.clients[slot].no_spectate = refused;
         level.spectator_end_frame(slot);
         let p = level.players[slot].as_ref().unwrap();
         (
-            p.ps.word("otherFlags"),
+            p.ps.word(ps!("otherFlags")),
             p.spectator_client,
-            p.ps.word("clientNum"),
-            p.ps.word("eFlags"),
+            p.ps.word(ps!("clientNum")),
+            p.ps.word(ps!("eFlags")),
         )
     }
 
@@ -2621,14 +2684,14 @@ mod tests {
             .as_mut()
             .unwrap()
             .ps
-            .set("eFlags", 0x10_0000);
+            .set(ps!("eFlags"), 0x10_0000);
         assert_eq!(watch(&mut level, 0, 0), (8, -1, 0, 0x10_0000));
         assert_eq!(watch(&mut level, 0, 0x17), (0, -1, 0, 0x10_0000));
         assert_eq!(watch(&mut level, 0, 0x10), (8, -1, 0, 0x10_0000));
         assert_eq!(watch(&mut level, 0, 0x16), (8, -1, 0, 0x10_0000));
         let ps = &level.players[0].as_ref().unwrap().ps;
-        assert_eq!(ps.word("viewmodelIndex"), 0);
-        assert_eq!(ps.word("pm_type"), PM_SPECTATOR);
+        assert_eq!(ps.word(ps!("viewmodelIndex")), 0);
+        assert_eq!(ps.pm_type(), pm_type::SPECTATOR);
     }
 
     /// Refused free flight follows the first playing client of a team it
@@ -2647,7 +2710,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .ps
-            .set("eFlags", 0x10_0000);
+            .set(ps!("eFlags"), 0x10_0000);
         // Allies refused: the axis player.
         assert_eq!(watch(&mut level, 0, 0x14), (0xa, 2, 2, 0x10_0022));
         // Still following, now free flight is allowed.
@@ -2656,8 +2719,8 @@ mod tests {
         let (of, followed, num, _) = watch(&mut level, 0, 0x16);
         assert_eq!((of, followed, num), (8, -1, 0));
         assert_eq!(
-            level.players[0].as_ref().unwrap().ps.word("pm_type"),
-            PM_SPECTATOR
+            level.players[0].as_ref().unwrap().ps.pm_type(),
+            pm_type::SPECTATOR
         );
         // Every team allowed, free flight refused: the allies player first.
         assert_eq!(watch(&mut level, 0, 0x10), (0xa, 1, 1, 0x10_0022));
@@ -2673,8 +2736,8 @@ mod tests {
         put(&mut level, 0, "spectator", "spectator");
         put(&mut level, 1, "playing", "allies");
         put(&mut level, 2, "playing", "axis");
-        let all = |_: u32| true;
-        let cycle = |level: &mut Cod4Level, from: i32, dir: i32, can: &dyn Fn(u32) -> bool| {
+        let all = |_: i32| true;
+        let cycle = |level: &mut Cod4Level, from: i32, dir: i32, can: &dyn Fn(i32) -> bool| {
             level.players[0].as_mut().unwrap().spectator_client = from;
             level.follow_cycle(0, dir, can)
         };
@@ -2683,9 +2746,9 @@ mod tests {
         assert_eq!(cycle(&mut level, 2, 1, &all), Some(1));
         assert_eq!(cycle(&mut level, 1, -1, &all), Some(2));
         assert_eq!(cycle(&mut level, 2, -1, &all), Some(1));
-        let no_axis = |t: u32| t != TEAM_AXIS;
+        let no_axis = |t: i32| t != TEAM_AXIS;
         assert_eq!(cycle(&mut level, 1, 1, &no_axis), Some(1));
-        let none = |_: u32| false;
+        let none = |_: i32| false;
         assert_eq!(cycle(&mut level, 1, 1, &none), None);
     }
 }

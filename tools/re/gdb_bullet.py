@@ -7,8 +7,8 @@
 #   GDB_OUT=<file> gdb -q -batch -ex 'source tools/re/gdb_bullet.py' \
 #       -ex run --args <cod_lnxded> ...
 #
-# Run it as `COD_LNXDED` for tools/run_probe.sh through a wrapper that runs
-# gdb with these arguments.
+# tools/run_probe.sh and tools/run_server.sh run the server this way under
+# `GDB_PY=tools/re/gdb_bullet.py`.
 import gdb, struct, os
 out = open(os.environ['GDB_OUT'], 'w')
 st = {'base': None}

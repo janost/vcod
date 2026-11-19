@@ -9,7 +9,7 @@ mod brushtree;
 pub use brushtree::{BrushBox, BrushNode, BrushTree, partition_brushes};
 pub use vcod_common::clipmap::{CollAabbTree, CollBorder, CollPartition, CollTri};
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use glam::{Vec2, Vec3};
 
 /// `IBSP`.
@@ -922,13 +922,18 @@ impl D3dBsp {
                 t.child_count
             );
         }
+        let sizes = self.aabb_subtree_sizes();
         for (i, c) in self.cells.iter().enumerate() {
             ensure!(
                 index_ok(c.first_aabb_tree as i64, self.aabb_trees.len()),
                 "cell {i}: aabb tree {} out of range",
                 c.first_aabb_tree
             );
-            self.aabb_tree_size(c.first_aabb_tree as usize)?;
+            ensure!(
+                sizes[c.first_aabb_tree as usize].is_some(),
+                "cell {i}: aabb tree walk from {} leaves lump 22",
+                c.first_aabb_tree
+            );
             ensure!(
                 run_ok(
                     c.first_portal as i64,
@@ -975,6 +980,11 @@ impl D3dBsp {
                 n.plane
             );
             for &c in &n.children {
+                // `CMod_LoadNodes` keeps each child as an `i16`.
+                ensure!(
+                    i16::try_from(c).is_ok(),
+                    "CMod_LoadNodes: children exceeded: node {i} child {c}"
+                );
                 let ok = if c < 0 {
                     index_ok(-(c as i64 + 1), self.leafs.len())
                 } else {
@@ -983,8 +993,29 @@ impl D3dBsp {
                 ensure!(ok, "node {i}: child {c} out of range");
             }
         }
+        vcod_common::treecheck::check_bsp(self.nodes.len(), self.leafs.len(), |n| {
+            self.nodes[n].children
+        })
+        .context("bsp nodes")?;
         let clusters = self.visibility.as_ref().map(|v| v.cluster_count as i64);
         for (i, l) in self.leafs.iter().enumerate() {
+            // `CMod_LoadLeafs` keeps the cluster as an `i16` and the
+            // collision AABB run as two `u16` words.
+            ensure!(
+                i16::try_from(l.cluster).is_ok(),
+                "cluster exceeded: leaf {i} cluster {}",
+                l.cluster
+            );
+            ensure!(
+                u16::try_from(l.first_coll_aabb).is_ok(),
+                "firstCollAabbIndex exceeded: leaf {i} {}",
+                l.first_coll_aabb
+            );
+            ensure!(
+                u16::try_from(l.coll_aabb_count).is_ok(),
+                "collAabbCount exceeded: leaf {i} {}",
+                l.coll_aabb_count
+            );
             ensure!(
                 l.cluster >= -1 && clusters.is_none_or(|n| (l.cluster as i64) < n.max(1)),
                 "leaf {i}: cluster {} out of range",
@@ -1073,6 +1104,12 @@ impl D3dBsp {
                 );
             }
         }
+        vcod_common::treecheck::check_forest(self.coll_aabb_trees.len(), |n| {
+            let a = &self.coll_aabb_trees[n];
+            let first = i64::from(a.child_or_partition);
+            first..first + i64::from(a.child_count)
+        })
+        .context("collision aabb trees")?;
 
         // Models.
         for (i, m) in self.models.iter().enumerate() {
@@ -1104,30 +1141,24 @@ impl D3dBsp {
         Ok(())
     }
 
-    /// Nodes in the render AABB tree rooted at `root`, walked in preorder
-    /// (children follow their parent back to back), or an error when the
-    /// walk leaves lump 22.
-    pub fn aabb_tree_size(&self, root: usize) -> Result<usize> {
-        // Explicit stack: (node, children left to walk).
-        let mut next = root;
-        let mut pending = vec![1usize];
-        while let Some(left) = pending.last_mut() {
-            if *left == 0 {
-                pending.pop();
-                continue;
+    /// The size of the render AABB subtree at every node of lump 22, walked
+    /// in preorder (children follow their parent back to back), `None`
+    /// where the walk leaves the lump. One pass from the end: a walk per
+    /// cell is quadratic when the cells share one tree.
+    fn aabb_subtree_sizes(&self) -> Vec<Option<usize>> {
+        let n = self.aabb_trees.len();
+        let mut sizes = vec![None; n];
+        for i in (0..n).rev() {
+            let mut next = Some(i + 1);
+            for _ in 0..self.aabb_trees[i].child_count.max(0) {
+                next = next.and_then(|j| Some(j + sizes.get(j).copied().flatten()?));
+                if next.is_none() {
+                    break;
+                }
             }
-            *left -= 1;
-            let Some(t) = self.aabb_trees.get(next) else {
-                bail!("aabb tree walk from {root} leaves lump 22 at {next}");
-            };
-            next += 1;
-            // Each push follows a visited node, so the stack stays under
-            // the lump's length.
-            if t.child_count > 0 {
-                pending.push(t.child_count as usize);
-            }
+            sizes[i] = next.map(|j| j - i);
         }
-        Ok(next - root)
+        sizes
     }
 
     /// The bounds the axial sides give brush `i` and its runtime contents
@@ -1145,55 +1176,6 @@ impl D3dBsp {
     /// Every brush's [`brush_box`](Self::brush_box), by brush number.
     pub fn brush_boxes(&self) -> Vec<BrushBox> {
         (0..self.brushes.len()).map(|i| self.brush_box(i)).collect()
-    }
-
-    /// `CMod_LoadBrushRelated`'s leaf pass (0x08053c84): every leaf's brush
-    /// tree, built leaf by leaf on one shared copy of lump 27 as retail
-    /// rewrites it in place. Returns that rewritten list (one spare slot at
-    /// the end, as the loader allocates it) and each leaf's tree, `None` for
-    /// a leaf with no brushes. A tree's [`BrushNode::Leaf`] runs index the
-    /// returned list.
-    pub fn leaf_brush_trees(&self) -> Result<(Vec<u16>, Vec<Option<BrushTree>>)> {
-        let boxes = self.brush_boxes();
-        let mut list: Vec<u16> = self.leaf_brushes.iter().map(|&b| b as u16).collect();
-        list.push(0);
-        let mut trees = Vec::with_capacity(self.leafs.len());
-        for (i, l) in self.leafs.iter().enumerate() {
-            if l.leaf_brush_count == 0 {
-                trees.push(None);
-                continue;
-            }
-            let tree = partition_brushes(
-                &boxes,
-                &mut list,
-                l.first_leaf_brush as usize,
-                l.leaf_brush_count as usize,
-            )
-            .map_err(|e| e.context(format!("leaf {i}")))?;
-            trees.push(Some(tree));
-        }
-        Ok((list, trees))
-    }
-
-    /// `CMod_LoadSubmodelBrushNodes` (0x08053404): model `m`'s brush tree
-    /// over its own `first_brush .. first_brush + brush_count`, with the
-    /// list it rewrote. `None` for a model with no brushes.
-    pub fn model_brush_tree(&self, m: usize) -> Result<Option<(Vec<u16>, BrushTree)>> {
-        let model = &self.models[m];
-        if model.brush_count == 0 {
-            return Ok(None);
-        }
-        let mut list: Vec<u16> = (model.first_brush..model.first_brush + model.brush_count)
-            .map(|b| b as u16)
-            .collect();
-        let tree = partition_brushes(
-            &self.brush_boxes(),
-            &mut list,
-            0,
-            model.brush_count as usize,
-        )
-        .map_err(|e| e.context(format!("model {m}")))?;
-        Ok(Some((list, tree)))
     }
 }
 

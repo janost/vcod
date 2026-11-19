@@ -1,277 +1,188 @@
-//! The ladder: `PM_CheckLadderMove`, `PM_LadderMove`, the jump's push-off,
-//! the yaw cap of `PM_UpdateViewAngles` and the rung footstep of
-//! `PM_FootstepEvent`, CoD2's (docs/research/cod2-movement.md 11) as 1.7
-//! keeps them (cod4-pmove.md 7).
+//! The ladder on CoD4 1.7: [`vcod_common::pmladder`] over [`Pmove`] with
+//! the kept helpers `cod4_lnxded` calls (cod4-pmove.md 7, 8 and 9).
 
 use glam::Vec3;
+use vcod_common::pmladder::{LadderHit, LadderPm};
+pub(crate) use vcod_common::pmladder::{
+    cap_yaw, check_ladder_move, ladder_move, push_off, rung_footstep,
+};
 
 use super::fpu::{self, d};
 use super::moves::{accelerate, air_move, free_scale, jump_check};
 use super::slide::step_slide_move;
-use super::{ENTITYNUM_NONE, Pml, Pmove, Stance, ev, leave_ladder, pm_type, pmf};
-use crate::collision::{CONTENTS_BODY, CONTENTS_PLAYERCLIP, SURF_LADDER};
+use super::{PlayerState, Pml, Pmove, Tr, ev};
 
-/// shrink a side.
-const PROBE_SHRINK: f32 = 6.0;
-/// The probe box's floor (an immediate).
-const PROBE_FLOOR: f32 = 8.0;
-/// The reach walking and airborne (immediates 0x41000000, 0x41f00000).
-const REACH_WALK: f32 = 8.0;
-const REACH_AIR: f32 = 30.0;
-const UP_BIAS: f32 = 0.25;
-const UP_GAIN: f32 = 2.5;
-const CLIMB_SCALE: f32 = 0.5;
-const STRAFE_SCALE: f32 = f32::from_bits(0x3e4c_cccd);
-/// The accelerate's rate (immediate 0x41100000).
-const ACCEL: f32 = 9.0;
-const SIDE_FRICTION: f32 = 16.0;
-/// The airborne press into the ladder (immediate 0xc2480000).
-const PRESS: f32 = -50.0;
-/// its normal turned round.
-const TURN: f32 = 180.0;
-/// `movementDir`'s cap on the ladder (immediate 0x4b).
-const MOVEMENT_DIR_CAP: i32 = 75;
-const PUSH_OFF_VZ: f32 = 0.75;
-const REFLECT: f32 = -2.0;
-/// The rung footstep's reach into the ladder (immediate 0xc1f80000).
-const RUNG_REACH: f32 = -31.0;
-/// The rung footstep with no material under the probe (immediate 0x15).
-const RUNG_DEFAULT_SURFACE: u32 = 0x15;
+impl LadderPm for Pmove<'_> {
+    type Ps = PlayerState;
+    type Tr = Tr;
 
-/// The probe box: the cmd's box shrunk 6 a side, its floor at 8 and its top
-/// at least 8.
-fn probe_box(pm: &Pmove) -> (Vec3, Vec3) {
-    let mut mins = pm.mins;
-    mins.x += PROBE_SHRINK;
-    mins.y += PROBE_SHRINK;
-    mins.z = PROBE_FLOOR;
-    let mut maxs = pm.maxs;
-    maxs.x -= PROBE_SHRINK;
-    maxs.y -= PROBE_SHRINK;
-    if maxs.z < mins.z {
-        maxs.z = mins.z;
-    }
-    (mins, maxs)
-}
+    const PRESS_NEEDS_MOTION: bool = true;
 
-/// `PM_CheckLadderMove`: on the ground the flat view must meet a ladder
-/// surface within 8 with a forward key held; in the air within 30, along
-/// `-vLadderVec` once on one. A fresh grab takes the struck normal as
-/// `vLadderVec` and must meet the ladder again along it. Skipped while a
-/// land or knockback timer runs off the ladder; refused prone, dead, within
-/// 300 ms of a jump and until a walking frame after leaving one.
-pub(crate) fn check_ladder_move(pm: &mut Pmove, pml: &mut Pml) {
-    if pml.walking {
-        pm.ps.pm_flags &= !pmf::LADDER_LEFT;
+    fn ps(&mut self) -> &mut PlayerState {
+        self.ps
     }
-    let flags = pm.ps.pm_flags;
-    if pm.ps.pm_time != 0
-        && flags & pmf::LADDER == 0
-        && flags & (pmf::TIME_LAND | pmf::TIME_KNOCKBACK) != 0
-    {
-        return;
+    fn bounds(&self) -> (Vec3, Vec3) {
+        (self.mins, self.maxs)
     }
-    let reach = if pml.walking { REACH_WALK } else { REACH_AIR };
-    let stick = flags & pmf::LADDER != 0 && pm.ps.ground_entity_num == ENTITYNUM_NONE;
-    let dir = if stick {
-        -pm.ps.ladder_vec
-    } else {
-        fpu::normalize(Vec3::new(pml.forward.x, pml.forward.y, 0.0)).0
-    };
-    if pm.ps.pm_type >= pm_type::DEAD {
-        pm.ps.ground_entity_num = ENTITYNUM_NONE;
-        pml.ground_plane = false;
-        pml.almost_ground_plane = false;
-        pml.walking = false;
-        leave_ladder(pm.ps);
-        return;
+    fn tracemask(&self) -> u32 {
+        self.tracemask
     }
-    if flags & pmf::LADDER_LEFT != 0
-        || pm.ps.effective_stance() == Stance::Prone
-        || pm.cmd.server_time - pm.ps.jump_time < 300
-    {
-        leave_ladder(pm.ps);
-        return;
+    fn cmd(&self) -> (i32, i8, i8) {
+        (
+            self.cmd.server_time,
+            self.cmd.forward_move,
+            self.cmd.right_move,
+        )
     }
-    let (mins, maxs) = probe_box(pm);
-    let origin = pm.ps.origin;
-    let mask = pm.tracemask;
-    let t = pm.trace_box(origin, fpu::ma(origin, reach, dir), mins, maxs, mask);
-    let ladder = |t: &super::Tr| t.fraction < 1.0 && t.surface_flags & SURF_LADDER != 0;
-    if ladder(&t) && (!pml.walking || pm.cmd.forward_move > 0) {
-        if flags & pmf::LADDER != 0 {
-            pm.ps.pm_flags |= pmf::LADDER;
-            return;
-        }
-        pm.ps.ladder_vec = t.normal;
-        let back = -pm.ps.ladder_vec;
-        let t = pm.trace_box(origin, fpu::ma(origin, reach, back), mins, maxs, mask);
-        if ladder(&t) {
-            pm.ps.pm_flags |= pmf::LADDER;
-            return;
+    fn ladder_yawcap(&self) -> f32 {
+        self.rules.ladder_yawcap
+    }
+    fn ladder_push_vel(&self) -> f32 {
+        self.rules.jump_ladder_push_vel
+    }
+    fn ladder_trace(
+        &mut self,
+        start: Vec3,
+        end: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+        mask: u32,
+    ) -> LadderHit {
+        let t = self.trace_box(start, end, mins, maxs, mask);
+        LadderHit {
+            fraction: t.fraction,
+            normal: t.normal,
+            surface_flags: t.surface_flags,
         }
     }
-    leave_ladder(pm.ps);
+
+    fn jump_check(&mut self, pml: &mut Pml) -> bool {
+        jump_check(self, pml)
+    }
+    fn air_move(&mut self, pml: &mut Pml) {
+        air_move(self, pml)
+    }
+    fn accelerate(&mut self, pml: &Pml, wishdir: Vec3, wishspeed: f32, accel: f32) {
+        accelerate(self, pml, wishdir, wishspeed, accel)
+    }
+    fn step_slide_move(&mut self, pml: &mut Pml) {
+        step_slide_move(self, pml, false)
+    }
+    fn jump_anim(&mut self) {
+        super::anim::event(self, super::anim::Event::Jump, false, true)
+    }
+
+    fn cmd_scale(&mut self, fm: i8, rm: i8) -> f64 {
+        free_scale(self.ps, &self.rules, &[f32::from(fm), f32::from(rm)])
+    }
+    fn push_delta_yaw(&mut self, excess: f32) {
+        self.ps.delta_angles[1] = (d(self.ps.delta_angles[1]) + d(excess)) as f32;
+    }
+    fn rung_event(&mut self, surf: u32) {
+        self.ps.add_event(ev::FOOTSTEP_RUN, surf)
+    }
+
+    fn normalize(v: Vec3) -> (Vec3, f32) {
+        fpu::normalize(v)
+    }
+    fn normalize_to(v: Vec3) -> (Vec3, f32) {
+        fpu::normalize_to(v)
+    }
+    fn vectoyaw(v: Vec3) -> f32 {
+        fpu::vectoyaw(v)
+    }
+    fn angle_delta(a: f32, b: f32) -> f32 {
+        fpu::angle_delta(a, b)
+    }
+    fn angle_normalize360(a: f32) -> f32 {
+        fpu::angle_normalize360(a)
+    }
 }
 
-/// `PM_LadderMove`: a jump pushes off through the air move; else the climb
-/// `forwardmove * 0.5 * clamp((forward.z + 0.25) * 2.5, -1, 1)` up and the
-/// strafe `rightmove * 0.2` along the flat right laid on the ladder's
-/// plane, both times the 2-axis cmd scale, through the ladder's
-/// accelerate; vz bled by gravity with no forward key, the sideways
-/// velocity bled 16/s with no strafe key, and in the air the velocity into
-/// the ladder taken away and a 50 press into it while the flat speed is no
-/// more than the vertical. `movementDir` faces the ladder, capped at 75.
-pub(crate) fn ladder_move(pm: &mut Pmove, pml: &mut Pml) {
-    if jump_check(pm, pml) {
-        air_move(pm, pml);
-        return;
-    }
-    let up = ((d(UP_GAIN) * (d(UP_BIAS) + d(pml.forward.z))) as f32).clamp(-1.0, 1.0);
-    pml.forward.z = 0.0;
-    pml.forward = fpu::normalize(pml.forward).0;
-    pml.right.z = 0.0;
-    let right = fpu::normalize_to(pml.right).0;
-    // `ProjectPointOnPlane`: the dot cast to a float.
-    let n = pm.ps.ladder_vec;
-    pml.right = fpu::ma(right, -(fpu::dot(n, right) as f32), n);
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
 
-    let (fm, rm) = (pm.cmd.forward_move, pm.cmd.right_move);
-    let scale = free_scale(pm.ps, &pm.rules, &[f32::from(fm), f32::from(rm)]);
-    let mut wishvel = Vec3::ZERO;
-    if fm != 0 {
-        wishvel.z = (f64::from(fm) * d(CLIMB_SCALE) * d(up) * scale) as f32;
-    }
-    if rm != 0 {
-        let s = (f64::from(rm) * d(STRAFE_SCALE) * scale) as f32;
-        wishvel = fpu::ma(wishvel, s, pml.right);
-    }
-    let (wishdir, wishspeed) = fpu::normalize_to(wishvel);
-    accelerate(pm, pml, wishdir, wishspeed, ACCEL);
+    use glam::Vec3;
+    use vcod_common::animtree::PlayerAnims;
+    use vcod_common::asset_source::{AssetCache, AssetSource};
+    use vcod_common::game::Game;
 
-    let ps = &mut *pm.ps;
-    if fm == 0 {
-        let g = f64::from(ps.gravity as f32) * d(pml.frametime);
-        if ps.velocity.z > 0.0 {
-            ps.velocity.z = (d(ps.velocity.z) - g) as f32;
-            if ps.velocity.z < 0.0 {
-                ps.velocity.z = 0.0;
-            }
-        } else {
-            ps.velocity.z = (d(ps.velocity.z) + g) as f32;
-            if ps.velocity.z > 0.0 {
-                ps.velocity.z = 0.0;
-            }
+    use super::super::anim::{ANIM_TOGGLEBIT, AnimInput};
+    use super::super::{Cmd, ENTITYNUM_NONE, PlayerState, PmWorld, Pmove, Rules, Tr, pmf, pmove};
+
+    /// The player tree and script as loose text.
+    struct Text(HashMap<&'static str, &'static str>, AssetCache);
+
+    impl AssetSource for Text {
+        fn game(&self) -> Game {
+            Game::Cod4
+        }
+        fn read(&self, path: &str) -> Option<Vec<u8>> {
+            self.0.get(path).map(|s| s.as_bytes().to_vec())
+        }
+        fn exists(&self, path: &str) -> bool {
+            self.0.contains_key(path)
+        }
+        fn list(&self, _: &str, _: &str) -> Vec<String> {
+            Vec::new()
+        }
+        fn cache(&self) -> &AssetCache {
+            &self.1
         }
     }
-    if rm == 0 {
-        let (sx, sy) = fpu::normalize2(pml.right.x, pml.right.y);
-        let side = Vec3::new(sx, sy, 0.0);
-        let along = fpu::dot2(side, ps.velocity) as f32;
-        if along != 0.0 {
-            ps.velocity = ma2(ps.velocity, -along, side);
-            let mut drop = (d(SIDE_FRICTION) * d(along) * d(pml.frametime)) as f32;
-            if drop.abs() < along.abs() {
-                if drop.abs() < 1.0 {
-                    drop = if drop.is_sign_negative() { -1.0 } else { 1.0 };
-                }
-                ps.velocity = ma2(ps.velocity, along - drop, side);
-            }
+
+    /// Nothing to meet: every trace runs its full length.
+    struct Open;
+
+    impl PmWorld for Open {
+        fn trace(&self, _: Vec3, _: Vec3, _: Vec3, _: Vec3, _: u32, _: u32) -> Tr {
+            Tr::default()
         }
     }
-    if !pml.walking {
-        let into = fpu::dot2(n, ps.velocity) as f32;
-        ps.velocity = ma2(ps.velocity, -into, n);
-        let flat = fpu::dot2(ps.velocity, ps.velocity) as f32;
-        if ps.velocity != Vec3::ZERO && f64::from(flat) <= d(ps.velocity.z) * d(ps.velocity.z) {
-            ps.velocity = ma2(ps.velocity, PRESS, n);
-        }
-    }
-    step_slide_move(pm, pml, false);
-    let ps = &mut *pm.ps;
-    let facing = (d(TURN) + d(fpu::vectoyaw(ps.ladder_vec))) as f32;
-    let a = fpu::angle_delta(facing, ps.view_angles[1]) as i32;
-    let a = if a.abs() > MOVEMENT_DIR_CAP {
-        if a < 1 {
-            -MOVEMENT_DIR_CAP
-        } else {
-            MOVEMENT_DIR_CAP
-        }
-    } else {
-        a
-    };
-    ps.movement_dir = a as i8 as i32;
-}
 
-/// The two-axis `VectorMA`: x and y only, each stored.
-fn ma2(a: Vec3, s: f32, b: Vec3) -> Vec3 {
-    Vec3::new(
-        (d(a.x) + d(s) * d(b.x)) as f32,
-        (d(a.y) + d(s) * d(b.y)) as f32,
-        a.z,
-    )
-}
-
-/// The push-off, after the jump's takeoff on a ladder: vz
-/// x0.75, and the flat view, reflected off `vLadderVec` when it faces into
-/// it, times `jump_ladderPushVel`; the ladder flag cleared without the
-/// left-ladder mark.
-pub(crate) fn push_off(pm: &mut Pmove, pml: &Pml) {
-    let ps = &mut *pm.ps;
-    ps.velocity.z = (d(PUSH_OFF_VZ) * d(ps.velocity.z)) as f32;
-    let flat = fpu::normalize(Vec3::new(pml.forward.x, pml.forward.y, 0.0)).0;
-    let n = ps.ladder_vec;
-    let dir = if (fpu::dot(n, pml.forward) as f32) < 0.0 {
-        let k = (d(REFLECT) * d(fpu::dot(flat, n) as f32)) as f32;
-        fpu::normalize(fpu::ma(flat, k, n)).0
-    } else {
-        flat
-    };
-    let push = pm.rules.jump_ladder_push_vel;
-    ps.velocity.x = (d(push) * d(dir.x)) as f32;
-    ps.velocity.y = (d(push) * d(dir.y)) as f32;
-    ps.pm_flags &= !pmf::LADDER;
-}
-
-/// The ladder arm of `PM_UpdateViewAngles`: on a ladder off
-/// the ground, a view more than `bg_ladder_yawcap` off the ladder's facing
-/// is pushed back to the cap through `delta_angles`.
-pub(crate) fn cap_yaw(pm: &mut Pmove) {
-    let cap = pm.rules.ladder_yawcap;
-    let ps = &mut *pm.ps;
-    if ps.pm_flags & pmf::LADDER == 0 || ps.ground_entity_num != ENTITYNUM_NONE || cap == 0.0 {
-        return;
+    /// A body held on the rungs in the air whose probe meets no ladder
+    /// lets go and raises the jump anim, forced past the legs' timer
+    /// (cod4-pmove.md 7, 0x805a0a7..0x805a0cc).
+    #[test]
+    fn letting_go_in_the_air_forces_the_jump_anim() {
+        let fs = Text(
+            HashMap::from([
+                ("animtrees/multiplayer.atr", "main { legs { pb_letgo } }"),
+                (
+                    "mp/playeranim.script",
+                    "ANIMATIONS\nSTATE COMBAT\n{\n}\nEVENTS\njump\n{\n\tdefault\n\t{\n\t\tlegs pb_letgo duration 300\n\t}\n}\n",
+                ),
+            ]),
+            AssetCache::default(),
+        );
+        let anims = PlayerAnims::load(&fs).unwrap();
+        let letgo = anims.wire_of("pb_letgo").unwrap() as u32;
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 64.0), 0.0, 1000);
+        ps.pm_flags |= pmf::LADDER;
+        ps.ground_entity_num = ENTITYNUM_NONE;
+        ps.ladder_vec = Vec3::NEG_X;
+        ps.legs_timer = 500;
+        let cmd = Cmd {
+            server_time: 1050,
+            ..Default::default()
+        };
+        let old = Cmd {
+            server_time: 1000,
+            ..Default::default()
+        };
+        let mut pm = Pmove::new(&mut ps, cmd, old, &Open, Rules::default());
+        pm.anim = Some(AnimInput {
+            anims: &anims,
+            player_anim_type: 0,
+            weapon_class: 0,
+        });
+        pmove(&mut pm);
+        assert_eq!(
+            ps.pm_flags & (pmf::LADDER | pmf::LADDER_LEFT),
+            pmf::LADDER_LEFT
+        );
+        assert_eq!(ps.legs_anim & !ANIM_TOGGLEBIT, letgo);
+        assert_eq!(ps.legs_timer, 350);
     }
-    let facing = (d(TURN) + d(fpu::vectoyaw(ps.ladder_vec))) as f32;
-    let mut delta = fpu::angle_delta(facing, ps.view_angles[1]);
-    if delta <= cap && delta >= -cap {
-        return;
-    }
-    delta = if delta > cap {
-        delta - cap
-    } else {
-        delta + cap
-    };
-    ps.delta_angles[1] = (d(ps.delta_angles[1]) + d(delta)) as f32;
-    ps.view_angles[1] = fpu::angle_normalize360(if delta > 0.0 {
-        facing - cap
-    } else {
-        facing + cap
-    });
-}
-
-/// `PM_FootstepEvent`'s airborne arm: on a ladder, the footstep of the
-/// material 31 into it (the probe box, no bodies, no player clip), 21 for
-/// none.
-pub(crate) fn rung_footstep(pm: &mut Pmove) {
-    let (mins, maxs) = probe_box(pm);
-    let mask = pm.tracemask & !(CONTENTS_BODY | CONTENTS_PLAYERCLIP);
-    let origin = pm.ps.origin;
-    let end = fpu::ma(origin, RUNG_REACH, pm.ps.ladder_vec);
-    let t = pm.trace_box(origin, end, mins, maxs, mask);
-    let mut surf = (t.surface_flags & 0x1f0_0000) >> 20;
-    if t.fraction == 1.0 || surf == 0 {
-        surf = RUNG_DEFAULT_SURFACE;
-    }
-    pm.ps.add_event(ev::FOOTSTEP_RUN, surf);
 }

@@ -79,19 +79,15 @@ fn script_blasts_on_trigger_damage_match_retail_uo() {
         return;
     };
     let fs = std::rc::Rc::new(fs);
-    let bsp_path = fs
-        .resolve_map("mp_uo_stanjel")
-        .expect("mp_uo_stanjel in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = std::time::Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg("mp_uo_stanjel", "probe_dmgtrig"), now);
-    sv.set_protocol(&vcod_common::net::protocol::PROTOCOL_V22);
     let src =
         std::fs::read_to_string("../gsc/tests/fixtures/semantics/client-probes/probe_dmgtrig.gsc")
             .expect("the probe");
-    sv.overlay_script("maps/mp/gametypes/probe_dmgtrig", &src);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&vcod_common::net::protocol::PROTOCOL_V22),
+        script: Some(&src),
+        ..common::Boot::new("mp_uo_stanjel", "probe_dmgtrig")
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, 11000);
     let ours: Vec<&str> = sv
         .script_log()
@@ -176,7 +172,7 @@ fn direct_run(map: &str, probe: &str) -> Option<Vec<String>> {
 /// [`direct_run`] on `fs` under `proto`.
 fn direct_run_on(
     fs: vcod_common::pk3::Pk3Fs,
-    proto: &'static vcod_common::net::protocol::Protocol,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     probe: &str,
 ) -> Vec<String> {
@@ -187,18 +183,16 @@ fn direct_run_on(
     use vcod_common::net::msg::UserCmd;
     use vcod_common::net::{NetClient, NetEvent};
     let fs = Rc::new(fs);
-    let bsp_path = fs.resolve_map(map).unwrap();
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = std::time::Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, probe), now);
-    sv.set_protocol(proto);
     let src = std::fs::read_to_string(format!(
         "../gsc/tests/fixtures/semantics/client-probes/{probe}.gsc"
     ))
     .expect("the probe");
-    sv.overlay_script(&format!("maps/mp/gametypes/{probe}"), &src);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        script: Some(&src),
+        ..common::Boot::new(map, probe)
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, 3000);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl = NetClient::start_with_qport(common::ClientEnd(q.clone()), now, 0x2001);
@@ -480,17 +474,15 @@ const RETAIL_SPAWNED_UO: &[&str] = &[
 fn spawned_run(fs: vcod_common::pk3::Pk3Fs) -> Vec<String> {
     let proto = vcod_server::server::install_protocol(&fs);
     let fs = std::rc::Rc::new(fs);
-    let bsp_path = fs.resolve_map("mp_carentan").expect("mp_carentan");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = std::time::Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg("mp_carentan", "probe_dmgspawn"), now);
-    sv.set_protocol(proto);
     let src =
         std::fs::read_to_string("../gsc/tests/fixtures/semantics/client-probes/probe_dmgspawn.gsc")
             .expect("the probe");
-    sv.overlay_script("maps/mp/gametypes/probe_dmgspawn", &src);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        script: Some(&src),
+        ..common::Boot::new("mp_carentan", "probe_dmgspawn")
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, 11000);
     let ours: Vec<String> = sv
         .script_log()

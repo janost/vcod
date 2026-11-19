@@ -1,5 +1,5 @@
 //! Which game an install is. A CoD1 install's version (1.1, 1.5, United
-//! Offensive) is its [`crate::net::protocol::Protocol`]
+//! Offensive) is its [`crate::net::protocol::Cod1Wire`]
 //! ([`crate::net::protocol::install_protocol`]); the game sits above it.
 
 use std::path::Path;
@@ -8,9 +8,9 @@ use std::path::Path;
 pub enum Game {
     /// Call of Duty (2003): 1.1, 1.5 and United Offensive.
     Cod1,
-    /// Call of Duty 2. Detected only.
+    /// Call of Duty 2 1.3.
     Cod2,
-    /// Call of Duty 4. Detected only.
+    /// Call of Duty 4 1.7.
     Cod4,
 }
 
@@ -70,13 +70,19 @@ impl Game {
         }
     }
 
-    /// Fails for a game vcod cannot run yet, before anything opens its data.
+    /// Fails, before anything opens the game's data, when the client was
+    /// asked for a CoD1-only mode (`--walk`, `--list`) on another game.
     pub fn ensure_supported(self) -> anyhow::Result<()> {
-        match self {
-            Game::Cod1 => Ok(()),
-            Game::Cod2 => anyhow::bail!("CoD2 support is not implemented yet"),
-            Game::Cod4 => anyhow::bail!("CoD4 support is not implemented yet"),
-        }
+        let name = match self {
+            Game::Cod1 => return Ok(()),
+            Game::Cod2 => "CoD2",
+            Game::Cod4 => "CoD4",
+        };
+        anyhow::bail!(
+            "--walk and --list are CoD1 only, and this is a {name} install: \
+             `vcod <map>` flies a map, `--connect <host>` joins a server, no \
+             arguments opens the menu; `--game` overrides the detection"
+        )
     }
 }
 
@@ -88,6 +94,9 @@ impl std::str::FromStr for Game {
             "cod1" => Ok(Game::Cod1),
             "cod2" => Ok(Game::Cod2),
             "cod4" => Ok(Game::Cod4),
+            "uo" | "coduo" => Err(format!(
+                "unknown game {s:?}: United Offensive is cod1 with --mod-dir uo"
+            )),
             _ => Err(format!("unknown game {s:?}: cod1, cod2 or cod4")),
         }
     }
@@ -150,6 +159,8 @@ mod tests {
         assert!("cod3".parse::<Game>().is_err());
         assert!(Game::Cod1.ensure_supported().is_ok());
         let e = Game::Cod2.ensure_supported().unwrap_err().to_string();
-        assert_eq!(e, "CoD2 support is not implemented yet");
+        assert!(e.starts_with("--walk and --list are CoD1 only"), "{e}");
+        let e = "uo".parse::<Game>().unwrap_err();
+        assert!(e.contains("--mod-dir uo"), "{e}");
     }
 }

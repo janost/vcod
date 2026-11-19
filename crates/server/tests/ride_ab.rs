@@ -23,8 +23,8 @@ use common::{ADDR, ClientEnd, FRAME_MS, Join, Queues, holding, step_at};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use std::time::Duration;
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::net::trajectory::Trajectory;
 use vcod_common::net::{NetClient, NetEvent};
 
@@ -184,16 +184,12 @@ const FIRST_SNAP_AFTER_JOIN_MS: i64 = 400;
 /// mover", and 21). `late_ms` starts the client that much earlier.
 fn run_once(probe: &Probe, late_ms: i64) -> Option<Ours> {
     let fs = vcod_common::testing::game_fs_11()?;
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, probe.name), now);
-    sv.overlay_script(&format!("maps/mp/gametypes/{}", probe.name), probe.source);
-    for (k, v) in probe.cvars {
-        sv.set_cvar(k, v);
+    let (mut sv, mut now) = common::Boot {
+        cvars: probe.cvars,
+        script: Some(probe.source),
+        ..common::Boot::new(MAP, probe.name)
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     let retail_text = std::fs::read_to_string(probe.fixture).unwrap();
     let mut hold = common::ProbeHold {
         base: Some([0.0; 3]),
@@ -235,15 +231,15 @@ fn run_once(probe: &Probe, late_ms: i64) -> Option<Ours> {
             }
         }
         if let Some(s) = cl.snapshots().newest() {
-            first_snap.get_or_insert(s.server_time);
+            first_snap.get_or_insert(s.server_time.raw());
             let p = &PROTOCOL_V1;
-            seen.insert(s.server_time, s.ps.origin(p));
+            seen.insert(s.server_time.raw(), s.ps.origin(p));
             let ent = s
                 .entities
                 .values()
                 .find(|e| e.field_i32(p, "eType") == 8 && e.field_i32(p, "index") == SLAB_MODEL);
             slab.insert(
-                s.server_time,
+                s.server_time.raw(),
                 ent.map(|e| SlabState {
                     solid: e.field_i32(p, "solid"),
                     index: e.field_i32(p, "index"),
@@ -597,16 +593,13 @@ fn a_rotated_brush_model_keeps_retails_quantized_angles() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_yawres"), now);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_yawres",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_yawres.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_yawres.gsc"
+        )),
+        ..common::Boot::new(MAP, "probe_yawres")
+    }
+    .start(fs);
     for _ in 0..600 {
         common::run_alone(&mut sv, &mut now, FRAME_MS);
         if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
@@ -760,16 +753,13 @@ fn every_link_snaps_angles_like_retail() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_anglesnap"), now);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_anglesnap",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_anglesnap.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_anglesnap.gsc"
+        )),
+        ..common::Boot::new(MAP, "probe_anglesnap")
+    }
+    .start(fs);
     for _ in 0..100 {
         common::run_alone(&mut sv, &mut now, FRAME_MS);
         if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
@@ -808,15 +798,9 @@ fn mover_script_reads_match_retail() {
 
 #[test]
 fn mover_script_reads_match_retail_on_1_5() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
-        eprintln!("COD_DIR unset or has no main/: skipping");
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        eprintln!("COD_DIR is not a 1.5 install: skipping");
-        return;
-    }
     mover_reads(&PROTOCOL_V6, fs, MOVERREADS_PROBE, MOVERREADS_15);
 }
 
@@ -861,15 +845,9 @@ fn mover_ramps_match_retail() {
 
 #[test]
 fn mover_ramps_match_retail_on_1_5() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
-        eprintln!("COD_DIR unset or has no main/: skipping");
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        eprintln!("COD_DIR is not a 1.5 install: skipping");
-        return;
-    }
     mover_reads(&PROTOCOL_V6, fs, MOVERRAMP_PROBE, MOVERRAMP_15);
 }
 
@@ -883,19 +861,17 @@ fn mover_ramps_match_retail_on_uo() {
 }
 
 fn mover_reads(
-    proto: &'static Protocol,
+    proto: &'static Cod1Wire,
     fs: vcod_common::pk3::Pk3Fs,
     (name, source): MoverProbe,
     fixture: &str,
 ) {
-    let bsp_path = fs.resolve_map(MAP).expect("map in mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, name), now);
-    sv.set_protocol(proto);
-    sv.overlay_script(&format!("maps/mp/gametypes/{name}"), source);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        script: Some(source),
+        ..common::Boot::new(MAP, name)
+    }
+    .start(fs);
     for _ in 0..600 {
         common::run_alone(&mut sv, &mut now, FRAME_MS);
         if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
@@ -1036,16 +1012,13 @@ fn a_lifted_brush_model_leaves_and_reenters_the_snapshot_like_retail() {
     }
     assert_eq!(retail_snaps.len(), 3, "{retail_snaps:?}");
 
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_cull"), now);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_cull",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_cull.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_cull.gsc"
+        )),
+        ..common::Boot::new(MAP, "probe_cull")
+    }
+    .start(fs);
     let q = Rc::new(RefCell::new(Queues::default()));
     let (mut cl, _join) = common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp");
     let p = &PROTOCOL_V1;
@@ -1059,7 +1032,7 @@ fn a_lifted_brush_model_leaves_and_reenters_the_snapshot_like_retail() {
                 .entities
                 .values()
                 .any(|e| e.field_i32(p, "eType") == 8 && e.field_i32(p, "index") == SLAB_MODEL);
-            snaps.insert(s.server_time, here);
+            snaps.insert(s.server_time.raw(), here);
         }
         if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
             break;

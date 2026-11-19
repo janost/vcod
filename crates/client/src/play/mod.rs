@@ -19,6 +19,7 @@ pub mod cod2_shock;
 mod cod2_soak;
 pub mod cod2_sound;
 pub mod cod2_view;
+pub mod cod2_weapons;
 pub mod cod4;
 pub mod cod4_dynents;
 pub mod cod4_input;

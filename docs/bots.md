@@ -17,16 +17,16 @@ the measuring harness in [research/bot-combat.md](research/bot-combat.md).
 Six fighting bots:
 
 ```
-vcod-server mp_carentan --gametype tdm --bots 6 --bots-shoot --set rconPassword=secret
+vcod-server mp_carentan --gametype tdm --bots 6 --set rconPassword=secret
 ```
 
 The same on the other games (the install picks the game, or pass
 `--game`):
 
 ```
-vcod-server mp_cassino --mod-dir uo --gametype tdm --bots 6 --bots-shoot
-vcod-server mp_toujane --game cod2 --gametype tdm --bots 6 --bots-shoot
-vcod-server mp_crash --game cod4 --bots 6 --bots-shoot
+vcod-server mp_cassino --mod-dir uo --gametype tdm --bots 6
+vcod-server mp_toujane --game cod2 --gametype tdm --bots 6
+vcod-server mp_crash --game cod4 --bots 6
 ```
 
 A server that keeps itself busy: with a floor of 10, an empty server runs
@@ -46,12 +46,14 @@ UO, `rcon login secret` then `rcon <command>` on CoD2 and CoD4.
 | Flag | Does |
 |---|---|
 | `--bots N` | Start with N bots. Each takes a real slot, so N can't exceed `--max-clients`. |
-| `--bots-shoot` | Let those bots fire. Without it they walk the map and play objectives but never shoot (`vc_bot_shoot 0`). |
+| `--bots-peaceful` | Keep those bots from firing: they walk the map and play objectives but never shoot (`vc_bot_shoot 0`). The old `--bots-shoot` still parses and changes nothing. |
 | `--set NAME=VALUE` | Set any cvar below before the first map loads. |
 
 The bots join once the level is up. The navigation graph builds on its
 own thread on the first tick, a few seconds on a big map; bots wander
-until it is ready.
+until it is ready. The server keeps each graph it built on disk
+(`--nav-cache`, [usage.md](usage.md#server)), so the next start of the
+same binary on the same map loads it in milliseconds.
 
 ## rcon commands
 
@@ -82,10 +84,11 @@ A change applies within half a second.
 |---|---|---|
 | `vc_bot_minplayers` | 0 | [Minimum player count](#minimum-player-count). 0 is off. |
 | `vc_bot_autobalance` | 1 | [Keeps the teams even](#team-balance) in team gametypes. |
-| `vc_bot_shoot` | 1 | 0 stops bots firing. `--bots` without `--bots-shoot` sets it to 0. |
+| `vc_bot_shoot` | 1 | 0 stops bots firing. `--bots-peaceful` sets it to 0. |
 | `vc_bot_names` | 1 | 0 names bots that join from then on `bot<slot>`; bots already in keep their names. |
 | `vc_bot_skill` | 1 | The [skill level](#skill), 0 to 3, of every bot `addbot ... skill N` didn't set. |
-| `vc_bot_vehicles` | 1 | United Offensive: 0 stops bots getting into vehicles; a bot already in one rides on until it gets out. |
+| `vc_bot_retreat` | 1 | 0 stops bots breaking off a fight when hurt or dry and walking to health items; a retreat under way ends. |
+| `vc_bot_vehicles` | 1 | United Offensive: 0 keeps bots out of vehicles: none gets in, and a bot already in one gets out. |
 
 ## Skill
 
@@ -236,7 +239,8 @@ bot does with the same keys. If one kills you, it earned it. The view holds:
   with a bolt rifle, lies down at long range, takes cover and leans,
   retreats when hurt, and peeks for or hunts an enemy it lost.
 - It throws frags at an enemy behind cover or one just lost, on a lob
-  whose arc comes down by him, and runs from a live frag near it.
+  whose arc comes down by him, and runs from a live frag near it. With
+  friendly fire on it throws none that would burst by a playing teammate.
 
 ### Getting around
 
@@ -372,7 +376,10 @@ switches and every number it prints. Results go in that doc and
 - Gametypes: every stock one, `dm`, `tdm`, `sd`, `re` and `bel`, and UO's
   `ctf`, `dom`, `hq` and `bas`.
 - Objectives: S&D plants and defuses; in Retrieval the team escorts the
-  carrier and holds the goal ahead of him; UO's flags, radio and base
+  carrier and holds the goal ahead of him, an escort steps off a carrier
+  it stands on, and a dropped objective
+  its clock sends home before a bot could run to it is awaited where it
+  comes back; UO's flags, radio and base
   breaches as in [research/bot-objectives.md](research/bot-objectives.md)
   sections 4 to 7.
 - `bas`: a bot making for a charge room where a teammate died in the
@@ -502,7 +509,7 @@ are most of a miss. Blame the gun. Full tables and the earlier runs:
   0.4% more and stalls 3% more over six seeds of all maps, so it is off.
 - Frags: thrown through the frag key. A live frag under its cursor hint
   with 1.5 s or more on the fuse is picked up and thrown back toward its
-  thrower (or the enemy in sight).
+  thrower, unless he is a teammate (else the enemy in sight).
 - Mounted SAWs, in `war` and `dm` only: a bot takes a free gun whose arc
   covers the enemy it fights, or a lane its team saw an enemy in within
   8 s, past 250 units from the gun, when the spot behind it is within

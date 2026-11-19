@@ -23,7 +23,7 @@ use common::{ADDR, ClientEnd, FRAME_MS, Join, Queues, holding, step_at};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 use vcod_common::net::{NetClient, NetEvent};
 
@@ -125,16 +125,13 @@ fn run_ours() -> Option<Ours> {
             },
         );
     }
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_shock"), now);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_shock",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_shock.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_shock.gsc"
+        )),
+        ..common::Boot::new(MAP, "probe_shock")
+    }
+    .start(fs);
     for _ in 0..JOIN_FRAMES {
         now += Duration::from_millis(FRAME_MS as u64);
         sv.tick(now);
@@ -148,7 +145,7 @@ fn run_ours() -> Option<Ours> {
     let mut snaps = BTreeMap::new();
     let mut next_cmd = 0;
     loop {
-        let newest = cl.snapshots().newest().map(|s| s.server_time);
+        let newest = cl.snapshots().newest().map(|s| s.server_time.raw());
         let t = newest.map_or(0, |t| t + FRAME_MS as i32);
         if t > last {
             break;
@@ -195,12 +192,12 @@ fn run_ours() -> Option<Ours> {
         }
         assert!(sv.script_aborts().is_empty(), "{:?}", sv.script_aborts());
         if let Some(s) = cl.snapshots().newest()
-            && s.server_time >= placed
+            && s.server_time.raw() >= placed
         {
             let f = |n: &str| s.ps.field_i32(p, n);
             let g = |n: &str| s.ps.field_f32(p, n);
             snaps.insert(
-                s.server_time,
+                s.server_time.raw(),
                 Snap {
                     shock: [
                         f("shellshockIndex"),

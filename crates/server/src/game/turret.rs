@@ -5,12 +5,67 @@
 //! half of a mount (section 4). Aim, fire and release mutate the record in
 //! place.
 
+use crate::game::host::GameHost;
+use crate::game::script::ScriptRuntime;
 use crate::spectate::ClientSim;
 use glam::Vec3;
-use vcod_common::net::protocol::{CsLayout, PROTOCOL_V1, Protocol};
+use vcod_common::fguard;
+use vcod_common::text::{atof, atoi};
+// The stance events: `cod11-events-and-fx.md`. ENTITYNUM_NONE is
+// `viewlocked_entNum` after a release (turrets doc 12.7).
+use vcod_common::net::event_ids::{
+    EV_STANCE_FORCE_CROUCH, EV_STANCE_FORCE_PRONE, EV_STANCE_FORCE_STAND,
+};
+use vcod_common::net::protocol::ENTITYNUM_NONE;
+use vcod_common::net::protocol::{Cod1Wire, CsLayout, PROTOCOL_V1};
 use vcod_common::pmove::Stance;
 use vcod_common::pmove::aim::{angle_normalize_180, angle_subtract};
 use vcod_gsc::EntId;
+
+/// A gun as the bots read it ([`ScriptRuntime::gun_list`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GunInfo {
+    pub id: EntId,
+    pub origin: Vec3,
+    pub yaw: f32,
+    /// [min, max] off the gun's angles: pitch [-top, bottom], yaw [-right,
+    /// left] (`TurretRecord`).
+    pub yaw_range: [f32; 2],
+    pub pitch_range: [f32; 2],
+    pub owner: Option<usize>,
+}
+
+impl ScriptRuntime {
+    /// Every gun with its pose (its entity's, [`Self::link_anchor`]), arcs
+    /// and gunner.
+    pub fn gun_list(&mut self) -> Vec<GunInfo> {
+        let ids: Vec<EntId> = self.host.turrets.keys().copied().collect();
+        ids.into_iter()
+            .filter_map(|id| {
+                let (origin, angles) = self.link_anchor(id)?;
+                let rec = self.host.turrets.get(&id)?;
+                Some(GunInfo {
+                    id,
+                    origin: Vec3::from(origin),
+                    yaw: angles[1],
+                    yaw_range: rec.yaw_range,
+                    pitch_range: rec.pitch_range,
+                    owner: rec.owner,
+                })
+            })
+            .collect()
+    }
+}
+
+impl GameHost {
+    /// The gun `slot` mans, if any.
+    pub fn manned_gun(&self, slot: usize) -> Option<EntId> {
+        self.turrets
+            .iter()
+            .find(|(_, r)| r.owner == Some(slot))
+            .map(|(id, _)| *id)
+    }
+}
 
 /// The turret keys of a weapon file (`weapons/mp/<name>`), weapon-def
 /// offsets in docs/research/cod11-turrets.md section 2.
@@ -149,9 +204,13 @@ impl TurretDef {
     /// carried weapon.
     pub fn parse(text: &str) -> Option<TurretDef> {
         let kv = vcod_common::xmodel::parse_weapon(text);
-        let f = |k: &str| kv.get(k).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
-        let s = |k: &str| kv.get(k).filter(|v| !v.is_empty()).cloned();
-        if kv.get("weaponClass").map(String::as_str) != Some("turret") {
+        // `ParseConfigStringToStruct`'s readers (combat doc 0.1): floats
+        // through `(float)atof`, ints through `atoi`, the name tables any case.
+        let f = |k: &str| kv.get(k).map_or(0.0, |v| atof(v) as f32);
+        let i = |k: &str| kv.get(k).map_or(0, |v| atoi(v));
+        let s = |k: &str| kv.get(k).cloned();
+        let is = |k: &str, name: &str| kv.get(k).is_some_and(|v| v.eq_ignore_ascii_case(name));
+        if !is("weaponClass", "turret") {
             return None;
         }
         Some(TurretDef {
@@ -159,26 +218,28 @@ impl TurretDef {
             right_arc: f("rightArc"),
             top_arc: f("topArc"),
             bottom_arc: f("bottomArc"),
-            damage: f("damage") as i32,
+            damage: i("damage"),
             // The stock file holds seconds (0.05); the record wants ms as
             // the type-7 parse stores them.
             fire_time_ms: vcod_common::weapon::stored_ms(f("fireTime")),
-            stance: match kv.get("stance").map(String::as_str) {
-                Some("prone") => TurretStance::Prone,
-                Some("duck") | Some("crouch") => TurretStance::Duck,
-                _ => TurretStance::Stand,
+            stance: if is("stance", "prone") {
+                TurretStance::Prone
+            } else if is("stance", "duck") || is("stance", "crouch") {
+                TurretStance::Duck
+            } else {
+                TurretStance::Stand
             },
             anim_hor_rotate_inc: f("animHorRotateInc"),
-            rifle_bullet: f("rifleBullet") != 0.0,
+            rifle_bullet: i("rifleBullet") != 0,
             loop_sound: s("loopFireSound"),
             stop_sound: s("stopFireSound"),
             use_hint_string: s("useHintString"),
             fire_heat: f("fireHeat"),
             cooldown_rate: f("cooldownRate"),
             falloff: crate::game::combat::Falloff {
-                min_percent: f("minDamagePercent") as i32,
-                inner: f("damageInnerRadius") as i32,
-                outer: f("damageOuterRadius") as i32,
+                min_percent: i("minDamagePercent"),
+                inner: i("damageInnerRadius"),
+                outer: i("damageOuterRadius"),
             },
         })
     }
@@ -200,10 +261,12 @@ impl TurretRecord {
     /// range is widened to include 0 rather than clamped to it, so a
     /// negative arc still leaves the rest position inside range.
     pub fn new(weapon: &str, def: TurretDef, keys: TurretKeys, rest_pitch: f32) -> TurretRecord {
-        let left = keys.left.unwrap_or(def.left_arc);
-        let right = keys.right.unwrap_or(def.right_arc);
-        let top = keys.top.unwrap_or(def.top_arc);
-        let bottom = keys.bottom.unwrap_or(def.bottom_arc);
+        // `parse::<f32>` takes `inf` and `nan`, no arc a retail map holds.
+        let arc = |key: Option<f32>, file: f32| fguard::finite(key.unwrap_or(file));
+        let left = arc(keys.left, def.left_arc);
+        let right = arc(keys.right, def.right_arc);
+        let top = arc(keys.top, def.top_arc);
+        let bottom = arc(keys.bottom, def.bottom_arc);
         TurretRecord {
             weapon: weapon.to_string(),
             pitch_range: [(-top).min(0.0), bottom.max(0.0)],
@@ -238,7 +301,7 @@ impl TurretRecord {
     /// `origin2[0..3]`: the pitch and yaw highs, then the lows, which their
     /// cgame holds the gunner's view inside (turrets doc 14.3). `None` on
     /// 1.1, which sends none, and before the first aim.
-    pub fn wire_arcs(&self, p: &Protocol) -> Option<[f32; 4]> {
+    pub fn wire_arcs(&self, p: &Cod1Wire) -> Option<[f32; 4]> {
         (self.aimed && !p.is_v1()).then_some([
             self.pitch_range[1],
             self.yaw_range[1],
@@ -313,7 +376,7 @@ pub fn mount(
 /// `r.currentAngles`) at the clamped view at once. `turret_use` writes
 /// through `other->client`, so a user that is no player segfaults all
 /// three retail servers; vcod notifies alone there (cod11-combat.md 5.9,
-/// "useBy on a turret"). Returns false for anything not a turret.
+/// "`useBy` on a gun, a sine mover and a `misc_spawner`"). Returns false for anything not a turret.
 pub fn use_by(
     host: &mut crate::game::host::GameHost,
     cx: &mut vcod_gsc::Cx,
@@ -328,8 +391,8 @@ pub fn use_by(
     }
     let slot = user.0 as usize;
     let origin = crate::game::item::origin_of(host, cx, user);
-    let stance = host.client_stance[slot];
-    let aim = host.client_aim[slot].1;
+    let stance = host.clients[slot].stance;
+    let aim = host.clients[slot].aim.1;
     let angles = crate::game::item::angles_of(host, cx, id);
     let Some(rec) = host.turrets.get_mut(&id) else {
         return true;
@@ -391,7 +454,7 @@ pub const TURRET_HEALTH: i32 = 100;
 const TIMER_STEP_MS: i32 = 50;
 
 /// Which patch's manned aim and mount a server runs (turrets doc 6.2 and
-/// 14.3, coduo-diff.md 19, "Bullets and turrets").
+/// 14.3, coduo-diff.md 21.3, "Bullets and turrets").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AimRule {
     /// 1.1's 0x5201c: arc clamp, 15-degree step, view forced onto the barrel.
@@ -403,7 +466,7 @@ pub enum AimRule {
 }
 
 impl AimRule {
-    pub fn of(p: &Protocol) -> Self {
+    pub fn of(p: &Cod1Wire) -> Self {
         match p.transport.version {
             v if v == PROTOCOL_V1.transport.version => AimRule::V1,
             v if v == vcod_common::net::protocol::PROTOCOL_V22.transport.version => AimRule::Uo,
@@ -617,13 +680,6 @@ pub fn lift_onto_floor(
     at
 }
 
-use vcod_common::net::event_ids::EV_STANCE_FORCE_CROUCH;
-use vcod_common::net::event_ids::EV_STANCE_FORCE_PRONE;
-/// `EV_STANCE_FORCE_STAND`/`_CROUCH`/`_PRONE` (`cod11-events-and-fx.md`).
-use vcod_common::net::event_ids::EV_STANCE_FORCE_STAND;
-/// `viewlocked_entNum` after a release (turrets doc 12.7).
-use vcod_common::net::protocol::ENTITYNUM_NONE;
-
 /// The record half of `G_ClientStopUsingTurret` (0x53054, turrets doc 8):
 /// the gun is free and its loop timer spent. Returns the gunner's slot and
 /// the spot and stance it mounted from, `None` for a gun nobody mans. The
@@ -780,6 +836,22 @@ mod tests {
         assert!(d.rifle_bullet);
     }
 
+    /// The turret file reads as the C loader does (combat doc 0.1): name
+    /// tables and keys in any case, the first value under a key, `atoi`
+    /// for an int field and `atof` for a float one.
+    #[test]
+    fn a_turret_file_reads_as_the_c_loader_reads_it() {
+        let d = TurretDef::parse(concat!(
+            "WEAPONFILE\\WEAPONCLASS\\Turret\\damage\\60.9\\damage\\10",
+            "\\leftarc\\45deg\\stance\\PRONE\\rifleBullet\\2",
+        ))
+        .unwrap();
+        assert_eq!(d.damage, 60);
+        assert_eq!(d.left_arc, 45.0);
+        assert_eq!(d.stance, TurretStance::Prone);
+        assert!(d.rifle_bullet);
+    }
+
     #[test]
     fn spawn_keys_override_the_file_and_ranges_straddle_zero() {
         let d = TurretDef::parse(STAND).unwrap();
@@ -795,6 +867,40 @@ mod tests {
         assert_eq!(r.pitch_range, [0.0, 40.0]);
         assert_eq!(r.dmg, 80);
         assert_eq!(r.angles2, [-63.0, 0.0, 0.0]);
+    }
+
+    /// A map's arc of 1e30, an infinity or a NaN, and a gun or view angle
+    /// as large, build a record a player uses and mounts at once (SEC-080).
+    #[test]
+    fn hostile_arcs_and_angles_mount() {
+        for bad in [1e30f32, -1e30, f32::INFINITY, f32::NAN] {
+            let keys = TurretKeys {
+                left: Some(bad),
+                right: Some(bad),
+                top: Some(bad),
+                bottom: Some(bad),
+                ..Default::default()
+            };
+            let mut r = TurretRecord::new("mg", TurretDef::parse(STAND).unwrap(), keys, 0.0);
+            assert!(
+                r.yaw_range
+                    .iter()
+                    .chain(&r.pitch_range)
+                    .all(|a| a.is_finite())
+            );
+            usable(&r, [0.0; 3], bad, [-40.0, 0.0, 0.0], 0, true);
+            mount(
+                &mut r,
+                0,
+                [0.0; 3],
+                Stance::Stand,
+                [bad, bad, 0.0],
+                [bad, bad, 0.0],
+            );
+            for [lo, hi] in [r.pitch_range, r.yaw_range] {
+                assert!(angle_subtract(hi + bad, lo).abs() <= 180.0);
+            }
+        }
     }
 
     fn rec() -> TurretRecord {

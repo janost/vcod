@@ -558,7 +558,7 @@ impl Cod2Draw {
         let now = frame.time_ms;
         let dt = self.last_ms.map_or(0, |l| (now - l).max(0));
         self.last_ms = Some(now);
-        (now, dt, frame.snap.server_time)
+        (now, dt, frame.snap.server_time.raw())
     }
 
     /// The CPU half of [`Self::draw`], for the headless probe: what the
@@ -593,8 +593,6 @@ impl Cod2Draw {
         c
     }
 
-    /// Hands `frame`'s entities and bodies to the renderer: the brush
-    /// models' poses and every model instance.
     /// The scene fog once configstring 12 changes (`CG_ParseFog`, Mac
     /// 0x1e273c): seven numbers set the fog and fade to it over the last,
     /// in ms; anything shorter switches it off. The colour lands as the
@@ -646,6 +644,8 @@ impl Cod2Draw {
         self.scene.models.get(name).is_some_and(Option::is_some)
     }
 
+    /// Hands `frame`'s entities and bodies to the renderer: the brush
+    /// models' poses and every model instance.
     pub fn draw(&mut self, frame: &Frame, fs: &Pk3Fs, r: &mut Renderer) -> DrawCounts {
         use crate::frame_prof::{Count, Stage, span};
         let mut prof = span(Stage::Pose);
@@ -744,7 +744,8 @@ pub(crate) mod tests {
     /// Half way between the last two snapshots, as the session draws.
     pub(crate) fn mid(view: &NetView) -> Frame<'_> {
         let (a, b) = (view.prev.as_ref().unwrap(), view.snap.as_ref().unwrap());
-        view.frame((a.server_time + b.server_time) / 2).unwrap()
+        view.frame((a.server_time.raw() + b.server_time.raw()) / 2)
+            .unwrap()
     }
 
     fn weapons(view: &NetView) -> Vec<String> {
@@ -817,7 +818,7 @@ pub(crate) mod tests {
         };
         let mut poser = Cod2Players::new();
         let t = f.time_ms;
-        let posed = poser.posed(&fs, &bodies, t, 0, snap.server_time);
+        let posed = poser.posed(&fs, &bodies, t, 0, snap.server_time.raw());
         assert_eq!(posed.len(), 1);
         let (_, rig, drawn) = &posed[0];
         let parts: Vec<&str> = rig.models.iter().map(|(n, _)| n.as_str()).collect();
@@ -955,7 +956,7 @@ pub(crate) mod tests {
             armed_with += 1;
             let mut armed = bodies.clone();
             armed[0].weapon = Some(w.clone());
-            let posed = poser.posed(&fs, &armed, t, 0, f.snap.server_time);
+            let posed = poser.posed(&fs, &armed, t, 0, f.snap.server_time.raw());
             let (_, rig, drawn) = &posed[0];
             let part = rig.models.iter().position(|(n, _)| *n == world);
             let part = part.unwrap_or_else(|| panic!("{w}: no {world} in the rig"));
@@ -981,7 +982,9 @@ pub(crate) mod tests {
         };
         vcod_cod2::model::register();
         let view = replay();
-        let f = view.frame(view.snap.as_ref().unwrap().server_time).unwrap();
+        let f = view
+            .frame(view.snap.as_ref().unwrap().server_time.raw())
+            .unwrap();
         let mut visuals: Vec<_> = place(&f).into_iter().map(|p| p.visual).collect();
         for w in weapons(&view) {
             visuals.push(Visual2::Item(w.clone()));

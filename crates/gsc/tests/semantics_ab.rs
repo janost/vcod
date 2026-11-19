@@ -27,7 +27,8 @@ impl ScriptSource for ProbeSource {
     }
 }
 
-/// Only what a probe calls: `logPrint` collects, `isDefined` answers.
+/// Only what a probe calls: `logPrint` collects, `isDefined` answers,
+/// `spawnStruct` makes a struct.
 #[derive(Default)]
 struct ProbeHost {
     lines: Vec<String>,
@@ -50,6 +51,7 @@ impl Host for ProbeHost {
                 }
                 Ok(Value::Undefined)
             }
+            "spawnstruct" => Ok(Value::Struct(cx.new_struct())),
             "isdefined" => Ok(Value::Int(
                 !matches!(args.first(), None | Some(Value::Undefined)) as i32,
             )),
@@ -64,6 +66,8 @@ impl Host for ProbeHost {
     fn set_field(&mut self, _cx: &mut Cx, _e: EntId, _f: Atom, _v: Value) -> Result<(), ErrorKind> {
         Ok(())
     }
+
+    fn roots(&self, _out: &mut Vec<Value>) {}
 }
 
 /// What one probe produced here: its `PROBE ` lines, the message of the
@@ -76,7 +80,7 @@ struct Run {
     /// `"call_now"`, `"start_thread"` or, for a script that did not compile,
     /// `"compile error: <msg>"`; carried into failure messages so a reader
     /// is not puzzled by which path an error could or couldn't have come
-    /// from -- see the two paths' doc comments below.
+    /// from. See the two paths' doc comments below.
     path: String,
 }
 
@@ -100,14 +104,14 @@ fn install(name: &str) -> Result<(Vm, FuncRef), String> {
 
 /// Runs `main` through `call_now`, which returns its error instead of only
 /// logging it (`start_thread`'s doc comment), so a probe that dies
-/// synchronously -- most of them, since nothing before their first fatal
-/// expression suspends -- surfaces that error here. A probe built around a
+/// synchronously (most of them, since nothing before their first fatal
+/// expression suspends) surfaces that error here. A probe built around a
 /// `wait` (`probe_notify`) cannot run this way: `call_now` rejects a
 /// suspend as `ErrorKind::SuspendedInImmediateCall`, at which point this
 /// falls back to a fresh `start_thread` plus 200 frames of 50 ms, which
 /// covers probe_notify's two 0.5 s waits with room to spare. That fallback
-/// path inherits `start_thread`'s own blind spot -- an error in its
-/// immediate run has nowhere to go either -- but nothing in the corpus
+/// path inherits `start_thread`'s own blind spot (an error in its
+/// immediate run has nowhere to go either), but nothing in the corpus
 /// needs both a `wait` and a synchronous-death measurement in one file.
 ///
 /// A compile error voids the whole script on retail before `main()` runs:
@@ -193,8 +197,8 @@ fn captures() -> BTreeMap<String, (Vec<String>, Option<String>)> {
 /// window on real spawned entities, so it is claimed there too. `probe_cvar`
 /// and `probe_not_string` call `getCvar`/`setCvar`/`getCvarInt`/
 /// `getCvarFloat`/`getTime`/`randomInt`, which this file's `ProbeHost`
-/// cannot answer without a fake cvar table -- the real one is
-/// `crates/server`'s `Cvars`, which `vcod-gsc` may not depend on -- so they
+/// cannot answer without a fake cvar table (the real one is
+/// `crates/server`'s `Cvars`, which `vcod-gsc` may not depend on), so they
 /// run there too, against a real `GameHost`.
 ///
 /// `probe_bootstrap` measures the order of the two `main()`s against the
@@ -298,7 +302,7 @@ fn vcod_matches_retail_on_every_probe() {
         }
         // Where retail dies, vcod raises an error and aborts the thread
         // instead of the server. This only checks that both sides stopped,
-        // not that they stopped in the same place or said the same thing --
+        // not that they stopped in the same place or said the same thing:
         // the line comparison above is what catches a differing stopping
         // point, since a side that ran on emits the lines the other didn't.
         match (retail_fatal.is_some(), ours.error.is_some()) {

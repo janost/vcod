@@ -1,6 +1,6 @@
 //! A CoD2 connection's events: `CG_CheckEvents` and
 //! `CG_TransitionPlayerState` over each snapshot as it becomes the cgame's
-//! current one (docs/research/cod2-sound.md 5, cod2-efx.md 6). Each event
+//! current one (docs/research/cod2-sound.md 5 and 7.1, cod2-efx.md 6). Each event
 //! comes out once, in CoD2's numbering ([`vcod_cod2::net::events`]), and
 //! every reaction reads the same list: the sounds
 //! (`play::cod2_sound::Cod2Sounds::cues`) and the effects
@@ -106,7 +106,7 @@ impl EventTracker {
                 time: es.i32("time"),
                 scale: es.i32("scale"),
                 angles2: [es.f32("angles2[0]"), es.f32("angles2[1]")],
-                pos: e.pos.evaluate(snap.server_time),
+                pos: e.pos.evaluate_f32(snap.server_time.raw()),
                 angles: e.apos.base,
                 from_ps: false,
             };
@@ -155,7 +155,9 @@ impl EventTracker {
     }
 
     /// `CG_TransitionPlayerState`: the playerstate ring's slots past the
-    /// last sequence, or changed within its window. A follow switch copies
+    /// last sequence, or changed within its window. The 8-bit sequence is
+    /// compared raw, so a snapshot that wraps it raises nothing, as retail's
+    /// (cod2-sound.md 5). A follow switch copies
     /// the new playerstate over the old first (`CG_SetNextSnap`'s clientNum
     /// test), so it raises nothing.
     fn ps_events(&mut self, snap: &SnapshotView) -> Vec<Event2> {
@@ -185,7 +187,7 @@ impl EventTracker {
                     weapon: ps.weapon,
                     surf: 0,
                     other_entity: 0,
-                    time: snap.server_time,
+                    time: snap.server_time.raw(),
                     scale: 0,
                     angles2: [0.0; 2],
                     pos: Vec3::from(ps.origin),
@@ -220,6 +222,7 @@ pub const SURFACES: [&str; 23] = [
 mod tests {
     use super::*;
     use vcod_cod2::net::{EntityView, PlayerView};
+    use vcod_common::net::Msec;
 
     fn set(es: &mut EntityState2, k: &str, v: i32) {
         let i = vcod_cod2::net::delta::field_index(&vcod_cod2::net::fields::ENTITY_STATE_FIELDS, k);
@@ -229,7 +232,7 @@ mod tests {
     fn snap(ents: &[EntityState2], t: i32) -> SnapshotView {
         SnapshotView {
             message_num: t,
-            server_time: t,
+            server_time: Msec::from_raw(t),
             snap_flags: 0,
             ps: PlayerView::new(&Default::default(), 0),
             entities: ents.iter().map(EntityView::new).collect(),
@@ -309,6 +312,31 @@ mod tests {
             };
             assert_eq!(got, want, "predicting {predicting}");
         }
+    }
+
+    /// Retail compares the 8-bit playerstate sequence raw
+    /// (`CoD2MP_s.exe` 0x4e0350..0x4e035f): 254 to 2 raises nothing.
+    #[test]
+    fn a_wrapped_playerstate_sequence_raises_nothing() {
+        use vcod_cod2::net::PlayerState2;
+        use vcod_cod2::net::delta::field_index;
+        use vcod_cod2::net::fields::PLAYER_STATE_FIELDS;
+        let ps_snap = |seq: u32, t: i32| {
+            let mut raw = PlayerState2::default();
+            let mut put = |n: &str, v: u32| raw.f[field_index(&PLAYER_STATE_FIELDS, n)] = v;
+            put("eventSequence", seq);
+            for k in 0..4 {
+                put(&format!("events[{k}]"), ev::EV_FIRE_WEAPON as u32);
+            }
+            SnapshotView {
+                ps: PlayerView::new(&raw, 0),
+                ..snap(&[], t)
+            }
+        };
+        let mut t = EventTracker::default();
+        assert!(t.transition(&ps_snap(254, 50)).is_empty());
+        assert!(t.transition(&ps_snap(2, 100)).is_empty());
+        assert_eq!(t.transition(&ps_snap(3, 150)).len(), 1);
     }
 
     /// A missile entering replays its ring from 0; a temp entity fires

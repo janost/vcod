@@ -60,14 +60,8 @@ fn ours_with(
     let fs = std::rc::Rc::new(fs);
     let start = std::time::Instant::now();
     let cfg = vcod_server::ServerConfig {
-        map: "mp_carentan".into(),
         hostname: "CoDHost".into(),
-        max_clients: 8,
-        gametype: "dm".into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
+        ..crate::common::cfg("mp_carentan", "dm")
     };
     let mut sv = vcod_server::server::Server::new(cfg, start);
     sv.set_protocol(&PROTOCOL_V6);
@@ -114,16 +108,9 @@ fn diff(retail: &BTreeMap<usize, String>, ours: &BTreeMap<usize, String>, skip: 
     );
 }
 
-/// The 1.5 install, `None` at any other.
-fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    (vcod_server::server::install_protocol(&fs).transport.version == PROTOCOL_V6.transport.version)
-        .then_some(fs)
-}
-
 #[test]
 fn the_configstring_table_matches_15b_on_mp_carentan() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     diff(&retail(), &ours(fs), &[]);
@@ -135,7 +122,7 @@ fn the_configstring_table_matches_15b_on_mp_carentan() {
 /// `scr_motd` (186/250). 1, which lists the capture's extra pak, stays out.
 #[test]
 fn the_configstring_table_matches_15b_with_a_motd_and_a_message() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     let path = "tests/fixtures/configstrings/mp_carentan-dm-motd-15.txt";

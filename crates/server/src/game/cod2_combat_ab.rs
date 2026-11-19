@@ -611,7 +611,7 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str, report: bool) -> Found {
     // next, so that snapshot's `commandTime` is its own time), takes that
     // snapshot's playerstate, then runs its own cmds: the target plays two
     // seconds before the shooter spawns, and its legs clip started then
-    // (cod2-combat.md 9.5, "The struck body"; 9.7).
+    // (cod2-combat.md 9.5; 9.7).
     let sides = [&target.side, &shooter.side];
     let first = |side: &Side| {
         side.snaps
@@ -1148,9 +1148,9 @@ fn recover_spread_seed() {
 /// the exact replay, the 32-bit `holdrand` behind them off a 2^17 search,
 /// and the seed off walking that back to a value inside the run's wall
 /// clock, `COMBAT_SEED_FROM..COMBAT_SEED_TO` (Unix seconds). glibc's
-/// `srand` took the same seed. Run by hand (`cargo test -p vcod-server
-/// --lib -- --ignored recover_rocket_seed --nocapture`, `COD2_DIR` set,
-/// `COMBAT_SEED_CAPTURE` naming the capture).
+/// `srand` took the same seed. Run by hand
+/// (`cargo test -p vcod-server --lib -- --ignored recover_rocket_seed --nocapture`,
+/// `COD2_DIR` set, `COMBAT_SEED_CAPTURE` naming the capture).
 #[test]
 #[ignore]
 fn recover_rocket_seed() {

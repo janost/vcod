@@ -16,12 +16,6 @@ fn console(sv: &mut Cod4Server, line: &str) -> String {
         .collect()
 }
 
-fn temp_home(tag: &str) -> PathBuf {
-    let home = std::env::temp_dir().join(format!("vcod-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&home);
-    home
-}
-
 /// The text after each line's `%3i:%i%i ` stamp, which must be there.
 fn unstamped(text: &str) -> Vec<String> {
     text.lines()
@@ -42,7 +36,8 @@ fn unstamped(text: &str) -> Vec<String> {
 /// clients go, then `ShutdownGame:` and the separator at `killserver`.
 #[test]
 fn cod4_games_mp_log_carries_the_engine_and_script_lines() {
-    let home = temp_home("gamelog");
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
     let path = home.display().to_string();
     let Some((mut sv, mut probes, mut now)) =
         two_playing_with(&[("fs_homepath", &path), ("g_logSync", "1")])
@@ -90,7 +85,6 @@ fn cod4_games_mp_log_carries_the_engine_and_script_lines() {
     assert_eq!(at, lines.len(), "{text}");
     // Killed, the server answers nothing.
     assert!(probes[0].oob(&mut sv, b"getinfo x", now).is_empty());
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// `g_inactivity 12`: each idle player is warned 10 s before the deadline
@@ -192,7 +186,7 @@ fn cod4_console_dumpuser_kick_and_dvar_commands() {
         console(&mut sv, "kick shooter"),
         format!("1:shooter EXE_PLAYERKICKED\nshooter (guid \"{guid}\") was kicked for cheating\n")
     );
-    assert!(sv.temp_banned(&guid));
+    assert!(sv.temp_banned(&guid, None));
     assert_eq!(
         console(&mut sv, "onlykick target"),
         "0:target EXE_PLAYERKICKED\n"

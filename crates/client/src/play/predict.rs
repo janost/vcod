@@ -12,7 +12,7 @@ use vcod_common::collision::CollisionWorld;
 use vcod_common::movetrace::{Body, CONTENTS_BODY, MoveWorld};
 use vcod_common::net::flags::EF_TELEPORT_BIT;
 use vcod_common::net::msg;
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::pmove::movers::SnapshotMovers;
 use vcod_common::pmove::predict::{self, Predicted};
 use vcod_common::weapon::WeaponDef;
@@ -24,8 +24,7 @@ const ERROR_DECAY_MS: f64 = 100.0;
 const MISS_EPSILON: f32 = 0.1;
 /// A correction longer than this is drawn at once.
 const SNAP_DISTANCE: f32 = 256.0;
-/// `eFlags` capsule bit; the client clips only capsule entities.
-const EF_CAPSULE: i32 = 0x10;
+use vcod_common::net::flags::EF_CAPSULE;
 use vcod_common::net::flags::ET_ITEM;
 use vcod_common::net::flags::ET_PLAYER;
 /// A brush submodel's `solid`; `SnapshotMovers` clips those.
@@ -258,10 +257,10 @@ impl Predictor {
     /// brush models with its serverTime; `None` when its `pm_type` is not one
     /// the client predicts, or when the cmd history no longer reaches back
     /// to its `commandTime` (a miss).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn predict(
         &mut self,
-        p: &Protocol,
+        p: &Cod1Wire,
         ps: &msg::PlayerState,
         ring: &CmdRing,
         world: &CollisionWorld,
@@ -354,10 +353,9 @@ impl Predictor {
     /// A new snapshot or moved bodies: rebuild from the snapshot, replay every
     /// cmd past its `commandTime`, and ease out what it corrected. False on a
     /// miss.
-    #[allow(clippy::too_many_arguments)]
     fn replay_snapshot(
         &mut self,
-        p: &Protocol,
+        p: &Cod1Wire,
         ps: &msg::PlayerState,
         ring: &CmdRing,
         world: &MoveWorld,
@@ -480,7 +478,7 @@ impl Predictor {
 /// (`docs/research/cod11-player-clip.md`). `lerped` is where each was drawn,
 /// else its `trBase` stands in.
 pub fn solid_bodies(
-    p: &Protocol,
+    p: &Cod1Wire,
     entities: &BTreeMap<u32, msg::EntityState>,
     own: u32,
     lerped: &HashMap<u32, Vec3>,
@@ -515,7 +513,7 @@ mod tests {
     use vcod_common::net::msg::UserCmd;
     use vcod_common::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD, PROTOCOL_V1};
 
-    const P: &Protocol = &PROTOCOL_V1;
+    const P: &Cod1Wire = &PROTOCOL_V1;
 
     /// A snapshot with no brush models.
     fn still() -> (SnapshotMovers, i32) {
@@ -553,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    /// A miss is `None`, so the caller draws stage 2's interpolated snapshots.
+    /// A miss is `None`, so the caller draws the interpolated snapshots.
     fn history_gap_draws_the_snapshot() {
         let world = test_world(&[]);
         let snap = standing(5000, 0.0);

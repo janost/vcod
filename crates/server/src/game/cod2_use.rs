@@ -14,22 +14,11 @@ use vcod_gsc::{EntId, Host, Value};
 use super::cod2::Cod2Level;
 use crate::game::trigger::TriggerKind;
 
-/// `+activate` (0x8) and `+usereload` (0x20): `useButtonPressed`'s bits.
-pub const USE_BUTTONS: i32 = 0x28;
+use crate::game::trigger::CONTENTS_USE;
+pub use crate::game::use_list::USE_BUTTONS;
+use crate::game::use_list::{ANGLE_WEIGHT, AREA_BOX, PENALTY, REACH, SIGHT_MASK};
 /// `+usereload` alone: a tap with nothing to use is a reload.
 const USE_RELOAD: i32 = 0x20;
-/// `Player_GetUseList`'s `CM_AreaEntities` box about the eye and its
-/// contents (lnxded rodata 0x815ee4c..0x815ee54).
-const AREA_BOX: Vec3 = Vec3::new(192.0, 192.0, 96.0);
-const CONTENTS_USE: i32 = 0x20_0000;
-/// The reach from the eye to a bounds centre (0x815ee60), the view-angle
-/// weight (0x815ee58, 0x815ee5c) and the penalty an ungrabbable item or a
-/// blocked sight takes (0x815ee64).
-const REACH: f32 = 128.0;
-const ANGLE_WEIGHT: f32 = 256.0;
-const PENALTY: f32 = 10000.0;
-/// The sight trace's mask (`G_TraceCapsuleComplete(.., 0x11)`).
-const SIGHT_MASK: u32 = 0x11;
 /// `weaponType` 1: a grenade item never hints.
 const WEAP_TYPE_GRENADE: i32 = 1;
 
@@ -66,23 +55,13 @@ pub struct UseEntry {
 pub type Hint = (i32, i32, Option<EntId>);
 const NO_HINT: Hint = (0, -1, None);
 
-/// An entry's score off its bounds centre, `None` past the reach:
-/// `((dot + 1) * -0.5 + 1) * 256`, less 256 for a `trigger_use`, plus the
-/// distance. The penalty is added by the caller between the two.
-fn score(eye: Vec3, forward: Vec3, centre: Vec3) -> Option<(f32, f32)> {
-    let to = centre - eye;
-    let dist = to.length();
-    if dist > REACH {
-        return None;
+impl crate::game::use_list::Scored for UseEntry {
+    fn score(&self) -> f32 {
+        self.score
     }
-    let dir = if dist > 0.0 { to / dist } else { Vec3::ZERO };
-    Some((((dir.dot(forward) + 1.0) * -0.5 + 1.0) * ANGLE_WEIGHT, dist))
-}
-
-/// `compare_use` (Mac 0x1cc8e2): the score difference truncated to an
-/// int, under glibc's merge sort.
-fn sort(list: &mut [UseEntry]) {
-    crate::game::item::msort(list, |a, b| (a.score - b.score) as i32 <= 0);
+    fn score_mut(&mut self) -> &mut f32 {
+        &mut self.score
+    }
 }
 
 /// The hint walk of `Player_UpdateCursorHints` off a gun (Mac 0x1ccebe):
@@ -219,7 +198,8 @@ impl Cod2Level {
                     // hint walk on an `eType` 0 one).
                     continue;
                 };
-                let Some((mut s, dist)) = score(eye, forward, centre) else {
+                let Some((mut s, dist)) = crate::game::use_list::score(eye, forward, centre, REACH)
+                else {
                     continue;
                 };
                 if matches!(kind, UseKind::Trigger { .. }) {
@@ -255,26 +235,16 @@ impl Cod2Level {
                 )
             })
             .count();
-        sort(&mut list);
-        list.truncate(list.len() - ungrabbable);
-        let mut blocked = 0;
-        for e in list.iter_mut() {
-            if matches!(e.kind, UseKind::Trigger { touch: true, .. }) {
-                continue;
-            }
-            // INFERRED: the world and the brush models stop the trace,
-            // not the static models.
-            let tr = self
-                .world
-                .collision
-                .point_trace(eye, e.sight, SIGHT_MASK, false);
-            if tr.fraction < 1.0 {
-                e.score += PENALTY;
-                blocked += 1;
-            }
-        }
-        sort(&mut list);
-        list.truncate(list.len() - blocked);
+        // INFERRED: the world and the brush models stop the sight trace,
+        // not the static models.
+        let collision = &self.world.collision;
+        crate::game::use_list::sort_and_cut(&mut list, ungrabbable, |e| {
+            !matches!(e.kind, UseKind::Trigger { touch: true, .. })
+                && collision
+                    .point_trace(eye, e.sight, SIGHT_MASK, false)
+                    .fraction
+                    < 1.0
+        });
         list
     }
 
@@ -417,6 +387,7 @@ impl Cod2Level {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::use_list::{score, sort};
 
     fn entry(n: u32, kind: UseKind, score: f32) -> UseEntry {
         UseEntry {
@@ -442,11 +413,11 @@ mod tests {
     #[test]
     fn the_use_list_scores_direction_and_distance() {
         let f = Vec3::X;
-        let (s, d) = score(Vec3::ZERO, f, Vec3::new(64.0, 0.0, 0.0)).unwrap();
+        let (s, d) = score(Vec3::ZERO, f, Vec3::new(64.0, 0.0, 0.0), REACH).unwrap();
         assert_eq!((s, d), (0.0, 64.0));
-        let (s, _) = score(Vec3::ZERO, f, Vec3::new(-64.0, 0.0, 0.0)).unwrap();
+        let (s, _) = score(Vec3::ZERO, f, Vec3::new(-64.0, 0.0, 0.0), REACH).unwrap();
         assert_eq!(s, 256.0);
-        assert!(score(Vec3::ZERO, f, Vec3::new(129.0, 0.0, 0.0)).is_none());
+        assert!(score(Vec3::ZERO, f, Vec3::new(129.0, 0.0, 0.0), REACH).is_none());
         // Truncated comparison: under a unit apart keeps the walk order.
         let mut l = vec![
             entry(1, UseKind::Turret, 10.9),
@@ -570,7 +541,7 @@ mod tests {
             f.frame();
             f.buttons[0] = 0;
             f.frames(2);
-            let w = f.level.rt.host.client_weapons[0];
+            let w = f.level.rt.host.clients[0].weapons;
             let mounted = f.level.manned_gun(0) == Some(gun);
             if side > 0.0 {
                 assert!(w.holds(mp40 as usize), "the press took the item");

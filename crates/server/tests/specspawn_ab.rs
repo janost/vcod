@@ -2,7 +2,7 @@
 //! spawns a spectator who holds forward again as a spectator every 2 s.
 //! 1.5b's and UO's `ClientSpawn` run the client's last cmd for a spectator
 //! as for a player, so the spawn frame's snapshot has him flown 100 ms off
-//! the spot; 1.1d's null cmd leaves him on it (cod15-movement.md 4, "The
+//! the spot; 1.1d's null cmd leaves him on it (cod15-movement.md 4.2, "The
 //! spawn's lie-down"). The fixtures' `EDGE origin` lines are the probe
 //! client's snapshots on the spawn frames.
 //!
@@ -18,10 +18,9 @@ use crate::common;
 use common::{Queues, step};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::NetClient;
 use vcod_common::net::msg::UserCmd;
-use vcod_common::net::protocol::PROTOCOL_V6;
 
 const SCRIPT: &str =
     include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_specspawn.gsc");
@@ -61,14 +60,12 @@ fn spawn_times(log: &[String]) -> Vec<i32> {
 fn check(fs: vcod_common::pk3::Pk3Fs, fixture: &str) {
     let proto = vcod_server::server::install_protocol(&fs);
     let map = "mp_carentan";
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_specspawn"), now);
-    sv.set_protocol(proto);
-    sv.overlay_script("maps/mp/gametypes/probe_specspawn", SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        script: Some(SCRIPT),
+        ..common::Boot::new(map, "probe_specspawn")
+    }
+    .start(fs);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl = NetClient::start_with_qport(common::ClientEnd(q.clone()), now, 0x2001);
     let frame = Duration::from_millis(common::FRAME_MS as u64);
@@ -83,7 +80,7 @@ fn check(fs: vcod_common::pk3::Pk3Fs, fixture: &str) {
         step(&mut sv, &q, &mut cl, now);
         let times = spawn_times(sv.script_log());
         if let Some(s) = cl.snapshots().newest()
-            && times.contains(&s.server_time)
+            && times.contains(&s.server_time.raw())
             && ours.last().is_none_or(|&(t, _)| t != s.server_time)
         {
             let f = |n: &str| f32::from_bits(s.ps.field_i32(cl.protocol(), n) as u32);
@@ -123,13 +120,9 @@ fn a_spectator_spawn_runs_a_null_cmd_like_retail() {
 
 #[test]
 fn a_spectator_spawn_runs_the_last_cmd_like_15() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     check(fs, include_str!("fixtures/specspawn/mp_carentan-1.5.txt"));
 }
 

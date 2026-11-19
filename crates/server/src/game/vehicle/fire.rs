@@ -27,8 +27,8 @@ const NUDGE_YAW: f32 = 2.0;
 const MAIN_JOLT: f32 = 0.75;
 /// The MG loops' hold after each round (`rec+0x2e4`, `0x2f0`).
 const LOOP_HOLD_MS: i32 = 200;
-/// `CONTENTS_BODY`, which the barrel test drops from the clipmask.
-const CONTENTS_BODY: u32 = 0x2000000;
+/// The barrel test drops `CONTENTS_BODY` from the clipmask.
+use vcod_common::clipmap::CONTENTS_BODY;
 /// Event parm bit 7: the server drew neither impact nor tracer, the client
 /// traces the round itself.
 pub const CLIENT_TRACED: i32 = 0x80;
@@ -355,7 +355,7 @@ mod tests {
     use super::*;
 
     /// mp_kharkov's Panzer IV under `probe_vehicle_shell`, read under gdb
-    /// on retail UO 1.51b (coduo-vehicles.md 13, "The shell's bits"): the
+    /// on retail UO 1.51b (coduo-vehicles.md 13.1, "The shell's bits"): the
     /// flash tag's forward and origin, the driver's aim point, the bend's
     /// angles, the bent forward, `Weapon_Artillery_Fire`'s spread point 16
     /// out for each of the three shells' `gunrandom` pairs, and the

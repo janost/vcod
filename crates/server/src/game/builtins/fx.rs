@@ -5,6 +5,7 @@
 //! (docs/research/cod11-events-and-fx.md 2).
 
 use crate::game::host::GameHost;
+use crate::game::slot::ClientSlot;
 use crate::game::temp_entity::{Quake, Scope, TempEntity};
 use vcod_gsc::{Cx, ErrorKind, Host, Target, Value};
 
@@ -12,7 +13,7 @@ pub use vcod_common::net::event_ids::EV_PLAY_FX;
 pub use vcod_common::net::event_ids::EV_PLAY_FX_DIR;
 pub use vcod_common::net::event_ids::EV_PLAY_FX_ON_TAG;
 
-pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+use super::Builtin;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("loadfx", load_fx),
@@ -22,10 +23,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("grenadeexplosioneffect", grenade_explosion_effect),
     ("earthquake", earthquake),
 ];
-
-pub fn lookup(folded: &str) -> Option<Builtin> {
-    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
-}
 
 /// `loadFX(path)`: intern the effect path into the effect configstring
 /// range and hand back its effect id, which is what `level._effect[...]`
@@ -232,18 +229,15 @@ pub fn play_fx_on_tag(
     let parm = host
         .allocators
         .fx_tag_index(&mut host.configstrings, fx, &tag)?;
-    let Some(e) = host.ents.get_mut(ent) else {
-        return Ok(Value::Undefined);
-    };
-    if e.client.is_some() {
+    if let Some(slot) = ClientSlot::of_entity(&host.ents, ent) {
         host.client_sim_ops.push((
-            ent.0 as usize,
+            slot.index(),
             crate::game::host::SimOp::Event {
                 event: EV_PLAY_FX_ON_TAG,
                 parm,
             },
         ));
-    } else {
+    } else if let Some(e) = host.ents.get_mut(ent) {
         e.events.add(EV_PLAY_FX_ON_TAG, parm);
     }
     Ok(Value::Undefined)

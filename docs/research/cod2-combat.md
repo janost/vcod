@@ -343,6 +343,13 @@ VERIFIED, its switch:
 | 197 | `player_die` with `MOD_SUICIDE` and 100000 |
 | 116..138 (landings) | `G_Damage` with `MOD_FALLING` (0xb) and `maxHealth * parm / 100`, all of it from a parm of 100 up |
 
+The walk starts at `eventSequence - 4` when the old sequence
+`ClientThink_real` hands it is further back, so a cmd raising five or more
+events walks only the ring's four (lnxded 0x80f52da: `sub $0x4` from
+`ps+0xa4`, `cmp`, `jge`). VERIFIED, the clamp. The body's copy in
+`ClientEndFrame` (0x80f56f8, `cod2-protocol.md` 16.3) has no such clamp.
+VERIFIED, the loop. vcod's walk is `game::cod2::cmd_events`.
+
 ### 2.2 The muzzle and the aim
 
 `G_CalcMuzzlePoints` (lnxded 0x81207ec) takes `AngleVectors` of
@@ -735,6 +742,18 @@ attachments assemble.
   `holdrand`: 9.6's "scripts' own generator" at 0x817e338 is this one.
 - So the bullet spread, the gun spring and the melee's damage roll draw
   from `rand()`; a rocket's wobble does not. VERIFIED, the call sites.
+- A thrower who leaves: `fire_grenade` stores the thrower into
+  `r.ownerNum` (`+0x150`) and `+0x18c` (lnxded 0x810e745, 0x810e751).
+  `ClientDisconnect` (0x80f94ce) frees the client's entity through
+  `G_FreeEntity` (call at 0x80f95f0), whose sweep (0x811eb3e, called at
+  0x811eebf) walks every entity in use and stores 0 into `+0x18c` where
+  it holds the freed entity (0x811eb86..0x811eb97) and 0x3ff into
+  `+0x150` where it holds its number (0x811eba1..0x811ebb2). VERIFIED
+  (the instructions). INFERRED: `+0x18c` is Q3's `parent`, as 1.1d's
+  `+0x198` (cod11-combat.md 13.7), so the next client into the slot is
+  never the grenade's attacker. vcod clears `Missile::owner` in
+  `Cod2Level::disconnect`. Whether `G_ExplodeMissile` then walks the
+  splash with no attacker is not read here; vcod walks none.
 
 ### 2.7 The melee
 
@@ -1014,6 +1033,8 @@ has only one with a goal weight). Test `a_corpse_falls_and_rests`
   `TR_GRAVITY`, a think at +1000. It is kept in a ring of
   `g_maxDroppedWeapons` (16, 1..32) that evicts the slot farthest from
   every playing client.
+- On `cod2_lnxded` the launch is at 0x81063d4. INFERRED (carried over
+  from vcod's port, `game::cod2_items::launch_off`, not re-read).
 - `crandom` is `2 * rand() / 2^31 - 1` (Mac 0x2cf1a). VERIFIED.
 - `Touch_Item` (Mac 0x1b1bea) is 1.1's (`cod11-items.md` 7) on CoD2's item
   rows (a weapon's row is its index). VERIFIED:
@@ -1069,7 +1090,7 @@ vcod:
 - `builtins::cod2::drop_item` runs 1.1's `dropItem`. `item::launch` names
   CoD2's row off the level's weapon list (`weapon_<name>`, INFERRED) and
   `cod2_items::launch_off` launches it, its climb off the game's `rand()`
-  (`GameHost::cod2_crandom`).
+  (`cod2_items::crandom`).
 - A thrown drop waits in `Cod2HostState::tag_drops` until
   `Cod2Level::place_drops` (each frame's start and after its threads)
   poses the dropper, controls eased toward the frame its last end frame
@@ -1159,10 +1180,19 @@ vcod:
   clear one. VERIFIED (Mac 0x1c45b8, 0x1c3f18; rodata 0x326570 sqrt 2,
   0x3262dc 0.2, 0x326388 0.1, 0x326470 24, 0x3264c4 15).
 
-vcod: `game::cod2_blast` holds the measure both walks share
-(`stored_length`, `blast_damage`). A missile's blast probes `CanDamage`
-through `Cod2Level::locational_trace` (the world, the static models, the
-entities); the builtin's probes still clip the world's collision alone. The builtin
+vcod: `game::cod2_blast` holds the one `G_RadiusDamage` measure and
+`CanDamage` both walks take (`victim_damage`, `client_share`,
+`entity_share`) and their one clear-test, `cod2_blast::passed`: a probe
+clips the world's clip map, the static models, then the brush and script
+model entities, passing the victim; the tenth's capsule clips the world's
+clip map alone. The level hands the host its clip map and static models at
+load (`Cod2HostState::blockers`), so the script's `radiusDamage` sees the
+blockers a missile's blast does, as retail's one function does. VERIFIED,
+the gate: `hit-rocket-cover`'s target behind the static panzer takes
+nothing from the builtin's blast at the rocket's point either
+(`radius_damage_stops_on_a_static_model`), where the world-only probes the
+builtin had before killed it. An entity victim's probes pass the entity
+itself. INFERRED. The builtin
 (`builtins::cod2::radius_damage`) walks the playing clients (their body as
 the last think or end frame left it) in slot order, then the entities
 with `takedamage` in the area tree's order. It starts each client's

@@ -12,11 +12,10 @@
 //! to pmove through [`Rules::mantle_anims`](super::Rules); without them no
 //! mantle starts.
 
-use std::sync::OnceLock;
+use std::sync::Mutex;
 use vcod_common::asset_source::AssetSource;
 
 use glam::Vec3;
-use vcod_common::pk3::Pk3Fs;
 
 use super::fpu::{self, d};
 use super::{PlayerState, Pml, Pmove, button, ef, pm_type, pmf};
@@ -130,6 +129,11 @@ impl Clip {
         }
         // 0x80bd0a6: the frame position stored, its whole part truncated.
         let pos = (d(t) * f64::from(n)) as f32;
+        // A negative timer off the wire is no retail state; its frame would
+        // index the keys at -1.
+        if pos.is_nan() || pos < 0.0 {
+            return self.keys[0];
+        }
         let whole = pos as i32;
         let count = self.keys.len() - 1;
         let (i, frac) = if count < usize::from(n) {
@@ -237,17 +241,24 @@ pub fn end_and_duration(anims: &MantleAnims, ps: &PlayerState) -> (Vec3, i32) {
     (add(ps.origin, left), total)
 }
 
-static ANIMS: OnceLock<MantleAnims> = OnceLock::new();
+/// Every distinct set of mantle anims a search path has given, one leak
+/// each: a mod or another server in the process gets its own clips.
+static ANIMS: Mutex<Vec<&'static MantleAnims>> = Mutex::new(Vec::new());
 
-/// The mantle anims off `fs`, read on the first call that finds them and
-/// kept for the process (retail keeps one `s_mantleAnims`). `None` (logged)
-/// where the paks lack them.
-pub fn anims(fs: &Pk3Fs) -> Option<&'static MantleAnims> {
-    if let Some(a) = ANIMS.get() {
-        return Some(a);
-    }
+/// The mantle anims off `fs`, read on each call: what retail's one
+/// `s_mantleAnims` holds (`Mantle_CreateAnims`, 0x80ddaa4) for this search
+/// path. `None` (logged) where the paks lack them.
+pub fn anims(fs: &dyn AssetSource) -> Option<&'static MantleAnims> {
     match MantleAnims::load(fs) {
-        Ok(a) => Some(ANIMS.get_or_init(|| a)),
+        Ok(a) => {
+            let mut kept = ANIMS.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(&k) = kept.iter().find(|k| ***k == a) {
+                return Some(k);
+            }
+            let k: &'static MantleAnims = Box::leak(Box::new(a));
+            kept.push(k);
+            Some(k)
+        }
         Err(e) => {
             log::warn!("no mantle: {e:#}");
             None
@@ -508,7 +519,7 @@ pub(crate) fn mantle_move(pm: &mut Pmove, pml: &Pml) {
     let (up, over) = anims.lengths(&ps.mantle);
     let total = up + over;
     let old = ps.mantle.timer;
-    ps.mantle.timer = (old + pml.msec).min(total);
+    ps.mantle.timer = old.wrapping_add(pml.msec).min(total);
     let now = ps.mantle.timer;
     let d0 = anims.delta(&ps.mantle, old);
     let d1 = anims.delta(&ps.mantle, now);
@@ -519,7 +530,7 @@ pub(crate) fn mantle_move(pm: &mut Pmove, pml: &Pml) {
     let ps = &mut *pm.ps;
     let step = sub(d1, d0);
     ps.origin = add(step, ps.origin);
-    let per_sec = (1.0 / (d(MSEC_TO_SEC) * f64::from((now - old) as f32))) as f32;
+    let per_sec = (1.0 / (d(MSEC_TO_SEC) * f64::from(now.wrapping_sub(old) as f32))) as f32;
     ps.velocity = fpu::scale(step, per_sec);
     if now == total {
         ps.pm_flags &= !pmf::MANTLE;
@@ -584,6 +595,99 @@ mod tests {
         assert_eq!(c.abs_delta(1.0), Vec3::new(10.0, 0.0, 8.0));
         let dense = clip(2, &[0, 1, 2], &[[0.0; 3], [1.0, 0.0, 0.0], [3.0, 0.0, 0.0]]);
         assert_eq!(dense.abs_delta(0.75), Vec3::new(2.0, 0.0, 0.0));
+    }
+
+    /// A wire playerstate mid-mantle with a timer at either end of i32 and a
+    /// huge mantle yaw steps without a panic or a hang (SEC-027, SEC-043).
+    #[test]
+    fn a_hostile_mantle_state_steps() {
+        use crate::net::PlayerState2;
+        use crate::net::usercmd::UserCmd2;
+        use vcod_common::movetrace::MoveWorld;
+        let mut c = clip(25, &(0..=25).collect::<Vec<_>>(), &[[1.0, 0.0, 2.0]; 26]);
+        c.length_ms = 833;
+        let anims: &'static MantleAnims = Box::leak(Box::new(MantleAnims {
+            clips: vec![c; ANIM_NAMES.len()],
+        }));
+        let rules = super::super::Rules {
+            mantle_anims: Some(anims),
+            ..Default::default()
+        };
+        let world = vcod_common::collision::test_world(&[]);
+        for (timer, yaw) in [
+            (i32::MIN, 0.0),
+            (-40, 1e30),
+            (i32::MAX, -1e30),
+            (100, f32::INFINITY),
+        ] {
+            let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.125), 0.0, 1000);
+            ps.pm_flags |= pmf::MANTLE;
+            ps.mantle.timer = timer;
+            ps.mantle.yaw = yaw;
+            ps.view_angles[1] = 1e30;
+            let mut ps = PlayerState::from_wire(&ps.to_wire(&PlayerState2::default()));
+            let mut old = UserCmd2 {
+                server_time: 1000,
+                ..Default::default()
+            };
+            for t in [1050, 1100] {
+                let cmd = UserCmd2 {
+                    server_time: t,
+                    ..Default::default()
+                };
+                super::super::player_step(
+                    &mut ps,
+                    &cmd,
+                    &mut old,
+                    MoveWorld::bare(&world),
+                    rules,
+                    0.0,
+                );
+            }
+        }
+    }
+
+    /// A negative or NaN fraction (a wire timer under 0) takes the first
+    /// key, never key -1 (SEC-027).
+    #[test]
+    fn a_negative_fraction_takes_the_first_key() {
+        let dense = clip(
+            2,
+            &[0, 1, 2],
+            &[[5.0, 0.0, 0.0], [1.0, 0.0, 0.0], [3.0, 0.0, 0.0]],
+        );
+        for t in [-0.6, -0.4, -1e9, f32::NEG_INFINITY, f32::NAN] {
+            assert_eq!(dense.abs_delta(t), Vec3::new(5.0, 0.0, 0.0), "{t}");
+        }
+    }
+
+    /// Two search paths whose `mp_mantle_up_57` differ give two sets of
+    /// clips in one process; the same files give the same set back. Needs
+    /// `COD2_DIR`.
+    #[test]
+    fn each_search_path_gets_its_own_clips() {
+        let (Some(stock), Some(mut modded)) = (
+            vcod_common::testing::cod2_fs(),
+            vcod_common::testing::cod2_fs(),
+        ) else {
+            return;
+        };
+        let other = stock.read("xanim/mp_mantle_up_51").unwrap();
+        modded.overlay("xanim/mp_mantle_up_57", other);
+        let a = anims(&stock).unwrap();
+        let b = anims(&modded).unwrap();
+        assert!(!std::ptr::eq(a, b));
+        let up_57 = ANIM_NAMES
+            .iter()
+            .position(|n| *n == "mp_mantle_up_57")
+            .unwrap();
+        let up_51 = ANIM_NAMES
+            .iter()
+            .position(|n| *n == "mp_mantle_up_51")
+            .unwrap();
+        assert_ne!(a.abs_delta(up_57, 1.0), b.abs_delta(up_57, 1.0));
+        assert_eq!(b.abs_delta(up_57, 1.0), a.abs_delta(up_51, 1.0));
+        assert!(std::ptr::eq(anims(&stock).unwrap(), a));
     }
 
     /// `Mantle_CreateAnims`' load check (0x80ddaa4): every up anim ends

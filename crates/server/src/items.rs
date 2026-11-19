@@ -77,7 +77,7 @@ pub fn item_models(defs: &Defs, fs: Option<&Pk3Fs>, name: &str) -> Vec<String> {
         "projectileModel",
     ]
     .iter()
-    .filter_map(|k| map.get(*k))
+    .filter_map(|k| map.get(k))
     .filter(|v| !v.is_empty())
     .cloned()
     .collect()
@@ -127,7 +127,7 @@ impl Items {
         let mut registered = vec![false; defs.num_items()];
         // M1: index 0's classname is blank (`dump_itemlist.py`), so no
         // `precacheItem` call can ever name it, and `ClearRegisteredItems`
-        // (0x4eecc) only `bzero`s `itemRegistered` — it does not special-
+        // (0x4eecc) only `bzero`s `itemRegistered`; it does not special-
         // case index 0 either. The only writer is `RegisterItem` (0x4e504),
         // reached from a handful of call sites that pass a computed weapon
         // index rather than a literal; two are inside `BG_GivePlayerWeapon`

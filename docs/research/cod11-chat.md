@@ -81,6 +81,11 @@ VERIFIED off the function body, each branch confirmed by the live captures in 2.
 - The line is `va("%s \"\x15%s%c%c%s\"", word, head, '^', colour, text)` (0x7397a), `word` being `i` (0x73976) for mode 1 and `h` (0x73978) otherwise, sent by `trap_SendServerCommand(client, 0, line)`.
 - Recipients: with no target, every entity slot below `level.maxclients`; with one, that one. A recipient must be in use, have a client, be `CON_CONNECTED` (`client+0x20ec` == 2), pass `OnSameTeam` (0x64aec: teams equal and not 0) in mode 1, and, when the speaker's `sessionState` (`client+0x20d0`) is not 0 (playing), have a nonzero `sessionState` too. A dead or spectating speaker reaches only clients out of play.
 - `G_LogPrintf` writes `say: %s: %s` or `sayteam: %s: %s`.
+- vcod writes each control character of the text as a space in its
+  `games_mp.log` lines and its server log, in `say`, `sayteam` and `tell`
+  alike (`game::say::log_text`): a quoted line feed would otherwise start a
+  record the client wrote, stamp included. Retail writes the bytes. The
+  chat line on the wire keeps them.
 
 INFERRED: the location forms never appear on a stock map. `Team_GetLocationMsg` (0x647c0) walks `level.locationHead`, which only `target_location` entities fill, and a byte search over `pak*.pk3` finds that classname in no stock `.bsp`. vcod leaves them out.
 
@@ -115,6 +120,8 @@ vcod's server gives the same lines to the same clients in both recipes.
 ### 2.2 The netchan key and `%`
 
 VERIFIED: the server-to-client scramble keys on the server's raw copy of the client's last command (`docs/protocol-1.1.md`, "XOR scramble"), and the server's `MSG_ReadString` keeps `%`. A client that substitutes `%` in its own copy of the key garbles every later message after a `say ... %s ...` (VERIFIED live, an older vcod client).
+
+The other direction runs on the server command the client acked. VERIFIED: the client's reader turns its `%` into `.` (CoDMP.exe 0x444e00, `docs/protocol-1.1.md` divergence 14), and that copy keys the client's op scramble and its usercmd key. UNVERIFIED: what retail's server keeps in its own ring for a queued command holding `%`; the 2.1 lines with `100%` were read off the server log only. vcod's server rings each queued command as the client will read it (`client_read_string`: `%` and bytes over 127 as `.`, past the writer's 1023-byte cap cut), so a relayed `100%` keys both ends alike whatever retail does. vcod's client rings each of its own commands as `write_string` sent it, high bytes as `.`, so a byte 0x92 inside a UTF-8 char keys as the `.` the server read.
 
 ## 3. The client's handlers
 

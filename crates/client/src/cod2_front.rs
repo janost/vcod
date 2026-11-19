@@ -15,7 +15,7 @@ use vcod_common::{bsp, mesh};
 
 use crate::camera::FlyCamera;
 use crate::play::cod2::{Cod2Session, ConnectOpts, Join, ServerError};
-use crate::{App, Mode, World, cod2_hud, cod2_scene, cod2_viewmodel, play, version_tag};
+use crate::{App, Mode, World, version_tag};
 
 /// How long a front-end connect waits for the gamestate, as `--connect`.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -35,8 +35,14 @@ impl App {
             self.unload_world();
             self.mode = Mode::Idle;
         }
-        log::info!("connecting to {addr}");
         vcod_common::laps::begin_load(format!("cod2 connect {addr}"));
+        self.start_cod2_connect(addr);
+    }
+
+    /// [`Self::connect_cod2`]'s handshake started, with no game up; a
+    /// start-up `--connect` keeps the load profile the process start began.
+    pub(crate) fn start_cod2_connect(&mut self, addr: String) {
+        log::info!("connecting to {addr}");
         if let Some(c) = self.session.cod2_mut() {
             c.connecting = Some(Cod2Session::connect_in_background(
                 &addr,
@@ -67,7 +73,7 @@ impl App {
             .session
             .cod2_mut()
             .and_then(|c| c.connecting.take())
-            .map(|c| c.addr)
+            .map(|c| c.addr.clone())
             .unwrap_or_default();
         vcod_common::laps::mark(|| "cod2 gamestate".into());
         let entered = result.and_then(|s| self.enter_cod2(s));
@@ -119,9 +125,8 @@ impl App {
         if let Some(r) = &mut self.renderer {
             r.reopen(&self.fs);
         }
-        // what the draw parsed came off the old search path
         if let Some(c) = self.session.cod2_mut() {
-            c.draw = cod2_scene::Cod2Draw::new();
+            c.search_path_reopened();
         }
         Ok(())
     }
@@ -184,16 +189,8 @@ impl App {
                 .read(&path)
                 .ok_or_else(|| ServerError(format!("EXE_ERR_COULDNT_LOAD\u{15}{path}")))?;
             laps.lap("read");
-            // A downloaded map is anyone's bytes: a parse or upload that
-            // panics ends the game with `Com_LoadBsp`'s error, not the client.
-            let (file, bsp) = std::panic::catch_unwind(|| {
-                let file = vcod_cod2::map::MapFile::parse(&data)?;
-                let bsp = file.world();
-                anyhow::Ok((file, bsp))
-            })
-            .map_err(|_| anyhow::anyhow!("the parser panicked"))
-            .and_then(|r| r)
-            .with_context(|| format!("cannot parse {path}"))?;
+            // An upload that panics ends the game too, not the client.
+            let (file, bsp) = parse_map(&data, &path)?;
             laps.lap("parse");
             // The session's prediction collision builds beside the upload.
             let session = pump.is_some();
@@ -267,24 +264,12 @@ impl App {
         loaded
     }
 
-    /// Ends the CoD2 session, or the connect still running: `disconnect`
-    /// to the server and the session's HUD and view state dropped.
+    /// Ends the CoD2 session, or the connect still running
+    /// ([`Cod2Client::leave`]).
     pub(crate) fn leave_cod2(&mut self) {
-        let Some(c) = self.session.cod2_mut() else {
-            return;
-        };
-        c.connecting = None;
-        if let Some(p) = c.pump.take() {
-            c.session = Some(p.finish());
+        if let Some(c) = self.session.cod2_mut() {
+            c.leave();
         }
-        if let Some(mut s) = c.session.take() {
-            s.disconnect();
-        }
-        c.draw = cod2_scene::Cod2Draw::new();
-        c.view = cod2_viewmodel::Cod2View::default();
-        c.hud = cod2_hud::Cod2Hud::default();
-        c.menus = play::join::Join::new(None, None);
-        c.menus_for = 0;
     }
 }
 
@@ -357,9 +342,46 @@ fn download_line(p: &vcod_cod2::net::download::Progress, loc: impl Fn(&str) -> S
     format!("{} {name}  {copied}", loc("EXE_DOWNLOADING"))
 }
 
+/// A `.d3dbsp` parsed into its file and world. A downloaded map is anyone's
+/// bytes: a parse that panics is `path`'s error, not the client's end.
+fn parse_map(data: &[u8], path: &str) -> Result<(vcod_cod2::map::MapFile, MapWorld)> {
+    std::panic::catch_unwind(|| {
+        let file = vcod_cod2::map::MapFile::parse(data)?;
+        let bsp = file.world();
+        anyhow::Ok((file, bsp))
+    })
+    .map_err(|_| anyhow::anyhow!("the parser panicked"))
+    .and_then(|r| r)
+    .with_context(|| format!("cannot parse {path}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A map that is not one fails its load with the path, whatever its
+    /// bytes, and the client stays up (TEST-050).
+    #[test]
+    fn a_hostile_map_fails_its_parse_not_the_client() {
+        let mut seed = 0x5eed_u64;
+        let junk: Vec<u8> = (0..4096)
+            .map(|_| vcod_common::rng::xorshift(&mut seed) as u8)
+            .collect();
+        let mut head = b"IBSP\x04\0\0\0".to_vec();
+        head.extend_from_slice(&junk);
+        for bytes in [&[][..], &junk, &head] {
+            let e = parse_map(bytes, "maps/mp/x.d3dbsp").err().expect("no map");
+            assert!(format!("{e:#}").contains("maps/mp/x.d3dbsp"), "{e:#}");
+        }
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let stock = fs.read("maps/mp/mp_toujane.d3dbsp").expect("mp_toujane");
+        assert!(parse_map(&stock, "toujane").is_ok());
+        for cut in [16, stock.len() / 3, stock.len() - 1] {
+            assert!(parse_map(&stock[..cut], "toujane").is_err(), "cut at {cut}");
+        }
+    }
 
     #[test]
     fn the_download_line_reads_as_retails() {

@@ -38,8 +38,7 @@ use common::{ADDR, ClientEnd, FRAME_MS, Join, Queues, holding, step_at};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
-use vcod_common::net::protocol::PROTOCOL_V6;
+use std::time::Duration;
 use vcod_common::net::{NetClient, NetEvent};
 use vcod_common::pk3::Pk3Fs;
 
@@ -74,8 +73,10 @@ const PROBE_ROLL: &str =
 const PROBE_CRUSH: &str =
     include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_sinecrush.gsc");
 
-/// Float formatting.
-const TOL: f32 = 0.05;
+/// Both logs print two decimals, so the same float can land a print step
+/// apart. Measured 2026-11-18 at 1.1 and UO: 0.01 over every frame row, 0
+/// on the spawned copies.
+const TOL: f32 = 0.02;
 
 /// How long before its first snapshot a capture's client starts joining.
 const FIRST_SNAP_AFTER_JOIN_MS: i64 = 400;
@@ -269,7 +270,14 @@ fn ours_tilt_15() -> Option<&'static Ours> {
     static RUN: std::sync::OnceLock<Option<Ours>> = std::sync::OnceLock::new();
     RUN.get_or_init(|| {
         let (map, name) = ("mp_harbor", "probe_tiltslab");
-        run_ours_on(fs_15, map, name, PROBE_TILT, TILT_15, true)
+        run_ours_on(
+            vcod_common::testing::game_fs_15,
+            map,
+            name,
+            PROBE_TILT,
+            TILT_15,
+            true,
+        )
     })
     .as_ref()
 }
@@ -296,7 +304,14 @@ fn ours_roll_15() -> Option<&'static Ours> {
     static RUN: std::sync::OnceLock<Option<Ours>> = std::sync::OnceLock::new();
     RUN.get_or_init(|| {
         let (map, name) = ("mp_depot", "probe_rollramp");
-        run_ours_on(fs_15, map, name, PROBE_ROLL, ROLL_15, true)
+        run_ours_on(
+            vcod_common::testing::game_fs_15,
+            map,
+            name,
+            PROBE_ROLL,
+            ROLL_15,
+            true,
+        )
     })
     .as_ref()
 }
@@ -365,7 +380,6 @@ fn run_ours_on(
 /// when it logs them. `late_ms` starts the client that much earlier.
 /// `known` is a first pass's lift for each landing by ours' level time.
 /// `probe_rate` sends the probe client's three cmds a frame instead of one.
-#[allow(clippy::too_many_arguments)]
 fn run_once(
     fs: Pk3Fs,
     map: &str,
@@ -377,14 +391,12 @@ fn run_once(
     known: &BTreeMap<i32, f32>,
 ) -> Option<Ours> {
     let p = vcod_server::server::install_protocol(&fs);
-    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, name), now);
-    sv.set_protocol(p);
-    sv.overlay_script(&format!("maps/mp/gametypes/{name}"), probe);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        script: Some(probe),
+        ..common::Boot::new(map, name)
+    }
+    .start(fs);
     // Each landing's lift is a fresh `rand()` draw, which ours cannot
     // replay. Before the samples start, a landing where the pack rests takes
     // the lift up to retail's first rest. After, a landing takes the lift up
@@ -489,7 +501,7 @@ fn run_once(
             }
         }
         if let Some(s) = cl.snapshots().newest() {
-            first_snap.get_or_insert(s.server_time);
+            first_snap.get_or_insert(s.server_time.raw());
             if let Some(present) = &present {
                 for (&n, e) in s.entities.iter().filter(|(n, _)| !present.contains(n)) {
                     new.entry(n).or_insert(Sent {
@@ -505,7 +517,7 @@ fn run_once(
             if std::env::var("WORLDCOPY_PS").is_ok() {
                 println!(
                     "PS t={} origin={:?} vel={:.0},{:.0},{:.0} ground={}",
-                    s.server_time,
+                    s.server_time.raw(),
                     s.ps.origin(p),
                     s.ps.field_f32(p, "velocity[0]"),
                     s.ps.field_f32(p, "velocity[1]"),
@@ -732,7 +744,11 @@ fn a_pitched_copy_blocks_its_rider_like_retail() {
 /// the carry (cod11-movers.md 21, "The carry's rounding").
 #[test]
 fn a_pitched_copy_blocks_its_rider_like_retail_on_15() {
-    pitched_matches(SERVER3_15, run3_on(fs_15, SERVER3_15), LIFT_15);
+    pitched_matches(
+        SERVER3_15,
+        run3_on(vcod_common::testing::game_fs_15, SERVER3_15),
+        LIFT_15,
+    );
 }
 
 #[test]
@@ -742,14 +758,6 @@ fn a_pitched_copy_blocks_its_rider_like_retail_on_uo() {
         run3_on(vcod_common::testing::uo_fs, SERVER3_UO),
         LIFT_15,
     );
-}
-
-/// The 1.5b install's paks, `None` elsewhere (a UO install's `main/` is
-/// 1.5's, so this runs there too).
-fn fs_15() -> Option<Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    (vcod_server::server::install_protocol(&fs).transport.version == PROTOCOL_V6.transport.version)
-        .then_some(fs)
 }
 
 fn run3_on(fs: fn() -> Option<Pk3Fs>, fixture: &str) -> Option<Ours> {

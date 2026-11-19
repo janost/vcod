@@ -68,7 +68,9 @@ impl RootClip {
             .saturating_sub(1)
             .min(self.rot.len() - 2);
         let ((f0, a), (f1, b)) = (self.rot[k], self.rot[k + 1]);
-        let s = ((frame - f32::from(f0)) / f32::from(f1.max(f0 + 1) - f0)).clamp(0.0, 1.0);
+        // Root keys are not checked ascending: a span under one frame is one.
+        let span = (f32::from(f1) - f32::from(f0)).max(1.0);
+        let s = ((frame - f32::from(f0)) / span).clamp(0.0, 1.0);
         [a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s]
     }
 
@@ -125,6 +127,17 @@ mod tests {
             }),
         };
         RootClip::of(&x).unwrap()
+    }
+
+    /// Root keys come off the zone unchecked: a non-last key of 65535
+    /// lerps without an overflow (BUG-130).
+    #[test]
+    fn a_root_key_of_65535_does_not_overflow() {
+        let c = clip(
+            true,
+            vec![(65535, [0, 32767]), (65535, [5000, 32000]), (0, [0, 32767])],
+        );
+        assert!(c.delta(0.0, 0.5).is_finite());
     }
 
     /// The root's move over a grid of time pairs, wraps included, under

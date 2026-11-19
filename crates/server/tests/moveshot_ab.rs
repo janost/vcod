@@ -27,7 +27,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::event_ids::{EV_BULLET_HIT_LARGE, EV_BULLET_HIT_SMALL, EV_UO_BULLET_HIT};
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
-use vcod_common::net::protocol::{PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::pk3::Pk3Fs;
 
 const MAP: &str = "mp_carentan";
@@ -226,7 +226,7 @@ fn retail(text: &str) -> Capture {
 }
 
 /// The bullet impacts on one of our snapshots.
-fn our_impacts(p: &Protocol, s: &vcod_common::net::snapshot::Snapshot) -> Vec<(u32, [i32; 3])> {
+fn our_impacts(p: &Cod1Wire, s: &vcod_common::net::snapshot::Snapshot) -> Vec<(u32, [i32; 3])> {
     s.entities
         .iter()
         .filter(|(_, e)| {
@@ -246,23 +246,19 @@ fn our_impacts(p: &Protocol, s: &vcod_common::net::snapshot::Snapshot) -> Vec<(u
 /// then each frame the cmds retail's snapshot of that frame had
 /// acknowledged, at their own times: the sight's idle sway runs on the
 /// level time, so both servers aim on the same one.
-fn ours(p: &'static Protocol, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<Vec3>, Vec<State>) {
+fn ours(p: &'static Cod1Wire, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<Vec3>, Vec<State>) {
     common::steady_weapon(&mut fs, part.weapon);
     let src = format!("../gsc/tests/fixtures/semantics/client-probes/{PROBE}.gsc");
     let probe = std::fs::read_to_string(src).expect("read the probe");
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, PROBE), now);
-    sv.set_protocol(p);
-    sv.overlay_script(&format!("maps/mp/gametypes/{PROBE}"), &probe);
-    sv.set_cvar("probe_teleport", "1");
-    sv.set_cvar("probe_spot", part.spot);
-    for (k, v) in part.cvars {
-        sv.set_cvar(k, v);
+    let mut all_cvars = vec![("probe_teleport", "1"), ("probe_spot", part.spot)];
+    all_cvars.extend_from_slice(part.cvars);
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        cvars: &all_cvars,
+        script: Some(&probe),
+        ..common::Boot::new(MAP, PROBE)
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let mut cl = common::connect(&mut sv, &q, &mut now);
@@ -297,7 +293,7 @@ fn ours(p: &'static Protocol, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<
         let frame_ms = common::FRAME_MS as i32;
         let batch: Vec<UserCmd> = (1..=6)
             .map(|k| UserCmd {
-                server_time: s.server_time - lag + (k * frame_ms + 5) / 6,
+                server_time: (s.server_time - lag + (k * frame_ms + 5) / 6).raw(),
                 angles: da.map(|d| (-d) & 0xffff),
                 weapon,
                 ..NULL_USERCMD
@@ -332,7 +328,7 @@ fn ours(p: &'static Protocol, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<
                 let ct = cap
                     .wait_snaps
                     .iter()
-                    .take_while(|w| w.0 <= t)
+                    .take_while(|w| w.0 <= t.raw())
                     .last()
                     .map_or(i32::MIN, |w| w.1);
                 let mut batch = Vec::new();
@@ -365,7 +361,7 @@ fn ours(p: &'static Protocol, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<
         {
             let o = s.ps.origin(p);
             if (o[0] - part.at[0]).abs() < 1.0 && (o[1] - part.at[1]).abs() < 1.0 {
-                shift = Some(s.server_time - r.0);
+                shift = Some((s.server_time - r.0).raw());
                 // The placement shares the spawn's frame and keeps what
                 // the cmds run at the spawn point left: retail's, from its
                 // snapshot (cod11-combat.md 2.1, "The street placement").
@@ -393,7 +389,7 @@ fn ours(p: &'static Protocol, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<
         let t = cl
             .snapshots()
             .newest()
-            .map_or(0, |s| s.server_time + common::FRAME_MS as i32);
+            .map_or(0, |s| (s.server_time + common::FRAME_MS as i32).raw());
         if t > last {
             break;
         }
@@ -440,7 +436,7 @@ fn ours(p: &'static Protocol, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<
 }
 
 /// The capture's impacts against ours, one for one.
-fn check(p: &'static Protocol, fs: Pk3Fs, part: Part, tag: &str) {
+fn check(p: &'static Cod1Wire, fs: Pk3Fs, part: Part, tag: &str) {
     let path = format!(
         "tests/fixtures/playerstate/{MAP}-dm-slope-8ms-moveshot-{}-{tag}.txt",
         part.name
@@ -506,13 +502,9 @@ fn check(p: &'static Protocol, fs: Pk3Fs, part: Part, tag: &str) {
 /// 1.5b's rounds fired strafing, running, crouched, sighted and leaning.
 #[test]
 fn a_15_moving_and_leaning_muzzle_lands_as_on_retail() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
-    {
-        return;
-    }
     check(&PROTOCOL_V6, fs, WALK, "1.5");
 }
 

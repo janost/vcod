@@ -97,15 +97,20 @@ pub(super) fn write_levels(queue: &wgpu::Queue, texture: &wgpu::Texture, levels:
 
 /// The loaded map's water draws.
 pub(super) struct Waters {
-    pipelines: HashMap<(usize, bool, bool), wgpu::RenderPipeline>,
+    pipelines: HashMap<(usize, bool, Option<PolygonOffset>), wgpu::RenderPipeline>,
     pub material_bgs: Vec<wgpu::BindGroup>,
     pub sims: Vec<WaterSim>,
 }
 
 impl Waters {
-    pub fn pipeline(&self, v: StageVariant, two_sided: bool, bias: bool) -> &wgpu::RenderPipeline {
+    pub fn pipeline(
+        &self,
+        v: StageVariant,
+        two_sided: bool,
+        offset: Option<PolygonOffset>,
+    ) -> &wgpu::RenderPipeline {
         let (slot, ..) = super::cod2::variant_state(v).expect("water draws take a lit variant");
-        &self.pipelines[&(slot, two_sided, bias)]
+        &self.pipelines[&(slot, two_sided, offset)]
     }
 
     /// Every water's height map at the frame's `time` seconds.
@@ -126,7 +131,7 @@ pub(super) struct WaterBuilder {
     /// One `rand()` stream for every setup, as retail's.
     rng: GlibcRand,
     material_of: HashMap<String, u32>,
-    pipelines: HashMap<(usize, bool, bool), wgpu::RenderPipeline>,
+    pipelines: HashMap<(usize, bool, Option<PolygonOffset>), wgpu::RenderPipeline>,
     material_bgs: Vec<wgpu::BindGroup>,
     sims: Vec<WaterSim>,
 }
@@ -205,7 +210,6 @@ impl WaterBuilder {
 
     /// Binds a water batch of `sh`, which [`draws_water`] accepted: the
     /// material's group (and its height map, same index) and the pipeline.
-    #[allow(clippy::too_many_arguments)]
     pub fn bind(
         &mut self,
         device: &wgpu::Device,
@@ -214,10 +218,10 @@ impl WaterBuilder {
         fs: &dyn AssetSource,
         sun_buf: &wgpu::Buffer,
         sh: &Material,
-        (v, two_sided, bias): (StageVariant, bool, bool),
+        (v, two_sided, offset): (StageVariant, bool, Option<PolygonOffset>),
     ) -> u32 {
         let (slot, blend, depth_write) = super::cod2::variant_state(v).expect("a lit variant");
-        let key = (slot, two_sided, bias);
+        let key = (slot, two_sided, offset);
         if !self.pipelines.contains_key(&key) {
             let p = make_lit_pipeline(
                 device,
@@ -228,11 +232,7 @@ impl WaterBuilder {
                 depth_write,
                 two_sided,
                 ("fs_main", None),
-                if bias {
-                    depth_bias(sh.depth_bias.unwrap_or(PolygonOffset::Single))
-                } else {
-                    Default::default()
-                },
+                offset.map_or_else(Default::default, depth_bias),
             );
             self.pipelines.insert(key, p);
         }
@@ -259,7 +259,6 @@ impl WaterBuilder {
     /// The material and height map groups of `w` over `cube`; without
     /// `mips` the height map keeps its top level only (the tests' exact
     /// sampling).
-    #[allow(clippy::too_many_arguments)]
     fn add(
         &mut self,
         device: &wgpu::Device,
@@ -287,7 +286,7 @@ impl WaterBuilder {
                     tex_entry(1, cube),
                 ],
             }));
-        let setup = WaterSetup::new(w, &mut self.rng);
+        let setup = WaterSetup::new(w, &mut self.rng).expect("water_of checked the width");
         let side = setup.width as u32;
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(&format!("watersetup {}", sh.name)),
@@ -423,7 +422,6 @@ mod tests {
     /// seen from `eye`, then identityLight 1 and the exp fog, its keep
     /// interpolated from the vertices of the plane's triangle under `p`
     /// (`Fog_VertexCalc`, cod2-client-perf.md 9).
-    #[allow(clippy::too_many_arguments)]
     fn hlsl(
         tex: &[u8],
         faces: &[[u8; 4]; 6],
@@ -561,7 +559,7 @@ mod tests {
             &Pk3Fs::empty(),
             &sun_buf,
             &sh,
-            (StageVariant::Opaque, true, false),
+            (StageVariant::Opaque, true, None),
         );
         // the bound group's map, rebuilt without mips over the test heights
         b.material_of.clear();
@@ -612,7 +610,7 @@ mod tests {
         for fog in [None, Some(([0.5, 0.55, 0.6], 0.0008))] {
             let cam = camera_group(&device, &queue, &camera, &camera_bytes(view_proj, eye, fog));
             let img = render(&device, &queue, format, |pass| {
-                pass.set_pipeline(waters.pipeline(StageVariant::Opaque, true, false));
+                pass.set_pipeline(waters.pipeline(StageVariant::Opaque, true, None));
                 pass.set_bind_group(0, &cam, &[]);
                 pass.set_bind_group(1, &waters.material_bgs[i as usize], &[]);
                 pass.set_bind_group(2, &waters.sims[i as usize].bg, &[]);

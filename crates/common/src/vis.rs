@@ -1,5 +1,7 @@
-//! Which soups a camera sees, decided the way the retail client does it:
-//! docs/research/bsp-ibsp59-format.md, "How the retail client draws the world".
+//! Which soups a camera sees: retail's portal walk, plus two passes on CoD1
+//! maps that mark more than retail for sightlines over low geometry
+//! (docs/research/bsp-ibsp59-format.md, "How the retail client draws the
+//! world", the passes and their cost in its last item).
 
 use crate::mapworld;
 use crate::mapworld::MapWorld;
@@ -220,8 +222,6 @@ fn convex_hull_on_plane(points: &[Vec3], n: Vec3) -> Vec<Vec3> {
     hull.into_iter().map(|p| p.2).collect()
 }
 
-/// Whether `p`, on the winding's plane, lies inside it (`ProjectedWinding
-/// ContainsCoplanarPoint`): on the inner side of every edge.
 /// Whether a popped portal's hull covers `min_area` of the screen, so its
 /// cell queues its own portals (`R_VisitPortals`, CoD2 Mac 0xf14c0): the
 /// share of the screen's 2 x 2 its points' NDC rectangle covers, then,
@@ -253,6 +253,8 @@ fn clips_children(hull: &[Vec3], view_proj: Mat4, min_area: f32) -> bool {
     (twice * 0.125).abs() >= min_area
 }
 
+/// Whether `p`, on the winding's plane, lies inside it (`ProjectedWinding
+/// ContainsCoplanarPoint`): on the inner side of every edge.
 fn point_in_winding(p: Vec3, verts: &[Vec3], n: Vec3) -> bool {
     let mut sign = 0.0f32;
     for i in 0..verts.len() {
@@ -684,8 +686,8 @@ impl WorldVis {
                 self.mark_group(&self.cull_groups[gi as usize], frustum, &mut w.vis);
             }
         }
-        // Sightlines that leave the graph over low geometry — bulwarks, rails
-        // (mp_ship's deck over the ocean) — under-mark: the walk treats those
+        // Sightlines that leave the graph over low geometry (bulwarks, rails,
+        // mp_ship's deck over the ocean) under-mark: the walk treats those
         // walls as sealed. Any cell sharing a portal with a visited cell is
         // frustum-tested directly, to a fixpoint; the camera frustum is the
         // conservative bound, same as the fallback path.
@@ -804,7 +806,7 @@ impl WorldVis {
     }
 
     /// CoD4 1.7's walk (`R_VisitPortals`, docs/research/cod4-world.md
-    /// 9.1, "The portal walk") and CoD2's, the same queue
+    /// 9.9) and CoD2's, the same queue
     /// (cod2-client-perf.md 9): a cell's portals are chopped to its
     /// frustum and queued, nearest first; a portal reached again before
     /// its turn gathers the new points, and on its turn it is opened once,
@@ -870,7 +872,6 @@ impl WorldVis {
     /// under the same frustum. `depth` counts the portals opened on the
     /// way here (0 at the eye's cell); each portal queued keeps the
     /// shallowest it was queued from (iw3mp.exe 0x60a289, 0x60a2aa).
-    #[allow(clippy::too_many_arguments)]
     fn visit_queued(
         &self,
         cell: usize,
@@ -886,7 +887,9 @@ impl WorldVis {
         let c = self.cells[cell];
         self.mark_cell(cell, frustum, &mut w.vis);
         q.set_ancestors(parent, true);
-        let volumes = self.occluder_volumes(cell, w.eye);
+        let volumes = w.volumes[cell]
+            .get_or_insert_with(|| std::rc::Rc::new(self.occluder_volumes(cell, w.eye)))
+            .clone();
         w.vis.stats.occluders += volumes.len();
         let near = w.camera.planes.get(4).copied();
         // a portal too small on screen to queue its cell's portals: the
@@ -990,7 +993,7 @@ impl WorldVis {
     /// left out, as in `walk`), the cell beyond goes on `list` once and
     /// its own portals are tried the same way, under the same planes.
     /// Retail's list holds 384 (its stack array).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn further_cells(
         &self,
         cell: usize,
@@ -1033,8 +1036,6 @@ impl WorldVis {
         }
     }
 
-    /// The cell's AABB tree and cull groups under `frustum`
-    /// (`R_AddVisibleSurfacesInCell`).
     /// Every soup the listed cells' trees and cull groups hold, unculled:
     /// the most a walk that reaches those cells can mark.
     pub fn cell_soups(&self, cells: &[bool]) -> Vec<bool> {
@@ -1046,6 +1047,8 @@ impl WorldVis {
         vis.soups
     }
 
+    /// The cell's AABB tree and cull groups under `frustum`
+    /// (`R_AddVisibleSurfacesInCell`).
     fn mark_cell(&self, cell: usize, frustum: &Frustum, vis: &mut Visible) {
         let c = &self.cells[cell];
         self.mark_tree(c.first_aabb, frustum, vis);
@@ -1447,9 +1450,7 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let Some(data) = fs.read("maps/mp/mp_brecourt.bsp") else {
-            return;
-        };
+        let data = crate::testing::stock_file(&fs, "maps/mp/mp_brecourt.bsp");
         let b = crate::bsp::parse(&data).unwrap();
         let vis = WorldVis::build(&b);
         let (lo, hi) = crate::mesh::map_bounds(&b);
@@ -1951,9 +1952,7 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let Some(data) = fs.read("maps/MP/mp_powcamp.bsp") else {
-            return;
-        };
+        let data = crate::testing::stock_file(&fs, "maps/MP/mp_powcamp.bsp");
         let bsp = crate::bsp::parse(&data).unwrap();
         let vis = WorldVis::build(&bsp);
         let m = &bsp.models[2];
@@ -1978,9 +1977,7 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let Some(data) = fs.read("maps/MP/mp_ship.bsp") else {
-            return;
-        };
+        let data = crate::testing::stock_file(&fs, "maps/MP/mp_ship.bsp");
         let bsp = crate::bsp::parse(&data).unwrap();
         let vis = WorldVis::build(&bsp);
         let ocean_soup = bsp

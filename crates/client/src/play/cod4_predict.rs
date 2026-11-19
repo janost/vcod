@@ -34,7 +34,6 @@ use vcod_cod4::pmove::weapon::{WeaponDef, WeaponDefs};
 use vcod_cod4::pmove::{
     self, CONTENTS_BODY, Cmd, PlayerState, PmWorld, Pmove, Rules, Tr, WeaponMove,
 };
-use vcod_common::turretpose::angles_quat;
 
 /// `cg_errordecay`'s default: `Dvar_RegisterFloat` (iw3mp.exe 0x43c3d6)
 /// of the name at 0x6ca2cc with the float 100.0 at 0x6f9e58
@@ -51,7 +50,9 @@ const STEP_SMOOTH_MS: i32 = 100;
 pub const CMD_BACKUP: usize = 128;
 
 /// What prediction moves through: the level's clip map and every weapon's
-/// move scales, by name.
+/// move scales, by name. The four weapon maps are keyed by lower-case
+/// name; look a weapon up through [`Cod4World::weapon_move`],
+/// [`Cod4World::is_primary`], [`Cod4World::def`] and [`Cod4World::kick`].
 pub struct Cod4World {
     pub clip: Arc<ClipMap>,
     pub weapons: HashMap<String, WeaponMove>,
@@ -78,15 +79,17 @@ pub struct Cod4World {
     pub parts: HashMap<String, Arc<vcod_cod4::physics::PartModel>>,
     /// The map's dynamic entities' defs (`vcod_cod4::dynent`).
     pub dynents: Arc<Vec<vcod_cod4::dynent::DynDef>>,
+    /// The mantle clips out of these zones, which prediction mantles along.
+    pub mantle: Option<&'static vcod_cod4::pmove::mantle::MantleAnims>,
 }
 
 impl Cod4World {
     /// The clip map of `map` (a walked map zone) and the weapons of
-    /// `zones`, the first naming one winning; the mantle clips out of
-    /// `zones` go to [`vcod_cod4::pmove::mantle::install`].
+    /// `zones`, the first naming one winning; the mantle clips are read
+    /// out of `zones` ([`vcod_cod4::pmove::mantle::install`]).
     pub fn from_assets(map: &Assets, zones: &[&Assets]) -> Result<Cod4World> {
         let clip = Arc::new(ClipMap::from_assets(map)?);
-        vcod_cod4::pmove::mantle::install(zones);
+        let mantle = vcod_cod4::pmove::mantle::install(zones);
         let mut weapons = HashMap::new();
         let mut primaries = HashSet::new();
         let mut defs = HashMap::new();
@@ -105,14 +108,15 @@ impl Cod4World {
                 }
             }
             for d in &a.weapons {
+                let key = d.name.to_ascii_lowercase();
                 if let Some(m) = WeaponMove::from_raw(&d.raw) {
-                    weapons.entry(d.name.clone()).or_insert(m);
+                    weapons.entry(key.clone()).or_insert(m);
                 }
                 if d.raw.get(316..320) == Some(&[0; 4]) {
-                    primaries.insert(d.name.clone());
+                    primaries.insert(key.clone());
                 }
                 kicks
-                    .entry(d.name.clone())
+                    .entry(key)
                     .or_insert_with(|| crate::play::cod4_kick::KickDef::from_raw(&d.raw));
                 if let Some(def) = WeaponDef::of(d) {
                     let s = |k: &str| d.strings.get(k).cloned().unwrap_or_default();
@@ -145,6 +149,7 @@ impl Cod4World {
             model_coll,
             parts: vcod_cod4::physics::part_models(&all),
             dynents: Arc::new(vcod_cod4::dynent::defs(map, zones)),
+            mantle,
         })
     }
 
@@ -167,34 +172,17 @@ impl Cod4World {
     /// `weapon_files_on_disk` does (cod4-fastfile.md 13): every weapon the
     /// zones carry and every file there; a missing or broken file takes
     /// `defaultweapon_mp`'s under its own name, and the zone's struct
-    /// stays only when that fails too. Returns the weapons replaced.
-    pub fn overlay_weapon_files(&mut self, fs: &vcod_common::pk3::Pk3Fs) -> usize {
-        let mut names: Vec<String> = self.defs.keys().cloned().collect();
-        for path in fs.list_prefix("weapons/mp/") {
-            let name = &path["weapons/mp/".len()..];
-            if !name.is_empty() && !name.contains('/') {
-                names.push(name.to_ascii_lowercase());
-            }
-        }
-        names.sort();
-        names.dedup();
-        let text = |name: &str| match vcod_cod4::weapon_file::load(fs, name)? {
-            Ok(t) => Some(t),
-            Err(e) => {
-                log::warn!("cod4: weapons/mp/{name}: {e:#}");
-                None
-            }
-        };
-        let mut n = 0;
-        for name in names {
-            let Some(t) = text(&name).or_else(|| text("defaultweapon_mp")) else {
-                continue;
-            };
-            let w = t.weapon;
-            let Some(def) = WeaponDef::of(&w).map(|d| WeaponDef {
-                name: name.to_ascii_lowercase(),
-                ..d
-            }) else {
+    /// stays only when that fails too. Returns the files read, which the
+    /// HUD takes too (`HudAssets::overlay_weapon_files`).
+    pub fn overlay_weapon_files(
+        &mut self,
+        fs: &vcod_common::pk3::Pk3Fs,
+    ) -> Vec<(String, vcod_cod4::weapon_file::TextWeapon)> {
+        let files = vcod_cod4::weapon_file::load_overlay(fs, fs, self.defs.keys().cloned());
+        for (name, t) in &files {
+            let name = name.clone();
+            let w = &t.weapon;
+            let Some(def) = WeaponDef::of(w) else {
                 continue;
             };
             let s = |k: &str| w.strings.get(k).cloned().unwrap_or_default();
@@ -212,9 +200,29 @@ impl Cod4World {
                 self.primaries.remove(&name);
             }
             self.defs.insert(name, (def, refs));
-            n += 1;
         }
-        n
+        files
+    }
+
+    /// A weapon's move scales by its name in any case.
+    pub fn weapon_move(&self, name: &str) -> Option<WeaponMove> {
+        self.weapons.get(&name.to_ascii_lowercase()).copied()
+    }
+
+    /// Whether `weapnext` walks a weapon, by its name in any case.
+    pub fn is_primary(&self, name: &str) -> bool {
+        self.primaries.contains(&name.to_ascii_lowercase())
+    }
+
+    /// A weapon's def and its ammo, clip and alt names, by its name in any
+    /// case.
+    pub fn def(&self, name: &str) -> Option<&(WeaponDef, [String; 3])> {
+        self.defs.get(&name.to_ascii_lowercase())
+    }
+
+    /// A weapon's recoil keys by its name in any case.
+    pub fn kick(&self, name: &str) -> Option<&crate::play::cod4_kick::KickDef> {
+        self.kicks.get(&name.to_ascii_lowercase())
     }
 
     /// The record a shellshock name loads: its own file, else
@@ -228,10 +236,10 @@ impl Cod4World {
 
     /// [`Rules::shock_slows`] for the shellshock configstrings `cs`
     /// (1955 on, one a `shellshockIndex` from 1).
-    pub fn shock_slows(&self, cs: impl Fn(u16) -> Vec<u8>) -> u16 {
+    pub fn shock_slows<'a>(&self, cs: impl Fn(u16) -> &'a [u8]) -> u16 {
         (1..16u16)
             .filter(|&i| {
-                let name = String::from_utf8_lossy(&cs(1954 + i)).into_owned();
+                let name = String::from_utf8_lossy(cs(1954 + i));
                 !name.is_empty() && self.shock(&name).is_some_and(|p| p.movement)
             })
             .fold(0, |bits, i| bits | 1 << i)
@@ -313,15 +321,14 @@ pub fn new_events(ps: &Ring, old: &Ring) -> Vec<usize> {
 /// The lean dvars the body controllers read (`player_lean_shift_*`,
 /// `player_lean_rotate_*`) off the server's mirror, 1.7's defaults where
 /// it names none (cod4-player-anims.md 8).
-pub fn lean_from_mirror(cs: impl Fn(u16) -> Vec<u8>) -> vcod_common::playerpose::LeanDvars {
+pub fn lean_from_mirror<'a>(cs: impl Fn(u16) -> &'a [u8]) -> vcod_common::playerpose::LeanDvars {
     let mut d = vcod_common::playerpose::LeanDvars::default();
+    let mut buf = [0u8; 64];
     for i in CS_CODINFO..CS_CODINFO_VALUE {
-        let name = String::from_utf8_lossy(&cs(i)).to_ascii_lowercase();
-        let Some(key) = name.strip_prefix("player_lean_") else {
+        let Some((name, v)) = mirror_slot(&cs, i, &mut buf) else {
             continue;
         };
-        let value = String::from_utf8_lossy(&cs(i + CS_CODINFO_VALUE - CS_CODINFO)).into_owned();
-        let Ok(v) = value.trim().parse::<f32>() else {
+        let Some(key) = name.strip_prefix("player_lean_") else {
             continue;
         };
         let slot = match key {
@@ -340,54 +347,68 @@ pub fn lean_from_mirror(cs: impl Fn(u16) -> Vec<u8>) -> vcod_common::playerpose:
     d
 }
 
+/// Mirror slot `i`'s dvar name, folded into `buf`, and its value as a
+/// finite float; `None` for an empty slot, a name longer than any dvar the
+/// readers know, or a value that is no finite float. Allocates nothing.
+fn mirror_slot<'a, 'b>(
+    cs: &impl Fn(u16) -> &'a [u8],
+    i: u16,
+    buf: &'b mut [u8; 64],
+) -> Option<(&'b str, f32)> {
+    let name = cs(i);
+    let dst = buf.get_mut(..name.len()).filter(|_| !name.is_empty())?;
+    dst.copy_from_slice(name);
+    dst.make_ascii_lowercase();
+    let name = std::str::from_utf8(dst).ok()?;
+    let value = std::str::from_utf8(cs(i + CS_CODINFO_VALUE - CS_CODINFO)).ok()?;
+    let v = value.trim().parse::<f32>().ok().filter(|v| v.is_finite())?;
+    Some((name, v))
+}
+
 /// The movement dvars off the server's mirror (`CS_CODINFO` names, the
-/// values 128 slots on): what a name the mirror carries says, the rest
-/// [`Rules::default`].
-pub fn rules_from_mirror(cs: impl Fn(u16) -> Vec<u8>) -> Rules {
+/// values 128 slots on): what a name the mirror carries says, held to the
+/// dvar's domain (cod4-pmove.md 12), the rest [`Rules::default`].
+pub fn rules_from_mirror<'a>(cs: impl Fn(u16) -> &'a [u8]) -> Rules {
     let mut r = Rules::default();
+    let mut buf = [0u8; 64];
     for i in CS_CODINFO..CS_CODINFO_VALUE {
-        let name = String::from_utf8_lossy(&cs(i)).into_owned();
-        if name.is_empty() {
-            continue;
-        }
-        let value = String::from_utf8_lossy(&cs(i + CS_CODINFO_VALUE - CS_CODINFO)).into_owned();
-        let Ok(v) = value.trim().parse::<f32>() else {
+        let Some((name, v)) = mirror_slot(&cs, i, &mut buf) else {
             continue;
         };
-        let slot = match name.to_ascii_lowercase().as_str() {
-            "friction" => &mut r.friction,
-            "stopspeed" => &mut r.stopspeed,
-            "inertiamax" => &mut r.inertia_max,
-            "inertiaangle" => &mut r.inertia_angle,
-            "jump_height" => &mut r.jump_height,
-            "jump_stepsize" => &mut r.jump_step_size,
-            "jump_ladderpushvel" => &mut r.jump_ladder_push_vel,
-            "jump_spreadadd" => &mut r.jump_spread_add,
-            "bg_ladder_yawcap" => &mut r.ladder_yawcap,
-            "bg_prone_yawcap" => &mut r.prone_yawcap,
-            "player_view_pitch_up" => &mut r.view_pitch_up,
-            "player_view_pitch_down" => &mut r.view_pitch_down,
-            "bg_falldamageminheight" => &mut r.fall_damage_min_height,
-            "bg_falldamagemaxheight" => &mut r.fall_damage_max_height,
-            "player_movethreshhold" => &mut r.move_threshold,
-            "player_footstepsthreshhold" => &mut r.footsteps_threshold,
-            "player_strafespeedscale" => &mut r.strafe_speed_scale,
-            "player_backspeedscale" => &mut r.back_speed_scale,
-            "player_spectatespeedscale" => &mut r.spectate_speed_scale,
-            "player_sprintspeedscale" => &mut r.sprint_speed_scale,
-            "player_sprinttime" => &mut r.sprint_time,
-            "player_sprintmintime" => &mut r.sprint_min_time,
-            "player_sprintrechargepause" => &mut r.sprint_recharge_pause,
-            "player_sprintstrafespeedscale" => &mut r.sprint_strafe_speed_scale,
-            "player_sprintcamerabob" => &mut r.sprint_camera_bob,
-            "player_dmgtimer_maxtime" => &mut r.dmgtimer_max_time,
-            "player_meleechargefriction" => &mut r.melee_charge_friction,
-            "player_dmgtimer_minscale" => &mut r.dmgtimer_min_scale,
-            "perk_sprintmultiplier" => &mut r.perk_sprint_multiplier,
-            "mantle_check_range" => &mut r.mantle_check_range,
-            "mantle_check_radius" => &mut r.mantle_check_radius,
-            "mantle_check_angle" => &mut r.mantle_check_angle,
-            "mantle_view_yawcap" => &mut r.mantle_view_yawcap,
+        let (slot, lo, hi) = match name {
+            "friction" => (&mut r.friction, 0.0, 100.0),
+            "stopspeed" => (&mut r.stopspeed, 0.0, 1000.0),
+            "inertiamax" => (&mut r.inertia_max, 0.0, 1000.0),
+            "inertiaangle" => (&mut r.inertia_angle, -1.0, 1.0),
+            "jump_height" => (&mut r.jump_height, 0.0, 1000.0),
+            "jump_stepsize" => (&mut r.jump_step_size, 0.0, 64.0),
+            "jump_ladderpushvel" => (&mut r.jump_ladder_push_vel, 0.0, 1024.0),
+            "jump_spreadadd" => (&mut r.jump_spread_add, 0.0, 512.0),
+            "bg_ladder_yawcap" => (&mut r.ladder_yawcap, 0.0, 360.0),
+            "bg_prone_yawcap" => (&mut r.prone_yawcap, 0.0, 360.0),
+            "player_view_pitch_up" => (&mut r.view_pitch_up, 0.0, 90.0),
+            "player_view_pitch_down" => (&mut r.view_pitch_down, 0.0, 90.0),
+            "bg_falldamageminheight" => (&mut r.fall_damage_min_height, 1.0, f32::MAX),
+            "bg_falldamagemaxheight" => (&mut r.fall_damage_max_height, 1.0, f32::MAX),
+            "player_movethreshhold" => (&mut r.move_threshold, 1e-8, 20.0),
+            "player_footstepsthreshhold" => (&mut r.footsteps_threshold, 0.0, 50000.0),
+            "player_strafespeedscale" => (&mut r.strafe_speed_scale, 0.0, 20.0),
+            "player_backspeedscale" => (&mut r.back_speed_scale, 0.0, 20.0),
+            "player_spectatespeedscale" => (&mut r.spectate_speed_scale, 0.0, 20.0),
+            "player_sprintspeedscale" => (&mut r.sprint_speed_scale, 0.0, 5.0),
+            "player_sprinttime" => (&mut r.sprint_time, 0.0, 12.8),
+            "player_sprintmintime" => (&mut r.sprint_min_time, 0.0, 12.8),
+            "player_sprintrechargepause" => (&mut r.sprint_recharge_pause, 0.0, 9000.0),
+            "player_sprintstrafespeedscale" => (&mut r.sprint_strafe_speed_scale, 0.0, 5000.0),
+            "player_sprintcamerabob" => (&mut r.sprint_camera_bob, 0.0, 2.0),
+            "player_dmgtimer_maxtime" => (&mut r.dmgtimer_max_time, 0.0, f32::MAX),
+            "player_meleechargefriction" => (&mut r.melee_charge_friction, f32::MIN, f32::MAX),
+            "player_dmgtimer_minscale" => (&mut r.dmgtimer_min_scale, 0.0, 1.0),
+            "perk_sprintmultiplier" => (&mut r.perk_sprint_multiplier, 0.0, f32::MAX),
+            "mantle_check_range" => (&mut r.mantle_check_range, 0.0, 128.0),
+            "mantle_check_radius" => (&mut r.mantle_check_radius, 0.0, 15.0),
+            "mantle_check_angle" => (&mut r.mantle_check_angle, 0.0, 180.0),
+            "mantle_view_yawcap" => (&mut r.mantle_view_yawcap, 0.0, 180.0),
             "mantle_enable" => {
                 r.mantle_enable = v != 0.0;
                 continue;
@@ -402,7 +423,7 @@ pub fn rules_from_mirror(cs: impl Fn(u16) -> Vec<u8>) -> Rules {
             }
             _ => continue,
         };
-        *slot = v;
+        *slot = v.clamp(lo, hi);
     }
     r
 }
@@ -505,11 +526,6 @@ impl PmWorld for Solids<'_> {
                     if contents & mask == 0 {
                         continue;
                     }
-                    let mut c = vcod_common::collision::Trace::clear(end);
-                    c.fraction = t.fraction;
-                    // `CM_TempBoxModel`'s model 0xfff takes `CM_Trace`'s
-                    // capsule arm (iw3mp.exe 0x4f5080), as on the server
-                    // (cod4-client-view.md 5.1).
                     let body = vcod_common::movetrace::Body {
                         entity: s.number,
                         origin: s.origin,
@@ -517,36 +533,19 @@ impl PmWorld for Solids<'_> {
                         maxs: bmax,
                         contents,
                     };
-                    vcod_common::movetrace::clip_body_kept(&mut c, start, end, mins, maxs, &body);
-                    if c.fraction < t.fraction || (c.startsolid && !t.startsolid) {
-                        t = Tr {
-                            fraction: c.fraction,
-                            normal: c.normal,
-                            surface_flags: 0,
-                            contents,
-                            entity_num: s.number,
-                            startsolid: c.startsolid,
-                            allsolid: c.allsolid,
-                            walkable: c.normal.z >= vcod_cod4::collision::WALKABLE_NORMAL_Z,
-                        };
-                    }
+                    t.fold_capsule(start, end, mins, maxs, &body);
                 }
                 SolidKind::Brush(model) => {
                     if model >= self.clip.submodels.len() {
                         continue;
                     }
-                    // `CM_TransformedBoxTrace`: in the model's frame.
-                    let q = angles_quat(s.angles.to_array());
-                    let local = |p: Vec3| q.inverse() * (p - s.origin);
-                    let c =
-                        self.clip
-                            .trace_model(model, local(start), local(end), mins, maxs, mask);
-                    if c.fraction < t.fraction || (c.startsolid && !t.startsolid) {
-                        let mut w = pmove::world_tr(&c);
-                        w.normal = q * c.normal;
-                        w.entity_num = s.number;
-                        t = w;
-                    }
+                    let b = pmove::Brush {
+                        entity: s.number,
+                        model,
+                        origin: s.origin,
+                        angles: s.angles,
+                    };
+                    t.fold_brush(self.clip, &b, start, end, mins, maxs, mask);
                 }
             }
             if t.fraction == 0.0 {
@@ -665,7 +664,7 @@ impl Cod4Predictor {
             ps.view_angles = v;
         }
         let ps = &ps;
-        let msec = (t - ps.command_time).min(200);
+        let msec = t.wrapping_sub(ps.command_time).min(200);
         let view = keys(vcod_cod4::pmove::aim::view_weapon(ps));
         let held = keys(ps.weapon);
         let mut state = self.aim;
@@ -697,7 +696,7 @@ impl Cod4Predictor {
         if let Some(last) = self.level_time.replace(server_time)
             && server_time > last
         {
-            self.frame_ms = server_time - last;
+            self.frame_ms = server_time.wrapping_sub(last);
         }
         let event = snap.get("damageEvent").unwrap_or(0);
         let last = self.damage_event.replace(event);
@@ -725,7 +724,7 @@ impl Cod4Predictor {
     fn level_at(&self, t: i32) -> Option<i32> {
         let snap = self.level_time?;
         let frame = self.frame_ms.max(1);
-        Some(snap + (t - snap).max(0) / frame * frame)
+        Some(snap.wrapping_add(t.wrapping_sub(snap).max(0) / frame * frame))
     }
 
     /// Predicts off `snap` (`cg.nextSnap`'s playerstate) with `cmds`, the
@@ -734,7 +733,7 @@ impl Cod4Predictor {
     /// over and drops any correction in flight (`CG_TransitionPlayerState`).
     /// `defs`, the level's weapon defs, runs the weapon half
     /// (not for a spectator, as the server's think leaves it out).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn predict(
         &mut self,
         snap: &delta::PlayerState,
@@ -877,7 +876,7 @@ impl Cod4Predictor {
     /// is the frame's own.
     fn smooth_steps(&mut self, change: f32, time: i32, smooth: bool) {
         if !smooth || change.abs() < STEP_SMOOTH_MIN {
-            if time - self.step_start > STEP_SMOOTH_MS {
+            if time.wrapping_sub(self.step_start) > STEP_SMOOTH_MS {
                 self.step_change = 0.0;
             }
             return;
@@ -889,7 +888,7 @@ impl Cod4Predictor {
 
     /// `CG_SmoothCameraZ`: what is left of the step's ease at `time`.
     fn step_left(&self, time: i32) -> f32 {
-        let since = time - self.step_start;
+        let since = time.wrapping_sub(self.step_start);
         if self.step_change == 0.0 || since < 0 {
             return 0.0;
         }
@@ -962,6 +961,174 @@ pub fn xyspeed(ps: &PlayerState) -> f32 {
 mod tests {
     use super::*;
 
+    /// The mirror's configstrings for `pairs` of dvar name and value.
+    fn mirror(pairs: &[(&str, &str)]) -> impl Fn(u16) -> &'static [u8] {
+        // Leaked so the closure can hand out the `&[u8]` the mirror readers take.
+        let leak = |s: &str| -> &'static str { Box::leak(s.to_owned().into_boxed_str()) };
+        let pairs: Vec<(&'static str, &'static str)> =
+            pairs.iter().map(|(n, v)| (leak(n), leak(v))).collect();
+        move |i| {
+            let k = usize::from(i.wrapping_sub(CS_CODINFO));
+            let v = usize::from(i.wrapping_sub(CS_CODINFO_VALUE));
+            match (pairs.get(k), pairs.get(v)) {
+                (Some((n, _)), _) if i < CS_CODINFO_VALUE => n.as_bytes(),
+                (_, Some((_, v))) if i >= CS_CODINFO_VALUE => v.as_bytes(),
+                _ => &[],
+            }
+        }
+    }
+
+    /// The `field: value` pairs of a derived `Debug` struct, by field.
+    fn fields(debug: String) -> std::collections::BTreeMap<String, String> {
+        let body = &debug[debug.find('{').unwrap() + 1..debug.rfind('}').unwrap()];
+        body.split(", ")
+            .filter_map(|f| f.trim().split_once(": "))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// The fields `got` holds apart from `base`.
+    fn moved<T: std::fmt::Debug>(base: &T, got: &T) -> Vec<String> {
+        let (a, b) = (fields(format!("{base:?}")), fields(format!("{got:?}")));
+        b.into_iter()
+            .filter(|(k, v)| a.get(k) != Some(v))
+            .map(|(k, _)| k)
+            .collect()
+    }
+
+    /// Each mirrored movement dvar, by its 1.7 name (cod4-pmove.md 12)
+    /// in the server's case, moves one field of [`Rules`] and no two move
+    /// the same one; the values sit inside every domain and off every
+    /// default.
+    #[test]
+    fn each_mirrored_movement_dvar_lands_in_its_own_field() {
+        let names = [
+            "friction",
+            "stopspeed",
+            "inertiaMax",
+            "inertiaAngle",
+            "jump_height",
+            "jump_stepSize",
+            "jump_ladderPushVel",
+            "jump_spreadAdd",
+            "bg_ladder_yawcap",
+            "bg_prone_yawcap",
+            "player_view_pitch_up",
+            "player_view_pitch_down",
+            "bg_fallDamageMinHeight",
+            "bg_fallDamageMaxHeight",
+            "player_moveThreshhold",
+            "player_footstepsThreshhold",
+            "player_strafeSpeedScale",
+            "player_backSpeedScale",
+            "player_spectateSpeedScale",
+            "player_sprintSpeedScale",
+            "player_sprintTime",
+            "player_sprintMinTime",
+            "player_sprintRechargePause",
+            "player_sprintStrafeSpeedScale",
+            "player_sprintCameraBob",
+            "player_dmgtimer_maxTime",
+            "player_meleeChargeFriction",
+            "player_dmgtimer_minScale",
+            "perk_sprintMultiplier",
+            "mantle_check_range",
+            "mantle_check_radius",
+            "mantle_check_angle",
+            "mantle_view_yawcap",
+            "mantle_enable",
+            "jump_slowdownEnable",
+            "player_sprintForwardMinimum",
+        ];
+        let base = Rules::default();
+        let mut owner: std::collections::BTreeMap<String, &str> = Default::default();
+        for name in names {
+            // 0.4375 is inside every domain and no default; the flags
+            // flip off their default either way.
+            let value = match name {
+                "mantle_enable" => {
+                    if base.mantle_enable {
+                        "0"
+                    } else {
+                        "1"
+                    }
+                }
+                "jump_slowdownEnable" => {
+                    if base.jump_slowdown_enable {
+                        "0"
+                    } else {
+                        "1"
+                    }
+                }
+                "player_sprintForwardMinimum" => "7",
+                _ => "0.4375",
+            };
+            let got = rules_from_mirror(mirror(&[(name, value)]));
+            let moved = moved(&base, &got);
+            assert_eq!(moved.len(), 1, "{name} moved {moved:?}");
+            if let Some(other) = owner.insert(moved[0].clone(), name) {
+                panic!("{name} and {other} both set {}", moved[0]);
+            }
+        }
+    }
+
+    /// The eight lean dvars each land in their own field.
+    #[test]
+    fn each_mirrored_lean_dvar_lands_in_its_own_field() {
+        let base = lean_from_mirror(|_| &[]);
+        let mut seen = std::collections::BTreeSet::new();
+        for side in ["left", "right", "crouch_left", "crouch_right"] {
+            for kind in ["shift", "rotate"] {
+                let name = format!("player_lean_{kind}_{side}");
+                let got = lean_from_mirror(mirror(&[(&name, "3.25")]));
+                let moved = moved(&base, &got);
+                assert_eq!(moved.len(), 1, "{name} moved {moved:?}");
+                assert!(seen.insert(moved[0].clone()), "{name}: {}", moved[0]);
+            }
+        }
+    }
+
+    /// Snapshot times at the ends of an i32 wrap as retail's do: the
+    /// packet's level time reads without an overflow (BUG-122).
+    #[test]
+    fn a_level_time_across_the_i32_wrap_does_not_overflow() {
+        let mut p = Cod4Predictor {
+            level_time: Some(i32::MIN + 5),
+            frame_ms: 50,
+            ..Cod4Predictor::default()
+        };
+        let _ = p.level_at(i32::MAX);
+        p.level_time = Some(i32::MAX - 5);
+        assert!(p.level_at(i32::MIN + 100).is_some());
+    }
+
+    /// A mirrored dvar outside 1.7's domain is held to it, a NaN or an
+    /// infinity is dropped for the default (SEC-046).
+    #[test]
+    fn mirrored_dvars_keep_their_domain() {
+        let pairs = [
+            ("mantle_view_yawcap", "-5"),
+            ("bg_prone_yawcap", "1e30"),
+            ("friction", "nan"),
+            ("stopspeed", "inf"),
+            ("jump_height", "45"),
+        ];
+        let r = rules_from_mirror(|i| {
+            let k = usize::from(i.wrapping_sub(CS_CODINFO));
+            let v = usize::from(i.wrapping_sub(CS_CODINFO_VALUE));
+            match (pairs.get(k), pairs.get(v)) {
+                (Some((name, _)), _) if i < CS_CODINFO_VALUE => name.as_bytes(),
+                (_, Some((_, value))) if i >= CS_CODINFO_VALUE => value.as_bytes(),
+                _ => &[],
+            }
+        });
+        let d = Rules::default();
+        assert_eq!(r.mantle_view_yawcap, 0.0);
+        assert_eq!(r.prone_yawcap, 360.0);
+        assert_eq!((r.friction, r.stopspeed), (d.friction, d.stopspeed));
+        assert_eq!(r.jump_height, 45.0);
+    }
+
     /// `new_events` on hand-built rings: the slots past the old sequence,
     /// a corrected slot inside the last four, the 8-bit wrap, and nothing
     /// for an equal ring.
@@ -1001,30 +1168,7 @@ mod tests {
         }
     }
 
-    /// A floor at z 0, solid below, as `vcod_cod4::pmove`'s own tests
-    /// build one.
-    struct Floor;
-
-    impl PmWorld for Floor {
-        fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, _: Vec3, _: u32, _: u32) -> Tr {
-            let (a, b) = (start.z + mins.z, end.z + mins.z);
-            let mut t = Tr::default();
-            if a < 0.0 {
-                t.fraction = 0.0;
-                t.startsolid = true;
-                t.allsolid = b < 0.0;
-            } else if b < 0.125 && b < a {
-                t.fraction = ((a - 0.125) / (a - b)).max(0.0);
-            } else {
-                return t;
-            }
-            t.normal = Vec3::Z;
-            t.walkable = true;
-            t.entity_num = pmove::ENTITYNUM_WORLD as u32;
-            t.contents = 1;
-            t
-        }
-    }
+    use vcod_cod4::pmove::testing::FLOOR;
 
     /// A correction past 0.1 is drawn whole on the frame that finds it
     /// less a frame's decay, and is gone `cg_errordecay` ms later.
@@ -1057,16 +1201,16 @@ mod tests {
         };
         let cut = (0, 0, 0);
         let rules = Rules::default();
-        let a = p.predict(&wire, cut, &cmds, None, &Floor, rules, &w, None, 0.0);
+        let a = p.predict(&wire, cut, &cmds, None, &FLOOR, rules, &w, None, 0.0);
         assert!(a.ps.origin.x > 1.0, "ran {:?}", a.ps.origin);
         // The same snapshot again: no correction.
-        p.predict(&wire, cut, &cmds, None, &Floor, rules, &w, None, 16.0);
+        p.predict(&wire, cut, &cmds, None, &FLOOR, rules, &w, None, 16.0);
         assert_eq!(p.stats.missed, 0);
         // A snapshot that puts the body 5 units aside at the same cmds.
         let mut moved = snap.clone();
         moved.origin.y += 5.0;
         let wire2 = moved.to_wire(&base);
-        let b = p.predict(&wire2, cut, &cmds, None, &Floor, rules, &w, None, 32.0);
+        let b = p.predict(&wire2, cut, &cmds, None, &FLOOR, rules, &w, None, 32.0);
         assert_eq!(p.stats.missed, 1);
         assert!((b.origin.y - b.ps.origin.y + 5.0 * (1.0 - 16.0 / 100.0)).abs() < 1e-3);
         assert!(p.drawn_error(16.0 + 100.0) == 0.0);
@@ -1076,7 +1220,7 @@ mod tests {
             (2, 0, 0),
             &cmds,
             None,
-            &Floor,
+            &FLOOR,
             rules,
             &w,
             None,
@@ -1120,7 +1264,7 @@ fn cod4_weapon_files_replace_the_zone_defs_under_a_mod() {
     let mut world = crate::cod4_fly::load_world(install.root(), "mp_crash").unwrap();
     let zone = world.defs.clone();
     let fs = crate::cod4_fly::open_fs(install.root(), g, Some("mp_crash")).unwrap();
-    let n = world.overlay_weapon_files(&fs);
+    let n = world.overlay_weapon_files(&fs).len();
     assert!(n >= zone.len(), "{n} of {} weapons", zone.len());
     // 0.065 s: 64 in the zone, 65 off the file and on retail under a mod.
     let fire = |defs: &HashMap<String, (WeaponDef, [String; 3])>| {
@@ -1128,4 +1272,15 @@ fn cod4_weapon_files_replace_the_zone_defs_under_a_mod() {
     };
     assert_eq!(fire(&zone), Some(64));
     assert_eq!(fire(&world.defs), Some(65));
+    // The HUD reads the same files: its defs and its ammo and clip slots
+    // are prediction's (and the server's, `level_defs`).
+    let hud = vcod_cod4::hud::HudAssets::load(&install.with_fs_game(g), "mp_crash").unwrap();
+    assert_eq!(hud.weapon_hud["m16_mp"].def.fire_time, 65);
+    let mut list: Vec<String> = world.defs.keys().cloned().collect();
+    list.sort();
+    let slots: Vec<(usize, usize)> = world.level_defs(&list)[1..]
+        .iter()
+        .map(|d| (d.ammo_index, d.clip_index))
+        .collect();
+    assert_eq!(vcod_cod4::hud::ammo_slots(&list, &hud.weapon_hud), slots);
 }

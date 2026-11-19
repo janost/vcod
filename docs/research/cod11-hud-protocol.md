@@ -92,8 +92,17 @@ calls `0x3003d570`, also trap 9. VERIFIED: CoDMP.exe's cgame trap
 dispatcher (`0x401e22`, table `0x4041f0`) sends trap 9 to `0x402331`, which
 calls `Cvar_Set2` (`0x439650`) with `eax` 1, the `force` path: no
 read-only, cheat or latch check, and an unregistered name is made with no
-flags (cod11-console.md 5). INFERRED that UO's engine does the same (no
-CoDUOMP.exe trap table read). INFERRED, off Q3's `cvar_modifiedFlags`: a `v`
+flags (cod11-console.md 5). VERIFIED, asm: UO's engine does the same.
+A made cvar takes a slot of a 1024-entry table: the creation path compares
+the count at 0x1646420 with 0x400 (CoDMP.exe 0x4394bb) and past it calls
+0x435ad0 with 0 and `MAX_CVARS` (0x562368). VERIFIED (the instructions and
+the string). That the call is `Com_Error(ERR_FATAL)` is INFERRED. vcod drops
+a new name once the server has set 1024 (`ClientCvars::server_set`) and
+stays up.
+CoDUOMP.exe's cgame syscall switch (`0x401f5f`, table `0x404ae8`, bound
+`0xfa`) sends trap 9 to `0x4023fe`, which calls `0x43df50`, and that calls
+`Cvar_Set2` (`0x43dc50`, the function holding `%s is read only.` and `%s is
+write protected.`) with a force argument of 1. INFERRED, off Q3's `cvar_modifiedFlags`: a `v`
 of a userinfo cvar sends a userinfo change, one of an archived cvar rewrites
 the config. The 140/204 mirror's writer (`0x3002bc60`, section 5) is a trap
 9 too. VERIFIED: `CG_Init` calls it at 0x30023106 and
@@ -524,6 +533,15 @@ Header tokens:
 
 - `numRows` is `min(level.numConnectedClients, 64)`; the client clamps to
   `0x40` again.
+- The rows stop at 1024 bytes: each row is `Com_sprintf`ed into a
+  0x400-byte buffer, and the loop breaks at the first row whose length
+  plus the rows' so far is over 0x400; the header's `numRows` is the loop
+  counter, the rows written. VERIFIED (the instructions), 1.1
+  `game_mp_x86.dll` 0x2001d1f7..0x2001d248 (`cmp esi,0x400` / `jg` at
+  0x2001d21c), the counter pushed for `"b %i %i %i%s"` at 0x2001d265;
+  1.5 `game_mp_x86.dll` 0x2001e9fc, UO `uo_game_mp_x86.dll` 0x200218ac,
+  the same test. CoD2's is the same (cod2-protocol.md 3.4). vcod:
+  `scoreboard::text`, every game.
 - Token 2 is `level.teamScores[1]` (Axis), token 3 `level.teamScores[2]`
   (Allies) (section 5). The client stores them at `0x3020ba04` /
   `0x3020ba08`; `-9999` means no score and renders `"-"` (`0x300630c8`).
@@ -598,7 +616,7 @@ score, deaths and status icon come from the client's `.score`, `.deaths` and
 `CsRange::StatusIcon`. The team totals are the level's `setTeamScore`
 values, axis then allies. Ping is the link's `cl->ping`, `-1` while
 connecting, capped at 999. With no script running every row is zero
-(`server.rs` `scoreboard`).
+(`server/sim_ops.rs` `scoreboard`).
 
 ### 3.1 How the cgame draws the board
 
@@ -895,11 +913,13 @@ reply carried axis 221 / allies 231. Both are legitimate wire values: a `d`
 for 5/6 and the next `b` (or the client's own `score` re-request, section 4)
 do not land in the same tick, so the two can read a few points apart.
 
-vcod's header prefers the latest `b` reply's totals once the scoreboard has
-one (`Scoreboard::totals`, `status::read_status`'s `scoreboard_totals`),
-falling back to CS 5/6 before any `b`. A `b` reply is requested and answered
-in one round trip, while CS 5/6 wait on a `d` push, so `b` is the more
-current. The header is vcod's own, drawn for spectators only (`hud/mod.rs`);
+vcod's header prefers the latest `b` reply's totals while the board is up
+(held, or intermission) and a reply has come since the last gamestate
+(`Scoreboard::totals`, `status::read_status`'s `scoreboard_totals`), and
+reads CS 5/6 otherwise. While the board is up the client re-requests `score`
+every 2 s (section 4), and a `b` reply is answered in one round trip while
+CS 5/6 wait on a `d` push, so `b` is the more current; once the board is
+down no reply comes and CS 5/6 are. The header is vcod's own, drawn for spectators only (`hud/mod.rs`);
 retail draws team totals only on the scoreboard (section 3.1).
 
 ### There is no round-timer configstring
@@ -1217,7 +1237,7 @@ VERIFIED, the writers agree: 1.5's console and message writer (0x409760, UO
 `CG_AddToTeamChat` (cgame 0x3002de50, UO 0x30039390; cod11-chat.md 3.2).
 
 vcod: `hud::font::set_team_colours`, called with
-`Protocol::team_colour_codes` and the client cvars at each HUD build and
+`Cod1Wire::team_colour_codes` and the client cvars at each HUD build and
 with no cvars at a gamestate; `hud::font::is_colour_code`, which every text
 path asks.
 
@@ -1702,9 +1722,10 @@ the client rebuilds the kick from the feedback bytes, scaling by
 `damageCount` where the server's own kick scales by `aimSpreadScale`
 (`cod11-combat.md` 6), and reads a byte as `/ 255` where the server wrote
 it as `* 256 / 360`. vcod does the same in `Hud::feed_damage` ("Damage
-direction", "When the feed runs"), stamping the kick with the sway's clock
-at the frame the new `damageEvent` is first seen, where retail stamps the
-snapshot's `serverTime`.
+direction", "When the feed runs"), stamping the kick with `cg.snap`'s
+`serverTime` (the older of the drawn pair) and reading it against the
+render clock, the view's kick and the gun's alike
+(`DamageIndicators::kick_on` moves the stamp onto the gun's clock).
 
 INFERRED, off `0x30015fe0`'s calls to `0x300310f0` (a wrapper of the
 stretch-pic trap `0x49`: x, y, w, h, s1, t1, s2, t2, material): with `w`
@@ -1765,6 +1786,29 @@ icons are skipped unless `cg_hudDamageIconInScope` (`0x301e0acc`, default
 `hud.menu` items (`0x3004a6f0`), `0x30017470` and the hudelems
 (`0x3001f980`). So the menu HUD and the hudelems paint over the overlay's
 black bands. vcod draws the overlay first, under them, as retail.
+
+The four between the crosshair and the hudelems, by what each reads:
+
+- `0x30016f70` draws the crosshair name (Q3's `CG_DrawCrosshairNames`).
+  VERIFIED, decompile: it returns on `cg_drawCrosshair` below 0
+  (`0x301d902c`), `cg_drawCrosshairNames` 0 (`0x301e0bec`) or
+  `0x30207158` set, runs the crosshair scan `0x30016e50`, fades off
+  `0x30019a30`, takes the client under the crosshair (`0x3020c8c8`, below
+  64) only when both client infos are valid (`0x3018bc0c`, stride `0x448`)
+  and the teams (`0x3018bc38`) match unless the viewer's is 3, and prints
+  the name (`0x3018bc18`) at (345, 217), scale 0.25. vcod leaves it out
+  (the table in "What vcod does not draw").
+- `0x30037790` is the weapon-slot strip ("The weapon-slot strip").
+- `0x300150b0` is the chat ring's draw (`cod11-chat.md` 3.2).
+- `0x30017470` is Q3 Team Arena's `CG_DrawTimedMenus`. VERIFIED, asm: once
+  `0x3020c904` is set and `cg.time` runs more than 2500 ms past it, it
+  closes the menu named `voiceMenu` (`0x300652f8`, found by `0x300419b0`,
+  closed by `0x30041a40`), sets `cl_conXOffset` to `0` and zeroes the
+  word. The one store of a time there is `0x3002726f` in `0x30027240`
+  (`CG_ShowResponseHead`: opens `voiceMenu`, sets `cl_conXOffset` to
+  `72`), and nothing calls `0x30027240` or holds its address (objdump,
+  `tools/re/xref.py`). INFERRED: so the word stays 0 and `0x30017470`
+  never acts. vcod has no counterpart.
 
 INFERRED, with "Which views draw it": a follower's playerstate carries its
 target's `pm_type` and `fWeaponPosFrac`, so a spectator following a scoped
@@ -1875,8 +1919,19 @@ name one, `hud@weaponmode_full.tga` on `bar_mp`, `fg42_mp`, `mp44_mp`,
 VERIFIED: `0x30037790` has one caller, `0x30018896` in the 2D pass
 `0x30018810`, after the crosshair (`0x30016760`) and `0x30016f70` and before
 `0x300150b0`, taken when the snapshot's `pm_type` is below 4. The pass
-returns early on `cg_draw2D` 0 and three unidentified flags (`0x301e214c`,
-`0x301e2150`, `0x3020cbdc`). `cg_drawStatus` does not gate it. VERIFIED,
+returns early on `cg_draw2D` 0 and three flags none of which is ever set
+in a multiplayer game. VERIFIED, objdump of every reference: `0x301e214c`
+has one, the pass's load at `0x30018811`, and sits in `.data`'s
+zero-filled tail (raw data ends at `0x30078000`); `0x301e2150` is stored
+only by `CG_DrawActiveFrame` (`0x300339ce`) from its fourth argument, which
+`CL_CGameRendering` (`CoDMP.exe` `0x404bc0`, the only caller of `vmMain` 3,
+from `0x416ee7` and `0x416f14`) pushes as 0; `0x3020cbdc` is stored only by
+the respawn reset (`0x30028abc`), with the `edx` it zeroed at `0x30028a70`.
+INFERRED: `0x3020cbdc` is RTCW's `cg.cameraMode`, off its reader
+`0x300333dc` in `0x300333b0`, which prints `Cinimatic Cameras are not
+available in the MP exe.` when it is set, and its other readers drop the
+player's own body flag (`0x30028318`) and the view weapon (`0x30036d57`).
+vcod reads none of the three. `cg_drawStatus` does not gate it. VERIFIED,
 inside: `dt` is `cg.time` less `0x3020c944`, which takes `cg.time` each
 call; it returns when the predicted `pm_type` (`0x30207160`) is 6 or more,
 and when `0x30019a30(1800, 0x3020c920)` returns null, so it shares the
@@ -2376,9 +2431,9 @@ vcod draws the snapshot's teammates off their interpolated origins with the
 snapshot's yaw, and the packed one, with the compass turned by the view yaw
 (no spring). vcod-server writes `iCompassFriendInfo` and the `0x100000` bit
 from each playing or dead client's end frame (`crate::compass`,
-`compass_friend` in `server.rs`). Its candidates are the clients whose
-`sessionstate` is `playing` and whose sim is a live player, what the probe
-saw retail answer for. It skips the area check, which stock maps never
+`compass_friend` in `server/snapshots.rs`). Its candidates are the clients
+whose `sessionstate` is `playing` and whose sim is a live player, what the
+probe saw retail answer for. It skips the area check, which stock maps never
 fail.
 
 VERIFIED, `ClientThink_real` (1.1d 0x405c4..0x40606): every cmd writes the
@@ -2528,9 +2583,15 @@ feeds that player's last hit. VERIFIED, `0x300287f0`: the kick's dots read
 transition runs before `CG_CalcViewValues` rebuilds the axis, so a hit
 splits along the view drawn the frame before, kick, quake and turret
 included. vcod feeds it from `Hud::feed_damage` every frame before the
-snapshot's events, on the newest snapshot's playerstate, along the last
-drawn view (`Hud::drawn_view`; the playerstate's view before the first
-frame); the first playerstate seen is the only baseline.
+snapshot's events, along the last drawn view (`Hud::drawn_view`; the
+playerstate's view before the first frame): on the newest snapshot's
+playerstate when it predicts, a followed player's `cg.snap`; the first
+playerstate seen is the only baseline. VERIFIED, `CG_ProcessSnapshots`'s
+loop (0x300303d8..0x300303e6) calls the transition 0x3002fc80, whose
+respawn reset is at 0x300300cd, before 0x3002faa0, whose tail feeds a
+followed hit; the prediction's feed runs later in the frame. So the reset
+runs ahead of either feed, as vcod's `track_spawn` does ahead of
+`feed_damage`, and a hit on the respawn snapshot keeps its kick.
 
 INFERRED, off `0x300172f0`: each slot younger than `cg_hudDamageIconTime`
 draws `hudHitDirection` over `(-64, 32)` to `(64, 96)` about the screen
@@ -2668,14 +2729,9 @@ fov the game names is a 4:3 view's width, and a wider view keeps that
 vertical fov). The crosshair's side arms read the fov a 4:3 view as tall
 would be wide, at 4:3 retail's `640 / fov_x` (`hud::player::arm_offset`).
 
-## UNVERIFIED summary
+## Unverified
 
-| # | Claim | Check that settles it |
-|---|---|---|
-| 1 | Resolved: the `killIcon<Mod>` names bind to `gfx/hud/death_<name>.tga` through `scripts/hud.shader` (section 2). | n/a |
-| 2 | Resolved: scores token 4 is `deaths`, written by script (section 3). | n/a |
-| 3 | Resolved: the `b` grammar, confirmed on screen against a populated server's Tab scoreboard (section 3). | n/a |
-| 4 | Resolved: hudelems travel in the playerstate's array block 5, filled per client by `HudElem_UpdateClient` (section 5); the cgame's draw is section 8. | n/a |
-| 5 | The second font header float's id-internal field name (section 6). Its use is settled. | Nothing downstream depends on it. |
-| 6 | Moot: the status header is vcod's own; the stock client draws team totals only on the scoreboard (section 5). | n/a |
-| 7 | Trap `4`'s official name (section 1). Its signature and engine case are read (section 1.1). | The name is in no binary read so far. |
+| Claim | Check that settles it |
+|---|---|
+| The second font header float's id-internal field name (section 6). Its use is settled. | Nothing downstream depends on it. |
+| Trap `4`'s official name (section 1). Its signature and engine case are read (section 1.1). | The name is in no binary read so far. |

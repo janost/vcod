@@ -22,14 +22,9 @@ const FRAME_MS: u64 = 50;
 fn server() -> Server {
     Server::new(
         ServerConfig {
-            map: "mp_carentan".into(),
             hostname: "flood".into(),
             max_clients: 2,
-            gametype: "dm".into(),
-            test_entities: 0,
-            trace: false,
-            bots: 0,
-            bots_shoot: false,
+            ..common::cfg("mp_carentan", "dm")
         },
         Instant::now(),
     )

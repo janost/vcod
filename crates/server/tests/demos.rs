@@ -16,7 +16,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use vcod_common::net::demo::{DemoEnd, DemoReader};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V22};
 use vcod_common::net::{NetClient, NetEvent, NetState};
 
 /// A `Write` the test reads back after the client is done with it.
@@ -33,7 +33,7 @@ impl Write for Shared {
     }
 }
 
-fn setup() -> Option<(vcod_common::pk3::Pk3Fs, &'static Protocol)> {
+fn setup() -> Option<(vcod_common::pk3::Pk3Fs, &'static Cod1Wire)> {
     match vcod_common::testing::uo_fs() {
         Some(fs) => Some((fs, &PROTOCOL_V22)),
         None => Some((vcod_common::testing::game_fs()?, &PROTOCOL_V1)),
@@ -63,23 +63,58 @@ impl Seen {
     }
 }
 
+/// `record` mid-level, no restart: the client's no-delta moves get a full
+/// frame back at once, and the file opens on it (cod11-demos.md 4). Needs
+/// no paks.
+#[test]
+fn record_mid_level_gets_a_full_frame_without_a_restart() {
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(common::cfg("mp_carentan", "dm"), now);
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let mut cl = common::connect(&mut sv, &q, &mut now);
+    for _ in 0..8 {
+        now += Duration::from_millis(50);
+        cl.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        common::step(&mut sv, &q, &mut cl, now);
+    }
+    assert!(cl.snapshots().newest().unwrap().delta_num > 0);
+    let sink = Shared::default();
+    cl.start_recording(Box::new(sink.clone()), "mid")
+        .expect("record in a level");
+    let mut full = None;
+    for _ in 0..3 {
+        now += Duration::from_millis(50);
+        cl.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        common::step(&mut sv, &q, &mut cl, now);
+        if let Some(s) = cl.snapshots().newest()
+            && s.message_num == cl.incoming_sequence()
+            && s.delta_num <= 0
+        {
+            full.get_or_insert(s.message_num);
+        }
+    }
+    let full = full.expect("no full frame after record");
+    assert!(cl.stop_recording().unwrap());
+    let mut r = DemoReader::new(sink.0.lock().unwrap().clone(), &PROTOCOL_V1);
+    r.next_message().unwrap();
+    assert_eq!(r.next_message().unwrap().0, full);
+}
+
 #[test]
 fn a_recorded_demo_plays_back_the_frames_the_client_parsed() {
     let Some((fs, p)) = setup() else {
         eprintln!("COD_DIR unset: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map("mp_carentan").expect("mp_carentan");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let fs = Rc::new(fs);
-    let mut now = Instant::now();
     let mut cfg = common::cfg("mp_carentan", "dm");
     cfg.bots = 2;
     cfg.bots_shoot = true;
-    let mut sv = vcod_server::Server::new(cfg, now);
-    sv.set_protocol(p);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs.clone()).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        ..common::Boot::on(cfg)
+    }
+    .start(fs.clone());
     let q = Rc::new(RefCell::new(Queues::default()));
     let (mut cl, _) = common::join(&mut sv, &q, &mut now, "axis", "mp44_mp");
     cl.enable_capture();
@@ -172,7 +207,7 @@ fn a_recorded_demo_plays_back_the_frames_the_client_parsed() {
         let until = play
             .snapshots()
             .newest()
-            .map_or(i32::MIN, |s| s.server_time);
+            .map_or(i32::MIN, |s| s.server_time.raw());
         let events = play.pump_demo(now, Some(until));
         seen.take(&play, &events);
         if events.iter().any(|e| matches!(e, NetEvent::DemoEnded(_))) {

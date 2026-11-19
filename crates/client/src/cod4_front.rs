@@ -402,12 +402,10 @@ impl App {
     }
 
     /// The `fs_game` the front end runs under: the Mods menu's pick
-    /// (`mods/<dir>`), else none.
+    /// (`mods/<dir>`) or the last server's, else none. Demos and the
+    /// profile's stats are written under it.
     fn cod4_fs_game(&self) -> Option<String> {
-        self.shell
-            .cvar("fs_game")
-            .filter(|g| !g.is_empty())
-            .map(str::to_string)
+        cod4_mod_dir(self.shell.cvar("fs_game")?)
     }
 
     /// `connect <addr>` on a CoD4 install, or the browser's join with its
@@ -423,33 +421,32 @@ impl App {
         if let Some(l) = self.cod4_loading.take() {
             l.cancel();
         }
-        let resolved = std::net::ToSocketAddrs::to_socket_addrs(addr.as_str())
-            .ok()
-            .and_then(|mut a| a.next());
-        let Some(at) = resolved else {
-            self.cod4_join_failed(&format!("cannot resolve {addr}"));
-            return;
-        };
         if let Some(f) = self.session.cod4_front_mut() {
             f.close();
         }
         log::info!("connecting to {addr}");
         vcod_common::laps::begin_load(format!("cod4 connect {addr}"));
         self.connect_addr = Some(addr.clone());
-        self.cod4_loading = Some(Loader::start(JoinArgs {
+        let name = self.shell.cvar("name").unwrap_or("vcod").to_string();
+        let join = crate::play::cod4_menus::Join {
+            team: self.team.clone(),
+            class: None,
+        };
+        let game_dir = self.game_dir.clone();
+        // `cl_allowDownload` and `cl_wwwDownload`, on by default as
+        // 1.7's (cod4-handshake.md 11).
+        let allow_download = self.shell.cvar("cl_allowDownload").is_none_or(|v| v != "0");
+        let www_download = self.shell.cvar("cl_wwwDownload").is_none_or(|v| v != "0");
+        let dir = game_dir.clone();
+        self.cod4_loading = Some(Loader::start_named(addr.clone(), dir, move |at| JoinArgs {
             addr: at,
             server: addr,
-            name: self.shell.cvar("name").unwrap_or("vcod").to_string(),
+            name,
             password,
-            join: crate::play::cod4_menus::Join {
-                team: self.team.clone(),
-                class: None,
-            },
-            game_dir: self.game_dir.clone(),
-            // `cl_allowDownload` and `cl_wwwDownload`, on by default as
-            // 1.7's (cod4-handshake.md 11).
-            allow_download: self.shell.cvar("cl_allowDownload").is_none_or(|v| v != "0"),
-            www_download: self.shell.cvar("cl_wwwDownload").is_none_or(|v| v != "0"),
+            join,
+            game_dir,
+            allow_download,
+            www_download,
         }));
     }
 
@@ -481,7 +478,7 @@ impl App {
         let Some(data) = self
             .cod4_demo_dirs()
             .into_iter()
-            .map(|d| d.join(&file))
+            .filter_map(|d| vcod_common::game_dir::confined(&d, &file))
             .find_map(|p| std::fs::read(p).ok())
         else {
             // `Com_Error`'s text goes through `SEH_LocalizeTextMessage`.
@@ -736,6 +733,13 @@ impl App {
     }
 }
 
+/// An `fs_game` value as a directory under the install: `None` when empty
+/// or when it would leave the install (rooted, a drive, a `..`), as
+/// `Install`'s own search path refuses it.
+fn cod4_mod_dir(value: &str) -> Option<String> {
+    vcod_common::game_dir::confined_rel_path(value).map(|_| value.to_string())
+}
+
 /// [`App::load_cod4_profile`]'s files: `active.txt` written, the
 /// profile's config run (vcod's, else 1.7's), `name` given the profile's
 /// when it has none, and vcod's config written there. Returns that
@@ -782,14 +786,25 @@ mod tests {
     use glam::Vec3;
     use vcod_cod4::scriptmenu::Cmd;
 
+    /// A server's systeminfo `fs_game` names the demos' and the stats'
+    /// directory only when it stays under the install.
+    #[test]
+    fn cod4_fs_game_from_a_server_stays_in_the_install() {
+        assert_eq!(cod4_mod_dir("mods/x").as_deref(), Some("mods/x"));
+        for bad in ["", "../x", "mods/../../x", "/abs", "C:\\x"] {
+            assert_eq!(cod4_mod_dir(bad), None, "{bad}");
+        }
+    }
+
     /// The front end over the `COD4_DIR` install, its main menu up with
-    /// vcod's stock CoD4 console.
-    fn front() -> Option<(Cod4Front, Shell)> {
+    /// vcod's stock CoD4 console, and its profile directory (removed on drop).
+    fn front() -> Option<(Cod4Front, Shell, tempfile::TempDir)> {
         let install = vcod_cod4::testing::cod4_install()?;
         let mut f = Cod4Front::new(install.root().to_path_buf());
         // A profile of the test's own, active, so `main` opens over no
         // profile pick and nothing is written into the install.
-        let players = tempfile::tempdir().unwrap().keep();
+        let tmp = tempfile::tempdir().unwrap();
+        let players = tmp.path().to_path_buf();
         std::fs::create_dir_all(players.join("players/profiles/tester")).unwrap();
         std::fs::write(players.join("players/profiles/active.txt"), "tester").unwrap();
         f.menus.front.players_root = Some(players);
@@ -806,7 +821,7 @@ mod tests {
         for line in f.take_console() {
             shell.execute(&line);
         }
-        Some((f, shell))
+        Some((f, shell, tmp))
     }
 
     fn names(f: &Cod4Front) -> Vec<String> {
@@ -851,7 +866,7 @@ mod tests {
     /// their materials.
     #[test]
     fn cod4_front_main_menu_draws_from_ui_mp() {
-        let Some((f, _)) = front() else {
+        let Some((f, _, _players)) = front() else {
             return;
         };
         assert_eq!(stack(&f), ["main_text"]);
@@ -883,7 +898,7 @@ mod tests {
     /// unlock it); its `statset 260 1` reaches the file.
     #[test]
     fn cod4_front_create_a_class_unlocks_off_the_profiles_stats() {
-        let Some((mut f, shell)) = front() else {
+        let Some((mut f, shell, _players)) = front() else {
             return;
         };
         click(&mut f, "Create a Class");
@@ -1004,7 +1019,7 @@ mod tests {
     /// page shows the picks when it opens again.
     #[test]
     fn cod4_front_create_a_class_picks_reach_the_profile() {
-        let Some((mut f, shell)) = front() else {
+        let Some((mut f, shell, _players)) = front() else {
             return;
         };
         let players = f.menus.front.players_root.clone().unwrap();
@@ -1052,7 +1067,7 @@ mod tests {
     /// the stats the join sent from the profile's file.
     #[test]
     fn cod4_front_create_a_class_spawns_with_its_picks() {
-        let Some((mut f, shell)) = front() else {
+        let Some((mut f, shell, _players)) = front() else {
             return;
         };
         let players = f.menus.front.players_root.clone().unwrap();
@@ -1115,7 +1130,7 @@ mod tests {
     /// `quit`. Esc backs out of a popup as its `onEsc` does.
     #[test]
     fn cod4_front_quit_asks_first() {
-        let Some((mut f, _)) = front() else {
+        let Some((mut f, _, _players)) = front() else {
             return;
         };
         click(&mut f, "Quit");
@@ -1142,7 +1157,7 @@ mod tests {
     /// Esc) closes it, whose `onClose` opens `main_text` again.
     #[test]
     fn cod4_front_start_new_server_asks_for_its_server() {
-        let Some((mut f, _)) = front() else {
+        let Some((mut f, _, _players)) = front() else {
             return;
         };
         click(&mut f, "Start New Server");
@@ -1236,7 +1251,7 @@ mod tests {
     /// 8 past their own text (`Item_TextField_Paint`).
     #[test]
     fn cod4_front_start_new_server_values_sit_beside_their_labels() {
-        let Some((mut f, _)) = front() else {
+        let Some((mut f, _, _players)) = front() else {
             return;
         };
         click(&mut f, "Start New Server");
@@ -1283,7 +1298,7 @@ mod tests {
     /// crosshair rows.
     #[test]
     fn cod4_front_option_pages_draw_their_values() {
-        let Some((mut f, shell)) = front() else {
+        let Some((mut f, shell, _players)) = front() else {
             return;
         };
         for (path, at_least) in [
@@ -1322,7 +1337,7 @@ mod tests {
     /// `vid_restart`, which the client's console runs.
     #[test]
     fn cod4_graphics_page_applies_the_video_mode() {
-        let Some((mut f, mut shell)) = front() else {
+        let Some((mut f, mut shell, _players)) = front() else {
             return;
         };
         shell.register_cod4_options();
@@ -1416,7 +1431,7 @@ mod tests {
     #[test]
     fn cod4_graphics_pages_apply_the_aspect_and_the_picmip() {
         use crate::console::shell::Effect;
-        let Some((mut f, mut shell)) = front() else {
+        let Some((mut f, mut shell, _players)) = front() else {
             return;
         };
         shell.register_cod4_options();
@@ -1543,7 +1558,7 @@ mod tests {
     /// `VCOD_FRONT_PPM=<path>` saves the frame.
     #[test]
     fn cod4_front_start_new_server_renders_offscreen() {
-        let Some((mut f, _)) = front() else {
+        let Some((mut f, _, _players)) = front() else {
             return;
         };
         click(&mut f, "Start New Server");
@@ -1580,7 +1595,7 @@ mod tests {
     /// mods/<dir>`.
     #[test]
     fn cod4_front_mods_lists_the_mods_directory() {
-        let Some((mut f, _)) = front() else {
+        let Some((mut f, _, _players)) = front() else {
             return;
         };
         let mods = crate::play::cod4_menus::front::mod_list(&f.root);
@@ -1607,7 +1622,7 @@ mod tests {
     /// clears the message and opens `main` again.
     #[test]
     fn cod4_front_error_popup_says_why() {
-        let Some((mut f, shell)) = front() else {
+        let Some((mut f, shell, _players)) = front() else {
             return;
         };
         f.open_main(&shell, Some(("Server disconnected", true)));
@@ -1664,7 +1679,7 @@ mod tests {
     /// `VCOD_FRONT_PPM=<path>` saves the frame for a look.
     #[test]
     fn cod4_front_main_menu_renders_offscreen() {
-        let Some((f, _)) = front() else {
+        let Some((f, _, _players)) = front() else {
             return;
         };
         let Some(bgra) = render(&f, (640, 384)) else {
@@ -1688,7 +1703,7 @@ mod tests {
     /// its layout (no expression vcod cannot evaluate); Esc comes back.
     #[test]
     fn cod4_front_screens_open_and_draw() {
-        let Some((mut f, shell)) = front() else {
+        let Some((mut f, shell, _players)) = front() else {
             return;
         };
         for (row, menu) in [
@@ -1720,14 +1735,17 @@ mod tests {
         f.button("MOUSE1", SIZE);
     }
 
-    /// Runs the front end's frames until `done` or 5 s pass, the frame's
-    /// sleep first: a Local reply read in the broadcast's own millisecond
-    /// pings 0, which the display list hides (browser.rs `pump_until`).
+    /// Runs the front end's frames until `done` or 5 s pass on the
+    /// [`TestServer`](crate::play::cod4_menus::browser::TestServer)'s
+    /// clock, the frame's sleep first: a Local reply read in the
+    /// broadcast's own millisecond pings 0, which the display list hides
+    /// (browser.rs `pump_until`).
     fn frames_until(f: &mut Cod4Front, done: impl Fn(&Cod4Front) -> bool) -> bool {
-        let t0 = Instant::now();
-        while t0.elapsed() < std::time::Duration::from_secs(5) {
-            std::thread::sleep(std::time::Duration::from_millis(16));
-            assert!(f.frame(Instant::now()).is_none());
+        use crate::play::cod4::tests::{clk_now, clk_sleep};
+        let t0 = clk_now();
+        while clk_now() - t0 < std::time::Duration::from_secs(5) {
+            clk_sleep(std::time::Duration::from_millis(16));
+            assert!(f.frame(clk_now()).is_none());
             if done(f) {
                 return true;
             }
@@ -1752,16 +1770,11 @@ mod tests {
             click_at(f, [p[0] + 2.0, p[1] - 4.0]);
         }
         assert_eq!(f.menus.dvar("ui_netSource").as_deref(), Some("0"));
-        // A loaded machine can starve the server past the broadcast's
-        // wait: Refresh List broadcasts again, as a player would.
-        let found =
-            |f: &Cod4Front| !f.menus.shown_servers().is_empty() && !f.menus.browser.refreshing;
-        let mut tries = 1;
-        while !frames_until(f, found) {
-            assert!(tries < 4, "Local found no server");
-            click(f, "Refresh List");
-            tries += 1;
-        }
+        assert!(
+            frames_until(f, |f| !f.menus.shown_servers().is_empty()
+                && !f.menus.browser.refreshing),
+            "Local found no server"
+        );
         assert_eq!(f.menus.shown_servers()[0].rec.addr, server);
     }
 
@@ -1773,7 +1786,9 @@ mod tests {
     /// the main menu comes back with `error_popmenu` saying why.
     #[test]
     fn cod4_front_join_game_joins_a_lan_server_and_drops_back_to_the_menu() {
-        let Some((mut f, shell)) = front() else {
+        use crate::play::cod4::tests::{clk_now, clk_sleep};
+        use std::time::Duration;
+        let Some((mut f, shell, _players)) = front() else {
             return;
         };
         let Some(server) = crate::play::cod4_menus::browser::TestServer::start("secret") else {
@@ -1789,9 +1804,7 @@ mod tests {
         assert!(f.key(KeyCode::Enter, None));
         assert_eq!(f.menus.open().unwrap().name, "pc_join_unranked");
         click(&mut f, "Join Server");
-        let join = f
-            .frame(Instant::now())
-            .expect("Join Server asks for a join");
+        let join = f.frame(clk_now()).expect("Join Server asks for a join");
         assert_eq!((join.addr, join.password.as_str()), (server.addr, "secret"));
 
         let mut loader = Loader::start(JoinArgs {
@@ -1804,13 +1817,14 @@ mod tests {
             allow_download: false,
             www_download: false,
         });
-        let t0 = Instant::now();
+        // The join's worker moves the clock; this thread waits off it.
+        let t0 = clk_now();
         let joined = loop {
-            assert!(t0.elapsed() < std::time::Duration::from_secs(60), "no join");
+            assert!(clk_now() - t0 < Duration::from_secs(60), "no join");
             if let Some(j) = loader.poll() {
                 break j;
             }
-            std::thread::sleep(std::time::Duration::from_millis(20));
+            std::thread::sleep(Duration::from_millis(20));
         };
         let mut s = joined
             .expect("the join with the password lands in the game")
@@ -1818,20 +1832,20 @@ mod tests {
         assert_eq!(s.map_name().as_deref(), Some("mp_crash"));
         server.command("w \"EXE_SERVERQUIT\"");
         // The `w` rides the next snapshot: five seconds of the server's
-        // snapshots (20 a second), with a wall-clock backstop.
-        let (sent, snaps) = (Instant::now(), s.client().snapshots.len());
+        // snapshots (20 a second).
+        let (sent, snaps) = (clk_now(), s.client().snapshots.len());
         let why = loop {
             assert!(
                 s.client().snapshots.len() < snaps + 100
-                    && sent.elapsed() < std::time::Duration::from_secs(60),
+                    && clk_now() - sent < Duration::from_secs(60),
                 "no drop"
             );
-            s.step(t0.elapsed().as_secs_f64() * 1000.0).unwrap();
+            s.step((clk_now() - t0).as_secs_f64() * 1000.0).unwrap();
             s.take_commands();
             if let Some(why) = s.take_dropped() {
                 break why;
             }
-            std::thread::sleep(std::time::Duration::from_millis(16));
+            clk_sleep(Duration::from_millis(16));
         };
         let why = crate::play::cod4::localize_drop(&why, &f.root);
         f.open_main(&shell, Some((&why, true)));
@@ -1845,7 +1859,7 @@ mod tests {
     /// `VCOD_FRONT_PPM=<path>` saves the frame.
     #[test]
     fn cod4_front_join_game_renders_its_row_offscreen() {
-        let Some((mut f, _)) = front() else {
+        let Some((mut f, _, _players)) = front() else {
             return;
         };
         let Some(server) = crate::play::cod4_menus::browser::TestServer::start("") else {
@@ -1888,7 +1902,7 @@ mod tests {
     /// and Start hands both to the server it asks for.
     #[test]
     fn cod4_front_start_new_server_edit_fields_reach_the_server() {
-        let Some((mut f, _)) = front() else {
+        let Some((mut f, _, _players)) = front() else {
             return;
         };
         click(&mut f, "Start New Server");
@@ -1921,7 +1935,7 @@ mod tests {
     /// zones' table and the search path.
     #[test]
     fn cod4_front_plays_its_menu_sounds_and_music() {
-        let Some((mut f, _)) = front() else {
+        let Some((mut f, _, _players)) = front() else {
             return;
         };
         let set = f.sounds_to_install().expect("the front end's sounds load");
@@ -1948,7 +1962,7 @@ mod tests {
                 assert!(fs.read(&path).is_some(), "{alias}: {path}");
             }
         }
-        let mut a = crate::audio::AudioSystem::new(&fs, opts);
+        let mut a = crate::audio::AudioSystem::with_aliases(&fs, opts, Default::default());
         a.set_cod4_aliases(table);
         for alias in ["mouse_over", "mouse_click"] {
             assert!(a.play_local(&fs, alias).is_some(), "{alias}");
@@ -1962,7 +1976,7 @@ mod tests {
     /// which the menu shows when it opens again.
     #[test]
     fn cod4_front_cd_key_menu_verifies_the_key() {
-        let Some((mut f, _shell)) = front() else {
+        let Some((mut f, _shell, _players)) = front() else {
             return;
         };
         let gs = f.gs.clone();
@@ -2012,7 +2026,7 @@ mod tests {
     /// one comes back (cod4-front-end.md 3).
     #[test]
     fn cod4_front_profiles_are_created_loaded_and_deleted() {
-        let Some((mut f, shell)) = front() else {
+        let Some((mut f, shell, _players)) = front() else {
             return;
         };
         let players = tempfile::tempdir().unwrap();

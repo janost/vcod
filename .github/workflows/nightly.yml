@@ -14,23 +14,34 @@ on:
       - 'tools/**'
       - '.github/workflows/ci.yml'
       - '.gitignore'
-      - 'opencode.json'
   workflow_dispatch:
 
-concurrency:
-  group: nightly
-  cancel-in-progress: true
+# Every job reads only; publish widens its own.
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
+  # ci.yml's toolchain; bump both together.
+  RUST_TOOLCHAIN: "1.100.0"
 
 jobs:
+  # The whole CI workflow (fmt, clippy, tests, deny) on this commit. A red
+  # run builds and publishes nothing, so the previous nightly stays up.
+  ci:
+    uses: ./.github/workflows/ci.yml
+    concurrency:
+      group: nightly-ci
+      cancel-in-progress: true
+
   build:
+    needs: ci
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Pinned: the build image's glibc is the oldest the binaries run on.
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             name: linux-amd64
           - os: windows-latest
@@ -40,8 +51,17 @@ jobs:
             target: aarch64-apple-darwin
             name: macos-arm64
     runs-on: ${{ matrix.os }}
+    # About ten times a warm build's 5 min. publish has none: a cut publish
+    # would leave the release half replaced.
+    timeout-minutes: 60
+    # A newer push cancels this build, never a publish in progress.
+    concurrency:
+      group: nightly-build-${{ matrix.name }}
+      cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install build deps
         if: runner.os == 'Linux'
@@ -49,14 +69,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libasound2-dev
 
-      - run: rustup target add ${{ matrix.target }}
+      - name: Toolchain
+        run: |
+          rustup toolchain install ${{ env.RUST_TOOLCHAIN }} --profile minimal --target ${{ matrix.target }}
+          rustup default ${{ env.RUST_TOOLCHAIN }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --workspace --target ${{ matrix.target }}
+        run: cargo build --release --workspace --locked --target ${{ matrix.target }}
+
+      # The floor README.md states. libm and libc symbols bind to the newest
+      # version the build image has, so a new image would raise it silently.
+      # Weak imports (pidfd_spawnp at 2.39) are left out: the binaries load
+      # without them.
+      - name: glibc floor
+        if: runner.os == 'Linux'
+        run: |
+          floor=2.35
+          newest=$(objdump -T target/${{ matrix.target }}/release/vcod target/${{ matrix.target }}/release/vcod-server |
+            grep -v '^[0-9a-f]*  w ' | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
+          echo "newest glibc symbol version: $newest (floor $floor)"
+          [ "$(printf '%s\n' "$newest" "$floor" | sort -V | tail -1)" = "$floor" ] ||
+            { echo "::error::the binaries need glibc $newest, above the $floor floor"; exit 1; }
 
       - name: Stage
         shell: bash
@@ -69,6 +106,9 @@ jobs:
             cp "$src" "$dir/"
           done
           cp README.md LICENSE NOTICE "$dir/"
+          # The linked crates' licence notices (NOTICE points here).
+          if [ "$RUNNER_OS" = Windows ]; then py=python; else py=python3; fi
+          "$py" -I tools/third_party_licenses.py ${{ matrix.target }} "$dir/THIRD-PARTY-LICENSES"
           # The build's own `<version>-<sha>`, for issue reports.
           "$dir/vcod" --version > "$dir/VERSION"
 
@@ -82,7 +122,7 @@ jobs:
         if: runner.os == 'Windows'
         run: Compress-Archive -Path vcod-${{ matrix.name }} -DestinationPath vcod-${{ matrix.name }}.zip
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vcod-${{ matrix.name }}
           path: vcod-${{ matrix.name }}.*
@@ -93,24 +133,33 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # Never cancelled halfway: a newer run's publish waits for this one.
+    concurrency:
+      group: nightly-publish
+      cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
           merge-multiple: true
 
-      # Rolling release: the previous nightly and its tag go, then both are
-      # recreated at this commit, so the download URLs stay stable.
+      - name: Checksums
+        run: cd dist && sha256sum -- * > SHA256SUMS
+
+      # Rolling release under stable download URLs. An existing release is
+      # updated in place (tag moved, assets replaced one by one), so the
+      # previous archives stay downloadable until the new ones land.
       - name: Publish nightly
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          gh release delete nightly --yes --cleanup-tag || true
-          gh release create nightly \
-            --prerelease \
-            --target "$GITHUB_SHA" \
-            --title "Nightly ${GITHUB_SHA:0:8}" \
-            --notes "Built from master at ${GITHUB_SHA:0:8} on $(date -u '+%Y-%m-%d %H:%M UTC'). Unstable by definition." \
-            dist/*
+          title="Nightly ${GITHUB_SHA:0:8}"
+          notes="Built from master at ${GITHUB_SHA:0:8} on $(date -u '+%Y-%m-%d %H:%M UTC'). Unstable by definition."
+          if gh release view nightly > /dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$GITHUB_SHA" -F force=true > /dev/null
+            gh release upload nightly dist/* --clobber
+            gh release edit nightly --prerelease --title "$title" --notes "$notes"
+          else
+            gh release create nightly --prerelease --target "$GITHUB_SHA" --title "$title" --notes "$notes" dist/*
+          fi

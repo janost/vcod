@@ -60,7 +60,7 @@ pub struct Info {
 
 /// A value as `Info_SetValueForKey` (cod_lnxded 0x80827d4) stores it: every
 /// `\`, `;` and `"` dropped.
-fn info_value(value: impl std::fmt::Display) -> String {
+pub fn info_value(value: impl std::fmt::Display) -> String {
     value
         .to_string()
         .chars()

@@ -24,13 +24,14 @@
 //! one runs at a 1.1 install, 1.5's is in `cull15_ab`.
 
 use crate::common;
+use vcod_common::net::Msec;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::msg::NULL_USERCMD;
-use vcod_common::net::protocol::{PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V22};
 
 const MAP: &str = "mp_berlin";
 const PROBE: &str = "probe_uocull";
@@ -92,18 +93,15 @@ fn retail() -> Run {
 
 fn ours() -> Run {
     let fs = vcod_common::testing::uo_fs().unwrap();
-    let p: &'static Protocol = &PROTOCOL_V22;
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, PROBE), now);
-    sv.set_protocol(p);
-    sv.overlay_script(
-        &format!("maps/mp/gametypes/{PROBE}"),
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_uocull.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let p: &'static Cod1Wire = &PROTOCOL_V22;
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_uocull.gsc"
+        )),
+        ..common::Boot::new(MAP, PROBE)
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let mut cl = common::connect(&mut sv, &q, &mut now);
@@ -114,9 +112,9 @@ fn ours() -> Run {
         cl.send_frame(&NULL_USERCMD);
         common::step(&mut sv, &q, &mut cl, now);
         if let Some(s) = cl.snapshots().newest()
-            && s.server_time != seen
+            && s.server_time != Msec::from_raw(seen)
         {
-            seen = s.server_time;
+            seen = s.server_time.raw();
             let ents: Ents = s
                 .entities
                 .iter()
@@ -125,7 +123,7 @@ fn ours() -> Run {
                 .map(|(n, t)| format!("{n}:{t}"))
                 .collect();
             if snaps.last().is_none_or(|(_, e)| *e != ents) {
-                snaps.push((s.server_time, ents));
+                snaps.push((s.server_time.raw(), ents));
             }
         }
         if sv

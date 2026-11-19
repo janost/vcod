@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 pub mod snapcull;
+pub mod tapes;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
@@ -77,7 +78,7 @@ pub fn step(
     step_at(sv, ADDR, q, cl, now)
 }
 
-/// Like `step`, but the server's reply never reaches the client — a lost
+/// Like `step`, but the server's reply never reaches the client: a lost
 /// snapshot packet, not a lost ack. The client's next real ack then names a
 /// frame it received without having received the one right before it, the
 /// only case where a server-side message_num that has drifted from the
@@ -282,7 +283,6 @@ pub fn join_pair_stamped(
 /// capture that starts soon after it can still be met. In the game a late
 /// `b` sends a 60 fps probe's cmds ([`probe_cadence`]), so a fall off the
 /// gsc's placement lands, and plays its land anim, when retail's did.
-#[allow(clippy::too_many_arguments)]
 pub fn join_pair_staggered(
     sv: &mut Server,
     qa: &Rc<RefCell<Queues>>,
@@ -305,7 +305,7 @@ pub fn join_pair_staggered(
         waited += 50;
         match ca.snapshots().newest().filter(|_| !stamps_a.is_empty()) {
             Some(snap) if ca.state() == NetState::Active => {
-                let end = snap.server_time + FRAME_MS as i32;
+                let end = snap.server_time.raw() + FRAME_MS as i32;
                 let cmds = stamped(&ca, &holding(&ca), stamps_a, last_a, end);
                 if let Some(c) = cmds.last() {
                     last_a = c.server_time;
@@ -330,7 +330,7 @@ pub fn join_pair_staggered(
         *now += Duration::from_millis(50);
         match ca.snapshots().newest().filter(|_| !stamps_a.is_empty()) {
             Some(snap) if ca.state() == NetState::Active => {
-                let end = snap.server_time + FRAME_MS as i32;
+                let end = snap.server_time.raw() + FRAME_MS as i32;
                 let cmds = stamped(&ca, &holding(&ca), stamps_a, last_a, end);
                 if let Some(c) = cmds.last() {
                     last_a = c.server_time;
@@ -343,8 +343,9 @@ pub fn join_pair_staggered(
         }
         match cb.snapshots().newest().filter(|_| b_after_ms > 0) {
             Some(snap) if cb.state() == NetState::Active => {
-                let end = snap.server_time + FRAME_MS as i32 - PROBE_CMD_LAG_MS;
-                let stamps = probe_cadence(last_b.max(snap.server_time - FRAME_MS as i32), end);
+                let end = snap.server_time.raw() + FRAME_MS as i32 - PROBE_CMD_LAG_MS;
+                let stamps =
+                    probe_cadence(last_b.max(snap.server_time.raw() - FRAME_MS as i32), end);
                 let cmds = stamped(&cb, &holding(&cb), &stamps, last_b, end);
                 if let Some(c) = cmds.last() {
                     last_b = c.server_time;
@@ -541,6 +542,192 @@ pub fn cfg(map: &str, gametype: &str) -> vcod_server::ServerConfig {
         bots: 0,
         bots_shoot: false,
     }
+}
+
+/// A gate's server: [`Boot::new`]'s map and gametype, the parts a gate
+/// changes by struct update, then [`Boot::start`]. Every A/B gate boots the
+/// same way, so a new step between the world and the scripts goes here.
+pub struct Boot<'a> {
+    pub cfg: vcod_server::ServerConfig,
+    /// A gsc source loaded as the gametype's script, a probe's.
+    pub script: Option<&'a str>,
+    /// Cvars set ahead of the scripts.
+    pub cvars: &'a [(&'a str, &'a str)],
+    /// The wire; the install's ([`vcod_server::server::install_protocol`])
+    /// when `None`.
+    pub proto: Option<&'static vcod_common::net::protocol::Cod1Wire>,
+    /// What a gate pins before the world loads: spawns, a seed, a clock.
+    pub prep: Option<&'a dyn Fn(&mut Server)>,
+}
+
+impl<'a> Boot<'a> {
+    pub fn new(map: &str, gametype: &str) -> Boot<'a> {
+        Boot::on(cfg(map, gametype))
+    }
+
+    /// A gate's own config; the map it names is the one loaded.
+    pub fn on(cfg: vcod_server::ServerConfig) -> Boot<'a> {
+        Boot {
+            cfg,
+            script: None,
+            cvars: &[],
+            proto: None,
+            prep: None,
+        }
+    }
+
+    /// The server on the map's world with the scripts loaded, and its clock.
+    /// A gate that reads the paks after takes `fs` as an `Rc` and passes a
+    /// clone.
+    pub fn start(self, fs: impl Into<Rc<vcod_common::pk3::Pk3Fs>>) -> (Server, Instant) {
+        let fs: Rc<vcod_common::pk3::Pk3Fs> = fs.into();
+        let map = self.cfg.map.clone();
+        let bsp_path = fs.resolve_map(&map).expect("map in the mounted paks");
+        let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+        let proto = self
+            .proto
+            .unwrap_or_else(|| vcod_server::server::install_protocol(&fs));
+        let gametype = self.cfg.gametype.clone();
+        let now = Instant::now();
+        let mut sv = Server::new(self.cfg, now);
+        sv.set_protocol(proto);
+        for (k, v) in self.cvars {
+            sv.set_cvar(k, v);
+        }
+        if let Some(src) = self.script {
+            sv.overlay_script(&format!("maps/mp/gametypes/{gametype}"), src);
+        }
+        if let Some(prep) = self.prep {
+            prep(&mut sv);
+        }
+        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+        sv.load_scripts(fs).expect("load the scripts");
+        (sv, now)
+    }
+}
+
+/// A capture recipe's `+set name value` pairs, in order, from the
+/// fixture's `#` header lines: the cvars retail's server ran with.
+pub fn recipe_sets(fixture: &str) -> Vec<(&str, &str)> {
+    let mut sets = Vec::new();
+    for l in fixture.lines().filter(|l| l.starts_with('#')) {
+        let mut t = l.split_whitespace();
+        while let Some(w) = t.next() {
+            if w == "+set"
+                && let (Some(name), Some(value)) = (t.next(), t.next())
+            {
+                sets.push((name, value));
+            }
+        }
+    }
+    sets
+}
+
+/// The source of the client probe `name`
+/// (`gsc/tests/fixtures/semantics/client-probes/<name>.gsc`).
+pub fn client_probe(name: &str) -> String {
+    std::fs::read_to_string(format!(
+        "../gsc/tests/fixtures/semantics/client-probes/{name}.gsc"
+    ))
+    .expect("the probe")
+}
+
+/// What a gate adds to [`run_probe`]'s client.
+pub trait ProbeHooks {
+    /// A server command, before the join reads it.
+    fn command(&mut self, _tokens: &[String]) {}
+    /// A live frame's cmds, before they go.
+    fn cmds(&mut self, _cmds: &mut [UserCmd]) {}
+}
+
+impl ProbeHooks for () {}
+
+/// The probes' direct input (`--probe-uo-weapon direct`): `f "PROBE_IN
+/// <buttons> <wbuttons> <up>"` sets the cmds' `wbuttons`, `a <weapon>` their
+/// weapon.
+#[derive(Default)]
+pub struct DirectInput {
+    pub wbuttons: u8,
+    pub weapon: Option<u8>,
+}
+
+impl ProbeHooks for DirectInput {
+    fn command(&mut self, tokens: &[String]) {
+        match tokens.first().map(String::as_str) {
+            Some("a") => self.weapon = tokens.get(1).and_then(|w| w.parse().ok()),
+            Some("f") => {
+                let w = tokens
+                    .get(1)
+                    .and_then(|t| t.strip_prefix("PROBE_IN "))
+                    .and_then(|t| t.split_whitespace().nth(1)?.parse().ok());
+                if let Some(w) = w {
+                    self.wbuttons = w;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn cmds(&mut self, cmds: &mut [UserCmd]) {
+        for c in cmds {
+            c.wbuttons = self.wbuttons;
+            if let Some(w) = self.weapon {
+                c.weapon = w;
+            }
+        }
+    }
+}
+
+/// One client joined as `join` and driven by `hold` and `hooks`, a frame
+/// at a time for at most `frames`, until the script logs `PROBE done`:
+/// the log's `PROBE` lines, trimmed.
+pub fn run_probe(
+    sv: &mut Server,
+    now: &mut Instant,
+    mut join: Join,
+    mut hold: ProbeHold,
+    frames: usize,
+    hooks: &mut impl ProbeHooks,
+) -> Vec<String> {
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let mut cl = NetClient::start_with_qport(ClientEnd(q.clone()), *now, 0x2001);
+    let frame = Duration::from_millis(FRAME_MS as u64);
+    for _ in 0..frames {
+        if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
+            break;
+        }
+        *now += frame;
+        let live = cl
+            .snapshots()
+            .newest()
+            .is_some_and(|s| s.ps.field_i32(cl.protocol(), "pm_type") == 0);
+        if live {
+            let mut cmds = hold.cmds(&cl, 0);
+            hooks.cmds(&mut cmds);
+            cl.send_cmds(&cmds);
+        } else if let Some(c) = cl.send_frame(&UserCmd::default()) {
+            hold.last = c.server_time;
+        }
+        let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
+        for p in pending {
+            sv.handle_packet(ADDR, &p, *now);
+        }
+        sv.tick(*now);
+        for (_, p) in sv.take_outgoing() {
+            q.borrow_mut().to_client.push_back(p);
+        }
+        for e in cl.pump_at(*now) {
+            if let NetEvent::ServerCommand(tokens) = e {
+                hooks.command(&tokens);
+                join.on_server_command(&tokens, &mut cl, *now);
+            }
+        }
+    }
+    sv.script_log()
+        .iter()
+        .map(|l| l.trim().to_string())
+        .filter(|l| l.starts_with("PROBE"))
+        .collect()
 }
 
 /// What the moving-shot captures' servers changed in a stock weapon file
@@ -956,7 +1143,7 @@ pub fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
 /// When each of a step's taps goes down, in ms from the step's start: one
 /// usercmd long, at the first cmd at or after the capture's own tap time. The
 /// capture holds the bit 32 ms out of every `pulse_period_ms`, which no cmd
-/// grid divides evenly, so the tap is placed rather than sampled -- sampling
+/// grid divides evenly, so the tap is placed rather than sampled: sampling
 /// it drops the taps that fall between two cmds.
 fn taps(step: &Step) -> Vec<i64> {
     (0..i64::from(step.pulses))
@@ -964,12 +1151,10 @@ fn taps(step: &Step) -> Vec<i64> {
         .collect()
 }
 
-/// Replays the capture's taps against our server: one trace per snapshot
-/// per step, the way the probe traced retail's.
 /// The weapon byte a cmd carries: the step's switch once it has been asked
 /// for, the step's own byte otherwise, and our own `ps.weapon` where the
-/// capture recorded a 0. A 0 is not neutral -- retail reads a `cmd.weapon`
-/// differing from `ps.weapon` as a request to holster -- and the capture's 0
+/// capture recorded a 0. A 0 is not neutral (retail reads a `cmd.weapon`
+/// differing from `ps.weapon` as a request to holster), and the capture's 0
 /// means the probe was holding nothing, which is a fact about retail's
 /// playerstate and not an input to replay.
 fn weapon_byte(step: &Step, t: i64, ours_now: u8) -> u8 {
@@ -1021,7 +1206,7 @@ pub fn replay(
 
 /// [`replay`] on a server speaking `proto`.
 pub fn replay_as(
-    proto: &'static vcod_common::net::protocol::Protocol,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     gametype: &str,
     steps: &[Step],
@@ -1029,14 +1214,11 @@ pub fn replay_as(
     fs: vcod_common::pk3::Pk3Fs,
     place: Option<([f32; 3], f32)>,
 ) -> Vec<Vec<Sample>> {
-    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let fs = std::rc::Rc::new(fs);
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(map, gametype), now);
-    sv.set_protocol(proto);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    let (mut sv, mut now) = Boot {
+        proto: Some(proto),
+        ..Boot::new(map, gametype)
+    }
+    .start(fs);
     let q = std::rc::Rc::new(RefCell::new(Queues::default()));
     let (mut cl, _join) = self::join(&mut sv, &q, &mut now, join.0, join.1);
     // The client sends absolute view angles: `NetClient::send_frame`
@@ -1122,7 +1304,11 @@ pub fn replay_as(
             }
         }
         if let Some(at) = step.open_at.filter(|_| step.cmds.is_none()) {
-            while cl.snapshots().newest().is_some_and(|s| s.server_time < at) {
+            while cl
+                .snapshots()
+                .newest()
+                .is_some_and(|s| s.server_time.raw() < at)
+            {
                 now += Duration::from_millis(FRAME_MS as u64);
                 cl.send_frame(&base);
                 self::step(&mut sv, &q, &mut cl, now);
@@ -1145,7 +1331,7 @@ pub fn replay_as(
         // and what it logged past that runs in the next step, on the same
         // clock unless that one waits for the weapon first.
         if let Some(log) = &step.cmds {
-            let open = cl.snapshots().newest().map_or(0, |s| s.server_time);
+            let open = cl.snapshots().newest().map_or(0, |s| s.server_time.raw());
             let shift = shift_carried.unwrap_or(open - log.start);
             let first = log.stamps[0];
             let hands_on = steps.get(si + 1).is_some_and(|s| s.cmds.is_some());
@@ -1304,7 +1490,7 @@ pub fn replay_as(
 fn sample_of(s: &vcod_common::net::snapshot::Snapshot, ms: i64, explosions: usize) -> Sample {
     Sample {
         ms,
-        server_time: s.server_time,
+        server_time: s.server_time.raw(),
         ps: s.ps.clone(),
         entities: s.entities.clone(),
         explosions,
@@ -1550,11 +1736,6 @@ impl Join {
     }
 }
 
-/// Connects a client, answers both stock menus with `team` and `weapon`, and
-/// runs on until the spawn has settled. 20 s of simulated time at sv_fps 20,
-/// well past the settle a completed join needs; a join that never happens
-/// burns the lot. The loop's first usercmd is what enters the world and
-/// releases `Callback_PlayerConnect`'s `waittill`; the menus follow from it.
 /// A client that connects and leaves again, the way each earlier probe run
 /// left the capture's server: its `ClientDisconnect` frees entity 0, and
 /// `G_FreeEntity`'s sweep reads 1023 into every `groundEntityNum` still at
@@ -1568,6 +1749,11 @@ pub fn connect_and_leave(sv: &mut Server, q: &Rc<RefCell<Queues>>, now: &mut Ins
     }
 }
 
+/// Connects a client, answers both stock menus with `team` and `weapon`, and
+/// runs on until the spawn has settled. 20 s of simulated time at sv_fps 20,
+/// well past the settle a completed join needs; a join that never happens
+/// burns the lot. The loop's first usercmd is what enters the world and
+/// releases `Callback_PlayerConnect`'s `waittill`; the menus follow from it.
 pub fn join(
     sv: &mut Server,
     q: &Rc<RefCell<Queues>>,
@@ -1765,7 +1951,7 @@ pub fn record_netchan(
         if let NetEvent::OutOfBand(text) = e {
             push(
                 NetchanKind::Oob(text.replace('\n', "\\n")),
-                cl.snapshots().newest().map(|s| s.server_time),
+                cl.snapshots().newest().map(|s| s.server_time.raw()),
             );
         }
     }
@@ -1787,7 +1973,7 @@ pub fn record_netchan(
                     clips.join(",")
                 },
             },
-            Some(s.server_time),
+            Some(s.server_time.raw()),
         );
     }
 }
@@ -2314,10 +2500,10 @@ impl ProbeHold {
         };
         let da =
             ["delta_angles[0]", "delta_angles[1]", "delta_angles[2]"].map(|n| s.ps.field_i32(p, n));
-        let mut t = self.last.max(s.server_time - FRAME_MS as i32);
+        let mut t = self.last.max(s.server_time.raw() - FRAME_MS as i32);
         let mut times = Vec::new();
         if self.framed {
-            let f = s.server_time;
+            let f = s.server_time.raw();
             // The `commandTime` of the newest snapshot logged at or before
             // `t`, inside the logged span: a stall that kept snapshots off
             // the client also kept its cmds off the server, so a frame in
@@ -2338,7 +2524,7 @@ impl ProbeHold {
                 }
                 None => {
                     let lo = self.times.partition_point(|&c| c < f);
-                    let hi = self.times.partition_point(|&c| c < f + FRAME_MS as i32);
+                    let hi = self.times.partition_point(|&c| c < (f + FRAME_MS as i32));
                     &self.times[lo..hi]
                 }
             };
@@ -2363,20 +2549,20 @@ impl ProbeHold {
                 }
                 false => t + PROBE_CMD_MS,
             };
-            while next(t) <= s.server_time + FRAME_MS as i32 {
+            while next(t) <= (s.server_time.raw() + FRAME_MS as i32) {
                 t = next(t);
                 times.push(t);
             }
         }
         // A cmd stamped before the newest snapshot's time went out on the
         // snapshot before it, its view and `delta_angles`.
-        if self.seen[0].is_none_or(|(st, _, _)| st != s.server_time) {
-            self.seen = [Some((s.server_time, v, da)), self.seen[0]];
+        if self.seen[0].is_none_or(|(st, _, _)| st != s.server_time.raw()) {
+            self.seen = [Some((s.server_time.raw(), v, da)), self.seen[0]];
         }
         let mut out = Vec::new();
         for &t in &times {
             let (v, da) = match self.seen[1] {
-                Some((_, ov, oda)) if !self.ran.is_empty() && t < s.server_time => (ov, oda),
+                Some((_, ov, oda)) if !self.ran.is_empty() && t < s.server_time.raw() => (ov, oda),
                 _ => (v, da),
             };
             out.push(UserCmd {
@@ -2455,7 +2641,7 @@ const DIRECT_JOIN_MS: i64 = 400;
 /// they land. Returns the script's `PROBE` lines.
 pub fn direct_replay(
     fs: fn() -> Option<vcod_common::pk3::Pk3Fs>,
-    proto: &'static vcod_common::net::protocol::Protocol,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     probe: &str,
     weapon: &str,
@@ -2476,7 +2662,7 @@ pub type SnapEntities = Vec<(
 /// between its spawn and the script's first placing is the spawn point's.
 pub fn direct_replay_frames(
     fs: fn() -> Option<vcod_common::pk3::Pk3Fs>,
-    proto: &'static vcod_common::net::protocol::Protocol,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     probe: &str,
     weapon: &str,
@@ -2487,7 +2673,7 @@ pub fn direct_replay_frames(
 
 fn direct_replay_run(
     fs: fn() -> Option<vcod_common::pk3::Pk3Fs>,
-    proto: &'static vcod_common::net::protocol::Protocol,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     probe: &str,
     weapon: &str,
@@ -2521,10 +2707,9 @@ fn spawned_origin(text: &str) -> [f32; 3] {
 
 /// One run of [`direct_replay`], the client joined `late_ms` earlier:
 /// the `PROBE` lines, the client's first snapshot time and its snapshots.
-#[allow(clippy::too_many_arguments)]
 fn direct_replay_once(
     fs: vcod_common::pk3::Pk3Fs,
-    proto: &'static vcod_common::net::protocol::Protocol,
+    proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     probe: &str,
     weapon: &str,
@@ -2532,18 +2717,6 @@ fn direct_replay_once(
     late_ms: i64,
     pin: bool,
 ) -> (Vec<String>, Option<i32>, SnapEntities) {
-    let fs = Rc::new(fs);
-    let bsp_path = fs.resolve_map(map).unwrap();
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = Server::new(cfg(map, probe), now);
-    sv.set_protocol(proto);
-    let src = std::fs::read_to_string(format!(
-        "../gsc/tests/fixtures/semantics/client-probes/{probe}.gsc"
-    ))
-    .expect("the probe");
-    sv.overlay_script(&format!("maps/mp/gametypes/{probe}"), &src);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     let spawn = pin.then(|| {
         let at = spawned_origin(text);
         let d = |p: &[f32; 3]| (0..3).map(|i| (p[i] - at[i]).powi(2)).sum::<f32>();
@@ -2552,7 +2725,13 @@ fn direct_replay_once(
             .min_by(|a, b| d(&a.0).total_cmp(&d(&b.0)))
             .expect("a spawn point")
     });
-    sv.load_scripts(fs).expect("load the scripts");
+    let src = client_probe(probe);
+    let (mut sv, mut now) = Boot {
+        script: Some(&src),
+        proto: Some(proto),
+        ..Boot::new(map, probe)
+    }
+    .start(fs);
     if let Some(at) = spawn {
         pin_spawns_at(&mut sv, &[&[at]]);
     }
@@ -2613,9 +2792,9 @@ fn direct_replay_once(
             }
         }
         if let Some(s) = cl.snapshots().newest() {
-            first_snap.get_or_insert(s.server_time);
-            if frames.last().is_none_or(|(t, _)| *t != s.server_time) {
-                frames.push((s.server_time, s.entities.clone()));
+            first_snap.get_or_insert(s.server_time.raw());
+            if frames.last().is_none_or(|(t, _)| *t != s.server_time.raw()) {
+                frames.push((s.server_time.raw(), s.entities.clone()));
             }
         }
     }

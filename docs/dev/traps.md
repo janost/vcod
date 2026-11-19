@@ -1,8 +1,12 @@
 # Traps already paid for
 
-Each entry below cost a debugging session. Read the section for the game and
-area you are touching before you change it. The research section an entry
-names holds the evidence.
+Each entry below cost a debugging session. Read All games and the section
+for the game and area you are touching before you change it. The research
+section an entry names holds the evidence.
+
+Research docs also mark a trap inline as `Trap:`, beside the fact it rests
+on. Most of CoD2's and CoD4's sit there: their sections below point at them
+by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
 
 - [All games](#all-games): script host and VM, assets, net, bots
 - [CoD1 1.1 and 1.5](#cod1-11-and-15) (UO shares these unless its section
@@ -10,10 +14,20 @@ names holds the evidence.
   script, assets and rendering
 - [United Offensive 1.51](#united-offensive-151): wire, vehicles, movement,
   rendering and sound, bots
-- [CoD2 1.3](#cod2-13)
-- [CoD4 1.7](#cod4-17)
+- [CoD2 1.3](#cod2-13): wire, map cycle, movement, combat, script,
+  rendering, bots
+- [CoD4 1.7](#cod4-17): wire, map cycle, movement, combat, script, HUD,
+  rendering, bots
 
 ## All games
+
+### Floats
+
+- Simulation code calls the host's libm for every transcendental except
+  `sinf` and `cosf` (`vcod_common::libm`, glibc 2.28's, cod4-pmove.md 13.2).
+  The Windows and macOS builds therefore run movement and combat on another
+  libm than the gates ran on, and a glibc update can move a gate by a bit.
+  Pin a function the same way before a gate depends on its last bit.
 
 ### Script host and VM
 
@@ -22,8 +36,16 @@ names holds the evidence.
   The VM's rules go through `VmProfile` (`Vm::apply_profile`). The load picks
   the profile and `GameHost::new` takes it. A test that switches version calls
   `GameHost::set_profile`: a write to `defs` alone leaves the builtins and
-  rules on the old version. `host.cod2()` panics on a CoD1 host;
+  rules on the old version. `host.cod2()` panics on another game's host;
   `GameHost::new` and `set_profile` pick the `HostExt` arm off the game.
+  Only files whose path names the game call it; shared code takes
+  `as_cod2()` / `as_cod4()` (`shared_code_reaches_game_state_without_panicking`),
+  and a builtin set's handlers run only on a host of the set's game.
+- A builtin turns an entity into a client slot through
+  `ClientSlot::of_entity` (`game::slot`), never by casting its number: a
+  script entity's number is past the client arrays, and a command queued
+  for it panicked the engine's drain (CoD2 `updateScores`). A queued server
+  command takes a `Recipient`, so it can only name a real slot or every one.
 - gsc folds case for identifiers, fields, paths and event names, not for
   string values or array keys. A misrouted event name hangs its `waittill`
   silently.
@@ -35,7 +57,27 @@ names holds the evidence.
   (`Heap::share`, `Heap::own`). A write path that skips the
   `EnsureArray*`/`OwnLocal` ops writes into every holder. CoD4's
   `CountPlayers` shared `level.players` that way and flooded
-  `spawnPerFrameUpdate` (cod4-gsc.md 10).
+  `spawnPerFrameUpdate` (cod4-gsc.md 10). `a[0] = a` owns `a` before it
+  reads the value, so `StoreIndex` stores a deep copy (`Heap::snapshot`)
+  when the value holds the target: no array cycle exists. A struct cycle
+  (`s.a = s`) is legal; the level carry (`lift_array`) and `scriptUsage`
+  take each object once.
+- The heap is swept at the end of `Vm::run_frame` (`Vm::collect`): a struct
+  or array nothing reaches is freed and its id goes to the next allocation.
+  A host that keeps one between frames names it in `Host::roots`; one left
+  out later reads as some other object. `GameHost::roots` walks the object
+  table (script structs, engine and client fields) and the two queued
+  notify lists. A host holding an id in a Rust local across `run_frame`
+  has the same bug.
+- The same sweep frees strings built with `+` that nothing names
+  (`Interner::intern_temp`, cod2-gsc-diff.md 3.7). One turns permanent when
+  the host is handed it: a builtin's argument, an entity field write, a read
+  through `Cx`. A host may keep any `Atom` it got that way. It must not keep
+  one read through `Vm::heap()`, which does not pin. A builtin named in
+  `GameHost::reads_text_only` gets its arguments unpinned, so its handler
+  must not keep an argument's atom. A new VM path that hands a value to the
+  host pins it (`Interner::pin`), or a host's cached atom later names other
+  text.
 - `Cx::spawn` runs a script thread before the calling builtin's next
   instruction. `Cx::spawn_then` adds `Host::spawn_returned` once that thread
   first suspends. Only a `Cx` handed to a builtin (or to `spawn_returned`)
@@ -59,6 +101,18 @@ names holds the evidence.
   Activision's own initial state over the upper-cased (CoD2) or lower-cased
   (CoD4) key, the same hash their `getchallenge` carries
   (cod11-server-handshake.md, "CD key authorization (the clients)").
+- A float off the wire or out of a file can be NaN, infinite or 1e30.
+  Retail's `while a > 180 { a -= 360 }` folds never end on one, and
+  `f32::clamp` panics on crossed or NaN bounds where retail's two compares
+  do not. Ported folds take `vcod_common::fguard::turns` (or `near`) first
+  and data-driven clamps `fguard::clamp`; both return a retail value
+  untouched. The playerstate readers (`predict::from_wire`, CoD2's and
+  CoD4's `PlayerState::from_wire`) zero non-finite floats.
+- A wire or level clock wraps as retail's `int` does, and a dev build traps
+  where release wraps. Snapshot and frame times are `net::Msec` in all four
+  games: `+`, `-` and `since` wrap, `<` is retail's plain signed compare.
+  A clock still held as `i32` (usercmds, trajectories, pmove) takes
+  `wrapping_*` for any sum or difference off the wire.
 
 ### Bots
 
@@ -91,10 +145,11 @@ names holds the evidence.
 - A bot on a jump edge jumps by the walk's own rule (`nav::PinJump`: two
   pinned ticks, a bob, or right under the top; no `jump_clear` room test;
   pinned off its pace toward the top and, on the ground, off the distance
-  moved too) and steers at `NavGraph::aim`. Every non-leap jump edge is
-  walked again that way, aimed there (`NavGraph::reprove_jumps`,
-  `nav::as_a_bot`). A change to the bot's jump goes in `PinJump` or
-  `as_a_bot`, or the bot and the graph part. What a bot's jump adds (no room
+  moved too) and steers at `NavGraph::aim`. Every non-leap jump edge but
+  `link_pockets'` is walked again that way, aimed there
+  (`NavGraph::reprove_jumps`, `nav::as_a_bot`); the pockets' come after
+  the re-proof (bot-navigation.md, "Other rules"). A change to the bot's
+  jump goes in `PinJump` or `as_a_bot`, or the bot and the graph part. What a bot's jump adds (no room
   test, the ramp wait) stays out of the flood's walks: in them it reshapes
   the graph. A jump edge is run forward whatever its drop: only the forward
   walk jumps, so every jump edge was proved that way.
@@ -130,6 +185,13 @@ names holds the evidence.
   once the script's brush links (`GameHost::brush_links`) hold still 2 s
   (`Server::relink_nav`). A test that runs two gametypes on one map builds
   two graphs, and one that deletes a brush mid-level waits on a build.
+- `vcod-server` keeps each graph it builds on disk (`nav::disk`), keyed by
+  the map file's checksum (`CollisionWorld::source`), the binary's own hash
+  and the in-memory key. A world with no source (every test world,
+  `nav_build`, the in-process gates) never reads or writes one, and the
+  library keeps none until `nav::set_disk_cache` names a directory, which
+  only `main.rs` does. A change to the build needs no version bump: a new
+  binary misses every file an old one wrote.
 
 ## CoD1 1.1 and 1.5
 
@@ -209,6 +271,13 @@ otherwise.
 - The netchan scramble keeps `%`. The server reads client commands with the
   server-side string reader. The client reader's `%` mapping garbles every
   later message after a chat line containing one.
+- Both reliable rings hold the peer's copy, not the text queued: the
+  server's as the client reads it (`%` and high bytes as `.`), the client's
+  as `write_string` sent it. A raw `%` in the server's ring mis-keys the
+  client's moves until the next command is acked (cod11-chat.md 2.2).
+- `clc_moveNoDelta` sets the server's delta base to none; a client sends it
+  unless its last message held a valid frame (cod11-demos.md 4). Without it
+  a mid-level `record` never gets the full frame it waits on.
 - A move message's ack is stamped with the newest frame already sent when
   the packet arrived, not the tick time, or loopback ping reads 21-50 ms.
 - On a 1.5 server `sv_time_ms` is the game clock (`level.time`, the
@@ -417,6 +486,9 @@ otherwise.
 - 1.1 MP has no grenade cook; "cooking" in the code means held.
   `grenadeTimeLeft` is `fuseTime` at the pullback and 0 at the throw, and the
   fuse always runs in full from release. UO has a cook (see its section).
+- A weapon file key matches in any case and takes its first value, an
+  empty one leaving the default; numbers read through `atoi` and `atof`, so
+  `40.0` is 40 in an int field (`xmodel::WeaponKeys`, combat doc 0.1).
 - A weapon file's millisecond keys are stored truncated (`weapon::stored_ms`:
   1.8 is 1799) on all three Linux servers (`coduo-movement.md` 13). Never
   round one.
@@ -453,7 +525,7 @@ otherwise.
 - 1.5's and UO's `ClientSpawn` thinks on the client's last cmd, not 1.1's
   null one (`ClientSim::spawn_cmd`). A client holding prone lies down along
   the spawn point's yaw before the script turns him, and a spectator flies
-  off the spot on his held keys (cod15-movement.md 4, "The spawn's
+  off the spot on his held keys (cod15-movement.md 4.2, "The spawn's
   lie-down"). The think runs twice in vcod, both through
   `ClientSim::spawn_think_on`: on a fresh sim in the `spawn` builtin, for the
   origin the spawning thread reads, and on the real sim in the frame's spawn
@@ -645,15 +717,17 @@ otherwise.
   `probe_passthru`, z -151.875 at y -376) is the map's bottom brush, 145
   under the garden terrain. A view from there shows walls floating over sky:
   the town from below, not a culling bug.
-- Portal walk: a portal's plane faces out of its owning cell. vcod adds three
-  over-marking rules in `common/src/vis.rs` for the mp_ship decks.
+- Portal walk: a portal's plane faces out of its owning cell. vcod adds
+  over-marking passes in `common/src/vis.rs` for the mp_ship decks; what
+  they cost is in bsp-ibsp59-format.md, "How the retail client draws the
+  world".
 - No cell lists a brush model's soups. `WorldVis` marks them by the model's
   bounds against the frustum, and the renderer keeps only those whose model
   a snapshot entity carries (movers doc, "The client").
 
 ## United Offensive 1.51
 
-### Wire
+### UO wire
 
 - A UO script model or turret carries its model in `xmodel`, not `index`
   (`G_DObjUpdate`). A brush model keeps its number in `index`.
@@ -727,7 +801,7 @@ otherwise.
 ### Rendering and sound
 
 - UO's impact tables spell their explode paths with backslashes. `Pk3Fs`
-  reads `\` as `/`, as the engine's lookup does (coduo-diff.md 19,
+  reads `\` as `/`, as the engine's lookup does (coduo-diff.md 19.1,
   "Backslashed rows").
 - A rider poses through the server's `Controllers::rider` and
   `playerpose::seat_inputs` on both sides, but the cgame scales the jeep's
@@ -737,7 +811,7 @@ otherwise.
   positions never move its voice. `AudioSystem::set_sound_blends` places it
   on its vehicle every frame (coduo-diff.md 16).
 
-### Bots
+### UO bots
 
 - A bot sprints only along `Follower::straight_run`: level, straight, no
   jump, leap or risky edge. A sprint takes no weapon scale, so the graph's
@@ -752,38 +826,114 @@ otherwise.
 
 ## CoD2 1.3
 
+### CoD2 wire and netcode
+
 - The server builds its entities in CoD2's numbers as it builds them
   (`HostProfile::entities`, `cod2_wire::COD2_ENTITY_NUMBERS`: types,
   `eFlags`, `trType`s, ring events), held in vcod's `EntityState` over 118's
   table (`Cod2Wire::as_cod1_shim`, identity maps) until the engine takes
   `EntityState2`. `cod2_wire::to_cod2_entity` only copies, so a CoD2 builder
   that writes a 1.1 number sends it as is (cod2-protocol.md 15.9).
+- Voice packets carry the qport, and retail's `SV_VoicePacket` reads it as
+  a signed short: a client on qport 0x8000 or more is never heard. A probe
+  or client that talks keeps its qport below that, and two clients of one
+  process need two qports (cod2-voice.md 3, 6).
+- Inline: `cod2-protocol.md` 15.6 (empty clip names number the weapon
+  slots), 15.7 (a dropped spectator's slot and the restart's waiters),
+  17.5 (download names), 18.2 (the client keeps sending through an outage),
+  18.4 (the net line's ease); `cod2-killcam.md` 1.1 (the skip key).
+
+### CoD2 map cycle
+
+- None yet beyond `cod2-protocol.md` 15.7 above.
+
+### CoD2 movement and collision
+
+- Inline: `cod2-movement.md` 7 (`0.2f32`), 10 (stance and eye), 11 (the
+  ladder), 17.2 (the captures fixed).
+
+### CoD2 combat and items
+
+- A weapon file key takes its first value: appending `\key\value` to a
+  stock file whose key is already there, empty, changes nothing
+  (`weapon::parse`).
+- Inline: `cod2-combat.md` 6.3 (the client ignores `a`), 9.1 to 9.5 (the
+  weapon replay's numbering, damage directions, a blow on a dead body, the
+  gunner's angles in `f32`, round starts, the stumble blend, a resting
+  frag, the hit pose); `cod2-turrets.md` 11 (a round on a body);
+  `cod2-player-anims.md` 1 (indexing the models).
+
+### CoD2 script
+
+- None yet in this file; `cod2-efx.md` 6.6 (script effects on the server:
+  the `_union.scale` word) sits between script and rendering.
+
+### CoD2 assets, rendering, sound
+
 - A player's muzzle flash is not `CG_FireWeapon`'s: it only sets a flag,
   and `CG_AddPlayerWeapon` plays it on the gun's `tag_flash` at the next
   draw (the view weapon's for the playerstate's events). The view
   weapon's tags exist only once the gun is placed, after the view
   effects, so `cod2_client` spawns the view's flash and brass in its
   `view` step, not with the other effects (cod2-efx.md 6.8).
-- A weapon file key takes its first value: appending `\key\value` to a
-  stock file whose key is already there, empty, changes nothing
-  (`weapon::parse`).
-- Voice packets carry the qport, and retail's `SV_VoicePacket` reads it as
-  a signed short: a client on qport 0x8000 or more is never heard. A probe
-  or client that talks keeps its qport below that, and two clients of one
-  process need two qports (cod2-voice.md 3, 6).
+
+### CoD2 bots
+
+- The walk rules (`Cod2Walk`) are under [Bots](#bots) in All games.
 
 ## CoD4 1.7
+
+### CoD4 wire and netcode
+
+- Inline: `cod4-handshake.md` 9 (the kick string's format);
+  `cod4-netfields.md` 12 (the watched view takes the entity's angles);
+  `cod4-client-view.md` 2 (the camera's pitch limit); `cod4-demos.md` 1
+  (which demo player opens).
+
+### CoD4 map cycle
 
 - A CoD4 bot never writes a message, so the commands it reads must be marked
   sent (`reliable_sent`) as well as acknowledged. 1.7's
   `SV_AddServerCommand` squashes only unsent ones; a squash of one already
   read moved the next level's team menu under the acknowledge, so no bot
   played past a map change.
-- A CoD4 nav graph clips the brush entities standing once the level has run a
-  frame (`bots::cod4::BrushedClip`), and its cache key carries their set. A
-  test's `bot_world(.., Vec::new())` and `nav_build` clip the clip map alone.
+
+### CoD4 movement and collision
+
+- Inline: `cod4-gsc.md` 9 and 9.4 (the use key, the linked player's frame,
+  `linkTo` on a tag).
+
+### CoD4 combat and items
+
+- Cmds are thought on arrival, so a hit lands between the victim's cmds of a
+  frame as the two clients' packets arrived. A gate replaying two retail
+  captures sends each frame's packets in the order retail got them
+  (`cod4::capture_ab`); a fixed order read as damage applied a frame late
+  (cod4-combat.md 15).
+- Inline: `cod4-combat.md` 3.2 (the eye and gun angle bytes), 5 (the
+  corpse's bit, `suicide`, the end-frame draw), 7.1 (the last-cmd word),
+  10.2, 10.3, 10.8, 10.10 (missiles, the burst, flash and concussion,
+  `radiusDamage`), 13 and 13.1 (rounds on script entities), 14 (entity
+  numbers).
+
+### CoD4 script
+
 - `CountPlayers`' shared `level.players` array is under
   [Script host and VM](#script-host-and-vm).
+- Inline: `cod4-gsc.md` 3.1, 3.2, 3.4 (`ET_FX` fields, hardpoint models,
+  `linkTo`), 8 (brush entities on the running level), 10 (`level.players`
+  string keys).
+
+### CoD4 HUD
+
+- Inline: `cod4-hud.md` 5 (hudelem bars), 7.1 (chat scrolling), 12 (script
+  menus and the qport), 15.2 (action slots), 15.8 (the minimap after a
+  rotation), 16.4 (death icons), 20 (the cursor hint's font), 23 (bars, the
+  board's menu, the top bar); `cod4-front-end.md` 10.2 (`LEFT` and
+  `RIGHT`).
+
+### CoD4 assets, rendering, sound
+
 - A CoD4 player's control bones turn in `tag_origin`'s frame, not the
   model's as CoD1's do (`vcod_cod4::skel::player_mats`, both the server's
   hit poses and the client's drawn bodies). `PoseBuffer::bone_worlds` of a
@@ -793,8 +943,22 @@ otherwise.
   creates its device with `D3DCREATE_FPU_PRESERVE` over the CRT's `_PC_53`
   (cod4-player-anims.md 11). A port of the client's arithmetic keeps
   doubles between the binary's stores; its stores are not the server's.
-- Cmds are thought on arrival, so a hit lands between the victim's cmds of a
-  frame as the two clients' packets arrived. A gate replaying two retail
-  captures sends each frame's packets in the order retail got them
-  (`cod4::capture_ab`); a fixed order read as damage applied a frame late
-  (cod4-combat.md 15).
+- Inline: `cod4-player-anims.md` 8 and 9 (aim and lean, the corpse's
+  models); `cod4-world.md` 9.4, 9.7, 9.9 (lighteners, reflection probes,
+  the cell walk); `cod4-effects.md` 2; `cod4-client-perf.md` 18, 20, 23
+  (hidden parts, configstring 1, the resident set).
+
+### CoD4 bots
+
+- A CoD4 nav graph clips the brush entities standing once the level has run a
+  frame (`bots::cod4::BrushedClip`), and its cache key carries their set. A
+  level on the same map keeps the world and graph only while that set reads
+  the same after its first frame: another gametype rebuilds them. A test's
+  `bot_world(.., Vec::new())` and `nav_build` clip the clip map alone.
+- The walk rules (`Cod4Walk`, `VC_NAV_COD4`) are under [Bots](#bots) in
+  All games.
+
+### CoD4 tests
+
+- The live tests' clock, `run_held` and memory: `docs/dev/testing.md`, "CoD4
+  live tests".

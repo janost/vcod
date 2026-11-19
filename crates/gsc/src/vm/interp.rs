@@ -23,7 +23,7 @@ use super::{Cx, ErrorKind, Host, QueuedSpawn, ScriptError, Target, Vm};
 
 /// Interpreter-internal: not part of the public API, since nothing outside
 /// this crate drives `step_frames` directly, and doing so needs the
-/// non-empty-`frames` precondition its doc comment states -- one an
+/// non-empty-`frames` precondition its doc comment states, one an
 /// embedder has no way to satisfy correctly from outside the scheduler.
 #[derive(Debug)]
 pub(crate) struct Frame {
@@ -34,7 +34,7 @@ pub(crate) struct Frame {
     /// that produces a `Frame` goes through `make_frame`, which sets this;
     /// a suspended frame just carries it along in `Thread::frames` across
     /// the wait, unchanged, rather than being rebuilt on resume. `func`
-    /// stays alongside it, unresolved, for error attribution -- a
+    /// stays alongside it, unresolved, for error attribution: a
     /// `ScriptError` names the file/function by `Atom`, not by the `Rc`.
     pub func_rc: Rc<Function>,
     pub ip: u32,
@@ -49,8 +49,8 @@ pub(crate) struct Frame {
     /// currently running on top of it returns, per `stack_effect`'s
     /// declared `(pop, push)` for that `Call`/`CallPtr`. Lives on the frame,
     /// not a local in `step_frames`, because a call can suspend (`wait`)
-    /// several layers deep and resume in a later `step_frames` invocation —
-    /// this has to survive that.
+    /// several layers deep and resume in a later `step_frames` invocation.
+    /// This has to survive that.
     #[cfg(test)]
     stack_effect_check: Option<i32>,
 }
@@ -122,6 +122,14 @@ const MAX_WAIT_SECONDS: f32 = 16777.0;
 /// The most returned frames' buffers [`Vm::recycle_frame`] keeps.
 const FRAME_POOL_MAX: usize = 64;
 
+/// The most frames in flight, a thread's and those of every thread under it
+/// on the native stack waiting on a spawn's immediate run. A call or a
+/// thread call past it is `script stack overflow (too many embedded
+/// function calls)`. Retail's CoD2 VM keeps one 32-entry frame stack for
+/// all of them and refuses a call once 31 are in use (cod2-gsc-diff.md
+/// 3.7); stock scripts reach 12, every CoD4 map's load included.
+pub(crate) const MAX_FRAMES: usize = 31;
+
 /// Converts an Int or Float value to `f32`; any other value has no numeric
 /// reading.
 fn to_f32(v: Value) -> Option<f32> {
@@ -178,38 +186,111 @@ pub(crate) fn values_equal(interner: &Interner, a: Value, b: Value) -> Result<bo
     }
 }
 
-/// `x op y` for one of the four ordering comparisons, promoting Int/Float
-/// like every other arithmetic op. Retail has no ordering outside numbers:
-/// `"a" < "b"` is fatal there (`# probe_cmp_order`).
-fn numeric_cmp(a: Value, b: Value, f: impl Fn(f32, f32) -> bool) -> Result<Value, ErrorKind> {
-    match (to_f32(a), to_f32(b)) {
-        (Some(x), Some(y)) => Ok(Value::Int(f(x, y) as i32)),
-        _ => Err(ErrorKind::BadType("< > <= >= need numbers")),
+/// Two numbers as the ordering comparisons read them: two ints stay ints,
+/// any other numeric pair compares as floats. Retail casts the pair to one
+/// type, then compares ints with `cmp`/`setl` and floats with `fcomps`
+/// (CoDMP.exe 1.1 0x478b98..0x478cd8, cod2_lnxded 0x807dd52).
+#[derive(Clone, Copy)]
+enum NumPair {
+    Int(i32, i32),
+    Float(f32, f32),
+}
+
+fn num_pair(a: Value, b: Value) -> Option<NumPair> {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => Some(NumPair::Int(x, y)),
+        _ => Some(NumPair::Float(to_f32(a)?, to_f32(b)?)),
     }
 }
 
-fn eval_add(interner: &mut Interner, a: Value, b: Value) -> Result<Value, ErrorKind> {
+/// `x op y` on a [`NumPair`].
+macro_rules! pair_cmp {
+    ($p:expr, $cmp:tt) => {
+        match $p {
+            NumPair::Int(x, y) => x $cmp y,
+            NumPair::Float(x, y) => x $cmp y,
+        }
+    };
+}
+
+/// `a op b` for one of the four ordering comparisons. Retail has no
+/// ordering outside numbers: `"a" < "b"` is fatal there (`# probe_cmp_order`).
+macro_rules! numeric_cmp {
+    ($a:expr, $b:expr, $cmp:tt) => {
+        match num_pair($a, $b) {
+            Some(p) => Ok(Value::Int(pair_cmp!(p, $cmp) as i32)),
+            None => Err(ErrorKind::BadType("< > <= >= need numbers")),
+        }
+    };
+}
+
+/// The longest string a concatenation may build. No retail limit is on
+/// record; stock scripts build at most 138 bytes and anything sent to a
+/// client stops at 1024, while the interner keeps every string it is given
+/// for the level, so `s = s + s` would otherwise reach gigabytes in about
+/// 30 turns.
+pub(crate) const MAX_STRING_LEN: usize = 8192;
+
+/// vcod's ceiling on a level's script variables: every struct and array
+/// the last sweep kept or allocated since, with their fields and elements
+/// ([`crate::heap::Heap::vars`]), plus the live threads, so the garbage of
+/// the frames since the sweep counts too. Past it the allocating thread
+/// ends with `ErrorKind::TooManyVariables`, where retail's fixed pool
+/// raises `exceeded maximum number of script variables`
+/// (cod11-gsc-language.md, "Runtime errors below developer 1"). A stock
+/// CoD4 round with 12 bots allocates about 17,000 a minute
+/// (cod2-gsc-diff.md 3.7).
+pub(crate) const MAX_VARIABLES: u64 = 64_000_000;
+
+/// The same ceiling on the interned strings' bytes: the permanent ones,
+/// the temporary ones the last sweep kept and those built since.
+pub(crate) const MAX_STRING_BYTES: usize = 256 << 20;
+
+/// `lhs` and `rhs` joined, or a script error past [`MAX_STRING_LEN`].
+fn concat(lhs: &str, rhs: &str) -> Result<String, ErrorKind> {
+    if lhs.len() + rhs.len() > MAX_STRING_LEN {
+        return Err(ErrorKind::BadType("string too long"));
+    }
+    Ok(format!("{lhs}{rhs}"))
+}
+
+/// `s` interned as a temporary string, unless the interner already holds
+/// `max_bytes`.
+fn intern_within(interner: &mut Interner, max_bytes: usize, s: &str) -> Result<Value, ErrorKind> {
+    if interner.bytes() + s.len() > max_bytes && interner.lookup_exact(s).is_none() {
+        return Err(ErrorKind::TooManyVariables);
+    }
+    Ok(Value::String(interner.intern_temp(s)))
+}
+
+/// `a + b`; a concatenation past `max_bytes` of interned text fails.
+fn eval_add(
+    interner: &mut Interner,
+    max_bytes: usize,
+    a: Value,
+    b: Value,
+) -> Result<Value, ErrorKind> {
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x.wrapping_add(y))),
         (Value::Vector(x), Value::Vector(y)) => {
             Ok(Value::Vector([x[0] + y[0], x[1] + y[1], x[2] + y[2]]))
         }
         // A string on either side concatenates whatever renders
-        // (`# probe_concat`); `intern_exact`, not `intern_folded`, so a built
+        // (`# probe_concat`); by exact text, not folded, so a built
         // display string keeps its case.
         (Value::String(x), other) => {
             let rhs = format_number(other, interner).ok_or(ErrorKind::BadType(
                 "+ cannot concatenate that onto a string",
             ))?;
-            let s = format!("{}{rhs}", interner.resolve(x));
-            Ok(Value::String(interner.intern_exact(&s)))
+            let s = concat(interner.resolve(x), &rhs)?;
+            intern_within(interner, max_bytes, &s)
         }
         (other, Value::String(y)) => {
             let lhs = format_number(other, interner).ok_or(ErrorKind::BadType(
                 "+ cannot concatenate that onto a string",
             ))?;
-            let s = format!("{lhs}{}", interner.resolve(y));
-            Ok(Value::String(interner.intern_exact(&s)))
+            let s = concat(&lhs, interner.resolve(y))?;
+            intern_within(interner, max_bytes, &s)
         }
         (a, b) => match (to_f32(a), to_f32(b)) {
             (Some(x), Some(y)) => Ok(Value::Float(x + y)),
@@ -382,9 +463,8 @@ fn not_of(v: Value, interner: &Interner) -> Result<bool, ErrorKind> {
 /// otherwise the cast fails (`# probe_cast_string`,
 /// tests/fixtures/semantics/retail-captures.txt).
 fn string_int(text: &str) -> Option<i32> {
-    let (len, neg) = numeric_prefix(text, false);
-    let digits = text[..len].trim_start_matches(|c: char| c.is_ascii_whitespace());
-    let digits = digits.trim_start_matches(['+', '-']);
+    let (start, len, neg) = numeric_prefix(text, false);
+    let digits = text[start..len].trim_start_matches(['+', '-']);
     // strtol saturates at a 32-bit long.
     let n = digits.bytes().fold(0i64, |n, d| {
         (n * 10 + i64::from(d - b'0')).min(i64::from(i32::MAX) + 1)
@@ -396,14 +476,15 @@ fn string_int(text: &str) -> Option<i32> {
 
 /// [`string_int`]'s `strtod` arm.
 fn string_float(text: &str) -> Option<f32> {
-    let (len, _) = numeric_prefix(text, true);
-    let f = text[..len].trim_start().parse::<f64>().unwrap_or(0.0) as f32;
+    let (start, len, _) = numeric_prefix(text, true);
+    let f = text[start..len].parse::<f64>().unwrap_or(0.0) as f32;
     (f != 0.0 || zero_spelled(text)).then_some(f)
 }
 
-/// The byte length of `text`'s blanks plus its longest decimal number (an
-/// integer, or with `float` a fraction and an exponent too), and its sign.
-fn numeric_prefix(text: &str, float: bool) -> (usize, bool) {
+/// Where `text`'s longest decimal number (an integer, or with `float` a
+/// fraction and an exponent too) starts past the `isspace` blanks and
+/// ends, and its sign; an empty run when there is none.
+fn numeric_prefix(text: &str, float: bool) -> (usize, usize, bool) {
     let b = text.as_bytes();
     let mut i = 0;
     while i < b.len() && (b[i] == b' ' || (b'\t'..=b'\r').contains(&b[i])) {
@@ -440,7 +521,11 @@ fn numeric_prefix(text: &str, float: bool) -> (usize, bool) {
             }
         }
     }
-    if any { (i, neg) } else { (start, false) }
+    if any {
+        (start, i, neg)
+    } else {
+        (start, start, false)
+    }
 }
 
 /// The engine's test that a cast's 0 was meant: the first character past
@@ -460,7 +545,7 @@ pub(crate) const DEAD_ENTITY: ErrorKind = ErrorKind::BadType("dead entity is not
 /// A call's receiver reads as a `Target` when it is an entity or a heap
 /// struct (`level` is one, and a common receiver in the corpus); `game` is
 /// array-typed, not a struct, so it falls through to `None` here like any
-/// other non-entity, non-struct value -- no corpus script uses `game` as a
+/// other non-entity, non-struct value: no corpus script uses `game` as a
 /// receiver, which is what makes that safe. `undefined` and any other
 /// value leave the callee's `self` unbound rather than erroring.
 fn as_target(v: Value) -> Option<Target> {
@@ -558,20 +643,19 @@ impl Vm {
     /// apply once this call returns. `errors` collects any `ScriptError` raised by a
     /// thread that a threaded call spawns and immediately runs during this
     /// call (`spawn` recurses into `step_thread`, which recurses back into
-    /// this function on the new thread's own frames) -- a nested spawn's
+    /// this function on the new thread's own frames): a nested spawn's
     /// failure does not abort this thread's own execution, only its own.
     pub(crate) fn step_frames(
         &mut self,
         host: &mut dyn Host,
         frames: &mut Vec<Frame>,
-        budget: u32,
+        remaining: &mut u32,
         thread_id: Option<ThreadId>,
         notifies: &mut Vec<(Target, Atom, Vec<Value>)>,
         errors: &mut Vec<ScriptError>,
     ) -> Result<Step, ScriptError> {
-        let mut remaining = budget;
         loop {
-            match self.step_ops(host, frames, &mut remaining, thread_id, notifies, errors) {
+            match self.step_ops(host, frames, remaining, thread_id, notifies, errors) {
                 Err(e) if self.recover_errors && e.kind.recoverable() => {
                     // Retail below `developer 1` (`Scr_Init`'s flag,
                     // coduo_lnxded 0x80aa818) leaves the failed
@@ -631,6 +715,16 @@ impl Vm {
                 &mut spawns,
             );
             match exit {
+                Exit::Call(frame) if self.outer_frames as usize + frames.len() >= MAX_FRAMES => {
+                    self.recycle_frame(frame);
+                    let f = frames.last().expect("a call leaves its caller on top");
+                    return Err(ScriptError {
+                        file: f.func_rc.file,
+                        func: f.func_rc.name,
+                        line: f.func_rc.lines[(f.ip as usize).saturating_sub(1)],
+                        kind: ErrorKind::StackOverflow,
+                    });
+                }
                 Exit::Call(frame) => frames.push(frame),
                 Exit::Return(v) => {
                     let done = frames.pop().expect("a frame is running");
@@ -676,7 +770,7 @@ impl Vm {
     /// and the budget live in locals here and go back to `fr` and
     /// `remaining` on the way out. `depth` is the frame stack's depth with
     /// `fr` on top.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn run_ops(
         &mut self,
         host: &mut dyn Host,
@@ -750,6 +844,15 @@ impl Vm {
                 }
             };
         }
+        // After an op that may allocate: past the level's ceiling the
+        // thread ends (`MAX_VARIABLES`).
+        macro_rules! ceiling {
+            () => {
+                if self.over_ceiling() {
+                    fail!(ErrorKind::TooManyVariables);
+                }
+            };
+        }
 
         // `LoadField`'s answer for a value it reads without failing:
         // `None` for a dead entity or a value with no such field.
@@ -773,14 +876,14 @@ impl Vm {
             }};
         }
         // A fused compare and `JumpIfFalse`: `Lt`'s two floats inline, any
-        // other pair through `numeric_cmp`, as the compare ops do.
+        // other pair through `numeric_cmp!`, as the compare ops do.
         macro_rules! cmp_jump {
             ($to:expr, $cmp:tt) => {{
                 let b = pop!();
                 let a = pop!();
                 let r = match (a, b) {
                     (Value::Float(x), Value::Float(y)) => x $cmp y,
-                    _ => tri!(numeric_cmp(a, b, |x, y| x $cmp y)) == Value::Int(1),
+                    _ => tri!(numeric_cmp!(a, b, $cmp)) == Value::Int(1),
                 };
                 if left > 0 {
                     left -= 1;
@@ -792,16 +895,20 @@ impl Vm {
         }
 
         // A fused `LoadLocal`/`Const`, compare and `JumpIfFalse`: two
-        // numbers compare as `numeric_cmp` does (as floats); any other pair
-        // runs the first op alone, so the compare's error comes from it.
+        // numbers compare as `numeric_cmp!` does; any other pair runs the
+        // first op alone, so the compare's error comes from it.
         macro_rules! operand_cmp_jump {
             ($b:expr, $to:expr, $cmp:tt) => {{
                 let b = $b;
-                match (to_f32(stack[sp - 1]), to_f32(b)) {
-                    (Some(x), Some(y)) if left >= 2 => {
+                match num_pair(stack[sp - 1], b) {
+                    Some(p) if left >= 2 => {
                         left -= 2;
                         sp -= 1;
-                        ip = if x $cmp y { ip + 2 } else { $to as usize };
+                        ip = if pair_cmp!(p, $cmp) {
+                            ip + 2
+                        } else {
+                            $to as usize
+                        };
                     }
                     _ => push!(b),
                 }
@@ -827,6 +934,9 @@ impl Vm {
             }
             // A spawn ran another thread, which may have ended this one.
             let mut spawned = false;
+            // What the threads this op spawned ran, out of `left`.
+            #[cfg(test)]
+            let mut nested_spent = 0u32;
 
             // Test-only: `stack_effect`'s table checked against what this
             // op does to the operand stack. A non-threaded `Call`/`CallPtr`
@@ -875,8 +985,8 @@ impl Vm {
                     push!(v);
                 }
                 Op::StoreField(name) => {
-                    let v = pop!();
                     let obj = pop!();
+                    let v = pop!();
                     self.heap.share(v);
                     match obj {
                         Value::Struct(id) => self.heap.set_field(id, name, v),
@@ -892,6 +1002,7 @@ impl Vm {
                                 notifies,
                                 spawns: field_spawns,
                             };
+                            cx.interner.pin(v);
                             tri!(host.store_field(&mut cx, id, name, v));
                             debug_assert!(
                                 field_spawns.is_empty(),
@@ -902,6 +1013,7 @@ impl Vm {
                             "field assignment needs a struct or entity"
                         )),
                     }
+                    ceiling!();
                 }
                 Op::LoadIndex => {
                     let key = pop!();
@@ -951,9 +1063,9 @@ impl Vm {
                     push!(v);
                 }
                 Op::StoreIndex => {
-                    let v = pop!();
                     let key = pop!();
                     let obj = pop!();
+                    let mut v = pop!();
                     self.heap.share(v);
                     let Value::Array(id) = obj else {
                         fail!(ErrorKind::BadType("indexing needs an array"));
@@ -961,12 +1073,23 @@ impl Vm {
                     let Some(k) = array_key(key) else {
                         fail!(ErrorKind::BadType("array key must be a string or a number"));
                     };
+                    // `a[0] = a`: the value read the array the target then
+                    // owned in place. An array is a value; the element
+                    // takes the array as it stood, not a cycle.
+                    if let Value::Array(a) = v
+                        && self.heap.reaches(a, id)
+                    {
+                        v = Value::Array(self.heap.snapshot(a));
+                        self.heap.share(v);
+                    }
                     self.heap.set_index(id, k, v);
+                    ceiling!();
                 }
                 Op::OwnLocal(slot) => {
                     if let Value::Array(id) = locals[slot as usize] {
                         let own = self.heap.own(id);
                         locals[slot as usize] = Value::Array(own);
+                        ceiling!();
                     }
                     push!(locals[slot as usize]);
                 }
@@ -1002,6 +1125,7 @@ impl Vm {
                         }
                         _ => fail!(ErrorKind::BadType("indexing needs an array")),
                     };
+                    ceiling!();
                     push!(Value::Array(id));
                 }
                 Op::EnsureArrayField(name) => {
@@ -1084,6 +1208,7 @@ impl Vm {
                             "field assignment needs a struct or entity"
                         )),
                     };
+                    ceiling!();
                     push!(Value::Array(id));
                 }
                 Op::EnsureArrayIndex => {
@@ -1110,6 +1235,7 @@ impl Vm {
                         }
                         _ => fail!(ErrorKind::BadType("indexing needs an array")),
                     };
+                    ceiling!();
                     push!(Value::Array(id));
                 }
                 Op::LoadSelf => {
@@ -1124,6 +1250,7 @@ impl Vm {
                 Op::LoadAnim => push!(Value::Struct(self.anim)),
                 Op::NewArray => {
                     let id = self.heap.new_array();
+                    ceiling!();
                     push!(Value::Array(id));
                 }
                 Op::MakeVector => {
@@ -1156,9 +1283,19 @@ impl Vm {
                         self_recv
                     };
                     if threaded {
+                        if self.outer_frames as usize + depth >= MAX_FRAMES {
+                            fail!(ErrorKind::StackOverflow);
+                        }
+                        ceiling!();
                         let args = stack[base..sp].to_vec();
                         sp = base - usize::from(has_recv);
-                        self.spawn(host, target, callee, recv, args, errors);
+                        let spent = self
+                            .spawn_nested(host, target, callee, recv, args, depth, left, errors);
+                        left -= spent;
+                        #[cfg(test)]
+                        {
+                            nested_spent += spent;
+                        }
                         spawned = true;
                         let v = self.thread_returned.take().filter(|_| self.thread_returns);
                         push!(v.unwrap_or(Value::Undefined));
@@ -1198,7 +1335,13 @@ impl Vm {
                         notifies,
                         spawns: pending_spawns,
                     };
-                    let v = tri!(host.builtin(&mut cx, name, recv, &stack[base..sp]));
+                    let v = tri!(super::call_builtin(
+                        host,
+                        &mut cx,
+                        name,
+                        recv,
+                        &stack[base..sp]
+                    ));
                     sp = base - usize::from(has_recv);
                     // Retail's `Scr_ExecEntThread` from inside a builtin:
                     // each queued thread runs to its first suspend here,
@@ -1206,9 +1349,19 @@ impl Vm {
                     // `Cx::spawn`).
                     if !pending_spawns.is_empty() {
                         let (pending, field) = (&mut *pending_spawns, &mut *field_spawns);
+                        self.outer_frames += depth as u32;
+                        self.pool = Some(left);
                         spawned |= self
                             .run_builtin_spawns(host, func, at, notifies, errors, pending, field);
+                        let spent = left - self.pool.take().unwrap_or(0);
+                        self.outer_frames -= depth as u32;
+                        left -= spent;
+                        #[cfg(test)]
+                        {
+                            nested_spent += spent;
+                        }
                     }
+                    ceiling!();
                     push!(v);
                 }
                 Op::CallPtr {
@@ -1234,7 +1387,18 @@ impl Vm {
                     };
                     let args = &stack[base..base + argc as usize];
                     if threaded {
-                        self.spawn(host, target, callee, recv, args.to_vec(), errors);
+                        if self.outer_frames as usize + depth >= MAX_FRAMES {
+                            fail!(ErrorKind::StackOverflow);
+                        }
+                        ceiling!();
+                        let args = args.to_vec();
+                        let spent = self
+                            .spawn_nested(host, target, callee, recv, args, depth, left, errors);
+                        left -= spent;
+                        #[cfg(test)]
+                        {
+                            nested_spent += spent;
+                        }
                         spawned = true;
                         let v = self.thread_returned.take().filter(|_| self.thread_returns);
                         push!(v.unwrap_or(Value::Undefined));
@@ -1255,7 +1419,7 @@ impl Vm {
                     let v = match (a, b) {
                         (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_add(y)),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
-                        _ => tri!(eval_add(&mut self.interner, a, b)),
+                        _ => tri!(eval_add(&mut self.interner, self.max_string_bytes, a, b)),
                     };
                     push!(v);
                 }
@@ -1364,7 +1528,7 @@ impl Vm {
                     let a = pop!();
                     let v = match (a, b) {
                         (Value::Float(x), Value::Float(y)) => Value::Int((x < y) as i32),
-                        _ => tri!(numeric_cmp(a, b, |x, y| x < y)),
+                        _ => tri!(numeric_cmp!(a, b, <)),
                     };
                     push!(v);
                 }
@@ -1373,7 +1537,7 @@ impl Vm {
                     let a = pop!();
                     let v = match (a, b) {
                         (Value::Float(x), Value::Float(y)) => Value::Int((x > y) as i32),
-                        _ => tri!(numeric_cmp(a, b, |x, y| x > y)),
+                        _ => tri!(numeric_cmp!(a, b, >)),
                     };
                     push!(v);
                 }
@@ -1382,7 +1546,7 @@ impl Vm {
                     let a = pop!();
                     let v = match (a, b) {
                         (Value::Float(x), Value::Float(y)) => Value::Int((x <= y) as i32),
-                        _ => tri!(numeric_cmp(a, b, |x, y| x <= y)),
+                        _ => tri!(numeric_cmp!(a, b, <=)),
                     };
                     push!(v);
                 }
@@ -1391,7 +1555,7 @@ impl Vm {
                     let a = pop!();
                     let v = match (a, b) {
                         (Value::Float(x), Value::Float(y)) => Value::Int((x >= y) as i32),
-                        _ => tri!(numeric_cmp(a, b, |x, y| x >= y)),
+                        _ => tri!(numeric_cmp!(a, b, >=)),
                     };
                     push!(v);
                 }
@@ -1716,7 +1880,7 @@ impl Vm {
                     let v = match (x, y) {
                         (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_add(y)),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
-                        _ => tri!(eval_add(&mut self.interner, x, y)),
+                        _ => tri!(eval_add(&mut self.interner, self.max_string_bytes, x, y)),
                     };
                     if left > 0 {
                         left -= 1;
@@ -1772,30 +1936,31 @@ impl Vm {
                         (Some(v), Value::Array(id)) if left >= u32::from(extra) => {
                             left -= u32::from(extra);
                             locals[i as usize] = v;
-                            let x = to_f32(v).expect("a number");
-                            let n = self.heap.array_len(id) as i32;
-                            ip = if x < n as f32 { body } else { exit } as usize;
+                            let n = Value::Int(self.heap.array_len(id) as i32);
+                            let p = num_pair(v, n).expect("a number");
+                            ip = if pair_cmp!(p, <) { body } else { exit } as usize;
                         }
                         _ => push!(x),
                     }
                 }
                 Op::LtLevelSizeJumpIfFalse { i, f, to } => {
                     let x = locals[i as usize];
-                    match (to_f32(x), self.heap.get_field(self.level, f)) {
-                        (Some(x), Value::Array(id)) if left >= 5 => {
+                    match (x, self.heap.get_field(self.level, f)) {
+                        (Value::Int(_) | Value::Float(_), Value::Array(id)) if left >= 5 => {
                             left -= 5;
-                            let n = self.heap.array_len(id) as i32;
-                            ip = if x < n as f32 { at + 6 } else { to as usize };
+                            let n = Value::Int(self.heap.array_len(id) as i32);
+                            let p = num_pair(x, n).expect("a number");
+                            ip = if pair_cmp!(p, <) { at + 6 } else { to as usize };
                         }
                         _ => push!(x),
                     }
                 }
                 Op::LtLocalConstJumpIfFalse { a, c, to } => {
                     let x = locals[a as usize];
-                    match (to_f32(x), to_f32(func.consts[c as usize])) {
-                        (Some(x), Some(y)) if left >= 3 => {
+                    match num_pair(x, func.consts[c as usize]) {
+                        Some(p) if left >= 3 => {
                             left -= 3;
-                            ip = if x < y { at + 4 } else { to as usize };
+                            ip = if pair_cmp!(p, <) { at + 4 } else { to as usize };
                         }
                         _ => push!(x),
                     }
@@ -1813,13 +1978,14 @@ impl Vm {
                 }
                 Op::LtSizeJumpIfFalse { i, a, to } => {
                     let x = locals[i as usize];
-                    match (to_f32(x), locals[a as usize]) {
+                    match (x, locals[a as usize]) {
                         // `LoadField size`'s `Int`, then `Lt` through
-                        // `numeric_cmp` as two floats.
-                        (Some(x), Value::Array(id)) if left >= 4 => {
+                        // `numeric_cmp!`.
+                        (Value::Int(_) | Value::Float(_), Value::Array(id)) if left >= 4 => {
                             left -= 4;
-                            let n = self.heap.array_len(id) as i32;
-                            ip = if x < n as f32 { at + 5 } else { to as usize };
+                            let n = Value::Int(self.heap.array_len(id) as i32);
+                            let p = num_pair(x, n).expect("a number");
+                            ip = if pair_cmp!(p, <) { at + 5 } else { to as usize };
                         }
                         _ => push!(x),
                     }
@@ -1877,7 +2043,7 @@ impl Vm {
             // A fused op ran as many of `code`'s ops as it took budget.
             #[cfg(test)]
             {
-                let ran = 1 + (dbg_left - left) as usize;
+                let ran = 1 + (dbg_left - left - nested_spent) as usize;
                 // Along the run's path: a `Jump` inside it goes on at its
                 // target.
                 let (mut pc, mut effect) = (at, 0);
@@ -1933,12 +2099,33 @@ impl Vm {
         v
     }
 
+    /// [`Vm::spawn`] from a thread call in a step with `left` instructions
+    /// and `depth` frames: the new thread runs on what the step has left and
+    /// on top of its frames. The instructions it spent.
+    #[expect(clippy::too_many_arguments)]
+    fn spawn_nested(
+        &mut self,
+        host: &mut dyn Host,
+        target: FuncRef,
+        callee: Rc<Function>,
+        recv: Option<Target>,
+        args: Vec<Value>,
+        depth: usize,
+        left: u32,
+        errors: &mut Vec<ScriptError>,
+    ) -> u32 {
+        self.outer_frames += depth as u32;
+        self.pool = Some(left);
+        self.spawn(host, target, callee, recv, args, errors);
+        self.outer_frames -= depth as u32;
+        left - self.pool.take().unwrap_or(0)
+    }
+
     /// Runs the threads a builtin just queued (`Cx::spawn`), each to its
     /// first suspend, as retail's `Scr_ExecEntThread` from inside a builtin
     /// does, before the calling thread's next op; whether any ran. `func`
     /// and `at` name the call, for an unknown function's error.
     #[inline(never)]
-    #[allow(clippy::too_many_arguments)]
     fn run_builtin_spawns(
         &mut self,
         host: &mut dyn Host,
@@ -1954,6 +2141,16 @@ impl Vm {
         while let Some(queued) = queue.pop_front() {
             let target = queued.func;
             match self.functions.get(&target).cloned() {
+                Some(_) if self.outer_frames as usize >= MAX_FRAMES => {
+                    let e = ScriptError {
+                        file: func.file,
+                        func: func.name,
+                        line: func.lines[at],
+                        kind: ErrorKind::StackOverflow,
+                    };
+                    self.record_abort(&e);
+                    errors.push(e);
+                }
                 Some(f) => {
                     self.spawn(host, target, f, queued.recv, queued.args, errors);
                     spawned = true;

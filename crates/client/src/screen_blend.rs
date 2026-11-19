@@ -295,15 +295,11 @@ mod tests {
     /// `lerp(capture, luminance, 0.25)` drawn SrcAlpha, InvSrcAlpha.
     #[test]
     fn cod2_blend_desaturates_the_capture_as_the_hlsl_does() {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let Some(adapter) = pollster::block_on(instance.request_adapter(&Default::default())).ok()
+        let Some((device, queue)) =
+            crate::renderer::headless::test_device(crate::renderer::headless::Need::Any)
         else {
-            eprintln!("no adapter; skipped");
             return;
         };
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
         const N: u32 = 64;
         let scene = device.create_texture(&wgpu::TextureDescriptor {
             label: None,

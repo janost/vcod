@@ -9,6 +9,17 @@ use std::collections::HashMap;
 /// Nested `#include`s and macro expansions stop here, so a cycle ends.
 const MAX_DEPTH: u32 = 16;
 
+/// The expanded text stops growing here: stock menus expand to tens of KB,
+/// while nested defines grow a small file exponentially.
+const MAX_OUTPUT: usize = 4 << 20;
+
+/// `#include`s one file may run, its includes' counted.
+const MAX_INCLUDES: u32 = 256;
+
+/// How deep an `#if` expression may nest parentheses, `?:` and prefix
+/// operators before it reads 0.
+const MAX_EXPR_DEPTH: u32 = 64;
+
 #[derive(Clone)]
 enum Macro {
     Object(String),
@@ -28,6 +39,9 @@ struct Pre<'a> {
     include: &'a dyn Fn(&str) -> Option<String>,
     macros: HashMap<String, Macro>,
     conds: Vec<Cond>,
+    includes: u32,
+    /// Set once the output reached [`MAX_OUTPUT`] and the warning went out.
+    full: bool,
 }
 
 /// `text` with its directives carried out and every macro expanded.
@@ -38,6 +52,8 @@ pub(crate) fn run(text: &str, include: &dyn Fn(&str) -> Option<String>) -> Strin
         include,
         macros: HashMap::new(),
         conds: Vec::new(),
+        includes: 0,
+        full: false,
     };
     let mut out = String::with_capacity(text.len());
     pre.scan(text, 0, true, &mut out);
@@ -108,6 +124,13 @@ impl Pre<'_> {
         let b = text.as_bytes();
         let mut i = 0;
         while i < b.len() {
+            if out.len() > MAX_OUTPUT {
+                if !self.full {
+                    log::warn!("ui: expansion passed {MAX_OUTPUT} bytes; the rest is dropped");
+                    self.full = true;
+                }
+                return;
+            }
             let c = b[i];
             if directives && c == b'#' {
                 let end = directive_end(b, i + 1);
@@ -246,6 +269,11 @@ impl Pre<'_> {
             _ if !self.active() => {}
             "include" => {
                 let path = rest.trim_matches(|c| matches!(c, '"' | '<' | '>'));
+                if self.includes >= MAX_INCLUDES {
+                    log::warn!("ui: more than {MAX_INCLUDES} includes; skipping {path}");
+                    return;
+                }
+                self.includes += 1;
                 match (self.include)(path) {
                     Some(inc) if depth < 8 => self.scan(&inc, depth + 1, true, out),
                     _ => log::warn!("ui: cannot include {path}"),
@@ -329,6 +357,7 @@ impl Pre<'_> {
         let mut p = Expr {
             b: resolved.as_bytes(),
             i: 0,
+            depth: 0,
         };
         let v = p.ternary();
         p.skip();
@@ -594,6 +623,8 @@ fn stringize(arg: &str) -> String {
 struct Expr<'a> {
     b: &'a [u8],
     i: usize,
+    /// The nesting [`Expr::nest`] counts, against [`MAX_EXPR_DEPTH`].
+    depth: u32,
 }
 
 impl Expr<'_> {
@@ -625,7 +656,27 @@ impl Expr<'_> {
         false
     }
 
+    /// `f` one nesting level down; past [`MAX_EXPR_DEPTH`] the rest of the
+    /// expression is dropped and reads 0.
+    fn nest(&mut self, f: impl FnOnce(&mut Self) -> i64) -> i64 {
+        if self.depth >= MAX_EXPR_DEPTH {
+            if self.i < self.b.len() {
+                log::warn!("ui: #if/#elif nests past {MAX_EXPR_DEPTH} levels");
+                self.i = self.b.len();
+            }
+            return 0;
+        }
+        self.depth += 1;
+        let v = f(self);
+        self.depth -= 1;
+        v
+    }
+
     fn ternary(&mut self) -> i64 {
+        self.nest(Self::ternary_at)
+    }
+
+    fn ternary_at(&mut self) -> i64 {
         let c = self.binary(0);
         if self.eat("?") {
             let a = self.ternary();
@@ -692,16 +743,16 @@ impl Expr<'_> {
 
     fn unary(&mut self) -> i64 {
         if self.eat("!") {
-            return i64::from(self.unary() == 0);
+            return i64::from(self.nest(Self::unary) == 0);
         }
         if self.eat("~") {
-            return !self.unary();
+            return !self.nest(Self::unary);
         }
         if self.eat("-") {
-            return self.unary().wrapping_neg();
+            return self.nest(Self::unary).wrapping_neg();
         }
         if self.eat("+") {
-            return self.unary();
+            return self.nest(Self::unary);
         }
         if self.eat("(") {
             let v = self.ternary();
@@ -834,6 +885,48 @@ mod tests {
         );
     }
 
+    /// Fifteen levels of an eight-wide define would expand one use of the
+    /// top to 8^15 copies; the output stops at the cap.
+    #[test]
+    fn nested_wide_defines_stop_at_the_output_cap() {
+        let mut text = String::from("#define L0 abcdefgh\n");
+        for n in 1..16 {
+            let prev = format!("L{} ", n - 1).repeat(8);
+            text.push_str(&format!("#define L{n} {prev}\n"));
+        }
+        text.push_str("L15 L15");
+        let start = std::time::Instant::now();
+        let out = pre(&text);
+        assert!(out.len() <= MAX_OUTPUT + 64, "{}", out.len());
+        assert!(out.len() > MAX_OUTPUT);
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    /// A file that includes itself on every line stops at the include cap.
+    #[test]
+    fn self_includes_stop_at_the_include_cap() {
+        let body = "#include \"self.h\"\n".repeat(100);
+        let reads = std::cell::Cell::new(0u32);
+        let inc = |_: &str| {
+            reads.set(reads.get() + 1);
+            Some(body.clone())
+        };
+        run(&body, &inc);
+        assert_eq!(reads.get(), MAX_INCLUDES);
+    }
+
+    /// 100,000 `(`, or as many `!`, read 0 past the depth cap instead of
+    /// recursing once each.
+    #[test]
+    fn a_deep_if_expression_reads_zero() {
+        for open in ["(", "!", "-"] {
+            let text = format!("#if {}1\nx\n#endif\ny", open.repeat(100_000));
+            assert_eq!(words(&text), ["y"], "{open}");
+        }
+        let ok = format!("#if {}1{}\nx\n#endif", "(".repeat(30), ")".repeat(30));
+        assert_eq!(words(&ok), ["x"]);
+    }
+
     #[test]
     fn include_shares_the_defines() {
         let inc = |p: &str| (p == "defs.h").then(|| "#define W 640\n".to_string());
@@ -842,5 +935,15 @@ mod tests {
             crate::menu::tokenize(&out),
             ["rect", "0", "0", "640", "480"]
         );
+    }
+
+    #[test]
+    fn a_hostile_menu_source_never_panics() {
+        let good = "#define A(x) x x\n#define B A(A(1))\n#ifdef B\nB\n#else\n2\n#endif\n#include \"a.h\"\n";
+        crate::testing::fuzz("precompiler", good.as_bytes(), 3000, |b| {
+            run(&String::from_utf8_lossy(b), &|_| {
+                Some("#define C 3\nC".into())
+            });
+        });
     }
 }

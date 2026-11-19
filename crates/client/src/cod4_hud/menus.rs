@@ -8,7 +8,10 @@ use vcod_cod4::menuexp;
 use vcod_cod4::net::parse::Snapshot;
 use vcod_cod4::scriptmenu::{ITEM_TYPE_OWNERDRAW, LayoutItem, WINDOW_VISIBLE};
 
-use super::{Cod4Hud, HudEnv, Loaded, MenuAssets, image_of, quad, text};
+use super::assets::{Loaded, MenuAssets};
+use super::env::HudEnv;
+use super::text::text;
+use super::{Cod4Hud, image_of, quad};
 use crate::console::shell::Shell;
 use crate::hud::HudQuad;
 use crate::hud::cod2elem::ScreenPlacement;
@@ -101,7 +104,7 @@ impl Cod4Hud {
     /// Menu `name` when its `visible when` holds: each visible item's
     /// window and text (`Item_Paint`), a hint owner draw by its number.
     /// Returns the texts drawn.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn draw_zone_menu(
         &self,
         l: &Loaded,
@@ -253,7 +256,6 @@ impl Cod4Hud {
     /// Owner draw `it.owner_draw` of a hint menu over `rect`, `None` when
     /// it draws nothing this frame. It reads the newest snapshot's
     /// playerstate where retail reads the predicted one.
-    #[allow(clippy::too_many_arguments)]
     fn hint(
         &self,
         l: &Loaded,
@@ -294,8 +296,8 @@ impl Cod4Hud {
                 let scoped = snap.ps.get_f32("fWeaponPosFrac") == Some(1.0);
                 let pm_type = u("pm_type") as i32;
                 let holding = s.input.buttons(pm_type, s.talking) & BUTTON_HOLD_BREATH != 0;
-                if def.reticle.overlay_reticle == 0
-                    || def.weap_class == WEAPCLASS_ITEM
+                if def.def.overlay_reticle == 0
+                    || def.def.weap_class == WEAPCLASS_ITEM
                     || !scoped
                     || holding
                     || u("holdBreathTimer") != 0

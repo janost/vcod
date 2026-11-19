@@ -304,7 +304,7 @@ pub struct ResolveCtx<'a> {
     pub eject_brass: bool,
     /// The gamestate's table, for the effect paths `EV_PLAY_FX` names.
     pub configstrings: &'a [String],
-    /// Where its blocks sit (`Protocol::cs`).
+    /// Where its blocks sit (`Cod1Wire::cs`).
     pub cs: &'a CsLayout,
 }
 
@@ -766,8 +766,8 @@ fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Re
         // eventParm is the surface normal here too (doc section 2). `_NOMARKS`
         // only suppresses the decal, so both rocket ids read the same csv row.
         // `grenade_bounce` is blank in stock data and resolves to `Known`.
-        // The weapon's own `projExplosionEffect` is not spawned; `weapon.rs`
-        // does not parse that key.
+        // An explode then adds the weapon's own `projExplosionEffect`
+        // (cod11-events-and-fx.md 5a), empty on every stock 1.1 weapon.
         EV_GRENADE_BOUNCE | EV_GRENADE_EXPLODE | EV_ROCKET_EXPLODE | EV_ROCKET_EXPLODE_NOMARKS => {
             let kind = match ev.event {
                 EV_GRENADE_BOUNCE => ImpactKind::GrenadeBounce,
@@ -775,15 +775,30 @@ fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Re
                 _ => ImpactKind::RocketExplode,
             };
             let surf = ev.surf_type.clamp(0, SURFACE_NAMES.len() as i32 - 1) as u8;
+            let at = SpawnAt::Surface {
+                pos: Vec3::from(ev.pos),
+                normal: Vec3::from(byte_to_dir(ev.parm)),
+            };
+            let nomarks = ev.event == EV_ROCKET_EXPLODE_NOMARKS;
             let mut out = Vec::new();
             if let Some(path) = table.get(kind, surf) {
                 out.push(Resolved::Spawn {
                     path: path.to_string(),
-                    at: SpawnAt::Surface {
-                        pos: Vec3::from(ev.pos),
-                        normal: Vec3::from(byte_to_dir(ev.parm)),
-                    },
-                    nomarks: ev.event == EV_ROCKET_EXPLODE_NOMARKS,
+                    at,
+                    nomarks,
+                    bolt: None,
+                    brass: false,
+                });
+            }
+            let own = (kind != ImpactKind::GrenadeBounce)
+                .then(|| weapon_def(ctx, ev.weapon))
+                .flatten()
+                .and_then(|d| d.proj_explosion_effect.clone());
+            if let Some(path) = own {
+                out.push(Resolved::Spawn {
+                    path,
+                    at,
+                    nomarks,
                     bolt: None,
                     brass: false,
                 });
@@ -1028,7 +1043,7 @@ mod tests {
     use super::*;
     use std::sync::OnceLock;
     use vcod_common::net::events::BYTE_DIRS;
-    use vcod_common::net::protocol::{CS_EFFECTS, CS_FX_TAGS};
+    use vcod_common::net::protocol::{CS_EFFECTS_V1, CS_FX_TAGS_V1};
 
     static EMPTY_BRASS: LazyLock<HashMap<u32, (Vec3, Vec3)>> = LazyLock::new(HashMap::new);
 
@@ -1100,7 +1115,7 @@ mod tests {
     #[test]
     fn play_fx_resolves_the_effect_configstring() {
         let mut cs = vec![String::new(); 2048];
-        cs[CS_EFFECTS + 3] = "fx/explosions/mp_bomb.efx".to_string();
+        cs[CS_EFFECTS_V1 + 3] = "fx/explosions/mp_bomb.efx".to_string();
         let ctx = ResolveCtx {
             configstrings: &cs,
             cs: &vcod_common::net::protocol::CS_LAYOUT_V1,
@@ -1150,10 +1165,10 @@ mod tests {
     #[test]
     fn play_fx_on_tag_reads_the_tag_pair() {
         let mut cs = vec![String::new(); 2048];
-        cs[CS_EFFECTS + 3] = "fx/explosions/mp_bomb.efx".to_string();
-        cs[CS_FX_TAGS + 1] = "03tag_helmet".to_string();
-        cs[CS_FX_TAGS + 2] = "07tag_helmet".to_string();
-        cs[CS_FX_TAGS + 3] = "x".to_string();
+        cs[CS_EFFECTS_V1 + 3] = "fx/explosions/mp_bomb.efx".to_string();
+        cs[CS_FX_TAGS_V1 + 1] = "03tag_helmet".to_string();
+        cs[CS_FX_TAGS_V1 + 2] = "07tag_helmet".to_string();
+        cs[CS_FX_TAGS_V1 + 3] = "x".to_string();
         let ctx = ResolveCtx {
             configstrings: &cs,
             cs: &vcod_common::net::protocol::CS_LAYOUT_V1,
@@ -1809,6 +1824,41 @@ mod tests {
         }
     }
 
+    /// 1.1's explodes add the weapon's `projExplosionEffect` after the table
+    /// row; a bounce does not (cod11-events-and-fx.md 5a).
+    #[test]
+    fn a_1_1_explode_adds_the_weapons_own_effect() {
+        let mut table = ImpactTable::default();
+        table.add_csv(
+            "grenade_explode,dirt,fx/g.efx\nrocket_explode,dirt,fx/r.efx\n\
+             grenade_bounce,dirt,fx/b.efx\n",
+        );
+        let weapons = uo_weapons();
+        let ctx = ResolveCtx {
+            weapons: &weapons,
+            ..empty_ctx()
+        };
+        let paths = |id: i32| -> Vec<(String, bool)> {
+            resolve_with(&ev(id, 0, 6, [0.0; 3]), &table, &ctx)
+                .into_iter()
+                .filter_map(|r| match r {
+                    Resolved::Spawn { path, nomarks, .. } => Some((path, nomarks)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let s = |p: &str, m: bool| (p.to_string(), m);
+        assert_eq!(
+            paths(EV_GRENADE_EXPLODE),
+            [s("fx/g.efx", false), s("fx/shell.efx", false)]
+        );
+        assert_eq!(
+            paths(EV_ROCKET_EXPLODE_NOMARKS),
+            [s("fx/r.efx", true), s("fx/shell.efx", true)]
+        );
+        assert_eq!(paths(EV_GRENADE_BOUNCE), [s("fx/b.efx", false)]);
+    }
+
     /// Retail's panzerfaust round (`net/snapshots-panzer-wall.bin`,
     /// cod11-combat.md 13.6) goes off as 179 on the rocket's own entity
     /// with the rock it struck as `surfType`, and draws `rocket_explode`'s
@@ -2166,7 +2216,6 @@ mod tests {
 /// fire as their `pakuo` weapon files define them.
 #[cfg(test)]
 pub(crate) mod uo_captures {
-    use std::collections::HashMap;
     use vcod_common::net::events::{EventTracker, GameEvent};
     use vcod_common::net::protocol::PROTOCOL_V22;
     use vcod_common::weapon::WeaponDef;
@@ -2289,7 +2338,7 @@ pub(crate) mod uo_captures {
                 *name,
                 "{tag}: configstring 7 slot {index}"
             );
-            let map: HashMap<String, String> = keys
+            let map: vcod_common::xmodel::WeaponKeys = keys
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect();
@@ -2315,7 +2364,7 @@ pub(crate) mod uo_captures {
 }
 
 /// What the client draws for the retail UO captures' events
-/// (docs/research/coduo-diff.md 19, "Captures").
+/// (docs/research/coduo-diff.md 19.6, "Captures").
 #[cfg(test)]
 mod uo_capture_gates {
     use super::*;
@@ -2673,20 +2722,24 @@ mod uo_capture_gates {
                     "event {:#x}",
                     ev.event
                 );
-                on_tag.extend(paths(rs).into_iter().map(|path| (s.server_time, path)));
+                on_tag.extend(
+                    paths(rs)
+                        .into_iter()
+                        .map(|path| (s.server_time.raw(), path)),
+                );
                 if ev.event == EV_EARTHQUAKE {
                     let q = quake::from_event(p, &ev, s.entities.get(&ev.entity_num), Vec3::ZERO)
                         .unwrap();
-                    quakes.push((s.server_time, q.scale, q.duration_ms, q.radius));
+                    quakes.push((s.server_time.raw(), q.scale, q.duration_ms, q.radius));
                 }
             }
-            for play in looped.frame(s, p, s.server_time, Vec3::ZERO, &cs) {
-                burns.push((s.server_time, play.path));
+            for play in looped.frame(s, p, s.server_time.raw(), Vec3::ZERO, &cs) {
+                burns.push((s.server_time.raw(), play.path));
             }
             if let Some(e) = s.entities.get(&186) {
                 assert_eq!(e.field_i32(p, "eType"), ET_VEHICLE_V22);
                 assert_eq!(e.field_i32(p, "xmodel"), 38, "no death model");
-                last_seen = s.server_time;
+                last_seen = s.server_time.raw();
             }
         }
         let dir = "fx/explosions/vehicles/t34_mp_n";
@@ -2788,7 +2841,7 @@ mod uo_capture_gates {
 
     /// `uo-shellveh`'s three shells strike the Elefant: each explode is 186
     /// with the vehicle bit on metal, and draws the `tank_explode` row's
-    /// vehicle column, not the metal one (coduo-vehicles.md 13, "A shell
+    /// vehicle column, not the metal one (coduo-vehicles.md 13.9, "A shell
     /// on a hull").
     #[test]
     fn the_uo_shellveh_capture_explodes_on_the_vehicle_column() {

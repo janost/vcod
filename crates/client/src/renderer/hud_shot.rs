@@ -9,40 +9,18 @@
 
 use super::*;
 use vcod_common::asset_source::AssetSource;
+use vcod_common::net::Msec;
 
 /// A device off a headless adapter with BC textures, `None` where the
 /// machine has none.
 fn headless() -> Option<(wgpu::Device, wgpu::Queue)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::default(),
-        compatible_surface: None,
-        force_fallback_adapter: false,
-        apply_limit_buckets: false,
-    }))
-    .ok()?;
-    let info = adapter.get_info();
-    eprintln!("adapter: {} {:?}", info.name, info.backend);
-    if !adapter
-        .features()
-        .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
-    {
-        return None;
-    }
-    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("hud shot device"),
-        required_features: wgpu::Features::TEXTURE_COMPRESSION_BC,
-        ..Default::default()
-    }))
-    .ok()
+    crate::renderer::headless::test_device(crate::renderer::headless::Need::Bc)
 }
 
 #[test]
+#[ignore = "tool: set VCOD_MENU_SHOT"]
 fn cod2_main_menu_shot() {
-    let Some(out) = std::env::var_os("VCOD_MENU_SHOT") else {
-        return;
-    };
+    let out = std::env::var_os("VCOD_MENU_SHOT").expect("set VCOD_MENU_SHOT");
     let Some(fs) = vcod_common::testing::cod2_fs() else {
         return;
     };
@@ -86,10 +64,9 @@ fn cod2_main_menu_shot() {
 }
 
 #[test]
+#[ignore = "tool: set VCOD_HUD_QUADS"]
 fn cod2_dumped_hud_shot() {
-    let Some(files) = std::env::var_os("VCOD_HUD_QUADS") else {
-        return;
-    };
+    let files = std::env::var_os("VCOD_HUD_QUADS").expect("set VCOD_HUD_QUADS");
     let Some(fs) = vcod_common::testing::cod2_fs() else {
         return;
     };
@@ -203,6 +180,7 @@ fn shoot(
 /// third of his health, a use trigger in his sight, a teammate ahead and
 /// a hit from his right, a second into the hit.
 #[test]
+#[ignore = "tool: set VCOD_HUD_SHOT"]
 fn cod2_player_hud_shot() {
     use vcod_cod2::net::delta::field_index;
     use vcod_cod2::net::delta::{ClientState2, EntityState2, PlayerState2};
@@ -210,9 +188,7 @@ fn cod2_player_hud_shot() {
     use vcod_cod2::net::parse::{Gamestate2, Snapshot2};
     use vcod_cod2::net::{ConfigStrings, Frame, SnapshotView};
 
-    let Some(out) = std::env::var_os("VCOD_HUD_SHOT") else {
-        return;
-    };
+    let out = std::env::var_os("VCOD_HUD_SHOT").expect("set VCOD_HUD_SHOT");
     let Some(fs) = vcod_common::testing::cod2_fs() else {
         return;
     };
@@ -266,7 +242,7 @@ fn cod2_player_hud_shot() {
         SnapshotView::new(
             &Snapshot2 {
                 message_num: 1,
-                server_time: t,
+                server_time: Msec::from_raw(t),
                 delta_num: -1,
                 snap_flags: 0,
                 valid: true,
@@ -322,6 +298,7 @@ fn cod2_player_hud_shot() {
 /// `<prefix>-chat.ppm` (chat lines, the open say field, two kill lines and
 /// the viewer's death print) through `Cod2Hud`.
 #[test]
+#[ignore = "tool: set VCOD_UI_SHOT"]
 fn cod2_ui_shot() {
     use vcod_cod2::net::delta::field_index;
     use vcod_cod2::net::delta::{ClientState2, EntityState2, PlayerState2};
@@ -329,9 +306,7 @@ fn cod2_ui_shot() {
     use vcod_cod2::net::parse::{Gamestate2, Snapshot2};
     use vcod_cod2::net::{ConfigStrings, Frame, SnapshotView};
 
-    let Some(prefix) = std::env::var_os("VCOD_UI_SHOT") else {
-        return;
-    };
+    let prefix = std::env::var_os("VCOD_UI_SHOT").expect("set VCOD_UI_SHOT");
     let Some(fs) = vcod_common::testing::cod2_fs() else {
         return;
     };
@@ -407,7 +382,7 @@ fn cod2_ui_shot() {
     let snap = SnapshotView::new(
         &Snapshot2 {
             message_num: 1,
-            server_time: 1000,
+            server_time: Msec::from_raw(1000),
             delta_num: -1,
             snap_flags: 0,
             valid: true,

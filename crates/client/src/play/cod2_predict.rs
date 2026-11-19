@@ -135,7 +135,7 @@ impl Cod2Predictor {
     /// `moveSpeedScale` (0 for none). `None` for a state the cgame
     /// interpolates (followed, intermission) or a miss. `bodies` are the
     /// frame's [`solid_bodies`], clipped beside `world`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn predict(
         &mut self,
         snap: &PlayerState2,
@@ -451,6 +451,7 @@ mod tests {
     use vcod_cod2::net::delta::field_index;
     use vcod_cod2::net::fields::PLAYER_STATE_FIELDS;
     use vcod_cod2::pmove::weapon::WeaponParams;
+    use vcod_common::net::Msec;
     use vcod_common::patch::Arith;
 
     /// The gunner's eye swings with the view about `tag_aim`, on a gun
@@ -529,7 +530,7 @@ mod tests {
             set("viewHeightTarget", 60);
             SnapshotView {
                 message_num: 0,
-                server_time: 0,
+                server_time: Msec::ZERO,
                 snap_flags: 0,
                 ps: PlayerView::new(&raw, 0),
                 entities: Vec::new(),
@@ -946,7 +947,7 @@ mod tests {
         };
         let snap = SnapshotView {
             message_num: 0,
-            server_time: 1000,
+            server_time: Msec::from_raw(1000),
             snap_flags: 0,
             ps: PlayerView::new(&PlayerState2::default(), 0),
             entities: vec![

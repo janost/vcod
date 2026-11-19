@@ -9,14 +9,14 @@
 //! (docs/research/player-model-anim-system.md, "The prone body on a grade").
 //!
 //! On 1.5 and UO the body keeps the bend its last airborne cmd wrote
-//! (cod15-movement.md 4, "The airborne prone body"), so ours' cmds run on
+//! (cod15-movement.md 4.1, "The airborne prone body"), so ours' cmds run on
 //! the probe client's 16, 16, 18 cadence and the playerstate's
 //! `fTorsoHeight`, `fTorsoPitch` and `fWaistPitch` are held to the
 //! fixture's last `FALL` line.
 //!
 //! With `probe_spawn_yaw` the first placement is a `spawn` at another yaw:
 //! 1.5's and UO's spawn think lies the held prone down along it
-//! (cod15-movement.md 4, "The spawn's lie-down").
+//! (cod15-movement.md 4.2, "The spawn's lie-down").
 //!
 //! `PB_REPORT=1` prints both logs, `PB_TRACE=1` our snapshots,
 //! `PB_FIXTURE=<path>` runs a `probe_rays` gate against another capture. The tests need `COD_DIR` at the install
@@ -27,7 +27,7 @@ use crate::common;
 use common::{Join, Queues, step};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::msg::{UserCmd, WBUTTON_PRONE};
 use vcod_common::net::protocol::PROTOCOL_V6;
 use vcod_common::net::{NetClient, NetEvent};
@@ -60,21 +60,21 @@ fn ours(
     rays: Option<&str>,
 ) -> (Vec<String>, [f32; 3], f32) {
     let proto = vcod_server::server::install_protocol(&fs);
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_pronebones"), now);
-    sv.set_protocol(proto);
-    sv.overlay_script("maps/mp/gametypes/probe_pronebones", SCRIPT);
-    sv.set_cvar("probe_spot", spot);
-    if let Some(y) = spawn_yaw {
-        sv.set_cvar("probe_spawn_yaw", &y.to_string());
+    let spawn_yaw = spawn_yaw.map(|y| y.to_string());
+    let mut cvars = vec![("probe_spot", spot)];
+    if let Some(y) = &spawn_yaw {
+        cvars.push(("probe_spawn_yaw", y.as_str()));
     }
     if rays.is_some() {
-        sv.set_cvar("probe_rays", "1");
+        cvars.push(("probe_rays", "1"));
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        cvars: &cvars,
+        script: Some(SCRIPT),
+        ..common::Boot::new(map, "probe_pronebones")
+    }
+    .start(fs);
     let join_ms = rays.map_or(common::PROBE_JOIN_MS, |f| {
         first_place(f)
             - match proto.transport.version == PROTOCOL_V6.transport.version {
@@ -314,17 +314,9 @@ fn a_prone_body_on_the_mp_brecourt_field_poses_like_retail() {
     );
 }
 
-/// The 1.5b install's paks, `None` elsewhere (a UO install's `main/` is
-/// 1.5's, so these run there too).
-fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
-    let fs = vcod_common::testing::game_fs()?;
-    (vcod_server::server::install_protocol(&fs).transport.version == PROTOCOL_V6.transport.version)
-        .then_some(fs)
-}
-
 #[test]
 fn a_prone_body_on_the_mp_carentan_mound_poses_like_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check(
@@ -338,7 +330,7 @@ fn a_prone_body_on_the_mp_carentan_mound_poses_like_15() {
 
 #[test]
 fn a_prone_body_on_flat_ground_poses_like_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check(
@@ -352,7 +344,7 @@ fn a_prone_body_on_flat_ground_poses_like_15() {
 
 #[test]
 fn a_prone_body_on_the_mp_brecourt_field_poses_like_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check(
@@ -409,7 +401,7 @@ fn a_prone_body_on_the_mp_brecourt_field_poses_like_uo() {
 /// The spawn's own think lies a client holding prone down along the spawn's
 /// yaw on 1.5 and UO, which run his last cmd there; 1.1's null cmd leaves
 /// him standing until his next cmd, by when the view is the spot's
-/// (cod15-movement.md 4, "The spawn's lie-down").
+/// (cod15-movement.md 4.2, "The spawn's lie-down").
 #[test]
 fn a_spawn_lies_down_on_its_own_yaw_like_retail() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
@@ -428,7 +420,7 @@ fn a_spawn_lies_down_on_its_own_yaw_like_retail() {
 
 #[test]
 fn a_spawn_lies_down_on_its_own_yaw_like_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check_spawn(
@@ -596,7 +588,7 @@ fn check_rays(
 /// (cod11-combat.md 3.1, "The clip's float time").
 #[test]
 fn a_prone_body_on_the_mp_brecourt_field_traces_like_15() {
-    let Some(fs) = fs_15() else {
+    let Some(fs) = vcod_common::testing::game_fs_15() else {
         return;
     };
     check_rays(

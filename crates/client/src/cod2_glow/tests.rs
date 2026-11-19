@@ -656,13 +656,43 @@ fn blur_matches_the_hlsl() {
 }
 
 fn headless() -> Option<(wgpu::Device, wgpu::Queue)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
-    let info = adapter.get_info();
-    eprintln!("adapter: {} {:?}", info.name, info.backend);
-    if info.backend == wgpu::Backend::Gl {
-        return None;
+    crate::renderer::headless::test_device(crate::renderer::headless::Need::NotGl)
+}
+
+/// No glow step writes the texture it reads, a one-pass second chain
+/// (radii 5 and 6) included, and the applies read where the last chain
+/// ended; the stock routing keeps retail's 11, 12, ..., 9 (BUG-084).
+#[test]
+fn no_glow_step_writes_the_target_it_reads() {
+    let mut one_pass = false;
+    for radius in [[5.0, 6.0], [5.0, 12.0], [3.0, 4.0], [6.0, 5.0]] {
+        let s = GlowSettings {
+            radius,
+            ..GlowSettings::default()
+        };
+        for (w, h) in [(640, 480), (1280, 720), (1920, 1080), (2560, 1440)] {
+            let Some(p) = plan(&s, w, h, false) else {
+                continue;
+            };
+            let totals: Vec<usize> = (p.chains.iter().enumerate())
+                .map(|(c, passes)| passes.len() + usize::from(c == 0))
+                .collect();
+            one_pass |= totals.get(1) == Some(&1);
+            let (route, ended) = glow_route(&totals);
+            assert_eq!(route.len(), totals.iter().sum::<usize>());
+            assert!(
+                route.iter().all(|(src, dst)| src != dst),
+                "{radius:?} {w}x{h}"
+            );
+            assert_eq!(route.last().map(|r| r.1), Some(ended));
+        }
     }
-    pollster::block_on(adapter.request_device(&Default::default())).ok()
+    assert!(one_pass, "no case made a one-pass second chain");
+    use Target::*;
+    let (route, ended) = glow_route(&[3, 2]);
+    assert_eq!(
+        route,
+        [(Scene, T11), (T11, T12), (T12, T9), (T9, T11), (T11, T9)]
+    );
+    assert_eq!(ended, T9);
 }

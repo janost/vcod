@@ -25,8 +25,8 @@ fn cvar(host: &GameHost, name: &str, default: f32) -> f32 {
 /// player's `r.currentOrigin` raised by half its box's height, along
 /// `AngleVectors((0, yaw, 0))`'s forward times `g_dropForwardSpeed`,
 /// climbing at `g_dropUpSpeedBase + crandom() * g_dropUpSpeedRand` off the
-/// game's `rand()`, under `TR_GRAVITY` from this frame. VERIFIED, the
-/// stores. `yaw` is in degrees.
+/// game's `rand()`, under `TR_GRAVITY` from this frame (cod2-combat.md
+/// 6.3). `yaw` is in degrees.
 pub fn launch_off(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -34,14 +34,19 @@ pub fn launch_off(
     index: usize,
     yaw: f32,
 ) -> Result<EntId, ErrorKind> {
+    // Shared code reaches here under `ItemRules::cvar_launch`.
+    let body = host
+        .as_cod2()
+        .ok_or_else(|| crate::game::host::wrong_game("dropitem"))?
+        .clients[slot]
+        .body;
     let forward = cvar(host, "g_dropForwardSpeed", FORWARD);
     let base = cvar(host, "g_dropUpSpeedBase", UP_BASE);
     let rand = cvar(host, "g_dropUpSpeedRand", UP_RAND);
     let [dir, _, _] = vcod_common::x87::angle_vectors(Vec3::new(0.0, yaw, 0.0));
     let mut velocity = (dir.as_dvec3() * f64::from(forward)).as_vec3();
-    let c = host.cod2_crandom();
+    let c = crandom(host);
     velocity.z = (f64::from(velocity.z) + c * f64::from(rand) + f64::from(base)) as f32;
-    let body = host.cod2().clients[slot].body;
     let player = host
         .ents
         .handle(slot as u32)
@@ -67,50 +72,28 @@ pub struct TagDrop {
     pub tag: String,
 }
 
+/// CoD2's `G_crandom` (Mac 0x2cf1a): `2 * rand() / 2^31 - 1` off the
+/// game's `rand()`, on the stack; a drop pin, when one waits, stands in
+/// for the value.
+fn crandom(host: &mut GameHost) -> f64 {
+    let c2 = host.cod2_mut();
+    let drawn = 2.0 * c2.rand.g_random() - 1.0;
+    c2.drop_pins.pop_front().unwrap_or(drawn)
+}
+
 /// `Drop_Weapon`'s spin (lnxded 0x81064de): three `crandom()` draws, the
 /// first the roll's at 60 degrees a second, then the yaw's at 40, then
 /// the pitch's at 50, each stored. VERIFIED, the calls and rodata
 /// 0x815a3e8..0x815a3f0.
 pub fn spin(host: &mut GameHost) -> Vec3 {
-    let roll = host.cod2_crandom();
-    let yaw = host.cod2_crandom();
-    let pitch = host.cod2_crandom();
+    let roll = crandom(host);
+    let yaw = crandom(host);
+    let pitch = crandom(host);
     Vec3::new(
         (50.0 * pitch) as f32,
         (40.0 * yaw) as f32,
         (60.0 * roll) as f32,
     )
-}
-
-/// `BG_EvaluateTrajectory` (lnxded 0x80df5d4) as `G_RunItem` reads the
-/// arc: the seconds stored as a float, then `VectorMA` on the stack with
-/// one store a component, `TR_GRAVITY` taking `t * 400 * t` off the stored
-/// z on the stack (cod2-combat.md 9.4), `TR_LINEAR_STOP` at its end time at
-/// most and never before its start. The shared `Trajectory::evaluate` rounds
-/// each product and sum to a float, which put a second dropped weapon's
-/// arc a last bit of z off retail's (cod2-protocol.md 15.7).
-pub fn evaluate(pos: &vcod_common::net::trajectory::Trajectory, at_ms: i32) -> Vec3 {
-    use vcod_common::net::trajectory::{TR_GRAVITY, TR_LINEAR, TR_LINEAR_STOP};
-    let secs = |at: i32| (at - pos.tr_time) as f32 * 0.001;
-    let ma = |t: f32| {
-        let m = |b: f32, d: f32| (f64::from(d) * f64::from(t) + f64::from(b)) as f32;
-        Vec3::new(
-            m(pos.base.x, pos.delta.x),
-            m(pos.base.y, pos.delta.y),
-            m(pos.base.z, pos.delta.z),
-        )
-    };
-    match pos.tr_type {
-        TR_LINEAR => ma(secs(at_ms)),
-        TR_LINEAR_STOP => ma(secs(at_ms.min(pos.tr_time + pos.tr_duration)).max(0.0)),
-        TR_GRAVITY => {
-            let t = secs(at_ms);
-            let mut p = ma(t);
-            p.z = (f64::from(p.z) - f64::from(t) * 400.0 * f64::from(t)) as f32;
-            p
-        }
-        _ => pos.evaluate(at_ms),
-    }
 }
 
 /// `G_RunItem`'s flight (lnxded 0x8107de6), CoD2's own: the arc read 50 ms
@@ -130,12 +113,17 @@ pub fn run_flight(
     now_ms: i32,
 ) -> super::item::Ran {
     use super::item::Ran;
-    use vcod_common::net::trajectory::{TR_LINEAR_STOP, Trajectory};
+    use vcod_common::net::trajectory::{TR_GRAVITY, TR_LINEAR, TR_LINEAR_STOP, Trajectory};
     const CONTENTS_NODROP: u32 = 0x8000_0000;
     let lerp = |a: Vec3, b: Vec3, f: f32| {
         (a.as_dvec3() + (b.as_dvec3() - a.as_dvec3()) * f64::from(f)).as_vec3()
     };
-    let mut to = evaluate(pos, now_ms + 50);
+    // lnxded's line, stop and arc store as 1.5b's (cod2-protocol.md 15.7);
+    // its other arms are unmeasured.
+    let mut to = match pos.tr_type {
+        TR_LINEAR | TR_LINEAR_STOP | TR_GRAVITY => pos.evaluate_stored(now_ms + 50),
+        _ => pos.evaluate_f32(now_ms + 50),
+    };
     if (origin.as_dvec3() - to.as_dvec3()).length_squared() < f64::from(0.1f32) {
         to.z -= 1.0;
     }

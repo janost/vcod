@@ -663,6 +663,8 @@ impl Shell {
         // nudge (docs/protocol-1.1.md, "The client's clock").
         s.register("cl_maxpackets", "30", ARCHIVE);
         s.register("cl_packetdup", "1", ARCHIVE);
+        // How long a browser ping waits (CoDMP.exe 0x41228d).
+        s.register("cl_maxPing", "800", ARCHIVE);
         s.register("cl_timeNudge", "0", 0);
         // 1.5's and UO's cgame records on the server's `C` and stops on its
         // `D` while this is 1; their cvar table rows are "0", archived.
@@ -716,6 +718,8 @@ impl Shell {
         // `vid_restart`. The UI reads it when it loads a menu file
         // (docs/research/cod11-front-end.md, 1).
         s.register("cl_language", "0", ARCHIVE | LATCH);
+        // Set by the language check (CoDMP.exe 0x4a9b10).
+        s.register("cl_languagesavailable", "1", 0);
         for name in [
             "ui_browserShowFull",
             "ui_browserShowEmpty",
@@ -801,7 +805,7 @@ impl Shell {
         s.register("vc_sunShafts", "0", ARCHIVE);
         // CoDMP.exe 0x4b386b: default "1", CVAR_CHEAT. 0 drops the flare
         // list, the sun's flare and washes with it (0x4d9770,
-        // docs/research/cod11-shader-scripts.md section 8, "r_flares").
+        // docs/research/cod11-shader-scripts.md section 8.6, "r_flares").
         s.register("r_flares", "1", CHEAT);
         // iw3mp.exe 0x49943a (`FX_RegisterDvars`): CoD4's "Toggles drawing
         // of effects after processing", cheat-protected; 0 still runs the
@@ -947,8 +951,9 @@ impl Shell {
     }
 
     pub fn cvar(&self, name: &str) -> Option<&str> {
+        let mut buf = [0; 64];
         self.cvars
-            .get(&name.to_ascii_lowercase())
+            .get(lower_key(name, &mut buf).as_ref())
             .map(|c| c.value.as_str())
     }
 
@@ -967,6 +972,15 @@ impl Shell {
         }
         if let Some(kept) = kept {
             self.run_only.insert(key, kept);
+        }
+    }
+
+    /// `Cvar_Set2` with `force`: the value now, past a latch, any pending
+    /// one dropped.
+    pub fn force_set(&mut self, name: &str, value: &str) {
+        if let Some(c) = self.cvars.get_mut(&name.to_ascii_lowercase()) {
+            c.value = value.to_string();
+            c.latched = None;
         }
     }
 
@@ -1013,16 +1027,12 @@ impl Shell {
         // `CG_Init` (Mac 0x145214): a bool, 1, flags 0x1080, cheat and not
         // archived (cod2-efx.md 6.8).
         self.register("cg_drawGun", "1", CHEAT);
+        for (name, default, _) in WINVOICE_DVARS {
+            self.register_kept(name, default, ARCHIVE);
+        }
         // `CG_Init` (Mac 0x145214), all archived (flags 0x1001): the chat's
         // and say field's places, the stance hint prints and the hints'
         // fade (cod2-hud.md 9, 14).
-        for (name, default, _) in WINVOICE_DVARS {
-            let kept = self.cvar(name).map(str::to_string);
-            self.register(name, default, ARCHIVE);
-            if let (Some(v), Some(c)) = (kept, self.cvars.get_mut(name)) {
-                c.value = v;
-            }
-        }
         for (name, default) in [
             ("snd_volume", "1"),
             ("cg_drawMantleHint", "1"),
@@ -1033,11 +1043,7 @@ impl Shell {
             ("cg_hintFadeTime", "100"),
             ("cg_drawLagometer", "0"),
         ] {
-            let kept = self.cvar(name).map(str::to_string);
-            self.register(name, default, ARCHIVE);
-            if let (Some(v), Some(c)) = (kept, self.cvars.get_mut(&name.to_ascii_lowercase())) {
-                c.value = v;
-            }
+            self.register_kept(name, default, ARCHIVE);
         }
         // The player profile dvars (`Com_InitPlayerProfiles`, Mac 0x111aa6;
         // `UI_RegisterDvars`, Mac 0x1505b0), none archived; the main menu's
@@ -1053,9 +1059,6 @@ impl Shell {
                 self.register(name, default, 0);
             }
         }
-        // The shadow cookies' dvars at the renderer's defaults, none
-        // archived (`R_RegisterDvars`, Mac 0x000cb8b6; cod2-materials.md
-        // 9.8); `sc_count` is registered and read by nothing.
         for (name, default) in [
             ("cg_drawCrosshairNamesPosX", "300"),
             ("cg_drawCrosshairNamesPosY", "180"),
@@ -1064,6 +1067,9 @@ impl Shell {
                 self.register(name, default, 0);
             }
         }
+        // The shadow cookies' dvars at the renderer's defaults, none
+        // archived (`R_RegisterDvars`, Mac 0x000cb8b6; cod2-materials.md
+        // 9.8); `sc_count` is registered and read by nothing.
         for (name, default) in COOKIE_DVARS {
             if self.cvar(name).is_none() {
                 self.register(name, default, 0);
@@ -1159,11 +1165,7 @@ impl Shell {
         // `iw3mp.exe` 0x46f541).
         self.cvars.remove("timedemo");
         for (name, value, flags) in COD4_OPTION_DVARS {
-            let kept = self.cvar(name).map(str::to_string);
-            self.register(name, value, flags);
-            if let (Some(v), Some(c)) = (kept, self.cvars.get_mut(&name.to_ascii_lowercase())) {
-                c.value = v;
-            }
+            self.register_kept(name, value, flags);
         }
         self.set_enum_domain(
             "r_aspectRatio",
@@ -1659,8 +1661,6 @@ impl Shell {
         }
     }
 
-    /// Command and cvar names starting with `prefix`, case-insensitively,
-    /// sorted.
     /// Re-registration takes a latched value (`Cvar_Get`, CoDMP.exe
     /// 0x439489): `vid_restart` re-registers `cl_language` (0x40fd14), and
     /// startup registers it after the config ran. True when a value moved.
@@ -1693,6 +1693,8 @@ impl Shell {
         moved
     }
 
+    /// Command and cvar names starting with `prefix`, case-insensitively,
+    /// sorted.
     pub fn complete(&self, prefix: &str) -> Vec<String> {
         let p = prefix.to_ascii_lowercase();
         let mut names: Vec<String> = COMMANDS
@@ -1756,8 +1758,9 @@ impl Shell {
     /// `unbindall`, every bind, then every archived cvar as `seta`.
     pub fn config_text(&self) -> String {
         let mut s = format!("{CONFIG_HEADER}\nunbindall\n");
+        // Retail writes values unescaped; vcod drops what would end the line.
         for (k, v) in &self.binds {
-            s.push_str(&format!("bind {k} \"{v}\"\n"));
+            s.push_str(&format!("bind {k} \"{}\"\n", quotable(v)));
         }
         // `Cvar_WriteVariables` (CoDMP.exe 0x43a148) writes a pending latch.
         for (k, c) in self.cvars.iter().filter(|(_, c)| c.archive) {
@@ -1766,7 +1769,7 @@ impl Shell {
                 .get(k)
                 .or(c.latched.as_ref())
                 .unwrap_or(&c.value);
-            s.push_str(&format!("seta {} \"{value}\"\n", c.name));
+            s.push_str(&format!("seta {} \"{}\"\n", c.name, quotable(value)));
         }
         s
     }
@@ -1850,6 +1853,23 @@ fn args_from(line: &str, n: usize) -> String {
     rest.to_string()
 }
 
+/// `s` for a quoted argument of a console line built from server, menu or
+/// typed text: `"`, CR and LF out, so [`split_commands`] and [`tokenize`]
+/// read back one command with `s` as one token.
+pub fn quotable(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(c, '"' | '\r' | '\n'))
+        .collect()
+}
+
+/// `s` for an unquoted argument of such a line: [`quotable`] with `;` out
+/// too.
+pub fn bare(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(c, '"' | ';' | '\r' | '\n'))
+        .collect()
+}
+
 /// Splits on `;` and newlines outside quotes, as `Cbuf_Execute` does.
 pub fn split_commands(text: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -1874,9 +1894,36 @@ pub fn split_commands(text: &str) -> Vec<String> {
     out
 }
 
+/// The store's key for `name`, lowercased into `buf` when it fits, so a
+/// read allocates nothing.
+fn lower_key<'a>(name: &'a str, buf: &'a mut [u8; 64]) -> std::borrow::Cow<'a, str> {
+    if !name.bytes().any(|b| b.is_ascii_uppercase()) {
+        return name.into();
+    }
+    match buf.get_mut(..name.len()) {
+        Some(b) => {
+            b.copy_from_slice(name.as_bytes());
+            b.make_ascii_lowercase();
+            // ASCII lowercasing keeps UTF-8 valid.
+            std::str::from_utf8(b).unwrap_or_default().into()
+        }
+        None => name.to_ascii_lowercase().into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cvar_read_takes_any_case_and_any_length() {
+        let mut s = Shell::new();
+        let long = format!("x{}", "Y".repeat(80));
+        s.force(&long, "1");
+        assert_eq!(s.cvar(&long.to_ascii_lowercase()), Some("1"));
+        assert_eq!(s.cvar(&long), Some("1"));
+        assert_eq!(s.cvar("CG_DRAWGUN"), s.cvar("cg_drawgun"));
+    }
 
     #[test]
     fn nextdemo_holds_a_whole_line_and_clears() {
@@ -2179,6 +2226,23 @@ mod tests {
         assert_eq!(t.cvar("name"), Some("Rob"));
     }
 
+    /// A server's forced value holding a quote and a newline saves as one
+    /// line: the config reads back the same cvars and binds, no more.
+    #[test]
+    fn a_forced_value_cannot_add_config_lines() {
+        let mut s = Shell::new();
+        s.execute("unbindall; bind f1 \"say a; say b\"");
+        s.apply_systeminfo("\\rate\\25000\"\nbind MOUSE1 \"quit;\r\nseta name x");
+        let text = s.config_text();
+        let mut t = Shell::new();
+        t.exec_config(&text);
+        assert_eq!(t.cvar("rate"), Some("25000bind MOUSE1 quit;seta name x"));
+        assert_eq!(t.bind("F1"), Some("say a; say b"));
+        assert_eq!(t.bind("MOUSE1"), None);
+        assert_eq!(t.cvar("name"), s.cvar("name"));
+        assert_eq!(t.config_text(), text);
+    }
+
     #[test]
     fn completion_covers_commands_and_cvars() {
         let s = Shell::new();
@@ -2193,6 +2257,8 @@ mod tests {
                 "cl_freelook",
                 "cl_freezeDemo",
                 "cl_language",
+                "cl_languagesavailable",
+                "cl_maxPing",
                 "cl_maxpackets",
                 "cl_mouseAccel",
                 "cl_packetdup",
@@ -2386,8 +2452,6 @@ mod tests {
         assert_eq!(s.cvar("cg_fov"), Some("80"), "no sv_cheats reads 0");
     }
 
-    /// `CL_SystemInfoChanged` forces every key: read-only, cheat and
-    /// latched cvars too, and keys the client never registered.
     /// `fs_game` is `CVAR_INIT`: the console cannot set it, the Mods
     /// menu's forced set and a systeminfo can, and a systeminfo without the
     /// key leaves it.
@@ -2407,6 +2471,8 @@ mod tests {
         assert!(!s.config_text().contains("fs_game"));
     }
 
+    /// `CL_SystemInfoChanged` forces every key: read-only, cheat and
+    /// latched cvars too, and keys the client never registered.
     #[test]
     fn the_systeminfo_forces_every_key() {
         let mut s = Shell::new();

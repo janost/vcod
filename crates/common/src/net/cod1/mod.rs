@@ -197,6 +197,14 @@ fn mod_v22_to_v1(m: i32) -> i32 {
     }
 }
 
+/// `FS_LoadZipFile`'s checksum of the 1.5 install's `main/pak0.pk3`, as the
+/// 1.5b server's `sv_referencedPaks` lists it.
+const PAK0_V6_CHECKSUM: i32 = 1_048_127_331;
+
+/// The same of 1.1's `main/pak0.pk3` (docs/research/cod11-server-handshake.md,
+/// "The checksum").
+const PAK0_V1_CHECKSUM: i32 = -363_972_028;
+
 /// The protocol an install hosts: 22 when United Offensive's `uo/` paks are
 /// mounted, 6 when its `main/pak0.pk3` is 1.5's, whose checksum differs
 /// from 1.1's (docs/research/cod15-protocol-diff.md 10), 1 otherwise.
@@ -208,9 +216,6 @@ pub fn install_protocol(fs: &crate::pk3::Pk3Fs) -> &'static Cod1Wire {
 pub fn install_protocol_of<'a>(
     paks: impl IntoIterator<Item = &'a crate::pk3::PakInfo>,
 ) -> &'static Cod1Wire {
-    /// `FS_LoadZipFile`'s checksum of the 1.5 install's `main/pak0.pk3`, as
-    /// the 1.5b server's `sv_referencedPaks` lists it.
-    const PAK0_V6_CHECKSUM: i32 = 1_048_127_331;
     let mut v6 = false;
     for p in paks {
         // A `uo/` with United Offensive's own paks beside `main/` (`--mod-dir
@@ -221,6 +226,30 @@ pub fn install_protocol_of<'a>(
         v6 |= p.game == "main" && p.name == "pak0" && p.checksum == PAK0_V6_CHECKSUM;
     }
     if v6 { &PROTOCOL_V6 } else { &PROTOCOL_V1 }
+}
+
+/// A warning for an install whose `main/pak0.pk3` is neither 1.1's nor
+/// 1.5's, which [`install_protocol_of`] runs as 1.1 all the same. A patch
+/// that kept 1.1's pak0 passes; United Offensive's paks are not checked.
+pub fn patch_warning_of<'a>(
+    paks: impl IntoIterator<Item = &'a crate::pk3::PakInfo>,
+) -> Option<String> {
+    let mut pak0 = None;
+    for p in paks {
+        if p.game == "uo" && p.name.starts_with("pakuo") {
+            return None;
+        }
+        if p.game == "main" && p.name == "pak0" {
+            pak0 = Some(p.checksum);
+        }
+    }
+    let c = pak0?;
+    (c != PAK0_V1_CHECKSUM && c != PAK0_V6_CHECKSUM).then(|| {
+        format!(
+            "main/pak0.pk3's checksum {c} is neither 1.1's nor 1.5's: vcod supports \
+             CoD 1.1 and 1.5 and runs this install as 1.1"
+        )
+    })
 }
 
 /// Model paths sit at `CS_MODELS_V1 + index`, index 1..=255 (`G_ModelIndex`,
@@ -245,32 +274,32 @@ pub const CS_ALLIES_SCORE: usize = 6;
 /// `SP_worldspawn` (0x61cec).
 pub const CS_NORTHYAW: usize = 11;
 /// `level.startTime`, server-clock ms.
-pub const CS_LEVEL_START_TIME: usize = 13;
+pub const CS_LEVEL_START_TIME_V1: usize = 13;
 
 /// The mirrored server cvars: names here, values in the next block at the
 /// same offset; the client `Cvar_Set`s the pairs.
-pub const CS_CVAR_NAMES: std::ops::RangeInclusive<usize> = 140..=203;
-pub const CS_CVAR_VALUES: std::ops::RangeInclusive<usize> = 204..=267;
+pub const CS_CVAR_NAMES_V1: std::ops::RangeInclusive<usize> = 140..=203;
+pub const CS_CVAR_VALUES_V1: std::ops::RangeInclusive<usize> = 204..=267;
 
 /// `CS_SOUNDS`: a sound-alias index (`EV_SOUND_ALIAS`'s parm, `loopSound`,
 /// `s <idx>`) counts from here, so the alias range's first slot travels as 1
 /// and 0 means no alias (docs/protocol-1.1.md, `s <idx>`).
-pub const CS_SOUNDS: usize = CsRange::SoundAlias.bounds().0 - 1;
+pub const CS_SOUNDS_V1: usize = CsRange::SoundAlias.bounds().0 - 1;
 /// A hudelem's `text`/`label` index counts from here, 1-based like
 /// `CS_SOUNDS`.
-pub const CS_LOCALIZED: usize = CsRange::Localized.bounds().0 - 1;
+pub const CS_LOCALIZED_V1: usize = CsRange::Localized.bounds().0 - 1;
 /// A hudelem's `shaderIndex` and the objective icons count from here, 1-based.
-pub const CS_SHADERS: usize = CsRange::Shader.bounds().0 - 1;
+pub const CS_SHADERS_V1: usize = CsRange::Shader.bounds().0 - 1;
 /// An effect id (`loadFx`'s return, `EV_PLAY_FX`'s parm, an `ET_FX`
 /// entity's `scale`) counts from here, 1..63 (`CG_PlayFx`, cgame
 /// 0x3001db20, docs/research/cod11-events-and-fx.md 5c).
-pub const CS_EFFECTS: usize = CsRange::Effect.bounds().0 - 1;
+pub const CS_EFFECTS_V1: usize = CsRange::Effect.bounds().0 - 1;
 /// `EV_PLAY_FX_ON_TAG`'s parm counts from here: configstring `844 + parm`
 /// holds `"%02d%s"` of the effect id and the tag (cgame 0x3001db80).
-pub const CS_FX_TAGS: usize = CsRange::FxTag.bounds().0 - 1;
+pub const CS_FX_TAGS_V1: usize = CsRange::FxTag.bounds().0 - 1;
 /// The first of the 32 hint-string configstrings `G_GetHintStringIndex`
 /// (0x5a238) fills; `serverCursorHintString` indexes from here.
-pub const CS_HINT_STRINGS: usize = 1212;
+pub const CS_HINT_STRINGS_V1: usize = 1212;
 /// 1.5's match timeout: the ms left (`%i`, empty once over) and the message
 /// under it, written by `Cmd_MatchTimeout_f`, `Cmd_MatchTimein_f` and
 /// `CheckMatchTimeout` (game.mp.i386.so 1.5b 0x4fea8). No 1.1 module writes
@@ -300,7 +329,7 @@ pub const CS_LAYOUT_V1: CsLayout = CsLayout {
     match_timeout: None,
     vote: 15,
     fog: CS_FOG_V1,
-    level_start: CS_LEVEL_START_TIME,
+    level_start: CS_LEVEL_START_TIME_V1,
     motd: 14, // SP_worldspawn 0x61dde (1.5b 0x66a3d)
     winner: 20,
 };
@@ -359,6 +388,13 @@ mod tests {
         );
         assert!(install_protocol_of(&uo).is_uo());
         assert!(!PROTOCOL_V6.is_uo() && !PROTOCOL_V6.is_v1());
+        assert!(patch_warning_of(&v1).unwrap().contains("checksum 7"));
+        assert_eq!(patch_warning_of(&v6), None);
+        assert_eq!(patch_warning_of(&[pak("main", "pak0", -363_972_028)]), None);
+        assert_eq!(
+            patch_warning_of(&[pak("main", "pak0", 7), pak("uo", "pakuo00", 3)]),
+            None
+        );
     }
 
     #[test]
@@ -383,7 +419,10 @@ mod tests {
 
     #[test]
     fn range_bases_sit_one_below_their_ranges() {
-        assert_eq!((CS_SOUNDS, CS_LOCALIZED, CS_SHADERS), (524, 1244, 1500));
+        assert_eq!(
+            (CS_SOUNDS_V1, CS_LOCALIZED_V1, CS_SHADERS_V1),
+            (524, 1244, 1500)
+        );
     }
 
     #[test]

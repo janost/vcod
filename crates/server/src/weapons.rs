@@ -30,8 +30,8 @@ pub struct PlayerWeapons {
 
 impl PlayerWeapons {
     /// `giveWeapon`: hold the weapon and put it in its file's `weaponSlot`.
-    /// A weapon whose file names no slot — including every weapon on a host
-    /// with no paks mounted — is still held; only the slot byte goes unset.
+    /// A weapon whose file names no slot (including every weapon on a host
+    /// with no paks mounted) is still held; only the slot byte goes unset.
     pub fn give(&mut self, index: usize, slot: usize) {
         if index < u64::BITS as usize {
             weapon::give_slot(&mut self.held, &mut self.slots, index as u8, slot);
@@ -62,10 +62,21 @@ impl PlayerWeapons {
             return;
         }
         self.give(index, slot);
-        let mut alt = table.get(index).map_or(0, |d| d.alt_index);
-        while alt != 0 && !self.holds(alt) {
-            self.give(alt, 0);
-            alt = table.get(alt).map_or(0, |d| d.alt_index);
+        // `give` holds nothing past index 63, so a cycle there never stops
+        // on `holds`; `alt_chain` stops on a repeat. Past 255 nothing is held.
+        let Ok(start) = u8::try_from(index) else {
+            return;
+        };
+        let alt_of = |w: u8| {
+            table
+                .get(usize::from(w))
+                .map_or(0, |d| u8::try_from(d.alt_index).unwrap_or(0))
+        };
+        for alt in vcod_common::weapon_table::alt_chain(start, alt_of) {
+            if self.holds(usize::from(alt)) {
+                break;
+            }
+            self.give(usize::from(alt), 0);
         }
     }
 
@@ -76,12 +87,7 @@ impl PlayerWeapons {
         if !self.holds(index) {
             return;
         }
-        let mut chain = vec![index];
-        let mut alt = table.get(index).map_or(0, |d| d.alt_index);
-        while alt != 0 && !chain.contains(&alt) {
-            chain.push(alt);
-            alt = table.get(alt).map_or(0, |d| d.alt_index);
-        }
+        let chain = table.alt_chain(index);
         for s in self
             .slots
             .iter_mut()
@@ -237,7 +243,36 @@ impl WeaponTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::configstrings::weapon_index;
+    use crate::defs::V1;
+
+    /// An `altWeapon` cycle past index 63, where `give` holds nothing, ends
+    /// the walk (BUG-044: `give_chain` looped forever); a chain below 64
+    /// gives every mode up to one already held.
+    #[test]
+    fn give_chain_ends_on_an_alt_cycle_past_63() {
+        let def = |alt_index| {
+            Some(WeaponDef {
+                alt_index,
+                ..WeaponDef::default()
+            })
+        };
+        let mut defs: Vec<Option<WeaponDef>> = (0..66).map(|_| def(0)).collect();
+        defs[0] = None;
+        defs[1] = def(64);
+        defs[64] = def(65);
+        defs[65] = def(64);
+        defs[2] = def(3);
+        defs[3] = def(4);
+        defs[4] = def(2);
+        let table = WeaponTable::from_defs(defs);
+        let mut w = PlayerWeapons::default();
+        w.give_chain(&table, 1, 1);
+        assert_eq!(w.held, 1 << 1);
+        w.give_chain(&table, 2, 2);
+        assert_eq!(w.held, 1 << 1 | 1 << 2 | 1 << 3 | 1 << 4);
+        w.take_chain(&table, 3);
+        assert_eq!(w.held, 1 << 1);
+    }
 
     /// The wire words the `playerstate_ab` captures pin, decoded from
     /// `crates/server/tests/fixtures/playerstate/mp_carentan-dm.txt`: an
@@ -247,10 +282,10 @@ mod tests {
     #[test]
     fn the_wire_words_match_the_retail_capture() {
         let mut w = PlayerWeapons::default();
-        w.give(weapon_index("colt_mp").unwrap(), 3);
-        w.give(weapon_index("fraggrenade_mp").unwrap(), 4);
-        w.give(weapon_index("m1carbine_mp").unwrap(), 1);
-        w.current = weapon_index("m1carbine_mp").unwrap() as u8;
+        w.give(V1.weapon_index("colt_mp").unwrap(), 3);
+        w.give(V1.weapon_index("fraggrenade_mp").unwrap(), 4);
+        w.give(V1.weapon_index("m1carbine_mp").unwrap(), 1);
+        w.current = V1.weapon_index("m1carbine_mp").unwrap() as u8;
 
         assert_eq!(w.held as u32 as i32, 4368);
         assert_eq!(w.slot_words(), [67111936, 8]);
@@ -262,9 +297,9 @@ mod tests {
     #[test]
     fn the_other_nationality_matches_too() {
         let mut w = PlayerWeapons::default();
-        w.give(weapon_index("luger_mp").unwrap(), 3);
-        w.give(weapon_index("rgd-33russianfrag_mp").unwrap(), 4);
-        w.give(weapon_index("mosin_nagant_mp").unwrap(), 1);
+        w.give(V1.weapon_index("luger_mp").unwrap(), 3);
+        w.give(V1.weapon_index("rgd-33russianfrag_mp").unwrap(), 4);
+        w.give(V1.weapon_index("mosin_nagant_mp").unwrap(), 1);
         assert_eq!(w.held as u32 as i32, 134481920);
         assert_eq!(w.slot_words(), [184553984, 27]);
     }
@@ -275,26 +310,28 @@ mod tests {
     #[test]
     fn a_weapon_with_no_slot_is_still_held() {
         let mut w = PlayerWeapons::default();
-        w.give(weapon_index("colt_mp").unwrap(), 0);
+        w.give(V1.weapon_index("colt_mp").unwrap(), 0);
         assert_eq!(w.held, 1 << 4);
         assert_eq!(w.slots, [0; NUM_SLOTS]);
     }
 
     /// The `weaponclass` condition in `mp/playeranim.script` is this field.
-    /// Values read straight out of the shipped weapon files, through the
-    /// table rather than the standalone lookup `PlayerWeapons` used to use.
+    /// Values read straight out of the shipped weapon files, through the table.
     #[test]
     fn a_weapon_file_names_its_class() {
         let Some(fs) = vcod_common::testing::game_fs() else {
             return;
         };
         let t = WeaponTable::load(&fs, &crate::defs::V1);
-        assert_eq!(t.class(weapon_index("m1carbine_mp").unwrap()), "rifle");
-        assert_eq!(t.class(weapon_index("colt_mp").unwrap()), "pistol");
-        assert_eq!(t.class(weapon_index("thompson_mp").unwrap()), "smg");
-        assert_eq!(t.class(weapon_index("fraggrenade_mp").unwrap()), "grenade");
+        assert_eq!(t.class(V1.weapon_index("m1carbine_mp").unwrap()), "rifle");
+        assert_eq!(t.class(V1.weapon_index("colt_mp").unwrap()), "pistol");
+        assert_eq!(t.class(V1.weapon_index("thompson_mp").unwrap()), "smg");
         assert_eq!(
-            t.class(weapon_index("panzerfaust_mp").unwrap()),
+            t.class(V1.weapon_index("fraggrenade_mp").unwrap()),
+            "grenade"
+        );
+        assert_eq!(
+            t.class(V1.weapon_index("panzerfaust_mp").unwrap()),
             "rocketlauncher"
         );
     }
@@ -304,7 +341,7 @@ mod tests {
     #[test]
     fn a_weapon_class_needs_no_paks_to_be_asked_for() {
         let t = WeaponTable::empty();
-        assert_eq!(t.class(weapon_index("m1carbine_mp").unwrap()), "");
+        assert_eq!(t.class(V1.weapon_index("m1carbine_mp").unwrap()), "");
     }
 
     /// The index the first distinct name gets is 1, and slot 0 goes unused:
@@ -343,7 +380,7 @@ mod tests {
         let ammo = array("ammo=");
 
         let t = WeaponTable::load(&fs, &crate::defs::V1);
-        let def = |name: &str| t.get(weapon_index(name).unwrap()).unwrap();
+        let def = |name: &str| t.get(V1.weapon_index(name).unwrap()).unwrap();
         assert_eq!(def("colt_mp").clip_index, 3);
         assert_eq!(def("fraggrenade_mp").clip_index, 6);
         assert_eq!(def("m1carbine_mp").clip_index, 10);
@@ -368,17 +405,17 @@ mod tests {
             return;
         };
         let t = WeaponTable::load(&fs, &crate::defs::V1);
-        let get = |n: &str| t.get(weapon_index(n).unwrap()).unwrap();
+        let get = |n: &str| t.get(V1.weapon_index(n).unwrap()).unwrap();
         assert!(get("fraggrenade_mp").shared_cap_index.is_some());
         assert_eq!(
             get("fraggrenade_mp").shared_cap_index,
             get("stielhandgranate_mp").shared_cap_index
         );
         assert_eq!(get("m1carbine_mp").shared_cap_index, None);
-        assert_eq!(t.slot(weapon_index("fg42_mp").unwrap()), 1);
-        assert_eq!(t.slot(weapon_index("m1carbine_mp").unwrap()), 1);
-        assert_eq!(t.slot(weapon_index("colt_mp").unwrap()), 3);
-        assert_eq!(t.slot(weapon_index("fraggrenade_mp").unwrap()), 4);
+        assert_eq!(t.slot(V1.weapon_index("fg42_mp").unwrap()), 1);
+        assert_eq!(t.slot(V1.weapon_index("m1carbine_mp").unwrap()), 1);
+        assert_eq!(t.slot(V1.weapon_index("colt_mp").unwrap()), 3);
+        assert_eq!(t.slot(V1.weapon_index("fraggrenade_mp").unwrap()), 4);
         assert_eq!(t.slot(0), 0);
     }
 
@@ -391,13 +428,13 @@ mod tests {
             return;
         };
         let t = WeaponTable::load(&fs, &crate::defs::V1);
-        let carbine = weapon_index("m1carbine_mp").unwrap();
+        let carbine = V1.weapon_index("m1carbine_mp").unwrap();
         assert_eq!(t.get(carbine).unwrap().damage, 45);
         assert_eq!(t.class(carbine), "rifle");
         assert_eq!(t.class(0), "");
 
         // Different weapons with unrelated ammo names never share either index.
-        let colt = weapon_index("colt_mp").unwrap();
+        let colt = V1.weapon_index("colt_mp").unwrap();
         assert_ne!(
             t.get(carbine).unwrap().ammo_index,
             t.get(colt).unwrap().ammo_index
@@ -410,20 +447,20 @@ mod tests {
         // bar_mp and bar_slow_mp share `ammoName BAR` (case differs from the
         // lowercased table key) in the shipped weapon files, so they share
         // an ammo index; every other weapon-def field still parses per file.
-        let bar = t.get(weapon_index("bar_mp").unwrap()).unwrap();
-        let bar_slow = t.get(weapon_index("bar_slow_mp").unwrap()).unwrap();
+        let bar = t.get(V1.weapon_index("bar_mp").unwrap()).unwrap();
+        let bar_slow = t.get(V1.weapon_index("bar_slow_mp").unwrap()).unwrap();
         assert_eq!(bar.ammo_index, bar_slow.ammo_index);
 
         // The index namespaces are per-name, not per-weapon: the distinct
         // count never exceeds the distinct lowercased name count.
         let names: std::collections::HashSet<_> = crate::configstrings::WEAPON_LIST
             .split(' ')
-            .filter_map(|w| t.get(weapon_index(w).unwrap()))
+            .filter_map(|w| t.get(V1.weapon_index(w).unwrap()))
             .map(|d| d.ammo_name.to_ascii_lowercase())
             .collect();
         let indexes: std::collections::HashSet<_> = crate::configstrings::WEAPON_LIST
             .split(' ')
-            .filter_map(|w| t.get(weapon_index(w).unwrap()))
+            .filter_map(|w| t.get(V1.weapon_index(w).unwrap()))
             .map(|d| d.ammo_index)
             .collect();
         assert_eq!(names.len(), indexes.len());

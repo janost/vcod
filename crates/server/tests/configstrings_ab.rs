@@ -18,24 +18,18 @@ use std::collections::BTreeMap;
 /// checksum lists. `crates/server/tests/connect.rs` covers both.
 const STRUCTURAL_SKIP: &[usize] = &[0, 1];
 
-/// Slots stage 3 knowingly does not reproduce, each with the reason. Empty
+/// Slots vcod knowingly does not reproduce, each with the reason. Empty
 /// is the goal. A gap that starts matching fails the guard below, so this
 /// list cannot rot into a lie.
 const GAPS: &[(usize, &str)] = &[];
 
 fn cfg(map: &str, gametype: &str) -> vcod_server::ServerConfig {
     vcod_server::ServerConfig {
-        map: map.into(),
-        hostname: "vcod test".into(),
         // The capture was taken at 8. `sv_maxclients` reaches the script
         // through the cvar table, so it has to match or the diff moves for
         // a reason that is not a bug.
         max_clients: 8,
-        gametype: gametype.into(),
-        test_entities: 0,
-        trace: false,
-        bots: 0,
-        bots_shoot: false,
+        ..crate::common::cfg(map, gametype)
     }
 }
 
@@ -185,7 +179,7 @@ fn the_configstring_table_matches_retail_on_mp_carentan() {
 
 /// The other stock gametype the map-cycle gates run under, whose bootstrap
 /// precaches a different string set and only when `game["gamestarted"]` is
-/// unset (`tests/restart_carry.rs` is what checks the restart after it).
+/// unset (`roundrestart_ab.rs` checks the restart after it).
 #[test]
 fn the_configstring_table_matches_retail_on_mp_carentan_sd() {
     check("mp_carentan", "sd");

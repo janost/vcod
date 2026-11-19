@@ -4,6 +4,7 @@
 
 use super::cmd::{self, EventRing};
 use super::{PlayerState, Stance, weapon};
+use crate::fguard;
 use crate::movetrace::MoveWorld;
 use crate::net::flags::{
     EF_CROUCH, EF_IN_VEHICLE_V22, EF_MOUNTED, EF_MOUNTED_DUCK, EF_MOUNTED_PRONE, EF_MOUNTED_STAND,
@@ -12,7 +13,7 @@ use crate::net::flags::{
     PMF_PRONE_BLOCKED, PMF_PRONE_DIVE, PMF_RESPAWNED, PMF_SPRINT_V22, PMF_WINDED_V22,
 };
 use crate::net::msg::{self, UserCmd};
-use crate::net::protocol::{ENTITYNUM_NONE, Protocol};
+use crate::net::protocol::{Cod1Wire, ENTITYNUM_NONE};
 use crate::weapon::WeaponDef;
 use glam::Vec3;
 
@@ -52,9 +53,11 @@ pub fn on_foot(pm_type: i32) -> bool {
 /// whose `server_time` equals `commandTime`, which is the only source for the
 /// few sim fields the wire does not carry; `None` leaves them at their spawn
 /// values.
-pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>) -> Predicted {
+pub fn from_wire(p: &Cod1Wire, w: &msg::PlayerState, last_cmd: Option<&UserCmd>) -> Predicted {
     let int = |name: &str| w.field_i32(p, name);
-    let float = |name: &str| w.field_f32(p, name);
+    // A NaN or infinite float is no retail state: 0, as the guards in
+    // `crate::fguard` expect.
+    let float = |name: &str| fguard::finite(w.field_f32(p, name));
     // The wire reads signed fields back unsigned.
     let s16 = |name: &str| i32::from(int(name) as u16 as i16);
     let s8 = |name: &str| i32::from(int(name) as u8 as i8);
@@ -70,8 +73,8 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
     let pm_type = int("pm_type");
     let command_time = int("commandTime");
     let view_lerp_start = int("viewHeightLerpTime");
-    let view = w.viewangles(p);
-    let mut ps = PlayerState::spawn(Vec3::from(w.origin(p)), view[1]);
+    let view = w.viewangles(p).map(fguard::finite);
+    let mut ps = PlayerState::spawn(Vec3::from(w.origin(p).map(fguard::finite)), view[1]);
     ps.rules = super::MoveRules::for_protocol(p);
     ps.pitch = (-view[0]).to_radians();
     ps.velocity = vec3("velocity");
@@ -151,7 +154,7 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
     ps.view_lerp_target = s8("viewHeightLerpTarget") as f32;
     ps.view_lerp_down = int("viewHeightLerpDown") != 0;
     ps.view_height_cur = float("viewHeightCurrent");
-    ps.view_lerp_ms = (view_lerp_start != 0).then(|| command_time - view_lerp_start);
+    ps.view_lerp_ms = (view_lerp_start != 0).then(|| command_time.wrapping_sub(view_lerp_start));
 
     ps.weapon = int("weapon") as u8;
     ps.weapons_held = u64_pair("weapons[0]", "weapons[1]");
@@ -166,7 +169,7 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
     ps.ammo = w.arrays.ammo;
     ps.ammoclip = w.arrays.ammoclip;
     ps.weapon_rechamber = u64_pair("weaponrechamber[0]", "weaponrechamber[1]");
-    ps.weapon_pos_frac = float("fWeaponPosFrac");
+    ps.weapon_pos_frac = float("fWeaponPosFrac").clamp(0.0, 1.0);
     ps.aim_spread_scale = float("aimSpreadScale");
     ps.grenade_time_left_ms = s16("grenadeTimeLeft");
     ps.linked = pm_type == PM_NORMAL_LINKED || pm_type == PM_DEAD_LINKED;
@@ -667,5 +670,98 @@ mod tests {
         assert_eq!(pred.ring.events[3], weapon::EV_FIRE_WEAPON);
         assert_eq!(pred.ring.parms[3], 0);
         assert_eq!(pred.ps.ammoclip[1], 2);
+    }
+
+    /// Wire clocks at the edges of an i32 wrap as retail's do: a stance
+    /// leg begun at -1 under a commandTime of i32::MAX, and a fatigue
+    /// stamp near i32::MAX, predict without an overflow panic (BUG-100).
+    #[test]
+    fn extreme_wire_clocks_predict_without_an_overflow() {
+        use crate::net::protocol::{PROTOCOL_V6, PROTOCOL_V22};
+        let world = test_world(&[]);
+        let world = MoveWorld::bare(&world);
+        for p in [&PROTOCOL_V1, &PROTOCOL_V6, &PROTOCOL_V22] {
+            for (ct, lerp) in [(i32::MAX, -1), (i32::MIN, 1)] {
+                let mut w = msg::PlayerState::null(p);
+                let mut set = |name: &str, v: i32| {
+                    if let Some(i) = msg::PlayerState::field_index(p, name) {
+                        w.fields[i] = v;
+                    }
+                };
+                set("eFlags", 16 | EF_CROUCH);
+                set("pm_flags", PMF_DUCKED);
+                set("groundEntityNum", ENTITYNUM_WORLD as i32);
+                set("viewHeightCurrent", 50.0f32.to_bits() as i32);
+                set("viewHeightLerpTarget", 40);
+                set("viewHeightLerpTime", lerp);
+                set("commandTime", ct);
+                set("iFatigueSoundTime", i32::MAX - 100);
+                set("speed", 190);
+                set("gravity", 800);
+                let mut pred = from_wire(p, &w, None);
+                pred.ps.winded = true;
+                let mut t = ct;
+                for _ in 0..4 {
+                    t = t.wrapping_add(50);
+                    let c = UserCmd {
+                        wbuttons: msg::WBUTTON_PRONE,
+                        ..cmd(t)
+                    };
+                    run_cmd(&mut pred, &c, &world, &[]);
+                }
+            }
+        }
+    }
+
+    /// Raw float fields a server should never send (NaN, infinities,
+    /// 1e30) on a prone player, under each CoD1 wire: every cmd returns
+    /// (SEC-062).
+    #[test]
+    fn hostile_playerstate_floats_predict_without_spinning() {
+        use crate::net::protocol::{PROTOCOL_V6, PROTOCOL_V22};
+        let world = test_world(&[]);
+        let world = MoveWorld::bare(&world);
+        for p in [&PROTOCOL_V1, &PROTOCOL_V6, &PROTOCOL_V22] {
+            for bad in [
+                f32::NAN,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                1e30,
+                -1e30,
+                1e10,
+            ] {
+                let mut w = msg::PlayerState::null(p);
+                let mut set = |name: &str, v: i32| {
+                    if let Some(i) = msg::PlayerState::field_index(p, name) {
+                        w.fields[i] = v;
+                    }
+                };
+                set("eFlags", 16 | EF_PRONE);
+                set("pm_flags", PMF_PRONE);
+                set("groundEntityNum", ENTITYNUM_WORLD as i32);
+                set("commandTime", 5000);
+                set("speed", 190);
+                set("gravity", 800);
+                for name in [
+                    "proneDirection",
+                    "proneDirectionPitch",
+                    "proneTorsoPitch",
+                    "viewangles[0]",
+                    "viewangles[1]",
+                    "leanf",
+                    "fWeaponPosFrac",
+                    "viewHeightCurrent",
+                ] {
+                    set(name, bad.to_bits() as i32);
+                }
+                let mut pred = from_wire(p, &w, None);
+                for (t, fwd) in [(5050, 0), (5100, 127), (5150, 0)] {
+                    let mut c = cmd(t);
+                    c.forward = fwd;
+                    c.angles = [0, 16384, 0];
+                    run_cmd(&mut pred, &c, &world, &[]);
+                }
+            }
+        }
     }
 }

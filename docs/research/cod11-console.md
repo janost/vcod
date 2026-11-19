@@ -126,7 +126,9 @@ the strings `bind <key> [command] : attach a command to a key` (`0x5678f0`),
 `"%s" is not bound` (`0x5678cc`). The key names are the `KEY_*` table and its
 short twin at `0x567a34`..`0x5682ec`. The config writer's formats are
 `bind %s "%s"` (`0x5678b0`) and `seta %s "%s"` (`0x562134`), after an
-`unbindall` (`0x5678c0`); a cvar is printed as `"%s" is:"%s^7"
+`unbindall` (`0x5678c0`). vcod writes the same lines with `"`, CR and LF
+dropped from the value, so a server's forced value cannot add a line to the
+config; vcod's rule. A cvar is printed as `"%s" is:"%s^7"
 default:"%s^7"` (`0x56225c`) and `cvarlist` ends on `%i total cvars`.
 
 VERIFIED: on a key-up whose bind starts with `+`, the key handler formats

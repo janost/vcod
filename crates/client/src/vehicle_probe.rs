@@ -16,7 +16,7 @@
 
 use std::time::Instant;
 use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, BUTTON_MELEE, BUTTON_USE, UserCmd};
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::net::snapshot::Snapshot;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -465,7 +465,7 @@ impl VehicleProbe {
         now: Instant,
         spawned: bool,
         newest: Option<&Snapshot>,
-        p: &Protocol,
+        p: &Cod1Wire,
     ) -> UserCmd {
         let mut cmd = UserCmd::default();
         let view = newest.map(|s| s.ps.viewangles(p));
@@ -573,7 +573,7 @@ impl VehicleProbe {
 
     /// A `VEH` line per vehicle, per player and per missile, once per
     /// snapshot.
-    pub fn report(&mut self, s: &Snapshot, p: &Protocol) {
+    pub fn report(&mut self, s: &Snapshot, p: &Cod1Wire) {
         if self.last_snap == Some(s.message_num) {
             return;
         }
@@ -757,4 +757,72 @@ pub fn direct_input(cmd: &str) -> Option<DirectInput> {
 /// ANGLE2SHORT: the wire's 16 bits over a full turn.
 fn deg_to_short(deg: f32) -> i32 {
     (deg * 65536.0 / 360.0).round() as i32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use vcod_common::net::Msec;
+    use vcod_common::net::msg::{EntityState, PlayerState};
+    use vcod_common::net::protocol::PROTOCOL_V22;
+
+    #[test]
+    fn direct_input_reads_three_or_five_fields() {
+        let d = direct_input("f \"PROBE_IN 1 4 -127\"").unwrap();
+        assert_eq!(
+            (d.buttons, d.wbuttons, d.up, d.forward, d.right),
+            (1, 4, -127, 0, 0)
+        );
+        let d = direct_input("f \"PROBE_IN 0 0 0 127 -64\"").unwrap();
+        assert_eq!((d.forward, d.right), (127, -64));
+        assert!(
+            direct_input("f \"PROBE_IN 0 0 0 127\"").is_none(),
+            "forward without right"
+        );
+        assert!(direct_input("f \"PROBE_IN 0 x 0\"").is_none());
+        assert!(
+            direct_input("f \"PROBE_IN 300 0 0\"").is_none(),
+            "past a byte"
+        );
+        assert!(direct_input("e \"PROBE_IN 0 0 0\"").is_none());
+    }
+
+    static SCRIPT: &[Step] = &[
+        step("settle", 100, 10, 0, 0, [0.0, 0.0]),
+        step(CREW, 1000, 0, 0, 0, [0.0, 0.0]),
+        step("ahead", 1000, 127, 0, 0, [0.0, 90.0]),
+    ];
+
+    /// A crew gate ends early once the vehicle's six seats are taken, and
+    /// the next step's view ramps from there.
+    #[test]
+    fn a_crew_gate_ends_once_the_seats_are_taken() {
+        let p = &PROTOCOL_V22;
+        let mut tank = EntityState::null(p);
+        let set = |e: &mut EntityState, n: &str, v: i32| {
+            e.fields[EntityState::field_index(p, n).expect(n)] = v;
+        };
+        set(&mut tank, "eType", vcod_common::net::flags::ET_VEHICLE_V22);
+        set(&mut tank, "animMovetype", 6);
+        let snap = Snapshot {
+            server_time: Msec::ZERO,
+            message_num: 0,
+            delta_num: -1,
+            snap_flags: 0,
+            ps: PlayerState::null(p),
+            entities: [(70, tank)].into(),
+            clients: Default::default(),
+            valid: true,
+        };
+        let mut v = VehicleProbe::with(SCRIPT, false);
+        let t0 = Instant::now();
+        let at = |ms| t0 + Duration::from_millis(ms);
+        assert_eq!(v.cmd(t0, true, None, p).forward, 10);
+        assert_eq!(v.cmd(at(50), true, None, p).forward, 10);
+        let c = v.cmd(at(150), true, Some(&snap), p);
+        assert_eq!((v.skipped, c.forward, c.angles[1]), (950, 127, 0));
+        let c = v.cmd(at(650), true, Some(&snap), p);
+        assert_eq!(c.angles[1], deg_to_short(45.0));
+    }
 }

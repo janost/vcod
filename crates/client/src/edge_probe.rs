@@ -33,7 +33,7 @@ pub enum EdgeMode {
     /// Hold forward the whole run and print every snapshot's origin
     /// (`EDGE origin`): beside `client-probes/probe_specspawn`, whether a
     /// spectator spawn's think runs the client's last cmd
-    /// (cod15-movement.md 4, "The spawn's lie-down").
+    /// (cod15-movement.md 4.2, "The spawn's lie-down").
     SpecFly,
     /// Stand idle and print an `EDGE ents` line whenever the snapshot's
     /// entity list changes, each entity as `num:eType`: what rides past the
@@ -189,7 +189,10 @@ pub fn run(addr: &str, mode: EdgeMode, secs: u64, cmd_ms: u64) -> anyhow::Result
                 // packet with that snapshot's frame time.
                 EdgeMode::Silence if fresh_snapshot => {
                     client.send_frame(&UserCmd::default());
-                    let t = client.snapshots().newest().map_or(0, |s| s.server_time);
+                    let t = client
+                        .snapshots()
+                        .newest()
+                        .map_or(0, |s| s.server_time.raw());
                     silent_after = Some(t);
                     println!("EDGE silent t={} after_serverTime={t}", ms(now));
                 }

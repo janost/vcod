@@ -1,35 +1,38 @@
 //! The server lists behind `joinserver.menu`'s list box, one per source as
 //! `ui_netSource` numbers them: Local (a `getinfo` broadcast), Internet (the
 //! master's list) and Favorites (`servercache.dat`). Every listed address
-//! gets a `getinfo` ping. Nothing blocks the frame: the master's name
-//! resolves on a helper thread and the socket is non-blocking
+//! gets a `getinfo` ping. Nothing blocks the frame: the socket, the
+//! master's resolve and the broadcast are [`ServerScan`]'s
 //! (docs/research/cod11-front-end.md, "Master query", "Local servers",
 //! "Favourites").
 
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use vcod_common::net::connectionless::{build_oob, parse_oob};
 use vcod_common::net::master::{
-    GETINFO, LAN_PORTS, LAN_ROUNDS, Master, ServerInfo, getservers, master_send_allowed,
-    parse_address, parse_servers_response,
+    GETINFO, LAN_PORTS, Master, ServerInfo, parse_address, parse_servers_response,
 };
-use vcod_common::net::server_cache::{self, Entry, MAX_FAVORITES};
+use vcod_common::net::server_cache::{self, Entry, Layout};
 use vcod_common::net::wire::Transport;
 
-/// Pings in flight at once, and how long one waits for its reply. vcod's
-/// numbers, not measured.
-const MAX_IN_FLIGHT: usize = 32;
-const PING_TIMEOUT: Duration = Duration::from_millis(1500);
-/// How long the master gets before the refresh gives up on it.
-const MASTER_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long a Local refresh listens for broadcast answers: the UI's refresh
-/// time for source 0 (ui_mp_x86.dll 0x4000eb5b).
-const LAN_WINDOW: Duration = Duration::from_millis(1000);
+use super::scan::{MASTER_TIMEOUT, Reply, ServerScan, write_cache};
+
+/// `MAX_PINGREQUESTS`: the ping slots (CoDMP.exe 0x15ca660, 16 of
+/// `0x41c` bytes).
+const MAX_IN_FLIGHT: usize = 16;
+/// `cl_maxPing`'s default and floor (CoDMP.exe 0x41228d, 0x413a7d), ms.
+pub const MAX_PING_DEFAULT: u32 = 800;
+const MAX_PING_FLOOR: u32 = 100;
 /// `MAX_OTHER_SERVERS`, the Local list's cap.
 const MAX_LOCAL: usize = 0x80;
+
+/// The Internet list's cap for a master protocol: 1.1's 2048 entries and
+/// the `0x800` addresses its overflow block holds (`CL_ServersResponsePacket`
+/// 0x4107b0), else the 20000 of 1.5, UO and CoD2 (front-end doc 8).
+fn max_internet(protocol: u32) -> usize {
+    if protocol == 1 { 2048 + 0x800 } else { 20000 }
+}
 
 /// The master an Internet refresh asks and the one protocol it asks for:
 /// the install's, never another the client could also join.
@@ -168,13 +171,8 @@ pub enum AddFavorite {
 }
 
 pub struct Browser {
-    socket: Option<UdpSocket>,
-    resolve: Option<mpsc::Receiver<Option<SocketAddr>>>,
-    /// The master's resolved address, waiting on the rate limit
-    /// ([`master_send_allowed`]) until its `getservers` goes.
-    master_due: Option<SocketAddr>,
-    /// The address the `getservers` went to; its answers are taken.
-    master: Option<SocketAddr>,
+    /// A fresh socket each refresh, closed when the refresh ends.
+    scan: ServerScan,
     /// The install's master and protocol; `None` asks no master.
     pub master_query: Option<MasterQuery>,
     started: Option<Instant>,
@@ -189,22 +187,25 @@ pub struct Browser {
     pub filter: Filter,
     /// Where a Local refresh sends its broadcasts; tests empty it.
     pub(super) lan_targets: Vec<SocketAddrV4>,
-    /// `servercache.dat`; `None` keeps favourites in memory only.
-    cache: Option<PathBuf>,
+    /// The game's server cache and its layout; `None` keeps favourites in
+    /// memory only, as does a file that is not a cache of that layout.
+    cache: Option<(PathBuf, Layout)>,
+    /// The cached favourites as read, by address: a save writes their
+    /// bytes back with what this run learnt.
+    cached: std::collections::HashMap<SocketAddrV4, Entry>,
     /// Favourites vcod cannot address (IPX, loopback), written back as read.
     foreign: Vec<Entry>,
     /// When each source's last refresh started, local time
     /// (`ui_lastServerRefresh_<source>`).
     pub last_refresh: [Option<jiff::civil::DateTime>; 3],
+    /// `cl_maxPing`, ms: how long a ping waits for its reply.
+    pub max_ping: u32,
 }
 
 impl Default for Browser {
     fn default() -> Self {
         Browser {
-            socket: None,
-            resolve: None,
-            master_due: None,
-            master: None,
+            scan: ServerScan::new("browser"),
             master_query: Some(MasterQuery::of(
                 &vcod_common::net::protocol::PROTOCOL_V1.transport,
             )),
@@ -220,41 +221,53 @@ impl Default for Browser {
                 .map(|&p| SocketAddrV4::new(Ipv4Addr::BROADCAST, p))
                 .collect(),
             cache: None,
+            cached: Default::default(),
             foreign: Vec::new(),
             last_refresh: [None; 3],
+            max_ping: MAX_PING_DEFAULT,
         }
     }
 }
 
-fn open_socket() -> Option<UdpSocket> {
-    UdpSocket::bind("0.0.0.0:0")
-        .and_then(|s| {
-            s.set_nonblocking(true)?;
-            s.set_broadcast(true)?;
-            Ok(s)
-        })
-        .map_err(|e| log::warn!("browser: cannot open a socket: {e}"))
-        .ok()
-}
-
 impl Browser {
-    /// A browser whose favourites live in `cache`, read now as
-    /// `LAN_LoadCachedServers` reads it at UI start.
-    pub fn with_cache(cache: PathBuf) -> Browser {
+    /// A browser whose favourites live in `cache`, a server cache of
+    /// `layout`, read now as `LAN_LoadCachedServers` reads it at UI start.
+    /// A file that is not one, or that cannot be read, is never written.
+    pub fn with_cache(cache: PathBuf, layout: Layout) -> Browser {
         let mut b = Browser::default();
-        if let Ok(bytes) = std::fs::read(&cache) {
-            for e in server_cache::read_favorites(&bytes) {
-                match e.addr() {
-                    Some(addr) => b.lists[Source::Favorites as usize].push(Server {
+        let entries = match std::fs::read(&cache) {
+            Ok(bytes) => server_cache::read_favorites(layout, &bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(Vec::new()),
+            Err(_) => None,
+        };
+        let Some(entries) = entries else {
+            log::warn!(
+                "browser: {} is not a {layout:?} server cache; favourites stay in memory",
+                cache.display()
+            );
+            return b;
+        };
+        for e in entries {
+            match e.addr() {
+                Some(addr) => {
+                    b.lists[Source::Favorites as usize].push(Server {
                         name: e.hostname(),
                         ..Server::new(addr)
-                    }),
-                    None => b.foreign.push(e),
+                    });
+                    b.cached.insert(addr, e);
                 }
+                None => b.foreign.push(e),
             }
         }
-        b.cache = Some(cache);
+        b.cache = Some((cache, layout));
         b
+    }
+
+    /// How many favourites the cache can hold and still load.
+    fn max_favorites(&self) -> usize {
+        self.cache
+            .as_ref()
+            .map_or(server_cache::MAX_FAVORITES, |(_, l)| l.max_favorites())
     }
 
     fn list(&self) -> &Vec<Server> {
@@ -263,6 +276,19 @@ impl Browser {
 
     fn list_mut(&mut self) -> &mut Vec<Server> {
         &mut self.lists[self.source as usize]
+    }
+
+    /// A master's addresses not listed yet, up to [`max_internet`].
+    fn add_master_servers(&mut self, addrs: impl IntoIterator<Item = SocketAddrV4>) {
+        let cap = max_internet(self.master_query.map_or(1, |q| q.protocol));
+        for addr in addrs {
+            if self.list().len() >= cap {
+                break;
+            }
+            if !self.list().iter().any(|s| s.addr == addr) {
+                self.list_mut().push(Server::new(addr));
+            }
+        }
     }
 
     /// A new source: stops the refresh running for the old one, and starts
@@ -283,44 +309,28 @@ impl Browser {
     /// for Internet, a broadcast for Local; favourites are pinged again.
     pub fn refresh(&mut self) {
         self.stamp();
-        let Some(socket) = open_socket() else {
+        if !self.scan.reopen() {
             self.status = Status::Failed;
             return;
-        };
+        }
         let now = Instant::now();
-        self.resolve = None;
-        self.master_due = None;
-        self.master = None;
+        self.scan.forget_master();
         self.started = Some(now);
         match (self.source, self.master_query) {
             (Source::Internet, None) => {
                 log::info!("browser: no master query for this game; use Local or a favourite");
                 self.list_mut().clear();
                 self.status = Status::Failed;
-                return;
+                self.scan.close();
             }
             (Source::Internet, Some(q)) => {
-                let (tx, rx) = mpsc::channel();
-                std::thread::spawn(move || {
-                    let addr = (q.master.host, q.master.port)
-                        .to_socket_addrs()
-                        .ok()
-                        .and_then(|mut a| a.find(SocketAddr::is_ipv4));
-                    let _ = tx.send(addr);
-                });
                 self.list_mut().clear();
-                self.resolve = Some(rx);
+                self.scan.ask_master(q.master.host, q.master.port);
                 self.status = Status::Master;
             }
             (Source::Local, _) => {
                 self.list_mut().clear();
-                for _ in 0..LAN_ROUNDS {
-                    for &to in &self.lan_targets {
-                        if let Err(e) = socket.send_to(&build_oob(GETINFO), to) {
-                            log::warn!("browser: broadcast to {to}: {e}");
-                        }
-                    }
-                }
+                self.scan.broadcast(&self.lan_targets, log::Level::Warn);
                 self.status = Status::Pinging;
             }
             (Source::Favorites, _) => {
@@ -328,7 +338,6 @@ impl Browser {
                 self.status = Status::Pinging;
             }
         }
-        self.socket = Some(socket);
     }
 
     /// `UI_StartServerRefresh` (ui_mp_x86.dll 0x4000ea90) dates the source
@@ -350,19 +359,19 @@ impl Browser {
             return self.refresh();
         }
         self.stamp();
-        let Some(socket) = open_socket() else { return };
+        if !self.scan.reopen() {
+            return;
+        }
         self.reset_pings();
-        self.socket = Some(socket);
-        self.resolve = None;
+        self.scan.stop_master();
         self.started = Some(Instant::now());
         self.status = Status::Pinging;
     }
 
     /// `stopRefresh` / `closeJoin`: stops pinging, keeps what came back.
     pub fn stop(&mut self) {
-        self.socket = None;
-        self.resolve = None;
-        self.master_due = None;
+        self.scan.close();
+        self.scan.stop_master();
         if matches!(self.status, Status::Master | Status::Pinging) {
             self.finish();
         }
@@ -373,10 +382,10 @@ impl Browser {
     fn finish(&mut self) {
         let rows = self.rows();
         let listed = rows.len();
-        let players: u32 = rows
+        let players: u64 = rows
             .iter()
             .filter_map(|s| s.info.as_ref())
-            .map(|i| i.clients)
+            .map(|i| u64::from(i.clients))
             .sum();
         let hidden = self.list().len().saturating_sub(listed);
         crate::console::log::print(&format!(
@@ -388,7 +397,7 @@ impl Browser {
             ));
         }
         self.status = Status::Done;
-        self.socket = None;
+        self.scan.close();
         if self.source == Source::Favorites {
             self.save();
         }
@@ -396,57 +405,20 @@ impl Browser {
 
     /// Reads replies and sends the next pings; once a frame.
     pub fn poll(&mut self, now: Instant) {
-        if let Some(rx) = &self.resolve
-            && let Ok(addr) = rx.try_recv()
-        {
-            self.resolve = None;
-            match addr {
-                Some(addr) => self.master_due = Some(addr),
-                None => {
-                    let host = self.master_query.map_or("", |q| q.master.host);
-                    log::warn!("browser: cannot resolve {host}");
-                    self.status = Status::Failed;
-                    self.socket = None;
-                }
-            }
+        if !self.scan.poll_master(self.master_query.map(|q| q.protocol)) {
+            self.status = Status::Failed;
+            self.scan.close();
         }
-        // One `getservers` per refresh, sent once the master's host is out
-        // of its last second; a list in several packets is not asked again.
-        if let (Some(addr), Some(socket), Some(q)) =
-            (self.master_due, &self.socket, self.master_query)
-            && master_send_allowed(addr.ip())
-        {
-            log::info!(
-                "browser: requesting protocol {} servers from {addr}",
-                q.protocol
-            );
-            let _ = socket.send_to(&build_oob(&getservers(q.protocol)), addr);
-            self.master_due = None;
-            self.master = Some(addr);
-        }
-        let Some(socket) = self.socket.take() else {
+        if !self.scan.is_open() {
             return;
-        };
-        let mut buf = [0u8; 16384];
-        while let Ok((n, from)) = socket.recv_from(&mut buf) {
-            let Some((cmd, rest)) = parse_oob(&buf[..n]) else {
-                continue;
-            };
-            let SocketAddr::V4(from4) = from else {
-                continue;
-            };
-            match cmd {
-                "getserversResponse" if Some(from) == self.master => {
-                    for addr in parse_servers_response(rest) {
-                        if !self.list().iter().any(|s| s.addr == addr) {
-                            self.list_mut().push(Server::new(addr));
-                        }
-                    }
+        }
+        for reply in self.scan.recv() {
+            match reply {
+                Reply::Servers(body) => {
+                    self.add_master_servers(parse_servers_response(&body));
                     self.status = Status::Pinging;
                 }
-                "infoResponse" => {
-                    // Latin-1, as the font indexes glyphs by byte.
-                    let text = vcod_common::text::latin1(rest);
+                Reply::Info(from4, text) => {
                     let info = ServerInfo::parse(&text);
                     // The master lists by what a server told it; one that
                     // answers with another protocol is dropped.
@@ -458,104 +430,137 @@ impl Browser {
                         self.list_mut().retain(|s| s.addr != from4);
                         continue;
                     }
-                    let started = self.started;
                     let local = self.source == Source::Local;
                     let list = self.list_mut();
-                    // A broadcast's answers are new servers, timed from the
-                    // broadcast (`CL_ServerInfoPacket` adds them to the
-                    // Local list).
-                    if local && !list.iter().any(|s| s.addr == from4) && list.len() < MAX_LOCAL {
-                        let mut s = Server::new(from4);
-                        s.sent = started;
-                        list.push(s);
+                    // An answer no ping waits on is a broadcast's: on Local,
+                    // `CL_ServerInfoPacket` adds its address unanswered, to
+                    // be pinged as any other (CoDMP.exe, front-end doc 7).
+                    let pinged = list
+                        .iter()
+                        .any(|s| s.addr == from4 && s.sent.is_some() && s.info.is_none());
+                    if local && !pinged {
+                        if !list.iter().any(|s| s.addr == from4) && list.len() < MAX_LOCAL {
+                            list.push(Server::new(from4));
+                        }
+                        continue;
                     }
+                    // The round trip plus one, as `CL_ServerInfoPacket`
+                    // stores it (0x412d4a).
                     if let Some(s) = list.iter_mut().find(|s| s.addr == from4)
                         && let Some(sent) = s.sent
                         && s.info.is_none()
+                        && !s.timed_out
                     {
                         s.name.clone_from(&info.hostname);
                         s.info = Some(info);
-                        s.ping = Some((now - sent).as_millis().max(1) as u32);
+                        s.ping = Some((now - sent).as_millis() as u32 + 1);
                     }
                 }
-                _ => {}
+                Reply::Status(..) => {}
             }
         }
-        self.socket = Some(socket);
         let since = self.started.map_or(Duration::ZERO, |t| now - t);
         if self.status == Status::Master && since > MASTER_TIMEOUT {
             log::warn!("browser: no answer from the master");
             self.status = Status::Failed;
-            self.socket = None;
+            self.scan.close();
             return;
         }
         if self.status != Status::Pinging {
             return;
         }
-        let socket = self.socket.take().unwrap();
-        let mut in_flight = 0;
-        for s in self.list_mut().iter_mut() {
-            if let Some(sent) = s.sent
-                && s.info.is_none()
-                && !s.timed_out
-            {
-                if now - sent > PING_TIMEOUT {
-                    s.timed_out = true;
-                } else {
-                    in_flight += 1;
-                }
+        // `CL_UpdateVisiblePings` (0x413de0), once a frame: unpinged
+        // servers into the free slots, then each slot's reply or timeout
+        // (`CL_GetPing`: past `cl_maxPing` the server keeps ping 0 and
+        // stays hidden, 0x413a8d). It ends the refresh once a call finds
+        // nothing to do; Local waits while its list is empty
+        // (`UI_DoServerRefresh` 0x4000ea00).
+        let waiting = |s: &Server| s.sent.is_some() && s.info.is_none() && !s.timed_out;
+        let busy = self.list().iter().filter(|s| waiting(s)).count();
+        let free = MAX_IN_FLIGHT.saturating_sub(busy);
+        let src = self.source as usize;
+        let sent = (self.lists[src].iter_mut())
+            .filter(|s| s.sent.is_none())
+            .take(free)
+            .map(|s| {
+                self.scan.send(GETINFO, s.addr);
+                s.sent = Some(now);
+            })
+            .count();
+        let acted = busy + sent > 0;
+        let max_ping = Duration::from_millis(self.max_ping.max(MAX_PING_FLOOR).into());
+        for s in self.list_mut().iter_mut().filter(|s| waiting(s)) {
+            if now - s.sent.unwrap() >= max_ping {
+                s.timed_out = true;
             }
         }
-        for s in self.list_mut().iter_mut().filter(|s| s.sent.is_none()) {
-            if in_flight >= MAX_IN_FLIGHT {
-                break;
-            }
-            let _ = socket.send_to(&build_oob(GETINFO), s.addr);
-            s.sent = Some(now);
-            in_flight += 1;
-        }
-        self.socket = Some(socket);
-        let listening = self.source == Source::Local && since < LAN_WINDOW;
-        if in_flight == 0 && !listening {
+        let wait = self.source == Source::Local && self.list().is_empty();
+        if !acted && !wait {
             self.finish();
         }
+    }
+
+    /// The servers the filter keeps, in the list's order.
+    fn filtered(&self) -> impl Iterator<Item = &Server> {
+        let all = self.source == Source::Favorites;
+        let blank = ServerInfo::default();
+        self.list().iter().filter(move |s| {
+            (all || s.info.is_some()) && self.filter.passes(s.info.as_ref().unwrap_or(&blank))
+        })
+    }
+
+    /// `rows().len()`, without the sort.
+    pub fn row_count(&self) -> usize {
+        self.filtered().count()
+    }
+
+    /// The row for `addr`, without the sort.
+    pub fn row(&self, addr: SocketAddrV4) -> Option<&Server> {
+        self.filtered().find(|s| s.addr == addr)
     }
 
     /// The servers the list shows, in display order: those that answered
     /// (every favourite, answered or not) that pass the filter.
     pub fn rows(&self) -> Vec<&Server> {
-        let all = self.source == Source::Favorites;
         let blank = ServerInfo::default();
-        let mut rows: Vec<&Server> = self
-            .list()
-            .iter()
-            .filter(|s| {
-                (all || s.info.is_some()) && self.filter.passes(s.info.as_ref().unwrap_or(&blank))
-            })
-            .collect();
-        if let Some(&col) = self.sort.and_then(|c| self.columns.get(c)) {
-            rows.sort_by(|a, b| {
-                let ia = a.info.as_ref().unwrap_or(&blank);
-                let ib = b.info.as_ref().unwrap_or(&blank);
+        let mut rows: Vec<&Server> = self.filtered().collect();
+        let Some(&col) = self.sort.and_then(|c| self.columns.get(c)) else {
+            return rows;
+        };
+        fn of<'a>(s: &'a Server, blank: &'a ServerInfo) -> &'a ServerInfo {
+            s.info.as_ref().unwrap_or(blank)
+        }
+        // A string key is built once a row, not twice a comparison; both
+        // sorts are stable, so ties keep the list's order either way.
+        match col {
+            Column::Name => {
+                rows.sort_by_cached_key(|s| strip(&of(s, &blank).hostname).to_lowercase())
+            }
+            Column::Map => rows.sort_by_cached_key(|s| of(s, &blank).mapname.to_lowercase()),
+            Column::GameType => rows.sort_by_cached_key(|s| strip(&of(s, &blank).gametype)),
+            _ => rows.sort_by(|a, b| {
+                let (ia, ib) = (of(a, &blank), of(b, &blank));
                 match col {
-                    Column::Name => strip(&ia.hostname)
-                        .to_lowercase()
-                        .cmp(&strip(&ib.hostname).to_lowercase()),
-                    Column::Map => ia.mapname.to_lowercase().cmp(&ib.mapname.to_lowercase()),
                     Column::Players => ib.clients.cmp(&ia.clients),
-                    Column::GameType => strip(&ia.gametype).cmp(&strip(&ib.gametype)),
                     Column::Ping => a.ping.cmp(&b.ping),
-                    // 1.5's `LAN_CompareServers` (CoDMP.exe 0x419c00) keys 1, 6, 7.
-                    Column::Hardware | Column::Hardware2 => ia.hardware.cmp(&ib.hardware),
+                    // 1.5's `LAN_CompareServers` (CoDMP.exe 0x419c00) keys 1, 6, 7;
+                    // an unknown `hw` (0) after every known one (0x419c4d).
+                    Column::Hardware => {
+                        let (ha, hb) = (ia.hardware as u8, ib.hardware as u8);
+                        (ha == 0).cmp(&(hb == 0)).then(ha.cmp(&hb))
+                    }
+                    Column::Hardware2 => ia.hardware.cmp(&ib.hardware),
                     Column::PunkBuster | Column::PunkBusterText => {
                         ia.punkbuster.cmp(&ib.punkbuster)
                     }
                     Column::Voice => ia.voice.cmp(&ib.voice),
                     Column::Pure => ia.pure.cmp(&ib.pure),
                     Column::Mod => ia.modded.cmp(&ib.modded),
-                    Column::Password => std::cmp::Ordering::Equal,
+                    Column::Name | Column::Map | Column::GameType | Column::Password => {
+                        std::cmp::Ordering::Equal
+                    }
                 }
-            });
+            }),
         }
         rows
     }
@@ -570,8 +575,9 @@ impl Browser {
     /// `LAN_AddServer(AS_FAVORITES, name, address)`: the cap, then the
     /// address, then a duplicate. The cache is written at once.
     pub fn add_favorite(&mut self, name: &str, address: &str) -> AddFavorite {
+        let max = self.max_favorites();
         let favs = &mut self.lists[Source::Favorites as usize];
-        if favs.len() + self.foreign.len() >= MAX_FAVORITES {
+        if favs.len() + self.foreign.len() >= max {
             return AddFavorite::Full;
         }
         let Some(addr) = parse_address(address) else {
@@ -584,6 +590,7 @@ impl Browser {
             name: name.chars().take(31).collect(),
             ..Server::new(addr)
         });
+        self.cached.remove(&addr);
         self.save();
         AddFavorite::Added
     }
@@ -598,14 +605,20 @@ impl Browser {
         }
     }
 
-    /// Writes the favourites into `servercache.dat`, keeping the rest of
-    /// the file.
+    /// Writes the favourites into the server cache, keeping the rest of
+    /// the file. A file that changed into something not a cache, or cannot
+    /// be read, is left alone; the new one goes in whole or not at all.
     fn save(&self) {
-        let Some(path) = &self.cache else { return };
+        let Some((path, layout)) = &self.cache else {
+            return;
+        };
         let mut entries: Vec<Entry> = self.lists[Source::Favorites as usize]
             .iter()
             .map(|s| {
-                let mut e = Entry::new(s.addr, &s.name);
+                let mut e = match self.cached.get(&s.addr) {
+                    Some(e) => e.clone(),
+                    None => Entry::new(*layout, s.addr, &s.name),
+                };
                 if let Some(info) = &s.info {
                     e.set_info(info, s.ping.map_or(-1, |p| p as i32));
                 }
@@ -613,9 +626,25 @@ impl Browser {
             })
             .collect();
         entries.extend(self.foreign.iter().cloned());
-        let old = std::fs::read(path).ok();
-        let bytes = server_cache::write_favorites(old.as_deref(), &entries);
-        if let Err(e) = std::fs::write(path, bytes) {
+        let old = match std::fs::read(path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                log::warn!(
+                    "browser: cannot read {}: {e}; not writing it",
+                    path.display()
+                );
+                return;
+            }
+        };
+        let Some(bytes) = server_cache::write_favorites(*layout, old.as_deref(), &entries) else {
+            log::warn!(
+                "browser: {} is no longer a {layout:?} server cache; not writing it",
+                path.display()
+            );
+            return;
+        };
+        if let Err(e) = write_cache(path, &bytes) {
             log::warn!("browser: cannot write {}: {e}", path.display());
         }
     }
@@ -793,6 +822,15 @@ pub fn column_text(s: &Server, col: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{SocketAddr, UdpSocket};
+    use vcod_common::net::connectionless::build_oob;
+
+    /// A scan with its socket open, as a refresh leaves it.
+    fn opened() -> ServerScan {
+        let mut scan = ServerScan::new("browser");
+        assert!(scan.reopen());
+        scan
+    }
 
     fn server(name: &str, clients: u32, ping: u32) -> Server {
         Server {
@@ -823,6 +861,16 @@ mod tests {
         let s = server("^1Red", 3, 42);
         let cols: Vec<String> = (0..6).map(|c| column_text(&s, c)).collect();
         assert_eq!(cols, ["X", "^1Red", "mp_harbor", "3 (20)", "^7dm", "42"]);
+    }
+
+    /// The end-of-refresh total sums server-sent counts without an
+    /// overflow (BUG-080).
+    #[test]
+    fn the_player_total_of_huge_counts_does_not_overflow() {
+        let mut b = Browser::default();
+        b.lists[0] = vec![server("a", u32::MAX, 10), server("b", u32::MAX, 10)];
+        b.finish();
+        assert_eq!(b.status, Status::Done);
     }
 
     #[test]
@@ -868,6 +916,32 @@ mod tests {
         assert_eq!(names(&b), ["dm"]);
     }
 
+    /// A master that keeps answering fills the Internet list to the size
+    /// retail's arrays hold and no further.
+    #[test]
+    fn the_internet_list_stops_at_retails_size() {
+        let addrs = |from: u32, n: u32| {
+            (from..from + n).map(|i| SocketAddrV4::new(Ipv4Addr::from(0x0a00_0000 + i), 28960))
+        };
+        for (protocol, cap) in [(1, 4096), (6, 20000), (118, 20000)] {
+            let mut b = Browser {
+                source: Source::Internet,
+                master_query: Some(MasterQuery {
+                    master: vcod_common::net::master::COD1_MASTER,
+                    protocol,
+                }),
+                ..Browser::default()
+            };
+            b.add_master_servers(addrs(0, 10));
+            b.add_master_servers(addrs(5, 10));
+            assert_eq!(b.list().len(), 15);
+            for k in 0..100 {
+                b.add_master_servers(addrs(k * 256, 256));
+            }
+            assert_eq!(b.list().len(), cap);
+        }
+    }
+
     /// A loopback "server" that answers `getinfo` with `info`.
     fn answer(sock: &UdpSocket, info: &str) -> SocketAddr {
         let mut buf = [0u8; 256];
@@ -897,13 +971,12 @@ mod tests {
             unreachable!()
         };
         let mut b = Browser {
-            socket: open_socket(),
+            scan: opened(),
             status: Status::Pinging,
             ..Browser::default()
         };
         b.lists[0].push(Server::new(addr));
         let t0 = Instant::now();
-        b.started = Some(t0 - LAN_WINDOW);
         b.poll(t0);
         answer(
             &server_sock,
@@ -912,7 +985,8 @@ mod tests {
         poll_until_done(&mut b, t0 + Duration::from_millis(30));
         assert_eq!(b.status, Status::Done);
         assert_eq!(b.rows().len(), 1);
-        assert_eq!(b.list()[0].ping, Some(30));
+        // The round trip plus one.
+        assert_eq!(b.list()[0].ping, Some(31));
         assert_eq!(column_text(&b.list()[0], 3), "2 (8)");
     }
 
@@ -929,26 +1003,65 @@ mod tests {
             ..Browser::default()
         };
         b.refresh();
-        // Two rounds to each port.
-        answer(&a, "\\hostname\\alpha\\clients\\1\\sv_maxclients\\8");
-        answer(&b_sock, "\\hostname\\beta\\clients\\0\\sv_maxclients\\8");
+        let t0 = b.started.unwrap();
+        // With nobody answering yet the refresh waits, however long.
+        b.poll(t0 + Duration::from_secs(10));
+        assert_eq!(b.status, Status::Pinging);
+        // Two rounds to each port; a broadcast's answer only lists the
+        // address.
+        answer(&a, "\\hostname\\stale\\clients\\1\\sv_maxclients\\8");
+        answer(&b_sock, "\\hostname\\stale\\clients\\0\\sv_maxclients\\8");
         let mut buf = [0u8; 64];
         assert!(a.recv_from(&mut buf).is_ok() && b_sock.recv_from(&mut buf).is_ok());
-        let t0 = b.started.unwrap();
-        b.poll(t0 + Duration::from_millis(100));
         std::thread::sleep(Duration::from_millis(20));
-        b.poll(t0 + Duration::from_millis(100));
-        assert_eq!(b.status, Status::Pinging, "still listening");
-        poll_until_done(&mut b, t0 + LAN_WINDOW);
+        let t1 = t0 + Duration::from_millis(100);
+        b.poll(t1);
+        assert_eq!(b.list().len(), 2);
+        assert!(b.rows().is_empty());
+        // Then each is pinged on its own, which brings its info and ping.
+        answer(&a, "\\hostname\\alpha\\clients\\1\\sv_maxclients\\8");
+        answer(&b_sock, "\\hostname\\beta\\clients\\0\\sv_maxclients\\8");
+        poll_until_done(&mut b, t1 + Duration::from_millis(40));
+        assert_eq!(b.status, Status::Done);
         b.sort = Some(1);
         assert_eq!(names(&b), ["alpha", "beta"]);
+        assert!(b.list().iter().all(|s| s.ping == Some(41)));
+    }
+
+    /// Sixteen pings at once; one unanswered past `cl_maxPing` keeps no
+    /// ping and stays off the list, and the refresh ends.
+    #[test]
+    fn sixteen_pings_fly_at_once_and_a_silent_server_times_out() {
+        let mut b = Browser {
+            scan: opened(),
+            status: Status::Pinging,
+            source: Source::Favorites,
+            ..Browser::default()
+        };
+        for i in 0..20u16 {
+            b.lists[2].push(Server::new(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 9 + i)));
+        }
+        let t0 = Instant::now();
+        b.poll(t0);
+        assert_eq!(b.lists[2].iter().filter(|s| s.sent.is_some()).count(), 16);
+        b.poll(t0 + Duration::from_millis(799));
+        assert_eq!(b.lists[2].iter().filter(|s| s.timed_out).count(), 0);
+        b.poll(t0 + Duration::from_millis(800));
+        assert_eq!(b.lists[2].iter().filter(|s| s.timed_out).count(), 16);
+        let t1 = t0 + Duration::from_millis(801);
+        b.poll(t1);
+        assert_eq!(b.lists[2].iter().filter(|s| s.sent.is_some()).count(), 20);
+        b.poll(t1 + Duration::from_millis(800));
+        b.poll(t1 + Duration::from_millis(801));
+        assert_eq!(b.status, Status::Done);
+        assert!(b.lists[2].iter().all(|s| s.ping.is_none()));
     }
 
     #[test]
     fn favourites_persist_in_the_server_cache() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("servercache.dat");
-        let mut b = Browser::with_cache(path.clone());
+        let mut b = Browser::with_cache(path.clone(), Layout::Cod11);
         assert_eq!(b.add_favorite("Home", "10.0.0.1"), AddFavorite::Added);
         assert_eq!(
             b.add_favorite("Again", "10.0.0.1:28960"),
@@ -964,18 +1077,51 @@ mod tests {
         );
         assert_eq!(
             std::fs::metadata(&path).unwrap().len() as usize,
-            server_cache::FILE_LEN
+            Layout::Cod11.file_len()
         );
-        let mut b = Browser::with_cache(path.clone());
+        let mut b = Browser::with_cache(path.clone(), Layout::Cod11);
         b.source = Source::Favorites;
         // Unanswered favourites still list, by address.
         let rows: Vec<String> = b.rows().iter().map(|s| column_text(s, 1)).collect();
         assert_eq!(rows, ["10.0.0.1:28960", "10.0.0.2:29661"]);
         assert_eq!(b.list()[0].name, "Home");
         b.remove_favorite("10.0.0.1:28960".parse().unwrap());
-        let b = Browser::with_cache(path);
+        let b = Browser::with_cache(path, Layout::Cod11);
         assert_eq!(b.lists[2].len(), 1);
         assert_eq!(b.lists[2][0].name, "Other");
+    }
+
+    /// Each game's own cache: 1.5's and UO's keep a favourite in their
+    /// shape and name, and a file that is not that game's cache is never
+    /// touched.
+    #[test]
+    fn favourites_keep_each_games_cache_and_spare_a_foreign_file() {
+        let dir = tempfile::tempdir().unwrap();
+        for layout in [Layout::Cod15, Layout::Uo, Layout::Cod2] {
+            let path = dir.path().join(layout.file_name());
+            let _ = std::fs::remove_file(&path);
+            let mut b = Browser::with_cache(path.clone(), layout);
+            assert_eq!(b.add_favorite("Home", "10.0.0.1"), AddFavorite::Added);
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().len() as usize,
+                layout.file_len()
+            );
+            let b = Browser::with_cache(path.clone(), layout);
+            assert_eq!(b.lists[2][0].name, "Home");
+        }
+        // UO's file read as 1.5's: not a 1.5 cache, so left as it was.
+        let uo = std::fs::read(dir.path().join(Layout::Uo.file_name())).unwrap();
+        let path = dir.path().join("other.dat");
+        std::fs::write(&path, &uo).unwrap();
+        let mut b = Browser::with_cache(path.clone(), Layout::Cod15);
+        assert!(b.lists[2].is_empty());
+        assert_eq!(b.add_favorite("Away", "10.0.0.2"), AddFavorite::Added);
+        assert_eq!(std::fs::read(&path).unwrap(), uo);
+        // Nor is a short file truncated or replaced.
+        std::fs::write(&path, b"not a cache").unwrap();
+        let mut b = Browser::with_cache(path.clone(), Layout::Cod11);
+        assert_eq!(b.add_favorite("Away", "10.0.0.2"), AddFavorite::Added);
+        assert_eq!(std::fs::read(&path).unwrap(), b"not a cache");
     }
 
     /// With no master an Internet refresh asks nobody and ends at once.
@@ -988,15 +1134,26 @@ mod tests {
         };
         b.refresh();
         assert_eq!(b.status, Status::Failed);
-        assert!(b.resolve.is_none() && b.socket.is_none());
+        assert!(!b.scan.master_pending() && !b.scan.is_open());
+    }
+
+    /// Panics unless `VCOD_LIVE_NET` is set, so an unfiltered `--ignored`
+    /// run contacts no one.
+    fn live_net_allowed(test: &str, what: &str) {
+        assert!(
+            std::env::var_os("VCOD_LIVE_NET").is_some(),
+            "{test} {what}: set VCOD_LIVE_NET=1 to run it"
+        );
     }
 
     /// The Internet list against cod.pm's live master: one `getservers 118`
     /// on the CoD2 port, then a `getinfo` to every server it lists. Run with
-    /// `cargo test -p vcod --bins master_list_live -- --ignored --nocapture`.
+    /// `VCOD_LIVE_NET=1 cargo test -p vcod --bins master_list_live --
+    /// --ignored --nocapture`.
     #[test]
     #[ignore]
     fn master_list_live() {
+        live_net_allowed("master_list_live", "asks cod.pm's public master");
         let mut b = Browser {
             master_query: Some(MasterQuery::of(&vcod_cod2::net::PROTOCOL_118.transport)),
             source: Source::Internet,
@@ -1028,11 +1185,12 @@ mod tests {
 
     /// The LAN scan against real servers: run ours and the retail one on
     /// 29661 and 29662 first (docs/research/cod11-front-end.md, "Local
-    /// servers"), then `cargo test -p vcod lan_scan_live -- --ignored
-    /// --nocapture`.
+    /// servers"), then `VCOD_LIVE_NET=1 cargo test -p vcod lan_scan_live --
+    /// --ignored --nocapture`.
     #[test]
     #[ignore]
     fn lan_scan_live() {
+        live_net_allowed("lan_scan_live", "broadcasts on the LAN");
         let mut b = Browser {
             lan_targets: [29661, 29662]
                 .map(|p| SocketAddrV4::new(Ipv4Addr::BROADCAST, p))
@@ -1083,6 +1241,12 @@ mod tests {
         br.sort = Some(2);
         assert_eq!(names(&br), ["a", "b"]);
         br.sort = Some(8);
+        assert_eq!(names(&br), ["b", "a"]);
+        // `ServerSort 1`: an unknown `hw` after every known one.
+        for (s, hw) in br.lists[0].iter_mut().zip([0, 3]) {
+            s.info.as_mut().unwrap().hardware = hw;
+        }
+        br.sort = Some(1);
         assert_eq!(names(&br), ["b", "a"]);
     }
 }

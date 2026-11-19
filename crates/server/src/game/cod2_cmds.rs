@@ -255,7 +255,7 @@ impl Cod2Level {
         };
         let all = is("all");
         if all || starts("health") {
-            let v = &mut self.rt.host.client_vitals[slot];
+            let v = &mut self.rt.host.clients[slot].vitals;
             v.health = if count == 0 {
                 v.max_health
             } else {
@@ -272,7 +272,7 @@ impl Cod2Level {
                     self.add_ammo(slot, i, 998, true);
                 }
             } else {
-                let current = self.rt.host.client_weapons[slot].current;
+                let current = self.rt.host.clients[slot].weapons.current;
                 if current != 0 {
                     self.add_ammo(slot, usize::from(current), count, true);
                 }
@@ -290,7 +290,9 @@ impl Cod2Level {
             // `G_FindItem`: a weapon by name, given as its pickup gives it.
             if let Some(i) = self.rt.host.weapon_index(&line) {
                 let weapons = self.rt.host.weapons.clone();
-                self.rt.host.client_weapons[slot].give_chain(&weapons, i, weapons.slot(i));
+                self.rt.host.clients[slot]
+                    .weapons
+                    .give_chain(&weapons, i, weapons.slot(i));
                 let start = weapons.get(i).map_or(0, |d| d.start_ammo);
                 self.add_ammo(slot, i, start as i32, true);
             }
@@ -307,7 +309,7 @@ impl Cod2Level {
         let weapons = self.rt.host.weapons.clone();
         let n = self.rt.host.cod2().weapons.len();
         let is_slot = |i: usize| matches!(weapons.slot(i), 1 | 2);
-        let w = &mut self.rt.host.client_weapons[slot];
+        let w = &mut self.rt.host.clients[slot].weapons;
         let second = usize::from(w.slots[2]);
         for taken in [w.slots[1], w.slots[2]] {
             let taken = usize::from(taken);
@@ -321,13 +323,13 @@ impl Cod2Level {
         }
         let free = |w: &crate::weapons::PlayerWeapons| w.slots[1] == 0 || w.slots[2] == 0;
         for i in 1..=n {
-            let w = &self.rt.host.client_weapons[slot];
+            let w = &self.rt.host.clients[slot].weapons;
             if !is_slot(i) || (second < i && free(w)) {
                 self.give_player_weapon(slot, i);
             }
         }
         for i in 1..=n {
-            if !free(&self.rt.host.client_weapons[slot]) {
+            if !free(&self.rt.host.clients[slot].weapons) {
                 break;
             }
             if is_slot(i) {
@@ -354,7 +356,7 @@ impl Cod2Level {
         }
         let host = &mut self.rt.host;
         let offhand = host.cod2().offhands.get(i - 1).copied().unwrap_or(0) != 0;
-        let w = &mut host.client_weapons[slot];
+        let w = &mut host.clients[slot].weapons;
         if w.holds(i) {
             return;
         }
@@ -411,7 +413,7 @@ impl Cod2Level {
         let all = is("all");
         let n = self.rt.host.weapons.defs().len();
         if all || starts("health") {
-            let v = &mut self.rt.host.client_vitals[slot];
+            let v = &mut self.rt.host.clients[slot].vitals;
             v.health = if count == 0 {
                 1
             } else {
@@ -420,10 +422,10 @@ impl Cod2Level {
         }
         if all || is("weapons") {
             for i in 1..n {
-                self.rt.host.client_weapons[slot].take(i);
+                self.rt.host.clients[slot].weapons.take(i);
                 self.set_rounds(slot, i, Some(0), Some(0));
             }
-            self.rt.host.client_weapons[slot].current = 0;
+            self.rt.host.clients[slot].weapons.current = 0;
         }
         if all || starts("ammo") {
             if count == 0 {
@@ -431,7 +433,7 @@ impl Cod2Level {
                     self.set_rounds(slot, i, Some(0), Some(0));
                 }
             } else {
-                let current = usize::from(self.rt.host.client_weapons[slot].current);
+                let current = usize::from(self.rt.host.clients[slot].weapons.current);
                 if current != 0 {
                     self.take_rounds(slot, current, count);
                 }
@@ -451,7 +453,7 @@ impl Cod2Level {
         let Some(def) = self.rt.host.weapons.get(weapon).cloned() else {
             return;
         };
-        let Some(a) = self.rt.host.client_ammo.get(slot) else {
+        let Some(a) = self.rt.host.clients.get(slot).map(|c| &c.ammo) else {
             return;
         };
         let ammo = i32::from(a.ammo[def.ammo_index]) - count;
@@ -492,7 +494,7 @@ impl Cod2Level {
     fn spectator_session(&mut self, slot: usize) -> Option<(i32, u8)> {
         let s = self.rt.client_session(slot)?;
         (s.state == crate::follow::SessionState::Spectator).then_some((s.spectator_client, {
-            self.rt.host.client_no_spectate[slot]
+            self.rt.host.clients[slot].no_spectate
         }))
     }
 
@@ -505,8 +507,9 @@ impl Cod2Level {
         let active = self
             .rt
             .host
-            .client_roster
+            .clients
             .get(target)
+            .map(|c| &c.roster)
             .and_then(Option::as_ref)
             .is_some_and(|r| r.active);
         let playing = self
@@ -822,7 +825,7 @@ mod tests {
     fn assert_given_weapons(level: &Cod2Level, second: usize, taken: &dyn Fn(usize) -> bool) {
         let host = &level.rt.host;
         let weapons = host.weapons.clone();
-        let w = host.client_weapons[0];
+        let w = host.clients[0].weapons;
         let n = host.cod2().weapons.len();
         let given: Vec<usize> = (second + 1..=n)
             .filter(|&i| matches!(weapons.slot(i), 1 | 2))
@@ -858,7 +861,7 @@ mod tests {
             return;
         };
         level.rt.host.cvars.set("sv_cheats", "1");
-        let second = usize::from(level.rt.host.client_weapons[0].slots[2]);
+        let second = usize::from(level.rt.host.clients[0].weapons.slots[2]);
         assert_ne!(second, 0);
         level.client_command(0, &argv("give weapons"));
         assert_given_weapons(&level, second, &|_| false);
@@ -877,24 +880,24 @@ mod tests {
             return;
         };
         level.rt.host.cvars.set("sv_cheats", "1");
-        let second = usize::from(level.rt.host.client_weapons[0].slots[2]);
+        let second = usize::from(level.rt.host.clients[0].weapons.slots[2]);
         let offhand = level.rt.host.cod2().clients[0].offhand;
-        level.rt.host.client_vitals[0].health = 7;
+        level.rt.host.clients[0].vitals.health = 7;
         level.client_command(0, &argv("give all"));
         let weapons = level.rt.host.weapons.clone();
         let cap = |i: usize| weapons.get(i).and_then(|d| d.shared_cap_index);
         let first_of_cap = |i: usize| (1..i).all(|j| cap(j) != cap(i));
         assert_given_weapons(&level, second, &|i| cap(i).is_some() && !first_of_cap(i));
         let host = &level.rt.host;
-        let v = host.client_vitals[0];
+        let v = host.clients[0].vitals;
         assert_eq!(v.health, v.max_health);
         assert_eq!(host.cod2().clients[0].offhand, offhand);
-        let rounds = host.client_ammo[0];
+        let rounds = host.clients[0].ammo;
         for i in 1..=host.cod2().weapons.len() {
             let Some(d) = host.weapons.get(i) else {
                 continue;
             };
-            if !host.client_weapons[0].holds(i) || d.shared_cap_index.is_some() {
+            if !host.clients[0].weapons.holds(i) || d.shared_cap_index.is_some() {
                 continue;
             }
             let name = &host.cod2().weapons[i - 1];
@@ -1014,7 +1017,7 @@ mod tests {
             level.client_think(1, &cmd);
         };
         let use_held = |level: &Cod2Level| {
-            level.rt.host.client_buttons[1] & vcod_common::net::msg::BUTTON_USE != 0
+            level.rt.host.clients[1].buttons & vcod_common::net::msg::BUTTON_USE != 0
         };
         think(&mut level, now + 16, 0x8);
         assert!(use_held(&level), "a held +activate");

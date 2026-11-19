@@ -322,6 +322,10 @@ fn key_handlers<R: BufRead>(w: &mut W<R>, mut p: Pointer) -> Result<Vec<(i32, St
     Ok(out)
 }
 
+/// The most entries a menu statement may hold: stock ones reach 141. The cap
+/// bounds what [`crate::menuexp::eval`] runs each frame.
+const MAX_STATEMENT_ENTRIES: usize = 4096;
+
 /// `statement_s`, 8, at `o`: `numEntries` slots of 0xC-byte
 /// `expressionEntry`, whose string operands (type 1, data type 2) load
 /// their string.
@@ -331,6 +335,9 @@ fn statement<R: BufRead>(w: &mut W<R>, s: &S, o: usize) -> Result<Statement> {
         return Ok(out);
     }
     let n = s.i32(o).max(0) as usize;
+    if n > MAX_STATEMENT_ENTRIES {
+        anyhow::bail!("a menu statement of {n} entries, past {MAX_STATEMENT_ENTRIES}");
+    }
     let a = w.load(4 * n)?;
     for i in 0..n {
         if !w.inline_only(a.ptr(4 * i), 4)? {

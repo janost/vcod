@@ -11,8 +11,11 @@ use std::net::SocketAddr;
 
 /// `MAX_CHALLENGES`: the loop bound 0x400 in all four.
 pub const MAX_CHALLENGES: usize = 1024;
+/// CoD4 1.7's slot hex: `Q_strncpyz` (0x81a9e1c) into +0x2c with size
+/// 0x21 (0x816f1ba), so at most 32 chars.
+const GUID_MAX: usize = 32;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct Slot {
     /// `None` is a slot never written (retail's zeroed `netadr_t`).
     addr: Option<SocketAddr>,
@@ -25,6 +28,8 @@ struct Slot {
     first_ping: i32,
     /// A client connected off it (+0x28).
     connected: bool,
+    /// CoD4's `getchallenge` hex, the GUID its connect takes (+0x2c).
+    guid: String,
 }
 
 pub struct Challenges {
@@ -88,6 +93,23 @@ impl Challenges {
         }
         s.connected = true;
         Some((i, s.first_ping))
+    }
+
+    /// CoD4's `SV_GetChallenge` copies the request's hex into the open slot
+    /// for `from`, cut to [`GUID_MAX`] chars (cod4-handshake.md 15).
+    pub fn keep_guid(&mut self, from: SocketAddr, guid: &str) {
+        if let Some(s) = self
+            .slots
+            .iter_mut()
+            .find(|s| !s.connected && s.addr == Some(from))
+        {
+            s.guid = guid.chars().take(GUID_MAX).collect();
+        }
+    }
+
+    /// The hex slot `i` holds ([`Challenges::keep_guid`]).
+    pub fn guid(&self, i: usize) -> &str {
+        &self.slots[i].guid
     }
 
     /// A connect that took a slot clears the stored ping (1.1d 0x8085c16),
@@ -186,6 +208,23 @@ mod tests {
         assert_eq!(t.issue(addr(1, 5), 100, || 8), 8);
         t.release(addr(1, 5));
         assert_eq!(t.open(addr(1, 5)), Some(7));
+    }
+
+    #[test]
+    fn the_guid_lives_in_the_slot_cut_to_32_chars() {
+        let mut t = Challenges::default();
+        t.issue(addr(1, 5), 0, || 7);
+        t.keep_guid(addr(1, 5), &"ab".repeat(500));
+        let (i, _) = t.connect(addr(1, 5), 7, 10).unwrap();
+        assert_eq!(t.guid(i), "ab".repeat(16));
+        // A flood of distinct senders holds no more than the table's slots.
+        for n in 0..100_000u32 {
+            let from = SocketAddr::from((n.to_be_bytes(), 1));
+            t.issue(from, n as i32, || 1);
+            t.keep_guid(from, &"x".repeat(1000));
+        }
+        assert!(t.slots.iter().all(|s| s.guid.len() <= GUID_MAX));
+        assert_eq!(t.slots.len(), MAX_CHALLENGES);
     }
 
     #[test]

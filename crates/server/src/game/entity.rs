@@ -42,7 +42,7 @@ pub struct GEntity {
     pub engine: Vec<Value>,
     /// A client entity's `gclient_t` fields, indexed by raw `CLIENT_FIELDS`
     /// position (`Route::Client`), a separate store from `engine` because
-    /// retail's `gclient_s *client` is a separate struct from `gentity_t` —
+    /// retail's `gclient_s *client` is a separate struct from `gentity_t`:
     /// sharing one array between the two field tables' index spaces would
     /// alias unrelated fields together. `Some` only for an entity
     /// `spawn_client` made; `None` for every map entity and HUD element,
@@ -131,6 +131,37 @@ pub struct GEntity {
     pub ground: i32,
     /// `G_FindTeams`' links (`crate::game::teams`).
     pub team: crate::game::teams::TeamLinks,
+}
+
+impl GEntity {
+    /// A fresh entity holding `engine`'s fields and script struct `script`,
+    /// solid, nothing else set; each spawn path sets what differs.
+    pub fn new(engine: Vec<Value>, script: StructId) -> GEntity {
+        GEntity {
+            engine,
+            client: None,
+            script,
+            solid: true,
+            hidden: false,
+            attachments: Vec::new(),
+            attach_ignore_collision: 0,
+            hud: None,
+            think: None,
+            nextthink: 0,
+            events: EventRing::default(),
+            loop_sound: 0,
+            constant_light: 0,
+            broadcast: false,
+            broadcast_time: 0,
+            apos_base: None,
+            item: None,
+            brush_model: None,
+            link: None,
+            unlinked: false,
+            ground: 0,
+            team: Default::default(),
+        }
+    }
 }
 
 /// The `gentity` fields `SV_LinkEntity` reads off an entity with no client
@@ -292,7 +323,7 @@ impl HudState {
 /// What an entity's `think` runs when `nextthink` comes due. A Rust enum
 /// rather than a script reference: retail's `think` is a C function pointer
 /// (`G_FreeEntity` for a deleted entity) and script-side timing goes through
-/// `thread`/`wait`. Stage 4's movers and doors add variants.
+/// `thread`/`wait`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ThinkFn {
     Free,
@@ -345,8 +376,8 @@ pub const CONCUSSIVE_THINK_MS: i32 = 100;
 pub struct ObjectTable {
     ents: Vec<Option<GEntity>>,
     /// The HUD element range, `EntId(FIRST_HUD_ELEM..)`. A separate vector
-    /// rather than a longer `ents`, so `iter_inuse` — and through it
-    /// `getEntArray` — cannot see a HUD element. A HUD element reuses
+    /// rather than a longer `ents`, so `iter_inuse` (and through it
+    /// `getEntArray`) cannot see a HUD element. A HUD element reuses
     /// `GEntity` for the two stores it does need (engine slots, keyed by
     /// `fields::route_hud`, and its own script struct); the gentity-only
     /// `solid`, `hidden` and `attachments` go unused.
@@ -482,30 +513,7 @@ impl ObjectTable {
                 engine[slot] = Value::Vector([0.0; 3]);
             }
         }
-        self.ents[id.0 as usize] = Some(GEntity {
-            engine,
-            client: None,
-            script,
-            solid: true,
-            hidden: false,
-            attachments: Vec::new(),
-            attach_ignore_collision: 0,
-            hud: None,
-            think: None,
-            nextthink: 0,
-            events: EventRing::default(),
-            loop_sound: 0,
-            constant_light: 0,
-            broadcast: false,
-            broadcast_time: 0,
-            apos_base: None,
-            item: None,
-            brush_model: None,
-            link: None,
-            unlinked: false,
-            ground: 0,
-            team: Default::default(),
-        });
+        self.ents[id.0 as usize] = Some(GEntity::new(engine, script));
         id
     }
 
@@ -538,30 +546,7 @@ impl ObjectTable {
             if let Route::Engine { slot, .. } = crate::game::fields::route_entity("classname") {
                 engine[slot] = Value::String(cx.intern_exact("worldspawn"));
             }
-            self.world = Some(GEntity {
-                engine,
-                client: None,
-                script: cx.new_struct(),
-                solid: true,
-                hidden: false,
-                attachments: Vec::new(),
-                attach_ignore_collision: 0,
-                hud: None,
-                think: None,
-                nextthink: 0,
-                events: EventRing::default(),
-                loop_sound: 0,
-                constant_light: 0,
-                broadcast: false,
-                broadcast_time: 0,
-                apos_base: None,
-                item: None,
-                brush_model: None,
-                link: None,
-                unlinked: false,
-                ground: 0,
-                team: Default::default(),
-            });
+            self.world = Some(GEntity::new(engine, cx.new_struct()));
         }
         EntId(ENTITYNUM_WORLD, 0)
     }
@@ -650,28 +635,8 @@ impl ObjectTable {
             engine[cs] = Value::String(cx.intern_exact("noclass"));
         }
         self.ents[slot] = Some(GEntity {
-            engine,
             client: Some(client),
-            script,
-            solid: true,
-            hidden: false,
-            attachments: Vec::new(),
-            attach_ignore_collision: 0,
-            hud: None,
-            think: None,
-            nextthink: 0,
-            events: EventRing::default(),
-            loop_sound: 0,
-            constant_light: 0,
-            broadcast: false,
-            broadcast_time: 0,
-            apos_base: None,
-            item: None,
-            brush_model: None,
-            link: None,
-            unlinked: false,
-            ground: 0,
-            team: Default::default(),
+            ..GEntity::new(engine, script)
         });
         Ok(EntId(slot as u32, self.ent_gens[slot]))
     }
@@ -680,7 +645,7 @@ impl ObjectTable {
     /// pushed onto the free list: that list feeds `spawn`, and a map entity
     /// must never be handed a client's number.
     ///
-    /// `GameHost::client_weapons` and `client_viewmodel` are left alone; the
+    /// `HostClient::weapons` and `HostClient::viewmodel` are left alone; the
     /// Connect path resets them, so the slot is clean before anything can
     /// read it and a reset here would only be the second half of the same
     /// guarantee.
@@ -732,28 +697,8 @@ impl ObjectTable {
             }
         }
         self.huds[i] = Some(GEntity {
-            engine,
-            client: None,
-            script,
-            solid: true,
-            hidden: false,
-            attachments: Vec::new(),
-            attach_ignore_collision: 0,
             hud: Some(HudState::default()),
-            think: None,
-            nextthink: 0,
-            events: EventRing::default(),
-            loop_sound: 0,
-            constant_light: 0,
-            broadcast: false,
-            broadcast_time: 0,
-            apos_base: None,
-            item: None,
-            brush_model: None,
-            link: None,
-            unlinked: false,
-            ground: 0,
-            team: Default::default(),
+            ..GEntity::new(engine, script)
         });
         Ok(EntId(FIRST_HUD_ELEM + i as u32, self.hud_gens[i]))
     }
@@ -780,6 +725,21 @@ impl ObjectTable {
         if id.0 >= FIRST_MAP_ENTITY && !self.queued.remove(&id.0) {
             self.free_list.push_back((id.0, self.clock_ms));
         }
+    }
+
+    /// `Scr_FreeEntityNum` on an entity that stays (UO's `freeVehicle`,
+    /// coduo-vehicles.md 17): every handle out goes dead and the script
+    /// fields go with the object; the slot, its number, its link and its
+    /// engine fields stay. The new handle, `None` for no such entity.
+    pub fn reissue(&mut self, cx: &mut Cx, id: EntId) -> Option<EntId> {
+        if self.get(id).is_none() || id.0 >= FIRST_HUD_ELEM || id.0 == ENTITYNUM_WORLD {
+            return None;
+        }
+        let n = id.0 as usize;
+        self.edits += 1;
+        self.ent_gens[n] = self.ent_gens[n].wrapping_add(1);
+        self.ents[n].as_mut()?.script = cx.new_struct();
+        Some(EntId(id.0, self.ent_gens[n]))
     }
 
     /// CoD4's `delete()`: `G_FreeEntity` runs inside the call, so the
@@ -830,7 +790,7 @@ impl ObjectTable {
 
     /// Every due think at once, by entity number: [`ObjectTable::run_think`]
     /// over the table. The server runs each entity's on its own turn in the
-    /// entity pass; this is for callers with no pass to run.
+    /// entity pass; only tests, which run no pass, call this.
     #[must_use]
     pub fn run_thinks(&mut self, now_ms: i32) -> Vec<(EntId, ThinkFn)> {
         let ids: Vec<EntId> = self.iter_inuse().map(|(id, _)| id).collect();
@@ -936,7 +896,6 @@ impl ObjectTable {
         self.get(id).map(|_| id)
     }
 
-    /// Whatever holds entity number `n` now.
     /// [`Self::get_mut`] for a write to what no reader of [`Self::edits`]
     /// reads (the client fields, the script struct, `apos_base`, the
     /// attachments, the loop sound and events): the count stays. A caller writes nothing else through
@@ -968,6 +927,7 @@ impl ObjectTable {
         self.slot_edits.get(slot).copied().unwrap_or(0)
     }
 
+    /// Whatever holds entity number `n` now.
     pub fn by_number_mut(&mut self, n: u32) -> Option<&mut GEntity> {
         let id = self.handle(n)?;
         self.get_mut(id)
@@ -995,6 +955,18 @@ impl ObjectTable {
     pub fn iter_inuse_mut(&mut self) -> impl Iterator<Item = &mut GEntity> {
         self.edits += 1;
         self.ents.iter_mut().flatten()
+    }
+
+    /// Every live object's script struct and the struct and array values in
+    /// its engine and client fields, HUD elements and the world included:
+    /// the table's part of `Host::roots`.
+    pub fn script_roots(&self, out: &mut Vec<Value>) {
+        let objects = self.ents.iter().chain(&self.huds).flatten();
+        for e in objects.chain(&self.world) {
+            out.push(Value::Struct(e.script));
+            let fields = e.engine.iter().chain(e.client.iter().flatten());
+            out.extend(fields.filter(|v| matches!(v, Value::Struct(_) | Value::Array(_))));
+        }
     }
 
     #[cfg(test)]

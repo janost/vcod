@@ -41,7 +41,7 @@ Hosting and joining work on one machine: the server answers on
 vcod                                                    # main menu and server browser
 vcod --connect 1.2.3.4:28960                            # join through the team and weapon menus
 vcod --connect 1.2.3.4:28960 --team axis --weapon kar98k_mp
-vcod-server mp_carentan --gametype tdm --bots 6 --bots-shoot
+vcod-server mp_carentan --gametype tdm --bots 6
 ```
 
 A 1.1 install hosts 1.1 (protocol 1), a 1.5 install hosts 1.5 (protocol 6).
@@ -53,7 +53,7 @@ when a server refuses it.
 ```
 vcod --mod-dir uo
 vcod --mod-dir uo --connect 1.2.3.4:28960 --team allies
-vcod-server mp_cassino --mod-dir uo --gametype tdm --bots 6 --bots-shoot
+vcod-server mp_cassino --mod-dir uo --gametype tdm --bots 6
 ```
 
 Without `--mod-dir uo` the install reads as plain 1.5. A UO client
@@ -64,7 +64,7 @@ refuses 1.1 and 1.5 servers and the others refuse UO servers.
 ```
 vcod                                                    # CoD2's main menu and browser
 vcod --connect 1.2.3.4:28960 --team allies --weapon thompson_mp
-vcod-server mp_toujane --gametype tdm --bots 6 --bots-shoot
+vcod-server mp_toujane --gametype tdm --bots 6
 ```
 
 ### CoD4
@@ -72,7 +72,7 @@ vcod-server mp_toujane --gametype tdm --bots 6 --bots-shoot
 ```
 vcod                                                    # 1.7's main menu; the first start asks for a profile
 vcod --connect 1.2.3.4:28960 --team allies --class assault_mp,0
-vcod-server mp_crash --bots 6 --bots-shoot              # war unless --gametype says otherwise
+vcod-server mp_crash --bots 6                           # war unless --gametype says otherwise
 ```
 
 Stock classes: `assault_mp,0`, `specops_mp,0`, `heavygunner_mp,0`,
@@ -83,7 +83,7 @@ Stock classes: `assault_mp,0`, `specops_mp,0`, `heavygunner_mp,0`,
 ### Play with friends on a LAN
 
 1. On one machine: `vcod-server <map> --gametype tdm --max-clients 16`.
-   It binds `0.0.0.0:28960`; `--port` picks another port.
+   It binds `0.0.0.0:28960`; `--port` picks another port and `--set net_ip=<ip>` one interface.
 2. On each player's machine, open `vcod` and pick the server from the
    browser's Local source, or run `vcod --connect <host-ip>:28960`.
 
@@ -147,8 +147,9 @@ vcod --exec "set nextdemo quit" --exec "demo mydemo"
 
 | Symptom | Cause and fix |
 |---|---|
-| `cannot open game data in <dir>` or `cannot read mod dir <dir>` | The install was not found. Pass `--game-dir` or set `COD_DIR` to the directory that holds `main/`. |
-| `CoD2 support is not implemented yet` (or CoD4) | The mode is CoD1-only (`--walk`, `--list`), or the game was misdetected. Pass `--game cod1`, `cod2` or `cod4`. |
+| `no main/ in <dir>`, `cannot open game data in <dir>` or `cannot read mod dir <dir>` | The install was not found where the message says it looked. Pass `--game-dir` or set `COD_DIR` to the directory that holds `main/` (`zone/` for CoD4). |
+| `--walk and --list are CoD1 only` | Those modes read CoD1 maps only, or the game was misdetected. Pass `--game cod1`, `cod2` or `cod4`. |
+| `<flag> is Cod1 only; this is Cod4` (server) | The flag does nothing on the detected game. Drop it, or pass the right `--game`. |
 | `map '<name>' not found; similar: ...` | Map names are case-insensitive; `vcod --list` prints every CoD1 map in the search path. |
 | `This is a United Offensive server: run vcod with --mod-dir uo` | Add `--mod-dir uo` (UO install). The reverse message means drop it. |
 | A third-party pak breaks a map or the menus (CoD1, UO) | `--vanilla` on either binary loads only the patch's stock paks. |

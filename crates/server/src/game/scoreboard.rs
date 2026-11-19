@@ -6,7 +6,7 @@ use crate::game::host::GameHost;
 use vcod_gsc::{Cx, Host, Value};
 
 /// What `Server` mirrors of one connected client slot before any script
-/// entry that can kill (`GameHost::client_roster`).
+/// entry that can kill (`HostClient::roster`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RosterSlot {
     /// `CS_CONNECTED`, no gamestate sent yet.
@@ -36,18 +36,20 @@ pub struct Row {
     pub icon: usize,
 }
 
+/// The rows' text stops at the first row that would take it past this
+/// many bytes, and `numRows` counts only the rows written: 1.1, 1.5, UO
+/// (cod11-hud-protocol.md 3), CoD2 (cod2-protocol.md 3.4) and CoD4 alike.
+const BOARD_BYTES: usize = 1024;
+
 /// `b <numRows> <axis> <allies>{ <client> <score> <ping> <time> <icon>}*`,
 /// one row per online client (`docs/research/cod11-hud-protocol.md` section
-/// 3). `ping` is `-1` for a client still connecting, else capped at 999.
+/// 3) up to [`BOARD_BYTES`]. `ping` is `-1` for a client still connecting,
+/// else capped at 999.
 pub fn text(rows: Vec<Row>, scores: [i32; 2]) -> String {
-    text_capped(rows, scores, None)
+    text_capped(rows, scores, BOARD_BYTES)
 }
 
-/// [`text`] with the rows' text cut at `cap` bytes: CoD2's
-/// `DeathmatchScoreboardMessage` (Mac 0x1a4f98) stops at the first row that
-/// would take it past 1024 and counts only the rows written
-/// (cod2-protocol.md 3.4). 1.1 passes `None`.
-pub fn text_capped(mut rows: Vec<Row>, [axis, allies]: [i32; 2], cap: Option<usize>) -> String {
+fn text_capped(mut rows: Vec<Row>, [axis, allies]: [i32; 2], cap: usize) -> String {
     // `level.sortedClients[]`'s order: `CalculateRanks` lists the slots in
     // order and glibc's `qsort` sorts them by `SortRanks` (hud protocol
     // doc, section 3).
@@ -57,7 +59,7 @@ pub fn text_capped(mut rows: Vec<Row>, [axis, allies]: [i32; 2], cap: Option<usi
     for r in rows {
         let ping = if r.connecting { -1 } else { r.ping.min(999) };
         let row = format!(" {} {} {ping} {} {}", r.slot, r.score, r.deaths, r.icon);
-        if cap.is_some_and(|cap| body.len() + row.len() > cap) {
+        if body.len() + row.len() > cap {
             break;
         }
         body.push_str(&row);
@@ -95,8 +97,9 @@ impl GameHost {
     /// (map-cycle doc, 6.3).
     pub fn scoreboard(&mut self, cx: &mut Cx) -> String {
         let roster: Vec<(usize, bool, i32)> = self
-            .client_roster
+            .clients
             .iter()
+            .map(|c| &c.roster)
             .enumerate()
             .filter_map(|(slot, r)| r.map(|r| (slot, r.connecting, r.ping)))
             .collect();
@@ -122,23 +125,22 @@ impl GameHost {
                 ),
             });
         }
-        let cap = self.profile.scoreboard_cap;
-        text_capped(rows, self.team_scores, cap)
+        text(rows, self.team_scores)
     }
 
     /// `player_die`'s walk (combat doc 5.1 step 9), run once the victim's
     /// `CodeCallback_PlayerKilled` has returned: every spectator following
     /// the victim is sent the scoreboard, behind what that callback queued.
     pub fn player_die_walk(&mut self, cx: &mut Cx, victim: usize) {
-        for slot in 0..self.client_roster.len() {
-            let Some(r) = self.client_roster[slot] else {
+        for slot in 0..self.clients.len() {
+            let Some(r) = self.clients[slot].roster else {
                 continue;
             };
             if r.following == Some(victim)
                 && self.client_field(cx, slot, "sessionstate").as_deref() == Some("spectator")
             {
                 let text = self.scoreboard(cx);
-                self.client_commands.push((slot, text));
+                self.command_to(slot, text);
             }
         }
     }
@@ -209,17 +211,19 @@ mod tests {
         assert_eq!(slots, ["5", "3", "4", "2", "1", "0"]);
     }
 
+    /// Every game's board stops at the row past 1024 bytes and counts the
+    /// rows it wrote (1.1 `game_mp_x86.dll` 0x2001d21c, CoD2 Mac 0x1a4f98).
     #[test]
-    fn a_cod2_board_stops_at_the_row_past_1024_bytes() {
+    fn a_board_stops_at_the_row_past_1024_bytes() {
         // Each row " <slot> 1000000000000 50 0 0" is 26 or 27 bytes.
         let rows = || {
             (0..64)
                 .map(|s| row(s, 1_000_000_000_000))
                 .collect::<Vec<_>>()
         };
-        let full = text(rows(), [0, 0]);
+        let full = text_capped(rows(), [0, 0], usize::MAX);
         assert!(full.starts_with("b 64 0 0 "));
-        let cut = text_capped(rows(), [0, 0], Some(1024));
+        let cut = text(rows(), [0, 0]);
         let body = cut.splitn(5, ' ').nth(4).unwrap();
         let n: usize = cut.split(' ').nth(1).unwrap().parse().unwrap();
         assert!(n < 64);

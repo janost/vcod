@@ -72,7 +72,9 @@ legible, recording is on and `demowaiting` (+0x40190) is clear, writes
 after the netchan, so the record is the plain 4-byte acknowledge and the
 unscrambled, still compressed op block (VERIFIED). A message whose
 acknowledge is more than 128 behind `reliableSequence` is not parsed live
-or from a demo (VERIFIED, the `- 0x80` compare in both).
+or from a demo (VERIFIED, the `- 0x80` compare in both). vcod:
+`Client::receive` and `demo_message` skip it, and `build_packet` resends
+no more than the 128 commands the ring holds whatever the acknowledge.
 
 `CL_ReadDemoMessage` reads into a 0x20000-byte `LargeLocal`: a length
 past it is `CL_ReadDemoMessage: demoMsglen > MAX_MSGLEN` (fatal); a short

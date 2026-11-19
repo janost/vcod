@@ -11,8 +11,8 @@ use crate::common;
 use common::{ADDR, ADDR_B, ADDR_C, ClientEnd, Join, Queues};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use std::time::Duration;
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::net::{NetClient, NetEvent, NetState, Userinfo};
 
 const NAMES: [&str; 3] = ["Able", "Baker", "Charlie"];
@@ -82,7 +82,7 @@ fn retail(fixture: &str) -> Retail {
 
 /// `order` is the connect order, which fixes the slots: retail's 1.5b run
 /// put the spectator in slot 0.
-fn run(fixture: &str, proto: &'static Protocol, cvars: &[(&str, &str)], order: [usize; 3]) {
+fn run(fixture: &str, proto: &'static Cod1Wire, cvars: &[(&str, &str)], order: [usize; 3]) {
     let fs = if proto.transport.version == PROTOCOL_V22.transport.version {
         vcod_common::testing::uo_fs()
     } else {
@@ -95,19 +95,13 @@ fn run(fixture: &str, proto: &'static Protocol, cvars: &[(&str, &str)], order: [
         return;
     }
     let retail = retail(fixture);
-    let bsp_path = fs
-        .resolve_map("mp_carentan")
-        .expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let fs = Rc::new(fs);
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg("mp_carentan", "tdm"), now);
-    sv.set_protocol(proto);
-    for (name, value) in cvars {
-        sv.set_cvar(name, value);
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        cvars,
+        ..common::Boot::new("mp_carentan", "tdm")
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    .start(fs);
 
     let addrs = [ADDR, ADDR_B, ADDR_C];
     let queues: [Rc<RefCell<Queues>>; 3] = Default::default();
@@ -189,7 +183,10 @@ fn run(fixture: &str, proto: &'static Protocol, cvars: &[(&str, &str)], order: [
                             && proto.transport.version == PROTOCOL_V1.transport.version
                             && !v.is_empty()
                         {
-                            let t = cl[i].snapshots().newest().map_or(0, |s| s.server_time);
+                            let t = cl[i]
+                                .snapshots()
+                                .newest()
+                                .map_or(0, |s| s.server_time.raw());
                             v = format!("+{}", v.parse::<i32>().unwrap() - t);
                         }
                         got[i].push(format!("d {cs} {v}"));

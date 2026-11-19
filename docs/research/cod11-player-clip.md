@@ -821,7 +821,7 @@ roundings lift a share that sits just under a whole number back onto it, so
 21 percent of 100 does 21 on 1.5 and UO where 1.1 does 20; 40 percent still
 does 39. VERIFIED, `mp_carentan-dm-dmgmove-1.5.txt` and `-uo.txt` (13.6):
 damage callbacks of 21 and 22 where vcod's 1.1 rule gave 20 and 21. vcod:
-`fall_damage`'s `stored` arm (`crates/server/src/server.rs`).
+`fall_damage`'s `stored` arm (`crates/server/src/server/sim_ops.rs`).
 
 INFERRED, from 4.2 and 4.4 of `cod11-combat.md`: the four null pointers
 reach `CodeCallback_PlayerDamage` as undefined `eInflictor`, `eAttacker`,
@@ -1466,7 +1466,7 @@ runs ahead of the timer's drop. `slide_move` hands back its starting
 velocity, with the gravity end velocity for z, whenever `knockback_ms` runs
 (8.5).
 
-The server (`crates/server/src/spectate.rs`, `server.rs`, `game/stuck.rs`):
+The server (`crates/server/src/spectate.rs`, `server/`, `game/stuck.rs`):
 
 - `ClientSim.contents` is `r.contents`: BODY at a spawn into play, 0 at any
   other spawn, rewritten by `update_contents` at each end frame (BODY while
@@ -1742,7 +1742,7 @@ and a `"touch"` on each player from the other on the spawn's frame, the
 host's line first. VERIFIED, 1.1d: every think leaves the spot as spawned
 and no spawn notifies a touch.
 
-INFERRED: the 1.5 think runs the held key (cod15-movement.md 4, "The
+INFERRED: the 1.5 think runs the held key (cod15-movement.md 4.2, "The
 spawn's lie-down"), so `inside_out` and `inside_through` start 8 inside the
 host and walk the same 12.549 either way, through him: `PM_trace` dropped
 the bodies on the think's first trace. `outside_in` starts 31 off and stops

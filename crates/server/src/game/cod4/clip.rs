@@ -9,7 +9,6 @@ use std::sync::Arc;
 use glam::Vec3;
 use vcod_cod4::collision::ClipMap;
 use vcod_cod4::pmove::{self, PmWorld, Tr};
-use vcod_common::turretpose::angles_quat;
 
 /// A client's body as `SV_LinkEntity` links it: feet origin and the box
 /// its last move left (`r.mins`, `r.maxs`); or a mantle's blockage, a box
@@ -25,14 +24,8 @@ pub struct Body4 {
     pub owner: Option<u32>,
 }
 
-/// A brush entity linked with inline model `model`, where it stands.
-#[derive(Clone, Copy, Debug)]
-pub struct Brush4 {
-    pub entity: u32,
-    pub model: usize,
-    pub origin: Vec3,
-    pub angles: Vec3,
-}
+/// A brush entity linked with an inline model, where it stands.
+pub type Brush4 = pmove::Brush;
 
 /// One trace's world: the clip map, then each body (a temp box model of
 /// `CONTENTS_BODY`) and brush entity but `pass` that cuts it shorter.
@@ -48,71 +41,44 @@ impl PmWorld for Cod4Clip<'_> {
         if t.fraction == 0.0 {
             return t;
         }
-        {
-            let clips =
-                |b: &&Body4| b.entity != pass && b.owner != Some(pass) && mask & b.contents != 0;
-            for b in self.bodies.iter().filter(clips) {
+        let clips =
+            |b: &&Body4| b.entity != pass && b.owner != Some(pass) && mask & b.contents != 0;
+        for b in self.bodies.iter().filter(clips) {
+            // A client is a capsule; the mantle blocks stay boxes.
+            if b.entity < pmove::MAX_CLIENTS as u32 {
+                let body = vcod_common::movetrace::Body {
+                    entity: b.entity,
+                    origin: b.origin,
+                    mins: b.mins,
+                    maxs: b.maxs,
+                    contents: b.contents,
+                };
+                t.fold_capsule(start, end, mins, maxs, &body);
+            } else {
                 let mut c = vcod_common::collision::Trace::clear(end);
                 c.fraction = t.fraction;
-                // A client is `CM_TempBoxModel`'s capsule (`CM_Trace`'s
-                // 0xfff arm, `cod4_lnxded` 0x811d29c): a body met at an
-                // angle stops on its round side (cod4-pmove.md 15). The
-                // mantle blocks stay boxes.
-                if b.entity < pmove::MAX_CLIENTS as u32 {
-                    let body = vcod_common::movetrace::Body {
-                        entity: b.entity,
-                        origin: b.origin,
-                        mins: b.mins,
-                        maxs: b.maxs,
-                        contents: b.contents,
-                    };
-                    vcod_common::movetrace::clip_body_kept(&mut c, start, end, mins, maxs, &body);
-                } else {
-                    vcod_common::collision::clip_entity_box(
-                        &mut c,
-                        start,
-                        end,
-                        mins,
-                        maxs,
-                        b.origin + b.mins,
-                        b.origin + b.maxs,
-                        b.contents,
-                        b.entity,
-                    );
-                }
-                if c.fraction < t.fraction || (c.startsolid && !t.startsolid) {
-                    t = Tr {
-                        fraction: c.fraction,
-                        normal: c.normal,
-                        surface_flags: 0,
-                        contents: b.contents,
-                        entity_num: b.entity,
-                        startsolid: c.startsolid,
-                        allsolid: c.allsolid,
-                        walkable: c.normal.z >= vcod_cod4::collision::WALKABLE_NORMAL_Z,
-                    };
-                }
-                if t.fraction == 0.0 {
-                    return t;
-                }
+                vcod_common::collision::clip_entity_box(
+                    &mut c,
+                    start,
+                    end,
+                    mins,
+                    maxs,
+                    b.origin + b.mins,
+                    b.origin + b.maxs,
+                    b.contents,
+                    b.entity,
+                );
+                t.fold_body(&c, b.contents, b.entity);
+            }
+            if t.fraction == 0.0 {
+                return t;
             }
         }
         for b in self.brushes.iter().filter(|b| b.entity != pass) {
             if b.model == 0 || b.model >= self.clip.submodels.len() {
                 continue;
             }
-            // `CM_TransformedBoxTrace`: in the model's frame.
-            let q = angles_quat(b.angles.to_array());
-            let local = |p: Vec3| q.inverse() * (p - b.origin);
-            let c = self
-                .clip
-                .trace_model(b.model, local(start), local(end), mins, maxs, mask);
-            if c.fraction < t.fraction || (c.startsolid && !t.startsolid) {
-                let mut w = pmove::world_tr(&c);
-                w.normal = q * c.normal;
-                w.entity_num = b.entity;
-                t = w;
-            }
+            t.fold_brush(self.clip, b, start, end, mins, maxs, mask);
             if t.fraction == 0.0 {
                 break;
             }
@@ -138,4 +104,172 @@ pub fn level_world(clip: Arc<ClipMap>) -> Rc<crate::world::World> {
         rubble: Vec::new(),
         nav_cover: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vcod_cod4::collision::{CONTENTS_SOLID, MASK_PLAYERSOLID, Submodel};
+    use vcod_common::clipmap::{self, BrushNode, CBrush, CLeaf, CNode, CPlane};
+
+    fn leaf(b: &CBrush, brush_node: u32) -> CLeaf {
+        CLeaf {
+            first_aabb: 0,
+            aabb_count: 0,
+            brush_contents: CONTENTS_SOLID,
+            terrain_contents: 0,
+            mins: b.mins - Vec3::splat(0.125),
+            maxs: b.maxs + Vec3::splat(0.125),
+            brush_node,
+        }
+    }
+
+    fn brush(mins: Vec3, maxs: Vec3) -> CBrush {
+        CBrush {
+            mins,
+            maxs,
+            contents: CONTENTS_SOLID,
+            sides: Vec::new(),
+            axial_material: [[0; 3]; 2],
+        }
+    }
+
+    /// A world wall at x 64..96 and submodel 1, a block round the origin.
+    fn wall_and_block() -> ClipMap {
+        let wall = brush(
+            Vec3::new(64.0, -100.0, -100.0),
+            Vec3::new(96.0, 100.0, 100.0),
+        );
+        let block = brush(Vec3::splat(-32.0), Vec3::splat(32.0));
+        let (world_leaf, block_leaf) = (leaf(&wall, 1), leaf(&block, 2));
+        let world = clipmap::ClipMap {
+            planes: vec![CPlane {
+                normal: Vec3::Z,
+                dist: -1000.0,
+                kind: 2,
+                signbits: 0,
+            }],
+            nodes: vec![CNode {
+                plane: 0,
+                children: [-1, -1],
+            }],
+            leafs: vec![world_leaf],
+            brush_nodes: vec![
+                BrushNode::Leaf {
+                    first: 0,
+                    count: 0,
+                    contents: 0,
+                },
+                BrushNode::Leaf {
+                    first: 0,
+                    count: 1,
+                    contents: CONTENTS_SOLID,
+                },
+                BrushNode::Leaf {
+                    first: 1,
+                    count: 1,
+                    contents: CONTENTS_SOLID,
+                },
+            ],
+            leaf_brush_list: vec![0, 1],
+            brushes: vec![wall, block],
+            materials: vec![(0, CONTENTS_SOLID)],
+            verts: Vec::new(),
+            edges: Vec::new(),
+            tris: Vec::new(),
+            borders: Vec::new(),
+            partitions: Vec::new(),
+            aabbs: Vec::new(),
+            indexed: None,
+            reach: Default::default(),
+        };
+        let sub = |leaf| Submodel {
+            mins: Vec3::splat(-32.0),
+            maxs: Vec3::splat(32.0),
+            radius: 56.0,
+            leaf,
+        };
+        ClipMap::new(
+            "wall_and_block".into(),
+            0,
+            world,
+            vec![sub(world_leaf), sub(block_leaf)],
+            Vec::new(),
+        )
+    }
+
+    /// A sweep that starts inside a brush entity and leaves it still stops
+    /// on the world wall behind it, and keeps the start in solid.
+    #[test]
+    fn leaving_a_brush_entity_still_stops_on_the_wall_behind_it() {
+        let clip = wall_and_block();
+        let brushes = [Brush4 {
+            entity: 70,
+            model: 1,
+            origin: Vec3::ZERO,
+            angles: Vec3::ZERO,
+        }];
+        let world = Cod4Clip {
+            clip: &clip,
+            bodies: &[],
+            brushes: &brushes,
+        };
+        let (start, end) = (Vec3::ZERO, Vec3::new(128.0, 0.0, 0.0));
+        let alone =
+            pmove::world_tr(&clip.trace(start, end, Vec3::ZERO, Vec3::ZERO, MASK_PLAYERSOLID));
+        assert!(alone.fraction < 0.5 && !alone.startsolid, "{alone:?}");
+        let t = world.trace(start, end, Vec3::ZERO, Vec3::ZERO, 1023, MASK_PLAYERSOLID);
+        assert_eq!(t.fraction, alone.fraction, "{t:?}");
+        assert_eq!(t.entity_num, alone.entity_num);
+        assert!(t.startsolid);
+    }
+
+    /// A client's body stops a sweep short of the wall behind it unless it
+    /// is the sweep's own; a mantle block stops everyone but its owner and
+    /// itself (`Body4::owner`).
+    #[test]
+    fn a_body_stops_a_sweep_but_for_its_own_and_its_climber() {
+        use vcod_cod4::collision::CONTENTS_BODY;
+        let clip = wall_and_block();
+        let body = |entity: u32, owner: Option<u32>| Body4 {
+            entity,
+            origin: Vec3::new(32.0, 0.0, 0.0),
+            mins: Vec3::new(-15.0, -15.0, 0.0),
+            maxs: Vec3::new(15.0, 15.0, 70.0),
+            contents: CONTENTS_BODY,
+            owner,
+        };
+        let (start, end) = (Vec3::new(0.0, 0.0, 30.0), Vec3::new(60.0, 0.0, 30.0));
+        let sweep = |bodies: &[Body4], pass: u32| {
+            let world = Cod4Clip {
+                clip: &clip,
+                bodies,
+                brushes: &[],
+            };
+            world.trace(start, end, Vec3::ZERO, Vec3::ZERO, pass, MASK_PLAYERSOLID)
+        };
+        let open = sweep(&[], 1023);
+        assert_eq!(open.fraction, 1.0, "the wall is past the end: {open:?}");
+        let player = [body(3, None)];
+        let met = sweep(&player, 1023);
+        assert!(met.fraction < 0.5 && met.entity_num == 3, "{met:?}");
+        assert_eq!(sweep(&player, 3).fraction, 1.0);
+        let block = [body(100, Some(5))];
+        let met = sweep(&block, 1023);
+        assert!(met.fraction < 0.5 && met.entity_num == 100, "{met:?}");
+        assert_eq!(sweep(&block, 5).fraction, 1.0);
+        assert_eq!(sweep(&block, 100).fraction, 1.0);
+        // A mask without CONTENTS_BODY passes both.
+        let world = Cod4Clip {
+            clip: &clip,
+            bodies: &player,
+            brushes: &[],
+        };
+        assert_eq!(
+            world
+                .trace(start, end, Vec3::ZERO, Vec3::ZERO, 1023, CONTENTS_SOLID)
+                .fraction,
+            1.0
+        );
+    }
 }

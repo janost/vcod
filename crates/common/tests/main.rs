@@ -3,8 +3,13 @@
 mod area_census;
 mod cod2_iwd_iwi;
 mod cod2_wavelet;
+mod comment_style;
+mod doc_citations;
+mod doc_placement;
+mod env_vars_documented;
 mod evidence_labels;
 mod gunskel_ab;
+mod notice_ports;
 mod shader_corpus;
 mod skel11_ab;
 mod slope_seams;
