@@ -1,6 +1,6 @@
 //! A CoD4 1.7 server message, decompressed: server commands, the gamestate
 //! (configstrings, baselines, clientNum, checksumFeed) and snapshots
-//! (docs/research/cod4-netfields.md, "Server messages"), and the writer that
+//! (docs/research/cod4-netfields.md 3 to 5), and the writer that
 //! puts a parsed message back together byte for byte.
 
 use super::constant_cs;

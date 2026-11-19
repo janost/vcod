@@ -150,7 +150,8 @@ blanket. The full rule, document defaults and what
 Research docs are cited by section number from code comments and other docs
 (`combat doc 12.4`, `coduo-diff.md 16`). Keep numbered sections and file
 names stable; extend a doc with what you learn instead of leaving the fact
-in a commit message.
+in a commit message. `crates/common/tests/doc_citations.rs` fails on a
+`<doc>.md <n>` or `<doc>.md, "<title>"` citation that no longer resolves.
 
 ## Research docs
 
