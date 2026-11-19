@@ -1778,32 +1778,6 @@ fn main() -> Result<()> {
         }
     }
 
-    let mut cod2_fs_game = None;
-    let cod2_session = match &args.connect {
-        Some(addr) if cod2_connect => {
-            let t0 = Instant::now();
-            let mut s = play::cod2::Cod2Session::connect(
-                addr,
-                &cod2_front::connect_opts(&shell, &fs),
-                std::time::Duration::from_secs(15),
-            )?;
-            // The gamestate's `fs_game` and downloads, before the map loads.
-            if s.take_reopen(None) {
-                cod2_fs_game = s.fs_game().map(str::to_string);
-                if let Some(g) = &cod2_fs_game {
-                    shell.force("fs_game", g);
-                }
-                fs = play::cod2::open_search(&args.game_dir, cod2_fs_game.as_deref())?;
-            }
-            s.join = args.team.clone().map(|team| play::cod2::Join {
-                team,
-                weapon: args.weapon.clone(),
-            });
-            vcod_common::laps::span(t0, || "cod2 handshake to the gamestate".into());
-            Some(Box::new(s))
-        }
-        _ => None,
-    };
     // A live CoD4 join runs beside the window, which draws the connect
     // screen meanwhile (`cod4_loading`).
     let mut cod4_loading = None;
@@ -1855,21 +1829,13 @@ fn main() -> Result<()> {
     // Fly and walk need their map up front; online learns it from the
     // server inside the loop and loads through the same path as a map change.
     // With neither, the window opens on the console.
-    // A CoD2 server names its map in the gamestate the session waited for.
-    let map_arg = match &cod2_session {
-        _ if let Some(s) = &cod4_session => {
-            Some(s.map_name().context("cod4: no mapname in serverinfo")?)
-        }
-        Some(s) => Some(
-            s.map_name()
-                .context("cod2: no mapname in serverinfo")?
-                .to_string(),
-        ),
+    // A CoD2 `--connect` loads its map once the window's connect has the
+    // gamestate (`App::connect_cod2`).
+    let map_arg = match &cod4_session {
+        Some(s) => Some(s.map_name().context("cod4: no mapname in serverinfo")?),
+        None if cod2_connect => None,
         None => args.map.clone(),
     };
-    // The session is read on its own thread until the window's first frame
-    // takes it back (play::cod2::Pump): the load can outlast `sv_timeout`.
-    let cod2_pump = cod2_session.map(|s| s.pump());
     let mut cod4_map = None;
     let local = if (cod4_fly || cod4_watch)
         && let Some(map) = map_arg.as_deref()
@@ -2039,9 +2005,8 @@ fn main() -> Result<()> {
                     FlyCamera::new(center, 0.0)
                 }
             };
-            // `--connect` to a CoD2 server: the session is on its pump. A
-            // watched CoD4 session drives the camera the same way.
-            match cod2_pump.is_some() || cod4_session.is_some() {
+            // A watched CoD4 session drives the camera.
+            match cod4_session.is_some() {
                 true => Mode::Cod2(cam),
                 false => Mode::Fly(cam),
             }
@@ -2090,7 +2055,7 @@ fn main() -> Result<()> {
         fs,
         game_dir: args.game_dir.clone(),
         mod_dir: args.mod_dir.clone(),
-        fs_game: cod2_fs_game,
+        fs_game: None,
         fs_pure: None,
         connect_addr: args.connect.clone(),
         team: args.team.clone(),
@@ -2167,9 +2132,7 @@ fn main() -> Result<()> {
                 cod4_ents.4,
                 cod4_ents.5,
             ))),
-            (true, None) => {
-                session::Session::Cod2(Box::new(cod2_client::Cod2Client::new(cod2_pump)))
-            }
+            (true, None) => session::Session::Cod2(Box::new(cod2_client::Cod2Client::new(None))),
             (false, None) if cod4_menu => session::Session::Cod4Menu(Box::new(
                 cod4_front::Cod4Front::new(args.game_dir.clone()),
             )),
@@ -2177,7 +2140,11 @@ fn main() -> Result<()> {
         },
         wheel: console::keys::WheelNotches::default(),
     };
-    if matches!(app.mode, Mode::Idle) && app.cod4_loading.is_none() {
+    // A CoD2 `--connect` runs the handshake and its downloads beside the
+    // window, as the console's `connect` does, under the connect screen.
+    if let Some(addr) = args.connect.clone().filter(|_| cod2_connect) {
+        app.start_cod2_connect(addr);
+    } else if matches!(app.mode, Mode::Idle) && app.cod4_loading.is_none() {
         app.enter_menu(None);
     }
     let ran = event_loop.run_app(&mut app);

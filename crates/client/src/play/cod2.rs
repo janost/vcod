@@ -3531,6 +3531,102 @@ mod tests {
         assert!(freed, "the server kept the dropped connect's slot");
     }
 
+    /// `vcod --connect` on CoD2 joins through `connect_in_background`, as
+    /// the console's `connect` does: the call returns before the server
+    /// has read a packet, and the session it hands over stands where the
+    /// blocking connect left one. Needs `COD2_DIR`.
+    #[test]
+    fn cod2_live_a_background_connect_hands_over_the_blocking_connects_session() {
+        const CONNECT_SECS: Duration = Duration::from_secs(15);
+        use vcod_server::cod2::{Cod2Config, Cod2Server, FRAME_MS};
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let fs = std::rc::Rc::new(fs);
+        let mut sv = Cod2Server::new(
+            Cod2Config {
+                map: "mp_toujane".into(),
+                gametype: "dm".into(),
+                hostname: "bg".into(),
+                max_clients: 4,
+                gametype_script: None,
+            },
+            7,
+            Instant::now(),
+        );
+        sv.exec_default_cfg(&*fs);
+        sv.set_cvar("sv_pure", "0");
+        sv.load(Some(fs)).unwrap();
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_nonblocking(true).unwrap();
+        let addr = sock.local_addr().unwrap().to_string();
+        let opts = ConnectOpts {
+            name: "joiner".into(),
+            allow_download: false,
+            www_download: false,
+            ..ConnectOpts::default()
+        };
+        let mut next = Instant::now();
+        // Serves the server until `done` holds, at most 30 s.
+        let mut serve = |sv: &mut Cod2Server, done: &mut dyn FnMut(&Cod2Server) -> bool| {
+            let mut buf = [0u8; 4096];
+            let t0 = Instant::now();
+            while !done(sv) {
+                assert!(t0.elapsed() < Duration::from_secs(30), "served 30 s");
+                while let Ok((n, from)) = sock.recv_from(&mut buf) {
+                    sv.handle_packet(from, &buf[..n], Instant::now());
+                }
+                let now = Instant::now();
+                if now >= next {
+                    next = now + Duration::from_millis(FRAME_MS as u64);
+                    sv.tick_frames(now, 1);
+                }
+                for (to, p) in sv.take_outgoing() {
+                    let _ = sock.send_to(&p, to);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        let state = |s: &Cod2Session| {
+            (
+                s.settled(),
+                s.map_name().map(str::to_string),
+                s.view.gamestates,
+                s.level_gamestates,
+                s.loaded_map.clone(),
+                s.fs_game().map(str::to_string),
+            )
+        };
+        let (a, o) = (addr.clone(), opts.clone());
+        let blocking = std::thread::spawn(move || Cod2Session::connect(&a, &o, CONNECT_SECS));
+        serve(&mut sv, &mut |_| blocking.is_finished());
+        let mut first = blocking.join().unwrap().unwrap();
+        let want = state(&first);
+        first.disconnect();
+        serve(&mut sv, &mut |sv| sv.client_count() == 0);
+        let connecting = Cod2Session::connect_in_background(&addr, opts, CONNECT_SECS);
+        assert!(connecting.poll().is_none(), "the connect ran on the caller");
+        let mut got = None;
+        serve(&mut sv, &mut |_| {
+            got = got.take().or_else(|| connecting.poll());
+            got.is_some()
+        });
+        let mut s = got.unwrap().unwrap();
+        assert_eq!(state(&s), want);
+        assert_eq!(
+            want,
+            (
+                true,
+                Some("mp_toujane".into()),
+                1,
+                1,
+                "mp_toujane".into(),
+                None
+            )
+        );
+        s.disconnect();
+    }
+
     /// `timedemo_<map>_mode_<r_mode>.csv`, the map short of its directory
     /// and last extension.
     #[test]
