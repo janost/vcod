@@ -2780,8 +2780,10 @@ vcod copies at the write, with a flag for the count (`Heap::share`,
 `Heap::own`): an array stored into a variable, field, element, argument or
 a `waittill`'s bound locals is flagged, and the `EnsureArray*` and
 `OwnLocal` ops that resolve an index write's target copy a flagged array
-and store the copy back. The flag is never cleared, which costs a copy
-retail would skip and no script can see. A write through `game` itself
+and store the copy back. The flag stays until a sweep between frames
+counts each array's holders (`Heap::collect`, cod2-gsc-diff.md 3.7) and
+clears it on an array one place holds; until then it costs a copy retail
+would skip and no script can see. A write through `game` itself
 (`game["k"] = v` after `g = game`) still reaches `g`. INFERRED
 (unmeasured on retail). Gates: `semantics_ab`'s `probe_array_copy`,
 `cod4::disconnect_tests::an_autoassigned_player_beside_bots_times_out_without_script_errors`

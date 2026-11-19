@@ -3284,6 +3284,15 @@ impl Host for GameHost {
         }
         self.set_field(cx, ent, field, value)
     }
+
+    /// The objects, and the notifies queued for the next frame.
+    fn roots(&self, out: &mut Vec<Value>) {
+        self.ents.script_roots(out);
+        let queued = self.engine_notifies.iter().map(|n| &n.2);
+        for args in queued.chain(self.vehicles.die_notifies.iter().map(|n| &n.2)) {
+            out.extend_from_slice(args);
+        }
+    }
 }
 
 impl GameHost {

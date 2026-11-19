@@ -54,6 +54,13 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
   when the value holds the target: no array cycle exists. A struct cycle
   (`s.a = s`) is legal; the level carry (`lift_array`) and `scriptUsage`
   take each object once.
+- The heap is swept at the end of `Vm::run_frame` (`Vm::collect`): a struct
+  or array nothing reaches is freed and its id goes to the next allocation.
+  A host that keeps one between frames names it in `Host::roots`; one left
+  out later reads as some other object. `GameHost::roots` walks the object
+  table (script structs, engine and client fields) and the two queued
+  notify lists. A host holding an id in a Rust local across `run_frame`
+  has the same bug.
 - `Cx::spawn` runs a script thread before the calling builtin's next
   instruction. `Cx::spawn_then` adds `Host::spawn_returned` once that thread
   first suspends. Only a `Cx` handed to a builtin (or to `spawn_returned`)

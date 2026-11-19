@@ -1,9 +1,12 @@
 //! Struct and array storage for script values.
 //!
-//! No garbage collection: nothing is freed until the whole heap is dropped
-//! at the next level. [`Heap::vars`] counts what has been allocated, and the
-//! VM ends a thread that takes it past its ceiling
-//! (`interp::MAX_VARIABLES`), as retail's variable pool runs out.
+//! Retail frees a variable when its reference count drops to zero. vcod's
+//! values are plain ids, so the heap is swept instead: between frames the VM
+//! marks what its threads, its globals and the host still hold
+//! ([`Heap::collect`]) and frees the rest for the next allocation to reuse.
+//! [`Heap::vars`] counts what is allocated, and the VM ends a thread that
+//! takes it past its ceiling (`interp::MAX_VARIABLES`), as retail's variable
+//! pool runs out.
 
 use std::collections::BTreeMap;
 
@@ -159,6 +162,13 @@ impl Elems {
     }
 }
 
+/// How many objects may be allocated past the last sweep's survivors before
+/// [`Heap::collect_due`] asks for the next: a sweep costs a walk of the live
+/// heap, so it waits for as many new objects as survived, and for at least
+/// this many: about two and a half minutes of stock CoD4 `war` with 12 bots
+/// (cod2-gsc-diff.md 3.7).
+const COLLECT_FLOOR: usize = 16_384;
+
 #[derive(Default)]
 pub struct Heap {
     structs: Vec<FxHashMap<Atom, Value>>,
@@ -166,6 +176,13 @@ pub struct Heap {
     /// Arrays a second place may hold ([`Heap::share`]): a write through
     /// one copies it first ([`Heap::own`]).
     shared: Vec<bool>,
+    /// The slots the last sweep freed, the lowest last: what the next
+    /// allocations take.
+    free_structs: Vec<u32>,
+    free_arrays: Vec<u32>,
+    /// Objects allocated since the last sweep, and how many it kept.
+    allocated: usize,
+    survivors: usize,
     /// [`Heap::vars`].
     vars: u64,
 }
@@ -176,30 +193,126 @@ impl Heap {
     }
 
     pub fn new_struct(&mut self) -> StructId {
+        self.allocated += 1;
+        self.vars += 1;
+        if let Some(i) = self.free_structs.pop() {
+            return StructId(i);
+        }
         let id = StructId(self.structs.len() as u32);
         self.structs.push(FxHashMap::default());
-        self.vars += 1;
         id
     }
 
     pub fn new_array(&mut self) -> ArrayId {
+        self.alloc_array(Elems::default())
+    }
+
+    /// A slot for `elems`, a freed one first, unshared.
+    fn alloc_array(&mut self, elems: Elems) -> ArrayId {
+        self.allocated += 1;
+        self.vars += 1 + elems.len() as u64;
+        if let Some(i) = self.free_arrays.pop() {
+            self.arrays[i as usize] = elems;
+            return ArrayId(i);
+        }
         let id = ArrayId(self.arrays.len() as u32);
-        self.arrays.push(Elems::default());
+        self.arrays.push(elems);
         self.shared.push(false);
-        self.vars += 1;
         id
     }
 
-    /// Every struct and array allocated, plus their fields and elements, the
-    /// unreachable ones included: one per variable retail's pool would hold
-    /// for them, less what retail would have freed.
+    /// Every struct and array allocated, plus their fields and elements:
+    /// what the last sweep kept and everything allocated since. One per
+    /// variable retail's pool would hold for them, plus the garbage since
+    /// the sweep.
     pub fn vars(&self) -> u64 {
         self.vars
     }
 
-    /// The arrays and the structs allocated.
+    /// The array and the struct slots, the freed ones included: the heap's
+    /// footprint.
     pub fn objects(&self) -> (usize, usize) {
         (self.arrays.len(), self.structs.len())
+    }
+
+    /// Whether enough has been allocated since the last sweep for the VM
+    /// to run the next ([`COLLECT_FLOOR`]).
+    pub(crate) fn collect_due(&self) -> bool {
+        self.allocated >= self.survivors.max(COLLECT_FLOOR)
+    }
+
+    /// Frees every struct and array `roots` cannot reach, at any depth, for
+    /// the next allocations to reuse, and recounts [`Heap::vars`] over what
+    /// is left. `roots` must name every value held outside the heap: a
+    /// thread's locals and operand stack, the globals, and the host's. The
+    /// same walk counts each array's holders, retail's `refCount` plus one,
+    /// so an array one place holds is no longer [`Heap::share`]d and its
+    /// next write goes to it in place, as retail's does.
+    pub fn collect(&mut self, roots: impl IntoIterator<Item = Value>) {
+        let mut struct_live = vec![false; self.structs.len()];
+        let mut holders = vec![0u8; self.arrays.len()];
+        let mut todo = Vec::new();
+        let mut visit = |v: Value, todo: &mut Vec<Value>| match v {
+            Value::Array(a) => {
+                if let Some(n) = holders.get_mut(a.0 as usize) {
+                    *n = n.saturating_add(1);
+                    if *n == 1 {
+                        todo.push(v);
+                    }
+                }
+            }
+            Value::Struct(s) => {
+                if let Some(live) = struct_live.get_mut(s.0 as usize)
+                    && !*live
+                {
+                    *live = true;
+                    todo.push(v);
+                }
+            }
+            _ => {}
+        };
+        for v in roots {
+            visit(v, &mut todo);
+        }
+        while let Some(v) = todo.pop() {
+            match v {
+                Value::Array(a) => {
+                    for (_, e) in self.arrays[a.0 as usize].iter() {
+                        visit(e, &mut todo);
+                    }
+                }
+                Value::Struct(s) => {
+                    for &e in self.structs[s.0 as usize].values() {
+                        visit(e, &mut todo);
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.vars = 0;
+        self.survivors = 0;
+        self.free_arrays.clear();
+        for (i, n) in holders.iter().enumerate().rev() {
+            if *n == 0 {
+                self.arrays[i] = Elems::default();
+                self.free_arrays.push(i as u32);
+            } else {
+                self.vars += 1 + self.arrays[i].len() as u64;
+                self.survivors += 1;
+            }
+            self.shared[i] = *n > 1;
+        }
+        self.free_structs.clear();
+        for (i, live) in struct_live.iter().enumerate().rev() {
+            if *live {
+                self.vars += 1 + self.structs[i].len() as u64;
+                self.survivors += 1;
+            } else {
+                self.structs[i] = FxHashMap::default();
+                self.free_structs.push(i as u32);
+            }
+        }
+        self.allocated = 0;
     }
 
     /// Whether `to` is `from` or an array `from` holds, at any depth through
@@ -264,7 +377,8 @@ impl Heap {
     /// An array value stored somewhere new (a variable, a field, an
     /// element, an argument): from here on two places may hold it. Retail
     /// counts the references (`Scr_EvalArrayRef`'s `refCount`); vcod keeps
-    /// the flag for good, which only costs a copy nobody could tell apart.
+    /// the flag until the next sweep counts the holders ([`Heap::collect`]),
+    /// which only costs a copy nobody could tell apart.
     pub fn share(&mut self, v: Value) {
         if let Value::Array(a) = v
             && let Some(f) = self.shared.get_mut(a.0 as usize)
@@ -297,11 +411,7 @@ impl Heap {
         for (_, v) in elems.iter() {
             self.share(v);
         }
-        let id = ArrayId(self.arrays.len() as u32);
-        self.vars += 1 + elems.len() as u64;
-        self.arrays.push(elems);
-        self.shared.push(false);
-        id
+        self.alloc_array(elems)
     }
 
     /// Reading an unset field yields `Undefined`, matching gsc semantics; so
@@ -408,7 +518,7 @@ impl Heap {
     /// How many struct fields and array elements hold each array, by id:
     /// the heap's share of retail's `refCount` plus one, which
     /// `scriptUsage` divides an array's usage by (`Vm::thread_usage`).
-    /// Garbage the heap never frees counts too.
+    /// Garbage since the last sweep counts too.
     pub fn array_holders(&self) -> FxHashMap<u32, u32> {
         let mut n = FxHashMap::default();
         let values = self

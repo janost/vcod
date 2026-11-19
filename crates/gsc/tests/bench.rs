@@ -199,6 +199,10 @@ impl Host for BenchHost {
         self.fields.insert((e.0, f), v);
         Ok(())
     }
+
+    fn roots(&self, out: &mut Vec<Value>) {
+        out.extend(self.fields.values());
+    }
 }
 
 #[test]

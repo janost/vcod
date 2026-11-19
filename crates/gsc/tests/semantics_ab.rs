@@ -64,6 +64,8 @@ impl Host for ProbeHost {
     fn set_field(&mut self, _cx: &mut Cx, _e: EntId, _f: Atom, _v: Value) -> Result<(), ErrorKind> {
         Ok(())
     }
+
+    fn roots(&self, _out: &mut Vec<Value>) {}
 }
 
 /// What one probe produced here: its `PROBE ` lines, the message of the
