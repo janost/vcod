@@ -944,7 +944,7 @@ impl Cod4Bots {
             thrower: ps.origin,
             speed: def.projectile_speed as f32,
             speed_up: def.projectile_speed_up as f32,
-            fuse_s: def.fuse_time.max(1000) as f32 / 1000.0,
+            fuse_ms: def.fuse_time,
             radius,
         };
         super::lob(&world.collision, &throw, target)

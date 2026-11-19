@@ -347,14 +347,14 @@ const LOST_STILL: f32 = 100.0;
 
 /// A frag throw as CoD2's and CoD4's lob flies it ([`lob`]): from the eye
 /// `from` at `projectileSpeed` along the view plus `projectileSpeedUp` up,
-/// its fuse in seconds, its `explosionRadius`, and the thrower's origin it
+/// its `fuseTime` in ms, its `explosionRadius`, and the thrower's origin it
 /// must go off that far from.
 pub(crate) struct Lob {
     pub(crate) from: glam::Vec3,
     pub(crate) thrower: glam::Vec3,
     pub(crate) speed: f32,
     pub(crate) speed_up: f32,
-    pub(crate) fuse_s: f32,
+    pub(crate) fuse_ms: i32,
     pub(crate) radius: f32,
 }
 
@@ -372,6 +372,9 @@ pub(crate) fn lob(
     const STEP_S: f32 = 0.05;
     let to = target - throw.from;
     let yaw = to.y.atan2(to.x).to_degrees();
+    // The whole fuse, however short: a frag that goes off in the air near
+    // the thrower is not thrown.
+    let fuse_s = throw.fuse_ms as f32 / 1000.0;
     let mut best: Option<([f32; 2], f32)> = None;
     for up in (-2..=17).map(|i| i as f32 * 5.0) {
         let (sp, cp) = up.to_radians().sin_cos();
@@ -381,7 +384,7 @@ pub(crate) fn lob(
         let mut at = throw.from;
         let mut t = 0.0;
         let mut landed = None;
-        while t < throw.fuse_s {
+        while t < fuse_s {
             let next = at + v * STEP_S - glam::Vec3::Z * 400.0 * STEP_S * STEP_S;
             v.z -= 800.0 * STEP_S;
             let tr = w.shot_trace(at, next);
@@ -917,5 +920,23 @@ mod tests {
         assert!(!mate_in_blast(mine, [(TEAM_AXIS, far)], target, 256.0));
         assert!(!mate_in_blast(mine, [(TEAM_ALLIES, near)], target, 256.0));
         assert!(!mate_in_blast(Some(3), [(3, near)], target, 256.0));
+    }
+
+    /// A lob flies its whole fuse and no more: one that goes off in the air
+    /// within its radius of the thrower is not thrown.
+    #[test]
+    fn a_lob_flies_the_fuse_it_has() {
+        let w = vcod_common::collision::test_world(&[]);
+        let throw = |fuse_ms| Lob {
+            from: glam::Vec3::new(0.0, 0.0, 60.0),
+            thrower: glam::Vec3::ZERO,
+            speed: 600.0,
+            speed_up: 0.0,
+            fuse_ms,
+            radius: 256.0,
+        };
+        let target = glam::Vec3::new(500.0, 0.0, 0.0);
+        assert!(lob(&w, &throw(3500), target).is_some());
+        assert_eq!(lob(&w, &throw(300), target), None);
     }
 }

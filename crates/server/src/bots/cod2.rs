@@ -1716,7 +1716,7 @@ pub(crate) fn lob_probe(
         thrower: p.ps.origin,
         speed: def.projectile_speed as f32,
         speed_up: def.projectile_speed_up as f32,
-        fuse_s: def.fuse_time as f32 / 1000.0,
+        fuse_ms: def.fuse_time,
         radius,
     };
     super::lob(&level.world.collision, &throw, target)

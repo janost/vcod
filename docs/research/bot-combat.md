@@ -2006,3 +2006,7 @@ VERIFIED (measured, ours): every refactor commit printed these, every
   for a held one, so the driver kept its brain until the slot freed;
   both now ask `Engine::bot_connected`, as CoD4 did. Digests unchanged:
   no bot drops in these matches.
+- The fuse: CoD4's lob flew at least 1000 ms of a frag's flight whatever
+  its `fuseTime`, CoD2's the fuse itself; a fuse shorter than the
+  clamp could pass the probe and go off in the air by the thrower. The
+  shared lob flies the fuse. Digests unchanged: 1.7's frag fuses 3500.
