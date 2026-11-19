@@ -10,9 +10,9 @@ use vcod_common::text::clean_str;
 use vcod_common::ui_menu::{FEEDER_MUTELIST, FEEDER_PLAYER_LIST, UiItem};
 use winit::keyboard::KeyCode;
 
-use super::{
-    HudQuad, Painter, SCROLLBAR_SIZE, Ui, UiEffect, listbox, truncate_visible, visible_rows,
-};
+use super::lists::visible_rows;
+use super::paint::{Painter, truncate_visible};
+use super::{HudQuad, SCROLLBAR_SIZE, Ui, UiEffect, listbox};
 use crate::console::shell::quotable;
 
 /// `UI_FeederCount` rebuilds the list at most this often (ui_mp_x86.dll

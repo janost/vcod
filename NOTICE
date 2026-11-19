@@ -11,7 +11,13 @@ The files below carry a "Contains routines ported from" header naming the
 source and pointing here (crates/common/tests/notice_ports.rs keeps the two
 in step):
 
+  crates/client/src/frontend/input.rs
+  crates/client/src/frontend/lists.rs
+  crates/client/src/frontend/load.rs
   crates/client/src/frontend/mod.rs
+  crates/client/src/frontend/paint.rs
+  crates/client/src/frontend/script.rs
+  crates/client/src/frontend/stack.rs
   crates/client/src/sky.rs
   crates/common/src/animscript.rs
   crates/common/src/collision.rs

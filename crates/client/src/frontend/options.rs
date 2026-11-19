@@ -29,7 +29,8 @@ fn enum_index(entries: &[String], value: &str) -> usize {
 
 use winit::keyboard::KeyCode;
 
-use super::{Painter, Ui, UiEffect};
+use super::paint::Painter;
+use super::{Ui, UiEffect};
 use crate::console::shell::{Shell, bare, quotable};
 use crate::hud::HudQuad;
 

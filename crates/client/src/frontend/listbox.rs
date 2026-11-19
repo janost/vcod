@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 use vcod_common::ui_menu::UiItem;
 use winit::keyboard::KeyCode;
 
-use super::{Painter, SCROLLBAR_SIZE};
+use super::SCROLLBAR_SIZE;
+use super::paint::Painter;
 use crate::hud::HudQuad;
 
 const ARROW_UP: &str = "ui/assets/scrollbar_arrow_up_a.tga";
