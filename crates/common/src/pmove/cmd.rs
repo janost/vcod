@@ -9,8 +9,8 @@ use crate::movetrace::MoveWorld;
 use crate::net::msg::{self, UserCmd};
 use crate::weapon::WeaponDef;
 
-/// ANGLE2SHORT units per degree (codextended shared.h).
-pub const ANGLE2SHORT: f32 = 65536.0 / 360.0;
+/// ANGLE2SHORT units per degree.
+pub const ANGLE2SHORT: f32 = crate::x87::SHORT_PER_DEG;
 /// `Pmove`'s catch-up (`game.mp.i386.so` 0x34492): a client further in arrears
 /// than this has the excess dropped rather than simulated, which also bounds
 /// the chop to 16 steps per cmd. `docs/protocol-1.1.md`, "How long a cmd is
@@ -97,9 +97,7 @@ pub fn view_angles(cmd_angles: [i32; 3], delta_angles: [i32; 3]) -> [f32; 3] {
 /// camera's convention (positive up). Returns the wire-convention view.
 pub fn apply_view(ps: &mut PlayerState, cmd_angles: [i32; 3], delta_angles: [i32; 3]) -> [f32; 3] {
     let view = view_angles(cmd_angles, delta_angles);
-    // `AngleVectors` takes each angle to radians by the double pi / 180 and
-    // rounds it to a float (game.mp 0x3b234).
-    let rad = |deg: f32| (f64::from(deg) * (std::f64::consts::PI / 180.0)) as f32;
+    let rad = super::angles::view_rad;
     ps.prev_yaw = ps.yaw;
     ps.yaw = rad(view[1]);
     ps.pitch = -rad(view[0]);
@@ -147,7 +145,7 @@ fn clamp_view(
         }
     }
     if changed {
-        let rad = |deg: f32| (f64::from(deg) * (std::f64::consts::PI / 180.0)) as f32;
+        let rad = super::angles::view_rad;
         ps.yaw = rad(view[1]);
         ps.pitch = -rad(view[0]);
     }
@@ -297,7 +295,7 @@ pub fn dead_step(
     weapon::adjust_aim_spread_scale(
         ps,
         &input,
-        weapons.get(ps.weapon as usize).and_then(Option::as_ref),
+        super::weapon::weapon_def(weapons, ps.weapon),
         dt,
     );
     ps.linked = linked;

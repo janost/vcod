@@ -144,29 +144,97 @@ pub fn vec3_normalize_to_kept(v: Vec3) -> (Vec3, f32) {
     }
 }
 
-/// 65536 / 360 as a float: CoD2's rodata 0x8155124, the short grid's
-/// factor and every `delta_angles` push's.
+/// 65536 / 360 as a float: CoD2's rodata 0x8155124 and CoD1's
+/// `ANGLE2SHORT`, the short grid's factor and every `delta_angles` push's.
 pub const SHORT_PER_DEG: f32 = f32::from_bits(0x4336_0b61);
 
-/// CoD2 1.3's `AngleNormalize360` through the short grid (`cod2_lnxded`
-/// 0x80a8432): the float argument times [`SHORT_PER_DEG`] truncated,
-/// masked to 16 bits, times 360 / 65536.
-pub fn angle_normalize360_short(a: f32) -> f32 {
-    let short = (f64::from(SHORT_PER_DEG) * f64::from(a)) as i32 & 0xffff;
+/// `AngleNormalize360` through the short grid on an argument the x87 keeps
+/// (1.1d 0x3eb30, 1.5b 0x36a3c, UO 0x3dc8c): the product with
+/// [`SHORT_PER_DEG`] stays on the stack into the truncating `fistp`, masked
+/// to 16 bits, times 360 / 65536. An angle a hair under a 65536th truncates
+/// down where a float product would round it up onto the unit (combat doc
+/// 12.7).
+pub fn angle_normalize360_kept(a: f64) -> f32 {
+    let short = (f64::from(SHORT_PER_DEG) * a) as i32 & 0xffff;
     (f64::from(short) * (360.0 / 65536.0)) as f32
+}
+
+/// `AngleNormalize180` (1.1d 0x3eb70) on a kept argument:
+/// [`angle_normalize360_kept`] stored, less 360 over 180.
+pub fn angle_normalize180_kept(a: f64) -> f32 {
+    let a = angle_normalize360_kept(a);
+    if a > 180.0 { a - 360.0 } else { a }
+}
+
+/// 1.1d's `AngleDelta` (0x3ec9c): the difference left on the stack.
+pub fn angle_delta_kept(a: f32, b: f32) -> f32 {
+    angle_normalize180_kept(f64::from(a) - f64::from(b))
+}
+
+/// CoD2 1.3's `AngleNormalize360` (`cod2_lnxded` 0x80a8432) and CoD1's on
+/// a float argument: [`angle_normalize360_kept`] of the stored float.
+pub fn angle_normalize360_short(a: f32) -> f32 {
+    angle_normalize360_kept(f64::from(a))
 }
 
 /// CoD2 1.3's `AngleNormalize180` (0x80a8476): [`angle_normalize360_short`]
 /// stored, less 360 over 180.
 pub fn angle_normalize180_short(a: f32) -> f32 {
-    let a = angle_normalize360_short(a);
-    if a > 180.0 { a - 360.0 } else { a }
+    angle_normalize180_kept(f64::from(a))
 }
 
-/// CoD2 1.3's `AngleDelta` (0x80a85bc): `AngleNormalize180(a - b)`, the
-/// difference stored as the argument.
+/// CoD2 1.3's `AngleDelta` (0x80a85bc), 1.5b's (0x36c0a) and UO's
+/// (0x3de5a): `AngleNormalize180(a - b)`, the difference stored as the
+/// argument.
 pub fn angle_delta_short(a: f32, b: f32) -> f32 {
     angle_normalize180_short(a - b)
+}
+
+/// One `delta_angles` push: `(int)(deg * 182.04445)` under a truncating
+/// control word, masked to 16 bits (`cod2_lnxded` 0x80e6eb8, 1.5b 0x26368).
+pub fn angle_shorts(deg: f32) -> i32 {
+    (f64::from(SHORT_PER_DEG) * f64::from(deg)) as i32 & 0xffff
+}
+
+/// `AngleNormalize360Accurate` (`cod2_lnxded` 0x80a84b8, 1.5b 0x36ae0):
+/// whole turns added or taken away until the angle is in 0..360, each sum
+/// stored.
+pub fn normalize360_accurate(a: f32) -> f32 {
+    let mut a = crate::fguard::turns(a);
+    while a < 0.0 {
+        a += 360.0;
+    }
+    while a >= 360.0 {
+        a -= 360.0;
+    }
+    a
+}
+
+/// `AngleNormalize180Accurate` (`cod2_lnxded` 0x80a8536, 1.5b 0x36b75):
+/// turns added while at or under -180 and taken away while over 180, so an
+/// angle already in range comes back as it went in.
+pub fn normalize180_accurate(a: f32) -> f32 {
+    let mut a = crate::fguard::turns(a);
+    while a <= -180.0 {
+        a += 360.0;
+    }
+    while a > 180.0 {
+        a -= 360.0;
+    }
+    a
+}
+
+/// `AngleSubtract` (1.1 0x3e968): `a - b` stored, wrapped into -180..180
+/// by whole turns.
+pub fn angle_subtract(a: f32, b: f32) -> f32 {
+    let mut d = crate::fguard::turns(a - b);
+    while d > 180.0 {
+        d -= 360.0;
+    }
+    while d < -180.0 {
+        d += 360.0;
+    }
+    d
 }
 
 /// 1 / 360 as the double constant CoD4 1.7's angle helpers multiply by.

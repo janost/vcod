@@ -100,7 +100,7 @@ fn a_climber_looking_away_is_held_100_off_the_rungs() {
     };
     let (c, yaw) = at(200.0, false, MoveRules::V1_1);
     assert!((c + 10.0).abs() < 0.01, "{c}");
-    assert_eq!(yaw, Some(short_normalize360(190.0)));
+    assert_eq!(yaw, Some(angle_normalize360_short(190.0)));
     assert_eq!(at(200.0, false, MoveRules::V1_5).1, Some(190.0));
     assert_eq!(at(-30.0, false, MoveRules::Uo).1, Some(350.0));
     assert_eq!(at(200.0, true, MoveRules::V1_1), (0.0, None));

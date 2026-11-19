@@ -5,7 +5,7 @@
 //! default arm's tail and the dead arms.
 
 use super::footsteps::footsteps;
-use super::ground::{ground_trace, set_water_level};
+use super::ground::{ground_trace, leave_ground, set_water_level};
 use super::jump::{check_jump, jump_penalty_landing};
 use super::ladder::{cap_ladder_yaw, check_ladder_move, ladder_check_skipped, ladder_move};
 use super::land::{LAND_ANIM_SPEED, crash_land};
@@ -90,13 +90,8 @@ pub fn pmove(
     // `PM_AdjustAimSpreadScale` runs first of all, ahead of the view-angle
     // update and of every flag this frame writes, so it reads the previous
     // frame's ground state and ADS fraction (combat doc, 2.1).
-    weapon::adjust_aim_spread_scale(
-        ps,
-        input,
-        weapons.get(ps.weapon as usize).and_then(Option::as_ref),
-        dt,
-    );
-    let weapon_def = weapons.get(ps.weapon as usize).and_then(Option::as_ref);
+    weapon::adjust_aim_spread_scale(ps, input, weapon::weapon_def(weapons, ps.weapon), dt);
+    let weapon_def = weapon::weapon_def(weapons, ps.weapon);
     let mut events = Vec::new();
     let was_on_ground = ps.on_ground;
     // retail's `pml.previous_origin` and `previous_velocity`, taken at the
@@ -250,23 +245,16 @@ fn linked_move(
     update_lean(ps, input, true, world, dt);
     // The arm's first store: `groundEntityNum` 1023, `pml.walking` and
     // `pml.groundPlane` 0.
-    ps.on_ground = false;
-    ps.ground_plane = None;
-    ps.ground_normal = Vec3::Z;
-    ps.ground_surface_flags = 0;
+    leave_ground(ps);
     ads_flag(
         ps,
         input,
-        weapons.get(ps.weapon as usize).and_then(Option::as_ref),
+        weapon::weapon_def(weapons, ps.weapon),
         world,
         events,
     );
     ps.walking = walking_flag(ps, input);
-    update_sprint_flag(
-        ps,
-        input,
-        weapons.get(ps.weapon as usize).and_then(Option::as_ref),
-    );
+    update_sprint_flag(ps, input, weapon::weapon_def(weapons, ps.weapon));
     update_stance(ps, input, world, dt, events);
     drop_knockback(ps, dt);
     update_fatigue(ps, input, dt, events);
@@ -288,14 +276,11 @@ fn seat_move(
     events: &mut Vec<PmEvent>,
 ) {
     ps.on_ladder = false;
-    ps.on_ground = false;
-    ps.ground_plane = None;
-    ps.ground_normal = Vec3::Z;
-    ps.ground_surface_flags = 0;
+    leave_ground(ps);
     // `PM_UpdateAimDownSightFlag`'s first clause (0x32c0b).
     ps.ads_active = input.ads;
     ps.walking = walking_flag(ps, input);
-    let def = weapons.get(ps.weapon as usize).and_then(Option::as_ref);
+    let def = weapon::weapon_def(weapons, ps.weapon);
     update_sprint_flag(ps, input, def);
     update_fatigue(ps, input, dt, events);
     let dt_ms = (dt * 1000.0).round() as i32;
@@ -442,10 +427,7 @@ pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) -> Vec<PmEven
     // still drops.
     if !ladder_check_skipped(ps) {
         ps.on_ladder = false;
-        ps.on_ground = false;
-        ps.ground_plane = None;
-        ps.ground_normal = Vec3::Z;
-        ps.ground_surface_flags = 0;
+        leave_ground(ps);
     }
     drop_knockback(ps, dt);
     // No events and no post-step velocity scale for a corpse: retail's step
@@ -492,10 +474,7 @@ pub fn dead_linked_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) {
     ps.move_start = ps.origin;
     ps.ads_active = false;
     update_lean(ps, &PmInput::default(), false, world, dt);
-    ps.on_ground = false;
-    ps.ground_plane = None;
-    ps.ground_normal = Vec3::Z;
-    ps.ground_surface_flags = 0;
+    leave_ground(ps);
     ps.walking = false;
     dead_eye(ps, dt);
     drop_knockback(ps, dt);

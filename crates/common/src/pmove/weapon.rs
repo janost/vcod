@@ -118,7 +118,7 @@ fn ms(seconds: f32) -> i32 {
     crate::weapon::stored_ms(seconds)
 }
 
-fn weapon_def(weapons: &[Option<WeaponDef>], index: u8) -> Option<&WeaponDef> {
+pub(super) fn weapon_def(weapons: &[Option<WeaponDef>], index: u8) -> Option<&WeaponDef> {
     weapons.get(index as usize).and_then(Option::as_ref)
 }
 
@@ -251,13 +251,7 @@ fn advance_ads(ps: &mut PlayerState, def: &WeaponDef, dt_ms: i32) {
     let reloading = reloading && !(ps.rules == MoveRules::Uo && def.is_lmg());
     let want = (ps.ads_active && !reloading && !rechambering)
         || (def.ads_fire && ps.weapon_delay_ms != 0 && ps.weaponstate == WEAPON_FIRING);
-    let step = dt_ms as f32
-        / if want {
-            trans_ms(def.ads_trans_in, ADS_TRANS_IN_DEFAULT_MS)
-        } else {
-            -trans_ms(def.ads_trans_out, ADS_TRANS_OUT_DEFAULT_MS)
-        };
-    ps.weapon_pos_frac = (ps.weapon_pos_frac + step).clamp(0.0, 1.0);
+    ads_ramp(ps, def, want, dt_ms);
 }
 
 /// UO's `PM_UpdateAimDownSightLerp` (game 0x3349e, cgame 0x30011f50) in
@@ -278,6 +272,12 @@ pub fn seat_ads_lerp(
     let Some(def) = def else {
         return;
     };
+    ads_ramp(ps, def, want, dt_ms);
+}
+
+/// The sight's fraction a frame toward 1 by `msec / adsTransInTime`, or
+/// back toward 0 by `msec / adsTransOutTime`.
+fn ads_ramp(ps: &mut PlayerState, def: &WeaponDef, want: bool, dt_ms: i32) {
     let step = dt_ms as f32
         / if want {
             trans_ms(def.ads_trans_in, ADS_TRANS_IN_DEFAULT_MS)
@@ -731,7 +731,7 @@ pub fn prone_move_key(
     if !grew(ps.last_cmd_moves[0], cmd.forward) && !grew(ps.last_cmd_moves[1], cmd.right) {
         return;
     }
-    let def = weapons.get(ps.weapon as usize).and_then(Option::as_ref);
+    let def = weapon_def(weapons, ps.weapon);
     if interrupt_with_prone_move(ps, def, cmd.weapon) {
         ps.ads_active = false;
     }

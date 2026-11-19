@@ -753,6 +753,9 @@ impl PlayerState {
 
     /// `PM_GetEffectiveStance` (0x34554): the stance the eye is in or
     /// easing towards, so a body still rising out of prone counts as prone.
+    /// 1.1 inlines it in the walk's scale and accel and the jump's gate
+    /// (0x2e7a1, 0x2f436, 0x2ebc8): standing up out of prone keeps prone's
+    /// accel and cannot jump until the eye reaches the crouch height.
     pub fn effective_stance(&self) -> Stance {
         if self.rules.v15() {
             // 1.5 0x1e9a5: the target alone.
@@ -762,7 +765,12 @@ impl PlayerState {
                 _ => Stance::Stand,
             };
         }
-        let lerping = self.view_lerp_ms.is_some();
+        self.eye_stance(self.view_lerp_ms.is_some())
+    }
+
+    /// 1.1's `PM_GetEffectiveStance` off the flags and the eye's target, with
+    /// `lerping` saying whether a leg runs.
+    fn eye_stance(&self, lerping: bool) -> Stance {
         if self.stance == Stance::Prone
             || self.view_lerp_target == VIEW_PRONE
             || (lerping && self.view_lerp_target == VIEW_CROUCH && !self.view_lerp_down)
@@ -782,10 +790,7 @@ impl PlayerState {
     /// `lerp_time` is the wire's `viewHeightLerpTime`.
     pub fn entity_prone_body(&self, lerp_time: i32, command_time: i32) -> ProneBody {
         let lerping = lerp_time != 0;
-        let prone = self.stance == Stance::Prone
-            || self.view_lerp_target == VIEW_PRONE
-            || (lerping && self.view_lerp_target == VIEW_CROUCH && !self.view_lerp_down);
-        if !prone {
+        if self.eye_stance(lerping) != Stance::Prone {
             return ProneBody::default();
         }
         let scale = if lerping {

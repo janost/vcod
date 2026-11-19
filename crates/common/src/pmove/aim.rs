@@ -178,36 +178,15 @@ fn spring_axis(
 
 const PI64: f64 = std::f64::consts::PI;
 
-/// `AngleNormalize360` (`0x3eb30`), 65536ths truncated toward zero (the
-/// `fldcw` there sets `0xc00`). A lag the sway eases toward zero reaches it
-/// only because of the truncation: rounded to nearest, it stalls a few
-/// 65536ths out once a step is under half of one, which a run against
-/// ours measured as a constant 0.022 degrees of yaw (combat doc, 15.4).
-/// The product stays on the x87 stack into the `fistp` (1.1d 0x3eb30, UO
-/// alike), so an angle a hair under a 65536th truncates down where an `f32`
-/// product would round it up onto the unit (combat doc 12.7).
-pub fn angle_normalize_360(a: f32) -> f32 {
-    ((f64::from(a) * f64::from(65536.0f32 / 360.0)) as i32 & 0xffff) as f32 * (360.0 / 65536.0)
-}
-
-/// `AngleNormalize180` (`0x3eb70`).
-pub fn angle_normalize_180(a: f32) -> f32 {
-    let a = angle_normalize_360(a);
-    if a > 180.0 { a - 360.0 } else { a }
-}
-
-/// `AngleSubtract` (`0x3e968`): the difference wrapped into -180..180 by
-/// repeated 360s, no rounding.
-pub fn angle_subtract(a: f32, b: f32) -> f32 {
-    let mut d = crate::fguard::turns(a - b);
-    while d > 180.0 {
-        d -= 360.0;
-    }
-    while d < -180.0 {
-        d += 360.0;
-    }
-    d
-}
+// `AngleNormalize360` (`0x3eb30`) and `AngleNormalize180` (`0x3eb70`) take
+// a float and keep the product into the truncating `fistp` (fldcw 0xc00). A
+// lag the sway eases toward zero reaches it only because of the
+// truncation: rounded to nearest, it stalls a few 65536ths out once a step
+// is under half of one (combat doc 15.4). `AngleSubtract` is 0x3e968.
+pub use crate::x87::{
+    angle_normalize180_short as angle_normalize_180,
+    angle_normalize360_short as angle_normalize_360, angle_subtract,
+};
 
 /// `GetLeanFraction` (`0x6ba64`): `(2 - |f|) * f`, the ease every kick
 /// curve and the lean roll go through.
@@ -469,7 +448,23 @@ fn movement_rot(
     } else {
         aim.pos_rot_rate
     };
-    for (cur, &target) in st.rot.iter_mut().zip(&target) {
+    ease_toward(&mut st.rot, target, rate, dt);
+    let k = if frac == 0.0 {
+        1.0
+    } else if frac < 0.5 {
+        1.0 - 2.0 * frac
+    } else {
+        return;
+    };
+    for (o, r) in out.iter_mut().zip(&st.rot) {
+        *o += r * k;
+    }
+}
+
+/// Each axis of `cur` a step of `dt * gap * rate` toward `target`, at least
+/// a tenth a second, and never past it.
+fn ease_toward(cur: &mut [f32; 3], target: [f32; 3], rate: f32, dt: f32) {
+    for (cur, &target) in cur.iter_mut().zip(&target) {
         if target == *cur {
             continue;
         }
@@ -481,16 +476,6 @@ fn movement_rot(
             step = step.min(dt * -0.1);
             *cur = (*cur + step).max(target);
         }
-    }
-    let k = if frac == 0.0 {
-        1.0
-    } else if frac < 0.5 {
-        1.0 - 2.0 * frac
-    } else {
-        return;
-    };
-    for (o, r) in out.iter_mut().zip(&st.rot) {
-        *o += r * k;
     }
 }
 
@@ -548,19 +533,7 @@ impl GunMove {
             aim.pos_move_rate
         };
         let dt = msec as f32 * 0.001;
-        for (cur, &target) in self.pos.iter_mut().zip(&target) {
-            if target == *cur {
-                continue;
-            }
-            let mut step = dt * (target - *cur) * rate;
-            if *cur < target {
-                step = step.max(dt * 0.1);
-                *cur = (*cur + step).min(target);
-            } else {
-                step = step.min(dt * -0.1);
-                *cur = (*cur + step).max(target);
-            }
-        }
+        ease_toward(&mut self.pos, target, rate, dt);
         let frac = ps.weapon_pos_frac;
         let k = if frac == 0.0 {
             1.0
