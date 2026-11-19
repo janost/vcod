@@ -14,31 +14,27 @@ use vcod_gsc::EntId;
 
 use super::{Cod2Bots, eye, playing};
 use crate::bots::BotView;
+use crate::bots::gun::{
+    MIN_RANGE, aim_barrel, arc_enemy, floor_spot, in_arc, mount_spot, straight_walk,
+};
 use crate::game::cod2::Cod2Level;
 use crate::game::cod2_turret::GunInfo;
-use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
 
 /// How far from the spot behind a gun a bot sets off for it.
 const GUN_REACH: f32 = 320.0;
-/// The most a bot's feet and the spot's may differ in height.
-const GUN_STEP: f32 = 40.0;
-/// An enemy nearer the gun than this is fought by hand.
-const MIN_RANGE: f32 = 250.0;
 /// The walk to a gun gives up after this, ms.
 const APPROACH_MS: i32 = 5000;
 /// A gunner with no enemy in the arc this long lets go, ms.
 const IDLE_RELEASE_MS: i32 = 4000;
-/// The barrel's turn per tick, degrees, and how near the aim it fires.
-const TURN_PER_TICK: f32 = 12.0;
+/// How near the aim the gunner fires, degrees.
 const FIRE_CONE: f32 = 3.0;
 /// The spot a bot mounts from, behind the gun along its yaw: where the
 /// stock probes stand (cod2-turrets.md 10).
 const BACK: f32 = 40.0;
+/// What a walk to a gun clips against.
+const MASK: u32 = vcod_cod2::pmove::MASK_PLAYERSOLID;
 /// `+activate` in a CoD2 cmd (`to_cmd2`'s map of `BUTTON_USE`).
 pub(super) const USE: i32 = 0x8;
-/// The walk's box: the player's, the step height up.
-const WALK_MINS: Vec3 = Vec3::new(-15.0, -15.0, 18.0);
-const WALK_MAXS: Vec3 = Vec3::new(15.0, 15.0, 70.0);
 
 /// One bot's business with a gun.
 #[derive(Clone, Copy, Debug, Default)]
@@ -63,41 +59,6 @@ pub(super) enum GunCmd {
         fire: bool,
         release: bool,
     },
-}
-
-/// `at`'s yaw off the gun's own, folded into (-180, 180].
-fn arc_yaw(gun: &GunInfo, at: Vec3) -> f32 {
-    let d = at - gun.origin;
-    angle_180(d.y.atan2(d.x).to_degrees() - gun.yaw)
-}
-
-fn angle_180(a: f32) -> f32 {
-    let a = a.rem_euclid(360.0);
-    if a > 180.0 { a - 360.0 } else { a }
-}
-
-/// Whether `at` is inside the gun's yaw arc.
-pub(super) fn in_arc(gun: &GunInfo, at: Vec3) -> bool {
-    let y = arc_yaw(gun, at);
-    y >= gun.yaw_range[0] && y <= gun.yaw_range[1]
-}
-
-/// The spot behind the gun a bot mounts from, at the gun's height.
-pub(super) fn mount_spot(gun: &GunInfo) -> Vec3 {
-    let (s, c) = gun.yaw.to_radians().sin_cos();
-    gun.origin - Vec3::new(c, s, 0.0) * BACK
-}
-
-/// The view from `eye` onto `at`: pitch (down positive), yaw.
-fn look_at(eye: Vec3, at: Vec3) -> [f32; 2] {
-    let d = at - eye;
-    let flat = d.truncate().length();
-    [-d.z.atan2(flat).to_degrees(), d.y.atan2(d.x).to_degrees()]
-}
-
-/// `from` turned toward `to` by at most `step` degrees an axis.
-fn turn(from: [f32; 2], to: [f32; 2], step: f32) -> [f32; 2] {
-    std::array::from_fn(|i| from[i] + angle_180(to[i] - from[i]).clamp(-step, step))
 }
 
 /// The cmd's angle for view angle `a` over `delta` (`ANGLE2SHORT` less
@@ -137,15 +98,7 @@ impl Cod2Bots {
             task.gun = Some(gun.id);
             task.manning = true;
             let cur = [p.ps.view_angles[0], p.ps.view_angles[1]];
-            let (aim, fire) = match target {
-                Some(at) => {
-                    let want = look_at(my_eye, at);
-                    let aim = turn(cur, want, TURN_PER_TICK);
-                    let off = (0..2).map(|i| angle_180(want[i] - aim[i]).abs());
-                    (aim, off.fold(0.0, f32::max) <= FIRE_CONE)
-                }
-                None => (cur, false),
-            };
+            let (aim, fire) = aim_barrel(cur, my_eye, target, FIRE_CONE);
             let release = now - task.seen >= IDLE_RELEASE_MS && !task.pressed;
             task.pressed = release;
             Some(GunCmd::Man {
@@ -172,7 +125,7 @@ impl Cod2Bots {
             }
             match task.gun.and_then(|id| guns.iter().find(|g| g.id == id)) {
                 Some(gun) => {
-                    view.waypoint = Some(mount_spot(gun).to_array());
+                    view.waypoint = Some(mount_spot(gun, BACK).to_array());
                     view.stop = false;
                     let press = p.gunner.hint_ent == Some(gun.id) && !task.pressed;
                     task.pressed = press;
@@ -210,27 +163,9 @@ impl Cod2Bots {
             .filter(|g| g.owner.is_none() && !taken.contains(&g.id))
             .filter(|g| in_arc(g, enemy) && g.origin.distance(enemy) > MIN_RANGE)
             .filter_map(|g| {
-                let spot = mount_spot(g);
-                let floor = w.move_trace(
-                    spot + Vec3::Z * 32.0,
-                    spot - Vec3::Z * 96.0,
-                    Vec3::ZERO,
-                    Vec3::ZERO,
-                    vcod_cod2::pmove::MASK_PLAYERSOLID,
-                );
-                let spot = floor.endpos;
+                let spot = floor_spot(w, mount_spot(g, BACK), MASK)?;
                 let d = (spot - feet).truncate().length();
-                if floor.fraction >= 1.0 || d > GUN_REACH || (spot.z - feet.z).abs() > GUN_STEP {
-                    return None;
-                }
-                let walk = w.move_trace(
-                    feet,
-                    spot,
-                    WALK_MINS,
-                    WALK_MAXS,
-                    vcod_cod2::pmove::MASK_PLAYERSOLID,
-                );
-                (walk.fraction >= 1.0).then_some((d, g.id))
+                straight_walk(w, feet, spot, GUN_REACH, MASK).then_some((d, g.id))
             })
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, id)| id)
@@ -252,24 +187,17 @@ impl Cod2Bots {
         }
         let mine = teams.get(slot).copied().unwrap_or(0);
         let w = &level.world.collision;
-        (level.players.iter().enumerate())
-            .filter(|(i, _)| *i != slot && playing(level, *i))
+        let foes = (level.players.iter().enumerate())
+            .filter(|&(i, _)| i != slot && playing(level, i))
+            .filter(|&(i, _)| crate::bots::foe(dm, mine, teams.get(i).copied().unwrap_or(0)))
             .filter_map(|(i, p)| {
                 let p = p.as_ref()?;
-                let theirs = teams.get(i).copied().unwrap_or(0);
-                let foe = dm
-                    || !(mine == TEAM_AXIS || mine == TEAM_ALLIES)
-                    || (theirs != mine && (theirs == TEAM_AXIS || theirs == TEAM_ALLIES));
-                let chest = Vec3::from(crate::bots::chest(
-                    p.ps.origin.into(),
-                    p.ps.view_height_current,
-                ));
-                let d = chest.distance(my_eye);
-                (foe && d <= crate::bots::SHOOT_RANGE && in_arc(gun, chest)).then_some((d, chest))
-            })
-            .filter(|(_, chest)| w.shot_trace(my_eye, *chest).fraction >= 1.0)
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-            .map(|(_, chest)| chest)
+                let chest = crate::bots::chest(p.ps.origin.into(), p.ps.view_height_current);
+                Some((i, Vec3::from(chest)))
+            });
+        arc_enemy(gun, my_eye, foes, |chest| {
+            w.shot_trace(my_eye, chest).fraction >= 1.0
+        })
     }
 }
 
@@ -306,36 +234,6 @@ pub(super) fn apply(c: &mut UserCmd2, step: &GunCmd, delta: [i32; 3]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn gun() -> GunInfo {
-        GunInfo {
-            id: EntId(295, 0),
-            origin: Vec3::new(100.0, 0.0, 0.0),
-            yaw: 90.0,
-            yaw_range: [-45.0, 45.0],
-            pitch_range: [-15.0, 15.0],
-            owner: None,
-        }
-    }
-
-    #[test]
-    fn the_arc_is_the_yaw_range_off_the_gun() {
-        let g = gun();
-        assert!(in_arc(&g, Vec3::new(100.0, 500.0, 0.0)));
-        assert!(in_arc(&g, Vec3::new(400.0, 400.0, 0.0)));
-        assert!(!in_arc(&g, Vec3::new(600.0, 400.0, 0.0)));
-        assert!(!in_arc(&g, Vec3::new(100.0, -500.0, 0.0)));
-        let spot = mount_spot(&g);
-        assert!((spot - Vec3::new(100.0, -40.0, 0.0)).length() < 1e-3);
-    }
-
-    #[test]
-    fn the_barrel_turns_a_step_at_a_time_the_short_way() {
-        assert_eq!(turn([0.0, 170.0], [5.0, -170.0], 12.0), [5.0, 182.0]);
-        assert_eq!(turn([0.0, 0.0], [30.0, 0.0], 12.0), [12.0, 0.0]);
-        let v = look_at(Vec3::ZERO, Vec3::new(100.0, 100.0, -100.0 * 2f32.sqrt()));
-        assert!((v[0] - 45.0).abs() < 1e-3 && (v[1] - 45.0).abs() < 1e-3);
-    }
 
     #[test]
     fn a_gunner_cmd_holds_still_and_fires_or_lets_go() {

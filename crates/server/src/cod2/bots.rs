@@ -178,7 +178,7 @@ impl BotWorld for Cod2Server {
     }
 
     fn connected(&self, slot: usize) -> bool {
-        self.core.clients[slot].is_some()
+        self.bot_connected(slot)
     }
 
     fn take_noises(&mut self) -> Vec<Noise> {
@@ -410,12 +410,13 @@ impl BotGame for super::Cod2Game {
         }
     }
 
-    /// The menu block's slots short of its last, as CoD2's bots have
-    /// always read it (CoD4's read the last too).
+    /// The first `team_` menu in the menu block, all 32 slots of it
+    /// (`CL_OpenScriptMenu_f`'s scan, cod2-protocol.md "Script menus on a
+    /// CoD2 client"), as CoD4's `menu_names` reads its block.
     fn team_menu(e: &Cod2Server) -> Option<usize> {
         use vcod_common::net::protocol::CsRange;
         let (first, last) = vcod_cod2::net::protocol::CS_LAYOUT_118.bounds(CsRange::Menu);
-        (first..last)
+        (first..=last)
             .find(|&i| {
                 e.core
                     .configstrings
@@ -482,6 +483,32 @@ mod tests {
         assert_eq!(said.matches("removed").count(), 4, "{said}");
         sv.tick_frames(now + std::time::Duration::from_millis(100), 1);
         assert_eq!(bots(&sv), 0);
+    }
+
+    /// A dropped bot's zombie slot holds no bot: the driver forgets it as
+    /// CoD4's does. Needs `COD2_DIR`.
+    #[test]
+    fn a_zombie_slot_is_no_bot_s() {
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        let mut sv = Cod2Server::new(
+            super::super::Cod2Config {
+                map: "mp_toujane".into(),
+                gametype: "dm".into(),
+                hostname: "zombie".into(),
+                max_clients: 4,
+                gametype_script: None,
+            },
+            3,
+            now,
+        );
+        sv.load(Some(std::rc::Rc::new(fs))).unwrap();
+        let slot = sv.add_bots(1, false)[0];
+        assert!(BotWorld::connected(&sv, slot));
+        sv.core.clients[slot].as_mut().unwrap().state = State::Zombie;
+        assert!(!BotWorld::connected(&sv, slot));
     }
 
     /// vcod's bots never vote, so they stay out of `numVotingClients`: one

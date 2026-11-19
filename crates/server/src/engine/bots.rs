@@ -106,6 +106,14 @@ impl<G: BotGame> Engine<G> {
         Some(slot)
     }
 
+    /// [`BotWorld::connected`]: a client holds `slot` and has not dropped;
+    /// a zombie only waits for its slot to free, and its bot is gone.
+    pub(crate) fn bot_connected(&self, slot: usize) -> bool {
+        self.core.clients[slot]
+            .as_ref()
+            .is_some_and(|c| c.state != State::Zombie)
+    }
+
     /// How many brains the bots have now.
     fn brain_count(&self) -> usize {
         self.game.bots().map_or(0, |b| b.bots().len())

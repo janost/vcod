@@ -36,6 +36,7 @@ use vcod_cod4::net::clmsg::UserCmd as UserCmd4;
 use vcod_cod4::pmove::weapon::{self as weap, WeaponDef};
 use vcod_cod4::pmove::{PlayerState, button, pm_type, pmf};
 use vcod_common::net::msg::{self, UserCmd};
+use vcod_gsc::EntId;
 
 use super::game_bots::{GameBots, OwnBots};
 use super::{
@@ -150,13 +151,17 @@ pub struct Cod4Own {
     stance_seq: HashMap<usize, i32>,
     arms: HashMap<usize, Arms>,
     /// Each bot's `damageEvent` last read and the hit it reported.
-    hits: HashMap<usize, (u32, Option<HitFelt>)>,
+    hits: HashMap<usize, (u32, Option<super::HitFelt>)>,
     /// The level's scored hits read so far, and each victim's last
     /// attacker off them with the level time.
     hits_read: usize,
     attackers: HashMap<usize, (usize, i32)>,
     /// Every client's `eventSequence` last read.
     heard: HashMap<usize, i32>,
+    /// The missiles in flight at the last read, and the bursts and spent
+    /// missiles already heard ([`blasts`]).
+    flying: Vec<Flying>,
+    heard_blasts: Vec<EntId>,
     /// Classes picked, by bot, for the spread.
     classes: BTreeMap<usize, usize>,
     /// Each bot's script switch under way (`a <weapon>`): the weapon and
@@ -184,9 +189,6 @@ pub struct Cod4Own {
 /// The bots' tick: the 50 ms the brain, its timers and the nav graph's
 /// walks were built on, whatever `sv_fps` steps the server.
 pub const BOT_TICK_MS: i32 = 50;
-
-/// A hit a bot felt: the attacker, the level time, the direction.
-type HitFelt = (usize, i32, [f32; 3]);
 
 /// What one tick carries from one of the driver's hooks to a later one.
 #[derive(Default)]
@@ -227,6 +229,8 @@ impl OwnBots for Cod4Own {
             hits_read: 0,
             attackers: HashMap::new(),
             heard: HashMap::new(),
+            flying: Vec::new(),
+            heard_blasts: Vec::new(),
             classes: BTreeMap::new(),
             switches: HashMap::new(),
             held: HashMap::new(),
@@ -569,23 +573,9 @@ impl Cod4Bots {
         };
         let event = word("damageEvent");
         let attacker = self.own.attackers.get(&slot).copied();
-        let seen = self.own.hits.entry(slot).or_insert((event, None));
-        if seen.0 != event {
-            seen.0 = event;
-            seen.1 = attacker
-                .filter(|&(_, t)| (0..1000).contains(&now.wrapping_sub(t)))
-                .map(|(a, _)| (a, now, level.hit_dir(slot).unwrap_or(Vec3::ZERO).to_array()));
-        }
-        let (a, at, dir) = seen.1?;
-        let ago_ms = now.wrapping_sub(at);
-        if !(0..super::HURT_MS).contains(&ago_ms) || !self.playing(level, a) {
-            return None;
-        }
-        Some(super::Hurt {
-            slot: a,
-            ago_ms,
-            dir,
-        })
+        let latch = self.own.hits.entry(slot).or_insert((event, None));
+        let hit = super::feel_hit(latch, event, attacker, || level.hit_dir(slot), now);
+        super::hurt_of(hit, now, |a| self.playing(level, a))
     }
 
     /// The enemy the bot in `slot` fights, the one that just hit it seen
@@ -611,55 +601,30 @@ impl Cod4Bots {
         }
         let me = self.ps(slot)?;
         let (world, _) = self.own.world.as_ref()?;
-        let bot = self.driver.bots.get(&slot);
         let mine = teams.get(slot).copied().unwrap_or(0);
-        let tracked = bot
-            .and_then(|b| b.target_slot())
-            .filter(|_| bot.is_none_or(|b| b.aware));
-        let fov = bot.map_or(super::Skill::default().fov_deg, |b| b.skill.fov_deg);
+        let (tracked, fov) = super::tracked_and_fov(self.driver.bots.get(&slot));
         let my_eye = eye(me);
-        let mut candidates: Vec<(f32, Vec3, EnemyView)> = Vec::new();
-        for (&i, p) in &self.own.pass.states {
-            if i == slot || !self.playing(level, i) {
-                continue;
-            }
-            let theirs = teams.get(i).copied().unwrap_or(0);
-            let foe = self.own.pass.dm
-                || !(mine == TEAM_AXIS || mine == TEAM_ALLIES)
-                || (theirs != mine && (theirs == TEAM_AXIS || theirs == TEAM_ALLIES));
-            if !foe {
-                continue;
-            }
-            let d = super::dist_sq(me.origin.into(), p.origin.into());
-            if d > super::SHOOT_RANGE * super::SHOOT_RANGE {
-                continue;
-            }
-            let chest = super::chest(p.origin.into(), p.view_height_current);
-            let known = Some(i) == tracked || Some(i) == attacker;
-            if !known && !super::in_sight_cone(my_eye, me.view_angles, chest.into(), fov) {
-                continue;
-            }
-            candidates.push((
-                d,
-                eye(p),
-                EnemyView {
-                    slot: i,
-                    origin: chest,
-                    velocity: p.velocity.into(),
-                },
-            ));
-        }
-        // The states map has no order: nearest first, then by slot.
-        candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.2.slot.cmp(&b.2.slot)));
-        let w = &world.collision;
-        let sighted = |i: usize| {
-            let (_, their_eye, e) = &candidates[i];
-            let clear = |to: [f32; 3]| self.shot_clear(w, my_eye, to.into());
-            let origin = super::aim_point(e.origin, (*their_eye).into(), clear)?;
-            Some(EnemyView { origin, ..*e })
+        let looker = super::Looker {
+            origin: me.origin,
+            eye: my_eye,
+            view: me.view_angles,
+            fov,
+            tracked,
+            attacker,
         };
-        let order: Vec<(f32, usize)> = candidates.iter().map(|c| (c.0, c.2.slot)).collect();
-        super::pick_enemy(&order, attacker, tracked, sighted)
+        let dm = self.own.pass.dm;
+        let foes = (self.own.pass.states.iter())
+            .filter(|&(&i, _)| i != slot && self.playing(level, i))
+            .filter(|&(&i, _)| super::foe(dm, mine, teams.get(i).copied().unwrap_or(0)))
+            .map(|(&i, p)| super::Seen {
+                slot: i,
+                origin: p.origin,
+                eye: eye(p),
+                view_height: p.view_height_current,
+                velocity: p.velocity.into(),
+            });
+        let w = &world.collision;
+        super::sight_enemy(&looker, foes, |to| self.shot_clear(w, my_eye, to.into()))
     }
 
     /// Whether a round from `from` reaches `to`: the world's shot trace
@@ -680,35 +645,51 @@ impl Cod4Bots {
             })
     }
 
-    /// The frame's gunfire since the last tick: each playing client's new
-    /// fire events chest high, as the CoD1 driver gathers them. Blasts are
-    /// not heard yet.
+    /// The frame's noises since the last tick: each playing client's new
+    /// fire events chest high as gunfire, and each burst since as a blast
+    /// ([`blasts`]), as CoD2's and the CoD1 driver gather them.
     pub(crate) fn listen(&mut self, level: &Cod4Level) -> Vec<super::Noise> {
         let mut noises = Vec::new();
         let mut slots: Vec<usize> = self.own.pass.states.keys().copied().collect();
         slots.sort_unstable();
+        let fire = [weap::ev::FIRE_WEAPON, weap::ev::FIRE_WEAPON_LASTSHOT];
         for i in slots {
             if !self.playing(level, i) {
                 self.own.heard.remove(&i);
                 continue;
             }
             let ps = &self.own.pass.states[&i];
-            let seq = ps.event_sequence;
-            let prev = self.own.heard.insert(i, seq).unwrap_or(seq);
-            let fired = (prev.max(seq - 4)..seq).any(|k| {
-                matches!(
-                    ps.events[(k & 3) as usize],
-                    weap::ev::FIRE_WEAPON | weap::ev::FIRE_WEAPON_LASTSHOT
-                )
-            });
-            if fired {
-                noises.push(super::Noise {
-                    at: super::chest(ps.origin.into(), ps.view_height_current),
-                    source: i,
-                    radius: super::HEAR_GUNFIRE,
-                });
+            if super::fired(&mut self.own.heard, i, ps.event_sequence, &ps.events, &fire) {
+                noises.push(super::gunfire(i, ps.origin.into(), ps.view_height_current));
             }
         }
+        let c4 = level.rt.host.cod4();
+        let defs = level.weapon_defs();
+        let loud = |w: u32| {
+            defs.get(w as usize).is_some_and(|d| {
+                d.explosion_radius > 0 && d.offhand_class != weap::OFFHAND_CLASS_SMOKE
+            })
+        };
+        let flying = |m: &crate::game::cod4::missile::Missile4| Flying {
+            id: m.id,
+            owner: m.owner,
+            weapon: m.weapon,
+            at: m.origin,
+        };
+        let missiles: Vec<(Flying, bool)> = (c4.missiles.iter())
+            .map(|m| (flying(m), m.free_at.is_some() && m.e_flags & SPENT != 0))
+            .collect();
+        let bursts: Vec<(EntId, u32, Vec3)> = c4
+            .bursts
+            .iter()
+            .map(|b| (b.id, b.weapon, b.origin))
+            .collect();
+        let heard = &mut self.own.heard_blasts;
+        noises.extend(blasts(&self.own.flying, &missiles, &bursts, heard, loud));
+        self.own.flying = (c4.missiles.iter())
+            .filter(|m| m.free_at.is_none())
+            .map(flying)
+            .collect();
         noises
     }
 
@@ -949,43 +930,25 @@ impl Cod4Bots {
     fn frag_near(&self, level: &Cod4Level, slot: usize) -> Option<[f32; 3]> {
         let ps = self.ps(slot)?;
         let (world, _) = self.own.world.as_ref()?;
-        let at = ps.origin;
         let eye = eye(ps);
         let defs = level.weapon_defs();
-        level
-            .rt
-            .host
-            .cod4()
-            .missiles
-            .iter()
+        let frags = (level.rt.host.cod4().missiles.iter())
             .filter(|m| {
                 defs.get(m.weapon as usize).is_some_and(|d| {
                     d.offhand_class == weap::OFFHAND_CLASS_FRAG && d.explosion_radius > 0
                 })
             })
-            .filter(|m| {
-                m.owner == Some(slot)
-                    || super::notices_frag(eye, ps.view_angles[1], m.origin, |a, b| {
-                        world.collision.shot_trace(a, b).fraction >= 1.0
-                    })
+            .map(|m| (m.origin, m.owner == Some(slot)));
+        super::frag_near(ps.origin, frags, |o| {
+            super::notices_frag(eye, ps.view_angles[1], o, |a, b| {
+                world.collision.shot_trace(a, b).fraction >= 1.0
             })
-            .map(|m| m.origin)
-            .filter(|o| {
-                (o.z - at.z).abs() < super::FLEE_HEIGHT
-                    && (*o - at).truncate().length() < super::FLEE_REACH
-            })
-            .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
-            .map(Into::into)
+        })
     }
 
     /// [`BotView::lob`] for the bot in `slot` throwing frag `weapon` (the
-    /// brain's number) at `target`, as CoD2's [`super::cod2::lob_probe`]
-    /// flies it: of the throws from 10 degrees down to 85 up, every 5, the
-    /// one whose frag comes down nearest `target`, within
-    /// [`super::LOB_MISS`], and not within its `explosionRadius` of the
-    /// thrower, flown from the eye at `projectileSpeed` plus
-    /// `projectileSpeedUp` under gravity 800 until it meets the world. With
-    /// friendly fire on, none onto a playing teammate's `explosionRadius`.
+    /// brain's number) at `target`, flown by [`super::lob`]. With friendly
+    /// fire on, none onto a playing teammate's `explosionRadius`.
     pub(crate) fn lob_probe(
         &self,
         level: &Cod4Level,
@@ -994,7 +957,6 @@ impl Cod4Bots {
         target: [f32; 3],
         teams: &[i32],
     ) -> Option<[f32; 2]> {
-        const STEP_S: f32 = 0.05;
         let ps = self.ps(slot)?;
         let w = self.own.arms.get(&slot)?.weapon(weapon);
         let def: &WeaponDef = level.weapon_defs().get(w as usize).filter(|_| w > 0)?;
@@ -1005,44 +967,21 @@ impl Cod4Bots {
             .enumerate()
             .filter(|&(i, _)| i != slot && self.playing(level, i))
             .filter_map(|(i, &t)| Some((t, self.ps(i)?.origin)));
-        if friendly_fire(level) && mate_in_blast(teams.get(slot).copied(), mates, target, radius) {
+        if friendly_fire(level)
+            && super::mate_in_blast(teams.get(slot).copied(), mates, target, radius)
+        {
             return None;
         }
         let (world, _) = self.own.world.as_ref()?;
-        let from = eye(ps);
-        let to = target - from;
-        let yaw = to.y.atan2(to.x).to_degrees();
-        let fuse_s = def.fuse_time.max(1000) as f32 / 1000.0;
-        let mut best: Option<([f32; 2], f32)> = None;
-        for up in (-2..=17).map(|i| i as f32 * 5.0) {
-            let (sp, cp) = up.to_radians().sin_cos();
-            let (sy, cy) = yaw.to_radians().sin_cos();
-            let mut v = Vec3::new(cp * cy, cp * sy, sp) * def.projectile_speed as f32;
-            v.z += def.projectile_speed_up as f32;
-            let mut at = from;
-            let mut t = 0.0;
-            let mut landed = None;
-            while t < fuse_s {
-                let next = at + v * STEP_S - Vec3::Z * 400.0 * STEP_S * STEP_S;
-                v.z -= 800.0 * STEP_S;
-                let tr = world.collision.shot_trace(at, next);
-                if tr.fraction < 1.0 {
-                    landed = Some(at + (next - at) * tr.fraction);
-                    break;
-                }
-                at = next;
-                t += STEP_S;
-            }
-            let burst = landed.unwrap_or(at);
-            if burst.distance(ps.origin) <= radius {
-                continue;
-            }
-            let miss = burst.distance(target);
-            if miss < super::LOB_MISS && best.is_none_or(|(_, m)| miss < m) {
-                best = Some(([-up, yaw], miss));
-            }
-        }
-        best.map(|(aim, _)| aim)
+        let throw = super::Lob {
+            from: eye(ps),
+            thrower: ps.origin,
+            speed: def.projectile_speed as f32,
+            speed_up: def.projectile_speed_up as f32,
+            fuse_ms: def.fuse_time,
+            radius,
+        };
+        super::lob(&world.collision, &throw, target)
     }
 
     /// The brain's `cmd` in 1.7's bits, its weapon back in CoD4's numbers,
@@ -1936,42 +1875,96 @@ fn friendly_fire(level: &Cod4Level) -> bool {
         .any(|n| crate::game::builtins::cvar::atoi(cvars.get(n)) != 0)
 }
 
-/// Whether `a` and `b` are on one team that is not `free`.
-pub(super) fn same_team(a: Option<i32>, b: Option<i32>) -> bool {
-    a.is_some_and(|a| (a == TEAM_AXIS || a == TEAM_ALLIES) && Some(a) == b)
+/// A missile at a read: its entity, thrower, weapon and origin.
+#[derive(Clone, Copy, Debug)]
+struct Flying {
+    id: EntId,
+    owner: Option<usize>,
+    weapon: u32,
+    at: Vec3,
 }
 
-/// Whether one of `mates` (team, origin) on `mine`'s team stands within
-/// `radius` of `target`.
-fn mate_in_blast(
-    mine: Option<i32>,
-    mates: impl IntoIterator<Item = (i32, Vec3)>,
-    target: Vec3,
-    radius: f32,
-) -> bool {
-    mates
-        .into_iter()
-        .any(|(t, at)| same_team(mine, Some(t)) && at.distance(target) < radius)
+/// `eFlags` 0x20, which a missile spent on impact carries (cod4-combat.md
+/// 10.3).
+const SPENT: u32 = 0x20;
+
+/// The blasts not heard yet, as CoD2's and CoD1's bots hear them, each as
+/// its thrower's: a burst (`bursts`, entity, weapon, point) laid to the
+/// missile of its weapon nearest it that was in flight at the last read
+/// (`was`) and is gone now, a fuse's burst leaving no thrower of its own;
+/// and a missile spent on impact (`missiles`, each with whether it is). Only
+/// weapons `loud` names are heard; `heard` keeps what was heard of what is
+/// still up.
+fn blasts(
+    was: &[Flying],
+    missiles: &[(Flying, bool)],
+    bursts: &[(EntId, u32, Vec3)],
+    heard: &mut Vec<EntId>,
+    loud: impl Fn(u32) -> bool,
+) -> Vec<super::Noise> {
+    heard.retain(|id| bursts.iter().any(|b| b.0 == *id) || missiles.iter().any(|m| m.0.id == *id));
+    let mut gone: Vec<Flying> = (was.iter())
+        .filter(|w| !missiles.iter().any(|(m, _)| m.id == w.id))
+        .copied()
+        .collect();
+    let mut noises = Vec::new();
+    for &(id, weapon, at) in bursts {
+        if heard.contains(&id) || !loud(weapon) {
+            continue;
+        }
+        heard.push(id);
+        let thrower = (gone.iter().enumerate())
+            .filter(|(_, g)| g.weapon == weapon)
+            .min_by(|a, b| a.1.at.distance(at).total_cmp(&b.1.at.distance(at)))
+            .map(|(k, _)| k);
+        if let Some(owner) = thrower.and_then(|k| gone.remove(k).owner) {
+            noises.push(super::blast(owner, at.into()));
+        }
+    }
+    for &(m, spent) in missiles {
+        if !spent || heard.contains(&m.id) || !loud(m.weapon) {
+            continue;
+        }
+        heard.push(m.id);
+        if let Some(owner) = m.owner {
+            noises.push(super::blast(owner, m.at.into()));
+        }
+    }
+    noises
 }
 
 #[cfg(test)]
 mod tests {
-    /// A frag aimed into a teammate's blast is refused, one into an enemy's
-    /// or a `free` player's is not (BUG-058).
-    #[test]
-    fn a_lob_into_a_teammate_s_blast_is_refused() {
-        use super::{TEAM_ALLIES, TEAM_AXIS, Vec3, mate_in_blast};
-        let target = Vec3::new(100.0, 0.0, 0.0);
-        let near = Vec3::new(150.0, 0.0, 0.0);
-        let far = Vec3::new(600.0, 0.0, 0.0);
-        let mine = Some(TEAM_AXIS);
-        assert!(mate_in_blast(mine, [(TEAM_AXIS, near)], target, 256.0));
-        assert!(!mate_in_blast(mine, [(TEAM_AXIS, far)], target, 256.0));
-        assert!(!mate_in_blast(mine, [(TEAM_ALLIES, near)], target, 256.0));
-        assert!(!mate_in_blast(Some(3), [(3, near)], target, 256.0));
-    }
-
     use super::*;
+
+    /// A fuse's burst is its vanished frag's thrower's, heard once; a
+    /// spent impact is heard where it struck; smoke and an unseen
+    /// missile's burst are not.
+    #[test]
+    fn a_blast_is_heard_once_as_its_thrower_s() {
+        let fly = |id, owner, weapon, x| Flying {
+            id: EntId(id, 0),
+            owner: Some(owner),
+            weapon,
+            at: Vec3::new(x, 0.0, 0.0),
+        };
+        let loud = |w: u32| w != 9;
+        let was = [
+            fly(100, 2, 5, 0.0),
+            fly(101, 3, 5, 400.0),
+            fly(102, 4, 9, 0.0),
+        ];
+        let mut heard = Vec::new();
+        let at = Vec3::new(390.0, 0.0, 0.0);
+        let bursts = [(EntId(200, 0), 5, at), (EntId(201, 0), 9, Vec3::ZERO)];
+        let missiles = [(fly(100, 2, 5, 10.0), false), (fly(103, 6, 5, 0.0), true)];
+        let n = blasts(&was, &missiles, &bursts, &mut heard, loud);
+        let got: Vec<(usize, f32)> = n.iter().map(|n| (n.source, n.at[0])).collect();
+        assert_eq!(got, [(3, 390.0), (6, 0.0)]);
+        assert!(blasts(&was, &missiles, &bursts, &mut heard, loud).is_empty());
+        let stray = [(EntId(202, 0), 5, at)];
+        assert!(blasts(&[], &[], &stray, &mut Vec::new(), loud).is_empty());
+    }
 
     #[test]
     fn a_cod1_cmd_maps_onto_cod4_bits_with_whole_moves() {

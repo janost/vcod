@@ -29,15 +29,15 @@ use vcod_gsc::EntId;
 
 use super::{Cod4Bots, deg_short, eye};
 use crate::bots::BotView;
+use crate::bots::gun::{
+    GUN_STEP, MIN_RANGE, aim_barrel, arc_enemy, floor_spot, in_arc, look_at, mount_spot,
+    straight_walk,
+};
 use crate::game::cod2_turret::GunInfo;
 use crate::game::cod4::level::Cod4Level;
-use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
 
 /// How far from the spot behind a gun a bot walks straight to it.
 const GUN_REACH: f32 = 400.0;
-/// The most a bot's feet and the spot's may differ in height for the
-/// straight walk.
-const GUN_STEP: f32 = 40.0;
 /// How far from the spot a bot with no enemy in sight sets off over the
 /// graph for a gun on another floor (its post, [`BotView::post`]):
 /// mp_backlot's two stand upstairs, where no straight walk reaches them.
@@ -45,8 +45,6 @@ const GUN_PATH_REACH: f32 = 800.0;
 /// The graph's node nearest the spot must lie this near it, about a step
 /// up or down, for the walk over the graph to end there.
 const GUN_NODE_REACH: f32 = 48.0;
-/// An enemy nearer the gun than this is fought by hand.
-const MIN_RANGE: f32 = 250.0;
 /// How long a team remembers an enemy seen in a gun's arc, ms.
 const LANE_MS: i32 = 8_000;
 /// A gun a team's bot set off for over the graph, or let go with nobody
@@ -68,8 +66,7 @@ const IDLE_RELEASE_MS: i32 = 3000;
 const FLANK_RANGE: f32 = 1200.0;
 /// A hit this recent from outside the arc flanks the gunner, ms.
 const FLANK_HIT_MS: i32 = 300;
-/// The barrel's turn per tick, degrees, and how near the aim it fires.
-const TURN_PER_TICK: f32 = 12.0;
+/// How near the aim the gunner fires, degrees.
 const FIRE_CONE: f32 = 2.0;
 /// The spot a bot mounts from, behind the gun along its yaw (the retail
 /// capture's probe stood 50 behind mp_backlot's crouch SAW).
@@ -81,11 +78,10 @@ pub(super) const THROW_BACK_MS: i32 = 1500;
 const THROW_LOFT: f32 = 12.0;
 /// Ticks the view stays on the throw's line after the release.
 const THROW_HOLD_TICKS: u8 = 6;
+/// What a walk to a gun clips against.
+const MASK: u32 = vcod_cod4::pmove::MASK_PLAYERSOLID;
 /// The use key in a 1.7 cmd (`to_cmd4`'s map of `BUTTON_USE`).
 const USE: u32 = 0x8;
-/// The walk's box: the player's, the step height up.
-const WALK_MINS: Vec3 = Vec3::new(-15.0, -15.0, 18.0);
-const WALK_MAXS: Vec3 = Vec3::new(15.0, 15.0, 70.0);
 
 /// One bot's business with a gun.
 #[derive(Clone, Copy, Debug, Default)]
@@ -160,45 +156,10 @@ impl GunState {
     }
 }
 
-/// `at`'s yaw off the gun's own, folded into (-180, 180].
-fn arc_yaw(gun: &GunInfo, at: Vec3) -> f32 {
-    let d = at - gun.origin;
-    angle_180(d.y.atan2(d.x).to_degrees() - gun.yaw)
-}
-
-fn angle_180(a: f32) -> f32 {
-    let a = a.rem_euclid(360.0);
-    if a > 180.0 { a - 360.0 } else { a }
-}
-
-/// Whether `at` is inside the gun's yaw arc.
-fn in_arc(gun: &GunInfo, at: Vec3) -> bool {
-    let y = arc_yaw(gun, at);
-    y >= gun.yaw_range[0] && y <= gun.yaw_range[1]
-}
-
 /// Whether `at` lies down a lane the gun covers: in its arc and past
 /// [`MIN_RANGE`] from it.
 fn covers(gun: &GunInfo, at: Vec3) -> bool {
     in_arc(gun, at) && gun.origin.distance(at) > MIN_RANGE
-}
-
-/// The spot behind the gun a bot mounts from, at the gun's height.
-fn mount_spot(gun: &GunInfo) -> Vec3 {
-    let (s, c) = gun.yaw.to_radians().sin_cos();
-    gun.origin - Vec3::new(c, s, 0.0) * BACK
-}
-
-/// The view from `eye` onto `at`: pitch (down positive), yaw.
-fn look_at(eye: Vec3, at: Vec3) -> [f32; 2] {
-    let d = at - eye;
-    let flat = d.truncate().length();
-    [-d.z.atan2(flat).to_degrees(), d.y.atan2(d.x).to_degrees()]
-}
-
-/// `from` turned toward `to` by at most `step` degrees an axis.
-fn turn(from: [f32; 2], to: [f32; 2], step: f32) -> [f32; 2] {
-    std::array::from_fn(|i| from[i] + angle_180(to[i] - from[i]).clamp(-step, step))
 }
 
 /// The cmd's angles for `view` over 1.7's float `delta_angles`.
@@ -206,11 +167,6 @@ fn cmd_angles(c: &mut UserCmd4, view: [f32; 2], delta: [f32; 3]) {
     for i in 0..2 {
         c.angles[i] = ((deg_short(view[i]) - deg_short(delta[i])) & 0xffff) as u16;
     }
-}
-
-fn foe(dm: bool, mine: i32, theirs: i32) -> bool {
-    dm || !(mine == TEAM_AXIS || mine == TEAM_ALLIES)
-        || (theirs != mine && (theirs == TEAM_AXIS || theirs == TEAM_ALLIES))
 }
 
 impl Cod4Bots {
@@ -317,15 +273,7 @@ impl Cod4Bots {
             task.gun = Some(gun.id);
             task.manning = true;
             let cur = [ps.view_angles[0], ps.view_angles[1]];
-            let (aim, fire) = match target {
-                Some(at) => {
-                    let want = look_at(my_eye, at);
-                    let aim = turn(cur, want, TURN_PER_TICK);
-                    let off = (0..2).map(|i| angle_180(want[i] - aim[i]).abs());
-                    (aim, off.fold(0.0, f32::max) <= FIRE_CONE)
-                }
-                None => (cur, false),
-            };
+            let (aim, fire) = aim_barrel(cur, my_eye, target, FIRE_CONE);
             let flanked = self.flanked(gun, view);
             let idle = now - task.seen >= IDLE_RELEASE_MS;
             let release = (flanked || idle) && !task.pressed;
@@ -375,7 +323,7 @@ impl Cod4Bots {
                     // Over the graph the route walks to the post; the last
                     // of it is straight.
                     if !task.far || self.straight_walk(Vec3::from(view.origin), task.spot) {
-                        view.waypoint = Some(mount_spot(gun).to_array());
+                        view.waypoint = Some(mount_spot(gun, BACK).to_array());
                         view.stop = false;
                     }
                     let hint = ps.cursor_hint_ent_index == gun.id.0 as i32;
@@ -418,34 +366,14 @@ impl Cod4Bots {
     /// floor there.
     fn floor_spot(&self, gun: &GunInfo) -> Option<Vec3> {
         let (world, _) = self.own.world.as_ref()?;
-        let spot = mount_spot(gun);
-        let floor = world.collision.move_trace(
-            spot + Vec3::Z * 32.0,
-            spot - Vec3::Z * 96.0,
-            Vec3::ZERO,
-            Vec3::ZERO,
-            vcod_cod4::pmove::MASK_PLAYERSOLID,
-        );
-        (floor.fraction < 1.0).then_some(floor.endpos)
+        floor_spot(&world.collision, mount_spot(gun, BACK), MASK)
     }
 
     /// Whether feet at `feet` walk straight to `spot`: within
     /// [`GUN_REACH`], level with it and unblocked.
     fn straight_walk(&self, feet: Vec3, spot: Vec3) -> bool {
-        let Some((world, _)) = self.own.world.as_ref() else {
-            return false;
-        };
-        if (spot - feet).truncate().length() > GUN_REACH || (spot.z - feet.z).abs() > GUN_STEP {
-            return false;
-        }
-        let walk = world.collision.move_trace(
-            feet,
-            spot,
-            WALK_MINS,
-            WALK_MAXS,
-            vcod_cod4::pmove::MASK_PLAYERSOLID,
-        );
-        walk.fraction >= 1.0
+        (self.own.world.as_ref())
+            .is_some_and(|(w, _)| straight_walk(&w.collision, feet, spot, GUN_REACH, MASK))
     }
 
     /// Whether the bot in `slot` stands nearer `spot` than every other
@@ -546,20 +474,15 @@ impl Cod4Bots {
         let mine = teams.get(slot).copied().unwrap_or(0);
         let (world, _) = self.own.world.as_ref()?;
         let w = &world.collision;
-        let mut seen: Vec<(f32, usize, Vec3)> = (self.own.pass.states.iter())
-            .filter(|(i, _)| **i != slot && self.playing(level, **i))
-            .filter(|(i, _)| foe(self.own.pass.dm, mine, teams.get(**i).copied().unwrap_or(0)))
-            .filter_map(|(&i, p)| {
-                let chest = Vec3::from(crate::bots::chest(p.origin.into(), p.view_height_current));
-                let d = chest.distance(my_eye);
-                (d <= crate::bots::SHOOT_RANGE && in_arc(gun, chest)).then_some((d, i, chest))
-            })
-            .collect();
-        // The states map has no order: nearest first, then by slot.
-        seen.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-        seen.into_iter()
-            .find(|(_, _, chest)| self.shot_clear(w, my_eye, *chest))
-            .map(|(_, _, chest)| chest)
+        let dm = self.own.pass.dm;
+        let foes = (self.own.pass.states.iter())
+            .filter(|&(&i, _)| i != slot && self.playing(level, i))
+            .filter(|&(&i, _)| crate::bots::foe(dm, mine, teams.get(i).copied().unwrap_or(0)))
+            .map(|(&i, p)| {
+                let chest = crate::bots::chest(p.origin.into(), p.view_height_current);
+                (i, Vec3::from(chest))
+            });
+        arc_enemy(gun, my_eye, foes, |chest| self.shot_clear(w, my_eye, chest))
     }
 
     /// The throw back for the bot in `slot` this tick: a live frag under
@@ -613,7 +536,8 @@ impl Cod4Bots {
         let thrower = missile
             .owner
             .filter(|&o| {
-                o != slot && !super::same_team(teams.get(slot).copied(), teams.get(o).copied())
+                o != slot
+                    && !crate::bots::same_team(teams.get(slot).copied(), teams.get(o).copied())
             })
             .and_then(|o| self.ps(o))
             .map(|p| p.origin + Vec3::Z * 40.0);
@@ -693,7 +617,7 @@ mod tests {
         assert!(!covers(&g, Vec3::new(-600.0, 68.0, 290.0)));
         assert!(!covers(&g, Vec3::new(-200.0, 700.0, 290.0)));
         assert!(!covers(&g, Vec3::new(-1200.0, 68.0, 290.0)));
-        let spot = mount_spot(&g);
+        let spot = mount_spot(&g, BACK);
         assert!((spot - Vec3::new(-768.0, 68.0, 290.0)).length() < 1e-3);
     }
 

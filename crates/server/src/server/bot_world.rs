@@ -538,10 +538,8 @@ impl Server {
                 .is_some_and(|d| d.cook_off_hold),
             grenade_ready: sim.ps.grenade_time_left_ms > 0 && sim.ps.weapon_delay_ms <= 1,
             frag_near: self.game.module.script.as_ref().and_then(|rt| {
-                let at = sim.ps.origin;
                 let eye = glam::Vec3::from(sim.eye_origin());
-                rt.missiles()
-                    .armed()
+                let frags = (rt.missiles().armed())
                     .filter(|(_, w, _, _)| {
                         weapons.get(*w as usize).is_some_and(|d| {
                             d.explosion_radius > 0.0 && d.explosion_inner_damage > 0
@@ -550,22 +548,14 @@ impl Server {
                     // A cook dropped by a thrower killed holding it is seen
                     // fall: one went off by a teammate 3.5 s on and killed
                     // him (bot-combat.md 12).
-                    .filter(|(o, _, owner, dropped)| {
-                        *owner == Some(slot)
-                            || *dropped
-                            || self.game.world.as_ref().is_none_or(|w| {
-                                crate::bots::notices_frag(eye, sim.view_angles()[1], *o, |a, b| {
-                                    w.collision.shot_trace(a, b).fraction >= 1.0
-                                })
-                            })
+                    .map(|(o, _, owner, dropped)| (o, owner == Some(slot) || dropped));
+                crate::bots::frag_near(sim.ps.origin, frags, |o| {
+                    self.game.world.as_ref().is_none_or(|w| {
+                        crate::bots::notices_frag(eye, sim.view_angles()[1], o, |a, b| {
+                            w.collision.shot_trace(a, b).fraction >= 1.0
+                        })
                     })
-                    .map(|(o, _, _, _)| o)
-                    .filter(|o| {
-                        (o.z - at.z).abs() < crate::bots::FLEE_HEIGHT
-                            && (*o - at).truncate().length() < crate::bots::FLEE_REACH
-                    })
-                    .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
-                    .map(Into::into)
+                })
             }),
             wrecks: if sim.seat.is_none() {
                 self.game.module.bot_parked.wrecks()
@@ -1021,64 +1011,35 @@ impl Server {
             Some(_) => 360.0,
             None => crate::bots::Skill::default().fov_deg,
         };
-        let view = me.view_angles();
-        // In-range candidates nearest first: the tracked target and the
-        // attacker wherever they stand, the rest only inside the cone.
-        let mut candidates: Vec<(f32, glam::Vec3, crate::bots::EnemyView)> = Vec::new();
-        for (i, c) in self.core.clients.iter().enumerate() {
-            if i == slot {
-                continue;
-            }
-            let Some(s) = c.as_ref().and_then(|c| c.sim.as_ref()) else {
-                continue;
-            };
-            if s.pm_type != crate::spectate::PmType::Normal || s.dead {
-                continue;
-            }
-            if !team_enemy(teams.get(i).copied().unwrap_or(0)) {
-                continue;
-            }
+        let looker = crate::bots::Looker {
+            origin: me.ps.origin,
+            eye: my_eye,
+            view: me.view_angles(),
+            fov,
+            tracked,
+            attacker,
+        };
+        let foes = (self.core.clients.iter().enumerate())
+            .filter(|&(i, _)| i != slot)
+            .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
+            .filter(|(_, s)| s.pm_type == crate::spectate::PmType::Normal && !s.dead)
+            .filter(|&(i, _)| team_enemy(teams.get(i).copied().unwrap_or(0)))
             // A tank's driver is out of every client's sight and every
             // round's reach (docs/research/coduo-vehicles.md 13).
-            if self
-                .game
-                .module
-                .script
-                .as_ref()
-                .is_some_and(|rt| rt.host.vehicles.drives_tank(i))
-            {
-                continue;
-            }
-            let d = crate::bots::dist_sq(me.ps.origin.into(), s.ps.origin.into());
-            if d > crate::bots::SHOOT_RANGE * crate::bots::SHOOT_RANGE {
-                continue;
-            }
-            let chest = crate::bots::chest(s.ps.origin.into(), s.ps.view_height());
-            let known = Some(i) == tracked || Some(i) == attacker;
-            if !known && !crate::bots::in_sight_cone(my_eye, view, chest.into(), fov) {
-                continue;
-            }
-            candidates.push((
-                d,
-                s.ps.view().eye,
-                crate::bots::EnemyView {
-                    slot: i,
-                    origin: chest,
-                    velocity: s.ps.velocity.into(),
-                },
-            ));
-        }
-        candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let sighted = |(_, eye, enemy): &(f32, glam::Vec3, crate::bots::EnemyView)| {
-            let Some(w) = world else {
-                return Some(*enemy);
-            };
-            let clear = |to: glam::Vec3| w.shot_trace(my_eye, to).fraction >= 1.0;
-            let origin = crate::bots::aim_point(enemy.origin, (*eye).into(), |p| clear(p.into()))?;
-            Some(crate::bots::EnemyView { origin, ..*enemy })
-        };
-        let order: Vec<(f32, usize)> = candidates.iter().map(|c| (c.0, c.2.slot)).collect();
-        crate::bots::pick_enemy(&order, attacker, tracked, |i| sighted(&candidates[i]))
+            .filter(|&(i, _)| {
+                !(self.game.module.script.as_ref())
+                    .is_some_and(|rt| rt.host.vehicles.drives_tank(i))
+            })
+            .map(|(i, s)| crate::bots::Seen {
+                slot: i,
+                origin: s.ps.origin,
+                eye: s.ps.view().eye,
+                view_height: s.ps.view_height(),
+                velocity: s.ps.velocity.into(),
+            });
+        crate::bots::sight_enemy(&looker, foes, |to| {
+            world.is_none_or(|w| w.shot_trace(my_eye, to.into()).fraction >= 1.0)
+        })
     }
 
     /// [`crate::bots::BotView::hurt`] for the body `sim`: its last hit by

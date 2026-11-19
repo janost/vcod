@@ -208,10 +208,12 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
   `BotWorld`. `bots.rs` holds `Skill`, `Bot`, its think loop (`think`,
   `think_body`, `goal`) and the getters; the brain's seams sit beside it in
   `bots/`: `view.rs` (`BotView`, the gametype views, `BotBody`), `sight.rs`
-  (sight cone, enemy pick, aim point, noises, remembered spots),
+  (sight cone, the enemy pick all three games fill, aim point, frags near,
+  gunfire, the hit latch, noises, remembered spots),
   `objective.rs` (`ObjTarget`, guard posts, plant, defuse, carry, breach;
   UO's `ctf`, `dom`, `hq` and `bas` in `objective/uo.rs`), `menus.rs` (the
-  menu replies, the weapon menus), `grenade.rs` (the throw's stages),
+  menu replies, the weapon menus), `grenade.rs` (the throw's stages; CoD2's
+  and CoD4's lob), `gun.rs` (CoD2's and CoD4's mounted-gun helpers),
   `fight.rs` (tracking, aim, trigger, footwork, weapon swaps) and `walk.rs`
   (the wander brain, steering, stalls, ladders). CoD1's `impl` and view
   builders are in `server/bot_world.rs`, CoD2's `impl` in `cod2/bots.rs`

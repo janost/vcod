@@ -1,5 +1,5 @@
-//! What a bot sees and hears: the sight cone, the enemy pick, the aim point, friends in the line,
-//! noises, and the spots it remembers.
+//! What a bot sees, hears and feels: the sight cone, the enemy pick, the aim point, friends in the
+//! line, frags near, gunfire, the hits it takes, noises, and the spots it remembers.
 
 use super::*;
 
@@ -46,6 +46,100 @@ pub(crate) fn notices_frag(
 /// map; these keep the same ratio at a range that leaves bots roaming.
 pub(crate) const HEAR_GUNFIRE: f32 = 2000.0;
 pub(crate) const HEAR_BLAST: f32 = 1500.0;
+
+/// The nearest of `frags` (where it lies, and whether the bot knows of it
+/// already, its own one) within [`FLEE_REACH`] across and [`FLEE_HEIGHT`]
+/// up or down of `at`: one known, or one `notices` says the bot notices
+/// ([`notices_frag`]).
+pub(crate) fn frag_near(
+    at: glam::Vec3,
+    frags: impl IntoIterator<Item = (glam::Vec3, bool)>,
+    notices: impl Fn(glam::Vec3) -> bool,
+) -> Option<[f32; 3]> {
+    frags
+        .into_iter()
+        .filter(|&(o, known)| known || notices(o))
+        .map(|(o, _)| o)
+        .filter(|o| (o.z - at.z).abs() < FLEE_HEIGHT && (*o - at).truncate().length() < FLEE_REACH)
+        .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
+        .map(Into::into)
+}
+
+/// Whether the client in `slot` fired since `heard`'s last read of its
+/// event ring (`events` at `eventSequence` `seq`, a shot one of `fire`);
+/// the read is kept.
+pub(crate) fn fired<E: PartialEq>(
+    heard: &mut std::collections::HashMap<usize, i32>,
+    slot: usize,
+    seq: i32,
+    events: &[E; 4],
+    fire: &[E],
+) -> bool {
+    let prev = heard.insert(slot, seq).unwrap_or(seq);
+    (prev.max(seq - 4)..seq).any(|k| fire.contains(&events[(k & 3) as usize]))
+}
+
+/// The gunfire the client in `source` makes, chest high on its body at
+/// `origin` with its eye `view_height` over it.
+pub(crate) fn gunfire(source: usize, origin: [f32; 3], view_height: f32) -> Noise {
+    Noise {
+        at: chest(origin, view_height),
+        source,
+        radius: HEAR_GUNFIRE,
+    }
+}
+
+/// The blast of `source`'s missile going off at `at`.
+pub(crate) fn blast(source: usize, at: [f32; 3]) -> Noise {
+    Noise {
+        at,
+        source,
+        radius: HEAR_BLAST,
+    }
+}
+
+/// A hit a bot felt: the attacker, the time it was read, the direction it
+/// came along.
+pub(crate) type HitFelt = (usize, i32, [f32; 3]);
+
+/// A bot's hit off its `damageEvent` latch (the event last read and the
+/// hit it gave): an `event` other than the last is a hit by `attacker`,
+/// the client last named with the time he hit, if that was under a second
+/// before `now`, along `dir` (zero for none).
+pub(crate) fn feel_hit<E: PartialEq>(
+    latch: &mut (E, Option<HitFelt>),
+    event: E,
+    attacker: Option<(usize, i32)>,
+    dir: impl FnOnce() -> Option<glam::Vec3>,
+    now: i32,
+) -> Option<HitFelt> {
+    if latch.0 != event {
+        latch.0 = event;
+        latch.1 = attacker
+            .filter(|&(_, t)| (0..1000).contains(&now.wrapping_sub(t)))
+            .map(|(a, _)| (a, now, dir().unwrap_or(glam::Vec3::ZERO).to_array()));
+    }
+    latch.1
+}
+
+/// [`BotView::hurt`] off the hit [`feel_hit`] gave: reported for
+/// [`HURT_MS`] while `plays` says the attacker still plays.
+pub(crate) fn hurt_of(
+    hit: Option<HitFelt>,
+    now: i32,
+    plays: impl Fn(usize) -> bool,
+) -> Option<Hurt> {
+    let (a, at, dir) = hit?;
+    let ago_ms = now.wrapping_sub(at);
+    if !(0..HURT_MS).contains(&ago_ms) || !plays(a) {
+        return None;
+    }
+    Some(Hurt {
+        slot: a,
+        ago_ms,
+        dir,
+    })
+}
 /// A lost enemy is remembered this far along its last velocity, seconds.
 const MEMORY_LEAD_S: f32 = 0.5;
 
@@ -114,6 +208,93 @@ pub(crate) fn aim_point(
     clear: impl Fn([f32; 3]) -> bool,
 ) -> Option<[f32; 3]> {
     [chest, eye].into_iter().find(|p| clear(*p))
+}
+
+/// A client a bot may fight, as its game's playerstate places it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Seen {
+    pub(crate) slot: usize,
+    pub(crate) origin: glam::Vec3,
+    pub(crate) eye: glam::Vec3,
+    /// The eye's height over `origin`, which places the chest ([`chest`]).
+    pub(crate) view_height: f32,
+    pub(crate) velocity: [f32; 3],
+}
+
+/// The bot looking for an enemy: where it stands, its eye and view (wire
+/// degrees), its sight cone, and the target it tracks and the attacker of a
+/// fresh hit, both seen wherever they stand.
+pub(crate) struct Looker {
+    pub(crate) origin: glam::Vec3,
+    pub(crate) eye: glam::Vec3,
+    pub(crate) view: [f32; 3],
+    pub(crate) fov: f32,
+    pub(crate) tracked: Option<usize>,
+    pub(crate) attacker: Option<usize>,
+}
+
+/// The target `bot` tracks while aware, and its sight cone; a slot with no
+/// brain sees with the default skill.
+pub(crate) fn tracked_and_fov(bot: Option<&Bot>) -> (Option<usize>, f32) {
+    let tracked = bot
+        .and_then(|b| b.target_slot())
+        .filter(|_| bot.is_none_or(|b| b.aware));
+    let fov = bot.map_or(Skill::default().fov_deg, |b| b.skill.fov_deg);
+    (tracked, fov)
+}
+
+/// Whether a client on `theirs` is a foe of one on `mine`: everyone in `dm`
+/// and to a player on neither side, else only the other side.
+pub(crate) fn foe(dm: bool, mine: i32, theirs: i32) -> bool {
+    use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
+    dm || !(mine == TEAM_AXIS || mine == TEAM_ALLIES)
+        || (theirs != mine && (theirs == TEAM_AXIS || theirs == TEAM_ALLIES))
+}
+
+/// Whether `a` and `b` are on one side, axis or allies.
+pub(crate) fn same_team(a: Option<i32>, b: Option<i32>) -> bool {
+    use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
+    a.is_some_and(|a| (a == TEAM_AXIS || a == TEAM_ALLIES) && Some(a) == b)
+}
+
+/// The enemy in sight `me` fights of `foes` ([`pick_enemy`]): those within
+/// [`SHOOT_RANGE`], the tracked one and the attacker wherever they stand
+/// and the rest inside the sight cone, nearest first and by slot on a tie,
+/// each aimed at where `clear` says the eye line reaches ([`aim_point`]).
+pub(crate) fn sight_enemy(
+    me: &Looker,
+    foes: impl IntoIterator<Item = Seen>,
+    clear: impl Fn([f32; 3]) -> bool,
+) -> Option<EnemyView> {
+    let mut candidates: Vec<(f32, glam::Vec3, EnemyView)> = Vec::new();
+    for s in foes {
+        let d = dist_sq(me.origin.into(), s.origin.into());
+        if d > SHOOT_RANGE * SHOOT_RANGE {
+            continue;
+        }
+        let chest = chest(s.origin.into(), s.view_height);
+        let known = Some(s.slot) == me.tracked || Some(s.slot) == me.attacker;
+        if !known && !in_sight_cone(me.eye, me.view, chest.into(), me.fov) {
+            continue;
+        }
+        candidates.push((
+            d,
+            s.eye,
+            EnemyView {
+                slot: s.slot,
+                origin: chest,
+                velocity: s.velocity,
+            },
+        ));
+    }
+    candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.2.slot.cmp(&b.2.slot)));
+    let sighted = |i: usize| {
+        let (_, eye, e) = &candidates[i];
+        let origin = aim_point(e.origin, (*eye).into(), &clear)?;
+        Some(EnemyView { origin, ..*e })
+    };
+    let order: Vec<(f32, usize)> = candidates.iter().map(|c| (c.0, c.2.slot)).collect();
+    pick_enemy(&order, me.attacker, me.tracked, sighted)
 }
 
 /// How long a bot keeps walking to one sidestep before it picks again.
@@ -377,6 +558,84 @@ mod tests {
         assert_eq!(
             pick_enemy(&order, None, Some(2), seen).map(|e| e.slot),
             Some(2)
+        );
+    }
+
+    /// Out of range or behind is not seen unless it just hit the bot; two
+    /// at one range go by slot, whatever order the game lists them in.
+    #[test]
+    fn the_sight_pick_takes_the_nearest_in_the_cone_by_slot_on_a_tie() {
+        let seen = |slot, x: f32, y: f32| Seen {
+            slot,
+            origin: glam::Vec3::new(x, y, 0.0),
+            eye: glam::Vec3::new(x, y, 60.0),
+            view_height: 60.0,
+            velocity: [0.0; 3],
+        };
+        let me = |attacker| Looker {
+            origin: glam::Vec3::ZERO,
+            eye: glam::Vec3::new(0.0, 0.0, 60.0),
+            view: [0.0; 3],
+            fov: 90.0,
+            tracked: None,
+            attacker,
+        };
+        let pick = |me: &Looker, foes: Vec<Seen>| sight_enemy(me, foes, |_| true).map(|e| e.slot);
+        let tie = vec![
+            seen(5, 300.0, 0.0),
+            seen(2, 0.0, 300.0),
+            seen(3, 300.0, 0.0),
+        ];
+        assert_eq!(pick(&me(None), tie), Some(3));
+        let behind = vec![seen(1, -200.0, 0.0), seen(4, SHOOT_RANGE + 10.0, 0.0)];
+        assert_eq!(pick(&me(None), behind.clone()), None);
+        assert_eq!(pick(&me(Some(1)), behind), Some(1));
+        let e = sight_enemy(&me(None), [seen(6, 400.0, 0.0)], |p| p[2] > 50.0).unwrap();
+        assert_eq!(
+            e.origin,
+            [400.0, 0.0, 60.0],
+            "the chest is covered: the head"
+        );
+    }
+
+    /// A shot is heard once, off the events past the last read; a ring
+    /// that ran more than 4 past it is read from its oldest.
+    #[test]
+    fn gunfire_is_heard_once_off_the_ring_past_the_last_read() {
+        let mut heard = std::collections::HashMap::new();
+        let fire = [7, 8];
+        assert!(
+            !fired(&mut heard, 1, 10, &[7, 7, 7, 7], &fire),
+            "the first read"
+        );
+        assert!(
+            fired(&mut heard, 1, 11, &[0, 0, 7, 0], &fire),
+            "event 10 sits at 10 & 3"
+        );
+        assert!(
+            !fired(&mut heard, 1, 11, &[0, 0, 7, 0], &fire),
+            "read twice"
+        );
+        assert!(fired(&mut heard, 1, 20, &[8, 0, 0, 0], &fire));
+    }
+
+    /// A new `damageEvent` is a hit by the attacker named under a second
+    /// before; the same event read again keeps the hit until `HURT_MS`.
+    #[test]
+    fn a_hit_is_felt_off_a_new_damage_event_for_hurt_ms() {
+        let dir = || Some(glam::Vec3::X);
+        let mut latch = (0u32, None);
+        assert_eq!(feel_hit(&mut latch, 0, Some((3, 900)), dir, 1000), None);
+        let hit = feel_hit(&mut latch, 1, Some((3, 900)), dir, 1000);
+        assert_eq!(hit, Some((3, 1000, [1.0, 0.0, 0.0])));
+        assert_eq!(feel_hit(&mut latch, 1, None, dir, 1500), hit);
+        assert_eq!(hurt_of(hit, 1500, |_| true).map(|h| h.ago_ms), Some(500));
+        assert_eq!(hurt_of(hit, 1000 + HURT_MS, |_| true), None);
+        assert_eq!(hurt_of(hit, 1500, |_| false), None, "the attacker left");
+        assert_eq!(
+            feel_hit(&mut latch, 2, Some((3, 0)), dir, 1500),
+            None,
+            "stale"
         );
     }
 

@@ -36,6 +36,7 @@ pub use skill::{DEFAULT_LEVEL, MAX_LEVEL};
 
 mod fight;
 mod grenade;
+pub(crate) mod gun;
 mod menus;
 mod objective;
 mod sight;
@@ -44,7 +45,8 @@ mod walk;
 pub(crate) use fight::HURT_MS;
 use fight::{PITCH_MOST, Target};
 pub(crate) use grenade::{
-    COOK_MEAN_MS, COOK_MOST_MS, LOB_BODY_GROW, LOB_MISS, LOB_REACH_SLACK, LOB_SLACK, MATE_LEAD_S,
+    COOK_MEAN_MS, COOK_MOST_MS, LOB_BODY_GROW, LOB_MISS, LOB_REACH_SLACK, LOB_SLACK, Lob,
+    MATE_LEAD_S, lob, mate_in_blast,
 };
 use grenade::{GRENADE_MIN, GRENADE_RANGE, Stage, ThrowFor};
 use menus::WEAPON_MENUS;
@@ -57,8 +59,9 @@ use objective::{
 pub(crate) use objective::{GuardHold, RADIO_HEIGHT, RADIO_HEIGHT_COD2, RADIO_MARGIN, inside_site};
 use sight::Recall;
 pub(crate) use sight::{
-    HEAR_BLAST, HEAR_GUNFIRE, WRECK_REACH, aim_point, chest, friend_in_line, held_sidestep,
-    in_sight_cone, loudest, notices_frag, pick_enemy, wreck_near,
+    HEAR_BLAST, HEAR_GUNFIRE, HitFelt, Looker, Seen, WRECK_REACH, blast, chest, feel_hit, fired,
+    foe, frag_near, friend_in_line, gunfire, held_sidestep, hurt_of, loudest, notices_frag,
+    same_team, sight_enemy, tracked_and_fov, wreck_near,
 };
 pub(crate) use view::Breach;
 pub use view::{
