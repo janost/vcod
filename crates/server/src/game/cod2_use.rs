@@ -541,7 +541,7 @@ mod tests {
             f.frame();
             f.buttons[0] = 0;
             f.frames(2);
-            let w = f.level.rt.host.client_weapons[0];
+            let w = f.level.rt.host.clients[0].weapons;
             let mounted = f.level.manned_gun(0) == Some(gun);
             if side > 0.0 {
                 assert!(w.holds(mp40 as usize), "the press took the item");

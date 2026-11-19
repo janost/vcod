@@ -180,7 +180,7 @@ fn climb_armed(attack: bool) -> Option<Armed> {
     let (cmds, snaps) = parse();
     let (mut level, mut now, _, ci) = spawned(&cmds, &snaps)?;
     // The spawn's rifle: the held weapon that is not a grenade.
-    let held = level.rt.host.client_weapons[0].held;
+    let held = level.rt.host.clients[0].weapons.held;
     let gun = (1..64u8)
         .find(|&i| {
             held >> i & 1 != 0

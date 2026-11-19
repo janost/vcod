@@ -60,7 +60,11 @@ pub fn rider_inputs(
         if sim.seat.is_none() {
             continue;
         }
-        let health = host.client_vitals.get(slot).map_or(0, |v| v.health);
+        let health = host
+            .clients
+            .get(slot)
+            .map(|c| &c.vitals)
+            .map_or(0, |v| v.health);
         inputs[slot] = Some(RiderInput {
             forward: sim.pers_cmd.forward,
             right: sim.pers_cmd.right,
@@ -131,8 +135,9 @@ fn think(host: &mut GameHost, cx: &mut Cx, id: EntId, inputs: &[Option<RiderInpu
         .collect();
     for r in riders {
         if host
-            .client_vitals
+            .clients
             .get(r)
+            .map(|c| &c.vitals)
             .is_none_or(|v| v.health < 1 || v.dead)
         {
             super::seat::unlink_player(host, cx, r, false, [0.0; 3], ([0.0; 3], [0.0; 3]));
@@ -166,9 +171,9 @@ fn think(host: &mut GameHost, cx: &mut Cx, id: EntId, inputs: &[Option<RiderInpu
     // The bodies the probes can strike: every live player but the riders.
     let riders_now = host.vehicles.live[&id].seats;
     let bodies: Vec<(u32, glam::Vec3, glam::Vec3, glam::Vec3)> = host
-        .client_bodies
+        .clients
         .iter()
-        .flatten()
+        .filter_map(|c| c.body.as_ref())
         .filter(|b| !riders_now.contains(&Some(b.slot)))
         .filter(|b| host.vehicles.seat_of(b.slot).is_none())
         .map(|b| (b.slot as u32, b.origin, b.mins, b.maxs))

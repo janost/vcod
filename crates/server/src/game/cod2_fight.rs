@@ -37,7 +37,7 @@ impl Fight {
             for (k, a) in angles.iter_mut().take(2).enumerate() {
                 *a = (short(self.aim[slot][k]) - p.ps.delta_angles[k]) & 0xffff;
             }
-            let weapon = self.level.rt.host.client_weapons[slot].current;
+            let weapon = self.level.rt.host.clients[slot].weapons.current;
             let cmd = UserCmd2 {
                 server_time: self.now,
                 buttons: self.buttons[slot],
@@ -188,7 +188,7 @@ fn a_rifle_round_kills_scores_and_the_victim_respawns() {
         return;
     };
     f.face_off();
-    let weapon = f.level.rt.host.client_weapons[0].current;
+    let weapon = f.level.rt.host.clients[0].weapons.current;
     let name = f.level.rt.host.weapon_name(usize::from(weapon)).unwrap();
     assert!(
         name == "kar98k_mp" || name == "enfield_mp",
@@ -278,10 +278,10 @@ fn an_smg_burst_lands_several_rounds() {
         (i, d.clip_index, d.ammo_index, d.clip_size)
     });
     let h = &mut f.level.rt.host;
-    h.client_weapons[0].give(index, 1);
-    h.client_weapons[0].current = index as u8;
-    h.client_ammo[0].clip[clip_index] = clip_size as i16;
-    h.client_ammo[0].ammo[ammo_index] = 64;
+    h.clients[0].weapons.give(index, 1);
+    h.clients[0].weapons.current = index as u8;
+    h.clients[0].ammo.clip[clip_index] = clip_size as i16;
+    h.clients[0].ammo.ammo[ammo_index] = 64;
     f.face_off();
     f.aim_at(0, 1, 20.0);
     f.buttons[0] = ADS;
@@ -501,8 +501,8 @@ fn the_held_weapon_scales_the_run() {
         .rt
         .with_host(|h, _| h.weapon_index("mp40_mp").expect("mp40_mp"));
     let h = &mut f.level.rt.host;
-    h.client_weapons[0].give(index, 1);
-    h.client_weapons[0].current = index as u8;
+    h.clients[0].weapons.give(index, 1);
+    h.clients[0].weapons.current = index as u8;
     f.face_off();
     f.aim_at(1, 0, 44.0);
     for _ in 0..10 {
@@ -515,7 +515,7 @@ fn the_held_weapon_scales_the_run() {
             }
             let cmd = UserCmd2 {
                 server_time: f.now,
-                weapon: f.level.rt.host.client_weapons[slot].current,
+                weapon: f.level.rt.host.clients[slot].weapons.current,
                 angles,
                 forward_move: 127,
                 ..Default::default()
@@ -564,7 +564,7 @@ fn players_block_each_other_and_overlapping_ones_part() {
     f.aim = [[0.0, 0.0], [0.0, 180.0]];
     for _ in 0..30 {
         f.now += 50;
-        let weapon = f.level.rt.host.client_weapons[0].current;
+        let weapon = f.level.rt.host.clients[0].weapons.current;
         let delta = f.level.players[0].as_ref().unwrap().ps.delta_angles;
         let cmd = UserCmd2 {
             server_time: f.now,

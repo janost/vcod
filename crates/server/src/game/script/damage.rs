@@ -351,8 +351,9 @@ impl ScriptRuntime {
         // A client that never spawned has no health to take.
         if self
             .host
-            .client_vitals
+            .clients
             .get(slot)
+            .map(|c| &c.vitals)
             .is_none_or(|v| v.max_health <= 0)
         {
             return false;

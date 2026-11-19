@@ -1967,7 +1967,7 @@ and `pm.maxs`, which `PM_CheckDuck` sizes to the stance
   prone row starts from standing.
 
 VERIFIED, `crates/server/src/game/trigger.rs`: vcod holds the height per
-client (`GameHost::client_height`, mirrored off the sim after each cmd and set
+client (`HostClient::height`, mirrored off the sim after each cmd and set
 by the `spawn` builtin's think; `ClientSim::box_height`:
 `PlayerState::box_height` alive, 70 once a cmd ran dead, `player_die`'s 30
 until then, which `GameHost::die` also links with) and builds
@@ -2187,7 +2187,7 @@ this capture's probe teleports the planter away for that reason.
 
 vcod: `trigger::aim_trace` takes the world with the second mask's world bits
 (0x802001) and the static models, the lookat the segment enters first, then
-every other live, playing client's body (`GameHost::client_bodies`, refreshed
+every other live, playing client's body (`HostClient::body`, refreshed
 from the sims just before the pass, so a `setOrigin` or re-anchor that frame
 moves it) through the `trace_bodies` a bullet and a blast use, with the aimer
 as pass entity and the held weapon's priority map. A body whose bones the

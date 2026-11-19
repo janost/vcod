@@ -836,7 +836,7 @@ decompiled):
   `InSameSquad` (0x69987) finds: on the speaker's team (`OnSameTeam`) and in
   his squad, which is not 0. UO's strings and `InSameSquad` are the same.
 
-vcod-server keeps the field on protocols 6 and 22 (`GameHost::client_squad`);
+vcod-server keeps the field on protocols 6 and 22 (`HostClient::squad`);
 on 1.1 the name is a plain script variable.
 
 VERIFIED live, 1.5b, `client-probes/probe_squad` on mp_carentan (2026-11-14,

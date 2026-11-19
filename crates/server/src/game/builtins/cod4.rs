@@ -345,7 +345,7 @@ fn get_stat(
     if !(0..=3499).contains(&i) {
         return Err(ErrorKind::Custom(format!("getstat: invalid index {i}")));
     }
-    if host.client_roster[slot].is_none() {
+    if host.clients[slot].roster.is_none() {
         return Err(ErrorKind::Custom(
             "getstat: called on a disconnected player".into(),
         ));
@@ -1038,7 +1038,7 @@ pub(super) mod tests {
             vec![String::new(); crate::game::cod4::MAX_CONFIGSTRINGS],
         );
         host.connect_client(cx, 0, "a").unwrap();
-        host.client_roster[0] = Some(Default::default());
+        host.clients[0].roster = Some(Default::default());
         let me = Some(Target::Entity(host.ents.handle(0).unwrap()));
         (host, me)
     }
@@ -1152,7 +1152,7 @@ pub(super) mod tests {
             assert_eq!(get(&mut host, 3498), Ok(i(0)));
             assert!(get(&mut host, -1).is_err());
             assert!(get(&mut host, 3500).is_err());
-            host.client_roster[0] = None;
+            host.clients[0].roster = None;
             assert!(get(&mut host, 5).is_err());
             host.cvars.set("developer_script", "1");
             assert!(set_stat(&mut host, cx, me, &[i(6), i(1)]).is_err());

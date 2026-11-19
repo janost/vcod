@@ -430,7 +430,7 @@ Which builtins index a configstring at run time comes from the relocations again
 - INFERRED, from `ClientSpawn`'s `bzero` of the `gclient_t` (0x42804, 0x22c4 bytes, the session block at +0x20d0 saved around it): a spawn clears the shellshock.
 - The client effect is cgame's: `cod11-shellshock.md` has the `.shock` files, the 27 `cg_shock_*` cvars, the screen blend, view kick, mouse damping, sound mix and the `wbuttons` 0x4 slowdown, and notes no stock MP script calls `shellshock`.
 
-vcod: `Allocators::index_precached` (`crates/server/src/configstrings.rs`) gates `setModel`, `attach`, `setViewModel`, `setShader`, `objective_add`, `objective_icon`, `setText`, `label` and `loadFx`; `setModel` and `attach` keep the precached spelling. The `statusicon` setter refuses an icon not precached and keeps the precached spelling. `shellShock` and `stopShellShock` (`builtins/client.rs`) write `GameHost::client_shellshock`, which the sim sends as the three playerstate fields; the client half is `play::shock` (`cod11-shellshock.md`). A/B: `probe_late_index_matches_retail` in `crates/server/tests/semantics_ents.rs`.
+vcod: `Allocators::index_precached` (`crates/server/src/configstrings.rs`) gates `setModel`, `attach`, `setViewModel`, `setShader`, `objective_add`, `objective_icon`, `setText`, `label` and `loadFx`; `setModel` and `attach` keep the precached spelling. The `statusicon` setter refuses an icon not precached and keeps the precached spelling. `shellShock` and `stopShellShock` (`builtins/client.rs`) write `HostClient::shellshock`, which the sim sends as the three playerstate fields; the client half is `play::shock` (`cod11-shellshock.md`). A/B: `probe_late_index_matches_retail` in `crates/server/tests/semantics_ents.rs`.
 
 ### `vectorToAngles`
 

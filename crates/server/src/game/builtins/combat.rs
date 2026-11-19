@@ -122,7 +122,7 @@ pub fn finish_player_damage(
         _ => None,
     };
     let dead_yaw = dead_yaw(host, cx, slot, inflictor_ent, attacker_ent);
-    let v = &mut host.client_vitals[slot];
+    let v = &mut host.clients[slot].vitals;
     // A client `player_die` already ran on (a blast that reaches it before
     // its end frame, 14.5) loses health as any other, clamped at -999
     // (0x43c5c), and dies no second time: `player_die` cleared `die`.
@@ -220,11 +220,11 @@ const DEATH_DROP_SPEED: f32 = 160.0;
 /// inside the dying player's own cmd, the unsnapped `ps.origin` everywhere
 /// else (5.5). The fuse is the one `Server::replay_moves` mirrored.
 fn drop_cooking_grenade(host: &mut GameHost, cx: &mut Cx, slot: usize) {
-    let fuse = host.client_grenade_ms.get(slot).copied().unwrap_or(0);
+    let fuse = host.clients.get(slot).map(|c| c.grenade_ms).unwrap_or(0);
     if fuse == 0 {
         return;
     }
-    host.client_grenade_ms[slot] = 0;
+    host.clients[slot].grenade_ms = 0;
     let Some(player) = host.ents.handle(slot as u32) else {
         return;
     };
@@ -235,7 +235,7 @@ fn drop_cooking_grenade(host: &mut GameHost, cx: &mut Cx, slot: usize) {
     let origin = Vec3::from(at) + Vec3::Z * DEATH_DROP_LIFT;
     // `self->s.weapon`: the grenade still in hand, since the drop runs ahead
     // of everything the death callback takes away.
-    let weapon = host.client_weapons[slot].current;
+    let weapon = host.clients[slot].weapons.current;
     let weapons = host.weapons.clone();
     let Some(def) = weapons.get(weapon as usize) else {
         return;
@@ -401,7 +401,7 @@ pub(crate) fn dead_yaw(
 /// inflictor and attacker, damage 100000, weapon 0 (`"none"`), no direction
 /// and hit location 0 (5.1), so the dead yaw is his own `angles` yaw.
 pub fn suicide_effects(host: &mut GameHost, cx: &mut Cx, slot: usize) -> Option<Vec<Value>> {
-    if host.client_vitals.get(slot)?.dead {
+    if host.clients.get(slot).map(|c| &c.vitals)?.dead {
         return None;
     }
     host.die(slot);
@@ -608,13 +608,13 @@ pub fn blast_step(host: &mut GameHost, cx: &mut Cx) {
             blast_entity(host, cx, id);
             continue;
         }
-        if !host.client_vitals[slot].takedamage || host.radius_ignore_active {
+        if !host.clients[slot].vitals.takedamage || host.radius_ignore_active {
             continue;
         }
         let Value::Vector(stands) = host.get_field(cx, id, origin_field) else {
             continue;
         };
-        let link = Vec3::from(host.client_link_origin[slot]);
+        let link = Vec3::from(host.clients[slot].link_origin);
         let victim = standing_victim(slot, Vec3::from(stands), link);
         let bodies = blast_bodies(host, cx);
         let world = host.world.clone();
@@ -692,9 +692,16 @@ fn blast_bodies(host: &mut GameHost, cx: &mut Cx) -> Vec<crate::game::combat::Hi
     if !host.profile.combat.bodies_shield_blasts {
         return bodies;
     }
-    for (other, body) in host.client_bodies.clone().into_iter().enumerate() {
+    for (other, body) in host
+        .clients
+        .iter()
+        .map(|c| c.body.clone())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .enumerate()
+    {
         let Some(mut body) = body else { continue };
-        if host.client_vitals[other].dead {
+        if host.clients[other].vitals.dead {
             continue;
         }
         let Some(handle) = host.ents.handle(other as u32) else {
@@ -964,9 +971,9 @@ fn body_hit(
     limit: f32,
 ) -> Option<(usize, f32)> {
     let bodies: Vec<crate::game::combat::HitBody> = host
-        .client_bodies
+        .clients
         .iter()
-        .flatten()
+        .filter_map(|c| c.body.as_ref())
         // The relink a death makes lands at once, ahead of the mirror.
         .filter(|b| {
             host.area
@@ -1112,7 +1119,7 @@ mod tests {
             name: "victim".into(),
         });
         rt.run_frame(0);
-        rt.host.client_vitals[0] = Vitals {
+        rt.host.clients[0].vitals = Vitals {
             health: 100,
             max_health: 100,
             dead: false,
@@ -1162,7 +1169,7 @@ mod tests {
                 });
             }
             rt.run_frame(0);
-            rt.host.client_vitals[0] = Vitals {
+            rt.host.clients[0].vitals = Vitals {
                 health: 100,
                 max_health: 100,
                 dead: false,
@@ -1235,7 +1242,7 @@ mod tests {
         rec.busy = 1;
         rt.host.turrets.insert(vcod_gsc::EntId(298, 0), rec);
         for health in [100, 10] {
-            rt.host.client_vitals[0] = Vitals {
+            rt.host.clients[0].vitals = Vitals {
                 health,
                 max_health: 100,
                 dead: false,
@@ -1261,7 +1268,7 @@ mod tests {
     #[test]
     fn a_fatal_finishplayerdamage_runs_the_killed_callback_first() {
         let mut rt = two_clients();
-        rt.host.client_vitals[0] = Vitals {
+        rt.host.clients[0].vitals = Vitals {
             health: 10,
             max_health: 100,
             dead: false,
@@ -1304,7 +1311,7 @@ mod tests {
     #[test]
     fn a_surviving_hit_takes_health_and_a_dead_player_only_until_its_end_frame() {
         let mut rt = two_clients();
-        rt.host.client_vitals[0] = Vitals {
+        rt.host.clients[0].vitals = Vitals {
             health: 100,
             max_health: 100,
             dead: false,
@@ -1433,7 +1440,7 @@ mod tests {
         });
         rt.run_frame(50);
         for slot in [0, 1] {
-            rt.host.client_vitals[slot] = Vitals {
+            rt.host.clients[slot].vitals = Vitals {
                 health: 100,
                 max_health: 100,
                 dead: false,
@@ -1526,7 +1533,7 @@ mod tests {
         rt.run_frame(50);
         let feet = [[100.0, 0.0, 0.0], [300.0, 300.0, 0.0]];
         for slot in [0, 1] {
-            rt.host.client_vitals[slot] = Vitals {
+            rt.host.clients[slot].vitals = Vitals {
                 health: 100,
                 max_health: 100,
                 dead: false,
@@ -1609,7 +1616,7 @@ mod tests {
             for slot in [0, 1] {
                 let x = if slot == front { 50.0 } else { 100.0 };
                 let health = if slot == front { 100 } else { 1000 };
-                rt.host.client_vitals[slot] = Vitals {
+                rt.host.clients[slot].vitals = Vitals {
                     health,
                     max_health: 100,
                     dead: false,
@@ -1725,7 +1732,7 @@ mod tests {
         }
         rt.run_frame(50);
         for (slot, x) in [(0, 50.0), (1, 100.0)] {
-            rt.host.client_vitals[slot] = Vitals {
+            rt.host.clients[slot].vitals = Vitals {
                 health: 1000,
                 max_health: 100,
                 dead: false,
@@ -1815,7 +1822,7 @@ mod tests {
         rt.run_frame(50);
         // In play at the far end of the map, as sd's spawns left them.
         for slot in 0..4 {
-            rt.host.client_vitals[slot] = Vitals {
+            rt.host.clients[slot].vitals = Vitals {
                 health: 1000,
                 max_health: 100,
                 dead: false,
@@ -1857,7 +1864,7 @@ mod tests {
         }
         rt.run_frame(50);
         for slot in [0, 1] {
-            rt.host.client_vitals[slot] = Vitals {
+            rt.host.clients[slot].vitals = Vitals {
                 health: 100,
                 max_health: 100,
                 dead: false,
@@ -1952,7 +1959,7 @@ mod tests {
             name: "victim".into(),
         });
         rt.run_frame(50);
-        rt.host.client_vitals[0] = Vitals {
+        rt.host.clients[0].vitals = Vitals {
             health: 100,
             max_health: 100,
             dead: false,
@@ -2214,7 +2221,7 @@ mod tests {
             }
         "#;
         let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
-        rt.host.client_vitals[0] = Vitals {
+        rt.host.clients[0].vitals = Vitals {
             health: 100,
             max_health: 100,
             dead: false,

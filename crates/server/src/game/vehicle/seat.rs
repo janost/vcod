@@ -361,7 +361,7 @@ pub fn usable(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize) -> bool 
     if crate::game::builtins::vehicle::health_of(host, cx, id) < 1 {
         return false;
     }
-    if host.client_grenade_ms.get(slot).copied().unwrap_or(0) != 0 {
+    if host.clients.get(slot).map(|c| c.grenade_ms).unwrap_or(0) != 0 {
         return false;
     }
     let mine = team(host, cx, slot);

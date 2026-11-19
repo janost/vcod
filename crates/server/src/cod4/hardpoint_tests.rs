@@ -371,7 +371,7 @@ fn a_helicopter_shot_down_crashes() {
             let eye = mid - Vec3::Z * 400.0 + right * 300.0;
             let a = crate::game::builtins::math::vectoangles((mid - eye).to_array());
             level.set_view_pos(0, eye.to_array(), [a[0], a[1], 0.0]);
-            level.rt.host.client_vitals[0].health = 100;
+            level.rt.host.clients[0].vitals.health = 100;
             let Some(ps) = level.pm_state(0) else {
                 return;
             };
@@ -555,7 +555,7 @@ fn rpg_at_heli(cvars: &[(&str, &str)], off: f32) -> Option<RpgFlight> {
         }
         // Held in the air where it fired from.
         level.set_view_pos(0, held.0.to_array(), held.1);
-        level.rt.host.client_vitals[0].health = 100;
+        level.rt.host.clients[0].vitals.health = 100;
         let Some(ps) = level.pm_state(0) else {
             return;
         };
@@ -664,7 +664,7 @@ fn ffar(guided: bool) -> Option<(Flight, Vec3, Vec<String>)> {
         let Some(h) = level.rt.host.cod4().helis.first().cloned() else {
             return;
         };
-        level.rt.host.client_vitals[0].health = 100;
+        level.rt.host.clients[0].vitals.health = 100;
         if let Some(eye) = spot {
             level.set_view_pos(0, eye.to_array(), [0.0, 0.0, 0.0]);
             let c4 = level.rt.host.cod4();

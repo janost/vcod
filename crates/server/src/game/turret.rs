@@ -391,8 +391,8 @@ pub fn use_by(
     }
     let slot = user.0 as usize;
     let origin = crate::game::item::origin_of(host, cx, user);
-    let stance = host.client_stance[slot];
-    let aim = host.client_aim[slot].1;
+    let stance = host.clients[slot].stance;
+    let aim = host.clients[slot].aim.1;
     let angles = crate::game::item::angles_of(host, cx, id);
     let Some(rec) = host.turrets.get_mut(&id) else {
         return true;

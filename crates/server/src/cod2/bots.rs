@@ -547,7 +547,7 @@ mod tests {
         let human = slots[0];
         sv.game.bots.as_mut().unwrap().bots_mut().remove(&human);
         let level = sv.game.level.as_mut().unwrap();
-        level.rt.host.client_roster[human].as_mut().unwrap().bot = false;
+        level.rt.host.clients[human].roster.as_mut().unwrap().bot = false;
         let from = sv.core.clients[human]
             .as_ref()
             .unwrap()
@@ -578,6 +578,10 @@ mod tests {
         frames(&mut sv, 80);
         assert_eq!(sv.game.cfg.gametype, "tdm");
         let level = sv.game.level.as_ref().unwrap();
-        assert!(level.rt.host.client_roster[slots[1]].is_some_and(|r| r.bot));
+        assert!(
+            level.rt.host.clients[slots[1]]
+                .roster
+                .is_some_and(|r| r.bot)
+        );
     }
 }

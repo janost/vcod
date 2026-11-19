@@ -1299,8 +1299,9 @@ impl Cod2Bots {
         let vitals = level
             .rt
             .host
-            .client_vitals
+            .clients
             .get(slot)
+            .map(|c| &c.vitals)
             .copied()
             .unwrap_or_default();
         let dead = vitals.dead || ps.pm_type >= pm_type::DEAD;
@@ -1596,8 +1597,9 @@ pub(crate) fn body(level: &Cod2Level, slot: usize) -> Option<super::driver::Body
     let dead = level
         .rt
         .host
-        .client_vitals
+        .clients
         .get(slot)
+        .map(|c| &c.vitals)
         .is_some_and(|v| v.dead);
     Some(super::driver::Body {
         origin: p.ps.origin,

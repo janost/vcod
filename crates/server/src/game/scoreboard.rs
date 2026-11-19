@@ -6,7 +6,7 @@ use crate::game::host::GameHost;
 use vcod_gsc::{Cx, Host, Value};
 
 /// What `Server` mirrors of one connected client slot before any script
-/// entry that can kill (`GameHost::client_roster`).
+/// entry that can kill (`HostClient::roster`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RosterSlot {
     /// `CS_CONNECTED`, no gamestate sent yet.
@@ -97,8 +97,9 @@ impl GameHost {
     /// (map-cycle doc, 6.3).
     pub fn scoreboard(&mut self, cx: &mut Cx) -> String {
         let roster: Vec<(usize, bool, i32)> = self
-            .client_roster
+            .clients
             .iter()
+            .map(|c| &c.roster)
             .enumerate()
             .filter_map(|(slot, r)| r.map(|r| (slot, r.connecting, r.ping)))
             .collect();
@@ -131,8 +132,8 @@ impl GameHost {
     /// `CodeCallback_PlayerKilled` has returned: every spectator following
     /// the victim is sent the scoreboard, behind what that callback queued.
     pub fn player_die_walk(&mut self, cx: &mut Cx, victim: usize) {
-        for slot in 0..self.client_roster.len() {
-            let Some(r) = self.client_roster[slot] else {
+        for slot in 0..self.clients.len() {
+            let Some(r) = self.clients[slot].roster else {
                 continue;
             };
             if r.following == Some(victim)

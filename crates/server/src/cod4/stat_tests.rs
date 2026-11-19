@@ -57,7 +57,7 @@ fn cod4_get_stat_refuses_as_retail() {
         "getstat: entity must be a player entity"
     );
     // `sess.connected` at 0: `ClientDisconnect` has run on the slot.
-    sv.game.level.as_mut().unwrap().rt.host.client_roster[1] = None;
+    sv.game.level.as_mut().unwrap().rt.host.clients[1].roster = None;
     assert_eq!(
         refused(call(&mut sv, "getstat", p1, &[Value::Int(0)])),
         "getstat: called on a disconnected player"

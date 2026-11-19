@@ -942,8 +942,9 @@ pub fn inflictor_weapon(host: &GameHost, id: Option<EntId>) -> usize {
     }
     if host.ents.get(id).is_some_and(|e| e.client.is_some()) {
         return host
-            .client_weapons
+            .clients
             .get(id.0 as usize)
+            .map(|c| &c.weapons)
             .map_or(0, |w| w.current as usize);
     }
     0
@@ -1105,7 +1106,12 @@ pub fn g_damage(
         return;
     }
     let slot = target.0 as usize;
-    if !host.client_vitals.get(slot).is_some_and(|v| v.takedamage) {
+    if !host
+        .clients
+        .get(slot)
+        .map(|c| &c.vitals)
+        .is_some_and(|v| v.takedamage)
+    {
         return;
     }
     let Some(damage) = host
@@ -1256,7 +1262,7 @@ pub fn vehicle_damage(
         // or no direction when the vehicle is its own attacker. The op skips
         // a slot with no sim.
         let driver = host.vehicles.live.get(&id).map_or(-1, |v| v.wire.other);
-        if (0..host.client_bodies.len() as i32).contains(&driver) {
+        if (0..host.clients.len() as i32).contains(&driver) {
             let from = (attacker != id).then(|| std::array::from_fn(|i| origin[i] - point[i]));
             host.client_sim_ops.push((
                 driver as usize,
@@ -1288,7 +1294,7 @@ pub fn position_clear(host: &mut GameHost, cx: &mut Cx, id: EntId) -> bool {
     let Some(me) = vehicle_box(host, id, origin) else {
         return true;
     };
-    for body in host.client_bodies.iter().flatten() {
+    for body in host.clients.iter().filter_map(|c| c.body.as_ref()) {
         let o = body.origin;
         let b = ((o + body.mins).to_array(), (o + body.maxs).to_array());
         if boxes_touch(me, b) {
@@ -1401,9 +1407,9 @@ pub fn dismount_spot(
     ff = ff.clamp(-len, len);
     let (pmins, pmaxs) = (Vec3::from(mins), Vec3::from(maxs));
     let body_at = |p: Vec3| {
-        host.client_bodies
+        host.clients
             .iter()
-            .flatten()
+            .filter_map(|c| c.body.as_ref())
             .filter(|b| Some(b.slot) != rider)
             .any(|b| {
                 let (lo, hi) = (b.origin + b.mins, b.origin + b.maxs);

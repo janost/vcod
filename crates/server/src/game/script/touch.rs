@@ -34,7 +34,7 @@ impl ScriptRuntime {
         let Some(client) = self.client_entity(slot) else {
             return;
         };
-        if self.host.client_pm_type.get(slot).copied().unwrap_or(0) > TOUCH_MAX_PM_TYPE {
+        if self.host.clients.get(slot).map(|c| c.pm_type).unwrap_or(0) > TOUCH_MAX_PM_TYPE {
             return;
         }
         let host = &mut self.host;
@@ -138,7 +138,11 @@ impl ScriptRuntime {
     /// The buttons of the last cmd `item_pass` saw from `slot`, which its
     /// use edge is taken against.
     pub fn client_old_buttons(&self, slot: usize) -> u8 {
-        self.host.client_old_buttons.get(slot).copied().unwrap_or(0)
+        self.host
+            .clients
+            .get(slot)
+            .map(|c| c.old_buttons)
+            .unwrap_or(0)
     }
 
     /// `Cmd_Activate_f` for one cmd (docs/research/cod11-items.md, section
@@ -151,7 +155,7 @@ impl ScriptRuntime {
         let Some(client) = self.client_entity(slot) else {
             return;
         };
-        let old = std::mem::replace(&mut self.host.client_old_buttons[slot], buttons);
+        let old = std::mem::replace(&mut self.host.clients[slot].old_buttons, buttons);
         let pressed = buttons & !old & vcod_common::net::msg::BUTTON_USE != 0;
         // `G_IsVehicleUnusable` first: a rider's press is the vehicle's use,
         // the exit (game.mp.uo 0x4dffb).
@@ -189,7 +193,7 @@ impl ScriptRuntime {
             rec.busy = 2;
             release_asked = true;
         }
-        if self.host.client_pm_type.get(slot).copied().unwrap_or(0) > TOUCH_MAX_PM_TYPE {
+        if self.host.clients.get(slot).map(|c| c.pm_type).unwrap_or(0) > TOUCH_MAX_PM_TYPE {
             return;
         }
         let host = &mut self.host;
@@ -197,7 +201,7 @@ impl ScriptRuntime {
             if !pressed || release_asked {
                 return;
             }
-            let v = host.client_vitals[slot];
+            let v = host.clients[slot].vitals;
             if v.health <= 0 || v.dead {
                 return;
             }
@@ -235,7 +239,7 @@ impl ScriptRuntime {
                     }
                 }
                 Some(Activate::Vehicle(veh)) => {
-                    let on_ground = host.client_on_ground.get(slot).copied().unwrap_or(false);
+                    let on_ground = host.clients.get(slot).map(|c| c.on_ground).unwrap_or(false);
                     crate::game::vehicle::seat::board(host, cx, veh, slot, on_ground, 0.0);
                 }
                 None => {}
@@ -257,21 +261,21 @@ impl ScriptRuntime {
     /// tests `isAlive`.
     pub fn aim_lookat(&mut self, slot: usize, now_ms: i32) {
         let Some(client) = self.client_entity(slot) else {
-            if let Some(l) = self.host.client_lookat.get_mut(slot) {
-                *l = None;
+            if let Some(c) = self.host.clients.get_mut(slot) {
+                c.lookat = None;
             }
             return;
         };
-        if self.host.client_pm_type.get(slot).copied().unwrap_or(0) > TOUCH_MAX_PM_TYPE {
-            self.host.client_lookat[slot] = None;
+        if self.host.clients.get(slot).map(|c| c.pm_type).unwrap_or(0) > TOUCH_MAX_PM_TYPE {
+            self.host.clients[slot].lookat = None;
             return;
         }
-        let (eye, aim, rifle) = self.host.client_aim[slot];
+        let (eye, aim, rifle) = self.host.clients[slot].aim;
         let host = &mut self.host;
         let hit = self
             .vm
             .with_cx(|cx| crate::game::trigger::aim_trace(host, cx, slot, eye, aim, rifle, now_ms));
-        self.host.client_lookat[slot] = hit;
+        self.host.clients[slot].lookat = hit;
         if let Some(id) = hit
             && self.host.triggers.fire(id, now_ms, false).fired()
             && !self.host.queue_trigger(id, client)
@@ -326,8 +330,9 @@ impl ScriptRuntime {
         };
         let v = self
             .host
-            .client_vitals
+            .clients
             .get(slot)
+            .map(|c| &c.vitals)
             .copied()
             .unwrap_or_default();
         if self.client_entity(slot).is_none() || v.health <= 0 || v.dead {
@@ -340,7 +345,7 @@ impl ScriptRuntime {
         if self.host.vehicles.seat_of(slot).is_some() {
             return hint(0, Some(-1));
         }
-        if self.host.client_pm_type.get(slot).copied().unwrap_or(0) > TOUCH_MAX_PM_TYPE {
+        if self.host.clients.get(slot).map(|c| c.pm_type).unwrap_or(0) > TOUCH_MAX_PM_TYPE {
             return hint(0, Some(-1));
         }
         let mut miss = hint(0, Some(-1));
@@ -438,7 +443,7 @@ impl ScriptRuntime {
         let Some(kind) = crate::game::pickup::item_kind(self.host.defs, item.index as usize) else {
             return miss;
         };
-        let owned = self.host.client_weapons[slot].holds(item.index as usize);
+        let owned = self.host.clients[slot].weapons.holds(item.index as usize);
         CursorHint {
             hint: crate::game::pickup::cursor_hint(self.host.defs.proto, kind, owned),
             ..miss

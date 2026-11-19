@@ -941,7 +941,7 @@ pub fn segment_enters_hulls(
 /// (docs/research/cod11-gsc-object-model.md 23.1). `aim` is `[pitch, yaw]`
 /// in wire degrees, the pair `ClientSim::aim_angles` returns. A lookat with
 /// brushes is entered through them, one without through its box. The bodies
-/// are `GameHost::client_bodies`.
+/// are `HostClient::body`.
 ///
 /// Not modelled: script models (0x2080, which the second mask's 0x2000
 /// meets). Also unmeasured: retail's traces end on whatever entity they hit
@@ -1009,7 +1009,12 @@ pub fn aim_trace(
         }
     }
     let (lookat_f, id) = best?;
-    let bodies: Vec<_> = host.client_bodies.iter().flatten().cloned().collect();
+    let bodies: Vec<_> = host
+        .clients
+        .iter()
+        .filter_map(|c| c.body.as_ref())
+        .cloned()
+        .collect();
     let (fs, anims) = (host.fs.clone(), host.anims.clone());
     let mut bones = crate::game::combat::BoneTraceCtx::of(
         fs.as_deref(),
@@ -1322,7 +1327,7 @@ mod tests {
                 (Stance::Crouch, true),
                 (Stance::Prone, false),
             ] {
-                host.client_height[0] = stance.height();
+                host.clients[0].height = stance.height();
                 let want = if hit { vec![id] } else { vec![] };
                 assert_eq!(touched(&mut host, cx, 0, [0.0; 3]), want, "{stance:?}");
             }

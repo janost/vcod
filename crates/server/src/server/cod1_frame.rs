@@ -285,7 +285,7 @@ impl Cod1Module {
             // at once, combat doc 14.7), and the walk measures it there.
             let set_down =
                 |rt: &script::ScriptRuntime, slot: usize, s: &crate::spectate::ClientSim| {
-                    let link = glam::Vec3::from(rt.host.client_link_origin[slot]);
+                    let link = glam::Vec3::from(rt.host.clients[slot].link_origin);
                     (link != s.link_origin()).then_some(link)
                 };
             let victim =
@@ -706,8 +706,8 @@ impl Cod1Module {
                     continue;
                 };
                 crate::tick_trace::step!("ClientEndFrame compass slot {slot}");
-                sim.ping = rt.host.client_ping_until[slot] > rt.host.level_time_ms;
-                sim.voted = rt.host.client_voted[slot];
+                sim.ping = rt.host.clients[slot].ping_until > rt.host.level_time_ms;
+                sim.voted = rt.host.clients[slot].voted;
                 let found = compass_friend(
                     clients,
                     slot,

@@ -81,9 +81,9 @@ pub fn step(host: &mut GameHost, cx: &mut Cx) -> Option<Callback> {
         let Some(victim) = host.ents.handle(slot as u32) else {
             continue;
         };
-        let health = host.client_vitals[slot].health;
+        let health = host.clients[slot].vitals.health;
         walk.probing = Some((slot, health));
-        host.client_vitals[slot].health = health + PROBE_PAD;
+        host.clients[slot].vitals.health = health + PROBE_PAD;
         if let Some(args) = probe_args(host, cx, death.attacker, victim, slot) {
             return Some((victim, args));
         }
@@ -101,7 +101,7 @@ fn probe_args(
     victim: EntId,
     slot: usize,
 ) -> Option<Vec<Value>> {
-    if !host.client_vitals[slot].takedamage || host.client_vitals[slot].dead {
+    if !host.clients[slot].vitals.takedamage || host.clients[slot].vitals.dead {
         return None;
     }
     let damage = host
@@ -128,8 +128,8 @@ fn probe_args(
 /// spot for him (a blocked search leaves him seated), the rest get out in
 /// place. Then `G_SetOrigin` lifts his `r.currentOrigin` [`LIFT`] units.
 fn finish_rider(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, health: i32) {
-    let shielded = host.client_vitals[slot].health == health + PROBE_PAD;
-    host.client_vitals[slot].health = health;
+    let shielded = host.clients[slot].vitals.health == health + PROBE_PAD;
+    host.clients[slot].vitals.health = health;
     let Some(player) = host.ents.handle(slot as u32) else {
         return;
     };
@@ -221,8 +221,8 @@ mod tests {
         vm.with_cx(|cx| {
             for slot in [3, 5] {
                 host.ents.spawn_client(cx, slot, None).unwrap();
-                host.client_vitals[slot].health = 50;
-                host.client_vitals[slot].takedamage = true;
+                host.clients[slot].vitals.health = 50;
+                host.clients[slot].vitals.takedamage = true;
             }
             let id = host.ents.spawn(cx).unwrap();
             let mut v = Vehicle::for_test(0);
@@ -243,18 +243,18 @@ mod tests {
             assert_eq!(victim.0, 3);
             assert_eq!(args[0], Value::Entity(world));
             assert_eq!(args[2], Value::Int(PROBE_DAMAGE));
-            assert_eq!(host.client_vitals[3].health, 60);
-            assert_eq!(host.client_vitals[5].health, 50);
+            assert_eq!(host.clients[3].vitals.health, 60);
+            assert_eq!(host.clients[5].vitals.health, 50);
             // His callback took the 5.
-            host.client_vitals[3].health = 55;
+            host.clients[3].vitals.health = 55;
             let (victim, _) = step(&mut host, cx).expect("the passenger's callback");
             assert_eq!(victim.0, 5);
-            assert_eq!(host.client_vitals[3].health, 50);
+            assert_eq!(host.clients[3].vitals.health, 50);
             assert_eq!(host.vehicles.seat_of(3), None);
-            assert_eq!(host.client_vitals[5].health, 60);
+            assert_eq!(host.clients[5].vitals.health, 60);
             // His did not: shielded, a dismount search, blocked.
             assert!(step(&mut host, cx).is_none());
-            assert_eq!(host.client_vitals[5].health, 50);
+            assert_eq!(host.clients[5].vitals.health, 50);
             assert_eq!(host.vehicles.seat_of(5), Some((id, 3)));
             assert!(host.vehicles.dying.is_empty());
             // Both are lifted 32 off where they sat.
@@ -281,7 +281,7 @@ mod tests {
         let mut vm = Vm::new();
         vm.with_cx(|cx| {
             host.ents.spawn_client(cx, 2, None).unwrap();
-            host.client_vitals[2].health = 40;
+            host.clients[2].vitals.health = 40;
             let id = host.ents.spawn(cx).unwrap();
             let mut v = Vehicle::for_test(0);
             v.seats[1] = Some(2);
@@ -296,7 +296,7 @@ mod tests {
                 },
             );
             assert!(step(&mut host, cx).is_none());
-            assert_eq!(host.client_vitals[2].health, 40);
+            assert_eq!(host.clients[2].vitals.health, 40);
             assert!(host.vehicles.dying.is_empty());
         });
     }

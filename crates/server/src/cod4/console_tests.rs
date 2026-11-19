@@ -96,7 +96,7 @@ fn cod4_a_long_userinfo_is_cut_and_its_name_cleaned() {
         format!("   {}", "x".repeat(12))
     );
     let level = sv.game.level.as_ref().unwrap();
-    assert_eq!(level.rt.host.client_names[0], "x".repeat(15));
+    assert_eq!(level.rt.host.clients[0].name, "x".repeat(15));
     assert_eq!(game_name("\\name\\  "), "UnnamedPlayer");
     sv.drop_client(0, "EXE_DISCONNECTED");
     run_ms(&mut sv, &mut probes, &mut now, 300);

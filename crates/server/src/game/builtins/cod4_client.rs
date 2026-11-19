@@ -162,7 +162,7 @@ fn shell_shock(
 ) -> Result<Value, ErrorKind> {
     super::client::shell_shock(host, cx, recv, a)?;
     let slot = client_receiver(host, recv)?;
-    if host.client_vitals[slot].health > 0 {
+    if host.clients[slot].vitals.health > 0 {
         host.cod4_mut().clients[slot].shock_pmf = Some(true);
     }
     Ok(Value::Undefined)
@@ -186,11 +186,11 @@ fn set_normal_health(
         _ => return Err(ErrorKind::BadType("setNormalHealth takes a number")),
     }
     .min(1.0);
-    let max = host.client_vitals[slot].max_health;
+    let max = host.clients[slot].vitals.max_health;
     let health = (f64::from(max) * f64::from(frac) + 0.5).floor() as i32;
     host.client_commands.push((slot, "J \"0\"".into()));
     if health > 0 {
-        host.client_vitals[slot].health = health;
+        host.clients[slot].vitals.health = health;
     }
     Ok(Value::Undefined)
 }

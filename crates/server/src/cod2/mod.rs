@@ -1560,7 +1560,7 @@ impl Cod2Server {
         let (origin, angles) = self.game.spot;
         if let Some(level) = self.game.level.as_mut() {
             let name = vcod_common::net::info_value_for_key(userinfo, "name").unwrap_or("");
-            level.rt.host.client_names[slot] = name.to_string();
+            level.rt.host.clients[slot].name = name.to_string();
             level.connect_at(slot, name, origin, angles);
         }
         self.core.clients[slot] = Some(self.new_client(slot, from, qport, challenge, userinfo));

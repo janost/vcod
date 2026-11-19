@@ -269,7 +269,7 @@ fn finish_player_damage(
         return Ok(Value::Undefined);
     }
     let hit = Hit::read(host, cx, args, damage)?;
-    if host.client_vitals[slot].dead {
+    if host.clients[slot].vitals.dead {
         return Err(ErrorKind::Custom(
             "Trying to do damage to a client that is already dead".into(),
         ));
@@ -277,7 +277,7 @@ fn finish_player_damage(
     push_mirrors(host, slot, &hit);
     let outcome = {
         let client = &host.cod4().clients[slot];
-        if host.client_vitals[slot].health > damage {
+        if host.clients[slot].vitals.health > damage {
             Outcome::Hurt
         } else if !client.last_stand && client.perks & PERK_PISTOL_DEATH != 0 {
             Outcome::Down
@@ -286,7 +286,7 @@ fn finish_player_damage(
         }
     };
     flesh_events(host, cx, slot, &hit, outcome == Outcome::Killed);
-    host.client_vitals[slot].health -= damage;
+    host.clients[slot].vitals.health -= damage;
     if let Some(r) = recv {
         let event = cx.intern_folded("damage");
         cx.notify(
@@ -402,7 +402,7 @@ fn kill(host: &mut GameHost, cx: &mut Cx, slot: usize, recv: Option<Target>, hit
     }
     host.cod4_mut().damage_ops.push(op);
     host.die(slot);
-    host.client_vitals[slot].health = 0;
+    host.clients[slot].vitals.health = 0;
     host.cod4_mut().callback = crate::game::host::Cod2CallbackArgs {
         time_offset: hit.time_offset,
         death_anim_duration: death.map_or(0, |d| d.duration),
@@ -476,7 +476,12 @@ fn suicide(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
-    if host.client_vitals.get(slot).is_none_or(|v| v.dead) {
+    if host
+        .clients
+        .get(slot)
+        .map(|c| &c.vitals)
+        .is_none_or(|v| v.dead)
+    {
         return Ok(Value::Undefined);
     }
     death_grenades(host, cx, slot, recv, "MOD_SUICIDE");
@@ -492,7 +497,7 @@ fn suicide(
         dead_yaw: None,
     });
     host.die(slot);
-    host.client_vitals[slot].health = 0;
+    host.clients[slot].vitals.health = 0;
     let Some(me) = host.ents.handle(slot as u32) else {
         return Ok(Value::Undefined);
     };

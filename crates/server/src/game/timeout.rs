@@ -200,7 +200,12 @@ impl GameHost {
     /// The caller's name as the banner line names it: `Q_CleanStr` of the
     /// session name.
     fn timeout_name(&self, slot: usize) -> String {
-        crate::game::say::clean_name(self.client_names.get(slot).map_or("", String::as_str))
+        crate::game::say::clean_name(
+            self.clients
+                .get(slot)
+                .map(|c| &c.name)
+                .map_or("", String::as_str),
+        )
     }
 }
 
@@ -226,7 +231,7 @@ mod tests {
                     host.set_field(cx, ent, atom, v).unwrap();
                 }
             });
-            host.client_names[slot] = format!("^2p{slot}");
+            host.clients[slot].name = format!("^2p{slot}");
         }
         host
     }
