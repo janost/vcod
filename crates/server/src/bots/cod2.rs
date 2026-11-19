@@ -1106,11 +1106,7 @@ impl Cod2Bots {
             } else if let Some(owner) = m.owner
                 && def.is_some_and(|d| d.explosion_radius > 0)
             {
-                noises.push(super::Noise {
-                    at: m.origin.into(),
-                    source: owner,
-                    radius: super::HEAR_BLAST,
-                });
+                noises.push(super::blast(owner, m.origin.into()));
             }
         }
         self.own

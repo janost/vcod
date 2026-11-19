@@ -89,6 +89,15 @@ pub(crate) fn gunfire(source: usize, origin: [f32; 3], view_height: f32) -> Nois
     }
 }
 
+/// The blast of `source`'s missile going off at `at`.
+pub(crate) fn blast(source: usize, at: [f32; 3]) -> Noise {
+    Noise {
+        at,
+        source,
+        radius: HEAR_BLAST,
+    }
+}
+
 /// A hit a bot felt: the attacker, the time it was read, the direction it
 /// came along.
 pub(crate) type HitFelt = (usize, i32, [f32; 3]);

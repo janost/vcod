@@ -36,6 +36,7 @@ use vcod_cod4::net::clmsg::UserCmd as UserCmd4;
 use vcod_cod4::pmove::weapon::{self as weap, WeaponDef};
 use vcod_cod4::pmove::{PlayerState, button, pm_type, pmf};
 use vcod_common::net::msg::{self, UserCmd};
+use vcod_gsc::EntId;
 
 use super::game_bots::{GameBots, OwnBots};
 use super::{
@@ -157,6 +158,10 @@ pub struct Cod4Own {
     attackers: HashMap<usize, (usize, i32)>,
     /// Every client's `eventSequence` last read.
     heard: HashMap<usize, i32>,
+    /// The missiles in flight at the last read, and the bursts and spent
+    /// missiles already heard ([`blasts`]).
+    flying: Vec<Flying>,
+    heard_blasts: Vec<EntId>,
     /// Classes picked, by bot, for the spread.
     classes: BTreeMap<usize, usize>,
     /// Each bot's script switch under way (`a <weapon>`): the weapon and
@@ -224,6 +229,8 @@ impl OwnBots for Cod4Own {
             hits_read: 0,
             attackers: HashMap::new(),
             heard: HashMap::new(),
+            flying: Vec::new(),
+            heard_blasts: Vec::new(),
             classes: BTreeMap::new(),
             switches: HashMap::new(),
             held: HashMap::new(),
@@ -638,9 +645,9 @@ impl Cod4Bots {
             })
     }
 
-    /// The frame's gunfire since the last tick: each playing client's new
-    /// fire events chest high, as the CoD1 driver gathers them. Blasts are
-    /// not heard yet.
+    /// The frame's noises since the last tick: each playing client's new
+    /// fire events chest high as gunfire, and each burst since as a blast
+    /// ([`blasts`]), as CoD2's and the CoD1 driver gather them.
     pub(crate) fn listen(&mut self, level: &Cod4Level) -> Vec<super::Noise> {
         let mut noises = Vec::new();
         let mut slots: Vec<usize> = self.own.pass.states.keys().copied().collect();
@@ -656,6 +663,33 @@ impl Cod4Bots {
                 noises.push(super::gunfire(i, ps.origin.into(), ps.view_height_current));
             }
         }
+        let c4 = level.rt.host.cod4();
+        let defs = level.weapon_defs();
+        let loud = |w: u32| {
+            defs.get(w as usize).is_some_and(|d| {
+                d.explosion_radius > 0 && d.offhand_class != weap::OFFHAND_CLASS_SMOKE
+            })
+        };
+        let flying = |m: &crate::game::cod4::missile::Missile4| Flying {
+            id: m.id,
+            owner: m.owner,
+            weapon: m.weapon,
+            at: m.origin,
+        };
+        let missiles: Vec<(Flying, bool)> = (c4.missiles.iter())
+            .map(|m| (flying(m), m.free_at.is_some() && m.e_flags & SPENT != 0))
+            .collect();
+        let bursts: Vec<(EntId, u32, Vec3)> = c4
+            .bursts
+            .iter()
+            .map(|b| (b.id, b.weapon, b.origin))
+            .collect();
+        let heard = &mut self.own.heard_blasts;
+        noises.extend(blasts(&self.own.flying, &missiles, &bursts, heard, loud));
+        self.own.flying = (c4.missiles.iter())
+            .filter(|m| m.free_at.is_none())
+            .map(flying)
+            .collect();
         noises
     }
 
@@ -1846,9 +1880,96 @@ fn friendly_fire(level: &Cod4Level) -> bool {
         .any(|n| crate::game::builtins::cvar::atoi(cvars.get(n)) != 0)
 }
 
+/// A missile at a read: its entity, thrower, weapon and origin.
+#[derive(Clone, Copy, Debug)]
+struct Flying {
+    id: EntId,
+    owner: Option<usize>,
+    weapon: u32,
+    at: Vec3,
+}
+
+/// `eFlags` 0x20, which a missile spent on impact carries (cod4-combat.md
+/// 10.3).
+const SPENT: u32 = 0x20;
+
+/// The blasts not heard yet, as CoD2's and CoD1's bots hear them, each as
+/// its thrower's: a burst (`bursts`, entity, weapon, point) laid to the
+/// missile of its weapon nearest it that was in flight at the last read
+/// (`was`) and is gone now, a fuse's burst leaving no thrower of its own;
+/// and a missile spent on impact (`missiles`, each with whether it is). Only
+/// weapons `loud` names are heard; `heard` keeps what was heard of what is
+/// still up.
+fn blasts(
+    was: &[Flying],
+    missiles: &[(Flying, bool)],
+    bursts: &[(EntId, u32, Vec3)],
+    heard: &mut Vec<EntId>,
+    loud: impl Fn(u32) -> bool,
+) -> Vec<super::Noise> {
+    heard.retain(|id| bursts.iter().any(|b| b.0 == *id) || missiles.iter().any(|m| m.0.id == *id));
+    let mut gone: Vec<Flying> = (was.iter())
+        .filter(|w| !missiles.iter().any(|(m, _)| m.id == w.id))
+        .copied()
+        .collect();
+    let mut noises = Vec::new();
+    for &(id, weapon, at) in bursts {
+        if heard.contains(&id) || !loud(weapon) {
+            continue;
+        }
+        heard.push(id);
+        let thrower = (gone.iter().enumerate())
+            .filter(|(_, g)| g.weapon == weapon)
+            .min_by(|a, b| a.1.at.distance(at).total_cmp(&b.1.at.distance(at)))
+            .map(|(k, _)| k);
+        if let Some(owner) = thrower.and_then(|k| gone.remove(k).owner) {
+            noises.push(super::blast(owner, at.into()));
+        }
+    }
+    for &(m, spent) in missiles {
+        if !spent || heard.contains(&m.id) || !loud(m.weapon) {
+            continue;
+        }
+        heard.push(m.id);
+        if let Some(owner) = m.owner {
+            noises.push(super::blast(owner, m.at.into()));
+        }
+    }
+    noises
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fuse's burst is its vanished frag's thrower's, heard once; a
+    /// spent impact is heard where it struck; smoke and an unseen
+    /// missile's burst are not.
+    #[test]
+    fn a_blast_is_heard_once_as_its_thrower_s() {
+        let fly = |id, owner, weapon, x| Flying {
+            id: EntId(id, 0),
+            owner: Some(owner),
+            weapon,
+            at: Vec3::new(x, 0.0, 0.0),
+        };
+        let loud = |w: u32| w != 9;
+        let was = [
+            fly(100, 2, 5, 0.0),
+            fly(101, 3, 5, 400.0),
+            fly(102, 4, 9, 0.0),
+        ];
+        let mut heard = Vec::new();
+        let at = Vec3::new(390.0, 0.0, 0.0);
+        let bursts = [(EntId(200, 0), 5, at), (EntId(201, 0), 9, Vec3::ZERO)];
+        let missiles = [(fly(100, 2, 5, 10.0), false), (fly(103, 6, 5, 0.0), true)];
+        let n = blasts(&was, &missiles, &bursts, &mut heard, loud);
+        let got: Vec<(usize, f32)> = n.iter().map(|n| (n.source, n.at[0])).collect();
+        assert_eq!(got, [(3, 390.0), (6, 0.0)]);
+        assert!(blasts(&was, &missiles, &bursts, &mut heard, loud).is_empty());
+        let stray = [(EntId(202, 0), 5, at)];
+        assert!(blasts(&[], &[], &stray, &mut Vec::new(), loud).is_empty());
+    }
 
     #[test]
     fn a_cod1_cmd_maps_onto_cod4_bits_with_whole_moves() {

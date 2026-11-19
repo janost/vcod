@@ -2010,3 +2010,11 @@ VERIFIED (measured, ours): every refactor commit printed these, every
   its `fuseTime`, CoD2's the fuse itself; a fuse shorter than the
   clamp could pass the probe and go off in the air by the thrower. The
   shared lob flies the fuse. Digests unchanged: 1.7's frag fuses 3500.
+- Blasts on CoD4: its bots heard gunfire only. 1.7's fuse burst carries
+  no thrower, so it is laid to the missile of its weapon, nearest it,
+  gone since the last tick; an impact's spent missile is heard where it
+  struck; smoke is not heard. CoD4's digests move from tick 1200 on, to
+  2b2bffc3935d12e9 (seed 1) and d1428bb5e367aacd (seed 2); kills 38
+  and 36 become 47 and 48, throws 22 and 16 become 14 and 13, script
+  errors 0 both. INFERRED: bots answer a blast as CoD2's do, walking in
+  on the thrower; two seeds tell nothing past that.
