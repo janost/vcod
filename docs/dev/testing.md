@@ -116,6 +116,20 @@ A step passes only on `test result: ok` lines that ran tests. `CARGO_WRAP`
 puts each cargo run under a wrapper (a memory-capped scope), `DRY=1`
 prints the commands.
 
+## Refactor checks
+
+`tools/move_check.sh <base> <head> <old-file>... [--into <path>]...`
+proves a split commit only moved code: it compares the old files at
+`<base>` with the files that received them at `<head>` (the old path, its
+module directory, each `--into`), line by line after rustfmt. Its header
+lists the differences it allows.
+
+`tools/baselines.sh <out-dir>` records the `bot_match` digests, the
+`nav_build` digests and each crate's test list at the installs the
+environment names (`COD_DIR`, `COD_UO_DIR`, `COD2_DIR`, `COD4_DIR`; takes
+`CARGO_WRAP` as `gate.sh` does). `tools/baselines.sh --compare <old-dir>
+<new-dir>` prints what differs and exits 1 if anything does.
+
 ## Ignored tests: when to run them
 
 `--ignored` always takes a name filter. Unfiltered it also starts the soaks
