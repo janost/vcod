@@ -23,6 +23,16 @@ const PRONE_TURN_DIVISOR: f32 = 240.0;
 pub(crate) const HEIGHT_PRONE: f32 = 30.0;
 pub(crate) const HEIGHT_CROUCH: f32 = 50.0;
 const HEIGHT_STAND: f32 = 70.0;
+
+/// The box height `PM_CheckDuck` sets for `stance`.
+pub(crate) fn stance_height(stance: Stance) -> f32 {
+    match stance {
+        Stance::Prone => HEIGHT_PRONE,
+        Stance::Crouch => HEIGHT_CROUCH,
+        Stance::Stand => HEIGHT_STAND,
+    }
+}
+
 /// The prone yaw cap's soft edge (rodata 0x820aae0), the body's swing rate
 /// (0x820deb8) and the refused turn's ease back (0x820dec4).
 const PRONE_SOFT_EDGE: f32 = 5.0;
@@ -997,12 +1007,12 @@ pub(crate) fn check_duck(pm: &mut Pmove, pml: &mut Pml) {
     view_height_adjust(pm.ps, pm.cmd.server_time, pml.frametime);
     let ps = &mut *pm.ps;
     let stance = ps.effective_stance();
-    let (height, flags) = match stance {
-        Stance::Prone => (HEIGHT_PRONE, ef::PRONE),
-        Stance::Crouch => (HEIGHT_CROUCH, ef::CROUCH),
-        Stance::Stand => (HEIGHT_STAND, 0),
+    let flags = match stance {
+        Stance::Prone => ef::PRONE,
+        Stance::Crouch => ef::CROUCH,
+        Stance::Stand => 0,
     };
-    pm.maxs.z = height;
+    pm.maxs.z = stance_height(stance);
     ps.e_flags = (ps.e_flags & !(ef::PRONE | ef::CROUCH)) | flags;
     set_stance(ps, stance);
     if pm.ps.pm_flags & pmf::PRONE != 0 && !was_prone {

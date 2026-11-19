@@ -71,6 +71,8 @@ pub(crate) trait BridgePs: PmState + Clone + Send + Sync + 'static {
     fn speed(&mut self) -> &mut i32;
     /// `viewHeightTarget` and `viewHeightCurrent`.
     fn view_height(&mut self) -> (&mut i32, &mut f32);
+    /// The box the game's pmove moves the body with for its stance.
+    fn stance_box(&self) -> (Vec3, Vec3);
 }
 
 macro_rules! bridge_ps {
@@ -108,6 +110,9 @@ macro_rules! bridge_ps {
             }
             fn view_height(&mut self) -> (&mut i32, &mut f32) {
                 (&mut self.view_height_target, &mut self.view_height_current)
+            }
+            fn stance_box(&self) -> (Vec3, Vec3) {
+                $pm::PlayerState::stance_box(self)
             }
         }
     };
@@ -152,6 +157,17 @@ impl From<vcod_common::clipmap::ClipTrace> for Hit {
     }
 }
 
+impl From<pm4::Tr> for Hit {
+    fn from(t: pm4::Tr) -> Hit {
+        Hit {
+            startsolid: t.startsolid,
+            fraction: t.fraction,
+            normal: t.normal,
+            surface_flags: t.surface_flags,
+        }
+    }
+}
+
 /// The body a walk carries between cmds, the cmd before it (`C`, the
 /// game's), and where it left the walk's CoD1 body.
 #[derive(Clone)]
@@ -166,14 +182,15 @@ struct Carried<P, C> {
 /// the one `carry` holds while the walk's CoD1 body `ps` is where it left
 /// it, else a fresh one off `ps` ([`walk_body`], its clock at `from_ms`).
 /// `step` moves it by the game's pmove (its second argument the cmd
-/// before) and says whether the jump key was down; `below` traces the
-/// body's box from its first point to its second ([`read_walk_body`]).
+/// before) and says whether the jump key was down; `below(start, end,
+/// mins, maxs)` traces the world the pmove moved it over
+/// ([`read_walk_body`]).
 pub(crate) fn walk_cmd<P: BridgePs, C: Clone + Default + Send + Sync + 'static>(
     ps: &mut Cod1Ps,
     carry: &mut WalkCarry,
     from_ms: i32,
     step: impl FnOnce(&mut P, &mut C) -> bool,
-    below: impl FnOnce(&P, Vec3, Vec3) -> Hit,
+    below: impl FnOnce(Vec3, Vec3, Vec3, Vec3) -> Hit,
 ) {
     // The walk's own CoD1 body is the truth when it moved it since.
     let mut body = carry
@@ -188,7 +205,7 @@ pub(crate) fn walk_cmd<P: BridgePs, C: Clone + Default + Send + Sync + 'static>(
             velocity: ps.velocity,
         });
     let jump_held = step(&mut body.ps, &mut body.old);
-    read_walk_body(&body.ps, ps, jump_held, |a, b| below(&body.ps, a, b));
+    read_walk_body(&body.ps, ps, jump_held, below);
     body.origin = ps.origin;
     body.velocity = ps.velocity;
     *carry = Some(Arc::new(body));
@@ -237,13 +254,15 @@ pub(crate) fn walk_body<P: BridgePs>(ps: &Cod1Ps, time: i32) -> P {
 
 /// What the walk reads off the game body `b` into its CoD1 body `ps`; a
 /// body off the ground over ground too steep to stand on reads sliding,
-/// off `below`'s trace a quarter unit down.
+/// off `below`'s trace of its stance box ([`BridgePs::stance_box`]) a
+/// quarter unit down.
 pub(crate) fn read_walk_body<P: BridgePs>(
     b: &P,
     ps: &mut Cod1Ps,
     jump_held: bool,
-    below: impl FnOnce(Vec3, Vec3) -> Hit,
+    below: impl FnOnce(Vec3, Vec3, Vec3, Vec3) -> Hit,
 ) {
+    let (mins, maxs) = b.stance_box();
     let b = b.seen();
     ps.origin = b.origin;
     ps.velocity = b.velocity;
@@ -265,7 +284,7 @@ pub(crate) fn read_walk_body<P: BridgePs>(
     let plane = if ps.on_ground {
         Some(Vec3::Z)
     } else {
-        let t = below(b.origin, b.origin - Vec3::Z * 0.25);
+        let t = below(b.origin, b.origin - Vec3::Z * 0.25, mins, maxs);
         (!t.startsolid && t.fraction < 1.0).then_some(t.normal)
     };
     ps.set_ground_plane(plane);
