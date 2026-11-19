@@ -300,27 +300,19 @@ impl Cod4Bots {
         let mut fresh = Cod4Bots::new(self.shoot);
         fresh.admin = std::mem::take(&mut self.admin);
         fresh.applied = self.applied;
-        fresh.driver.nav_background = self.driver.nav_background;
         fresh.on_level = self.on_level.take();
         fresh.classes = std::mem::take(&mut self.classes);
         fresh.objectives = self.objectives;
         fresh.man_guns = self.man_guns;
         fresh.throw_back = self.throw_back;
         fresh.gun.carry_counts(&self.gun);
-        // `bot_match`'s cue counts run over the whole match.
-        fresh.driver.posts.tally = self.driver.posts.tally;
+        fresh.driver = std::mem::take(&mut self.driver);
+        fresh.driver.new_level(same_map);
         if same_map {
-            fresh.driver.nav_job = self.driver.nav_job.take();
-            fresh.driver.nav = self.driver.nav.take();
-            fresh.driver.creases = std::mem::take(&mut self.driver.creases);
-            fresh.driver.probes = std::mem::take(&mut self.driver.probes);
-            fresh.driver.sites = std::mem::take(&mut self.driver.sites);
-            fresh.driver.posts.carry_surveys(&mut self.driver.posts);
             fresh.world = self.world.take();
             fresh.brush_key = std::mem::take(&mut self.brush_key);
             fresh.recheck_brushes = fresh.world.is_some();
         }
-        fresh.driver.bots = std::mem::take(&mut self.driver.bots);
         for bot in fresh.driver.bots.values_mut() {
             bot.rearm();
         }
@@ -339,11 +331,7 @@ impl Cod4Bots {
     fn drop_world(&mut self) {
         self.world = None;
         self.brush_key.clear();
-        self.driver.nav = None;
-        self.driver.nav_job = None;
-        self.driver.creases = Default::default();
-        self.driver.probes = Default::default();
-        self.driver.sites = Default::default();
+        self.driver.new_world();
     }
 
     /// Whether new bots fight, and `vc_bot_shoot`'s change for every bot.
@@ -362,11 +350,7 @@ impl Cod4Bots {
         self.held.remove(&slot);
         self.admin.pinned.remove(&slot);
         self.admin.skills.remove(&slot);
-        self.driver.bots.remove(&slot);
-        self.driver.paths.remove(&slot);
-        self.driver.enemies.remove(&slot);
-        self.driver.hunts.remove(&slot);
-        self.driver.covers.remove(&slot);
+        self.driver.forget(slot);
         self.throwing.remove(&slot);
         self.mantling.remove(&slot);
         self.climbed.remove(&slot);

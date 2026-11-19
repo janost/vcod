@@ -73,6 +73,11 @@ pub(crate) struct Gate {
 }
 
 impl Gate {
+    /// A bot gone from `slot`: the next one there starts unquieted.
+    pub(crate) fn forget(&mut self, slot: usize) {
+        self.bot_last.remove(&slot);
+    }
+
     /// The row of `yell`'s menu the bot in `slot` sends at `now` (level
     /// ms), or `None`: not on a side (DM's `none`), quiet after its own or
     /// its team's last yell, or the roll said no. A clock that went back

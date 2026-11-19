@@ -58,10 +58,8 @@ impl Server {
             && let Some(g) = job.poll(!self.game.module.driver.nav_background)
         {
             log::info!("bots: navigation graph rebuilt over the script's brushes");
-            self.game.module.driver.nav = Some(g);
+            self.game.module.driver.swap_graph(g);
             self.game.module.nav_rebuild = None;
-            self.game.module.driver.paths.clear();
-            self.game.module.driver.sites.clear();
             self.game.module.bot_breach_stands.clear();
         }
     }

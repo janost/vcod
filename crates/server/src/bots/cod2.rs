@@ -454,20 +454,10 @@ impl Cod2Bots {
         let mut fresh = Cod2Bots::new(self.shoot);
         fresh.admin = std::mem::take(&mut self.admin);
         fresh.applied = self.applied;
-        fresh.driver.nav_background = self.driver.nav_background;
         fresh.man_guns = self.man_guns;
         fresh.smokes = self.smokes;
-        // `bot_match`'s cue counts run over the whole match.
-        fresh.driver.posts.tally = self.driver.posts.tally;
-        if !new_map {
-            fresh.driver.nav_job = self.driver.nav_job.take();
-            fresh.driver.nav = self.driver.nav.take();
-            fresh.driver.creases = std::mem::take(&mut self.driver.creases);
-            fresh.driver.sites = std::mem::take(&mut self.driver.sites);
-            fresh.driver.radios = std::mem::take(&mut self.driver.radios);
-            fresh.driver.posts.carry_surveys(&mut self.driver.posts);
-        }
-        fresh.driver.bots = std::mem::take(&mut self.driver.bots);
+        fresh.driver = std::mem::take(&mut self.driver);
+        fresh.driver.new_level(!new_map);
         for bot in fresh.driver.bots.values_mut() {
             bot.rearm();
         }
@@ -494,10 +484,7 @@ impl Cod2Bots {
     pub fn remove(&mut self, slot: usize) {
         self.admin.pinned.remove(&slot);
         self.admin.skills.remove(&slot);
-        self.driver.bots.remove(&slot);
-        self.driver.paths.remove(&slot);
-        self.driver.enemies.remove(&slot);
-        self.driver.hunts.remove(&slot);
+        self.driver.forget(slot);
         self.throwing.remove(&slot);
         self.mantling.remove(&slot);
         self.crouched.remove(&slot);
@@ -506,7 +493,6 @@ impl Cod2Bots {
         self.fetches.remove(&slot);
         self.last_views.remove(&slot);
         self.hits.remove(&slot);
-        self.driver.covers.remove(&slot);
         self.heard.remove(&slot);
         self.smoking.remove(&slot);
         self.retreats.remove(&slot);
