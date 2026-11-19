@@ -116,6 +116,93 @@ pub(crate) fn aim_point(
     [chest, eye].into_iter().find(|p| clear(*p))
 }
 
+/// A client a bot may fight, as its game's playerstate places it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Seen {
+    pub(crate) slot: usize,
+    pub(crate) origin: glam::Vec3,
+    pub(crate) eye: glam::Vec3,
+    /// The eye's height over `origin`, which places the chest ([`chest`]).
+    pub(crate) view_height: f32,
+    pub(crate) velocity: [f32; 3],
+}
+
+/// The bot looking for an enemy: where it stands, its eye and view (wire
+/// degrees), its sight cone, and the target it tracks and the attacker of a
+/// fresh hit, both seen wherever they stand.
+pub(crate) struct Looker {
+    pub(crate) origin: glam::Vec3,
+    pub(crate) eye: glam::Vec3,
+    pub(crate) view: [f32; 3],
+    pub(crate) fov: f32,
+    pub(crate) tracked: Option<usize>,
+    pub(crate) attacker: Option<usize>,
+}
+
+/// The target `bot` tracks while aware, and its sight cone; a slot with no
+/// brain sees with the default skill.
+pub(crate) fn tracked_and_fov(bot: Option<&Bot>) -> (Option<usize>, f32) {
+    let tracked = bot
+        .and_then(|b| b.target_slot())
+        .filter(|_| bot.is_none_or(|b| b.aware));
+    let fov = bot.map_or(Skill::default().fov_deg, |b| b.skill.fov_deg);
+    (tracked, fov)
+}
+
+/// Whether a client on `theirs` is a foe of one on `mine`: everyone in `dm`
+/// and to a player on neither side, else only the other side.
+pub(crate) fn foe(dm: bool, mine: i32, theirs: i32) -> bool {
+    use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
+    dm || !(mine == TEAM_AXIS || mine == TEAM_ALLIES)
+        || (theirs != mine && (theirs == TEAM_AXIS || theirs == TEAM_ALLIES))
+}
+
+/// Whether `a` and `b` are on one side, axis or allies.
+pub(crate) fn same_team(a: Option<i32>, b: Option<i32>) -> bool {
+    use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
+    a.is_some_and(|a| (a == TEAM_AXIS || a == TEAM_ALLIES) && Some(a) == b)
+}
+
+/// The enemy in sight `me` fights of `foes` ([`pick_enemy`]): those within
+/// [`SHOOT_RANGE`], the tracked one and the attacker wherever they stand
+/// and the rest inside the sight cone, nearest first and by slot on a tie,
+/// each aimed at where `clear` says the eye line reaches ([`aim_point`]).
+pub(crate) fn sight_enemy(
+    me: &Looker,
+    foes: impl IntoIterator<Item = Seen>,
+    clear: impl Fn([f32; 3]) -> bool,
+) -> Option<EnemyView> {
+    let mut candidates: Vec<(f32, glam::Vec3, EnemyView)> = Vec::new();
+    for s in foes {
+        let d = dist_sq(me.origin.into(), s.origin.into());
+        if d > SHOOT_RANGE * SHOOT_RANGE {
+            continue;
+        }
+        let chest = chest(s.origin.into(), s.view_height);
+        let known = Some(s.slot) == me.tracked || Some(s.slot) == me.attacker;
+        if !known && !in_sight_cone(me.eye, me.view, chest.into(), me.fov) {
+            continue;
+        }
+        candidates.push((
+            d,
+            s.eye,
+            EnemyView {
+                slot: s.slot,
+                origin: chest,
+                velocity: s.velocity,
+            },
+        ));
+    }
+    candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.2.slot.cmp(&b.2.slot)));
+    let sighted = |i: usize| {
+        let (_, eye, e) = &candidates[i];
+        let origin = aim_point(e.origin, (*eye).into(), &clear)?;
+        Some(EnemyView { origin, ..*e })
+    };
+    let order: Vec<(f32, usize)> = candidates.iter().map(|c| (c.0, c.2.slot)).collect();
+    pick_enemy(&order, me.attacker, me.tracked, sighted)
+}
+
 /// How long a bot keeps walking to one sidestep before it picks again.
 const SIDESTEP_HOLD_MS: i32 = 3000;
 /// A sidestep this near across is reached: the bot picks again if the line
@@ -377,6 +464,43 @@ mod tests {
         assert_eq!(
             pick_enemy(&order, None, Some(2), seen).map(|e| e.slot),
             Some(2)
+        );
+    }
+
+    /// Out of range or behind is not seen unless it just hit the bot; two
+    /// at one range go by slot, whatever order the game lists them in.
+    #[test]
+    fn the_sight_pick_takes_the_nearest_in_the_cone_by_slot_on_a_tie() {
+        let seen = |slot, x: f32, y: f32| Seen {
+            slot,
+            origin: glam::Vec3::new(x, y, 0.0),
+            eye: glam::Vec3::new(x, y, 60.0),
+            view_height: 60.0,
+            velocity: [0.0; 3],
+        };
+        let me = |attacker| Looker {
+            origin: glam::Vec3::ZERO,
+            eye: glam::Vec3::new(0.0, 0.0, 60.0),
+            view: [0.0; 3],
+            fov: 90.0,
+            tracked: None,
+            attacker,
+        };
+        let pick = |me: &Looker, foes: Vec<Seen>| sight_enemy(me, foes, |_| true).map(|e| e.slot);
+        let tie = vec![
+            seen(5, 300.0, 0.0),
+            seen(2, 0.0, 300.0),
+            seen(3, 300.0, 0.0),
+        ];
+        assert_eq!(pick(&me(None), tie), Some(3));
+        let behind = vec![seen(1, -200.0, 0.0), seen(4, SHOOT_RANGE + 10.0, 0.0)];
+        assert_eq!(pick(&me(None), behind.clone()), None);
+        assert_eq!(pick(&me(Some(1)), behind), Some(1));
+        let e = sight_enemy(&me(None), [seen(6, 400.0, 0.0)], |p| p[2] > 50.0).unwrap();
+        assert_eq!(
+            e.origin,
+            [400.0, 0.0, 60.0],
+            "the chest is covered: the head"
         );
     }
 

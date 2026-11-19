@@ -31,7 +31,6 @@ use super::{Cod4Bots, deg_short, eye};
 use crate::bots::BotView;
 use crate::game::cod2_turret::GunInfo;
 use crate::game::cod4::level::Cod4Level;
-use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
 
 /// How far from the spot behind a gun a bot walks straight to it.
 const GUN_REACH: f32 = 400.0;
@@ -206,11 +205,6 @@ fn cmd_angles(c: &mut UserCmd4, view: [f32; 2], delta: [f32; 3]) {
     for i in 0..2 {
         c.angles[i] = ((deg_short(view[i]) - deg_short(delta[i])) & 0xffff) as u16;
     }
-}
-
-fn foe(dm: bool, mine: i32, theirs: i32) -> bool {
-    dm || !(mine == TEAM_AXIS || mine == TEAM_ALLIES)
-        || (theirs != mine && (theirs == TEAM_AXIS || theirs == TEAM_ALLIES))
 }
 
 impl Cod4Bots {
@@ -548,7 +542,9 @@ impl Cod4Bots {
         let w = &world.collision;
         let mut seen: Vec<(f32, usize, Vec3)> = (self.own.pass.states.iter())
             .filter(|(i, _)| **i != slot && self.playing(level, **i))
-            .filter(|(i, _)| foe(self.own.pass.dm, mine, teams.get(**i).copied().unwrap_or(0)))
+            .filter(|(i, _)| {
+                crate::bots::foe(self.own.pass.dm, mine, teams.get(**i).copied().unwrap_or(0))
+            })
             .filter_map(|(&i, p)| {
                 let chest = Vec3::from(crate::bots::chest(p.origin.into(), p.view_height_current));
                 let d = chest.distance(my_eye);
@@ -613,7 +609,8 @@ impl Cod4Bots {
         let thrower = missile
             .owner
             .filter(|&o| {
-                o != slot && !super::same_team(teams.get(slot).copied(), teams.get(o).copied())
+                o != slot
+                    && !crate::bots::same_team(teams.get(slot).copied(), teams.get(o).copied())
             })
             .and_then(|o| self.ps(o))
             .map(|p| p.origin + Vec3::Z * 40.0);

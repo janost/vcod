@@ -57,8 +57,8 @@ use objective::{
 pub(crate) use objective::{GuardHold, RADIO_HEIGHT, RADIO_HEIGHT_COD2, RADIO_MARGIN, inside_site};
 use sight::Recall;
 pub(crate) use sight::{
-    HEAR_BLAST, HEAR_GUNFIRE, WRECK_REACH, aim_point, chest, friend_in_line, held_sidestep,
-    in_sight_cone, loudest, notices_frag, pick_enemy, wreck_near,
+    HEAR_BLAST, HEAR_GUNFIRE, Looker, Seen, WRECK_REACH, chest, foe, friend_in_line, held_sidestep,
+    loudest, notices_frag, same_team, sight_enemy, tracked_and_fov, wreck_near,
 };
 pub(crate) use view::Breach;
 pub use view::{

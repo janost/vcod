@@ -16,7 +16,6 @@ use super::{Cod2Bots, eye, playing};
 use crate::bots::BotView;
 use crate::game::cod2::Cod2Level;
 use crate::game::cod2_turret::GunInfo;
-use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
 
 /// How far from the spot behind a gun a bot sets off for it.
 const GUN_REACH: f32 = 320.0;
@@ -256,10 +255,7 @@ impl Cod2Bots {
             .filter(|(i, _)| *i != slot && playing(level, *i))
             .filter_map(|(i, p)| {
                 let p = p.as_ref()?;
-                let theirs = teams.get(i).copied().unwrap_or(0);
-                let foe = dm
-                    || !(mine == TEAM_AXIS || mine == TEAM_ALLIES)
-                    || (theirs != mine && (theirs == TEAM_AXIS || theirs == TEAM_ALLIES));
+                let foe = crate::bots::foe(dm, mine, teams.get(i).copied().unwrap_or(0));
                 let chest = Vec3::from(crate::bots::chest(
                     p.ps.origin.into(),
                     p.ps.view_height_current,

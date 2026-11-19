@@ -1024,57 +1024,34 @@ impl Cod2Bots {
             return None;
         }
         let me = level.players[slot].as_ref()?;
-        let bot = self.driver.bots.get(&slot);
         let mine = teams.get(slot).copied().unwrap_or(0);
-        let tracked = bot
-            .and_then(|b| b.target_slot())
-            .filter(|_| bot.is_none_or(|b| b.aware));
-        let fov = bot.map_or(super::Skill::default().fov_deg, |b| b.skill.fov_deg);
+        let (tracked, fov) = super::tracked_and_fov(self.driver.bots.get(&slot));
         let my_eye = eye(&me.ps);
-        let mut candidates: Vec<(f32, Vec3, EnemyView)> = Vec::new();
-        for (i, p) in level.players.iter().enumerate() {
-            let Some(p) = p.as_ref().filter(|_| i != slot && playing(level, i)) else {
-                continue;
-            };
-            let theirs = teams.get(i).copied().unwrap_or(0);
-            let foe = dm
-                || !(mine == TEAM_AXIS || mine == TEAM_ALLIES)
-                || (theirs != mine && (theirs == TEAM_AXIS || theirs == TEAM_ALLIES));
-            if !foe {
-                continue;
-            }
-            let d = super::dist_sq(me.ps.origin.into(), p.ps.origin.into());
-            if d > super::SHOOT_RANGE * super::SHOOT_RANGE {
-                continue;
-            }
-            let chest = super::chest(p.ps.origin.into(), p.ps.view_height_current);
-            let known = Some(i) == tracked || Some(i) == attacker;
-            if !known && !super::in_sight_cone(my_eye, me.ps.view_angles, chest.into(), fov) {
-                continue;
-            }
-            candidates.push((
-                d,
-                eye(&p.ps),
-                EnemyView {
-                    slot: i,
-                    origin: chest,
-                    velocity: p.ps.velocity.into(),
-                },
-            ));
-        }
-        candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let w = &level.world.collision;
-        let sighted = |i: usize| {
-            let (_, their_eye, e) = &candidates[i];
-            let clear = |to: [f32; 3]| {
-                w.shot_trace(my_eye, to.into()).fraction >= 1.0
-                    && !self.smoked(my_eye, to.into(), now)
-            };
-            let origin = super::aim_point(e.origin, (*their_eye).into(), clear)?;
-            Some(EnemyView { origin, ..*e })
+        let looker = super::Looker {
+            origin: me.ps.origin,
+            eye: my_eye,
+            view: me.ps.view_angles,
+            fov,
+            tracked,
+            attacker,
         };
-        let order: Vec<(f32, usize)> = candidates.iter().map(|c| (c.0, c.2.slot)).collect();
-        super::pick_enemy(&order, attacker, tracked, sighted)
+        let foes = (level.players.iter().enumerate())
+            .filter(|&(i, _)| i != slot && playing(level, i))
+            .filter(|&(i, _)| super::foe(dm, mine, teams.get(i).copied().unwrap_or(0)))
+            .filter_map(|(i, p)| {
+                let p = p.as_ref()?;
+                Some(super::Seen {
+                    slot: i,
+                    origin: p.ps.origin,
+                    eye: eye(&p.ps),
+                    view_height: p.ps.view_height_current,
+                    velocity: p.ps.velocity.into(),
+                })
+            });
+        let w = &level.world.collision;
+        super::sight_enemy(&looker, foes, |to| {
+            w.shot_trace(my_eye, to.into()).fraction >= 1.0 && !self.smoked(my_eye, to.into(), now)
+        })
     }
 
     /// Whether the segment `a` to `b` passes through a smoke cloud thick

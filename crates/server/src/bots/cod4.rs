@@ -611,55 +611,30 @@ impl Cod4Bots {
         }
         let me = self.ps(slot)?;
         let (world, _) = self.own.world.as_ref()?;
-        let bot = self.driver.bots.get(&slot);
         let mine = teams.get(slot).copied().unwrap_or(0);
-        let tracked = bot
-            .and_then(|b| b.target_slot())
-            .filter(|_| bot.is_none_or(|b| b.aware));
-        let fov = bot.map_or(super::Skill::default().fov_deg, |b| b.skill.fov_deg);
+        let (tracked, fov) = super::tracked_and_fov(self.driver.bots.get(&slot));
         let my_eye = eye(me);
-        let mut candidates: Vec<(f32, Vec3, EnemyView)> = Vec::new();
-        for (&i, p) in &self.own.pass.states {
-            if i == slot || !self.playing(level, i) {
-                continue;
-            }
-            let theirs = teams.get(i).copied().unwrap_or(0);
-            let foe = self.own.pass.dm
-                || !(mine == TEAM_AXIS || mine == TEAM_ALLIES)
-                || (theirs != mine && (theirs == TEAM_AXIS || theirs == TEAM_ALLIES));
-            if !foe {
-                continue;
-            }
-            let d = super::dist_sq(me.origin.into(), p.origin.into());
-            if d > super::SHOOT_RANGE * super::SHOOT_RANGE {
-                continue;
-            }
-            let chest = super::chest(p.origin.into(), p.view_height_current);
-            let known = Some(i) == tracked || Some(i) == attacker;
-            if !known && !super::in_sight_cone(my_eye, me.view_angles, chest.into(), fov) {
-                continue;
-            }
-            candidates.push((
-                d,
-                eye(p),
-                EnemyView {
-                    slot: i,
-                    origin: chest,
-                    velocity: p.velocity.into(),
-                },
-            ));
-        }
-        // The states map has no order: nearest first, then by slot.
-        candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.2.slot.cmp(&b.2.slot)));
-        let w = &world.collision;
-        let sighted = |i: usize| {
-            let (_, their_eye, e) = &candidates[i];
-            let clear = |to: [f32; 3]| self.shot_clear(w, my_eye, to.into());
-            let origin = super::aim_point(e.origin, (*their_eye).into(), clear)?;
-            Some(EnemyView { origin, ..*e })
+        let looker = super::Looker {
+            origin: me.origin,
+            eye: my_eye,
+            view: me.view_angles,
+            fov,
+            tracked,
+            attacker,
         };
-        let order: Vec<(f32, usize)> = candidates.iter().map(|c| (c.0, c.2.slot)).collect();
-        super::pick_enemy(&order, attacker, tracked, sighted)
+        let dm = self.own.pass.dm;
+        let foes = (self.own.pass.states.iter())
+            .filter(|&(&i, _)| i != slot && self.playing(level, i))
+            .filter(|&(&i, _)| super::foe(dm, mine, teams.get(i).copied().unwrap_or(0)))
+            .map(|(&i, p)| super::Seen {
+                slot: i,
+                origin: p.origin,
+                eye: eye(p),
+                view_height: p.view_height_current,
+                velocity: p.velocity.into(),
+            });
+        let w = &world.collision;
+        super::sight_enemy(&looker, foes, |to| self.shot_clear(w, my_eye, to.into()))
     }
 
     /// Whether a round from `from` reaches `to`: the world's shot trace
@@ -1941,11 +1916,6 @@ fn friendly_fire(level: &Cod4Level) -> bool {
         .any(|n| crate::game::builtins::cvar::atoi(cvars.get(n)) != 0)
 }
 
-/// Whether `a` and `b` are on one team that is not `free`.
-pub(super) fn same_team(a: Option<i32>, b: Option<i32>) -> bool {
-    a.is_some_and(|a| (a == TEAM_AXIS || a == TEAM_ALLIES) && Some(a) == b)
-}
-
 /// Whether one of `mates` (team, origin) on `mine`'s team stands within
 /// `radius` of `target`.
 fn mate_in_blast(
@@ -1956,7 +1926,7 @@ fn mate_in_blast(
 ) -> bool {
     mates
         .into_iter()
-        .any(|(t, at)| same_team(mine, Some(t)) && at.distance(target) < radius)
+        .any(|(t, at)| super::same_team(mine, Some(t)) && at.distance(target) < radius)
 }
 
 #[cfg(test)]
