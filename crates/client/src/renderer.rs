@@ -1217,6 +1217,15 @@ fn ent_run(
     n
 }
 
+/// The uploaded surfaces [`Renderer::dynamic_model_hiding`] draws, by
+/// index: those whose source surface (`VmSurface::src`) `keep` does not set
+/// false. A surface past `keep`'s end stays.
+fn kept_surfaces(surfaces: &[VmSurface], keep: &[bool]) -> Vec<usize> {
+    (0..surfaces.len())
+        .filter(|&i| keep.get(surfaces[i].src as usize).copied().unwrap_or(true))
+        .collect()
+}
+
 /// The emission order of `draws`, into `out`: by the batch's place in the
 /// sorted shader list (`keys`, material sort first), each batch's stages
 /// back to back in stage order, as retail's draw loop iterates a shader's
@@ -6414,28 +6423,14 @@ impl Renderer {
         let d = &mut self.dynamic;
         let full = d.handles.get(h.0)?;
         let lod0 = &d.models[(*full.lods.first()?)?];
-        let kept = |src: u32| keep.get(src as usize).copied().unwrap_or(true);
-        let (surfaces, skins): (Vec<_>, Vec<_>) = lod0
-            .vm
-            .surfaces
-            .iter()
-            .zip(&lod0.skins)
-            .filter(|(s, _)| kept(s.src))
-            .map(|(s, k)| (s.clone(), k.clone()))
-            .unzip();
-        if surfaces.is_empty() {
+        let shown = kept_surfaces(&lod0.vm.surfaces, keep);
+        if shown.is_empty() {
             return None;
         }
+        let skins: Vec<_> = shown.iter().map(|&i| lod0.skins[i].clone()).collect();
         let vm = VmModel {
-            skins: lod0
-                .vm
-                .surfaces
-                .iter()
-                .zip(&lod0.vm.skins)
-                .filter(|(s, _)| kept(s.src))
-                .map(|(_, k)| k.clone())
-                .collect(),
-            surfaces,
+            skins: shown.iter().map(|&i| lod0.vm.skins[i].clone()).collect(),
+            surfaces: shown.iter().map(|&i| lod0.vm.surfaces[i].clone()).collect(),
             ..lod0.vm.clone()
         };
         let lit = skins.iter().any(|s| s.lit);
@@ -6447,7 +6442,7 @@ impl Renderer {
             lod0_surfaces
                 .iter()
                 .enumerate()
-                .filter(|(i, _)| kept(*i as u32))
+                .filter(|(i, _)| keep.get(*i).copied().unwrap_or(true))
                 .map(|(_, s)| s),
         );
         let view_boxes = full.view_boxes.clone();
@@ -14492,6 +14487,23 @@ mod tests {
             1,
             "another kind of item"
         );
+    }
+
+    /// `keep` is by the model's surfaces, and an empty one uploads no
+    /// surface, so the filter reads each uploaded surface's `src`.
+    #[test]
+    fn a_hidden_surface_is_picked_by_its_source_index() {
+        let surfs: Vec<VmSurface> = [0, 2, 3, 5]
+            .into_iter()
+            .map(|src| VmSurface {
+                src,
+                ..vm_surface(0, 3, 0, 0)
+            })
+            .collect();
+        assert_eq!(kept_surfaces(&surfs, &[]), [0, 1, 2, 3]);
+        assert_eq!(kept_surfaces(&surfs, &[true, true, false, true]), [0, 2, 3]);
+        assert_eq!(kept_surfaces(&surfs, &[false, false, true, false]), [1, 3]);
+        assert!(kept_surfaces(&surfs, &[false; 6]).is_empty());
     }
 
     /// A run whose commands held from the last frame draws through a
