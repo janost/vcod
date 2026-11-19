@@ -8,7 +8,8 @@
 //! first divergence is the report. The resynced run takes each snapshot's
 //! state as the next row's start (keeping only `oldVelocity`, which is not
 //! on the wire), so each row tests one snapshot's worth of cmds; a field it
-//! finds wrong must be named in [`GAPS`]. Needs `COD4_DIR`.
+//! finds wrong must be named in [`GAPS`]. Needs `COD4_DIR`, save the taped
+//! walk at the end (docs/dev/testing.md, "Trace tapes").
 //!
 //! The kill capture's shooter replays armed: the weapon half runs on the
 //! level's weapon defs and its words ([`COMPARED_WEAPON`], the clip and the
@@ -34,12 +35,14 @@ use vcod_cod4::net::clmsg::ClOp;
 use vcod_cod4::net::delta;
 use vcod_cod4::net::fields::PLAYER_STATE;
 use vcod_cod4::net::parse::Op;
+use vcod_cod4::pmove::tape::Taped;
 use vcod_cod4::pmove::weapon::WeaponDef;
-use vcod_cod4::pmove::{self, Cmd, PlayerState, Rules, WeaponMove};
+use vcod_cod4::pmove::{self, Cmd, PlayerState, PmWorld, Rules, WeaponMove};
 use vcod_cod4::testing::cod4_install;
 use vcod_cod4::walk::{WalkOptions, walk};
 use vcod_cod4::zone::Zone;
 use vcod_common::animtree::PlayerAnims;
+use vcod_common::tracetape::Tape;
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/net");
 
@@ -355,7 +358,7 @@ struct Outcome {
 
 struct Replay<'a> {
     cap: &'a Capture,
-    world: &'a ClipMap,
+    world: &'a dyn PmWorld,
     weapons: &'a [WeaponMove],
     rules: Rules,
     /// The level's weapon defs by number, for an armed capture.
@@ -606,6 +609,42 @@ impl Replay<'_> {
     }
 }
 
+/// Prints `out`'s row of the table and its fields; returns the fields
+/// wrong outside [`GAPS`].
+fn print_outcome(name: &str, out: &Outcome) -> Vec<String> {
+    eprintln!(
+        "{name:<8} {:>4}  {:>4}  {:>8}  {:>8}  {:>8.3} (row {})  {}",
+        out.rows,
+        out.cmds,
+        out.free_matching,
+        out.resync_matching,
+        out.free_max_err.0,
+        out.free_max_err.1,
+        out.free_first.as_deref().unwrap_or("-")
+    );
+    let mut unexplained = Vec::new();
+    for (f, (n, first)) in &out.resync_fields {
+        let gap = GAPS.iter().find(|&&(c, g, _, _)| c == name && g == *f);
+        eprintln!(
+            "    {f}: {n} rows{}, first {first}",
+            gap.map_or(String::new(), |g| format!(" (gap: {})", g.3))
+        );
+        match gap {
+            Some(&(_, _, rows, _)) if rows == *n => {}
+            Some(&(_, _, rows, _)) => {
+                unexplained.push(format!("{name} {f}: {n} rows, GAPS says {rows}"))
+            }
+            None => unexplained.push(format!("{name} {f}: {n} rows, first {first}")),
+        }
+    }
+    for &(c, f, rows, _) in GAPS {
+        if c == name && !out.resync_fields.contains_key(f) {
+            unexplained.push(format!("{c} {f}: right in every row, GAPS says {rows}"));
+        }
+    }
+    unexplained
+}
+
 /// The level's weapon defs by number (0 the empty hand), each ammo and
 /// clip slot the first earlier weapon's of its name, as the server's
 /// registration gives them (`BG_SetupAmmoIndexes`,
@@ -740,35 +779,7 @@ fn cod4_moves_ab() {
             eprintln!("{name}:");
         }
         r.run(true, &mut out, report, trace_row(name, true));
-        eprintln!(
-            "{name:<8} {:>4}  {:>4}  {:>8}  {:>8}  {:>8.3} (row {})  {}",
-            out.rows,
-            out.cmds,
-            out.free_matching,
-            out.resync_matching,
-            out.free_max_err.0,
-            out.free_max_err.1,
-            out.free_first.as_deref().unwrap_or("-")
-        );
-        for (f, (n, first)) in &out.resync_fields {
-            let gap = GAPS.iter().find(|&&(c, g, _, _)| c == name && g == *f);
-            eprintln!(
-                "    {f}: {n} rows{}, first {first}",
-                gap.map_or(String::new(), |g| format!(" (gap: {})", g.3))
-            );
-            match gap {
-                Some(&(_, _, rows, _)) if rows == *n => {}
-                Some(&(_, _, rows, _)) => {
-                    unexplained.push(format!("{name} {f}: {n} rows, GAPS says {rows}"))
-                }
-                None => unexplained.push(format!("{name} {f}: {n} rows, first {first}")),
-            }
-        }
-        for &(c, f, rows, _) in GAPS {
-            if c == name && !out.resync_fields.contains_key(f) {
-                unexplained.push(format!("{c} {f}: right in every row, GAPS says {rows}"));
-            }
-        }
+        unexplained.extend(print_outcome(name, &out));
     }
     assert!(
         unexplained.is_empty(),
@@ -921,4 +932,162 @@ fn cod4_fire_rate_ab() {
     let [plain, rof] = [&seen[0], &seen[1]];
     assert_eq!(plain.len(), 2, "{plain:?}");
     assert_eq!(rof.len(), 2, "{rof:?}");
+}
+
+const TAPE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tapes");
+
+/// The captures replayed off trace tapes (docs/dev/testing.md, "Trace
+/// tapes"): the unarmed walk script. The fly's tape is 165k traces, most of
+/// them `fit_delta`'s search, so it stays live only.
+const TAPED: &[&str] = &["walk"];
+
+/// An outcome as the tape's header keeps it: the replay must give it back.
+fn outcome_lines(out: &Outcome) -> Vec<String> {
+    let mut v = vec![
+        format!(
+            "outcome rows {} cmds {} free {} resync {} maxerr {} row {}",
+            out.rows,
+            out.cmds,
+            out.free_matching,
+            out.resync_matching,
+            out.free_max_err.0,
+            out.free_max_err.1
+        ),
+        format!("free first {}", out.free_first.as_deref().unwrap_or("-")),
+    ];
+    for (f, (n, first)) in &out.resync_fields {
+        v.push(format!("resync {f} {n} {first}"));
+    }
+    v
+}
+
+/// The free run and the resynced run of capture `name`, as [`cod4_moves_ab`]
+/// runs them, on `world`.
+fn taped_outcome(
+    name: &str,
+    cap: &Capture,
+    world: &dyn PmWorld,
+    weapons: &[WeaponMove],
+    rules: Rules,
+) -> Outcome {
+    let &(_, _, _, from, _) = CAPTURES.iter().find(|c| c.0 == name).unwrap();
+    let r = Replay {
+        cap,
+        world,
+        weapons,
+        rules,
+        defs: None,
+        from,
+        anims: None,
+    };
+    let mut out = Outcome::default();
+    r.run(false, &mut out, false, None);
+    r.run(true, &mut out, false, None);
+    out
+}
+
+/// `RECORD_TAPES=1` at `COD4_DIR`: replays each taped capture on its map and
+/// writes its tape, the weapon list's move scales in its header.
+fn record_cod4_tapes() {
+    let install = cod4_install().expect("RECORD_TAPES needs COD4_DIR");
+    let common = walk(
+        Zone::open_path(&install.zone("english", "common_mp")).unwrap(),
+        WalkOptions { keep_bulk: false },
+    )
+    .unwrap()
+    .assets;
+    pmove::mantle::install(&[&common]).expect("the mantle clips");
+    std::fs::create_dir_all(TAPE_DIR).unwrap();
+    for &name in TAPED {
+        let &(_, file, map, _, _) = CAPTURES.iter().find(|c| c.0 == name).unwrap();
+        let cap = read(file);
+        let (_, walked) = Map::load(&install, "english", map).unwrap();
+        let world = ClipMap::from_assets(&walked.assets).unwrap();
+        let weapons = weapon_moves(&install, map, &cap.weapons);
+        let tape = Tape::record();
+        let taped = Taped {
+            tape: &tape,
+            live: Some(&world),
+        };
+        let out = taped_outcome(name, &cap, &taped, &weapons, Rules::default());
+        let mut header = vec![
+            format!("{file} on {map}, the {name} row of cod4_moves_ab (moves_ab.rs)"),
+            "RECORD_TAPES=1 rewrites it (docs/dev/testing.md, \"Trace tapes\")".to_owned(),
+        ];
+        for (n, w) in cap.weapons.iter().zip(&weapons) {
+            header.push(format!(
+                "weapon {n} {} {} {}",
+                w.move_speed_scale, w.ads_move_speed_scale, w.sprint_duration_scale
+            ));
+        }
+        header.extend(outcome_lines(&out));
+        std::fs::write(format!("{TAPE_DIR}/{name}.tape"), tape.text(&header)).unwrap();
+        eprintln!("{name}: {} traces", tape.len());
+    }
+}
+
+/// The taped captures replayed with no install: every trace pmove asks is
+/// answered off the capture's tape, and both runs must give the outcome the
+/// live gate gave when the tape was recorded, and pass [`GAPS`]. A trace
+/// off the tape stops the replay there.
+#[test]
+fn cod4_taped_moves_replay_without_the_zones() {
+    if std::env::var_os("RECORD_TAPES").is_some() {
+        record_cod4_tapes();
+    }
+    let rules = Rules {
+        mantle_anims: Some(pmove::testing::stand_in_mantle()),
+        ..Rules::default()
+    };
+    let mut unexplained = Vec::new();
+    for &name in TAPED {
+        let &(_, file, _, _, _) = CAPTURES.iter().find(|c| c.0 == name).unwrap();
+        let cap = read(file);
+        let text = std::fs::read_to_string(format!("{TAPE_DIR}/{name}.tape")).unwrap();
+        let header: Vec<&str> = text.lines().filter_map(|l| l.strip_prefix("# ")).collect();
+        let weapons: Vec<WeaponMove> = header
+            .iter()
+            .filter_map(|l| l.strip_prefix("weapon "))
+            .map(|l| {
+                let v: Vec<f32> = l.split(' ').skip(1).map(|x| x.parse().unwrap()).collect();
+                WeaponMove {
+                    move_speed_scale: v[0],
+                    ads_move_speed_scale: v[1],
+                    sprint_duration_scale: v[2],
+                }
+            })
+            .collect();
+        assert_eq!(
+            weapons.len(),
+            cap.weapons.len(),
+            "{name}: the tape's weapon list"
+        );
+        let tape = Tape::replay(&text);
+        let taped = Taped {
+            tape: &tape,
+            live: None,
+        };
+        let out = taped_outcome(name, &cap, &taped, &weapons, rules);
+        assert_eq!(tape.remaining(), 0, "{name}: traces left on the tape");
+        let recorded: Vec<&str> = header
+            .iter()
+            .copied()
+            .filter(|l| {
+                ["outcome ", "free first ", "resync "]
+                    .iter()
+                    .any(|p| l.starts_with(p))
+            })
+            .collect();
+        assert_eq!(
+            outcome_lines(&out),
+            recorded,
+            "{name}: not the recorded outcome"
+        );
+        unexplained.extend(print_outcome(name, &out));
+    }
+    assert!(
+        unexplained.is_empty(),
+        "fields wrong outside GAPS:\n{}",
+        unexplained.join("\n")
+    );
 }
