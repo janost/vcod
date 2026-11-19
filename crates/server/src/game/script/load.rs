@@ -512,10 +512,9 @@ impl ScriptRuntime {
             .unwrap_or(0)
             != 0;
         vm.set_recover_errors(!developer);
-        host.patch_1_5 = matches!(host.cvars.get("protocol"), "6" | "22");
-        host.missiles.uo = proto.is_uo();
-        host.missiles.falls = !host.speaks_1_1();
-        host.movers.stored = host.patch_1_5;
+        host.missiles.uo = profile.missiles.uo;
+        host.missiles.falls = profile.missiles.falls;
+        host.movers.stored = profile.stored_movers;
         host.allocators = crate::configstrings::Allocators::seeded(&host.configstrings, &proto.cs);
         host.items = crate::items::Items::new(host.defs);
         host.timeout = crate::game::timeout::MatchTimeout::new(crate::game::builtins::cvar::atoi(

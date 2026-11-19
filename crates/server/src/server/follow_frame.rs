@@ -492,7 +492,7 @@ mod tests {
         let mut rig = v6_rig();
         {
             let host = &mut rig.script().host;
-            host.patch_1_5 = true;
+            host.set_profile(&crate::game::profile::COD1_15);
             host.cvars.set("g_timeoutsAllowed", "1");
             host.cvars.set("g_timeoutLength", "300");
             host.cvars.set("g_timeoutRecovery", "200");

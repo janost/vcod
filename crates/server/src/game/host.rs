@@ -966,9 +966,6 @@ pub struct GameHost {
     /// A slot `Cmd_Vote_f` drops for its complaints; `Server` drops it
     /// before it sends the vote's lines.
     pub complaint_drop: Option<usize>,
-    /// Whether the server speaks 1.5 (protocol 6), where `G_Say` and the
-    /// turret think differ from 1.1's.
-    pub patch_1_5: bool,
     /// The frame did not move the game clock (`G_IsInMatchTimeout`,
     /// 1.5b 0x51043: `level.frametime == 0`).
     pub frozen: bool,
@@ -1817,7 +1814,7 @@ impl GameHost {
             return vec![("damage", hit.uo_args(cx, damage, attacker))];
         }
         let mut out = self.damage_entity(cx, id, damage, attacker);
-        if self.defs.proto.is_uo() {
+        if self.profile.combat.damage_notify_six_args {
             out[0].1 = hit.uo_args(cx, damage.max(1), attacker);
         }
         // A `trigger_damage`'s `pain` or `die` (combat doc 14.8).
@@ -2188,10 +2185,10 @@ impl GameHost {
     /// `(int)g_speed.value` (game.mp 0x41100), 1.5's and UO's `maxspeed`
     /// (1.5b 0x3ada8, UO 0x4329f).
     pub fn client_speed(&self, slot: usize) -> i32 {
-        if self.speaks_1_1() {
-            crate::game::builtins::cvar::atof(self.cvars.get("g_speed")) as i32
-        } else {
+        if self.profile.speed_off_maxspeed {
             self.client_max_speed.get(slot).copied().unwrap_or(0)
+        } else {
+            crate::game::builtins::cvar::atof(self.cvars.get("g_speed")) as i32
         }
     }
 
@@ -2210,16 +2207,6 @@ impl GameHost {
         })
     }
 
-    /// The server runs 1.1's rules (`HostProfile::speaks_1_1`).
-    pub fn speaks_1_1(&self) -> bool {
-        self.profile.speaks_1_1
-    }
-
-    /// The server speaks United Offensive's protocol 22.
-    pub fn is_uo(&self) -> bool {
-        self.defs.proto.is_uo()
-    }
-
     /// The name `G_ShaderIndex` indexes: CoD2's lowercases it first
     /// (cod2_lnxded 0x811d44a, `I_strlwr`; cod2-protocol.md 15.3), 1.1's
     /// keeps the script's spelling.
@@ -2229,13 +2216,6 @@ impl GameHost {
         } else {
             name.to_string()
         }
-    }
-
-    /// Whether the players' bodies stop a blast's `CanDamage` traces: 1.1's
-    /// mask 0x2802091 holds `CONTENTS_BODY`, United Offensive's 0x802091
-    /// (game.mp.uo `CanDamage` 0x503f8) does not.
-    pub fn bodies_shield_blasts(&self) -> bool {
-        !self.defs.proto.is_uo()
     }
 
     /// Queues `op` for the client's sim and applies it to the host's mirror
@@ -2437,7 +2417,6 @@ impl GameHost {
             cvars: crate::cvars::Cvars::new(),
             timeout: Default::default(),
             vote: Default::default(),
-            patch_1_5: false,
             frozen: false,
             world: None,
             area: crate::area::AreaTree::unbounded(),
@@ -2878,7 +2857,7 @@ impl GameHost {
         let Some(rec) = self.turrets.get_mut(&id) else {
             return;
         };
-        if self.missiles.uo && crate::game::turret::heat_tick(rec) {
+        if self.profile.combat.turret_heat && crate::game::turret::heat_tick(rec) {
             self.engine_notifies.push((id, "overheating", Vec::new()));
             if let Some(ent) = self.ents.get_mut(id) {
                 ent.events
@@ -3005,11 +2984,9 @@ impl GameHost {
         self.game_log.push((self.level_time_ms, text));
     }
 
-    /// Whether the log lines take 1.1's forms (`say: %s: %s`, `Weapon: %i
-    /// %s`) rather than 1.5's, UO's and CoD2's `;` records: CoD1 at
-    /// protocol 1 (cod11-map-cycle.md 9).
+    /// Whether the log lines take 1.1's forms (`HostProfile::log_1_1_lines`).
     pub fn logs_1_1(&self) -> bool {
-        self.profile.game == vcod_common::game::Game::Cod1 && !self.patch_1_5
+        self.profile.log_1_1_lines
     }
 
     /// The route the packed HUD setters store through: CoD4's own table,
@@ -3211,10 +3188,10 @@ impl Host for GameHost {
                 "maxhealth" => {
                     return Some(Value::Int(self.client_vitals[ent.0 as usize].max_health));
                 }
-                "maxspeed" if !self.speaks_1_1() => {
+                "maxspeed" if self.profile.maxspeed_and_squads => {
                     return Some(Value::Int(self.client_max_speed[ent.0 as usize]));
                 }
-                "sessionsquad" if !self.speaks_1_1() => {
+                "sessionsquad" if self.profile.maxspeed_and_squads => {
                     let name = SQUADS[self.client_squad[ent.0 as usize] as usize];
                     return Some(Value::String(cx.intern_exact(name)));
                 }
@@ -3336,7 +3313,7 @@ impl Host for GameHost {
         if ent.0 < FIRST_HUD_ELEM {
             let name = cx.resolve_folded(field);
             if matches!(name, "classname" | "model" | "spawnflags")
-                || (name == "vehicletype" && self.is_uo())
+                || (name == "vehicletype" && self.profile.readonly_vehicletype)
             {
                 return Err(ErrorKind::Custom(
                     "Tried to set a read only entity field".to_string(),
@@ -3476,8 +3453,8 @@ impl GameHost {
             store_script(cx, e.script, field, value);
             return Ok(());
         }
-        let max_speed = !self.speaks_1_1() && cx.resolve_folded(field) == "maxspeed";
-        if !self.speaks_1_1()
+        let max_speed = self.profile.maxspeed_and_squads && cx.resolve_folded(field) == "maxspeed";
+        if self.profile.maxspeed_and_squads
             && cx.resolve_folded(field) == "sessionsquad"
             && self.ents.get(ent).is_some_and(|e| e.client.is_some())
         {
@@ -3551,7 +3528,7 @@ impl GameHost {
                     return Ok(());
                 }
                 "headiconteam" => {
-                    let n = head_icon_team(cx, value, self.defs.proto.is_uo())?;
+                    let n = head_icon_team(cx, value, self.profile.head_icon_spectator)?;
                     c[fields::client_index("headiconteam")] = Value::Int(n);
                     return Ok(());
                 }

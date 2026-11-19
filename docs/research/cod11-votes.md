@@ -129,7 +129,7 @@ United Offensive 1.51 (`game.mp.uo.i386.so`, file addresses) has the same three 
 
 INFERRED: UO's `Cmd_Vote_f` adds one step, a second test of the offender's local-client flag (`+0x4554`) before the drop, which can never fail there since step 2 returned on it.
 
-vcod's `complaints_about_gone` clears the lowest slot only, with 1.1's rule or 1.5's (`patch_1_5`, which UO sets too).
+vcod's `complaints_about_gone` clears the lowest slot only, with 1.1's rule or 1.5's (`VoteRules::complaints_connected_only`, which UO's profile sets too).
 
 The retail run: 1.1d, `tools/run_probe.sh client-probes/probe_complaint mp_carentan` and two `--net-probe` clients (recipe in that directory's `README.md`), `g_complaintlimit` 3. VERIFIED, what the clients printed:
 

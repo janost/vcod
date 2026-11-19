@@ -666,7 +666,7 @@ fn angle_set(host: &mut GameHost, id: EntId) {
 /// (0x87df9), which `GameHost::dobj_updates` queues for the sim.
 pub fn model_changed(host: &mut GameHost, cx: &mut Cx, parent: EntId) {
     if let Some(slot) = client_slot(host, parent) {
-        if host.defs.proto.is_uo()
+        if host.profile.model_change_updates_client
             && let Some(now) = crate::game::script::wear(host, cx, parent)
         {
             host.dobj_updates.push((slot, now));

@@ -659,7 +659,7 @@ pub(crate) fn launch(
     link(host, cx, id, CONTENTS_ITEM);
     host.ents
         .schedule(id, ThinkFn::ClearOwner, now + OWNER_LOCKOUT_MS);
-    let by_number = host.speaks_1_1();
+    let by_number = host.profile.items.drop_ring_by_number;
     if let Some(old) = host.drop_ring.claim(&host.ents, by_number, id) {
         host.ents.schedule(old, ThinkFn::Free, now + 1);
     }

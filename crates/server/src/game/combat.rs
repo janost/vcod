@@ -464,15 +464,6 @@ pub const BULLET_RANGE: f32 = 8192.0;
 /// `Bullet_Fire` and the artillery strike (combat doc, 2.2).
 pub const UO_BULLET_RANGE: f32 = 10_000.0;
 
-/// How far a protocol's server traces a bullet.
-pub fn bullet_range(p: &vcod_common::net::protocol::Cod1Wire) -> f32 {
-    if p.is_uo() {
-        UO_BULLET_RANGE
-    } else {
-        BULLET_RANGE
-    }
-}
-
 /// The deepest `Bullet_Fire_Extended` recursion that still traces; the
 /// first call is depth 0 (combat doc, 2.3).
 const MAX_BULLET_DEPTH: i32 = 12;

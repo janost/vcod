@@ -2186,7 +2186,7 @@ module after the fire's muzzle stores (0x5aa90).
   captures lands on retail's bits; the knockback kills do once the 1.5b
   and UO muzzle reads the gun's own skeleton (13.6).
 
-vcod: `combat::bullet_range` (`UO_BULLET_RANGE` on UO), `combat::bullet_end`,
+vcod: `CombatRules::bullet_range` (`UO_BULLET_RANGE` on UO), `combat::bullet_end`,
 `turret::AimRule::fire_angles`, `turret::muzzle` (1.1d) and
 `turret::muzzle_stored` (1.5b and UO: `tag_flash` and `tag_player` off
 the gun's skeleton, `turretpose::GunSkel`, and the reach and the start in

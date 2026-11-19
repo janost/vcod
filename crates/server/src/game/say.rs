@@ -107,7 +107,7 @@ impl GameHost {
         let cod4 = self.profile.game == vcod_common::game::Game::Cod4;
         let status = if team == "spectator" {
             "\u{15}(\u{14}GAME_SPECTATOR\u{15})".to_string()
-        } else if self.patch_1_5 {
+        } else if self.profile.say.side_status {
             // 1.5 colours the name by side and reads death off the session
             // state, not the health.
             let side = match team {
@@ -157,8 +157,8 @@ impl GameHost {
         let letter = if mode == SayMode::Team { 'i' } else { 'h' };
         let cmd = format!("{letter} \"\u{15}{head}^{colour}{body}\"");
         // 1.5's `g_deadChat` lets the dead and the spectators reach everyone.
-        let dead_chat =
-            self.patch_1_5 && crate::game::builtins::cvar::atoi(self.cvars.get("g_deadChat")) != 0;
+        let dead_chat = self.profile.say.dead_chat
+            && crate::game::builtins::cvar::atoi(self.cvars.get("g_deadChat")) != 0;
         let recipients: Vec<usize> = match target {
             Some(t) => vec![t],
             None => (0..self.client_roster.len()).collect(),
@@ -415,7 +415,7 @@ mod tests {
                 (19_000, "sayteam: p0: team log\n".to_string())
             ]
         );
-        host.patch_1_5 = true;
+        host.set_profile(&crate::game::profile::COD1_15);
         say(&mut vm, &mut host, 1, SayMode::Team, "go");
         assert_eq!(
             std::mem::take(&mut host.game_log),
@@ -455,7 +455,7 @@ mod tests {
     fn a_15_say_colours_the_side() {
         let mut vm = vcod_gsc::Vm::new();
         let mut host = host(&mut vm, &["axis", "allies"]);
-        host.patch_1_5 = true;
+        host.set_profile(&crate::game::profile::COD1_15);
         host.client_names[0] = "vcod".into();
         say(&mut vm, &mut host, 0, SayMode::All, "hi");
         let line = "h \"\u{15}\u{15}^9vcod^7: ^7hi\"".to_string();
@@ -477,7 +477,6 @@ mod tests {
     fn a_15_squad_say_reaches_the_squad_on_the_side() {
         let mut vm = vcod_gsc::Vm::new();
         let mut host = host(&mut vm, &["axis", "axis", "axis", "allies"]);
-        host.patch_1_5 = true;
         host.set_profile(&crate::game::profile::COD1_15);
         vm.with_cx(|cx| {
             for (slot, squad) in [(0, "squad_bravo"), (1, "squad_alpha"), (2, "squad_bravo")] {
@@ -517,7 +516,7 @@ mod tests {
     fn a_15_dead_speaker_and_dead_chat() {
         let mut vm = vcod_gsc::Vm::new();
         let mut host = host(&mut vm, &["axis", "allies"]);
-        host.patch_1_5 = true;
+        host.set_profile(&crate::game::profile::COD1_15);
         host.cvars = crate::cvars::Cvars::for_protocol(6);
         vm.with_cx(|cx| set(&mut host, cx, 0, "sessionstate", "dead"));
         say(&mut vm, &mut host, 0, SayMode::All, "x");

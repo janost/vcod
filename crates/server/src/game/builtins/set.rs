@@ -41,15 +41,10 @@ struct Entry {
 }
 
 impl BuiltinSet {
-    /// The set for `proto`'s game version, built on first use.
+    /// The set for `proto`'s game version (`HostProfile::cod1`'s), built on
+    /// first use.
     pub fn of(proto: &Cod1Wire) -> &'static BuiltinSet {
-        if proto.is_uo() {
-            Self::uo()
-        } else if proto.is_v1() {
-            Self::v11()
-        } else {
-            Self::v15()
-        }
+        (crate::game::profile::HostProfile::cod1(proto).builtins)()
     }
 
     /// 1.1's set.

@@ -833,8 +833,9 @@ The level runs on CoD2's tables where vcod has them:
   keys onto the struct (typed by the Radiant list, INFERRED). mp_toujane
   spawns its ten `trigger_radius` and three `trigger_use_touch`.
   `func_bobbing`, `func_pendulum` and `misc_spawner` have no arm on CoD2.
-- 1.1's rules everywhere else: `HostProfile::speaks_1_1` is true in
-  `profile::COD2`, so every 1.5-or-UO arm stays off.
+- 1.1's rules everywhere else: `profile::COD2` sets each `HostProfile`
+  rule 1.5 or UO turns on (`speed_off_maxspeed`, `maxspeed_and_squads`,
+  `say`, the vote's, `missiles.falls` and the rest) to 1.1's value.
 
 The fourteen builtins later frames call, and what else a joining client
 reached, each row read off its handler (VERIFIED):

@@ -360,7 +360,7 @@ pub fn rider_damage(
 /// then their aliases ahead of every other alias of the level. United
 /// Offensive only.
 pub fn load_level(host: &mut GameHost) {
-    if !host.defs.proto.is_uo() {
+    if !host.profile.vehicles {
         return;
     }
     let Some(fs) = host.fs.clone() else {

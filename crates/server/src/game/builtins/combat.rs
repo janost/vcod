@@ -81,8 +81,10 @@ pub fn finish_player_damage(
     let dir = match dir {
         // `VectorNormalize2` into the knockback's copy (1.1d 0x43922 into
         // 0x3da68; 1.5b 0x3ee76, UO 0x47634; cod11-combat.md 4.5).
-        Value::Vector(d) if host.speaks_1_1() => vcod_common::x87::normalize(Vec3::from(*d)).into(),
-        Value::Vector(d) => vcod_common::x87::normalize2_stored(Vec3::from(*d)).into(),
+        Value::Vector(d) if host.profile.combat.stored_damage_dir => {
+            vcod_common::x87::normalize2_stored(Vec3::from(*d)).into()
+        }
+        Value::Vector(d) => vcod_common::x87::normalize(Vec3::from(*d)).into(),
         _ => [0.0; 3],
     };
     let point = match point {
@@ -297,7 +299,7 @@ pub fn obituary(
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    if host.defs.proto.is_uo() && super::cvar::atoi(host.cvars.get("sv_obituary")) == 0 {
+    if host.profile.combat.obituary_cvar && super::cvar::atoi(host.cvars.get("sv_obituary")) == 0 {
         return Ok(Value::Undefined);
     }
     let (
@@ -328,7 +330,7 @@ pub fn obituary(
     let origin_atom = cx.intern_folded("origin");
     let origin = match host.get_field(cx, victim, origin_atom) {
         // UO's raises it at `vec3_origin` (0x6a819).
-        _ if host.defs.proto.is_uo() => [0.0; 3],
+        _ if host.profile.combat.obituary_at_origin => [0.0; 3],
         Value::Vector(v) => v,
         _ => [0.0; 3],
     };
@@ -522,7 +524,7 @@ pub fn radius_damage(
     // the world when absent, the inflictor NULL (coduo-vehicles.md 11.2).
     // CoD4 1.7's (0x80bdab0) takes the attacker fifth and makes the method
     // form's entity the inflictor (cod4-combat.md 10.10).
-    let uo = host.defs.proto.is_uo();
+    let uo = host.profile.combat.radius_damage_attacker_args;
     let cod4 = matches!(host.ext, crate::game::host::HostExt::Cod4(_));
     let entity = |v: Option<&Value>| match v {
         Some(Value::Entity(e)) if uo || cod4 => Some(*e),
@@ -687,7 +689,7 @@ pub fn blast_step(host: &mut GameHost, cx: &mut Cx) {
 fn blast_bodies(host: &mut GameHost, cx: &mut Cx) -> Vec<crate::game::combat::HitBody> {
     let origin_field = cx.intern_folded("origin");
     let mut bodies = Vec::new();
-    if !host.bodies_shield_blasts() {
+    if !host.profile.combat.bodies_shield_blasts {
         return bodies;
     }
     for (other, body) in host.client_bodies.clone().into_iter().enumerate() {
