@@ -5,6 +5,7 @@
 use vcod_cod4::net::capture::{self, Item, Session};
 use vcod_cod4::net::clmsg::{self, ClientMessage, UserCmd};
 use vcod_cod4::net::parse::{Client, Op, Parsed};
+use vcod_common::net::Msec;
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/net");
 
@@ -132,7 +133,7 @@ fn spectator_snapshots_decode_to_svc_eof() {
     for s in snaps {
         let ct = s.ps.get("commandTime").unwrap() as i32;
         assert!(
-            ct <= s.server_time && ct > s.server_time - 1000,
+            ct <= s.server_time.raw() && ct > (s.server_time - 1000).raw(),
             "msg {}",
             s.message_num
         );
@@ -571,7 +572,7 @@ fn a_teleport_sends_only_the_view_rows_that_changed() {
         .client
         .snapshots
         .iter()
-        .find(|s| s.server_time == 42100)
+        .find(|s| s.server_time == Msec::from_raw(42100))
         .unwrap();
     let rows: Vec<(&str, Change)> = vcod_cod4::net::fields::PLAYER_STATE
         .iter()

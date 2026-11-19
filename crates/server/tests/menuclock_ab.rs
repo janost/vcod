@@ -109,7 +109,7 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, proto: &'static Cod1Wire) -> (Vec<String>, 
         cl.send_frame(&vcod_common::net::msg::NULL_USERCMD);
         step(&mut sv, &q, &mut cl, now);
         if let Some(s) = cl.snapshots().newest() {
-            let t = i64::from(s.server_time);
+            let t = i64::from(s.server_time.raw());
             if plays.last().is_none_or(|&(last, _)| last < t) {
                 plays.push((t, s.ps.field_i32(cl.protocol(), "pm_type")));
             }

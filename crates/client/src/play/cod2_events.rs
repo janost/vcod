@@ -106,7 +106,7 @@ impl EventTracker {
                 time: es.i32("time"),
                 scale: es.i32("scale"),
                 angles2: [es.f32("angles2[0]"), es.f32("angles2[1]")],
-                pos: e.pos.evaluate_f32(snap.server_time),
+                pos: e.pos.evaluate_f32(snap.server_time.raw()),
                 angles: e.apos.base,
                 from_ps: false,
             };
@@ -187,7 +187,7 @@ impl EventTracker {
                     weapon: ps.weapon,
                     surf: 0,
                     other_entity: 0,
-                    time: snap.server_time,
+                    time: snap.server_time.raw(),
                     scale: 0,
                     angles2: [0.0; 2],
                     pos: Vec3::from(ps.origin),
@@ -222,6 +222,7 @@ pub const SURFACES: [&str; 23] = [
 mod tests {
     use super::*;
     use vcod_cod2::net::{EntityView, PlayerView};
+    use vcod_common::net::Msec;
 
     fn set(es: &mut EntityState2, k: &str, v: i32) {
         let i = vcod_cod2::net::delta::field_index(&vcod_cod2::net::fields::ENTITY_STATE_FIELDS, k);
@@ -231,7 +232,7 @@ mod tests {
     fn snap(ents: &[EntityState2], t: i32) -> SnapshotView {
         SnapshotView {
             message_num: t,
-            server_time: t,
+            server_time: Msec::from_raw(t),
             snap_flags: 0,
             ps: PlayerView::new(&Default::default(), 0),
             entities: ents.iter().map(EntityView::new).collect(),

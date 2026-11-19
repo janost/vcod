@@ -1,6 +1,7 @@
 //! Client slots: gamestate, server commands, drops, zombies, pings and timeouts.
 
 use super::*;
+use vcod_common::net::Msec;
 
 /// `SV_UpdateServerCommandsToClient`. The caller bounds `from_ack` to
 /// `0..=reliable_sequence`, so the range is empty or inside the ring.
@@ -56,7 +57,7 @@ fn zombie_message(
         .as_ref()
         .map_or_else(|| msg::PlayerState::null(proto), |f| f.ps.clone());
     let frame = snapshot::Snapshot {
-        server_time: sv_time_ms,
+        server_time: Msec::from_raw(sv_time_ms),
         message_num,
         delta_num: -1,
         snap_flags,
@@ -865,7 +866,7 @@ mod tests {
             let mut e = msg::EntityState::null(p);
             e.number = 100;
             c.record_frame(snapshot::Snapshot {
-                server_time: 50 * n as i32,
+                server_time: Msec::from_raw(50 * n as i32),
                 message_num: n,
                 delta_num: -1,
                 snap_flags: 0,

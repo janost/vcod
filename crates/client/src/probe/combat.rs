@@ -184,7 +184,7 @@ impl MissileWatch {
                     num,
                     e_type: f("eType"),
                     e_flags: f("eFlags"),
-                    origin: pos.evaluate_f32(snap.server_time).into(),
+                    origin: pos.evaluate_f32(snap.server_time.raw()).into(),
                     pos,
                     apos: vcod_common::net::trajectory::Trajectory::read(e, p, "apos"),
                     weapon: f("weapon"),
@@ -1007,7 +1007,7 @@ impl CombatProbe {
         let (label, dur, wait_ready, fires) =
             (step.label, step.dur, step.wait_ready, step_fires(step));
         if self.start_times.is_empty() {
-            self.start_times.push((label, snap.server_time));
+            self.start_times.push((label, snap.server_time.raw()));
             // The cmds already in flight when the script began run in its
             // first frames: a walk's first logged cmd otherwise reads as
             // walking from the last `commandTime` traced.
@@ -1066,7 +1066,7 @@ impl CombatProbe {
             let s = CombatSample {
                 label,
                 elapsed_ms: elapsed.as_millis(),
-                server_time: snap.server_time,
+                server_time: snap.server_time.raw(),
                 command_time: snap.ps.field_i32(p, "commandTime"),
                 buttons: cmd.buttons,
                 wbuttons: cmd.wbuttons,
@@ -1251,7 +1251,7 @@ viewHeightCurrent={} leanf={} viewangles={},{},{} eFlags={}\n",
         });
         self.idx += 1;
         if let Some(next) = self.steps.get(self.idx) {
-            self.start_times.push((next.label, snap.server_time));
+            self.start_times.push((next.label, snap.server_time.raw()));
         }
         self.started = None;
         self.waiting_since = None;
@@ -1693,6 +1693,7 @@ leanf={:.4} commandTime={}\n",
 mod tests {
     use super::*;
     use crate::probe::tests::pickup_snap;
+    use vcod_common::net::Msec;
 
     /// A weapon file's negative or non-finite time is no duration, not a
     /// panic (BUG-089).
@@ -1776,7 +1777,7 @@ mod tests {
             e
         };
         let snap = |ents: Vec<EntityState>| net::snapshot::Snapshot {
-            server_time: 1000,
+            server_time: Msec::from_raw(1000),
             message_num: 1,
             delta_num: -1,
             snap_flags: 0,
@@ -1841,7 +1842,7 @@ mod tests {
         let mut ps = PlayerState::null(p);
         ps.fields[PlayerState::field_index(p, "weapons[2]").unwrap()] = 4;
         let snap = net::snapshot::Snapshot {
-            server_time: 1000,
+            server_time: Msec::from_raw(1000),
             message_num: 1,
             delta_num: -1,
             snap_flags: 0,

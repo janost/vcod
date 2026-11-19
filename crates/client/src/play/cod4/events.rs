@@ -115,7 +115,7 @@ impl Cod4Session {
             .map_or(now.ps.get("commandTime").unwrap_or(0) as i32, |p| {
                 p.command_time
             });
-        let dt = now.server_time.wrapping_sub(prev.server_time);
+        let dt = now.server_time - prev.server_time;
         for f in fired
             .iter_mut()
             .filter(|f| f.name.starts_with("EV_FIRE_WEAPON"))
@@ -196,7 +196,7 @@ fn walk_snapshot(
 ) -> Walked {
     let mut fired = Vec::new();
     let mut lines = Vec::new();
-    let t = s.server_time;
+    let t = s.server_time.raw();
     // `ev(k)` is ring slot `k`'s event and parm.
     let ring =
         |seq_from: u32, seq_to: u32, ev: &dyn Fn(u32) -> (u32, u32), ent: Option<&EntityState>| {

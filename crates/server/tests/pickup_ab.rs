@@ -485,7 +485,7 @@ fn items_near(s: &Snapshot, me: [f32; 3]) -> (BTreeSet<ItemKey>, BTreeSet<(i32, 
             continue;
         }
         let at: [f32; 3] = Trajectory::read(e, p, "pos")
-            .evaluate_f32(s.server_time)
+            .evaluate_f32(s.server_time.raw())
             .into();
         if dist(at, me) > ITEM_RADIUS {
             continue;
@@ -512,7 +512,7 @@ fn cadence(cl: &NetClient<ClientEnd>, cmds: &[(i32, UserCmd)]) -> Vec<UserCmd> {
     let p = cl.protocol();
     let (base, delta) = cl.snapshots().newest().map_or((0, [0; 3]), |s| {
         (
-            s.server_time,
+            s.server_time.raw(),
             DELTA_ANGLE_FIELDS.map(|n| s.ps.field_i32(p, n)),
         )
     });

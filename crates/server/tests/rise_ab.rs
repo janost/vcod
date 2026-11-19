@@ -22,6 +22,7 @@
 //! paks it returns early.
 
 use crate::common;
+use vcod_common::net::Msec;
 
 use common::{Join, Queues};
 use std::cell::RefCell;
@@ -190,7 +191,7 @@ fn ours(
             .as_ref()
             .is_some_and(|(_, ps)| ps.field_i32(p, "pm_type") == 0);
         match newest {
-            Some((t, ps)) if spawned && t > last_cmd => {
+            Some((t, ps)) if spawned && t > Msec::from_raw(last_cmd) => {
                 // The view as the snapshot has it, rebased on `delta_angles`.
                 let view = ps.viewangles(p);
                 let angles = std::array::from_fn(|i| {
@@ -198,7 +199,7 @@ fn ours(
                     ((view[i] * 65536.0 / 360.0).round() as i32 - da) & 0xffff
                 });
                 cl.send_cmds(&[UserCmd {
-                    server_time: t,
+                    server_time: t.raw(),
                     angles,
                     buttons: input.0,
                     wbuttons: input.1,
@@ -206,7 +207,7 @@ fn ours(
                     weapon: ps.field_i32(p, "weapon") as u8,
                     ..msg::NULL_USERCMD
                 }]);
-                last_cmd = t;
+                last_cmd = t.raw();
             }
             _ if !spawned => {
                 cl.send_frame(&UserCmd::default());
@@ -230,9 +231,9 @@ fn ours(
             }
         }
         if let Some(s) = cl.snapshots().newest()
-            && snaps.last().is_none_or(|l| l.0 != s.server_time)
+            && snaps.last().is_none_or(|l| l.0 != s.server_time.raw())
         {
-            snaps.push((s.server_time, s.ps.clone()));
+            snaps.push((s.server_time.raw(), s.ps.clone()));
         }
     }
     (snaps, sv.script_log().to_vec())

@@ -48,7 +48,7 @@ impl Seen {
             .filter(|e| e.field_i32(p, "eType") == 1)
         {
             let base = [0, 1, 2].map(|i| e.field_f32(p, &format!("pos.trBase[{i}]")));
-            self.victim.push((s.server_time, base));
+            self.victim.push((s.server_time.raw(), base));
         }
         for ev in tracker.drain(s, p) {
             let model = ev.entity_num != VICTIM && ev.entity_num != u32::MAX;
@@ -128,7 +128,7 @@ fn ours() -> Seen {
                 .newest()
                 .filter(|s| s.ps.field_i32(&PROTOCOL_V22, "pm_type") == 0);
             if let (None, Some(s)) = (&hold, live) {
-                let shift = spawned - s.server_time;
+                let shift = spawned - s.server_time.raw();
                 hold = Some(common::ProbeHold {
                     aim: true,
                     framed: true,
@@ -172,9 +172,9 @@ fn ours() -> Seen {
             v.pump_at(now);
         }
         if let Some(s) = watcher.snapshots().newest()
-            && last != Some(s.server_time)
+            && last != Some(s.server_time.raw())
         {
-            last = Some(s.server_time);
+            last = Some(s.server_time.raw());
             seen.take(&mut tracker, s);
         }
     }

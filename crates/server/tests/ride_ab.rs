@@ -231,15 +231,15 @@ fn run_once(probe: &Probe, late_ms: i64) -> Option<Ours> {
             }
         }
         if let Some(s) = cl.snapshots().newest() {
-            first_snap.get_or_insert(s.server_time);
+            first_snap.get_or_insert(s.server_time.raw());
             let p = &PROTOCOL_V1;
-            seen.insert(s.server_time, s.ps.origin(p));
+            seen.insert(s.server_time.raw(), s.ps.origin(p));
             let ent = s
                 .entities
                 .values()
                 .find(|e| e.field_i32(p, "eType") == 8 && e.field_i32(p, "index") == SLAB_MODEL);
             slab.insert(
-                s.server_time,
+                s.server_time.raw(),
                 ent.map(|e| SlabState {
                     solid: e.field_i32(p, "solid"),
                     index: e.field_i32(p, "index"),
@@ -1032,7 +1032,7 @@ fn a_lifted_brush_model_leaves_and_reenters_the_snapshot_like_retail() {
                 .entities
                 .values()
                 .any(|e| e.field_i32(p, "eType") == 8 && e.field_i32(p, "index") == SLAB_MODEL);
-            snaps.insert(s.server_time, here);
+            snaps.insert(s.server_time.raw(), here);
         }
         if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
             break;

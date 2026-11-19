@@ -92,7 +92,7 @@ fn twin(lines: &[Line]) -> Twin {
             Ok(Some(Item::Server { parsed, .. })) => {
                 for op in &parsed.ops {
                     if let Op::Snapshot(i) = op {
-                        newest = s.client.snapshots[*i].server_time;
+                        newest = s.client.snapshots[*i].server_time.raw();
                         first.get_or_insert(newest);
                     }
                 }
@@ -136,10 +136,10 @@ fn twin(lines: &[Line]) -> Twin {
     }
     Twin {
         slot,
-        first: snaps[0].server_time,
-        spawn: spawn.server_time,
+        first: snaps[0].server_time.raw(),
+        spawn: spawn.server_time.raw(),
         pm_type,
-        last: snaps.last().unwrap().server_time,
+        last: snaps.last().unwrap().server_time.raw(),
         pins: if pm_type == 0 { pins } else { Vec::new() },
         commands: commands.into_values().collect(),
     }
@@ -153,7 +153,7 @@ fn snapshot_arrivals(lines: &[Line]) -> BTreeMap<i32, u64> {
         if let Ok(Some(Item::Server { parsed, .. })) = s.feed(l) {
             for op in &parsed.ops {
                 if let Op::Snapshot(i) = op {
-                    out.entry(s.client.snapshots[*i].server_time)
+                    out.entry(s.client.snapshots[*i].server_time.raw())
                         .or_insert(l.ms);
                 }
             }
@@ -323,9 +323,13 @@ fn diffs(
     fields: &[&str],
 ) -> Vec<String> {
     let mut out = Vec::new();
-    for a in r.snaps.iter().filter(|f| window.contains(&f.server_time)) {
-        let t = a.server_time;
-        let Some(b) = o.snaps.iter().find(|f| f.server_time == t) else {
+    for a in r
+        .snaps
+        .iter()
+        .filter(|f| window.contains(&f.server_time.raw()))
+    {
+        let t = a.server_time.raw();
+        let Some(b) = o.snaps.iter().find(|f| f.server_time.raw() == t) else {
             out.push(format!("{tag} snapshot - {t}: ours none"));
             continue;
         };
@@ -341,7 +345,7 @@ fn diffs(
 }
 
 fn entity_diffs(tag: &str, a: &Snapshot, b: &Snapshot) -> Vec<String> {
-    let t = a.server_time;
+    let t = a.server_time.raw();
     let mut out = Vec::new();
     let ours: BTreeMap<u32, &EntityState> = b.entities.iter().map(|e| (e.number(), e)).collect();
     let theirs: BTreeMap<u32, &EntityState> = a.entities.iter().map(|e| (e.number(), e)).collect();
@@ -455,13 +459,13 @@ fn pair_diffs(run: &Run, pair: &Pair) -> Vec<String> {
             s.snaps
                 .iter()
                 .find(|f| f.ps.get("pm_type") == Some(0))
-                .map_or(0, |f| f.server_time)
+                .map_or(0, |f| f.server_time.raw())
         })
         .collect();
     let end = run
         .retail
         .iter()
-        .map(|s| s.snaps.last().unwrap().server_time)
+        .map(|s| s.snaps.last().unwrap().server_time.raw())
         .min()
         .unwrap()
         .min(until.unwrap_or(i32::MAX));
@@ -486,11 +490,15 @@ fn pair_diffs(run: &Run, pair: &Pair) -> Vec<String> {
                 ));
             }
         }
-        for a in r.snaps.iter().filter(|f| window.contains(&f.server_time)) {
+        for a in r
+            .snaps
+            .iter()
+            .filter(|f| window.contains(&f.server_time.raw()))
+        {
             let Some(b) = o.snaps.iter().find(|f| f.server_time == a.server_time) else {
                 continue;
             };
-            let t = a.server_time;
+            let t = a.server_time.raw();
             if a.ps.stats != b.ps.stats {
                 out.push(format!(
                     "{tag} ps stats {t}: ours {:?} retail {:?}",

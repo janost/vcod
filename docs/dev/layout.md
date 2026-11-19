@@ -48,6 +48,8 @@ Grep the module header comments for more; each one names its research doc.
     version alone: CoD4 1.7 and CoD1 1.5 both speak protocol 6), its
     connectionless framing, gamestate and snapshot writers.
   - `net/codec.rs`: the game-neutral bit reader and table-driven field codec.
+  - `net/msec.rs`: `Msec`, the wire and level clock every game's snapshot
+    and frame carries; its arithmetic wraps as retail's `int` does.
   - `net/voice.rs`: voice chat's out-of-band packets, CoD2's and CoD4's.
   - `net/cod1/`: CoD1's tables, configstring layouts and 1.1 numbering.
 - `testing`: the install fixtures tests take (`docs/dev/testing.md`).

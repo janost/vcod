@@ -371,7 +371,7 @@ impl Rig {
                 // rebases the view, so the rebase is done here too.
                 let p = self.p;
                 let snap = self.target.snapshots().newest().expect("a target snapshot");
-                let base = snap.server_time;
+                let base = snap.server_time.raw();
                 let da = [0, 1, 2].map(|i| snap.ps.field_i32(p, &format!("delta_angles[{i}]")));
                 let mut cmds = Vec::new();
                 for off in plan {
@@ -388,7 +388,7 @@ impl Rig {
             }
             None if !self.target_cmds.is_empty() => {
                 let snap = self.target.snapshots().newest().expect("a target snapshot");
-                let end = snap.server_time + FRAME_MS as i32;
+                let end = snap.server_time.raw() + FRAME_MS as i32;
                 let cmds = common::stamped(
                     &self.target,
                     &held,
@@ -534,7 +534,7 @@ impl Rig {
         let g = |name: &str| gun.map_or(0, |e| e.field_i32(p, name));
         let ev = |name: &str| ev_v1(p, g(name));
         Sample {
-            t: s.server_time,
+            t: s.server_time.raw(),
             ct: Some(ps("commandTime")),
             viewlocked: ps("viewlocked"),
             viewlocked_ent: ps("viewlocked_entNum"),
@@ -574,7 +574,7 @@ impl Rig {
                 let i = |name: &str| e.field_i32(p, name);
                 let f = |name: &str| e.field_f32(p, name) as i32;
                 Victim {
-                    tr_off: i("pos.trTime") - s.server_time,
+                    tr_off: i("pos.trTime") - s.server_time.raw(),
                     base: [0, 1, 2].map(|k| f(&format!("pos.trBase[{k}]"))),
                     delta: [0, 1, 2].map(|k| f(&format!("pos.trDelta[{k}]"))),
                     legs: i("legsAnim"),

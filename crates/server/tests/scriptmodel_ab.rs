@@ -480,7 +480,7 @@ fn ours_pair_run(
             send(ca, &mut ha, buttons, selected);
         }
         if prone && live(&cb) {
-            played.get_or_insert(cb.snapshots().newest().unwrap().server_time as i64);
+            played.get_or_insert(cb.snapshots().newest().unwrap().server_time.raw() as i64);
             let mut cmds = hb.cmds(&cb, 0);
             for c in &mut cmds {
                 c.wbuttons |= vcod_common::net::msg::WBUTTON_PRONE;
@@ -526,7 +526,7 @@ fn ours_pair_run(
                 if i("eType") == 4 {
                     missiles.push(format!(
                         "VEH {} missile {num} type {} bits {:#x} {:#x} {:#x} ground {}",
-                        snap.server_time,
+                        snap.server_time.raw(),
                         i("pos.trType"),
                         i("pos.trBase[0]"),
                         i("pos.trBase[1]"),

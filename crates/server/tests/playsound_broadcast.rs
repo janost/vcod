@@ -10,6 +10,7 @@
 //! Needs `COD_DIR`; without the paks it returns early.
 
 use crate::common;
+use vcod_common::net::Msec;
 
 use common::{ClientEnd, Queues};
 use std::cell::RefCell;
@@ -51,12 +52,12 @@ fn a_sounded_player_rides_every_snapshot_until_the_restart() {
         sounder.send_frame(&NULL_USERCMD);
         common::step_pair(&mut sv, (&qa, &mut viewer), (&qb, &mut sounder), now);
         if let Some(s) = viewer.snapshots().newest()
-            && s.server_time != seen
+            && s.server_time != Msec::from_raw(seen)
         {
-            seen = s.server_time;
+            seen = s.server_time.raw();
             let rides = s.entities.contains_key(&1);
             if changes.last().is_none_or(|&(_, r)| r != rides) {
-                changes.push((s.server_time, rides));
+                changes.push((s.server_time.raw(), rides));
             }
         }
         for l in sv.script_log() {

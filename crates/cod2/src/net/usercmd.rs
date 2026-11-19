@@ -279,4 +279,29 @@ mod tests {
         };
         assert_eq!(roundtrip(key, from, f), f);
     }
+
+    /// A cmd clock at either end of `int`: the one-byte step wraps past
+    /// `i32::MAX` as retail's `int` add does, and a step past 255 or
+    /// backwards goes out whole.
+    #[test]
+    fn the_clock_wraps_at_the_ends_of_int() {
+        let key = 0xdead_beef;
+        let from = UserCmd2 {
+            server_time: i32::MAX - 5,
+            ..UserCmd2::default()
+        };
+        let to = UserCmd2 {
+            server_time: i32::MIN + 3,
+            ..from
+        };
+        assert_eq!(roundtrip(key, from, to), to);
+        for t in [i32::MAX, i32::MIN] {
+            let to = UserCmd2 {
+                server_time: t,
+                ..from
+            };
+            assert_eq!(roundtrip(key, UserCmd2::default(), to), to);
+            assert_eq!(roundtrip(key, to, from), from);
+        }
+    }
 }

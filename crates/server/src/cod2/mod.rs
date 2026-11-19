@@ -46,6 +46,7 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::Instant;
 use vcod_common::asset_source::RawFile;
+use vcod_common::net::Msec;
 
 use glam::Vec3;
 use vcod_cod2::net::PROTOCOL_118;
@@ -1492,7 +1493,7 @@ impl Cod2Server {
         if in_world {
             conn::write_pending_commands::<Cod2Game>(&mut w, c);
             let to = Frame2 {
-                server_time: svs,
+                server_time: Msec::from_raw(svs),
                 ps,
                 entities,
                 clients: archived.map_or_else(|| clients.to_vec(), |r| r.to_vec()),

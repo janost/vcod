@@ -788,6 +788,7 @@ mod tests {
     use vcod_cod2::net::capture::{Capture, Dir};
     use vcod_cod2::net::oob::{self, Reply};
     use vcod_cod2::net::{Client, NetView};
+    use vcod_common::net::Msec;
     use vcod_common::pk3::Pk3Fs;
 
     const FIXTURE: &[u8] = include_bytes!("../../../cod2/tests/fixtures/mp_toujane-spectate.bin");
@@ -835,7 +836,7 @@ mod tests {
             // The cgame's current snapshot is the older of the two.
             let cur = view.prev.as_ref().unwrap_or(snap);
             let new = tracker.transition(cur);
-            let f = view.frame(snap.server_time).unwrap();
+            let f = view.frame(snap.server_time.raw()).unwrap();
             let eye = Vec3::from(f.eye());
             let none = HashMap::new();
             let scene = FxScene {
@@ -942,7 +943,7 @@ mod tests {
         let shooter = vcod_cod2::net::EntityState2::null(3);
         let snap = SnapshotView {
             message_num: 1,
-            server_time: 1000,
+            server_time: Msec::from_raw(1000),
             snap_flags: 0,
             ps,
             entities: vec![EntityView::new(&shooter)],
@@ -1057,7 +1058,7 @@ mod tests {
         };
         let snap = SnapshotView {
             message_num: 1,
-            server_time: 1000,
+            server_time: Msec::from_raw(1000),
             snap_flags: 0,
             ps,
             entities: vec![body(0, 1), body(3, 1)],
@@ -1192,7 +1193,7 @@ mod tests {
         };
         let snap = |entities| SnapshotView {
             message_num: 1,
-            server_time: 1000,
+            server_time: Msec::from_raw(1000),
             snap_flags: 0,
             ps: ps.clone(),
             entities,

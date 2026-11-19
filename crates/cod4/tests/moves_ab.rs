@@ -232,7 +232,7 @@ fn read(file: &str) -> Capture {
                 for op in &parsed.ops {
                     if let Op::Snapshot(i) = op {
                         let sn = &s.client.snapshots[*i];
-                        snaps.push((sn.server_time, sn.ps.clone()));
+                        snaps.push((sn.server_time.raw(), sn.ps.clone()));
                     }
                 }
             }

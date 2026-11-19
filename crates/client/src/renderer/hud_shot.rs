@@ -9,6 +9,7 @@
 
 use super::*;
 use vcod_common::asset_source::AssetSource;
+use vcod_common::net::Msec;
 
 /// A device off a headless adapter with BC textures, `None` where the
 /// machine has none.
@@ -241,7 +242,7 @@ fn cod2_player_hud_shot() {
         SnapshotView::new(
             &Snapshot2 {
                 message_num: 1,
-                server_time: t,
+                server_time: Msec::from_raw(t),
                 delta_num: -1,
                 snap_flags: 0,
                 valid: true,
@@ -381,7 +382,7 @@ fn cod2_ui_shot() {
     let snap = SnapshotView::new(
         &Snapshot2 {
             message_num: 1,
-            server_time: 1000,
+            server_time: Msec::from_raw(1000),
             delta_num: -1,
             snap_flags: 0,
             valid: true,

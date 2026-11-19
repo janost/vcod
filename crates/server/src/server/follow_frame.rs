@@ -843,7 +843,7 @@ mod tests {
             rig.sv.test_set_client_origin(1, a);
             rig.sv.test_set_client_origin(2, b);
             let s = rig.step(0);
-            trail.insert(s.server_time, (a, b));
+            trail.insert(s.server_time.raw(), (a, b));
         }
         trail
     }
@@ -865,7 +865,7 @@ mod tests {
         assert_eq!(ps_i32(&s, "clientNum"), 1);
         assert_eq!(ps_i32(&s, "pm_flags") & 0x70000, 0x30000);
         assert_eq!(ps_i32(&s, "deltaTime"), 1000);
-        let (then_1, then_2) = trail[&(s.server_time - 1000)];
+        let (then_1, then_2) = trail[&(s.server_time - 1000).raw()];
         assert_eq!(s.ps.origin(&PROTOCOL_V1), then_1);
         assert!(!s.entities.contains_key(&1));
         let e2 = &s.entities[&2];
@@ -894,7 +894,10 @@ mod tests {
         // The age holds: the next frame replays the next archived one.
         let s = rig.step(0);
         assert_eq!(ps_i32(&s, "deltaTime"), 1000);
-        assert_eq!(s.ps.origin(&PROTOCOL_V1), trail[&(s.server_time - 1000)].0);
+        assert_eq!(
+            s.ps.origin(&PROTOCOL_V1),
+            trail[&(s.server_time - 1000).raw()].0
+        );
     }
 
     /// A stock killcam asks for nine seconds; a level younger than that
@@ -980,7 +983,7 @@ mod tests {
         assert_eq!(ps_i32(&s, "pm_flags") & 0x10000, 0);
         assert_eq!(
             s.entities[&2].origin(&PROTOCOL_V1),
-            trail[&(s.server_time - 1000)].1
+            trail[&(s.server_time - 1000).raw()].1
         );
     }
 

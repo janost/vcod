@@ -43,7 +43,11 @@ fn fetch(base: &Path, home: &Path, wanted: Vec<Wanted>, sets: &[(&str, &str)]) -
             let busy = waiting || dls.as_ref().is_some_and(|d| !d.is_done());
             let cmds = match (&conn.client.gamestate, busy) {
                 (Some(_), false) => {
-                    let snap = conn.client.snapshots.last().map_or(0, |s| s.server_time);
+                    let snap = conn
+                        .client
+                        .snapshots
+                        .last()
+                        .map_or(0, |s| s.server_time.raw());
                     vec![UserCmd {
                         server_time: (snap + 10).max(conn.last_cmd().server_time + 1),
                         ..UserCmd::default()

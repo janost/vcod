@@ -2,6 +2,7 @@
 //! scripted walk that prints the lines the capture recipes parse.
 
 use super::*;
+use vcod_common::net::Msec;
 
 /// The scripted player of `vcod --net-probe ADDR --game cod2 --probe-team
 /// T`: a 16 s loop of a walk, a strafe while turning, a jump, a back-up, a
@@ -554,9 +555,9 @@ pub fn probe(addr: &str, secs: u64, fs: &Pk3Fs, join: Option<Join>) -> anyhow::R
         }
         if trace_weapon
             && let Some(snap) = &s.view.snap
-            && snap.server_time != traced_time
+            && snap.server_time != Msec::from_raw(traced_time)
         {
-            traced_time = snap.server_time;
+            traced_time = snap.server_time.raw();
             let ps = &snap.ps;
             let nz = |a: &[i32]| -> Vec<(usize, i32)> {
                 a.iter()

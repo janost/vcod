@@ -41,7 +41,7 @@ impl NetchanSample {
         let f = |n: &str| snap.ps.field_i32(p, n);
         NetchanSample {
             elapsed_ms,
-            server_time: snap.server_time,
+            server_time: snap.server_time.raw(),
             pm_type: f("pm_type"),
             e_flags: f("eFlags"),
             health: snap.ps.health(),

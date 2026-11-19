@@ -501,7 +501,7 @@ fn run_once(
             }
         }
         if let Some(s) = cl.snapshots().newest() {
-            first_snap.get_or_insert(s.server_time);
+            first_snap.get_or_insert(s.server_time.raw());
             if let Some(present) = &present {
                 for (&n, e) in s.entities.iter().filter(|(n, _)| !present.contains(n)) {
                     new.entry(n).or_insert(Sent {
@@ -517,7 +517,7 @@ fn run_once(
             if std::env::var("WORLDCOPY_PS").is_ok() {
                 println!(
                     "PS t={} origin={:?} vel={:.0},{:.0},{:.0} ground={}",
-                    s.server_time,
+                    s.server_time.raw(),
                     s.ps.origin(p),
                     s.ps.field_f32(p, "velocity[0]"),
                     s.ps.field_f32(p, "velocity[1]"),

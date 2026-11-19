@@ -2182,6 +2182,41 @@ mod tests {
         assert_eq!(got.forward, 127);
     }
 
+    /// A cmd clock at either end of `int`: the absolute branch round-trips
+    /// byte for byte, and the 8-bit delta wraps past `i32::MAX` as
+    /// `MSG_ReadDeltaUsercmdKey`'s `int` add does (0x807b7f8).
+    #[test]
+    fn usercmd_clock_wraps_at_the_ends_of_int() {
+        let h = Huffman::new();
+        let key = 0x1122_3344i32;
+        for t in [i32::MAX, i32::MIN] {
+            let to = UserCmd {
+                server_time: t,
+                forward: 127,
+                ..NULL_USERCMD
+            };
+            let mut w = MsgWriter::new(&h);
+            write_delta_usercmd(&mut w, key, &NULL_USERCMD, &to);
+            let d = w.finish();
+            let got = read_delta_usercmd(&mut MsgReader::new(&d, &h), key, &NULL_USERCMD).unwrap();
+            assert_eq!(got, to);
+            let mut w = MsgWriter::new(&h);
+            write_delta_usercmd(&mut w, key, &NULL_USERCMD, &got);
+            assert_eq!(w.finish(), d);
+        }
+        // The delta branch: one byte on a base 5 ms short of `i32::MAX`.
+        let base = UserCmd {
+            server_time: i32::MAX - 5,
+            ..NULL_USERCMD
+        };
+        let mut w = MsgWriter::new(&h);
+        w.write_bits(1, 1);
+        w.write_byte(10);
+        w.write_bits(key & 1, 1); // unchanged
+        let got = read_delta_usercmd(&mut MsgReader::new(&w.finish(), &h), key, &base).unwrap();
+        assert_eq!(got.server_time, i32::MIN + 4);
+    }
+
     #[test]
     fn move_ops_count_reads_back() {
         let h = Huffman::new();

@@ -306,7 +306,7 @@ impl LegsProbe {
             && (o[0] - LEGS_SPOT[0]).abs() < 0.5
             && (o[1] - LEGS_SPOT[1]).abs() < 0.5
         {
-            self.placed = Some((now, s.server_time));
+            self.placed = Some((now, s.server_time.raw()));
             println!("legs: placed at serverTime {}", s.server_time);
             pre = self.before.past(s.ps.field_i32(p, "commandTime")).collect();
         }

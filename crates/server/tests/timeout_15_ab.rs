@@ -106,7 +106,7 @@ fn a_match_timeout_runs_as_15b_ran_it() {
         if let Some(s) = cl.snapshots().newest()
             && snaps.last().is_none_or(|(m, _)| *m != s.message_num)
         {
-            snaps.push((s.message_num, s.server_time));
+            snaps.push((s.message_num, s.server_time.raw()));
         }
         if cmds.len() >= retail.cmds.len() && cmds.last().is_some_and(|c| c == "d 227 1") {
             break;

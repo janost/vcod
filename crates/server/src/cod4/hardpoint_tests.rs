@@ -300,7 +300,7 @@ fn a_helicopter_flies_its_path_and_fires() {
         .flat_map(|f| {
             of_type(f, ET_HELICOPTER)
                 .into_iter()
-                .map(move |e| (f.server_time, e))
+                .map(move |e| (f.server_time.raw(), e))
         })
         .collect();
     assert!(!helis.is_empty(), "no helicopter reached the target");
@@ -321,7 +321,7 @@ fn a_helicopter_flies_its_path_and_fires() {
     // Its loop done (`scr_heli_loopmax` 1), `heli_leave` flies it off and
     // deletes it: the last snapshots carry none.
     let last = helis.last().unwrap().0;
-    let end = seen.snaps.last().unwrap().server_time;
+    let end = seen.snaps.last().unwrap().server_time.raw();
     assert!(last + 10_000 < end, "still there at {last} of {end}");
 }
 
@@ -405,7 +405,7 @@ fn a_helicopter_shot_down_crashes() {
         .flat_map(|f| {
             of_type(f, ET_HELICOPTER)
                 .into_iter()
-                .map(move |e| (f.server_time, word(&e, "un1.helicopterStage")))
+                .map(move |e| (f.server_time.raw(), word(&e, "un1.helicopterStage")))
         })
         .collect();
     let mut order: Vec<u32> = Vec::new();
@@ -418,7 +418,7 @@ fn a_helicopter_shot_down_crashes() {
     assert!(order.contains(&1), "{order:?}");
     assert_eq!(order.last(), Some(&0), "{order:?}");
     let last = stages.last().unwrap().0;
-    let end = seen.snaps.last().unwrap().server_time;
+    let end = seen.snaps.last().unwrap().server_time.raw();
     assert!(last + 10_000 < end, "still there at {last} of {end}");
 }
 

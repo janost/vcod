@@ -71,11 +71,11 @@ fn shocked(weapon: &str, ahead: f32) -> Option<(Vec<Row>, String, Vec<String>)> 
     let rows: Vec<_> = ot
         .snaps
         .iter()
-        .filter(|f| f.server_time >= BURST_MS)
+        .filter(|f| f.server_time.raw() >= BURST_MS)
         .map(|f| {
             let u = |n: &str| f.ps.get(n).unwrap_or(0);
             (
-                f.server_time,
+                f.server_time.raw(),
                 u("shellshockIndex"),
                 u("shellshockDuration"),
                 u("pm_flags"),

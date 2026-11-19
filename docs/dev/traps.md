@@ -103,6 +103,11 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
   and data-driven clamps `fguard::clamp`; both return a retail value
   untouched. The playerstate readers (`predict::from_wire`, CoD2's and
   CoD4's `PlayerState::from_wire`) zero non-finite floats.
+- A wire or level clock wraps as retail's `int` does, and a dev build traps
+  where release wraps. Snapshot and frame times are `net::Msec` in all four
+  games: `+`, `-` and `since` wrap, `<` is retail's plain signed compare.
+  A clock still held as `i32` (usercmds, trajectories, pmove) takes
+  `wrapping_*` for any sum or difference off the wire.
 
 ### Bots
 

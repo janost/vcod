@@ -169,7 +169,7 @@ fn drawn(fs: Pk3Fs, name: &str, cvars: &[(&str, &str)]) -> Vec<Drawn> {
             }
         }
         if let Some(s) = cl.snapshots().newest() {
-            own.insert(s.server_time, Vec3::from(s.ps.origin(cl.protocol())));
+            own.insert(s.server_time.raw(), Vec3::from(s.ps.origin(cl.protocol())));
         }
         let Some((_, w)) = watcher.as_mut() else {
             continue;
@@ -185,7 +185,7 @@ fn drawn(fs: Pk3Fs, name: &str, cvars: &[(&str, &str)]) -> Vec<Drawn> {
             continue;
         }
         let a = last.replace(b.clone()).unwrap_or_else(|| b.clone());
-        let t = b.server_time;
+        let t = b.server_time.raw();
         let configstrings = w.configstrings();
         let weapon_names =
             split_weapon_list(configstrings.get(7).map(String::as_str).unwrap_or(""));
@@ -234,7 +234,7 @@ fn drawn(fs: Pk3Fs, name: &str, cvars: &[(&str, &str)]) -> Vec<Drawn> {
             clock_ms: t,
             snapshot_ms: t,
         };
-        let frametime_ms = t - a.server_time;
+        let frametime_ms = t - a.server_time.raw();
         for (&num, ent) in &b.entities {
             if ent.field_i32(p, "eType") != ET_PLAYER {
                 continue;

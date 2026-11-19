@@ -149,7 +149,7 @@ pub fn run(addr: &str, secs: u64, frame_ms: u64) -> anyhow::Result<()> {
             client.send_frame(&UserCmd::default());
         }
         if let Some(s) = client.snapshots().newest() {
-            let snap = s.server_time;
+            let snap = s.server_time.raw();
             if newest.is_none_or(|(t, _)| t != snap) {
                 if let Some((t, at)) = newest {
                     for a in [&mut arrivals, &mut total_arrivals] {

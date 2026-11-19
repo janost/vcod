@@ -293,7 +293,7 @@ fn ours(p: &'static Cod1Wire, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<
         let frame_ms = common::FRAME_MS as i32;
         let batch: Vec<UserCmd> = (1..=6)
             .map(|k| UserCmd {
-                server_time: s.server_time - lag + (k * frame_ms + 5) / 6,
+                server_time: (s.server_time - lag + (k * frame_ms + 5) / 6).raw(),
                 angles: da.map(|d| (-d) & 0xffff),
                 weapon,
                 ..NULL_USERCMD
@@ -328,7 +328,7 @@ fn ours(p: &'static Cod1Wire, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<
                 let ct = cap
                     .wait_snaps
                     .iter()
-                    .take_while(|w| w.0 <= t)
+                    .take_while(|w| w.0 <= t.raw())
                     .last()
                     .map_or(i32::MIN, |w| w.1);
                 let mut batch = Vec::new();
@@ -361,7 +361,7 @@ fn ours(p: &'static Cod1Wire, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<
         {
             let o = s.ps.origin(p);
             if (o[0] - part.at[0]).abs() < 1.0 && (o[1] - part.at[1]).abs() < 1.0 {
-                shift = Some(s.server_time - r.0);
+                shift = Some((s.server_time - r.0).raw());
                 // The placement shares the spawn's frame and keeps what
                 // the cmds run at the spawn point left: retail's, from its
                 // snapshot (cod11-combat.md 2.1, "The street placement").
@@ -389,7 +389,7 @@ fn ours(p: &'static Cod1Wire, mut fs: Pk3Fs, part: Part, cap: &Capture) -> (Vec<
         let t = cl
             .snapshots()
             .newest()
-            .map_or(0, |s| s.server_time + common::FRAME_MS as i32);
+            .map_or(0, |s| (s.server_time + common::FRAME_MS as i32).raw());
         if t > last {
             break;
         }

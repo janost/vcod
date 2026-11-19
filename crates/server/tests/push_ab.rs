@@ -171,7 +171,7 @@ fn run_ours() -> Option<Ours> {
                 if e.field_i32(p, "eType") == ET_ITEM {
                     let pos = Trajectory::read(e, p, "pos");
                     items.entry(*num).or_default().insert(
-                        s.server_time,
+                        s.server_time.raw(),
                         (e.field_i32(p, "groundEntityNum"), pos.base.into()),
                     );
                 }

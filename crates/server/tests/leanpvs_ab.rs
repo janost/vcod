@@ -9,6 +9,7 @@
 //! `LPVS_REPORT=1` prints ours' changes. Needs `COD_DIR` at a 1.1 install.
 
 use crate::common;
+use vcod_common::net::Msec;
 
 use common::{Join, Queues};
 use std::cell::RefCell;
@@ -130,13 +131,13 @@ fn ours() -> Vec<(i32, bool)> {
                 }
             }
             if let Some(s) = ca.snapshots().newest()
-                && s.server_time != last_time
-                && (FROM_MS..=TO_MS).contains(&s.server_time)
+                && s.server_time != Msec::from_raw(last_time)
+                && (FROM_MS..=TO_MS).contains(&s.server_time.raw())
             {
-                last_time = s.server_time;
+                last_time = s.server_time.raw();
                 let carried = s.entities.contains_key(&0);
                 if seen.last().is_none_or(|&(_, v)| v != carried) {
-                    seen.push((s.server_time, carried));
+                    seen.push((s.server_time.raw(), carried));
                 }
             }
         }

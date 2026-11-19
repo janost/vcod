@@ -1601,7 +1601,7 @@ fn lerp_pos_angles(
         let pos = from.movers.carry(
             pos_tr.evaluate_f32(render_time),
             cur.field_i32(p, "groundEntityNum"),
-            from.snap.snap.server_time,
+            from.snap.snap.server_time.raw(),
             render_time,
         );
         return (
@@ -2625,6 +2625,7 @@ mod gunner_ab;
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use vcod_common::net::Msec;
 
     /// A client the new `cg.snap` no longer lists loses his lerp frames;
     /// one still listed keeps them while his entity is out of view, and a
@@ -3048,7 +3049,7 @@ mod tests {
             ])
         };
         let snap = |t: i32, ents: Vec<(u32, EntityState)>| Snapshot {
-            server_time: t,
+            server_time: Msec::from_raw(t),
             entities: ents.into_iter().collect(),
             ..Snapshot::default()
         };
@@ -3505,7 +3506,7 @@ mod tests {
                         ci_seat_angles: served.angles,
                         ..Default::default()
                     };
-                    let server = body.pose_inputs(&anims, s.server_time);
+                    let server = body.pose_inputs(&anims, s.server_time.raw());
                     let client = body_controllers(
                         MoveRules::Uo,
                         Some(&drawn),

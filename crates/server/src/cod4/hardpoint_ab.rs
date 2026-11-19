@@ -115,10 +115,10 @@ fn tracks(s: &Side) -> Tracks {
                 nums.push(e.number());
             }
             let k = nums.iter().position(|&n| n == e.number()).unwrap();
-            let t0 = *first.entry(e.number()).or_insert(f.server_time);
+            let t0 = *first.entry(e.number()).or_insert(f.server_time.raw());
             out.entry((e.etype(), k))
                 .or_default()
-                .push((f.server_time - t0, *e));
+                .push(((f.server_time - t0).raw(), *e));
         }
     }
     out
@@ -168,7 +168,7 @@ fn ours(
         "owner",
         0,
         28961,
-        first_snap,
+        first_snap.raw(),
         &[
             (1050, "mr {sid} 8 axis"),
             (2550, "mr {sid} 15 assault_mp,0"),
@@ -177,7 +177,7 @@ fn ours(
     let mut now = Instant::now();
     // To the capture's last snapshot and a frame.
     let run_ms = r.snaps.last().expect("snapshots").server_time + 50;
-    while sv.core.sv_time_ms < run_ms {
+    while sv.core.sv_time_ms < run_ms.raw() {
         let svs = sv.core.sv_time_ms;
         if !probe.joined && svs >= probe.connect_at {
             probe.join(&mut sv, now);

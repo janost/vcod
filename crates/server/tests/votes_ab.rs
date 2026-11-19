@@ -183,7 +183,10 @@ fn run(fixture: &str, proto: &'static Cod1Wire, cvars: &[(&str, &str)], order: [
                             && proto.transport.version == PROTOCOL_V1.transport.version
                             && !v.is_empty()
                         {
-                            let t = cl[i].snapshots().newest().map_or(0, |s| s.server_time);
+                            let t = cl[i]
+                                .snapshots()
+                                .newest()
+                                .map_or(0, |s| s.server_time.raw());
                             v = format!("+{}", v.parse::<i32>().unwrap() - t);
                         }
                         got[i].push(format!("d {cs} {v}"));

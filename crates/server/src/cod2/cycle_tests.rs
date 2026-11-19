@@ -99,7 +99,7 @@ impl Rig {
                     continue;
                 }
                 let pkt = if p.cl.parser.gamestate.is_some() {
-                    let base = p.cl.parser.snapshot().map_or(0, |s| s.server_time);
+                    let base = p.cl.parser.snapshot().map_or(0, |s| s.server_time.raw());
                     let mut cmd = p.cl.idle_cmd(base + FRAME_MS);
                     cmd.buttons = p.buttons;
                     p.cl.build_packet(&[cmd]).unwrap()

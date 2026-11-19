@@ -90,12 +90,16 @@ impl ShockProbe {
     pub fn observe(&mut self, now: Instant, s: &Snapshot) -> bool {
         let p = crate::probe::wire();
         let f = |name: &str| s.ps.field_i32(p, name);
-        self.shock = (s.server_time, f("shellshockTime"), f("shellshockDuration"));
+        self.shock = (
+            s.server_time.raw(),
+            f("shellshockTime"),
+            f("shellshockDuration"),
+        );
         let o = s.ps.origin(p);
         let mut pre = Vec::new();
         if self.placed.is_none() {
             if (o[0] - SHOCK_SPOT[0]).abs() < 0.5 && (o[1] - SHOCK_SPOT[1]).abs() < 0.5 {
-                self.placed = Some((now, s.server_time));
+                self.placed = Some((now, s.server_time.raw()));
                 println!("shock: placed at serverTime {}", s.server_time);
                 pre = self.before.past(f("commandTime")).collect();
             } else {

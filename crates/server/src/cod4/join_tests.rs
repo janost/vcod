@@ -60,7 +60,11 @@ fn join(cp: Cp, done: fn(&Seen) -> bool) -> (Seen, Vec<capture::Line>) {
             // sends from its first frame in the level.
             let cmds = match &conn.client.gamestate {
                 Some(_) => {
-                    let snap = conn.client.snapshots.last().map_or(0, |s| s.server_time);
+                    let snap = conn
+                        .client
+                        .snapshots
+                        .last()
+                        .map_or(0, |s| s.server_time.raw());
                     vec![UserCmd {
                         server_time: (snap + 10).max(conn.last_cmd().server_time + 1),
                         ..UserCmd::default()

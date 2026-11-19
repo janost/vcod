@@ -496,7 +496,7 @@ mod tests {
             "net/snapshots-uo-tank.bin",
         );
         let s = &frames.last().unwrap().snapshot;
-        SnapshotMovers::from_entities(p, &s.entities).place(&world, s.server_time);
+        SnapshotMovers::from_entities(p, &s.entities).place(&world, s.server_time.raw());
         let tanks: Vec<_> = s
             .entities
             .iter()

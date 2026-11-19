@@ -15,6 +15,7 @@
 //! and fire sounds only with a 1.1 install's weapon files.
 
 use std::collections::{BTreeMap, HashMap};
+use vcod_common::net::Msec;
 
 use glam::Vec3;
 use vcod_common::collision::CollisionWorld;
@@ -121,7 +122,7 @@ impl<'a> Client<'a> {
                     solid_bodies(p, &newest.entities, self.client_num as u32, &HashMap::new());
                 let movers = (
                     SnapshotMovers::from_entities(p, &newest.entities),
-                    newest.server_time,
+                    newest.server_time.raw(),
                 );
                 self.predictor.predict(
                     p,
@@ -139,7 +140,7 @@ impl<'a> Client<'a> {
         // `main.rs`'s `Hud::feed_damage`, the playerstate's view standing in
         // for the drawn one.
         let fb = DamageFeedback::from_ps(p, &newest.ps);
-        let t = newest.server_time;
+        let t = newest.server_time.raw();
         if self.damage.feed(fb, newest.ps.viewangles(p), t, t) {
             self.tally.hits += 1;
             self.tally.mounted_hits +=
@@ -285,7 +286,7 @@ fn replay_own_as(
                     }
                 }
                 newest = Some(Snapshot {
-                    server_time: s.server_time,
+                    server_time: Msec::from_raw(s.server_time),
                     message_num: s.message_num,
                     delta_num: -1,
                     snap_flags: 0,
@@ -455,7 +456,7 @@ fn replay_capture(p: &'static Cod1Wire, tag: &str, weapons: &[Option<WeaponDef>]
             }
         }
         seqs.retain(|n, _| s.entities.contains_key(n));
-        client.frame(s, None, f64::from(s.server_time));
+        client.frame(s, None, f64::from(s.server_time.raw()));
     }
     let t = client.tally;
     println!("{tag}: {fires} fires, {kicks} kicks and {hits} hits in the rings, {t:?}");
@@ -564,7 +565,7 @@ fn a_followed_uo_gunner_sees_down_the_gun() {
             view,
             base,
             &arcs,
-            shakes.then(|| super::seat::shake_phase(s.server_time)),
+            shakes.then(|| super::seat::shake_phase(s.server_time.raw())),
             [0.0; 2],
             &mut rng,
         );
@@ -614,7 +615,7 @@ fn the_jeep_drivers_binds_wait_for_cg_snap() {
         let mut input = PlayInput::default();
         input.sync(&held);
         if ahead && !input.select_allowed(Action::NextWeapon) {
-            late.push(newest.server_time);
+            late.push(newest.server_time.raw());
         }
         if newest.ps.field_i32(p, "vehPos") == 1 {
             seated += 1;

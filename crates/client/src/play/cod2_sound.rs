@@ -7,6 +7,7 @@
 //! `p`, `q`, `r` and `D`.
 
 use std::collections::HashMap;
+use vcod_common::net::Msec;
 
 use crate::audio::cod2::atof;
 use glam::Vec3;
@@ -153,7 +154,7 @@ pub(crate) fn muzzle_point(snap: &SnapshotView, shooter: i32, view: Vec3) -> Opt
         return Some(view);
     }
     let e = snap.entity(u32::try_from(shooter).ok()?)?;
-    let origin = e.pos.evaluate_f32(snap.server_time);
+    let origin = e.pos.evaluate_f32(snap.server_time.raw());
     if shooter >= 64 {
         return Some(origin);
     }
@@ -395,7 +396,10 @@ impl Cod2Sounds {
             }
             // Played unless the entity carries eFlags 0x10000 and the
             // blast is 50 ms old or more.
-            ev::EV_CUSTOM_EXPLODE if e.eflags & 0x10000 == 0 || snap.server_time - e.time < 50 => {
+            ev::EV_CUSTOM_EXPLODE
+                if e.eflags & 0x10000 == 0
+                    || snap.server_time.since(Msec::from_raw(e.time)) < 50 =>
+            {
                 out.extend(explosion().map(at_point));
             }
             ev::EV_GRENADE_SUICIDE => out.push(at_point("grenade_explode_default".into())),
@@ -600,7 +604,7 @@ mod tests {
                     &weapons,
                     Vec3::from(cur.ps.eye()),
                 ) {
-                    cues.push((cur.server_time, e.entity, c.alias));
+                    cues.push((cur.server_time.raw(), e.entity, c.alias));
                 }
                 events.push((e.entity, ev::event_name(e.event).unwrap_or("?")));
             }
@@ -634,7 +638,7 @@ mod tests {
     fn bullet_hits_play_their_rows_aliases() {
         let snap = vcod_cod2::net::SnapshotView {
             message_num: 1,
-            server_time: 100,
+            server_time: Msec::from_raw(100),
             snap_flags: 0,
             ps: vcod_cod2::net::PlayerView::new(&Default::default(), 0),
             entities: Vec::new(),
@@ -706,7 +710,7 @@ mod tests {
             weapon,
             surf,
             other_entity: 1,
-            time: cur.server_time,
+            time: cur.server_time.raw(),
             scale: 0,
             angles2: [0.0; 2],
             pos: Vec3::ZERO,
@@ -774,7 +778,7 @@ mod tests {
     fn snap_of(ents: &[EntityState2], t: i32) -> SnapshotView {
         SnapshotView {
             message_num: t,
-            server_time: t,
+            server_time: Msec::from_raw(t),
             snap_flags: 0,
             ps: vcod_cod2::net::PlayerView::new(&Default::default(), 0),
             entities: ents.iter().map(vcod_cod2::net::EntityView::new).collect(),

@@ -145,7 +145,7 @@ fn run_ours() -> Option<Ours> {
     let mut snaps = BTreeMap::new();
     let mut next_cmd = 0;
     loop {
-        let newest = cl.snapshots().newest().map(|s| s.server_time);
+        let newest = cl.snapshots().newest().map(|s| s.server_time.raw());
         let t = newest.map_or(0, |t| t + FRAME_MS as i32);
         if t > last {
             break;
@@ -192,12 +192,12 @@ fn run_ours() -> Option<Ours> {
         }
         assert!(sv.script_aborts().is_empty(), "{:?}", sv.script_aborts());
         if let Some(s) = cl.snapshots().newest()
-            && s.server_time >= placed
+            && s.server_time.raw() >= placed
         {
             let f = |n: &str| s.ps.field_i32(p, n);
             let g = |n: &str| s.ps.field_f32(p, n);
             snaps.insert(
-                s.server_time,
+                s.server_time.raw(),
                 Snap {
                     shock: [
                         f("shellshockIndex"),

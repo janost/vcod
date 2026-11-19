@@ -270,9 +270,9 @@ fn run(c: Conditions, weapon: &str) -> Option<Outcome> {
         }
         let snap = net.snapshots().newest().unwrap().clone();
         let realtime = local as i32;
-        clock.update(realtime, snap.server_time, snap.message_num, 0);
+        clock.update(realtime, snap.server_time.raw(), snap.message_num, 0);
         let kick = recoil.view_kick();
-        for t in cmd_clock.due(clock.cmd_time(snap.server_time)) {
+        for t in cmd_clock.due(clock.cmd_time(snap.server_time.raw())) {
             ring.push(UserCmd {
                 server_time: t,
                 buttons: if uo {
@@ -298,7 +298,7 @@ fn run(c: Conditions, weapon: &str) -> Option<Outcome> {
             let bodies = solid_bodies(p, &snap.entities, client_num as u32, &HashMap::new());
             let movers = (
                 SnapshotMovers::from_entities(p, &snap.entities),
-                snap.server_time,
+                snap.server_time.raw(),
             );
             predictor.predict(
                 p, &snap.ps, &ring, &world, &bodies, &movers, &weapons, local,
@@ -406,7 +406,7 @@ fn switch_run(weapon: &str, give: &[&str], binds: &[super::input::Action]) -> Op
             now += Duration::from_millis(50);
             let s = net.snapshots().newest().unwrap();
             let spawn = (s.ps.field_i32(p, "clientNum"), s.ps.arrays.stats[5]);
-            name.step(spawn, s.server_time);
+            name.step(spawn, s.server_time.raw());
             let cmd = input.build(0, &Held::from_ps(&s.ps, p, &weapons));
             net.send_frame(&cmd);
             common::step(sv, &q, net, now);

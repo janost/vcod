@@ -318,6 +318,7 @@ impl Default for EventTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::Msec;
     use crate::net::flags::ET_PLAYER;
     use crate::net::msg::{EntityState, PlayerState};
     use crate::net::protocol::PROTOCOL_V1;
@@ -335,7 +336,7 @@ mod tests {
 
     fn snap(p: &Cod1Wire, msg: u32, time: i32, ents: Vec<EntityState>) -> Snapshot {
         Snapshot {
-            server_time: time,
+            server_time: Msec::from_raw(time),
             message_num: msg,
             delta_num: -1,
             snap_flags: 0,

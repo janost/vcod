@@ -58,7 +58,7 @@ fn shell_events<'a>(
     for s in frames {
         for ev in tracker.drain(s, p) {
             if shells.contains(&ev.entity_num) {
-                out.push((s.server_time, ev));
+                out.push((s.server_time.raw(), ev));
             }
         }
     }
@@ -118,9 +118,9 @@ fn ours() -> Option<(Vec<String>, Vec<vcod_common::net::snapshot::Snapshot>)> {
             }
         }
         if let Some(s) = cl.snapshots().newest()
-            && s.server_time != seen_time
+            && s.server_time.raw() != seen_time
         {
-            seen_time = s.server_time;
+            seen_time = s.server_time.raw();
             snaps.push(s.clone());
         }
         if placed_at.is_none() && sv.script_log().iter().any(|l| l.contains("PROBE place")) {

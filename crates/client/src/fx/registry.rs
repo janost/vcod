@@ -2722,20 +2722,24 @@ mod uo_capture_gates {
                     "event {:#x}",
                     ev.event
                 );
-                on_tag.extend(paths(rs).into_iter().map(|path| (s.server_time, path)));
+                on_tag.extend(
+                    paths(rs)
+                        .into_iter()
+                        .map(|path| (s.server_time.raw(), path)),
+                );
                 if ev.event == EV_EARTHQUAKE {
                     let q = quake::from_event(p, &ev, s.entities.get(&ev.entity_num), Vec3::ZERO)
                         .unwrap();
-                    quakes.push((s.server_time, q.scale, q.duration_ms, q.radius));
+                    quakes.push((s.server_time.raw(), q.scale, q.duration_ms, q.radius));
                 }
             }
-            for play in looped.frame(s, p, s.server_time, Vec3::ZERO, &cs) {
-                burns.push((s.server_time, play.path));
+            for play in looped.frame(s, p, s.server_time.raw(), Vec3::ZERO, &cs) {
+                burns.push((s.server_time.raw(), play.path));
             }
             if let Some(e) = s.entities.get(&186) {
                 assert_eq!(e.field_i32(p, "eType"), ET_VEHICLE_V22);
                 assert_eq!(e.field_i32(p, "xmodel"), 38, "no death model");
-                last_seen = s.server_time;
+                last_seen = s.server_time.raw();
             }
         }
         let dir = "fx/explosions/vehicles/t34_mp_n";

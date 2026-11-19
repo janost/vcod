@@ -26,6 +26,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
+use vcod_common::net::Msec;
 
 use vcod_cod4::install::Install;
 use vcod_cod4::net::clmsg::{self, ClOp, UserCmd};
@@ -1512,7 +1513,7 @@ impl Cod4Server {
             // culls none by position (cod4-pmove.md 15).
             let viewer = ps.get("clientNum").unwrap_or(slot as u32);
             let to = Frame4 {
-                server_time: svs,
+                server_time: Msec::from_raw(svs),
                 map_center,
                 ps,
                 entities: world

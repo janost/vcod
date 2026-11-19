@@ -11,6 +11,7 @@
 //! install; without one it returns early.
 
 use crate::common;
+use vcod_common::net::Msec;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -88,7 +89,7 @@ fn retail(tag: &str) -> Vec<Seen> {
         dump_ents("retail", &f.snapshot, p);
         for ev in tracker.drain(&f.snapshot, p) {
             out.push(Seen {
-                t: f.snapshot.server_time,
+                t: f.snapshot.server_time.raw(),
                 ev,
             });
         }
@@ -162,7 +163,7 @@ fn ours(pitch: f32, secs: i64) -> Vec<Seen> {
                 None => v,
             };
             let cmd = UserCmd {
-                server_time: s.server_time.max(last_sent + 1),
+                server_time: s.server_time.max(Msec::from_raw(last_sent + 1)).raw(),
                 angles: std::array::from_fn(|k| (deg_to_short(want[k]) - da[k]) & 0xffff),
                 buttons,
                 weapon: s.ps.field_i32(p, "weapon") as u8,
@@ -191,7 +192,7 @@ fn ours(pitch: f32, secs: i64) -> Vec<Seen> {
             dump_ents("ours", s, p);
             for ev in tracker.drain(s, p) {
                 out.push(Seen {
-                    t: s.server_time,
+                    t: s.server_time.raw(),
                     ev,
                 });
             }

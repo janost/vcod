@@ -86,6 +86,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 use vcod_common::asset_source::{AssetSource, RawFile};
+use vcod_common::net::Msec;
 use vcod_common::text::atoi_msvc;
 use winit::application::ApplicationHandler;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseScrollDelta, WindowEvent};
@@ -6477,7 +6478,7 @@ impl ApplicationHandler for App {
                             let nudge = self.shell.cvar_f32("cl_timeNudge") as i32;
                             live.clock.update_demo(
                                 local_ms as i32,
-                                s.server_time,
+                                s.server_time.raw(),
                                 nudge,
                                 demo_clock,
                             );
@@ -6495,11 +6496,11 @@ impl ApplicationHandler for App {
                                     let nudge = self.shell.cvar_f32("cl_timeNudge") as i32;
                                     live.clock.update(
                                         realtime,
-                                        s.server_time,
+                                        s.server_time.raw(),
                                         s.message_num,
                                         nudge,
                                     );
-                                    live.clock.cmd_time(s.server_time)
+                                    live.clock.cmd_time(s.server_time.raw())
                                 }
                                 _ => net.server_clock_ms(),
                             };
@@ -6840,7 +6841,8 @@ impl ApplicationHandler for App {
                                         }
                                         let oa = Vec3::from(a.ps.origin(p));
                                         let ob = Vec3::from(b.ps.origin(p));
-                                        let f = ((render_time - a.server_time) as f32
+                                        let f = ((Msec::from_raw(render_time) - a.server_time)
+                                            as f32
                                             / (b.server_time - a.server_time).max(1) as f32)
                                             .clamp(0.0, 1.0);
                                         let t0 = Instant::now();
@@ -6901,7 +6903,8 @@ impl ApplicationHandler for App {
                                             render_time,
                                             net.snapshots()
                                                 .newest()
-                                                .map_or(b.server_time, |s| s.server_time),
+                                                .map_or(b.server_time, |s| s.server_time)
+                                                .raw(),
                                             if seat_body { -1 } else { skip_num },
                                             net.configstrings(),
                                             &self.fs,
@@ -6996,7 +6999,7 @@ impl ApplicationHandler for App {
                                                     p,
                                                     &s.entities,
                                                 ),
-                                                s.server_time,
+                                                s.server_time.raw(),
                                             );
                                             predictor.predict(
                                                 p, &s.ps, ring, world, &bodies, &movers, weapons,
@@ -7074,7 +7077,7 @@ impl ApplicationHandler for App {
                                             p,
                                             &fed.ps,
                                             render_time.unwrap_or(0),
-                                            cg_snap.server_time,
+                                            cg_snap.server_time.raw(),
                                         );
                                     }
                                     // Retail runs a snapshot's events in
@@ -7684,7 +7687,7 @@ impl ApplicationHandler for App {
                                         server_time: render_time.unwrap_or(0),
                                         snap_time: render_time
                                             .and_then(|t| net.snapshots().two_for_time(t))
-                                            .map_or(0, |(a, _)| a.server_time),
+                                            .map_or(0, |(a, _)| a.server_time.raw()),
                                         fs: &self.fs,
                                         ps: newest.map(|s| &s.ps),
                                         entities: newest.map_or(&no_entities, |s| &s.entities),
@@ -7769,7 +7772,7 @@ impl ApplicationHandler for App {
                                             p,
                                             &newest.entities,
                                         );
-                                        movers.place(world, newest.server_time);
+                                        movers.place(world, newest.server_time.raw());
                                         let round_trace = |s: Vec3, e: Vec3, skip: u32| {
                                             let w = MoveWorld::new(world, &bodies, skip);
                                             let t = w.box_trace(
@@ -8088,7 +8091,7 @@ impl ApplicationHandler for App {
                                     if let Some(t) = render_time
                                         && let Some((a, b)) = net.snapshots().two_for_time(t)
                                     {
-                                        let f = ((t - a.server_time) as f32
+                                        let f = ((Msec::from_raw(t) - a.server_time) as f32
                                             / (b.server_time - a.server_time).max(1) as f32)
                                             .clamp(0.0, 1.0);
                                         // A blend restarts when its voice ran out,

@@ -1,6 +1,7 @@
 //! The world frame, snapshot build and send, and the archive.
 
 use super::*;
+use vcod_common::net::Msec;
 
 /// [`Server::fog_cull`] off the fields, for a caller holding the script.
 pub(super) fn fog_cull_of(p: &Cod1Wire, configstrings: &[String]) -> Option<f32> {
@@ -549,7 +550,7 @@ impl Server {
                 ps.arrays.hud_current.clear();
             }
             let frame = snapshot::Snapshot {
-                server_time: self.core.sv_time_ms,
+                server_time: Msec::from_raw(self.core.sv_time_ms),
                 message_num,
                 delta_num: -1,
                 snap_flags: self.game.snap_flag_server_bit | u32::from(c.link.rate_delayed),

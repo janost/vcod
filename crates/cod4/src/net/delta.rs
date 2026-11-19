@@ -8,6 +8,7 @@
 
 use super::fields;
 use anyhow::{Result, bail, ensure};
+use vcod_common::net::Msec;
 use vcod_common::net::codec::{MsgReader, MsgWriter};
 
 /// One netfield row: `{name, offset, bits, changeHints}`.
@@ -81,7 +82,7 @@ pub const fn word_at(table: &[Field], base: &str, k: usize) -> usize {
 /// `-97` delta times) and `CS_MAPCENTER` (the `-92..-90` origins).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Ctx {
-    pub time: i32,
+    pub time: Msec,
     pub map_center: [f32; 3],
 }
 
@@ -307,7 +308,7 @@ impl Code {
                 if bit(r) {
                     r.read_long() as u32
                 } else {
-                    ctx.time.wrapping_sub(bits(r, 8) as i32) as u32
+                    (ctx.time - bits(r, 8) as i32).raw() as u32
                 }
             }
             Code::Ground => {
@@ -383,7 +384,7 @@ impl Code {
             }
             Code::Time => {
                 // Up to 255 ms before the snapshot (0x813e789).
-                let ago = ctx.time.wrapping_sub(to as i32);
+                let ago = ctx.time.since(Msec::from_raw(to as i32));
                 if (0..256).contains(&ago) {
                     put_bit(w, false);
                     put_bits(w, ago as u32, 8);
@@ -1372,7 +1373,7 @@ mod tests {
     #[test]
     fn an_unchanged_delta_keeps_its_own_number() {
         let ctx = Ctx {
-            time: 0,
+            time: Msec::ZERO,
             map_center: [0.0; 3],
         };
         let mut w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
@@ -1410,6 +1411,30 @@ mod tests {
         v.to_bits()
     }
 
+    /// The `-97` time code at either end of `int`: a word up to 255 ms
+    /// before the snapshot rides one byte across the wrap, and one the
+    /// wrapped difference puts after it goes out whole.
+    #[test]
+    fn the_time_code_wraps_at_the_ends_of_int() {
+        let field = Field::new("pin", 0, -97, 0);
+        for (now, to, bytes) in [
+            (Msec::MIN + 5, (i32::MAX - 4) as u32, 2),
+            (Msec::MAX, i32::MIN as u32, 5),
+            (Msec::MIN, i32::MAX as u32, 2),
+        ] {
+            let ctx = Ctx {
+                time: now,
+                map_center: [0.0; 3],
+            };
+            let mut w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
+            write_field(&mut w, &ctx, 0, to, &field, Change::Sent);
+            let plain = w.into_ops();
+            let mut r = MsgReader::from_plain(plain.clone());
+            assert_eq!(read_field(&mut r, &ctx, 0, &field), (to, Change::Sent));
+            assert_eq!(plain.len(), bytes, "{now} -> {to:#x}");
+        }
+    }
+
     /// One case per field code form: the plain bits `write_field` puts
     /// out and the word `read_field` takes back from them. Pinned before
     /// the codec's rewrite; the capture re-encodes in `net_decode` check
@@ -1417,7 +1442,7 @@ mod tests {
     #[test]
     fn every_field_form_writes_and_reads_as_pinned() {
         let ctx = Ctx {
-            time: 50_000,
+            time: Msec::from_raw(50_000),
             map_center: [429.0, 126.5, 137.0],
         };
         let toggle_from = u32::from_le_bytes([10, 20, 30, 0xff]);

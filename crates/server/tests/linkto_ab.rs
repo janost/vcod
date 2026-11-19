@@ -219,7 +219,7 @@ fn run_ours_patched(
                 if let Some(e) = s.entities.get(&n) {
                     let p = &PROTOCOL_V1;
                     wire.entry(n).or_default().insert(
-                        s.server_time,
+                        s.server_time.raw(),
                         (
                             Trajectory::read(e, p, "pos"),
                             Trajectory::read(e, p, "apos"),

@@ -422,7 +422,9 @@ impl LadderProbe {
                 );
             }
         }
-        if self.weapsel && self.traced.replace(snap.server_time) != Some(snap.server_time) {
+        if self.weapsel
+            && self.traced.replace(snap.server_time.raw()) != Some(snap.server_time.raw())
+        {
             let list = |name: &str, map: fn(i32) -> i32| {
                 (0..4)
                     .map(|k| map(i(&format!("{name}[{k}]"))).to_string())

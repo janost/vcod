@@ -238,7 +238,7 @@ fn ours_trims_and_ends_the_killcam_as_retail_does() {
             && shooter_view.is_none()
             && s.ps.field_i32(p, "pm_flags") & 0x40000 != 0
         {
-            shooter_view = Some(s.server_time);
+            shooter_view = Some(s.server_time.raw());
         }
         if ja.settled(now) && jb.settled(now) {
             break;
@@ -295,10 +295,10 @@ fn ours_trims_and_ends_the_killcam_as_retail_does() {
         cb.send_frame(&crate::common::echo_weapon(&cb, &facing_a));
         common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
         let sa = ca.snapshots().newest().unwrap();
-        trail.insert(sa.server_time, sa.ps.origin(p));
+        trail.insert(sa.server_time.raw(), sa.ps.origin(p));
         let sb = cb.snapshots().newest().unwrap().clone();
         if kill.is_none() && sb.ps.field_i32(p, "pm_type") == PM_DEAD {
-            kill = Some(sb.server_time);
+            kill = Some(sb.server_time.raw());
         }
         if sb.ps.field_i32(p, "pm_flags") & 0x10000 != 0 {
             replay.push(sb);
@@ -315,8 +315,8 @@ fn ours_trims_and_ends_the_killcam_as_retail_does() {
     let last = replay.last().unwrap();
     let ours = Killcam {
         kill,
-        start: first.server_time,
-        end: spawn.server_time,
+        start: first.server_time.raw(),
+        end: spawn.server_time.raw(),
         age: first.ps.field_i32(p, "deltaTime"),
     };
     let (theirs, _, _) = retail();
@@ -332,7 +332,7 @@ fn ours_trims_and_ends_the_killcam_as_retail_does() {
     for s in &replay {
         assert_eq!(s.ps.field_i32(p, "clientNum"), na as i32);
         assert_eq!(s.ps.field_i32(p, "deltaTime"), ours.age);
-        if let Some(then) = trail.get(&(s.server_time - ours.age)) {
+        if let Some(then) = trail.get(&(s.server_time.raw() - ours.age)) {
             assert_eq!(s.ps.origin(p), *then);
         }
     }
@@ -342,7 +342,10 @@ fn ours_trims_and_ends_the_killcam_as_retail_does() {
     assert_eq!(spawn.ps.field_i32(p, "pm_flags"), 0x40800);
     // The spawn's own think ran its 100 ms of dead pmove up to the frame's
     // clock: the eye has dropped 18 and `commandTime` is the frame's.
-    assert_eq!(spawn.ps.field_i32(p, "commandTime"), spawn.server_time);
+    assert_eq!(
+        spawn.ps.field_i32(p, "commandTime"),
+        spawn.server_time.raw()
+    );
     assert_eq!(spawn.ps.field_f32(p, "viewHeightCurrent"), 42.0);
     assert_eq!(spawn.ps.health(), 0);
     assert_eq!(spawn.ps.field_i32(p, "eventSequence"), 0);
@@ -356,5 +359,5 @@ fn ours_trims_and_ends_the_killcam_as_retail_does() {
 }
 
 fn sv_time(c: &NetClient<common::ClientEnd>) -> i32 {
-    c.snapshots().newest().map_or(0, |s| s.server_time)
+    c.snapshots().newest().map_or(0, |s| s.server_time.raw())
 }

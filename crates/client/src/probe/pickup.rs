@@ -325,7 +325,7 @@ impl PickupProbe {
             .filter(|e| e.field_i32(p, "index") == i32::from(index))
             .map(|e| {
                 let at: [f32; 3] = Trajectory::read(e, p, "pos")
-                    .evaluate_f32(snap.server_time)
+                    .evaluate_f32(snap.server_time.raw())
                     .into();
                 at
             })
@@ -374,7 +374,7 @@ eventParms={},{},{},{} origin={} viewangles={}",
                 continue;
             }
             let pos = Trajectory::read(e, p, "pos");
-            let at: [f32; 3] = pos.evaluate_f32(snap.server_time).into();
+            let at: [f32; 3] = pos.evaluate_f32(snap.server_time.raw()).into();
             if dist(at, origin) > PICKUP_ITEM_RADIUS {
                 continue;
             }
@@ -627,6 +627,7 @@ fn pickup_phase_blocks(out: &mut String, pk: &PickupProbe) {
 mod tests {
     use super::*;
     use crate::probe::tests::pickup_snap;
+    use vcod_common::net::Msec;
 
     /// The writer's old inline loop, kept as the reference [`pickup_phase_blocks`] must match.
     fn old_pickup_phase_blocks(pk: &PickupProbe) -> String {
@@ -738,7 +739,7 @@ mod tests {
                     v.to_bits() as i32;
             }
             net::snapshot::Snapshot {
-                server_time: 1000 + 50 * num as i32,
+                server_time: Msec::from_raw(1000 + 50 * num as i32),
                 message_num: num,
                 delta_num: -1,
                 snap_flags: 0,

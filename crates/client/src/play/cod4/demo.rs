@@ -131,7 +131,7 @@ impl DemoPlay {
             if self.client.snapshots.len() == had || snap.snap_flags & 2 != 0 {
                 return None;
             }
-            let t = snap.server_time;
+            let t = snap.server_time.raw();
             self.delta = Some(t - realtime);
             (self.old_time, self.time, self.base_time) = (t, t, t);
         }
@@ -147,7 +147,7 @@ impl DemoPlay {
             .client
             .snapshots
             .last()
-            .is_none_or(|s| self.time >= s.server_time)
+            .is_none_or(|s| self.time >= s.server_time.raw())
         {
             if !self.read() {
                 break;

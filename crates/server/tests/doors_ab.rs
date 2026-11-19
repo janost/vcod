@@ -246,6 +246,6 @@ fn retail_wire(p: &Cod1Wire, tag: &str) -> Vec<String> {
         p,
         frames
             .iter()
-            .map(|f| (f.snapshot.server_time, &f.snapshot.entities)),
+            .map(|f| (f.snapshot.server_time.raw(), &f.snapshot.entities)),
     )
 }

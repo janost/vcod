@@ -110,7 +110,7 @@ impl ProbeWatch {
                         "corpse {num} appeared clientNum {cn} modelindex {}",
                         mi_of(cn)
                     );
-                    (cn, s.server_time)
+                    (cn, s.server_time.raw())
                 });
                 // The trajectory decides whether a closed-form evaluation sinks
                 // the body: TR_GRAVITY with a frozen trTime drops z by
@@ -120,7 +120,7 @@ impl ProbeWatch {
                 // rewrites the ground entity to 1022 when the body lands
                 // (`docs/research/cod11-combat.md` 5.3).
                 let tr = net::trajectory::Trajectory::read(ent, p, "pos");
-                let eval = tr.evaluate_f32(s.server_time);
+                let eval = tr.evaluate_f32(s.server_time.raw());
                 println!(
                     "corpse {num} trType {} trTime {} (age {} ms) base z {:.0} delta {:?} eval z {:.0} eFlags {:#x} groundEntityNum {}",
                     tr.tr_type,

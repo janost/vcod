@@ -104,7 +104,7 @@ mod tests {
         let gs = vcod_common::testing::fixture_gamestate(p, "net/gamestate-uo.bin");
         let frames =
             vcod_common::testing::fixture_frames(p, "net/gamestate-uo.bin", "net/snapshots-uo.bin");
-        let now = frames[0].snapshot.server_time;
+        let now = frames[0].snapshot.server_time.raw();
         let start: i32 = gs.configstrings[14].parse().unwrap();
         let elapsed = (now - start) / 1000;
         let want = format!("{:02}:{:02}", elapsed / 60, elapsed % 60);

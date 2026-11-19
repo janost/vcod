@@ -1,6 +1,7 @@
 //! Playing a `.dm_1` and recording one (docs/research/cod2-demos.md).
 
 use super::*;
+use vcod_common::net::Msec;
 
 /// `demo` / `timedemo` on a CoD2 install (docs/research/cod2-demos.md):
 /// `CL_PlayDemo_f`'s `clc` fields (Mac 0x14c288) and `CL_SetCGameTime`'s
@@ -224,10 +225,10 @@ impl Cod2Session {
             }
             let d = self.demo.as_mut().expect("playing");
             d.active = true;
-            d.delta = time - real;
-            d.old_server_time = time;
-            d.server_time = time;
-            d.base = time;
+            d.delta = (time - real).raw();
+            d.old_server_time = time.raw();
+            d.server_time = time.raw();
+            d.base = time.raw();
         }
         let d = self.demo.as_mut().expect("playing");
         if !d.freeze {
@@ -246,7 +247,7 @@ impl Cod2Session {
             .client
             .parser
             .snapshot()
-            .is_some_and(|s| s.server_time <= until)
+            .is_some_and(|s| s.server_time <= Msec::from_raw(until))
         {
             if !self.read_demo_message() {
                 return;

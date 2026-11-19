@@ -207,7 +207,7 @@ fn a_recorded_demo_plays_back_the_frames_the_client_parsed() {
         let until = play
             .snapshots()
             .newest()
-            .map_or(i32::MIN, |s| s.server_time);
+            .map_or(i32::MIN, |s| s.server_time.raw());
         let events = play.pump_demo(now, Some(until));
         seen.take(&play, &events);
         if events.iter().any(|e| matches!(e, NetEvent::DemoEnded(_))) {

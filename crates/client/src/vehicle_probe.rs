@@ -763,6 +763,7 @@ fn deg_to_short(deg: f32) -> i32 {
 mod tests {
     use super::*;
     use std::time::Duration;
+    use vcod_common::net::Msec;
     use vcod_common::net::msg::{EntityState, PlayerState};
     use vcod_common::net::protocol::PROTOCOL_V22;
 
@@ -805,7 +806,7 @@ mod tests {
         set(&mut tank, "eType", vcod_common::net::flags::ET_VEHICLE_V22);
         set(&mut tank, "animMovetype", 6);
         let snap = Snapshot {
-            server_time: 0,
+            server_time: Msec::ZERO,
             message_num: 0,
             delta_num: -1,
             snap_flags: 0,

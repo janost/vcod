@@ -66,7 +66,7 @@ impl FollowProbe {
         let (snap, st, num, pm_type) = s.map_or((0, 0, -1, -1), |s| {
             (
                 s.message_num,
-                s.server_time,
+                s.server_time.raw(),
                 s.ps.field_i32(p, "clientNum"),
                 s.ps.field_i32(p, "pm_type"),
             )
@@ -234,7 +234,7 @@ impl FallProbe {
         }
         if let Some(s) = ring
             .newest()
-            .filter(|s| self.last_snap != Some(s.server_time))
+            .filter(|s| self.last_snap != Some(s.server_time.raw()))
         {
             // Every snapshot parsed since the last cmd, not only the newest:
             // two that land in one loop pass would hide a frame's `ct`.
@@ -246,7 +246,7 @@ impl FallProbe {
                 self.ran.push(format!("{}:{ct}", snap.server_time));
             }
             self.snaps.push(format!("{k}:{}", s.server_time));
-            self.last_snap = Some(s.server_time);
+            self.last_snap = Some(s.server_time.raw());
             self.last_msg = Some(s.message_num);
         }
         self.cmds.push((server_time, yaw));
@@ -580,7 +580,7 @@ pub(super) struct RideProbe {
 
 impl RideProbe {
     pub(super) fn observe(&mut self, snap: &net::snapshot::Snapshot) {
-        if self.last.replace(snap.server_time) == Some(snap.server_time) {
+        if self.last.replace(snap.server_time.raw()) == Some(snap.server_time.raw()) {
             return;
         }
         let p = wire();
@@ -870,6 +870,7 @@ fn killcam_hud_str(elems: &[net::msg::HudElem]) -> String {
 mod tests {
     use super::*;
     use crate::probe::tests::pickup_snap;
+    use vcod_common::net::Msec;
 
     /// A run's last partial block of cmds is printed too: 61 cmds make two
     /// `CMDS` lines (BUG-091).
@@ -894,7 +895,7 @@ mod tests {
         let mut ring = vcod_common::net::snapshot::SnapshotRing::default();
         let snap = |num, t: i32, ct| {
             let mut s = pickup_snap(num, &[("commandTime", ct)], &[]);
-            s.server_time = t;
+            s.server_time = Msec::from_raw(t);
             s
         };
         let mut fall = FallProbe::default();

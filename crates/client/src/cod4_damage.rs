@@ -7,6 +7,7 @@
 use crate::hud::HudQuad;
 use crate::hud::cod2elem::ScreenPlacement;
 use vcod_cod4::net::parse::Snapshot;
+use vcod_common::net::Msec;
 
 /// `hud_healthOverlay_pulseStart`: the health fraction under which the
 /// overlay throbs, and `regenPauseTime` in ms.
@@ -173,7 +174,10 @@ impl Cod4Damage {
     pub(crate) fn update(&mut self, snaps: &[Snapshot], now: i32, view: [f32; 2]) {
         self.view = view;
         let after = self.seen.map_or(i32::MIN, |s| s.server_time);
-        for snap in snaps.iter().filter(|s| s.server_time > after) {
+        for snap in snaps
+            .iter()
+            .filter(|s| s.server_time > Msec::from_raw(after))
+        {
             self.take(snap);
         }
         if let Some(newest) = snaps.last() {
@@ -192,7 +196,7 @@ impl Cod4Damage {
         let ps = &snap.ps;
         let word = |n: &str| ps.get(n).unwrap_or(0);
         let seen = Seen {
-            server_time: snap.server_time,
+            server_time: snap.server_time.raw(),
             spawn: (word("clientNum"), ps.stats[4]),
             damage_event: word("damageEvent"),
         };
@@ -208,9 +212,9 @@ impl Cod4Damage {
         }
         let (yaw, pitch) = (word("damageYaw"), word("damagePitch"));
         self.kick
-            .feedback(count, yaw, pitch, self.view, snap.server_time);
+            .feedback(count, yaw, pitch, self.view, snap.server_time.raw());
         if (yaw, pitch) != NO_DIRECTION {
-            self.mark(snap.server_time, yaw);
+            self.mark(snap.server_time.raw(), yaw);
         }
     }
 
@@ -380,7 +384,7 @@ mod tests {
         ps.stats[4] = spawn;
         Snapshot {
             message_num: 0,
-            server_time: time,
+            server_time: Msec::from_raw(time),
             delta_num: 0,
             base: None,
             snap_flags: 0,

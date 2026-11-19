@@ -61,7 +61,7 @@ fn run(sv: &mut Cod2Server, cl: &mut Client, fs: Option<&Pk3Fs>, secs: u32) -> S
     let mut now = Instant::now();
     for _ in 0..secs * 20 {
         let pkt = if cl.parser.gamestate.is_some() {
-            let base = cl.parser.snapshot().map_or(0, |s| s.server_time);
+            let base = cl.parser.snapshot().map_or(0, |s| s.server_time.raw());
             let mut cmd: UserCmd2 = cl.idle_cmd(base + FRAME_MS);
             cmd.forward_move = 127;
             cl.build_packet(&[cmd]).unwrap()
@@ -151,7 +151,7 @@ fn a_cod2_spectator_joins_a_bare_server_and_takes_delta_snapshots() {
     assert_eq!(snap.clients.len(), 1);
     assert_eq!(snap.clients[0].name(), "vcodspec");
     // No world: the cmds advance the clock and nothing else.
-    assert_eq!(snap.ps.i32("commandTime"), snap.server_time);
+    assert_eq!(snap.ps.i32("commandTime"), snap.server_time.raw());
 
     let Reply::Status { info, players } = ask(&mut sv, &oob::getstatus("s"), now) else {
         panic!("no statusResponse");
@@ -196,7 +196,7 @@ fn move_packet(cl: &mut Client, sv: &Cod2Server, message_ack: i32, reliable_ack:
     let key = (sv.core.checksum_feed ^ message_ack ^ com_hash_key_bytes(&server_cmd, 32)) as u32;
     let snap = cl.parser.snapshot().unwrap();
     let from = default_usercmd(&snap.ps);
-    let cmd = cl.idle_cmd(snap.server_time + FRAME_MS);
+    let cmd = cl.idle_cmd((snap.server_time + FRAME_MS).raw());
     let mut w = MsgWriter::new(&huff);
     w.write_bits(Clc::Move as i32, CLC_BITS);
     w.write_byte(1);
@@ -665,7 +665,7 @@ fn two_cod2_players_join_spawn_and_see_each_other_on_mp_toujane() {
         }
         for p in players.iter_mut() {
             let pkt = if p.cl.parser.gamestate.is_some() {
-                let base = p.cl.parser.snapshot().map_or(0, |s| s.server_time);
+                let base = p.cl.parser.snapshot().map_or(0, |s| s.server_time.raw());
                 let mut cmd: UserCmd2 = p.cl.idle_cmd(base + FRAME_MS);
                 // Ten seconds to join, then run, turning slowly.
                 if frame > 200 {
@@ -1215,7 +1215,7 @@ fn a_cod2_attachments_tag_reaches_the_client_before_its_snapshot() {
     let mut carried = 0;
     for _ in 0..6 * 20 {
         let pkt = if cl.parser.gamestate.is_some() {
-            let base = cl.parser.snapshot().map_or(0, |s| s.server_time);
+            let base = cl.parser.snapshot().map_or(0, |s| s.server_time.raw());
             cl.build_packet(&[cl.idle_cmd(base + FRAME_MS)]).unwrap()
         } else {
             cl.build_packet(&[]).unwrap()

@@ -16,6 +16,8 @@ pub mod http;
 pub mod huffman;
 pub mod lan;
 pub mod master;
+pub mod msec;
+pub use msec::Msec;
 pub mod msg;
 pub mod netchan;
 pub mod netsim;
@@ -335,7 +337,7 @@ pub struct NetClient<T: Transport> {
     commands_taken: Option<i32>,
 
     /// Server clock estimate and the pump time it was taken.
-    server_time: i32,
+    server_time: Msec,
     server_time_at: Instant,
 
     /// The last usercmd put on the wire; the delta base for the next move
@@ -524,7 +526,7 @@ impl<T: Transport> NetClient<T> {
             client_num: 0,
             command_sequence: 0,
             commands_taken: None,
-            server_time: 0,
+            server_time: Msec::ZERO,
             server_time_at: now,
             last_sent_cmd: NULL_USERCMD,
             now,
@@ -571,7 +573,10 @@ impl<T: Transport> NetClient<T> {
             let want = match (&self.gamestate, until) {
                 (None, _) => true,
                 (Some(_), None) => false,
-                (Some(_), Some(t)) => self.snapshots.newest().is_none_or(|s| s.server_time <= t),
+                (Some(_), Some(t)) => self
+                    .snapshots
+                    .newest()
+                    .is_none_or(|s| s.server_time <= Msec::from_raw(t)),
             };
             if !want {
                 break;
@@ -1399,7 +1404,7 @@ impl<T: Transport> NetClient<T> {
             cap.triples.extend_from_slice(msg);
             cap.count += 1;
             if let Some(s) = self.snapshots.newest() {
-                cap.times.push(s.server_time);
+                cap.times.push(s.server_time.raw());
             }
         }
     }
@@ -1966,7 +1971,7 @@ impl<T: Transport> NetClient<T> {
     /// by wall-clock elapsed since it arrived.
     pub fn server_clock_ms(&self) -> i32 {
         let elapsed = self.now.duration_since(self.server_time_at).as_millis() as i32;
-        self.server_time.wrapping_add(elapsed)
+        (self.server_time + elapsed).raw()
     }
 }
 
@@ -3881,11 +3886,14 @@ mod tests {
             let mut got = Vec::new();
             let mut ended = false;
             while !ended {
-                let until = c.snapshots().newest().map_or(i32::MIN, |s| s.server_time);
+                let until = c
+                    .snapshots()
+                    .newest()
+                    .map_or(i32::MIN, |s| s.server_time.raw());
                 let evs = c.pump_demo(now, Some(until));
                 ended = evs.contains(&NetEvent::DemoEnded(demo::DemoEnd::Completed));
                 if let Some(s) = c.snapshots().newest()
-                    && s.server_time > until
+                    && s.server_time.raw() > until
                 {
                     got.push(format!("{s:?}"));
                 }
@@ -4081,10 +4089,13 @@ mod tests {
             assert!(d.pump_demo(now, None).contains(&NetEvent::GamestateReady));
             let mut got = Vec::new();
             loop {
-                let until = d.snapshots().newest().map_or(i32::MIN, |s| s.server_time);
+                let until = d
+                    .snapshots()
+                    .newest()
+                    .map_or(i32::MIN, |s| s.server_time.raw());
                 let evs = d.pump_demo(now, Some(until));
                 if let Some(s) = d.snapshots().newest()
-                    && s.server_time > until
+                    && s.server_time.raw() > until
                 {
                     got.push(format!("{s:?}"));
                 }
@@ -4150,10 +4161,13 @@ mod tests {
         assert!(c.pump_demo(now, None).contains(&NetEvent::GamestateReady));
         let mut times = Vec::new();
         loop {
-            let until = c.snapshots().newest().map_or(i32::MIN, |s| s.server_time);
+            let until = c
+                .snapshots()
+                .newest()
+                .map_or(i32::MIN, |s| s.server_time.raw());
             let evs = c.pump_demo(now, Some(until));
             if let Some(s) = c.snapshots().newest()
-                && s.server_time > until
+                && s.server_time.raw() > until
             {
                 times.push(s.server_time);
             }

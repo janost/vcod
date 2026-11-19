@@ -2,6 +2,7 @@
 //! the game type's strings, key bindings, and the action slots.
 
 use std::collections::HashMap;
+use vcod_common::net::Msec;
 
 use vcod_cod4::hud as h;
 use vcod_cod4::net::parse::Snapshot;
@@ -44,7 +45,7 @@ impl Cod4Hud {
         // The time left: configstring 11, `setGameEndTime`'s
         // level time (`CG_ParseGameEndTime`), against the snapshot's.
         let end = h::atoi(&self.configstring(s, CS_GAME_END_TIME));
-        g.time_left = Some((end - snap.server_time) / 1000);
+        g.time_left = Some((Msec::from_raw(end) - snap.server_time) / 1000);
         g.scoreboard = self.scoreboard_fade(snap, now).is_some();
         g.killcam = in_killcam(snap);
         g.dead = u("pm_type") >= PM_DEAD;

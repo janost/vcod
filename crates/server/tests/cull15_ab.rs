@@ -15,6 +15,7 @@
 //! sides. Needs `COD_DIR` at a 1.5 install; on any other it returns early.
 
 use crate::common;
+use vcod_common::net::Msec;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -104,9 +105,9 @@ fn ours(fs: vcod_common::pk3::Pk3Fs) -> Run {
         cl.send_frame(&NULL_USERCMD);
         common::step(&mut sv, &q, &mut cl, now);
         if let Some(s) = cl.snapshots().newest()
-            && s.server_time != seen
+            && s.server_time != Msec::from_raw(seen)
         {
-            seen = s.server_time;
+            seen = s.server_time.raw();
             let ents: Ents = s
                 .entities
                 .iter()
@@ -115,7 +116,7 @@ fn ours(fs: vcod_common::pk3::Pk3Fs) -> Run {
                 .map(|(n, t)| format!("{n}:{t}"))
                 .collect();
             if snaps.last().is_none_or(|(_, e)| *e != ents) {
-                snaps.push((s.server_time, ents));
+                snaps.push((s.server_time.raw(), ents));
             }
         }
         if sv

@@ -10,6 +10,7 @@ use vcod_cod4::net::events::event_name;
 use vcod_cod4::net::parse::{Gamestate, Snapshot};
 use vcod_cod4::pmove::weapon::WeaponDefs;
 use vcod_cod4::pmove::{self as pm, Cmd, WeaponMove};
+use vcod_common::net::Msec;
 
 use super::events::{Fired, force_stance, source_client};
 use super::{
@@ -152,18 +153,18 @@ impl Cod4Session {
         let at = c
             .snapshots
             .iter()
-            .rposition(|s| s.server_time <= time)
+            .rposition(|s| s.server_time <= Msec::from_raw(time))
             .unwrap_or(0);
         let old = &c.snapshots[at];
         let new = c.snapshots[at + 1..]
             .iter()
             .find(|s| s.server_time > old.server_time)
             .unwrap_or(old);
-        let time = time.max(old.server_time);
+        let time = time.max(old.server_time.raw());
         // `CG_SetFrameInterpolation`.
         let frac = match new.server_time - old.server_time {
             0 => 0.0,
-            span => ((time - old.server_time) as f32 / span as f32).max(0.0),
+            span => ((Msec::from_raw(time) - old.server_time) as f32 / span as f32).max(0.0),
         };
         // A respawn, a teleport or another client's view starts over:
         // `CG_SetNextSnap` copies the new playerstate over the old.
@@ -408,7 +409,7 @@ impl Cod4Session {
                     ps_u(&new.ps, "clientNum"),
                     new.ps.stats[4],
                 );
-                self.predictor.note_damage(&new.ps, new.server_time);
+                self.predictor.note_damage(&new.ps, new.server_time.raw());
                 Some(self.predictor.predict(
                     &new.ps,
                     cut,
@@ -678,7 +679,7 @@ impl Cod4Session {
             angles,
             entities,
             dynents,
-            server_time: new.server_time,
+            server_time: new.server_time.raw(),
             render_time,
             following: !own,
             view_reset: reset,

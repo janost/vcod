@@ -25,6 +25,7 @@ use vcod_cod4::net::conn::Conn;
 use vcod_cod4::net::delta::{ClientState, EntityState, PlayerState};
 use vcod_cod4::net::fields::CLIENT_STATE;
 use vcod_cod4::net::parse::{Client, Gamestate, Op, Snapshot};
+use vcod_common::net::Msec;
 
 use crate::cod4_fly::EntityAssets;
 use crate::play::clock::ServerClock;
@@ -468,7 +469,7 @@ impl Cod4Session {
         let snaps = &self.client().snapshots;
         let Some(snap) = snaps
             .iter()
-            .rposition(|s| s.server_time <= time)
+            .rposition(|s| s.server_time <= Msec::from_raw(time))
             .or((!snaps.is_empty()).then_some(0))
             .map(|i| &snaps[i])
         else {
@@ -807,7 +808,7 @@ impl Cod4Session {
             c.snapshots.last().map(|s| s.server_time),
         );
         if let Some(t) = newest {
-            self.slew_cmd_clock(t, n > self.cmd_snaps);
+            self.slew_cmd_clock(t.raw(), n > self.cmd_snaps);
         }
         self.cmd_snaps = n;
         // `CL_SetCGameTime` (iw3mp.exe 0x45c440): once a frame, the
@@ -818,11 +819,14 @@ impl Cod4Session {
             }
         } else if let Some(new) = self.client().snapshots.last() {
             let snaps = &self.client().snapshots;
-            let prev = snaps.len().checked_sub(2).map(|i| snaps[i].server_time);
+            let prev = snaps
+                .len()
+                .checked_sub(2)
+                .map(|i| snaps[i].server_time.raw());
             let n = self.client().total_snapshots() as u32;
             let t = self
                 .clock
-                .update_cod2(now_ms.floor() as i32, new.server_time, prev, n);
+                .update_cod2(now_ms.floor() as i32, new.server_time.raw(), prev, n);
             self.cg_time = Some(t);
         }
         let new = self.queue_commands();

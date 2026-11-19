@@ -80,7 +80,7 @@ fn check(fs: vcod_common::pk3::Pk3Fs, fixture: &str) {
         step(&mut sv, &q, &mut cl, now);
         let times = spawn_times(sv.script_log());
         if let Some(s) = cl.snapshots().newest()
-            && times.contains(&s.server_time)
+            && times.contains(&s.server_time.raw())
             && ours.last().is_none_or(|&(t, _)| t != s.server_time)
         {
             let f = |n: &str| f32::from_bits(s.ps.field_i32(cl.protocol(), n) as u32);
