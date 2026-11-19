@@ -3,6 +3,9 @@
 //! `cursorHint` and `cursorHintString` (docs/research/cod4-hud.md 20). A
 //! child of `cod4_hud`, whose loaded zones it draws with.
 
+use super::assets::Loaded;
+use super::env::HudEnv;
+use super::weapon_info::OwnerDraw;
 use super::*;
 use vcod_cod4::menuexp;
 

@@ -1744,7 +1744,7 @@ file).
   `x + w / 3` and `x + 2w / 3` (the third at `0x4002ff88`), limit 36, the
   row 10 lower each time, stopping once the row passes `y + h - 11`.
   VERIFIED. On the stock rect that is 35 rows, 105 names. INFERRED.
-- vcod draws the same lines (`frontend::gl_info_lines`) off its GPU:
+- vcod draws the same lines (`frontend::paint::gl_info_lines`) off its GPU:
   the driver's name as the vendor, its version string and the adapter's
   name as version and renderer, the surface format's and the depth
   format's bits, stencil 0, and the adapter's wgpu features as the
@@ -3147,7 +3147,7 @@ gametype's loop re-copies it. vcod has no retail connect screen and sends
 no `getmotd`, so it draws neither the Activision motd nor `cl_motdString`.
 Tests: `the_team_menu_shows_scr_motd_on_1_1` and
 `the_serverinfo_menu_shows_ui_motd_on_1_5_and_uo`
-(`crates/client/src/frontend/mod.rs`), on the retail captures.
+(`crates/client/src/frontend/stack.rs`), on the retail captures.
 
 ## 23. The CD key menu
 

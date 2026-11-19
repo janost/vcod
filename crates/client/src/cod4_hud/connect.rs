@@ -5,6 +5,8 @@
 //! once the gamestate names them, the stage line and a download's
 //! progress. A child of `cod4_hud`, whose fonts and strings it draws with.
 
+use super::assets::Loaded;
+use super::text::glow_text;
 use super::*;
 use crate::cod4_loading::{Stage, Status};
 

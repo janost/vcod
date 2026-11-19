@@ -7,7 +7,7 @@ event plays. Code: `crates/cod4/src/fx.rs` (the element decode),
 looping elements, the createfx ambience and the client-side bullets),
 `crates/client/src/fx/cod4_trail.rs` (the trails);
 gates: `crates/cod4/tests/fx_census.rs` and the replay gate in
-`crates/client/src/play/cod4.rs`.
+`crates/client/src/play/cod4/tests/`.
 
 ## Sources
 
@@ -323,11 +323,11 @@ does the same, so the explode plays.
   arm, `CG_EjectWeaponBrass`). Each of the kill-shooter
   capture's own shots flashes 10 to 40 units ahead of the eye pointing
   down the view and ejects once. VERIFIED (the gate
-  `play::cod4::tests::shooter_draws_its_view_weapon_and_flashes_on_its_tag`).
+  `play::cod4::tests::capture_view::shooter_draws_its_view_weapon_and_flashes_on_its_tag`).
 - The spectator capture's 18 M16 shots each flash about 37 units ahead of
   the walker's origin and 50 up, pointing along its yaw, and eject 18
   shells. VERIFIED (the gate
-  `play::cod4::tests::spectator_capture_flashes_on_the_weapon_tags`).
+  `play::cod4::tests::capture::spectator_capture_flashes_on_the_weapon_tags`).
 - A flash or eject rides its tag while it plays: `cod4_fx` keys it in
   the fx system's `TagBolt` by the entity and a slot (`cod4_fx::slot`,
   the view's on the drawn client), `Cod4Effects::set_tags` hands the
@@ -341,7 +341,7 @@ does the same, so the explode plays.
   (`common_mp`). Each of the spectator capture's flashes rides the
   walker's `tag_flash`, 36 frames in all, the nearest sprite within 2
   units of the tag's pose in each. VERIFIED (the gate
-  `play::cod4::tests::spectator_capture_flashes_follow_the_tag`).
+  `play::cod4::tests::capture::spectator_capture_flashes_follow_the_tag`).
 
 ## 11. The map's createfx ambience and the effect entities
 
@@ -430,7 +430,7 @@ does the same, so the explode plays.
   shots strike at about 660 units, 15 on plaster and 3 on dirt
   (`impacts/large_plaster_1`, `bullet_large_plaster`); the kill target
   hears two of the shooter's rounds go by. VERIFIED (the gate
-  `play::cod4::tests::client_side_bullets_strike_the_world`).
+  `play::cod4::tests::capture_bullets::client_side_bullets_strike_the_world`).
 - The tracer: `cg_tracerchance` 0.2, `cg_firstPersonTracerChance` 0.5,
   `cg_tracerwidth` 4, `cg_tracerSpeed` 7500, `cg_tracerlength` 160,
   `cg_tracerScale` 1, `cg_tracerScaleMinDist` 5000,
@@ -480,7 +480,7 @@ does the same, so the explode plays.
   30 own shots each place a mark (`mc/gfx_impact_concrete01..03`,
   `mc/gfx_impact_plaster01`) that lands on the map's mark world, its
   material in the map's material list, and 14 draw a tracer. VERIFIED
-  (the gate `play::cod4::tests::own_shots_strike_mark_and_trace`).
+  (the gate `play::cod4::tests::capture_bullets::own_shots_strike_mark_and_trace`).
 - The impact table's surface-0 (`default`) column is empty for every
   bullet row, so a round into `caulk` (mp_crash's edge,
   `surfaceFlags` 0x400a0) plays no effect, only `bullet_large_default`.
@@ -490,7 +490,7 @@ does the same, so the explode plays.
   back in the playerstate ring and each is traced from the drawn eye:
   six rounds into the rock 85 units ahead, six impact effects and
   sounds, three tracers. VERIFIED (the gate
-  `play::cod4::tests::cod4_live_own_shots_strike_the_world`).
+  `play::cod4::tests::live_rounds::cod4_live_own_shots_strike_the_world`).
 - The own shots fire off the prediction (cod4-client-view.md 5.4): the
   frame `+attack` goes down the predicted weapon half raises
   `EV_FIRE_WEAPON` and its flash, fire sound, view clip, tracer roll and
@@ -501,7 +501,7 @@ does the same, so the explode plays.
   the server's ring carried it 1 to 3 frames (17 to 54 ms) later; six
   fire events, six in the server's ring, six flashes, six impacts.
   VERIFIED (the gate
-  `play::cod4::tests::cod4_live_own_shots_fire_the_frame_they_press`).
+  `play::cod4::tests::live_rounds::cod4_live_own_shots_fire_the_frame_they_press`).
   Off a real link the gap is the round trip plus up to a snapshot.
 - The spread, the bodies in the way and a shotgun's pellets are 12.2,
   the turrets' rounds, the tracer rolls and the own shots' third-person
@@ -674,7 +674,7 @@ does the same, so the explode plays.
   degrees off by the recoil. The server's `EV_BULLET_HIT` flesh events land
   within 24 units of where our rounds stopped and play the flesh hit.
   VERIFIED (the gate
-  `play::cod4::tests::cod4_live_rounds_stop_on_the_bot_where_the_server_bleeds`).
+  `play::cod4::tests::live_rounds::cod4_live_rounds_stop_on_the_bot_where_the_server_bleeds`).
 - That gate's missing first round (server 11016, 11082, 11150; client
   11082, 11150) was the harness, not the prediction: its spawn and
   settle loops ran no scene, so no ring was kept (`ps_ring` `None`), and
@@ -685,7 +685,7 @@ does the same, so the explode plays.
   it kept, which a client that predicts every frame never lacks.
   INFERRED. The window runs a
   scene every frame, so live play lost no round to this. VERIFIED (gate
-  `play::cod4::tests::cod4_live_every_server_round_fires_once`: in the
+  `play::cod4::tests::live_rounds::cod4_live_every_server_round_fires_once`: in the
   window's frame order, the M16's bursts, the MP5 held and the M40A3's
   single shots, hip and sighted, fire one predicted event per round the
   server fires, seeded with its time: 12, 16 and 4 rounds, no miss and
@@ -696,7 +696,7 @@ does the same, so the explode plays.
   stance's ends. In one run, of 12 rounds 4 in `idlecr` read crouched, 2 in
   `runcr` on a crouched body (`eFlags` 4) read standing, as 1.7's mask
   reads them. VERIFIED (the gate
-  `play::cod4::tests::cod4_live_a_bots_rounds_spread_by_his_legs_anim`).
+  `play::cod4::tests::live_rounds::cod4_live_a_bots_rounds_spread_by_his_legs_anim`).
 - Left out: vehicles' client-side rounds and the exit effect 1.7's
   `CG_BulletHitEvent` adds at a player target (flag 4 along the muzzle
   line) on the server's event.
@@ -758,7 +758,7 @@ Addresses are `iw3mp.exe` 1.7.
   `cod4_client::saw_tests::cod4_live_saw_gunner_view`). Our
   demolitions shotgun on mp_crash: every pellet within 0.05 degrees of
   the server's, 8 tracers or none a shot. VERIFIED (the gate
-  `play::cod4::tests::cod4_live_own_shotgun_pellets_share_one_tracer_roll`).
+  `play::cod4::tests::live_rounds::cod4_live_own_shotgun_pellets_share_one_tracer_roll`).
 - vcod: under `cg.renderingThirdPerson` (`cg_thirdPerson` or a dead
   playerstate, cod4-client-view.md 16) the own shot's tracer starts 30
   along the rounds' axis from the shot's eye (`cod4_fx::client_bullets`,
@@ -766,7 +766,7 @@ Addresses are `iw3mp.exe` 1.7.
   own round of the kill capture's shooter on mp_crash, drawn again in
   third person, keeps its start and end and starts its tracer 30 from
   the eye within 15 degrees of its way. VERIFIED (the gate
-  `play::cod4::tests::own_shots_strike_mark_and_trace`).
+  `play::cod4::tests::capture_bullets::own_shots_strike_mark_and_trace`).
 
 ### 12.4 The server's rounds (`sv_clientSideBullets` 0)
 
@@ -876,7 +876,7 @@ Addresses are `iw3mp.exe` 1.7.
   the dynamic entities and the launched parts. A posed shooter without a
   `tag_flash` gives his state's origin, a client's raised 11 prone, 40
   crouched, else 60 (`muzzle_of`; `server_rounds_leave_the_shooters_muzzle`).
-  The gate `play::cod4::tests::server_side_bullets_carry_every_round`
+  The gate `play::cod4::tests::capture_bullets::server_side_bullets_carry_every_round`
   replays both captures with the shooter posed: no client-side round,
   270 server rounds a client, 90 of them exits with no leg, every leg out
   of the origin, no prop struck, the target hearing each of the 90 that

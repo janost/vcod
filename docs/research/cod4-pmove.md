@@ -1164,7 +1164,7 @@ from the crosshair; the aim point `j_spine4`; the distance the origin's
 from the predicted origin, squared. `charge::client_pick` is that. vcod's
 client feeds it the newest snapshot's players with the stance's bind
 heights for `j_head` and `j_helmet` and the origin for `j_spine4`
-(`play::cod4::melee_charge`), at `cg_fov` 65 on 4:3, the world alone in
+(`play::cod4::cmd::melee_charge`), at `cg_fov` 65 on 4:3, the world alone in
 the sight trace and no smoke test (`FX_GetClientVisibility`). INFERRED:
 no capture of `iw3mp.exe`'s own cmds measures the pick.
 

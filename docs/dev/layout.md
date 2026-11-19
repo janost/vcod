@@ -162,7 +162,11 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
 - Window, renderer (`renderer.rs`, `renderer/`), HUD, fx, audio.
 - `console/`: drop-down console, cvars, binds.
 - `frontend/`: stock main menu, server browser, options screens, Start New
-  Server, the server's script menus; `frontend/cod2.rs` CoD2's.
+  Server, the server's script menus; `frontend/cod2.rs` CoD2's. `mod.rs`
+  holds `Ui`, `UiEffect` and the constants; `load.rs` the menu files and
+  building a `Ui`, `stack.rs` the open menus, `script.rs` the menu scripts
+  and `uiScript`, `input.rs` mouse, keys and focus, `lists.rs` the list
+  boxes and the browser's poll, `paint.rs` the `Painter` and drawing.
 - `play/`: join, input, cmd clock, prediction, events, the replay and
   loopback gates, the soaks and sweeps.
 - `session.rs`: `App`'s game, one call per frame step, input, console
@@ -174,8 +178,19 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     through `Cod2Frame`.
   - `Session::Cod4`: `cod4_client.rs` over `play/cod4.rs`, a watched CoD4
     capture or a live join (as a player or a spectator), also in
-    `Mode::Cod2`. `cod4_audio.rs` and `cod4_fx.rs` play its events' sounds
-    and effects, `cod4_hud.rs` its 2D layer, `cod4_scoreboard.rs` its
+    `Mode::Cod2`. `play/cod4.rs` holds `Cod4Session`, `step` and the
+    accessors; `play/cod4/` its `join.rs` (connects, downloads, probe,
+    drop text), `demo.rs`, `scene.rs` (`scene()` and the drawn types),
+    `events.rs` (`Fired`, the snapshot walk) and `cmd.rs` (our cmds, the
+    weapon picks, the selector); its tests are `play/cod4/tests.rs` (the
+    sim clock, `serve`, `run_held`, `live_join*`) and `tests/*.rs` by
+    area. `cod4_audio.rs` and `cod4_fx.rs` play its events' sounds
+    and effects, `cod4_hud.rs` its 2D layer (`cod4_hud/`: `assets.rs`,
+    `fonts.rs`, `env.rs` the menus' expression env, `board.rs`,
+    `messages.rs`, `weapon_info.rs` the owner draws, `compass.rs`,
+    `ticker.rs`, `world.rs`, `elems.rs` the hudelems, `text.rs`, and
+    `menus.rs`, `connect.rs`, `fullmap.rs`, `hints.rs`, `grenades.rs`),
+    `cod4_scoreboard.rs` its
     scoreboard, `cod4_viewmodel.rs` its first-person view weapon,
     `play/cod4_predict.rs` its prediction, `play/cod4_physics.rs` its
     launched parts.
