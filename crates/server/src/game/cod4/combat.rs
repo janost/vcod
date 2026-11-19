@@ -210,15 +210,62 @@ impl PosedBody4 {
         if !segment_meets_box(start, end, lo, hi, limit) {
             return None;
         }
-        let inv = self.placed.inverse();
-        let (ls, le) = (inv.transform_point3(start), inv.transform_point3(end));
         let skel = &self.rig.skeleton;
-        let mats = skel_mats(skel, &self.pose, Some(&self.controls));
-        let worlds = worlds_of(&mats);
-        let mut h = bone_trace_worlds_cod4(skel, &worlds, ls, le, priority, limit)?;
-        h.normal = struck_normal(&mats, &worlds, &h);
+        let h = trace_pose(
+            skel,
+            &self.pose,
+            Some(&self.controls),
+            &self.placed,
+            start,
+            end,
+            priority,
+            limit,
+        )?;
         Some((h, entity_normal(self.yaw, h.normal)))
     }
+}
+
+/// Where a body at `origin` turned `yaw` stands: its model's frame.
+fn placed_at(origin: Vec3, yaw: f32) -> glam::Mat4 {
+    BodyFrame {
+        origin,
+        angles: [0.0, yaw, 0.0],
+        ..Default::default()
+    }
+    .transform()
+}
+
+/// `start..end` against the hit boxes of `skel` under `pose` and
+/// `controls`, placed by `placed`, nearer than `limit`: the hit, its
+/// struck face's normal in the model's frame.
+#[allow(clippy::too_many_arguments)]
+fn trace_pose(
+    skel: &vcod_common::skeleton::Skeleton,
+    pose: &Pose4,
+    controls: Option<&Controllers>,
+    placed: &glam::Mat4,
+    start: Vec3,
+    end: Vec3,
+    priority: &PriorityMap,
+    limit: f32,
+) -> Option<vcod_common::bonetrace::BoneHit> {
+    let inv = placed.inverse();
+    let (ls, le) = (inv.transform_point3(start), inv.transform_point3(end));
+    let mats = skel_mats(skel, pose, controls);
+    let worlds = worlds_of(&mats);
+    let mut h = bone_trace_worlds_cod4(skel, &worlds, ls, le, priority, limit)?;
+    h.normal = struck_normal(&mats, &worlds, &h);
+    Some(h)
+}
+
+/// A live body posed for this frame ([`Cod4Level::posed`]).
+struct Posed4 {
+    rig: Rc<PlayerRig>,
+    pose: Pose4,
+    controls: Controllers,
+    yaw: f32,
+    /// The pose stepped the controls a frame: the frame's first.
+    built: bool,
 }
 
 /// A body's pose for the server's traces and tags: the shared sampler's
@@ -1210,6 +1257,48 @@ impl Cod4Level {
         ease: bool,
     ) -> Option<vcod_common::bonetrace::BoneHit> {
         self.take_script_poses();
+        let Posed4 {
+            rig,
+            pose,
+            controls,
+            yaw,
+            built,
+        } = self.posed(slot, origin, ease)?;
+        let placed = placed_at(origin, yaw);
+        let hit = trace_pose(
+            &rig.skeleton,
+            &pose,
+            Some(&controls),
+            &placed,
+            start,
+            end,
+            priority,
+            limit,
+        );
+        if built {
+            // The frame's skeleton: a tag read later in the frame (the
+            // dying body's `tag_weapon_right`) reads this pose.
+            let now = self.level_time();
+            let entity = self.rt.client_entity(slot).map(|e| e.0);
+            if let Some(p) = self
+                .rt
+                .host
+                .cod4_mut()
+                .posed_bodies
+                .iter_mut()
+                .find(|p| Some(p.entity) == entity)
+            {
+                p.pose = Rc::new(pose);
+                p.controls = controls;
+                p.built_at = Some(now);
+            }
+        }
+        hit
+    }
+
+    /// `slot`'s body posed at `origin` at this frame's time; `ease` steps
+    /// its controls a frame first unless a pose already did this frame.
+    fn posed(&mut self, slot: usize, origin: Vec3, ease: bool) -> Option<Posed4> {
         let character = self.rt.client_character(slot)?;
         let f = self.body_frame(slot, origin)?;
         let rig = self.combat.rig(&character)?;
@@ -1231,40 +1320,13 @@ impl Cod4Level {
             b.ease_controls(&set.anims, &controller_frame(&f, end_frame[slot]), dt);
         }
         let pose = pose4(b, &rig, set, &src, &f, now);
-        let placed = BodyFrame {
-            origin,
-            angles: [0.0, f.angles[1], 0.0],
-            ..Default::default()
-        }
-        .transform();
-        let inv = placed.inverse();
-        let (ls, le) = (inv.transform_point3(start), inv.transform_point3(end));
-        let skel = &rig.skeleton;
-        let controls = *b.controls();
-        let mats = skel_mats(skel, &pose, Some(&controls));
-        let worlds = worlds_of(&mats);
-        let hit = bone_trace_worlds_cod4(skel, &worlds, ls, le, priority, limit).map(|mut h| {
-            h.normal = struck_normal(&mats, &worlds, &h);
-            h
-        });
-        if built {
-            // The frame's skeleton: a tag read later in the frame (the
-            // dying body's `tag_weapon_right`) reads this pose.
-            let entity = self.rt.client_entity(slot).map(|e| e.0);
-            if let Some(p) = self
-                .rt
-                .host
-                .cod4_mut()
-                .posed_bodies
-                .iter_mut()
-                .find(|p| Some(p.entity) == entity)
-            {
-                p.pose = Rc::new(pose);
-                p.controls = controls;
-                p.built_at = Some(now);
-            }
-        }
-        hit
+        Some(Posed4 {
+            rig,
+            pose,
+            controls: *b.controls(),
+            yaw: f.angles[1],
+            built,
+        })
     }
 
     /// Every playing body posed where it stands at this frame's time, for
@@ -1314,12 +1376,7 @@ impl Cod4Level {
             next.set_weight_lead(dt);
             let pose = pose4(&next, &rig, set, &src, &f, now);
             next.ease_controls(&set.anims, &controller_frame(&f, end_frame[slot]), dt);
-            let placed = BodyFrame {
-                origin: ps.origin,
-                angles: [0.0, f.angles[1], 0.0],
-                ..Default::default()
-            }
-            .transform();
+            let placed = placed_at(ps.origin, f.angles[1]);
             out.push(PosedBody4 {
                 entity: entity.0,
                 origin: ps.origin,
@@ -1353,41 +1410,22 @@ impl Cod4Level {
     pub fn hit_box_center(&mut self, slot: usize, hitloc: u8) -> Option<Vec3> {
         self.take_script_poses();
         let ps = self.pm_state(slot)?;
-        let character = self.rt.client_character(slot)?;
-        let f = self.body_frame(slot, ps.origin)?;
-        let rig = self.combat.rig(&character)?;
-        let now = self.level_time();
-        let src = self.combat.src.clone()?;
-        let dt = self.frame_time();
-        let Combat4 {
-            anims,
-            bodies,
-            eased,
-            end_frame,
+        let Posed4 {
+            rig,
+            pose,
+            controls,
+            yaw,
             ..
-        } = &mut self.combat;
-        let set = anims.as_mut()?.as_mut()?;
-        let b = &mut bodies[slot];
-        if eased[slot] != Some(now) {
-            eased[slot] = Some(now);
-            b.ease_controls(&set.anims, &controller_frame(&f, end_frame[slot]), dt);
-        }
-        let pose = pose4(b, &rig, set, &src, &f, now);
+        } = self.posed(slot, ps.origin, true)?;
         let skel = &rig.skeleton;
         let (i, bone) = skel
             .bones()
             .iter()
             .enumerate()
             .find(|(_, b)| b.has_hit_box() && b.hit_location == hitloc)?;
-        let (pos, rot) = skel_worlds(skel, &pose, Some(b.controls()))[i];
+        let (pos, rot) = skel_worlds(skel, &pose, Some(&controls))[i];
         let local = pos + rot * ((bone.hit_mins + bone.hit_maxs) * 0.5);
-        let placed = BodyFrame {
-            origin: ps.origin,
-            angles: [0.0, f.angles[1], 0.0],
-            ..Default::default()
-        }
-        .transform();
-        Some(placed.transform_point3(local))
+        Some(placed_at(ps.origin, yaw).transform_point3(local))
     }
 
     /// The archive the antilag reads: this frame's live origins.
@@ -2066,25 +2104,23 @@ impl Cod4Level {
         let pose = pose4(&body.body, &rig, set, &src, f, now);
         let angles = Vec3::from(f.angles);
         let placed = if angles.x == 0.0 && angles.z == 0.0 {
-            BodyFrame {
-                origin: f.origin,
-                angles: [0.0, angles.y, 0.0],
-                ..Default::default()
-            }
-            .transform()
+            placed_at(f.origin, angles.y)
         } else {
             glam::Mat4::from_rotation_translation(
                 vcod_common::turretpose::angles_quat(f.angles),
                 f.origin,
             )
         };
-        let inv = placed.inverse();
-        let (ls, le) = (inv.transform_point3(start), inv.transform_point3(end));
-        let skel = &rig.skeleton;
-        let mats = skel_mats(skel, &pose, None);
-        let worlds = worlds_of(&mats);
-        let mut h = bone_trace_worlds_cod4(skel, &worlds, ls, le, priority, limit)?;
-        h.normal = struck_normal(&mats, &worlds, &h);
+        let h = trace_pose(
+            &rig.skeleton,
+            &pose,
+            None,
+            &placed,
+            start,
+            end,
+            priority,
+            limit,
+        )?;
         Some(CorpseHit {
             fraction: h.fraction,
             normal: entity_normal_at(angles, h.normal),
