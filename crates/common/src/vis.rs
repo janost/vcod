@@ -1,5 +1,7 @@
-//! Which soups a camera sees, decided the way the retail client does it:
-//! docs/research/bsp-ibsp59-format.md, "How the retail client draws the world".
+//! Which soups a camera sees: retail's portal walk, plus two passes on CoD1
+//! maps that mark more than retail for sightlines over low geometry
+//! (docs/research/bsp-ibsp59-format.md, "How the retail client draws the
+//! world", the passes and their cost in its last item).
 
 use crate::mapworld;
 use crate::mapworld::MapWorld;

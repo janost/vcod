@@ -1349,7 +1349,7 @@ VERIFIED, vcod measurement 2026-11-14. On our own clock (about 13.7 s
 behind) the offsets read up to 1.03 apart, the sway model's and the two
 snaps' error.
 
-#### 1.5 and United Offensive
+#### United Offensive and 1.5
 
 Neither truncates. VERIFIED, 1.5b `game.mp.i386.so` `CalcMuzzlePoint`
 (0x7e91f; Ghidra's addresses, image base 0x10000): the muzzle is
@@ -6666,7 +6666,7 @@ with 0; the snapshot after the script moves him it reads `trType` 5 with
 its base unchanged and ground still 0, and it falls to the floor and rests
 there with 1022. The same capture's throws leave from z 36.148 where
 1.1's leave from 37.0 on the same spot: 1.1 truncates the muzzle point and
-1.5 does not (2.1, "1.5 and United Offensive").
+1.5 does not (2.1, "United Offensive and 1.5").
 
 vcod: `Missile::falls`, set for 1.5 and UO, runs the test through the
 missile's own trace (`a_frag_left_hanging_falls_on_15_and_uo_only`). Ours'

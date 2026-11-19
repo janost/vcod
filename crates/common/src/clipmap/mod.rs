@@ -495,6 +495,10 @@ impl WorldClip for ClipMap {
         ClipMap::point_contents(self, p)
     }
 
+    fn shot_mask(&self) -> u32 {
+        MASK_SHOT
+    }
+
     fn ladder_boxes(&self) -> Vec<(Vec3, Vec3)> {
         ClipMap::ladder_boxes(self)
     }

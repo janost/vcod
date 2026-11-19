@@ -78,9 +78,11 @@ pub fn material<R: BufRead>(w: &mut W<R>, p: Pointer, slot: u32) -> Result<Optio
             Follow::At(a) => w.recall("texture table", a).unwrap_or_default(),
         };
         let constants = match w.follow(s.ptr(72), 16)? {
+            Follow::Null => Vec::new(),
             Follow::Inline => {
+                let at = w.here()?;
                 let c = w.load(0x20 * s.u8(59) as usize)?;
-                (0..s.u8(59) as usize)
+                let t: Vec<Constant> = (0..s.u8(59) as usize)
                     .map(|i| {
                         let e = c.elem(i, 0x20);
                         Constant {
@@ -89,18 +91,24 @@ pub fn material<R: BufRead>(w: &mut W<R>, p: Pointer, slot: u32) -> Result<Optio
                             literal: [e.f32(16), e.f32(20), e.f32(24), e.f32(28)],
                         }
                     })
-                    .collect()
+                    .collect();
+                w.remember("constant table", at, t.clone());
+                t
             }
-            _ => Vec::new(),
+            Follow::At(a) => w.recall("constant table", a).unwrap_or_default(),
         };
         let state_bits = match w.follow(s.ptr(76), 4)? {
+            Follow::Null => Vec::new(),
             Follow::Inline => {
+                let at = w.here()?;
                 let b = w.load(8 * s.u8(60) as usize)?;
-                (0..s.u8(60) as usize)
+                let t: Vec<[u32; 2]> = (0..s.u8(60) as usize)
                     .map(|i| [b.u32(8 * i), b.u32(8 * i + 4)])
-                    .collect()
+                    .collect();
+                w.remember("state bits", at, t.clone());
+                t
             }
-            _ => Vec::new(),
+            Follow::At(a) => w.recall("state bits", a).unwrap_or_default(),
         };
         w.pop()?;
         Ok(push(

@@ -1601,7 +1601,7 @@ resolves `COMPUTERNAME` as retail does.
   `getchallenge` gets `error\nEXE_ERR_BAD_CDKEY`; a LAN client has no guid and
   is never refused, as on retail. No `Resolving` lines.
 
-### 1.5 temporary bans (`tempBanUser` 0x8087f2a, `tempBanClient` 0x8088087)
+### Temporary bans on 1.5 (`tempBanUser` 0x8087f2a, `tempBanClient` 0x8088087)
 
 cod_lnxded 1.5b, from the asm.
 
@@ -1639,7 +1639,7 @@ cod_lnxded 1.5b, from the asm.
   `getGuid` stays 0. The table runs on the game clock as retail's (the
   unscaled clock would age a ban through a match timeout).
 
-### 1.5 permanent bans (`banUser` 0x8087f73, `banClient` 0x8087fc7, `unbanUser` 0x808801b)
+### Permanent bans on 1.5 (`banUser` 0x8087f73, `banClient` 0x8087fc7, `unbanUser` 0x808801b)
 
 cod_lnxded 1.5b, from the asm. UO matches it instruction for instruction.
 VERIFIED (`coduo_lnxded` 1.51b, jumps relative, absolute addresses masked):

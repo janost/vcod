@@ -1614,6 +1614,10 @@ impl vcod_common::collision::WorldClip for BrushedClip {
         })
     }
 
+    fn shot_mask(&self) -> u32 {
+        vcod_cod4::collision::MASK_SHOT
+    }
+
     fn ladder_boxes(&self) -> Vec<(Vec3, Vec3)> {
         self.clip.ladder_boxes()
     }

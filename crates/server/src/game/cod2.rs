@@ -521,7 +521,7 @@ impl Cod2Level {
             let file = vcod_cod2::map::MapFile::find(&**fs, map)?;
             drop(p);
             let p = crate::tick_profile::phase("load/world");
-            let world = file.world();
+            let world = file.world_unlit();
             drop(p);
             let _p = crate::tick_profile::phase("load/clip");
             Ok((world, std::sync::Arc::new(file.clip()?)))
@@ -589,7 +589,7 @@ impl Cod2Level {
             laps.lap("collision world");
             let p = crate::tick_profile::phase("load/mantle anims");
             let rules = Rules {
-                mantle_anims: vcod_cod2::pmove::mantle::anims(&fs),
+                mantle_anims: vcod_cod2::pmove::mantle::anims(&*fs),
                 ..Rules::default()
             };
             drop(p);

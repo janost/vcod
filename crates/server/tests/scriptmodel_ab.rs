@@ -1119,8 +1119,8 @@ fn shooter_origins(lines: &[String]) -> Vec<[f32; 3]> {
 
 /// mp_carentan on 1.5b: each frag leaves from the thrower's unsnapped
 /// origin plus the eye's 60, untruncated, where 1.1d truncates the origin
-/// and the point (docs/research/cod11-combat.md 2.1, "1.5 and United
-/// Offensive"). The thrower spawns where retail's did, lands on its grade
+/// and the point (docs/research/cod11-combat.md 2.1, "United Offensive and
+/// 1.5"). The thrower spawns where retail's did, lands on its grade
 /// moving and slides off the site to retail's float (2.1, "The thrower's
 /// slide"), so both frags leave from retail's point. Each frag rests with
 /// retail's ground (12.6). Runs only with `COD_DIR` at a 1.5 install.

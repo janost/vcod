@@ -510,6 +510,11 @@ refusal of both (VERIFIED,
   gunner capture's `wait 1500 / 1000` waited 1.5 s on retail
   (cod2-turrets.md 14). vcod: `Op::DivFloat`, which the compiler emits
   for `/` and `/=` under `Dialect::Cod2`.
+- VERIFIED (the instructions), lnxded 0x807dd52: `<` casts the pair
+  through 0x807d7aa, then compares two ints (type 6) with `cmp`/`setl`
+  and two floats (type 5) with `fucompp`; `>` at 0x807de00 has the same
+  shape with `setg`/`seta`. Two ints order exactly past 2^24, as on 1.1
+  (cod11-gsc-language.md 9, "Ordering").
 - VERIFIED, `Scr_EvalMultiply` (lnxded 0x807e290): `*` takes two numbers
   only, an int promoted to a float beside a float (0x807d7aa); a vector
   operand is `pair '(1, 0, -0)' and '200' has unmatching types 'vector'

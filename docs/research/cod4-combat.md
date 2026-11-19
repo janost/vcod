@@ -1477,8 +1477,8 @@ VERIFIED (`strings`). Whether 1.7's `kill` asks `CheatsOk` is unmeasured.
 
 ### 10.6 Live
 
-A scratch script (`live.sh frag|melee`, uncommitted): vcod-server `--game
-cod4 mp_crash` with `sv_cheats`; `cod4_probe` `target` (allies, `idle`,
+A scratch run, not kept, whose parts were: vcod-server `--game cod4
+mp_crash` with `sv_cheats`; `cod4_probe` `target` (allies, `idle`,
 `--goto 207 2291 296`) and `attacker` (axis, `--script frag` from 123 2110
 300, or `--script melee` from 180 2260 300). The frag hit the target in
 flight (15, `MOD_IMPACT`, `torso_lower`) and burst 3.3 s after the throw,
@@ -1596,8 +1596,8 @@ flashbang 40 units before the target's eye gives the `flashbang` shock for
 gives `concussion_grenade_mp` for the distance's time. VERIFIED (the gates
 `a_flashbang_in_the_face_shocks_for_six_seconds`,
 `a_concussion_grenade_shocks_by_its_distance`,
-`a_slowing_shellshock_walks_at_four_tenths`). Live, scratch `live.sh
-flash` (uncommitted: vcod-server `--game cod4 mp_crash`, a `cod4_probe`
+`a_slowing_shellshock_walks_at_four_tenths`). Live, a scratch run, not
+kept (vcod-server `--game cod4 mp_crash`, a `cod4_probe`
 `target` on allies at 207 2291 296, an axis `attacker` with `--script
 flash` (secondary offhand key 0x8000) from 123 2110 300, both
 `assault_mp,0`): the target shocked for 5286 ms (configstring slot 15)
@@ -1713,7 +1713,8 @@ those anims.
   which tolerate nothing: their `GAPS` are empty. The tag and trace read
   gates' few rows are cod4-server-gaps.md's Open list.
 - The use key's weapon swap is gated live on ours (cod4-gsc.md 9.1); its
-  retail capture is uncommitted, so no A/B gate.
+  retail capture was not kept, so no A/B gate (cod4-server-gaps.md,
+  Open).
 - The terrain triangle normal's last bit.
 - The corpse's drag uses CoD2's yaw turn shape; no 1.7 capture of a death
   anim whose root turns. No retail capture holds a shellshock's torso

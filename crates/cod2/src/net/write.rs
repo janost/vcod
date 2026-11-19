@@ -502,6 +502,56 @@ mod tests {
         );
     }
 
+    /// A message that fails after a server command, a gamestate or a
+    /// snapshot leaves the parser as it was: the next packet acknowledges
+    /// no command the caller never got.
+    #[test]
+    fn a_message_that_fails_late_changes_nothing() {
+        let huff = Huffman::new();
+        let gs = Gamestate2 {
+            server_command_sequence: 4,
+            configstrings: Default::default(),
+            baselines: Default::default(),
+            client_num: 0,
+            checksum_feed: 0,
+        };
+        let frame = Frame2 {
+            server_time: 1000,
+            ps: PlayerState2::default(),
+            entities: vec![],
+            clients: vec![],
+        };
+        let mut parser = Parser::new();
+        let mut w = MsgWriter::new(&huff);
+        write_server_command(&mut w, 1, b"first");
+        w.write_byte(Svc::Eof as u8);
+        parser.parse(1, &w.into_ops()).unwrap();
+
+        let mut w = MsgWriter::new(&huff);
+        write_server_command(&mut w, 2, b"lost");
+        write_gamestate(&mut w, &gs);
+        write_snapshot(&mut w, None, 0, 0, &frame, |_| None, 0);
+        w.write_byte(0xee);
+        assert!(parser.parse(2, &w.into_ops()).is_err());
+        assert_eq!(parser.server_command_sequence, 1);
+        assert_eq!(parser.server_command(2), b"");
+        assert_eq!(parser.server_command(1), b"first");
+        assert!(parser.gamestate.is_none());
+        assert!(parser.frame(2).is_none() && parser.last_snapshot.is_none());
+
+        // A snapshot under the kept gamestate rolls back the same way.
+        let mut w = MsgWriter::new(&huff);
+        write_gamestate(&mut w, &gs);
+        w.write_byte(Svc::Eof as u8);
+        parser.parse(3, &w.into_ops()).unwrap();
+        let mut w = MsgWriter::new(&huff);
+        write_snapshot(&mut w, None, 0, 0, &frame, |_| None, 0);
+        w.write_byte(0xee);
+        assert!(parser.parse(4, &w.into_ops()).is_err());
+        assert!(parser.frame(4).is_none() && parser.last_snapshot.is_none());
+        assert_eq!(parser.server_command_sequence, 4);
+    }
+
     /// A packet entity or client list that repeats or goes back a number
     /// is refused: a stock server writes them ascending (3.3).
     #[test]
