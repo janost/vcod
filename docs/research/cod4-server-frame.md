@@ -1292,7 +1292,13 @@ for the next frame's tag reads (`posed_bodies`, 7 M of `frame/end frames`'
 9.6 M at 32 bots) and evaluates the death anim choices twice a cmd and
 frame (1.3 M each); CoD1's per-frame configstring copy, systeminfo and
 serverinfo (0.24 M together). VERIFIED (instrumented runs). CoD1's
-snapshot build is not measured here: phases inside the entered client's
-snapshot never ran for `bot_match`'s CoD1 observers, so they take the
-unentered message and no snapshot. INFERRED (the phases that did not
-run).
+snapshot build, with 8 observers in the world (`OBSERVERS_PLAY=1`,
+24 bots, 1.1 mp_carentan): `messages` 13.39 M a tick, of it
+`messages/begin` (the frame's world) 3.42, `messages/snapshot` 7.78 over
+the 8 (`/cull` 3.95, `/write` 2.70). Writing against the delta base in
+place of a copy of it took `messages/snapshot` to 7.25 (tick p50 35.4 to
+35.0), `DIGEST=1` and `NETDIGEST=600` the same. VERIFIED (the runs'
+logs, 2026-11-19). The cull's entity copies stay: `Snapshot` owns its
+entity states, and the 1.5/UO conversion reads the culled copy.
+CoD4 at 32 bots with 8 in-process observers walking: `messages` 2.98 M
+a tick, `messages/snapshot world` 1.30 of it. VERIFIED (the run's log).

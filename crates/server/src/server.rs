@@ -7410,20 +7410,22 @@ impl Server {
                 .filter(|b| {
                     let back = message_num.saturating_sub(b.message_num);
                     (1..=255).contains(&back)
-                })
-                .cloned();
+                });
 
             let _w = crate::tick_profile::phase("messages/snapshot/write");
             let mut w = MsgWriter::new(&self.core.huff);
             write_pending_commands(&mut w, &c.link.netchan, c.link.reliable_ack);
-            c.link.reliable_sent = c.link.netchan.reliable_sequence as i32;
             self.game.proto.write_snapshot(
                 &mut w,
-                base.as_ref(),
+                base,
                 &frame,
-                frame.head(base.as_ref()),
+                frame.head(base),
                 &self.game.baselines,
             );
+            // The base is read in place out of the ring; the frame files
+            // into it once the write is done.
+            let base_num = base.map(|b| b.message_num);
+            c.link.reliable_sent = c.link.netchan.reliable_sequence as i32;
             c.record_frame(frame);
             write_download(c, &mut w, svs_ms, rate, &open, www.as_ref());
 
@@ -7444,8 +7446,8 @@ impl Server {
                     _ => "-".into(),
                 };
                 let ack_behind = message_num as i64 - i64::from(c.message_ack);
-                let base_desc = match base.as_ref() {
-                    Some(b) => format!("d{}", message_num - b.message_num),
+                let base_desc = match base_num {
+                    Some(b) => format!("d{}", message_num - b),
                     None => "uncompressed".into(),
                 };
                 // The walker's own state, for chasing a prediction error a
