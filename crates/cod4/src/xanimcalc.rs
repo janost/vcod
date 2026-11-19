@@ -9,7 +9,7 @@
 //! where the binary stores, `iw3mp.exe` storing a few values `cod4_lnxded`
 //! keeps ([`Cod4Arith`]).
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 
 use crate::anim::{BodySource, Streams, script_string};
 use crate::assets::Assets;
@@ -80,7 +80,8 @@ pub struct Parts {
 
 impl Parts {
     /// `x`'s parts, read in `XAnimCalcParts`' stream order
-    /// (cod4-player-anims.md 1).
+    /// (cod4-player-anims.md 1): every key list ascending from 0 to
+    /// `numframes`, each bone translated once, each stream read to its end.
     pub fn of(a: &Assets, x: &XAnim) -> Result<Parts> {
         let bones: Vec<String> = x
             .names
@@ -95,69 +96,85 @@ impl Parts {
             x.name,
             x.bone_count
         );
+        let last = x.num_frames;
         let mut s = Streams::of(x);
         let mut rot = vec![Rot::None; n];
-        let mut bone = bc[0];
-        for (part, &count) in bc.iter().enumerate().take(5).skip(1) {
-            for _ in 0..count {
-                let keys = match part <= 2 {
-                    true => Some(s.keys()?),
-                    false => None,
-                };
-                let k = keys.as_ref().map_or(1, Vec::len);
-                let src = |s: &mut Streams| match part <= 2 {
-                    true => s.rshort.i16(),
-                    false => s.short.i16(),
-                };
-                rot[bone] = match part % 2 == 1 {
-                    true => Rot::Half(
-                        keys,
-                        (0..k)
-                            .map(|_| Ok([src(&mut s)?, src(&mut s)?]))
-                            .collect::<Result<_>>()?,
-                    ),
-                    false => Rot::Full(
-                        keys,
-                        (0..k)
-                            .map(|_| Ok([src(&mut s)?, src(&mut s)?, src(&mut s)?, src(&mut s)?]))
-                            .collect::<Result<_>>()?,
-                    ),
-                };
-                bone += 1;
-            }
-        }
         let mut trans = vec![Trans::None; n];
-        for (part, &count) in bc.iter().enumerate().take(9).skip(5) {
-            for _ in 0..count {
-                let b = usize::from(s.byte.u8()?);
-                ensure!(b < n, "{}: trans bone {b}", x.name);
-                trans[b] = match part {
-                    5 | 6 => {
-                        let keys = s.keys()?;
-                        let v = s.int.vec3()?;
-                        let mins = v.to_array();
-                        let size = s.int.vec3()?.to_array();
-                        let v = (0..keys.len())
-                            .map(|_| match part {
-                                5 => {
-                                    let b = s.rbyte.take(3)?;
-                                    Ok([b[0], b[1], b[2]].map(u16::from))
-                                }
-                                _ => Ok([s.rshort.u16()?, s.rshort.u16()?, s.rshort.u16()?]),
-                            })
-                            .collect::<Result<_>>()?;
-                        Trans::Keyed {
-                            keys,
-                            mins,
-                            size,
-                            v,
+        let mut decode = || -> Result<()> {
+            let mut bone = bc[0];
+            for (part, &count) in bc.iter().enumerate().take(5).skip(1) {
+                for _ in 0..count {
+                    let keys = match part <= 2 {
+                        true => {
+                            let k = s.keys()?;
+                            check_keys(&k, last)
+                                .with_context(|| format!("bone {}", bones[bone]))?;
+                            Some(k)
                         }
-                    }
-                    7 => Trans::Fixed(s.int.vec3()?.to_array()),
-                    _ => Trans::None,
-                };
+                        false => None,
+                    };
+                    let k = keys.as_ref().map_or(1, Vec::len);
+                    let src = |s: &mut Streams| match part <= 2 {
+                        true => s.rshort.i16(),
+                        false => s.short.i16(),
+                    };
+                    rot[bone] = match part % 2 == 1 {
+                        true => Rot::Half(
+                            keys,
+                            (0..k)
+                                .map(|_| Ok([src(&mut s)?, src(&mut s)?]))
+                                .collect::<Result<_>>()?,
+                        ),
+                        false => Rot::Full(
+                            keys,
+                            (0..k)
+                                .map(|_| {
+                                    Ok([src(&mut s)?, src(&mut s)?, src(&mut s)?, src(&mut s)?])
+                                })
+                                .collect::<Result<_>>()?,
+                        ),
+                    };
+                    bone += 1;
+                }
             }
-        }
+            let mut seen = vec![false; n];
+            for (part, &count) in bc.iter().enumerate().take(9).skip(5) {
+                for _ in 0..count {
+                    let b = usize::from(s.byte.u8()?);
+                    ensure!(b < n && !seen[b], "trans bone {b}");
+                    seen[b] = true;
+                    trans[b] = match part {
+                        5 | 6 => {
+                            let keys = s.keys()?;
+                            check_keys(&keys, last)
+                                .with_context(|| format!("bone {}", bones[b]))?;
+                            let mins = s.int.vec3()?.to_array();
+                            let size = s.int.vec3()?.to_array();
+                            let v = (0..keys.len())
+                                .map(|_| match part {
+                                    5 => {
+                                        let b = s.rbyte.take(3)?;
+                                        Ok([b[0], b[1], b[2]].map(u16::from))
+                                    }
+                                    _ => Ok([s.rshort.u16()?, s.rshort.u16()?, s.rshort.u16()?]),
+                                })
+                                .collect::<Result<_>>()?;
+                            Trans::Keyed {
+                                keys,
+                                mins,
+                                size,
+                                v,
+                            }
+                        }
+                        7 => Trans::Fixed(s.int.vec3()?.to_array()),
+                        _ => Trans::None,
+                    };
+                }
+            }
+            Ok(())
+        };
+        decode().with_context(|| x.name.clone())?;
+        s.finished().with_context(|| x.name.clone())?;
         Ok(Parts {
             name: x.name.clone(),
             num_frames: x.num_frames,
@@ -263,6 +280,19 @@ impl Parts {
             m.trans_weight = (x(m.trans_weight) + w).f();
         }
     }
+}
+
+/// A key list checked: ascending, starting at 0 and ending at the clip's
+/// last frame, as `XAnim_GetTimeIndex` reads it.
+fn check_keys(keys: &[u16], last: u16) -> Result<()> {
+    ensure!(
+        keys.first() == Some(&0) && keys.last() == Some(&last),
+        "keys run {:?}..{:?}, the clip 0..{last}",
+        keys.first(),
+        keys.last()
+    );
+    ensure!(keys.windows(2).all(|w| w[0] < w[1]), "keys not ascending");
+    Ok(())
 }
 
 /// Where a leaf samples: its node time, `numframes` times it, and the
@@ -578,6 +608,59 @@ fn add_normalized(mats: &mut [AnimMat], src: &[AnimMat], w: f32, a: Cod4Arith) {
                 m.trans[c] = (x(s.trans[c]) * g + x(m.trans[c])).f();
             }
             m.trans_weight = (w + x(m.trans_weight)).f();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two bones: a `noQuat` one and a keyed half quat, both `noTrans`,
+    /// over 10 frames: the half quat's keys `keys`, the bytes `tail` after
+    /// the trans bones.
+    fn xanim(keys: [u8; 3], trans: [u8; 2], tail: &[u8]) -> XAnim {
+        XAnim {
+            name: "t".into(),
+            num_frames: 10,
+            looped: false,
+            delta: false,
+            bone_count: [1, 1, 0, 0, 0, 0, 0, 0, 2, 2],
+            framerate: 30.0,
+            frequency: 3.0,
+            asset_type: 0,
+            names: vec![0, 0],
+            notify: Vec::new(),
+            data_byte: [&keys[..], &trans, tail].concat(),
+            data_short: 2u16.to_le_bytes().to_vec(),
+            data_int: Vec::new(),
+            random_data_short: [1i16, 2, 3, 4, 5, 6]
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect(),
+            random_data_byte: Vec::new(),
+            random_data_int: Vec::new(),
+            indices: Vec::new(),
+            root: None,
+        }
+    }
+
+    /// The sampler divides by each key gap and takes the last key for
+    /// `numframes`: a key list out of order or short of the clip, a bone
+    /// translated twice and bytes left over are refused.
+    #[test]
+    fn parts_refuse_what_the_sampler_cannot_read() {
+        let a = Assets::default();
+        let p = Parts::of(&a, &xanim([0, 5, 10], [0, 1], &[])).unwrap();
+        assert!(matches!(&p.rot[1], Rot::Half(Some(k), v) if *k == [0, 5, 10] && v.len() == 3));
+        for (keys, trans, tail, why) in [
+            ([0, 7, 5], [0, 1], &[][..], "descending keys"),
+            ([0, 5, 9], [0, 1], &[], "keys short of numframes"),
+            ([1, 5, 10], [0, 1], &[], "keys from 1"),
+            ([0, 5, 10], [0, 0], &[], "bone 0 translated twice"),
+            ([0, 5, 10], [0, 1], &[0], "a byte left over"),
+        ] {
+            assert!(Parts::of(&a, &xanim(keys, trans, tail)).is_err(), "{why}");
         }
     }
 }

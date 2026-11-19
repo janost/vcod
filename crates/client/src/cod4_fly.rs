@@ -1063,11 +1063,10 @@ fn decode_clip(zones: &[&Assets], clips: &mut Clips, n: &str) -> Option<Clip> {
                 Some((*z, x))
             });
             let (z, x) = found?;
-            vcod_cod4::anim::clip(z, x)
-                .and_then(|c| Ok((c, vcod_cod4::xanimcalc::Parts::of(z, x)?)))
+            vcod_cod4::xanimcalc::Parts::of(z, x)
                 .inspect_err(|e| log::warn!("cod4 weapon anim {n}: {e:#}"))
                 .ok()
-                .map(|(c, p)| (Arc::new(c), Arc::new(p)))
+                .map(|p| (Arc::new(vcod_cod4::anim::clip_of(z, x, &p)), Arc::new(p)))
         })
         .clone()
 }
