@@ -193,19 +193,27 @@ pub fn delete_profile(root: &Path, name: &str) -> bool {
         .is_ok()
 }
 
-/// `dir/name` as it is on disk, matched case-insensitively; `None` for a
-/// name that is not one plain component.
+/// `dir/name` as it is on disk, matched case-insensitively, an exact match
+/// first; `None` for a name that is not one plain component. Read off the
+/// listing: on a case-folding file system `alpha` is a directory too, under
+/// the wrong name.
 fn find_dir(dir: &Path, name: &str) -> Option<PathBuf> {
     let exact = vcod_common::game_dir::confined_component(dir, name)?;
-    if exact.is_dir() {
-        return Some(exact);
+    let Ok(list) = std::fs::read_dir(dir) else {
+        return exact.is_dir().then_some(exact);
+    };
+    let mut hit = None;
+    for e in list.flatten() {
+        let file = e.file_name();
+        let file = file.to_string_lossy();
+        if file.eq_ignore_ascii_case(name) && e.path().is_dir() {
+            if file == name {
+                return Some(e.path());
+            }
+            hit.get_or_insert(e.path());
+        }
     }
-    std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(name))
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
+    hit
 }
 
 impl ScriptMenus {
