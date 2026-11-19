@@ -235,3 +235,82 @@ fn a_cod4_move_of_33_cmds_or_none_is_refused() {
     sv.user_move(0, -1, false, &cmds(32));
     assert_eq!(last(&sv), t0 + 32);
 }
+
+/// Hostile datagrams on both entry points, connectionless and netchan,
+/// from the client's own address and a stranger's: none panics, none takes
+/// a slot or moves the client's, and the client's next message is taken.
+#[test]
+fn a_cod4_server_shrugs_off_malformed_packets() {
+    let (mut sv, mut p, mut now) = joined();
+    sv.set_cvar("sv_voice", "1");
+    sv.set_cvar("rcon_password", "pw");
+    let q = p.qport.to_le_bytes();
+    let oob = |parts: &[&[u8]]| {
+        let mut d = vec![0xff; 4];
+        for part in parts {
+            d.extend_from_slice(part);
+        }
+        d
+    };
+    let mut cases: Vec<Vec<u8>> = vec![
+        Vec::new(),
+        vec![1, 2, 3],
+        vec![0xff; 4],
+        oob(&[b"stats\0", &q[..1]]),
+        oob(&[b"stats\0", &q]),
+        oob(&[b"stats\0", &q, &[7], &[0xab; 64]]),
+        oob(&[b"stats\0", &q, &[255], &[0xab; 2000]]),
+        oob(&[b"stats\0", &q, &[0], &[0xab; 3]]),
+        oob(&[b"v"]),
+        oob(&[b"v\0", &q[..1]]),
+        oob(&[b"v\0", &q, &[255]]),
+        oob(&[b"v\0", &q, &[3, 255, 1]]),
+        oob(&[b"rcon"]),
+        oob(&[b"rcon pw"]),
+        oob(&[b"rcon pw ", &[b'x'; 2000]]),
+        oob(&[b"connect"]),
+        oob(&[b"connect \"\\protocol\\6\\challenge\\-1\\qport\\0\""]),
+        oob(&[b"getchallenge 0 \"", &[b'a'; 2000], b"\""]),
+    ];
+    // The netchan header's extremes: sequence, then the message and
+    // reliable acknowledges, with and without a body.
+    for (seq, ack, rack) in [
+        (u32::MAX, i32::MIN, i32::MIN),
+        (0x8000_0000, -1, -1),
+        (p.ack as u32 + 1, i32::MAX, i32::MAX),
+        (p.ack as u32 + 1, 0, i32::MIN),
+    ] {
+        let mut d = seq.to_le_bytes().to_vec();
+        d.extend_from_slice(&q);
+        d.push(sv.game.server_id as u8);
+        d.extend_from_slice(&ack.to_le_bytes());
+        d.extend_from_slice(&rack.to_le_bytes());
+        cases.push(d.clone());
+        d.extend_from_slice(&[0x55; 40]);
+        cases.push(d);
+    }
+    let stranger = SocketAddr::from(([10, 0, 0, 9], 40002));
+    let state = |sv: &Cod4Server| {
+        let c = sv.core.clients[0].as_ref().unwrap();
+        (c.state, c.link.addr, c.link.reliable_ack)
+    };
+    let before = state(&sv);
+    for d in &cases {
+        for from in [stranger, p.addr] {
+            sv.handle_packet(from, d, now);
+            sv.take_outgoing();
+        }
+    }
+    assert_eq!(state(&sv), before);
+    assert_eq!(sv.core.clients.iter().flatten().count(), 1);
+    let seq = sv.core.clients[0]
+        .as_ref()
+        .unwrap()
+        .link
+        .netchan
+        .incoming_sequence;
+    step(&mut sv, &mut p, &mut now);
+    let c = sv.core.clients[0].as_ref().unwrap();
+    assert!(c.link.netchan.incoming_sequence > seq);
+    assert_eq!(c.state, State::Active);
+}
