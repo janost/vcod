@@ -23,7 +23,7 @@ use common::{Join, Queues};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::event_ids;
 use vcod_common::net::msg::UserCmd;
 use vcod_common::net::protocol::PROTOCOL_V22;
@@ -162,14 +162,12 @@ fn rows(snaps: &[Snap], lines: &[String]) -> BTreeMap<String, Vec<String>> {
 fn ours(fs: vcod_common::pk3::Pk3Fs, fixture: &str, lead: i32) -> (Vec<Snap>, Vec<String>) {
     let p = vcod_server::server::install_protocol(&fs);
     let map = "mp_carentan";
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_pronecrouch"), now);
-    sv.set_protocol(p);
-    sv.overlay_script("maps/mp/gametypes/probe_pronecrouch", SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        script: Some(SCRIPT),
+        ..common::Boot::new(map, "probe_pronecrouch")
+    }
+    .start(fs);
     let (times, pressed, ran) = retail_cmds(fixture);
     // Join so that our first phase starts on retail's frame: the cmds run
     // on retail's clock.

@@ -132,7 +132,7 @@ broadcast on the LAN.
 | CoD4 bots | `cargo test --release -p vcod-server --lib -- --ignored cod4::bots::` (`COD4_DIR`) | ~4 s |
 | CoD4 hit boxes per map | `--lib -- --ignored cod4_every_map_poses_both_teams` (`COD4_DIR`) | 29 s of test, 7 min with the release build (2026-11-18) |
 | CoD2 gametypes | `--lib -- --ignored cod2_gametype_census` (`COD2_DIR`) | ~18 s |
-| CoD2 play: level effects, model pipelines, view weapons, muzzle flash and brass | `cargo test -p vcod --bins -- --ignored play::cod2_soak::cod2_live_` (`COD2_DIR`, a Vulkan adapter) | real time: each plays 16 ms frames for its seconds after the spawn against a server paced by the wall, with a 120 to 180 s deadline; CoD2 has no `sim` clock |
+| CoD2 play: level effects, model pipelines, view weapons, muzzle flash and brass | `cargo test -p vcod --bins -- --ignored play::cod2_soak::cod2_live_` (`COD2_DIR`, a Vulkan adapter) | each plays 16 ms frames for its seconds after the spawn, client and server on one `sim` clock (`tests::run_held`), with a 120 to 180 s deadline on it |
 | 1.5 stuck seed | `--lib -- --ignored the_15_overlap_spectator_seed_is_the_only_fit` | ~2 s |
 | shaders or render layouts | `cargo test -p vcod --bins -- renderer::pipeline_check` (not ignored: it skips without a Vulkan adapter; lavapipe env below) | |
 | CoD2 maps, CoD2 load path | `cod2_map_census`, `cod2_load_profile` | |
@@ -247,6 +247,12 @@ in process, on `play::cod4`'s `tests::sim` clock.
   polling the loader waits off the clock, so only the worker moves it. `play/cod4_sweep.rs`'s `rig` and
   `answer_menu` wait on the thread's `sim` clock, the wall off one (the
   sweep and the soak).
+- CoD2's live tests (`cod2_live_*`, `COD2_DIR`) run on the same clock:
+  `play::cod2::clock_now` is the session's, and `tests::run_held` serves a
+  `Cod2Server` (`tests::Held`: `drain_console`, then the frame). A
+  `Connecting`'s worker runs on its starter's clock, the starter waiting
+  off it while the worker runs; the load pump (`Cod2Session::pump`) reads
+  the clock but sleeps on the wall, so a map's load takes no clock time.
 - A live test that writes frames (`VCOD_C4_SHOTS`) runs through
   `tests::run_held`, each frame loop sleeping its 16 ms first. The client
   reads the session's clock through `play::cod4::clock_now`, never

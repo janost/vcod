@@ -18,12 +18,11 @@ use crate::common;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{ADDR, ClientEnd, Queues};
 use vcod_common::net::capture::ScriptedCapture;
 use vcod_common::net::{NetClient, NetEvent};
-use vcod_server::Server;
 
 const MAP: &str = "mp_carentan";
 const FRAME_MS: u64 = 50;
@@ -75,17 +74,15 @@ fn fx_view(lines: &[String], steps: &[i64], until: Option<i64>) -> Vec<String> {
 /// the client's lines and the script log.
 fn run_ours(probe: &str) -> Option<(Vec<String>, Vec<String>)> {
     let fs = vcod_common::testing::game_fs_11()?;
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = Server::new(common::cfg(MAP, probe), now);
     let src = std::fs::read_to_string(format!(
         "../gsc/tests/fixtures/semantics/client-probes/{probe}.gsc"
     ))
     .expect("the probe");
-    sv.overlay_script(&format!("maps/mp/gametypes/{probe}"), &src);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(&src),
+        ..common::Boot::new(MAP, probe)
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, JOIN_MS as i64);
 
     let q = Rc::new(RefCell::new(Queues::default()));

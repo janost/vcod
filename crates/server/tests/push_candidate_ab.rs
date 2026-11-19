@@ -33,7 +33,7 @@ use crate::common;
 use common::{ADDR, ADDR_B, ADDR_C, ClientEnd, FRAME_MS, Join, ProbeHold, Queues, holding};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::{NetClient, NetEvent};
 
 const MAP: &str = "mp_carentan";
@@ -89,20 +89,19 @@ fn run_once(
     late: [i64; 2],
 ) -> Ours {
     let p = vcod_server::server::install_protocol(&fs);
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_pushcand"), now);
-    sv.set_protocol(p);
-    if let Some((seed, skip)) = seed {
-        sv.pin_stuck_rand(seed, skip);
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_pushcand.gsc"
+        )),
+        prep: Some(&|sv: &mut vcod_server::Server| {
+            if let Some((seed, skip)) = seed {
+                sv.pin_stuck_rand(seed, skip);
+            }
+        }),
+        ..common::Boot::new(MAP, "probe_pushcand")
     }
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_pushcand",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_pushcand.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
 
     let mut holds: [ProbeHold; 2] = WHO.map(|who| ProbeHold {
         base: Some([0.0; 3]),

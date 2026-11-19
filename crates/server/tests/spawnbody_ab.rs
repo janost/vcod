@@ -19,7 +19,7 @@ use crate::common;
 use common::{Join, Queues};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::msg::UserCmd;
 use vcod_common::net::{NetClient, NetEvent};
 
@@ -55,19 +55,12 @@ fn direct_input(tokens: &[String]) -> Option<[i32; 5]> {
 
 /// The script's log under ours, `PROBE` lines only.
 fn ours(fs: vcod_common::pk3::Pk3Fs, moved: bool) -> Vec<String> {
-    let proto = vcod_server::server::install_protocol(&fs);
-    let map = "mp_carentan";
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_spawnbody"), now);
-    sv.set_protocol(proto);
-    sv.overlay_script("maps/mp/gametypes/probe_spawnbody", SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    if moved {
-        sv.set_cvar("probe_moved", "1");
+    let (mut sv, mut now) = common::Boot {
+        cvars: if moved { &[("probe_moved", "1")] } else { &[] },
+        script: Some(SCRIPT),
+        ..common::Boot::new("mp_carentan", "probe_spawnbody")
     }
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let qs = [
         Rc::new(RefCell::new(Queues::default())),

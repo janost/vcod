@@ -853,7 +853,7 @@ impl HudAssets {
             let dirs = install.clone().with_map(Some(map)).iwd_dirs();
             let fs = vcod_common::pk3::Pk3Fs::open_iwd_layers(&dirs[0], &dirs[1..])?;
             let names = out.weapon_hud.keys().cloned().collect::<Vec<_>>();
-            out.overlay_weapon_files(&crate::weapon_file::load_overlay(&fs, names));
+            out.overlay_weapon_files(&crate::weapon_file::load_overlay(&fs, &fs, names));
         }
         Ok(out)
     }

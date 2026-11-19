@@ -20,14 +20,10 @@ fn server() -> Server {
 fn server_with_entities(test_entities: usize) -> Server {
     Server::new(
         ServerConfig {
-            map: "mp_carentan".into(),
             hostname: "loop".into(),
             max_clients: 2,
-            gametype: "dm".into(),
             test_entities,
-            trace: false,
-            bots: 0,
-            bots_shoot: false,
+            ..common::cfg("mp_carentan", "dm")
         },
         Instant::now(),
     )
@@ -548,17 +544,16 @@ fn probe_server(probe: &str) -> Option<Server> {
     let fs = vcod_common::testing::game_fs()?;
     let proto = vcod_server::server::install_protocol(&fs);
     let fs = Rc::new(fs);
-    let bsp_path = fs.resolve_map("mp_carentan").expect("mp_carentan");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut sv = Server::new(common::cfg("mp_carentan", probe), Instant::now());
-    sv.set_protocol(proto);
     let src = std::fs::read_to_string(format!(
         "../gsc/tests/fixtures/semantics/client-probes/{probe}.gsc"
     ))
     .expect("the probe");
-    sv.overlay_script(&format!("maps/mp/gametypes/{probe}"), &src);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    let (sv, _) = common::Boot {
+        proto: Some(proto),
+        script: Some(&src),
+        ..common::Boot::new("mp_carentan", probe)
+    }
+    .start(fs);
     Some(sv)
 }
 

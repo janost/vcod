@@ -395,16 +395,15 @@ const MAP: &str = "mp_carentan";
 /// A dm server on `fs`'s protocol, its pushes drawn from glibc's `rand()`
 /// under `seed` when given (`Server::pin_stuck_rand`).
 fn server(fs: Pk3Fs, seed: Option<(u32, usize)>) -> (Server, Instant) {
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let now = Instant::now();
-    let mut sv = Server::new(common::cfg(MAP, "dm"), now);
-    sv.set_protocol(vcod_server::server::install_protocol(&fs));
-    if let Some((seed, skip)) = seed {
-        sv.pin_stuck_rand(seed, skip);
+    let (sv, now) = common::Boot {
+        prep: Some(&|sv: &mut vcod_server::Server| {
+            if let Some((seed, skip)) = seed {
+                sv.pin_stuck_rand(seed, skip);
+            }
+        }),
+        ..common::Boot::new(MAP, "dm")
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    .start(fs);
     (sv, now)
 }
 

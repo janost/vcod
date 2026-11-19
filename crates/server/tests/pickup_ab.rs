@@ -37,7 +37,6 @@ use vcod_common::net::{DELTA_ANGLE_FIELDS, NetClient, NetEvent};
 use vcod_server::Server;
 
 const MAP: &str = "mp_carentan";
-const PROBE_PATH: &str = "maps/mp/gametypes/probe_pickup";
 const PROBE_SRC: &str = "../gsc/tests/fixtures/semantics/client-probes/probe_pickup.gsc";
 const CLIENT: &str = "tests/fixtures/items/mp_carentan-dm-pickup.txt";
 const SCRIPT: &str = "tests/fixtures/items/mp_carentan-dm-pickup-script.txt";
@@ -352,16 +351,13 @@ struct Rig {
 /// let that teleport settle.
 fn rig(cap: &Capture) -> Option<Rig> {
     let fs = vcod_common::testing::game_fs_11()?;
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let fs = Rc::new(fs);
-    let mut now = Instant::now();
-    let mut sv = Server::new(common::cfg(MAP, "probe_pickup"), now);
-    sv.overlay_script(PROBE_PATH, &read(PROBE_SRC));
-    sv.set_cvar("probe_teleport", "1");
-    sv.set_cvar("scr_allow_fg42", "1");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        cvars: &[("probe_teleport", "1"), ("scr_allow_fg42", "1")],
+        script: Some(&read(PROBE_SRC)),
+        ..common::Boot::new(MAP, "probe_pickup")
+    }
+    .start(fs);
     // Past the watcher's census, as retail's probe joined, so its slot is
     // logged as an `other` before its first spawn.
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);

@@ -19,7 +19,7 @@ use crate::common;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::msg::NULL_USERCMD;
 use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V6};
 
@@ -86,17 +86,14 @@ fn retail() -> Run {
 
 fn ours(fs: vcod_common::pk3::Pk3Fs) -> Run {
     let p: &'static Cod1Wire = &PROTOCOL_V6;
-    let bsp_path = fs.resolve_map(MAP).expect("the map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, PROBE), now);
-    sv.set_protocol(p);
-    sv.overlay_script(
-        &format!("maps/mp/gametypes/{PROBE}"),
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_cull15.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(p),
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_cull15.gsc"
+        )),
+        ..common::Boot::new(MAP, PROBE)
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let mut cl = common::connect(&mut sv, &q, &mut now);

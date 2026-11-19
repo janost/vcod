@@ -11,7 +11,7 @@ use crate::common;
 use common::Queues;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::msg::NULL_USERCMD;
 use vcod_common::net::protocol::PROTOCOL_V1;
 
@@ -57,15 +57,11 @@ fn a_suicide_that_stays_playing_keeps_pm_type_0() {
         return;
     };
     let p = &PROTOCOL_V1;
-    let mut now = Instant::now();
-    let bsp_path = fs
-        .resolve_map("mp_harbor")
-        .expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut sv = vcod_server::Server::new(common::cfg("mp_harbor", "probe_suicide_one"), now);
-    sv.overlay_script("maps/mp/gametypes/probe_suicide_one", SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(SCRIPT),
+        ..common::Boot::new("mp_harbor", "probe_suicide_one")
+    }
+    .start(fs);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl = common::connect(&mut sv, &q, &mut now);
     // (phase, pm_type) per snapshot: 0 alive, 1 suicided, 2 dead session.
@@ -108,18 +104,15 @@ fn probe_suicide_near(
     map: &str,
     proto: &'static vcod_common::net::protocol::Cod1Wire,
 ) -> Vec<String> {
-    let mut now = Instant::now();
-    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_suicide"), now);
-    sv.set_protocol(proto);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_suicide",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_suicide.gsc"),
-    );
-    sv.set_cvar("probe_suicide_near", "1");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        cvars: &[("probe_suicide_near", "1")],
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_suicide.gsc"
+        )),
+        ..common::Boot::new(map, "probe_suicide")
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, 8000);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
