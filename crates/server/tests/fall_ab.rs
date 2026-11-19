@@ -143,7 +143,7 @@ fn parse_fall(l: &str) -> FallLine {
     }
 }
 
-/// The probe client's `FALL` line for a snapshot (`crates/client/src/probe.rs`,
+/// The probe client's `FALL` line for a snapshot (`crates/client/src/probe/observe.rs`,
 /// `FallProbe::observe`).
 fn fall_line(s: &Snapshot) -> FallLine {
     let p = &PROTOCOL_V1;

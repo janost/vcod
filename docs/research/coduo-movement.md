@@ -343,7 +343,7 @@ names).
 
 `crates/server/tests/fixtures/playerstate/mp_carentan-dm-slope-8ms-sprint-uo.txt`
 (2026-10-14). Recipe: `sprint_script` (`--probe-sprint` in
-`crates/client/src/probe.rs`) from `client-probes/probe_prone`'s street
+`crates/client/src/probe/scripts.rs`) from `client-probes/probe_prone`'s street
 placement on `COD_VERSION=uo tools/run_probe.sh`, `--probe-weapon
 mg30cal_mp`, cmds every 8 ms, every snapshot's whole playerstate.
 
@@ -418,7 +418,7 @@ Every stock UO map has both mount brushes (VERIFIED, the material lumps).
 Captures (VERIFIED, 2026-10-14):
 `crates/server/tests/fixtures/playerstate/mp_foy-dm-slope-8ms-uofoot-{stand,crouch,mount}.txt`.
 Recipe: `--save-slope --probe-uofoot <yaw>` (`uofoot_script` in
-`crates/client/src/probe.rs`) on `COD_VERSION=uo tools/run_probe.sh
+`crates/client/src/probe/scripts.rs`) on `COD_VERSION=uo tools/run_probe.sh
 client-probes/probe_uofoot mp_foy +set probe_teleport 1 +set probe_spot
 <spot>`, `--probe-weapon mg30cal_mp`, cmds every 8 ms.
 
@@ -664,7 +664,7 @@ the predicted sprint flag.
 ## 15. Automatic fire and the view kick
 
 Capture: `mp_carentan-dm-slope-8ms-autofire-uo.txt`, `--probe-autofire`
-(`autofire_script` in `crates/client/src/probe.rs`) with `mp44_mp` on
+(`autofire_script` in `crates/client/src/probe/scripts.rs`) with `mp44_mp` on
 retail 1.51b, from `probe_prone`'s street placement. `moves_ab.rs`
 (`the_predictor_replays_uo_automatic_fire`) replays it under UO's rules.
 
