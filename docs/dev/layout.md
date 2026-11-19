@@ -122,6 +122,7 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     `games_mp.log`.
 - CoD1: `server.rs` (the frame), `server/cod1_game.rs` (`Cod1Game`),
   `server/cod1_frame.rs`, `spectate.rs` (usercmds in, playerstate out).
+  `server/test_hooks.rs` holds the `test_*` and `pin_*` seams the gates call.
 - `cod2/`: the CoD2 engine, `Cod2Game` in `cod2/mod.rs`: handshake,
   gamestate, snapshots, spectators. `house.rs`: zombies, downloads,
   heartbeat. `voice.rs`: the voice relay.
