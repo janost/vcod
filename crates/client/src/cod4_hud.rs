@@ -5156,14 +5156,10 @@ pub(crate) mod tests {
     }
 }
 
-#[path = "cod4_fullmap.rs"]
 mod fullmap;
 
-#[path = "cod4_connect.rs"]
 pub(crate) mod connect;
 
-#[path = "cod4_hints.rs"]
 pub(crate) mod hints;
 
-#[path = "cod4_grenades.rs"]
 pub(crate) mod grenades;
