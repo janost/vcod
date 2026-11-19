@@ -39,6 +39,7 @@ use super::flags::EF_TELEPORT_BIT;
 use super::parse::{Gamestate2, Parsed, Parser, Snapshot2};
 use super::protocol::{CS_LAYOUT_118, CS_WEAPONS};
 use crate::trajectory::{TR_INTERPOLATE, TR_LINEAR_STOP, Trajectory2};
+use vcod_common::net::Msec;
 use vcod_common::net::protocol::CsRange;
 
 /// One entity of a snapshot.
@@ -85,7 +86,7 @@ impl EntityView {
 /// The local client's playerstate.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlayerView {
-    pub command_time: i32,
+    pub command_time: Msec,
     pub origin: [f32; 3],
     pub velocity: [f32; 3],
     pub viewangles: [f32; 3],
@@ -108,7 +109,7 @@ impl PlayerView {
     pub fn new(ps: &PlayerState2, own_client_num: i32) -> Self {
         let v = |k: &str| [0, 1, 2].map(|i| ps.f32(&format!("{k}[{i}]")));
         PlayerView {
-            command_time: ps.i32("commandTime"),
+            command_time: Msec::from_raw(ps.i32("commandTime")),
             origin: ps.origin(),
             velocity: v("velocity"),
             viewangles: ps.viewangles(),
@@ -141,7 +142,7 @@ impl PlayerView {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SnapshotView {
     pub message_num: i32,
-    pub server_time: i32,
+    pub server_time: Msec,
     pub snap_flags: u8,
     pub ps: PlayerView,
     /// Ascending by number.
@@ -436,7 +437,7 @@ impl NetView {
     /// (`CG_SetInitialSnapshot`), and with none to read the time is held at
     /// least at `cg.snap`'s. Otherwise it is done once `t` sits in
     /// `[cg.snap, cg.nextSnap)`, else `cg.nextSnap` becomes `cg.snap`.
-    fn select(&self, from: Option<Cursor>, t: i32) -> Option<(Cursor, i32)> {
+    fn select(&self, from: Option<Cursor>, t: Msec) -> Option<(Cursor, Msec)> {
         let mut c = match from.filter(|c| self.by_num(c.cur).is_some()) {
             Some(c) => c,
             None => {
@@ -486,7 +487,7 @@ impl NetView {
     /// `CG_AddLagometerSnapshotInfo` records). Message numbers no
     /// snapshot was kept for (lost, or refused as invalid) count as refused.
     pub fn process(&mut self, t: i32) -> (i32, Vec<(i32, bool)>) {
-        let Some((c, time)) = self.select(self.cgame, t) else {
+        let Some((c, time)) = self.select(self.cgame, Msec::from_raw(t)) else {
             return (t, Vec::new());
         };
         // The first process reports every kept message from the oldest.
@@ -503,7 +504,7 @@ impl NetView {
                 .collect()
         });
         self.cgame = Some(c);
-        (time, read)
+        (time.raw(), read)
     }
 
     /// The cgame's cursor, `None` before [`Self::process`] ran.
@@ -516,12 +517,13 @@ impl NetView {
     /// Before any process it starts as the cgame would. With no readable
     /// snapshot to start on, the newest alone.
     pub fn frame(&self, t: i32) -> Option<Frame<'_>> {
+        let t = Msec::from_raw(t);
         let newest = self.snap.as_ref()?;
         let Some((c, time)) = self.select(self.cgame, t) else {
             return Some(Frame {
                 snap: newest,
                 prev: None,
-                time_ms: t.max(newest.server_time),
+                time_ms: t.max(newest.server_time).raw(),
                 frac: 0.0,
                 configstrings: &self.configstrings,
             });
@@ -538,7 +540,7 @@ impl NetView {
         Some(Frame {
             snap: next,
             prev: (c.next != c.cur).then_some(cur),
-            time_ms: time,
+            time_ms: time.raw(),
             frac,
             configstrings: &self.configstrings,
         })
@@ -595,7 +597,7 @@ impl Frame<'_> {
     }
 
     /// The older snapshot's time, `cg.snap->serverTime`.
-    fn older_ms(&self) -> i32 {
+    fn older_ms(&self) -> Msec {
         self.prev.map_or(self.snap.server_time, |p| p.server_time)
     }
 
@@ -619,13 +621,13 @@ impl Frame<'_> {
         let cur = self.current(e);
         if Self::interpolates(cur) {
             let (pos, ang) = (
-                e.pos.evaluate_f32(self.snap.server_time),
-                e.apos.evaluate_f32(self.snap.server_time),
+                e.pos.evaluate_f32(self.snap.server_time.raw()),
+                e.apos.evaluate_f32(self.snap.server_time.raw()),
             );
             if std::ptr::eq(cur, e) {
                 return (pos, ang);
             }
-            let from = self.older_ms();
+            let from = self.older_ms().raw();
             return (
                 cur.pos.evaluate_f32(from).lerp(pos, self.frac),
                 lerp_angles(cur.apos.evaluate_f32(from), ang, self.frac),
@@ -640,7 +642,7 @@ impl Frame<'_> {
                 .filter(|m| m.etype == ET_SCRIPTMOVER)
         {
             let mover = self.current(mover).pos;
-            origin += mover.evaluate_f32(self.time_ms) - mover.evaluate_f32(self.older_ms());
+            origin += mover.evaluate_f32(self.time_ms) - mover.evaluate_f32(self.older_ms().raw());
         }
         (origin, cur.apos.evaluate_f32(self.time_ms))
     }
@@ -722,7 +724,7 @@ mod tests {
     fn snap(time: i32, entities: Vec<EntityView>) -> SnapshotView {
         SnapshotView {
             message_num: 0,
-            server_time: time,
+            server_time: Msec::from_raw(time),
             snap_flags: 0,
             ps: PlayerView::new(&PlayerState2::default(), 0),
             entities,
@@ -757,6 +759,25 @@ mod tests {
         assert_eq!(at(vec![], body(100.0, 0)), 100.0);
         assert!(teleported(0x42, 0x40));
         assert!(!teleported(0x42, 0x2));
+    }
+
+    /// Snapshots at both ends of `int`: `CG_SetFrameInterpolation`'s two
+    /// `int` differences wrap as retail's do (to `i32::MIN` over -1).
+    #[test]
+    fn frac_wraps_at_the_ends_of_int() {
+        let mut v = NetView::default();
+        for (n, t) in [(1, i32::MIN), (2, i32::MAX)] {
+            let mut s = snap(t, vec![body(0.0, 0)]);
+            s.message_num = n;
+            v.push(s, (0, 0));
+        }
+        let (time, _) = v.process(0);
+        let f = v.frame(time).unwrap();
+        assert_eq!(
+            (f.prev.map(|p| p.message_num), f.snap.message_num),
+            (Some(1), 2)
+        );
+        assert_eq!(f.frac, i32::MIN as f32 / -1.0);
     }
 
     /// Message `n` at `50 * n` ms, one body at x `n`.

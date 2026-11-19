@@ -139,7 +139,7 @@ fn holding(cl: &NetClient<ClientEnd>, buttons: u8) -> UserCmd {
     let da =
         ["delta_angles[0]", "delta_angles[1]", "delta_angles[2]"].map(|n| s.ps.field_i32(p, n));
     UserCmd {
-        server_time: s.server_time,
+        server_time: s.server_time.raw(),
         angles: std::array::from_fn(|i| ((v[i] * 65536.0 / 360.0).round() as i32 - da[i]) & 0xffff),
         buttons,
         weapon: s.ps.field_i32(p, "weapon") as u8,
@@ -374,7 +374,7 @@ fn replay_with(
         Line::Snap(s) => Some(s.delta_angles()),
         _ => None,
     })?;
-    let seated_at = cl.snapshots().newest()?.server_time;
+    let seated_at = cl.snapshots().newest()?.server_time.raw();
     let mut ours_first = seated_at;
     while ours_first < seated_at + CAPTURE_LAG_MS {
         now += frame;
@@ -383,7 +383,7 @@ fn replay_with(
         last_sent = cmd.server_time;
         cl.send_cmds(&[cmd]);
         step(&mut sv, &q, &mut cl, now);
-        ours_first = cl.snapshots().newest()?.server_time;
+        ours_first = cl.snapshots().newest()?.server_time.raw();
     }
     let offset = ours_first - first;
     // One rebase a seat: retail's `delta_angles` onto ours at the capture's
@@ -439,7 +439,7 @@ fn replay_with(
                     if cl
                         .snapshots()
                         .newest()
-                        .is_some_and(|n| n.server_time >= want)
+                        .is_some_and(|n| n.server_time.raw() >= want)
                     {
                         break;
                     }

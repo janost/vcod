@@ -88,7 +88,7 @@ impl HitSample {
         let f = |n: &str| snap.ps.field_i32(p, n);
         HitSample {
             elapsed_ms,
-            server_time: snap.server_time,
+            server_time: snap.server_time.raw(),
             health: snap.ps.health(),
             damage_event: f("damageEvent"),
             damage_count: f("damageCount"),
@@ -1338,7 +1338,7 @@ impl HitProbe {
             let s = ShooterSample {
                 phase: self.phase.label(),
                 elapsed_ms: ms,
-                server_time: snap.server_time,
+                server_time: snap.server_time.raw(),
                 buttons: cmd.buttons,
                 wbuttons: cmd.wbuttons,
                 weaponstate: f("weaponstate"),

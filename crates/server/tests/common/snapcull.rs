@@ -7,6 +7,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
+use vcod_common::net::Msec;
 use vcod_common::net::msg::NULL_USERCMD;
 use vcod_common::net::protocol::Cod1Wire;
 
@@ -120,18 +121,18 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, p: &'static Cod1Wire, cvars: &[(&str, &str)
         subject.send_frame(&NULL_USERCMD);
         super::step_pair(&mut sv, (&qa, &mut viewer), (&qb, &mut subject), now);
         if let Some(s) = viewer.snapshots().newest()
-            && s.server_time != seen_v
+            && s.server_time != Msec::from_raw(seen_v)
         {
-            seen_v = s.server_time;
+            seen_v = s.server_time.raw();
             let info = s.ps.field_i32(p, "iCompassFriendInfo");
             if compass.last().is_none_or(|(_, i)| *i != info) {
-                compass.push((s.server_time, info));
+                compass.push((s.server_time.raw(), info));
             }
         }
         if let Some(s) = subject.snapshots().newest()
-            && s.server_time != seen_s
+            && s.server_time != Msec::from_raw(seen_s)
         {
-            seen_s = s.server_time;
+            seen_s = s.server_time.raw();
             let list: Ents = s
                 .entities
                 .iter()
@@ -140,7 +141,7 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, p: &'static Cod1Wire, cvars: &[(&str, &str)
                 .map(|(n, t)| format!("{n}:{t}"))
                 .collect();
             if ents.last().is_none_or(|(_, e)| *e != list) {
-                ents.push((s.server_time, list));
+                ents.push((s.server_time.raw(), list));
             }
         }
         if sv

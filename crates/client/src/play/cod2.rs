@@ -54,6 +54,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+use vcod_common::net::Msec;
 
 use anyhow::{Context, bail};
 use glam::Vec3;
@@ -691,7 +692,7 @@ impl Cod2Session {
         if p.snapshot.is_some()
             && let Some(s) = &self.view.snap
         {
-            self.meter.snapshot(s.ps.command_time, clock_now());
+            self.meter.snapshot(s.ps.command_time.raw(), clock_now());
             self.lagometer
                 .parsed(s.message_num, self.meter.ping, s.snap_flags);
         }
@@ -1008,12 +1009,12 @@ impl Cod2Session {
             .prev
             .as_ref()
             .map_or(0, |p| snap.server_time - p.server_time);
-        Some(snap.server_time - gap + since(self.snap_at).as_millis() as i32)
+        Some((snap.server_time - gap + since(self.snap_at).as_millis() as i32).raw())
     }
 
     /// The server time a cmd made now carries.
     fn cmd_time(&self) -> i32 {
-        let snap = self.view.snap.as_ref().map_or(0, |s| s.server_time);
+        let snap = self.view.snap.as_ref().map_or(0, |s| s.server_time.raw());
         if self.clock.started() {
             return self.clock.cmd_time(snap);
         }
@@ -1033,9 +1034,9 @@ impl Cod2Session {
     fn advance_clock(&mut self) {
         let real = self.real_ms() as i32;
         if let Some(s) = &self.view.snap {
-            let prev = self.view.prev.as_ref().map(|p| p.server_time);
+            let prev = self.view.prev.as_ref().map(|p| p.server_time.raw());
             self.clock
-                .update_cod2(real, s.server_time, prev, s.message_num as u32);
+                .update_cod2(real, s.server_time.raw(), prev, s.message_num as u32);
         }
     }
 
@@ -1053,7 +1054,7 @@ impl Cod2Session {
         let Some(newest) = &self.view.snap else {
             return;
         };
-        self.lagometer.latest = newest.server_time;
+        self.lagometer.latest = newest.server_time.raw();
         self.cg_time = Some(time);
         if let Some(c) = self.view.cursor()
             && let Some(f) = self.view.frame(time)
@@ -1066,8 +1067,12 @@ impl Cod2Session {
                 .prev
                 .as_ref()
                 .map_or(newest.server_time, |p| p.server_time);
-            self.lerp
-                .frame(t, time, (cur, next), (prev, newest.server_time));
+            self.lerp.frame(
+                t,
+                time,
+                (cur.raw(), next.raw()),
+                (prev.raw(), newest.server_time.raw()),
+            );
         }
     }
 
@@ -1223,7 +1228,7 @@ impl Cod2Session {
         // `cg.snap`: the older of the two the frame draws between.
         let ps = &f.prev.unwrap_or(f.snap).ps;
         let oldest = self.sent[self.sent.len() - CMD_BACKUP].server_time;
-        ps.command_time < oldest && oldest <= t
+        ps.command_time < Msec::from_raw(oldest) && oldest <= t
     }
 
     /// The F3 overlay's link lines: ping, the last second's snapshots,
@@ -1739,7 +1744,7 @@ impl Cod2Session {
             .map(|f| f.snap);
         let ambient = crate::play::cod2_sound::ambient(
             &self.view.configstrings,
-            cur.map_or(0, |s| s.server_time),
+            cur.map_or(0, |s| s.server_time.raw()),
         );
         let Some(cur) = cur else {
             return (Vec::new(), ambient);
@@ -2427,7 +2432,7 @@ mod tests {
         let mut s = session(None);
         s.view.snap = Some(SnapshotView {
             message_num: 1,
-            server_time: 1000,
+            server_time: Msec::from_raw(1000),
             snap_flags: 0,
             ps: PlayerView::new(&vcod_cod2::net::PlayerState2::default(), 0),
             entities: Vec::new(),
@@ -2658,10 +2663,10 @@ mod tests {
     fn interrupted_once_the_oldest_kept_cmd_is_unrun() {
         let mut s = session(None);
         let mut ps = PlayerView::new(&vcod_cod2::net::PlayerState2::default(), 0);
-        ps.command_time = 980;
+        ps.command_time = Msec::from_raw(980);
         s.view.snap = Some(SnapshotView {
             message_num: 1,
-            server_time: 1000,
+            server_time: Msec::from_raw(1000),
             snap_flags: 0,
             ps,
             entities: Vec::new(),

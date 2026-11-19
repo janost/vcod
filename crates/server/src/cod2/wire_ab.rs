@@ -126,7 +126,7 @@ fn death_time(join: &Side) -> Option<i32> {
     join.snaps
         .windows(2)
         .find(|w| w[0].ps.i32("pm_type") == 0 && w[1].ps.i32("pm_type") >= 5)
-        .map(|w| w[1].server_time)
+        .map(|w| w[1].server_time.raw())
 }
 
 /// Each death of the retail joiner, its death anim without the toggle:
@@ -182,7 +182,7 @@ fn ours(
 ) -> (Side, Side) {
     let pins = spawn_pins(retail[1]);
     let deaths = death_pins(retail[1]);
-    let starts = retail.map(|s| s.snaps[0].server_time);
+    let starts = retail.map(|s| s.snaps[0].server_time.raw());
     let kill_at = death_time(retail[1]);
     let mut now = Instant::now();
     let cfg = Cod2Config {
@@ -257,7 +257,7 @@ fn ours(
             // before its twin's first snapshot, once the gamestate is in,
             // so it begins and reads that snapshot when its twin did.
             let base = match p.cl.parser.snapshot() {
-                Some(s) => Some(s.server_time),
+                Some(s) => Some(s.server_time.raw()),
                 None => (p.cl.parser.gamestate.is_some() && sv.time_ms() + FRAME_MS >= p.first)
                     .then(|| sv.time_ms()),
             };

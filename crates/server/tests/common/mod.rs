@@ -304,7 +304,7 @@ pub fn join_pair_staggered(
         waited += 50;
         match ca.snapshots().newest().filter(|_| !stamps_a.is_empty()) {
             Some(snap) if ca.state() == NetState::Active => {
-                let end = snap.server_time + FRAME_MS as i32;
+                let end = snap.server_time.raw() + FRAME_MS as i32;
                 let cmds = stamped(&ca, &holding(&ca), stamps_a, last_a, end);
                 if let Some(c) = cmds.last() {
                     last_a = c.server_time;
@@ -329,7 +329,7 @@ pub fn join_pair_staggered(
         *now += Duration::from_millis(50);
         match ca.snapshots().newest().filter(|_| !stamps_a.is_empty()) {
             Some(snap) if ca.state() == NetState::Active => {
-                let end = snap.server_time + FRAME_MS as i32;
+                let end = snap.server_time.raw() + FRAME_MS as i32;
                 let cmds = stamped(&ca, &holding(&ca), stamps_a, last_a, end);
                 if let Some(c) = cmds.last() {
                     last_a = c.server_time;
@@ -342,8 +342,9 @@ pub fn join_pair_staggered(
         }
         match cb.snapshots().newest().filter(|_| b_after_ms > 0) {
             Some(snap) if cb.state() == NetState::Active => {
-                let end = snap.server_time + FRAME_MS as i32 - PROBE_CMD_LAG_MS;
-                let stamps = probe_cadence(last_b.max(snap.server_time - FRAME_MS as i32), end);
+                let end = snap.server_time.raw() + FRAME_MS as i32 - PROBE_CMD_LAG_MS;
+                let stamps =
+                    probe_cadence(last_b.max(snap.server_time.raw() - FRAME_MS as i32), end);
                 let cmds = stamped(&cb, &holding(&cb), &stamps, last_b, end);
                 if let Some(c) = cmds.last() {
                     last_b = c.server_time;
@@ -1304,7 +1305,11 @@ pub fn replay_as(
             }
         }
         if let Some(at) = step.open_at.filter(|_| step.cmds.is_none()) {
-            while cl.snapshots().newest().is_some_and(|s| s.server_time < at) {
+            while cl
+                .snapshots()
+                .newest()
+                .is_some_and(|s| s.server_time.raw() < at)
+            {
                 now += Duration::from_millis(FRAME_MS as u64);
                 cl.send_frame(&base);
                 self::step(&mut sv, &q, &mut cl, now);
@@ -1327,7 +1332,7 @@ pub fn replay_as(
         // and what it logged past that runs in the next step, on the same
         // clock unless that one waits for the weapon first.
         if let Some(log) = &step.cmds {
-            let open = cl.snapshots().newest().map_or(0, |s| s.server_time);
+            let open = cl.snapshots().newest().map_or(0, |s| s.server_time.raw());
             let shift = shift_carried.unwrap_or(open - log.start);
             let first = log.stamps[0];
             let hands_on = steps.get(si + 1).is_some_and(|s| s.cmds.is_some());
@@ -1486,7 +1491,7 @@ pub fn replay_as(
 fn sample_of(s: &vcod_common::net::snapshot::Snapshot, ms: i64, explosions: usize) -> Sample {
     Sample {
         ms,
-        server_time: s.server_time,
+        server_time: s.server_time.raw(),
         ps: s.ps.clone(),
         entities: s.entities.clone(),
         explosions,
@@ -1947,7 +1952,7 @@ pub fn record_netchan(
         if let NetEvent::OutOfBand(text) = e {
             push(
                 NetchanKind::Oob(text.replace('\n', "\\n")),
-                cl.snapshots().newest().map(|s| s.server_time),
+                cl.snapshots().newest().map(|s| s.server_time.raw()),
             );
         }
     }
@@ -1969,7 +1974,7 @@ pub fn record_netchan(
                     clips.join(",")
                 },
             },
-            Some(s.server_time),
+            Some(s.server_time.raw()),
         );
     }
 }
@@ -2496,10 +2501,10 @@ impl ProbeHold {
         };
         let da =
             ["delta_angles[0]", "delta_angles[1]", "delta_angles[2]"].map(|n| s.ps.field_i32(p, n));
-        let mut t = self.last.max(s.server_time - FRAME_MS as i32);
+        let mut t = self.last.max(s.server_time.raw() - FRAME_MS as i32);
         let mut times = Vec::new();
         if self.framed {
-            let f = s.server_time;
+            let f = s.server_time.raw();
             // The `commandTime` of the newest snapshot logged at or before
             // `t`, inside the logged span: a stall that kept snapshots off
             // the client also kept its cmds off the server, so a frame in
@@ -2520,7 +2525,7 @@ impl ProbeHold {
                 }
                 None => {
                     let lo = self.times.partition_point(|&c| c < f);
-                    let hi = self.times.partition_point(|&c| c < f + FRAME_MS as i32);
+                    let hi = self.times.partition_point(|&c| c < (f + FRAME_MS as i32));
                     &self.times[lo..hi]
                 }
             };
@@ -2545,20 +2550,20 @@ impl ProbeHold {
                 }
                 false => t + PROBE_CMD_MS,
             };
-            while next(t) <= s.server_time + FRAME_MS as i32 {
+            while next(t) <= (s.server_time.raw() + FRAME_MS as i32) {
                 t = next(t);
                 times.push(t);
             }
         }
         // A cmd stamped before the newest snapshot's time went out on the
         // snapshot before it, its view and `delta_angles`.
-        if self.seen[0].is_none_or(|(st, _, _)| st != s.server_time) {
-            self.seen = [Some((s.server_time, v, da)), self.seen[0]];
+        if self.seen[0].is_none_or(|(st, _, _)| st != s.server_time.raw()) {
+            self.seen = [Some((s.server_time.raw(), v, da)), self.seen[0]];
         }
         let mut out = Vec::new();
         for &t in &times {
             let (v, da) = match self.seen[1] {
-                Some((_, ov, oda)) if !self.ran.is_empty() && t < s.server_time => (ov, oda),
+                Some((_, ov, oda)) if !self.ran.is_empty() && t < s.server_time.raw() => (ov, oda),
                 _ => (v, da),
             };
             out.push(UserCmd {
@@ -2788,9 +2793,9 @@ fn direct_replay_once(
             }
         }
         if let Some(s) = cl.snapshots().newest() {
-            first_snap.get_or_insert(s.server_time);
-            if frames.last().is_none_or(|(t, _)| *t != s.server_time) {
-                frames.push((s.server_time, s.entities.clone()));
+            first_snap.get_or_insert(s.server_time.raw());
+            if frames.last().is_none_or(|(t, _)| *t != s.server_time.raw()) {
+                frames.push((s.server_time.raw(), s.entities.clone()));
             }
         }
     }

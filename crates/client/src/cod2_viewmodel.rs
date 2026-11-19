@@ -633,6 +633,7 @@ pub fn view_angles(frame: &Frame) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::net::Msec;
 
     /// A search path opened again drops the view weapon's rigs, the misses
     /// included, so a weapon a download brought loads (BUG-083).
@@ -660,7 +661,7 @@ mod tests {
             raw.f[field_index(&PLAYER_STATE_FIELDS, "fWeaponPosFrac")] = pos.to_bits();
             SnapshotView {
                 message_num: 0,
-                server_time: 0,
+                server_time: Msec::ZERO,
                 snap_flags: 0,
                 ps: PlayerView::new(&raw, 0),
                 entities: Vec::new(),
@@ -812,7 +813,7 @@ mod tests {
         raw.ammoclip = [5; 64];
         let snap = SnapshotView {
             message_num: 0,
-            server_time: time_ms,
+            server_time: Msec::from_raw(time_ms),
             snap_flags: 0,
             ps: PlayerView::new(&raw, 0),
             entities: Vec::new(),

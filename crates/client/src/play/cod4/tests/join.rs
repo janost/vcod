@@ -373,7 +373,7 @@ fn score_bar_off(s: &mut Cod4Session) -> Option<i32> {
         .take_commands()
         .iter()
         .any(|c| String::from_utf8_lossy(c).contains("ui_score_bar \"0\""));
-    off.then(|| s.client().snapshots.last().map(|f| f.server_time))?
+    off.then(|| s.client().snapshots.last().map(|f| f.server_time.raw()))?
 }
 
 /// What `sv_fps` shows a client: the `serverTime` steps between
@@ -390,7 +390,8 @@ fn frame_timing(s: &Cod4Session, off: i32) -> (std::collections::BTreeSet<i32>, 
         .iter()
         .find(|f| f.ps.get("otherFlags").unwrap_or(0) & 4 != 0)
         .expect("a spawn")
-        .server_time;
+        .server_time
+        .raw();
     (steps, off - spawn)
 }
 

@@ -36,6 +36,7 @@ pub(crate) use fonts::console_font;
 use messages::{draw_say, push_line, wrap_chat};
 use text::draw_interrupted;
 pub(crate) use text::{glow_text, text};
+use vcod_common::net::Msec;
 use weapon_info::{DPAD_MENU, LOW_HEALTH_MENU, TALKERS_MENU};
 
 #[cfg(test)]
@@ -311,7 +312,7 @@ impl Cod4Hud {
                 .snapshots
                 .iter()
                 .rev()
-                .find(|x| x.server_time == f.server_time)
+                .find(|x| x.server_time == Msec::from_raw(f.server_time))
             else {
                 continue;
             };

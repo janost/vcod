@@ -154,7 +154,7 @@ fn print_missiles(side: &str, s: &vcod_common::net::snapshot::Snapshot) {
         if i("eType") == 4 {
             eprintln!(
                 "{side} {} missile {num} tr {} time {} base {:.2} {:.2} {:.2} delta {:.1} {:.1} {:.1} ground {}",
-                s.server_time,
+                s.server_time.raw(),
                 i("pos.trType"),
                 i("pos.trTime"),
                 f("pos.trBase[0]"),
@@ -179,7 +179,7 @@ fn print_ps(side: &str, s: &vcod_common::net::snapshot::Snapshot) {
     let f = |n: &str| s.ps.field_f32(p, n);
     eprintln!(
         "{side} {} ps o {:.3} {:.3} {:.3} v {:.2} {:.2} {:.2} ground {} pmf {:#x} pmt {} ct {}",
-        s.server_time,
+        s.server_time.raw(),
         f("origin[0]"),
         f("origin[1]"),
         f("origin[2]"),
@@ -267,14 +267,14 @@ fn ours(c: &Case) -> Option<(Vec<String>, Explodes)> {
             }
         }
         if let Some(s) = cl.snapshots().newest()
-            && s.server_time != seen_time
+            && s.server_time.raw() != seen_time
         {
-            seen_time = s.server_time;
+            seen_time = s.server_time.raw();
             print_missiles("ours  ", s);
             print_ps("ours  ", s);
             for ev in tracker.drain(s, p) {
                 if is_held(&ev) {
-                    explodes.push((s.server_time, ev));
+                    explodes.push((s.server_time.raw(), ev));
                 }
             }
         }
@@ -297,7 +297,7 @@ fn retail_explodes(tag: &str) -> Explodes {
         print_ps("retail", &f.snapshot);
         for ev in tracker.drain(&f.snapshot, p) {
             if is_held(&ev) {
-                out.push((f.snapshot.server_time, ev));
+                out.push((f.snapshot.server_time.raw(), ev));
             }
         }
     }

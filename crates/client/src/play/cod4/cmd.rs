@@ -343,7 +343,7 @@ impl Cod4Session {
                 .and_then(|d| d.get(usize::from(w)))
                 .map_or(0, |d| d.alt_weapon as u8)
         };
-        self.input.action_slot(&s, &alt_of, &primaries, now)
+        self.input.action_slot(&s, &alt_of, &primaries, now.raw())
     }
 
     /// `CG_OutOfAmmoChange` (`iw3mp.exe` 0x457560) after our own EV_NOAMMO
@@ -540,7 +540,7 @@ fn own_cmd(
     let server_time = c
         .snapshots
         .last()
-        .map_or(0, |s| s.server_time + snap_age.as_millis() as i32);
+        .map_or(0, |s| (s.server_time + snap_age.as_millis() as i32).raw());
     let delta = |i: usize| angle2short(ps_f32(ps, &format!("delta_angles[{i}]")));
     let [forwardmove, rightmove] = input.moves(talking);
     let (weapon, offhand) = input.weapons();

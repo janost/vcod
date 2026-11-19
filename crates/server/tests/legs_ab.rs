@@ -471,7 +471,7 @@ fn run_ours(
     let mut next_cmd = 0;
     let mut last_st = i32::MIN;
     loop {
-        let newest = cl.snapshots().newest().map(|s| s.server_time);
+        let newest = cl.snapshots().newest().map(|s| s.server_time.raw());
         let t = newest.map_or(0, |t| t + FRAME_MS as i32);
         if t > last {
             break;
@@ -525,13 +525,13 @@ fn run_ours(
                 let l = s.ps.field_i32(p, "legsAnim");
                 let retail = walk.spawned.unwrap_or(idle_ms);
                 assert!(
-                    l == 0 || s.server_time == retail,
+                    l == 0 || s.server_time.raw() == retail,
                     "ours set the spawn idle at {}, not retail's {retail}",
-                    s.server_time
+                    s.server_time.raw()
                 );
             }
             legs.insert(
-                s.server_time,
+                s.server_time.raw(),
                 (
                     s.ps.field_i32(p, "legsAnim"),
                     s.ps.field_i32(p, "movementDir"),

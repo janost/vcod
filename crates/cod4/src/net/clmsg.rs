@@ -681,4 +681,34 @@ mod tests {
         );
         assert_eq!(read_ops(plain, key, &base).unwrap(), ops);
     }
+
+    /// A cmd clock at either end of `int`: the one-byte step wraps past
+    /// `i32::MAX` as retail's `int` add does; the whole-clock branches
+    /// carry both ends.
+    #[test]
+    fn the_clock_wraps_at_the_ends_of_int() {
+        let base = UserCmd::default();
+        let key = 0x5a5a_1234u32 as i32;
+        let (a, b) = (cmd(i32::MAX - 5), cmd(i32::MIN + 3));
+        let short = CmdWire::natural(&a, &b);
+        assert_ne!(short.branch, Branch::Long);
+        let (lo, hi) = (cmd(i32::MIN), cmd(i32::MAX));
+        let ops = vec![
+            ClOp::Move {
+                delta: true,
+                cmds: vec![
+                    (a, CmdWire::full(&base, &a)),
+                    (b, short),
+                    (lo, CmdWire::natural(&b, &lo)),
+                    (hi, CmdWire::natural(&lo, &hi)),
+                ],
+                origin: [0, 0, 0],
+                origin_time: i32::MAX,
+            },
+            ClOp::Eof,
+        ];
+        let plain = write_ops(&ops, key, &base);
+        assert_eq!(read_ops(plain.clone(), key, &base).unwrap(), ops);
+        assert_eq!(write_ops(&ops, key, &base), plain);
+    }
 }

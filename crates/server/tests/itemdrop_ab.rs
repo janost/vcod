@@ -29,6 +29,7 @@
 //! `main/` is 1.5's) the 1.5b and UO ones; without the paks they return.
 
 use crate::common;
+use vcod_common::net::Msec;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -615,9 +616,9 @@ fn run_ours(patch: &Patch, fs: vcod_common::pk3::Pk3Fs, retail: &Run) -> Run {
             }
         }
         if let Some(s) = cl.snapshots().newest()
-            && s.server_time != seen_time
+            && s.server_time != Msec::from_raw(seen_time)
         {
-            seen_time = s.server_time;
+            seen_time = s.server_time.raw();
             let mut here = BTreeMap::new();
             for (&num, e) in &s.entities {
                 if e.field_i32(p, "eType") != ET_ITEM {
@@ -625,7 +626,7 @@ fn run_ours(patch: &Patch, fs: vcod_common::pk3::Pk3Fs, retail: &Run) -> Run {
                 }
                 let i = |n: &str| e.field_i32(p, n);
                 let item = Item {
-                    t: s.server_time,
+                    t: s.server_time.raw(),
                     num,
                     index: i("index"),
                     client_num: i("clientNum"),
@@ -648,7 +649,7 @@ fn run_ours(patch: &Patch, fs: vcod_common::pk3::Pk3Fs, retail: &Run) -> Run {
             }
             for &num in last.keys().filter(|n| !here.contains_key(n)) {
                 lines.push(Line::Gone {
-                    t: s.server_time,
+                    t: s.server_time.raw(),
                     num,
                 });
             }

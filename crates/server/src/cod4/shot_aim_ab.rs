@@ -191,21 +191,21 @@ fn ours(install: &vcod_cod4::install::Install, run: &Run) -> (Vec<String>, Vec<S
             "target",
             0,
             28961,
-            rt.snaps[0].server_time,
+            rt.snaps[0].server_time.raw(),
             &answers("mr {sid} 8 allies", run.goto[0]),
         ),
         Probe::new(
             "shooter",
             1,
             28962,
-            rs.snaps[0].server_time,
+            rs.snaps[0].server_time.raw(),
             &answers("mr {sid} 8 axis", run.goto[1]),
         ),
     ];
-    probes[0].replay = replay_schedule(&retail(&target), target_spawn);
-    probes[0].replay_from = target_spawn;
-    probes[1].replay = replay_schedule(&retail(&shooter), shooter_spawn);
-    probes[1].replay_from = shooter_spawn;
+    probes[0].replay = replay_schedule(&retail(&target), target_spawn.raw());
+    probes[0].replay_from = target_spawn.raw();
+    probes[1].replay = replay_schedule(&retail(&shooter), shooter_spawn.raw());
+    probes[1].replay_from = shooter_spawn.raw();
     let mut now = Instant::now();
     while sv.core.sv_time_ms < run.run_ms {
         let svs = sv.core.sv_time_ms;

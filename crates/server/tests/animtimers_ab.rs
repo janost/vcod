@@ -195,7 +195,7 @@ fn ours(
         let t = cl
             .snapshots()
             .newest()
-            .map_or(0, |s| s.server_time + common::FRAME_MS as i32);
+            .map_or(0, |s| (s.server_time + common::FRAME_MS as i32).raw());
         if t > last {
             break;
         }

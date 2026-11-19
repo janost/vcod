@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, bail, ensure};
+use vcod_common::net::Msec;
 use vcod_common::net::codec::MsgReader;
 
 use super::delta::{
@@ -47,7 +48,7 @@ impl Gamestate2 {
 pub struct Snapshot2 {
     /// The netchan sequence that carried it.
     pub message_num: i32,
-    pub server_time: i32,
+    pub server_time: Msec,
     /// The frame it deltas from, -1 for none.
     pub delta_num: i32,
     pub snap_flags: u8,
@@ -275,7 +276,7 @@ impl Parser {
         message_num: i32,
         undo: &mut Undo,
     ) -> anyhow::Result<i32> {
-        let server_time = r.read_long();
+        let server_time = Msec::from_raw(r.read_long());
         let back = i32::from(r.read_byte());
         let snap_flags = r.read_byte();
         let delta_num = if back == 0 { -1 } else { message_num - back };

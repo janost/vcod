@@ -118,7 +118,7 @@ fn cod4_live_grenade_launcher_fires_along_the_view() {
                 let events = std::array::from_fn(|k| ent_u32(e, &format!("events[{k}]")));
                 let tr = ent_u32(e, "lerp.pos.trType");
                 seen.states
-                    .push((snap.server_time, tr, v("trBase"), events));
+                    .push((snap.server_time.raw(), tr, v("trBase"), events));
                 if seen.launch.is_none() {
                     seen.launch = Some((tr, v("trBase"), v("trDelta")));
                 }

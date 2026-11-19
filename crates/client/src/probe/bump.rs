@@ -2,6 +2,7 @@
 
 use super::fixture::{PLAYERSTATE_FIXTURE_DIR, cmd_fields, serverinfo_key, write_fixture_file};
 use super::*;
+use vcod_common::net::Msec;
 
 /// The target's feet under `client-probes/probe_bump`'s `probe_teleport 1`; the
 /// walker is placed [`BUMP_BACK`] units behind along -x, both facing +x.
@@ -614,7 +615,7 @@ impl BumpProbe {
             }
         }
         let placed_st = self.placed.map_or(0, |(_, st)| st);
-        let since_placed = snap.server_time - placed_st;
+        let since_placed = snap.server_time.since(Msec::from_raw(placed_st));
         let nav_done = |s: &Self| s.nav_mark().is_some_and(|m| s.at_mark(m));
         let nav_timeout = in_phase >= BUMP_NAV_LIMIT;
         if self.nav_mark().is_some() && nav_timeout && !nav_done(self) {
@@ -630,7 +631,7 @@ impl BumpProbe {
             BumpPhase::Wait => {
                 let start = [self.spot[0] - BUMP_BACK, self.spot[1], self.spot[2]];
                 if horiz_dist(self.origin, start) <= BUMP_PLACED {
-                    self.placed = Some((now, snap.server_time));
+                    self.placed = Some((now, snap.server_time.raw()));
                     BumpPhase::Settle
                 } else if in_phase >= BUMP_WAIT {
                     self.notes.push(

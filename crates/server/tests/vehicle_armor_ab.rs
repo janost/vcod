@@ -26,6 +26,7 @@
 //! Needs `COD_DIR` at a UO install; without one it returns early.
 
 use crate::common;
+use vcod_common::net::Msec;
 
 use common::{Join, Queues, step_pair, step_pair_b_first};
 use std::cell::RefCell;
@@ -167,10 +168,10 @@ fn holding(cl: &NetClient<common::ClientEnd>, buttons: u8, last: &mut i32) -> Us
     let v = s.ps.viewangles(p);
     let da =
         ["delta_angles[0]", "delta_angles[1]", "delta_angles[2]"].map(|n| s.ps.field_i32(p, n));
-    let st = s.server_time.max(*last + 1);
-    *last = st;
+    let st = s.server_time.max(Msec::from_raw(*last + 1));
+    *last = st.raw();
     UserCmd {
-        server_time: st,
+        server_time: st.raw(),
         angles: std::array::from_fn(|i| ((v[i] * 65536.0 / 360.0).round() as i32 - da[i]) & 0xffff),
         buttons,
         weapon: s.ps.field_i32(p, "weapon") as u8,

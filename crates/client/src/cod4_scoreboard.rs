@@ -660,6 +660,7 @@ mod tests {
     use vcod_cod4::hud::ScoreRow;
     use vcod_cod4::net::delta::ClientState;
     use vcod_cod4::net::fields::CLIENT_STATE;
+    use vcod_common::net::Msec;
 
     /// [`crate::hud::hudelem::tests::test_font`] with advances varied by
     /// byte, so widths depend on the text.
@@ -695,7 +696,7 @@ mod tests {
     fn snapshot(clients: Vec<ClientState>) -> Snapshot {
         Snapshot {
             message_num: 0,
-            server_time: 0,
+            server_time: Msec::ZERO,
             delta_num: 0,
             base: None,
             snap_flags: 0,

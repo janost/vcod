@@ -933,7 +933,7 @@ impl Cod4Client {
             .client()
             .snapshots
             .last()
-            .map_or(0, |s| s.server_time);
+            .map_or(0, |s| s.server_time.raw());
         self.hud
             .update(&mut self.session, &fired, at.max(self.render_time));
         // `playLocalSound`'s `s`: the leader dialog, the announcer.

@@ -32,7 +32,12 @@ fn retail() -> Vec<(i32, GameEvent)> {
         "net/snapshots-uo-wreck.bin",
     ) {
         let s = &f.snapshot;
-        out.extend(tracker.drain(s, p).into_iter().map(|e| (s.server_time, e)));
+        out.extend(
+            tracker
+                .drain(s, p)
+                .into_iter()
+                .map(|e| (s.server_time.raw(), e)),
+        );
     }
     out
 }
@@ -63,7 +68,12 @@ fn ours(secs: i64) -> Vec<(i32, GameEvent)> {
             }
         }
         if let Some(s) = cl.snapshots().newest() {
-            out.extend(tracker.drain(s, p).into_iter().map(|e| (s.server_time, e)));
+            out.extend(
+                tracker
+                    .drain(s, p)
+                    .into_iter()
+                    .map(|e| (s.server_time.raw(), e)),
+            );
         }
     }
     if std::env::var_os("WRECK_REPORT").is_some() {

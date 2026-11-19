@@ -124,16 +124,16 @@ impl Run {
     fn record(&mut self, tracker: &mut EventTracker, s: &Snapshot, p: &Cod1Wire) {
         for ev in tracker.drain(s, p) {
             self.seen.push(Seen {
-                t: s.server_time,
+                t: s.server_time.raw(),
                 ev,
             });
         }
         for (&n, e) in &s.entities {
-            self.last_seen.insert(n, s.server_time);
+            self.last_seen.insert(n, s.server_time.raw());
             if e.field_i32(p, "eType") == 4 {
                 let f = |name: &str| e.field_f32(p, name);
                 self.missiles.push((
-                    s.server_time,
+                    s.server_time.raw(),
                     n,
                     Flight {
                         tr_type: e.field_i32(p, "pos.trType"),
@@ -579,7 +579,7 @@ fn the_mounted_mg_overheats_and_cools_as_on_uo() {
                     gun = Some(n);
                 }
                 if e.field_i32(p, "animMovetype") == 1 && retail_mark.is_none() {
-                    retail_mark = Some(f.snapshot.server_time);
+                    retail_mark = Some(f.snapshot.server_time.raw());
                 }
             }
         }
@@ -649,7 +649,7 @@ fn the_mounted_mg_overheats_and_cools_as_on_uo() {
                         our_gun = Some(n);
                     }
                     if e.field_i32(p, "animMovetype") == 1 && ours_mark.is_none() {
-                        ours_mark = Some(s.server_time);
+                        ours_mark = Some(s.server_time.raw());
                     }
                 }
             }
@@ -912,7 +912,7 @@ fn the_bazooka_rocket_flies_and_explodes_as_on_uo() {
     let view = frames
         .iter()
         .map(|f| &f.snapshot)
-        .take_while(|s| s.server_time < fire_t)
+        .take_while(|s| s.server_time.raw() < fire_t)
         .last()
         .expect("a snapshot before the fire")
         .ps
@@ -1049,7 +1049,7 @@ fn the_bazooka_rocket_leaves_on_retails_bits() {
     let view = frames
         .iter()
         .map(|f| &f.snapshot)
-        .take_while(|s| s.server_time < fire_t)
+        .take_while(|s| s.server_time.raw() < fire_t)
         .last()
         .expect("a snapshot before the fire")
         .ps
@@ -1159,9 +1159,9 @@ fn ours_direct(probe: &str, src: &str, fixture: &str, secs: i64) -> (Vec<String>
             }
         }
         if let Some(s) = cl.snapshots().newest()
-            && s.server_time != seen_time
+            && s.server_time.raw() != seen_time
         {
-            seen_time = s.server_time;
+            seen_time = s.server_time.raw();
             out.record(&mut tracker, s, p);
         }
     }

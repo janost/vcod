@@ -820,7 +820,7 @@ fn main() -> Result<()> {
             let snap = conn.client.snapshots.last();
             let ps = snap.map(|s| s.ps.clone()).unwrap_or_default();
             let now_time = snap.map_or(0, |s| {
-                s.server_time + last_snap_at.elapsed().as_millis() as i32
+                (s.server_time + last_snap_at.elapsed().as_millis() as i32).raw()
             });
             let spawn_s = spawned.map(|s| s.elapsed().as_secs_f32());
             let target = snap.and_then(|s| aim_at(&s.ps, &s.entities, aim_z, corpse_z));

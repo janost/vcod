@@ -119,7 +119,7 @@ pub fn read_frame<T: Transport>(
         if stop {
             return (events, held);
         }
-        clock.update_demo(realtime, snap, knobs.nudge, held);
+        clock.update_demo(realtime, snap.raw(), knobs.nudge, held);
     }
     let how = DemoClock {
         freeze: knobs.freeze,
@@ -187,6 +187,7 @@ pub fn stamp_now() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::net::Msec;
     use vcod_common::net::protocol::PROTOCOL_V1;
     use vcod_common::net::protocol::{PROTOCOL_V6, PROTOCOL_V22};
     use vcod_common::net::{NetEvent, UdpTransport};
@@ -364,12 +365,12 @@ mod tests {
                 assert_eq!((frame, how.timedemo_frames), (0, None));
                 continue;
             };
-            let t = clock.update_demo(realtime, newest, 0, how);
+            let t = clock.update_demo(realtime, newest.raw(), 0, how);
             frames += 1;
             assert_eq!(how.timedemo_frames, Some(frames));
-            assert_eq!(t, base + 50 * frames, "frame {frame}");
+            assert_eq!(t, (base + 50 * frames).raw(), "frame {frame}");
             // Read one snapshot past the frame's time.
-            assert_eq!(newest, t + 50, "frame {frame}");
+            assert_eq!(newest, Msec::from_raw(t + 50), "frame {frame}");
         }
         let span = net.snapshots().newest().unwrap().server_time - base;
         // The frame that finds the trailer is counted but not drawn.
@@ -402,13 +403,16 @@ mod tests {
                 continue;
             };
             seen.insert(newest.message_num);
-            let t = clock.update_demo(realtime, newest.server_time, 0, run);
+            let t = clock.update_demo(realtime, newest.server_time.raw(), 0, run);
             assert!(
-                newest.server_time > t,
+                newest.server_time > Msec::from_raw(t),
                 "frame {frame}: drawn past the newest"
             );
             let (a, b) = net.snapshots().two_for_time(t).unwrap();
-            assert!(a.server_time <= t && t <= b.server_time, "frame {frame}");
+            assert!(
+                a.server_time <= Msec::from_raw(t) && t <= b.server_time.raw(),
+                "frame {frame}"
+            );
         }
         assert!(ended, "the demo never ended");
         // Every snapshot is newest on some frame but the first: the frame

@@ -2291,6 +2291,7 @@ fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::net::Msec;
 
     /// The aim is what decides whether the shooter's shots reach the target at
     /// all, and its two sign conventions (yaw counter-clockwise from +x, pitch
@@ -2383,7 +2384,7 @@ mod tests {
             })
             .collect();
         net::snapshot::Snapshot {
-            server_time: 1000 + 50 * num as i32,
+            server_time: Msec::from_raw(1000 + 50 * num as i32),
             message_num: num,
             delta_num: -1,
             snap_flags: 0,

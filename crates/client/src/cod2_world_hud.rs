@@ -240,6 +240,7 @@ fn head_icons(frame: &Frame, heads: &HashMap<u32, Vec3>, view: &WorldView, out: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::net::Msec;
 
     fn view() -> WorldView {
         let (w, h) = (640.0, 480.0);
@@ -326,7 +327,7 @@ mod tests {
             vcod_cod2::net::SnapshotView::new(
                 &Snapshot2 {
                     message_num: 1,
-                    server_time: 1000,
+                    server_time: Msec::from_raw(1000),
                     delta_num: -1,
                     snap_flags: 0,
                     valid: true,

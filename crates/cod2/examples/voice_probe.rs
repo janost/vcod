@@ -78,7 +78,7 @@ impl Peer {
             self.last_send = Instant::now();
             let pkt = match self.cl.parser.gamestate.is_some() {
                 true => {
-                    let base = self.cl.parser.snapshot().map_or(0, |f| f.server_time);
+                    let base = self.cl.parser.snapshot().map_or(0, |f| f.server_time.raw());
                     let cmd = self
                         .cl
                         .idle_cmd(base + self.snap_at.elapsed().as_millis() as i32);

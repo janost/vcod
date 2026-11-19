@@ -400,7 +400,7 @@ impl PvsProbe {
         self.stations.push(PvsStation {
             label,
             origin: me,
-            server_time: snap.server_time,
+            server_time: snap.server_time.raw(),
             // The frame's own list, not the diff state: what the server sent
             // is what the fixture has to carry.
             ents: snap.entities.clone(),

@@ -120,7 +120,7 @@ fn run_once(
             }
         }
         if let Some(s) = cl.snapshots().newest() {
-            first_snap.get_or_insert(s.server_time);
+            first_snap.get_or_insert(s.server_time.raw());
         }
         if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
             break;

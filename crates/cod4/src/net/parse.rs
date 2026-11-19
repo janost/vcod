@@ -11,6 +11,7 @@ use super::delta::{
 use super::huffman::Huffman;
 use anyhow::{Context, Result, bail, ensure};
 use std::collections::BTreeMap;
+use vcod_common::net::Msec;
 use vcod_common::net::codec::{MsgReader, MsgWriter};
 use vcod_common::net::huffman::Huffman as Cod1Huffman;
 
@@ -121,7 +122,7 @@ pub struct SnapshotWire {
 pub struct Snapshot {
     /// The netchan sequence of the message that carried it.
     pub message_num: i32,
-    pub server_time: i32,
+    pub server_time: Msec,
     /// 0 for a snapshot from nothing, else the message it deltas from.
     pub delta_num: i32,
     /// Index into [`Client::snapshots`] of the snapshot it deltas from.
@@ -292,7 +293,7 @@ impl Client {
             .gamestate
             .as_ref()
             .context("snapshot before the gamestate")?;
-        let server_time = r.read_long();
+        let server_time = Msec::from_raw(r.read_long());
         let delta = r.read_byte() as i32;
         let snap_flags = r.read_byte();
         let base = if delta == 0 {
@@ -421,7 +422,7 @@ impl Client {
             map_center: gs.map_center,
         };
         w.write_byte(SVC_SNAPSHOT);
-        w.write_long(s.server_time);
+        w.write_long(s.server_time.raw());
         w.write_byte(s.delta_num as u8);
         w.write_byte(s.snap_flags);
         delta::write_delta_playerstate(w, &ctx, old.map(|o| &o.ps), &s.ps, &s.wire.ps);
@@ -504,7 +505,7 @@ pub fn parse_gamestate(r: &mut MsgReader) -> Result<Gamestate> {
                 let num = delta::read_entity_index(r, &mut last_entity, GENTITYNUM_BITS)?;
                 ensure!(num < 1024, "baseline {num}");
                 let ctx = Ctx {
-                    time: 0,
+                    time: Msec::ZERO,
                     map_center: gs.map_center,
                 };
                 let (e, wire) = delta::read_delta_entity(r, &ctx, &EntityState::default(), num)?;
@@ -530,7 +531,7 @@ pub fn write_gamestate(w: &mut MsgWriter, gs: &Gamestate) {
     w.write_long(gs.server_command_sequence);
     let mut last_entity = -1;
     let ctx = Ctx {
-        time: 0,
+        time: Msec::ZERO,
         map_center: gs.map_center,
     };
     for op in &gs.ops {

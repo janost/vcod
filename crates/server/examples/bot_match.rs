@@ -2807,7 +2807,7 @@ mod cod2 {
             }
             if let Observer2::Joined { cl, out } = self {
                 let pkt = if cl.parser.gamestate.is_some() {
-                    let base = cl.parser.snapshot().map_or(0, |s| s.server_time);
+                    let base = cl.parser.snapshot().map_or(0, |s| s.server_time.raw());
                     let cmd = cl.idle_cmd(base + super::TICK_MS as i32);
                     cl.build_packet(&[cmd])
                 } else {
@@ -3708,6 +3708,7 @@ mod cod2 {
 mod cod4 {
     use std::collections::{BTreeMap, HashMap, VecDeque};
     use std::time::{Duration, Instant};
+    use vcod_common::net::Msec;
 
     use vcod_server::cod4::{Cod4Config, Cod4Server};
     use vcod_server::engine::GameModule;
@@ -3842,7 +3843,7 @@ mod cod4 {
             let walk = self.play && self.answered >= 2;
             let cmd = UserCmd {
                 server_time: snap
-                    .map_or(sv.core.sv_time_ms, |t| t + 10)
+                    .map_or(sv.core.sv_time_ms, |t| (t + 10).raw())
                     .max(self.last_cmd.server_time + 1),
                 forwardmove: if walk { 127 } else { 0 },
                 angles: [0, if walk { (self.ticks * 182) as u16 } else { 0 }, 0],
@@ -3914,7 +3915,7 @@ mod cod4 {
             let newest = self.parser.snapshots.last().map(|s| s.server_time);
             let first = *self
                 .first_snap
-                .get_or_insert_with(|| newest.unwrap_or(i32::MAX));
+                .get_or_insert_with(|| newest.unwrap_or(Msec::MAX).raw());
             let sid = self
                 .parser
                 .gamestate
@@ -3925,7 +3926,7 @@ mod cod4 {
             let answers = ["mr {sid} 8 autoassign", "mr {sid} 15 assault_mp,0"];
             if let (true, Some(newest), Some(sid)) = (self.play, newest, sid)
                 && self.answered < answers.len()
-                && newest >= first + 1000 + 1500 * self.answered as i32
+                && newest >= Msec::from_raw(first + 1000 + 1500 * self.answered as i32)
             {
                 let text = answers[self.answered].replace("{sid}", &sid);
                 self.commands.push(text.into_bytes());

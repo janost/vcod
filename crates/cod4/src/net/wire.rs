@@ -18,6 +18,7 @@ use super::parse::{
 };
 use std::collections::BTreeMap;
 use vcod_common::game::Game;
+use vcod_common::net::Msec;
 use vcod_common::net::codec::{FieldCodec, MsgWriter};
 use vcod_common::net::netchan::NetchanParams;
 use vcod_common::net::protocol::{CsLayout, PakRules, SnapshotHead, Transport, WireGame};
@@ -112,7 +113,7 @@ pub static PROTOCOL_17: Cod4Wire = Cod4Wire {
 /// centre its origins are coded against.
 #[derive(Clone, Debug)]
 pub struct Frame4 {
-    pub server_time: i32,
+    pub server_time: Msec,
     pub map_center: [f32; 3],
     pub ps: PlayerState,
     pub entities: Vec<EntityState>,
@@ -267,7 +268,7 @@ pub fn write_snapshot(
         map_center: frame.map_center,
     };
     w.write_byte(SVC_SNAPSHOT);
-    w.write_long(frame.server_time);
+    w.write_long(frame.server_time.raw());
     w.write_byte(head.delta_num);
     w.write_byte(head.snap_flags as u8);
     let from_ps = base.map_or(&*delta::ZERO_PS, |b| &b.ps);
@@ -386,7 +387,7 @@ mod tests {
         c.0[0] = 1;
         c.0[1] = 3;
         let f1 = Frame4 {
-            server_time: 1000,
+            server_time: Msec::from_raw(1000),
             map_center: gs.map_center,
             ps: ps.clone(),
             entities: Vec::new(),
@@ -419,7 +420,7 @@ mod tests {
 
         // A delta one message on: the playerstate moves, the client leaves.
         let mut f2 = f1.clone();
-        f2.server_time = 1050;
+        f2.server_time = Msec::from_raw(1050);
         set(&mut f2.ps, "origin[0]", 340.0f32.to_bits());
         f2.clients.clear();
         let mut w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
@@ -435,5 +436,45 @@ mod tests {
         let s = &client.snapshots[1];
         assert_eq!(s.ps.get_f32("origin[0]"), Some(340.0));
         assert!(s.clients.is_empty());
+    }
+
+    /// Frames at `i32::MAX` and, one delta on, `i32::MIN`: the parser
+    /// reads both times back and re-encodes each message byte for byte.
+    #[test]
+    fn frames_at_the_ends_of_int_round_trip() {
+        let gs = Gamestate::from_table(3, &table(), &BTreeMap::new(), 1, 77);
+        let huff = Huffman::new();
+        let mut client = Client::new();
+        let mut w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
+        PROTOCOL_17.write_gamestate(&mut w, &gs);
+        let f1 = Frame4 {
+            server_time: Msec::MAX,
+            map_center: gs.map_center,
+            ps: PlayerState::default(),
+            entities: Vec::new(),
+            clients: Vec::new(),
+        };
+        let f2 = Frame4 {
+            server_time: Msec::MAX + 50,
+            ..f1.clone()
+        };
+        assert_eq!(f2.server_time, Msec::MIN + 49);
+        for (n, base, f) in [(1, None, &f1), (2, Some(&f1), &f2)] {
+            let head = SnapshotHead {
+                delta_num: base.map_or(0, |_| 1),
+                snap_flags: 4,
+            };
+            PROTOCOL_17.write_snapshot(&mut w, base, f, head, &BTreeMap::new());
+            w.write_byte(EOF);
+            let block = huff.compress(&w.into_ops());
+            let parsed = client.parse(n, &block).unwrap();
+            assert!(parsed.exact);
+            assert_eq!(client.snapshots.last().unwrap().server_time, f.server_time);
+            assert_eq!(
+                client.write(&parsed).unwrap(),
+                huff.decompress(&block)[..parsed.eof_at]
+            );
+            w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
+        }
     }
 }

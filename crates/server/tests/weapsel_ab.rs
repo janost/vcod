@@ -228,7 +228,7 @@ impl Rig {
         let parms: Vec<i32> = (0..4).map(|i| f(&format!("eventParms[{i}]"))).collect();
         let events = drain(&mut self.seq, f("eventSequence"), &events, &parms);
         let sample = Sample {
-            t: s.server_time,
+            t: s.server_time.raw(),
             weapon: f("weapon"),
             state: f("weaponstate"),
             time: f("weaponTime"),

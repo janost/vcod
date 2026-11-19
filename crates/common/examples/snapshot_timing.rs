@@ -80,9 +80,9 @@ fn report(gs_name: &str, snap_name: &str, p: &Cod1Wire) {
                     }
                     rows.push((
                         snap.message_num,
-                        snap.server_time,
+                        snap.server_time.raw(),
                         ct,
-                        snap.server_time - ct,
+                        (snap.server_time - ct).raw(),
                     ));
                     break;
                 }

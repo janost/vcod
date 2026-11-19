@@ -2002,7 +2002,7 @@ fn a_throw_s_first_frame_matches_retail_s_capture() {
         let (server_time, tr_time, base, delta) = first.expect("the release threw nothing");
         assert_eq!(
             tr_time,
-            server_time - 50,
+            (server_time - 50).raw(),
             "trTime is the level.time the throw cmd ran under"
         );
         assert_eq!(base, want_base, "trBase off the muzzle at {feet:?}");
@@ -2611,7 +2611,7 @@ fn fire_panzerfaust(
         if let (Some(e), None) = (rocket, seen.as_ref()) {
             let v = |f: &str| e.field_f32(p, f);
             seen = Some(RocketSeen {
-                fired_at: snap.server_time,
+                fired_at: snap.server_time.raw(),
                 flight: (e.field_i32(p, "eType") == ET_MISSILE).then(|| Flight {
                     tr_type: e.field_i32(p, "pos.trType"),
                     tr_time: e.field_i32(p, "pos.trTime"),
@@ -2624,17 +2624,17 @@ fn fire_panzerfaust(
                     ],
                 }),
                 explode: None,
-                last_sent: snap.server_time,
+                last_sent: snap.server_time.raw(),
             });
         }
         match (rocket, seen.as_mut()) {
             (Some(e), Some(s)) => {
-                s.last_sent = snap.server_time;
+                s.last_sent = snap.server_time.raw();
                 if s.explode.is_none() && e.field_i32(p, "eType") == 0 {
                     let v = |f: &str| e.field_f32(p, f);
                     let slot = (e.field_i32(p, "eventSequence") - 1) & 3;
                     s.explode = Some((
-                        snap.server_time,
+                        snap.server_time.raw(),
                         e.field_i32(p, &format!("events[{slot}]")),
                         e.field_i32(p, &format!("eventParms[{slot}]")),
                         [v("pos.trBase[0]"), v("pos.trBase[1]"), v("pos.trBase[2]")],

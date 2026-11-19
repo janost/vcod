@@ -95,7 +95,7 @@ impl FlameProbe {
         let muzzles = match (&mut self.scene, fs) {
             (Some((r, scene)), Some(fs)) => {
                 let view = || SnapView { snap, own: None };
-                let t = snap.server_time;
+                let t = snap.server_time.raw();
                 let built = build_instances(
                     scene,
                     (view(), view(), 1.0),

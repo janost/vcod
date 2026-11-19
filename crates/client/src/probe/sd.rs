@@ -594,7 +594,7 @@ impl SdProbe {
             self.trace.push(SdSample {
                 phase: self.phase,
                 elapsed_ms: ms,
-                server_time: snap.server_time,
+                server_time: snap.server_time.raw(),
                 buttons: cmd.buttons,
                 forward: cmd.forward,
                 pm_type: snap.ps.field_i32(p, "pm_type"),

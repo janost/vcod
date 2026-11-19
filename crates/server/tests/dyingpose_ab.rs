@@ -95,7 +95,7 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, seed: u64) -> (Vec<String>, Option<EntitySt
             let i = |n: &str| s.ps.field_i32(cl.protocol(), n);
             eprintln!(
                 "SNAP t={} pm_type={} legs={} torso={} view={:?} eflags={:#x}",
-                s.server_time,
+                s.server_time.raw(),
                 i("pm_type"),
                 i("legsAnim"),
                 i("torsoAnim"),
@@ -104,9 +104,9 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, seed: u64) -> (Vec<String>, Option<EntitySt
             );
         }
         if let Some(s) = cl.snapshots().newest()
-            && last_snap != Some(s.server_time)
+            && last_snap != Some(s.server_time.raw())
         {
-            last_snap = Some(s.server_time);
+            last_snap = Some(s.server_time.raw());
             if let Some(t) = dead_timers(cl.protocol(), &s.ps) {
                 timers.push(t);
             }
@@ -260,7 +260,13 @@ fn retail_corpse(p: &Cod1Wire, tag: &str) -> EntityState {
             if last != Some(now) {
                 eprintln!(
                     "RETAIL t={} pm_type={} legs={} torso={} eflags={:#x} timers={} {}",
-                    s.server_time, now.0, now.1, now.2, now.3, now.4, now.5
+                    s.server_time.raw(),
+                    now.0,
+                    now.1,
+                    now.2,
+                    now.3,
+                    now.4,
+                    now.5
                 );
                 last = Some(now);
             }
@@ -403,9 +409,9 @@ fn corpse_clock<'a>(
         let Some(e) = s.entities.get(&64) else {
             continue;
         };
-        seen.get_or_insert(s.server_time);
+        seen.get_or_insert(s.server_time.raw());
         if cleared.is_none() && e.field_i32(p, "eFlags") & 0x800 == 0 {
-            cleared = Some(s.server_time);
+            cleared = Some(s.server_time.raw());
         }
     }
     (seen, cleared)

@@ -209,7 +209,7 @@ const TARGET_FIELDS: &[&str] = &[
 ];
 
 fn at(s: &Side, t: i32) -> Option<&Snapshot> {
-    s.snaps.iter().find(|f| f.server_time == t)
+    s.snaps.iter().find(|f| f.server_time.raw() == t)
 }
 
 /// The entities of `t`'s snapshot with `etype`, as (number, the field).
@@ -232,9 +232,12 @@ fn diffs(rt: &Side, rs: &Side, ot: &Side, os: &Side) -> Vec<String> {
     let mut out = Vec::new();
     let word = |f: &Snapshot, n: &str| f.ps.get(n).unwrap_or(0);
     // The shooter's weapon half, every snapshot from its teleport.
-    for r in rs.snaps.iter().filter(|f| f.server_time >= 47_550) {
-        let Some(o) = at(os, r.server_time) else {
-            out.push(format!("shooter {}: no snapshot of ours", r.server_time));
+    for r in rs.snaps.iter().filter(|f| f.server_time.raw() >= 47_550) {
+        let Some(o) = at(os, r.server_time.raw()) else {
+            out.push(format!(
+                "shooter {}: no snapshot of ours",
+                r.server_time.raw()
+            ));
             continue;
         };
         for n in SHOOTER_FIELDS {
@@ -242,7 +245,7 @@ fn diffs(rt: &Side, rs: &Side, ot: &Side, os: &Side) -> Vec<String> {
             if a != b {
                 out.push(format!(
                     "shooter {n} {}: ours {a:#x} retail {b:#x}",
-                    r.server_time
+                    r.server_time.raw()
                 ));
             }
         }
@@ -251,10 +254,13 @@ fn diffs(rt: &Side, rs: &Side, ot: &Side, os: &Side) -> Vec<String> {
     for r in rt
         .snaps
         .iter()
-        .filter(|f| (47_500..=48_400).contains(&f.server_time))
+        .filter(|f| (47_500..=48_400).contains(&f.server_time.raw()))
     {
-        let Some(o) = at(ot, r.server_time) else {
-            out.push(format!("target {}: no snapshot of ours", r.server_time));
+        let Some(o) = at(ot, r.server_time.raw()) else {
+            out.push(format!(
+                "target {}: no snapshot of ours",
+                r.server_time.raw()
+            ));
             continue;
         };
         for n in TARGET_FIELDS {
@@ -262,14 +268,16 @@ fn diffs(rt: &Side, rs: &Side, ot: &Side, os: &Side) -> Vec<String> {
             if a != b {
                 out.push(format!(
                     "target {n} {}: ours {a:#x} retail {b:#x}",
-                    r.server_time
+                    r.server_time.raw()
                 ));
             }
         }
         if o.ps.stats[0] != r.ps.stats[0] {
             out.push(format!(
                 "target health {}: ours {} retail {}",
-                r.server_time, o.ps.stats[0], r.ps.stats[0]
+                r.server_time.raw(),
+                o.ps.stats[0],
+                r.ps.stats[0]
             ));
         }
         // The flesh event (17 + 43), the corpse (2), the item (3) and the
@@ -290,12 +298,12 @@ fn diffs(rt: &Side, rs: &Side, ot: &Side, os: &Side) -> Vec<String> {
             if vals(&a) != vals(&b) {
                 out.push(format!(
                     "target entity type {etype} {field} {}: ours {a:?} retail {b:?}",
-                    r.server_time
+                    r.server_time.raw()
                 ));
             } else if a.iter().map(|x| x.0).ne(b.iter().map(|x| x.0)) {
                 out.push(format!(
                     "target entity type {etype} number {}: ours {a:?} retail {b:?}",
-                    r.server_time
+                    r.server_time.raw()
                 ));
             }
         }
@@ -304,14 +312,14 @@ fn diffs(rt: &Side, rs: &Side, ot: &Side, os: &Side) -> Vec<String> {
     for r in rs
         .snaps
         .iter()
-        .filter(|f| (47_900..=48_100).contains(&f.server_time))
+        .filter(|f| (47_900..=48_100).contains(&f.server_time.raw()))
     {
-        if let Some(o) = at(os, r.server_time) {
+        if let Some(o) = at(os, r.server_time.raw()) {
             let (a, b) = (of_type(o, 58, "eventParm"), of_type(r, 58, "eventParm"));
             if a.iter().map(|x| x.1).ne(b.iter().map(|x| x.1)) {
                 out.push(format!(
                     "shooter bullet hit {}: ours {a:?} retail {b:?}",
-                    r.server_time
+                    r.server_time.raw()
                 ));
             }
         }
@@ -321,10 +329,10 @@ fn diffs(rt: &Side, rs: &Side, ot: &Side, os: &Side) -> Vec<String> {
     let killcam = |s: &Side| {
         s.snaps
             .iter()
-            .find(|f| f.server_time > 48_000 && f.ps.get("clientNum") == Some(1))
+            .find(|f| f.server_time.raw() > 48_000 && f.ps.get("clientNum") == Some(1))
             .map(|f| {
                 (
-                    f.server_time,
+                    f.server_time.raw(),
                     f.ps.get("deltaTime").unwrap_or(0),
                     f.ps.get("commandTime").unwrap_or(0),
                 )
@@ -346,14 +354,14 @@ fn diffs(rt: &Side, rs: &Side, ot: &Side, os: &Side) -> Vec<String> {
     for r in rt
         .snaps
         .iter()
-        .filter(|f| f.server_time > 48_000 && f.ps.get("clientNum") == Some(1))
+        .filter(|f| f.server_time.raw() > 48_000 && f.ps.get("clientNum") == Some(1))
     {
-        if let Some(o) = at(ot, r.server_time)
+        if let Some(o) = at(ot, r.server_time.raw())
             && bodies(o) != bodies(r)
         {
             out.push(format!(
                 "target killcam bodies {}: ours {:?} retail {:?}",
-                r.server_time,
+                r.server_time.raw(),
                 bodies(o),
                 bodies(r)
             ));
@@ -466,7 +474,7 @@ fn the_sight_the_trigger_and_a_switch_drive_the_weapon() {
     let fired = os
         .snaps
         .iter()
-        .filter(|f| (48_500..49_600).contains(&f.server_time))
+        .filter(|f| (48_500..49_600).contains(&f.server_time.raw()))
         .any(|f| (0..4).any(|k| f.ps.get(&format!("events[{k}]")) == Some(26)));
     assert!(fired, "EV_FIRE_WEAPON");
     assert!(
@@ -519,7 +527,7 @@ fn the_score_command_answers_as_retail() {
                 for op in &parsed.ops {
                     match op {
                         vcod_cod4::net::parse::Op::Snapshot(i) => {
-                            last = s.client.snapshots[*i].server_time;
+                            last = s.client.snapshots[*i].server_time.raw();
                             first.get_or_insert(last);
                         }
                         vcod_cod4::net::parse::Op::ServerCommand { text, .. }
@@ -709,7 +717,7 @@ fn the_kill_command_kills_its_sender() {
     let dead = ot
         .snaps
         .iter()
-        .find(|f| f.server_time < 47_900 && f.ps.get("pm_type") == Some(7));
+        .find(|f| f.server_time.raw() < 47_900 && f.ps.get("pm_type") == Some(7));
     assert!(dead.is_some(), "aborts {aborts:?}");
     let corpse = ot
         .snaps
@@ -758,7 +766,7 @@ fn a_dropped_rifle_hands_its_ammo_over() {
     let got = os
         .snaps
         .iter()
-        .filter(|f| (49_000..49_500).contains(&f.server_time))
+        .filter(|f| (49_000..49_500).contains(&f.server_time.raw()))
         .any(|f| (0..4).any(|k| f.ps.get(&format!("events[{k}]")) == Some(9)));
     assert!(got, "EV_ITEM_PICKUP");
     let after = level.pm_state(1).unwrap().ammo;
@@ -837,7 +845,7 @@ fn the_corpse_turns_ragdoll_when_retails_did() {
             let types = |n: &str| of_type(f, 2, n).iter().map(|x| x.1).collect::<Vec<_>>();
             let v = (types("lerp.pos.trType"), types("lerp.apos.trType"));
             if out.last().is_none_or(|l| (&l.1, &l.2) != (&v.0, &v.1)) {
-                out.push((f.server_time, v.0, v.1));
+                out.push((f.server_time.raw(), v.0, v.1));
             }
         }
         out
@@ -875,7 +883,7 @@ fn the_corpse_drifts_on_its_death_anim_as_on_retail() {
             let (x, y, z) = (at(0), at(1), at(2));
             let v: Vec<[i32; 3]> = (0..x.len()).map(|i| [x[i], y[i], z[i]]).collect();
             if out.last().is_none_or(|l| l.1 != v) {
-                out.push((f.server_time, v));
+                out.push((f.server_time.raw(), v));
             }
         }
         out
@@ -913,8 +921,8 @@ fn a_killcam_entity_rides_the_killcam_playerstate() {
     let cam: Vec<(i32, u32)> = ot
         .snaps
         .iter()
-        .filter(|f| f.server_time > 48_000 && f.ps.get("clientNum") == Some(1))
-        .map(|f| (f.server_time, f.ps.get("killCamEntity").unwrap_or(0)))
+        .filter(|f| f.server_time.raw() > 48_000 && f.ps.get("clientNum") == Some(1))
+        .map(|f| (f.server_time.raw(), f.ps.get("killCamEntity").unwrap_or(0)))
         .collect();
     assert!(cam.iter().any(|c| c.0 < 50_500 && c.1 == 1023), "{cam:?}");
     assert!(cam.iter().any(|c| c.0 > 50_600 && c.1 == 70), "{cam:?}");
@@ -922,7 +930,7 @@ fn a_killcam_entity_rides_the_killcam_playerstate() {
     assert!(
         rt.snaps
             .iter()
-            .filter(|f| f.server_time > 48_000 && f.ps.get("clientNum") == Some(1))
+            .filter(|f| f.server_time.raw() > 48_000 && f.ps.get("clientNum") == Some(1))
             .all(|f| f.ps.get("killCamEntity") == Some(1023))
     );
 }

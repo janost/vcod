@@ -165,7 +165,7 @@ fn cod4_live_recorded_demo_plays_back_what_the_session_saw() {
     let key = |f: &Fired| (f.name, f.entity, f.server_time, f.parm);
     let after = |v: &[Fired]| -> Vec<_> {
         v.iter()
-            .filter(|f| f.server_time > demo[0].server_time)
+            .filter(|f| f.server_time > demo[0].server_time.raw())
             .map(key)
             .collect()
     };
@@ -309,7 +309,7 @@ fn capture_demo(name: &str) -> (Vec<u8>, Vec<u8>, Vec<Vec<u8>>) {
         if let Some(s) = c.snapshots.last() {
             let ps = pm::PlayerState::from_wire(&s.ps);
             ring.add(Archive {
-                server_time: s.server_time,
+                server_time: s.server_time.raw(),
                 origin: ps.origin.to_array(),
                 velocity: ps.velocity.to_array(),
                 bob_cycle: ps.bob_cycle,
@@ -392,7 +392,7 @@ fn cod4_retail_framed_demo_plays_and_vcod_writes_it_alike() {
     let key = |f: &Fired| (f.name, f.entity, f.server_time, f.parm);
     let after = |v: &[Fired]| -> Vec<_> {
         v.iter()
-            .filter(|f| f.server_time > demo[0].server_time)
+            .filter(|f| f.server_time > demo[0].server_time.raw())
             .map(key)
             .collect()
     };

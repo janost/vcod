@@ -9,6 +9,7 @@
 
 use std::io::{self, Write};
 
+use vcod_common::net::Msec;
 use vcod_common::net::codec::MsgWriter;
 
 use super::constant_cs;
@@ -34,7 +35,7 @@ pub const ARCHIVE_ROWS: usize = 256;
 /// The `time` `CL_Record_f` hands `MSG_WriteDeltaEntity` for the
 /// baselines (the `push 0xfffea070` at 0x468cce): every time field goes
 /// out whole.
-pub const BASELINE_TIME: i32 = -90000;
+pub const BASELINE_TIME: Msec = Msec::from_raw(-90000);
 
 const REC_MESSAGE: u8 = 0;
 const REC_ARCHIVE: u8 = 1;

@@ -51,7 +51,7 @@ fn jets(s: &Side) -> Vec<Jet> {
             match out.iter_mut().find(|j| j.0 == e.number()) {
                 Some(j) => {
                     if seq != j.1 && j.4.is_none() {
-                        j.4 = Some(f.server_time - j.3);
+                        j.4 = Some((f.server_time - j.3).raw());
                     }
                 }
                 None => {
@@ -63,7 +63,7 @@ fn jets(s: &Side) -> Vec<Jet> {
                             )
                         })
                         .collect();
-                    out.push((e.number(), seq, ring, f.server_time, None));
+                    out.push((e.number(), seq, ring, f.server_time.raw(), None));
                 }
             }
         }
@@ -126,7 +126,7 @@ fn ours(install: &vcod_cod4::install::Install, r: &Side) -> (Side, Vec<String>) 
         "owner",
         0,
         28961,
-        first_snap,
+        first_snap.raw(),
         &[
             (1050, "mr {sid} 8 allies"),
             (2550, "mr {sid} 15 assault_mp,0"),

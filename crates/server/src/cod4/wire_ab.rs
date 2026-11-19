@@ -87,7 +87,7 @@ pub(super) fn side(lines: &[Line]) -> Side {
                             .entry(*sequence)
                             .or_insert((last_time, String::from_utf8_lossy(text).into_owned()));
                     }
-                    Op::Snapshot(i) => last_time = s.client.snapshots[*i].server_time,
+                    Op::Snapshot(i) => last_time = s.client.snapshots[*i].server_time.raw(),
                     _ => {}
                 }
             }
@@ -348,7 +348,7 @@ impl Probe {
             }
         } else if svs + FRAME_MS >= self.first_snap {
             let last = self.parser.snapshots.last();
-            let snap = last.map_or(svs, |s| s.server_time);
+            let snap = last.map_or(svs, |s| s.server_time.raw());
             // `cod4_probe`'s view: (0, 0) until its spawn, the spawn's view
             // after, each over the snapshot's `delta_angles`.
             let ps = last.map(|s| s.ps.clone()).unwrap_or_default();
@@ -616,7 +616,7 @@ pub(super) fn replay_schedule_timed(lines: &[Line], from: i32) -> Vec<(i32, u64,
                     if let Op::Snapshot(i) = op {
                         let sn = &s.client.snapshots[*i];
                         let ct = sn.ps.get("commandTime").unwrap_or(0) as i32;
-                        snaps.push((sn.server_time, ct));
+                        snaps.push((sn.server_time.raw(), ct));
                     }
                 }
             }
@@ -1010,11 +1010,9 @@ fn the_walk_replays_on_ours_as_on_retail() {
     let mut missing = Vec::new();
     let mut fields: BTreeMap<String, (usize, String)> = BTreeMap::new();
     let mut max_err = (0f32, 0);
-    for r in r_walk
-        .snaps
-        .iter()
-        .filter(|s| s.server_time >= WALKER_SPAWN_MS && s.ps.get("clientNum") == Some(2))
-    {
+    for r in r_walk.snaps.iter().filter(|s| {
+        s.server_time >= Msec::from_raw(WALKER_SPAWN_MS) && s.ps.get("clientNum") == Some(2)
+    }) {
         let Some(o) = o_walk.snaps.iter().find(|s| s.server_time == r.server_time) else {
             missing.push(r.server_time);
             continue;
@@ -1028,7 +1026,7 @@ fn the_walk_replays_on_ours_as_on_retail() {
         };
         let err = (origin(o) - origin(r)).length();
         if err > max_err.0 {
-            max_err = (err, r.server_time);
+            max_err = (err, r.server_time.raw());
         }
         if d.is_empty() {
             exact += 1;
@@ -1086,7 +1084,7 @@ fn the_walk_replays_on_ours_as_on_retail() {
     for r in r_spec
         .snaps
         .iter()
-        .filter(|s| (WALKER_SPAWN_MS..RUN_MS).contains(&s.server_time))
+        .filter(|s| (WALKER_SPAWN_MS..RUN_MS).contains(&s.server_time.raw()))
     {
         let Some(o) = o_spec.snaps.iter().find(|s| s.server_time == r.server_time) else {
             missing.push(r.server_time);
@@ -1120,7 +1118,7 @@ fn the_walk_replays_on_ours_as_on_retail() {
     // compared.
     let (mut floats, mut float_exact) = (0, 0);
     for r in r_spec.snaps.iter().filter(|s| {
-        (WALKER_SPAWN_MS..RUN_MS).contains(&s.server_time) && s.ps.get("clientNum") == Some(1)
+        (WALKER_SPAWN_MS..RUN_MS).contains(&s.server_time.raw()) && s.ps.get("clientNum") == Some(1)
     }) {
         let Some(o) = o_spec.snaps.iter().find(|s| s.server_time == r.server_time) else {
             continue;
@@ -1211,7 +1209,7 @@ fn the_frag_flies_on_ours_as_on_retail() {
     for r in r_walk
         .snaps
         .iter()
-        .filter(|s| (65_000..71_000).contains(&s.server_time))
+        .filter(|s| (65_000..71_000).contains(&s.server_time.raw()))
     {
         let o = o_walk.snaps.iter().find(|s| s.server_time == r.server_time);
         for (kind, is) in kinds {

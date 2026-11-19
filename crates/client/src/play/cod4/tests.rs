@@ -1024,7 +1024,11 @@ fn live_war_pair_on<T: Send + 'static>(
                 &shell,
             );
             let both = s.spawn().is_some() && e.spawn().is_some();
-            let level = s.client().snapshots.last().map_or(0, |x| x.server_time);
+            let level = s
+                .client()
+                .snapshots
+                .last()
+                .map_or(0, |x| x.server_time.raw());
             let local_sounds = hud.take_local_sounds();
             out = each(PairFrame {
                 s: &mut s,

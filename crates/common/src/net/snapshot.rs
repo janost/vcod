@@ -4,6 +4,7 @@
 //! `CL_ParseSnapshot` + `CL_ParsePacketEntities` (RTCW-MP cl_parse.c), and the
 //! ring of recent snapshots a delta frame resolves its base from.
 
+use super::msec::Msec;
 use super::msg::{
     ClientState, EntityState, MsgReader, MsgWriter, PlayerState, read_delta_client,
     read_delta_entity, read_delta_playerstate, write_delta_entity,
@@ -21,7 +22,7 @@ const RING_CAP: usize = 32;
 
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
-    pub server_time: i32,
+    pub server_time: Msec,
     pub message_num: u32,
     /// Base message, or -1 when uncompressed.
     pub delta_num: i32,
@@ -121,7 +122,7 @@ impl SnapshotRing {
         p: &Cod1Wire,
         message_num: u32,
     ) -> anyhow::Result<&Snapshot> {
-        let server_time = r.read_long();
+        let server_time = Msec::from_raw(r.read_long());
         let delta_byte = r.read_byte();
         // 0 means uncompressed; otherwise the base is this many messages back.
         let delta_num = if delta_byte == 0 {
@@ -182,6 +183,7 @@ impl SnapshotRing {
     /// so a snapshot arriving late holds the scene rather than emptying it.
     /// `None` only with no valid frame.
     pub fn two_for_time(&self, t: i32) -> Option<(&Snapshot, &Snapshot)> {
+        let t = Msec::from_raw(t);
         // One scan for what a stable sort by time and its windows would
         // pick: among equal times the first slot is the lower end of a
         // pair and the last slot the upper.
@@ -302,7 +304,7 @@ pub fn write(
 ) {
     use super::msg::{write_delta_client, write_delta_playerstate};
 
-    w.write_long(to.server_time);
+    w.write_long(to.server_time.raw());
     // deltaNum rides the wire as the offset back to the base, not its number.
     let delta_byte = match from {
         Some(base) => {
@@ -589,7 +591,7 @@ pub(crate) mod tests {
         let mut r = MsgReader::new(&data, &h);
         let s = ring.parse_into(&mut r, p, 10).unwrap();
         assert!(s.valid);
-        assert_eq!(s.server_time, 48_000);
+        assert_eq!(s.server_time, Msec::from_raw(48_000));
         assert_eq!(s.message_num, 10);
         assert_eq!(s.delta_num, -1); // uncompressed
         assert_eq!(s.ps.origin(p), [200.0, 100.0, 50.0]);
@@ -648,7 +650,7 @@ pub(crate) mod tests {
 
     fn snap(message_num: u32, delta_num: i32, server_time: i32, valid: bool) -> Snapshot {
         Snapshot {
-            server_time,
+            server_time: Msec::from_raw(server_time),
             message_num,
             delta_num,
             valid,
@@ -678,7 +680,7 @@ pub(crate) mod tests {
         // 33 % 32 == 1
         ring.insert(snap(33, 32, 200, true));
         assert!(ring.get(1).is_none());
-        assert_eq!(ring.get(33).map(|s| s.server_time), Some(200));
+        assert_eq!(ring.get(33).map(|s| s.server_time.raw()), Some(200));
     }
 
     #[test]
@@ -689,15 +691,15 @@ pub(crate) mod tests {
         ring.insert(snap(3, 2, 200, true));
 
         let (a, b) = ring.two_for_time(160).unwrap();
-        assert_eq!((a.server_time, b.server_time), (150, 200));
+        assert_eq!((a.server_time.raw(), b.server_time.raw()), (150, 200));
         // on a boundary that frame is the earlier of the pair
         let (a, b) = ring.two_for_time(150).unwrap();
-        assert_eq!((a.server_time, b.server_time), (150, 200));
+        assert_eq!((a.server_time.raw(), b.server_time.raw()), (150, 200));
         // outside the buffered range the nearest frame is held
         let held = |t| {
             let (a, b) = ring.two_for_time(t).unwrap();
             assert!(std::ptr::eq(a, b), "{t} holds one frame");
-            a.server_time
+            a.server_time.raw()
         };
         assert_eq!(held(50), 100);
         assert_eq!(held(200), 200);
@@ -712,7 +714,7 @@ pub(crate) mod tests {
         for (num, time) in [(1, 100), (2, 150), (3, 150), (4, 200), (5, 200), (6, 250)] {
             ring.insert(snap(num, num as i32 - 1, time, true));
         }
-        let sorted = |t: i32| {
+        let sorted = |t: Msec| {
             let mut v: Vec<&Snapshot> = ring.slots.iter().flatten().filter(|s| s.valid).collect();
             v.sort_by_key(|s| s.server_time);
             let (first, last) = (v[0], v[v.len() - 1]);
@@ -725,8 +727,8 @@ pub(crate) mod tests {
                     (w[0].message_num, w[1].message_num)
                 })
         };
-        for t in (50..300).step_by(25) {
-            let (a, b) = ring.two_for_time(t).unwrap();
+        for t in (50..300).step_by(25).map(Msec::from_raw) {
+            let (a, b) = ring.two_for_time(t.raw()).unwrap();
             assert_eq!((a.message_num, b.message_num), sorted(t), "t {t}");
         }
     }
@@ -745,7 +747,7 @@ pub(crate) mod tests {
         assert!(ring.newest().is_none(), "newest must skip an invalid frame");
         let (a, b) = ring.two_for_time(175).unwrap();
         assert_eq!(
-            (a.server_time, b.server_time),
+            (a.server_time.raw(), b.server_time.raw()),
             (150, 150),
             "an invalid upper bound is not a straddle"
         );
@@ -812,7 +814,7 @@ pub(crate) mod tests {
                     }
                     SVC_SNAPSHOT => {
                         let s = ring.parse_into(&mut r, p, message_num).unwrap();
-                        assert!(s.server_time > 0, "serverTime {}", s.server_time);
+                        assert!(s.server_time > Msec::ZERO, "serverTime {}", s.server_time);
                         assert!(s.snap_flags <= 0xff, "snapFlags {}", s.snap_flags);
                         assert!(
                             s.delta_num == -1
@@ -866,7 +868,7 @@ pub(crate) mod tests {
                                 assert_eq!(s.ps.field_i32(p, f), 0, "{f} in {message_num}");
                             }
                             valid_count += 1;
-                            times.push(s.server_time);
+                            times.push(s.server_time.raw());
                         }
                         // The snapshot is the message's last op; huffman padding follows.
                         saw_snapshot = true;
@@ -957,6 +959,47 @@ pub(crate) mod tests {
         assert!(ring.two_for_time(0).is_none());
     }
 
+    /// A `serverTime` at either end of `int` decodes and re-encodes byte
+    /// for byte. Two frames across the wrap are 50 ms apart by
+    /// [`Msec::since`], and [`SnapshotRing::two_for_time`] orders them by
+    /// the plain signed compare the cgame makes.
+    #[test]
+    fn server_time_at_the_ends_of_int_round_trips() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        for t in [i32::MAX, i32::MIN] {
+            let a = Snapshot {
+                message_num: 10,
+                server_time: Msec::from_raw(t),
+                valid: true,
+                ps: PlayerState::null(p),
+                ..Default::default()
+            };
+            let mut w = MsgWriter::new(&h);
+            write(&mut w, p, None, &a, &HashMap::new());
+            let d = w.finish();
+            let mut ring = SnapshotRing::new();
+            let s = ring
+                .parse_into(&mut MsgReader::new(&d, &h), p, 10)
+                .unwrap()
+                .clone();
+            assert_eq!(s.server_time.raw(), t);
+            let mut w = MsgWriter::new(&h);
+            write(&mut w, p, None, &s, &HashMap::new());
+            assert_eq!(w.finish(), d);
+        }
+        let mut ring = SnapshotRing::new();
+        ring.insert(snap(1, -1, i32::MAX - 20, true));
+        ring.insert(snap(2, 1, i32::MIN + 29, true));
+        let (old, new) = (ring.get(1).unwrap(), ring.get(2).unwrap());
+        assert_eq!(new.server_time.since(old.server_time), 50);
+        assert!(new.server_time < old.server_time);
+        let (a, b) = ring.two_for_time(i32::MAX).unwrap();
+        assert_eq!((a.message_num, b.message_num), (1, 1));
+        let (a, b) = ring.two_for_time(0).unwrap();
+        assert_eq!((a.message_num, b.message_num), (2, 1));
+    }
+
     /// Three frames through one ring: a join, a shortening rename plus a
     /// second join, then a disconnect with a surviving client whose team
     /// clears to zero. Entries go out as full states from null, so every
@@ -974,7 +1017,7 @@ pub(crate) mod tests {
         // Frame A: client 0 appears out of nothing.
         let mut a = Snapshot {
             message_num: 10,
-            server_time: 48_000,
+            server_time: Msec::from_raw(48_000),
             valid: true,
             ps: ps.clone(),
             ..Default::default()
@@ -988,7 +1031,7 @@ pub(crate) mod tests {
         let s = ring.parse_into(&mut r, p, 10).unwrap();
         assert!(s.valid);
         assert_eq!(s.delta_num, -1);
-        assert_eq!(s.server_time, 48_000);
+        assert_eq!(s.server_time, Msec::from_raw(48_000));
         assert_eq!(s.ps.origin(p)[0], 384.0);
         assert_eq!(s.ps.field_i32(p, "pm_type"), 4);
         assert_eq!(s.clients[&0].name(p), "vcod");
@@ -1000,7 +1043,7 @@ pub(crate) mod tests {
         // client numbers, so the gap stays absent.
         let mut b = Snapshot {
             message_num: 11,
-            server_time: 48_050,
+            server_time: Msec::from_raw(48_050),
             valid: true,
             ps: ps.clone(),
             ..Default::default()
@@ -1029,7 +1072,7 @@ pub(crate) mod tests {
         eve_cleared.fields[ti] = 0;
         let mut c = Snapshot {
             message_num: 12,
-            server_time: 48_100,
+            server_time: Msec::from_raw(48_100),
             valid: true,
             ps: ps.clone(),
             ..Default::default()
@@ -1058,7 +1101,7 @@ pub(crate) mod tests {
 
         let mut base = Snapshot {
             message_num: 10,
-            server_time: 1000,
+            server_time: Msec::from_raw(1000),
             valid: true,
             ps: PlayerState::null(p),
             ..Default::default()
@@ -1070,7 +1113,7 @@ pub(crate) mod tests {
         // alice unchanged, bob renamed, carol gone, dave new.
         let mut to = Snapshot {
             message_num: 11,
-            server_time: 1050,
+            server_time: Msec::from_raw(1050),
             valid: true,
             ps: PlayerState::null(p),
             ..Default::default()
@@ -1125,7 +1168,7 @@ pub(crate) mod tests {
 
         let mut base = Snapshot {
             message_num: 20,
-            server_time: 2000,
+            server_time: Msec::from_raw(2000),
             valid: true,
             ps: PlayerState::null(p),
             ..Default::default()
@@ -1141,7 +1184,7 @@ pub(crate) mod tests {
 
         let mut to = Snapshot {
             message_num: 21,
-            server_time: 2050,
+            server_time: Msec::from_raw(2050),
             valid: true,
             ps: PlayerState::null(p),
             ..Default::default()

@@ -1242,7 +1242,7 @@ impl PlayerHud {
                 pitch,
                 ps.raw.i32("damageCount"),
                 axis,
-                frame.snap.server_time,
+                frame.snap.server_time.raw(),
                 now,
             );
             if (yaw, pitch) != (255, 255) {
@@ -1252,7 +1252,7 @@ impl PlayerHud {
                 self.rng = self.rng.wrapping_mul(1_103_515_245).wrapping_add(12345);
                 let r = (self.rng >> 16 & 0x7fff) as f32 / 32768.0;
                 self.damage[slot] = DamageIcon {
-                    start: frame.snap.server_time,
+                    start: frame.snap.server_time.raw(),
                     ms: DAMAGE_ICON_MS,
                     yaw: angle_normalize_360(yaw as f32 / 255.0 * 360.0 + (r - 0.5) * 20.0),
                 };
@@ -2097,6 +2097,7 @@ fn slot_weapon(ps: &PlayerView, slot: usize) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::net::Msec;
 
     /// A mod's weapon list can hand out clip and ammo slots past the
     /// wire's 64; the HUD reads 0 there.
@@ -2259,7 +2260,7 @@ mod tests {
         SnapshotView::new(
             &Snapshot2 {
                 message_num: 1,
-                server_time: t,
+                server_time: Msec::from_raw(t),
                 delta_num: -1,
                 snap_flags: 0,
                 valid: true,
@@ -2276,7 +2277,7 @@ mod tests {
         Frame {
             snap,
             prev: None,
-            time_ms: snap.server_time,
+            time_ms: snap.server_time.raw(),
             frac: 1.0,
             configstrings: cs,
         }

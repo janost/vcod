@@ -785,6 +785,7 @@ pub fn load_quads(text: &str) -> Vec<HudQuad> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::net::Msec;
 
     /// A client state named `name` on `team`, as a snapshot carries it.
     fn client(number: u32, name: &str, team: u32) -> ClientState2 {
@@ -1037,7 +1038,7 @@ mod tests {
             let snap = vcod_cod2::net::SnapshotView::new(
                 &vcod_cod2::net::Snapshot2 {
                     message_num: 1,
-                    server_time: 1000,
+                    server_time: Msec::from_raw(1000),
                     delta_num: -1,
                     snap_flags: 0,
                     valid: true,

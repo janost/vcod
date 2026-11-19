@@ -225,7 +225,7 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, fixture: &str, lead: i32) -> (Vec<Snap>, Ve
             }
         }
         if let Some(s) = cl.snapshots().newest()
-            && snaps.last().is_none_or(|l| l.0 < s.server_time)
+            && snaps.last().is_none_or(|l| l.0 < s.server_time.raw())
         {
             let z = s.ps.origin(p)[2];
             let bits = s.ps.field_i32(p, "pm_flags") & 3;
@@ -241,7 +241,7 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, fixture: &str, lead: i32) -> (Vec<Snap>, Ve
                 )
                 .collect();
             last_seq = Some(seq);
-            snaps.push((s.server_time, bits, z, events));
+            snaps.push((s.server_time.raw(), bits, z, events));
         }
     }
     let log = sv

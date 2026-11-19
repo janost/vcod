@@ -39,9 +39,14 @@ fn cod4_live_blast_pulses_the_overlay_and_points_an_icon_at_it() {
         // (`Callback_PlayerDamage`, `lastSpawnTime + 3500`), and the
         // spawn's snapshot is no earlier than `lastSpawnTime`.
         let spawned_at = s.client().snapshots.last()?.server_time;
-        let level = |s: &Cod4Session| s.client().snapshots.last().map_or(0, |x| x.server_time);
+        let level = |s: &Cod4Session| {
+            s.client()
+                .snapshots
+                .last()
+                .map_or(0, |x| x.server_time.raw())
+        };
         let end = since(t0) + Duration::from_millis(3000);
-        while since(t0) < end || level(s) < spawned_at + 3600 {
+        while since(t0) < end || level(s) < (spawned_at + 3600).raw() {
             frame(&mut hud, s);
         }
         // The frag 240 units off along the first yaw with open,
@@ -867,7 +872,11 @@ fn cod4_live_dead_silence_steps_quiet_and_bomb_squad_shows_the_trigger() {
                 c.take_commands();
             }
             let up = s.spawn().is_some() && e.spawn().is_some() && !frozen(&s) && !frozen(&e);
-            let level = s.client().snapshots.last().map_or(0, |x| x.server_time);
+            let level = s
+                .client()
+                .snapshots
+                .last()
+                .map_or(0, |x| x.server_time.raw());
             if up {
                 up_at.get_or_insert(level);
             }

@@ -84,14 +84,14 @@ fn ours() -> Option<(Vec<String>, Explodes)> {
             }
         }
         if let Some(s) = cl.snapshots().newest()
-            && s.server_time != seen_time
+            && s.server_time.raw() != seen_time
         {
-            seen_time = s.server_time;
+            seen_time = s.server_time.raw();
             for ev in tracker.drain(s, p) {
                 if ev.event == EV_ROCKET_EXPLODE_NOMARKS
                     || ev.event == vcod_common::net::event_ids::EV_GRENADE_EXPLODE
                 {
-                    explodes.push((s.server_time, ev));
+                    explodes.push((s.server_time.raw(), ev));
                 }
             }
         }
@@ -117,7 +117,7 @@ fn retail_explodes() -> Explodes {
             if ev.event == EV_ROCKET_EXPLODE_NOMARKS
                 || ev.event == vcod_common::net::event_ids::EV_GRENADE_EXPLODE
             {
-                out.push((f.snapshot.server_time, ev));
+                out.push((f.snapshot.server_time.raw(), ev));
             }
         }
     }
