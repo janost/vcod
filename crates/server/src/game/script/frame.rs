@@ -108,7 +108,7 @@ impl ScriptRuntime {
         // 1.1's second thread pass follows `G_DObjUpdateServerTime`; 1.5's
         // and UO's one pass runs before `G_XAnimUpdate` (1.5b 0x50821,
         // 0x50840; UO 0x59e4d, 0x59e6c), on the last frame's DObjs.
-        if !self.host.patch_1_5 {
+        if !self.host.profile.threads_on_last_dobjs {
             self.host.dobj_time_ms = now_ms;
         }
         // The VM logs each error itself (`Vm::record_error`).

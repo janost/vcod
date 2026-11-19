@@ -61,7 +61,7 @@ pub fn spec_of(block: &[(String, String)], uo: bool) -> DamageSpec {
 /// its origin (docs/research/cod11-combat.md 14.8, movers doc 19).
 pub fn spawn_scripted(host: &mut GameHost, cx: &mut Cx, id: EntId, spawnflags: i32) {
     let block = [("spawnflags".to_string(), spawnflags.to_string())];
-    let spec = spec_of(&block, host.is_uo());
+    let spec = spec_of(&block, host.profile.combat.damage_trigger_teams);
     let (mins, maxs) = host.model_bounds.first().copied().unwrap_or_default();
     let shape = crate::game::trigger::TriggerShape {
         mins,
@@ -146,8 +146,7 @@ pub fn activate(
     else {
         return Fired::No;
     };
-    let uo = host.is_uo();
-    if uo && !teams_agree(host, cx, spec.team, attacker) {
+    if host.profile.combat.damage_trigger_teams && !teams_agree(host, cx, spec.team, attacker) {
         return Fired::No;
     }
     let linked = host.links.is_enabled(id);
@@ -158,7 +157,11 @@ pub fn activate(
     if spec.threshold > 0 && damage < spec.threshold {
         return Fired::No;
     }
-    if !responds(spec.spawnflags, mod_, uo) {
+    if !responds(
+        spec.spawnflags,
+        mod_,
+        host.profile.combat.damage_trigger_uo_means,
+    ) {
         return Fired::No;
     }
     let health_field = cx.intern_folded("health");

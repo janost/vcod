@@ -501,7 +501,7 @@ impl Cod1Module {
                 // stops nothing.
                 let live_bodies =
                     |rt: &script::ScriptRuntime| -> Vec<crate::game::combat::HitBody> {
-                        if !rt.host.bodies_shield_blasts() {
+                        if !rt.host.profile.combat.bodies_shield_blasts {
                             return Vec::new();
                         }
                         sims.iter()
@@ -951,7 +951,7 @@ impl Cod1Module {
                     shot.pass(),
                     shot.muzzle,
                     shot.dir,
-                    crate::game::combat::bullet_range(proto),
+                    rt.host.profile.combat.bullet_range,
                     shot.damage,
                     shot.rifle_bullet,
                     falloff,
@@ -1011,7 +1011,7 @@ impl Cod1Module {
             crate::tick_trace::step!("CheckVote");
             _p = crate::tick_profile::phase("frame/vote");
             vote_lines = rt.check_vote(svs_ms).0;
-            timeout_written = rt.host.patch_1_5 && rt.host.check_match_timeout(svs_ms);
+            timeout_written = rt.host.profile.match_timeout && rt.host.check_match_timeout(svs_ms);
             console_lines = rt.take_console();
             client_commands = rt.take_client_commands_stamped();
             ranks_dirty = rt.take_ranks_dirty();

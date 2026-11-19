@@ -1774,7 +1774,7 @@ VERIFIED, United Offensive's `BG_Bullet_Endpos` (`game.mp.uo.i386.so`
 0x3011c): the same cone, 10000 units out (0x461c4000), with the forward
 product on the x87 stack. 1.5b's `Bullet_Endpos` (0x6de56) keeps 8192.
 Every UO `Bullet_Fire` and the artillery strike go through it
-(cod11-turrets.md 13.8). vcod: `combat::bullet_range`.
+(cod11-turrets.md 13.8). vcod: `CombatRules::bullet_range`.
 
 **The rounding.** VERIFIED, 1.1d `Bullet_Endpos` (0x69624): `fptan` of
 `spread * pi / 180` (.rodata 0x79cf8, 0x79d00) is stored as a double and

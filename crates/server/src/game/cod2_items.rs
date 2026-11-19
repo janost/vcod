@@ -34,14 +34,19 @@ pub fn launch_off(
     index: usize,
     yaw: f32,
 ) -> Result<EntId, ErrorKind> {
+    // Shared code reaches here under `ItemRules::cvar_launch`.
+    let body = host
+        .as_cod2()
+        .ok_or_else(|| crate::game::host::wrong_game("dropitem"))?
+        .clients[slot]
+        .body;
     let forward = cvar(host, "g_dropForwardSpeed", FORWARD);
     let base = cvar(host, "g_dropUpSpeedBase", UP_BASE);
     let rand = cvar(host, "g_dropUpSpeedRand", UP_RAND);
     let [dir, _, _] = vcod_common::x87::angle_vectors(Vec3::new(0.0, yaw, 0.0));
     let mut velocity = (dir.as_dvec3() * f64::from(forward)).as_vec3();
-    let c = host.cod2_crandom();
+    let c = crandom(host);
     velocity.z = (f64::from(velocity.z) + c * f64::from(rand) + f64::from(base)) as f32;
-    let body = host.cod2().clients[slot].body;
     let player = host
         .ents
         .handle(slot as u32)
@@ -67,14 +72,23 @@ pub struct TagDrop {
     pub tag: String,
 }
 
+/// CoD2's `G_crandom` (Mac 0x2cf1a): `2 * rand() / 2^31 - 1` off the
+/// game's `rand()`, on the stack; a drop pin, when one waits, stands in
+/// for the value.
+fn crandom(host: &mut GameHost) -> f64 {
+    let c2 = host.cod2_mut();
+    let drawn = 2.0 * c2.rand.g_random() - 1.0;
+    c2.drop_pins.pop_front().unwrap_or(drawn)
+}
+
 /// `Drop_Weapon`'s spin (lnxded 0x81064de): three `crandom()` draws, the
 /// first the roll's at 60 degrees a second, then the yaw's at 40, then
 /// the pitch's at 50, each stored. VERIFIED, the calls and rodata
 /// 0x815a3e8..0x815a3f0.
 pub fn spin(host: &mut GameHost) -> Vec3 {
-    let roll = host.cod2_crandom();
-    let yaw = host.cod2_crandom();
-    let pitch = host.cod2_crandom();
+    let roll = crandom(host);
+    let yaw = crandom(host);
+    let pitch = crandom(host);
     Vec3::new(
         (50.0 * pitch) as f32,
         (40.0 * yaw) as f32,

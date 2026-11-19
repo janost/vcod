@@ -136,7 +136,7 @@ pub fn spawn_entities_from_string(
         }
         let spawnflags = field_value(&pairs, "spawnflags").map_or(0, atoi);
         // Only UO's spawn table has `trigger_mount` (`SP_trigger_mount`).
-        let mount = (classname == "trigger_mount" && host.is_uo()).then_some(
+        let mount = (classname == "trigger_mount" && host.profile.spawn.trigger_mount).then_some(
             crate::game::trigger::TriggerKind::Mount {
                 crouch: spawnflags & 1 != 0,
             },
@@ -413,7 +413,8 @@ fn register_trigger(
         return;
     }
     if kind == crate::game::trigger::TriggerKind::Damage {
-        let spec = crate::game::damage_trigger::spec_of(block, host.is_uo());
+        let spec =
+            crate::game::damage_trigger::spec_of(block, host.profile.combat.damage_trigger_teams);
         host.triggers.register_damage(id, shape, spec);
         return;
     }

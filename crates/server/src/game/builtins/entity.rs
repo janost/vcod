@@ -347,8 +347,8 @@ fn client_spawn(
     host.set_field(cx, id, angles_field, Value::Vector(read))?;
 
     host.client_weapons[slot] = crate::weapons::PlayerWeapons::default();
-    if host.profile.game == vcod_common::game::Game::Cod4 {
-        host.cod4_mut().clients[slot].spawned();
+    if let Some(c4) = host.as_cod4_mut() {
+        c4.clients[slot].spawned();
         // 1.7's `ClientSpawn` writes the playerstate's `pm_type` in the call,
         // so the next spawn's `positionWouldTelefrag` sees this body; the
         // copy here was the last move's, a dead body's 7 at a round's start
@@ -363,8 +363,8 @@ fn client_spawn(
     host.reset_client_objectives(slot);
     // CoD2's `ClientSpawn` stores 0x1000 in `ent->flags` (0x80f9202), in the
     // call: a `setStableMissile` after the spawn holds.
-    if host.profile.game == vcod_common::game::Game::Cod2 {
-        host.cod2_mut().clients[slot].flags = crate::game::cod2_cmds::FL_SPAWN;
+    if let Some(c2) = host.as_cod2_mut() {
+        c2.clients[slot].flags = crate::game::cod2_cmds::FL_SPAWN;
     }
     // `ClientSpawn`'s memset empties the ammo here, in the call, and the
     // script's gives that follow land on it. It goes in the weapon op queue

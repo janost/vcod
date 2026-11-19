@@ -148,20 +148,29 @@ const COMMANDS_COD2: &str = "e \"GAME_VOTECOMMANDSARE\u{15} map_restart, map_rot
 pub struct VoteRules {
     /// `;` in the third argument refuses the call too (CoD2's).
     pub checks_third_arg: bool,
-    /// One kind list behind `g_allowVote` and its usage line; `None` runs
-    /// 1.1's or 1.5's off `patch_1_5`.
-    pub own_kinds: Option<(&'static [&'static str], &'static str)>,
-    /// `typemap` with no map still asks for one (CoD2's, as 1.5's).
+    /// The kinds a call may name, their gates and the usage line.
+    pub kinds: VoteKinds,
+    /// `typemap` with no map still asks for one (1.5's and CoD2's).
     pub typemap_needs_map: bool,
+    /// The vote runs on `trap_Milliseconds` (`svs_ms`), which a match
+    /// timeout does not stop (1.5's); else on the level time.
+    pub svs_clock: bool,
     /// The command a passed `map_restart` runs (CoD2's `fast_restart`);
     /// `None` runs the kind as called.
     pub restart_command: Option<&'static str>,
     /// `Cmd_Vote_f` has the complaint arm (CoD2's, lnxded 0x8100960, has
     /// none).
     pub complaints: bool,
+    /// `ClientDisconnect`'s complaint pass skips the slots not connected
+    /// (1.5b's and UO's, [`GameHost::complaints_about_gone`]).
+    pub complaints_connected_only: bool,
     /// The vote ends on a running majority and weighs the abstainers at
     /// its end (`cod2_vote_verdict`).
     pub running_majority: bool,
+    /// Short of a running majority, a vote fails once no more than
+    /// `n - (n / 2 + 1)` noes would be needed against it (1.5b 0x4fd1b);
+    /// 1.1's fails at `n / 2` noes.
+    pub fails_out_of_reach: bool,
     /// Under `g_oldVoting` 0 the script runs the votes
     /// (`ScriptRuntime::cod2_script_vote`).
     pub script_votes: bool,
@@ -174,54 +183,97 @@ pub struct VoteRules {
     pub min_connected: usize,
     /// Every map passes (CoD4's fastfile build asks for none).
     pub maps_unchecked: bool,
-    /// Configstring 15's time is `<voteTime> <sv_serverId>` (CoD4's).
-    pub time_with_server_id: bool,
+    /// What configstring 15's time holds.
+    pub time: VoteTime,
     /// The gametypes are `maps/mp/gametypes/_gametypes.txt`'s, read off
     /// the zones (CoD4's `Scr_ParseGameTypeList_FastFile`).
     pub gametype_list: bool,
 }
 
+/// [`VoteRules::kinds`].
+#[derive(Clone, Copy)]
+pub enum VoteKinds {
+    /// 1.1's, all behind `g_allowVote`.
+    V1,
+    /// 1.5's, each behind its own `g_allowVote*` gate.
+    V6,
+    /// One list behind `g_allowVote` and its usage line.
+    Own(&'static [&'static str], &'static str),
+}
+
+/// [`VoteRules::time`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum VoteTime {
+    /// The vote's end on its clock (1.1's).
+    End,
+    /// The vote's length, `VOTE_MS` (1.5's).
+    Length,
+    /// `<voteTime> <sv_serverId>` (CoD4's).
+    EndAndServerId,
+}
+
 impl VoteRules {
+    /// 1.1's.
     pub const COD1: VoteRules = VoteRules {
         checks_third_arg: false,
-        own_kinds: None,
+        kinds: VoteKinds::V1,
         typemap_needs_map: false,
+        svs_clock: false,
         restart_command: None,
         complaints: true,
+        complaints_connected_only: false,
         running_majority: false,
+        fails_out_of_reach: false,
         script_votes: false,
         queues_lines: false,
         min_connected: 0,
         maps_unchecked: false,
-        time_with_server_id: false,
+        time: VoteTime::End,
         gametype_list: false,
+    };
+
+    /// 1.5's and UO's (cod11-votes.md).
+    pub const COD1_15: VoteRules = VoteRules {
+        kinds: VoteKinds::V6,
+        typemap_needs_map: true,
+        svs_clock: true,
+        complaints_connected_only: true,
+        fails_out_of_reach: true,
+        time: VoteTime::Length,
+        ..VoteRules::COD1
     };
 
     /// CoD2's engine vote (cod2-protocol.md 3.4.2).
     pub const COD2: VoteRules = VoteRules {
         checks_third_arg: true,
-        own_kinds: Some((KINDS_COD2, COMMANDS_COD2)),
+        kinds: VoteKinds::Own(KINDS_COD2, COMMANDS_COD2),
         typemap_needs_map: true,
+        svs_clock: false,
         restart_command: Some("fast_restart"),
         complaints: false,
+        complaints_connected_only: false,
         running_majority: true,
+        fails_out_of_reach: false,
         script_votes: true,
         queues_lines: true,
         min_connected: 0,
         maps_unchecked: false,
-        time_with_server_id: false,
+        time: VoteTime::End,
         gametype_list: false,
     };
 
     /// CoD4 1.7's (`Cmd_CallVote_f` 0x80adbf2, `Cmd_Vote_f` 0x80ada2a,
     /// `CheckVote` 0x80b423a; cod4-map-cycle.md 4): CoD2's kinds, strings,
     /// verdict and `g_oldVoting`, two clients connected, no map check,
-    /// and the server id beside the vote's end.
+    /// and the server id beside the vote's end. Its complaint pass takes
+    /// 1.5's rule, off the `protocol` dvar 1.7 shares with 1.5
+    /// (unmeasured).
     pub const COD4: VoteRules = VoteRules {
         min_connected: 2,
         maps_unchecked: true,
-        time_with_server_id: true,
+        time: VoteTime::EndAndServerId,
         gametype_list: true,
+        complaints_connected_only: true,
         ..VoteRules::COD2
     };
 }
@@ -239,9 +291,8 @@ impl GameHost {
     /// The clock the vote runs on: 1.1's level time, 1.5's
     /// `trap_Milliseconds` (`svs_ms`), which a match timeout does not stop.
     fn vote_clock(&self, svs_ms: i32) -> i32 {
-        // CoD4's host reads as 1.5 (its `protocol` is 6 too); its vote runs
-        // on `level.time` (0x836f8ac).
-        if self.patch_1_5 && !self.profile.votes.time_with_server_id {
+        // CoD4's vote runs on `level.time` (0x836f8ac).
+        if self.profile.votes.svs_clock {
             svs_ms
         } else {
             self.level_time_ms
@@ -385,29 +436,25 @@ impl GameHost {
         {
             return reply("e \"GAME_INVALIDVOTESTRING\"");
         }
-        let gate = if let Some((kinds, _)) = rules.own_kinds {
-            kinds
+        let gate = match rules.kinds {
+            VoteKinds::Own(kinds, _) => kinds
                 .iter()
                 .any(|k| k.eq_ignore_ascii_case(&kind))
-                .then_some("g_allowVote")
-        } else if self.patch_1_5 {
-            KINDS_V6
+                .then_some("g_allowVote"),
+            VoteKinds::V6 => KINDS_V6
                 .iter()
                 .find(|(k, _)| k.eq_ignore_ascii_case(&kind))
-                .map(|(_, cvar)| *cvar)
-        } else {
-            KINDS_V1
+                .map(|(_, cvar)| *cvar),
+            VoteKinds::V1 => KINDS_V1
                 .iter()
                 .any(|k| k.eq_ignore_ascii_case(&kind))
-                .then_some("g_allowVote")
+                .then_some("g_allowVote"),
         };
         let Some(gate) = gate else {
-            let list = if let Some((_, commands)) = rules.own_kinds {
-                commands
-            } else if self.patch_1_5 {
-                COMMANDS_V6
-            } else {
-                COMMANDS_V1
+            let list = match rules.kinds {
+                VoteKinds::Own(_, commands) => commands,
+                VoteKinds::V6 => COMMANDS_V6,
+                VoteKinds::V1 => COMMANDS_V1,
             };
             return vec![
                 (Some(slot), "e \"GAME_INVALIDVOTESTRING\"".into()),
@@ -435,13 +482,13 @@ impl GameHost {
         if let Some(v) = self.client_voted.get_mut(slot) {
             *v = true;
         }
-        let time = if self.profile.votes.time_with_server_id {
-            let id = crate::game::builtins::cvar::atoi(self.cvars.get("sv_serverid"));
-            format!("{} {id}", self.vote.end_ms)
-        } else if self.patch_1_5 {
-            VOTE_MS.to_string()
-        } else {
-            self.vote.end_ms.to_string()
+        let time = match self.profile.votes.time {
+            VoteTime::EndAndServerId => {
+                let id = crate::game::builtins::cvar::atoi(self.cvars.get("sv_serverid"));
+                format!("{} {id}", self.vote.end_ms)
+            }
+            VoteTime::Length => VOTE_MS.to_string(),
+            VoteTime::End => self.vote.end_ms.to_string(),
         };
         self.set_vote_cs(CS_VOTE_TIME, time);
         self.set_vote_cs(CS_VOTE_STRING, display);
@@ -468,8 +515,7 @@ impl GameHost {
             };
             // 1.1's typemap without a map keeps the map (`GAME_TYPEMAP_NOCHANGE`
             // in the 1.1d capture); 1.5 and CoD2 ask for it even then.
-            if (self.patch_1_5 || self.profile.votes.typemap_needs_map || !arg3.is_empty())
-                && !self.map_exists(arg3)
+            if (self.profile.votes.typemap_needs_map || !arg3.is_empty()) && !self.map_exists(arg3)
             {
                 return Err(NO_MAP.into());
             }
@@ -599,7 +645,7 @@ impl GameHost {
     /// not connected, 1.1 does not, so there a stale window on a slot
     /// since left can take the clear.
     pub fn complaints_about_gone(&mut self, gone: usize) {
-        let v15 = self.patch_1_5;
+        let v15 = self.profile.votes.complaints_connected_only;
         let hit = (0..self.client_complaints.len()).find(|&slot| {
             self.client_complaints[slot].against == gone as i32
                 && (!v15 || self.client_roster.get(slot).is_some_and(Option::is_some))
@@ -747,7 +793,7 @@ impl GameHost {
             }
         } else if now.wrapping_sub(self.vote.end_ms) >= 0 {
             "e \"GAME_VOTEFAILED\""
-        } else if self.patch_1_5 {
+        } else if self.profile.votes.fails_out_of_reach {
             // 1.5 (0x4fd1b): a majority of `n / 2 + 1` passes, and fails
             // once no more than `n - majority` would be needed against it.
             let majority = n / 2 + 1;
@@ -846,7 +892,6 @@ mod tests {
             let mut vm = vcod_gsc::Vm::new();
             let mut h = host(&mut vm, &["axis", "allies"]);
             h.profile = profile;
-            h.patch_1_5 = std::ptr::eq(profile, &COD1_15);
             for name in ["g_allowVoteDrawFriend", "g_allowVoteKillCam"] {
                 h.cvars.set(name, "1");
             }
@@ -1123,7 +1168,9 @@ mod tests {
         for v15 in [false, true] {
             let mut vm = vcod_gsc::Vm::new();
             let mut host = host(&mut vm, &["axis", "allies", "allies", "allies"]);
-            host.patch_1_5 = v15;
+            if v15 {
+                host.set_profile(&crate::game::profile::COD1_15);
+            }
             for slot in 1..4 {
                 host.allow_complaint(slot, 0);
             }
@@ -1146,7 +1193,9 @@ mod tests {
         for (v15, after_one_no) in [(false, true), (true, false)] {
             let mut vm = vcod_gsc::Vm::new();
             let mut host = host(&mut vm, &["axis", "allies", "axis"]);
-            host.patch_1_5 = v15;
+            if v15 {
+                host.set_profile(&crate::game::profile::COD1_15);
+            }
             call(&mut vm, &mut host, 0, "callvote map_restart");
             vote(&mut vm, &mut host, 1, "no");
             assert_eq!(
@@ -1163,7 +1212,7 @@ mod tests {
     fn a_15_vote_reads_its_own_gate() {
         let mut vm = vcod_gsc::Vm::new();
         let mut host = host(&mut vm, &["axis", "allies"]);
-        host.patch_1_5 = true;
+        host.set_profile(&crate::game::profile::COD1_15);
         for (name, value) in [
             ("g_allowVoteClientKick", "0"),
             ("g_allowVoteKillCam", "1"),

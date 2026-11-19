@@ -135,18 +135,15 @@ pub fn register_weapon(host: &mut GameHost, name: &str) -> Option<usize> {
     if name.is_empty() || name.eq_ignore_ascii_case("none") {
         return None;
     }
-    if let Some(i) = host
-        .cod2()
-        .weapons
-        .iter()
-        .position(|w| w.eq_ignore_ascii_case(name))
-    {
+    // Shared code reaches here under `WeaponNumbering::Registered`.
+    let weapons = &host.as_cod2()?.weapons;
+    if let Some(i) = weapons.iter().position(|w| w.eq_ignore_ascii_case(name)) {
         return Some(i + 1);
     }
     if !host.initializing {
         return None;
     }
-    if host.cod2().weapons.len() >= COD2_MAX_WEAPONS {
+    if weapons.len() >= COD2_MAX_WEAPONS {
         log::warn!("{name}: more than {COD2_MAX_WEAPONS} weapons registered, not registered");
         return None;
     }
@@ -199,7 +196,7 @@ const COD2_ITEMS: usize = 131;
 /// VERIFIED, the calls and the dirty words. A restart that registers the
 /// same list writes nothing (no `d 7`, cod2-map-cycle.md 3).
 pub fn write_weapon_configstrings(host: &mut GameHost) {
-    if host.cod2().weapons.is_empty() {
+    if host.as_cod2().is_none_or(|c2| c2.weapons.is_empty()) {
         return;
     }
     host.configstrings.set(

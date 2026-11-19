@@ -35,9 +35,14 @@ pub struct HostProfile {
     /// `delete()` on a client is a script error (`Cannot delete a client
     /// entity`, CoD4 1.7's `Scr_Delete`, cod4-combat.md 14).
     pub delete_refuses_client: bool,
-    /// 1.1's rules: protocol 1, or CoD2, which keeps them wherever vcod has
-    /// not measured its own (cod2-gsc-diff.md 5.1).
-    pub speaks_1_1: bool,
+    /// `ClientEndFrame` stores the client's `maxspeed` in `ps.speed`
+    /// (1.5b 0x3ada8, UO 0x4329f); 1.1's `(int)g_speed.value` (game.mp
+    /// 0x41100).
+    pub speed_off_maxspeed: bool,
+    /// A client has the `maxspeed` and `sessionsquad` fields (1.5b's and
+    /// UO's; cod15-movement.md, cod15-protocol-diff.md "say_squad"); on 1.1
+    /// both are plain script variables.
+    pub maxspeed_and_squads: bool,
     /// `G_ShaderIndex` lowercases the name (CoD2's `I_strlwr`,
     /// cod2-protocol.md 15.3).
     pub lowercase_shaders: bool,
@@ -98,6 +103,91 @@ pub struct HostProfile {
     /// `fast_restart`, where its `map_restart` is a full load
     /// (cod2-map-cycle.md 1).
     pub restart_command: &'static str,
+    /// `G_Say`'s rules.
+    pub say: SayRules,
+    /// The combat code's rules (`game::combat`, the damage builtins).
+    pub combat: CombatRules,
+    /// The missile pool's rules (`game::missile`).
+    pub missiles: MissileRules,
+    /// The log takes 1.1's line forms (`say: %s: %s`, `Weapon: %i %s`)
+    /// rather than the `;` records 1.5, UO and CoD2 write
+    /// (cod11-map-cycle.md 9).
+    pub log_1_1_lines: bool,
+    /// `G_RunFrame`'s one thread pass runs before `G_XAnimUpdate`, on the
+    /// last frame's DObjs (1.5b 0x50821, 0x50840; UO 0x59e4d, 0x59e6c);
+    /// 1.1's second pass follows `G_DObjUpdateServerTime`.
+    pub threads_on_last_dobjs: bool,
+    /// A mover's position comes off 1.5b's and UO's stored-float
+    /// evaluation (`mover::bg_evaluate`).
+    pub stored_movers: bool,
+    /// `G_RunFrame` ends in `CheckMatchTimeout` (cod15-protocol-diff.md
+    /// 12). Only CoD1's frame reads it.
+    pub match_timeout: bool,
+    /// `G_InitGame` opens with `G_ParseScrVehicleInfo` (UO's 0x586cf):
+    /// the level has vehicles.
+    pub vehicles: bool,
+    /// `vehicletype` is a read-only entity field (UO's).
+    pub readonly_vehicletype: bool,
+    /// `headiconteam` takes `spectator` and refuses any other unknown name
+    /// (UO's); else an unknown name is 0.
+    pub head_icon_spectator: bool,
+    /// A client's model change runs `G_UpdateClientInfo` (UO's 0x87df9);
+    /// 1.1d's and 1.5b's return.
+    pub model_change_updates_client: bool,
+}
+
+/// `G_Say`'s rules (`game::say`).
+pub struct SayRules {
+    /// A say's status colours the name by side and reads death off the
+    /// session state, not the health (1.5b, cod15-protocol-diff.md 13).
+    pub side_status: bool,
+    /// `g_deadChat` lets the dead and the spectators reach everyone
+    /// (1.5b's).
+    pub dead_chat: bool,
+}
+
+/// The combat code's rules.
+pub struct CombatRules {
+    /// How far a CoD1 server traces a bullet: 8192 on 1.1 and 1.5, UO's
+    /// `BG_Bullet_Endpos` (game.mp.uo 0x3011c) 10000 (combat doc 2.2).
+    pub bullet_range: f32,
+    /// The players' bodies stop a blast's `CanDamage` traces: 1.1's mask
+    /// 0x2802091 holds `CONTENTS_BODY`, UO's 0x802091 (game.mp.uo
+    /// `CanDamage` 0x503f8) does not.
+    pub bodies_shield_blasts: bool,
+    /// A `trigger_damage` reads `teamname` and fires only for a hit from
+    /// that team (UO's, combat doc 14.8).
+    pub damage_trigger_teams: bool,
+    /// `Respond_trigger_damage` reads UO's renumbered means of death and
+    /// has no 0x40 arm (`damage_trigger::responds`).
+    pub damage_trigger_uo_means: bool,
+    /// An entity's `"damage"` notify takes six arguments, the damage
+    /// floored at 1 (UO's, `EntityHit::uo_args`).
+    pub damage_notify_six_args: bool,
+    /// `obituary()` writes nothing under `sv_obituary 0` (UO's).
+    pub obituary_cvar: bool,
+    /// `obituary()` raises its event at `vec3_origin` (UO's 0x6a819), not
+    /// at the victim's origin.
+    pub obituary_at_origin: bool,
+    /// `radiusDamage()` takes an attacker and an inflictor after its four
+    /// arguments (UO's 0x6c229, coduo-vehicles.md 11.2).
+    pub radius_damage_attacker_args: bool,
+    /// A player's damage takes its direction off `VectorNormalize2` stored
+    /// (1.5b 0x3ee76, UO 0x47634); 1.1d's normalizes on the stack
+    /// (cod11-combat.md 4.5).
+    pub stored_damage_dir: bool,
+    /// A turret heats while it fires and overheats (UO's).
+    pub turret_heat: bool,
+}
+
+/// The missile pool's rules (`game::missile::Missiles`).
+pub struct MissileRules {
+    /// United Offensive's missile rules: its bounce, its explode's type in
+    /// `es.scale` and no concussion entity.
+    pub uo: bool,
+    /// A resting missile falls once its floor is gone (1.5b 0x54ad7, UO
+    /// 0x5ee9c; cod11-combat.md 12.6).
+    pub falls: bool,
 }
 
 /// A trigger's entity state on the wire.
@@ -143,6 +233,8 @@ pub struct ItemRules {
     /// A drop at a tag waits for the body's pose and takes the player's
     /// angles (`cod2_items::TagDrop`).
     pub tag_drops: bool,
+    /// The drop ring holds entity numbers (1.1d's, `DropRing::claim`).
+    pub drop_ring_by_number: bool,
 }
 
 /// [`SpawnRules::weapon_pickup`]'s registration.
@@ -179,6 +271,8 @@ pub struct SpawnRules {
     /// `G_FindTeams` chains the map's `teamname`s after the spawn pass
     /// (`crate::game::teams`); CoD2's and CoD4's are not measured.
     pub find_teams: bool,
+    /// The spawn table has `trigger_mount` (UO's `SP_trigger_mount`).
+    pub trigger_mount: bool,
 }
 
 /// How a weapon name gets its 1-based wire index.
@@ -193,7 +287,21 @@ pub enum WeaponNumbering {
     Registered,
 }
 
-const fn cod1(defs: &'static Defs, builtins: fn() -> &'static BuiltinSet, v1: bool) -> HostProfile {
+/// Which CoD1 version [`cod1`] builds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cod1Version {
+    V11,
+    V15,
+    Uo,
+}
+
+const fn cod1(
+    defs: &'static Defs,
+    builtins: fn() -> &'static BuiltinSet,
+    v: Cod1Version,
+) -> HostProfile {
+    let v1 = matches!(v, Cod1Version::V11);
+    let uo = matches!(v, Cod1Version::Uo);
     HostProfile {
         game: Game::Cod1,
         vm: VmProfile::COD1,
@@ -203,7 +311,8 @@ const fn cod1(defs: &'static Defs, builtins: fn() -> &'static BuiltinSet, v1: bo
         ent_reuse_after_ms: None,
         delete_queues_number: false,
         delete_refuses_client: false,
-        speaks_1_1: v1,
+        speed_off_maxspeed: !v1,
+        maxspeed_and_squads: !v1,
         lowercase_shaders: false,
         reads_radiant_keys: false,
         callback_extra_args: false,
@@ -227,6 +336,7 @@ const fn cod1(defs: &'static Defs, builtins: fn() -> &'static BuiltinSet, v1: bo
             round_triggers: false,
             turret_weapon_and_player_sounds: false,
             find_teams: true,
+            trigger_mount: uo,
         },
         items: ItemRules {
             negative_unit_draw: v1,
@@ -235,8 +345,13 @@ const fn cod1(defs: &'static Defs, builtins: fn() -> &'static BuiltinSet, v1: bo
             weapon_rows: false,
             cvar_launch: false,
             tag_drops: false,
+            drop_ring_by_number: v1,
         },
-        votes: VoteRules::COD1,
+        votes: if v1 {
+            VoteRules::COD1
+        } else {
+            VoteRules::COD1_15
+        },
         print: PrintRules {
             letter_from_args: false,
             plain_packer: false,
@@ -248,18 +363,47 @@ const fn cod1(defs: &'static Defs, builtins: fn() -> &'static BuiltinSet, v1: bo
         trigger_wire: TriggerWire::Cod1,
         entities: &crate::game::wire::COD1_ENTITY_NUMBERS,
         restart_command: "map_restart",
+        say: SayRules {
+            side_status: !v1,
+            dead_chat: !v1,
+        },
+        combat: CombatRules {
+            bullet_range: if uo {
+                crate::game::combat::UO_BULLET_RANGE
+            } else {
+                crate::game::combat::BULLET_RANGE
+            },
+            bodies_shield_blasts: !uo,
+            damage_trigger_teams: uo,
+            damage_trigger_uo_means: uo,
+            damage_notify_six_args: uo,
+            obituary_cvar: uo,
+            obituary_at_origin: uo,
+            radius_damage_attacker_args: uo,
+            stored_damage_dir: !v1,
+            turret_heat: uo,
+        },
+        missiles: MissileRules { uo, falls: !v1 },
+        log_1_1_lines: v1,
+        threads_on_last_dobjs: !v1,
+        stored_movers: !v1,
+        match_timeout: !v1,
+        vehicles: uo,
+        readonly_vehicletype: uo,
+        head_icon_spectator: uo,
+        model_change_updates_client: uo,
     }
 }
 
 /// 1.1.
-pub static COD1_11: HostProfile = cod1(&defs::V1, BuiltinSet::v11, true);
+pub static COD1_11: HostProfile = cod1(&defs::V1, BuiltinSet::v11, Cod1Version::V11);
 /// 1.5.
 pub static COD1_15: HostProfile = HostProfile {
     vm: VmProfile::COD1_15,
-    ..cod1(&defs::V15, BuiltinSet::v15, false)
+    ..cod1(&defs::V15, BuiltinSet::v15, Cod1Version::V15)
 };
 /// United Offensive 1.51.
-pub static COD1_UO: HostProfile = cod1(&defs::UO, BuiltinSet::uo, false);
+pub static COD1_UO: HostProfile = cod1(&defs::UO, BuiltinSet::uo, Cod1Version::Uo);
 
 /// CoD2 1.3.
 pub static COD2: HostProfile = HostProfile {
@@ -271,7 +415,9 @@ pub static COD2: HostProfile = HostProfile {
     ent_reuse_after_ms: Some(500),
     delete_queues_number: false,
     delete_refuses_client: false,
-    speaks_1_1: true,
+    // 1.1's, unmeasured (cod2-gsc-diff.md 5.1).
+    speed_off_maxspeed: false,
+    maxspeed_and_squads: false,
     lowercase_shaders: true,
     reads_radiant_keys: true,
     callback_extra_args: true,
@@ -295,6 +441,7 @@ pub static COD2: HostProfile = HostProfile {
         round_triggers: true,
         turret_weapon_and_player_sounds: true,
         find_teams: false,
+        trigger_mount: false,
     },
     items: ItemRules {
         negative_unit_draw: false,
@@ -303,6 +450,7 @@ pub static COD2: HostProfile = HostProfile {
         weapon_rows: true,
         cvar_launch: true,
         tag_drops: true,
+        drop_ring_by_number: true,
     },
     votes: VoteRules::COD2,
     print: PrintRules {
@@ -316,6 +464,38 @@ pub static COD2: HostProfile = HostProfile {
     trigger_wire: TriggerWire::Cod2,
     entities: &crate::game::cod2_wire::COD2_ENTITY_NUMBERS,
     restart_command: "fast_restart",
+    // 1.1's say and log rules, unmeasured (cod2-gsc-diff.md 5.1).
+    say: SayRules {
+        side_status: false,
+        dead_chat: false,
+    },
+    combat: COD2_COMBAT,
+    missiles: MissileRules {
+        uo: false,
+        falls: false,
+    },
+    log_1_1_lines: false,
+    threads_on_last_dobjs: false,
+    stored_movers: false,
+    match_timeout: false,
+    vehicles: false,
+    readonly_vehicletype: false,
+    head_icon_spectator: false,
+    model_change_updates_client: false,
+};
+
+/// CoD2's and CoD4's combat rules: 1.1's where the CoD1 code reads them.
+const COD2_COMBAT: CombatRules = CombatRules {
+    bullet_range: crate::game::combat::BULLET_RANGE,
+    bodies_shield_blasts: true,
+    damage_trigger_teams: false,
+    damage_trigger_uo_means: false,
+    damage_notify_six_args: false,
+    obituary_cvar: false,
+    obituary_at_origin: false,
+    radius_damage_attacker_args: false,
+    stored_damage_dir: false,
+    turret_heat: false,
 };
 
 /// CoD4 1.7: CoD2's rules wherever vcod has not measured 1.7's own
@@ -332,7 +512,9 @@ pub static COD4: HostProfile = HostProfile {
     ent_reuse_after_ms: Some(500),
     delete_queues_number: true,
     delete_refuses_client: true,
-    speaks_1_1: true,
+    // 1.1's, unmeasured (cod2-gsc-diff.md 5.1).
+    speed_off_maxspeed: false,
+    maxspeed_and_squads: false,
     lowercase_shaders: true,
     reads_radiant_keys: true,
     callback_extra_args: true,
@@ -356,6 +538,7 @@ pub static COD4: HostProfile = HostProfile {
         round_triggers: true,
         turret_weapon_and_player_sounds: true,
         find_teams: false,
+        trigger_mount: false,
     },
     items: ItemRules {
         negative_unit_draw: false,
@@ -364,6 +547,7 @@ pub static COD4: HostProfile = HostProfile {
         weapon_rows: true,
         cvar_launch: true,
         tag_drops: true,
+        drop_ring_by_number: true,
     },
     votes: VoteRules::COD4,
     print: PrintRules {
@@ -377,6 +561,27 @@ pub static COD4: HostProfile = HostProfile {
     trigger_wire: TriggerWire::Cod4,
     entities: &crate::game::cod2_wire::COD2_ENTITY_NUMBERS,
     restart_command: "fast_restart",
+    // `side_status`, `dead_chat`, `threads_on_last_dobjs` and
+    // `stored_movers` are 1.5's: the host took 1.5's arms off the
+    // `protocol` dvar, 6 on 1.7 as on 1.5. Unmeasured on 1.7; the say's
+    // colours are (`GameHost::say`).
+    say: SayRules {
+        side_status: true,
+        dead_chat: true,
+    },
+    combat: COD2_COMBAT,
+    missiles: MissileRules {
+        uo: false,
+        falls: false,
+    },
+    log_1_1_lines: false,
+    threads_on_last_dobjs: true,
+    stored_movers: true,
+    match_timeout: false,
+    vehicles: false,
+    readonly_vehicletype: false,
+    head_icon_spectator: false,
+    model_change_updates_client: false,
 };
 
 impl HostProfile {
