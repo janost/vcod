@@ -1601,6 +1601,10 @@ mod tests {
         assert_eq!(reply_text(&mut sv).0, "connectResponse");
     }
 
+    /// `gameCompleteStatus` over rcon (handshake doc, "Console commands
+    /// over rcon"): a master the heartbeat resolved first is named and sent
+    /// nothing; one the command resolves itself gets the serverinfo with
+    /// the argument, if any, as `challenge` and a line per player.
     #[test]
     fn game_complete_status_reaches_only_the_masters_it_resolved() {
         let t = Instant::now();

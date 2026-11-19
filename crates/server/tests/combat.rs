@@ -1191,10 +1191,6 @@ fn angle_short(deg: f32) -> i32 {
     (deg * 65536.0 / 360.0) as i32
 }
 
-/// The falloff a frag charges a player standing at `feet` from a blast at
-/// `at`, with a clear line of sight (combat doc, 14.1). The tests assert
-/// against this rather than a constant: where a grenade comes to rest is the
-/// bounce's business, so the distance is only known once it has.
 /// The stock frag's falloff at a distance, times `CanDamage`'s share, in
 /// the server's own f64 arithmetic (`Blast::hit`).
 fn frag_damage(at: [f32; 3], feet: [f32; 3], fraction: f32) -> i32 {
