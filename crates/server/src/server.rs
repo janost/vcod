@@ -8997,8 +8997,10 @@ mod tests {
             .collect()
     }
 
-    const PROBE_USAGE: &str =
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_usage.gsc");
+    const PROBE_USAGE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../gsc/tests/fixtures/semantics/client-probes/probe_usage.gsc"
+    ));
 
     /// `scriptUsage` under `probe_usage` on retail 1.1d, mp_brecourt, at
     /// `developer 1` (`tests/fixtures/usage/`, handshake doc, "Console
@@ -9011,7 +9013,10 @@ mod tests {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
-        let retail = include_str!("../tests/fixtures/usage/mp_brecourt-probe_usage.txt");
+        let retail = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/usage/mp_brecourt-probe_usage.txt"
+        ));
         assert_eq!(ours, usage_reply(retail));
     }
 
@@ -9024,9 +9029,10 @@ mod tests {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
-        let retail = usage_reply(include_str!(
-            "../tests/fixtures/usage/mp_brecourt-probe_usage-dev0.txt"
-        ));
+        let retail = usage_reply(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/usage/mp_brecourt-probe_usage-dev0.txt"
+        )));
         let offsets = |t: &str| -> Vec<u32> {
             t.lines()
                 .filter_map(|l| l.strip_prefix("@ ")?.parse().ok())
@@ -9058,16 +9064,19 @@ mod tests {
     /// `count`) is compared.
     #[test]
     fn script_usage_entities_as_retail() {
-        const SRC: &str =
-            include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_usage_ents.gsc");
+        const SRC: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../gsc/tests/fixtures/semantics/client-probes/probe_usage_ents.gsc"
+        ));
         let Some(base) = usage_under("probe_usage_ents", SRC, "1", ["base", "x", "classname"])
         else {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
-        let retail = usage_reply(include_str!(
-            "../tests/fixtures/usage/mp_brecourt-probe_usage_ents.txt"
-        ));
+        let retail = usage_reply(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/usage/mp_brecourt-probe_usage_ents.txt"
+        )));
         let threads = |t: &str| t.split("ent type").next().unwrap().to_string();
         assert_eq!(threads(&base), threads(&retail));
         // `var usage` less `count` on the entity line.
@@ -9111,8 +9120,10 @@ mod tests {
         // Naming three radiant keys stores them: `export` once,
         // `script_noteworthy` twice, `script_gameobjectname` 27 times
         // (retail 63, 314, one more object for the trigger_lookat).
-        const KEYS: &str =
-            include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_usage_keys.gsc");
+        const KEYS: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../gsc/tests/fixtures/semantics/client-probes/probe_usage_keys.gsc"
+        ));
         let keys = usage_under("probe_usage_keys", KEYS, "1", ["", "", ""]).unwrap();
         assert_eq!(held(&keys), 314 - 63);
     }
@@ -9137,7 +9148,10 @@ mod tests {
         );
         sv.overlay_script(
             "maps/mp/gametypes/probe_startclock",
-            include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_startclock.gsc"),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../gsc/tests/fixtures/semantics/client-probes/probe_startclock.gsc"
+            )),
         );
         // The first load runs the settle frames a map change does.
         sv.load_scripts(Rc::new(fs)).expect("load the scripts");
