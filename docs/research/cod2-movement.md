@@ -679,7 +679,8 @@ linked. Its think (handler 0x13, `G_FreeEntity` 0x811ee50) is due
   INFERRED.
 
 vcod-server spawns and frees it on that clock (`Cod2Level::
-spawn_mantle_block`, `run_mantle_blocks`), so later entity numbers match,
+spawn_mantle_block`, `game::mantle_block::MantleBlocks`), so later entity
+numbers match,
 and hands each cmd's pmove the blocks as `movetrace::ClipBox`es
 (`MoveWorld::with_clip_boxes`), the climber's own passed. No capture has a
 second player walk into one. The bots' walks and the client's prediction

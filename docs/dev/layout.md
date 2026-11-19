@@ -185,6 +185,11 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     scripts, the clients' playerstates and their pmove over the map's clip
     map, combat (`combat.rs`, `bullet.rs`), missiles, entity damage,
     corpses, turrets, vehicles, the use key, weapons.
+  - What CoD2's and CoD4's levels share: `game/use_list.rs` (the use
+    list's constants, score, sort and cuts), `game/mantle_block.rs` (the
+    mantle blockages), `game/turret.rs` (`GunInfo`, `gun_list`,
+    `manned_gun`), `crate::follow` (the follow cycle, `StopFollowing`'s
+    spot).
   - `game/script.rs` + `game/script/`: `ScriptRuntime`, the VM and host
     of one level. `load.rs` the level load and compile cache, `frame.rs`
     the frame and entity pass, `damage.rs`, `touch.rs` (the touch and use

@@ -1180,10 +1180,19 @@ vcod:
   clear one. VERIFIED (Mac 0x1c45b8, 0x1c3f18; rodata 0x326570 sqrt 2,
   0x3262dc 0.2, 0x326388 0.1, 0x326470 24, 0x3264c4 15).
 
-vcod: `game::cod2_blast` holds the measure both walks share
-(`stored_length`, `blast_damage`). A missile's blast probes `CanDamage`
-through `Cod2Level::locational_trace` (the world, the static models, the
-entities); the builtin's probes still clip the world's collision alone. The builtin
+vcod: `game::cod2_blast` holds the one `G_RadiusDamage` measure and
+`CanDamage` both walks take (`victim_damage`, `client_share`,
+`entity_share`) and their one clear-test, `cod2_blast::passed`: a probe
+clips the world's clip map, the static models, then the brush and script
+model entities, passing the victim; the tenth's capsule clips the world's
+clip map alone. The level hands the host its clip map and static models at
+load (`Cod2HostState::blockers`), so the script's `radiusDamage` sees the
+blockers a missile's blast does, as retail's one function does. VERIFIED,
+the gate: `hit-rocket-cover`'s target behind the static panzer takes
+nothing from the builtin's blast at the rocket's point either
+(`radius_damage_stops_on_a_static_model`), where the world-only probes the
+builtin had before killed it. An entity victim's probes pass the entity
+itself. INFERRED. The builtin
 (`builtins::cod2::radius_damage`) walks the playing clients (their body as
 the last think or end frame left it) in slot order, then the entities
 with `takedamage` in the area tree's order. It starts each client's

@@ -34,7 +34,7 @@ use vcod_common::x87::{F80, angle_vectors};
 use vcod_gsc::{EntId, Value};
 
 use super::cod2::Cod2Level;
-use super::combat::Hit;
+use super::combat::{Hit, segment_meets_box};
 use super::host::{GameHost, SimOp};
 use super::temp_entity::{Scope, TempEntity};
 
@@ -649,37 +649,6 @@ impl Cod2Level {
             .collect()
     }
 
-    /// The character `slot`'s entity carries: its model and attachments.
-    fn character(&mut self, slot: usize) -> Option<Character> {
-        let strip = |s: &str| s.strip_prefix("xmodel/").unwrap_or(s).to_string();
-        let body = strip(&self.rt.client_field(slot, "model")?);
-        if body.is_empty() {
-            return None;
-        }
-        let id = self.rt.client_entity(slot)?;
-        let (attachments, ignore_collision) = self.rt.with_host(|h, cx| {
-            h.ents.get(id).map_or_else(
-                || (Vec::new(), 0),
-                |e| {
-                    let list = e
-                        .attachments
-                        .iter()
-                        .map(|(m, t)| {
-                            let tag = cx.resolve(*t).to_string();
-                            (strip(cx.resolve(*m)), (!tag.is_empty()).then_some(tag))
-                        })
-                        .collect();
-                    (list, u32::from(e.attach_ignore_collision))
-                },
-            )
-        });
-        Some(Character {
-            body,
-            attachments,
-            ignore_collision,
-        })
-    }
-
     /// The frame `slot`'s body poses from at `origin`: its playerstate's
     /// anims, stance, view and lean.
     fn body_frame(&self, slot: usize, origin: Vec3) -> Option<BodyFrame> {
@@ -781,7 +750,7 @@ impl Cod2Level {
         all: bool,
     ) -> Option<(Rc<PlayerRig>, Rc<Vec<Mat>>, BodyFrame)> {
         let fs = self.rt.host.fs.clone()?;
-        let character = self.character(slot)?;
+        let character = self.rt.client_character(slot)?;
         let rig = self.combat.rig(&fs, &character)?;
         let now = self.level_time();
         let stamp = self.combat.stamp;
@@ -930,7 +899,7 @@ impl Cod2Level {
     #[cfg(test)]
     pub(super) fn tag_positions(&mut self, slot: usize, now_ms: i32, names: &[&str]) -> Vec<Vec3> {
         let fs = self.rt.host.fs.clone().unwrap();
-        let character = self.character(slot).unwrap();
+        let character = self.rt.client_character(slot).unwrap();
         let ps = &self.players[slot].as_ref().unwrap().ps;
         let (origin, yaw) = (ps.origin, ps.view_angles[1]);
         let f = self.body_frame(slot, origin).unwrap();
@@ -1011,10 +980,8 @@ impl Cod2Level {
             .collect()
     }
 
-    /// The entity with no client a segment meets before `limit`: a linked
-    /// brush model (`SV_Trace`'s entity clip) or a script model's xmodel
-    /// collision, through the host's `bulletTrace` pass; `skip`'s own
-    /// entity is passed.
+    /// The entity with no client a segment meets before `limit`
+    /// ([`entity_hit`]); `skip`'s own entity is passed.
     fn entity_contact(
         &mut self,
         start: Vec3,
@@ -1023,30 +990,9 @@ impl Cod2Level {
         limit: f32,
     ) -> Option<Contact> {
         let ignore = skip.and_then(|s| self.rt.client_entity(s));
-        // The brush models under CoD2's shot mask (the shared `shot_trace`
-        // holds 1.1's), then the script models.
-        let brush = self
-            .world
-            .collision
-            .point_trace(start, end, MASK_SHOT & !CONTENTS_BODY, false);
-        let n = self.world.collision.entity_num(&brush);
-        let brush = (brush.fraction < 1.0 && n < vcod_common::net::protocol::ENTITYNUM_WORLD)
-            .then(|| self.rt.host.ents.handle(n))
-            .flatten()
-            .map(|id| (brush.fraction, brush.normal, Some(id), brush.surface_flags));
-        let (model, _) = self.rt.with_host(|h, cx| {
-            super::builtins::combat::bullet_hit(h, cx, start, end, false, ignore)
-        });
-        let model = model.filter(|m| m.2.is_some());
-        let hit = match (brush, model) {
-            (Some(b), Some(m)) if m.0 < b.0 => m,
-            (Some(b), _) => b,
-            (None, Some(m)) => m,
-            (None, None) => return None,
-        };
-        let (fraction, normal, Some(id), surface_flags) = hit else {
-            return None;
-        };
+        let (fraction, normal, id, surface_flags) = self
+            .rt
+            .with_host(|h, cx| entity_hit(h, cx, start, end, ignore))?;
         (fraction < limit).then_some(Contact {
             fraction,
             normal,
@@ -2423,30 +2369,15 @@ impl Cod2Level {
         if self.rt.host.ignore_radius_damage {
             return;
         }
-        let radius = radius.max(1.0);
         for v in self.targets(ignore.client) {
-            let origin = self.players[v].as_ref().expect("a target").ps.origin;
-            let dist = super::cod2_blast::stored_length(origin - at);
-            if dist >= radius {
+            let ps = &self.players[v].as_ref().expect("a target").ps;
+            let victim = super::cod2_blast::BlastBody::of(ps).victim();
+            let mut clear = |a: Vec3, b: Vec3, probe| self.blast_clear(v, a, b, probe);
+            let Some((dealt, dir)) =
+                super::cod2_blast::victim_damage(&mut clear, &victim, at, inner, outer, radius)
+            else {
                 continue;
-            }
-            let damage = |mult| super::cod2_blast::blast_damage(inner, outer, radius, dist, mult);
-            let share = self.can_damage(v, at);
-            let dealt = if share > 0.0 {
-                damage(share)
-            } else {
-                let ps = &self.players[v].as_ref().expect("a target").ps;
-                let centre = origin + (ps.mins + ps.maxs) * 0.5;
-                let reached = self.combat.clip.as_ref().is_some_and(|c| {
-                    c.trace(at, centre, Vec3::ZERO, Vec3::ZERO, 0x811).fraction < 1.0
-                });
-                if !reached || centre.distance(at) >= 0.2 * radius {
-                    continue;
-                }
-                damage(0.1)
             };
-            let mut dir = origin - at;
-            dir.z += 24.0;
             self.g_damage(
                 v,
                 attacker,
@@ -2463,6 +2394,7 @@ impl Cod2Level {
         }
         // The entities with `takedamage` the walk meets (`game::cod2_blast`).
         let attacker_ent = self.rt.client_entity(attacker);
+        let radius = radius.max(1.0);
         self.rt.with_host(|h, cx| {
             super::cod2_blast::damage_entities(
                 h,
@@ -2480,45 +2412,18 @@ impl Cod2Level {
         });
     }
 
-    /// `CanDamage` (Mac 0x1c3f18) for a client: five probes from the blast
-    /// to the body's middle and its four corners, 15 either side across
-    /// the line to the blast and half the eye's height up and down; 0 when
-    /// none passes, `n / 3` for one to three, 1 for four or five. Each is
-    /// `G_LocationalTracePassed` (lnxded 0x810a622) under 0x802891 passing
-    /// the victim: the world, the static models and the entities block it.
-    fn can_damage(&mut self, victim: usize, at: Vec3) -> f32 {
-        if self.combat.clip.is_none() {
-            return 1.0;
-        }
-        let ps = &self.players[victim].as_ref().expect("a target").ps;
-        let eye = Self::view_origin(ps);
-        let centre = (eye + ps.origin) * 0.5;
-        let half = (eye.z - ps.origin.z) * 0.5;
-        let mut d = at - ps.origin;
-        d.z = 0.0;
-        let d = d.normalize_or_zero();
-        let side = Vec3::new(-d.y, d.x, 0.0);
-        let probes = [
-            centre,
-            centre + side * 15.0 + Vec3::Z * half,
-            centre + side * 15.0 - Vec3::Z * half,
-            centre - side * 15.0 + Vec3::Z * half,
-            centre - side * 15.0 - Vec3::Z * half,
-        ];
-        let none = HashMap::new();
-        let passed = probes
-            .iter()
-            .filter(|&&p| {
-                self.locational_trace(at, p, Some(victim), MASK_BLAST, &BULLET_PRIORITY, &none)
-                    .fraction
-                    >= 1.0
-            })
-            .count();
-        match passed {
-            0 => 0.0,
-            n @ 1..=3 => n as f32 / 3.0,
-            _ => 1.0,
-        }
+    /// The level's clear-test for `victim`'s blast
+    /// ([`super::cod2_blast::passed`]), passing the victim.
+    fn blast_clear(
+        &mut self,
+        victim: usize,
+        a: Vec3,
+        b: Vec3,
+        probe: super::cod2_blast::Probe,
+    ) -> bool {
+        let ignore = self.rt.client_entity(victim);
+        self.rt
+            .with_host(|h, cx| super::cod2_blast::passed(h, cx, a, b, probe, ignore))
     }
 
     /// The missiles' entities for the snapshot, in CoD2's numbers over
@@ -2743,29 +2648,34 @@ impl Cod2Level {
     }
 }
 
-/// Whether the segment `start..start + (end - start) * limit` meets the
-/// box `lo..hi`.
-fn segment_meets_box(start: Vec3, end: Vec3, lo: Vec3, hi: Vec3, limit: f32) -> bool {
-    let d = end - start;
-    let (mut t0, mut t1) = (0.0f32, limit);
-    for a in 0..3 {
-        if d[a].abs() < 1e-6 {
-            if start[a] < lo[a] || start[a] > hi[a] {
-                return false;
-            }
-            continue;
-        }
-        let (mut x, mut y) = ((lo[a] - start[a]) / d[a], (hi[a] - start[a]) / d[a]);
-        if x > y {
-            std::mem::swap(&mut x, &mut y);
-        }
-        t0 = t0.max(x);
-        t1 = t1.min(y);
-        if t0 > t1 {
-            return false;
-        }
+/// The entity with no client a segment meets: a linked brush model
+/// (`SV_Trace`'s entity clip, under CoD2's shot mask; the shared
+/// `shot_trace` holds 1.1's) or, nearer, a script model's xmodel collision
+/// through the host's `bulletTrace` pass, passing `ignore`. The fraction,
+/// normal, entity and surface flags.
+pub(super) fn entity_hit(
+    host: &mut GameHost,
+    cx: &mut vcod_gsc::Cx,
+    start: Vec3,
+    end: Vec3,
+    ignore: Option<EntId>,
+) -> Option<(f32, Vec3, EntId, u32)> {
+    let brush = host.world.as_ref().and_then(|w| {
+        let t = w
+            .collision
+            .point_trace(start, end, MASK_SHOT & !CONTENTS_BODY, false);
+        let n = w.collision.entity_num(&t);
+        (t.fraction < 1.0 && n < vcod_common::net::protocol::ENTITYNUM_WORLD).then_some((t, n))
+    });
+    let brush = brush
+        .and_then(|(t, n)| Some((t.fraction, t.normal, host.ents.handle(n)?, t.surface_flags)));
+    let (model, _) = super::builtins::combat::bullet_hit(host, cx, start, end, false, ignore);
+    let model = model.and_then(|(f, n, id, sf)| Some((f, n, id?, sf)));
+    match (brush, model) {
+        (Some(b), Some(m)) if m.0 < b.0 => Some(m),
+        (Some(b), _) => Some(b),
+        (None, m) => m,
     }
-    true
 }
 
 #[cfg(test)]
@@ -2781,20 +2691,5 @@ mod tests {
         assert_eq!(t[17], 0.5);
         assert_eq!(t[0], 1.0);
         assert!(parse_hitloc_table("nope").is_none());
-    }
-
-    #[test]
-    fn a_segment_meets_a_box_only_inside_its_limit() {
-        let (lo, hi) = (Vec3::new(-15.0, -15.0, 0.0), Vec3::new(15.0, 15.0, 70.0));
-        let (s, e) = (Vec3::new(-100.0, 0.0, 40.0), Vec3::new(100.0, 0.0, 40.0));
-        assert!(segment_meets_box(s, e, lo, hi, 1.0));
-        assert!(!segment_meets_box(s, e, lo, hi, 0.3));
-        assert!(!segment_meets_box(
-            s,
-            e + Vec3::Z * 200.0,
-            lo,
-            hi + Vec3::Z * 0.0,
-            0.2
-        ));
     }
 }

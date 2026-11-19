@@ -27,7 +27,7 @@ use vcod_common::bonetrace::{PriorityMap, bone_trace_worlds_cod4};
 use vcod_common::playerpose::{Cod4Arith, Controllers};
 use vcod_gsc::{EntId, Value};
 
-use super::level::{Cod4Level, PM_DEAD, PsExt, ps};
+use super::level::{Cod4Level, PsExt, ps};
 use crate::follow::SessionState;
 
 /// `bulletPriorityMap` and `riflePriorityMap`, one byte per hit
@@ -44,28 +44,7 @@ pub const RIFLE_PRIORITY: PriorityMap = [1, 9, 9, 9, 8, 7, 6, 6, 6, 6, 5, 5, 4, 
 pub const HIT_BROAD_MINS: Vec3 = Vec3::new(-64.0, -64.0, -32.0);
 pub const HIT_BROAD_MAXS: Vec3 = Vec3::new(64.0, 64.0, 72.0);
 
-/// `hitLocation_t` by number, as `G_GetHitLocationString` names them.
-pub const HITLOC_NAMES: [&str; 19] = [
-    "none",
-    "helmet",
-    "head",
-    "neck",
-    "torso_upper",
-    "torso_lower",
-    "right_arm_upper",
-    "left_arm_upper",
-    "right_arm_lower",
-    "left_arm_lower",
-    "right_hand",
-    "left_hand",
-    "right_leg_upper",
-    "left_leg_upper",
-    "right_leg_lower",
-    "left_leg_lower",
-    "right_foot",
-    "left_foot",
-    "gun",
-];
+pub use crate::game::combat::HITLOC_NAMES;
 
 /// `weapType` 2 (a projectile) and `weapClass` 5 (a grenade): the grenade
 /// launcher's pair (`gl_m16_mp`, VERIFIED off `common_mp.ff`).
@@ -102,8 +81,9 @@ pub use vcod_cod4::collision::MASK_SHOT;
 pub const DFLAG_NO_KNOCKBACK: i32 = 4;
 /// `Bullet_Fire`'s range for everything but a spread weapon.
 pub(super) const BULLET_RANGE: f32 = vcod_cod4::bullet::BULLET_RANGE;
-/// The archive of positions the antilag reads: one second of frames.
-const HISTORY_MS: i32 = 1000;
+/// The archive of positions the antilag reads: one second of frames, past
+/// the 400 ms a rewind reaches ([`Cod4Level::rewound`]).
+const ANTILAG_HISTORY_MS: i32 = 1000;
 
 /// The temp entity events this module raises, 1.7's numbers (VERIFIED off
 /// the name table, cod4-netfields.md 9).
@@ -231,15 +211,62 @@ impl PosedBody4 {
         if !segment_meets_box(start, end, lo, hi, limit) {
             return None;
         }
-        let inv = self.placed.inverse();
-        let (ls, le) = (inv.transform_point3(start), inv.transform_point3(end));
         let skel = &self.rig.skeleton;
-        let mats = skel_mats(skel, &self.pose, Some(&self.controls));
-        let worlds = worlds_of(&mats);
-        let mut h = bone_trace_worlds_cod4(skel, &worlds, ls, le, priority, limit)?;
-        h.normal = struck_normal(&mats, &worlds, &h);
+        let h = trace_pose(
+            skel,
+            &self.pose,
+            Some(&self.controls),
+            &self.placed,
+            start,
+            end,
+            priority,
+            limit,
+        )?;
         Some((h, entity_normal(self.yaw, h.normal)))
     }
+}
+
+/// Where a body at `origin` turned `yaw` stands: its model's frame.
+fn placed_at(origin: Vec3, yaw: f32) -> glam::Mat4 {
+    BodyFrame {
+        origin,
+        angles: [0.0, yaw, 0.0],
+        ..Default::default()
+    }
+    .transform()
+}
+
+/// `start..end` against the hit boxes of `skel` under `pose` and
+/// `controls`, placed by `placed`, nearer than `limit`: the hit, its
+/// struck face's normal in the model's frame.
+#[allow(clippy::too_many_arguments)]
+fn trace_pose(
+    skel: &vcod_common::skeleton::Skeleton,
+    pose: &Pose4,
+    controls: Option<&Controllers>,
+    placed: &glam::Mat4,
+    start: Vec3,
+    end: Vec3,
+    priority: &PriorityMap,
+    limit: f32,
+) -> Option<vcod_common::bonetrace::BoneHit> {
+    let inv = placed.inverse();
+    let (ls, le) = (inv.transform_point3(start), inv.transform_point3(end));
+    let mats = skel_mats(skel, pose, controls);
+    let worlds = worlds_of(&mats);
+    let mut h = bone_trace_worlds_cod4(skel, &worlds, ls, le, priority, limit)?;
+    h.normal = struck_normal(&mats, &worlds, &h);
+    Some(h)
+}
+
+/// A live body posed for this frame ([`Cod4Level::posed`]).
+struct Posed4 {
+    rig: Rc<PlayerRig>,
+    pose: Pose4,
+    controls: Controllers,
+    yaw: f32,
+    /// The pose stepped the controls a frame: the frame's first.
+    built: bool,
 }
 
 /// A body's pose for the server's traces and tags: the shared sampler's
@@ -550,29 +577,7 @@ pub(super) struct Contact {
     pub(super) startsolid: bool,
 }
 
-/// Does `start..end` meet the box `lo..hi` before `limit`?
-pub(super) fn segment_meets_box(start: Vec3, end: Vec3, lo: Vec3, hi: Vec3, limit: f32) -> bool {
-    let d = end - start;
-    let (mut t0, mut t1) = (0.0f32, limit);
-    for a in 0..3 {
-        if d[a].abs() < 1e-9 {
-            if start[a] < lo[a] || start[a] > hi[a] {
-                return false;
-            }
-            continue;
-        }
-        let (mut u, mut v) = ((lo[a] - start[a]) / d[a], (hi[a] - start[a]) / d[a]);
-        if u > v {
-            std::mem::swap(&mut u, &mut v);
-        }
-        t0 = t0.max(u);
-        t1 = t1.min(v);
-        if t0 > t1 {
-            return false;
-        }
-    }
-    true
-}
+pub(super) use crate::game::combat::segment_meets_box;
 
 impl Cod4Level {
     /// The level's weapon table as pmove reads it, rebuilt when a weapon
@@ -1037,8 +1042,7 @@ impl Cod4Level {
     /// A body in play: playing, `pm_type` normal or last stand.
     pub(super) fn playing(&mut self, slot: usize) -> bool {
         self.players[slot].as_ref().is_some_and(|p| {
-            super::level::in_play(p.ps.word(ps!("pm_type")))
-                && p.ps.word(ps!("otherFlags")) & 4 != 0
+            super::level::in_play(p.ps.pm_type()) && p.ps.word(ps!("otherFlags")) & 4 != 0
         }) && self
             .rt
             .client_session(slot)
@@ -1160,37 +1164,6 @@ impl Cod4Level {
         best
     }
 
-    /// The character `slot`'s entity carries: its body and attachments.
-    fn character(&mut self, slot: usize) -> Option<Character> {
-        let strip = |s: &str| s.strip_prefix("xmodel/").unwrap_or(s).to_string();
-        let body = strip(&self.rt.client_field(slot, "model")?);
-        if body.is_empty() {
-            return None;
-        }
-        let id = self.rt.client_entity(slot)?;
-        let (attachments, ignore_collision) = self.rt.with_host(|h, cx| {
-            h.ents.get(id).map_or_else(
-                || (Vec::new(), 0),
-                |e| {
-                    let list = e
-                        .attachments
-                        .iter()
-                        .map(|(m, t)| {
-                            let tag = cx.resolve(*t).to_string();
-                            (strip(cx.resolve(*m)), (!tag.is_empty()).then_some(tag))
-                        })
-                        .collect();
-                    (list, u32::from(e.attach_ignore_collision))
-                },
-            )
-        });
-        Some(Character {
-            body,
-            attachments,
-            ignore_collision,
-        })
-    }
-
     /// The frame `slot`'s body poses from at `origin`: the playerstate's
     /// anims, the view and the stance bits.
     fn body_frame(&mut self, slot: usize, origin: Vec3) -> Option<BodyFrame> {
@@ -1284,7 +1257,49 @@ impl Cod4Level {
         ease: bool,
     ) -> Option<vcod_common::bonetrace::BoneHit> {
         self.take_script_poses();
-        let character = self.character(slot)?;
+        let Posed4 {
+            rig,
+            pose,
+            controls,
+            yaw,
+            built,
+        } = self.posed(slot, origin, ease)?;
+        let placed = placed_at(origin, yaw);
+        let hit = trace_pose(
+            &rig.skeleton,
+            &pose,
+            Some(&controls),
+            &placed,
+            start,
+            end,
+            priority,
+            limit,
+        );
+        if built {
+            // The frame's skeleton: a tag read later in the frame (the
+            // dying body's `tag_weapon_right`) reads this pose.
+            let now = self.level_time();
+            let entity = self.rt.client_entity(slot).map(|e| e.0);
+            if let Some(p) = self
+                .rt
+                .host
+                .cod4_mut()
+                .posed_bodies
+                .iter_mut()
+                .find(|p| Some(p.entity) == entity)
+            {
+                p.pose = Rc::new(pose);
+                p.controls = controls;
+                p.built_at = Some(now);
+            }
+        }
+        hit
+    }
+
+    /// `slot`'s body posed at `origin` at this frame's time; `ease` steps
+    /// its controls a frame first unless a pose already did this frame.
+    fn posed(&mut self, slot: usize, origin: Vec3, ease: bool) -> Option<Posed4> {
+        let character = self.rt.client_character(slot)?;
         let f = self.body_frame(slot, origin)?;
         let rig = self.combat.rig(&character)?;
         let now = self.level_time();
@@ -1305,40 +1320,13 @@ impl Cod4Level {
             b.ease_controls(&set.anims, &controller_frame(&f, end_frame[slot]), dt);
         }
         let pose = pose4(b, &rig, set, &src, &f, now);
-        let placed = BodyFrame {
-            origin,
-            angles: [0.0, f.angles[1], 0.0],
-            ..Default::default()
-        }
-        .transform();
-        let inv = placed.inverse();
-        let (ls, le) = (inv.transform_point3(start), inv.transform_point3(end));
-        let skel = &rig.skeleton;
-        let controls = *b.controls();
-        let mats = skel_mats(skel, &pose, Some(&controls));
-        let worlds = worlds_of(&mats);
-        let hit = bone_trace_worlds_cod4(skel, &worlds, ls, le, priority, limit).map(|mut h| {
-            h.normal = struck_normal(&mats, &worlds, &h);
-            h
-        });
-        if built {
-            // The frame's skeleton: a tag read later in the frame (the
-            // dying body's `tag_weapon_right`) reads this pose.
-            let entity = self.rt.client_entity(slot).map(|e| e.0);
-            if let Some(p) = self
-                .rt
-                .host
-                .cod4_mut()
-                .posed_bodies
-                .iter_mut()
-                .find(|p| Some(p.entity) == entity)
-            {
-                p.pose = Rc::new(pose);
-                p.controls = controls;
-                p.built_at = Some(now);
-            }
-        }
-        hit
+        Some(Posed4 {
+            rig,
+            pose,
+            controls: *b.controls(),
+            yaw: f.angles[1],
+            built,
+        })
     }
 
     /// Every playing body posed where it stands at this frame's time, for
@@ -1359,7 +1347,7 @@ impl Cod4Level {
             let Some(ps) = self.pm_state(slot) else {
                 continue;
             };
-            let Some(character) = self.character(slot) else {
+            let Some(character) = self.rt.client_character(slot) else {
                 continue;
             };
             let Some(f) = self.body_frame(slot, ps.origin) else {
@@ -1388,12 +1376,7 @@ impl Cod4Level {
             next.set_weight_lead(dt);
             let pose = pose4(&next, &rig, set, &src, &f, now);
             next.ease_controls(&set.anims, &controller_frame(&f, end_frame[slot]), dt);
-            let placed = BodyFrame {
-                origin: ps.origin,
-                angles: [0.0, f.angles[1], 0.0],
-                ..Default::default()
-            }
-            .transform();
+            let placed = placed_at(ps.origin, f.angles[1]);
             out.push(PosedBody4 {
                 entity: entity.0,
                 origin: ps.origin,
@@ -1427,41 +1410,22 @@ impl Cod4Level {
     pub fn hit_box_center(&mut self, slot: usize, hitloc: u8) -> Option<Vec3> {
         self.take_script_poses();
         let ps = self.pm_state(slot)?;
-        let character = self.character(slot)?;
-        let f = self.body_frame(slot, ps.origin)?;
-        let rig = self.combat.rig(&character)?;
-        let now = self.level_time();
-        let src = self.combat.src.clone()?;
-        let dt = self.frame_time();
-        let Combat4 {
-            anims,
-            bodies,
-            eased,
-            end_frame,
+        let Posed4 {
+            rig,
+            pose,
+            controls,
+            yaw,
             ..
-        } = &mut self.combat;
-        let set = anims.as_mut()?.as_mut()?;
-        let b = &mut bodies[slot];
-        if eased[slot] != Some(now) {
-            eased[slot] = Some(now);
-            b.ease_controls(&set.anims, &controller_frame(&f, end_frame[slot]), dt);
-        }
-        let pose = pose4(b, &rig, set, &src, &f, now);
+        } = self.posed(slot, ps.origin, true)?;
         let skel = &rig.skeleton;
         let (i, bone) = skel
             .bones()
             .iter()
             .enumerate()
             .find(|(_, b)| b.has_hit_box() && b.hit_location == hitloc)?;
-        let (pos, rot) = skel_worlds(skel, &pose, Some(b.controls()))[i];
+        let (pos, rot) = skel_worlds(skel, &pose, Some(&controls))[i];
         let local = pos + rot * ((bone.hit_mins + bone.hit_maxs) * 0.5);
-        let placed = BodyFrame {
-            origin: ps.origin,
-            angles: [0.0, f.angles[1], 0.0],
-            ..Default::default()
-        }
-        .transform();
-        Some(placed.transform_point3(local))
+        Some(placed_at(ps.origin, yaw).transform_point3(local))
     }
 
     /// The archive the antilag reads: this frame's live origins.
@@ -1481,7 +1445,7 @@ impl Cod4Level {
             })
             .collect();
         self.combat.history.push_front((now, row));
-        let keep = (HISTORY_MS / self.frame_ms()) as usize;
+        let keep = (ANTILAG_HISTORY_MS / self.frame_ms()) as usize;
         self.combat.history.truncate(keep);
     }
 
@@ -1564,7 +1528,7 @@ impl Cod4Level {
         let hurt =
             (blood > 0 && max_health > 0).then(|| (100 * blood / max_health).min(MAX_DAMAGE_COUNT));
         match hurt {
-            _ if ps.word(ps!("pm_type")) >= PM_DEAD => {}
+            _ if ps.pm_type() >= vcod_cod4::pmove::pm_type::DEAD => {}
             Some(count) => {
                 let [pitch, yaw] = damage_direction(from);
                 ps.set(
@@ -2032,7 +1996,7 @@ impl Cod4Level {
             // takes rounds on the corpse.
             let character = Character {
                 ignore_collision: 0,
-                ..self.character(slot)?
+                ..self.rt.client_character(slot)?
             };
             let body = self.combat.bodies.get(slot)?.clone();
             self.combat.corpses.insert(
@@ -2140,25 +2104,23 @@ impl Cod4Level {
         let pose = pose4(&body.body, &rig, set, &src, f, now);
         let angles = Vec3::from(f.angles);
         let placed = if angles.x == 0.0 && angles.z == 0.0 {
-            BodyFrame {
-                origin: f.origin,
-                angles: [0.0, angles.y, 0.0],
-                ..Default::default()
-            }
-            .transform()
+            placed_at(f.origin, angles.y)
         } else {
             glam::Mat4::from_rotation_translation(
                 vcod_common::turretpose::angles_quat(f.angles),
                 f.origin,
             )
         };
-        let inv = placed.inverse();
-        let (ls, le) = (inv.transform_point3(start), inv.transform_point3(end));
-        let skel = &rig.skeleton;
-        let mats = skel_mats(skel, &pose, None);
-        let worlds = worlds_of(&mats);
-        let mut h = bone_trace_worlds_cod4(skel, &worlds, ls, le, priority, limit)?;
-        h.normal = struck_normal(&mats, &worlds, &h);
+        let h = trace_pose(
+            &rig.skeleton,
+            &pose,
+            None,
+            &placed,
+            start,
+            end,
+            priority,
+            limit,
+        )?;
         Some(CorpseHit {
             fraction: h.fraction,
             normal: entity_normal_at(angles, h.normal),
@@ -2255,14 +2217,6 @@ mod tests {
             let (x, y) = random_dir(t);
             assert!(x * x + y * y <= 1.0, "{t}: {x} {y}");
         }
-    }
-
-    #[test]
-    fn a_segment_meets_a_box_only_inside_its_limit() {
-        let (lo, hi) = (Vec3::splat(-1.0), Vec3::splat(1.0));
-        let (a, b) = (Vec3::new(-10.0, 0.0, 0.0), Vec3::new(10.0, 0.0, 0.0));
-        assert!(segment_meets_box(a, b, lo, hi, 1.0));
-        assert!(!segment_meets_box(a, b, lo, hi, 0.4));
     }
 
     /// A level-long log keeps its newest entries and its count, so a reader

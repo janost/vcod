@@ -712,6 +712,38 @@ impl ScriptRuntime {
         })
     }
 
+    /// The character `slot`'s entity carries: its model and attachments,
+    /// what a CoD2 or CoD4 hit rig is built from.
+    pub fn client_character(&mut self, slot: usize) -> Option<vcod_cod2::player::Character> {
+        let strip = |s: &str| s.strip_prefix("xmodel/").unwrap_or(s).to_string();
+        let body = strip(&self.client_field(slot, "model")?);
+        if body.is_empty() {
+            return None;
+        }
+        let id = self.client_entity(slot)?;
+        let (attachments, ignore_collision) = self.with_host(|h, cx| {
+            h.ents.get(id).map_or_else(
+                || (Vec::new(), 0),
+                |e| {
+                    let list = e
+                        .attachments
+                        .iter()
+                        .map(|(m, t)| {
+                            let tag = cx.resolve(*t).to_string();
+                            (strip(cx.resolve(*m)), (!tag.is_empty()).then_some(tag))
+                        })
+                        .collect();
+                    (list, u32::from(e.attach_ignore_collision))
+                },
+            )
+        });
+        Some(vcod_cod2::player::Character {
+            body,
+            attachments,
+            ignore_collision,
+        })
+    }
+
     /// A client's `archivetime` in the milliseconds the engine reads, 0 for
     /// a slot with no client entity.
     pub fn client_archive_ms(&mut self, slot: usize) -> i32 {
