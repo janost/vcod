@@ -1690,14 +1690,8 @@ fn frag_near(level: &Cod2Level, slot: usize) -> Option<[f32; 3]> {
 }
 
 /// [`BotView::lob`] for the bot in `slot` throwing frag `weapon` at
-/// `target`: of the throws from 10 degrees down to 85 up, every 5, the
-/// one whose frag comes down nearest `target`, within
-/// [`super::LOB_MISS`], and not within its `explosionRadius` of the
-/// thrower. The flight is `weapon_grenadelauncher_fire`'s
-/// (`projectileSpeed` along the view plus `projectileSpeedUp` up, from the
-/// eye) under `TR_GRAVITY`'s 800, up to where it first meets the world: a
-/// bounce is not flown. With friendly fire on, none while a live teammate
-/// stands within the radius of `target`.
+/// `target`, flown by [`super::lob`]. With friendly fire on, none while a
+/// live teammate stands within the radius of `target`.
 pub(crate) fn lob_probe(
     level: &Cod2Level,
     slot: usize,
@@ -1705,60 +1699,27 @@ pub(crate) fn lob_probe(
     target: [f32; 3],
     teams: &[i32],
 ) -> Option<[f32; 2]> {
-    const STEP_S: f32 = 0.05;
     let p = level.players.get(slot)?.as_ref()?;
     let def = level.combat.weapons.get(usize::from(weapon))?.as_ref()?;
     let radius = def.explosion_radius as f32;
     let target = Vec3::from(target);
-    let mine = teams.get(slot).copied().unwrap_or(0);
-    let teamplay = (mine == TEAM_AXIS || mine == TEAM_ALLIES)
-        && crate::game::builtins::cvar::atoi(level.rt.cvars().get("scr_friendlyfire")) != 0;
-    let mate_near = level.players.iter().enumerate().any(|(i, o)| {
-        teamplay
-            && i != slot
-            && teams.get(i).copied() == Some(mine)
-            && playing(level, i)
-            && o.as_ref()
-                .is_some_and(|o| o.ps.origin.distance(target) < radius)
-    });
-    if mate_near {
+    let friendly_fire =
+        crate::game::builtins::cvar::atoi(level.rt.cvars().get("scr_friendlyfire")) != 0;
+    let mates = (level.players.iter().enumerate())
+        .filter(|&(i, _)| i != slot && playing(level, i))
+        .filter_map(|(i, o)| Some((*teams.get(i)?, o.as_ref()?.ps.origin)));
+    if friendly_fire && super::mate_in_blast(teams.get(slot).copied(), mates, target, radius) {
         return None;
     }
-    let w = &level.world.collision;
-    let from = eye(&p.ps);
-    let to = target - from;
-    let yaw = to.y.atan2(to.x).to_degrees();
-    let fuse_s = def.fuse_time as f32 / 1000.0;
-    let mut best: Option<([f32; 2], f32)> = None;
-    for up in (-2..=17).map(|i| i as f32 * 5.0) {
-        let (sp, cp) = up.to_radians().sin_cos();
-        let (sy, cy) = yaw.to_radians().sin_cos();
-        let mut v = Vec3::new(cp * cy, cp * sy, sp) * def.projectile_speed as f32;
-        v.z += def.projectile_speed_up as f32;
-        let mut at = from;
-        let mut t = 0.0;
-        let mut landed = None;
-        while t < fuse_s {
-            let next = at + v * STEP_S - Vec3::Z * 400.0 * STEP_S * STEP_S;
-            v.z -= 800.0 * STEP_S;
-            let tr = w.shot_trace(at, next);
-            if tr.fraction < 1.0 {
-                landed = Some(at + (next - at) * tr.fraction);
-                break;
-            }
-            at = next;
-            t += STEP_S;
-        }
-        let burst = landed.unwrap_or(at);
-        if burst.distance(p.ps.origin) <= radius {
-            continue;
-        }
-        let miss = burst.distance(target);
-        if miss < super::LOB_MISS && best.is_none_or(|(_, m)| miss < m) {
-            best = Some(([-up, yaw], miss));
-        }
-    }
-    best.map(|(aim, _)| aim)
+    let throw = super::Lob {
+        from: eye(&p.ps),
+        thrower: p.ps.origin,
+        speed: def.projectile_speed as f32,
+        speed_up: def.projectile_speed_up as f32,
+        fuse_s: def.fuse_time as f32 / 1000.0,
+        radius,
+    };
+    super::lob(&level.world.collision, &throw, target)
 }
 
 /// The cmd the brain's asks for, in CoD2's bits, and the frag throw's

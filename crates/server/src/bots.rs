@@ -44,7 +44,8 @@ mod walk;
 pub(crate) use fight::HURT_MS;
 use fight::{PITCH_MOST, Target};
 pub(crate) use grenade::{
-    COOK_MEAN_MS, COOK_MOST_MS, LOB_BODY_GROW, LOB_MISS, LOB_REACH_SLACK, LOB_SLACK, MATE_LEAD_S,
+    COOK_MEAN_MS, COOK_MOST_MS, LOB_BODY_GROW, LOB_MISS, LOB_REACH_SLACK, LOB_SLACK, Lob,
+    MATE_LEAD_S, lob, mate_in_blast,
 };
 use grenade::{GRENADE_MIN, GRENADE_RANGE, Stage, ThrowFor};
 use menus::WEAPON_MENUS;

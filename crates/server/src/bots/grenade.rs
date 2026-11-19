@@ -345,6 +345,78 @@ const LOST_THROW_TICKS: u32 = 60;
 /// runner left lands where he no longer is.
 const LOST_STILL: f32 = 100.0;
 
+/// A frag throw as CoD2's and CoD4's lob flies it ([`lob`]): from the eye
+/// `from` at `projectileSpeed` along the view plus `projectileSpeedUp` up,
+/// its fuse in seconds, its `explosionRadius`, and the thrower's origin it
+/// must go off that far from.
+pub(crate) struct Lob {
+    pub(crate) from: glam::Vec3,
+    pub(crate) thrower: glam::Vec3,
+    pub(crate) speed: f32,
+    pub(crate) speed_up: f32,
+    pub(crate) fuse_s: f32,
+    pub(crate) radius: f32,
+}
+
+/// [`BotView::lob`] for `throw` at `target` over `w`: of the throws from
+/// 10 degrees down to 85 up, every 5, the one whose frag comes down
+/// nearest `target`, within [`LOB_MISS`], and not within its radius of the
+/// thrower. The flight is `weapon_grenadelauncher_fire`'s under
+/// `TR_GRAVITY`'s 800, up to where it first meets the world: a bounce is
+/// not flown. As (pitch, yaw), wire degrees.
+pub(crate) fn lob(
+    w: &vcod_common::collision::CollisionWorld,
+    throw: &Lob,
+    target: glam::Vec3,
+) -> Option<[f32; 2]> {
+    const STEP_S: f32 = 0.05;
+    let to = target - throw.from;
+    let yaw = to.y.atan2(to.x).to_degrees();
+    let mut best: Option<([f32; 2], f32)> = None;
+    for up in (-2..=17).map(|i| i as f32 * 5.0) {
+        let (sp, cp) = up.to_radians().sin_cos();
+        let (sy, cy) = yaw.to_radians().sin_cos();
+        let mut v = glam::Vec3::new(cp * cy, cp * sy, sp) * throw.speed;
+        v.z += throw.speed_up;
+        let mut at = throw.from;
+        let mut t = 0.0;
+        let mut landed = None;
+        while t < throw.fuse_s {
+            let next = at + v * STEP_S - glam::Vec3::Z * 400.0 * STEP_S * STEP_S;
+            v.z -= 800.0 * STEP_S;
+            let tr = w.shot_trace(at, next);
+            if tr.fraction < 1.0 {
+                landed = Some(at + (next - at) * tr.fraction);
+                break;
+            }
+            at = next;
+            t += STEP_S;
+        }
+        let burst = landed.unwrap_or(at);
+        if burst.distance(throw.thrower) <= throw.radius {
+            continue;
+        }
+        let miss = burst.distance(target);
+        if miss < LOB_MISS && best.is_none_or(|(_, m)| miss < m) {
+            best = Some(([-up, yaw], miss));
+        }
+    }
+    best.map(|(aim, _)| aim)
+}
+
+/// Whether one of `mates` (team, origin) on `mine`'s side stands within
+/// `radius` of `target`: with friendly fire on no frag goes there.
+pub(crate) fn mate_in_blast(
+    mine: Option<i32>,
+    mates: impl IntoIterator<Item = (i32, glam::Vec3)>,
+    target: glam::Vec3,
+    radius: f32,
+) -> bool {
+    mates
+        .into_iter()
+        .any(|(t, at)| same_team(mine, Some(t)) && at.distance(target) < radius)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -829,5 +901,21 @@ mod tests {
                 "stage {start_stage}: a bot killed mid-grenade-phase never pressed use"
             );
         }
+    }
+
+    /// A frag aimed into a teammate's blast is refused, one into an enemy's
+    /// or a `free` player's is not (BUG-058).
+    #[test]
+    fn a_lob_into_a_teammate_s_blast_is_refused() {
+        use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
+        use glam::Vec3;
+        let target = Vec3::new(100.0, 0.0, 0.0);
+        let near = Vec3::new(150.0, 0.0, 0.0);
+        let far = Vec3::new(600.0, 0.0, 0.0);
+        let mine = Some(TEAM_AXIS);
+        assert!(mate_in_blast(mine, [(TEAM_AXIS, near)], target, 256.0));
+        assert!(!mate_in_blast(mine, [(TEAM_AXIS, far)], target, 256.0));
+        assert!(!mate_in_blast(mine, [(TEAM_ALLIES, near)], target, 256.0));
+        assert!(!mate_in_blast(Some(3), [(3, near)], target, 256.0));
     }
 }

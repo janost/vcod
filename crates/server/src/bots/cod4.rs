@@ -913,13 +913,8 @@ impl Cod4Bots {
     }
 
     /// [`BotView::lob`] for the bot in `slot` throwing frag `weapon` (the
-    /// brain's number) at `target`, as CoD2's [`super::cod2::lob_probe`]
-    /// flies it: of the throws from 10 degrees down to 85 up, every 5, the
-    /// one whose frag comes down nearest `target`, within
-    /// [`super::LOB_MISS`], and not within its `explosionRadius` of the
-    /// thrower, flown from the eye at `projectileSpeed` plus
-    /// `projectileSpeedUp` under gravity 800 until it meets the world. With
-    /// friendly fire on, none onto a playing teammate's `explosionRadius`.
+    /// brain's number) at `target`, flown by [`super::lob`]. With friendly
+    /// fire on, none onto a playing teammate's `explosionRadius`.
     pub(crate) fn lob_probe(
         &self,
         level: &Cod4Level,
@@ -928,7 +923,6 @@ impl Cod4Bots {
         target: [f32; 3],
         teams: &[i32],
     ) -> Option<[f32; 2]> {
-        const STEP_S: f32 = 0.05;
         let ps = self.ps(slot)?;
         let w = self.own.arms.get(&slot)?.weapon(weapon);
         let def: &WeaponDef = level.weapon_defs().get(w as usize).filter(|_| w > 0)?;
@@ -939,44 +933,21 @@ impl Cod4Bots {
             .enumerate()
             .filter(|&(i, _)| i != slot && self.playing(level, i))
             .filter_map(|(i, &t)| Some((t, self.ps(i)?.origin)));
-        if friendly_fire(level) && mate_in_blast(teams.get(slot).copied(), mates, target, radius) {
+        if friendly_fire(level)
+            && super::mate_in_blast(teams.get(slot).copied(), mates, target, radius)
+        {
             return None;
         }
         let (world, _) = self.own.world.as_ref()?;
-        let from = eye(ps);
-        let to = target - from;
-        let yaw = to.y.atan2(to.x).to_degrees();
-        let fuse_s = def.fuse_time.max(1000) as f32 / 1000.0;
-        let mut best: Option<([f32; 2], f32)> = None;
-        for up in (-2..=17).map(|i| i as f32 * 5.0) {
-            let (sp, cp) = up.to_radians().sin_cos();
-            let (sy, cy) = yaw.to_radians().sin_cos();
-            let mut v = Vec3::new(cp * cy, cp * sy, sp) * def.projectile_speed as f32;
-            v.z += def.projectile_speed_up as f32;
-            let mut at = from;
-            let mut t = 0.0;
-            let mut landed = None;
-            while t < fuse_s {
-                let next = at + v * STEP_S - Vec3::Z * 400.0 * STEP_S * STEP_S;
-                v.z -= 800.0 * STEP_S;
-                let tr = world.collision.shot_trace(at, next);
-                if tr.fraction < 1.0 {
-                    landed = Some(at + (next - at) * tr.fraction);
-                    break;
-                }
-                at = next;
-                t += STEP_S;
-            }
-            let burst = landed.unwrap_or(at);
-            if burst.distance(ps.origin) <= radius {
-                continue;
-            }
-            let miss = burst.distance(target);
-            if miss < super::LOB_MISS && best.is_none_or(|(_, m)| miss < m) {
-                best = Some(([-up, yaw], miss));
-            }
-        }
-        best.map(|(aim, _)| aim)
+        let throw = super::Lob {
+            from: eye(ps),
+            thrower: ps.origin,
+            speed: def.projectile_speed as f32,
+            speed_up: def.projectile_speed_up as f32,
+            fuse_s: def.fuse_time.max(1000) as f32 / 1000.0,
+            radius,
+        };
+        super::lob(&world.collision, &throw, target)
     }
 
     /// The brain's `cmd` in 1.7's bits, its weapon back in CoD4's numbers,
@@ -1875,36 +1846,8 @@ fn friendly_fire(level: &Cod4Level) -> bool {
         .any(|n| crate::game::builtins::cvar::atoi(cvars.get(n)) != 0)
 }
 
-/// Whether one of `mates` (team, origin) on `mine`'s team stands within
-/// `radius` of `target`.
-fn mate_in_blast(
-    mine: Option<i32>,
-    mates: impl IntoIterator<Item = (i32, Vec3)>,
-    target: Vec3,
-    radius: f32,
-) -> bool {
-    mates
-        .into_iter()
-        .any(|(t, at)| super::same_team(mine, Some(t)) && at.distance(target) < radius)
-}
-
 #[cfg(test)]
 mod tests {
-    /// A frag aimed into a teammate's blast is refused, one into an enemy's
-    /// or a `free` player's is not (BUG-058).
-    #[test]
-    fn a_lob_into_a_teammate_s_blast_is_refused() {
-        use super::{TEAM_ALLIES, TEAM_AXIS, Vec3, mate_in_blast};
-        let target = Vec3::new(100.0, 0.0, 0.0);
-        let near = Vec3::new(150.0, 0.0, 0.0);
-        let far = Vec3::new(600.0, 0.0, 0.0);
-        let mine = Some(TEAM_AXIS);
-        assert!(mate_in_blast(mine, [(TEAM_AXIS, near)], target, 256.0));
-        assert!(!mate_in_blast(mine, [(TEAM_AXIS, far)], target, 256.0));
-        assert!(!mate_in_blast(mine, [(TEAM_ALLIES, near)], target, 256.0));
-        assert!(!mate_in_blast(Some(3), [(3, near)], target, 256.0));
-    }
-
     use super::*;
 
     #[test]
