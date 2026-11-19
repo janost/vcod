@@ -589,7 +589,7 @@ impl Cod2Level {
             laps.lap("collision world");
             let p = crate::tick_profile::phase("load/mantle anims");
             let rules = Rules {
-                mantle_anims: vcod_cod2::pmove::mantle::anims(&fs),
+                mantle_anims: vcod_cod2::pmove::mantle::anims(&*fs),
                 ..Rules::default()
             };
             drop(p);
