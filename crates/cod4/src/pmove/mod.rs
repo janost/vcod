@@ -1541,5 +1541,7 @@ fn settle_velocity(ps: &mut PlayerState, pml: &Pml) {
 
 #[cfg(test)]
 mod pin;
+#[doc(hidden)]
+pub mod testing;
 #[cfg(test)]
 mod tests;
