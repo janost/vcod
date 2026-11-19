@@ -416,14 +416,12 @@ fn corpse_clock<'a>(
 fn ours_blast(fs: vcod_common::pk3::Pk3Fs) -> (Vec<String>, CorpseClock) {
     let map = "mp_carentan";
     let proto = vcod_server::server::install_protocol(&fs);
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_corpseblast"), now);
-    sv.set_protocol(proto);
-    sv.overlay_script("maps/mp/gametypes/probe_corpseblast", BLAST_SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        script: Some(BLAST_SCRIPT),
+        ..common::Boot::new(map, "probe_corpseblast")
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl =

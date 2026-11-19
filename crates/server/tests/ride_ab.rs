@@ -597,16 +597,13 @@ fn a_rotated_brush_model_keeps_retails_quantized_angles() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_yawres"), now);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_yawres",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_yawres.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_yawres.gsc"
+        )),
+        ..common::Boot::new(MAP, "probe_yawres")
+    }
+    .start(fs);
     for _ in 0..600 {
         common::run_alone(&mut sv, &mut now, FRAME_MS);
         if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
@@ -760,16 +757,13 @@ fn every_link_snaps_angles_like_retail() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    let bsp_path = fs.resolve_map(MAP).expect("map in mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_anglesnap"), now);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_anglesnap",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_anglesnap.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_anglesnap.gsc"
+        )),
+        ..common::Boot::new(MAP, "probe_anglesnap")
+    }
+    .start(fs);
     for _ in 0..100 {
         common::run_alone(&mut sv, &mut now, FRAME_MS);
         if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
@@ -876,14 +870,12 @@ fn mover_reads(
     (name, source): MoverProbe,
     fixture: &str,
 ) {
-    let bsp_path = fs.resolve_map(MAP).expect("map in mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, name), now);
-    sv.set_protocol(proto);
-    sv.overlay_script(&format!("maps/mp/gametypes/{name}"), source);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        script: Some(source),
+        ..common::Boot::new(MAP, name)
+    }
+    .start(fs);
     for _ in 0..600 {
         common::run_alone(&mut sv, &mut now, FRAME_MS);
         if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
@@ -1024,16 +1016,13 @@ fn a_lifted_brush_model_leaves_and_reenters_the_snapshot_like_retail() {
     }
     assert_eq!(retail_snaps.len(), 3, "{retail_snaps:?}");
 
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_cull"), now);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_cull",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_cull.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_cull.gsc"
+        )),
+        ..common::Boot::new(MAP, "probe_cull")
+    }
+    .start(fs);
     let q = Rc::new(RefCell::new(Queues::default()));
     let (mut cl, _join) = common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp");
     let p = &PROTOCOL_V1;

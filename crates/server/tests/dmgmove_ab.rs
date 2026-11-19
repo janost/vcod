@@ -19,7 +19,7 @@ use crate::common;
 use common::{Join, Queues};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::msg::UserCmd;
 use vcod_common::net::{NetClient, NetEvent};
 
@@ -84,8 +84,6 @@ fn nearest_spawn(fs: &vcod_common::pk3::Pk3Fs, at: [f32; 3]) -> common::SpawnAt 
 fn ours(fs: vcod_common::pk3::Pk3Fs, fixture: &str) -> Vec<String> {
     let proto = vcod_server::server::install_protocol(&fs);
     let map = "mp_carentan";
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let lead = join_lead_ms(&fs);
     let (host_t, host_at) = spawned(fixture, "host");
     let (faller_t, faller_at) = spawned(fixture, "faller");
@@ -93,12 +91,12 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, fixture: &str) -> Vec<String> {
         vec![Some(nearest_spawn(&fs, host_at))],
         vec![Some(nearest_spawn(&fs, faller_at))],
     ];
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_dmgmove"), now);
-    sv.set_protocol(proto);
-    sv.overlay_script("maps/mp/gametypes/probe_dmgmove", SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        script: Some(SCRIPT),
+        ..common::Boot::new(map, "probe_dmgmove")
+    }
+    .start(fs);
     sv.pin_spawns(pins);
     common::run_alone(&mut sv, &mut now, host_t - lead);
     let qs = [

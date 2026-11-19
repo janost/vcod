@@ -13,7 +13,7 @@ use crate::common;
 use common::{Join, Queues};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::msg::UserCmd;
 use vcod_common::net::{NetClient, NetEvent};
 
@@ -48,13 +48,11 @@ fn direct_input(tokens: &[String]) -> Option<(u8, u8, i8)> {
 fn ours() -> Vec<(i32, bool)> {
     let fs = vcod_common::testing::game_fs_11().expect("checked by the caller");
     let map = "mp_carentan";
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_leanpvs"), now);
-    sv.overlay_script("maps/mp/gametypes/probe_leanpvs", SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(SCRIPT),
+        ..common::Boot::new(map, "probe_leanpvs")
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, TARGET_JOIN_MS);
     let (qa, qb) = (
         Rc::new(RefCell::new(Queues::default())),

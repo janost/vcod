@@ -19,7 +19,7 @@ use crate::common;
 use common::{Join, Queues, step};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::NetEvent;
 use vcod_common::net::events::{EventTracker, GameEvent};
 use vcod_common::net::msg::{BUTTON_USE, UserCmd};
@@ -68,18 +68,15 @@ fn shell_events<'a>(
 /// Ours: the log and every snapshot the rider received.
 fn ours() -> Option<(Vec<String>, Vec<vcod_common::net::snapshot::Snapshot>)> {
     let fs = vcod_common::testing::uo_fs()?;
-    let bsp_path = fs.resolve_map(MAP).expect("map in the UO paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_shellfuse"), now);
-    sv.set_protocol(&PROTOCOL_V22);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_shellfuse",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_shellfuse.gsc"),
-    );
-    sv.set_cvar("probe_vehicletype", "panzeriv_mp");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(&PROTOCOL_V22),
+        cvars: &[("probe_vehicletype", "panzeriv_mp")],
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_shellfuse.gsc"
+        )),
+        ..common::Boot::new(MAP, "probe_shellfuse")
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, common::PROBE_JOIN_MS);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl =

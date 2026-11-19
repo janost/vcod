@@ -30,7 +30,7 @@ use crate::common;
 use common::{NetchanEvent, NetchanKind};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::NetEvent;
 
 const MAP: &str = "mp_carentan";
@@ -295,15 +295,11 @@ fn an_sd_round_restart_matches_retail() {
     };
     let retail = [read(SHOOTER), read(TARGET)];
 
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "sd"), now);
-    // The fixture headers' two cvars, verbatim.
-    sv.set_cvar("scr_sd_roundlength", "1");
-    sv.set_cvar("scr_friendlyfire", "1");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        cvars: &[("scr_sd_roundlength", "1"), ("scr_friendlyfire", "1")],
+        ..common::Boot::new(MAP, "sd")
+    }
+    .start(fs);
     // Retail ran a while before either probe joined (the target's gamestate
     // reads serverTime 24950), so the first round's own `sayMoveIn` had
     // played to nobody before the match-start restart; a join on the load

@@ -554,20 +554,31 @@ pub struct Boot<'a> {
     /// The wire; the install's ([`vcod_server::server::install_protocol`])
     /// when `None`.
     pub proto: Option<&'static vcod_common::net::protocol::Cod1Wire>,
+    /// What a gate pins before the world loads: spawns, a seed, a clock.
+    pub prep: Option<&'a dyn Fn(&mut Server)>,
 }
 
 impl<'a> Boot<'a> {
     pub fn new(map: &str, gametype: &str) -> Boot<'a> {
+        Boot::on(cfg(map, gametype))
+    }
+
+    /// A gate's own config; the map it names is the one loaded.
+    pub fn on(cfg: vcod_server::ServerConfig) -> Boot<'a> {
         Boot {
-            cfg: cfg(map, gametype),
+            cfg,
             script: None,
             cvars: &[],
             proto: None,
+            prep: None,
         }
     }
 
     /// The server on the map's world with the scripts loaded, and its clock.
-    pub fn start(self, fs: vcod_common::pk3::Pk3Fs) -> (Server, Instant) {
+    /// A gate that reads the paks after takes `fs` as an `Rc` and passes a
+    /// clone.
+    pub fn start(self, fs: impl Into<Rc<vcod_common::pk3::Pk3Fs>>) -> (Server, Instant) {
+        let fs: Rc<vcod_common::pk3::Pk3Fs> = fs.into();
         let map = self.cfg.map.clone();
         let bsp_path = fs.resolve_map(&map).expect("map in the mounted paks");
         let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
@@ -584,8 +595,11 @@ impl<'a> Boot<'a> {
         if let Some(src) = self.script {
             sv.overlay_script(&format!("maps/mp/gametypes/{gametype}"), src);
         }
+        if let Some(prep) = self.prep {
+            prep(&mut sv);
+        }
         sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        sv.load_scripts(fs).expect("load the scripts");
         (sv, now)
     }
 }

@@ -11,7 +11,7 @@ use crate::common;
 use common::{ADDR, ADDR_B, ADDR_C, ClientEnd, Join, Queues};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::net::{NetClient, NetEvent, NetState, Userinfo};
 
@@ -95,19 +95,13 @@ fn run(fixture: &str, proto: &'static Cod1Wire, cvars: &[(&str, &str)], order: [
         return;
     }
     let retail = retail(fixture);
-    let bsp_path = fs
-        .resolve_map("mp_carentan")
-        .expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let fs = Rc::new(fs);
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg("mp_carentan", "tdm"), now);
-    sv.set_protocol(proto);
-    for (name, value) in cvars {
-        sv.set_cvar(name, value);
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        cvars,
+        ..common::Boot::new("mp_carentan", "tdm")
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    .start(fs);
 
     let addrs = [ADDR, ADDR_B, ADDR_C];
     let queues: [Rc<RefCell<Queues>>; 3] = Default::default();

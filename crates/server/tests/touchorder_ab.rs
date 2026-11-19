@@ -36,7 +36,7 @@ use crate::common;
 use common::{Join, Queues, step};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::net::{NetClient, NetEvent};
 
@@ -113,14 +113,12 @@ fn ours(
     retail: &[[f32; 3]],
 ) -> (Vec<String>, Vec<f32>) {
     let map = "mp_pavlov";
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_touchorder"), now);
-    sv.set_protocol(proto);
-    sv.overlay_script("maps/mp/gametypes/probe_touchorder", SCRIPT);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        script: Some(SCRIPT),
+        ..common::Boot::new(map, "probe_touchorder")
+    }
+    .start(fs);
     let lifts = Rc::new(RefCell::new(Vec::new()));
     let (seen, retail) = (lifts.clone(), retail.to_vec());
     sv.test_item_lifts(Box::new(move |_, floor| {
@@ -247,17 +245,14 @@ fn the_touch_pass_wakes_its_threads_in_retails_order_on_uo() {
 /// `client-probes/probe_trigqueue` on ours, no client, on mp_carentan.
 fn trigqueue(fs: vcod_common::pk3::Pk3Fs, proto: &'static Cod1Wire) -> Vec<String> {
     let map = "mp_carentan";
-    let bsp_path = fs.resolve_map(map).expect("map in the paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_trigqueue"), now);
-    sv.set_protocol(proto);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_trigqueue",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_trigqueue.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        proto: Some(proto),
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_trigqueue.gsc"
+        )),
+        ..common::Boot::new(map, "probe_trigqueue")
+    }
+    .start(fs);
     common::run_alone(&mut sv, &mut now, 8000);
     sv.script_log()
         .iter()

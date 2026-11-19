@@ -33,7 +33,6 @@ use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_server::Server;
 
 const MAP: &str = "mp_carentan";
-const PROBE_PATH: &str = "maps/mp/gametypes/probe_lookat";
 const PROBE_SRC: &str = "../gsc/tests/fixtures/semantics/client-probes/probe_lookat.gsc";
 const ATTACKER: &str = "tests/fixtures/playerstate/mp_carentan-sd-plant-attacker.txt";
 const DEFENDER: &str = "tests/fixtures/playerstate/mp_carentan-sd-defuse-defender.txt";
@@ -160,18 +159,13 @@ impl Rig {
 /// plantable.
 fn rig() -> Option<Rig> {
     let fs = vcod_common::testing::game_fs_11()?;
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let fs = Rc::new(fs);
-    let mut now = Instant::now();
-    let mut sv = Server::new(common::cfg(MAP, "probe_lookat"), now);
-    // As retail's run: after the plant the probe unlinks the planter and
-    // puts it on its spawn, off the defender's sightline. Its other two
-    // teleports land before the rig places the clients itself.
-    sv.set_cvar("probe_teleport", "1");
-    sv.overlay_script(PROBE_PATH, &read(PROBE_SRC));
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(fs).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        cvars: &[("probe_teleport", "1")],
+        script: Some(&read(PROBE_SRC)),
+        ..common::Boot::new(MAP, "probe_lookat")
+    }
+    .start(fs);
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
     let (ca, cb) = common::join_pair(

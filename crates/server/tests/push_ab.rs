@@ -18,7 +18,7 @@ use common::{ADDR, ClientEnd, FRAME_MS, Join, Queues, holding, step_at};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::trajectory::Trajectory;
 use vcod_common::net::{NetClient, NetEvent};
@@ -144,16 +144,13 @@ struct Ours {
 /// `PROBE done`.
 fn run_ours() -> Option<Ours> {
     let fs = vcod_common::testing::game_fs_11()?;
-    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_push"), now);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_push",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_push.gsc"),
-    );
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
-    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let (mut sv, mut now) = common::Boot {
+        script: Some(include_str!(
+            "../../gsc/tests/fixtures/semantics/client-probes/probe_push.gsc"
+        )),
+        ..common::Boot::new(MAP, "probe_push")
+    }
+    .start(fs);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl = NetClient::start_with_qport(ClientEnd(q.clone()), now, 0x2001);
     let mut join = Join::new("allies", "m1carbine_mp");
