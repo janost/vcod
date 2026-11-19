@@ -279,7 +279,13 @@ impl Parser {
         let server_time = Msec::from_raw(r.read_long());
         let back = i32::from(r.read_byte());
         let snap_flags = r.read_byte();
-        let delta_num = if back == 0 { -1 } else { message_num - back };
+        // Retail's wrapping `int` (CoD2MP_s.exe 0x413751): a demo's sequence is
+        // any word.
+        let delta_num = if back == 0 {
+            -1
+        } else {
+            message_num.wrapping_sub(back)
+        };
         let (from, valid) = if delta_num < 0 {
             (None, true)
         } else {

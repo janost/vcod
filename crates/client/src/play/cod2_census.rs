@@ -666,7 +666,7 @@ fn cod2_map_census() {
     } else {
         Renderer::headless_sized(&fs, false, 1, FRAME_SIZE)
     };
-    // The window's ramp: gamma 1, windowed overbright (`main.rs`'s frame).
+    // The window's ramp: gamma 1, windowed overbright (`App::apply_render_cvars`).
     if let Some((r, _)) = renderer.as_mut() {
         let bits = crate::gamma::overbright_bits(fs.game(), false, true);
         r.set_gamma(1.0, bits);

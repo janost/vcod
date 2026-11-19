@@ -405,7 +405,7 @@ mod tests {
     }
 
     /// Every stock action key, from the bind through the console to the
-    /// cmd: what `main.rs` routes for a CoD2 session.
+    /// cmd: what `input_events.rs` routes for a CoD2 session.
     #[test]
     fn the_stock_binds_reach_the_cmd() {
         use crate::console::shell::Shell;

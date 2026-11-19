@@ -78,7 +78,7 @@ impl ProbeScript {
                 s.input.impulse(a, ps.as_ref());
             }
         }
-        // The keys as `main.rs` routes them: bind, effect, input.
+        // The keys as `input_events.rs` routes them: bind, effect, input.
         for (at, k) in [(14.5, "2"), (15.5, "MWHEELUP")] {
             let key = (at * 10.0) as u32;
             if p >= at && !self.done.contains(&key) {

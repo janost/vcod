@@ -755,11 +755,10 @@ fn change_profile(root: &std::path::Path, name: &str, shell: &mut Shell) -> Opti
         log::warn!("cannot write {}: {e}", active.display());
     }
     let config = dir.join(crate::CONFIG_FILE);
-    let text = std::fs::read_to_string(&config)
-        .or_else(|_| std::fs::read_to_string(dir.join("config_mp.cfg")))
-        .ok();
+    let text =
+        crate::read_config(&config).or_else(|| crate::read_config(&dir.join("config_mp.cfg")));
     if let Some(t) = &text {
-        let _ = shell.exec_config(t);
+        let _ = shell.exec_config(t, &mut |_| None);
     }
     // the config is written below either way
     let _ = shell.upgrade_config(vcod_common::game::Game::Cod4);
@@ -2115,5 +2114,17 @@ mod tests {
         assert_eq!(shell.cvar("name"), Some("Old Hand"));
         assert_eq!(shell.cvar("sensitivity"), Some("7"));
         assert!(change_profile(root.path(), "gone", &mut shell).is_none());
+    }
+
+    /// 1.7's `config_mp.cfg` holding a byte that is not UTF-8 still runs.
+    #[test]
+    fn cod4_profile_change_runs_a_config_that_is_not_utf8() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("players/profiles/Retail");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config_mp.cfg"), b"seta name \"J\xf6rg\"\n").unwrap();
+        let mut shell = Shell::new();
+        change_profile(root.path(), "Retail", &mut shell).unwrap();
+        assert_eq!(shell.cvar("name"), Some("J\u{fffd}rg"));
     }
 }

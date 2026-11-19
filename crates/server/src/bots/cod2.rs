@@ -118,10 +118,8 @@ impl crate::nav::WalkStep for Cod2Walk {
                 *delta = b.delta_angles;
                 cmd2.buttons & button::JUMP != 0
             },
-            // CoD2's slope test traces the stance's box over the level's
-            // world, as its pmove does.
-            |b, from, to| {
-                let (mins, maxs) = b.stance_box();
+            // The level's world, as the pmove moves over it.
+            |from, to, mins, maxs| {
                 let mask = vcod_cod2::pmove::MASK_PLAYERSOLID;
                 MoveWorld::bare(world)
                     .box_trace(from, to, mins, maxs, mask)

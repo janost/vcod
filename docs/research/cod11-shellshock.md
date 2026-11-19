@@ -337,7 +337,7 @@ units on the origin.
   server and in the client's prediction.
 - `crates/client/src/play/shock.rs` is the cgame half: the parser and the
   record, the per-frame sound, mouse, kick and blend state, `kicked_angles`
-  and `sway_scale`. `main.rs` reads the fields off the interpolation's
+  and `sway_scale`. `live_frame.rs` reads the fields off the interpolation's
   older snapshot (`cg.snap`), turns the view after the quake, sets
   `wbuttons` 0x4 and the mouse caps (`play::input::PlayInput`), the
   sensitivity factor, the audio and the screen blend.

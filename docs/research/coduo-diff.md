@@ -1821,7 +1821,7 @@ vcod:
 - `turret::ridden` takes UO's gate, `turret::UoArcs` the arcs and clamp,
   `turret::uo_eye` the eye, shake and kick (msvcrt's `rand` seeded 1, as
   1.1's shake), `turret::sway_offset` with a `GunnerSway` of its own in
-  `main.rs`. `entities::build_instances` turns the ridden gun by the view
+  `live_frame.rs`. `entities::build_instances` turns the ridden gun by the view
   (`EntityScene::view`) and idles an overheated one. The tag is read off
   this frame's pose, as retail's.
 - `TurretEye::kicked` adds the damage kick and the bob on a 1.1 or 1.5 gun

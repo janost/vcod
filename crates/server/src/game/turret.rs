@@ -7,6 +7,7 @@
 
 use crate::game::host::GameHost;
 use crate::game::script::ScriptRuntime;
+use crate::game::slot::ClientSlot;
 use crate::spectate::ClientSim;
 use glam::Vec3;
 use vcod_common::fguard;
@@ -386,10 +387,9 @@ pub fn use_by(
     if !host.turrets.contains_key(&id) {
         return false;
     }
-    if !host.ents.get(user).is_some_and(|e| e.client.is_some()) {
+    let Some(slot) = ClientSlot::of_entity(&host.ents, user).map(ClientSlot::index) else {
         return true;
-    }
-    let slot = user.0 as usize;
+    };
     let origin = crate::game::item::origin_of(host, cx, user);
     let stance = host.clients[slot].stance;
     let aim = host.clients[slot].aim.1;

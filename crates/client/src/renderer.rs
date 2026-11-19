@@ -8993,15 +8993,20 @@ impl Renderer {
             Some(t) => Some(match t {
                 wgpu::CurrentSurfaceTexture::Success(tex)
                 | wgpu::CurrentSurfaceTexture::Suboptimal(tex) => tex,
+                // A frame with no surface still submits, so the writes it
+                // queued above go now and do not pile up until one draws.
                 wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                    self.queue.submit([]);
                     return;
                 }
                 wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                    self.queue.submit([]);
                     self.reconfigure();
                     return;
                 }
                 wgpu::CurrentSurfaceTexture::Validation => {
                     log::warn!("dropped frame: surface validation error");
+                    self.queue.submit([]);
                     return;
                 }
             }),

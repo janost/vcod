@@ -106,10 +106,6 @@ const ALLOWED: &[(&str, &str)] = &[
         "standing on a lip it overhangs is held by it.",
     ),
     (
-        "crates/server/tests/combat.rs",
-        "bounce's business, so the distance is only known once it has.",
-    ),
-    (
         "crates/server/tests/entity_vis_ab.rs",
         "Samples vcod knowingly does not reproduce, as `(map, label, reason)`.",
     ),

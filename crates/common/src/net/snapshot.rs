@@ -124,11 +124,13 @@ impl SnapshotRing {
     ) -> anyhow::Result<&Snapshot> {
         let server_time = Msec::from_raw(r.read_long());
         let delta_byte = r.read_byte();
-        // 0 means uncompressed; otherwise the base is this many messages back.
+        // 0 means uncompressed; otherwise the base is this many messages back,
+        // in retail's wrapping `int` (CoDMP.exe 0x415c36): a demo's sequence
+        // is any word.
         let delta_num = if delta_byte == 0 {
             -1
         } else {
-            message_num as i32 - delta_byte as i32
+            (message_num as i32).wrapping_sub(i32::from(delta_byte))
         };
         let snap_flags = r.read_byte() as u32;
         // No areamask on CoD1 (docs/protocol-1.1.md, divergence 6); reading one
@@ -625,6 +627,32 @@ pub(crate) mod tests {
         assert_eq!(s.delta_num, 10);
         assert_eq!(s.entities[&5].field_f32(p, "pos.trBase[0]"), 300.0);
         assert_eq!(ring.newest().unwrap().message_num, 11);
+    }
+
+    /// A demo's sequence is any word: frame 2^31 deltas from 2^31 - 1 as
+    /// retail's `int` subtraction wraps (CoDMP.exe 0x415c36).
+    #[test]
+    fn a_delta_across_the_sign_bit_resolves_its_base() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let mut ring = SnapshotRing::new();
+        ring.set_baselines(baselines());
+
+        let mut w = MsgWriter::new(&h);
+        write_snapshot(&mut w, 48_000, 0, [0.0; 3], &[(5, Some(300.0))], &[]);
+        let d = w.finish();
+        ring.parse_into(&mut MsgReader::new(&d, &h), p, 0x7fff_ffff)
+            .unwrap();
+
+        let mut w = MsgWriter::new(&h);
+        write_snapshot(&mut w, 48_050, 1, [0.0; 3], &[], &[]);
+        let d = w.finish();
+        let s = ring
+            .parse_into(&mut MsgReader::new(&d, &h), p, 0x8000_0000)
+            .unwrap();
+        assert!(s.valid);
+        assert_eq!(s.delta_num, i32::MAX);
+        assert_eq!(s.entities[&5].field_f32(p, "pos.trBase[0]"), 300.0);
     }
 
     #[test]

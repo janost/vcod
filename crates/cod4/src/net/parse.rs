@@ -299,7 +299,9 @@ impl Client {
         let base = if delta == 0 {
             None
         } else {
-            let num = message_num - delta;
+            // Retail's wrapping `int` (iw3mp.exe 0x47378a): a demo's
+            // sequence is any word.
+            let num = message_num.wrapping_sub(delta);
             match self.ring[num.rem_euclid(PACKET_BACKUP as i32) as usize] {
                 Some((n, i)) if n == num => Some(i),
                 _ => bail!("snapshot {message_num} deltas from {num}, which I don't hold"),

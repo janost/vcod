@@ -568,6 +568,13 @@ impl PlayerState {
         self.ground_entity_num != ENTITYNUM_NONE
     }
 
+    /// The box a living body's cmd moves with once `PM_CheckDuck` has set
+    /// it: the stance's height off [`Self::effective_stance`].
+    pub fn stance_box(&self) -> (Vec3, Vec3) {
+        let height = stance::stance_height(self.effective_stance());
+        (PLAYER_MINS, PLAYER_MAXS.with_z(height))
+    }
+
     /// `PM_IsSprinting`.
     pub fn is_sprinting(&self) -> bool {
         self.sprint.last_start != 0 && self.sprint.last_start > self.sprint.last_end

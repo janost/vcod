@@ -261,6 +261,15 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
   share.
 - `play/`: join, input, cmd clock, prediction, events, the replay and
   loopback gates, the soaks and sweeps.
+- `main.rs`: the arguments, `main`, `App` and its commands. `window_event`
+  hands keys, pointer and wheel to `input_events.rs` and a redraw to
+  `redraw.rs` (`App::redraw`): the clock, the level and join polls, the
+  render cvars, the mode's frame (`fly_frame`, `cod2_frame`, `walk_frame`),
+  `frame_ui`'s 2D layer, then the overlay, render and exec lines. CoD1's
+  online frame is `online_frame.rs` (the read, `online_events`,
+  `online_cmds`, the connect and load phases); its live frame is
+  `live_frame.rs`, whose steps (`LiveCx::pose` through `LiveCx::flame`)
+  run in the cgame's order.
 - `session.rs`: `App`'s game, one call per frame step, input, console
   effect, renderer build and quit.
   - `Session::Cod1`, whose state is still `App`'s `mode`/`world`/`hud`.

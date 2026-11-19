@@ -660,7 +660,7 @@ is `AddLeanToPosition` with 16 and 20 in each build's rounding
 `combat::muzzle_point`, `ClientSim::eye_origin` and the playing client's
 camera all apply it, and none rolls the view. The camera passes the
 predicted lean and its yaw after the damage kick and sight bob
-(`Hud::view_kick`), before the quake (`crates/client/src/main.rs`). Its
+(`Hud::view_kick`), before the quake (`crates/client/src/live_frame.rs`). Its
 cmds tick at 8 ms where retail builds one a frame (`play::cmds::CMD_MS`),
 so a frame between two cmds draws the mouse's newer yaw over the last
 cmd's lean. The viewmodel's own lean
