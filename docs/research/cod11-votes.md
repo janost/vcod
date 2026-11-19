@@ -161,7 +161,7 @@ VERIFIED (decompile): the clock is `level.time` on 1.1 and `trap_Milliseconds` o
 The 1.5 engine commands a 1.5 pass runs (`cod_lnxded` 1.5b registrations at 0x80887f5..0x808896d, VERIFIED):
 
 - `setdrawfriend`, `setfriendlyfire`, `setkillcam` (0x808863e, 0x80886a9, 0x8088714) print `Usage: %s <integer>\n` without an argument, and otherwise `Cvar_Set` `scr_<x>` and `ui_<x>` to it (VERIFIED, the strings at 0x80ddd23..0x80ddd82; the 1.5b run's `scr_friendlyfire` read `2` after the pass).
-- `tempBanUser` and `tempBanClient` are registered beside them (0x80887f5, 0x8088809, VERIFIED names). `sv_kickBanTime` defaults to 300 (VERIFIED, cvar capture). They kick the client and ban its guid for `sv_kickBanTime` seconds (`cod11-server-handshake.md`, "1.5 temporary bans").
+- `tempBanUser` and `tempBanClient` are registered beside them (0x80887f5, 0x8088809, VERIFIED names). `sv_kickBanTime` defaults to 300 (VERIFIED, cvar capture). They kick the client and ban its guid for `sv_kickBanTime` seconds (`cod11-server-handshake.md`, "Temporary bans on 1.5").
 
 ## 5. The client
 

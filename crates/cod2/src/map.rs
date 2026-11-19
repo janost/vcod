@@ -32,6 +32,12 @@ impl MapFile {
         crate::world::from_bsp(&self.bsp)
     }
 
+    /// [`Self::world`] without the lightmap pages, for a dedicated server
+    /// (`crate::world::from_bsp_unlit`).
+    pub fn world_unlit(&self) -> MapWorld {
+        crate::world::from_bsp_unlit(&self.bsp)
+    }
+
     /// The world's collision model.
     pub fn clip(&self) -> Result<ClipMap> {
         clip_map(&self.bsp)

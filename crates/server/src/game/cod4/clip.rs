@@ -189,13 +189,13 @@ mod tests {
             radius: 56.0,
             leaf,
         };
-        ClipMap {
-            name: "wall_and_block".into(),
-            checksum: 0,
+        ClipMap::new(
+            "wall_and_block".into(),
+            0,
             world,
-            submodels: vec![sub(world_leaf), sub(block_leaf)],
-            static_models: Vec::new(),
-        }
+            vec![sub(world_leaf), sub(block_leaf)],
+            Vec::new(),
+        )
     }
 
     /// A sweep that starts inside a brush entity and leaves it still stops

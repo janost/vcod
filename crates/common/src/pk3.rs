@@ -275,8 +275,18 @@ fn archives_in(dir: &Path, kind: ArchiveKind) -> Result<Vec<PathBuf>> {
 /// aside), then its loose file; then every directory's `localized_*`
 /// archives. CoD4 1.7's `path` lists a home path's iwds, its directory,
 /// then the base path's (docs/research/cod4-handshake.md 14.1). A loose
-/// file is read only when `name` stays under its directory.
+/// file is read only when `name` stays under its directory; an archive
+/// member that inflates past `MAX_ENTRY_BYTES` reads as missing.
 pub fn read_search(dirs: &[PathBuf], kind: ArchiveKind, name: &str) -> Option<Vec<u8>> {
+    read_search_limited(dirs, kind, name, MAX_ENTRY_BYTES)
+}
+
+fn read_search_limited(
+    dirs: &[PathBuf],
+    kind: ArchiveKind,
+    name: &str,
+    limit: u64,
+) -> Option<Vec<u8>> {
     let key = path_key(name);
     let loose = crate::game_dir::confined_rel_path(name);
     let member = |pak: &Path| -> Option<Vec<u8>> {
@@ -286,10 +296,10 @@ pub fn read_search(dirs: &[PathBuf], kind: ArchiveKind, name: &str) -> Option<Ve
             .flatten()
             .find(|n| path_key(n) == key)?
             .into_owned();
-        let mut f = zip.by_name(&entry).ok()?;
+        let f = zip.by_name(&entry).ok()?;
         let mut out = Vec::new();
-        std::io::Read::read_to_end(&mut f, &mut out).ok()?;
-        Some(out)
+        f.take(limit + 1).read_to_end(&mut out).ok()?;
+        (out.len() as u64 <= limit).then_some(out)
     };
     let localized = |p: &PathBuf| {
         p.file_name().is_some_and(|n| {
@@ -1094,6 +1104,20 @@ mod tests {
         assert_eq!(read("../../secret.cfg"), None);
         let abs = dir.path().join("secret.cfg");
         assert_eq!(read(&abs.to_string_lossy()), None);
+    }
+
+    /// An archive member past the cap reads as missing; the stream is
+    /// bounded, not the declared size.
+    #[test]
+    fn read_search_drops_a_member_past_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("main");
+        std::fs::create_dir_all(&home).unwrap();
+        make_pk3(&home, "a.iwd", &[("big.cfg", "12345"), ("ok.cfg", "1234")]);
+        let dirs = [home];
+        let read = |p: &str| read_search_limited(&dirs, ArchiveKind::Iwd, p, 4);
+        assert_eq!(read("ok.cfg").as_deref(), Some(&b"1234"[..]));
+        assert_eq!(read("big.cfg"), None);
     }
 
     #[test]

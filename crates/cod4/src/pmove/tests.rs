@@ -6,29 +6,7 @@ use glam::Vec3;
 
 use super::*;
 
-/// A floor at z 0, solid below.
-struct Floor;
-
-impl PmWorld for Floor {
-    fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, _maxs: Vec3, _pass: u32, _mask: u32) -> Tr {
-        let (a, b) = (start.z + mins.z, end.z + mins.z);
-        let mut t = Tr::default();
-        if a < 0.0 {
-            t.fraction = 0.0;
-            t.startsolid = true;
-            t.allsolid = b < 0.0;
-        } else if b < 0.125 && b < a {
-            t.fraction = ((a - 0.125) / (a - b)).max(0.0);
-        } else {
-            return t;
-        }
-        t.normal = Vec3::Z;
-        t.walkable = true;
-        t.entity_num = ENTITYNUM_WORLD as u32;
-        t.contents = 1;
-        t
-    }
-}
+use super::testing::FLOOR;
 
 fn cmd(time: i32, buttons: u32, forward: i8) -> Cmd {
     Cmd {
@@ -44,7 +22,7 @@ fn run(ps: &mut PlayerState, n: usize, buttons: u32, forward: i8, weapon: Weapon
     let mut old = cmd(ps.command_time, 0, 0);
     for _ in 0..n {
         let c = cmd(ps.command_time + 50, buttons, forward);
-        player_step(ps, &c, &mut old, &Floor, Rules::default(), weapon);
+        player_step(ps, &c, &mut old, &FLOOR, Rules::default(), weapon);
     }
 }
 
@@ -86,7 +64,7 @@ fn a_slowing_shellshock_walks_at_four_tenths() {
         let mut old = cmd(ps.command_time, 0, 0);
         for _ in 0..40 {
             let c = cmd(ps.command_time + 50, 0, 127);
-            player_step(&mut ps, &c, &mut old, &Floor, rules, WeaponMove::NONE);
+            player_step(&mut ps, &c, &mut old, &FLOOR, rules, WeaponMove::NONE);
         }
         ps.velocity.x
     };
@@ -150,7 +128,7 @@ fn a_held_sprint_forces_the_stand_on_every_cmd() {
     let mut seq = None;
     for _ in 0..40 {
         let c = cmd(ps.command_time + 50, button::SPRINT, 127);
-        player_step(&mut ps, &c, &mut old, &Floor, Rules::default(), RIFLE);
+        player_step(&mut ps, &c, &mut old, &FLOOR, Rules::default(), RIFLE);
         assert!(ps.pm_flags & pmf::SPRINTING != 0);
         let s = seq.get_or_insert(ps.event_sequence - 1);
         *s += 1;
@@ -272,7 +250,7 @@ mod weapon_pins {
                     ..Default::default()
                 };
                 let seq = ps.event_sequence;
-                let mut pm = Pmove::new(ps, cmd, old, &Floor, Rules::default());
+                let mut pm = Pmove::new(ps, cmd, old, &FLOOR, Rules::default());
                 pm.defs = Some(&defs);
                 let pml = Pml {
                     msec,
@@ -1344,7 +1322,7 @@ mod weapon_pins {
                         ..tmpl
                     };
                     let seq = ps.event_sequence;
-                    let mut pm = Pmove::new(ps, cmd, old, &Floor, arm.rules);
+                    let mut pm = Pmove::new(ps, cmd, old, &FLOOR, arm.rules);
                     pm.defs = Some(&defs);
                     let pml = Pml {
                         msec,
@@ -2692,7 +2670,7 @@ impl PmWorld for Brush {
             }
             return t;
         }
-        Floor.trace(start, end, mins, maxs, pass, mask)
+        FLOOR.trace(start, end, mins, maxs, pass, mask)
     }
 }
 
@@ -3075,7 +3053,7 @@ fn hostile_mantle_caps_and_yaws_step() {
         for _ in 0..2 {
             let mut c = cmd(ps.command_time + 50, 0, 0);
             c.angles[1] = 0x4000;
-            player_step(&mut ps, &c, &mut old, &Floor, rules, RIFLE);
+            player_step(&mut ps, &c, &mut old, &FLOOR, rules, RIFLE);
         }
     }
 }

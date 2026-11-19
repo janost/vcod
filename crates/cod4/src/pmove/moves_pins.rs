@@ -10,31 +10,7 @@ use glam::Vec3;
 use super::super::pin::Pin;
 use super::super::*;
 
-/// A floor at z 0, solid below.
-struct Floor;
-
-impl PmWorld for Floor {
-    fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, _maxs: Vec3, _pass: u32, _mask: u32) -> Tr {
-        let (a, b) = (start.z + mins.z, end.z + mins.z);
-        let mut t = Tr::default();
-        if a < 0.0 {
-            t.fraction = 0.0;
-            t.startsolid = true;
-            t.allsolid = b < 0.0;
-        } else if b < 0.125 && b < a {
-            t.fraction = ((a - 0.125) / (a - b)).max(0.0);
-        } else {
-            return t;
-        }
-        t.normal = Vec3::Z;
-        t.walkable = true;
-        t.entity_num = ENTITYNUM_WORLD as u32;
-        t.contents = 1;
-        // Asphalt, so the footsteps carry a surface.
-        t.surface_flags = 22 << 20;
-        t
-    }
-}
+use super::super::testing::ASPHALT;
 
 const RIFLE: WeaponMove = WeaponMove {
     move_speed_scale: 0.95,
@@ -95,7 +71,7 @@ fn play(ps: &mut PlayerState, keys: &[Key], rules: Rules, weapon: WeaponMove) ->
                 angles: [0, k.yaw, 0],
                 ..Default::default()
             };
-            player_step(ps, &c, &mut old, &Floor, rules, weapon);
+            player_step(ps, &c, &mut old, &ASPHALT, rules, weapon);
             state(&mut d, ps);
         }
     }
@@ -253,7 +229,7 @@ fn a_climber_bobs_off_his_vertical_speed() {
                 server_time: 2000 + 33 * i,
                 ..Default::default()
             };
-            let mut pm = Pmove::new(&mut ps, c, c, &Floor, Rules::default());
+            let mut pm = Pmove::new(&mut ps, c, c, &ASPHALT, Rules::default());
             let pml = Pml {
                 msec: 33,
                 ..Default::default()
@@ -278,7 +254,7 @@ fn the_movement_dir_follows_the_prone_heading_and_the_ladder() {
             ps.prone_direction = 20.0;
             ps.ladder_vec = Vec3::new(0.6, -0.8, 0.0);
             let c = Cmd::default();
-            let mut pm = Pmove::new(&mut ps, c, c, &Floor, Rules::default());
+            let mut pm = Pmove::new(&mut ps, c, c, &ASPHALT, Rules::default());
             super::update_movement_dir(&mut pm, &Pml::default());
             d.step();
             d.i32("movement_dir", ps.movement_dir);

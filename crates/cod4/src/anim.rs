@@ -791,3 +791,96 @@ impl AssetSource for BodySource {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assets::model::XSurface;
+
+    fn le(v: &[u16]) -> Vec<u8> {
+        v.iter().flat_map(|x| x.to_le_bytes()).collect()
+    }
+
+    fn streams<'a>(byte: &'a [u8], short: &'a [u8], indices: &'a [u8], wide: bool) -> Streams<'a> {
+        Streams {
+            byte: Cur::new(byte, "dataByte"),
+            short: Cur::new(short, "dataShort"),
+            int: Cur::new(&[], "dataInt"),
+            rshort: Cur::new(&[], "randomDataShort"),
+            rbyte: Cur::new(&[], "randomDataByte"),
+            indices: Cur::new(indices, "indices"),
+            wide,
+        }
+    }
+
+    /// Under 256 frames the keys are bytes; past it shorts, and from 64
+    /// keys a coarse table (one entry per 256 keys, plus one) in
+    /// `dataShort` with the keys in `indices`.
+    #[test]
+    fn a_tracks_keys_come_off_the_stream_its_size_picks() {
+        let short = le(&[2]);
+        let mut s = streams(&[0, 7, 9], &short, &[], false);
+        assert_eq!(s.keys().unwrap(), [0, 7, 9]);
+
+        let short = le(&[2, 0, 300, 400]);
+        let mut s = streams(&[], &short, &[], true);
+        assert_eq!(s.keys().unwrap(), [0, 300, 400]);
+
+        let keys: Vec<u16> = (0..=64).map(|k| k * 5).collect();
+        let short = le(&[64, 0xaaaa, 0xbbbb]);
+        let indices = le(&keys);
+        let mut s = streams(&[], &short, &indices, true);
+        assert_eq!(s.keys().unwrap(), keys);
+        assert!(s.short.take(1).is_err(), "the coarse table read whole");
+    }
+
+    fn surface(deformed: bool, blend: &[u16], counts: [u16; 4], rigid: Vec<[u16; 4]>) -> XSurface {
+        XSurface {
+            tile_mode: 0,
+            deformed,
+            vert_count: 0,
+            tri_count: 0,
+            base_tri_index: 0,
+            base_vert_index: 0,
+            blend_counts: counts,
+            verts_blend: Some(le(blend)),
+            verts: None,
+            tris: None,
+            rigid,
+            part_bits: [0; 4],
+        }
+    }
+
+    fn verts(n: usize) -> Vec<Vertex> {
+        vec![packed_vertex(&[0; 0x20]); n]
+    }
+
+    /// A deformed surface's blend data: one-bone vertices first, then
+    /// two-bone ones whose second bone takes `w / 65536` and the first the
+    /// rest. A rigid surface's runs bind consecutive vertices. A bone past
+    /// the skeleton, an offset off a matrix and data short of the vertices
+    /// are refused.
+    #[test]
+    fn skin_reads_the_blend_layout_and_the_rigid_runs() {
+        let s = surface(true, &[64, 0, 128, 16384], [1, 1, 0, 0], vec![]);
+        let mut v = verts(2);
+        skin(&s, &mut v, 3).unwrap();
+        assert_eq!((v[0].bone_indices[0], v[0].bone_weights[0]), (1, 1.0));
+        assert_eq!(v[1].bone_indices[..2], [0, 2]);
+        assert_eq!(v[1].bone_weights[..2], [0.75, 0.25]);
+
+        assert!(skin(&s, &mut verts(2), 2).is_err(), "bone 2 of 2");
+        assert!(skin(&s, &mut verts(3), 3).is_err(), "covers 2 of 3");
+        let off = surface(true, &[65], [1, 0, 0, 0], vec![]);
+        assert!(skin(&off, &mut verts(1), 3).is_err(), "offset 65");
+
+        let rigid = surface(false, &[], [0; 4], vec![[64, 2, 0, 0], [0, 1, 0, 0]]);
+        let mut v = verts(3);
+        skin(&rigid, &mut v, 2).unwrap();
+        assert_eq!(
+            v.iter().map(|v| v.bone_indices[0]).collect::<Vec<_>>(),
+            [1, 1, 0]
+        );
+        assert!(skin(&rigid, &mut verts(4), 2).is_err(), "covers 3 of 4");
+    }
+}

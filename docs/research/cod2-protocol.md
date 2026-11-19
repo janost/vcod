@@ -3706,7 +3706,7 @@ VERIFIED (the `Cmd_AddCommand` calls; `kick` is the string at 0x814994c). So
   `This GUID (%i) is already banned`; otherwise `ban.txt` opens for append and
   gets `%i %s\r\n`, the guid and the cleaned name, and the client is dropped
   with `EXE_PLAYERKICKED`. VERIFIED. 1.5b returns silently on a guid of 0
-  (cod11-server-handshake.md, "1.5 permanent bans"); 1.3 prints.
+  (cod11-server-handshake.md, "Permanent bans on 1.5"); 1.3 prints.
 - `SV_IsBannedGuid` (0x808d630): 0 never; otherwise `ban.txt` through
   `FS_ReadFile`, each line's first `Com_Parse` token `atoi`'d against the
   guid, the rest of the line skipped. VERIFIED.

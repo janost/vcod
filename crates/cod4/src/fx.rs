@@ -511,4 +511,62 @@ pub mod createfx {
             out.sounds.push((origin, alias));
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        const HEAD: &str = "//_createfx generated. Do not touch!!\nmain()\n{\n";
+
+        fn oneshot(fxid: &str) -> String {
+            format!(
+                "{ONESHOT}\"{fxid}\" );\nent.v[ \"origin\" ] = ( 1, 2, 3 );\n\
+                 ent.v[ \"angles\" ] = ( 270, 0, 0 );\nent.v[ \"fxid\" ] = \"{fxid}\";\n\
+                 ent.v[ \"delay\" ] = -15;\n"
+            )
+        }
+
+        /// The first mapping of a name wins and the 33rd name is dropped.
+        #[test]
+        fn effect_map_keeps_the_first_of_a_name_and_32_names() {
+            let mut text = String::from("level._effect[ \"a\" ] = loadfx( \"fx/one\" );\n");
+            text += "level._effect[ \"a\" ] = loadfx( \"fx/two\" );\n";
+            text += "level._effect[ \"b\" ] = spawnfx( \"fx/no\" );\n";
+            for i in 0..40 {
+                text += &format!("level._effect[\"e{i}\"]=loadfx(\"fx/e{i}\");\n");
+            }
+            let m = effect_map(&text);
+            assert_eq!(m.len(), MAX_EFFECT_DEFS);
+            assert_eq!(m[0], ("a".to_string(), "fx/one".to_string()));
+            assert_eq!(m[31].0, "e30");
+        }
+
+        /// An entry out of order ends the parse with an error and keeps
+        /// what it read before.
+        #[test]
+        fn placed_stops_at_a_bad_entry_and_keeps_the_ones_before() {
+            let good = oneshot("fire");
+            let text = format!("{HEAD}{good}{LOOPSOUND}\nent.v[ \"origin\" ] = ( 4, 5, 6 );\n}}\n");
+            let p = placed(&text);
+            assert_eq!(p.effects.len(), 1);
+            assert_eq!(p.effects[0].fxid, "fire");
+            assert_eq!(p.effects[0].origin, [1.0, 2.0, 3.0]);
+            assert_eq!(p.effects[0].delay, -15.0);
+            assert!(p.sounds.is_empty());
+            assert!(p.error.unwrap().starts_with("a bad loop sound"));
+
+            let p = placed(&format!("main()\n{{\n{good}}}\n"));
+            assert!(p.effects.is_empty());
+            assert_eq!(
+                p.error.as_deref(),
+                Some("expected '//_createfx generated. Do not touch!!'")
+            );
+
+            let p = placed(&format!(
+                "{HEAD}{good}ent.v[ \"soundalias\" ] = \"amb\";\n}}\n"
+            ));
+            assert_eq!((p.effects.len(), p.sounds.len(), p.error), (1, 1, None));
+            assert_eq!(p.sounds[0], ([1.0, 2.0, 3.0], "amb".to_string()));
+        }
+    }
 }

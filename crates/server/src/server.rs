@@ -5594,7 +5594,7 @@ impl Server {
     /// 1.5's ban tail (cod_lnxded 1.5b 0x8089121): nothing for a client
     /// without a guid or one already in `ban.txt`, else the guid and the
     /// cleaned name appended and the client kicked, with no print
-    /// (docs/research/cod11-server-handshake.md, "1.5 permanent bans").
+    /// (docs/research/cod11-server-handshake.md, "Permanent bans on 1.5").
     fn ban_slot_v15(&mut self, slot: usize, guid: i32, name: &str, now: Instant) {
         if guid == 0 || self.core.bans.is_banned(guid) {
             return;
@@ -13849,7 +13849,7 @@ mod tests {
         assert_eq!(reply(&mut sv).1, "error");
     }
 
-    /// 1.5's `ban.txt` (handshake doc, "1.5 permanent bans"): a LAN client
+    /// 1.5's `ban.txt` (handshake doc, "Permanent bans on 1.5"): a LAN client
     /// has no guid, so `banUser` answers an empty print and leaves it on,
     /// as the retail 1.5b server did; an off-LAN one is kicked and refused
     /// with retail's string, and `unbanUser` drops it by its cleaned name

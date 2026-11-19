@@ -154,7 +154,8 @@ in a commit message. Split a long section by adding numbered subsections
 (12.4.1) under it, never by renumbering. `crates/common/tests/doc_citations.rs`
 checks that every `<doc>.md N` citation names a heading and every quoted
 paragraph name (`<doc>.md N, "The name"`) a heading, bold lead or
-paragraph lead in that section.
+paragraph lead in that section, and that no doc gives two headings one
+section number.
 
 ## Research docs
 

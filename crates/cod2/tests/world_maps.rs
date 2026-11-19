@@ -402,3 +402,37 @@ fn cell_walks_side_by_side() {
         );
     }
 }
+
+/// A dedicated server's world ([`vcod_cod2::map::MapFile::world_unlit`])
+/// holds no lightmap page and everything else the client's does.
+#[test]
+fn an_unlit_world_drops_only_the_lightmap_pages() {
+    let Some(fs) = testing::cod2_fs() else {
+        return;
+    };
+    for map in MAPS {
+        let data = fs.read(&format!("maps/mp/{map}.d3dbsp")).unwrap();
+        let file = vcod_cod2::map::MapFile::parse(&data).unwrap();
+        let (lit, unlit) = (file.world(), file.world_unlit());
+        assert!(!lit.lightmap_basis.is_empty(), "{map}");
+        assert!(
+            unlit.lightmaps.is_empty() && unlit.lightmap_basis.is_empty(),
+            "{map}"
+        );
+        assert_eq!(
+            (
+                unlit.soups.len(),
+                unlit.verts.len(),
+                unlit.brushes.len(),
+                unlit.entities.len()
+            ),
+            (
+                lit.soups.len(),
+                lit.verts.len(),
+                lit.brushes.len(),
+                lit.entities.len()
+            ),
+            "{map}"
+        );
+    }
+}
