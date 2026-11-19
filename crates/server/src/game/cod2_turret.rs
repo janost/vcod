@@ -27,18 +27,7 @@ const FRAME_MS: i32 = 50;
 /// origin (rodata 0x815ac4c), mask 0x2810011 (lnxded 0x810aa50). VERIFIED.
 const PLACE_DROP: f32 = 60.0;
 
-/// A gun as the bots read it ([`Cod2Level::gun_list`]).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct GunInfo {
-    pub id: EntId,
-    pub origin: Vec3,
-    pub yaw: f32,
-    /// [min, max] off the gun's angles: pitch [-top, bottom], yaw [-right,
-    /// left] (`TurretRecord`).
-    pub yaw_range: [f32; 2],
-    pub pitch_range: [f32; 2],
-    pub owner: Option<usize>,
-}
+pub use crate::game::turret::GunInfo;
 
 /// What a client's turret use keeps beside its playerstate.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -156,31 +145,12 @@ impl Cod2Level {
     /// Every gun with its pose, arcs and gunner, for the bots
     /// (`bots::cod2::gun`).
     pub fn gun_list(&mut self) -> Vec<GunInfo> {
-        let ids: Vec<EntId> = self.rt.host.turrets.keys().copied().collect();
-        ids.into_iter()
-            .filter_map(|id| {
-                let (origin, angles) = self.gun_pose(id)?;
-                let rec = self.rt.host.turrets.get(&id)?;
-                Some(GunInfo {
-                    id,
-                    origin: Vec3::from(origin),
-                    yaw: angles[1],
-                    yaw_range: rec.yaw_range,
-                    pitch_range: rec.pitch_range,
-                    owner: rec.owner,
-                })
-            })
-            .collect()
+        self.rt.gun_list()
     }
 
     /// The gun `slot` mans, if any.
     pub fn manned_gun(&self, slot: usize) -> Option<EntId> {
-        self.rt
-            .host
-            .turrets
-            .iter()
-            .find(|(_, r)| r.owner == Some(slot))
-            .map(|(id, _)| *id)
+        self.rt.host.manned_gun(slot)
     }
 
     /// `G_IsTurretUsable` (lnxded 0x810c358) with 0x810c1be's arc test:

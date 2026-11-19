@@ -297,29 +297,13 @@ impl Cod4Level {
 
     /// Every gun as the bots read it: where it stands, its arcs and its
     /// gunner.
-    pub fn gun_list(&mut self) -> Vec<crate::game::cod2_turret::GunInfo> {
-        let ids: Vec<EntId> = self.rt.host.turrets.keys().copied().collect();
-        ids.into_iter()
-            .filter_map(|id| {
-                let g = self.gun(id)?;
-                let rec = self.rt.host.turrets.get(&id)?;
-                Some(crate::game::cod2_turret::GunInfo {
-                    id,
-                    origin: g.origin,
-                    yaw: g.angles[1],
-                    yaw_range: rec.yaw_range,
-                    pitch_range: rec.pitch_range,
-                    owner: rec.owner,
-                })
-            })
-            .collect()
+    pub fn gun_list(&mut self) -> Vec<crate::game::turret::GunInfo> {
+        self.rt.gun_list()
     }
 
     /// The gun `slot` mans, if any.
     pub fn manned_gun(&self, slot: usize) -> Option<EntId> {
-        (self.rt.host.turrets.iter())
-            .find(|(_, r)| r.owner == Some(slot))
-            .map(|(id, _)| *id)
+        self.rt.host.manned_gun(slot)
     }
 
     /// Guns whose gunner left the server are let go. A death lets go in

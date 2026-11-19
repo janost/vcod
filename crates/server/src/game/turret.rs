@@ -5,6 +5,8 @@
 //! half of a mount (section 4). Aim, fire and release mutate the record in
 //! place.
 
+use crate::game::host::GameHost;
+use crate::game::script::ScriptRuntime;
 use crate::spectate::ClientSim;
 use glam::Vec3;
 use vcod_common::fguard;
@@ -19,6 +21,51 @@ use vcod_common::net::protocol::{Cod1Wire, CsLayout, PROTOCOL_V1};
 use vcod_common::pmove::Stance;
 use vcod_common::pmove::aim::{angle_normalize_180, angle_subtract};
 use vcod_gsc::EntId;
+
+/// A gun as the bots read it ([`ScriptRuntime::gun_list`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GunInfo {
+    pub id: EntId,
+    pub origin: Vec3,
+    pub yaw: f32,
+    /// [min, max] off the gun's angles: pitch [-top, bottom], yaw [-right,
+    /// left] (`TurretRecord`).
+    pub yaw_range: [f32; 2],
+    pub pitch_range: [f32; 2],
+    pub owner: Option<usize>,
+}
+
+impl ScriptRuntime {
+    /// Every gun with its pose (its entity's, [`Self::link_anchor`]), arcs
+    /// and gunner.
+    pub fn gun_list(&mut self) -> Vec<GunInfo> {
+        let ids: Vec<EntId> = self.host.turrets.keys().copied().collect();
+        ids.into_iter()
+            .filter_map(|id| {
+                let (origin, angles) = self.link_anchor(id)?;
+                let rec = self.host.turrets.get(&id)?;
+                Some(GunInfo {
+                    id,
+                    origin: Vec3::from(origin),
+                    yaw: angles[1],
+                    yaw_range: rec.yaw_range,
+                    pitch_range: rec.pitch_range,
+                    owner: rec.owner,
+                })
+            })
+            .collect()
+    }
+}
+
+impl GameHost {
+    /// The gun `slot` mans, if any.
+    pub fn manned_gun(&self, slot: usize) -> Option<EntId> {
+        self.turrets
+            .iter()
+            .find(|(_, r)| r.owner == Some(slot))
+            .map(|(id, _)| *id)
+    }
+}
 
 /// The turret keys of a weapon file (`weapons/mp/<name>`), weapon-def
 /// offsets in docs/research/cod11-turrets.md section 2.
