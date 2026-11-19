@@ -52,7 +52,7 @@ pub struct PlayerDObj {
     /// update; an empty slot clears its names without counting as a change.
     names: Assembly,
     /// What the DObj was built from: the hit walk's assembly.
-    built: Assembly,
+    built: Rc<Assembly>,
     /// The weapon it was built with, 0 for a rider without one.
     weapon: i32,
     /// The client info's rebuild flag (1.5b `+0x3f8`, UO `+0x404`).
@@ -69,16 +69,18 @@ impl PlayerDObj {
     /// rebuilds it, reading the bits as they are. Then `BG_PlayerAnimation`:
     /// a new torso anim other than 0, toggle bit aside, sets the flag for the
     /// next update (`BG_SetNewAnimation`, 1.5b 0x1908f, UO 0x1d201).
-    pub fn update(&mut self, now: &Assembly, weapon: i32, torso: i32) -> &Assembly {
+    pub fn update(&mut self, now: &Assembly, weapon: i32, torso: i32) -> &Rc<Assembly> {
         let changed = now.body != self.names.body
             || now
                 .attachments
                 .iter()
                 .enumerate()
                 .any(|(i, a)| self.names.attachments.get(i) != Some(a));
-        self.names = now.clone();
+        if self.names != *now {
+            self.names = now.clone();
+        }
         if changed || weapon != self.weapon || self.rebuild {
-            self.built = now.clone();
+            self.built = Rc::new(now.clone());
             self.weapon = weapon;
             self.rebuild = false;
         }
