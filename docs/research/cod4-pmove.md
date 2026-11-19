@@ -269,10 +269,104 @@ make the input by passing the velocity as both. VERIFIED.
 
 ## 7. The ladder
 
-CoD2's (cod2-movement.md 11) with 1.7's flag numbers; the in-air press of
-50 into the ladder only once the velocity is non-zero, and the rung
-footstep is `EV_FOOTSTEP_RUN` with the surface (21 for none) in its parm.
-INFERRED. No capture climbs one yet.
+CoD2's (cod2-movement.md 11) with 1.7's flag numbers (`pm_flags` 8 the
+ladder, 0x2000 the left-ladder mark, 0x80 and 0x100 the land and
+knockback timers) and section 1's float model: 1.7 keeps the scale, the
+dots and the bleed on the x87 stack where CoD2 stores them. VERIFIED (the
+instructions below). No capture climbs one yet.
+
+- `PM_CheckLadderMove` is 0x8059e18 (INFERRED off its probe and flags).
+  `PmoveSingle`'s default arm calls it at 0x805d008 and then tests
+  `pm_flags & 8` (0x805d00d) to pick the ladder move over the walk
+  (0x805987e). VERIFIED (the instructions). In it:
+  - a walking frame (pml+0x2c) clears 0x2000 (0x8059e31); a running
+    `pm_time` with 8 clear and 0x180 set returns (0x8059e38..0x8059e44,
+    0x805a0d6). VERIFIED (the instructions).
+  - the reach is 30 (rodata 0x820dee8), 8 walking (0x820aac4, the `cmovne`
+    at 0x8059e5b). Held and off the ground (ps+0x70 0x3ff) the probe runs
+    along `-vLadderVec` (ps+0x74) and a let-go flag goes up
+    (0x805a109..0x805a11b); otherwise along the flat view, normalized
+    inline with the length and the components left on the stack, never
+    stored (0x8059e78..0x8059ea1, 0x805a124). VERIFIED (the instructions).
+  - `pm_type` above 6 (0x8059ea7) clears the ground entity, pml+0x2c,
+    +0x30 and +0x34 and takes the body off the ladder; 0x2000 set,
+    `viewHeightTarget` (ps+0x114) 11 when it is neither 22 nor 40, or
+    `commandTime - jumpTime` (pm+4, ps+0x80) at most 299 (0x8059f18) takes
+    it off at 0x805a0e6, without the anim below. VERIFIED (the
+    instructions).
+  - the probe box is the cmd's (pm+0xcc, pm+0xd8) shrunk 6 a side
+    (0x820aacc), its floor 8 and its top at least 8 (the `fcmovbe` at
+    0x8059f6c); the end `origin + reach * dir` is stored per component; the
+    trace goes through the handler table 0x826af40 under `pm->tracemask`
+    (pm+0x44) with `PM_playerTrace`'s body retrace inlined
+    (0x8059fef..0x805a086). VERIFIED (the instructions).
+  - a hit (fraction under 1 and `surfaceFlags & 8`, 0x805a13f) that is
+    airborne or has `forwardmove > 0` (the signed byte pm+0x1a, 0x805a150)
+    keeps a held ladder (0x805a15a); a fresh grab copies the normal into
+    `vLadderVec`, probes again to `origin - reach * vLadderVec`
+    (0x805a181..0x805a1a4) and takes the ladder on a second ladder hit
+    (0x805a210). VERIFIED (the instructions).
+  - anything else clears 8 and sets 0x2000 if 8 was held (0x805a09c,
+    0x805a131). Then, with the let-go flag up, `BG_AnimScriptEvent`
+    (0x8050194) runs with event 3 (`JUMP`, section 17.5), not continuing,
+    forced (0x805a0a7..0x805a0cc). VERIFIED (the instructions). Letting go
+    in the air raises CoD2's forced jump anim on 1.7 too.
+- `PM_LadderMove` is inlined in `PmoveSingle` at 0x805d657..0x805da64.
+  VERIFIED (the instructions); the name is INFERRED. In it:
+  - `Jump_Check` (0x8050a42) first; a jump runs `PM_AirMove` (0x805958c,
+    called at 0x805dcb0) and nothing else. VERIFIED (the instructions).
+  - `up = (forward.z + 0.25) * 2.5` (0x820966c, 0x820a31c), clamped to
+    ±1 (0x805d68f, 0x805de5b; -1 at 0x820de94) and stored across the calls
+    (0x805d70d). `forward` is flattened and normalized inline, each
+    component stored; `right` is flattened, goes through `Vec3NormalizeTo`
+    (0x8192a64) and is laid on the ladder's plane by `ProjectPointOnPlane`
+    (0x8190e76), which keeps the dot on the stack (0x8190e82..0x8190e9c)
+    and stores each component. VERIFIED (the instructions).
+  - the scale is `PM_CmdScale` on the two move keys, inlined at
+    0x805d73f..0x805d812: `max(|fm|, |rm|) * speed / (127 * sqrt(fm² +
+    rm²))` (127 at 0x820ded8), the root off the integer sum (`fsqrt`;
+    `sqrtf` only for a NaN), times 0.4 (0x820969c) under `pm_flags` 0x40
+    or a lean (ps+0x5c), times 3 (0x8209658), 6 (0x820aacc) or
+    `player_spectateSpeedScale` (dvar 0x827b00c) for `pm_type` 2, 3 and
+    4, all of it kept on the stack. VERIFIED (the instructions). That is
+    `moves::free_scale`, the air move's, not CoD2's stored 2-key scale.
+  - the wish: `up * 0.5 * scale * fm` (0x8209628) into z, stored once
+    (0x805d84e); `scale * 0.2 * rm` (0x8209690) kept and added along the
+    right, each component stored (0x805d85d..0x805d893); then
+    `Vec3NormalizeTo` and `PM_Accelerate` (0x80592e8) at 9 (0x41100000 at
+    0x805d8a8). VERIFIED (the instructions).
+  - no forward key: vz moves toward 0 by `gravity * frametime` (ps+0x58
+    loaded as an integer, pml+0x24) and never past it
+    (0x805d8cc..0x805d8fd, 0x805df25..0x805df58). VERIFIED (the
+    instructions).
+  - no strafe key: the velocity along the flat right (normalized by
+    0x81915d8) is taken away and given back less `frametime * along * 16`
+    (0x820967c), the drop at least a unit (0x805df7b) and all of it gone
+    once the drop's size reaches `along`'s; `along` and the drop stay on
+    the stack, their sizes stored only for the compare
+    (0x805dcf3..0x805ddaf). VERIFIED (the instructions).
+  - airborne (pml+0x2c clear, 0x805d909): the flat velocity into
+    `vLadderVec` is taken away, the dot kept and each component stored
+    (0x805d917..0x805d970). The press of 50 into the ladder (-50 at
+    0x820aad8, added at 0x805d9c4..0x805d9de) runs only when the velocity
+    is not zero, x and y tested on the stack after the strip and z as
+    stored (0x805d973..0x805d9a2), and the flat speed squared, kept off the
+    stored components, is no more than vz squared, kept
+    (0x805d9a8..0x805d9be). VERIFIED (the instructions).
+  - `PM_StepSlideMove` (0x805e930) without gravity; `movementDir`
+    (ps+0xac) is `AngleDelta(vectoyaw(vLadderVec) + 180, yaw)` stored,
+    truncated (`cvttss2si` at 0x805da34), its low byte sign-extended and
+    capped at ±75 (0x805da44). VERIFIED (the instructions).
+- The push-off sits in `Jump_Check` after the jump event `EV_JUMP` (0x4c)
+  with parm 21 on the ladder (0x8050b84..0x8050b9d): vz times 0.75
+  (0x820a328) stored, the flat forward normalized and, when `vLadderVec .
+  forward` is negative, reflected (`-2` at 0x820a32c) and normalized again,
+  all on the stack, then the flat velocity `jump_ladderPushVel` (dvar
+  0x82772ec) times it, each component stored, and 8 cleared without 0x2000
+  (0x8050c0f..0x8050ca0, 0x8050d0c..0x8050d65). VERIFIED (the
+  instructions).
+- The ladder arm of `PM_UpdateViewAngles` is section 8's; the rung
+  footstep is section 9's.
 
 The climb's wish velocity has only a vertical part (the forward key
 times `clamp((forward.z + 0.25) * 2.5, -1, 1)`) and the strafe laid on
@@ -405,6 +499,23 @@ surface, as on CoD2 (bot-objectives.md 12.15). INFERRED.
   `AngleDelta(base, old yaw)` stored plus `AngleDelta(old yaw, view)` kept
   (0x8057739..0x8057769), so it reads past the wrap. VERIFIED (the
   disassembly); the order is INFERRED. `stance::tests` pins it.
+- The ladder arm of `PM_UpdateViewAngles`: with `eFlags & 0x300` clear
+  (no turret, 0x8057691), `pm_flags` 4 runs `Mantle_CapView` (0x8050dc6) instead, else `pm_flags`
+  8 with `groundEntityNum` 0x3ff (0x8057796..0x80577a9) jumps to
+  0x8057ea2..0x8058179, which returns to the prone test at 0x80577af. It
+  skips a `bg_ladder_yawcap` (dvar 0x827af68) of 0; takes the facing
+  `vectoyaw(vLadderVec)` (0x8191c22) plus 180 (0x8209668), stored
+  (0x8057ed7, 0x8057eda); and leaves `AngleDelta(facing, viewangles[1])`
+  (0x8190590) on the stack. Within the cap either way nothing changes
+  (0x8058158). Past it, the excess `delta - cap` or `delta + cap` stays on
+  the stack (0x805813d, 0x8057f15) and goes into the float
+  `delta_angles[1]` (ps+0x68) in one rounding (0x8057f19..0x8057f1e); the
+  view yaw (ps+0x10c) becomes `AngleNormalize360` (0x8190540) of
+  `facing - cap` for a positive excess, else `facing + cap`
+  (0x8057f2f..0x8057f3f, 0x8058163..0x8058173). VERIFIED (the
+  instructions). So the fold is 1.7's floor `AngleNormalize360`, not
+  CoD2's `AngleNormalize360Accurate`, and the push is a float add, not
+  CoD2's short add.
 - The calls to `AngleDelta` (0x8190590) and `AngleNormalize360`
   (0x8190540) return on the stack, the difference and the turns unrounded.
   VERIFIED (the disassembly). `pmove/fpu.rs` (`x87::angle_delta_floor`,
@@ -478,6 +589,20 @@ runs from 300 ms after a jump at `vz / 95.25 * 0.45`, sighted or leaning
 `vz / 38.1 * 0.35` (0x820def0..0x820defc), its rate stored across the
 anim call. VERIFIED.
 
+`PM_FootstepEvent` is 0x805a2a8 (INFERRED off its events 0x48..0x4b). It
+fires when the cycle's old and new bytes, each plus 0x40, differ in
+their sign bit (0x805a2b9..0x805a2c8). Off the ground (ps+0x70 0x3ff) it
+steps only on the ladder (`pm_flags` 8, 0x805a35a): the probe box of
+section 7 (6 at 0x820aacc, 8 at 0x820aac4) traced from the origin to
+`origin + -31 * vLadderVec` (rodata 0x820deec, each end component
+stored) under `pm->tracemask & 0xfdfeffff`, no `CONTENTS_BODY` and no
+`CONTENTS_PLAYERCLIP` (0x805a3b5), with the body retrace inlined. The
+event is `EV_FOOTSTEP_RUN` (0x49) with the struck material
+(`surfaceFlags` bits 20-24, 0x805a4ca) as its parm, not plus 1, and 21
+(0x15) on a miss (fraction 1) or material 0 (0x805a4d5..0x805a4f8).
+VERIFIED (the instructions). CoD2's rung step raises the material plus 1
+as the event itself, with no parm (cod2-movement.md 11).
+
 ## 10. The jump
 
 `Jump_Check`, `Jump_Start`, the slowdown (`Jump_ApplySlowdown` 1800 ms at
@@ -495,6 +620,8 @@ three components, each stored, only with `jump_slowdownEnable`. The
 friction curve (0x80509e6) clears the jump past 1800 whatever the dvar,
 and returns 2.5 from 1700 on (`pm_time > 0x6a3`). The takeoff's aim
 spread is stored, then compared with 255 unrounded. VERIFIED.
+On the ladder `EV_JUMP` (0x4c) goes out with parm 21 (0x8050b84..0x8050b9d)
+before section 7's push-off. VERIFIED (the instructions).
 
 ## 11. The sprint
 
