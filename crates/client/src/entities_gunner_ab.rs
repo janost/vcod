@@ -18,8 +18,11 @@ mod common;
 
 /// The capture under the server's tests.
 fn capture(name: &str) -> String {
-    std::fs::read_to_string(format!("../server/tests/fixtures/ownline/{name}"))
-        .expect("the capture")
+    std::fs::read_to_string(format!(
+        "{}/../server/tests/fixtures/ownline/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("the capture")
 }
 
 /// The `buttons` of a `f "PROBE_IN <buttons> <wbuttons> <up>"` command.
@@ -58,7 +61,8 @@ fn drawn(fs: Pk3Fs, name: &str, cvars: &[(&str, &str)]) -> Vec<Drawn> {
     let mut sv = vcod_server::Server::new(common::cfg(map, probe), now);
     sv.set_protocol(proto);
     let src = std::fs::read_to_string(format!(
-        "../gsc/tests/fixtures/semantics/client-probes/{probe}.gsc"
+        "{}/../gsc/tests/fixtures/semantics/client-probes/{probe}.gsc",
+        env!("CARGO_MANIFEST_DIR")
     ))
     .expect("the probe");
     sv.overlay_script(&format!("maps/mp/gametypes/{probe}"), &src);
