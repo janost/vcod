@@ -733,28 +733,15 @@ impl Cod4Bots {
         })
     }
 
-    /// The CoD1 body the follower's foot and jump tests read: where the
-    /// CoD4 body stands and how it moves, its last jump's age, and the jump
-    /// penalty `GRAPH_RULES` jumps under (1.7's `JUMPING` with its
-    /// `pm_time`, as CoD2's).
+    /// The body in `slot` as the follower reads it
+    /// ([`super::bridge::follower_body`]).
     pub(crate) fn move_ps(&self, slot: usize) -> Option<vcod_common::pmove::PlayerState> {
         let ps = self.ps(slot)?;
-        let now = self.own.pass.now;
-        let mut b = vcod_common::pmove::PlayerState::spawn(ps.origin, ps.view_angles[1]);
-        b.rules = GRAPH_RULES;
-        b.velocity = ps.velocity;
-        b.on_ground = ps.on_ground();
-        b.on_ladder = ps.pm_flags & pmf::LADDER != 0;
-        b.ladder_normal = ps.ladder_vec;
-        b.since_jump_ms = if ps.jump_time > 0 {
-            now.saturating_sub(ps.jump_time).max(0) as f32
-        } else {
-            f32::MAX
-        };
-        b.jump_penalty = ps.pm_flags & pmf::JUMPING != 0;
-        b.knockback_ms = ps.pm_time as f32;
-        b.jump_origin_z = ps.jump_origin_z;
-        Some(b)
+        Some(super::bridge::follower_body(
+            ps,
+            self.own.pass.now,
+            GRAPH_RULES,
+        ))
     }
 
     /// The bots following a mantle edge (`BotWorld::routed`).
@@ -1523,16 +1510,6 @@ impl Cod4Walk {
     }
 }
 
-/// The CoD4 body a walk carries between cmds ([`Cod4Walk`]), the cmd
-/// before it, and where it left the walk's CoD1 body.
-#[derive(Clone)]
-struct WalkBody {
-    ps: PlayerState,
-    old: vcod_cod4::pmove::Cmd,
-    origin: Vec3,
-    velocity: Vec3,
-}
-
 /// Shorts to degrees and back, for `delta_angles` (1.7 keeps floats).
 const SHORT_DEG: f64 = 360.0 / 65536.0;
 
@@ -1547,137 +1524,44 @@ impl crate::nav::WalkStep for Cod4Walk {
         _world: &vcod_common::collision::CollisionWorld,
         _weapons: &[Option<vcod_common::weapon::WeaponDef>],
     ) {
-        use vcod_cod4::pmove::{Cmd, WeaponMove};
-        // The walk's own CoD1 body is the truth when it moved it since.
-        let mut body = carry
-            .take()
-            .and_then(|c| c.downcast::<WalkBody>().ok())
-            .map(Arc::unwrap_or_clone)
-            .filter(|b| b.origin == ps.origin && b.velocity == ps.velocity)
-            .unwrap_or_else(|| WalkBody {
-                ps: cod4_walk_body(ps, from_ms),
-                old: Cmd::default(),
-                origin: ps.origin,
-                velocity: ps.velocity,
-            });
-        body.ps.delta_angles = delta.map(|d| (f64::from(d) * SHORT_DEG) as f32);
+        use vcod_cod4::pmove::{Cmd, MASK_PLAYERSOLID, PLAYER_MAXS, PLAYER_MINS, WeaponMove};
         // Weapon 0: no weapon scale, the graph's 190 units/s.
         let mut c = Cmd::from(&to_cmd4(cmd));
         c.weapon = 0;
-        vcod_cod4::pmove::player_step(
-            &mut body.ps,
-            &c,
-            &mut body.old,
-            &crate::game::cod4::clip::Cod4Clip {
-                clip: &self.clip,
-                bodies: &[],
-                brushes: &self.brushes,
+        super::bridge::walk_cmd(
+            ps,
+            carry,
+            from_ms,
+            |b: &mut PlayerState, old: &mut Cmd| {
+                // 1.7 keeps `delta_angles` as floats: the walk's shorts
+                // go in and come back rounded.
+                b.delta_angles = delta.map(|d| (f64::from(d) * SHORT_DEG) as f32);
+                let world = crate::game::cod4::clip::Cod4Clip {
+                    clip: &self.clip,
+                    bodies: &[],
+                    brushes: &self.brushes,
+                };
+                vcod_cod4::pmove::player_step(b, &c, old, &world, self.rules, WeaponMove::NONE);
+                *delta = b
+                    .delta_angles
+                    .map(|d| (f64::from(d) / SHORT_DEG).round() as i32);
+                c.buttons & button::JUMP != 0
             },
-            self.rules,
-            WeaponMove::NONE,
+            // CoD4's slope test traces the standing box over the clip map
+            // without the brushes: unmeasured, the walk is off by default.
+            |_, from, to| {
+                let t = self
+                    .clip
+                    .trace(from, to, PLAYER_MINS, PLAYER_MAXS, MASK_PLAYERSOLID);
+                t.into()
+            },
         );
-        *delta = body
-            .ps
-            .delta_angles
-            .map(|d| (f64::from(d) / SHORT_DEG).round() as i32);
-        read_walk_body(&body.ps, ps, c.buttons & button::JUMP != 0, &self.clip);
-        body.origin = ps.origin;
-        body.velocity = ps.velocity;
-        *carry = Some(Arc::new(body));
     }
 
     fn key(&self) -> String {
         self.key.clone()
     }
 }
-
-/// A walk's first CoD4 body off its CoD1 one, its clock at `time`: moving
-/// as the CoD1 body moves, its last jump `since_jump_ms` back.
-fn cod4_walk_body(ps: &vcod_common::pmove::PlayerState, time: i32) -> PlayerState {
-    use vcod_cod4::pmove::{ENTITYNUM_NONE, VIEW_CROUCH, VIEW_PRONE};
-    use vcod_common::pmove::Stance;
-    let mut b = PlayerState::spawn(ps.origin, ps.yaw.to_degrees(), time);
-    b.view_angles[0] = ps.pitch.to_degrees();
-    b.velocity = ps.velocity;
-    b.old_velocity = [ps.velocity.x, ps.velocity.y];
-    b.speed = ps.speed as i32;
-    b.gravity = ps.gravity as i32;
-    b.ground_entity_num = if ps.on_ground {
-        ps.ground_entity as i32
-    } else {
-        ENTITYNUM_NONE
-    };
-    if ps.on_ladder {
-        b.pm_flags |= pmf::LADDER;
-        b.ladder_vec = ps.ladder_normal;
-    }
-    let view = match ps.stance {
-        Stance::Stand => None,
-        Stance::Crouch => Some((pmf::DUCKED, VIEW_CROUCH)),
-        Stance::Prone => Some((pmf::PRONE, VIEW_PRONE)),
-    };
-    if let Some((flag, height)) = view {
-        b.pm_flags |= flag;
-        b.view_height_target = height;
-        b.view_height_current = height as f32;
-    }
-    // `PM_CheckJump` refuses a jump inside 500 ms of `jumpTime`.
-    b.jump_time = time - ps.since_jump_ms.min(10_000.0) as i32;
-    b.jump_origin_z = ps.jump_origin_z;
-    if ps.jump_penalty {
-        b.pm_flags |= pmf::JUMPING;
-        b.pm_time = ps.knockback_ms as i32;
-    }
-    b
-}
-
-/// What the walk reads off the CoD4 body `b` into its CoD1 body `ps`; a
-/// body off the ground over ground too steep to stand on reads sliding.
-fn read_walk_body(
-    b: &PlayerState,
-    ps: &mut vcod_common::pmove::PlayerState,
-    jump_held: bool,
-    clip: &ClipMap,
-) {
-    ps.origin = b.origin;
-    ps.velocity = b.velocity;
-    ps.yaw = b.view_angles[1].to_radians();
-    ps.pitch = b.view_angles[0].to_radians();
-    ps.on_ground = b.on_ground();
-    if ps.on_ground {
-        ps.ground_entity = b.ground_entity_num as u32;
-    }
-    ps.on_ladder = b.pm_flags & pmf::LADDER != 0;
-    ps.ladder_normal = b.ladder_vec;
-    ps.stance = b.effective_stance();
-    ps.ducked = b.pm_flags & (pmf::DUCKED | pmf::PRONE) != 0;
-    ps.since_jump_ms = (b.command_time - b.jump_time).max(0) as f32;
-    ps.jump_penalty = b.pm_flags & pmf::JUMPING != 0;
-    ps.knockback_ms = b.pm_time as f32;
-    ps.jump_origin_z = b.jump_origin_z;
-    ps.jump_latched = jump_held;
-    let plane = if ps.on_ground {
-        Some(Vec3::Z)
-    } else {
-        use vcod_cod4::pmove::{MASK_PLAYERSOLID, PLAYER_MAXS, PLAYER_MINS};
-        let t = clip.trace(
-            b.origin,
-            b.origin - Vec3::Z * 0.25,
-            PLAYER_MINS,
-            PLAYER_MAXS,
-            MASK_PLAYERSOLID,
-        );
-        (!t.startsolid && t.fraction < 1.0).then_some(t.normal)
-    };
-    ps.set_ground_plane(plane);
-}
-
-/// How far ahead of a node a wall flagged for the mantle is looked for
-/// before the climb is walked, and the walk's and the whole probe's ticks,
-/// as CoD2's.
-const MANTLE_LOOK: f32 = 64.0;
-const MANTLE_WALK_TICKS: usize = 20;
-const MANTLE_TICKS: usize = 70;
 
 /// How far a bot's climb may land from the compass walk's and still be
 /// the same edge: inside the landing's grid cell, within a step up or down.
@@ -1712,64 +1596,38 @@ fn climbs_facing(clip: &ClipMap, rules: vcod_cod4::pmove::Rules, from: Vec3, lan
 }
 
 /// Where a CoD4 body standing at `from` and run at the wall along `yaw`
-/// stands once it mantles (cod4-pmove.md 17): only off a wall flagged
-/// `MANTLE_ON` or `MANTLE_OVER` within [`MANTLE_LOOK`]; the body walks at
-/// it, presses the jump key on the first step pmove offers the climb, as a
-/// bot does, and the climb's end on the ground is the answer.
+/// stands once it mantles over `clip` ([`super::bridge::mantle_walk`],
+/// cod4-pmove.md 17).
 pub fn mantle_walk(
     clip: &ClipMap,
     rules: vcod_cod4::pmove::Rules,
     from: Vec3,
     yaw: f32,
 ) -> Option<Vec3> {
-    use vcod_cod4::pmove::mantle::{CONTENTS_MANTLE, SURF_MANTLE_ON, SURF_MANTLE_OVER, flag};
     use vcod_cod4::pmove::{Cmd, WeaponMove};
     if !rules.mantle_enable || rules.mantle_anims.is_none() {
         return None;
     }
-    let (s, c) = yaw.to_radians().sin_cos();
-    let dir = Vec3::new(c, s, 0.0);
-    let r = rules.mantle_check_radius.max(1.0);
-    let t = ClipMap::trace(
-        clip,
-        from,
-        from + dir * MANTLE_LOOK,
-        Vec3::new(-r, -r, 0.0),
-        Vec3::new(r, r, 70.0),
-        CONTENTS_MANTLE,
-    );
-    if t.startsolid
-        || t.fraction >= 1.0
-        || t.surface_flags & (SURF_MANTLE_ON | SURF_MANTLE_OVER) == 0
-    {
-        return None;
-    }
-    let mut ps = PlayerState::spawn(from + Vec3::Z * 0.125, yaw, 0);
+    // CoD4's walk rounds its yaw to a short, CoD2's truncates: kept, so
+    // the graphs stay as measured.
     let angle = ((f64::from(yaw) * 65536.0 / 360.0).round() as i64 & 0xffff) as u16;
     let mut old = Cmd::default();
-    let mut mantled = false;
-    for tick in 0..MANTLE_TICKS {
-        if !mantled && tick >= MANTLE_WALK_TICKS {
-            return None;
-        }
-        let jump = !mantled && ps.mantle.flags & flag::HINT != 0;
-        let cmd = Cmd {
-            server_time: ps.command_time + 50,
-            buttons: if jump { button::JUMP } else { 0 },
-            angles: [0, angle, 0],
-            forward_move: if mantled { 0 } else { 127 },
-            ..Default::default()
-        };
-        vcod_cod4::pmove::player_step(&mut ps, &cmd, &mut old, clip, rules, WeaponMove::NONE);
-        if ps.pm_flags & pmf::MANTLE != 0 {
-            mantled = true;
-        } else if mantled && ps.on_ground() {
-            return Some(ps.origin);
-        } else if !mantled && jump {
-            return None;
-        }
-    }
-    None
+    super::bridge::mantle_walk(
+        from,
+        yaw,
+        rules.mantle_check_radius,
+        |a, b, mins, maxs, mask| ClipMap::trace(clip, a, b, mins, maxs, mask).into(),
+        |ps: &mut PlayerState, server_time, jump, forward| {
+            let cmd = Cmd {
+                server_time,
+                buttons: if jump { button::JUMP } else { 0 },
+                angles: [0, angle, 0],
+                forward_move: if forward { 127 } else { 0 },
+                ..Default::default()
+            };
+            vcod_cod4::pmove::player_step(ps, &cmd, &mut old, clip, rules, WeaponMove::NONE);
+        },
+    )
 }
 
 /// A weapon's time between rounds as the brain paces its trigger: a bolt

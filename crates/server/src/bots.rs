@@ -8,6 +8,7 @@
 //! [`BotView`] the server fills. Everything wire- and VM-shaped stays in
 //! `server.rs`.
 
+pub(crate) mod bridge;
 pub mod cod2;
 pub mod cod4;
 pub(crate) mod cover;

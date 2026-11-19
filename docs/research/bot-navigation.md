@@ -881,7 +881,7 @@ CoD2's bots' pass ran outside any `with_rules`, so the follower's walks
 for a CoD2 bot (`Follower::rest_jump_fails` and the re-proofs) stepped
 under 1.1's rules. `Cod2Server::step_bots` now runs the driver under its
 graph's `NavGraph::moving` (`GRAPH_RULES` while the graph builds), and
-the body the follower reads (`bots::cod2::cod1_body`) carries CoD2's jump
+the body the follower reads (`bots::bridge::follower_body`) carries CoD2's jump
 penalty (`pm_flags` 0x80000 with `pm_time`, 1.5's 0x2000 under the
 graph's rules), so `nav::jump_ready` waits it out (bot-combat.md 17).
 

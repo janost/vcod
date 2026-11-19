@@ -1652,11 +1652,12 @@ Two bugs, fixed:
    `NavGraph::moving` (rules and step), `GRAPH_RULES` until the graph
    lands, as `engine::tick` runs CoD1's under the server's rules
    (`fix1`).
-2. `bots::cod2::cod1_body` never set `jump_penalty`, so `nav::jump_ready`
-   never waited out CoD2's penalty and the rest-jump test jumped full
-   height. It now copies CoD2's `JUMPING` (`pm_flags` 0x80000) and
-   `pm_time` into 1.5's `jump_penalty` and `knockback_ms`, with
-   `jump_origin_z`, as `Cod2Walk` maps them (`fix2`, on top of `fix1`).
+2. `bots::cod2::cod1_body` (now `bots::bridge::follower_body`) never set
+   `jump_penalty`, so `nav::jump_ready` never waited out CoD2's penalty
+   and the rest-jump test jumped full height. It now copies CoD2's
+   `JUMPING` (`pm_flags` 0x80000) and `pm_time` into 1.5's `jump_penalty`
+   and `knockback_ms`, with `jump_origin_z`, as `Cod2Walk` maps them
+   (`fix2`, on top of `fix1`).
 
 VERIFIED (measured, ours, release; section 15's runs; `bm2_tdm` 12
 matches, `bm2_dm_skills` 8):
