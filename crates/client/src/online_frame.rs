@@ -628,12 +628,12 @@ impl App {
                     Ok(()) => {
                         r.reopen(&self.fs);
                         view.reopen();
-                        self.shell.execute("set ui_menuFiles ui_mp/menus.txt");
-                        self.ui = new_ui(
+                        restart_ui(
+                            &mut self.ui,
+                            &mut self.shell,
                             &self.fs,
                             &self.game_dir,
                             &self.mod_dir,
-                            self.shell.cvar("cl_language").unwrap_or(""),
                         );
                     }
                     Err(e) => *fatal = Some(e),

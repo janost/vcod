@@ -2807,6 +2807,21 @@ fn couldnt_load(map: &str) -> String {
     format!("EXE_ERR_COULDNT_LOAD\u{15}maps/mp/{map}.bsp")
 }
 
+/// [`App::restart_ui`]'s front end: `ui_menuFiles` back to its default,
+/// a fresh UI off `fs`, the server lists of `ui` carried over.
+fn restart_ui(
+    ui: &mut frontend::Ui,
+    shell: &mut console::shell::Shell,
+    fs: &Pk3Fs,
+    game_dir: &std::path::Path,
+    mod_dir: &str,
+) {
+    shell.execute("set ui_menuFiles ui_mp/menus.txt");
+    let browser = std::mem::take(&mut ui.browser);
+    *ui = new_ui(fs, game_dir, mod_dir, shell.cvar("cl_language").unwrap_or(""));
+    ui.set_browser(browser);
+}
+
 /// The front end off `fs`, with the favourites file and the Mods menu's
 /// directory listing under `game_dir`.
 fn new_ui(fs: &Pk3Fs, game_dir: &std::path::Path, mod_dir: &str, language: &str) -> frontend::Ui {
@@ -3578,15 +3593,13 @@ impl App {
     /// In a live game the cgame starts again too; an error is its drop
     /// ([`load_script_menus`]).
     fn restart_ui(&mut self) -> Result<(), String> {
-        self.shell.execute("set ui_menuFiles ui_mp/menus.txt");
-        let browser = std::mem::take(&mut self.ui.browser);
-        self.ui = new_ui(
+        restart_ui(
+            &mut self.ui,
+            &mut self.shell,
             &self.fs,
             &self.game_dir,
             &self.mod_dir,
-            self.shell.cvar("cl_language").unwrap_or(""),
         );
-        self.ui.set_browser(browser);
         // The cgame starts again with the UI and loads its menus back.
         if let Mode::Online {
             net,
@@ -6011,5 +6024,20 @@ mod tests {
         load_profile_config(&mut shell, &path);
         assert_eq!(shell.bind("F1"), Some("say sch\u{fffd}n"));
         assert_eq!(std::fs::read(&path).unwrap(), bytes, "the profile's config was rewritten");
+    }
+
+    /// The gamestate's search path restart and `vid_restart` rebuild the
+    /// UI through [`restart_ui`], which keeps the Internet and LAN lists.
+    #[test]
+    fn a_ui_restart_keeps_the_server_lists() {
+        use frontend::browser::Source;
+        let dir = tempfile::tempdir().unwrap();
+        let fs = Pk3Fs::empty();
+        let mut shell = console::shell::Shell::new();
+        let mut ui = new_ui(&fs, dir.path(), "main", "");
+        let addr = std::net::SocketAddrV4::new([10, 0, 0, 1].into(), 28960);
+        ui.browser.list_server(Source::Internet, addr);
+        restart_ui(&mut ui, &mut shell, &fs, dir.path(), "main");
+        assert_eq!(ui.browser.listed(Source::Internet), vec![addr]);
     }
 }

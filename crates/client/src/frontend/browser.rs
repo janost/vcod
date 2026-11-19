@@ -509,6 +509,18 @@ impl Browser {
         })
     }
 
+    /// Tests: `addr` listed under `source`, not answered yet.
+    #[cfg(test)]
+    pub fn list_server(&mut self, source: Source, addr: SocketAddrV4) {
+        self.lists[source as usize].push(Server::new(addr));
+    }
+
+    /// Tests: the addresses listed under `source`.
+    #[cfg(test)]
+    pub fn listed(&self, source: Source) -> Vec<SocketAddrV4> {
+        self.lists[source as usize].iter().map(|s| s.addr).collect()
+    }
+
     /// `rows().len()`, without the sort.
     pub fn row_count(&self) -> usize {
         self.filtered().count()
