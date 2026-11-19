@@ -214,7 +214,7 @@ impl Download {
                 break;
             }
             if self.current == window {
-                if svs_ms - self.send_time <= RETRANSMIT_MS {
+                if svs_ms.wrapping_sub(self.send_time) <= RETRANSMIT_MS {
                     return;
                 }
                 self.current = self.acked;

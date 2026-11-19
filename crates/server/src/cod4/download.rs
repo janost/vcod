@@ -216,7 +216,7 @@ impl Download {
                 break;
             }
             if self.current == window {
-                if svs_ms - self.send_time <= RETRANSMIT_MS {
+                if svs_ms.wrapping_sub(self.send_time) <= RETRANSMIT_MS {
                     return;
                 }
                 self.current = self.acked;
@@ -324,6 +324,29 @@ mod tests {
         }
         assert_eq!(got, bytes);
         assert!(!d.next_dl(9, t) || d.name.is_empty());
+    }
+
+    /// A window sent just before the server clock wraps goes again a
+    /// second later, past the wrap.
+    #[test]
+    fn the_resend_clock_wraps() {
+        let open = |_: &str| Some(DownloadFile::from_bytes(vec![0u8; 20 * 2048]));
+        let mut d = Download::default();
+        d.begin("mods/m/a.iwd");
+        let t0 = i32::MAX - 100;
+        let mut w = MsgWriter::new(&UNUSED_HUFF);
+        d.write(&mut w, t0, 20, &cvars(true), false, &open);
+        assert_eq!(msgs(w).len(), 8, "one window");
+        let mut w = MsgWriter::new(&UNUSED_HUFF);
+        d.write(&mut w, t0.wrapping_add(1500), 2, &cvars(true), false, &open);
+        let again: Vec<i32> = msgs(w)
+            .iter()
+            .map(|m| match m {
+                DownloadMsg::Block { block, .. } => *block,
+                m => panic!("{m:?}"),
+            })
+            .collect();
+        assert_eq!(again, [0, 1]);
     }
 
     #[test]
