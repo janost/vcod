@@ -11,6 +11,7 @@
 //! `enableLinkTo`, turrets and a tag parent's model change.
 
 use crate::game::host::GameHost;
+use crate::game::slot::ClientSlot;
 use crate::game::spawn::axis_to_angles;
 use glam::{Quat, Vec3};
 use std::collections::{BTreeMap, HashSet};
@@ -226,10 +227,7 @@ impl Links {
 
 /// The client slot behind `id`, when it is a client's entity.
 fn client_slot(host: &GameHost, id: EntId) -> Option<usize> {
-    host.ents
-        .get(id)
-        .and_then(|e| e.client.as_ref())
-        .map(|_| id.0 as usize)
+    ClientSlot::of_entity(&host.ents, id).map(ClientSlot::index)
 }
 
 fn vector(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> [f32; 3] {

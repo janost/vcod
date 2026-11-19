@@ -3190,22 +3190,23 @@ impl Host for GameHost {
         // `ps.stats[0]` and `maxhealth`'s writes `sess.maxHealth`, which is
         // what the wire and the damage path read (docs/protocol-1.1.md,
         // "Block 1"). A map entity's `health` is still its own slot.
-        if let Some(c) = &e.client {
+        if let (Some(c), Some(slot)) = (&e.client, ClientSlot::of_entity(&self.ents, ent)) {
+            let slot = slot.index();
             match cx.resolve_folded(field) {
                 // A CoD1 player's `r.currentAngles` live with his DObj's
                 // stamps, which place his body for a trace or a tag.
                 "angles" if matches!(self.ext, HostExt::Cod1) => {
-                    return Some(Value::Vector(self.dobj_posed[ent.0 as usize].angles()));
+                    return Some(Value::Vector(self.dobj_posed[slot].angles()));
                 }
-                "health" => return Some(Value::Int(self.clients[ent.0 as usize].vitals.health)),
+                "health" => return Some(Value::Int(self.clients[slot].vitals.health)),
                 "maxhealth" => {
-                    return Some(Value::Int(self.clients[ent.0 as usize].vitals.max_health));
+                    return Some(Value::Int(self.clients[slot].vitals.max_health));
                 }
                 "maxspeed" if self.profile.maxspeed_and_squads => {
-                    return Some(Value::Int(self.clients[ent.0 as usize].max_speed));
+                    return Some(Value::Int(self.clients[slot].max_speed));
                 }
                 "sessionsquad" if self.profile.maxspeed_and_squads => {
-                    let name = SQUADS[self.clients[ent.0 as usize].squad as usize];
+                    let name = SQUADS[self.clients[slot].squad as usize];
                     return Some(Value::String(cx.intern_exact(name)));
                 }
                 // Retail keeps an icon index and reads 0 back as ""
@@ -3467,11 +3468,12 @@ impl GameHost {
             return Ok(());
         }
         let max_speed = self.profile.maxspeed_and_squads && cx.resolve_folded(field) == "maxspeed";
-        if self.profile.maxspeed_and_squads
+        let slot = ClientSlot::of_entity(&self.ents, ent).map(ClientSlot::index);
+        if let Some(slot) = slot
+            && self.profile.maxspeed_and_squads
             && cx.resolve_folded(field) == "sessionsquad"
-            && self.ents.get(ent).is_some_and(|e| e.client.is_some())
         {
-            self.clients[ent.0 as usize].squad = squad_of(cx, value)?;
+            self.clients[slot].squad = squad_of(cx, value)?;
             return Ok(());
         }
         let cod1 = matches!(self.ext, HostExt::Cod1);
@@ -3484,7 +3486,7 @@ impl GameHost {
             client_arm,
             "health" | "maxhealth" | "statusicon" | "headicon" | "headiconteam"
         ) || (cod1 && client_arm == "angles");
-        let has_client = self.ents.get(ent).is_some_and(|e| e.client.is_some());
+        let has_client = slot.is_some();
         let reach = match route {
             _ if max_speed && has_client => self.ents.get_mut(ent),
             _ if client_arm && has_client => self.ents.get_mut_quiet(ent),
@@ -3497,25 +3499,25 @@ impl GameHost {
         let Some(e) = reach else {
             return Err(ErrorKind::BadType("no such entity"));
         };
-        if let Some(c) = e.client.as_mut() {
+        if let (Some(c), Some(slot)) = (e.client.as_mut(), slot) {
             if cod1 && cx.resolve_folded(field) == "angles" {
                 let Value::Vector(v) = value else {
                     return Err(ErrorKind::BadType("wrong type for an engine field"));
                 };
-                self.dobj_posed[ent.0 as usize].set_angles(v);
+                self.dobj_posed[slot].set_angles(v);
                 return Ok(());
             }
             // 1.5's and UO's setter (1.5b 0x3b88e, UO 0x43b82) floors the
             // int at 0 and copies it, as a float, into the entity's `speed`.
             if max_speed {
                 let speed = as_health(value)?.max(0);
-                self.clients[ent.0 as usize].max_speed = speed;
+                self.clients[slot].max_speed = speed;
                 if let Route::Engine { slot, .. } = fields::route_entity("speed") {
                     e.engine[slot] = Value::Float(speed as f32);
                 }
                 return Ok(());
             }
-            let v = &mut self.clients[ent.0 as usize].vitals;
+            let v = &mut self.clients[slot].vitals;
             match cx.resolve_folded(field) {
                 "health" => {
                     v.health = as_health(value)?;

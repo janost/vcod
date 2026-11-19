@@ -12,6 +12,7 @@ pub mod think;
 
 use crate::configstrings::CsRange;
 use crate::game::host::GameHost;
+use crate::game::slot::ClientSlot;
 use info::{VehicleInfo, VehicleInfos};
 use std::collections::HashMap;
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Value};
@@ -940,14 +941,9 @@ pub fn inflictor_weapon(host: &GameHost, id: Option<EntId>) -> usize {
     if let Some(v) = host.vehicles.live.get(&id) {
         return v.wire.weapon as usize;
     }
-    if host.ents.get(id).is_some_and(|e| e.client.is_some()) {
-        return host
-            .clients
-            .get(id.0 as usize)
-            .map(|c| &c.weapons)
-            .map_or(0, |w| w.current as usize);
-    }
-    0
+    ClientSlot::of_entity(&host.ents, id)
+        .and_then(|slot| host.clients.get(slot.index()))
+        .map_or(0, |c| c.weapons.current as usize)
 }
 
 /// `G_IsVehicleImmune` (0x8b893): bullets need `bulletDamage`, grenades
@@ -1077,9 +1073,11 @@ pub fn g_damage(
     mod_: &str,
 ) {
     // A player's own origin: a rider the die walk lifted reads unlifted.
-    let origin = match host.vehicles.lifted.get(&(target.0 as usize)) {
-        Some(o) if host.ents.get(target).is_some_and(|e| e.client.is_some()) => *o,
-        _ => crate::game::item::origin_of(host, cx, target),
+    let lifted = ClientSlot::of_entity(&host.ents, target)
+        .and_then(|slot| host.vehicles.lifted.get(&slot.index()));
+    let origin = match lifted {
+        Some(o) => *o,
+        None => crate::game::item::origin_of(host, cx, target),
     };
     let d = glam::Vec3::from(origin) - glam::Vec3::from(point);
     let dir = d.normalize_or_zero().to_array();
@@ -1102,10 +1100,9 @@ pub fn g_damage(
         }
         return;
     }
-    if host.ents.get(target).is_none_or(|e| e.client.is_none()) {
+    let Some(slot) = ClientSlot::of_entity(&host.ents, target).map(ClientSlot::index) else {
         return;
-    }
-    let slot = target.0 as usize;
+    };
     if !host
         .clients
         .get(slot)
