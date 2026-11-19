@@ -721,7 +721,7 @@ impl Vm {
     /// clock of the moment. The errors are collected and returned rather
     /// than propagated, so one bad thread never stops the rest of the
     /// server. Once enough has been allocated it ends with a sweep of the
-    /// heap ([`Vm::collect`]).
+    /// heap and the temporary strings ([`Vm::collect`]).
     ///
     /// The clock is 24-bit. On the frame `level.time` wraps it the walk's
     /// target is behind the clock, so the clock jumps there and only the
@@ -732,7 +732,7 @@ impl Vm {
         // `Scr_SetTime` leaves the clock on `level.time` whether or not it
         // walked forward; a pass a cap cut short deferred what it left.
         self.now_ms = level_ms & CLOCK_MASK;
-        if self.heap.collect_due() {
+        if self.heap.collect_due() || self.interner.collect_due() {
             self.collect(host);
         }
         errors
@@ -903,7 +903,10 @@ impl Vm {
             self.notify(target, event, &args);
         }
         match result? {
-            Step::Returned(v) => Ok(v),
+            Step::Returned(v) => {
+                self.interner.pin(v);
+                Ok(v)
+            }
             Step::Suspend(_) => {
                 let top = frames
                     .last()

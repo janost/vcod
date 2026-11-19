@@ -18,8 +18,9 @@ use crate::value::{ArrayId, StructId, Value};
 /// An array index: gsc arrays are associative, keyed by either a string
 /// (`a["allies"]`) or an integer (`a[0]`). Ordered so iteration over an
 /// array is deterministic. The derived `Ord` puts every `Int` before every
-/// `Str`, and orders `Str(Atom)` by interning order, not lexicographically
-/// by the text it names: deterministic, which is all iteration needs.
+/// `Str`, and orders `Str(Atom)` by atom number, not lexicographically by
+/// the text it names: deterministic, which is all iteration needs, though a
+/// string built after a sweep may take a freed, lower number.
 /// `getArrayKeys` does not read this order; it takes insertion order
 /// ([`Heap::array_keys_newest_first`]).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -247,12 +248,19 @@ impl Heap {
     /// thread's locals and operand stack, the globals, and the host's. The
     /// same walk counts each array's holders, retail's `refCount` plus one,
     /// so an array one place holds is no longer [`Heap::share`]d and its
-    /// next write goes to it in place, as retail's does.
-    pub fn collect(&mut self, roots: impl IntoIterator<Item = Value>) {
+    /// next write goes to it in place, as retail's does. Every atom a value,
+    /// an array key or a field name reached names is set in `atoms`, for
+    /// the interner's sweep.
+    pub fn collect(&mut self, roots: impl IntoIterator<Item = Value>, atoms: &mut [bool]) {
         let mut struct_live = vec![false; self.structs.len()];
         let mut holders = vec![0u8; self.arrays.len()];
         let mut todo = Vec::new();
-        let mut visit = |v: Value, todo: &mut Vec<Value>| match v {
+        let mut mark = |a: Atom| {
+            if let Some(m) = atoms.get_mut(a.0 as usize) {
+                *m = true;
+            }
+        };
+        let mut visit = |v: Value, todo: &mut Vec<Value>, mark: &mut dyn FnMut(Atom)| match v {
             Value::Array(a) => {
                 if let Some(n) = holders.get_mut(a.0 as usize) {
                     *n = n.saturating_add(1);
@@ -269,21 +277,26 @@ impl Heap {
                     todo.push(v);
                 }
             }
+            Value::String(a) | Value::Localized(a) | Value::Anim(a) => mark(a),
             _ => {}
         };
         for v in roots {
-            visit(v, &mut todo);
+            visit(v, &mut todo, &mut mark);
         }
         while let Some(v) = todo.pop() {
             match v {
                 Value::Array(a) => {
-                    for (_, e) in self.arrays[a.0 as usize].iter() {
-                        visit(e, &mut todo);
+                    for (k, e) in self.arrays[a.0 as usize].iter() {
+                        if let ArrayKey::Str(k) = k {
+                            mark(k);
+                        }
+                        visit(e, &mut todo, &mut mark);
                     }
                 }
                 Value::Struct(s) => {
-                    for &e in self.structs[s.0 as usize].values() {
-                        visit(e, &mut todo);
+                    for (&f, &e) in &self.structs[s.0 as usize] {
+                        mark(f);
+                        visit(e, &mut todo, &mut mark);
                     }
                 }
                 _ => {}

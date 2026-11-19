@@ -214,8 +214,8 @@ pub(crate) const MAX_STRING_LEN: usize = 8192;
 /// (cod2-gsc-diff.md 3.7).
 pub(crate) const MAX_VARIABLES: u64 = 64_000_000;
 
-/// The same ceiling on the interned strings' bytes, which the interner
-/// never frees.
+/// The same ceiling on the interned strings' bytes: the permanent ones,
+/// the temporary ones the last sweep kept and those built since.
 pub(crate) const MAX_STRING_BYTES: usize = 256 << 20;
 
 /// `lhs` and `rhs` joined, or a script error past [`MAX_STRING_LEN`].
@@ -227,12 +227,13 @@ fn concat(lhs: &str, rhs: &str) -> Result<String, ErrorKind> {
 }
 
 /// `a + b`; a concatenation past `max_bytes` of interned text fails.
-/// `s` interned, unless the interner already holds `max_bytes`.
+/// `s` interned as a temporary string, unless the interner already holds
+/// `max_bytes`.
 fn intern_within(interner: &mut Interner, max_bytes: usize, s: &str) -> Result<Value, ErrorKind> {
-    if interner.bytes() + s.len() > max_bytes && interner.get_exact(s).is_none() {
+    if interner.bytes() + s.len() > max_bytes && interner.lookup_exact(s).is_none() {
         return Err(ErrorKind::TooManyVariables);
     }
-    Ok(Value::String(interner.intern_exact(s)))
+    Ok(Value::String(interner.intern_temp(s)))
 }
 
 fn eval_add(
@@ -247,7 +248,7 @@ fn eval_add(
             Ok(Value::Vector([x[0] + y[0], x[1] + y[1], x[2] + y[2]]))
         }
         // A string on either side concatenates whatever renders
-        // (`# probe_concat`); `intern_exact`, not `intern_folded`, so a built
+        // (`# probe_concat`); by exact text, not folded, so a built
         // display string keeps its case.
         (Value::String(x), other) => {
             let rhs = format_number(other, interner).ok_or(ErrorKind::BadType(
@@ -969,6 +970,7 @@ impl Vm {
                                 notifies,
                                 spawns: field_spawns,
                             };
+                            cx.interner.pin(v);
                             tri!(host.store_field(&mut cx, id, name, v));
                             debug_assert!(
                                 field_spawns.is_empty(),
