@@ -1,5 +1,6 @@
 //! `--save-entities` and `--probe-pvs`: the entity list along a route and its fixture.
 
+use super::fixture::{serverinfo_key, tagged_name, write_fixture_file};
 use super::*;
 
 /// One leg of the `--probe-pvs` route: a heading relative to where the spawn
@@ -121,8 +122,7 @@ pub(super) fn write_entities_fixture(
     join: &JoinProbe,
     tag: Option<&str>,
 ) -> anyhow::Result<()> {
-    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
-    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let key = |k: &str| serverinfo_key(configstrings, k);
     let (map, gametype) = (key("mapname"), key("g_gametype"));
 
     let mut head = String::new();
@@ -163,20 +163,16 @@ sample of a set\n"
     );
     head.push_str("# from Protocol::entity_fields; a field a block does not list is zero.\n");
 
-    let suffix = tag.map(|t| format!("-{t}")).unwrap_or_default();
-    let path = fixture_path(
-        ENTITIES_FIXTURE_DIR,
-        &format!("{map}-{gametype}{suffix}.txt"),
-    )?;
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let name = tagged_name(&format!("{map}-{gametype}"), tag);
+    let existing =
+        std::fs::read_to_string(fixture_path(ENTITIES_FIXTURE_DIR, &name)?).unwrap_or_default();
     let (body, taken, kept, sets) = merge_entity_samples(&existing, &probe.stations);
     let mut out = head;
     out.push_str(&body);
 
-    std::fs::create_dir_all(ENTITIES_FIXTURE_DIR)?;
     // Each run's samples join the file's: it is this mode's append target,
     // so an existing file is no reason to refuse.
-    std::fs::write(&path, &out)?;
+    let path = write_fixture_file(ENTITIES_FIXTURE_DIR, &name, &out, true)?;
     println!(
         "entities: {} stations this run, {} samples in the file ({} read, {} dropped as \
          repeats), {} distinct entity sets -> {path}",

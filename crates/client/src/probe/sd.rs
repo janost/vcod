@@ -1,6 +1,8 @@
 //! `--probe-plant` and `--probe-defuse`: the S&D pair and its fixture.
 
-use super::fixture::{PLAYERSTATE_FIXTURE_DIR, vec_str, write_capture};
+use super::fixture::{
+    PLAYERSTATE_FIXTURE_DIR, cmd_fields, serverinfo_key, tagged_name, vec_str, write_fixture_file,
+};
 use super::hit::{STEER_AHEAD, Steer};
 use super::pvs::{entity_origin, offset_by};
 use super::triggers::TriggerBox;
@@ -689,8 +691,7 @@ pub(super) fn write_sd_fixture(
     tag: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
-    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
-    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let key = |k: &str| serverinfo_key(configstrings, k);
     let map = key("mapname");
     let gametype = key("g_gametype");
     let role = sd.role.label();
@@ -824,19 +825,8 @@ pub(super) fn write_sd_fixture(
             lines.push((
                 *st,
                 1,
-                format!(
-                    "!cmd st={st} buttons={} wbuttons={} weapon={} up={} forward={} right={} \
-angles={},{},{}\n",
-                    c.buttons,
-                    c.wbuttons,
-                    c.weapon,
-                    c.up,
-                    c.forward,
-                    c.right,
-                    c.angles[0],
-                    c.angles[1],
-                    c.angles[2],
-                ),
+                // `st` is the cmd's own server_time (see `cmds`), which cmd_fields prints.
+                format!("!cmd {}\n", cmd_fields(c)),
             ));
         }
         lines.sort_by_key(|(st, tag, _)| (*st, *tag));
@@ -845,12 +835,12 @@ angles={},{},{}\n",
         }
     }
 
-    let path = fixture_path(
+    let path = write_fixture_file(
         PLAYERSTATE_FIXTURE_DIR,
-        &format!("{map}-sd-{role}{}.txt", tag_suffix(tag)),
+        &tagged_name(&format!("{map}-sd-{role}"), tag),
+        &out,
+        overwrite,
     )?;
-    std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
-    write_capture(&path, &out, overwrite)?;
     println!("sd: {role} -> {path}");
     Ok(())
 }

@@ -1,7 +1,9 @@
 //! `--save-mapchange` and `--save-roundrestart`: the capture either side of a map change or a
 //! restart.
 
-use super::fixture::{nonzero_pairs, pairs_str, vec_str, write_capture};
+use super::fixture::{
+    nonzero_pairs, pairs_str, serverinfo_key, tagged_name, vec_str, write_fixture_file,
+};
 use super::hit::keep_sample;
 use super::*;
 
@@ -201,15 +203,14 @@ pub(super) fn write_mapchange_fixture(
     tag: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
-    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
-    let gametype = net::info_value_for_key(serverinfo, "g_gametype").unwrap_or("?");
+    let gametype = serverinfo_key(configstrings, "g_gametype");
     let out = mapchange_text(role, gametype, join, probe, map);
-    let path = fixture_path(
+    let path = write_fixture_file(
         NETCHAN_FIXTURE_DIR,
-        &format!("{map}-{gametype}-{role}{}.txt", tag_suffix(tag)),
+        &tagged_name(&format!("{map}-{gametype}-{role}"), tag),
+        &out,
+        overwrite,
     )?;
-    std::fs::create_dir_all(NETCHAN_FIXTURE_DIR)?;
-    write_capture(&path, &out, overwrite)?;
     println!("netchan: {role} -> {path}");
     Ok(())
 }

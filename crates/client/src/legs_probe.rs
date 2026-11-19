@@ -276,17 +276,8 @@ impl LegsProbe {
         }
         let line = |head: &str| {
             format!(
-                "{head} st={} buttons={} wbuttons={} weapon={} up={} forward={} right={} angles={},{},{} world={},{},{}",
-                sent.server_time,
-                sent.buttons,
-                sent.wbuttons,
-                sent.weapon,
-                sent.up,
-                sent.forward,
-                sent.right,
-                sent.angles[0],
-                sent.angles[1],
-                sent.angles[2],
+                "{head} {} world={},{},{}",
+                crate::probe::cmd_fields(&sent),
                 world[0],
                 world[1],
                 world[2],
@@ -426,14 +417,12 @@ impl LegsProbe {
             out.push_str(l);
             out.push('\n');
         }
-        let path = crate::probe::fixture_path(
+        let path = crate::probe::write_fixture_file(
             path_dir,
-            &format!("{map}-dm-legs-client{}.txt", crate::probe::tag_suffix(tag)),
+            &crate::probe::tagged_name(&format!("{map}-dm-legs-client"), tag),
+            &out,
+            overwrite,
         )?;
-        if !overwrite && std::path::Path::new(&path).exists() {
-            anyhow::bail!("{path} already exists; pass --overwrite-fixture to replace it");
-        }
-        std::fs::write(&path, out)?;
         println!("legs: {} lines -> {path}", self.lines.len());
         Ok(())
     }

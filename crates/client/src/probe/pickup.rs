@@ -1,7 +1,10 @@
 //! `--save-pickup`: the item capture and its fixture.
 
 use super::combat::{PULSE_HOLD, WEAPONSTATE_READY, traj_str, weapon_cs_index};
-use super::fixture::{ITEMS_FIXTURE_DIR, nonzero_pairs, pairs_str, vec_str, write_capture};
+use super::fixture::{
+    FixturePhase, ITEMS_FIXTURE_DIR, cmd_fields, nonzero_pairs, pairs_str, serverinfo_key,
+    tagged_name, vec_str, write_fixture_file, write_phase_blocks,
+};
 use super::*;
 
 /// How long the capture waits past the join for the gsc probe's first
@@ -88,6 +91,15 @@ impl PickupPhase {
             PickupPhase::Watch => "watch",
             PickupPhase::Done => "done",
         }
+    }
+}
+
+impl FixturePhase for PickupPhase {
+    fn order(self) -> u8 {
+        self as u8
+    }
+    fn label(self) -> &'static str {
+        PickupPhase::label(self)
     }
 }
 
@@ -529,8 +541,7 @@ pub(super) fn write_pickup_fixture(
     tag: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
-    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
-    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let key = |k: &str| serverinfo_key(configstrings, k);
     let (map, gametype) = (key("mapname"), key("g_gametype"));
     let mut out = String::new();
     out.push_str(&format!(
@@ -582,28 +593,66 @@ pub(super) fn write_pickup_fixture(
         out.push_str(n);
         out.push('\n');
     }
-    let mut phases: Vec<PickupPhase> = Vec::new();
-    for p in pk
+    pickup_phase_blocks(&mut out, pk);
+    let path = write_fixture_file(
+        ITEMS_FIXTURE_DIR,
+        &tagged_name(&format!("{map}-dm-pickup"), tag),
+        &out,
+        overwrite,
+    )?;
+    println!("pickup: wrote {path}");
+    Ok(())
+}
+
+/// [`write_pickup_fixture`]'s `[phase]` blocks; a `!trace` keeps its `!item` lines after it.
+fn pickup_phase_blocks(out: &mut String, pk: &PickupProbe) {
+    let cmds: Vec<(PickupPhase, u128, String)> = pk
         .cmds
         .iter()
-        .map(|c| c.0)
-        .chain(pk.lines.iter().map(|l| l.0))
-    {
-        if !phases.contains(&p) {
-            phases.push(p);
+        .map(|(p, ms, c, v)| {
+            let row = format!(
+                "!cmd ms={ms} {} view={},{},{}",
+                cmd_fields(c),
+                v[0],
+                v[1],
+                v[2]
+            );
+            (*p, *ms, row)
+        })
+        .collect();
+    write_phase_blocks(out, &pk.stations, &cmds, &pk.lines);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::probe::tests::pickup_snap;
+
+    /// The writer's old inline loop, kept as the reference [`pickup_phase_blocks`] must match.
+    fn old_pickup_phase_blocks(pk: &PickupProbe) -> String {
+        let mut out = String::new();
+        let mut phases: Vec<PickupPhase> = Vec::new();
+        for p in pk
+            .cmds
+            .iter()
+            .map(|c| c.0)
+            .chain(pk.lines.iter().map(|l| l.0))
+        {
+            if !phases.contains(&p) {
+                phases.push(p);
+            }
         }
-    }
-    phases.sort_by_key(|p| *p as u8);
-    for phase in phases {
-        out.push_str(&format!("[phase {}]\n", phase.label()));
-        for (_, o, v) in pk.stations.iter().filter(|s| s.0 == phase) {
-            out.push_str(&format!(
-                "!station origin={} viewangles={}\n",
-                vec_str(*o),
-                vec_str(*v)
-            ));
-        }
-        let mut rows: Vec<(u128, String)> = pk
+        phases.sort_by_key(|p| *p as u8);
+        for phase in phases {
+            out.push_str(&format!("[phase {}]\n", phase.label()));
+            for (_, o, v) in pk.stations.iter().filter(|s| s.0 == phase) {
+                out.push_str(&format!(
+                    "!station origin={} viewangles={}\n",
+                    vec_str(*o),
+                    vec_str(*v)
+                ));
+            }
+            let mut rows: Vec<(u128, String)> = pk
             .cmds
             .iter()
             .filter(|c| c.0 == phase)
@@ -624,27 +673,55 @@ pub(super) fn write_pickup_fixture(
                     .map(|(_, ms, l)| (*ms, l.clone())),
             )
             .collect();
-        // Stable, so a `!trace` keeps its `!item` lines after it.
-        rows.sort_by_key(|r| r.0);
-        for (_, r) in rows {
-            out.push_str(&r);
-            out.push('\n');
+            // Stable, so a `!trace` keeps its `!item` lines after it.
+            rows.sort_by_key(|r| r.0);
+            for (_, r) in rows {
+                out.push_str(&r);
+                out.push('\n');
+            }
         }
+        out
     }
-    std::fs::create_dir_all(ITEMS_FIXTURE_DIR)?;
-    let path = fixture_path(
-        ITEMS_FIXTURE_DIR,
-        &format!("{map}-dm-pickup{}.txt", tag_suffix(tag)),
-    )?;
-    write_capture(&path, &out, overwrite)?;
-    println!("pickup: wrote {path}");
-    Ok(())
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::probe::tests::pickup_snap;
+    /// The `[phase]` blocks through `write_phase_blocks` are byte for byte the old loop's:
+    /// phases out of order, a phase with only a station, ms ties between cmds and lines.
+    #[test]
+    fn pickup_phase_blocks_match_the_old_loop() {
+        let c = |server_time, forward| net::msg::UserCmd {
+            server_time,
+            buttons: 1,
+            wbuttons: 2,
+            weapon: 3,
+            angles: [4, -5, 65535],
+            forward,
+            right: -7,
+            up: 8,
+            ..Default::default()
+        };
+        let pk = PickupProbe {
+            cmds: vec![
+                (PickupPhase::Use1, 30, c(100, 1), [1, 2, 3]),
+                (PickupPhase::Aim, 10, c(90, -1), [0, 0, 0]),
+                (PickupPhase::Use1, 20, c(110, 127), [9, -9, 9]),
+            ],
+            lines: vec![
+                (PickupPhase::Use1, 30, "!trace a".into()),
+                (PickupPhase::Use1, 30, "!trace b".into()),
+                (PickupPhase::Use1, 20, "!event c".into()),
+                (PickupPhase::Stand, 5, "!trace d".into()),
+                (PickupPhase::Use1, 30, "!event e".into()),
+            ],
+            stations: vec![
+                (PickupPhase::Use1, [1.25, -2.0, 3.0], [0.0, 90.0, 0.0]),
+                (PickupPhase::Done, [0.0; 3], [0.0; 3]),
+            ],
+            ..PickupProbe::default()
+        };
+        let mut out = String::new();
+        pickup_phase_blocks(&mut out, &pk);
+        assert!(out.contains("[phase "), "{out}");
+        assert_eq!(out, old_pickup_phase_blocks(&pk));
+    }
 
     /// `dm` spawns and the gsc teleports before the join settles, so the
     /// capture's first snapshot is already on the fg42 and no jump is ever

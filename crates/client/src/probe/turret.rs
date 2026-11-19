@@ -1,7 +1,10 @@
 //! `--save-turret`: the mounted MG capture and its fixture.
 
 use super::combat::PULSE_HOLD;
-use super::fixture::{vec_exact, vec_str, write_capture};
+use super::fixture::{
+    FixturePhase, cmd_fields, serverinfo_key, tagged_name, vec_exact, vec_str, write_fixture_file,
+    write_phase_blocks,
+};
 use super::hit::EV_BULLET_HIT_LARGE;
 use super::*;
 
@@ -100,6 +103,15 @@ impl TurretPhase {
             TurretPhase::Refused => "refused",
             TurretPhase::Done => "done",
         }
+    }
+}
+
+impl FixturePhase for TurretPhase {
+    fn order(self) -> u8 {
+        self as u8
+    }
+    fn label(self) -> &'static str {
+        TurretPhase::label(self)
     }
 }
 
@@ -731,8 +743,7 @@ pub(super) fn write_turret_fixture(
     tag: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
-    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
-    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let key = |k: &str| serverinfo_key(configstrings, k);
     let (map, gametype) = (key("mapname"), key("g_gametype"));
     let mut out = String::new();
     out.push_str(&format!(
@@ -807,28 +818,67 @@ pub(super) fn write_turret_fixture(
         out.push_str(n);
         out.push('\n');
     }
-    let mut phases: Vec<TurretPhase> = Vec::new();
-    for p in tp
+    turret_phase_blocks(&mut out, tp);
+    let path = write_fixture_file(
+        TURRET_FIXTURE_DIR,
+        &tagged_name(&format!("{map}-dm-turret"), tag),
+        &out,
+        overwrite,
+    )?;
+    println!("turret: wrote {path}");
+    Ok(())
+}
+
+/// [`write_turret_fixture`]'s `[phase]` blocks; a `!trace` keeps its `!turret` and `!event`
+/// lines after it.
+fn turret_phase_blocks(out: &mut String, tp: &TurretProbe) {
+    let cmds: Vec<(TurretPhase, u128, String)> = tp
         .cmds
         .iter()
-        .map(|c| c.0)
-        .chain(tp.lines.iter().map(|l| l.0))
-    {
-        if !phases.contains(&p) {
-            phases.push(p);
+        .map(|(p, ms, c, v, q)| {
+            let row = format!(
+                "!cmd ms={ms} {} view={},{},{} q={q}",
+                cmd_fields(c),
+                v[0],
+                v[1],
+                v[2]
+            );
+            (*p, *ms, row)
+        })
+        .collect();
+    write_phase_blocks(out, &tp.stations, &cmds, &tp.lines);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::probe::tests::pickup_snap;
+
+    /// The writer's old inline loop, kept as the reference [`turret_phase_blocks`] must match.
+    fn old_turret_phase_blocks(tp: &TurretProbe) -> String {
+        let mut out = String::new();
+        let mut phases: Vec<TurretPhase> = Vec::new();
+        for p in tp
+            .cmds
+            .iter()
+            .map(|c| c.0)
+            .chain(tp.lines.iter().map(|l| l.0))
+        {
+            if !phases.contains(&p) {
+                phases.push(p);
+            }
         }
-    }
-    phases.sort_by_key(|p| *p as u8);
-    for phase in phases {
-        out.push_str(&format!("[phase {}]\n", phase.label()));
-        for (_, o, v) in tp.stations.iter().filter(|s| s.0 == phase) {
-            out.push_str(&format!(
-                "!station origin={} viewangles={}\n",
-                vec_str(*o),
-                vec_str(*v)
-            ));
-        }
-        let mut rows: Vec<(u128, String)> = tp
+        phases.sort_by_key(|p| *p as u8);
+        for phase in phases {
+            out.push_str(&format!("[phase {}]\n", phase.label()));
+            for (_, o, v) in tp.stations.iter().filter(|s| s.0 == phase) {
+                out.push_str(&format!(
+                    "!station origin={} viewangles={}\n",
+                    vec_str(*o),
+                    vec_str(*v)
+                ));
+            }
+            let mut rows: Vec<(u128, String)> = tp
             .cmds
             .iter()
             .filter(|c| c.0 == phase)
@@ -849,33 +899,55 @@ pub(super) fn write_turret_fixture(
                     .map(|(_, ms, l)| (*ms, l.clone())),
             )
             .collect();
-        // Stable, so a `!trace` keeps its `!turret` and `!event` lines after it.
-        rows.sort_by_key(|r| r.0);
-        for (_, r) in rows {
-            out.push_str(&r);
-            out.push('\n');
+            // Stable, so a `!trace` keeps its `!turret` and `!event` lines after it.
+            rows.sort_by_key(|r| r.0);
+            for (_, r) in rows {
+                out.push_str(&r);
+                out.push('\n');
+            }
         }
+        out
     }
-    std::fs::create_dir_all(TURRET_FIXTURE_DIR)?;
-    match tag {
-        Some(tag) => {
-            let path = fixture_path(TURRET_FIXTURE_DIR, &format!("{map}-dm-turret-{tag}.txt"))?;
-            write_capture(&path, &out, overwrite)?;
-            println!("turret: wrote {path}");
-        }
-        None => {
-            let path = fixture_path(TURRET_FIXTURE_DIR, &format!("{map}-dm-turret.txt"))?;
-            std::fs::write(&path, out)?;
-            println!("turret: wrote {path}");
-        }
-    }
-    Ok(())
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::probe::tests::pickup_snap;
+    /// The `[phase]` blocks through `write_phase_blocks` are byte for byte the old loop's:
+    /// phases out of order, a phase with only a station, ms ties between cmds and lines.
+    #[test]
+    fn turret_phase_blocks_match_the_old_loop() {
+        let c = |server_time, forward| net::msg::UserCmd {
+            server_time,
+            buttons: 1,
+            wbuttons: 2,
+            weapon: 3,
+            angles: [4, -5, 65535],
+            forward,
+            right: -7,
+            up: 8,
+            ..Default::default()
+        };
+        let tp = TurretProbe {
+            cmds: vec![
+                (TurretPhase::Fire, 30, c(100, 1), [1, 2, 3], 7),
+                (TurretPhase::Aim, 10, c(90, -1), [0, 0, 0], 5),
+                (TurretPhase::Fire, 20, c(110, 127), [9, -9, 9], 6),
+            ],
+            lines: vec![
+                (TurretPhase::Cool, 30, "!trace a".into()),
+                (TurretPhase::Fire, 30, "!trace b".into()),
+                (TurretPhase::Fire, 20, "!event c".into()),
+                (TurretPhase::Wait, 5, "!trace d".into()),
+                (TurretPhase::Fire, 30, "!event e".into()),
+            ],
+            stations: vec![
+                (TurretPhase::Fire, [1.25, -2.0, 3.0], [0.0, 90.0, 0.0]),
+                (TurretPhase::Done, [0.0; 3], [0.0; 3]),
+            ],
+            ..TurretProbe::default()
+        };
+        let mut out = String::new();
+        turret_phase_blocks(&mut out, &tp);
+        assert!(out.contains("[phase "), "{out}");
+        assert_eq!(out, old_turret_phase_blocks(&tp));
+    }
 
     #[test]
     fn turret_sweep_steps_two_degrees_a_cmd_and_ends_past_both_edges() {

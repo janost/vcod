@@ -1,7 +1,9 @@
 //! `--save-combat`, `--save-ads`, `--probe-sway`, `--save-lean`, `--save-grenade`: the combat
 //! scripts and their fixture.
 
-use super::fixture::{PLAYERSTATE_FIXTURE_DIR, vec_exact, vec_str, write_capture};
+use super::fixture::{
+    PLAYERSTATE_FIXTURE_DIR, serverinfo_key, tagged_name, vec_exact, vec_str, write_fixture_file,
+};
 use super::hit::EV_BULLET_HIT_LARGE;
 use super::*;
 
@@ -1374,8 +1376,7 @@ pub(super) fn write_combat_fixture(
     overwrite: bool,
 ) -> anyhow::Result<()> {
     let p = wire();
-    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
-    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let key = |k: &str| serverinfo_key(configstrings, k);
     let map = key("mapname");
     let gametype = key("g_gametype");
 
@@ -1667,13 +1668,12 @@ leanf={:.4} commandTime={}\n",
 
     // `--capture-tag` keeps a capture taken with another weapon beside the
     // committed one rather than on top of it.
-    let suffix = tag.map(|t| format!("-{t}")).unwrap_or_default();
-    let path = fixture_path(
+    let path = write_fixture_file(
         PLAYERSTATE_FIXTURE_DIR,
-        &format!("{map}-{gametype}-{}{suffix}.txt", combat.kind),
+        &tagged_name(&format!("{map}-{gametype}-{}", combat.kind), tag),
+        &out,
+        overwrite,
     )?;
-    std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
-    write_capture(&path, &out, overwrite)?;
     println!(
         "{}: {} steps, {} traced snapshots -> {path}",
         combat.kind,
