@@ -3220,7 +3220,7 @@ mod tests {
 
     #[test]
     fn life_zero_emitter_does_not_panic_and_produces_no_quads() {
-        // Spawn, step and build at the same `now`, as main.rs does.
+        // Spawn, step and build at the same `now`, as the live frame does.
         let mut e = simple_emitter();
         e.life = R1 { a: 0.0, b: 0.0 };
         let mut s = sys_with(e, SpawnAt::Point { pos: Vec3::ZERO });

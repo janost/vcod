@@ -1599,8 +1599,8 @@ mod tests {
         }
     }
 
-    /// playerState-ring fire events carry `entity_num == u32::MAX`; `main.rs`
-    /// inserts a synthetic muzzle under that key.
+    /// playerState-ring fire events carry `entity_num == u32::MAX`; the live
+    /// frame (`live_frame.rs`) inserts a synthetic muzzle under that key.
     #[test]
     fn view_marker_fire_event_resolves_to_a_directed_flash_at_the_synthetic_muzzle() {
         let mut muzzles = HashMap::new();

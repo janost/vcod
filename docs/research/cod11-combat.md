@@ -9274,7 +9274,7 @@ speed and the same frame's `CG_KickAngles` steps it, and the kick that
 frame hands syscall `0x56` (`0x30033ec1`) rides the next frame's cmds.
 vcod handled the fire in the event pass after the view, which stepped the
 kick a frame late; the fire now runs in the event pass ahead of
-`OnlineView::step_recoil` (`crates/client/src/main.rs`).
+`OnlineView::step_recoil` (`crates/client/src/live_frame.rs`).
 
 **The reset.** VERIFIED, `0x30028a70` zeroes both vectors and the gun
 spring (`0x3020cb94`-`0x3020cba8`) and stamps the weapon name. Its callers:

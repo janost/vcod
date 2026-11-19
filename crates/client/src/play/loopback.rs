@@ -1,7 +1,7 @@
 //! vcod-server in process, played through the client's own frame: the clock
 //! (`play::clock`), the cmd ring and its packets (`play::cmds`), the
-//! prediction, the event collection and the kick, called in `main.rs`'s
-//! order, over a link with optional delay and jitter and a frame rate with
+//! prediction, the event collection and the kick, called in the live
+//! frame's order (`live_frame.rs`), over a link with optional delay and jitter and a frame rate with
 //! hitches. The rounds fired are counted off the server's ammo, what the
 //! client played off `events::frame_events`; each round has to play and kick
 //! once. Needs `COD_DIR` (UO's install runs UO, else 1.1).
