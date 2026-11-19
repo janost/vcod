@@ -4949,30 +4949,29 @@ impl App {
     }
 
     /// A CoD4 session's map change, before the frame: a gamestate naming
-    /// another map loads it as the start-up does (`cod4_fly::load` over the
-    /// gamestate's models and weapons) and hands the session its parts.
+    /// another map starts its load on a worker under the loading screen
+    /// (`Cod4Client::start_map_load`, the zones over the gamestate's models
+    /// and weapons); once it lands the session takes its parts and the
+    /// world and the prewarm go to the GPU here.
     fn cod4_level(&mut self) -> Result<()> {
         let Some(c) = self.session.cod4_mut() else {
             return Ok(());
         };
-        let Some(map) = c.session.take_map_change() else {
+        if let Some(map) = c.session.take_map_change() {
+            vcod_common::laps::begin_load(format!("cod4 map change {map}"));
+            c.start_map_load(&self.game_dir, map);
+        }
+        let Some(done) = c.take_map_load() else {
             return Ok(());
         };
-        vcod_common::laps::begin_load(format!("cod4 map change {map}"));
-        let t0 = Instant::now();
-        let ents = c.session.entity_assets();
-        let fs_game = c.session.fs_game();
-        let (mut m, hud) =
-            cod4_fly::load_with_hud(&self.game_dir, fs_game.as_deref(), &map, &ents, None)
-                .with_context(|| format!("cannot load CoD4 map '{map}'"))?;
+        let cod4_loading::MapLoaded {
+            map: mut m,
+            name: map,
+            hud,
+            fs,
+        } = done?;
         c.install_hud(hud);
-        vcod_common::laps::span(t0, || "cod4 map".into());
-        // The image search path follows the new level's `fs_game` and
-        // usermap, as the zones do (cod4-fastfile.md 13).
-        self.fs = cod4_fly::open_fs(&self.game_dir, fs_game.as_deref(), Some(&map))?;
-        for (path, wav) in std::mem::take(&mut m.sound_files) {
-            self.fs.overlay(&path, wav);
-        }
+        self.fs = fs;
         c.new_map(
             std::mem::take(&mut m.models),
             std::mem::take(&mut m.parts),
