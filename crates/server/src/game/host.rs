@@ -3879,35 +3879,141 @@ mod tests {
         }
     }
 
-    /// A connect into a used slot starts from a clean `gclient_t`: none of
-    /// the last occupant's engine mirrors carry over (BUG-141).
+    /// Each slot's per-client fields as `name: Debug`, `dobj_posed` included.
+    fn client_view(h: &GameHost, s: usize) -> Vec<(&'static str, String)> {
+        macro_rules! view {
+            ($($name:literal: $e:expr),* $(,)?) => { vec![$(($name, format!("{:?}", $e))),*] };
+        }
+        view![
+            "weapons": h.client_weapons[s],
+            "viewmodel": h.client_viewmodel[s],
+            "shellshock": h.client_shellshock[s],
+            "ammo": h.client_ammo[s],
+            "vitals": h.client_vitals[s],
+            "roster": h.client_roster[s],
+            "name": h.client_names[s],
+            "ping_until": h.client_ping_until[s],
+            "buttons": h.client_buttons[s],
+            "last_cmd": h.client_last_cmd[s],
+            "no_spectate": h.client_no_spectate[s],
+            "pm_type": h.client_pm_type[s],
+            "on_ground": h.client_on_ground[s],
+            "stance": h.client_stance[s],
+            "prone_cone": h.client_prone_cone[s],
+            "aim": h.client_aim[s],
+            "lookat": h.client_lookat[s],
+            "old_buttons": h.client_old_buttons[s],
+            "grenade_ms": h.client_grenade_ms[s],
+            "height": h.client_height[s],
+            "link_origin": h.client_link_origin[s],
+            "entity_state": h.client_entity_states[s],
+            "body": h.client_bodies[s],
+            "dobj": h.client_dobjs[s],
+            "voted": h.client_voted[s],
+            "complaint": h.client_complaints[s],
+            "max_speed": h.client_max_speed[s],
+            "squad": h.client_squad[s],
+            "objectives": h.client_objectives[s],
+            "dobj_posed": h.dobj_posed[s],
+        ]
+    }
+
+    /// `ClientConnect`'s clean `gclient_t`, field by field: each field a
+    /// connect clears reads as a fresh host's, `maxspeed` takes `g_speed`,
+    /// and each the engine writes ahead of the connect or mirrors in every
+    /// frame reads as the last occupant left it (BUG-141, QUAL-031).
     #[test]
-    fn a_connect_starts_the_slots_mirrors_clean() {
+    fn a_connect_clears_the_slot_and_keeps_what_the_engine_mirrors() {
+        use crate::game::combat::{BodyPose, HitBody};
+        use vcod_common::pmove::{MoveRules, ProneCone, Stance};
+        let s = 2;
         let mut vm = vcod_gsc::Vm::new();
-        let mut host = GameHost::new(&crate::game::profile::COD1_11, vec![String::new(); 2048]);
-        vm.with_cx(|cx| {
-            host.connect_client(cx, 2, "a");
+        let profile = &crate::game::profile::COD1_11;
+        let fresh = GameHost::new(profile, vec![String::new(); 2048]);
+        let mut host = GameHost::new(profile, vec![String::new(); 2048]);
+        host.cvars.set("g_speed", "211");
+        let id = vm.with_cx(|cx| host.connect_client(cx, s, "a")).unwrap();
+        let body = HitBody {
+            slot: s,
+            origin: glam::Vec3::ONE,
+            mins: glam::Vec3::NEG_ONE,
+            maxs: glam::Vec3::ONE,
+            pose: BodyPose::default(),
+        };
+        host.client_weapons[s].held = 1 << 3;
+        host.client_viewmodel[s] = 5;
+        host.client_shellshock[s] = [1, 2, 3];
+        host.client_ammo[s].ammo[1] = 30;
+        host.client_vitals[s] = Vitals {
+            health: 100,
+            max_health: 100,
+            dead: false,
+            takedamage: true,
+        };
+        host.client_roster[s] = Some(crate::game::scoreboard::RosterSlot {
+            active: true,
+            ..Default::default()
         });
-        host.client_buttons[2] = 7;
-        host.client_last_cmd[2].server_time = 1234;
-        host.client_pm_type[2] = 4;
-        host.client_on_ground[2] = true;
-        host.client_stance[2] = vcod_common::pmove::Stance::Prone;
-        host.client_ammo[2].ammo[1] = 30;
-        host.client_aim[2].2 = true;
-        host.client_grenade_ms[2] = 500;
-        host.ents.free_client(2);
-        vm.with_cx(|cx| {
-            host.connect_client(cx, 2, "b");
+        host.client_names[s] = "a".into();
+        host.client_ping_until[s] = 9;
+        host.client_buttons[s] = 7;
+        host.client_last_cmd[s].server_time = 1234;
+        host.client_no_spectate[s] = 0x17;
+        host.client_pm_type[s] = 4;
+        host.client_on_ground[s] = true;
+        host.client_stance[s] = Stance::Prone;
+        host.client_prone_cone[s] = Some(ProneCone {
+            direction: 10.0,
+            torso_pitch: 5.0,
+            rules: MoveRules::default(),
         });
-        assert_eq!(host.client_buttons[2], 0);
-        assert_eq!(host.client_last_cmd[2], vcod_common::net::msg::NULL_USERCMD);
-        assert_eq!(host.client_pm_type[2], 0);
-        assert!(!host.client_on_ground[2]);
-        assert_eq!(host.client_stance[2], vcod_common::pmove::Stance::Stand);
-        assert_eq!(host.client_ammo[2], AmmoArrays::default());
-        assert!(!host.client_aim[2].2);
-        assert_eq!(host.client_grenade_ms[2], 0);
+        host.client_aim[s] = ([1.0, 2.0, 3.0], [4.0, 5.0], true);
+        host.client_lookat[s] = Some(id);
+        host.client_old_buttons[s] = 1;
+        host.client_grenade_ms[s] = 500;
+        host.client_height[s] = 30.0;
+        host.client_link_origin[s] = [1.0, 2.0, 3.0];
+        host.client_entity_states[s] = Some(vcod_common::net::msg::EntityState::null(
+            &vcod_common::net::protocol::PROTOCOL_V1,
+        ));
+        host.client_bodies[s] = Some(body.clone());
+        host.client_dobjs[s] = Some(body);
+        host.client_voted[s] = true;
+        host.client_complaints[s] = crate::game::vote::Complaint {
+            count: 1,
+            against: 3,
+            end_ms: 4,
+        };
+        host.client_max_speed[s] = 7;
+        host.client_squad[s] = 1;
+        host.client_objectives[s][0].state = 1;
+        host.dobj_posed[s].set_angles([1.0, 2.0, 3.0]);
+        let marked = client_view(&host, s);
+        host.ents.free_client(s);
+        vm.with_cx(|cx| host.connect_client(cx, s, "b"));
+        let (after, clean) = (client_view(&host, s), client_view(&fresh, s));
+
+        let kept = [
+            "roster",
+            "name",
+            "prone_cone",
+            "lookat",
+            "height",
+            "link_origin",
+            "entity_state",
+            "body",
+            "dobj",
+        ];
+        for (((name, m), (_, a)), (_, c)) in marked.iter().zip(&after).zip(&clean) {
+            assert_ne!(m, c, "{name}: the marker reads as a fresh slot's");
+            if kept.contains(name) {
+                assert_eq!(a, m, "{name} survives a connect");
+            } else if *name == "max_speed" {
+                assert_eq!(a, "211", "max_speed takes g_speed");
+            } else {
+                assert_eq!(a, c, "{name} is cleared by a connect");
+            }
+        }
     }
 
     /// The top 2^39 words round to 2^64 as f32; the draw still stays under
