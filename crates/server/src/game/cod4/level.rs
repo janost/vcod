@@ -2532,6 +2532,51 @@ fn shift_archived(ps: &mut PlayerState, back: i32, now: i32) {
 mod tests {
     use super::*;
 
+    /// `SetClientViewAngle`'s `delta_angles`: the spot's view less the last
+    /// cmd's, wrapped to -180..180 on the turns; the view itself as given.
+    #[test]
+    fn a_placed_view_keeps_the_cmd_s_angles_out_of_delta_angles() {
+        let cmd = |yaw: u16| UserCmd {
+            angles: [0, yaw, 0],
+            ..UserCmd::default()
+        };
+        let delta = |angles: [f32; 3], c: Option<&UserCmd>| {
+            let mut ps = PlayerState::default();
+            place(&mut ps, [1.0, 2.0, 3.0], angles, c);
+            assert_eq!(f32::from_bits(ps.word(ps!(3 "origin")[0])), 1.0);
+            assert_eq!(f32::from_bits(ps.word(ps!(3 "viewangles")[1])), angles[1]);
+            f32::from_bits(ps.word(ps!(3 "delta_angles")[1]))
+        };
+        assert_eq!(delta([0.0, 65.0, 0.0], None), 65.0);
+        assert_eq!(delta([0.0, 65.0, 0.0], Some(&cmd(0x4000))), -25.0);
+        assert_eq!(delta([0.0, 200.0, 0.0], None), -160.0);
+        assert_eq!(delta([0.0, 10.0, 0.0], Some(&cmd(60_000))), 40.41015);
+    }
+
+    /// A spawn keeps of the old playerstate only `eFlags` 0x100002 (0x2
+    /// flipped) and the spawn count, stepped; the rest is the fresh
+    /// player's (cod4-gsc.md 7).
+    #[test]
+    fn a_spawn_keeps_only_the_eflags_bits_and_the_spawn_count() {
+        let mut old = PlayerState::default();
+        old.set(ps!("eFlags"), 0x10_0006);
+        old.set(ps!("commandTime"), 5000);
+        old.stats[4] = 3;
+        let ps = spawn_playerstate(&old, 7, 100, SpawnMode::Player);
+        assert_eq!(ps.word(ps!("eFlags")), 0x10_0000);
+        assert_eq!(ps.word(ps!("commandTime")), 0);
+        assert_eq!(ps.word(ps!("clientNum")), 7);
+        assert_eq!(ps.word(ps!("pm_type")), PM_NORMAL);
+        assert_eq!(ps.word(ps!("pm_flags")), pmove::pmf::RESPAWNED);
+        assert_eq!(ps.word(ps!("viewlocked_entNum")), ENTITYNUM_NONE);
+        assert_eq!(f32::from_bits(ps.word(ps!("viewHeightCurrent"))), 60.0);
+        assert_eq!((ps.stats[2], ps.stats[4]), (100, 4));
+        old.set(ps!("eFlags"), 0x4);
+        let ps = spawn_playerstate(&old, 7, 100, SpawnMode::Spectator);
+        assert_eq!(ps.word(ps!("eFlags")), 0x2);
+        assert_eq!(ps.word(ps!("pm_type")), PM_SPECTATOR);
+    }
+
     /// The killcam's shift: the six playerstate clocks and the archival
     /// hudelems' four move up by the look back only where set, a fade's
     /// start no later than now, the walk stopping at the first free
