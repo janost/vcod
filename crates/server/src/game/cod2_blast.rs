@@ -4,18 +4,39 @@
 //! docs/research/cod2-combat.md 7.
 //!
 //! The missiles' blast (`Cod2Level::radius_damage`) and the builtin share
-//! the measure; each hands the result to its own `G_Damage`.
+//! the measure ([`victim_damage`]); each brings its own clear-test and
+//! hands the result to its own `G_Damage`.
 
 use glam::Vec3;
 use vcod_cod2::collision::MASK_BLAST;
 use vcod_cod2::pmove::PlayerState;
-use vcod_common::asset_source::RawFile;
 use vcod_gsc::{Cx, EntId, Target, Value};
 
 use super::host::GameHost;
 
 /// The mask of the tenth's capsule trace (`G_TraceCapsule(.., 0x811)`).
-const TENTH_MASK: u32 = 0x811;
+pub const TENTH_MASK: u32 = 0x811;
+
+/// Which of `G_RadiusDamage`'s traces a clear-test runs: one of
+/// `CanDamage`'s probes (`G_LocationalTracePassed` under [`MASK_BLAST`])
+/// or the tenth's capsule trace ([`TENTH_MASK`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Probe {
+    Blast,
+    Tenth,
+}
+
+impl Probe {
+    pub fn mask(self) -> u32 {
+        match self {
+            Probe::Blast => MASK_BLAST,
+            Probe::Tenth => TENTH_MASK,
+        }
+    }
+}
+
+/// A trace that meets nothing: `clear(from, to, probe)`.
+pub type Clear<'a> = dyn FnMut(Vec3, Vec3, Probe) -> bool + 'a;
 /// `CanDamage`'s side offset (rodata 0x3264c4, 0x326534: 15 and -15).
 const SIDE: f32 = 15.0;
 
@@ -31,6 +52,19 @@ pub struct BlastBody {
     pub eye: Vec3,
     /// `ps.origin`, which the rewind leaves alone: `cloneplayer`'s.
     pub ps_origin: Vec3,
+}
+
+impl BlastBody {
+    /// The body as a blast's victim, measured from `origin`.
+    pub fn victim(self) -> Victim {
+        Victim {
+            origin: self.origin,
+            absmin: self.origin + self.mins,
+            absmax: self.origin + self.maxs,
+            brush: false,
+            client: Some(self),
+        }
+    }
 }
 
 impl BlastBody {
@@ -88,9 +122,9 @@ pub fn blast_damage(inner: f32, outer: f32, radius: f32, dist: f32, mult: f32) -
 /// What one victim takes: the damage `G_Damage` is handed
 /// ([`blast_damage`]), and the direction, the victim's origin less the
 /// blast raised 24 (rodata 0x326470). `None` past the radius, or shielded
-/// with no tenth. `clear(a, b, mask)` is a trace that meets nothing.
+/// with no tenth.
 pub fn victim_damage(
-    clear: &dyn Fn(Vec3, Vec3, u32) -> bool,
+    clear: &mut Clear,
     v: &Victim,
     at: Vec3,
     inner: f32,
@@ -125,8 +159,11 @@ pub fn victim_damage(
         // A shielded victim takes a tenth (rodata 0x326388) when the
         // capsule trace to its box's centre is cut short and that centre is
         // within a fifth of the radius (0x3262dc).
-        let centre = (v.absmin + v.absmax) * 0.5;
-        if clear(at, centre, TENTH_MASK) || centre.distance(at) >= 0.2 * radius {
+        let centre = match &v.client {
+            Some(b) => b.origin + (b.mins + b.maxs) * 0.5,
+            None => (v.absmin + v.absmax) * 0.5,
+        };
+        if clear(at, centre, Probe::Tenth) || centre.distance(at) >= 0.2 * radius {
             return None;
         }
         0.1
@@ -141,7 +178,7 @@ pub fn victim_damage(
 /// eye and feet and four points 15 either side across the line to the
 /// blast, half the eye's height up and down; none 0, one to three `n / 3`,
 /// four or five 1.
-pub fn client_share(clear: &dyn Fn(Vec3, Vec3, u32) -> bool, b: &BlastBody, at: Vec3) -> f32 {
+pub fn client_share(clear: &mut Clear, b: &BlastBody, at: Vec3) -> f32 {
     let centre = (b.eye + b.origin) * 0.5;
     let half = (b.eye.z - b.origin.z) * 0.5;
     let mut d = at - b.origin;
@@ -155,7 +192,11 @@ pub fn client_share(clear: &dyn Fn(Vec3, Vec3, u32) -> bool, b: &BlastBody, at: 
         centre - side * SIDE + Vec3::Z * half,
         centre - side * SIDE - Vec3::Z * half,
     ];
-    match probes.iter().filter(|&&p| clear(at, p, MASK_BLAST)).count() {
+    match probes
+        .iter()
+        .filter(|&&p| clear(at, p, Probe::Blast))
+        .count()
+    {
         0 => 0.0,
         n @ 1..=3 => n as f32 / 3.0,
         _ => 1.0,
@@ -165,7 +206,7 @@ pub fn client_share(clear: &dyn Fn(Vec3, Vec3, u32) -> bool, b: &BlastBody, at: 
 /// `CanDamage`'s arm for an entity with no client: its link's centre, then
 /// the four corners 15 out on x and y at the centre's height, each traced
 /// to the blast; 1 on the first that passes, else 0.
-pub fn entity_share(clear: &dyn Fn(Vec3, Vec3, u32) -> bool, v: &Victim, at: Vec3) -> f32 {
+pub fn entity_share(clear: &mut Clear, v: &Victim, at: Vec3) -> f32 {
     let c = (v.absmin + v.absmax) * 0.5;
     let probes = [
         c,
@@ -174,7 +215,7 @@ pub fn entity_share(clear: &dyn Fn(Vec3, Vec3, u32) -> bool, v: &Victim, at: Vec
         c + Vec3::new(-SIDE, SIDE, 0.0),
         c + Vec3::new(-SIDE, -SIDE, 0.0),
     ];
-    if probes.iter().any(|&p| clear(p, at, MASK_BLAST)) {
+    if probes.iter().any(|&p| clear(p, at, Probe::Blast)) {
         1.0
     } else {
         0.0
@@ -183,11 +224,11 @@ pub fn entity_share(clear: &dyn Fn(Vec3, Vec3, u32) -> bool, v: &Victim, at: Vec
 
 /// The host's clear-trace for [`victim_damage`]: the world's clip and the
 /// linked brush models, no props.
-fn host_clear(host: &GameHost) -> impl Fn(Vec3, Vec3, u32) -> bool + '_ {
-    move |a, b, mask| {
+fn host_clear(host: &GameHost) -> impl FnMut(Vec3, Vec3, Probe) -> bool + '_ {
+    move |a, b, probe| {
         host.world
             .as_ref()
-            .is_none_or(|w| w.collision.point_trace(a, b, mask, false).fraction >= 1.0)
+            .is_none_or(|w| w.collision.point_trace(a, b, probe.mask(), false).fraction >= 1.0)
     }
 }
 
@@ -261,7 +302,8 @@ pub fn damage_entities(
         if Some(id) == ignore {
             continue;
         }
-        let Some((damage, dir)) = victim_damage(&host_clear(host), &v, at, inner, outer, radius)
+        let Some((damage, dir)) =
+            victim_damage(&mut host_clear(host), &v, at, inner, outer, radius)
         else {
             continue;
         };
@@ -311,10 +353,10 @@ pub fn radius_damage(
 ) {
     let ignore = host.ignore_radius_damage;
     host.blast_noises.push((at.to_array(), None));
-    let none_mult = hitloc_none(host);
+    let none_mult = host.cod2().hitloc_none;
     let mut clients = Vec::new();
     {
-        let clear = host_clear(host);
+        let mut clear = host_clear(host);
         for (slot, state) in host.cod2().clients.iter().enumerate() {
             let Some(b) = state.body else {
                 continue;
@@ -322,15 +364,8 @@ pub fn radius_damage(
             if ignore || !host.client_vitals[slot].takedamage {
                 continue;
             }
-            let v = Victim {
-                origin: b.origin,
-                absmin: b.origin + b.mins,
-                absmax: b.origin + b.maxs,
-                brush: false,
-                client: Some(b),
-            };
             if let Some((damage, dir)) =
-                victim_damage(&clear, &v, at, max_damage, min_damage, radius)
+                victim_damage(&mut clear, &b.victim(), at, max_damage, min_damage, radius)
             {
                 let damage = (none_mult * damage as f32) as i32;
                 if damage > 0 {
@@ -434,25 +469,15 @@ impl super::cod2::Cod2Level {
     }
 }
 
-/// `g_fHitLocDamageMult[0]`, the `none` row of `info/mp_lochit_dmgtable`
-/// (1 when the table is missing).
-fn hitloc_none(host: &GameHost) -> f32 {
-    host.fs
-        .as_deref()
-        .and_then(|fs| fs.load::<RawFile>("info/mp_lochit_dmgtable").ok())
-        .and_then(|b| super::cod2_combat::parse_hitloc_table(&b.text()))
-        .map_or(1.0, |t| t[0])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn open(_: Vec3, _: Vec3, _: u32) -> bool {
+    fn open(_: Vec3, _: Vec3, _: Probe) -> bool {
         true
     }
 
-    fn shut(_: Vec3, _: Vec3, _: u32) -> bool {
+    fn shut(_: Vec3, _: Vec3, _: Probe) -> bool {
         false
     }
 
@@ -464,13 +489,7 @@ mod tests {
             eye: at + Vec3::Z * 60.0,
             ps_origin: at,
         };
-        Victim {
-            origin: at,
-            absmin: at + b.mins,
-            absmax: at + b.maxs,
-            brush: false,
-            client: Some(b),
-        }
+        b.victim()
     }
 
     /// The damage falls from the inner to the outer linearly with the
@@ -479,10 +498,20 @@ mod tests {
     fn the_blast_falls_off_and_stops_at_the_radius() {
         let at = Vec3::ZERO;
         let v = standing(Vec3::new(100.0, 0.0, 0.0));
-        let (dmg, dir) = victim_damage(&open, &v, at, 200.0, 50.0, 200.0).unwrap();
+        let (dmg, dir) = victim_damage(&mut open, &v, at, 200.0, 50.0, 200.0).unwrap();
         assert_eq!(dmg, 125);
         assert_eq!(dir, Vec3::new(100.0, 0.0, 24.0));
-        assert!(victim_damage(&open, &standing(Vec3::X * 200.0), at, 200.0, 50.0, 200.0).is_none());
+        assert!(
+            victim_damage(
+                &mut open,
+                &standing(Vec3::X * 200.0),
+                at,
+                200.0,
+                50.0,
+                200.0
+            )
+            .is_none()
+        );
     }
 
     /// A body nothing reaches takes a tenth only when it stands within a
@@ -491,14 +520,14 @@ mod tests {
     fn a_shielded_body_takes_a_tenth_up_close() {
         let at = Vec3::ZERO;
         let close = standing(Vec3::new(20.0, 0.0, -35.0));
-        let (dmg, _) = victim_damage(&shut, &close, at, 300.0, 100.0, 300.0).unwrap();
+        let (dmg, _) = victim_damage(&mut shut, &close, at, 300.0, 100.0, 300.0).unwrap();
         // 1 - 40.31 / 300 of the way from 100 to 300, a tenth.
         assert_eq!(
             dmg,
             (0.1f32 * (100.0 + (1.0 - 40.31129 / 300.0) * 200.0)).round() as i32
         );
         let far = standing(Vec3::new(150.0, 0.0, -35.0));
-        assert!(victim_damage(&shut, &far, at, 300.0, 100.0, 300.0).is_none());
+        assert!(victim_damage(&mut shut, &far, at, 300.0, 100.0, 300.0).is_none());
     }
 
     /// A brush model is measured from the nearest point of its box.
@@ -511,17 +540,17 @@ mod tests {
             brush: true,
             client: None,
         };
-        let (dmg, _) = victim_damage(&open, &v, Vec3::ZERO, 100.0, 0.0, 100.0).unwrap();
+        let (dmg, _) = victim_damage(&mut open, &v, Vec3::ZERO, 100.0, 0.0, 100.0).unwrap();
         assert_eq!(dmg, 50);
     }
 
     #[test]
     fn the_client_share_counts_its_probes() {
         let b = standing(Vec3::new(100.0, 0.0, 0.0)).client.unwrap();
-        assert_eq!(client_share(&open, &b, Vec3::ZERO), 1.0);
-        assert_eq!(client_share(&shut, &b, Vec3::ZERO), 0.0);
+        assert_eq!(client_share(&mut open, &b, Vec3::ZERO), 1.0);
+        assert_eq!(client_share(&mut shut, &b, Vec3::ZERO), 0.0);
         // Only the middle probe passes: a third.
-        let middle = |_: Vec3, p: Vec3, _: u32| p.y == 0.0;
-        assert_eq!(client_share(&middle, &b, Vec3::ZERO), 1.0 / 3.0);
+        let mut middle = |_: Vec3, p: Vec3, _: Probe| p.y == 0.0;
+        assert_eq!(client_share(&mut middle, &b, Vec3::ZERO), 1.0 / 3.0);
     }
 }

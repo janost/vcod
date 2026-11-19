@@ -2392,30 +2392,15 @@ impl Cod2Level {
         if self.rt.host.ignore_radius_damage {
             return;
         }
-        let radius = radius.max(1.0);
         for v in self.targets(ignore.client) {
-            let origin = self.players[v].as_ref().expect("a target").ps.origin;
-            let dist = super::cod2_blast::stored_length(origin - at);
-            if dist >= radius {
+            let ps = &self.players[v].as_ref().expect("a target").ps;
+            let victim = super::cod2_blast::BlastBody::of(ps).victim();
+            let mut clear = |a: Vec3, b: Vec3, probe| self.blast_clear(v, a, b, probe);
+            let Some((dealt, dir)) =
+                super::cod2_blast::victim_damage(&mut clear, &victim, at, inner, outer, radius)
+            else {
                 continue;
-            }
-            let damage = |mult| super::cod2_blast::blast_damage(inner, outer, radius, dist, mult);
-            let share = self.can_damage(v, at);
-            let dealt = if share > 0.0 {
-                damage(share)
-            } else {
-                let ps = &self.players[v].as_ref().expect("a target").ps;
-                let centre = origin + (ps.mins + ps.maxs) * 0.5;
-                let reached = self.combat.clip.as_ref().is_some_and(|c| {
-                    c.trace(at, centre, Vec3::ZERO, Vec3::ZERO, 0x811).fraction < 1.0
-                });
-                if !reached || centre.distance(at) >= 0.2 * radius {
-                    continue;
-                }
-                damage(0.1)
             };
-            let mut dir = origin - at;
-            dir.z += 24.0;
             self.g_damage(
                 v,
                 attacker,
@@ -2432,6 +2417,7 @@ impl Cod2Level {
         }
         // The entities with `takedamage` the walk meets (`game::cod2_blast`).
         let attacker_ent = self.rt.client_entity(attacker);
+        let radius = radius.max(1.0);
         self.rt.with_host(|h, cx| {
             super::cod2_blast::damage_entities(
                 h,
@@ -2449,44 +2435,34 @@ impl Cod2Level {
         });
     }
 
-    /// `CanDamage` (Mac 0x1c3f18) for a client: five probes from the blast
-    /// to the body's middle and its four corners, 15 either side across
-    /// the line to the blast and half the eye's height up and down; 0 when
-    /// none passes, `n / 3` for one to three, 1 for four or five. Each is
-    /// `G_LocationalTracePassed` (lnxded 0x810a622) under 0x802891 passing
-    /// the victim: the world, the static models and the entities block it.
-    fn can_damage(&mut self, victim: usize, at: Vec3) -> f32 {
-        if self.combat.clip.is_none() {
-            return 1.0;
-        }
-        let ps = &self.players[victim].as_ref().expect("a target").ps;
-        let eye = Self::view_origin(ps);
-        let centre = (eye + ps.origin) * 0.5;
-        let half = (eye.z - ps.origin.z) * 0.5;
-        let mut d = at - ps.origin;
-        d.z = 0.0;
-        let d = d.normalize_or_zero();
-        let side = Vec3::new(-d.y, d.x, 0.0);
-        let probes = [
-            centre,
-            centre + side * 15.0 + Vec3::Z * half,
-            centre + side * 15.0 - Vec3::Z * half,
-            centre - side * 15.0 + Vec3::Z * half,
-            centre - side * 15.0 - Vec3::Z * half,
-        ];
-        let none = HashMap::new();
-        let passed = probes
-            .iter()
-            .filter(|&&p| {
-                self.locational_trace(at, p, Some(victim), MASK_BLAST, &BULLET_PRIORITY, &none)
+    /// The level's clear-test for `victim`'s blast ([`super::cod2_blast::Probe`]):
+    /// a `CanDamage` probe is `G_LocationalTracePassed` (lnxded 0x810a622)
+    /// under 0x802891 passing the victim, so the world, the static models
+    /// and the entities block it; the tenth's capsule trace meets the world
+    /// alone. Every trace passes on a level with no clip.
+    fn blast_clear(
+        &mut self,
+        victim: usize,
+        a: Vec3,
+        b: Vec3,
+        probe: super::cod2_blast::Probe,
+    ) -> bool {
+        use super::cod2_blast::Probe;
+        let Some(clip) = &self.combat.clip else {
+            return true;
+        };
+        match probe {
+            Probe::Tenth => {
+                clip.trace(a, b, Vec3::ZERO, Vec3::ZERO, probe.mask())
                     .fraction
                     >= 1.0
-            })
-            .count();
-        match passed {
-            0 => 0.0,
-            n @ 1..=3 => n as f32 / 3.0,
-            _ => 1.0,
+            }
+            Probe::Blast => {
+                let none = HashMap::new();
+                self.locational_trace(a, b, Some(victim), MASK_BLAST, &BULLET_PRIORITY, &none)
+                    .fraction
+                    >= 1.0
+            }
         }
     }
 

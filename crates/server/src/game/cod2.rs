@@ -558,7 +558,7 @@ impl Cod2Level {
         // The static models' collision builds beside the world and the
         // script, which don't need it.
         let pak: &Pk3Fs = &fs;
-        let (rt, statics, world, rules) = std::thread::scope(|sc| {
+        let (mut rt, statics, world, rules) = std::thread::scope(|sc| {
             // The static models' collision for the bullets (`CM_LoadStaticModels`
             // off the `misc_model` blocks); nothing else clips it.
             let statics = match &parts {
@@ -663,6 +663,7 @@ impl Cod2Level {
             combat.set_rigs(rigs);
         }
         combat.rand = rt.host.cod2().rand.clone();
+        rt.host.cod2_mut().hitloc_none = parts.hitloc_mult[0];
         let anims = parts.anims.clone();
         drop(p);
         laps.lap("combat and anims");

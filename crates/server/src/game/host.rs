@@ -228,6 +228,10 @@ pub struct Cod2HostState {
     /// The weapon files the registrations read, which the next level over
     /// the same paks takes ([`WeaponFiles`]).
     pub weapon_files: WeaponFiles,
+    /// `g_fHitLocDamageMult[0]`, the `none` row of `info/mp_lochit_dmgtable`
+    /// the level loaded (1 without one): the `radiusDamage` builtin's
+    /// multiplier.
+    pub hitloc_none: f32,
 }
 
 /// The weapon files CoD2's registrations (`precacheItem` and kin) read and
@@ -295,6 +299,7 @@ impl Default for Cod2HostState {
             drop_pins: Default::default(),
             tag_drops: Vec::new(),
             weapon_files: WeaponFiles::default(),
+            hitloc_none: 1.0,
         }
     }
 }
