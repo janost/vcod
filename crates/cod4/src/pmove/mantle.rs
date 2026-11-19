@@ -288,6 +288,13 @@ static ANIMS: Mutex<(Vec<&'static MantleAnims>, Option<&'static MantleAnims>)> =
 /// cod4-pmove.md 17): a mod's zone that replaces them wins on its level.
 /// An equal set read before is shared, so each distinct one is kept once.
 pub fn install(zones: &[&Assets]) -> Option<&'static MantleAnims> {
+    let kept = read(zones)?;
+    ANIMS.lock().unwrap_or_else(|p| p.into_inner()).1 = Some(kept);
+    Some(kept)
+}
+
+/// [`install`]'s read: the clips off `zones`, an equal set's kept copy.
+fn read(zones: &[&Assets]) -> Option<&'static MantleAnims> {
     let read = match MantleAnims::from_zones(zones) {
         Ok(a) => a,
         Err(e) => {
@@ -296,16 +303,14 @@ pub fn install(zones: &[&Assets]) -> Option<&'static MantleAnims> {
         }
     };
     let mut g = ANIMS.lock().unwrap_or_else(|p| p.into_inner());
-    let kept = match g.0.iter().find(|a| ***a == read) {
+    Some(match g.0.iter().find(|a| ***a == read) {
         Some(a) => *a,
         None => {
             let a: &'static MantleAnims = Box::leak(Box::new(read));
             g.0.push(a);
             a
         }
-    };
-    g.1 = Some(kept);
-    Some(kept)
+    })
 }
 
 /// The clips [`install`] read last, if any zone held them yet: what
@@ -688,9 +693,9 @@ mod tests {
         assert_eq!(c.abs_delta(1.0), Vec3::new(10.0, 0.0, 8.0));
     }
 
-    /// Each level's zones give their own clips: a mod's set read after the
-    /// stock one replaces it, and the stock set read again is the kept one
-    /// (BUG-147).
+    /// Each level's zones give their own clips, and the stock set read
+    /// again is the kept one (BUG-147). `read`, not `install`: the default
+    /// rules the other tests run take the installed set.
     #[test]
     fn each_install_reads_its_own_zones_clips() {
         let zone = |frames: u16| Assets {
@@ -720,11 +725,10 @@ mod tests {
             ..Default::default()
         };
         let (stock, modded) = (zone(15), zone(30));
-        let a = install(&[&stock]).unwrap();
-        let b = install(&[&modded]).unwrap();
+        let a = read(&[&stock]).unwrap();
+        let b = read(&[&modded]).unwrap();
         assert_eq!((a.length_ms(1), b.length_ms(1)), (500, 1000));
-        assert!(std::ptr::eq(installed().unwrap(), b));
-        assert!(std::ptr::eq(install(&[&stock]).unwrap(), a));
+        assert!(std::ptr::eq(read(&[&stock]).unwrap(), a));
     }
 
     #[test]
