@@ -894,106 +894,95 @@ impl ClientSim {
         }
     }
 
+    /// `ClientSpawn`: its memset is the connect's sim ([`Self::spectator`]),
+    /// with what the spawn carries across it or writes after it named here.
+    /// A field left out is cleared.
     fn respawn(&mut self, mode: PmType, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
-        let (rules, bg) = (self.ps.rules, self.ps.bg);
-        self.ps = pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg);
-        self.ps.rules = rules;
-        self.ps.bg = bg;
-        // The turret rows live in the DObj's anim info, which outlives a
-        // dismount; a spawn's `G_DObjUpdate` builds a fresh one.
-        self.gunner_tree = Default::default();
+        // A fresh sim holds the place until the memset below replaces it.
+        let old = std::mem::replace(self, Self::spectator(origin, yaw_deg, cmd_angles));
+        let rules = old.ps.rules;
+        let mut ps = pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg);
+        ps.rules = rules;
+        ps.bg = old.ps.bg;
         // The spawn's `ClientEndFrame` stores a player's speed ahead of its
         // think (0x42a75); a spectator's think is `SpectatorThink`'s 400.
-        self.ps.speed = match mode {
+        ps.speed = match mode {
             PmType::Spectator => pmove::SPEED_SPECTATOR,
-            _ => self.max_speed as f32,
+            _ => old.max_speed as f32,
         };
-        self.ps.gravity = self.gravity as f32;
+        ps.gravity = old.gravity as f32;
         // `ClientSpawn`'s memset leaves `groundEntityNum` 0, not 0x3ff, and
         // `PM_CheckDuck` runs ahead of the ground trace (1.5 0x28814,
         // 0x28819): the think's first step takes 1.5's prone press, which
         // it drops for a body in the air (0x237d6). 1.1's think has no keys.
-        self.ps.on_ground = rules.v15();
-        self.pm_type = mode;
-        self.delta_angles = spawn_delta_angles(yaw_deg, cmd_angles);
-        self.view_angles = view_angles(cmd_angles, self.delta_angles);
-        // `ClientSpawn`'s memset clears the aim block's state with the rest
-        // of the client.
-        self.aim_state = Default::default();
-        self.spread_frac = 0.0;
-        self.spawn_view = [0.0, yaw_deg, 0.0];
-        self.kick = Default::default();
-        self.gun_kick = Default::default();
-        self.aim = [self.view_angles[0], self.view_angles[1]];
-        self.gun_offset = [0.0; 2];
-        // `ClientSpawn` calls `G_EntUnlink` on the spawning client
-        // (object-model doc, 23.2).
-        self.link_to = None;
-        self.unseated = false;
-        // The memset takes the seat's `vehType` and `vehMotion`, which an
-        // exit or a death in the seat left (coduo-vehicles.md 11.7).
-        self.veh_type = 0;
-        self.veh_motion = 0;
-        // `ClientSpawn`'s memset. Only a playing client's end frame writes
-        // the hint again, so a spectator and the intermission camera keep 0.
-        self.set_cursor_hint(0, 0);
-        self.cursor_hint_string = -1;
-        // A respawned player does not resume the anim it died in.
-        self.anim = Default::default();
-        self.was_airborne = false;
-        self.strafing = None;
-        self.jumped = None;
-        self.torso_cmds.clear();
-        self.jump_time = 0;
-        self.land_anim = None;
-        // `ClientSpawn`'s memset: the damage fields read 0 again after a
-        // respawn (combat doc, 8.4), and so does the dead yaw.
-        self.dead = false;
-        self.pm_dead = false;
-        self.died_box = false;
-        self.dead_eye = false;
-        self.damage = DamageAccum::default();
-        self.feedback = DamageFeedback::default();
-        self.last_hit = None;
-        self.dead_yaw = 0;
-        self.pain_after_ms = 0;
-        self.spawn_count = self.spawn_count.wrapping_add(1);
-        // The memset again: the capture's first trace, after a spawn, reads
-        // `viewlocked_entNum` 0 (turrets doc, 12.7). `ps.mounted` went with
-        // the fresh `ps` above.
-        self.viewlocked = 0;
-        self.viewlocked_ent = 0;
-        self.gunfx = 0;
-        self.mounted_on = None;
-        self.firing = false;
-        self.attacking = false;
-        self.talking = false;
-        // The memset again; nothing after it in `ClientSpawn` rewrites them.
-        self.compass_friend = 0;
-        self.last_friend = 0;
-        self.friend_ping = false;
-        self.last_cmd_angles = cmd_angles;
-        // Retail's respawn frame reads an empty ring at sequence 0
-        // (combat doc, 9.2).
-        self.ring.clear();
-        // The memset again, which keeps only `sess` and writes -1 to the
-        // follow target after it (0x4282c).
-        self.follow = Default::default();
-        self.last_buttons = 0;
-        // Every spawn consumes a flip, a spectator's and the intermission
-        // camera's included: retail's capture reads 16 on a respawn's
-        // spectator frame and 24 on the next one (map-cycle doc, 8.2).
-        self.teleport_bit = !self.teleport_bit;
-        self.respawned = true;
-        self.follow_wire = None;
-        self.residue = None;
-        self.end_frame_wire = None;
-        self.frozen_command_time = None;
-        // `G_SetClientContents`, then the spawn's link.
-        self.contents = if mode == PmType::Normal {
-            CONTENTS_BODY
-        } else {
-            0
+        ps.on_ground = rules.v15();
+        // What the memset clears, and the connect's values say so: the aim
+        // block's state, the anims a respawned player does not resume, the
+        // damage fields (combat doc 8.4) and the dead yaw, `G_EntUnlink`'s
+        // link (object-model doc 23.2), the seat's `vehType` and `vehMotion`
+        // (coduo-vehicles.md 11.7), the cursor hint, which only a playing
+        // client's end frame writes again, `viewlocked_entNum` 0 (turrets
+        // doc 12.7), the compass, the empty ring at sequence 0 (combat doc
+        // 9.2), the follow, to which the spawn writes -1 after (0x4282c),
+        // and the turret rows, whose DObj a spawn's `G_DObjUpdate` rebuilds.
+        *self = ClientSim {
+            ps,
+            pm_type: mode,
+            // `SetClientViewAngle`'s view for the think's aim block.
+            spawn_view: [0.0, yaw_deg, 0.0],
+            spawn_count: old.spawn_count.wrapping_add(1),
+            // Every spawn consumes a flip, a spectator's and the intermission
+            // camera's included: retail's capture reads 16 on a respawn's
+            // spectator frame and 24 on the next one (map-cycle doc, 8.2).
+            teleport_bit: !old.teleport_bit,
+            respawned: true,
+            // `G_SetClientContents`, then the spawn's link below.
+            contents: if mode == PmType::Normal {
+                CONTENTS_BODY
+            } else {
+                0
+            },
+            // Mirrored off the script host every frame or end frame.
+            viewmodel_index: old.viewmodel_index,
+            shellshock: old.shellshock,
+            assembly: old.assembly,
+            head_icon: old.head_icon,
+            head_icon_team: old.head_icon_team,
+            health: old.health,
+            max_health: old.max_health,
+            session: old.session,
+            ping: old.ping,
+            voted: old.voted,
+            max_speed: old.max_speed,
+            gravity: old.gravity,
+            knockback: old.knockback,
+            // vcod's caches, rebuilt off the models and the next end frame.
+            dobj: old.dobj,
+            pose: old.pose,
+            // `pers.cmd`, which the spawn keeps.
+            pers_cmd: old.pers_cmd,
+            // What the last end frame left, read before the next one.
+            compass_candidate: old.compass_candidate,
+            own_view: old.own_view,
+            spectate_flags: old.spectate_flags,
+            hud_cleared: old.hud_cleared,
+            dobj_ahead: old.dobj_ahead,
+            ring_before_pain: old.ring_before_pain,
+            end_frame_entity: old.end_frame_entity,
+            // Kept as they always were; whether the memset takes them is
+            // unmeasured (QUAL-044).
+            view_lerp_start: old.view_lerp_start,
+            movetype: old.movetype,
+            footsteps_movetype: old.footsteps_movetype,
+            stance_window_ms: old.stance_window_ms,
+            gunner_leaves: old.gunner_leaves,
+            gunner_left: old.gunner_left,
+            hook_es: old.hook_es,
+            ci_seat_angles: old.ci_seat_angles,
+            seat: old.seat,
+            seat_angles: old.seat_angles,
+            seat_steer: old.seat_steer,
+            ..Self::spectator(origin, yaw_deg, cmd_angles)
         };
         self.relink();
     }
