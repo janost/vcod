@@ -22,7 +22,7 @@
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 
 /// A clock in ms as retail's `int` holds it. Arithmetic wraps.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct Msec(i32);
 
@@ -52,6 +52,13 @@ impl Msec {
 impl std::fmt::Display for Msec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+/// The raw ms too, so a struct's `{:?}` reads as it did with an `i32`.
+impl std::fmt::Debug for Msec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.0, f)
     }
 }
 
