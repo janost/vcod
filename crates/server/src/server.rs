@@ -6817,6 +6817,7 @@ impl Server {
         if timeout_written {
             self.copy_timeout_configstrings();
         }
+        let mut _p = crate::tick_profile::phase("frame/configstrings");
         if let Some(rt) = self.game.module.script.as_mut() {
             // The script owns the table while it runs and allocates into it
             // from any thread, so the server re-reads it rather than trusting
@@ -6840,6 +6841,7 @@ impl Server {
         // is named before anything points at it, and one allocated after a
         // command goes out after it (gametypes doc 7.6).
         crate::tick_trace::step!("SV_SetConfigstring broadcast");
+        _p = crate::tick_profile::phase("frame/commands");
         let writes = self
             .game
             .module
@@ -7139,6 +7141,7 @@ impl Server {
         moved: Vec<MoveSummary>,
         wall: (Option<f32>, u32),
     ) -> Cod1Snapshots {
+        let _p = crate::tick_profile::phase("messages/begin");
         let live = self.build_world_frame();
         // The game clock: what 1.5b and UO compare `r.broadcastTime` with
         // (cod15-protocol-diff.md 15), which a match timeout stands still.
@@ -7293,6 +7296,7 @@ impl Server {
             Some(c) if c.sim.is_none() => return self.send_unentered(slot, snaps),
             Some(_) => {}
         }
+        let _p = crate::tick_profile::phase("messages/snapshot");
         let svs_ms = self.svs_time_ms();
         let collision_vis = self.game.world.as_ref().map(|w| &w.vis);
         let Cod1Snapshots {
@@ -7334,6 +7338,7 @@ impl Server {
                 Some((index, shift)) => (&self.game.archive.frame(index).unwrap().world, shift),
                 None => (live, 0),
             };
+            let cull = crate::tick_profile::phase("messages/snapshot/cull");
             let mut visible =
                 world.entities_for(client_num, eye, collision_vis, shift, self.game.proto);
             if self.game.proto.et_events != vcod_common::net::events::ET_EVENTS {
@@ -7342,6 +7347,7 @@ impl Server {
                 }
             }
             let roster = (*world.roster).clone();
+            drop(cull);
 
             let mut ps = match follow_frame {
                 Some(f) => f.ps.clone(),
@@ -7407,6 +7413,7 @@ impl Server {
                 })
                 .cloned();
 
+            let _w = crate::tick_profile::phase("messages/snapshot/write");
             let mut w = MsgWriter::new(&self.core.huff);
             write_pending_commands(&mut w, &c.link.netchan, c.link.reliable_ack);
             c.link.reliable_sent = c.link.netchan.reliable_sequence as i32;

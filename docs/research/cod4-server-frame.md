@@ -408,13 +408,20 @@ jobs, each run pinned to cores 0-7 (`taskset`) under a memory cap.
   `frame/touch triggers`, `frame/scripts`, `frame/script ops`,
   `frame/entities`, `frame/trace bodies`, `frame/mantle and hud`,
   `frame/end frames`, `frame/vote and archive`, `frame/flush` with the
-  `game log` write; on CoD2 `frame/drops`, `frame/scripts`,
+  `game log` write; on CoD1 `cmds` (the packets' cmds, thought in the
+  frame) ahead of it and `frame/scripts`, `frame/spawns and ops`,
+  `frame/entities`, `frame/end frames`, `frame/vote`,
+  `frame/configstrings` (the table copy, the cvar mirror, systeminfo and
+  serverinfo) and `frame/commands`; on CoD2 `frame/drops`, `frame/scripts`,
   `frame/test clients`, `frame/mantle and weapons`, `frame/missiles`,
   `frame/corpses`, `frame/spawns`, `frame/script ops`, `frame/end frames`
   with `end frames/animate`, `end frames/look at`, `end frames/spectators
   and turrets` and `end frames/entity states`, `frame/identify`,
   `frame/vote`), `frame out`, `timeouts`, `messages` (`messages/snapshot`,
-  `messages/snapshot world`), `archive`, `heartbeat`. Every game's script
+  `messages/snapshot world`; on CoD1 `messages/begin`, the frame's world,
+  and each entered client's `messages/snapshot` with
+  `messages/snapshot/cull` and `messages/snapshot/write`), `archive`,
+  `heartbeat`. Every game's script
   pass splits into `scripts/threads` (`threads/client events`,
   `threads/notifies`, `threads/triggers`, which runs the woken threads,
   and `threads/vm`) and `scripts/entity pass`; a script trace into
@@ -959,9 +966,13 @@ wait) left out.
 
 `bot_match TICKSTATS=1` (any game) prints each match's tick time (p50,
 p90, p99, max and the slowest tick's phases) and every
-`tick_profile` phase's mean and p99 a tick. `OBSERVERS=N` (CoD1 and
-CoD2) joins N spectator clients at their own non-LAN addresses, for a
-server with humans to build snapshots for. The probe pass splits into
+`tick_profile` phase's mean and p99 a tick. `OBSERVERS=N` joins N
+spectator clients at their own non-LAN addresses, for a server with
+humans to build snapshots for: CoD1's and CoD2's over their clients'
+wire code, CoD4's an in-process 1.7 client (`bot_match`'s `Spectator4`,
+the join `vcod_cod4::net::conn` makes). With `OBSERVERS_PLAY=1` (CoD1,
+CoD4) they answer the team and weapon menus and walk a canned circle,
+so their snapshots are those of a body in the world. The probe pass splits into
 `probes/pre-think`, `probes/drops and walls` and `probes/lob`.
 
 Live, the same phases on a running server:
