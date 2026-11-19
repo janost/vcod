@@ -256,7 +256,7 @@ fn check_spawn_shape(entities: &str, ps: &PlayerState, who: &str, out: &mut Vec<
     // Zero here only because the join enters with `NULL_USERCMD`. Retail sets
     // `delta_angles[0] = -cmd.angles[0]` like every other axis, so a harness
     // that ever enters with a nonzero pitch trips this check, and it is the
-    // check that is wrong then, not the server (`server.rs`,
+    // check that is wrong then, not the server (`server/frame.rs`,
     // `entry_takes_delta_angles_from_the_entering_cmd`).
     for f in ["delta_angles[0]", "delta_angles[2]"] {
         let v = ps.field_i32(p, f);

@@ -853,7 +853,8 @@ Before (`AWARE=none`): the nearest enemy in line of sight within
 full reaction and `error_start` on every slot change, hits ignored; a bot
 between two enemies swapped targets and paid the delay each time.
 
-Now (`crates/server/src/bots.rs`, `server.rs`, `spectate.rs`):
+Now (`crates/server/src/bots.rs`, `server/sim_ops.rs`, `server/bot_world.rs`,
+`spectate.rs`):
 
 - `ClientSim::last_hit`: each `SimOp::Damaged` with another client as
   attacker and damage above 0 records his slot, the frame's `sv_time` and
