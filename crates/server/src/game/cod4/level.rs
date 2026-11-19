@@ -333,7 +333,7 @@ pub struct Cod4Level {
     )>,
     /// The mantles' blockages ([`Self::spawn_mantle_block`]): the entity,
     /// its think's time and its box.
-    mantle_blocks: Vec<(vcod_gsc::EntId, i32, Body4)>,
+    mantle_blocks: crate::game::mantle_block::MantleBlocks<Body4>,
     /// Each gun's own event ring (`EV_FIRE_WEAPON_MG42`).
     pub(super) gun_events: std::collections::HashMap<vcod_gsc::EntId, super::turret::GunEvents>,
 }
@@ -432,7 +432,7 @@ impl Cod4Level {
             box_bounds: Default::default(),
             rules,
             brushes: Vec::new(),
-            mantle_blocks: Vec::new(),
+            mantle_blocks: Default::default(),
             gun_events: Default::default(),
             entity_history: std::collections::VecDeque::new(),
         })
@@ -1079,42 +1079,16 @@ impl Cod4Level {
     /// `mantleDuration + g_mantleBlockTimeBuffer` ms on (the dvar 500, 0 to
     /// 60000). Every other player's pmove clips it (cod4-pmove.md 17.4).
     fn spawn_mantle_block(&mut self, slot: usize, end: Vec3, maxs: Vec3, duration: i32) {
-        let buffer = self
-            .rt
-            .host
-            .cvars
-            .get("g_mantleBlockTimeBuffer")
-            .trim()
-            .parse::<i32>()
-            .unwrap_or(500)
-            .clamp(0, 60000);
-        match self.rt.with_host(|h, cx| h.ents.spawn(cx)) {
-            Ok(id) => {
-                let block = Body4 {
-                    entity: id.0,
-                    origin: end,
-                    mins: pmove::PLAYER_MINS,
-                    maxs,
-                    contents: 0x10000,
-                    owner: Some(slot as u32),
-                };
-                let at = self.level_time + duration + buffer;
-                self.mantle_blocks.push((id, at, block));
-            }
-            Err(e) => log::warn!("cod4: mantle block dropped: {e:?}"),
-        }
-    }
-
-    /// The mantle blocks whose think is due, freed (`G_FreeEntity`).
-    fn run_mantle_blocks(&mut self) {
         let now = self.level_time;
-        let (due, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.mantle_blocks)
-            .into_iter()
-            .partition(|&(_, at, _)| at <= now);
-        self.mantle_blocks = kept;
-        for (id, _, _) in due {
-            self.rt.host.free_entity(id);
-        }
+        self.mantle_blocks
+            .spawn(&mut self.rt, now, duration, |entity| Body4 {
+                entity,
+                origin: end,
+                mins: pmove::PLAYER_MINS,
+                maxs,
+                contents: 0x10000,
+                owner: Some(slot as u32),
+            });
     }
 
     /// After a player's cmd: the loadout follows what its weapon half did,
@@ -1212,7 +1186,7 @@ impl Cod4Level {
                         owner: None,
                     })
             })
-            .chain(self.mantle_blocks.iter().map(|b| b.2))
+            .chain(self.mantle_blocks.boxes())
             .collect()
     }
 
@@ -1262,7 +1236,7 @@ impl Cod4Level {
         c4.trace_bodies = bodies;
         c4.trace_brushes = self.brushes.clone();
         _p = crate::tick_profile::phase("frame/mantle and hud");
-        self.run_mantle_blocks();
+        self.mantle_blocks.run(&mut self.rt, self.level_time);
         // `G_UpdateHudElemsToClients`, ahead of the end frames:
         // both arrays into every client's playerstate; a follower's
         // `ClientEndFrame` copies the followed one's and puts its own

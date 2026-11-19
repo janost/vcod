@@ -446,7 +446,7 @@ pub struct Cod2Level {
     pub archive: crate::game::cod2_archive::Cod2Archive,
     /// Each mantle's block entity, the level time its think frees it
     /// (lnxded 0x80f5c34) and the box other players' moves clip.
-    mantle_blocks: Vec<(vcod_gsc::EntId, i32, vcod_common::movetrace::ClipBox)>,
+    mantle_blocks: crate::game::mantle_block::MantleBlocks<vcod_common::movetrace::ClipBox>,
     /// `addTestClient`'s slots given a `Cod2Player`, each with its bot
     /// port and name, for the engine to give a client.
     test_clients: Vec<(usize, u16, String)>,
@@ -677,7 +677,7 @@ impl Cod2Level {
             parts,
             anims,
             archive: Default::default(),
-            mantle_blocks: Vec::new(),
+            mantle_blocks: Default::default(),
             test_clients: Vec::new(),
             level_time: now_ms,
             frametime_ms: 50,
@@ -938,7 +938,7 @@ impl Cod2Level {
             return;
         }
         self.combat.sync_weapons(&self.rt.host);
-        let blocks: Vec<_> = self.mantle_blocks.iter().map(|b| b.2).collect();
+        let blocks: Vec<_> = self.mantle_blocks.boxes().collect();
         let bodies = self.move_bodies();
         let Some(p) = self.players.get_mut(slot).and_then(Option::as_mut) else {
             return;
@@ -1134,7 +1134,7 @@ impl Cod2Level {
         self.install_test_clients();
         crate::tick_trace::step!("G_RunFrame entities");
         _p = crate::tick_profile::phase("frame/mantle and weapons");
-        self.run_mantle_blocks();
+        self.mantle_blocks.run(&mut self.rt, self.level_time);
         crate::game::builtins::cod2::write_weapon_configstrings(&mut self.rt.host);
         self.combat.sync_weapons(&self.rt.host);
         _p = crate::tick_profile::phase("frame/missiles");
@@ -1303,42 +1303,16 @@ impl Cod2Level {
         duration: i32,
         now: i32,
     ) {
-        let buffer = self
-            .rt
-            .host
-            .cvars
-            .get("g_mantleBlockTimeBuffer")
-            .trim()
-            .parse::<i32>()
-            .unwrap_or(500)
-            .clamp(0, 60000);
-        let id = self.rt.with_host(|h, cx| h.ents.spawn(cx));
-        match id {
-            Ok(id) => {
-                let block = vcod_common::movetrace::ClipBox {
-                    entity: id.0,
+        self.mantle_blocks
+            .spawn(&mut self.rt, now, duration, |entity| {
+                vcod_common::movetrace::ClipBox {
+                    entity,
                     owner: slot as u32,
                     mins: end + mins,
                     maxs: end + maxs,
                     contents: 0x10000,
-                };
-                self.mantle_blocks
-                    .push((id, duration + now + buffer, block));
-            }
-            Err(e) => log::warn!("mantle block dropped: {e:?}"),
-        }
-    }
-
-    /// The mantle blocks whose think is due, freed (`G_FreeEntity`).
-    fn run_mantle_blocks(&mut self) {
-        let now = self.level_time;
-        let (due, kept) = std::mem::take(&mut self.mantle_blocks)
-            .into_iter()
-            .partition(|&(_, at, _)| at <= now);
-        self.mantle_blocks = kept;
-        for (id, _, _) in due {
-            self.rt.host.free_entity(id);
-        }
+                }
+            });
     }
 
     /// A player's `linkTo` and `unlink` onto its playerstate: `pm_type` 1
@@ -2076,7 +2050,7 @@ mod tests {
             blocked.length() < 31.0 && blocked.length() > 25.0,
             "stopped at the block: {blocked}"
         );
-        level.mantle_blocks[0].2.owner = 0;
+        level.mantle_blocks.list[0].2.owner = 0;
         let own = strafe(&mut level);
         assert!((own - free).length() < 1.0, "{own} vs {free}");
     }

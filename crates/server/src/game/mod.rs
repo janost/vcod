@@ -49,6 +49,7 @@ pub mod hitrig;
 pub mod host;
 pub mod item;
 pub mod link;
+pub mod mantle_block;
 pub mod missile;
 pub mod mover;
 pub mod pickup;
