@@ -1,6 +1,6 @@
 //! The map's sky and sun as the renderer picks them at load, and whether the
 //! sky (and so the sun) draws in a frame
-//! (docs/research/cod11-shader-scripts.md section 8, "The sun").
+//! (docs/research/cod11-shader-scripts.md section 8.4, "The sun").
 
 use crate::asset_source::AssetSource;
 use glam::Vec3;

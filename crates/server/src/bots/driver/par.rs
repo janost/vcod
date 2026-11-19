@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 /// The most threads a pass runs on unless `VCOD_BOT_THREADS` says more:
 /// a dozen bots' pass took as long on eight, its slowest bot's plan the
-/// floor (bot-navigation.md section 3, "The pass on threads").
+/// floor (bot-navigation.md section 3.11, "The pass on threads").
 const MAX_THREADS: usize = 4;
 
 thread_local! {

@@ -224,7 +224,7 @@ impl BotWorld for Cod2Server {
     const YIELDS: bool = false;
     const SPREADS: bool = true;
     /// Off: not measured here; `PARTS_MATES` plans round a still
-    /// teammate (bot-navigation.md section 3, "Bodies in the way").
+    /// teammate (bot-navigation.md section 3.8, "Bodies in the way").
     const SHUNS_BODIES: bool = false;
     /// On: two teammates held each other at mp_decoy's (8650, -12570,
     /// -531) for whole matches (bot-objectives.md 11.5).

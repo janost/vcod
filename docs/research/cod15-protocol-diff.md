@@ -54,7 +54,7 @@ The userinfo positions follow from the newest-first info string walk, as for 1.1
 - CD key authorization uses the same `getKeyAuthorize %i %s` and `getIpAuthorize %i %i.%i.%i.%i %s %i` strings (VERIFIED). vcod's client sends `getKeyAuthorize` as on 1.1 (`net::cdkey`); `vcod-server` sends neither.
 - `sv_punkbuster`, `cl_punkbuster` and the `pbsv.so` loader strings are new in 1.5b (VERIFIED).
 
-### PunkBuster
+### 2.1 PunkBuster
 
 - `sv_punkbuster` is read-only once registered. The Linux 1.5b server prints `sv_punkbuster is read only.` for `+set sv_punkbuster 1` and runs without PunkBuster (live, VERIFIED; no `pbsv.so` here). The Windows server loads `pb/pbsv.dll` and prints `PunkBuster Server (v1.076 | A1319 C1.074) Enabled` for the same `+set` (live, VERIFIED).
 - `pb_sv_enable` on a running server answers `PunkBuster Server: This edition of PunkBuster Server cannot be enabled while the game server is running.` (live, rcon, VERIFIED).
@@ -209,7 +209,7 @@ The client's clock (`docs/protocol-1.1.md`, "The client's clock") runs `CL_Adjus
 
 vcod draws the banner (`hud::timeout`), the line break as a second line under the first, its shadow vcod's usual 1 px one. It counts a new snapshot by message number, so the drawn time holds through a timeout. A 1.1 install lacks `CGAME_PAUSED` and the `PATCH_1_5_*` strings (`localized_english_pak5.pk3`) and shows the keys.
 
-### The server's half
+### 12.1 The server's half
 
 The game module (`game.mp.i386.so` 1.5b; `nm` addresses):
 
@@ -248,17 +248,17 @@ vcod:
 
 What a server does differently to host 1.5 clients. `cod_lnxded` 1.5b addresses are virtual; `game.mp.i386.so` 1.5b ones are `nm` addresses. Live comparisons: the 1.5b server on loopback (`COD_VERSION=1.5 tools/run_server.sh`, a basepath of the eleven stock 1.5 paks and the localized ones) against `vcod-server` on the same paks, 2026-10-13.
 
-### One protocol per process
+### 13.1 One protocol per process
 
 Each retail binary checks the connect's `protocol` against its own and nothing else (`SVC_DirectConnect`, 0x8089ebc, INFERRED), so a 1.5b server takes 1.5 clients only and 1.1d 1.1 clients only. vcod does the same: one protocol per process, picked by `--set protocol=<1|6>` or by the install (6 when `main/pak0.pk3` has 1.5's checksum, 1048127331 as the 1.5b server's `sv_referencedPaks` lists it, VERIFIED). Mixing both on one server would need two script sets and two pak lists; no retail server does it.
 
-### Collision arithmetic
+### 13.2 Collision arithmetic
 
 VERIFIED, the `.comment` strings: 1.1d's `cod_lnxded` is `GCC: (GNU) 2.95.2` and 1.5b's `GCC: (GNU) 3.2.3`, unoptimized, storing every float variable 1.1d keeps on the x87 stack. On mp_carentan (the same bsp in both installs) the two put cracks in different places along a patch's facet seams, and a round 1.1d stops goes through on 1.5b. Its terrain point clip is UO's (0x8055763, as `coduo_lnxded` 0x8055595).
 
 vcod's 1.5 server clips patches and terrain in 1.5b's arithmetic (`CollisionWorld::set_arith`; `bsp-ibsp59-format.md`, "Patch collision on 1.5 and UO"). Its brush clip keeps 1.1d's, which leaves a brush hit a bit or two off 1.5b's fraction.
 
-### `getinfo` (`SVC_Info`, 0x8092a74)
+### 13.3 `getinfo` (`SVC_Info`, 0x8092a74)
 
 The key strings, each referenced in turn from 0x8092a74, are VERIFIED. Each value and condition is read off its branch:
 
@@ -283,18 +283,18 @@ The key strings, each referenced in turn from 0x8092a74, are VERIFIED. Each valu
 - 1.5's `FS_idPak` (0x80754ea) accepts `mp_bin` and `pak`, `mp_pak`, `sp_pak` or `localized_<language>_pak` with one hex digit (format strings `%s/mp_bin`, `%s/pak%x`, `%s/mp_pak%x`, `%s/sp_pak%x`, `%s/localized_`, `_pak%x`, VERIFIED).
 - vcod's reply to `getinfo xyz` on the 1.5 paks is byte for byte the 1.5b server's (live, VERIFIED).
 
-### `getstatus` (0x8092538)
+### 13.4 `getstatus` (0x8092538)
 
 The serverinfo string, then `challenge`, `con_disabled` (the `sv_disableClientConsole` integer, only when non-zero), `pswrd` (`1` or `0`, always) and `mod`, then 1.1's `%i %i "%s"` player lines (format at 0x80dfe4b) (INFERRED from the branches; strings VERIFIED). vcod's reply matches 1.5b's byte for byte on the same paks (live, VERIFIED).
 
-### Connect
+### 13.5 Connect
 
 - `SVC_DirectConnect` keeps 1.1's refusal strings (`EXE_BAD_CHALLENGE`, `EXE_ERR_HIGH_PING_ONLY`, `EXE_ERR_LOW_PING_ONLY`, `EXE_SERVERISFULL`, `error\n%s` for the game's verdict; the string set referenced from 0x8089ebc on, VERIFIED). It tests them in 1.1's order and changes only the version it names (INFERRED).
 - It reads `cl_punkbuster` (an `atoi`) and `cl_guid` from the userinfo (0x808a46a, VERIFIED). Both go with the address to 0x80c191c, whose non-null answer is either relayed when it starts `error\n` or drops the connect silently (0x808a52b..0x808a59e, INFERRED). That this is PunkBuster's authorization is INFERRED from the arguments and `sv_punkbuster`.
 - The guid in the log line `Going from CS_FREE to CS_CONNECTED for %s (num %i guid %i)` comes from the challenge entry (0x808a1d0), which only the CD key authorize answer fills (INFERRED). 1.5b logs `guid 0` for a LAN client (live, VERIFIED).
 - vcod accepts the two keys and ignores them.
 
-### Cvars
+### 13.6 Cvars
 
 `tools/capture_cvars.py` against 1.5b, diffed with 1.1d's capture (VERIFIED):
 - `protocol 6`, `shortversion 1.5`, `gamename "Call of Duty"` (1.1 `main`); `fs_game` gains `S`, `g_allowVote` gains `AL`.
@@ -308,7 +308,7 @@ Configstring 1 drops `timescale` and adds `sv_console_lockout`, `sv_disableClien
 
 With `sv_pure 1` both servers send the same `sv_pakNames` and `sv_paks`, `pakb` down to `pak0` (live, VERIFIED). Unlike 1.1, 1.5b's `sv_referencedPakNames` names only the paks the level read a file from, plus any outside `main`, and its systeminfo is bounded by `BIG_INFO_STRING`, not `MAX_INFO_STRING`. vcod builds both the same way (`cod11-server-handshake.md`, "The four cvars" and "Configstring 1, systeminfo").
 
-### Script builtins the stock 1.5 gametypes call
+### 13.7 Script builtins the stock 1.5 gametypes call
 
 The 1.5 scripts (`pak9`, `paka`, `pakb`) call seven player methods and one entity method 1.1 lacks. The player method table is at 0x82ca0, 54 entries (VERIFIED).
 
@@ -340,7 +340,7 @@ The 1.5 scripts (`pak9`, `paka`, `pakb`) call seven player methods and one entit
 
 With those, a protocol 6 server on the 1.5 paks builds 1.5b's whole configstring table for mp_carentan dm, slot for slot, the referenced pak pair included (`crates/server/tests/configstrings_15_ab.rs` against `gamestate-1.5.bin`, VERIFIED; runs when `COD_DIR` is a 1.5 install).
 
-### Chat
+### 13.8 Chat
 
 1.5's `G_Say` (0x42dc9) differs from 1.1's (0x46c14) in four places (decompile, VERIFIED; strings at 0x786bd..0x787d0):
 
@@ -367,7 +367,7 @@ vcod-server keeps the field on protocols 6 and 22 (`GameHost::client_squad`); on
 
 VERIFIED live, 1.5b, `client-probes/probe_squad` on mp_carentan (2026-11-14, `crates/server/tests/fixtures/chat/mp_carentan-squad-1.5.txt`): the script puts four probes in squads at their begin (0 and 1 axis `squad_alpha`, 2 axis `squad_bravo`, 3 allies `squad_alpha`). Client 0's `say_squad` reached clients 0 and 1 as an `h` line with `PATCH_1_5_SQUADALPHA`, client 2's reached client 2 alone with `PATCH_1_5_SQUADBRAVO`, client 3's reached client 3 alone with `GAME_ALLIES` (an allied speaker's squad mate on the other side does not hear it), and client 0's `say_team` reached 0, 1 and 2 as an `i` line. `games_mp.log` held `saysquad;0;<slot>;<name>;<text>` for each squad say. vcod: `squad_ab` replays the says on vcod-server and gets every client's lines byte for byte; the same probes against `vcod-server --gametype-script` read the same.
 
-### PunkBuster on the Linux server
+### 13.9 PunkBuster on the Linux server
 
 The 1.5b Linux server has no `pbsv.so` here and runs without PunkBuster (section 2). Live against it (2026-10-14, VERIFIED):
 
@@ -378,19 +378,19 @@ The 1.5b Linux server has no `pbsv.so` here and runs without PunkBuster (section
 
 `vcod-server` on 1.5 answers each the same way: `Server::set_cvar` refuses `sv_punkbuster`, the console refuses the read-only cvar, and an unknown command prints nothing over rcon.
 
-### Spawn events
+### 13.10 Spawn events
 
 - Retail 1.5b's spawn sends no event. A probe joining dm or tdm, and one respawned by `scr_forcerespawn` after a `kill`, reads `eventSequence` 0 and an empty ring from its first playing snapshot. The death frame reads `EV_DEATH` and `EV_RAISE_WEAPON` (2026-10-14, VERIFIED). `vcod-server` sends the same.
 - The `--probe-moves` run over `client-probes/probe_prone` drains the same events on both (41, then 87 and 110 per jump, 18).
 - The dead playerstate's `weaponstate` is no 1.5 difference. It is 1 when one cmd reached the server behind the `kill` inside its frame and 0 when two or more did, on 1.1d, 1.5b and UO alike, and ours follows the same rule (2026-10-17, VERIFIED, run: `--probe-kill-cmds 1,3`, `kill_cmds_ab.rs`; `cod11-combat.md` 9.2, "The death frame's `weaponstate`").
 
-### Missiles
+### 13.11 Missiles
 
 - 1.5b's `G_RunMissile` sends every trace through `G_MissileTrace` (0x54a18), `trap_LocationalTrace` under `bulletPriorityMap` as 1.1's traces are. It opens with a fall test 1.1 lacks: a resting missile whose ground is not the world falls once nothing is 1.5 below it. Addresses and the live capture are in `cod11-combat.md` 12.6.
 - VERIFIED there, live: the throw leaves from z 36.148 where 1.1's leaves from 37.0 on the same spot.
 - 1.5's `CalcMuzzlePoint` (0x7e91f) starts from the unsnapped origin, adds the walk bob and never truncates. Shots, rockets, throws and the melee swing all take it (`cod11-combat.md` 2.1, "1.5 and United Offensive"), and so does vcod-server's on protocols 6 and 22.
 
-### Not modelled
+### 13.12 Not modelled
 
 - The parts of 1.5's movement `cod15-movement.md` leaves out. The rest runs on a protocol 6 server for every client, bots included, as the 1.5 game module's one pmove does (`MoveRules::V1_5`, through `MoveRules::for_protocol`). The wire carries the jump penalty's 0x2000 and `pm_time`, the stepped `viewHeightTarget` and the `eFlags` stance that follows it. The bots' nav graph builds and walks under the server's rules (`NavJob::start` with `Server::move_rules`).
 - Live, the `--probe-moves` script against `vcod-server` on the 1.5 paks jumps 39.7, 39.5, 16.4, 18.1, 40.8, 16.2, 17.8 and 39.3 units. The 1.5b capture (`mp_carentan-dm-slope-8ms-moves-1.5.txt`) jumps 40.3, 39.3, 16.6, 18.1, 40.6, 16.7, 18.1 and 39.7, and 1.1d about 40 every time. Penalty bit on 400 snapshots against 1.5b's 399 (2026-10-13, VERIFIED).
@@ -403,7 +403,7 @@ The 1.5b Linux server has no `pbsv.so` here and runs without PunkBuster (section
 
 Sources: 1.5b `cod_lnxded` disassembly, Ghidra exports of UO `coduo_lnxded` and of 1.5 and UO `CoDMP.exe` / `CoDUOMP.exe`, and live runs on loopback (2026-10-15): the 1.5b and UO servers on a copy of the stock paks plus `nsf_mp_j5outpost.pk3` (a third-party map, run as `mp_j5outpost` dm), `python3 -m http.server` serving the same pak, and `vcod --net-probe ... --probe-download <scratch dir>`.
 
-### The server
+### 14.1 The server
 
 - The redirect is one `svc_download` op: byte 6, short -1, string `"%s/%s"` of `sv_wwwBaseURL` and the requested name (`.pk3` included), long file size, long flags (UO `SV_WriteDownloadToClient` 0x808c559, decompile, VERIFIED; 1.5b's writer at 0x808b6fc writes the same ops, disassembly, VERIFIED). Flag bit 0 is `sv_wwwDlDisconnected != 0` (VERIFIED, same function). Nothing in either server sets bit 1 (INFERRED: the one write of the flags long).
 - Live, with `sv_wwwBaseURL "http://127.0.0.1:31072"`, both servers log `Redirecting client 'vcod' to http://127.0.0.1:31072/main/nsf_mp_j5outpost.pk3` and send `http://127.0.0.1:31072/main/nsf_mp_j5outpost.pk3`, 953499, flags 0. With `sv_wwwDlDisconnected 1` UO sends flags 1. The 1.5b and UO messages are byte for byte the same (VERIFIED, `crates/common/tests/fixtures/net/www-redirect-1.5.bin`, `www-redirect-uo.bin`, `www-redirect-uo-discon.bin`, each the decoded message: the `u32` reliable acknowledge then the Huffman ops).
@@ -429,7 +429,7 @@ Sources: 1.5b `cod_lnxded` disassembly, Ghidra exports of UO `coduo_lnxded` and 
 - Live on loopback (UO, `mp_j5outpost`, 2026-10-15) the server took a `wwwdl chkfail` after the ack and printed `WARNING: client 'vcod' reports that the redirect download for 'main/nsf_mp_j5outpost.pk3' had wrong checksum.` and `you should check your download redirect configuration.` (VERIFIED). The redirect itself prints through `Com_DPrintf`, so `Redirecting client` is not in a `developer 0` log (VERIFIED, the run's log).
 - The warning's two `%s` are the client's name (client +0x10a44) and its download name (+0x10a64), two `Com_Printf` calls on the strings at 0x80de8c0 and 0x80de920 (1.5b 0x808b671, UO 0x808c478 on 0x80e47e0 and 0x80e4840; disassembly, VERIFIED). 1.5b's redirect writes a 0 to +0x10a64 once the block -1 message is out (0x808b81e), so its warning reads `''` (disassembly and `www-chkfail-15.txt`, VERIFIED). UO's redirect returns without that store (0x808c926) and its warning names the pak (`www-refuse-uo.txt`, VERIFIED).
 
-### The client
+### 14.2 The client
 
 - `CL_ParseDownload` (UO `CoDUOMP.exe` 0x418f90; 1.5 0x417d80 with the redirect in 0x417b10) takes block -1 as the redirect while no www transfer runs. It keeps the requested name and reads URL, size and flags; on a repeat it only eats the three fields (decompile, INFERRED from the branches).
 - Flag 2 opens the URL in a browser (1.5: `ShellExecuteA "open"`) and sends `wwwdl bbl8r`. Otherwise it sets `cl_downloadSize`, sends `wwwdl ack`, refuses a name on its bad-checksum list (`refusing redirect to %s by server (bad checksum)`, `wwwdl fail`), starts the transfer (`Failed to initialize download for '%s'`, `wwwdl fail`), and on flag 1 sends `wwwdl bbl8r` and marks the transfer disconnected (decompile, INFERRED from the branches; the quoted strings are in both executables, VERIFIED).
@@ -440,7 +440,7 @@ Sources: 1.5b `cod_lnxded` disassembly, Ghidra exports of UO `coduo_lnxded` and 
 - The checksum is checked later. `CL_WWWBadChecksum` (UO 0x4136e0, 1.5 0x412570) prints `WARNING: file %s obtained through download redirect has wrong checksum` and `this likely means the server configuration is broken` for a name on the redirected list, and adds it to the bad-checksum list `refusing redirect` reads (decompile, VERIFIED strings).
 - Its one caller is `FS_ComparePaks` (UO 0x440630), in the branch that builds the "missing files" warning, for a referenced pak whose name exists with another checksum; it deletes that file (decompile, INFERRED). `CL_InitDownloads` (UO 0x411c20) takes that branch only with autodownload off or refused by the server. With it on, the same pak is asked for again under `<name>.<checksum %08x>.pk3` (INFERRED from the branches). So a retail client keeps a wrong pak from a redirect and either fails the pure check or fetches it again.
 
-### What vcod does
+### 14.3 What vcod does
 
 - On protocols 6 and 22 the userinfo ends `\cl_wwwDownload\<value>`. The client cvar `cl_wwwDownload` (default 1, archived, userinfo, as `CL_Init` registers it) sets the value; a change once connected goes out in a `userinfo` command. With 0 a 1.5b server streams the pak over UDP and a UO one sends nothing (above).
 - `NetClient::parse_www_redirect` reads block -1. A redirect on protocol 1, one with no download asked for, or one with flag 2 drops with a reason. Otherwise it sends `wwwdl ack` and fetches the URL over plain `http://` (`net::http`: HTTP/1.0 on a thread, Location hops followed, other schemes refused, the status line and headers held to 64 KiB and 30 s, vcod's own bounds) into the UDP path's spool, which validates the zip and renames it. `wwwdl done` or `wwwdl fail` follows. UDP blocks during a www transfer are ignored.
@@ -455,7 +455,7 @@ Sources: 1.5b `cod_lnxded` disassembly, Ghidra exports of UO `coduo_lnxded` and 
 - Rerun 2026-10-20, connected on both (VERIFIED, captures): 1.5b took `chkfail` and streamed the re-request over UDP, 467 block lines, one HTTP GET (`crates/server/tests/fixtures/handshake/www-chkfail-15.txt`). UO redirected again, the probe acked and refused it with `wwwdl fail`, UO redirected the next request again and the probe left, one HTTP GET (`www-refuse-uo.txt` beside it). Retail's 1.5 client reaches the same UDP transfer by a longer road: it keeps the wrong pak, deletes it at the next gamestate's `FS_ComparePaks` and asks again (INFERRED, above).
 - `--probe-download` reopens its search path over the install and the download directory after each pak lands, and sends `cp` from it. Live on a pure UO server (`sv_pure 1`) after the redirect, `cp` passed and the probe stayed in for 20 s (2026-10-15, VERIFIED).
 
-### vcod-server
+### 14.4 vcod-server
 
 - On protocols 6 and 22 `sv_wwwDownload`, `sv_wwwBaseURL` and `sv_wwwDlDisconnected` are read per message. A client whose userinfo `cl_wwwDownload` is non-zero gets the redirect on every message until `wwwdl ack`, then nothing until `done`, `fail` or `chkfail` (`download::ServerDownload::write`, `download::wwwdl`).
 - The message is retail's byte for byte: the three fixtures above come out of `ServerDownload::write` unchanged (gate `the_redirect_is_retails_byte_for_byte`).

@@ -37,7 +37,7 @@
 //! `-legs-client-torso-1.5.txt` and `-torso-uo.txt` are the torso walk's
 //! client half on 1.5b and UO, compared for the anim selection alone: there
 //! `PM_Footsteps` runs ahead of `PM_Weapon` (player-model-anim-system.md,
-//! "the main arm calls `PM_Footsteps`, then `PM_Weapon`").
+//! "The speed it compares").
 //!
 //! `LEGS_REPORT=1` prints every compared frame; `LEGS_IDLE_MS` sweeps the
 //! 1.5 and UO join.

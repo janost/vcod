@@ -4079,7 +4079,7 @@ fn friction_stored(ps: &mut PlayerState, speed: f32, dt: f32, spectator: bool) {
     ps.velocity = x87::scale(ps.velocity, scale);
 }
 
-/// How a build's walk cmd scale rounds its steps (cod15-movement.md 8,
+/// How a build's walk cmd scale rounds its steps (cod15-movement.md 8.2,
 /// "The walk's cmd scale").
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum WishArith {
@@ -4355,7 +4355,7 @@ fn cmd_scale_x87(ps: &PlayerState, input: &PmInput) -> f64 {
 /// floats, the rate floored at `pm_stopspeed` (100) and stored once, capped
 /// at the lack, and each component rounded once. The ground term's
 /// `1 / ps.friction` is 1: only `ClientSpawn` writes the field, 1.0
-/// (cod15-movement.md 8, "The walk's cmd scale").
+/// (cod15-movement.md 8.2, "The walk's cmd scale").
 fn accelerate_stored(ps: &mut PlayerState, wishdir: Vec3, wishspeed: f32, accel: f32, dt: f32) {
     let current = x87::dot(ps.velocity, wishdir) as f32;
     let add = wishspeed - current;
@@ -5595,7 +5595,7 @@ mod tests {
 
     /// 1.5b's walk scale (0x1f08b) stores the length, the base scale and
     /// each factor, where 1.1d rounds the whole product once: a diagonal
-    /// run at 190 wishes a float step more (cod15-movement.md 8, "The
+    /// run at 190 wishes a float step more (cod15-movement.md 8.2, "The
     /// walk's cmd scale").
     #[test]
     fn the_1_5_walk_scale_rounds_each_step() {
@@ -5617,7 +5617,7 @@ mod tests {
     /// The Windows cgames' walk scale (1.5 0x30007e40) stores the run
     /// scale's product before the stance's, where 1.1d rounds once: a
     /// crouched diagonal run wishes a float step less on every protocol's
-    /// client (cod15-movement.md 8, "The walk's cmd scale").
+    /// client (cod15-movement.md 8.2, "The walk's cmd scale").
     /// The Windows cgames' `PM_Accelerate` (1.1 0x30007560) caps the rate
     /// at the lack stored as a float, where 1.1d's inline one keeps it.
     #[test]

@@ -1,7 +1,7 @@
 //! A CoD4 1.7 client message: its ops (client commands, a move with its
 //! usercmds) and their writer, the mirror image the probe builds its
 //! packets with and the capture gate re-encodes against
-//! (docs/research/cod4-netfields.md, "The client's answer").
+//! (docs/research/cod4-netfields.md 5).
 //!
 //! The usercmd's fields, widths and keys follow `cod4_lnxded` 1.7's reader
 //! (0x813928e) and the choice of branch `iw3mp.exe`'s writer (0x505c60);

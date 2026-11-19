@@ -33,7 +33,7 @@ same code a player moves with. Edges are directed: a drop is an edge with no
 way back, up to a fall of 250 units from the highest the body rose (under
 `bg_fallDamageMinHeight`, 256, section "Other rules").
 
-### Spacing
+### 2.1 Spacing
 
 The lattice pitch is chosen per map: the spawn points' bounding box cut into
 about 20 000 cells, rounded up to a multiple of 16 and clamped to 32..48. The
@@ -50,7 +50,7 @@ and the capsule's slide round a frame's edge covers most of the rest. At 48 and
 and 169 of 185 spawns in one component, against 185 at 32; VERIFIED,
 measured).
 
-### The flood
+### 2.2 The flood
 
 - Breadth-first from every spawn point, dropped to the floor by idle cmds and
   walked onto its own column's centre.
@@ -261,7 +261,7 @@ patch grid moved `mp_brecourt` back to 159.
   run still left past the top. Without either, a climb to a node more than a
   column past the face ran out at the lip.
 
-### Ladders
+### 2.3 Ladders
 
 The flood's neighbour walks meet few ladders square on: a climb ends a storey
 up and up to 70 units past the face, out of the column the walk aimed at. A
@@ -374,7 +374,7 @@ pass after the flood (`NavGraph::link_ladders`) handles them on their own.
   the two whose foot did not fit (x 6475 and x 3600, y -131) and one at
   x 4229 that a later collision change had already fixed.
 
-### Jumps
+### 2.4 Jumps
 
 `PM_CheckJump` lifts the feet 39 units (vz `sqrt(2 * 39 * 800)` = 249.8,
 `vcod_common::pmove::JUMP_HEIGHT`; docs/research/cod11-mantle.md, "Jumps"),
@@ -574,7 +574,7 @@ that proved it jumped (`nav::PinJump`, `nav::leap_cue`, `nav::jump_key`):
   first try, picks the documents up at tick 483 (983 before) and delivers
   them 272 ticks later.
 
-### Build times
+### 2.5 Build times
 
 VERIFIED (measured) with `cargo run --release -p vcod-server --example
 nav_build`. "Spawns in one component": spawn points in the strongly
@@ -830,7 +830,7 @@ Spawn gaps, explained:
   `Server::test_ground_under` traces down outside the wall too; the graph
   is right to leave it out. The other maps' gaps were not investigated.
 
-### Other rules: 1.5 and United Offensive
+### 2.6 Other rules: 1.5 and United Offensive
 
 Until 2026-10-14 every walk ran a body built by `PlayerState::spawn`,
 whose `rules` is 1.1's, so a 1.5 or UO server's bots, which move by the
@@ -1981,7 +1981,7 @@ In S&D the objective names the point and can hold the bot still
 (`bot-objectives.md`); a bot standing at its objective or linked by the
 script is never counted as stuck.
 
-### The lip walk
+### 3.1 The lip walk
 
 The 2026-10-20 round compared the bot with the walk that proved its edge,
 tick by tick, at `mp_depot`'s roof by the ladder at x -2750, on master
@@ -2043,7 +2043,7 @@ settings, release; ours only):
   bot whenever it closes under `PINNED`. Since aligned
   ("The jump cue and the re-proof" below).
 
-### The crest run and the stringer's jump
+### 3.2 The crest run and the stringer's jump
 
 The 2026-10-20 round took the two `mp_ship` edge follow-ups of 10-18d
 (seed 4231's dome crest, seed 2553's crate-top jumps). Neither seed
@@ -2111,7 +2111,7 @@ against 0 / 3 / 0 (two unstick spells off (276, 3388, -390)).
   where the body would coast off (`coasts_off`), the crow's nest deaths
   stayed.
 
-### The jump cue and the re-proof
+### 3.3 The jump cue and the re-proof
 
 The 2026-10-20 round took the lip walk's open divergence (above): the
 bot's jump on a jump edge and the walk's were different rules, and the
@@ -2242,7 +2242,7 @@ merge, the same detector; ship seeds in three blocks of 768):
   the pit's exits, a bot bobbing up the slope at (-1280, 2100) to
   (-1280, 2148, 227), a plain edge).
 
-### String-pulling
+### 3.4 String-pulling
 
 `Follower::pull` (`nav.rs`) takes the waypoint one node further along
 the plan a tick, so a bot crossing open floor heads straight for a node
@@ -2294,7 +2294,7 @@ without fire, seeds 1 to 31 odd: 0 / 0, and 0 with either half alone.
 `nav_census` passes at 1.1 and at UO (both halves are the follower's;
 the graph is untouched).
 
-### Parked vehicles
+### 3.5 Parked vehicles
 
 The graph is built round the UO vehicles where they stand at the build
 (section 2, the copy keeps their collmap instances), and rebuilt only
@@ -2387,7 +2387,7 @@ which the driver's route owns, not the walk's follower. Deaths with fire
 off over the 32 dm seeds went from 53 to 61, the hemmed-in kills among
 them. The graph is untouched: no build or digest moves.
 
-### The 2026-10-21 recheck
+### 3.6 The 2026-10-21 recheck
 
 The 1.1 tables above are tied to the commits they measured. This round
 ran them again on master 028799bf (past botrng, shipedges, jumpcue and
@@ -2446,7 +2446,7 @@ the UO pins). VERIFIED (measured, release `ship_stalls`, `dm`, 6 bots,
   -18304, 94), about 50 down. Traced and fixed in "The recheck's
   leftovers" below, which the last column measures.
 
-### The recheck's leftovers
+### 3.7 The recheck's leftovers
 
 Each leftover above traced per tick (`ship_stalls` `TRACE=`, with a
 temporary per-tick log of the bot's view and cmd), on the recheck's last
@@ -2589,7 +2589,7 @@ avoided at the rim cleared seed 307, but seed 661's bot replanned for
 the next drop at (2560, -127, 385) and fell off the hatch's lip there to
 its death; dropped too.
 
-### Bodies in the way
+### 3.8 Bodies in the way
 
 Retail has no bots; this section is measured on vcod-server only.
 
@@ -2691,7 +2691,7 @@ Ladder meetings keep their own rules (`ladder_yield`, `head_on_yield`,
 ground only, and the mast ladder's head meetings on `mp_ship` are
 unchanged.
 
-### The ship's leftovers
+### 3.9 The ship's leftovers
 
 Retail has no bots; this section is measured on vcod-server only. Each
 leftover traced per tick (`ship_stalls` `TRACE=`, `bot_match`
@@ -2842,7 +2842,7 @@ are a block where ae407a223 drew few long stalls, not a regression of
 one change: over seeds 1-72 the stalls go from 3 499 to 924 and kills
 from 11 281 to 11 161 (-1.1%).
 
-### A goal far off the graph, the ladders again, 2026-11-14
+### 3.10 A goal far off the graph, the ladders again, 2026-11-14
 
 Retail has no bots; this section is measured on vcod-server only. Traced
 per tick (a temporary per-tick log of the follower, the cmd and the
@@ -2908,7 +2908,7 @@ Inside the per-seed spread on `mp_ship`; the change closes the UO gate.
 c6d7e1bd9's 1 528 over seeds 1-72 against the 924 above is the base's
 own: the CoD1 script draws moved every spawn pick.
 
-### The pass on threads
+### 3.11 The pass on threads
 
 The bots' pass works its costly per-bot parts out on worker threads
 (docs/dev/server-tick.md, "The bots' threads") and moves every bot as it
@@ -2994,7 +2994,7 @@ machine whose other jobs ran at idle priority, 2026-11-14).
   serial). VERIFIED
   (measured, the runs above).
 
-### The leftovers, 2026-11-17
+### 3.12 The leftovers, 2026-11-17
 
 Retail has no bots; everything here is measured on vcod-server. The
 detector is `ship_stalls` (`dm`, 6 bots, 4000 ticks, shoot off, release,
@@ -3084,7 +3084,7 @@ odd 0 / 3 / 0, 384 given up (all three falls off the pit's rim at
   `a_bot_backing_onto_a_climber_climbs_back_onto_the_crows_nest`, which
   fails with the hold off). VERIFIED (measured).
 
-### Open stalls, 2026-11-17
+### 3.13 Open stalls, 2026-11-17
 
 Stalls found by the behaviour pass (fix/bots-behaviour-leftovers) and left
 for a nav pass:

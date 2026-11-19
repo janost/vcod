@@ -611,7 +611,7 @@ fn replay(fs: &Rc<vcod_common::pk3::Pk3Fs>, name: &str, report: bool) -> Found {
     // next, so that snapshot's `commandTime` is its own time), takes that
     // snapshot's playerstate, then runs its own cmds: the target plays two
     // seconds before the shooter spawns, and its legs clip started then
-    // (cod2-combat.md 9.5, "The struck body"; 9.7).
+    // (cod2-combat.md 9.5; 9.7).
     let sides = [&target.side, &shooter.side];
     let first = |side: &Side| {
         side.snaps

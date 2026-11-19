@@ -1151,7 +1151,7 @@ const LEVEL_SPAWN_15: [f32; 3] = [1080.0, 3488.0, -23.875];
 const LEVEL_SPAWN_UO: [f32; 3] = [1800.0, 2696.0, -23.875];
 
 /// mp_carentan on 1.5b, the target lying still with the body his drop
-/// left (cod15-movement.md 4, "The airborne prone body"): the first frag
+/// left (cod15-movement.md 4.1, "The airborne prone body"): the first frag
 /// strikes his back and comes to rest on it, his number its ground, each
 /// on retail's bits, not snapped 1.5 up onto his bones
 /// as 1.1's would be (12.2); moved off, he leaves it to 1.5's fall test,

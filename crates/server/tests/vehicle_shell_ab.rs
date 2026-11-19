@@ -230,7 +230,7 @@ fn a_shell_strikes_a_vehicle_as_on_uo() {
 
 /// One vehicle's notifies, retail's against ours. The splash's point is the
 /// blast 4 off the struck face, which ours puts up to a unit off retail's
-/// (docs/research/coduo-vehicles.md 13, "The firing vehicle's own splash").
+/// (docs/research/coduo-vehicles.md 13.3, "The firing vehicle's own splash").
 fn compare(rn: &[Notify], on: &[Notify], tag: &str) {
     assert_eq!(on.len(), rn.len(), "{tag}: retail {rn:?}, ours {on:?}");
     for (o, r) in on.iter().zip(rn) {

@@ -467,8 +467,7 @@ pub struct ChannelClock {
     /// 1.5's and UO's sync groups (a gunner's turret anims) a blend took
     /// to weight 0, at the node time their last weighted step left: the
     /// group's rows keep their weights, so its record lives on and a later
-    /// set plays on from that time (cod11-turrets.md 13.10, "The fire
-    /// group's time").
+    /// set plays on from that time (cod11-turrets.md 13.10).
     held: [Option<Play>; HELD],
     /// `lf+0x2c` and `lf+0x1c`: the snapshot time and `pos.trBase` the rate
     /// was last measured from; 0 is unset, as the zeroed lerp frame reads.

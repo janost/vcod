@@ -1127,7 +1127,7 @@ mod tests {
 }
 
 /// What the client plays for the retail UO captures' events
-/// (docs/research/coduo-diff.md 19, "Captures").
+/// (docs/research/coduo-diff.md 19.6, "Captures").
 #[cfg(test)]
 mod uo_capture_gates {
     use super::*;

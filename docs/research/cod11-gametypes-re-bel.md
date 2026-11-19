@@ -247,7 +247,7 @@ one snapshot, as retail's frame loop catches up (cod11-map-cycle.md 4.7).
 VERIFIED, the `re` attacker capture: the three restarts' first snapshots
 came 450, 1350 and 850 ms after their level starts (13850, 91450, 106600),
 so 100, 1000 and 500 ms owed; no view moved with them. The UO `bas` runs
-are where it shows (coduo-diff.md 22, "Gaps").
+are where it shows (coduo-diff.md 22.5, "Gaps").
 
 The script, after the match-start restart. Round 1 puts the attacker on
 the objective's spot (`setOrigin(trigger.origin)`,

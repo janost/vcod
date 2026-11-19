@@ -10,7 +10,7 @@
 //! The fixtures are retail UO 1.51b's: the probe's log
 //! (`fixtures/vehicles/*-blast-*-uo.txt`, recipe in each header) and the
 //! shooter's snapshots (`*-uo-blasttank.bin` and kin, the explodes).
-//! docs/research/coduo-vehicles.md 13, "A blast on a hull".
+//! docs/research/coduo-vehicles.md 13.3, "A blast on a hull".
 //!
 //! `BLAST_REPORT=1` prints both sides. Needs `COD_DIR` at a UO install;
 //! without one it returns early.

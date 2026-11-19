@@ -85,7 +85,7 @@ fn ours(map: &str, vehicletype: &str, cvars: &[(&str, &str)]) -> Option<Vec<Stri
             // `setPlayerAngles` left, the rest along the held view the cmd
             // rebases back to, and every sixth cmd fires on the press's
             // phase: retail's rounds left along the held view
-            // (coduo-vehicles.md 13, "The shooter's phase").
+            // (coduo-vehicles.md 13.9, "The shooter's phase").
             if settled && !pressed {
                 if let Some(c) = cmds.first_mut() {
                     c.buttons = 0;

@@ -805,7 +805,7 @@ impl Shell {
         s.register("vc_sunShafts", "0", ARCHIVE);
         // CoDMP.exe 0x4b386b: default "1", CVAR_CHEAT. 0 drops the flare
         // list, the sun's flare and washes with it (0x4d9770,
-        // docs/research/cod11-shader-scripts.md section 8, "r_flares").
+        // docs/research/cod11-shader-scripts.md section 8.6, "r_flares").
         s.register("r_flares", "1", CHEAT);
         // iw3mp.exe 0x49943a (`FX_RegisterDvars`): CoD4's "Toggles drawing
         // of effects after processing", cheat-protected; 0 still runs the

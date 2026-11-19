@@ -91,7 +91,7 @@ fn place_of(fixture: &str) -> i64 {
 /// origin and angles of the spawn point retail's script picked, `PROBE
 /// spawn <time> 0 (x, y, z) (pitch, yaw, roll)`. The spawn's think there
 /// starts the legs clip the tank driver still idles on in his seat
-/// (coduo-vehicles.md 13, "The tank driver's idle").
+/// (coduo-vehicles.md 13.7, "The tank driver's idle").
 fn logged_spawn(fixture: &str) -> ([f32; 3], [f32; 3]) {
     let l = fixture
         .lines()
@@ -800,7 +800,7 @@ fn bones(log: &[String]) -> BTreeMap<(i32, String), [f32; 3]> {
 /// the gunner's seat blend left at full weight, not the one the aim group
 /// descends to by the view's pitch. Every bone of the glide within 0.02 of
 /// retail's: the frame after the change each mark's build eases the neck
-/// one more step (coduo-vehicles.md 13, "The glide back").
+/// one more step (coduo-vehicles.md 13.7, "The glide back").
 #[test]
 fn the_tank_rider_glides_back_into_the_drivers_seat_as_on_retail() {
     let fixture = include_str!("fixtures/vehicles/mp_cassino-tank-glide-uo.txt");
@@ -924,7 +924,7 @@ fn compare_glide(fixture: &str, ours: &[String]) {
 /// blends over the stance window, the frame of a change poses the controls
 /// off the entity his last cmd left (whether and where he rides, his
 /// weapon) and the exit's fall runs retail's cmd split (coduo-vehicles.md
-/// 13, "The glides on the jeep", "The weapon-swap frame").
+/// 13.7, "The glides on the jeep", "The weapon-swap frame").
 #[test]
 fn the_jeep_rider_glides_into_each_seat_and_falls_out_as_on_retail() {
     let fixture = include_str!("fixtures/vehicles/mp_peaks-jeep-glide-uo.txt");
@@ -936,7 +936,7 @@ fn the_jeep_rider_glides_into_each_seat_and_falls_out_as_on_retail() {
 
 /// The Panzer IV's driver idling in his seat on the clip his spawn
 /// started, then out over the hull: the body's fall frame for frame on
-/// retail's cmd split, every bone of it (coduo-vehicles.md 13, "The tank
+/// retail's cmd split, every bone of it (coduo-vehicles.md 13.7, "The tank
 /// driver's idle", "The weapon-swap frame").
 #[test]
 fn the_tank_driver_idles_and_falls_off_the_hull_as_on_retail() {

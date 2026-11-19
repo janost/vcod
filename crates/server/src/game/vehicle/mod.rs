@@ -32,7 +32,8 @@ const NONE: i32 = 1023;
 pub const THINK_MS: i32 = 50;
 
 /// What the vehicle entity carries on the wire beyond its pose
-/// (docs/research/coduo-vehicles.md 12, "The entity").
+/// (docs/research/coduo-vehicles.md 9, as the cgame reads it; 10.4 and
+/// 11.1).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VehicleWire {
     /// Turret pitch and yaw off the hull, the gunner's pitch.

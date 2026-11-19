@@ -100,7 +100,7 @@ pub struct Seat {
     pub overheated: bool,
     /// The offset `VEH_LinkPlayer` linked the player at, in the seat tag's
     /// axes: `BG_GetVehiclePosOffset` of the slot it asked for, which a use
-    /// asks as 0 (coduo-vehicles.md 13, "The tank driver's link offset").
+    /// asks as 0 (coduo-vehicles.md 13.7, "The tank driver's link offset").
     pub link_offset: [f32; 3],
 }
 
@@ -1157,7 +1157,7 @@ impl ClientSim {
     /// so the spawn frame's `viewangles` read 0. 1.5's and UO's is the
     /// client's last cmd (`trap_GetUsercmd`, 1.5b 0x3cce6, UO 0x45162), keys
     /// and stance included, at the spawn's view: a client holding prone lies
-    /// down along the spawn's yaw (cod15-movement.md 4, "The spawn's
+    /// down along the spawn's yaw (cod15-movement.md 4.2, "The spawn's
     /// lie-down").
     pub fn spawn_cmd(&self, last: &UserCmd, now_ms: i32) -> UserCmd {
         if self.ps.rules.v15() {
@@ -1444,7 +1444,7 @@ impl ClientSim {
 
     /// `G_SetFixedLink`'s write of a seated UO rider's `ps.origin` and
     /// `r.currentOrigin` in `G_RunClient`, which relinks there unsnapped
-    /// (coduo-vehicles.md 13, "The tank driver's link offset").
+    /// (coduo-vehicles.md 13.7, "The tank driver's link offset").
     pub fn seat_linked_at(&mut self, origin: Vec3) {
         self.ps.origin = origin;
         self.linked_unsnapped = true;
@@ -2309,7 +2309,7 @@ impl ClientSim {
     /// reads off the entity: whether and where he rides, and his weapon.
     /// `ClientThink_real` runs it after each cmd's move (game.mp.uo
     /// 0x40c91), `SetClientOrigin` (0x44210) and `ClientEndFrame` too
-    /// (coduo-vehicles.md 13, "The weapon-swap frame").
+    /// (coduo-vehicles.md 13.7, "The weapon-swap frame").
     pub fn write_entity(&mut self) {
         self.hook_es = crate::game::combat::HookEs {
             seat: self.seat.map(|s| (s.kind, s.pos)),

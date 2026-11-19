@@ -355,7 +355,7 @@ mod tests {
     use super::*;
 
     /// mp_kharkov's Panzer IV under `probe_vehicle_shell`, read under gdb
-    /// on retail UO 1.51b (coduo-vehicles.md 13, "The shell's bits"): the
+    /// on retail UO 1.51b (coduo-vehicles.md 13.1, "The shell's bits"): the
     /// flash tag's forward and origin, the driver's aim point, the bend's
     /// angles, the bent forward, `Weapon_Artillery_Fire`'s spread point 16
     /// out for each of the three shells' `gunrandom` pairs, and the

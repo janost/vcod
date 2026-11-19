@@ -10,7 +10,7 @@ Sources:
 
 vcod: `vcod_cod2::d3dbsp` parses the lumps, `vcod_cod2::collision::build` fills a `ClipMap` from the collision lumps, and the trace kernels live in `vcod_common::clipmap` (re-exported by `vcod_cod2::collision`); their module comments carry the addresses below.
 
-## Header
+## 1. Header
 
 ```
 char[4] magic        // "IBSP"
@@ -20,7 +20,7 @@ u32     version      // 4
 
 VERIFIED, `Com_LoadBsp` (`cod2_lnxded` 0x08051e88, mac 0x11154e): the loader refuses a file shorter than 0x140 bytes (the 320-byte header), magic other than `IBSP` (0x50534249) or version other than 4 (`EXE_ERR_WRONG_MAP_VERSION_NUM`), and walks 0x27 = 39 directory entries. The entry order is `(length, offset)`, as in IBSP 59. VERIFIED, the same function: it stores `Com_BlockChecksum` over the whole file, and `CM_LoadMap` (0x080521a2) hands that word back to its caller as the map's checksum. VERIFIED, the renderer (`R_LoadWorldInternal`, mac 0xe4fa0) errors `LoadMap: lump extends past end of file` and `LoadMap: funny lump offset` (offset under 4) on every lump it reads, and `LoadMap: funny lump size` when a length is not a multiple of the record. The collision loaders raise `<Loader>: funny lump size` the same way.
 
-## Lump directory
+## 2. Lump directory
 
 `Reader` names who loads the lump in 1.3 MP: `cm` is the collision model (the server's `CM_LoadMapFromBsp`, `cod2_lnxded` 0x08054d70, mac 0x78638, which also runs on the client), `r` the client renderer (`R_LoadWorldInternal` and the `R_Load*` it calls). `CoD1` gives the IBSP 59 lump with the same role.
 
@@ -66,15 +66,15 @@ VERIFIED, census: every lump length divides by the record size above on all 15 m
 
 What IBSP 59 had and IBSP 4 drops: the terrain partitions with patch records (CoD1 lump 24), the leaf light indices (19), the lights (30) and the light visibility cache (32). VERIFIED, no CoD2 loader reads a lump of those shapes. Patches and terrain both reach the collision model as triangles (lumps 29-34 below).
 
-## Load order
+## 3. Load order
 
 VERIFIED, `CM_LoadMapFromBsp` 0x08054d70: materials (0), planes (4), then `CMod_LoadBrushRelated` (0x08054c2a), which loads brushes and sides (6, 5), leaf brushes (27), collision AABB trees (34), leafs (26) and models (35) and then builds each leaf's brush tree; then nodes (25), leaf surfaces (28), collision vertices, edges, triangles, borders and partitions (29-33), visibility (36) and entities (37). VERIFIED, `CM_LoadMap` 0x080521a2 calls 0x08052182, which calls `CM_LoadMapFromBsp(name, 1)` and then `CM_LoadStaticModels`. VERIFIED, the string at 0x08054d70's tail: with the second argument 0 a non-empty lump 36 is an error ("In single player, do not compile the bsp with visibility"). INFERRED from that string: the argument is the multiplayer flag, and the server always passes 1.
 
 VERIFIED, `R_LoadWorldInternal` mac 0xe4fa0, by its "Loading %s..." lines: materials, sun settings (from the entity lump), lightmaps, lightgrid coefficients (3), lightgrid hash (2), surfaces (7, 8, 9), cull groups (10), cull group indices (11), portal vertices (17), occluders (18-20), occluder indices (21), AABB trees (22), cells (23), portals (24), nodes and leafs (25, 26), submodels (35), entities (37). The renderer reads planes through `CM_GetPlaneNum`, so the collision model is loaded first.
 
-## Collision lumps
+## 4. Collision lumps
 
-### Lump 0, materials (72 bytes)
+### 4.1 Lump 0, materials (72 bytes)
 
 ```
 char[64] name
@@ -84,11 +84,11 @@ u32      content_flags     // +0x44
 
 Same as IBSP 59. VERIFIED, `CMod_LoadMaterials` 0x080527e4 copies the records whole and byte-swaps +0x40 and +0x44 on a big-endian host; `CM_TraceThroughAabbTree` (mac 0x67ca2) copies +0x40 and +0x44 into the trace and tests +0x44 against the trace's mask. VERIFIED, "Map with no materials" errors on an empty lump. VERIFIED, census: the brush content words are not CoD 1's; the most common over the 15 maps are 0x8000001 (85925 brushes), 0x28031640, 0x2080, 0x1, 0x28030200 and 0x28001002, and the collision AABB tree leaves carry 0x1, 0x2080, 0x10, 0x2082, 0x20 and 0x2.
 
-### Lump 4, planes (16 bytes)
+### 4.2 Lump 4, planes (16 bytes)
 
 `f32 normal[3]; f32 dist`, as IBSP 59. VERIFIED, `CMod_LoadPlanes` 0x08053d82: "Map with no planes" on an empty lump; the runtime plane is 20 bytes, the record plus a type byte (0, 1 or 2 when that normal component is exactly 1.0, else 3) and a sign-bits byte (bit k set when component k is negative). VERIFIED, census: every normal has unit length to 1e-3.
 
-### Lump 6, brushes (4 bytes), lump 5, brush sides (8 bytes)
+### 4.3 Lump 6, brushes (4 bytes), lump 5, brush sides (8 bytes)
 
 ```
 brush: i16 num_sides; i16 material
@@ -107,11 +107,11 @@ Same layout as IBSP 59: no first-side field, sides stored brush after brush, the
 
 VERIFIED, census: `sum(num_sides)` equals the side count on all 15 maps, every axial pair has min <= max, and every plane and material index is in range.
 
-### Lump 25, nodes (36 bytes)
+### 4.4 Lump 25, nodes (36 bytes)
 
 `i32 plane; i32 children[2]; i32 mins[3], maxs[3]`, as IBSP 59; a negative child `c` is leaf `-(c + 1)`. VERIFIED, `CMod_LoadNodes` 0x08053558 keeps the plane pointer and each child as an `i16` ("CMod_LoadNodes: children exceeded"); "Map has no nodes" on an empty lump. VERIFIED, `R_LoadNodesAndLeafs` mac 0xe3728 reads the same three words. VERIFIED, both loaders: the twelve bounds words are read by neither. VERIFIED, census: every plane and child in range, every node's mins <= maxs.
 
-### Lump 26, leafs (36 bytes)
+### 4.5 Lump 26, leafs (36 bytes)
 
 ```
 i32 cluster                // -1 in solid
@@ -135,15 +135,15 @@ VERIFIED, census:
 - Every reached leaf's brushes lie in model 0's brush range, and its AABB roots in the part of lump 34 before the first submodel's.
 - Every node in lump 34 that a leaf lists is a root (no node lists it as a child).
 
-### Lump 27, leaf brushes (4 bytes)
+### 4.6 Lump 27, leaf brushes (4 bytes)
 
 `i32` brush indices. VERIFIED, `CMod_LoadLeafBrushes` 0x08053f38 stores each as a `u16` ("brushIndex exceeded") with one spare slot at the end, which the box brush takes (0x08054f0c).
 
-### Lump 28, leaf surfaces (4 bytes)
+### 4.7 Lump 28, leaf surfaces (4 bytes)
 
 `i32`, copied as is by `CMod_LoadLeafSurfaces` 0x08054012 (VERIFIED). Empty in all 15 maps (VERIFIED, census). What reads it was not looked for.
 
-### Lump 29, collision vertices (16 bytes)
+### 4.8 Lump 29, collision vertices (16 bytes)
 
 ```
 u32 unused                 // 0 in every record of the 15 maps
@@ -152,7 +152,7 @@ f32 xyz[3]
 
 VERIFIED, `CMod_LoadCollisionVerts` 0x080540c6 keeps bytes 4..16 as a 12-byte vertex and drops the first word. VERIFIED, census: the first word is 0 everywhere.
 
-### Lump 31, collision triangles (72 bytes)
+### 4.9 Lump 31, collision triangles (72 bytes)
 
 ```
 f32 plane[4]               // normal, dist
@@ -164,7 +164,7 @@ i32 edges[3]               // into lump 30; -1 = none
 
 VERIFIED, `CMod_LoadCollisionTriangles` 0x08054424 copies all 72 bytes (the runtime record is the file record). VERIFIED, census on every triangle whose three vertices are given: each vertex lies on the plane to 1e-3, and `(s, t)` reads (0, 0) at vertex 0, (1, 0) at vertex 1 and (0, 1) at vertex 2, to 1e-3. So `s` and `t` are barycentric weights of vertices 1 and 2. VERIFIED, census: edge `k` joins the two vertices other than `k`, in either direction. VERIFIED, `CM_TraceCapsuleThroughTriangle` (`cod2_lnxded` 0x08056490, mac 0x66aa8): it tests `edges[k]` and `verts[k]` only when the index is not negative, and each against a per-trace stamp array, so an edge or vertex shared by several triangles is tested once a trace. INFERRED, from that: -1 marks an edge or vertex another triangle owns or one that cannot be met; census counts 263 vertex and 6618 edge slots of -1 on mp_toujane's 8986 triangles. VERIFIED, the point arm of `CM_TraceThroughAabbTree_r` (mac 0x6754e): a triangle is hit only when the start is in front of the plane and the end behind it, and then only for `s >= -0.001`, `t >= -0.001`, `s + t <= 1.001` (mac `.literal4` 0x326228, 0x32622c). INFERRED from that test: a triangle is one-sided, as a CoD 1 patch facet is.
 
-### Lump 30, collision edges (56 bytes)
+### 4.10 Lump 30, collision edges (56 bytes)
 
 ```
 u32 unused                 // 0 in every record of the 15 maps
@@ -176,7 +176,7 @@ f32 length
 
 VERIFIED, `CMod_LoadCollisionEdges` 0x080541c4 keeps bytes 4..52 as a 48-byte runtime edge and scales the last three floats by `1 / length` (the reciprocal passed to the scale helper 0x080552e2 as an `f32`), so the runtime edge holds `dir / length`. VERIFIED, census: `axis[0]`, `axis[1]` and `dir` are unit and mutually perpendicular to 1e-4 on every sampled edge, and `origin + dir * length` lands on the triangle vertex at the edge's other end. VERIFIED, `CM_TraceCapsuleThroughTriangle` mac 0x66aa8: the capsule meets the edge in the plane of the two axes and accepts the contact when `|dot(p - origin, dir / length) - 0.5| <= 0.5` (mac 0x326190 is 0.5), i.e. inside the segment.
 
-### Lump 32, collision borders (28 bytes)
+### 4.11 Lump 32, collision borders (28 bytes)
 
 ```
 f32 dist_eq[3]             // a, b, c: a*x + b*y = c, (a, b) unit
@@ -188,7 +188,7 @@ f32 length
 
 VERIFIED, `CMod_LoadCollisionBorders` 0x08054690 copies all 28 bytes. VERIFIED, census: `(a, b)` has unit length and `length > 0` on all 29246 borders. VERIFIED, the capsule arm of `CM_TraceThroughAabbTree_r` (mac 0x6754e) walks a partition's borders only when the trace moves in x or y and the trace word at +0x90 is non-zero: it takes the trace's xy against `(a, b, c)`, measures the position along the border from `start` and accepts it up to `length`, and accepts a height within that +0x90 word of `z_base + z_slope * along`. INFERRED from those reads: the +0x90 word is the capsule's half height, and a border is a vertical wall along the outer edge of a terrain partition, which keeps a sideways capsule from slipping under the edge of the triangles.
 
-### Lump 33, collision partitions (12 bytes)
+### 4.12 Lump 33, collision partitions (12 bytes)
 
 ```
 u16 unused                 // 0 in every record of the 15 maps
@@ -200,7 +200,7 @@ i32 first_border           // into lump 32
 
 VERIFIED, `CMod_LoadCollisionPartitions` 0x08054822 keeps bytes 2 and 3 and turns the two indices into pointers; bytes 0 and 1 are dropped. VERIFIED, census: every partition has at least one triangle, at most 96 triangles and 24 borders on these maps, the partitions' triangle runs and border runs each tile their lump in order with no gap or overlap, and every triangle and border belongs to exactly one partition. CoD 1's partition carried a patch or a terrain mesh; this one carries triangles either way, and there is no patch record.
 
-### Lump 34, collision AABB trees (32 bytes)
+### 4.13 Lump 34, collision AABB trees (32 bytes)
 
 ```
 f32 origin[3]              // box centre
@@ -214,7 +214,7 @@ VERIFIED, `CMod_LoadCollisionAabbTrees` 0x08054952 copies the record field by fi
 
 VERIFIED, census: every child run lies after its parent and inside the lump, every leaf's partition is in range, on every fifth node, a leaf's box covers its triangles' vertices to 0.004 and a parent's box holds its children's to the same margin. Partitions are shared: the 15 maps hold 8244 partitions that more than one tree leaf names.
 
-### Lump 35, models (48 bytes)
+### 4.14 Lump 35, models (48 bytes)
 
 ```
 f32 mins[3], maxs[3]
@@ -227,15 +227,15 @@ IBSP 59's model, with the lump-23 partition run replaced by a collision AABB run
 
 VERIFIED, census: the brush runs and the surface runs of the models tile lumps 6 and 7 in model order. Model 0 owns no collision AABB range (both words 0); the world reaches lump 34 only through its leafs. No submodel on the 15 maps owns a collision AABB tree; on five maps 2 or 6 submodels own surfaces, on the other ten none.
 
-### Lump 36, visibility (8 bytes + rows)
+### 4.15 Lump 36, visibility (8 bytes + rows)
 
 `i32 cluster_count; i32 row_bytes;` then `cluster_count` rows, as IBSP 59. VERIFIED, `CMod_LoadVisibility` 0x08054b3a: an empty lump makes an all-visible row of `(clusters + 31) & ~31` bytes from the leafs' cluster count; otherwise it copies the rows. VERIFIED, census: all 15 maps carry one, `cluster_count` equals the leafs' largest cluster plus one, `row_bytes` is `ceil(cluster_count / 64) * 8`, the length is `8 + cluster_count * row_bytes`, and every cluster sees itself.
 
-### Lump 37, entities
+### 4.16 Lump 37, entities
 
 ASCII `{ "key" "value" }` blocks, NUL-terminated. VERIFIED, `CMod_LoadEntityString` 0x08054ae0 copies the whole lump; census: the last byte is 0 on all 15 maps. VERIFIED, mac `CM_LoadStaticModels` 0x77724: the collision model takes static models from the `misc_model` entities (`model`, `origin`, `angles`, `modelscale`, `modelscale_vec`). VERIFIED, mac `R_ParseSunLight` 0xe22e4 reads the sun from the same lump's keys (`sunlight`, `suncolor`, `sundiffusecolor`, `sundirection`, `diffuseFraction`, `ambient`, `_color`), and mac `R_LoadEntities` 0xe2b6c the static models' lighting keys (`gndLt`, `directLightScale`, `indirectLightScale`).
 
-## What the trace reads
+## 5. What the trace reads
 
 The order in which a sweep meets the brushes and triangles decides ties (`bsp-ibsp59-format.md`, "The leaf walk"), so it is part of the format a faithful collision model has to rebuild.
 
@@ -255,7 +255,7 @@ The runtime node is 20 bytes: axis byte, `i16` brush count, contents, then eithe
 
 VERIFIED, 0x08052d16: the high-side and low-side passes are separate tests (`d <= min`, `max <= d`), so a brush flat on the split (`min == max == d`) is written on both sides and the rewrite runs past the leaf's run into the next one's; the scorer's `else` counts such a brush on the high side only. VERIFIED, `crates/cod2/tests/d3dbsp_maps.rs` running the port (`vcod_cod2::d3dbsp::partition_brushes`) over every leaf of the 15 maps: no leaf's rewrite leaves its run, so each run stays a permutation of its lump-27 list.
 
-## Contents and surface flags
+## 6. Contents and surface flags
 
 VERIFIED, the material compiler's `surfaceparm` table in the Mac 1.3 MP binary (`.data` 0x348820, 20-byte rows `{name, clears SOLID, surface bits, content bits, tool bits}`): the content bits are
 
@@ -302,7 +302,7 @@ INFERRED, from the masks against the census: a `clipshot` trim (0x2080 after the
 
 `GScr_PlaceSpawnPoint` (Mac 0x19f4b8), VERIFIED: a player capsule (`playerMins`, `playerMaxs`, mask 0x2810011) is swept 128 up (rodata 0x326384) from the spawn's origin, then 262144 down (0x32641c) from where that stopped, the origin is set to the landing, and a position test there prints `WARNING: Spawn point entity %i is in solid` when it comes back `allsolid`. INFERRED from that order: a spawn whose box starts inside a brush it can rise out of lands on top of that brush. The three are `G_TraceCapsule` (0x0810a528), `SV_Trace` without static models, so a solid entity in the way (mp_toujane's bombzone `script_brushmodel`s) is landed on ("The trace A/B").
 
-## The trace
+## 7. The trace
 
 `cod2_lnxded`'s trace functions, matched to the Mac names by their callers, sizes and constants (Mac addresses after each). VERIFIED for each the structure described. The arithmetic is the Linux build's x87 code: every named float variable stored, every expression in between extended. `vcod_common::clipmap` ports them with the same addresses in its comments.
 
@@ -325,7 +325,7 @@ VERIFIED, 0x08055af0 and 0x08055d4c: the partition stamp is a `u16` compared wit
 
 VERIFIED, `crates/cod2/tests/collision_maps.rs` against the port: point traces from the spawns agree with a clip over every model-0 brush and every triangle under a leaf's trees to 1e-4 on all 15 maps (800 segments each). Every stock spawn, placed by `GScr_PlaceSpawnPoint`'s three traces, is not `startsolid` for the standing player. Before placement 12 of the 930 spawns, on 6 maps, start solid where the map puts them: mp_carentan 1 (an `mp_dm_spawn` at (0, 696, 160) whose box reaches 14 units into a 26-sided `clip_nosight` brush), mp_harbor 1, mp_railyard 2, mp_rhine 4, mp_toujane 2 (one, at (536, 1585, 39), under a plaster block from z 100 that the placement then lands it on top of), mp_trainstation 2. VERIFIED, retail (`crates/cod2/tests/trace_ab.rs`, "The trace A/B" below): every stock spawn of the 15 maps, 1902 placements counting each gametype's class, lands where the port puts it to the bit, and retail warns `in solid` about none.
 
-## The trace A/B
+## 8. The trace A/B
 
 `crates/cod2/tests/trace_ab.rs` replays `tests/fixtures/traces/<map>.txt` through `ClipMap::trace` and the solid brush models (below) and diffs bit for bit. Each fixture is what `cod2_lnxded` 1.3 returned to a gsc gametype written by `cargo run -p vcod-cod2 --example trace_probe -- <map>`. On mp_toujane and mp_carentan the fixture holds `bulletTrace(start, end, false, undefined)` and `physicsTrace(start, end)` over 1729 and 1688 segments (the c4 doorway and window rays, the window swept every 2 units up its height, a 24 by 24 grid of vertical rays over the spawns' area, axial and slanted rays grazing brush box edges at 0, 1/64, 1/8 and 1/8 + 1/64 off, rays down onto collision triangles' middles, corners and edges and just outside an edge, glancing rays along triangles, rays from spawn eyes), `placeSpawnPoint()` on 258 and 240 script_origins around the spawns, and on each spawn entity. On the other 13 maps (`--spawns-only`) it is `placeSpawnPoint()` on each spawn entity of every gametype class. A run boots the server in an `unshare -rn` namespace with the probe installed as a loose gametype (`maps/mp/gametypes/<name>.gsc` and its `.txt`, `sv_pure 0`), reads the `logPrint` lines from `games_mp.log` and pairs each console `WARNING: Spawn point entity %i is in solid` with its placement by entity number and rounded origin. A map's run takes about 6 s.
 
@@ -362,9 +362,9 @@ The brush models. VERIFIED, the gate: mp_toujane placement `near` 105, from (108
 - VERIFIED, Mac decompile (`CM_LoadMapFromBsp` 0x78638, the `CMod_LoadSubmodelBrushNodes` block): each inline model past 0 gets a leaf over its own brushes `firstBrush..+numBrushes` (lump 32's `first_brush`, `brush_count`), its contents the OR of theirs, its terrain contents those of its AABB trees (`first_coll_aabb`, `coll_aabb_count`), and its tree from `CMod_PartionLeafBrushes`, as a world leaf's. vcod: `collision::build_with_submodels`, traced through `ClipMap::trace_in_leaf`.
 - VERIFIED, `maps/mp/_load.gsc`: a `script_brushmodel` with a `script_exploder` and the `targetname` `exploder` or `exploderchunk` is made `notsolid()`; the probe deletes nothing. The gate clips every other `script_brushmodel` at its entity lump origin; no stock one carries `angles`. No other record moved. VERIFIED, the gate. vcod-server's `placeSpawnPoint` (`builtins::entity::placed_origin` over the level's `CollisionWorld`, mp_toujane under `dm`, where `*16` stands in for `*15` with the same box) lands the record at retail's bits too. VERIFIED, a one-off run of the server's placement on the record.
 
-## Render lumps
+## 9. Render lumps
 
-### Lump 1, lightmaps (4 MiB pages)
+### 9.1 Lump 1, lightmaps (4 MiB pages)
 
 VERIFIED, mac 0xe4fa0: the page count is `length / 0x400000`, and a non-empty lump whose page count is not the surfaces' largest lightmap index plus one is a `funny lump size`. VERIFIED, the same function, by the sizes it copies: a page is four images back to back,
 
@@ -381,7 +381,7 @@ VERIFIED, mac 0xe4fa0, the same fixed-function loop: the output texel's byte 0 i
 
 VERIFIED, mac 0xe4fa0: the loader may pack several pages into one larger texture ("%i merged lightmaps from %i original lightmaps", `r_optimizeLightmaps`) and rescales each surface's lightmap UV by its page's scale and offset in `R_LoadSurfaces`; this is a load-time choice, not file data.
 
-### Lump 2, light grid entries (8 bytes), lump 3, light grid colours (24 bytes)
+### 9.2 Lump 2, light grid entries (8 bytes), lump 3, light grid colours (24 bytes)
 
 ```
 entry:  u32 key            // (x >> 2) << 21 | (y >> 2) << 10 | (z >> 2)
@@ -410,7 +410,7 @@ VERIFIED, census over the 15 stock maps: every colour index is in range, entries
 
 VERIFIED, census (`crates/cod2/tests/lightgrid_maps.rs`, with the sight traces through the clip map): at every spawn's standing lighting origin on all 15 maps the lookup returns values in [0, 1], and the mean sun visibility of spawns under open sky beats that of roofed spawns on every map but mp_downtown (0.10 against 0.14).
 
-### Lump 7, draw surfaces (16 bytes)
+### 9.3 Lump 7, draw surfaces (16 bytes)
 
 ```
 i16 material               // into lump 0
@@ -425,7 +425,7 @@ IBSP 59's soup with the no-lightmap value 31 instead of 65535. VERIFIED, `R_Load
 
 VERIFIED, census, as IBSP 59 has it: the surfaces of model 0 are covered exactly once by the cull groups' runs at the front of the lump and the render AABB trees' leaf runs after them, and each cell's AABB tree, walked in preorder, ends where the next cell's begins.
 
-### Lump 8, draw vertices (68 bytes)
+### 9.4 Lump 8, draw vertices (68 bytes)
 
 ```
 f32 xyz[3]                 // +0x00
@@ -439,11 +439,11 @@ f32 binormal[3]            // +0x38
 
 VERIFIED, `R_LoadSurfaces` mac 0xe4672 copies the fields at these offsets into the 68-byte runtime vertex (the tangent to +0x38 and the binormal to +0x2c) and packs the colour as `b0 << 24 | b1 << 16 | b2 << 8 | b3` for the colour converter. INFERRED from that packing: the bytes are R, G, B, A. VERIFIED, census on mp_toujane: the vector at +0x2c follows dP/du (dot over 0.9 on 3719 of 3824 sampled triangles) and the one at +0x38 dP/dv (3775 of 3824); both are unit and perpendicular to the normal on every sampled vertex of all 15 maps; the handedness `cross(n, tangent) · binormal` is positive and negative about equally often. VERIFIED, census on mp_toujane: every sampled triangle winds clockwise seen from its vertex normal, as IBSP 59's do.
 
-### Lump 9, draw indices
+### 9.5 Lump 9, draw indices
 
 Flat `u16`, relative to the surface's `first_vertex`, as IBSP 59 (VERIFIED, mac 0xe4672 adds `first_vertex`).
 
-### Lumps 10-11, 17-24, cells, portals, cull groups, occluders, render AABB trees
+### 9.6 Lumps 10-11, 17-24, cells, portals, cull groups, occluders, render AABB trees
 
 The same records as IBSP 59's lumps 9-18 (`bsp-ibsp59-format.md`, "Visibility and tree lumps"), renumbered:
 
@@ -464,7 +464,7 @@ VERIFIED, mac 0xe39d6: a portal's runtime plane is `{n, -dist}` and its vertex c
 
 The renderer walks the cells through these portals with a nearest-first queue (`R_VisitPortals`, mac 0xf14c0). VERIFIED (decompile). cod2-client-perf.md 9 has the walk and vcod's port of it.
 
-### Surface bounds and the render AABB trees
+### 9.7 Surface bounds and the render AABB trees
 
 `R_LoadSurfaces` (mac 0xe4672) bounds each surface over the vertices its
 indices reach: per index, `_AddPointToBounds` of vertex `first_vertex +
@@ -484,7 +484,7 @@ preorder (`vis::walk_bounds`); it covers the same node range and each
 node's bounds hold every node it skips, so it culls conservatively, not
 as tightly as retail's tree. INFERRED.
 
-## Census
+## 10. Census
 
 VERIFIED, census, record counts per map:
 
@@ -506,7 +506,7 @@ VERIFIED, census, record counts per map:
 | mp_toujane | 141 | 5664 | 4567 | 44177 | 2413 | 84986 | 1 | 40339 | 5123 | 11 | 90 | 374 | 0 | 690 | 714 | 7836 | 5844 | 11432 | 8986 | 1248 | 741 | 1698 | 23 | 388 |
 | mp_trainstation | 422 | 9594 | 11087 | 82035 | 5344 | 175705 | 3 | 55906 | 18592 | 58 | 338 | 855 | 0 | 3038 | 3064 | 19023 | 10226 | 20829 | 15909 | 3520 | 1891 | 4052 | 25 | 1472 |
 
-## Open questions
+## 11. Open questions
 
 - Lumps 12-16 and 38 are read by no 1.3 MP loader and empty in the MP maps. Whether the single-player maps fill them, and with what, was not checked.
 - Which basis each of the four lightmap coefficients holds, and which channel order the A8R8G8B8 images take in memory on the PC build.

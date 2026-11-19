@@ -2,7 +2,7 @@
 //! spawns a spectator who holds forward again as a spectator every 2 s.
 //! 1.5b's and UO's `ClientSpawn` run the client's last cmd for a spectator
 //! as for a player, so the spawn frame's snapshot has him flown 100 ms off
-//! the spot; 1.1d's null cmd leaves him on it (cod15-movement.md 4, "The
+//! the spot; 1.1d's null cmd leaves him on it (cod15-movement.md 4.2, "The
 //! spawn's lie-down"). The fixtures' `EDGE origin` lines are the probe
 //! client's snapshots on the spawn frames.
 //!

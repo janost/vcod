@@ -227,7 +227,7 @@ pub struct Combat {
 /// One client's body on the server: its `clientInfo_t` (lnxded
 /// `0x87035bc + client * 0x4b8`, zeroed by `ClientConnect`, not by a spawn)
 /// and the skeleton last built from it, under which stamp. cod2-combat.md
-/// 9.3, "The hit pose".
+/// 9.5, "The hit pose".
 #[derive(Clone, Default)]
 struct ServerBody {
     body: PlayerBody,

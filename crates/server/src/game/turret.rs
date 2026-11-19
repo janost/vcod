@@ -407,7 +407,7 @@ pub const TURRET_HEALTH: i32 = 100;
 const TIMER_STEP_MS: i32 = 50;
 
 /// Which patch's manned aim and mount a server runs (turrets doc 6.2 and
-/// 14.3, coduo-diff.md 19, "Bullets and turrets").
+/// 14.3, coduo-diff.md 21.3, "Bullets and turrets").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AimRule {
     /// 1.1's 0x5201c: arc clamp, 15-degree step, view forced onto the barrel.

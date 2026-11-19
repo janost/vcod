@@ -3444,7 +3444,7 @@ mod tests {
 
     /// The vehicle captures (`net/snapshots-uo-{tank,jeep,overheat}.bin`,
     /// the last the tank's crew with the gunner holding its trigger): every
-    /// frame their sound blend entities (coduo-diff.md 19, "Captures") hold
+    /// frame their sound blend entities (coduo-diff.md 19.6, "Captures") hold
     /// one voice each on their vehicle, a listener beside it, the engine
     /// pairs' volume and the jeep's pitch follow `angles2[1]` between the
     /// rows of UO's `gmi_mp_vehicles_ge.csv`, and a blend gone from the

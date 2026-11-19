@@ -7,7 +7,7 @@ use vcod_gsc::{Cx, ErrorKind, Value};
 /// distance is the density, and a density >= 1 selects linear fog, which is
 /// what `setCullFog` means. Retail writes `1` there on both captured maps
 /// (docs/research/cod11-server-handshake.md, "Map-dependent"); the field's
-/// meaning is in docs/protocol-1.1.md, "Configstring indices".
+/// meaning is in docs/protocol-1.1.md, "Constants worth having".
 pub fn set_cull_fog(
     cs: &mut crate::configstrings::ConfigStrings,
     slot: usize,

@@ -277,7 +277,7 @@ impl<'a> MoveWorld<'a> {
 
 /// A capsule sweep against `body`'s capsule alone, the transformed trace
 /// against a temp capsule model that the UO cgame's flame chunks run on
-/// the local player (docs/research/coduo-diff.md 19, "Chunks against bodies").
+/// the local player (docs/research/coduo-diff.md 19.3, "Chunks against bodies").
 pub fn body_trace(start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, body: &Body) -> Trace {
     let mut t = Trace::clear(end);
     clip_capsule(

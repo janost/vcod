@@ -4,7 +4,7 @@
 //! (the S&D bomb's timer face), else the implicit model skin, one opaque
 //! `lightingDiffuse` stage (0x4fc440). Every model resolves its skins the
 //! same way, props included (docs/research/cod11-shader-scripts.md, section
-//! 8, "Model skin scripts"). Only `lightingDiffuse` stages take the light grid; the
+//! 8.2, "Model skin scripts"). Only `lightingDiffuse` stages take the light grid; the
 //! rest draw their constant or wave colour
 //! (docs/research/cod11-light-grid-and-leaf-lights.md, section 13).
 

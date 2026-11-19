@@ -6,7 +6,7 @@
 //! holds `wbuttons` 0x1 while the report does and sends the `fdc` it names.
 //! Prints every `fdc`, every flag change and every health change; pairs
 //! with `client-probes/probe_flame` (recipe in
-//! docs/research/coduo-diff.md 19, "The flame report"). Writes no fixture.
+//! docs/research/coduo-diff.md 19.3, "The flame report"). Writes no fixture.
 
 use std::collections::HashMap;
 use std::time::Instant;

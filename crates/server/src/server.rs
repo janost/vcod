@@ -1331,7 +1331,7 @@ fn run_client_link(rt: &mut script::ScriptRuntime, slot: usize, sim: &mut Client
 /// mode 2 puts `r.currentOrigin` and `ps.origin` at the seat tag of the
 /// vehicle as it stands, shifted by the link's own offset, and links him
 /// there unsnapped. His end frame puts `ps.origin` and `r.currentOrigin` back on the
-/// seat (coduo-vehicles.md 13, "The tank driver's link offset").
+/// seat (coduo-vehicles.md 13.7, "The tank driver's link offset").
 fn run_rider_link(
     rt: &mut script::ScriptRuntime,
     slot: usize,
@@ -9605,7 +9605,7 @@ mod tests {
     /// The burst ahead of the restart's `n` carries every slot the incoming
     /// level wrote to a new value: the outgoing level's team score, which
     /// `ExitLevel` zeroes in the game only, goes out as `d 6 0` when the next
-    /// level sets it (coduo-diff.md 22, "Round and map ends").
+    /// level sets it (coduo-diff.md 22.2, "Round and map ends").
     #[test]
     fn a_restart_sends_the_slots_the_incoming_level_changed() {
         let Some(fs) = vcod_common::testing::game_fs_11() else {

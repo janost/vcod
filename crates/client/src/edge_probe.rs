@@ -33,7 +33,7 @@ pub enum EdgeMode {
     /// Hold forward the whole run and print every snapshot's origin
     /// (`EDGE origin`): beside `client-probes/probe_specspawn`, whether a
     /// spectator spawn's think runs the client's last cmd
-    /// (cod15-movement.md 4, "The spawn's lie-down").
+    /// (cod15-movement.md 4.2, "The spawn's lie-down").
     SpecFly,
     /// Stand idle and print an `EDGE ents` line whenever the snapshot's
     /// entity list changes, each entity as `num:eType`: what rides past the
