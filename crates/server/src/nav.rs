@@ -14,6 +14,9 @@ use vcod_common::net::msg::{self, NULL_USERCMD, UserCmd};
 use vcod_common::pmove::cmd::{ANGLE2SHORT, EventRing, chop, player_step};
 use vcod_common::pmove::{MoveRules, PlayerState};
 
+mod disk;
+pub use disk::set_dir as set_disk_cache;
+
 /// Grid pitch bounds in world units. The finest is about a capsule width
 /// plus the slack a doorway leaves; a large map coarsens toward the other
 /// to keep its node count near [`TARGET_CELLS`] (bot-navigation.md,
@@ -1868,17 +1871,19 @@ fn cache_key(
     )
 }
 
-/// The cached graph under `key`, else `build`'s, cached. The lock is held
-/// across the build, so two servers asking at once build it once.
-fn cached(key: CacheKey, build: impl FnOnce() -> NavGraph) -> Arc<NavGraph> {
+/// The cached graph under `key`, else `build`'s, cached: the graph and
+/// how it came (`built`, or `loaded` off disk). The lock is held across
+/// the build, so two servers asking at once build it once.
+fn cached(key: CacheKey, build: impl FnOnce() -> (NavGraph, &'static str)) -> Arc<NavGraph> {
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((_, g)) = cache.iter().find(|(k, _)| *k == key) {
         return g.clone();
     }
     let t = std::time::Instant::now();
-    let g = Arc::new(build());
+    let (g, how) = build();
+    let g = Arc::new(g);
     log::info!(
-        "nav graph for {}: {} nodes, {} edges, spacing {}, built in {} ms",
+        "nav graph for {}: {} nodes, {} edges, spacing {}, {how} in {} ms",
         key.0,
         g.len(),
         g.edge_count(),
@@ -1909,13 +1914,14 @@ pub fn clear_cache() {
 pub fn graph_for(map: &str, world: &crate::world::World) -> Arc<NavGraph> {
     let rules = RULES.get();
     cached(cache_key(map, &world.collision, world, rules), || {
-        NavGraph::build(
+        let g = NavGraph::build(
             &world.collision,
             &world.spawn_points,
             &world.nav_cover,
             &world.hazards,
             rules,
-        )
+        );
+        (g, "built")
     })
 }
 
@@ -1936,7 +1942,9 @@ pub struct NavJob {
 impl NavJob {
     /// The cached graph when there is one, else a build started over a copy
     /// of `world`'s collision as it stands now: the links and poses scripts
-    /// change later never reach the build. The walks move by `rules`.
+    /// change later never reach the build. The walks move by `rules`. The
+    /// build thread first looks for the graph on disk ([`set_disk_cache`]),
+    /// keyed by the world's map file (`CollisionWorld::source`).
     pub fn start(map: &str, world: &crate::world::World, rules: MoveRules) -> NavJob {
         Self::start_with(map, world, rules, None, None)
     }
@@ -1991,8 +1999,15 @@ impl NavJob {
             // One core stays the tick's, so a build doesn't jitter the
             // schedule it runs beside.
             SPARE_CORE.set(true);
+            let disk = disk::key(&key, collision.source());
             cached(key, || {
-                NavGraph::build_opts(
+                if let Some(g) = disk
+                    .as_ref()
+                    .and_then(|d| disk::load(d, rules, step.clone()))
+                {
+                    return (g, "loaded");
+                }
+                let g = NavGraph::build_opts(
                     &collision,
                     &seeds,
                     &cover,
@@ -2001,7 +2016,11 @@ impl NavJob {
                     mantle.as_ref(),
                     step,
                     lip,
-                )
+                );
+                if let Some(d) = &disk {
+                    disk::store(d, &g);
+                }
+                (g, "built")
             })
         };
         NavJob {

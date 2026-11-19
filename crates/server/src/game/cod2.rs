@@ -580,7 +580,11 @@ impl Cod2Level {
                 }
             };
             let p = crate::tick_profile::phase("load/collision world");
-            let world = Rc::new(level_world(&map_world, clip.clone(), parts.spots()));
+            let mut world = level_world(&map_world, clip.clone(), parts.spots());
+            world
+                .collision
+                .set_source(pak.map_checksum(map).unwrap_or(0));
+            let world = Rc::new(world);
             drop(p);
             laps.lap("collision world");
             let p = crate::tick_profile::phase("load/mantle anims");

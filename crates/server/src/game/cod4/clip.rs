@@ -191,6 +191,7 @@ mod tests {
         };
         ClipMap {
             name: "wall_and_block".into(),
+            checksum: 0,
             world,
             submodels: vec![sub(world_leaf), sub(block_leaf)],
             static_models: Vec::new(),

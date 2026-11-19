@@ -1448,6 +1448,7 @@ pub fn bot_world(
 ) -> Rc<World> {
     let map = vcod_common::mapworld::MapWorld::default();
     let mut collision = vcod_common::collision::CollisionWorld::build(&map, &[]);
+    collision.set_source(clip.checksum);
     if brushes.is_empty() {
         collision.set_world_clip(clip);
     } else {

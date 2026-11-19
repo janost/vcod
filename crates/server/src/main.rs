@@ -78,6 +78,11 @@ struct Args {
     /// until the process exits.
     #[arg(long)]
     ban_file: Option<std::path::PathBuf>,
+    /// Where the bots' navigation graphs are kept between runs, keyed by
+    /// the map file and this binary. Default: navcache/ beside the binary,
+    /// unless that is inside the game dir, where none is kept.
+    #[arg(long)]
+    nav_cache: Option<std::path::PathBuf>,
     /// CoD1 and UO: load only the install's stock retail paks (the patch's numbered paks,
     /// their `localized_*` ones, UO's map pack) and ignore every other pk3:
     /// third-party maps, `zzz_*` mods, downloads. Refuses `fs_game`.
@@ -98,6 +103,18 @@ struct Args {
     /// slowest tick and how far the loop ran behind its schedule.
     #[arg(long, help_heading = "Developer")]
     trace: bool,
+}
+
+/// `--nav-cache`, else `navcache/` beside the binary when that is not
+/// inside the game install.
+fn nav_cache_dir(args: &Args) -> Option<std::path::PathBuf> {
+    if let Some(dir) = &args.nav_cache {
+        return Some(dir.clone());
+    }
+    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
+    let dir = exe.parent()?;
+    let game = args.game_dir.canonicalize().ok()?;
+    (!dir.starts_with(&game)).then(|| dir.join("navcache"))
 }
 
 /// `sv_fps 20`, the loop's slot until the game names another
@@ -127,6 +144,7 @@ fn main() -> Result<()> {
     // a level loads for seconds.
     check_game_flags(&matches, game)?;
     check_args(&args)?;
+    vcod_server::nav::set_disk_cache(nav_cache_dir(&args));
     if game == Game::Cod1 {
         set_protocol(&args.set)?;
     }
@@ -381,6 +399,7 @@ fn cod1_server(args: Args, sock: UdpSocket, sets_after_map: &[bool]) -> Result<(
 
     let (gametype, overlay) = gametype_overlay(&args)?;
     let protocol = protocol(&args.set, &fs)?;
+    let map_source = fs.map_checksum(&args.map).unwrap_or(0);
 
     let (sock, packets) = listen(sock)?;
     log::info!("vcod-server: {} on udp/{}", args.map, args.port);
@@ -407,7 +426,9 @@ fn cod1_server(args: Args, sock: UdpSocket, sets_after_map: &[bool]) -> Result<(
     );
     server.set_protocol(protocol);
     server.build_nav_in_background(true);
-    server.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    let mut world = vcod_server::world::World::from_bsp(&bsp, Some(&fs));
+    world.collision.set_source(map_source);
+    server.load_world(world);
     if let Some((stem, text)) = &overlay {
         server.overlay_script(&format!("maps/mp/gametypes/{stem}"), text);
     }

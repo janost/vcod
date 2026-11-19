@@ -1031,6 +1031,8 @@ pub struct CollisionWorld {
     /// The world's own clip, when the game brings one
     /// ([`Self::set_world_clip`]).
     world_clip: Option<Arc<dyn WorldClip>>,
+    /// The map file's checksum, 0 when unknown ([`Self::set_source`]).
+    source: u64,
 }
 
 /// One entity's copy of a submodel: its pose and `r.contents`, which a
@@ -1144,6 +1146,7 @@ impl Clone for CollisionWorld {
             any_instance: AtomicBool::new(self.any_instance.load(Ordering::Acquire)),
             arith: AtomicU8::new(self.arith.load(Ordering::Acquire)),
             world_clip: self.world_clip.clone(),
+            source: self.source,
         }
     }
 }
@@ -1711,6 +1714,7 @@ impl CollisionWorld {
             any_instance: AtomicBool::new(false),
             arith: AtomicU8::new(Arith::Kept as u8),
             world_clip: None,
+            source: 0,
         }
     }
 
@@ -1719,6 +1723,17 @@ impl CollisionWorld {
     /// must leave model 0's brushes and partitions out.
     pub fn set_world_clip(&mut self, clip: Arc<dyn WorldClip>) {
         self.world_clip = Some(clip);
+    }
+
+    /// Names the map file the world was built from by a checksum of its
+    /// bytes, which the server's bots key their graph on disk by.
+    pub fn set_source(&mut self, checksum: u64) {
+        self.source = checksum;
+    }
+
+    /// [`Self::set_source`]'s checksum, 0 when none was set.
+    pub fn source(&self) -> u64 {
+        self.source
     }
 
     /// The world clip's ladder boxes ([`WorldClip::ladder_boxes`]); none

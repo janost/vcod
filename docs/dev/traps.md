@@ -155,6 +155,13 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
   once the script's brush links (`GameHost::brush_links`) hold still 2 s
   (`Server::relink_nav`). A test that runs two gametypes on one map builds
   two graphs, and one that deletes a brush mid-level waits on a build.
+- `vcod-server` keeps each graph it builds on disk (`nav::disk`), keyed by
+  the map file's checksum (`CollisionWorld::source`), the binary's own hash
+  and the in-memory key. A world with no source (every test world,
+  `nav_build`, the in-process gates) never reads or writes one, and the
+  library keeps none until `nav::set_disk_cache` names a directory, which
+  only `main.rs` does. A change to the build needs no version bump: a new
+  binary misses every file an old one wrote.
 
 ## CoD1 1.1 and 1.5
 
