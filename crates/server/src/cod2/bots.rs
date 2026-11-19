@@ -584,7 +584,7 @@ impl AdminHost for Cod2Server {
         }
     }
 
-    /// `--bots-shoot` and the cvar's default stand until the cvar moves.
+    /// `--bots-peaceful` and the cvar's default stand until the cvar moves.
     fn apply_settings(&mut self, s: Settings) {
         let Some(b) = self.game.bots.as_mut() else {
             return;

@@ -422,7 +422,7 @@ stale player in the scripts.
 
 ### Bots
 
-`--bots N [--bots-shoot]` adds bots that join through the team and class
+`--bots N [--bots-peaceful]` adds bots that join through the team and class
 menus and play with vcod's shared bot brain
 ([bots.md](../bots.md#cod4)):
 

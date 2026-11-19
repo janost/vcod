@@ -1931,7 +1931,7 @@ impl Server {
             sv.game.baselines = te.baselines(sv.game.proto);
             sv.game.module.test_entities = Some(te);
         }
-        // `--bots` without `--bots-shoot` keeps its peaceful bots.
+        // `--bots-peaceful` keeps its bots from firing.
         if sv.game.cfg.bots > 0 && !sv.game.cfg.bots_shoot {
             sv.set_cvar(crate::botmgmt::cvar::SHOOT, "0");
         }

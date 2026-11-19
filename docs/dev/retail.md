@@ -67,7 +67,7 @@ them on vcod.
 - `--gametype-script <file>` runs a gametype from disk (how a client probe
   runs against vcod).
 - `--set NAME=VALUE` is retail's `+set`.
-- `--bots N [--bots-shoot]` adds clients.
+- `--bots N [--bots-peaceful]` adds clients.
 - `--trace` logs per-snapshot timing.
 
 ## A retail client against vcod-server

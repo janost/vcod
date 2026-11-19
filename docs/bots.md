@@ -17,16 +17,16 @@ the measuring harness in [research/bot-combat.md](research/bot-combat.md).
 Six fighting bots:
 
 ```
-vcod-server mp_carentan --gametype tdm --bots 6 --bots-shoot --set rconPassword=secret
+vcod-server mp_carentan --gametype tdm --bots 6 --set rconPassword=secret
 ```
 
 The same on the other games (the install picks the game, or pass
 `--game`):
 
 ```
-vcod-server mp_cassino --mod-dir uo --gametype tdm --bots 6 --bots-shoot
-vcod-server mp_toujane --game cod2 --gametype tdm --bots 6 --bots-shoot
-vcod-server mp_crash --game cod4 --bots 6 --bots-shoot
+vcod-server mp_cassino --mod-dir uo --gametype tdm --bots 6
+vcod-server mp_toujane --game cod2 --gametype tdm --bots 6
+vcod-server mp_crash --game cod4 --bots 6
 ```
 
 A server that keeps itself busy: with a floor of 10, an empty server runs
@@ -46,7 +46,7 @@ UO, `rcon login secret` then `rcon <command>` on CoD2 and CoD4.
 | Flag | Does |
 |---|---|
 | `--bots N` | Start with N bots. Each takes a real slot, so N can't exceed `--max-clients`. |
-| `--bots-shoot` | Let those bots fire. Without it they walk the map and play objectives but never shoot (`vc_bot_shoot 0`). |
+| `--bots-peaceful` | Keep those bots from firing: they walk the map and play objectives but never shoot (`vc_bot_shoot 0`). The old `--bots-shoot` still parses and changes nothing. |
 | `--set NAME=VALUE` | Set any cvar below before the first map loads. |
 
 The bots join once the level is up. The navigation graph builds on its
@@ -84,7 +84,7 @@ A change applies within half a second.
 |---|---|---|
 | `vc_bot_minplayers` | 0 | [Minimum player count](#minimum-player-count). 0 is off. |
 | `vc_bot_autobalance` | 1 | [Keeps the teams even](#team-balance) in team gametypes. |
-| `vc_bot_shoot` | 1 | 0 stops bots firing. `--bots` without `--bots-shoot` sets it to 0. |
+| `vc_bot_shoot` | 1 | 0 stops bots firing. `--bots-peaceful` sets it to 0. |
 | `vc_bot_names` | 1 | 0 names bots that join from then on `bot<slot>`; bots already in keep their names. |
 | `vc_bot_skill` | 1 | The [skill level](#skill), 0 to 3, of every bot `addbot ... skill N` didn't set. |
 | `vc_bot_retreat` | 1 | 0 stops bots breaking off a fight when hurt or dry and walking to health items; a retreat under way ends. |

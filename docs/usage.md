@@ -115,7 +115,7 @@ vcod-server <map> [--port 28960] [--hostname vcod] [--max-clients 8] [--gametype
 | `--max-clients <n>` | `sv_maxclients`, default 8, 1 to 64. Bots count: more `--bots` than slots is refused. |
 | `--gametype <gt>` | The script under `maps/mp/gametypes/`. Default `dm` (CoD4 `war`). |
 | `--set NAME=VALUE` | Retail's `+set`, repeatable. |
-| `--bots <n>`, `--bots-shoot` | Start with `n` bots; without `--bots-shoot` they never fire ([bots.md](bots.md)). |
+| `--bots <n>`, `--bots-peaceful` | Start with `n` bots, which fight; with `--bots-peaceful` they never fire ([bots.md](bots.md)). |
 | `--ban-file <path>` | Keep `banUser`/`banClient` bans across runs. |
 | `--nav-cache <dir>` | Where the bots' navigation graphs are kept between runs, keyed by the map file and the server binary. Default `navcache/` beside the binary, or none when the binary sits inside the game dir. |
 | `--gametype-script <file>` | CoD1, UO, CoD2: run a gametype from disk instead of the paks. |
@@ -239,7 +239,7 @@ logged with its sender.
 
 ### Bots
 
-`--bots <n> [--bots-shoot]`, rcon's `addbot`, `removebot` and
+`--bots <n> [--bots-peaceful]`, rcon's `addbot`, `removebot` and
 `listbots`, and the `vc_bot_*` cvars (`vc_bot_minplayers`,
 `vc_bot_autobalance`, `vc_bot_shoot`, `vc_bot_names`, `vc_bot_skill`,
 `vc_bot_retreat`, `vc_bot_vehicles`, UO only) work alike on all four
