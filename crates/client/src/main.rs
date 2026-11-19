@@ -1722,7 +1722,7 @@ fn main() -> Result<()> {
     } else {
         dir.join(CONFIG_FILE)
     };
-    let config_text = std::fs::read_to_string(&read_path).ok();
+    let config_text = read_config(&read_path);
     if let Some(text) = &config_text {
         for effect in shell.exec_config(text) {
             if let console::shell::Effect::Print(line) = effect {
@@ -2477,6 +2477,47 @@ fn chat_field_key(
         }
     }
     None
+}
+
+/// A config file's text, decoded lossily as `exec` decodes: `None` when
+/// there is none, or with a warning when it exists but cannot be read.
+fn read_config(path: &std::path::Path) -> Option<String> {
+    match std::fs::read(path) {
+        Ok(bytes) => Some(config_from_bytes(path, bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            log::warn!("cannot read {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+/// A config's bytes as text; bytes that are not UTF-8 become U+FFFD.
+fn config_from_bytes(path: &std::path::Path, bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).unwrap_or_else(|e| {
+        log::warn!("{}: not UTF-8, read lossily", path.display());
+        String::from_utf8_lossy(e.as_bytes()).into_owned()
+    })
+}
+
+/// A CoD2 profile's config into `shell`: run when the file is there,
+/// written from what is set now only when it is absent, so a file that
+/// fails to read is never overwritten.
+fn load_profile_config(shell: &mut console::shell::Shell, path: &std::path::Path) {
+    let write = match std::fs::read(path) {
+        Ok(bytes) => {
+            shell.exec_config(&config_from_bytes(path, bytes));
+            shell.upgrade_config(vcod_common::game::Game::Cod2).1
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(e) => {
+            log::warn!("cannot read {}: {e}", path.display());
+            false
+        }
+    };
+    if write && let Err(e) = std::fs::write(path, shell.config_text()) {
+        log::warn!("cannot write {}: {e}", path.display());
+    }
 }
 
 /// `exec`'s file: the search path's, else the one under `config_dir`
@@ -4732,21 +4773,7 @@ impl App {
         self.config_path = dir.join(CONFIG_FILE);
         self.shell
             .execute(&format!("set com_playerProfile \"{name}\""));
-        match std::fs::read_to_string(&self.config_path) {
-            Ok(text) => {
-                self.shell.exec_config(&text);
-                if self.shell.upgrade_config(vcod_common::game::Game::Cod2).1
-                    && let Err(e) = std::fs::write(&self.config_path, self.shell.config_text())
-                {
-                    log::warn!("cannot write {}: {e}", self.config_path.display());
-                }
-            }
-            Err(_) => {
-                if let Err(e) = std::fs::write(&self.config_path, self.shell.config_text()) {
-                    log::warn!("cannot write {}: {e}", self.config_path.display());
-                }
-            }
-        }
+        load_profile_config(&mut self.shell, &self.config_path);
         log::info!("player profile {name}: {}", self.config_path.display());
     }
 
@@ -5962,5 +5989,27 @@ mod tests {
         let (pos, dir) = view_muzzle(cam_pos, forward, right, up);
         assert_eq!(pos, Vec3::new(120.0, 204.0, 297.0));
         assert_eq!(dir, forward);
+    }
+
+    /// A config holding a byte that is not UTF-8 (a retail config's
+    /// Latin-1 `ö`) still runs, at startup and as a CoD2 profile's, and
+    /// the profile's file is not overwritten.
+    #[test]
+    fn a_config_that_is_not_utf8_still_runs_and_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CONFIG_FILE);
+        // Not vcod's header, so the stamp is current and nothing upgrades.
+        let bytes = b"bind F1 \"say sch\xf6n\"\n".to_vec();
+        std::fs::write(&path, &bytes).unwrap();
+
+        let text = read_config(&path).expect("the config reads");
+        let mut shell = console::shell::Shell::new();
+        shell.exec_config(&text);
+        assert_eq!(shell.bind("F1"), Some("say sch\u{fffd}n"));
+
+        let mut shell = console::shell::Shell::new();
+        load_profile_config(&mut shell, &path);
+        assert_eq!(shell.bind("F1"), Some("say sch\u{fffd}n"));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "the profile's config was rewritten");
     }
 }
