@@ -824,6 +824,11 @@ fn rgba(rgb: [f32; 4], a: f32) -> [f32; 4] {
 }
 
 impl PlayerHud {
+    /// The search path opened again: `hud.menu` loads again off the new one.
+    pub fn search_path_reopened(&mut self) {
+        self.items = None;
+    }
+
     /// The HUD for `frame` on a `w` x `h` window at cgame time `now`.
     #[expect(clippy::too_many_arguments)]
     pub fn build(

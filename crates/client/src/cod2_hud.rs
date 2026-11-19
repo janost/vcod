@@ -507,6 +507,15 @@ fn timer(e: &HudElem, now: i32) -> String {
 }
 
 impl Cod2Hud {
+    /// The search path opened again (a mod, a downloaded map): what was
+    /// read off the old one loads again on next use.
+    pub fn search_path_reopened(&mut self) {
+        self.fonts = None;
+        self.game_types = None;
+        self.arenas = None;
+        self.player.search_path_reopened();
+    }
+
     /// The frame's obituaries into the kill lines and the centre print.
     pub fn on_events(
         &mut self,
@@ -798,6 +807,22 @@ mod tests {
             c.f[i] = u32::from_le_bytes(bytes[k * 4..k * 4 + 4].try_into().unwrap());
         }
         c
+    }
+
+    /// A search path reopen drops the fonts, game types and arenas read off
+    /// the old one, so the next frame loads them off the new one.
+    #[test]
+    fn a_search_path_reopen_drops_what_the_old_one_gave() {
+        let mut hud = Cod2Hud {
+            fonts: Some(None),
+            game_types: Some(Vec::new()),
+            arenas: Some(Vec::new()),
+            ..Default::default()
+        };
+        hud.search_path_reopened();
+        assert!(hud.fonts.is_none());
+        assert!(hud.game_types.is_none());
+        assert!(hud.arenas.is_none());
     }
 
     /// The HUD dvars: a vec2 dvar's two numbers, the stance prints' keys
