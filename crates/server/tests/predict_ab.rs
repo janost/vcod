@@ -1252,7 +1252,7 @@ fn retail_state_rows(
 }
 
 /// The spectator spell of retail UO's `probe_uostates` capture: 1.5's and
-/// UO's stored fly move (cod15-movement.md 5, "The fly move"). Needs
+/// UO's stored fly move (cod15-movement.md 5.2, "The fly move"). Needs
 /// `COD_DIR` at a United Offensive install.
 #[test]
 fn predictor_flies_retail_spectator() {
@@ -1394,7 +1394,7 @@ fn predictor_holds_retail_intermission_1_1() {
 }
 
 /// The 22 s spectator spell of retail 1.5b's `probe_states` capture: 1.5's
-/// stored fly move (cod15-movement.md 5, "The fly move"). Needs `COD_DIR` at
+/// stored fly move (cod15-movement.md 5.2, "The fly move"). Needs `COD_DIR` at
 /// a 1.5 install, or a UO one.
 #[test]
 fn predictor_flies_retail_spectator_1_5() {

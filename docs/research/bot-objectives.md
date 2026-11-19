@@ -2128,7 +2128,7 @@ the tank died and its driver with it, and then the shooter died too,
 killed by the world, so stock `tdm.gsc`'s `Callback_PlayerKilled` read
 the unset `level.teamkill_penalty` (line 815, coduo-vehicles.md 11.6) and
 dropped the `bazooka_mp` the test hands him outside `giveWeapon` (line
-836, an item past initialization, cod11-gsc-object-model.md M4).
+836, an item past initialization, cod11-gsc-object-model.md, "M4").
 
 - `_tankdrive_gmi.gsc`'s damage thread ends a hull with
   `radiusDamage(origin + (0, 0, 180), 300, 150, 10, attacker, inflictor)`
@@ -2964,7 +2964,7 @@ map whose bots never meet the new arm replays to the tick).
   border was met only where its top lay within the capsule's straight
   part, while this one lies 26 under the centre, beside the lower
   sphere. VERIFIED (the clip map traced). 1.7 meets such a border with
-  the end sphere (cod4-collision.md 2, "1.7's capsule border"), and the
+  the end sphere (cod4-collision.md 2), and the
   CoD4 sweep now does (`Cx::border_sphere`). `sab` mp_creek's and
   `koth` mp_crash's stalls were the same, bots wedged in terrain at
   (540, 4554, -41) and (62, -640, 313). INFERRED (their stall lines

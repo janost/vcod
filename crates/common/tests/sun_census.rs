@@ -1,6 +1,6 @@
 //! Which stock MP maps draw a sun, and what of it: the active sky's `.sun`
 //! file on a map with a lump-30 sun light, its disc sprite and its flare
-//! image (docs/research/cod11-shader-scripts.md section 8, "The sun").
+//! image (docs/research/cod11-shader-scripts.md section 8.4, "The sun").
 
 use vcod_common::{assets, bsp, pk3::Pk3Fs, shader::ShaderLib, sun};
 

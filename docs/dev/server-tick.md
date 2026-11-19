@@ -172,7 +172,7 @@ The workers are a pool per ticking thread (`driver::par`), woken after
 the nav tick so they are on a core by the plans, spinning until the plans
 are in, parked between ticks. `VCOD_BOT_THREADS=<n>` sets the threads, the
 ticking one among them (default the cores up to 4; `1` runs the pass as
-before it had workers). Measured in bot-navigation.md section 3, "The
+before it had workers). Measured in bot-navigation.md section 3.11, "The
 pass on threads".
 
 ## Tracing a tick

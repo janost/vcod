@@ -477,7 +477,7 @@ impl Canvas<'_> {
         });
     }
 
-    /// A sight's overlay (cod4-hud.md 17, "The overlay"): `size` grid
+    /// A sight's overlay (cod4-hud.md 17, "ADS overlay"): `size` grid
     /// units about the centre, mirrored into four quarters when it fits a
     /// quarter of the grid, and the window around it filled by stretching
     /// its edge texels.

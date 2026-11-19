@@ -1598,7 +1598,7 @@ pub struct FxSystem {
 const MAX_TRAILS: usize = 64;
 
 /// How a United Offensive cgame draws a tracer where 1.1's and 1.5's do
-/// not (docs/research/coduo-diff.md 19, "The tracer cvars").
+/// not (docs/research/coduo-diff.md 19.2, "The tracer cvars").
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct TracerRules {
     /// The moving streak needs a shot at least as long as the tracer

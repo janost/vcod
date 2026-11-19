@@ -511,7 +511,7 @@ pub struct Material {
     pub phong: Option<PhongLit>,
     /// A CoD2 `vertcol_mul*` decal (`effect_multiply`): the stage multiplies
     /// the framebuffer by `lerp(1, colour * vertex rgb, vertex alpha)`
-    /// (cod2-materials.md 9, "Multiply"). Always false on CoD1.
+    /// (cod2-materials.md 9, "Multiply decal"). Always false on CoD1.
     pub vertex_multiply: bool,
     /// How a CoD2 model surface takes the map's light. Always
     /// [`ModelLight::None`] on CoD1.

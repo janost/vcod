@@ -158,7 +158,7 @@ pub enum ClientEvent {
 }
 
 /// What CoD2's damage and killed callbacks take past 1.1's arguments
-/// (cod2-gsc-diff.md 4.1, "timeOffset and deathAnimDuration"): a hit's
+/// (cod2-gsc-diff.md 4.1): a hit's
 /// `timeOffset` ([`crate::game::cod2::time_offset`] for a bullet, 0 for
 /// every other `G_Damage` caller) and the death anim's length
 /// `BG_AnimScriptEvent` returns. Both 0 until a hit sets them. CoD4's
@@ -183,7 +183,7 @@ impl HostExt {
         match profile.game {
             vcod_common::game::Game::Cod2 => HostExt::Cod2(Box::default()),
             vcod_common::game::Game::Cod4 => HostExt::Cod4(Box::default()),
-            _ => HostExt::Cod1,
+            vcod_common::game::Game::Cod1 => HostExt::Cod1,
         }
     }
 }
@@ -3840,7 +3840,7 @@ mod tests {
 
     /// `mp_pavlov.gsc` opens with exactly these two calls, and they are the
     /// only configstrings the script writes so far: slot 12 from setCullFog
-    /// (docs/protocol-1.1.md, "Configstrings") and slot 3 from ambientPlay.
+    /// (docs/protocol-1.1.md, "Constants worth having") and slot 3 from ambientPlay.
     #[test]
     fn setcullfog_and_ambientplay_write_their_configstring_slots() {
         let mut vm = vcod_gsc::Vm::new();

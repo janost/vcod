@@ -1,6 +1,6 @@
 //! The stock team/weapon menu handshake as a pure state machine
 //! (docs/research/cod11-hud-protocol.md, section 0.1). `JoinProbe`
-//! (`crates/client/src/probe.rs`) is the headless reference this mirrors,
+//! (`crates/client/src/probe/join.rs`) is the headless reference this mirrors,
 //! minus the socket.
 
 use super::cvars::ClientCvars;

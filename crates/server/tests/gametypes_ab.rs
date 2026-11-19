@@ -1151,7 +1151,7 @@ fn uo_headquarters_matches_retail() {
 }
 
 // The endings: each probe plays its gametype to a map end and through the
-// restart exitLevel(false) falls back to with no rotation (coduo-diff.md 22,
+// restart exitLevel(false) falls back to with no rotation (coduo-diff.md 22.2,
 // "Round and map ends").
 
 #[test]

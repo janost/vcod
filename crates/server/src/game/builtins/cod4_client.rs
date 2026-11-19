@@ -1,5 +1,5 @@
 //! CoD4 1.7's player methods the connect, the team and class menus and the
-//! spawn reach (docs/research/cod4-gsc.md 3, "The connect and the spawn").
+//! spawn reach (docs/research/cod4-gsc.md 7, "The connect, the menus and the spawn").
 //! Each command's text is the walk capture's (`play-1.7-walk.txt`) where
 //! the capture carries one.
 

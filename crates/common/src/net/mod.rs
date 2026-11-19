@@ -1193,7 +1193,9 @@ impl<T: Transport> NetClient<T> {
                 self.state = NetState::LoadingGamestate;
                 self.last_packet = Some(self.now);
                 self.connect_deadline = self.now + GAMESTATE_TIMEOUT;
-                self.last_send = self.now - GAMESTATE_POKE; // poke immediately
+                // Poke at once; `checked_sub` because an `Instant` minus a
+                // `Duration` panics on a clock younger than it.
+                self.last_send = self.now.checked_sub(GAMESTATE_POKE).unwrap_or(self.now);
             }
             // `CL_DisconnectPacket` (CoDMP.exe 0x410620): honoured only
             // while connecting or connected, and only once the server has

@@ -1,4 +1,4 @@
-//! The bots' graphs kept on disk between runs (bot-navigation.md 2, "Build
+//! The bots' graphs kept on disk between runs (bot-navigation.md 2.5, "Build
 //! times"): the next start of the same server binary on the same map loads
 //! the graph its build proved instead of building it again. A file is read
 //! as hostile input: a wrong key, length or hash, an index past the nodes

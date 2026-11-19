@@ -2986,7 +2986,7 @@ carried one (section 4.4).
 `crates/client/src/turret.rs` holds the controller, the anim pick, the
 `tag_player` eye and the shake; `entities::build_instances` draws each
 `eType` 11 entity through them, and `hud::player::turret_reticle` draws the
-reticle. UO's gate, view and drawn barrel differ (coduo-diff.md 19, "The
+reticle. UO's gate, view and drawn barrel differ (coduo-diff.md 19.5, "The
 turret view"). Where vcod differs:
 
 - The control rotation is composed onto the bone's local after the anim, in

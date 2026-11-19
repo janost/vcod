@@ -1742,7 +1742,7 @@ and a `"touch"` on each player from the other on the spawn's frame, the
 host's line first. VERIFIED, 1.1d: every think leaves the spot as spawned
 and no spawn notifies a touch.
 
-INFERRED: the 1.5 think runs the held key (cod15-movement.md 4, "The
+INFERRED: the 1.5 think runs the held key (cod15-movement.md 4.2, "The
 spawn's lie-down"), so `inside_out` and `inside_through` start 8 inside the
 host and walk the same 12.549 either way, through him: `PM_trace` dropped
 the bodies on the think's first trace. `outside_in` starts 31 off and stops

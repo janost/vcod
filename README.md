@@ -54,7 +54,7 @@ copied on purpose.
 - **The server** runs Activision's own gametype scripts on vcod's own
   `.gsc` VM, so the stock modes play by the stock rules. Retail clients
   can join it.
-- **Bots** (`--bots N --bots-shoot`) join through the menus, find their way
+- **Bots** (`--bots N`) join through the menus, find their way
   around the map, play the objectives and fight back. They're bad at it.
   So am I. rcon's `addbot` and `removebot` manage them on a running server
   ([docs/bots.md](docs/bots.md)).
@@ -82,10 +82,10 @@ copied on purpose.
 
    | Game | Server |
    |---|---|
-   | CoD 1 | `vcod-server mp_carentan --bots 6 --bots-shoot --gametype tdm` |
-   | UO | `vcod-server mp_cassino --mod-dir uo --bots 6 --bots-shoot --gametype tdm` |
-   | CoD 2 | `vcod-server mp_toujane --bots 6 --bots-shoot --gametype tdm` |
-   | CoD 4 | `vcod-server mp_crash --bots 6 --bots-shoot --gametype war` |
+   | CoD 1 | `vcod-server mp_carentan --bots 6 --gametype tdm` |
+   | UO | `vcod-server mp_cassino --mod-dir uo --bots 6 --gametype tdm` |
+   | CoD 2 | `vcod-server mp_toujane --bots 6 --gametype tdm` |
+   | CoD 4 | `vcod-server mp_crash --bots 6 --gametype war` |
 
    Then `vcod --connect 127.0.0.1:28960` (add `--mod-dir uo` for UO). Pick
    a team, pick a weapon, go get shot.

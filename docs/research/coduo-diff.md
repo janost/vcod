@@ -288,7 +288,7 @@ Live gamestates (VERIFIED, each item):
 
 ## 8. Entity types, events, server commands
 
-### Entity types
+### 8.1 Entity types
 
 Read off the `CG_AddCEntity` switch (`uo_cgame_mp_x86.dll` 0x30022170), the
 `eType` stores in `game.mp.uo.i386.so` and its `ET_*` debug names. vcod's
@@ -339,7 +339,7 @@ A seated player's own entity:
   driver; the driver saw the gunner in every frame after the climb in;
   VERIFIED, capture).
 
-### Events
+### 8.2 Events
 
 `evtab.py` runs unchanged on `uo_cgame_mp_x86.dll` (table 0x30082428, 211
 entries) and `uo_game_mp_x86.dll` (0x20083428, identical); 1.1 and 1.5 have
@@ -371,7 +371,7 @@ Every projectile explode rides 185/186 with the kind in the weapon's
 `projExplosionType` (INFERRED from the names; `G_ExplodeSmokeGrenade`
 0x5eb72 raises 185 with a direction byte, VERIFIED decompile).
 
-### Server and client commands
+### 8.3 Server and client commands
 
 - `CG_ServerCommand` (`uo_cgame_mp_x86.dll` 0x3003ac90) handles 1.5's set
   (`a`..`v`, `B`..`E`) and adds `F <ms>` (`rewindFx`, cgame trap 0xf0) and
@@ -1031,7 +1031,7 @@ stock UO grenade, smoke, flash and satchel has `cookOffHold 1` (VERIFIED).
     (`audio::AudioSystem::pick_counts`);
     `a_lod_pick_repeats_by_the_admitted_rows_alone` pins it.
 
-### Sound blend entities
+### 16.1 Sound blend entities
 
 What the cgame's case 9 and syscall 199 do with an `ET_SOUND_BLEND` entity
 (section 8). Addresses are `uo_cgame_mp_x86.dll`'s unless named.
@@ -1215,7 +1215,7 @@ What the UO cgame (`uo_cgame_mp_x86.dll`, base 0x30000000) does with section
 unless named. Live rows come from `client-probes/probe_uofx.gsc` on the
 retail server (recipe at the end).
 
-### Event dispatch
+### 19.1 Event dispatch
 
 `CG_EntityEvent` is 0x30022810. Events 139..210 jump through the table at
 0x30023564 indexed by `event - 0x8b`; the slots for the events marked so
@@ -1335,7 +1335,7 @@ registered in 0x3002b560 (VERIFIED, strings).
   The server's `rewindFx(player, seconds)` sends it to that player only
   (VERIFIED, live: the shooter got it, the spectator did not).
 
-### Client-traced rounds
+### 19.2 Client-traced rounds
 
 A vehicle MG's round (`CMD_VEH_FireTurret` 0x8ee02, `CMD_VEH_FireAltTurret`
 0x8f57e in `game.mp.uo.i386.so`) and a mounted MG's (0x5aaa9) fire through
@@ -1432,7 +1432,7 @@ The cgame side, `uo_cgame_mp_x86.dll`:
   `cod11-combat.md` 2.1). A server's `EV_BULLET_TRACER` draws from its own
   `trBase`, that server muzzle.
 
-### The flame report
+### 19.3 The flame report
 
 The server never traces a flame: the victim's cgame tests its own flame
 chunks against its own box and reports the burn (section 21,
@@ -1658,7 +1658,7 @@ so and the nozzle sits 16 units ahead of the eye. The same pair on vcod-server
 (`--gametype-script` the probe) burns the victim the same way, 8 with
 `MOD_FLAME` a frame while the bit rides, and no bullet hit (section 21).
 
-### HUD
+### 19.4 HUD
 
 `CG_OwnerDraw` 0x300320e0 returns at once under `cg_drawStatus 0` and
 switches on the owner draw id through 0x300326e8 / 0x30032648 (VERIFIED).
@@ -1707,7 +1707,7 @@ switches on the owner draw id through 0x300326e8 / 0x30032648 (VERIFIED).
   (`adsOverlayShader`); no artillery marker or range readout exists
   (VERIFIED).
 
-### The turret view
+### 19.5 The turret view
 
 Read off the UO cgame disassembly over 0x30041550..0x30041a2c, called from
 the view setup 0x30041a30 after the playerstate copy and before the
@@ -1835,7 +1835,7 @@ vcod:
   of them with the playerstate's view past an arc (its pitch reads 60 at
   28250 against a top arc of 40), and 44 shake.
 
-### Captures
+### 19.6 Captures
 
 Retail UO 1.51b, mp_cassino, each a `--probe-follow` spectator's
 `--save-snapshots` (fixtures in `crates/common/tests/fixtures/net/`, recipe
@@ -1924,7 +1924,7 @@ wire's, as `event_dump` prints them.
   the server's ints differed above the field's width (VERIFIED, the gates;
   `docs/protocol-1.1.md`, "PlayerState delta").
 
-### What vcod does
+### 19.7 What vcod does
 
 - Events: the UO-only ids keep their numbers as `EV_UO_*` (`EV_FOREIGN |
   id`), and `EV_BULLET_HIT` and the projectile explodes join them; each
@@ -1980,7 +1980,7 @@ wire's, as `event_dump` prints them.
   so the `vehicle` column and the server's 0x100000 rest on the decompiles
   (coduo-vehicles.md 14).
 
-### Capture recipe
+### 19.8 Capture recipe
 
 `probe_uofx.gsc` precaches the flamethrower and the artillery binoculars,
 hands the first player the weapon `probe_weapon` names (none: its own), a
@@ -2072,7 +2072,7 @@ Other facts from these runs:
 (`cod15-protocol-diff.md` 13). Measured against the retail 1.51b server on
 loopback (`COD_VERSION=uo tools/run_server.sh`, mp_cassino dm).
 
-### What the server writes as UO's
+### 20.1 What the server writes as UO's
 
 - **Queries and connect.** `getinfo` is 1.5's builder with `jps` and `tnk`
   after `timeoutsAllowed`; `getstatus` is 1.5's. Both replies, and the
@@ -2155,13 +2155,13 @@ loopback (`COD_VERSION=uo tools/run_server.sh`, mp_cassino dm).
   The server's torso anims under the kar98k match retail's
   (`playerstate_combat_ab`'s UO capture, VERIFIED).
 
-### Vehicles
+### 20.2 Vehicles
 
 `vcod-server` spawns, seats, drives, fires and damages UO's vehicles as
 retail does: `coduo-vehicles.md` 10 to 14 carry the addresses, captures and
 gates.
 
-### Measured
+### 20.3 Measured
 
 - `configstrings_uo_ab`: the whole table against `gamestate-uo.bin`, start
   time included. UO's level clock starts at the server's uptime (3's `t`
@@ -2201,7 +2201,7 @@ gates.
 - The vcod client (`--net-probe`, protocol 22) joins ours, answers
   `serverinfo_dm`, the team and weapon menus and spawns.
 
-### Not done (stage 1)
+### 20.4 Not done (stage 1)
 
 Stage 1's list is mostly closed: the gametypes are section 22; artillery,
 smoke, the satchel and the flamethrower's `fdc` damage section 21; the mount
@@ -2224,7 +2224,7 @@ shooter where the retail capture's stood, drives `--probe-uo-weapon`'s step
 scripts at the probe client's 60 Hz cmd cadence and compares the events and
 carriers against the section 19 captures.
 
-### Missiles
+### 21.1 Missiles
 
 - **Bounce.** `G_BounceMissile` (0x5d6e5) reflects the velocity at the
   impact time and scales all of it by 0.4 (.rodata 0xa17a4), 0.1 (0xa17a0)
@@ -2374,7 +2374,7 @@ carriers against the section 19 captures.
     satchelcharge_mp`, `--capture-tag uo-satchel` and `--probe-uo-weapon
     smoke`, port 31021 (run 75 s, spectator 55, shooter 48, 3 s apart).
 
-### Artillery
+### 21.2 Artillery
 
 - `FireWeapon` (0x7bd05) sends type 3 (`spotter`) to
   `Weapon_ArtilleryStrike_Fire` (0x7b758): `BG_Bullet_Endpos` 10000 out with
@@ -2434,7 +2434,7 @@ carriers against the section 19 captures.
   (VERIFIED, the gate). There is no terrain at those spots, so no
   terrain-against-brush tie decides them.
 
-### Bullets and turrets
+### 21.3 Bullets and turrets
 
 - `Bullet_Fire_Extended` (0x7a920) raises the world impact (178) only when
   the pass entity is the attacker, with the weapon (+0xcc) and the round's
@@ -2519,7 +2519,7 @@ carriers against the section 19 captures.
   round, the first round after it and the mark (VERIFIED). The overheat tank
   capture's vehicle gunner is section 9's, not this path.
 
-### Flamethrower
+### 21.4 Flamethrower
 
 - `weaponType gas` does nothing in `FireWeapon` (0x7bd05: types 0 to 3 have
   an arm, 4 falls through the `!= 4` error test; VERIFIED). A pulse deals no
@@ -2553,7 +2553,7 @@ carriers against the section 19 captures.
 - `eFlags` 0x200 (1.1's 0x400) rides every fire while the trigger is held
   (the flame capture), which vcod's sim sets for any held trigger.
 
-### Not done
+### 21.5 Not done
 
 - A live run of a retail UO client burning on vcod-server.
 - The bipod deploy's entity bit is not a gap: `BG_PlayerStateToEntityState`
@@ -2590,7 +2590,7 @@ a UO install:
   entity numbers, which the vehicles shift by about 40. `gametypes_ab::GAPS`
   is empty.
 
-### What each probe drives
+### 22.1 What each probe drives
 
 - **ctf** (mp_cassino, 75 s). The first level ends in ctf's own match start:
   once both teams hold a weapon, `CheckMatchStart` calls `endRound("reset")`,
@@ -2625,7 +2625,7 @@ a UO install:
   `MOD_PROJECTILE*` or `MOD_ARTILLERY*` (INFERRED from bas.gsc 3954). The
   gate matches every view ("Gaps" below).
 
-### Round and map ends
+### 22.2 Round and map ends
 
 Four more probes play each gametype to its end (ports 31111-31117) under the
 same two `--save-scripted` clients; `gametypes_ab`'s `uo_*_end` tests compare
@@ -2686,7 +2686,7 @@ the scores in the game, not the configstring, and the new level's
 `setTeamScore("allies", 0)` changes it), `d 3` (the ambient) (VERIFIED,
 every `*end*-uo.txt` capture at the `B`). Their order is `G_InitGame`'s, the
 gametype's and the level script's writes (INFERRED). vcod's restart sends
-the same burst in write order (cod11-map-cycle.md 4.5, "Gaps" below).
+the same burst in write order (cod11-map-cycle.md 4.5; 22.5 below).
 
 Four more probes (ports 32531-32539), the same two clients and
 `gametypes_ab` tests (`uo_*_time*`, `uo_team_deathmatch_*`), cover the clock
@@ -2826,7 +2826,7 @@ One more (port 32711, the same clients, `gametypes_ab`'s
   dom's team score is the flag count (`d 6 1`, then `d 6 0` at the
   restart). vcod-server matches.
 
-### Battle rank
+### 22.3 Battle rank
 
 `_rank_gmi` (`pakuo01.pk3`) is UO's battle rank, shared by the stock
 gametypes. `client-probes/probe_tdmrank` runs stock `tdm` on mp_cassino
@@ -2910,7 +2910,7 @@ compares every view. Ranks below are the icons' 1..5, `pers["rank"]` 0..4.
   `startAmmo`, which gave rank 3's binoculars 10 rounds against retail's
   0; it now gives none on CoD1. vcod-server matches every view.
 
-### Engine facts the gametypes reach
+### 22.4 Engine facts the gametypes reach
 
 - **Model entities send `xmodel`.** UO's `G_DObjUpdate` (0x77df9) writes the
   model index into `s.xmodel` (entity +0x90) for `eType` 0, 8, 11, 12, 13
@@ -3026,7 +3026,7 @@ compares every view. Ranks below are the icons' 1..5, `pers["rank"]` 0..4.
   `M_PI` (VERIFIED, 1.1 disassembly; the UO rows by name,
   `tools/re/dump_builtins.py`). `probe_basend` calls `cos` and `sin`.
 
-### Gaps
+### 22.5 Gaps
 
 All closed; `gametypes_ab::GAPS` is empty.
 

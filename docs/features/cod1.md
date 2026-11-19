@@ -336,7 +336,7 @@ Game:
 
 ### Bots
 
-`--bots N [--bots-shoot]` and rcon's `addbot`, `removebot`, `listbots`
+`--bots N [--bots-peaceful]` and rcon's `addbot`, `removebot`, `listbots`
 ([bots.md](../bots.md)).
 
 - They join through the stock menus and roam a nav graph built from
@@ -344,7 +344,7 @@ Game:
 - Objectives: S&D plants and defuses, Retrieval carries and escorts,
   Behind Enemy Lines hunts. Only the two teammates nearest a shot go to
   it.
-- With `--bots-shoot` they fight: a reaction delay, a turn cap, aim that
+- Unless `--bots-peaceful`, they fight: a reaction delay, a turn cap, aim that
   settles and trails a crossing target, strafing on their sights. They
   spot enemies in a sight cone, keep their target and turn on whoever
   shoots them.

@@ -313,7 +313,7 @@ impl WeaponMove {
     };
 
     /// The fields off a weapon asset's raw `WeaponDef` (offsets in
-    /// cod4-pmove.md, "The weapon's scales").
+    /// cod4-pmove.md 6).
     pub fn from_raw(raw: &[u8]) -> Option<WeaponMove> {
         let f = |o: usize| Some(f32::from_le_bytes(raw.get(o..o + 4)?.try_into().ok()?));
         Some(WeaponMove {

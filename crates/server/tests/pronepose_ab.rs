@@ -9,14 +9,14 @@
 //! (docs/research/player-model-anim-system.md, "The prone body on a grade").
 //!
 //! On 1.5 and UO the body keeps the bend its last airborne cmd wrote
-//! (cod15-movement.md 4, "The airborne prone body"), so ours' cmds run on
+//! (cod15-movement.md 4.1, "The airborne prone body"), so ours' cmds run on
 //! the probe client's 16, 16, 18 cadence and the playerstate's
 //! `fTorsoHeight`, `fTorsoPitch` and `fWaistPitch` are held to the
 //! fixture's last `FALL` line.
 //!
 //! With `probe_spawn_yaw` the first placement is a `spawn` at another yaw:
 //! 1.5's and UO's spawn think lies the held prone down along it
-//! (cod15-movement.md 4, "The spawn's lie-down").
+//! (cod15-movement.md 4.2, "The spawn's lie-down").
 //!
 //! `PB_REPORT=1` prints both logs, `PB_TRACE=1` our snapshots,
 //! `PB_FIXTURE=<path>` runs a `probe_rays` gate against another capture. The tests need `COD_DIR` at the install
@@ -401,7 +401,7 @@ fn a_prone_body_on_the_mp_brecourt_field_poses_like_uo() {
 /// The spawn's own think lies a client holding prone down along the spawn's
 /// yaw on 1.5 and UO, which run his last cmd there; 1.1's null cmd leaves
 /// him standing until his next cmd, by when the view is the spot's
-/// (cod15-movement.md 4, "The spawn's lie-down").
+/// (cod15-movement.md 4.2, "The spawn's lie-down").
 #[test]
 fn a_spawn_lies_down_on_its_own_yaw_like_retail() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {

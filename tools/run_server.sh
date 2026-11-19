@@ -18,6 +18,7 @@
 #   COD_LNXDED       server binary (default private/retail/cod-lnxded-1.1d/cod_lnxded,
 #                    cod-lnxded-1.5b/cod_lnxded for 1.5,
 #                    coduo-lnxded-1.51b/coduo_lnxded for uo)
+#   GDB_PY           a gdb python script the server runs under (tools/re/gdb_*.py)
 #   COD_LNXDED_HOME  homepath holding main/game.mp.i386.so, or uo/game.mp.uo.i386.so.
 #                    Unset, the module comes from private/server (private/server-1.5,
 #                    private/server-uo) and the server runs in a homepath of its port's
@@ -38,33 +39,12 @@
 #     capture uses `+set g_gametype tdm +set scr_friendlyfire 1`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-if [ -z "${COD_DIR:-}" ]; then
-    echo "COD_DIR is not set; point it at the game install (the directory containing main/)" >&2
-    exit 1
-fi
-[ -d "$COD_DIR/main" ] || { echo "COD_DIR=$COD_DIR has no main/ directory" >&2; exit 1; }
-EXE=cod_lnxded MODULE=main/game.mp.i386.so MAP_DEFAULT=mp_carentan
-case "${COD_VERSION:-1.1}" in
-    1.1) REF=private/retail/cod-lnxded-1.1d HOME_DEFAULT=private/server ;;
-    1.5) REF=private/retail/cod-lnxded-1.5b HOME_DEFAULT=private/server-1.5 ;;
-    uo) REF=private/retail/coduo-lnxded-1.51b HOME_DEFAULT=private/server-uo
-        EXE=coduo_lnxded MODULE=uo/game.mp.uo.i386.so MAP_DEFAULT=mp_cassino
-        [ -d "$COD_DIR/uo" ] || { echo "COD_DIR=$COD_DIR has no uo/ directory" >&2; exit 1; } ;;
-    *) echo "COD_VERSION must be 1.1, 1.5 or uo" >&2; exit 1 ;;
-esac
-[ -d "$REF/lib" ] && export LD_LIBRARY_PATH="$PWD/$REF/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-BIN="${COD_LNXDED:-$REF/$EXE}"
-MAP="${1:-$MAP_DEFAULT}"
-[ -x "$BIN" ] || { echo "server binary $BIN missing or not executable; set COD_LNXDED" >&2; exit 1; }
-if [ ! -e /lib/ld-linux.so.2 ]; then
-    echo "32-bit loader /lib/ld-linux.so.2 missing; the server needs a 32-bit glibc" >&2
-    exit 1
-fi
-GAMEDIR="${MODULE%%/*}" PORT_USED="${PORT:-28960}"
+PORT_USED="${PORT:-28960}"
 . tools/retail_home.sh
+MAP="${1:-$MAP_DEFAULT}"
 # Split as shell words without eval: xargs honours the quotes.
 mapfile -t PRE_ARGS < <(printf '%s' "${PRE_MAP_ARGS:-}" | xargs -r printf '%s\n')
-exec "$BIN" \
+exec "${RUN[@]}" "$BIN" \
     +set dedicated 1 \
     +set fs_basepath "$COD_DIR" \
     +set fs_homepath "$HOMEPATH" \
