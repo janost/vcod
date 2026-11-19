@@ -54,6 +54,7 @@ mod hud_text;
 mod input_events;
 mod legs_probe;
 mod lightmap_blocks;
+mod live_frame;
 mod loading;
 mod marks;
 mod online_frame;
