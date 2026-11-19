@@ -41,6 +41,7 @@ pub mod terrain;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod text;
+pub mod tracetape;
 pub mod treecheck;
 pub mod turretpose;
 pub mod ui_menu;

@@ -29,6 +29,7 @@ pub mod mantle;
 mod moves;
 mod slide;
 mod stance;
+pub mod tape;
 pub mod weapon;
 pub mod wire;
 
