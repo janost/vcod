@@ -244,7 +244,16 @@ impl Loader {
         let p = progress.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
-        let job = std::thread::spawn(move || f(&p, &flag));
+        // A live test's join runs on its clock (`play::cod4::tests::sim`).
+        #[cfg(test)]
+        let clock = crate::play::cod4::tests::sim::current();
+        let job = std::thread::spawn(move || {
+            #[cfg(test)]
+            if clock.is_some() {
+                crate::play::cod4::tests::sim::install(clock);
+            }
+            f(&p, &flag)
+        });
         let dir = game_dir.join("main");
         let hud = std::thread::spawn(move || {
             let mut h = Cod4Hud::default();
@@ -411,7 +420,8 @@ mod tests {
     /// map (cod4-hud.md 18).
     #[test]
     fn cod4_live_join_draws_the_connect_screen_then_hands_over() {
-        use vcod_server::cod4::{Cod4Config, Cod4Server, FRAME_MS};
+        use crate::play::cod4::tests::{clk_now, run_held, since};
+        use vcod_server::cod4::{Cod4Config, Cod4Server};
         let Some(install) = vcod_cod4::testing::cod4_install() else {
             return;
         };
@@ -426,11 +436,9 @@ mod tests {
             7,
         );
         sv.load(Some(&install)).unwrap();
-        let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        sock.set_nonblocking(true).unwrap();
-        let addr = sock.local_addr().unwrap();
         let game_dir = install.root().to_path_buf();
-        let client = std::thread::spawn(move || {
+        // The join's worker moves the clock; this thread samples off it.
+        let client = move |addr| {
             let mut l = Loader::start(JoinArgs {
                 addr,
                 server: addr.to_string(),
@@ -441,11 +449,11 @@ mod tests {
                 allow_download: false,
                 www_download: false,
             });
-            let t0 = Instant::now();
+            let t0 = clk_now();
             let (mut stages, mut fills, mut shot) = (Vec::new(), Vec::new(), false);
             let done = loop {
-                assert!(t0.elapsed() < Duration::from_secs(60), "no join in 60 s");
-                let q = l.quads((1280.0, 960.0), t0.elapsed().as_millis() as i32);
+                assert!(since(t0) < Duration::from_secs(60), "no join in 60 s");
+                let q = l.quads((1280.0, 960.0), since(t0).as_millis() as i32);
                 let st = l.progress.status();
                 if stages.last() != Some(&st.stage) {
                     stages.push(st.stage);
@@ -468,24 +476,8 @@ mod tests {
                 fills,
                 shot,
             )
-        });
-        let mut next = Instant::now();
-        let mut buf = [0u8; 2048];
-        while !client.is_finished() {
-            while let Ok((n, from)) = sock.recv_from(&mut buf) {
-                sv.handle_packet(from, &buf[..n], Instant::now());
-            }
-            let now = Instant::now();
-            if now >= next {
-                sv.tick_frames(now, 1);
-                next += Duration::from_millis(FRAME_MS as u64);
-            }
-            for (to, p) in sv.take_outgoing() {
-                sock.send_to(&p, to).unwrap();
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        let (done, stages, fills, shot) = client.join().unwrap();
+        };
+        let (done, stages, fills, shot) = run_held(&mut sv, client, |_, _, _| true);
         println!("stages {stages:?}, {} bar frames", fills.len());
         assert_eq!(done.unwrap(), ("mp_crash".to_string(), true));
         assert!(stages.contains(&Stage::Loading), "{stages:?}");
@@ -513,16 +505,52 @@ mod tests {
         }
     }
 
-    /// The worker's end: what `poll` hands back within `secs`.
+    /// The worker's end: what `poll` hands back within `secs` of a live
+    /// test's clock, which the worker moves.
     fn finish(l: &mut Loader, secs: u64) -> Option<Result<Joined>> {
-        let t0 = Instant::now();
-        while t0.elapsed() < Duration::from_secs(secs) {
+        use crate::play::cod4::tests::{clk_now, since};
+        let t0 = clk_now();
+        while since(t0) < Duration::from_secs(secs) {
             if let Some(done) = l.poll() {
                 return Some(done);
             }
             std::thread::sleep(Duration::from_millis(5));
         }
         None
+    }
+
+    /// `client` against `sv` through `run_held`, then the clock moved on
+    /// until the server holds no client or `secs` pass: the client's
+    /// result, the most clients the server held, and whether it freed
+    /// them.
+    fn held_until_freed<T: Send + 'static>(
+        sv: &mut vcod_server::cod4::Cod4Server,
+        secs: u64,
+        client: impl FnOnce(std::net::SocketAddr) -> T + Send + 'static,
+    ) -> (T, usize, bool) {
+        use crate::play::cod4::tests::{clk_now, clk_sleep, run_held, since};
+        use std::sync::atomic::AtomicUsize;
+        let (count, most) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let (c, m) = (count.clone(), most.clone());
+        let (out, freed) = run_held(
+            sv,
+            move |addr| {
+                let out = client(addr);
+                let t0 = clk_now();
+                // The disconnect lands in a frame or two; a timeout takes
+                // `sv_connectTimeout`'s 45 s.
+                while c.load(Ordering::Relaxed) != 0 && since(t0) < Duration::from_secs(secs) {
+                    clk_sleep(Duration::from_millis(16));
+                }
+                (out, c.load(Ordering::Relaxed) == 0)
+            },
+            move |sv, _, _| {
+                count.store(sv.client_count(), Ordering::Relaxed);
+                m.fetch_max(sv.client_count(), Ordering::Relaxed);
+                true
+            },
+        );
+        (out, most.load(Ordering::Relaxed), freed)
     }
 
     /// A server's `print` while the challenge is out draws in yellow
@@ -620,7 +648,8 @@ mod tests {
     /// frees the slot (`CL_Disconnect`), instead of timing it out.
     #[test]
     fn cod4_connect_cancel_after_the_gamestate_frees_the_server_slot() {
-        use vcod_server::cod4::{Cod4Config, Cod4Server, FRAME_MS};
+        use crate::play::cod4::tests::{clk_now, since};
+        use vcod_server::cod4::{Cod4Config, Cod4Server};
         let Some(install) = vcod_cod4::testing::cod4_install() else {
             return;
         };
@@ -635,54 +664,17 @@ mod tests {
             7,
         );
         sv.load(Some(&install)).unwrap();
-        let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        sock.set_nonblocking(true).unwrap();
-        let addr = sock.local_addr().unwrap();
         let game_dir = install.root().to_path_buf();
-        let client = std::thread::spawn(move || {
+        let (done, most, freed) = held_until_freed(&mut sv, 20, move |addr| {
             let mut l = Loader::start(args(addr, game_dir));
-            let t0 = Instant::now();
+            let t0 = clk_now();
             while l.progress.status().stage != Stage::Loading {
-                assert!(t0.elapsed() < Duration::from_secs(30), "no gamestate");
+                assert!(since(t0) < Duration::from_secs(30), "no gamestate");
                 std::thread::sleep(Duration::from_millis(2));
             }
             l.cancel();
             finish(&mut l, 60).expect("the join ends")
         });
-        let mut next = Instant::now();
-        let mut buf = [0u8; 2048];
-        let mut most = 0;
-        let mut finished_at: Option<Instant> = None;
-        let mut freed = false;
-        let t0 = Instant::now();
-        while t0.elapsed() < Duration::from_secs(90) {
-            while let Ok((n, from)) = sock.recv_from(&mut buf) {
-                sv.handle_packet(from, &buf[..n], Instant::now());
-            }
-            let now = Instant::now();
-            if now >= next {
-                sv.tick_frames(now, 1);
-                next += Duration::from_millis(FRAME_MS as u64);
-            }
-            for (to, p) in sv.take_outgoing() {
-                let _ = sock.send_to(&p, to);
-            }
-            most = most.max(sv.client_count());
-            if client.is_finished() {
-                let at = *finished_at.get_or_insert_with(Instant::now);
-                if sv.client_count() == 0 {
-                    freed = true;
-                    break;
-                }
-                // The disconnect lands in a frame or two; a timeout takes
-                // `sv_connectTimeout`'s 45 s.
-                if at.elapsed() > Duration::from_secs(20) {
-                    break;
-                }
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        let done = client.join().unwrap();
         let e = done.err().expect("a cancelled join fails");
         assert!(
             e.downcast_ref::<vcod_cod4::net::conn::Cancelled>()
@@ -699,7 +691,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn cod4_join_whose_map_load_fails_frees_the_server_slot() {
-        use vcod_server::cod4::{Cod4Config, Cod4Server, FRAME_MS};
+        use vcod_server::cod4::{Cod4Config, Cod4Server};
         let Some(install) = vcod_cod4::testing::cod4_install() else {
             return;
         };
@@ -713,47 +705,14 @@ mod tests {
             7,
         );
         sv.load(Some(&install)).unwrap();
-        let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        sock.set_nonblocking(true).unwrap();
-        let addr = sock.local_addr().unwrap();
         let root = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(install.root().join("main"), root.path().join("main")).unwrap();
         let game_dir = root.path().to_path_buf();
-        let client = std::thread::spawn(move || {
+        let (done, most, freed) = held_until_freed(&mut sv, 5, move |addr| {
             let mut l = Loader::start(args(addr, game_dir));
             finish(&mut l, 60).expect("the join ends")
         });
-        let mut next = Instant::now();
-        let mut buf = [0u8; 2048];
-        let (mut most, mut freed) = (0, false);
-        let mut finished_at: Option<Instant> = None;
-        let t0 = Instant::now();
-        while t0.elapsed() < Duration::from_secs(90) {
-            while let Ok((n, from)) = sock.recv_from(&mut buf) {
-                sv.handle_packet(from, &buf[..n], Instant::now());
-            }
-            let now = Instant::now();
-            if now >= next {
-                sv.tick_frames(now, 1);
-                next += Duration::from_millis(FRAME_MS as u64);
-            }
-            for (to, p) in sv.take_outgoing() {
-                let _ = sock.send_to(&p, to);
-            }
-            most = most.max(sv.client_count());
-            if client.is_finished() {
-                let at = *finished_at.get_or_insert_with(Instant::now);
-                if sv.client_count() == 0 {
-                    freed = true;
-                    break;
-                }
-                if at.elapsed() > Duration::from_secs(5) {
-                    break;
-                }
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        let e = client.join().unwrap().err().expect("the load fails");
+        let e = done.err().expect("the load fails");
         assert!(format!("{e:#}").contains("cannot load CoD4 map"), "{e:#}");
         assert_eq!(most, 1, "the client was in the slot table");
         assert!(freed, "the server kept the client past 5 s");

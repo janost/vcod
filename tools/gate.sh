@@ -18,7 +18,8 @@
 #   bots    bots:: at both, bot_threads::, cod4::bots:: with COD4_DIR
 #   render  renderer::pipeline_check (needs a Vulkan adapter; LVP_ICD
 #           names lavapipe's ICD json to use it)
-#   cod2    cod2_gametype_census with COD2_DIR
+#   cod2    cod2_gametype_census with COD2_DIR; the client's real-time
+#           play::cod2_soak::cod2_live_ (needs an adapter too)
 #   cod4    cod4_every_map_poses_both_teams with COD4_DIR
 #
 # Env:
@@ -128,6 +129,8 @@ for area in "$@"; do
 		cod2)
 			[[ -n ${COD2_DIR:-} ]] && check "cod2_gametype_census" "${base[@]}" -- \
 				test --release -p vcod-server --lib -- --ignored cod2_gametype_census
+			[[ -n ${COD2_DIR:-} ]] && check "cod2 live play" "${base[@]}" -- \
+				test -p vcod --bins -- --ignored play::cod2_soak::cod2_live_
 			;;
 		cod4)
 			[[ -n ${COD4_DIR:-} ]] && check "cod4 hit boxes" "${base[@]}" -- \

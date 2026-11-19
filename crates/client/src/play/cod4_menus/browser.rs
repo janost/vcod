@@ -180,7 +180,7 @@ impl Browser {
     /// added to), and Favorites only pings. A quick refresh
     /// (`full` false) only forgets the pings.
     pub fn refresh(&mut self, source: Source, full: bool) {
-        let now = Instant::now();
+        let now = browser_now();
         self.source = source;
         self.refreshing = true;
         self.started = Some(now);
@@ -392,7 +392,7 @@ impl Browser {
     pub fn ask_status(&mut self, addr: SocketAddrV4) {
         self.status = Some((addr, None));
         self.status_sent = None;
-        self.status_resend(Instant::now());
+        self.status_resend(browser_now());
     }
 
     fn status_resend(&mut self, now: Instant) {
@@ -1085,10 +1085,22 @@ impl Browser {
     }
 }
 
+/// Now for the browser's ping clock: the wall's, or the clock a live test
+/// runs its server on (`play::cod4::tests::sim`).
+pub(crate) fn browser_now() -> Instant {
+    #[cfg(test)]
+    if let Some(t) = crate::play::cod4::tests::sim::now() {
+        return t;
+    }
+    Instant::now()
+}
+
 /// vcod-server's CoD4 `war` on mp_crash on a loopback port, served on a
 /// thread for tests (the browser's, the front end's) until it is dropped:
 /// `password` its `g_password`; [`TestServer::command`] sends client 0 a
-/// server command.
+/// server command. The server runs on a `sim` clock the starting thread
+/// is put on, so only that thread's sleeps (`clk_sleep`) move it and a
+/// loaded machine cannot starve the server past a client's wait.
 #[cfg(test)]
 pub(crate) struct TestServer {
     pub(crate) addr: SocketAddrV4,
@@ -1100,14 +1112,17 @@ pub(crate) struct TestServer {
 #[cfg(test)]
 impl TestServer {
     pub(crate) fn start(password: &str) -> Option<TestServer> {
+        use crate::play::cod4::tests::{serve_until, sim};
         use std::sync::atomic::{AtomicBool, Ordering};
-        use vcod_server::cod4::{Cod4Config, Cod4Server, FRAME_MS};
+        use vcod_server::cod4::{Cod4Config, Cod4Server};
         let install = vcod_cod4::testing::cod4_install()?;
         let run = std::sync::Arc::new(AtomicBool::new(true));
         let flag = run.clone();
         let password = password.to_string();
         let (tx, rx) = mpsc::channel();
         let (cmd_tx, cmd_rx) = mpsc::channel::<String>();
+        let clock = sim::Clock::new();
+        let served = clock.clone();
         // The server is built on its own thread: it is not `Send`.
         let h = std::thread::spawn(move || {
             let mut sv = Cod4Server::new(
@@ -1124,29 +1139,18 @@ impl TestServer {
             let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
             sock.set_nonblocking(true).unwrap();
             tx.send(sock.local_addr().unwrap()).unwrap();
-            let mut next = Instant::now();
-            let mut buf = [0u8; 4096];
-            while flag.load(Ordering::Relaxed) {
-                while let Ok((n, from)) = sock.recv_from(&mut buf) {
-                    sv.handle_packet(from, &buf[..n], Instant::now());
-                }
+            let finished = || !flag.load(Ordering::Relaxed);
+            serve_until(&mut sv, &sock, &served, finished, |sv, _, _| {
                 while let Ok(c) = cmd_rx.try_recv() {
                     sv.send_server_command(0, &c);
                 }
-                let now = Instant::now();
-                if now >= next {
-                    sv.tick_frames(now, 1);
-                    next += Duration::from_millis(FRAME_MS as u64);
-                }
-                for (to, p) in sv.take_outgoing() {
-                    let _ = sock.send_to(&p, to);
-                }
-                std::thread::sleep(Duration::from_millis(1));
-            }
+                true
+            });
         });
         let SocketAddr::V4(addr) = rx.recv().ok()? else {
             return None;
         };
+        sim::install(Some(clock));
         Some(TestServer {
             addr,
             run,
@@ -1167,6 +1171,7 @@ impl Drop for TestServer {
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
+        crate::play::cod4::tests::sim::install(None);
     }
 }
 
@@ -1215,12 +1220,19 @@ mod tests {
     /// Pumps the browser a frame at a time until `done` or 5 s pass, the
     /// frame's sleep first: a Local reply read in the broadcast's own
     /// millisecond has ping 0, which the display list hides (retail's
-    /// `time - start` at 0x470df3 has no `+ 1` either).
+    /// `time - start` at 0x470df3 has no `+ 1` either). The 5 s are on a
+    /// [`TestServer`]'s clock where one runs, and on the wall too: a
+    /// loopback helper thread (a fake master, the resolve) answers in
+    /// wall time.
     fn pump_until(m: &mut ScriptMenus, done: impl Fn(&ScriptMenus) -> bool) -> bool {
-        let t0 = Instant::now();
-        while t0.elapsed() < Duration::from_secs(5) {
-            std::thread::sleep(Duration::from_millis(16));
-            m.pump_browser(Instant::now());
+        use crate::play::cod4::tests::{clk_now, clk_sleep};
+        let (t0, wall) = (clk_now(), Instant::now());
+        let budget = Duration::from_secs(5);
+        while clk_now() - t0 < budget || wall.elapsed() < budget {
+            clk_sleep(Duration::from_millis(16));
+            // the helpers' turn
+            std::thread::sleep(Duration::from_millis(1));
+            m.pump_browser(browser_now());
             if done(m) {
                 return true;
             }

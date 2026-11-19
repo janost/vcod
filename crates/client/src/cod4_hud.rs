@@ -26,6 +26,7 @@ use crate::console::shell::Shell;
 use crate::hud::HudQuad;
 use crate::hud::cod2elem::{self, ScreenPlacement};
 use crate::hud::font::{self, Font, Glyph};
+use crate::hud::hudelem::format_g;
 use crate::play::cod4::{Cod4Session, EV_OBITUARY, Fired, client_name, ent_u32};
 
 /// `cg_chatHeight` 8 and `cg_chatTime` 12000 (`iw3mp.exe` 0x43ce07,
@@ -932,20 +933,7 @@ impl Cod4Hud {
         else {
             return out;
         };
-        let mode = match shell
-            .cvar("cg_drawTalk")
-            .map(str::to_ascii_uppercase)
-            .as_deref()
-        {
-            None | Some("ALL") | Some("1") => 1,
-            Some("NONE") | Some("0") => 0,
-            Some("FRIENDLY") | Some("2") => 2,
-            Some("ENEMY") | Some("3") => 3,
-            Some(_) => 1,
-        };
-        if mode == 0 {
-            return out;
-        }
+        let draw_talk = shell.cvar("cg_drawTalk");
         let talkers = s.talkers();
         let own_team = s.own_team();
         let perks = snap.ps.get("perks").unwrap_or(0);
@@ -967,7 +955,7 @@ impl Cod4Hud {
             let name = crate::play::cod4::client_name(c);
             let team = crate::play::cod4::client_team(c);
             let enemy = own_team != 0 && own_team != team;
-            if (mode == 2 && enemy) || (mode == 3 && !enemy) {
+            if !draws_talker(draw_talk, enemy) {
                 continue;
             }
             let mut text_rgba = it.fore_color;
@@ -3745,6 +3733,17 @@ fn elem_time(e: &HudElem, now: i32) -> i32 {
     (e.time - now + unit - 1).max(0)
 }
 
+/// Whether `cg_drawTalk` (`NONE`, `ALL`, `FRIENDLY`, `ENEMY` or 0..3;
+/// unset or unknown is `ALL`) draws a talker who is an `enemy` or not.
+fn draws_talker(cg_draw_talk: Option<&str>, enemy: bool) -> bool {
+    match cg_draw_talk.map(str::to_ascii_uppercase).as_deref() {
+        Some("NONE") | Some("0") => false,
+        Some("FRIENDLY") | Some("2") => !enemy,
+        Some("ENEMY") | Some("3") => enemy,
+        _ => true,
+    }
+}
+
 /// `setPulseFX`: letters come in one per `fxLetterTime` from
 /// `fxBirthTime`, and from `fxDecayStartTime` the text fades over
 /// `fxDecayDuration` (an approximation of the cgame's per-letter decay).
@@ -3762,15 +3761,6 @@ fn pulse(e: &HudElem, text: &str, now: i32, rgba: &mut [f32; 4]) -> String {
     }
     let shown = (t / e.fx_letter_time + 1) as usize;
     text.chars().take(shown).collect()
-}
-
-/// `%g` of a value: six significant digits, no trailing zeros.
-fn format_g(v: f32) -> String {
-    if v.fract() == 0.0 && v.abs() < 1e6 {
-        return format!("{}", v as i64);
-    }
-    let s = format!("{v:.6}");
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// The fields `cod2elem::position` places by, which CoD4 packs as CoD2.
@@ -3802,6 +3792,90 @@ pub(crate) mod tests {
     fn close<const N: usize>(got: [f32; N], want: [f32; N]) {
         let off = got.iter().zip(&want).any(|(g, w)| (g - w).abs() > 1e-3);
         assert!(!off, "{got:?} != {want:?}");
+    }
+
+    /// `cg_drawTalk`'s four modes, by name or number, any case; unset or
+    /// unknown draws everyone.
+    #[test]
+    fn draw_talk_picks_whom_the_talker_list_shows() {
+        for (v, mate, enemy) in [
+            (None, true, true),
+            (Some("ALL"), true, true),
+            (Some("1"), true, true),
+            (Some("none"), false, false),
+            (Some("0"), false, false),
+            (Some("Friendly"), true, false),
+            (Some("2"), true, false),
+            (Some("ENEMY"), false, true),
+            (Some("3"), false, true),
+            (Some("7"), true, true),
+        ] {
+            assert_eq!(
+                (draws_talker(v, false), draws_talker(v, true)),
+                (mate, enemy),
+                "{v:?}"
+            );
+        }
+    }
+
+    /// `setPulseFX`: nothing before the birth, a letter per
+    /// `fxLetterTime` from it, and past `fxDecayStartTime` the text fades
+    /// over `fxDecayDuration`.
+    #[test]
+    fn pulse_fx_types_the_letters_in_then_decays() {
+        let e = HudElem {
+            fx_birth_time: 1000,
+            fx_letter_time: 100,
+            fx_decay_start_time: 2000,
+            fx_decay_duration: 1000,
+            ..Default::default()
+        };
+        let at = |now| {
+            let mut rgba = [1.0; 4];
+            (pulse(&e, "HELLO", now, &mut rgba), rgba[3])
+        };
+        assert_eq!(at(999), (String::new(), 1.0));
+        assert_eq!(at(1000), ("H".into(), 1.0));
+        assert_eq!(at(1250), ("HEL".into(), 1.0));
+        assert_eq!(at(3000), ("HELLO".into(), 1.0));
+        assert_eq!(at(3500), ("HELLO".into(), 0.5));
+        assert_eq!(at(4500), ("HELLO".into(), 0.0));
+        let plain = HudElem::default();
+        assert_eq!(pulse(&plain, "HELLO", 0, &mut [1.0; 4]), "HELLO");
+    }
+
+    /// A value hudelem prints as C's `%g`: six significant digits, an
+    /// exponent from 1e6 up.
+    #[test]
+    fn a_value_hudelem_prints_like_percent_g() {
+        assert_eq!(format_g(5.0), "5");
+        assert_eq!(format_g(0.1), "0.1");
+        assert_eq!(format_g(-2.5), "-2.5");
+        assert_eq!(format_g(1234.5678), "1234.57");
+        assert_eq!(format_g(1_000_000.0), "1e+06");
+    }
+
+    /// `Scoreboard_HandleInput`: the board's keys reach it only while it
+    /// is held; down scrolls a step while lines run off the bottom, to the
+    /// last; up stops at the first line; other keys pass to the binds.
+    #[test]
+    fn the_scoreboard_scrolls_only_while_held_and_within_its_lines() {
+        let mut hud = Cod4Hud::default();
+        assert!(!hud.scoreboard_key("PGDN", 4), "a hidden board");
+        hud.show_scores = true;
+        hud.scores_off_bottom.set((false, 20));
+        assert!(hud.scoreboard_key("MWHEELDOWN", 4));
+        assert_eq!(hud.scores_top.get(), 0, "nothing below");
+        hud.scores_off_bottom.set((true, 6));
+        assert!(hud.scoreboard_key("KP_PGDN", 4));
+        assert_eq!(hud.scores_top.get(), 4);
+        assert!(hud.scoreboard_key("PGDN", 4));
+        assert_eq!(hud.scores_top.get(), 6, "to the last line");
+        assert!(hud.scoreboard_key("PGUP", 4));
+        assert_eq!(hud.scores_top.get(), 2);
+        assert!(hud.scoreboard_key("MWHEELUP", 4));
+        assert_eq!(hud.scores_top.get(), 1, "the first line");
+        assert!(!hud.scoreboard_key("TAB", 4));
     }
 
     /// The minimap's texture window: centred on the view's place on the

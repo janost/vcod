@@ -76,6 +76,9 @@ pub const BREATH_ENTITY: u32 = 1022;
 /// track for any room but `generic`, its equal-power mix and a gain set so
 /// the dry path stays at 1 (docs/research/cod11-shellshock.md, "Sound").
 const ROOM_FEEDBACK: f64 = 0.85;
+/// The frames one mock `process` renders: kira's default internal buffer.
+#[cfg(test)]
+const MOCK_BLOCK: usize = 128;
 const ROOM_DAMPING: f64 = 0.9;
 
 pub struct AudioOpts {
@@ -113,7 +116,7 @@ pub struct AudioSystem {
     cs_sounds: usize,
     /// `None` when disabled or no device opened; cues still resolve, nothing
     /// starts.
-    manager: Option<AudioManager<DefaultBackend>>,
+    manager: Option<Mixer>,
     aliases_all: AliasTable,
     /// `aliases_all` filtered by loadspec for the current map; empty before
     /// the first gamestate.
@@ -205,10 +208,6 @@ pub struct AudioSystem {
     /// mixer ([`Self::mix`]).
     #[cfg(test)]
     rows: HashMap<VoiceId, AliasRow>,
-    /// A silent system's looping voices play on until stopped, as a
-    /// device's do ([`Self::keep_silent_loops`]).
-    #[cfg(test)]
-    keep_loops: bool,
     /// CoD4's rule for secondary aliases: each starts its own in turn
     /// down the chain (`SND_PlaySoundAlias_Internal`, iw3mp.exe
     /// 0x5c3b5f..0x5c3bdb). Off, CoD2's: one secondary, refused when it
@@ -297,6 +296,46 @@ struct FireLoop {
     voice: Option<VoiceId>,
 }
 
+/// The main track every mixer plays into, with the shellshock room's reverb
+/// and its wet level.
+fn main_track() -> (MainTrackBuilder, (ReverbHandle, VolumeControlHandle)) {
+    let mut main = MainTrackBuilder::new().sound_capacity(SOUND_CAPACITY);
+    let room = (
+        main.add_effect(
+            ReverbBuilder::new()
+                .feedback(ROOM_FEEDBACK)
+                .damping(ROOM_DAMPING)
+                .mix(Mix::DRY),
+        ),
+        main.add_effect(VolumeControlBuilder::new(Decibels::IDENTITY)),
+    );
+    (main, room)
+}
+
+/// The kira manager voices start on: the output device's, or under test
+/// kira's mock backend, which renders only when [`AudioSystem::pump_mixer`]
+/// runs it.
+// one per AudioSystem; the mock variant exists only in the test build
+#[cfg_attr(test, expect(clippy::large_enum_variant))]
+enum Mixer {
+    Device(AudioManager<DefaultBackend>),
+    #[cfg(test)]
+    Mock(AudioManager<kira::backend::mock::MockBackend>),
+}
+
+impl Mixer {
+    fn play<D: kira::sound::SoundData>(
+        &mut self,
+        d: D,
+    ) -> Result<D::Handle, kira::PlaySoundError<D::Error>> {
+        match self {
+            Mixer::Device(m) => m.play(d),
+            #[cfg(test)]
+            Mixer::Mock(m) => m.play(d),
+        }
+    }
+}
+
 impl AudioSystem {
     pub fn new(fs: &dyn AssetSource, opts: AudioOpts) -> AudioSystem {
         let aliases = match fs.game() == vcod_common::game::Game::Cod2 {
@@ -314,25 +353,18 @@ impl AudioSystem {
     ) -> AudioSystem {
         let mut reverb = None;
         let manager = if opts.enabled {
-            let mut main = MainTrackBuilder::new().sound_capacity(SOUND_CAPACITY);
-            reverb = Some((
-                main.add_effect(
-                    ReverbBuilder::new()
-                        .feedback(ROOM_FEEDBACK)
-                        .damping(ROOM_DAMPING)
-                        .mix(Mix::DRY),
-                ),
-                main.add_effect(VolumeControlBuilder::new(Decibels::IDENTITY)),
-            ));
+            let (main, room) = main_track();
             let settings = AudioManagerSettings {
                 main_track_builder: main,
                 ..Default::default()
             };
             match AudioManager::<DefaultBackend>::new(settings) {
-                Ok(m) => Some(m),
+                Ok(m) => {
+                    reverb = Some(room);
+                    Some(Mixer::Device(m))
+                }
                 Err(e) => {
                     log::warn!("audio: cannot open an output device ({e}); running silent");
-                    reverb = None;
                     None
                 }
             }
@@ -393,8 +425,6 @@ impl AudioSystem {
             subtitles: Vec::new(),
             #[cfg(test)]
             rows: HashMap::new(),
-            #[cfg(test)]
-            keep_loops: false,
             chain_secondaries: false,
             entity_offsets: false,
             as_master: false,
@@ -2166,22 +2196,11 @@ impl AudioSystem {
             self.set_room_wet(self.env.wet());
         }
         let master = self.master();
-        #[cfg(test)]
-        let kept: HashSet<VoiceId> = if self.keep_loops {
-            let t = &self.table;
-            t.ids()
-                .into_iter()
-                .filter(|&id| t.looping(id) == Some(true))
-                .collect()
-        } else {
-            HashSet::new()
-        };
-        #[cfg(not(test))]
-        let kept = HashSet::<VoiceId>::new();
         let handles = &mut self.handles;
-        self.table.retain(|id| match handles.get(&id) {
-            Some(h) => h.state() != PlaybackState::Stopped,
-            None => kept.contains(&id),
+        self.table.retain(|id| {
+            handles
+                .get(&id)
+                .is_some_and(|h| h.state() != PlaybackState::Stopped)
         });
         let live: HashSet<VoiceId> = self.table.ids().into_iter().collect();
         // A dropped kira handle keeps playing.
@@ -2240,12 +2259,47 @@ impl AudioSystem {
         self.stats.step_ms = t0.elapsed().as_secs_f32() * 1000.0;
     }
 
-    /// A silent system keeps its looping voices until something stops
-    /// them, where it would drop every voice at the next `step`: what a
-    /// device would still play.
+    /// Voices start on kira's mock backend from here on, as on a device but
+    /// rendered only by [`Self::pump_mixer`]: no test opens an output.
     #[cfg(test)]
-    pub(crate) fn keep_silent_loops(&mut self) {
-        self.keep_loops = true;
+    pub(crate) fn mock_mixer(&mut self) {
+        let (main, room) = main_track();
+        let settings = AudioManagerSettings {
+            main_track_builder: main,
+            backend_settings: kira::backend::mock::MockBackendSettings {
+                sample_rate: self.mock_rate(),
+            },
+            ..Default::default()
+        };
+        let m = AudioManager::new(settings).expect("the mock backend opens");
+        self.manager = Some(Mixer::Mock(m));
+        self.reverb = Some(room);
+    }
+
+    /// The mock mixer's rate: the bank's, 44.1 kHz where the bank keeps the
+    /// files' own.
+    #[cfg(test)]
+    fn mock_rate(&self) -> u32 {
+        if self.bank.rate == 0 {
+            44100
+        } else {
+            self.bank.rate
+        }
+    }
+
+    /// Renders `secs` of the mock mixer's output, its sounds' clocks and
+    /// fades with it; nothing on a device's.
+    #[cfg(test)]
+    pub(crate) fn pump_mixer(&mut self, secs: f64) {
+        let frames = (secs * f64::from(self.mock_rate())).ceil() as usize;
+        let Some(Mixer::Mock(m)) = &mut self.manager else {
+            return;
+        };
+        let b = m.backend_mut();
+        for _ in 0..frames.div_ceil(MOCK_BLOCK) {
+            b.on_start_processing();
+            b.process();
+        }
     }
 
     /// Where a live voice stands after the last [`Self::step`].
@@ -2579,6 +2633,59 @@ mod tests {
         assert_eq!(a.table.len(), 0);
     }
 
+    /// On the mock mixer a voice starts a kira sound; a one-shot plays out
+    /// and the next `step` reaps it once its handle reads stopped, a loop
+    /// plays on past its length, and a stopped voice's handle fades out to
+    /// stopped.
+    #[test]
+    fn mixer_voices_play_out_and_step_reaps_the_stopped() {
+        let mut fs = Pk3Fs::empty();
+        // a tenth of a second at 22050 Hz
+        fs.overlay("sound/a.wav", silent_wav(2205));
+        let csv = "name,sequence,file,vol_min,vol_max,pitch_min,pitch_max,dist_min,dist_max,lod_min,lod_max,channel,type,probability,loop,masterslave,loadspec,subtitle\n\
+              shot,,a.wav,1,,1,,10,5000,,,auto,,,\n\
+              hum,,a.wav,1,,1,,10,5000,,,auto,,,looping\n";
+        let mut a = AudioSystem::new(
+            &fs,
+            AudioOpts {
+                enabled: false,
+                volume: 1.0,
+                rate: 0,
+            },
+        );
+        a.aliases_all = AliasTable::parse_csv(csv, "mixer.csv");
+        a.on_gamestate("mp_crash");
+        a.mock_mixer();
+        assert!(a.enabled());
+        let cue = |alias: &str| Cue {
+            alias: alias.into(),
+            source: Source::Point(Vec3::X * 50.0),
+            delay_s: 0.0,
+        };
+        let shot = a.play(&fs, cue("shot")).unwrap();
+        let hum = a.play(&fs, cue("hum")).unwrap();
+        assert_eq!(a.handles.len(), 2, "both started on the mixer");
+        let none = HashMap::new();
+        a.pump_mixer(0.05);
+        a.step(&none, &none, None);
+        assert!(a.table.looping(shot).is_some(), "half-way through");
+        assert_eq!(a.handles[&shot].state(), PlaybackState::Playing);
+        a.pump_mixer(0.1);
+        assert_eq!(a.handles[&shot].state(), PlaybackState::Stopped);
+        a.step(&none, &none, None);
+        assert!(a.table.looping(shot).is_none() && !a.handles.contains_key(&shot));
+        assert_eq!(a.table.looping(hum), Some(true), "a loop plays on");
+        let mut h = a.handles.remove(&hum).unwrap();
+        h.fade_out(Tween {
+            duration: Duration::from_millis(100),
+            ..Default::default()
+        });
+        a.pump_mixer(0.05);
+        assert_eq!(h.state(), PlaybackState::Stopping);
+        a.pump_mixer(0.1);
+        assert_eq!(h.state(), PlaybackState::Stopped);
+    }
+
     /// A loop whose row names a looping secondary (CoD4's
     /// `cobra_helicopter_dying_loop` and its `_layer`): the secondary
     /// starts beside it and stops with it, and one whose primary is out of
@@ -2760,7 +2867,7 @@ mod tests {
         };
         // A brush model's loop 32 above its origin at 0.
         let wanted = HashMap::from([(5u32, (3, Some("veh_loop".to_string()), Vec3::Z * 32.0))]);
-        a.keep_silent_loops();
+        a.mock_mixer();
         a.set_loop_aliases(&fs, &wanted);
         a.step(&HashMap::from([(5, Vec3::ZERO)]), &HashMap::new(), None);
         a.step(&HashMap::from([(5, Vec3::X * 10.0)]), &HashMap::new(), None);

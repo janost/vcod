@@ -1735,14 +1735,17 @@ mod tests {
         f.button("MOUSE1", SIZE);
     }
 
-    /// Runs the front end's frames until `done` or 5 s pass, the frame's
-    /// sleep first: a Local reply read in the broadcast's own millisecond
-    /// pings 0, which the display list hides (browser.rs `pump_until`).
+    /// Runs the front end's frames until `done` or 5 s pass on the
+    /// [`TestServer`](crate::play::cod4_menus::browser::TestServer)'s
+    /// clock, the frame's sleep first: a Local reply read in the
+    /// broadcast's own millisecond pings 0, which the display list hides
+    /// (browser.rs `pump_until`).
     fn frames_until(f: &mut Cod4Front, done: impl Fn(&Cod4Front) -> bool) -> bool {
-        let t0 = Instant::now();
-        while t0.elapsed() < std::time::Duration::from_secs(5) {
-            std::thread::sleep(std::time::Duration::from_millis(16));
-            assert!(f.frame(Instant::now()).is_none());
+        use crate::play::cod4::tests::{clk_now, clk_sleep};
+        let t0 = clk_now();
+        while clk_now() - t0 < std::time::Duration::from_secs(5) {
+            clk_sleep(std::time::Duration::from_millis(16));
+            assert!(f.frame(clk_now()).is_none());
             if done(f) {
                 return true;
             }
@@ -1767,16 +1770,11 @@ mod tests {
             click_at(f, [p[0] + 2.0, p[1] - 4.0]);
         }
         assert_eq!(f.menus.dvar("ui_netSource").as_deref(), Some("0"));
-        // A loaded machine can starve the server past the broadcast's
-        // wait: Refresh List broadcasts again, as a player would.
-        let found =
-            |f: &Cod4Front| !f.menus.shown_servers().is_empty() && !f.menus.browser.refreshing;
-        let mut tries = 1;
-        while !frames_until(f, found) {
-            assert!(tries < 4, "Local found no server");
-            click(f, "Refresh List");
-            tries += 1;
-        }
+        assert!(
+            frames_until(f, |f| !f.menus.shown_servers().is_empty()
+                && !f.menus.browser.refreshing),
+            "Local found no server"
+        );
         assert_eq!(f.menus.shown_servers()[0].rec.addr, server);
     }
 
@@ -1788,6 +1786,8 @@ mod tests {
     /// the main menu comes back with `error_popmenu` saying why.
     #[test]
     fn cod4_front_join_game_joins_a_lan_server_and_drops_back_to_the_menu() {
+        use crate::play::cod4::tests::{clk_now, clk_sleep};
+        use std::time::Duration;
         let Some((mut f, shell, _players)) = front() else {
             return;
         };
@@ -1804,9 +1804,7 @@ mod tests {
         assert!(f.key(KeyCode::Enter, None));
         assert_eq!(f.menus.open().unwrap().name, "pc_join_unranked");
         click(&mut f, "Join Server");
-        let join = f
-            .frame(Instant::now())
-            .expect("Join Server asks for a join");
+        let join = f.frame(clk_now()).expect("Join Server asks for a join");
         assert_eq!((join.addr, join.password.as_str()), (server.addr, "secret"));
 
         let mut loader = Loader::start(JoinArgs {
@@ -1819,13 +1817,14 @@ mod tests {
             allow_download: false,
             www_download: false,
         });
-        let t0 = Instant::now();
+        // The join's worker moves the clock; this thread waits off it.
+        let t0 = clk_now();
         let joined = loop {
-            assert!(t0.elapsed() < std::time::Duration::from_secs(60), "no join");
+            assert!(clk_now() - t0 < Duration::from_secs(60), "no join");
             if let Some(j) = loader.poll() {
                 break j;
             }
-            std::thread::sleep(std::time::Duration::from_millis(20));
+            std::thread::sleep(Duration::from_millis(20));
         };
         let mut s = joined
             .expect("the join with the password lands in the game")
@@ -1833,20 +1832,20 @@ mod tests {
         assert_eq!(s.map_name().as_deref(), Some("mp_crash"));
         server.command("w \"EXE_SERVERQUIT\"");
         // The `w` rides the next snapshot: five seconds of the server's
-        // snapshots (20 a second), with a wall-clock backstop.
-        let (sent, snaps) = (Instant::now(), s.client().snapshots.len());
+        // snapshots (20 a second).
+        let (sent, snaps) = (clk_now(), s.client().snapshots.len());
         let why = loop {
             assert!(
                 s.client().snapshots.len() < snaps + 100
-                    && sent.elapsed() < std::time::Duration::from_secs(60),
+                    && clk_now() - sent < Duration::from_secs(60),
                 "no drop"
             );
-            s.step(t0.elapsed().as_secs_f64() * 1000.0).unwrap();
+            s.step((clk_now() - t0).as_secs_f64() * 1000.0).unwrap();
             s.take_commands();
             if let Some(why) = s.take_dropped() {
                 break why;
             }
-            std::thread::sleep(std::time::Duration::from_millis(16));
+            clk_sleep(Duration::from_millis(16));
         };
         let why = crate::play::cod4::localize_drop(&why, &f.root);
         f.open_main(&shell, Some((&why, true)));

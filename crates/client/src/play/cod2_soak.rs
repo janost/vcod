@@ -330,6 +330,8 @@ fn rig(map: &str, addr: SocketAddr) -> anyhow::Result<Rig> {
         },
     );
     audio.on_gamestate(map);
+    // the soak's sounds start, play out and reap as on a device
+    audio.mock_mixer();
     let (origin, yaw) = vcod_common::bsp::find_spawn(&bsp.entities).unwrap_or(([0.0; 3], 0.0));
     let cam = crate::camera::FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw);
     Ok(Rig {
@@ -404,6 +406,7 @@ fn step(
     let t2 = Instant::now();
     if pumped {
         let events = sess.events(&mut cx);
+        cx.audio.pump_mixer(f64::from(dt));
         sess.audio(&mut cx, &events, cam.pos);
         sess.effects(&mut cx, &events, cam.pos);
         view_fx = sess.view(&mut cx, &events, cam);
@@ -618,6 +621,7 @@ fn serve_rotating(
 /// material registered and no fx image loaded past the spawn. Needs
 /// `COD2_DIR` and an adapter (lavapipe will do).
 #[test]
+#[ignore = "real-time frames against a wall-paced server; COD2_DIR and an adapter"]
 fn cod2_live_level_effects_and_models_build_nothing_in_play() {
     if vcod_common::testing::cod2_fs().is_none() {
         return;
@@ -692,6 +696,7 @@ fn cod2_live_level_effects_and_models_build_nothing_in_play() {
 /// gamestate and its models (cod2-client-perf.md, "The sd level's first
 /// frame"). Needs `COD2_DIR` and an adapter (lavapipe will do).
 #[test]
+#[ignore = "real-time frames against a wall-paced server; COD2_DIR and an adapter"]
 fn cod2_live_same_map_gamestate_builds_no_model_pipeline() {
     if vcod_common::testing::cod2_fs().is_none() {
         return;
@@ -759,6 +764,7 @@ fn cod2_live_same_map_gamestate_builds_no_model_pipeline() {
 /// "The view weapon's first draw"). Needs `COD2_DIR` and an adapter
 /// (lavapipe will do).
 #[test]
+#[ignore = "real-time frames against a wall-paced server; COD2_DIR and an adapter"]
 fn cod2_live_view_weapons_build_nothing_in_play() {
     if vcod_common::testing::cod2_fs().is_none() {
         return;
@@ -844,6 +850,7 @@ fn cod2_live_view_weapons_build_nothing_in_play() {
 /// while its brass still flies (cod2-efx.md 6.8). Needs `COD2_DIR` and an
 /// adapter (lavapipe will do).
 #[test]
+#[ignore = "real-time frames against a wall-paced server; COD2_DIR and an adapter"]
 fn cod2_live_shots_flash_and_eject_on_their_guns() {
     use crate::play::cod2_fx::ViewTag;
     if vcod_common::testing::cod2_fs().is_none() {
