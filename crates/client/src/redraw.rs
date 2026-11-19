@@ -3,9 +3,18 @@
 use super::*;
 
 impl App {
+    /// One frame, then the next frame's request: every early return of
+    /// `redraw_frame` (a drop, a demo played out) keeps the redraw chain going.
+    pub(crate) fn redraw(&mut self, event_loop: &ActiveEventLoop) {
+        self.redraw_frame(event_loop);
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
     /// One frame of whichever mode is up, then the 2D layer, the render and
     /// the frame's end.
-    pub(crate) fn redraw(&mut self, event_loop: &ActiveEventLoop) {
+    fn redraw_frame(&mut self, event_loop: &ActiveEventLoop) {
         {
             let _pace = frame_prof::span(frame_prof::Stage::Pace);
             self.pace_frame();
@@ -63,9 +72,6 @@ impl App {
             let why = play::cod4::localize_drop(&why, &self.game_dir);
             log::error!("{why}");
             self.leave_cod4_game(Some((&why, true)));
-            if let Some(w) = &self.window {
-                w.request_redraw();
-            }
             return;
         }
         // The CoD4 systeminfo's dvars, `sv_cheats` among them
@@ -152,9 +158,6 @@ impl App {
         }
         if let Some(err) = fatal {
             self.disconnect(Some(format!("{err:#}")));
-            if let Some(w) = &self.window {
-                w.request_redraw();
-            }
             return;
         }
         self.frame_ui(&tick, hud_quads);
@@ -266,9 +269,6 @@ impl App {
             self.apply(event_loop, effects);
             // after the line's own work (a `vid_restart`'s rebuild)
             self.exec_after_last = Some(std::time::Instant::now());
-        }
-        if let Some(w) = &self.window {
-            w.request_redraw();
         }
     }
 
