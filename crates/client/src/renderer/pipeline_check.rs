@@ -336,7 +336,12 @@ fn cod1_renderer_builds_and_draws_without_validation_errors() {
         &mut r,
         &fs,
         (eye, yaw),
-        &["gfx/effects/smoke/roller", "gfx/impact/bullethit_plaster"],
+        // a shaderless element's `<default>`, the opaque fx pipeline
+        &[
+            "gfx/effects/smoke/roller",
+            "gfx/impact/bullethit_plaster",
+            vcod_common::shader::DEFAULT_SHADER,
+        ],
         || {
             Some(VmDraw {
                 transform: glam::Mat4::IDENTITY,
@@ -347,6 +352,12 @@ fn cod1_renderer_builds_and_draws_without_validation_errors() {
         },
     );
     assert_clean(&errors, "CoD1 mp_carentan frame");
+    assert!(
+        r.fx.textures
+            .get(vcod_common::shader::DEFAULT_IMAGE)
+            .is_some_and(Option::is_some),
+        "the <default> quad binds *default"
+    );
 }
 
 /// A windowed CoD1 frame at `r_gamma` 1 skips the gamma pass and draws the

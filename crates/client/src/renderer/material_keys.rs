@@ -119,7 +119,7 @@ fn stock_material_pipeline_keys_hold() {
     }
     assert_eq!(
         (names.len(), stypes.len(), fnv1a(&out)),
-        (582, 129, 3180396038756088198),
+        (582, 129, 17188338106992713134),
         "a stock material draws differently"
     );
 }

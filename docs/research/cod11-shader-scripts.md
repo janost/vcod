@@ -1067,9 +1067,15 @@ cross-referenced against BSP materials and the skin names in every
 
 vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
 
-- wave and flap displace in the vertex shader from their record,
-  `sin` in place of the 1024-entry table; flap scales by `uv.x` or `uv.y`.
-  A rate of 0 drops the spread term, as retail does.
+- wave and flap displace in the vertex shader from their record through
+  the form's 1024-entry table (`deform.wgsl`'s `table_entry`, the sin entry
+  `sin(i * 2pi / 1023)` as `build_sin_table`), indexed at `round` of the
+  phase times 1024, which rounds ties to even as `fistp` does, masked to
+  1023. The form rides the kind's upper bits (`renderer::deform_form`);
+  a noise form holds its base where retail errors. The CPU sends the
+  phase `phase + t * rate` as its fraction, which indexes the table as
+  the whole would. flap scales by `uv.x` or `uv.y`. A rate of 0 drops the
+  spread term, as retail does.
 - autosprite: at load each quad's vertices take the centre as position,
   their stamp corner as uv and the half-width in `lm_uv.x`, and the quad's
   indices become the stamp's (0, 1, 3, 3, 1, 2). The vertex shader offsets
@@ -1082,8 +1088,8 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   vertex's side as the one that puts it back where it was seen face on.
 - Deformed props draw two-sided like every prop; a stock autosprite stage
   is additive, so winding does not show.
-- bulge rides its record (`[width, height, t * speed]`, `sin` in
-  place of the table), move its record (the frame's offset,
+- bulge rides its record (`[width, height, t * speed]`, the sin table
+  at the truncated index as `_ftol` takes it), move its record (the frame's offset,
   evaluated on the CPU through the table), normal
   its record with the noise in `noise.wgsl` (the tables
   `shader::NOISE_TABLE` / `NOISE_PERM`, held equal by a test). The normal
