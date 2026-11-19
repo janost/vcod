@@ -67,12 +67,8 @@ pub(crate) trait BridgePs: PmState + Clone + Send + Sync + 'static {
     /// A living player standing at `origin`, its clock at `time`.
     fn spawn(origin: Vec3, yaw: f32, time: i32) -> Self;
     fn seen(&self) -> Seen;
-    fn view_angles(&mut self) -> &mut [f32; 3];
     fn old_velocity(&mut self) -> &mut [f32; 2];
     fn speed(&mut self) -> &mut i32;
-    fn gravity(&mut self) -> &mut i32;
-    fn ladder_vec(&mut self) -> &mut Vec3;
-    fn jump_time(&mut self) -> &mut i32;
     /// `viewHeightTarget` and `viewHeightCurrent`.
     fn view_height(&mut self) -> (&mut i32, &mut f32);
 }
@@ -104,23 +100,11 @@ macro_rules! bridge_ps {
                     stance: self.effective_stance(),
                 }
             }
-            fn view_angles(&mut self) -> &mut [f32; 3] {
-                &mut self.view_angles
-            }
             fn old_velocity(&mut self) -> &mut [f32; 2] {
                 &mut self.old_velocity
             }
             fn speed(&mut self) -> &mut i32 {
                 &mut self.speed
-            }
-            fn gravity(&mut self) -> &mut i32 {
-                &mut self.gravity
-            }
-            fn ladder_vec(&mut self) -> &mut Vec3 {
-                &mut self.ladder_vec
-            }
-            fn jump_time(&mut self) -> &mut i32 {
-                &mut self.jump_time
             }
             fn view_height(&mut self) -> (&mut i32, &mut f32) {
                 (&mut self.view_height_target, &mut self.view_height_current)
