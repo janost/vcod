@@ -759,7 +759,7 @@ fn change_profile(root: &std::path::Path, name: &str, shell: &mut Shell) -> Opti
         .or_else(|_| std::fs::read_to_string(dir.join("config_mp.cfg")))
         .ok();
     if let Some(t) = &text {
-        let _ = shell.exec_config(t);
+        let _ = shell.exec_config(t, &mut |_| None);
     }
     // the config is written below either way
     let _ = shell.upgrade_config(vcod_common::game::Game::Cod4);

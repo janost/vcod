@@ -1724,7 +1724,8 @@ fn main() -> Result<()> {
     };
     let config_text = read_config(&read_path);
     if let Some(text) = &config_text {
-        for effect in shell.exec_config(text) {
+        let mut read = |file: &str| exec_text(&fs, config_path.parent(), file);
+        for effect in shell.exec_config(text, &mut read) {
             if let console::shell::Effect::Print(line) = effect {
                 log::warn!("{CONFIG_FILE}: {line}");
             }
@@ -2503,10 +2504,11 @@ fn config_from_bytes(path: &std::path::Path, bytes: Vec<u8>) -> String {
 /// A CoD2 profile's config into `shell`: run when the file is there,
 /// written from what is set now only when it is absent, so a file that
 /// fails to read is never overwritten.
-fn load_profile_config(shell: &mut console::shell::Shell, path: &std::path::Path) {
+fn load_profile_config(shell: &mut console::shell::Shell, fs: &Pk3Fs, path: &std::path::Path) {
     let write = match std::fs::read(path) {
         Ok(bytes) => {
-            shell.exec_config(&config_from_bytes(path, bytes));
+            let mut read = |file: &str| exec_text(fs, path.parent(), file);
+            let _ = shell.exec_config(&config_from_bytes(path, bytes), &mut read);
             shell.upgrade_config(vcod_common::game::Game::Cod2).1
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
@@ -2818,7 +2820,12 @@ fn restart_ui(
 ) {
     shell.execute("set ui_menuFiles ui_mp/menus.txt");
     let browser = std::mem::take(&mut ui.browser);
-    *ui = new_ui(fs, game_dir, mod_dir, shell.cvar("cl_language").unwrap_or(""));
+    *ui = new_ui(
+        fs,
+        game_dir,
+        mod_dir,
+        shell.cvar("cl_language").unwrap_or(""),
+    );
     ui.set_browser(browser);
 }
 
@@ -3862,7 +3869,8 @@ impl App {
     /// Carries out what the console's commands asked for.
     fn apply(&mut self, event_loop: &ActiveEventLoop, effects: Vec<console::shell::Effect>) {
         use console::shell::Effect;
-        for effect in effects {
+        let mut queue = std::collections::VecDeque::from(effects);
+        while let Some(effect) = queue.pop_front() {
             // A CoD2 session takes the gameplay binds (play::cod2_input).
             if self.session.apply(&effect, &self.shell, self.start) {
                 continue;
@@ -4098,6 +4106,12 @@ impl App {
                     }
                 }
                 Effect::Exec(file) => self.exec_file(event_loop, &file),
+                // after the exec'd file, ahead of what was queued behind it
+                Effect::Then(rest) => {
+                    for e in self.shell.execute(&rest).into_iter().rev() {
+                        queue.push_front(e);
+                    }
+                }
                 // CoD2's; a CoD1 client has no such command.
                 Effect::OpenScriptMenu { .. } => {}
                 // cgame 0x300140e0: only with the client's own view
@@ -4354,7 +4368,7 @@ impl App {
             console::log::print(&format!("couldn't exec {file}"));
             return;
         };
-        if self.exec_depth >= 8 {
+        if self.exec_depth >= console::shell::EXEC_DEPTH {
             log::warn!("exec {file}: too deep, skipped");
             return;
         }
@@ -4786,7 +4800,7 @@ impl App {
         self.config_path = dir.join(CONFIG_FILE);
         self.shell
             .execute(&format!("set com_playerProfile \"{name}\""));
-        load_profile_config(&mut self.shell, &self.config_path);
+        load_profile_config(&mut self.shell, &self.fs, &self.config_path);
         log::info!("player profile {name}: {}", self.config_path.display());
     }
 
@@ -6017,13 +6031,17 @@ mod tests {
 
         let text = read_config(&path).expect("the config reads");
         let mut shell = console::shell::Shell::new();
-        shell.exec_config(&text);
+        shell.exec_config(&text, &mut |_| None);
         assert_eq!(shell.bind("F1"), Some("say sch\u{fffd}n"));
 
         let mut shell = console::shell::Shell::new();
-        load_profile_config(&mut shell, &path);
+        load_profile_config(&mut shell, &Pk3Fs::empty(), &path);
         assert_eq!(shell.bind("F1"), Some("say sch\u{fffd}n"));
-        assert_eq!(std::fs::read(&path).unwrap(), bytes, "the profile's config was rewritten");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            bytes,
+            "the profile's config was rewritten"
+        );
     }
 
     /// The gamestate's search path restart and `vid_restart` rebuild the

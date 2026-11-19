@@ -477,3 +477,32 @@ vcod: `play::input::stance_press` is the table above for every game,
 the share of the frame a key was held (a held key sends the full 127),
 the `0x87a148` term for a noclip, UFO or spectator body, and the writes to
 `cl_stanceTemp`: vcod's forced-stance gate reads the cvar or a held key.
+
+## 10. `exec` and the command buffer
+
+`Cbuf_Execute` (`0x428300`) takes one command at a time off the front of
+`cmd_text` (data `0x1625620`, cursize `0x1625628`): it scans to a `;`
+outside quotes, a `\n` or a `\r` (`0x428348..0x42836e`), copies the
+command out (`0x428389..0x42839c`), moves the rest of the buffer down over
+it (the call at `0x4283b8`), and only then runs it through
+`Cmd_ExecuteString` (`0x428a80`, called at `0x4283c5`). VERIFIED (the
+instructions).
+
+`Cmd_Exec_f` (`0x428410`) reads the file, prints `execing %s` (`0x5649b4`)
+and hands the text to `Cbuf_InsertText` (`0x428200`, called at
+`0x4284d7`), which shifts what is left of `cmd_text` up by the file's
+length (`0x428234..0x42824f`), copies the file to the front and ends it
+with a `\n` (`0x42826e`). VERIFIED (the instructions). A miss prints
+`couldn't exec %s` (`0x5649c0`). VERIFIED.
+
+So a file runs where its `exec` stands: in `exec a.cfg; set x 2`, or a
+config holding `exec inner.cfg` and lines after it, the file's commands
+run before the rest, and a nested `exec` the same way. INFERRED from the
+two functions above.
+
+vcod: `Shell::execute` stops at an `exec` and hands the commands after it
+back as `Effect::Then`, which the app runs once the file has
+(`App::apply`). A config read at start-up or as a profile's runs its
+`exec` lines in place through `Shell::exec_config`'s reader. vcod caps the
+nesting at `EXEC_DEPTH` (8); retail has no depth cap, only the buffer's
+`Cbuf_InsertText overflowed` (`0x564a2c`).
