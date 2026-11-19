@@ -77,7 +77,7 @@ pub fn item_models(defs: &Defs, fs: Option<&Pk3Fs>, name: &str) -> Vec<String> {
         "projectileModel",
     ]
     .iter()
-    .filter_map(|k| map.get(*k))
+    .filter_map(|k| map.get(k))
     .filter(|v| !v.is_empty())
     .cloned()
     .collect()

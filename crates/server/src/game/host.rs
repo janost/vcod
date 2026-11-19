@@ -245,7 +245,7 @@ pub struct WeaponFiles {
 /// One weapon file: its def and its keys.
 pub struct WeaponFile {
     pub def: vcod_common::weapon::WeaponDef,
-    pub keys: HashMap<String, String>,
+    pub keys: vcod_common::xmodel::WeaponKeys,
     /// CoD2's own parse of it, which `Combat::sync_weapons` reads: made
     /// on the first level's read, taken by a later one's.
     pub cod2_def: std::cell::OnceCell<Rc<vcod_cod2::weapon::WeaponDef>>,

@@ -664,6 +664,8 @@ clc_move / clc_moveNoDelta: 2-bit op, byte count, <delta usercmds>
 clc_EOF
 ```
 
+Retail fragments a client message past `FRAGMENT_SIZE` like any other. vcod's client does not: an oversized message carries the oldest unacked reliables that fit beside the newest cmd, then as many of the newest cmds as still fit, and resends that prefix until the server acks it (`NetClient::send_message`). A prefix keeps the server's in-order rule: a sequence past `lastClientCommand + 1` drops the client.
+
 `usercmd_t`, checked against the game's struct:
 
 ```

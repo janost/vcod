@@ -463,6 +463,9 @@ otherwise.
 - 1.1 MP has no grenade cook; "cooking" in the code means held.
   `grenadeTimeLeft` is `fuseTime` at the pullback and 0 at the throw, and the
   fuse always runs in full from release. UO has a cook (see its section).
+- A weapon file key matches in any case and takes its first value, an
+  empty one leaving the default; numbers read through `atoi` and `atof`, so
+  `40.0` is 40 in an int field (`xmodel::WeaponKeys`, combat doc 0.1).
 - A weapon file's millisecond keys are stored truncated (`weapon::stored_ms`:
   1.8 is 1799) on all three Linux servers (`coduo-movement.md` 13). Never
   round one.

@@ -700,13 +700,16 @@ The 85 stock zones pass unchanged.
   `changeclass_mw` and `ocd_*` menus reach the game, and load again when
   the server's `fs_game` changes.
 - The client reads the weapon files too: under a set `fs_game` its
-  prediction's weapon defs come off `weapons/mp/<name>` on the search
-  path, as the server's do (`Cod4World::overlay_weapon_files`). A weapon
+  prediction's weapon defs and its HUD's weapon fields (ammo and clip
+  slots, clip size, icons, kill icon, crosshair) come off
+  `weapons/mp/<name>` on the search path, as the server's do
+  (`vcod_cod4::weapon_file::load_overlay`, `Cod4World::overlay_weapon_files`,
+  `HudAssets::overlay_weapon_files`). A weapon
   file's model field, when set, reads as a set pointer in the struct, so
   `knifeModel`'s test (`WeaponDef::knife_model`, offset 772) holds off a
   file as off the zone. VERIFIED (`cod4_weapon_files_replace_the_zone_defs_under_a_mod`:
   under ModWarfare, which carries no weapon files, `main/`'s stock files
-  give the zone's defs).
+  give the zone's defs, and the HUD's slots match prediction's).
 - Downloads: `cod4-handshake.md` 11.
 - Not done: the HUD's other map-dependent
   assets on a map change under one `fs_game`.

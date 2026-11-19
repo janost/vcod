@@ -169,34 +169,17 @@ impl Cod4World {
     /// `weapon_files_on_disk` does (cod4-fastfile.md 13): every weapon the
     /// zones carry and every file there; a missing or broken file takes
     /// `defaultweapon_mp`'s under its own name, and the zone's struct
-    /// stays only when that fails too. Returns the weapons replaced.
-    pub fn overlay_weapon_files(&mut self, fs: &vcod_common::pk3::Pk3Fs) -> usize {
-        let mut names: Vec<String> = self.defs.keys().cloned().collect();
-        for path in fs.list_prefix("weapons/mp/") {
-            let name = &path["weapons/mp/".len()..];
-            if !name.is_empty() && !name.contains('/') {
-                names.push(name.to_ascii_lowercase());
-            }
-        }
-        names.sort();
-        names.dedup();
-        let text = |name: &str| match vcod_cod4::weapon_file::load(fs, name)? {
-            Ok(t) => Some(t),
-            Err(e) => {
-                log::warn!("cod4: weapons/mp/{name}: {e:#}");
-                None
-            }
-        };
-        let mut n = 0;
-        for name in names {
-            let Some(t) = text(&name).or_else(|| text("defaultweapon_mp")) else {
-                continue;
-            };
-            let w = t.weapon;
-            let Some(def) = WeaponDef::of(&w).map(|d| WeaponDef {
-                name: name.to_ascii_lowercase(),
-                ..d
-            }) else {
+    /// stays only when that fails too. Returns the files read, which the
+    /// HUD takes too (`HudAssets::overlay_weapon_files`).
+    pub fn overlay_weapon_files(
+        &mut self,
+        fs: &vcod_common::pk3::Pk3Fs,
+    ) -> Vec<(String, vcod_cod4::weapon_file::TextWeapon)> {
+        let files = vcod_cod4::weapon_file::load_overlay(fs, self.defs.keys().cloned());
+        for (name, t) in &files {
+            let name = name.clone();
+            let w = &t.weapon;
+            let Some(def) = WeaponDef::of(w) else {
                 continue;
             };
             let s = |k: &str| w.strings.get(k).cloned().unwrap_or_default();
@@ -214,9 +197,8 @@ impl Cod4World {
                 self.primaries.remove(&name);
             }
             self.defs.insert(name, (def, refs));
-            n += 1;
         }
-        n
+        files
     }
 
     /// A weapon's move scales by its name in any case.
@@ -1302,7 +1284,7 @@ fn cod4_weapon_files_replace_the_zone_defs_under_a_mod() {
     let mut world = crate::cod4_fly::load_world(install.root(), "mp_crash").unwrap();
     let zone = world.defs.clone();
     let fs = crate::cod4_fly::open_fs(install.root(), g, Some("mp_crash")).unwrap();
-    let n = world.overlay_weapon_files(&fs);
+    let n = world.overlay_weapon_files(&fs).len();
     assert!(n >= zone.len(), "{n} of {} weapons", zone.len());
     // 0.065 s: 64 in the zone, 65 off the file and on retail under a mod.
     let fire = |defs: &HashMap<String, (WeaponDef, [String; 3])>| {
@@ -1310,4 +1292,15 @@ fn cod4_weapon_files_replace_the_zone_defs_under_a_mod() {
     };
     assert_eq!(fire(&zone), Some(64));
     assert_eq!(fire(&world.defs), Some(65));
+    // The HUD reads the same files: its defs and its ammo and clip slots
+    // are prediction's (and the server's, `level_defs`).
+    let hud = vcod_cod4::hud::HudAssets::load(&install.with_fs_game(g), "mp_crash").unwrap();
+    assert_eq!(hud.weapon_hud["m16_mp"].def.fire_time, 65);
+    let mut list: Vec<String> = world.defs.keys().cloned().collect();
+    list.sort();
+    let slots: Vec<(usize, usize)> = world.level_defs(&list)[1..]
+        .iter()
+        .map(|d| (d.ammo_index, d.clip_index))
+        .collect();
+    assert_eq!(vcod_cod4::hud::ammo_slots(&list, &hud.weapon_hud), slots);
 }

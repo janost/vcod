@@ -157,9 +157,9 @@ impl Cod4Hud {
             .filter(|e| e.etype() == ET_MISSILE)
             .filter_map(|e| {
                 let def = def_of(ent_u32(e, "weapon"))?;
-                let frag = def.weap_type == WEAPTYPE_GRENADE
-                    && FRAG_EXPLOSIONS.contains(&def.proj_explosion)
-                    && def.timed_detonation;
+                let frag = def.def.weap_type == WEAPTYPE_GRENADE
+                    && FRAG_EXPLOSIONS.contains(&def.def.proj_explosion)
+                    && def.def.timed_detonation;
                 if !frag || !resting(e) {
                     return None;
                 }
@@ -167,7 +167,7 @@ impl Cod4Hud {
                 let offset = origin - ps.origin;
                 if !in_range(
                     offset,
-                    def.explosion_radius,
+                    def.def.explosion_radius,
                     ps.view_height_current,
                     ceiling(),
                 ) {

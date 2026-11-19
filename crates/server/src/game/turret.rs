@@ -8,6 +8,7 @@
 use crate::spectate::ClientSim;
 use glam::Vec3;
 use vcod_common::fguard;
+use vcod_common::text::{atof, atoi};
 // The stance events: `cod11-events-and-fx.md`. ENTITYNUM_NONE is
 // `viewlocked_entNum` after a release (turrets doc 12.7).
 use vcod_common::net::event_ids::{
@@ -156,9 +157,13 @@ impl TurretDef {
     /// carried weapon.
     pub fn parse(text: &str) -> Option<TurretDef> {
         let kv = vcod_common::xmodel::parse_weapon(text);
-        let f = |k: &str| kv.get(k).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
-        let s = |k: &str| kv.get(k).filter(|v| !v.is_empty()).cloned();
-        if kv.get("weaponClass").map(String::as_str) != Some("turret") {
+        // `ParseConfigStringToStruct`'s readers (combat doc 0.1): floats
+        // through `(float)atof`, ints through `atoi`, the name tables any case.
+        let f = |k: &str| kv.get(k).map_or(0.0, |v| atof(v) as f32);
+        let i = |k: &str| kv.get(k).map_or(0, |v| atoi(v));
+        let s = |k: &str| kv.get(k).cloned();
+        let is = |k: &str, name: &str| kv.get(k).is_some_and(|v| v.eq_ignore_ascii_case(name));
+        if !is("weaponClass", "turret") {
             return None;
         }
         Some(TurretDef {
@@ -166,26 +171,28 @@ impl TurretDef {
             right_arc: f("rightArc"),
             top_arc: f("topArc"),
             bottom_arc: f("bottomArc"),
-            damage: f("damage") as i32,
+            damage: i("damage"),
             // The stock file holds seconds (0.05); the record wants ms as
             // the type-7 parse stores them.
             fire_time_ms: vcod_common::weapon::stored_ms(f("fireTime")),
-            stance: match kv.get("stance").map(String::as_str) {
-                Some("prone") => TurretStance::Prone,
-                Some("duck") | Some("crouch") => TurretStance::Duck,
-                _ => TurretStance::Stand,
+            stance: if is("stance", "prone") {
+                TurretStance::Prone
+            } else if is("stance", "duck") || is("stance", "crouch") {
+                TurretStance::Duck
+            } else {
+                TurretStance::Stand
             },
             anim_hor_rotate_inc: f("animHorRotateInc"),
-            rifle_bullet: f("rifleBullet") != 0.0,
+            rifle_bullet: i("rifleBullet") != 0,
             loop_sound: s("loopFireSound"),
             stop_sound: s("stopFireSound"),
             use_hint_string: s("useHintString"),
             fire_heat: f("fireHeat"),
             cooldown_rate: f("cooldownRate"),
             falloff: crate::game::combat::Falloff {
-                min_percent: f("minDamagePercent") as i32,
-                inner: f("damageInnerRadius") as i32,
-                outer: f("damageOuterRadius") as i32,
+                min_percent: i("minDamagePercent"),
+                inner: i("damageInnerRadius"),
+                outer: i("damageOuterRadius"),
             },
         })
     }
@@ -779,6 +786,22 @@ mod tests {
         );
         assert_eq!(d.loop_sound.as_deref(), Some("weap_mg42_loop"));
         assert_eq!(d.use_hint_string.as_deref(), Some("CGAME_USEMG42"));
+        assert!(d.rifle_bullet);
+    }
+
+    /// The turret file reads as the C loader does (combat doc 0.1): name
+    /// tables and keys in any case, the first value under a key, `atoi`
+    /// for an int field and `atof` for a float one.
+    #[test]
+    fn a_turret_file_reads_as_the_c_loader_reads_it() {
+        let d = TurretDef::parse(concat!(
+            "WEAPONFILE\\WEAPONCLASS\\Turret\\damage\\60.9\\damage\\10",
+            "\\leftarc\\45deg\\stance\\PRONE\\rifleBullet\\2",
+        ))
+        .unwrap();
+        assert_eq!(d.damage, 60);
+        assert_eq!(d.left_arc, 45.0);
+        assert_eq!(d.stance, TurretStance::Prone);
         assert!(d.rifle_bullet);
     }
 

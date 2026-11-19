@@ -14,11 +14,12 @@ use vcod_common::text::atoi;
 const SIZE: usize = 0x878;
 
 /// A weapon file's struct: the [`Weapon`] its numbers, strings, sound
-/// aliases and anims fill, and the xmodels it names, which a zone would
-/// carry as ids, by the struct's field name.
+/// aliases and anims fill, and the xmodels and materials it names, which a
+/// zone would carry as ids, by the struct's field name.
 pub struct TextWeapon {
     pub weapon: Weapon,
     pub models: HashMap<&'static str, String>,
+    pub materials: HashMap<&'static str, String>,
     /// `gunModel` and `worldModel`, sixteen each.
     pub model_lists: HashMap<&'static str, Vec<Option<String>>>,
 }
@@ -136,6 +137,7 @@ pub fn parse(name: &str, text: &[u8], anim_types: &[&str]) -> Result<TextWeapon>
     }
     weapon.strings.insert("name", name.to_string());
     let mut models = HashMap::new();
+    let mut materials = HashMap::new();
     let mut model_lists: HashMap<&'static str, Vec<Option<String>>> = HashMap::new();
     let put = |raw: &mut [u8], at: usize, v: u32| raw[at..at + 4].copy_from_slice(&v.to_le_bytes());
     for &(key, at, ty) in FIELDS.iter() {
@@ -167,7 +169,10 @@ pub fn parse(name: &str, text: &[u8], anim_types: &[&str]) -> Result<TextWeapon>
                 Some((SlotKind::Sound, field, _)) => {
                     weapon.sounds.insert(field, v.to_string());
                 }
-                // Effects and materials the server never registers.
+                Some((SlotKind::Material, field, _)) => {
+                    materials.insert(field, v.to_string());
+                }
+                // Effects, which the server never registers.
                 _ => {}
             },
             4 => put(&mut raw, at, atoi(v) as u32),
@@ -206,6 +211,7 @@ pub fn parse(name: &str, text: &[u8], anim_types: &[&str]) -> Result<TextWeapon>
     Ok(TextWeapon {
         weapon,
         models,
+        materials,
         model_lists,
     })
 }
@@ -273,6 +279,42 @@ pub fn load(fs: &(impl AssetSource + ?Sized), name: &str) -> Option<Result<TextW
         types
     };
     Some(parse(name, &text, &types))
+}
+
+/// Under a set `fs_game`, the weapons `BG_LoadWeaponDef` reads off `fs`'s
+/// weapon files in place of the zones' structs (cod4-fastfile.md 13):
+/// every name in `zone` and every `weapons/mp/` file, lowercased; a
+/// missing or broken file takes `defaultweapon_mp`'s under its own name. A
+/// name left out (that fails too) keeps its zone struct.
+pub fn load_overlay(
+    fs: &vcod_common::pk3::Pk3Fs,
+    zone: impl IntoIterator<Item = String>,
+) -> Vec<(String, TextWeapon)> {
+    let mut names: Vec<String> = zone.into_iter().map(|n| n.to_ascii_lowercase()).collect();
+    for path in fs.list_prefix("weapons/mp/") {
+        let name = &path["weapons/mp/".len()..];
+        if !name.is_empty() && !name.contains('/') {
+            names.push(name.to_ascii_lowercase());
+        }
+    }
+    names.sort();
+    names.dedup();
+    let text = |name: &str| match load(fs, name)? {
+        Ok(t) => Some(t),
+        Err(e) => {
+            log::warn!("cod4: weapons/mp/{name}: {e:#}");
+            None
+        }
+    };
+    names
+        .into_iter()
+        .filter_map(|name| {
+            let mut t = text(&name).or_else(|| text("defaultweapon_mp"))?;
+            t.weapon.name = name.clone();
+            t.weapon.strings.insert("name", name.clone());
+            Some((name, t))
+        })
+        .collect()
 }
 
 /// `stricmp` against each name; the first match's index.

@@ -293,8 +293,8 @@ impl Cod4Hud {
                 let scoped = snap.ps.get_f32("fWeaponPosFrac") == Some(1.0);
                 let pm_type = u("pm_type") as i32;
                 let holding = s.input.buttons(pm_type, s.talking) & BUTTON_HOLD_BREATH != 0;
-                if def.reticle.overlay_reticle == 0
-                    || def.weap_class == WEAPCLASS_ITEM
+                if def.def.overlay_reticle == 0
+                    || def.def.weap_class == WEAPCLASS_ITEM
                     || !scoped
                     || holding
                     || u("holdBreathTimer") != 0

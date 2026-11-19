@@ -2443,7 +2443,6 @@ impl Blast {
 mod tests {
     use super::*;
     use crate::game::trigger::{PLAYER_MAXS, PLAYER_MINS};
-    use std::collections::HashMap;
 
     fn ps_on(rules: MoveRules, origin: Vec3) -> PlayerState {
         let mut ps = PlayerState::spawn(origin, 45.0);
@@ -2946,10 +2945,10 @@ mod tests {
     }
 
     fn zero_spread_carbine() -> WeaponDef {
-        let mut m = HashMap::new();
-        m.insert("damage".to_string(), "45".to_string());
-        m.insert("rifleBullet".to_string(), "1".to_string());
-        m.insert("weaponClass".to_string(), "rifle".to_string());
+        let mut m = vcod_common::xmodel::WeaponKeys::default();
+        m.insert("damage", "45".to_string());
+        m.insert("rifleBullet", "1".to_string());
+        m.insert("weaponClass", "rifle".to_string());
         WeaponDef::from_map(&m)
     }
 
@@ -3572,8 +3571,8 @@ mod tests {
         // A pistol round names the pistol means of death and passes nothing.
         b.dead = false;
         b.update_contents();
-        let mut m = HashMap::new();
-        m.insert("damage".to_string(), "30".to_string());
+        let mut m = vcod_common::xmodel::WeaponKeys::default();
+        m.insert("damage", "30".to_string());
         let colt = WeaponDef::from_map(&m);
         let r = fire(&colt, &[(0, &a), (1, &b)], &open, &mut rng);
         let hit = only(r.hits(), "the colt round");
@@ -3680,8 +3679,8 @@ mod tests {
         assert_eq!(te.event, 174);
         assert!((te.origin[0] - 300.0).abs() < 0.2, "{:?}", te.origin);
 
-        let mut m = HashMap::new();
-        m.insert("damage".to_string(), "30".to_string());
+        let mut m = vcod_common::xmodel::WeaponKeys::default();
+        m.insert("damage", "30".to_string());
         let r = fire(&WeaponDef::from_map(&m), &sims, &wall, &mut rng);
         assert_eq!(only(r.hits(), "the colt round").victim, 1);
         assert!(r.impacts().next().is_none(), "the pistol round ends in B");
@@ -3733,8 +3732,8 @@ mod tests {
         assert!((at[0].0 - 40.0).abs() < 0.2 && at[0].1 == 9, "{at:?}");
         assert!((at[1].0 - 300.0).abs() < 0.2, "the wall behind B, {at:?}");
 
-        let mut m = HashMap::new();
-        m.insert("damage".to_string(), "30".to_string());
+        let mut m = vcod_common::xmodel::WeaponKeys::default();
+        m.insert("damage", "30".to_string());
         let r = fire(
             &WeaponDef::from_map(&m),
             &[(0, &a), (1, &b)],
@@ -3796,8 +3795,8 @@ mod tests {
     }
 
     fn melee_carbine() -> WeaponDef {
-        let mut m = HashMap::new();
-        m.insert("meleeDamage".to_string(), "50".to_string());
+        let mut m = vcod_common::xmodel::WeaponKeys::default();
+        m.insert("meleeDamage", "50".to_string());
         WeaponDef::from_map(&m)
     }
 

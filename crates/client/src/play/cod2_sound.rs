@@ -169,7 +169,7 @@ pub(crate) fn muzzle_point(snap: &SnapshotView, shooter: i32, view: Vec3) -> Opt
 /// when the file did not read.
 #[derive(Default)]
 pub struct Cod2Sounds {
-    weapons: HashMap<i32, Option<HashMap<String, String>>>,
+    weapons: HashMap<i32, Option<vcod_common::xmodel::WeaponKeys>>,
     /// The drawn bodies' world `tag_flash` by entity
     /// (`cod2_scene::Cod2Draw::muzzles`), where a fire sound and a
     /// whizby start.
@@ -188,7 +188,7 @@ impl Cod2Sounds {
         fs: Option<&Pk3Fs>,
         cs: &ConfigStrings,
         index: i32,
-    ) -> Option<&HashMap<String, String>> {
+    ) -> Option<&vcod_common::xmodel::WeaponKeys> {
         if index <= 0 {
             return None;
         }

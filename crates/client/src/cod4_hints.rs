@@ -261,10 +261,10 @@ impl Cod4Hud {
         // The weapon's prompt (0x443050): a turret takes the use string; a
         // frag offhand the throw back; another item the pickup; a primary
         // the swap once two primaries are held.
-        let (text, name) = if def.weap_class == WEAPCLASS_TURRET {
+        let (text, name) = if def.def.weap_class == WEAPCLASS_TURRET {
             (use_string(), name)
-        } else if def.inventory_type != 0 {
-            if def.offhand_class == OFFHAND_FRAG {
+        } else if def.def.inventory_type != 0 {
+            if def.def.offhand_class == OFFHAND_FRAG {
                 (Some(prompt("PLATFORM_THROWBACKGRENADE", "+frag")), None)
             } else {
                 (Some(prompt("PLATFORM_PICKUPNEWWEAPON", "+activate")), name)
@@ -274,7 +274,7 @@ impl Cod4Hud {
                 ps.get(&format!("weapons[{}]", n / 32)).unwrap_or(0) & 1 << (n % 32) != 0
             };
             let primaries_held = (1..=list.len())
-                .filter(|&n| holds(n) && def_of(n).is_some_and(|d| d.inventory_type == 0))
+                .filter(|&n| holds(n) && def_of(n).is_some_and(|d| d.def.inventory_type == 0))
                 .count();
             let text = if primaries_held >= 2 {
                 "PLATFORM_SWAPWEAPONS"

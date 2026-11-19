@@ -254,7 +254,7 @@ pub fn load_from(
     // stub technique sets' keys for 1.7's material order (cod4-world.md 12)
     m.resolve_material_orders(&zones);
     let fly = ents.models.is_empty() && ents.weapons.is_empty();
-    let hud = (!fly).then(|| {
+    let mut hud = (!fly).then(|| {
         let stock = std::iter::once(("common_mp", &common.assets))
             .chain(SOUND_ZONES.into_iter().zip(sound.iter().map(|z| &z.assets)));
         hud_assets(stock, &walked.assets, mod_zone.as_ref().map(|z| &z.assets))
@@ -298,8 +298,14 @@ pub fn load_from(
             .map(|mut w| {
                 if let Ok(fs) = open_fs(game_dir, fs_game, Some(map)) {
                     if fs_game.is_some() {
-                        let n = w.overlay_weapon_files(&fs);
-                        log::info!("cod4: {n} weapon files read off the search path");
+                        let files = w.overlay_weapon_files(&fs);
+                        log::info!(
+                            "cod4: {} weapon files read off the search path",
+                            files.len()
+                        );
+                        if let Some(h) = hud.as_mut() {
+                            h.overlay_weapon_files(&files);
+                        }
                     }
                     if !w.read_ragdoll(&fs) {
                         log::warn!("cod4: no ragdoll.cfg, corpses keep their death anims");

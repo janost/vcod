@@ -7,11 +7,14 @@
 use crate::assets::Assets;
 use crate::assets::material::Material;
 use crate::assets::ui::Font;
+use crate::assets::weapon::Weapon;
 use crate::install::Install;
 use crate::map::stub_name;
 use crate::net::delta;
 use crate::net::fields::HUDELEM;
+use crate::pmove::weapon::WeaponDef;
 use crate::walk::{WalkOptions, walk};
+use crate::weapon_file::TextWeapon;
 use crate::zone::Zone;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -636,9 +639,15 @@ impl Table {
     }
 }
 
-/// A weapon's HUD fields.
+/// A weapon's HUD fields, off the same struct (a zone's or a weapon
+/// file's) its [`WeaponDef`] comes from.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WeaponHud {
+    /// What the HUD shares with prediction and the server: `weapType`,
+    /// `weapClass`, `inventoryType`, `offhandClass`, `maxAmmo`,
+    /// `clipSize`, `clipOnly`, `cookOffHold`, the hip spread, the
+    /// grenade's explosion fields and `adsOverlayReticle`.
+    pub def: WeaponDef,
     /// `displayName`, a localized string key.
     pub display_name: String,
     /// `hudIcon`'s material.
@@ -647,8 +656,6 @@ pub struct WeaponHud {
     pub ammo_counter_icon: Option<String>,
     /// `modeName`, a localized key or empty.
     pub mode_name: String,
-    /// `offhandClass` (+324): 0 none, 1 frag, 2 smoke, 3 flash.
-    pub offhand_class: i32,
     /// `ammoName` and `clipName`: weapons sharing one share its slot.
     pub ammo_name: String,
     pub clip_name: String,
@@ -656,13 +663,9 @@ pub struct WeaponHud {
     /// none, 1 magazine, 2 short magazine, 3 shotgun, 4 rocket, 5 belt
     /// fed, 6 the alt weapon's.
     pub ammo_counter_clip: i32,
-    /// `clipSize` (+824).
-    pub clip_size: i32,
-    /// `maxAmmo` (+820), `sharedAmmoCap` (+840) and `clipOnly` (+1280):
-    /// what `BG_GetAmmoPlayerMax` sums (cod4-hud.md 15).
-    pub max_ammo: i32,
+    /// `sharedAmmoCap` (+840): with `maxAmmo` and `clipOnly`, what
+    /// `BG_GetAmmoPlayerMax` sums (cod4-hud.md 15).
     pub shared_ammo_cap: i32,
-    pub clip_only: bool,
     /// `dpadIcon` (+1316) and `dpadIconRatio` (+1320): the action slot's
     /// picture, 0 square, 1 2:1, 2 4:1.
     pub dpad_icon: Option<String>,
@@ -670,22 +673,15 @@ pub struct WeaponHud {
     /// `lowAmmoWarningThreshold` (+1468): the clip's fraction at or under
     /// which it reads low.
     pub low_ammo_threshold: f32,
-    /// `weapType` (+300), 1 a grenade, and `silenced` (+1360): a shot of
-    /// either pings no compass (cod4-hud.md 15.7).
-    pub weap_type: i32,
+    /// `silenced` (+1360): a shot of a silenced weapon or a grenade
+    /// (`weapType` 1) pings no compass (cod4-hud.md 15.7).
     pub silenced: bool,
-    /// `hudIconRatio` (+784): 0 square, 1 2:1, 2 4:1; `weapClass` (+304),
-    /// 7 a turret, 9 an item (no hold breath hint); `inventoryType` (+316), 0 a primary (the cursor hint,
-    /// cod4-hud.md 20).
+    /// `hudIconRatio` (+784): 0 square, 1 2:1, 2 4:1. `weapClass` 7 a
+    /// turret, 9 an item (no hold breath hint); `inventoryType` 0 a
+    /// primary (the cursor hint, cod4-hud.md 20); `explosionRadius`,
+    /// `projExplosion` (0 a grenade, 2 a flashbang, 6 heavy) and
+    /// `timedDetonation` what the grenade indicator tests (cod4-hud.md 21).
     pub hud_icon_ratio: i32,
-    pub weap_class: i32,
-    pub inventory_type: i32,
-    /// `explosionRadius` (+1364), `projExplosionType` (+1416: 0 a
-    /// grenade, 2 a flashbang, 6 heavy) and `timedDetonation` (+1452):
-    /// what the grenade indicator tests (cod4-hud.md 21).
-    pub explosion_radius: i32,
-    pub proj_explosion: i32,
-    pub timed_detonation: bool,
     /// What the crosshair and the sight's overlay draw with.
     pub reticle: Reticle,
 }
@@ -710,74 +706,78 @@ pub struct Reticle {
     /// `enemyCrosshairRange` (+1040): how near an enemy under the
     /// crosshair turns it (`CG_ScanForCrosshairEntity`).
     pub enemy_range: f32,
-    /// `hipSpreadStandMin`, `DuckedMin`, `ProneMin`, `hipSpreadMax`,
-    /// `DuckedMax`, `ProneMax` (+1104..+1124), degrees.
-    pub hip_spread: [f32; 6],
-    /// `cookOffHold` (+1276).
-    pub cook_off_hold: bool,
     /// `adsZoomInFrac` (+1064), `adsZoomOutFrac` (+1068).
     pub ads_zoom_frac: [f32; 2],
     /// `adsCrosshairInFrac` (+1744), `adsCrosshairOutFrac` (+1748) and
     /// `adsAimPitch` (+1740).
     pub ads_crosshair_frac: [f32; 2],
     pub ads_aim_pitch: f32,
-    /// `adsOverlayShader` (+1072), `adsOverlayShaderLowRes` (+1076),
-    /// `adsOverlayReticle` (+1080) and `adsOverlayWidth` / `Height`
-    /// (+1088, +1092).
+    /// `adsOverlayShader` (+1072), `adsOverlayShaderLowRes` (+1076) and
+    /// `adsOverlayWidth` / `Height` (+1088, +1092); `adsOverlayReticle`
+    /// is the def's.
     pub overlay: Option<String>,
     pub overlay_low_res: Option<String>,
-    pub overlay_reticle: i32,
     pub overlay_size: [f32; 2],
 }
 
-/// `perk_weapSpreadMultiplier`'s default, 0.65 (the float at `iw3mp.exe`
-/// 0x70b390 its registration at 0x40dd48 loads).
-pub const PERK_SPREAD_MULTIPLIER: f32 = 0.65;
+impl WeaponHud {
+    /// `w`'s HUD fields, `material` naming the material each of its
+    /// material fields (`hudIcon`, `reticleCenter`, ..) points at; `None`
+    /// for a struct short of 0x878 bytes.
+    pub fn of(w: &Weapon, material: impl Fn(&str) -> Option<String>) -> Option<WeaponHud> {
+        let def = WeaponDef::of(w)?;
+        let int = |o: usize| i32::from_le_bytes(w.raw[o..o + 4].try_into().unwrap());
+        let flt = |o: usize| f32::from_bits(int(o) as u32);
+        let s = |k: &str| w.strings.get(k).cloned().unwrap_or_default();
+        Some(WeaponHud {
+            def,
+            display_name: s("displayName"),
+            hud_icon: material("hudIcon"),
+            ammo_counter_icon: material("ammoCounterIcon"),
+            mode_name: s("modeName"),
+            ammo_name: s("ammoName"),
+            clip_name: s("clipName"),
+            ammo_counter_clip: int(796),
+            shared_ammo_cap: int(840),
+            dpad_icon: material("dpadIcon"),
+            dpad_icon_ratio: int(1320),
+            low_ammo_threshold: flt(1468),
+            silenced: int(1360) != 0,
+            hud_icon_ratio: int(784),
+            reticle: Reticle {
+                center: material("reticleCenter"),
+                side: material("reticleSide"),
+                center_size: int(548),
+                side_size: int(552),
+                min_ofs: int(556),
+                side_pos: flt(1152),
+                color_change: int(1044) != 0,
+                enemy_range: flt(1040),
+                ads_zoom_frac: [flt(1064), flt(1068)],
+                ads_crosshair_frac: [flt(1744), flt(1748)],
+                ads_aim_pitch: flt(1740),
+                overlay: material("adsOverlayShader"),
+                overlay_low_res: material("adsOverlayShaderLowRes"),
+                overlay_size: [flt(1088), flt(1092)],
+            },
+        })
+    }
+}
 
-impl Reticle {
-    /// `BG_GetSpreadForWeapon` (`iw3mp.exe` 0x416c70): the hip spread's
-    /// two ends, by the eye's height between prone (11), crouched (40)
-    /// and standing (60); a `spreadOverride` of state 2 pins both, of
-    /// state 1 the max; Steady Aim (`perks` bit 1) scales both by
-    /// [`PERK_SPREAD_MULTIPLIER`].
-    pub fn spread(
-        &self,
-        view_height: f32,
-        perks: u32,
-        override_state: i32,
-        override_value: i32,
-    ) -> (f32, f32) {
-        let [
-            stand_min,
-            ducked_min,
-            prone_min,
-            stand_max,
-            ducked_max,
-            prone_max,
-        ] = self.hip_spread;
-        let (mut min, mut max) = if override_state == 2 {
-            (override_value as f32, override_value as f32)
-        } else if view_height <= 40.0 {
-            let f = (view_height - 11.0) / 29.0;
-            (
-                (ducked_min - prone_min) * f + prone_min,
-                (ducked_max - prone_max) * f + prone_max,
-            )
-        } else {
-            let f = (view_height - 40.0) / 20.0;
-            (
-                (stand_min - ducked_min) * f + ducked_min,
-                (stand_max - ducked_max) * f + ducked_max,
-            )
+impl KillIcon {
+    /// `w`'s kill icon, `material` as for [`WeaponHud::of`]; `None`
+    /// without a `killIcon`.
+    pub fn of(w: &Weapon, material: impl Fn(&str) -> Option<String>) -> Option<KillIcon> {
+        let int = |o: usize| {
+            w.raw
+                .get(o..o + 4)
+                .map_or(0, |b| i32::from_le_bytes(b.try_into().unwrap()))
         };
-        if override_state == 1 {
-            max = override_value as f32;
-        }
-        if perks & 2 != 0 {
-            min *= PERK_SPREAD_MULTIPLIER;
-            max *= PERK_SPREAD_MULTIPLIER;
-        }
-        (min, max)
+        Some(KillIcon {
+            material: material("killIcon")?,
+            ratio: int(1308),
+            flip: int(1312) != 0,
+        })
     }
 }
 
@@ -841,12 +841,21 @@ impl HudAssets {
     /// Walks the HUD zones and `map`'s (later zones override), then under
     /// an `fs_game` its `mod.ff`, whose assets win over both
     /// (cod4-fastfile.md 13).
+    ///
+    /// Under an `fs_game` the weapons then come off its weapon files.
     pub fn load(install: &Install, map: &str) -> Result<HudAssets> {
         let mod_zone = install.mod_zone().map(|_| "mod");
-        Self::load_zones(
+        let mut out = Self::load_zones(
             install,
             HUD_ZONES.iter().copied().chain([map]).chain(mod_zone),
-        )
+        )?;
+        if install.fs_game().is_some() {
+            let dirs = install.clone().with_map(Some(map)).iwd_dirs();
+            let fs = vcod_common::pk3::Pk3Fs::open_iwd_layers(&dirs[0], &dirs[1..])?;
+            let names = out.weapon_hud.keys().cloned().collect::<Vec<_>>();
+            out.overlay_weapon_files(&crate::weapon_file::load_overlay(&fs, names));
+        }
+        Ok(out)
     }
 
     /// The front end's zones ([`FRONT_ZONES`]), with no level's, then
@@ -873,6 +882,25 @@ impl HudAssets {
         Ok(out)
     }
 
+    /// The weapons a set `fs_game` reads off its weapon files
+    /// ([`crate::weapon_file::load_overlay`]) in place of the zones'
+    /// structs, as prediction and the server take them (cod4-fastfile.md
+    /// 13).
+    pub fn overlay_weapon_files(&mut self, files: &[(String, TextWeapon)]) {
+        for (name, t) in files {
+            let w = &t.weapon;
+            let material = |f: &str| t.materials.get(f).cloned();
+            let Some(h) = WeaponHud::of(w, material) else {
+                continue;
+            };
+            self.weapon_hud.insert(name.clone(), h);
+            match KillIcon::of(w, material) {
+                Some(k) => self.kill_icons.insert(name.clone(), k),
+                None => self.kill_icons.remove(name),
+            };
+        }
+    }
+
     pub fn add(&mut self, a: &Assets) {
         for m in &a.materials {
             if let Some(img) = colour_image(a, m) {
@@ -893,22 +921,9 @@ impl HudAssets {
             }
         }
         for w in &a.weapons {
-            let Some(&m) = w.materials.get("killIcon") else {
-                continue;
-            };
-            let int = |o: usize| {
-                w.raw
-                    .get(o..o + 4)
-                    .map_or(0, |b| i32::from_le_bytes(b.try_into().unwrap()))
-            };
-            self.kill_icons.insert(
-                w.name.clone(),
-                KillIcon {
-                    material: stub_name(&a.materials[m.index()].name).to_string(),
-                    ratio: int(1308),
-                    flip: int(1312) != 0,
-                },
-            );
+            if let Some(k) = KillIcon::of(w, |f| zone_material(a, w, f)) {
+                self.kill_icons.insert(w.name.clone(), k);
+            }
         }
         for r in &a.raw_files {
             let text = || String::from_utf8_lossy(&r.data);
@@ -972,64 +987,9 @@ impl HudAssets {
             }
         }
         for w in &a.weapons {
-            let int = |o: usize| {
-                w.raw
-                    .get(o..o + 4)
-                    .map_or(0, |b| i32::from_le_bytes(b.try_into().unwrap()))
-            };
-            let mat = |k: &str| {
-                w.materials
-                    .get(k)
-                    .map(|m| stub_name(&a.materials[m.index()].name).to_string())
-            };
-            let flt = |o: usize| f32::from_bits(int(o) as u32);
-            self.weapon_hud.insert(
-                w.name.clone(),
-                WeaponHud {
-                    display_name: w.strings.get("displayName").cloned().unwrap_or_default(),
-                    hud_icon: mat("hudIcon"),
-                    ammo_counter_icon: mat("ammoCounterIcon"),
-                    mode_name: w.strings.get("modeName").cloned().unwrap_or_default(),
-                    offhand_class: int(324),
-                    ammo_name: w.strings.get("ammoName").cloned().unwrap_or_default(),
-                    clip_name: w.strings.get("clipName").cloned().unwrap_or_default(),
-                    ammo_counter_clip: int(796),
-                    clip_size: int(824),
-                    max_ammo: int(820),
-                    shared_ammo_cap: int(840),
-                    clip_only: int(1280) != 0,
-                    dpad_icon: mat("dpadIcon"),
-                    dpad_icon_ratio: int(1320),
-                    low_ammo_threshold: f32::from_bits(int(1468) as u32),
-                    weap_type: int(300),
-                    silenced: int(1360) != 0,
-                    hud_icon_ratio: int(784),
-                    weap_class: int(304),
-                    inventory_type: int(316),
-                    explosion_radius: int(1364),
-                    proj_explosion: int(1416),
-                    timed_detonation: int(1452) != 0,
-                    reticle: Reticle {
-                        center: mat("reticleCenter"),
-                        side: mat("reticleSide"),
-                        center_size: int(548),
-                        side_size: int(552),
-                        min_ofs: int(556),
-                        side_pos: flt(1152),
-                        color_change: int(1044) != 0,
-                        enemy_range: flt(1040),
-                        hip_spread: std::array::from_fn(|k| flt(1104 + 4 * k)),
-                        cook_off_hold: int(1276) != 0,
-                        ads_zoom_frac: [flt(1064), flt(1068)],
-                        ads_crosshair_frac: [flt(1744), flt(1748)],
-                        ads_aim_pitch: flt(1740),
-                        overlay: mat("adsOverlayShader"),
-                        overlay_low_res: mat("adsOverlayShaderLowRes"),
-                        overlay_reticle: int(1080),
-                        overlay_size: [flt(1088), flt(1092)],
-                    },
-                },
-            );
+            if let Some(h) = WeaponHud::of(w, |f| zone_material(a, w, f)) {
+                self.weapon_hud.insert(w.name.clone(), h);
+            }
         }
         for menu in &a.menus {
             let sm = crate::scriptmenu::ScriptMenu::of(menu, a);
@@ -1099,6 +1059,12 @@ impl HudAssets {
 /// A material's colour map: its 2D (semantic 0) or colour (2) texture's
 /// image, else its first; a reference to another zone's image (`,name`)
 /// by its name.
+/// The material zone weapon `w`'s field `field` points at, by name.
+fn zone_material(a: &Assets, w: &Weapon, field: &str) -> Option<String> {
+    let m = w.materials.get(field)?;
+    Some(stub_name(&a.materials[m.index()].name).to_string())
+}
+
 pub fn colour_image(a: &Assets, m: &Material) -> Option<String> {
     let t = m
         .textures
@@ -1111,6 +1077,53 @@ pub fn colour_image(a: &Assets, m: &Material) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Under a mod the HUD takes the weapon files prediction and the
+    /// server take: a file that moves `clipName` to another weapon's moves
+    /// its clip slot with it, and its numbers and materials replace the
+    /// zone's.
+    #[test]
+    fn weapon_files_replace_the_zone_weapons_hud() {
+        let file = |name: &str, body: &str| {
+            let text = format!("WEAPONFILE{body}").into_bytes();
+            let anims = crate::pmove::anim::PLAYER_ANIM_TYPES;
+            let t = crate::weapon_file::parse(name, &text, &anims).unwrap();
+            (name.to_string(), t)
+        };
+        let zone = |ammo: &str, clip: &str| WeaponHud {
+            ammo_name: ammo.into(),
+            clip_name: clip.into(),
+            ..Default::default()
+        };
+        let mut a = HudAssets::default();
+        a.weapon_hud.insert("ak47_mp".into(), zone("ak47", "ak47"));
+        a.weapon_hud.insert("m16_mp".into(), zone("m16", "m16"));
+        a.kill_icons.insert(
+            "m16_mp".into(),
+            KillIcon {
+                material: "hud_icon_zone".into(),
+                ratio: 0,
+                flip: false,
+            },
+        );
+        let list = ["ak47_mp".to_string(), "m16_mp".to_string()];
+        assert_eq!(ammo_slots(&list, &a.weapon_hud), [(1, 1), (2, 2)]);
+
+        a.overlay_weapon_files(&[file(
+            "m16_mp",
+            "\\ammoName\\M16\\clipName\\AK47\\clipSize\\45\\killIcon\\hud_icon_mod\\killIconRatio\\2:1",
+        )]);
+        assert_eq!(ammo_slots(&list, &a.weapon_hud), [(1, 1), (2, 1)]);
+        let m16 = &a.weapon_hud["m16_mp"];
+        assert_eq!(m16.def.clip_size, 45);
+        assert_eq!(m16.def.name, "m16_mp");
+        assert_eq!(a.kill_icons["m16_mp"].material, "hud_icon_mod");
+        assert_eq!(a.kill_icons["m16_mp"].ratio, 1);
+
+        // A file naming no kill icon leaves the weapon none.
+        a.overlay_weapon_files(&[file("m16_mp", "\\clipSize\\30")]);
+        assert!(!a.kill_icons.contains_key("m16_mp"));
+    }
 
     fn menu(name: &str, items: &[&str]) -> crate::assets::ui::Menu {
         use crate::assets::ui::{Item, ItemExps, ItemScripts, Menu, TypeData, Window};

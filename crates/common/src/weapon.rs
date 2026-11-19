@@ -9,8 +9,8 @@
 //! (`crate::pmove::aim`). `adsBobFactor` scales the walk bob on the gun
 //! down the sight (cod11-combat.md 15.2).
 
+use crate::xmodel::WeaponKeys;
 use anyhow::{Result, anyhow};
-use std::collections::HashMap;
 
 /// Retail's `cg_fov` default: horizontal degrees across the whole view
 /// (docs/research/xmodel-v14-format.md, "The view fov").
@@ -208,14 +208,14 @@ pub struct WeaponSounds {
     pub fire_time_ms: f32,
 }
 
-fn opt_str(map: &HashMap<String, String>, key: &str) -> Option<String> {
+fn opt_str(map: &WeaponKeys, key: &str) -> Option<String> {
     map.get(key)
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
 }
 
 impl WeaponSounds {
-    pub fn from_map(map: &HashMap<String, String>) -> WeaponSounds {
+    pub fn from_map(map: &WeaponKeys) -> WeaponSounds {
         WeaponSounds {
             fire: opt_str(map, "fireSound"),
             last_shot: opt_str(map, "lastShotSound"),
@@ -332,7 +332,7 @@ pub struct AimDef {
 }
 
 impl AimDef {
-    pub fn from_map(map: &HashMap<String, String>) -> AimDef {
+    pub fn from_map(map: &WeaponKeys) -> AimDef {
         let f = |key: &str| parse_num(map, key, 0.0f32);
         let pair = |key: &str| [f(key), f(&format!("ads{}", capitalize(key)))];
         let range = |key: &str| {
@@ -749,41 +749,47 @@ impl WeaponDef {
     }
 }
 
-/// Absence is normal (a spread key on a turret file, an ammo key on a
-/// melee-only weapon: whole sections the file's kind does not carry) and
-/// stays silent; garbage warns. Same convention as `parse_bool`.
-fn parse_num<T: std::str::FromStr + std::fmt::Display + Copy>(
-    map: &HashMap<String, String>,
-    key: &str,
-    default: T,
-) -> T {
-    match map.get(key) {
-        Some(v) => v.trim().parse().unwrap_or_else(|_| {
-            log::warn!("weapon: invalid {key} value {v:?}, using default {default}");
-            default
-        }),
-        None => default,
+/// A number field as `ParseConfigStringToStruct` reads its type (combat
+/// doc 0.1): an int (type 4) through `atoi`, a float (6, and the seconds of
+/// a type-7 time) through `(float)atof`.
+trait FieldNum: Copy {
+    fn read(v: &str) -> Self;
+}
+
+impl FieldNum for i32 {
+    fn read(v: &str) -> i32 {
+        crate::text::atoi(v)
     }
 }
 
-/// Absence is normal (no `boltAction` on a semi-auto) and stays silent;
-/// garbage warns.
-fn parse_bool(map: &HashMap<String, String>, key: &str, default: bool) -> bool {
-    match map.get(key).map(|v| v.trim()) {
-        Some("0") => false,
-        Some("1") => true,
-        Some(v) => {
-            log::warn!("weapon: invalid {key} value {v:?}, using default {default}");
-            default
-        }
-        None => default,
+/// An ammo count: vcod's counters are unsigned, so a negative int reads 0.
+impl FieldNum for u32 {
+    fn read(v: &str) -> u32 {
+        crate::text::atoi(v).max(0) as u32
     }
+}
+
+impl FieldNum for f32 {
+    fn read(v: &str) -> f32 {
+        crate::text::atof(v) as f32
+    }
+}
+
+/// `key`'s number, `default` when the file has none (a spread key on a
+/// turret file, an ammo key on a melee-only weapon).
+fn parse_num<T: FieldNum>(map: &WeaponKeys, key: &str, default: T) -> T {
+    map.get(key).map_or(default, |v| T::read(v))
+}
+
+/// A type-5 field: `atoi != 0`, `default` when the file has none.
+fn parse_bool(map: &WeaponKeys, key: &str, default: bool) -> bool {
+    map.get(key).map_or(default, |v| crate::text::atoi(v) != 0)
 }
 
 /// Every field's own default, which is what `from_map` gives an empty file.
 impl Default for WeaponDef {
     fn default() -> WeaponDef {
-        WeaponDef::from_map(&HashMap::new())
+        WeaponDef::from_map(&WeaponKeys::default())
     }
 }
 
@@ -937,7 +943,7 @@ impl WeaponDef {
     }
 
     /// Times default to 0, so a missing time completes its state instantly.
-    pub fn from_map(map: &HashMap<String, String>) -> WeaponDef {
+    pub fn from_map(map: &WeaponKeys) -> WeaponDef {
         WeaponDef {
             clip_size: parse_num(map, "clipSize", 1).max(1),
             fire_time: parse_num(map, "fireTime", 0.0),
@@ -992,12 +998,12 @@ impl WeaponDef {
             fuse_time: parse_num(map, "fuseTime", 0.0),
             hold_fire_time: parse_num(map, "holdFireTime", 0.0),
             cook_off_hold: parse_bool(map, "cookOffHold", false),
-            explosion_radius: parse_num(map, "explosionRadius", 0.0),
+            explosion_radius: parse_num(map, "explosionRadius", 0) as f32,
             explosion_inner_damage: parse_num(map, "explosionInnerDamage", 0),
             explosion_outer_damage: parse_num(map, "explosionOuterDamage", 0),
             vehicle_scale: parse_num(map, "vehiclescale", 0.0),
-            projectile_speed: parse_num(map, "projectileSpeed", 0.0),
-            projectile_speed_up: parse_num(map, "projectileSpeedUp", 0.0),
+            projectile_speed: parse_num(map, "projectileSpeed", 0) as f32,
+            projectile_speed_up: parse_num(map, "projectileSpeedUp", 0) as f32,
             projectile_model: opt_str(map, "projectileModel")
                 .map(|m| m.strip_prefix("xmodel/").unwrap_or(&m).to_string()),
             projectile_dlight: parse_num::<i32>(map, "projectileDLight", 0) as f32,
@@ -1045,9 +1051,9 @@ impl WeaponDef {
             shared_cap_index: None,
             reticle_center: opt_str(map, "reticleCenter"),
             reticle_side: opt_str(map, "reticleSide"),
-            reticle_center_size: parse_num(map, "reticleCenterSize", 0.0),
-            reticle_side_size: parse_num(map, "reticleSideSize", 0.0),
-            reticle_min_ofs: parse_num(map, "reticleMinOfs", 0.0),
+            reticle_center_size: parse_num(map, "reticleCenterSize", 0) as f32,
+            reticle_side_size: parse_num(map, "reticleSideSize", 0) as f32,
+            reticle_min_ofs: parse_num(map, "reticleMinOfs", 0) as f32,
             hip_reticle_side_pos: parse_num(map, "hipReticleSidePos", 0.0),
             ads_crosshair_in_frac: parse_num(map, "adsCrosshairInFrac", 0.0),
             ads_crosshair_out_frac: parse_num(map, "adsCrosshairOutFrac", 0.0),
@@ -1373,9 +1379,9 @@ mod tests {
     #[test]
     fn a_missing_rechamber_while_ads_reads_as_zero() {
         let def = |v: Option<&str>| {
-            let mut map = HashMap::new();
+            let mut map = WeaponKeys::default();
             if let Some(v) = v {
-                map.insert("rechamberWhileAds".to_string(), v.to_string());
+                map.insert("rechamberWhileAds", v.to_string());
             }
             WeaponDef::from_map(&map).rechamber_drops_ads
         };
@@ -1386,14 +1392,11 @@ mod tests {
 
     #[test]
     fn sound_keys_blank_means_absent() {
-        let mut map = HashMap::new();
-        map.insert("fireSound".to_string(), "weap_kar98k_fire".to_string());
-        map.insert("lastShotSound".to_string(), "".to_string());
-        map.insert(
-            "reloadSound".to_string(),
-            " weap_kar98k_reload ".to_string(),
-        );
-        map.insert("rifleBullet".to_string(), "1".to_string());
+        let mut map = WeaponKeys::default();
+        map.insert("fireSound", "weap_kar98k_fire".to_string());
+        map.insert("lastShotSound", "".to_string());
+        map.insert("reloadSound", " weap_kar98k_reload ".to_string());
+        map.insert("rifleBullet", "1".to_string());
         let s = WeaponSounds::from_map(&map);
         assert_eq!(s.fire.as_deref(), Some("weap_kar98k_fire"));
         assert_eq!(s.last_shot, None);
@@ -1914,7 +1917,7 @@ mod tests {
         assert_eq!(d.clip_size, 5);
         assert!((d.fire_time - 0.33).abs() < 1e-6);
         assert!(d.bolt_action);
-        let d = WeaponDef::from_map(&HashMap::new());
+        let d = WeaponDef::from_map(&WeaponKeys::default());
         assert_eq!(d.clip_size, 1);
         assert_eq!(d.fire_time, 0.0);
         assert!(!d.bolt_action);
@@ -1924,9 +1927,31 @@ mod tests {
         assert!(!d.wide_kill_icon);
     }
 
+    /// Values as `ParseConfigStringToStruct` reads them (combat doc 0.1):
+    /// ints through `atoi`, bools as `atoi != 0`, floats through `atof`, a
+    /// type-4 field read as an int even where vcod keeps a float; keys in
+    /// any case, the first value under a key, an empty first value leaving
+    /// the default.
+    #[test]
+    fn values_read_as_the_c_loader_reads_them() {
+        let d = WeaponDef::from_map(&crate::xmodel::parse_weapon(concat!(
+            r"WEAPONFILE\damage\40.0\clipSize\30 rounds\SEMIAUTO\2\semiAuto\0",
+            r"\boltaction\1\fireTime\ 0.1s\FireTime\9\explosionRadius\256.9",
+            r"\hipSpreadMax\3.5x\rifleBullet\\rifleBullet\1",
+        )));
+        assert_eq!(d.damage, 40);
+        assert_eq!(d.clip_size, 30);
+        assert!(d.semi_auto, "2 is true, and the first semiAuto wins");
+        assert!(d.bolt_action, "any case");
+        assert_eq!(d.fire_time, 0.1);
+        assert_eq!(d.explosion_radius, 256.0, "explosionRadius is an int field");
+        assert_eq!(d.hip_spread_max, 3.5);
+        assert!(!d.sounds.rifle_bullet, "an empty first value is no value");
+    }
+
     #[test]
     fn the_frag_keys_parse() {
-        let map: HashMap<String, String> = [
+        let map: WeaponKeys = [
             ("weaponType", "grenade"),
             ("fuseTime", "4"),
             ("holdFireTime", "0.6"),
@@ -1985,7 +2010,7 @@ mod tests {
         let map = xmodel::parse_weapon(r"\killIcon\gfx/hud/hud@death_colt45.tga\wideKillIcon\0");
         let d = WeaponDef::from_map(&map);
         assert!(!d.wide_kill_icon);
-        assert!(!WeaponDef::from_map(&HashMap::new()).wide_kill_icon);
+        assert!(!WeaponDef::from_map(&WeaponKeys::default()).wide_kill_icon);
     }
 
     #[test]
@@ -2070,9 +2095,9 @@ mod tests {
     /// A def with every `WeaponAnim` key filled in, for `view_anim`/`resolve`
     /// tests that don't care about a specific weapon file.
     fn full_def() -> WeaponDef {
-        let mut map = HashMap::new();
+        let mut map = WeaponKeys::default();
         for which in WeaponAnim::ALL {
-            map.insert(which.key().to_string(), "some_anim".to_string());
+            map.insert(which.key(), "some_anim".to_string());
         }
         WeaponDef::from_map(&map)
     }

@@ -1822,6 +1822,12 @@ impl<T: Transport> NetClient<T> {
     /// Client message: unacked reliables, `cmds` as one `clc_move` (skipped
     /// when empty), `clc_EOF`. Each cmd is written full-branch, chained from
     /// the one before it under the same key, the first from `last_sent_cmd`.
+    ///
+    /// Retail fragments a message past `FRAGMENT_SIZE`; vcod does not, so an
+    /// oversized one carries the oldest unacked reliables that fit beside the
+    /// newest cmd, then as many of the newest cmds as still fit. The rest
+    /// wait for the server's ack: resending a prefix keeps the server's
+    /// in-order rule, where skipping ahead past a lost packet would not.
     fn send_message(&mut self, cmds: &[UserCmd]) {
         // `CL_WritePacket` sends nothing while a demo plays.
         if self.demo.is_some() {
@@ -1829,20 +1835,96 @@ impl<T: Transport> NetClient<T> {
         }
         let message_ack = self.netchan.incoming_sequence as i32;
         let reliable_ack = self.command_sequence;
-
-        let mut w = MsgWriter::new(&self.huff);
         // `reliable_acknowledge` comes off the wire; an all-ones ack must not
         // overflow the add.
         let from = self.netchan.reliable_acknowledge.wrapping_add(1);
-        for seq in from..=self.netchan.reliable_sequence {
-            let slot = seq as usize & (self.netchan.reliable.len() - 1);
-            let s = self.netchan.reliable[slot].clone();
-            if s.is_empty() {
-                continue;
+        let pending: Vec<u32> = (from..=self.netchan.reliable_sequence)
+            .filter(|&seq| !self.reliable_at(seq).is_empty())
+            .collect();
+        let (r, c) = match self.message_fit(&pending, cmds, message_ack, reliable_ack) {
+            Ok(rc) => rc,
+            Err(why) => {
+                self.drop(&why);
+                return;
             }
+        };
+        let m = cmds.len();
+        let cmds = &cmds[m - c..];
+        let ops = self.message_ops(&pending[..r], cmds, message_ack, reliable_ack);
+        match self
+            .netchan
+            .build_out(self.server_id, message_ack, reliable_ack, &ops, &self.huff)
+        {
+            Ok(pkt) => {
+                self.transport.send(&pkt);
+                if let Some(to) = cmds.last() {
+                    self.last_sent_cmd = *to;
+                }
+            }
+            Err(e) => log::warn!("client message not sent: {e:#}"),
+        }
+    }
+
+    /// How many of `pending` (oldest first) and of `cmds` (newest last)
+    /// [`Self::send_message`] sends; all of both when they fit. `Err` when
+    /// the oldest reliable, or with none pending one cmd, cannot fit alone.
+    fn message_fit(
+        &self,
+        pending: &[u32],
+        cmds: &[UserCmd],
+        message_ack: i32,
+        reliable_ack: i32,
+    ) -> Result<(usize, usize), String> {
+        let (n, m) = (pending.len(), cmds.len());
+        let fits = |r: usize, c: usize| {
+            let ops = self.message_ops(&pending[..r], &cmds[m - c..], message_ack, reliable_ack);
+            netchan::fits(&ops, &self.huff)
+        };
+        if fits(n, m) {
+            return Ok((n, m));
+        }
+        let mut beside = m.min(1);
+        let mut r = largest_fitting(n, |r| fits(r, beside));
+        if r == 0 && n > 0 && beside == 1 {
+            beside = 0;
+            r = largest_fitting(1, |r| fits(r, 0));
+        }
+        if n > 0 && r == 0 {
+            return Err(format!(
+                "reliable command {} does not fit in a packet",
+                pending[0]
+            ));
+        }
+        if !fits(r, beside) {
+            return Err("a usercmd does not fit in a packet".into());
+        }
+        let c = beside + largest_fitting(m - beside, |k| fits(r, beside + k));
+        log::debug!(
+            "client message past {} bytes: {r} of {n} reliables, {c} of {m} cmds",
+            netchan::FRAGMENT_SIZE
+        );
+        Ok((r, c))
+    }
+
+    /// The reliable command ringed at `seq`.
+    fn reliable_at(&self, seq: u32) -> &str {
+        &self.netchan.reliable[seq as usize & (self.netchan.reliable.len() - 1)]
+    }
+
+    /// The op block of [`Self::send_message`]: the `reliables` by sequence,
+    /// `cmds` as one `clc_move` when there are any, `clc_EOF`.
+    fn message_ops(
+        &self,
+        reliables: &[u32],
+        cmds: &[UserCmd],
+        message_ack: i32,
+        reliable_ack: i32,
+    ) -> Vec<u8> {
+        let mut w = MsgWriter::new(&self.huff);
+        for &seq in reliables {
             w.write_bits(CLC_CLIENT_COMMAND, CLC_BITS);
             w.write_long(seq as i32);
-            w.write_string(&s);
+            w.write_string(self.reliable_at(seq));
         }
         if !cmds.is_empty() {
             let key = self.usercmd_key(message_ack, reliable_ack);
@@ -1868,17 +1950,7 @@ impl<T: Transport> NetClient<T> {
             }
         }
         w.write_bits(CLC_EOF, CLC_BITS);
-        let ops = w.into_ops();
-
-        if let Ok(pkt) =
-            self.netchan
-                .build_out(self.server_id, message_ack, reliable_ack, &ops, &self.huff)
-        {
-            self.transport.send(&pkt);
-            if let Some(to) = cmds.last() {
-                self.last_sent_cmd = *to;
-            }
-        }
+        w.into_ops()
     }
 
     /// `SV_UserMove`'s delta key (cod_lnxded 0x8086fa4, the mask at 0x8087060).
@@ -1894,6 +1966,21 @@ impl<T: Transport> NetClient<T> {
         let elapsed = self.now.duration_since(self.server_time_at).as_millis() as i32;
         self.server_time.wrapping_add(elapsed)
     }
+}
+
+/// The largest `k` in `0..=max` with `fits(k)`, `fits` growing false with
+/// `k`; 0 when none does.
+fn largest_fitting(max: usize, fits: impl Fn(usize) -> bool) -> usize {
+    let (mut lo, mut hi) = (0, max + 1);
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if fits(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
 }
 
 /// Cmds in one `clc_move`, the cap on both ends: `send_cmds` keeps the most
@@ -2643,14 +2730,9 @@ mod tests {
         assert_eq!(c.state(), NetState::Disconnected);
     }
 
-    /// Unscramble and decompress packet `i` the way the server would, and
-    /// walk to its clc_move: returns the usercmd key, a reader positioned
-    /// right after the cmd count, and the count itself.
-    fn sent_move(
-        c: &NetClient<FakeTransport>,
-        h: &Huffman,
-        i: usize,
-    ) -> Option<(i32, MsgReader, u8)> {
+    /// Unscramble and decompress packet `i` the way the server would:
+    /// returns the usercmd key and a reader at the first op.
+    fn sent_ops(c: &NetClient<FakeTransport>, h: &Huffman, i: usize) -> (i32, MsgReader) {
         let pkt = &c.transport.sent[i];
         let body = &pkt[6..];
         let server_id = body[0] as i32;
@@ -2669,8 +2751,20 @@ mod tests {
             *b ^= key;
         }
         // MsgReader::new block-decompresses; the body only needed unscrambling.
-        let key = c.usercmd_key(message_ack, reliable_ack);
-        let mut r = MsgReader::new(&comp, h);
+        (
+            c.usercmd_key(message_ack, reliable_ack),
+            MsgReader::new(&comp, h),
+        )
+    }
+
+    /// Walk packet `i` to its clc_move: returns the usercmd key, a reader
+    /// positioned right after the cmd count, and the count itself.
+    fn sent_move(
+        c: &NetClient<FakeTransport>,
+        h: &Huffman,
+        i: usize,
+    ) -> Option<(i32, MsgReader, u8)> {
+        let (key, mut r) = sent_ops(c, h, i);
         loop {
             match r.read_bits(CLC_BITS) {
                 CLC_MOVE | CLC_MOVE_NO_DELTA => {
@@ -2684,6 +2778,107 @@ mod tests {
                 _ => return None,
             }
         }
+    }
+
+    /// Packet `i`'s clc_clientCommands, `(sequence, text)`.
+    fn sent_reliables(c: &NetClient<FakeTransport>, h: &Huffman, i: usize) -> Vec<(u32, String)> {
+        let (_, mut r) = sent_ops(c, h, i);
+        let mut out = Vec::new();
+        while r.read_bits(CLC_BITS) == CLC_CLIENT_COMMAND {
+            let seq = r.read_long() as u32;
+            out.push((seq, r.read_string()));
+        }
+        out
+    }
+
+    /// Reliables past one packet go out as the oldest that fit beside the
+    /// newest cmd, resent until acked, then the next: the server sees every
+    /// command, in order, with a move in each packet.
+    #[test]
+    fn oversized_reliables_go_out_over_several_packets() {
+        let mut c = active_client();
+        let h = Huffman::new();
+        // ~3 KiB of text Huffman cannot squeeze much.
+        let mut x = 12345u32;
+        let queued: Vec<String> = (0..12)
+            .map(|i| {
+                let tail: String = (0..250)
+                    .map(|_| {
+                        x = x.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                        match b'!' + (x >> 16) as u8 % 90 {
+                            b'%' => 'x',
+                            b => b as char,
+                        }
+                    })
+                    .collect();
+                format!("say {i} {tail}")
+            })
+            .collect();
+        for q in &queued {
+            c.send_reliable(q);
+        }
+        let first_seq = c.netchan.reliable_acknowledge + 1;
+        let mut got: Vec<(u32, String)> = Vec::new();
+        for frame in 0..12 {
+            let at = c.transport.sent.len();
+            let cmd = UserCmd {
+                server_time: 1000 + 8 * frame,
+                forward: 127,
+                ..Default::default()
+            };
+            let base = c.last_sent_cmd;
+            c.send_cmds(&[cmd]);
+            assert_eq!(c.transport.sent.len(), at + 1, "frame {frame} sent nothing");
+            assert!(c.transport.sent[at].len() < 6 + netchan::FRAGMENT_SIZE);
+            assert_eq!(decoded_move_cmds(&c, &h, at, &base), Some(vec![cmd]));
+            let sent = sent_reliables(&c, &h, at);
+            if sent.is_empty() {
+                break;
+            }
+            // The server runs those past its last; its ack retires them.
+            for (seq, text) in &sent {
+                if got.last().is_none_or(|(s, _)| seq > s) {
+                    got.push((*seq, text.clone()));
+                }
+            }
+            c.netchan.reliable_acknowledge = got.last().unwrap().0;
+        }
+        let want: Vec<(u32, String)> = (first_seq..).zip(queued.iter().cloned()).collect();
+        assert_eq!(got, want);
+        assert_ne!(c.state(), NetState::Disconnected);
+    }
+
+    /// A reliable that fills a packet by itself goes out without the move;
+    /// the cmds wait for its ack.
+    #[test]
+    fn a_reliable_too_big_to_share_a_packet_goes_out_alone() {
+        let mut c = active_client();
+        let h = Huffman::new();
+        // As long as a string goes, of the ASCII byte with the longest code.
+        let rare = (1u8..128)
+            .max_by_key(|&b| h.compress_block(&[b; 64]).len())
+            .unwrap();
+        let huge = (rare as char).to_string().repeat(1023);
+        c.send_reliable(&huge);
+        let seq = c.netchan.reliable_sequence;
+        let base = c.last_sent_cmd;
+        let cmd = |t| UserCmd {
+            server_time: t,
+            forward: 127,
+            ..Default::default()
+        };
+
+        let at = c.transport.sent.len();
+        c.send_cmds(&[cmd(1000)]);
+        assert_eq!(c.transport.sent.len(), at + 1);
+        assert_eq!(sent_reliables(&c, &h, at), vec![(seq, huge)]);
+        assert!(sent_move(&c, &h, at).is_none(), "no room for the move");
+
+        c.netchan.reliable_acknowledge = seq;
+        let at = c.transport.sent.len();
+        c.send_cmds(&[cmd(1008)]);
+        assert!(sent_reliables(&c, &h, at).is_empty());
+        assert_eq!(decoded_move_cmds(&c, &h, at, &base), Some(vec![cmd(1008)]));
     }
 
     /// Decode packet `i`'s clc_move's first cmd against `base`.

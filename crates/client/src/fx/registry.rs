@@ -2216,7 +2216,6 @@ mod tests {
 /// fire as their `pakuo` weapon files define them.
 #[cfg(test)]
 pub(crate) mod uo_captures {
-    use std::collections::HashMap;
     use vcod_common::net::events::{EventTracker, GameEvent};
     use vcod_common::net::protocol::PROTOCOL_V22;
     use vcod_common::weapon::WeaponDef;
@@ -2339,7 +2338,7 @@ pub(crate) mod uo_captures {
                 *name,
                 "{tag}: configstring 7 slot {index}"
             );
-            let map: HashMap<String, String> = keys
+            let map: vcod_common::xmodel::WeaponKeys = keys
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect();
