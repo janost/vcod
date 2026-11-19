@@ -49,7 +49,7 @@ pub struct Plane {
 #[derive(Debug, Clone)]
 pub struct BrushSide {
     /// Sides 0..6: f32 axial bound, bit-cast. Sides 6..: index into
-    /// `MapWorld::planes`. Decoded in collision.rs.
+    /// `MapWorld::planes`. Decoded in collision/build.rs.
     pub plane_or_dist: u32,
     /// Index into `MapWorld::materials`: the side's own material, whose surface
     /// flags a trace stopping on this side reports.

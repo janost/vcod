@@ -1177,9 +1177,9 @@ trace @0x328cc), water enter/leave 144/145, forced stance 140/141/142.
 
 ### vcod port notes and divergences
 
-- `crates/common/src/pmove.rs` (`footsteps`, `step_rate`, `footstep_speed`,
-  `tick_bob_cycle`, `ground_step_event`, `ladder_step_event`,
-  `landing_event`) emits wire ids straight into the shared cue resolver;
+- `crates/common/src/pmove/footsteps.rs` (`footsteps`, `step_rate`,
+  `footstep_speed`, `tick_bob_cycle`, `ground_step_event`,
+  `ladder_step_event`) and `pmove/land.rs` (`landing_event`) emits wire ids straight into the shared cue resolver;
   `collision::sound_material` extracts `(sf >> 20) & 0x1f` off brush and
   triangle hits.
 - The rate is `xyspeed / W * K` with retail's key blend and the stance scale

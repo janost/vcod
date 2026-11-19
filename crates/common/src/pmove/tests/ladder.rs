@@ -125,7 +125,7 @@ fn ladder_world() -> CollisionWorld {
     crate::collision::synthetic_world(
         &[
             ("textures/test/solid", crate::collision::CONTENTS_SOLID, 0),
-            // CONTENTS_PLAYERCLIP is private to collision.rs
+            // CONTENTS_PLAYERCLIP is private to the collision module
             ("textures/common/ladder", 0x10000, 0x8),
         ],
         &[
@@ -637,7 +637,7 @@ fn push_off_normalizes_the_3d_reflection_before_scaling_xy() {
 }
 
 /// Stock maps carry real SURF_LADDER brushes; find one from the BSP like
-/// collision.rs does for harbor water, stand outside its thinnest axis and
+/// collision/tests.rs does for harbor water, stand outside its thinnest axis and
 /// climb.
 #[test]
 fn climbs_a_real_map_ladder() {
