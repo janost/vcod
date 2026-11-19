@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 pub mod snapcull;
+pub mod tapes;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};

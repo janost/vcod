@@ -23,7 +23,8 @@
 //! snapshots' origins match retail's to the bit, and `MOVES_INEXACT=1`
 //! each one that does not.
 //!
-//! Needs `COD_DIR`; without the paks it returns early.
+//! Needs `COD_DIR`; without the paks it returns early, save the taped
+//! replays at the end (docs/dev/testing.md, "Trace tapes").
 
 use std::collections::{BTreeMap, HashMap};
 use vcod_common::collision::CollisionWorld;
@@ -34,6 +35,9 @@ use vcod_common::patch::Arith;
 use vcod_common::pmove::predict::{self, Predicted};
 use vcod_common::pmove::{MoveRules, Stance};
 use vcod_common::testing::SlopeLine;
+use vcod_common::tracetape::Tape;
+
+use crate::common::tapes;
 use vcod_common::weapon::WeaponDef;
 
 const FIXTURE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/playerstate");
@@ -247,6 +251,18 @@ fn replay(
     world: &CollisionWorld,
     weapons: &[Option<WeaponDef>],
 ) -> Report {
+    replay_taped(p, rules, lines, world, None, weapons)
+}
+
+/// [`replay`], its traces recorded on or answered from `tape`.
+fn replay_taped(
+    p: &Cod1Wire,
+    rules: MoveRules,
+    lines: &[Line],
+    world: &CollisionWorld,
+    tape: Option<&Tape>,
+    weapons: &[Option<WeaponDef>],
+) -> Report {
     let cmds: Vec<UserCmd> = lines
         .iter()
         .filter_map(|l| match l {
@@ -284,6 +300,7 @@ fn replay(
         Arith::Kept
     });
     let mw = MoveWorld::bare(world);
+    let mw = tape.map_or(mw, |t| mw.with_tape(t));
     let mut report = Report {
         compared: 0,
         exact: 0,
@@ -1211,4 +1228,118 @@ fn the_predictor_replays_uo_at_maxspeed_and_gravity() {
     print("UO speedgrav at stock", &r);
     let off = r.count("origin.xy") + r.count("origin.z") + r.count("velocity");
     assert!(off > 100, "{off}");
+}
+
+/// The 1.1 captures replayed off trace tapes (docs/dev/testing.md, "Trace
+/// tapes"), with the gate's snapshot floor: the moves script's ground,
+/// air, crouch, prone and strafes, and the kerb patch walk's steps up and
+/// slides along the kerb.
+const TAPED: &[(&str, usize)] = &[
+    (MOVES_1_1, 500),
+    ("mp_carentan-dm-slope-8ms-patchwalk-kerb-1.1.txt", 300),
+];
+const TAPED_WEAPONS: &str = "weapons-moves-1.1.txt";
+
+/// A report as the tape's header keeps it: the replay must give it back.
+fn summary(r: &Report) -> Vec<String> {
+    let mut out = vec![format!("report compared {} exact {}", r.compared, r.exact)];
+    for (field, misses) in &r.misses {
+        out.extend(misses.iter().map(|m| format!("miss {field} {m}")));
+    }
+    out
+}
+
+/// `RECORD_TAPES=1` with `COD_DIR` at the 1.1 install: replays each taped
+/// capture against mp_carentan, writes its tape and the weapon list.
+fn record_tapes() {
+    let Some((world, weapons)) = setup().filter(|_| vcod_common::testing::game_fs_11().is_some())
+    else {
+        panic!("RECORD_TAPES needs COD_DIR at the 1.1 install");
+    };
+    let mut carried = std::collections::BTreeSet::new();
+    for &(file, _) in TAPED {
+        let text = std::fs::read_to_string(format!("{FIXTURE_DIR}/{file}")).unwrap();
+        let lines = parse(&PROTOCOL_V1, &text);
+        for l in &lines {
+            if let Line::Snap(w, _) = l {
+                carried.insert(w.field_i32(&PROTOCOL_V1, "weapon") as usize);
+            }
+        }
+        let tape = Tape::record();
+        let r = replay_taped(
+            &PROTOCOL_V1,
+            MoveRules::V1_1,
+            &lines,
+            &world,
+            Some(&tape),
+            &weapons,
+        );
+        let mut header = vec![
+            format!("{file} replayed under V1_1 on mp_carentan by moves_ab.rs"),
+            "RECORD_TAPES=1 rewrites it (docs/dev/testing.md, \"Trace tapes\")".to_owned(),
+        ];
+        header.extend(summary(&r));
+        std::fs::write(tapes::tape_path(file), tape.text(&header)).unwrap();
+        println!("{file}: {} queries", tape.len());
+    }
+    let fs = vcod_common::testing::game_fs_11().unwrap();
+    tapes::write_weapons(&fs, retail_cs7(), &carried, TAPED_WEAPONS);
+}
+
+/// The taped 1.1 captures replayed with no install: every trace and point
+/// contents pmove asks is answered off the capture's tape, and the replay
+/// must give the report the live gate gave when the tape was recorded, and
+/// pass the gate's own checks. A query off the tape stops the replay
+/// there: a change that moves what pmove traces needs `RECORD_TAPES=1`.
+#[test]
+fn the_taped_captures_replay_without_the_paks() {
+    if tapes::recording() {
+        record_tapes();
+    }
+    let weapons = tapes::read_weapons(TAPED_WEAPONS);
+    // The tape answers every query; this world only carries the arithmetic.
+    let world = vcod_common::collision::test_world(&[]);
+    let mut failures = Vec::new();
+    for &(file, floor) in TAPED {
+        let text = std::fs::read_to_string(format!("{FIXTURE_DIR}/{file}")).unwrap();
+        let tape_text = std::fs::read_to_string(tapes::tape_path(file)).unwrap();
+        let tape = Tape::replay(&tape_text);
+        let r = replay_taped(
+            &PROTOCOL_V1,
+            MoveRules::V1_1,
+            &parse(&PROTOCOL_V1, &text),
+            &world,
+            Some(&tape),
+            &weapons,
+        );
+        print(file, &r);
+        assert_eq!(tape.remaining(), 0, "{file}: queries left on the tape");
+        assert_eq!(
+            summary(&r),
+            tapes::recorded(&tape_text, &["report ", "miss "]),
+            "{file}: not the recorded report"
+        );
+        assert!(r.compared > floor, "{file}: only {} snapshots", r.compared);
+        failures.extend(over(&r, &[]).into_iter().map(|f| format!("{file}: {f}")));
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// The moves capture replayed on the kerb walk's tape stops at the first
+/// query, the one the two runs ask differently.
+#[test]
+#[should_panic(expected = "trace tape: query 1 (line")]
+fn a_tape_from_another_capture_stops_at_the_first_query() {
+    let weapons = tapes::read_weapons(TAPED_WEAPONS);
+    let world = vcod_common::collision::test_world(&[]);
+    let text = std::fs::read_to_string(format!("{FIXTURE_DIR}/{MOVES_1_1}")).unwrap();
+    let tape = Tape::replay(&std::fs::read_to_string(tapes::tape_path(TAPED[1].0)).unwrap());
+    replay_taped(
+        &PROTOCOL_V1,
+        MoveRules::V1_1,
+        &parse(&PROTOCOL_V1, &text),
+        &world,
+        Some(&tape),
+        &weapons,
+    );
 }
