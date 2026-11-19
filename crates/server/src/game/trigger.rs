@@ -3,6 +3,7 @@
 //! own brushes.
 
 use crate::game::host::GameHost;
+use crate::game::slot::ClientSlot;
 use glam::Vec3;
 use std::collections::BTreeMap;
 use vcod_gsc::{Atom, Cx, EntId, Host, Value};
@@ -567,11 +568,9 @@ fn abs_bounds_with_atom(
     if let Some(t) = host.triggers.get(id) {
         return abs_bounds(origin, t);
     }
-    let is_client = host.ents.get(id).is_some_and(|e| e.client.is_some());
-    let (mins, maxs) = if is_client {
-        host.client_box(id.0 as usize)
-    } else {
-        ([0.0; 3], [0.0; 3])
+    let (mins, maxs) = match ClientSlot::of_entity(&host.ents, id) {
+        Some(slot) => host.client_box(slot.index()),
+        None => ([0.0; 3], [0.0; 3]),
     };
     offset_bounds(origin, mins, maxs)
 }

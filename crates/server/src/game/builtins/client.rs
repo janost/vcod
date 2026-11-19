@@ -18,6 +18,7 @@ use crate::game::builtins::entity::entity_receiver;
 use crate::game::host::{GameHost, SimOp, WeaponOp};
 use crate::game::say::SayMode;
 use crate::game::slot::ClientSlot;
+use crate::game::vote::ComplaintParties;
 use vcod_common::pmove;
 use vcod_gsc::{Cx, ErrorKind, Host, Target, Value};
 
@@ -579,7 +580,7 @@ pub fn allow_complaint(
             _ => None,
         }),
     )?;
-    host.allow_complaint(victim, attacker);
+    host.allow_complaint(ComplaintParties { victim, attacker });
     Ok(Value::Undefined)
 }
 

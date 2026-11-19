@@ -10,6 +10,14 @@ use vcod_common::asset_source::RawFile;
 use vcod_common::text::atoi;
 use vcod_gsc::Cx;
 
+/// The two clients of `allowComplaint`, by field so a caller cannot swap
+/// them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ComplaintParties {
+    pub victim: ClientSlot,
+    pub attacker: ClientSlot,
+}
+
 /// Configstring 15 (UO 16, `CsLayout::vote`): when the vote ends. 1.1
 /// writes the level time, 1.5 the milliseconds left, which its cgame adds
 /// to its own clock. The three after it are 1.1's numbers too.
@@ -637,7 +645,7 @@ impl GameHost {
     /// victim may answer `vote` about `attacker` for 20.5 s, and is told
     /// with `m <attacker>`. Nothing when the two are one. Retail's `m -4`
     /// for a listen server's own client never goes: vcod has none.
-    pub fn allow_complaint(&mut self, victim: ClientSlot, attacker: ClientSlot) {
+    pub fn allow_complaint(&mut self, ComplaintParties { victim, attacker }: ComplaintParties) {
         if victim == attacker {
             return;
         }
@@ -1138,9 +1146,16 @@ mod tests {
             )
         };
         let m = |s: &str| vec![(Some(1), s.to_string())];
-        host.allow_complaint(ClientSlot::at(1), ClientSlot::at(1));
+        let offence = ComplaintParties {
+            victim: ClientSlot::at(1),
+            attacker: ClientSlot::at(0),
+        };
+        host.allow_complaint(ComplaintParties {
+            victim: ClientSlot::at(1),
+            attacker: ClientSlot::at(1),
+        });
         assert!(host.client_commands.is_empty());
-        host.allow_complaint(ClientSlot::at(1), ClientSlot::at(0));
+        host.allow_complaint(offence);
         assert_eq!(
             std::mem::take(&mut host.client_commands),
             [(one(1), "m 0".into())]
@@ -1151,25 +1166,25 @@ mod tests {
             [to(1, "GAME_NOVOTEINPROGRESS")]
         );
         for left in [2, 1] {
-            host.allow_complaint(ClientSlot::at(1), ClientSlot::at(0));
+            host.allow_complaint(offence);
             assert_eq!(
                 vote(&mut vm, &mut host, 1, "yes"),
                 [warn(left), (Some(1), "m -1".into())]
             );
         }
-        host.allow_complaint(ClientSlot::at(1), ClientSlot::at(0));
+        host.allow_complaint(offence);
         assert_eq!(vote(&mut vm, &mut host, 1, "yes"), m("m -1"));
         assert_eq!(host.complaint_drop, Some(0));
 
         // The window shuts 20.5 s on, and goes with the offender.
         host.client_commands.clear();
-        host.allow_complaint(ClientSlot::at(1), ClientSlot::at(0));
+        host.allow_complaint(offence);
         host.level_time_ms += 20_500;
         assert_eq!(
             vote(&mut vm, &mut host, 1, "yes"),
             [to(1, "GAME_NOVOTEINPROGRESS")]
         );
-        host.allow_complaint(ClientSlot::at(1), ClientSlot::at(0));
+        host.allow_complaint(offence);
         host.client_commands.clear();
         host.complaints_about_gone(0);
         assert_eq!(host.client_commands, [(one(1), "m -2".into())]);
@@ -1191,7 +1206,10 @@ mod tests {
                 host.set_profile(&crate::game::profile::COD1_15);
             }
             for slot in 1..4 {
-                host.allow_complaint(ClientSlot::at(slot), ClientSlot::at(0));
+                host.allow_complaint(ComplaintParties {
+                    victim: ClientSlot::at(slot),
+                    attacker: ClientSlot::at(0),
+                });
             }
             host.clients[1].roster = None;
             host.client_commands.clear();

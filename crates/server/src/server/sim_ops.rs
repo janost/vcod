@@ -507,6 +507,10 @@ pub(super) fn relink(
 mod tests {
     use super::*;
 
+    /// The landings of the earlier pair of retail runs (2026-10-05), parm
+    /// and maxhealth to damage; player-clip doc 8.10 tables the later pair.
+    /// The float `0.01` keeps each whole share just under, and past 99 the
+    /// fall does 110 percent.
     #[test]
     fn fall_damage_is_retails_share_of_max_health() {
         for (percent, max, damage) in [
