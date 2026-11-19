@@ -1660,15 +1660,14 @@ mod tests {
     /// namespace): Local with its broadcast sent to that address's
     /// `COD4_BROWSER_BROADCAST` (a broadcast address, ports 28960..28963)
     /// or to the server itself finds it; Server Info lists its status.
-    /// Prints both lists. Skipped without the variable.
+    /// Prints both lists.
     #[test]
+    #[ignore = "tool: set COD4_BROWSER_SERVER=ip:port"]
     fn cod4_browser_against_a_named_server() {
-        let Some(addr) = std::env::var("COD4_BROWSER_SERVER")
+        let addr = std::env::var("COD4_BROWSER_SERVER")
             .ok()
             .and_then(|a| a.parse::<SocketAddrV4>().ok())
-        else {
-            return;
-        };
+            .expect("set COD4_BROWSER_SERVER=ip:port");
         let Some(install) = vcod_cod4::testing::cod4_install() else {
             return;
         };

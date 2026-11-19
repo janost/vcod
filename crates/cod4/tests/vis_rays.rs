@@ -200,10 +200,9 @@ fn coarse_lods(w: &MapWorld) -> Vec<bool> {
 }
 
 #[test]
+#[ignore = "tool: set VIS_RAYS"]
 fn spawn_sweep() {
-    let Ok(name) = std::env::var("VIS_RAYS") else {
-        return;
-    };
+    let name = std::env::var("VIS_RAYS").expect("set VIS_RAYS");
     let Some(w) = load(&name) else {
         return;
     };

@@ -159,6 +159,24 @@ its doc comment says what it reads and which env vars drive it.
 | `lit_pipeline_register_census` | CoD4 shader registers on a driver | cod4-client-perf.md 29 |
 | `spawn_wave` | the gsc interpreter | "The gsc interpreter" below |
 
+By-hand tools behind an env var: each is `#[ignore = "tool: set <VAR>"]`
+and panics with that line when run without it.
+
+| Test | Var | What | Where |
+|---|---|---|---|
+| `cod4_browser_against_a_named_server` | `COD4_BROWSER_SERVER=ip:port` (and `COD4_BROWSER_BROADCAST`) | the CoD4 browser's Local and Server Info lists against one server, retail in its namespace | `play/cod4_menus/browser.rs` |
+| `cod2_main_menu_shot` | `VCOD_MENU_SHOT=<out>` | the CoD2 main menu as a picture (BC adapter) | `renderer/hud_shot.rs` |
+| `cod2_dumped_hud_shot` | `VCOD_HUD_QUADS=<files>` | dumped HUD quads drawn | `renderer/hud_shot.rs` |
+| `cod2_player_hud_shot` | `VCOD_HUD_SHOT=<out>` | a staged CoD2 HUD | `renderer/hud_shot.rs` |
+| `cod2_ui_shot` | `VCOD_UI_SHOT=<prefix>` | the CoD2 scoreboard and chat | `renderer/hud_shot.rs` |
+| `bench_the_pose` | `SKEL_BENCH=1` | the CoD2 skeleton walk and build times (`COD2_DIR`) | `cod2/tests/skel_ab.rs` |
+| `cull_census` | `CULL_CENSUS=<map>` (`CULL_OLD`, `CULL_TURN`) | CoD4 culled triangles over the spawn views | `cod4/tests/cull_census.rs` |
+| `cull_census_view` | `CULL_VIEW=<spec>` | the same for one view | `cod4/tests/cull_census.rs` |
+| `cull_techsets` | `CULL_TECHSETS=<map>` | triangles and batches by techset (cod4-client-perf.md 21) | `cod4/tests/cull_census.rs` |
+| `cull_draws` | `CULL_DRAWS=<map>` (`CULL_DRAWS_VIEWS`) | 1.7's draw surface count over the views | `cod4/tests/cull_census.rs` |
+| `an_env_named_capture_reencodes` | `COD4_REENCODE=<capture>` | any capture through the reencode gate | `cod4/tests/net_decode.rs` |
+| `spawn_sweep` | `VIS_RAYS=<map>` | CoD4 visibility rays from the spawns | `cod4/tests/vis_rays.rs` |
+
 Never run by an agent: `master_list_live` (cod.pm's public master and every
 server it lists) and `lan_scan_live` (a LAN broadcast). Both panic unless
 `VCOD_LIVE_NET=1` is set as well.

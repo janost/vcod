@@ -502,10 +502,9 @@ fn iwd_checksums_match_the_server() {
 /// `COD4_REENCODE=<capture>`: any capture, a run against vcod-server's CoD4
 /// server included, walked through the same gate.
 #[test]
+#[ignore = "tool: set COD4_REENCODE"]
 fn an_env_named_capture_reencodes() {
-    let Some(path) = std::env::var_os("COD4_REENCODE") else {
-        return;
-    };
+    let path = std::env::var_os("COD4_REENCODE").expect("set COD4_REENCODE");
     let w = walk(&path.to_string_lossy());
     eprintln!(
         "{} server messages, {} client",
