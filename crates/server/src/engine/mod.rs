@@ -12,6 +12,7 @@ pub mod commands;
 pub mod conn;
 pub mod contain;
 pub mod core;
+pub mod download;
 pub mod game;
 pub mod gamelog;
 pub mod link;

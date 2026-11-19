@@ -104,13 +104,7 @@ impl Gamestate {
     /// A key of the systeminfo string (`sv_serverid`).
     pub fn systeminfo(&self, key: &str) -> Option<String> {
         let s = String::from_utf8_lossy(self.configstring(CS_SYSTEMINFO));
-        let mut parts = s.split('\\').skip(1);
-        while let (Some(k), Some(v)) = (parts.next(), parts.next()) {
-            if k == key {
-                return Some(v.to_string());
-            }
-        }
-        None
+        vcod_common::net::info_value_for_key(&s, key).map(str::to_string)
     }
 }
 
@@ -503,7 +497,7 @@ pub fn parse_gamestate(r: &mut MsgReader) -> Result<Gamestate> {
                     sent.push((i as u16, s));
                     last = i;
                 }
-                gs.map_center = parse_map_center(gs.configstring(CS_MAPCENTER));
+                gs.map_center = super::wire::map_center(gs.configstring(CS_MAPCENTER));
                 gs.ops.push(GamestateOp::Configstrings(sent));
             }
             SVC_BASELINE => {
@@ -568,19 +562,6 @@ pub fn write_gamestate(w: &mut MsgWriter, gs: &Gamestate) {
     w.write_byte(SVC_EOF);
     w.write_long(gs.client_num);
     w.write_long(gs.checksum_feed);
-}
-
-/// `CL_ParseMapCenter`: `sscanf("%f %f %f")`, unread axes 0.
-fn parse_map_center(s: &[u8]) -> [f32; 3] {
-    let s = String::from_utf8_lossy(s);
-    let mut out = [0.0; 3];
-    for (o, v) in out.iter_mut().zip(s.split_whitespace()) {
-        match v.parse() {
-            Ok(f) => *o = f,
-            Err(_) => break,
-        }
-    }
-    out
 }
 
 #[cfg(test)]

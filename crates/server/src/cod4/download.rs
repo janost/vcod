@@ -5,137 +5,40 @@
 
 use std::path::{Path, PathBuf};
 
-use vcod_cod4::net::download::{DownloadMsg, fs_iw_iwd, safe_rel_path};
+use vcod_cod4::net::download::DownloadMsg;
 use vcod_common::net::codec::MsgWriter;
 
-use crate::download::DownloadFile;
+use super::Cod4Game;
+use crate::engine::download::{DownloadFile, DownloadWire};
 
-/// The window (`& 7`, the `cmp 7`s at 0x816f8e7); its 0x800-byte blocks
-/// are [`DownloadFile`]'s.
-const WINDOW: u32 = 8;
-/// A window's blocks go again after this long without a `nextdl`
-/// (`cmp 0x3e8` at 0x816fb5f).
-const RETRANSMIT_MS: i32 = 1000;
-
-/// The dvars `SV_WriteDownloadToClient` reads.
-#[derive(Clone, Debug, Default)]
-pub struct DownloadCvars {
-    /// `sv_allowDownload` (0x13ed7c10).
-    pub allow: bool,
-    /// `sv_pure` (0x13ed7c50): the refusal's `_PURE` key.
-    pub pure: bool,
-    /// `sv_wwwDownload` (0x13ed7c88).
-    pub www: bool,
-    pub www_base_url: String,
-    pub www_disconnected: bool,
-}
+pub use crate::engine::download::{DownloadCvars, Www};
 
 /// One client's transfer (client +0x212a0 .. +0x21450).
-#[derive(Default)]
-pub struct Download {
-    /// `downloadName` (+0x212a4); empty when none.
-    pub name: String,
-    /// The open file; `None` until opened.
-    file: Option<DownloadFile>,
-    /// `downloadClientBlock` (+0x212f0): the next block the client acks.
-    acked: u32,
-    /// `downloadCurrentBlock` (+0x212f8): the next block written.
-    current: u32,
-    /// `downloadSendTime` (+0x21340).
-    send_time: i32,
-    /// A redirect went out (+0x21448).
-    redirected: bool,
-    /// `wwwdl ack` came (+0x2144c): nothing more is written.
-    www_acked: bool,
-    /// The last www transfer failed (+0x21450): the next goes over UDP.
-    www_fallback: bool,
-}
+pub type Download = crate::engine::download::Download<Cod4Game>;
 
-/// What a `wwwdl` asks of the server.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Www {
-    None,
-    /// `fail` / `chkfail`: the gamestate again.
-    Gamestate,
-    Drop(&'static str),
+/// 1.7's `svc_download` shapes (section 11: the block number a long) and
+/// its `wwwdl` drops (0x8170ffa, as CoD2's `SV_WWWDownload_f` reads its
+/// strings, 0x8230b14..0x8230cbc).
+impl DownloadWire for Cod4Game {
+    const UNEXPECTED: &'static str = "Unexpected www download message.";
+    const DISCONNECTED: &'static str = "Client dropped to download files.";
+    const END_CLEARS_REDIRECT: bool = true;
+
+    fn write_block(w: &mut MsgWriter, block: u32, size: Option<i32>, data: Vec<u8>) {
+        let block = block as i32;
+        DownloadMsg::Block { block, size, data }.write(w);
+    }
+
+    fn write_refusal(w: &mut MsgWriter, text: String) {
+        DownloadMsg::Refused(text).write(w);
+    }
+
+    fn write_redirect(w: &mut MsgWriter, url: String, size: i32, flags: i32) {
+        DownloadMsg::Redirect { url, size, flags }.write(w);
+    }
 }
 
 impl Download {
-    pub fn active(&self) -> bool {
-        !self.name.is_empty()
-    }
-
-    /// `SV_CloseDownload`.
-    pub fn close(&mut self) {
-        self.name.clear();
-        self.file = None;
-    }
-
-    /// `download <name>` (0x8172068): the old transfer closed, the name
-    /// kept to 63 characters.
-    pub fn begin(&mut self, name: &str) {
-        self.close();
-        self.name = name.chars().take(63).collect();
-    }
-
-    /// `nextdl <n>` (0x81721c6). False for any block but the one due: the
-    /// caller drops the client with `broken download`.
-    pub fn next_dl(&mut self, block: i32, svs_ms: i32) -> bool {
-        if block != self.acked as i32 {
-            return false;
-        }
-        if self.file.as_ref().is_some_and(|f| f.is_end(self.acked)) {
-            log::info!("clientDownload: file {:?} completed", self.name);
-            self.close();
-        } else {
-            self.send_time = svs_ms;
-            self.acked += 1;
-        }
-        true
-    }
-
-    /// `retransdl <n>` (0x81707aa): start over from the block due.
-    pub fn retransmit(&mut self, block: i32) {
-        if block == self.acked as i32 {
-            self.current = self.acked;
-        }
-    }
-
-    /// `wwwdl <sub>` (0x8170ffa), as CoD2's `SV_WWWDownload_f` reads its
-    /// strings (0x8230b14..0x8230cbc).
-    pub fn wwwdl(&mut self, sub: &str) -> Www {
-        let is = |s: &str| sub.eq_ignore_ascii_case(s);
-        if !self.redirected {
-            return Www::Drop("Unexpected www download message.");
-        }
-        if is("ack") {
-            self.www_acked = true;
-            return Www::None;
-        }
-        if is("bbl8r") {
-            return Www::Drop("Client dropped to download files.");
-        }
-        if !self.www_acked {
-            return Www::Drop("Unexpected www download message.");
-        }
-        let failed = if is("done") {
-            false
-        } else if is("fail") || is("chkfail") {
-            true
-        } else {
-            return Www::Drop("Unexpected www download message.");
-        };
-        self.close();
-        self.www_acked = false;
-        self.redirected = false;
-        if failed {
-            self.www_fallback = true;
-            Www::Gamestate
-        } else {
-            Www::None
-        }
-    }
-
     /// `SV_WriteDownloadToClient` (0x816f774): on the first call the
     /// refusals (`sv_allowDownload`, a stock iwd, no file), then the www
     /// redirect when the server and the client want one, then up to `budget`
@@ -150,102 +53,33 @@ impl Download {
         wants_www: bool,
         open: &dyn Fn(&str) -> Option<DownloadFile>,
     ) {
-        if self.name.is_empty() || self.www_acked {
+        if self.name.is_empty() || self.www.acked {
             return;
         }
-        if self.file.is_none() {
-            let refuse = |w: &mut MsgWriter, key: &str, name: &str| {
-                DownloadMsg::Refused(format!("{key}\x15{name}")).write(w);
-            };
-            if !cvars.allow {
-                log::info!("clientDownload: {:?} download disabled", self.name);
-                let key = if cvars.pure {
-                    "EXE_AUTODL_SERVERDISABLED_PURE"
-                } else {
-                    "EXE_AUTODL_SERVERDISABLED"
-                };
-                refuse(w, key, &self.name);
-                self.name.clear();
-                return;
-            }
-            if fs_iw_iwd(&self.name, "main") {
-                log::info!(
-                    "clientDownload: {:?} cannot download IW iwd files",
-                    self.name
-                );
-                refuse(w, "EXE_CANTAUTODLGAMEPAK", &self.name);
-                self.name.clear();
-                return;
-            }
-            let Some(file) = open(&self.name).filter(|f| !f.is_empty()) else {
-                log::info!("clientDownload: {:?} file not found on server", self.name);
-                refuse(w, "EXE_AUTODL_FILENOTONSERVER", &self.name);
-                self.name.clear();
+        if self.transfer.file().is_none() {
+            let Some(file) = self.open_checked(w, cvars, open) else {
                 return;
             };
             if cvars.www && wants_www {
-                if self.www_fallback {
+                if self.www.fallback {
                     // 0x816fc72: the fallback flag cleared and nothing
                     // written this message; the blocks start on the next.
-                    self.www_fallback = false;
+                    self.www.fallback = false;
                     self.start(file);
                     return;
                 }
-                // `SV_WWWRedirectClient` (0x816f674).
-                let url = format!("{}/{}", cvars.www_base_url, self.name);
-                log::info!("Redirecting client to {url}");
-                self.redirected = true;
-                DownloadMsg::Redirect {
-                    url,
-                    size: file.size(),
-                    flags: i32::from(cvars.www_disconnected),
-                }
-                .write(w);
-                self.name.clear();
+                self.redirect(w, cvars, &file);
                 return;
             }
             log::info!("clientDownload: beginning {:?}", self.name);
             self.start(file);
         }
-        let Some(file) = self.file.as_mut() else {
-            return;
-        };
-        let window = (self.acked + WINDOW).min(file.blocks());
-        for _ in 0..budget {
-            if self.acked == window {
-                break;
-            }
-            if self.current == window {
-                if svs_ms - self.send_time <= RETRANSMIT_MS {
-                    return;
-                }
-                self.current = self.acked;
-            }
-            let block = self.current;
-            let data = match file.read_block(block) {
-                Ok(data) => data,
-                Err(e) => {
-                    log::warn!("clientDownload: {:?} read failed: {e}", self.name);
-                    self.close();
-                    return;
-                }
-            };
-            DownloadMsg::Block {
-                block: block as i32,
-                size: (block == 0).then(|| file.size()),
-                data,
-            }
-            .write(w);
-            self.current += 1;
-            self.send_time = svs_ms;
-        }
+        self.write_blocks(w, svs_ms, budget);
     }
 
     fn start(&mut self, file: DownloadFile) {
-        self.redirected = false;
-        self.file = Some(file);
-        self.acked = 0;
-        self.current = 0;
+        self.www.redirected = false;
+        self.transfer.start(file);
     }
 }
 
@@ -257,7 +91,7 @@ pub fn servable(root: &Path, name: &str) -> Option<PathBuf> {
     if !lower.ends_with(".iwd") && !lower.ends_with(".ff") {
         return None;
     }
-    Some(root.join(safe_rel_path(name)?))
+    vcod_common::game_dir::confined(root, name)
 }
 
 #[cfg(test)]
@@ -346,8 +180,8 @@ mod tests {
                 flags: 0
             }]
         );
-        assert_eq!(d.wwwdl("ack"), Www::None);
-        assert_eq!(d.wwwdl("fail"), Www::Gamestate);
+        assert_eq!(d.wwwdl("ack", "c"), Www::None);
+        assert_eq!(d.wwwdl("fail", "c"), Www::Gamestate);
         d.begin("mods/m/a.iwd");
         let mut w = MsgWriter::new(&UNUSED_HUFF);
         d.write(&mut w, 0, 1, &cv, true, &open);
@@ -369,7 +203,7 @@ mod tests {
             .filter_map(|l| l.split_once(" download block "))
             .map(|(_, rest)| format!("block {rest}"))
             .collect();
-        let budget = vcod_cod4::net::download::blocks_per_message(5000, 50);
+        let budget = crate::engine::download::blocks_per_message(5000, 50);
         assert_eq!(budget, 1);
         let mut ours = Vec::new();
         for (name, size) in [("mods/m/z.iwd", 178745), ("mods/m/mod.ff", 34310)] {

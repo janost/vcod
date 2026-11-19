@@ -1021,12 +1021,15 @@ impl Cod2Server {
             "donedl" if conn::gamestate_last(c) => {}
             "donedl" => self.send_gamestate(slot),
             "retransdl" => c.extra.download.retransmit(atoi(arg(1))),
-            "wwwdl" => match c.extra.download.wwwdl(arg(1)) {
-                house::Www::None => {}
-                house::Www::Gamestate if conn::gamestate_last(c) => {}
-                house::Www::Gamestate => self.send_gamestate(slot),
-                house::Www::Drop(why) => self.drop_client(slot, why),
-            },
+            "wwwdl" => {
+                let who = vcod_common::net::info_value_for_key(&c.link.userinfo, "name");
+                match c.extra.download.wwwdl(arg(1), who.unwrap_or("")) {
+                    house::Www::None => {}
+                    house::Www::Gamestate if conn::gamestate_last(c) => {}
+                    house::Www::Gamestate => self.send_gamestate(slot),
+                    house::Www::Drop(why) => self.drop_client(slot, why),
+                }
+            }
             _ => {}
         }
     }
@@ -1504,8 +1507,10 @@ impl Cod2Server {
             );
         }
         if c.state != State::Zombie {
-            let budget =
-                house::blocks_per_message(c.rates.send_rate(max_rate), c.rates.snapshot_msec);
+            let budget = crate::engine::download::blocks_per_message(
+                c.rates.send_rate(max_rate),
+                c.rates.snapshot_msec,
+            );
             let open = |name: &str| house::open_download(&home, &base, name);
             c.extra
                 .download
