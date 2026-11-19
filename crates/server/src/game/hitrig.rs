@@ -165,8 +165,8 @@ impl HitRigs {
         self.roots
             .entry(name.to_string())
             .or_insert_with(|| {
-                let model = model::load(fs, name).ok()?;
-                model.bones.first().map(|b| b.name.clone())
+                let bones = model::load_bones(fs, name).ok()?;
+                bones.first().map(|b| b.name.clone())
             })
             .clone()
     }
@@ -188,16 +188,27 @@ impl HitRigs {
     }
 }
 
+/// A model's skeleton alone: a rig reads the bones and the name, never the
+/// surfaces, so no `xmodelsurfs` is parsed or baked.
+fn bones_only(fs: &dyn AssetSource, name: &str) -> anyhow::Result<model::Model> {
+    Ok(model::Model {
+        name: name.to_string(),
+        bones: model::load_bones(fs, name)?,
+        lods: Vec::new(),
+        collision: Vec::new(),
+    })
+}
+
 /// An attachment that will not load is left out, the way the client leaves it
 /// undrawn; a body that will not load has no rig at all.
 fn build(fs: &dyn AssetSource, assembly: &Assembly) -> Option<Rc<Skeleton>> {
-    let body = model::load(fs, &assembly.body).ok()?;
+    let body = bones_only(fs, &assembly.body).ok()?;
     let parts: Vec<(model::Model, Option<&str>)> = assembly
         .attachments
         .iter()
         .enumerate()
         .filter_map(|(i, (name, tag))| {
-            let mut model = model::load(fs, name).ok()?;
+            let mut model = bones_only(fs, name).ok()?;
             // The engine's hit-box walk skips a flagged model's boxes
             // (docs/research/cod15-protocol-diff.md, `getAttachIgnoreCollision`).
             if assembly.ignore_collision >> i & 1 != 0 {
