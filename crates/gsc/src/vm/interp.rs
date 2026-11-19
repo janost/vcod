@@ -985,8 +985,8 @@ impl Vm {
                     push!(v);
                 }
                 Op::StoreField(name) => {
-                    let v = pop!();
                     let obj = pop!();
+                    let v = pop!();
                     self.heap.share(v);
                     match obj {
                         Value::Struct(id) => self.heap.set_field(id, name, v),
@@ -1063,9 +1063,9 @@ impl Vm {
                     push!(v);
                 }
                 Op::StoreIndex => {
-                    let mut v = pop!();
                     let key = pop!();
                     let obj = pop!();
+                    let mut v = pop!();
                     self.heap.share(v);
                     let Value::Array(id) = obj else {
                         fail!(ErrorKind::BadType("indexing needs an array"));
@@ -1073,9 +1073,9 @@ impl Vm {
                     let Some(k) = array_key(key) else {
                         fail!(ErrorKind::BadType("array key must be a string or a number"));
                     };
-                    // `a[0] = a`: the target was owned before the value was
-                    // read, so the value holds it. An array is a value; the
-                    // element takes the array as it stood, not a cycle.
+                    // `a[0] = a`: the value read the array the target then
+                    // owned in place. An array is a value; the element
+                    // takes the array as it stood, not a cycle.
                     if let Value::Array(a) = v
                         && self.heap.reaches(a, id)
                     {
