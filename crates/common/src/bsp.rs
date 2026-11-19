@@ -900,7 +900,7 @@ pub fn sun_direction(entities: &str) -> [f32; 3] {
 }
 
 /// A `corona` entity as the renderer's world load keeps it (CoDMP.exe
-/// 0x4dbcd0, docs/research/cod11-shader-scripts.md section 8, "Coronas").
+/// 0x4dbcd0, docs/research/cod11-shader-scripts.md section 8.5, "Coronas").
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Corona {
     pub origin: [f32; 3],

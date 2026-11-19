@@ -1,7 +1,7 @@
 //! The game module's per-version tables a server picks with its protocol:
 //! the weapon list configstring 7 carries, `bg_itemlist`'s layout and the
 //! means of death. 1.1 and 1.5 share one set of tables; United Offensive has its own
-//! (docs/research/coduo-diff.md 12, "Server").
+//! (docs/research/coduo-diff.md 12).
 
 use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::weapon_table::{STATIC_ITEMS, static_item};

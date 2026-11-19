@@ -690,7 +690,7 @@ fn a_frag_into_water_splashes() {
         assert_eq!(os.0 - o[0].0, rs.0 - r[0].0, "retail {rs:?}, ours {os:?}");
         // The fuse runs out on the harbor floor, 70 under the water: 1.1d
         // and 1.5b go off there, UO's `G_ExplodeMissile` (0x5e2b5) moves
-        // the explode up to the surface (coduo-diff.md 21, "Explode").
+        // the explode up to the surface (coduo-diff.md 21.1, "Explode").
         let (rx, ox) = (
             explode(&fixture).expect("retail's went off"),
             explode(&log).unwrap_or_else(|| panic!("ours did not go off: {log:?}")),

@@ -212,21 +212,7 @@ impl Server {
         let me = self.core.clients[slot].as_ref()?.sim.as_ref()?;
         let eye = glam::Vec3::from(me.eye_origin());
         let world = self.game.world.as_ref().map(|w| &w.collision);
-        // Along the view and the hip cone round it as a shot this cmd
-        // would spread (`Bot::think_armor` fires from the hip), nothing
-        // within the rocket's splash of the muzzle.
-        let muzzle_clear = match (launcher, world) {
-            (Some(def), Some(w)) => super::cone_clear(
-                w,
-                models,
-                crate::game::combat::muzzle_point(&me.ps),
-                crate::game::combat::aim_frame([view.view[0], view.view[1]])[0],
-                crate::game::combat::hip_spread_now(def, me),
-                def.explosion_radius + crate::bots::ROCKET_CLEAR_MARGIN,
-            ),
-            _ => true,
-        };
-        crewed
+        let (_, c) = crewed
             .iter()
             .filter(|c| {
                 (slot >= 64 || c.crew >> slot & 1 == 0) && c.sides.iter().any(|t| hostile(*t))
@@ -241,18 +227,32 @@ impl Server {
                     hull_met(&c.spot, t.fraction, end)
                 })
             })
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-            .map(|(_, c)| ArmorView {
-                num: c.spot.num,
-                centre: c.spot.centre(),
-                velocity: c.velocity,
-                crew: c.crew,
-                shot_speed: speed,
-                friend_in_line: self
-                    .bot_friend_in_line(slot, c.spot.centre(), teams, None)
-                    .0,
-                muzzle_clear,
-            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))?;
+        // Along the view and the hip cone round it as a shot this cmd
+        // would spread (`Bot::think_armor` fires from the hip), nothing
+        // within the rocket's splash of the muzzle.
+        let muzzle_clear = match (launcher, world) {
+            (Some(def), Some(w)) => super::cone_clear(
+                w,
+                models,
+                crate::game::combat::muzzle_point(&me.ps),
+                crate::game::combat::aim_frame([view.view[0], view.view[1]])[0],
+                crate::game::combat::hip_spread_now(def, me),
+                def.explosion_radius + crate::bots::ROCKET_CLEAR_MARGIN,
+            ),
+            _ => true,
+        };
+        Some(ArmorView {
+            num: c.spot.num,
+            centre: c.spot.centre(),
+            velocity: c.velocity,
+            crew: c.crew,
+            shot_speed: speed,
+            friend_in_line: self
+                .bot_friend_in_line(slot, c.spot.centre(), teams, None, false)
+                .0,
+            muzzle_clear,
+        })
     }
 
     /// Test-facing: the kind of the live vehicle `num` (`info::KIND_*`).

@@ -4105,7 +4105,7 @@ impl Bot {
                 // corner, and came down on the crate beside it (seed 661);
                 // read so off the ground as well, bots sliding on the hull's
                 // curve at (2200, -300, -45) never jumped and stuck in its
-                // crease (bot-navigation.md section 3, "The recheck's
+                // crease (bot-navigation.md section 3.7, "The recheck's
                 // leftovers").
                 let held = self.pressed == Some(w);
                 if !held {

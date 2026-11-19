@@ -2570,4 +2570,115 @@ mod tests {
         assert_eq!(down, [0.0, 0.0, -((share - 1.0) * falloff)]);
         assert!(pull(&repulsor, Vec3::new(-10.0, 0.0, 0.0), Vec3::X, 1500.0).is_none());
     }
+
+    /// glibc's `srand(1)` stream opens 1804289383, 846930886, 1681692777,
+    /// 1714636915: the draws below are those, not vcod's own numbers.
+    fn seed_1() -> GlibcRand {
+        GlibcRand::new(1)
+    }
+
+    /// `G_flrand` scales by the negative float at 0x8214ac4, so a draw
+    /// lands at or under `min`; `G_irand(0, 2)`'s wrapped product makes it
+    /// 0 for these draws, as for any but 2^30 (10.2).
+    #[test]
+    fn the_cod4_draws_fall_as_the_disassembly_reads() {
+        let mut r = seed_1();
+        assert_eq!(g_flrand(&mut r, 320.0, 800.0), -83.29011);
+        assert_eq!(g_irand(&mut r, 0, 2), 0);
+        assert_eq!(g_flrand(&mut r, 180.0, 540.0), -101.91572);
+        assert_eq!(g_irand(&mut r, 0, 2), 0);
+    }
+
+    /// The tumble's two rates off the coin that comes up -1: both turn
+    /// backwards, the pitch tipped back 120 and wrapped (10.2; the walk
+    /// capture's -296.36 and -102.30 are in these ranges).
+    #[test]
+    fn the_grenade_spin_draws_its_rates_turned_by_the_coin() {
+        let t = draw_spin(&mut seed_1(), Vec3::new(10.0, 20.0, 0.0));
+        assert_eq!(t.tr_type, TR_LINEAR);
+        assert_eq!(t.base, Vec3::new(250.0, 20.0, 0.0));
+        assert_eq!(t.delta, Vec3::new(83.29011, 0.0, 101.91572));
+    }
+
+    #[test]
+    fn a_grenade_bursts_at_its_fuse_or_30_s_never_past_60() {
+        assert_eq!(grenade_deadline(1000, Some(3500)), 4500);
+        assert_eq!(grenade_deadline(1000, None), 31_000);
+        assert_eq!(grenade_deadline(1000, Some(-1000)), 31_000);
+        assert_eq!(grenade_deadline(1000, Some(90_000)), 61_000);
+    }
+
+    /// `BounceMissile`'s `hitTime`: the frame's ms times the fraction,
+    /// stored as a float and truncated.
+    #[test]
+    fn the_contact_time_truncates_inside_the_frame() {
+        assert_eq!(contact_time(66_500, 66_550, 0.5), 66_525);
+        assert_eq!(contact_time(66_500, 66_550, 0.999), 66_549);
+        assert_eq!(contact_time(66_500, 66_550, 1.0), 66_550);
+    }
+
+    /// The dot's first two products stored as floats and the third kept:
+    /// the sum all in doubles lands the mirror's z a unit in the fifth
+    /// place off (-193.14177 against -193.14175).
+    #[test]
+    fn the_mirror_stores_the_dot_as_the_disassembly_does() {
+        let v = Vec3::new(-366.84952, 61.920914, -182.06276);
+        let n = Vec3::new(-0.47727776, -0.36360133, 0.8);
+        let (m, dot) = mirror(v, n);
+        assert_eq!(m, Vec3::new(-360.2398, 66.95634, -193.14175));
+        assert_eq!(dot, 6.924375);
+    }
+
+    /// `(perp - par) cos + par` on the surface type's two factors; a move
+    /// away from the surface or a still one takes none.
+    #[test]
+    fn the_bounce_mixes_its_two_factors_by_the_strike() {
+        let mut d = WeaponDef::default();
+        d.parallel_bounce[5] = 0.5;
+        d.perpendicular_bounce[5] = 0.25;
+        let v = Vec3::new(3.0, 0.0, -4.0);
+        // Straight down onto the floor: the cosine is 1.
+        assert_eq!(
+            bounce_factor(&d, 5, Vec3::new(0.0, 0.0, -4.0), -4.0),
+            Some(0.25)
+        );
+        // At 3-4-5: 0.5 - 0.25 * 0.8.
+        assert_eq!(bounce_factor(&d, 5, v, -4.0), Some(0.5 - 0.25 * 0.8));
+        assert_eq!(bounce_factor(&d, 5, v, 1.0), None);
+        assert_eq!(bounce_factor(&d, 5, Vec3::ZERO, 0.0), None);
+        // A surface type past the table's 29 reads 0 for both.
+        assert_eq!(bounce_factor(&d, 40, v, -4.0), Some(0.0));
+    }
+
+    /// A tenth of the normal off the surface, its upward part dropped.
+    #[test]
+    fn the_push_off_drops_the_normal_s_upward_tenth() {
+        let at = Vec3::new(10.0, 20.0, 30.0);
+        assert_eq!(push_off(at, Vec3::Z), at);
+        let p = push_off(at, Vec3::new(0.6, 0.0, -0.8));
+        assert_eq!(p, Vec3::new(10.06, 20.0, 29.92));
+    }
+
+    /// Off a wall a bounce turns the pitch rate by `(rand() & 0x7f) - 63`:
+    /// 1804289383's low seven bits less 63 is 40. A rest draws nothing.
+    #[test]
+    fn a_wall_bounce_turns_the_pitch_rate_by_a_seven_bit_draw() {
+        let spin = Traj {
+            tr_type: TR_LINEAR,
+            time: 0,
+            base: Vec3::ZERO,
+            delta: Vec3::new(100.0, 0.0, 0.0),
+        };
+        let wall = Vec3::new(1.0, 0.0, 0.0);
+        let mut apos = spin;
+        let mut r = seed_1();
+        tumble_on_contact(&mut apos, 0, wall, Landing::Bounce, &mut r);
+        assert_eq!(apos.delta.x, 140.0);
+        assert_eq!(r.next_u31(), 846_930_886);
+        let mut apos = spin;
+        let mut r = seed_1();
+        tumble_on_contact(&mut apos, 0, wall, Landing::Rest, &mut r);
+        assert_eq!(apos.delta.x, 100.0);
+        assert_eq!(r.next_u31(), 1_804_289_383);
+    }
 }

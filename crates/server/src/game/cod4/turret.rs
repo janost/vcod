@@ -723,4 +723,23 @@ mod tests {
         assert_eq!(pitch.pin(-40.0, 0.0), -15.0);
         assert_eq!(yaw.pin(-10.0, 0.0), -10.0);
     }
+
+    /// The fire timer runs down a frame at a time and holds at 0; a held
+    /// trigger then fires every frame, a single-shot gun once a press.
+    #[test]
+    fn the_gun_fires_when_its_timer_runs_out_and_the_trigger_is_held() {
+        let (mut timer, mut latched) = (FRAME_MS + 10, false);
+        assert!(!round_due(&mut timer, &mut latched, true, false));
+        assert_eq!(timer, 10);
+        assert!(round_due(&mut timer, &mut latched, true, false));
+        assert_eq!(timer, 0);
+        assert!(round_due(&mut timer, &mut latched, true, false));
+        // Single shot: the press latches, the hold fires no more.
+        let (mut timer, mut latched) = (0, false);
+        assert!(round_due(&mut timer, &mut latched, true, true));
+        assert!(!round_due(&mut timer, &mut latched, true, true));
+        assert!(!round_due(&mut timer, &mut latched, false, true));
+        assert!(!latched);
+        assert!(round_due(&mut timer, &mut latched, true, true));
+    }
 }

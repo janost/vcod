@@ -804,7 +804,7 @@ impl WorldVis {
     }
 
     /// CoD4 1.7's walk (`R_VisitPortals`, docs/research/cod4-world.md
-    /// 9.1, "The portal walk") and CoD2's, the same queue
+    /// 9.9) and CoD2's, the same queue
     /// (cod2-client-perf.md 9): a cell's portals are chopped to its
     /// frustum and queued, nearest first; a portal reached again before
     /// its turn gathers the new points, and on its turn it is opened once,

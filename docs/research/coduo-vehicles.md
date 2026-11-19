@@ -1576,18 +1576,22 @@ trace").
 
 ## 13. Guns, heat and damage
 
-Contents, by paragraph name (code cites these): the readers and fire
-calls; "Inside the call, and only with a driver"; "The bend's
-arithmetic"; "The guns' spread"; "The shell's bits"; heat; `G_Damage` on
-a vehicle; "The driver's feedback"; "A blast on a hull"; "The firing
-vehicle's own splash"; "A frag's splash on a hull"; "Measured, rockets and
-frags"; "The hull's clip, surface by surface"; "The rider's pose"; "The
-broad phase"; "The silhouette" (with "The tank driver", "Back from the
+Contents, by subsection and the paragraph names code cites: 13.1 the
+readers and fire calls, "Inside the call, and only with a driver", "The
+bend's arithmetic", "The guns' spread", "The shell's bits", heat; 13.2
+`G_Damage` on a vehicle, "The driver's feedback"; 13.3 "A blast on a
+hull", "The firing vehicle's own splash", "A frag's splash on a hull",
+"Measured, rockets and frags"; 13.4 "The hull's clip, surface by
+surface", the riders under fire; 13.5 "The rider's pose", "The broad
+phase"; 13.6 "The silhouette"; 13.7 "The tank driver", "Back from the
 gunner's seat", "The driver's idle", "The tank driver's link offset",
 "The glide back", "Two runs that part", "The glides on the jeep", "The
 weapon-swap frame", "The angle updater on a rider", "The tank driver's
-idle", "Retail's spawn point", "The shooter's trigger"); "The inflictor
-swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
+idle"; 13.8 "Retail's spawn point", "The shooter's trigger"; 13.9 "The
+inflictor swap", "The barrel test", "A hull stops rounds", "A shell on a
+hull".
+
+### 13.1 The readers, the fire calls and heat
 
 - **The readers.** The driver's reader (0x86c57), with a turret weapon
   and `capturing` 0 (VERIFIED decompile):
@@ -1707,6 +1711,9 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   `pm_flags` 0x800000 on the gunner and notifies `overheating` every think
   (VERIFIED decompile; VERIFIED capture: 49 rounds, 208, the mask 6 → 1 →
   0, recovery 2550 ms on).
+
+### 13.2 Damage on a vehicle
+
 - **`G_Damage` on a vehicle** (0x4fedb) (VERIFIED decompile):
   1. `G_IsVehicleImmune` (0x8b893): bullets need `bulletDamage`, grenades
      `grenadeDamage`, projectiles and artillery `projectileDamage`; water,
@@ -1737,6 +1744,9 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   (`SimOp::VehiclePain`) and matches the event, its parm, `damageEvent`
   and both counts (VERIFIED, `vehicle_ab` replay), given the splash
   measure below.
+
+### 13.3 Blasts on a hull
+
 - **A blast on a hull.** `G_RadiusDamage` (game.mp.uo 0x5098b) measures an
   entity with `r.bmodel` (+0x104) to its `r.absmin`/`r.absmax` (+0x124,
   +0x130) on each axis, and one that also has a vehicle record (+0x164) to
@@ -1857,6 +1867,8 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   `projectileSpeed`, so the contacts sit within a unit of retail's
   (INFERRED: the direction is logged to two decimals).
 
+### 13.4 The hull's clip and rounds on riders
+
 - **The hull's clip, surface by surface.** The DObj clip (`coduo_lnxded`
   0x80c7be8 over each model, 0x80c4892 over its surfaces) moves the
   segment into each surface's bone frame and tries the surface only when
@@ -1948,6 +1960,9 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   process (`common::ProbeHold::aim`, the target holding the view of its
   use tap) and compare each seat's rounds a step, height by height, within
   2.5 a step; every seat is in the comparison (VERIFIED, replay).
+
+### 13.5 The rider's pose and the broad phase
+
 - **The rider's pose.** `G_PlayerVehiclePositionAndBlend` (0x9048f), at
   the end of `ClientEndFrame`, besides placing the body:
   - Seat 1 or 3 of a type 1 vehicle (four-wheel) whose legs anim carries
@@ -2011,6 +2026,9 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   (VERIFIED, the paks: the Panzer IV's reaches 172.3 of 201.7). On a
   hull the reject therefore only saves work, a turned turret staying
   inside (INFERRED).
+
+### 13.6 The silhouette
+
 - **The silhouette.** Retail UO 1.51b, 2026-10-15, `probe_profile 1`
   (fixtures `*-silhouette-uo.txt`, recipe in their headers; the tank's and
   the seated jeep's recaptured 2026-10-21, see "Retail's spawn point").
@@ -2064,6 +2082,9 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   `vehicle_armor_ab`'s silhouette tests compare every seat ray for ray
   within a quarter unit, the stints after the gunner's seat included. The
   paragraphs below are the facts those tests rest on.
+
+### 13.7 The silhouette through seat changes
+
 - **The tank driver.** No clause of `playeranim.script` names a tank's
   driver, and none is needed: his legs play `pb_stand_alert` (185, wire
   697 with the toggle) on retail and ours, the on-foot idle carried into
@@ -2415,6 +2436,9 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   then places him (idle from the spawn frame) every bone of the whole
   local capture (29550 to 76000) sits within 0.01 of retail's and the
   silhouette cell matches.
+
+### 13.8 The silhouette run's spawn, trigger and times
+
 - **Retail's spawn point.** The probe logs each spawn's pick: `log_spawns`
   wakes on `"spawned"` after tdm's `spawnPlayer` returns and prints the
   origin and angles of the `mp_teamdeathmatch_spawn` nearest the body
@@ -2465,6 +2489,8 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   65250 (bones); jeep 29650/41800/53800, out 65800 and 29700/41850/53850,
   out 65850. The gates join on each fixture's placement (`late_for`,
   `LATE_MS` set on a placement at 19300).
+
+### 13.9 Rounds and shells on a hull
 
 - **The inflictor swap.** `Bullet_Fire_Extended` (0x7b13c..0x7b1ae) uses
   the given inflictor, else the attacker; when that is the attacker, a
@@ -2961,7 +2987,7 @@ its `eFlags` at +0x90 and `fWeaponPosFrac` at +0xec do, those are
 roll delta, which no seat change turns, so 0 (INFERRED). vcod writes no
 roll. The turret view (0x30041550, `eFlags` 0x6000) has a sway and firing
 kick of its own off the turret weapon's file; that is a turret's, not a
-vehicle's: coduo-diff.md 19, "The turret view".
+vehicle's: coduo-diff.md 19.5, "The turret view".
 
 ## 16. Clearing and verifying a vehicle's spot
 

@@ -255,3 +255,42 @@ impl super::weapon::WeaponState {
         w.ammoclip.copy_from_slice(&self.clip[..64]);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pmove::weapon::WeaponState;
+
+    /// A wire playerstate with every word distinct, a finite float, and
+    /// every ammo slot its own count.
+    fn distinct() -> PlayerState2 {
+        let mut w = PlayerState2::default();
+        for (i, word) in w.f.iter_mut().enumerate() {
+            *word = (0.5 + i as f32).to_bits();
+        }
+        for (i, a) in w.ammo.iter_mut().chain(w.ammoclip.iter_mut()).enumerate() {
+            *a = i as i32 + 1;
+        }
+        w
+    }
+
+    /// Every field `from_wire` reads comes back through `to_wire`: a field
+    /// added to one side alone, or written to another word, fails here.
+    #[test]
+    fn to_wire_writes_back_what_from_wire_reads() {
+        let w = distinct();
+        let want = PlayerState::from_wire(&w);
+        let back = want.to_wire(&PlayerState2::default());
+        assert_eq!(PlayerState::from_wire(&back), want);
+    }
+
+    /// The same for the weapon's half and `write_wire`.
+    #[test]
+    fn write_wire_writes_back_what_the_weapons_from_wire_reads() {
+        let w = distinct();
+        let want = WeaponState::from_wire(&w);
+        let mut back = PlayerState2::default();
+        want.write_wire(&mut back);
+        assert_eq!(WeaponState::from_wire(&back), want);
+    }
+}

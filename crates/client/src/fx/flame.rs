@@ -18,7 +18,7 @@
 //!
 //! The burn is the victim's to report: [`FlameSystem::report`] tests the
 //! chunks against the snapshot's own player and yields the `wbuttons` bit
-//! and the `fdc <owner>` command the server burns on (coduo-diff.md 19,
+//! and the `fdc <owner>` command the server burns on (coduo-diff.md 19.3,
 //! "The flame report").
 
 use std::collections::HashMap;

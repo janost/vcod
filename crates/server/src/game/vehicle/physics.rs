@@ -2103,7 +2103,7 @@ mod tests {
     use super::*;
 
     /// The yaw truncates to 65536ths, toward zero: a coasting hull's rate
-    /// bleeds on it (physics.md 3.5).
+    /// bleeds on it (coduo-vehicles.md 12).
     #[test]
     fn an180_truncates_to_16_bit_units() {
         let unit = 360.0 / 65536.0;
@@ -2483,7 +2483,7 @@ mod tests {
 
     /// From rest under full throttle the Panzer gains `0.05 * accel` a
     /// step up to `0.8 * maxSpeed` (211.2), and the tracks scroll
-    /// `trunc(1.5625 * v)` a step (physics.md 3.2, entity `time`).
+    /// `trunc(1.5625 * v)` a step (entity `time`).
     #[test]
     fn full_throttle_ramps_to_four_fifths_of_max_speed() {
         let info = panzer();

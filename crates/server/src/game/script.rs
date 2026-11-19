@@ -868,8 +868,8 @@ impl ScriptRuntime {
     /// All three run under `level.initializing` (`GameHost::initializing`).
     fn start_bootstrap(&mut self) -> anyhow::Result<()> {
         self.host.initializing = true;
-        // Both run with `level` as `self` (cod11-gsc-language.md, "the
-        // compiler types the bare globals"; `probe_usage`'s `self endon`).
+        // Both run with `level` as `self` (cod11-gsc-language.md, "Why:
+        // the compiler types the bare globals"; `probe_usage`'s `self endon`).
         let level = Some(self.vm.level());
         let gametype_entry = self.gametype_entry.clone();
         self.start(&gametype_entry, "main", level)?;

@@ -468,3 +468,26 @@ fn a_claymore_kill_runs_the_kill_scripts_clean() {
     );
     assert!(health <= 0, "{health}");
 }
+
+/// A frame leaves neither the blast noises (a script `radiusDamage`'s)
+/// nor the weapon ops (the spawns' `TakeAll`s) the shared builtins queue
+/// for CoD1's engine: both are gone past every frame.
+#[test]
+fn a_cod4_frame_keeps_no_blast_noise_or_weapon_op() {
+    let mut most = (0, 0);
+    let mut heard = false;
+    let ran = run(&mut |level, _| {
+        let h = &mut level.rt.host;
+        most = (
+            most.0.max(h.blast_noises.len()),
+            most.1.max(h.client_weapon_ops.len()),
+        );
+        if !std::mem::replace(&mut heard, true) {
+            h.blast_noises.push(([0.0; 3], Some(1)));
+        }
+    });
+    if ran.is_none() {
+        return;
+    }
+    assert_eq!(most, (0, 0));
+}

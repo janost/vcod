@@ -197,6 +197,14 @@ fn mod_v22_to_v1(m: i32) -> i32 {
     }
 }
 
+/// `FS_LoadZipFile`'s checksum of the 1.5 install's `main/pak0.pk3`, as the
+/// 1.5b server's `sv_referencedPaks` lists it.
+const PAK0_V6_CHECKSUM: i32 = 1_048_127_331;
+
+/// The same of 1.1's `main/pak0.pk3` (docs/research/cod11-server-handshake.md,
+/// "The checksum").
+const PAK0_V1_CHECKSUM: i32 = -363_972_028;
+
 /// The protocol an install hosts: 22 when United Offensive's `uo/` paks are
 /// mounted, 6 when its `main/pak0.pk3` is 1.5's, whose checksum differs
 /// from 1.1's (docs/research/cod15-protocol-diff.md 10), 1 otherwise.
@@ -208,9 +216,6 @@ pub fn install_protocol(fs: &crate::pk3::Pk3Fs) -> &'static Cod1Wire {
 pub fn install_protocol_of<'a>(
     paks: impl IntoIterator<Item = &'a crate::pk3::PakInfo>,
 ) -> &'static Cod1Wire {
-    /// `FS_LoadZipFile`'s checksum of the 1.5 install's `main/pak0.pk3`, as
-    /// the 1.5b server's `sv_referencedPaks` lists it.
-    const PAK0_V6_CHECKSUM: i32 = 1_048_127_331;
     let mut v6 = false;
     for p in paks {
         // A `uo/` with United Offensive's own paks beside `main/` (`--mod-dir
@@ -221,6 +226,30 @@ pub fn install_protocol_of<'a>(
         v6 |= p.game == "main" && p.name == "pak0" && p.checksum == PAK0_V6_CHECKSUM;
     }
     if v6 { &PROTOCOL_V6 } else { &PROTOCOL_V1 }
+}
+
+/// A warning for an install whose `main/pak0.pk3` is neither 1.1's nor
+/// 1.5's, which [`install_protocol_of`] runs as 1.1 all the same. A patch
+/// that kept 1.1's pak0 passes; United Offensive's paks are not checked.
+pub fn patch_warning_of<'a>(
+    paks: impl IntoIterator<Item = &'a crate::pk3::PakInfo>,
+) -> Option<String> {
+    let mut pak0 = None;
+    for p in paks {
+        if p.game == "uo" && p.name.starts_with("pakuo") {
+            return None;
+        }
+        if p.game == "main" && p.name == "pak0" {
+            pak0 = Some(p.checksum);
+        }
+    }
+    let c = pak0?;
+    (c != PAK0_V1_CHECKSUM && c != PAK0_V6_CHECKSUM).then(|| {
+        format!(
+            "main/pak0.pk3's checksum {c} is neither 1.1's nor 1.5's: vcod supports \
+             CoD 1.1 and 1.5 and runs this install as 1.1"
+        )
+    })
 }
 
 /// Model paths sit at `CS_MODELS_V1 + index`, index 1..=255 (`G_ModelIndex`,
@@ -359,6 +388,13 @@ mod tests {
         );
         assert!(install_protocol_of(&uo).is_uo());
         assert!(!PROTOCOL_V6.is_uo() && !PROTOCOL_V6.is_v1());
+        assert!(patch_warning_of(&v1).unwrap().contains("checksum 7"));
+        assert_eq!(patch_warning_of(&v6), None);
+        assert_eq!(patch_warning_of(&[pak("main", "pak0", -363_972_028)]), None);
+        assert_eq!(
+            patch_warning_of(&[pak("main", "pak0", 7), pak("uo", "pakuo00", 3)]),
+            None
+        );
     }
 
     #[test]

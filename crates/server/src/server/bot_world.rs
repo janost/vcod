@@ -1106,15 +1106,17 @@ impl Server {
     /// [`crate::bots::BotView::friend_in_line`] for the body in `slot`
     /// shooting at `target`: its live axis or allies teammates' boxes this
     /// tick (the enemy is cached, the friends are not); and when one is in
-    /// the line, [`crate::bots::BotView::sidestep`], a graph node near
-    /// whose eye clears it: `held`, the spot and pick time the bot is
-    /// already walking to, while it still clears and is not yet reached.
+    /// the line and `step` asks for it, [`crate::bots::BotView::sidestep`],
+    /// a graph node near whose eye clears it: `held`, the spot and pick time
+    /// the bot is already walking to, while it still clears and is not yet
+    /// reached.
     pub(super) fn bot_friend_in_line(
         &self,
         slot: usize,
         target: [f32; 3],
         teams: &[i32],
         held: Option<([f32; 3], i32)>,
+        step: bool,
     ) -> (bool, Option<[f32; 3]>) {
         let my_team = teams.get(slot).copied().unwrap_or(0);
         if my_team != script::TEAM_AXIS && my_team != script::TEAM_ALLIES {
@@ -1144,6 +1146,9 @@ impl Server {
         let target = glam::Vec3::from(target);
         if !crate::bots::friend_in_line(eye, target, &friends) {
             return (false, None);
+        }
+        if !step {
+            return (true, None);
         }
         let (Some(g), Some(w)) = (
             self.game.module.driver.nav.as_ref(),
@@ -1398,7 +1403,7 @@ impl crate::bots::driver::BotWorld for Server {
         teams: &[i32],
         held: Option<([f32; 3], i32)>,
     ) -> (bool, Option<[f32; 3]>) {
-        self.bot_friend_in_line(slot, target, teams, held)
+        self.bot_friend_in_line(slot, target, teams, held, true)
     }
 
     fn cover_body(&self, slot: usize, threat: usize) -> Option<crate::bots::driver::CoverBody> {

@@ -221,6 +221,124 @@ mod tests {
         }
     }
 
+    /// A floor at z 0 or a ceiling at z 100 under the item's ±1 box,
+    /// struck by a straight sweep: the stub `G_RunItem` traces against.
+    /// A start against the ceiling is solid, so no slide runs off it.
+    struct Slab {
+        ceiling: bool,
+    }
+
+    impl PmWorld for Slab {
+        fn trace(
+            &self,
+            start: Vec3,
+            end: Vec3,
+            mins: Vec3,
+            maxs: Vec3,
+            _: u32,
+            _: u32,
+        ) -> vcod_cod4::pmove::Tr {
+            let (from, to, wall, normal) = match self.ceiling {
+                false => (start.z + mins.z, end.z + mins.z, 0.0, Vec3::Z),
+                true => (start.z + maxs.z, end.z + maxs.z, 100.0, Vec3::NEG_Z),
+            };
+            let crosses = if self.ceiling { to > wall } else { to < wall };
+            if !crosses {
+                return vcod_cod4::pmove::Tr::default();
+            }
+            vcod_cod4::pmove::Tr {
+                fraction: (from - wall) / (from - to),
+                normal,
+                entity_num: 1022,
+                // A box already against the ceiling starts in it.
+                startsolid: self.ceiling && from >= wall,
+                ..vcod_cod4::pmove::Tr::default()
+            }
+        }
+    }
+
+    fn dropped(origin: Vec3) -> Item4 {
+        Item4 {
+            id: vcod_gsc::EntId(0, 0),
+            weapon: 0,
+            model: 0,
+            owner: 0,
+            clear_owner_at: 0,
+            tr_type: TR_STATIONARY,
+            start_ms: 0,
+            duration_ms: 0,
+            base: origin,
+            delta: Vec3::ZERO,
+            origin,
+            angles: Vec3::ZERO,
+            ground: NONE,
+            clip: 0,
+            stock: 0,
+        }
+    }
+
+    /// With no ground it falls from where it is; free of the floor it goes
+    /// to the arc's point 50 ms on; a hit makes the 50 ms stop along the
+    /// move; the contact under 0.01 of the move rests it on the floor, its
+    /// ground the struck entity (cod4-combat.md 6.1).
+    #[test]
+    fn a_dropped_item_falls_stops_and_rests() {
+        let floor = Slab { ceiling: false };
+        let mut it = dropped(Vec3::new(0.0, 0.0, 40.0));
+        assert!(matches!(
+            run(&mut it, 1000, &floor, |_| false, |_| 0),
+            Step::Kept
+        ));
+        assert_eq!((it.tr_type, it.start_ms), (TR_GRAVITY, 1000));
+        assert!(it.origin.z < 40.0 && it.origin.z > 38.0, "{}", it.origin);
+        let mut now = 1000;
+        while it.tr_type == TR_GRAVITY && now < 5000 {
+            now += 50;
+            run(&mut it, now, &floor, |_| false, |_| 0);
+        }
+        assert_eq!(
+            (it.tr_type, it.start_ms, it.duration_ms),
+            (TR_LINEAR_STOP, now, 50)
+        );
+        assert!(
+            (it.origin.z - 1.0).abs() < 1e-3,
+            "on the floor: {}",
+            it.origin
+        );
+        // The stop's 50 ms then the fall's next step meets the floor at once.
+        while !it.resting() && now < 6000 {
+            now += 50;
+            assert!(matches!(
+                run(&mut it, now, &floor, |_| false, |_| 0),
+                Step::Kept
+            ));
+        }
+        assert!(it.resting());
+        assert_eq!((it.ground, it.delta), (1022, Vec3::ZERO));
+    }
+
+    /// A rest against a surface facing down (a start against it, so the
+    /// one slide does not run), or in `CONTENTS_NODROP`, frees the item.
+    #[test]
+    fn an_item_resting_upside_down_or_in_nodrop_is_freed() {
+        let mut it = dropped(Vec3::new(0.0, 0.0, 99.0));
+        it.tr_type = TR_GRAVITY;
+        it.delta = Vec3::new(0.0, 0.0, 200.0);
+        it.start_ms = 1000;
+        let up = Slab { ceiling: true };
+        assert!(matches!(
+            run(&mut it, 1000, &up, |_| false, |_| 0),
+            Step::Freed
+        ));
+        let floor = Slab { ceiling: false };
+        let mut it = dropped(Vec3::new(0.0, 0.0, 1.0));
+        let nodrop = |_: Vec3| CONTENTS_NODROP;
+        assert!(matches!(
+            run(&mut it, 1000, &floor, |_| false, nodrop),
+            Step::Freed
+        ));
+    }
+
     #[test]
     fn a_level_rest_rolls_the_item_on_its_side() {
         let a = rest_angles(Vec3::new(0.0, -134.989, 0.0), Vec3::Z);

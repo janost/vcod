@@ -6,8 +6,8 @@
 #       gdb -q -batch -ex 'source tools/re/gdb_gunner_tree.py' -ex run \
 #       --args <server> ...
 #
-# Run it as `COD_LNXDED` for tools/run_probe.sh through a wrapper that execs
-# gdb with these arguments.
+# tools/run_probe.sh and tools/run_server.sh run the server this way under
+# `GDB_PY=tools/re/gdb_gunner_tree.py`.
 #
 # `grid` (the default): entity GDB_ENT once a frame,
 #   step t=<level time> dobj=<addr>   at his weight step

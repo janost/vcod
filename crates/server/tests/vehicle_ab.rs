@@ -208,7 +208,7 @@ fn board(map: &str, vehicletype: &str, cvars: &[(&str, &str)]) -> Option<Boarded
 /// `mp_teamdeathmatch_spawn`, whose think starts the idle on the spawn
 /// frame, where the seeded draw's sloped point slides and sets a walk
 /// first. Every mp_cassino capture's `legsAnim` toggle reads the flat
-/// spawn's (coduo-vehicles.md 13, "The driver's idle"); on mp_peaks the
+/// spawn's (coduo-vehicles.md 13.7, "The driver's idle"); on mp_peaks the
 /// seeded draw already reads retail's, `JEEP_GUN`'s aside ([`JEEP_GUN_PIN`]).
 const FLAT_SPAWNS: &[(&str, Spot)] = &[("mp_cassino", ([64.0, 152.0, 0.125], [0.0, 270.0, 0.0]))];
 
@@ -281,7 +281,7 @@ fn board_with(
     // after it, and wait for the seat. The probe settles 2 s from the
     // placed snapshot and its use lands a frame later: every retail
     // capture's `PROBE activated` is 2050 past its `PROBE place`
-    // (coduo-vehicles.md 13, "The driver's idle").
+    // (coduo-vehicles.md 13.7, "The driver's idle").
     for i in 0..2000i64 {
         now += frame;
         let noboard = std::env::var("VEHICLE_NOBOARD").is_ok();
@@ -1012,7 +1012,7 @@ const JEEP_GUN: &str = "tests/fixtures/playerstate/mp_peaks-tdm-slope-8ms-jeep-g
 /// 94): a spawn whose think lands sliding sets a walk before the idle.
 /// Retail's [`JEEP_GUN_SPAWN`] run spawned on tdm spawnpoint 277 and reads
 /// 606 too. Of the map's 32 tdm spawns pinned, 277 and (-1328, -160) match
-/// every field here; the other 30 miss the toggle (coduo-vehicles.md 13,
+/// every field here; the other 30 miss the toggle (coduo-vehicles.md 13.7,
 /// "The driver's idle").
 const JEEP_GUN_PIN: Spot = ([-3872.0, 3064.0, -25.528], [0.0, 255.0, 0.0]);
 
@@ -1096,7 +1096,7 @@ fn the_tank_gun_replays_on_ours() {
 /// The same run's marks linked to the rider's bones, every frame of both
 /// stints. Through the first, a driver boarded by use is linked with no
 /// seat offset, so every mark reads 20 above the seat until the
-/// `nextvehslot` (coduo-vehicles.md 13, "The tank driver's link offset").
+/// `nextvehslot` (coduo-vehicles.md 13.7, "The tank driver's link offset").
 #[test]
 fn the_tank_rider_s_bones_follow_retail_s_in_both_seats() {
     let text = std::fs::read_to_string(TANK_GUN).unwrap();
@@ -1285,7 +1285,7 @@ fn a_driver_spawned_out_of_the_seat_reads_retail_s_origin() {
 
 /// What the entity pass finds of a tank driver boarded by use: his turn
 /// links him with no seat offset, 20 above the seat his end frame puts
-/// `ps.origin` on (coduo-vehicles.md 13, "The tank driver's link offset"),
+/// `ps.origin` on (coduo-vehicles.md 13.7, "The tank driver's link offset"),
 /// so the area tree a later entity's blast or missile queries, and the body
 /// such a round traces, sit at the link through the first stint, and on
 /// the seat once a `nextvehslot` has asked for the slot it takes.

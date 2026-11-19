@@ -12,7 +12,7 @@ pub use super::cod1::{
     CS_FX_TAGS_V1, CS_HINT_STRINGS_V1, CS_LAYOUT_V1, CS_LAYOUT_V22, CS_LEVEL_START_TIME_V1,
     CS_LOCALIZED_V1, CS_MATCH_TIMEOUT_TEXT_V6, CS_MATCH_TIMEOUT_V6, CS_MODELS_V1, CS_NORTHYAW,
     CS_SHADERS_V1, CS_SOUNDS_V1, CS_TAGS_V1, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22,
-    install_protocol, install_protocol_of,
+    install_protocol, install_protocol_of, patch_warning_of,
 };
 pub use super::cod1::{Cod1Wire, CursorHints};
 pub use super::codec::{ANGLE_BITS, FieldCodec, NetField};

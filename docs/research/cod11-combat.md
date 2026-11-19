@@ -3125,7 +3125,7 @@ table reads as full damage; retail has no such state.
 
 #### What the sweep measured
 
-`--probe-sweep` (`crates/client/src/probe.rs`) taps once per entry of a
+`--probe-sweep` (`crates/client/src/probe/hit.rs`) taps once per entry of a
 table of pitch offsets around the aim at the target's eye and echoes the
 offset on its `!trace` line; the retail server logs `sHitLoc` per hit in its
 `games_mp.log`, a `D;` record for a wound and a `K;` record for the kill, and
@@ -3455,7 +3455,7 @@ replays on the `PROBE_IN` lines rather than the logged inputs.
   vcod measurement: with the spawn pin taking the placed spawnpoint's own
   float (unpinned, the think left (10, 5, -1)), ours leaves (6, 3, -1) and
   the eye rows match
-  without an offset (cod15-movement.md 4, "The think on a slope,
+  without an offset (cod15-movement.md 4.2, "The think on a slope,
   standing").
 
 VERIFIED, live (retail 1.1d, 1.5b and UO 1.51b, the same
@@ -3593,7 +3593,7 @@ vcod measurement: every grid cell of the six captures sits within 0.0001
 median of retail's, and with the read order every round of the `-turn`
 captures matches, with no gap.
 
-**One ease a build.** VERIFIED, game.mp.uo (coduo-vehicles.md 13, "The
+**One ease a build.** VERIFIED, game.mp.uo (coduo-vehicles.md 13.7, "The
 glide back"): each skeleton build that finds a bone unbuilt under the
 current stamp runs the controller hook, which steps every control 18
 degrees toward its target from where the last build left it, and
@@ -6356,7 +6356,7 @@ arm keeps 1.1's 0.125 (0x7b1a8), and the reflection's -2.0 (0x7b198), the
 0.7 ground test (0x7b1a0, a double), the rest speed 20.0 (0x7b1b0), the
 0.1 nudge (0x7b1b4) and the 100.0 event gate (0x7b1bc) are 1.1's. 1.5
 has no tangential and normal split. United Offensive scales the same way
-by 0.4 and 0.1 (coduo-diff.md 21, "Missiles"). VERIFIED, live (retail
+by 0.4 and 0.1 (coduo-diff.md 21.1, "Missiles"). VERIFIED, live (retail
 1.5b, mp_carentan, `mp_carentan-scriptmodel-prone-rest-1.5.txt`
 and `mp_carentan-scriptmodel-prone-1.5.txt`): the frag that falls off the
 prone target (12.6) strikes the floor at z -22.375 and is airborne two
@@ -6952,7 +6952,7 @@ VERIFIED: on the committed take the first traces of `cook_release`
 it the other way round, `pin_out` alone opening on the pullback).
 VERIFIED: `to_frag`'s last trace is `serverTime` 16700 at `weaponstate` 0,
 so no snapshot is missing between the two steps. INFERRED, off
-`CombatProbe::step` in `crates/client/src/probe.rs`: a step's clock starts
+`CombatProbe::step` in `crates/client/src/probe/combat.rs`: a step's clock starts
 on the probe's first iteration after the step before it ended, and a
 snapshot already traced is not traced again, so a step's first trace is
 whichever snapshot arrives next, before or after its first cmd reached the

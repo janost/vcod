@@ -1,7 +1,7 @@
 //! The world's `corona` entities as retail adds them each view (CoDMP.exe
 //! 0x4e4800): a camera-facing sprite of `flareShader`, pulled 16 units
 //! toward the eye, drawn only while the eye sits far enough below it.
-//! docs/research/cod11-shader-scripts.md section 8, "Coronas".
+//! docs/research/cod11-shader-scripts.md section 8.5, "Coronas".
 
 use glam::Vec3;
 use vcod_common::bsp::Corona;

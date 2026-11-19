@@ -49,6 +49,27 @@ pub fn check_install(
     anyhow::bail!("no {sub}/ in {} ({chosen}): {INSTALL_HINT}", root.display())
 }
 
+/// A warning when `root` lacks a file the supported patch's install holds:
+/// CoD2 1.3's `main/iw_15.iwd` (docs/research/cod2-iwi-iwd.md). Names only.
+/// CoD1's check is `net::protocol::patch_warning_of`, over the paks; CoD4
+/// has none yet.
+pub fn patch_warning(root: &Path, game: crate::game::Game) -> Option<String> {
+    if game != crate::game::Game::Cod2 {
+        return None;
+    }
+    let has = std::fs::read_dir(root.join("main"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|e| e.file_name().eq_ignore_ascii_case("iw_15.iwd"));
+    (!has).then(|| {
+        format!(
+            "{} has no main/iw_15.iwd, which a CoD2 1.3 install holds: vcod supports CoD2 1.3 only",
+            root.display()
+        )
+    })
+}
+
 /// The hint for a map that was not found under `main/` while `root`
 /// holds United Offensive's paks beside it.
 pub fn uo_map_hint(root: &Path, mod_dir: &str) -> Option<&'static str> {
@@ -96,6 +117,21 @@ pub fn confined_component(dir: &Path, name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A CoD2 `main/` without 1.3's `iw_15.iwd` warns; one with it, in any
+    /// case, and the other games do not.
+    #[test]
+    fn a_cod2_install_short_of_iw_15_warns() {
+        use crate::game::Game;
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("main")).unwrap();
+        std::fs::write(root.path().join("main/iw_14.iwd"), b"").unwrap();
+        let w = patch_warning(root.path(), Game::Cod2).unwrap();
+        assert!(w.contains("iw_15.iwd") && w.contains("1.3"), "{w}");
+        assert_eq!(patch_warning(root.path(), Game::Cod1), None);
+        std::fs::write(root.path().join("main/IW_15.IWD"), b"").unwrap();
+        assert_eq!(patch_warning(root.path(), Game::Cod2), None);
+    }
 
     #[test]
     fn a_missing_install_names_the_directory_and_the_fix() {

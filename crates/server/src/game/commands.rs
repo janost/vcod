@@ -66,3 +66,54 @@ impl<const N: usize> PartialEq<[(usize, String); N]> for ClientCommands {
         self.list == other
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn three() -> ClientCommands {
+        let mut c = ClientCommands::default();
+        for (to, text) in [(0, "a"), (1, "b"), (ALL_CLIENTS, "c")] {
+            c.push((to, text.to_string()));
+        }
+        c
+    }
+
+    /// `split_off` cuts the stamps where it cuts the commands, so the kept
+    /// head still takes its own stamps, in write order.
+    #[test]
+    fn split_off_keeps_the_stamps_beside_their_commands() {
+        let mut c = three();
+        let stamps: Vec<u64> = three().take_stamped().iter().map(|s| s.0).collect();
+        assert!(stamps.windows(2).all(|w| w[0] < w[1]));
+        let tail = c.split_off(1);
+        assert_eq!(
+            tail,
+            vec![(1, "b".to_string()), (ALL_CLIENTS, "c".to_string())]
+        );
+        c.push((2, "d".to_string()));
+        let kept = c.take_stamped();
+        assert_eq!(kept.len(), 2);
+        assert_eq!((kept[0].1, kept[0].2.as_str()), (0, "a"));
+        assert_eq!((kept[1].1, kept[1].2.as_str()), (2, "d"));
+        assert!(kept[0].0 < kept[1].0);
+        assert!(c.is_empty());
+        assert!(c.take_stamped().is_empty());
+    }
+
+    /// `take` and `clear` empty both halves: a later push stands alone.
+    #[test]
+    fn take_and_clear_drop_the_stamps_too() {
+        for drain in [
+            |c: &mut ClientCommands| drop(c.take()),
+            |c: &mut ClientCommands| c.clear(),
+        ] {
+            let mut c = three();
+            drain(&mut c);
+            c.push((5, "e".to_string()));
+            let s = c.take_stamped();
+            assert_eq!(s.len(), 1);
+            assert_eq!((s[0].1, s[0].2.as_str()), (5, "e"));
+        }
+    }
+}
