@@ -1509,6 +1509,15 @@ impl Cod4Walk {
             key: format!("cod4 {:016x}", h.finish()),
         }
     }
+
+    /// What a walk's body moves over: the clip map and the map's brushes.
+    fn world(&self) -> crate::game::cod4::clip::Cod4Clip<'_> {
+        crate::game::cod4::clip::Cod4Clip {
+            clip: &self.clip,
+            bodies: &[],
+            brushes: &self.brushes,
+        }
+    }
 }
 
 /// Shorts to degrees and back, for `delta_angles` (1.7 keeps floats).
@@ -1525,7 +1534,7 @@ impl crate::nav::WalkStep for Cod4Walk {
         _world: &vcod_common::collision::CollisionWorld,
         _weapons: &[Option<vcod_common::weapon::WeaponDef>],
     ) {
-        use vcod_cod4::pmove::{Cmd, MASK_PLAYERSOLID, PLAYER_MAXS, PLAYER_MINS, WeaponMove};
+        use vcod_cod4::pmove::{Cmd, ENTITYNUM_NONE, MASK_PLAYERSOLID, PmWorld, WeaponMove};
         // Weapon 0: no weapon scale, the graph's 190 units/s.
         let mut c = Cmd::from(&to_cmd4(cmd));
         c.weapon = 0;
@@ -1537,24 +1546,19 @@ impl crate::nav::WalkStep for Cod4Walk {
                 // 1.7 keeps `delta_angles` as floats: the walk's shorts
                 // go in and come back rounded.
                 b.delta_angles = delta.map(|d| (f64::from(d) * SHORT_DEG) as f32);
-                let world = crate::game::cod4::clip::Cod4Clip {
-                    clip: &self.clip,
-                    bodies: &[],
-                    brushes: &self.brushes,
-                };
+                let world = self.world();
                 vcod_cod4::pmove::player_step(b, &c, old, &world, self.rules, WeaponMove::NONE);
                 *delta = b
                     .delta_angles
                     .map(|d| (f64::from(d) / SHORT_DEG).round() as i32);
                 c.buttons & button::JUMP != 0
             },
-            // CoD4's slope test traces the standing box over the clip map
-            // without the brushes: unmeasured, the walk is off by default.
-            |_, from, to| {
-                let t = self
-                    .clip
-                    .trace(from, to, PLAYER_MINS, PLAYER_MAXS, MASK_PLAYERSOLID);
-                t.into()
+            // The clip map and the brushes, as the pmove moves over them.
+            |from, to, mins, maxs| {
+                let none = ENTITYNUM_NONE as u32;
+                self.world()
+                    .trace(from, to, mins, maxs, none, MASK_PLAYERSOLID)
+                    .into()
             },
         );
     }
@@ -2169,6 +2173,45 @@ mod tests {
         assert!(step(&graph(Vec::new())));
         assert!(!step(&graph(pipe)));
     }
+
+    /// A walk's body in the air on mp_cargoship's `pipe_shootable` (`*76`),
+    /// on its facet at (1340, 61, 114) too steep to stand on: the step's
+    /// pmove clips the pipe, so the slope read under the body must trace
+    /// it too, or the body reads as falling where it slides.
+    #[test]
+    fn a_cod4_walk_slides_on_the_brush_entity_its_pmove_clips() {
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let zones = crate::game::cod4::Cod4Zones::load(&install, "mp_cargoship").unwrap();
+        let clip = zones.clip.clone().unwrap();
+        let pipe = map_brushes(&zones.map.entities)
+            .into_iter()
+            .filter(|b| b.model == 76)
+            .collect::<Vec<_>>();
+        let walk = Cod4Walk::new(clip.clone(), vcod_cod4::pmove::Rules::default(), pipe);
+        let world = bot_world(clip, &zones.map.entities, Vec::new());
+        let mut ps = vcod_common::pmove::PlayerState::spawn(Vec3::new(1340.0, 61.0, 114.0), 0.0);
+        ps.on_ground = false;
+        let cmd = UserCmd {
+            server_time: 50,
+            ..msg::NULL_USERCMD
+        };
+        use crate::nav::WalkStep;
+        walk.step(
+            &mut ps,
+            &mut [0; 3],
+            &mut None,
+            0,
+            &cmd,
+            &world.collision,
+            &[],
+        );
+        // The deck under the pipe is at 52: the pipe holds the body.
+        assert!(ps.origin.z > 100.0, "{}", ps.origin);
+        assert!(!ps.on_ground && ps.sliding(), "{}", ps.origin);
+    }
+
     /// mp_bloc's pool at (160, -5540, -24) is reached only down off a
     /// mantle's top and left only by a mantle over its rim: probed once,
     /// before the flood off the tops had found the pool's floor, the

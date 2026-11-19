@@ -3068,6 +3068,15 @@ the live bot's path on the same edge (`bot_match` traces), 2026-10-27:
   The walk now clips the map's `script_brushmodel`s where they stand at
   load (`bots::cod4::map_brushes`). VERIFIED (the entity and the walk
   with and without it); that the pipe is the cap is INFERRED.
+- The walk's slope read under a body in the air
+  (`bots::bridge::read_walk_body`) traced the standing box over the clip
+  map alone, so a body sliding on a brush entity's steep face read as
+  falling. Since 2026-11-19 it traces the stance's box over the clip map
+  and the brushes, as the step's pmove does: a body on the pipe's facet
+  at (1340, 61, 114) reads sliding. VERIFIED (the walk, both ways). The
+  `VC_NAV_COD4=1` graphs of mp_crash, mp_killhouse, mp_cargoship and
+  mp_bloc build the same, digests and mantle counts, on both. VERIFIED
+  (`nav_build`, both arms).
 - Left: mp_killhouse's crate jumps from (1279, 2496, 60) up 37 to
   (1310, 2556, 97). The CoD4 walk proves them with a running start
   aimed 8 units aside; a bot that comes to rest at the foot (the jump's
