@@ -4044,41 +4044,100 @@ pub(crate) mod tests {
         clk_now().saturating_duration_since(t)
     }
 
+    /// What [`serve`] runs a game's in-process server through.
+    pub(crate) trait Held {
+        /// Ahead of a turn's packets.
+        fn turn(&mut self) {}
+        /// One server frame at `at`.
+        fn frame(&mut self, at: Instant);
+        fn frame_ms(&self) -> u64;
+        fn handle_packet(&mut self, from: std::net::SocketAddr, pkt: &[u8], now: Instant);
+        fn take_outgoing(&mut self) -> Vec<(std::net::SocketAddr, Vec<u8>)>;
+    }
+
+    impl Held for vcod_server::cod4::Cod4Server {
+        fn turn(&mut self) {
+            // The bots' graph lands on the frame that asks for it, not
+            // when a build thread is done.
+            if let Some(b) = self.bots_mut() {
+                b.wait_for_graph();
+            }
+        }
+
+        fn frame(&mut self, at: Instant) {
+            self.tick_frames(at, 1);
+        }
+
+        fn frame_ms(&self) -> u64 {
+            vcod_server::cod4::Cod4Server::frame_ms(self) as u64
+        }
+
+        fn handle_packet(&mut self, from: std::net::SocketAddr, pkt: &[u8], now: Instant) {
+            vcod_server::cod4::Cod4Server::handle_packet(self, from, pkt, now);
+        }
+
+        fn take_outgoing(&mut self) -> Vec<(std::net::SocketAddr, Vec<u8>)> {
+            vcod_server::cod4::Cod4Server::take_outgoing(self)
+        }
+    }
+
+    impl Held for vcod_server::cod2::Cod2Server {
+        fn turn(&mut self) {
+            if let Some(b) = self.bots_mut() {
+                b.wait_for_graph();
+            }
+        }
+
+        /// The binary's frame: `Cbuf_Execute`, then `SV_Frame`.
+        fn frame(&mut self, at: Instant) {
+            self.drain_console(at);
+            self.tick_frames(at, 1);
+        }
+
+        fn frame_ms(&self) -> u64 {
+            vcod_server::cod2::FRAME_MS as u64
+        }
+
+        fn handle_packet(&mut self, from: std::net::SocketAddr, pkt: &[u8], now: Instant) {
+            vcod_server::cod2::Cod2Server::handle_packet(self, from, pkt, now);
+        }
+
+        fn take_outgoing(&mut self) -> Vec<(std::net::SocketAddr, Vec<u8>)> {
+            vcod_server::cod2::Cod2Server::take_outgoing(self)
+        }
+    }
+
     /// An in-process server's loop under `client`, on `clock`: each turn
     /// reads the packets the client sent (stamped with the time it sent
-    /// them), runs every frame (`1000 / sv_fps`) due by the clock and sends what they
-    /// queued. `tick` runs ahead of each frame, at its time, between the
-    /// packets' cmds and the frame (it may move the next frame's time);
-    /// once it returns false the server goes quiet for good: nothing read,
-    /// run or sent.
-    pub(crate) fn serve<T>(
-        sv: &mut vcod_server::cod4::Cod4Server,
+    /// them), runs every frame ([`Held::frame_ms`]) due by the clock and
+    /// sends what they queued. `tick` runs ahead of each frame, at its
+    /// time, between the packets' cmds and the frame (it may move the next
+    /// frame's time); once it returns false the server goes quiet for
+    /// good: nothing read, run or sent.
+    pub(crate) fn serve<S: Held, T>(
+        sv: &mut S,
         sock: &std::net::UdpSocket,
         clock: &sim::Clock,
         client: &std::thread::JoinHandle<T>,
-        tick: impl FnMut(&mut vcod_server::cod4::Cod4Server, Instant, &mut Instant) -> bool,
+        tick: impl FnMut(&mut S, Instant, &mut Instant) -> bool,
     ) {
         serve_until(sv, sock, clock, || client.is_finished(), tick);
     }
 
     /// [`serve`] until `finished`.
-    pub(crate) fn serve_until(
-        sv: &mut vcod_server::cod4::Cod4Server,
+    pub(crate) fn serve_until<S: Held>(
+        sv: &mut S,
         sock: &std::net::UdpSocket,
         clock: &sim::Clock,
         finished: impl Fn() -> bool,
-        mut tick: impl FnMut(&mut vcod_server::cod4::Cod4Server, Instant, &mut Instant) -> bool,
+        mut tick: impl FnMut(&mut S, Instant, &mut Instant) -> bool,
     ) {
-        let mut buf = [0u8; 2048];
+        let mut buf = [0u8; 4096];
         let mut quiet = false;
         let mut next = clock.now();
         let mut heard = next;
         while let Some(until) = clock.turn(&finished) {
-            // The bots' graph lands on the frame that asks for it, not
-            // when a build thread is done.
-            if let Some(b) = sv.bots_mut() {
-                b.wait_for_graph();
-            }
+            sv.turn();
             while !quiet && let Ok((n, from)) = sock.recv_from(&mut buf) {
                 sv.handle_packet(from, &buf[..n], heard);
             }
@@ -4088,8 +4147,8 @@ pub(crate) mod tests {
                     quiet = true;
                     break;
                 }
-                sv.tick_frames(at, 1);
-                next += Duration::from_millis(sv.frame_ms() as u64);
+                sv.frame(at);
+                next += Duration::from_millis(sv.frame_ms());
                 for (to, p) in sv.take_outgoing() {
                     let _ = sock.send_to(&p, to);
                 }
@@ -4107,10 +4166,10 @@ pub(crate) mod tests {
     /// [`serve`]: its frames, the server's frames and every packet between
     /// them land on the same times run to run whatever the wall does.
     /// `tick` is [`serve`]'s.
-    pub(crate) fn run_held<T: Send + 'static>(
-        sv: &mut vcod_server::cod4::Cod4Server,
+    pub(crate) fn run_held<S: Held, T: Send + 'static>(
+        sv: &mut S,
         client: impl FnOnce(std::net::SocketAddr) -> T + Send + 'static,
-        tick: impl FnMut(&mut vcod_server::cod4::Cod4Server, Instant, &mut Instant) -> bool,
+        tick: impl FnMut(&mut S, Instant, &mut Instant) -> bool,
     ) -> T {
         let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         sock.set_nonblocking(true).unwrap();

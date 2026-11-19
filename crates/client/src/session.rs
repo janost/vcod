@@ -559,8 +559,6 @@ mod tests {
     use super::*;
     use crate::console::rcon::{Cod4Rcon, RconSocket};
     use crate::play::cod2::Cod2Session;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
 
     /// `rcon` from a client joined to `vcod-server --game cod2 --set
@@ -570,53 +568,35 @@ mod tests {
     /// `rcon host`. Needs `COD2_DIR`.
     #[test]
     fn cod2_live_rcon_status_from_a_joined_client_and_from_the_host() {
-        use vcod_server::cod2::{Cod2Config, Cod2Server, FRAME_MS};
+        use crate::play::cod4::tests::run_held;
+        use vcod_server::cod2::{Cod2Config, Cod2Server};
         let Some(fs) = vcod_common::testing::cod2_fs() else {
             return;
         };
-        let done = Arc::new(AtomicBool::new(false));
-        let (tx, rx) = std::sync::mpsc::channel();
-        let stop = done.clone();
-        let server = std::thread::spawn(move || {
-            let fs = std::rc::Rc::new(vcod_common::testing::cod2_fs().unwrap());
-            let mut sv = Cod2Server::new(
-                Cod2Config {
-                    map: "mp_toujane".into(),
-                    gametype: "dm".into(),
-                    hostname: "rcon".into(),
-                    max_clients: 4,
-                    gametype_script: None,
-                },
-                7,
-                Instant::now(),
-            );
-            sv.exec_default_cfg(&*fs);
-            sv.set_cvar("sv_pure", "0");
-            // As `vcod-server`'s `--set rconPassword=x` sets it.
-            sv.set_cvar(vcod_server::rcon::login_cvar_name("rconPassword"), "x");
-            sv.load(Some(fs)).unwrap();
-            let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-            sock.set_nonblocking(true).unwrap();
-            tx.send(sock.local_addr().unwrap()).unwrap();
-            let mut buf = [0u8; 4096];
-            let mut next = Instant::now();
-            while !stop.load(Ordering::Relaxed) {
-                while let Ok((n, from)) = sock.recv_from(&mut buf) {
-                    sv.handle_packet(from, &buf[..n], Instant::now());
-                }
-                let now = Instant::now();
-                if now >= next {
-                    next = now + Duration::from_millis(FRAME_MS as u64);
-                    sv.drain_console(now);
-                    sv.tick_frames(now, 1);
-                }
-                for (to, p) in sv.take_outgoing() {
-                    let _ = sock.send_to(&p, to);
-                }
-                std::thread::sleep(Duration::from_millis(1));
-            }
-        });
-        let addr = rx.recv_timeout(Duration::from_secs(300)).unwrap();
+        let fs = std::rc::Rc::new(fs);
+        let mut sv = Cod2Server::new(
+            Cod2Config {
+                map: "mp_toujane".into(),
+                gametype: "dm".into(),
+                hostname: "rcon".into(),
+                max_clients: 4,
+                gametype_script: None,
+            },
+            7,
+            Instant::now(),
+        );
+        sv.exec_default_cfg(&*fs);
+        sv.set_cvar("sv_pure", "0");
+        // As `vcod-server`'s `--set rconPassword=x` sets it.
+        sv.set_cvar(vcod_server::rcon::login_cvar_name("rconPassword"), "x");
+        sv.load(Some(fs)).unwrap();
+        run_held(&mut sv, rcon_client, |_, _, _| true);
+    }
+
+    /// The rcon test's client, on the test clock.
+    fn rcon_client(addr: std::net::SocketAddr) {
+        use crate::play::cod4::tests::{clk_now, clk_sleep};
+        let fs = vcod_common::testing::cod2_fs().unwrap();
         let mut shell = Shell::new();
         shell.use_cod2_cvars();
         shell.apply_latched();
@@ -638,8 +618,8 @@ mod tests {
             };
             let mut got = session.login_rcon(&mut rcon, &mut sock, args).unwrap();
             // Past the server's 500 ms between two rcons.
-            let end = Instant::now() + Duration::from_millis(700);
-            while Instant::now() < end {
+            let end = clk_now() + Duration::from_millis(700);
+            while clk_now() < end {
                 if let Session::Cod2(c) = session
                     && let Some(s) = c.session.as_deref_mut()
                 {
@@ -647,7 +627,7 @@ mod tests {
                 }
                 got.extend(session.take_prints());
                 got.extend(sock.poll());
-                std::thread::sleep(Duration::from_millis(16));
+                clk_sleep(Duration::from_millis(16));
             }
             got
         };
@@ -692,7 +672,5 @@ mod tests {
             status.starts_with("map: mp_toujane\nnum score ping"),
             "{status}"
         );
-        done.store(true, Ordering::Relaxed);
-        server.join().unwrap();
     }
 }
