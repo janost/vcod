@@ -1,8 +1,25 @@
-//! The test-facing seams on [`Server`]: the `test_*` and `pin_*` methods the
-//! gates under `tests/`, the examples and the client's tests call. Most sit
-//! behind the `testing` feature; the `pin_*` draw queues do not.
+//! The test-facing seams on [`Server`]: the `test_*` and `pin_*` methods and
+//! the readers (`bot_*`, `all_entities`, `place_client`, ...) the gates under
+//! `tests/`, the examples and the client's tests call. Most `test_*` sit
+//! behind the `testing` feature; the `pin_*` draw queues and the readers do
+//! not.
 
 use super::*;
+
+/// A standing player with its feet at `feet`, as a blast candidate in slot 0.
+#[cfg(any(test, feature = "testing"))]
+fn standing_blast_victim(feet: [f32; 3]) -> crate::game::combat::BlastVictim {
+    use vcod_common::pmove::{HALF_WIDTH, Stance};
+    let feet = glam::Vec3::from(feet);
+    crate::game::combat::BlastVictim {
+        slot: 0,
+        origin: feet,
+        link_origin: feet.trunc(),
+        mins: glam::Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0),
+        maxs: glam::Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height()),
+        eye: feet + glam::Vec3::Z * Stance::Stand.view_height(),
+    }
+}
 
 impl Server {
     /// Test-facing: each client slot's playing spawns, in order, go to these
@@ -690,5 +707,346 @@ impl Server {
         );
         self.game.fs = Some(fs);
         self.set_protocol(self.game.proto);
+    }
+
+    /// Every entity the map puts on the wire, before any client's cull. The
+    /// gates read it: `entities_ab` diffs it against the trace's union, and
+    /// `entity_vis_ab` culls it at each sample's origin. A snapshot's own list
+    /// is already culled, so reading one back would test the cull twice and
+    /// the object table not at all.
+    pub fn all_entities(&mut self) -> BTreeMap<u32, msg::EntityState> {
+        let proto = self.game.proto;
+        self.game
+            .module
+            .script
+            .as_mut()
+            .map_or_else(BTreeMap::new, |rt| rt.packet_entities(proto))
+    }
+
+    /// The frame the next snapshots take their entities from, as
+    /// `snapshots_begin` builds it: a gate that culls from a spot of its
+    /// own reads the server's own cull ([`crate::archive::WorldFrame::entities_for`]).
+    pub fn world_frame(&mut self) -> crate::archive::WorldFrame {
+        self.build_world_frame()
+    }
+
+    /// Puts a client where the caller says, the way the `spawn` builtin does.
+    /// Test-facing: a gate about what two clients see of each other needs them
+    /// somewhere known, and both spawn weighted-random.
+    pub fn place_client(&mut self, slot: usize, origin: [f32; 3], yaw_deg: f32) {
+        let Some(c) = self.core.clients.get_mut(slot).and_then(Option::as_mut) else {
+            return;
+        };
+        if let Some(sim) = c.sim.as_mut() {
+            // The spawn builtin's reset is followed by the script's ammo
+            // ops in the same frame; nothing follows this one, so the ammo
+            // rides across.
+            let (ammo, clip) = (sim.ps.ammo, sim.ps.ammoclip);
+            sim.become_player(origin, yaw_deg, [0; 3]);
+            sim.ps.ammo = ammo;
+            sim.ps.ammoclip = clip;
+        }
+        // What a spawn into play leaves; the next end frame rewrites it off
+        // the script's `sessionstate`.
+        if let Some(rt) = self.game.module.script.as_mut() {
+            rt.set_client_takedamage(slot, true);
+        }
+    }
+
+    /// The blasts the last tick's missile pass set off, after the same
+    /// tick's radius damage pass charged them. Test-facing: the replay in
+    /// `tests/common` counts them per frame.
+    pub fn pending_explosions(&self) -> &[crate::game::missile::Explosion] {
+        &self.game.module.pending_explosions
+    }
+
+    /// The running level's game host, for a gate that reads entity state.
+    #[cfg(test)]
+    pub(crate) fn game_host(&self) -> Option<&crate::game::host::GameHost> {
+        self.game.module.script.as_ref().map(|rt| &rt.host)
+    }
+
+    /// Puts a client back to spectating, where every client starts and where
+    /// a dead one waits. Test-facing, like `place_client`.
+    pub fn spectate_client(&mut self, slot: usize, origin: [f32; 3]) {
+        let Some(c) = self.core.clients.get_mut(slot).and_then(Option::as_mut) else {
+            return;
+        };
+        if let Some(sim) = c.sim.as_mut() {
+            sim.become_spectator(origin, 0.0, [0; 3]);
+        }
+    }
+
+    /// Every entity the scripts see as `classname` "player", with the origin
+    /// the script side reads, for the gate that pins both. Test-facing: the
+    /// server itself never asks.
+    pub fn script_players(&mut self) -> Vec<(usize, [f32; 3])> {
+        let Some(rt) = self.game.module.script.as_mut() else {
+            return Vec::new();
+        };
+        let live: Vec<usize> = (0..self.core.clients.len())
+            .filter(|slot| self.core.clients[*slot].is_some())
+            .collect();
+        let mut out = Vec::new();
+        for slot in live {
+            if rt.client_field(slot, "classname").as_deref() == Some("player") {
+                out.push((slot, rt.client_origin(slot)));
+            }
+        }
+        out
+    }
+
+    /// Test-facing: the shots and blasts the bots hear next tick.
+    pub fn bot_noises(&self) -> &[crate::bots::Noise] {
+        &self.game.module.driver.noises
+    }
+
+    /// Test-facing, for the bot gates: the slots the bots hold.
+    pub fn bot_slots(&self) -> Vec<usize> {
+        self.game.module.driver.bots.keys().copied().collect()
+    }
+
+    /// Test-facing: where a bot's body is and what it is doing.
+    pub fn bot_body(&self, slot: usize) -> Option<crate::bots::BotBody> {
+        let sim = self.core.clients[slot].as_ref()?.sim.as_ref()?;
+        Some(crate::bots::BotBody {
+            origin: sim.ps.origin.into(),
+            on_ladder: sim.ps.on_ladder,
+            on_ground: sim.ps.on_ground,
+            playing: sim.pm_type == crate::spectate::PmType::Normal && !sim.dead,
+            dead: sim.dead,
+            health: sim.health,
+            clip: {
+                let d = self.game.module.weapon_table.get(sim.ps.weapon as usize);
+                d.map_or(-1, |d| sim.ps.ammoclip[d.clip_index])
+            },
+            weapon: sim.ps.weapon,
+            gun: self
+                .game
+                .module
+                .weapon_table
+                .get(sim.ps.weapon as usize)
+                .is_some_and(|d| d.weapon_type == "bullet"),
+            unsticking: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .is_some_and(|b| b.unsticking()),
+            sprinting: sim.ps.sprinting,
+            sprint_leg: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .is_some_and(|b| b.sprint_leg()),
+            deployed: sim.ps.deployed(),
+            engaged: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .is_some_and(|b| b.engaged()),
+            retreating: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .map_or(0, |b| b.retreating()),
+            seat: sim.seat.map(|s| (s.vehicle, s.pos)),
+            crew_wait: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .is_some_and(|b| b.waiting_for_crew()),
+            boardings: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .map_or(0, |b| b.boardings()),
+            rockets_at_armor: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .map_or(0, |b| b.rockets_at_armor()),
+            target: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .and_then(|b| b.target_slot()),
+            firing: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .is_some_and(|b| b.fired()),
+            clip_size: self
+                .game
+                .module
+                .weapon_table
+                .get(sim.ps.weapon as usize)
+                .filter(|d| d.weapon_type == "bullet")
+                .map_or(0, |d| d.clip_size.min(i16::MAX as u32) as i16),
+            throws: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .map_or(0, |b| b.throws()),
+            yaw: sim.view_angles()[1],
+            walking: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .is_some_and(|b| b.walking()),
+            holds_cover: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .is_some_and(|b| b.holds_cover()),
+            on_objective: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .is_some_and(|b| b.on_objective()),
+            objective: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .and_then(|b| b.objective_point()),
+            exposure: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .and_then(|b| b.exposure()),
+            guard: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .and_then(|b| b.guard_point()),
+        })
+    }
+
+    /// Read-only, for `bot_match`'s `DIGEST=`: a client's last cmd that ran
+    /// (`pers.cmd`), its playerstate and its health.
+    pub fn bot_digest_state(
+        &self,
+        slot: usize,
+    ) -> Option<(UserCmd, &vcod_common::pmove::PlayerState, i32)> {
+        let sim = self.core.clients.get(slot)?.as_ref()?.sim.as_ref()?;
+        Some((sim.pers_cmd, &sim.ps, sim.health))
+    }
+
+    /// Test-facing: a bot's peeks, re-peeks and hunt arrivals
+    /// (`Bot::tactics`).
+    pub fn bot_tactics(&self, slot: usize) -> Option<[u32; 3]> {
+        Some(self.game.module.driver.bots.get(&slot)?.tactics())
+    }
+
+    /// Test-facing: whether a bot holds a cover spot, and its `ps.lean`.
+    pub fn bot_cover_state(&self, slot: usize) -> Option<(bool, f32)> {
+        let sim = self.core.clients[slot].as_ref()?.sim.as_ref()?;
+        Some((
+            self.game.module.driver.bots.get(&slot)?.holds_cover(),
+            sim.ps.lean,
+        ))
+    }
+
+    /// Test-facing: each `re` objective's goal standing point
+    /// (`ReObjView::goal`); empty on any other level.
+    pub fn re_goals(&mut self) -> Vec<[f32; 3]> {
+        self.bot_re()
+            .map(|(_, _, o)| o.iter().map(|(v, _, _)| v.goal).collect())
+            .unwrap_or_default()
+    }
+
+    /// Test-facing: each `re` objective's return clock while it lies
+    /// dropped (`ReObjView::returns`); empty on any other level.
+    pub fn re_returns(&mut self) -> Vec<Option<([f32; 3], f32)>> {
+        self.bot_re()
+            .map(|(_, _, o)| o.iter().map(|(v, _, _)| v.returns).collect())
+            .unwrap_or_default()
+    }
+
+    /// Test-facing: a bot's current waypoint node and the next, as points.
+    pub fn bot_waypoints(&self, slot: usize) -> (Option<[f32; 3]>, Option<[f32; 3]>) {
+        let (Some(g), Some(f)) = (
+            self.game.module.driver.nav.as_ref(),
+            self.game.module.driver.paths.get(&slot),
+        ) else {
+            return (None, None);
+        };
+        let at = |n: Option<u32>| n.map(|n| g.nodes[n as usize].into());
+        let (a, b) = f.current();
+        (at(a), at(b))
+    }
+
+    /// Test-facing: the edges the bots' followers gave up on, and those
+    /// with another body near (`bots::driver::BotDriver::edge_stalls`).
+    pub fn bot_edge_stalls(&self) -> [u32; 2] {
+        self.game.module.driver.edge_stalls
+    }
+
+    /// Read-only, for `bot_match`: per side (axis, allies), the cues that
+    /// pulled guards back, those a guard came back from, and the ms from
+    /// cue to the first back (bot-objectives.md 14).
+    pub fn bot_cue_tally(&self) -> [(u32, u32, u64); 2] {
+        self.game.module.driver.posts.cue_tally()
+    }
+
+    /// Test-facing: the ticks a bot has waited aside for a climber
+    /// (`nav::Follower::yielding`).
+    pub fn bot_yielding(&self, slot: usize) -> u32 {
+        self.game
+            .module
+            .driver
+            .paths
+            .get(&slot)
+            .map_or(0, |f| f.yielding())
+    }
+
+    /// Test-facing: the name a bot joined with.
+    pub fn bot_name(&self, slot: usize) -> Option<&str> {
+        self.game
+            .module
+            .driver
+            .bots
+            .get(&slot)
+            .map(|b| b.name.as_str())
+    }
+
+    /// Test-facing: the script team value a bot landed in.
+    pub fn bot_team(&mut self, slot: usize) -> i32 {
+        self.game
+            .module
+            .script
+            .as_mut()
+            .map_or(0, |rt| rt.client_team(slot))
     }
 }
