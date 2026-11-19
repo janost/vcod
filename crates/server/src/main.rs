@@ -420,6 +420,9 @@ fn cod1_server(args: Args, sock: UdpSocket, sets_after_map: &[bool]) -> Result<(
         protocol.transport.version,
         protocol.transport.short_version
     );
+    if let Some(w) = vcod_common::net::protocol::patch_warning_of(fs.paks()) {
+        log::warn!("{w}");
+    }
     let bots_shoot = args.bots_fire();
     let mut server = Server::with_seed(
         ServerConfig {
@@ -522,7 +525,10 @@ fn cod2_server(args: Args, sock: UdpSocket) -> Result<(vcod_server::cod2::Cod2Se
         }),
         sleep: Box::new(net_sleep),
     });
-    log::info!("vcod-server: CoD2 {} on udp/{}", args.map, args.port);
+    log::info!("vcod-server: CoD2 1.3 {} on udp/{}", args.map, args.port);
+    if let Some(w) = vcod_common::game_dir::patch_warning(&args.game_dir, Game::Cod2) {
+        log::warn!("{w}");
+    }
     master_hint(&args.set);
     Ok((server, (sock, packets)))
 }
@@ -571,7 +577,7 @@ fn cod4_server(args: Args, sock: UdpSocket) -> Result<(vcod_server::cod4::Cod4Se
         }),
         sleep: Box::new(net_sleep),
     });
-    log::info!("vcod-server: CoD4 {} on udp/{}", args.map, args.port);
+    log::info!("vcod-server: CoD4 1.7 {} on udp/{}", args.map, args.port);
     master_hint(&args.set);
     Ok((server, (sock, packets)))
 }
