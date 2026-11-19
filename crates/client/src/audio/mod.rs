@@ -1436,15 +1436,7 @@ impl AudioSystem {
         // over the next few frames like any other change.
         let (db, pan) = self
             .table
-            .update(
-                &self.listener,
-                &HashMap::new(),
-                &HashMap::new(),
-                &HashMap::new(),
-                master,
-            )
-            .into_iter()
-            .find(|u| u.id == id)
+            .update_one(id, &self.listener, master)
             .map(|u| (amplitude_db(u.gain), u.pan))
             // Unreachable; silence if it ever is.
             .unwrap_or((-60.0, 0.0));
@@ -2227,22 +2219,23 @@ impl AudioSystem {
 
         if !self.table.is_empty() {
             // The ridden entity has no drawn body, so `entity_pos` never
-            // carries it.
-            let mut positions = entity_pos.clone();
-            positions.insert(self.ps_entity, self.listener.pos);
-            // A 3D music row stays on the listener, as a 3D ambient would.
-            positions.insert(cues::MUSIC_ENTITY, self.listener.pos);
+            // carries it; a 3D music row stays on the listener, as a 3D
+            // ambient would.
+            let (ps, l) = (self.ps_entity, &self.listener);
+            let positions = |n: u32| match n {
+                _ if n == ps || n == cues::MUSIC_ENTITY => Some(l.pos),
+                _ => entity_pos.get(&n).copied(),
+            };
             // cgame `vmMain` 13: the centity's origin and `AnglesToAxis` of
-            // its `lerpAngles`; the ridden body's are the view's.
-            let mut axes: HashMap<u32, Mat3> = entity_angles
-                .iter()
-                .map(|(&n, a)| {
+            // its `lerpAngles`; the ridden body's are the view's. Only a tag
+            // voice asks.
+            let axes = |n: u32| match n {
+                _ if n == ps => Some(Mat3::from_cols(l.forward, -l.right, l.up)),
+                _ => entity_angles.get(&n).map(|a| {
                     let [f, l, u] = vcod_common::pmove::aim::angles_to_axis_msvc(a.to_array());
-                    (n, Mat3::from_cols(f.into(), l.into(), u.into()))
-                })
-                .collect();
-            let l = &self.listener;
-            axes.insert(self.ps_entity, Mat3::from_cols(l.forward, -l.right, l.up));
+                    Mat3::from_cols(f.into(), l.into(), u.into())
+                }),
+            };
             let occluded = match world {
                 Some(w) => {
                     self.occlusion
@@ -2324,8 +2317,8 @@ impl AudioSystem {
         let master = self.master();
         let gains = self.table.update(
             &self.listener,
-            &HashMap::new(),
-            &HashMap::new(),
+            &|_| None,
+            &|_| None,
             &HashMap::new(),
             master,
         );

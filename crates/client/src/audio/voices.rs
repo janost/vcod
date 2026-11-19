@@ -367,66 +367,113 @@ impl VoiceTable {
     pub fn update(
         &mut self,
         listener: &Listener,
-        entity_pos: &HashMap<u32, Vec3>,
-        entity_axes: &HashMap<u32, Mat3>,
+        entity_pos: &dyn Fn(u32) -> Option<Vec3>,
+        entity_axes: &dyn Fn(u32) -> Option<Mat3>,
         occlusion: &HashMap<VoiceId, f32>,
         master_volume: f32,
     ) -> Vec<VoiceUpdate> {
-        let master_live = self
-            .voices
-            .iter()
-            .any(|v| v.master_slave == MasterSlave::Master);
+        let master_live = self.master_live();
         let mut out = Vec::with_capacity(self.voices.len());
         for v in &mut self.voices {
             // Unconditional so a 2D voice's tracked position stays current
             // too.
             match &mut v.source {
                 Source::Entity { num, pos } => {
-                    if let Some(p) = entity_pos.get(num) {
-                        *pos = *p;
+                    if let Some(p) = entity_pos(*num) {
+                        *pos = p;
                     }
                 }
                 Source::Tag { num, pos } => {
-                    if let Some(&p) = entity_pos.get(num) {
-                        let axis = entity_axes.get(num).copied().unwrap_or(Mat3::IDENTITY);
+                    if let Some(p) = entity_pos(*num) {
+                        let axis = entity_axes(*num).unwrap_or(Mat3::IDENTITY);
                         *pos = p + axis * *v.offset.get_or_insert(axis.transpose() * (*pos - p));
                     }
                 }
                 Source::Point(_) => {}
             }
-            let (spatial_scale, pan_v) = if v.spatial {
-                let p = v.source.pos();
-                let d = p.distance(listener.pos);
-                let fall = match &v.curve {
-                    Some(c) => c.attenuate(d, v.dist.0, v.dist.1),
-                    None => falloff(d, v.dist.0, v.dist.1),
-                };
-                (
-                    fall * occlusion.get(&v.id).copied().unwrap_or(1.0),
-                    pan(listener, p),
-                )
-            } else {
-                (1.0, 0.0)
+            let mix = Mix {
+                listener,
+                occlusion,
+                master_live,
+                slave_lerp: self.slave_lerp,
+                channel_volume: self.channel_volume,
+                master_volume,
             };
-            let scaled = v.volume * spatial_scale;
-            let capped = match (v.master_slave, self.slave_lerp) {
-                // `SND_GetLerpedSlavePercentage`: 1 - (1 - pct) * lerp.
-                (MasterSlave::Slave(pct), Some(lerp)) if lerp != 0.0 => {
-                    scaled * (1.0 - (1.0 - pct) * lerp)
-                }
-                (MasterSlave::Slave(level), None) if master_live => scaled.min(level),
-                _ => scaled,
-            };
-            let channel = self
-                .channel_volume
-                .map_or(1.0, |c| c.get(v.channel as usize).copied().unwrap_or(1.0));
-            out.push(VoiceUpdate {
-                id: v.id,
-                gain: capped * master_volume * channel,
-                pan: pan_v,
-            });
+            out.push(mix.gain(v));
         }
         out
+    }
+
+    /// [`Self::update`]'s gain and pan for voice `id` alone, no entity
+    /// position known: a new voice's first placement.
+    pub fn update_one(
+        &self,
+        id: VoiceId,
+        listener: &Listener,
+        master_volume: f32,
+    ) -> Option<VoiceUpdate> {
+        let mix = Mix {
+            listener,
+            occlusion: &HashMap::new(),
+            master_live: self.master_live(),
+            slave_lerp: self.slave_lerp,
+            channel_volume: self.channel_volume,
+            master_volume,
+        };
+        self.voices.iter().find(|v| v.id == id).map(|v| mix.gain(v))
+    }
+
+    fn master_live(&self) -> bool {
+        self.voices
+            .iter()
+            .any(|v| v.master_slave == MasterSlave::Master)
+    }
+}
+
+/// What a voice's gain reads beside the voice ([`VoiceTable::update`]).
+struct Mix<'a> {
+    listener: &'a Listener,
+    occlusion: &'a HashMap<VoiceId, f32>,
+    master_live: bool,
+    slave_lerp: Option<f32>,
+    channel_volume: Option<[f32; 11]>,
+    master_volume: f32,
+}
+
+impl Mix<'_> {
+    fn gain(&self, v: &Voice) -> VoiceUpdate {
+        let listener = self.listener;
+        let (spatial_scale, pan_v) = if v.spatial {
+            let p = v.source.pos();
+            let d = p.distance(listener.pos);
+            let fall = match &v.curve {
+                Some(c) => c.attenuate(d, v.dist.0, v.dist.1),
+                None => falloff(d, v.dist.0, v.dist.1),
+            };
+            (
+                fall * self.occlusion.get(&v.id).copied().unwrap_or(1.0),
+                pan(listener, p),
+            )
+        } else {
+            (1.0, 0.0)
+        };
+        let scaled = v.volume * spatial_scale;
+        let capped = match (v.master_slave, self.slave_lerp) {
+            // `SND_GetLerpedSlavePercentage`: 1 - (1 - pct) * lerp.
+            (MasterSlave::Slave(pct), Some(lerp)) if lerp != 0.0 => {
+                scaled * (1.0 - (1.0 - pct) * lerp)
+            }
+            (MasterSlave::Slave(level), None) if self.master_live => scaled.min(level),
+            _ => scaled,
+        };
+        let channel = self
+            .channel_volume
+            .map_or(1.0, |c| c.get(v.channel as usize).copied().unwrap_or(1.0));
+        VoiceUpdate {
+            id: v.id,
+            gain: capped * self.master_volume * channel,
+            pan: pan_v,
+        }
     }
 }
 
@@ -538,7 +585,7 @@ mod tests {
         let loc = put(&mut t, nv2d(Channel::Auto));
         let mut pos = HashMap::new();
         pos.insert(3u32, -l.right * 100.0);
-        let ups = t.update(&l, &pos, &HashMap::new(), &HashMap::new(), 1.0);
+        let ups = t.update(&l, &|n| pos.get(&n).copied(), &|_| None, &HashMap::new(), 1.0);
         let get = |id| ups.iter().find(|u| u.id == id).unwrap();
         assert!((get(p).gain - 0.5).abs() < 1e-5); // 600 into a 100..1100 range
         assert!((get(p).pan - 1.0).abs() < 1e-5);
@@ -546,7 +593,7 @@ mod tests {
         assert!((get(e).pan + 1.0).abs() < 1e-5);
         assert_eq!((get(loc).gain, get(loc).pan), (1.0, 0.0));
         // Entity gone from the map: keeps its last position.
-        let ups = t.update(&l, &HashMap::new(), &HashMap::new(), &HashMap::new(), 1.0);
+        let ups = t.update(&l, &|_| None, &|_| None, &HashMap::new(), 1.0);
         assert!((get_from(&ups, e).pan + 1.0).abs() < 1e-5);
     }
 
@@ -562,7 +609,7 @@ mod tests {
         let id = put(&mut t, v);
         let flat = put(&mut t, nv2d(Channel::Auto2d));
         let again = put(&mut t, nv2d(Channel::Auto2d));
-        let ups = t.update(&l, &HashMap::new(), &HashMap::new(), &HashMap::new(), 1.0);
+        let ups = t.update(&l, &|_| None, &|_| None, &HashMap::new(), 1.0);
         // 350 is a quarter of the way through 100..1100: the knot's 0.8.
         assert!((get_from(&ups, id).gain - 0.8).abs() < 1e-5);
         assert_eq!(get_from(&ups, flat).gain, 1.0);
@@ -578,12 +625,12 @@ mod tests {
         let tag = Vec3::new(30.0, 0.0, 60.0);
         let id = put(&mut t, nv(Source::Tag { num: 4, pos: tag }, Channel::Auto));
         let mut pos = HashMap::from([(4u32, Vec3::new(10.0, 0.0, 0.0))]);
-        t.update(&l, &pos, &HashMap::new(), &HashMap::new(), 1.0);
+        t.update(&l, &|n| pos.get(&n).copied(), &|_| None, &HashMap::new(), 1.0);
         assert_eq!(t.source(id).unwrap().pos(), tag);
         pos.insert(4, Vec3::new(110.0, 50.0, 0.0));
-        t.update(&l, &pos, &HashMap::new(), &HashMap::new(), 1.0);
+        t.update(&l, &|n| pos.get(&n).copied(), &|_| None, &HashMap::new(), 1.0);
         assert_eq!(t.source(id).unwrap().pos(), Vec3::new(130.0, 50.0, 60.0));
-        t.update(&l, &HashMap::new(), &HashMap::new(), &HashMap::new(), 1.0);
+        t.update(&l, &|_| None, &|_| None, &HashMap::new(), 1.0);
         assert_eq!(t.source(id).unwrap().pos(), Vec3::new(130.0, 50.0, 60.0));
     }
 
@@ -602,10 +649,10 @@ mod tests {
         let id = put(&mut t, nv(Source::Tag { num: 4, pos: tag }, Channel::Auto));
         let pos = HashMap::from([(4u32, origin)]);
         let mut axes = HashMap::from([(4u32, axis(0.0))]);
-        t.update(&l, &pos, &axes, &HashMap::new(), 1.0);
+        t.update(&l, &|n| pos.get(&n).copied(), &|n| axes.get(&n).copied(), &HashMap::new(), 1.0);
         assert_eq!(t.source(id).unwrap().pos(), tag);
         axes.insert(4, axis(90.0));
-        t.update(&l, &pos, &axes, &HashMap::new(), 1.0);
+        t.update(&l, &|n| pos.get(&n).copied(), &|n| axes.get(&n).copied(), &HashMap::new(), 1.0);
         let got = t.source(id).unwrap().pos();
         assert!(got.abs_diff_eq(Vec3::new(10.0, 30.0, 60.0), 1e-4), "{got}");
         // Started while the entity faced 90: the offset is taken in that frame.
@@ -613,9 +660,9 @@ mod tests {
             &mut t,
             nv(Source::Tag { num: 4, pos: got }, Channel::Weapon),
         );
-        t.update(&l, &pos, &axes, &HashMap::new(), 1.0);
+        t.update(&l, &|n| pos.get(&n).copied(), &|n| axes.get(&n).copied(), &HashMap::new(), 1.0);
         axes.insert(4, axis(180.0));
-        t.update(&l, &pos, &axes, &HashMap::new(), 1.0);
+        t.update(&l, &|n| pos.get(&n).copied(), &|n| axes.get(&n).copied(), &HashMap::new(), 1.0);
         let got = t.source(id).unwrap().pos();
         assert!(got.abs_diff_eq(Vec3::new(-20.0, 0.0, 60.0), 1e-4), "{got}");
     }
@@ -632,8 +679,8 @@ mod tests {
         let id = put(&mut t, v);
         let ups = t.update(
             &Listener::default(),
-            &HashMap::new(),
-            &HashMap::new(),
+            &|_| None,
+            &|_| None,
             &HashMap::new(),
             0.5,
         );
@@ -651,8 +698,8 @@ mod tests {
         t.set_channel_volumes(vols);
         let ups = t.update(
             &Listener::default(),
-            &HashMap::new(),
-            &HashMap::new(),
+            &|_| None,
+            &|_| None,
             &HashMap::new(),
             1.0,
         );
@@ -668,8 +715,8 @@ mod tests {
         let s = put(&mut t, slave);
         let ups = t.update(
             &Listener::default(),
-            &HashMap::new(),
-            &HashMap::new(),
+            &|_| None,
+            &|_| None,
             &HashMap::new(),
             1.0,
         );
@@ -679,8 +726,8 @@ mod tests {
         let m = put(&mut t, master);
         let ups = t.update(
             &Listener::default(),
-            &HashMap::new(),
-            &HashMap::new(),
+            &|_| None,
+            &|_| None,
             &HashMap::new(),
             1.0,
         );
@@ -689,8 +736,8 @@ mod tests {
         t.remove(m);
         let ups = t.update(
             &Listener::default(),
-            &HashMap::new(),
-            &HashMap::new(),
+            &|_| None,
+            &|_| None,
             &HashMap::new(),
             1.0,
         );
@@ -709,7 +756,7 @@ mod tests {
         let s = put(&mut t, slave);
         let gain = |t: &mut VoiceTable| {
             let l = Listener::default();
-            let ups = t.update(&l, &HashMap::new(), &HashMap::new(), &HashMap::new(), 1.0);
+            let ups = t.update(&l, &|_| None, &|_| None, &HashMap::new(), 1.0);
             get_from(&ups, s).gain
         };
         assert_eq!(gain(&mut t), 0.2);
@@ -743,8 +790,8 @@ mod tests {
         put(&mut t, master);
         let ups = t.update(
             &Listener::default(),
-            &HashMap::new(),
-            &HashMap::new(),
+            &|_| None,
+            &|_| None,
             &HashMap::new(),
             1.0,
         );
@@ -779,7 +826,7 @@ mod tests {
         master.master_slave = MasterSlave::Master;
         put(&mut t, master);
         // falloff(600, 100, 1100) = 0.5; min(0.5, 0.25) * 0.5 = 0.125.
-        let ups = t.update(&l, &HashMap::new(), &HashMap::new(), &HashMap::new(), 0.5);
+        let ups = t.update(&l, &|_| None, &|_| None, &HashMap::new(), 0.5);
         assert!((get_from(&ups, s).gain - 0.125).abs() < 1e-5);
 
         // Cap above scale*v; min(0.5, 0.75) * 0.5 = 0.25.
@@ -791,7 +838,7 @@ mod tests {
         let mut master = nv2d(Channel::Auto);
         master.master_slave = MasterSlave::Master;
         put(&mut t, master);
-        let ups = t.update(&l, &HashMap::new(), &HashMap::new(), &HashMap::new(), 0.5);
+        let ups = t.update(&l, &|_| None, &|_| None, &HashMap::new(), 0.5);
         assert!((get_from(&ups, s).gain - 0.25).abs() < 1e-5);
     }
 
