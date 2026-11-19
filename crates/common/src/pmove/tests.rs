@@ -1,6 +1,20 @@
 use super::*;
+use super::{
+    angles::*, footsteps::*, frame::*, ground::*, jump::*, ladder::*, land::*, prone::*, slide::*,
+    stance::*, state::*, walk::*,
+};
+use crate::collision::MASK_PLAYERSOLID;
 use crate::collision::{CollisionWorld, test_world};
+use crate::movetrace::MoveWorld;
 use crate::movetrace::{Body, CONTENTS_BODY};
+use crate::net::event_ids::EV_STEP_VIEW;
+use crate::net::event_ids::{
+    EV_FOOTSTEP_RUN_BASE, EV_FOOTSTEP_WALK_BASE, EV_JUMP_BASE, EV_LANDING_BASE,
+};
+use crate::net::event_ids::{EV_STANCE_FORCE_CROUCH, EV_STANCE_FORCE_PRONE, EV_STANCE_FORCE_STAND};
+use crate::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
+use crate::weapon::WeaponDef;
+use crate::x87;
 
 fn flat() -> CollisionWorld {
     test_world(&[])
