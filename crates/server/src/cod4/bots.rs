@@ -790,6 +790,7 @@ mod tests {
     use crate::engine::GameModule;
     use crate::game::cod4::bot_feed::Cod4Objectives;
     use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
+    use std::rc::Rc;
     use std::time::{Duration, Instant};
 
     /// A round restart under the same gametype keeps the bots' world (and
@@ -821,17 +822,18 @@ mod tests {
                 sv.take_outgoing();
             }
         };
-        let world = |sv: &Cod4Server| sv.game.bots.as_ref().unwrap().world_ptr();
+        let world = |sv: &Cod4Server| sv.game.bots.as_ref().unwrap().world_rc();
         run(&mut sv, 20);
         let war = world(&sv).expect("no world built");
         sv.push_console("fast_restart");
         run(&mut sv, 20);
-        assert_eq!(world(&sv), Some(war), "a round restart rebuilt the world");
+        let kept = world(&sv).expect("no world after the restart");
+        assert!(Rc::ptr_eq(&kept, &war), "a round restart rebuilt the world");
         sv.push_console("g_gametype sd");
         sv.push_console("map_restart");
         run(&mut sv, 20);
         let sd = world(&sv).expect("no world after the change");
-        assert_ne!(sd, war, "the war world stayed under sd");
+        assert!(!Rc::ptr_eq(&sd, &war), "the war world stayed under sd");
     }
 
     /// Two bots on a fresh mp_crash `koth` level enter it as a loading
