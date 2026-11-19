@@ -1,6 +1,7 @@
 //! pk3 downloads over the Q3/RTCW UDP download protocol (docs/protocol-1.1.md,
-//! svc_download). Pak bookkeeping and the file spool; the wire handling is on
-//! `NetClient`.
+//! svc_download). Pak bookkeeping, the file spool every game's client writes
+//! into, and the block step CoD2's and CoD4's share; CoD1's wire handling is
+//! on `NetClient`.
 
 use anyhow::{Context, bail};
 use std::fs::File;
@@ -280,9 +281,8 @@ pub fn listed_checksum(systeminfo: &str, remote: &str) -> Option<i32> {
 /// pak is under 300 MiB.
 pub const MAX_DOWNLOAD_SIZE: u32 = 512 << 20;
 
-/// One transfer, spooled into `<dest>.tmp` until the EOF block validates it as
-/// a zip and renames it into place. Never overwrites an existing destination.
-/// Dropped unfinished, it removes its spool.
+/// One transfer, spooled into `<dest>.tmp` until the EOF block validates it
+/// and renames it into place. Dropped unfinished, it removes its spool.
 pub struct Download {
     /// As requested, e.g. `main/foo.pk3`.
     pub remote: String,
@@ -298,15 +298,23 @@ pub struct Download {
 }
 
 impl Download {
+    /// A spool for `dest`, which must not exist yet.
     pub fn create(remote: &str, dest: &Path) -> anyhow::Result<Self> {
         if dest.exists() {
             bail!("{} already exists, refusing to overwrite", dest.display());
         }
+        Self::replacing(remote, dest)
+    }
+
+    /// A spool whose [`Self::land`] replaces whatever sits at `dest`.
+    pub fn replacing(remote: &str, dest: &Path) -> anyhow::Result<Self> {
         if let Some(dir) = dest.parent() {
             std::fs::create_dir_all(dir)
                 .with_context(|| format!("cannot create {}", dir.display()))?;
         }
-        let tmp = dest.with_extension("pk3.tmp");
+        let mut tmp = dest.as_os_str().to_owned();
+        tmp.push(".tmp");
+        let tmp = PathBuf::from(tmp);
         let file =
             File::create(&tmp).with_context(|| format!("cannot create {}", tmp.display()))?;
         Ok(Download {
@@ -322,6 +330,11 @@ impl Download {
 
     pub fn dest(&self) -> &Path {
         &self.dest
+    }
+
+    /// The spool file, for a check before [`Self::land`].
+    pub fn spooled(&self) -> &Path {
+        &self.tmp
     }
 
     /// A second handle on the spool, for an HTTP transfer's thread.
@@ -354,13 +367,11 @@ impl Download {
             .map_err(anyhow::Error::from)
             .and_then(|f| zip::ZipArchive::new(f).map_err(anyhow::Error::from));
         if let Err(e) = checked {
-            let _ = std::fs::remove_file(&self.tmp);
             bail!("{} is not a valid pk3: {e}", self.remote);
         }
         if let Some(want) = want {
             let got = crate::pak_checksum::pak_checksums(&self.tmp, 0)?.checksum;
             if got != want {
-                let _ = std::fs::remove_file(&self.tmp);
                 return Err(WrongChecksum {
                     remote: std::mem::take(&mut self.remote),
                     got,
@@ -369,6 +380,12 @@ impl Download {
                 .into());
             }
         }
+        self.land()
+    }
+
+    /// The spool renamed into place unchecked.
+    pub fn land(mut self) -> anyhow::Result<()> {
+        self.file = None;
         std::fs::rename(&self.tmp, &self.dest)
             .with_context(|| format!("cannot rename into {}", self.dest.display()))
     }
@@ -378,11 +395,77 @@ impl Download {
 }
 
 impl Drop for Download {
-    /// Past a successful [`Download::finish`] the spool was renamed away
-    /// and this finds nothing.
+    /// Past a successful [`Download::land`] the spool was renamed away and
+    /// this finds nothing.
     fn drop(&mut self) {
         self.file = None;
         let _ = std::fs::remove_file(&self.tmp);
+    }
+}
+
+/// One file coming over UDP into its spool: `clc.downloadBlock`, the block
+/// due, and `clc.downloadSize`, block 0's announced size (CoD2
+/// `CL_ParseDownload` Mac 0x1d59c8, CoD4 iw3mp.exe 0x474440).
+pub struct UdpFile {
+    pub spool: Download,
+    /// The block expected next.
+    pub block: i32,
+    /// 0 until block 0 or a redirect names it.
+    pub size: u64,
+}
+
+/// What one block did to a [`UdpFile`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum Block {
+    /// An older block, a resend already written.
+    Old,
+    /// A block past the one due: `retransdl <due>`.
+    Ahead(i32),
+    /// Written: `nextdl <block>`, and on the empty block the file is all in.
+    Took { block: i32, eof: bool },
+    /// More than the announced size, or an announced size past the cap:
+    /// `stopdl`, and the transfer fails.
+    TooBig(String),
+    /// The spool would not take it: `stopdl`, and the file is passed over.
+    Unwritable(String),
+}
+
+impl UdpFile {
+    pub fn new(spool: Download) -> Self {
+        UdpFile {
+            spool,
+            block: 0,
+            size: 0,
+        }
+    }
+
+    /// One `svc_download` block: `size` is block 0's, `cap` vcod's bound on
+    /// a file, on top of the announced size.
+    pub fn take(&mut self, block: i32, size: Option<i32>, data: &[u8], cap: u64) -> Block {
+        if block != self.block {
+            return match block > self.block {
+                true => Block::Ahead(self.block),
+                false => Block::Old,
+            };
+        }
+        if let Some(s) = size {
+            self.size = s.max(0) as u64;
+        }
+        let landed = self.spool.received + data.len() as u64;
+        if self.size > cap || landed > self.size {
+            return Block::TooBig(format!(
+                "{} sent {landed} bytes, {} announced (at most {cap})",
+                self.spool.remote, self.size
+            ));
+        }
+        if let Err(e) = self.spool.accept_block(data) {
+            return Block::Unwritable(format!("{e:#}"));
+        }
+        self.block += 1;
+        Block::Took {
+            block,
+            eof: data.is_empty(),
+        }
     }
 }
 
@@ -689,7 +772,48 @@ mod tests {
             .expect("a WrongChecksum");
         assert_eq!((wrong.remote.as_str(), wrong.want), ("main/foo.pk3", 1234));
         assert!(!dest.exists());
-        assert!(!dest.with_extension("pk3.tmp").exists());
+        assert!(!dir.join("main/foo.pk3.tmp").exists());
+    }
+
+    /// The block step: a resend is ignored, a block ahead asks again, the
+    /// announced size and the cap bound the bytes, the empty block ends it.
+    #[test]
+    fn udp_blocks_land_in_order_and_inside_the_announced_size() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("main/z.iwd");
+        let mut f = UdpFile::new(Download::create("main/z.iwd", &dest).unwrap());
+        assert_eq!(f.take(1, None, b"x", 10), Block::Ahead(0));
+        assert_eq!(
+            f.take(0, Some(3), b"ab", 10),
+            Block::Took {
+                block: 0,
+                eof: false
+            }
+        );
+        assert_eq!(f.take(0, Some(3), b"ab", 10), Block::Old);
+        assert!(matches!(f.take(1, None, b"cd", 10), Block::TooBig(_)));
+        assert_eq!(
+            f.take(1, None, b"c", 10),
+            Block::Took {
+                block: 1,
+                eof: false
+            }
+        );
+        assert_eq!(
+            f.take(2, None, b"", 10),
+            Block::Took {
+                block: 2,
+                eof: true
+            }
+        );
+        f.spool.land().unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"abc");
+        let mut f =
+            UdpFile::new(Download::create("main/y.iwd", &tmp.path().join("main/y.iwd")).unwrap());
+        assert!(
+            matches!(f.take(0, Some(11), b"", 10), Block::TooBig(_)),
+            "past the cap"
+        );
     }
 
     #[test]

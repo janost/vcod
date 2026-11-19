@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 use vcod_common::net::codec::{MsgReader, MsgWriter};
-use vcod_common::net::download::{Download, MAX_DOWNLOAD_SIZE};
+use vcod_common::net::download::{Block, Download, MAX_DOWNLOAD_SIZE, UdpFile};
 pub use vcod_common::pak_checksum::fs_iw_iwd;
 
 use super::ops::Svc;
@@ -202,12 +202,8 @@ pub struct Progress {
 
 /// One file in flight.
 struct Current {
-    remote: String,
-    spool: Download,
-    /// `clc.downloadBlock`: the block expected next.
-    block: i32,
+    udp: UdpFile,
     want: Option<i32>,
-    size: u64,
     /// The HTTP transfer a www redirect started.
     www: Option<vcod_common::net::http::Fetch>,
 }
@@ -258,12 +254,12 @@ impl Downloads {
         let cur = self.current.as_ref()?;
         let got = match &cur.www {
             Some(f) => f.received(),
-            None => cur.spool.received,
+            None => cur.udp.spool.received,
         };
         Some(Progress {
-            remote: cur.remote.clone(),
+            remote: cur.udp.spool.remote.clone(),
             got,
-            size: cur.size,
+            size: cur.udp.size,
         })
     }
 
@@ -285,11 +281,8 @@ impl Downloads {
             match Download::create(&remote, &self.root.join(rel)) {
                 Ok(spool) => {
                     self.current = Some(Current {
-                        remote: remote.clone(),
-                        spool,
-                        block: 0,
+                        udp: UdpFile::new(spool),
                         want,
-                        size: 0,
                         www: None,
                     });
                     self.started = true;
@@ -322,8 +315,9 @@ impl Downloads {
         };
         let mut cur = self.current.take().unwrap();
         cur.www = None;
-        let dest = cur.spool.dest().to_path_buf();
-        let landed = res.and_then(|()| cur.spool.finish(cur.want));
+        let spool = cur.udp.spool;
+        let (remote, dest) = (spool.remote.clone(), spool.dest().to_path_buf());
+        let landed = res.and_then(|()| spool.finish(cur.want));
         match landed {
             Ok(()) => {
                 let mut out = vec![
@@ -338,8 +332,7 @@ impl Downloads {
                 self.started = false;
                 vec![
                     DownloadEvent::Skipped(format!(
-                        "Download failure while getting '{}': {e:#}",
-                        cur.remote
+                        "Download failure while getting '{remote}': {e:#}"
                     )),
                     DownloadEvent::Command("wwwdl fail".into()),
                 ]
@@ -362,6 +355,7 @@ impl Downloads {
         let fetch = match (self.www, self.current.as_ref()) {
             // The UDP cap holds over HTTP too, as on CoD1.
             (true, Some(cur)) if (0..=MAX_DOWNLOAD_SIZE as i32).contains(&size) => cur
+                .udp
                 .spool
                 .spool()
                 .map_err(anyhow::Error::from)
@@ -375,13 +369,11 @@ impl Downloads {
             Ok(f) => {
                 log::info!("cod2: server redirected download: {url} ({size} bytes)");
                 let cur = self.current.as_mut().unwrap();
-                cur.size = size as u64;
+                cur.udp.size = size as u64;
                 cur.www = Some(f);
             }
             Err(e) => {
-                if let Some(cur) = self.current.take() {
-                    cur.spool.abort();
-                }
+                self.current = None;
                 self.queue.clear();
                 self.started = false;
                 out.push(DownloadEvent::Command("wwwdl fail".into()));
@@ -402,60 +394,48 @@ impl Downloads {
                 _ => Vec::new(),
             };
         };
-        let block_due = cur.block;
-        match msg {
+        let (block, size, data) = match msg {
             // A redirect while one runs is read and dropped (Mac 0x1d59c8).
-            DownloadMsg::Redirect { .. } if cur.www.is_some() => Vec::new(),
-            DownloadMsg::Redirect { url, size, flags } => self.redirect(url, *size, *flags),
+            DownloadMsg::Redirect { .. } if cur.www.is_some() => return Vec::new(),
+            DownloadMsg::Redirect { url, size, flags } => {
+                return self.redirect(url, *size, *flags);
+            }
             DownloadMsg::Refused(reason) => {
-                let cur = self.current.take().unwrap();
-                cur.spool.abort();
-                vec![DownloadEvent::Failed(reason.clone())]
+                self.current = None;
+                return vec![DownloadEvent::Failed(reason.clone())];
             }
-            DownloadMsg::Block { block, .. } if *block != block_due => {
-                // A block past the one due asks for it again; an older one is
-                // a retransmit already written.
-                if *block > block_due {
-                    vec![DownloadEvent::Command(format!("retransdl {block_due}"))]
-                } else {
-                    Vec::new()
-                }
+            DownloadMsg::Block { block, size, data } => (*block, *size, data),
+        };
+        // vcod's bound, CoD1's: the announced size, at most
+        // `MAX_DOWNLOAD_SIZE`.
+        match cur
+            .udp
+            .take(block, size, data, u64::from(MAX_DOWNLOAD_SIZE))
+        {
+            Block::Old => Vec::new(),
+            Block::Ahead(due) => vec![DownloadEvent::Command(format!("retransdl {due}"))],
+            Block::TooBig(why) => {
+                self.current = None;
+                vec![
+                    DownloadEvent::Command("stopdl".into()),
+                    DownloadEvent::Failed(why),
+                ]
             }
-            DownloadMsg::Block { data, size, .. } => {
-                if let Some(s) = size {
-                    cur.size = (*s).max(0) as u64;
-                }
-                // vcod's bound, CoD1's: the announced size, at most
-                // `MAX_DOWNLOAD_SIZE`.
-                let landed = cur.spool.received + data.len() as u64;
-                if cur.size > u64::from(MAX_DOWNLOAD_SIZE) || landed > cur.size {
+            Block::Unwritable(why) => {
+                self.current = None;
+                let mut out = vec![
+                    DownloadEvent::Command("stopdl".into()),
+                    DownloadEvent::Skipped(why),
+                ];
+                out.extend(self.next_download());
+                out
+            }
+            Block::Took { block, eof } => {
+                let mut out = vec![DownloadEvent::Command(format!("nextdl {block}"))];
+                if eof {
                     let cur = self.current.take().unwrap();
-                    let why = format!(
-                        "{} sent {landed} bytes, {} announced (at most {MAX_DOWNLOAD_SIZE})",
-                        cur.remote, cur.size
-                    );
-                    cur.spool.abort();
-                    return vec![
-                        DownloadEvent::Command("stopdl".into()),
-                        DownloadEvent::Failed(why),
-                    ];
-                }
-                if let Err(e) = cur.spool.accept_block(data) {
-                    let cur = self.current.take().unwrap();
-                    cur.spool.abort();
-                    let mut out = vec![
-                        DownloadEvent::Command("stopdl".into()),
-                        DownloadEvent::Skipped(format!("{e:#}")),
-                    ];
-                    out.extend(self.next_download());
-                    return out;
-                }
-                cur.block += 1;
-                let mut out = vec![DownloadEvent::Command(format!("nextdl {block_due}"))];
-                if data.is_empty() {
-                    let cur = self.current.take().unwrap();
-                    let dest = cur.spool.dest().to_path_buf();
-                    match cur.spool.finish(cur.want) {
+                    let dest = cur.udp.spool.dest().to_path_buf();
+                    match cur.udp.spool.finish(cur.want) {
                         Ok(()) => out.push(DownloadEvent::Finished(dest)),
                         Err(e) => out.push(DownloadEvent::Skipped(format!("{e:#}"))),
                     }

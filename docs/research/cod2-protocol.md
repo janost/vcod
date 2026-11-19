@@ -3632,8 +3632,9 @@ the server's text, localized in the popup. A file whose checksum is not the
 listed one is deleted and the join goes on without it, where retail keeps it.
 A UDP transfer past its block-0 size, or announcing more than 512 MiB
 (`net::download::MAX_DOWNLOAD_SIZE`, CoD1's cap), says `stopdl` and ends the
-join, vcod's own bound; a transfer the session leaves unfinished deletes its
-`.tmp` spool. Flag 1 (`sv_wwwDlDisconnected`) is fetched connected, with no
+join, vcod's own bound; a redirect announcing more than that answers
+`wwwdl fail` and the HTTP body stops there too. A transfer the session leaves
+unfinished deletes its `<name>.tmp` spool. Flag 1 (`sv_wwwDlDisconnected`) is fetched connected, with no
 `bbl8r`; flag 2 ends the join. A gamestate for a new map mid-game downloads
 the same way while the old map stays drawn; its progress shows on the same
 line.
