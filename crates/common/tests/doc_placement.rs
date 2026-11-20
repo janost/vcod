@@ -38,6 +38,10 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/client/src/renderer.rs",
+        "(a split, the dlights), which a run never crosses.",
+    ),
+    (
+        "crates/client/src/renderer.rs",
         "`None` when nothing is drawable (empty buffers are invalid to create).",
     ),
     (

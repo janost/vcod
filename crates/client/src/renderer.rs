@@ -39,6 +39,17 @@ use vcod_common::shader::{Shader, ShaderLib};
 use vcod_common::static_light::{SceneLight, StaticLighting};
 use vcod_common::vis::{Frustum, Visible, WorldVis};
 
+/// Logs a frame write on `$r` in tests; nothing in the shipped client.
+macro_rules! frame_write {
+    ($r:expr, $what:expr, $bytes:expr) => {
+        #[cfg(test)]
+        $r.frame_writes.borrow_mut().push(FrameWrite {
+            what: ($what).to_string(),
+            bytes: ($bytes) as u64,
+        });
+    };
+}
+
 mod capture;
 mod cod2;
 mod cod2_cookie;
@@ -71,6 +82,9 @@ mod fx_cloud;
 #[cfg(test)]
 mod shader_ops;
 pub use fx_cloud::OutdoorSource;
+mod bundles;
+mod draw_list;
+mod fog;
 #[cfg(test)]
 mod fx_feather;
 pub(crate) mod headless;
@@ -85,6 +99,9 @@ pub(crate) mod pipeline_check;
 mod prop_blends;
 #[cfg(test)]
 mod screenshot_live;
+use bundles::*;
+use draw_list::*;
+use fog::*;
 
 // The vertex layout below hardcodes the BSP drawvert stride.
 const _: () = assert!(std::mem::size_of::<DrawVert>() == 44);
@@ -481,33 +498,6 @@ fn fx_blend_state(blend: FxBlend) -> Option<wgpu::BlendState> {
     }
 }
 
-/// The world batches' pipelines. Layers (polygonOffset terrain blends) and
-/// overlays (decals, masked cutouts) are coplanar with the world and draw
-/// depth-biased on top. `Stage` marks batches expanded into per-stage draws
-/// instead. Placement comes from the batch's sort key (`order_draws`).
-#[derive(Copy, Clone, PartialEq)]
-enum Pass {
-    /// `fs_main`: the image's alpha cut at 0.5.
-    Opaque,
-    /// A CoD1 `Opaque` batch whose image has no texel the cut drops, drawn
-    /// without the discard (`fs_main_solid`) so early depth writes hold.
-    Solid,
-    /// Static models (`fs_prop`): `culled` as retail culls a one-sided
-    /// skin, `solid` as [`Pass::Solid`] (cod11-client-perf.md 5).
-    Prop {
-        culled: bool,
-        solid: bool,
-    },
-    Layer,
-    Overlay,
-    Stage,
-}
-
-struct DrawCall {
-    bind_group: usize,
-    pass: Pass,
-}
-
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum CullMode {
     On,
@@ -533,53 +523,6 @@ impl std::fmt::Display for CullMode {
             CullMode::Off => "off",
         })
     }
-}
-
-/// A per-frame draw: `batch` picks the bind group and pass, the range is in
-/// the gathered index buffer.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct DrawRange {
-    pub batch: u32,
-    pub first: u32,
-    pub count: u32,
-}
-
-/// One entry of a frame's emission-ordered list.
-#[derive(Copy, Clone)]
-enum DrawRef {
-    /// A legacy batch on its fixed pipeline.
-    Legacy(Pass),
-    /// An authored stage draw; index into `WorldGpu::stage_batches`.
-    Stage(u32),
-}
-
-struct FrameDraw {
-    kind: DrawRef,
-    /// The batch's material sort and its place in the sorted shader list
-    /// (`WorldGpu::batch_keys`).
-    sort: f32,
-    rank: u32,
-    /// Index into `WorldGpu::draws`, the gathered visible range.
-    src: u32,
-}
-
-/// The pipeline a run of world draws has bound.
-#[derive(Copy, Clone, PartialEq)]
-enum Bound {
-    Legacy(Pass),
-    Stage(StageVariant, bool, bool),
-    /// CoD2's lit pipeline (`cod2::Cod2World`), then a static prop's and
-    /// a water's, and which of the depth prepass's pipelines.
-    Lit(
-        StageVariant,
-        bool,
-        Option<vcod_common::material::PolygonOffset>,
-        cod2::FsKey,
-        bool,
-        Depth,
-    ),
-    /// A CoD4 feathered or distortion stage (`cod4_worldfx`).
-    Fx(cod4_worldfx::WorldFx, StageVariant, bool, bool),
 }
 
 /// What [`Renderer::encode_cookie_receivers`] reads and writes.
@@ -642,41 +585,6 @@ fn ent_takes_prepass(skin: &EntSkin) -> bool {
     skin.stages.first().is_some_and(|st| st.prepass)
 }
 
-/// Test only: one entity draw of [`Renderer::ent_census`].
-#[cfg(test)]
-pub(crate) type EntCensus = (u32, u32, u32, usize, bool, bool);
-
-/// A frame's draw calls by kind and its pipeline and bind group sets, in
-/// the depth prepass and the main scene pass (cod4-client-perf.md 21).
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub(crate) struct PassCensus {
-    pub sky: u32,
-    pub world: u32,
-    pub ents: u32,
-    pub gun: u32,
-    pub marks: u32,
-    pub fx: u32,
-    pub dlights: u32,
-    pub prepass_world: u32,
-    pub prepass_ents: u32,
-    pub pipelines: u32,
-    pub bind_groups: u32,
-}
-
-impl PassCensus {
-    pub fn draws(&self) -> u32 {
-        self.sky
-            + self.world
-            + self.ents
-            + self.gun
-            + self.marks
-            + self.fx
-            + self.dlights
-            + self.prepass_world
-            + self.prepass_ents
-    }
-}
-
 /// One GPU write of a frame (cod4-client-perf.md 24): a pass with the
 /// bytes its attachments store (each attachment once, whatever the
 /// overdraw), a copy or a buffer upload.
@@ -687,16 +595,6 @@ pub(crate) struct FrameWrite {
     pub bytes: u64,
 }
 
-/// Logs a frame write on `$r` in tests; nothing in the shipped client.
-macro_rules! frame_write {
-    ($r:expr, $what:expr, $bytes:expr) => {
-        #[cfg(test)]
-        $r.frame_writes.borrow_mut().push(FrameWrite {
-            what: ($what).to_string(),
-            bytes: ($bytes) as u64,
-        });
-    };
-}
 /// What `Renderer::cull` reads off the frame, bit for bit.
 type CullKey = ([u32; 3], [u32; 16], [u32; 2]);
 
@@ -706,254 +604,6 @@ fn cull_key(eye: glam::Vec3, view_proj: &glam::Mat4, lod: (f32, f32)) -> CullKey
         view_proj.to_cols_array().map(f32::to_bits),
         [lod.0.to_bits(), lod.1.to_bits()],
     )
-}
-
-/// Where `emit_world_draw` sends its commands: the scene pass itself, or
-/// a [`Recording`] that a render bundle replays (cod4-client-perf.md 31).
-trait DrawSink {
-    fn pipeline(&mut self, p: &wgpu::RenderPipeline);
-    fn group(&mut self, slot: u32, bg: &wgpu::BindGroup, offset: Option<u32>);
-    fn vertices(&mut self, slot: u32, s: wgpu::BufferSlice<'_>);
-    fn indices(&mut self, s: wgpu::BufferSlice<'_>, f: wgpu::IndexFormat);
-    fn draw(&mut self, indices: std::ops::Range<u32>);
-    /// An entity surface's draw: its vertices from `base`, one instance.
-    fn draw_inst(&mut self, indices: std::ops::Range<u32>, base: i32, instance: u32);
-}
-
-impl DrawSink for wgpu::RenderPass<'_> {
-    fn pipeline(&mut self, p: &wgpu::RenderPipeline) {
-        self.set_pipeline(p);
-    }
-    fn group(&mut self, slot: u32, bg: &wgpu::BindGroup, offset: Option<u32>) {
-        self.set_bind_group(slot, bg, offset.as_slice());
-    }
-    fn vertices(&mut self, slot: u32, s: wgpu::BufferSlice<'_>) {
-        self.set_vertex_buffer(slot, s);
-    }
-    fn indices(&mut self, s: wgpu::BufferSlice<'_>, f: wgpu::IndexFormat) {
-        self.set_index_buffer(s, f);
-    }
-    fn draw(&mut self, indices: std::ops::Range<u32>) {
-        self.draw_indexed(indices, 0, 0..1);
-    }
-    fn draw_inst(&mut self, indices: std::ops::Range<u32>, base: i32, instance: u32) {
-        self.draw_indexed(indices, base, instance..instance + 1);
-    }
-}
-
-/// One command of a [`Recording`].
-#[derive(PartialEq)]
-enum Cmd {
-    Pipeline(wgpu::RenderPipeline),
-    Group(u32, wgpu::BindGroup, Option<u32>),
-    Vertices(u32, wgpu::Buffer, u64, u64),
-    Indices(wgpu::Buffer, wgpu::IndexFormat, u64, u64),
-    Draw(std::ops::Range<u32>),
-    DrawInst(std::ops::Range<u32>, i32, u32),
-}
-
-/// A run of world draws' commands, recorded every frame (an `Arc` clone
-/// a handle, no validation) and compared with the last frame's: the
-/// same commands replay last frame's bundle.
-#[derive(Default, PartialEq)]
-struct Recording(Vec<Cmd>);
-
-impl DrawSink for Recording {
-    fn pipeline(&mut self, p: &wgpu::RenderPipeline) {
-        self.0.push(Cmd::Pipeline(p.clone()));
-    }
-    fn group(&mut self, slot: u32, bg: &wgpu::BindGroup, offset: Option<u32>) {
-        self.0.push(Cmd::Group(slot, bg.clone(), offset));
-    }
-    fn vertices(&mut self, slot: u32, s: wgpu::BufferSlice<'_>) {
-        self.0.push(Cmd::Vertices(
-            slot,
-            s.buffer().clone(),
-            s.offset(),
-            s.size(),
-        ));
-    }
-    fn indices(&mut self, s: wgpu::BufferSlice<'_>, f: wgpu::IndexFormat) {
-        self.0
-            .push(Cmd::Indices(s.buffer().clone(), f, s.offset(), s.size()));
-    }
-    fn draw(&mut self, indices: std::ops::Range<u32>) {
-        self.0.push(Cmd::Draw(indices));
-    }
-    fn draw_inst(&mut self, indices: std::ops::Range<u32>, base: i32, instance: u32) {
-        self.0.push(Cmd::DrawInst(indices, base, instance));
-    }
-}
-
-impl Recording {
-    fn draws(&self) -> usize {
-        self.0
-            .iter()
-            .filter(|c| matches!(c, Cmd::Draw(_) | Cmd::DrawInst(..)))
-            .count()
-    }
-
-    /// The commands into `pass`, one by one.
-    fn replay(&self, pass: &mut impl DrawSink) {
-        for c in &self.0 {
-            match c {
-                Cmd::Pipeline(p) => pass.pipeline(p),
-                Cmd::Group(slot, bg, o) => pass.group(*slot, bg, *o),
-                Cmd::Vertices(slot, b, o, n) => pass.vertices(*slot, b.slice(*o..*o + *n)),
-                Cmd::Indices(b, f, o, n) => pass.indices(b.slice(*o..*o + *n), *f),
-                Cmd::Draw(r) => pass.draw(r.clone()),
-                Cmd::DrawInst(r, b, i) => pass.draw_inst(r.clone(), *b, *i),
-            }
-        }
-    }
-
-    /// The commands in a bundle for a pass with colour target `format`
-    /// (none: the depth prepass) over the scene's depth.
-    fn bundle(
-        &self,
-        device: &wgpu::Device,
-        format: Option<wgpu::TextureFormat>,
-    ) -> wgpu::RenderBundle {
-        let colour = [format];
-        let mut enc = device.create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
-            label: Some("world run"),
-            color_formats: match format {
-                Some(_) => &colour,
-                None => &[],
-            },
-            depth_stencil: Some(wgpu::RenderBundleDepthStencil {
-                format: DEPTH_FORMAT,
-                depth_read_only: false,
-                stencil_read_only: false,
-            }),
-            sample_count: msaa_samples(),
-            multiview: None,
-        });
-        for c in &self.0 {
-            match c {
-                Cmd::Pipeline(p) => enc.set_pipeline(p),
-                Cmd::Group(slot, bg, o) => enc.set_bind_group(*slot, bg, o.as_slice()),
-                Cmd::Vertices(slot, b, o, n) => enc.set_vertex_buffer(*slot, b.slice(*o..*o + *n)),
-                Cmd::Indices(b, f, o, n) => enc.set_index_buffer(b.slice(*o..*o + *n), *f),
-                Cmd::Draw(r) => enc.draw_indexed(r.clone(), 0, 0..1),
-                Cmd::DrawInst(r, b, i) => enc.draw_indexed(r.clone(), *b, *i..*i + 1),
-            }
-        }
-        enc.finish(&wgpu::RenderBundleDescriptor {
-            label: Some("world run"),
-        })
-    }
-}
-
-/// A pass's runs of draws, in frame order, each with its bundle once its
-/// commands held from one frame to the next (cod4-client-perf.md 31, 40):
-/// the scene pass's world runs and entity runs, the depth prepass's world
-/// and entities. A run whose commands change every frame (a moving view,
-/// a body entering or leaving it) replays into the pass: a bundle made
-/// for one frame costs more than it saves.
-#[derive(Default)]
-struct WorldBundles {
-    runs: Vec<(Recording, Option<wgpu::RenderBundle>)>,
-    /// The targets the bundles were made for: colour format (none in a
-    /// depth-only prepass), samples.
-    targets: Option<(Option<wgpu::TextureFormat>, u32)>,
-    /// This frame's runs so far.
-    at: usize,
-}
-
-impl WorldBundles {
-    fn begin(&mut self, format: Option<wgpu::TextureFormat>) {
-        let targets = Some((format, msaa_samples()));
-        if self.targets != targets {
-            self.runs.clear();
-            self.targets = targets;
-        }
-        self.at = 0;
-    }
-
-    /// This frame's next run, recorded in `rec`, into `pass`: last frame's
-    /// run at the same place held the same commands, its bundle (made now
-    /// if it was new then), else the commands one by one. A bundled run's
-    /// draws count under `kind`.
-    fn draw(
-        &mut self,
-        pass: &mut wgpu::RenderPass<'_>,
-        device: &wgpu::Device,
-        rec: Recording,
-        kind: crate::frame_prof::Count,
-    ) {
-        use crate::frame_prof::{Count, count};
-        let format = self.targets.and_then(|t| t.0);
-        let at = self.at;
-        self.at += 1;
-        match self.runs.get_mut(at) {
-            Some((old, bundle)) if *old == rec => {
-                if bundle.is_none() {
-                    count(Count::Rebundled, 1);
-                }
-                count(kind, rec.draws());
-                pass.execute_bundles([&*bundle.get_or_insert_with(|| rec.bundle(device, format))]);
-            }
-            run => {
-                rec.replay(pass);
-                match run {
-                    Some(run) => *run = (rec, None),
-                    None => self.runs.push((rec, None)),
-                }
-            }
-        }
-    }
-
-    /// Drops the runs past this frame's last.
-    fn end(&mut self) {
-        self.runs.truncate(self.at);
-    }
-}
-
-/// The bind groups a run of world draws left at groups 1 and 2: each
-/// one's address and dynamic offset. A pipeline set clears it, so a
-/// draw rebinds only a group the last draw under its pipeline did not
-/// leave (cod4-client-perf.md 21).
-#[derive(Clone, Copy, Default, PartialEq)]
-struct WorldGroups([Option<(usize, u32)>; 2]);
-
-impl WorldGroups {
-    /// Binds `bg` at group `slot` (1 or 2) unless it is there already.
-    fn bind(
-        &mut self,
-        pass: &mut impl DrawSink,
-        slot: u32,
-        bg: &wgpu::BindGroup,
-        offset: Option<u32>,
-        census: &std::cell::Cell<PassCensus>,
-    ) {
-        let key = Some((std::ptr::from_ref(bg) as usize, offset.unwrap_or(u32::MAX)));
-        let at = &mut self.0[slot as usize - 1];
-        if *at == key {
-            return;
-        }
-        *at = key;
-        pass.group(slot, bg, offset);
-        tally(census, |c| c.bind_groups += 1);
-    }
-}
-
-/// Adds to a frame's [`PassCensus`].
-fn tally(c: &std::cell::Cell<PassCensus>, f: impl FnOnce(&mut PassCensus)) {
-    let mut v = c.get();
-    f(&mut v);
-    c.set(v);
-}
-
-/// Where a draw stands to `r_vc_depthprepass`: its own pipeline, the
-/// prepass's depth-only draw, or its colour draw under EQUAL after it.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-enum Depth {
-    Plain,
-    Prepass,
-    /// The prepass writing `floatZ` too (cod4-client-perf.md 35).
-    FloatZ,
-    Equal,
 }
 
 /// One entity or viewmodel surface in draw order.
@@ -994,16 +644,6 @@ fn sorted_ent_draws<'a>(
             .then(a.gun.cmp(&b.gun))
     });
     out
-}
-
-/// Where the dlight pass goes in the merged list: after the last
-/// world draw that sorts up to opaque, as retail lights a batch right
-/// after its base stages (0x500d3a) and only those sorts take it.
-fn dlight_slot(items: &[SortedItem], world_sorts: &[f32]) -> usize {
-    items
-        .iter()
-        .rposition(|it| matches!(it, SortedItem::World(wi) if world_sorts[*wi] <= SORT_OPAQUE))
-        .map_or(0, |at| at + 1)
 }
 
 /// The frame's MSAA colour and depth. With SSAO the frame is two passes
@@ -1074,43 +714,6 @@ impl SceneTargets<'_> {
             multiview_mask: None,
         })
     }
-}
-
-/// Where the depth copy a CoD2 feather reads goes: before the first
-/// entity or view weapon surface, so the copy holds the world (props
-/// included) and not the models, as retail's `floatZ` under
-/// `r_depthPrepassModels 0` does (cod2-materials.md 9.5); never past the
-/// frame's `split`.
-fn feather_copy_at(items: &[SortedItem], split: usize) -> usize {
-    items
-        .iter()
-        .position(|it| matches!(it, SortedItem::Model(_)))
-        .map_or(split, |m| m.min(split))
-}
-
-/// Where the SSAO multiply goes in the merged list: after the last draw
-/// that sorts up to decal, so it darkens the opaque surfaces and the
-/// polygonOffset layers and impact marks blended onto them and none of the
-/// blends after.
-fn ssao_split(
-    items: &[SortedItem],
-    world: &[f32],
-    marks: &[f32],
-    models: &[f32],
-    fx: &[f32],
-) -> usize {
-    items
-        .iter()
-        .rposition(|it| {
-            let sort = match *it {
-                SortedItem::World(i) => world[i],
-                SortedItem::Mark(i) => marks[i],
-                SortedItem::Model(i) => models[i],
-                SortedItem::Fx(i) => fx[i],
-            };
-            sort <= SORT_DECAL
-        })
-        .map_or(0, |at| at + 1)
 }
 
 /// What a run of entity draws left bound: the pipeline (a stage's index,
@@ -1242,251 +845,6 @@ fn kept_surfaces(surfaces: &[VmSurface], keep: &[bool]) -> Vec<usize> {
     (0..surfaces.len())
         .filter(|&i| keep.get(surfaces[i].src as usize).copied().unwrap_or(true))
         .collect()
-}
-
-/// The emission order of `draws`, into `out`: by the batch's place in the
-/// sorted shader list (`keys`, material sort first), each batch's stages
-/// back to back in stage order, as retail's draw loop iterates a shader's
-/// stages over its surfaces (shader doc 5). Sky soups are never in `draws`.
-fn order_draws(
-    keys: &[(f32, u32)],
-    calls: &[DrawCall],
-    stages_of_batch: &[Vec<u32>],
-    draws: &[DrawRange],
-    out: &mut Vec<FrameDraw>,
-) {
-    out.clear();
-    for (di, d) in draws.iter().enumerate() {
-        let b = d.batch as usize;
-        let (sort, rank) = keys[b];
-        let at = |kind| FrameDraw {
-            kind,
-            sort,
-            rank,
-            src: di as u32,
-        };
-        match calls[b].pass {
-            Pass::Stage => out.extend(stages_of_batch[b].iter().map(|&sb| at(DrawRef::Stage(sb)))),
-            p => out.push(at(DrawRef::Legacy(p))),
-        }
-    }
-    // stable: a batch keeps its stage order
-    out.sort_by_key(|fd| fd.rank);
-}
-
-/// A shader as R_SortNewShader (CoDMP.exe 0x4fb790) reads it: its sort and
-/// its first stage's bundle 0 and 1 image numbers (0 for none), `None` for
-/// a shader without stages.
-#[derive(Copy, Clone, Debug)]
-struct SortEntry {
-    sort: f32,
-    images: Option<[u32; 2]>,
-}
-
-/// A scripted shader's entry: its stages' images numbered in stage order,
-/// then its sort and its sorting stage's two bundle images.
-fn staged_sort_entry(sh: &Material, image: &mut dyn FnMut(&ImageRef) -> u32) -> SortEntry {
-    for st in &sh.stages {
-        for bu in &st.bundles {
-            image(&bu.image);
-            for p in bu.anim.iter().flat_map(|a| &a.paths) {
-                image(&ImageRef::Path(p.clone()));
-            }
-        }
-    }
-    SortEntry {
-        sort: sh.sort,
-        images: sh.sort_images.as_ref().map(|imgs| {
-            let mut at = |i: usize| imgs.get(i).map_or(0, &mut *image);
-            [at(0), at(1)]
-        }),
-    }
-}
-
-/// Each entry's place in retail's sorted shader list when registered in
-/// this order. R_SortNewShader walks back from the end and puts the new
-/// shader after the first one that sorts lower, or sorts the same with a
-/// lower bundle 0 image, or the same bundle 0 image and a bundle 1 image
-/// no higher; it passes everything else, a stageless shader and a missing
-/// bundle 1 included.
-fn sorted_places(entries: &[SortEntry]) -> Vec<u32> {
-    let mut list: Vec<usize> = Vec::with_capacity(entries.len());
-    for (n, new) in entries.iter().enumerate() {
-        let [b0, b1] = new.images.unwrap_or([0, 0]);
-        let mut at = list.len();
-        while at > 0 {
-            let e = &entries[list[at - 1]];
-            if e.sort < new.sort {
-                break;
-            }
-            if e.sort == new.sort
-                && let Some([e0, e1]) = e.images
-            {
-                let b0_holds = e0 == 0 || e0 == b0;
-                if e0 != 0 && e0 < b0 {
-                    break;
-                }
-                if b0_holds && e1 != 0 && e1 <= b1 {
-                    break;
-                }
-            }
-            at -= 1;
-        }
-        list.insert(at, n);
-    }
-    let mut place = vec![0; entries.len()];
-    for (p, &e) in list.iter().enumerate() {
-        place[e] = p as u32;
-    }
-    place
-}
-
-/// Each entry's place in a CoD4 frame's order: by sort, then the first
-/// place in 1.7's lit draw order (`MapWorld::soup_order`) any of the
-/// batch's soups holds, so a batch draws where retail's list reaches its
-/// first surface and the primary light groups the materials as 1.7's key
-/// does (cod4-world.md 12). Entries past the world's batches keep their
-/// registration order after them.
-fn cod4_places(entries: &[SortEntry], ranges: &[Option<IndexRange>], order: &[u64]) -> Vec<u32> {
-    let mut first = vec![u64::MAX; entries.len()];
-    for (r, &o) in ranges.iter().zip(order) {
-        if let Some(f) = r.and_then(|r| first.get_mut(r.batch as usize)) {
-            *f = (*f).min(o);
-        }
-    }
-    let mut by: Vec<usize> = (0..entries.len()).collect();
-    by.sort_by(|&a, &b| {
-        let (ea, eb) = (&entries[a], &entries[b]);
-        ea.sort
-            .total_cmp(&eb.sort)
-            .then(first[a].cmp(&first[b]))
-            .then(a.cmp(&b))
-    });
-    let mut place = vec![0; entries.len()];
-    for (p, &e) in by.iter().enumerate() {
-        place[e] = p as u32;
-    }
-    place
-}
-
-/// Retail's image numbers in load order (`image+0x58`, CoDMP.exe
-/// 0x4ec310: the creation count plus 0x400); 0 stays "no image".
-#[derive(Default)]
-struct ImageNumbers(HashMap<String, u32>);
-
-impl ImageNumbers {
-    fn number(&mut self, name: &str) -> u32 {
-        let mut key = name.to_ascii_lowercase();
-        for ext in [".tga", ".jpg", ".dds"] {
-            if let Some(stem) = key.strip_suffix(ext) {
-                key.truncate(stem.len());
-                break;
-            }
-        }
-        let next = self.0.len() as u32 + 1;
-        *self.0.entry(key).or_insert(next)
-    }
-}
-
-/// One entry of the frame's merged draw list.
-#[derive(Copy, Clone, Debug, PartialEq)]
-enum SortedItem {
-    World(usize),
-    /// A run of impact marks (`mark_pass::MarkPass::runs`).
-    Mark(usize),
-    /// An entity or viewmodel surface.
-    Model(usize),
-    Fx(usize),
-}
-
-/// Merges the world's draws, the mark runs, the entity and viewmodel
-/// surfaces and the fx runs, each list already in sort order, by material
-/// sort. On a tie the world goes first, then the marks, the models and the
-/// fx: the world's materials and images register at map load, before the
-/// cgame's (R_SortNewShader breaks ties on image numbers, 0x4fb790). The
-/// marks' place among the cgame's lists is vcod's guess.
-fn merge_by_sort(world: &[f32], marks: &[f32], models: &[f32], fx: &[f32]) -> Vec<SortedItem> {
-    let lists = [world, marks, models, fx];
-    let mut at = [0usize; 4];
-    let mut out = Vec::with_capacity(lists.iter().map(|l| l.len()).sum());
-    loop {
-        let mut best: Option<usize> = None;
-        for l in 0..4 {
-            if at[l] < lists[l].len() && best.is_none_or(|b| lists[l][at[l]] < lists[b][at[b]]) {
-                best = Some(l);
-            }
-        }
-        let Some(l) = best else {
-            break;
-        };
-        out.push(match l {
-            0 => SortedItem::World(at[l]),
-            1 => SortedItem::Mark(at[l]),
-            2 => SortedItem::Model(at[l]),
-            _ => SortedItem::Fx(at[l]),
-        });
-        at[l] += 1;
-    }
-    out
-}
-
-/// What a merged list's last draw left bound.
-enum Emit {
-    None,
-    World {
-        set: usize,
-        bound: Option<Bound>,
-        groups: WorldGroups,
-    },
-    Ent {
-        /// The `DynamicPass::models` index whose buffers are bound.
-        model: usize,
-        bound: EntBound,
-    },
-    Gun {
-        part: u32,
-        bound: EntBound,
-    },
-    Fx {
-        blend: FxBlend,
-        soft: bool,
-    },
-}
-
-/// Copies the visible `ranges` out of `src` batch by batch into `out`, one
-/// `DrawRange` per batch that got anything. `per_batch` is scratch, kept
-/// between frames.
-pub(crate) fn gather(
-    src: &[u32],
-    ranges: impl IntoIterator<Item = IndexRange>,
-    batch_count: usize,
-    out: &mut Vec<u32>,
-    per_batch: &mut Vec<Vec<IndexRange>>,
-) -> Vec<DrawRange> {
-    per_batch.resize_with(batch_count, Vec::new);
-    for b in per_batch.iter_mut() {
-        b.clear();
-    }
-    for r in ranges {
-        per_batch[r.batch as usize].push(r);
-    }
-    out.clear();
-    let mut draws = Vec::new();
-    for (batch, rs) in per_batch.iter().enumerate() {
-        if rs.is_empty() {
-            continue;
-        }
-        let first = out.len() as u32;
-        for r in rs {
-            out.extend_from_slice(&src[r.first as usize..(r.first + r.count) as usize]);
-        }
-        draws.push(DrawRange {
-            batch: batch as u32,
-            first,
-            count: out.len() as u32 - first,
-        });
-    }
-    draws
 }
 
 #[derive(Clone)]
@@ -1703,116 +1061,6 @@ impl FxLightsUniform {
 pub struct LevelLook {
     pub film: Option<crate::post::Film>,
     pub glow: Option<crate::cod2_glow::Cod4Glow>,
-}
-
-/// The fog values as currently displayed.
-#[derive(Copy, Clone, Default, PartialEq)]
-struct FogLive {
-    linear: bool,
-    color: [f32; 3],
-    density: f32,
-    near: f32,
-    far: f32,
-    start: f32,
-}
-
-impl FogLive {
-    fn of(p: &FogParams) -> Self {
-        FogLive {
-            linear: p.is_linear(),
-            color: p.color,
-            density: p.density,
-            near: p.near,
-            far: p.far,
-            start: p.start,
-        }
-    }
-
-    /// 1 = GL_EXP, 2 = GL_LINEAR: the WGSL Camera mode encoding; the off
-    /// state is carried by [`FogState::set`], not here.
-    fn mode(&self) -> f32 {
-        if self.linear { 2.0 } else { 1.0 }
-    }
-}
-
-/// Global fog from configstring 12, faded toward each new target. Same-mode
-/// transitions lerp over the script's fade time; cross-mode changes snap and
-/// linear fog clears to the fog colour (docs/protocol-1.1.md, configstring
-/// 12: the clear is VERIFIED there; the fade and snap follow RTCW-MP's
-/// R_SetFog and are unverified against retail).
-#[derive(Default)]
-struct FogState {
-    set: bool,
-    /// CoD2's world: fog runs on the radial eye distance (fogcalc.hlsl's
-    /// `useRadialFog`), not CoD1's eye-space depth.
-    radial: bool,
-    /// The last frame's time, where [`Renderer::set_fog_now`] starts a fade.
-    clock: f32,
-    live: FogLive,
-    from: FogLive,
-    /// target params, transition start (frame seconds), duration (s)
-    target: Option<(FogParams, f32, f32)>,
-    /// The last fog asked for: CoD1's frame sets it every frame, and only a
-    /// new one starts a fade.
-    asked: Option<FogParams>,
-}
-
-impl FogState {
-    fn set_target(&mut self, p: FogParams, now: f32) {
-        if self.set && self.asked == Some(p) {
-            return;
-        }
-        self.asked = Some(p);
-        // No fade, first fog, or a mode change snaps like retail.
-        let snap = !self.set || p.fade_ms == 0 || self.live.linear != p.is_linear();
-        self.from = self.live;
-        self.target = Some((p, now, p.fade_ms as f32 / 1000.0));
-        self.set = true;
-        if snap {
-            self.finish();
-        }
-    }
-
-    fn clear(&mut self) {
-        self.set = false;
-        self.target = None;
-        self.asked = None;
-    }
-
-    fn finish(&mut self) {
-        if let Some((p, _, _)) = self.target.take() {
-            self.live = FogLive::of(&p);
-        }
-    }
-
-    fn advance(&mut self, now: f32) {
-        self.clock = now;
-        if self.target.is_none() {
-            return;
-        }
-        let (_, t0, dur) = self.target.unwrap();
-        let k = ((now - t0) / dur.max(f32::EPSILON)).clamp(0.0, 1.0);
-        let to = match self.target {
-            Some((p, _, _)) => FogLive::of(&p),
-            None => return,
-        };
-        let f = &self.from;
-        self.live = FogLive {
-            linear: to.linear,
-            color: [
-                f.color[0] + (to.color[0] - f.color[0]) * k,
-                f.color[1] + (to.color[1] - f.color[1]) * k,
-                f.color[2] + (to.color[2] - f.color[2]) * k,
-            ],
-            density: f.density + (to.density - f.density) * k,
-            near: f.near + (to.near - f.near) * k,
-            far: f.far + (to.far - f.far) * k,
-            start: f.start + (to.start - f.start) * k,
-        };
-        if k >= 1.0 {
-            self.target = None;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -7122,35 +6370,6 @@ impl Renderer {
     /// Name of the map's active sky block, for the F3 `sky` field.
     pub fn sky_name(&self) -> Option<&str> {
         self.sky.as_ref().map(|s| s.name.as_str())
-    }
-
-    /// New global fog target from configstring 12; `None` clears it.
-    pub fn set_fog(&mut self, fog: Option<FogParams>, now: f32) {
-        match fog {
-            Some(p) => self.fog.set_target(p, now),
-            None => self.fog.clear(),
-        }
-    }
-
-    /// [`Self::set_fog`] with a fade starting at the last frame's time,
-    /// for a caller that does not hold the frame clock (CoD2's session).
-    pub fn set_fog_now(&mut self, fog: Option<FogParams>) {
-        let now = self.fog.clock;
-        self.set_fog(fog, now);
-    }
-
-    /// The displayed fog, for the F3 `fog:` line.
-    pub fn fog_debug(&self) -> String {
-        if !self.fog.set {
-            return "off".to_string();
-        }
-        let f = &self.fog.live;
-        let tail = if self.fog.target.is_some() { " ->" } else { "" };
-        if f.linear {
-            format!("linear {}..{} {:?}{tail}", f.near, f.far, f.color)
-        } else {
-            format!("exp den {:.6} {:?}{tail}", f.density, f.color)
-        }
     }
 
     /// The profile's GPU group of the main pass's `item` (`frame_prof::Group`):
