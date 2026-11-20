@@ -3,7 +3,7 @@
 //!
 //! Sky geometry: the farbox cube sides and the cloud-dome grid, transcribed
 //! from RTCW-MP `src/renderer/tr_sky.c`. Pure math; the GPU side lives in
-//! `renderer.rs` (`SkyRender`) and `sky.wgsl`.
+//! `renderer/sky_pass.rs` (`SkyRender`) and `sky.wgsl`.
 
 use vcod_common::mapworld::DrawVert;
 

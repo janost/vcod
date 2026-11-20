@@ -6,7 +6,7 @@ binary, or seen in the running client; INFERRED means read off the RTCW
 sources or asset shape. RTCW references are RTCW-MP's `src/renderer/*.c`, the
 closest public ancestor of the CoD 1.1 renderer. vcod's parser and runtime
 math live in `crates/common/src/shader.rs`, the drawing in
-`crates/client/src/renderer.rs` and `crates/client/src/sky.rs`.
+`crates/client/src/renderer.rs` with `renderer/` and `crates/client/src/sky.rs`.
 
 ## 1. What shader scripts are and where they live
 
@@ -317,7 +317,7 @@ The dlight pass in detail, all CoDMP.exe 1.1:
   colour holds for every fogged stage whose destination factor is
   `GL_ONE`, world, model or effect, whatever its source factor, so an
   additive stage fades to nothing with distance instead of greying
-  towards the fog colour. vcod: `STAGE_FLAG_FOG_BLACK` (`renderer.rs`),
+  towards the fog colour. vcod: `STAGE_FLAG_FOG_BLACK` (`renderer/stage.rs`),
   set by `stage_params` for a stage blended onto `GL_ONE`, makes
   `fs_stage` scale by `1 - fog` (`shader.wgsl`), as `fx.wgsl`'s additive
   draw does.
@@ -592,11 +592,11 @@ it. The env stype users are `metal_env` and `wood_env`.
 
 Classification and ordering: `Shader::classify_stage` sorts each stage into
 Opaque / Blend / Additive (dst factor One or SrcAlphaSaturate means additive),
-which picks the stage's pipeline (`renderer.rs` `stage_draw_facts`). Where a
+which picks the stage's pipeline (`renderer/stage.rs` `stage_draw_facts`). Where a
 draw goes in the frame is its shader's sort and sorted index, not its class
 (§5); retail sorts nothing by depth, so no per-batch centroid order.
 Per-stage state rides to the GPU in 240-byte `StageParams` slots
-(`renderer.rs`; size pinned by a const assert), one bind group per stage, with
+(`renderer/stage.rs`; size pinned by a const assert), one bind group per stage, with
 animated stages re-evaluated per frame.
 
 Each bundle of a stage picks its own sampler from its clamp bits, so a
@@ -763,7 +763,7 @@ images; so shaders of one sort order by their texture's first load, then
 by lightmap page.
 
 vcod (`sorted_places`, `ImageNumbers`, `order_draws`, `merge_by_sort`
-in `renderer.rs`): at map load each batch (material x lightmap) is one
+in `renderer/draw_list.rs`): at map load each batch (material x lightmap) is one
 shader, registered in batch order; image numbers go to white, the
 lightmap pages, then every stage's bundle images (animMap frames
 included) as each shader registers; `sorted_places` replays 0x4fb790
@@ -835,7 +835,7 @@ among the world's surfaces; between equal sorts, R_SortNewShader's tie on
 image numbers puts the effect's material after the world's, which load
 first at map load. The stock `gfx/...` blocks (effects and HUD art) sort blend 15
 (70 blocks), additive 19 (87), nearest 22 (8) or opaque 5 (15). vcod
-(`merge_by_sort`, `set_fx_quads` in `renderer.rs`): the fx quads order by
+(`merge_by_sort`, `set_fx_quads` in `renderer/draw_list.rs` and `renderer/fx_pass.rs`): the fx quads order by
 material sort, keeping the sim's back-to-front order within one, and
 merge into the frame's one list with the world's draws and the entity
 and viewmodel surfaces by sort; on a tie the world first, then the
@@ -868,7 +868,7 @@ inner box anywhere in the corpus (§2). The geometry is transcribed from
   FillCloudySkySide's pattern (`tr_sky.c` :571, index loop :597).
 - As in RB_StageIteratorSky (`tr_sky.c` :994), if the farbox's first side
   image fails to load the whole box is skipped; the dome still draws through
-  the stage path (`renderer.rs` sky-pass block).
+  the stage path (`renderer/frame.rs` sky-pass block).
 - Which block owns the sky pass: highest soup reference count wins, ties to the
   alphabetically first name (`pick_sky`, `sky.rs`).
 
