@@ -33,12 +33,12 @@ const ALLOWED: &[(&str, &str)] = &[
         "The GPU pass groups the renderer stamps, in file order.",
     ),
     (
-        "crates/client/src/renderer.rs",
+        "crates/client/src/renderer/shadow_encode.rs",
         "left (`cod2-client-perf.md` 11).",
     ),
     (
-        "crates/client/src/renderer.rs",
-        "`None` when nothing is drawable (empty buffers are invalid to create).",
+        "crates/client/src/renderer/dynamic.rs",
+        "(a split, the dlights), which a run never crosses.",
     ),
     (
         "crates/client/src/play/cod4_sweep.rs",

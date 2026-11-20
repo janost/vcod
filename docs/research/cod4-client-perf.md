@@ -1155,7 +1155,7 @@ only.
 
 What changed:
 
-1. World runs replay from render bundles (`WorldBundles`, `renderer.rs`).
+1. World runs replay from render bundles (`WorldBundles`, `renderer/bundles.rs`).
    The main pass's items between two non-world items or pass breaks are
    one run; each frame `emit_world_draw` records the run into a
    `Recording` (a handle clone each, no validation). A run whose commands
@@ -1659,7 +1659,7 @@ What changed:
    `first_instance` over the whole instance buffer, bound once per run; a
    model's buffers stay bound across its instances; a stage rebinds its
    image and parameter groups only when they change (`EntBound`,
-   `renderer.rs`).
+   `renderer/dynamic.rs`).
 2. The sun and spot passes' entity casters (`draw_entities`,
    `cod4_sunshadow.rs`) bind the instance and bone buffers once, set
    pipeline, image and buffers only on change, and join an instance's next
@@ -1739,7 +1739,7 @@ What is left:
 
 ## 40. Entity runs and the depth prepass from render bundles (P32)
 
-1. `WorldBundles` (`renderer.rs`) keeps any pass's runs: the main pass's
+1. `WorldBundles` (`renderer/bundles.rs`) keeps any pass's runs: the main pass's
    world runs, its entity runs (the non-gun entity items between two
    other items or stops), and the depth prepass's world draws and entity
    surfaces, each pass with its own targets (no colour target, or

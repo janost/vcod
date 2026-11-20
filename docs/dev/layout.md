@@ -248,6 +248,33 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
 ## vcod (`crates/client`)
 
 - Window, renderer (`renderer.rs`, `renderer/`), HUD, fx, audio.
+  `renderer.rs` holds `Renderer`, `new`, `build`, the frame types and the
+  shared formats; `renderer/` the rest:
+  - `frame.rs` the cull, the scene targets and `render`.
+  - `world_load.rs` `WorldGpu`, `load_world` and its helpers, unload.
+  - `world_encode.rs` the world's draws into a pass or a bundle, the depth
+    prepass, the dlights.
+  - `shadow_encode.rs` `vc_shadows`' maps, CoD2's cookies and their
+    receivers, the sun shadow.
+  - `stage.rs` `StageParams`, the stage flags and deforms, the stage
+    pipelines and bind groups.
+  - `draw_list.rs` the CPU draw list: draw kinds, the sorted shader order,
+    the merge.
+  - `bundles.rs` render bundle recording, the bind group cache,
+    `PassCensus`.
+  - `dynamic.rs` entities and the view weapon: upload, placement, LOD,
+    light pick.
+  - `prop_skin.rs` how a prop's or model's skin draws, the images it loads.
+  - `upload.rs` texture uploads and the test-only upload digest.
+  - `fx_pass.rs` effect quads, their stages and textures, the fx lights.
+  - `hud_pass.rs` the 2D layer: the HUD and debug text passes, HUD
+    textures.
+  - `sky_pass.rs` the farbox, cloud dome and sun sprite; `fog.rs` the fog.
+  - `settings.rs` resize, the cvar setters, the counts and F3 lines.
+  - `mark_pass.rs` impact marks and coronas; `cod2.rs` the CoD2 and CoD4
+    lit world; `headless.rs` a windowless `Renderer`.
+  - `tests.rs` the unit tests; `pipeline_check.rs` and `*_live.rs` the GPU
+    gates.
 - `console/`: drop-down console, cvars, binds.
 - `frontend/`: stock main menu, server browser, options screens, Start New
   Server, the server's script menus; `frontend/cod2.rs` CoD2's. `mod.rs`

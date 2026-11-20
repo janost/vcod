@@ -38,8 +38,8 @@ captures, the research docs and the A/B gates.
 
 The module map per crate is `docs/dev/layout.md`.
 
-Check a file's size before reading it whole. Four sources pass 5k lines
-(`renderer.rs` at 14.9k, `main.rs`, `spectate.rs`, `renderer/cod2.rs`;
+Check a file's size before reading it whole. Three sources pass 5k lines
+(`main.rs` at 6.1k, `spectate.rs`, `renderer/cod2.rs`;
 `git ls-files 'crates/*.rs' | xargs wc -l | sort -rn`): grep them. Research docs run from 14 KB to 630 KB, and thirteen pass 150 KB
 (`ls -S docs/research`): jump by section.
 
