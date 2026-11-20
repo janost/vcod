@@ -3279,10 +3279,13 @@ mod tests {
                     _ => "",
                 };
                 seen.push(cmd);
+                // Pump until the reply lands. A reply to the duplicate
+                // `getchallenge` changes nothing and runs the 100 ms out.
+                let before = c.state();
                 server.send_to(&oob(reply, ""), from).unwrap();
                 for _ in 0..50 {
                     c.pump_at(Instant::now());
-                    if c.state() != NetState::Challenging {
+                    if c.state() != before {
                         break;
                     }
                     std::thread::sleep(Duration::from_millis(2));
