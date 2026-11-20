@@ -37,12 +37,8 @@ const ALLOWED: &[(&str, &str)] = &[
         "left (`cod2-client-perf.md` 11).",
     ),
     (
-        "crates/client/src/renderer.rs",
+        "crates/client/src/renderer/dynamic.rs",
         "(a split, the dlights), which a run never crosses.",
-    ),
-    (
-        "crates/client/src/renderer.rs",
-        "`None` when nothing is drawable (empty buffers are invalid to create).",
     ),
     (
         "crates/client/src/play/cod4_sweep.rs",
