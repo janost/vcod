@@ -33,7 +33,7 @@ const ALLOWED: &[(&str, &str)] = &[
         "The GPU pass groups the renderer stamps, in file order.",
     ),
     (
-        "crates/client/src/renderer.rs",
+        "crates/client/src/renderer/shadow_encode.rs",
         "left (`cod2-client-perf.md` 11).",
     ),
     (

@@ -20,8 +20,8 @@ use vcod_common::pk3::Pk3Fs;
 use vcod_common::shader::Shader;
 
 use super::{
-    AnimFrames, BundleViews, STAGE_PARAMS_SIZE, depth_bias, scene_pipeline, stage_animated,
-    stage_bind_groups, stage_params,
+    AnimFrames, BundleViews, Renderer, STAGE_PARAMS_SIZE, depth_bias, scene_pipeline,
+    stage_animated, stage_bind_groups, stage_params,
 };
 use crate::entity_material::wgpu_blend_factor;
 use crate::lightmap_blocks::LightmapPage;
@@ -606,4 +606,75 @@ fn implicit_mark_shader(name: &str) -> Material {
         polygon_offset: Some(PolygonOffset::Single),
         ..Shader::default()
     })
+}
+
+impl Renderer {
+    /// One frame of impact marks: `requests` placed at `now_ms` (the
+    /// cgame's clock), the pool expired, faded and uploaded after this
+    /// frame's `temporary` marks (`crate::blob_shadow`). `enabled` is
+    /// `cg_marks`.
+    pub fn set_marks(
+        &mut self,
+        fs: &Pk3Fs,
+        requests: &[crate::marks::MarkRequest],
+        temporary: &[crate::marks::MarkRequest],
+        now_ms: i32,
+        time: f32,
+        enabled: bool,
+    ) {
+        let ctx = MarkCtx {
+            device: &self.device,
+            queue: &self.queue,
+            fs,
+            shader_lib: &self.shader_lib,
+            material_layout: &self.material_layout,
+            stage_layout: &self.stage_layout,
+            white_view: &self.white_view,
+            white_lightmap: &self.white_lightmap,
+            lightmap_sampler: &self.lightmap_sampler,
+            image_gamma: self.image_gamma.as_ref(),
+            textures: self.textures,
+        };
+        if !self.coronas.is_empty() {
+            self.marks.prepare_sprites(&ctx, crate::corona::SHADER);
+        }
+        self.marks
+            .update(&ctx, requests, temporary, now_ms, time, enabled);
+    }
+
+    /// Builds every mark shader in `shaders` now (its images, stages and
+    /// pipelines): a surface's first impact mark then binds only its
+    /// lightmap (cod4-map-sweep.md, "The soak").
+    pub fn prewarm_marks<'a>(&mut self, fs: &Pk3Fs, shaders: impl IntoIterator<Item = &'a str>) {
+        let ctx = MarkCtx {
+            device: &self.device,
+            queue: &self.queue,
+            fs,
+            shader_lib: &self.shader_lib,
+            material_layout: &self.material_layout,
+            stage_layout: &self.stage_layout,
+            white_view: &self.white_view,
+            white_lightmap: &self.white_lightmap,
+            lightmap_sampler: &self.lightmap_sampler,
+            image_gamma: self.image_gamma.as_ref(),
+            textures: self.textures,
+        };
+        self.marks.prewarm(&ctx, shaders);
+    }
+
+    /// `map_restart` frees every mark (cgame `CG_MapRestart` 0x3002ca60).
+    pub fn clear_marks(&mut self) {
+        self.marks.clear();
+    }
+
+    /// Mark shaders registered (their images and stages built) so far.
+    #[cfg(test)]
+    pub(crate) fn mark_shaders(&self) -> usize {
+        self.marks.registered()
+    }
+
+    /// Live marks in the pool, for the F3 `fx` line.
+    pub fn mark_count(&self) -> usize {
+        self.marks.live()
+    }
 }
