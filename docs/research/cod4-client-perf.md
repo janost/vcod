@@ -1357,6 +1357,47 @@ cost.
 Pending, real card: the `load profile` line before and after on each
 game's join; the first shot, frag and tracer should not hitch.
 
+### What a load keeps and what it skips (perf/client-mem)
+
+What changed, none of it in what a frame binds or draws (read off the
+draw paths; no frame compared on this box, which has no adapter):
+
+- A world material or static model skin that draws through its stages
+  (`Pass::Stage`: every CoD2 and CoD4 one, CoD1's scripted ones) binds
+  white for its base image, which only the legacy draw, the cut shadow
+  cast and the implicit dlight copy read, none of them on a staged batch.
+  The pak its skipped read would have flagged is flagged without reading
+  (`assets::mark_material_image`, `mark_skin_image`,
+  `prop_skin::mark_colour_map`), so the `cp` list holds.
+- The other world materials and prop skins decode and mip on every core,
+  a few a core at a time, and upload in first-use order.
+- The model image cache (`Renderer::model_images`) lives for one upload
+  batch and the map; before, it held every model image of the session.
+- A dynamic model's skin uploads once a map (`DynamicPass::skin_groups`)
+  where every LOD of every model uploaded its own copy, and its LODs carry
+  no bone buffer.
+- The client drops the parsed `MapWorld` once the renderer has loaded it.
+  A renderer rebuild (`vid_restart` with a changed `vc_hdr`, sample count
+  or image setting, CoD4's `r_applyPicmip`) reads the map again: CoD1's
+  `.bsp`, CoD2's `.d3dbsp`, CoD4's zone walked again (`cod4_fly::load`).
+- Pipelines kept across loads beside the lit ones: the four `floatZ`
+  writers, water's shader and pipelines, the CoD4 world fx pass
+  (`WorldFxKeep`), and the `r_vc_normalMaps` 0 variants.
+- CoD1's leaf light trace world (`StaticLighting::collision_for`) builds
+  beside the batches.
+
+The trace world alone, release, this box. VERIFIED (scratch timer, ours):
+`CollisionWorld::build` takes 26.1 ms on mp_carentan (6.3 MB), 12.8 on
+mp_brecourt (3.6 MB) and 28.0 on mp_harbor. The play world does not stand
+in for it: it traces under the client's patch arithmetic
+(`Arith::for_client`) with its brush models unlinked, and offline modes
+build none.
+
+Pending, real card: each game's join and a map change on the server's
+console, before and after, three runs a side: the `load profile` lines and
+the client's VmRSS and VmHWM after each load; and the CoD4 frames byte for
+byte (`VCOD_C4_SHOTS`, 39).
+
 ## 35. `floatZ` written in the depth prepass, no split and copy (P22)
 
 ### What 1.7's prepass draws
