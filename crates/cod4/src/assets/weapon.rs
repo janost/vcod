@@ -45,6 +45,129 @@ impl Weapon {
         f32::from_bits(self.i32_at(at) as u32)
     }
 
+    /// Three little-endian floats from `at`.
+    fn vec3_at(&self, at: usize) -> [f32; 3] {
+        [self.f32_at(at), self.f32_at(at + 4), self.f32_at(at + 8)]
+    }
+
+    /// `aimDownSight` (+1260).
+    pub fn aim_down_sight(&self) -> bool {
+        self.i32_at(1260) != 0
+    }
+
+    /// `adsOverlayReticle` (+1080), 0 none.
+    pub fn ads_overlay_reticle(&self) -> i32 {
+        self.i32_at(1080)
+    }
+
+    /// Whether the `adsOverlayShader` slot (+1072) is set in the struct.
+    pub fn has_ads_overlay_shader(&self) -> bool {
+        self.i32_at(1072) != 0
+    }
+
+    /// `adsZoomFov` (+1060).
+    pub fn ads_zoom_fov(&self) -> f32 {
+        self.f32_at(1060)
+    }
+
+    /// `adsZoomInFrac` (+1064) and `adsZoomOutFrac` (+1068).
+    pub fn ads_zoom_fracs(&self) -> (f32, f32) {
+        (self.f32_at(1064), self.f32_at(1068))
+    }
+
+    /// `adsBobFactor` (+1096).
+    pub fn ads_bob_factor(&self) -> f32 {
+        self.f32_at(1096)
+    }
+
+    /// `adsAimPitch` (+1740).
+    pub fn ads_aim_pitch(&self) -> f32 {
+        self.f32_at(1740)
+    }
+
+    /// `adsReloadTransTime` (+1940), ms.
+    pub fn ads_reload_trans_time(&self) -> i32 {
+        self.i32_at(1940)
+    }
+
+    /// Stand, ducked, prone `{stance}Move{F,R,U}` (+564, +600, +636).
+    pub fn stance_moves(&self) -> [[f32; 3]; 3] {
+        [564, 600, 636].map(|o| self.vec3_at(o))
+    }
+
+    /// Stand, ducked, prone `{stance}Rot{P,Y,R}` (+576, +612, +648).
+    pub fn stance_rots(&self) -> [[f32; 3]; 3] {
+        [576, 612, 648].map(|o| self.vec3_at(o))
+    }
+
+    /// Ducked then prone `{stance}Ofs{F,R,U}` (+588, +624); standing has none.
+    pub fn stance_ofs(&self) -> [[f32; 3]; 2] {
+        [588, 624].map(|o| self.vec3_at(o))
+    }
+
+    /// Stand, ducked, prone `{stance}MoveMinSpeed` (+668..+676).
+    pub fn move_min_speeds(&self) -> [f32; 3] {
+        self.vec3_at(668)
+    }
+
+    /// Stand, ducked, prone `{stance}RotMinSpeed` (+688..+696).
+    pub fn rot_min_speeds(&self) -> [f32; 3] {
+        self.vec3_at(688)
+    }
+
+    /// `posMoveRate` (+660) and `posProneMoveRate` (+664).
+    pub fn pos_move_rates(&self) -> [f32; 2] {
+        [self.f32_at(660), self.f32_at(664)]
+    }
+
+    /// `posRotRate` (+680) and `posProneRotRate` (+684).
+    pub fn pos_rot_rates(&self) -> [f32; 2] {
+        [self.f32_at(680), self.f32_at(684)]
+    }
+
+    /// `adsIdleAmount` (+1164) and `hipIdleAmount` (+1168).
+    pub fn idle_amounts(&self) -> [f32; 2] {
+        [self.f32_at(1164), self.f32_at(1168)]
+    }
+
+    /// `adsIdleSpeed` (+1172) and `hipIdleSpeed` (+1176).
+    pub fn idle_speeds(&self) -> [f32; 2] {
+        [self.f32_at(1172), self.f32_at(1176)]
+    }
+
+    /// `idleCrouchFactor` (+1180) and `idleProneFactor` (+1184).
+    pub fn idle_factors(&self) -> [f32; 2] {
+        [self.f32_at(1180), self.f32_at(1184)]
+    }
+
+    /// Hip (+1196) then ads (+1224) sway: `swayMaxAngle`, `swayLerpSpeed`,
+    /// `swayPitchScale`, `swayYawScale`, `swayHorizScale`, `swayVertScale`.
+    pub fn sways(&self) -> [[f32; 6]; 2] {
+        [1196, 1224].map(|o| std::array::from_fn(|k| self.f32_at(o + 4 * k)))
+    }
+
+    /// `nightVisionWearTime` (+980), ms.
+    pub fn night_vision_wear_time(&self) -> i32 {
+        self.i32_at(980)
+    }
+
+    /// `reloadTime` (+904) and `reloadShowRocketTime` (+908), ms.
+    pub fn reload_times(&self) -> (i32, i32) {
+        (self.i32_at(904), self.i32_at(908))
+    }
+
+    /// `adsDofStart` (+2160) and `adsDofEnd` (+2164).
+    pub fn ads_dof(&self) -> [f32; 2] {
+        [self.f32_at(2160), self.f32_at(2164)]
+    }
+
+    /// Each view anim node's time in ms off `g_animRateOffsets`
+    /// (iw3mp.exe 0x727580, cod4-client-view.md 4.1), `None` for a node
+    /// with no time field.
+    pub fn anim_rate_times(&self) -> [Option<i32>; 33] {
+        ANIM_RATE_OFFSETS.map(|o| (o >= 0).then(|| self.i32_at(o as usize)))
+    }
+
     /// `weapClass` (+304, the weapon file's `weaponClass`); 7 a turret.
     pub fn weap_class(&self) -> i32 {
         self.i32_at(304)
@@ -85,6 +208,13 @@ impl Weapon {
             .collect()
     }
 }
+
+/// `g_animRateOffsets` (iw3mp.exe 0x727580): each view anim node's time
+/// field in `WeaponDef`, -1 for none.
+const ANIM_RATE_OFFSETS: [i32; 33] = [
+    -1, -1, -1, -1, 888, -1, -1, 896, 900, 904, 912, 920, 928, 936, 956, 932, 944, 940, 952, 948,
+    960, 964, 968, 972, 976, -1, 980, 992, -1, -1, -1, -1, -1,
+];
 
 /// One slot of the walk, at its offset in `WeaponDef`.
 #[derive(Clone, Copy, Debug)]
