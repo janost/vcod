@@ -888,11 +888,14 @@ impl Bot {
         let jump = vcod_common::pmove::JUMP_HEIGHT;
         let path_drop = view.waypoint.map_or(0.0, |w| view.origin[2] - w[2]);
         let path_drops = path_drop > jump;
+        // Past `bg_fallDamageMinHeight` the fall hurts. mp_ship's 280 off
+        // the 216 floor at x 2010 took a bot's health with it (section 3).
+        let hurts = crate::nav::falls().min;
         let shun = |depth: f32| {
             if path_drops {
-                depth > FALL_HURTS && depth > path_drop + jump
+                depth > hurts && depth > path_drop + jump
             } else {
-                self.unstick_tries < CORNERED || depth > FALL_HURTS
+                self.unstick_tries < CORNERED || depth > hurts
             }
         };
         view.hazard_ahead[o] || view.drop_ahead[o].is_some_and(shun)
@@ -915,10 +918,6 @@ pub fn octant(yaw: f32) -> usize {
     ((yaw.rem_euclid(360.0) + 22.5) / 45.0) as usize % 8
 }
 
-/// A cornered bot still keeps off a drop this deep: past
-/// `bg_fallDamageMinHeight` the fall hurts. mp_ship's 280 off the 216
-/// floor at x 2010 took a bot's health with it (section 3).
-const FALL_HURTS: f32 = 256.0;
 /// A climb this near the middle of the rungs along the face stops strafing.
 const LADDER_CENTRED: f32 = 2.0;
 /// A climb this near under its waypoint stops strafing: a body still

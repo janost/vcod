@@ -10,6 +10,8 @@ thread_local! {
     pub(super) static CANCEL: std::cell::RefCell<Option<Arc<std::sync::atomic::AtomicBool>>> = const { std::cell::RefCell::new(None) };
     /// The movement rules every walk's body moves by ([`with_rules`]).
     pub(super) static RULES: std::cell::Cell<MoveRules> = const { std::cell::Cell::new(MoveRules::V1_1) };
+    /// The fall heights every walk and bot judges a drop by ([`with_falls`]).
+    pub(super) static FALLS: std::cell::Cell<FallHeights> = const { std::cell::Cell::new(FallHeights::COD1) };
     /// A game's own step every walk's body moves by in place of CoD1's
     /// pmove ([`with_step`]).
     static STEP: std::cell::RefCell<Option<Arc<dyn WalkStep>>> = const { std::cell::RefCell::new(None) };
@@ -41,6 +43,22 @@ pub fn with_rules<R>(rules: MoveRules, f: impl FnOnce() -> R) -> R {
     let r = f();
     RULES.set(was);
     r
+}
+
+/// Runs `f` with drops judged by `falls`, the game's
+/// `bg_fallDamageMinHeight` and `MaxHeight`: CoD1's 256 and 480 unless a
+/// game names its own (CoD4's 128 and 300, `bots::cod4::FALLS`). Read by
+/// [`falls`].
+pub fn with_falls<R>(falls: FallHeights, f: impl FnOnce() -> R) -> R {
+    let was = FALLS.replace(falls);
+    let r = f();
+    FALLS.set(was);
+    r
+}
+
+/// The fall heights in force ([`with_falls`]).
+pub fn falls() -> FallHeights {
+    FALLS.get()
 }
 
 /// What a [`WalkStep`] keeps of a walk's body between its cmds, beside the
@@ -81,21 +99,23 @@ pub fn with_step<R>(step: Option<Arc<dyn WalkStep>>, f: impl FnOnce() -> R) -> R
     r
 }
 
-/// The walks' rules and step in force on a thread ([`with_rules`],
-/// [`with_step`]), carried to a worker thread that walks for it: the bots'
+/// The walks' rules, step and fall heights in force on a thread
+/// ([`with_rules`], [`with_step`], [`with_falls`]), carried to a worker thread that walks for it: the bots'
 /// pass plans on workers under the ticking thread's (`bots::driver::par`).
 #[derive(Clone)]
-pub(crate) struct WalkRules(MoveRules, Option<Arc<dyn WalkStep>>);
+pub(crate) struct WalkRules(MoveRules, Option<Arc<dyn WalkStep>>, FallHeights);
 
 impl WalkRules {
     /// This thread's.
     pub(crate) fn here() -> WalkRules {
-        WalkRules(RULES.get(), own_step())
+        WalkRules(RULES.get(), own_step(), FALLS.get())
     }
 
     /// Runs `f` under them.
     pub(crate) fn enter<R>(&self, f: impl FnOnce() -> R) -> R {
-        with_rules(self.0, || with_step(self.1.clone(), f))
+        with_rules(self.0, || {
+            with_falls(self.2, || with_step(self.1.clone(), f))
+        })
     }
 }
 
@@ -136,6 +156,7 @@ pub(super) fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync)
     let next = std::sync::atomic::AtomicUsize::new(0);
     let mut out: Vec<Option<R>> = (0..items.len()).map(|_| None).collect();
     let rules = RULES.get();
+    let falls = FALLS.get();
     let step = own_step();
     std::thread::scope(|s| {
         let handles: Vec<_> = (0..threads.min(items.len()))
@@ -143,6 +164,7 @@ pub(super) fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync)
                 let (step, next, f) = (step.clone(), &next, &f);
                 s.spawn(move || {
                     RULES.set(rules);
+                    FALLS.set(falls);
                     STEP.set(step);
                     let mut done = Vec::new();
                     loop {
@@ -208,7 +230,7 @@ const TURN_PACE: f32 = 150.0;
 pub(super) const LADDER_NEAR: f32 = 96.0;
 
 /// The ticks a walk's budget stretches by while the body is in the air:
-/// a fall of [`MAX_DROP`] takes 16.
+/// a fall of [`max_drop`] takes 16.
 const FALL_TICKS: usize = 18;
 
 /// Inside this of its target, horizontally, a body backing onto a ladder
@@ -361,14 +383,16 @@ pub(super) fn creep_takes_a_turn(
 }
 
 /// Whether a floor point 32 or 48 units from `q` in any of the eight
-/// octants has nothing under it within `bg_fallDamageMinHeight` (256).
+/// octants has nothing under it within `bg_fallDamageMinHeight`
+/// ([`falls`]).
 pub(super) fn beside_a_fall_that_hurts(world: &CollisionWorld, q: Vec3) -> bool {
+    let hurts = falls().min;
     (0..8).any(|i| {
         let a = (i as f32 * 45.0).to_radians();
         let dir = Vec3::new(a.cos(), a.sin(), 0.0);
         [32.0, 48.0].iter().any(|&r| {
             let top = q + dir * r + Vec3::Z * 16.0;
-            let down = top - Vec3::Z * (16.0 + 256.0);
+            let down = top - Vec3::Z * (16.0 + hurts);
             world
                 .point_trace(top, down, MASK_PLAYERSOLID, false)
                 .fraction
@@ -379,18 +403,19 @@ pub(super) fn beside_a_fall_that_hurts(world: &CollisionWorld, q: Vec3) -> bool 
 
 /// Whether a point 32 to 96 units from a drop's landing `q` in any of the
 /// eight octants, in the open from [`MISS_EYE`] over `q`, has no floor
-/// within `bg_fallDamageMinHeight` (256) under `q`: a run off the drop
+/// within `bg_fallDamageMinHeight` ([`falls`]) under `q`: a run off the drop
 /// that misses it carries that far (mp_ship's run onto the ledge at
 /// (3521, 289, 760) flew 93 units before it was level with it). From
 /// lower, a slope over that ledge hides the way it flew.
 pub(super) fn a_miss_hurts(world: &CollisionWorld, q: Vec3) -> bool {
+    let hurts = falls().min;
     (0..8).any(|i| {
         let a = (i as f32 * 45.0).to_radians();
         let dir = Vec3::new(a.cos(), a.sin(), 0.0);
         let eye = q + Vec3::Z * MISS_EYE;
         [32.0, 48.0, 64.0, 80.0, 96.0].iter().any(|&r| {
             let top = eye + dir * r;
-            let down = top - Vec3::Z * (MISS_EYE + 256.0);
+            let down = top - Vec3::Z * (MISS_EYE + hurts);
             // Not through a wall: past the hull lies nothing at all.
             world
                 .point_trace(eye, top, MASK_PLAYERSOLID, false)
@@ -431,7 +456,7 @@ pub(super) fn ladder_near(ladders: &[(Vec3, Vec3)], p: Vec3) -> bool {
         let (lo, hi) = (lo - near, hi + near);
         (lo.x..=hi.x).contains(&p.x)
             && (lo.y..=hi.y).contains(&p.y)
-            && hi.z >= p.z - MAX_DROP
+            && hi.z >= p.z - max_drop()
             && lo.z <= p.z + Z_MERGE
     })
 }
@@ -439,7 +464,7 @@ pub(super) fn ladder_near(ladders: &[(Vec3, Vec3)], p: Vec3) -> bool {
 /// Runs a body from `from` toward `target`, re-aiming every tick, and
 /// reports where it came to rest when it got within [`ARRIVE`] on the
 /// ground (and of the height `floor`, when given) without falling past
-/// [`MAX_DROP`], and whether it jumped on the way: once where a forward
+/// [`max_drop`], and whether it jumped on the way: once where a forward
 /// run stalls, or at the lip for a [`Gait::Leap`].
 pub(super) fn walk_as(
     world: &CollisionWorld,
@@ -584,6 +609,7 @@ pub(super) fn walk_sliding(
     // measures from where the body last stood, in the air only.
     let mut fall_top = from.z;
     let mut support_z = from.z;
+    let (max_drop, paced_drop) = (max_drop(), paced_drop());
     let mut tick = 0;
     let mut airborne = false;
     let cap = budget + FALL_TICKS + run_ticks(dist);
@@ -662,8 +688,8 @@ pub(super) fn walk_sliding(
             fall_top = fall_top.max(ps.origin.z);
         }
         let deep = match pace {
-            Some(_) => !held && ps.origin.z < support_z - PACED_DROP,
-            None => ps.origin.z < fall_top - MAX_DROP,
+            Some(_) => !held && ps.origin.z < support_z - paced_drop,
+            None => ps.origin.z < fall_top - max_drop,
         };
         if deep {
             return Walked::Fell;
