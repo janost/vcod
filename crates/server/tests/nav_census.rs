@@ -4,8 +4,9 @@
 //! spawn fails here, one that joins more passes and should raise the floor.
 //!
 //! Needs `COD_DIR`; without the paks it returns early. Ignored by default
-//! (about 3 min, 2300 s of CPU). After touching nav, run it with
-//! `cargo test -p vcod-server --test server -- --ignored nav_census::`.
+//! (about 20 s in release at 1.1, 80 s at UO). After touching nav, run it
+//! with `cargo test --release -p vcod-server --test server -- --ignored
+//! nav_census::`.
 //!
 //! The United Offensive census runs only with `COD_DIR` at a UO install
 //! (`uo/` beside `main/`) and returns at once otherwise, so it costs the
@@ -30,7 +31,7 @@ const FLOORS: [(&str, usize, usize); 12] = [
 ];
 
 #[test]
-#[ignore = "builds all 12 stock nav graphs, ~3 min; run with --ignored"]
+#[ignore = "builds all 12 stock nav graphs, ~20 s in release; run with --ignored"]
 fn every_stock_maps_spawns_stay_in_one_component() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         eprintln!("COD_DIR unset or has no main/: skipping");

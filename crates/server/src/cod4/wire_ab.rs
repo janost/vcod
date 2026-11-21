@@ -1316,7 +1316,7 @@ fn the_challenges_come_off_the_levels_rand() {
 /// [`WALK_SEED`] alone, and with `kill-target,kill-shooter` `combat_ab`'s
 /// `KILL_SEED`.
 #[test]
-#[ignore]
+#[ignore = "seed search by hand: COD4_SEED_FROM and COD4_SEED_TO"]
 fn recover_game_seed() {
     let ms = |k: &str| -> u64 { std::env::var(k).expect(k).parse().unwrap() };
     let (from, to) = (ms("COD4_SEED_FROM"), ms("COD4_SEED_TO"));

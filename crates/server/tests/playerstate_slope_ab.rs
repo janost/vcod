@@ -838,7 +838,7 @@ fn check_path(map: &str, gametype: &str, path: &str, tol: &Tolerance, until: Opt
 /// A capture that is not committed: `SLOPE_FIXTURE=<path> SLOPE_MAP=<map>
 /// SLOPE_GAMETYPE=<gt> cargo test ... -- --ignored`, for a run kept in `tmp/`.
 #[test]
-#[ignore]
+#[ignore = "tool: set SLOPE_FIXTURE"]
 fn the_mover_replays_the_fixture_named_by_slope_fixture() {
     let path = std::env::var("SLOPE_FIXTURE").expect("SLOPE_FIXTURE");
     let map = std::env::var("SLOPE_MAP").unwrap_or_else(|_| "mp_carentan".into());

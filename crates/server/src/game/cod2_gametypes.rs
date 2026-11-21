@@ -222,7 +222,7 @@ fn cod2_every_gametype_plays_on_two_maps() {
 /// The whole census: every stock gametype on every stock map, 10 s each
 /// with two clients (about 80 loads; run in release).
 #[test]
-#[ignore]
+#[ignore = "every stock gametype on every stock map: COD2_DIR, ~18 s in release"]
 fn cod2_gametype_census() {
     let Some(fs) = vcod_common::testing::cod2_fs() else {
         return;

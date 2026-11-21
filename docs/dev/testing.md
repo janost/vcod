@@ -178,6 +178,10 @@ and the map sweep (minutes and gigabytes a map) and the two live browser
 tests, which ask cod.pm's public master and every server it lists, and
 broadcast on the LAN.
 
+Every `#[ignore]` carries a reason (what it needs) and every ignored test is
+named below, by name, prefix or `module::` filter; `--test common
+ignored_tests_named` fails on one that is not.
+
 | Touching | Run | Cost |
 |---|---|---|
 | pmove, collision or nav | `cargo test --release -p vcod-server --test server -- --ignored nav_census::` | ~20 s at 1.1; ~80 s at UO |

@@ -1163,7 +1163,7 @@ mod tests {
     /// `VCOD_LIVE_NET=1 cargo test -p vcod --bins master_list_live --
     /// --ignored --nocapture`.
     #[test]
-    #[ignore]
+    #[ignore = "live net: asks cod.pm's public master; needs VCOD_LIVE_NET=1"]
     fn master_list_live() {
         live_net_allowed("master_list_live", "asks cod.pm's public master");
         let mut b = Browser {
@@ -1200,7 +1200,7 @@ mod tests {
     /// servers"), then `VCOD_LIVE_NET=1 cargo test -p vcod lan_scan_live --
     /// --ignored --nocapture`.
     #[test]
-    #[ignore]
+    #[ignore = "live net: broadcasts on the LAN; needs VCOD_LIVE_NET=1"]
     fn lan_scan_live() {
         live_net_allowed("lan_scan_live", "broadcasts on the LAN");
         let mut b = Browser {

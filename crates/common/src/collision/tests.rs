@@ -976,7 +976,7 @@ fn a_capsule_stopped_at_0_reads_the_first_in_leaf_order() {
 /// difference from the leaf walk, as `in` (the walk enters an open
 /// leaf) or `out` (only solid ones). Run in release.
 #[test]
-#[ignore]
+#[ignore = "census, not a check: COD_DIR at 1.1, every stock map; run in release"]
 fn leaf_order_census() {
     let Some(fs) = crate::testing::game_fs_11() else {
         return;
