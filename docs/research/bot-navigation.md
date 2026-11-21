@@ -3178,8 +3178,31 @@ Retail has no bots; this section is measured on vcod-server only.
 | 6 | `0d1140148c0fb2d9` | `5661bad59f254abd` | 39 / 42 | 0 / 0 | 0 / 0 |
 
   Kills 265 before, 269 after; suicides 1 and 1; stalled bot-ticks 19
-  and 113, all but 4 of the after's on seed 2, not traced. VERIFIED
-  (measured).
+  and 113. VERIFIED (measured).
+- The stalls are one spot, on master's build as on this one: the foot of
+  the mantle up onto the ledge at about (1400, 195, 188), 60 over the
+  ground at 126, with a teammate standing on the ledge's top. Its local
+  graph is the same before and after (`NEAR=1380,190,60 EDGES=1`: nodes
+  (1414, 190, 126), (1408, 195, 187), (1391, 189, 186) and their edges,
+  mantles included, only renumbered), and no drop near it is past the new
+  122. `STALLS=1`, 12 bots, 3000 ticks, release:
+
+| Build | Seed | Bot-ticks | Bot | Where, first line | Teammate on the ledge |
+|---|---|---|---|---|---|
+| master | 1 | 19 | slot 10, allies | (1425, 125, 126) tick 980 | slot 4 at (1403, 190, 186) |
+| master | 9 | 7 | slot 6, allies | (1426, 86, 116) tick 740 | slot 2 at (1355, 238, 200) |
+| branch | 2 | 109 | slot 9, axis | (1398, 182, 137) tick 1760, mantling | slot 7 at (1373, 235, 226) |
+| branch | 3 | 4 | slot 0, allies | (1384, 159, 175) tick 1360 | slot 10 at (1372, 204, 190) |
+| branch | 16 | 19 | slot 10, allies | (1431, 189, 127) tick 1040 | slot 8 at (1367, 233, 198) |
+
+  Seed 2's bot mantles up (`pmf` 0x4, the mantle's flags 4), reaches
+  the top at z 189 beside the teammate 31 off, and comes back down to
+  126, four times over 100 ticks (ticks 1760 to 1860). Master's seeds 2
+  to 8 and 10 to 16 and the branch's 1, 4 to 15 stall nowhere. The new
+  heights leave no node without an edge out (mp_crash, `NEAR=0,0,100000`:
+  0 dead ends of 8444 before, 0 of 8441 after) and every spawn in the one
+  component. VERIFIED (measured). The mantle loop under a teammate is
+  older than this change and left open. INFERRED (the runs).
 
 ## 4. Memory and hearing
 
