@@ -17,6 +17,14 @@ pub struct Engine<G: GameModule> {
 /// What every server answers the same over its core: the binary's loop
 /// and the tests drive both games through these.
 impl<G: GameModule> Engine<G> {
+    /// Pins the challenge mask's key ([`super::challenge::Challenges::pin_key`]):
+    /// a harness that hashes the datagrams sent (`bot_match`'s `NETDIGEST`)
+    /// gets the same bytes each run.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn test_pin_challenges(&mut self, seed: u64) {
+        self.core.challenges.pin_key(seed);
+    }
+
     /// `SV_Frame` for `frames` owed game frames ([`tick`]). A panic in it
     /// loads the level again ([`Self::level_panicked`]).
     pub fn tick_frames(&mut self, now: Instant, frames: u32) {

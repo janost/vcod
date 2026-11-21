@@ -66,7 +66,9 @@
 //! the match: compare `NETDIGEST` runs only with `NETDIGEST` runs. CoD2's
 //! challenge is salted with the wall clock, which keys every netchan byte;
 //! under `NETDIGEST` the CoD2 server salts it with the frame clock
-//! (`Cod2Server::test_frame_clock`). `NETDUMP=<dir>` writes the
+//! (`Cod2Server::test_frame_clock`). Every game masks its challenges under
+//! a per-process key; `NETDIGEST` pins it to the seed
+//! (`Engine::test_pin_challenges`). `NETDUMP=<dir>` writes the
 //! datagrams themselves, a line each (`<tick> <to> <len> <hex>`), to
 //! `<dir>/<game>_<map>_<gametype>_s<seed>.net`, to find the bytes behind a
 //! `net@` window that parted.
@@ -1946,6 +1948,9 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
         .net
         .is_some()
         .then(|| Observer::new(sv.protocol(), now, 0));
+    if observer.is_some() {
+        sv.test_pin_challenges(seed);
+    }
     let mut crowd: Vec<Observer> = (1..=observers_from_env())
         .map(|i| match play_from_env() {
             true => Observer::player(sv.protocol(), now, i),
@@ -3507,6 +3512,7 @@ mod cod2 {
         let mut dump = super::net_dump("cod2", map, gametype, seed);
         if observer.is_some() {
             sv.test_frame_clock();
+            sv.test_pin_challenges(seed);
         }
         // `STALLS=1`: every 20th tick of a stalled sample to stderr.
         let stall_log = crate::knob("STALLS").as_deref() == Ok("1");
