@@ -15,8 +15,6 @@
 use vcod_cod2::hudelem::HudElem;
 use vcod_cod2::net::Frame;
 use vcod_cod2::net::delta::ClientState2;
-use vcod_cod2::net::delta::field_index;
-use vcod_cod2::net::fields::CLIENT_STATE_FIELDS;
 use vcod_cod2::net::protocol::CS_LAYOUT_118;
 use vcod_common::asset_source::AssetSource;
 use vcod_common::localize::Localized;
@@ -37,6 +35,18 @@ use crate::play::cod2_events::Event2;
 
 /// `pm_type` 5 keeps the board up (cod2-movement.md).
 use vcod_cod2::pmove::pm_type::{DEAD as PM_DEAD, INTERMISSION as PM_INTERMISSION};
+
+// Netfield indices, resolved at compile time.
+const CS_TEAM: usize = vcod_cod2::field!(vcod_cod2::net::fields::CLIENT_STATE_FIELDS, "team");
+const ES_ATTACKER_ENTITY_NUM: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::ENTITY_STATE_FIELDS,
+    "attackerEntityNum"
+);
+const PS_CLIENT_NUM: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "clientNum");
+const PS_DELTA_TIME: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "deltaTime");
+
 /// `b`'s status icon `n` is configstring `0x16 + n` (cod2-protocol.md 5).
 const CS_STATUS_ICONS: usize = 0x16;
 /// The vote's four configstrings, 1.1's 15..18.
@@ -466,7 +476,7 @@ fn localized(frame: &Frame, loc: &Localized, index: i32) -> Option<String> {
 /// snapshot does not carry, whose row the board leaves out.
 pub fn board_client(clients: &[ClientState2], n: u32) -> Option<(String, i32)> {
     let c = clients.iter().find(|c| c.number == n)?;
-    let team = c.f[field_index(&CLIENT_STATE_FIELDS, "team")] as i32;
+    let team = c.f[CS_TEAM] as i32;
     Some((c.name(), team))
 }
 
@@ -539,8 +549,8 @@ impl Cod2Hud {
             .entities
             .iter()
             .find(|e| e.number == ev.entity)
-            .map_or(1022, |e| e.raw.i32("attackerEntityNum"));
-        let own = frame.snap.ps.raw.i32("clientNum");
+            .map_or(1022, |e| e.raw.i32_at(ES_ATTACKER_ENTITY_NUM));
+        let own = frame.snap.ps.raw.i32_at(PS_CLIENT_NUM);
         let icons = &mut self.kill_icons;
         let cs = frame.configstrings.all();
         obituary(
@@ -677,7 +687,7 @@ impl Cod2Hud {
         };
         let view = BoardView {
             now: clock,
-            own_client: u32::try_from(frame.snap.ps.raw.i32("clientNum")).ok(),
+            own_client: u32::try_from(frame.snap.ps.raw.i32_at(PS_CLIENT_NUM)).ok(),
             client: &client,
             cvar: &cvar,
             loc,
@@ -700,7 +710,7 @@ impl Cod2Hud {
             self.kills.build(fonts, now, &v.left(), &mut out);
             // `cg + 0x2cd14`, the killcam, is `ps.deltaTime` set
             // (`CG_SetNextSnap`, Mac 0x1dee08).
-            let killcam = ps.raw.i32("deltaTime") != 0;
+            let killcam = ps.raw.i32_at(PS_DELTA_TIME) != 0;
             self.player.follow(
                 frame,
                 fonts,
@@ -781,6 +791,8 @@ pub fn load_quads(text: &str) -> Vec<HudQuad> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_cod2::net::delta::field_index;
+    use vcod_cod2::net::fields::CLIENT_STATE_FIELDS;
     use vcod_common::net::Msec;
 
     /// A client state named `name` on `team`, as a snapshot carries it.

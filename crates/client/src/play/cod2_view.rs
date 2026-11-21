@@ -29,6 +29,40 @@ use vcod_cod2::net::flags::{
 };
 use vcod_cod2::pmove::pm_type::{INTERMISSION as PM_INTERMISSION, SPECTATOR as PM_SPECTATOR};
 
+// Netfield indices, resolved at compile time.
+const PS_BOB_CYCLE: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "bobCycle");
+const PS_HOLD_BREATH_SCALE: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+    "holdBreathScale"
+);
+const PS_LEANF: usize = vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "leanf");
+const PS_OFF_HAND_INDEX: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "offHandIndex");
+const PS_SHELLSHOCK_DURATION: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+    "shellshockDuration"
+);
+const PS_SHELLSHOCK_INDEX: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+    "shellshockIndex"
+);
+const PS_SHELLSHOCK_TIME: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+    "shellshockTime"
+);
+const PS_SPEED: usize = vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "speed");
+const PS_VIEW_HEIGHT_CURRENT: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+    "viewHeightCurrent"
+);
+const PS_VIEW_HEIGHT_TARGET: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+    "viewHeightTarget"
+);
+const PS_WEAPONSTATE: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "weaponstate");
+
 /// What the view reads of the weapon `BG_GetViewmodelWeaponIndex` names.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SightDef {
@@ -561,7 +595,7 @@ impl ViewFx {
     pub fn sight_def(f: &Frame, weapons: &LevelWeapons) -> Option<(SightDef, GunKeys)> {
         let ps = &f.snap.ps;
         let w = if ps.pm_flags & PMF_OFFHAND != 0 {
-            ps.raw.i32("offHandIndex")
+            ps.raw.i32_at(PS_OFF_HAND_INDEX)
         } else {
             ps.weapon
         };
@@ -608,9 +642,9 @@ impl ViewFx {
             let vps = ViewPs {
                 pos_frac: pos,
                 eflags: ps.eflags,
-                view_height_target: ps.raw.i32("viewHeightTarget"),
-                bob_cycle: ps.raw.i32("bobCycle") as u8,
-                hold_breath_scale: ps.raw.f32("holdBreathScale"),
+                view_height_target: ps.raw.i32_at(PS_VIEW_HEIGHT_TARGET),
+                bob_cycle: ps.raw.i32_at(PS_BOB_CYCLE) as u8,
+                hold_breath_scale: ps.raw.f32_at(PS_HOLD_BREATH_SCALE),
                 xyspeed: Vec3::from(ps.velocity).truncate().length(),
             };
             let a = view_angles(&vps, def.as_ref(), kick, &mut self.idle, now, msec);
@@ -634,9 +668,9 @@ impl ViewFx {
         // the console's record.
         let raw = &ps.raw;
         let fields = (
-            raw.i32("shellshockIndex"),
-            raw.i32("shellshockTime"),
-            raw.i32("shellshockDuration"),
+            raw.i32_at(PS_SHELLSHOCK_INDEX),
+            raw.i32_at(PS_SHELLSHOCK_TIME),
+            raw.i32_at(PS_SHELLSHOCK_DURATION),
         );
         let cs = f.configstrings;
         let mut shock = self.shock.frame(
@@ -661,14 +695,14 @@ impl ViewFx {
                 let gps = GunPs {
                     view: angles,
                     pos_frac: pos,
-                    leanf: raw.f32("leanf"),
+                    leanf: raw.f32_at(PS_LEANF),
                     eflags: ps.eflags,
-                    weaponstate: raw.i32("weaponstate"),
-                    view_height_target: raw.i32("viewHeightTarget"),
-                    view_height_current: raw.f32("viewHeightCurrent"),
-                    speed: raw.i32("speed") as f32,
+                    weaponstate: raw.i32_at(PS_WEAPONSTATE),
+                    view_height_target: raw.i32_at(PS_VIEW_HEIGHT_TARGET),
+                    view_height_current: raw.f32_at(PS_VIEW_HEIGHT_CURRENT),
+                    speed: raw.i32_at(PS_SPEED) as f32,
                     xyspeed: Vec3::from(ps.velocity).truncate().length(),
-                    bob_cycle: raw.i32("bobCycle") as u8,
+                    bob_cycle: raw.i32_at(PS_BOB_CYCLE) as u8,
                 };
                 let input = GunInput {
                     kick,

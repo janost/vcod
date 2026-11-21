@@ -43,6 +43,14 @@ const MUZZLE_STAND: f32 = 60.0;
 /// `EF_NODRAW`.
 use vcod_cod2::net::flags::{EF_CROUCHING, EF_NODRAW, EF_PRONE};
 
+// Netfield indices, resolved at compile time.
+const ES_EVENT_PARMS: [usize; 4] =
+    vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, 4 "eventParms");
+const ES_LEANF: usize = vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "leanf");
+const ES_LOOP_SOUND: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "loopSound");
+const ES_TIME: usize = vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "time");
+
 /// A server command `CG_ServerCommand` (Mac 0x1e2ea4) turns into sound.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SoundCommand {
@@ -420,10 +428,10 @@ impl Cod2Sounds {
         let cs = frame.configstrings;
         let (mut loops, mut missiles) = (HashMap::new(), HashMap::new());
         for e in &frame.snap.entities {
-            let idx = e.raw.i32("loopSound");
+            let idx = e.raw.i32_at(ES_LOOP_SOUND);
             let missile = e.etype == ev::ET_MISSILE
                 && e.eflags & EF_NODRAW == 0
-                && e.raw.i32("time") <= frame.time_ms
+                && e.raw.i32_at(ES_TIME) <= frame.time_ms
                 && e.weapon > 0;
             if idx <= 0 && !missile {
                 continue;
@@ -459,19 +467,21 @@ impl Cod2Sounds {
             if e.etype != ev::ET_SOUND_BLEND {
                 continue;
             }
-            let alias = |field: &str| {
-                let i = usize::try_from(e.raw.i32(field)).ok().filter(|&i| i > 0)?;
+            let alias = |field: usize| {
+                let i = usize::try_from(e.raw.i32_at(field))
+                    .ok()
+                    .filter(|&i| i > 0)?;
                 let a = cs.get(CS_SOUND_ALIASES + i);
                 (!a.is_empty()).then(|| a.to_string())
             };
-            let (Some(a), Some(b)) = (alias("eventParms[0]"), alias("eventParms[1]")) else {
+            let (Some(a), Some(b)) = (alias(ES_EVENT_PARMS[0]), alias(ES_EVENT_PARMS[1])) else {
                 continue;
             };
-            let next = e.raw.f32("leanf");
+            let next = e.raw.f32_at(ES_LEANF);
             let cur = frame
                 .prev
                 .and_then(|p| p.entity(e.number))
-                .map_or(next, |p| p.raw.f32("leanf"));
+                .map_or(next, |p| p.raw.f32_at(ES_LEANF));
             out.push(BlendSource {
                 entity: e.number,
                 aliases: [a, b],

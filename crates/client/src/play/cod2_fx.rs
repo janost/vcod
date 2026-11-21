@@ -16,6 +16,19 @@ use vcod_cod2::net::flags::EF_TURRET_STANCE;
 use vcod_cod2::net::{ConfigStrings, EntityView, Frame, SnapshotView};
 use vcod_common::asset_source::{Asset, AssetKind, AssetSource};
 
+// Netfield indices, resolved at compile time.
+const ES_ANGLES2: [usize; 3] =
+    vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, 3 "angles2");
+const ES_EVENT_PARM: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "eventParm");
+const ES_ORIGIN2: [usize; 3] =
+    vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, 3 "origin2");
+const ES_SCALE: usize = vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "scale");
+const PS_VIEWLOCKED_ENT_NUM: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+    "viewlocked_entNum"
+);
+
 /// One effect to play.
 #[derive(Clone, Debug)]
 pub struct FxPlay {
@@ -431,7 +444,7 @@ impl Cod2Fx {
         if e.etype == ET_TURRET {
             let w = fx_of(weapons, e.weapon);
             let manned = snap.ps.eflags & EF_TURRET_STANCE != 0
-                && snap.ps.raw.i32("viewlocked_entNum") == e.entity as i32;
+                && snap.ps.raw.i32_at(PS_VIEWLOCKED_ENT_NUM) == e.entity as i32;
             let path = if manned { w.view_flash } else { w.world_flash };
             if let Some(path) = path
                 && let Some(pose) = scene.tags.get(&e.entity).and_then(|t| t.flash)
@@ -708,7 +721,7 @@ impl Cod2Fx {
     fn looped(&mut self, e: &EntityView, frame: &Frame, view: Vec3, out: &mut Vec<FxPlay>) {
         let raw = &e.raw;
         let time = frame.time_ms;
-        let period = raw.f32("angles2[1]") as i32;
+        let period = raw.f32_at(ES_ANGLES2[1]) as i32;
         let last = self.loops.entry(e.number).or_insert(0);
         if time < *last {
             *last = time;
@@ -723,21 +736,21 @@ impl Cod2Fx {
             }
         }
         let origin = frame.entity_origin(e);
-        let cull = raw.f32("angles2[0]");
+        let cull = raw.f32_at(ES_ANGLES2[0]);
         if cull != 0.0 && origin.distance_squared(view) >= cull * cull {
             return;
         }
-        let id = raw.i32("scale");
+        let id = raw.i32_at(ES_SCALE);
         let Some(path) = cs_effect(frame.configstrings, id) else {
             self.bad_id(id);
             return;
         };
         let fwd = Vec3::new(
-            raw.f32("origin2[0]"),
-            raw.f32("origin2[1]"),
-            raw.f32("origin2[2]"),
+            raw.f32_at(ES_ORIGIN2[0]),
+            raw.f32_at(ES_ORIGIN2[1]),
+            raw.f32_at(ES_ORIGIN2[2]),
         );
-        let up = raw.i32("eventParm");
+        let up = raw.i32_at(ES_EVENT_PARM);
         let at = if fwd.length_squared() == 0.0 {
             SpawnAt::Point { pos: origin }
         } else if up == 0 {
