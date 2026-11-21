@@ -1154,10 +1154,13 @@ damage kick), each a client joined to vcod-server's `war` on mp_crash.
   two floats summed on the x87, times the double 182.04445 (0x70afb0)
   plus the double 0.5 (0x70ace8), then 0x68b360 (`fstp QWORD`,
   `cvttsd2si`) truncates the double, masked to 16 bits (0x463aa9..
-  0x463acf). VERIFIED (the instructions). So the kick turns the aim: the
+  0x463acf). VERIFIED (the instructions). The loop runs `esi` from
+  0xc84f98 to 0xc84fa4, three floats, so the roll (`kickAVel`'s
+  `-yaw / 2`) rides the cmd with the pitch and yaw. VERIFIED (the
+  instructions). So the kick turns the aim: the
   server reads it off the cmd like a mouse turn, and the prediction draws
-  it for the same reason. vcod adds `Cod4Kick::view_kick` to the cmd's
-  view in `live_frame` and makes the cmd with
+  it for the same reason. vcod adds all three of `Cod4Kick::view_kick`
+  to the cmd's view (`play::cod4::cmd`) and makes the cmd with
   `vcod_cod4::net::conn::cmd_angles` off the float difference from
   `delta_angles`. vcod's view is not retail's `cl.viewangles`, which
   piles up the mouse unwrapped, so the helper wraps the difference into

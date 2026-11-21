@@ -18,6 +18,25 @@ use super::ops::{
     MAX_RELIABLE_COMMANDS, PACKET_BACKUP, Svc,
 };
 
+/// `CL_ParseServerMessage: Illegible server message %d`, a `Com_Error`
+/// drop (`CoD2MP_s.exe` 0x414546, cod2-protocol.md 2.2): an op over 6, a
+/// top-level 2 or 3, or -1 for one read at the message's end. The client
+/// drops the connection on it.
+#[derive(Debug)]
+pub struct Illegible(pub i32);
+
+impl std::fmt::Display for Illegible {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "CL_ParseServerMessage: Illegible server message {}",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for Illegible {}
+
 /// `svc_gamestate`'s body (3.2).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Gamestate2 {
@@ -181,8 +200,12 @@ impl Parser {
             ..Parsed::default()
         };
         loop {
+            // An op's body read past the end; retail ends the parse there.
             ensure!(!r.is_overflowed(), "read past the end of the message");
             let op = r.read_byte();
+            if r.is_overflowed() {
+                bail!(Illegible(-1));
+            }
             match Svc::from_u8(op) {
                 Some(Svc::Eof) => break,
                 Some(Svc::Nop) => out.nops += 1,
@@ -221,7 +244,7 @@ impl Parser {
                     out.downloads
                         .push(super::download::DownloadMsg::read(&mut r));
                 }
-                _ => bail!("illegible server message {op}"),
+                _ => bail!(Illegible(op.into())),
             }
         }
         ensure!(!r.is_overflowed(), "read past the end of the message");
@@ -390,5 +413,26 @@ impl Parser {
             self.last_snapshot = Some(message_num);
         }
         Ok(message_num)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Illegible, Parser};
+
+    fn illegible(plain: &[u8]) -> Option<i32> {
+        let e = Parser::new().parse(1, plain).err()?;
+        e.downcast_ref::<Illegible>().map(|i| i.0)
+    }
+
+    /// The jump table at 0x4145b4 sends 2, 3 and anything over 7 to the
+    /// error, and an op read at the end reads -1 (0x4144df).
+    #[test]
+    fn an_unknown_op_or_a_missing_eof_is_illegible() {
+        assert_eq!(illegible(&[2]), Some(2));
+        assert_eq!(illegible(&[0, 3, 7]), Some(3));
+        assert_eq!(illegible(&[9]), Some(9));
+        assert_eq!(illegible(&[0, 0]), Some(-1));
+        assert!(Parser::new().parse(1, &[0, 7]).is_ok());
     }
 }

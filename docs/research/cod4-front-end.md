@@ -170,7 +170,61 @@ confirmed on 1.7.
   pending. VERIFIED (the instructions). Between `Com_SetPlayerProfile` and
   that test 0x579900 runs on `com_playerProfile` (`%s/%s` and `mpdata`,
   0x6c81dc, 0x6f5c64: the profile's stats) and then 0x4fe930. VERIFIED
-  (the calls at 0x4fad99, 0x4fad9e); what 0x4fe930 does is unread.
+  (the calls at 0x4fad99, 0x4fad9e).
+- 0x4fe930 is the autoconfigure check, also run once at start right after
+  `com_recommendedSet` is registered (0x4ff39d..0x4ff3b1; the name at
+  0x6e1d84, `Use recommended settings` at 0x6e1d68, the dvar at
+  0x1476f00). With that dvar clear, or set and 0x4fe090 returning true,
+  it calls 0x4fe7a0 with a 0 and sets the dvar to true (0x56b1b0,
+  0x4fe947..0x4fe98b); then, when 0x5766d0 returns true, 0x4fe7a0 again
+  (0x4fe993..0x4fe99f). VERIFIED (the instructions and the strings).
+  0x4fe090 reads `configure_mp.csv` (0x6e13d8 through 0x55c440; missing,
+  `EXE_ERR_NOT_FOUND` through 0x4fd330 with code 0), hashes it
+  (`h = h * 31337 + byte`, the byte sign-extended, then `& 0xfffffff`
+  plus 1, 0x4fe0c3..0x4fe0ef), returns 0x576330's answer when
+  `sys_configSum` (0xcc17a70, registered at 0x576493, flags 0x11) is set
+  and differs from it, and stores the hash there when it is clear or
+  differs (0x56c900, 0x4fe0fe..0x4fe12e). VERIFIED (the instructions).
+  0x5766d0 compares the machine's measure (0xcc17818, a double; 0xcc17828,
+  the MB; 0xcc1782c, the GPU's name) with `sys_configureGHz` (0xcc15fe0,
+  outside 0.9..1.1 times the measure), `sys_sysMB` (0xcc17808, more than 32 MB off)
+  and `sys_gpu` (0xcc16004, a byte compare); on a change it stores the new
+  measure (0x5767b0 with 0) and asks through the message box
+  `WIN_COMPUTER_CHANGE_TITLE` (0x6f4eb0, flags 0x44), true on 6.
+  VERIFIED (the constants 1.1 and 0.9 at 0x70bcd8 and 0x70b478, the
+  calls and the strings); that 6 is `IDYES` is INFERRED (Win32).
+  0x4fe7a0 prints `========= autoconfigure` (0x6e1720), reads the CSV
+  again, applies its CPU section by the measure times 1.02 (0x70be38) and
+  the MB (128 at least, else plus 8) through 0x4fe440 and its GPU section
+  by name through 0x4fe6b0, either failing into a code 0 error
+  (`EXE_ERR_COULDNT_CONFIGURE`, 0x6e173c and 0x6e177c), stores the hash
+  and the measure (0x5767b0), and with its second argument set runs
+  `snd_restart` when a latched dvar is pending (0x4fe8f3..0x4fe912).
+  VERIFIED (the instructions and the strings). Options' `uiScript
+  setRecommended` (0x6d1da4) calls it with a 1 (0x546d5f). VERIFIED. The
+  CSV (`iw_00.iwd`) picks, per its own header, the CPU row nearest the
+  machine without going over, then the first GPU row whose name matches;
+  its CPU columns set `ai_corpseCount`, `g_useGear`, `ragdoll_enable`,
+  `fx_marks`, the LOD scales and biases, `r_drawWater`, `snd_khz`,
+  `snd_enableEq`, `ragdoll_max_simulating` and `r_fastSkin`, its GPU
+  columns `r_rendererPreference`, `r_mode`, `sm_enable`, `r_zfeather`,
+  `r_glow_allowed`, `r_distortion`, `r_aaSamples`, `r_specular`,
+  `drew_notes`, `cg_laserLight`, `r_dof_enable`,
+  `r_altModelLightingUpdate` and `r_dlightlimit`. VERIFIED (the file).
+  So a 1.7 profile whose config holds no `com_recommendedSet 1` (a new
+  one) takes the machine's row on load. A current machine lands on the
+  top CPU row and, for most cards, the catch-all GPU rows: `r_mode`
+  1024x768 and `r_aaSamples` 4 with every effect on. INFERRED (the
+  wildcards matched by hand).
+- vcod has no autoconfigure: no `com_recommendedSet`, `sys_*` or
+  `setRecommended`, at start or on a profile change. Its CoD4 defaults
+  match the top rows' picks for the dvars it reads (`ragdoll_enable`,
+  `r_lodScaleRigid`, `r_lodBiasRigid`, `r_drawWater`, `sm_enable`,
+  `r_zFeather`, `r_glow_allowed`, `r_distortion`, `r_dof_enable`,
+  `r_specular`, `r_dlightLimit`) but not `r_aaSamples`, which vcod keeps
+  at the registered 1 for its cost (cod4-client-perf.md 19), or `r_mode`,
+  which vcod's window owns. Porting the check would turn MSAA on for a
+  new profile; that is left for a decision.
 - vcod runs those scripts as written (`play::cod4_menus::front`): the
   list is `players/profiles/`' directories (`front::profile_list`, feeder
   24, `player_profile`'s list; VERIFIED, the walk's `feeder`), a pick
