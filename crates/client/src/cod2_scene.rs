@@ -31,7 +31,7 @@ use crate::cod2_players::{Cod2PlayerView, Cod2Players, tag_pose};
 use crate::entities::resolve_model;
 use crate::fx::sim::TagPose;
 use crate::renderer::{CookieEntity, DynamicModelInstance, ModelHandle, Renderer};
-use crate::turret::{ANIM_BLEND_MS, GunAnim, apply_controller};
+use crate::turret::{ANIM_BLEND_MS, GunAnim, GunClock, apply_controller};
 use vcod_cod2::player::GunFrame;
 
 use vcod_cod2::net::flags::{EF_DEAD, EF_NODRAW, SOLID_BMODEL};
@@ -264,15 +264,6 @@ struct GunRig {
     bindings: HashMap<String, AnimBinding>,
 }
 
-/// One gun's anim across frames: the slot it blends to and the one it
-/// leaves.
-#[derive(Clone, Copy)]
-struct GunClock {
-    anim: GunAnim,
-    start_ms: i32,
-    prev: Option<(GunAnim, i32)>,
-}
-
 /// Uploaded models and loaded weapon files across frames. Its handles die
 /// with the map: make a new one after `Renderer::unload_world`.
 #[derive(Default)]
@@ -281,7 +272,7 @@ pub struct Cod2Scene {
     weapons: HashMap<String, Option<WeaponDef>>,
     gun_rigs: HashMap<String, Option<GunRig>>,
     clips: HashMap<String, Option<Rc<XAnim>>>,
-    guns: HashMap<u32, GunClock>,
+    guns: HashMap<u32, GunClock<GunAnim>>,
 }
 
 impl Cod2Scene {
@@ -330,20 +321,11 @@ impl Cod2Scene {
                 .map_or((None, None), |d| (d.idle_anim.clone(), d.fire_anim.clone())),
             None => (None, None),
         };
-        let clock = self.guns.entry(p.number).or_insert(GunClock {
-            anim: aim.anim,
-            start_ms: now_ms,
-            prev: None,
-        });
-        if clock.anim != aim.anim {
-            clock.prev = Some((clock.anim, clock.start_ms));
-            clock.anim = aim.anim;
-            clock.start_ms = now_ms;
-        }
-        let fade = (now_ms - clock.start_ms) as f32 / ANIM_BLEND_MS as f32;
-        if fade >= 1.0 {
-            clock.prev = None;
-        }
+        let clock = self
+            .guns
+            .entry(p.number)
+            .or_insert(GunClock::new(aim.anim, now_ms));
+        clock.set(aim.anim, now_ms);
         let clock = *clock;
         let rig = self
             .gun_rigs
@@ -360,19 +342,7 @@ impl Cod2Scene {
             })
             .as_mut()?;
         let mut pose = PoseBuffer::new(&rig.skeleton);
-        let layers = clock
-            .prev
-            .map(|(a, start)| (a, start, 1.0))
-            .into_iter()
-            .chain([(
-                clock.anim,
-                clock.start_ms,
-                if clock.prev.is_some() {
-                    fade.max(0.0)
-                } else {
-                    1.0
-                },
-            )]);
+        let layers = clock.layers(now_ms, ANIM_BLEND_MS);
         for (anim, start, w) in layers {
             let name = match anim {
                 GunAnim::Idle => idle.as_deref(),

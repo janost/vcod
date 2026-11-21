@@ -21,6 +21,49 @@ const ENTITYNUM_NONE: i32 = vcod_common::net::protocol::ENTITYNUM_NONE as i32;
 /// The 0.1 s the controller hands its goal-weight call.
 pub const ANIM_BLEND_MS: i32 = 100;
 
+/// A mounted gun's crossfade between its idle and fire clips, CoD2's and
+/// CoD4's: the goal clip `A`, when it started, and the clip it left. The
+/// left clip plays at weight 1 under the goal, which fades in over the
+/// blend.
+#[derive(Clone, Copy, Debug)]
+pub struct GunClock<A> {
+    pub goal: A,
+    since_ms: i32,
+    from: Option<(A, i32)>,
+}
+
+impl<A: Copy + PartialEq> GunClock<A> {
+    pub fn new(goal: A, now_ms: i32) -> Self {
+        GunClock {
+            goal,
+            since_ms: now_ms,
+            from: None,
+        }
+    }
+
+    /// The clip the gun should play at `now_ms`: another starts a fade.
+    pub fn set(&mut self, goal: A, now_ms: i32) {
+        if goal != self.goal {
+            self.from = Some((self.goal, self.since_ms));
+            self.goal = goal;
+            self.since_ms = now_ms;
+        }
+    }
+
+    /// The clips to pose at `now_ms`, each with its start and weight, the
+    /// left one first while the goal fades in over `blend_ms`.
+    pub fn layers(&self, now_ms: i32, blend_ms: i32) -> impl Iterator<Item = (A, i32, f32)> {
+        let w = ((now_ms - self.since_ms) as f32 / blend_ms as f32).clamp(0.0, 1.0);
+        let from = self.from.filter(|_| w < 1.0);
+        let goal_w = if from.is_some() { w } else { 1.0 };
+        from.map(|(a, start)| (a, start, 1.0)).into_iter().chain([(
+            self.goal,
+            self.since_ms,
+            goal_w,
+        )])
+    }
+}
+
 /// The gun's two anim slots: the weapon file's `idleAnim` and `fireAnim`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GunAnim {
