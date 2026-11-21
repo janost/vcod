@@ -196,6 +196,73 @@ pub(super) fn paint(
     p.quad([x, thumb.min(y - s - 1.0), s, s], [1.0; 4], THUMB, out);
 }
 
+/// Where `Item_ListBox_Paint` (0x400159b0) puts a row: `x` one in from the
+/// box's left, `y` the row's top, `eh` the row height.
+#[derive(Clone, Copy)]
+pub(super) struct Row {
+    pub(super) x: f32,
+    pub(super) y: f32,
+    pub(super) eh: f32,
+}
+
+impl Row {
+    /// A text cell of the column at `col_pos`.
+    pub(super) fn text(
+        &self,
+        p: &Painter,
+        item: &UiItem,
+        text: &str,
+        col_pos: f32,
+        out: &mut Vec<HudQuad>,
+    ) {
+        p.text(
+            text,
+            self.x + 4.0 + col_pos + item.text_align_x,
+            self.y + self.eh + item.text_align_y,
+            item.text_scale,
+            item.fore,
+            out,
+        );
+    }
+}
+
+/// `Item_ListBox_Paint`'s rows for a feeder of `len`: from `top`, as many
+/// as fit whole, each drawn by `cells`, then outlined when `selected`.
+pub(super) fn paint_rows(
+    p: &Painter,
+    item: &UiItem,
+    len: usize,
+    top: usize,
+    selected: impl Fn(usize) -> bool,
+    mut cells: impl FnMut(usize, Row, &mut Vec<HudQuad>),
+    out: &mut Vec<HudQuad>,
+) {
+    let [x, y, w, _] = item.rect;
+    let eh = item.element_height.max(1.0);
+    let mut row = Row {
+        x: x + 1.0,
+        y: y + 1.0,
+        eh,
+    };
+    for i in (top..len).take(super::lists::visible_rows(item)) {
+        cells(i, row, out);
+        if selected(i) {
+            p.fill(
+                [row.x, row.y, w - SCROLLBAR_SIZE - 4.0, eh - 1.0],
+                item.outline_color,
+                out,
+            );
+        }
+        row.y += eh;
+    }
+}
+
+/// The row under `cursor_y` in a list whose first row drawn is `top`.
+pub(super) fn row_at(item: &UiItem, cursor_y: f32, top: usize) -> usize {
+    let row = ((cursor_y - item.rect[1] - 1.0) / item.element_height.max(1.0)).floor();
+    row.max(0.0) as usize + top
+}
+
 /// `Item_ListBox_ThumbDrawPosition` (0x400116a0): while dragged, the thumb
 /// sits half its size above the cursor inside the bar's travel; else where
 /// the first row puts it.
