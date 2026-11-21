@@ -280,17 +280,7 @@ impl DlightPass {
                     entry_point: Some("vs_dlight"),
                     compilation_options: Default::default(),
                     buffers: &[
-                        Some(wgpu::VertexBufferLayout {
-                            array_stride: 44,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: &wgpu::vertex_attr_array![
-                                0 => Float32x3,
-                                1 => Float32x2,
-                                2 => Float32x2,
-                                3 => Float32x3,
-                                4 => Unorm8x4,
-                            ],
-                        }),
+                        Some(gpu_util::world_vertex_layout(&gpu_util::WORLD_VERTEX_ATTRS)),
                         Some(wgpu::VertexBufferLayout {
                             array_stride: 12,
                             step_mode: wgpu::VertexStepMode::Vertex,

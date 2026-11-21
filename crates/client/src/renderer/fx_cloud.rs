@@ -154,12 +154,7 @@ impl CloudPass {
             ],
         });
         // the code sampler's filter is not read off retail: linear, clamped
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("$outdoor sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let sampler = gpu_util::linear_clamp_sampler(device, Some("$outdoor sampler"));
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("cloud outdoor"),
             layout: &layout,

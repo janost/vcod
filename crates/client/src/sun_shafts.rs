@@ -103,14 +103,7 @@ impl SunShafts {
                 ),
             ],
         });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("sun shafts sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let sampler = gpu_util::linear_clamp_sampler(device, Some("sun shafts sampler"));
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sun shafts params"),
             size: std::mem::size_of::<Params>() as u64,
@@ -129,31 +122,19 @@ impl SunShafts {
             immediate_size: 0,
         });
         let pipeline = |entry: &str, format, blend| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(entry),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
+            gpu_util::Fullscreen::new(
+                Some(entry),
+                Some(&pipeline_layout),
+                &shader,
+                "vs_main",
+                entry,
+                wgpu::ColorTargetState {
+                    format,
+                    blend,
+                    write_mask: wgpu::ColorWrites::COLOR,
                 },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(entry),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend,
-                        write_mask: wgpu::ColorWrites::COLOR,
-                    })],
-                }),
-                primitive: Default::default(),
-                depth_stencil: None,
-                multisample: Default::default(),
-                multiview_mask: None,
-                cache: None,
-            })
+            )
+            .build(device)
         };
         let add = wgpu::BlendState {
             color: wgpu::BlendComponent {
@@ -249,22 +230,7 @@ impl SunShafts {
                     pipeline: &wgpu::RenderPipeline,
                     bg: &wgpu::BindGroup,
                     load: wgpu::LoadOp<wgpu::Color>| {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("sun shafts pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let mut pass = gpu_util::color_pass(encoder, Some("sun shafts pass"), target, load);
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, bg, &[]);
             pass.draw(0..3, 0..1);

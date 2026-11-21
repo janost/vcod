@@ -103,34 +103,23 @@ impl SsaoPass {
             immediate_size: 0,
         });
         let pipeline = |label, vs, entry, format, blend, samples, depth| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some(vs),
-                    compilation_options: Default::default(),
-                    buffers: &[],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(entry),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
+            gpu_util::Fullscreen {
+                depth,
+                samples,
+                ..gpu_util::Fullscreen::new(
+                    Some(label),
+                    Some(&pipeline_layout),
+                    &shader,
+                    vs,
+                    entry,
+                    wgpu::ColorTargetState {
                         format,
                         blend,
                         write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: Default::default(),
-                depth_stencil: depth,
-                multisample: wgpu::MultisampleState {
-                    count: samples,
-                    ..Default::default()
-                },
-                multiview_mask: None,
-                cache: None,
-            })
+                    },
+                )
+            }
+            .build(device)
         };
         let half = |label, entry, format| pipeline(label, "vs_main", entry, format, None, 1, None);
         let depth_pipeline = half("ssao depth", "fs_depth", LINZ_FORMAT);
@@ -244,22 +233,13 @@ impl SsaoPass {
              pipeline: &wgpu::RenderPipeline,
              bg: &wgpu::BindGroup,
              stamp: Option<wgpu::RenderPassTimestampWrites<'_>>| {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("ssao half pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: target,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: stamp,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
+                let mut pass = gpu_util::color_pass_timed(
+                    encoder,
+                    Some("ssao half pass"),
+                    target,
+                    wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    stamp,
+                );
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, bg, &[]);
                 pass.draw(0..3, 0..1);

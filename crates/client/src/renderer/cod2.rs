@@ -141,7 +141,7 @@ const M_SPECULAR: u32 = 1;
 const M_DETAIL: u32 = 2;
 const M_ALPHA: u32 = 4;
 /// The material's fogged technique leaves the fog off (`Material::nofog`).
-const M_NOFOG: u32 = 8;
+pub(super) const M_NOFOG: u32 = 8;
 /// A CoD4 lit world set: CoD4's lightmap, normal and specular
 /// (`PhongLit::cod4`).
 const M_COD4: u32 = 16;
@@ -2018,25 +2018,8 @@ fn lit_pipeline(
             entry_point: Some("vs_main"),
             compilation_options: Default::default(),
             buffers: &[
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: 44,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x3, // pos
-                        1 => Float32x2, // uv
-                        2 => Float32x2, // lm_uv
-                        3 => Float32x3, // normal
-                        4 => Unorm8x4,  // color
-                    ],
-                }),
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: 24,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![
-                        5 => Float32x3, // tangent
-                        6 => Float32x3, // binormal
-                    ],
-                }),
+                Some(gpu_util::world_vertex_layout(&gpu_util::WORLD_VERTEX_ATTRS)),
+                Some(gpu_util::tangent_layout()),
             ],
         },
         fragment: fs_entry.map(|(entry, _)| wgpu::FragmentState {
@@ -2678,11 +2661,7 @@ pub(super) mod tests {
             contents: bytes,
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let sampler = gpu_util::linear_clamp_sampler(device, None);
         let lights = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: 256,

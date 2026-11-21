@@ -110,34 +110,22 @@ impl GammaPass {
             immediate_size: 0,
         });
         let srgb = [("SRGB", if format.is_srgb() { 1.0 } else { 0.0 })];
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("gamma pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &srgb,
-                    ..Default::default()
-                },
-                targets: &[Some(wgpu::ColorTargetState {
+        let pipeline = gpu_util::Fullscreen {
+            constants: &srgb,
+            ..gpu_util::Fullscreen::new(
+                Some("gamma pipeline"),
+                Some(&pipeline_layout),
+                &shader,
+                "vs_main",
+                "fs_main",
+                wgpu::ColorTargetState {
                     format,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+                },
+            )
+        }
+        .build(device);
 
         let scene_view = create_scene_view(device, width, height);
         let bind_group = create_bind_group(device, &layout, &scene_view, &ramp_view);
@@ -195,22 +183,12 @@ impl GammaPass {
 
     /// Maps the offscreen frame through the ramp onto `target`.
     pub fn draw(&self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("gamma pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        let mut pass = gpu_util::color_pass(
+            encoder,
+            Some("gamma pass"),
+            target,
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+        );
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.draw(0..3, 0..1);

@@ -661,33 +661,21 @@ impl SunShadowPass {
                 bind_group_layouts: &[Some(&static_layout)],
                 immediate_size: 0,
             });
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("cod4 spot blit"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &module,
-                    entry_point: Some("vs_blit"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &module,
-                    entry_point: Some(entry),
-                    compilation_options: Default::default(),
-                    targets: &[],
-                }),
-                primitive: Default::default(),
-                depth_stencil: Some(wgpu::DepthStencilState {
+            gpu_util::Fullscreen::depth(
+                Some("cod4 spot blit"),
+                Some(&layout),
+                &module,
+                "vs_blit",
+                Some(entry),
+                wgpu::DepthStencilState {
                     format: ATLAS_FORMAT,
                     depth_write_enabled: Some(true),
                     depth_compare: Some(wgpu::CompareFunction::Always),
                     stencil: Default::default(),
                     bias: Default::default(),
-                }),
-                multisample: Default::default(),
-                multiview_mask: None,
-                cache: None,
-            })
+                },
+            )
+            .build(device)
         };
         let spot_blit = blit("fs_blit");
         let sun_blit = blit("fs_blit_sun");

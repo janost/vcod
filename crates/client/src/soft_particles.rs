@@ -72,27 +72,15 @@ impl SoftParticles {
             bind_group_layouts: &[Some(&copy_layout)],
             immediate_size: 0,
         });
-        let copy_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("soft particles depth copy"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_copy"),
-                compilation_options: Default::default(),
-                targets: &[Some(LINZ_FORMAT.into())],
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let copy_pipeline = gpu_util::Fullscreen::new(
+            Some("soft particles depth copy"),
+            Some(&pipeline_layout),
+            &shader,
+            "vs_main",
+            "fs_copy",
+            LINZ_FORMAT.into(),
+        )
+        .build(device);
         // near and far from the start: CoD2's feather reads the copy with
         // vc_softParticles off
         let uniform = wgpu::util::DeviceExt::create_buffer_init(
@@ -173,22 +161,12 @@ impl SoftParticles {
     /// Copies the MSAA depth as it stands into the linear target. Call
     /// between the frame's two halves, with no pass holding the depth.
     pub fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("soft particles depth copy"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.linz,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        let mut pass = gpu_util::color_pass(
+            encoder,
+            Some("soft particles depth copy"),
+            &self.linz,
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+        );
         pass.set_pipeline(&self.copy_pipeline);
         pass.set_bind_group(0, &self.copy_bg, &[]);
         pass.draw(0..3, 0..1);

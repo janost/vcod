@@ -128,8 +128,6 @@ pub(crate) use upload::*;
 use world_encode::*;
 use world_load::*;
 
-// The vertex layout below hardcodes the BSP drawvert stride.
-const _: () = assert!(std::mem::size_of::<DrawVert>() == 44);
 // Ditto the viewmodel vertex stride.
 const _: () = assert!(std::mem::size_of::<VmVert>() == 80);
 

@@ -740,17 +740,9 @@ pub(crate) fn scene_pipeline(
             module: shader,
             entry_point: Some(vs_entry),
             compilation_options: Default::default(),
-            buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: 44,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![
-                    0 => Float32x3, // pos
-                    1 => Float32x2, // uv
-                    2 => Float32x2, // lm_uv
-                    3 => Float32x3, // normal
-                    4 => Unorm8x4,  // color
-                ],
-            })],
+            buffers: &[Some(gpu_util::world_vertex_layout(
+                &gpu_util::WORLD_VERTEX_ATTRS,
+            ))],
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,

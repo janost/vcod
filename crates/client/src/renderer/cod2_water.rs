@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use vcod_common::asset_source::AssetSource;
 use wgpu::util::DeviceExt;
 
-use super::cod2::{load_cube_faces, make_lit_pipeline, tex_entry, upload_cube};
+use super::cod2::{M_NOFOG, load_cube_faces, make_lit_pipeline, tex_entry, upload_cube};
 use super::{StageVariant, depth_bias};
 use vcod_cod2::water::WaterSetup;
 use vcod_common::assets::{Image, ImageData};
@@ -28,9 +28,6 @@ pub struct WaterUniform {
     pub color: [f32; 4],
     pub flags: [u32; 4],
 }
-
-/// The material's fogged technique leaves the fog off.
-const M_NOFOG: u32 = 8;
 
 impl WaterUniform {
     pub fn new(w: &WaterLit, nofog: bool) -> Self {

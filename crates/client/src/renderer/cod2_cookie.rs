@@ -401,12 +401,7 @@ impl Cookies {
             super::DEPTH_FORMAT,
             wgpu::TextureUsages::RENDER_ATTACHMENT,
         );
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("cod2 cookie sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let sampler = gpu_util::linear_clamp_sampler(device, Some("cod2 cookie sampler"));
         let uniform = gpu_util::uniform_sized;
         let tex = gpu_util::texture_2d;
         let samp = gpu_util::filtering_sampler;
@@ -512,27 +507,15 @@ impl Cookies {
             bind_group_layouts: &[Some(&blur_layout)],
             immediate_size: 0,
         });
-        let blur_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("cod2 cookie blur"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs_blur"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs_blur"),
-                compilation_options: Default::default(),
-                targets: &[Some(ATLAS_FORMAT.into())],
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let blur_pipeline = gpu_util::Fullscreen::new(
+            Some("cod2 cookie blur"),
+            Some(&layout),
+            &module,
+            "vs_blur",
+            "fs_blur",
+            ATLAS_FORMAT.into(),
+        )
+        .build(device);
 
         // receivers, into the screen's dynamic shadow
         let recv_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -579,12 +562,9 @@ impl Cookies {
                     module: &module,
                     entry_point: Some("vs_receive"),
                     compilation_options: Default::default(),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        // the world's vertex (renderer::cod2's lit pipeline)
-                        array_stride: 44,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-                    })],
+                    buffers: &[Some(gpu_util::world_vertex_layout(
+                        &gpu_util::WORLD_VERTEX_ATTRS[..1],
+                    ))],
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &module,

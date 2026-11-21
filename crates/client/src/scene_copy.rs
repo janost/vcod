@@ -70,34 +70,17 @@ impl SceneCopy {
             bind_group_layouts: &[Some(&blit_layout)],
             immediate_size: 0,
         });
-        let blit = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("scene copy blit"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_blit"),
-                compilation_options: Default::default(),
-                targets: &[Some(format.into())],
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let blit = gpu_util::Fullscreen::new(
+            Some("scene copy blit"),
+            Some(&pipeline_layout),
+            &shader,
+            "vs_main",
+            "fs_blit",
+            format.into(),
+        )
+        .build(device);
         // `R_InitCodeImages`' sampler for it: linear, clamped
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("scene copy sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let sampler = gpu_util::linear_clamp_sampler(device, Some("scene copy sampler"));
         let (copy, bg, world_bg) = targets(
             device,
             [&layout, &world_layout],
@@ -184,22 +167,12 @@ impl SceneCopy {
             self.blit_bg = Some((scene.clone(), bg));
         }
         let (_, bg) = self.blit_bg.as_ref().expect("built above");
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("scene copy blit"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.copy,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        let mut pass = gpu_util::color_pass(
+            encoder,
+            Some("scene copy blit"),
+            &self.copy,
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+        );
         pass.set_pipeline(&self.blit);
         pass.set_bind_group(0, bg, &[]);
         pass.draw(0..3, 0..1);
