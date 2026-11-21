@@ -1,5 +1,5 @@
 """Parse CoD2 techsets, techniques (dx9) and statemaps; print keyword census.
-usage: python3 -I techparse.py <materials dir> -> writes tech.json"""
+usage: python3 -I cod2_techparse.py <materials dir> -> writes tech.json"""
 import sys, os, re, json, collections as C
 root = sys.argv[1]
 TOK = re.compile(r'//[^\n]*|/\*.*?\*/|"[^"]*"|[A-Za-z_$][\w$]*|-?\d+\.\d*|-?\d+|\S', re.S)

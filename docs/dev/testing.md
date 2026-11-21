@@ -189,6 +189,23 @@ A step passes only on `test result: ok` lines that ran tests. `CARGO_WRAP`
 puts each cargo run under a wrapper (a memory-capped scope), `DRY=1`
 prints the commands.
 
+## Other tools
+
+The scripts under `tools/` no other section names:
+
+| Tool | What it does |
+|---|---|
+| `cod4_perf.py` | Summarizes a `VCOD_FRAME_PROFILE` file or `cod4_perf.sh`'s output (Performance, below) |
+| `bsp_append_entities.py`, `bsp_worldspawn_key.py` | Copy a CoD1 `.bsp` with entities appended or a worldspawn key added, the bytes `vcod_common::testing`'s `bsp_with_*` builds |
+| `efx_chains.py` | A census of the stock `.efx` chaining keys (`efx-grammar.md`) |
+| `pair_sweep.py` | Pairs a `--probe-sweep` run's hits with the labels the server logged |
+| `cod4_handshake_probe.py` | Walks retail `cod4_lnxded` through the handshake and logs each datagram (`cod4-handshake.md`) |
+| `udp_relay.py` | The UDP relay `offlan_capture.sh` runs |
+| `reflow_md.py` | Rewraps a doc's prose to 78 columns in place |
+
+`cod4_perf.sh` and `cod4_soak.sh` serve the other games too (`GAME=cod1`,
+`uo`, `cod2`), despite the names.
+
 ## Refactor checks
 
 `tools/move_check.sh <base> <head> <old-file>... [--into <path>]...`
