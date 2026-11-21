@@ -179,7 +179,7 @@ fn classify(kind: &Kind) -> Behavior {
 }
 
 struct Particle {
-    spawn: f32, // absolute seconds, after delay
+    spawn: f64, // absolute seconds, after delay
     life: f32,  // seconds
     /// Bolt-local while `bolt` is set, like `vel` and `accel`.
     pos: Vec3,
@@ -237,6 +237,18 @@ struct Particle {
     cod2: Option<Box<cod2::Live>>,
 }
 
+impl Particle {
+    /// Seconds since the spawn, off the f64 clock so it stays exact.
+    fn age(&self, now: f64) -> f32 {
+        (now - self.spawn) as f32
+    }
+
+    /// How far through its life the particle is, 0 to 1.
+    fn frac(&self, now: f64) -> f32 {
+        (self.age(now) / self.life).clamp(0.0, 1.0)
+    }
+}
+
 /// `CEmitter`'s emit cursor (CoDMP.exe 0x48fcd4, grammar doc R10): the
 /// path it walks is its spawn origin and velocity under its current
 /// acceleration, not its traced position, so bounces do not move it.
@@ -278,7 +290,7 @@ impl Emit4 {
 /// An effect another one starts: an `FxRunner`'s `playfx`, an `Emitter`'s
 /// `emitfx`, a hit's `impactfx`, a death's `deathfx`.
 struct Chain {
-    due: f32,
+    due: f64,
     path: String,
     at: SpawnAt,
     depth: u8,
@@ -490,7 +502,7 @@ fn spawn_sound_cues(rng: &mut Rng, em: &Emitter, at: SpawnAt) -> Vec<FxSound> {
 
 /// A `Decal` element waiting for its delay.
 struct PendingMark {
-    due: f32,
+    due: f64,
     req: MarkRequest,
     /// The tag a delayed `Decal` of an effect on a tag waits on: `req`'s
     /// origin and direction are in its frame, posed when it falls due
@@ -545,7 +557,7 @@ struct SpawnOut<'a> {
 #[derive(Clone, Copy)]
 struct SpawnCx {
     at: SpawnAt,
-    now: f32,
+    now: f64,
     /// The camera, for `cullrange`.
     view: Option<Vec3>,
     /// The origin `PlayEffect` was handed, which `cullrange` measures from
@@ -689,7 +701,7 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
             Some(step) => (index as f32 * step).trunc() / 1000.0,
             None => sample_r1(rng, em.delay) / 1000.0,
         };
-        let spawn = now + delay;
+        let spawn = now + f64::from(delay);
         if behavior == Behavior::Runner {
             // Case 10 of the spawner: the element's origin and frame, then
             // PlayEffect on one `playfx` entry (0x492780 picks).
@@ -1001,7 +1013,7 @@ fn push_capped(q: &mut VecDeque<Particle>, p: Particle, cap: usize) {
 /// Per-frame inputs [`step_pool`] shares between particles.
 struct StepCx<'a> {
     dt: f32,
-    now: f32,
+    now: f64,
     world: Option<&'a CollisionWorld>,
     bolts: &'a HashMap<Bolt, BoltFrame>,
 }
@@ -1054,7 +1066,7 @@ fn step_pool(pool: &mut VecDeque<Particle>, cx: &StepCx, rng: &mut Rng, chains: 
         if frame.is_some() {
             p.last_frame = frame;
         }
-        if p.life <= 0.0 || now - p.spawn > p.life {
+        if p.life <= 0.0 || p.age(now) > p.life {
             death_chain(p, frame, now, rng, chains);
             return false;
         }
@@ -1064,7 +1076,7 @@ fn step_pool(pool: &mut VecDeque<Particle>, cx: &StepCx, rng: &mut Rng, chains: 
         }
         if let Some(l) = &p.cod2 {
             // Degrees per 100 ms (cod2-efx.md 4.3).
-            p.rot_delta = l.rotation_delta(((now - p.spawn) / p.life).clamp(0.0, 1.0)) * 10.0;
+            p.rot_delta = l.rotation_delta(p.frac(now)) * 10.0;
         }
         p.rot += p.rot_delta * dt;
         if let Some(d) = &mut p.debris {
@@ -1150,7 +1162,7 @@ fn emit4_along(e: &mut Emit4, end: Vec3, rng: &mut Rng) -> Vec<(Vec3, Vec3)> {
 fn death_chain(
     p: &Particle,
     frame: Option<BoltFrame>,
-    now: f32,
+    now: f64,
     rng: &mut Rng,
     chains: &mut Vec<Chain>,
 ) {
@@ -1234,13 +1246,13 @@ fn update_origin(
     p: &mut Particle,
     dt: f32,
     world: Option<&CollisionWorld>,
-    now: f32,
+    now: f64,
     chains: &mut Vec<Chain>,
 ) -> bool {
     let new_pos = match p.cod2.as_deref().filter(|l| l.moving) {
         // A CoD2 element sits where its velocity integrals put it.
         Some(l) => {
-            let at = l.position(now - p.spawn);
+            let at = l.position(p.age(now));
             if dt > 0.0 {
                 p.vel = (at - p.pos) / dt;
             }
@@ -1354,8 +1366,8 @@ fn world_state(p: &Particle, bolts: &HashMap<Bolt, BoltFrame>) -> Option<(Vec3, 
     }
 }
 
-fn live(p: &Particle, now: f32) -> bool {
-    now >= p.spawn && p.life > 0.0 && now - p.spawn <= p.life
+fn live(p: &Particle, now: f64) -> bool {
+    now >= p.spawn && p.life > 0.0 && p.age(now) <= p.life
 }
 
 /// A particle's extents at life fraction `t`: half-width, half-height,
@@ -1432,7 +1444,7 @@ fn push_quads(
     cam_pos: Vec3,
     cam_right: Vec3,
     cam_up: Vec3,
-    now: f32,
+    now: f64,
     out: &mut Vec<FxQuad>,
 ) {
     for p in pool {
@@ -1455,16 +1467,13 @@ fn push_quads(
         let Some((pos, vel)) = world_state(p, bolts) else {
             continue;
         };
-        let t = ((now - p.spawn) / p.life).clamp(0.0, 1.0);
+        let t = p.frac(now);
         let shape = Shape::at(p, t);
         // `size` is a half-extent (grammar doc R4).
         let half = shape.half;
         let (rgb, alpha) = faded_colour(p, t, pos, cam_pos);
         let rad = p.rot.to_radians();
-        let uvs = p
-            .cod2
-            .as_ref()
-            .and_then(|l| l.uvs((now - p.spawn) * 1000.0));
+        let uvs = p.cod2.as_ref().and_then(|l| l.uvs(p.age(now) * 1000.0));
         let mut push = |mut q: FxQuad| {
             if let Some(uvs) = uvs {
                 q.uvs = uvs;
@@ -1505,7 +1514,7 @@ fn moving_tracer_life(muzzle: Vec3, impact: Vec3, len: f32) -> f32 {
 
 /// A tracer as a stretch particle: `head` leads, the tail trails `len` back
 /// along `vel`.
-fn tracer_particle(spawn: f32, life: f32, head: Vec3, vel: Vec3, len: f32, width: f32) -> Particle {
+fn tracer_particle(spawn: f64, life: f32, head: Vec3, vel: Vec3, len: f32, width: f32) -> Particle {
     Particle {
         spawn,
         life,
@@ -1639,7 +1648,7 @@ impl FxSystem {
         rules: cod2_tracer::Rules,
         muzzle: Vec3,
         hit: Vec3,
-        now: f32,
+        now: f64,
         back_ms: i32,
     ) {
         crate::frame_digest::effect("", muzzle);
@@ -1899,7 +1908,7 @@ impl FxSystem {
         path: &str,
         tag: TagBolt,
         pose: TagPose,
-        now: f32,
+        now: f64,
     ) -> Vec<FxSound> {
         self.spawn_on_tag_from(fs, path, tag, pose, now, None)
     }
@@ -1914,7 +1923,7 @@ impl FxSystem {
         path: &str,
         tag: TagBolt,
         pose: TagPose,
-        now: f32,
+        now: f64,
         cull_from: Option<Vec3>,
     ) -> Vec<FxSound> {
         crate::frame_digest::effect(path, pose.origin);
@@ -1939,7 +1948,7 @@ impl FxSystem {
         fs: &dyn AssetSource,
         path: &str,
         at: SpawnAt,
-        now: f32,
+        now: f64,
     ) -> Vec<FxSound> {
         self.spawn_marked(fs, path, at, None, now, true)
     }
@@ -1954,7 +1963,7 @@ impl FxSystem {
         path: &str,
         at: SpawnAt,
         bolt: Option<u32>,
-        now: f32,
+        now: f64,
         marks: bool,
     ) -> Vec<FxSound> {
         self.spawn_marked_from(fs, path, at, bolt, now, marks, None)
@@ -1970,7 +1979,7 @@ impl FxSystem {
         path: &str,
         at: SpawnAt,
         bolt: Option<u32>,
-        now: f32,
+        now: f64,
         marks: bool,
         cull_from: Option<Vec3>,
     ) -> Vec<FxSound> {
@@ -1999,7 +2008,7 @@ impl FxSystem {
         fs: &dyn AssetSource,
         path: &str,
         at: SpawnAt,
-        now: f32,
+        now: f64,
         depth: u8,
         bolt: Option<Bolt>,
         cull_from: Option<Vec3>,
@@ -2058,7 +2067,7 @@ impl FxSystem {
 
     /// Spawns the chained effects due by `now` from `chains[from..]`,
     /// and those they start in turn, until the spawn budget runs out.
-    fn drain_chains(&mut self, fs: &dyn AssetSource, now: f32, from: usize) -> Vec<FxSound> {
+    fn drain_chains(&mut self, fs: &dyn AssetSource, now: f64, from: usize) -> Vec<FxSound> {
         let mut sounds = Vec::new();
         let mut i = from;
         while i < self.chains.len() && self.budget > 0 {
@@ -2088,7 +2097,7 @@ impl FxSystem {
     /// Plays the effects due by `now` that others started: delayed
     /// `playfx`, and the `impactfx`, `emitfx` and `deathfx` the steps
     /// since the last call raised.
-    pub fn spawn_chained(&mut self, fs: &dyn AssetSource, now: f32) -> Vec<FxSound> {
+    pub fn spawn_chained(&mut self, fs: &dyn AssetSource, now: f64) -> Vec<FxSound> {
         self.budget = MAX_SPAWN_BUDGET;
         let sounds = self.drain_chains(fs, now, 0);
         self.drop_oldest_pending();
@@ -2109,7 +2118,7 @@ impl FxSystem {
         (muzzle, impact): (Vec3, Vec3),
         flesh: bool,
         (heavy, roll): (bool, bool),
-        now: f32,
+        now: f64,
         frame_dt: f32,
     ) -> bool {
         crate::frame_digest::effect("", muzzle);
@@ -2157,7 +2166,7 @@ impl FxSystem {
             };
             let vel = dir * TRACER_SPEED;
             tracer_particle(
-                now - back,
+                now - f64::from(back),
                 moving_tracer_life(muzzle, impact, len),
                 muzzle + dir * len + vel * back,
                 vel,
@@ -2170,7 +2179,7 @@ impl FxSystem {
     }
 
     #[cfg(test)]
-    pub fn spawn_effect_for_test(&mut self, effect: Effect, at: SpawnAt, now: f32) -> Vec<FxSound> {
+    pub fn spawn_effect_for_test(&mut self, effect: Effect, at: SpawnAt, now: f64) -> Vec<FxSound> {
         let mut sounds = Vec::new();
         let cx = SpawnCx {
             at,
@@ -2197,9 +2206,9 @@ impl FxSystem {
 
     /// Advance the simulation. `world` enables usePhysics collision. Call
     /// [`Self::spawn_chained`] after it for the effects the step started.
-    pub fn step(&mut self, dt: f32, now: f32, world: Option<&CollisionWorld>) {
+    pub fn step(&mut self, dt: f32, now: f64, world: Option<&CollisionWorld>) {
         if let Some(ms) = self.rewind_ms.take() {
-            let since = now - ms / 1000.0;
+            let since = now - f64::from(ms) / 1000.0;
             self.particles.retain(|p| p.spawn <= since);
             self.chains.retain(|c| c.due <= since);
         }
@@ -2223,7 +2232,7 @@ impl FxSystem {
     }
 
     /// This frame's `Emitter` debris models.
-    pub fn models(&self, now: f32) -> Vec<FxModel> {
+    pub fn models(&self, now: f64) -> Vec<FxModel> {
         self.particles
             .iter()
             .filter(|p| live(p, now))
@@ -2232,7 +2241,7 @@ impl FxSystem {
                 let model = d.model.clone()?;
                 let (origin, _) = world_state(p, &self.bolts)?;
                 let frame = p.bolt.and_then(|id| self.bolts.get(&id)).copied();
-                let t = ((now - p.spawn) / p.life).clamp(0.0, 1.0);
+                let t = p.frac(now);
                 let scale = Shape::at(p, t).half;
                 let axis = angles_to_axis_msvc(d.angles.to_array()).map(|a| {
                     let a = Vec3::from(a) * scale;
@@ -2254,7 +2263,7 @@ impl FxSystem {
         cam_pos: Vec3,
         cam_right: Vec3,
         cam_up: Vec3,
-        now: f32,
+        now: f64,
     ) -> Vec<FxQuad> {
         let mut out = Vec::new();
         push_quads(
@@ -2284,7 +2293,7 @@ impl FxSystem {
         cam_pos: Vec3,
         cam_right: Vec3,
         cam_up: Vec3,
-        now: f32,
+        now: f64,
     ) -> cod2_cloud::Clouds {
         let mut out: Vec<cod2_cloud::FxCloud> = Vec::new();
         for p in &self.particles {
@@ -2297,7 +2306,7 @@ impl FxSystem {
             let Some((pos, vel)) = world_state(p, &self.bolts) else {
                 continue;
             };
-            let t = ((now - p.spawn) / p.life).clamp(0.0, 1.0);
+            let t = p.frac(now);
             let size = l.size(t);
             let width = if l.prim().non_uniform_scale {
                 l.size2(t)
@@ -2333,14 +2342,14 @@ impl FxSystem {
     /// Live Light-kind particles as point lights: the first
     /// `MAX_SCENE_LIGHTS` in spawn order, as retail queues them while it
     /// draws, then sorted nearest `cam_pos` first.
-    pub fn lights(&self, cam_pos: Vec3, now: f32) -> Vec<FxLight> {
+    pub fn lights(&self, cam_pos: Vec3, now: f64) -> Vec<FxLight> {
         let mut candidates: Vec<(f32, FxLight)> = self
             .particles
             .iter()
             .filter(|p| p.is_light && live(p, now))
             .filter_map(|p| {
                 let (pos, _) = world_state(p, &self.bolts)?;
-                let t = ((now - p.spawn) / p.life).clamp(0.0, 1.0);
+                let t = p.frac(now);
                 let radius = Shape::at(p, t).half;
                 let rgb = match &p.cod2 {
                     Some(l) => l.rgb(t),
@@ -2366,7 +2375,7 @@ impl FxSystem {
     /// at spawn. One delayed on a tag is posed on the tag as it stands now;
     /// with the tag gone it places nothing, as a delayed particle spawns
     /// nothing.
-    pub fn take_marks(&mut self, now: f32) -> Vec<MarkRequest> {
+    pub fn take_marks(&mut self, now: f64) -> Vec<MarkRequest> {
         let mut out = Vec::new();
         let bolts = &self.bolts;
         self.marks.retain(|m| {
@@ -2443,6 +2452,30 @@ mod tests {
         s
     }
 
+    /// The fx clock is f64: 11 h in, a particle ages by the
+    /// 7 ms frame as it does 10 s in, where f32 seconds held 3.9 ms steps.
+    #[test]
+    fn a_particle_ages_alike_hours_into_the_clock() {
+        let sizes = |base: f64| {
+            let mut s = FxSystem::new();
+            let effect = Effect {
+                emitters: vec![simple_emitter()],
+            };
+            s.spawn_effect_for_test(effect, SpawnAt::Point { pos: Vec3::ZERO }, base);
+            (1..=70)
+                .map(|k| {
+                    let now = base + f64::from(k) * 0.007;
+                    s.step(0.007, now, None);
+                    let q = s.build_quads(Vec3::new(0.0, -100.0, 0.0), Vec3::X, Vec3::Z, now);
+                    quad_half_x(&q[0])
+                })
+                .collect::<Vec<_>>()
+        };
+        for (early, late) in sizes(10.0).iter().zip(sizes(40_000.0)) {
+            assert!((early - late).abs() < 1e-4, "{early} {late}");
+        }
+    }
+
     #[test]
     fn particle_integrates_velocity_and_gravity_and_expires() {
         let mut s = sys_with(simple_emitter(), SpawnAt::Point { pos: Vec3::ZERO });
@@ -2481,8 +2514,8 @@ mod tests {
         e.alpha.end = R1 { a: -0.5, b: -0.5 };
         let colour = |e: &Emitter, t: f32| {
             let mut s = sys_with(e.clone(), SpawnAt::Point { pos: Vec3::ZERO });
-            s.step(t, t, None);
-            s.build_quads(Vec3::new(0.0, -100.0, 0.0), Vec3::X, Vec3::Z, t)[0].rgba
+            s.step(t, f64::from(t), None);
+            s.build_quads(Vec3::new(0.0, -100.0, 0.0), Vec3::X, Vec3::Z, f64::from(t))[0].rgba
         };
         let near = |a: [f32; 4], b: [f32; 4]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-4);
         let rgb = [0.8804, 0.71765, 0.6196];
@@ -2948,7 +2981,7 @@ mod tests {
             linear: false,
         };
         let s = sys_with(e, SpawnAt::Point { pos: Vec3::ZERO });
-        for now in [0.0f32, 0.5, 0.99] {
+        for now in [0.0f64, 0.5, 0.99] {
             let q = s.build_quads(Vec3::new(0.0, -100.0, 0.0), Vec3::X, Vec3::Z, now);
             assert_eq!(q.len(), 1);
             assert!((quad_half_x(&q[0]) - 3.0).abs() < 1e-4, "{now}");
@@ -2982,14 +3015,14 @@ mod tests {
         s: &mut FxSystem,
         impact: Vec3,
         flesh: bool,
-        now: f32,
+        now: f64,
         frame_dt: f32,
     ) -> bool {
         (0..50).any(|_| s.spawn_tracer((Vec3::ZERO, impact), flesh, (false, true), now, frame_dt))
     }
 
     /// The one tracer's (tail, head) x along a +x shot, and its width.
-    fn tracer_extent(s: &FxSystem, now: f32) -> Option<(f32, f32, f32)> {
+    fn tracer_extent(s: &FxSystem, now: f64) -> Option<(f32, f32, f32)> {
         let q = s.build_quads(Vec3::new(0.0, -500.0, 0.0), Vec3::X, Vec3::Z, now);
         let q = q.first()?;
         assert_eq!(&*q.shader, "gfx/misc/tracer");
@@ -3019,7 +3052,7 @@ mod tests {
             let Some((tail, head, _)) = tracer_extent(&s, now) else {
                 break;
             };
-            assert!((tail - 4500.0 * now).abs() < 1e-2, "{now}: {tail}");
+            assert!((tail - 4500.0 * now as f32).abs() < 1e-2, "{now}: {tail}");
             assert!((head - tail - 160.0).abs() < 1e-2, "{now}: {head}");
             assert!(head <= impact.x + 1e-2, "{now}: {head} past the impact");
         }
@@ -3049,7 +3082,7 @@ mod tests {
         let impact = Vec3::new(4000.0, 0.0, 0.0);
         for i in 0..200 {
             s.clear();
-            let now = i as f32;
+            let now = i as f64;
             assert!(spawn_tracer_retrying(&mut s, impact, false, now, 0.016));
             let (tail, head, _) = tracer_extent(&s, now).unwrap();
             // `(rand() % 16) / 2` ms, so at most 7 ms of travel.
@@ -3136,7 +3169,7 @@ mod tests {
         let mut s = FxSystem::new();
         for i in 0..100 {
             s.clear();
-            let now = i as f32;
+            let now = i as f64;
             assert!(spawn_tracer_retrying(
                 &mut s,
                 Vec3::new(1000.0, 0.0, 0.0),
@@ -3333,9 +3366,9 @@ mod tests {
             normal: Vec3::Z,
         };
         for (i, path) in paths.iter().enumerate() {
-            s.spawn(&empty, path, at, i as f32);
+            s.spawn(&empty, path, at, i as f64);
         }
-        let mut now = paths.len() as f32;
+        let mut now = paths.len() as f64;
         for _ in 0..200 {
             now += 0.05;
             s.step(0.05, now, None);
@@ -3604,7 +3637,7 @@ mod tests {
         e
     }
 
-    fn centers(s: &FxSystem, now: f32) -> Vec<Vec3> {
+    fn centers(s: &FxSystem, now: f64) -> Vec<Vec3> {
         s.build_quads(Vec3::new(0.0, 0.0, 1000.0), Vec3::X, Vec3::Y, now)
             .iter()
             .map(quad_center)
@@ -3741,7 +3774,7 @@ mod tests {
         s.spawn(&Pk3Fs::empty(), "fx/emit.efx", at, 0.0);
         let mut plays = Vec::new();
         for i in 1..=10 {
-            let now = i as f32 * 0.01;
+            let now = i as f64 * 0.01;
             s.step(0.01, now, None);
             for c in s.chains.drain(..) {
                 assert_eq!(c.path, "fx/puff.efx");
@@ -3778,7 +3811,7 @@ mod tests {
         let mut plays = Vec::new();
         // 7 ms steps, 1.4 units each, to 98 units.
         for i in 1..=70 {
-            let now = i as f32 * 0.007;
+            let now = i as f64 * 0.007;
             s.step(0.007, now, None);
             for c in s.chains.drain(..) {
                 assert_eq!(c.path, "fx/puff.efx");
@@ -4130,7 +4163,7 @@ mod tests {
         assert!(s.counts().0 > alone.counts().0, "the runner's flash");
         let mut emitted = 0;
         for i in 1..=10 {
-            let now = i as f32 * 0.016;
+            let now = i as f64 * 0.016;
             s.step(0.016, now, None);
             emitted += s.chains.len();
             s.spawn_chained(&fs, now);

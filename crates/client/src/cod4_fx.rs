@@ -836,17 +836,10 @@ impl Cod4Effects {
         owner: Option<u32>,
     ) -> Vec<FxSound> {
         let Some(specs) = self.loops.get(&play.key) else {
-            return self.spawn_one(fx, fs, &play.key, play.at, play.bolt, begin as f32);
+            return self.spawn_one(fx, fs, &play.key, play.at, play.bolt, begin);
         };
         let specs = specs.clone();
-        let sounds = self.spawn_one(
-            fx,
-            fs,
-            &one_shot_key(&play.key),
-            play.at,
-            play.bolt,
-            begin as f32,
-        );
+        let sounds = self.spawn_one(fx, fs, &one_shot_key(&play.key), play.at, play.bolt, begin);
         for (i, spec) in specs.into_iter().enumerate() {
             if spec.count <= 0 {
                 continue;
@@ -876,7 +869,7 @@ impl Cod4Effects {
         key: &str,
         at: SpawnAt,
         bolt: Option<TagBolt>,
-        t: f32,
+        t: f64,
     ) -> Vec<FxSound> {
         match bolt.and_then(|b| Some((b, *self.tags.get(&b)?))) {
             Some((b, pose)) => fx.spawn_on_tag(fs, key, b, pose, t),
@@ -911,7 +904,7 @@ impl Cod4Effects {
                 if t > now {
                     break;
                 }
-                sounds.extend(self.spawn_one(fx, fs, &l.key, l.at, l.bolt, t as f32));
+                sounds.extend(self.spawn_one(fx, fs, &l.key, l.at, l.bolt, t));
                 self.loop_spawns += 1;
                 l.next += 1;
             }
@@ -2168,7 +2161,7 @@ impl Cod4Effects {
         &mut self,
         fx: &mut FxSystem,
         hits: &[BulletHit],
-        now: f32,
+        now: f64,
         frame_ms: i32,
     ) -> usize {
         let own = hits.first().is_some_and(|h| h.own);
@@ -2213,7 +2206,7 @@ impl Cod4Effects {
         fx: &mut FxSystem,
         r: &ServerRound,
         own: bool,
-        now: f32,
+        now: f64,
         frame_ms: i32,
     ) {
         if own || self.roll() >= TRACER_CHANCE {
@@ -2549,7 +2542,7 @@ mod tests {
         fx.spawn(&fs, &key("impacts/large_brick"), at, 0.0);
         let mut emits = 0;
         for i in 1..=60 {
-            let now = i as f32 / 60.0;
+            let now = f64::from(i) / 60.0;
             fx.step(1.0 / 60.0, now, None);
             emits += fx
                 .pending_chains()
@@ -2590,15 +2583,15 @@ mod tests {
         };
         fx.set_tag_bolts(&HashMap::from([(bolt, pose(0.0))]));
         fx.spawn_on_tag(&fs, &key("smoke/smoke_geotrail_rpg"), bolt, pose(0.0), 0.0);
-        let trail = |fx: &FxSystem, now: f32| -> Vec<crate::fx::sim::FxQuad> {
+        let trail = |fx: &FxSystem, now: f64| -> Vec<crate::fx::sim::FxQuad> {
             fx.build_quads(Vec3::new(500.0, -500.0, 100.0), Vec3::X, Vec3::Z, now)
                 .into_iter()
                 .filter(|q| q.shader.contains("smoke_trail02"))
                 .collect()
         };
         for i in 1..=60 {
-            let now = i as f32 / 60.0;
-            fx.set_tag_bolts(&HashMap::from([(bolt, pose(1003.0 * now))]));
+            let now = f64::from(i) / 60.0;
+            fx.set_tag_bolts(&HashMap::from([(bolt, pose(1003.0 * now as f32))]));
             fx.step(1.0 / 60.0, now, None);
         }
         let q = trail(&fx, 1.0);
@@ -3021,7 +3014,7 @@ mod tests {
         let mut samples = Vec::new();
         for i in 0..600 {
             e.run_loops(&mut fx, &fs, now);
-            fx.step(1.0 / 60.0, now as f32, None);
+            fx.step(1.0 / 60.0, now, None);
             if i % 120 == 0 {
                 let (parts, _, lights) = fx.counts();
                 samples.push((e.loop_spawns, parts, lights));
@@ -3048,7 +3041,7 @@ mod tests {
             "{rate:?}"
         );
         // The drawn sprites stay near the placed effects.
-        let quads = fx.build_quads(Vec3::ZERO, Vec3::Y, Vec3::Z, now as f32);
+        let quads = fx.build_quads(Vec3::ZERO, Vec3::Y, Vec3::Z, now);
         let near = quads
             .iter()
             .filter(|q| {
@@ -3104,10 +3097,10 @@ mod tests {
         for _ in 0..600 {
             view(&mut fx);
             e.run_loops(&mut fx, &fs, now);
-            fx.step(1.0 / 60.0, now as f32, None);
+            fx.step(1.0 / 60.0, now, None);
             now += 1.0 / 60.0;
         }
-        Some((eye, fx.build_quads(eye, right, up, now as f32), fires))
+        Some((eye, fx.build_quads(eye, right, up, now), fires))
     }
 
     /// The fires' smoke (`fire/firelp_small_pm` element 2,
@@ -3173,9 +3166,9 @@ mod tests {
         let mut heights = Vec::new();
         for i in 0..600 {
             e.run_loops(&mut fx, &fs, now);
-            fx.step(1.0 / 60.0, now as f32, None);
+            fx.step(1.0 / 60.0, now, None);
             if i % 60 == 0 {
-                for q in fx.build_quads(Vec3::ZERO, Vec3::Y, Vec3::Z, now as f32) {
+                for q in fx.build_quads(Vec3::ZERO, Vec3::Y, Vec3::Z, now) {
                     if q.shader.contains("hawk") {
                         let c = q.verts.iter().map(|v| Vec3::from(*v)).sum::<Vec3>() / 4.0;
                         heights.push(c.z);

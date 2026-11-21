@@ -609,8 +609,8 @@ fn implicit_mark_shader(name: &str) -> Material {
 }
 
 impl Renderer {
-    /// One frame of impact marks: `requests` placed at `now_ms` (the
-    /// cgame's clock), the pool expired, faded and uploaded after this
+    /// One frame of impact marks: `requests` placed at `time` (the fx
+    /// clock, seconds), the pool expired, faded and uploaded after this
     /// frame's `temporary` marks (`crate::blob_shadow`). `enabled` is
     /// `cg_marks`.
     pub fn set_marks(
@@ -618,10 +618,10 @@ impl Renderer {
         fs: &Pk3Fs,
         requests: &[crate::marks::MarkRequest],
         temporary: &[crate::marks::MarkRequest],
-        now_ms: i32,
-        time: f32,
+        time: f64,
         enabled: bool,
     ) {
+        let now_ms = (time * 1000.0) as i32;
         let ctx = MarkCtx {
             device: &self.device,
             queue: &self.queue,
@@ -639,7 +639,7 @@ impl Renderer {
             self.marks.prepare_sprites(&ctx, crate::corona::SHADER);
         }
         self.marks
-            .update(&ctx, requests, temporary, now_ms, time, enabled);
+            .update(&ctx, requests, temporary, now_ms, time as f32, enabled);
     }
 
     /// Builds every mark shader in `shaders` now (its images, stages and

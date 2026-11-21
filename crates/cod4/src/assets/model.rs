@@ -2,6 +2,7 @@
 
 use super::material::{Material, material};
 use super::misc::{PhysPreset, phys_preset};
+use super::world::SharedBulk;
 use super::{Id, asset, push};
 use crate::walk::{Follow, Handle, S, W, u16s};
 use crate::zone::{Block, Pointer};
@@ -113,11 +114,11 @@ pub struct XSurface {
     /// Vertices with 1, 2, 3 and 4 bone weights.
     pub blend_counts: [u16; 4],
     /// `vertsBlend`: u16 bone data, `c0 + 3 c1 + 5 c2 + 7 c3` of them.
-    pub verts_blend: Option<Vec<u8>>,
+    pub verts_blend: SharedBulk,
     /// `GfxPackedVertex`, 0x20 each, in the vertex block.
-    pub verts: Option<Vec<u8>>,
+    pub verts: SharedBulk,
     /// Three u16 per triangle, in the index block.
-    pub tris: Option<Vec<u8>>,
+    pub tris: SharedBulk,
     /// `XRigidVertList`, 0xC each: bone offset, vertex and triangle runs.
     pub rigid: Vec<[u16; 4]>,
     pub part_bits: [u32; 4],
@@ -203,12 +204,12 @@ pub fn xmodel<R: BufRead>(w: &mut W<R>, p: Pointer, slot: u32) -> Result<Option<
                 num_bones: s.u8(4),
                 num_root_bones: s.u8(5),
                 bone_names,
-                parent_list: parent_list.unwrap_or_default(),
-                quats: quats.unwrap_or_default(),
-                trans: trans.unwrap_or_default(),
-                part_classification: part_classification.unwrap_or_default(),
-                base_mat: base_mat.unwrap_or_default(),
-                bone_info: bone_info.unwrap_or_default(),
+                parent_list: parent_list.as_deref().unwrap_or_default().to_vec(),
+                quats: quats.as_deref().unwrap_or_default().to_vec(),
+                trans: trans.as_deref().unwrap_or_default().to_vec(),
+                part_classification: part_classification.as_deref().unwrap_or_default().to_vec(),
+                base_mat: base_mat.as_deref().unwrap_or_default().to_vec(),
+                bone_info: bone_info.as_deref().unwrap_or_default().to_vec(),
                 surfaces,
                 materials,
                 lods,

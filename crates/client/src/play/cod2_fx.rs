@@ -126,7 +126,7 @@ impl FxPlay {
         }
     }
 
-    pub fn spawn(&self, fx: &mut FxSystem, fs: &dyn AssetSource, now: f32) {
+    pub fn spawn(&self, fx: &mut FxSystem, fs: &dyn AssetSource, now: f64) {
         match &self.play {
             Play::Effect { path, at } => {
                 log::debug!("cod2 fx {path} ({})", self.why);

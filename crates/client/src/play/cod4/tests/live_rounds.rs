@@ -888,7 +888,7 @@ fn cod4_live_own_shotgun_pellets_share_one_tracer_roll() {
                             Some(&own),
                             shot_world,
                         );
-                        let drawn = effects.tracers(&mut fx, &hits, press as f32, 16);
+                        let drawn = effects.tracers(&mut fx, &hits, f64::from(press), 16);
                         let aim = f.aim?;
                         let rounds: Vec<_> = hits.iter().map(|h| (h.start, h.end)).collect();
                         shots.push((aim.seed, aim.spread, rounds, drawn));

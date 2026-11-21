@@ -367,7 +367,7 @@ fn own_shots_strike_mark_and_trace() {
     let (mut shots, mut impacts, mut cues, mut marks, mut placed) = (0, 0, 0, Vec::new(), 0);
     let mut pierced: BTreeMap<(bool, bool), usize> = BTreeMap::new();
     let mut bodies = 0;
-    let mut now = 0.0f32;
+    let mut now = 0.0f64;
     let mut ms = 0.0;
     while !s.finished() {
         ms += 1000.0 / 60.0;
@@ -429,7 +429,7 @@ fn own_shots_strike_mark_and_trace() {
             effects.tracers(&mut fx, std::slice::from_ref(&hit), now, 16);
             for p in effects.bullet_plays(f, &weapons, &hit) {
                 impacts += 1;
-                effects.start(&mut fx, &fs, &p, f64::from(now), None);
+                effects.start(&mut fx, &fs, &p, now, None);
             }
             cues += sounds.bullet_cues(f, &weapons, &hit, Some(scene.eye)).len();
         }

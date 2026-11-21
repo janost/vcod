@@ -16,7 +16,6 @@ use vcod_common::pmove::angle_normalize180;
 use vcod_common::turretpose::angles_quat;
 
 use crate::camera::FlyCamera;
-use crate::cod2_client::Cod2Frame;
 use crate::cod2_viewmodel::ViewFrame;
 use crate::cod4_audio::{self, Cod4Sounds};
 use crate::cod4_fly::WeaponModels;
@@ -33,6 +32,7 @@ use crate::play::cod4::{
 use crate::play::cod4_players::{Cod4Players, WeaponTags};
 use crate::play::quake::Quakes;
 use crate::renderer::{DynamicModelInstance, ModelHandle, Renderer};
+use crate::session::ClientFrame;
 use vcod_cod4::anim::BodySource;
 use vcod_common::asset_source::AssetSource;
 
@@ -576,7 +576,7 @@ impl Cod4Client {
     /// Reads what is due, logs the events, prints the obituaries, puts the
     /// camera on the snapshot's view and draws the entities. False with no
     /// snapshot yet (the camera flies).
-    pub(crate) fn pump(&mut self, cx: &mut Cod2Frame, cam: &mut FlyCamera) -> bool {
+    pub(crate) fn pump(&mut self, cx: &mut ClientFrame, cam: &mut FlyCamera) -> bool {
         use crate::frame_prof::{Stage, span};
         // The camera holds behind the loading screen (`Session::scene`).
         if self.map_load.is_some() {
@@ -807,7 +807,7 @@ impl Cod4Client {
     /// and every entity model the level can draw uploaded. Each is a no-op
     /// the second time; [`Self::pump`] runs the first two again, which a
     /// session that never prewarms still needs.
-    pub(crate) fn prewarm(&mut self, cx: &mut Cod2Frame) {
+    pub(crate) fn prewarm(&mut self, cx: &mut ClientFrame) {
         let mut laps = vcod_common::laps::Laps::new("cod4 level prewarm");
         self.load_hud(cx);
         laps.lap("hud");
@@ -846,7 +846,7 @@ impl Cod4Client {
     /// The level's HUD and script menu zones (`HudAssets::load`) under its
     /// `fs_game`, loaded again when either changes, and the menus' defs,
     /// strings and lists handed to the session.
-    fn load_hud(&mut self, cx: &Cod2Frame) {
+    fn load_hud(&mut self, cx: &ClientFrame) {
         let (Some(dir), Some(map)) = (cx.fs.dirs().first(), self.session.map_name()) else {
             return;
         };
@@ -874,7 +874,7 @@ impl Cod4Client {
     /// Voice chat's frame: `+talk`'s frames encoded onto the session's
     /// batch while [`crate::voice::may_send`] holds, the heard ones
     /// played. `cl_voice` defaults to 1 and `rate` to the userinfo's 25000.
-    fn voice_frame(&mut self, cx: &mut Cod2Frame) {
+    fn voice_frame(&mut self, cx: &mut ClientFrame) {
         use crate::voice::may_send;
         let atoi = vcod_cod4::menuexp::atoi;
         let (sv_voice, quality) = self.session.voice_settings();
@@ -897,7 +897,7 @@ impl Cod4Client {
     /// The drawn snapshot's shellshock at the render time `now`
     /// (`play::cod4_shock`): the screen to the renderer, the mix to the
     /// audio, the kick and mouse caps kept for the draw and the mouse.
-    fn shellshock(&mut self, cx: &mut Cod2Frame, now: i32) {
+    fn shellshock(&mut self, cx: &mut ClientFrame, now: i32) {
         let (parms, start, duration) = crate::play::cod4_shock::of_session(&self.session);
         let f = self.shock.frame(parms.as_ref(), start, duration, now);
         cx.r.set_cod4_shock(Some(f.screen));
@@ -917,7 +917,7 @@ impl Cod4Client {
 
     /// The frame's fired events and lines: the HUD's, the console's, their
     /// sounds and effects.
-    fn events(&mut self, cx: &mut Cod2Frame, now: f64) {
+    fn events(&mut self, cx: &mut ClientFrame, now: f64) {
         let fired = self.session.take_fired();
         let at = self
             .session
@@ -962,7 +962,7 @@ impl Cod4Client {
     /// The fog and vision set on the cgame's clock: configstring 9's fog
     /// faded to when it changes, 824's set blended, 825's while `night`
     /// (cod4-world.md 11).
-    fn look_frame(&mut self, cx: &mut Cod2Frame, night: bool) {
+    fn look_frame(&mut self, cx: &mut ClientFrame, night: bool) {
         // the HUD keeps the `d` updates since the gamestate
         if self.session.gamestate().is_some() {
             let (hud, session) = (&self.hud, &self.session);
@@ -978,11 +978,11 @@ impl Cod4Client {
     /// this frame's tag poses for the bolted ones, the map's createfx
     /// ambience on the first frame, the `ET_FX` / `ET_LOOP_FX` entities
     /// and the looping elements' spawns.
-    fn effects_frame(&mut self, cx: &mut Cod2Frame, scene: &Scene) {
+    fn effects_frame(&mut self, cx: &mut ClientFrame, scene: &Scene) {
         let (Some(e), Some(gs)) = (&mut self.effects, self.session.gamestate()) else {
             return;
         };
-        let now = f64::from(cx.time);
+        let now = cx.time;
         e.set_tags(cx.fx, &self.weapon_tags, self.view_tags.as_ref());
         // The helicopters' smoke and wash, then every model tag an effect
         // rides.
@@ -1074,7 +1074,7 @@ impl Cod4Client {
     /// The view weapon of the drawn playerstate, posed for this frame; a
     /// camera flown off the recorded view draws none, and keeps the fly
     /// fov.
-    fn view_weapon(&mut self, cx: &mut Cod2Frame, scene: &Scene, cam: &FlyCamera) {
+    fn view_weapon(&mut self, cx: &mut ClientFrame, scene: &Scene, cam: &FlyCamera) {
         self.vm = None;
         self.view_tags = None;
         self.ads_dof = None;
@@ -1138,7 +1138,7 @@ impl Cod4Client {
     /// `dof*` fields, else the sight's, with the gun's own range; the
     /// sight's targets reach as far as the view's forward trace
     /// (cod4-client-view.md 12).
-    fn depth_of_field(&mut self, cx: &mut Cod2Frame, scene: &Scene, cam: &FlyCamera) {
+    fn depth_of_field(&mut self, cx: &mut ClientFrame, scene: &Scene, cam: &FlyCamera) {
         // `CG_UpdateAdsDof`'s trace mask
         const MASK: u32 = 0x0080_6c31;
         let (fwd, _, _) = crate::camera::basis(cam.yaw, cam.pitch);
@@ -1183,7 +1183,7 @@ impl Cod4Client {
         cam: &FlyCamera,
         vm: Option<ViewFrame>,
         (fly_fov, aspect, _): (f32, f32, bool),
-    ) -> crate::cod2_client::DrawView {
+    ) -> crate::session::DrawView {
         // `CG_UpdateFov` (iw3mp.exe 0x450510) is Hor+ whatever
         // `vc_widescreen` says: the fov is a 4:3 view's width.
         let fov = self
@@ -1228,7 +1228,7 @@ impl Cod4Client {
             );
             (-p.to_radians(), y.to_radians(), r.to_radians())
         };
-        crate::cod2_client::DrawView {
+        crate::session::DrawView {
             yaw,
             pitch,
             roll,
@@ -1239,7 +1239,7 @@ impl Cod4Client {
 
     /// The fired events' sounds and effects, the map's ambient, and the
     /// zones' tables handed to the audio and fx systems on the first call.
-    fn sound_and_fx(&mut self, cx: &mut Cod2Frame, fired: &[Fired], now_ms: i32) {
+    fn sound_and_fx(&mut self, cx: &mut ClientFrame, fired: &[Fired], now_ms: i32) {
         // Out of the session while its gamestate is read.
         let mut dynents = self.session.dynents.take();
         let mut physics = std::mem::take(&mut self.session.physics);
@@ -1252,7 +1252,7 @@ impl Cod4Client {
 
     fn sound_and_fx_with(
         &mut self,
-        cx: &mut Cod2Frame,
+        cx: &mut ClientFrame,
         fired: &[Fired],
         now_ms: i32,
         dynents: &mut Option<vcod_cod4::dynent::DynEnts>,
@@ -1454,7 +1454,7 @@ impl Cod4Client {
             // (0x48dec7).
             for (i, hit) in &dyn_hits {
                 for p in e.bullet_plays(&fired[*i], &weapons, hit) {
-                    let sounds = e.start(cx.fx, cx.fs, &p, f64::from(cx.time), None);
+                    let sounds = e.start(cx.fx, cx.fs, &p, cx.time, None);
                     cx.audio.play_fx(cx.fs, sounds);
                 }
             }
@@ -1465,7 +1465,7 @@ impl Cod4Client {
                     axis: b.axis,
                 };
                 if let Some(p) = e.play_named(name, at, None) {
-                    let sounds = e.start(cx.fx, cx.fs, &p, f64::from(cx.time), None);
+                    let sounds = e.start(cx.fx, cx.fs, &p, cx.time, None);
                     cx.audio.play_fx(cx.fs, sounds);
                 }
             }
@@ -1482,7 +1482,7 @@ impl Cod4Client {
                     _ => f,
                 };
                 for p in e.plays(f, &weapons, &cs, tags, self.view_tags.as_ref()) {
-                    let sounds = e.start(cx.fx, cx.fs, &p, f64::from(cx.time), None);
+                    let sounds = e.start(cx.fx, cx.fs, &p, cx.time, None);
                     cx.audio.play_fx(cx.fs, sounds);
                 }
                 // `CG_PlayFxOnTag`: the effect bolted to the entity's tag;
@@ -1505,7 +1505,7 @@ impl Cod4Client {
                     axis: pose.axis,
                 };
                 if let Some(p) = e.play_named(&name, at, Some(b)) {
-                    let sounds = e.start(cx.fx, cx.fs, &p, f64::from(cx.time), None);
+                    let sounds = e.start(cx.fx, cx.fs, &p, cx.time, None);
                     cx.audio.play_fx(cx.fs, sounds);
                 }
             }
@@ -1536,7 +1536,7 @@ impl Cod4Client {
                     .flat_map(|h| e.bullet_plays(f, &weapons, h))
                     .collect();
                 for p in plays {
-                    let sounds = e.start(cx.fx, cx.fs, &p, f64::from(cx.time), None);
+                    let sounds = e.start(cx.fx, cx.fs, &p, cx.time, None);
                     cx.audio.play_fx(cx.fs, sounds);
                 }
             }
@@ -1569,7 +1569,7 @@ impl Cod4Client {
     /// This frame's names over heads (`cod4_names`) from the drawn view,
     /// each over its posed `j_head` or its drawn origin; none while the
     /// camera flies free.
-    fn names_frame(&mut self, cx: &Cod2Frame, scene: &Scene, cam: &FlyCamera) {
+    fn names_frame(&mut self, cx: &ClientFrame, scene: &Scene, cam: &FlyCamera) {
         if self.free {
             self.overhead.0.clear();
             return;
@@ -1666,7 +1666,7 @@ impl Cod4Client {
     /// entities come and go.
     fn draw_dynents(
         &mut self,
-        cx: &mut Cod2Frame,
+        cx: &mut ClientFrame,
         scene: &Scene,
         out: &mut Vec<DynamicModelInstance>,
     ) {
@@ -1696,7 +1696,7 @@ impl Cod4Client {
         }
     }
 
-    fn draw(&mut self, cx: &mut Cod2Frame, scene: &Scene) {
+    fn draw(&mut self, cx: &mut ClientFrame, scene: &Scene) {
         let mut instances = Vec::new();
         let mut submodels = Vec::new();
         #[cfg(test)]
@@ -1853,7 +1853,7 @@ impl Cod4Client {
     /// `out`; returns the entity numbers drawn so.
     fn pose_bodies(
         &mut self,
-        cx: &mut Cod2Frame,
+        cx: &mut ClientFrame,
         scene: &Scene,
         out: &mut Vec<DynamicModelInstance>,
     ) -> Vec<u32> {
@@ -1961,7 +1961,7 @@ impl Cod4Client {
     /// of a destructible car's intact and cracked glass only the state's
     /// pair draws, and a newly broken part builds no GPU data in play
     /// (cod4-client-perf.md 18).
-    fn handle(&mut self, cx: &mut Cod2Frame, d: &Drawn) -> Option<ModelHandle> {
+    fn handle(&mut self, cx: &mut ClientFrame, d: &Drawn) -> Option<ModelHandle> {
         let name = self.model_of(d)?;
         let hides = |p: &[u32; 4]| p.iter().zip(d.part_bits).any(|(p, h)| p & h != 0);
         let keep: Option<Vec<bool>> = self
@@ -1992,7 +1992,7 @@ impl Cod4Client {
 
     fn upload(
         &mut self,
-        cx: &mut Cod2Frame,
+        cx: &mut ClientFrame,
         name: &str,
         model: impl FnOnce() -> Option<Model>,
     ) -> Option<ModelHandle> {
@@ -2257,7 +2257,7 @@ impl Cod4Client {
 /// The level's effects, once they are read: their sprite images and mark
 /// materials build with the level, not in an effect's or a surface's first
 /// frame (cod4-map-sweep.md 5), and the defs go to the fx system.
-fn take_level_effects(e: &mut Cod4Effects, cx: &mut Cod2Frame) {
+fn take_level_effects(e: &mut Cod4Effects, cx: &mut ClientFrame) {
     let Some(all) = e.take_effects() else {
         return;
     };
@@ -2767,7 +2767,7 @@ mod saw_tests {
             let now = clk_now();
             let dt = now.duration_since(last).as_secs_f32();
             last = now;
-            let mut cx = Cod2Frame {
+            let mut cx = ClientFrame {
                 fs: &fs,
                 shell: &shell,
                 localized: &localized,
@@ -2776,7 +2776,7 @@ mod saw_tests {
                 ui: &ui,
                 r,
                 console_open: false,
-                time: clk_since(start).as_secs_f32(),
+                time: clk_since(start).as_secs_f64(),
                 dt,
             };
             c.pump(&mut cx, cam);

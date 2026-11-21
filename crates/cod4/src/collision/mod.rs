@@ -575,28 +575,28 @@ fn vec3_at(b: &[u8], o: usize) -> Vec3 {
 fn content_hash(c: &world::ClipMap) -> u64 {
     use std::hash::Hasher;
     let bulks = [
-        &c.planes,
-        &c.brush_sides,
-        &c.brush_edges,
-        &c.nodes,
-        &c.leafs,
-        &c.leaf_brushes,
-        &c.leaf_brush_nodes,
-        &c.leaf_surfaces,
-        &c.verts,
-        &c.tri_indices,
-        &c.tri_edge_walkable,
-        &c.borders,
-        &c.partitions,
-        &c.aabb_trees,
-        &c.cmodels,
-        &c.brushes,
+        c.planes.as_deref(),
+        c.brush_sides.as_deref(),
+        c.brush_edges.as_deref(),
+        c.nodes.as_deref(),
+        c.leafs.as_deref(),
+        c.leaf_brushes.as_deref(),
+        c.leaf_brush_nodes.as_deref(),
+        c.leaf_surfaces.as_deref(),
+        c.verts.as_deref(),
+        c.tri_indices.as_deref(),
+        c.tri_edge_walkable.as_deref(),
+        c.borders.as_deref(),
+        c.partitions.as_deref(),
+        c.aabb_trees.as_deref(),
+        c.cmodels.as_deref(),
+        c.brushes.as_deref(),
     ];
     let models = c.static_models.iter().map(|(_, b)| b.as_slice());
     let mut h = std::hash::DefaultHasher::new();
     for a in bulks
         .into_iter()
-        .map(|b| b.as_deref().unwrap_or_default())
+        .map(Option::unwrap_or_default)
         .chain([c.materials.as_slice()])
         .chain(models)
     {
@@ -606,7 +606,7 @@ fn content_hash(c: &world::ClipMap) -> u64 {
     h.finish()
 }
 
-fn bulk<'a>(b: &'a Option<Vec<u8>>, what: &str) -> Result<&'a [u8]> {
+fn bulk<'a, B: std::ops::Deref<Target = [u8]>>(b: &'a Option<B>, what: &str) -> Result<&'a [u8]> {
     b.as_deref()
         .with_context(|| format!("{what} not kept (walk with keep_bulk)"))
 }

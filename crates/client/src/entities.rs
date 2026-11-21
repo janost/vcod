@@ -35,9 +35,6 @@ use vcod_common::turretpose::{
 use vcod_common::vehiclepose::{self, VehicleFields};
 use vcod_common::xanim::{self, XAnim};
 
-/// `legsAnim`/`torsoAnim`: anim index in the low 9 bits, restart toggle in bit 512.
-const ANIM_INDEX_MASK: i32 = 511;
-
 /// How long a turret's anim state and a pending assembly survive unseen.
 const STATE_TTL_MS: i32 = 5000;
 
@@ -463,43 +460,6 @@ fn finalize_assembly(pending: PendingAssembly) -> Option<Rc<Assembly>> {
     }))
 }
 
-/// A turret's anim channel. `raw` is the last wire value; the server flips
-/// the toggle bit on every anim (re)start, the only signal that a repeat of
-/// the same anim should restart from frame 0.
-#[derive(Clone, Copy)]
-struct Channel {
-    raw: i32,
-    /// Render-clock time the current playback started at.
-    start_ms: i32,
-    /// The clip playing before the last switch, kept for the cross-fade:
-    /// `(raw, start_ms)`. `None` once the fade is over, on a same-clip
-    /// restart (re-fires stay snappy), and before the first anim.
-    prev: Option<(i32, i32)>,
-}
-
-impl Channel {
-    /// -1 cannot occur on the 10-bit field, so the first update counts as a restart.
-    fn new() -> Channel {
-        Channel {
-            raw: -1,
-            start_ms: 0,
-            prev: None,
-        }
-    }
-
-    /// Returns whether playback restarted.
-    fn update(&mut self, raw: i32, now_ms: i32) -> bool {
-        if self.raw == raw {
-            return false; // same anim, same toggle: keep the phase
-        }
-        let switched_clip = self.raw >= 0 && (self.raw ^ raw) & ANIM_INDEX_MASK != 0;
-        self.prev = switched_clip.then_some((self.raw, self.start_ms));
-        self.raw = raw;
-        self.start_ms = now_ms;
-        true
-    }
-}
-
 /// Per-connection draw-path state: caches, the player animtree, clips, and one
 /// [`EntityAnim`] per animating entity.
 pub struct EntityScene {
@@ -706,7 +666,7 @@ struct GunFrame {
 }
 
 struct TurretAnim {
-    channel: Channel,
+    clock: turret::GunClock<GunAnim>,
     last_seen_ms: i32,
     /// This frame's posed bones, model space.
     worlds: Vec<(Vec3, Quat)>,
@@ -2842,49 +2802,27 @@ fn draw_turret(
         )
     });
     let rides = ridden == Some(num);
-    let st = turret_anims.entry(num).or_insert_with(|| TurretAnim {
-        channel: Channel::new(),
-        last_seen_ms: render_time,
-        worlds: Vec::new(),
-    });
-    st.last_seen_ms = render_time;
     let movetype = if uo {
         ent.field_i32(p, "animMovetype")
     } else {
         0
     };
     let slot = turret::gun_anim(rides, ent.field_i32(p, "eFlags"), movetype);
-    st.channel.update(slot as i32, render_time);
-    let clip_of = |raw: i32| {
-        if raw & ANIM_INDEX_MASK == GunAnim::Fire as i32 {
-            fire.as_deref()
-        } else {
-            idle.as_deref()
-        }
+    let st = turret_anims.entry(num).or_insert_with(|| TurretAnim {
+        clock: turret::GunClock::new(slot, render_time),
+        last_seen_ms: render_time,
+        worlds: Vec::new(),
+    });
+    st.last_seen_ms = render_time;
+    st.clock.set(slot, render_time);
+    let clip_of = |a: GunAnim| match a {
+        GunAnim::Fire => fire.as_deref(),
+        GunAnim::Idle => idle.as_deref(),
     };
 
-    // The previous anim at full weight, then the goal blended over it.
     let mut pose = PoseBuffer::drawn(&rig.skeleton);
-    let ch = &mut st.channel;
-    let fade = (render_time - ch.start_ms) as f32 / turret::ANIM_BLEND_MS as f32;
-    if fade >= 1.0 {
-        ch.prev = None;
-    }
-    let layers = ch
-        .prev
-        .map(|(raw, start)| (raw, start, 1.0))
-        .into_iter()
-        .chain([(
-            ch.raw,
-            ch.start_ms,
-            if ch.prev.is_some() {
-                fade.max(0.0)
-            } else {
-                1.0
-            },
-        )]);
-    for (raw, start, w) in layers {
-        let Some(name) = clip_of(raw) else { continue };
+    for (a, start, w) in st.clock.layers(render_time, turret::ANIM_BLEND_MS) {
+        let Some(name) = clip_of(a) else { continue };
         let Some(clip) = load_clip(clips, fs, name) else {
             continue;
         };
@@ -3640,20 +3578,6 @@ mod tests {
             resolve_visual(&ent(ET_ITEM, 0, 0), &none, &cs, p),
             EntityVisual::None
         );
-    }
-
-    #[test]
-    fn toggle_bit_restarts_channel() {
-        let mut ch = Channel::new();
-        assert!(ch.update(5, 1000)); // first sight: (re)start
-        assert_eq!(ch.prev, None); // nothing to fade from
-        assert!(!ch.update(5, 1500)); // same raw: keep phase
-        assert!(ch.update(5 | 512, 2000)); // toggle flip: restart
-        assert_eq!(ch.prev, None); // same clip re-trigger: no fade
-        assert!(ch.update(6 | 512, 2500)); // index change: restart
-        assert_eq!(ch.prev, Some((5 | 512, 2000))); // fade from the old clip
-        assert_eq!(ch.raw & ANIM_INDEX_MASK, 6);
-        assert_eq!(ch.start_ms, 2500);
     }
 
     #[test]

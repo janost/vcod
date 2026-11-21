@@ -134,7 +134,7 @@ impl App {
                     r,
                     &self.localized,
                     &mut self.hud,
-                    time,
+                    time as f32,
                     aspect,
                     cull,
                     net.configstrings(),
@@ -249,7 +249,7 @@ impl App {
                     r,
                     &self.localized,
                     &mut self.hud,
-                    time,
+                    time as f32,
                     aspect,
                     cull,
                     net.configstrings(),
@@ -285,7 +285,7 @@ impl App {
                         r,
                         &self.localized,
                         &mut self.hud,
-                        time,
+                        time as f32,
                         aspect,
                         cull,
                         net.configstrings(),
@@ -335,7 +335,7 @@ impl App {
             if let Some(hud) = &mut self.hud {
                 let p = net.protocol();
                 let bound = |cmd: &str| bound_key(&self.shell, &self.localized, p, cmd);
-                hud.on_net_event(ev, time, &self.localized, &bound);
+                hud.on_net_event(ev, time as f32, &self.localized, &bound);
             }
             match ev {
                 // `player_talk` with every chat line, as
@@ -568,7 +568,7 @@ impl App {
 
         // One quick-chat line per second, played and shown
         // like a chat line (retail queues text + alias).
-        if let Some(line) = self.quick_chat.drain(time) {
+        if let Some(line) = self.quick_chat.drain(time as f32) {
             let name = net
                 .snapshots()
                 .newest()
@@ -586,10 +586,10 @@ impl App {
         // Re-send `score` every 2 s while Tab is held, as the
         // stock client does (cod11-hud-protocol.md, section 4).
         if let Some(hud) = &mut self.hud
-            && hud.scoreboard.due(time)
+            && hud.scoreboard.due(time as f32)
         {
             net.send_reliable("score");
-            hud.scoreboard.mark_requested(time);
+            hud.scoreboard.mark_requested(time as f32);
         }
         gamestate_ready
     }
@@ -695,7 +695,7 @@ impl App {
                 net.protocol(),
                 net.configstring(0),
                 cam.pos,
-                time,
+                time as f32,
                 self.ui.active(),
             );
         }

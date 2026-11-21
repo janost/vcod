@@ -490,10 +490,10 @@ pub fn probe(addr: &str, secs: u64, fs: &Pk3Fs, join: Option<Join>) -> anyhow::R
         let now = start.elapsed().as_secs_f32();
         fx.set_view(cam.pos);
         for p in &plays {
-            p.spawn(&mut fx, fs, now);
+            p.spawn(&mut fx, fs, f64::from(now));
         }
-        fx.step(fx_last.elapsed().as_secs_f32(), now, None);
-        fx.spawn_chained(fs, now);
+        fx.step(fx_last.elapsed().as_secs_f32(), f64::from(now), None);
+        fx.spawn_chained(fs, f64::from(now));
         fx_last = Instant::now();
         events_sec += events.len();
         cues_sec += cues.len();

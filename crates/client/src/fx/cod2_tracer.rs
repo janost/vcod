@@ -106,19 +106,19 @@ pub struct Tracer {
     /// Muzzle to hit (`le + 0x44`).
     pub dist: f32,
     /// `trTime`, seconds: the spawn, back-dated.
-    pub start: f32,
+    pub start: f64,
     /// `endTime`, seconds: when the tail reaches the hit.
-    pub end: f32,
+    pub end: f64,
 }
 
 impl Tracer {
     /// `CG_SpawnTracer` under `rules` at `now` (seconds), back-dated `back_ms`
     /// (`(rand() % cg.frametime) / 2`, the caller's roll). The life is
     /// the whole distance at the rules' speed, truncated to whole ms.
-    pub fn with(rules: Rules, muzzle: Vec3, hit: Vec3, now: f32, back_ms: i32) -> Tracer {
+    pub fn with(rules: Rules, muzzle: Vec3, hit: Vec3, now: f64, back_ms: i32) -> Tracer {
         let d = hit - muzzle;
         let dist = d.length();
-        let start = now - back_ms as f32 / 1000.0;
+        let start = now - f64::from(back_ms) / 1000.0;
         let life_ms = (dist * 1000.0 / rules.speed) as i32;
         Tracer {
             rules,
@@ -126,19 +126,19 @@ impl Tracer {
             dir: d.normalize_or_zero(),
             dist,
             start,
-            end: start + life_ms as f32 / 1000.0,
+            end: start + f64::from(life_ms) / 1000.0,
         }
     }
 
     /// `CG_AddLocalEntities`' test: drawn while `start <= now < end`.
-    pub fn live(&self, now: f32) -> bool {
+    pub fn live(&self, now: f64) -> bool {
         self.start <= now && now < self.end
     }
 
     /// `CG_AddMovingTracer`: (tail, head) at `now`. The tail rides the
     /// trajectory; the head leads it by [`LENGTH`], never past the hit.
-    pub fn segment(&self, now: f32) -> (Vec3, Vec3) {
-        let tail = self.muzzle + self.dir * (self.rules.speed * (now - self.start));
+    pub fn segment(&self, now: f64) -> (Vec3, Vec3) {
+        let tail = self.muzzle + self.dir * (self.rules.speed * (now - self.start) as f32);
         let left = self.dist - (tail - self.muzzle).dot(self.dir);
         (tail, tail + self.dir * left.min(self.rules.length))
     }
@@ -146,7 +146,7 @@ impl Tracer {
     /// `CG_DrawTracer` from the eye at `eye` with view axes `right` and
     /// `up`: each end `width` either side along the shot's screen-space
     /// perpendicular, the head's u 1 and the tail's 0.
-    pub fn quad(&self, now: f32, eye: Vec3, right: Vec3, up: Vec3) -> FxQuad {
+    pub fn quad(&self, now: f64, eye: Vec3, right: Vec3, up: Vec3) -> FxQuad {
         let (tail, head) = self.segment(now);
         let d = head - tail;
         // `-(d . left) up + (d . up) left`, left being -right.
@@ -172,7 +172,7 @@ impl Tracer {
     /// looking along `fwd`: CoD2's one [`Self::quad`], or CoD4's beam.
     pub fn quads(
         &self,
-        now: f32,
+        now: f64,
         eye: Vec3,
         fwd: Vec3,
         right: Vec3,

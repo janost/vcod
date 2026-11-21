@@ -12,6 +12,7 @@ use anyhow::{Context, Result, bail, ensure};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::io::BufRead;
+use std::sync::Arc;
 
 /// What the walk keeps beyond names and headers.
 #[derive(Clone, Copy, Debug, Default)]
@@ -231,8 +232,9 @@ pub struct W<'z, R: BufRead> {
     /// address, for offset tokens that name one.
     memo: HashMap<(&'static str, u32), Box<dyn Any>>,
     /// Kept [`Self::shared`] data and [`Self::pool`] arrays by kind and
-    /// start, so an offset token into the middle of one copies its bytes.
-    pools: HashMap<&'static str, BTreeMap<u32, Vec<u8>>>,
+    /// start, the asset's own buffers: an offset token to one's start
+    /// shares it, one into its middle copies the bytes.
+    pools: HashMap<&'static str, BTreeMap<u32, Arc<[u8]>>>,
     scratch: Vec<u8>,
     pub out: Assets,
     pub stats: WalkStats,
@@ -419,7 +421,7 @@ impl<'z, R: BufRead> W<'z, R> {
         n: usize,
         kind: &'static str,
         bulk: bool,
-    ) -> Result<Option<Vec<u8>>> {
+    ) -> Result<Option<Arc<[u8]>>> {
         Ok(self.shared_at(p, align, n, kind, bulk)?.1)
     }
 
@@ -432,18 +434,19 @@ impl<'z, R: BufRead> W<'z, R> {
         n: usize,
         kind: &'static str,
         bulk: bool,
-    ) -> Result<(u32, Option<Vec<u8>>)> {
+    ) -> Result<(u32, Option<Arc<[u8]>>)> {
         let keep = !bulk || self.opts.keep_bulk;
         Ok(match self.follow(p, align)? {
             Follow::Null => (0, None),
             Follow::Inline => {
                 let at = self.here()?;
                 if keep {
-                    let b = self.bytes(1, n)?;
+                    let b: Arc<[u8]> = self.bytes(1, n)?.into();
                     self.pool(kind, at, b.clone());
                     (at, Some(b))
                 } else {
-                    (at, self.bulk(1, n)?)
+                    self.bulk(1, n)?;
+                    (at, None)
                 }
             }
             Follow::At(a) => {
@@ -464,16 +467,19 @@ impl<'z, R: BufRead> W<'z, R> {
 
     /// Records `b`, loaded at `at`, as `kind` data a later offset token
     /// may name the start or the middle of ([`Self::shared`]).
-    pub fn pool(&mut self, kind: &'static str, at: u32, b: Vec<u8>) {
+    pub fn pool(&mut self, kind: &'static str, at: u32, b: Arc<[u8]>) {
         self.pools.entry(kind).or_default().insert(at, b);
     }
 
     /// The `n` bytes at `a` inside pooled `kind` data, counting a token
     /// into the middle of an array in [`WalkStats::into_arrays`].
-    fn pooled(&mut self, kind: &'static str, a: u32, n: usize) -> Option<Vec<u8>> {
+    fn pooled(&mut self, kind: &'static str, a: u32, n: usize) -> Option<Arc<[u8]>> {
         let (&start, b) = self.pools.get(kind)?.range(..=a).next_back()?;
         let o = (a - start) as usize;
-        let out = b.get(o..o + n)?.to_vec();
+        if o == 0 && n == b.len() {
+            return Some(b.clone());
+        }
+        let out = b.get(o..o + n)?.into();
         if o > 0 {
             self.stats.into_arrays += 1;
         }
