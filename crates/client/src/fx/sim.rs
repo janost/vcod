@@ -816,7 +816,7 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
             // A bolted model's angles are in the tag's frame, whose forward
             // is the spawn direction.
             if let Some((x, _, _)) = frame.filter(|_| bolt.is_none()) {
-                angles += forward_angles(x);
+                angles += super::vectoangles(x);
             }
             Debris {
                 model,
@@ -894,7 +894,7 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
                 e.vel = vel;
             }
             if let Some(d) = &mut debris {
-                d.angles -= forward_angles(frame.axis.0);
+                d.angles -= super::vectoangles(frame.axis.0);
             }
         }
         if let Some((_, frame)) = bolt {
@@ -998,13 +998,6 @@ fn pick<'a, T>(rng: &mut Rng, list: &'a [T]) -> Option<&'a T> {
     list.get(idx)
 }
 
-/// `vectoangles`: pitch (positive down) and yaw of `dir`, roll 0.
-fn forward_angles(dir: Vec3) -> Vec3 {
-    let yaw = dir.y.atan2(dir.x).to_degrees();
-    let pitch = -dir.z.atan2(dir.truncate().length()).to_degrees();
-    Vec3::new(pitch, yaw, 0.0)
-}
-
 /// `v` cut to its newest `cap` entries.
 fn drop_oldest<T>(v: &mut Vec<T>, cap: usize) {
     let excess = v.len().saturating_sub(cap);
@@ -1054,7 +1047,7 @@ fn step_pool(pool: &mut VecDeque<Particle>, cx: &StepCx, rng: &mut Rng, chains: 
                 e.at = p.pos;
             }
             if let Some(d) = &mut p.debris {
-                d.angles += forward_angles(f.axis.0);
+                d.angles += super::vectoangles(f.axis.0);
             }
         }
         let frame = match p.bolt {
