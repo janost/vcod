@@ -138,8 +138,8 @@ fn corner_dark(live: &[u8], bare: &[u8]) -> usize {
 /// The client's half; `None` without an adapter.
 fn play(root: &std::path::Path, addr: std::net::SocketAddr) -> Option<Seen> {
     use crate::audio::{AudioOpts, AudioSystem, bank};
-    use crate::cod2_client::Cod2Frame;
     use crate::play::input::Action;
+    use crate::session::ClientFrame;
     let join = crate::play::cod4_menus::Join {
         team: Some("allies".into()),
         class: Some("sniper_mp,0".into()),
@@ -196,8 +196,8 @@ fn play(root: &std::path::Path, addr: std::net::SocketAddr) -> Option<Seen> {
         let now = clk_now();
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
-        let time = clk_since(start).as_secs_f32();
-        let mut cx = Cod2Frame {
+        let time = clk_since(start).as_secs_f64();
+        let mut cx = ClientFrame {
             fs: &fs,
             shell: &shell,
             localized: &localized,
@@ -227,7 +227,7 @@ fn play(root: &std::path::Path, addr: std::net::SocketAddr) -> Option<Seen> {
                 eye: cam.pos,
                 fwd,
                 up,
-                time,
+                time: time as f32,
                 fov_x: view.fov,
                 cull: CullMode::On,
                 hud_lines: Vec::new(),

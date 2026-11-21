@@ -1134,7 +1134,7 @@ fn rig(root: &Path, map: &str, addr: std::net::SocketAddr) -> anyhow::Result<Rig
     // The level's first-use builds behind the load, as `main`'s join runs
     // them (`App::cod4_prewarm`).
     if let Some((r, _)) = &mut renderer {
-        c.prewarm(&mut crate::cod2_client::Cod2Frame {
+        c.prewarm(&mut crate::session::ClientFrame {
             fs: &fs,
             shell: &shell,
             localized: &localized,
@@ -1184,7 +1184,7 @@ fn answer_menu(c: &mut crate::cod4_client::Cod4Client, since: &mut Option<Instan
 /// The client's side: join, then play through the live pump until the
 /// server is done; `Err` when the join itself fails.
 fn play(root: &Path, map: &str, addr: std::net::SocketAddr, shared: &Shared) -> anyhow::Result<()> {
-    use crate::cod2_client::Cod2Frame;
+    use crate::session::ClientFrame;
     let Rig {
         mut c,
         fs,
@@ -1204,13 +1204,13 @@ fn play(root: &Path, map: &str, addr: std::net::SocketAddr, shared: &Shared) -> 
         let now = Instant::now();
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
-        let time = start.elapsed().as_secs_f32();
+        let time = start.elapsed().as_secs_f64();
         // A gamestate naming another map loads it, as `main.rs` does.
         if let Some(new) = c.session.take_map_change() {
             log::warn!("sweep: the client changed map to {new}");
         }
         if let Some((r, _)) = &mut renderer {
-            let mut cx = Cod2Frame {
+            let mut cx = ClientFrame {
                 fs: &fs,
                 shell: &shell,
                 localized: &localized,
@@ -1230,7 +1230,7 @@ fn play(root: &Path, map: &str, addr: std::net::SocketAddr, shared: &Shared) -> 
             audio.pump_mixer(f64::from(dt));
             audio.step(&positions, &HashMap::new(), None);
         } else {
-            c.session.step(time as f64 * 1000.0)?;
+            c.session.step(time * 1000.0)?;
             c.session.take_fired();
             c.session.take_lines();
         }
@@ -1553,7 +1553,7 @@ fn play_soak(
     shared: &Shared,
     opts: SoakOpts,
 ) -> anyhow::Result<()> {
-    use crate::cod2_client::Cod2Frame;
+    use crate::session::ClientFrame;
     let Rig {
         c,
         fs,
@@ -1586,20 +1586,20 @@ fn play_soak(
         let now = Instant::now();
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
-        let time = start.elapsed().as_secs_f32();
+        let time = start.elapsed().as_secs_f64();
         let graph = shared.graph.lock().unwrap().clone();
         let c = sess.cod4_mut().unwrap();
         if let Some(new) = c.session.take_map_change() {
             log::warn!("sweep: the client changed map to {new}");
         }
         let mut frame = SoakPair::default();
-        me.act(c, &mut cam, time, graph.as_deref(), &mut frame);
+        me.act(c, &mut cam, time as f32, graph.as_deref(), &mut frame);
         let warm = Tally::warm(&r);
         // `main`'s `Mode::Cod2` arm, which a CoD4 session runs.
         let t0 = Instant::now();
         let mut hud_quads = Vec::new();
         let mut vm = None;
-        let mut cx = Cod2Frame {
+        let mut cx = ClientFrame {
             fs: &fs,
             shell: &shell,
             localized: &localized,
@@ -1661,8 +1661,8 @@ fn play_soak(
         let tally = Tally {
             parts: &parts,
             render_ms,
-            time,
-            level_at: me.level_at(&gametype, time),
+            time: time as f32,
+            level_at: me.level_at(&gametype, time as f32),
             errors: &errors,
             audio: &audio,
             warm: [warm, Tally::warm(&r)],
@@ -2013,7 +2013,7 @@ struct MarksSeen {
 /// [`cod4_live_first_impact_marks_build_nothing_in_play`]'s client; `None`
 /// without an adapter.
 fn first_marks(root: &Path, addr: SocketAddr) -> Option<MarksSeen> {
-    use crate::cod2_client::Cod2Frame;
+    use crate::session::ClientFrame;
     let Rig {
         mut c,
         fs,
@@ -2039,7 +2039,7 @@ fn first_marks(root: &Path, addr: SocketAddr) -> Option<MarksSeen> {
         let now = clk_now();
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
-        let time = now.duration_since(start).as_secs_f32();
+        let time = now.duration_since(start).as_secs_f64();
         let frozen = c
             .session
             .client()
@@ -2058,7 +2058,7 @@ fn first_marks(root: &Path, addr: SocketAddr) -> Option<MarksSeen> {
         } else if c.session.menus.open().is_some() {
             answer_menu(&mut c, &mut menu_since);
         }
-        let mut cx = Cod2Frame {
+        let mut cx = ClientFrame {
             fs: &fs,
             shell: &shell,
             localized: &localized,
@@ -2073,7 +2073,7 @@ fn first_marks(root: &Path, addr: SocketAddr) -> Option<MarksSeen> {
         c.pump(&mut cx, &mut cam);
         let (f, rt, u) = crate::camera::basis(cam.yaw, cam.pitch);
         let marks_due = fx.take_marks(time);
-        r.set_marks(&fs, &marks_due, &[], (time * 1000.0) as i32, time, true);
+        r.set_marks(&fs, &marks_due, &[], time, true);
         fx.step(dt, time, None);
         audio.set_listener(cam.pos, f, rt, u, u32::MAX);
         c.session.take_commands();
@@ -2139,7 +2139,7 @@ struct JoinSeen {
 /// [`cod4_live_join_builds_its_models_with_the_load`]'s client; `None`
 /// without an adapter.
 fn join_models(root: &Path, addr: SocketAddr) -> Option<JoinSeen> {
-    use crate::cod2_client::Cod2Frame;
+    use crate::session::ClientFrame;
     let Rig {
         mut c,
         fs,
@@ -2172,7 +2172,7 @@ fn join_models(root: &Path, addr: SocketAddr) -> Option<JoinSeen> {
         if c.session.spawn().is_none() && c.session.menus.open().is_some() {
             answer_menu(&mut c, &mut menu_since);
         }
-        let mut cx = Cod2Frame {
+        let mut cx = ClientFrame {
             fs: &fs,
             shell: &shell,
             localized: &localized,
@@ -2181,7 +2181,7 @@ fn join_models(root: &Path, addr: SocketAddr) -> Option<JoinSeen> {
             ui: &ui,
             r: &mut r,
             console_open: false,
-            time: now.duration_since(start).as_secs_f32(),
+            time: now.duration_since(start).as_secs_f64(),
             dt,
         };
         c.pump(&mut cx, &mut cam);
@@ -2254,7 +2254,7 @@ struct CarSeen {
 /// an adapter.
 fn shoot_car(root: &Path, addr: SocketAddr) -> Option<CarSeen> {
     use super::cod4::Visual;
-    use crate::cod2_client::Cod2Frame;
+    use crate::session::ClientFrame;
     let Rig {
         mut c,
         fs,
@@ -2288,7 +2288,7 @@ fn shoot_car(root: &Path, addr: SocketAddr) -> Option<CarSeen> {
         let now = clk_now();
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
-        let time = now.duration_since(start).as_secs_f32();
+        let time = now.duration_since(start).as_secs_f64();
         let frozen = c
             .session
             .client()
@@ -2330,7 +2330,7 @@ fn shoot_car(root: &Path, addr: SocketAddr) -> Option<CarSeen> {
         } else if c.session.menus.open().is_some() {
             answer_menu(&mut c, &mut menu_since);
         }
-        let mut cx = Cod2Frame {
+        let mut cx = ClientFrame {
             fs: &fs,
             shell: &shell,
             localized: &localized,

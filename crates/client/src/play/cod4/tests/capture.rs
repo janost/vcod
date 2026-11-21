@@ -419,8 +419,8 @@ fn spectator_capture_flashes_follow_the_tag() {
         );
         effects.set_tags(&mut fx, &players.tags, None);
         effects.run_loops(&mut fx, &fs, now);
-        fx.step(1.0 / 60.0, now as f32, None);
-        fx.spawn_chained(&fs, now as f32);
+        fx.step(1.0 / 60.0, now, None);
+        fx.spawn_chained(&fs, now);
         let ridden = fx.tag_bolts();
         if let Some(w) = walker
             && let Some(tag) = players.tags.get(&w).and_then(|t| t.flash)
@@ -431,7 +431,7 @@ fn spectator_capture_flashes_follow_the_tag() {
         {
             // The nearest drawn sprite: the flash's own, on the tag.
             let near = fx
-                .build_quads(scene.eye, glam::Vec3::Y, glam::Vec3::Z, now as f32)
+                .build_quads(scene.eye, glam::Vec3::Y, glam::Vec3::Z, now)
                 .iter()
                 .map(|q| {
                     let c = q

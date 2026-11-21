@@ -10,6 +10,7 @@ use crate::walk::{Follow, Handle, S, W, product, u16s};
 use crate::zone::{Block, Pointer};
 use anyhow::{Context, Result, ensure};
 use std::io::BufRead;
+use std::sync::Arc;
 
 /// Inline cells a portal chain may nest (no stock map inlines one) and
 /// splits a path tree may stack: the walk recurses once per level, and a
@@ -19,6 +20,10 @@ const MAX_PATH_TREE_DEPTH: usize = 64;
 
 /// Raw bytes kept under [`crate::walk::WalkOptions::keep_bulk`].
 pub type Bulk = Option<Vec<u8>>;
+
+/// [`Bulk`] an offset token may name: the walk's pool holds the same
+/// buffer, not a copy.
+pub type SharedBulk = Option<Arc<[u8]>>;
 
 /// `clipMap_t`, 0x11C: `col_map_mp` and `col_map_sp` share it.
 #[derive(Clone, Debug, Default)]
@@ -46,7 +51,7 @@ pub struct ClipMap {
     pub dyn_ent_count: [u16; 2],
     pub checksum: u32,
     /// `cplane_s`, 0x14 each.
-    pub planes: Bulk,
+    pub planes: SharedBulk,
     /// One per `cStaticModel_s` (0x50): its model and the struct.
     pub static_models: Vec<(Option<Id<XModel>>, Vec<u8>)>,
     /// `dmaterial_t`, 0x48 each: a 64-byte name, surface and content flags.
@@ -58,7 +63,7 @@ pub struct ClipMap {
     pub nodes: Bulk,
     /// `cLeaf_t`, 0x2C each.
     pub leafs: Bulk,
-    pub leaf_brushes: Bulk,
+    pub leaf_brushes: SharedBulk,
     pub leaf_brush_nodes: Bulk,
     /// Per leaf brush node, a leaf's (positive count) brush list, copied
     /// out of `leaf_brushes` when its slot is an offset into them.
@@ -193,7 +198,7 @@ fn clip_map_t<R: BufRead>(w: &mut W<R>) -> Result<ClipMap> {
     c.leafs = array(w, &s, 60, 4, 0x2C * n(56))?;
     if w.inline_only(s.ptr(76), 2)? {
         let at = w.here()?;
-        c.leaf_brushes = w.bulk(2, 2 * n(72))?;
+        c.leaf_brushes = w.bulk(2, 2 * n(72))?.map(Arc::from);
         if let Some(b) = &c.leaf_brushes {
             w.pool("leaf brushes", at, b.clone());
         }
@@ -563,7 +568,7 @@ pub struct GfxWorld {
     pub indices: Bulk,
     pub cells: Vec<GfxCell>,
     /// `dpvsPlanes.planes`: `cplane_s`, 0x14 each.
-    pub planes: Bulk,
+    pub planes: SharedBulk,
     /// `dpvsPlanes.nodes`: u16 per node, the cell lookup's tree.
     pub dpvs_nodes: Bulk,
     /// `GfxBrushModel`, 0x38 each.

@@ -424,7 +424,7 @@ fn session(
         let events = s.take_events();
         let _ = s.sound_cues(&events, fs, eye, draw.muzzles());
         let plays = s.effects(&events, fs, eye, draw.fx_scene(true));
-        let now = start.elapsed().as_secs_f32();
+        let now = start.elapsed().as_secs_f64();
         fx.set_view(eye);
         for p in &plays {
             p.spawn(&mut fx, fs, now);
@@ -457,8 +457,8 @@ fn session(
         }
         let (fwd, right, up) = crate::camera::basis(yaw.to_radians(), 0.0);
         let fov = crate::camera::DEFAULT_FOV_DEG;
-        for time in [secs, secs + 0.05] {
-            r.set_fx_quads(fs, fx.build_quads(eye, right, up, time), time);
+        for time in [secs, secs + 0.05].map(f64::from) {
+            r.set_fx_quads(fs, fx.build_quads(eye, right, up, time), time as f32);
             r.set_fx_lights(&fx.lights(eye, time));
             r.render(
                 Frame {
@@ -473,7 +473,7 @@ fn session(
                     eye,
                     fwd,
                     up,
-                    time,
+                    time: time as f32,
                     fov_x: fov,
                     cull: CullMode::On,
                     hud_lines: Vec::new(),

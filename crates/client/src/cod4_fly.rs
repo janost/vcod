@@ -1497,7 +1497,7 @@ mod tests {
         let mut parts = Vec::new();
         for i in 0..180 {
             av.frame(&fs, &mut a, &mut fx, now);
-            fx.step(1.0 / 60.0, now as f32, None);
+            fx.step(1.0 / 60.0, now, None);
             for (row, gain) in a.mix() {
                 if gain > 0.01 {
                     heard.insert(row.name.clone());

@@ -1447,7 +1447,7 @@ mod tests {
             let now = clk_now();
             let dt = now.duration_since(last).as_secs_f32();
             last = now;
-            let mut cx = crate::cod2_client::Cod2Frame {
+            let mut cx = crate::session::ClientFrame {
                 fs: &fs,
                 shell: &shell,
                 localized: &localized,
@@ -1456,7 +1456,7 @@ mod tests {
                 ui: &ui,
                 r: &mut r,
                 console_open: false,
-                time: clk_since(start).as_secs_f32(),
+                time: clk_since(start).as_secs_f64(),
                 dt,
             };
             c.pump(&mut cx, &mut cam);
@@ -1564,7 +1564,7 @@ mod tests {
             let now = clk_now();
             let dt = now.duration_since(last).as_secs_f32();
             last = now;
-            let mut cx = crate::cod2_client::Cod2Frame {
+            let mut cx = crate::session::ClientFrame {
                 fs: &fs,
                 shell: &shell,
                 localized: &localized,
@@ -1573,7 +1573,7 @@ mod tests {
                 ui: &ui,
                 r: &mut r,
                 console_open: false,
-                time: clk_since(start).as_secs_f32(),
+                time: clk_since(start).as_secs_f64(),
                 dt,
             };
             c.pump(&mut cx, &mut cam);

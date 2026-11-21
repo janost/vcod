@@ -696,8 +696,8 @@ mod tests {
         tx: std::sync::mpsc::Sender<Call>,
     ) -> Option<Seen> {
         use crate::audio::{AudioOpts, AudioSystem, bank};
-        use crate::cod2_client::Cod2Frame;
         use crate::renderer::{CullMode, Frame, Renderer};
+        use crate::session::ClientFrame;
         let join = crate::play::cod4_menus::Join {
             team: Some("allies".into()),
             class: Some("assault_mp,0".into()),
@@ -758,8 +758,8 @@ mod tests {
         let (mut heli_at, mut rotor0, mut struck) = (None, None, None);
         // The launcher first: its grenade's `projTrailEffect` on its
         // `tag_fx`; then the helicopter.
-        let (mut gl_weapon, mut gl_fired, mut heli_called) = (None::<u32>, None::<f32>, false);
-        let trail_quads = |fx: &crate::fx::sim::FxSystem, time: f32| {
+        let (mut gl_weapon, mut gl_fired, mut heli_called) = (None::<u32>, None::<f64>, false);
+        let trail_quads = |fx: &crate::fx::sim::FxSystem, time: f64| {
             fx.build_quads(Vec3::ZERO, Vec3::Y, Vec3::Z, time)
                 .iter()
                 .filter(|q| q.shader.contains("smoke_trail"))
@@ -772,8 +772,8 @@ mod tests {
             let now = clk_now();
             let dt = now.duration_since(last).as_secs_f32();
             last = now;
-            let time = clk_since(start).as_secs_f32();
-            let mut cx = Cod2Frame {
+            let time = clk_since(start).as_secs_f64();
+            let mut cx = ClientFrame {
                 fs: &fs,
                 shell: &shell,
                 localized: &localized,
@@ -902,7 +902,7 @@ mod tests {
                         eye,
                         fwd,
                         up,
-                        time,
+                        time: time as f32,
                         fov_x: FOV,
                         cull: CullMode::On,
                         hud_lines: Vec::new(),

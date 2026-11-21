@@ -21,8 +21,8 @@ const ENTITYNUM_NONE: i32 = vcod_common::net::protocol::ENTITYNUM_NONE as i32;
 /// The 0.1 s the controller hands its goal-weight call.
 pub const ANIM_BLEND_MS: i32 = 100;
 
-/// A mounted gun's crossfade between its idle and fire clips, CoD2's and
-/// CoD4's: the goal clip `A`, when it started, and the clip it left. The
+/// A mounted gun's crossfade between its idle and fire clips, in all three
+/// games: the goal clip `A`, when it started, and the clip it left. The
 /// left clip plays at weight 1 under the goal, which fades in over the
 /// blend.
 #[derive(Clone, Copy, Debug)]
@@ -316,6 +316,20 @@ mod tests {
         assert_eq!(gun_anim(true, 0x408, 0), GunAnim::Idle);
         // UO: an overheated gun idles.
         assert_eq!(gun_anim(false, 0x408, 1), GunAnim::Idle);
+    }
+
+    #[test]
+    fn a_new_clip_fades_in_over_the_one_it_left() {
+        let layers = |c: &GunClock<GunAnim>, t| c.layers(t, ANIM_BLEND_MS).collect::<Vec<_>>();
+        let mut c = GunClock::new(GunAnim::Idle, 1000);
+        assert_eq!(layers(&c, 1000), [(GunAnim::Idle, 1000, 1.0)]);
+        c.set(GunAnim::Idle, 1500); // the same clip keeps its phase
+        c.set(GunAnim::Fire, 2000);
+        assert_eq!(
+            layers(&c, 2050),
+            [(GunAnim::Idle, 1000, 1.0), (GunAnim::Fire, 2000, 0.5)]
+        );
+        assert_eq!(layers(&c, 2100), [(GunAnim::Fire, 2000, 1.0)]);
     }
 
     #[test]

@@ -9,17 +9,17 @@ use std::collections::HashMap;
 use vcod_common::localize::Localized;
 use vcod_common::pk3::Pk3Fs;
 
-use crate::audio::AudioSystem;
 use crate::camera::{self, FlyCamera};
 use crate::console::{
     self,
     shell::{Effect, Shell},
 };
 use crate::frontend::Ui;
-use crate::fx::sim::{FxSystem, TagBolt, TagPose};
+use crate::fx::sim::{TagBolt, TagPose};
 use crate::play::cod2_events::Event2;
 use crate::play::cod2_fx::{FxPlay, Play, ViewTag};
 use crate::renderer::{self, Renderer};
+use crate::session::{ClientFrame, DrawView};
 use crate::{cod2_hud, cod2_scene, cod2_viewmodel, cod2_world_hud, hud, play};
 
 pub(crate) struct Cod2Client {
@@ -110,32 +110,6 @@ impl Cod2Client {
     }
 }
 
-/// What a [`Cod2Client`] frame step borrows from `App`, built at the call
-/// site so the client and the rest of `App` borrow apart.
-pub(crate) struct Cod2Frame<'a> {
-    pub(crate) fs: &'a Pk3Fs,
-    pub(crate) shell: &'a Shell,
-    pub(crate) localized: &'a Localized,
-    pub(crate) audio: &'a mut AudioSystem,
-    pub(crate) fx: &'a mut FxSystem,
-    pub(crate) ui: &'a Ui,
-    pub(crate) r: &'a mut Renderer,
-    pub(crate) console_open: bool,
-    /// Seconds since the client started, the effects' clock.
-    pub(crate) time: f32,
-    pub(crate) dt: f32,
-}
-
-/// The fly camera's draw for a frame: the view effects' (or predicted)
-/// angles, the world's fov and the view weapon.
-pub(crate) struct DrawView {
-    pub(crate) yaw: f32,
-    pub(crate) pitch: f32,
-    pub(crate) roll: f32,
-    pub(crate) fov: f32,
-    pub(crate) vm: Option<renderer::VmDraw>,
-}
-
 impl Cod2Client {
     /// The startup or renderer-build pump hands the session back; first
     /// in every frame that reads the session.
@@ -148,7 +122,7 @@ impl Cod2Client {
     /// The session's frame read off the wire: the camera flies or follows,
     /// a restart clears the effects, scores and chat land in the HUD and
     /// the console. False with no session (the caller flies freely).
-    pub(crate) fn pump(&mut self, cx: &mut Cod2Frame, cam: &mut FlyCamera) -> bool {
+    pub(crate) fn pump(&mut self, cx: &mut ClientFrame, cam: &mut FlyCamera) -> bool {
         let Some(s) = self.session.as_deref_mut() else {
             return false;
         };
@@ -173,9 +147,9 @@ impl Cod2Client {
             self.hud.chat.push(&line, chat_ms);
         }
         // `score` again every 2 s while Tab is held.
-        if self.hud.scoreboard.due(cx.time) {
+        if self.hud.scoreboard.due(cx.time as f32) {
             s.send_command("score");
-            self.hud.scoreboard.mark_requested(cx.time);
+            self.hud.scoreboard.mark_requested(cx.time as f32);
         }
         // `CL_GetMenuBlurRadius`: none on a demo
         cx.r.set_world_blur(if s.is_demo() { 0.0 } else { cx.ui.blur_world() });
@@ -186,7 +160,7 @@ impl Cod2Client {
     /// the session's batch while [`crate::voice::may_send`] holds, the
     /// batch sent on `CL_VoiceTransmit`'s clock, the heard ones played.
     /// `cl_voice` goes to the server in the userinfo when it changes.
-    fn voice_frame(&mut self, cx: &mut Cod2Frame) {
+    fn voice_frame(&mut self, cx: &mut ClientFrame) {
         use crate::voice::may_send;
         let Some(s) = self.session.as_deref_mut() else {
             return;
@@ -260,7 +234,7 @@ impl Cod2Client {
     /// One `frame()` for all of it, as its time can move between reads.
     pub(crate) fn scene(
         &mut self,
-        cx: &mut Cod2Frame,
+        cx: &mut ClientFrame,
         cam: &mut FlyCamera,
     ) -> (Option<cod2_viewmodel::ViewFrame>, Vec<hud::HudQuad>) {
         let Some(s) = self.session.as_deref() else {
@@ -333,7 +307,7 @@ impl Cod2Client {
             cx.localized,
             cx.r.screen_size(),
             f.time_ms,
-            cx.time,
+            cx.time as f32,
         );
         if f.snap.ps.followed().is_some() || s.is_demo() {
             let [pitch, yaw, _] = cod2_viewmodel::view_angles(&f);
@@ -345,7 +319,7 @@ impl Cod2Client {
 
     /// The frame's one list of events for the sounds and the effects,
     /// after the recoil and the HUD read it.
-    pub(crate) fn events(&mut self, cx: &mut Cod2Frame) -> Vec<Event2> {
+    pub(crate) fn events(&mut self, cx: &mut ClientFrame) -> Vec<Event2> {
         let Some(s) = self.session.as_deref_mut() else {
             return Vec::new();
         };
@@ -361,7 +335,7 @@ impl Cod2Client {
 
     /// The events' sound cues, subtitles, the ambient, blends, the
     /// server's sound commands and the loops.
-    pub(crate) fn audio(&mut self, cx: &mut Cod2Frame, events: &[Event2], cam_pos: Vec3) {
+    pub(crate) fn audio(&mut self, cx: &mut ClientFrame, events: &[Event2], cam_pos: Vec3) {
         let Some(s) = self.session.as_deref_mut() else {
             return;
         };
@@ -407,7 +381,7 @@ impl Cod2Client {
     }
 
     /// The events' effects spawned at the view.
-    pub(crate) fn effects(&mut self, cx: &mut Cod2Frame, events: &[Event2], cam_pos: Vec3) {
+    pub(crate) fn effects(&mut self, cx: &mut ClientFrame, events: &[Event2], cam_pos: Vec3) {
         let Some(s) = self.session.as_deref_mut() else {
             return;
         };
@@ -453,7 +427,7 @@ impl Cod2Client {
     /// breath cues and screen blend. None without a frame.
     pub(crate) fn view(
         &mut self,
-        cx: &mut Cod2Frame,
+        cx: &mut ClientFrame,
         events: &[Event2],
         cam: &FlyCamera,
     ) -> Option<play::cod2_view::ViewOut> {
@@ -533,7 +507,7 @@ impl Cod2Client {
     /// either way, only on the weapon placed (cod2-efx.md 6.8).
     fn view_weapon_fx(
         &mut self,
-        cx: &mut Cod2Frame,
+        cx: &mut ClientFrame,
         out: &play::cod2_view::ViewOut,
         cam: &FlyCamera,
         flash: Option<String>,
