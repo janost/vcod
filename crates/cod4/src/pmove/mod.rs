@@ -244,6 +244,15 @@ pub struct Rules {
     /// `player_meleeChargeFriction` (1200): the lunge's friction, which
     /// also sets its speed and length (cod4-pmove.md 17).
     pub melee_charge_friction: f32,
+    /// `player_burstFireCooldown` (seconds): a burst's wait.
+    pub burst_fire_cooldown: f32,
+    /// `bg_aimSpreadMoveSpeedThreshold`: the flat speed past which a move
+    /// grows the hip spread.
+    pub aim_spread_move_speed_threshold: f32,
+    /// `perk_weapReloadMultiplier` and `perk_weapRateMultiplier`: Sleight
+    /// of Hand's and Double Tap's clock divisors (cod4-combat.md 2.1).
+    pub perk_weap_reload_multiplier: f32,
+    pub perk_weap_rate_multiplier: f32,
 }
 
 impl Default for Rules {
@@ -292,6 +301,10 @@ impl Default for Rules {
             mantle_anims: mantle::installed(),
             shock_slows: 0,
             melee_charge_friction: 1200.0,
+            burst_fire_cooldown: 0.2,
+            aim_spread_move_speed_threshold: 11.0,
+            perk_weap_reload_multiplier: 0.5,
+            perk_weap_rate_multiplier: 0.75,
         }
     }
 }

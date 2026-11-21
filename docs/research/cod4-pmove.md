@@ -667,7 +667,10 @@ call to those three is decoded from the stores that build its arguments
 (the function names INFERRED off their arguments; the values VERIFIED).
 The walk capture's dvar mirror carries each name at a codinfo slot `n` and
 its value at `n + 128` (`friction` at 36 and 164): every value equals the
-default below. VERIFIED live. `Rules::default()` holds them.
+default below. VERIFIED live. `Rules::default()` holds them. The weapon
+clock's four (`player_burstFireCooldown`, `bg_aimSpreadMoveSpeedThreshold`
+and the two `perk_weap*` multipliers) are registered values off the binary;
+whether a mirror carries the 0x80-flagged three is unchecked.
 
 | dvar | default | range | dvar | default | range |
 |---|---|---|---|---|---|
@@ -692,7 +695,9 @@ default below. VERIFIED live. `Rules::default()` holds them.
 | `mantle_check_radius` | 0.1 | 0..15 | `mantle_check_angle`, `mantle_view_yawcap` | 60 | 0..180 |
 | `player_breath_hold_time` | 4.5 | 0..30 | `player_breath_gasp_time` | 1 | 0..30 |
 | `player_breath_gasp_scale` | 4.5 | 0..50 | `player_breath_hold_lerp` | 1 | 0..50 |
-| `player_breath_gasp_lerp` | 6 | 0..50 | | | |
+| `player_breath_gasp_lerp` | 6 | 0..50 | `player_burstFireCooldown` | 0.2 | 0..60 |
+| `bg_aimSpreadMoveSpeedThreshold` | 11 | 0..300 | `perk_weapReloadMultiplier` | 0.5 | 0..1 |
+| `perk_weapRateMultiplier` | 0.75 | 0..1 | | | |
 
 ## 13. The moves A/B
 

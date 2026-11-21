@@ -602,6 +602,26 @@ mod weapon_pins {
         assert_eq!(got, BOLTRELOAD, "{got}");
     }
 
+    /// The perk divisors come off the rules: Double Tap at a rate
+    /// multiplier of 0.5 steps the fire clock twice the msec, and a
+    /// multiplier of 0 steps by the larger clock (0x806394f).
+    #[test]
+    fn the_perk_multipliers_are_rules() {
+        let mut ps = armed(2, 10);
+        ps.weapon_state = weapon::state::FIRE;
+        ps.perks = 0x8;
+        ps.weapon_time = 300;
+        ps.weapon_delay = 700;
+        let mut rules = Rules::default();
+        assert_eq!(weapon::clock_step(&ps, &rules, 50), 67);
+        rules.perk_weap_rate_multiplier = 0.5;
+        assert_eq!(weapon::clock_step(&ps, &rules, 50), 100);
+        rules.perk_weap_rate_multiplier = 0.0;
+        assert_eq!(weapon::clock_step(&ps, &rules, 50), 700);
+        ps.perks = 0;
+        assert_eq!(weapon::clock_step(&ps, &rules, 50), 50);
+    }
+
     /// 1.7's `PM_Weapon_ReloadDelayedAction` (0x806258b..0x8062714): an
     /// unchambered bolt's brass at a start with no `reloadStartAddTime`
     /// ends the step; the start's rounds do not go in.

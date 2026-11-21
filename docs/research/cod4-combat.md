@@ -138,8 +138,13 @@ the shot's start (`PM_Weapon_StartFiring`, inlined at 0x80640af).
   Either rounds half up: `fadd` 0.5 (0x8209628 = 0x3f000000), `frndint`
   under round-down, truncating `fistp` (0x80645c8..0x80645ed,
   0x80636f0..0x806372b). VERIFIED (the disassembly). A multiplier of 0
-  steps by the larger timer (0x806394f). INFERRED (the branch). vcod:
-  `pmove::weapon::run_clocks`, `clock_step`, `perk_msec`.
+  steps by the larger of `weaponTime` and `weaponDelay`
+  (0x806394f..0x8063963; the reload dvar's test at 0x80636dd..0x80636ea,
+  the rate dvar's at 0x8063938..0x8063949, a NaN taking the quotient).
+  VERIFIED (the instructions). vcod: `pmove::weapon::run_clocks`,
+  `clock_step`, `perk_msec`, the multipliers, `player_burstFireCooldown`
+  and `bg_aimSpreadMoveSpeedThreshold` off `Rules` (the client's off the
+  server's dvar mirror when it carries them).
 - A timer stepped to 0 or below is set to 0 (`weaponTime` 0x8064592,
   `weaponDelay` 0x80645b5): the overshoot is dropped, never carried.
   INFERRED (the branches into both stores).
