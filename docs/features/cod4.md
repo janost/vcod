@@ -385,6 +385,8 @@ against a retail kill capture, entity numbers included:
 - Rockets wobble, curve and accelerate as 1.7's do; an RPG bends toward
   the helicopter's attractor; the helicopter's guided rockets steer.
 - Melee swings and hurts; `kill` works under `sv_cheats` (10.4, 10.5).
+- A fall past `bg_fallDamageMinHeight` hurts by 1.7's share of max
+  health (16).
 - Retail captures gate a rocket's flight, a grenade's throw back, a
   prone death and a killcam on a helicopter-style kill (15). A hit's push
   and timers land a frame late (12, 15). A dropped weapon leaves the

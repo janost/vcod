@@ -179,6 +179,27 @@ const IN_ROOM: [f32; 3] = [207.0, 2250.0, 296.0];
 const A_SPOT: [f32; 3] = [207.0, 2380.0, 292.0];
 const B_SPOT: [f32; 3] = [207.0, 2500.0, 285.0];
 
+/// A painful landing takes its percent of max health through
+/// `ClientEvents`' landing arm (cod4-combat.md 16): B, at 100 of 100,
+/// loses 40 to a landing of 40, nothing to one of 0, and dies to one of
+/// 100 (1.1 of max health). Before the arm he lost nothing.
+#[test]
+fn a_painful_landing_takes_its_share_of_max_health() {
+    let Some(mut t) = Trio::new(&[("scr_player_maxhealth", "100")]) else {
+        return;
+    };
+    t.place([(A_SPOT, -90.0), (B_SPOT, -90.0), (IN_ROOM, 90.0)]);
+    let level = t.level();
+    let health = |l: &Cod4Level| l.rt.client_vitals(B).health;
+    assert_eq!(health(level), 100);
+    level.land_hurt_for_test(B, 40);
+    assert_eq!(health(level), 60);
+    level.land_hurt_for_test(B, 0);
+    assert_eq!(health(level), 60);
+    level.land_hurt_for_test(B, 100);
+    assert!(health(level) <= 0, "health {}", health(level));
+}
+
 /// Rounds north along x 207 through the plate, A's body, B's body and
 /// the yard's far concrete wall, and the variants: perks, weapons,
 /// penetration off, a leg begun past the plate.
