@@ -189,7 +189,9 @@ struct Args {
     /// settings.
     #[arg(long)]
     rtx_on: bool,
-    /// Headless: connect to a CoD server, dump the gamestate, then exit
+    /// Headless: connect to a CoD server, dump the gamestate, then exit.
+    /// The fixture modes write under the source checkout the binary was
+    /// built from.
     #[arg(long)]
     net_probe: Option<String>,
     /// Headless, CoD2: play this `.dm_1` demo through the client's demo
