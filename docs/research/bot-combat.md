@@ -2047,6 +2047,27 @@ mp_crash `war`, from master 7f386db5c:
 
 VERIFIED (measured, ours). Both part from `digest@600` on, the first
 window: a cmd angle moves a short wherever the two conversions part.
-Script errors 0 both. INFERRED: the counts move by the matches' chaos,
-not by any aim change a short's 0.0055 degrees could make; two seeds tell
-nothing past that.
+Script errors 0 both.
+
+Seeds 3 to 6, same command, stalled ticks 0 on both builds:
+
+| Seed | Kills before, after | Throws before, after | Stalled before, after |
+|---|---|---|---|
+| 3 | 44, 43 | 18, 13 | 0, 0 |
+| 4 | 37, 48 | 14, 20 | 0, 0 |
+| 5 | 54, 52 | 25, 16 | 0, 0 |
+| 6 | 44, 52 | 15, 24 | 0, 0 |
+
+Seed 1's 140 stalled ticks are one bot (`STALLS=1`): axis slot 3 at
+about (1410, 180, 127), ticks 2180 to 2300, mantling west (mantle yaw
+180, `pmf` 0x4) onto the ledge where its teammate slot 1 stands still 60
+units up at (1403, 196, 188), and falling back each time. The before
+build stalls the same way on seed 11 (35 ticks): allies slot 0 at (1402,
+156, 126), mantle yaw 180, under teammate slot 4 on the ledge at (1397,
+181, 184). Seeds 7 to 12 on the before build stall nowhere else. VERIFIED
+(measured, ours). So the stall is an old one, a mantle onto a ledge a
+teammate holds, which the new angles reach on seed 1 by the matches'
+chaos. INFERRED from the two traces. The one other reader of the
+integer delta, the flee's yaw in `bots.rs` (`angles[1] + delta_angles[1]`),
+adds the rounded delta back onto the rounded angle, within a short of
+the aim. VERIFIED (the code).
