@@ -227,6 +227,9 @@ pub struct BotView {
     /// pmove offers the climb only to a view on the wall
     /// (bot-combat.md 17.1), so no look turns it away.
     pub mantle: bool,
+    /// pmove's climb is under way (CoD4's `PMF_MANTLE`): the body moves on
+    /// the climb's own track, so it is no stall (bot-navigation.md 3.15).
+    pub climbing: bool,
     /// The held weapon's `moveSpeedScale`: a bot following its path on the
     /// ground runs at the graph's pace, not the weapon's (`Bot::think`).
     pub move_scale: f32,
@@ -658,6 +661,9 @@ pub struct BotBody {
     /// Breaking contact (`bots/retreat.rs`): 1 hurt, 2 dry, 3 at the
     /// cover, 0 not.
     pub retreating: u8,
+    /// How the last retreat ended (`Bot::retreat_end`): 1 held, 2 loaded,
+    /// 3 out of rounds, 4 no cover, 5 a duty, 6 timed out; 0 none.
+    pub retreat_end: u8,
     /// The UO vehicle (entity number) and seat it sits in.
     pub seat: Option<(u32, i32)>,
     /// Driving, and holding the hull for a teammate walking up to board.

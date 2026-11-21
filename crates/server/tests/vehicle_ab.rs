@@ -846,8 +846,8 @@ const JEEP_CLOSESPEED: &str =
     "tests/fixtures/playerstate/mp_peaks-tdm-slope-8ms-jeep-closespeed-uo.txt";
 
 /// The jeep drive with the script's `closespeed` 0.5 on every vehicle
-/// (`probe_closespeed`): the step's speed cap halves, and the first 119
-/// snapshots match retail's field for field (coduo-vehicles.md 17).
+/// (`probe_closespeed`): the step's speed cap halves, and the drive matches
+/// retail's field for field to the exit (coduo-vehicles.md 17).
 #[test]
 fn the_jeep_drive_under_closespeed_replays_on_ours() {
     let text = std::fs::read_to_string(JEEP_CLOSESPEED).unwrap();
@@ -862,8 +862,8 @@ fn the_jeep_drive_under_closespeed_replays_on_ours() {
     };
     tally(&lines, &ours).assert_within(&[Gap {
         field: "",
-        snaps: 120..=usize::MAX,
-        why: "coduo-vehicles.md 17: retail's front-left probe meets a face ours clears at 18500",
+        snaps: 419..=usize::MAX,
+        why: "coduo-vehicles.md 17.1: the fall off the exit spot runs 3 u/s slow from its first frame",
     }]);
 }
 
@@ -884,7 +884,7 @@ fn the_tank_drive_under_closespeed_and_harc_replays_on_ours() {
     tally(&lines, &ours).assert_within(&[Gap {
         field: "",
         snaps: 284..=usize::MAX,
-        why: "coduo-vehicles.md 17: the track clock parts at 27200, unread",
+        why: "coduo-vehicles.md 17.5: retail's velocity reaches 0 a frame before ours",
     }]);
 }
 
