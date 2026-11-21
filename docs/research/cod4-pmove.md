@@ -669,8 +669,8 @@ The walk capture's dvar mirror carries each name at a codinfo slot `n` and
 its value at `n + 128` (`friction` at 36 and 164): every value equals the
 default below. VERIFIED live. `Rules::default()` holds them. The weapon
 clock's four (`player_burstFireCooldown`, `bg_aimSpreadMoveSpeedThreshold`
-and the two `perk_weap*` multipliers) are registered values off the binary;
-whether a mirror carries the 0x80-flagged three is unchecked.
+and the two `perk_weap*` multipliers) are registered values off the binary,
+VERIFIED; whether a mirror carries the three flagged 0x80 is unchecked.
 
 | dvar | default | range | dvar | default | range |
 |---|---|---|---|---|---|
