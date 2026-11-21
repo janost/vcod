@@ -190,20 +190,10 @@ pub fn hud_elems(
     slot: usize,
     team: i32,
 ) -> ([HudElem; MAX_HUDELEMS], [HudElem; MAX_HUDELEMS]) {
-    use crate::game::entity::HUD_OWNER_ALL;
     let mut archival = [HudElem::default(); MAX_HUDELEMS];
     let mut current = archival;
     let (mut na, mut nc) = (0, 0);
-    for (_, e) in host.ents.iter_hud_elems() {
-        let Some(state) = e.hud else {
-            continue;
-        };
-        if state.elem_type == 0
-            || (state.team != 0 && state.team != team)
-            || (state.owner != HUD_OWNER_ALL && state.owner != slot as u32)
-        {
-            continue;
-        }
+    for (_, e, state) in crate::game::wire::hud_visible(host, slot, team, true) {
         let (out, n) = if hud_i32(e, hf!("archived")) != 0 {
             (&mut archival, &mut na)
         } else {
@@ -223,10 +213,8 @@ pub fn hud_elems(
 fn elem_type(t: i32) -> u32 {
     use crate::game::builtins::cod4_script::HOST_PLAYERNAME;
     (match t {
-        3 => 6,
         HOST_PLAYERNAME => 3,
-        4..=9 => t + 3,
-        t => t,
+        t => crate::game::cod2_wire::cod2_elem_type(t),
     }) as u32
 }
 
@@ -305,19 +293,17 @@ fn hud_value(e: &crate::game::entity::GEntity, read: usize) -> Option<vcod_gsc::
 }
 
 fn hud_i32(e: &crate::game::entity::GEntity, read: usize) -> i32 {
-    match hud_value(e, read) {
-        Some(vcod_gsc::Value::Int(i)) => i,
-        Some(vcod_gsc::Value::Float(f)) => f as i32,
-        _ => 0,
-    }
+    hud_value(e, read)
+        .as_ref()
+        .and_then(crate::game::builtins::args::as_int)
+        .unwrap_or(0)
 }
 
 fn hud_f32(e: &crate::game::entity::GEntity, read: usize) -> f32 {
-    match hud_value(e, read) {
-        Some(vcod_gsc::Value::Int(i)) => i as f32,
-        Some(vcod_gsc::Value::Float(f)) => f,
-        _ => 0.0,
-    }
+    hud_value(e, read)
+        .as_ref()
+        .and_then(crate::game::builtins::args::as_float)
+        .unwrap_or(0.0)
 }
 
 #[cfg(test)]
