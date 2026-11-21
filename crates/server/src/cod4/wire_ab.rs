@@ -511,6 +511,8 @@ pub(super) fn ours(
     }
     sv.set_cvar("sv_pure", "0");
     sv.pin_game_seed(WALK_SEED);
+    // `the_challenges_come_off_the_levels_rand` reads the draws.
+    sv.core.challenges.unmasked();
     sv.load(Some(install)).unwrap();
     // Each spawn on its twin's spot: the script's pick is `randomInt` off
     // a clock-seeded stream (`Server::pin_spawns`' rule).
@@ -1287,7 +1289,8 @@ fn challenge_of(lines: &[Line]) -> Option<i32> {
 /// [`WALK_SEED`], after the map's pickups drew 17, the spectator's and the
 /// walker's draws are retail's. A challenge is `(rand() << 16) ^ rand() ^
 /// svs.time`, and the in-process probes ask theirs at another `svs.time`
-/// (under 2^17 on both), so the bits above it are compared.
+/// (under 2^17 on both), so the bits above it are compared. vcod masks the
+/// challenge it sends (`engine::challenge`); [`ours`] turns the mask off.
 #[test]
 fn the_challenges_come_off_the_levels_rand() {
     let Some(install) = vcod_cod4::testing::cod4_install() else {
