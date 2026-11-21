@@ -630,24 +630,8 @@ impl Cod4Client {
         }
         if self.session.menus.open().is_some() {
             self.session.menus.mirror = self.hud.mirrored_dvars(&self.session);
-            self.session.menus.host = crate::play::cod4_menus::Host {
-                cvars: cx
-                    .shell
-                    .cvar_values()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-                    .collect(),
-                enums: cx
-                    .shell
-                    .enum_domains()
-                    .map(|(k, v)| (k.to_string(), v.to_vec()))
-                    .collect(),
-                binds: cx
-                    .shell
-                    .binds()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-                    .collect(),
-                players: self.session.players(),
-            };
+            self.session.menus.host =
+                crate::play::cod4_menus::Host::from_shell(cx.shell, self.session.players());
             self.session.menus.game = self.hud.menu_game(&self.session, self.render_time);
             let (gametype, name, objective) = self.hud.gametype_strings(&self.session);
             let m = &mut self.session.menus;

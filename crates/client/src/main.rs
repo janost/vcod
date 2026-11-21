@@ -5437,6 +5437,11 @@ impl ApplicationHandler for App {
         self.ui_effects(event_loop, pending);
         let releases = std::mem::take(&mut self.key_releases);
         self.apply(event_loop, releases);
+        // The CoD4 front end's option pages read the console as it is now,
+        // the menus' own lines and anything typed included, as in a game.
+        if let Some(f) = self.session.cod4_front_mut().filter(|f| f.active()) {
+            f.sync(&self.shell);
+        }
         self.sync_menu_mouse();
         self.sync_capture();
     }

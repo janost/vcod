@@ -211,21 +211,7 @@ impl Cod4Front {
 
     /// The console's cvars and binds, as the option pages read them.
     pub(crate) fn sync(&mut self, shell: &Shell) {
-        self.menus.host = Host {
-            cvars: shell
-                .cvar_values()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-            enums: shell
-                .enum_domains()
-                .map(|(k, v)| (k.to_string(), v.to_vec()))
-                .collect(),
-            binds: shell
-                .binds()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-            players: Vec::new(),
-        };
+        self.menus.host = Host::from_shell(shell, Vec::new());
     }
 
     /// A key while the front end is up (`Menu_HandleKey`): a bind row

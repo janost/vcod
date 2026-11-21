@@ -1370,28 +1370,10 @@ mod tests {
         let mut shell = crate::console::shell::Shell::new();
         shell.use_cod2_binds();
         shell.use_cod4_binds();
-        m.host = host(&shell);
+        m.host = crate::play::cod4_menus::Host::from_shell(&shell, Vec::new());
         m.host.players = vec![(0, "^9walker".into()), (3, "probe".into())];
         m.command(b"v g_scriptMainMenu \"class_marines\"", &gs);
         (m, gs)
-    }
-
-    fn host(shell: &crate::console::shell::Shell) -> crate::play::cod4_menus::Host {
-        crate::play::cod4_menus::Host {
-            cvars: shell
-                .cvar_values()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-            enums: shell
-                .enum_domains()
-                .map(|(k, v)| (k.to_string(), v.to_vec()))
-                .collect(),
-            binds: shell
-                .binds()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-            players: Vec::new(),
-        }
     }
 
     const SIZE: (f32, f32) = (640.0, 480.0);

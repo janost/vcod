@@ -113,6 +113,27 @@ pub struct Host {
     pub players: Vec<(u32, String)>,
 }
 
+impl Host {
+    /// The console's cvars, enum domains and binds, with `players`.
+    pub fn from_shell(shell: &crate::console::shell::Shell, players: Vec<(u32, String)>) -> Self {
+        Host {
+            cvars: shell
+                .cvar_values()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            enums: shell
+                .enum_domains()
+                .map(|(k, v)| (k.to_string(), v.to_vec()))
+                .collect(),
+            binds: shell
+                .binds()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            players,
+        }
+    }
+}
+
 /// The UI's own state: `UILocalVarContext` and the dvars menu scripts
 /// and the server set.
 #[derive(Clone, Debug, Default)]
