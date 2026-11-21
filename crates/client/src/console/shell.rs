@@ -1337,7 +1337,7 @@ impl Shell {
                     Some(_) if depth >= EXEC_DEPTH => log::warn!("exec {file}: too deep, skipped"),
                     Some(text) => {
                         out.push(Effect::Print(format!("execing {file}")));
-                        let more = self.execute(&String::from_utf8_lossy(&text));
+                        let more = self.execute(&vcod_common::text::utf8_or_latin1(text));
                         self.run_execs_into(more, read, depth + 1, out);
                     }
                 },

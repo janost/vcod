@@ -2116,7 +2116,8 @@ mod tests {
         assert!(change_profile(root.path(), "gone", &mut shell).is_none());
     }
 
-    /// 1.7's `config_mp.cfg` holding a byte that is not UTF-8 still runs.
+    /// 1.7's `config_mp.cfg` holding a byte that is not UTF-8 runs as
+    /// Latin-1: the name keeps its `ö`, in vcod's config too.
     #[test]
     fn cod4_profile_change_runs_a_config_that_is_not_utf8() {
         let root = tempfile::tempdir().unwrap();
@@ -2125,6 +2126,8 @@ mod tests {
         std::fs::write(dir.join("config_mp.cfg"), b"seta name \"J\xf6rg\"\n").unwrap();
         let mut shell = Shell::new();
         change_profile(root.path(), "Retail", &mut shell).unwrap();
-        assert_eq!(shell.cvar("name"), Some("J\u{fffd}rg"));
+        assert_eq!(shell.cvar("name"), Some("J\u{f6}rg"));
+        let vcod = std::fs::read_to_string(dir.join(crate::CONFIG_FILE)).unwrap();
+        assert!(vcod.contains("seta name \"J\u{f6}rg\""), "{vcod}");
     }
 }
