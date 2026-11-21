@@ -49,6 +49,10 @@ CoD1 (1.1d, 1.5b, UO):
 - `gdb_teams.py`: a gdb script for the 1.1d, 1.5b and UO servers, read
   only, that logs the team pick of `Use_Item` and `RespawnItem`
   (cod11-items.md 14.8).
+- `gdb_vehicle.py`: a gdb script for the UO server, read only, that logs
+  every vehicle record's physics state, sway and jolt at each think's track
+  clock, and its velocity and committed copy at the think's entry, every
+  float as its bits (coduo-vehicles.md 17.5).
 - `annotate_func.py`: one function of a PIC ELF with its relocations
   resolved. Run it first: a plain `objdump` of `game.mp.i386.so` hides every
   call and cvar behind PIC relocations.

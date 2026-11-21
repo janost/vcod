@@ -4,7 +4,7 @@
 //! What a script moves: model instances and poses, world copies, links and entity numbers.
 
 use super::clip::{
-    Capsule, Shape, capsule_sweep, clip_brush_capsule, clip_segment, expand_brush, expand_brush_box,
+    Capsule, Shape, capsule_sweep, clip_brush_box, clip_brush_capsule, clip_segment, expand_brush,
 };
 use super::masks::NO_ENTITY_CONTENTS;
 use super::walk::TraceInput;
@@ -395,7 +395,7 @@ impl CollisionWorld {
     ) {
         let span = self.model_span[model];
         if let Some(pose) = pose.filter(|p| p.turned) {
-            self.clip_turned_model(model, pose, start, end, shape, mask, trace, scratch);
+            self.clip_turned_model(model, pose, start, end, shape, mask, trace);
             return;
         }
         let moving = trace.fraction > 0.0;
@@ -415,25 +415,32 @@ impl CollisionWorld {
                 }
                 None => &brush.planes[..],
             };
-            let (centre, sphere) = match shape {
+            match shape {
                 Shape::Capsule(c, _, _) => {
                     expand_brush(planes, c.radius, scratch);
-                    (c.center, c.offset)
+                    clip_segment(
+                        trace,
+                        start + c.center,
+                        end + c.center,
+                        scratch,
+                        &brush.side_surface_flags,
+                        c.offset,
+                        Prim::Brush(b),
+                    );
                 }
-                Shape::Box(mins, maxs) => {
-                    expand_brush_box(planes, mins, maxs, scratch);
-                    (Vec3::ZERO, Vec3::ZERO)
-                }
-            };
-            clip_segment(
-                trace,
-                start + centre,
-                end + centre,
-                scratch,
-                &brush.side_surface_flags,
-                sphere,
-                Prim::Brush(b),
-            );
+                Shape::Box(mins, maxs) => clip_brush_box(
+                    trace,
+                    start,
+                    end,
+                    mins,
+                    maxs,
+                    planes,
+                    &brush.side_surface_flags,
+                    Prim::Brush(b),
+                    self.arith(),
+                    false,
+                ),
+            }
         }
     }
 
@@ -443,7 +450,6 @@ impl CollisionWorld {
     /// turned into the model's frame, the box axial there, the capsule's
     /// sphere offset turned, and the brushes clipped as built (movers doc
     /// 22). The normal comes back in the world's frame.
-    #[expect(clippy::too_many_arguments)]
     fn clip_turned_model(
         &self,
         model: usize,
@@ -453,7 +459,6 @@ impl CollisionWorld {
         shape: Shape,
         mask: u32,
         trace: &mut Trace,
-        scratch: &mut Vec<(Vec3, f32)>,
     ) {
         let span = self.model_span[model];
         let (mins, maxs) = match shape {
@@ -489,18 +494,18 @@ impl CollisionWorld {
                         false,
                     );
                 }
-                Shape::Box(_, _) => {
-                    expand_brush_box(&brush.planes, mins, maxs, scratch);
-                    clip_segment(
-                        trace,
-                        ls,
-                        le,
-                        scratch,
-                        &brush.side_surface_flags,
-                        Vec3::ZERO,
-                        Prim::Brush(b),
-                    );
-                }
+                Shape::Box(_, _) => clip_brush_box(
+                    trace,
+                    ls,
+                    le,
+                    mins,
+                    maxs,
+                    &brush.planes,
+                    &brush.side_surface_flags,
+                    Prim::Brush(b),
+                    self.arith(),
+                    false,
+                ),
             }
         }
         // One call per model and trace, so a hit on its brushes is this one's.
