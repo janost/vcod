@@ -1398,6 +1398,27 @@ hooks: CoD1's `Server` implements them there, `Cod2Server` and
   `EXE_PLAYERKICKED`, so the game's `ClientDisconnect` and the drop notice
   run as for a kick, and the slot frees at once (a bot leaves no zombie).
 
+### 8.1 The CoD2 and CoD4 menus
+
+A CoD2 or CoD4 bot answers the menus a player would (`bots/menus.rs`,
+`bots/cod2.rs`, `bots/cod4.rs`). VERIFIED (the code) for each rule
+below.
+
+- CoD2: `serverinfo_<gametype>` is answered `close`. The team menu takes
+  `autoassign` in `dm`, else `allies` and `axis` in turn. The weapon menu
+  takes a weapon the bot's nationality offers and the `scr_allow_*`
+  cvars allow, the one the fewest other bots carry, so a side spreads
+  over the menu.
+- CoD4: the team menu takes `allies` and `axis` in turn (`autoassign` in
+  `dm`), then the class menu (`changeclass_marines`,
+  `changeclass_opfor`) takes a stock class through `changeclass`
+  (assault, spec ops, heavy gunner, demolitions, sniper), the one the
+  fewest other bots carry.
+- A new level (`map`, a passed vote, `map_restart`, `fast_restart`,
+  `map_rotate`, a level end), round or rotation keeps the bots, and each
+  answers the menus the level opens again. A new map builds a new graph.
+  A CoD2 `sd` round opens no menu, and the bots play on.
+
 ## 9. Team play
 
 vcod's own, with nothing on retail to measure against. `bots::team` holds
@@ -1565,7 +1586,7 @@ group (a flanker still drew its hold from 0.5 to 2 s). VERIFIED
   1518 are one match (4.2); the parts' 479 are mp_rocket seeds 5 and 6,
   bots of both sides near (9900, 5800, 160), off any fight, against 11
   there without them. Not traced further; dropped by the stall rule
-  (`docs/bots.md`, "How a change is judged"). UO's `ctf`, `dom` and
+  (bot-combat.md 1). UO's `ctf`, `dom` and
   `bas` attackers got none.
 - VERIFIED (the table): the defenders, already split over two sites,
   barely move (51% to 50% packed).
@@ -2863,7 +2884,7 @@ b7630cbb, six shooting bots, `TICKS=6000`, seeds 1 and 2:
   spot notwithstanding (`give_way`, `BotView::give_way`). VERIFIED (the
   runs below).
 - `bot_match` before is b7630cbb for the objective gametypes and b7630cbb with the walk to
-  a gun on another floor (docs/bots.md, "CoD4") for `war` and `dm`;
+  a gun on another floor (bot-combat.md 23) for `war` and `dm`;
   after is both rules:
 
 Per-map table (b7630cbb to both rules) superseded by 12.8's; VERIFIED (measured) headlines: `koth` mp_backlot 74 stalled bot-ticks to 0, mp_strike 31 to 0; `war` mp_crash 0 to 52; `dm` unchanged.
@@ -2876,8 +2897,9 @@ Per-map table (b7630cbb to both rules) superseded by 12.8's; VERIFIED (measured)
   the mantle. `koth` lost kills on mp_backlot and mp_strike (78 to 52
   over both seeds) with the captures unchanged: not looked into.
   INFERRED (the stall lines).
-- mp_backlot's two SAWs: docs/bots.md ("CoD4") has the cause and the
-  walk over the graph to a gun on another floor, with its numbers.
+- mp_backlot's two SAWs: bot-measurements-cod2-cod4.md 5 has the cause
+  and the walk over the graph to a gun on another floor, with its
+  numbers.
 
 ### 12.8 A mantle's landing, the shipment yard's stand
 

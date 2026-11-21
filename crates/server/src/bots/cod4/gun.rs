@@ -1,5 +1,5 @@
 //! CoD4 bots on the stock maps' mounted SAWs and on a live frag at their
-//! feet (docs/bots.md, "CoD4"). Retail has no bots, so both rules are
+//! feet (bot-combat.md 23). Retail has no bots, so both rules are
 //! vcod's own, over 1.7's use key and throw back (cod4-gsc.md 9.2, 9.3).
 //!
 //! Where no objective deals out roles, a bot takes a free gun whose arc

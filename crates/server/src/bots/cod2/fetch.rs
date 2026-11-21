@@ -1,4 +1,4 @@
-//! CoD2 bots fetching a dropped gun (docs/bots.md, "CoD2"). Retail has no
+//! CoD2 bots fetching a dropped gun (bot-combat.md 22). Retail has no
 //! bots and the CoD1 brain fetches only in UO's `bas`, so the rule is
 //! vcod's own: a bot whose primaries are dry, with no enemy in sight,
 //! walks to the nearest loaded gun lying within [`REACH`] on a clear
