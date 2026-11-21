@@ -405,6 +405,30 @@ what not to retry.
   of sight on every reload and the threat's target lapses after
   `Skill::forget_ticks` while the bot's own does not.
 
+### 4.6 Cover against more than one enemy (2026-11-21, not shipped)
+
+A spot hides the body from its threat alone. Tried: the server hands the
+search the eyes of the three nearest other enemies within 2000 units
+whose standing eye has a line to the bot's chest, and a spot's hidden
+pose must hide the chest from each of them too. VERIFIED (measured,
+ours, release, master af564b3c7 plus 5.3, `COVER=alt`, `tdm`, 8 bots,
+6000 ticks, mp_carentan, mp_harbor, mp_depot, mp_brecourt, seeds
+1..=32, 128 matches a row):
+
+| Run | Cover side kills : deaths | Control kills : deaths | Cover hold bot-ticks |
+|---|---|---|---|
+| master | 5402 : 5578 | 5577 : 5402 | 819 700 |
+| one threat or more | 5477 : 5716 | 5715 : 5477 | 782 930 |
+
+- The cover side dies 176 more than the control on master and 239 more
+  with the rule: 63 apart, inside the spread (about 150 over 128
+  matches at 4.5's 12 to 14 deaths a seed). Not kept. VERIFIED (the
+  table).
+- On master the cover side now loses its fights by 3%, where 4.5 had it
+  6% ahead: the fights round it changed since (sections 9 to 13, the
+  retreat's cover, 18's aim). INFERRED. Lean break-even, node-only spots
+  and a prone peek (backlog) are left untried. Open.
+
 ## 5. Retreat
 
 A bot in a fight breaks contact when it is hurt or its clip runs dry,
