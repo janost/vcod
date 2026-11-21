@@ -6,6 +6,7 @@
 //! `examples/cod4_probe.rs` and the vcod client both join through it.
 
 use super::clmsg::{self, ClOp, CmdWire, UserCmd};
+use super::demo::Archive;
 use super::parse::{Client, Illegible, Op, Parsed};
 use super::pure;
 use super::stats::{STAT_PACKETS, Stats};
@@ -423,8 +424,12 @@ impl Conn {
     /// One move message: the unacked commands and `cmds`, the first on the
     /// long branch with every field, the rest the fewest bits off the one
     /// before (no move op without cmds). Before the gamestate it is the
-    /// bare header the client sends while it waits.
-    pub fn send(&mut self, cmds: &[UserCmd]) -> Result<()> {
+    /// bare header the client sends while it waits. The move carries
+    /// `origin`'s predicted origin and time and files it in
+    /// `cl.clientArchive` (`CL_WritePacket`, `iw3mp.exe` 0x4641cd..0x46428c);
+    /// without one it carries an origin far off at time 0, so the server
+    /// always sends origin and velocity (cod4-netfields.md 13).
+    pub fn send(&mut self, cmds: &[UserCmd], origin: Option<Archive>) -> Result<()> {
         self.check_overflow()?;
         let mut pkt = self.seq.to_le_bytes().to_vec();
         self.seq += 1;
@@ -460,14 +465,16 @@ impl Conn {
                     self.last_cmd = *c;
                 }
                 if !wired.is_empty() {
+                    let (at, time) = origin.map_or(([1.0e6; 3], 0), |a| (a.origin, a.server_time));
                     ops.push(ClOp::Move {
                         delta: !self.client.snapshots.is_empty() && !self.no_delta,
                         cmds: wired,
-                        // Far off on purpose, so the server always sends
-                        // origin and velocity.
-                        origin: [1.0e6f32.to_bits(); 3],
-                        origin_time: 0,
+                        origin: at.map(f32::to_bits),
+                        origin_time: time,
                     });
+                    if let Some(a) = origin {
+                        self.client.archive.add(a);
+                    }
                 }
                 ops.push(ClOp::Eof);
                 let mut comp =
@@ -492,7 +499,7 @@ impl Conn {
         }
         self.command("disconnect");
         for _ in 0..3 {
-            self.send(&[])?;
+            self.send(&[], None)?;
         }
         Ok(())
     }
@@ -1145,7 +1152,7 @@ mod tests {
         let got = c.poll(Instant::now() + Duration::from_millis(200)).unwrap();
         assert_eq!(got.iter().map(|r| r.sequence).collect::<Vec<_>>(), [2]);
         assert_eq!(c.commands_acked, i32::MAX);
-        c.send(&[]).unwrap();
+        c.send(&[], None).unwrap();
     }
 
     /// A `reliableAcknowledge` more than the ring behind drops its message
@@ -1205,9 +1212,9 @@ mod tests {
         for i in 1..=KEPT_COMMANDS + 1 {
             assert_eq!(c.command("x"), i);
         }
-        c.send(&[]).unwrap();
+        c.send(&[], None).unwrap();
         assert_eq!(c.command("x"), KEPT_COMMANDS + 1);
-        let e = c.send(&[]).unwrap_err();
+        let e = c.send(&[], None).unwrap_err();
         assert_eq!(e.to_string(), "EXE_ERR_CLIENT_CMD_OVERFLOW");
         assert!(c.poll(Instant::now()).is_err());
     }

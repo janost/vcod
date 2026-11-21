@@ -658,6 +658,81 @@ fn cod4_live_recoil_rides_the_cmd_and_the_server_takes_it() {
     assert!(rest < 0.01, "the view {rest} off the mouse's");
 }
 
+/// A joined client's moves carry its predicted origin at `cl.serverTime`,
+/// the time its cmds are stamped: the server finds it within 0.1 of the
+/// body it ran at that `commandTime` and leaves origin and velocity out
+/// of most snapshots, standing and walking, and the client puts its
+/// archive row in their place (cod4-netfields.md 13). Before, the moves
+/// carried 1e6 at time 0 and every snapshot sent them.
+#[test]
+fn cod4_live_a_predicted_walk_lets_the_server_leave_origin_out() {
+    use crate::play::input::Action;
+    let sets = [
+        ("scr_game_playerwaittime", "1"),
+        ("scr_game_matchstarttime", "1"),
+    ];
+    let Some(r) = live_join_on("mp_crash", crash_world(), &sets, |s, spawned, t0, _| {
+        spawned.as_ref()?;
+        // Each new snapshot: sent without origin, its speed, and its
+        // origin off the archive row for its `commandTime`.
+        let mut last = 0;
+        let mut step = |s: &mut Cod4Session, ms: u64, out: &mut Vec<(bool, f32, bool)>| {
+            let end = since(t0) + Duration::from_millis(ms);
+            while since(t0) < end {
+                s.step(since(t0).as_secs_f64() * 1000.0).unwrap();
+                s.scene();
+                s.take_commands();
+                s.take_fired();
+                let c = s.client();
+                let from = last;
+                for snap in c.snapshots.iter().filter(|x| x.server_time.raw() > from) {
+                    let f = |n: &str| snap.ps.get_f32(n).unwrap_or(0.0);
+                    let speed = glam::Vec2::new(f("velocity[0]"), f("velocity[1]")).length();
+                    let row = c
+                        .archive
+                        .at_or_before(snap.ps.get("commandTime").unwrap_or(0) as i32);
+                    let filled = row
+                        .is_some_and(|r| r.origin == [0, 1, 2].map(|k| f(&format!("origin[{k}]"))));
+                    out.push((!snap.ps.origin_sent, speed, filled));
+                    last = snap.server_time.raw();
+                }
+                clk_sleep(Duration::from_millis(16));
+            }
+        };
+        let mut warmup = Vec::new();
+        step(s, 3000, &mut warmup);
+        let mut still = Vec::new();
+        step(s, 1500, &mut still);
+        s.input.key(Action::Forward, true);
+        let mut walk = Vec::new();
+        step(s, 500, &mut walk);
+        walk.clear();
+        step(s, 2000, &mut walk);
+        s.input.key(Action::Forward, false);
+        Some((still, walk))
+    }) else {
+        return;
+    };
+    let (still, walk) = r.expect("never spawned");
+    let left_out = |v: &[(bool, f32, bool)]| v.iter().filter(|x| x.0).count();
+    assert!(
+        left_out(&still) * 4 >= still.len() * 3,
+        "standing: {} of {} without origin",
+        left_out(&still),
+        still.len()
+    );
+    let walking: Vec<_> = walk.iter().filter(|x| x.1 > 100.0).copied().collect();
+    assert!(walking.len() >= 20, "{} walking snapshots", walking.len());
+    assert!(
+        left_out(&walking) * 2 >= walking.len(),
+        "walking: {} of {} without origin",
+        left_out(&walking),
+        walking.len()
+    );
+    // A snapshot without origin reads its row's.
+    assert!(still.iter().chain(&walk).filter(|x| x.0).all(|x| x.2));
+}
+
 /// A standing jump through a joined client: the landing's
 /// `EV_LANDING_*` dips the eye by its parm over 150 ms and brings it
 /// back by 450, and the view weapon's `ViewPs` carries the dip.

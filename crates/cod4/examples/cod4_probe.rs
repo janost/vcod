@@ -853,7 +853,7 @@ fn main() -> Result<()> {
                 cmds.push(c);
             }
         }
-        conn.send(&cmds)?;
+        conn.send(&cmds, None)?;
         for got in conn.poll(Instant::now() + Duration::from_millis(50))? {
             let s = got.sequence;
             for op in &got.parsed.ops {

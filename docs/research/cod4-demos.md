@@ -253,10 +253,10 @@ call at 0x46428c). The two ints are `bobCycle` (+0x1c) and
 `movementDir` (+0x20) in `clientArchiveData_t`: the cgame hands the
 playerstate's +0x8 and +0xac (0x447b1a..0x447b36), the netfield table's
 `bobCycle` and `movementDir` offsets. VERIFIED (the instructions and
-the table). vcod adds a row at each packet sent from the
-predicted playerstate, or unpredicted the newest snapshot's with the
-cmd's view (`Cod4Session::archive_row`), into `Client::archive`, the
-ring a playerstate sent without origin reads (cod4-netfields.md 11).
+the table). vcod adds a row at each packet sent, after the frame's prediction,
+from the predicted playerstate, or unpredicted the newest snapshot's with
+the cmd's view (`Cod4Session::archive_row`), into `Client::archive`, the
+ring a playerstate sent without origin reads (cod4-netfields.md 13).
 
 ## 5. Playback
 

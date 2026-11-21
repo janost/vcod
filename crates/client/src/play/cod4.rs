@@ -185,7 +185,6 @@ enum Source {
     Live {
         conn: Box<Conn>,
         last_send: Option<Instant>,
-        last_snap_at: Instant,
         /// When the last sequenced message came (`clc.lastPacketTime`).
         last_msg: Instant,
     },
@@ -298,6 +297,9 @@ pub struct Cod4Session {
     recording: Option<vcod_cod4::net::demo::Recording>,
     /// The last predicted playerstate, which the archive copies.
     last_predicted: Option<pm::PlayerState>,
+    /// A live packet is due: the scene sends it once its prediction has
+    /// run this frame's cmd ([`Self::send_packet`]), else the next step.
+    packet_due: bool,
     /// The recoil and the landing dip (`play::cod4_kick`), and how many of
     /// [`Self::fired`] they have taken.
     pub kick: cod4_kick::Cod4Kick,
@@ -421,6 +423,7 @@ impl Cod4Session {
             selector: Selector::default(),
             recording: None,
             last_predicted: None,
+            packet_due: false,
             kick: Default::default(),
             kick_seen: 0,
             keep_snapshots: KEEP_SNAPSHOTS,
@@ -511,6 +514,7 @@ impl Cod4Session {
         self.cmd_angles = None;
         self.pending.clear();
         self.sent_cmds.clear();
+        self.cmd_last = i32::MIN;
         self.predictor.reset();
         self.restart_dynents();
         let map = self.map_name()?;
@@ -547,9 +551,9 @@ impl Cod4Session {
         self.world.as_ref()
     }
 
-    /// The cmd clock, what a cmd built now is stamped: the newest
-    /// snapshot's time plus its age, as vcod's live cmds and the probe's
-    /// are. Arrival jitter would step it with every snapshot, so its offset
+    /// A capture's cmd clock, the one its probe stamped its cmds on: the
+    /// newest snapshot's time plus its age (a live session's is
+    /// [`Self::cmd_time`]). Arrival jitter would step it with every snapshot, so its offset
     /// off session ms slews 1 ms a snapshot toward that, as
     /// `CL_AdjustTimeDelta` slews `cl.serverTimeDelta`, and starts over past
     /// 100 ms. Never runs back.
@@ -726,12 +730,7 @@ impl Cod4Session {
                     }
                 }
             }
-            Source::Live {
-                conn,
-                last_snap_at,
-                last_msg,
-                ..
-            } => {
+            Source::Live { conn, last_msg, .. } => {
                 let got = conn.poll(now)?;
                 if !got.is_empty() {
                     *last_msg = now;
@@ -791,10 +790,7 @@ impl Cod4Session {
                     for op in &r.parsed.ops {
                         match op {
                             Op::Gamestate => self.gamestates += 1,
-                            Op::Snapshot(_) => {
-                                *last_snap_at = now;
-                                self.snap_at_ms = now_ms;
-                            }
+                            Op::Snapshot(_) => self.snap_at_ms = now_ms,
                             Op::ServerCommand { text, .. } => {
                                 log::debug!(
                                     "cod4: server command {}",

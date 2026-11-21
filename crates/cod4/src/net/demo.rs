@@ -106,7 +106,7 @@ impl ArchiveRing {
     /// `MSG_ReadDeltaPlayerstate` on a playerstate sent without origin
     /// (its first bit 0, 0x507252..0x5072fd): origin, velocity, view
     /// angles, `bobCycle` and `movementDir` come off the row for its
-    /// `commandTime`, else, none found, off `from` (cod4-netfields.md 11).
+    /// `commandTime`, else, none found, off `from` (cod4-netfields.md 13).
     pub fn fill_unsent(&self, ps: &mut delta::PlayerState, from: &delta::PlayerState) {
         use crate::ps_word;
         let words = [
