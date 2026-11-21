@@ -10,7 +10,7 @@ Sources, addresses virtual:
 
 Default label for the first four sections: VERIFIED, read from the binaries; exceptions are labelled. No stock server has been seen sending `j`/`k`/`l` on the wire. The live captures in `cod11-sound-system.md` came from modded servers that bypass this path with `EV_SOUND_ALIAS`.
 
-## Server side
+## 1. Server side
 
 `G_Voice` (`game.mp.i386.so`, `G_Voice@@Base` at `0x473b8`; `game_mp_x86.dll` at the same VA):
 
@@ -26,7 +26,7 @@ j <int> <int> <int> <category> <origin_x> <origin_y> <origin_z>
 
 Every numeric field prints as a decimal integer, which the client reads back with `atol`. The client takes argv 1 as the scope echo (it picks the chat-line format and the team-only gate), argv 3 as the speaking client index and argv 5-7 as the speaker origin. argv 2's meaning is unknown.
 
-## Client dispatch and handling
+## 2. Client dispatch and handling
 
 All addresses are `cgame_mp_x86.dll` 1.1.
 
@@ -54,7 +54,7 @@ All addresses are `cgame_mp_x86.dll` 1.1.
 | 1 | `"(%s)%s(%s): %c%c%s"` |
 | 2 | `"[%s]%s[%s]: %c%c%s"` |
 
-## The `.voice` file format
+## 3. The `.voice` file format
 
 `FUN_3002cbd0` (`0x3002cbd0`) parses it, called once at init from `FUN_30020a00` (`0x30020a00`):
 
@@ -98,7 +98,7 @@ VERIFIED against the decompilation and asm:
 
 The aliases these files name are the `american_*` / `british_*` / `russian_*` / `german_*` rows of `dialog_mp.csv` (`cod11-sound-system.md`, quick chat).
 
-## Negative result: stock installs ship no `.voice` data
+## 4. Negative result: stock installs ship no `.voice` data
 
 VERIFIED (a zipfile walk over every pak plus a loose-file sweep): no stock `.pk3` of 1.1 `main/`, 1.5 `main/` or UO `uo/`, the `localized_english_pak*.pk3` included, holds a `*.voice` file. INFERRED, off the code above: a stock client logs "^1voice chat file not found: mp/axis_chat.voice" twice from `FUN_30020a00`, both tables stay empty, `FUN_3002d390` always returns 0 and `FUN_3002d770` returns without queueing. Stock quick chat prints nothing, plays nothing and shows no head icon, whatever `j`/`k`/`l` a server sends, unless a mod ships `.voice` files.
 
@@ -106,7 +106,7 @@ vcod keeps this inert path for parity. Building `.voice` files from `dialog_mp.c
 
 VERIFIED live: a sweep of three populated public servers (TDM, S&D and one more, 75-90 s each) saw no `j`/`k`/`l` command. All three ran mods (`g_scriptMainMenu` set to `team_*`; `i`/`f`/`v`/`t`/`n`/`h`/`s` commands; `MPSCRIPT_*`/`scr_fm_*` text) that relay voice lines through `s <idx>` and events. The stock `j`/`k`/`l` path is unobserved live.
 
-## The quick message menu (`mp_QuickMessage`)
+## 5. The quick message menu (`mp_QuickMessage`)
 
 The stock path that does reach players: the `V` menu, whose rows make the gametype script play an alias and send a team chat line. It never uses `j`/`k`/`l`.
 
@@ -120,14 +120,14 @@ The stock path that does reach players: the `V` menu, whose rows make the gamety
 - VERIFIED (the scripts): `tdm.gsc:449-454` routes the three menus to `_teams.gsc` `quickcommands` / `quickstatements` / `quickresponses`. These pick a nationality's alias and a `&"QUICKMESSAGE_*"` string, refuse a spectator or a player inside the 2 s `spamdelay`, and call `doQuickMessage` (`_teams.gsc:1629`): a playing player gets the `headicon@quickmessage` head icon, `playSound(alias)`, then `sayTeam` and `pingPlayer` (or `sayAll` with `level.QuickMessageToAll`).
 - INFERRED, from Team Arena's `_UI_KeyEvent`, which runs `Menus_CloseAll` on Esc when no fullscreen menu is visible: Esc closes the quick menus without a response, as they have no `onEsc`.
 
-## vcod behaviour and deliberate divergences
+## 6. vcod behaviour and deliberate divergences
 
-### The menu
+### 6.1 The menu
 
 - `mp_QuickMessage` (bound to `V`, as `default_mp.cfg` does) opens `quickmessage` when the game is live and the newest snapshot's `pm_flags` has `0x40000` (`Ui::open_quick_message`, case 8). The menu is the front end's own copy from `ui_mp/ingame.txt`, `cl_language`'s directory first, drawn from the file at `32 256`. Its `execKey`s open the quick-chat script menus the cgame loaded, whose `execKey`s send `mr` with the index looked up by name.
 - Only those digits and Esc reach the menus; every other key and the mouse reach the binds, as `cl_bypassMouseInput` lets them (`cod11-front-end.md` section 13, "`cl_bypassMouseInput` and the keys"). Retail draws the cursor parked at `639 479`; vcod draws none.
 
-### `mp_QuickMessage` after a `ui_load`
+### 6.2 `mp_QuickMessage` after a `ui_load`
 
 After a `ui_load` retail's `ingame.txt` menus are gone, so `Menus_ActivateByName` finds no `quickmessage` (0x400134b0 returns on a missing name, `cod11-front-end.md` section 13) and `mp_QuickMessage` only closes the open menus. Case 8 still sets the UI key catcher with no menu up. Retail then:
 
@@ -142,7 +142,7 @@ After a `ui_load` retail's `ingame.txt` menus are gone, so `Menus_ActivateByName
 
 vcod asks the UI whether `quickmessage` is loaded. When it is not, vcod closes every menu through its `onClose`, opens nothing and sets a stray catcher on the connection's menu state (`play::join::Join`). A mod whose own `menus.txt` lists a `quickmessage` keeps it, as on retail. The next press (keyboard, mouse button or wheel; not the console key, not a repeat) is dropped and lets go of held keys (`clear_held_keys`: the movement and button state, and the scoreboard a held `+scores` keeps up); mouse look is ignored until then. A script menu that opens first takes the catcher over. Every gamestate clears the stray catcher and closes the in-game menus, giving the mouse back to the view.
 
-### `j`/`k`/`l` and `.voice`
+### 6.3 `j`/`k`/`l` and `.voice`
 
 - Parser: `crates/common/src/voicechat.rs`, the grammar above (gender, categories, optional head icon, 64/64 caps, case-insensitive braces and category names). One divergence: retail aborts on a gender token that fails all three checks; vcod accepts any as `Gender::Other`.
 - `crates/client/src/quick_chat.rs` loads the tables lazily from the game dir (reloaded after a download reopens the search path). A missing file leaves quick chat inert, as on retail. A file over `0x4000` bytes is refused.

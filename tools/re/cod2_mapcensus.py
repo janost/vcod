@@ -1,5 +1,5 @@
 """Census of material/techset use on stock MP maps.
-usage: python3 -I mapcensus.py <bsp dir> <xmodel dir> mats.json tech.json"""
+usage: python3 -I cod2_mapcensus.py <bsp dir> <xmodel dir> mats.json tech.json"""
 import sys, os, struct, re, json, glob, collections as C
 bspdir, xmdir, mj, tj = sys.argv[1:5]
 M = {m['name']: m for m in json.load(open(mj))}; T = json.load(open(tj))

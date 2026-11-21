@@ -20,7 +20,7 @@ const LEAN_SCALE_PRONE: f32 = 0.25;
 
 /// `PM_UpdateLean` (0x32ac8), the last step of `PM_UpdateViewAngles` (0x33377), so it
 /// reads the stance, ground and eye the previous move left
-/// (docs/research/bsp-ibsp59-format.md, "Lean"). `alive` is `pm_type < 6`:
+/// (docs/research/cod11-mantle.md, "Lean"). `alive` is `pm_type < 6`:
 /// a dead body's lean only eases back. A linked player leans off the ground
 /// and skips the wall clamp (0x32c63).
 pub(super) fn update_lean(

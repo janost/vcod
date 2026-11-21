@@ -10,7 +10,21 @@ numbers say so.
 
 Superseded rounds are kept as one line each with their headline delta;
 the current state of each piece is in the latest section that touches
-it.
+it, the last one listed here:
+
+| Piece | Sections |
+|---|---|
+| Feather and distortion | 13, 14, 30, 32, 35 |
+| Shadows | 9, 10, 11, 28, 38 |
+| Bodies, events, net | 16, 31, 36, 38 |
+| Cull and gather | 6, 31, 36, 40 |
+| Depth prepass | 12, 19, 35, 37, 40 |
+| Effects | 6, 20, 32, 33 |
+| Draws, materials, shaders | 21, 22, 24, 26, 27, 29 |
+| HUD | 33 |
+| Load and first frame | 17, 34 |
+| Resident set | 23 |
+| Dynamic entities | 41 |
 
 Current real-card reference points (1920 x 1080, one sample):
 
@@ -113,21 +127,10 @@ mp_creek, mp_overgrown.
 
 ## 3. What the GPU time follows (mp_crossfire, war spectator, fixed view)
 
-First pass, before section 6:
-
-| Run | GPU scene ms | world tris |
-|---|---|---|
-| base | 1072 | 427247 |
-| base again | 1019 | 427247 |
-| `r_zFeather 0` | 1093 | 427247 |
-| `r_glow_allowed 0` | 1206 | 427247 |
-| `r_dof_enable 0` | 1193 | 427247 |
-| `sm_enable 0` (dm, moving view) | 520 vs 618 | 171905 vs 194176 |
-
-Feather, glow and depth of field cost nothing measurable; the scene
-followed the world triangles (dm frames at 170k draw in ~500 ms, the war
-spot's 427k in ~1050 ms). The sun shadow was 40-90 ms a frame on every
-map (cut in 10).
+First pass, before section 6, on lavapipe: `r_zFeather`, glow and depth of
+field cost nothing measurable, the scene followed world triangles, and the
+sun shadow took 40 to 90 ms a frame. VERIFIED (measured). Superseded by 6,
+10 and 21.
 
 ## 4. Fixes
 
@@ -141,17 +144,10 @@ map (cut in 10).
 
 ## 5. What to cut next, ranked
 
-The first pass's list, every item since taken:
-
-1. World triangles drawn: sections 6 and 21 (cod4-world.md 9.9, 9.10).
-2. The sun shadow pass: sections 10 and 11.
-3. `bodies`: sections 7, 16, 31, 36, 38.
-4. Effects: sections 6, 32, 33.
-5. `gather` and `cull`: sections 6, 31, 36.
-6. `events` and `net`: section 16.
-
-The p99 `other` spikes (~12 ms) were first-use uploads inside the
-measured window: section 17.
+The first pass's ranked list, every item since taken: world triangles (6,
+21), the sun shadow (10, 11), `bodies` (7, 16, 31, 36, 38), effects (6, 32,
+33), `gather` and `cull` (6, 31, 36), `events` and `net` (16), first-use
+upload spikes (17).
 
 ## 6. The cuts from section 5's items 1, 4 and 5
 
@@ -213,17 +209,11 @@ What a ragdoll costs: section 36.
 
 ## 8. Close to a car on mp_crash (playtest 2026-10-26)
 
-Superseded by sections 15, 20, 32, 35 and 37. The playtest's F3 by a
-damaged `vehicle_80s_sedan1_red_destructible_mp` (-279 1396 293, yaw -15,
-pitch -28) read 10.9 fps, GPU scene 89 ms, 168 world draws, 42 model
-instances, 132168 triangles, `fx p913 m108 l7`. VERIFIED (the
-screenshot). The car's LOD 0 is eight surfaces, 2608 triangles: the body
-(`mc/mtl_80s_econ_red`, 2248), the intact and shattered glass inside and
-out (`mtl_80s_econ_glass_outside`/`_inside`,
-`com_glass_shattered_outside`/`_inside`, 50 to 94 each, set
-`mc_l_sm_b0c0s0`), and the engine, rubber and destroyed parts. VERIFIED
-(the zone through `cod4_fly`). All four glass layers drew; retail hides
-one pair by `hidePart`, as vcod now does (15, cod4-client-view.md 15).
+Superseded by sections 15, 20, 32, 35 and 37. The playtest's F3 by the
+damaged sedan (-279 1396 293, yaw -15, pitch -28) read 10.9 fps, GPU scene
+89 ms. VERIFIED (the screenshot). All four of the car's glass layers drew;
+retail hides one pair by `hidePart`, and vcod now does (15,
+cod4-client-view.md 15).
 
 ## 9. The spot light shadow tiles (mp_crash's tiled room)
 
@@ -370,7 +360,7 @@ Live harness (dm, 12 bots, a `Cod4Client::pump`ed spectator, lavapipe
 
 ## 17. The first frame after the join
 
-The soak (cod4-map-sweep.md, "The soak") found one 600-1300 ms frame on
+The soak (cod4-map-sweep.md 5) found one 600-1300 ms frame on
 the first draw after every join. Frame 0 on mp_crossfire, mp_bloc,
 mp_killhouse: 763/738/728 ms -> 2-3 ms; frame 1: 436-569 ms -> 0. The
 causes: the level's HUD and script menu zones loaded on `pump`'s first
@@ -746,7 +736,7 @@ frames, section 39).
 Measures what each optional piece of the frame costs, in one client
 session at one held view.
 
-### The command
+### 25.1 The command
 
 After `cargo build --release -p vcod -p vcod-server`:
 
@@ -769,7 +759,7 @@ both modes; the profile's `# size` line names the size drawn. Before
 saved mode and a nested run drew SIZE less kwin's 28-row title bar
 (1280x772 at the default).
 
-### What it does
+### 25.2 What it does
 
 - vcod-server on `war`, no bots, `sv_cheats 1` (for `fx_draw`, `r_glow`,
   `r_fog` and `setviewpos`, which the client honours off the systeminfo,
@@ -819,7 +809,7 @@ The vcod-side switches, each 1 (the normal path) by default:
 - `r_vc_film`: 0 drops the vision set's film grade, so a frame with no
   glow and no depth of field runs no post pass.
 
-### The columns
+### 25.3 The columns
 
 `fps` and `wall` are the pass's mean frame; `gpu.total` and the pass
 groups (`gpu.sunshadow`, `gpu.opaque`, `gpu.split`, `gpu.blend`,
@@ -847,7 +837,7 @@ that overlap on the card land in the later group. The main pass's groups
 sum to about `gpu.opaque` plus `gpu.blend`. Every stamp inside a pass
 costs a little; `VCOD_GPU_GROUPS=0` drops the finer groups.
 
-### Lavapipe, end to end (2026-10-28)
+### 25.4 Lavapipe, end to end (2026-10-28)
 
 `SWEEP=1 SIZE=640x400 SETTLE=4 tools/cod4_perf.sh <dir> mp_crossfire 8` on
 lavapipe (4 threads), nested kwin, no bots. The milliseconds rank nothing
@@ -886,7 +876,7 @@ learnt to note a sample change.)
 
 ## 26. The opaque shaders' arithmetic against 1.7's (P8)
 
-### The counters
+### 26.1 The counters
 
 - Retail: `tools/re/d3d9dis.py --count` over the technique passes
   `--example techset_shaders` writes (`wc_l_sm_r0c0n0s0` out of
@@ -904,7 +894,7 @@ learnt to note a sample change.)
   ps_3_0 expands the same macros. It keeps dead code the driver would
   drop (`surface`'s CoD2 normal on a CoD4 path, about 8 slots).
 
-### The table
+### 26.2 The table
 
 Technique 9 is `lm_sm_sun_*` / `lp_sm_sun_*` (sun and shadow map), 7 no
 primary light, 8 the sun without the map, 11 a spot with its map. `(+n)`
@@ -931,7 +921,7 @@ vcod's vertex stage reads float positions and frames where retail decodes
 packed normals (`mad v3, c8.xxxy, c8.zzzw` and the `cross` for the
 binormal), so its 15 slots against 33-47 are not a gap.
 
-### What changed
+### 26.3 What changed
 
 1. Size queries: `sample_image` asked `textureNumLevels` on every fetch.
    The material uniform's free `flags.w` carries which maps have mipmaps
@@ -965,7 +955,7 @@ binormal), so its 15 slots against 33-47 are not a gap.
 Frames (items 1, 2, 5 byte for byte; 3 and 4 as stated) on the 38
 deterministic `cod4_live` frames of the time. VERIFIED.
 
-### What is left, ranked by slots
+### 26.4 What is left, ranked by slots
 
 1. The entity's lighting block: done in 27.
 2. The shadow taps: done in 28.
@@ -1093,7 +1083,7 @@ pipeline` draws' register count and occupancy, split against unsplit.
 
 ## 30. The gamma pass folded into the post pass, the feather copy kept (P14)
 
-### The gamma pass
+### 30.1 The gamma pass
 
 - 1.7 has no overbright bits: iw3mp.exe's dvar names hold `r_gamma`
   (0x7046d8) and `r_ignorehwgamma` (0x7046f8) and no `r_overBrightBits`;
@@ -1127,7 +1117,7 @@ Pending, real card: `r_gamma` 1 at the held view, `gpu.total` against
 before; then the Brightness slider should still brighten the picture (the
 gamma pass comes back off 1).
 
-### The feather copy, not folded
+### 30.2 The feather copy, not folded
 
 At a feather the copy at the split held every depth-writing draw before
 it; vcod's prepass then took only opaque lit world draws without alpha
@@ -1221,7 +1211,7 @@ retail's screenshot.
 
 ## 33. 1.7's draw order, the HUD's dvars and the marks' gather (P17)
 
-### The draw order
+### 33.1 The draw order
 
 A CoD4 batch draws at its first soup's place in 1.7's order (primary
 light above material, the world list in the zone's surface order,
@@ -1249,7 +1239,7 @@ bit retail's order decides those pixels, so the new frames take its side.
 VERIFIED (the frames). Which is closer to retail's pixels needs a retail
 capture of the same view, not made.
 
-### The HUD
+### 33.2 The HUD
 
 `Cod4Hud::server_dvar` was 0.23-0.28 ms of `hud.build`'s 0.39-0.43: the
 menus ask 30-54 dvars a frame, each copying all 128 name slots into
@@ -1257,7 +1247,7 @@ Strings. It compares the configstrings in place (`configstring_bytes`):
 0.06 ms, `hud.build` 0.19. No cache: configstrings change under `d` and
 fades run off render time. VERIFIED (scratch timers).
 
-### `fxdraw`
+### 33.3 `fxdraw`
 
 The fight's 0.34-0.45 ms: quads 0.08-0.13 (sort 0.02), upload 0.07-0.09,
 clouds and lights under 0.01, marks 0.17-0.27, of which placing the
@@ -1276,7 +1266,7 @@ mp_crash's arcade floor and mp_crossfire's plaster wall against retail.
 
 ## 34. Connect to the first frame in game, every game (P20)
 
-### The tool
+### 34.1 The tool
 
 Every load logs one timeline at info, `load profile <what>: <ms> ms to the
 first frame`, then a line a step (start ms off the load's start, length,
@@ -1288,7 +1278,7 @@ is live (`laps::begin_load`, `laps::end_load`).
 `VCOD_LOAD_PROFILE=<path>` appends the same lines to a file. VERIFIED
 (log).
 
-### Before and after
+### 34.2 Before and after
 
 `tools/cod4_perf.sh` (lavapipe, two shooting bots), process start with
 `--connect`, three runs a side alternated, medians, ms. Lavapipe compiles
@@ -1336,7 +1326,7 @@ CoD4's handshake (3.2 s) is the gamestate's fragments 350 ms apart at
 `sv_maxRate` 5000 as 1.7 paces them (cod4-handshake.md 3), not a client
 cost.
 
-### What 1.7 does at load
+### 34.3 What 1.7 does at load
 
 - Zones load on a database thread: the setup at 0x50b480 calls
   `CreateThread` (import 0x6911b4) with entry 0x48ade0 stored at
@@ -1359,7 +1349,7 @@ game's join; the first shot, frag and tracer should not hitch.
 
 ## 35. `floatZ` written in the depth prepass, no split and copy (P22)
 
-### What 1.7's prepass draws
+### 35.1 What 1.7's prepass draws
 
 All iw3mp.exe, read off the disassembly.
 
@@ -1404,7 +1394,7 @@ All iw3mp.exe, read off the disassembly.
   where the gun covers a pixel the sprites behind it fail the depth test
   either way.
 
-### What vcod does now
+### 35.2 What vcod does now
 
 A CoD4 frame at one sample with a feathered effect or world surface in
 view and `r_zFeather` 1 runs the prepass as a `floatZ` prepass
@@ -1422,7 +1412,7 @@ fragment's write is not the copy's sample 0), `vc_softParticles` (it fades
 every sprite, not 1.7's), distortion alone, `r_zFeather` 0, CoD2, and
 `VCOD_C4_FLOATZ=0` for an A/B.
 
-### Every feathered pixel against the copy
+### 35.3 Every feathered pixel against the copy
 
 `cod4_live_floatz_prepass_against_the_copy` (lavapipe, 960 x 540, one
 sample) draws each view with the copy and with the prepass, comparing
@@ -1466,7 +1456,7 @@ foliage and wires by the sedan, against retail's.
 
 ## 36. The CPU frame with the view moving (P24)
 
-### The tool
+### 36.1 The tool
 
 `TURN=<deg/s>` on `tools/cod4_perf.sh` sets `VCOD_PERF_TURN` on the
 client, which yaws the view by that rate times the frame's time on every
@@ -1477,7 +1467,7 @@ mean time, how many steps kept the last step's cell set, soup set and
 (since 38) batch set, and the triangles drawn against those of the
 visible cells whole. `CULL_OLD=1` walks without 1.7's small-portal rule.
 
-### Where the moving frame goes
+### 36.2 Where the moving frame goes
 
 A 90 deg/s turn on mp_crossfire's held view at 18 fps (lavapipe): `cull`
 0.13-0.16 ms (the cell walk and the static LOD picks), `gather` 0.10-0.15
@@ -1488,7 +1478,7 @@ In the walk itself the cells' cull groups took 82% on mp_overgrown: a
 CoD4 static model placement is one cull group and a cell lists hundreds
 to thousands. VERIFIED (scratch timers, `cull_census`, ours).
 
-### What changed
+### 36.3 What changed
 
 1. A cell's cull groups are a box tree built at load
    (`WorldVis::cell_groups`, eight groups a leaf, split at the median
@@ -1505,7 +1495,7 @@ Tried and dropped: kept chop buffers (within spread); skipping planes a
 parent box lies wholly inside of (the groups were the cost, not the
 nodes).
 
-### A world bundle per cell set
+### 36.4 A world bundle per cell set
 
 `CULL_TURN=1`, every spawn point, level. VERIFIED (`cull_census`, ours):
 
@@ -1521,7 +1511,7 @@ triangles 1.7 draws (its leaves and static models are frustum culled
 too). Not done: it trades 0.7 ms of CPU for several times the vertex
 work.
 
-### The ragdoll's steps
+### 36.5 The ragdoll's steps
 
 - 1.7's ragdoll world steps in `Phys_RunToTime` (iw3mp.exe
   0x5a6dfb..0x5a6e6b): `maxIter` 2 (0x5a6dfb), each step `max(msecStep,

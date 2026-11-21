@@ -89,7 +89,7 @@ fn cod4_games_mp_log_carries_the_engine_and_script_lines() {
 
 /// `g_inactivity 12`: each idle player is warned 10 s before the deadline
 /// its spawn set and dropped at it; a spectator is never timed (the
-/// retail run's shape, cod4-server-gaps.md "g_inactivity").
+/// retail run's shape, cod4-server-gaps.md 5).
 #[test]
 fn cod4_idle_players_are_warned_then_dropped() {
     let Some((mut sv, mut probes, mut now)) = two_playing_with(&[("g_inactivity", "12")]) else {

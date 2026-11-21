@@ -549,7 +549,7 @@ impl Cod4Level {
     /// cmd with a move key or the 0x401 buttons puts it `g_inactivity`
     /// seconds ahead. Past the deadline the client goes; ten seconds
     /// before, it is warned once. Network clients only: `pers.localClient`
-    /// exempts bots and loopback (cod4-server-gaps.md, "g_inactivity").
+    /// exempts bots and loopback (cod4-server-gaps.md 5).
     pub fn inactivity_timer(&mut self, slot: usize, cmd: &UserCmd) -> Inactivity {
         let state = self.rt.client_session(slot).map(|s| s.state);
         if !matches!(state, Some(SessionState::Playing | SessionState::Dead)) {

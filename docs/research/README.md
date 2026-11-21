@@ -11,19 +11,19 @@ Every claim names the module, the virtual address and the string or table it res
 
 A doc may keep a stricter rule and label all control flow INFERRED (`cod4-server-frame.md`, `cod4-voice.md`, `cod4-netfields.md`, the CoD2 docs, and each doc whose header says so). A stricter label is not a defect; a VERIFIED branch or order with no address behind it is.
 
-One label per claim. A document may open with a document-level VERIFIED default only when its provenance is uniform and every exception is labelled. A section-level blanket, including one in a heading, is never allowed. Docs carry derived facts (offsets, tables, enum orders), never pasted decompiler output. `crates/common/tests/evidence_labels.rs` catches two mechanical shapes; its header lists what a reader still has to check.
+One label per claim. A document may open with a document-level VERIFIED default only when its provenance is uniform and every exception is labelled. A lead-in may carry one label for the table or the list right under it when every row or item rests on the source it names ("The results, each VERIFIED live:"); an item that rests on another carries its own. A section-level blanket, a label over prose or over more than that one table or list, including one in a heading, is never allowed. Docs carry derived facts (offsets, tables, enum orders), never pasted decompiler output. `crates/common/tests/evidence_labels.rs` catches two mechanical shapes; its header lists what a reader still has to check.
 
 ## CoD1 1.1 (the base the other games diff against)
 
 | Doc | Covers |
 |---|---|
-| [../protocol-1.1.md](../protocol-1.1.md) | The 1.1 wire; its last section lists every divergence from RTCW/Q3. Check it before assuming Q3 semantics |
+| [../protocol-1.1.md](../protocol-1.1.md) | The 1.1 wire; client command flood protection (Client commands), the client's and the server's clocks and rates (Clocks and rates); its last section lists every divergence from RTCW/Q3. Check it before assuming Q3 semantics |
 | [clientstate-wire-format.md](clientstate-wire-format.md) | `clientState_t`, the third snapshot stream: `team`, the configstring map, entity types on the wire, inline submodels |
-| [cod11-server-handshake.md](cod11-server-handshake.md) | Handshake, configstrings, rcon, the stdin console, heartbeat, zombies, pings, rate, bans, passwords, private slots, message pacing, downloads, CD key authorize (the Housekeeping section) |
+| [cod11-server-handshake.md](cod11-server-handshake.md) | Handshake, configstrings, rcon, the stdin console, heartbeat, zombies, the receive order, pings, rate, bans, passwords, private slots, message pacing, downloads, CD key authorize (the Housekeeping section) |
 | [cod11-map-cycle.md](cod11-map-cycle.md) | `map`, `map_restart`, `sv_serverid`, rotation, the restart's configstring burst, compile carry-over. The client's side of `map_restart` (`CG_MapRestart`) is `cod11-events-and-fx.md` 9.8 |
-| [cod11-combat.md](cod11-combat.md) | Shots, damage, death, grenades, blasts, hit locations, shot timing, the view weapon's offsets |
-| [cod11-mantle.md](cod11-mantle.md) | Movement: why 1.1 has no mantle; stances, ladders, jump, step-up, slide; movement constants. 1.1's stored floats and the Windows client's arithmetic: `cod15-movement.md` 7 and 8 |
-| [cod11-player-clip.md](cod11-player-clip.md) | Player clip, kerbs, getting stuck, `StuckInClient` |
+| [cod11-combat.md](cod11-combat.md) | Shots, damage, death, grenades, blasts, hit locations, shot timing, the view weapon's offsets; `trigger_hurt` (5.9) and `trigger_damage` (14.8) |
+| [cod11-mantle.md](cod11-mantle.md) | Movement: why 1.1 has no mantle; stances, ladders, jump, step-up, slide, lean; movement constants and their provenance. 1.1's stored floats and the Windows client's arithmetic: `cod15-movement.md` 7 and 8 |
+| [cod11-player-clip.md](cod11-player-clip.md) | Player clip, kerbs, getting stuck, `StuckInClient`; fall height, fall damage and the landing stun (8) |
 | [cod11-movers.md](cod11-movers.md) | Movers, push, `linkTo`, brush model clip, player anim clock |
 | [cod11-items.md](cod11-items.md) | Items, pickups, drops |
 | [cod11-turrets.md](cod11-turrets.md) | Mounted MGs: mount, aim, fire, the gunner's pose |
@@ -127,7 +127,7 @@ The CoD1 view weapon: `cod11-combat.md` (its offsets), `xanim-v14-format.md` (th
 
 | Doc | Covers |
 |---|---|
-| [bsp-ibsp59-format.md](bsp-ibsp59-format.md) | CoD1 `.bsp` (IBSP 59) lumps, patch and terrain collision, the leaf walk, movement constants |
+| [bsp-ibsp59-format.md](bsp-ibsp59-format.md) | CoD1 `.bsp` (IBSP 59) lumps, patch and terrain collision, the leaf walk |
 | [xmodel-v14-format.md](xmodel-v14-format.md) | CoD1 xmodel descriptor, parts, surfs, collision, LOD selection, the model basis, the view fov |
 | [xanim-v14-format.md](xanim-v14-format.md) | CoD1 xanim layout, timing, the view weapon's sight layer and hip pose, sampling, rotation key rebuild |
 

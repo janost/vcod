@@ -1069,7 +1069,6 @@ VERIFIED, census, record counts per map:
 - What reads lump 28 at runtime, if anything.
 - Which bit 0x800000 is: every player and shot mask carries it and no
   `surfaceparm` sets it.
-- The trace against retail is closed: `trace_ab` compares the port with
-  `cod2_lnxded` record for record ("The trace A/B"). The gate clips the solid
-  brush models; script models and static models stay outside the clip map and
-  the gate skips the records they decide.
+- Traces that script models and static models decide: they stay outside the
+  clip map, and `trace_ab`, which compares the port with `cod2_lnxded`
+  record for record ("The trace A/B"), skips those records.

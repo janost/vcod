@@ -137,7 +137,7 @@ The range bounds come from the indexers in `cod4_lnxded`. VERIFIED (the constant
 
 `SV_SetConfigstring` (0x8173e54) refuses an index above 2441 (compare at 0x8173e60, `SV_SetConfigstring: bad index %i` at 0x82320d4) and `SV_SendClientGameState` (0x816e10a) loops to 2442, so `MAX_CONFIGSTRINGS` is 2442. VERIFIED. The hint strings are under "Configstring defaults".
 
-### Configstring defaults
+### 5.1 Configstring defaults
 
 - `constantConfigStrings` is a table of 16-byte rows `{int slot; char *string; int hash; int lowercaseHash}`, ascending, ended by a row of slot 0: `cod4_lnxded` 0x826e4c0, `iw3mp.exe` 0x7209b0, `cod4_lnxded-bin` 0x826e320. Each holds 832 rows, slots 20 to 2273; the three are equal row for row and the hash words are 0 in the files. VERIFIED (`cargo run -p vcod-cod4 --example cod4_constcs -- <cod4_lnxded> <iw3mp.exe>`).
 - The rows cover dvar names 20..108 (`bg_aimSpreadMoveSpeedThreshold` .. `stopspeed`), localized strings 350..351 and 390..741, models 852..910 and 933..1150 (`weapon_*`), menus 1968..1996, materials 2020..2125, and 2271..2273 (a weapon list and the two status icons). VERIFIED.
@@ -149,14 +149,10 @@ The range bounds come from the indexers in `cod4_lnxded`. VERIFIED (the constant
 
 ## 6. Not decoded, and what is still open
 
-Closed since this capture:
-
-- Baselines, `svc_EOF`, `clientNum` and `checksumFeed` (`cod4-netfields.md` 4).
-- `crates/cod4/examples/cod4_probe.rs` sends `sv_serverid` back in keyed move messages and captures snapshots (`cod4-netfields.md` 5, 6).
-- Both scramble directions over non-empty commands (`cod4-netfields.md` 5, 8).
-- `constantConfigStrings` from both binaries (section 5, "Configstring defaults").
-- `requeststats` and the authorize round trip off the LAN: section 15.
-- The pure check: section 8.
+What this capture left undecoded is read elsewhere: baselines, `svc_EOF`,
+`clientNum`, `checksumFeed` and the scramble (`cod4-netfields.md` 4 to 8),
+`constantConfigStrings` (section 5), the pure check (8), `requeststats`
+and the authorize round trip (15).
 
 Still open: the rate pacing on loopback (section 3) and why the first two fragments go out together.
 
@@ -233,7 +229,7 @@ Gates:
 
 Read off `cod4_lnxded`'s and `iw3mp.exe`'s disassembly and measured live with `cod4_probe --download` against retail serving a mod (`+set fs_game mods/modwarfare`, `sv_pure 1`, `sv_allowDownload` 1 and 0). The raw captures hold the mod's bytes and stay out of the tree; `crates/cod4/tests/fixtures/net/download-1.7.txt` is the decoded message list (block numbers, sizes and lengths, the commands, the refusals).
 
-### The server
+### 11.1 The server
 
 - **Commands.** The client command table at 0x826d398 holds, after `cp` and `vdr`, `download` (handler 0x8172068), `nextdl` (0x81721c6), `stopdl` (0x81723d2), `donedl` (0x816fd00), `retransdl` (0x81707aa) and `wwwdl` (0x8170ffa). VERIFIED (the table).
 - `download <name>` closes any transfer and copies the name, 64 bytes with its NUL. VERIFIED (0x8172068). `nextdl <n>` drops the client with `broken download` (0x8231452) unless `n` is the block due (+0x212f0); the block due past an empty block closes the transfer (`clientDownload: %d : file "%s" completed`), any other moves the window on. VERIFIED (0x81721c6). `donedl` closes the transfer and jumps into `SV_SendClientGameState`. VERIFIED (0x816fd00..0x816fd5d).
@@ -252,7 +248,7 @@ Read off `cod4_lnxded`'s and `iw3mp.exe`'s disassembly and measured live with `c
 - **Pacing.** Eight blocks in flight (the `cmp 7`s at 0x816f8e7, 0x816f93e); a resend from the last acknowledged block after 1000 ms without a `nextdl` (0x816fb5f). Blocks per message are the client's rate (capped by `sv_maxRate` past 999) times its snapshot interval over 2048, rounded up past a whole one (0x816fa21..0x816fa93). VERIFIED (the code). At `rate 25000`, `snaps 20` and `sv_maxRate` 5000 that is one block a message. Each 2 KB message went as two fragments 50 ms apart, the next message 250 ms after the first, so the iwd took 22 s (about 8 KB/s) on loopback. VERIFIED live.
 - **Redirect** (`SV_WWWRedirectClient`, 0x816f674): `svc_download` (5), a long -1, the URL (`%s/%s` of `sv_wwwBaseURL` and the file, 0x820e5d6), the file's size as a long and `sv_wwwDlDisconnected` as a long. The console prints `Redirecting client '%s' to %s` (0x82308b8); the file is closed and the name cleared. VERIFIED (the code). After a failed www transfer (+0x21450) the next message writes nothing and clears the flag; blocks start on the one after. VERIFIED (0x816fc72). The client answers `wwwdl ack`, `bbl8r`, `done` or `fail` (`iw3mp.exe` strings 0x6d2914, 0x6d28e8, 0x6d2520, 0x6d2554). VERIFIED (the strings). `wwwdl done`, `fail` and `chkfail` clear the redirect mark (+0x21448) beside the ack (+0x2144c) at 0x817110a and 0x8171184, where CoD2's handler leaves it. VERIFIED (the instructions).
 
-### What the client asks for
+### 11.2 What the client asks for
 
 - `sv_referencedIwdNames` listed `main/iw_11 mods/modwarfare/z_modwarfare`; `sv_referencedFFNames` `code_post_gfx_mp mp_crash common_mp mods/modwarfare/mod`, with `sv_referencedFFCheckSums` `89196 35287381 13517381 34310`: the fastfiles' sizes (mod.ff came as 34310 bytes). VERIFIED live.
 - The client fetches each referenced iwd under `fs_game` whose checksum it lacks and each referenced fastfile there whose size differs, as `<name>.iwd` and `<name>.ff`, never a `main` iwd (`server_file_compare`). INFERRED. The probe's `auto` list, built by that rule, was `mods/modwarfare/z_modwarfare.iwd` and `mods/modwarfare/mod.ff`, and retail served both. VERIFIED live.
@@ -266,7 +262,7 @@ Read off `cod4_lnxded`'s and `iw3mp.exe`'s disassembly and measured live with `c
 
   The size is `GetFileSize` of that file (0x48b940). A mod or usermap mismatch goes on the list as `@<name>.ff@<name>.ff`, remote and local names the same (`@` at 0x6e2840, `.ff` at 0x6e2888), printed with `(local file exists with wrong filesize)` (0x6e288c) when the file is there; a stock mismatch returns 2 (0x503b93). The name is used as it came: nothing escapes it or strips a colour code on the way to the request or the file. INFERRED (no string or escape call between the list and `DL_BeginDownload`; libwww sends the path as given).
 
-### The client's www half
+### 11.3 The client's www half
 
 - `CL_ParseDownload`'s block -1 (`iw3mp.exe` 0x474270..0x474439) reads the URL into `cls.downloadName` (0xc5b188), then the size (0x14b8c30) and the flags (0xc5b6a8) as longs. VERIFIED (the code).
 - Flags bit 2 (`test al,0x2` at 0x474308) sends `wwwdl bbl8r` (0x47432c) and `quit` (0x6d28e0) after a call at 0x5769e0, the Q3 lineage's `Sys_OpenURL`. INFERRED (the branch; the call's role from the lineage).
@@ -277,12 +273,12 @@ Read off `cod4_lnxded`'s and `iw3mp.exe`'s disassembly and measured live with `c
   - Failed, disconnected: a disconnect and `Download failure while getting '%s'` as an error (0x472b01..0x472b16). Failed, connected: that line printed, `wwwdl fail`, the flag cleared (0x472b28..0x472b3f).
 - The server answers `fail` with the gamestate and the client asks for the file again on it, over UDP. INFERRED (the server's fallback flag is consumed by the next `download`; no retail client ran against an HTTP server).
 
-### No file check
+### 11.4 No file check
 
 - Neither end checks a file. `CL_WWWDownload`'s done arm renames the spool (0x472a4b, `rename` at 0x671ac6) and asks for the next; `CL_ParseDownload`'s empty block closes the file, renames it (0x474614) and does the same (0x474640). VERIFIED (the code).
 - The only check is `CL_InitDownloads` (0x46ac60), called by `CL_ParseGamestate` at the end of every gamestate (0x47423e). VERIFIED (the call). It calls the compare (0x503ba0) with the download flag from `cl_allowDownload`. Off: a missing file ends the join with `\x15You are missing some files referenced by the server` (0x6d0910). On: the list goes out as `Need files: %s` (0x6d09a4) and the first `download` starts. A stock fastfile that differs ends it with `\x15%s is different from the server` (0x6d0980). INFERRED (the branches). So a file that still differs after its download is asked for again on `donedl`'s gamestate, without end. INFERRED.
 
-### vcod
+### 11.5 vcod
 
 - **Server** (`crates/server/src/cod4/download.rs`) serves a `.iwd` or `.ff` under its install root at the name asked for, checks in the order above, the blocks in the snapshot message after the snapshot. It serves no other kind (retail serves any file). A transfer holds the open file and reads each block off it as it goes out (`crate::download::DownloadFile`); the redirect's size is the file's metadata. Its `wwwdl` drop texts are the strings at 0x6e6768 and 0x6e67c4 in `iw3mp.exe`'s server half, INFERRED as the reasons.
 - **Client** (`vcod_cod4::net::download::Downloads`) writes into the install root at the referenced path. Unlike 1.7 it checks a file before the rename: no more bytes than the server announced (block 0's size or the redirect's) and at most 1 GiB on either transport, a block 0 announcing more failing at once, all of them, a fastfile at its listed size and an iwd at its listed checksum. An HTTP body past the announced size fails the fetch (`wwwdl fail`, then the file over UDP); a landed file that fails is removed and ends the join with the reason, as the next gamestate's compare would. A `fs_game` that leaves the install or names one of its own directories (`main`, `zone`, `players`, `usermaps` and kin) fetches nothing into it. It compares again on every gamestate and ends the join when a file it landed is asked for again (`<name> is different from the server after its download`; retail fetches it again on each gamestate). On a refusal it ends the join with the reason. It sends `cl_wwwDownload\1` in the userinfo when `cl_wwwDownload` is on.
@@ -333,7 +329,8 @@ Read off `iw3mp.exe`'s disassembly and data; addresses are in it. Function names
 
 ### 12.2 The wire
 
-All VERIFIED (the code).
+Each item in this list is VERIFIED (the instructions at the addresses it
+names).
 
 - **Refresh.** `UI_StartServerRefresh` (0x54aaf0) first writes `ui_lastServerRefresh_<source>` as `%s %i, %i   %i:%02i` (0x6eb858): localized month (`EXE_MONTH_ABV_JANUARY`.., table 0x723dc0), day, year, hour, minute. A quick refresh (argument 0) then resets the source's pings (0x475560: ping -1, no send time) and stops. A full one marks every row of the source (+0x1b = 1, 0x54abf5), resets the pings, then Local runs `localservers` (0x6eb86c), Internet `globalservers 0 6 full empty` (0x6eb89c; `globalservers 0 %s full empty` with `debug_protocol` when that dvar is set, 0x54ac4d), Favorites nothing more.
 - **`localservers`** (`CL_LocalServers` 0x470220) prints `Scanning for servers on the local network...`, empties the Local list keeping each row's mark, and broadcasts `getinfo xxx` (0x6d1e9c) to ports 28960 (0x7120) to 28963, the whole round twice.
@@ -451,7 +448,7 @@ Read off the `cod4_lnxded` 1.7 disassembly; no retail console run was diffed aga
 
 ### 14.1 The rest of the command table
 
-A retail run (`cod4_lnxded` under `unshare -rnm`, mp_crash `war`, two `cod4_probe` clients, the commands over rcon; cod4-server-gaps.md, "The retail run") answered each of these as written here.
+A retail run (`cod4_lnxded` under `unshare -rnm`, mp_crash `war`, two `cod4_probe` clients, the commands over rcon; cod4-server-gaps.md 3) answered each of these as written here.
 
 - **The table.** `Cmd_AddCommand` (0x81116b4) registers 67 names and `Cmd_Init` inlines four more (`wait`, `cmdlist`, `exec`, `vstr`; `Cmd_AddCommand: %s already defined` at 0x8222858 has five references). VERIFIED. A dedicated server's `cmdlist` printed 63 of them, newest first, then `63 commands`. VERIFIED live. vcod's `cmdlist` prints the ones its console runs, in that order (`cod4::oob::COMMANDS`).
 - **`kick` bans, `onlykick` does not.** `kick` and `tempBanUser` are one handler (0x816cb4a, both rows of the server command table); `onlykick` is 0x816cb36. Both call the helper, `onlykick` with no name buffers. With a client found, 0x816cb4a prints `%s (guid "%s") was kicked for cheating` (0x82303c4) and calls 0x816e808 with the GUID: the brief ban `sv_kickBanTime` holds. VERIFIED. `kick bravo` printed `0:bravo EXE_PLAYERKICKED` (`SV_DropClient`'s own line, under the redirect) then the cheating line. VERIFIED live.
@@ -519,7 +516,7 @@ vcod-server under `--game cod4` reads stdin as 1.1 does without its tty editor, 
 
 The run: `cod4_lnxded` at 203.0.113.1:28960 in a rootless user, net and mount namespace, the clients at 198.51.100.2 in a child net namespace joined by a veth pair (`tools/offlan_capture.sh`'s layout), so neither address is private or shares three octets with the other. The hosts file mapped `cod4master.activision.com` to 127.0.0.2, where a listener logged every datagram and answered none. `sv_pure 0`, `scr_war_timelimit 0`, `+set dedicated 1` (refused; the server ran at 2, see "The server's own address"). A script sent `getchallenge 0 "<hex>"` every 3 s for 1290 s. Then `cod4_probe` joined as a spectator, `rcon map mp_crash` went in 25 s into its join, a second script challenged off the LAN 15 s after that spawn, and a third from the server's own address. vcod-server ran the same timeline with a 30 s first script.
 
-### The challenge off the LAN
+### 15.1 The challenge off the LAN
 
 - `SV_GetChallenge` (0x816f05a) finds or makes the address's slot, runs the bans (section 14), copies the hex into the slot, then asks `Sys_IsLANAddress` (0x81d59c8), or `Sys_IsLANAddress_IgnoreSubnet` (0x81d55a0) at `dedicated 2`, which `cod4_lnxded` always is; it asks neither when `net_lanauthorize` (0x892fe94) is set. A LAN address gets `challengeResponse` at once. VERIFIED (the code).
 - Off the LAN, with `svs.authorizeAddress` unset, it resolves `cod4master.activision.com` (0x822325c) on port 20800 (0x5140); a failed lookup prints `Couldn't resolve address` (0x823117f) and returns with no answer. VERIFIED (the code). The `Resolving %s` and `%s resolved to %i.%i.%i.%i:%i` lines came on the console. VERIFIED live. That a failed lookup marks the address bad (type 1, 0x816f24c), so the next challenge goes on to the timeout test, is INFERRED.
@@ -532,7 +529,7 @@ The run: `cod4_lnxded` at 203.0.113.1:28960 in a rootless user, net and mount na
 - The heartbeat goes out at the server's start (`heartbeat COD-4\n` to :20810, 0.8 s in). VERIFIED live. The run's `+set dedicated 1` did not take, so it ran at `dedicated 2`, the only value `cod4_lnxded` has. vcod-server sends none below `dedicated 2`, as for every game it hosts, and keeps its own `dedicated` settable with 1 as the default (`docs/dev/running.md`, "Server").
 - vcod-server never asks the authorize server (the CD key check is skipped on purpose): every address gets `challengeResponse` at once, which is what retail sends once its authorize server answers `accept`. Off the LAN its first answer came within a millisecond. VERIFIED live.
 
-### The server's own address
+### 15.2 The server's own address
 
 Read with gdb on the same layout (retail under `unshare -rnm`, breakpoints on the two tests and the table's build).
 
@@ -542,23 +539,23 @@ Read with gdb on the same layout (retail under `unshare -rnm`, breakpoints on th
 - Its callers: `SV_UserinfoChanged`'s rate (0x817037d: a LAN client gets 99999 only below `dedicated 2`, 0x817038f, so never on `cod4_lnxded`; else the userinfo's `rate`, 5000 when empty), `SV_DirectConnect`'s ping limits (0x8171847) and `SV_SendMessageToClient`'s pacing (0x8178b3e). A connected client's `getIpAuthorize` resend (0x8172bb7, `sending getIpAuthorize for %s` 0x82306bc) takes the challenge's split. VERIFIED (the code).
 - vcod-server answers every challenge (no authorize), so the subnet-blind test decides nothing there. Its ping limits and pacing take `Lan::Cod2`, the subnet test, with the host's interface addresses for the table (`vcod_common::net::lan::local_addresses`, the choice CoD1's port made for the 127.0.1.1 case). It never gives the LAN rate, as retail does not. VERIFIED (the code).
 
-### The connect off the LAN
+### 15.3 The connect off the LAN
 
 - `SV_DirectConnect` takes the slot's first ping (+0x3c, else `svs.time` minus the ping time), prints `Client %i connecting with %i challenge ping from %s` (0x8230dd0) and marks the slot connected. For an address `Sys_IsLANAddress` refuses (0x8171847) it applies `sv_minPing` (0x13ed7c00, `error\nEXE_ERR_HIGH_PING_ONLY`, `Client %i rejected on a too low ping`) and `sv_maxPing` (0x13ed7c04, `error\nEXE_ERR_LOW_PING_ONLY`, `Client %i rejected on a too high ping: %i`). VERIFIED (the code). vcod-server applies both the same way (`cod4_min_ping_refuses_only_off_the_lan`).
 
-### `requeststats` off the LAN
+### 15.4 `requeststats` off the LAN
 
 - Past the 20 minutes the probe got `connectResponse` 6 ms after its `connect`; its seven `stats` packets were answered in 4-15 ms each, `statResponse 126` down to 0, as on loopback. VERIFIED live.
 - `map mp_crash` sent `loadingnewmap\nmp_crash\nwar`, and 428 ms later `requeststats\n`; the probe's netchan messages drew eight more, and its repeated packets 22 `statResponse 0`. VERIFIED live. One `requeststats` per message while no stats packet has come is `SV_SendClientGameState`'s (the reference at 0x816e616). INFERRED.
 - vcod-server sent the same counts: 1 `loadingnewmap`, 9 `requeststats`, six falling masks and 22 `statResponse 0` for 28 `stats` packets, its first `requeststats` 382 ms after `loadingnewmap`. VERIFIED live.
 
-### Pacing a client out of the world
+### 15.5 Pacing a client out of the world
 
 - `SV_SendMessageToClient` (0x8178aff..0x8178bed): a loopback or LAN address (0x8178b3e) is due the next frame. Anyone else is due `(min(bytes, 1500) * 1000 + 48000) / rate` ms on, `rate` capped by `sv_maxRate` past 999, at least `snapshotMsec`. A client not `CS_ACTIVE` (4) with no download (`downloadName`, +0x212a4) waits at least a second (0x8178bd1..0x8178bed). VERIFIED (the code).
 - Both gamestates' second fragment left 957 ms after the first, the rest about 350 ms apart. VERIFIED live. vcod-server waits the same second (`cod4_an_idle_off_lan_client_waits_a_second`): its second fragments left 976 and 991 ms after the first, the rest 350 ms apart. VERIFIED live. Without that wait it sent the second 336 ms after the first.
 - A client in the world more than 28 messages past its last acknowledge is paced by a random back-off instead, LAN or not (`cod4-server-frame.md` 12). VERIFIED (the code).
 
-### A stand-in authorize server
+### 15.6 A stand-in authorize server
 
 - `SV_AuthorizeIpPacket` (0x816fd62) takes a packet only from the authorize server's address (`SV_AuthorizeIpPacket: not from authorize server` 0x82309e4 otherwise), finds the slot by argv 1, the challenge (`SV_AuthorizeIpPacket: challenge not found` 0x8230a18), and stamps the slot's time. VERIFIED (the code and strings). Argv 2 is `deny` (0x8231222), `demo` (0x8231296) or `accept` (0x82312a7); argv 3 the reason (`CLIENT_UNKNOWN_TO_AUTH`, `BAD_CDKEY`, `INVALID_CDKEY`, `BANNED_CDKEY`); past a `deny`, argv 5 must equal the slot's `getchallenge` hex (`strcmp` at 0x816ffb8) or it answers `error\nEXE_ERR_BAD_CDKEY` and prints `rejecting connection due to mismatched GUID` (0x8230a44). An `accept` sends `challengeResponse %i` (0x823115c) when the slot holds no client yet (+0x28). INFERRED (control flow).
 - A stand-in at 127.0.0.2:20800 that answered each `getIpAuthorize` with `ipAuthorize <challenge> accept KEY_IS_GOOD 0 <hex>`, the request's challenge and hex, let `cod4_probe` in from 198.51.100.2 30 s after the start: `challengeResponse` came 13 ms after its first `getchallenge`. VERIFIED live. `tools/cod4_offlan_capture.sh` runs that stand-in, so an off-LAN run waits out no 20 minutes.

@@ -386,7 +386,7 @@ back, and counts the parts `set_viewmodel` uploaded itself
 (`Renderer::viewmodel_first_uses`): 6 before the preload, 0 after, the
 worst `view weapon` part 0.2 ms.
 
-## 8. The lit and cookie shaders against retail's compiled ones (P15)
+## 8. The lit and cookie shaders against retail's compiled ones
 
 As `cod4-client-perf.md` 21, 26, 28 and 29 did for CoD4's opaque pass:
 count what vcod's CoD2 world, static model and shadow cookie shaders fetch
@@ -426,12 +426,12 @@ at the Mac binary's file offsets of the names. VERIFIED (program text):
   shadow (`TXP`), the weights at the normal, the three coefficient images
   and the colour map. The specular map and the specularity table come only
   with `_s`, the detail map only with `_dtl`. VERIFIED (program text).
-- The fog is per vertex: `lmap_s_efog.vsn` ends `MAD oFog, r0.w, c11.x,
-  c11.y` (name at 0x2829a8) and the D3D pixel shader has none, as
+- The fog is per vertex: each fogged vertex program ends in its fog write
+  (`lmap_lfog.vsn`'s `MAD oFog, r0.w, c11.x, c11.y`, the exp programs'
+  `EX2 oFog, r0.w`, section 9) and the D3D pixel shader has none, as
   `lib/fog.hlsl`'s `Fog_VertexCalc` writes the factor to the `FOG` output
   and the fixed-function fog blends it (`FOG_SEMANTIC` is `FOG` off the
-  Xbox 360, `lib/globals.hlsl`). VERIFIED (program text, HLSL). Section 9
-  corrects which program that `MAD` belongs to.
+  Xbox 360, `lib/globals.hlsl`). VERIFIED (program text, HLSL).
 - A receiver pixel costs one fetch and five ALU per cookie, and retail
   draws a cookie's receivers once for that cookie: the receiving surfaces
   whose bounds pass the cookie's five planes (section 9.8 of
@@ -536,7 +536,7 @@ Pending, on a real card: `SESSION=1 GAME=cod2 COD2_DIR=<install>
 PORT=28995 tools/cod4_perf.sh <out> mp_carentan 30`, then the same with
 `VCOD_LIT_SPLIT=0` in front, reading `gpu.cookies`, `gpu.opaque` and fps.
 
-## 9. The fog per vertex, the cell walk as retail's (P19)
+## 9. The fog per vertex, the cell walk as retail's
 
 Section 8's leftovers: the lit pixel's radial fog and identityLight, the
 model and effect shaders' fog, and the `cull` stage's cell walk.
@@ -558,10 +558,7 @@ and `vertcol_simple_efog.vsn` (0x29c87c) end `EX2 oFog, r0.w` on the
 distance times `c11.z` and log2 e; `lmap_lfog.vsn` (0x282958) ends
 `MAD oFog, r0.w, c11.x, c11.y`; each fragment program ends by clamping
 `fragment.fogcoord` to 0..1 and `LRP`ing toward `state.fog.color`.
-VERIFIED (program text). The `MAD` section 8 quotes under
-`lmap_s_efog.vsn`'s name is the linear program's text; the exp ones are
-the `EX2` texts. INFERRED (the extractor keys a name to the text before
-it).
+VERIFIED (program text).
 
 No CoD2 shader declares identityLight (cod2-materials.md 9.3), and vcod
 draws CoD2 at identityLight 1 (`gamma::overbright_bits`); CoD4 likewise.
@@ -760,7 +757,7 @@ looking west and the house and pole from mp_burgundy's at 932 -592 96
 looking west, which the old walk dropped, and any wall or roof that pops
 in or out while turning in town, which the new walk would cause.
 
-## 10. The probe weight cubes and the dynamic shadow's read (P23)
+## 10. The probe weight cubes and the dynamic shadow's read
 
 Section 9's two leftovers, and the entity vertex stage against retail's.
 
@@ -899,7 +896,7 @@ weapon in sun and in shade (their light should look the same as before,
 one level off at most), and a body's shadow cookie on the street and a
 body standing in it (unchanged).
 
-## 11. The cookie receivers over the world's prepass (P28)
+## 11. The cookie receivers over the world's prepass
 
 On a real card (mp_carentan, 12 bots, spectator, 1920 x 1080) a frame took
 3.22 ms of GPU, of which the cookies took 1.05, and 2.45 at 3840 x 1600:
@@ -1009,7 +1006,7 @@ mp_carentan 30`, reading fps, `gpu.cookies` plus the `receivers` group
 (base: `gpu.cookies` alone) and `gpu.total`. Pending by eye: a body's
 cookie shadow on the street and on a wall, the same as before.
 
-## 12. Retail's prepass, the stale config and the receivers per soup (P30)
+## 12. Retail's prepass, the stale config and the receivers per soup
 
 A real-card run (mp_carentan, 12 bots, 1920 x 1080) counted `prepass 0`,
 so section 11's receivers drew on their own depth there.

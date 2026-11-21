@@ -222,7 +222,7 @@ confirmed on 1.7.
   main menu comes up and when a profile loads or is deleted
   (`Cod4Front::reload_stats`), a fresh profile's block without one, and
   writes a `statset` back to it two seconds on or as a join starts. A
-  game's `N`s reach the same file (cod4-netfields.md, "The stats file").
+  game's `N`s reach the same file (cod4-netfields.md 10.2).
   Gate: `cod4_front_create_a_class_unlocks_off_the_profiles_stats`.
 
 `main_text`'s `onOpen` runs `selectStringTableEntryInDvar
@@ -340,7 +340,7 @@ writes `vcod_mpdata` at the next frame, in the front end and in a game.
 `customclass1`..`5` are vcod's archived cvars (the config keeps the
 names); a profile loaded with no stats file takes the `CLASS_SLOT<n>`
 names once. The server reads the class off the stats the join sent
-(cod4-gsc.md, "The stats, the loadout, the perks"). Gates:
+(cod4-gsc.md 7.3). Gates:
 `cac::tests` (each command and refusal),
 `cod4_front_create_a_class_picks_reach_the_profile` (the editor's
 picks, the new marks, the file, the page drawn again) and

@@ -3564,8 +3564,8 @@ snapshot land within microseconds. The `-turn` captures in the tree (all
 three 2026-11-13; the 2026-10-19 runs are in git at 55164194) log the
 server's own read order: `showpackets 1` prints each client packet as
 `Netchan_Process` takes it, ahead of the message's cmds
-(docs/dev/retail.md, "Receive order", which has the addresses and the
-counts). Each pair's order there decided the round:
+(cod11-server-handshake.md, "Receive order", which has the addresses
+and the counts). Each pair's order there decided the round:
 
 - VERIFIED, vcod measurement: `leanhit_ab` replays each run's cmds one a
   packet in the server's read order (`common::cmds_read`), and every
@@ -10228,7 +10228,7 @@ which is `(0, -cos r, -sin r)`. VERIFIED, `0x30036840` turns the output
 into the world as `vieworg + x * forward - y * right + z * up` off
 `refdefViewAngles`, so the frame is (forward, left, up). INFERRED: a full
 lean right moves the gun 1.6 units right and 0.056 up relative to the eye,
-on top of the eye's own 19.2 (`bsp-ibsp59-format.md`, "Lean"), and none
+on top of the eye's own 19.2 (`cod11-mantle.md`, "Lean"), and none
 once the sight is fully up.
 
 VERIFIED, the gun's angles: `0x30012bf0` (15.5) opens with `out[2] =

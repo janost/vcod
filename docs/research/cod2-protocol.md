@@ -1554,10 +1554,6 @@ mirror `cod11-hud-protocol.md` reads at CS 140/204, at a new base.
 
 ## 8. Open questions
 
-- The server command whose letter is a space (` "MP_CONNECTED\x15<name>"`, 9)
-  is `iPrintLn`'s own word, emptied by `va`'s two buffers (15.5). The retail
-  client logs it as `Unknown client game command` (16.2). VERIFIED live.
-  Closed.
 - What the client sends in `getchallenge` when it has no CD key (a server
   build, a LAN game). Off loopback the client refuses to connect without one
   (16.1).
@@ -1579,7 +1575,7 @@ inside `unshare -rn`, loopback only, driven by a Python client written from
 this doc: Huffman codes from `vcod_common::net::huffman`, netfield tables from
 `tools/re/netfields.py`, the rest as sections 1 to 5 describe. Outside a
 namespace with the socket bound to 127.0.0.1 the heartbeats fail with
-`NET_SendPacket ERROR: Invalid argument`. Every result below is VERIFIED live.
+`NET_SendPacket ERROR: Invalid argument`. The results, each VERIFIED live:
 
 - `getinfo xyz` with `sv_pure 1`:
   `infoResponse\n\challenge\xyz\protocol\118\hostname\CoD2Host\mapname\mp_toujane\sv_maxclients\8\gametype\dm\pure\1\kc\1\hw\1\mod\0\voice\0\pb\0`.
@@ -1666,8 +1662,8 @@ Nothing was written at 9, 10, 21, 46..109 or 1182..1245 on this map.
 `tools/re/netfields.py` at the VAs of 5.1), the playerstate delta, the keyed
 usercmd delta and the parser; the field codec, message reader and netchan are
 vcod-common's (`FieldCodec::COD2`, `NetchanParams::COD2`: 4-byte fragment
-starts, 128-slot rings, a raw key string). Every result below is VERIFIED
-live. A 30 s rerun on the shared codec and netchan parsed 592 messages, 588
+starts, 128-slot rings, a raw key string). The results in the list that
+follows are VERIFIED live. A 30 s rerun on the shared codec and netchan parsed 592 messages, 588
 delta snapshots, with no parse error.
 
 - A 62 s session: 1235 messages, 1228 of them delta snapshots against the
@@ -2299,7 +2295,8 @@ world and flew, and both left with `disconnect`. The probe's eye ended at
 
 `Cod2Server` drives `Cod2Level` in `cod2_lnxded`'s order, read off the
 functions each item names. Calls and their order are read off control flow, so
-every ordering claim below is INFERRED unless it says otherwise.
+in the list that follows an ordering claim is INFERRED unless it says
+otherwise.
 
 - `SV_SpawnServer` (0x8093520): after `SV_InitGameProgs` three `SV_RunFrame`s,
   each 100 ms on, then `SV_CreateBaseline`, then `ClientConnect` again for
@@ -2478,7 +2475,8 @@ same two clients against `vcod-server --game cod2` gave the diff below; each
 item ends with what vcod does. The captures are
 `crates/server/tests/fixtures/cod2-wire/` (15.7 lists the gametype ones), and
 `cod2::wire_ab` replays the same two clients in process and pins what still
-differs (15.7). Every "live" claim below is VERIFIED live from those captures.
+differs (15.7). A claim in 15.1 to 15.7 that says "live" rests on those
+captures: VERIFIED live.
 
 ### 15.1 Entity numbers
 

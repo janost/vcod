@@ -140,8 +140,7 @@ ground trace has zeroed `fJumpOriginZ` (0x305c8), so it never fires
   had the top's clear, and a dead body walks only while its 0x100 or 0x200
   timer runs, which takes the knockback branch ahead of the penalty's
   (`pmove::ladder_check_skipped`). vcod clears at the top only
-  (`pmove::jump_penalty_landing`), which is equivalent. Backlog
-  2026-11-13 item 7 closed on this.
+  (`pmove::jump_penalty_landing`), which is equivalent.
 - `PM_DropTimers` is 1.1's: it clears 0x100, 0x200 and 0x2000 when the
   timer runs out (mask 0xffffdcff at 0x25b3e) and leaves `fJumpOriginZ`.
   VERIFIED.

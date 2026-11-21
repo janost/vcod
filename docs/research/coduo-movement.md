@@ -603,7 +603,7 @@ Measured in all three captures of section 11 (VERIFIED):
 vcod's replay matches the fuse, `weaponDelay` and every event by id on
 every snapshot.
 
-## 13. Two questions from the first pass
+## 13. Weapon times truncate; a sighted prone body holds still
 
 **Weapon times truncate.** The weapon parser's field type 7 (the 22
 millisecond keys from `fireDelay` to `adsTransBlendTime`) loads the float,

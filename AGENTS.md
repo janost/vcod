@@ -38,10 +38,10 @@ captures, the research docs and the A/B gates.
 
 The module map per crate is `docs/dev/layout.md`.
 
-Check a file's size before reading it whole. Three sources pass 5k lines
-(`main.rs` at 6.1k, `spectate.rs`, `renderer/cod2.rs`;
-`git ls-files 'crates/*.rs' | xargs wc -l | sort -rn`): grep them. Research docs run from 14 KB to 630 KB, and thirteen pass 150 KB
-(`ls -S docs/research`): jump by section.
+Check a file's size before reading it whole. Grep a source past 5k lines
+(`git ls-files 'crates/*.rs' | xargs wc -l | sort -rn`) and jump by section
+in a research doc past 150 KB (`ls -lS docs/research`); the largest pass
+600 KB.
 
 Gitignored and local to one machine: `private/` (local reference material,
 the retail 1.1d Linux server and its homepaths, old plans) and `tmp/`

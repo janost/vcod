@@ -41,6 +41,7 @@ mod edge_probe;
 mod entities;
 mod entity_light;
 mod entity_material;
+mod fatal;
 mod flame_probe;
 mod frame_clock;
 mod frame_digest;
@@ -175,6 +176,11 @@ struct Args {
     /// Spawn as a soldier and walk (first person) instead of flying
     #[arg(long)]
     walk: bool,
+    /// Fly mode (`vcod <map>`): start at "x y z yaw [pitch]", the order and
+    /// degrees the F3 overlay's camera line prints, instead of the first spawn
+    #[arg(long, value_name = "X Y Z YAW [PITCH]", allow_hyphen_values = true,
+          value_parser = FlyCamera::parse_view)]
+    pos: Option<FlyCamera>,
     /// Start with the debug overlay visible (F3 toggles it at runtime)
     #[arg(long)]
     debug_overlay: bool,
@@ -1447,6 +1453,10 @@ fn hud_lines(
 }
 
 fn main() -> Result<()> {
+    run().inspect_err(|e| fatal::record(TITLE, &format!("Error: {e:?}")))
+}
+
+fn run() -> Result<()> {
     let started = Instant::now();
     console::log::init();
     frame_digest::init();
@@ -1457,6 +1467,7 @@ fn main() -> Result<()> {
     std::panic::set_hook(Box::new(move |info| {
         eprintln!("{TITLE} panicked");
         default_panic(info);
+        fatal::record(TITLE, &info.to_string());
     }));
     quit::install();
     use vcod_common::game::Game;
@@ -2002,9 +2013,12 @@ fn main() -> Result<()> {
                 Some(c) => Some(c.spawn),
                 None => bsp::find_spawn(&bsp.entities),
             };
-            let cam = match spawn {
-                Some((origin, yaw)) => FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw),
-                None => {
+            let cam = match (args.pos.clone(), spawn) {
+                (Some(cam), _) => cam,
+                (None, Some((origin, yaw))) => {
+                    FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw)
+                }
+                (None, None) => {
                     let (min, max) = mesh::map_bounds(&bsp);
                     let center = (Vec3::from(min) + Vec3::from(max)) * 0.5;
                     log::warn!("no player spawn found, starting at the center of the map");

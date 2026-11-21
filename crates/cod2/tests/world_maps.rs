@@ -305,7 +305,7 @@ fn the_frustum_culls_soups_from_the_spawns() {
 /// soups only one of them marks, cells visited and the walk's time.
 /// Maps from `VCOD_PROFILE_MAPS`, every stock map without.
 #[test]
-#[ignore]
+#[ignore = "profile, not a check: COD2_DIR, VCOD_PROFILE_MAPS"]
 fn cell_walks_side_by_side() {
     let Some(fs) = testing::cod2_fs() else {
         return;

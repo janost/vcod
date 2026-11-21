@@ -3,7 +3,7 @@
 //! (`fixtures/skel/cobra-idle-gdb.txt`, its header the recipe), rebuilt
 //! here from the zone's model and the think's two gun angles: the base
 //! locals, the controller's three tags and `DObjCalcSkel`'s composition,
-//! word for word (docs/research/cod4-gsc.md 3.2, "The skeleton"). Needs
+//! word for word (docs/research/cod4-gsc.md 3.2.5). Needs
 //! `COD4_DIR`.
 
 use vcod_cod4::assets::model::XModel;

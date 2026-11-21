@@ -853,7 +853,7 @@ impl Cod4Session {
         self.walk();
         // A live connection and a demo keep the snapshots they still draw,
         // delta and walk: with every one kept the soak's client grew 100 to
-        // 250 MB a three-minute level (cod4-map-sweep.md, "The soak").
+        // 250 MB a three-minute level (cod4-map-sweep.md 5).
         let client = match &mut self.source {
             Source::Live { conn, .. } => Some(&mut conn.client),
             Source::Demo(d) => Some(&mut d.client),

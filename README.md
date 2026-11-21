@@ -8,7 +8,7 @@ Nobody ever wrote those protocols down, so I dug them out of the binaries.
 | Game | Patch | Protocol | Client | Server | Bots | Details |
 |---|---|---|---|---|---|---|
 | Call of Duty | 1.1, 1.5 | 1, 6 | Plays | Hosts | Yes | [cod1.md](docs/features/cod1.md) |
-| United Offensive | 1.51 | 22 | Plays, tanks and jeeps included | Hosts, tanks and jeeps included | Yes | [uo.md](docs/features/uo.md) |
+| United Offensive | 1.51 | 22 | Plays, vehicles included | Hosts, vehicles included | Yes | [uo.md](docs/features/uo.md) |
 | Call of Duty 2 | 1.3 | 118 | Plays | Hosts | Yes | [cod2.md](docs/features/cod2.md) |
 | Call of Duty 4 | 1.7 | 6 | Plays on stock 1.7 servers (not CoD4x) | Hosts | Yes | [cod4.md](docs/features/cod4.md) |
 
@@ -124,7 +124,9 @@ asphalt. Twenty-three years late, Infinity Ward, you're welcome.
 
 Rust 1.95 or newer. The client needs a GPU with BC (DXT) texture
 compression, and wgpu picks the backend (`WGPU_BACKEND=vulkan|gl|dx12|metal`
-narrows it). The server needs no GPU.
+narrows it). The server needs no GPU. On Linux the build needs ALSA's
+headers; the packages per distro are in
+[docs/dev/testing.md](docs/dev/testing.md#host-setup).
 
 ```
 cargo build --release
@@ -139,14 +141,10 @@ its sha from `VCOD_GIT_SHA`, or calls itself `unknown`.
 
 ## How I know it's right (when it is)
 
-- A headless probe client (`vcod --net-probe`) joins a server and records
-  what it sees, with a few dozen scripted modes: shoot someone, throw a
-  grenade, plant the bomb, drive a tank into another tank.
-- Retail's recordings are committed as fixtures. A/B tests replay the same
-  inputs on vcod's server and diff the result snapshot by snapshot.
-- Small `.gsc` probes run on retail and on vcod's VM, and the suite compares
-  their output.
-
+A headless probe client records what retail servers send, the recordings
+are committed as fixtures, and the tests replay them on vcod's server and
+diff the result snapshot by snapshot
+([docs/features.md](docs/features.md#measuring-against-retail)).
 That catches a lot. Anything about how it looks or sounds still needs a
 human squinting at a screen, which is where you come in.
 
@@ -261,9 +259,9 @@ retail server output that I made (wire captures, configstring tables,
 debugger readings, log lines, one retail client demo) beside probe scripts and
 pinned outputs written for the tests, and hold no game assets; each fixture
 root's README says how they were made. The reverse engineering was done to
-interoperate with the game's own files and servers. The research notes document file formats and the network
-protocol for that purpose: layouts and addresses recovered from the
-binaries, no copied code. The projects under "Consulted, not copied" were
+interoperate with the game's own files and servers. The research notes
+document file formats and the network protocol for that purpose: layouts
+and addresses recovered from the binaries, no copied code. The projects under "Consulted, not copied" were
 read as references, and no code from them is included. The screenshots show
 art owned by Activision.
 

@@ -1,8 +1,8 @@
 # CoD 1.1 player model & animation system
 
-How a CoD1 player body is built, which anim indices the server picks and how both sides play them. Sources: `game.mp.i386.so` disassembly (symbols intact), CoDExtended and RTCW-MP source, and the pk3 assets. Claims with no label are VERIFIED; everything else carries its own. `clientstate-wire-format.md` covers how the model indices reach the client.
+How a CoD1 player body is built, which anim indices the server picks and how both sides play them. Sources: `game.mp.i386.so` disassembly (symbols intact), CoDExtended and RTCW-MP source, and the pk3 assets. Claims with no label are VERIFIED, read out of `game.mp.i386.so` or the pk3 assets; a claim that rests on CoDExtended or RTCW-MP source is labelled INFERRED, and every other exception carries its own label. `clientstate-wire-format.md` covers how the model indices reach the client.
 
-## Model assembly: body + attachments
+## 1. Model assembly: body + attachments
 
 A player is one body xmodel plus up to 6 attached xmodels. `character/mp_american_airborne01.gsc` (pak5.pk3):
 
@@ -20,7 +20,7 @@ Model choice is server-side; the client sees only the indices. The map `.gsc` se
 
 Tags on `xmodelparts/USAirborne3` (79 non-root bones + root): `tag_helmet`, `tag_helmetside`, `tag_belt_*`, `tag_thigh_*`, `tag_calf_*`, `tag_shin_*`, `tag_breastpocket_*`, `tag_weapon_left/right`, and the control bones `pelvis`, `back_low`, `back_mid`, `back_up`.
 
-## Grounding: origin at the feet
+## 2. Grounding: origin at the feet
 
 Bind pose of `xmodelparts/USAirborne3` (parsed by `crates/common/src/xmodel.rs`):
 
@@ -33,9 +33,9 @@ bip01 head          -2.18   -0.00    62.68
 tag_helmet          -1.17   -0.00    70.88
 ```
 
-Root `tag_origin` sits at the feet. Draw the model with its root at `entityState.pos.trBase`, no Z offset; Q3's -24 waist offset does not apply. `standViewHeight = 60` (CoDExtended `bg_pmove.c:135`) agrees with `bip01 neck` at z 59.82; crouch is 40, prone 11. vcod's pmove uses mins z = 0.
+Root `tag_origin` sits at the feet. Draw the model with its root at `entityState.pos.trBase`, no Z offset; Q3's -24 waist offset does not apply. INFERRED (CoDExtended source): `standViewHeight = 60` (`bg_pmove.c:135`) agrees with `bip01 neck` at z 59.82; crouch is 40, prone 11. vcod's pmove uses mins z = 0.
 
-## Animation indices: the animtree
+## 3. Animation indices: the animtree
 
 `legsAnim`/`torsoAnim` are 10 bits in entityState (offsets 204/208) and playerState (112/120). As in RTCW (`ANIM_BITS 10`, `ANIM_TOGGLEBIT = 512`), index = `value & 511` and the restart flag = `value & 512`; a toggle change restarts the clip.
 
@@ -74,7 +74,7 @@ The pk3s hold 195 `xanim/pb_*` files:
 
 There are no stance-transition clips: `animtrees/multiplayer.atr` has no `2crouch|2prone|to_crouch|to_prone|transition|getup` entry, only per-stance idles and loops. The engine cross-fades the outgoing and incoming nodes over a blend time the anim setter picks. The server's and the cgame's copies, with rate and phase, are in `cod11-movers.md` section 15 ("A moving body's clip", "The drawn body's clip"). vcod runs both through `vcod_common::animclock::ChannelClock`.
 
-## xanim v14 header flags (decoded)
+## 4. xanim v14 header flags (decoded)
 
 The flag byte at header offset 6 takes four values in the shipped pk3s. The format has no length prefixes, so the layout was decoded by exact-EOF probing: a correct layout consumes the file down to the last notetrack byte. With the rules below all 2957 `xanim/*` entries decode byte-exact (862 flag 0, 48 flag 1, 1490 flag 2, 557 flag 3).
 
@@ -97,7 +97,7 @@ Player-anim coverage: 254 `pb_`/`pl_`/`pt_` files. `pb_*` splits 1/78/116 across
 
 Notetracks: vcod parses them into `XAnim::notes`, but nothing on the CoD1 path reads them. CoD4's view weapon reads its own clips' notes (`cod4_viewmodel.rs`).
 
-## Legs/torso split and aim layer
+## 5. Legs/torso split and aim layer
 
 One skeleton, two anims, one tree. `pt_*` clips key only the upper body (spine up, arms, weapon tags); `pb_*` clips key every bone. The tree walk blends `main`'s `torso` and `legs` nodes per bone. A torso anim weights them 1 and 0.01, so the bones a torso clip keys take it with 1% of the legs clip and the rest take the legs clip alone (`cod11-movers.md` 15, "Torso over legs").
 
@@ -109,13 +109,13 @@ VERIFIED, live (1.1d, 1.5b and UO 1.51b, 2026-10-17, `probe_leanhit` with `probe
 
 The inputs ride the entityState: `fTorsoPitch` (232), `fWaistPitch` (236), `fTorsoHeight` (228), `leanf` (212), `animMovetype` (224, 4 bits).
 
-### 1.5's and UO's stance window, drawn
+### 5.1 1.5's and UO's stance window, drawn
 
 The cgame's lerp-frame setter carries the server's 400 ms window (`coduo-vehicles.md` 13). VERIFIED decompile: 1.5's `cgame_mp_x86.dll` 0x30003870 stores `cg.time + 400` at `ci+0x4a4`, UO's `uo_cgame_mp_x86.dll` 0x30003a90 at `ci+0x4c0`, when the legs frame (`ci+0x380` on UO) changes crouch or prone class, and floors every later blend of either frame to what is left of it. 1.1's cgame has no such store.
 
 vcod's drawn bodies run the window under 1.5 and UO rules only (`update_channels` in `crates/client/src/entities.rs`, through `animclock::update_body`), one window per drawn entity. INFERRED: the cgame keeps it per client info, so a corpse sharing the dead client's info could read his last window; vcod does not model that. Pending: no check against a retail client's draw (pixels).
 
-### The prone body on a grade
+### 5.2 The prone body on a grade
 
 VERIFIED, live (retail 1.1d, 2026-10-16, `client-probes/probe_pronebones`, fixtures in `crates/server/tests/fixtures/pronebones/`): a prone client facing downhill on mp_carentan's ~19 degree mound (-224, 60) has his pelvis at (5.92, 24.36, -0.03) off his origin and his feet about 10 under it. On flat ground the pelvis sits 6.27 above the origin. vcod's server pose puts all eight logged bones (pelvis, spine2, neck, head, both hands, both feet) within 0.03 of retail's offsets on the mound, on mp_carentan's flat ground and on mp_brecourt's field at (1659, 781). With the slope terms zeroed the mound's pelvis lands 5.8 too high. The probe reads bones through a `script_origin` linked to each tag, which lags a frame, so it measures a still body.
 
@@ -127,11 +127,11 @@ VERIFIED, live (retail 1.5b and UO 1.51b, 2026-10-16, the same probe, placing th
 
 VERIFIED, live (retail 1.5b and UO 1.51b, 2026-10-19, `probe_pronebones` with `probe_rays 1`, fixtures `mp_brecourt-brecourt-rays-1.5.txt` and `-rays-uo.txt`): the probe prints the settled origin and each bone mark to the float (integer part and exact remainder) and a 2-unit grid of downward `bulletTrace`s over the body. With the client's cmds replayed (`ProbeHold::times`) and the engine's pose arithmetic ported (`cod11-combat.md` 3.1, "The pose on 1.5 and UO"), vcod's origin, marks and every ray match retail's bits on both servers; 1.5b's rays need the clips on the engine's float node time (`cod11-combat.md` 3.1, "The clip's float time"). VERIFIED, the same runs and four more: the drop onto the grade leaves `fTorsoHeight` between -0.425 and -0.516 by the cmd split (-0.491 in the 2026-10-16 runs), and the whole body rides it. The 1.5b run without `probe_spawn_yaw` lay at `proneDirection` -170 off its spawn's yaw, so the 1.5b fixture spawns on the spot.
 
-## The animscript: which index the server picks
+## 6. The animscript: which index the server picks
 
 The server picks `legsAnim`/`torsoAnim` by running `mp/playeranim.script` against the player's state. `crates/common/src/animscript.rs` parses and selects; `ClientSim::update_anims` (`crates/server/src/spectate.rs`) builds the conditions.
 
-### The file
+### 6.1 The file
 
 VERIFIED, `mp/playeranim.script` in `pak4.pk3` (1177 lines): three sections, `DEFINES` at line 18, `ANIMATIONS` at 98, `EVENTS` at 576. VERIFIED: `ANIMATIONS` holds three states; `STATE RELAXED` (100-103) and `STATE ALERT` (105-108) are empty, and `STATE COMBAT` (110-548) has every movetype block. INFERRED: `COMBAT` is the only state with content in MP, so the server never decides a state.
 
@@ -139,7 +139,7 @@ VERIFIED: `STATE COMBAT`'s movetype blocks are `idle`, `idlecr`, `idleprone`, `w
 
 VERIFIED: live clauses use the conditions `weapons`, `weaponclass`, `weapon_position`, `strafing`, `movetype`, `mounted` and `firing`. VERIFIED: `enemy_weapon` and `impact_point` appear only in commented-out clauses of `DEATH` and `pain` (lines 1032-1094 and 1116-1167). INFERRED: an unknown condition parses to a kind that never holds, so it makes its clause unselectable rather than unconditional, and no live clause reaches one (`animscript.rs`). VERIFIED: `leaning`, `position`, `underwater` and `underhand` occur only in the commented legend at lines 78-91. INFERRED: a lean changes no index, and the parser has no kind for those four.
 
-### What retail sent, pose by pose
+### 6.2 What retail sent, pose by pose
 
 VERIFIED, both captures: `crates/server/tests/fixtures/playerstate/mp_carentan-dm-motion.txt` and `mp_pavlov-dm-motion.txt`, 22 poses each, `--net-probe --save-motion` against retail 1.1d, one client, `dm`, weapon `m1carbine_mp` (`weaponclass rifle`). Each pose holds one usercmd until the playerstate settles. Indices are `legsAnim & 511`; the speed is the pose's own `velocity`.
 
@@ -162,11 +162,11 @@ VERIFIED, both captures: `crates/server/tests/fixtures/playerstate/mp_carentan-d
 
 VERIFIED: `torsoAnim` is 0 in every pose of both captures, `jump_takeoff` included, and `playerstate_motion_ab` compares it. No movement pose raises a weapon event, so a torso index in one is a defect. VERIFIED: every clause reached in the table is written `both`. INFERRED: retail does not write the torso half of the continuous selection, so vcod clears `Selection::torso` before applying it and leaves the torso to events. Captures from before 2026-09-02 read 720 (index 208, `pt_stand_pullout_pose`) at `jump_takeoff`: a holstered weapon, not a clause ("The `jump_takeoff` torso 720 was a holstered weapon").
 
-### Unarmed
+### 6.3 Unarmed
 
 VERIFIED, live (retail 1.1d, 1.5b and UO 1.51b, 2026-10-16, `client-probes/probe_pronebones` with `probe_spawn_yaw 315`, fixtures `crates/server/tests/fixtures/pronebones/mp_brecourt-spawn315*.txt`): a player the script `spawn`s with no weapon (`ps.weapon` 0) crouches in `pb_crouch_alert_unarmed` (1.1 and 1.5 index 107) and lies in `pb_prone_aim_pistol` (44). Those are the clips of `idlecr`'s and `idleprone`'s `weapons none` clauses (script lines 176 and 221). INFERRED: the `weapons` condition names weapon 0 `none`, as `getCurrentWeapon` does. `pb_prone_aim_pistol` is a 3 s loop where `pb_prone_aim` is a 0.3 s pose, so an unarmed prone body keeps moving (the pelvis about 0.1 a second). vcod names weapon 0 `none` for the conditions (`AnimInputs`).
 
-### How retail picks the movetype
+### 6.4 How retail picks the movetype
 
 VERIFIED, `PM_Footsteps` at `game.mp.i386.so` 0x322c8 (the static after `PM_ShouldMakeFootsteps`; `pmove.rs` and `cod11-sound-system.md` use the same name), with the movetype and condition enum orders from the rodata name blocks at 0x6e260 and 0x6e424. VERIFIED: both blocks are stored in reverse, `** UNUSED **` first, so the movetypes are:
 
@@ -213,7 +213,7 @@ VERIFIED: the ladder flag is `pm_flags` 0x10 and 0x323af tests it. INFERRED: a s
 - The direction from the usercmd or from velocity. VERIFIED: pavlov `run_forward` carries velocity `(0, -148)` at `viewangles[1]` -31.94, 58 degrees off the facing, and pavlov `strafe_right` carries `(-143, 0)`. Projecting either onto the facing selects 91 where retail sent 94, and 93 where retail sent 91. INFERRED: reading the cmd matches every capture pose but differs on a diagonal, where the latch rule clears the strafe condition and the cmd would set it.
 - A coasting player keeping his anim. VERIFIED: RTCW does hold one: RTCW-MP's `src/game/bg_pmove.c:1607-1622` returns without selecting when neither axis is asked for and `xyspeed > 120` ("continue what they were doing last frame, until we stop"). VERIFIED: retail dropped it; the only float compare in `PM_Footsteps` is the one against 10.0 at 0x3249f and the function holds no 120. INFERRED: retail re-selects every frame above the threshold, so a tap and release slides in the run loop, not the idle, and a backwards crouched coast is `runcrbk`, not a standing back-run.
 
-### Walk against run
+### 6.5 Walk against run
 
 VERIFIED: CoD 1.1 MP has one move speed and no walk bit in the usercmd (`docs/protocol-1.1.md`, "Usercmd input bits"). VERIFIED: retail chose the `run` family in every moving standing or crouched pose of both movement captures (94, 93, 92, 91, 84); the only walk-family block it selected was `walkprone` (50), which prone reaches because there is no `runprone`. VERIFIED: holding the ads bit for two seconds selected the standing ads clause on both maps, `ads_stand` reading 121 `pb_stand_ads`. Captures from before 2026-09-02 read 122 there because their usercmd `weapon` byte was 0: the probe was holstered, so its ads bit reached no weapon.
 
@@ -228,13 +228,13 @@ VERIFIED, `game.mp.i386.so` 1.1d: `PM_Footsteps` keeps `pm_flags & 0x80` in `edi
 
 VERIFIED, `game.mp.i386.so` 1.5b: `PM_Footsteps` (0x24ae8) sets its walk local (`ebp-0x28`) when `pm_flags & 0x80` (0x24e6f) or the float at `ps+0x40`, `leanf`, is non-zero (0x24e82); the movetype dispatch tests that local (0x25307, 0x253c9). VERIFIED, `game.mp.uo.i386.so`: UO's (0x297e4) takes `pm_flags & 0x80` alone (0x29ba4, `ebp-0x28`, tested at 0x29eae and on); its lean test (0x29a2a, `ps+0x44`) sits in the bob block above. INFERRED: a 1.5 runner who leans plays the walk clips; no capture shows it. vcod: `ClientSim::footsteps_movetype_of` (`crates/server/src/spectate.rs`).
 
-### The weapon event's movetype
+### 6.6 The weapon event's movetype
 
 VERIFIED, `game.mp.i386.so` 1.1d, `PmoveSingle` (0x33dfc, relocations resolved with `tools/re/annotate_func.py`): the main arm calls `PM_Weapon` (0x34331), then `PM_Footsteps` (0x34336). The `fireweapon` and `reload` events `PM_Weapon` raises select by the `movetype` condition, which only `PM_Footsteps` writes, so they read the movetype the previous pmove left. VERIFIED, 1.5b: the main arm calls `PM_Footsteps` (0x28889), then `PM_Weapon` (0x2888e); UO likewise (0x2e04e, 0x2e053). INFERRED: there the event reads the movetype its own pmove just wrote. VERIFIED, live (retail 1.5b and UO 1.51b, 2026-11-16, the torso capture's recipe on each, client halves `mp_carentan-dm-legs-client-torso-1.5.txt` and `-torso-uo.txt`): the first shot of each moving step writes no fire anim, where 1.1d writes the idle's (`run_fire` keeps the standing fire's anim until it clears, `strafe_fire` stays 0, `crouch_run_fire` and `ads_walk_fire` keep the crouched and aimed fire's). vcod replays both captures' cmds and selects retail's legs, movement direction and torso on all 573 snapshots (`legs_ab::a_body_firing_on_the_move_selects_retails_anims_on_15`, `_on_uo`); with 1.1's order 28 differ.
 
 VERIFIED, live (retail 1.1d, 2026-10-17, the torso capture above): the first shot of each moving step, sent in the first cmd that moves, writes the idle's fire anim, each held for ten snapshots: `run_fire` 253 `pt_stand_shoot`, `strafe_fire` 253, `crouch_run_fire` 249 `pt_crouch_shoot`, `ads_walk_fire` 251 `pt_stand_shoot_ads`. Later shots while moving write nothing (the `movetype moving` clauses are empty). Selecting by the end-of-frame movetype instead plays none of the four. vcod: `ClientSim::note_footsteps`, called after each pmove of a cmd's chop; the events carry the movetype it returns (`spectate::AnimEvent`).
 
-### The turn movetypes, and what selects them
+### 6.7 The turn movetypes, and what selects them
 
 VERIFIED: `turn_left` and `turn_right` turn the view 60 degrees with no move input, and retail sent 122, the standing idle, on both maps. VERIFIED: the `turnright` and `turnleft` blocks select `legs pl_chicken_dance` and `legs pl_chicken_dance_crouch`, gated on `movetype idle` and `movetype idlecr`. VERIFIED: `animtrees/multiplayer.atr` puts exactly those two clips in a top-level `turning` group commented "temp turning animations"; they are the only `pl_*` names in the tree and resolve to indices 4 and 3, which appear in neither capture.
 
@@ -246,15 +246,15 @@ INFERRED, off the retail control flow ported into `walk_move` (`pmove/walk.rs`, 
 
 Nothing selects them. VERIFIED, objdump of each game module: the movetype condition is set by `BG_AnimScriptAnimation` (1.1d 0x29db0, 1.5b 0x18465, UO 0x1c377) through `BG_UpdateConditionValue` (condition 3 on 1.1d at 0x29ef1 and 1.5b at 0x1855a, 5 on UO at 0x1c46f), and every call of `BG_AnimScriptAnimation` passes its movetype as an immediate: 1.1d's five (`PM_Footsteps`, relocations at 0x3242f, 0x327d9, 0x32872, 0x3288e, 0x328a2) pass 1 to 13, 16 and 17 (0x32415, 0x32422, 0x326f9..0x327b5, 0x3285b, 0x3286c, 0x32881, 0x3289a), and the 22 calls in 1.5b and in UO pass 1 to 13, 16 and 17 alike. None passes 14 (`TURNRIGHT`) or 15 (`TURNLEFT`). VERIFIED: 1.1d has no other call of `BG_UpdateConditionValue`; 1.5b's and UO's other writes of the condition store 0 (1.5b 0x19b11, 0x19b61, 0x19c13, 0x19eab, 0x19f22, 0x1a466; UO 0x1dcaa, 0x1dcfa, 0x1ddac, 0x1e092, 0x1e102, 0x1e9be) or copy the `+0x54` word of the anim record being played (1.5b 0x1a256, UO 0x1e62e). INFERRED: that word holds the movetypes whose blocks name the anim, so it carries 14 or 15 only for `pl_chicken_dance` or `pl_chicken_dance_crouch`, which only those blocks name; the blocks are dead in MP, as the turn captures' 122 and vcod's selector have it. Not checked: a 1.1d write of the condition inlined outside `BG_UpdateConditionValue`.
 
-### The restart toggle
+### 6.8 The restart toggle
 
 VERIFIED: the toggle's absolute value is not a function of the pose. `stand_up` is index 122 in both captures, with `legsAnim` 634 (toggle set) on mp_carentan and 122 (clear) on mp_pavlov; `run_back` is 93 in both and reads 93 against 605. INFERRED: only the change carries meaning, so a gate compares the index and checks per frame that the bit flips exactly when the index does, never the bit's value.
 
-### Open: what clears the ads pose
+### 6.9 Open: what clears the ads pose
 
 VERIFIED, in a run not committed: the ads pose latches. A capture that pressed the ads bit mid-script kept `pm_flags` 0x20 and 0x80 and `legsAnim` 121 `pb_stand_ads` for every later pose (a crouch run, a stand, two turns) with the bit long released, and read them clear at the jump that followed. UNVERIFIED: what clears them, and whether the jump did. The probe's motion script holds `ads_stand` last for this reason, so the committed captures cannot show it.
 
-## The weapon channel: what writes `torsoAnim`
+## 7. The weapon channel: what writes `torsoAnim`
 
 VERIFIED: `crates/server/tests/fixtures/playerstate/mp_carentan-dm-combat.txt` and `mp_pavlov-dm-combat.txt`, nine steps each, `--net-probe --save-combat` against retail 1.1d, one client, `dm`. Each step holds one input and taps the attack bit. The fixture logs one `!trace` line per snapshot, since the event ring holds four slots and a shot is shorter than a step.
 
@@ -267,7 +267,7 @@ VERIFIED: carentan's join gave `m1carbine_mp` and pavlov's `mosin_nagant_mp` (`w
 | `m1carbine_mp` | 0.135 | 0.1 | 2.65 | 0.67 | 15 |
 | `mosin_nagant_mp` | 0.33 | 1.0 | 2.4 | 0.4 | 5 |
 
-### Firing
+### 7.1 Firing
 
 VERIFIED: a shot reads `weaponstate` 3 and `weapAnim` 514 and bumps `eventSequence` by one with event 159, `EV_FIRE_WEAPON` (`cod11-events-and-fx.md`). VERIFIED: the event goes to `events[eventSequence & 3]` and the counter increments after; every bump in both captures moves exactly that slot. VERIFIED: `weapAnim` carries the same 512 toggle as the anim channels; pavlov's traces hold 2 and 514, 4 and 516.
 
@@ -287,13 +287,13 @@ VERIFIED, resolved from the animtree (`crates/common/src/animtree.rs`, `PlayerAn
 
 UNVERIFIED on the wire: every member but 224, 249 and 253 (and 251, "The weapon event's movetype"). The combat probe never held the ads bit through a shot, and neither rifle is automatic.
 
-### The restart toggle, doing its job
+### 7.2 The restart toggle, doing its job
 
 VERIFIED, carentan `sustained_fire`: six shots read 765, 253, 765, 253, 765, 253: index 253 throughout, bit 512 flipping on every `eventSequence` bump. VERIFIED, carentan `crouch_fire`: 249, 761, 249 across three shots. INFERRED: the toggle alone signals a repeated shot, so a client watching only the index plays the first shot's clip and nothing after.
 
 VERIFIED: when a shot ends the torso reads 512, index 0 with the toggle flipped: the channel clears to no anim and flips the bit doing it.
 
-### `weaponstate`, and what each value carried
+### 7.3 `weaponstate`, and what each value carried
 
 Paired values are carentan then pavlov.
 
@@ -318,7 +318,7 @@ VERIFIED, superseded pair: the pullout pose is stance-matched like the shoot ani
 
 **The reload key reloads a partly-full clip.** VERIFIED: the step that taps `wbuttons` 0x08 reads `weaponstate` 5 with event 151 `EV_RELOAD` on both maps, for 53 samples on carentan and 48 on pavlov (`reloadTime` 2.65 and 2.4). VERIFIED: the torso index is the weapon's, 229 `pt_reload_stand_auto` for the carbine and 231 `pt_reload_stand_rifle` for the mosin, and `weapAnim` takes index 11 `WEAP_RELOAD`. This confirms what `cod11-combat.md` 1.7 read off the instructions.
 
-### What `weapAnim` is not written by
+### 7.4 What `weapAnim` is not written by
 
 VERIFIED, superseded pair: no `weaponstate` 2 writes `weapAnim`. Carentan's reload step holds index 0 for all 13 samples of the state and takes 512 (index 0, toggle flipped) on the sample the state ends; pavlov's `stand_between` holds the rechamber index 4 for all 8 and lands on 512 the same way.
 
@@ -328,11 +328,11 @@ VERIFIED: a rechamber ending writes no `weapAnim` either. Pavlov's `single_shot`
 
 VERIFIED: pavlov's `weaponstate` goes 3 to 4 on consecutive samples 50 ms of server time apart, and `weapAnim` 2 to 4 across the same pair: 341 to 390 ms on `sustained_fire`, 359 to 408 on `prone_fire` (2026-10-18 recapture; the 2026-10-17 one read 344 to 408 and 310 to 374 on `crouch_fire`, an earlier capture 328 to 378). INFERRED: the shot's state ends and the rechamber opens within one server frame. That frame holds several cmds, so it cannot show whether the rechamber waits a cmd for the state 3 exit; it does (`cod11-combat.md` 1.4).
 
-### The `jump_takeoff` torso 720 was a holstered weapon
+### 7.5 The `jump_takeoff` torso 720 was a holstered weapon
 
 VERIFIED: the movement captures committed before 2026-09-02 read `weaponstate` 2 and `torsoAnim` 720 at `jump_takeoff`, and the retaken pair reads 0 and 0. VERIFIED: the only difference is the usercmd's `weapon` byte. The compact usercmd branch carries no weapon byte, so a probe sending 0 reaches the weapon-change check only when `upmove`, `wbuttons` or the byte itself changes, and the jump's `upmove` change is what put it on the wire (`docs/protocol-1.1.md`, "Usercmd delta"). INFERRED: the 720 was a holstered weapon, not an animscript clause. VERIFIED: the retaken pair reads `pm_flags` 0x8 clear at `jump_takeoff` on both maps, as vcod does, and `playerstate_motion_ab` compares it.
 
-### Prone fire, taken on both maps
+### 7.6 Prone fire, taken on both maps
 
 VERIFIED: carentan's `prone_fire` step reads `legsAnim` 557 (index 45, `pb_prone_aim`) and `torsoAnim` 224 `pt_prone_shoot` across its three shots. VERIFIED: pavlov's 2026-10-17 recapture reads the same, `legsAnim` 557 and `torsoAnim` 736 (224 with the toggle), and so does the 2026-10-18 recapture from another spawn. VERIFIED: 230 `pt_reload_prone_rifle` appears in neither capture; neither reload ran prone.
 
@@ -342,13 +342,13 @@ VERIFIED, first capture (git `c52e9606`): pavlov's `prone_fire` read `legsAnim` 
 
 vcod: `playerstate_combat_ab` starts the step after such a turn at retail's settled origin and yaw (`Step::place`) and compares `prone_fire` on both maps like every other step. Against the first capture vcod lay down on carentan and stayed standing on pavlov, as retail did.
 
-### Neither counter in `!observed` counts shots
+### 7.7 Neither counter in `!observed` counts shots
 
 VERIFIED: carentan's `sustained_fire` reads `shots_seen` 5 against six taps and six 159 events (3 on the 2026-10-17 recapture, 4 before it); pavlov's `single_shot` reads `seq_delta` 3 against one tap. INFERRED for the first: `shots_seen` counts `weaponstate` 0 -> 3 edges, and at carentan's 183 ms tap period against a 135 ms `fireTime` the weapon is ready for under one snapshot interval between shots, so some edges fall between samples. VERIFIED for the second: one mosin shot raises three events, 159, 162 `EV_RECHAMBER_WEAPON`, 163 `EV_EJECT_BRASS`, so `seq_delta` is three per shot on pavlov and one on carentan, whose carbine raises only 159.
 
 INFERRED: a gate counts `events[]` entries equal to 159, or 161 for a clip's last round, across the per-snapshot traces, never `seq_delta` or `shots_seen`. VERIFIED: the ring holds four slots, so only a per-snapshot trace can count a burst longer than four.
 
-### As implemented
+### 7.8 As implemented
 
 The torso channel has no table of its own. The weapon machine raises an animscript event and the script's `EVENTS` clauses pick the index. `ClientSim::update_anims` (`crates/server/src/spectate.rs`) maps each `PmEvent` the frame's moves raised onto a block (`weapon_anim_event`) and runs it through `AnimScript::select_event`:
 
@@ -391,7 +391,7 @@ The channel clears as the capture reads it. When the hold runs out and the conti
 | pavlov | reload | {0, 231} | 2 |
 | pavlov | crouched | {0, 249} | 2 |
 
-### The takeoff and the landing
+### 7.9 The takeoff and the landing
 
 VERIFIED disassembly, 1.1d `game.mp.i386.so` `PmoveSingle` 0x33dfc, walking arm, in order:
 

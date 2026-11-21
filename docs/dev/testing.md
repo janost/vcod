@@ -1,8 +1,40 @@
 # Testing: suites, ignored gates, soaks, perf
 
-AGENTS.md has the rules every commit follows. This file has the per-install
-gates, the ignored tests, and the census, soak, perf and bot harness recipes.
+AGENTS.md has the rules every commit follows. This file has the host
+setup, the per-install gates, the ignored tests, and the census, soak, perf
+and bot harness recipes.
 The A/B gates against retail captures are in [retail.md](retail.md).
+
+## Host setup
+
+The build needs ALSA's headers on Linux (`alsa-sys` links it in its build
+script) and `pkg-config` to find them:
+
+| Distro family | Build | Lavapipe (headless render tests) |
+|---|---|---|
+| Debian, Ubuntu | `libasound2-dev pkg-config` | `mesa-vulkan-drivers` |
+| Fedora | `alsa-lib-devel pkgconf-pkg-config` | `mesa-vulkan-drivers` |
+| Arch | `alsa-lib pkgconf` | `vulkan-swrast` |
+
+Lavapipe's ICD json is the `lvp_icd.*.json` the package puts in the Vulkan
+loader's `icd.d/` directory (`/usr/share/vulkan/icd.d/` on these three).
+Every script that draws takes its path as `LVP_ICD`; `VCOD_REQUIRE_GPU=1`
+then makes a render test that finds no adapter fail instead of skip. CoD2
+voice needs the system's libspeex at run time only.
+
+The gates and tools shell out to more. Each script's header names what it
+needs, and the soak, perf and off-LAN scripts stop on the first one missing
+(`tools/lib.sh`):
+
+| Tool | Used by |
+|---|---|
+| a 32-bit glibc (`libc6-i386`, `glibc.i686`, `lib32-glibc`) | `run_server.sh`, `run_probe.sh`, `capture_probes.sh`: the retail Linux servers; 1.5b and UO bring their own `libstdc++.so.5` |
+| `gdb`, `gcc -m32` | `GDB_PY` runs (`retail_home.sh`), `run_probe_cod2.sh`'s `RAND_TRACE` |
+| `objdump`, `readelf` (binutils), `python3` | `tools/re/` |
+| `unshare`, `nsenter`, `taskset`, `ip`, `ss` | the retail servers' namespaces, the soaks, the off-LAN captures |
+| `kwin_wayland`, `dbus-run-session` | `cod1_soak.sh`, `cod4_perf.sh`: the nested compositor |
+| `unzip` | `cod1_soak.sh` (the maps' arenas) |
+| ImageMagick 7, `jpegoptim` | `screenshots.sh` |
 
 ## Installs and which tests they run
 
@@ -157,6 +189,23 @@ A step passes only on `test result: ok` lines that ran tests. `CARGO_WRAP`
 puts each cargo run under a wrapper (a memory-capped scope), `DRY=1`
 prints the commands.
 
+## Other tools
+
+The scripts under `tools/` no other section names:
+
+| Tool | What it does |
+|---|---|
+| `cod4_perf.py` | Summarizes a `VCOD_FRAME_PROFILE` file or `cod4_perf.sh`'s output (Performance, below) |
+| `bsp_append_entities.py`, `bsp_worldspawn_key.py` | Copy a CoD1 `.bsp` with entities appended or a worldspawn key added, the bytes `vcod_common::testing`'s `bsp_with_*` builds |
+| `efx_chains.py` | A census of the stock `.efx` chaining keys (`efx-grammar.md`) |
+| `pair_sweep.py` | Pairs a `--probe-sweep` run's hits with the labels the server logged |
+| `cod4_handshake_probe.py` | Walks retail `cod4_lnxded` through the handshake and logs each datagram (`cod4-handshake.md`) |
+| `udp_relay.py` | The UDP relay `offlan_capture.sh` runs |
+| `reflow_md.py` | Rewraps a doc's prose to 78 columns in place |
+
+`cod4_perf.sh` and `cod4_soak.sh` serve the other games too (`GAME=cod1`,
+`uo`, `cod2`), despite the names.
+
 ## Refactor checks
 
 `tools/move_check.sh <base> <head> <old-file>... [--into <path>]...`
@@ -177,6 +226,10 @@ environment names (`COD_DIR`, `COD_UO_DIR`, `COD2_DIR`, `COD4_DIR`; takes
 and the map sweep (minutes and gigabytes a map) and the two live browser
 tests, which ask cod.pm's public master and every server it lists, and
 broadcast on the LAN.
+
+Every `#[ignore]` carries a reason (what it needs) and every ignored test is
+named below, by name, prefix or `module::` filter; `--test common
+ignored_tests_named` fails on one that is not.
 
 | Touching | Run | Cost |
 |---|---|---|
@@ -261,8 +314,8 @@ CoD1, a CoD2 and a CoD4 frame under wgpu validation. Its gates are plain
 `#[test]`s, not ignored: they need a Vulkan (not GL) adapter with BC
 textures, and without one each prints `skipped` and passes, as every
 headless render test does; `VCOD_REQUIRE_GPU=1` fails them instead, as
-CI sets it on lavapipe. On lavapipe:
-`VK_DRIVER_FILES=<lvp_icd.json> WGPU_BACKEND=vulkan GALLIVM_PERF=nopt`. Run it
+CI sets it on lavapipe. On lavapipe ([Host setup](#host-setup)):
+`VK_DRIVER_FILES=$LVP_ICD WGPU_BACKEND=vulkan GALLIVM_PERF=nopt`. Run it
 after any shader or layout change. A render test that passes headless can
 still draw wrong live; a change to a draw path also needs a test through the
 session or replay path.
@@ -394,24 +447,12 @@ names a wrapper command, default `nice -n 10`) runs `cod4_soak` in
 - `VCOD_FRAME_PROFILE=<path>` on `vcod` writes each frame's CPU ms by stage
   (net, bodies, fx, hud, cull, encode...), its counts and its GPU ms per pass
   group (`frame_prof`).
-- `tools/cod4_perf.sh <outdir> <map> <secs>` runs a CoD4 server with 12
+- `tools/cod4_perf.sh <outdir> <map> <secs>` runs a server with 12
   shooting bots and a spectating client under it in a nested kwin, and
-  prints the summary.
-  - `SESSION=1`: a window in the current session, on a real GPU.
-  - `GAMETYPE=war` holds the view still for a GPU A/B. `TURN=<deg/s>` turns
-    it on its own for a moving view's CPU.
-  - `GAME=cod2` with `COD2_DIR` runs CoD2's, whose free spectator holds still
-    on any gametype. `GAME=cod1` or `GAME=uo` with `COD_DIR` runs a CoD1 or
-    UO server, whose spectator stands still.
-  - `SIZE=WxH` sizes the client's window (`vcod --window`) in both modes.
-    `SESSION=1` without it keeps the game's saved video mode.
-  - `SWEEP=1 SESSION=1 tools/cod4_perf.sh <outdir> mp_crossfire 10` holds one
-    view in one session and toggles one setting a pass (MSAA, prepass, sun
-    shadow, feather, distortion, `fx_draw`, specular, normal maps, fog, glow,
-    dof, film), printing a row a pass with the finer `gpu.<group>` stamps
-    (world, smodel, ents, gun, fx, each post pass). It restores the
-    install's `vcod_mp.cfg` files at the end. `cod4-client-perf.md` 25 has
-    the command and each column.
+  prints the summary. It runs every game (`GAME=`), a real GPU in the
+  current session (`SESSION=1`) and a one-setting-a-pass sweep (`SWEEP=1`);
+  its header lists every knob, and `cod4-client-perf.md` 25 the sweep's
+  columns.
 - Per-game numbers: `cod4-client-perf.md` (the per-map table),
   `cod2-client-perf.md`, `cod11-client-perf.md`.
 - `cod2_load_profile` (ignored, in `renderer/pipeline_check.rs`, run on
@@ -425,44 +466,15 @@ names a wrapper command, default `nice -n 10`) runs `cod4_soak` in
 Bot play is measured, not eyeballed. Retail has no bots, so these are the
 only yardstick.
 
-- `cargo run --release -p vcod-server --example bot_match [seed...]` runs
-  seeded bot-vs-bot matches. It is the one bot measuring tool: extend it
-  rather than add another example. Knobs:
-  - `MAPS=`, `GAMETYPE=`, `BOTS=`, `TICKS=`, `JOBS=`, `SET=`, `UO=1`.
-  - Per side `AXIS_SKILL=`/`ALLIES_SKILL=`; one-sided `COVER=`, `RETREAT=`,
-    `TEAMPLAY=`, `AWARE=`, `FOOTWORK=`, `WARY=`, `SQUAD=`, `AIM=`, `TACTICS=`,
-    `CONVERGE=`, `LANES=`, `FAR=`, `CUES=`, `TRAVEL=`, `CARRY=` arms
-    (`dm` splits them by slot parity), and `ESCORT=`, `ROUTE=`, `HOLD=`,
-    `SPRINT=`, `WATCH=`, `CLOSE=`, `NEAROUT=`, which turn on rules that
-    are off by default (bot-objectives.md 14.12, 14.13). On `ctf` it counts the carries and how each
-    ends (`ctf_carry_*`), and `CTF_TRACE=1` prints each carry's end.
-  - `GAME=cod2` runs `vcod-server --game cod2`'s bots, split by weapon class
-    and skill; `GUNS=0` keeps them off the mounted guns (docs/bots.md
-    "CoD2"). `GAME=cod4` runs CoD4's, with each level's line and every script
-    error the levels raised (docs/bots.md "CoD4").
-  - `DIGEST=1` or `DIGEST=<N>` adds a per-tick hash of every bot's cmd and
-    body, the check that a refactor moved no bot. `NETDIGEST=<N>` hashes
-    every datagram sent, with an observer client joined. `OBSERVERS=<N>`
-    joins N more (CoD4's in process), whose snapshots the server builds;
-    `OBSERVERS_PLAY=1` (CoD1, CoD4) puts them in the world, walking.
-    `VCOD_TICK_TRACE=<dir>` writes the tick's step log (bot-combat.md
-    section 1). `SPIKE_MS` logs slow ticks (every game), with the ticking
-    thread's instructions where the kernel lets a process count them, the
-    number to compare on a loaded machine (cod4-server-frame.md 9.1); on
-    CoD1 and CoD2 `RESTART=<n>` runs `map_restart` every `n` ticks, a spawn wave
-    each (cod4-server-frame.md 9). `TICKSTATS=1` (with `JOBS=1`) prints each
-    phase's mean, p50, p99 and max a tick; `TICKSTATS=insns` counts each
-    phase's user-space instructions instead, the number to compare on a
-    loaded machine. `VCOD_BOT_THREADS=1` runs the
-    bots' pass serial: its digests match the threaded run's.
-
-  It prints kills, deaths, damage, time-to-kill, wins, objective actions,
-  lives, wounds survived, retreats, cover holds, peeks and hunts and the
-  deaths after them, hits answered, deaths blindsided, stalls (split from
-  deliberate holds), shots, hits, accuracy, sight to first shot and first
-  hit, and fights and how they end, re-engagements included, per team,
-  skill and arm.
-  `bot-combat.md` section 1 says what each number means.
+- `cargo run --release -p vcod-server --example bot_match -- [seed...]
+  [KEY=VALUE...]` runs seeded bot-vs-bot matches in every game. It is the
+  one bot measuring tool: extend it rather than add another example. Its
+  `KNOBS` table is the one list of knobs, which an unknown key prints.
+  `DIGEST=1` is the check that a refactor moved no bot; `TICKSTATS=insns`
+  and `SPIKE_MS` the tick's cost on a loaded machine (cod4-server-frame.md
+  9.1); `VCOD_BOT_THREADS=1` runs the bots' pass serial, with the threaded
+  run's digests. `bot-combat.md` section 1 says what each printed number
+  means.
 - A bot behaviour change reports its before and after on the same seeds in
   `docs/research/bot-combat.md`.
 - `cargo run --release -p vcod-server --example ship_stalls` is the stall
@@ -481,4 +493,4 @@ only yardstick.
 --nocapture` runs `tests/bench.rs`: CoD2's `getSpawnpoint_DM` loops for
 60 spawns over a table host, best of ten, and the result it must keep. A
 change to the interpreter, the heap or the scheduler reports it before and
-after (cod4-server-frame.md 9, "The spawn wave").
+after (cod4-server-frame.md 9.7).

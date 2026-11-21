@@ -1,5 +1,5 @@
 """Parse CoD2 binary materials (materials/*) to exact consumption.
-usage: python3 -I matparse.py <materials dir>  -> prints census, writes mats.json"""
+usage: python3 -I cod2_matparse.py <materials dir>  -> prints census, writes mats.json"""
 import struct, sys, os, json, collections
 root = sys.argv[1]
 SKIP = {'techniques', 'techniquesets', 'statemaps', 'shaders'}

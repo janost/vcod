@@ -7,7 +7,7 @@
 //! the scheduler's next pick (`ReadyIndex`). Each holds every thread that
 //! could qualify and some that no longer do; a candidate is checked against
 //! the thread itself, so the order and the result are the walk's
-//! (docs/research/cod4-server-frame.md 9, "The spawn wave").
+//! (docs/research/cod4-server-frame.md 9.7).
 
 use std::cmp::Reverse;
 use std::rc::Rc;
@@ -82,7 +82,7 @@ fn thread_index_in(threads: &[Thread], id: ThreadId) -> Option<usize> {
 /// (target, event): every one that has, and some that since stopped, which
 /// a notify checks against the thread before it acts. A notify reads its
 /// own entry instead of walking every thread; the walk was most of CoD4's
-/// script time (cod4-server-frame.md 9, "The spawn wave").
+/// script time (cod4-server-frame.md 9.7).
 #[derive(Default)]
 pub(crate) struct NotifyIndex {
     pub endons: crate::fxhash::FxHashMap<(Target, Atom), Vec<ThreadId>>,
@@ -119,7 +119,7 @@ impl NotifyIndex {
 /// parked one's due time and turn. A key whose thread has since moved on is
 /// dropped when it comes up. The pick was a walk of every thread each step,
 /// most of CoD4's script time once the notifies were indexed
-/// (cod4-server-frame.md 9, "The spawn wave").
+/// (cod4-server-frame.md 9.7).
 #[derive(Default)]
 pub(crate) struct ReadyIndex {
     /// `Runnable` threads, the latest queued first.
