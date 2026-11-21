@@ -1162,7 +1162,12 @@ impl Renderer {
                     drop(pass);
                     self.screen_blend.capture(&mut encoder);
                     frame_write!(self, "screen capture", self.target_bytes(4));
-                    pass = single_pass(&mut encoder, self.gamma.scene_view(), "hud pass");
+                    pass = gpu_util::color_pass(
+                        &mut encoder,
+                        Some("hud pass"),
+                        self.gamma.scene_view(),
+                        wgpu::LoadOp::Load,
+                    );
                     None
                 }
                 (Some(Cod4Screen::Flash { white, grab }), _) => {
@@ -1205,7 +1210,12 @@ impl Renderer {
                 self.screen_blend.capture(&mut encoder);
                 frame_write!(self, "screen capture", self.target_bytes(4));
                 self.shock_captured_at = Some(std::time::Instant::now());
-                pass = single_pass(&mut encoder, self.gamma.scene_view(), "hud pass");
+                pass = gpu_util::color_pass(
+                    &mut encoder,
+                    Some("hud pass"),
+                    self.gamma.scene_view(),
+                    wgpu::LoadOp::Load,
+                );
             }
 
             // HUD after the weapon so it sits on top, before the debug
@@ -2308,7 +2318,12 @@ impl Renderer {
         }
         if plan.post {
             if plan.bloom {
-                let mut bloom_pass = single_pass(encoder, self.post.world_view(), "bloom pass");
+                let mut bloom_pass = gpu_util::color_pass(
+                    encoder,
+                    Some("bloom pass"),
+                    self.post.world_view(),
+                    wgpu::LoadOp::Load,
+                );
                 self.bloom.composite(&mut bloom_pass);
             }
             self.post.bind_glow(
@@ -2327,9 +2342,19 @@ impl Renderer {
             group(encoder, Group::PostFx);
             pass = if plan.gamma_direct {
                 // the post pass writes every texel
-                clear_pass(encoder, view, "hud pass")
+                gpu_util::color_pass(
+                    encoder,
+                    Some("hud pass"),
+                    view,
+                    wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                )
             } else {
-                single_pass(encoder, self.gamma.scene_view(), "hud pass")
+                gpu_util::color_pass(
+                    encoder,
+                    Some("hud pass"),
+                    self.gamma.scene_view(),
+                    wgpu::LoadOp::Load,
+                )
             };
             self.post.draw(&mut pass);
             if plan.gamma_direct {
@@ -2346,7 +2371,12 @@ impl Renderer {
                 );
             }
         } else {
-            pass = single_pass(encoder, self.gamma.scene_view(), "hud pass");
+            pass = gpu_util::color_pass(
+                encoder,
+                Some("hud pass"),
+                self.gamma.scene_view(),
+                wgpu::LoadOp::Load,
+            );
             frame_write!(self, "2D pass (gamma scene)", self.target_bytes(4));
             if plan.bloom {
                 self.bloom.composite(&mut pass);
@@ -2354,56 +2384,6 @@ impl Renderer {
         }
         pass
     }
-}
-
-/// A single-sample pass that clears `view` to black and stores it: the post
-/// pass and the 2D straight into the swapchain.
-pub(super) fn clear_pass<'e>(
-    encoder: &'e mut wgpu::CommandEncoder,
-    view: &wgpu::TextureView,
-    label: &str,
-) -> wgpu::RenderPass<'e> {
-    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some(label),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
-    })
-}
-
-/// A single-sample pass that loads and stores `view`: the bloom composite
-/// and the HUD after the map pass.
-pub(super) fn single_pass<'e>(
-    encoder: &'e mut wgpu::CommandEncoder,
-    view: &wgpu::TextureView,
-    label: &str,
-) -> wgpu::RenderPass<'e> {
-    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some(label),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Load,
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
-    })
 }
 
 /// The bytes `frame_write!` logs.
