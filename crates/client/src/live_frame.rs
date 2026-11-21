@@ -216,7 +216,6 @@ impl App {
             snap_time: render_time
                 .and_then(|t| net.snapshots().two_for_time(t))
                 .map_or(0, |(a, _)| a.server_time.raw()),
-            fs: &self.fs,
             ps: newest.map(|s| &s.ps),
             entities: newest.map_or(&no_entities, |s| &s.entities),
             predicted: predicted.as_ref().filter(|_| local_player).map(|v| &v.pred),

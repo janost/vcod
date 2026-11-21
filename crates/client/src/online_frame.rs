@@ -132,7 +132,6 @@ impl App {
                 }
                 loading_frame(
                     r,
-                    &self.fs,
                     &self.localized,
                     &mut self.hud,
                     time,
@@ -247,7 +246,6 @@ impl App {
                 }
                 loading_frame(
                     r,
-                    &self.fs,
                     &self.localized,
                     &mut self.hud,
                     time,
@@ -284,7 +282,6 @@ impl App {
                     };
                     loading_frame(
                         r,
-                        &self.fs,
                         &self.localized,
                         &mut self.hud,
                         time,

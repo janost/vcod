@@ -3096,7 +3096,6 @@ fn load_map(
 #[expect(clippy::too_many_arguments)]
 fn loading_frame(
     r: &mut Renderer,
-    fs: &Pk3Fs,
     localized: &vcod_common::localize::Localized,
     hud: &mut Option<hud::Hud>,
     now: f32,
@@ -3118,7 +3117,6 @@ fn loading_frame(
             protocol: &net::protocol::PROTOCOL_V1,
             server_time: 0,
             snap_time: 0,
-            fs,
             ps: None,
             entities: &BTreeMap::new(),
             predicted: None,
