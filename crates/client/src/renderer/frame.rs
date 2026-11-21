@@ -463,547 +463,14 @@ impl Renderer {
         let (camera, moved, ssao_on) = self.upload_frame_uniforms(&frame);
         let t0 = std::time::Instant::now();
         let mut prof = crate::frame_prof::span(crate::frame_prof::Stage::Cull);
-        crate::frame_prof::size(self.config.width, self.config.height);
-        let frustum = Frustum::from_view_proj(frame.view_proj);
-        let cod4_lod = vcod_common::mapworld::cod4_lod_ramp(
-            crate::camera::fov_y(frame.fov_x, self.aspect()),
-            self.lod_cvars.0,
-            self.lod_cvars.1,
-        );
-        self.cod4_lod = cod4_lod;
-        self.sky_drawn = false;
-        if let Some(world) = &mut self.world {
-            let visible = match frame.cull {
-                CullMode::Off => None,
-                CullMode::Locked => Some(match world.locked.take() {
-                    Some(v) => v,
-                    None => Self::cull(world, frame.eye, &frame.view_proj, &frustum, cod4_lod),
-                }),
-                CullMode::On => {
-                    let key = cull_key(frame.eye, &frame.view_proj, cod4_lod);
-                    Some(match world.culled.take() {
-                        Some((k, v)) if k == key => v,
-                        _ => Self::cull(world, frame.eye, &frame.view_proj, &frustum, cod4_lod),
-                    })
-                }
-            };
-            // A corona's box goes through the frustum and the visited cells,
-            // as a static model's does (0x4e48b8..0x4e4a41).
-            let sprites: Vec<crate::corona::Sprite> = self
-                .coronas
-                .iter()
-                .filter(|c| {
-                    let (lo, hi) = crate::corona::cull_box(c);
-                    match &visible {
-                        Some((v, _)) => world.vis.prop_visible(v, &frustum, lo, hi),
-                        None => frustum.intersects_aabb(lo, hi),
-                    }
-                })
-                .filter_map(|c| crate::corona::sprite(c, frame.eye, frame.fwd, frame.up))
-                .collect();
-            self.marks
-                .set_sprites(&self.queue, crate::corona::SHADER, &sprites);
-            // A static model reads the LOD table like an entity, at its origin
-            // and scale (docs/research/xmodel-v14-format.md, "LOD selection").
-            let prop_lod: Vec<Option<u8>> = world
-                .prop_lods
-                .iter()
-                .map(|l| {
-                    let d = lod_view.distance(frame.eye, l.origin, l.scale);
-                    model::select_lod(&l.dists, d).map(|i| i as u8)
-                })
-                .collect();
-            let lod_shown = |p: u32, l: u8| prop_lod[p as usize] == Some(l);
-            let mut props_drawn = 0usize;
-            prof.next(crate::frame_prof::Stage::Gather);
-            // unculled, a static model draws its LOD 0; culled, the pick
-            // in `cull` left one LOD's soups
-            let culled = visible.is_some();
-            let shown = |si: usize| {
-                world.static_models[world.soup_model[si] as usize]
-                    && (culled || !world.coarse_lod[si])
-            };
-            let ranges: Vec<IndexRange> = match &visible {
-                None => world
-                    .soup_ranges
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(si, r)| if shown(si) { *r } else { None })
-                    .chain(
-                        world
-                            .prop_ranges
-                            .iter()
-                            .filter(|&&(p, l, _)| lod_shown(p, l))
-                            .map(|&(_, _, r)| r),
-                    )
-                    .collect(),
-                Some((v, prop_ok)) => {
-                    props_drawn = prop_ok
-                        .iter()
-                        .zip(&prop_lod)
-                        .filter(|&(&ok, l)| ok && l.is_some())
-                        .count();
-                    world
-                        .soup_ranges
-                        .iter()
-                        .zip(&v.soups)
-                        .enumerate()
-                        .filter_map(|(si, (r, &vis))| if vis && shown(si) { *r } else { None })
-                        .chain(
-                            world
-                                .prop_ranges
-                                .iter()
-                                .filter(|&&(p, l, _)| prop_ok[p as usize] && lod_shown(p, l))
-                                .map(|&(_, _, r)| r),
-                        )
-                        .collect()
-                }
-            };
-            let same_world = ranges == world.gathered_from;
-            if same_world {
-                // last frame's moved brush models follow the world's part
-                world.gathered.truncate(world.world_gathered);
-            } else {
-                world.draws = gather(
-                    &world.cpu_indices,
-                    ranges.iter().copied(),
-                    world.batch_draws.len(),
-                    &mut world.gathered,
-                    &mut world.gather_scratch,
-                );
-                // the receiving soups where the gather put them, for the
-                // cookie masks: a batch's soups follow each other in its draw
-                world.cookie_runs.clear();
-                for d in &world.draws {
-                    if world.cookie_receive.get(d.batch as usize) != Some(&true) {
-                        continue;
-                    }
-                    let mut at = d.first;
-                    for r in &world.gather_scratch[d.batch as usize] {
-                        let b = world.cookie_bounds.get(&r.first).copied();
-                        world.cookie_runs.push((at..at + r.count, b));
-                        at += r.count;
-                    }
-                }
-                world.gathered_from = ranges;
-                world.world_gathered = world.gathered.len();
-            }
-            // Animated stages get fresh params; static slots keep the load fill.
-            for (sh, si, slot) in &world.animated {
-                if let Some(p) = stage_params(sh, *si, frame.time) {
-                    self.queue.write_buffer(
-                        &world.stage_params_buf,
-                        u64::from(*slot) * world.stage_params_stride,
-                        bytemuck::bytes_of(&p),
-                    );
-                }
-            }
-            // Dome stages always carry the view origin, animated or not, and
-            // the sky flag so linear fog skips them.
-            for (sh, si, slot) in &world.sky_stages {
-                if let Some(mut p) = stage_params(sh, *si, frame.time) {
-                    p.flags |= STAGE_FLAG_EYE_OFFSET | STAGE_FLAG_SKY;
-                    p.eye_off = [frame.eye.x, frame.eye.y, frame.eye.z, 0.0];
-                    self.queue.write_buffer(
-                        &world.stage_params_buf,
-                        u64::from(*slot) * world.stage_params_stride,
-                        bytemuck::bytes_of(&p),
-                    );
-                }
-            }
-            if !same_world {
-                let mut frame_draws = std::mem::take(&mut world.frame_draws);
-                order_draws(
-                    &world.batch_keys,
-                    &world.batch_draws,
-                    &world.stages_of_batch,
-                    &world.draws,
-                    &mut frame_draws,
-                );
-                world.frame_draws = frame_draws;
-            }
-            // A moved brush model's soups follow the world's in the index
-            // buffer, each set ordered on its own and drawn under its own
-            // camera.
-            let mut moved_draws = std::mem::take(&mut world.moved_draws);
-            moved_draws.clear();
-            for &(m, _) in &world.moved {
-                let ranges: Vec<IndexRange> = world.model_soups[m]
-                    .clone()
-                    .filter_map(|si| world.soup_ranges.get(si).copied().flatten())
-                    .collect();
-                let mut out = Vec::new();
-                let mut draws = gather(
-                    &world.cpu_indices,
-                    ranges,
-                    world.batch_draws.len(),
-                    &mut out,
-                    &mut world.gather_scratch,
-                );
-                let base = world.gathered.len() as u32;
-                for d in &mut draws {
-                    d.first += base;
-                }
-                world.gathered.extend(out);
-                let mut order = Vec::new();
-                order_draws(
-                    &world.batch_keys,
-                    &world.batch_draws,
-                    &world.stages_of_batch,
-                    &draws,
-                    &mut order,
-                );
-                moved_draws.push((draws, order));
-            }
-            world.moved_draws = moved_draws;
-            // The dlight pass: per light, the visible soups it reaches
-            // whose batch takes dlights, then each moved brush model's
-            // with the light carried into the model's frame (0x4b59f0).
-            world.dlight_runs.clear();
-            world.dlight_indices.clear();
-            let mut scene = self.dynamic.scene_lights.clone();
-            scene.extend_from_slice(&self.dynamic.entity_scene_lights);
-            let lights = if lights_world(self.dynamic_light) {
-                dlight::from_scene(&scene)
-            } else {
-                Vec::new()
-            };
-            if !lights.is_empty() {
-                for (i, l) in lights.iter().enumerate() {
-                    self.queue.write_buffer(
-                        &self.dlight.buf,
-                        i as u64 * self.dlight.stride,
-                        bytemuck::bytes_of(&dlight::DlightUniform::of(l, self.dlight_quality)),
-                    );
-                }
-                let takes = |si: usize| {
-                    world.soup_ranges[si]
-                        .is_some_and(|r| !world.dlights_of_batch[r.batch as usize].is_empty())
-                };
-                let lit: Vec<usize> = (0..world.soup_ranges.len())
-                    .filter(|&si| {
-                        takes(si) && shown(si) && visible.as_ref().is_none_or(|(v, _)| v.soups[si])
-                    })
-                    .collect();
-                let mut sets: Vec<(Option<usize>, glam::Mat4, Vec<usize>)> =
-                    vec![(None, glam::Mat4::IDENTITY, lit)];
-                for (mi, &(m, pose)) in world.moved.iter().enumerate() {
-                    let soups = world.model_soups[m]
-                        .clone()
-                        .filter(|&si| takes(si))
-                        .collect();
-                    sets.push((Some(mi), pose.inverse(), soups));
-                }
-                let mut out = Vec::new();
-                for (moved, to_model, soups) in &sets {
-                    for (li, l) in lights.iter().enumerate() {
-                        let origin = to_model.transform_point3(l.origin);
-                        let ranges = soups.iter().filter_map(|&si| {
-                            let (lo, hi) = world.soup_bounds[si];
-                            dlight::reaches(l, origin, lo, hi)
-                                .then_some(world.soup_ranges[si])
-                                .flatten()
-                        });
-                        let draws = gather(
-                            &world.cpu_indices,
-                            ranges,
-                            world.batch_draws.len(),
-                            &mut out,
-                            &mut world.gather_scratch,
-                        );
-                        let base = world.dlight_indices.len() as u32;
-                        world.dlight_indices.extend_from_slice(&out);
-                        world
-                            .dlight_runs
-                            .extend(draws.into_iter().map(|d| DlightRun {
-                                light: li as u32,
-                                moved: *moved,
-                                draw: DrawRange {
-                                    first: d.first + base,
-                                    ..d
-                                },
-                            }));
-                    }
-                }
-                let bytes = (world.dlight_indices.len() * 4) as u64;
-                if bytes > world.dlight_index_buf.size() {
-                    world.dlight_index_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("dlight indices"),
-                        size: bytes.next_power_of_two(),
-                        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    });
-                }
-                if bytes > 0 {
-                    self.queue.write_buffer(
-                        &world.dlight_index_buf,
-                        0,
-                        bytemuck::cast_slice(&world.dlight_indices),
-                    );
-                    frame_write!(self, "upload dlight indices", bytes);
-                }
-            }
-            world.stage_draws_last = world
-                .frame_draws
-                .iter()
-                .filter(|fd| matches!(fd.kind, DrawRef::Stage(_)))
-                .count();
-            // a world part gathered from last frame's ranges is in the
-            // buffer already; the moved models' part after it is not
-            let from = if same_world { world.world_gathered } else { 0 };
-            if from < world.gathered.len() {
-                self.queue.write_buffer(
-                    &world.index_buf,
-                    from as u64 * 4,
-                    bytemuck::cast_slice(&world.gathered[from..]),
-                );
-                frame_write!(
-                    self,
-                    "upload gathered world indices",
-                    (world.gathered.len() - from) * 4
-                );
-            }
-            world.prop_lod = prop_lod;
-            let cell_total = world.vis.cell_count();
-            self.vis_counts = VisCounts {
-                mode: Some(frame.cull),
-                cells: visible.as_ref().map_or((cell_total, cell_total), |(v, _)| {
-                    (v.cells.iter().filter(|&&c| c).count(), cell_total)
-                }),
-                soups: visible.as_ref().map_or(
-                    (world.soup_ranges.len(), world.soup_ranges.len()),
-                    |(v, _)| (v.stats.soups, world.soup_ranges.len()),
-                ),
-                tris: (world.gathered.len() / 3, world.cpu_indices.len() / 3),
-                props: (
-                    if visible.is_some() {
-                        props_drawn
-                    } else {
-                        world.prop_bounds.len()
-                    },
-                    world.prop_bounds.len(),
-                ),
-                occluders: visible.as_ref().map_or(0, |(v, _)| v.stats.occluders),
-                portals_occluded: visible
-                    .as_ref()
-                    .map_or(0, |(v, _)| v.stats.portals_occluded),
-                gather_ms: t0.elapsed().as_secs_f32() * 1000.0,
-            };
-            prof.next(crate::frame_prof::Stage::Build);
-            crate::frame_prof::count(crate::frame_prof::Count::Tris, self.vis_counts.tris.0);
-            crate::frame_prof::count(crate::frame_prof::Count::Soups, self.vis_counts.soups.0);
-            // linear fog is the far plane retail's 0x4e1670 reads (no `r_zfar`)
-            let far = (self.fog.set && self.fog.live.linear).then_some(self.fog.live.far);
-            let walked = world
-                .sky_soups
-                .iter()
-                .any(|&(si, _)| visible.as_ref().is_none_or(|(v, _)| v.soups[si]) && shown(si));
-            let boxes: Vec<_> = world.sky_soups.iter().map(|&(_, b)| b).collect();
-            self.sky_drawn = vcod_common::sun::sky_drawn(walked, far, frame.eye, frame.fwd, &boxes);
-            world.locked = None;
-            world.culled = None;
-            match frame.cull {
-                CullMode::Locked => world.locked = visible,
-                CullMode::On => {
-                    let key = cull_key(frame.eye, &frame.view_proj, cod4_lod);
-                    world.culled = visible.map(|v| (key, v));
-                }
-                CullMode::Off => {}
-            }
-        }
-        // The glyph cap truncates whole quads, so a cut readout stays legible.
-        let hud_quads = if frame.hud_lines.is_empty() {
-            0
-        } else {
-            let mut verts = hud_text::layout_lines(
-                &frame.hud_lines,
-                self.config.width as f32,
-                self.config.height as f32,
-                2.0,
-            );
-            verts.truncate(MAX_HUD_GLYPHS * 2 * 4);
-            self.queue
-                .write_buffer(&self.hud.vertex_buf, 0, bytemuck::cast_slice(&verts));
-            verts.len() / 4
-        };
-        // Instance i draws from slot i of instance_buf.
-        if !self.dynamic.instances.is_empty() {
-            let m = &self.dynamic.materials;
-            for (sh, si, slot) in &m.animated {
-                if let Some(p) = stage_params(sh, *si, frame.time) {
-                    self.queue.write_buffer(
-                        &m.params_buf,
-                        u64::from(*slot) * ENT_STAGE_STRIDE,
-                        bytemuck::bytes_of(&p),
-                    );
-                }
-            }
-            let sets = self.pick_entity_lights();
-            self.queue
-                .write_buffer(&self.dynamic.light_buf, 0, bytemuck::cast_slice(&sets));
-            let raw: Vec<InstanceRaw> = self.dynamic.instances.iter().map(|(_, r)| *r).collect();
-            self.queue
-                .write_buffer(&self.dynamic.instance_buf, 0, bytemuck::cast_slice(&raw));
-            self.queue.write_buffer(
-                &self.dynamic.bone_buf,
-                0,
-                bytemuck::cast_slice(&self.dynamic.bone_mats),
-            );
-            frame_write!(
-                self,
-                "upload entity lights, instances and bones",
-                std::mem::size_of_val(sets.as_slice())
-                    + std::mem::size_of_val(raw.as_slice())
-                    + std::mem::size_of_val(self.dynamic.bone_mats.as_slice())
-            );
-        }
-        let draw_vm = match &vm {
-            Some(draw) if !self.vm_pass.models.is_empty() => {
-                let to_view = glam::camera::rh::view::look_to_mat4(frame.eye, frame.fwd, frame.up);
-                // CoD2: the grid at the eye, world space (cod2_model.wgsl);
-                // CoD4: the view model's own block, world space too
-                let cod2 = self.dynamic.cod2_light.is_some() || self.dynamic.cod4_light.is_some();
-                let lights = match (&self.dynamic.cod2_light, self.dynamic.lighting.as_mut()) {
-                    _ if self.dynamic.cod4_light.is_some() => {
-                        let c4 = self.dynamic.cod4_light.as_ref().expect("checked");
-                        // the gun's box: its lighting origin alone; its
-                        // block the volume's last
-                        let o = draw.light_origin;
-                        let block = entity_light::COD4_VOLUME_BLOCKS - 1;
-                        let (set, texels) = c4.set(o, [o, o], block, self.identity_light);
-                        self.dynamic
-                            .materials
-                            .cod4_volume
-                            .write_view_block(&self.queue, &texels);
-                        set
-                    }
-                    (Some(c2), _) => c2.entity_set(draw.light_origin, self.identity_light),
-                    (None, Some(l)) => {
-                        let scene = model_scene_lights(
-                            &self.dynamic.scene_lights,
-                            &self.dynamic.entity_scene_lights,
-                            self.dynamic_light,
-                        );
-                        let picked = l.entity_lights(draw.light_origin, &scene);
-                        entity_light::pack(&picked, Some(to_view), self.identity_light)
-                    }
-                    (None, None) => GpuLightSet::default(),
-                };
-                let uniform = vm_uniform(draw.transform, draw.fov_x, self.aspect());
-                self.queue.write_buffer(
-                    &self.vm_pass.uniform_buf,
-                    0,
-                    bytemuck::cast_slice(&uniform),
-                );
-                self.queue.write_buffer(
-                    &self.vm_pass.uniform_buf,
-                    VM_LIGHTS_OFFSET,
-                    bytemuck::bytes_of(&lights),
-                );
-                self.queue.write_buffer(
-                    &self.vm_pass.uniform_buf,
-                    VM_MISC_OFFSET,
-                    bytemuck::cast_slice(&[
-                        self.identity_light,
-                        f32::from(u8::from(cod2)),
-                        frame.time,
-                        0.0,
-                    ]),
-                );
-                self.queue.write_buffer(
-                    &self.vm_pass.uniform_buf,
-                    VM_VIEW_TO_WORLD_OFFSET,
-                    bytemuck::cast_slice(&to_view.inverse().to_cols_array()),
-                );
-                for (i, model) in self.vm_pass.models.iter().enumerate() {
-                    let Some(bones) = draw.bone_sets.get(i) else {
-                        continue;
-                    };
-                    if bones.is_empty() {
-                        continue;
-                    }
-                    if bones.len() > VM_BONE_COUNT {
-                        static VM_BONE_CAP_WARNED: std::sync::Once = std::sync::Once::new();
-                        VM_BONE_CAP_WARNED.call_once(|| {
-                            log::warn!(
-                                "viewmodel bone set of {} exceeds the shader's {VM_BONE_COUNT}; truncating",
-                                bones.len()
-                            );
-                        });
-                    }
-                    let cols: Vec<[f32; 16]> = bones
-                        .iter()
-                        .take(VM_BONE_COUNT)
-                        .map(glam::Mat4::to_cols_array)
-                        .collect();
-                    self.queue
-                        .write_buffer(&model.bone_buf, 0, bytemuck::cast_slice(&cols));
-                    frame_write!(self, "upload view model bones", cols.len() * 64);
-                }
-                true
-            }
-            _ => false,
-        };
-
-        let draw_vm = draw_vm && self.vm_pass.skins.len() == self.vm_pass.models.len();
-        let vm_skins: &[Vec<Rc<EntSkin>>] = if draw_vm { &self.vm_pass.skins } else { &[] };
-        // the instances the view can see; the shadow casters keep them all
-        let frustum = vcod_common::vis::Frustum::from_view_proj(frame.view_proj);
-        let seen: Vec<bool> = (0..self.dynamic.instances.len())
-            .map(|k| !self.draw_joins || instance_seen(&self.dynamic, k, &frustum))
-            .collect();
-        let ent_draws = sorted_ent_draws(
-            self.dynamic
-                .instances
-                .iter()
-                .enumerate()
-                .filter(|&(i, _)| seen[i])
-                .flat_map(|(i, (m, _))| {
-                    self.dynamic.models[*m]
-                        .skins
-                        .iter()
-                        .enumerate()
-                        .map(move |(j, sk)| (i as u32, j as u32, &**sk))
-                }),
-            vm_skins.iter().enumerate().flat_map(|(i, skins)| {
-                skins
-                    .iter()
-                    .enumerate()
-                    .map(move |(j, sk)| (i as u32, j as u32, &**sk))
-            }),
-        );
+        self.cull_and_gather(&frame, &lod_view, t0, &mut prof);
+        let hud_quads = self.upload_hud_text(&frame);
+        self.upload_entities(&frame);
+        let draw_vm = self.upload_view_model(&frame, vm.as_ref());
+        let ent_draws = self.frame_ent_draws(&frame, draw_vm);
         prof.next(crate::frame_prof::Stage::Acquire);
-        let surface_tex = match &self.target {
-            Target::Offscreen(_) => None,
-            Target::Surface(s) => Some(s.get_current_texture()),
-        };
-        let surface_tex = match surface_tex {
-            None => None,
-            Some(t) => Some(match t {
-                wgpu::CurrentSurfaceTexture::Success(tex)
-                | wgpu::CurrentSurfaceTexture::Suboptimal(tex) => tex,
-                // A frame with no surface still submits, so the writes it
-                // queued above go now and do not pile up until one draws.
-                wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                    self.queue.submit([]);
-                    return;
-                }
-                wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                    self.queue.submit([]);
-                    self.reconfigure();
-                    return;
-                }
-                wgpu::CurrentSurfaceTexture::Validation => {
-                    log::warn!("dropped frame: surface validation error");
-                    self.queue.submit([]);
-                    return;
-                }
-            }),
-        };
-        let view = match (&surface_tex, &self.target) {
-            (Some(t), _) => t.texture.create_view(&Default::default()),
-            (None, Target::Offscreen(t)) => t.create_view(&Default::default()),
-            (None, Target::Surface(_)) => unreachable!("a surface frame holds its texture"),
+        let Some((surface_tex, view)) = self.acquire() else {
+            return;
         };
         let mut encoder = self
             .device
@@ -1026,28 +493,8 @@ impl Renderer {
         if let Some(g) = &self.prof_gpu {
             g.stamp(prof_slot, &mut encoder, 0);
         }
-        let shadow_on = self.encode_shadow_maps(&mut encoder, &frame, &camera, &moved);
-        if shadow_on {
-            frame_write!(self, "vc_shadows maps (not sized)", 0);
-        }
-        if let Some(g) = &self.prof_gpu {
-            g.stamp(prof_slot, &mut encoder, 1);
-        }
-        self.encode_cookies(&mut encoder, &frame);
-        let receivers_on_prepass = self.cookie_receivers_on_prepass();
-        if !receivers_on_prepass {
-            Self::encode_cookie_receivers(self.cookie_receivers(), &mut encoder, &frame, false);
-        }
-        if let Some(g) = &self.prof_gpu {
-            g.stamp(prof_slot, &mut encoder, 2);
-        }
-        self.encode_sun_shadow(&mut encoder, &frame);
-        if let Some(g) = &self.prof_gpu {
-            g.stamp(prof_slot, &mut encoder, 3);
-        }
-        if !shadow_on && let Some(sp) = &self.shadows {
-            sp.idle(&self.queue);
-        }
+        let (shadow_on, receivers_on_prepass) =
+            self.encode_shadow_passes(&mut encoder, &frame, (&camera, &moved), prof_slot);
         {
             let plan = self.plan_frame(&frame, ssao_on, shadow_on);
             if let Some(flare) = self
@@ -1214,85 +661,7 @@ impl Renderer {
                 self.scene_pass_bytes(!plan.split)
             );
             pass.set_bind_group(0, &self.camera_bg, &[]);
-            // The sky draws first so every world draw overwrites it; the box
-            // and dome both ignore depth (cleared 1.0) and write none. CoD
-            // keeps the sky visible under linear fog (VERIFIED live on
-            // mp_ship, unlike RTCW's drawsky=false).
-            if let (Some(world), Some(sky)) = (&self.world, &self.sky) {
-                if let Some(farbox) = &sky.farbox {
-                    pass.set_pipeline(&farbox.pipeline);
-                    pass.set_bind_group(2, &farbox.eye_bg, &[]);
-                    pass.set_vertex_buffer(0, farbox.vertex_buf.slice(..));
-                    pass.set_index_buffer(farbox.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                    for (axis, &(first, end)) in farbox.sides.iter().enumerate() {
-                        pass.set_bind_group(1, &farbox.side_bgs[axis], &[]);
-                        pass.draw_indexed(first..end, 0, 0..1);
-                    }
-                    tally(&self.census, |c| {
-                        let n = farbox.sides.len() as u32;
-                        c.sky += n;
-                        c.pipelines += 1;
-                        c.bind_groups += 1 + n;
-                    });
-                }
-                // The sunfile disc: additive billboard along the sun
-                // direction at farbox distance, camera-facing via world axes.
-                if let Some(sun) = sky.sun.as_ref().filter(|_| self.sky_drawn && self.draw_sun) {
-                    let center = frame.eye + sun.dir * sky::box_size(Z_FAR, Z_NEAR);
-                    let up = glam::Vec3::Z;
-                    let right = up.cross(sun.dir).normalize_or_zero();
-                    let quad_up = sun.dir.cross(right);
-                    let r = right * sun.half_extent;
-                    let u = quad_up * sun.half_extent;
-                    let corner = |dr: f32, du: f32| sky::SkyBoxVert {
-                        pos: (center + r * dr + u * du).to_array(),
-                        uv: [(dr + 1.0) * 0.5, 1.0 - (du + 1.0) * 0.5],
-                    };
-                    let verts = [
-                        corner(-1.0, -1.0),
-                        corner(1.0, -1.0),
-                        corner(1.0, 1.0),
-                        corner(-1.0, -1.0),
-                        corner(1.0, 1.0),
-                        corner(-1.0, 1.0),
-                    ];
-                    self.queue
-                        .write_buffer(&sun.vertex_buf, 0, bytemuck::cast_slice(&verts));
-                    pass.set_pipeline(&sun.pipeline);
-                    pass.set_bind_group(1, &sun.bind_group, &[]);
-                    pass.set_vertex_buffer(0, sun.vertex_buf.slice(..));
-                    pass.draw(0..6, 0..1);
-                    tally(&self.census, |c| {
-                        c.sky += 1;
-                        c.pipelines += 1;
-                        c.bind_groups += 1;
-                    });
-                }
-                if let Some(dome) = &sky.dome {
-                    pass.set_vertex_buffer(0, dome.vertex_buf.slice(..));
-                    pass.set_index_buffer(dome.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                    let mut bound: Option<(StageVariant, bool)> = None;
-                    for ds in &dome.stages {
-                        let key = (ds.variant, ds.two_sided);
-                        if bound != Some(key) {
-                            pass.set_pipeline(self.stage_pipeline(ds.variant, ds.two_sided, false));
-                            bound = Some(key);
-                            tally(&self.census, |c| c.pipelines += 1);
-                        }
-                        pass.set_bind_group(1, ds.mat.bind_group(frame.time), &[]);
-                        pass.set_bind_group(
-                            2,
-                            ds.stage.bind_group(frame.time),
-                            &[world.stage_offset(ds.slot)],
-                        );
-                        pass.draw_indexed(0..dome.index_count, 0, 0..1);
-                        tally(&self.census, |c| {
-                            c.sky += 1;
-                            c.bind_groups += 2;
-                        });
-                    }
-                }
-            }
+            self.draw_sky(&mut pass, &frame);
             // One list, as retail's draw list keys every surface (shader doc
             // 5): the world's draws, the entity and viewmodel surfaces and
             // the fx runs merged by material sort, the world first on a
@@ -2254,6 +1623,705 @@ impl Renderer {
             );
         }
         (camera, moved, ssao_on)
+    }
+
+    /// The visible set, the gathered world indices and their draw order,
+    /// the moved brush models', the dlight runs, the coronas and the F3
+    /// `vis` counts; `t0` is when the frame's gather began.
+    fn cull_and_gather(
+        &mut self,
+        frame: &Frame,
+        lod_view: &model::LodView,
+        t0: std::time::Instant,
+        prof: &mut crate::frame_prof::Span,
+    ) {
+        crate::frame_prof::size(self.config.width, self.config.height);
+        let frustum = Frustum::from_view_proj(frame.view_proj);
+        let cod4_lod = vcod_common::mapworld::cod4_lod_ramp(
+            crate::camera::fov_y(frame.fov_x, self.aspect()),
+            self.lod_cvars.0,
+            self.lod_cvars.1,
+        );
+        self.cod4_lod = cod4_lod;
+        self.sky_drawn = false;
+        if let Some(world) = &mut self.world {
+            let visible = match frame.cull {
+                CullMode::Off => None,
+                CullMode::Locked => Some(match world.locked.take() {
+                    Some(v) => v,
+                    None => Self::cull(world, frame.eye, &frame.view_proj, &frustum, cod4_lod),
+                }),
+                CullMode::On => {
+                    let key = cull_key(frame.eye, &frame.view_proj, cod4_lod);
+                    Some(match world.culled.take() {
+                        Some((k, v)) if k == key => v,
+                        _ => Self::cull(world, frame.eye, &frame.view_proj, &frustum, cod4_lod),
+                    })
+                }
+            };
+            // A corona's box goes through the frustum and the visited cells,
+            // as a static model's does (0x4e48b8..0x4e4a41).
+            let sprites: Vec<crate::corona::Sprite> = self
+                .coronas
+                .iter()
+                .filter(|c| {
+                    let (lo, hi) = crate::corona::cull_box(c);
+                    match &visible {
+                        Some((v, _)) => world.vis.prop_visible(v, &frustum, lo, hi),
+                        None => frustum.intersects_aabb(lo, hi),
+                    }
+                })
+                .filter_map(|c| crate::corona::sprite(c, frame.eye, frame.fwd, frame.up))
+                .collect();
+            self.marks
+                .set_sprites(&self.queue, crate::corona::SHADER, &sprites);
+            // A static model reads the LOD table like an entity, at its origin
+            // and scale (docs/research/xmodel-v14-format.md, "LOD selection").
+            let prop_lod: Vec<Option<u8>> = world
+                .prop_lods
+                .iter()
+                .map(|l| {
+                    let d = lod_view.distance(frame.eye, l.origin, l.scale);
+                    model::select_lod(&l.dists, d).map(|i| i as u8)
+                })
+                .collect();
+            let lod_shown = |p: u32, l: u8| prop_lod[p as usize] == Some(l);
+            let mut props_drawn = 0usize;
+            prof.next(crate::frame_prof::Stage::Gather);
+            // unculled, a static model draws its LOD 0; culled, the pick
+            // in `cull` left one LOD's soups
+            let culled = visible.is_some();
+            let shown = |si: usize| {
+                world.static_models[world.soup_model[si] as usize]
+                    && (culled || !world.coarse_lod[si])
+            };
+            let ranges: Vec<IndexRange> = match &visible {
+                None => world
+                    .soup_ranges
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(si, r)| if shown(si) { *r } else { None })
+                    .chain(
+                        world
+                            .prop_ranges
+                            .iter()
+                            .filter(|&&(p, l, _)| lod_shown(p, l))
+                            .map(|&(_, _, r)| r),
+                    )
+                    .collect(),
+                Some((v, prop_ok)) => {
+                    props_drawn = prop_ok
+                        .iter()
+                        .zip(&prop_lod)
+                        .filter(|&(&ok, l)| ok && l.is_some())
+                        .count();
+                    world
+                        .soup_ranges
+                        .iter()
+                        .zip(&v.soups)
+                        .enumerate()
+                        .filter_map(|(si, (r, &vis))| if vis && shown(si) { *r } else { None })
+                        .chain(
+                            world
+                                .prop_ranges
+                                .iter()
+                                .filter(|&&(p, l, _)| prop_ok[p as usize] && lod_shown(p, l))
+                                .map(|&(_, _, r)| r),
+                        )
+                        .collect()
+                }
+            };
+            let same_world = ranges == world.gathered_from;
+            if same_world {
+                // last frame's moved brush models follow the world's part
+                world.gathered.truncate(world.world_gathered);
+            } else {
+                world.draws = gather(
+                    &world.cpu_indices,
+                    ranges.iter().copied(),
+                    world.batch_draws.len(),
+                    &mut world.gathered,
+                    &mut world.gather_scratch,
+                );
+                // the receiving soups where the gather put them, for the
+                // cookie masks: a batch's soups follow each other in its draw
+                world.cookie_runs.clear();
+                for d in &world.draws {
+                    if world.cookie_receive.get(d.batch as usize) != Some(&true) {
+                        continue;
+                    }
+                    let mut at = d.first;
+                    for r in &world.gather_scratch[d.batch as usize] {
+                        let b = world.cookie_bounds.get(&r.first).copied();
+                        world.cookie_runs.push((at..at + r.count, b));
+                        at += r.count;
+                    }
+                }
+                world.gathered_from = ranges;
+                world.world_gathered = world.gathered.len();
+            }
+            // Animated stages get fresh params; static slots keep the load fill.
+            for (sh, si, slot) in &world.animated {
+                if let Some(p) = stage_params(sh, *si, frame.time) {
+                    self.queue.write_buffer(
+                        &world.stage_params_buf,
+                        u64::from(*slot) * world.stage_params_stride,
+                        bytemuck::bytes_of(&p),
+                    );
+                }
+            }
+            // Dome stages always carry the view origin, animated or not, and
+            // the sky flag so linear fog skips them.
+            for (sh, si, slot) in &world.sky_stages {
+                if let Some(mut p) = stage_params(sh, *si, frame.time) {
+                    p.flags |= STAGE_FLAG_EYE_OFFSET | STAGE_FLAG_SKY;
+                    p.eye_off = [frame.eye.x, frame.eye.y, frame.eye.z, 0.0];
+                    self.queue.write_buffer(
+                        &world.stage_params_buf,
+                        u64::from(*slot) * world.stage_params_stride,
+                        bytemuck::bytes_of(&p),
+                    );
+                }
+            }
+            if !same_world {
+                let mut frame_draws = std::mem::take(&mut world.frame_draws);
+                order_draws(
+                    &world.batch_keys,
+                    &world.batch_draws,
+                    &world.stages_of_batch,
+                    &world.draws,
+                    &mut frame_draws,
+                );
+                world.frame_draws = frame_draws;
+            }
+            // A moved brush model's soups follow the world's in the index
+            // buffer, each set ordered on its own and drawn under its own
+            // camera.
+            let mut moved_draws = std::mem::take(&mut world.moved_draws);
+            moved_draws.clear();
+            for &(m, _) in &world.moved {
+                let ranges: Vec<IndexRange> = world.model_soups[m]
+                    .clone()
+                    .filter_map(|si| world.soup_ranges.get(si).copied().flatten())
+                    .collect();
+                let mut out = Vec::new();
+                let mut draws = gather(
+                    &world.cpu_indices,
+                    ranges,
+                    world.batch_draws.len(),
+                    &mut out,
+                    &mut world.gather_scratch,
+                );
+                let base = world.gathered.len() as u32;
+                for d in &mut draws {
+                    d.first += base;
+                }
+                world.gathered.extend(out);
+                let mut order = Vec::new();
+                order_draws(
+                    &world.batch_keys,
+                    &world.batch_draws,
+                    &world.stages_of_batch,
+                    &draws,
+                    &mut order,
+                );
+                moved_draws.push((draws, order));
+            }
+            world.moved_draws = moved_draws;
+            // The dlight pass: per light, the visible soups it reaches
+            // whose batch takes dlights, then each moved brush model's
+            // with the light carried into the model's frame (0x4b59f0).
+            world.dlight_runs.clear();
+            world.dlight_indices.clear();
+            let mut scene = self.dynamic.scene_lights.clone();
+            scene.extend_from_slice(&self.dynamic.entity_scene_lights);
+            let lights = if lights_world(self.dynamic_light) {
+                dlight::from_scene(&scene)
+            } else {
+                Vec::new()
+            };
+            if !lights.is_empty() {
+                for (i, l) in lights.iter().enumerate() {
+                    self.queue.write_buffer(
+                        &self.dlight.buf,
+                        i as u64 * self.dlight.stride,
+                        bytemuck::bytes_of(&dlight::DlightUniform::of(l, self.dlight_quality)),
+                    );
+                }
+                let takes = |si: usize| {
+                    world.soup_ranges[si]
+                        .is_some_and(|r| !world.dlights_of_batch[r.batch as usize].is_empty())
+                };
+                let lit: Vec<usize> = (0..world.soup_ranges.len())
+                    .filter(|&si| {
+                        takes(si) && shown(si) && visible.as_ref().is_none_or(|(v, _)| v.soups[si])
+                    })
+                    .collect();
+                let mut sets: Vec<(Option<usize>, glam::Mat4, Vec<usize>)> =
+                    vec![(None, glam::Mat4::IDENTITY, lit)];
+                for (mi, &(m, pose)) in world.moved.iter().enumerate() {
+                    let soups = world.model_soups[m]
+                        .clone()
+                        .filter(|&si| takes(si))
+                        .collect();
+                    sets.push((Some(mi), pose.inverse(), soups));
+                }
+                let mut out = Vec::new();
+                for (moved, to_model, soups) in &sets {
+                    for (li, l) in lights.iter().enumerate() {
+                        let origin = to_model.transform_point3(l.origin);
+                        let ranges = soups.iter().filter_map(|&si| {
+                            let (lo, hi) = world.soup_bounds[si];
+                            dlight::reaches(l, origin, lo, hi)
+                                .then_some(world.soup_ranges[si])
+                                .flatten()
+                        });
+                        let draws = gather(
+                            &world.cpu_indices,
+                            ranges,
+                            world.batch_draws.len(),
+                            &mut out,
+                            &mut world.gather_scratch,
+                        );
+                        let base = world.dlight_indices.len() as u32;
+                        world.dlight_indices.extend_from_slice(&out);
+                        world
+                            .dlight_runs
+                            .extend(draws.into_iter().map(|d| DlightRun {
+                                light: li as u32,
+                                moved: *moved,
+                                draw: DrawRange {
+                                    first: d.first + base,
+                                    ..d
+                                },
+                            }));
+                    }
+                }
+                let bytes = (world.dlight_indices.len() * 4) as u64;
+                if bytes > world.dlight_index_buf.size() {
+                    world.dlight_index_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("dlight indices"),
+                        size: bytes.next_power_of_two(),
+                        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                }
+                if bytes > 0 {
+                    self.queue.write_buffer(
+                        &world.dlight_index_buf,
+                        0,
+                        bytemuck::cast_slice(&world.dlight_indices),
+                    );
+                    frame_write!(self, "upload dlight indices", bytes);
+                }
+            }
+            world.stage_draws_last = world
+                .frame_draws
+                .iter()
+                .filter(|fd| matches!(fd.kind, DrawRef::Stage(_)))
+                .count();
+            // a world part gathered from last frame's ranges is in the
+            // buffer already; the moved models' part after it is not
+            let from = if same_world { world.world_gathered } else { 0 };
+            if from < world.gathered.len() {
+                self.queue.write_buffer(
+                    &world.index_buf,
+                    from as u64 * 4,
+                    bytemuck::cast_slice(&world.gathered[from..]),
+                );
+                frame_write!(
+                    self,
+                    "upload gathered world indices",
+                    (world.gathered.len() - from) * 4
+                );
+            }
+            world.prop_lod = prop_lod;
+            let cell_total = world.vis.cell_count();
+            self.vis_counts = VisCounts {
+                mode: Some(frame.cull),
+                cells: visible.as_ref().map_or((cell_total, cell_total), |(v, _)| {
+                    (v.cells.iter().filter(|&&c| c).count(), cell_total)
+                }),
+                soups: visible.as_ref().map_or(
+                    (world.soup_ranges.len(), world.soup_ranges.len()),
+                    |(v, _)| (v.stats.soups, world.soup_ranges.len()),
+                ),
+                tris: (world.gathered.len() / 3, world.cpu_indices.len() / 3),
+                props: (
+                    if visible.is_some() {
+                        props_drawn
+                    } else {
+                        world.prop_bounds.len()
+                    },
+                    world.prop_bounds.len(),
+                ),
+                occluders: visible.as_ref().map_or(0, |(v, _)| v.stats.occluders),
+                portals_occluded: visible
+                    .as_ref()
+                    .map_or(0, |(v, _)| v.stats.portals_occluded),
+                gather_ms: t0.elapsed().as_secs_f32() * 1000.0,
+            };
+            prof.next(crate::frame_prof::Stage::Build);
+            crate::frame_prof::count(crate::frame_prof::Count::Tris, self.vis_counts.tris.0);
+            crate::frame_prof::count(crate::frame_prof::Count::Soups, self.vis_counts.soups.0);
+            // linear fog is the far plane retail's 0x4e1670 reads (no `r_zfar`)
+            let far = (self.fog.set && self.fog.live.linear).then_some(self.fog.live.far);
+            let walked = world
+                .sky_soups
+                .iter()
+                .any(|&(si, _)| visible.as_ref().is_none_or(|(v, _)| v.soups[si]) && shown(si));
+            let boxes: Vec<_> = world.sky_soups.iter().map(|&(_, b)| b).collect();
+            self.sky_drawn = vcod_common::sun::sky_drawn(walked, far, frame.eye, frame.fwd, &boxes);
+            world.locked = None;
+            world.culled = None;
+            match frame.cull {
+                CullMode::Locked => world.locked = visible,
+                CullMode::On => {
+                    let key = cull_key(frame.eye, &frame.view_proj, cod4_lod);
+                    world.culled = visible.map(|v| (key, v));
+                }
+                CullMode::Off => {}
+            }
+        }
+    }
+
+    /// The debug HUD's text quads; returns how many.
+    fn upload_hud_text(&mut self, frame: &Frame) -> usize {
+        // The glyph cap truncates whole quads, so a cut readout stays legible.
+
+        if frame.hud_lines.is_empty() {
+            0
+        } else {
+            let mut verts = hud_text::layout_lines(
+                &frame.hud_lines,
+                self.config.width as f32,
+                self.config.height as f32,
+                2.0,
+            );
+            verts.truncate(MAX_HUD_GLYPHS * 2 * 4);
+            self.queue
+                .write_buffer(&self.hud.vertex_buf, 0, bytemuck::cast_slice(&verts));
+            verts.len() / 4
+        }
+    }
+
+    /// The entities' animated stage params, lights, instances and bones.
+    fn upload_entities(&mut self, frame: &Frame) {
+        // Instance i draws from slot i of instance_buf.
+        if !self.dynamic.instances.is_empty() {
+            let m = &self.dynamic.materials;
+            for (sh, si, slot) in &m.animated {
+                if let Some(p) = stage_params(sh, *si, frame.time) {
+                    self.queue.write_buffer(
+                        &m.params_buf,
+                        u64::from(*slot) * ENT_STAGE_STRIDE,
+                        bytemuck::bytes_of(&p),
+                    );
+                }
+            }
+            let sets = self.pick_entity_lights();
+            self.queue
+                .write_buffer(&self.dynamic.light_buf, 0, bytemuck::cast_slice(&sets));
+            let raw: Vec<InstanceRaw> = self.dynamic.instances.iter().map(|(_, r)| *r).collect();
+            self.queue
+                .write_buffer(&self.dynamic.instance_buf, 0, bytemuck::cast_slice(&raw));
+            self.queue.write_buffer(
+                &self.dynamic.bone_buf,
+                0,
+                bytemuck::cast_slice(&self.dynamic.bone_mats),
+            );
+            frame_write!(
+                self,
+                "upload entity lights, instances and bones",
+                std::mem::size_of_val(sets.as_slice())
+                    + std::mem::size_of_val(raw.as_slice())
+                    + std::mem::size_of_val(self.dynamic.bone_mats.as_slice())
+            );
+        }
+    }
+
+    /// The view model's uniforms, lights and bones; returns whether it
+    /// draws.
+    fn upload_view_model(&mut self, frame: &Frame, vm: Option<&VmDraw>) -> bool {
+        let draw_vm = match &vm {
+            Some(draw) if !self.vm_pass.models.is_empty() => {
+                let to_view = glam::camera::rh::view::look_to_mat4(frame.eye, frame.fwd, frame.up);
+                // CoD2: the grid at the eye, world space (cod2_model.wgsl);
+                // CoD4: the view model's own block, world space too
+                let cod2 = self.dynamic.cod2_light.is_some() || self.dynamic.cod4_light.is_some();
+                let lights = match (&self.dynamic.cod2_light, self.dynamic.lighting.as_mut()) {
+                    _ if self.dynamic.cod4_light.is_some() => {
+                        let c4 = self.dynamic.cod4_light.as_ref().expect("checked");
+                        // the gun's box: its lighting origin alone; its
+                        // block the volume's last
+                        let o = draw.light_origin;
+                        let block = entity_light::COD4_VOLUME_BLOCKS - 1;
+                        let (set, texels) = c4.set(o, [o, o], block, self.identity_light);
+                        self.dynamic
+                            .materials
+                            .cod4_volume
+                            .write_view_block(&self.queue, &texels);
+                        set
+                    }
+                    (Some(c2), _) => c2.entity_set(draw.light_origin, self.identity_light),
+                    (None, Some(l)) => {
+                        let scene = model_scene_lights(
+                            &self.dynamic.scene_lights,
+                            &self.dynamic.entity_scene_lights,
+                            self.dynamic_light,
+                        );
+                        let picked = l.entity_lights(draw.light_origin, &scene);
+                        entity_light::pack(&picked, Some(to_view), self.identity_light)
+                    }
+                    (None, None) => GpuLightSet::default(),
+                };
+                let uniform = vm_uniform(draw.transform, draw.fov_x, self.aspect());
+                self.queue.write_buffer(
+                    &self.vm_pass.uniform_buf,
+                    0,
+                    bytemuck::cast_slice(&uniform),
+                );
+                self.queue.write_buffer(
+                    &self.vm_pass.uniform_buf,
+                    VM_LIGHTS_OFFSET,
+                    bytemuck::bytes_of(&lights),
+                );
+                self.queue.write_buffer(
+                    &self.vm_pass.uniform_buf,
+                    VM_MISC_OFFSET,
+                    bytemuck::cast_slice(&[
+                        self.identity_light,
+                        f32::from(u8::from(cod2)),
+                        frame.time,
+                        0.0,
+                    ]),
+                );
+                self.queue.write_buffer(
+                    &self.vm_pass.uniform_buf,
+                    VM_VIEW_TO_WORLD_OFFSET,
+                    bytemuck::cast_slice(&to_view.inverse().to_cols_array()),
+                );
+                for (i, model) in self.vm_pass.models.iter().enumerate() {
+                    let Some(bones) = draw.bone_sets.get(i) else {
+                        continue;
+                    };
+                    if bones.is_empty() {
+                        continue;
+                    }
+                    if bones.len() > VM_BONE_COUNT {
+                        static VM_BONE_CAP_WARNED: std::sync::Once = std::sync::Once::new();
+                        VM_BONE_CAP_WARNED.call_once(|| {
+                            log::warn!(
+                                "viewmodel bone set of {} exceeds the shader's {VM_BONE_COUNT}; truncating",
+                                bones.len()
+                            );
+                        });
+                    }
+                    let cols: Vec<[f32; 16]> = bones
+                        .iter()
+                        .take(VM_BONE_COUNT)
+                        .map(glam::Mat4::to_cols_array)
+                        .collect();
+                    self.queue
+                        .write_buffer(&model.bone_buf, 0, bytemuck::cast_slice(&cols));
+                    frame_write!(self, "upload view model bones", cols.len() * 64);
+                }
+                true
+            }
+            _ => false,
+        };
+
+        draw_vm && self.vm_pass.skins.len() == self.vm_pass.models.len()
+    }
+
+    /// The frame's entity and view model surfaces in draw order; the
+    /// shadow casters keep every instance.
+    fn frame_ent_draws(&self, frame: &Frame, draw_vm: bool) -> Vec<EntDraw> {
+        let vm_skins: &[Vec<Rc<EntSkin>>] = if draw_vm { &self.vm_pass.skins } else { &[] };
+        // the instances the view can see; the shadow casters keep them all
+        let frustum = vcod_common::vis::Frustum::from_view_proj(frame.view_proj);
+        let seen: Vec<bool> = (0..self.dynamic.instances.len())
+            .map(|k| !self.draw_joins || instance_seen(&self.dynamic, k, &frustum))
+            .collect();
+
+        sorted_ent_draws(
+            self.dynamic
+                .instances
+                .iter()
+                .enumerate()
+                .filter(|&(i, _)| seen[i])
+                .flat_map(|(i, (m, _))| {
+                    self.dynamic.models[*m]
+                        .skins
+                        .iter()
+                        .enumerate()
+                        .map(move |(j, sk)| (i as u32, j as u32, &**sk))
+                }),
+            vm_skins.iter().enumerate().flat_map(|(i, skins)| {
+                skins
+                    .iter()
+                    .enumerate()
+                    .map(move |(j, sk)| (i as u32, j as u32, &**sk))
+            }),
+        )
+    }
+
+    /// The frame's target and its view. `None` skips the frame: the
+    /// surface gave no texture, so the writes queued so far submit now.
+    fn acquire(&mut self) -> Option<(Option<wgpu::SurfaceTexture>, wgpu::TextureView)> {
+        let surface_tex = match &self.target {
+            Target::Offscreen(_) => None,
+            Target::Surface(s) => Some(s.get_current_texture()),
+        };
+        let surface_tex = match surface_tex {
+            None => None,
+            Some(t) => Some(match t {
+                wgpu::CurrentSurfaceTexture::Success(tex)
+                | wgpu::CurrentSurfaceTexture::Suboptimal(tex) => tex,
+                // A frame with no surface still submits, so the writes it
+                // queued above go now and do not pile up until one draws.
+                wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                    self.queue.submit([]);
+                    return None;
+                }
+                wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                    self.queue.submit([]);
+                    self.reconfigure();
+                    return None;
+                }
+                wgpu::CurrentSurfaceTexture::Validation => {
+                    log::warn!("dropped frame: surface validation error");
+                    self.queue.submit([]);
+                    return None;
+                }
+            }),
+        };
+        let view = match (&surface_tex, &self.target) {
+            (Some(t), _) => t.texture.create_view(&Default::default()),
+            (None, Target::Offscreen(t)) => t.create_view(&Default::default()),
+            (None, Target::Surface(_)) => unreachable!("a surface frame holds its texture"),
+        };
+        Some((surface_tex, view))
+    }
+
+    /// The shadow passes before the scene: `vc_shadows`' maps, CoD2's
+    /// cookies (and their receivers unless they draw over the prepass) and
+    /// CoD4's sun shadow. Returns whether `vc_shadows` drew and whether the
+    /// receivers wait for the prepass.
+    fn encode_shadow_passes(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        frame: &Frame,
+        (camera, moved): (&[f32; CAMERA_FLOATS], &[glam::Mat4]),
+        prof_slot: Option<usize>,
+    ) -> (bool, bool) {
+        let shadow_on = self.encode_shadow_maps(encoder, frame, camera, moved);
+        if shadow_on {
+            frame_write!(self, "vc_shadows maps (not sized)", 0);
+        }
+        if let Some(g) = &self.prof_gpu {
+            g.stamp(prof_slot, encoder, 1);
+        }
+        self.encode_cookies(encoder, frame);
+        let receivers_on_prepass = self.cookie_receivers_on_prepass();
+        if !receivers_on_prepass {
+            Self::encode_cookie_receivers(self.cookie_receivers(), encoder, frame, false);
+        }
+        if let Some(g) = &self.prof_gpu {
+            g.stamp(prof_slot, encoder, 2);
+        }
+        self.encode_sun_shadow(encoder, frame);
+        if let Some(g) = &self.prof_gpu {
+            g.stamp(prof_slot, encoder, 3);
+        }
+        if !shadow_on && let Some(sp) = &self.shadows {
+            sp.idle(&self.queue);
+        }
+        (shadow_on, receivers_on_prepass)
+    }
+
+    /// The sky into the scene pass, first: the farbox, the sun disc and
+    /// the dome.
+    fn draw_sky(&self, pass: &mut wgpu::RenderPass<'_>, frame: &Frame) {
+        // The sky draws first so every world draw overwrites it; the box
+        // and dome both ignore depth (cleared 1.0) and write none. CoD
+        // keeps the sky visible under linear fog (VERIFIED live on
+        // mp_ship, unlike RTCW's drawsky=false).
+        if let (Some(world), Some(sky)) = (&self.world, &self.sky) {
+            if let Some(farbox) = &sky.farbox {
+                pass.set_pipeline(&farbox.pipeline);
+                pass.set_bind_group(2, &farbox.eye_bg, &[]);
+                pass.set_vertex_buffer(0, farbox.vertex_buf.slice(..));
+                pass.set_index_buffer(farbox.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                for (axis, &(first, end)) in farbox.sides.iter().enumerate() {
+                    pass.set_bind_group(1, &farbox.side_bgs[axis], &[]);
+                    pass.draw_indexed(first..end, 0, 0..1);
+                }
+                tally(&self.census, |c| {
+                    let n = farbox.sides.len() as u32;
+                    c.sky += n;
+                    c.pipelines += 1;
+                    c.bind_groups += 1 + n;
+                });
+            }
+            // The sunfile disc: additive billboard along the sun
+            // direction at farbox distance, camera-facing via world axes.
+            if let Some(sun) = sky.sun.as_ref().filter(|_| self.sky_drawn && self.draw_sun) {
+                let center = frame.eye + sun.dir * sky::box_size(Z_FAR, Z_NEAR);
+                let up = glam::Vec3::Z;
+                let right = up.cross(sun.dir).normalize_or_zero();
+                let quad_up = sun.dir.cross(right);
+                let r = right * sun.half_extent;
+                let u = quad_up * sun.half_extent;
+                let corner = |dr: f32, du: f32| sky::SkyBoxVert {
+                    pos: (center + r * dr + u * du).to_array(),
+                    uv: [(dr + 1.0) * 0.5, 1.0 - (du + 1.0) * 0.5],
+                };
+                let verts = [
+                    corner(-1.0, -1.0),
+                    corner(1.0, -1.0),
+                    corner(1.0, 1.0),
+                    corner(-1.0, -1.0),
+                    corner(1.0, 1.0),
+                    corner(-1.0, 1.0),
+                ];
+                self.queue
+                    .write_buffer(&sun.vertex_buf, 0, bytemuck::cast_slice(&verts));
+                pass.set_pipeline(&sun.pipeline);
+                pass.set_bind_group(1, &sun.bind_group, &[]);
+                pass.set_vertex_buffer(0, sun.vertex_buf.slice(..));
+                pass.draw(0..6, 0..1);
+                tally(&self.census, |c| {
+                    c.sky += 1;
+                    c.pipelines += 1;
+                    c.bind_groups += 1;
+                });
+            }
+            if let Some(dome) = &sky.dome {
+                pass.set_vertex_buffer(0, dome.vertex_buf.slice(..));
+                pass.set_index_buffer(dome.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                let mut bound: Option<(StageVariant, bool)> = None;
+                for ds in &dome.stages {
+                    let key = (ds.variant, ds.two_sided);
+                    if bound != Some(key) {
+                        pass.set_pipeline(self.stage_pipeline(ds.variant, ds.two_sided, false));
+                        bound = Some(key);
+                        tally(&self.census, |c| c.pipelines += 1);
+                    }
+                    pass.set_bind_group(1, ds.mat.bind_group(frame.time), &[]);
+                    pass.set_bind_group(
+                        2,
+                        ds.stage.bind_group(frame.time),
+                        &[world.stage_offset(ds.slot)],
+                    );
+                    pass.draw_indexed(0..dome.index_count, 0, 0..1);
+                    tally(&self.census, |c| {
+                        c.sky += 1;
+                        c.bind_groups += 2;
+                    });
+                }
+            }
+        }
     }
 }
 
