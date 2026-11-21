@@ -53,7 +53,7 @@ use crate::console::shell::Shell;
 use crate::hud::HudQuad;
 use crate::hud::cod2elem::ScreenPlacement;
 use crate::hud::font::{self, Font};
-use crate::play::cod4::{Cod4Session, EV_OBITUARY, Fired, client_u32};
+use crate::play::cod4::{Cod4Session, ET_HELICOPTER, ET_PLANE, EV_OBITUARY, Fired, client_u32};
 
 /// `cg_chatHeight` 8 and `cg_chatTime` 12000 (`iw3mp.exe` 0x43ce07,
 /// 0x43cdd0), drawn at `cg_hudChatPosition` (5, 204).
@@ -94,10 +94,6 @@ const EF_TURRET_ACTIVE: u32 = 0x2_0000;
 /// (`iw3mp.exe` 0x429717, 0x429856).
 const EF_PING: u32 = 0x40_0000;
 const EF_COMPASS_PING: u32 = 0x80_0000;
-/// 1.7's `ET_HELICOPTER` and `ET_PLANE`, the compass's owner draws 155
-/// and 156.
-const ET_HELICOPTER: u32 = 12;
-const ET_PLANE: u32 = 13;
 
 /// A line of text at `scale`, grid units: the 48-unit font height,
 /// truncated as the layouts read it.

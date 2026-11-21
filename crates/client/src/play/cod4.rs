@@ -86,6 +86,10 @@ pub const ET_MG42: u32 = 11;
 /// (cod4-client-view.md 11).
 pub const ET_HELICOPTER: u32 = 12;
 pub const ET_PLANE: u32 = 13;
+/// A vehicle: its own row of 1.7's per-eType table (`cod4_lnxded`
+/// 0x8228be0, the vehicle table at 0x8225f80, cod4-netfields.md 1). The
+/// name is INFERRED.
+pub const ET_VEHICLE: u32 = 14;
 pub const ET_EVENTS: u32 = 17;
 /// A brush model's `solid`.
 const SOLID_BMODEL: u32 = 0xff_ffff;

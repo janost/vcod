@@ -175,6 +175,14 @@ pub fn up_hint(yaw: f32, pitch: f32, roll: f32) -> Vec3 {
     Quat::from_axis_angle(basis(yaw, pitch).0, roll) * Vec3::Z
 }
 
+/// The view's forward, right and up off `(yaw, pitch, roll)` radians, the
+/// roll turning right and up about forward.
+pub fn rolled_basis(yaw: f32, pitch: f32, roll: f32) -> (Vec3, Vec3, Vec3) {
+    let forward = basis(yaw, pitch).0;
+    let right = forward.cross(up_hint(yaw, pitch, roll)).normalize();
+    (forward, right, right.cross(forward))
+}
+
 /// Wrap an angle in degrees to `[-180, 180)`.
 fn wrap180(mut d: f32) -> f32 {
     d %= 360.0;

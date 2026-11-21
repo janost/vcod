@@ -297,6 +297,14 @@ impl Cod4Vehicles {
         self.bolts.retain(|b| placed.contains_key(&b.entity));
     }
 
+    /// [`Self::tag`]'s world origin and turn, as weapon tags carry them.
+    pub(crate) fn tag_origin_turn(&self, number: u32, tag: &str) -> Option<(Vec3, Quat)> {
+        self.tag(number, tag).map(|(_, p)| {
+            let q = Quat::from_mat3(&glam::Mat3::from_cols(p.axis[0], p.axis[1], p.axis[2]));
+            (p.origin, q)
+        })
+    }
+
     /// Entity `number`'s `tag` this frame, by name (case-blind, as the
     /// engine's script strings are), as an fx bolt and its world pose.
     pub(crate) fn tag(&self, number: u32, tag: &str) -> Option<(TagBolt, TagPose)> {
