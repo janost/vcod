@@ -55,7 +55,8 @@ Ranked by how much a player notices.
   are radii was open. They are (`iw3mp.exe` 0x496ef0), so sprites were
   right, but tails drew half 1.7's length; tails now run `2 * size[1]`,
   and model elements load out of the zones and draw at the visual
-  state's scale (cod4-effects.md 9).
+  state's scale (cod4-effects.md 9), on 1.7's axes (9.1). Their
+  physics body (flag 0x8000000) is still vcod's own path.
 
 - A playerstate sent without origin (bit 0) kept the base's origin and
   velocity. It now takes them, the view, `bobCycle` and `movementDir`
