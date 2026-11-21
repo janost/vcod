@@ -448,8 +448,15 @@ impl Cod2World {
     /// `r_vc_normalMaps` (cod4-client-perf.md 25): off, every CoD4 set
     /// lights by its vertex normal and reads no normal map, as one
     /// without a map does. Its split pipelines' variants without the map
-    /// are made on the first switch off.
-    pub fn set_normal_maps(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, on: bool) {
+    /// are made on the first switch off, through `shared`, so a later map
+    /// takes them made.
+    pub fn set_normal_maps(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        on: bool,
+        shared: &mut LitShared,
+    ) {
         for (buf, u) in &self.normal_maps {
             let mut u = *u;
             if !on {
@@ -477,9 +484,16 @@ impl Cod2World {
             })
             .filter(|(k, _)| !self.pipelines.contains_key(k))
             .collect();
+        let mut seen = std::collections::HashSet::new();
+        let fresh: Vec<MadeKey> = todo
+            .iter()
+            .map(|&(_, made)| made)
+            .filter(|m| !shared.pipelines.contains_key(m) && seen.insert(*m))
+            .collect();
+        let built = par_compile(&fresh, |&m| build_made(device, module, layout, *format, m));
+        shared.pipelines.extend(fresh.into_iter().zip(built));
         for (key, made) in todo {
-            let p = build_made(device, module, layout, *format, made);
-            self.pipelines.insert(key, p);
+            self.pipelines.insert(key, shared.pipelines[&made].clone());
             self.made.insert(key, made);
         }
         let todo: Vec<PrepassKey> = self
@@ -488,9 +502,17 @@ impl Cod2World {
             .map(|&(ts, fs)| (ts, fs.map(off)))
             .filter(|k| !self.prepass.contains_key(k))
             .collect();
+        let fresh: Vec<PrepassKey> = todo
+            .iter()
+            .filter(|k| !shared.prepass.contains_key(k))
+            .copied()
+            .collect();
+        let built = par_compile(&fresh, |&(ts, fs)| {
+            make_prepass_pipeline(device, module, layout, *format, ts, fs)
+        });
+        shared.prepass.extend(fresh.into_iter().zip(built));
         for key in todo {
-            let p = make_prepass_pipeline(device, module, layout, *format, key.0, key.1);
-            self.prepass.insert(key, p);
+            self.prepass.insert(key, shared.prepass[&key].clone());
         }
     }
 
@@ -669,6 +691,9 @@ pub(super) struct LitShared {
     base: Option<LitBase>,
     pipelines: HashMap<MadeKey, wgpu::RenderPipeline>,
     prepass: HashMap<PrepassKey, wgpu::RenderPipeline>,
+    /// By (two-sided, alpha-tested).
+    floatz: HashMap<(bool, bool), wgpu::RenderPipeline>,
+    water: Option<super::cod2_water::WaterKeep>,
 }
 
 struct LitBase {
@@ -903,8 +928,7 @@ impl<'a> Cod2Builder<'a> {
         if shared.base.as_ref().is_none_or(|b| b.format != format) {
             shared = LitShared {
                 base: Some(LitBase::new(device, queue, format, camera_layout)),
-                pipelines: HashMap::new(),
-                prepass: HashMap::new(),
+                ..LitShared::default()
             };
         }
         let base = shared.base.as_ref().expect("made above");
@@ -1060,9 +1084,10 @@ impl<'a> Cod2Builder<'a> {
         bias: bool,
     ) -> LitBind {
         let (device, camera_layout) = (self.device, self.camera_layout);
-        let water = self
-            .water
-            .get_or_insert_with(|| super::cod2_water::WaterBuilder::new(device, camera_layout));
+        let keep = &mut self.shared.water;
+        let water = self.water.get_or_insert_with(|| {
+            super::cod2_water::WaterBuilder::with_keep(device, camera_layout, keep.take())
+        });
         let i = water.bind(
             self.device,
             self.queue,
@@ -1438,15 +1463,21 @@ impl<'a> Cod2Builder<'a> {
         let pipelines = self.lit_pipelines();
         let prepass = self.prepass_pipelines();
         let keys = [(false, false), (false, true), (true, false), (true, true)];
+        let fresh: Vec<(bool, bool)> = keys
+            .into_iter()
+            .filter(|k| !self.shared.floatz.contains_key(k))
+            .collect();
         let (device, module, layout) = (self.device, &self.module, &self.layout);
         let t = std::time::Instant::now();
+        let built = par_compile(&fresh, |&(two_sided, atest)| {
+            make_floatz_pipeline(device, module, layout, two_sided, atest)
+        });
+        self.compile += t.elapsed();
+        self.shared.floatz.extend(fresh.into_iter().zip(built));
         let floatz: HashMap<(bool, bool), wgpu::RenderPipeline> = keys
             .into_iter()
-            .zip(par_compile(&keys, |&(two_sided, atest)| {
-                make_floatz_pipeline(device, module, layout, two_sided, atest)
-            }))
+            .map(|k| (k, self.shared.floatz[&k].clone()))
             .collect();
-        self.compile += t.elapsed();
         log::info!(
             "cod2 lit: {} materials, {} lightmap pages, {} pipelines ({} split), {} prepass, {:.0} ms compiling",
             self.out.len(),
@@ -1468,7 +1499,11 @@ impl<'a> Cod2Builder<'a> {
             made: self.made,
             material_bgs: self.out,
             lightmap_bgs: self.lightmap_bgs,
-            water: self.water.map(super::cod2_water::WaterBuilder::finish),
+            water: self.water.map(|w| {
+                let (waters, keep) = w.finish();
+                self.shared.water = Some(keep);
+                waters
+            }),
             cod4_waters: self.cod4_waters,
             prepass,
             floatz,

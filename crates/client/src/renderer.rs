@@ -486,6 +486,7 @@ pub struct Renderer {
     /// The loaded world's feathered and distortion stage pipelines
     /// (`cod4_worldfx`); `None` when it has none.
     world_fx: Option<cod4_worldfx::WorldFxPass>,
+    world_fx_keep: cod4_worldfx::WorldFxKeep,
     /// Retail's `identityLight` for the current overbright bits
     /// (`gamma::identity_light`): what lit colours are scaled by.
     identity_light: f32,
@@ -1151,6 +1152,7 @@ impl Renderer {
             soft,
             scene_copy,
             world_fx: None,
+            world_fx_keep: Default::default(),
             identity_light: 0.5,
             image_gamma: None,
             textures,

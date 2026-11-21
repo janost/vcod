@@ -119,6 +119,18 @@ impl Waters {
     }
 }
 
+/// What a water load makes no differently from map to map: the shader,
+/// the layouts, the sampler and every pipeline made, kept across loads in
+/// `cod2::LitShared`.
+pub(super) struct WaterKeep {
+    module: wgpu::ShaderModule,
+    layout: wgpu::PipelineLayout,
+    material_layout: wgpu::BindGroupLayout,
+    sim_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    pipelines: HashMap<(usize, bool, Option<PolygonOffset>), wgpu::RenderPipeline>,
+}
+
 /// Builds [`Waters`] during a world load.
 pub(super) struct WaterBuilder {
     module: wgpu::ShaderModule,
@@ -129,13 +141,40 @@ pub(super) struct WaterBuilder {
     /// One `rand()` stream for every setup, as retail's.
     rng: GlibcRand,
     material_of: HashMap<String, u32>,
+    /// Every pipeline made, an earlier load's included.
+    made: HashMap<(usize, bool, Option<PolygonOffset>), wgpu::RenderPipeline>,
+    /// This load's.
     pipelines: HashMap<(usize, bool, Option<PolygonOffset>), wgpu::RenderPipeline>,
     material_bgs: Vec<wgpu::BindGroup>,
     sims: Vec<WaterSim>,
 }
 
 impl WaterBuilder {
-    pub fn new(device: &wgpu::Device, camera_layout: &wgpu::BindGroupLayout) -> Self {
+    /// A builder over an earlier load's `keep`, or a new one.
+    pub fn with_keep(
+        device: &wgpu::Device,
+        camera_layout: &wgpu::BindGroupLayout,
+        keep: Option<WaterKeep>,
+    ) -> Self {
+        let keep = keep.unwrap_or_else(|| WaterKeep::new(device, camera_layout));
+        WaterBuilder {
+            module: keep.module,
+            layout: keep.layout,
+            material_layout: keep.material_layout,
+            sim_layout: keep.sim_layout,
+            sampler: keep.sampler,
+            rng: GlibcRand::new(1),
+            material_of: HashMap::new(),
+            made: keep.pipelines,
+            pipelines: HashMap::new(),
+            material_bgs: Vec::new(),
+            sims: Vec::new(),
+        }
+    }
+}
+
+impl WaterKeep {
+    fn new(device: &wgpu::Device, camera_layout: &wgpu::BindGroupLayout) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("cod2_water.wgsl"),
             source: wgpu::ShaderSource::Wgsl(COD2_WATER_WGSL.into()),
@@ -174,20 +213,18 @@ impl WaterBuilder {
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
-        WaterBuilder {
+        WaterKeep {
             module,
             layout,
             material_layout,
             sim_layout,
             sampler,
-            rng: GlibcRand::new(1),
-            material_of: HashMap::new(),
             pipelines: HashMap::new(),
-            material_bgs: Vec::new(),
-            sims: Vec::new(),
         }
     }
+}
 
+impl WaterBuilder {
     /// Binds a water batch of `sh`, which [`draws_water`] accepted: the
     /// material's group (and its height map, same index) and the pipeline.
     pub fn bind(
@@ -203,18 +240,20 @@ impl WaterBuilder {
         let (slot, blend, depth_write) = super::cod2::variant_state(v).expect("a lit variant");
         let key = (slot, two_sided, offset);
         if !self.pipelines.contains_key(&key) {
-            let p = make_lit_pipeline(
-                device,
-                &self.module,
-                &self.layout,
-                format,
-                blend,
-                depth_write,
-                two_sided,
-                ("fs_main", None),
-                offset.map_or_else(Default::default, depth_bias),
-            );
-            self.pipelines.insert(key, p);
+            let p = self.made.entry(key).or_insert_with(|| {
+                make_lit_pipeline(
+                    device,
+                    &self.module,
+                    &self.layout,
+                    format,
+                    blend,
+                    depth_write,
+                    two_sided,
+                    ("fs_main", None),
+                    offset.map_or_else(Default::default, depth_bias),
+                )
+            });
+            self.pipelines.insert(key, p.clone());
         }
         if let Some(&i) = self.material_of.get(&sh.name) {
             return i;
@@ -321,15 +360,25 @@ impl WaterBuilder {
         })
     }
 
-    pub fn finish(self) -> Waters {
+    /// The load's waters, and what the next load reuses.
+    pub fn finish(self) -> (Waters, WaterKeep) {
         if !self.sims.is_empty() {
             log::info!("cod2 water: {} materials", self.sims.len());
         }
-        Waters {
+        let waters = Waters {
             pipelines: self.pipelines,
             material_bgs: self.material_bgs,
             sims: self.sims,
-        }
+        };
+        let keep = WaterKeep {
+            module: self.module,
+            layout: self.layout,
+            material_layout: self.material_layout,
+            sim_layout: self.sim_layout,
+            sampler: self.sampler,
+            pipelines: self.made,
+        };
+        (waters, keep)
     }
 }
 
@@ -531,7 +580,7 @@ mod tests {
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let format = super::super::SCENE_FORMAT;
-        let mut b = WaterBuilder::new(&device, &camera);
+        let mut b = WaterBuilder::with_keep(&device, &camera, None);
         let _ = b.bind(
             &device,
             &queue,
@@ -552,7 +601,7 @@ mod tests {
             &b.sims[i as usize].texture,
             std::slice::from_ref(&tex),
         );
-        let waters = b.finish();
+        let (waters, _) = b.finish();
 
         let eye = Vec3::new(0.0, 0.0, 120.0);
         let target = Vec3::new(100.0, 30.0, 0.0);

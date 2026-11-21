@@ -1335,7 +1335,12 @@ impl Renderer {
         if let Some(c2) = self.world.as_mut().and_then(|w| w.cod2.as_mut())
             && c2.normal_maps_on != self.cod4_options.normal_maps
         {
-            c2.set_normal_maps(&self.device, &self.queue, self.cod4_options.normal_maps);
+            c2.set_normal_maps(
+                &self.device,
+                &self.queue,
+                self.cod4_options.normal_maps,
+                &mut self.cod2_lit,
+            );
         }
         if self.fog.set && self.cod4_options.fog {
             let f = &self.fog.live;

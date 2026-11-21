@@ -1511,7 +1511,7 @@ impl Renderer {
             .map(|sb| (sb.fx, sb.variant, sb.two_sided, sb.bias))
             .collect();
         self.world_fx = (!fx_keys.is_empty()).then(|| {
-            cod4_worldfx::WorldFxPass::new(
+            self.world_fx_keep.pass(
                 device,
                 self.world_format,
                 [
