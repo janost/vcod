@@ -282,7 +282,9 @@ fn headless_device_has_the_window_limits() {
 
 /// mp_carentan through the app's path: the world, its submodels, a player
 /// body bind-posed and skinned, the kar98k viewmodel, a smoke and an
-/// impact sprite, a bullet hole and the HUD, every cvar pass on.
+/// impact sprite, a bullet hole and the HUD, every cvar pass on. With
+/// `VCOD_C1_SHOTS=<dir>` the frame is written there as a TGA, for the GPU
+/// kit to compare builds byte for byte.
 #[test]
 fn cod1_renderer_builds_and_draws_without_validation_errors() {
     let Some(fs) = vcod_common::testing::game_fs() else {
@@ -352,6 +354,21 @@ fn cod1_renderer_builds_and_draws_without_validation_errors() {
         },
     );
     assert_clean(&errors, "CoD1 mp_carentan frame");
+    if let Some(dir) = std::env::var_os("VCOD_C1_SHOTS").map(std::path::PathBuf::from) {
+        let (w, h, bgra) = r.read_offscreen().expect("offscreen target");
+        let rgba: Vec<u8> = bgra
+            .chunks(4)
+            .flat_map(|p| [p[2], p[1], p[0], 255])
+            .collect();
+        image::save_buffer(
+            dir.join("mp_carentan.tga"),
+            &rgba,
+            w,
+            h,
+            image::ExtendedColorType::Rgba8,
+        )
+        .unwrap();
+    }
     assert!(
         r.fx.textures
             .get(vcod_common::shader::DEFAULT_IMAGE)
@@ -1137,6 +1154,42 @@ fn cod2_dynamic_skins_upload_only_what_a_stage_reads() {
     }
     assert!(by_path > 0, "no skin binds its images by path");
     assert_clean(&errors, "CoD2 dynamic model upload");
+}
+
+/// The CoD1 twin: the S&D bomb's `timer_face.dds` skin has a `skins/`
+/// block that maps its images by path, so its own image never uploads,
+/// through the prewarm's batch or alone.
+#[test]
+fn cod1_dynamic_skins_upload_only_what_a_stage_reads() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    let Some((mut r, errors)) = Renderer::headless(&fs, false, 1) else {
+        eprintln!("no adapter with BC textures; skipped");
+        return;
+    };
+    let bomb = model::load(&fs, "mp_bomb1").unwrap();
+    let bomb2 = model::load(&fs, "mp_bomb2").unwrap();
+    r.upload_dynamic_models(&fs, &[&bomb]);
+    r.upload_dynamic_model(&fs, &bomb2)
+        .expect("the model uploads");
+    let d = &r.dynamic;
+    let white = &d.materials.images[0];
+    let mut by_path = Vec::new();
+    for model in &d.models {
+        for (name, ent) in model.vm.skins.iter().zip(&model.skins) {
+            assert_eq!(
+                &d.skin_groups[name] == white,
+                !ent.reads_skin_image(),
+                "{name}"
+            );
+            if !ent.reads_skin_image() {
+                by_path.push(name.to_ascii_lowercase());
+            }
+        }
+    }
+    assert!(by_path.iter().any(|n| n == "timer_face.dds"), "{by_path:?}");
+    assert_clean(&errors, "CoD1 dynamic model upload");
 }
 
 /// The front end with no map loaded, single-sampled as CoD2 runs by

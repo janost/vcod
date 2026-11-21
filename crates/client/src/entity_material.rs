@@ -299,9 +299,14 @@ pub(crate) struct EntSkin {
     pub(crate) lit: bool,
     /// The material's sort (`Material::sort`), retail's first sort key.
     pub(crate) sort: f32,
-    /// Load order: stands in for retail's tie-break between equal sorts
-    /// (R_SortNewShader, CoDMP.exe 0x4fb790).
-    pub(crate) order: u32,
+    /// Its place among the model shaders: in retail's sorted list
+    /// (R_SortNewShader, CoDMP.exe 0x4fb790) on a CoD1 map, load order
+    /// elsewhere. A later registration may move it.
+    pub(crate) order: std::cell::Cell<u32>,
+    /// The world rank it draws before on a sort tie
+    /// (`renderer::ShaderList::model_keys`), `AFTER_THE_WORLD` for after
+    /// all of the world's.
+    pub(crate) anchor: std::cell::Cell<u32>,
     /// A CoD2 material whose set names `shadowcookie caster`: the surface
     /// draws into its entity's shadow cookie (`renderer::cod2_cookie`).
     pub(crate) cookie_caster: bool,
@@ -458,6 +463,13 @@ pub(crate) struct EntityMaterials {
     pub(crate) animated: Vec<(Material, usize, u32)>,
     next_slot: u32,
     warns: WarnSet,
+    /// A CoD1 map's sorted shader list, which each skin registers into as
+    /// it builds; `None` elsewhere, where load order stands in.
+    shaders: Option<crate::renderer::ShaderList>,
+    /// The skins registered into `shaders`, in registration order.
+    ranked: Vec<Rc<EntSkin>>,
+    /// Moves on each registration that may reorder the skins.
+    order_epoch: u32,
     /// What stage images load with: `r_picmip2` unless the shader says
     /// `nopicmip`, and `r_texturebits`.
     textures: TextureSettings,
@@ -619,6 +631,9 @@ impl EntityMaterials {
             animated: Vec::new(),
             next_slot: 0,
             warns: WarnSet::new(),
+            shaders: None,
+            ranked: Vec::new(),
+            order_epoch: 0,
             textures,
         };
         materials
@@ -642,6 +657,8 @@ impl EntityMaterials {
         self.by_skin.clear();
         self.loaded.clear();
         self.animated.clear();
+        self.shaders = None;
+        self.ranked.clear();
         self.images.truncate(1);
         self.views.truncate(1);
         self.image_index.clear();
@@ -723,6 +740,31 @@ impl EntityMaterials {
             };
             self.pipelines.push((key, [world, view]));
         }
+    }
+
+    /// Whether `skin`'s draw may read the surface's skin image, before
+    /// [`Self::skin`] builds it: a `$texturename` stage, no stage, or more
+    /// stages than the slots left now (the plain fallback). The material
+    /// waits in `loaded` for [`Self::skin`].
+    pub(crate) fn may_read_skin_image(
+        &mut self,
+        fs: &dyn AssetSource,
+        lib: &MaterialLib,
+        skin: &str,
+    ) -> bool {
+        if let Some(d) = self.by_skin.get(skin) {
+            return d.reads_skin_image();
+        }
+        let warns = &mut self.warns;
+        let sh = self
+            .loaded
+            .entry(skin.to_string())
+            .or_insert_with(|| load(fs, lib, skin, warns));
+        sh.stages.is_empty()
+            || stage_slots(self.next_slot.max(1), sh.stages.len(), MAX_ENT_STAGES).is_none()
+            || sh.stages.iter().any(|st| {
+                matches!(&st.bundles[0].image, ImageRef::Path(p) if p.eq_ignore_ascii_case(TEXTURE_NAME))
+            })
     }
 
     /// The pipeline keys [`Self::skin`] would build for `skins` not
@@ -1022,7 +1064,8 @@ impl EntityMaterials {
                 rigid,
             });
         }
-        if stages.is_empty() {
+        let fallback = stages.is_empty();
+        if fallback {
             stages.push(EntStageDraw {
                 pipeline: 0,
                 image: StageImage::Skin,
@@ -1048,13 +1091,42 @@ impl EntityMaterials {
             stages,
             lit,
             sort,
-            order: self.by_skin.len() as u32,
+            order: std::cell::Cell::new(self.by_skin.len() as u32),
+            anchor: std::cell::Cell::new(crate::renderer::AFTER_THE_WORLD),
             cookie_caster: sh.cookie.caster,
             sun_caster: sh.cookie.sun_caster,
             sun_cut,
         });
         self.by_skin.insert(skin.to_string(), out.clone());
+        if let Some(list) = &mut self.shaders {
+            // the image `$texturename` loads: the skin under `skins/`, cut
+            // at its first `.` as R_FindShader cuts it (0x4fc5c0)
+            let image = format!("skins/{}", skin.split('.').next().unwrap_or(skin));
+            match fallback {
+                true => list.register(&implicit(skin), &image),
+                false => list.register(&sh, &image),
+            }
+            self.ranked.push(out.clone());
+            for (sk, (order, anchor)) in self.ranked.iter().zip(list.model_keys()) {
+                sk.order.set(order);
+                sk.anchor.set(anchor);
+            }
+            self.order_epoch = self.order_epoch.wrapping_add(1);
+        }
         out
+    }
+
+    /// The map's sorted shader list the skins register into from now on
+    /// (CoD1; `None` keeps load order).
+    pub(crate) fn set_shader_list(&mut self, list: Option<crate::renderer::ShaderList>) {
+        self.shaders = list;
+        self.ranked.clear();
+        self.order_epoch = self.order_epoch.wrapping_add(1);
+    }
+
+    /// Moves whenever a registration may have reordered the skins.
+    pub(crate) fn order_epoch(&self) -> u32 {
+        self.order_epoch
     }
 
     /// A CoD2 probe stage's group 3: the material's normal, specular and

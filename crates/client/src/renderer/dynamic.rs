@@ -34,14 +34,16 @@ pub(super) struct EntDraw {
     pub(super) surf: u32,
     pub(super) sort: f32,
     pub(super) order: u32,
+    /// `EntSkin::anchor`: where it draws among the world's on a sort tie.
+    pub(super) anchor: u32,
     /// A viewmodel surface: depth-hack range and the view camera.
     pub(super) gun: bool,
 }
 
 /// The live entities' and the viewmodel's `(instance, surface, material)`
 /// in instance order, in one list sorted as retail's key does: the
-/// material's sort, its load order (the sorted index), then the entity
-/// number. The gun is added after the packet entities, so on one material
+/// material's sort, its place among the model shaders (`EntSkin::order`,
+/// the sorted index), then the entity number. The gun is added after the packet entities, so on one material
 /// it draws after them (docs/research/cod11-shader-scripts.md, §5).
 pub(super) fn sorted_ent_draws<'a>(
     ents: impl Iterator<Item = (u32, u32, &'a EntSkin)>,
@@ -52,7 +54,8 @@ pub(super) fn sorted_ent_draws<'a>(
             inst,
             surf,
             sort: sk.sort,
-            order: sk.order,
+            order: sk.order.get(),
+            anchor: sk.anchor.get(),
             gun: is_gun,
         }
     };
@@ -790,6 +793,8 @@ pub(super) struct DynamicPass {
     pub(super) placed_boxes: PlacedBoxes,
     /// The instances' entity draws in draw order, before the view cull.
     pub(super) ent_sorted: EntSorted,
+    /// `EntityMaterials::order_epoch` `ent_sorted` was sorted under.
+    pub(super) ent_sorted_epoch: u32,
     /// Per instance, where its lights are picked.
     pub(super) light_origins: Vec<glam::Vec3>,
     /// CoD4: each instance's posed world box (mins, maxs), as
@@ -1091,12 +1096,16 @@ impl Renderer {
             self.prefetch_skins(fs, skins.iter());
             return;
         }
-        let (lib, images) = (&self.shader_lib, &self.model_images);
-        let (textures, gamma) = (self.textures, self.image_gamma);
+        // a skin no stage of reads its own image is left to its draw's
+        // white group (`upload_dyn_lod`)
+        let mats = &mut self.dynamic.materials;
         let fresh: Vec<&String> = skins
             .iter()
             .filter(|s| !self.prepared_skins.contains_key(s.as_str()))
+            .filter(|s| mats.may_read_skin_image(fs, &self.shader_lib, s))
             .collect();
+        let (lib, images) = (&self.shader_lib, &self.model_images);
+        let (textures, gamma) = (self.textures, self.image_gamma);
         let prepared = vcod_common::laps::par_map(&fresh, |skin| {
             prepare_skin(fs, lib, images, &textures, gamma.as_ref(), skin)
         });
@@ -1246,35 +1255,39 @@ impl Renderer {
         materials: &[String],
     ) -> Option<usize> {
         let gamma = self.image_gamma;
-        if fs.game() == vcod_common::game::Game::Cod2 {
-            // CoD2's and CoD4's stages bind their images by path: a skin
-            // image only a `$texturename` stage or the fallback reads
-            // uploads, the others bind white, their pak read marked
-            for skin in drawn_skins(std::iter::once((surfaces, materials))) {
-                if self.dynamic.skin_groups.contains_key(&skin) {
-                    continue;
-                }
-                let ent = self.dynamic.materials.skin(
-                    &self.device,
-                    &self.queue,
-                    (fs, &self.model_images),
-                    &self.shader_lib,
-                    gamma.as_ref(),
-                    &skin,
-                );
-                let g = match ent.reads_skin_image() {
-                    true => {
-                        let (img, levels) = self.skin_image(fs, &skin);
-                        let view = upload_levels(&self.device, &self.queue, &skin, &img, &levels);
-                        vm_skin_group(&self.device, &self.vm_pass, &view)
-                    }
-                    false => {
-                        super::prop_skin::mark_colour_map(fs, self.shader_lib.get(&skin));
-                        self.dynamic.materials.images[0].clone()
-                    }
-                };
-                self.dynamic.skin_groups.insert(skin, g);
+        let cod2 = fs.game() == vcod_common::game::Game::Cod2;
+        // Stages bind their images by path: a skin image only a
+        // `$texturename` stage or the fallback reads uploads, the others
+        // bind white. Built in surface order, as the upload's loop
+        // below reads them, so each skin's load order holds.
+        for skin in drawn_skins(std::iter::once((surfaces, materials))) {
+            if self.dynamic.skin_groups.contains_key(&skin) {
+                continue;
             }
+            let ent = self.dynamic.materials.skin(
+                &self.device,
+                &self.queue,
+                (fs, &self.model_images),
+                &self.shader_lib,
+                gamma.as_ref(),
+                &skin,
+            );
+            let g = match ent.reads_skin_image() {
+                true => {
+                    let (img, levels) = self.skin_image(fs, &skin);
+                    let view = upload_levels(&self.device, &self.queue, &skin, &img, &levels);
+                    vm_skin_group(&self.device, &self.vm_pass, &view)
+                }
+                false => {
+                    // CoD2's pak read of the colour map is marked; CoD1's
+                    // retail never opens a scripted skin's own image
+                    if cod2 {
+                        super::prop_skin::mark_colour_map(fs, self.shader_lib.get(&skin));
+                    }
+                    self.dynamic.materials.images[0].clone()
+                }
+            };
+            self.dynamic.skin_groups.insert(skin, g);
         }
         let mut groups = std::mem::take(&mut self.dynamic.skin_groups);
         let uploaded = upload_vm_model(
@@ -1776,6 +1789,7 @@ pub(super) fn create_dynamic_pass(
         light_buf,
         placed_boxes: PlacedBoxes::default(),
         ent_sorted: EntSorted::default(),
+        ent_sorted_epoch: 0,
         light_written: Written::default(),
         instance_written: Written::default(),
         bone_written: Written::default(),

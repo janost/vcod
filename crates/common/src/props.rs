@@ -305,7 +305,23 @@ pub fn build(
     lighting: &mut StaticLighting,
     skin_draw: &dyn Fn(&str) -> SkinDraw,
 ) -> Props {
-    build_with(fs, &bsp.entities, Some(lighting), skin_draw, MAX_PROP_VERTS)
+    build_placed(
+        fs,
+        &Placed::load_drawn(fs, &bsp.entities),
+        lighting,
+        skin_draw,
+    )
+}
+
+/// [`build`] off `placed`, loaded from the same map's entity string: a
+/// client load that also builds its collision decodes each prop once.
+pub fn build_placed(
+    fs: &dyn AssetSource,
+    placed: &Placed,
+    lighting: &mut StaticLighting,
+    skin_draw: &dyn Fn(&str) -> SkinDraw,
+) -> Props {
+    build_with(fs, placed, Some(lighting), skin_draw, MAX_PROP_VERTS)
 }
 
 /// The name `R_FindShader` (CoDMP.exe 0x4fc5c0) looks a model skin up by:
@@ -355,25 +371,18 @@ type GroupKey = (String, Option<u32>);
 /// them is skipped as an unloadable model is.
 fn build_with(
     fs: &dyn AssetSource,
-    entities: &str,
+    placed: &Placed,
     mut lighting: Option<&mut StaticLighting>,
     skin_draw: &dyn Fn(&str) -> SkinDraw,
     max_verts: usize,
 ) -> Props {
-    let placements = placements(entities);
+    let (placements, cache) = (&placed.placements, &placed.models);
     let mut gens: HashMap<String, SkinGen> = HashMap::new();
     let mut draws: HashMap<String, SkinDraw> = HashMap::new();
     // (placement, vertex range, gen) per surface, and the normal each
     // vertex is lit with: retail's, the scaled axis renormalised
     let mut surf_runs: Vec<(usize, usize, usize, SkinGen)> = Vec::new();
     let mut lit_normals: Vec<Vec3> = Vec::new();
-    let cache = load_models(
-        fs,
-        placements
-            .iter()
-            .map(|p| p.model.as_str())
-            .filter(|m| !is_unregistered(m)),
-    );
     let mut verts: Vec<DrawVert> = Vec::new();
     let mut vert_placement: Vec<u32> = Vec::new();
     let mut vert_lit: Vec<bool> = Vec::new();
@@ -635,6 +644,20 @@ impl Placed {
     pub fn load(fs: &dyn AssetSource, entities: &str) -> Self {
         let placements = placements(entities);
         let models = load_models(fs, placements.iter().map(|p| p.model.as_str()));
+        Placed { placements, models }
+    }
+
+    /// [`Self::load`] without the `shadow_*` models ([`is_unregistered`]),
+    /// for a [`build`] alone: it never draws them.
+    fn load_drawn(fs: &dyn AssetSource, entities: &str) -> Self {
+        let placements = placements(entities);
+        let models = load_models(
+            fs,
+            placements
+                .iter()
+                .map(|p| p.model.as_str())
+                .filter(|m| !is_unregistered(m)),
+        );
         Placed { placements, models }
     }
 
@@ -1020,15 +1043,56 @@ mod tests {
             return;
         };
         let one = "{\n\"model\" \"xmodel/crate_misc1a\"\n\"origin\" \"0 0 0\"\n\"classname\" \"misc_model\"\n}";
-        let n = build_with(&fs, one, None, &|_| SkinDraw::default(), MAX_PROP_VERTS)
-            .verts
-            .len();
+        let n = build_with(
+            &fs,
+            &Placed::load_drawn(&fs, one),
+            None,
+            &|_| SkinDraw::default(),
+            MAX_PROP_VERTS,
+        )
+        .verts
+        .len();
         assert!(n > 0);
         let three = [one; 3].join("\n");
-        let props = build_with(&fs, &three, None, &|_| SkinDraw::default(), 2 * n);
+        let props = build_with(
+            &fs,
+            &Placed::load_drawn(&fs, &three),
+            None,
+            &|_| SkinDraw::default(),
+            2 * n,
+        );
         assert_eq!(props.verts.len(), 2 * n);
         assert_eq!(props.bounds.len(), 3);
         assert_eq!(props.bounds[2], (Vec3::ZERO, Vec3::ZERO));
+    }
+
+    /// A client load's one decode, which keeps the `shadow_*` models the
+    /// collision reads, bakes what a bake of its own does.
+    #[test]
+    fn a_shared_placed_bakes_as_build_does() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let ents = "{\n\"model\" \"xmodel/shadow_brush_gnarly\"\n\"origin\" \"0 0 0\"\n\"classname\" \"misc_model\"\n}\n\
+                    {\n\"model\" \"xmodel/crate_misc1a\"\n\"origin\" \"100 200 300\"\n\"angles\" \"0 30 0\"\n\"classname\" \"misc_model\"\n}";
+        let shared = Placed::load(&fs, ents);
+        assert!(shared.models.contains_key("shadow_brush_gnarly"));
+        let draw = &|_: &str| SkinDraw::default();
+        let own = build_with(
+            &fs,
+            &Placed::load_drawn(&fs, ents),
+            None,
+            draw,
+            MAX_PROP_VERTS,
+        );
+        let off = build_with(&fs, &shared, None, draw, MAX_PROP_VERTS);
+        let bytes = |p: &Props| bytemuck::cast_slice::<DrawVert, u8>(&p.verts).to_vec();
+        assert!(!own.verts.is_empty());
+        assert_eq!(bytes(&own), bytes(&off));
+        assert_eq!(own.indices, off.indices);
+        assert_eq!(own.bounds, off.bounds);
+        let skins = |p: &Props| p.batches.iter().map(|b| b.skin.clone()).collect::<Vec<_>>();
+        assert_eq!(skins(&own), skins(&off));
     }
 
     #[test]
@@ -1037,7 +1101,13 @@ mod tests {
             return;
         };
         let ents = "{\n\"model\" \"xmodel/crate_misc1a\"\n\"origin\" \"100 200 300\"\n\"classname\" \"misc_model\"\n}";
-        let props = build_with(&fs, ents, None, &|_| SkinDraw::default(), MAX_PROP_VERTS);
+        let props = build_with(
+            &fs,
+            &Placed::load_drawn(&fs, ents),
+            None,
+            &|_| SkinDraw::default(),
+            MAX_PROP_VERTS,
+        );
         assert_eq!(props.bounds.len(), 1);
         let (lo, hi) = props.bounds[0];
         assert!(
@@ -1085,7 +1155,13 @@ mod tests {
             reflects: skin.starts_with("metal_env@"),
             ..SkinDraw::default()
         };
-        let props = build_with(&fs, &ents, None, &skin_draw, MAX_PROP_VERTS);
+        let props = build_with(
+            &fs,
+            &Placed::load_drawn(&fs, &ents),
+            None,
+            &skin_draw,
+            MAX_PROP_VERTS,
+        );
         let body: Vec<&Batch> = props
             .batches
             .iter()
