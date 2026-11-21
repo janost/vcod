@@ -210,18 +210,11 @@ pub(crate) fn note_contact(candidate: f64, fraction: f64) {
 /// brush whose first six planes are the axial ones, `-x, +x, -y, +y, -z,
 /// +z`, as `brush_side_planes` lays them out. The axial sides take the
 /// capsule as its box, `|sphere| + r` a side (`(r, r, half height)`
-/// upright), the bounds in the binary's order (mins x, y, z, then maxs);
-/// every other side tests
-/// the sphere nearer it against its distance pushed out by the radius
-/// (0x8055080-0x8055176). `sphere` is the sphere offset, `(0, 0, half
-/// height - radius)` but in a turned model's frame, where
-/// `CM_TransformedBoxTrace` turns it (movers doc 21). Distances and fractions stay on the x87 stack
-/// but the enter fraction, which is stored and compared as a float, and
-/// the leave fraction starts at the trace's. 1.5b's build
-/// (0x80590d6) stores each side's distances, their difference and both
-/// fractions, which `arith` says. A trace a brush clips always
-/// lands closer than the trace's fraction, so the lead side replaces the
-/// trace's contact outright.
+/// upright); every other side tests the sphere nearer it against its
+/// distance pushed out by the radius (0x8055080-0x8055176). `sphere` is the
+/// sphere offset, `(0, 0, half height - radius)` but in a turned model's
+/// frame, where `CM_TransformedBoxTrace` turns it (movers doc 21). The side
+/// walk is [`BrushSides::clip`].
 pub(super) fn clip_brush_capsule(
     trace: &mut Trace,
     sw: &CapsuleSweep,
@@ -233,83 +226,14 @@ pub(super) fn clip_brush_capsule(
     same_model: bool,
 ) {
     let d = f64::from;
-    let var = |x: f64| arith.var(x);
     let r = sw.radius;
     // The capsule's box in the brush's frame: each axis the sphere offset's
     // reach plus the radius (0x8056310's `|offset| + radius`, read at
     // `+0x10c`), `(r, r, half height)` for an upright one.
     let ext = [0, 1, 2].map(|i| sphere[i].abs() + r);
-    let mut enter = 0.0f32;
-    let frac0 = d(trace.fraction);
-    let mut leave = frac0;
-    let mut allsolid = true;
-    let mut lead: Option<(Vec3, usize)> = None;
-    let contact = trace.hit.is_some();
-    // A contact that repeats the trace's own (same fraction, side and
-    // surface, a brush of the same model) reads alike in either order.
-    let (frac_f, normal0, flags0) = (trace.fraction, trace.normal, trace.surface_flags);
-    let repeats = |f: f32, normal: Vec3, k: usize| {
-        same_model
-            && f == frac_f
-            && normal == normal0
-            && side_flags.get(k).copied().unwrap_or(0) == flags0
-    };
-    // One side's distances; `false` when the side rules the brush out.
-    // The Windows clients store `d1`, the enter path's gap and both
-    // fractions only (CoDMP15.exe 0x424fc0, cod15-movement.md 8).
-    let gcc = |x: f64| arith.gcc_var(x);
-    let mut side = |d1: f64, d2: f64, normal: Vec3, k: usize| -> bool {
-        let (d1, d2) = (var(d1), gcc(d2));
-        if d1 <= 0.0 {
-            let gap = gcc(d1 - d2);
-            if d2 > 0.0 {
-                allsolid = false;
-                if leave * gap < d1 {
-                    leave = var(d1 / gap);
-                    if leave <= d(enter) {
-                        return false;
-                    }
-                }
-            }
-            return true;
-        }
-        let gap = var(d1 - d2);
-        if d2 > 0.0 {
-            if gap <= 0.0 || d(SURFACE_CLIP_EPSILON) <= d2 {
-                return false;
-            }
-            allsolid = false;
-        }
-        let back = gcc(d1 - d(SURFACE_CLIP_EPSILON));
-        if d(enter) * gap < back {
-            let e = back / gap;
-            enter = e as f32;
-            if leave <= gcc(e) {
-                // Entering at about the trace's fraction is a tie the walk
-                // order settles (`walk_tree`).
-                if contact && leave == frac0 && !repeats(e as f32, normal, k) {
-                    note_contact(gcc(e), frac0);
-                }
-                return false;
-            }
-            lead = Some((normal, k));
-        } else if lead.is_none() {
-            lead = Some((normal, k));
-        }
-        true
-    };
-    for (k, sign) in [(0usize, -1.0f64), (1, 1.0)] {
-        for axis in 0..3 {
-            let (n, dist) = planes[axis * 2 + k];
-            let bound = d(dist) * sign;
-            let d1 = (d(sw.start[axis]) - bound) * sign - d(ext[axis]);
-            let d2 = (d(sw.end[axis]) - bound) * sign - d(ext[axis]);
-            if !side(d1, d2, n, axis * 2 + k) {
-                return;
-            }
-        }
-    }
-    for (k, &(n, dist)) in planes.iter().enumerate().skip(6) {
+    let (start, end) = (Vec3::from(sw.start), Vec3::from(sw.end));
+    let msvc = arith == Arith::Msvc;
+    let far = |n: Vec3, dist: f32| {
         let toward = if crate::x87::dot(n, sphere) > 0.0 {
             -sphere
         } else {
@@ -318,41 +242,207 @@ pub(super) fn clip_brush_capsule(
         // Windows keeps the pushed distance and the shifted start on the
         // stack and stores only the shifted end (CoDMP15.exe 0x4251c7,
         // 0x4251fb, 0x42521e).
-        let msvc = arith == Arith::Msvc;
         let pushed = if msvc { d(dist) + d(r) } else { d(dist + r) };
         let d1 = if msvc {
-            let (p, n) = (
-                Vec3::from(sw.start).as_dvec3() + toward.as_dvec3(),
-                n.as_dvec3(),
-            );
+            let (p, n) = (start.as_dvec3() + toward.as_dvec3(), n.as_dvec3());
             (n.x * p.x + n.y * p.y) + n.z * p.z - pushed
         } else {
-            crate::x87::dot(n, Vec3::from(sw.start) + toward) - pushed
+            crate::x87::dot(n, start + toward) - pushed
         };
-        let d2 = crate::x87::dot(n, Vec3::from(sw.end) + toward) - pushed;
-        if !side(d1, d2, n, k) {
-            return;
+        (d1, crate::x87::dot(n, end + toward) - pushed)
+    };
+    let sides = BrushSides {
+        start: sw.start,
+        end: sw.end,
+        ext,
+        planes,
+        side_flags,
+        prim,
+        arith,
+        same_model,
+    };
+    sides.clip(trace, far);
+}
+
+/// The box arm of the same clip (UO `coduo_lnxded` 0x8058f0a, the arm at
+/// 0x80593dc), a plain `trap_Trace` box's: start and end moved to the box's
+/// centre, the axial sides against its half size, every other side's
+/// distance pulled in by the box corner its normal points away from (Q3's
+/// `offsets[signbits]`) and stored. Its side walk is [`BrushSides::clip`],
+/// the capsule arm's: a leave fraction takes no `SURFACE_CLIP_EPSILON`
+/// (coduo-vehicles.md 17.5).
+#[expect(clippy::too_many_arguments)]
+pub(super) fn clip_brush_box(
+    trace: &mut Trace,
+    start: Vec3,
+    end: Vec3,
+    mins: Vec3,
+    maxs: Vec3,
+    planes: &[(Vec3, f32)],
+    side_flags: &[u32],
+    prim: Prim,
+    arith: Arith,
+    same_model: bool,
+) {
+    let off = (mins + maxs) * 0.5;
+    let (s, e) = (start + off, end + off);
+    let (lo, hi) = (mins - off, maxs - off);
+    let far = |n: Vec3, dist: f32| {
+        let corner = Vec3::new(
+            if n.x < 0.0 { hi.x } else { lo.x },
+            if n.y < 0.0 { hi.y } else { lo.y },
+            if n.z < 0.0 { hi.z } else { lo.z },
+        );
+        let pulled = arith.var(f64::from(dist) - crate::x87::dot(corner, n));
+        (
+            crate::x87::dot(n, s) - pulled,
+            crate::x87::dot(n, e) - pulled,
+        )
+    };
+    let sides = BrushSides {
+        start: s.to_array(),
+        end: e.to_array(),
+        ext: hi.to_array(),
+        planes,
+        side_flags,
+        prim,
+        arith,
+        same_model,
+    };
+    sides.clip(trace, far);
+}
+
+/// One brush as both arms of retail's brush clip walk it.
+struct BrushSides<'a> {
+    start: [f32; 3],
+    end: [f32; 3],
+    /// The shape's reach along each axis, which the axial sides add.
+    ext: [f32; 3],
+    planes: &'a [(Vec3, f32)],
+    side_flags: &'a [u32],
+    prim: Prim,
+    arith: Arith,
+    same_model: bool,
+}
+
+impl BrushSides<'_> {
+    /// The side walk: the axial sides in the binary's order (mins x, y, z,
+    /// then maxs), then the rest, each through `far`'s distances. Distances
+    /// and fractions stay on the x87 stack but the enter fraction, which is
+    /// stored and compared as a float, and the leave fraction starts at the
+    /// trace's and takes no epsilon. 1.5b's build (0x80590d6) stores each
+    /// side's distances, their difference and both fractions, which `arith`
+    /// says. A trace a brush clips always lands closer than the trace's
+    /// fraction, so the lead side replaces the trace's contact outright.
+    fn clip(&self, trace: &mut Trace, mut far: impl FnMut(Vec3, f32) -> (f64, f64)) {
+        let &BrushSides {
+            start,
+            end,
+            ext,
+            planes,
+            side_flags,
+            prim,
+            arith,
+            same_model,
+        } = self;
+        let d = f64::from;
+        let var = |x: f64| arith.var(x);
+        let mut enter = 0.0f32;
+        let frac0 = d(trace.fraction);
+        let mut leave = frac0;
+        let mut allsolid = true;
+        let mut lead: Option<(Vec3, usize)> = None;
+        let contact = trace.hit.is_some();
+        // A contact that repeats the trace's own (same fraction, side and
+        // surface, a brush of the same model) reads alike in either order.
+        let (frac_f, normal0, flags0) = (trace.fraction, trace.normal, trace.surface_flags);
+        let repeats = |f: f32, normal: Vec3, k: usize| {
+            same_model
+                && f == frac_f
+                && normal == normal0
+                && side_flags.get(k).copied().unwrap_or(0) == flags0
+        };
+        // One side's distances; `false` when the side rules the brush out.
+        // The Windows clients store `d1`, the enter path's gap and both
+        // fractions only (CoDMP15.exe 0x424fc0, cod15-movement.md 8).
+        let gcc = |x: f64| arith.gcc_var(x);
+        let mut side = |d1: f64, d2: f64, normal: Vec3, k: usize| -> bool {
+            let (d1, d2) = (var(d1), gcc(d2));
+            if d1 <= 0.0 {
+                let gap = gcc(d1 - d2);
+                if d2 > 0.0 {
+                    allsolid = false;
+                    if leave * gap < d1 {
+                        leave = var(d1 / gap);
+                        if leave <= d(enter) {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            }
+            let gap = var(d1 - d2);
+            if d2 > 0.0 {
+                if gap <= 0.0 || d(SURFACE_CLIP_EPSILON) <= d2 {
+                    return false;
+                }
+                allsolid = false;
+            }
+            let back = gcc(d1 - d(SURFACE_CLIP_EPSILON));
+            if d(enter) * gap < back {
+                let e = back / gap;
+                enter = e as f32;
+                if leave <= gcc(e) {
+                    // Entering at about the trace's fraction is a tie the walk
+                    // order settles (`walk_tree`).
+                    if contact && leave == frac0 && !repeats(e as f32, normal, k) {
+                        note_contact(gcc(e), frac0);
+                    }
+                    return false;
+                }
+                lead = Some((normal, k));
+            } else if lead.is_none() {
+                lead = Some((normal, k));
+            }
+            true
+        };
+        for (k, sign) in [(0usize, -1.0f64), (1, 1.0)] {
+            for axis in 0..3 {
+                let (n, dist) = planes[axis * 2 + k];
+                let bound = d(dist) * sign;
+                let d1 = (d(start[axis]) - bound) * sign - d(ext[axis]);
+                let d2 = (d(end[axis]) - bound) * sign - d(ext[axis]);
+                if !side(d1, d2, n, axis * 2 + k) {
+                    return;
+                }
+            }
         }
-    }
-    match lead {
-        None => {
-            trace.startsolid = true;
-            if allsolid {
-                trace.allsolid = true;
-                trace.fraction = 0.0;
-                trace.surface_flags = 0;
+        for (k, &(n, dist)) in planes.iter().enumerate().skip(6) {
+            let (d1, d2) = far(n, dist);
+            if !side(d1, d2, n, k) {
+                return;
+            }
+        }
+        match lead {
+            None => {
+                trace.startsolid = true;
+                if allsolid {
+                    trace.allsolid = true;
+                    trace.fraction = 0.0;
+                    trace.surface_flags = 0;
+                    trace.hit = Some(prim);
+                }
+            }
+            Some((normal, k)) => {
+                if contact && !repeats(enter, normal, k) {
+                    note_contact(f64::from(enter), frac0);
+                }
+                trace.fraction = enter;
+                trace.enter = enter;
+                trace.normal = normal;
+                trace.surface_flags = side_flags.get(k).copied().unwrap_or(0);
                 trace.hit = Some(prim);
             }
-        }
-        Some((normal, k)) => {
-            if contact && !repeats(enter, normal, k) {
-                note_contact(f64::from(enter), frac0);
-            }
-            trace.fraction = enter;
-            trace.enter = enter;
-            trace.normal = normal;
-            trace.surface_flags = side_flags.get(k).copied().unwrap_or(0);
-            trace.hit = Some(prim);
         }
     }
 }
@@ -528,26 +618,6 @@ pub(super) enum Shape {
     /// The capsule and the box it was made of.
     Capsule(Capsule, Vec3, Vec3),
     Box(Vec3, Vec3),
-}
-
-/// A brush's planes pushed out by an axial box, Q3's `CM_TraceThroughBrush`
-/// non-sphere arm: `dist - offset·normal` with each offset component the
-/// box corner the normal points away from.
-pub(super) fn expand_brush_box(
-    planes: &[(Vec3, f32)],
-    mins: Vec3,
-    maxs: Vec3,
-    out: &mut Vec<(Vec3, f32)>,
-) {
-    out.clear();
-    for &(n, d) in planes {
-        let corner = Vec3::new(
-            if n.x < 0.0 { maxs.x } else { mins.x },
-            if n.y < 0.0 { maxs.y } else { mins.y },
-            if n.z < 0.0 { maxs.z } else { mins.z },
-        );
-        out.push((n, d - corner.dot(n)));
-    }
 }
 
 /// A brush's planes pushed out by the capsule's radius, Q3's

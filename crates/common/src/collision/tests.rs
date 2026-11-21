@@ -489,6 +489,25 @@ fn box_down_rests_on_brush_by_its_mins() {
     assert!(t.fraction < 1.0 && (t.endpos.z - 0.0).abs() < 0.2);
 }
 
+/// A box swept over a brush's top edge enters its side 0.005 before it
+/// leaves the top: UO's box arm takes the leave fraction bare, so it
+/// strikes, where Q3's backed-off leave would clear the edge
+/// (coduo-vehicles.md 17.5).
+#[test]
+fn a_box_sweep_over_an_edge_leaves_without_the_epsilon() {
+    let (mins, maxs) = (Vec3::splat(-1.0), Vec3::splat(1.0));
+    let t = world().box_sweep(
+        Vec3::new(-70.05, 0.0, -4.0),
+        Vec3::new(-60.05, 0.0, 6.0),
+        mins,
+        maxs,
+        0x1,
+        None,
+    );
+    assert!((t.fraction - 0.4925).abs() < 1e-5, "fraction {}", t.fraction);
+    assert!(t.normal.abs_diff_eq(-Vec3::X, 1e-6), "normal {}", t.normal);
+}
+
 #[test]
 fn miss_returns_full_fraction() {
     let t = world().box_trace(

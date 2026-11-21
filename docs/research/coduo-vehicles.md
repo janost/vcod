@@ -3079,18 +3079,13 @@ drives under the fields (`playerstate/mp_peaks-tdm-slope-8ms-jeep-closespeed-uo.
 - A turret held on `harc` 10 sends 9.997559: the float limit, truncated
   to the wire's 16 bits (VERIFIED, capture).
 - vcod: the think passes the entity's two fields to the step
-  (`vehicle::think`). The jeep drive matches retail field for field for
-  119 snapshots and the tank's for 283 (VERIFIED, replay). Then each parts:
-  - at 18500 retail's jeep strikes a face with probe 0 (front left) at
-    (-3678.94, 804.65, 56.01) and kicks its yaw; ours clears that probe,
-    strikes with probe 1 at (-3679.07, 826.90, 51.47), where the hit
-    point lies dead ahead and the yaw takes no kick (VERIFIED, gdb at
-    0x8499f on a rerun of the drive, the same hit 5150 ms later). The
-    swept box against that face is the open question. The UO server
-    prints `Box collision on terrain currently being faked with capsule
-    collision` at load (VERIFIED, console), which vcod's clip does not
-    do. INFERRED: the face is terrain.
-  - at 27200 the tank's track clock parts by 78, then its pose; not read.
+  (`vehicle::think`). The jeep drive matches retail field for field to the
+  driver's exit, all 418 seated snapshots (VERIFIED, replay, 17.5 for the
+  hit at 18500 that used to part it). After the exit the fall off the
+  dismount spot runs 3 u/s slow from its first frame (z velocity -34 where
+  retail has -37 at `commandTime` 33432, the same six cmds) and lands 0.6
+  higher with no slide; not read. The tank's drive matches for 283
+  snapshots; at 27200 its track clock parts by 78 (17.5).
   `vehicle_ab` and `vehicle_drive_ab` name both tails as gaps.
 
 ### 17.2 `getWheelSurface(name)`
@@ -3183,3 +3178,69 @@ drives under the fields (`playerstate/mp_peaks-tdm-slope-8ms-jeep-closespeed-uo.
   forced exit where he sits (`SeatOp::Exit` with no spot) so his sim is
   not left on a freed number; a `delete()` of an occupied vehicle does the
   same.
+
+### 17.5 The closespeed drives' two parts
+
+The jeep part at 18500 is the probes' brush clip. Addresses are
+`coduo_lnxded`'s and `game.mp.uo.i386.so`'s.
+
+- `CM_TraceThroughBrush`'s UO build (0x8058f0a) branches on the trace's
+  capsule flag (`tw+0xf4`): a capsule takes the arm at 0x8058f5f, a plain
+  box (`trap_Trace`, every vehicle sweep) the arm at 0x80593dc (VERIFIED
+  (the instructions)). The box arm walks the six axial sides first, mins
+  then maxs, each against the box's half size (`tw+0x34`), then the other
+  sides with their distance less `offsets[signbits] . normal`
+  (`tw+0x40`), stored (0x80595f4..0x8059644) (VERIFIED (the
+  instructions)). Both arms share one side test: the enter fraction backs
+  off 0.125 (0x80dca40), the leave fraction is `d1 / (d1 - d2)` with no
+  epsilon (0x8059542..0x805957a), leave starts at the trace's fraction
+  (`tw+0xc4`, 0x8058f1e), and a side that brings enter to leave ends the
+  brush (VERIFIED (the instructions)). Q3's box arm backs the leave off
+  0.125 as well (INFERRED, Q3's `cm_trace.c`).
+- At 18500 probe 0 sweeps from (-3698.30, 847.52, 29.74) to (-3673.48,
+  792.57, 63.42) past brush 465, a `clip_nosight` post (x -3656.07 ..
+  -3648.67, y 814.40 .. 821.07, z 10.90 .. 55.08, 66 sides). It enters
+  the post's slanted side (normal (-0.9996, 0, 0.0287)) at 0.78013 and
+  leaves the axial top at 0.78201 by retail's rule, at 0.77828 with Q3's
+  epsilon. Retail's probe 0 strikes at (-3678.94, 804.65, 56.01) and
+  kicks the yaw (VERIFIED, gdb at 0x8499f on a rerun of the drive, the
+  same hit 5150 ms later), the 0.78013 point (VERIFIED, replay). The
+  server's `Box collision on terrain currently being faked with capsule
+  collision` print is the terrain clip's box arm (0x8056f57 sets the
+  capsule flag and the radius for 0x80558dd), not the brush clip's
+  (VERIFIED (the instructions)). vcod's box sweeps
+  take that arm (`clip::clip_brush_box`, the capsule arm's side walk), and
+  both jeep closespeed replays match to the exit (VERIFIED, replay).
+
+The tank part at 27200 is a velocity that reaches 0. Read under
+`tools/re/gdb_vehicle.py` on a rerun of the drive, the record's state at
+the track clock each think, every float equal to vcod's through the
+capture's 27150 (VERIFIED, gdb, 2026-11-21).
+
+- The tank stops at 24150 and its velocity decays by about 0.316 a think
+  through the turn in place that starts at 26750. At 27200 retail's is
+  exactly 0, vcod's 1.17e-23. `VEH_SlideMove`'s walkable arm (0x81175)
+  tests `clip(v) . v` against 0 on the x87 stack (0x8120e..0x8123a); the
+  sum there is 1.75e-46, so it renormalizes. `VectorNormalize` stores the
+  squared length as a float, 0, and leaves the vector; the scale by the
+  old speed (5.07e-23) then stores each component as 0 (VERIFIED (the
+  instructions); gdb). vcod rounded the dot to a float first and skipped
+  both.
+- With the local velocity's x exactly 0 the track clock reads the yaw rate
+  instead (0x86b20..0x86b37): `trunc(1000 * 50.097656 / 176 * 0.05 *
+  5.5)` is the 78 (VERIFIED (the instructions); capture).
+- The stack test alone moves `vehicle_ram_ab` and `vehicle_runover_ab`:
+  their struck tank then reaches 0 where retail's keeps stepping, which
+  `VEH_PhysicsNotRequired`'s walk of the pool does (0x87c2d..0x87cc3:
+  each record in use within 1024 units, 1048576 squared at 0xa6d38, that
+  is not itself at rest keeps the caller stepping) (VERIFIED (the
+  instructions)). vcod passes no neighbour (12, "Ported and unwired").
+  With both, the ram, runover and closespeed replays match; but on
+  mp_peaks the wreck's duplicate then wakes the wreck and shoves it, and
+  `vehicle_blast_ab`'s wreck blast lands 10 on the shooter where retail
+  lands 11, and `bot_vehicles::a_bot_keeps_out_of_a_burning_hull` takes 1.
+  Retail does wake the wreck: it rises 0.12 on the duplicate's first
+  think and slides 0.9 before its blast (VERIFIED, gdb on a rerun of the
+  blast capture). vcod's duplicate ends that think on its BSP pose (its
+  probes strike the wreck and the hit restores the committed copy, 10.4)
+  where retail's stays on its settled one; why is not read.
