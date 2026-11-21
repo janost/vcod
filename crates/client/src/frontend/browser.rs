@@ -235,15 +235,34 @@ impl Default for Browser {
 
 impl Browser {
     /// A browser whose favourites live in `cache`, a server cache of
-    /// `layout`, read now as `LAN_LoadCachedServers` reads it at UI start.
-    /// A file that is not one, or that cannot be read, is never written.
+    /// `layout`, read now as `LAN_LoadCachedServers` reads it at UI start,
+    /// the Internet list with its saved rows and pings too. A file that is
+    /// not one, or that cannot be read, is never written.
     pub fn with_cache(cache: PathBuf, layout: Layout) -> Browser {
         let mut b = Browser::default();
-        let entries = match std::fs::read(&cache) {
-            Ok(bytes) => server_cache::read_favorites(layout, &bytes),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(Vec::new()),
+        let file = match std::fs::read(&cache) {
+            Ok(bytes) => Some(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(None),
             Err(_) => None,
         };
+        let read = |f: fn(Layout, &[u8]) -> Option<Vec<Entry>>| match &file {
+            Some(Some(bytes)) => f(layout, bytes),
+            Some(None) => Some(Vec::new()),
+            None => None,
+        };
+        let entries = read(server_cache::read_favorites);
+        // The list shows each with its saved row while its ping is above 0
+        // (`UI_BuildServerDisplayList`), until a refresh pings it again.
+        for e in read(server_cache::read_internet).unwrap_or_default() {
+            let Some(addr) = e.addr() else { continue };
+            let saved = e.info().filter(|(_, ping)| *ping > 0);
+            b.lists[Source::Internet as usize].push(Server {
+                name: e.hostname(),
+                info: saved.as_ref().map(|(info, _)| info.clone()),
+                ping: saved.map(|(_, ping)| ping as u32),
+                ..Server::new(addr)
+            });
+        }
         let Some(entries) = entries else {
             log::warn!(
                 "browser: {} is not a {layout:?} server cache; favourites stay in memory",
@@ -402,8 +421,10 @@ impl Browser {
         }
         self.status = Status::Done;
         self.scan.close();
-        if self.source == Source::Favorites {
-            self.save();
+        match self.source {
+            Source::Favorites => self.save(),
+            Source::Internet => self.save_internet(),
+            Source::Local => {}
         }
     }
 
@@ -651,11 +672,38 @@ impl Browser {
         }
     }
 
+    /// The Internet list into the server cache, as [`Browser::save`] writes
+    /// the favourites: each with its row and ping, 0 for one that timed out
+    /// (`CL_GetPing`), -1 for one never answered.
+    fn save_internet(&self) {
+        let Some((_, layout)) = &self.cache else {
+            return;
+        };
+        let entries: Vec<Entry> = self.lists[Source::Internet as usize]
+            .iter()
+            .map(|s| {
+                let mut e = Entry::new(*layout, s.addr, &s.name);
+                let blank = ServerInfo {
+                    hostname: s.name.clone(),
+                    ..ServerInfo::default()
+                };
+                let ping = match s.ping {
+                    Some(p) => p as i32,
+                    None if s.timed_out => 0,
+                    None => -1,
+                };
+                e.set_info(s.info.as_ref().unwrap_or(&blank), ping);
+                e
+            })
+            .collect();
+        self.write(|old| server_cache::write_internet(*layout, old, &entries));
+    }
+
     /// Writes the favourites into the server cache, keeping the rest of
     /// the file. A file that changed into something not a cache, or cannot
     /// be read, is left alone; the new one goes in whole or not at all.
     fn save(&self) {
-        let Some((path, layout)) = &self.cache else {
+        let Some((_, layout)) = &self.cache else {
             return;
         };
         let mut entries: Vec<Entry> = self.lists[Source::Favorites as usize]
@@ -672,6 +720,16 @@ impl Browser {
             })
             .collect();
         entries.extend(self.foreign.iter().cloned());
+        self.write(|old| server_cache::write_favorites(*layout, old, &entries));
+    }
+
+    /// Writes the cache file through `update`, which takes what it holds
+    /// (`None` for no file) and gives the new bytes, or `None` for a file
+    /// that is not a cache of the layout.
+    fn write(&self, update: impl FnOnce(Option<&[u8]>) -> Option<Vec<u8>>) {
+        let Some((path, layout)) = &self.cache else {
+            return;
+        };
         let old = match std::fs::read(path) {
             Ok(bytes) => Some(bytes),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -683,7 +741,7 @@ impl Browser {
                 return;
             }
         };
-        let Some(bytes) = server_cache::write_favorites(*layout, old.as_deref(), &entries) else {
+        let Some(bytes) = update(old.as_deref()) else {
             log::warn!(
                 "browser: {} is no longer a {layout:?} server cache; not writing it",
                 path.display()
@@ -1335,6 +1393,49 @@ mod tests {
         let mut b = Browser::with_cache(path.clone(), Layout::Cod11);
         assert_eq!(b.add_favorite("Away", "10.0.0.2"), AddFavorite::Added);
         assert_eq!(std::fs::read(&path).unwrap(), b"not a cache");
+    }
+
+    /// The Internet list goes into the cache at the end of its refresh and
+    /// comes back at the next start with its rows and pings, as
+    /// `LAN_LoadCachedServers` has it; one that timed out stays hidden.
+    #[test]
+    fn the_internet_list_persists_in_the_server_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        for layout in [Layout::Cod11, Layout::Cod15, Layout::Uo] {
+            let path = dir.path().join(layout.file_name());
+            let mut b = Browser::with_cache(path.clone(), layout);
+            b.add_favorite("Home", "10.0.0.9");
+            b.source = Source::Internet;
+            let mut up = server("^1Up", 3, 48);
+            up.info.as_mut().unwrap().hardware = 2;
+            let silent = Server {
+                timed_out: true,
+                ..Server::new("203.0.113.5:28960".parse().unwrap())
+            };
+            b.lists[1] = vec![up, silent];
+            b.status = Status::Pinging;
+            b.finish();
+            let b = Browser::with_cache(path, layout);
+            assert_eq!(b.lists[2][0].name, "Home", "{layout:?}");
+            let net = &b.lists[1];
+            assert_eq!(net.len(), 2);
+            assert_eq!(net[0].ping, Some(48));
+            let info = net[0].info.as_ref().unwrap();
+            assert_eq!(
+                (
+                    info.hostname.as_str(),
+                    info.mapname.as_str(),
+                    info.gametype.as_str()
+                ),
+                ("^1Up", "mp_harbor", "^7dm")
+            );
+            assert_eq!(
+                (info.clients, info.max_clients, info.password),
+                (3, 20, true)
+            );
+            assert_eq!(info.hardware, if layout == Layout::Cod11 { 0 } else { 2 });
+            assert!(net[1].info.is_none() && net[1].ping.is_none());
+        }
     }
 
     /// With no master an Internet refresh asks nobody and ends at once.
