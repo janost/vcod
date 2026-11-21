@@ -542,6 +542,22 @@ the word at 0x64a178 (0x413780) and marks the frame valid (0x413786).
 VERIFIED (the instructions). That the word is `demowaiting` is INFERRED
 (CoD4's same arm, cod4-demos.md 4). vcod's parser wraps the same way (a demo's record sequence is
 any word) and reads a base of 0 or less from nothing.
+A failed slot test does not stop the parse. `Delta from invalid frame`
+(0x5a443c, printed through 0x431ee0 at 0x4137de), `Delta frame too old.`
+(0x4137f2) and the two 0x780 ring-age prints (0x413815, 0x41383f) each
+jump back to 0x41378c with `edi` still the slot, past the arm's
+`xor edi, edi` (0x41377e) and its valid mark (0x413786): the playerstate
+reads against the slot's (`edi + 0x1c`, 0x4137b6..0x4137bd), the entities
+and clients against its lists (0x413882, 0x4138b2), and the frame stays
+invalid. The same jump skips the 0x64a178 clear, so such a frame does not
+end a demo's wait. VERIFIED (the instructions and the strings).
+`CL_ParseGamestate` (0x413bd0, its error string at 0x5a4298) zeroes the
+0x195d94 bytes from 0x96b650 through 0x40cca0 (0x413beb; the `rep stos`
+at 0x40ccd5), which hold the ring (0x9d0db0, 32 slots of 0x26d8). VERIFIED
+(the instructions). So a slot no frame has filled since the gamestate
+reads as zeros: no playerstate, entity or client state. vcod reads an empty
+slot from nothing and marks the frame invalid (`Parser::parse_snapshot`),
+a slot that holds another frame against that frame, invalid too.
 
 The entity, client and baseline deltas are 1.1's `MSG_ReadDeltaStruct` shape:
 a remove bit, a no-change bit, an `lc` byte, then `lc` fields through
