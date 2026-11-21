@@ -3567,6 +3567,52 @@ the third column the give-up with every jump edge 64 longer in A*
   body held in the air at (1174, -141, 45)), `koth` mp_crash_snow seed
   12 155. Not traced.
 
+### 12.20 A mantle onto a body on the ledge, 2026-11-21
+
+- bot-combat.md 20's seed 1 stall, traced again with `STALLS=1`: axis
+  slot 3 climbs west from (1410..1442, 171..192, 126) onto the ledge
+  its teammate slot 1 stands still on at (1403, 196, 188), the climb
+  ends in him (`pmf` 0x4, timer 700 of 833), the two boxes push apart
+  and the climber is back under the ledge at z 127 by the next sample,
+  then climbs again. Four mantle edges end on the two landing nodes
+  there (2959 and 3752 to 8345, 3779 and 4140 to 8352). VERIFIED (the
+  run, ours).
+- Why pmove offers the climb (the hint) with him standing there is not
+  traced.
+- The rule, vcod's own (retail has no bots): a CoD4 bot on the ground
+  more than a step under the landing of the mantle edge it follows
+  (the probe's, else the edge's end node), within 96 flat of it, with
+  another body slower than 10 units/s within two half-widths and a
+  margin (32) flat and a step up or down of the landing, gives the edge
+  up (`Follower::mantle_held`, then `Follower::stuck`: the edge is
+  avoided for 200 ticks, twice is dead) and plans round it
+  (`BotWorld::MANTLE_YIELDS`, CoD4 only). INFERRED (the runs below).
+
+`bot_match GAME=cod4 DIGEST=600 TICKS=6000`, release, mp_crash, before
+is master e5cdb4ddd, after is the rule. VERIFIED (measured, ours):
+
+| `war` seed | Digest before | Digest after | Kills | Stalled |
+|---|---|---|---|---|
+| 1 | 0cf2dbc2e1a49354 | 51dfa08218229289 | 40 to 47 | 140 to 0 |
+| 2 | a00fb1c9c848a566 | a00fb1c9c848a566 | 46, 46 | 0, 0 |
+| 3 | cbe5fb740f169797 | 496428420667275d | 43 to 45 | 0, 0 |
+| 4 | 0c7f90ceceac11dc | 0c7f90ceceac11dc | 48, 48 | 0, 0 |
+| 5 | ea3033598c029a7f | ea3033598c029a7f | 52, 52 | 0, 0 |
+| 6 | f94a4d3efa993cab | f94a4d3efa993cab | 52, 52 | 0, 0 |
+| 11 | 5ecfd746b5d32c3d | e9145f301a5bd131 | 51 to 42 | 0, 0 |
+
+- Seed 1 gives an edge up 13 times, each one of the ledge's four:
+  slot 3 ten times, slot 1 three. Seeds 3 and 6 give up a mantle at
+  (1063, -839..-799, 70) onto node 7756 (twice and once), seed 11 the
+  ledge's edge from 2959 once, at (1408, 157, 126). Seed 6's give-up
+  moves no body the digest reads. VERIFIED (the runs, a trace line per
+  give-up).
+- `koth`, `sd`, `sab` and `dom`, seeds 1 to 4, after: stalled 0 in all
+  16. The rule fires once, `sab` seed 3 at (1063, -786, 71) (kills 40
+  to 45, digest de802dcc48a92739 to 472735189b58397f; `sab` seeds 1, 2
+  and 4 the same before and after) and in none of the other 12, where
+  the check reads and writes nothing. VERIFIED (the runs).
+
 ## 13. Posts, lanes and a site under attack (2026-11-14)
 
 A playtest report: on objective gametypes the bots clumped. Attackers went

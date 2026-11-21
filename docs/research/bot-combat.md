@@ -2057,7 +2057,9 @@ build stalls the same way on seed 11 (35 ticks): allies slot 0 at (1402,
 181, 184). Seeds 7 to 12 on the before build stall nowhere else. VERIFIED
 (measured, ours). So the stall is an old one, a mantle onto a ledge a
 teammate holds, which the new angles reach on seed 1 by the matches'
-chaos. INFERRED from the two traces. The one other reader of the
+chaos. INFERRED from the two traces. A CoD4 bot under a mantle's
+landing with another body standing still on it now plans round the
+edge (bot-objectives.md 12.20); seed 1's 140 stalled ticks go to 0. The one other reader of the
 integer delta, the flee's yaw in `bots.rs` (`angles[1] + delta_angles[1]`),
 adds the rounded delta back onto the rounded angle, within a short of
 the aim. VERIFIED (the code).
