@@ -191,7 +191,7 @@ pub fn models(instances: &[crate::renderer::DynamicModelInstance]) {
     }
     u32(Part::Ents, instances.len() as u32);
     for i in instances {
-        u32(Part::Ents, i.model.0 as u32);
+        u32(Part::Ents, i.model.index as u32);
         mat(Part::Ents, &i.transform);
         f32s(Part::Ents, &i.light_origin.to_array());
         f32s(Part::Ents, &[i.shader_time.unwrap_or(f32::NAN)]);

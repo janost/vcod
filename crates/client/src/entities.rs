@@ -3693,7 +3693,7 @@ mod tests {
     /// No real GPU upload; `ModelHandle`'s index is `pub(crate)` so tests can build one.
     fn fake_part() -> (Rc<Model>, ModelHandle) {
         let m = Model::rig("x", vec![]);
-        (Rc::new(m), ModelHandle(0))
+        (Rc::new(m), ModelHandle::first_map(0))
     }
 
     #[test]

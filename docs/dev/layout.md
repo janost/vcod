@@ -273,6 +273,9 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
   - `settings.rs` resize, the cvar setters, the counts and F3 lines.
   - `mark_pass.rs` impact marks and coronas; `cod2.rs` the CoD2 and CoD4
     lit world; `headless.rs` a windowless `Renderer`.
+  - `gpu_util.rs` the wgpu descriptor builders every pass shares: bind
+    group layout entries, the clamp sampler, `Fullscreen` pipelines,
+    one-attachment passes, the world vertex layout.
   - `tests.rs` the unit tests; `pipeline_check.rs` and `*_live.rs` the GPU
     gates.
 - `console/`: drop-down console, cvars, binds.
