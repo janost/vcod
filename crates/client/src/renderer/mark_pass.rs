@@ -20,7 +20,7 @@ use vcod_common::pk3::Pk3Fs;
 use vcod_common::shader::Shader;
 
 use super::{
-    AnimFrames, BundleViews, Renderer, STAGE_PARAMS_SIZE, depth_bias, scene_pipeline,
+    AnimFrames, BundleViews, ImageRule, Renderer, STAGE_PARAMS_SIZE, depth_bias, scene_pipeline,
     stage_animated, stage_bind_groups, stage_params,
 };
 use crate::entity_material::wgpu_blend_factor;
@@ -383,8 +383,6 @@ impl MarkPass {
             let mut bundle_views = BundleViews {
                 views: std::mem::take(&mut self.views),
                 table: ctx.image_gamma,
-                picmip: ctx.textures.world_picmip(ms.shader.nopicmip),
-                mipmap: !ms.shader.nomipmaps,
                 store: ctx.textures.store(),
                 prefetched: None,
             };
@@ -425,6 +423,7 @@ impl MarkPass {
                     lm_view,
                     ctx.lightmap_sampler,
                     &mut bundle_views,
+                    ImageRule::world(&ctx.textures, &ms.shader),
                     st,
                 );
                 batches.push(MarkBatch {

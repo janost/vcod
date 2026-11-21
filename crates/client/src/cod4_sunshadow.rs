@@ -883,13 +883,14 @@ impl SunShadowPass {
 
     /// The casters of `bsp`'s world and static model soups (`soup_model` 0)
     /// whose material casts, grouped (`sunshadow::caster_groups`), `None` on a map with no caster list (not
-    /// CoD4). `image` uploads an alpha-tested caster's colour map.
+    /// CoD4). `image` uploads an alpha-tested caster's colour map, given its
+    /// material index and the map's path.
     pub fn casters(
         &self,
         device: &wgpu::Device,
         bsp: &vcod_common::mapworld::MapWorld,
         soup_model: &[u32],
-        mut image: impl FnMut(&str) -> wgpu::TextureView,
+        mut image: impl FnMut(u16, &str) -> wgpu::TextureView,
     ) -> Option<Casters> {
         if bsp.sun_casters.is_empty() {
             return None;
@@ -908,7 +909,7 @@ impl SunShadowPass {
             let Some(Some(c)) = bsp.sun_casters.get(usize::from(m)) else {
                 return None;
             };
-            let view = image(&c.image);
+            let view = image(m, &c.image);
             cut_bgs.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("cod4 sun shadow cut image"),
                 layout: &self.cut_layout,

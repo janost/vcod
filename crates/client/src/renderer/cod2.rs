@@ -14,8 +14,8 @@ use vcod_common::asset_source::AssetSource;
 use wgpu::util::DeviceExt;
 
 use super::{
-    BundleViews, DEPTH_FORMAT, SkyBox, StageVariant, depth_bias, msaa_samples, upload_bundle_view,
-    upload_levels,
+    BundleViews, DEPTH_FORMAT, ImageRule, SkyBox, StageVariant, depth_bias, msaa_samples,
+    upload_bundle_view, upload_levels,
 };
 use crate::camera::{Z_FAR, Z_NEAR};
 use crate::sky;
@@ -1029,27 +1029,40 @@ impl<'a> Cod2Builder<'a> {
 
     /// [`Self::bind_in`] with probe 0, as every CoD2 batch's.
     #[cfg(test)]
+    #[expect(clippy::too_many_arguments)]
     pub fn bind(
         &mut self,
         fs: &Pk3Fs,
         bundle_views: &mut BundleViews,
+        rule: ImageRule,
         sh: &Material,
         lightmap: u16,
         v: StageVariant,
         two_sided: bool,
         bias: bool,
     ) -> LitBind {
-        self.bind_in(fs, bundle_views, sh, (lightmap, 0, 0), v, two_sided, bias)
+        self.bind_in(
+            fs,
+            bundle_views,
+            rule,
+            sh,
+            (lightmap, 0, 0),
+            v,
+            two_sided,
+            bias,
+        )
     }
 
     /// Binds a lit batch of `sh` on page `lightmap` under reflection probe
     /// `probe` and primary light `light` (a CoD4 surface's; 0 elsewhere),
     /// which [`draws_lit`] accepted. A spot or omni light in `light` lights
     /// it in the sun's place (`lm_spot_*`, `lm_omni_*`).
+    #[expect(clippy::too_many_arguments)]
     pub fn bind_in(
         &mut self,
         fs: &Pk3Fs,
         bundle_views: &mut BundleViews,
+        rule: ImageRule,
         sh: &Material,
         (lightmap, probe, light): (u16, u8, u8),
         v: StageVariant,
@@ -1057,7 +1070,7 @@ impl<'a> Cod2Builder<'a> {
         bias: bool,
     ) -> LitBind {
         let lit = sh.phong.expect("draws_lit checked");
-        let material = self.prepare(fs, bundle_views, sh, lit, LitEntry::Main);
+        let material = self.prepare(fs, bundle_views, rule, sh, lit, LitEntry::Main);
         // a set that reads no probe shares the page's group with probe 0
         let probe = if lit.specular { probe } else { 0 };
         let light = self.light_key(light);
@@ -1117,6 +1130,7 @@ impl<'a> Cod2Builder<'a> {
         &mut self,
         fs: &Pk3Fs,
         bundle_views: &mut BundleViews,
+        rule: ImageRule,
         sh: &Material,
         v: StageVariant,
         bias: bool,
@@ -1130,7 +1144,7 @@ impl<'a> Cod2Builder<'a> {
             cod4: None,
         };
         // props keep the prop path's two-sidedness (xmodel winding)
-        let material = self.prepare(fs, bundle_views, sh, lit, LitEntry::Smodel);
+        let material = self.prepare(fs, bundle_views, rule, sh, lit, LitEntry::Smodel);
         let lightmap = match self.smodel_bg {
             Some(i) => i,
             None => {
@@ -1153,10 +1167,12 @@ impl<'a> Cod2Builder<'a> {
     /// primary light `light` (the sun's technique unless it names a spot
     /// or omni light), which [`draws_cod4_model`] accepted, over the map's
     /// model lighting volume.
+    #[expect(clippy::too_many_arguments)]
     pub fn bind_cod4_model(
         &mut self,
         fs: &Pk3Fs,
         bundle_views: &mut BundleViews,
+        rule: ImageRule,
         sh: &Material,
         (probe, light): (u8, u8),
         v: StageVariant,
@@ -1165,7 +1181,7 @@ impl<'a> Cod2Builder<'a> {
     ) -> LitBind {
         let lit = sh.phong.expect("draws_cod4_model checked");
         let entry = LitEntry::Cod4Model;
-        let material = self.prepare(fs, bundle_views, sh, lit, entry);
+        let material = self.prepare(fs, bundle_views, rule, sh, lit, entry);
         let probe = if lit.specular { probe } else { 0 };
         // the ambient set takes the sun alone (`lp_amb_sun_*`)
         let ambient = lit.cod4.is_some_and(|c| c.light == Cod4Light::GridAmbient);
@@ -1187,10 +1203,12 @@ impl<'a> Cod2Builder<'a> {
 
     /// Binds a CoD4 water batch of `sh` under reflection probe `probe`,
     /// which [`draws_cod4_water`] accepted.
+    #[expect(clippy::too_many_arguments)]
     pub fn bind_cod4_water(
         &mut self,
         fs: &Pk3Fs,
         bundle_views: &mut BundleViews,
+        rule: ImageRule,
         sh: &Material,
         probe: u8,
         v: StageVariant,
@@ -1202,7 +1220,7 @@ impl<'a> Cod2Builder<'a> {
         if !self.material_of.contains_key(&(sh.name.clone(), entry)) {
             self.water_normal = self.cod4_water_map(&sh.name);
         }
-        let material = self.prepare(fs, bundle_views, sh, lit, entry);
+        let material = self.prepare(fs, bundle_views, rule, sh, lit, entry);
         let lightmap = match self.probe_bgs.get(&probe) {
             Some(&i) => i,
             None => {
@@ -1383,6 +1401,7 @@ impl<'a> Cod2Builder<'a> {
         &mut self,
         fs: &Pk3Fs,
         bundle_views: &mut BundleViews,
+        rule: ImageRule,
         sh: &Material,
         lit: PhongLit,
         entry: LitEntry,
@@ -1392,7 +1411,7 @@ impl<'a> Cod2Builder<'a> {
             Some(&i) => i,
             None => {
                 let waves = lit.cod4.is_some_and(|c| c.flag);
-                let (bg, buf, uniform) = self.material_group(fs, bundle_views, sh, lit);
+                let (bg, buf, uniform) = self.material_group(fs, bundle_views, rule, sh, lit);
                 self.out.push(bg);
                 // a lit world or model set runs its own path, as retail
                 // compiles one shader per technique (CoD2's `lmap_s_dtl` and
@@ -1582,6 +1601,7 @@ impl<'a> Cod2Builder<'a> {
         &mut self,
         fs: &Pk3Fs,
         bundle_views: &mut BundleViews,
+        rule: ImageRule,
         sh: &Material,
         lit: PhongLit,
     ) -> (wgpu::BindGroup, wgpu::Buffer, MaterialUniform) {
@@ -1603,16 +1623,14 @@ impl<'a> Cod2Builder<'a> {
         // colour and detail as the stage path loads its images (gamma,
         // picmip); white for a missing detail map, which the switch skips
         let color = match path(TexSemantic::Color) {
-            Some(p) => upload_bundle_view(self.device, self.queue, fs, bundle_views, &p),
+            Some(p) => upload_bundle_view(self.device, self.queue, fs, bundle_views, &p, rule),
             None => self.raw_view(fs, None, "$white", None, 0),
         };
         // detail maps take no picmip (0x616d40)
         let detail = match path(TexSemantic::Detail) {
             Some(p) => {
-                let picmip = std::mem::take(&mut bundle_views.picmip);
-                let v = upload_bundle_view(self.device, self.queue, fs, bundle_views, &p);
-                bundle_views.picmip = picmip;
-                v
+                let rule = ImageRule { picmip: 0, ..rule };
+                upload_bundle_view(self.device, self.queue, fs, bundle_views, &p, rule)
             }
             None => self.raw_view(fs, None, "$white", None, 0),
         };
@@ -2584,8 +2602,6 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
@@ -2609,7 +2625,7 @@ pub(super) mod tests {
             for two_sided in [false, true] {
                 for bias in [false, true] {
                     assert!(draws_lit(&sh, 0, b.page_count(), v));
-                    let bind = b.bind(&fs, &mut views, &sh, 0, v, two_sided, bias);
+                    let bind = b.bind(&fs, &mut views, ImageRule::FULL, &sh, 0, v, two_sided, bias);
                     assert_eq!(
                         bind,
                         LitBind {
@@ -2867,8 +2883,6 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
@@ -2883,7 +2897,16 @@ pub(super) mod tests {
             }),
             ..Material::from_shader(&vcod_common::shader::Shader::default())
         };
-        let bind = b.bind(&fs, &mut views, &sh, 0, StageVariant::Opaque, true, false);
+        let bind = b.bind(
+            &fs,
+            &mut views,
+            ImageRule::FULL,
+            &sh,
+            0,
+            StageVariant::Opaque,
+            true,
+            false,
+        );
         let tangents = tangent_stream(&bsp, 3);
         let world = b.finish(&tangents);
         // clip-space positions under an identity view_proj
@@ -3017,8 +3040,6 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
@@ -3043,7 +3064,16 @@ pub(super) mod tests {
             ],
             ..Material::from_shader(&vcod_common::shader::Shader::default())
         };
-        let bind = b.bind(&fs, &mut views, &sh, 0, StageVariant::Opaque, true, false);
+        let bind = b.bind(
+            &fs,
+            &mut views,
+            ImageRule::FULL,
+            &sh,
+            0,
+            StageVariant::Opaque,
+            true,
+            false,
+        );
         let world = b.finish(&tangent_stream(&bsp, 3));
         let vcolor = [255u8, 204, 255, 255];
         let corners = [[-1.0f32, -1.0], [3.0, -1.0], [-1.0, 3.0]];
@@ -3160,8 +3190,6 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
@@ -3194,7 +3222,16 @@ pub(super) mod tests {
             ],
             ..Material::from_shader(&vcod_common::shader::Shader::default())
         };
-        let bind = builder.bind(&fs, &mut views, &sh, 0, StageVariant::Opaque, true, false);
+        let bind = builder.bind(
+            &fs,
+            &mut views,
+            ImageRule::FULL,
+            &sh,
+            0,
+            StageVariant::Opaque,
+            true,
+            false,
+        );
         let world = builder.finish(&tangent_stream(&bsp, 3));
         let vcolor = [255u8, 204, 255, 255];
         let corners = [[-1.0f32, -1.0], [3.0, -1.0], [-1.0, 3.0]];
@@ -3352,8 +3389,6 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
@@ -3380,7 +3415,16 @@ pub(super) mod tests {
             }],
             ..Material::from_shader(&vcod_common::shader::Shader::default())
         };
-        let bind = builder.bind(&fs, &mut views, &sh, 0, StageVariant::Opaque, true, false);
+        let bind = builder.bind(
+            &fs,
+            &mut views,
+            ImageRule::FULL,
+            &sh,
+            0,
+            StageVariant::Opaque,
+            true,
+            false,
+        );
         let world = builder.finish(&tangent_stream(&bsp, verts.len()));
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
@@ -3394,7 +3438,7 @@ pub(super) mod tests {
         });
         let mut pass = SunShadowPass::new(&device, &queue);
         let casters = pass
-            .casters(&device, &bsp, &[0, 0], |_| unreachable!("no cut"))
+            .casters(&device, &bsp, &[0, 0], |_, _| unreachable!("no cut"))
             .expect("both soups cast");
 
         // eye 48 up, looking down 50 degrees toward `at` on the floor
@@ -3624,8 +3668,6 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
@@ -3656,6 +3698,7 @@ pub(super) mod tests {
             builder.bind_in(
                 &fs,
                 &mut views,
+                ImageRule::FULL,
                 &sh,
                 (0, 0, light),
                 StageVariant::Opaque,
@@ -3854,8 +3897,6 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
@@ -3896,6 +3937,7 @@ pub(super) mod tests {
         let bl = b.bind_cod4_model(
             &fs,
             &mut views,
+            ImageRule::FULL,
             &lit,
             (0, 1),
             StageVariant::Opaque,
@@ -3905,6 +3947,7 @@ pub(super) mod tests {
         let ba = b.bind_cod4_model(
             &fs,
             &mut views,
+            ImageRule::FULL,
             &amb,
             (0, 1),
             StageVariant::Opaque,
@@ -3914,6 +3957,7 @@ pub(super) mod tests {
         let bo = b.bind_cod4_model(
             &fs,
             &mut views,
+            ImageRule::FULL,
             &lit,
             (0, 2),
             StageVariant::Opaque,
@@ -3923,6 +3967,7 @@ pub(super) mod tests {
         let bs = b.bind_cod4_model(
             &fs,
             &mut views,
+            ImageRule::FULL,
             &lit,
             (0, 3),
             StageVariant::Opaque,
@@ -3933,6 +3978,7 @@ pub(super) mod tests {
         let bao = b.bind_cod4_model(
             &fs,
             &mut views,
+            ImageRule::FULL,
             &amb,
             (0, 2),
             StageVariant::Opaque,
@@ -3946,6 +3992,7 @@ pub(super) mod tests {
         let bn0 = b.bind_cod4_model(
             &fs,
             &mut views,
+            ImageRule::FULL,
             &lit,
             (0, 0),
             StageVariant::Opaque,
@@ -4177,8 +4224,6 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
@@ -4209,13 +4254,30 @@ pub(super) mod tests {
         assert!(draws_cod4_water(&sh, StageVariant::Opaque));
         assert!(!draws_cod4_model(&sh, StageVariant::Opaque));
         assert!(!draws_lit(&sh, 0, 1, StageVariant::Opaque));
-        let bind = b.bind_cod4_water(&fs, &mut views, &sh, 0, StageVariant::Opaque, true, false);
+        let bind = b.bind_cod4_water(
+            &fs,
+            &mut views,
+            ImageRule::FULL,
+            &sh,
+            0,
+            StageVariant::Opaque,
+            true,
+            false,
+        );
         let sim = Material {
             name: "sim".into(),
             ..sh.clone()
         };
-        let sim_bind =
-            b.bind_cod4_water(&fs, &mut views, &sim, 0, StageVariant::Opaque, true, false);
+        let sim_bind = b.bind_cod4_water(
+            &fs,
+            &mut views,
+            ImageRule::FULL,
+            &sim,
+            0,
+            StageVariant::Opaque,
+            true,
+            false,
+        );
         assert_ne!(sim_bind.material, bind.material);
         let mut world = b.finish(&tangent_stream(&bsp, 3));
         // the spectrum's height map is made and runs on the view's time
@@ -4361,8 +4423,6 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
@@ -4392,7 +4452,14 @@ pub(super) mod tests {
         };
         assert!(draws_smodel(&sh, StageVariant::Opaque));
         assert!(!draws_smodel(&sh, StageVariant::AdditiveFixed));
-        let bind = b.bind_smodel(&fs, &mut views, &sh, StageVariant::Opaque, false);
+        let bind = b.bind_smodel(
+            &fs,
+            &mut views,
+            ImageRule::FULL,
+            &sh,
+            StageVariant::Opaque,
+            false,
+        );
         assert_eq!(bind.entry, LitEntry::Smodel);
         // a prop's frame: normal up, tangent along +x turned 30 degrees
         // about z, binormal across it
@@ -4681,8 +4748,6 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
@@ -4701,6 +4766,7 @@ pub(super) mod tests {
         let base_bind = b.bind(
             &fs,
             &mut views,
+            ImageRule::FULL,
             &base,
             0,
             StageVariant::Opaque,
@@ -4709,7 +4775,7 @@ pub(super) mod tests {
         );
         let (v, two, bias) = facts(&layer);
         assert!(draws_lit(&layer, 0, b.page_count(), v));
-        let layer_bind = b.bind(&fs, &mut views, &layer, 0, v, two, bias);
+        let layer_bind = b.bind(&fs, &mut views, ImageRule::FULL, &layer, 0, v, two, bias);
         let lit_layer_key = (v, two, bias);
         let world = b.finish(&tangent_stream(&bsp, 3));
 
@@ -4768,6 +4834,7 @@ pub(super) mod tests {
             &page,
             &lm_sampler,
             &mut views,
+            ImageRule::FULL,
             &decal.stages[0],
         );
 
@@ -4879,8 +4946,6 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
@@ -4893,7 +4958,16 @@ pub(super) mod tests {
 
         let mut b = Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
         let key = (StageVariant::Opaque, false, false);
-        let lit_bind = b.bind(&fs, &mut views, &lit, 0, key.0, key.1, key.2);
+        let lit_bind = b.bind(
+            &fs,
+            &mut views,
+            ImageRule::FULL,
+            &lit,
+            0,
+            key.0,
+            key.1,
+            key.2,
+        );
         let world = b.finish(&tangent_stream(&bsp, 3));
 
         let material_layout = super::super::material_layout(&device);
@@ -4950,6 +5024,7 @@ pub(super) mod tests {
                 &page,
                 &lm_sampler,
                 views,
+                ImageRule::FULL,
                 &sh.stages[0],
             )
         };

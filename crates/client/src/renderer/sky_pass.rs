@@ -77,6 +77,7 @@ pub(super) fn build_sky_box(
     fs: &Pk3Fs,
     camera_layout: &wgpu::BindGroupLayout,
     bundle_views: &mut BundleViews,
+    rule: ImageRule,
     white_view: &wgpu::TextureView,
     env: &str,
     sh_name: &str,
@@ -112,7 +113,7 @@ pub(super) fn build_sky_box(
         let path = format!("{env}_{suffix}");
         let found = assets::resolve_bundle_image(fs, &path).is_some();
         let view = if found {
-            upload_bundle_view(device, queue, fs, bundle_views, &path)
+            upload_bundle_view(device, queue, fs, bundle_views, &path, rule)
         } else {
             // retail binds tr.defaultImage for a side the paks lack
             log::warn!("sky {sh_name}: env image {path} not found, drawing white");
@@ -230,6 +231,7 @@ pub(super) fn build_sun_sprite(
     fs: &Pk3Fs,
     camera_layout: &wgpu::BindGroupLayout,
     bundle_views: &mut BundleViews,
+    rule: ImageRule,
     sprite: &str,
     dir: glam::Vec3,
     size: f32,
@@ -238,7 +240,7 @@ pub(super) fn build_sun_sprite(
         log::warn!("sunfile: sprite image {sprite} not found, drawing no sun");
         return None;
     }
-    let view = upload_bundle_view(device, queue, fs, bundle_views, sprite);
+    let view = upload_bundle_view(device, queue, fs, bundle_views, sprite, rule);
     let tex_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("sun sprite layout"),
         entries: &[gpu_util::texture_2d(0)],

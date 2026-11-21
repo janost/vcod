@@ -829,7 +829,8 @@ pub(crate) fn stage_animated(sh: &Material, idx: usize) -> bool {
 
 /// Group(1) and group(2) bind groups for one authored stage, shared by the
 /// world stage-batch loop and the cloud dome. `lm` is the batch's
-/// lightmap page (bundle-0 `$lightmap` samples it through the flag).
+/// lightmap page (bundle-0 `$lightmap` samples it through the flag); the
+/// stage's images load under `rule`.
 #[expect(clippy::too_many_arguments)]
 pub(super) fn stage_bind_groups(
     device: &wgpu::Device,
@@ -843,6 +844,7 @@ pub(super) fn stage_bind_groups(
     lm: &LightmapPage,
     lightmap_sampler: &wgpu::Sampler,
     bundle_views: &mut BundleViews,
+    rule: ImageRule,
     st: &Stage,
 ) -> (AnimFrames, AnimFrames) {
     let b0 = &st.bundles[0];
@@ -892,7 +894,7 @@ pub(super) fn stage_bind_groups(
             ],
         })
     };
-    let mut resolve = |p: &str| upload_bundle_view(device, queue, fs, bundle_views, p);
+    let mut resolve = |p: &str| upload_bundle_view(device, queue, fs, bundle_views, p, rule);
     let mat = match (&b0.anim, &b0.image) {
         (Some(anim), _) => AnimFrames {
             fps: anim.fps,

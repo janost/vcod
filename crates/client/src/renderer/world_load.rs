@@ -864,8 +864,6 @@ impl Renderer {
         let mut bundle_views = BundleViews {
             views: HashMap::new(),
             table: self.image_gamma.as_ref(),
-            picmip: 0,
-            mipmap: true,
             store: self.textures.store(),
             prefetched: Some(&prefetched),
         };
@@ -905,8 +903,7 @@ impl Renderer {
             if sh.stages.is_empty() {
                 continue;
             }
-            bundle_views.picmip = self.textures.world_picmip(sh.nopicmip);
-            bundle_views.mipmap = !sh.nomipmaps;
+            let rule = ImageRule::world(&self.textures, sh);
             let lm_view = match batch.lightmap {
                 bsp::NO_LIGHTMAP => white_lightmap,
                 i => lightmap_views.get(i as usize).unwrap_or(white_lightmap),
@@ -928,6 +925,7 @@ impl Renderer {
                     lm_view,
                     lightmap_sampler,
                     &mut bundle_views,
+                    rule,
                     &sh.stages[si],
                 );
                 if stage_animated(sh, si) {
@@ -944,6 +942,7 @@ impl Renderer {
                         return Some(b.bind_cod4_water(
                             fs,
                             &mut bundle_views,
+                            rule,
                             sh,
                             probe,
                             variant,
@@ -957,6 +956,7 @@ impl Renderer {
                             b.bind_cod4_model(
                                 fs,
                                 &mut bundle_views,
+                                rule,
                                 sh,
                                 (batch.probe, batch.light),
                                 variant,
@@ -969,6 +969,7 @@ impl Renderer {
                         b.bind_in(
                             fs,
                             &mut bundle_views,
+                            rule,
                             sh,
                             (batch.lightmap, batch.probe, batch.light),
                             variant,
@@ -993,8 +994,7 @@ impl Renderer {
         // winding) and take no lightmap.
         for (pi, script) in prop_scripts.iter().enumerate() {
             let Some((sh, first)) = *script else { continue };
-            bundle_views.picmip = self.textures.model_picmip(sh.nopicmip);
-            bundle_views.mipmap = !sh.nomipmaps;
+            let rule = ImageRule::model(&self.textures, sh);
             for si in 0..sh.stages.len() {
                 let Some((variant, _, bias)) = stage_draw_facts(sh, si) else {
                     continue;
@@ -1012,6 +1012,7 @@ impl Renderer {
                     white_lightmap,
                     lightmap_sampler,
                     &mut bundle_views,
+                    rule,
                     &sh.stages[si],
                 );
                 if stage_animated(sh, si) {
@@ -1029,7 +1030,8 @@ impl Renderer {
                 let smodel = smodel_cache.as_ref().and_then(|_| {
                     let m = self.shader_lib.get(&props.batches[pi].skin)?;
                     let b = lit.as_mut()?;
-                    cod2_smodel(m).then(|| b.bind_smodel(fs, &mut bundle_views, m, variant, bias))
+                    cod2_smodel(m)
+                        .then(|| b.bind_smodel(fs, &mut bundle_views, rule, m, variant, bias))
                 });
                 stage_batches.push(StageBatch {
                     slot,
@@ -1091,8 +1093,7 @@ impl Renderer {
                 };
                 for &di in list {
                     let syn = &dl_shaders[di as usize];
-                    bundle_views.picmip = self.textures.world_picmip(syn.nopicmip);
-                    bundle_views.mipmap = !syn.nomipmaps;
+                    let rule = ImageRule::world(&self.textures, syn);
                     let st = &syn.stages[0];
                     let (Some(blend), Some((_, two_sided, bias))) =
                         (DlightBlend::of(st), stage_draw_facts(syn, 0))
@@ -1113,6 +1114,7 @@ impl Renderer {
                         lm_view,
                         lightmap_sampler,
                         &mut bundle_views,
+                        rule,
                         st,
                     );
                     if stage_animated(syn, 0) {
@@ -1181,8 +1183,7 @@ impl Renderer {
                 .get(&name)
                 .expect("sky candidate comes from the lib");
             let parms = sh.sky.as_ref().expect("sky_blocks only yields skyparms");
-            bundle_views.picmip = self.textures.world_picmip(sh.nopicmip);
-            bundle_views.mipmap = !sh.nomipmaps;
+            let rule = ImageRule::world(&self.textures, sh);
             log::info!(
                 "sky: {name}  env {}  cloud height {}  stages {}",
                 parms.env,
@@ -1207,8 +1208,6 @@ impl Renderer {
                 if assets::resolve_bundle_image(fs, &rt).is_some() {
                     // skyParms loads its sides with flags 0x33 whatever the
                     // block says: mipmapped, `r_picmip`, clamped (0x4fa3cd)
-                    bundle_views.picmip = self.textures.world_picmip(false);
-                    bundle_views.mipmap = true;
                     farbox = Some(build_sky_box(
                         device,
                         queue,
@@ -1216,6 +1215,7 @@ impl Renderer {
                         fs,
                         &self.camera_layout,
                         &mut bundle_views,
+                        ImageRule::world_or_bare(&self.textures, None),
                         white_view,
                         &parms.env,
                         &name,
@@ -1223,8 +1223,6 @@ impl Renderer {
                 } else {
                     log::warn!("sky {name}: env image {rt} not found, drawing no farbox");
                 }
-                bundle_views.picmip = self.textures.world_picmip(sh.nopicmip);
-                bundle_views.mipmap = !sh.nomipmaps;
             }
             let mut dome = None;
             if !sh.stages.is_empty() {
@@ -1270,6 +1268,7 @@ impl Renderer {
                         white_lightmap,
                         lightmap_sampler,
                         &mut bundle_views,
+                        rule,
                         &sh.stages[si],
                     );
                     // dome params ride the per-frame rewrite with the eye offset
@@ -1311,10 +1310,8 @@ impl Renderer {
                     log::info!("sky {name}: sun sprite {sprite} size {}", sf.sprite_size);
                     // a shader of its own (0x4e7930); stock ones say
                     // `nomipmaps` and `nopicmip`
-                    let sh = self.shader_lib.get(sprite);
-                    bundle_views.picmip =
-                        self.textures.world_picmip(sh.is_some_and(|sh| sh.nopicmip));
-                    bundle_views.mipmap = !sh.is_some_and(|sh| sh.nomipmaps);
+                    let rule =
+                        ImageRule::world_or_bare(&self.textures, self.shader_lib.get(sprite));
                     sun = build_sun_sprite(
                         device,
                         queue,
@@ -1322,16 +1319,11 @@ impl Renderer {
                         fs,
                         &self.camera_layout,
                         &mut bundle_views,
+                        rule,
                         sprite,
                         dir,
                         sf.sprite_size,
                     );
-                }
-                if let Some(f) = &sf.flare {
-                    let sh = self.shader_lib.get(f);
-                    bundle_views.picmip =
-                        self.textures.world_picmip(sh.is_some_and(|sh| sh.nopicmip));
-                    bundle_views.mipmap = !sh.is_some_and(|sh| sh.nomipmaps);
                 }
                 // the flare's image: its block's first stage, or the name
                 let image = sf.flare.as_ref().and_then(|f| {
@@ -1341,7 +1333,10 @@ impl Renderer {
                 match image {
                     Some(path) => {
                         log::info!("sky {name}: sun flare {path}");
-                        let view = upload_bundle_view(device, queue, fs, &mut bundle_views, &path);
+                        let flare_sh = sf.flare.as_ref().and_then(|f| self.shader_lib.get(f));
+                        let rule = ImageRule::world_or_bare(&self.textures, flare_sh);
+                        let view =
+                            upload_bundle_view(device, queue, fs, &mut bundle_views, &path, rule);
                         flare = Some(SunFlareGpu::new(
                             device,
                             self.world_format,
@@ -1525,8 +1520,14 @@ impl Renderer {
                 fx_keys,
             )
         });
-        let sun_casters = self.sun_shadow.casters(device, bsp, &soup_model, |p| {
-            upload_bundle_view(device, queue, fs, &mut bundle_views, p)
+        // a caster binds its material's colour image, under the world draw's rule
+        let sun_casters = self.sun_shadow.casters(device, bsp, &soup_model, |m, p| {
+            let sh = bsp
+                .materials
+                .get(usize::from(m))
+                .and_then(|m| self.shader_lib.get(&m.name));
+            let rule = ImageRule::world_or_bare(&self.textures, sh);
+            upload_bundle_view(device, queue, fs, &mut bundle_views, p, rule)
         });
         let cookie_bounds = soup_ranges
             .iter()
