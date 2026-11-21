@@ -379,8 +379,8 @@ pass after the flood (`NavGraph::link_ladders`) handles them on their own.
 
 `PM_CheckJump` lifts the feet 39 units (vz `sqrt(2 * 39 * 800)` = 249.8,
 `vcod_common::pmove::JUMP_HEIGHT`; docs/research/cod11-mantle.md, "Jumps"),
-over the 18-unit step. Two kinds of edge use it, kept in
-`NavGraph::jumps`, and a bot on one sends the jump key where the walk
+over the 18-unit step. Two kinds of edge use it, flagged
+`nav::Edge::jump` on the edge, and a bot on one sends the jump key where the walk
 that proved it jumped (`nav::PinJump`, `nav::leap_cue`, `nav::jump_key`):
 
 - A pinned jump: the flood's forward walk above, stalled at a ledge's face
@@ -411,7 +411,7 @@ that proved it jumped (`nav::PinJump`, `nav::leap_cue`, `nav::jump_key`):
   `jump_clear` allows 2 units over the 39 (`nav::JUMP_SLACK`): that jump
   from z 612.26 stands on the ledge at 652.42, 40.2 up, where a trace to
   exactly 39 is blocked by the ledge's lip.
-- A leap (`NavGraph::link_leaps`, `NavGraph::leaps`): after the flood,
+- A leap (`NavGraph::link_leaps`, `nav::Edge::leap`): after the flood,
   ladders and walk-back passes, every node 2 columns off whose floor is
   between a step and a jump higher, that 3 edges do not already reach, is
   run at from a standstill with a jump on the tick the body would lose the
@@ -1066,8 +1066,8 @@ mp_uo_dawnville 189 / 243, mp_uo_powcamp 226 / 254, mp_uo_hurtgen 281 /
     (`PM_CheckJump` refuses a crouched body) until the body is on the
     ground again. `NavGraph::link_pockets` tries it on every run of a
     cut-off node that arrives no other way, and on the node-to-node
-    walk again; an edge it proves goes in `NavGraph::crouch_jumps`
-    (and `jumps`). A crouched rest where a standing body does not fit
+    walk again; an edge it proves is flagged `Edge::crouched`
+    (and `Edge::jump`). A crouched rest where a standing body does not fit
     is no node (`stands`): every walk on from a node starts standing.
     The rest on each of these sills holds a standing body.
   - A bot on a crouched jump edge (`BotView::crouch_jump`,
@@ -2220,7 +2220,7 @@ merge, the same detector; ship seeds in three blocks of 768):
   edge again from its node, aimed at its top (where a bot steers), with
   the bot's jump (`nav::as_a_bot`: the bob, no room test), then aimed
   8 units either side. An edge that lands only aside keeps that aim in
-  `NavGraph::aims` and a bot on it steers there (`NavGraph::aim`,
+  `Edge::aim` and a bot on it steers there (`NavGraph::aim`,
   `Follower::jump_aim`); one that lands at none is dropped. The pit
   edge (-1569, 2087, 212) -> (-1533.2, 2112, 239.1) lands at none and is
   dropped (`nav::walk::tests::a_jump_edge_that_lands_only_off_where_a_bot_steers_is_dropped`);

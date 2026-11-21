@@ -484,8 +484,8 @@ pub(crate) fn cover_spot(
                 return None;
             }
         }
-        for &m in &g.edges[n as usize] {
-            if g.risky.contains(&(n, m)) {
+        for m in g.next(n) {
+            if g.has(n, m, |k| k.risky) {
                 continue;
             }
             let next = cost[n as usize] + p.distance(g.nodes[m as usize]);

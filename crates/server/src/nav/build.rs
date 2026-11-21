@@ -182,14 +182,7 @@ impl NavGraph {
         let mut g = NavGraph {
             nodes: Vec::new(),
             edges: Vec::new(),
-            jumps: HashSet::new(),
-            leaps: HashSet::new(),
-            crouch_jumps: HashSet::new(),
-            aims: HashMap::new(),
-            risky: HashSet::new(),
             perches: HashSet::new(),
-            mantles: HashSet::new(),
-            mantle_lands: HashMap::new(),
             seeds: Vec::new(),
             spacing: spacing.clamp(SPACING_MIN, SPACING_MAX),
             columns: HashMap::new(),
@@ -242,7 +235,7 @@ impl NavGraph {
         g.link_back(world);
         g.link_leaps(world);
         if !lip {
-            g.leaps.clear();
+            g.edges.iter_mut().flatten().for_each(|e| e.leap = false);
         }
         g.reprove_jumps(world);
         if !lip {
@@ -255,7 +248,7 @@ impl NavGraph {
         g
     }
 
-    /// Marks [`Self::risky`]: every walk down off a jump edge beside a fall
+    /// Marks [`Edge::risky`]: every walk down off a jump edge beside a fall
     /// that hurts ([`beside_a_fall_that_hurts`]) whose forward walk falls
     /// from 4 units aside: bots that passed mp_ship's roof node
     /// (3514, -283, 623) a few units off the line flew off the ridge past
@@ -268,16 +261,8 @@ impl NavGraph {
     /// to (bot-navigation.md section 3).
     fn mark_risky(&mut self, world: &CollisionWorld) {
         let drops: Vec<(u32, u32)> = self
-            .edges
-            .iter()
-            .enumerate()
-            .flat_map(|(a, out)| out.iter().map(move |&b| (a as u32, b)))
-            .filter(|&(a, b)| {
-                let (p, q) = (self.nodes[a as usize], self.nodes[b as usize]);
-                q.z < p.z - LEVEL
-                    && !self.jumps.contains(&(a, b))
-                    && !self.mantles.contains(&(a, b))
-            })
+            .edges_where(|e| !e.jump && !e.mantle)
+            .filter(|&(a, b)| self.nodes[b as usize].z < self.nodes[a as usize].z - LEVEL)
             .collect();
         let risky = par_map(&drops, |&(a, b)| {
             let (p, q) = (self.nodes[a as usize], self.nodes[b as usize]);
@@ -329,16 +314,20 @@ impl NavGraph {
                 )
             })
         });
-        self.risky = drops
-            .into_iter()
-            .zip(risky)
-            .filter_map(|(e, r)| r.then_some(e))
-            .collect();
+        self.edges
+            .iter_mut()
+            .flatten()
+            .for_each(|e| e.risky = false);
+        for ((a, b), r) in drops.into_iter().zip(risky) {
+            if let Some(e) = self.edge_mut(a, b) {
+                e.risky = r;
+            }
+        }
     }
 
     /// Links every node from `from` on to where a mantle off it lands, by
     /// `probe` facing each of the eight compass ways, as a mantle edge
-    /// ([`Self::mantles`]) unless a walk already proved the edge; a landing
+    /// ([`Edge::mantle`]) unless a walk already proved the edge; a landing
     /// no node stands at gets one, and the new nodes are returned for the
     /// flood to go on from.
     fn link_mantles(
@@ -368,10 +357,12 @@ impl NavGraph {
                     }
                     None => continue,
                 };
-                if a != b && !self.edges[a as usize].contains(&b) {
-                    self.edges[a as usize].push(b);
-                    self.mantles.insert((a, b));
-                    self.mantle_lands.insert((a, b), q);
+                if a != b && !self.linked(a, b) {
+                    self.edges[a as usize].push(Edge {
+                        mantle: true,
+                        land: Some(q),
+                        ..Edge::to(b)
+                    });
                 }
             }
         }
@@ -574,7 +565,7 @@ impl NavGraph {
                 let c = self.column(q);
                 match self.find(c, q.z) {
                     Some(m) if (self.nodes[m as usize].z - q.z).abs() < ARRIVE => {
-                        if !pocket.contains(&m) && !self.edges[n as usize].contains(&m) {
+                        if !pocket.contains(&m) && !self.linked(n, m) {
                             recheck.push((n, m));
                         }
                     }
@@ -627,7 +618,11 @@ impl NavGraph {
         let mut heads: HashSet<u32> = HashSet::new();
         for (a, out) in self.edges.iter().enumerate() {
             let z = self.nodes[a].z + JUMP_HEIGHT;
-            heads.extend(out.iter().filter(|&&b| self.nodes[b as usize].z > z));
+            heads.extend(
+                out.iter()
+                    .map(|e| e.to)
+                    .filter(|&b| self.nodes[b as usize].z > z),
+            );
         }
         let mut jobs = Vec::new();
         for (a, &p) in self.nodes.iter().enumerate() {
@@ -664,9 +659,12 @@ impl NavGraph {
             )
         });
         for (&(a, b), ok) in jobs.iter().zip(walked) {
-            if ok && !self.edges[a as usize].contains(&b) {
-                self.link_as(a, b, true);
-                self.leaps.insert((a, b));
+            if ok && !self.linked(a, b) {
+                self.edges[a as usize].push(Edge {
+                    jump: true,
+                    leap: true,
+                    ..Edge::to(b)
+                });
             }
         }
     }
@@ -679,15 +677,10 @@ impl NavGraph {
     /// (-1569, 2087, 212) jumped at the step at (-1533, 2112, 239) again and
     /// again (bot-navigation.md, "Jumps"). An edge that lands only aimed
     /// [`SIDESTEP`] to one side, or at its column's centre, where the flood
-    /// aimed, keeps that aim ([`Self::aims`]); one that lands at none is
+    /// aimed, keeps that aim ([`Edge::aim`]); one that lands at none is
     /// dropped.
     pub(super) fn reprove_jumps(&mut self, world: &CollisionWorld) {
-        let mut jobs: Vec<(u32, u32)> = self
-            .jumps
-            .iter()
-            .copied()
-            .filter(|e| !self.leaps.contains(e))
-            .collect();
+        let mut jobs: Vec<(u32, u32)> = self.edges_where(|e| e.jump && !e.leap).collect();
         jobs.sort_unstable();
         let walked = par_map(&jobs, |&(a, b)| {
             let (from, to) = (self.nodes[a as usize], self.nodes[b as usize]);
@@ -704,13 +697,12 @@ impl NavGraph {
         for (&(a, b), aim) in jobs.iter().zip(walked) {
             match aim {
                 Some(Some(p)) => {
-                    self.aims.insert((a, b), p);
+                    if let Some(e) = self.edge_mut(a, b) {
+                        e.aim = Some(p);
+                    }
                 }
                 Some(None) => {}
-                None => {
-                    self.edges[a as usize].retain(|&m| m != b);
-                    self.jumps.remove(&(a, b));
-                }
+                None => self.edges[a as usize].retain(|e| e.to != b),
             }
         }
     }
@@ -728,27 +720,18 @@ impl NavGraph {
         for a in 0..self.edges.len() {
             let p = self.nodes[a];
             let mut out = std::mem::take(&mut self.edges[a]);
-            out.retain(|&b| {
-                let e = (a as u32, b);
-                let keep = self.mantles.contains(&e)
-                    || (self.nodes[b as usize] - p).truncate().length() <= reach;
-                if !keep {
-                    self.jumps.remove(&e);
-                    self.crouch_jumps.remove(&e);
-                    self.aims.remove(&e);
-                }
-                keep
+            out.retain(|e| {
+                e.mantle || (self.nodes[e.to as usize] - p).truncate().length() <= reach
             });
             self.edges[a] = out;
         }
     }
 
     /// Where a bot on edge `a -> b` steers: `b`'s spot, or the point
-    /// beside it the edge's jump was proved at ([`Self::aims`]).
+    /// beside it the edge's jump was proved at ([`Edge::aim`]).
     pub fn aim(&self, a: u32, b: u32) -> glam::Vec2 {
-        self.aims
-            .get(&(a, b))
-            .copied()
+        self.edge(a, b)
+            .and_then(|e| e.aim)
             .unwrap_or_else(|| self.nodes[b as usize].truncate())
     }
 
@@ -759,7 +742,7 @@ impl NavGraph {
         for _ in 0..hops {
             let mut next = Vec::new();
             for n in layer {
-                for &m in &self.edges[n as usize] {
+                for m in self.next(n) {
                     if seen.insert(m) {
                         next.push(m);
                     }
@@ -779,9 +762,9 @@ impl NavGraph {
         let mut jobs = Vec::new();
         for (a, out) in self.edges.iter().enumerate() {
             let p = self.nodes[a];
-            for &b in out {
+            for &Edge { to: b, .. } in out {
                 let q = self.nodes[b as usize];
-                if (q.z - p.z).abs() < Z_MERGE && !self.edges[b as usize].contains(&(a as u32)) {
+                if (q.z - p.z).abs() < Z_MERGE && !self.linked(b, a as u32) {
                     jobs.push((b, a as u32));
                 }
             }
@@ -1093,12 +1076,12 @@ pub(super) mod tests {
         let g = graph_for("mp_ship", &world);
         let roof = g.nearest([3514.0, -283.0, 623.0]).unwrap();
         let ridge = g.nearest([3496.0, -318.0, 611.0]).unwrap();
-        assert!(g.edges[roof as usize].contains(&ridge));
-        assert!(g.risky.contains(&(roof, ridge)));
+        assert!(g.linked(roof, ridge));
+        assert!(g.has(roof, ridge, |k| k.risky));
         let hull = g.nearest([3839.6, -611.7, 54.125]).unwrap();
         let below = g.nearest([3875.0, -578.4, 27.13]).unwrap();
-        assert!(g.edges[hull as usize].contains(&below));
-        assert!(!g.risky.contains(&(hull, below)));
+        assert!(g.linked(hull, below));
+        assert!(!g.has(hull, below, |k| k.risky));
     }
 
     /// mp_ship's crow's nest exits back off the rim into the hatch for the
@@ -1116,15 +1099,15 @@ pub(super) mod tests {
         let below = node([4929.0, 68.0, 692.125]);
         for exit in [[4963.9, 35.5, 1219.125], [4963.9, 92.5, 1219.125]] {
             let exit = node(exit);
-            assert!(g.edges[exit as usize].contains(&below));
-            assert!(g.risky.contains(&(exit, below)));
+            assert!(g.linked(exit, below));
+            assert!(g.has(exit, below, |k| k.risky));
         }
         let (head, foot) = (
             node([4963.9, 64.0, 1219.125]),
             node([4959.0, 64.0, 692.125]),
         );
-        assert!(g.edges[head as usize].contains(&foot));
-        assert!(!g.risky.contains(&(head, foot)));
+        assert!(g.linked(head, foot));
+        assert!(!g.has(head, foot, |k| k.risky));
     }
 
     /// mp_carentan's graph from the real collision: every spawn point sits on
@@ -1233,12 +1216,9 @@ pub(super) mod tests {
         let ledge = node([3685.5, -354.3, 400.125]);
         let north = node([3647.9, -316.9, 618.5]);
         let west = node([3647.0, -352.9, 611.125]);
-        assert!(!g.edges[north as usize].contains(&ledge), "from the north");
-        assert!(g.edges[west as usize].contains(&ledge), "from the west");
-        assert!(
-            g.risky.contains(&(west, ledge)),
-            "missed from 4 units south"
-        );
+        assert!(!g.linked(north, ledge), "from the north");
+        assert!(g.linked(west, ledge), "from the west");
+        assert!(g.has(west, ledge, |k| k.risky), "missed from 4 units south");
     }
 
     /// mp_ship's mast hatch: the climb's head stands on the ladder plate's

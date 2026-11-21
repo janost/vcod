@@ -169,7 +169,13 @@ impl Search {
                 return Plan::Failed;
             }
             let here = g.nodes[node as usize];
-            for &next in &g.edges[node as usize] {
+            for &Edge {
+                to: next,
+                risky,
+                jump,
+                ..
+            } in &g.edges[node as usize]
+            {
                 if self.avoid.contains(&(node, next))
                     || (next != self.to
                         && (self.blocked.binary_search(&next).is_ok()
@@ -177,7 +183,7 @@ impl Search {
                 {
                     continue;
                 }
-                let risk = if g.risky.contains(&(node, next)) {
+                let risk = if risky {
                     // Round a stuck edge, never down a risky drop: with the
                     // ladder off mp_ship's crow's nest avoided after a
                     // meeting at its head, plans took the drop down its
@@ -206,7 +212,7 @@ impl Search {
                 {
                     len *= 1.0 + self.crowd_cost;
                 }
-                if self.jump_cost > 0.0 && g.jumps.contains(&(node, next)) {
+                if self.jump_cost > 0.0 && jump {
                     len += self.jump_cost;
                 }
                 let c = self.cost[node as usize] + len + risk;

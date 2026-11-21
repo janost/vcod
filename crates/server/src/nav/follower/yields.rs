@@ -482,12 +482,9 @@ impl Follower {
             ms.map(|m| g.nodes[m as usize])
                 .max_by(|a, b| box_flat(&rungs, *a).total_cmp(&box_flat(&rungs, *b)))
         };
-        let near = || g.edges[e as usize].iter().copied().filter(floor);
-        let on = |ms: &[u32]| -> Vec<u32> {
-            ms.iter()
-                .flat_map(|&m| g.edges[m as usize].iter().copied().filter(floor))
-                .collect()
-        };
+        let near = || g.next(e).filter(floor);
+        let on =
+            |ms: &[u32]| -> Vec<u32> { ms.iter().flat_map(|&m| g.next(m).filter(floor)).collect() };
         let two = on(&near().collect::<Vec<_>>());
         let three = if deadly_head { on(&two) } else { Vec::new() };
         // Where a fall off kills, a body's width clear of every exit too: a
@@ -1018,7 +1015,7 @@ mod tests {
         let g = graph_for("mp_ship", &world);
         let head = g.nearest([4963.9, 64.0, 1219.125]).unwrap();
         let foot = g.nearest([4959.0, 64.0, 692.125]).unwrap();
-        assert!(g.edges[head as usize].contains(&foot));
+        assert!(g.linked(head, foot));
         let mut f = Follower {
             path: vec![head, foot],
             next: 1,
@@ -1127,7 +1124,7 @@ mod tests {
         let g = graph_for("mp_ship", &world);
         let head = g.nearest([3760.0, 65.0, 616.0]).unwrap();
         let foot = g.nearest([3809.0, 65.0, 304.0]).unwrap();
-        assert!(g.edges[head as usize].contains(&foot));
+        assert!(g.linked(head, foot));
         let body = Footing {
             still: false,
             ..Footing::STANDING

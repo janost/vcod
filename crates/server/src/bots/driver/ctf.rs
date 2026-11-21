@@ -496,11 +496,7 @@ pub(super) fn danger(
                 outs.iter()
                     .flat_map(|p| g.nodes_in_box(*p, OUTPOST_NEAR, DANGER_RISE)),
             )
-            .flat_map(|a| {
-                g.edges[a as usize]
-                    .iter()
-                    .map(move |&b| (a.min(b), a.max(b)))
-            })
+            .flat_map(|a| g.next(a).map(move |b| (a.min(b), a.max(b))))
             .collect();
         edges.sort_unstable();
         edges.dedup();

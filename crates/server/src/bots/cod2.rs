@@ -5,7 +5,7 @@
 //! shared [`vcod_common::collision::WorldClip`] hook, its ladder brushes
 //! too) with walks under 1.5's movement rules, which CoD2's pmove starts
 //! from (cod2-movement.md), and adds the mantles CoD2's own pmove climbs
-//! ([`mantle_probe`], `NavGraph::mantles`). The brain reads a [`BotView`]
+//! ([`mantle_probe`], `Edge::mantle`). The brain reads a [`BotView`]
 //! filled from the CoD2 playerstate, weapon state and weapon table, and
 //! its CoD1 usercmd is rewritten into CoD2's button bits ([`to_cmd2`], the
 //! frag throw onto the offhand key by [`offhand_cmd`]) and run through
@@ -1764,7 +1764,11 @@ mod tests {
         assert!(hits_felt > 0, "no hit felt");
         // The graph's mantle edges, and bots that climb them.
         let g = sv.bots_mut().unwrap().graph().unwrap().clone();
-        assert!(g.mantles.len() > 100, "{} mantle edges", g.mantles.len());
+        assert!(
+            g.edges_where(|k| k.mantle).count() > 100,
+            "{} mantle edges",
+            g.edges_where(|k| k.mantle).count()
+        );
         assert!(
             mantles > 0,
             "no bot mantled, walked {walked:?} kills {kills}"
@@ -1836,12 +1840,15 @@ mod tests {
         sv.bots_mut().unwrap().wait_for_graph();
         sv.tick_frames(now + std::time::Duration::from_millis(50), 1);
         let g = sv.bots_mut().unwrap().graph().unwrap().clone();
-        assert!(g.leaps.is_empty(), "{} leaps", g.leaps.len());
+        assert!(
+            g.edges_where(|k| k.leap).next().is_none(),
+            "{} leaps",
+            g.edges_where(|k| k.leap).count()
+        );
         let pit = |p: Vec3| (p.x - 8650.0).hypot(p.y + 12570.0) < 100.0 && p.z < -505.0;
         let out = g
-            .jumps
-            .iter()
-            .any(|&(a, b)| pit(g.nodes[a as usize]) && g.nodes[b as usize].z > -500.0);
+            .edges_where(|k| k.jump)
+            .any(|(a, b)| pit(g.nodes[a as usize]) && g.nodes[b as usize].z > -500.0);
         assert!(out, "no jump out of the pit");
     }
 

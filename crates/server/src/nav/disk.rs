@@ -4,7 +4,7 @@
 //! as hostile input: a wrong key, length or hash, an index past the nodes
 //! or a float that is not finite is a miss, and the graph is built.
 
-use super::{CacheKey, NavGraph, SPACING_MAX, SPACING_MIN};
+use super::{CacheKey, Edge, NavGraph, SPACING_MAX, SPACING_MIN};
 use glam::{Vec2, Vec3};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -222,16 +222,25 @@ fn encode(g: &NavGraph) -> Vec<u8> {
     g.nodes.iter().for_each(|&p| w.vec3(p));
     for out in &g.edges {
         w.len(out.len());
-        out.iter().for_each(|&b| w.u32(b));
+        out.iter().for_each(|e| w.u32(e.to));
     }
-    for set in [&g.jumps, &g.leaps, &g.crouch_jumps, &g.risky, &g.mantles] {
-        w.pairs(sorted(set.iter().copied()));
+    let kinds: [fn(&Edge) -> bool; 5] = [
+        |e| e.jump,
+        |e| e.leap,
+        |e| e.crouched,
+        |e| e.risky,
+        |e| e.mantle,
+    ];
+    for kind in kinds {
+        w.pairs(sorted(g.edges_where(kind)));
     }
     w.ids(sorted(g.perches.iter().copied()));
+    let all: Vec<((u32, u32), Edge)> = (g.edges.iter().enumerate())
+        .flat_map(|(a, out)| out.iter().map(move |e| ((a as u32, e.to), *e)))
+        .collect();
     let aims = sorted(
-        g.aims
-            .iter()
-            .map(|(&e, a)| (e, a.to_array().map(f32::to_bits))),
+        all.iter()
+            .filter_map(|(k, e)| Some((*k, e.aim?.to_array().map(f32::to_bits)))),
     );
     w.len(aims.len());
     for (e, a) in aims {
@@ -239,9 +248,8 @@ fn encode(g: &NavGraph) -> Vec<u8> {
         a.iter().for_each(|&c| w.u32(c));
     }
     let lands = sorted(
-        g.mantle_lands
-            .iter()
-            .map(|(&e, p)| (e, p.to_array().map(f32::to_bits))),
+        all.iter()
+            .filter_map(|(k, e)| Some((*k, e.land?.to_array().map(f32::to_bits)))),
     );
     w.len(lands.len());
     for (e, p) in lands {
@@ -278,41 +286,41 @@ fn decode(
     let count = r.len(12)?;
     let nodes: Vec<Vec3> = (0..count).map(|_| r.vec3()).collect::<Option<_>>()?;
     let node = |id: u32| (id as usize) < nodes.len();
-    let mut edges = Vec::with_capacity(count);
+    let mut edges: Vec<Vec<Edge>> = Vec::with_capacity(count);
     for _ in 0..count {
         let out = r.ids()?;
-        if !out.iter().all(|&b| node(b)) {
+        let fresh: HashSet<u32> = out.iter().copied().collect();
+        if !out.iter().all(|&b| node(b)) || fresh.len() != out.len() {
             return None;
         }
-        edges.push(out);
+        edges.push(out.into_iter().map(Edge::to).collect());
     }
-    let mut sets = Vec::new();
-    for _ in 0..5 {
-        let pairs = r.pairs()?;
-        if !pairs.iter().all(|&(a, b)| node(a) && node(b)) {
-            return None;
+    // Each kind, aim and landing names an edge the lists above hold.
+    fn edge(edges: &mut [Vec<Edge>], (a, b): (u32, u32)) -> Option<&mut Edge> {
+        edges.get_mut(a as usize)?.iter_mut().find(|e| e.to == b)
+    }
+    let kinds: [fn(&mut Edge); 5] = [
+        |e| e.jump = true,
+        |e| e.leap = true,
+        |e| e.crouched = true,
+        |e| e.risky = true,
+        |e| e.mantle = true,
+    ];
+    for set in kinds {
+        for pair in r.pairs()? {
+            set(edge(&mut edges, pair)?);
         }
-        sets.push(pairs.into_iter().collect::<HashSet<_>>());
     }
-    let [jumps, leaps, crouch_jumps, risky, mantles] = <[_; 5]>::try_from(sets).ok()?;
     let perches = r.ids()?;
-    let mut aims = HashMap::new();
     for _ in 0..r.len(16)? {
         let e = r.pair()?;
         let a = Vec2::new(r.f32()?, r.f32()?);
-        if !(node(e.0) && node(e.1)) {
-            return None;
-        }
-        aims.insert(e, a);
+        edge(&mut edges, e)?.aim = Some(a);
     }
-    let mut mantle_lands = HashMap::new();
     for _ in 0..r.len(20)? {
         let e = r.pair()?;
         let p = r.vec3()?;
-        if !(node(e.0) && node(e.1)) {
-            return None;
-        }
-        mantle_lands.insert(e, p);
+        edge(&mut edges, e)?.land = Some(p);
     }
     let seeds = r.ids()?;
     let mut columns = HashMap::new();
@@ -333,14 +341,7 @@ fn decode(
     let mut g = NavGraph {
         nodes,
         edges,
-        jumps,
-        leaps,
-        crouch_jumps,
-        aims,
-        risky,
         perches: perches.into_iter().collect(),
-        mantles,
-        mantle_lands,
         seeds,
         spacing,
         columns,
@@ -472,14 +473,14 @@ mod tests {
             ],
             vec![vec![1, 3], vec![0, 2], vec![1, 4], vec![0, 2], vec![]],
         );
-        g.jumps.insert((1, 2));
-        g.leaps.insert((1, 2));
-        g.crouch_jumps.insert((0, 3));
-        g.aims.insert((1, 2), Vec2::new(60.0, 2.0));
-        g.risky.insert((2, 4));
+        g.edge_mut(1, 2).unwrap().jump = true;
+        g.edge_mut(1, 2).unwrap().leap = true;
+        g.edge_mut(0, 3).unwrap().crouched = true;
+        g.edge_mut(1, 2).unwrap().aim = Some(Vec2::new(60.0, 2.0));
+        g.edge_mut(2, 4).unwrap().risky = true;
         g.perches.insert(4);
-        g.mantles.insert((3, 2));
-        g.mantle_lands.insert((3, 2), Vec3::new(60.0, 4.0, 8.0));
+        g.edge_mut(3, 2).unwrap().mantle = true;
+        g.edge_mut(3, 2).unwrap().land = Some(Vec3::new(60.0, 4.0, 8.0));
         g.seeds = vec![0, 3];
         g.ladder_boxes = vec![(Vec3::new(1.0, 2.0, 3.0), Vec3::new(4.0, 5.0, 6.0))];
         g.index_components();
@@ -522,10 +523,10 @@ mod tests {
     #[test]
     fn a_whole_file_with_a_bad_graph_is_refused() {
         let mut g = graph();
-        g.edges[0].push(5);
+        g.edges[0].push(Edge::to(5));
         assert!(parsed(&file_bytes(b"k", &g), b"k").is_none());
         let mut g = graph();
-        g.mantle_lands.insert((3, 2), Vec3::new(f32::NAN, 0.0, 0.0));
+        g.edge_mut(3, 2).unwrap().land = Some(Vec3::new(f32::NAN, 0.0, 0.0));
         assert!(parsed(&file_bytes(b"k", &g), b"k").is_none());
         let mut g = graph();
         g.spacing = 1.0;

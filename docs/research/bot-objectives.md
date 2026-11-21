@@ -2894,7 +2894,7 @@ follower's path per tick) on 8e1d545d:
   offered the climb; run at the landing, 52 are, every one north of y
   964, where the bots come from. VERIFIED (1.7's pmove stepped over the
   clip map, `a_mantle_edge_keeps_the_landing_its_probe_climbed_to`). The
-  graph now keeps each mantle edge's landing (`NavGraph::mantle_lands`)
+  graph now keeps each mantle edge's landing (`nav::Edge::land`)
   and a CoD4 bot on the edge runs at it until it stands within 24 units
   of it, then on to the node (`BotWorld::MANTLE_AIMS`). INFERRED (the
   runs below).
