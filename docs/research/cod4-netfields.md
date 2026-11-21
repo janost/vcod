@@ -194,9 +194,10 @@ ends on its block's last byte. VERIFIED live.
   starts past it (none sent). vcod takes the difference in 64-bit math,
   so an acknowledge near `i32::MIN` counts as 128 behind and is clamped
   where retail's wrapping test lets it in and walks 2^31 commands
-  (SEC-001). The clamp commits before the message is read; the netchan
-  sequence and the address still wait for the read (cod2-protocol.md
-  2.2).
+  (SEC-001). The clamp commits before the message is read, and it keeps
+  the netchan sequence as `Netchan_Process` (0x8177d59) took it, within
+  vcod's 32-message window; the address still waits for the read
+  (cod2-protocol.md 2.2).
 - A usercmd: bit 0 and a long serverTime (or bit 1 and a byte step), then
   a 1-bit "changed" flag XOR the key (section 8 has the rest). The key is
   `checksumFeed ^ messageAcknowledge ^ Com_HashKey(server command, 32)`,

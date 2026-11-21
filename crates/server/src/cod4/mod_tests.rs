@@ -83,9 +83,10 @@ fn modwarfare_boots_its_own_scripts_and_names_the_mod_as_retail() {
 }
 
 /// A message whose reliableAcknowledge is i32::MIN, or a `clc_move` whose
-/// messageAcknowledge is, is dropped whole on a bare level: the server
-/// takes neither ack nor a delta base from it and its next frames go out
-/// as before.
+/// messageAcknowledge is, is dropped on a bare level: the server takes
+/// neither ack nor a delta base from it and its next frames go out as
+/// before. The first is retail's clamp, which keeps the sequence
+/// (cod2-protocol.md 2.2).
 #[test]
 fn cod4_a_message_with_an_acknowledge_near_i32_min_is_ignored() {
     use super::test_harness::Probe;
@@ -117,12 +118,13 @@ fn cod4_a_message_with_an_acknowledge_near_i32_min_is_ignored() {
     assert!(c.state == State::Active && c.delta_message > 0);
 
     let p = &mut probes[0];
-    let before = state(&sv);
+    let mut want = state(&sv);
     // reliableAcknowledge is the plain header's last long.
     let mut pkt = p.packet(sv.core.sv_time_ms);
     pkt[11..15].copy_from_slice(&i32::MIN.to_le_bytes());
+    want.0 = u32::from_le_bytes(pkt[..4].try_into().unwrap());
     sv.handle_packet(p.addr, &pkt, now);
-    assert_eq!(state(&sv), before, "reliableAcknowledge i32::MIN");
+    assert_eq!(state(&sv), want, "reliableAcknowledge i32::MIN");
     now += Duration::from_millis(FRAME_MS as u64);
     sv.tick_frames(now, 1);
     assert!(!sv.take_outgoing().is_empty());
