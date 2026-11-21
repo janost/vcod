@@ -1091,7 +1091,7 @@ pub fn probe(
                                 .map(|c| c.field_i32(protocol, "team"))
                         });
                         if handled {
-                            while let Some(line) = quick_chat.drain(f32::INFINITY) {
+                            while let Some(line) = quick_chat.drain(f64::INFINITY) {
                                 println!(
                                     "  quickchat: {:?} -> {:?} ({line_text})",
                                     line.cue.source,

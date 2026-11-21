@@ -153,7 +153,7 @@ pub struct Hud {
 
 /// Per-frame inputs the composer's elements read from.
 pub struct HudFrame<'a> {
-    pub now: f32,
+    pub now: f64,
     pub screen_w: f32,
     pub screen_h: f32,
     pub configstrings: &'a [String],
@@ -270,7 +270,7 @@ impl Hud {
     pub fn on_net_event(
         &mut self,
         ev: &NetEvent,
-        now: f32,
+        now: f64,
         loc: &Localized,
         bound: &dyn Fn(&str) -> Option<String>,
     ) {
@@ -339,7 +339,7 @@ impl Hud {
     /// and `cg.mapRestart`, so the next snapshot runs the respawn reset.
     /// The engine's own `n`/`B` case empties the message windows first
     /// (cod11-hud-protocol.md 1.1).
-    fn on_map_restart(&mut self, now: f32) {
+    fn on_map_restart(&mut self, now: f64) {
         self.game_messages.clear();
         self.bold_messages.clear();
         self.center_print.clear();

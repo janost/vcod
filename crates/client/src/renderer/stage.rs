@@ -178,7 +178,12 @@ pub(super) const UV_AFFINE_IDENTITY: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 /// Evaluates one stage's draw parameters at time `t`: bundle affines/turb,
 /// tint from rgbGen/alphaGen, and the flag bits the WGSL reads. `None` when
 /// `idx` is out of range or the stage has no bundles.
-pub(crate) fn stage_params(shader: &Material, idx: usize, t: f32) -> Option<StageParams> {
+pub(crate) fn stage_params(
+    shader: &Material,
+    idx: usize,
+    t: impl Into<ShaderClock>,
+) -> Option<StageParams> {
+    let t = t.into();
     let st = shader.stages.get(idx)?;
     let b0 = st.bundles.first()?;
     let b1 = st.bundles.get(1);
@@ -324,7 +329,8 @@ pub(crate) fn stage_params(shader: &Material, idx: usize, t: f32) -> Option<Stag
     // table as the whole would, keeping the f32 add on the GPU small
     let wave = |w: &Wave, spread: f32| {
         let spread = if w.freq == 0.0 { 0.0 } else { spread };
-        let phase = (f64::from(w.phase) + f64::from(t) * f64::from(w.freq)).rem_euclid(1.0);
+        let phase =
+            (f64::from(w.phase) + f64::from(t.at(w.freq)) * f64::from(w.freq)).rem_euclid(1.0);
         [w.base, w.amp, phase as f32, spread]
     };
     let records = shader.deforms.iter().filter_map(|d| match d {
@@ -339,12 +345,24 @@ pub(crate) fn stage_params(shader: &Material, idx: usize, t: f32) -> Option<Stag
             } | deform_form(&f.wave.form),
             wave(&f.wave, f.spread),
         )),
-        Deform::Bulge(b) => Some((DEFORM_BULGE, [b.width, b.height, t * b.speed, 0.0])),
+        // a bulge's sin cycle is 2 pi of `t * speed`, the normal's noise 256
+        Deform::Bulge(b) => Some((
+            DEFORM_BULGE,
+            [
+                b.width,
+                b.height,
+                t.at_every(b.speed, std::f64::consts::TAU) * b.speed,
+                0.0,
+            ],
+        )),
         Deform::Move { by, wave: w } => {
             let k = wave_value(w, t);
             Some((DEFORM_MOVE, [by[0] * k, by[1] * k, by[2] * k, 0.0]))
         }
-        Deform::Normal(n) => Some((DEFORM_NORMAL, [n.amp, t * n.freq, 0.0, 0.0])),
+        Deform::Normal(n) => Some((
+            DEFORM_NORMAL,
+            [n.amp, t.at_every(n.freq, 256.0) * n.freq, 0.0, 0.0],
+        )),
         Deform::Other => None,
     });
     for (i, (kind, rec)) in records.take(3).enumerate() {
@@ -438,7 +456,7 @@ impl AnimFrames {
         }
     }
 
-    pub(super) fn bind_group(&self, t: f32) -> &wgpu::BindGroup {
+    pub(super) fn bind_group(&self, t: impl Into<ShaderClock>) -> &wgpu::BindGroup {
         &self.groups[anim_frame_index(self.fps, self.groups.len(), t)]
     }
 }
@@ -484,11 +502,11 @@ pub(super) struct DlightRun {
 }
 
 /// floor(t * fps) % len, clamped to a valid frame; static or empty anims stick at 0.
-pub(super) fn anim_frame_index(fps: f32, len: usize, t: f32) -> usize {
+pub(super) fn anim_frame_index(fps: f32, len: usize, t: impl Into<ShaderClock>) -> usize {
     if fps <= 0.0 || len == 0 {
         return 0;
     }
-    (t.max(0.0) * fps) as usize % len
+    (t.into().at_every(fps, len as f64).max(0.0) * fps) as usize % len
 }
 
 /// Which prebuilt stage pipeline a StageBatch draws with; selected from

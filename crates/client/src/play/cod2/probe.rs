@@ -467,7 +467,7 @@ pub fn probe(addr: &str, secs: u64, fs: &Pk3Fs, join: Option<Join>) -> anyhow::R
             };
             let mut quads = crate::cod2_world_hud::build(&f, draw.heads(), &view, f.time_ms);
             hud.crosshair_hit = s.crosshair_entity();
-            quads.extend(hud.build(&f, fs, &loc, size, f.time_ms, start.elapsed().as_secs_f32()));
+            quads.extend(hud.build(&f, fs, &loc, size, f.time_ms, start.elapsed().as_secs_f64()));
             let path = format!("{prefix}-{t}.quads");
             std::fs::write(&path, crate::cod2_hud::dump_quads(&quads))?;
             println!(

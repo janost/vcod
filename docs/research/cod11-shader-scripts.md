@@ -639,6 +639,15 @@ repeating bundle 0 beside a clamped bundle 1 keeps wrapping.
 - vcod: `stage_params` clamps a table wave below at 0 only and the
   stage shaders clamp `tint * identityLight` at 1 (`F_TINT_LIGHT`).
   Clamping to 1 before the scale is the trap: 1.5 then draws 0.5.
+- vcod: the time is seconds since the client started, f64
+  (`material::ShaderClock`). Past 3840 s each term `rate * t` reads it less
+  a whole number of its own cycles (`ShaderClock::at_every`: 1 for scroll
+  and the table waves, 360 for rotate, 2 pi for turb and bulge, 256 for
+  noise, the frame count for animMap), so an uptime of days keeps every
+  phase where the f64 time puts it; under 3840 s every term reads the plain
+  f32 time. The shaders' own time terms (the CoD2 flap, the CoD4 flag, the
+  CoD2 scroll and objective pulse, the film grain's seed) read it wrapped
+  at 3840 s (`renderer::gpu_time`), a whole number of each of their cycles.
 
 ### The noise wave
 

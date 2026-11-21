@@ -461,7 +461,7 @@ impl Renderer {
             self.lod_cvars.0,
             self.lod_cvars.1,
         );
-        self.pick_dynamic_lods(frame.eye, &lod_view, frame.time);
+        self.pick_dynamic_lods(frame.eye, &lod_view, frame.time as f32);
         let (camera, moved, ssao_on) = self.upload_frame_uniforms(&frame);
         let t0 = std::time::Instant::now();
         let mut prof = crate::frame_prof::span(crate::frame_prof::Stage::Cull);
@@ -801,7 +801,7 @@ impl Renderer {
                     if let Some(g) = &mut gpu_groups {
                         g.pass(&mut pass, Some(crate::frame_prof::Group::Dlight));
                     }
-                    self.emit_dlights(&mut pass, world, frame.time);
+                    self.emit_dlights(&mut pass, world, ShaderClock(frame.time));
                     emit = Emit::None;
                 }
                 let Some(&item) = items.get(k) else {
@@ -846,7 +846,7 @@ impl Renderer {
                                 &world_list,
                                 &items[k..end],
                                 None,
-                                frame.time,
+                                ShaderClock(frame.time),
                                 fx_ready(k),
                                 world_equal,
                             );
@@ -876,7 +876,7 @@ impl Renderer {
                                 &world_list,
                                 &items[k..=k],
                                 at,
-                                frame.time,
+                                ShaderClock(frame.time),
                                 fx_ready(k),
                                 world_equal,
                             ));
@@ -980,7 +980,7 @@ impl Renderer {
                             pass.set_viewport(0.0, 0.0, vw, vh, 0.0, 1.0);
                         }
                         pass.set_bind_group(0, &self.camera_bg, &[]);
-                        let n = self.marks.draw(&mut pass, ri, frame.time);
+                        let n = self.marks.draw(&mut pass, ri, ShaderClock(frame.time));
                         tally(&self.census, |c| {
                             c.marks += n;
                             c.pipelines += n;
@@ -1337,10 +1337,10 @@ impl Renderer {
     ) -> ([f32; CAMERA_FLOATS], Vec<glam::Mat4>, bool) {
         // `proj` (64) + `time_pad` (16) + eye/fog tail (48) + view forward
         // (16), matching Camera in the WGSL modules.
-        self.fog.advance(frame.time);
+        self.fog.advance(frame.time as f32);
         let mut camera = [0.0f32; CAMERA_FLOATS];
         camera[..16].copy_from_slice(&frame.view_proj.to_cols_array());
-        camera[16] = frame.time;
+        camera[16] = gpu_time(frame.time);
         camera[17] = self.identity_light;
         camera[18] = if self.bicubic { 1.0 } else { 0.0 };
         // `r_specular` 0 drops a CoD4 set's specular (cod2_world.wgsl).
@@ -1379,7 +1379,7 @@ impl Renderer {
         // CoD4's water height maps at the view's time (cod4-world.md 9.8),
         // held under `r_drawWater` 0 (cod4-front-end.md 9)
         if self.cod4_options.water {
-            self.water_time = frame.time;
+            self.water_time = frame.time as f32;
         }
         if let Some(c2) = self.world.as_mut().and_then(|w| w.cod2.as_mut()) {
             for w in &mut c2.cod4_waters {
@@ -1392,7 +1392,7 @@ impl Renderer {
             .as_mut()
             .and_then(|w| w.cod2.as_mut()?.water.as_mut())
         {
-            w.update(&self.queue, frame.time);
+            w.update(&self.queue, frame.time as f32);
         }
         let ssao_on = self.ssao.strength() > 0.0 && self.world.is_some();
         if ssao_on {
@@ -1834,12 +1834,12 @@ impl Renderer {
                     );
                 }
             }
-            let sets = self.pick_entity_lights();
+            // the spans that changed since the last write
+            let lights = self.write_entity_lights();
             let raw: Vec<InstanceRaw> = self.dynamic.instances.iter().map(|(_, r)| *r).collect();
             let d = &mut self.dynamic;
-            // the spans that changed since the last write
             #[cfg_attr(not(test), expect(unused_variables))]
-            let bytes = d.light_written.write(&self.queue, &d.light_buf, &sets)
+            let bytes = lights
                 + d.instance_written.write(&self.queue, &d.instance_buf, &raw)
                 + d.bone_written.write(&self.queue, &d.bone_buf, &d.bone_mats);
             frame_write!(self, "upload entity lights, instances and bones", bytes);
@@ -1898,7 +1898,7 @@ impl Renderer {
                     bytemuck::cast_slice(&[
                         self.identity_light,
                         f32::from(u8::from(cod2)),
-                        frame.time,
+                        gpu_time(frame.time),
                         0.0,
                     ]),
                 );
@@ -1942,34 +1942,57 @@ impl Renderer {
 
     /// The frame's entity and view model surfaces in draw order; the
     /// shadow casters keep every instance.
-    fn frame_ent_draws(&self, frame: &Frame, draw_vm: bool) -> Vec<EntDraw> {
+    fn frame_ent_draws(&mut self, frame: &Frame, draw_vm: bool) -> Vec<EntDraw> {
         let vm_skins: &[Vec<Rc<EntSkin>>] = if draw_vm { &self.vm_pass.skins } else { &[] };
         // the instances the view can see; the shadow casters keep them all
         let frustum = vcod_common::vis::Frustum::from_view_proj(frame.view_proj);
-        let seen: Vec<bool> = (0..self.dynamic.instances.len())
-            .map(|k| !self.draw_joins || instance_seen(&self.dynamic, k, &frustum))
+        let d = &mut self.dynamic;
+        let seen: Vec<bool> = (0..d.instances.len())
+            .map(|k| !self.draw_joins || instance_seen(d, k, &frustum))
             .collect();
-
-        sorted_ent_draws(
-            self.dynamic
-                .instances
-                .iter()
-                .enumerate()
-                .filter(|&(i, _)| seen[i])
-                .flat_map(|(i, (m, _))| {
-                    self.dynamic.models[*m]
-                        .skins
-                        .iter()
-                        .enumerate()
-                        .map(move |(j, sk)| (i as u32, j as u32, &**sk))
-                }),
+        d.ent_sorted.update(&d.instances, &d.models);
+        let gun = sorted_ent_draws(
+            std::iter::empty(),
             vm_skins.iter().enumerate().flat_map(|(i, skins)| {
                 skins
                     .iter()
                     .enumerate()
                     .map(move |(j, sk)| (i as u32, j as u32, &**sk))
             }),
-        )
+        );
+        // a stable sort of the seen instances' draws and the gun's
+        let draws = merge_draws(
+            d.ent_sorted
+                .draws
+                .iter()
+                .copied()
+                .filter(|e| seen[e.inst as usize]),
+            gun,
+        );
+        #[cfg(test)]
+        {
+            let skins = |(i, (m, _)): (usize, &(usize, InstanceRaw))| {
+                d.models[*m]
+                    .skins
+                    .iter()
+                    .enumerate()
+                    .map(move |(j, sk)| (i as u32, j as u32, &**sk))
+            };
+            let gun = vm_skins.iter().enumerate().flat_map(|(i, skins)| {
+                skins
+                    .iter()
+                    .enumerate()
+                    .map(move |(j, sk)| (i as u32, j as u32, &**sk))
+            });
+            let ents = d.instances.iter().enumerate().filter(|&(i, _)| seen[i]);
+            let fresh = sorted_ent_draws(ents.flat_map(skins), gun);
+            let key = |e: &EntDraw| (e.inst, e.surf, e.gun);
+            assert!(
+                draws.iter().map(key).eq(fresh.iter().map(key)),
+                "the kept entity sort"
+            );
+        }
+        draws
     }
 
     /// The frame's target and its view. `None` skips the frame: the
@@ -2164,7 +2187,7 @@ impl Renderer {
                     floatz: plan.floatz,
                     load: false,
                 },
-                frame.time,
+                ShaderClock(frame.time),
                 plan.ent_bundling.then_some(&mut pre_bundles),
             );
             if receivers_split {
@@ -2199,7 +2222,7 @@ impl Renderer {
                             floatz: plan.floatz,
                             load: true,
                         },
-                        frame.time,
+                        ShaderClock(frame.time),
                         plan.ent_bundling.then_some(&mut pre_bundles),
                     );
                 }
@@ -2343,7 +2366,7 @@ impl Renderer {
                 plan.glow4.as_ref().map_or(0.0, |g| g.1),
                 plan.hdr,
                 self.identity_light,
-                frame.time,
+                gpu_time(frame.time),
             );
             group(encoder, Group::PostFx);
             pass = if plan.gamma_direct {

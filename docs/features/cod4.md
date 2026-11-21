@@ -56,6 +56,9 @@ with its `mouse_over`, `mouse_click` and `music_mainmenu_mp` sounds.
   `mod.ff` and iwds over the stock zones and `main/` in 1.7's order. The
   HUD and script menus read `mod.ff` too (ModWarfare's class menus).
   Prediction uses the mod's weapon files off its iwds, as the server does.
+- Loose files under a mod's directory read under its iwds, as 1.7 reads
+  them; out of `main/` only `.cfg` files and `ban.txt` (cod4-handshake.md
+  14.1).
 - A map missing from `zone/<language>/` loads from `usermaps/<map>/`.
   `<map>_load.ff` gives the connect screen its levelshot.
 - Missing mod or usermap iwds and fastfiles download before the map

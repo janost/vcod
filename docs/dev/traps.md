@@ -792,6 +792,10 @@ otherwise.
   the type alone and still maps the events.
 - Vehicle clip brushes (contents 0x200) are in the collision world; only a
   vehicle's clipmask meets them.
+- A vehicle's box sweeps clip brushes through retail's box arm
+  (`clip_brush_box`): its leave fraction takes no epsilon. Q3's backed-off
+  leave cleared mp_peaks' clip post where retail's probe struck it
+  (`coduo-vehicles.md` 17.5).
 - A vehicle's collmap clips as that vehicle's own model instance
   (`CollisionWorld::set_model_instance`; one inline model serves every
   vehicle of a kind), passed by its own traces as `Pusher::Copy(entity)`.

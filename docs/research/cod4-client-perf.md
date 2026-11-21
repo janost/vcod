@@ -24,7 +24,7 @@ it, the last one listed here:
 | HUD | 33 |
 | Load and first frame | 17, 34 |
 | Resident set | 23 |
-| Dynamic entities | 41, 42 |
+| Dynamic entities | 41, 42, 41.1 |
 | Renderer refactors on a card | 43 |
 
 Current real-card reference points (1920 x 1080, one sample):
@@ -1420,7 +1420,66 @@ Open: CoD4's map-change timeline (`load profile cod4 map change`) ends 5-6
 ms in, on a frame drawn before the new map loads; the map load itself is
 the `load cod4 map` lap above. VERIFIED (the client logs). CoD1's peak RSS
 after the change rose 314 -> 321 MB; a `malloc_trim` after the load is the
-untried follow-up.
+untried follow-up. Both taken up in 34.5.
+
+### 34.5 The heap trim, the CoD4 change timeline, skins and pipelines a load skips (perf/gpu-load-2)
+
+What changed, none of it in what a frame binds or draws:
+
+- After each load's first frame in game the client calls glibc's
+  `malloc_trim(0)` on a thread of its own (`laps::trim_heap`, glibc
+  builds only) and logs `heap trim: <ms> ms, RSS <before> -> <after>
+  MB`. glibc keeps the pages a load's parses and decodes freed, the
+  worker threads' arenas included, until a trim.
+- A CoD4 session is out of the game while a map change loads under the
+  loading screen (`Cod4Client::in_game` is false while `map_load` is
+  set), so `load profile cod4 map change` ends at the new map's first
+  frame, past the zones, the world's GPU state and the prewarm. The same
+  test holds `--exec-in-game` and `cl_avidemo` (`client_active`) through
+  the load.
+- CoD2 and CoD4 dynamic models: a skin's image uploads only when its
+  entity material reads it (`EntSkin::reads_skin_image`: a `$texturename`
+  stage, or the fallback past the stage slots). Every other skin binds
+  the materials' white group, its stages binding their images by path,
+  and its colour map's pak read is marked without reading
+  (`prop_skin::mark_colour_map`), so the `cp` list holds. The entity
+  material is built before the skin's image, in the same skin order as
+  before, so stage slots and load order are unchanged; the upload order
+  differs only in the skins left out and in each kept skin image now
+  following its material's own images.
+- The four `floatZ` writers are built only for a map with a draw whose
+  material writes `floatZ` (`Material::floatz`, every CoD2 map has none).
+- Water's pipelines a load has not made before build at once on eight
+  threads at the end of the world build (`WaterBuilder::finish`), their
+  time in the `cod2 lit` line's compile figure.
+
+Without a card, the CPU side, this box (30 cores), the dev profile
+(opt-level 1), each load through the client's own code with the map
+dropped as the client drops it. VERIFIED (scratch timer, ours):
+
+| | RSS before trim | after | trim |
+|---|---|---|---|
+| CoD1 mp_carentan, the bsp dropped | 30 MB | 24 MB | 0.3 ms |
+| CoD1 then mp_brecourt, the first map and the bsp dropped | 48 | 27 | 1.0 |
+| CoD2 mp_toujane (parse, prediction world), the bsp dropped | 42 | 26 | 0.7 |
+| CoD2 then mp_burgundy, the first map and the bsp dropped | 72 | 27 | 1.3 |
+| CoD4 mp_crossfire (the worker's `Loader::start_map`), kept | 705 | 438 | 15.2 |
+| CoD4 then mp_crash, mp_crossfire dropped | 935 | 417 | 30.9 |
+
+A main-thread allocation loop running beside the CoD4 trim stalled 0.17
+ms at worst. VERIFIED (scratch timer, ours).
+
+mp_crash's level models as the csb0 capture's gamestate names them
+(`play-1.7-csb0-shooter.txt`, `entity_assets`): 535 models drawing 275
+skins, of which one material reads the skin image. The 275
+`prepare_skin` calls (a colour map's copy and its mip chain, on the main
+thread) take 187 ms and make 107 MB of image; the load now makes one.
+VERIFIED (scratch timer, ours; the one that reads it counted off the
+materials' stages).
+
+Not taken here: the card's numbers (kit `perf-mem`, after against wave
+4), and the frames byte for byte (kit `shots`, `render`); this box has no
+Vulkan adapter.
 
 ## 35. `floatZ` written in the depth prepass, no split and copy (P22)
 
@@ -1890,8 +1949,52 @@ census).
 
 What the dynents still cost is CPU: 0.2 ms of `build` and 0.3 of `encode`
 plus `finish` on mp_crash, the last two from their 290-odd entity calls.
-The next cut is batching each model's dynents into one static draw while
-none is awake, which takes the calls with it.
+41.1 keeps their `build` work from frame to frame. The next cut is
+batching each model's dynents into one static draw while none is awake,
+which takes the calls with it.
+
+### 41.1 The held dynents' frame work kept
+
+A held dynent's inputs are the same bits frame after frame, so what the
+renderer derives from them is kept and reused while they hold:
+
+1. `PlacedBoxes`: each placed entry's posed light box and grown view box,
+   kept while its handle and transform bits hold and it is unskinned
+   (bone base 0, every box bone inside the identity block).
+2. `Cod4EntityLight::frame_sets` keeps last frame's packed sets and
+   blocks: a pair in the same place packs nothing (42's lookups were
+   already kept; the packing was not), and it returns the range of sets
+   that can differ. `Written::write_within` and `write_blocks` compare
+   only that range, so a held list is not compared byte by byte either.
+   The bytes written are those of the full compare.
+3. `EntSorted`: every instance's entity draws sorted by material, kept
+   while the leading instances keep their models; only those after them
+   sort again, merged after the kept ones on a tie. The view cull filters
+   the kept list, which a stable sort allows.
+4. The light pick's origin dedupe hashes the float bits with FxHash's step
+   (`BitsMap`), sized for the instances, in place of SipHash.
+5. The client keeps each dynent's model handle by its def, not a name
+   lookup a frame.
+
+A test build checks each kept result against a fresh one on every frame
+it draws (the hinted span against the full compare, each kept box, the
+kept sort), so the GPU runs of the client suite cover it. Frames are the
+same by construction.
+
+CPU per frame, opt-level 1 test build on this box (no adapter), held lists
+of 516, 678 and 1901 instances (mp_crash, mp_backlot, mp_shipment), one
+origin each, two surfaces each over 20 models, microseconds. VERIFIED
+(scratch timer, ours):
+
+| Step | 516 | 678 | 1901 |
+|---|---|---|---|
+| origin dedupe, SipHash -> `BitsMap` | 25.0 -> 7.6 | 28.1 -> 10.1 | 93.0 -> 28.3 |
+| sets packed and compared -> kept | 64.3 -> 10.2 | 84.0 -> 13.6 | 222.0 -> 37.5 |
+| entity draw sort -> kept, filtered and merged | 22.5 -> 7.5 | 29.0 -> 9.6 | 84.9 -> 26.3 |
+| posed boxes, each of the two passes (now a compare) | 5.0 | 6.4 | 17.7 |
+
+Pending, on a card: the kit's `perf-frame` cases `crash`, `crash-nodyn`
+and `crash-held` (and `backlot`, `shipment`) against the build before it.
 
 ## 42. Entity lighting held across frames, and the frame's uploads by span
 
@@ -1928,9 +2031,11 @@ rebuild (1024 marks, eight shaders, PERF-081) is 0.06 ms at opt-level 1,
 under its 0.1 ms bar: left as is. VERIFIED (scratch timer, ours).
 
 Not done: a draw per model of the sleeping dynents (41's next cut). With
-the lookups gone a held dynent costs its placement, LOD pick, posed box,
+the lookups gone a held dynent cost its placement, LOD pick, posed box,
 light set pack and draw sort each frame, 0.2 ms of `build` on mp_crash
-on the card, and its entity calls in `encode` and `finish` (41).
+on the card, and its entity calls in `encode` and `finish` (41). 41.1
+keeps all of those but the LOD pick and the instance packing; the calls
+stay.
 
 ### 42.1 On a card
 
@@ -1969,7 +2074,25 @@ VERIFIED (the runs on the 780M; `renderer/frame.rs` and `wgpu-core` 30.0.2
 writes no span (43's census), rose 0.03. One run a side with the base always first
 cannot tell that from the APU's clocks or the bots' fight; the next run
 alternates three a side on mp_backlot and mp_shipment, and adds a build
-that writes the whole lists, to split the partial writes from the rest.
+that writes the whole lists, to split the partial writes from the rest. The kit mode and the switch are in 42.2.
+
+### 42.2 The `finish` probe
+
+What the next run takes (42.1's open item):
+
+- `VCOD_WRITE_ALL=1` on `vcod`: the light sets, instances, bones and the
+  CoD4 volume's blocks are written whole each frame, from offset 0, not
+  their changed span (`renderer::write_span`). Off by default; read once.
+- The GPU kit's `finish` mode: mp_backlot and mp_shipment as `perf-frame`
+  runs them (12 shooting bots, `war`, 25 s), three rounds of the base, the
+  candidate and the candidate with `VCOD_WRITE_ALL=1`, each round in
+  another order so no build always runs first, each run's `finish`,
+  `build`, `encode`, `submit`, `gpu.total`, `calls`, `entcalls` and
+  `entbundled` with their mean.
+
+A `finish` that falls with the whole lists written puts the rise on the
+partial writes; one that holds puts it elsewhere (the APU's clocks, the
+fight). Pending, on a card.
 
 ## 43. The renderer refactors checked on a card (P2, P3, P4)
 

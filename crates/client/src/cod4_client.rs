@@ -59,6 +59,9 @@ pub(crate) struct Cod4Client {
     parts: crate::cod4_fly::Parts,
     weapons: HashMap<String, WeaponModels>,
     uploaded: HashMap<String, Option<ModelHandle>>,
+    /// Per dynamic entity of the world at this address, its model's entry
+    /// of `uploaded` once looked up.
+    dynent_handles: (usize, Vec<Option<Option<ModelHandle>>>),
     /// The camera's (pitch, yaw) as the last pump left it: live, the
     /// mouse's turn since then is what moves the cmd's view.
     cam_left: Option<(f32, f32)>,
@@ -273,6 +276,7 @@ impl Cod4Client {
             parts,
             weapons,
             uploaded: HashMap::new(),
+            dynent_handles: (0, Vec::new()),
             cam_left: None,
             bodies,
             players,
@@ -1155,10 +1159,11 @@ impl Cod4Client {
         cx.r.set_cod4_dof(dof);
     }
 
-    /// Whether a snapshot's view has been drawn, the game frame
-    /// `--exec-in-game` waits for.
+    /// Whether a snapshot's view has been drawn and no map change loads
+    /// under the loading screen: the game frame `--exec-in-game` and the
+    /// load profile's end wait for.
     pub(crate) fn in_game(&self) -> bool {
-        self.view.is_some()
+        self.view.is_some() && self.map_load.is_none()
     }
 
     /// The drawn playerstate's view fields, last pump's.
@@ -1673,14 +1678,25 @@ impl Cod4Client {
         let Some(w) = self.session.world().cloned().filter(|_| !no_dynents()) else {
             return;
         };
+        let at = std::sync::Arc::as_ptr(&w) as usize;
+        if self.dynent_handles.0 != at {
+            self.dynent_handles = (at, vec![None; w.dynents.len()]);
+        }
         for &(i, origin, rot) in &scene.dynents {
-            let name = &w.dynents[i as usize].model;
-            // Checked first: a model clone for an uploaded name is only dropped.
-            let handle = match self.uploaded.get(name) {
-                Some(h) => *h,
+            let handle = match self.dynent_handles.1[i as usize] {
+                Some(h) => h,
                 None => {
-                    let model = self.models.get(name).cloned();
-                    self.upload(cx, name, || model)
+                    let name = &w.dynents[i as usize].model;
+                    // Checked first: a model clone for an uploaded name is only dropped.
+                    let h = match self.uploaded.get(name) {
+                        Some(h) => *h,
+                        None => {
+                            let model = self.models.get(name).cloned();
+                            self.upload(cx, name, || model)
+                        }
+                    };
+                    self.dynent_handles.1[i as usize] = Some(h);
+                    h
                 }
             };
             let Some(handle) = handle else {
@@ -2034,6 +2050,7 @@ impl Cod4Client {
     /// A new map or renderer: every handle is gone.
     pub(crate) fn reset_render(&mut self) {
         self.uploaded.clear();
+        self.dynent_handles = (0, Vec::new());
         // The view weapon's models go to the new renderer on its next frame.
         self.view_weapon.clear();
     }
@@ -2854,7 +2871,7 @@ mod saw_tests {
                 eye: cam.pos,
                 fwd,
                 up,
-                time: clk_since(start).as_secs_f32(),
+                time: clk_since(start).as_secs_f64(),
                 fov_x: FOV,
                 cull: CullMode::On,
                 hud_lines: Vec::new(),
@@ -2969,5 +2986,41 @@ mod new_map_tests {
             c.session.legs_movetypes.is_none(),
             "no bodies, no movetypes"
         );
+    }
+
+    /// A map change loading under the loading screen is out of the game
+    /// until it lands, so the load profile times the load itself
+    /// (cod4-client-perf.md 34.4), though the last map's view is kept.
+    #[test]
+    fn a_map_change_is_out_of_the_game_until_its_load_lands() {
+        let text =
+            std::fs::read_to_string(format!("{FIXTURES}/play-1.7-csb0-shooter.txt")).unwrap();
+        let s = Cod4Session::open_capture(&text).unwrap();
+        let mut c = Cod4Client::new(
+            s,
+            HashMap::new(),
+            Default::default(),
+            HashMap::new(),
+            None,
+            None,
+            None,
+            Default::default(),
+        );
+        c.view = Some((Vec3::ZERO, 0.0));
+        assert!(c.in_game());
+        // no install there: the load fails, which lands it all the same
+        let dir = tempfile::tempdir().unwrap();
+        c.start_map_load(dir.path(), "mp_crash".into());
+        assert!(!c.in_game(), "in game while the map loads");
+        let t0 = Instant::now();
+        let landed = loop {
+            if let Some(done) = c.take_map_load() {
+                break done;
+            }
+            assert!(t0.elapsed().as_secs() < 30, "the load never landed");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert!(landed.is_err());
+        assert!(c.in_game());
     }
 }

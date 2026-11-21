@@ -138,7 +138,7 @@ impl App {
         if pressed && !event.repeat && self.eat_stray_key() {
             return;
         }
-        // auto-repeat would retrigger the jump and walk's prone toggle
+        // auto-repeat would retrigger a bind's press
         if event.repeat {
             return;
         }
@@ -169,53 +169,10 @@ impl App {
             self.cull_mode = self.cull_mode.next();
             return;
         }
-        if self.plays_binds() {
-            if let Some(key) = console::keys::key_name(code) {
-                self.bound_key(event_loop, key, pressed);
-            }
-            return;
-        }
-        let grabbed = self.grabbed;
-        match &mut self.mode {
-            Mode::Idle | Mode::Online { .. } => {}
-            Mode::Fly(_) | Mode::Cod2(_) => match code {
-                KeyCode::KeyW => self.input.forward = pressed,
-                KeyCode::KeyS => self.input.back = pressed,
-                KeyCode::KeyA => self.input.left = pressed,
-                KeyCode::KeyD => self.input.right = pressed,
-                KeyCode::Space => self.input.up = pressed,
-                KeyCode::ControlLeft => self.input.down = pressed,
-                KeyCode::ShiftLeft => self.input.boost = pressed,
-                _ => {}
-            },
-            Mode::Walk {
-                input,
-                keys,
-                reload_edge,
-                switch_to,
-                ..
-            } => match code {
-                // weapon actions count only while the mouse is captured
-                KeyCode::KeyR if pressed && grabbed => *reload_edge = true,
-                KeyCode::KeyW => keys.w = pressed,
-                KeyCode::KeyS => keys.s = pressed,
-                KeyCode::KeyA => keys.a = pressed,
-                KeyCode::KeyD => keys.d = pressed,
-                KeyCode::Space => input.jump = pressed,
-                KeyCode::ControlLeft => input.crouch = pressed,
-                KeyCode::KeyZ if pressed => input.prone = !input.prone,
-                KeyCode::KeyQ => input.lean_left = pressed,
-                KeyCode::KeyE => input.lean_right = pressed,
-                KeyCode::ShiftLeft => input.walk_slow = pressed,
-                _ => {
-                    if pressed
-                        && grabbed
-                        && let Some(slot) = digit_slot(code)
-                    {
-                        *switch_to = Some(slot);
-                    }
-                }
-            },
+        if self.plays_binds()
+            && let Some(key) = console::keys::key_name(code)
+        {
+            self.bound_key(event_loop, key, pressed);
         }
     }
 
@@ -308,31 +265,10 @@ impl App {
         if pressed && self.eat_stray_key() {
             return;
         }
-        if self.plays_binds() {
-            if let Some(key) = console::keys::mouse_name(button) {
-                self.bound_key(event_loop, key, pressed);
-            }
-            return;
-        }
-        if !self.grabbed {
-            return;
-        }
-        match &mut self.mode {
-            Mode::Walk {
-                fire_edge,
-                fire_held,
-                ads_held,
-                ..
-            } => match button {
-                MouseButton::Left if pressed => {
-                    *fire_edge = true;
-                    *fire_held = true;
-                }
-                MouseButton::Left => *fire_held = false,
-                MouseButton::Right => *ads_held = pressed,
-                _ => {}
-            },
-            Mode::Idle | Mode::Online { .. } | Mode::Fly(_) | Mode::Cod2(_) => {}
+        if self.plays_binds()
+            && let Some(key) = console::keys::mouse_name(button)
+        {
+            self.bound_key(event_loop, key, pressed);
         }
     }
 
@@ -378,23 +314,27 @@ impl App {
             }
             return;
         }
-        if self.plays_binds() {
-            if self.grabbed && scroll != 0.0 {
-                let key = if scroll < 0.0 {
-                    "MWHEELDOWN"
-                } else {
-                    "MWHEELUP"
-                };
-                if self.eat_stray_key() {
-                    return;
-                }
-                for _ in 0..scroll.abs() as i32 {
-                    self.bound_key(event_loop, key, true);
-                    self.bound_key(event_loop, key, false);
-                }
-            }
-        } else if let Mode::Fly(cam) | Mode::Cod2(cam) = &mut self.mode {
+        // The fly camera's wheel sets its speed, a vcod control no bind holds.
+        let flying = match self.mode {
+            Mode::Fly(_) => true,
+            Mode::Cod2(_) => !self.session.live(),
+            _ => false,
+        };
+        if flying && let Mode::Fly(cam) | Mode::Cod2(cam) = &mut self.mode {
             cam.adjust_speed(scroll);
+        } else if self.plays_binds() && self.grabbed && scroll != 0.0 {
+            let key = if scroll < 0.0 {
+                "MWHEELDOWN"
+            } else {
+                "MWHEELUP"
+            };
+            if self.eat_stray_key() {
+                return;
+            }
+            for _ in 0..scroll.abs() as i32 {
+                self.bound_key(event_loop, key, true);
+                self.bound_key(event_loop, key, false);
+            }
         }
     }
 }

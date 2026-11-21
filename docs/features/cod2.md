@@ -38,6 +38,8 @@ rects placed by their screen alignment
   on the connect screen, then reopens the search path over them
   (cod2-protocol.md 17.5). A refused download or a map that will not load
   returns to the menu with retail's message.
+- Reads loose files beside the iwds, each directory's under its own iwds,
+  as 1.3 does on an unpure server ([cod2-iwi-iwd.md](../research/cod2-iwi-iwd.md) 1).
 - Shows the server's script menus (server info, team, weapon, Esc's
   `ingame`, mute and vote) for the player to answer. `--team` and
   `--weapon` answer them on their own.

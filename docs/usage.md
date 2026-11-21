@@ -25,7 +25,7 @@ Both binaries share these flags.
 | `--game-dir <dir>` | The install. Default: `$COD_DIR`, else the executable's directory. |
 | `--game cod1\|cod2\|cod4` | The install's game. Default: detected. `zone/` or `iw3mp.exe` is CoD4, `main/iw_*.iwd` or `CoD2MP_s.exe` CoD2, anything else CoD1. |
 | `--mod-dir uo` | United Offensive: `uo/` searched over the `main/` beside it, as UO does. Default `main`. |
-| `--vanilla` | CoD1 and UO: only the patch's stock paks (`pak0`..`pak8` on 1.1, `pak0`..`pakf` on 1.5, UO's `pakuo*` and `uomappack00`, and their `localized_*` paks). Every other pk3 in `main/` and `uo/` is ignored. |
+| `--vanilla` | CoD1 and UO: only the patch's stock paks (`pak0`..`pak8` on 1.1, `pak0`..`pakf` on 1.5, UO's `pakuo*` and `uomappack00`, and their `localized_*` paks). Every other pk3 in `main/` and `uo/` is ignored, and so is every loose file. |
 
 `COD_DIR` is the only install variable the binaries read, for every game.
 `COD2_DIR` and `COD4_DIR` point tests and tools at those installs. The
@@ -298,11 +298,14 @@ spectator, Space rises and C sinks; as on retail, E (lean right) sinks at
 
 ### Fly mode
 
+The keys go through the binds, as in a game, once the mouse is captured.
+
 | Input | Action |
 |---|---|
-| W / A / S / D | Move |
-| Space / Ctrl | Up / down |
-| Shift | Speed boost |
+| `+forward` / `+back` / `+moveleft` / `+moveright` (W / S / A / D) | Move |
+| `+gostand`, `+moveup` (Space) | Up while held; stands from a stance |
+| A stance bind (C, Ctrl) | Down until Space stands, as a spectator; `+movedown` / `+prone` while held |
+| `+sprint` (Alt), CoD4's `+breath_sprint` (Shift) | Speed boost |
 | Scroll | Fly speed |
 
 ### Everywhere
@@ -549,9 +552,10 @@ Server (`vcod-server <map> --game cod4`, or a CoD4 install):
 
 ## Debug and developer modes
 
-- `vcod <map> --walk` (CoD1): an early offline walk mode. WASD, Space
-  jump, Ctrl crouch, Z prone, Q / E lean, Shift slow walk, mouse fire and
-  sight, R reload, 1-7 pick a weapon.
+- `vcod <map> --walk` (CoD1): an early offline walk mode on the binds,
+  as in a game: move, stance, jump, lean, fire, sight and reload.
+  `weaponslot N` (1-4 by default) picks loadout weapon N of 7 and the
+  weapon cycle (the wheel) steps through them.
 - `vcod --net-probe <ip:port>` is a headless client that joins, prints a
   line a second and writes captures. `vcod --help` documents its modes.
   Bare, on CoD1 and UO, it holds forward for 2 s in every 30 once in

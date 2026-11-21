@@ -1484,9 +1484,14 @@ impl<'a> Cod2Builder<'a> {
     pub fn finish_keeping(mut self, tangents: &[[[f32; 3]; 2]]) -> (Cod2World, LitShared) {
         let pipelines = self.lit_pipelines();
         let prepass = self.prepass_pipelines();
-        let keys = [(false, false), (false, true), (true, false), (true, true)];
+        // a map with no `floatZ` draw (every CoD2 one) takes no writer
+        let keys: &[(bool, bool)] = match self.floatz_draws.iter().any(Option::is_some) {
+            true => &[(false, false), (false, true), (true, false), (true, true)],
+            false => &[],
+        };
         let fresh: Vec<(bool, bool)> = keys
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|k| !self.shared.floatz.contains_key(k))
             .collect();
         let (device, module, layout) = (self.device, &self.module, &self.layout);
@@ -1495,11 +1500,16 @@ impl<'a> Cod2Builder<'a> {
         let built = par_compile(&fresh, |&(two_sided, atest)| {
             make_floatz_pipeline(device, module, layout, samples, two_sided, atest)
         });
+        let water = self.water.take().map(|w| {
+            let (waters, keep) = w.finish(device);
+            self.shared.water = Some(keep);
+            waters
+        });
         self.compile += t.elapsed();
         self.shared.floatz.extend(fresh.into_iter().zip(built));
         let floatz: HashMap<(bool, bool), wgpu::RenderPipeline> = keys
-            .into_iter()
-            .map(|k| (k, self.shared.floatz[&k].clone()))
+            .iter()
+            .map(|k| (*k, self.shared.floatz[k].clone()))
             .collect();
         log::info!(
             "cod2 lit: {} materials, {} lightmap pages, {} pipelines ({} split), {} prepass, {:.0} ms compiling",
@@ -1522,11 +1532,7 @@ impl<'a> Cod2Builder<'a> {
             made: self.made,
             material_bgs: self.out,
             lightmap_bgs: self.lightmap_bgs,
-            water: self.water.map(|w| {
-                let (waters, keep) = w.finish();
-                self.shared.water = Some(keep);
-                waters
-            }),
+            water,
             cod4_waters: self.cod4_waters,
             prepass,
             floatz,
@@ -2672,6 +2678,51 @@ pub(super) mod tests {
         assert!(err.is_none(), "{err:?}");
         let err = pollster::block_on(internal.pop());
         assert!(err.is_none(), "{err:?}");
+    }
+
+    /// The four `floatZ` writers build only for a map with a draw whose
+    /// material 1.7's prepass writes `floatZ` (`Material::floatz`).
+    #[test]
+    fn floatz_writers_build_only_for_a_floatz_draw() {
+        let Some((device, queue)) = headless() else {
+            eprintln!("no adapter; skipped");
+            return;
+        };
+        let camera = camera_layout(&device);
+        let bsp = MapWorld {
+            lightmap_basis: vec![LightmapBasis {
+                coeffs: std::array::from_fn(|_| vec![128; 512 * 512 * 4]),
+                sun: vec![255; 1024 * 1024],
+            }],
+            tangents: vec![[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]; 3],
+            ..Default::default()
+        };
+        let fs = Pk3Fs::empty();
+        let writers = |floatz: Option<bool>| {
+            let mut views = BundleViews {
+                views: HashMap::new(),
+                table: None,
+                store: Default::default(),
+                prefetched: None,
+            };
+            let mut b = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
+            let sh = Material {
+                phong: Some(PhongLit {
+                    specular: false,
+                    detail: false,
+                    alpha: false,
+                    detail_scale: [8.0, 8.0],
+                    cod4: None,
+                }),
+                floatz,
+                ..Material::from_shader(&vcod_common::shader::Shader::default())
+            };
+            let v = StageVariant::Opaque;
+            b.bind(&fs, &mut views, ImageRule::FULL, &sh, 0, v, false, false);
+            b.finish(&tangent_stream(&bsp, 3)).floatz.len()
+        };
+        assert_eq!(writers(None), 0);
+        assert_eq!(writers(Some(false)), 4);
     }
 
     /// The camera uniform's bytes (shader.wgsl's `Camera`): `view_proj`,
