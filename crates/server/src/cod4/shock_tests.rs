@@ -1,5 +1,5 @@
 //! The flashbang's and the concussion grenade's shellshocks on ours, over
-//! the kill pair's join (`combat_ab::ours_hooked`): a grenade bursts in
+//! the kill pair's join (`test_harness::ours_hooked`): a grenade bursts in
 //! front of the target, the stock scripts (`_flashgrenades.gsc`'s
 //! `monitorFlash`, `_weapons.gsc`'s `onWeaponDamage`) answer with
 //! `shellShock`, and the target's playerstate carries it to the client

@@ -1,5 +1,5 @@
 //! The killstreak hardpoints on ours over the kill pair's join
-//! (`combat_ab::ours_hooked`, mp_crash `war`): the axis shooter calls in
+//! (`test_harness::ours_hooked`, mp_crash `war`): the axis shooter calls in
 //! the stock scripts' airstrike (`_hardpoints.gsc`'s `useAirstrike`, what
 //! a confirmed location runs) and helicopter (`triggerHardpoint
 //! ("helicopter_mp")`, what selecting the item runs) on the allied target,

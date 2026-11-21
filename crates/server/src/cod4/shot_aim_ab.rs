@@ -19,9 +19,9 @@
 //! `SHOT_AIM_REPORT=1` prints every row.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use super::test_harness::{Probe, replay_schedule, retail, side};
+use super::test_harness::{Probe, replay_schedule, retail, run_frames, side, test_cfg};
 use super::*;
 
 /// One retail run of two `cod4_probe`s under a probe gsc.
@@ -140,15 +140,7 @@ fn ours(install: &vcod_cod4::install::Install, run: &Run) -> (Vec<String>, Vec<S
     let rt = side(&retail(&target));
     let rs = side(&retail(&shooter));
     let cs0 = String::from_utf8_lossy(rt.gs.configstring(0)).into_owned();
-    let mut sv = Cod4Server::new(
-        Cod4Config {
-            map: run.map.into(),
-            gametype: "war".into(),
-            hostname: "CoD4Host".into(),
-            max_clients: 8,
-        },
-        7,
-    );
+    let mut sv = Cod4Server::new(test_cfg(run.map, "war"), 7);
     for (k, v) in vcod_common::net::connectionless::info_pairs(&cs0) {
         if !matches!(k, "protocol" | "shortversion" | "fs_game") {
             sv.set_cvar(k, v);
@@ -206,28 +198,13 @@ fn ours(install: &vcod_cod4::install::Install, run: &Run) -> (Vec<String>, Vec<S
     probes[0].replay_from = target_spawn.raw();
     probes[1].replay = replay_schedule(&retail(&shooter), shooter_spawn.raw());
     probes[1].replay_from = shooter_spawn.raw();
-    let mut now = Instant::now();
-    while sv.core.sv_time_ms < run.run_ms {
-        let svs = sv.core.sv_time_ms;
-        for p in probes.iter_mut() {
-            if !p.joined && svs >= p.connect_at {
-                p.join(&mut sv, now);
-            }
-        }
-        for p in probes.iter_mut().filter(|p| p.joined) {
-            let pkt = p.packet(svs);
-            p.log("c2s", svs, &pkt);
-            sv.handle_packet(p.addr, &pkt, now);
-        }
-        now += Duration::from_millis(FRAME_MS as u64);
-        sv.tick_frames(now, 1);
-        let svs = sv.core.sv_time_ms;
-        for (to, pkt) in sv.take_outgoing() {
-            if let Some(p) = probes.iter_mut().find(|p| p.addr == to) {
-                p.receive(svs, &pkt);
-            }
-        }
-    }
+    run_frames(
+        &mut sv,
+        &mut probes,
+        run.run_ms,
+        &mut Instant::now(),
+        &mut |_, _, _| {},
+    );
     let level = sv.game.level.as_ref().unwrap();
     (level.rt.host.script_log.clone(), level.rt.aborts())
 }

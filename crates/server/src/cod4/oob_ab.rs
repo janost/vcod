@@ -4,6 +4,7 @@
 //! the capture's (`CoD4Host`, 8 slots, mp_crash `war`), every reply compared
 //! byte for byte with retail's (cod4-handshake.md 2, 3).
 
+use super::test_harness::test_cfg;
 use super::*;
 use vcod_cod4::net::capture;
 
@@ -25,15 +26,7 @@ fn oob(d: &[u8]) -> Option<&[u8]> {
 #[test]
 fn oob_replies_match_retail_byte_for_byte() {
     let lines = capture::parse(&std::fs::read_to_string(FIXTURE).unwrap()).unwrap();
-    let mut server = Cod4Server::new(
-        Cod4Config {
-            map: "mp_crash".into(),
-            gametype: "war".into(),
-            hostname: "CoD4Host".into(),
-            max_clients: 8,
-        },
-        1,
-    );
+    let mut server = Cod4Server::new(test_cfg("mp_crash", "war"), 1);
     server.load(None).unwrap();
     let from: SocketAddr = "127.0.0.1:4660".parse().unwrap();
     let now = Instant::now();
@@ -122,15 +115,7 @@ const SCRIPT_SLOTS: [u16; 5] = [1, 9, 11, 12, 19];
 #[test]
 fn engine_configstrings_match_retail() {
     let retail = retail_gamestate();
-    let mut server = Cod4Server::new(
-        Cod4Config {
-            map: "mp_crash".into(),
-            gametype: "war".into(),
-            hostname: "CoD4Host".into(),
-            max_clients: 8,
-        },
-        1,
-    );
+    let mut server = Cod4Server::new(test_cfg("mp_crash", "war"), 1);
     let install = vcod_cod4::testing::cod4_install();
     server.load(install.as_ref()).unwrap();
     // The capture joined past the prematch (its game end time 619800 is

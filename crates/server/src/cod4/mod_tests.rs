@@ -7,6 +7,7 @@
 //! referenced iwds included. Passes vacuously without `COD4_DIR` or without
 //! the mod in it.
 
+use super::test_harness::test_cfg;
 use super::*;
 use vcod_cod4::net::capture;
 use vcod_common::net::connectionless::info_pairs;
@@ -36,15 +37,7 @@ fn modwarfare_boots_its_own_scripts_and_names_the_mod_as_retail() {
     {
         return;
     }
-    let mut sv = Cod4Server::new(
-        Cod4Config {
-            map: "mp_crash".into(),
-            gametype: "war".into(),
-            hostname: "CoD4Host".into(),
-            max_clients: 8,
-        },
-        7,
-    );
+    let mut sv = Cod4Server::new(test_cfg("mp_crash", "war"), 7);
     sv.set_cvar("fs_game", "mods/ModWarfare");
     sv.load(Some(&install)).unwrap();
     let level = sv.game.level.as_mut().unwrap();

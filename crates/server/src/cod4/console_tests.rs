@@ -4,6 +4,7 @@
 //! idle client's second). Two in-process clients on mp_crash `war`
 //! (`vote_tests::two_playing`). Needs `COD4_DIR`.
 
+use super::test_harness::test_cfg;
 use super::vote_tests::{run_ms, two_playing};
 use super::*;
 use crate::rcon::Redirect;
@@ -282,15 +283,7 @@ fn cod4_a_bot_has_no_guid_to_ban() {
 /// slots), its home path a scratch directory.
 fn bare(home: &std::path::Path) -> Cod4Server {
     std::fs::create_dir_all(home).unwrap();
-    let mut sv = Cod4Server::new(
-        Cod4Config {
-            map: "mp_crash".into(),
-            gametype: "war".into(),
-            hostname: "CoD4Host".into(),
-            max_clients: 8,
-        },
-        7,
-    );
+    let mut sv = Cod4Server::new(test_cfg("mp_crash", "war"), 7);
     sv.set_cvar("fs_homepath", &home.display().to_string());
     sv
 }

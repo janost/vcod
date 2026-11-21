@@ -610,15 +610,7 @@ pub(super) fn ours_set_up(
         .max()
         .unwrap_or(0)
         .max(RUN_MS);
-    let mut sv = Cod4Server::new(
-        Cod4Config {
-            map: "mp_crash".into(),
-            gametype: "war".into(),
-            hostname: "CoD4Host".into(),
-            max_clients: 8,
-        },
-        7,
-    );
+    let mut sv = Cod4Server::new(test_cfg("mp_crash", "war"), 7);
     for (k, v) in vcod_common::net::connectionless::info_pairs(retail_cs0) {
         if !matches!(k, "protocol" | "shortversion") {
             sv.set_cvar(k, v);
@@ -664,29 +656,7 @@ pub(super) fn ours_set_up(
     probes[1].replay =
         shooter.unwrap_or_else(|| replay_schedule(&kill("shooter"), SHOOTER_SPAWN_MS));
     probes[1].replay_from = SHOOTER_SPAWN_MS;
-    let mut now = Instant::now();
-    while sv.core.sv_time_ms < run_ms {
-        let svs = sv.core.sv_time_ms;
-        for p in probes.iter_mut() {
-            if !p.joined && svs >= p.connect_at {
-                p.join(&mut sv, now);
-            }
-        }
-        hook(&mut sv, &mut probes, svs);
-        for p in probes.iter_mut().filter(|p| p.joined) {
-            let pkt = p.packet(svs);
-            p.log("c2s", svs, &pkt);
-            sv.handle_packet(p.addr, &pkt, now);
-        }
-        now += Duration::from_millis(FRAME_MS as u64);
-        sv.tick_frames(now, 1);
-        let svs = sv.core.sv_time_ms;
-        for (to, pkt) in sv.take_outgoing() {
-            if let Some(p) = probes.iter_mut().find(|p| p.addr == to) {
-                p.receive(svs, &pkt);
-            }
-        }
-    }
+    run_frames(&mut sv, &mut probes, run_ms, &mut Instant::now(), hook);
     let aborts = sv.game.level.as_ref().unwrap().rt.aborts();
     (probes, aborts, sv)
 }
@@ -694,3 +664,48 @@ pub(super) fn ours_set_up(
 /// The walker's spawn: from its first snapshot past this one on, the walker
 /// sends the capture's own cmds.
 pub(super) const WALKER_SPAWN_MS: i32 = 47_900;
+
+/// The retail captures' server: `CoD4Host`, 8 slots.
+pub(super) fn test_cfg(map: &str, gametype: &str) -> Cod4Config {
+    Cod4Config {
+        map: map.into(),
+        gametype: gametype.into(),
+        hostname: "CoD4Host".into(),
+        max_clients: 8,
+    }
+}
+
+/// The frame loop to server time `until` (cod4-server-frame.md 2): each
+/// probe whose time has come joins, `hook` runs, each joined probe's
+/// packet goes in and is logged, the server runs a frame, and what it sent
+/// goes to the probe it was for.
+pub(super) fn run_frames(
+    sv: &mut Cod4Server,
+    probes: &mut [Probe],
+    until: i32,
+    now: &mut Instant,
+    hook: &mut Hook,
+) {
+    while sv.core.sv_time_ms < until {
+        let svs = sv.core.sv_time_ms;
+        for p in probes.iter_mut() {
+            if !p.joined && svs >= p.connect_at {
+                p.join(sv, *now);
+            }
+        }
+        hook(sv, probes, svs);
+        for p in probes.iter_mut().filter(|p| p.joined) {
+            let pkt = p.packet(svs);
+            p.log("c2s", svs, &pkt);
+            sv.handle_packet(p.addr, &pkt, *now);
+        }
+        *now += Duration::from_millis(FRAME_MS as u64);
+        sv.tick_frames(*now, 1);
+        let svs = sv.core.sv_time_ms;
+        for (to, pkt) in sv.take_outgoing() {
+            if let Some(p) = probes.iter_mut().find(|p| p.addr == to) {
+                p.receive(svs, &pkt);
+            }
+        }
+    }
+}

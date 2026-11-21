@@ -1,5 +1,5 @@
 //! The netchan's acceptance and the `donedl` limit on a bare level, one
-//! in-process probe (`wire_ab::Probe`); no install needed.
+//! in-process probe (`test_harness::Probe`); no install needed.
 
 use std::time::{Duration, Instant};
 

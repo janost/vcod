@@ -24,7 +24,7 @@
 //! is sent it (docs/research/cod4-pmove.md 15.1).
 
 use std::collections::{BTreeMap, VecDeque};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use vcod_cod4::net::capture::Line;
 use vcod_cod4::net::parse::Snapshot;
@@ -63,15 +63,7 @@ pub(super) fn ours(
     install: &vcod_cod4::install::Install,
     retail_cs0: &str,
 ) -> (Vec<Probe>, Vec<String>) {
-    let mut sv = Cod4Server::new(
-        Cod4Config {
-            map: "mp_crash".into(),
-            gametype: "war".into(),
-            hostname: "CoD4Host".into(),
-            max_clients: 8,
-        },
-        7,
-    );
+    let mut sv = Cod4Server::new(test_cfg("mp_crash", "war"), 7);
     // Retail's command line as its serverinfo reflects it.
     for (k, v) in vcod_common::net::connectionless::info_pairs(retail_cs0) {
         if !matches!(k, "protocol" | "shortversion") {
@@ -121,28 +113,13 @@ pub(super) fn ours(
     // follower's cmds (`ClientThink`), and the spawn's view goes off the
     // last.
     probes[2].pre_angles = cmd_angles(&retail("walk"));
-    let mut now = Instant::now();
-    while sv.core.sv_time_ms < RUN_MS {
-        let svs = sv.core.sv_time_ms;
-        for p in probes.iter_mut() {
-            if !p.joined && svs >= p.connect_at {
-                p.join(&mut sv, now);
-            }
-        }
-        for p in probes.iter_mut().filter(|p| p.joined) {
-            let pkt = p.packet(svs);
-            p.log("c2s", svs, &pkt);
-            sv.handle_packet(p.addr, &pkt, now);
-        }
-        now += Duration::from_millis(FRAME_MS as u64);
-        sv.tick_frames(now, 1);
-        let svs = sv.core.sv_time_ms;
-        for (to, pkt) in sv.take_outgoing() {
-            if let Some(p) = probes.iter_mut().find(|p| p.addr == to) {
-                p.receive(svs, &pkt);
-            }
-        }
-    }
+    run_frames(
+        &mut sv,
+        &mut probes,
+        RUN_MS,
+        &mut Instant::now(),
+        &mut |_, _, _| {},
+    );
     let aborts = sv.game.level.as_ref().unwrap().rt.aborts();
     (probes, aborts)
 }

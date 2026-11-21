@@ -4,7 +4,7 @@
 //! claymore's damage cone, a flashbang's shares, and a frag's blast on
 //! mp_backlot's destructible sedans (`CanDamage` on an entity). The kill
 //! pair's join
-//! (`combat_ab::ours_hooked`) with the shooter held still; needs
+//! (`test_harness::ours_hooked`) with the shooter held still; needs
 //! `COD4_DIR` (docs/research/cod4-combat.md 10.2, 10.3, 13).
 
 use std::time::{Duration, Instant};
