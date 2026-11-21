@@ -334,7 +334,8 @@ Ranked by how much a player notices, worst first.
 
 1. **PunkBuster and CD key checks.** vcod runs no PunkBuster. vcod-server
    never asks the authorize server: an off-LAN client gets its challenge
-   at once and its IP stands in for its ban guid. It does not send the
+   at once and its IP stands in for its ban guid. In its place one
+   public address holds at most `vc_maxClientsPerIP` slots (4). It does not send the
    master the status retail sends every 10 minutes. The client reads no
    CD key from the registry; set `VCOD_CDKEY` or enter it in the CD key
    menu, which keeps it until vcod quits ([usage.md](../usage.md), "CD

@@ -156,6 +156,7 @@ Common ones:
 | `fs_homepath` | Where the log goes. Default the `--game-dir`. CoD2 serves downloads from here first, then the game dir. Like `fs_game` and `fs_basepath`, set on the command line only: rcon and scripts cannot move it. |
 | `sv_allowDownload` | On by default: serve the server's non-stock paks to a client that lacks them. CoD2 serves any `.iwd` a client names under `fs_homepath` or the game dir, nothing else and nothing outside them. `sv_wwwDownload 1` with `sv_wwwBaseURL` redirects instead. |
 | `sv_pure` | 1 by default, as on retail: clients must pass the pure `cp` check. 0 turns it off. |
+| `vc_maxClientsPerIP` | vcod's own, all games: the most slots one public address may hold, connected or connecting. Default 4; 0 turns it off. Loopback, private (10/8, 172.16/12, 192.168/16) and link-local addresses are never capped. |
 
 ### Log
 

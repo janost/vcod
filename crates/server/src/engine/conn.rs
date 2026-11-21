@@ -292,6 +292,21 @@ impl<G: ConnGame> Engine<G> {
         crate::game::builtins::cvar::atoi(G::cvar(self, name))
     }
 
+    /// Whether `from`'s address holds its share of slots
+    /// ([`link::per_ip_full`]); bots and zombies hold none. A refused
+    /// address is told so.
+    pub(crate) fn refuse_per_ip(&mut self, from: SocketAddr, exact: bool) -> bool {
+        let held = self.core.clients.iter().flatten();
+        let held = held.filter(|c| !c.bot && c.state > State::Zombie);
+        let cap = self.int(link::PER_IP_CVAR);
+        if !link::per_ip_full(cap, from, exact, held.map(|c| c.link.addr)) {
+            return false;
+        }
+        log::info!("{from}: refused, its address holds {cap} slots");
+        self.send_oob(from, link::PER_IP_REFUSAL);
+        true
+    }
+
     /// `NET_OutOfBandPrint`.
     pub(crate) fn send_oob(&mut self, to: SocketAddr, text: &str) {
         let pkt = G::wire(self).oob_packet(text);
@@ -647,7 +662,8 @@ impl<G: ConnGame> Engine<G> {
     /// `SV_DirectConnect` on a plain-text `connect "<userinfo>"` up to the
     /// game's `ClientConnect` (cod2-protocol.md 17.1, cod4-handshake.md 3):
     /// the protocol, the reconnect limit, the challenge and its ping off
-    /// the LAN, the slot, `g_password`. The same client again takes its old
+    /// the LAN, the slot (a new one within vcod's per-address cap,
+    /// [`link::PER_IP_CVAR`]), `g_password`. The same client again takes its old
     /// slot, freed first when live (cod4-handshake.md 9, "Reconnects"); a
     /// refused password leaves that slot free.
     pub(crate) fn connect_slot(&mut self, from: SocketAddr, userinfo: &str) -> Option<Admit> {
@@ -724,6 +740,9 @@ impl<G: ConnGame> Engine<G> {
                 slot
             }
             None => {
+                if self.refuse_per_ip(from, false) {
+                    return None;
+                }
                 let start = G::first_slot(self, key("password")).min(self.core.clients.len());
                 let Some(slot) =
                     (start..self.core.clients.len()).find(|&i| self.core.clients[i].is_none())

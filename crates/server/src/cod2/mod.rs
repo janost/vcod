@@ -862,7 +862,8 @@ impl Cod2Server {
     }
 
     /// Whether a message of the running level reads to its end: its
-    /// commands, then `clc_EOF`, or a move whose cmds all read. Retail
+    /// commands (at most `ServerNetchan::max_commands`), then `clc_EOF`, or a
+    /// move whose cmds all read. Retail
     /// runs each op as it reads it; vcod reads the whole block before the
     /// netchan takes the message, as CoD1's server does, so a forged or
     /// garbled one runs nothing. A move's cmds read the same off any base
@@ -870,6 +871,10 @@ impl Cod2Server {
     /// may move the playerstate, need not run first.
     fn reads_to_end(&self, slot: usize, m: &ClientMessage, ops: &[u8]) -> bool {
         let mut r = MsgReader::from_plain(ops.to_vec());
+        let max = self.core.clients[slot]
+            .as_ref()
+            .map_or(0, |c| c.link.netchan.max_commands());
+        let mut commands = 0;
         loop {
             let op = r.read_bits(CLC_BITS);
             if r.is_overflowed() {
@@ -879,6 +884,10 @@ impl Cod2Server {
                 x if x == Clc::ClientCommand as i32 => {
                     r.read_long();
                     r.read_string_bytes();
+                    commands += 1;
+                    if commands > max {
+                        return false;
+                    }
                 }
                 x if x == Clc::Eof as i32 => return true,
                 x if x == Clc::Move as i32 || x == Clc::MoveNoDelta as i32 => {

@@ -260,6 +260,8 @@ Wire and housekeeping:
   off-LAN client's messages wait out its rate and `snaps`. Big messages go
   one fragment a frame; a client not in the world gets retail's bare
   keepalive.
+- One public address holds at most `vc_maxClientsPerIP` slots (default 4,
+  vcod's own; [usage.md](../usage.md), "`--set`").
 - rcon with retail's commands and replies, bans, the master heartbeat,
   zombie slots and retail-measured pings.
 - `g_log` writes retail's `games_mp.log` (`InitGame`, `RestartGame`,

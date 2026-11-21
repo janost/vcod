@@ -929,7 +929,12 @@ impl Cod4Server {
                 ),
             );
             let plain = self.game.huff.decompress(&m.ops);
+            let max = c.link.netchan.max_commands();
             match clmsg::read_ops(plain, key, &UserCmd::default()) {
+                Ok(ops) if commands(&ops) > max => {
+                    log::debug!("cod4: client {slot}: more than {max} commands in a message");
+                    return;
+                }
                 Ok(ops) if matches!(ops.last(), Some(ClOp::Eof)) => ops,
                 Ok(_) => {
                     log::debug!("cod4: client {slot}: message short of clc_EOF");
@@ -974,7 +979,11 @@ impl Cod4Server {
             // the gamestate again once the client has acknowledged past the
             // last one (VERIFIED live).
             let plain = self.game.huff.decompress(&m.ops);
-            for op in clmsg::read_commands(plain) {
+            let ops = clmsg::read_commands(plain);
+            if commands(&ops) > c.link.netchan.max_commands() {
+                return;
+            }
+            for op in ops {
                 if let ClOp::Command { sequence, text } = op
                     && !self.client_command(slot, sequence, &text, true)
                 {
@@ -1660,6 +1669,13 @@ fn ignorable(text: &str) -> bool {
         text.as_bytes().first(),
         Some(b'J' | b'G' | b'H' | b'I' | b'c' | b'e' | b'f' | b'g' | b'h' | b'i' | b' ')
     )
+}
+
+/// The `clc_clientCommand`s among a message's ops.
+fn commands(ops: &[ClOp]) -> usize {
+    ops.iter()
+        .filter(|op| matches!(op, ClOp::Command { .. }))
+        .count()
 }
 
 /// The engine's copy of a userinfo's `name`: its first 15 characters

@@ -944,6 +944,10 @@ The registry:
   the default (`is:"8" default:"20"`). Registering a `set`-created cvar takes
   over its default (`scr_allow_fg42` `is:"0" default:"1"` after
   `default_mp.cfg`'s `set` and `makeCvarServerInfo(..., "1")`). VERIFIED.
+- vcod-only rows sit on top (`registry::VCOD_ONLY`, on every protocol and
+  in the CoD2 and CoD4 tables): the `vc_bot_*` cvars and
+  `vc_maxClientsPerIP` ("The challenge table"). Retail registers none of
+  them.
 - That homepath mounted 1.5's localized paks, whose `default_mp.cfg` also sets
   `scr_killcam`, `scr_freelook`, `scr_teambalance`, `scr_spectateenemy` and
   four `scr_hq*` limits: 8 more than vcod on a 1.1 install. VERIFIED.
@@ -2012,6 +2016,20 @@ writes).
   rand() ^ sv_time_ms` (the game clock, 1.5's 0x83ccd84), CoD2's on
   `svs.time`. Address and port must match, so a connect from another port is
   refused, as on retail.
+- vcod's own, on all four: what goes out is the draw xored with a SipHash of
+  the address and the draw under a per-process key from the OS
+  (`Challenges::issue`), so a challenge tells nothing of the `rand()` stream
+  and one issued to a spoofed address cannot be guessed. The draws and their
+  count are retail's, so the game's stream stays in step (cod2-combat.md
+  9.6, cod4-combat.md 10.9); only the number sent differs.
+- vcod's own, on all four: `vc_maxClientsPerIP` (default 4, 0 off) caps the
+  slots one address holds, connected or on its way in. Past it a
+  `getchallenge` from a socket that holds no slot and a `connect` into a new
+  slot get `error\n\x15Too many clients from your address`, before the
+  challenge or the client slot is taken. Loopback, RFC 1918 and link-local
+  addresses are exempt; bots and zombies hold none
+  (`engine::link::per_ip_full`). Retail has no cap; off the LAN its
+  authorize server stands in front of the challenge, which vcod skips.
 
 ### Message pacing (`SV_SendClientMessages` 0x809045c)
 

@@ -176,9 +176,10 @@ impl Server {
     }
 
     /// `SV_ExecuteClientMessage`'s op walk, read to the end before any op is
-    /// applied. `None` when the stream does not decode: an overflow anywhere
-    /// or a bad usercmd count, which is what a forged block looks like once
-    /// the scramble key is wrong. On success the new delta base comes back
+    /// applied. `None` when the stream does not decode: an overflow anywhere,
+    /// a bad usercmd count or more commands than `ServerNetchan::max_commands`,
+    /// which is what a forged block looks like once the scramble key is
+    /// wrong. On success the new delta base comes back
     /// with the ops: the last cmd decoded, for the next move message to
     /// chain from.
     fn parse_client_ops(
@@ -199,7 +200,7 @@ impl Server {
                 CLC_CLIENT_COMMAND => {
                     let seq = r.read_long();
                     let text = r.read_server_string();
-                    if r.is_overflowed() {
+                    if r.is_overflowed() || ops.len() == c.link.netchan.max_commands() {
                         return None;
                     }
                     ops.push(ClientOp::Command { seq, text });
@@ -935,6 +936,26 @@ mod tests {
         let (before, _) = seq(&sv);
         pipelined(&mut sv, &mut nc, &["donedl"; 50], t);
         assert_eq!(seq(&sv), (before + 1, i64::from(before)));
+    }
+
+    /// A message with more commands than twice the client's ring is a
+    /// forgery: none of it runs.
+    #[test]
+    fn a_message_past_the_command_cap_runs_nothing() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let mut nc = active(&mut sv, now);
+        let last = |sv: &Server| {
+            sv.core.clients[0]
+                .as_ref()
+                .unwrap()
+                .link
+                .last_client_command
+        };
+        pipelined(&mut sv, &mut nc, &["x"; 129], now);
+        assert_eq!(last(&sv), 0);
+        pipelined(&mut sv, &mut nc, &["x"; 128], now);
+        assert_eq!(last(&sv), 128);
     }
 
     /// Score requests pipelined faster than a snapshot goes out leave one
