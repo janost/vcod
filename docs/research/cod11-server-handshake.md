@@ -1,4 +1,4 @@
-# Retail server handshake and empty-map configstrings (CoD 1.1)
+# Retail server handshake, configstrings and housekeeping (CoD 1.1)
 
 What the retail 1.1d Linux dedicated server sends before any player exists:
 the three connectionless replies, the gamestate framing and the whole

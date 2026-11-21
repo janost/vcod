@@ -2,7 +2,7 @@
 //! and the RTCW-MP GPL source, Copyright (C) 1999-2010 id Software LLC, a ZeniMax Media company. See NOTICE.
 //!
 //! Q3/RTCW-derived player movement on top of `movetrace::MoveWorld`. Every
-//! constant's provenance: docs/research/bsp-ibsp59-format.md, "Movement
+//! constant's provenance: docs/research/cod11-mantle.md, "Movement
 //! constants and their provenance".
 
 use glam::Vec3;

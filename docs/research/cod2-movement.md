@@ -1005,7 +1005,7 @@ changes every client's predictor. vcod's predictor runs the defaults
 
 A VERIFIED row rests on the dvar default (`BG_RegisterDvars`'s
 immediates), the rodata VA or the immediate it names; the 1.1 column is
-vcod's `pmove.rs` and `bsp-ibsp59-format.md`. The walk accel floor is read
+vcod's `pmove.rs` and `cod11-mantle.md`. The walk accel floor is read
 off `PM_Accelerate`'s use of `stopspeed` and the plane count off
 `PM_SlideMove`'s `> 7` test, both control flow.
 

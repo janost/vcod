@@ -882,6 +882,8 @@ INFERRED from those steps: a spectator flies where it looks, half a key flies at
 
 A spectator who was a player reads `groundEntityNum` 0 too. `ClientSpawn` (0x4268c) zeroes the whole `gclient_t` (`__bzero` of 0x22c4 bytes at 0x42804) and copies back only the persistent halves, so the last ground trace does not survive. INFERRED from that call. Live 2026-10-12, `mp_carentan` dm: a probe that joined allies stood at 1022 (`ENTITYNUM_WORLD`) for 12 s, then answered the team menu with `spectator` (`--probe-say '12:mr {sid} 0 spectator'`) and read 0 on every snapshot after. VERIFIED (capture). vcod read the same in the same run: `ClientSim::to_wire` writes `groundEntityNum` for a player only. VERIFIED (capture).
 
+## Client commands
+
 ### Client commands are flood-protected
 
 `SV_ClientCommand` (`cod_lnxded` 0x8086e08) gates every client command on `sv_floodProtect` before the game sees it. VERIFIED, out of the function:
@@ -898,6 +900,8 @@ INFERRED, from that control flow:
 - A bare `score` is *not* exempt: its NUL fails the compare against the space.
 
 VERIFIED, `crates/server/tests/fixtures/netchan/mp_carentan-sd-roundrestart-target.txt` and two later pairs: the probe sends `score` every 2 s and `kill` every 45 s. Retail killed it on the first and third `kill` and ignored the second and fourth, each of which landed 300 to 700 ms after a `score`. After each accepted `kill` the next `score` went unanswered (the 4 s gaps between `b` lines at `ms=21571` and `ms=111970`), the window the `kill` had opened. vcod's `client_command` applies the same rule (`FLOOD_WINDOW_MS`), and `crates/server/tests/flood_protect.rs` measures it.
+
+## The playerstate and prediction
 
 ### View angles: `delta_angles` always, `viewangles` the sum below `pm_type` 5
 
@@ -965,6 +969,8 @@ The general rule, which two vcod bugs came out of: **a field that only holds a v
 VERIFIED live 2026-08-28 against the retail 1.1 client, both directions. With `commandTime` clamped up to `serverTime - sv_fps_interval`, it sat 11-24 ms past the newest simulated cmd on 100% of 801 traced frames, and retail drew smooth movement with a view that juddered at snapshot rate: position was predicted while the view angles were reset from the stale snapshot 20 times a second. Reporting the true last-simulated time made `commandTime - last_simulated` exactly 0 on all 446 frames of the confirming trace, and the judder went away.
 
 The lead (`serverTime - commandTime`) is a consequence, not a target: it is however far behind the client's own clock runs. The committed captures (vcod's probe against retail) show 0-34 ms (mean 16); a retail client against vcod's server shows 63-74 ms, because a retail client runs its `serverTime` estimate behind on purpose so it always has frames to interpolate. Clamping the lead to hide that difference caused the bug. `crates/common/examples/snapshot_timing.rs` prints the capture side; `vcod-server --trace` prints the live side.
+
+## Clocks and rates
 
 ### The client's clock
 
