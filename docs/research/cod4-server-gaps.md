@@ -198,6 +198,8 @@ and `bravo` (a spectator); the console commands went over rcon, then
 - `games_mp.log`: `g_log`, `g_logSync`, `logPrint`, the engine's own
   lines and `getGuid` ("games_mp.log" below).
 - `g_inactivity` warns and drops ("g_inactivity" below).
+- `sv_floodprotect`: 1.7's count of game commands per 800 ms
+  (cod4-handshake.md 16).
 - Rounds, throws and rockets leave from the eye with its walk bob and
   lean, along the angles the last cmd's aim block left: sway, movement
   tilt, idle drift, gun spring, and `P_DamageFeedback`'s damage kick, in
