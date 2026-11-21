@@ -29,6 +29,8 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use common::{ClientEnd, FRAME_MS, Queues, holding};
+use vcod_common::net::event_ids::EV_RAISE_WEAPON;
+use vcod_common::net::flags::ET_ITEM;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::snapshot::Snapshot;
@@ -40,9 +42,7 @@ const MAP: &str = "mp_carentan";
 const PROBE_SRC: &str = "../gsc/tests/fixtures/semantics/client-probes/probe_pickup.gsc";
 const CLIENT: &str = "tests/fixtures/items/mp_carentan-dm-pickup.txt";
 const SCRIPT: &str = "tests/fixtures/items/mp_carentan-dm-pickup-script.txt";
-const ET_ITEM: i32 = 3;
 const ITEM_RADIUS: f32 = 256.0;
-const EV_RAISE_WEAPON: i32 = 155;
 /// `PM_UpdateViewAngles` caps the view here by pushing `delta_angles[0]`;
 /// ours does not, so the replay caps the view it asks for
 /// (`docs/research/cod11-gsc-object-model.md`, 23.1).

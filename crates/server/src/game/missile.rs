@@ -34,12 +34,10 @@ pub use vcod_common::net::event_ids::EV_GRENADE_EXPLODE;
 pub use vcod_common::net::flags::ET_GENERAL;
 /// `ET_MISSILE` (11.1).
 pub use vcod_common::net::flags::ET_MISSILE;
-
-/// The `eFlags` bit `G_ExplodeMissile` ORs in (13.2). The two bounce bits
-/// `fire_grenade` sets, `0x03000000`, are above the 24 the `eFlags` netfield
-/// carries and never reach a client: the capture's flying missile reads
-/// `eFlags=0` and its exploded one `eFlags=256`.
-const EFLAGS_EXPLODED: i32 = 0x100;
+// `G_ExplodeMissile` ORs in 0x100, `EF_NODRAW` (13.2): the capture's exploded
+// missile reads `eFlags=256`. `fire_grenade`'s bounce bits, 0x03000000, sit
+// above the 24 the `eFlags` netfield carries and never reach a client.
+use vcod_common::net::flags::EF_NODRAW;
 
 /// 12.4's damping for a grenade, which is the one arm with both bounce bits
 /// set: sliding friction on the tangential component and restitution along
@@ -242,7 +240,7 @@ pub struct Missile {
     /// When the explode event went on the ring, if it has.
     exploded_ms: Option<i32>,
     /// `G_ExplodeMissile` set it off (the fuse), which ORs in
-    /// [`EFLAGS_EXPLODED`]; `G_MissileImpact` sets no such bit.
+    /// [`EF_NODRAW`]; `G_MissileImpact` sets no such bit.
     fused: bool,
     /// United Offensive's missile rules: its bounce, its explode's type in
     /// `es.scale` and no concussion entity.
@@ -1224,10 +1222,7 @@ impl Missile {
         let general = exploded && self.free_at_ms.is_none();
         set("eType", if general { ET_GENERAL } else { ET_MISSILE });
         let flag = general && self.fused;
-        set(
-            "eFlags",
-            self.eflags | if flag { EFLAGS_EXPLODED } else { 0 },
-        );
+        set("eFlags", self.eflags | if flag { EF_NODRAW } else { 0 });
         set("weapon", i32::from(self.weapon));
         set("surfType", self.surf_type);
         if exploded && self.uo {
@@ -2240,7 +2235,7 @@ mod tests {
         ms.run(None, &[], &[], None, 4000);
         let e = ms.entities(p).next().unwrap().1;
         assert_eq!(e.field_i32(p, "eType"), ET_GENERAL);
-        assert_eq!(e.field_i32(p, "eFlags"), EFLAGS_EXPLODED);
+        assert_eq!(e.field_i32(p, "eFlags"), EF_NODRAW);
         assert_eq!(e.field_i32(p, "events[0]"), EV_GRENADE_EXPLODE);
         assert_eq!(e.field_i32(p, "eventSequence"), 1);
         assert!(

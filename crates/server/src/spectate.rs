@@ -1245,7 +1245,7 @@ impl ClientSim {
             | if self.talking { EF_TALK } else { 0 }
             | if self.ping { EF_PING } else { 0 }
             | if self.voted {
-                crate::game::vote::EF_VOTED
+                vcod_common::net::flags::EF_VOTED
             } else {
                 0
             }

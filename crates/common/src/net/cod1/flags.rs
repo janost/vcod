@@ -42,7 +42,7 @@ pub const EF_CAPSULE: i32 = 0x10;
 /// from a run whose spawns happened to pair off.
 /// INFERRED: a client breaks interpolation on the
 /// changed word, so without it a respawn smears from the corpse to the spawn.
-/// The same bit `bodies::EFLAGS_ANIM_TOGGLE` inverts per body-queue push, for
+/// The same bit the server's body queue inverts per push, for
 /// the same reason: a changed `eFlags` is what makes a client stop carrying
 /// the previous occupant of that entity number forward.
 pub const EF_TELEPORT_BIT: i32 = 0x8;
@@ -334,7 +334,12 @@ pub const ET_VEHICLE_OWNER_ICON_V22: i32 = 15;
 /// `notSolid()`ed brush model keeps it (docs/research/cod11-movers.md 14).
 pub const SOLID_BMODEL: i32 = 0xff_ffff;
 
-/// `sessionTeam`'s spectator.
+/// `sessionTeam` and `clientState.team`, the roster's 2-bit team field: what
+/// retail's `sessionteam` setter writes for the four names script may
+/// assign it (`docs/research/clientstate-wire-format.md`).
+pub const TEAM_NONE: i32 = 0;
+pub const TEAM_AXIS: i32 = 1;
+pub const TEAM_ALLIES: i32 = 2;
 pub const TEAM_SPECTATOR: i32 = 3;
 
 /// The restart toggle on `legsAnim`, `torsoAnim` and `ps.weapAnim`: every

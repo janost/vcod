@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 use vcod_common::net::NetClient;
 use vcod_common::net::NetEvent;
 use vcod_common::net::event_ids::{EV_BULLET_HIT_LARGE, EV_BULLET_HIT_SMALL, EV_UO_BULLET_HIT};
+use vcod_common::net::flags::ET_SOUND_BLEND_V22;
 use vcod_common::net::msg::{BUTTON_USE, EntityState, PlayerState, UserCmd};
 use vcod_common::net::protocol::PROTOCOL_V22;
 
@@ -28,9 +29,6 @@ use vcod_common::net::protocol::PROTOCOL_V22;
 /// retail logs' `activated` times against the captures' first snapshots
 /// (tank 15150 and 16050, jeep 15550 and 16450).
 const CAPTURE_LAG_MS: i32 = 900;
-
-/// UO's `ET_SOUND_BLEND`.
-const ET_SOUND_BLEND: i32 = 9;
 
 /// One `!cmd` or `!snap` line.
 enum Line {
@@ -541,7 +539,7 @@ fn sample(cl: &NetClient<ClientEnd>) -> Sample {
     let blends = s
         .entities
         .iter()
-        .filter(|(_, e)| e.field_i32(p, "eType") == ET_SOUND_BLEND)
+        .filter(|(_, e)| e.field_i32(p, "eType") == ET_SOUND_BLEND_V22)
         .map(|(n, e)| {
             (
                 *n,

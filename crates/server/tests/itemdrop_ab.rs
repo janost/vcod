@@ -37,6 +37,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use glam::Vec3;
+use vcod_common::net::flags::ET_ITEM;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::net::trajectory::{TR_GRAVITY, TR_LINEAR, TR_STATIONARY, Trajectory};
@@ -45,7 +46,6 @@ use vcod_server::game::item::{LAUNCH_CLIPMASK, RUN_CLIPMASK, Ran, bounds, run_fl
 const MAP: &str = "mp_carentan";
 const PROBE_PATH: &str = "maps/mp/gametypes/probe_itemdrop";
 const PROBE_SRC: &str = "../gsc/tests/fixtures/semantics/client-probes/probe_itemdrop.gsc";
-const ET_ITEM: i32 = 3;
 const FRAME_MS: i32 = 50;
 /// Where the two sides' start positions may differ in a capture without
 /// the probe client's `CMDS` lines: a player resting a fifth of a unit off

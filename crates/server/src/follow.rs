@@ -5,11 +5,11 @@
 use glam::Vec3;
 use vcod_common::collision::CollisionWorld;
 use vcod_common::net::flags::PMF_OWN_VIEW;
+// The one `eFlags` bit the spectator keeps from its own word across the copy.
+use vcod_common::net::flags::EF_VOTED;
 pub use vcod_common::net::flags::{PMF_FOLLOW, PMF_FORCED_FOLLOW};
 use vcod_common::net::msg;
 use vcod_common::net::protocol::Cod1Wire;
-/// The one `eFlags` bit the spectator keeps from its own word across the copy.
-const EF_KEPT_ACROSS_FOLLOW: i32 = 0x20000;
 
 /// A client's `sessionstate`, the word `ClientEndFrame` branches on.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -186,7 +186,7 @@ pub fn patch_wire(ps: &mut msg::PlayerState, p: &Cod1Wire, forced: bool, own_efl
     let (pm, ef) = (idx("pm_flags"), idx("eFlags"));
     ps.fields[pm] =
         (ps.fields[pm] & !PMF_OWN_VIEW) | PMF_FOLLOW | if forced { PMF_FORCED_FOLLOW } else { 0 };
-    ps.fields[ef] = (ps.fields[ef] & !EF_KEPT_ACROSS_FOLLOW) | (own_eflags & EF_KEPT_ACROSS_FOLLOW);
+    ps.fields[ef] = (ps.fields[ef] & !EF_VOTED) | (own_eflags & EF_VOTED);
 }
 
 #[cfg(test)]

@@ -17,6 +17,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
+use vcod_common::net::flags::{EF_TELEPORT_BIT, PM_DEAD};
 use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD, UserCmd};
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::{NetClient, NetEvent};
@@ -24,8 +25,6 @@ use vcod_common::net::{NetClient, NetEvent};
 const MAP: &str = "mp_carentan";
 const TARGET: &str = "tests/fixtures/playerstate/mp_carentan-tdm-hit-target.txt";
 const SHOOTER: &str = "tests/fixtures/playerstate/mp_carentan-tdm-hit-shooter.txt";
-const PM_DEAD: i32 = 6;
-const EF_TELEPORT_BIT: i32 = 0x8;
 /// `Callback_PlayerKilled`'s `delay`, and the seven seconds `killcam` adds.
 const DELAY_MS: i32 = 2000;
 const ASKED_MS: i32 = DELAY_MS + 7000;

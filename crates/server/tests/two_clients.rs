@@ -555,8 +555,7 @@ fn a_joined_client_carries_its_head_and_helmet_as_attachments() {
 /// spawn, so both clients would read 0 there whatever the menu answered.
 #[test]
 fn opposite_teams_carry_different_roster_team_values() {
-    const TEAM_AXIS: i32 = 1;
-    const TEAM_ALLIES: i32 = 2;
+    use vcod_common::net::flags::{TEAM_ALLIES, TEAM_AXIS};
 
     let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");

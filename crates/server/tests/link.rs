@@ -13,6 +13,7 @@ use common::{ClientEnd, FRAME_MS, Join, Queues, step_pair};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
+use vcod_common::net::flags::EF_TELEPORT_BIT;
 use vcod_common::net::msg::{BUTTON_USE, NULL_USERCMD, UserCmd};
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::{NetClient, NetEvent};
@@ -25,8 +26,6 @@ const ENTITYNUM_NONE: i32 = 1023;
 /// flak88 clip's top at -21.875. A box set down below that top is stuck in
 /// the clip, as on retail (mantle doc, "A start inside a solid").
 const STATION: [f32; 3] = [-225.0, 2452.0, -21.875];
-/// `EF_TELEPORT_BIT`.
-const EF_TELEPORT: i32 = 0x8;
 
 fn server() -> Option<vcod_server::Server> {
     let fs = vcod_common::testing::game_fs_11()?;
@@ -298,8 +297,8 @@ fn set_origin_moves_a_player_a_unit_up_and_flips_the_teleport_bit() {
     let (origin, before, after) = landed.expect("the attacker never reached the courtyard spawn");
     assert_eq!(origin[2], -15.0, "setOrigin lifts the argument one unit");
     assert_eq!(
-        before.map(|b| (b ^ after) & EF_TELEPORT),
-        Some(EF_TELEPORT),
+        before.map(|b| (b ^ after) & EF_TELEPORT_BIT),
+        Some(EF_TELEPORT_BIT),
         "the teleport frame did not flip the teleport bit"
     );
 }

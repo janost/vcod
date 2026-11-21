@@ -25,7 +25,7 @@ use crate::game::profile::{TriggerWire, WeaponNumbering};
 use std::collections::BTreeMap;
 use vcod_common::net::flags::{
     EF_FIRING, EF_NODRAW, EF_TELEPORT_BIT, ET_CORPSE, ET_FX, ET_ITEM, ET_MOVER, ET_PLAYER,
-    ET_SCRIPTMOVER, ET_TURRET, SOLID_BMODEL,
+    ET_SCRIPTMOVER, ET_SOUND_BLEND_V22, ET_TURRET, SOLID_BMODEL,
 };
 use vcod_common::net::msg::{EntityState, HudElem, MAX_HUD_ELEMS};
 use vcod_common::net::protocol::{Cod1Wire, ENTITYNUM_NONE};
@@ -95,8 +95,6 @@ pub const COD1_ENTITY_NUMBERS: EntityNumbers = EntityNumbers {
 /// numbering puts its events there, so the type rides above the 8-bit
 /// field until [`entity_to_protocol`] takes the marker off.
 pub const ET_RAW: i32 = 0x100;
-/// United Offensive's `ET_SOUND_BLEND`.
-const ET_SOUND_BLEND: i32 = 9;
 
 /// The vehicle a United Offensive sound blend belongs to. The snapshot
 /// builder (coduo_lnxded 0x8096c6a) tests a blend whose `otherEntityNum`
@@ -104,7 +102,7 @@ const ET_SOUND_BLEND: i32 = 9;
 /// clusters, never the blend's own (coduo-vehicles.md 10.2).
 pub fn sound_blend_vehicle(p: &Cod1Wire, es: &EntityState) -> Option<u32> {
     let other = es.field_i32(p, "otherEntityNum");
-    (es.field_i32(p, "eType") == (ET_RAW | ET_SOUND_BLEND) && other != ENTITYNUM_NONE as i32)
+    (es.field_i32(p, "eType") == (ET_RAW | ET_SOUND_BLEND_V22) && other != ENTITYNUM_NONE as i32)
         .then_some(other as u32)
 }
 
@@ -620,7 +618,7 @@ fn build(
             seti(&mut e, "eventParm", fx.up);
         }
         Kind::SoundBlend(vehicle, (a, b, blend)) => {
-            seti(&mut e, "eType", ET_RAW | ET_SOUND_BLEND);
+            seti(&mut e, "eType", ET_RAW | ET_SOUND_BLEND_V22);
             seti(&mut e, "eventParm", a);
             seti(&mut e, "_union.scale", b);
             setf(&mut e, "angles2[1]", blend);

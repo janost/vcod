@@ -28,6 +28,7 @@ use vcod_common::tracetape::Tape;
 use vcod_common::weapon::WeaponDef;
 
 use crate::common::tapes;
+use vcod_common::net::flags::{PMF_JUMP_HELD, PMF_LADDER};
 
 /// Each capture, the world yaw it faced the rungs at and the patch whose
 /// server it ran on.
@@ -42,11 +43,6 @@ const FIXTURES: &[(&str, f32, MoveRules)] = &[
     ("mp_ship-dm-ladder-1.5.txt", 90.0, MoveRules::V1_5),
     ("mp_ship-dm-ladder-uo.txt", 90.0, MoveRules::Uo),
 ];
-
-/// `pm_flags` 0x10, on a ladder.
-const PMF_LADDER: i32 = 0x10;
-/// `pm_flags` 0x8, retail's held-jump latch.
-const PMF_JUMP_HELD: i32 = 0x8;
 
 #[derive(Clone, Debug)]
 struct Snap {

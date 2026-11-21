@@ -15,13 +15,12 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::NetClient;
+use vcod_common::net::flags::{PM_DEAD, PMF_FOLLOW};
 use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, BUTTON_USE, NULL_USERCMD, UserCmd};
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::snapshot::Snapshot;
 
 const MAP: &str = "mp_carentan";
-const PMF_FOLLOW: i32 = 0x10000;
-const PM_DEAD: i32 = 6;
 
 /// A and B on stock dm, B 40 units down A's +x facing back, and every
 /// server time's A origin as A was sent it.

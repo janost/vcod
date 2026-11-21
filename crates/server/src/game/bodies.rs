@@ -5,7 +5,11 @@
 
 use glam::Vec3;
 use vcod_common::collision::CollisionWorld;
-use vcod_common::net::flags::EF_DEAD;
+// `G_SpawnPlayerClone` inverts `EF_TELEPORT_BIT` on every push so the word
+// differs from the slot's previous occupant's and the client restarts the
+// anim; `cloneplayer` sets `EF_CORPSE_FRESH`, which the think armed at
+// `level.time + 250` clears (`.so` 0x456DC, sections 5.2 and 5.3).
+use vcod_common::net::flags::{EF_CORPSE_FRESH, EF_DEAD, EF_TELEPORT_BIT};
 use vcod_common::net::msg::EntityState;
 use vcod_common::net::protocol::{Cod1Wire, ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use vcod_common::net::trajectory::{TR_GRAVITY, TR_STATIONARY};
@@ -21,18 +25,6 @@ pub use vcod_common::net::flags::ET_CORPSE;
 pub const BODY_FIRST: u32 = 64;
 pub const BODY_QUEUE_SIZE: usize = 8;
 
-/// The `eFlags` bit `G_SpawnPlayerClone` inverts on every push so the word
-/// differs from whatever the slot's previous occupant sent, which is what
-/// makes the client restart the animation. The same bit a player's respawn
-/// flips (`spectate::EF_TELEPORT_BIT`).
-const EFLAGS_ANIM_TOGGLE: i32 = 8;
-
-/// The `eFlags` bit `cloneplayer` also sets, cleared by the think it arms at
-/// `level.time + 250` (`.so` 0x456DC, whose whole body is
-/// `s.eFlags &= ~0x800`). The retail client reads it as "this body was just
-/// cloned off a live player": set, the death animation plays from the top;
-/// clear, it is snapped to its last frame and held (sections 5.2 and 5.3).
-const EFLAGS_CORPSE_FRESH: i32 = 0x800;
 const CORPSE_FRESH_MS: i32 = 250;
 
 /// The bounds the settle traces with. `player_die` flattens the dying
@@ -260,7 +252,7 @@ impl BodyQueue {
         match body.fresh {
             Some((i, bit, ms)) if age >= ms => body.state.fields[i] &= !bit,
             Some(_) => {}
-            None if age >= CORPSE_FRESH_MS => body.state.fields[index] &= !EFLAGS_CORPSE_FRESH,
+            None if age >= CORPSE_FRESH_MS => body.state.fields[index] &= !EF_CORPSE_FRESH,
             None => {}
         }
     }
@@ -326,9 +318,9 @@ fn clone_of(
     // `EF_ADS` on top (`BG_PlayerStateToEntityState`), so they come off.
     set(
         "eFlags",
-        (get("eFlags") & !(EFLAGS_ANIM_TOGGLE | EF_DEAD | EF_ADS))
-            | if toggle { EFLAGS_ANIM_TOGGLE } else { 0 }
-            | EFLAGS_CORPSE_FRESH,
+        (get("eFlags") & !(EF_TELEPORT_BIT | EF_DEAD | EF_ADS))
+            | if toggle { EF_TELEPORT_BIT } else { 0 }
+            | EF_CORPSE_FRESH,
     );
     set("groundEntityNum", ENTITYNUM_NONE as i32);
     set("pos.trType", TR_GRAVITY);
@@ -465,13 +457,13 @@ mod tests {
         let first = q.entities().next().unwrap().1.field_i32(p, "eFlags");
         q.push(dying(p, 2), None, 100, None, p);
         let second = q.entities().next().unwrap().1.field_i32(p, "eFlags");
-        assert_ne!(first & EFLAGS_ANIM_TOGGLE, second & EFLAGS_ANIM_TOGGLE);
+        assert_ne!(first & EF_TELEPORT_BIT, second & EF_TELEPORT_BIT);
         // Everything but that bit is the player's own eFlags, plus the
         // fresh-corpse marker every push sets.
-        let rest = !(EFLAGS_ANIM_TOGGLE | EFLAGS_CORPSE_FRESH);
+        let rest = !(EF_TELEPORT_BIT | EF_CORPSE_FRESH);
         assert_eq!(first & rest, 16);
         assert_eq!(second & rest, 16);
-        assert_eq!(first & EFLAGS_CORPSE_FRESH, EFLAGS_CORPSE_FRESH);
+        assert_eq!(first & EF_CORPSE_FRESH, EF_CORPSE_FRESH);
     }
 
     /// A new body is re-read from its source client's sim once, so a death
@@ -603,16 +595,16 @@ mod tests {
         let mut q = BodyQueue::new(1);
         q.push(dying(p, 0), None, 5000, None, p);
         let flags = |q: &BodyQueue| q.entities().next().unwrap().1.field_i32(p, "eFlags");
-        assert_eq!(flags(&q) & EFLAGS_CORPSE_FRESH, EFLAGS_CORPSE_FRESH);
+        assert_eq!(flags(&q) & EF_CORPSE_FRESH, EF_CORPSE_FRESH);
         q.run_thinks(5200, p);
         assert_eq!(
-            flags(&q) & EFLAGS_CORPSE_FRESH,
-            EFLAGS_CORPSE_FRESH,
+            flags(&q) & EF_CORPSE_FRESH,
+            EF_CORPSE_FRESH,
             "the marker is cleared 250 ms in, not before"
         );
         q.run_thinks(5250, p);
-        assert_eq!(flags(&q) & EFLAGS_CORPSE_FRESH, 0);
+        assert_eq!(flags(&q) & EF_CORPSE_FRESH, 0);
         // The slot's own anim toggle is untouched by the think.
-        assert_eq!(flags(&q) & EFLAGS_ANIM_TOGGLE, EFLAGS_ANIM_TOGGLE);
+        assert_eq!(flags(&q) & EF_TELEPORT_BIT, EF_TELEPORT_BIT);
     }
 }

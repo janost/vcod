@@ -18,6 +18,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
+use vcod_common::net::flags::EF_PRONE;
 use vcod_common::net::msg::{NULL_USERCMD, PlayerState, UserCmd};
 use vcod_common::net::protocol::{ENTITYNUM_WORLD, PROTOCOL_V1};
 
@@ -130,9 +131,6 @@ fn gap_mask(map: &str, label: &str, name: &str) -> i32 {
         .filter(|(m, pose, ..)| *m == map && *pose == label && name == "pm_flags")
         .fold(0, |mask, (.., bit, _)| mask | bit)
 }
-
-/// `eFlags` bit for prone, so a pose can be told to have taken.
-const EF_PRONE: i32 = 0x40;
 
 /// A prone one side took and the other refused. Both movers now run the fit
 /// check (the body needs 54 units of clear space behind the facing), so the

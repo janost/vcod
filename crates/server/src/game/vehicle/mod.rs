@@ -15,7 +15,10 @@ use crate::game::host::{ENTITYNUM_NONE, GameHost};
 use crate::game::slot::ClientSlot;
 use info::{VehicleInfo, VehicleInfos};
 use std::collections::HashMap;
+use vcod_common::net::flags::SOLID_BMODEL;
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Value};
+// Both trajectories' type on a vehicle.
+use vcod_common::net::trajectory::TR_INTERPOLATE;
 
 /// The pool `G_SpawnVehicle` (0x8abfd) takes a slot of; past it retail's
 /// `Com_Error "Hit max vehicle count"`.
@@ -914,11 +917,6 @@ pub fn write_wire(host: &GameHost, id: EntId, model: i32, set: &mut dyn FnMut(&s
     set("iHeadIconTeam", v.wire.head_icon[1]);
     set("loopSound", v.wire.loop_sound);
 }
-
-/// `TR_INTERPOLATE`, both trajectories' type on a vehicle.
-const TR_INTERPOLATE: i32 = 1;
-/// `trap_SetBrushModel`'s packed `solid`.
-const SOLID_BMODEL: i32 = 0x00ff_ffff;
 
 /// `r.svFlags`-free link state: `unlinkFromWorld` and `linkIntoWorld`.
 pub fn set_linked(host: &mut GameHost, cx: &mut Cx, id: EntId, linked: bool) {

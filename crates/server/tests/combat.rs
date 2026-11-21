@@ -12,13 +12,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::NetEvent;
+use vcod_common::net::flags::{ET_ITEM, ET_MISSILE};
 use vcod_common::net::protocol::PROTOCOL_V1;
 
 const MAP: &str = "mp_carentan";
-/// `ET_ITEM`, a placed or dropped weapon (`crate::game::wire`).
-const ET_ITEM: i32 = 3;
-/// `ET_MISSILE`, a grenade in the air (`docs/research/cod11-combat.md` 11.1).
-const ET_MISSILE: i32 = 4;
 /// The first entity number the body queue uses
 /// (`docs/research/cod11-combat.md` section 5.2).
 const FIRST_BODY: u32 = 64;

@@ -17,12 +17,11 @@ use crate::common;
 
 use common::{parse_fixture, replay};
 use glam::Vec3;
+use vcod_common::net::event_ids::{EV_BULLET_HIT_LARGE, EV_BULLET_HIT_SMALL};
 use vcod_common::net::events::ET_EVENTS;
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::trajectory::Trajectory;
 
-const EV_BULLET_HIT_SMALL: i32 = 173;
-const EV_BULLET_HIT_LARGE: i32 = 174;
 /// How far our muzzle offset may sit from retail's: none, measured
 /// 2026-11-14. Each step opens on retail's level clock, so both sides
 /// sway alike and every round strikes retail's whole-unit impact. Before
