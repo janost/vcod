@@ -661,6 +661,9 @@ pub struct BotBody {
     /// Breaking contact (`bots/retreat.rs`): 1 hurt, 2 dry, 3 at the
     /// cover, 0 not.
     pub retreating: u8,
+    /// How the last retreat ended (`Bot::retreat_end`): 1 held, 2 loaded,
+    /// 3 out of rounds, 4 no cover, 5 a duty, 6 timed out; 0 none.
+    pub retreat_end: u8,
     /// The UO vehicle (entity number) and seat it sits in.
     pub seat: Option<(u32, i32)>,
     /// Driving, and holding the hull for a teammate walking up to board.

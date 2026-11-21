@@ -100,6 +100,7 @@ Everything it counts comes off the script's `logPrint` lines (the
 | life | bodies | Mean life: bot-ticks playing over the lives they made up (a life still running at the end is left out). |
 | wounds, dead in 5 s | bodies | A life's first tick under 50 health while `BotBody::engaged`, and the share of those whose bot died within 5 s. |
 | retreats hurt, dry | bodies | `BotBody::retreating` going from 0 to 1 (hurt) or 2 (dry): retreats started (section 5). |
+| retreats ended | bodies | `BotBody::retreating` going back to 0, split by `BotBody::retreat_end` (`held` its time or a health item took over, `loaded`, `empty` reserve, `nocover`, `duty`, `timeout`), `cut` for one ended alive by none of those (a seat, the cvar), and `died-on-way` or `died-at-cover` for a body dead by then; `reached cover` is the share that stood at the cover first (section 5.2). |
 | cover hold, lean | `bot_cover_state` | Bot-ticks playing on a held cover spot, and with `ps.lean` off zero (section 4). |
 | answered | `D;`, bodies | Of the hits a bot takes from an enemy (one per attacker until answered or 1 s passes), the share it answers within 1 s: a tick after the hit's with `BotBody::firing` and that attacker as `BotBody::target`. Fire at someone else does not count; a bot killed inside the second has not answered. Printed with the hit count. |
 | blindsided | `K;`, bodies | Of a bot's deaths to an enemy, the share whose killer was never its `BotBody::target` that life, reaction delay included. Printed with the death count. |
@@ -122,7 +123,8 @@ Everything it counts comes off the script's `logPrint` lines (the
 
 Each match prints one line, then the totals by team, by skill and (arm
 one-sided) by arm; with several maps a block per map comes first. Each
-row prints seven lines: the log's columns, the bodies', the aim, the
+row prints eight lines: the log's columns, the bodies', the retreats'
+ends, the aim, the
 grenades and the clip, the peeks and hunts, the walking view, the fights.
 
 A change to bot behaviour reports its before and after on the same seeds,
@@ -442,7 +444,31 @@ one side retreating. VERIFIED (measured):
 - 1150 to 1440 hurt and 40 to 100 dry starts in 64 matches with one side
   on; 28 to 32% reach the cover. The rest die on the way, or the retreat
   ends first (a dry clip refilled, or no cover left from a moved threat).
-  Not split by cause yet; open (2026-11-17).
+  Split by cause in 5.2.
+
+### 5.2 How retreats end (2026-11-21)
+
+`bot_match` counts each retreat's end (section 1, "retreats ended").
+VERIFIED (measured, ours, release, master af564b3c7, 1.1 `tdm`, 8 bots,
+3000 ticks, mp_carentan, mp_harbor, mp_depot, mp_brecourt, seeds 1..=16,
+both sides retreating; 2137 hurt and 132 dry starts):
+
+| End | Retreats | Share |
+|---|---|---|
+| held its time, or a health item took over | 955 | 42% |
+| died on the way to the cover | 840 | 37% |
+| died at the cover | 333 | 15% |
+| dry clip loaded again | 104 | 5% |
+| no cover left from the threat | 15 | 1% |
+| timed out (10 s) | 1 | 0% |
+
+- 42% stood at their cover before the end (`reached cover`). The rest
+  are mostly deaths on the way: the cover search tests up to 1200 units
+  of path, and a hurt body walks there under fire with its sights up.
+  INFERRED (the split against 5's search reach). A refilled clip ends a
+  dry retreat before the cover in about half of them.
+- No duty ended one, and no retreat was cut alive by a seat or the cvar
+  in `tdm`. VERIFIED (the counts).
 
 ## 6. One table on `bot_match` (2026-10-21)
 

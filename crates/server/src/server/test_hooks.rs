@@ -859,6 +859,13 @@ impl Server {
                 .bots
                 .get(&slot)
                 .map_or(0, |b| b.retreating()),
+            retreat_end: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .map_or(0, |b| b.retreat_end()),
             seat: sim.seat.map(|s| (s.vehicle, s.pos)),
             crew_wait: self
                 .game

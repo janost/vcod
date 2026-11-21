@@ -735,6 +735,10 @@ struct Tally {
     /// Retreats started hurt and dry.
     hurt: u32,
     dry: u32,
+    /// Retreats ended, by how ([`RETREAT_ENDS`]), and those that reached
+    /// their cover.
+    retreat_ends: [u32; RETREAT_ENDS.len()],
+    retreat_reached: u32,
     /// Bot-ticks holding a cover spot, and leaning.
     hold: u64,
     lean: u64,
@@ -898,6 +902,10 @@ impl Tally {
         self.wound_deaths += o.wound_deaths;
         self.hurt += o.hurt;
         self.dry += o.dry;
+        for (a, b) in self.retreat_ends.iter_mut().zip(o.retreat_ends) {
+            *a += b;
+        }
+        self.retreat_reached += o.retreat_reached;
         self.hold += o.hold;
         self.lean += o.lean;
         self.aim.add(&o.aim);
@@ -926,6 +934,19 @@ impl Tally {
             self.snaps,
             100.0 * self.snaps as f64 / self.walk_ticks.max(1) as f64,
         )
+    }
+
+    /// How the retreats ended (bot-combat.md 5.2).
+    fn retreat_ends(&self) -> String {
+        let all: u32 = self.retreat_ends.iter().sum();
+        let mut s = format!(
+            "retreats ended {all:5} reached cover {:3.0}%",
+            100.0 * self.retreat_reached as f32 / all.max(1) as f32
+        );
+        for (name, n) in RETREAT_ENDS.iter().zip(self.retreat_ends) {
+            s += &format!(" {name} {n}");
+        }
+        s
     }
 
     /// The per-bot-tick line under [`Tally::line`].
@@ -1863,6 +1884,7 @@ fn summarize(what: &str, results: &[&Match]) {
         for (k, t) in map {
             println!("  {kind} {k:<13} {}", t.line());
             println!("  {kind} {k:<13} {}", t.survive());
+            println!("  {kind} {k:<13} {}", t.retreat_ends());
             println!("  {kind} {k:<13} {}", t.aim.line());
             println!("  {kind} {k:<13} {}", t.kit.line());
             println!("  {kind} {k:<13} {}", t.peeks.line());
@@ -2604,6 +2626,21 @@ fn team_name(sv: &mut vcod_server::Server, slot: usize, dm: bool) -> &'static st
     }
 }
 
+/// How a retreat ends, as [`Life::step`] counts it: by
+/// `BotBody::retreat_end`'s code (1 to 6), cut off with the bot alive
+/// (0), or with the bot dead before or after it reached the cover.
+const RETREAT_ENDS: [&str; 9] = [
+    "cut",
+    "held",
+    "loaded",
+    "empty",
+    "nocover",
+    "duty",
+    "timeout",
+    "died-on-way",
+    "died-at-cover",
+];
+
 /// One bot's running life, wound and retreat state between ticks.
 #[derive(Default)]
 struct Life {
@@ -2611,6 +2648,8 @@ struct Life {
     /// Ticks since this life's wound, if any.
     wound: Option<u64>,
     retreating: u8,
+    /// The retreat under way reached its cover.
+    reached: bool,
     /// The held bullet gun and its clip last tick.
     gun: Option<(u8, i16)>,
     /// The target acquired with none tracked, and the ticks since, until
@@ -2647,8 +2686,19 @@ impl Life {
         match (self.retreating, r) {
             (0, 1) => d.hurt += 1,
             (0, 2) => d.dry += 1,
+            (1.., 0) => {
+                let end = match body.map_or(0, |b| b.retreat_end) {
+                    _ if dead && self.reached => 8,
+                    _ if dead => 7,
+                    e => e.min(6) as usize,
+                };
+                d.retreat_ends[end] += 1;
+                d.retreat_reached += u32::from(self.reached);
+                self.reached = false;
+            }
             _ => {}
         }
+        self.reached |= r == 3;
         self.retreating = r;
         let fired = match (body.filter(|b| b.playing && b.gun), self.gun) {
             (Some(b), Some((w, clip))) if b.weapon == w && b.clip < clip => (clip - b.clip) as u64,

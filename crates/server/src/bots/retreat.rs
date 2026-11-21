@@ -48,6 +48,25 @@ pub(crate) enum Why {
     Ahead,
 }
 
+/// Why a retreat ended ([`Bot::retreat_end`]), as `bot_match` splits them
+/// (bot-combat.md 5.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum RetreatEnd {
+    /// Held the cover its time, or a health item near took over.
+    Held = 1,
+    /// The dry clip holds a round again.
+    Loaded = 2,
+    /// The dry clip's reserve ran out.
+    Empty = 3,
+    /// No cover from the threat (none found, or the threat moved).
+    NoCover = 4,
+    /// A duty came up ([`Bot::duty_bound`]).
+    Duty = 5,
+    /// [`RETREAT_TICKS`] ran out.
+    Timeout = 6,
+}
+
 /// A retreat under way.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Retreat {
@@ -151,6 +170,13 @@ impl Bot {
         if !on {
             self.retreat = None;
         }
+    }
+
+    /// How the last retreat ended in [`Self::retreat_update`], a
+    /// [`RetreatEnd`] code; 0 while one runs, before any, or after one cut
+    /// off elsewhere (a death, a seat, the cvar) (`BotBody::retreat_end`).
+    pub fn retreat_end(&self) -> u8 {
+        self.retreat_end.map_or(0, |e| e as u8)
     }
 
     /// Breaking contact ([`BotBody::retreating`]).
@@ -373,18 +399,28 @@ impl Bot {
             }
             let done = match r.why {
                 // A health item near ends the wait: the heal goal takes over.
-                Why::Hurt => {
-                    r.held >= HOLD_TICKS
-                        || (r.held > 0 && view.enemy.is_none() && view.survive.heal.is_some())
-                }
-                Why::Dry => (view.clip > 0 && view.busy_ms == 0) || !loaded,
-                Why::Ahead => {
-                    r.held >= HOLD_TICKS || !matches!(&view.uo, Some(UoView::Ctf(c)) if c.carrying)
-                }
+                Why::Hurt => (r.held >= HOLD_TICKS
+                    || (r.held > 0 && view.enemy.is_none() && view.survive.heal.is_some()))
+                .then_some(RetreatEnd::Held),
+                Why::Dry if view.clip > 0 && view.busy_ms == 0 => Some(RetreatEnd::Loaded),
+                Why::Dry => (!loaded).then_some(RetreatEnd::Empty),
+                Why::Ahead => (r.held >= HOLD_TICKS
+                    || !matches!(&view.uo, Some(UoView::Ctf(c)) if c.carrying))
+                .then_some(RetreatEnd::Held),
             };
             let ahead = r.why == Why::Ahead;
-            if (duty && !ahead) || done || r.cover.is_none() || r.ticks >= RETREAT_TICKS {
+            let end = if duty && !ahead {
+                Some(RetreatEnd::Duty)
+            } else if done.is_some() {
+                done
+            } else if r.cover.is_none() {
+                Some(RetreatEnd::NoCover)
+            } else {
+                (r.ticks >= RETREAT_TICKS).then_some(RetreatEnd::Timeout)
+            };
+            if let Some(end) = end {
                 self.retreat = None;
+                self.retreat_end = Some(end);
                 if ahead {
                     self.ahead_rest = AHEAD_REST;
                 }
@@ -405,6 +441,7 @@ impl Bot {
                 ticks: 0,
                 held: 0,
             });
+            self.retreat_end = None;
             return;
         }
         if duty || self.switch_to.is_some() {
@@ -432,6 +469,7 @@ impl Bot {
             ticks: 0,
             held: 0,
         });
+        self.retreat_end = None;
     }
 }
 
@@ -602,6 +640,7 @@ mod tests {
             bot.think(&v);
         }
         assert_eq!(bot.retreating(), 0);
+        assert_eq!(bot.retreat_end(), RetreatEnd::Held as u8);
         v.enemy = engaged(1).1.enemy;
         bot.think(&v);
         assert_eq!(bot.retreating(), 0, "retreated twice on one wound");
@@ -615,8 +654,10 @@ mod tests {
         let (mut bot, v) = hurt(1);
         bot.think(&v);
         assert_eq!(bot.retreating(), 1);
+        assert_eq!(bot.retreat_end(), 0, "under way");
         bot.think(&v);
         assert_eq!(bot.retreating(), 0);
+        assert_eq!(bot.retreat_end(), RetreatEnd::NoCover as u8);
         assert!(matches!(bot.goal(&v), Goal::To(e) if e == v.enemy.unwrap().origin));
     }
 
@@ -635,6 +676,7 @@ mod tests {
         v.busy_ms = 0;
         bot.think(&v);
         assert_eq!(bot.retreating(), 0);
+        assert_eq!(bot.retreat_end(), RetreatEnd::Loaded as u8);
     }
 
     #[test]

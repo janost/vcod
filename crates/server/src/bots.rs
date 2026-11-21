@@ -514,6 +514,7 @@ pub struct Bot {
     /// `vc_bot_retreat`, applied by the bot pass ([`Bot::allow_retreat`]).
     retreat_cvar: bool,
     retreat: Option<retreat::Retreat>,
+    retreat_end: Option<retreat::RetreatEnd>,
     hurt_at: i32,
     dry_had: bool,
     /// Ticks before a `ctf` carrier may hold from an enemy ahead again
@@ -654,6 +655,7 @@ impl Bot {
             retreat_on: true,
             retreat_cvar: true,
             retreat: None,
+            retreat_end: None,
             hurt_at: i32::MAX,
             dry_had: false,
             ahead_rest: 0,
