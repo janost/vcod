@@ -574,7 +574,8 @@ fn kick_frame(s: &mut Cod4Session, t0: Instant) -> Option<Scene> {
 /// (cod4-client-view.md 14): the M16's burst kicks the view
 /// (`CG_KickAngles`) and the kick rides the cmds' angles, so the
 /// server's view of each cmd is the client's drawn one, kick and all,
-/// and both come back to the mouse's view once the kick has centred.
+/// roll too (1.7's cmd loop converts all three angles, 0x463aa9), and
+/// both come back to the mouse's view once the kick has centred.
 #[test]
 fn cod4_live_recoil_rides_the_cmd_and_the_server_takes_it() {
     use crate::play::input::Action;
@@ -598,6 +599,7 @@ fn cod4_live_recoil_rides_the_cmd_and_the_server_takes_it() {
         };
         let (ptx, prx) = std::sync::mpsc::channel();
         let (mut kick, mut drawn, mut server) = (0.0f32, 0.0f32, 0.0f32);
+        let (mut kick_roll, mut server_roll) = (0.0f32, 0.0f32);
         let (mut checked, mut worst) = (0, 0.0f32);
         let start = since(t0);
         while since(t0) < start + Duration::from_millis(2500) {
@@ -605,17 +607,19 @@ fn cod4_live_recoil_rides_the_cmd_and_the_server_takes_it() {
             s.input.key(Action::Attack, held);
             let scene = kick_frame(s, t0)?;
             kick = kick.max(off(s.kick.view_kick()));
+            kick_roll = kick_roll.max(s.kick.view_kick()[2].abs());
             drawn = drawn.max(off(scene.angles.to_array()));
             tx.send(Ctl::Probe(ptx.clone())).unwrap();
             let ps = &s.client().snapshots.last()?.ps;
-            let delta: [u16; 2] =
+            let delta: [u16; 3] =
                 std::array::from_fn(|k| angle2short(ps_f32(ps, &format!("delta_angles[{k}]"))));
             while let Ok((t, va)) = prx.try_recv() {
                 server = server.max(off(va));
+                server_roll = server_roll.max(va[2].abs());
                 let Some(c) = s.sent_cmds.iter().find(|c| c.server_time == t) else {
                     continue;
                 };
-                for k in 0..2 {
+                for k in 0..3 {
                     let mine =
                         f32::from(c.angles[k].wrapping_add(delta[k]) as i16) * (360.0 / 65536.0);
                     let miss = vcod_common::pmove::angle_normalize180(mine - va[k]);
@@ -629,6 +633,7 @@ fn cod4_live_recoil_rides_the_cmd_and_the_server_takes_it() {
             kick,
             drawn,
             server,
+            (kick_roll, server_roll),
             checked,
             worst,
             s.kick.view_kick(),
@@ -637,9 +642,14 @@ fn cod4_live_recoil_rides_the_cmd_and_the_server_takes_it() {
     }) else {
         return;
     };
-    let (kick, drawn, server, checked, worst, left, rest) = r.expect("never spawned");
+    let (kick, drawn, server, (kick_roll, server_roll), checked, worst, left, rest) =
+        r.expect("never spawned");
     assert!(kick > 0.1, "kick {kick}");
     assert!(drawn > 0.1 && server > 0.1, "drawn {drawn} server {server}");
+    assert!(
+        kick_roll > 0.01 && server_roll > 0.01,
+        "kick roll {kick_roll} server roll {server_roll}"
+    );
     assert!(
         checked > 20 && worst < 0.01,
         "{checked} cmds, worst {worst}"

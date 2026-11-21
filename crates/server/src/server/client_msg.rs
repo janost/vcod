@@ -1148,6 +1148,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -1223,6 +1224,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -1287,6 +1289,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -1364,6 +1367,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -1458,6 +1462,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -1550,6 +1555,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         });
         let mut nc = begun(&mut sv, now);
         let sim = sv.core.clients[0].as_mut().unwrap().sim.as_mut().unwrap();
@@ -1604,6 +1610,7 @@ mod tests {
                 hazards: Vec::new(),
                 rubble: Vec::new(),
                 nav_cover: Vec::new(),
+                prop_areas: None,
             });
             let mut nc = begun(&mut sv, now);
             let sim = sv.core.clients[0].as_mut().unwrap().sim.as_mut().unwrap();
@@ -1654,6 +1661,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -1738,6 +1746,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();

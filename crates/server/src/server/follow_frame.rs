@@ -289,6 +289,7 @@ mod tests {
                 hazards: Vec::new(),
                 rubble: Vec::new(),
                 nav_cover: Vec::new(),
+                prop_areas: None,
             });
             install_script(&mut sv, rt);
             let nc = begun(&mut sv, now);

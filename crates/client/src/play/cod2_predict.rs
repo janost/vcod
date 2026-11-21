@@ -47,6 +47,9 @@ use vcod_cod2::pmove::{self, PlayerState, Rules, ev, pm_type};
 use vcod_common::collision::CollisionWorld;
 use vcod_common::movetrace::{Body, CONTENTS_BODY, MoveWorld};
 
+// Netfield indices, resolved at compile time.
+const ES_SOLID: usize = vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "solid");
+
 /// `pm_flags` that make the cgame interpolate instead
 /// (`CG_PredictPlayerState`'s `snap->ps.pm_flags` byte 2 & 0x40): a
 /// spectator following someone.
@@ -285,7 +288,7 @@ pub fn solid_bodies(frame: &Frame, own: i32) -> Vec<Body> {
         .iter()
         .filter(|e| e.number as i32 != own && e.etype != ET_ITEM)
         .filter_map(|e| {
-            let solid = e.raw.i32("solid");
+            let solid = e.raw.i32_at(ES_SOLID);
             if solid == 0 || solid == SOLID_BMODEL {
                 return None;
             }

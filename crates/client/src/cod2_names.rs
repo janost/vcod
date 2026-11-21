@@ -5,12 +5,11 @@
 
 use glam::Vec3;
 use vcod_cod2::net::Frame;
-use vcod_cod2::net::delta::field_index;
-use vcod_cod2::net::fields::CLIENT_STATE_FIELDS;
 use vcod_cod2::net::flags::{SOLID_BMODEL, TEAM_SPECTATOR};
 use vcod_common::collision::CollisionWorld;
 
 // Netfield indices the draw reads, resolved at compile time.
+const CS_TEAM: usize = vcod_cod2::field!(vcod_cod2::net::fields::CLIENT_STATE_FIELDS, "team");
 const ES_SOLID: usize = vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "solid");
 
 /// The trace's reach (Mac 0x3265c8).
@@ -124,15 +123,14 @@ impl CrosshairNames {
             return None;
         }
         let fade = ((SHOW_MS - since) as f32 / FADE_MS as f32).min(1.0);
-        let team = field_index(&CLIENT_STATE_FIELDS, "team");
         let client = |n: u32| frame.snap.clients.iter().find(|c| c.number == n);
         let ps = &frame.snap.ps;
-        let viewer = client(u32::try_from(ps.client_num).ok()?)?.f[team];
+        let viewer = client(u32::try_from(ps.client_num).ok()?)?.f[CS_TEAM];
         if viewer == 0 {
             return None;
         }
         let target = client(self.client)?;
-        if viewer != TEAM_SPECTATOR as u32 && viewer != target.f[team] {
+        if viewer != TEAM_SPECTATOR as u32 && viewer != target.f[CS_TEAM] {
             return None;
         }
         let name = vcod_common::net::strip_colors(&target.name());
@@ -162,6 +160,8 @@ fn health_rgb(health: i32) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_cod2::net::delta::field_index;
+    use vcod_cod2::net::fields::CLIENT_STATE_FIELDS;
     use vcod_common::net::Msec;
 
     #[test]

@@ -6,7 +6,7 @@
 #
 # Records, a file each:
 #   bot_<game>.txt  bot_match's `digest`/`net` lines, seeds 1 and 2, 6000
-#                   ticks, DIGEST and NETDIGEST every 600 (CoD4 has no net)
+#                   ticks, DIGEST and NETDIGEST every 600
 #   nav_<game>.txt  nav_build's line per map, build time cut (default maps)
 #   tests_<crate>.txt  every test of `cargo test -p <crate> --tests --
 #                   list` (lib, bins, integration), `<target> <name>`, sorted

@@ -582,7 +582,15 @@ impl ScriptRuntime {
             }
             _ => {
                 let bsp = vcod_common::mapworld::find(&*fs, map)?;
-                let area = crate::area::AreaTree::for_map(&bsp, &*fs);
+                // The world's load already read the props' boxes.
+                let known = host
+                    .world
+                    .as_ref()
+                    .and_then(|w| w.prop_areas.as_ref()?.of(&bsp.entities));
+                let area = match known {
+                    Some(props) => crate::area::AreaTree::for_map_with(&bsp, props),
+                    None => crate::area::AreaTree::for_map(&bsp, &*fs),
+                };
                 (Rc::new(LevelMap::of(&bsp)), area)
             }
         };

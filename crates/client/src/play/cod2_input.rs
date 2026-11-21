@@ -30,6 +30,26 @@ use vcod_cod2::net::PlayerState2;
 use super::input::{Action, KeyState, StanceBits};
 use crate::console::shell::Effect;
 
+// Netfield indices, resolved at compile time.
+const PS_CLIENT_NUM: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "clientNum");
+const PS_OFF_HAND_INDEX: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "offHandIndex");
+const PS_WEAPON: usize = vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "weapon");
+const PS_WEAPONS: [usize; 2] =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, 2 "weapons");
+/// `weaponslots[0]` and `[4]`, the two words of the slot bytes.
+const PS_WEAPONSLOTS: [usize; 2] = [
+    vcod_cod2::field!(
+        vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+        "weaponslots[0]"
+    ),
+    vcod_cod2::field!(
+        vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+        "weaponslots[4]"
+    ),
+];
+
 pub mod bit {
     pub const ATTACK: i32 = 0x1;
     pub const MELEE: i32 = 0x4;
@@ -82,12 +102,12 @@ pub struct Cod2Input {
 /// The weapons a playerstate holds, `weapons[0..1]` as one mask.
 fn holds(ps: &PlayerState2, w: u8) -> bool {
     let (word, b) = (usize::from(w) / 32, u32::from(w) % 32);
-    word < 2 && w != 0 && ps.i32(&format!("weapons[{word}]")) as u32 >> b & 1 != 0
+    word < 2 && w != 0 && ps.i32_at(PS_WEAPONS[word]) as u32 >> b & 1 != 0
 }
 
 /// `weaponslots` byte `slot` (1 primary, 2 primaryb).
 fn slot_weapon(ps: &PlayerState2, slot: usize) -> u8 {
-    let word = ps.i32(&format!("weaponslots[{}]", slot / 4 * 4)) as u32;
+    let word = ps.i32_at(PS_WEAPONSLOTS[slot / 4]) as u32;
     (word >> (8 * (slot % 4))) as u8
 }
 
@@ -173,9 +193,9 @@ impl Cod2Input {
     /// a selection the playerstate no longer holds falls back to its weapon
     /// (`CG_DrawActive`'s range check, here any weapon not held).
     pub fn sync(&mut self, ps: &PlayerState2) {
-        let spawn = (ps.i32("clientNum"), ps.stats[5]);
-        let weapon = ps.i32("weapon") as u8;
-        let offhand = ps.i32("offHandIndex") as u8;
+        let spawn = (ps.i32_at(PS_CLIENT_NUM), ps.stats[5]);
+        let weapon = ps.i32_at(PS_WEAPON) as u8;
+        let offhand = ps.i32_at(PS_OFF_HAND_INDEX) as u8;
         let holds_selected = holds(ps, self.keys.selected);
         self.keys.respawn(spawn, weapon, offhand, holds_selected);
     }

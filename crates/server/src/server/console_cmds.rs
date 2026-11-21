@@ -1291,6 +1291,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         });
         sv.set_cvar("rconpassword", "pw");
         let huff = Huffman::new();

@@ -1241,6 +1241,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         }));
         host.level_time_ms = 1_000;
         vm.with_cx(|cx| {
@@ -1304,6 +1305,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         }));
         vm.with_cx(|cx| {
             let e = host.ents.spawn(cx).unwrap();
@@ -1341,6 +1343,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         }));
         vm.with_cx(|cx| {
             let e = host.ents.spawn(cx).unwrap();
@@ -1373,6 +1376,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         }
     }
 

@@ -8,8 +8,6 @@
 
 use std::sync::Arc;
 
-use vcod_cod2::net::delta::field_index;
-use vcod_cod2::net::fields::CLIENT_STATE_FIELDS;
 use vcod_cod2::net::protocol::CS_WEAPONS;
 use vcod_cod2::net::{ConfigStrings, Frame, PlayerView};
 use vcod_cod2::pmove::weapon::{WeaponParams, spread_for_weapon};
@@ -29,6 +27,58 @@ use vcod_cod2::net::flags::{
 };
 use vcod_cod2::pmove::pm_type::{DEAD as PM_DEAD, SPECTATOR as PM_SPECTATOR};
 use vcod_common::pmove::aim::angle_subtract;
+
+// Netfield indices, resolved at compile time.
+const CS_TEAM: usize = vcod_cod2::field!(vcod_cod2::net::fields::CLIENT_STATE_FIELDS, "team");
+
+// Netfield indices, resolved at compile time.
+const PS_AIM_SPREAD_SCALE: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+    "aimSpreadScale"
+);
+const PS_CURSOR_HINT: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "cursorHint");
+const PS_CURSOR_HINT_STRING: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+    "cursorHintString"
+);
+const PS_DAMAGE_COUNT: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "damageCount");
+const PS_DAMAGE_EVENT: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "damageEvent");
+const PS_DAMAGE_PITCH: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "damagePitch");
+const PS_DAMAGE_YAW: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "damageYaw");
+const PS_F_WEAPON_POS_FRAC: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+    "fWeaponPosFrac"
+);
+const PS_MANTLE_STATE_FLAGS: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+    "mantleState.flags"
+);
+const PS_OFF_HAND_INDEX: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "offHandIndex");
+const PS_VIEWLOCKED_ENT_NUM: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+    "viewlocked_entNum"
+);
+const PS_WEAPONS: [usize; 2] =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, 2 "weapons");
+/// `weaponslots[0]` and `[4]`, the two words of the slot bytes.
+const PS_WEAPONSLOTS: [usize; 2] = [
+    vcod_cod2::field!(
+        vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+        "weaponslots[0]"
+    ),
+    vcod_cod2::field!(
+        vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+        "weaponslots[4]"
+    ),
+];
+const PS_WEAPONSTATE: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "weaponstate");
 
 /// The owner draws `ui/menudefinition.h` numbers and `hud.menu` uses.
 mod od {
@@ -255,7 +305,7 @@ impl Weapons {
 /// `ps.weapons[]`'s bit for `w`.
 fn holds(ps: &PlayerView, w: i32) -> bool {
     let (word, b) = (w / 32, w % 32);
-    (0..2).contains(&word) && w > 0 && (ps.raw.i32(&format!("weapons[{word}]")) >> b) & 1 != 0
+    (0..2).contains(&word) && w > 0 && (ps.raw.i32_at(PS_WEAPONS[word as usize]) >> b) & 1 != 0
 }
 
 /// `ps.ammoclip[slot]`. The wire carries 64 slots; a weapon list with more
@@ -954,7 +1004,8 @@ impl PlayerHud {
         self.damage_icons(frame, &cx, out);
         if let Some(weap) = self.view_weapon(ps) {
             let def = SightDef::of(&weap.def);
-            self.latch.step(def.ads, ps.raw.f32("fWeaponPosFrac"));
+            self.latch
+                .step(def.ads, ps.raw.f32_at(PS_F_WEAPON_POS_FRAC));
         }
     }
 
@@ -1023,7 +1074,7 @@ impl PlayerHud {
     /// it is up.
     fn view_weapon(&self, ps: &PlayerView) -> Option<&Weap> {
         let w = if ps.pm_flags & PMF_OFFHAND != 0 {
-            ps.raw.i32("offHandIndex")
+            ps.raw.i32_at(PS_OFF_HAND_INDEX)
         } else {
             ps.weapon
         };
@@ -1037,7 +1088,8 @@ impl PlayerHud {
     /// with the texture's edge.
     fn scope_overlay(&self, weap: &Weap, ps: &PlayerView, cx: &Ctx, out: &mut Vec<HudQuad>) {
         let def = SightDef::of(&weap.def);
-        let Some(a) = def.overlay_alpha(ps.raw.f32("fWeaponPosFrac"), self.latch.zooming_in) else {
+        let Some(a) = def.overlay_alpha(ps.raw.f32_at(PS_F_WEAPON_POS_FRAC), self.latch.zooming_in)
+        else {
             return;
         };
         let m = weap.s("adsOverlayShader");
@@ -1147,9 +1199,9 @@ impl PlayerHud {
         // `CG_DrawCursorhint` (Mac 0x18a7a6): a hint in the playerstate is
         // latched with the time, so it outlives the playerstate's by
         // `cg_hintFadeTime`, its last 100 ms fading.
-        let hint = ps.raw.i32("cursorHint");
+        let hint = ps.raw.i32_at(PS_CURSOR_HINT);
         if hint != 0 {
-            let string = ps.raw.i32("cursorHintString");
+            let string = ps.raw.i32_at(PS_CURSOR_HINT_STRING);
             self.cursor_hint = (hint, string, now, input.hint_fade_ms);
         }
         let weapon = self.shown_weapon(ps, input);
@@ -1161,16 +1213,16 @@ impl PlayerHud {
             self.pulse.step(frac, now);
         }
         // `CG_DamageFeedback` (Mac 0x1e3e10) on a new `damageEvent`.
-        let event = ps.raw.i32("damageEvent");
+        let event = ps.raw.i32_at(PS_DAMAGE_EVENT);
         let last = self.last_damage_event.replace(event);
-        if last.is_some_and(|l| l != event) && ps.raw.i32("damageCount") != 0 {
-            let (yaw, pitch) = (ps.raw.i32("damageYaw"), ps.raw.i32("damagePitch"));
+        if last.is_some_and(|l| l != event) && ps.raw.i32_at(PS_DAMAGE_COUNT) != 0 {
+            let (yaw, pitch) = (ps.raw.i32_at(PS_DAMAGE_YAW), ps.raw.i32_at(PS_DAMAGE_PITCH));
             let view = crate::cod2_viewmodel::view_angles(frame);
             let axis = vcod_common::pmove::aim::angles_to_axis_msvc(view).map(glam::Vec3::from);
             self.kick = DamageKick::feedback(
                 yaw,
                 pitch,
-                ps.raw.i32("damageCount"),
+                ps.raw.i32_at(PS_DAMAGE_COUNT),
                 axis,
                 frame.snap.server_time.raw(),
                 now,
@@ -1306,7 +1358,7 @@ impl PlayerHud {
             od::MANTLE_HINT => {
                 // `CG_DrawMantleHint` (Mac 0x18ae44): under
                 // `cg_drawMantleHint`, while `mantleState.flags & 8`.
-                if !input.mantle_hint || ps.raw.i32("mantleState.flags") & 8 == 0 {
+                if !input.mantle_hint || ps.raw.i32_at(PS_MANTLE_STATE_FLAGS) & 8 == 0 {
                     return;
                 }
                 let s = cx.loc.get("PLATFORM_MANTLE").unwrap_or("PLATFORM_MANTLE");
@@ -1501,7 +1553,7 @@ impl PlayerHud {
         let (x, y, al, sc) = (item.rect[0], item.rect[1], item.align, item.text_scale);
         match what {
             Offhand::Icon => {
-                let equipped = ps.raw.i32("offHandIndex");
+                let equipped = ps.raw.i32_at(PS_OFF_HAND_INDEX);
                 let w = self
                     .weapons
                     .get(equipped)
@@ -1831,7 +1883,7 @@ impl PlayerHud {
             return;
         }
         let weapon = if ps.pm_flags & PMF_OFFHAND != 0 {
-            ps.raw.i32("offHandIndex")
+            ps.raw.i32_at(PS_OFF_HAND_INDEX)
         } else {
             ps.weapon
         };
@@ -1841,11 +1893,11 @@ impl PlayerHud {
         if weapon != 0 {
             self.scope_overlay(weap, ps, cx, out);
         }
-        let state = ps.raw.i32("weaponstate");
+        let state = ps.raw.i32_at(PS_WEAPONSTATE);
         if matches!(state, 1 | 2 | 5 | 10 | 11) {
             return;
         }
-        let pos = ps.raw.f32("fWeaponPosFrac");
+        let pos = ps.raw.f32_at(PS_F_WEAPON_POS_FRAC);
         // `CG_DrawWeapReticle` hands back `1 - ` its overlay's alpha, which
         // `cg_crosshairAlpha` (1) scales.
         let overlay = SightDef::of(&weap.def).overlay_alpha(pos, self.latch.zooming_in);
@@ -1893,7 +1945,7 @@ impl PlayerHud {
         if side.is_empty() {
             return;
         }
-        let spread_scale = ps.raw.f32("aimSpreadScale") / 255.0;
+        let spread_scale = ps.raw.f32_at(PS_AIM_SPREAD_SCALE) / 255.0;
         let alpha = (base * (1.0 - spread_scale)).max(0.0);
         let s = weap.def.int("reticleSideSize") as f32 * scale;
         let (min, max) = spread_for_weapon(ps.view_height, &weap.params);
@@ -1921,7 +1973,7 @@ impl PlayerHud {
     /// is 1. VERIFIED (cod2-turrets.md 12).
     fn turret_crosshair(&self, frame: &Frame, cx: &Ctx, out: &mut Vec<HudQuad>) {
         let ps = &frame.snap.ps;
-        let gun = ps.raw.i32("viewlocked_entNum");
+        let gun = ps.raw.i32_at(PS_VIEWLOCKED_ENT_NUM);
         if gun == ENTITYNUM_NONE {
             return;
         }
@@ -1958,7 +2010,7 @@ impl PlayerHud {
         let ps = &frame.snap.ps;
         if let Some(weap) = self.view_weapon(ps)
             && SightDef::of(&weap.def)
-                .overlay_alpha(ps.raw.f32("fWeaponPosFrac"), self.latch.zooming_in)
+                .overlay_alpha(ps.raw.f32_at(PS_F_WEAPON_POS_FRAC), self.latch.zooming_in)
                 .is_some()
         {
             return;
@@ -2015,18 +2067,20 @@ fn team_of(frame: &Frame, client: i32) -> Option<i32> {
         .clients
         .iter()
         .find(|c| c.number as i32 == client)?;
-    Some(c.f[field_index(&CLIENT_STATE_FIELDS, "team")] as i32)
+    Some(c.f[CS_TEAM] as i32)
 }
 
 /// `weaponslots` byte `slot` (1 primary, 2 primaryb).
 fn slot_weapon(ps: &PlayerView, slot: usize) -> u8 {
-    let word = ps.raw.i32(&format!("weaponslots[{}]", slot / 4 * 4)) as u32;
+    let word = ps.raw.i32_at(PS_WEAPONSLOTS[slot / 4]) as u32;
     (word >> (8 * (slot % 4))) as u8
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_cod2::net::delta::field_index;
+    use vcod_cod2::net::fields::CLIENT_STATE_FIELDS;
     use vcod_common::net::Msec;
 
     /// A mod's weapon list can hand out clip and ammo slots past the

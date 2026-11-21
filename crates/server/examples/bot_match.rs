@@ -68,8 +68,10 @@
 //! under `NETDIGEST` the CoD2 server salts it with the frame clock
 //! (`Cod2Server::test_frame_clock`). Every game masks its challenges under
 //! a per-process key; `NETDIGEST` pins it to the seed
-//! (`Engine::test_pin_challenges`). `NETDUMP=<dir>` writes the
-//! datagrams themselves, a line each (`<tick> <to> <len> <hex>`), to
+//! (`Engine::test_pin_challenges`). CoD4's observer is an in-process 1.7
+//! client (`cod4::Spectator4`), its datagrams the server's own.
+//! `NETDUMP=<dir>` writes the datagrams themselves, a line each
+//! (`<tick> <to> <len> <hex>`), to
 //! `<dir>/<game>_<map>_<gametype>_s<seed>.net`, to find the bytes behind a
 //! `net@` window that parted.
 //!
@@ -83,7 +85,7 @@
 //!
 //! `VCOD_TICK_TRACE=<dir>` writes each match's tick step log
 //! (`vcod_server::tick_trace`) to `<dir>/<game>_<map>_<gametype>_s<seed>.trace`,
-//! `<game>` `11`, `uo` or `cod2`.
+//! `<game>` `11`, `uo`, `cod2` or `cod4`.
 //!
 //! `GAME=cod2` runs CoD2 matches instead (`COD2_DIR=<install>`, maps
 //! `mp_toujane` by default, `GAMETYPE=` dm or tdm): the bots of
@@ -4299,6 +4301,7 @@ mod cod4 {
         obj: BTreeMap<String, super::ObjSpread>,
         log: Vec<String>,
         digest: Option<Digest>,
+        net: Option<Digest>,
     }
 
     pub(super) fn main() {
@@ -4410,6 +4413,9 @@ mod cod4 {
             if let Some(d) = &m.digest {
                 d.print(&m.map, &gametype, m.seed, m.ticks);
             }
+            if let Some(d) = &m.net {
+                d.print(&m.map, &gametype, m.seed, m.ticks);
+            }
             for (e, n) in &m.errors {
                 *errors.entry(e).or_default() += n;
             }
@@ -4500,10 +4506,17 @@ mod cod4 {
             sv.set_cvar(k, v);
         }
         sv.load(Some(&install)).expect("load the level");
+        let net = Digest::net_from_env();
+        // `NETDIGEST`'s observer: CoD4's challenge comes off the frame
+        // clock and the level's `rand()`, so only the mask needs pinning.
+        let mut observer = net.is_some().then(|| Spectator4::new(0, false));
+        if observer.is_some() {
+            sv.test_pin_challenges(seed);
+        }
         let mut crowd: Vec<Spectator4> = (1..=super::observers_from_env())
             .map(|i| Spectator4::new(i, super::play_from_env()))
             .collect();
-        for ob in &mut crowd {
+        for ob in observer.iter_mut().chain(&mut crowd) {
             ob.join(&mut sv, now);
         }
         let slots = sv.add_bots(bots, true);
@@ -4520,10 +4533,12 @@ mod cod4 {
             map: map.to_string(),
             seed,
             digest: Digest::from_env(),
+            net,
             maps: vec![map.to_string()],
             ..Default::default()
         };
         install_trace("cod4", map, gametype, seed);
+        let mut dump = super::net_dump("cod4", map, gametype, seed);
         // `SPIKE_MS=<ms>`: each tick past it to stderr with its phases
         // (`vcod_server::tick_profile`).
         let spike_ms: Option<f32> = crate::knob("SPIKE_MS").ok().and_then(|v| v.parse().ok());
@@ -4605,7 +4620,7 @@ mod cod4 {
             if leave.contains(&tick) {
                 sv.core.console.push_back("removebot 1".into());
             }
-            for ob in &mut crowd {
+            for ob in observer.iter_mut().chain(&mut crowd) {
                 ob.deliver(&mut sv, now);
             }
             let sched = spike_ms.and_then(|_| vcod_server::tick_profile::sched());
@@ -4625,7 +4640,11 @@ mod cod4 {
                 );
             }
             let sent = sv.take_outgoing();
-            for ob in &mut crowd {
+            if let Some(d) = m.net.as_mut() {
+                d.datagrams(&sent, tick);
+                super::dump_datagrams(&mut dump, &sent, tick);
+            }
+            for ob in observer.iter_mut().chain(&mut crowd) {
                 ob.receive(&sent);
             }
             m.ticks = tick + 1;

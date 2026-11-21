@@ -10,14 +10,14 @@ use std::collections::HashMap;
 use glam::{Mat4, Vec3, Vec4};
 use vcod_cod2::hudelem::HudElem;
 use vcod_cod2::net::Frame;
-use vcod_cod2::net::delta::field_index;
-use vcod_cod2::net::fields::CLIENT_STATE_FIELDS;
 
 use crate::hud::HudQuad;
 
 use vcod_cod2::net::events::ET_PLAYER;
 use vcod_cod2::net::flags::TEAM_SPECTATOR;
+
 // Netfield indices the draw reads, resolved at compile time.
+const CS_TEAM: usize = vcod_cod2::field!(vcod_cod2::net::fields::CLIENT_STATE_FIELDS, "team");
 const ES_I_HEAD_ICON: usize =
     vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "iHeadIcon");
 const ES_I_HEAD_ICON_TEAM: usize =
@@ -186,14 +186,13 @@ fn waypoints(frame: &Frame, view: &WorldView, now: i32, out: &mut Vec<HudQuad>) 
 /// 19.2).
 fn head_icons(frame: &Frame, heads: &HashMap<u32, Vec3>, view: &WorldView, out: &mut Vec<HudQuad>) {
     let ps = &frame.snap.ps;
-    let team = field_index(&CLIENT_STATE_FIELDS, "team");
     let team_of = |client: i32| {
         frame
             .snap
             .clients
             .iter()
             .find(|c| c.number as i32 == client)
-            .map(|c| c.f[team] as i32)
+            .map(|c| c.f[CS_TEAM] as i32)
     };
     let Some(viewer) = team_of(ps.client_num) else {
         return;
@@ -247,6 +246,8 @@ fn head_icons(frame: &Frame, heads: &HashMap<u32, Vec3>, view: &WorldView, out: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_cod2::net::delta::field_index;
+    use vcod_cod2::net::fields::CLIENT_STATE_FIELDS;
     use vcod_common::net::Msec;
 
     fn view() -> WorldView {

@@ -1351,6 +1351,7 @@ pub fn bot_world(
         hazards: Vec::new(),
         rubble: Vec::new(),
         nav_cover: Vec::new(),
+        prop_areas: None,
     })
 }
 

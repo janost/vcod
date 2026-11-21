@@ -32,6 +32,28 @@ pub struct World {
     /// launchers. mp_italy's western axis bunker lay past the box's margin,
     /// its charge room off the graph (bot-objectives.md 7.2).
     pub nav_cover: Vec<[f32; 3]>,
+    /// The collidable props' area-tree boxes, read off the same model load
+    /// as the collision's, for the script host's tree; `None` without paks.
+    pub prop_areas: Option<PropAreas>,
+}
+
+/// [`vcod_common::props::Placed::area_bounds`] and the entity string they
+/// came off, by hash.
+pub struct PropAreas {
+    entities: u64,
+    pub bounds: Vec<(glam::Vec3, glam::Vec3)>,
+}
+
+impl PropAreas {
+    fn hash(entities: &str) -> u64 {
+        use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+        BuildHasherDefault::<DefaultHasher>::default().hash_one(entities)
+    }
+
+    /// The boxes, when they came off `entities`.
+    pub fn of(&self, entities: &str) -> Option<&[(glam::Vec3, glam::Vec3)]> {
+        (self.entities == Self::hash(entities)).then_some(&self.bounds[..])
+    }
 }
 
 /// The unit the engine grows a linked entity's box by on each axis before
@@ -264,8 +286,13 @@ impl World {
         b: &mapworld::MapWorld,
         fs: Option<&dyn vcod_common::asset_source::AssetSource>,
     ) -> Self {
-        let props = fs.map_or_else(Vec::new, |fs| {
-            vcod_common::props::collision_tris(fs, &b.entities)
+        let placed = fs.map(|fs| vcod_common::props::Placed::load(fs, &b.entities));
+        let props = placed
+            .as_ref()
+            .map_or_else(Vec::new, |p| p.collision_tris());
+        let prop_areas = placed.map(|p| PropAreas {
+            entities: PropAreas::hash(&b.entities),
+            bounds: p.area_bounds(),
         });
         let collision = CollisionWorld::build(b, &props);
         let spawn = bsp::find_spawn(&b.entities)
@@ -290,6 +317,7 @@ impl World {
                 })
                 .filter_map(|e| bsp::parse_vec3(e.get("origin")?))
                 .collect(),
+            prop_areas,
         }
     }
 }
@@ -411,6 +439,24 @@ mod tests {
         let w = World::from_bsp(&parsed, None);
         // find_spawn picked a real spot, not bedrock.
         assert!(w.spawn.0[2] > -500.0, "spawn {:?}", w.spawn);
+    }
+
+    /// A world off the paks keeps the props' area boxes its one model load
+    /// read, the ones a fresh `area_bounds` reads, and hands them only to
+    /// the entity string they came off. Needs `COD_DIR`.
+    #[test]
+    fn the_world_keeps_the_prop_area_boxes_of_its_map() {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
+            return;
+        };
+        let bsp = bsp::parse(&fs.read("maps/mp/mp_carentan.bsp").unwrap()).unwrap();
+        let w = World::from_bsp(&bsp, Some(&fs));
+        let areas = w.prop_areas.as_ref().expect("built with paks");
+        let fresh = vcod_common::props::area_bounds(&fs, &bsp.entities);
+        assert!(!fresh.is_empty());
+        assert_eq!(areas.of(&bsp.entities), Some(&fresh[..]));
+        assert_eq!(areas.of("{\n}"), None);
+        assert!(World::from_bsp(&bsp, None).prop_areas.is_none());
     }
 
     /// A moving brush model is culled where its trajectory has it at the

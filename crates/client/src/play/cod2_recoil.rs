@@ -29,6 +29,18 @@ use crate::play::recoil::{KickDef, Kicker};
 /// `offHandIndex`.
 use vcod_cod2::net::flags::{PMF_FIRST_PERSON, PMF_OFFHAND, PMF_OWN_VIEW};
 
+// Netfield indices, resolved at compile time.
+const PS_F_WEAPON_POS_FRAC: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+    "fWeaponPosFrac"
+);
+const PS_OFF_HAND_INDEX: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "offHandIndex");
+const PS_WEAPON_RESTRICT_KICK_TIME: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+    "weaponRestrictKickTime"
+);
+
 /// One weapon's kick keys off its parsed weapon file.
 pub fn kick_def(def: &vcod_cod2::weapon::WeaponDef) -> KickDef {
     KickDef::from_lookup(
@@ -64,7 +76,7 @@ pub fn fire_calls(event: i32) -> usize {
 /// and whose index the kick does not need.
 pub fn kick_weapon(ps: &PlayerView) -> i32 {
     if ps.pm_flags & PMF_OFFHAND != 0 {
-        ps.raw.i32("offHandIndex")
+        ps.raw.i32_at(PS_OFF_HAND_INDEX)
     } else {
         ps.weapon
     }
@@ -88,11 +100,11 @@ impl Cod2Recoil {
         def: Option<&KickDef>,
         time_ms: i32,
     ) {
-        let frac = ps.raw.f32("fWeaponPosFrac");
+        let frac = ps.raw.f32_at(PS_F_WEAPON_POS_FRAC);
         if let Some(def) = def
             && ps.pm_flags & PMF_FIRST_PERSON != 0
         {
-            let restrict = ps.raw.i32("weaponRestrictKickTime");
+            let restrict = ps.raw.i32_at(PS_WEAPON_RESTRICT_KICK_TIME);
             let shots: usize = events
                 .iter()
                 .filter(|e| e.entity as i32 == ps.client_num)

@@ -13,6 +13,32 @@ use vcod_cod2::net::events::{self as ev, ET_CORPSE, ET_EVENTS, ET_GENERAL, ET_MI
 use vcod_cod2::net::flags::EF_TELEPORT_BIT;
 use vcod_cod2::net::{EntityState2, SnapshotView};
 
+// Netfield indices, resolved at compile time.
+const ES_ANGLES2: [usize; 3] =
+    vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, 3 "angles2");
+const ES_EVENTS: [usize; 4] =
+    vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, 4 "events");
+const ES_EVENT_PARM: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "eventParm");
+const ES_EVENT_PARMS: [usize; 4] =
+    vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, 4 "eventParms");
+const ES_EVENT_SEQUENCE: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "eventSequence");
+const ES_OTHER_ENTITY_NUM: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::ENTITY_STATE_FIELDS,
+    "otherEntityNum"
+);
+const ES_SCALE: usize = vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "scale");
+const ES_SURF_TYPE: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "surfType");
+const ES_TIME: usize = vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "time");
+const PS_EVENTS: [usize; 4] =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, 4 "events");
+const PS_EVENT_PARMS: [usize; 4] =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, 4 "eventParms");
+const PS_EVENT_SEQUENCE: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "eventSequence");
+
 /// A corpse whose `eFlags` carry this replays its ring on entering
 /// (`CG_ResetEntity`, Mac 0x1deb10: the `cent[0xfa] & 8` test).
 const EF_CORPSE_REPLAY: i32 = 0x80000;
@@ -77,8 +103,8 @@ pub struct EventTracker {
 fn ring(es: &EntityState2, i: i32) -> (i32, i32) {
     let k = i & 3;
     (
-        es.i32(&format!("events[{k}]")),
-        es.i32(&format!("eventParms[{k}]")),
+        es.i32_at(ES_EVENTS[k as usize]),
+        es.i32_at(ES_EVENT_PARMS[k as usize]),
     )
 }
 
@@ -101,16 +127,16 @@ impl EventTracker {
                 etype: e.etype,
                 eflags: e.eflags,
                 weapon: e.weapon,
-                surf: es.i32("surfType"),
-                other_entity: es.i32("otherEntityNum"),
-                time: es.i32("time"),
-                scale: es.i32("scale"),
-                angles2: [es.f32("angles2[0]"), es.f32("angles2[1]")],
+                surf: es.i32_at(ES_SURF_TYPE),
+                other_entity: es.i32_at(ES_OTHER_ENTITY_NUM),
+                time: es.i32_at(ES_TIME),
+                scale: es.i32_at(ES_SCALE),
+                angles2: [es.f32_at(ES_ANGLES2[0]), es.f32_at(ES_ANGLES2[1])],
                 pos: e.pos.evaluate_f32(snap.server_time.raw()),
                 angles: e.apos.base,
                 from_ps: false,
             };
-            let now = es.i32("eventSequence");
+            let now = es.i32_at(ES_EVENT_SEQUENCE);
             // `CG_SetNextSnap` (Mac 0x1dee08) resets an entity not in the
             // last snapshot, or whose teleport bit flipped.
             let prev = match self.seen.get(&e.number) {
@@ -127,7 +153,7 @@ impl EventTracker {
             let prev = if e.etype > ET_EVENTS {
                 // A temp entity fires once, while `previousEvent` is 0.
                 if prev == 0 {
-                    out.push(at(e.etype - ET_EVENTS, es.i32("eventParm")));
+                    out.push(at(e.etype - ET_EVENTS, es.i32_at(ES_EVENT_PARM)));
                 }
                 1
             } else if now == 0 {
@@ -162,8 +188,8 @@ impl EventTracker {
     /// test), so it raises nothing.
     fn ps_events(&mut self, snap: &SnapshotView) -> Vec<Event2> {
         let ps = &snap.ps;
-        let now = ps.raw.i32("eventSequence");
-        let events = [0, 1, 2, 3].map(|k| ps.raw.i32(&format!("events[{k}]")));
+        let now = ps.raw.i32_at(PS_EVENT_SEQUENCE);
+        let events = PS_EVENTS.map(|i| ps.raw.i32_at(i));
         let old = self.ps.replace((ps.client_num, now, events));
         let Some((client, before, old_events)) = old else {
             return Vec::new();
@@ -181,7 +207,7 @@ impl EventTracker {
                 out.push(Event2 {
                     entity: ps.client_num as u32,
                     event: events[k],
-                    parm: ps.raw.i32(&format!("eventParms[{k}]")),
+                    parm: ps.raw.i32_at(PS_EVENT_PARMS[k]),
                     etype: ev::ET_PLAYER,
                     eflags: ps.eflags,
                     weapon: ps.weapon,

@@ -88,6 +88,14 @@ use vcod_cod2::net::{PlayerView, SnapshotView};
 use vcod_common::collision::CollisionWorld;
 use vcod_common::net::protocol::CsRange;
 
+// Netfield indices, resolved at compile time.
+const PS_VIEWLOCKED: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "viewlocked");
+const PS_VIEWLOCKED_ENT_NUM: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+    "viewlocked_entNum"
+);
+
 mod connect;
 mod demo;
 use demo::DemoPlay;
@@ -727,7 +735,7 @@ impl Cod2Session {
         if ps.eflags & EF_TURRET_STANCE == 0 {
             return None;
         }
-        let n = ps.raw.i32("viewlocked_entNum") as u32;
+        let n = ps.raw.i32_at(PS_VIEWLOCKED_ENT_NUM) as u32;
         let e = f.snap.entity(n)?;
         let model = f.configstrings.model(e.model_index)?;
         let model = model.strip_prefix("xmodel/").unwrap_or(model);
@@ -1178,10 +1186,10 @@ impl Cod2Session {
                 return [0.0; 2];
             };
             let ps = &f.snap.ps;
-            if ps.eflags & EF_TURRET_STANCE == 0 || ps.raw.i32("viewlocked") != 2 {
+            if ps.eflags & EF_TURRET_STANCE == 0 || ps.raw.i32_at(PS_VIEWLOCKED) != 2 {
                 return [0.0; 2];
             }
-            let gun = f.snap.entity(ps.raw.i32("viewlocked_entNum") as u32);
+            let gun = f.snap.entity(ps.raw.i32_at(PS_VIEWLOCKED_ENT_NUM) as u32);
             match gun.filter(|e| f.configstrings.weapon_name(e.weapon).is_some()) {
                 Some(e) => e.weapon,
                 None => return [0.0; 2],
@@ -2635,6 +2643,44 @@ mod tests {
         assert_eq!(s.stats.restarts, 2);
         s.server_command(b"w \"EXE_PLAYERKICKED\"");
         assert_eq!(s.dropped.as_deref(), Some("EXE_PLAYERKICKED"));
+    }
+
+    /// A sequenced message off the socket whose op is illegible drops the
+    /// session with retail's `Com_Error` text (cod2-protocol.md 2.2); a
+    /// legible one before it does not.
+    #[test]
+    fn an_illegible_server_message_drops_the_session() {
+        use vcod_common::net::huffman::Huffman;
+        use vcod_common::net::netchan::{NetchanParams, ServerNetchan};
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let me = sock.local_addr().unwrap();
+        let mut s = Cod2Session::new(Some(sock), Client::new(1, 2));
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut nc = ServerNetchan::with_params(1, 2, NetchanParams::COD2);
+        let h = Huffman::new();
+        let mut send = |ops: &[u8]| {
+            for p in nc.transmit_eof(0, ops, 7, &h) {
+                server.send_to(&p, me).unwrap();
+            }
+        };
+        let poll = |s: &mut Cod2Session, messages: usize, errors: usize| {
+            let until = Instant::now() + Duration::from_secs(2);
+            while (s.stats.messages, s.stats.parse_errors) < (messages, errors)
+                && Instant::now() < until
+            {
+                s.poll(None);
+            }
+        };
+        send(&[]);
+        poll(&mut s, 1, 0);
+        assert_eq!((s.stats.messages, s.dropped.as_deref()), (1, None));
+        send(&[9]);
+        poll(&mut s, 1, 1);
+        assert_eq!(s.stats.parse_errors, 1);
+        assert_eq!(
+            s.dropped.as_deref(),
+            Some("CL_ParseServerMessage: Illegible server message 9")
+        );
     }
 
     #[test]

@@ -10,11 +10,9 @@ use std::rc::Rc;
 use vcod_common::asset_source::AssetSource;
 
 use glam::{Mat4, Vec3};
-use vcod_cod2::net::delta::field_index;
 use vcod_cod2::net::events::{
     ET_CORPSE, ET_GENERAL, ET_ITEM, ET_MISSILE, ET_PLAYER, ET_SCRIPTMOVER, ET_TURRET,
 };
-use vcod_cod2::net::fields::CLIENT_STATE_FIELDS;
 use vcod_cod2::net::flags::{EF_FIRING, EF_TURRET_STANCE};
 use vcod_cod2::net::protocol::PROTOCOL_118;
 use vcod_cod2::net::{ConfigStrings, EntityView, Frame};
@@ -35,6 +33,7 @@ use crate::turret::{ANIM_BLEND_MS, GunAnim, GunClock, apply_controller};
 use vcod_cod2::player::GunFrame;
 
 // Netfield indices the draw reads, resolved at compile time.
+const CS_TEAM: usize = vcod_cod2::field!(vcod_cod2::net::fields::CLIENT_STATE_FIELDS, "team");
 const ES_ANGLES2: [usize; 3] =
     vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, 3 "angles2");
 const ES_OTHER_ENTITY_NUM: usize = vcod_cod2::field!(
@@ -49,6 +48,7 @@ const PS_VIEWLOCKED_ENT_NUM: usize = vcod_cod2::field!(
 );
 
 use vcod_cod2::net::flags::{EF_DEAD, EF_NODRAW, SOLID_BMODEL};
+
 /// `bg_itemlist` rows 1..=128 are the weapons by their CS 7 index.
 const MAX_WEAPON_ITEMS: i32 = 128;
 /// `bg_itemlist`'s rows past the weapons (`cod2_lnxded` .data 0x81850c0,
@@ -197,7 +197,6 @@ pub fn place(frame: &Frame) -> Vec<Placed2> {
 /// weapon in hand.
 pub fn players(frame: &Frame) -> Vec<Cod2PlayerView> {
     let snap = frame.snap;
-    let team_field = field_index(&CLIENT_STATE_FIELDS, "team");
     snap.entities
         .iter()
         .filter(|e| match e.etype {
@@ -223,7 +222,7 @@ pub fn players(frame: &Frame) -> Vec<Cod2PlayerView> {
                 character: client.and_then(|c| {
                     Character::from_client_state(c, |i| Some(frame.configstrings.get(i.into())))
                 }),
-                team: client.map_or(0, |c| c.f[team_field] as i32),
+                team: client.map_or(0, |c| c.f[CS_TEAM] as i32),
                 // `BG_UpdatePlayerDObj` (Mac 0x182312) holds no weapon on a
                 // gun's mount.
                 weapon: (e.eflags & EF_TURRET_STANCE == 0)
@@ -677,6 +676,7 @@ impl Cod2Draw {
 pub(crate) mod tests {
     use super::*;
     use vcod_cod2::net::capture::{Capture, Dir};
+    use vcod_cod2::net::delta::field_index;
     use vcod_cod2::net::events::ET_FX;
     use vcod_cod2::net::oob::{self, Reply};
     use vcod_cod2::net::protocol::CS_WEAPONS;
