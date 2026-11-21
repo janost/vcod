@@ -359,6 +359,41 @@ Both are 1.1's shape. VERIFIED:
 one whose `reliableSequence - reliableAcknowledge` is 128 or more (1.1: 64),
 setting the acknowledge to the sequence. VERIFIED. A datagram from an address
 and qport no client holds is answered with an OOB `disconnect`. VERIFIED.
+The test is a signed 32-bit difference, so an acknowledge past
+`reliableSequence` passes. vcod-server takes the clamp and lets an
+acknowledge past the sequence through (`Link::reliable_ack_behind`, shared
+with CoD1 and CoD4); it takes the difference in 64 bits, so an acknowledge
+near `i32::MIN` is clamped where retail's wraps into the window (SEC-001).
+The clamp is the one thing a dropped message commits: the netchan sequence
+and the address move only once a message is read to its end
+(`engine::conn::commit`), so a forged one cannot stall the slot behind a
+huge sequence or redirect its replies (vcod's).
+
+The client's side, `CL_PacketEvent` (`CoD2MP_s.exe` 0x40f3a4..0x40f46b):
+after `Netchan_Process` (0x4481b0 at 0x40f3b6) it keeps
+`serverMessageSequence` (0x62a120) and `reliableAcknowledge` (0x60a11c) in
+`esi` and `ebp` (0x40f3ca, 0x40f3d0), stores the packet's sequence as the
+first (0x40f3d6) and the message's first long as the second (0x40f3ee), and
+when that is below `reliableSequence` (0x60a118) less 0x80 stores the
+sequence over it and returns (0x40f3e3..0x40f404). Else it decodes
+(0x412860), parses (0x4143e0 at 0x40f41e), and when the message's first
+word is set prints `ignoring illegible message` (0x5a35d4) and puts both
+back (0x40f435, 0x40f43b). VERIFIED (the instructions and the string).
+The parser decompresses into a message of its own (0x444050 at 0x41448a)
+and walks that one: after each op a set first word on it ends the parse
+(0x414556..0x41455c) and nothing reaches the outer message, so only a
+packet too short for its `reliableAcknowledge` (`MSG_ReadLong` 0x444410 at
+0x40f3de on the outer one) rolls back. An op read at the end reads as -1
+(0x4144df..0x4144e7) and, like any op above 6 (0x414501), is
+`CL_ParseServerMessage: Illegible server message %d` (0x5a40bc) through
+0x4324c0 with code 1 (0x414546..0x41454e). VERIFIED (the instructions and
+the strings). That 0x4324c0 is `Com_Error` and code 1 `ERR_DROP` is
+INFERRED (its other callers, `configstring > MAX_CONFIGSTRINGS` at
+0x413c6c). vcod's `Client::receive` takes the clamp and fails a packet too
+short for the acknowledge before it changes anything, which is the
+rollback; a message that fails to parse keeps both acknowledges, as the
+local overflow does. vcod logs an unknown op and skips the message where
+retail drops the connection.
 
 ### 2.3 Netchan framing
 

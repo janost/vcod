@@ -7,7 +7,8 @@ use vcod_common::net::Msec;
 /// `SV_UpdateServerCommandsToClient`. The caller bounds `from_ack` to
 /// `0..=reliable_sequence`, so the range is empty or inside the ring.
 pub(super) fn write_pending_commands(w: &mut MsgWriter, nc: &ServerNetchan, from_ack: i32) {
-    for seq in (from_ack + 1)..=(nc.reliable_sequence as i32) {
+    // The ack may stand past the sequence (`Link::reliable_ack_behind`).
+    for seq in from_ack.saturating_add(1)..=(nc.reliable_sequence as i32) {
         msg::write_server_command(
             w,
             seq,
@@ -287,9 +288,11 @@ impl Server {
         if (0..z.link.netchan.outgoing_sequence as i32).contains(&m.message_ack) {
             z.message_ack = m.message_ack;
         }
-        if z.link.reliable_ack_in_window(m.reliable_ack) {
-            z.link.reliable_ack = m.reliable_ack;
-        }
+        z.link.reliable_ack = if z.link.reliable_ack_behind(m.reliable_ack) {
+            z.link.netchan.reliable_sequence as i32
+        } else {
+            m.reliable_ack
+        };
     }
 
     /// What `SV_WriteDownloadToClient` (0x8086290) opens a download with:

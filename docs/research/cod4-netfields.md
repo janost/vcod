@@ -186,10 +186,17 @@ ends on its block's last byte. VERIFIED live.
   The window test is a signed 32-bit difference, so an acknowledge past
   `reliableSequence` or near `i32::MIN` passes it. vcod-server
   (`engine::conn::incoming`) drops a negative `messageAcknowledge` as
-  retail does; it also drops a `messageAcknowledge` of a message never
-  sent and a `reliableAcknowledge` outside `0..=reliableSequence` or 128
-  behind it, in 64-bit math, without retail's clamp: only a forgery
-  carries one, and nothing of it is committed.
+  retail does, and also one of a message never sent (vcod's). A
+  `reliableAcknowledge` 128 or more behind takes retail's clamp:
+  `reliableSequence` stored over it and the message dropped
+  (`Link::reliable_ack_behind`). One past `reliableSequence` passes, as
+  retail's signed test lets it, and the next message's command walk
+  starts past it (none sent). vcod takes the difference in 64-bit math,
+  so an acknowledge near `i32::MIN` counts as 128 behind and is clamped
+  where retail's wrapping test lets it in and walks 2^31 commands
+  (SEC-001). The clamp commits before the message is read; the netchan
+  sequence and the address still wait for the read (cod2-protocol.md
+  2.2).
 - A usercmd: bit 0 and a long serverTime (or bit 1 and a byte step), then
   a 1-bit "changed" flag XOR the key (section 8 has the rest). The key is
   `checksumFeed ^ messageAcknowledge ^ Com_HashKey(server command, 32)`,

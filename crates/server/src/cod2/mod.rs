@@ -781,7 +781,7 @@ impl Cod2Server {
     }
 
     fn client_packet(&mut self, from: SocketAddr, pkt: &[u8], now: Instant) {
-        let (slot, m) = match conn::incoming(&self.core, from, pkt) {
+        let (slot, m) = match conn::incoming(&mut self.core, from, pkt) {
             conn::Incoming::Message(slot, m) => (slot, m),
             // `SV_PacketEvent` (0x80960e2): a sender no slot holds is told
             // to go away (17.3).

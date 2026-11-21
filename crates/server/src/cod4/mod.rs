@@ -911,7 +911,7 @@ impl Cod4Server {
     /// A netchan packet: its slot by address and qport, the netchan, then
     /// `SV_ExecuteClientMessage`.
     fn client_packet(&mut self, from: SocketAddr, pkt: &[u8]) {
-        let conn::Incoming::Message(slot, m) = conn::incoming(&self.core, from, pkt) else {
+        let conn::Incoming::Message(slot, m) = conn::incoming(&mut self.core, from, pkt) else {
             return;
         };
         let svs = self.core.sv_time_ms;
