@@ -43,7 +43,7 @@ impl Session {
     pub(crate) fn cod4_mut(&mut self) -> Option<&mut Cod4Client> {
         match self {
             Session::Cod4(c) => Some(c),
-            _ => None,
+            Session::Cod1 | Session::Cod2(_) | Session::Cod4Menu(_) => None,
         }
     }
 
@@ -51,7 +51,7 @@ impl Session {
     pub(crate) fn cod4_front_mut(&mut self) -> Option<&mut Cod4Front> {
         match self {
             Session::Cod4Menu(f) => Some(f),
-            _ => None,
+            Session::Cod1 | Session::Cod2(_) | Session::Cod4(_) => None,
         }
     }
 
@@ -64,7 +64,9 @@ impl Session {
     pub(crate) fn cod4_front_quads(&self, size: (f32, f32)) -> Vec<hud::HudQuad> {
         match self {
             Session::Cod4Menu(f) if f.active() => f.quads(size),
-            _ => Vec::new(),
+            Session::Cod1 | Session::Cod2(_) | Session::Cod4(_) | Session::Cod4Menu(_) => {
+                Vec::new()
+            }
         }
     }
 
@@ -86,26 +88,35 @@ impl Session {
         shell: &mut Shell,
         pending: &mut Vec<UiEffect>,
     ) -> bool {
-        self.cod2_mut()
-            .is_some_and(|c| c.script_menus(ui, fs, shell, pending))
+        match self {
+            Session::Cod2(c) => c.script_menus(ui, fs, shell, pending),
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => false,
+        }
     }
 
     /// A drop's reason, or the map a new gamestate names.
     pub(crate) fn take_level_change(&mut self) -> Result<Option<String>> {
-        self.cod2_mut().map_or(Ok(None), |c| c.take_level_change())
+        match self {
+            Session::Cod2(c) => c.take_level_change(),
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => Ok(None),
+        }
     }
 
     /// A demo played out, with its `timedemo` line.
     pub(crate) fn demo_over(&self) -> Option<Option<String>> {
-        if let Session::Cod4(c) = self {
-            return c.demo_over();
+        match self {
+            Session::Cod4(c) => c.demo_over(),
+            Session::Cod2(c) => c.demo_over(),
+            Session::Cod1 | Session::Cod4Menu(_) => None,
         }
-        self.cod2()?.demo_over()
     }
 
     pub(crate) fn finish_pump(&mut self) {
-        if let Some(c) = self.cod2_mut() {
-            c.finish_pump();
+        match self {
+            Session::Cod2(c) => {
+                c.finish_pump();
+            }
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => {}
         }
     }
 
@@ -113,7 +124,8 @@ impl Session {
     pub(crate) fn pump(&mut self, cx: &mut Cod2Frame, cam: &mut FlyCamera) -> bool {
         match self {
             Session::Cod4(c) => c.pump(cx, cam),
-            _ => self.cod2_mut().is_some_and(|c| c.pump(cx, cam)),
+            Session::Cod2(c) => c.pump(cx, cam),
+            Session::Cod1 | Session::Cod4Menu(_) => false,
         }
     }
 
@@ -122,30 +134,41 @@ impl Session {
         cx: &mut Cod2Frame,
         cam: &mut FlyCamera,
     ) -> (Option<cod2_viewmodel::ViewFrame>, Vec<hud::HudQuad>) {
-        if let Session::Cod4(c) = self {
-            // A map change loading draws its loading screen alone.
-            if let Some(q) = c.map_load_quads(cx.r.screen_size()) {
-                return (None, q);
+        match self {
+            Session::Cod4(c) => {
+                // A map change loading draws its loading screen alone.
+                if let Some(q) = c.map_load_quads(cx.r.screen_size()) {
+                    return (None, q);
+                }
+                (c.take_view(), c.hud_quads(cx.r.screen_size(), cx.shell))
             }
-            return (c.take_view(), c.hud_quads(cx.r.screen_size(), cx.shell));
+            Session::Cod2(c) => c.scene(cx, cam),
+            Session::Cod1 | Session::Cod4Menu(_) => (None, Vec::new()),
         }
-        self.cod2_mut()
-            .map_or_else(|| (None, Vec::new()), |c| c.scene(cx, cam))
     }
 
     pub(crate) fn events(&mut self, cx: &mut Cod2Frame) -> Vec<Event2> {
-        self.cod2_mut().map_or_else(Vec::new, |c| c.events(cx))
+        match self {
+            Session::Cod2(c) => c.events(cx),
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => Vec::new(),
+        }
     }
 
     pub(crate) fn audio(&mut self, cx: &mut Cod2Frame, events: &[Event2], cam_pos: Vec3) {
-        if let Some(c) = self.cod2_mut() {
-            c.audio(cx, events, cam_pos);
+        match self {
+            Session::Cod2(c) => {
+                c.audio(cx, events, cam_pos);
+            }
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => {}
         }
     }
 
     pub(crate) fn effects(&mut self, cx: &mut Cod2Frame, events: &[Event2], cam_pos: Vec3) {
-        if let Some(c) = self.cod2_mut() {
-            c.effects(cx, events, cam_pos);
+        match self {
+            Session::Cod2(c) => {
+                c.effects(cx, events, cam_pos);
+            }
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => {}
         }
     }
 
@@ -155,12 +178,18 @@ impl Session {
         events: &[Event2],
         cam: &FlyCamera,
     ) -> Option<play::cod2_view::ViewOut> {
-        self.cod2_mut()?.view(cx, events, cam)
+        match self {
+            Session::Cod2(c) => c.view(cx, events, cam),
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => None,
+        }
     }
 
     pub(crate) fn idle(&mut self) {
-        if let Some(c) = self.cod2_mut() {
-            c.idle();
+        match self {
+            Session::Cod2(c) => {
+                c.idle();
+            }
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => {}
         }
     }
 
@@ -175,12 +204,10 @@ impl Session {
         vm: Option<cod2_viewmodel::ViewFrame>,
         fovs: (f32, f32, bool),
     ) -> DrawView {
-        if let Session::Cod4(c) = self {
-            return c.draw_view(fs, r, cam, vm, fovs);
-        }
-        match self.cod2() {
-            Some(c) => c.draw_view(fs, r, cam, fx, vm, fovs),
-            None => DrawView {
+        match self {
+            Session::Cod4(c) => c.draw_view(fs, r, cam, vm, fovs),
+            Session::Cod2(c) => c.draw_view(fs, r, cam, fx, vm, fovs),
+            Session::Cod1 | Session::Cod4Menu(_) => DrawView {
                 yaw: cam.yaw,
                 pitch: cam.pitch,
                 roll: 0.0,
@@ -197,16 +224,18 @@ impl Session {
         angles: (f32, f32, f32),
         size: (f32, f32),
     ) {
-        if let Session::Cod4(c) = self {
-            return c.world_hud(quads, view_proj, angles, size);
-        }
-        if let Some(c) = self.cod2() {
-            c.world_hud(quads, view_proj, angles, size);
+        match self {
+            Session::Cod4(c) => c.world_hud(quads, view_proj, angles, size),
+            Session::Cod2(c) => c.world_hud(quads, view_proj, angles, size),
+            Session::Cod1 | Session::Cod4Menu(_) => {}
         }
     }
 
     pub(crate) fn map_name(&self) -> Option<&str> {
-        self.cod2()?.map_name()
+        match self {
+            Session::Cod2(c) => c.map_name(),
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => None,
+        }
     }
 
     /// A CoD4 session's view drawn (`Cod4Client::in_game`).
@@ -216,8 +245,10 @@ impl Session {
 
     /// The drawn CoD2 frame's `serverTime`; None with no frame.
     pub(crate) fn frame_time(&self) -> Option<i32> {
-        let s = self.cod2()?.session.as_deref()?;
-        s.frame().map(|f| f.time_ms)
+        match self {
+            Session::Cod2(c) => c.session.as_deref()?.frame().map(|f| f.time_ms),
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => None,
+        }
     }
 
     /// Where a CoD4 session's entities stand this frame, which the sounds
@@ -225,7 +256,7 @@ impl Session {
     pub(crate) fn entity_positions(&self) -> HashMap<u32, Vec3> {
         match self {
             Session::Cod4(c) => c.entity_positions(),
-            _ => HashMap::new(),
+            Session::Cod1 | Session::Cod2(_) | Session::Cod4Menu(_) => HashMap::new(),
         }
     }
 
@@ -234,34 +265,39 @@ impl Session {
     pub(crate) fn entity_angles(&self) -> HashMap<u32, Vec3> {
         match self {
             Session::Cod4(c) => c.entity_angles(),
-            _ => HashMap::new(),
+            Session::Cod1 | Session::Cod2(_) | Session::Cod4Menu(_) => HashMap::new(),
         }
     }
 
     pub(crate) fn recording_status(&self) -> Option<(&str, u64)> {
-        if let Session::Cod4(c) = self {
-            return c.session.recording_status();
+        match self {
+            Session::Cod4(c) => c.session.recording_status(),
+            Session::Cod2(c) => c.recording_status(),
+            Session::Cod1 | Session::Cod4Menu(_) => None,
         }
-        self.cod2()?.recording_status()
     }
 
     pub(crate) fn connect_lines(&self, localized: &Localized) -> Vec<String> {
-        self.cod2()
-            .map_or_else(Vec::new, |c| c.connect_lines(localized))
+        match self {
+            Session::Cod2(c) => c.connect_lines(localized),
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => Vec::new(),
+        }
     }
 
     pub(crate) fn debug_lines(&mut self) -> Option<Vec<String>> {
         match self {
             Session::Cod4(c) => Some(c.debug_lines()),
-            _ => self.cod2_mut()?.debug_lines(),
+            Session::Cod2(c) => c.debug_lines(),
+            Session::Cod1 | Session::Cod4Menu(_) => None,
         }
     }
 
     /// The fly keys held this frame, which a watched CoD4 session flies
     /// its camera (a capture) or its spectator (live) by.
     pub(crate) fn set_fly_keys(&mut self, input: &crate::camera::InputState) {
-        if let Session::Cod4(c) = self {
-            c.set_keys(crate::cod4_client::FlyKeys::of(input));
+        match self {
+            Session::Cod4(c) => c.set_keys(crate::cod4_client::FlyKeys::of(input)),
+            Session::Cod1 | Session::Cod2(_) | Session::Cod4Menu(_) => {}
         }
     }
 
@@ -270,7 +306,7 @@ impl Session {
     pub(crate) fn cam_tag(&self) -> &'static str {
         match self {
             Session::Cod4(_) => "cod4",
-            _ => "cod2",
+            Session::Cod1 | Session::Cod2(_) | Session::Cod4Menu(_) => "cod2",
         }
     }
 
@@ -280,19 +316,24 @@ impl Session {
     pub(crate) fn live(&self) -> bool {
         match self {
             Session::Cod4(_) => true,
-            _ => self.cod2().is_some_and(|c| c.live()),
+            Session::Cod2(c) => c.live(),
+            Session::Cod1 | Session::Cod4Menu(_) => false,
         }
     }
 
     /// A CoD2 front-end connect is running.
     pub(crate) fn busy(&self) -> bool {
-        self.cod2().is_some_and(|c| c.busy())
+        match self {
+            Session::Cod2(c) => c.busy(),
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => false,
+        }
     }
 
     pub(crate) fn playing_demo(&self) -> bool {
         match self {
             Session::Cod4(c) => c.session.is_demo(),
-            _ => self.cod2().is_some_and(|c| c.playing_demo()),
+            Session::Cod2(c) => c.playing_demo(),
+            Session::Cod1 | Session::Cod4Menu(_) => false,
         }
     }
 
@@ -300,46 +341,41 @@ impl Session {
     pub(crate) fn shutdown(&mut self) {
         match self {
             Session::Cod4(c) => c.session.disconnect(),
-            _ => {
-                if let Some(c) = self.cod2_mut() {
-                    c.shutdown();
-                }
-            }
+            Session::Cod2(c) => c.shutdown(),
+            Session::Cod1 | Session::Cod4Menu(_) => {}
         }
     }
 
     pub(crate) fn park(&mut self) {
-        if let Some(c) = self.cod2_mut() {
-            c.park();
+        match self {
+            Session::Cod2(c) => {
+                c.park();
+            }
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => {}
         }
     }
 
     pub(crate) fn reset_render(&mut self) {
         match self {
             Session::Cod4(c) => c.reset_render(),
-            _ => {
-                if let Some(c) = self.cod2_mut() {
-                    c.reset_render();
-                }
-            }
+            Session::Cod2(c) => c.reset_render(),
+            Session::Cod1 | Session::Cod4Menu(_) => {}
         }
     }
 
     pub(crate) fn release_keys(&mut self) {
-        if let Session::Cod4(c) = self {
-            c.session.input.release_all();
-        }
-        if let Some(c) = self.cod2_mut() {
-            c.release_keys();
+        match self {
+            Session::Cod4(c) => c.session.input.release_all(),
+            Session::Cod2(c) => c.release_keys(),
+            Session::Cod1 | Session::Cod4Menu(_) => {}
         }
     }
 
     pub(crate) fn hide_scoreboard(&mut self) {
-        if let Session::Cod4(c) = self {
-            c.set_scores(false);
-        }
-        if let Some(c) = self.cod2_mut() {
-            c.hide_scoreboard();
+        match self {
+            Session::Cod4(c) => c.set_scores(false),
+            Session::Cod2(c) => c.hide_scoreboard(),
+            Session::Cod1 | Session::Cod4Menu(_) => {}
         }
     }
 
@@ -348,28 +384,32 @@ impl Session {
     pub(crate) fn cod4_scoreboard_key(&mut self, key: &str, step: i32) -> bool {
         match self {
             Session::Cod4(c) => c.hud.scoreboard_key(key, step),
-            _ => false,
+            Session::Cod1 | Session::Cod2(_) | Session::Cod4Menu(_) => false,
         }
     }
 
     pub(crate) fn scoreboard_mut(&mut self) -> Option<&mut hud::scoreboard::Scoreboard> {
-        self.cod2_mut()?.scoreboard_mut()
+        match self {
+            Session::Cod2(c) => c.scoreboard_mut(),
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => None,
+        }
     }
 
     /// The mouse's turn under a CoD2 or CoD4 shellshock's caps.
     pub(crate) fn turn(&mut self, degrees: [f32; 2]) -> [f32; 2] {
-        if let Session::Cod4(c) = self {
-            return c.turn(degrees);
-        }
-        match self.cod2_mut() {
-            Some(c) => c.turn(degrees),
-            None => degrees,
+        match self {
+            Session::Cod4(c) => c.turn(degrees),
+            Session::Cod2(c) => c.turn(degrees),
+            Session::Cod1 | Session::Cod4Menu(_) => degrees,
         }
     }
 
     pub(crate) fn reset_view_fx(&mut self) {
-        if let Some(c) = self.cod2_mut() {
-            c.reset_view_fx();
+        match self {
+            Session::Cod2(c) => {
+                c.reset_view_fx();
+            }
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => {}
         }
     }
 
@@ -379,11 +419,11 @@ impl Session {
         text: Option<&str>,
     ) -> Option<bool> {
         match self {
-            Session::Cod4(c) => return c.chat_key(code, text),
-            Session::Cod4Menu(f) if f.active() => return Some(f.key(code, text)),
-            _ => {}
+            Session::Cod4(c) => c.chat_key(code, text),
+            Session::Cod4Menu(f) if f.active() => Some(f.key(code, text)),
+            Session::Cod2(c) => c.chat_key(code, text),
+            Session::Cod1 | Session::Cod4Menu(_) => None,
         }
-        self.cod2_mut()?.chat_key(code, text)
     }
 
     /// The mouse over a CoD4 session's drawn script menu: raw counts `d`,
@@ -404,7 +444,7 @@ impl Session {
                 }
                 true
             }
-            _ => false,
+            Session::Cod1 | Session::Cod2(_) | Session::Cod4Menu(_) => false,
         }
     }
 
@@ -418,7 +458,7 @@ impl Session {
                 f.button(key, size);
                 true
             }
-            _ => false,
+            Session::Cod1 | Session::Cod2(_) | Session::Cod4Menu(_) => false,
         }
     }
 
@@ -428,7 +468,7 @@ impl Session {
         match self {
             Session::Cod4(c) => c.session.menus.release(),
             Session::Cod4Menu(f) => f.release(),
-            _ => {}
+            Session::Cod1 | Session::Cod2(_) => {}
         }
     }
 
@@ -462,7 +502,7 @@ impl Session {
                     }
                 }
                 Session::Cod4(c) => c.session.send_oob(&text),
-                _ => {}
+                Session::Cod1 | Session::Cod4Menu(_) => {}
             },
             Cod4RconOut::Host(to, text) => {
                 let mut p = vec![0xff; 4];
@@ -481,7 +521,7 @@ impl Session {
                 .session
                 .as_deref_mut()
                 .map_or(Vec::new(), |s| s.take_prints()),
-            _ => Vec::new(),
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => Vec::new(),
         }
     }
 
@@ -491,7 +531,7 @@ impl Session {
         match self {
             Session::Cod4(c) => c.session.menus.take_console(),
             Session::Cod4Menu(f) => f.take_console(),
-            _ => Vec::new(),
+            Session::Cod1 | Session::Cod2(_) => Vec::new(),
         }
     }
 
@@ -500,13 +540,15 @@ impl Session {
         match self {
             Session::Cod4(c) => c.menu_has_mouse(),
             Session::Cod4Menu(f) => f.active(),
-            _ => false,
+            Session::Cod1 | Session::Cod2(_) => false,
         }
     }
 
     pub(crate) fn menu_response(&mut self, menu: &str, response: &str) -> bool {
-        self.cod2_mut()
-            .is_some_and(|c| c.menu_response(menu, response))
+        match self {
+            Session::Cod2(c) => c.menu_response(menu, response),
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => false,
+        }
     }
 
     pub(crate) fn apply(
@@ -515,46 +557,50 @@ impl Session {
         shell: &Shell,
         start: std::time::Instant,
     ) -> bool {
-        if let Session::Cod4(c) = self {
-            return c.apply(effect);
+        match self {
+            Session::Cod4(c) => c.apply(effect),
+            Session::Cod2(c) => c.apply(effect, shell, start),
+            Session::Cod1 | Session::Cod4Menu(_) => false,
         }
-        self.cod2_mut()
-            .is_some_and(|c| c.apply(effect, shell, start))
     }
 
     pub(crate) fn record(&mut self, dir: &std::path::Path, name: Option<&str>) -> Option<String> {
-        if let Session::Cod4(c) = self {
-            return Some(c.session.start_recording(dir, name));
+        match self {
+            Session::Cod4(c) => Some(c.session.start_recording(dir, name)),
+            Session::Cod2(c) => c.record(dir, name),
+            Session::Cod1 | Session::Cod4Menu(_) => None,
         }
-        self.cod2_mut()?.record(dir, name)
     }
 
     pub(crate) fn stop_record(&mut self) -> Option<String> {
-        if let Session::Cod4(c) = self {
-            return Some(c.session.stop_recording());
+        match self {
+            Session::Cod4(c) => Some(c.session.stop_recording()),
+            Session::Cod2(c) => c.stop_record(),
+            Session::Cod1 | Session::Cod4Menu(_) => None,
         }
-        self.cod2_mut()?.stop_record()
     }
 
     pub(crate) fn shellshock(&mut self, args: Vec<String>) -> Result<(), Vec<String>> {
-        match self.cod2_mut() {
-            Some(c) => c.shellshock(args),
-            None => Err(args),
+        match self {
+            Session::Cod2(c) => c.shellshock(args),
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => Err(args),
         }
     }
 
     pub(crate) fn set_userinfo(&mut self, info: &vcod_common::net::Userinfo) {
-        if let Some(c) = self.cod2_mut() {
-            c.set_userinfo(info);
-        }
-        // CoD4's userinfo carries only `name` of these (`Conn::set_name`).
-        if let Session::Cod4(c) = self {
-            c.session.set_name(&info.name);
+        match self {
+            Session::Cod2(c) => c.set_userinfo(info),
+            // CoD4's userinfo carries only `name` of these (`Conn::set_name`).
+            Session::Cod4(c) => c.session.set_name(&info.name),
+            Session::Cod1 | Session::Cod4Menu(_) => {}
         }
     }
 
     pub(crate) fn escape(&mut self, ui: &mut Ui, shell: &Shell, out: &mut Vec<UiEffect>) -> bool {
-        self.cod2_mut().is_some_and(|c| c.escape(ui, shell, out))
+        match self {
+            Session::Cod2(c) => c.escape(ui, shell, out),
+            Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => false,
+        }
     }
 }
 
