@@ -1298,13 +1298,13 @@ impl ViewTail<'_> {
             true => fx.build_quads(cam.pos, cam_right, cam_up, time),
             false => Vec::new(),
         };
-        r.set_fx_quads(fs, quads, time as f32);
+        r.set_fx_quads(fs, quads, time);
         // CoD2's snow (fx::cod2_cloud), tested against the map's roofs
         let clouds = match draw_fx {
             true => fx.clouds(cam.pos, cam_right, cam_up, time),
             false => Default::default(),
         };
-        r.set_fx_clouds(fs, session.map_name(), &clouds, time as f32);
+        r.set_fx_clouds(fs, session.map_name(), &clouds, time);
         r.set_marks(
             fs,
             &fx.take_marks(time),
@@ -1340,7 +1340,7 @@ impl ViewTail<'_> {
                 eye: cam.pos,
                 fwd: cam_forward,
                 up: Vec3::Z,
-                time: time as f32,
+                time,
                 fov_x: world_fov,
                 cull,
                 hud_lines: Vec::new(),
@@ -3242,7 +3242,7 @@ fn loading_frame(
         eye: Vec3::ZERO,
         fwd: camera::basis(0.0, 0.0).0,
         up: Vec3::Z,
-        time: now,
+        time: f64::from(now),
         fov_x: camera::DEFAULT_FOV_DEG,
         cull,
         hud_lines: vec![text],

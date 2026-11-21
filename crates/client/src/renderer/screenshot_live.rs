@@ -42,7 +42,7 @@ fn draw(r: &mut Renderer, eye: Vec3, yaw: f32, pitch: f32, time: f32) {
             eye,
             fwd,
             up,
-            time,
+            time: f64::from(time),
             fov_x: fov,
             cull: CullMode::On,
             hud_lines: vec!["screenshot".into()],

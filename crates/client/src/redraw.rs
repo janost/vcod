@@ -131,7 +131,7 @@ impl App {
                     eye: Vec3::ZERO,
                     fwd: camera::basis(0.0, 0.0).0,
                     up: Vec3::Z,
-                    time: time as f32,
+                    time,
                     fov_x: camera::DEFAULT_FOV_DEG,
                     cull,
                     hud_lines: Vec::new(),
@@ -616,11 +616,11 @@ impl App {
         r.set_fx_quads(
             &self.fs,
             self.fx.build_quads(v.eye, eye_right, eye_up, time),
-            time as f32,
+            time,
         );
         let clouds = self.fx.clouds(v.eye, eye_right, eye_up, time);
         let map = self.session.map_name();
-        r.set_fx_clouds(&self.fs, map, &clouds, time as f32);
+        r.set_fx_clouds(&self.fs, map, &clouds, time);
         r.set_marks(
             &self.fs,
             &self.fx.take_marks(time),
@@ -645,7 +645,7 @@ impl App {
                 eye: v.eye,
                 fwd: camera::basis(v.yaw, v.pitch).0,
                 up: camera::up_hint(v.yaw, v.pitch, 0.0),
-                time: time as f32,
+                time,
                 fov_x: fov,
                 cull,
                 hud_lines: vec![format!(

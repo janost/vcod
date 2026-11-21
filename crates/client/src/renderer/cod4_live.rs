@@ -83,7 +83,7 @@ fn shot(
         eye,
         fwd,
         up,
-        time,
+        time: f64::from(time),
         fov_x: fov,
         cull: CullMode::On,
         hud_lines: Vec::new(),

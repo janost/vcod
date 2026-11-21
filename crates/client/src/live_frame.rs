@@ -329,7 +329,7 @@ impl App {
             eye: cam.pos,
             fwd: cam_forward,
             up: Vec3::Z,
-            time: time as f32,
+            time,
             fov_x: fov,
             cull,
             hud_lines: Vec::new(),
@@ -1843,11 +1843,11 @@ impl LiveCx<'_> {
             ));
             fx::sim::sort_back_to_front(&mut fx_quads, cam.pos);
         }
-        r.set_fx_quads(self.fs, fx_quads, time as f32);
+        r.set_fx_quads(self.fs, fx_quads, time);
         // CoD2's snow (fx::cod2_cloud), tested against the map's roofs
         let clouds = self.fx.clouds(cam.pos, cam_right, cam_up, time);
         let map = self.session.map_name();
-        r.set_fx_clouds(self.fs, map, &clouds, time as f32);
+        r.set_fx_clouds(self.fs, map, &clouds, time);
         r.set_marks(
             self.fs,
             &self.fx.take_marks(time),

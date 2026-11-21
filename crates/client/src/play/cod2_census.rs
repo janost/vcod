@@ -458,7 +458,7 @@ fn session(
         let (fwd, right, up) = crate::camera::basis(yaw.to_radians(), 0.0);
         let fov = crate::camera::DEFAULT_FOV_DEG;
         for time in [secs, secs + 0.05].map(f64::from) {
-            r.set_fx_quads(fs, fx.build_quads(eye, right, up, time), time as f32);
+            r.set_fx_quads(fs, fx.build_quads(eye, right, up, time), time);
             r.set_fx_lights(&fx.lights(eye, time));
             r.render(
                 Frame {
@@ -473,7 +473,7 @@ fn session(
                     eye,
                     fwd,
                     up,
-                    time: time as f32,
+                    time,
                     fov_x: fov,
                     cull: CullMode::On,
                     hud_lines: Vec::new(),

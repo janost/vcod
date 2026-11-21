@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use vcod_common::bsp::{self, DrawVert};
 use vcod_common::material::{
     AlphaGen, BlendFactor, Bundle, Clamp, DepthFunc, ImageRef, Material, MaterialLib,
-    PolygonOffset, RgbGen, Stage, TcGen, TexEnv,
+    PolygonOffset, RgbGen, ShaderClock, Stage, TcGen, TexEnv,
 };
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::shader::Shader;
@@ -215,7 +215,7 @@ impl MarkPass {
         requests: &[MarkRequest],
         temporary: &[MarkRequest],
         now_ms: i32,
-        time: f32,
+        time: ShaderClock,
         enabled: bool,
     ) {
         self.runs.clear();
@@ -526,7 +526,12 @@ impl MarkPass {
 
     /// Draws run `ri`'s stages back to back, the caller having bound the
     /// world camera at group 0; the number of draws.
-    pub(super) fn draw(&self, pass: &mut wgpu::RenderPass<'_>, ri: usize, time: f32) -> u32 {
+    pub(super) fn draw(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        ri: usize,
+        time: ShaderClock,
+    ) -> u32 {
         let run = &self.runs[ri];
         let Some(batches) = self.materials.get(&run.key) else {
             return 0;
@@ -638,8 +643,14 @@ impl Renderer {
         if !self.coronas.is_empty() {
             self.marks.prepare_sprites(&ctx, crate::corona::SHADER);
         }
-        self.marks
-            .update(&ctx, requests, temporary, now_ms, time as f32, enabled);
+        self.marks.update(
+            &ctx,
+            requests,
+            temporary,
+            now_ms,
+            ShaderClock(time),
+            enabled,
+        );
     }
 
     /// Builds every mark shader in `shaders` now (its images, stages and

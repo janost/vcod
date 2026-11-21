@@ -182,7 +182,7 @@ fn play(root: &std::path::Path, addr: std::net::SocketAddr) -> Option<Seen> {
                 eye,
                 fwd,
                 up,
-                time: t as f32,
+                time: t,
                 fov_x: view.fov,
                 cull: CullMode::On,
                 hud_lines: Vec::new(),
