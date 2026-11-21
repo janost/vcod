@@ -204,6 +204,17 @@ impl Renderer {
 
     /// Builds the map's GPU state; a previous map is dropped first.
     pub fn load_world(&mut self, bsp: &MapWorld, fs: &Pk3Fs) -> Result<()> {
+        self.load_world_placed(bsp, fs, None)
+    }
+
+    /// [`Self::load_world`] baking its props off `placed`, the map's
+    /// placements and models a caller already decoded for its collision.
+    pub fn load_world_placed(
+        &mut self,
+        bsp: &MapWorld,
+        fs: &Pk3Fs,
+        placed: Option<&props::Placed>,
+    ) -> Result<()> {
         let mut laps = vcod_common::laps::Laps::new("world GPU state");
         self.unload_world();
         let device = &self.device;
@@ -249,7 +260,7 @@ impl Renderer {
                 .light_grid
                 .is_some()
                 .then(|| sc.spawn(|| vcod_common::collision::CollisionWorld::build(bsp, &[])));
-            let props = props::build(fs, bsp, &mut lighting, &|skin| {
+            let skin_draw = |skin: &str| {
                 let script = prop_material(lib, cod2, skin);
                 props::SkinDraw {
                     sprite: script.and_then(|sh| sh.sprite),
@@ -266,7 +277,11 @@ impl Renderer {
                         && script.is_some_and(cod2_smodel),
                     skip: cod2 && script.is_some_and(|m| m.model_light == ModelLight::Objective),
                 }
-            });
+            };
+            let props = match placed {
+                Some(placed) => props::build_placed(fs, placed, &mut lighting, &skin_draw),
+                None => props::build(fs, bsp, &mut lighting, &skin_draw),
+            };
             (props, clip.map(vcod_common::laps::joined))
         });
         laps.lap("props");
@@ -1367,9 +1382,13 @@ impl Renderer {
         // textures. vcod's own: props and the implicit overlays keep their
         // slot after every other opaque.
         laps.lap("sky and sun");
-        let batch_keys: Vec<(f32, u32)> = {
+        let (batch_keys, shader_list) = {
             let mut images = ImageNumbers::default();
-            images.number("$white");
+            // the builtins number before anything (0x4f057e..0x4f06ea),
+            // `$white` standing for `*white`
+            for builtin in ["*default", "$white", "*identityLight", "*gray", "*scratch"] {
+                images.number(builtin);
+            }
             let lightmap = |i: u16| format!("$lightmap{i}");
             for i in 0..lightmap_views.len() {
                 images.number(&lightmap(i as u16));
@@ -1424,11 +1443,15 @@ impl Renderer {
                 true => sorted_places(&entries),
                 false => cod4_places(&entries, &soup_ranges, &bsp.soup_order),
             };
-            entries
+            let keys: Vec<(f32, u32)> = entries
                 .iter()
                 .zip(places)
                 .map(|(e, p)| (e.sort, p))
-                .collect()
+                .collect();
+            // CoD1's models register into the same list (shader doc 5)
+            let list = (fs.game() == vcod_common::game::Game::Cod1 && bsp.soup_order.is_empty())
+                .then(|| ShaderList::new(entries, images));
+            (keys, list)
         };
 
         let shadow_cast: Vec<ShadowCast> = batch_draws
@@ -1631,6 +1654,7 @@ impl Renderer {
             }),
             shadow_casters: None,
         });
+        self.dynamic.materials.set_shader_list(shader_list);
         // the materials were dropped with the old map
         self.resolve_viewmodel_skins(fs);
         laps.lap("finish");

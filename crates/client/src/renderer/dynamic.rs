@@ -34,14 +34,16 @@ pub(super) struct EntDraw {
     pub(super) surf: u32,
     pub(super) sort: f32,
     pub(super) order: u32,
+    /// `EntSkin::anchor`: where it draws among the world's on a sort tie.
+    pub(super) anchor: u32,
     /// A viewmodel surface: depth-hack range and the view camera.
     pub(super) gun: bool,
 }
 
 /// The live entities' and the viewmodel's `(instance, surface, material)`
 /// in instance order, in one list sorted as retail's key does: the
-/// material's sort, its load order (the sorted index), then the entity
-/// number. The gun is added after the packet entities, so on one material
+/// material's sort, its place among the model shaders (`EntSkin::order`,
+/// the sorted index), then the entity number. The gun is added after the packet entities, so on one material
 /// it draws after them (docs/research/cod11-shader-scripts.md, §5).
 pub(super) fn sorted_ent_draws<'a>(
     ents: impl Iterator<Item = (u32, u32, &'a EntSkin)>,
@@ -52,7 +54,8 @@ pub(super) fn sorted_ent_draws<'a>(
             inst,
             surf,
             sort: sk.sort,
-            order: sk.order,
+            order: sk.order.get(),
+            anchor: sk.anchor.get(),
             gun: is_gun,
         }
     };
@@ -153,8 +156,9 @@ pub(super) struct EntBound {
 
 /// Draws one entity surface's stages back to back, as retail's stage
 /// iterator does, over `indices` (the surface's own, or a run of its
-/// neighbours' from [`ent_run`]). `bound` tracks the bound pipeline across
-/// calls.
+/// neighbours' from [`ent_run`]) and `instances` (one, or a run of one
+/// model's from [`ent_instances`]). `bound` tracks the bound pipeline
+/// across calls.
 #[expect(clippy::too_many_arguments)]
 pub(super) fn draw_ent_stages(
     pass: &mut impl DrawSink,
@@ -163,7 +167,7 @@ pub(super) fn draw_ent_stages(
     skin_bg: &wgpu::BindGroup,
     skin: &EntSkin,
     surf: &VmSurface,
-    (indices, instance): (std::ops::Range<u32>, u32),
+    (indices, instances): (std::ops::Range<u32>, std::ops::Range<u32>),
     bound: &mut EntBound,
     depth: Depth,
     census: &std::cell::Cell<PassCensus>,
@@ -207,7 +211,7 @@ pub(super) fn draw_ent_stages(
             bound.params = Some(params);
             tally(census, |c| c.bind_groups += 1);
         }
-        pass.draw_inst(indices.clone(), surf.base_vertex, instance);
+        pass.draw_inst(indices.clone(), surf.base_vertex, instances.clone());
         tally(census, |c| match (depth, which) {
             (Depth::Prepass | Depth::FloatZ, _) => c.prepass_ents += 1,
             (_, EntPass::View) => c.gun += 1,
@@ -260,6 +264,76 @@ pub(super) fn ent_run(
         n += 1;
     }
     n
+}
+
+/// How many instances the run of `n` items at `k` ([`ent_run`]) draws
+/// over as one instanced draw: it and each next `n` items that repeat it
+/// on the next instance of the same model, no stop among them. The draw
+/// rasterizes instance by instance, so in the same order as one draw
+/// each. Only a one-stage skin repeats: a second stage would draw after
+/// every instance's first. `model_of` is an instance's model.
+pub(super) fn ent_instances(
+    items: &[SortedItem],
+    (k, n): (usize, usize),
+    draws: &[EntDraw],
+    model_of: impl Fn(u32) -> usize,
+    one_stage: bool,
+    stops: &[Option<usize>],
+) -> usize {
+    let SortedItem::Model(first) = items[k] else {
+        return 1;
+    };
+    let d = &draws[first];
+    if !one_stage || d.gun {
+        return 1;
+    }
+    let model = model_of(d.inst);
+    let repeats = |r: usize| {
+        (0..n).all(|t| {
+            let at = k + r * n + t;
+            match items.get(at) {
+                Some(&SortedItem::Model(m)) => {
+                    let e = &draws[m];
+                    !e.gun
+                        && e.inst as usize == d.inst as usize + r
+                        && e.surf as usize == d.surf as usize + t
+                        && model_of(e.inst) == model
+                        && !stops.contains(&Some(at))
+                }
+                _ => false,
+            }
+        })
+    };
+    let mut r = 1;
+    while repeats(r) {
+        r += 1;
+    }
+    r
+}
+
+/// The depth prepass's [`ent_instances`]: how many instances the draw
+/// of `surfs[k..k + n]` (one instance's surfaces, `(instance, surface)`)
+/// takes, it and each next `n` entries that repeat it on the next
+/// instance of the same model.
+pub(super) fn prepass_instances(
+    surfs: &[(u32, u32)],
+    (k, n): (usize, usize),
+    model_of: impl Fn(u32) -> usize,
+) -> usize {
+    let (inst, _) = surfs[k];
+    let model = model_of(inst);
+    let repeats = |r: usize| {
+        (0..n).all(|t| {
+            surfs.get(k + r * n + t).is_some_and(|&(i, s)| {
+                i as usize == inst as usize + r && s == surfs[k + t].1 && model_of(i) == model
+            })
+        })
+    };
+    let mut r = 1;
+    while repeats(r) {
+        r += 1;
+    }
+    r
 }
 
 /// The uploaded surfaces [`Renderer::dynamic_model_hiding`] draws, by
@@ -790,6 +864,8 @@ pub(super) struct DynamicPass {
     pub(super) placed_boxes: PlacedBoxes,
     /// The instances' entity draws in draw order, before the view cull.
     pub(super) ent_sorted: EntSorted,
+    /// `EntityMaterials::order_epoch` `ent_sorted` was sorted under.
+    pub(super) ent_sorted_epoch: u32,
     /// Per instance, where its lights are picked.
     pub(super) light_origins: Vec<glam::Vec3>,
     /// CoD4: each instance's posed world box (mins, maxs), as
@@ -1091,12 +1167,16 @@ impl Renderer {
             self.prefetch_skins(fs, skins.iter());
             return;
         }
-        let (lib, images) = (&self.shader_lib, &self.model_images);
-        let (textures, gamma) = (self.textures, self.image_gamma);
+        // a skin no stage of reads its own image is left to its draw's
+        // white group (`upload_dyn_lod`)
+        let mats = &mut self.dynamic.materials;
         let fresh: Vec<&String> = skins
             .iter()
             .filter(|s| !self.prepared_skins.contains_key(s.as_str()))
+            .filter(|s| mats.may_read_skin_image(fs, &self.shader_lib, s))
             .collect();
+        let (lib, images) = (&self.shader_lib, &self.model_images);
+        let (textures, gamma) = (self.textures, self.image_gamma);
         let prepared = vcod_common::laps::par_map(&fresh, |skin| {
             prepare_skin(fs, lib, images, &textures, gamma.as_ref(), skin)
         });
@@ -1246,35 +1326,39 @@ impl Renderer {
         materials: &[String],
     ) -> Option<usize> {
         let gamma = self.image_gamma;
-        if fs.game() == vcod_common::game::Game::Cod2 {
-            // CoD2's and CoD4's stages bind their images by path: a skin
-            // image only a `$texturename` stage or the fallback reads
-            // uploads, the others bind white, their pak read marked
-            for skin in drawn_skins(std::iter::once((surfaces, materials))) {
-                if self.dynamic.skin_groups.contains_key(&skin) {
-                    continue;
-                }
-                let ent = self.dynamic.materials.skin(
-                    &self.device,
-                    &self.queue,
-                    (fs, &self.model_images),
-                    &self.shader_lib,
-                    gamma.as_ref(),
-                    &skin,
-                );
-                let g = match ent.reads_skin_image() {
-                    true => {
-                        let (img, levels) = self.skin_image(fs, &skin);
-                        let view = upload_levels(&self.device, &self.queue, &skin, &img, &levels);
-                        vm_skin_group(&self.device, &self.vm_pass, &view)
-                    }
-                    false => {
-                        super::prop_skin::mark_colour_map(fs, self.shader_lib.get(&skin));
-                        self.dynamic.materials.images[0].clone()
-                    }
-                };
-                self.dynamic.skin_groups.insert(skin, g);
+        let cod2 = fs.game() == vcod_common::game::Game::Cod2;
+        // Stages bind their images by path: a skin image only a
+        // `$texturename` stage or the fallback reads uploads, the others
+        // bind white. Built in surface order, as the upload's loop
+        // below reads them, so each skin's load order holds.
+        for skin in drawn_skins(std::iter::once((surfaces, materials))) {
+            if self.dynamic.skin_groups.contains_key(&skin) {
+                continue;
             }
+            let ent = self.dynamic.materials.skin(
+                &self.device,
+                &self.queue,
+                (fs, &self.model_images),
+                &self.shader_lib,
+                gamma.as_ref(),
+                &skin,
+            );
+            let g = match ent.reads_skin_image() {
+                true => {
+                    let (img, levels) = self.skin_image(fs, &skin);
+                    let view = upload_levels(&self.device, &self.queue, &skin, &img, &levels);
+                    vm_skin_group(&self.device, &self.vm_pass, &view)
+                }
+                false => {
+                    // CoD2's pak read of the colour map is marked; CoD1's
+                    // retail never opens a scripted skin's own image
+                    if cod2 {
+                        super::prop_skin::mark_colour_map(fs, self.shader_lib.get(&skin));
+                    }
+                    self.dynamic.materials.images[0].clone()
+                }
+            };
+            self.dynamic.skin_groups.insert(skin, g);
         }
         let mut groups = std::mem::take(&mut self.dynamic.skin_groups);
         let uploaded = upload_vm_model(
@@ -1776,6 +1860,7 @@ pub(super) fn create_dynamic_pass(
         light_buf,
         placed_boxes: PlacedBoxes::default(),
         ent_sorted: EntSorted::default(),
+        ent_sorted_epoch: 0,
         light_written: Written::default(),
         instance_written: Written::default(),
         bone_written: Written::default(),

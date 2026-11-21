@@ -303,8 +303,7 @@ does the same, so the explode plays.
   `scale` in the size channel, loads every model element's xmodel out of
   the zones with the entity models (`cod4_fly::entity_models`) and draws
   the fx system's models as entity instances (`Cod4Client::draw`). Its
-  axes are the CoD2 debris model's (`FxSystem::models`), not 0x497cc0's;
-  how they sit beside retail's is pending a look.
+  axes are 0x497cc0's (9.1).
 - **Sizes are radii.** VERIFIED (the instructions). The draw state's
   visual (0x496ad0) is the lerp of the samples' `size[0]` (+0xc, +0x24,
   +0x3c, +0x54) at the draw's +0x78, with no factor; `size[1]` takes its
@@ -324,6 +323,84 @@ does the same, so the explode plays.
   list compiles them; the lighting fraction, the sort order and
   collision against the world are not applied. The distance fades are
   (section 18).
+
+### 9.1 Model elements' axes
+
+`FX_DrawElem_Model`'s axes (`iw3mp.exe` 0x497cc0, called at 0x4983fe)
+and the draw state 0x4991e0 fills before it. VERIFIED (the
+instructions) unless labelled:
+
+- The draw state: `+0x44` the spawn's random index (0x49921d), `+0x48`
+  the life in ms drawn off `lifeSpanMsec` (0x499250), `+0x4c` the ms
+  elapsed, the life once it has run out (0x499279..0x49928d), `+0x50`
+  their ratio, `+0x10` the element's frame from 0x4a5d30 (origin, then
+  three axes from `+0xc`), `+0x54` the element's origin in that frame
+  (0x4992ad..0x499306), `+0x8` the element, `+0xc` its def.
+- 0x497c40 is the ms the angles turn by: with `r` the element's byte at
+  `+2` and `rest = r / 255 * life` (the double at 0x70aea0, 1/255) and
+  `d = elapsed - rest`, it is `elapsed` for `d <= 0`, `rest + 150` for
+  `d >= 300` (the float at 0x70afe0, the double at 0x70ade8) and
+  `elapsed - d * d / 600` between (the double at 0x70afd8, 1/600). So a
+  turn slows to a stop over the 300 ms after the element came to rest,
+  150 ms of turn past it.
+- 0x4a6500 draws the angles: per axis `spawnAngles` (`+0x60`, base and
+  amplitude) by `fx_randomTable` entries 12..14 past the index, plus
+  `angularVelocity` (`+0x78`) by entries 3..5 times those ms, radians
+  and radians a ms. 0x4a62f0 turns them into axes (sines of yaw, pitch,
+  roll at 0x4a6310, 0x4a633b, 0x4a6368; forward `(cp cy, cp sy, -sp)`)
+  and each axis into the frame: `out[i] = sum_j axis[i][j] * frame[j]`
+  (0x4a63a5..0x4a64f9). 0x562980 makes the placement's quaternion of
+  them; the origin is `+0x54`, the scale `+0x80` (0x497d0d..0x497d25).
+- The frame, 0x4a5d30 by the run bits (flags 0xc0): 0 the world's axes
+  at the origin (0x4a5d4b..0x4a5d7e); 0x40 the effect's frame at `+0x28`
+  (0x4a5d84), 0x80 the one at `+0x44` (0x4a5dad), each through
+  0x561100; 0xc0 a frame on the spawn offset: forward the offset 0x4a5ab0
+  adds to the spawn origin, normalized, `(1, 0, 0)` when it is none
+  (0x4a5df1..0x4a5e2f). Under spawn bits 0x10 (a sphere) up is
+  0x55fed0's perpendicular to it (the unit axis it is shortest along,
+  the lower index on a tie, less its share along it, normalized) and
+  left up x forward (0x55fa30); else left is `(0, 0, 1)` x forward, or
+  `(0, 1, 0)` x forward where `|forward.z|` is 0.999 or more (the double
+  at 0x70b270), normalized, and up forward x left (0x4a5e55..0x4a5eac).
+  That `+0x28` is the effect's frame at its spawn and `+0x44` its frame
+  now is INFERRED.
+- The element's byte at `+2` is 255 at the spawn (0x4a2763). The update
+  0x4a4a00 sets it once, while it is 255, when the element's position
+  held over the update (0x432740, an exact compare; with flags 0x100 only
+  on an update that hit something, 0x4a4b6e): `ceil((ms - begin) * 255 /
+  life - 0.25)` (0x4a3e90, the doubles at 0x70aee0 and 0x70b058; 0x6715d0
+  runs under control word 0x1b3f, rounding up), stored truncated
+  (0x4a4b9d..0x4a4bb2).
+- Flags 0x8000000 on a model element (type 5 at `+0xb0`): the spawn
+  makes a physics body for it (0x4a2838, 0x4a1ff0) at the frame's origin
+  plus the element's offset in its axes, turned by the spawn angles at 0
+  ms, spinning at `angularVelocity` times 1000 (the double at 0x70af28)
+  at body `+0x140`, in world 1 (0x5a4fb0 with edi 1), its collision off
+  the model (0x5a5710), the body's id at element `+0x18`. The draw then
+  takes the body's position and orientation (0x498340: 0x5a6ec0 in world
+  1 under the critical section at 0xcc12038) in place of the frame's.
+  Freeing the element destroys the body (0x4a2909..0x4a291d, 0x5a58c0).
+
+Over `common_mp` and every MP map zone, 127 distinct effects' model
+elements: 73 under run bits 0x80 (52 of them colliding and turning, the
+shell ejects among them), 37 under 0x40, 13 under 0xc0, 4 under 0; 14
+carry 0x8000000 (cluster bombs, breakables, the copy paper box, the
+watermelon). VERIFIED (a scratch
+walk of the zones).
+
+vcod (`fx::sim`, a CoD4 model element's `Cod4Pose`): the angles and the
+angular velocity drawn per element off its own random stream, turned by
+0x497c40's ms, in the world's axes under run bits 0, the effect's
+frame under 0x40 and 0x80 (the tag's as it stands on a bolted element,
+the spawn's otherwise), and under 0xc0 the frame built each draw on the
+direction vcod's spawn offset took. The rest is vcod's update holding
+the element's position, as 0x4a4a00 tests it. Until this, a model
+element took CoD1's debris spin, 10 times too fast (CoD1's angle rate
+is per 100 ms) and turned by the spawn direction under every run bit.
+Not modelled: 0x8000000's physics body. vcod moves such an element as
+it moves the others and turns it as the non-physics arm does, which
+matches the body only up to its first contact. How the models sit
+beside retail's is pending a look.
 
 ## 10. The weapon's tags
 

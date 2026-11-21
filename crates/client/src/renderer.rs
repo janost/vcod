@@ -114,6 +114,7 @@ mod world_encode;
 mod world_load;
 use bundles::*;
 use draw_list::*;
+pub(crate) use draw_list::{AFTER_THE_WORLD, ShaderList};
 pub(crate) use dynamic::*;
 use fog::*;
 use frame::*;

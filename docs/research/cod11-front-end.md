@@ -1450,6 +1450,26 @@ file).
   implicit images take 0x4ebf20's path. VERIFIED: 0x80 is set at 0x4eee2d
   (in 0x4eed80, for an image without flag 0x100); which images reach it is
   not traced.
+- The sheet candidates. VERIFIED (the instructions), 0x4eed80's only
+  caller is the shader-type path's image loop (0x4fc2ce, 0x4fc0c0), which
+  loads a typed skin's `$texturename` image (bundle slot `+0x50 == 10`)
+  with `edi = (0x16c4e68 == 0)`; 0x4eed80 sets 0x80 at 0x4eee2d only when
+  that is 0 (a model number is set, so a model registration is running),
+  `r_optimizeTextures` (0x16c3854) and `r_optimize` (0x16c383c) are both
+  non-zero and flag 0x100 is clear, else clears it (0x4eee34). 0x4ed9f0,
+  called first, parses a `:` suffix of the name (`strchr` 0x526200 with
+  0x3a) into four floats compared against 1.0 (0x568e60). VERIFIED,
+  0x4ec730: an image keeping 0x80 is created (0x4ec310) and, when its
+  format is `GL_RGBA` (0x1908) or both sides are 4 or more, not uploaded:
+  0x4ec79e stores its format and the model number (0x16c4e68 into `+0x6c`)
+  and returns it for the sheet build; else 0x80 is cleared and the image
+  goes up through 0x4ec490. VERIFIED, 0x4f0d20 sets a shader's 0x800 when
+  a stage image kept 0x80 (0x4f0db3). INFERRED: so with the defaults the
+  typed skins (`type@image`) of the models registered before the precache
+  ends draw from `*sheet%03i` atlases, with the sheet path's picmip
+  (0x4ef590) and remapped texture coordinates. vcod uploads each such
+  image alone (backlog 154, 157); the packer (0x4fcdf0, 0x4ef8e0,
+  0x4ef800) and the coordinate remap are not read.
 - `r_texturebits`. VERIFIED, 0x4ebe30, uncompressed only (a compressed
   format returns at once): an image with any alpha below 255 goes up as
   `GL_RGBA4` (0x8056) with 16, `GL_RGBA8` with 32, else generic `GL_RGBA`;
@@ -1515,10 +1535,31 @@ file).
   is copied over the input. INFERRED: with a side of 1 the level has no
   texels, the copy is empty, and the next level is the leading texels of
   the one above.
-- `r_colorMipLevels`. VERIFIED, 0x4ebf20's mip loop calls 0x4ebd60 for each
-  level while the cvar is non-zero. INFERRED from 0x4ebb90 (a blend of each
-  texel toward a colour by its alpha) that it tints levels for debugging.
-  vcod does not register it.
+- `r_colorMipLevels`. VERIFIED, `R_Register` stores it at 0x16c36e4
+  (0x4b364a; name 0x5580e4, default "0" 0x56871c, flags 0x20). VERIFIED
+  (the instructions), 0x4ebf20's mip loop (0x4ec1c0..0x4ec291): the table
+  pointer starts at 0x571370 and steps 4 bytes before each level is built,
+  so level `n` (the first uploaded level is 0, after any picmip) reads
+  entry `n`; while the cvar's integer (`+0x20`, read at 0x4ec256) is
+  non-zero, 0x4ebd60 tints the level in place after 0x4eb1d0 built it and
+  before its upload, so the next level filters the tinted one down (a `#N`
+  file level is tinted as loaded). Level 0 is never tinted. VERIFIED, the
+  table (`.data` 0x571370, 16 entries of r, g, b, weight): 0 0 0 0, then
+  red, green, blue, yellow, cyan, magenta, red, green, blue, ff8000,
+  00ff80, 8000ff, red, green, blue, each weight 0x80.
+- VERIFIED, 0x4ebd60 by format: `GL_RGBA` (0x1908) goes to 0x4ebb90, which
+  sets each texel's r, g and b to `(c * (255 - w) + tint * w) >> 8` over
+  `width * height` texels and leaves alpha. DXT1 (0x83f0, 0x83f1) and
+  DXT3/5 (0x83f2, 0x83f3, colour half at block `+8`) go to 0x4ebc00 with a
+  block size of 8 or 16: over the first `(width * height - 1) / 16 + 1`
+  blocks it blends each 565 endpoint per field, `((c & mask) * (255 - w) +
+  (tint field) * w) >> 8 & mask`, the tint cut to 5:6:5 bits first. Only
+  for size 16, when the two new endpoints' order differs from the old
+  ones', it stores them swapped and rewrites the index word as `i ^ ((~i
+  >> 1) & 0x55555555)`, which trades indices 0 and 1 and keeps 2 and 3.
+  vcod (`texture_settings::prepare`, `TextureSettings::color_mips`):
+  registered latched, read at `vid_restart` on CoD1 only, both paths as
+  above.
 - Address modes. VERIFIED, 0x4ec490: after the upload it sets
   `GL_TEXTURE_WRAP_S` (0x2802) to `GL_CLAMP_TO_EDGE` (0x812f) with image
   flag 0x10, else `GL_REPEAT` (0x2901), and `GL_TEXTURE_WRAP_T` (0x2803) by
@@ -1718,7 +1759,8 @@ file).
     reaches it.
   - `r_simpleMipMaps 0` and `r_weightMipMaps` in (0, 1] swap the box for
     the kernel and the weighted step, latched to `vid_restart`.
-    `r_colorMipLevels` is not ported.
+    `r_colorMipLevels`, latched the same way, tints each level below the
+    first as 0x4ebd60 does (section 14.4).
   - Effect images take `r_picmip` and the chain like world ones. The sky
     box takes flags 0x33 whatever its block says; the sun disc and flare
     follow their own blocks. The flare samples `GL_LINEAR` when unmipped

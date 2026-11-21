@@ -37,10 +37,6 @@ const ALLOWED: &[(&str, &str)] = &[
         "left (`cod2-client-perf.md` 11).",
     ),
     (
-        "crates/client/src/renderer/dynamic.rs",
-        "(a split, the dlights), which a run never crosses.",
-    ),
-    (
         "crates/client/src/play/cod4_sweep.rs",
         "`soak.md` under `VCOD_SWEEP_OUT` (default `tmp/cod4-soak`).",
     ),

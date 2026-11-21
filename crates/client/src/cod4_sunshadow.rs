@@ -335,8 +335,9 @@ fn draw_runs(
 /// whatever the order, so state is set only where it changes and an
 /// instance's next surface on the same buffers and image, its indices
 /// following on, joins the last draw: the same triangles, fewer calls
-/// (cod4-client-perf.md 38). The instance comes in as `first_instance`
-/// over the whole instance buffer, not a slice per draw.
+/// (cod4-client-perf.md 38). The next instance's same draw then joins
+/// it as an instance range (cod4-client-perf.md 41.2). The instance comes in as
+/// `first_instance` over the whole instance buffer, not a slice per draw.
 fn draw_entities(
     pass: &mut wgpu::RenderPass<'_>,
     e: &Entities<'_>,
@@ -378,8 +379,8 @@ fn draw_entities(
             pass.set_vertex_buffer(0, d.vertex_buf.slice(..));
             pass.set_index_buffer(d.index_buf.slice(..), wgpu::IndexFormat::Uint16);
         }
-        ShadowOp::Draw(r, base, inst) => {
-            pass.draw_indexed(r, base, inst..inst + 1);
+        ShadowOp::Draw(r, base, insts) => {
+            pass.draw_indexed(r, base, insts);
             calls += 1;
         }
     });
@@ -401,20 +402,40 @@ struct CasterKey<B, I> {
 /// caster whose state to bind.
 #[derive(Clone, Debug, PartialEq)]
 enum ShadowOp {
-    Pipeline { cut: bool },
+    Pipeline {
+        cut: bool,
+    },
     Image(usize),
     Buffers(usize),
-    Draw(std::ops::Range<u32>, i32, u32),
+    /// Indices, base vertex, instances.
+    Draw(std::ops::Range<u32>, i32, std::ops::Range<u32>),
 }
 
 /// [`draw_entities`]' state changes and joined draws over `keys` (each
 /// caster's index and key, in draw order): state only where it changes,
 /// and a caster on the open draw's instance, base vertex, buffers and
-/// image whose indices follow on extends it.
+/// image whose indices follow on extends it. A draw with no state change
+/// before it, over the last draw's indices and base vertex on the next
+/// instance, extends that draw's instances.
 fn plan_draws<B: PartialEq + Copy, I: PartialEq + Copy>(
     keys: impl Iterator<Item = (usize, CasterKey<B, I>)>,
-    mut emit: impl FnMut(ShadowOp),
+    mut out: impl FnMut(ShadowOp),
 ) {
+    let mut last: Option<ShadowOp> = None;
+    let mut emit = |op: ShadowOp| {
+        if let (Some(ShadowOp::Draw(r, base, insts)), ShadowOp::Draw(r2, base2, insts2)) =
+            (&mut last, &op)
+            && r == r2
+            && base == base2
+            && insts.end == insts2.start
+        {
+            insts.end = insts2.end;
+            return;
+        }
+        if let Some(prev) = last.replace(op) {
+            out(prev);
+        }
+    };
     let mut tested = None;
     let mut image: Option<I> = None;
     let mut buffers: Option<B> = None;
@@ -433,7 +454,7 @@ fn plan_draws<B: PartialEq + Copy, I: PartialEq + Copy>(
             continue;
         }
         if let Some((r, base, inst)) = open.take() {
-            emit(ShadowOp::Draw(r, base, inst));
+            emit(ShadowOp::Draw(r, base, inst..inst + 1));
         }
         if tested != Some(d.image.is_some()) {
             emit(ShadowOp::Pipeline {
@@ -452,7 +473,10 @@ fn plan_draws<B: PartialEq + Copy, I: PartialEq + Copy>(
         open = Some((d.indices, d.base_vertex, d.instance));
     }
     if let Some((r, base, inst)) = open {
-        emit(ShadowOp::Draw(r, base, inst));
+        emit(ShadowOp::Draw(r, base, inst..inst + 1));
+    }
+    if let Some(op) = last {
+        out(op);
     }
 }
 
@@ -1496,7 +1520,7 @@ mod tests {
         let joined = plan(&[key(0, 0, 0..6, 1, None), key(0, 0, 6..12, 1, None)]);
         assert_eq!(
             joined,
-            [Pipeline { cut: false }, Buffers(0), Draw(0..12, 0, 0)]
+            [Pipeline { cut: false }, Buffers(0), Draw(0..12, 0, 0..1)]
         );
         for (second, why) in [
             (key(0, 0, 9..12, 1, None), "a gap"),
@@ -1515,9 +1539,9 @@ mod tests {
                 Pipeline { cut: true },
                 Image(0),
                 Buffers(0),
-                Draw(0..6, 0, 0),
+                Draw(0..6, 0, 0..1),
                 Image(1),
-                Draw(6..12, 0, 0),
+                Draw(6..12, 0, 0..1),
             ]
         );
         let mixed = plan(&[key(0, 0, 0..6, 1, Some(7)), key(0, 0, 6..12, 1, None)]);
@@ -1527,9 +1551,52 @@ mod tests {
                 Pipeline { cut: true },
                 Image(0),
                 Buffers(0),
-                Draw(0..6, 0, 0),
+                Draw(0..6, 0, 0..1),
                 Pipeline { cut: false },
-                Draw(6..12, 0, 0),
+                Draw(6..12, 0, 0..1),
+            ]
+        );
+    }
+
+    /// The next instance's same draw on the same state joins as an
+    /// instance range; a gap in the instances, other indices or a state
+    /// change between starts a draw (cod4-client-perf.md 41.2).
+    #[test]
+    fn entity_caster_draws_of_the_next_instance_join_as_instances() {
+        use ShadowOp::*;
+        let two = |a, b| {
+            let mut v = Vec::new();
+            for i in [a, b] {
+                v.push(key(i, 0, 0..6, 1, None));
+                v.push(key(i, 0, 6..12, 1, None));
+            }
+            v
+        };
+        assert_eq!(
+            plan(&two(3, 4)),
+            [Pipeline { cut: false }, Buffers(0), Draw(0..12, 0, 3..5)]
+        );
+        let gap = plan(&two(3, 5));
+        assert_eq!(
+            gap.iter().filter(|o| matches!(o, Draw(..))).count(),
+            2,
+            "{gap:?}"
+        );
+        let other = plan(&[key(0, 0, 0..6, 1, None), key(1, 0, 0..9, 1, None)]);
+        assert_eq!(
+            other.iter().filter(|o| matches!(o, Draw(..))).count(),
+            2,
+            "{other:?}"
+        );
+        let bufs = plan(&[key(0, 0, 0..6, 1, None), key(1, 0, 0..6, 2, None)]);
+        assert_eq!(
+            bufs,
+            [
+                Pipeline { cut: false },
+                Buffers(0),
+                Draw(0..6, 0, 0..1),
+                Buffers(1),
+                Draw(0..6, 0, 1..2),
             ]
         );
     }

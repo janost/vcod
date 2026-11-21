@@ -466,6 +466,16 @@ fn emitter(
             falloff: trail_falloff(a, e),
         });
     }
+    if d.elem_type == Some(ElemType::Model) {
+        use crate::fx::efx::Cod4ModelFrame;
+        em.cod4_model = Some(match d.flags & flags::RUN_MASK {
+            0 => Cod4ModelFrame::World,
+            flags::RUN_MASK => Cod4ModelFrame::Offset {
+                sphere: d.flags & flags::SPAWN_OFFSET_MASK == flags::SPAWN_OFFSET_SPHERE,
+            },
+            _ => Cod4ModelFrame::Effect,
+        });
+    }
     if !em.emit_fx.is_empty() {
         let (a, b) = ends(d.emit_dist);
         em.cod4_emit = Some(crate::fx::efx::Cod4Emit {

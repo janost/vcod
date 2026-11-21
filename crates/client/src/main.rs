@@ -1058,19 +1058,20 @@ struct LivePhase {
     seat_frac: f32,
 }
 
-/// The live phase off `bsp`, with the weapons configstring 7 (`weapons_cs`)
-/// names read off `fs`.
-fn live_phase(fs: &Pk3Fs, bsp: &MapWorld, weapons_cs: &str) -> Phase {
+/// The live phase off `bsp` and its props (`placed`), with the weapons
+/// configstring 7 (`weapons_cs`) names read off `fs`.
+fn live_phase(fs: &Pk3Fs, bsp: &MapWorld, placed: &props::Placed, weapons_cs: &str) -> Phase {
     Phase::Live(Box::new(LivePhase::new(
-        client_world(fs, bsp),
+        client_world(bsp, placed),
         live_weapons(fs, weapons_cs),
     )))
 }
 
-/// The client's collision map off `bsp`, what `CM_LoadMap` (CoDMP.exe
-/// 0x419c90) loads for the cgame.
-fn client_world(fs: &Pk3Fs, bsp: &MapWorld) -> collision::CollisionWorld {
-    let world = collision::CollisionWorld::build(bsp, &props::collision_tris(fs, &bsp.entities));
+/// The client's collision map off `bsp` and its props, what `CM_LoadMap`
+/// (CoDMP.exe 0x419c90) loads for the cgame. `placed` is decoded once for
+/// it and the renderer's props (`Renderer::load_world_placed`).
+fn client_world(bsp: &MapWorld, placed: &props::Placed) -> collision::CollisionWorld {
+    let world = collision::CollisionWorld::build(bsp, &placed.collision_tris());
     // Predict as the retail Windows client does, not as the server.
     world.set_arith(vcod_common::patch::Arith::for_client());
     // A brush model clips only through its snapshot entity
@@ -3023,18 +3024,19 @@ fn read_map(fs: &dyn AssetSource, map: &str) -> Result<MapWorld> {
     mapworld::find(fs, map).with_context(|| format!("cannot load map '{map}'"))
 }
 
-/// The serverinfo's map and its collision map off `fs`: the CPU half of
-/// [`App::reload_live_map`].
+/// The serverinfo's map, its collision map and its props off `fs`: the
+/// CPU half of [`App::reload_live_map`].
 fn reread_live_map(
     fs: &Pk3Fs,
     configstrings: &[String],
-) -> Result<(MapWorld, collision::CollisionWorld)> {
+) -> Result<(MapWorld, collision::CollisionWorld, props::Placed)> {
     let serverinfo = configstrings.first().map_or("", String::as_str);
     let map = net::info_value_for_key(serverinfo, "mapname")
         .context("the server sent no mapname in its serverinfo")?;
     let bsp = read_map(fs, map)?;
-    let world = client_world(fs, &bsp);
-    Ok((bsp, world))
+    let placed = props::Placed::load(fs, &bsp.entities);
+    let world = client_world(&bsp, &placed);
+    Ok((bsp, world, placed))
 }
 
 /// The CPU half of [`App::restart_cgame`]: a live game's cgame state
@@ -3142,9 +3144,11 @@ fn load_map(
         window.set_title(title);
     }
     laps.lap("ambient");
-    let phase = live_phase(fs, &bsp, net.configstring(7));
+    let placed = props::Placed::load(fs, &bsp.entities);
+    let phase = live_phase(fs, &bsp, &placed, net.configstring(7));
     laps.lap("collision and weapons");
-    r.load_world(&bsp, fs)?;
+    r.load_world_placed(&bsp, fs, Some(&placed))?;
+    drop(placed);
     laps.lap("renderer");
     laps.finish();
     if let Phase::Live(live) = &phase {
@@ -4403,8 +4407,10 @@ impl App {
     /// UO's filters the level.
     fn texture_settings(&self) -> texture_settings::TextureSettings {
         let mut t = texture_cvars(&self.shell, self.textures.filter);
-        t.refuse_bad_levels = self.game == vcod_common::game::Game::Cod1
-            && !net::protocol::install_protocol(&self.fs).is_uo();
+        let cod1 = self.game == vcod_common::game::Game::Cod1;
+        t.refuse_bad_levels = cod1 && !net::protocol::install_protocol(&self.fs).is_uo();
+        // 0x4ebf20 reads its integer (0x4ec256)
+        t.color_mips = cod1 && self.shell.cvar_f32("r_colorMipLevels") as i32 != 0;
         t
     }
 
@@ -5019,13 +5025,14 @@ impl App {
         else {
             return Ok(());
         };
-        let (bsp, world) = reread_live_map(&self.fs, net.configstrings())?;
+        let (bsp, world, placed) = reread_live_map(&self.fs, net.configstrings())?;
         if let Phase::Live(live) = phase {
             live.world = world;
         }
         if let Some(r) = &mut self.renderer {
-            r.load_world(&bsp, &self.fs)?;
+            r.load_world_placed(&bsp, &self.fs, Some(&placed))?;
         }
+        drop(placed);
         let map = net::info_value_for_key(net.configstring(0), "mapname").unwrap_or_default();
         self.world = Some(World::new(
             map_base_name(map),
@@ -6061,7 +6068,7 @@ mod tests {
         let mut cs = vec![String::new(); 8];
         cs[0] = "\\mapname\\mp_harbor".into();
         cs[7] = "m1carbine_mp".into();
-        let (bsp, world) = reread_live_map(&fs, &cs).unwrap();
+        let (bsp, world, _) = reread_live_map(&fs, &cs).unwrap();
         let mut live = LivePhase::new(world, live_weapons(&fs, &cs[7]));
         live.clock.update(1000, 5000, 1, 0);
         let time = live.clock.server_time();
@@ -6167,7 +6174,7 @@ mod tests {
         let mut cs = vec![String::new(); 8];
         cs[0] = "\\mapname\\mp_carentan".into();
         let models = |fs: &Pk3Fs| {
-            let (bsp, world) = reread_live_map(fs, &cs).unwrap();
+            let (bsp, world, _) = reread_live_map(fs, &cs).unwrap();
             assert_eq!(world.model_count(), bsp.models.len());
             (bsp.models.len(), bsp.entities.len())
         };

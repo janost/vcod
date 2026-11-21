@@ -100,6 +100,7 @@ are its `KNOBS` table's.
 | `VCOD_VOICE_INPUT=tone` | `vcod` | A 440 Hz tone in place of the microphone (cod2-voice.md). |
 | `VCOD_NO_DYNENTS=1` | `vcod` | CoD4 dynamic entities not drawn, for a frame time A/B (cod4-client-perf.md 41); F3's `cod4 dynents` line counts them. |
 | `VCOD_PERF_TURN=<deg/s>` | `vcod` | Turns a CoD4 spectator's view on its own (`tools/cod4_perf.sh`'s `TURN`). |
+| `VCOD_HEAP_TRIM=0` | `vcod` | No heap trim after a load's first frame, for the kit's A/B of what the next load pays for it (cod4-client-perf.md 34.6). |
 | `VCOD_WRITE_ALL=1` | `vcod` | The entity light sets, instances, bones and CoD4 volume blocks written whole each frame, not their changed span, for the `finish` A/B (cod4-client-perf.md 42.1). |
 | `VCOD_C4_DRAW_ORDER=0`, `VCOD_C4_ENTITY_CULL=0`, `VCOD_C4_FLOATZ=0`, `VCOD_WORLD_BUNDLES=0`, `VCOD_ENT_BUNDLES=0` | `vcod` | CoD4 renderer A/B switches back to the older path, each named in cod4-client-perf.md. |
 | `VCOD_LIT_SPLIT=0` | `vcod` | CoD2 lit draws not split by light kind (cod2-client-perf.md). |
@@ -122,6 +123,7 @@ are its `KNOBS` table's.
 | `VCOD_LIVE_SLOTS=<n>` | CoD4 live tests | How many test servers run at once, 3 by default ([testing.md](testing.md#cod4-live-tests)). |
 | `VCOD_LIVE_NET=1` | `master_list_live`, `lan_scan_live` | Lets the two ignored tests that contact a public master or the LAN run. |
 | `VCOD_C4_SHOTS=<dir>` | CoD4 live tests | Writes their frames ([testing.md](testing.md#cod4-live-tests)). |
+| `VCOD_C1_SHOTS=<dir>` | `cod1_renderer_builds_and_draws_without_validation_errors` | Writes its mp_carentan frame as a TGA ([testing.md](testing.md#headless-render-pipeline_check)). |
 | `VCOD_SWEEP_MAPS`, `VCOD_SWEEP_GAMETYPES`, `VCOD_SWEEP_JOBS`, `VCOD_SWEEP_LEVEL_SECS`, `VCOD_SWEEP_OUT` | `cod4_map_sweep`, the soaks | Which maps and gametypes, how many at once, each level's length, the output directory (`play/cod4_sweep.rs`). |
 | `VCOD_SOAK_MINUTES`, `VCOD_SOAK_RENDER_HZ`, `VCOD_SOAK_TICK_LOG_MS`, `VCOD_SOAK_CLIENT_LOG_MS`, `VCOD_SOAK_TICK_WATCH` | CoD4 and CoD2 soaks | `tools/cod4_soak.sh`'s header. |
 | `VCOD_CENSUS_MAPS`, `VCOD_CENSUS_SECS`, `VCOD_CENSUS_OUT`, `VCOD_CENSUS_FRAMES=0` | `cod2_map_census` | Its maps, time a map, output directory; no headless frame (`play/cod2_census.rs`). |
