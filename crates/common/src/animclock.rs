@@ -1206,6 +1206,11 @@ pub fn update_body(
     if let Some(death) = t.knob_all {
         torso.knob_nodes(anims, death, now_ms);
     }
+    // A node both lerp frames hold is one node: the time a setter gives it
+    // is the other lerp frame's too.
+    if t.raised.is_some_and(|(i, _)| i == torso.current.index) && !flavour.cod2_tree() {
+        torso.current = legs.current;
+    }
     let shared = ChannelClock::shared(torso, legs, torso_wire, now_ms);
     let t = torso.update_in(anims, false, torso_wire, seen, at, window, shared);
     if shared.is_some() {
@@ -1215,6 +1220,61 @@ pub fn update_body(
     if let Some(death) = t.knob_all {
         torso.knob_nodes(anims, death, now_ms);
     }
+    // The torso's update sets the shared node's rate last.
+    if legs.current.index == torso.current.index && legs.current.index != 0 && !flavour.cod2_tree()
+    {
+        legs.current = torso.current;
+    }
+}
+
+/// The two lerp frames' clips as the tree holds them, legs then torso: each
+/// under the `main` child (`legs` or `torso`) its anim sits under in the
+/// tree, whichever lerp frame set it, and a node both carry once, at the
+/// copy a lerp frame holds as its current clip (the torso's when both do).
+/// CoD2's and CoD4's bodies keep each lerp frame's clips under its own node
+/// ([`Flavour::cod2_tree`]). cod11-movers.md 15, "The drawn body's clip".
+pub fn body_layers(
+    legs: &ChannelClock,
+    torso: &ChannelClock,
+    anims: &PlayerAnims,
+    now_ms: i32,
+) -> (Vec<Layer>, Vec<Layer>) {
+    let (mut l, mut t) = (legs.layers(now_ms), torso.layers(now_ms));
+    let Some(node) = anims
+        .tree
+        .index_of("torso")
+        .filter(|_| !torso.flavour.cod2_tree())
+    else {
+        return (l, t);
+    };
+    // The tree numbers its nodes depth first, so a subtree is a range.
+    let mut last = node;
+    while let Some(&c) = anims.tree.nodes[last].children.last() {
+        last = c;
+    }
+    // A clip the tree does not place stays on its lerp frame's node.
+    let under_torso = |i: i32| {
+        anims
+            .index
+            .node_id(i)
+            .is_none_or(|n| (node..=last).contains(&n))
+    };
+    let current = |c: &ChannelClock, i: i32| c.current.index == i;
+    let mut moved = Vec::new();
+    t.retain(|x| {
+        under_torso(x.index) || {
+            moved.push(*x);
+            false
+        }
+    });
+    for x in moved {
+        match l.iter_mut().find(|y| y.index == x.index) {
+            Some(y) if current(torso, x.index) || !current(legs, x.index) => *y = x,
+            Some(_) => {}
+            None => l.push(x),
+        }
+    }
+    (l, t)
 }
 
 /// The tree nodes from `wire`'s up to the root, its own first.
@@ -1966,6 +2026,43 @@ mod tests {
         let raised = t.iter().find(|x| x.index == throw).unwrap().weight;
         assert!((raised - fading).abs() < 1e-3, "{t:?}");
         assert!(l.iter().all(|x| x.index != throw), "{l:?}");
+    }
+
+    /// A `both` line's node is one node under the two lerp frames: it
+    /// poses once, under `legs` where the tree has it, and a restart from
+    /// either lerp frame moves the time the other carries.
+    #[test]
+    fn a_node_both_lerp_frames_hold_poses_once_under_its_own_node() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let anims = PlayerAnims::load(&fs).unwrap();
+        let throw = anims.wire_of("pb_stand_grenade_throw").unwrap();
+        let idle = anims.wire_of("pb_stand_alert").unwrap();
+        let fire = anims.wire_of("pt_stand_shoot").unwrap();
+        let (mut legs, mut torso) = (ChannelClock::default(), ChannelClock::default());
+        let mut step = |w, ms| {
+            update_body(
+                (&mut legs, &mut torso),
+                &anims,
+                w,
+                &seen(0.0, 0),
+                Times::end_frame(ms),
+                Flavour::V1_1,
+                &mut 0,
+            );
+            body_layers(&legs, &torso, &anims, ms)
+        };
+        step((idle, fire), 1000);
+        let (l, t) = step((throw, throw), 1100);
+        assert_eq!(l.iter().filter(|x| x.index == throw).count(), 1, "{l:?}");
+        assert!(t.iter().all(|x| x.index == fire), "{t:?}");
+        // The legs restart the node; the torso's copy restarts with it.
+        step((throw, throw), 1600);
+        let (l, _) = step((throw ^ TOGGLE, throw), 1700);
+        assert_eq!(legs.seconds(1750), torso.seconds(1750));
+        assert!(legs.seconds(1750) < 0.1, "{}", legs.seconds(1750));
+        assert_eq!(l.iter().filter(|x| x.index == throw).count(), 1, "{l:?}");
     }
 
     /// A paused clock's clips and ramps stand still for the pause.

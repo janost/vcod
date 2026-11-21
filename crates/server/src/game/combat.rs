@@ -1463,12 +1463,14 @@ impl BodyPose {
         now_ms: i32,
     ) -> vcod_common::playerpose::PoseInputs<'a> {
         let mounted = self.input.eflags & vcod_common::net::flags::EF_MOUNTED != 0;
+        let (legs_layers, torso_layers) =
+            vcod_common::animclock::body_layers(&self.legs_clock, &self.torso_clock, anims, now_ms);
         vcod_common::playerpose::PoseInputs {
             anims,
             legs: self.legs,
             torso: self.torso,
-            legs_layers: self.legs_clock.layers(now_ms),
-            torso_layers: self.torso_clock.layers(now_ms),
+            legs_layers,
+            torso_layers,
             nodes: self.torso_clock.node_weights(now_ms),
             // Down positive, as `descend_aim` reads it; only a gunner with no
             // placement blend descends an aim group.

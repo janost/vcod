@@ -2670,12 +2670,14 @@ fn step_player_pose(
     let goal = rider
         .as_ref()
         .and_then(|seat| seat_inputs(anims, legs_wire, seat));
+    let (legs_layers, torso_layers) =
+        vcod_common::animclock::body_layers(&st.legs, &st.torso, anims, render_time);
     let held = HeldPose {
         assembly: assembly.clone(),
         legs: legs_wire,
         torso: torso_wire,
-        legs_layers: st.legs.layers(render_time),
-        torso_layers: st.torso.layers(render_time),
+        legs_layers,
+        torso_layers,
         nodes: st.torso.node_weights(render_time),
         group_pitch: pitch,
         turret_leaves: placed.map(|g| (g.node, g.rows)),

@@ -730,6 +730,11 @@ How it got there, one line a round (VERIFIED, measured):
   10.4-10.7 of CPU, `mp_carentan` 6.3-6.5 to 5.8-6.2 (release, three runs
   each, the two binaries alternating, load 10-30); every graph digest of
   the 1.1 and UO builds unchanged.
+- Memory, 2026-11-21 at 392a0d445 (release `nav_build`, peak RSS of the
+  whole process, map load included): `mp_ship` 57-58 MB, `mp_hurtgen` 76
+  MB. The build is not memory-bound; the "~4 G over" an older backlog gave
+  `mp_ship` was instructions (the leaf walk round above). VERIFIED
+  (measured).
 - Not changed: the flood's layers are a barrier each (walks kept 16
   threads 66% busy on `mp_ship`'s 149 layers, 85-89% on `mp_rocket` and
   `mp_hurtgen`'s 46-54, at load 57); a back down off a ledge away from a

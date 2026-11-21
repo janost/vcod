@@ -19,7 +19,7 @@ use super::input::contains;
 use super::{
     ITEM_ALIGN_CENTER2, ITEM_TYPE_UPREDITFIELD, ItemState, UI_GLINFO, UI_JOINGAMETYPE,
     UI_NETGAMETYPE, UI_NETMAPCINEMATIC, UI_NETMAPPREVIEW, UI_NETSOURCE, UI_SERVERREFRESHDATE,
-    UI_STARTMAPCINEMATIC, Ui, cod2, listbox,
+    UI_STARTMAPCINEMATIC, Ui, UiEffect, cod2, listbox,
 };
 use crate::console::shell::Shell;
 use crate::hud::font::{Slot, UiFonts};
@@ -179,7 +179,7 @@ impl Ui {
                         &loc.translate("@EXE_NETSOURCE"),
                         &[&loc.translate(Source::NAMES[self.browser.source as usize])],
                     )),
-                    UI_SERVERREFRESHDATE => Some(self.refresh_text(loc)),
+                    UI_SERVERREFRESHDATE => Some(self.refresh_text(loc, shell)),
                     UI_JOINGAMETYPE => Some(match self.join_game_type() {
                         0 => loc.translate("@EXE_ALL").into_owned(),
                         i => {
@@ -289,14 +289,16 @@ impl Ui {
 
     /// `UI_SERVERREFRESHDATE`'s line (ui_mp_x86.dll 0x40008fc5): the
     /// refresh's progress with the source's list length, else
-    /// `EXE_REFRESHTIME` with the date the source's last refresh started.
-    fn refresh_text(&self, loc: &Localized) -> String {
+    /// `EXE_REFRESHTIME` with `ui_lastServerRefresh_<source>`
+    /// (`0x400090fa`..`0x4000913b`), empty for a source not refreshed.
+    fn refresh_text(&self, loc: &Localized, shell: &Shell) -> String {
         let (total, _) = self.browser.counts();
         match self.browser.status {
             Status::Idle | Status::Done | Status::Failed => fill(
                 &loc.translate("@EXE_REFRESHTIME"),
-                &[&self.browser.last_refresh[self.browser.source as usize]
-                    .map_or_else(String::new, |t| refresh_date(t, loc))],
+                &[&self
+                    .cvar(&refresh_cvar(self.browser.source), shell)
+                    .unwrap_or_default()],
             ),
             Status::Master => loc
                 .translate("@EXE_WAITINGFORMASTERSERVERRESPONSE")
@@ -306,6 +308,25 @@ impl Ui {
                 &[&total.to_string()],
             ),
         }
+    }
+}
+
+/// The cvar `UI_StartServerRefresh` dates `source` in (ui_mp_x86.dll
+/// `0x4002f000`): not in the vmCvar table, so nothing archives it.
+pub(super) fn refresh_cvar(source: Source) -> String {
+    format!("ui_lastServerRefresh_{}", source as usize)
+}
+
+impl Ui {
+    /// The `set` of `ui_lastServerRefresh_<source>` for each refresh started
+    /// since the last call, its month localized as the UI localizes it
+    /// (ui_mp_x86.dll 0x4000ea90); once a frame, before the menus draw.
+    pub fn date_refreshes(&mut self, loc: &Localized) -> Vec<UiEffect> {
+        let mut out = Vec::new();
+        for (source, t) in std::mem::take(&mut self.browser.stamps) {
+            self.set_cvar(&refresh_cvar(source), &refresh_date(t, loc), &mut out);
+        }
+        out
     }
 }
 
@@ -1101,6 +1122,39 @@ mod tests {
         assert_eq!(refresh_date(t, &loc), "Oct 11, 2026   9:05");
         let t = jiff::civil::date(2026, 6, 1).at(23, 59, 0, 0);
         assert_eq!(refresh_date(t, &loc), "EXE_MONTH_ABV_JUN 1, 2026   23:59");
+    }
+
+    /// A refresh dates its source in `ui_lastServerRefresh_<source>`, a
+    /// console cvar the date line reads back, so a `set` of it shows; a
+    /// source never refreshed prints the label alone.
+    #[test]
+    fn the_refresh_date_lives_in_a_cvar() {
+        let Some(mut ui) = ui() else { return };
+        let fs = vcod_common::testing::stock_fs_11().unwrap();
+        let loc = Localized::load(&fs);
+        let mut shell = Shell::new();
+        ui.browser.source = Source::Local;
+        ui.browser.refresh();
+        ui.browser.stop();
+        ui.browser.stamps[0].1 = jiff::civil::date(2026, 10, 11).at(9, 5, 0, 0);
+        let out = ui.date_refreshes(&loc);
+        assert!(
+            matches!(&out[..], [UiEffect::Command(c)]
+                if c == "set ui_lastServerRefresh_0 \"Oct 11, 2026   9:05\""),
+            "{out:?}"
+        );
+        super::super::tests::apply(&mut shell, &out);
+        ui.options.new_input();
+        let label = loc.translate("@EXE_REFRESHTIME");
+        assert_eq!(
+            ui.refresh_text(&loc, &shell),
+            fill(&label, &["Oct 11, 2026   9:05"])
+        );
+        shell.execute("set ui_lastServerRefresh_0 later");
+        assert_eq!(ui.refresh_text(&loc, &shell), fill(&label, &["later"]));
+        ui.browser.source = Source::Favorites;
+        assert_eq!(ui.refresh_text(&loc, &shell), fill(&label, &[""]));
+        assert!(ui.date_refreshes(&loc).is_empty());
     }
 
     #[test]

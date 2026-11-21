@@ -551,8 +551,24 @@ impl ScriptRuntime {
                 self.vm.objects_usage(all.into_iter(), named) as usize,
             )
         };
-        let entity = objects(&mut ents.iter_inuse().map(|(id, e)| (id, e.script)));
-        let hudelem = objects(&mut ents.iter_hud_elems().map(|(id, e)| (id, e.script)));
+        // An entity has an object once script was handed it or a named
+        // radiant key was stored on it at the spawn (`Heap::reach`).
+        let heap = self.vm.heap();
+        let has_object = |id: vcod_gsc::EntId, s: vcod_gsc::StructId| {
+            heap.reached(id) || heap.struct_fields(s).iter().any(|(k, _)| named(*k))
+        };
+        let entity = objects(
+            &mut ents
+                .iter_inuse()
+                .filter(|(id, e)| has_object(*id, e.script))
+                .map(|(id, e)| (id, e.script)),
+        );
+        let hudelem = objects(
+            &mut ents
+                .iter_hud_elems()
+                .filter(|(id, e)| has_object(*id, e.script))
+                .map(|(id, e)| (id, e.script)),
+        );
         let sources = self.scripts.as_ref().map(|s| &s.sources);
         let source = |file: &str| sources.and_then(|s| s.text(file));
         let positions = match self.developer {
