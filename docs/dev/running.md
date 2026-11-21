@@ -115,7 +115,7 @@ are its header's.
 | `VCOD_TICK_TRACE=<path or dir>` | `vcod-server`, `bot_match` | The tick's step log ([server-tick.md](server-tick.md#tracing-a-tick)). |
 | `VCOD_TICK_PROFILE_MS=<ms>` | `vcod-server` | Logs each tick past it with its phases. |
 | `VCOD_BOT_THREADS=<n>` | `vcod-server` | The threads the bots' pass plans on, `1` serial ([server-tick.md](server-tick.md#the-bots-threads)). |
-| `VC_NAV_COD4=1` | `vcod-server` | CoD4 bots walk the nav graph's CoD4 step ([bots.md](../bots.md), traps.md). |
+| `VC_NAV_COD4=1` | `vcod-server` | CoD4 bots walk the nav graph's CoD4 step, off by default (traps.md, Bots). |
 | `VCOD_REQUIRE_INSTALL=<names>` | tests | Turns an install skip into a failure ([testing.md](testing.md)). |
 | `VCOD_REQUIRE_GPU=1` | tests | Turns a headless render test's adapter skip into a failure ([testing.md](testing.md#headless-render-pipeline_check)). |
 | `VCOD_LIVE_SLOTS=<n>` | CoD4 live tests | How many test servers run at once, 3 by default ([testing.md](testing.md#cod4-live-tests)). |
