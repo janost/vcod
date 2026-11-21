@@ -49,6 +49,8 @@ Grep the module header comments for more; each one names its research doc.
     connectionless framing and snapshot writer (the gamestate writer is
     each wire's own method).
   - `net/codec.rs`: the game-neutral bit reader and table-driven field codec.
+  - `net/ps_arrays.rs`: the playerstate's closing array blocks, CoD1's and
+    CoD2's one wire.
   - `net/msec.rs`: `Msec`, the wire and level clock every game's snapshot
     and frame carries; its arithmetic wraps as retail's `int` does.
   - `net/voice.rs`: voice chat's out-of-band packets, CoD2's and CoD4's.
