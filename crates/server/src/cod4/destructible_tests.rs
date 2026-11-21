@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use glam::Vec3;
 use vcod_gsc::{EntId, Host, Value};
 
-use super::wire_ab::Probe;
+use super::test_harness::Probe;
 use super::*;
 use crate::game::cod4::level::Cod4Level;
 

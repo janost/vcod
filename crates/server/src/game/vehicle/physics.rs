@@ -2011,11 +2011,8 @@ fn madv(a: Vec3, k: f32, b: Vec3) -> Vec3 {
     Vec3::new(mad(a.x, k, b.x), mad(a.y, k, b.y), mad(a.z, k, b.z))
 }
 
-fn dot64(a: Vec3, b: Vec3) -> f64 {
-    f64::from(a.z) * f64::from(b.z)
-        + f64::from(a.y) * f64::from(b.y)
-        + f64::from(a.x) * f64::from(b.x)
-}
+// Summed x, y, z, as the module's inline `DotProduct`s (UO 0x806f2, 0x80826).
+use vcod_common::x87::dot as dot64;
 
 fn dot(a: Vec3, b: Vec3) -> f32 {
     dot64(a, b) as f32
@@ -2029,31 +2026,14 @@ fn len(v: Vec3) -> f32 {
 
 use vcod_common::x87::cross;
 
-/// `VectorNormalize` (0x3a1c3): the squared length stored as a float, its
-/// root as a float, the reciprocal as a float; a zero vector left alone.
+/// `VectorNormalize` (UO 0x3a1c3) in place; returns the length it stores.
 fn normalize_in_place(v: &mut Vec3) -> f32 {
-    let l = (f64::from(dot64(*v, *v) as f32)).sqrt() as f32;
-    if l != 0.0 {
-        let il = 1.0f32 / l;
-        *v = Vec3::new(v.x * il, v.y * il, v.z * il);
-    }
+    let l;
+    (*v, l) = vcod_common::x87::normalize_stored_len(*v);
     l
 }
 
-fn normalize(v: Vec3) -> Vec3 {
-    let mut v = v;
-    normalize_in_place(&mut v);
-    v
-}
-
-/// `VectorNormalize2` (0x3a466): a zero vector comes out zero.
-fn normalize2(v: Vec3) -> Vec3 {
-    let mut out = v;
-    if normalize_in_place(&mut out) == 0.0 {
-        return Vec3::ZERO;
-    }
-    out
-}
+use vcod_common::x87::{normalize_stored as normalize, normalize2_stored as normalize2};
 
 /// `MatrixTransformVector`: `v`'s components scale the axes.
 fn transform(v: Vec3, ax: &[Vec3; 3]) -> Vec3 {

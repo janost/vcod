@@ -1958,6 +1958,8 @@ mod shot_aim_ab;
 #[cfg(test)]
 mod stat_tests;
 #[cfg(test)]
+mod test_harness;
+#[cfg(test)]
 mod vote_tests;
 #[cfg(test)]
 mod wire_ab;

@@ -235,6 +235,98 @@ pub(super) fn apply(c: &mut UserCmd2, step: &GunCmd, delta: [i32; 3]) {
 mod tests {
     use super::*;
 
+    /// A bot pinned behind a free gun on mp_toujane `dm`, with a foe that
+    /// cannot shoot pinned in the gun's arc 400 ahead, mounts it and hits
+    /// the foe; with the foe moved out of the arc it lets go within
+    /// [`IDLE_RELEASE_MS`] and a second. Needs `COD2_DIR`.
+    #[test]
+    fn a_bot_mans_a_free_gun_and_lets_go_with_no_foe_in_its_arc() {
+        use crate::bots::gun::{floor_spot, in_arc, mount_spot};
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        let mut sv = crate::cod2::Cod2Server::new(
+            crate::cod2::Cod2Config {
+                map: "mp_toujane".into(),
+                gametype: "dm".into(),
+                hostname: "bots".into(),
+                max_clients: 8,
+                gametype_script: None,
+            },
+            3,
+            now,
+        );
+        sv.load(Some(std::rc::Rc::new(fs))).unwrap();
+        let slots = sv.add_bots(2, true);
+        let (gunner, foe) = (slots[0], slots[1]);
+        sv.bots_mut().unwrap().wait_for_graph();
+        let at = |t: u64| now + std::time::Duration::from_millis(50 * t);
+        let mut tick = 0;
+        while tick < 400
+            && !(sv.level().unwrap().playing(gunner) && sv.level().unwrap().playing(foe))
+        {
+            tick += 1;
+            sv.tick_frames(at(tick), 1);
+        }
+        // A gun with a floor behind it and one 400 ahead in clear sight.
+        let level = sv.level_mut().unwrap();
+        let guns = level.rt.gun_list();
+        let w = &level.world.collision;
+        let (gun, back, front) = guns
+            .iter()
+            .find_map(|g| {
+                let back = floor_spot(w, mount_spot(g, BACK), MASK)?;
+                let front = floor_spot(w, mount_spot(g, -400.0), MASK)?;
+                let seen = w.shot_trace(g.origin, front + Vec3::Z * 48.0).fraction >= 1.0;
+                (seen && in_arc(g, front)).then_some((*g, back, front))
+            })
+            .expect("a gun with room in front");
+        let behind = floor_spot(w, mount_spot(&gun, 300.0), MASK).unwrap_or(back);
+        // The foe's gun runs dry, so only the gunner shoots.
+        level.rt.with_host(|host, _| {
+            let ammo = &mut host.clients[foe].ammo;
+            ammo.clip.iter_mut().for_each(|c| *c = 0);
+            ammo.ammo.iter_mut().for_each(|a| *a = 0);
+        });
+        let pin = |sv: &mut crate::cod2::Cod2Server, slot: usize, to: Vec3| {
+            let p = sv.level_mut().unwrap().players[slot].as_mut().unwrap();
+            p.ps.origin = to + Vec3::Z;
+            p.ps.velocity = Vec3::ZERO;
+        };
+        let mounted = |sv: &crate::cod2::Cod2Server| {
+            let p = sv.level().unwrap().players[gunner].as_ref().unwrap();
+            p.ps.e_flags & ef::TURRET != 0
+        };
+        let (mut hit, mut gone) = (false, None);
+        for _ in 0..1200 {
+            tick += 1;
+            let on = mounted(&sv);
+            if !on && gone.is_none() {
+                pin(&mut sv, gunner, back);
+            }
+            pin(&mut sv, foe, if gone.is_some() { behind } else { front });
+            sv.tick_frames(at(tick), 1);
+            let health = sv.level().unwrap().rt.client_vitals(foe).health;
+            hit |= mounted(&sv) && health < 100;
+            if hit && gone.is_none() {
+                gone = Some(tick);
+            }
+            if let Some(t) = gone
+                && !mounted(&sv)
+            {
+                let held = (tick - t) * 50;
+                assert!(held >= IDLE_RELEASE_MS as u64, "let go after {held} ms");
+                assert!(
+                    held <= IDLE_RELEASE_MS as u64 + 1000,
+                    "let go after {held} ms"
+                );
+                return;
+            }
+        }
+        panic!("hit {hit}, foe gone at {gone:?}, mounted {}", mounted(&sv));
+    }
+
     #[test]
     fn a_gunner_cmd_holds_still_and_fires_or_lets_go() {
         let mut c = UserCmd2 {

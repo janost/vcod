@@ -818,7 +818,7 @@ impl Cod4Level {
         };
         let hit = crate::game::combat::Hit {
             victim,
-            attacker,
+            attacker: crate::game::combat::Attacker::of_slot(attacker),
             inflictor,
             damage,
             dflags,

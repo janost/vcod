@@ -987,7 +987,7 @@ impl Cod1Module {
                             .to_string();
                         rt.deliver_hits(vec![crate::game::combat::Hit {
                             victim: slot,
-                            attacker: slot,
+                            attacker: Some(crate::game::combat::Attacker::Client(slot)),
                             inflictor: None,
                             damage: PRONE_DAMAGE,
                             dflags: 0,

@@ -7,14 +7,14 @@
 //! then "Match begins in" over 5 s from 14800, both gone at 19800
 //! (cod4-hud.md 5.1). The same probe joins [`Cod4Server`] in process on
 //! retail's level clock; every HUD element of every snapshot both sent at
-//! one server time is diffed (`wire_ab::hud_diffs`), and the server
+//! one server time is diffed (`test_harness::hud_diffs`), and the server
 //! commands it read, in order (the prematch's `ui_hud_hardcore` among
 //! them). `COD4_PRE_CMDS=1` prints both command lists. Needs `COD4_DIR`.
 
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use super::wire_ab::{Probe, hud_diffs, retail, side};
+use super::test_harness::{Probe, hud_diffs, retail, run_frames, side, test_cfg};
 use super::*;
 
 #[test]
@@ -34,15 +34,7 @@ fn the_prematch_hud_matches_retail() {
     let yaw = spawn.ps.get_f32("viewangles[1]").unwrap();
 
     let cs0 = String::from_utf8_lossy(r.gs.configstring(0)).into_owned();
-    let mut sv = Cod4Server::new(
-        Cod4Config {
-            map: "mp_crash".into(),
-            gametype: "war".into(),
-            hostname: "CoD4Host".into(),
-            max_clients: 8,
-        },
-        7,
-    );
+    let mut sv = Cod4Server::new(test_cfg("mp_crash", "war"), 7);
     for (k, v) in vcod_common::net::connectionless::info_pairs(&cs0) {
         if !matches!(k, "protocol" | "shortversion") {
             sv.set_cvar(k, v);
@@ -67,26 +59,13 @@ fn the_prematch_hud_matches_retail() {
             (2550, "mr {sid} 15 assault_mp,0"),
         ],
     );
-    let mut now = Instant::now();
-    while sv.core.sv_time_ms < run_ms.raw() {
-        let svs = sv.core.sv_time_ms;
-        if !p.joined && svs >= p.connect_at {
-            p.join(&mut sv, now);
-        }
-        if p.joined {
-            let pkt = p.packet(svs);
-            p.log("c2s", svs, &pkt);
-            sv.handle_packet(p.addr, &pkt, now);
-        }
-        now += Duration::from_millis(FRAME_MS as u64);
-        sv.tick_frames(now, 1);
-        let svs = sv.core.sv_time_ms;
-        for (to, pkt) in sv.take_outgoing() {
-            if to == p.addr {
-                p.receive(svs, &pkt);
-            }
-        }
-    }
+    run_frames(
+        &mut sv,
+        std::slice::from_mut(&mut p),
+        run_ms.raw(),
+        &mut Instant::now(),
+        &mut |_, _, _| {},
+    );
     let aborts = sv.game.level.as_ref().unwrap().rt.aborts();
     assert!(aborts.is_empty(), "script errors:\n{}", aborts.join("\n"));
     let o = side(&p.lines);
@@ -96,7 +75,7 @@ fn the_prematch_hud_matches_retail() {
         .find(|f| f.name == "type")
         .unwrap()
         .word();
-    let timer = |s: &super::wire_ab::Side| {
+    let timer = |s: &super::test_harness::Side| {
         s.snaps
             .first()
             .is_some_and(|f| f.ps.hud_archival.iter().any(|h| h.0[ty] == 7))
@@ -115,7 +94,7 @@ fn the_prematch_hud_matches_retail() {
         }
     }
     let mut out = Vec::new();
-    let texts = |s: &super::wire_ab::Side| -> Vec<String> {
+    let texts = |s: &super::test_harness::Side| -> Vec<String> {
         s.commands.iter().map(|(_, c)| c.clone()).collect()
     };
     let (rc, oc) = (texts(&r), texts(&o));

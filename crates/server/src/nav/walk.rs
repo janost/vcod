@@ -282,7 +282,7 @@ pub(super) enum Gait {
     Creep,
     /// [`Gait::Forward`] that holds crouch from the tick after its jump
     /// until the body lands again: through a window too low for a standing
-    /// body (`NavGraph::crouch_jumps`).
+    /// body (`Edge::crouched`).
     CrouchJump,
 }
 
@@ -1076,7 +1076,7 @@ mod tests {
         let g = graph_for("mp_ship", &world);
         let deck = g.nearest([3515.0, -323.0, 631.0]).unwrap();
         let ledge = g.nearest([3488.0, -358.0, 580.0]).unwrap();
-        assert!(g.edges[deck as usize].contains(&ledge));
+        assert!(g.linked(deck, ledge));
         let (p, q) = (g.nodes[deck as usize], g.nodes[ledge as usize]);
         for gait in [Gait::Forward, Gait::Backward, Gait::Creep] {
             assert!(!matches!(
@@ -1084,7 +1084,7 @@ mod tests {
                 Walked::Arrived(..)
             ));
         }
-        assert!(g.risky.contains(&(deck, ledge)));
+        assert!(g.has(deck, ledge, |k| k.risky));
     }
 
     /// mp_hurtgen's slope west of the crease at (437, 2824, -97): a body
@@ -1502,9 +1502,9 @@ mod tests {
             "the flood's jump"
         );
         let mut g = NavGraph::from_parts(vec![pit, step], vec![vec![1], vec![]]);
-        g.jumps.insert((0, 1));
+        g.edge_mut(0, 1).unwrap().jump = true;
         g.reprove_jumps(w);
-        assert!(g.edges[0].is_empty() && g.jumps.is_empty() && g.aims.is_empty());
+        assert!(g.edges[0].is_empty());
     }
 
     /// United Offensive's mp_uo_dawnville: the jump edge from (-241,
@@ -1530,9 +1530,9 @@ mod tests {
             let foot = settle(w, Vec3::new(-241.0, -16802.0, 120.0), 0.0).unwrap();
             let top = settle(w, Vec3::new(-190.0, -16848.0, 190.0), 0.0).unwrap();
             let mut g = NavGraph::from_parts(vec![foot, top], vec![vec![1], vec![]]);
-            g.jumps.insert((0, 1));
+            g.edge_mut(0, 1).unwrap().jump = true;
             g.reprove_jumps(w);
-            assert!(g.edges[0] == [1] && g.jumps.contains(&(0, 1)));
+            assert!(g.next(0).eq([1]) && g.has(0, 1, |k| k.jump));
         });
     }
 
@@ -1578,9 +1578,9 @@ mod tests {
             "the walk with the room test"
         );
         let mut g = NavGraph::from_parts(vec![foot, top], vec![vec![1], vec![]]);
-        g.jumps.insert((0, 1));
+        g.edge_mut(0, 1).unwrap().jump = true;
         g.reprove_jumps(w);
-        assert!(g.edges[0] == [1] && g.jumps.contains(&(0, 1)) && g.aims.is_empty());
+        assert!(g.next(0).eq([1]) && g.has(0, 1, |k| k.jump && k.aim.is_none()));
         assert_eq!(g.aim(0, 1), top.truncate());
     }
 
@@ -1603,11 +1603,11 @@ mod tests {
         assert!(matches!(leap(tipped), Walked::Fell));
         let mut g = NavGraph::from_parts(vec![foot, head, top], vec![vec![1], vec![0], vec![]]);
         g.link_leaps(w);
-        assert!(g.leaps.is_empty(), "{:?}", g.leaps);
+        assert!(g.edges_where(|k| k.leap).next().is_none(), "{:?}", g.edges);
         // Not reached by the climb, the same spot is a foot.
         let mut g = NavGraph::from_parts(vec![foot, head, top], vec![vec![], vec![0], vec![]]);
         g.link_leaps(w);
-        assert!(g.leaps.contains(&(1, 2)), "{:?}", g.leaps);
+        assert!(g.has(1, 2, |k| k.leap), "{:?}", g.edges);
     }
 
     /// mp_cassino's allied upper floor at z 208 leaves by a window sill at

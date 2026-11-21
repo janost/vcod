@@ -47,16 +47,16 @@ impl Follower {
         ) else {
             return true;
         };
-        let jump = g.jumps.contains(&(a, b));
+        let jump = g.has(a, b, |k| k.jump);
         let edge = (a, b);
         self.walked_jump = None;
         // No CoD1 walk climbs a mantle; the graph's probe proved it.
-        if g.mantles.contains(&edge) {
+        if g.has(edge.0, edge.1, |k| k.mantle) {
             return true;
         }
         // A crouched jump's walk is the gait that proved it: no other gets
         // through the window.
-        let gait = if g.crouch_jumps.contains(&edge) {
+        let gait = if g.has(edge.0, edge.1, |k| k.crouched) {
             Gait::CrouchJump
         } else {
             Gait::Forward
@@ -211,7 +211,7 @@ impl Follower {
         let drop = from.z - to.z;
         let run = drop > vcod_common::pmove::STEPSIZE
             && drop <= vcod_common::pmove::JUMP_HEIGHT
-            && !g.jumps.contains(&(a, b));
+            && !g.has(a, b, |k| k.jump);
         let fast = body.velocity.truncate().length() > vcod_common::pmove::SPEED_RUN;
         run && body.on_ground
             && (fast || (body.still && self.move_scale > 1.0))
@@ -251,14 +251,14 @@ impl Follower {
         // (`bots::cod4::Cod4Walk`) misses it either way, so rest and go
         // (bot-objectives.md 12.11).
         if self.mantle_rests
-            && g.mantles.contains(&(a, b))
+            && g.has(a, b, |k| k.mantle)
             && to.z < from.z - vcod_common::pmove::JUMP_HEIGHT
         {
             return body.on_ground && self.held != Some((a, b));
         }
         to.z < from.z - vcod_common::pmove::JUMP_HEIGHT
             && body.on_ground
-            && !g.jumps.contains(&(a, b))
+            && !g.has(a, b, |k| k.jump)
             && !self.runs_off(world, (a, b), from, to)
             && !matches!(
                 self.walk_paced(world, at, body.velocity, to, Gait::Creep),
@@ -439,7 +439,7 @@ mod tests {
             !f.edge_holds(Some(w), aside, Vec3::ZERO, false, &g),
             "3 units north"
         );
-        g.jumps.insert((0, 1));
+        g.edge_mut(0, 1).unwrap().jump = true;
         assert!(
             f.edge_holds(Some(w), aside, Vec3::ZERO, false, &g),
             "on a jump edge"

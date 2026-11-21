@@ -3,42 +3,59 @@
 
 use super::*;
 
+/// One directed edge and what the walk that proved it needed. A link that
+/// proves an edge without a jump clears `jump` and `crouched` only
+/// ([`NavGraph::link_as`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Edge {
+    pub to: u32,
+    /// Proved only with a jump; a bot following one jumps where the walk
+    /// did ([`PinJump`], [`leap_cue`]).
+    pub jump: bool,
+    /// A jump proved from a standstill at its foot, jumping at the lip
+    /// ([`NavGraph::link_leaps`]): a bot comes to rest at the foot first.
+    pub leap: bool,
+    /// A jump proved only with crouch held from the tick after the jump
+    /// until the body lands ([`Gait::CrouchJump`]), through a window too
+    /// low for a standing body ([`NavGraph::link_pockets`]).
+    pub crouched: bool,
+    /// A drop deeper than a jump whose walk from 4 units aside of its node
+    /// falls, or a walk down beside a fall that hurts whose forward walk
+    /// does: a plan takes one only where there is no other way
+    /// ([`RISK_COST`], [`NavGraph::mark_risky`]).
+    pub risky: bool,
+    /// Only a CoD2 or CoD4 mantle climbs it ([`NavGraph::link_mantles`]): a
+    /// bot on one runs at the wall and jumps once pmove offers the climb.
+    pub mantle: bool,
+    /// A jump whose walk lands only aimed beside its top
+    /// ([`NavGraph::reprove_jumps`]), and the point it aimed at: a bot on
+    /// one steers there ([`NavGraph::aim`]).
+    pub aim: Option<glam::Vec2>,
+    /// A mantle's landing as its probe proved it, which may stand a cell
+    /// off the node the edge ends at: a body run at the node need not be
+    /// offered the climb ([`Follower::mantle_land`]).
+    pub land: Option<Vec3>,
+}
+
+impl Edge {
+    pub fn to(to: u32) -> Edge {
+        Edge {
+            to,
+            ..Edge::default()
+        }
+    }
+}
+
 pub struct NavGraph {
     /// Feet origins where pmove came to rest.
     pub nodes: Vec<Vec3>,
-    /// Directed: `edges[a]` holds every `b` a run from `a` reaches. A drop
-    /// off a ledge has no edge back.
-    pub edges: Vec<Vec<u32>>,
-    /// The edges a walk proved only with a jump; a bot following one jumps
-    /// where the walk did ([`PinJump`], [`leap_cue`]).
-    pub jumps: HashSet<(u32, u32)>,
-    /// The jump edges proved from a standstill at their foot, jumping at the
-    /// lip ([`NavGraph::link_leaps`]): a bot comes to rest at the foot first.
-    pub leaps: HashSet<(u32, u32)>,
-    /// The jump edges proved only with crouch held from the tick after the
-    /// jump until the body lands ([`Gait::CrouchJump`]), through a window
-    /// too low for a standing body ([`NavGraph::link_pockets`]).
-    pub crouch_jumps: HashSet<(u32, u32)>,
-    /// The jump edges whose walk lands only aimed beside their top
-    /// ([`NavGraph::reprove_jumps`]), and the point it aimed at: a bot on
-    /// one steers there ([`NavGraph::aim`]).
-    pub aims: HashMap<(u32, u32), glam::Vec2>,
-    /// Drops deeper than a jump whose walk from 4 units aside of their node
-    /// falls, and walks down beside a fall that hurts whose forward walk
-    /// does: a plan takes one only where there
-    /// is no other way ([`RISK_COST`], [`NavGraph::mark_risky`]).
-    pub risky: HashSet<(u32, u32)>,
+    /// Directed: `edges[a]` holds every edge a run from `a` proved, in the
+    /// order the build linked them (A*'s tie-break). A drop off a ledge has
+    /// no edge back.
+    pub edges: Vec<Vec<Edge>>,
     /// Nodes whose middle stands over a fall that kills, on a rail or a
     /// spar's edge: a roam never ends on one ([`NavGraph::mark_perches`]).
     pub perches: HashSet<u32>,
-    /// The edges only a CoD2 mantle climbs ([`NavGraph::link_mantles`]): a
-    /// bot on one runs at the wall and jumps once pmove offers the climb.
-    /// Empty on a CoD1 graph.
-    pub mantles: HashSet<(u32, u32)>,
-    /// Each mantle edge's landing as its probe proved it, which may stand
-    /// a cell off the node the edge ends at: a body run at the node need
-    /// not be offered the climb ([`Follower::mantle_land`]).
-    pub mantle_lands: HashMap<(u32, u32), Vec3>,
     /// The nodes the flood started from at the spawn points. A ladder's
     /// ends seed a flood of their own, which may never meet the spawns'
     /// floors: mp_shipment's grounds round the yard, out of bounds, are
@@ -113,9 +130,14 @@ impl NavGraph {
         let mut out = Vec::new();
         self.moving(|| {
             for (a, bs) in self.edges.iter().enumerate() {
-                for &b in bs {
-                    let e = (a as u32, b);
-                    if self.jumps.contains(&e) || self.mantles.contains(&e) {
+                for &Edge {
+                    to: b,
+                    jump,
+                    mantle,
+                    ..
+                } in bs
+                {
+                    if jump || mantle {
                         continue;
                     }
                     let (p, q) = (self.nodes[a], self.nodes[b as usize]);
@@ -176,7 +198,7 @@ impl NavGraph {
 
     pub(super) fn index_components(&mut self) {
         self.comp = self.components();
-        let safe = self.components_by(|a, b| !self.risky.contains(&(a, b)));
+        let safe = self.components_by(|e| !e.risky);
         let mut sizes = HashMap::new();
         for &c in &safe {
             *sizes.entry(c).or_insert(0usize) += 1;
@@ -197,7 +219,7 @@ impl NavGraph {
         let mut out = vec![HashSet::new(); count];
         for (a, next) in self.edges.iter().enumerate() {
             let ca = self.comp[a];
-            for &b in next {
+            for &Edge { to: b, .. } in next {
                 let cb = self.comp[b as usize];
                 if cb != ca {
                     out[ca as usize].insert(cb);
@@ -270,7 +292,7 @@ impl NavGraph {
         };
         let mut into: Vec<Vec<u32>> = vec![Vec::new(); self.nodes.len()];
         for (a, out) in self.edges.iter().enumerate() {
-            for &b in out {
+            for &Edge { to: b, .. } in out {
                 into[b as usize].push(a as u32);
             }
         }
@@ -307,8 +329,7 @@ impl NavGraph {
         let (cx, cy) = self.column(from);
         let level = |m: u32| (self.nodes[m as usize].z - from.z).abs() < LEVEL;
         // Walked without a jump: a jump one way says nothing of the other.
-        let has =
-            |a: u32, b: u32| self.edges[a as usize].contains(&b) && !self.jumps.contains(&(a, b));
+        let has = |a: u32, b: u32| self.linked(a, b) && !self.has(a, b, |k| k.jump);
         if let Some(d) = self.find(c, from.z).filter(|&d| level(d)) {
             let proven = if c.0 == cx || c.1 == cy {
                 has(d, n)
@@ -352,23 +373,64 @@ impl NavGraph {
         if a == b {
             return;
         }
-        if !self.edges[a as usize].contains(&b) {
-            self.edges[a as usize].push(b);
-            if jumped {
-                self.jumps.insert((a, b));
+        match self.edge_mut(a, b) {
+            None => self.edges[a as usize].push(Edge {
+                jump: jumped,
+                ..Edge::to(b)
+            }),
+            Some(e) if !jumped => {
+                e.jump = false;
+                e.crouched = false;
             }
-        } else if !jumped {
-            self.jumps.remove(&(a, b));
-            self.crouch_jumps.remove(&(a, b));
+            Some(_) => {}
         }
     }
 
     /// [`Self::link_as`], a crouched jump edge when `crouched`.
     pub(super) fn link_crouched(&mut self, a: u32, b: u32, jumped: bool, crouched: bool) {
         self.link_as(a, b, jumped);
-        if crouched && self.jumps.contains(&(a, b)) {
-            self.crouch_jumps.insert((a, b));
+        if let Some(e) = self.edge_mut(a, b).filter(|e| crouched && e.jump) {
+            e.crouched = true;
         }
+    }
+
+    /// Edge `a -> b`, if the graph has it.
+    pub fn edge(&self, a: u32, b: u32) -> Option<&Edge> {
+        self.edges.get(a as usize)?.iter().find(|e| e.to == b)
+    }
+
+    pub fn edge_mut(&mut self, a: u32, b: u32) -> Option<&mut Edge> {
+        self.edges
+            .get_mut(a as usize)?
+            .iter_mut()
+            .find(|e| e.to == b)
+    }
+
+    /// Whether the graph has edge `a -> b`.
+    pub fn linked(&self, a: u32, b: u32) -> bool {
+        self.edge(a, b).is_some()
+    }
+
+    /// Whether edge `a -> b` exists and `kind` holds of it.
+    pub fn has(&self, a: u32, b: u32, kind: impl FnOnce(&Edge) -> bool) -> bool {
+        self.edge(a, b).is_some_and(kind)
+    }
+
+    /// The nodes `a`'s edges lead to, in edge order.
+    pub fn next(&self, a: u32) -> impl Iterator<Item = u32> + '_ {
+        self.edges[a as usize].iter().map(|e| e.to)
+    }
+
+    /// Every edge `(a, b)` that `kind` holds of, in edge order.
+    pub fn edges_where<'a>(
+        &'a self,
+        kind: impl Fn(&Edge) -> bool + Copy + 'a,
+    ) -> impl Iterator<Item = (u32, u32)> + 'a {
+        self.edges.iter().enumerate().flat_map(move |(a, out)| {
+            out.iter()
+                .filter(move |e| kind(e))
+                .map(move |e| (a as u32, e.to))
+        })
     }
 
     pub(super) fn add(&mut self, c: (i32, i32), p: Vec3) -> u32 {
@@ -560,15 +622,15 @@ impl NavGraph {
         let level = |a: u32, b: u32| {
             (self.nodes[a as usize].z - self.nodes[b as usize].z).abs()
                 <= vcod_common::pmove::STEPSIZE
-                && !self.jumps.contains(&(a, b))
-                && !self.risky.contains(&(a, b))
+                && !self.has(a, b, |k| k.jump)
+                && !self.has(a, b, |k| k.risky)
         };
         let mut seen = vec![start];
         let mut ring = vec![start];
         for _ in 0..2 {
             let mut next = Vec::new();
             for &a in &ring {
-                for &b in &self.edges[a as usize] {
+                for b in self.next(a) {
                     if !seen.contains(&b) && level(a, b) {
                         seen.push(b);
                         next.push(b);
@@ -656,7 +718,7 @@ impl NavGraph {
         let z = |n: u32| self.nodes[n as usize].z;
         let mut ends: HashSet<u32> = HashSet::new();
         for &n in &near {
-            for &b in &self.edges[n as usize] {
+            for b in self.next(n) {
                 if z(b) > z(n) + JUMP_HEIGHT {
                     ends.extend([n, b]);
                 }
@@ -845,7 +907,7 @@ impl NavGraph {
     /// Each node's strongly connected component, numbered from 0 (Kosaraju,
     /// iterative). Two nodes share a number when each reaches the other.
     pub fn components(&self) -> Vec<u32> {
-        self.components_by(|_, _| true)
+        self.components_by(|_| true)
     }
 
     /// [`Self::components`] as indexed when the graph was finished, which
@@ -856,13 +918,12 @@ impl NavGraph {
     }
 
     /// [`Self::components`] over only the edges `keep` passes.
-    fn components_by(&self, keep: impl Fn(u32, u32) -> bool) -> Vec<u32> {
+    fn components_by(&self, keep: impl Fn(&Edge) -> bool) -> Vec<u32> {
         let n = self.nodes.len();
         let edges: Vec<Vec<u32>> = self
             .edges
             .iter()
-            .enumerate()
-            .map(|(a, out)| out.iter().copied().filter(|&b| keep(a as u32, b)).collect())
+            .map(|out| out.iter().filter(|e| keep(e)).map(|e| e.to).collect())
             .collect();
         // Pass 1: finish order of a DFS over the forward edges.
         let mut order = Vec::with_capacity(n);
@@ -919,15 +980,11 @@ impl NavGraph {
     pub fn from_parts(nodes: Vec<Vec3>, edges: Vec<Vec<u32>>) -> NavGraph {
         let mut g = NavGraph {
             nodes: Vec::new(),
-            edges,
-            jumps: HashSet::new(),
-            leaps: HashSet::new(),
-            crouch_jumps: HashSet::new(),
-            aims: HashMap::new(),
-            risky: HashSet::new(),
+            edges: edges
+                .into_iter()
+                .map(|out| out.into_iter().map(Edge::to).collect())
+                .collect(),
             perches: HashSet::new(),
-            mantles: HashSet::new(),
-            mantle_lands: HashMap::new(),
             seeds: Vec::new(),
             spacing: SPACING_MIN,
             columns: HashMap::new(),
@@ -954,14 +1011,10 @@ impl NavGraph {
     /// leap, crouched jump or risky drop, and no more than a step between
     /// its ends. What [`Follower::pull`] cuts across.
     pub fn plain_edge(&self, a: u32, b: u32) -> bool {
-        let e = (a, b);
-        !self.jumps.contains(&e)
-            && !self.leaps.contains(&e)
-            && !self.crouch_jumps.contains(&e)
-            && !self.risky.contains(&e)
-            && !self.mantles.contains(&e)
-            && (self.nodes[a as usize].z - self.nodes[b as usize].z).abs()
-                <= vcod_common::pmove::STEPSIZE
+        !self.has(a, b, |e| {
+            e.jump || e.leap || e.crouched || e.risky || e.mantle
+        }) && (self.nodes[a as usize].z - self.nodes[b as usize].z).abs()
+            <= vcod_common::pmove::STEPSIZE
     }
 
     /// For a body at `p` on a ladder, the point level with it across the
@@ -1067,6 +1120,11 @@ impl NavGraph {
 pub(super) mod tests {
     use super::*;
     use crate::nav::build::tests::map_world;
+
+    /// Each node's edge targets, what [`NavGraph::from_parts`] takes.
+    fn targets(g: &NavGraph) -> Vec<Vec<u32>> {
+        (0..g.len() as u32).map(|a| g.next(a).collect()).collect()
+    }
 
     /// 0 - 1 - 2 in a row with a shortcut 0 -> 3 -> 2 that is longer, and a
     /// one-way drop 2 -> 4.
@@ -1246,14 +1304,14 @@ pub(super) mod tests {
     fn a_plain_walk_clears_a_jump_edge() {
         let mut g = row();
         g.link_as(0, 2, true);
-        assert!(g.jumps.contains(&(0, 2)));
+        assert!(g.has(0, 2, |k| k.jump));
         g.link_as(0, 2, true);
-        assert!(g.jumps.contains(&(0, 2)), "a second jump keeps it a jump");
+        assert!(g.has(0, 2, |k| k.jump), "a second jump keeps it a jump");
         g.link_as(0, 2, false);
-        assert!(!g.jumps.contains(&(0, 2)));
+        assert!(!g.has(0, 2, |k| k.jump));
         g.link_as(2, 4, false);
         g.link_as(2, 4, true);
-        assert!(!g.jumps.contains(&(2, 4)), "a plain edge stays plain");
+        assert!(!g.has(2, 4, |k| k.jump), "a plain edge stays plain");
     }
 
     /// A roam picks among the nodes its start reaches both ways: two rows
@@ -1341,7 +1399,7 @@ pub(super) mod tests {
             .map(|i| Vec3::new(i as f32 * 32.0, 0.0, 0.0))
             .collect();
         let mut g = NavGraph::from_parts(nodes, vec![vec![1], vec![0, 2], vec![1]]);
-        g.risky.insert((1, 2));
+        g.edge_mut(1, 2).unwrap().risky = true;
         g.index_components();
         let mut picks = [2, 1].into_iter();
         assert_eq!(
@@ -1414,7 +1472,7 @@ pub(super) mod tests {
             vec![vec![1, 2], vec![], vec![3], vec![1]],
         );
         assert_eq!(g.path(0, 1), Some(vec![0, 1]));
-        g.risky.insert((0, 1));
+        g.edge_mut(0, 1).unwrap().risky = true;
         assert_eq!(g.path(0, 1), Some(vec![0, 2, 3, 1]), "round it");
         g.edges[2].clear();
         assert_eq!(g.path(0, 1), Some(vec![0, 1]), "the only way");
@@ -1442,7 +1500,7 @@ pub(super) mod tests {
         // A spawn in it: a room to be in.
         assert!(!g.pit([96.0, 16.0, -40.0], &[[96.0, 32.0, -32.0]]));
         // A spawn on a ledge cut off over it, its one way a drop into it.
-        let (mut nodes, mut edges) = (g.nodes.clone(), g.edges.clone());
+        let (mut nodes, mut edges) = (g.nodes.clone(), targets(&g));
         nodes.push(Vec3::new(128.0, 64.0, 0.0));
         edges.push(vec![4]);
         let g = NavGraph::from_parts(nodes, edges);
@@ -1511,7 +1569,7 @@ pub(super) mod tests {
         // A node straight above node 1, one storey up.
         g = NavGraph::from_parts(
             [g.nodes.clone(), vec![Vec3::new(32.0, 0.0, 128.0)]].concat(),
-            [g.edges.clone(), vec![vec![]]].concat(),
+            [targets(&g), vec![vec![]]].concat(),
         );
         assert_eq!(g.nearest([30.0, 2.0, 10.0]), Some(1));
         assert_eq!(g.nearest([30.0, 2.0, 140.0]), Some(5));

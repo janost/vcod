@@ -2005,7 +2005,7 @@ mod tests {
         };
         rt.deliver_hits(vec![Hit {
             victim: 0,
-            attacker: 1,
+            attacker: Some(crate::game::combat::Attacker::Client(1)),
             inflictor: None,
             damage: 45,
             dflags: 0,

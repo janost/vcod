@@ -100,15 +100,13 @@ fn main() {
             g.edge_count(),
             on,
             seeds.len(),
-            g.leaps.len(),
-            g.crouch_jumps.len(),
-            g.aims.len(),
+            g.edges_where(|k| k.leap).count(),
+            g.edges_where(|k| k.crouched).count(),
+            g.edges_where(|k| k.aim.is_some()).count(),
             digest(&g),
         );
         if std::env::var("CROUCH").is_ok_and(|v| v == "1") {
-            let mut edges: Vec<_> = g.crouch_jumps.iter().copied().collect();
-            edges.sort_unstable();
-            for (a, b) in edges {
+            for (a, b) in g.edges_where(|k| k.crouched) {
                 println!(
                     "  crouched jump {a} {:?} -> {b} {:?}",
                     g.nodes[a as usize].round(),
@@ -160,15 +158,15 @@ fn inspect(g: &NavGraph) {
     }
     if let Ok(near) = std::env::var("JUMPS") {
         let v: Vec<f32> = near.split(',').map(|x| x.parse().expect("JUMPS")).collect();
-        for &(a, b) in &g.jumps {
+        for (a, b) in g.edges_where(|k| k.jump) {
             let n = g.nodes[a as usize];
             if (n.x - v[0]).hypot(n.y - v[1]) < v[2] {
                 println!(
                     "  jump {:?} -> {:?} leap {} aim {:?}",
                     n.round(),
                     g.nodes[b as usize].round(),
-                    g.leaps.contains(&(a, b)),
-                    g.aims.get(&(a, b))
+                    g.has(a, b, |k| k.leap),
+                    g.edge(a, b).and_then(|e| e.aim)
                 );
             }
         }
@@ -179,17 +177,17 @@ fn inspect(g: &NavGraph) {
             if (n.x - v[0]).hypot(n.y - v[1]) < v[2] {
                 println!("  node {i} {:?} edges {}", n.round(), g.edges[i].len());
                 if std::env::var("EDGES").is_ok_and(|v| v == "1") {
-                    for &b in &g.edges[i] {
-                        let e = (i as u32, b);
+                    for e in &g.edges[i] {
+                        let b = e.to;
                         let tag = [
-                            (&g.jumps, "jump"),
-                            (&g.leaps, "leap"),
-                            (&g.crouch_jumps, "crouch"),
-                            (&g.risky, "risky"),
-                            (&g.mantles, "mantle"),
+                            (e.jump, "jump"),
+                            (e.leap, "leap"),
+                            (e.crouched, "crouch"),
+                            (e.risky, "risky"),
+                            (e.mantle, "mantle"),
                         ]
                         .iter()
-                        .filter(|(s, _)| s.contains(&e))
+                        .filter(|(on, _)| *on)
                         .map(|(_, t)| *t)
                         .collect::<Vec<_>>()
                         .join(",");
@@ -213,10 +211,11 @@ fn digest(g: &NavGraph) -> u64 {
     }
     for e in &g.edges {
         eat(e.len() as u32);
-        e.iter().for_each(|&b| eat(b));
+        e.iter().for_each(|e| eat(e.to));
     }
-    for set in [&g.jumps, &g.leaps, &g.risky] {
-        let mut v: Vec<_> = set.iter().copied().collect();
+    let kinds: [fn(&vcod_server::nav::Edge) -> bool; 3] = [|e| e.jump, |e| e.leap, |e| e.risky];
+    for kind in kinds {
+        let mut v: Vec<_> = g.edges_where(kind).collect();
         v.sort_unstable();
         eat(v.len() as u32);
         v.iter().for_each(|&(a, b)| {
@@ -284,10 +283,10 @@ fn cod4_main() {
             g.edge_count(),
             on,
             seeds.len(),
-            g.leaps.len(),
-            g.crouch_jumps.len(),
-            g.aims.len(),
-            g.mantles.len(),
+            g.edges_where(|k| k.leap).count(),
+            g.edges_where(|k| k.crouched).count(),
+            g.edges_where(|k| k.aim.is_some()).count(),
+            g.edges_where(|k| k.mantle).count(),
             digest(&g),
         );
         inspect(&g);
@@ -356,10 +355,10 @@ fn cod2_main() {
             g.edge_count(),
             on,
             seeds.len(),
-            g.leaps.len(),
-            g.crouch_jumps.len(),
-            g.aims.len(),
-            g.mantles.len(),
+            g.edges_where(|k| k.leap).count(),
+            g.edges_where(|k| k.crouched).count(),
+            g.edges_where(|k| k.aim.is_some()).count(),
+            g.edges_where(|k| k.mantle).count(),
             digest(&g),
         );
         inspect(&g);

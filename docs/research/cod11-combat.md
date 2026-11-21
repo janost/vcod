@@ -7264,7 +7264,7 @@ INFERRED: entity 1023's number reads 0, so `CodeCallback_PlayerDamage` gets
 entity 0 as `eAttacker` from that splash. vcod: the drop arms
 `Missile::explode_at_ms` 15 s on, a shell `fire_artillery` hangs with no
 owner keeps `parent_unspawned`, and its fuse blast is charged to
-`host::ZEROED_ENTITY`, which `ScriptRuntime::attacker_entity` reads as entity
+`combat::Attacker::Unspawned`, which `ScriptRuntime::attacker_entity` reads as entity
 0. A fuse blast's means of death is the missile's own splash one (a rocket's
 `MOD_PROJECTILE_SPLASH`, a shell's `MOD_ARTILLERY_SPLASH`), not
 `MOD_GRENADE_SPLASH`.
@@ -7361,7 +7361,7 @@ arms push it through `Scr_AddEntity` too. INFERRED: with the slot empty
 the shell's direct hit and splash are charged to the freed entity and the
 callback sees entity 0 as `eAttacker`: the client in slot 0 when there is
 one. vcod: `ScriptRuntime::charged_owner` turns an owner slot with no client
-into `host::ZEROED_ENTITY`, delivered as entity 0. Not modelled: with no
+into `combat::Attacker::Unspawned`, delivered as entity 0. Not modelled: with no
 entity 0 in use vcod passes undefined, where retail pushes the free
 entity's object.
 

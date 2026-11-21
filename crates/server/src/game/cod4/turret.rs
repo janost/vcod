@@ -499,7 +499,7 @@ impl Cod4Level {
             self.bullet_fire_round(slot, id.0, d, start, end, now, &origins);
         }
         let ev = self.gun_events.entry(id).or_default();
-        ev.add(EV_FIRE_WEAPON_MG42, slot as u32);
+        ev.add(EV_FIRE_WEAPON_MG42 as i32, (slot & 0xff) as i32);
     }
 
     /// `G_ClientStopUsingTurret` (0x80b7866): the gun is freed, idle and silent; its
@@ -599,7 +599,7 @@ impl Cod4Level {
             }
             set("lerp.eFlags", flags);
             if let Some(ev) = self.gun_events.get(&id) {
-                ev.write(&mut set);
+                ev.write(&mut |name, v| set(name, v as u32));
             }
             *e = t;
         }
@@ -653,31 +653,6 @@ impl Cod4Level {
             p.ps.set(ps!("cursorHintEntIndex"), ENTITYNUM_NONE);
             p.ps.set(ps!("cursorHint"), w + 4);
             p.ps.set(ps!("cursorHintString"), s as u32);
-        }
-    }
-}
-
-/// A gun's own event ring (`G_AddEvent` on the turret entity).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct GunEvents {
-    seq: u32,
-    events: [u32; 4],
-    parms: [u32; 4],
-}
-
-impl GunEvents {
-    fn add(&mut self, event: u32, parm: u32) {
-        let k = (self.seq & 3) as usize;
-        self.events[k] = event;
-        self.parms[k] = parm & 0xff;
-        self.seq = (self.seq + 1) & 0xff;
-    }
-
-    fn write(&self, set: &mut impl FnMut(&str, u32)) {
-        set("eventSequence", self.seq);
-        for k in 0..4 {
-            set(&format!("events[{k}]"), self.events[k]);
-            set(&format!("eventParms[{k}]"), self.parms[k]);
         }
     }
 }

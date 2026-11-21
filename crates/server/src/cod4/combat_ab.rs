@@ -13,30 +13,15 @@
 //! `COMBAT_REPORT=1` prints every row.
 
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
 
 use vcod_cod4::net::parse::Snapshot;
 
-use super::wire_ab::{Probe, Side, replay_schedule, retail, side};
+use super::test_harness::*;
 use super::*;
-
-/// The run's end: the capture's last snapshot (63350) and a frame.
-const RUN_MS: i32 = 63_400;
-/// The two spawns the replays start after.
-const TARGET_SPAWN_MS: i32 = 45_950;
-const SHOOTER_SPAWN_MS: i32 = 46_900;
-
-/// The kill run's `srand` seed (`G_InitGame`, 0x80b56ee), found off its
-/// two challenges as `wire_ab::WALK_SEED` was (cod4-combat.md 10.9).
-const KILL_SEED: u32 = 1_807_258_603;
 
 /// Each tolerated row (a prefix of the report line) and why, by
 /// cod4-combat.md's section.
 const GAPS: &[(&str, &str)] = &[];
-
-pub(super) fn kill(name: &str) -> Vec<vcod_cod4::net::capture::Line> {
-    retail(&format!("kill-{name}"))
-}
 
 /// The two clients against `Cod4Server` to [`RUN_MS`].
 fn ours(install: &vcod_cod4::install::Install, retail_cs0: &str) -> (Vec<Probe>, Vec<String>) {
@@ -58,129 +43,6 @@ fn ours_with(
         &mut |_, _, _| {},
     );
     (probes, aborts)
-}
-
-/// A hook run before each tick's packets: the server, the probes and the
-/// server time.
-pub(super) type Hook<'a> = dyn FnMut(&mut Cod4Server, &mut [Probe], i32) + 'a;
-
-/// [`ours_with`] with a [`Hook`]; the server comes back too.
-pub(super) fn ours_hooked(
-    install: &vcod_cod4::install::Install,
-    retail_cs0: &str,
-    shooter: Option<VecDeque<(i32, Vec<UserCmd>)>>,
-    target_extra: &[(i32, &'static str)],
-    hook: &mut Hook,
-) -> (Vec<Probe>, Vec<String>, Cod4Server) {
-    let classes = ["mr {sid} 15 assault_mp,0"; 2];
-    ours_set_up(
-        install,
-        retail_cs0,
-        &[],
-        classes,
-        shooter,
-        target_extra,
-        hook,
-    )
-}
-
-/// [`ours_hooked`] with `cvars` set over the capture's serverinfo and each
-/// side's class menu answer (target, shooter).
-pub(super) fn ours_set_up(
-    install: &vcod_cod4::install::Install,
-    retail_cs0: &str,
-    cvars: &[(&str, &str)],
-    classes: [&'static str; 2],
-    shooter: Option<VecDeque<(i32, Vec<UserCmd>)>>,
-    target_extra: &[(i32, &'static str)],
-    hook: &mut Hook,
-) -> (Vec<Probe>, Vec<String>, Cod4Server) {
-    // Past the capture's end when a request falls later.
-    let run_ms = target_extra
-        .iter()
-        .map(|a| 43_350 + a.0 + 500)
-        .max()
-        .unwrap_or(0)
-        .max(RUN_MS);
-    let mut sv = Cod4Server::new(
-        Cod4Config {
-            map: "mp_crash".into(),
-            gametype: "war".into(),
-            hostname: "CoD4Host".into(),
-            max_clients: 8,
-        },
-        7,
-    );
-    for (k, v) in vcod_common::net::connectionless::info_pairs(retail_cs0) {
-        if !matches!(k, "protocol" | "shortversion") {
-            sv.set_cvar(k, v);
-        }
-    }
-    // `+devmap`: cheats on, so `setviewpos` runs.
-    sv.set_cvar("sv_cheats", "1");
-    for (k, v) in cvars {
-        sv.set_cvar(k, v);
-    }
-    sv.pin_game_seed(KILL_SEED);
-    sv.load(Some(install)).unwrap();
-    let pin =
-        |o: [u32; 3], yaw: u32| Some((o.map(f32::from_bits), [0.0, f32::from_bits(yaw), 0.0]));
-    let mut pins = vec![VecDeque::new(); crate::server::MAX_CLIENTS];
-    pins[0].push_back(pin([0x442e_4000, 0xc4fe_c000, 0x4308_2af3], 0x42b4_0000));
-    pins[1].push_back(pin([0xc454_8000, 0x4509_c000, 0x437e_2000], 0xc2b3_fd30));
-    sv.game.level.as_mut().unwrap().rt.host.spawn_pins =
-        Some(std::rc::Rc::new(std::cell::RefCell::new(pins)));
-    let mut target_answers = vec![
-        (1050, "mr {sid} 8 allies"),
-        (2550, classes[0]),
-        (3050, "setviewpos 207 2291 296"),
-    ];
-    target_answers.extend_from_slice(target_extra);
-    target_answers.sort_by_key(|a| a.0);
-    let mut probes = vec![
-        Probe::new("target", 0, 28961, 43350, &target_answers),
-        Probe::new(
-            "shooter",
-            1,
-            28962,
-            44300,
-            &[
-                (1050, "mr {sid} 8 axis"),
-                (2550, classes[1]),
-                (3050, "setviewpos 123 2110 300"),
-            ],
-        ),
-    ];
-    probes[0].replay = replay_schedule(&kill("target"), TARGET_SPAWN_MS);
-    probes[0].replay_from = TARGET_SPAWN_MS;
-    probes[1].replay =
-        shooter.unwrap_or_else(|| replay_schedule(&kill("shooter"), SHOOTER_SPAWN_MS));
-    probes[1].replay_from = SHOOTER_SPAWN_MS;
-    let mut now = Instant::now();
-    while sv.core.sv_time_ms < run_ms {
-        let svs = sv.core.sv_time_ms;
-        for p in probes.iter_mut() {
-            if !p.joined && svs >= p.connect_at {
-                p.join(&mut sv, now);
-            }
-        }
-        hook(&mut sv, &mut probes, svs);
-        for p in probes.iter_mut().filter(|p| p.joined) {
-            let pkt = p.packet(svs);
-            p.log("c2s", svs, &pkt);
-            sv.handle_packet(p.addr, &pkt, now);
-        }
-        now += Duration::from_millis(FRAME_MS as u64);
-        sv.tick_frames(now, 1);
-        let svs = sv.core.sv_time_ms;
-        for (to, pkt) in sv.take_outgoing() {
-            if let Some(p) = probes.iter_mut().find(|p| p.addr == to) {
-                p.receive(svs, &pkt);
-            }
-        }
-    }
-    let aborts = sv.game.level.as_ref().unwrap().rt.aborts();
-    (probes, aborts, sv)
 }
 
 /// The shooter's weapon words, compared from its `setviewpos` on.

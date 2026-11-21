@@ -11,7 +11,7 @@ use vcod_common::asset_source::AssetSource;
 use vcod_common::bonetrace::{PriorityMap, bone_trace_in, into_frame_kept, into_frame_stored};
 use vcod_common::collision::{CONTENTS_GLASS, CollisionWorld, sound_material};
 use vcod_common::net::events::dir_to_byte;
-use vcod_common::net::protocol::ENTITYNUM_WORLD;
+use vcod_common::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use vcod_common::patch::Arith;
 use vcod_common::playerpose::pose_player;
 use vcod_common::pmove::weapon::{SpreadStance, hip_spread_min};
@@ -344,11 +344,45 @@ impl DobjStamps {
     }
 }
 
+/// Who `G_Damage` is handed as the attacker; a field that can hold NULL
+/// takes an `Option` (combat doc 13.7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Attacker {
+    /// A client's slot.
+    Client(usize),
+    /// An entity with no client: a UO vehicle, which its shell's fuse blast
+    /// is charged to.
+    Entity(EntId),
+    /// No client and not NULL: a slot `G_FreeEntity` memset, or
+    /// `g_entities[1023]`, which nothing spawns. Its `s.number` reads 0, so
+    /// `Scr_AddEntity` pushes entity 0.
+    Unspawned,
+    /// `g_entities[ENTITYNUM_WORLD]`: a blast the world set off.
+    World,
+}
+
+impl Attacker {
+    /// The client slot, when the attacker is a client.
+    pub fn client(self) -> Option<usize> {
+        match self {
+            Attacker::Client(slot) => Some(slot),
+            _ => None,
+        }
+    }
+
+    /// A CoD2 or CoD4 attacker slot, where an ownerless missile charges
+    /// `ENTITYNUM_NONE`: NULL for that, else the client.
+    pub fn of_slot(slot: usize) -> Option<Attacker> {
+        (slot != ENTITYNUM_NONE as usize).then_some(Attacker::Client(slot))
+    }
+}
+
 /// One player hit, ready for `CodeCallback_PlayerDamage`.
 #[derive(Clone, Debug)]
 pub struct Hit {
     pub victim: usize,
-    pub attacker: usize,
+    /// `None` for NULL: a missile's whose thrower left.
+    pub attacker: Option<Attacker>,
     /// The entity the damage came out of, when it is not the attacker
     /// himself: a blast names the missile that went off. `None` on a bullet
     /// and a swing, where the two are the same.
@@ -391,7 +425,8 @@ pub enum Effect {
 /// death.
 #[derive(Clone, Copy, Debug)]
 pub struct TriggerSweep {
-    pub attacker: usize,
+    /// `None` charges the world.
+    pub attacker: Option<Attacker>,
     pub start: Vec3,
     pub end: Vec3,
     pub damage: i32,
@@ -403,7 +438,8 @@ pub struct TriggerSweep {
 #[derive(Clone, Debug)]
 pub struct EntityHit {
     pub target: EntId,
-    pub attacker: usize,
+    /// `None` charges the world.
+    pub attacker: Option<Attacker>,
     /// The round's own inflictor when it is not the attacker: a vehicle's
     /// gun's vehicle.
     pub inflictor: Option<EntId>,
@@ -1116,7 +1152,7 @@ fn fire_round(
             bones.as_deref_mut(),
         );
         out.effects.push(Effect::TriggerSweep(TriggerSweep {
-            attacker: shooter,
+            attacker: Some(Attacker::Client(shooter)),
             start,
             end: traced.endpos(start, end),
             damage,
@@ -1137,7 +1173,7 @@ fn fire_round(
                 // `Bullet_Fire_Extended` raises no impact on a client (2.4).
                 out.effects.push(Effect::Hit(Hit {
                     victim: slot,
-                    attacker: shooter,
+                    attacker: Some(Attacker::Client(shooter)),
                     inflictor: None,
                     damage: located_damage(dealt, hitlocs.multiplier(hitloc)),
                     dflags,
@@ -1180,7 +1216,7 @@ fn fire_round(
                 if takes_damage && dealt > 0 {
                     out.effects.push(Effect::EntityHit(EntityHit {
                         target: id,
-                        attacker: shooter,
+                        attacker: Some(Attacker::Client(shooter)),
                         inflictor: None,
                         damage: dealt,
                         dflags,
@@ -1911,7 +1947,7 @@ pub fn melee_fire(
     // `G_CheckHitTriggerDamage` with `meleeDamage` ahead of the swing's
     // own damage roll (1.1d 0x687a0, combat doc 14.8).
     let sweep = Effect::TriggerSweep(TriggerSweep {
-        attacker,
+        attacker: Some(Attacker::Client(attacker)),
         start: muzzle,
         end: traced.endpos(muzzle, end),
         damage: def.melee_damage,
@@ -1949,7 +1985,7 @@ pub fn melee_fire(
                     }),
                     Effect::Hit(Hit {
                         victim: slot,
-                        attacker,
+                        attacker: Some(Attacker::Client(attacker)),
                         inflictor: None,
                         damage,
                         dflags: 0,
@@ -1999,7 +2035,7 @@ pub fn melee_fire(
                 if takes_damage {
                     effects.push(Effect::EntityHit(EntityHit {
                         target: id,
-                        attacker,
+                        attacker: Some(Attacker::Client(attacker)),
                         inflictor: None,
                         damage: def.melee_damage + (vcod_common::rng::xorshift(rng) % 5) as i32,
                         dflags: 0,
@@ -2030,7 +2066,7 @@ pub fn melee_fire(
                 if let Some(&target) = damageable.iter().find(|id| id.0 == other) {
                     effects.push(Effect::EntityHit(EntityHit {
                         target,
-                        attacker,
+                        attacker: Some(Attacker::Client(attacker)),
                         inflictor: None,
                         damage: def.melee_damage + (vcod_common::rng::xorshift(rng) % 5) as i32,
                         dflags: 0,
@@ -2301,7 +2337,7 @@ pub struct Blast {
     pub inner: f32,
     pub outer: f32,
     /// `None` for a blast the world set off.
-    pub attacker: Option<usize>,
+    pub attacker: Option<Attacker>,
     pub inflictor: Option<EntId>,
     pub weapon: String,
     pub mod_: &'static str,
@@ -2313,7 +2349,7 @@ impl Blast {
         radius: f32,
         inner: f32,
         outer: f32,
-        attacker: Option<usize>,
+        attacker: Option<Attacker>,
         inflictor: Option<EntId>,
         weapon: &str,
         mod_: &'static str,
@@ -2441,7 +2477,7 @@ impl Blast {
         let damage = self.charge(points, fraction, mid, world)?;
         Some(Hit {
             victim: v.slot,
-            attacker: self.attacker.unwrap_or(ENTITYNUM_WORLD as usize),
+            attacker: Some(self.attacker.unwrap_or(Attacker::World)),
             inflictor: self.inflictor,
             damage,
             dflags: DFLAG_RADIUS,
@@ -2856,7 +2892,7 @@ mod tests {
         radius: f32,
         inner: f32,
         outer: f32,
-        attacker: Option<usize>,
+        attacker: Option<Attacker>,
         inflictor: Option<EntId>,
         weapon: &str,
         mod_: &'static str,
@@ -3327,7 +3363,7 @@ mod tests {
         let r = fire(&def, &[(0, &a), (1, &b)], &world, &mut rng);
         let hit = only(r.hits(), "the shot reached B");
         assert_eq!(hit.victim, 1);
-        assert_eq!(hit.attacker, 0);
+        assert_eq!(hit.attacker, Some(Attacker::Client(0)));
         assert_eq!(
             hit.hitloc, "none",
             "with no rig to trace the hit carries no location"
@@ -3579,7 +3615,7 @@ mod tests {
             None,
         );
         let hit = only(r.hits(), "the round reached B");
-        assert_eq!((hit.victim, hit.attacker), (1, 0));
+        assert_eq!((hit.victim, hit.attacker), (1, Some(Attacker::Client(0))));
         assert_eq!(hit.inflictor, None);
         assert_eq!(hit.damage, 60);
         assert_eq!((hit.mod_, hit.dflags), ("MOD_RIFLE_BULLET", DFLAG_PASSTHRU));
@@ -4061,7 +4097,7 @@ mod tests {
             350.0,
             120.0,
             5.0,
-            Some(0),
+            Some(Attacker::Client(0)),
             None,
             "fraggrenade_mp",
             "MOD_GRENADE_SPLASH",
@@ -4082,7 +4118,10 @@ mod tests {
             hits.iter()
                 .all(|h| h.dflags == DFLAG_RADIUS && h.mod_ == "MOD_GRENADE_SPLASH")
         );
-        assert!(hits.iter().all(|h| h.hitloc == "none" && h.attacker == 0));
+        assert!(
+            hits.iter()
+                .all(|h| h.hitloc == "none" && h.attacker == Some(Attacker::Client(0)))
+        );
         // The direction is the blast to the victim with 24 added to z, and
         // not a unit vector: its length is what carries the distance.
         let at137 = hits.iter().find(|h| h.victim == 2).unwrap();
@@ -4123,7 +4162,7 @@ mod tests {
                 350.0,
                 120.0,
                 5.0,
-                Some(0),
+                Some(Attacker::Client(0)),
                 None,
                 "fraggrenade_mp",
                 "MOD_GRENADE_SPLASH",

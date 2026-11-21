@@ -5,7 +5,7 @@
 //! The graph floods the map's clip map (the shared
 //! [`vcod_common::collision::WorldClip`] hook, [`bot_world`]) with walks
 //! under 1.5's movement rules, as CoD2's does, and adds the mantles 1.7's
-//! own pmove climbs ([`mantle_probe`], `NavGraph::mantles`). The brain
+//! own pmove climbs ([`mantle_probe`], `Edge::mantle`). The brain
 //! reads a [`BotView`] filled from the 1.7 playerstate and the level's
 //! weapon defs, its weapons renumbered into the brain's 63 ([`Arms`]); its
 //! CoD1 usercmd is rewritten into 1.7's button bits ([`to_cmd4`], the frag
@@ -2088,8 +2088,8 @@ mod tests {
             node(Vec3::new(704.0, 964.0, 174.0)),
             node(Vec3::new(800.0, 964.0, 139.0)),
         );
-        assert!(g.mantles.contains(&(a, b)));
-        let land = g.mantle_lands[&(a, b)];
+        assert!(g.has(a, b, |k| k.mantle));
+        let land = g.edge(a, b).and_then(|e| e.land).expect("a landing");
         assert!(
             (land - Vec3::new(787.6, 953.1, 140.3)).length() < 1.0,
             "{land}"
@@ -2124,7 +2124,7 @@ mod tests {
             LIP,
         );
         let g = job.poll(true).expect("the graph");
-        assert!(g.leaps.is_empty());
+        assert!(g.edges_where(|k| k.leap).next().is_none());
         let node = |p: Vec3| {
             (0..g.nodes.len() as u32)
                 .find(|&n| g.nodes[n as usize].distance(p) < 4.0)
@@ -2135,11 +2135,11 @@ mod tests {
             Vec3::new(1280.0, 2496.0, 60.0),
             Vec3::new(1247.0, 2524.0, 60.0),
         ] {
-            assert!(!g.edges[node(foot) as usize].contains(&top), "{foot}");
+            assert!(!g.linked(node(foot), top), "{foot}");
         }
         // This one lands as a plain jump aimed beside the top.
         let kept = node(Vec3::new(1242.0, 2496.0, 60.0));
-        assert!(g.jumps.contains(&(kept, top)) && g.aims.contains_key(&(kept, top)));
+        assert!(g.has(kept, top, |k| k.jump && k.aim.is_some()));
     }
     /// mp_crash's roof at (64, -643, 313): `link_back` proved jumps 158
     /// across to (160, -518, 304), past the 128 a follower reads as off its
@@ -2167,10 +2167,11 @@ mod tests {
         let g = job.poll(true).expect("the graph");
         let reach = 4.0 * g.spacing;
         for (a, out) in g.edges.iter().enumerate() {
-            for &b in out {
+            for e in out {
+                let b = e.to;
                 let flat = (g.nodes[b as usize] - g.nodes[a]).truncate().length();
                 assert!(
-                    flat <= reach || g.mantles.contains(&(a as u32, b)),
+                    flat <= reach || e.mantle,
                     "{} -> {}",
                     g.nodes[a],
                     g.nodes[b as usize]
@@ -2183,11 +2184,7 @@ mod tests {
                 .expect("a node")
         };
         let roof = node(Vec3::new(63.8, -643.5, 313.1));
-        assert!(
-            g.edges[roof as usize]
-                .iter()
-                .any(|&b| g.nodes[b as usize].z < 280.0)
-        );
+        assert!(g.next(roof).any(|b| g.nodes[b as usize].z < 280.0));
     }
 
     /// mp_cargoship's `pipe_shootable` (`*76` at (1300, 61, 104)) caps the
@@ -2225,7 +2222,7 @@ mod tests {
             ) else {
                 return false;
             };
-            g.edges[a as usize].contains(&b)
+            g.linked(a, b)
         };
         assert!(step(&graph(Vec::new())));
         assert!(!step(&graph(pipe)));

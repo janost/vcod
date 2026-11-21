@@ -1,12 +1,12 @@
 //! Every CoD4 1.7 perk on ours (docs/research/cod4-gsc.md 7.4):
-//! the kill pair's two clients (`combat_ab::ours_set_up`), a perk set on
+//! the kill pair's two clients (`test_harness::ours_set_up`), a perk set on
 //! one side or a custom class built off its stats, an act, and the effect
 //! asserted. Needs `COD4_DIR`.
 
 use glam::Vec3;
 
-use super::combat_ab::{kill, ours_set_up};
-use super::wire_ab::{Probe, side};
+use super::test_harness::{Probe, side};
+use super::test_harness::{kill, ours_set_up};
 use super::*;
 
 fn cs0() -> String {
@@ -576,7 +576,7 @@ fn a_round_goes_through_a_wall_and_deep_impact_goes_further() {
     // The assault class's Stopping Power on top, `int(31 * 140 / 100)`:
     // what retail's first round took through the same plate
     // (`play-1.7-wall-target.txt`, cod4-combat.md 3.1).
-    let retail = side(&super::wire_ab::retail("wall-target"));
+    let retail = side(&super::test_harness::retail("wall-target"));
     let health: Vec<i32> = retail
         .snaps
         .iter()

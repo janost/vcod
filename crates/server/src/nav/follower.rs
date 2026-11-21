@@ -64,7 +64,7 @@ pub(super) const JUMP_PASS: f32 = 16.0;
 /// within this of its height (bot-navigation.md, section 3).
 const DROP_PASS: f32 = 8.0;
 
-/// What a [`NavGraph::risky`] drop adds to a plan's cost: a long way round
+/// What a [`super::Edge::risky`] drop adds to a plan's cost: a long way round
 /// is taken first.
 pub(super) const RISK_COST: f32 = 4000.0;
 
@@ -690,7 +690,7 @@ impl Follower {
             let leap = self
                 .path
                 .get(self.next + 1)
-                .is_some_and(|&b| g.leaps.contains(&(w, b)));
+                .is_some_and(|&b| g.has(w, b, |k| k.leap));
             let wp = g.nodes[w as usize];
             // A node held for a body too fast for the walk on is passed only
             // from at rest on it, like a leap's foot.
@@ -757,7 +757,7 @@ impl Follower {
                 && !jump
                 && !rung
                 && self.path.get(self.next + 1).is_some_and(|&n| {
-                    if g.jumps.contains(&(self.path[self.next], n)) {
+                    if g.has(self.path[self.next], n, |k| k.jump) {
                         return false;
                     }
                     let n = g.nodes[n as usize];
@@ -942,7 +942,7 @@ impl Follower {
             let (a, b) = (self.path[self.next - 1], self.path[self.next]);
             let (za, zb) = (g.nodes[a as usize].z, g.nodes[b as usize].z);
             let step = vcod_common::pmove::STEPSIZE;
-            if !g.jumps.contains(&(a, b)) && (za - zb).abs() < step && here.z < za.min(zb) - step {
+            if !g.has(a, b, |k| k.jump) && (za - zb).abs() < step && here.z < za.min(zb) - step {
                 self.avoid_edge(a, b);
                 self.reset();
                 self.fell = true;
@@ -983,7 +983,7 @@ impl Follower {
             let edge = (self.path[self.next - 1], self.path[self.next]);
             let top = g.nodes[edge.0 as usize];
             if (here.z - top.z).abs() < vcod_common::pmove::STEPSIZE
-                && !g.jumps.contains(&edge)
+                && !g.has(edge.0, edge.1, |k| k.jump)
                 && !self.avoid.iter().any(|a| (a.0, a.1) == edge)
                 && self.runs_off(world, edge, top, w)
                 && !matches!(
@@ -1254,9 +1254,7 @@ impl Follower {
     pub fn holding(&self, g: &NavGraph) -> bool {
         match (self.path.get(self.next), self.path.get(self.next + 1)) {
             (Some(&a), Some(&b)) => {
-                g.leaps.contains(&(a, b))
-                    || self.stop_at == Some((a, b))
-                    || self.held == Some((a, b))
+                g.has(a, b, |k| k.leap) || self.stop_at == Some((a, b)) || self.held == Some((a, b))
             }
             _ => false,
         }
@@ -1327,7 +1325,7 @@ impl Follower {
             return false;
         };
         match (self.path.get(i), self.path.get(self.next)) {
-            (Some(&a), Some(&b)) => g.leaps.contains(&(a, b)),
+            (Some(&a), Some(&b)) => g.has(a, b, |k| k.leap),
             _ => false,
         }
     }
@@ -1439,9 +1437,7 @@ impl Follower {
         for &n in ahead.iter().take(SPRINT_LOOK) {
             let p = g.nodes[n as usize];
             let plain = prev.is_none_or(|m| {
-                !g.jumps.contains(&(m, n))
-                    && !g.leaps.contains(&(m, n))
-                    && !g.risky.contains(&(m, n))
+                !g.has(m, n, |k| k.jump) && !g.has(m, n, |k| k.leap) && !g.has(m, n, |k| k.risky)
             });
             if !plain || (p.z - pts[pts.len() - 1].z).abs() > vcod_common::pmove::STEPSIZE {
                 break;
@@ -1500,7 +1496,7 @@ impl Follower {
         };
         let (from, to) = (g.nodes[a as usize], g.nodes[b as usize]);
         to.z < at.z - vcod_common::pmove::JUMP_HEIGHT
-            && !g.jumps.contains(&(a, b))
+            && !g.has(a, b, |k| k.jump)
             && !self.runs_off(world, (a, b), from, to)
     }
 
@@ -1542,13 +1538,13 @@ impl Follower {
             return self.jump_start && !self.path.is_empty();
         };
         match (self.path.get(i), self.path.get(self.next)) {
-            (Some(&a), Some(&b)) => g.jumps.contains(&(a, b)),
+            (Some(&a), Some(&b)) => g.has(a, b, |k| k.jump),
             _ => false,
         }
     }
 
     /// Whether the way to the current waypoint is a mantle edge
-    /// ([`NavGraph::mantles`]).
+    /// ([`super::Edge::mantle`]).
     pub fn mantling(&self, g: &NavGraph) -> bool {
         self.mantle_edge(g).is_some()
     }
@@ -1557,12 +1553,13 @@ impl Follower {
     pub fn mantle_edge(&self, g: &NavGraph) -> Option<(u32, u32)> {
         let i = self.next.checked_sub(1)?;
         let e = (*self.path.get(i)?, *self.path.get(self.next)?);
-        g.mantles.contains(&e).then_some(e)
+        g.has(e.0, e.1, |k| k.mantle).then_some(e)
     }
 
-    /// On a mantle edge, where its probe landed ([`NavGraph::mantle_lands`]).
+    /// On a mantle edge, where its probe landed ([`super::Edge::land`]).
     pub fn mantle_land(&self, g: &NavGraph) -> Option<Vec3> {
-        g.mantle_lands.get(&self.mantle_edge(g)?).copied()
+        let (a, b) = self.mantle_edge(g)?;
+        g.edge(a, b)?.land
     }
 
     /// Whether the bot jumps on the way to the current waypoint: a jump
@@ -1576,12 +1573,12 @@ impl Follower {
         self.jumping(g) && (self.walked_jump.is_none() || self.walked_jump != into)
     }
 
-    /// On a jump edge proved aimed beside its top ([`NavGraph::aims`]),
+    /// On a jump edge proved aimed beside its top ([`super::Edge::aim`]),
     /// the point to steer at in place of the top.
     pub fn jump_aim(&self, g: &NavGraph) -> Option<glam::Vec2> {
         let i = self.next.checked_sub(1)?;
         let (a, b) = (*self.path.get(i)?, *self.path.get(self.next)?);
-        g.aims.get(&(a, b)).copied()
+        g.edge(a, b)?.aim
     }
 
     /// Whether the way to the current waypoint is a crouched jump edge: the
@@ -1592,7 +1589,7 @@ impl Follower {
             return false;
         };
         match (self.path.get(i), self.path.get(self.next)) {
-            (Some(&a), Some(&b)) => g.crouch_jumps.contains(&(a, b)),
+            (Some(&a), Some(&b)) => g.has(a, b, |k| k.crouched),
             _ => false,
         }
     }
@@ -1654,7 +1651,7 @@ impl Follower {
             Some((e, lands)) if e == edge => lands,
             _ => {
                 let top = g.nodes[b as usize];
-                let gait = if g.crouch_jumps.contains(&edge) {
+                let gait = if g.has(edge.0, edge.1, |k| k.crouched) {
                     Gait::CrouchJump
                 } else {
                     Gait::Forward
@@ -2051,7 +2048,7 @@ mod tests {
             Vec3::new(128.0, 0.0, 0.0),
         ];
         let mut g = NavGraph::from_parts(nodes, vec![vec![1, 2], vec![2], vec![]]);
-        g.risky.insert((0, 2));
+        g.edge_mut(0, 2).unwrap().risky = true;
         g.index_components();
         let goal = Goal::To([128.0, 0.0, 0.0]);
         let mut f = Follower::default();
@@ -2074,7 +2071,7 @@ mod tests {
         assert!(matches!(s.run(&g, &mut 100), Plan::Failed));
         let mut s = Search::new(&g, 0, 2, Vec::new());
         assert!(matches!(s.run(&g, &mut 100), Plan::Found(p) if p == [0, 1, 2]));
-        g.edges[0] = vec![2];
+        g.edges[0] = vec![Edge::to(2)];
         let mut s = Search::new(&g, 0, 2, Vec::new());
         assert!(matches!(s.run(&g, &mut 100), Plan::Found(p) if p == [0, 2]));
     }
@@ -2092,7 +2089,7 @@ mod tests {
             Vec3::new(128.0, 0.0, 0.0),
         ];
         let mut g = NavGraph::from_parts(nodes, vec![vec![1, 2], vec![2], vec![]]);
-        g.risky.insert((0, 2));
+        g.edge_mut(0, 2).unwrap().risky = true;
         g.index_components();
         let mut f = Follower::default();
         f.avoid.push((0, 1, u32::MAX));
@@ -2376,7 +2373,7 @@ mod tests {
         )]);
         assert_eq!(run(&zigzag(), &pillar, at)[0], Some([32.0, 0.0]));
         let mut g = zigzag();
-        g.jumps.insert((1, 2));
+        g.edge_mut(1, 2).unwrap().jump = true;
         assert_eq!(run(&g, &open, at)[0], Some([32.0, 0.0]));
     }
 
@@ -2861,7 +2858,7 @@ mod tests {
             ],
             vec![vec![1], vec![0, 2], vec![1]],
         );
-        g.jumps.insert((0, 1));
+        g.edge_mut(0, 1).unwrap().jump = true;
         let mut f = Follower::default();
         let goal = crate::bots::Goal::To([32.0, 64.0, 36.0]);
         let mut budget = 100;
@@ -2901,7 +2898,7 @@ mod tests {
             ],
             vec![vec![1], vec![0, 2], vec![1]],
         );
-        g.jumps.insert((0, 1));
+        g.edge_mut(0, 1).unwrap().jump = true;
         let mut f = Follower::default();
         let goal = crate::bots::Goal::To([3328.2, 252.4, 664.125]);
         let mut budget = 100;
@@ -3157,8 +3154,8 @@ mod tests {
             ],
             vec![vec![1], vec![0, 2], vec![1]],
         );
-        g.jumps.insert((1, 2));
-        g.leaps.insert((1, 2));
+        g.edge_mut(1, 2).unwrap().jump = true;
+        g.edge_mut(1, 2).unwrap().leap = true;
         let mut f = Follower::default();
         let goal = crate::bots::Goal::To([96.0, 0.0, 32.0]);
         let mut budget = 100;
@@ -3350,7 +3347,7 @@ mod tests {
         assert!(run(f32::INFINITY), "a jump to hand lands on the rim");
         assert!(!run(150.0), "a jump refused runs off the crate");
         let mut g = NavGraph::from_parts(vec![foot, top], vec![vec![1], vec![]]);
-        g.jumps.insert((0, 1));
+        g.edge_mut(0, 1).unwrap().jump = true;
         let f = Follower {
             path: vec![0, 1],
             next: 1,
@@ -3372,7 +3369,7 @@ mod tests {
     fn a_jump_edge_waits_out_the_jump_penalty() {
         let (foot, top) = (Vec3::ZERO, Vec3::new(32.0, 0.0, 30.0));
         let mut g = NavGraph::from_parts(vec![foot, top], vec![vec![1], vec![]]);
-        g.jumps.insert((0, 1));
+        g.edge_mut(0, 1).unwrap().jump = true;
         let f = Follower {
             path: vec![0, 1],
             next: 1,
@@ -3398,7 +3395,7 @@ mod tests {
     fn a_jump_edge_is_waited_on_from_a_ledge_above_its_foot() {
         let (foot, top) = (Vec3::ZERO, Vec3::new(48.0, 0.0, 53.0));
         let mut g = NavGraph::from_parts(vec![foot, top], vec![vec![1], vec![]]);
-        g.jumps.insert((0, 1));
+        g.edge_mut(0, 1).unwrap().jump = true;
         let f = Follower {
             path: vec![0, 1],
             next: 1,
@@ -3418,7 +3415,7 @@ mod tests {
             vec![foot, Vec3::new(48.0, 0.0, 16.0)],
             vec![vec![1], vec![]],
         );
-        low.jumps.insert((0, 1));
+        low.edge_mut(0, 1).unwrap().jump = true;
         assert_eq!(
             f.jump_wait(&low, [-20.0, 0.0, 16.0], &ps),
             Some(foot.into())
@@ -3478,7 +3475,7 @@ mod tests {
             (96.0, 0.0, 0.0),
             (144.0, 0.0, 0.0),
         ]);
-        g.jumps.insert((2, 3));
+        g.edge_mut(2, 3).unwrap().jump = true;
         let run = follow(4).straight_run(&g, Vec3::ZERO);
         assert!((run - 96.0).abs() < 1.0, "to the jump: {run}");
     }
@@ -3640,11 +3637,11 @@ mod tests {
         let foot = settle(w, Vec3::new(-1760.0, 71.0, 0.0), 0.0).unwrap();
         let top = settle(w, Vec3::new(-1731.0, 32.0, 30.0), 0.0).unwrap();
         let mut g = NavGraph::from_parts(vec![foot, top], vec![vec![1], vec![]]);
-        g.jumps.insert((0, 1));
+        g.edge_mut(0, 1).unwrap().jump = true;
         g.reprove_jumps(w);
-        let aim = g.aims.get(&(0, 1)).copied().expect("aimed aside");
+        let aim = g.edge(0, 1).and_then(|e| e.aim).expect("aimed aside");
         assert!((aim.distance(top.truncate()) - SIDESTEP).abs() < 0.01);
-        assert!(g.edges[0] == [1] && g.jumps.contains(&(0, 1)));
+        assert!(g.next(0).eq([1]) && g.has(0, 1, |k| k.jump));
         let f = Follower {
             path: vec![0, 1],
             next: 1,
@@ -3669,7 +3666,7 @@ mod tests {
         let a = Vec3::new(5829.127, 544.00085, 92.125);
         let b = Vec3::new(5792.3965, 576.17664, 76.125);
         let mut g = NavGraph::from_parts(vec![a, b], vec![vec![1], vec![]]);
-        g.jumps.insert((0, 1));
+        g.edge_mut(0, 1).unwrap().jump = true;
         let mut f = Follower {
             path: vec![0, 1],
             ..Follower::default()

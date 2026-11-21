@@ -881,11 +881,7 @@ impl Heli4 {
             );
         }
         set("loopSound", loop_sound as u32);
-        set("eventSequence", ring.seq as u32);
-        for k in 0..4 {
-            set(&format!("events[{k}]"), ring.events[k] as u32);
-            set(&format!("eventParms[{k}]"), ring.parms[k] as u32);
-        }
+        ring.write(&mut |name, v| set(name, v as u32));
         e
     }
 }

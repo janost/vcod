@@ -22,7 +22,7 @@ use vcod_cod4::net::clmsg::ClOp;
 use vcod_cod4::net::delta::EntityState;
 use vcod_cod4::net::parse::{Op, Snapshot};
 
-use super::wire_ab::{Probe, Side, cmd_angles, replay_schedule_timed, retail, side};
+use super::test_harness::{Probe, Side, cmd_angles, replay_schedule_timed, retail, side, test_cfg};
 use super::*;
 
 /// One retail run of the two probes.
@@ -195,15 +195,7 @@ fn run(install: &vcod_cod4::install::Install, pair: &Pair, hook: &mut Hook) -> R
     let twins: Vec<Twin> = lines.iter().map(|l| twin(l)).collect();
     let retail_sides: Vec<Side> = lines.iter().map(|l| side(l)).collect();
     let cs0 = String::from_utf8_lossy(retail_sides[0].gs.configstring(0)).into_owned();
-    let mut sv = Cod4Server::new(
-        Cod4Config {
-            map: "mp_crash".into(),
-            gametype: "war".into(),
-            hostname: "CoD4Host".into(),
-            max_clients: 8,
-        },
-        7,
-    );
+    let mut sv = Cod4Server::new(test_cfg("mp_crash", "war"), 7);
     for (k, v) in vcod_common::net::connectionless::info_pairs(&cs0) {
         if !matches!(k, "protocol" | "shortversion" | "fs_game") {
             sv.set_cvar(k, v);

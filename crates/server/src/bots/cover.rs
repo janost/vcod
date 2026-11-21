@@ -200,15 +200,15 @@ pub fn find(g: &NavGraph, from: Vec3, sight: &Sight) -> Option<Spot> {
     let start = g.nearest(from.into())?;
     let level = |a: u32, b: u32| {
         (g.nodes[a as usize].z - g.nodes[b as usize].z).abs() <= pmove::STEPSIZE
-            && !g.jumps.contains(&(a, b))
-            && !g.risky.contains(&(a, b))
+            && !g.has(a, b, |k| k.jump)
+            && !g.has(a, b, |k| k.risky)
     };
     let mut seen = vec![start];
     let mut ring = vec![start];
     for _ in 0..RINGS {
         let mut next = Vec::new();
         for &a in &ring {
-            for &b in &g.edges[a as usize] {
+            for b in g.next(a) {
                 if !seen.contains(&b)
                     && level(a, b)
                     && (g.nodes[b as usize] - from).truncate().length() <= REACH

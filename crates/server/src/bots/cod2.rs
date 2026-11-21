@@ -5,7 +5,7 @@
 //! shared [`vcod_common::collision::WorldClip`] hook, its ladder brushes
 //! too) with walks under 1.5's movement rules, which CoD2's pmove starts
 //! from (cod2-movement.md), and adds the mantles CoD2's own pmove climbs
-//! ([`mantle_probe`], `NavGraph::mantles`). The brain reads a [`BotView`]
+//! ([`mantle_probe`], `Edge::mantle`). The brain reads a [`BotView`]
 //! filled from the CoD2 playerstate, weapon state and weapon table, and
 //! its CoD1 usercmd is rewritten into CoD2's button bits ([`to_cmd2`], the
 //! frag throw onto the offhand key by [`offhand_cmd`]) and run through
@@ -1764,7 +1764,11 @@ mod tests {
         assert!(hits_felt > 0, "no hit felt");
         // The graph's mantle edges, and bots that climb them.
         let g = sv.bots_mut().unwrap().graph().unwrap().clone();
-        assert!(g.mantles.len() > 100, "{} mantle edges", g.mantles.len());
+        assert!(
+            g.edges_where(|k| k.mantle).count() > 100,
+            "{} mantle edges",
+            g.edges_where(|k| k.mantle).count()
+        );
         assert!(
             mantles > 0,
             "no bot mantled, walked {walked:?} kills {kills}"
@@ -1836,12 +1840,15 @@ mod tests {
         sv.bots_mut().unwrap().wait_for_graph();
         sv.tick_frames(now + std::time::Duration::from_millis(50), 1);
         let g = sv.bots_mut().unwrap().graph().unwrap().clone();
-        assert!(g.leaps.is_empty(), "{} leaps", g.leaps.len());
+        assert!(
+            g.edges_where(|k| k.leap).next().is_none(),
+            "{} leaps",
+            g.edges_where(|k| k.leap).count()
+        );
         let pit = |p: Vec3| (p.x - 8650.0).hypot(p.y + 12570.0) < 100.0 && p.z < -505.0;
         let out = g
-            .jumps
-            .iter()
-            .any(|&(a, b)| pit(g.nodes[a as usize]) && g.nodes[b as usize].z > -500.0);
+            .edges_where(|k| k.jump)
+            .any(|(a, b)| pit(g.nodes[a as usize]) && g.nodes[b as usize].z > -500.0);
         assert!(out, "no jump out of the pit");
     }
 
@@ -1980,6 +1987,88 @@ mod tests {
         assert!(b.smoked(eye, far, 1000 + SMOKE_FORM_MS));
         assert!(!b.smoked(eye, Vec3::new(0.0, 900.0, 60.0), 1000 + SMOKE_FORM_MS));
         assert!(!b.smoked(eye, far, 1000 + SMOKE_GONE_MS));
+    }
+
+    /// A bot on mp_toujane `dm` with a foe that cannot shoot pinned 600
+    /// off in clear sight, hurt under half its health, starts a retreat and
+    /// throws its smoke grenade at the line to the foe ([`Self::smokes`]).
+    /// Needs `COD2_DIR`.
+    #[test]
+    fn a_hurt_bot_with_a_foe_in_sight_throws_its_smoke() {
+        use crate::bots::gun::floor_spot;
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        let mut sv = crate::cod2::Cod2Server::new(
+            crate::cod2::Cod2Config {
+                map: "mp_toujane".into(),
+                gametype: "dm".into(),
+                hostname: "bots".into(),
+                max_clients: 8,
+                gametype_script: None,
+            },
+            3,
+            now,
+        );
+        sv.load(Some(std::rc::Rc::new(fs))).unwrap();
+        let slots = sv.add_bots(2, true);
+        let (thrower, foe) = (slots[0], slots[1]);
+        sv.bots_mut().unwrap().wait_for_graph();
+        let at = |t: u64| now + std::time::Duration::from_millis(50 * t);
+        let mut tick = 0;
+        let playing = |sv: &crate::cod2::Cod2Server| {
+            let l = sv.level().unwrap();
+            l.playing(thrower) && l.playing(foe)
+        };
+        while tick < 400 && !playing(&sv) {
+            tick += 1;
+            sv.tick_frames(at(tick), 1);
+        }
+        // A graph node with a floor 600 off in clear sight from its eye.
+        let g = sv.bots_mut().unwrap().graph().unwrap().clone();
+        let level = sv.level_mut().unwrap();
+        let w = &level.world.collision;
+        let eye = Vec3::Z * 60.0;
+        let (from, to) = (g.nodes.iter())
+            .find_map(|&n| {
+                (0..8).find_map(|k| {
+                    let (s, c) = (k as f32 * 45.0).to_radians().sin_cos();
+                    let to = floor_spot(
+                        w,
+                        n + Vec3::new(c, s, 0.0) * 600.0,
+                        vcod_cod2::pmove::MASK_PLAYERSOLID,
+                    )?;
+                    let clear = w.shot_trace(n + eye, to + eye).fraction >= 1.0;
+                    (clear && (to.z - n.z).abs() < 16.0).then_some((n, to))
+                })
+            })
+            .expect("a node with a floor 600 off in sight");
+        level.rt.with_host(|host, _| {
+            let ammo = &mut host.clients[foe].ammo;
+            ammo.clip.iter_mut().for_each(|c| *c = 0);
+            ammo.ammo.iter_mut().for_each(|a| *a = 0);
+        });
+        let pin = |sv: &mut crate::cod2::Cod2Server, slot: usize, to: Vec3| {
+            let p = sv.level_mut().unwrap().players[slot].as_mut().unwrap();
+            p.ps.origin = to + Vec3::Z;
+            p.ps.velocity = Vec3::ZERO;
+        };
+        for k in 0..400 {
+            tick += 1;
+            pin(&mut sv, foe, to);
+            if k < 40 {
+                pin(&mut sv, thrower, from);
+            } else if k == 40 {
+                let level = sv.level_mut().unwrap();
+                level.rt.host.clients[thrower].vitals.health = 30;
+            }
+            sv.tick_frames(at(tick), 1);
+            if sv.bots_mut().unwrap().smokes() > 0 {
+                return;
+            }
+        }
+        panic!("no smoke thrown from {from} at {to}");
     }
 
     /// A weapon menu spreads the bots over its weapons: none twice while

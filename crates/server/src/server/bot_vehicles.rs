@@ -272,7 +272,7 @@ impl Server {
         rt.damage_vehicle(
             id,
             damage,
-            num as usize,
+            crate::game::combat::Attacker::Entity(id),
             id,
             [o[0], o[1], o[2] + 1.0],
             "MOD_EXPLOSIVE",
@@ -925,9 +925,9 @@ fn plan_route(
         if h(n) < best_h {
             (best, best_h) = (n, h(n));
         }
-        for &m in &g.edges[n as usize] {
+        for m in g.next(n) {
             let q = g.nodes[m as usize];
-            let plain = !g.jumps.contains(&(n, m)) && !g.leaps.contains(&(n, m));
+            let plain = !g.has(n, m, |k| k.jump) && !g.has(n, m, |k| k.leap);
             if !plain || (q.z - p.z).abs() > vcod_common::pmove::STEPSIZE {
                 continue;
             }
@@ -1229,7 +1229,7 @@ mod tests {
         // A chain of the graph's own edges from the start.
         assert_eq!(path[0], from);
         for w in path.windows(2) {
-            assert!(g.edges[w[0] as usize].contains(&w[1]), "{w:?} is no edge");
+            assert!(g.linked(w[0], w[1]), "{w:?} is no edge");
         }
         path
     }
@@ -1307,14 +1307,14 @@ mod tests {
         let mut g = grid(4, 2, 64.0);
         // The direct row 0 -> 1 -> 2 -> 3 and its detour by row 1.
         assert_eq!(plan(&g, &world, 10.0, 0, 3), [0, 1, 2, 3]);
-        g.jumps.insert((1, 2));
+        g.edge_mut(1, 2).unwrap().jump = true;
         let p = plan(&g, &world, 10.0, 0, 3);
         assert!(!p.windows(2).any(|w| w == [1, 2]), "{p:?}");
-        g.jumps.clear();
-        g.leaps.insert((1, 2));
+        g.edges.iter_mut().flatten().for_each(|k| k.jump = false);
+        g.edge_mut(1, 2).unwrap().leap = true;
         let p = plan(&g, &world, 10.0, 0, 3);
         assert!(!p.windows(2).any(|w| w == [1, 2]), "{p:?}");
-        g.leaps.clear();
+        g.edges.iter_mut().flatten().for_each(|k| k.leap = false);
         g.nodes[2].z = vcod_common::pmove::STEPSIZE + 1.0;
         let p = plan(&g, &world, 10.0, 0, 3);
         assert!(!p.contains(&2), "{p:?}");

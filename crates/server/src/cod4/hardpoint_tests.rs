@@ -1,5 +1,5 @@
 //! The killstreak hardpoints on ours over the kill pair's join
-//! (`combat_ab::ours_hooked`, mp_crash `war`): the axis shooter calls in
+//! (`test_harness::ours_hooked`, mp_crash `war`): the axis shooter calls in
 //! the stock scripts' airstrike (`_hardpoints.gsc`'s `useAirstrike`, what
 //! a confirmed location runs) and helicopter (`triggerHardpoint
 //! ("helicopter_mp")`, what selecting the item runs) on the allied target,
@@ -11,8 +11,8 @@
 use glam::Vec3;
 use vcod_gsc::{EntId, Host, Value};
 
-use super::combat_ab::kill;
-use super::wire_ab::{Probe, side};
+use super::test_harness::kill;
+use super::test_harness::{Probe, side};
 use super::*;
 use crate::game::cod4::level::Cod4Level;
 use crate::game::cod4::vehicle::{ET_HELICOPTER, ET_PLANE};
@@ -114,7 +114,7 @@ fn run_classes(
     };
     let late = [(until - 43_850, "score")];
     let (probes, aborts, _) =
-        super::combat_ab::ours_set_up(&install, &cs0, &[], classes, None, &late, &mut hook);
+        super::test_harness::ours_set_up(&install, &cs0, &[], classes, None, &late, &mut hook);
     Some(Seen {
         snaps: side(&probes[0].lines).snaps,
         low_health: low,

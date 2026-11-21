@@ -24,6 +24,7 @@ use vcod_cod4::net::delta::{ClientState, ENTITYNUM_NONE, EntityState, PlayerStat
 use vcod_cod4::net::fields::CLIENT_STATE;
 use vcod_cod4::net::stats::Stats;
 use vcod_cod4::pmove::wire::{body_height, player_entity};
+use vcod_common::pmove::cmd::EventRing;
 
 use super::Cod4Zones;
 use super::clip::{Body4, Brush4, Cod4Clip};
@@ -219,13 +220,11 @@ pub enum Inactivity {
 /// playerstate's (`BG_PlayerToEntityProcessEvents`, `cod4_lnxded`
 /// 0x8052b84..0x8052ca0, cod4-pmove.md 15.2): `taken` is how far the
 /// playerstate's sequence has been copied (`ps.oldEventSequence`, +0xd8),
-/// `seq` the entity's `eventSequence`, a byte.
+/// `ring` the entity's own.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BodyEvents {
     taken: i32,
-    seq: u32,
-    events: [u32; 4],
-    parms: [u32; 4],
+    ring: EventRing,
 }
 
 /// The events the body never shows: 1.7's `serverOnlyEvents` and
@@ -250,17 +249,11 @@ impl BodyEvents {
                 .chain(&SINGLE_CLIENT_EVENTS)
                 .any(|&e| e == event);
             if !hidden {
-                self.push(event, ps.word(ps!(4 "eventParms")[ring]) & 0xff);
+                let parm = ps.word(ps!(4 "eventParms")[ring]) & 0xff;
+                self.ring.add(event as i32, parm as i32);
             }
         }
         self.taken = newest;
-    }
-
-    fn push(&mut self, event: u32, parm: u32) {
-        let at = (self.seq % 4) as usize;
-        self.events[at] = event;
-        self.parms[at] = parm;
-        self.seq = (self.seq + 1) % 256;
     }
 
     /// The ring onto the body's entity.
@@ -270,11 +263,7 @@ impl BodyEvents {
                 e.0[w] = v;
             }
         };
-        set("eventSequence", self.seq);
-        for k in 0..4 {
-            set(&format!("events[{k}]"), self.events[k]);
-            set(&format!("eventParms[{k}]"), self.parms[k]);
-        }
+        self.ring.write(&mut |name, v| set(name, v as u32));
     }
 }
 
@@ -320,7 +309,7 @@ pub struct Cod4Level {
     /// its think's time and its box.
     mantle_blocks: crate::game::mantle_block::MantleBlocks<Body4>,
     /// Each gun's own event ring (`EV_FIRE_WEAPON_MG42`).
-    pub(super) gun_events: std::collections::HashMap<vcod_gsc::EntId, super::turret::GunEvents>,
+    pub(super) gun_events: std::collections::HashMap<vcod_gsc::EntId, EventRing>,
 }
 
 impl Cod4Level {
@@ -2575,28 +2564,28 @@ mod tests {
         fire(&mut ps, 1, 31, 7);
         fire(&mut ps, 2, 6, 7);
         ring.take(&ps);
-        assert_eq!((ring.taken, ring.seq), (3, 1));
-        assert_eq!((ring.events[0], ring.parms[0]), (25, 0xff));
+        assert_eq!((ring.taken, ring.ring.seq), (3, 1));
+        assert_eq!((ring.ring.events[0], ring.ring.parms[0]), (25, 0xff));
         // Nothing new: nothing taken.
         ring.take(&ps);
-        assert_eq!(ring.seq, 1);
+        assert_eq!(ring.ring.seq, 1);
         // Six behind: only the last four.
         for (k, ev) in [50, 51, 52, 53, 54, 55].into_iter().enumerate() {
             fire(&mut ps, 3 + k as u32, ev, k as u32);
         }
         ring.take(&ps);
-        assert_eq!((ring.taken, ring.seq), (9, 5));
-        assert_eq!(ring.events, [55, 52, 53, 54]);
-        assert_eq!(ring.parms, [5, 2, 3, 4]);
+        assert_eq!((ring.taken, ring.ring.seq), (9, 5));
+        assert_eq!(ring.ring.events, [55, 52, 53, 54]);
+        assert_eq!(ring.ring.parms, [5, 2, 3, 4]);
         // A sequence behind the ring's (a fresh playerstate): nothing.
         ps.set(ps!("eventSequence"), 2);
         ring.take(&ps);
-        assert_eq!((ring.taken, ring.seq), (2, 5));
+        assert_eq!((ring.taken, ring.ring.seq), (2, 5));
         // The ring's sequence wraps at 256.
-        ring.seq = 255;
+        ring.ring.seq = 255;
         fire(&mut ps, 2, 60, 1);
         ring.take(&ps);
-        assert_eq!((ring.seq, ring.events[3]), (0, 60));
+        assert_eq!((ring.ring.seq, ring.ring.events[3]), (0, 60));
     }
 
     /// A dm level on mp_crash with two connected clients and their

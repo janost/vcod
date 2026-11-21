@@ -518,12 +518,9 @@ impl Follower {
             ms.map(|m| g.nodes[m as usize])
                 .max_by(|a, b| box_flat(&rungs, *a).total_cmp(&box_flat(&rungs, *b)))
         };
-        let near = || g.edges[e as usize].iter().copied().filter(floor);
-        let on = |ms: &[u32]| -> Vec<u32> {
-            ms.iter()
-                .flat_map(|&m| g.edges[m as usize].iter().copied().filter(floor))
-                .collect()
-        };
+        let near = || g.next(e).filter(floor);
+        let on =
+            |ms: &[u32]| -> Vec<u32> { ms.iter().flat_map(|&m| g.next(m).filter(floor)).collect() };
         let two = on(&near().collect::<Vec<_>>());
         let three = if deadly_head { on(&two) } else { Vec::new() };
         // Where a fall off kills, a body's width clear of every exit too: a
@@ -613,7 +610,7 @@ mod tests {
             Vec3::new(1300.0, 190.0, 188.0),
         );
         let mut g = NavGraph::from_parts(vec![foot, top, on], vec![vec![1], vec![2], vec![]]);
-        g.mantles.insert((0, 1));
+        g.edge_mut(0, 1).unwrap().mantle = true;
         let mut f = Follower {
             path: vec![0, 1, 2],
             next: 1,
@@ -627,10 +624,9 @@ mod tests {
         assert!(!f.mantle_held(&g, at, true, &[(mate, Vec3::new(150.0, 0.0, 0.0))]));
         assert!(!f.mantle_held(&g, at, true, &still(mate + Vec3::new(0.0, 40.0, 0.0))));
         // The landing the probe proved, off the node, is the one read.
-        g.mantle_lands
-            .insert((0, 1), Vec3::new(1380.0, 150.0, 188.0));
+        g.edge_mut(0, 1).unwrap().land = Some(Vec3::new(1380.0, 150.0, 188.0));
         assert!(!f.mantle_held(&g, at, true, &still(mate)));
-        g.mantle_lands.clear();
+        g.edge_mut(0, 1).unwrap().land = None;
         f.next = 2;
         assert!(!f.mantle_held(&g, at, true, &still(mate)));
     }
@@ -1087,7 +1083,7 @@ mod tests {
         let g = graph_for("mp_ship", &world);
         let head = g.nearest([4963.9, 64.0, 1219.125]).unwrap();
         let foot = g.nearest([4959.0, 64.0, 692.125]).unwrap();
-        assert!(g.edges[head as usize].contains(&foot));
+        assert!(g.linked(head, foot));
         let mut f = Follower {
             path: vec![head, foot],
             next: 1,
@@ -1196,7 +1192,7 @@ mod tests {
         let g = graph_for("mp_ship", &world);
         let head = g.nearest([3760.0, 65.0, 616.0]).unwrap();
         let foot = g.nearest([3809.0, 65.0, 304.0]).unwrap();
-        assert!(g.edges[head as usize].contains(&foot));
+        assert!(g.linked(head, foot));
         let body = Footing {
             still: false,
             ..Footing::STANDING

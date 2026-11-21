@@ -232,7 +232,10 @@ fn a_rifle_round_kills_scores_and_the_victim_respawns() {
         .back()
         .cloned()
         .expect("the round struck");
-    assert_eq!((hit.victim, hit.attacker), (1, 0));
+    assert_eq!(
+        (hit.victim, hit.attacker),
+        (1, Some(crate::game::combat::Attacker::Client(0)))
+    );
     assert_eq!(hit.mod_, "MOD_RIFLE_BULLET");
     assert_eq!(hit.weapon, name);
     assert!(hit.hitloc.starts_with("torso"), "{}", hit.hitloc);

@@ -239,8 +239,8 @@ fn flood(g: &NavGraph, start: u32, far: f32) -> BTreeMap<u32, f32> {
             continue;
         }
         let p = g.nodes[n as usize];
-        for &m in &g.edges[n as usize] {
-            if g.risky.contains(&(n, m)) {
+        for m in g.next(n) {
+            if g.has(n, m, |k| k.risky) {
                 continue;
             }
             let next = here + p.distance(g.nodes[m as usize]);
@@ -412,8 +412,8 @@ fn flood_tree(g: &NavGraph, start: u32, far: f32) -> BTreeMap<u32, (f32, u32)> {
             continue;
         }
         let p = g.nodes[n as usize];
-        for &m in &g.edges[n as usize] {
-            if g.risky.contains(&(n, m)) {
+        for m in g.next(n) {
+            if g.has(n, m, |k| k.risky) {
                 continue;
             }
             let next = here + p.distance(g.nodes[m as usize]);

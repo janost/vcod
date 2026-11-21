@@ -1105,7 +1105,7 @@ fn a_hit_with_no_inflictor_and_no_attacker_reaches_the_callback_undefined() {
     rt.host.clients[0].vitals.takedamage = true;
     rt.deliver_hits(vec![crate::game::combat::Hit {
         victim: 0,
-        attacker: crate::game::host::ENTITYNUM_NONE as usize,
+        attacker: None,
         inflictor: None,
         damage: 300,
         dflags: 0,
@@ -1122,7 +1122,7 @@ fn a_hit_with_no_inflictor_and_no_attacker_reaches_the_callback_undefined() {
 
 /// A UO vehicle shell's fuse blast names the vehicle as `eAttacker`
 /// (`G_ExplodeMissile`'s `parent`, game.mp.uo 0x5e2fc, combat doc 13.7),
-/// and `charged_owner` keeps its number.
+/// and `charged_owner` keeps it.
 #[test]
 fn a_blast_charged_to_a_vehicle_names_it() {
     let mut rt = ScriptRuntime::for_test_at(
@@ -1144,8 +1144,8 @@ fn a_blast_charged_to_a_vehicle_names_it() {
         .vehicles
         .live
         .insert(tank, crate::game::vehicle::Vehicle::for_test(0));
-    let attacker = rt.charged_owner(Some(tank.0 as usize)).unwrap();
-    assert_eq!(attacker, tank.0 as usize);
+    let attacker = rt.charged_owner(Some(crate::game::combat::Attacker::Entity(tank)));
+    assert_eq!(attacker, Some(crate::game::combat::Attacker::Entity(tank)));
     rt.deliver_hits(vec![crate::game::combat::Hit {
         victim: 0,
         attacker,
@@ -1187,9 +1187,10 @@ fn a_hit_charged_to_an_empty_slot_names_entity_0() {
     }
     rt.run_frame(0);
     rt.host.clients[1].vitals.takedamage = true;
-    assert_eq!(rt.charged_owner(Some(0)), Some(0));
-    let attacker = rt.charged_owner(Some(5)).unwrap();
-    assert_eq!(attacker, crate::game::host::ZEROED_ENTITY);
+    let client = |slot| Some(crate::game::combat::Attacker::Client(slot));
+    assert_eq!(rt.charged_owner(client(0)), client(0));
+    let attacker = rt.charged_owner(client(5));
+    assert_eq!(attacker, Some(crate::game::combat::Attacker::Unspawned));
     rt.deliver_hits(vec![crate::game::combat::Hit {
         victim: 1,
         attacker,

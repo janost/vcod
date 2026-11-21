@@ -5,7 +5,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::wire_ab::Probe;
+use super::test_harness::Probe;
 use super::*;
 use crate::follow::SessionState;
 
@@ -311,7 +311,7 @@ fn cod4_a_class_answered_with_the_team_is_lost() {
     use vcod_cod4::net::capture::{Item, Session};
     use vcod_cod4::net::clmsg::ClOp;
     // Retail: commands 5 and 6 in one packet, then no spawn.
-    let lines = super::wire_ab::retail("menus-together");
+    let lines = super::test_harness::retail("menus-together");
     let mut session = Session::new();
     let (mut joint_at, mut spawned_after) = (None, false);
     for l in &lines {

@@ -24,6 +24,7 @@ use crate::game::combat::Parties;
 use glam::Vec3;
 use vcod_cod4::net::delta::EntityState;
 use vcod_cod4::pmove::weapon::{WEAPTYPE_GRENADE, WeaponDef};
+use vcod_common::pmove::cmd::EventRing;
 use vcod_common::rng::GlibcRand;
 use vcod_gsc::{EntId, Value};
 
@@ -184,9 +185,7 @@ pub struct Missile4 {
     pub travel: f32,
     /// A frag is also a pickup item: `index` the item, `clientNum` 64.
     pub pickup: bool,
-    pub event_seq: u32,
-    pub events: [u32; 4],
-    pub parms: [u32; 4],
+    pub events: EventRing,
     /// `freeAfterEvent`: an impact's burst rides this entity until then.
     pub free_at: Option<i32>,
     /// `missile.team`: the thrower's `sessionteam` at the throw, the
@@ -285,9 +284,7 @@ impl Missile4 {
             birth: now,
             travel: 0.0,
             pickup: false,
-            event_seq: 0,
-            events: [0; 4],
-            parms: [0; 4],
+            events: EventRing::default(),
             free_at: None,
             team,
             rocket: false,
@@ -303,10 +300,7 @@ impl Missile4 {
 
     /// `G_AddEvent`.
     fn add_event(&mut self, event: u32, parm: u32) {
-        let k = (self.event_seq & 3) as usize;
-        self.events[k] = event;
-        self.parms[k] = parm & 0xff;
-        self.event_seq += 1;
+        self.events.add(event as i32, (parm & 0xff) as i32);
     }
 
     /// `G_SetOrigin`: at rest where it stands.
@@ -1668,11 +1662,7 @@ impl Cod4Level {
                 set("index", m.weapon);
                 set("clientNum", 64);
             }
-            set("eventSequence", m.event_seq);
-            for k in 0..4 {
-                set(&format!("events[{k}]"), m.events[k]);
-                set(&format!("eventParms[{k}]"), m.parms[k]);
-            }
+            m.events.write(&mut |name, v| set(name, v as u32));
             out.push(e);
         }
         for b in &c4.bursts {

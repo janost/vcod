@@ -663,7 +663,11 @@ mod tests {
         run(&mut sv, 2000, &mut spawned);
         assert_eq!(spawned.len(), 4, "spawned {spawned:?}");
         let g = sv.game.bots.as_ref().unwrap().graph().unwrap();
-        assert!(g.len() > 1000 && !g.mantles.is_empty(), "{} nodes", g.len());
+        assert!(
+            g.len() > 1000 && !g.edges_where(|k| k.mantle).next().is_none(),
+            "{} nodes",
+            g.len()
+        );
         let level = sv.game.level.as_ref().unwrap();
         let kills = level
             .rt

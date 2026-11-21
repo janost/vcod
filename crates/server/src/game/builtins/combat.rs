@@ -1042,7 +1042,7 @@ mod tests {
     fn hit(damage: i32) -> Hit {
         Hit {
             victim: 0,
-            attacker: 1,
+            attacker: Some(crate::game::combat::Attacker::Client(1)),
             inflictor: None,
             damage,
             dflags: 0,

@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::wire_ab::{Probe, side};
+use super::test_harness::{Probe, side};
 use super::*;
 
 /// Runs `probes` against a fresh `war` level until `run_ms`, each probe

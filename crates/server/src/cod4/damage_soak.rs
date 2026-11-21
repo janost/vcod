@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use glam::Vec3;
 
-use super::wire_ab::Probe;
+use super::test_harness::{Probe, test_cfg};
 use super::*;
 use crate::follow::SessionState;
 
@@ -506,15 +506,7 @@ fn soak_run(plan: &'static [Act], cvars: &[(&str, &str)], lag_ms: i32) -> SoakRu
         return SoakRun::default();
     };
     let mut run = SoakRun::default();
-    let mut sv = Cod4Server::new(
-        Cod4Config {
-            map: "mp_crash".into(),
-            gametype: "war".into(),
-            hostname: "CoD4Host".into(),
-            max_clients: 8,
-        },
-        7,
-    );
+    let mut sv = Cod4Server::new(test_cfg("mp_crash", "war"), 7);
     sv.set_cvar("sv_cheats", "1");
     sv.set_cvar("sv_pure", "0");
     for (k, v) in cvars {
@@ -820,15 +812,7 @@ fn cod4_every_map_poses_both_teams() {
     ];
     let mut bad = Vec::new();
     for map in &maps {
-        let mut sv = Cod4Server::new(
-            Cod4Config {
-                map: map.clone(),
-                gametype: "war".into(),
-                hostname: "CoD4Host".into(),
-                max_clients: 8,
-            },
-            7,
-        );
+        let mut sv = Cod4Server::new(test_cfg(map, "war"), 7);
         sv.set_cvar("sv_cheats", "1");
         sv.set_cvar("sv_pure", "0");
         sv.load(Some(&install)).unwrap();

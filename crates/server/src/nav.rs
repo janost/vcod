@@ -41,8 +41,8 @@ use follower::{
 pub use follower::{
     CROWD_COST, DANGER_COST, FLANK_COST, Follower, Footing, LEAP_FOOT, fall_that_kills,
 };
-pub use graph::NavGraph;
 use graph::seed_bounds;
+pub use graph::{Edge, NavGraph};
 pub(crate) use probe::{CreaseCache, CreaseRead, drop_ahead, hazard, wall_ahead};
 pub use probe::{Creases, UNPIN_SPEED, UNPIN_TICKS, lip_ahead, push_off, unpin_yaw};
 use probe::{jump_clear, straight_floor, under_ground};

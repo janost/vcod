@@ -1579,6 +1579,19 @@ trace").
     `trigger` notify in `think` never run (INFERRED: the struck-entity
     arms are ported off the decompile of 0x8036e and 0x827ab; no capture
     drives a vehicle into a script_model).
+- **Dot products and normalizes.** `VectorNormalize` (0x3a1c3) and
+  `VectorNormalize2` (0x3a466) sum the squared length x, y, z on the x87
+  stack (`flds`/`fmuls` of offsets 0, 4, 8, two `faddp`), store it as a
+  float, store `sqrt`'s result as a float and the reciprocal `1 / len`
+  as a float (1.0 at rodata 0x9da10), and store each component times it;
+  `VectorNormalize` returns the stored length, and `VectorNormalize2`
+  writes the 0.0 it compared the length against (rodata 0x9da0c) into
+  each component of a zero vector (VERIFIED (the instructions),
+  0x3a1d5..0x3a277, 0x3a479..0x3a528). The
+  inline dot products in `VEH_SlideMove` sum x, y, z the same way
+  (0x806f2..0x80731, 0x80826..0x8086b) (VERIFIED (the instructions)).
+  `physics.rs` takes `vcod_common::x87`'s `dot`, `normalize_stored` and
+  `normalize2_stored`, which sum in that order.
 
 ## 13. Guns, heat and damage
 

@@ -12,11 +12,11 @@
 //! Needs `COD4_DIR`.
 
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use vcod_cod4::net::delta::EntityState;
 
-use super::wire_ab::{Probe, Side, retail, side};
+use super::test_harness::{Probe, Side, retail, run_frames, side, test_cfg};
 use super::*;
 use crate::game::cod4::vehicle::ET_PLANE;
 
@@ -94,15 +94,7 @@ fn hints(s: &Side) -> Vec<(u32, u32, u32, u32)> {
 /// class at its twin's times, spawned on its twin's spot.
 fn ours(install: &vcod_cod4::install::Install, r: &Side) -> (Side, Vec<String>) {
     let cs0 = String::from_utf8_lossy(r.gs.configstring(0)).into_owned();
-    let mut sv = Cod4Server::new(
-        Cod4Config {
-            map: "mp_crash".into(),
-            gametype: "war".into(),
-            hostname: "CoD4Host".into(),
-            max_clients: 8,
-        },
-        7,
-    );
+    let mut sv = Cod4Server::new(test_cfg("mp_crash", "war"), 7);
     for (k, v) in vcod_common::net::connectionless::info_pairs(&cs0) {
         if !matches!(k, "protocol" | "shortversion" | "fs_game") {
             sv.set_cvar(k, v);
@@ -132,26 +124,13 @@ fn ours(install: &vcod_cod4::install::Install, r: &Side) -> (Side, Vec<String>) 
             (2550, "mr {sid} 15 assault_mp,0"),
         ],
     );
-    let mut now = Instant::now();
-    while sv.core.sv_time_ms < RUN_MS {
-        let svs = sv.core.sv_time_ms;
-        if !probe.joined && svs >= probe.connect_at {
-            probe.join(&mut sv, now);
-        }
-        if probe.joined {
-            let pkt = probe.packet(svs);
-            probe.log("c2s", svs, &pkt);
-            sv.handle_packet(probe.addr, &pkt, now);
-        }
-        now += Duration::from_millis(FRAME_MS as u64);
-        sv.tick_frames(now, 1);
-        let svs = sv.core.sv_time_ms;
-        for (to, pkt) in sv.take_outgoing() {
-            if to == probe.addr {
-                probe.receive(svs, &pkt);
-            }
-        }
-    }
+    run_frames(
+        &mut sv,
+        std::slice::from_mut(&mut probe),
+        RUN_MS,
+        &mut Instant::now(),
+        &mut |_, _, _| {},
+    );
     let aborts = sv.game.level.as_ref().unwrap().rt.aborts();
     (side(&probe.lines), aborts)
 }

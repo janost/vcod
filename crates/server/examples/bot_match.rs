@@ -3637,7 +3637,7 @@ mod cod2 {
                     "{map} seed {seed}: graph {} nodes, {} edges, {} mantles",
                     g.len(),
                     g.edge_count(),
-                    g.mantles.len()
+                    g.edges_where(|k| k.mantle).count()
                 );
             }
             // Per bot: holding still on purpose (`BotBody::holds` less the
@@ -4636,7 +4636,7 @@ mod cod4 {
                     "{map} seed {seed}: graph {} nodes, {} edges, {} mantles",
                     g.len(),
                     g.edge_count(),
-                    g.mantles.len()
+                    g.edges_where(|k| k.mantle).count()
                 );
             }
             let id = sv.server_id();

@@ -40,11 +40,11 @@ pub fn vantage(g: &NavGraph, from: Vec3, spot: Vec3, sees: &dyn Fn(Vec3) -> bool
     for _ in 0..RINGS {
         let mut next = Vec::new();
         for &a in &ring {
-            for &b in &g.edges[a as usize] {
+            for b in g.next(a) {
                 if !marked[b as usize]
                     && near(g.nodes[b as usize]) <= VANTAGE_REACH
-                    && !g.jumps.contains(&(a, b))
-                    && !g.risky.contains(&(a, b))
+                    && !g.has(a, b, |k| k.jump)
+                    && !g.has(a, b, |k| k.risky)
                 {
                     marked[b as usize] = true;
                     seen.push(b);

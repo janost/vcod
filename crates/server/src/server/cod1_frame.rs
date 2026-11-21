@@ -6,6 +6,7 @@
 
 use super::cod1_game::{Cod1Module, FrameOut, Lend};
 use super::*;
+use crate::game::combat::Attacker;
 
 impl Cod1Module {
     pub(super) fn run_frame_cod1(
@@ -372,7 +373,7 @@ impl Cod1Module {
                 };
                 self.driver.noises.push(crate::bots::Noise {
                     at: (x.at + glam::Vec3::Z * 40.0).into(),
-                    source: x.owner.unwrap_or(usize::MAX),
+                    source: x.owner.and_then(Attacker::client).unwrap_or(usize::MAX),
                     radius: crate::bots::HEAR_BLAST,
                 });
                 let Some(def) = weapons.get(x.weapon as usize) else {
@@ -388,7 +389,6 @@ impl Cod1Module {
                 // entity there reads number 0; its fuse blast names the
                 // vehicle (combat doc 13.7).
                 let owner = rt.charged_owner(x.owner);
-                let attacker = owner.unwrap_or(crate::game::host::ENTITYNUM_NONE as usize);
                 // A shell's direct hit lands before its splash, which skips
                 // the client it struck (`G_MissileImpact`, coduo-diff.md 21).
                 // UO's `G_MissileImpact` drops the inflictor with the owner
@@ -410,7 +410,7 @@ impl Cod1Module {
                 {
                     let hit = crate::game::combat::Hit {
                         victim,
-                        attacker,
+                        attacker: owner,
                         inflictor,
                         damage,
                         dflags: 0,
@@ -437,7 +437,7 @@ impl Cod1Module {
                 {
                     rt.deliver_entity_hit(&crate::game::combat::EntityHit {
                         target: v,
-                        attacker,
+                        attacker: owner,
                         inflictor: Some(x.inflictor),
                         damage: x.shell_damage,
                         dflags: 0,
@@ -451,7 +451,7 @@ impl Cod1Module {
                 // position (game.mp.uo 0x5df1a, combat doc 14.8).
                 if proto.is_uo() && x.struck.is_some() && x.shell_damage != 0 {
                     rt.trigger_sweep(&crate::game::combat::TriggerSweep {
-                        attacker,
+                        attacker: owner,
                         start: x.contact,
                         end: x.contact,
                         damage: x.shell_damage,
@@ -782,7 +782,7 @@ impl Cod1Module {
                     let (me, them) = (origin(slot), origin(from));
                     burns.push(Effect::Hit(crate::game::combat::Hit {
                         victim: slot,
-                        attacker: from,
+                        attacker: Some(crate::game::combat::Attacker::Client(from)),
                         inflictor: None,
                         damage: if from == slot { damage } else { damage * 4 },
                         dflags: 0,
