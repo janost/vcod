@@ -8,7 +8,9 @@ use crate::assets::world::{ClipMap, GfxCell, GfxWorld};
 use crate::install::Install;
 use crate::state::{GfxState, caster_state, draw_state};
 use crate::techset::{TechClass, classify};
-use crate::walk::{WalkOptions, Walked, u16s, walk};
+use crate::walk::{
+    WalkOptions, Walked, f32_at, i16_at, i32_at, u16_at, u16s, u32_at, vec3_at, walk,
+};
 use crate::zone::{Pointer, Zone};
 use anyhow::{Context, Result, bail, ensure};
 use std::collections::{BTreeSet, HashMap};
@@ -34,25 +36,6 @@ pub struct WorldVertex {
 pub fn unpack_unit_vec([x, y, z, w]: [u8; 4]) -> [f32; 3] {
     let scale = (f32::from(w) + 192.0) / 32385.0;
     [x, y, z].map(|c| (f32::from(c) - 127.0) * scale)
-}
-
-fn f32_at(b: &[u8], o: usize) -> f32 {
-    f32::from_le_bytes(b[o..o + 4].try_into().unwrap())
-}
-fn u32_at(b: &[u8], o: usize) -> u32 {
-    u32::from_le_bytes(b[o..o + 4].try_into().unwrap())
-}
-fn i32_at(b: &[u8], o: usize) -> i32 {
-    u32_at(b, o) as i32
-}
-fn u16_at(b: &[u8], o: usize) -> u16 {
-    u16::from_le_bytes([b[o], b[o + 1]])
-}
-fn i16_at(b: &[u8], o: usize) -> i16 {
-    u16_at(b, o) as i16
-}
-fn vec3_at(b: &[u8], o: usize) -> [f32; 3] {
-    [f32_at(b, o), f32_at(b, o + 4), f32_at(b, o + 8)]
 }
 
 impl WorldVertex {

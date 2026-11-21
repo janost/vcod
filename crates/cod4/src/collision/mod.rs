@@ -23,6 +23,7 @@ use vcod_common::collision::{WorldClip, WorldHit};
 use crate::assets::Assets;
 use crate::assets::model::XModelCollSurf;
 use crate::assets::world;
+use crate::walk::{f32_at, i16_at, i32_at, u16_at, u32_at};
 use crate::zone::Pointer;
 
 mod static_tree;
@@ -572,28 +573,8 @@ fn tri_crossing(tri: &[f32; 12], start: Vec3, end: Vec3, nearest: f32) -> Option
     (within(s) && t >= -EQUAL_EPS && s + t <= 1.0 + EQUAL_EPS).then_some(fraction)
 }
 
-fn f32_at(b: &[u8], o: usize) -> f32 {
-    f32::from_le_bytes(b[o..o + 4].try_into().unwrap())
-}
-
-fn u32_at(b: &[u8], o: usize) -> u32 {
-    u32::from_le_bytes(b[o..o + 4].try_into().unwrap())
-}
-
-fn i32_at(b: &[u8], o: usize) -> i32 {
-    u32_at(b, o) as i32
-}
-
-fn u16_at(b: &[u8], o: usize) -> u16 {
-    u16::from_le_bytes(b[o..o + 2].try_into().unwrap())
-}
-
-fn i16_at(b: &[u8], o: usize) -> i16 {
-    u16_at(b, o) as i16
-}
-
 fn vec3_at(b: &[u8], o: usize) -> Vec3 {
-    Vec3::new(f32_at(b, o), f32_at(b, o + 4), f32_at(b, o + 8))
+    Vec3::from_array(crate::walk::vec3_at(b, o))
 }
 
 /// A hash of every array of `c` the clip reads, each led by its length.
