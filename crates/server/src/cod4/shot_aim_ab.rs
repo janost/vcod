@@ -21,7 +21,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
 
-use super::wire_ab::{Probe, replay_schedule, retail, side};
+use super::test_harness::{Probe, replay_schedule, retail, side};
 use super::*;
 
 /// One retail run of two `cod4_probe`s under a probe gsc.
@@ -163,7 +163,7 @@ fn ours(install: &vcod_cod4::install::Install, run: &Run) -> (Vec<String>, Vec<S
     );
     sv.load(Some(install)).unwrap();
     // Each spawn on its twin's spot, and the spawn snapshot's time.
-    let spawn = |s: &super::wire_ab::Side, slot: u32| {
+    let spawn = |s: &super::test_harness::Side, slot: u32| {
         let f = s
             .snaps
             .iter()

@@ -22,7 +22,7 @@ use vcod_cod4::net::clmsg::ClOp;
 use vcod_cod4::net::delta::EntityState;
 use vcod_cod4::net::parse::{Op, Snapshot};
 
-use super::wire_ab::{Probe, Side, cmd_angles, replay_schedule_timed, retail, side};
+use super::test_harness::{Probe, Side, cmd_angles, replay_schedule_timed, retail, side};
 use super::*;
 
 /// One retail run of the two probes.

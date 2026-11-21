@@ -14,7 +14,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use super::wire_ab::{Probe, hud_diffs, retail, side};
+use super::test_harness::{Probe, hud_diffs, retail, side};
 use super::*;
 
 #[test]
@@ -96,7 +96,7 @@ fn the_prematch_hud_matches_retail() {
         .find(|f| f.name == "type")
         .unwrap()
         .word();
-    let timer = |s: &super::wire_ab::Side| {
+    let timer = |s: &super::test_harness::Side| {
         s.snaps
             .first()
             .is_some_and(|f| f.ps.hud_archival.iter().any(|h| h.0[ty] == 7))
@@ -115,7 +115,7 @@ fn the_prematch_hud_matches_retail() {
         }
     }
     let mut out = Vec::new();
-    let texts = |s: &super::wire_ab::Side| -> Vec<String> {
+    let texts = |s: &super::test_harness::Side| -> Vec<String> {
         s.commands.iter().map(|(_, c)| c.clone()).collect()
     };
     let (rc, oc) = (texts(&r), texts(&o));

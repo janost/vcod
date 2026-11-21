@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use glam::Vec3;
 
-use super::wire_ab::Probe;
+use super::test_harness::Probe;
 use super::*;
 use crate::follow::SessionState;
 

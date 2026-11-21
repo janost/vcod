@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use glam::Vec3;
 use vcod_gsc::{EntId, Value};
 
-use super::combat_ab::{kill, ours_hooked};
-use super::wire_ab::{Probe, side};
+use super::test_harness::{Probe, side};
+use super::test_harness::{kill, ours_hooked};
 use super::*;
 use crate::game::cod4::level::Cod4Level;
 use crate::game::cod4::missile::ev;

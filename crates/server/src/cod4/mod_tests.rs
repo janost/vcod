@@ -95,8 +95,8 @@ fn modwarfare_boots_its_own_scripts_and_names_the_mod_as_retail() {
 /// as before.
 #[test]
 fn cod4_a_message_with_an_acknowledge_near_i32_min_is_ignored() {
+    use super::test_harness::Probe;
     use super::vote_tests::run_ms;
-    use super::wire_ab::Probe;
     use std::time::Duration;
     let mut sv = Cod4Server::new(
         Cod4Config {

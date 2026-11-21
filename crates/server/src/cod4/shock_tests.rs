@@ -7,8 +7,8 @@
 
 use glam::Vec3;
 
-use super::combat_ab::{kill, ours_hooked};
-use super::wire_ab::{Probe, side};
+use super::test_harness::{Probe, side};
+use super::test_harness::{kill, ours_hooked};
 use super::*;
 
 /// A snapshot's `(time, shellshockIndex, shellshockDuration, pm_flags,

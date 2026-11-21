@@ -215,19 +215,19 @@ fn cod4_an_off_lan_ban_holds_the_address_whatever_the_hex() {
     let ip = std::net::Ipv4Addr::new(203, 0, 113, 7);
     let addr_guid = (u32::from(ip) as i32).to_string();
     let join = |sv: &mut Cod4Server, slot: u32, port: u16| {
-        let mut p = super::wire_ab::Probe::new("far", slot, port, 0, &[]);
+        let mut p = super::test_harness::Probe::new("far", slot, port, 0, &[]);
         p.addr = std::net::SocketAddr::from((ip, port));
         p.join(sv, now);
         p
     };
-    let challenge = |sv: &mut Cod4Server, p: &mut super::wire_ab::Probe, hex: &str| {
+    let challenge = |sv: &mut Cod4Server, p: &mut super::test_harness::Probe, hex: &str| {
         let replies = p.oob(sv, format!("getchallenge 0 \"{hex}\"").as_bytes(), now);
         String::from_utf8_lossy(&replies[0][4..]).into_owned()
     };
     join(&mut sv, 2, 28990);
     assert_eq!(console(&mut sv, "banClient 2"), "2:far EXE_PLAYERKICKED\n");
     assert!(sv.core.bans.lists_guid(&addr_guid));
-    let mut back = super::wire_ab::Probe::new("far", 2, 28991, 0, &[]);
+    let mut back = super::test_harness::Probe::new("far", 2, 28991, 0, &[]);
     back.addr = std::net::SocketAddr::from((ip, 28991));
     for hex in ["0123456789abcdef0123456789abcdef", ""] {
         assert_eq!(
@@ -485,7 +485,7 @@ fn cod4_min_ping_refuses_only_off_the_lan() {
         return;
     };
     sv.set_cvar("sv_minPing", "100");
-    let connect = |p: &mut super::wire_ab::Probe, sv: &mut Cod4Server| {
+    let connect = |p: &mut super::test_harness::Probe, sv: &mut Cod4Server| {
         let challenge = format!("getchallenge 0 \"{}\"", vcod_cod4::net::conn::KEY_HASH);
         let reply = p.oob(sv, challenge.as_bytes(), now);
         let text = String::from_utf8_lossy(&reply[0][4..]).into_owned();
@@ -520,7 +520,7 @@ fn cod4_an_idle_off_lan_client_waits_a_second() {
         return;
     };
     for (slot, ip, next) in [(2u32, [203, 0, 113, 9], 1000), (3, [127, 0, 0, 1], -1)] {
-        let mut p = super::wire_ab::Probe::new("far", slot, 28980 + slot as u16, 0, &[]);
+        let mut p = super::test_harness::Probe::new("far", slot, 28980 + slot as u16, 0, &[]);
         p.addr = std::net::SocketAddr::from((ip, 28980 + slot as u16));
         p.join(&mut sv, now);
         let svs = sv.core.sv_time_ms;

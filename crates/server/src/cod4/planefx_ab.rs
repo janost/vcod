@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use vcod_cod4::net::delta::EntityState;
 
-use super::wire_ab::{Probe, Side, retail, side};
+use super::test_harness::{Probe, Side, retail, side};
 use super::*;
 use crate::game::cod4::vehicle::ET_PLANE;
 
