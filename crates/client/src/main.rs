@@ -3189,7 +3189,7 @@ fn loading_frame(
     r: &mut Renderer,
     localized: &vcod_common::localize::Localized,
     hud: &mut Option<hud::Hud>,
-    now: f32,
+    now: f64,
     aspect: f32,
     cull: renderer::CullMode,
     configstrings: &[String],
@@ -3242,7 +3242,7 @@ fn loading_frame(
         eye: Vec3::ZERO,
         fwd: camera::basis(0.0, 0.0).0,
         up: Vec3::Z,
-        time: f64::from(now),
+        time: now,
         fov_x: camera::DEFAULT_FOV_DEG,
         cull,
         hud_lines: vec![text],
@@ -4143,7 +4143,7 @@ impl App {
                         // when the gun has no other mode (0x30037f90).
                         if action == play::input::Action::AltWeapon {
                             let now_ms =
-                                ((Instant::now() - self.start).as_secs_f32() * 1000.0) as i32;
+                                ((Instant::now() - self.start).as_secs_f64() * 1000.0) as i32;
                             match (input.alt_weapon(), &mut self.hud) {
                                 (play::input::AltWeapon::Selected, Some(hud)) => {
                                     hud.weapon_selected()
@@ -4190,7 +4190,7 @@ impl App {
                 // docs/research/cod11-hud-protocol.md, sections 3.1 and 4).
                 Effect::Scores(down) => {
                     if let (Mode::Online { net, .. }, Some(hud)) = (&mut self.mode, &mut self.hud) {
-                        let now = (Instant::now() - self.start).as_secs_f32();
+                        let now = (Instant::now() - self.start).as_secs_f64();
                         if !down {
                             hud.scoreboard.release(now);
                         } else if hud.scoreboard.press(now) {

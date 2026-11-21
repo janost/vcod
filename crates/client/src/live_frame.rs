@@ -204,7 +204,7 @@ impl App {
         let client_cvar = |c: &str| join.cvars.get(c, net.configstrings(), &self.shell);
         let server_address = net.transport().peer().map(|a| a.to_string());
         let hud_frame = hud::HudFrame {
-            now: time as f32,
+            now: time,
             screen_w,
             screen_h,
             configstrings: net.configstrings(),
