@@ -440,6 +440,60 @@ fn a_demo_message_acknowledging_behind_the_ring_is_skipped() {
     assert_eq!(d.demo_counts(), Some((3, 1)), "records read, parse errors");
 }
 
+/// A gamestate inside the demo primes its clock again, as
+/// `CL_InitCGame`'s `CA_PRIMED` (`iw3mp.exe` 0x45c023) ends
+/// `CL_SetCGameTime`'s read loop (0x45c627): the next frame reads one
+/// record and its snapshot seeds the clock, where the old clock would
+/// wait four seconds to reach it.
+#[test]
+fn a_gamestate_inside_a_demo_primes_its_clock_again() {
+    use std::collections::BTreeMap;
+    use vcod_cod4::net::parse::{Gamestate, MAX_CONFIGSTRINGS, UNUSED_HUFF};
+    use vcod_cod4::net::wire::{EOF, Frame4, write_snapshot};
+    use vcod_common::net::Msec;
+    use vcod_common::net::codec::MsgWriter;
+    use vcod_common::net::protocol::SnapshotHead;
+    let huff = vcod_cod4::net::huffman::Huffman::new();
+    let table = vec![String::new(); MAX_CONFIGSTRINGS as usize];
+    let gs = Gamestate::from_table(0, &table, &BTreeMap::new(), 0, 0);
+    let opening = vcod_cod4::net::demo::gamestate_message(&huff, 0, 0, &gs);
+    let snapshot = |time: i32| {
+        let mut w = MsgWriter::new(&UNUSED_HUFF);
+        let frame = Frame4 {
+            server_time: Msec::from_raw(time),
+            map_center: gs.map_center,
+            ps: Default::default(),
+            entities: Vec::new(),
+            clients: Vec::new(),
+        };
+        let head = SnapshotHead {
+            delta_num: 0,
+            snap_flags: 0,
+        };
+        write_snapshot(&mut w, None, &frame, head, &BTreeMap::new());
+        w.write_byte(EOF);
+        let mut m = 0i32.to_le_bytes().to_vec();
+        m.extend(huff.compress(&w.into_ops()));
+        m
+    };
+    let mut demo = RetailDemo::default();
+    demo.message(1, &opening);
+    demo.message(2, &snapshot(1000));
+    demo.message(3, &snapshot(1050));
+    demo.message(4, &opening);
+    demo.message(5, &snapshot(5000));
+    demo.stop();
+    let mut s = Cod4Session::play_demo(demo.0, false).unwrap();
+    let Source::Demo(d) = &mut s.source else {
+        unreachable!()
+    };
+    assert_eq!(d.frame(0), None, "the first frame reads nothing");
+    assert_eq!(d.frame(16), Some(1000));
+    assert_eq!(d.frame(66), Some(1050), "reads the gamestate");
+    assert_eq!(d.frame(82), Some(5000), "seeded off the next snapshot");
+    assert_eq!(d.gamestates, 2);
+}
+
 /// A demo sheds its old snapshots as a live session does and plays the
 /// same events to its end.
 #[test]

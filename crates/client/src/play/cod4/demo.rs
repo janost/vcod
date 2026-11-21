@@ -115,6 +115,7 @@ impl DemoPlay {
     /// (held under `cl_freezeDemo`; `CL_AdjustTimeDelta` is never reached),
     /// or under `timedemo` 50 ms a frame off the first snapshot
     /// (0x45c350), then records while the newest snapshot is not past it.
+    /// A gamestate among them primes the clock again (cod4-demos.md 5).
     pub(super) fn frame(&mut self, realtime: i32) -> Option<i32> {
         if !self.clock.started() {
             if !self.clock.primed_read() {
@@ -129,6 +130,7 @@ impl DemoPlay {
             self.clock.seed(snap.server_time.raw(), realtime);
         }
         let time = self.clock.tick(realtime)?;
+        let gamestates = self.gamestates;
         while self
             .client
             .snapshots
@@ -136,6 +138,10 @@ impl DemoPlay {
             .is_none_or(|s| time >= s.server_time.raw())
         {
             if !self.read() {
+                break;
+            }
+            if self.gamestates != gamestates {
+                self.clock.reprime();
                 break;
             }
         }

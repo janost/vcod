@@ -274,6 +274,23 @@ cmd's view (`Cod4Session::archive_row`).
 - then records while `serverTime >= cl.snap.serverTime`, stopping when
   the state leaves 9 (0x45c5dc..0x45c63c).
 
+The state is `clc.state` at 0xc5f900 (a 16-byte stride a local client).
+A gamestate record read in that loop leaves it at 8: `CL_ParseGamestate`
+(its `bad command byte` string at 0x6d28ac, 0x47413f) ends in 0x46ac60
+(0x47423e), whose arms that start no download end in 0x46a8d0 (0x46ae48;
+the one that does stores 5, 0x46ad95). VERIFIED (the instructions). That a
+demo's gamestate takes one of the former is INFERRED (a demo fetches
+nothing). 0x46a8d0 stores 7 behind `Setting state to CA_LOADING in CL_DownloadsComplete`
+(0x46a9e7, 0x6d0858) and calls 0x45bef0 (0x46aad8), which stores 7 again
+behind `Setting state to CA_LOADING in CL_InitCGame` (0x45bfda, 0x6ceee4)
+and 8 once the cgame is up (0x45c023). VERIFIED (the stores, the calls and
+the strings). So the loop ends at the gamestate, and the next frame takes
+the state 8 arm with `firstDemoFrameSkipped` (0x934e80) still set: one
+record, and its snapshot seeds the clock afresh, as CoD2's does
+(`cod2-demos.md` 5). VERIFIED (the instructions). vcod's `DemoPlay::frame`
+reprimes `DemoTime` on a gamestate read in that loop
+(`a_gamestate_inside_a_demo_primes_its_clock_again`).
+
 `CL_DemoCompleted` (0x468df0): with `timedemo`, when the ms since the
 start are above 0, `%i frames, %3.1f seconds: %3.1f fps`; the csv
 closes; `CL_Disconnect(0)`; `CL_NextDemo` (0x469380), which runs
