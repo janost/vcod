@@ -7,15 +7,13 @@ use crate::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
 struct SkySlab;
 
 impl WorldClip for SkySlab {
-    fn trace(&self, _: Vec3, _: Vec3, _: Vec3, _: Vec3, mask: u32) -> WorldHit {
+    fn trace(&self, _: Vec3, _: Vec3, _: Vec3, _: Vec3, mask: u32) -> crate::clipmap::ClipTrace {
         let hit = mask & 0x800 != 0;
-        WorldHit {
+        crate::clipmap::ClipTrace {
             fraction: if hit { 0.5 } else { 1.0 },
             normal: if hit { Vec3::Z } else { Vec3::ZERO },
-            surface_flags: 0,
             contents: if hit { 0x800 } else { 0 },
-            startsolid: false,
-            allsolid: false,
+            ..crate::clipmap::ClipTrace::clear()
         }
     }
     fn point_contents(&self, _: Vec3) -> u32 {

@@ -1438,7 +1438,7 @@ impl vcod_common::collision::WorldClip for BrushedClip {
         mins: Vec3,
         maxs: Vec3,
         mask: u32,
-    ) -> vcod_common::collision::WorldHit {
+    ) -> vcod_common::clipmap::ClipTrace {
         use vcod_cod4::pmove::PmWorld;
         let near: Vec<_> = self
             .near(start.min(end) + mins, start.max(end) + maxs)
@@ -1450,15 +1450,7 @@ impl vcod_common::collision::WorldClip for BrushedClip {
             brushes: &near,
         };
         let none = vcod_cod4::pmove::ENTITYNUM_NONE as u32;
-        let t = world.trace(start, end, mins, maxs, none, mask);
-        vcod_common::collision::WorldHit {
-            fraction: t.fraction,
-            normal: t.normal,
-            surface_flags: t.surface_flags,
-            contents: t.contents,
-            startsolid: t.startsolid,
-            allsolid: t.allsolid,
-        }
+        world.trace(start, end, mins, maxs, none, mask).into()
     }
 
     fn point_contents(&self, p: Vec3) -> u32 {

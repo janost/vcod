@@ -692,6 +692,22 @@ pub trait PmWorld {
     fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, pass: u32, mask: u32) -> Tr;
 }
 
+/// A pmove trace as a world clip's result: `material` unknown.
+impl From<Tr> for ClipTrace {
+    fn from(t: Tr) -> ClipTrace {
+        ClipTrace {
+            fraction: t.fraction,
+            normal: t.normal,
+            surface_flags: t.surface_flags,
+            contents: t.contents,
+            material: None,
+            allsolid: t.allsolid,
+            startsolid: t.startsolid,
+            walkable: t.walkable,
+        }
+    }
+}
+
 /// A world trace's contact named as `SV_Trace` names it.
 pub fn world_tr(t: &ClipTrace) -> Tr {
     let hit = t.fraction < 1.0 || t.startsolid;

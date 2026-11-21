@@ -18,7 +18,7 @@ use vcod_common::clipmap::{
     self, BrushNode, CBrush, CLeaf, CNode, CPlane, ClipTrace, CollAabbTree, CollBorder,
     CollPartition, IndexedMesh,
 };
-use vcod_common::collision::{WorldClip, WorldHit};
+use vcod_common::collision::WorldClip;
 
 use crate::assets::Assets;
 use crate::assets::model::XModelCollSurf;
@@ -447,16 +447,8 @@ impl ClipMap {
 }
 
 impl WorldClip for ClipMap {
-    fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> WorldHit {
-        let t = ClipMap::trace(self, start, end, mins, maxs, mask);
-        WorldHit {
-            fraction: t.fraction,
-            normal: t.normal,
-            surface_flags: t.surface_flags,
-            contents: t.contents,
-            startsolid: t.startsolid,
-            allsolid: t.allsolid,
-        }
+    fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> ClipTrace {
+        ClipMap::trace(self, start, end, mins, maxs, mask)
     }
 
     fn point_contents(&self, p: Vec3) -> u32 {

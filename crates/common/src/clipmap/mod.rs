@@ -19,7 +19,7 @@ use std::cell::RefCell;
 
 use glam::Vec3;
 
-use crate::collision::{WorldClip, WorldHit};
+use crate::collision::WorldClip;
 
 /// `surfaceparm` content bits, from the material compiler's table (Mac
 /// `.data` 0x348820; `cod2-d3dbsp-format.md`, "Contents and surface flags").
@@ -483,16 +483,8 @@ impl ClipMap {
 }
 
 impl WorldClip for ClipMap {
-    fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> WorldHit {
-        let t = ClipMap::trace(self, start, end, mins, maxs, mask);
-        WorldHit {
-            fraction: t.fraction,
-            normal: t.normal,
-            surface_flags: t.surface_flags,
-            contents: t.contents,
-            startsolid: t.startsolid,
-            allsolid: t.allsolid,
-        }
+    fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> ClipTrace {
+        ClipMap::trace(self, start, end, mins, maxs, mask)
     }
 
     fn point_contents(&self, p: Vec3) -> u32 {
