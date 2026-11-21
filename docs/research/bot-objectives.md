@@ -4237,6 +4237,18 @@ floors at 208 and 240 at (150 to 195, 1000 to 1290) after a respawn,
 its goal a chase moving every second (VERIFIED, trace, positions and
 goals only); not traced further.
 
+A plan toward a goal that finds no route at all (its only node the
+hull's own) is kept too, with the start node, goal node, fit key and
+fit link epoch it failed on (`PlanInputs`): until one of them moves, or
+`HEADWAY_MS` or `REPLAN_MS` runs out, the driver does not plan again.
+The same inputs replay the same A* over the same cached fits, so the
+answer cannot change. Before, the A* ran again every tick, up to
+`PLAN_EXPANSIONS` each. VERIFIED (measured, a temporary print per plan,
+release, UO, `bot_match` `tdm` `mp_foy`, `mp_kursk`, `mp_cassino` 12
+bots 6000 ticks seeds 1 2, 2026-11-21): failed goal plans 80 → 2,
+found ones 516 → 516, every `DIGEST` line unchanged
+(`server::bot_vehicles::tests::a_failed_plan_stands_while_its_inputs_do`).
+
 ### 14.11 The `ctf` carrier home, 2026-11-14
 
 A playtest report: a carrier reaches its base and waits there for its

@@ -1946,8 +1946,8 @@ impl GameHost {
         self.turrets.contains_key(&id)
             || self.vehicles.live.contains_key(&id)
             || self.script_takedamage.contains(&id)
-            || crate::game::mover::damageable_statics(self).contains(&id)
-            || crate::game::mover::door::damageable(self).contains(&id)
+            || crate::game::mover::is_damageable_static(self, id)
+            || crate::game::mover::door::is_damageable(self, id)
             || self.is_damage_trigger(id)
     }
 

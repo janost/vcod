@@ -249,14 +249,12 @@ impl SoundSet {
     }
 
     pub fn alias(&self, name: &str) -> Option<&[Alias]> {
-        self.aliases
-            .get(&name.to_ascii_lowercase())
-            .map(Vec::as_slice)
+        vcod_common::text::with_ascii_lowercase(name, |n| self.aliases.get(n)).map(Vec::as_slice)
     }
 
     /// The `.wav` bytes of loaded sound `name` (no leading `,`, any case).
     pub fn wav(&self, name: &str) -> Option<Result<Vec<u8>>> {
-        let l = self.loaded.get(&name.to_ascii_lowercase())?;
+        let l = vcod_common::text::with_ascii_lowercase(name, |n| self.loaded.get(n))?;
         Some(wav(l))
     }
 }

@@ -1325,12 +1325,17 @@ pub fn damageable_statics(host: &GameHost) -> Vec<EntId> {
     let mut ids: Vec<EntId> = host
         .movers
         .rows
-        .iter()
-        .filter(|(id, m)| m.use_static && host.area.last_link(id.0).is_some())
-        .map(|(id, _)| *id)
+        .keys()
+        .copied()
+        .filter(|&id| is_damageable_static(host, id))
         .collect();
     ids.sort_by_key(|id| id.0);
     ids
+}
+
+/// Whether `id` is one of [`damageable_statics`].
+pub fn is_damageable_static(host: &GameHost, id: EntId) -> bool {
+    host.movers.rows.get(&id).is_some_and(|m| m.use_static) && host.area.last_link(id.0).is_some()
 }
 
 /// `G_Damage`'s arm for an `eType` 5 entity (game.mp `0x49e93`): with a

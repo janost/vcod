@@ -9,6 +9,7 @@
 //! engine's writer is in `docs/research/cod11-map-cycle.md` 3.2.
 
 use std::collections::BTreeMap;
+use vcod_common::text::with_ascii_lowercase;
 use vcod_gsc::ErrorKind;
 
 mod registry;
@@ -159,6 +160,15 @@ impl Default for Cvars {
 }
 
 impl Cvars {
+    /// The cvar any spelling of `name` names, found without allocating.
+    fn var(&self, name: &str) -> Option<&Cvar> {
+        with_ascii_lowercase(name, |n| self.vars.get(n))
+    }
+
+    fn var_mut(&mut self, name: &str) -> Option<&mut Cvar> {
+        with_ascii_lowercase(name, |n| self.vars.get_mut(n))
+    }
+
     pub fn new() -> Cvars {
         Cvars::for_protocol(1)
     }
@@ -242,24 +252,19 @@ impl Cvars {
     }
 
     pub fn get(&self, name: &str) -> &str {
-        self.vars
-            .get(&name.to_ascii_lowercase())
-            .map_or("", |c| c.value.as_str())
+        self.var(name).map_or("", |c| c.value.as_str())
     }
 
     /// `Cvar_Command`'s view of one cvar: the registration spelling, the
     /// value and the default. `None` when no such cvar exists.
     pub fn lookup(&self, name: &str) -> Option<(&str, &str, &str)> {
-        self.vars
-            .get(&name.to_ascii_lowercase())
+        self.var(name)
             .map(|c| (c.name.as_str(), c.value.as_str(), c.default.as_str()))
     }
 
     /// Whether a `set` made the cvar rather than a registration.
     pub fn user_created(&self, name: &str) -> bool {
-        self.vars
-            .get(&name.to_ascii_lowercase())
-            .is_some_and(|c| c.user_created)
+        self.var(name).is_some_and(|c| c.user_created)
     }
 
     /// `Cvar_Set`: registers the cvar if it does not exist, and never
@@ -285,7 +290,7 @@ impl Cvars {
     /// holds the value for the next load. `cheats` is `sv_cheats`.
     /// The messages name the cvar as the caller spelled it.
     pub fn console_set(&mut self, name: &str, value: &str, cheats: bool) -> ConsoleSet {
-        let Some(c) = self.vars.get_mut(&name.to_ascii_lowercase()) else {
+        let Some(c) = self.var_mut(name) else {
             self.set(name, value);
             return ConsoleSet::Applied;
         };
@@ -307,9 +312,7 @@ impl Cvars {
 
     /// The value a latched cvar waits with, if any.
     pub fn latched(&self, name: &str) -> Option<&str> {
-        self.vars
-            .get(&name.to_ascii_lowercase())
-            .and_then(|c| c.latched.as_deref())
+        self.var(name).and_then(|c| c.latched.as_deref())
     }
 
     /// A level load's `Cvar_Get` of every latched cvar: the waiting value
@@ -324,7 +327,7 @@ impl Cvars {
 
     /// ORs flag bits into an existing cvar, as a registration does.
     pub fn add_flags(&mut self, name: &str, bits: u16) {
-        if let Some(c) = self.vars.get_mut(&name.to_ascii_lowercase()) {
+        if let Some(c) = self.var_mut(name) {
             c.flags |= bits;
         }
     }
@@ -347,7 +350,7 @@ impl Cvars {
     /// Gives an existing cvar `name`'s spelling, as another game registers
     /// it (CoD4's `sv_floodprotect` over CoD1's `sv_floodProtect`).
     pub fn respell(&mut self, name: &str) {
-        if let Some(c) = self.vars.get_mut(&name.to_ascii_lowercase()) {
+        if let Some(c) = self.var_mut(name) {
             c.name = name.to_string();
         }
     }
@@ -370,7 +373,7 @@ impl Cvars {
     }
 
     pub fn flags(&self, name: &str) -> Option<u16> {
-        self.vars.get(&name.to_ascii_lowercase()).map(|c| c.flags)
+        self.var(name).map(|c| c.flags)
     }
 
     /// `Cvar_List_f` (cod_lnxded 0x806f530): every cvar whose name matches
@@ -448,8 +451,7 @@ impl Cvars {
             let tokens = cfg_tokens(line);
             if tokens.len() >= 2 && tokens[0].eq_ignore_ascii_case("set") {
                 let set_by_hand = self
-                    .vars
-                    .get(&tokens[1].to_ascii_lowercase())
+                    .var(&tokens[1])
                     .is_some_and(|c| c.user_created || c.value != c.default);
                 if !set_by_hand {
                     self.set(&tokens[1], tokens.get(2).map_or("", |s| s.as_str()));
@@ -464,7 +466,7 @@ impl Cvars {
     /// flag, which it sets whether or not the cvar already existed.
     pub fn make_server_info(&mut self, name: &str, default: &str) {
         self.register(name, default);
-        if let Some(c) = self.vars.get_mut(&name.to_ascii_lowercase()) {
+        if let Some(c) = self.var_mut(name) {
             c.mirrored = true;
         }
     }
@@ -483,7 +485,7 @@ impl Cvars {
         self.mirror = layout;
         for &(name, value) in rows {
             self.register(name, value);
-            if let Some(c) = self.vars.get_mut(&name.to_ascii_lowercase()) {
+            if let Some(c) = self.var_mut(name) {
                 c.value = value.to_string();
                 c.default = value.to_string();
                 c.mirrored = true;
