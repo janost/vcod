@@ -134,7 +134,15 @@ reads into a 0x20000-byte buffer: a short sequence or length read, or a
 a short message read prints `Demo file truncated.` and ends it
 (VERIFIED, 0x468fbb..0x46904a). A message whose acknowledge is more than
 128 behind `reliableSequence` is skipped as live (VERIFIED, the `-0x80`
-compare at 0x46907c).
+compare at 0x46907c): the acknowledge is stored (0x469081), replaced by
+`reliableSequence` (0x469088) and the record returns before the parse
+at 0x4690a4 (VERIFIED, 0x469069..0x469099). `reliableSequence` is 0 on
+playback: `CL_PlayDemo_f` calls `CL_Disconnect` (0x469193), which zeroes
+the 0x615e8 bytes of `clc` from 0x8f4ce0 (0x4697d3..0x4697da), its
++0x134 the `reliableSequence` (VERIFIED, the instructions; that the
+memset runs only from state 5 on, 0x4697ce, and `clc` is zero before any
+connection is INFERRED). vcod's `DemoPlay::read` skips a message whose
+acknowledge is below -0x80.
 
 ## 3. The opening gamestate
 
@@ -211,7 +219,11 @@ Any other byte is a plain 32-bit `sub` from `serverMessageSequence`
 (0x47378a), so the base wraps on a record sequence past `i32::MAX`; a
 positive one needs its ring slot (`& 0x1f`) valid (0x473842) and holding
 that number (0x47386a), else the message stops there (VERIFIED, the
-instructions). vcod's `Client::parse_snapshot` wraps the same way.
+instructions). The `jg` that splits the arms tests the base itself
+(0x4737c9..0x4737d1), so a byte that reaches message 0 or before takes
+the no-base arm too (VERIFIED, the instructions). vcod's
+`Client::parse_snapshot` wraps the same way and reads a base of 0 or
+less from nothing; `demowaiting` clears on any snapshot without a base.
 The parse runs before `CL_PacketEvent`'s write, so the full frame is
 the first message written (VERIFIED, the call at 0x46c534 ahead of the
 compare at 0x46c56e). vcod: `Conn::no_delta`, cleared on a snapshot

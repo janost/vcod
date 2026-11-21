@@ -463,9 +463,9 @@ impl Conn {
         self.send_raw(&pkt)
     }
 
-    /// `disconnect` as a reliable command, sent three times as Q3's
-    /// `CL_Disconnect` does (1.7's count unverified); the server frees the
-    /// slot at once.
+    /// `disconnect` as a reliable command, sent in three moves as
+    /// `CL_Disconnect` sends it (`iw3mp.exe` 0x469776..0x46978d); the
+    /// server frees the slot at once.
     pub fn disconnect(&mut self) -> Result<()> {
         if self.client.gamestate.is_none() {
             return Ok(());
@@ -515,8 +515,11 @@ impl Conn {
             let rack = i32::from_le_bytes(msg[..4].try_into().unwrap());
             self.ack = s as i32;
             // `CL_PacketEvent` drops a message acknowledging less than the
-            // ring (`iw3mp.exe` 0x46c502, cod4-handshake.md 10).
+            // ring and takes every command as acknowledged (`iw3mp.exe`
+            // 0x46c502..0x46c50e, cod4-handshake.md 10).
             if rack < self.reliable_sequence() - KEPT_COMMANDS as i32 {
+                self.commands_acked = self.reliable_sequence();
+                self.drop_acked_commands();
                 continue;
             }
             let key = self.command_text(rack).to_vec();
@@ -1035,6 +1038,36 @@ mod tests {
         assert_eq!(got.iter().map(|r| r.sequence).collect::<Vec<_>>(), [2]);
         assert_eq!(c.commands_acked, i32::MAX);
         c.send(&[]).unwrap();
+    }
+
+    /// A `reliableAcknowledge` more than the ring behind drops its message
+    /// and acknowledges every command, as `CL_PacketEvent` stores
+    /// `reliableSequence` over it (`iw3mp.exe` 0x46c50e): the next move
+    /// resends none.
+    #[test]
+    fn an_acknowledge_behind_the_ring_acknowledges_every_command() {
+        use super::super::huffman::Huffman;
+        use super::super::parse::{Gamestate, MAX_CONFIGSTRINGS, SVC_EOF};
+        use std::collections::BTreeMap;
+        use vcod_common::net::netchan::ServerNetchan;
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut c = joined(server.local_addr().unwrap());
+        let mut table = vec![String::new(); MAX_CONFIGSTRINGS as usize];
+        table[1] = "\\sv_serverid\\16".into();
+        c.client.gamestate = Some(Gamestate::from_table(0, &table, &BTreeMap::new(), 0, 0));
+        c.command("say hi");
+        c.command("say there");
+        let me = c.sock.local_addr().unwrap();
+        let mut chan = ServerNetchan::with_params(1, 0, NetchanParams::COD2);
+        let huff = Huffman::new();
+        for p in chan.transmit_block(-1000, &huff.compress(&[SVC_EOF])) {
+            server.send_to(&p, me).unwrap();
+        }
+        let got = c.poll(Instant::now() + Duration::from_millis(200)).unwrap();
+        assert!(got.is_empty(), "the message is dropped");
+        assert_eq!(c.ack, 1, "its sequence is read");
+        assert_eq!(c.commands_acked, c.reliable_sequence());
+        assert_eq!(c.commands_acked, 2);
     }
 
     /// Acknowledged commands past the reliable ring are dropped; the
