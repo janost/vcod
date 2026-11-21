@@ -143,7 +143,7 @@ fn version_tag() -> String {
 }
 
 #[derive(Parser)]
-#[command(about = "Call of Duty (2003) map viewer and client", version = env!("VCOD_VERSION"))]
+#[command(about = "Client and map viewer for Call of Duty 1.1 and 1.5, United Offensive, Call of Duty 2 and Call of Duty 4", version = env!("VCOD_VERSION"))]
 struct Args {
     /// Map name, e.g. mp_pavlov
     map: Option<String>,
@@ -1055,10 +1055,11 @@ enum Mode {
     /// no menu is up, as retail's is when disconnected. A CoD1 install
     /// reopens main each frame none is up (`App::cod1_front_end`).
     Idle,
-    /// `vcod <map>`: a free camera over a CoD1 or CoD2 map, no server.
+    /// `vcod <map>`: a free camera over a CoD1, CoD2 or CoD4 map, no server.
     Fly(FlyCamera),
-    /// A CoD2 session, online or a demo (`App::session`'s `Cod2Client`):
-    /// the camera follows its frames, or flies until the first one.
+    /// A CoD2 or CoD4 session, online or a demo (`App::session`'s
+    /// `Cod2Client` or `Cod4Client`): the camera follows its frames, or
+    /// flies until the first one.
     Cod2(FlyCamera),
     /// Position follows the interpolated playerstate. The client joins
     /// through the stock menus and plays or spectates as the snapshot says.
@@ -1479,7 +1480,7 @@ fn run() -> Result<()> {
     net::cdkey::set_install(&args.game_dir);
     // Where a CoD4 join reads and writes its profile's stats.
     play::cod4_profile::set_context(&args.game_dir, "");
-    // CoD2 runs in fly mode only: a map with no walk, server, probe or list.
+    // `vcod <map>` on CoD2 flies over it: no walk, server, probe or list.
     let cod2_fly = game == Game::Cod2
         && args.map.is_some()
         && !args.walk
@@ -2218,7 +2219,6 @@ fn gamma_cvar(shell: &mut console::shell::Shell) -> f32 {
     }
 }
 
-/// What the next renderer loads and samples images with: the latched
 /// The cvars the samplers follow, as one key: `r_textureMode` and CoD4's
 /// mip mode and anisotropy pair.
 fn texture_mode_key(shell: &console::shell::Shell) -> String {
@@ -2767,7 +2767,7 @@ fn start_loading(
                 .for_systeminfo(systeminfo),
         });
     }
-    // Same candidate order as the old blocking downloader; `MapLoader` caps it.
+    // The pak candidates in search order; `MapLoader` caps them.
     let exists = |rel: &std::path::Path| game_dir.join(rel).exists();
     // The base dir's own base under it (`main/` under `uo/`), then the rest.
     let dir_paths: Vec<std::path::PathBuf> = dirs
@@ -3339,7 +3339,7 @@ struct App {
     texture_mode_seen: String,
     hud: Option<hud::Hud>,
     hud_ms: f32,
-    /// Menu labels; empty outside `--connect`.
+    /// Menu labels and localized strings, loaded off the search path.
     localized: vcod_common::localize::Localized,
     audio: audio::AudioSystem,
     quick_chat: quick_chat::QuickChat,
@@ -3388,7 +3388,8 @@ struct App {
     /// Nested `exec`s running.
     exec_depth: u8,
     error: Option<anyhow::Error>,
-    /// The game's session: CoD2's client, or CoD1's (whose state is
+    /// The game's session: CoD2's or CoD4's client or CoD4's main menu,
+    /// or CoD1's (whose state is
     /// `mode`, `world` and `hud`).
     session: session::Session,
     /// The wheel's turn not yet a whole notch.
@@ -4344,9 +4345,10 @@ impl App {
         Ok(r)
     }
 
-    /// `vid_restart` with a changed `vc_hdr`: every world pipeline targets
-    /// the scene format, so the renderer is rebuilt and the map reloaded
-    /// into it. The entity scene's model handles index the old renderer, so
+    /// `vid_restart` with a changed `vc_hdr`, MSAA or image setting (or
+    /// CoD4's `r_applyPicmip`): every world pipeline targets the scene
+    /// format and samples the images, so the renderer is rebuilt and the
+    /// map reloaded into it. The entity scene's model handles index the old renderer, so
     /// a live game starts a fresh one, as a gamestate does.
     fn rebuild_renderer(&mut self, event_loop: &ActiveEventLoop) {
         let Some(window) = self.window.clone() else {
