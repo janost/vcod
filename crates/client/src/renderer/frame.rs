@@ -1975,7 +1975,9 @@ impl Renderer {
             {
                 g.pass(&mut pass, Some(crate::frame_prof::Group::Shock));
             }
-            match (cod4_shock, shock) {
+            // a blend's decay and desaturation: the last capture over the 3D
+            // view, captured again after
+            let blend = match (cod4_shock, shock) {
                 // CoD4's flashbang: the first frame saves the still, the
                 // later ones add it with the white (cod4-client-view.md 8).
                 (Some(Cod4Screen::Save), _) => {
@@ -1983,50 +1985,49 @@ impl Renderer {
                     self.screen_blend.capture(&mut encoder);
                     frame_write!(self, "screen capture", full(4));
                     pass = single_pass(&mut encoder, self.gamma.scene_view(), "hud pass");
+                    None
                 }
                 (Some(Cod4Screen::Flash { white, grab }), _) => {
                     self.screen_blend.flash(&self.queue, &mut pass, white, grab);
+                    None
                 }
                 (Some(Cod4Screen::Blur { decay_ms }), _) => {
-                    let since = self.shock_captured_at.map_or(i32::MAX, |t| {
-                        i32::try_from(t.elapsed().as_millis()).unwrap_or(i32::MAX)
-                    });
-                    self.screen_blend.blend(
-                        &self.queue,
-                        &mut pass,
-                        crate::screen_blend::alpha(since, decay_ms),
-                        crate::screen_blend::COD2_DESATURATE,
-                    );
-                    drop(pass);
-                    self.screen_blend.capture(&mut encoder);
-                    frame_write!(self, "screen capture", full(4));
-                    self.shock_captured_at = Some(std::time::Instant::now());
-                    pass = single_pass(&mut encoder, self.gamma.scene_view(), "hud pass");
+                    Some((decay_ms, crate::screen_blend::COD2_DESATURATE))
                 }
-                (Some(Cod4Screen::Off), _) => self.screen_blend.drop_capture(),
+                (Some(Cod4Screen::Off), _) => {
+                    self.screen_blend.drop_capture();
+                    None
+                }
+                // CoD2 draws the capture through `shellshock`
                 (None, Some(decay)) => {
-                    let since = self.shock_captured_at.map_or(i32::MAX, |t| {
-                        i32::try_from(t.elapsed().as_millis()).unwrap_or(i32::MAX)
-                    });
-                    // CoD2 draws the capture through `shellshock`
-                    let desaturate = if self.world.as_ref().is_some_and(|w| w.cod2.is_some()) {
+                    let cod2 = self.world.as_ref().is_some_and(|w| w.cod2.is_some());
+                    let desaturate = if cod2 {
                         crate::screen_blend::COD2_DESATURATE
                     } else {
                         0.0
                     };
-                    self.screen_blend.blend(
-                        &self.queue,
-                        &mut pass,
-                        crate::screen_blend::alpha(since, decay),
-                        desaturate,
-                    );
-                    drop(pass);
-                    self.screen_blend.capture(&mut encoder);
-                    frame_write!(self, "screen capture", full(4));
-                    self.shock_captured_at = Some(std::time::Instant::now());
-                    pass = single_pass(&mut encoder, self.gamma.scene_view(), "hud pass");
+                    Some((decay, desaturate))
                 }
-                (None, None) => self.screen_blend.drop_capture(),
+                (None, None) => {
+                    self.screen_blend.drop_capture();
+                    None
+                }
+            };
+            if let Some((decay, desaturate)) = blend {
+                let since = self.shock_captured_at.map_or(i32::MAX, |t| {
+                    i32::try_from(t.elapsed().as_millis()).unwrap_or(i32::MAX)
+                });
+                self.screen_blend.blend(
+                    &self.queue,
+                    &mut pass,
+                    crate::screen_blend::alpha(since, decay),
+                    desaturate,
+                );
+                drop(pass);
+                self.screen_blend.capture(&mut encoder);
+                frame_write!(self, "screen capture", full(4));
+                self.shock_captured_at = Some(std::time::Instant::now());
+                pass = single_pass(&mut encoder, self.gamma.scene_view(), "hud pass");
             }
 
             // HUD after the weapon so it sits on top, before the debug
