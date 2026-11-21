@@ -496,7 +496,8 @@ Ranked by how much a player notices. The research-side lists are
    the registry.
 7. **Server-side differences.** vcod-server never asks the authorize
    server, so it answers an off-LAN challenge at once where 1.7 waits on
-   the authorize server (cod4-handshake.md 15). No PunkBuster (a stock
+   the authorize server (cod4-handshake.md 15); in its place one public
+   address holds at most `vc_maxClientsPerIP` slots (4). No PunkBuster (a stock
    dedicated server runs none either).
 
 Pending human checks: pixel and by-ear comparisons with retail.
