@@ -465,7 +465,6 @@ pub fn layout(
 }
 
 /// [`layout`] with the shadow at `shadow_alpha`.
-#[expect(clippy::too_many_arguments)]
 pub fn layout_shadowed(
     font: &Font,
     text: &str,
