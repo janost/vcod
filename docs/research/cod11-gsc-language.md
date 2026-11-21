@@ -369,7 +369,7 @@ vcod uses a generation. `EntId` carries the slot's generation beside its number;
 
 **Freeing an object ends every thread whose `self` it is (`probe_stale_self`, `probe_stale_self_hud`).** VERIFIED on 1.1d and UO 1.51b (`probe_stale_self` on both, the hudelem case on 1.1d): a thread on an entity asleep in `wait` over the free, and one waiting on a `level` notify sent after the free, never log again and raise no error. A thread on `level` holding the entity in a local wakes and reads `isDefined` 0. A thread on a hudelem that `destroy()` frees ends the same way. INFERRED, from the free chain: the end rides `Scr_FreeEntityNum`'s engine call. vcod drops such a thread when the scheduler picks it (`Vm::step_runnable`, through `Host::is_live`); no script can tell this from an end at the free, since the thread runs no step in between. The stock jeep self-destruct timer depends on it (`_jeepdrive_gmi::process_deactivate`, `client-probes/probe_jeepdeact`, `crates/server/tests/fixtures/vehicles/mp_foy-jeep-deactivate-uo.txt`): a jeep destroyed while it waits is deleted, and retail runs past the timer's `dodamage` line with nothing in its console.
 
-### Runtime errors below developer 1
+### 9.1 Runtime errors below developer 1
 
 Every probe capture in this section was taken at `developer 1` (`tools/run_probe.sh`), where a runtime error is fatal. Below `developer 1`, retail's default and vcod-server's, the server runs on.
 
@@ -381,7 +381,7 @@ Every probe capture in this section was taken at `developer 1` (`tools/run_probe
 
 vcod takes the mode from `developer` at the load (`Vm::set_recover_errors`, `ScriptRuntime::load_from`). On, a failed instruction leaves `stack_effect`'s results undefined and the thread runs on (`Vm::step_frames`); the error is still recorded in `Vm::aborts`. vcod's own errors (a builtin it lacks, its instruction cap, its frame cap, its variable ceiling, a wait in `call_now`) still end the thread, and a builtin's error recovers on UO as on 1.1d instead of ending the process. Retail prints every error, and only under `developer` or `logfile`; vcod logs each one the first time and then a count every 10 s, keyed on its file, function, line and kind, never on its text, which can name a script value (`Vm::record_error`). A gate replaying a `run_probe.sh` capture runs at `developer 1` (`semantics_ents.rs`'s `probe_cvars`, `linkto_ab.rs`). Stock UO `tdm.gsc` 815 shows it in play: a death to no player (a tank its own attacker, coduo-vehicles.md 11.6) reads the unset `level.teamkill_penalty`, takes the branch, and costs the victim's team a point.
 
-### The map-cycle builtins, and the `sd` connect race
+### 9.2 The map-cycle builtins, and the `sd` connect race
 
 Five builtins end or restart a level or set the scores it ends on. Addresses: `cod11-map-cycle.md` sections 1, 2 and 6, and `cod11-sound-system.md` section 9.
 
@@ -393,7 +393,7 @@ Five builtins end or restart a level or set the scores it ends on. Addresses: `c
 
 **`sd.gsc`'s `Callback_PlayerConnect` opens the team menu before it suspends, VERIFIED from the stock script.** The `else` arm calls `openMenu(game["menu_team"])`, then `spawnSpectator()`. After its `notify`, `resettimeout()`, session-state assignments and the `self spawn(...)` that places the camera, that calls the file's own `updateTeamStatus()`, which opens with `wait 0` and a comment saying the wait lets `Callback_PlayerDisconnect` finish first. INFERRED, from that order against the scheduler: the `t` command is on the wire while the connect thread is suspended, before it reaches the `waittill("menuresponse")` loop, so a menu answer arriving in that one frame notifies an event nothing waits on and is lost. `dm.gsc` has no wait between its `openMenu` and its loop.
 
-### Precache builtins
+### 9.3 Precache builtins
 
 The builtin table (`tools/re/dump_builtins.py`) has nine precache builtins: `precacheModel` (0x5ecb8), `precacheShellShock` (0x5ecf0), `precacheItem` (0x5ed28), `precacheShader` (0x5eda8), `precacheString` (0x5ee00), `loadFx` (0x5ef88), `precacheMenu` (0x5a92c), `precacheStatusIcon` (0x5aa08) and `precacheHeadIcon` (0x5aae4). MP has no `precacheTurret` or `precacheFx`.
 
@@ -407,13 +407,13 @@ What the indexers do past initializing is the next subsection but one.
 
 vcod: `crates/server/src/game/builtins/precache.rs` and `Allocators::index`'s case-folded scan; A/B `probe_precache_wait_matches_retail` in `crates/server/tests/semantics_ents.rs`.
 
-### Arrays are values
+### 9.4 Arrays are values
 
 VERIFIED (`probe_array_copy`, 1.1d on mp_pavlov): after `b = a`, a write through either leaves the other's size alone (`local_copy_write 1 2`, `local_orig_write 2 1`). Likewise a string key written into a copy of a `level` field (`field_copy_strkey 1 2`), a write through an argument (`arg_write 1`), into a copy of an outer array's nested array (`nested_write 1 2`), into a copy of an element (`element_copy_write 1 2`) and into a field assigned from another field (`field_to_field 1 2`). CoD4 1.7 prints the same lines, and there a struct an array holds is shared (cod4-gsc.md 10). vcod flags an array stored a second time and copies it at the next write (`Heap::share`, `Heap::own`); the sweep between frames that frees unreachable arrays recounts each one's holders and unflags an array one place holds (`Heap::collect`, cod2-gsc-diff.md 3.7). INFERRED: no 1.1 stock script depends on shared arrays, since vcod ran the corpus with them shared before this.
 
 VERIFIED (`probe_assign_order`, 1.1d, 1.5b and UO 1.51b on mp_pavlov, 2026-11-19): an index assignment runs its value before its key (`a[side("k")] = side("v")` logs `vk`), and both before it reads the target, so a value that changes the target writes into what the target is afterwards. A value that copies `level.arr` and writes `level.arr[1]` leaves all three keys in `level.arr` (`copied_target 3 1`); a value that clears `level.brr` leaves it vivified with the key (`cleared_target 1`); a field write whose value replaces `level.o` lands on the new struct (`swapped_object new 1`); `c[1] = c` stores `c` as it stood (`self_store 2 1`). vcod compiles the value first (`Compiler::compile_assign`; `StoreIndex` and `StoreField` pop the value last).
 
-### Indexing past the first wait
+### 9.5 Indexing past the first wait
 
 Which builtins index a configstring at run time comes from the relocations against each indexer in `game.mp.i386.so` (`readelf -r`, mapped onto the tables `tools/re/dump_builtins.py` prints). Addresses are `.so` file addresses.
 
@@ -432,11 +432,11 @@ Which builtins index a configstring at run time comes from the relocations again
 
 vcod: `Allocators::index_precached` (`crates/server/src/configstrings.rs`) gates `setModel`, `attach`, `setViewModel`, `setShader`, `objective_add`, `objective_icon`, `setText`, `label` and `loadFx`; `setModel` and `attach` keep the precached spelling. The `statusicon` setter refuses an icon not precached and keeps the precached spelling. `shellShock` and `stopShellShock` (`builtins/client.rs`) write `HostClient::shellshock`, which the sim sends as the three playerstate fields; the client half is `play::shock` (`cod11-shellshock.md`). A/B: `probe_late_index_matches_retail` in `crates/server/tests/semantics_ents.rs`.
 
-### `vectorToAngles`
+### 9.6 `vectorToAngles`
 
 VERIFIED, `vectoangles` (1.1d 0x3de94, `.rodata` 0x72ae8..0x72b08): yaw is `atan2(y, x) * 180 / PI`, pitch `atan2(z, sqrt(x² + y²)) * -180 / PI`, each stored as a float and given 360 while negative; roll 0. A vector with no horizontal part reads pitch 270 when `z > 0`, else 90. Unlike Q3's, which negates a pitch already wrapped, both angles come back in [0, 360): 16 degrees down reads 15.99, not -344.01. VERIFIED (retail UO's log of `probe_dmgtouch` and `probe_belltower`, cod11-combat.md 14.8): `(15.99, 180.00, 0.00)`, `(34.99, 0.00, 0.00)` and `(51.34, 90.00, 0.00)` for three downward aims. vcod: `builtins::math::vector_to_angles` (Q3's negative pitch is the trap).
 
-### Casting a string
+### 9.7 Casting a string
 
 VERIFIED, cod_lnxded 1.1d: the casts to bool (0x080a3c30), int (0x080a3de0, the VM's case 0x31) and float (0x080a3fa0) read a string through `strtol(s, 0, 10)` and `strtod`, so the numeric prefix is the value, blanks and a sign included, the rest ignored. A result of 0 stands only when the first character past those (under `!`) and a sign is `0`, or `.` then `0`; otherwise the cast raises `cannot cast "%s" to int` (to bool, to float). UO's engine has the same three (coduo_lnxded 0x080aa9a0, 0x080aaae2, 0x080aac34).
 
@@ -456,7 +456,7 @@ A condition and unary `!` take the bool cast, so `!"0.5"` is 1: `strtol` stops a
 
 UO's stock `maps/mp/_birdbush.gsc` (pakuo01) adds `(int) self.script_noteworthy`, a BSP key and so a string, to `(int) gettime()` on every trigger of a `birdbush` brush (mp_uo_stanjel's, seen in the UO soak, `cod11-client-soak.md`). A VM whose `(int)` refuses strings returns undefined there, the next trigger compares undefined, and the birds never fly. vcod: `vm::interp`'s `string_int` and `string_float`, gated by `semantics_ab.rs` on the probe.
 
-### Still unestablished
+### 9.8 Still unestablished
 
 - `!"a"`: not put to a retail server. INFERRED from the bool cast above (0x080a3c30): `"a"` has no numeric prefix and is not `0`, so the cast raises, the same fatal as `!""`; `if ("a")` is fatal (`probe_truthy`). `not_of` (`crates/gsc/src/vm/interp.rs`) treats any unparseable string that way. Nothing on the bootstrap path reaches it: every `scr_allow_*` value is `"0"` or `"1"`.
 - `undefined == undefined`: not probed. INFERRED: retail's mixed-case message names a "pair has unmatching types", which two `undefined`s are not, so equal. vcod answers true (`values_equal`, `crates/gsc/src/vm/interp.rs`); every mixed pair with `undefined` errors, which is measured.
