@@ -210,18 +210,20 @@ pub(crate) fn upload_texel4(
 }
 
 /// Resolves a bundle image path through the asset probe chain; a missing
-/// file warns and lands in the default image. Views are deduped per load.
+/// file warns and lands in the default image. Views are deduped per load:
+/// `rule` applies to an image's first upload only.
 pub(super) fn upload_bundle_view(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     fs: &Pk3Fs,
     cache: &mut BundleViews,
     path: &str,
+    rule: ImageRule,
 ) -> wgpu::TextureView {
     if let Some(v) = cache.views.get(path) {
         return v.clone();
     }
-    let mut picmip = cache.picmip;
+    let mut picmip = rule.picmip;
     let mut img = if path == "$dlight" {
         // engine-generated light blob, never a file on disk (research doc §8)
         assets::dlight_blob()
@@ -255,7 +257,7 @@ pub(super) fn upload_bundle_view(
     let levels = if path == "$dlight" {
         Vec::new()
     } else {
-        let mips = if cache.mipmap {
+        let mips = if rule.mipmap {
             texture_settings::Mips::chain(path, &load)
         } else {
             texture_settings::Mips::single(path, &load)
@@ -267,17 +269,56 @@ pub(super) fn upload_bundle_view(
     v
 }
 
+/// How an image uploads the first time it loads: the levels it drops and
+/// whether it gets a mip chain. A cached image keeps its first rule, as
+/// retail's image cache does (0x4ee7ff warns on the mix).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct ImageRule {
+    pub(super) picmip: u32,
+    pub(super) mipmap: bool,
+}
+
+impl ImageRule {
+    /// Every level, mipmapped: what a block without `nopicmip` or
+    /// `nomipmaps` loads at `r_picmip 0`; the lit tests' rule.
+    #[cfg(test)]
+    pub(super) const FULL: ImageRule = ImageRule {
+        picmip: 0,
+        mipmap: true,
+    };
+
+    /// A world shader's images: `r_picmip` unless `nopicmip`, a mip chain
+    /// unless `nomipmaps`.
+    pub(super) fn world(t: &TextureSettings, sh: &Material) -> ImageRule {
+        ImageRule {
+            picmip: t.world_picmip(sh.nopicmip),
+            mipmap: !sh.nomipmaps,
+        }
+    }
+
+    /// A model shader's images: `r_picmip2` in `r_picmip`'s place.
+    pub(super) fn model(t: &TextureSettings, sh: &Material) -> ImageRule {
+        ImageRule {
+            picmip: t.model_picmip(sh.nopicmip),
+            mipmap: !sh.nomipmaps,
+        }
+    }
+
+    /// [`Self::world`] for `sh`, or a world image no block flags
+    /// (`r_picmip`, mipmapped) when there is none.
+    pub(super) fn world_or_bare(t: &TextureSettings, sh: Option<&Material>) -> ImageRule {
+        ImageRule {
+            picmip: t.world_picmip(sh.is_some_and(|sh| sh.nopicmip)),
+            mipmap: !sh.is_some_and(|sh| sh.nomipmaps),
+        }
+    }
+}
+
 /// Shader-stage images uploaded during one world load, and the texture
 /// gamma they load through (`r_ignorehwgamma 1`, `gamma::bake_image`).
 pub(super) struct BundleViews<'a> {
     pub(super) views: HashMap<String, wgpu::TextureView>,
     pub(super) table: Option<&'a [u8; 256]>,
-    /// Levels the next new image drops, set per shader by the caller; an
-    /// image already loaded keeps its first picmip, as retail's image
-    /// cache does (0x4ee7ff warns on the mix).
-    pub(super) picmip: u32,
-    /// Whether the next new image gets a mip chain: not under `nomipmaps`.
-    pub(super) mipmap: bool,
     /// `r_texturebits` and the mip filter.
     pub(super) store: texture_settings::Store,
     /// What the world load decoded ahead ([`assets::DecodedImages`]).

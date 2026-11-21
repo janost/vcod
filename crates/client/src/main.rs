@@ -935,7 +935,13 @@ struct Args {
 /// The map every mode reads: the renderer builds from it, entities resolve
 /// submodels in it. `None` while `--connect` is between maps.
 struct World {
-    bsp: MapWorld,
+    /// The parsed map until a renderer has loaded it, then `None`: only a
+    /// renderer rebuild reads it again, through `source`.
+    bsp: Option<MapWorld>,
+    /// Where a rebuild reads the map again.
+    source: MapSource,
+    /// The map's model count, its world and inline (brush) models.
+    models: usize,
     /// The map's base name (`mp_carentan`), which a levelshot is named by.
     name: String,
     /// The fog a load with no server draws: CoD2 fly mode's map script
@@ -944,6 +950,63 @@ struct World {
     /// A CoD4 map's own materials (`cod4_fly`), which the renderer draws
     /// with in place of the game's library.
     materials: Option<vcod_common::material::MaterialLib>,
+}
+
+impl World {
+    /// `bsp` kept for a renderer still to come, else only what a rebuild
+    /// needs to read it again.
+    fn new(name: String, bsp: MapWorld, keep: bool, source: MapSource) -> World {
+        World {
+            models: bsp.models.len(),
+            bsp: keep.then_some(bsp),
+            source,
+            name,
+            fog: None,
+            materials: None,
+        }
+    }
+}
+
+/// How a map is read again for a rebuilt renderer.
+enum MapSource {
+    /// A search path file, parsed as CoD1's `.bsp` or CoD2's `.d3dbsp`
+    /// (fly mode's start).
+    File { path: String, cod2: bool },
+    /// `maps/mp/<map>.bsp` ([`read_map`]).
+    Cod1(String),
+    /// `maps/mp/<map>.d3dbsp`.
+    Cod2(String),
+    /// The map's zone under `fs_game` (`cod4_fly::load`).
+    Cod4 {
+        map: String,
+        fs_game: Option<String>,
+    },
+}
+
+impl MapSource {
+    fn read(&self, fs: &Pk3Fs, game_dir: &std::path::Path) -> Result<MapWorld> {
+        let file = |path: &str| fs.read(path).with_context(|| format!("cannot read {path}"));
+        match self {
+            MapSource::File { path, cod2 } => {
+                let data = file(path)?;
+                match cod2 {
+                    true => vcod_cod2::world::from_bytes(&data),
+                    false => mapworld::load(&data),
+                }
+                .with_context(|| format!("cannot parse {path}"))
+            }
+            MapSource::Cod1(map) => read_map(fs, map),
+            MapSource::Cod2(map) => {
+                let path = format!("maps/mp/{map}.d3dbsp");
+                cod2_front::parse_map(&file(&path)?, &path).map(|(_, bsp)| bsp)
+            }
+            MapSource::Cod4 { map, fs_game } => {
+                cod4_fly::load(game_dir, fs_game.as_deref(), map, &Default::default())
+                    .map(|m| m.bsp)
+                    .with_context(|| format!("cannot load CoD4 map '{map}'"))
+            }
+        }
+    }
 }
 
 /// Where `--connect` is between connecting and drawing a map.
@@ -1880,7 +1943,11 @@ fn run() -> Result<()> {
             fs.overlay(&path, wav);
         }
         let bsp = std::mem::take(&mut cod4_map.insert(c).bsp);
-        Some((map.to_string(), bsp))
+        let source = MapSource::Cod4 {
+            map: map.to_string(),
+            fs_game,
+        };
+        Some((map.to_string(), bsp, source))
     } else if net_client.is_none()
         && let Some(map) = map_arg.as_deref()
     {
@@ -1906,7 +1973,7 @@ fn run() -> Result<()> {
         }
         .with_context(|| format!("cannot parse {path}"))?;
         vcod_common::laps::span(t0, || format!("{map}: read and parse"));
-        Some((map.to_string(), bsp))
+        Some((map.to_string(), bsp, MapSource::File { path, cod2 }))
     } else {
         None
     };
@@ -1984,7 +2051,7 @@ fn run() -> Result<()> {
             None,
             format!("{} — connecting", version_tag()),
         )
-    } else if let Some((map, bsp)) = local {
+    } else if let Some((map, bsp, source)) = local {
         audio.on_gamestate(&map);
         // CoD2 runs no script in fly mode: the map's own fog call stands in
         let fog = if cod2_fly {
@@ -2037,10 +2104,9 @@ fn run() -> Result<()> {
         (
             mode,
             Some(World {
-                name: map_base_name(&map),
-                bsp,
                 fog,
                 materials: cod4_map.take().map(|c| c.materials),
+                ..World::new(map_base_name(&map), bsp, true, source)
             }),
             format!("{} — {map}", version_tag()),
         )
@@ -3103,12 +3169,12 @@ fn load_map(
     if let Phase::Live(live) = &phase {
         r.set_hud_weapons(Some(&live.weapons));
     }
-    *world = Some(World {
-        name: map_base_name(map),
+    *world = Some(World::new(
+        map_base_name(map),
         bsp,
-        fog: None,
-        materials: None,
-    });
+        false,
+        MapSource::Cod1(map.to_string()),
+    ));
     Ok(phase)
 }
 
@@ -4237,9 +4303,7 @@ impl App {
         let textures = self.texture_settings();
         let samples = renderer::aa_samples(self.shell.cvar_f32("r_aaSamples"));
         if self.renderer.as_ref().is_some_and(|r| {
-            r.hdr() != hdr_cvar(&self.shell)
-                || textures != self.textures
-                || samples != renderer::msaa_samples()
+            r.hdr() != hdr_cvar(&self.shell) || textures != self.textures || samples != r.samples()
         }) {
             self.rebuild_renderer(event_loop);
         }
@@ -4326,11 +4390,16 @@ impl App {
             samples,
         )?;
         r.set_image_gamma(image_gamma(&mut self.shell, self.ignore_hw_gamma));
-        if let Some(w) = &self.world {
+        if let Some(w) = &mut self.world {
             if let Some(lib) = &w.materials {
                 r.set_material_lib(lib.clone());
             }
-            r.load_world(&w.bsp, &self.fs)?;
+            // the start's parse, else the map read again; dropped once loaded
+            let bsp = match w.bsp.take() {
+                Some(bsp) => bsp,
+                None => w.source.read(&self.fs, &self.game_dir)?,
+            };
+            r.load_world(&bsp, &self.fs)?;
             if w.fog.is_some() {
                 r.set_fog(w.fog, 0.0);
             }
@@ -4338,7 +4407,7 @@ impl App {
             // every one stands where the map put it.
             if !matches!(self.mode, Mode::Online { .. }) {
                 r.set_submodels(
-                    &(1..w.bsp.models.len())
+                    &(1..w.models)
                         .map(|m| (m, glam::Mat4::IDENTITY))
                         .collect::<Vec<_>>(),
                 );
@@ -4920,14 +4989,13 @@ impl App {
         if let Some(r) = &mut self.renderer {
             r.load_world(&bsp, &self.fs)?;
         }
-        self.world = Some(World {
-            name: map_base_name(
-                net::info_value_for_key(net.configstring(0), "mapname").unwrap_or_default(),
-            ),
+        let map = net::info_value_for_key(net.configstring(0), "mapname").unwrap_or_default();
+        self.world = Some(World::new(
+            map_base_name(map),
             bsp,
-            fog: None,
-            materials: None,
-        });
+            self.renderer.is_none(),
+            MapSource::Cod1(map.to_string()),
+        ));
         Ok(())
     }
 
@@ -5001,12 +5069,12 @@ impl App {
         vcod_common::laps::begin_load(format!("cod2 map change {map}"));
         self.reopen_cod2_fs()?;
         let bsp = self.load_cod2_map(&map)?;
-        self.world = Some(World {
-            name: map_base_name(&map),
+        self.world = Some(World::new(
+            map_base_name(&map),
             bsp,
-            fog: None,
-            materials: None,
-        });
+            self.renderer.is_none(),
+            MapSource::Cod2(map.clone()),
+        ));
         self.fx.clear();
         self.session.reset_view_fx();
         self.audio.on_gamestate(&map);
@@ -5052,11 +5120,13 @@ impl App {
             r.set_material_lib(m.materials.clone());
             r.load_world(&bsp, &self.fs)?;
         }
+        let source = MapSource::Cod4 {
+            map: map.clone(),
+            fs_game: c.session.fs_game(),
+        };
         self.world = Some(World {
-            name: map_base_name(&map),
-            bsp,
-            fog: None,
             materials: Some(m.materials),
+            ..World::new(map_base_name(&map), bsp, self.renderer.is_none(), source)
         });
         self.fx.clear();
         self.cod4_prewarm();
@@ -5142,11 +5212,18 @@ impl App {
             r.set_material_lib(map.materials.clone());
             r.load_world(&bsp, &self.fs)?;
         }
+        let source = MapSource::Cod4 {
+            map: map_name.clone(),
+            fs_game,
+        };
         self.world = Some(World {
-            name: map_base_name(&map_name),
-            bsp,
-            fog: None,
             materials: Some(map.materials),
+            ..World::new(
+                map_base_name(&map_name),
+                bsp,
+                self.renderer.is_none(),
+                source,
+            )
         });
         self.audio.on_gamestate(&map_name);
         self.cod4_prewarm();
@@ -5891,6 +5968,48 @@ mod tests {
         match fx::registry::resolve(&hit, &ctx).as_slice() {
             [fx::registry::Resolved::Spawn { path, .. }] => assert_eq!(path, "fx/mod/hit.efx"),
             other => panic!("impact table from the new pak: {other:?}"),
+        }
+    }
+
+    /// A map the renderer loaded is not kept; a rebuild reads it again
+    /// through its source, the same map each game's load parsed.
+    #[test]
+    fn a_dropped_world_reads_its_map_again() {
+        let dir = std::path::Path::new("");
+        let shape = |m: &MapWorld| {
+            (
+                m.verts.len(),
+                m.indices.len(),
+                m.models.len(),
+                m.materials.len(),
+            )
+        };
+        if let Some(fs) = vcod_common::testing::game_fs() {
+            let bsp = read_map(&fs, "mp_harbor").unwrap();
+            let want = shape(&bsp);
+            let w = World::new(
+                "mp_harbor".into(),
+                bsp,
+                false,
+                MapSource::Cod1("mp_harbor".into()),
+            );
+            assert!(w.bsp.is_none());
+            assert_eq!(w.models, want.2);
+            assert_eq!(shape(&w.source.read(&fs, dir).unwrap()), want);
+            let path = fs.resolve_map("mp_harbor").unwrap();
+            let file = MapSource::File { path, cod2: false };
+            assert_eq!(shape(&file.read(&fs, dir).unwrap()), want);
+        }
+        if let Some(fs) = vcod_common::testing::cod2_fs() {
+            let path = "maps/mp/mp_toujane.d3dbsp";
+            let (_, bsp) = cod2_front::parse_map(&fs.read(path).unwrap(), path).unwrap();
+            let source = MapSource::Cod2("mp_toujane".into());
+            assert_eq!(shape(&source.read(&fs, dir).unwrap()), shape(&bsp));
+            let file = MapSource::File {
+                path: path.into(),
+                cod2: true,
+            };
+            assert_eq!(shape(&file.read(&fs, dir).unwrap()), shape(&bsp));
         }
     }
 

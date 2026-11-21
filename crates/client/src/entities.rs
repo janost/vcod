@@ -1358,6 +1358,7 @@ fn load_clip(
 }
 
 /// [`build_instances`]'s result.
+#[derive(Default)]
 pub struct BuiltScene {
     pub instances: Vec<DynamicModelInstance>,
     /// Per player entity number: world-space muzzle position and forward, from
@@ -1755,24 +1756,9 @@ pub fn build_instances(
         })
         .as_ref();
 
-    // Shared across the whole pass, see ASSEMBLY_LOAD_BUDGET_PER_FRAME.
-    let mut load_budget = ASSEMBLY_LOAD_BUDGET_PER_FRAME;
-
     // split once per frame, shared by the ET_ITEM and held-weapon lookups
     let weapon_names = split_weapon_list(configstrings.get(7).map(String::as_str).unwrap_or(""));
 
-    let mut out = Vec::new();
-    let mut muzzles: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
-    let mut shot_fallbacks: HashMap<u32, Vec3> = HashMap::new();
-    let mut brass: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
-    let mut weapon_flash: HashMap<i32, String> = HashMap::new();
-    let mut entity_pos: HashMap<u32, Vec3> = HashMap::new();
-    let mut entity_angles: HashMap<u32, Vec3> = HashMap::new();
-    let mut heads: HashMap<u32, Vec3> = HashMap::new();
-    let mut turret_eye = None;
-    let mut submodels = Vec::new();
-    let mut scene_lights = Vec::new();
-    let mut shadow_casters = Vec::new();
     let ps_int = |name: &str| b.snap.ps.field_i32(p, name);
     let uo = p.is_uo();
     let rules = MoveRules::for_protocol(p);
@@ -1788,8 +1774,189 @@ pub fn build_instances(
         snap: a,
         movers: SnapshotMovers::from_entities(p, &a.snap.entities),
     };
-    // The guns first: a gunner's body is placed off its gun, whose number is
-    // always above the gunner's.
+    let fr = Frame {
+        a,
+        b,
+        f,
+        from: &from,
+        render_time,
+        latest_snapshot_ms,
+        frametime_ms,
+        skip_num,
+        configstrings,
+        weapon_names: &weapon_names,
+        fs,
+        trace,
+        p,
+        rules,
+        uo,
+        ridden,
+        view: *view,
+        swing_speed: *swing_speed,
+        anims,
+    };
+    let mut c = Caches {
+        assemblies,
+        parts,
+        model_cache,
+        weapon_cache,
+        warned_items,
+        clips,
+        states,
+        turret_rigs,
+        turret_anims,
+        shake,
+        stats,
+        drawn,
+        vehicle_rigs,
+        vehicle_worlds,
+        renderer,
+        load_budget: ASSEMBLY_LOAD_BUDGET_PER_FRAME,
+    };
+    let mut out = BuiltScene::default();
+    let guns = gun_frames(&fr, &mut c);
+    let vehicles = vehicle_frames(&fr, &mut c, &mut out);
+    let mounts = Mounts { guns, vehicles };
+    for (num, ent) in b.entities() {
+        draw_entity(&fr, &mut c, &mut out, &mounts, num, ent);
+    }
+    let Caches {
+        assemblies,
+        weapon_cache,
+        states,
+        turret_anims,
+        stats,
+        ..
+    } = c;
+    stale_shot_points(
+        states,
+        StaleShots {
+            snap: b,
+            p,
+            skip_num,
+            entity_pos: &out.entity_pos,
+            entity_angles: &out.entity_angles,
+        },
+        &out.muzzles,
+        &mut out.shot_fallbacks,
+    );
+    // `b.ps`'s owner is always `skip_num`, so its weapon never reaches the
+    // insert in the `Player` arm above.
+    let ps_weapon = b.snap.ps.field_i32(p, "weapon");
+    if let Some(path) = resolve_weapon_flash(weapon_cache, fs, &weapon_names, ps_weapon) {
+        out.weapon_flash
+            .entry(ps_weapon)
+            .or_insert_with(|| path.to_string());
+    }
+    // `abs` so a render clock that jumps backwards prunes instead of keeping everything.
+    turret_anims.retain(|_, s| (render_time - s.last_seen_ms).abs() < STATE_TTL_MS);
+    assemblies.prune_stale(render_time);
+    stats.pending_assemblies = assemblies.pending.len();
+    out
+}
+
+/// What every step of [`build_instances`] reads: the frame's snapshots,
+/// clocks and wire.
+#[derive(Clone, Copy)]
+struct Frame<'a> {
+    a: SnapView<'a>,
+    b: SnapView<'a>,
+    f: f32,
+    from: &'a LerpFrom<'a>,
+    render_time: i32,
+    latest_snapshot_ms: i32,
+    frametime_ms: i32,
+    skip_num: i32,
+    configstrings: &'a [String],
+    weapon_names: &'a [String],
+    fs: &'a Pk3Fs,
+    trace: Option<MoveWorld<'a>>,
+    p: &'a Cod1Wire,
+    rules: MoveRules,
+    uo: bool,
+    ridden: Option<u32>,
+    view: Option<[f32; 3]>,
+    swing_speed: f32,
+    anims: Option<&'a PlayerAnims>,
+}
+
+/// The scene's caches and entity state the steps of [`build_instances`]
+/// write.
+struct Caches<'a> {
+    assemblies: &'a mut AssemblyCache,
+    parts: &'a mut PartCache,
+    model_cache: &'a mut HashMap<String, Option<ModelHandle>>,
+    weapon_cache: &'a mut HashMap<String, Option<vcod_common::weapon::WeaponDef>>,
+    warned_items: &'a mut HashSet<String>,
+    clips: &'a mut HashMap<String, Option<Rc<XAnim>>>,
+    states: &'a mut HashMap<u32, EntityAnim>,
+    turret_rigs: &'a mut HashMap<String, Option<TurretRig>>,
+    turret_anims: &'a mut HashMap<u32, TurretAnim>,
+    shake: &'a mut MsvcRand,
+    stats: &'a mut SceneStats,
+    drawn: &'a mut HashMap<u32, Drawn>,
+    vehicle_rigs: &'a mut HashMap<String, Option<VehicleRig>>,
+    vehicle_worlds: &'a mut HashMap<u32, Vec<(Vec3, Quat)>>,
+    renderer: &'a mut Renderer,
+    /// Shared across the whole pass, see ASSEMBLY_LOAD_BUDGET_PER_FRAME.
+    load_budget: u32,
+}
+
+/// The guns and vehicles posed before the bodies placed on them.
+struct Mounts {
+    guns: HashMap<u32, GunFrame>,
+    vehicles: HashMap<u32, VehicleFrame>,
+}
+
+/// One entity where [`draw_entity`] draws it this frame.
+#[derive(Clone, Copy)]
+struct EntDraw<'e> {
+    num: u32,
+    ent: &'e EntityState,
+    prev: Option<&'e EntityState>,
+    etype: i32,
+    /// Posed for its tags and never drawn.
+    hidden: bool,
+    pos: Vec3,
+    rot: Quat,
+    angles: Vec3,
+    transform: Mat4,
+    light_origin: Vec3,
+}
+
+/// Where [`place_entity`] moved an entity: onto its gun or its seat.
+struct Placement {
+    pos: Vec3,
+    rot: Quat,
+    placed: Option<GunnerPlacement>,
+    rider: Option<BodySeat>,
+    seat_hidden: bool,
+}
+
+/// The guns first: a gunner's body is placed off its gun, whose number is
+/// always above the gunner's.
+fn gun_frames(fr: &Frame, c: &mut Caches) -> HashMap<u32, GunFrame> {
+    let Frame {
+        a,
+        b,
+        f,
+        from,
+        render_time,
+        configstrings,
+        weapon_names,
+        fs,
+        p,
+        ridden,
+        view,
+        ..
+    } = *fr;
+    let Caches {
+        parts,
+        weapon_cache,
+        turret_rigs,
+        renderer,
+        ..
+    } = c;
     let mut guns: HashMap<u32, GunFrame> = HashMap::new();
     for (num, ent) in b.entities() {
         let EntityVisual::Turret { model, weapon } =
@@ -1801,7 +1968,7 @@ pub fn build_instances(
             continue;
         };
         let prev = a.entity(num);
-        let (pos, angles) = lerp_pos_angles(num, ent, &from, f, render_time, p);
+        let (pos, angles) = lerp_pos_angles(num, ent, from, f, render_time, p);
         let a2 =
             |e: &EntityState| ["angles2[0]", "angles2[1]", "angles2[2]"].map(|n| e.field_f32(p, n));
         let eflags = |e: &EntityState| e.field_i32(p, "eFlags");
@@ -1814,10 +1981,10 @@ pub fn build_instances(
             let arcs = turret::UoArcs::lerp(arcs(prev.unwrap_or(ent)), arcs(ent), f);
             ([angles.x, angles.y], arcs)
         });
-        if let (Some((base, arcs)), Some(v)) = (&uo_gun, *view) {
+        if let (Some((base, arcs)), Some(v)) = (&uo_gun, view) {
             [barrel[0], barrel[1]] = arcs.barrel(v, *base);
         }
-        let rotate_inc = weapon_name_for_index(&weapon_names, weapon as i32)
+        let rotate_inc = weapon_name_for_index(weapon_names, weapon as i32)
             .and_then(|name| resolve_weapon_def(weapon_cache, fs, name))
             .map_or(0.0, |d| d.anim_hor_rotate_inc);
         guns.insert(
@@ -1834,10 +2001,30 @@ pub fn build_instances(
             },
         );
     }
-    // The vehicles next: a seated player draws at its vehicle's posed seat.
+    guns
+}
+
+/// The vehicles next: a seated player draws at its vehicle's posed seat.
+fn vehicle_frames(fr: &Frame, c: &mut Caches, out: &mut BuiltScene) -> HashMap<u32, VehicleFrame> {
+    let Frame {
+        a,
+        b,
+        f,
+        from,
+        render_time,
+        configstrings,
+        fs,
+        p,
+        view,
+        ..
+    } = *fr;
+    let Caches {
+        parts,
+        vehicle_rigs,
+        renderer,
+        ..
+    } = c;
     let mut vehicles: HashMap<u32, VehicleFrame> = HashMap::new();
-    let mut vehicle_angles = HashMap::new();
-    let mut vehicle_wheels = Vec::new();
     for (num, ent) in b.entities() {
         let EntityVisual::Vehicle(model) = resolve_visual(ent, &b.snap.clients, configstrings, p)
         else {
@@ -1846,11 +2033,11 @@ pub fn build_instances(
         let Some(rig) = resolve_vehicle_rig(vehicle_rigs, parts, renderer, fs, &model) else {
             continue;
         };
-        let (pos, angles) = lerp_pos_angles(num, ent, &from, f, render_time, p);
+        let (pos, angles) = lerp_pos_angles(num, ent, from, f, render_time, p);
         if !pos.is_finite() || !angles.is_finite() {
             continue;
         }
-        vehicle_angles.insert(num, angles.to_array());
+        out.vehicle_angles.insert(num, angles.to_array());
         let next = VehicleFields::read(ent, p);
         let cur = a.entity(num).map_or(next, |e| VehicleFields::read(e, p));
         let v = VehicleFrame::posed(
@@ -1865,7 +2052,7 @@ pub fn build_instances(
                 }
             },
         );
-        vehicle_wheels.push(crate::fx::vehicle_trails::Wheels {
+        out.vehicle_wheels.push(crate::fx::vehicle_trails::Wheels {
             entity: num,
             four_wheel: v.pose.kind == vehiclepose::KIND_FOUR_WHEEL,
             forward: v.rot * Vec3::X,
@@ -1879,743 +2066,915 @@ pub fn build_instances(
         });
         vehicles.insert(num, v);
     }
-    for (num, ent) in b.entities() {
-        // The body the camera is inside is posed, for the tags `playFxOnTag`
-        // reads, and never drawn (cgame 0x30028210's `renderfx` 2).
-        let hidden = num as i32 == skip_num;
-        let etype = ent.field_i32(p, "eType");
-        if hidden && etype != ET_PLAYER {
-            continue;
-        }
-        let mut visual = resolve_visual(ent, &b.snap.clients, configstrings, p);
-        // A corpse carries no model of its own; it resolves through the dead
-        // client's roster entry, which clears when they enter limbo. Fall back
-        // to the visual cached while the corpse (or the player it copies) was
-        // still resolvable, instead of dropping the body with it.
-        if matches!(visual, EntityVisual::None) && etype == ET_CORPSE {
-            let cn = ent.field_i32(p, "clientNum") as u32;
-            if let Some(st) = states.get(&num).or_else(|| states.get(&cn)) {
-                visual = st.visual.clone();
-            }
-        }
-        // every entity's constantLight, drawn or not (0x3001d5f0)
-        let cl = ent.field_i32(p, "constantLight") as u32;
-        if cl == 0 && matches!(visual, EntityVisual::None) {
-            continue;
-        }
-        let (mut pos, angles) = lerp_pos_angles(num, ent, &from, f, render_time, p);
-        if let Some(l) = constant_light(cl, pos).filter(|l| !hidden && l.origin.is_finite()) {
-            scene_lights.push(l);
-        }
-        if matches!(visual, EntityVisual::None) {
-            continue;
-        }
+    vehicles
+}
 
-        let prev = a.entity(num);
-        if !pos.is_finite() || !angles.is_finite() {
-            continue; // never feed a NaN transform to the GPU
-        }
-        let mut rot = model_rotation(&visual, angles);
-        // A gunner stands and turns where its gun puts it, traced down.
-        let snap_pos = pos;
-        let placed = match (&visual, anims) {
-            (EntityVisual::Player { .. }, Some(anims)) if etype == ET_PLAYER => {
-                let at = Times {
-                    clock_ms: render_time,
-                    snapshot_ms: latest_snapshot_ms,
-                };
-                let seconds = || {
-                    let clocks = states.get(&num).map(EntityAnim::clocks);
-                    gunner_legs_seconds(clocks, anims, rules, ent, p, at, frametime_ms)
-                };
-                place_body(anims, ent, p, &guns, pos, seconds, clips, fs)
-            }
-            _ => None,
-        };
-        let placed = placed.map(|(g, gun_z)| {
-            let traced = match trace {
-                Some(world) if g.origin.is_finite() => trace_down(world, num, g.origin, gun_z),
-                _ => g.origin,
-            };
-            GunnerPlacement {
-                origin: traced,
-                ..g
-            }
-        });
-        if let Some(g) = placed.as_ref().filter(|g| g.origin.is_finite()) {
-            // Yaw only, as every player draws; a stock gun stands level.
-            pos = g.origin;
-            rot = Quat::from_rotation_z(g.yaw().to_radians());
-        }
-        // A seated player draws at its seat as its vehicle is posed this
-        // frame, turned with the seat (cgame 0x30032fe0), or not at all.
-        // A seat that hides the body returns before it moves `lerpOrigin`,
-        // and `CG_Player` (0x300343e0) has stepped its anims already, so
-        // the body is posed undrawn where it stands, for its tags.
-        let mut seat_hidden = false;
-        // The seat the controllers and the seat blend read (0x30033a77
-        // writes the tag's angles into the client info's `+0x3f4`).
-        let mut rider = None;
-        if etype == ET_PLAYER
-            && p.et_events > ET_VEHICLE_CORPSE_V22
-            && ent.field_i32(p, "eFlags") & EF_IN_VEHICLE_V22 != 0
-            && let Some(v) = vehicles.get(&(ent.field_i32(p, "otherEntityNum") as u32))
-            && let Some(rig) = vehicle_rigs.get(&v.model).and_then(Option::as_ref)
-        {
-            let surf_type = ent.field_i32(p, "surfType");
-            // The view's own body comes here only when its seat hides it
-            // (`play::seat::own_body_drawn`).
-            seat_hidden =
-                hidden || !vehiclepose::seat_drawn(v.pose.kind, vehiclepose::rider_seat(surf_type));
-            if let Some((at, r, seat)) =
-                rider_frame(&rig.skeleton, v, surf_type, ent.field_i32(p, "weapon"))
-            {
-                if !seat_hidden {
-                    pos = at;
-                    rot = r;
-                }
-                rider = Some(seat);
-            }
-        }
-        if !hidden {
-            entity_pos.insert(num, pos);
-            entity_angles.insert(num, angles);
-        }
-        // Posed for its tags and never drawn.
-        let hidden = hidden || seat_hidden;
-        // `CG_Player` (0x30028210) draws no player with `EF_NODRAW` or
-        // `EF_DEAD`: what a death leaves lying is the corpse `cloneplayer`
-        // makes. Its events still sound from where it stands.
-        if etype == ET_PLAYER && ent.field_i32(p, "eFlags") & (EF_DEAD | EF_NODRAW) != 0 {
-            continue;
-        }
-        if !hidden && etype == ET_PLAYER && matches!(visual, EntityVisual::Player { .. }) {
-            shadow_casters.push(pos);
-        }
-        let transform = Mat4::from_rotation_translation(rot, pos);
-        let light_origin = light_origin(etype, ent, p, snap_pos, pos);
-
-        match visual {
-            EntityVisual::Player {
-                body,
-                mut attachments,
-            } => {
-                let _bodies = crate::frame_prof::span(crate::frame_prof::Stage::Bodies);
-                // Kept before the held weapon joins: the corpse fallback
-                // re-resolves the weapon from its own entityState.
-                let roster_visual = EntityVisual::Player {
-                    body: body.clone(),
-                    attachments: attachments.clone(),
-                };
-                // The held weapon is one more attachment on tag_weapon_right,
-                // so a weapon switch changes the assembly key like a gear change.
-                // A gunner's is not drawn (0x30004eb0 zeroes it on `eFlags & 0xc000`),
-                // nor a UO rider's but in the seat that holds a weapon (0x300058f0).
-                let weapon_index = if ent.field_i32(p, "eFlags") & turret::EF_MOUNTED != 0
-                    || seat_unarmed(ent.field_i32(p, "eFlags"), ent.field_i32(p, "surfType"))
-                {
-                    0
-                } else {
-                    ent.field_i32(p, "weapon")
-                };
-                let held_weapon = resolve_held_weapon(
-                    weapon_cache,
-                    warned_items,
-                    fs,
-                    &weapon_names,
-                    weapon_index,
-                );
-                if let Some(world_model) = &held_weapon {
-                    attachments.push((world_model.clone(), Some("tag_weapon_right".to_string())));
-                }
-                if let Some(path) =
-                    resolve_weapon_flash(weapon_cache, fs, &weapon_names, weapon_index)
-                {
-                    weapon_flash
-                        .entry(weapon_index)
-                        .or_insert_with(|| path.to_string());
-                }
-                let key = AssemblyCache::key(&body, &attachments);
-                let Some(assembly) = assemblies.resolve(
-                    &key,
-                    &body,
-                    &attachments,
-                    fs,
-                    renderer,
-                    parts,
-                    &mut load_budget,
-                    render_time,
-                ) else {
-                    continue;
-                };
-                // A corpse keeps lerp frames of its own (cgame 0x30028400
-                // indexes them by body queue slot), so its death clip plays
-                // from the start while `eFlags` 0x800 marks it fresh, and
-                // shows its last frame otherwise. A player's are his
-                // client's. Neither expires while unseen (movers doc 15).
-                states.entry(num).or_insert_with(|| {
-                    EntityAnim::new(key.clone(), &assembly.skeleton, render_time)
-                });
-                let st = states.get_mut(&num).expect("inserted above");
-                if st.key != key {
-                    // The clocks hold only anim indices and times, so carry
-                    // them across a loadout change instead of restarting the
-                    // clip. Only the pose buffer is skeleton-shaped.
-                    *st = EntityAnim {
-                        key: key.clone(),
-                        skeleton: assembly.skeleton.clone(),
-                        pose: PoseBuffer::drawn(&assembly.skeleton),
-                        legs: st.legs,
-                        torso: st.torso,
-                        visual: EntityVisual::None,
-                        body: st.body,
-                        controls: st.controls,
-                        stance_window_ms: st.stance_window_ms,
-                        seat: st.seat.clone(),
-                        present_ms: st.present_ms,
-                        held: None,
-                        shot: st.shot,
-                    };
-                }
-                st.visual = roster_visual;
-                let (legs_wire, torso_wire) =
-                    (ent.field_i32(p, "legsAnim"), ent.field_i32(p, "torsoAnim"));
-                stats.anim_restarts += u64::from(legs_wire != st.legs.anim())
-                    + u64::from(torso_wire != st.torso.anim());
-
-                st.held = None;
-                if let Some(anims) = anims {
-                    let lerp_field = |name: &str| {
-                        let vb = ent.field_f32(p, name);
-                        match prev {
-                            Some(ea) => {
-                                let va = ea.field_f32(p, name);
-                                va + (vb - va) * f
-                            }
-                            None => vb,
-                        }
-                    };
-                    let pitch = lerp_field("fTorsoPitch");
-                    let waist_pitch = lerp_field("fWaistPitch");
-                    let lean = lerp_field("leanf");
-                    let eflags = ent.field_i32(p, "eFlags");
-
-                    let at = Times {
-                        clock_ms: render_time,
-                        snapshot_ms: latest_snapshot_ms,
-                    };
-                    let clocks = (
-                        &mut st.legs,
-                        &mut st.torso,
-                        &mut st.stance_window_ms,
-                        &mut st.present_ms,
-                    );
-                    let wires = (legs_wire, torso_wire);
-                    step_clocks(clocks, anims, rules, wires, &seen(ent, p), at, frametime_ms);
-
-                    // Corpses keep their death-clip pose; their aim fields are
-                    // stale and would twist the body forever. A gunner runs no
-                    // controllers (cgame 0x30004710).
-                    let controllers = if etype == ET_PLAYER {
-                        // cgame's `CG_PlayerAnimation` (0x30004e40) swings
-                        // the legs, torso and torso pitch after the lerped
-                        // view every frame, then reads the legs anim's
-                        // record, as the server's `BG_PlayerAnimation` does.
-                        let surf_type = ent.field_i32(p, "surfType");
-                        let input = BodyInput {
-                            view: angles.to_array(),
-                            movement_dir: ent.field_f32(p, "angles2[1]"),
-                            eflags,
-                            legs: anims.record(legs_wire),
-                            // UO's updater reads the seat off `surfType`;
-                            // the record's seat yaw is the seat tag's this
-                            // frame (0x30033a77).
-                            seat_weapon: if rules == MoveRules::Uo {
-                                SeatWeapon::of(
-                                    surf_type >> 3 & 7,
-                                    vehiclepose::rider_seat(surf_type),
-                                    ent.field_i32(p, "weapon"),
-                                    rider.as_ref().map_or(0.0, |s| s.angles[1]),
-                                )
-                            } else {
-                                SeatWeapon::Barred
-                            },
-                        };
-                        st.body.step(&input, frametime_ms, *swing_speed);
-                        st.body.update_conditions(&input);
-                        let slope = BodySlope {
-                            lean,
-                            torso_height: lerp_field("fTorsoHeight"),
-                            torso_pitch: pitch,
-                            waist_pitch,
-                        };
-                        let target =
-                            body_controllers(rules, rider.as_ref(), &st.body, &input, &slope);
-                        match target {
-                            // The cgame's hook steps the controls over the
-                            // frame (coduo-vehicles.md 14, "The controllers").
-                            Some(t) if Controllers::eased(rules) => {
-                                let mut c = st.controls.unwrap_or_default();
-                                c.ease_toward(&t, frametime_ms);
-                                st.controls = Some(c);
-                                Some(c)
-                            }
-                            _ => target,
-                        }
-                    } else {
-                        None
-                    };
-
-                    // The server's pose: the legs and torso clocks' clips
-                    // blended as the tree walk blends its nodes. A gunner's
-                    // legs are the placement's leaf blend (0x300279b0 sets
-                    // the goal weights on the gunner's own tree); an MG42 aim
-                    // group descends by the torso pitch with no yaw, which
-                    // the wire does not carry.
-                    let goal = rider
-                        .as_ref()
-                        .and_then(|seat| seat_inputs(anims, legs_wire, seat));
-                    let held = HeldPose {
-                        assembly: assembly.clone(),
-                        legs: legs_wire,
-                        torso: torso_wire,
-                        legs_layers: st.legs.layers(render_time),
-                        torso_layers: st.torso.layers(render_time),
-                        nodes: st.torso.node_weights(render_time),
-                        group_pitch: pitch,
-                        turret_leaves: placed.map(|g| (g.node, g.rows)),
-                        seat_leaves: st.seat.next(goal),
-                        controllers,
-                    };
-                    // The body the camera is inside is posed only when a
-                    // tag on it is read (`EntityScene::tag_pose`).
-                    if hidden {
-                        st.held = Some(held);
-                    } else {
-                        st.held = None;
-                        st.pose = held.pose(anims, clips, fs);
-                    }
-                }
-
-                drawn.insert(
-                    num,
-                    Drawn {
-                        pos,
-                        rot,
-                        rig: Rig::Player,
-                    },
-                );
-                if hidden {
-                    continue;
-                }
-                // Composed once for the tags and every model's skin.
-                let worlds = st.pose.bone_worlds(&assembly.skeleton);
-                if etype == ET_PLAYER
-                    && let Some(bi) = assembly.skeleton.bone_index("Bip01 Head")
-                {
-                    let (local, _) = worlds[bi];
-                    heads.insert(num, transform.transform_point3(local));
-                }
-
-                // The weapon's `tag_flash`. A body without one (a gunner,
-                // whose weapon is not drawn) flashes nothing and starts its
-                // tracers at the stance point (`CG_CalcMuzzlePoint`).
-                let flash_tag = held_weapon
-                    .as_ref()
-                    .and_then(|_| assembly.skeleton.bone_index("tag_flash"));
-                match flash_tag {
-                    Some(bi) => {
-                        let (local_pos, local_rot) = worlds[bi];
-                        // Tags point +X forward (docs/research/xmodel-v14-format.md,
-                        // "Model space and the view basis").
-                        let world_pos = transform.transform_point3(local_pos);
-                        let world_dir = transform.transform_vector3(local_rot * Vec3::X);
-                        muzzles.insert(num, (world_pos, world_dir));
-                        if etype == ET_PLAYER && num < MAX_CLIENTS {
-                            st.shot = Some(ShotPoint {
-                                tag: Some(local_pos),
-                                world: world_pos,
-                            });
-                        }
-                    }
-                    None if etype == ET_PLAYER && num < MAX_CLIENTS => {
-                        let at = stance_point(ent, p);
-                        shot_fallbacks.insert(num, at);
-                        st.shot = Some(ShotPoint {
-                            tag: None,
-                            world: at,
-                        });
-                    }
-                    None => {}
-                }
-                if held_weapon.is_some()
-                    && let Some(bi) = assembly.skeleton.bone_index("tag_brass")
-                {
-                    let (local_pos, local_rot) = worlds[bi];
-                    brass.insert(
-                        num,
-                        (
-                            transform.transform_point3(local_pos),
-                            transform.transform_vector3(local_rot * Vec3::X),
-                        ),
-                    );
-                }
-
-                for (m, &handle) in assembly.handles.iter().enumerate() {
-                    out.push(DynamicModelInstance {
-                        model: handle,
-                        transform,
-                        bones: Some(assembly.skeleton.skin_matrices(&worlds, m)),
-                        light_origin,
-                        shader_time: None,
-                    });
-                }
-            }
-            EntityVisual::Model(m) => {
-                let Some(handle) = resolve_model(model_cache, renderer, fs, &m) else {
-                    continue;
-                };
-                drawn.insert(
-                    num,
-                    Drawn {
-                        pos,
-                        rot,
-                        rig: Rig::Model(m),
-                    },
-                );
-                out.push(DynamicModelInstance {
-                    model: handle,
-                    transform,
-                    bones: None,
-                    light_origin,
-                    shader_time: None,
-                });
-            }
-            EntityVisual::Missile(index) => {
-                let Some(def) = weapon_name_for_index(&weapon_names, index as i32)
-                    .and_then(|name| resolve_weapon_def(weapon_cache, fs, name))
-                else {
-                    continue;
-                };
-                let Some(model) = def.projectile_model.clone() else {
-                    continue;
-                };
-                let Some(handle) = resolve_model(model_cache, renderer, fs, &model) else {
-                    continue;
-                };
-                drawn.insert(
-                    num,
-                    Drawn {
-                        pos,
-                        rot,
-                        rig: Rig::Model(model),
-                    },
-                );
-                // the panzerfaust's: black (weaponInfo `+0x130` is never
-                // written) but it takes a scene light slot
-                if def.projectile_dlight != 0.0 {
-                    scene_lights.push(SceneLight {
-                        origin: pos,
-                        color: Vec3::ZERO,
-                        intensity: def.projectile_dlight,
-                    });
-                }
-                out.push(DynamicModelInstance {
-                    model: handle,
-                    transform,
-                    bones: None,
-                    light_origin,
-                    shader_time: None,
-                });
-            }
-            EntityVisual::Item(index) => {
-                // Ammo and health rows (1.1 65-69, UO 129-133) carry their
-                // own world model; a mod's dropped health pack is one.
-                if let Some(model) = static_item_model(p, index) {
-                    if let Some(handle) = resolve_model(model_cache, renderer, fs, model) {
-                        drawn.insert(
-                            num,
-                            Drawn {
-                                pos,
-                                rot,
-                                rig: Rig::Model(model.to_string()),
-                            },
-                        );
-                        out.push(DynamicModelInstance {
-                            model: handle,
-                            transform,
-                            bones: None,
-                            light_origin,
-                            shader_time: None,
-                        });
-                    }
-                    continue;
-                }
-                let Some(name) = weapon_name_for_index(&weapon_names, index as i32) else {
-                    if warned_items.insert(format!("oob:{index}")) {
-                        log::warn!(
-                            "ET_ITEM index {index} out of range of the {}-entry CS7 weapon list",
-                            weapon_names.len()
-                        );
-                    }
-                    continue;
-                };
-                let Some(def) = resolve_weapon_def(weapon_cache, fs, name) else {
-                    continue; // warned by resolve_weapon_def
-                };
-                let Some(world_model) = def.world_model.clone() else {
-                    if warned_items.insert(format!("no-world-model:{name}")) {
-                        log::warn!(
-                            "weapon '{name}' has no worldModel, drawing nothing for its dropped item"
-                        );
-                    }
-                    continue;
-                };
-                let Some(handle) = resolve_model(model_cache, renderer, fs, &world_model) else {
-                    continue;
-                };
-                drawn.insert(
-                    num,
-                    Drawn {
-                        pos,
-                        rot,
-                        rig: Rig::Model(world_model),
-                    },
-                );
-                out.push(DynamicModelInstance {
-                    model: handle,
-                    transform,
-                    bones: None,
-                    light_origin,
-                    shader_time: None,
-                });
-            }
-            EntityVisual::Vehicle(model) => {
-                let (Some(v), Some(rig)) = (
-                    vehicles.get(&num),
-                    vehicle_rigs.get(&model).and_then(Option::as_ref),
-                ) else {
-                    continue;
-                };
-                out.push(DynamicModelInstance {
-                    model: rig.handle,
-                    transform,
-                    bones: Some(v.skins.clone()),
-                    light_origin,
-                    shader_time: Some(v.pose.shader_time),
-                });
-                vehicle_worlds.insert(num, v.worlds.clone());
-                drawn.insert(
-                    num,
-                    Drawn {
-                        pos,
-                        rot,
-                        rig: Rig::Vehicle(model),
-                    },
-                );
-            }
-            EntityVisual::Submodel(n) => {
-                // At rest where the map put it, which is the zero pose: no
-                // stock `script_brushmodel` carries an `origin` key, so its
-                // brushes and surfaces are in world space.
-                let at_rest = pos.abs().max_element() < 0.01 && angles.abs().max_element() < 0.01;
-                submodels.push((n, if at_rest { Mat4::IDENTITY } else { transform }));
-            }
-            EntityVisual::Turret { model, weapon } => {
-                let (Some(rig), Some(gun)) = (
-                    resolve_turret_rig(turret_rigs, parts, renderer, fs, &model),
-                    guns.get(&num),
-                ) else {
-                    continue;
-                };
-                let def = weapon_name_for_index(&weapon_names, weapon as i32)
-                    .and_then(|name| resolve_weapon_def(weapon_cache, fs, name));
-                let (idle, fire, flash) = def.map_or((None, None, None), |d| {
-                    (
-                        d.idle_anim.clone(),
-                        d.fire_anim.clone(),
-                        d.world_flash_effect.clone(),
-                    )
-                });
-                let rides = ridden == Some(num);
-                let st = turret_anims.entry(num).or_insert_with(|| TurretAnim {
-                    channel: Channel::new(),
-                    last_seen_ms: render_time,
-                    worlds: Vec::new(),
-                });
-                st.last_seen_ms = render_time;
-                let movetype = if uo {
-                    ent.field_i32(p, "animMovetype")
-                } else {
-                    0
-                };
-                let slot = turret::gun_anim(rides, ent.field_i32(p, "eFlags"), movetype);
-                st.channel.update(slot as i32, render_time);
-                let clip_of = |raw: i32| {
-                    if raw & ANIM_INDEX_MASK == GunAnim::Fire as i32 {
-                        fire.as_deref()
-                    } else {
-                        idle.as_deref()
-                    }
-                };
-
-                // The previous anim at full weight, then the goal blended over it.
-                let mut pose = PoseBuffer::drawn(&rig.skeleton);
-                let ch = &mut st.channel;
-                let fade = (render_time - ch.start_ms) as f32 / turret::ANIM_BLEND_MS as f32;
-                if fade >= 1.0 {
-                    ch.prev = None;
-                }
-                let layers = ch
-                    .prev
-                    .map(|(raw, start)| (raw, start, 1.0))
-                    .into_iter()
-                    .chain([(
-                        ch.raw,
-                        ch.start_ms,
-                        if ch.prev.is_some() {
-                            fade.max(0.0)
-                        } else {
-                            1.0
-                        },
-                    )]);
-                for (raw, start, w) in layers {
-                    let Some(name) = clip_of(raw) else { continue };
-                    let Some(clip) = load_clip(clips, fs, name) else {
-                        continue;
-                    };
-                    let binding = rig
-                        .bindings
-                        .entry(name.to_string())
-                        .or_insert_with(|| rig.skeleton.bind(&clip));
-                    let t = (render_time - start).max(0) as f32 / 1000.0;
-                    pose.apply_weighted(&clip, binding, clip.frame_pos(t, clip.looping), w);
-                }
-
-                let barrel = gun.barrel;
-                turret::apply_controller(&mut pose, &rig.skeleton, barrel);
-                let worlds = pose.bone_worlds(&rig.skeleton);
-                let tag = |name: &str| {
-                    let (lp, lr) = worlds[rig.skeleton.bone_index(name)?];
-                    Some((pos + rot * lp, rot * lr))
-                };
-                // The flash plays on the gun's own `tag_flash`, world effect
-                // even for the gunner (`CG_FireWeapon` 0x30038bdd).
-                if let Some((at, r)) = tag("tag_flash") {
-                    muzzles.insert(num, (at, r * Vec3::X));
-                }
-                if let Some(path) = flash {
-                    weapon_flash.entry(weapon as i32).or_insert(path);
-                }
-                if rides
-                    && !uo
-                    && let Some((base, arcs)) = &gun.uo
-                    && let Some((eye, _)) = tag("tag_player")
-                {
-                    // `viewlocked` 2 is a frame that fired (0x30034a18).
-                    let jitter = (ps_int("viewlocked") == 2).then(|| {
-                        def.map_or([0.0; 2], |d| [d.vert_view_jitter, d.horiz_view_jitter])
-                    });
-                    let view = view.unwrap_or([base[0], base[1], 0.0]);
-                    turret_eye = Some(turret::v15_eye(eye, view, *base, arcs, jitter, shake));
-                } else if rides
-                    && let Some((base, arcs)) = &gun.uo
-                    && let Some((eye, r)) = tag("tag_player")
-                {
-                    // `cg.snap` fires and the gun is not overheated.
-                    let fires = crate::play::seat::gunner_shakes(
-                        a.snap.ps.field_i32(p, "eFlags"),
-                        a.entity(num).map_or(0, |e| e.field_i32(p, "animMovetype")),
-                    );
-                    let view = view.unwrap_or([base[0], base[1], 0.0]);
-                    turret_eye = Some(turret::uo_eye(
-                        (eye, [r * Vec3::X, r * Vec3::Y, r * Vec3::Z]),
-                        view,
-                        *base,
-                        arcs,
-                        fires.then(|| crate::play::seat::shake_phase(render_time)),
-                        def.map_or([0.0; 2], |d| [d.vert_view_jitter, d.horiz_view_jitter]),
-                        shake,
-                    ));
-                } else if rides && let Some((eye, _)) = tag("tag_player") {
-                    let [mut pitch, mut yaw, roll] = angles.to_array();
-                    pitch += barrel[0];
-                    yaw += barrel[1];
-                    // `viewlocked` 2 is a frame that fired.
-                    if ps_int("viewlocked") == 2 {
-                        pitch += shake.shake();
-                        yaw += shake.shake();
-                    }
-                    turret_eye = Some(TurretEye {
-                        pos: eye,
-                        angles: [pitch, yaw, roll],
-                        axis: None,
-                        snap: None,
-                        kicks: true,
-                    });
-                }
-                out.push(DynamicModelInstance {
-                    model: rig.handle,
-                    transform,
-                    bones: Some(pose.skin_matrices(&rig.skeleton, 0)),
-                    light_origin,
-                    shader_time: None,
-                });
-                if let Some(st) = turret_anims.get_mut(&num) {
-                    st.worlds = worlds;
-                }
-                drawn.insert(
-                    num,
-                    Drawn {
-                        pos,
-                        rot,
-                        rig: Rig::Turret(model),
-                    },
-                );
-            }
-            EntityVisual::None => unreachable!("skipped above"),
+/// One live entity of `b`: its lights, where it stands, and its draw.
+fn draw_entity(
+    fr: &Frame,
+    c: &mut Caches,
+    out: &mut BuiltScene,
+    mounts: &Mounts,
+    num: u32,
+    ent: &EntityState,
+) {
+    let Caches { states, .. } = c;
+    let Frame {
+        a,
+        b,
+        f,
+        from,
+        render_time,
+        skip_num,
+        configstrings,
+        fs,
+        p,
+        ..
+    } = *fr;
+    // The body the camera is inside is posed, for the tags `playFxOnTag`
+    // reads, and never drawn (cgame 0x30028210's `renderfx` 2).
+    let hidden = num as i32 == skip_num;
+    let etype = ent.field_i32(p, "eType");
+    if hidden && etype != ET_PLAYER {
+        return;
+    }
+    let mut visual = resolve_visual(ent, &b.snap.clients, configstrings, p);
+    // A corpse carries no model of its own; it resolves through the dead
+    // client's roster entry, which clears when they enter limbo. Fall back
+    // to the visual cached while the corpse (or the player it copies) was
+    // still resolvable, instead of dropping the body with it.
+    if matches!(visual, EntityVisual::None) && etype == ET_CORPSE {
+        let cn = ent.field_i32(p, "clientNum") as u32;
+        if let Some(st) = states.get(&num).or_else(|| states.get(&cn)) {
+            visual = st.visual.clone();
         }
     }
-    stale_shot_points(
-        states,
-        StaleShots {
-            snap: b,
-            p,
-            skip_num,
-            entity_pos: &entity_pos,
-            entity_angles: &entity_angles,
-        },
-        &muzzles,
-        &mut shot_fallbacks,
+    // every entity's constantLight, drawn or not (0x3001d5f0)
+    let cl = ent.field_i32(p, "constantLight") as u32;
+    if cl == 0 && matches!(visual, EntityVisual::None) {
+        return;
+    }
+    let (pos, angles) = lerp_pos_angles(num, ent, from, f, render_time, p);
+    if let Some(l) = constant_light(cl, pos).filter(|l| !hidden && l.origin.is_finite()) {
+        out.scene_lights.push(l);
+    }
+    if matches!(visual, EntityVisual::None) {
+        return;
+    }
+
+    let prev = a.entity(num);
+    if !pos.is_finite() || !angles.is_finite() {
+        return; // never feed a NaN transform to the GPU
+    }
+    let rot = model_rotation(&visual, angles);
+    let snap_pos = pos;
+    let Placement {
+        pos,
+        rot,
+        placed,
+        rider,
+        seat_hidden,
+    } = place_entity(
+        fr,
+        c,
+        mounts,
+        (num, ent, etype),
+        &visual,
+        hidden,
+        (pos, rot),
     );
-    // `b.ps`'s owner is always `skip_num`, so its weapon never reaches the
-    // insert in the `Player` arm above.
-    let ps_weapon = b.snap.ps.field_i32(p, "weapon");
-    if let Some(path) = resolve_weapon_flash(weapon_cache, fs, &weapon_names, ps_weapon) {
-        weapon_flash
-            .entry(ps_weapon)
+    if !hidden {
+        out.entity_pos.insert(num, pos);
+        out.entity_angles.insert(num, angles);
+    }
+    // Posed for its tags and never drawn.
+    let hidden = hidden || seat_hidden;
+    // `CG_Player` (0x30028210) draws no player with `EF_NODRAW` or
+    // `EF_DEAD`: what a death leaves lying is the corpse `cloneplayer`
+    // makes. Its events still sound from where it stands.
+    if etype == ET_PLAYER && ent.field_i32(p, "eFlags") & (EF_DEAD | EF_NODRAW) != 0 {
+        return;
+    }
+    if !hidden && etype == ET_PLAYER && matches!(visual, EntityVisual::Player { .. }) {
+        out.shadow_casters.push(pos);
+    }
+    let transform = Mat4::from_rotation_translation(rot, pos);
+    let light_origin = light_origin(etype, ent, p, snap_pos, pos);
+    let e = EntDraw {
+        num,
+        ent,
+        prev,
+        etype,
+        hidden,
+        pos,
+        rot,
+        angles,
+        transform,
+        light_origin,
+    };
+    match visual {
+        EntityVisual::Player { body, attachments } => {
+            draw_player(fr, c, out, &e, (body, attachments), placed, &rider);
+        }
+        EntityVisual::Model(m) => {
+            if let Some(handle) = resolve_model(c.model_cache, c.renderer, fs, &m) {
+                draw_plain(c.drawn, out, &e, m, handle);
+            }
+        }
+        EntityVisual::Missile(index) => {
+            let Caches {
+                model_cache,
+                weapon_cache,
+                renderer,
+                drawn,
+                ..
+            } = c;
+            let Some(def) = weapon_name_for_index(fr.weapon_names, index as i32)
+                .and_then(|name| resolve_weapon_def(weapon_cache, fs, name))
+            else {
+                return;
+            };
+            let Some(model) = def.projectile_model.clone() else {
+                return;
+            };
+            let Some(handle) = resolve_model(model_cache, renderer, fs, &model) else {
+                return;
+            };
+            // the panzerfaust's: black (weaponInfo `+0x130` is never
+            // written) but it takes a scene light slot
+            if def.projectile_dlight != 0.0 {
+                out.scene_lights.push(SceneLight {
+                    origin: pos,
+                    color: Vec3::ZERO,
+                    intensity: def.projectile_dlight,
+                });
+            }
+            draw_plain(drawn, out, &e, model, handle);
+        }
+        EntityVisual::Item(index) => draw_item(fr, c, out, &e, index),
+        EntityVisual::Vehicle(model) => {
+            let Caches {
+                vehicle_rigs,
+                vehicle_worlds,
+                drawn,
+                ..
+            } = c;
+            let (Some(v), Some(rig)) = (
+                mounts.vehicles.get(&num),
+                vehicle_rigs.get(&model).and_then(Option::as_ref),
+            ) else {
+                return;
+            };
+            out.instances.push(DynamicModelInstance {
+                model: rig.handle,
+                transform,
+                bones: Some(v.skins.clone()),
+                light_origin,
+                shader_time: Some(v.pose.shader_time),
+            });
+            vehicle_worlds.insert(num, v.worlds.clone());
+            drawn.insert(
+                num,
+                Drawn {
+                    pos,
+                    rot,
+                    rig: Rig::Vehicle(model),
+                },
+            );
+        }
+        EntityVisual::Submodel(n) => {
+            // At rest where the map put it, which is the zero pose: no
+            // stock `script_brushmodel` carries an `origin` key, so its
+            // brushes and surfaces are in world space.
+            let at_rest = pos.abs().max_element() < 0.01 && angles.abs().max_element() < 0.01;
+            out.submodels
+                .push((n, if at_rest { Mat4::IDENTITY } else { transform }));
+        }
+        EntityVisual::Turret { model, weapon } => {
+            draw_turret(fr, c, out, mounts, &e, model, weapon)
+        }
+        EntityVisual::None => unreachable!("skipped above"),
+    }
+}
+
+/// An unskinned model in its bind pose where `e` stands: a script model,
+/// a missile or an item.
+fn draw_plain(
+    drawn: &mut HashMap<u32, Drawn>,
+    out: &mut BuiltScene,
+    e: &EntDraw,
+    model: String,
+    handle: ModelHandle,
+) {
+    drawn.insert(
+        e.num,
+        Drawn {
+            pos: e.pos,
+            rot: e.rot,
+            rig: Rig::Model(model),
+        },
+    );
+    out.instances.push(DynamicModelInstance {
+        model: handle,
+        transform: e.transform,
+        bones: None,
+        light_origin: e.light_origin,
+        shader_time: None,
+    });
+}
+
+/// A gunner on its gun, traced down, and a seated player at its seat.
+fn place_entity(
+    fr: &Frame,
+    c: &mut Caches,
+    mounts: &Mounts,
+    (num, ent, etype): (u32, &EntityState, i32),
+    visual: &EntityVisual,
+    hidden: bool,
+    (mut pos, mut rot): (Vec3, Quat),
+) -> Placement {
+    let Frame {
+        render_time,
+        latest_snapshot_ms,
+        frametime_ms,
+        fs,
+        trace,
+        p,
+        rules,
+        anims,
+        ..
+    } = *fr;
+    let Caches {
+        clips,
+        states,
+        vehicle_rigs,
+        ..
+    } = c;
+    // A gunner stands and turns where its gun puts it, traced down.
+    let placed = match (&visual, anims) {
+        (EntityVisual::Player { .. }, Some(anims)) if etype == ET_PLAYER => {
+            let at = Times {
+                clock_ms: render_time,
+                snapshot_ms: latest_snapshot_ms,
+            };
+            let seconds = || {
+                let clocks = states.get(&num).map(EntityAnim::clocks);
+                gunner_legs_seconds(clocks, anims, rules, ent, p, at, frametime_ms)
+            };
+            place_body(anims, ent, p, &mounts.guns, pos, seconds, clips, fs)
+        }
+        _ => None,
+    };
+    let placed = placed.map(|(g, gun_z)| {
+        let traced = match trace {
+            Some(world) if g.origin.is_finite() => trace_down(world, num, g.origin, gun_z),
+            _ => g.origin,
+        };
+        GunnerPlacement {
+            origin: traced,
+            ..g
+        }
+    });
+    if let Some(g) = placed.as_ref().filter(|g| g.origin.is_finite()) {
+        // Yaw only, as every player draws; a stock gun stands level.
+        pos = g.origin;
+        rot = Quat::from_rotation_z(g.yaw().to_radians());
+    }
+    // A seated player draws at its seat as its vehicle is posed this
+    // frame, turned with the seat (cgame 0x30032fe0), or not at all.
+    // A seat that hides the body returns before it moves `lerpOrigin`,
+    // and `CG_Player` (0x300343e0) has stepped its anims already, so
+    // the body is posed undrawn where it stands, for its tags.
+    let mut seat_hidden = false;
+    // The seat the controllers and the seat blend read (0x30033a77
+    // writes the tag's angles into the client info's `+0x3f4`).
+    let mut rider = None;
+    if etype == ET_PLAYER
+        && p.et_events > ET_VEHICLE_CORPSE_V22
+        && ent.field_i32(p, "eFlags") & EF_IN_VEHICLE_V22 != 0
+        && let Some(v) = mounts
+            .vehicles
+            .get(&(ent.field_i32(p, "otherEntityNum") as u32))
+        && let Some(rig) = vehicle_rigs.get(&v.model).and_then(Option::as_ref)
+    {
+        let surf_type = ent.field_i32(p, "surfType");
+        // The view's own body comes here only when its seat hides it
+        // (`play::seat::own_body_drawn`).
+        seat_hidden =
+            hidden || !vehiclepose::seat_drawn(v.pose.kind, vehiclepose::rider_seat(surf_type));
+        if let Some((at, r, seat)) =
+            rider_frame(&rig.skeleton, v, surf_type, ent.field_i32(p, "weapon"))
+        {
+            if !seat_hidden {
+                pos = at;
+                rot = r;
+            }
+            rider = Some(seat);
+        }
+    }
+    Placement {
+        pos,
+        rot,
+        placed,
+        rider,
+        seat_hidden,
+    }
+}
+
+/// A player or corpse: its assembly, its anim clocks and pose, its tags
+/// and its models.
+fn draw_player(
+    fr: &Frame,
+    c: &mut Caches,
+    out: &mut BuiltScene,
+    e: &EntDraw,
+    (body, mut attachments): (String, Vec<(String, Option<String>)>),
+    placed: Option<GunnerPlacement>,
+    rider: &Option<BodySeat>,
+) {
+    let Frame {
+        render_time,
+        weapon_names,
+        fs,
+        p,
+        anims,
+        ..
+    } = *fr;
+    let EntDraw {
+        num,
+        ent,
+        etype,
+        hidden,
+        pos,
+        rot,
+        transform,
+        light_origin,
+        ..
+    } = *e;
+    let Caches {
+        assemblies,
+        parts,
+        weapon_cache,
+        warned_items,
+        clips,
+        states,
+        stats,
+        drawn,
+        renderer,
+        load_budget,
+        ..
+    } = c;
+    let _bodies = crate::frame_prof::span(crate::frame_prof::Stage::Bodies);
+    // Kept before the held weapon joins: the corpse fallback
+    // re-resolves the weapon from its own entityState.
+    let roster_visual = EntityVisual::Player {
+        body: body.clone(),
+        attachments: attachments.clone(),
+    };
+    // The held weapon is one more attachment on tag_weapon_right,
+    // so a weapon switch changes the assembly key like a gear change.
+    // A gunner's is not drawn (0x30004eb0 zeroes it on `eFlags & 0xc000`),
+    // nor a UO rider's but in the seat that holds a weapon (0x300058f0).
+    let weapon_index = if ent.field_i32(p, "eFlags") & turret::EF_MOUNTED != 0
+        || seat_unarmed(ent.field_i32(p, "eFlags"), ent.field_i32(p, "surfType"))
+    {
+        0
+    } else {
+        ent.field_i32(p, "weapon")
+    };
+    let held_weapon =
+        resolve_held_weapon(weapon_cache, warned_items, fs, weapon_names, weapon_index);
+    if let Some(world_model) = &held_weapon {
+        attachments.push((world_model.clone(), Some("tag_weapon_right".to_string())));
+    }
+    if let Some(path) = resolve_weapon_flash(weapon_cache, fs, weapon_names, weapon_index) {
+        out.weapon_flash
+            .entry(weapon_index)
             .or_insert_with(|| path.to_string());
     }
-    // `abs` so a render clock that jumps backwards prunes instead of keeping everything.
-    turret_anims.retain(|_, s| (render_time - s.last_seen_ms).abs() < STATE_TTL_MS);
-    assemblies.prune_stale(render_time);
-    stats.pending_assemblies = assemblies.pending.len();
-    BuiltScene {
-        instances: out,
-        muzzles,
-        shot_fallbacks,
-        brass,
-        weapon_flash,
-        entity_pos,
-        entity_angles,
-        heads,
-        turret_eye,
-        submodels,
-        scene_lights,
-        shadow_casters,
-        vehicle_angles,
-        vehicle_wheels,
+    let key = AssemblyCache::key(&body, &attachments);
+    let Some(assembly) = assemblies.resolve(
+        &key,
+        &body,
+        &attachments,
+        fs,
+        renderer,
+        parts,
+        load_budget,
+        render_time,
+    ) else {
+        return;
+    };
+    // A corpse keeps lerp frames of its own (cgame 0x30028400
+    // indexes them by body queue slot), so its death clip plays
+    // from the start while `eFlags` 0x800 marks it fresh, and
+    // shows its last frame otherwise. A player's are his
+    // client's. Neither expires while unseen (movers doc 15).
+    states
+        .entry(num)
+        .or_insert_with(|| EntityAnim::new(key.clone(), &assembly.skeleton, render_time));
+    let st = states.get_mut(&num).expect("inserted above");
+    if st.key != key {
+        // The clocks hold only anim indices and times, so carry
+        // them across a loadout change instead of restarting the
+        // clip. Only the pose buffer is skeleton-shaped.
+        *st = EntityAnim {
+            key: key.clone(),
+            skeleton: assembly.skeleton.clone(),
+            pose: PoseBuffer::drawn(&assembly.skeleton),
+            legs: st.legs,
+            torso: st.torso,
+            visual: EntityVisual::None,
+            body: st.body,
+            controls: st.controls,
+            stance_window_ms: st.stance_window_ms,
+            seat: st.seat.clone(),
+            present_ms: st.present_ms,
+            held: None,
+            shot: st.shot,
+        };
     }
+    st.visual = roster_visual;
+    let (legs_wire, torso_wire) = (ent.field_i32(p, "legsAnim"), ent.field_i32(p, "torsoAnim"));
+    stats.anim_restarts +=
+        u64::from(legs_wire != st.legs.anim()) + u64::from(torso_wire != st.torso.anim());
+
+    st.held = None;
+    if let Some(anims) = anims {
+        step_player_pose(
+            fr,
+            anims,
+            e,
+            st,
+            clips,
+            &assembly,
+            (legs_wire, torso_wire),
+            placed,
+            rider,
+        );
+    }
+
+    drawn.insert(
+        num,
+        Drawn {
+            pos,
+            rot,
+            rig: Rig::Player,
+        },
+    );
+    if hidden {
+        return;
+    }
+    // Composed once for the tags and every model's skin.
+    let worlds = st.pose.bone_worlds(&assembly.skeleton);
+    if etype == ET_PLAYER
+        && let Some(bi) = assembly.skeleton.bone_index("Bip01 Head")
+    {
+        let (local, _) = worlds[bi];
+        out.heads.insert(num, transform.transform_point3(local));
+    }
+
+    // The weapon's `tag_flash`. A body without one (a gunner,
+    // whose weapon is not drawn) flashes nothing and starts its
+    // tracers at the stance point (`CG_CalcMuzzlePoint`).
+    let flash_tag = held_weapon
+        .as_ref()
+        .and_then(|_| assembly.skeleton.bone_index("tag_flash"));
+    match flash_tag {
+        Some(bi) => {
+            let (local_pos, local_rot) = worlds[bi];
+            // Tags point +X forward (docs/research/xmodel-v14-format.md,
+            // "Model space and the view basis").
+            let world_pos = transform.transform_point3(local_pos);
+            let world_dir = transform.transform_vector3(local_rot * Vec3::X);
+            out.muzzles.insert(num, (world_pos, world_dir));
+            if etype == ET_PLAYER && num < MAX_CLIENTS {
+                st.shot = Some(ShotPoint {
+                    tag: Some(local_pos),
+                    world: world_pos,
+                });
+            }
+        }
+        None if etype == ET_PLAYER && num < MAX_CLIENTS => {
+            let at = stance_point(ent, p);
+            out.shot_fallbacks.insert(num, at);
+            st.shot = Some(ShotPoint {
+                tag: None,
+                world: at,
+            });
+        }
+        None => {}
+    }
+    if held_weapon.is_some()
+        && let Some(bi) = assembly.skeleton.bone_index("tag_brass")
+    {
+        let (local_pos, local_rot) = worlds[bi];
+        out.brass.insert(
+            num,
+            (
+                transform.transform_point3(local_pos),
+                transform.transform_vector3(local_rot * Vec3::X),
+            ),
+        );
+    }
+
+    for (m, &handle) in assembly.handles.iter().enumerate() {
+        out.instances.push(DynamicModelInstance {
+            model: handle,
+            transform,
+            bones: Some(assembly.skeleton.skin_matrices(&worlds, m)),
+            light_origin,
+            shader_time: None,
+        });
+    }
+}
+
+/// The player's anim clocks, controllers and the pose they blend.
+#[expect(clippy::too_many_arguments)]
+fn step_player_pose(
+    fr: &Frame,
+    anims: &PlayerAnims,
+    e: &EntDraw,
+    st: &mut EntityAnim,
+    clips: &mut HashMap<String, Option<Rc<XAnim>>>,
+    assembly: &Rc<Assembly>,
+    (legs_wire, torso_wire): (i32, i32),
+    placed: Option<GunnerPlacement>,
+    rider: &Option<BodySeat>,
+) {
+    let Frame {
+        f,
+        render_time,
+        latest_snapshot_ms,
+        frametime_ms,
+        fs,
+        p,
+        rules,
+        swing_speed,
+        ..
+    } = *fr;
+    let EntDraw {
+        ent,
+        prev,
+        etype,
+        hidden,
+        angles,
+        ..
+    } = *e;
+    let lerp_field = |name: &str| {
+        let vb = ent.field_f32(p, name);
+        match prev {
+            Some(ea) => {
+                let va = ea.field_f32(p, name);
+                va + (vb - va) * f
+            }
+            None => vb,
+        }
+    };
+    let pitch = lerp_field("fTorsoPitch");
+    let waist_pitch = lerp_field("fWaistPitch");
+    let lean = lerp_field("leanf");
+    let eflags = ent.field_i32(p, "eFlags");
+
+    let at = Times {
+        clock_ms: render_time,
+        snapshot_ms: latest_snapshot_ms,
+    };
+    let clocks = (
+        &mut st.legs,
+        &mut st.torso,
+        &mut st.stance_window_ms,
+        &mut st.present_ms,
+    );
+    let wires = (legs_wire, torso_wire);
+    step_clocks(clocks, anims, rules, wires, &seen(ent, p), at, frametime_ms);
+
+    // Corpses keep their death-clip pose; their aim fields are
+    // stale and would twist the body forever. A gunner runs no
+    // controllers (cgame 0x30004710).
+    let controllers = if etype == ET_PLAYER {
+        // cgame's `CG_PlayerAnimation` (0x30004e40) swings
+        // the legs, torso and torso pitch after the lerped
+        // view every frame, then reads the legs anim's
+        // record, as the server's `BG_PlayerAnimation` does.
+        let surf_type = ent.field_i32(p, "surfType");
+        let input = BodyInput {
+            view: angles.to_array(),
+            movement_dir: ent.field_f32(p, "angles2[1]"),
+            eflags,
+            legs: anims.record(legs_wire),
+            // UO's updater reads the seat off `surfType`;
+            // the record's seat yaw is the seat tag's this
+            // frame (0x30033a77).
+            seat_weapon: if rules == MoveRules::Uo {
+                SeatWeapon::of(
+                    surf_type >> 3 & 7,
+                    vehiclepose::rider_seat(surf_type),
+                    ent.field_i32(p, "weapon"),
+                    rider.as_ref().map_or(0.0, |s| s.angles[1]),
+                )
+            } else {
+                SeatWeapon::Barred
+            },
+        };
+        st.body.step(&input, frametime_ms, swing_speed);
+        st.body.update_conditions(&input);
+        let slope = BodySlope {
+            lean,
+            torso_height: lerp_field("fTorsoHeight"),
+            torso_pitch: pitch,
+            waist_pitch,
+        };
+        let target = body_controllers(rules, rider.as_ref(), &st.body, &input, &slope);
+        match target {
+            // The cgame's hook steps the controls over the
+            // frame (coduo-vehicles.md 14, "The controllers").
+            Some(t) if Controllers::eased(rules) => {
+                let mut c = st.controls.unwrap_or_default();
+                c.ease_toward(&t, frametime_ms);
+                st.controls = Some(c);
+                Some(c)
+            }
+            _ => target,
+        }
+    } else {
+        None
+    };
+
+    // The server's pose: the legs and torso clocks' clips
+    // blended as the tree walk blends its nodes. A gunner's
+    // legs are the placement's leaf blend (0x300279b0 sets
+    // the goal weights on the gunner's own tree); an MG42 aim
+    // group descends by the torso pitch with no yaw, which
+    // the wire does not carry.
+    let goal = rider
+        .as_ref()
+        .and_then(|seat| seat_inputs(anims, legs_wire, seat));
+    let held = HeldPose {
+        assembly: assembly.clone(),
+        legs: legs_wire,
+        torso: torso_wire,
+        legs_layers: st.legs.layers(render_time),
+        torso_layers: st.torso.layers(render_time),
+        nodes: st.torso.node_weights(render_time),
+        group_pitch: pitch,
+        turret_leaves: placed.map(|g| (g.node, g.rows)),
+        seat_leaves: st.seat.next(goal),
+        controllers,
+    };
+    // The body the camera is inside is posed only when a
+    // tag on it is read (`EntityScene::tag_pose`).
+    if hidden {
+        st.held = Some(held);
+    } else {
+        st.held = None;
+        st.pose = held.pose(anims, clips, fs);
+    }
+}
+
+/// An item: its own world model for an ammo or health row, else its
+/// weapon's.
+fn draw_item(fr: &Frame, c: &mut Caches, out: &mut BuiltScene, e: &EntDraw, index: usize) {
+    let Frame {
+        weapon_names,
+        fs,
+        p,
+        ..
+    } = *fr;
+    let Caches {
+        model_cache,
+        weapon_cache,
+        warned_items,
+        drawn,
+        renderer,
+        ..
+    } = c;
+    // Ammo and health rows (1.1 65-69, UO 129-133) carry their
+    // own world model; a mod's dropped health pack is one.
+    if let Some(model) = static_item_model(p, index) {
+        if let Some(handle) = resolve_model(model_cache, renderer, fs, model) {
+            draw_plain(drawn, out, e, model.to_string(), handle);
+        }
+        return;
+    }
+    let Some(name) = weapon_name_for_index(weapon_names, index as i32) else {
+        if warned_items.insert(format!("oob:{index}")) {
+            log::warn!(
+                "ET_ITEM index {index} out of range of the {}-entry CS7 weapon list",
+                weapon_names.len()
+            );
+        }
+        return;
+    };
+    let Some(def) = resolve_weapon_def(weapon_cache, fs, name) else {
+        return; // warned by resolve_weapon_def
+    };
+    let Some(world_model) = def.world_model.clone() else {
+        if warned_items.insert(format!("no-world-model:{name}")) {
+            log::warn!("weapon '{name}' has no worldModel, drawing nothing for its dropped item");
+        }
+        return;
+    };
+    let Some(handle) = resolve_model(model_cache, renderer, fs, &world_model) else {
+        return;
+    };
+    draw_plain(drawn, out, e, world_model, handle);
+}
+
+/// A turret: its anim blend, its barrel, its flash and the eye of the
+/// player riding it.
+fn draw_turret(
+    fr: &Frame,
+    c: &mut Caches,
+    out: &mut BuiltScene,
+    mounts: &Mounts,
+    e: &EntDraw,
+    model: String,
+    weapon: usize,
+) {
+    let Frame {
+        a,
+        b,
+        render_time,
+        weapon_names,
+        fs,
+        p,
+        uo,
+        ridden,
+        view,
+        ..
+    } = *fr;
+    let EntDraw {
+        num,
+        ent,
+        pos,
+        rot,
+        angles,
+        transform,
+        light_origin,
+        ..
+    } = *e;
+    let Caches {
+        parts,
+        weapon_cache,
+        clips,
+        turret_rigs,
+        turret_anims,
+        shake,
+        drawn,
+        renderer,
+        ..
+    } = c;
+    let ps_int = |name: &str| b.snap.ps.field_i32(p, name);
+    let (Some(rig), Some(gun)) = (
+        resolve_turret_rig(turret_rigs, parts, renderer, fs, &model),
+        mounts.guns.get(&num),
+    ) else {
+        return;
+    };
+    let def = weapon_name_for_index(weapon_names, weapon as i32)
+        .and_then(|name| resolve_weapon_def(weapon_cache, fs, name));
+    let (idle, fire, flash) = def.map_or((None, None, None), |d| {
+        (
+            d.idle_anim.clone(),
+            d.fire_anim.clone(),
+            d.world_flash_effect.clone(),
+        )
+    });
+    let rides = ridden == Some(num);
+    let st = turret_anims.entry(num).or_insert_with(|| TurretAnim {
+        channel: Channel::new(),
+        last_seen_ms: render_time,
+        worlds: Vec::new(),
+    });
+    st.last_seen_ms = render_time;
+    let movetype = if uo {
+        ent.field_i32(p, "animMovetype")
+    } else {
+        0
+    };
+    let slot = turret::gun_anim(rides, ent.field_i32(p, "eFlags"), movetype);
+    st.channel.update(slot as i32, render_time);
+    let clip_of = |raw: i32| {
+        if raw & ANIM_INDEX_MASK == GunAnim::Fire as i32 {
+            fire.as_deref()
+        } else {
+            idle.as_deref()
+        }
+    };
+
+    // The previous anim at full weight, then the goal blended over it.
+    let mut pose = PoseBuffer::drawn(&rig.skeleton);
+    let ch = &mut st.channel;
+    let fade = (render_time - ch.start_ms) as f32 / turret::ANIM_BLEND_MS as f32;
+    if fade >= 1.0 {
+        ch.prev = None;
+    }
+    let layers = ch
+        .prev
+        .map(|(raw, start)| (raw, start, 1.0))
+        .into_iter()
+        .chain([(
+            ch.raw,
+            ch.start_ms,
+            if ch.prev.is_some() {
+                fade.max(0.0)
+            } else {
+                1.0
+            },
+        )]);
+    for (raw, start, w) in layers {
+        let Some(name) = clip_of(raw) else { continue };
+        let Some(clip) = load_clip(clips, fs, name) else {
+            continue;
+        };
+        let binding = rig
+            .bindings
+            .entry(name.to_string())
+            .or_insert_with(|| rig.skeleton.bind(&clip));
+        let t = (render_time - start).max(0) as f32 / 1000.0;
+        pose.apply_weighted(&clip, binding, clip.frame_pos(t, clip.looping), w);
+    }
+
+    let barrel = gun.barrel;
+    turret::apply_controller(&mut pose, &rig.skeleton, barrel);
+    let worlds = pose.bone_worlds(&rig.skeleton);
+    let tag = |name: &str| {
+        let (lp, lr) = worlds[rig.skeleton.bone_index(name)?];
+        Some((pos + rot * lp, rot * lr))
+    };
+    // The flash plays on the gun's own `tag_flash`, world effect
+    // even for the gunner (`CG_FireWeapon` 0x30038bdd).
+    if let Some((at, r)) = tag("tag_flash") {
+        out.muzzles.insert(num, (at, r * Vec3::X));
+    }
+    if let Some(path) = flash {
+        out.weapon_flash.entry(weapon as i32).or_insert(path);
+    }
+    if rides
+        && !uo
+        && let Some((base, arcs)) = &gun.uo
+        && let Some((eye, _)) = tag("tag_player")
+    {
+        // `viewlocked` 2 is a frame that fired (0x30034a18).
+        let jitter = (ps_int("viewlocked") == 2)
+            .then(|| def.map_or([0.0; 2], |d| [d.vert_view_jitter, d.horiz_view_jitter]));
+        let view = view.unwrap_or([base[0], base[1], 0.0]);
+        out.turret_eye = Some(turret::v15_eye(eye, view, *base, arcs, jitter, shake));
+    } else if rides
+        && let Some((base, arcs)) = &gun.uo
+        && let Some((eye, r)) = tag("tag_player")
+    {
+        // `cg.snap` fires and the gun is not overheated.
+        let fires = crate::play::seat::gunner_shakes(
+            a.snap.ps.field_i32(p, "eFlags"),
+            a.entity(num).map_or(0, |e| e.field_i32(p, "animMovetype")),
+        );
+        let view = view.unwrap_or([base[0], base[1], 0.0]);
+        out.turret_eye = Some(turret::uo_eye(
+            (eye, [r * Vec3::X, r * Vec3::Y, r * Vec3::Z]),
+            view,
+            *base,
+            arcs,
+            fires.then(|| crate::play::seat::shake_phase(render_time)),
+            def.map_or([0.0; 2], |d| [d.vert_view_jitter, d.horiz_view_jitter]),
+            shake,
+        ));
+    } else if rides && let Some((eye, _)) = tag("tag_player") {
+        let [mut pitch, mut yaw, roll] = angles.to_array();
+        pitch += barrel[0];
+        yaw += barrel[1];
+        // `viewlocked` 2 is a frame that fired.
+        if ps_int("viewlocked") == 2 {
+            pitch += shake.shake();
+            yaw += shake.shake();
+        }
+        out.turret_eye = Some(TurretEye {
+            pos: eye,
+            angles: [pitch, yaw, roll],
+            axis: None,
+            snap: None,
+            kicks: true,
+        });
+    }
+    out.instances.push(DynamicModelInstance {
+        model: rig.handle,
+        transform,
+        bones: Some(pose.skin_matrices(&rig.skeleton, 0)),
+        light_origin,
+        shader_time: None,
+    });
+    if let Some(st) = turret_anims.get_mut(&num) {
+        st.worlds = worlds;
+    }
+    drawn.insert(
+        num,
+        Drawn {
+            pos,
+            rot,
+            rig: Rig::Turret(model),
+        },
+    );
 }
 
 #[cfg(test)]
@@ -3335,7 +3694,7 @@ mod tests {
     /// No real GPU upload; `ModelHandle`'s index is `pub(crate)` so tests can build one.
     fn fake_part() -> (Rc<Model>, ModelHandle) {
         let m = Model::rig("x", vec![]);
-        (Rc::new(m), ModelHandle(0))
+        (Rc::new(m), ModelHandle::first_map(0))
     }
 
     #[test]

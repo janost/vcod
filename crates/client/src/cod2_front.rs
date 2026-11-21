@@ -156,12 +156,12 @@ impl App {
                 FlyCamera::new((Vec3::from(min) + Vec3::from(max)) * 0.5, 0.0)
             }
         };
-        self.world = Some(World {
+        self.world = Some(World::new(
+            crate::map_base_name(&map),
             bsp,
-            name: crate::map_base_name(&map),
-            fog: None,
-            materials: None,
-        });
+            self.renderer.is_none(),
+            crate::MapSource::Cod2(map.clone()),
+        ));
         self.mode = Mode::Cod2(cam);
         self.fx.clear();
         self.audio.on_gamestate(&map);
@@ -344,7 +344,7 @@ fn download_line(p: &vcod_cod2::net::download::Progress, loc: impl Fn(&str) -> S
 
 /// A `.d3dbsp` parsed into its file and world. A downloaded map is anyone's
 /// bytes: a parse that panics is `path`'s error, not the client's end.
-fn parse_map(data: &[u8], path: &str) -> Result<(vcod_cod2::map::MapFile, MapWorld)> {
+pub(crate) fn parse_map(data: &[u8], path: &str) -> Result<(vcod_cod2::map::MapFile, MapWorld)> {
     std::panic::catch_unwind(|| {
         let file = vcod_cod2::map::MapFile::parse(data)?;
         let bsp = file.world();

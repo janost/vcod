@@ -3,6 +3,7 @@
 //! stage pipelines and bind groups.
 
 use super::*;
+use crate::renderer::gpu_util;
 
 pub const STAGE_FLAG_VERTEX_RGB: u32 = 1;
 pub const STAGE_FLAG_VERTEX_ALPHA: u32 = 2;
@@ -632,46 +633,24 @@ pub(crate) fn depth_bias(form: PolygonOffset) -> wgpu::DepthBiasState {
     }
 }
 
-pub(super) fn stage_texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    }
-}
-
 /// Group 1 of the world and stage pipelines: the colour image, the
 /// lightmap page, a sampler and the page's block runs.
 pub(super) fn material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("material layout"),
         entries: &[
-            stage_texture_entry(0),
-            stage_texture_entry(1),
+            gpu_util::texture_2d(0),
+            gpu_util::texture_2d(1),
             // images sample through the camera group's samplers
-            wgpu::BindGroupLayoutEntry {
-                binding: 3,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
+            gpu_util::filtering_sampler(3),
             // the lightmap page's block runs (lightmap_blocks), read by
             // vc_bicubic's taps
-            wgpu::BindGroupLayoutEntry {
-                binding: 4,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Uint,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
+            gpu_util::texture(
+                4,
+                wgpu::TextureSampleType::Uint,
+                wgpu::TextureViewDimension::D2,
+                false,
+            ),
         ],
     })
 }
@@ -682,17 +661,13 @@ pub(super) fn stage_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("stage params layout"),
         entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: true,
-                    min_binding_size: wgpu::BufferSize::new(STAGE_PARAMS_SIZE),
-                },
-                count: None,
-            },
-            stage_texture_entry(1),
+            gpu_util::uniform_sized(
+                0,
+                wgpu::ShaderStages::VERTEX_FRAGMENT,
+                true,
+                STAGE_PARAMS_SIZE,
+            ),
+            gpu_util::texture_2d(1),
         ],
     })
 }
@@ -711,7 +686,6 @@ pub(crate) fn par_build_on<T: Send>(
     n: usize,
     f: impl Fn(usize) -> T + Sync,
 ) -> Vec<T> {
-    let samples = msaa_samples();
     let next = std::sync::atomic::AtomicUsize::new(0);
     let mut out: Vec<Option<T>> = (0..n).map(|_| None).collect();
     std::thread::scope(|s| {
@@ -719,7 +693,6 @@ pub(crate) fn par_build_on<T: Send>(
         let handles: Vec<_> = (0..workers.min(n))
             .map(|_| {
                 s.spawn(move || {
-                    set_msaa_samples(samples);
                     let mut done = Vec::new();
                     loop {
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -742,13 +715,14 @@ pub(crate) fn par_build_on<T: Send>(
         .collect()
 }
 
-/// A pipeline over shader.wgsl's world vertex layout into the scene target:
-/// the world, layer, overlay and stage pipelines, and the marks'.
+/// A pipeline over shader.wgsl's world vertex layout into the scene target
+/// (its format and sample count): the world, layer, overlay and stage
+/// pipelines, and the marks'.
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn scene_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
-    format: wgpu::TextureFormat,
+    (format, samples): (wgpu::TextureFormat, u32),
     label: &str,
     layout: &wgpu::PipelineLayout,
     (vs_entry, fs_entry): (&str, &str),
@@ -765,17 +739,9 @@ pub(crate) fn scene_pipeline(
             module: shader,
             entry_point: Some(vs_entry),
             compilation_options: Default::default(),
-            buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: 44,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![
-                    0 => Float32x3, // pos
-                    1 => Float32x2, // uv
-                    2 => Float32x2, // lm_uv
-                    3 => Float32x3, // normal
-                    4 => Unorm8x4,  // color
-                ],
-            })],
+            buffers: &[Some(gpu_util::world_vertex_layout(
+                &gpu_util::WORLD_VERTEX_ATTRS,
+            ))],
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
@@ -804,7 +770,7 @@ pub(crate) fn scene_pipeline(
             bias,
         }),
         multisample: wgpu::MultisampleState {
-            count: msaa_samples(),
+            count: samples,
             mask: !0,
             alpha_to_coverage_enabled: alpha_to_coverage,
         },
@@ -862,7 +828,8 @@ pub(crate) fn stage_animated(sh: &Material, idx: usize) -> bool {
 
 /// Group(1) and group(2) bind groups for one authored stage, shared by the
 /// world stage-batch loop and the cloud dome. `lm` is the batch's
-/// lightmap page (bundle-0 `$lightmap` samples it through the flag).
+/// lightmap page (bundle-0 `$lightmap` samples it through the flag); the
+/// stage's images load under `rule`.
 #[expect(clippy::too_many_arguments)]
 pub(super) fn stage_bind_groups(
     device: &wgpu::Device,
@@ -876,6 +843,7 @@ pub(super) fn stage_bind_groups(
     lm: &LightmapPage,
     lightmap_sampler: &wgpu::Sampler,
     bundle_views: &mut BundleViews,
+    rule: ImageRule,
     st: &Stage,
 ) -> (AnimFrames, AnimFrames) {
     let b0 = &st.bundles[0];
@@ -925,7 +893,7 @@ pub(super) fn stage_bind_groups(
             ],
         })
     };
-    let mut resolve = |p: &str| upload_bundle_view(device, queue, fs, bundle_views, p);
+    let mut resolve = |p: &str| upload_bundle_view(device, queue, fs, bundle_views, p, rule);
     let mat = match (&b0.anim, &b0.image) {
         (Some(anim), _) => AnimFrames {
             fps: anim.fps,

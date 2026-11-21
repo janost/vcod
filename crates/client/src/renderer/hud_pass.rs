@@ -2,6 +2,7 @@
 //! resolution as retail registers 2D images.
 
 use super::*;
+use crate::renderer::gpu_util;
 
 /// Debug-HUD glyph budget per frame; lines past it are cut.
 pub(super) const MAX_HUD_GLYPHS: usize = 1024;
@@ -132,6 +133,7 @@ pub(super) fn create_hud_text_pass(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     format: wgpu::TextureFormat,
+    samples: u32,
 ) -> HudTextPass {
     // Nearest sampling: glyphs draw at integer scales, filtering would blur them.
     let atlas = hud_text::build_atlas();
@@ -177,24 +179,7 @@ pub(super) fn create_hud_text_pass(
 
     let bg_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("hud text layout"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ],
+        entries: &[gpu_util::texture_2d(0), gpu_util::filtering_sampler(1)],
     });
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("hud text"),
@@ -289,7 +274,7 @@ pub(super) fn create_hud_text_pass(
             cache: None,
         })
     };
-    let (pipeline, pipeline_1x) = (make(msaa_samples(), true), make(1, false));
+    let (pipeline, pipeline_1x) = (make(samples, true), make(1, false));
 
     HudTextPass {
         pipeline,
@@ -418,32 +403,17 @@ impl HudUpload<'_> {
 /// Like `create_hud_text_pass` but with `hud.wgsl`, which samples an image
 /// with mipmaps through `r_textureMode`'s sampler and one without through
 /// `GL_LINEAR` ([`HudTexture`]).
-pub(super) fn create_hud_pass(device: &wgpu::Device, format: wgpu::TextureFormat) -> HudPass {
+pub(super) fn create_hud_pass(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    samples: u32,
+) -> HudPass {
     let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("hud texture layout"),
         entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
+            gpu_util::texture_2d(0),
+            gpu_util::filtering_sampler(1),
+            gpu_util::filtering_sampler(2),
         ],
     });
 
@@ -534,8 +504,8 @@ pub(super) fn create_hud_pass(device: &wgpu::Device, format: wgpu::TextureFormat
         color: add,
         alpha: add,
     };
-    let (pipeline, pipeline_1x) = (make(msaa_samples(), true, alpha), make(1, false, alpha));
-    let (additive, additive_1x) = (make(msaa_samples(), true, add), make(1, false, add));
+    let (pipeline, pipeline_1x) = (make(samples, true, alpha), make(1, false, alpha));
+    let (additive, additive_1x) = (make(samples, true, add), make(1, false, add));
 
     HudPass {
         pipeline,

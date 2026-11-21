@@ -10,6 +10,7 @@
 //! section 9).
 
 use crate::renderer::SCENE_FORMAT;
+use crate::renderer::gpu_util;
 
 /// The user's settings, read every frame (`vc_hdr` only at renderer build).
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -86,26 +87,8 @@ impl PostPass {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("post layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                gpu_util::unfilterable_2d(0),
+                gpu_util::uniform(1, wgpu::ShaderStages::FRAGMENT),
             ],
         });
         let params = device.create_buffer(&wgpu::BufferDescriptor {
@@ -116,31 +99,9 @@ impl PostPass {
         });
         let glow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("post glow layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
+            entries: &[gpu_util::texture_2d(0), gpu_util::filtering_sampler(1)],
         });
-        let glow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("post glow sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let glow_sampler = gpu_util::linear_clamp_sampler(device, Some("post glow sampler"));
         let no_glow = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("post no glow"),
@@ -164,31 +125,19 @@ impl PostPass {
             bind_group_layouts: &[Some(&layout), Some(&glow_layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("post pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
+        let pipeline = gpu_util::Fullscreen::new(
+            Some("post pipeline"),
+            Some(&pipeline_layout),
+            &shader,
+            "vs_main",
+            "fs_main",
+            wgpu::ColorTargetState {
+                format: SCENE_FORMAT,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: SCENE_FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        )
+        .build(device);
         let world = create_world(device, format, width, height);
         let world_view = world.create_view(&Default::default());
         let bind_group = create_bind_group(device, &layout, &world_view, &params);
@@ -436,27 +385,17 @@ mod tests {
         });
         pass.bind_glow(device, glow_view.as_ref());
         let mut enc = device.create_command_encoder(&Default::default());
-        enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: None,
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: pass.world_view(),
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: f64::from(display[0] * il),
-                        g: f64::from(display[1] * il),
-                        b: f64::from(display[2] * il),
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        gpu_util::color_pass(
+            &mut enc,
+            None,
+            pass.world_view(),
+            wgpu::LoadOp::Clear(wgpu::Color {
+                r: f64::from(display[0] * il),
+                g: f64::from(display[1] * il),
+                b: f64::from(display[2] * il),
+                a: 1.0,
+            }),
+        );
         let out = device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: one,
@@ -478,22 +417,12 @@ mod tests {
             0.0,
         );
         {
-            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let mut rp = gpu_util::color_pass(
+                &mut enc,
+                None,
+                &view,
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            );
             pass.draw(&mut rp);
         }
         let buf = device.create_buffer(&wgpu::BufferDescriptor {

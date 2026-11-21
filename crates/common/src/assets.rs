@@ -1,5 +1,6 @@
 use crate::asset_source::{Asset, AssetKind, AssetSource};
 use crate::pk3::Pk3Fs;
+use crate::shader::ShaderLib;
 use anyhow::{Result, bail, ensure};
 use std::collections::HashMap;
 
@@ -286,41 +287,6 @@ pub fn dlight_blob() -> Image {
     }
 }
 
-/// Material facts from `scripts/*.shader` (world) and `fxshaders/*.shader`
-/// (effects, pak5); the scan is by suffix, not directory. Thin queries over
-/// [`ShaderLib`].
-pub struct Shaders {
-    lib: std::sync::Arc<crate::shader::ShaderLib>,
-}
-
-impl Shaders {
-    /// First texture path of the material (lowercased, image extension
-    /// stripped), for implicit-material loading.
-    pub fn image(&self, name: &str) -> Option<&str> {
-        self.lib.image(name)
-    }
-
-    /// The whole material->image table, for helpers that take the map form.
-    pub fn image_map(&self) -> &HashMap<String, String> {
-        self.lib.image_map()
-    }
-
-    /// The stage carrying the material's first image blends onto GL_ONE;
-    /// the fx pass draws such quads additive.
-    pub fn is_additive(&self, name: &str) -> bool {
-        self.lib.is_additive(name)
-    }
-    pub fn uses_polygon_offset(&self, name: &str) -> bool {
-        self.lib.uses_polygon_offset(name)
-    }
-}
-
-pub fn load_shaders(fs: &dyn AssetSource) -> Shaders {
-    Shaders {
-        lib: crate::shader::ShaderLib::load(fs),
-    }
-}
-
 /// Probed in this order.
 pub const IMAGE_EXTS: [&str; 3] = [".dds", ".tga", ".jpg"];
 
@@ -430,7 +396,7 @@ fn try_load_image(fs: &dyn AssetSource, name: &str) -> Option<Image> {
 
 /// File probe first, then the shader script image. Never fails: missing or
 /// broken assets warn and return retail's default image.
-pub fn load_material_image(fs: &dyn AssetSource, shaders: &Shaders, name: &str) -> Image {
+pub fn load_material_image(fs: &dyn AssetSource, shaders: &ShaderLib, name: &str) -> Image {
     if let Some(img) = try_load_image(fs, name) {
         return img;
     }
@@ -442,6 +408,18 @@ pub fn load_material_image(fs: &dyn AssetSource, shaders: &Shaders, name: &str) 
     }
     log::warn!("no texture found for material {name}, using the default image");
     default_image()
+}
+
+/// The pak read [`load_material_image`] of `name` marks, made without
+/// reading or decoding: the first image its probe finds, by name, then by
+/// the script's image. (A file that fails to decode, where the load reads
+/// on, marks only itself.)
+pub fn mark_material_image(fs: &Pk3Fs, shaders: &ShaderLib, name: &str) {
+    let found = probe_image_path(fs, name)
+        .or_else(|| shaders.image(name).and_then(|m| probe_image_path(fs, m)));
+    if let Some(path) = found {
+        fs.mark_read(&path);
+    }
 }
 
 /// Foliage skins (`foliage_masked@`, `foliage_detail@`, tga and dds) store
@@ -595,6 +573,13 @@ pub fn load_skin_image(fs: &dyn AssetSource, filename: &str) -> Image {
 pub fn skin_image_exists(fs: &dyn AssetSource, filename: &str) -> bool {
     let named = format!("skins/{filename}");
     resolve_bundle_image(fs, &named).is_some() || fs.exists(&named)
+}
+
+/// The pak read [`load_skin_image`] of `filename` marks, made without
+/// reading or decoding.
+pub fn mark_skin_image(fs: &Pk3Fs, filename: &str) {
+    let named = format!("skins/{filename}");
+    fs.mark_read(&resolve_bundle_image(fs, &named).unwrap_or(named));
 }
 
 /// Loads by full pk3 path, extension included; no probing, no shader lookup.
@@ -898,6 +883,53 @@ mod tests {
         assert_eq!(missing("gfx/bad.dds"), Some(false));
     }
 
+    /// A material or skin load the renderer skips marks the paks its read
+    /// would have.
+    #[test]
+    fn skipped_image_loads_mark_the_paks_their_reads_would() {
+        let dir = tempfile::tempdir().unwrap();
+        let tga = gray_tga(2, 2);
+        let script = b"textures/b\n{\n\t{\n\t\tmap textures/c.tga\n\t}\n}\n";
+        let pak0 = crate::testing::pk3_with(&[("textures/a.tga", &tga)]);
+        let pak1 = crate::testing::pk3_with(&[
+            ("scripts/x.shader", script),
+            ("textures/c.tga", &tga),
+            ("skins/s.tga", &tga),
+        ]);
+        std::fs::write(dir.path().join("pak0.pk3"), pak0).unwrap();
+        std::fs::write(dir.path().join("pak1.pk3"), pak1).unwrap();
+        let fs = Pk3Fs::open(dir.path()).unwrap();
+        let shaders = ShaderLib::load(&fs);
+        let marked = |f: &dyn Fn()| {
+            fs.clear_references();
+            f();
+            let mut v: Vec<String> = fs
+                .referenced_paks()
+                .iter()
+                .map(|p| p.name.clone())
+                .collect();
+            v.sort();
+            v
+        };
+        for name in ["textures/a", "textures/b", "textures/none"] {
+            let loaded = marked(&|| drop(load_material_image(&fs, &shaders, name)));
+            assert_eq!(
+                marked(&|| mark_material_image(&fs, &shaders, name)),
+                loaded,
+                "{name}"
+            );
+        }
+        assert_eq!(
+            marked(&|| mark_material_image(&fs, &shaders, "textures/b")).len(),
+            1
+        );
+        for skin in ["s.dds", "none.tga"] {
+            let loaded = marked(&|| drop(load_skin_image(&fs, skin)));
+            assert_eq!(marked(&|| mark_skin_image(&fs, skin)), loaded, "{skin}");
+        }
+        assert_eq!(marked(&|| mark_skin_image(&fs, "s.dds")).len(), 1);
+    }
+
     /// The decoded cache stops keeping images at its byte budget; a path
     /// past it still loads, decoded again on each take.
     #[test]
@@ -1002,7 +1034,7 @@ textures/x/dds_ref
         let dir = tempfile::tempdir().unwrap();
         make_pk3(dir.path(), "pak0.pk3", &[("scripts/test.shader", script)]);
         let fs = crate::pk3::Pk3Fs::open(dir.path()).unwrap();
-        let s = load_shaders(&fs);
+        let s = ShaderLib::load(&fs);
         let img = |n: &str| s.image(n).unwrap();
         assert_eq!(img("textures/x/fancy"), "textures/x/real@img");
         // $lightmap first: the lookup falls through to the real image
@@ -1020,7 +1052,7 @@ textures/x/dds_ref
         let dir = tempfile::tempdir().unwrap();
         make_pk3(dir.path(), "pak0.pk3", &[("scripts/test.shader", script)]);
         let fs = crate::pk3::Pk3Fs::open(dir.path()).unwrap();
-        let shaders = load_shaders(&fs);
+        let shaders = ShaderLib::load(&fs);
         assert!(shaders.uses_polygon_offset("textures/x/blendlayer"));
         assert!(!shaders.uses_polygon_offset("textures/x/plain"));
         assert_eq!(
@@ -1079,7 +1111,7 @@ gfx/effects/second_stage_only
         let dir = tempfile::tempdir().unwrap();
         make_pk3(dir.path(), "pak0.pk3", &[("fxshaders/pj.shader", script)]);
         let fs = crate::pk3::Pk3Fs::open(dir.path()).unwrap();
-        let s = load_shaders(&fs);
+        let s = ShaderLib::load(&fs);
 
         assert_eq!(s.image("gfx/effects/flash"), Some("gfx/effects/flash"));
         assert_eq!(s.image("gfx/effects/smoke"), Some("gfx/effects/smoke"));
@@ -1103,7 +1135,7 @@ gfx/effects/second_stage_only
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let s = load_shaders(&fs);
+        let s = ShaderLib::load(&fs);
 
         assert_eq!(
             s.image("gfx/effects/muzflash2"),
@@ -1145,7 +1177,7 @@ gfx/effects/second_stage_only
             ],
         );
         let fs = crate::pk3::Pk3Fs::open(dir.path()).unwrap();
-        let shaders = load_shaders(&fs);
+        let shaders = ShaderLib::load(&fs);
         let img = load_material_image(&fs, &shaders, "textures/x/fancy");
         assert_eq!((img.width, img.height), (1, 1));
         assert!(matches!(img.data, ImageData::Rgba8(_)));
@@ -1197,7 +1229,7 @@ gfx/effects/second_stage_only
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let shaders = load_shaders(&fs);
+        let shaders = ShaderLib::load(&fs);
         let exists = |n: &str| IMAGE_EXTS.iter().any(|e| fs.contains(&format!("{n}{e}")));
         let resolves = |name: &str| {
             let n = name.to_lowercase();
@@ -1269,7 +1301,7 @@ gfx/effects/second_stage_only
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let all = load_shaders(&fs);
+        let all = ShaderLib::load(&fs);
         // mp_neuville terrain blend layer
         assert!(all.uses_polygon_offset("textures/normandy/ground/dirt_oldpacked"));
         let img = load_material_image(&fs, &all, "textures/normandy/walls/brick@damagedwall1_p4");

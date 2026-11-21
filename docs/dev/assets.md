@@ -17,7 +17,7 @@ cache, so within a level only its first load marks the pak it read.
 
 | Kind | Cached | Who owns it |
 |---|---|---|
-| `Image` (by path, extension included) | no, builds through `Asset::find` | the client's texture caches. `assets::DecodedImages` keeps `&Pk3Fs` for its unflagged prefetch and `mark_read`, and stops keeping images past `DECODED_BUDGET` (2 GiB). |
+| `Image` (by path, extension included) | no, builds through `Asset::find` | the client's texture caches. `assets::DecodedImages` keeps `&Pk3Fs` for its unflagged prefetch and `mark_read`, and stops keeping images past `DECODED_BUDGET` (2 GiB). The renderer's model image cache holds one upload batch's (a level prewarm's, a view model preload's) and empties at its end and with the map. |
 | `ShaderLib::load` | yes, one parse per source; a `.shader` read marks no pak | |
 | `vcod_cod2::materials::load_lib` (`Compiled`) | no | the renderer's `MaterialLib` |
 | `Model` (v14 or v20, by its `xmodel/` name; `model::load` is `Model::find`) | no | the client's model caches, the server's hit rigs. The renderer's `upload_dynamic_model` and the multicore prop load keep `&Pk3Fs`. |

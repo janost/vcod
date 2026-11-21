@@ -138,11 +138,11 @@ impl Recording {
     }
 
     /// The commands in a bundle for a pass with colour target `format`
-    /// (none: the depth prepass) over the scene's depth.
+    /// (none: the depth prepass) over the scene's depth, `samples` each.
     pub(super) fn bundle(
         &self,
         device: &wgpu::Device,
-        format: Option<wgpu::TextureFormat>,
+        (format, samples): (Option<wgpu::TextureFormat>, u32),
     ) -> wgpu::RenderBundle {
         let colour = [format];
         let mut enc = device.create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
@@ -156,7 +156,7 @@ impl Recording {
                 depth_read_only: false,
                 stencil_read_only: false,
             }),
-            sample_count: msaa_samples(),
+            sample_count: samples,
             multiview: None,
         });
         for c in &self.0 {
@@ -192,8 +192,8 @@ pub(super) struct WorldBundles {
 }
 
 impl WorldBundles {
-    pub(super) fn begin(&mut self, format: Option<wgpu::TextureFormat>) {
-        let targets = Some((format, msaa_samples()));
+    pub(super) fn begin(&mut self, format: Option<wgpu::TextureFormat>, samples: u32) {
+        let targets = Some((format, samples));
         if self.targets != targets {
             self.runs.clear();
             self.targets = targets;
@@ -213,7 +213,7 @@ impl WorldBundles {
         kind: crate::frame_prof::Count,
     ) {
         use crate::frame_prof::{Count, count};
-        let format = self.targets.and_then(|t| t.0);
+        let targets = self.targets.expect("begin set the targets");
         let at = self.at;
         self.at += 1;
         match self.runs.get_mut(at) {
@@ -222,7 +222,7 @@ impl WorldBundles {
                     count(Count::Rebundled, 1);
                 }
                 count(kind, rec.draws());
-                pass.execute_bundles([&*bundle.get_or_insert_with(|| rec.bundle(device, format))]);
+                pass.execute_bundles([&*bundle.get_or_insert_with(|| rec.bundle(device, targets))]);
             }
             run => {
                 rec.replay(pass);

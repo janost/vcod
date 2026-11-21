@@ -459,7 +459,8 @@ names a wrapper command, default `nice -n 10`) runs `cod4_soak` in
   lavapipe as `pipeline_check` is, in release) loads three CoD2 maps twice
   through the renderer, the prediction's collision and the first draw, and
   prints a digest of every texture uploaded and the paks the load marked. A
-  load made faster keeps both.
+  load made faster keeps both, unless it stops uploading an image nothing
+  binds: then the paks hold and the frames stay byte for byte.
 
 ## Bots
 

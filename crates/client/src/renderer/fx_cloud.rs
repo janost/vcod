@@ -7,6 +7,7 @@
 
 use super::*;
 use crate::fx::cod2_cloud::{self, Clouds, FLAKES};
+use crate::renderer::gpu_util;
 use glam::{Mat4, Vec3};
 use std::ops::Range;
 use std::sync::Arc;
@@ -106,6 +107,7 @@ impl CloudPass {
         format: wgpu::TextureFormat,
         camera_layout: &wgpu::BindGroupLayout,
         texture_layout: &wgpu::BindGroupLayout,
+        samples: u32,
     ) -> CloudPass {
         let (verts, indices) = flake_buffer();
         let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -147,41 +149,13 @@ impl CloudPass {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("cloud outdoor layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                gpu_util::texture_2d(0),
+                gpu_util::filtering_sampler(1),
+                gpu_util::uniform(2, wgpu::ShaderStages::VERTEX),
             ],
         });
         // the code sampler's filter is not read off retail: linear, clamped
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("$outdoor sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let sampler = gpu_util::linear_clamp_sampler(device, Some("$outdoor sampler"));
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("cloud outdoor"),
             layout: &layout,
@@ -271,7 +245,7 @@ impl CloudPass {
                     bias: Default::default(),
                 }),
                 multisample: wgpu::MultisampleState {
-                    count: msaa_samples(),
+                    count: samples,
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },
@@ -656,24 +630,9 @@ mod tests {
             eprintln!("no adapter; skipped");
             return;
         };
-        set_msaa_samples(1);
-        let mut entries = vec![wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }];
+        let mut entries = vec![gpu_util::uniform(0, wgpu::ShaderStages::VERTEX_FRAGMENT)];
         for binding in 9..=16 {
-            entries.push(wgpu::BindGroupLayoutEntry {
-                binding,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            });
+            entries.push(gpu_util::filtering_sampler(binding));
         }
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
@@ -681,18 +640,9 @@ mod tests {
         });
         let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
+            entries: &[gpu_util::texture_2d(0)],
         });
-        let mut pass = CloudPass::new(&device, SCENE_FORMAT, &camera_layout, &texture_layout);
+        let mut pass = CloudPass::new(&device, SCENE_FORMAT, &camera_layout, &texture_layout, 1);
 
         // a view down +x: right is -y, up is +z
         let vp = crate::camera::view_proj_from(Vec3::ZERO, 0.0, 0.0, 0.0, 90.0, 1.0);
@@ -800,7 +750,7 @@ mod tests {
             view_formats: &[],
         });
         let view = target.create_view(&Default::default());
-        let depth = create_depth_view(&device, N, N);
+        let depth = create_depth_view(&device, N, N, 1);
         let mut enc = device.create_command_encoder(&Default::default());
         {
             let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {

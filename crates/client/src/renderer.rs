@@ -90,6 +90,7 @@ mod frame;
 #[cfg(test)]
 mod fx_feather;
 mod fx_pass;
+pub(crate) mod gpu_util;
 pub(crate) mod headless;
 mod hud_pass;
 #[cfg(test)]
@@ -127,30 +128,10 @@ pub(crate) use upload::*;
 use world_encode::*;
 use world_load::*;
 
-// The vertex layout below hardcodes the BSP drawvert stride.
-const _: () = assert!(std::mem::size_of::<DrawVert>() == 44);
 // Ditto the viewmodel vertex stride.
 const _: () = assert!(std::mem::size_of::<VmVert>() == 80);
 
 pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-thread_local! {
-    static MSAA: std::cell::Cell<u32> = const { std::cell::Cell::new(4) };
-}
-
-/// The scene's sample count, `r_aaSamples` as [`Renderer::new`] took it
-/// (1 or 4) on this thread, the render thread, and on the build's worker
-/// threads ([`par_build`]); every scene target and
-/// pipeline reads it. 4 until a renderer sets it.
-pub(crate) fn msaa_samples() -> u32 {
-    MSAA.with(|m| m.get())
-}
-
-/// Sets this thread's [`msaa_samples`]: the renderer's thread, and each
-/// worker it builds pipelines on.
-fn set_msaa_samples(samples: u32) {
-    MSAA.with(|m| m.set(samples));
-}
-
 /// `r_aaSamples` to a count wgpu takes on every adapter: 1 stays 1, any
 /// other value is 4.
 pub fn aa_samples(cvar: f32) -> u32 {
@@ -159,11 +140,7 @@ pub fn aa_samples(cvar: f32) -> u32 {
 
 /// A shader's multisampled depth binding, single-sampled when the scene is:
 /// `textureLoad(t, p, 0)` reads sample 0 or mip 0 alike.
-pub(crate) fn depth_wgsl(src: &str) -> std::borrow::Cow<'_, str> {
-    depth_wgsl_at(src, msaa_samples())
-}
-
-fn depth_wgsl_at(src: &str, samples: u32) -> std::borrow::Cow<'_, str> {
+pub(crate) fn depth_wgsl(src: &str, samples: u32) -> std::borrow::Cow<'_, str> {
     if samples > 1 {
         src.into()
     } else {
@@ -433,11 +410,14 @@ pub struct Renderer {
     /// [`Renderer::take_capture`].
     captured: Option<Option<Capture>>,
     /// Off keeps the gamma pass on an identity ramp, for an A/B.
-    #[cfg(test)]
     swap_direct: bool,
     /// `SCENE_FORMAT`, or `HDR_FORMAT` with `vc_hdr`: what every world,
     /// entity, fx and sky pipeline draws into. Fixed for the renderer's life.
     world_format: wgpu::TextureFormat,
+    /// The scene's sample count, `r_aaSamples` through [`aa_samples`] (1 or
+    /// 4): every scene target and pipeline takes it. Fixed for the
+    /// renderer's life.
+    samples: u32,
     /// `vc_hdr`'s tonemap and `vc_grade`/`vc_vignette`/`vc_grain`.
     post: crate::post::PostPass,
     /// CoD4's depth of field over `post`'s world target
@@ -472,9 +452,10 @@ pub struct Renderer {
     world_blur: f32,
     /// When the blend last captured, for render command 10's wall clock.
     shock_captured_at: Option<std::time::Instant>,
-    /// CoD2 model skins and their stage images decoded, kept across maps
-    /// (players and weapons come back on the next one) until the search
-    /// path reopens.
+    /// Model skins and their stage images decoded for the upload batch
+    /// running (prefetched on CoD2 and CoD4), or the single uploads since
+    /// the last one: emptied at each batch's end and with the map, as the
+    /// GPU holds what was taken.
     model_images: assets::DecodedImages,
     /// A batch's model skins decoded and mipped ahead on every core
     /// ([`Self::upload_dynamic_models`]), emptied when the batch ends.
@@ -487,6 +468,7 @@ pub struct Renderer {
     /// The loaded world's feathered and distortion stage pipelines
     /// (`cod4_worldfx`); `None` when it has none.
     world_fx: Option<cod4_worldfx::WorldFxPass>,
+    world_fx_keep: cod4_worldfx::WorldFxKeep,
     /// Retail's `identityLight` for the current overbright bits
     /// (`gamma::identity_light`): what lit colours are scaled by.
     identity_light: f32,
@@ -513,10 +495,8 @@ pub struct Renderer {
     /// depth, for an A/B.
     cookies_on_prepass: bool,
     /// The last frame's prepass draws.
-    #[cfg(test)]
     prepass_drawn: std::cell::Cell<usize>,
     /// Whether the last frame's prepass wrote `floatZ`.
-    #[cfg(test)]
     pub(crate) floatz_drawn: std::cell::Cell<bool>,
     /// The depth prepass joins its draws ([`Self::encode_prepass_world_joined`]),
     /// the world draws skip a bind group already bound ([`WorldGroups`])
@@ -551,7 +531,7 @@ pub struct Renderer {
     dlight_quality: bool,
     /// Kept past map load so later inline submodels resolve `textures/...`
     /// names the same way the world did.
-    shaders: assets::Shaders,
+    shaders: Arc<ShaderLib>,
     /// Parsed shader scripts; map materials are classified against it.
     shader_lib: MaterialLib,
     /// The map's active sky (farbox + optional cloud dome); `None` without a
@@ -757,11 +737,10 @@ impl Renderer {
         textures: TextureSettings,
         samples: u32,
     ) -> Renderer {
-        set_msaa_samples(samples);
         let world_format = if hdr { HDR_FORMAT } else { SCENE_FORMAT };
         let (width, height, format) = (config.width, config.height, config.format);
-        let msaa_view = create_msaa_view(&device, world_format, width, height);
-        let depth_view = create_depth_view(&device, width, height);
+        let msaa_view = create_msaa_view(&device, world_format, width, height, samples);
+        let depth_view = create_depth_view(&device, width, height, samples);
         let ssao = crate::ssao::SsaoPass::new(
             &device,
             &queue,
@@ -770,6 +749,7 @@ impl Renderer {
             width,
             height,
             timestamps,
+            samples,
         );
 
         let [r0, r1, r2, r3, r4, r5, r6] = shadows::receive_layout_entries();
@@ -778,29 +758,11 @@ impl Renderer {
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("camera layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                gpu_util::uniform(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
                 // Fx lights. The fx pass shares this layout without declaring
                 // binding 1 in fx.wgsl, which wgpu allows. Props light
                 // per vertex from them.
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                gpu_util::uniform(1, wgpu::ShaderStages::VERTEX_FRAGMENT),
                 // vc_shadows on what draws after the mask (2..=8)
                 r0,
                 r1,
@@ -820,16 +782,7 @@ impl Renderer {
                 s7,
                 // CoD2's dynamic shadow the lit world and models read
                 // (cod2_cookie::DynamicShadows)
-                wgpu::BindGroupLayoutEntry {
-                    binding: DYNAMIC_SHADOW_BINDING,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                gpu_util::texture_2d(DYNAMIC_SHADOW_BINDING),
                 // CoD4's sun shadow map (cod4_sunshadow, 18 and 19)
                 m0,
                 m1,
@@ -899,7 +852,7 @@ impl Renderer {
             ),
         };
 
-        let shaders = assets::load_shaders(fs);
+        let shaders = ShaderLib::load(fs);
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("shader.wgsl"),
@@ -932,7 +885,7 @@ impl Renderer {
             scene_pipeline(
                 &device,
                 &shader,
-                world_format,
+                (world_format, samples),
                 label,
                 layout,
                 (vs_entry, fs_entry),
@@ -1018,7 +971,6 @@ impl Renderer {
         // while this one builds the entity pass (`par_build`).
         let (stage_pipelines, dlight, vm_pass, dynamic) = std::thread::scope(|s| {
             let stages = s.spawn(|| {
-                set_msaa_samples(samples);
                 par_build(STAGE_VARIANTS * 4, |i| {
                     let variant = STAGE_VARIANT_ORDER[i / 4];
                     let (two_sided, want_bias) = (i & 2 != 0, i & 1 != 0);
@@ -1037,7 +989,6 @@ impl Renderer {
                 })
             });
             let dlight = s.spawn(|| {
-                set_msaa_samples(samples);
                 dlight::DlightPass::new(
                     &device,
                     &queue,
@@ -1045,14 +996,14 @@ impl Renderer {
                     [&camera_layout, &material_layout, &stage_layout],
                     &lightmap_sampler,
                     bias,
-                    world_format,
+                    (world_format, samples),
                 )
             });
             let vm_pass = create_vm_pass(&device, &tex_samplers);
             let dynamic = create_dynamic_pass(
                 &device,
                 &queue,
-                world_format,
+                (world_format, samples),
                 &camera_layout,
                 &vm_pass,
                 &white_view,
@@ -1070,7 +1021,8 @@ impl Renderer {
             std::array::from_fn(|_| {
                 std::array::from_fn(|_| std::array::from_fn(|_| stage_pipelines.next().unwrap()))
             });
-        let soft = crate::soft_particles::SoftParticles::new(&device, &depth_view, width, height);
+        let soft =
+            crate::soft_particles::SoftParticles::new(&device, &depth_view, width, height, samples);
         let scene_copy =
             crate::scene_copy::SceneCopy::new(&device, world_format, soft.linz(), width, height);
         let fx = create_fx_pass(
@@ -1080,13 +1032,14 @@ impl Renderer {
             &vm_pass.skin_layout,
             &soft.fx_layout,
             &scene_copy.layout,
+            samples,
         );
         let cookies = cod2_cookie::Cookies::new(&device, &dynamic.bone_layout);
-        let hud = create_hud_text_pass(&device, &queue, SCENE_FORMAT);
-        let hud_pass = create_hud_pass(&device, SCENE_FORMAT);
+        let hud = create_hud_text_pass(&device, &queue, SCENE_FORMAT, samples);
+        let hud_pass = create_hud_pass(&device, SCENE_FORMAT, samples);
         let gamma = GammaPass::new(&device, format, width, height);
         let post = crate::post::PostPass::new(&device, world_format, width, height);
-        let dof = crate::cod4_dof::DofPass::new(&device, world_format, width, height);
+        let dof = crate::cod4_dof::DofPass::new(&device, world_format, width, height, samples);
         let bloom =
             crate::bloom::Bloom::new(&device, world_format, gamma.scene_view(), width, height);
         let cod2_glow = crate::cod2_glow::Cod2Glow::new(&device, world_format, width, height);
@@ -1097,6 +1050,7 @@ impl Renderer {
             &depth_view,
             width,
             height,
+            samples,
         );
         let screen_blend =
             crate::screen_blend::ScreenBlend::new(&device, gamma.scene_view(), width, height);
@@ -1106,7 +1060,7 @@ impl Renderer {
             &device,
             shader.clone(),
             stage_pipeline_layout.clone(),
-            world_format,
+            (world_format, samples),
         );
         let prof_gpu = crate::frame_prof::GpuStamps::new(&device, &queue);
         let frag_stats = crate::frame_prof::FragStats::new(&device);
@@ -1156,9 +1110,9 @@ impl Renderer {
             gamma_skipped: false,
             capture_wanted: None,
             captured: None,
-            #[cfg(test)]
             swap_direct: true,
             world_format,
+            samples,
             post,
             dof,
             cod4_dof: None,
@@ -1182,6 +1136,7 @@ impl Renderer {
             soft,
             scene_copy,
             world_fx: None,
+            world_fx_keep: Default::default(),
             identity_light: 0.5,
             image_gamma: None,
             textures,
@@ -1191,9 +1146,7 @@ impl Renderer {
             cod4_options: Cod4Options::default(),
             depth_prepass: false,
             cookies_on_prepass: true,
-            #[cfg(test)]
             prepass_drawn: Default::default(),
-            #[cfg(test)]
             floatz_drawn: Default::default(),
             draw_joins: true,
             world_bundles_on: std::env::var_os("VCOD_WORLD_BUNDLES").is_none_or(|v| v != "0"),
@@ -1284,7 +1237,12 @@ fn camera_bind_group(
     })
 }
 
-fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
+fn create_depth_view(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    samples: u32,
+) -> wgpu::TextureView {
     device
         .create_texture(&wgpu::TextureDescriptor {
             label: Some("depth"),
@@ -1294,7 +1252,7 @@ fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Te
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
-            sample_count: msaa_samples(),
+            sample_count: samples,
             dimension: wgpu::TextureDimension::D2,
             format: DEPTH_FORMAT,
             // the SSAO passes read it between the frame's two halves
@@ -1309,11 +1267,12 @@ fn create_msaa_view(
     format: wgpu::TextureFormat,
     width: u32,
     height: u32,
+    samples: u32,
 ) -> wgpu::TextureView {
     // single-sampled the scene draws into its resolve target and never
     // touches this one (`SceneTargets::begin`): keep it a texel, not a
     // second full-screen colour target (cod4-client-perf.md 24)
-    let (width, height) = match msaa_samples() {
+    let (width, height) = match samples {
         1 => (1, 1),
         _ => (width, height),
     };
@@ -1326,7 +1285,7 @@ fn create_msaa_view(
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
-            sample_count: msaa_samples(),
+            sample_count: samples,
             dimension: wgpu::TextureDimension::D2,
             format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,

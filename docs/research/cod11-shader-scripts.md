@@ -868,7 +868,7 @@ inner box anywhere in the corpus (§2). The geometry is transcribed from
   FillCloudySkySide's pattern (`tr_sky.c` :571, index loop :597).
 - As in RB_StageIteratorSky (`tr_sky.c` :994), if the farbox's first side
   image fails to load the whole box is skipped; the dome still draws through
-  the stage path (`renderer/frame.rs` sky-pass block).
+  the stage path (`Renderer::draw_sky`, `renderer/frame.rs`).
 - Which block owns the sky pass: highest soup reference count wins, ties to the
   alphabetically first name (`pick_sky`, `sky.rs`).
 

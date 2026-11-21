@@ -1347,6 +1347,47 @@ cost.
 Pending, real card: the `load profile` line before and after on each
 game's join; the first shot, frag and tracer should not hitch.
 
+### What a load keeps and what it skips (perf/client-mem)
+
+What changed, none of it in what a frame binds or draws (read off the
+draw paths; no frame compared on this box, which has no adapter):
+
+- A world material or static model skin that draws through its stages
+  (`Pass::Stage`: every CoD2 and CoD4 one, CoD1's scripted ones) binds
+  white for its base image, which only the legacy draw, the cut shadow
+  cast and the implicit dlight copy read, none of them on a staged batch.
+  The pak its skipped read would have flagged is flagged without reading
+  (`assets::mark_material_image`, `mark_skin_image`,
+  `prop_skin::mark_colour_map`), so the `cp` list holds.
+- The other world materials and prop skins decode and mip on every core,
+  a few a core at a time, and upload in first-use order.
+- The model image cache (`Renderer::model_images`) lives for one upload
+  batch and the map; before, it held every model image of the session.
+- A dynamic model's skin uploads once a map (`DynamicPass::skin_groups`)
+  where every LOD of every model uploaded its own copy, and its LODs carry
+  no bone buffer.
+- The client drops the parsed `MapWorld` once the renderer has loaded it.
+  A renderer rebuild (`vid_restart` with a changed `vc_hdr`, sample count
+  or image setting, CoD4's `r_applyPicmip`) reads the map again: CoD1's
+  `.bsp`, CoD2's `.d3dbsp`, CoD4's zone walked again (`cod4_fly::load`).
+- Pipelines kept across loads beside the lit ones: the four `floatZ`
+  writers, water's shader and pipelines, the CoD4 world fx pass
+  (`WorldFxKeep`), and the `r_vc_normalMaps` 0 variants.
+- CoD1's leaf light trace world (`StaticLighting::collision_for`) builds
+  beside the batches.
+
+The trace world alone, release, this box. VERIFIED (scratch timer, ours):
+`CollisionWorld::build` takes 26.1 ms on mp_carentan (6.3 MB), 12.8 on
+mp_brecourt (3.6 MB) and 28.0 on mp_harbor. The play world does not stand
+in for it: it traces under the client's patch arithmetic
+(`Arith::for_client`) with its brush models unlinked, and offline modes
+build none.
+
+Pending, real card: each game's join and a map change on the server's
+console, before and after, three runs a side: the `load profile` lines and
+the client's VmRSS and VmHWM after each load; and the CoD4 frames byte for
+byte (`VCOD_C4_SHOTS`, 39).
+
 ## 35. `floatZ` written in the depth prepass, no split and copy (P22)
 
 ### 35.1 What 1.7's prepass draws
@@ -1807,3 +1848,49 @@ census).
 What the dynents still cost is CPU in `build` (0.8 ms on mp_crash): the
 next cut is batching each model's dynents into one static draw while none
 is awake.
+
+## 42. Entity lighting held across frames, and the frame's uploads by span
+
+1. `Cod4EntityLight::frame_sets` keeps each lookup with its lighting
+   origin and world box, by their bits, for the next frame: a set whose
+   pair held is not looked up again (the lighter reads the world's clip
+   map alone, no movers). 1.7's `R_AllocModelLighting` keeps a model's
+   block while its lighting origin holds (cod4-world.md 3.3, INFERRED
+   there). Set `i` still names block `i`, so the sets, blocks and frames
+   are the ones a fresh lookup gives. Gate:
+   `cod4_lookups_hold_while_their_origin_and_box_do`.
+2. The light sets, instances and bone matrices (`renderer::Written`) and
+   the entity volume's block rows (`Cod4Volume::write_blocks`) are written
+   from the first element whose bytes changed since the last write to the
+   last one. The map's dynamic entities lead the instance list (41), so a
+   held scene writes nothing of theirs; a moving body writes its own tail.
+3. The waters' height maps build into buffers kept from frame to frame
+   and only the levels their texture keeps (`WaterSetup::levels_into`,
+   bytes as before: `levels_into_reuses_its_buffers_for_the_same_bytes`).
+4. CoD1's mark clip skips a run of 16 triangles whose box lies past the
+   gather box (cod11-events-and-fx.md 9.6), the same fragments.
+
+CPU before the change, opt-level 1 test build on this box (no adapter):
+the dynents' lookups alone, one a dynent at its origin with a 16-unit box,
+take 0.44 ms a frame on mp_crash (516), 1.04 on mp_backlot (678) and 1.57
+on mp_shipment (1901). VERIFIED (scratch timer, ours). The 21 stock
+maps' 14 water materials are all 64 x 64, 0.05 ms a sim a frame at
+opt-level 1. VERIFIED (the zones, scratch timer, ours). Twelve
+`markShadow` gathers of radius 24 a frame, same run, without and with the
+run boxes: mp_carentan 0.11 -> 0.07 ms, mp_brecourt 0.35 -> 0.08,
+mp_harbor 0.10 -> 0.05, mp_depot 0.10 -> 0.06, at opt-level 1, the same
+fragments. VERIFIED (scratch timer, ours). A full pool's regroup and
+rebuild (1024 marks, eight shaders, PERF-081) is 0.06 ms at opt-level 1,
+under its 0.1 ms bar: left as is. VERIFIED (scratch timer, ours).
+
+Not done: a draw per model of the sleeping dynents (41's next cut). With
+the lookups gone a held dynent costs its placement, LOD pick, posed box,
+light set pack and draw sort each frame; the real card's `build` with
+and without dynents says whether that is worth a static batch.
+
+Pending, real card: GPU kit `./run.sh perf-frame` (`bin/p23` against
+`bin/perfframe`): mp_crash with and without `VCOD_NO_DYNENTS=1` and held
+with no bots, mp_backlot, mp_shipment, mp_crossfire at `TURN=90`, CoD1
+mp_carentan with `cg_shadows 1`, CoD2 mp_harbor; reading `build`,
+`pose`, `fxdraw` and the frame. `./run.sh shots` for the frames byte for
+byte.

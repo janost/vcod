@@ -4,6 +4,7 @@
 //! machine with no adapter.
 
 use super::*;
+use crate::renderer::gpu_util;
 use wgpu::util::DeviceExt;
 
 /// retail's clip z of a point `depth` units ahead: the infinite
@@ -50,24 +51,10 @@ fn feathered_sprite_fades_into_the_wall_as_the_hlsl_does() {
     };
     const N: u32 = 128;
     const FEATHER: f32 = 0.025;
-    let uniform = |binding| wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    };
+    let uniform = |binding| gpu_util::uniform(binding, wgpu::ShaderStages::VERTEX_FRAGMENT);
     let mut entries = vec![uniform(0)];
     for binding in 9..=16 {
-        entries.push(wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-            count: None,
-        });
+        entries.push(gpu_util::filtering_sampler(binding));
     }
     let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: None,
@@ -75,20 +62,11 @@ fn feathered_sprite_fades_into_the_wall_as_the_hlsl_does() {
     });
     let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: None,
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        }],
+        entries: &[gpu_util::texture_2d(0)],
     });
-    let depth = create_depth_view(&device, N, N);
-    let msaa = create_msaa_view(&device, SCENE_FORMAT, N, N);
-    let soft = crate::soft_particles::SoftParticles::new(&device, &depth, N, N);
+    let depth = create_depth_view(&device, N, N, 4);
+    let msaa = create_msaa_view(&device, SCENE_FORMAT, N, N, 4);
+    let soft = crate::soft_particles::SoftParticles::new(&device, &depth, N, N, 4);
     let copy = crate::scene_copy::SceneCopy::new(&device, SCENE_FORMAT, soft.linz(), N, N);
     let fx = create_fx_pass(
         &device,
@@ -97,6 +75,7 @@ fn feathered_sprite_fades_into_the_wall_as_the_hlsl_does() {
         &texture_layout,
         &soft.fx_layout,
         &copy.layout,
+        4,
     );
 
     // the Camera block: view_proj, then five vec4s; fog mode 0

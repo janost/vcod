@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn every_mod_icon_resolves_to_an_image() {
         let check = |fs: &vcod_common::pk3::Pk3Fs, uo: bool| {
-            let shaders = vcod_common::assets::load_shaders(fs);
+            let shaders = vcod_common::shader::ShaderLib::load(fs);
             for m in 0..32 {
                 let name = mod_icon(m, uo);
                 let map = shaders.image_map();

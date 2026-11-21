@@ -51,8 +51,8 @@ impl Renderer {
         if let Target::Surface(s) = &self.target {
             s.configure(&self.device, &self.config);
         }
-        self.msaa_view = create_msaa_view(&self.device, self.world_format, w, h);
-        self.depth_view = create_depth_view(&self.device, w, h);
+        self.msaa_view = create_msaa_view(&self.device, self.world_format, w, h, self.samples);
+        self.depth_view = create_depth_view(&self.device, w, h, self.samples);
         self.gamma.resize(&self.device, w, h);
         self.ssao.resize(&self.device, &self.depth_view, w, h);
         self.soft.resize(&self.device, &self.depth_view, w, h);
@@ -71,17 +71,7 @@ impl Renderer {
             .resize(&self.device, self.gamma.scene_view(), w, h);
         self.cod2_glow.resize(&self.device, w, h);
         self.dyn_shadows = cod2_cookie::DynamicShadows::new(&self.device, &self.queue, w, h);
-        self.camera_bg = camera_bind_group(
-            &self.device,
-            &self.camera_layout,
-            &self.camera_buf,
-            &self.fx_lights_buf,
-            &self.shadow_receive(),
-            &self.tex_samplers,
-            self.dyn_shadows.view(),
-            &self.sun_shadow,
-        );
-        self.moved_cams.clear();
+        self.rebuild_camera_bg();
     }
 
     /// The shellshock's screen blend for the next frame
@@ -128,6 +118,11 @@ impl Renderer {
         self.world_format == HDR_FORMAT
     }
 
+    /// The scene's sample count the renderer was built with (1 or 4).
+    pub fn samples(&self) -> u32 {
+        self.samples
+    }
+
     /// `vc_bloom` (0 off) and `vc_bloomThreshold`, applied from the next frame.
     pub fn set_bloom(&mut self, intensity: f32, threshold: f32) {
         self.bloom_intensity = intensity.max(0.0);
@@ -143,17 +138,7 @@ impl Renderer {
         }
         self.textures.filter = filter;
         self.tex_samplers = TexSamplers::new(&self.device, filter);
-        self.camera_bg = camera_bind_group(
-            &self.device,
-            &self.camera_layout,
-            &self.camera_buf,
-            &self.fx_lights_buf,
-            &self.shadow_receive(),
-            &self.tex_samplers,
-            self.dyn_shadows.view(),
-            &self.sun_shadow,
-        );
-        self.moved_cams.clear();
+        self.rebuild_camera_bg();
         self.vm_pass.uniform_bg = vm_uniform_group(
             &self.device,
             &self.vm_pass.uniform_layout,
@@ -198,7 +183,7 @@ impl Renderer {
                 &self.device,
                 &self.queue,
                 self.world_format,
-                msaa_samples(),
+                self.samples,
                 shadows::EntLayouts {
                     skin: &mats.skin_layout,
                     bones: &self.dynamic.bone_layout,
@@ -213,16 +198,28 @@ impl Renderer {
             )
         });
         // the camera groups bind the receiver inputs of the new state
-        self.camera_bg = camera_bind_group(
+        self.rebuild_camera_bg();
+    }
+
+    /// The camera group over `camera` (the shared Camera block or a moved
+    /// brush model's) and the renderer's receiver inputs and samplers.
+    pub(super) fn camera_group(&self, camera: &wgpu::Buffer) -> wgpu::BindGroup {
+        camera_bind_group(
             &self.device,
             &self.camera_layout,
-            &self.camera_buf,
+            camera,
             &self.fx_lights_buf,
             &self.shadow_receive(),
             &self.tex_samplers,
             self.dyn_shadows.view(),
             &self.sun_shadow,
-        );
+        )
+    }
+
+    /// Rebuilds the camera group after an input it binds changed; the moved
+    /// brush models' groups are rebuilt as the next frame needs them.
+    pub(super) fn rebuild_camera_bg(&mut self) {
+        self.camera_bg = self.camera_group(&self.camera_buf);
         self.moved_cams.clear();
     }
 
