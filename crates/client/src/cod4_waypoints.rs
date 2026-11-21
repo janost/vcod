@@ -203,7 +203,7 @@ fn turned(centre: Vec2, size: Vec2, angle: f32, rgba: [f32; 4], tex: &str) -> Hu
     let at = |a: f32, d: f32| (centre + across * a + down * d).to_array();
     HudQuad {
         verts: [at(-1.0, -1.0), at(1.0, -1.0), at(1.0, 1.0), at(-1.0, 1.0)],
-        uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        uvs: HudQuad::UNIT_UVS,
         rgba,
         texture: tex.to_string(),
     }

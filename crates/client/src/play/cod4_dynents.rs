@@ -15,8 +15,7 @@ use crate::cod4_fx::OwnView;
 
 /// `eFlags`' prone and crouch bits, which pick the eye height of another
 /// player's swing (0x4585b4, 0x4585c4).
-const EF_PRONE: u32 = 0x8;
-const EF_CROUCH: u32 = 0x4;
+use vcod_cod4::net::flags::{EF_CROUCH, EF_PRONE};
 
 /// What the fired events did to the dynamic entities.
 #[derive(Default)]

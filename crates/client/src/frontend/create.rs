@@ -15,9 +15,8 @@ use vcod_common::localize::Localized;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::ui_menu::{UiItem, script_commands};
 
-use super::lists::visible_rows;
 use super::paint::{Painter, truncate_visible};
-use super::{SCROLLBAR_SIZE, Ui, UiEffect, listbox};
+use super::{Ui, UiEffect, listbox};
 use crate::console::shell::bare;
 use crate::hud::HudQuad;
 use winit::keyboard::KeyCode;
@@ -374,8 +373,7 @@ impl Ui {
 
     /// A click on `FEEDER_ALLMAPS`: selects the row under the cursor.
     pub(super) fn map_click(&mut self, item: &UiItem) {
-        let row = ((self.cursor[1] - item.rect[1] - 1.0) / item.element_height.max(1.0)).floor();
-        let row = row.max(0.0) as usize + self.map_top;
+        let row = listbox::row_at(item, self.cursor[1], self.map_top);
         if row < self.active_maps().len() {
             self.map_row = row;
         }
@@ -406,35 +404,21 @@ impl Ui {
     /// `Item_ListBox_Paint` for `FEEDER_ALLMAPS`: each allowed map's
     /// `longname` (0x4000c6c0).
     pub(super) fn map_rows(&self, p: &Painter, item: &UiItem, out: &mut Vec<HudQuad>) {
-        let [x, y0, w, _] = item.rect;
-        let (x, mut y) = (x + 1.0, y0 + 1.0);
-        let eh = item.element_height.max(1.0);
         let col = item.columns.first().copied();
         let maps = self.active_maps();
-        for (row, a) in maps
-            .iter()
-            .enumerate()
-            .skip(self.map_top)
-            .take(visible_rows(item))
-        {
-            let text = truncate_visible(&a.long_name, col.map_or(0, |c| c.max_chars));
-            p.text(
-                &text,
-                x + 4.0 + col.map_or(0.0, |c| c.pos) + item.text_align_x,
-                y + eh + item.text_align_y,
-                item.text_scale,
-                item.fore,
-                out,
-            );
-            if row == self.map_row {
-                p.fill(
-                    [x, y, w - SCROLLBAR_SIZE - 4.0, eh - 1.0],
-                    item.outline_color,
-                    out,
-                );
-            }
-            y += eh;
-        }
+        let selected = |i| i == self.map_row;
+        listbox::paint_rows(
+            p,
+            item,
+            maps.len(),
+            self.map_top,
+            selected,
+            |i, row, out| {
+                let text = truncate_visible(&maps[i].long_name, col.map_or(0, |c| c.max_chars));
+                row.text(p, item, &text, col.map_or(0.0, |c| c.pos), out);
+            },
+            out,
+        );
     }
 }
 

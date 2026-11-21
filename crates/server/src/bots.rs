@@ -1099,8 +1099,13 @@ fn aim_angles(view: &BotView, at: [f32; 3]) -> (f32, f32) {
     (pitch, yaw)
 }
 
-/// An absolute (pitch, yaw) as the cmd carries it, net of `delta_angles`.
+/// An absolute (pitch, yaw) as the cmd carries it, net of `delta_angles`:
+/// CoD1 and CoD2 truncate, 1.7 rounds off its float delta ([`BotView::delta_deg`]).
 pub(crate) fn cmd_angles(view: &BotView, aim: [f32; 2]) -> [i32; 3] {
+    if let Some(d) = view.delta_deg {
+        let a = |i: usize, aim: f32| cod4::cmd_angle(f64::from(aim) - f64::from(d[i]));
+        return [a(0, aim[0]), a(1, aim[1]), a(2, 0.0)];
+    }
     [
         deg_short(aim[0]) - view.delta_angles[0],
         deg_short(aim[1]) - view.delta_angles[1],

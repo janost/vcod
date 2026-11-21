@@ -405,20 +405,14 @@ impl Cod4Players {
                         })
                         .clone()
                         .map(|rig| {
-                            let bone = |name: &str| {
-                                rig.skeleton
-                                    .bones()
-                                    .iter()
-                                    .position(|b| b.name.eq_ignore_ascii_case(name))
-                            };
-                            let tags = [bone("tag_flash"), bone("tag_brass"), bone("j_head")];
+                            let tags = crate::cod2_players::rig_tags(&rig.skeleton);
                             (rig, tags)
                         });
                     body.rig = Some((held.cloned(), rig.clone()));
                     rig
                 }
             };
-            let Some((rig, [flash, brass, head])) = rig else {
+            let Some((rig, [flash, head, brass])) = rig else {
                 continue;
             };
             let body = self.bodies.get_mut(n).expect("inserted above");

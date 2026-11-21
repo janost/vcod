@@ -17,7 +17,7 @@ use winit::keyboard::KeyCode;
 use super::browser::{Filter, Source, Status};
 use super::input::exec_key;
 use super::paint::{Painter, truncate_visible};
-use super::{K_MWHEELDOWN, K_MWHEELUP, SCROLLBAR_SIZE, UI_CVARS, Ui, UiEffect, browser, listbox};
+use super::{K_MWHEELDOWN, K_MWHEELUP, UI_CVARS, Ui, UiEffect, browser, listbox};
 use crate::console::shell::Shell;
 use crate::hud::HudQuad;
 
@@ -261,24 +261,21 @@ impl Ui {
         out: &mut Vec<HudQuad>,
     ) {
         let Some(q) = &self.status else { return };
-        let [x, y0, _, _] = item.rect;
-        let (x, mut y) = (x + 1.0, y0 + 1.0);
-        let eh = item.element_height.max(1.0);
         let top = q.top.min(listbox::max_scroll(item, q.rows.len()));
-        for row in q.rows.iter().skip(top).take(visible_rows(item)) {
-            for (col, cell) in item.columns.iter().zip(row) {
-                let text = truncate_visible(&loc.translate(cell), col.max_chars);
-                p.text(
-                    &text,
-                    x + 4.0 + col.pos + item.text_align_x,
-                    y + eh + item.text_align_y,
-                    item.text_scale,
-                    item.fore,
-                    out,
-                );
-            }
-            y += eh;
-        }
+        listbox::paint_rows(
+            p,
+            item,
+            q.rows.len(),
+            top,
+            |_| false,
+            |i, row, out| {
+                for (col, cell) in item.columns.iter().zip(&q.rows[i]) {
+                    let text = truncate_visible(&loc.translate(cell), col.max_chars);
+                    row.text(p, item, &text, col.pos, out);
+                }
+            },
+            out,
+        );
     }
 
     /// A key with the cursor over the Mods list, as over the map list
@@ -305,38 +302,24 @@ impl Ui {
     /// `Item_ListBox_Paint` for `FEEDER_MODS`: each mod's description, or
     /// its directory when it has none (ui_mp_x86.dll 0x4000caa9).
     pub(super) fn mod_rows(&self, p: &Painter, item: &UiItem, out: &mut Vec<HudQuad>) {
-        let [x, y0, w, _] = item.rect;
-        let (x, mut y) = (x + 1.0, y0 + 1.0);
-        let eh = item.element_height.max(1.0);
-        for (i, m) in self
-            .mods
-            .iter()
-            .enumerate()
-            .skip(self.mod_top)
-            .take(visible_rows(item))
-        {
-            let text = if m.description.is_empty() {
-                &m.dir
-            } else {
-                &m.description
-            };
-            p.text(
-                text,
-                x + 4.0 + item.text_align_x,
-                y + eh + item.text_align_y,
-                item.text_scale,
-                item.fore,
-                out,
-            );
-            if self.mod_selected == Some(i) {
-                p.fill(
-                    [x, y, w - SCROLLBAR_SIZE - 4.0, eh - 1.0],
-                    item.outline_color,
-                    out,
-                );
-            }
-            y += eh;
-        }
+        let selected = |i| self.mod_selected == Some(i);
+        listbox::paint_rows(
+            p,
+            item,
+            self.mods.len(),
+            self.mod_top,
+            selected,
+            |i, row, out| {
+                let m = &self.mods[i];
+                let text = if m.description.is_empty() {
+                    &m.dir
+                } else {
+                    &m.description
+                };
+                row.text(p, item, text, 0.0, out);
+            },
+            out,
+        );
     }
 
     /// A server list cell ([`browser::column_cell`]). CoD2's map column
@@ -362,37 +345,39 @@ impl Ui {
     /// (ui_mp_x86.dll 0x400159b0).
     pub(super) fn server_list(&self, p: &Painter, item: &UiItem, out: &mut Vec<HudQuad>) {
         let rows = self.browser.rows();
-        let [x, y0, w, _] = item.rect;
-        let (x, mut y) = (x + 1.0, y0 + 1.0);
-        let eh = item.element_height.max(1.0);
-        for s in rows.iter().skip(self.list_top).take(visible_rows(item)) {
-            for (&kind, col) in self.browser.columns.iter().zip(&item.columns) {
-                match self.list_cell(s, kind) {
-                    browser::Cell::Image(shader) => p.quad(
-                        [x + 4.0 + col.pos, y - 1.0 + eh * 0.5, col.width, col.width],
-                        [1.0; 4],
-                        shader,
-                        out,
-                    ),
-                    browser::Cell::Text(text) => p.text(
-                        &truncate_visible(&text, col.max_chars),
-                        x + 4.0 + col.pos + item.text_align_x,
-                        y + eh + item.text_align_y,
-                        item.text_scale,
-                        item.fore,
-                        out,
-                    ),
+        let selected = |i: usize| self.selected == Some(rows[i].addr);
+        listbox::paint_rows(
+            p,
+            item,
+            rows.len(),
+            self.list_top,
+            selected,
+            |i, row, out| {
+                for (&kind, col) in self.browser.columns.iter().zip(&item.columns) {
+                    match self.list_cell(rows[i], kind) {
+                        browser::Cell::Image(shader) => p.quad(
+                            [
+                                row.x + 4.0 + col.pos,
+                                row.y - 1.0 + row.eh * 0.5,
+                                col.width,
+                                col.width,
+                            ],
+                            [1.0; 4],
+                            shader,
+                            out,
+                        ),
+                        browser::Cell::Text(text) => row.text(
+                            p,
+                            item,
+                            &truncate_visible(&text, col.max_chars),
+                            col.pos,
+                            out,
+                        ),
+                    }
                 }
-            }
-            if self.selected == Some(s.addr) {
-                p.fill(
-                    [x, y, w - SCROLLBAR_SIZE - 4.0, eh - 1.0],
-                    item.outline_color,
-                    out,
-                );
-            }
-            y += eh;
-        }
+            },
+            out,
+        );
     }
 }
 

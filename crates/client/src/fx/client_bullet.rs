@@ -9,8 +9,10 @@ use vcod_common::weapon::WeaponDef;
 
 use crate::fx::registry::{ClientRound, EV_UO_BULLET_HIT};
 use crate::fx::sim::{Rng, TagPose};
+use crate::fx::vectoangles;
 use vcod_common::net::events::{GameEvent, dir_to_byte};
 use vcod_common::net::protocol::ENTITYNUM_WORLD;
+use vcod_common::x87::angle_vectors;
 
 /// `CG_Trace`'s mask for the round (0x30045992).
 pub const MASK_CLIENT_SHOT: u32 = 0x2802031;
@@ -98,28 +100,6 @@ fn angle_sub(a: f32, b: f32) -> f32 {
     d
 }
 
-/// `vectoangles`: pitch (down positive) and yaw of a direction.
-fn to_angles(v: Vec3) -> [f32; 3] {
-    if v.x == 0.0 && v.y == 0.0 {
-        return [if v.z > 0.0 { -90.0 } else { 90.0 }, 0.0, 0.0];
-    }
-    let yaw = v.y.atan2(v.x).to_degrees();
-    let pitch = -v.z.atan2(v.x.hypot(v.y)).to_degrees();
-    [pitch, yaw, 0.0]
-}
-
-/// `AngleVectors`: forward, right, up.
-fn angle_vectors(a: [f32; 3]) -> [Vec3; 3] {
-    let (sy, cy) = a[1].to_radians().sin_cos();
-    let (sp, cp) = a[0].to_radians().sin_cos();
-    let (sr, cr) = a[2].to_radians().sin_cos();
-    [
-        Vec3::new(cp * cy, cp * sy, -sp),
-        Vec3::new(-sr * sp * cy + cr * sy, -sr * sp * sy - cr * cy, -sr * cp),
-        Vec3::new(cr * sp * cy + sr * sy, cr * sp * sy - sr * cy, cr * cp),
-    ]
-}
-
 impl ClientBullets {
     /// The round `round.entity` fires from `round.tag`, posed at `pose`
     /// this frame (`frame` names the frame), `None` when it is the entity's second this
@@ -152,15 +132,15 @@ impl ClientBullets {
         let altfire = tag.eq_ignore_ascii_case(TAG_ALTFIRE);
         let axis = match view.filter(|_| altfire) {
             Some(v) => {
-                let [fwd, _, _] = angle_vectors(v.angles);
+                let [fwd, _, _] = angle_vectors(Vec3::from(v.angles));
                 let aim = trace(v.origin, v.origin + fwd * ALTFIRE_AIM_RANGE, entity);
-                let gun = to_angles(pose.axis[0]);
-                let want = to_angles((aim.endpos - start).normalize_or_zero());
+                let gun = vectoangles(pose.axis[0]);
+                let want = vectoangles((aim.endpos - start).normalize_or_zero());
                 let turn = |i: usize| {
                     let d = angle_sub(gun[i], want[i]);
                     angle_sub(gun[i], d.clamp(-ALTFIRE_TURN[i], ALTFIRE_TURN[i]))
                 };
-                angle_vectors([turn(0), turn(1), gun[2]])
+                angle_vectors(Vec3::new(turn(0), turn(1), gun[2]))
             }
             None => pose.axis,
         };

@@ -1116,7 +1116,7 @@ pub struct PsWire {
 }
 
 /// `PM_INTERMISSION`, whose view angles always go out. INFERRED.
-const PM_INTERMISSION: u32 = 5;
+use super::flags::PM_INTERMISSION;
 
 impl PsWire {
     /// `MSG_WriteDeltaPlayerstate`'s (0x813f586) choice of rows for a

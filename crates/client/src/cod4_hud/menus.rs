@@ -11,7 +11,7 @@ use vcod_cod4::scriptmenu::{ITEM_TYPE_OWNERDRAW, LayoutItem, WINDOW_VISIBLE};
 use super::assets::{Loaded, MenuAssets};
 use super::env::HudEnv;
 use super::text::text;
-use super::{Cod4Hud, image_of, quad};
+use super::{Cod4Hud, image_of, quad, text_height};
 use crate::console::shell::Shell;
 use crate::hud::HudQuad;
 use crate::hud::cod2elem::ScreenPlacement;
@@ -322,7 +322,7 @@ impl Cod4Hud {
                 }
                 let t = tr("PLATFORM_MANTLE").replace("&&1", &key(&["+gostand", "+moveup"]));
                 let tw = width(&t);
-                let th = (48.0 * it.text_scale) as i32 as f32;
+                let th = text_height(it.text_scale);
                 let tx = x - (w + tw) * 0.5;
                 Some(Hint {
                     at: [tx, th * 0.5 + y],
@@ -383,7 +383,7 @@ fn material_name(l: &Loaded, m: &str) -> String {
 fn draw_hint(l: &Loaded, it: &LayoutItem, h: &Hint, sp: &ScreenPlacement, out: &mut Vec<HudQuad>) {
     let f = l.fonts.pick(it.font, it.text_scale, sp);
     let px = it.text_scale / f.unit_scale();
-    let th = (48.0 * it.text_scale) as i32 as f32;
+    let th = text_height(it.text_scale);
     let (rx, _) = sp.axis(0, h.at[0], 0.0, it.align[0]);
     let (ry, _) = sp.axis(1, h.at[1] - th, th, it.align[1]);
     text(f, &h.text, rx, ry, px * sp.virtual_to_real[1], h.rgba, out);

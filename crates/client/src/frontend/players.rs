@@ -10,9 +10,8 @@ use vcod_common::text::clean_str;
 use vcod_common::ui_menu::{FEEDER_MUTELIST, FEEDER_PLAYER_LIST, UiItem};
 use winit::keyboard::KeyCode;
 
-use super::lists::visible_rows;
 use super::paint::{Painter, truncate_visible};
-use super::{HudQuad, SCROLLBAR_SIZE, Ui, UiEffect, listbox};
+use super::{HudQuad, Ui, UiEffect, listbox};
 use crate::console::shell::quotable;
 
 /// `UI_FeederCount` rebuilds the list at most this often (ui_mp_x86.dll
@@ -65,8 +64,7 @@ impl Ui {
     /// A click on the kick list selects the row under the cursor
     /// (`UI_FeederSelection` 0x4000cdd9 keeps the index).
     pub(super) fn player_click(&mut self, item: &UiItem) {
-        let row = ((self.cursor[1] - item.rect[1] - 1.0) / item.element_height.max(1.0)).floor();
-        let row = row.max(0.0) as usize + self.player_top;
+        let row = listbox::row_at(item, self.cursor[1], self.player_top);
         if row < self.players.len() {
             self.player_row = row;
         }
@@ -99,35 +97,20 @@ impl Ui {
     /// `Item_ListBox_Paint` for `FEEDER_PLAYER_LIST`: the cleaned names
     /// (`UI_FeederItemText` 0x4000ca50).
     pub(super) fn player_rows(&self, p: &Painter, item: &UiItem, out: &mut Vec<HudQuad>) {
-        let [x, y0, w, _] = item.rect;
-        let (x, mut y) = (x + 1.0, y0 + 1.0);
-        let eh = item.element_height.max(1.0);
         let col = item.columns.first().copied();
-        for (row, name) in self
-            .players
-            .iter()
-            .enumerate()
-            .skip(self.player_top)
-            .take(visible_rows(item))
-        {
-            let text = truncate_visible(name, col.map_or(0, |c| c.max_chars));
-            p.text(
-                &text,
-                x + 4.0 + col.map_or(0.0, |c| c.pos) + item.text_align_x,
-                y + eh + item.text_align_y,
-                item.text_scale,
-                item.fore,
-                out,
-            );
-            if row == self.player_row {
-                p.fill(
-                    [x, y, w - SCROLLBAR_SIZE - 4.0, eh - 1.0],
-                    item.outline_color,
-                    out,
-                );
-            }
-            y += eh;
-        }
+        let selected = |i| i == self.player_row;
+        listbox::paint_rows(
+            p,
+            item,
+            self.players.len(),
+            self.player_top,
+            selected,
+            |i, row, out| {
+                let text = truncate_visible(&self.players[i], col.map_or(0, |c| c.max_chars));
+                row.text(p, item, &text, col.map_or(0.0, |c| c.pos), out);
+            },
+            out,
+        );
     }
 
     /// `Item_ListBox_Paint` for CoD2's `FEEDER_MUTELIST`: column 0
@@ -140,44 +123,32 @@ impl Ui {
         loc: &Localized,
         out: &mut Vec<HudQuad>,
     ) {
-        let [x, y0, w, _] = item.rect;
-        let (x, mut y) = (x + 1.0, y0 + 1.0);
-        let eh = item.element_height.max(1.0);
         let muted = loc.message("MP_MUTED");
-        for (row, name) in self
-            .players
-            .iter()
-            .enumerate()
-            .skip(self.player_top)
-            .take(visible_rows(item))
-        {
-            let client = self.player_clients.get(row).copied().unwrap_or(u32::MAX);
-            let on = client < 64 && self.muted >> client & 1 != 0;
-            let cells = [if on { muted.as_str() } else { "" }, name.as_str()];
-            for (k, cell) in cells.iter().enumerate() {
-                let col = item.columns.get(k).copied();
-                let text = truncate_visible(cell, col.map_or(0, |c| c.max_chars));
-                if text.is_empty() {
-                    continue;
+        let selected = |i| i == self.player_row;
+        listbox::paint_rows(
+            p,
+            item,
+            self.players.len(),
+            self.player_top,
+            selected,
+            |i, row, out| {
+                let client = self.player_clients.get(i).copied().unwrap_or(u32::MAX);
+                let on = client < 64 && self.muted >> client & 1 != 0;
+                let cells = [
+                    if on { muted.as_str() } else { "" },
+                    self.players[i].as_str(),
+                ];
+                for (k, cell) in cells.iter().enumerate() {
+                    let col = item.columns.get(k).copied();
+                    let text = truncate_visible(cell, col.map_or(0, |c| c.max_chars));
+                    if text.is_empty() {
+                        continue;
+                    }
+                    row.text(p, item, &text, col.map_or(0.0, |c| c.pos), out);
                 }
-                p.text(
-                    &text,
-                    x + 4.0 + col.map_or(0.0, |c| c.pos) + item.text_align_x,
-                    y + eh + item.text_align_y,
-                    item.text_scale,
-                    item.fore,
-                    out,
-                );
-            }
-            if row == self.player_row {
-                p.fill(
-                    [x, y, w - SCROLLBAR_SIZE - 4.0, eh - 1.0],
-                    item.outline_color,
-                    out,
-                );
-            }
-            y += eh;
-        }
+            },
+            out,
+        );
     }
 
     /// The mute list's selected client, for a test.

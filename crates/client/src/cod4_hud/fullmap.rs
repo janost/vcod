@@ -97,7 +97,7 @@ impl Cod4Hud {
                 let f = l.fonts.pick(it.font, it.text_scale, sp);
                 let px = it.text_scale / f.unit_scale();
                 let tw = font::measure(f, &t, px);
-                let fh = (48.0 * it.text_scale) as i32 as f32;
+                let fh = text_height(it.text_scale);
                 let [x, y, w, hh] = it.rect;
                 let tx = match it.text_align {
                     1 => x + 0.5 * w - 0.5 * tw,
@@ -267,7 +267,7 @@ impl Cod4Hud {
                     snap.clients
                         .iter()
                         .find(|c| c.0[0] == n)
-                        .map_or(0, |c| client_word(c, "team"))
+                        .map_or(0, |c| client_u32(c, "team"))
                 };
                 let mine = team(me);
                 if !matches!(mine, 1 | 2) {
@@ -326,17 +326,12 @@ impl Cod4Hud {
                 };
                 for ([px, py, pw, ph], st) in border_pieces(r) {
                     let [qx, qy, qw, qh] = place(px, py, pw, ph);
-                    out.push(HudQuad {
-                        verts: [[qx, qy], [qx + qw, qy], [qx + qw, qy + qh], [qx, qy + qh]],
-                        uvs: [
-                            [st[0], st[1]],
-                            [st[2], st[1]],
-                            [st[2], st[3]],
-                            [st[0], st[3]],
-                        ],
-                        rgba: it.fore_color,
-                        texture: tex.clone(),
-                    });
+                    out.push(HudQuad::rect_uv(
+                        [qx, qy, qw, qh],
+                        st,
+                        it.fore_color,
+                        tex.clone(),
+                    ));
                 }
             }
             _ => {}
@@ -418,7 +413,7 @@ fn turned([x, y, w, h]: [f32; 4], angle: f32, rgba: [f32; 4], texture: String) -
             corner(1.0, 1.0),
             corner(-1.0, 1.0),
         ],
-        uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        uvs: HudQuad::UNIT_UVS,
         rgba,
         texture,
     }

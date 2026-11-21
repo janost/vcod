@@ -431,9 +431,7 @@ impl Ui {
             return;
         }
         if item.kind == ITEM_TYPE_LISTBOX && item.feeder == Some(FEEDER_MODS) {
-            let row = ((self.cursor[1] - item.rect[1] - 1.0) / item.element_height.max(1.0)).floor()
-                as usize
-                + self.mod_top;
+            let row = listbox::row_at(&item, self.cursor[1], self.mod_top);
             if row < self.mods.len() {
                 let double = self
                     .last_mod_click
@@ -474,9 +472,7 @@ impl Ui {
             return;
         }
         if item.kind == ITEM_TYPE_LISTBOX && item.feeder == Some(FEEDER_SERVERS) {
-            let row = ((self.cursor[1] - item.rect[1] - 1.0) / item.element_height.max(1.0)).floor()
-                as usize
-                + self.list_top;
+            let row = listbox::row_at(&item, self.cursor[1], self.list_top);
             let rows = self.browser.rows();
             let Some(addr) = rows.get(row).map(|s| s.addr) else {
                 return;

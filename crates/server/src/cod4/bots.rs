@@ -964,7 +964,8 @@ mod tests {
         for _ in 0..10 {
             let level = sv.game.level.as_mut().unwrap();
             let ps = level.pm_state(taker).unwrap();
-            let short = |a: f32, d: f32| ((a - d) * 65536.0 / 360.0) as i32 as u16;
+            let short =
+                |a: f32, d: f32| (cod4::cmd_angle(f64::from(a) - f64::from(d)) & 0xffff) as u16;
             let cmd = vcod_cod4::net::clmsg::UserCmd {
                 server_time: level.level_time() + 50,
                 buttons: 0x8,

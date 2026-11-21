@@ -20,11 +20,9 @@
 //! held primaries, the server's `a <n>` picks one and `C <n>` the equipped
 //! offhand.
 
-use std::collections::HashSet;
-
 use vcod_cod4::pmove::button;
 
-use super::input::{Action, StancePress, held_stance, stance_press};
+use super::input::{Action, KeyState, StanceBits};
 use crate::console::shell::Effect;
 
 /// `+speed_throw`'s throw bit (`KEY_THROW`, kb 26).
@@ -57,19 +55,9 @@ pub use super::input::Stance;
 
 #[derive(Default)]
 pub struct Cod4Input {
-    down: HashSet<Action>,
-    pub stance: Stance,
-    /// `cl->usingAds`.
-    ads_toggle: bool,
-    /// The held `+gostand` / `+moveup` keys that pressed the jump (kb 10)
-    /// rather than moving the stance.
-    jump_by: HashSet<Action>,
-    /// `cg_weaponSelect`.
-    selected: u8,
-    /// The equipped offhand.
-    offhand: u8,
-    /// The spawn count (`stats[4]`) the selection was last reset for.
-    spawn: Option<(u32, i32)>,
+    /// The held keys, `cl->stance`, `cl->usingAds`, `cg_weaponSelect`
+    /// and the equipped offhand, reset per `(clientNum, stats[4])`.
+    pub keys: KeyState<(u32, i32)>,
     /// The clock of the last `+actionslot` that did something
     /// (`iw3mp.exe` 0x84ca90).
     last_action_slot: Option<i32>,
@@ -123,46 +111,26 @@ impl Cod4Input {
     /// Whether `action`'s key is down (`+talk` for voice chat,
     /// `IN_IsTalkKeyHeld`).
     pub fn held(&self, action: Action) -> bool {
-        self.down.contains(&action)
+        self.keys.held(action)
     }
 
-    /// A `+button` bind's edge.
+    /// A `+button` bind's edge. A fresh `+gostand` or `+moveup` steps the
+    /// stance (`IN_GoStandDown`, `IN_UpDown`, `iw3mp.exe` 0x462f40,
+    /// 0x4628a0, gated on the held `+prone` kb byte 0x8f1708 and
+    /// `+movedown` 0x8f1604).
     pub fn key(&mut self, action: Action, pressed: bool) {
-        let was = self.down.contains(&action);
-        if pressed {
-            self.down.insert(action);
-        } else {
-            self.down.remove(&action);
-        }
+        let was = self.keys.key(action, pressed);
         // `IN_ToggleADS_Throw_Down`: the press flips the sight toggle.
         if action == Action::ToggleAdsThrow && pressed && !was {
-            self.ads_toggle = !self.ads_toggle;
-        }
-        if !pressed {
-            self.jump_by.remove(&action);
-        } else if !was && matches!(action, Action::Jump | Action::MoveUp) {
-            self.stance_press(action);
-        }
-    }
-
-    /// `IN_GoStandDown`, `IN_UpDown` and the stance one-shots (`iw3mp.exe`
-    /// 0x462f40, 0x4628a0, 0x462e20..0x462f20), each gated on the held
-    /// `+prone` (kb byte 0x8f1708) and `+movedown` (0x8f1604).
-    fn stance_press(&mut self, action: Action) {
-        match stance_press(action, self.stance, held_stance(&self.down).is_some()) {
-            StancePress::Set(s) => self.stance = s,
-            StancePress::Jump => {
-                self.jump_by.insert(action);
-            }
-            StancePress::Nothing => {}
+            self.keys.ads_toggle = !self.keys.ads_toggle;
         }
     }
 
     /// `CL_SetStance` (0x462870), what a forced-stance event calls: the
     /// stance, unless `+prone` or `+movedown` is held.
     pub fn set_stance(&mut self, stance: Stance) {
-        if held_stance(&self.down).is_none() {
-            self.stance = stance;
+        if self.keys.held_stance().is_none() {
+            self.keys.stance = stance;
         }
     }
 
@@ -173,15 +141,8 @@ impl Cod4Input {
     pub fn effect(&mut self, effect: &Effect, primaries: &[u8]) -> bool {
         match effect {
             Effect::Button(action, down) => self.key(*action, *down),
+            Effect::Impulse(action) if self.keys.stance_or_sight(*action) => {}
             Effect::Impulse(action) => match action {
-                Action::Crouch
-                | Action::Prone
-                | Action::ToggleCrouch
-                | Action::ToggleProne
-                | Action::LowerStance
-                | Action::RaiseStance => self.stance_press(*action),
-                Action::ToggleAds => self.ads_toggle = !self.ads_toggle,
-                Action::LeaveAds => self.ads_toggle = false,
                 Action::NextWeapon | Action::PrevWeapon => {
                     self.cycle(primaries, *action == Action::NextWeapon)
                 }
@@ -199,16 +160,12 @@ impl Cod4Input {
 
     /// Lets go of every held key; the stance and the selection stay.
     pub fn release_all(&mut self) {
-        self.down.clear();
-        self.jump_by.clear();
+        self.keys.release_all();
     }
 
     /// `CG_SelectWeaponIndex`: another weapon drops the sight toggle.
     pub fn select(&mut self, w: u8) {
-        if w != self.selected {
-            self.selected = w;
-            self.ads_toggle = false;
-        }
+        self.keys.select(w);
     }
 
     /// `+actionslot` (`iw3mp.exe` 0x457960, client-view doc 9) on a slot
@@ -227,7 +184,7 @@ impl Cod4Input {
         }
         // vcod's stand-in for the select's own bookkeeping (0x458f7d): the
         // selection's primary, its own or an alt mode's.
-        if let Some(&p) = [self.selected, alt_of(self.selected)]
+        if let Some(&p) = [self.keys.selected, alt_of(self.keys.selected)]
             .iter()
             .find(|p| primaries.contains(p))
         {
@@ -270,7 +227,7 @@ impl Cod4Input {
     /// primary, else the next primary.
     fn weapon_slot(&mut self, s: &SlotState, primaries: &[u8]) -> bool {
         let w = s.param as u8;
-        if w != self.selected {
+        if w != self.keys.selected {
             let usable = holds(s.held, w) && s.weapon != w;
             if usable {
                 self.select(w);
@@ -283,7 +240,7 @@ impl Cod4Input {
             return true;
         }
         self.cycle(primaries, true);
-        self.selected != w
+        self.keys.selected != w
     }
 
     /// An `altMode` slot (0x4578b0): not while the weapon raises, drops or
@@ -301,7 +258,7 @@ impl Cod4Input {
         }
         let after = primaries
             .iter()
-            .position(|&p| p == self.selected)
+            .position(|&p| p == self.keys.selected)
             .map_or(0, |i| i + 1);
         let next_alt = || {
             primaries
@@ -312,7 +269,7 @@ impl Cod4Input {
                 .map(|&p| alt_of(p))
                 .find(|&a| a != 0)
         };
-        let Some(alt) = Some(alt_of(self.selected))
+        let Some(alt) = Some(alt_of(self.keys.selected))
             .filter(|&a| a != 0)
             .or_else(next_alt)
         else {
@@ -329,21 +286,12 @@ impl Cod4Input {
 
     /// The server's `C <n>`: the equipped offhand.
     pub fn set_offhand(&mut self, w: u8) {
-        self.offhand = w;
+        self.keys.offhand = w;
     }
 
     /// `CG_NextWeapon_f` / `CG_PrevWeapon_f` over `primaries`.
     fn cycle(&mut self, primaries: &[u8], forward: bool) {
-        let n = primaries.len();
-        if n == 0 {
-            return;
-        }
-        let next = match primaries.iter().position(|&w| w == self.selected) {
-            Some(i) if forward => (i + 1) % n,
-            Some(i) => (i + n - 1) % n,
-            None => 0,
-        };
-        self.select(primaries[next]);
+        self.keys.cycle(primaries, forward);
     }
 
     /// Takes the newest playerstate (`clientNum`, the spawn count
@@ -351,20 +299,14 @@ impl Cod4Input {
     /// spawn sets the selection to the spawn weapon and stands up, and a
     /// selection the playerstate no longer holds falls back to its weapon.
     pub fn sync(&mut self, client: u32, spawns: i32, weapon: u8, offhand: u8, held: [u32; 4]) {
-        let spawn = (client, spawns);
-        if self.spawn.replace(spawn) != Some(spawn) {
-            self.selected = weapon;
-            self.offhand = offhand;
-            self.stance = Stance::Stand;
-            self.ads_toggle = false;
-        } else if !holds(held, self.selected) && weapon != 0 {
-            self.selected = weapon;
-        }
+        let holds_selected = holds(held, self.keys.selected);
+        self.keys
+            .respawn((client, spawns), weapon, offhand, holds_selected);
     }
 
     /// The cmd's `weapon` and `offHandIndex`.
     pub fn weapons(&self) -> (u8, u8) {
-        (self.selected, self.offhand)
+        self.keys.weapons()
     }
 
     /// The cmd's buttons for a body of `pm_type` (spectators jump on a
@@ -374,35 +316,23 @@ impl Cod4Input {
         if talking {
             return button::TALK;
         }
-        let mut b = 0;
-        for (a, bits) in HELD {
-            if self.down.contains(&a) {
-                b |= bits;
-            }
-        }
+        let mut b = self.keys.held_bits(&HELD);
         // `CL_KeyMove` (0x4631b0): a held `+prone`, then `+movedown`, with
-        // 0x1000, else `cl->stance`.
-        let key_stance = held_stance(&self.down);
-        if key_stance.is_some() {
-            b |= button::STANCE_HELD;
-        }
-        b |= match key_stance.unwrap_or(self.stance) {
-            Stance::Crouch => button::CROUCH,
-            Stance::Prone => button::PRONE,
-            Stance::Stand => 0,
-        };
-        // `CL_CmdButtons`: kb 12, which `+gostand` and `+moveup` hold, held
-        // by a noclip, UFO or spectator body.
-        let up = self.down.contains(&Action::Jump) || self.down.contains(&Action::MoveUp);
-        if !self.jump_by.is_empty() || (up && (2..=4).contains(&pm_type)) {
-            b |= button::JUMP;
-        }
-        if self.ads_toggle != self.down.contains(&Action::Ads) {
-            b |= button::ADS_MODE;
-        }
-        let sprint =
-            self.down.contains(&Action::Sprint) || self.down.contains(&Action::BreathSprint);
-        if sprint && !self.down.contains(&Action::Back) {
+        // 0x1000, else `cl->stance`. `CL_CmdButtons`: kb 12, which
+        // `+gostand` and `+moveup` hold, held by a noclip, UFO or
+        // spectator body.
+        b |= self.keys.stance_and_jump_bits(
+            pm_type,
+            &StanceBits {
+                held: button::STANCE_HELD,
+                crouch: button::CROUCH,
+                prone: button::PRONE,
+                jump: button::JUMP,
+                ads: button::ADS_MODE,
+            },
+        );
+        let sprint = self.keys.held(Action::Sprint) || self.keys.held(Action::BreathSprint);
+        if sprint && !self.keys.held(Action::Back) {
             b |= button::SPRINT;
         }
         b
@@ -414,14 +344,7 @@ impl Cod4Input {
         if talking {
             return [0; 2];
         }
-        let axis = |plus: Action, minus: Action| {
-            let (p, m) = (self.down.contains(&plus), self.down.contains(&minus));
-            127 * i8::from(p) - 127 * i8::from(m)
-        };
-        [
-            axis(Action::Forward, Action::Back),
-            axis(Action::Right, Action::Left),
-        ]
+        self.keys.move_axes()
     }
 }
 

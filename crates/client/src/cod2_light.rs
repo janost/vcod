@@ -130,15 +130,7 @@ impl Cod2Lighting {
         props: &mut Props,
         map: impl FnOnce(&[usize], &(dyn Fn(&usize) -> GridSample + Sync)) -> Vec<GridSample>,
     ) -> Option<SmodelCache> {
-        let blocks: Vec<_> = vcod_common::bsp::entity_blocks(entities)
-            .into_iter()
-            .filter(|b| b.get("classname").map(String::as_str) == Some("misc_model"))
-            // the placements `props::placements` lists, in its order
-            .filter(|b| {
-                b.get("model")
-                    .is_some_and(|m| m.replace('\\', "/").starts_with("xmodel/"))
-            })
-            .collect();
+        let placements = vcod_common::props::placements(entities);
         let needs =
             |i: usize| props.vert_lit[i] || props.vert_smodel.get(i).copied().unwrap_or(false);
         let mut wanted = vec![false; props.bounds.len()];
@@ -149,7 +141,7 @@ impl Cod2Lighting {
         // The xmodel flag matters only under `gndLt`: read once per model
         // that some such placement names.
         let mut ground_models = std::collections::HashMap::new();
-        for b in todo.iter().filter_map(|&pi| blocks.get(pi)) {
+        for b in todo.iter().map(|&pi| &placements[pi].keys) {
             if StaticModelKeys::of(b).ground.is_some()
                 && let Some(m) = b.get("model")
             {
@@ -159,17 +151,11 @@ impl Cod2Lighting {
             }
         }
         let sample = |&pi: &usize| {
-            let block = blocks.get(pi);
-            let keys = block.map_or(
-                StaticModelKeys {
-                    ground: None,
-                    direct: 1.0,
-                    indirect: 1.0,
-                },
-                StaticModelKeys::of,
-            );
+            let block = &placements[pi].keys;
+            let keys = StaticModelKeys::of(block);
             let ground_lit = block
-                .and_then(|b| ground_models.get(b.get("model")?.as_str()))
+                .get("model")
+                .and_then(|m| ground_models.get(m.as_str()))
                 .is_some_and(|&g| g);
             let (lo, hi) = props.bounds[pi];
             let blocked =

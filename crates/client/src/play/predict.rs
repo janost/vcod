@@ -17,11 +17,12 @@ use vcod_common::pmove::movers::SnapshotMovers;
 use vcod_common::pmove::predict::{self, Predicted};
 use vcod_common::weapon::WeaponDef;
 
-/// `cg_errordecay`: how long a correction takes to ease out.
-const ERROR_DECAY_MS: f64 = 100.0;
+/// `cg_errordecay`: how long a correction takes to ease out, the default
+/// in all three games (CoD2: `Dvar_RegisterFloat("cg_errordecay", 100.0`).
+pub const ERROR_DECAY_MS: f64 = 100.0;
 /// A correction no longer than this is not eased (`CG_PredictPlayerState`'s
-/// 0.1 at cgame 0x3006953c).
-const MISS_EPSILON: f32 = 0.1;
+/// 0.1 at cgame 0x3006953c; CoD2's at Mac 0x326388).
+pub const MISS_EPSILON: f32 = 0.1;
 /// A correction longer than this is drawn at once.
 const SNAP_DISTANCE: f32 = 256.0;
 use vcod_common::net::flags::EF_CAPSULE;
@@ -470,6 +471,73 @@ impl Predictor {
     /// The share of the error still drawn at `now_ms`, 1 down to 0.
     fn decay(&self, now_ms: f64) -> f32 {
         ((ERROR_DECAY_MS - (now_ms - self.error_ms)) / ERROR_DECAY_MS).clamp(0.0, 1.0) as f32
+    }
+}
+
+/// CoD2's and CoD4's prediction error (`cg.predictedError`), eased out
+/// over [`ERROR_DECAY_MS`] from `cg.predictedErrorTime`
+/// (cod4-client-view.md 5.1). CoD1's predictor clamps its decay to 0..=1
+/// and snaps past [`SNAP_DISTANCE`] instead.
+#[derive(Default)]
+pub struct Correction {
+    pub error: Vec3,
+    /// Local ms the error eases from.
+    pub error_ms: f64,
+}
+
+impl Correction {
+    /// Last frame's prediction moved by `delta` at this frame's
+    /// `now_ms`: past [`MISS_EPSILON`] what is still drawn of the error
+    /// takes it on and eases from `cg.oldTime` (`old_ms`), so the frame
+    /// that finds it already draws part of it. True for a miss.
+    pub fn note(&mut self, delta: Vec3, now_ms: f64, old_ms: Option<f64>) -> bool {
+        let missed = delta.length() > MISS_EPSILON;
+        if missed {
+            self.error = self.error * self.decay(now_ms) + delta;
+            self.error_ms = old_ms.unwrap_or(now_ms);
+        }
+        missed
+    }
+
+    /// The error still drawn at `now_ms`.
+    pub fn drawn(&self, now_ms: f64) -> Vec3 {
+        self.error * self.decay(now_ms)
+    }
+
+    /// `(cg_errordecay - (cg.time - predictedErrorTime)) / cg_errordecay`,
+    /// 0 outside (0, 1) as `CG_CalcViewValues` drops it.
+    fn decay(&self, now_ms: f64) -> f32 {
+        let f = (ERROR_DECAY_MS - (now_ms - self.error_ms)) / ERROR_DECAY_MS;
+        if f > 0.0 && f < 1.0 { f as f32 } else { 0.0 }
+    }
+}
+
+/// `oldVelocity` after each replayed cmd, by cmd time, oldest first: the
+/// next replay starts from the one at the snapshot's `commandTime`.
+#[derive(Default)]
+pub struct OldVelocity(std::collections::VecDeque<(i32, [f32; 2])>);
+
+impl OldVelocity {
+    /// The one stored at cmd time `t`.
+    pub fn at(&self, t: i32) -> Option<[f32; 2]> {
+        self.0.iter().find(|(at, _)| *at == t).map(|&(_, v)| v)
+    }
+
+    /// Drops those before cmd time `t`.
+    pub fn keep_from(&mut self, t: i32) {
+        self.0.retain(|(at, _)| *at >= t);
+    }
+
+    /// Stores `v` for cmd time `t`, over one already there.
+    pub fn store(&mut self, t: i32, v: [f32; 2]) {
+        match self.0.iter_mut().find(|(at, _)| *at == t) {
+            Some(slot) => slot.1 = v,
+            None => self.0.push_back((t, v)),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
     }
 }
 

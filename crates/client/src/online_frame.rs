@@ -132,7 +132,6 @@ impl App {
                 }
                 loading_frame(
                     r,
-                    &self.fs,
                     &self.localized,
                     &mut self.hud,
                     time,
@@ -216,6 +215,7 @@ impl App {
                                     predictor,
                                     self.hud.as_mut(),
                                     &mut self.fx,
+                                    &mut self.flame,
                                 );
                                 if let Err(e) = cgame_init(
                                     view,
@@ -247,7 +247,6 @@ impl App {
                 }
                 loading_frame(
                     r,
-                    &self.fs,
                     &self.localized,
                     &mut self.hud,
                     time,
@@ -284,7 +283,6 @@ impl App {
                     };
                     loading_frame(
                         r,
-                        &self.fs,
                         &self.localized,
                         &mut self.hud,
                         time,

@@ -439,13 +439,11 @@ fn emitter(
     d: &ElemDef,
     e: &vcod_cod4::assets::fx::FxElem,
 ) -> crate::fx::efx::Emitter {
-    let fs = vcod_common::pk3::Pk3Fs::empty();
-    let materials = p.materials.clone();
     let range_i = |(base, amp): (i32, i32)| crate::fx::efx::R1 {
         a: base as f32,
         b: (base + amp) as f32,
     };
-    let mut em = crate::fx::cod2::to_emitter(p, &fs);
+    let mut em = crate::fx::cod2::to_emitter(p, &|_| grid);
     if d.elem_type == Some(ElemType::Trail)
         && let Some(t) = &e.trail
     {
@@ -469,16 +467,6 @@ fn emitter(
     em.impact_fx = em.impact_fx.iter().map(|n| key(n)).collect();
     em.death_fx = em.death_fx.iter().map(|n| key(n)).collect();
     em.emit_fx = em.emit_fx.iter().map(|n| key(n)).collect();
-    if let Some(el) = em.cod2.take() {
-        let el = Arc::try_unwrap(el).unwrap_or_else(|a| crate::fx::cod2::Element {
-            prim: a.prim.clone(),
-            atlas: a.atlas.clone(),
-        });
-        em.cod2 = Some(Arc::new(crate::fx::cod2::Element {
-            prim: el.prim,
-            atlas: materials.into_iter().map(|m| (m, grid)).collect(),
-        }));
-    }
     em
 }
 

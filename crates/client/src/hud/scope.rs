@@ -144,22 +144,6 @@ pub fn gun_point(gun: [f32; 3], (fov_x, fov_y): (f32, f32), (w, h): (f32, f32)) 
     ]
 }
 
-/// Window-pixel rect with retail's `DrawStretchPic` texture corners: `(s0,
-/// t0)` at the top left, `(s1, t1)` at the bottom right.
-fn rect(
-    (x, y, w, h): (f32, f32, f32, f32),
-    [s0, t0, s1, t1]: [f32; 4],
-    rgba: [f32; 4],
-    texture: &str,
-) -> HudQuad {
-    HudQuad {
-        verts: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
-        uvs: [[s0, t0], [s1, t0], [s1, t1], [s0, t1]],
-        rgba,
-        texture: texture.to_string(),
-    }
-}
-
 /// How the cgame lays out `adsOverlayShader` (cod11-hud-protocol.md,
 /// "Scope overlay"): 1.1's and 1.5's mirror a quarter image four times
 /// about the centre, UO's draws its whole scope image once.
@@ -200,19 +184,34 @@ pub fn build(
     let h = def.ads_overlay_height * scale;
 
     if let Some(shader) = &def.ads_overlay_shader {
-        // The image's box, (left, top, width, height).
-        let (left, top, bw, bh) = match layout {
+        // The image's box, [left, top, width, height].
+        let [left, top, bw, bh] = match layout {
             Layout::Quarters => {
                 let (left, top) = (cx - w, cy - h);
-                out.push(rect((left, top, w, h), FULL, WHITE, shader));
-                out.push(rect((cx, top, w, h), [1.0, 0.0, 0.0, 1.0], WHITE, shader));
-                out.push(rect((left, cy, w, h), [0.0, 1.0, 1.0, 0.0], WHITE, shader));
-                out.push(rect((cx, cy, w, h), [1.0, 1.0, 0.0, 0.0], WHITE, shader));
-                (left, top, 2.0 * w, 2.0 * h)
+                out.push(HudQuad::rect_uv([left, top, w, h], FULL, WHITE, shader));
+                out.push(HudQuad::rect_uv(
+                    [cx, top, w, h],
+                    [1.0, 0.0, 0.0, 1.0],
+                    WHITE,
+                    shader,
+                ));
+                out.push(HudQuad::rect_uv(
+                    [left, cy, w, h],
+                    [0.0, 1.0, 1.0, 0.0],
+                    WHITE,
+                    shader,
+                ));
+                out.push(HudQuad::rect_uv(
+                    [cx, cy, w, h],
+                    [1.0, 1.0, 0.0, 0.0],
+                    WHITE,
+                    shader,
+                ));
+                [left, top, 2.0 * w, 2.0 * h]
             }
             Layout::Whole => {
-                let at = (cx - w / 2.0, cy - h / 2.0, w, h);
-                out.push(rect(at, FULL, WHITE, shader));
+                let at = [cx - w / 2.0, cy - h / 2.0, w, h];
+                out.push(HudQuad::rect_uv(at, FULL, WHITE, shader));
                 at
             }
         };
@@ -221,18 +220,33 @@ pub fn build(
         let column = [0.0, 0.0, 0.0, 1.0];
         let row = [0.0, 0.0, 1.0, 0.0];
         if left > 0.0 {
-            out.push(rect((0.0, 0.0, left, sh), column, WHITE, shader));
+            out.push(HudQuad::rect_uv(
+                [0.0, 0.0, left, sh],
+                column,
+                WHITE,
+                shader,
+            ));
         }
         let right = left + bw;
         if right < sw {
-            out.push(rect((right, 0.0, sw - right, sh), column, WHITE, shader));
+            out.push(HudQuad::rect_uv(
+                [right, 0.0, sw - right, sh],
+                column,
+                WHITE,
+                shader,
+            ));
         }
         if top > 0.0 {
-            out.push(rect((left, 0.0, bw, top), row, WHITE, shader));
+            out.push(HudQuad::rect_uv([left, 0.0, bw, top], row, WHITE, shader));
         }
         let bottom = top + bh;
         if bottom < sh {
-            out.push(rect((left, bottom, bw, sh - bottom), row, WHITE, shader));
+            out.push(HudQuad::rect_uv(
+                [left, bottom, bw, sh - bottom],
+                row,
+                WHITE,
+                shader,
+            ));
         }
     }
 
@@ -245,35 +259,40 @@ pub fn build(
         OverlayReticle::Crosshair => {
             if let Some(center) = &def.reticle_center {
                 let s = def.reticle_center_size * scale;
-                let at = (cx - s / 2.0, cy - s / 2.0, s, s);
-                out.push(rect(at, FULL, WHITE, center));
+                let at = [cx - s / 2.0, cy - s / 2.0, s, s];
+                out.push(HudQuad::rect_uv(at, FULL, WHITE, center));
             }
         }
         OverlayReticle::Fg42 | OverlayReticle::Gewehr43 => {
-            out.push(rect((cx - 1.0, cy, 3.0, h * 0.9), FULL, BLACK, vline));
+            out.push(HudQuad::rect_uv(
+                [cx - 1.0, cy, 3.0, h * 0.9],
+                FULL,
+                BLACK,
+                vline,
+            ));
             let bar = (w * 0.75, 3.0);
-            out.push(rect(
-                (cx - w * 0.9, cy - 1.0, bar.0, bar.1),
+            out.push(HudQuad::rect_uv(
+                [cx - w * 0.9, cy - 1.0, bar.0, bar.1],
                 FULL,
                 BLACK,
                 hline,
             ));
-            out.push(rect(
-                (cx + w * 0.15, cy - 1.0, bar.0, bar.1),
+            out.push(HudQuad::rect_uv(
+                [cx + w * 0.15, cy - 1.0, bar.0, bar.1],
                 FULL,
                 BLACK,
                 hline,
             ));
         }
         OverlayReticle::Springfield => {
-            out.push(rect(
-                (cx - 1.0, cy - h * 0.9, 3.0, h * 1.8),
+            out.push(HudQuad::rect_uv(
+                [cx - 1.0, cy - h * 0.9, 3.0, h * 1.8],
                 FULL,
                 BLACK,
                 vline,
             ));
-            out.push(rect(
-                (cx - w * 0.9, cy - 1.0, w * 1.8, 3.0),
+            out.push(HudQuad::rect_uv(
+                [cx - w * 0.9, cy - 1.0, w * 1.8, 3.0],
                 FULL,
                 BLACK,
                 hline,

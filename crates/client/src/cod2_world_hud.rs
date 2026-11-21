@@ -15,14 +15,21 @@ use vcod_cod2::net::fields::CLIENT_STATE_FIELDS;
 
 use crate::hud::HudQuad;
 
-/// `ET_PLAYER`.
-const ET_PLAYER: i32 = 1;
+use vcod_cod2::net::events::ET_PLAYER;
+use vcod_cod2::net::flags::TEAM_SPECTATOR;
+// Netfield indices the draw reads, resolved at compile time.
+const ES_I_HEAD_ICON: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "iHeadIcon");
+const ES_I_HEAD_ICON_TEAM: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "iHeadIconTeam");
+const PS_DELTA_TIME: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "deltaTime");
+
 /// `he_type_t` 13, what `HECmd_SetWaypoint` (lnxded 0x81044c0) writes.
 const HE_TYPE_WAYPOINT: i32 = 13;
 /// The head icon block: an entity's `iHeadIcon` n is configstring
 /// `0x1e + n` (`CG_PlayerSprites`, Mac 0x1e662c).
 const CS_HEAD_ICONS: usize = 0x1e;
-const TEAM_SPECTATOR: i32 = 3;
 /// `eFlags` 0x80: the client's connection is interrupted.
 const EF_DISCONNECTED: i32 = 0x80;
 /// `eFlags` 0x200000: the client is typing.
@@ -108,7 +115,7 @@ impl WorldView {
                 screen(at + rx - uy),
                 screen(at - rx - uy),
             ],
-            uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            uvs: HudQuad::UNIT_UVS,
             rgba,
             texture: m.to_string(),
         })
@@ -191,7 +198,7 @@ fn head_icons(frame: &Frame, heads: &HashMap<u32, Vec3>, view: &WorldView, out: 
     let Some(viewer) = team_of(ps.client_num) else {
         return;
     };
-    let killcam = ps.raw.i32("deltaTime") != 0;
+    let killcam = ps.raw.i32_at(PS_DELTA_TIME) != 0;
     for e in frame.snap.entities.iter().filter(|e| e.etype == ET_PLAYER) {
         // The viewed body, seen from inside: `CG_PlayerFloatSprite` skips
         // it in the first person (`ps.pm_flags` 0xc00000 while following).
@@ -209,8 +216,8 @@ fn head_icons(frame: &Frame, heads: &HashMap<u32, Vec3>, view: &WorldView, out: 
             radius: ICON_RADIUS,
             min: MIN_SCREEN_RADIUS,
         };
-        let icon = e.raw.i32("iHeadIcon");
-        let icon_team = e.raw.i32("iHeadIconTeam");
+        let icon = e.raw.i32_at(ES_I_HEAD_ICON);
+        let icon_team = e.raw.i32_at(ES_I_HEAD_ICON_TEAM);
         let mut offset = 0.0;
         if icon != 0 && (icon_team == 0 || viewer == TEAM_SPECTATOR || viewer == icon_team) {
             let m = frame.configstrings.get(CS_HEAD_ICONS + icon as usize);

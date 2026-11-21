@@ -375,12 +375,7 @@ pub fn recording_text(name: &str, bytes: u64, show_name: bool) -> String {
 }
 
 fn rect(x: f32, y: f32, w: f32, h: f32, rgba: [f32; 4]) -> HudQuad {
-    HudQuad {
-        verts: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
-        uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-        rgba,
-        texture: "white".into(),
-    }
+    HudQuad::rect([x, y, w, h], rgba, "white")
 }
 
 /// Breaks `line` every `cols` printable characters; a row that starts

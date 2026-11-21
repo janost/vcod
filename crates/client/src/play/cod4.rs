@@ -86,9 +86,12 @@ pub const ET_MG42: u32 = 11;
 /// (cod4-client-view.md 11).
 pub const ET_HELICOPTER: u32 = 12;
 pub const ET_PLANE: u32 = 13;
+/// A vehicle: its own row of 1.7's per-eType table (`cod4_lnxded`
+/// 0x8228be0, the vehicle table at 0x8225f80, cod4-netfields.md 1). The
+/// name is INFERRED.
+pub const ET_VEHICLE: u32 = 14;
 pub const ET_EVENTS: u32 = 17;
-/// A brush model's `solid`.
-const SOLID_BMODEL: u32 = 0xff_ffff;
+use vcod_cod4::net::flags::SOLID_BMODEL;
 pub const EV_OBITUARY: u32 = 66;
 /// `EF_TELEPORT_BIT`: toggled, the entity or view starts over instead of
 /// lerping (`CG_SetNextSnap`, cod4-client-view.md 2).
@@ -150,7 +153,8 @@ fn vec3(f: impl Fn(usize) -> f32) -> Vec3 {
     Vec3::new(f(0), f(1), f(2))
 }
 
-/// An info string's value (`\key\value\...`).
+/// An info string's value (`\key\value\...`). Unlike common's
+/// `info_value_for_key` the key matches case-blind and the bytes read lossy.
 pub fn info_value(info: &[u8], key: &str) -> Option<String> {
     let s = String::from_utf8_lossy(info);
     let parts: Vec<&str> = s.split('\\').collect();

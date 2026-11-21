@@ -286,19 +286,9 @@ impl Cod2Session {
         if self.view.snap.is_none() {
             return "You must be in a level to record.".into();
         }
-        use crate::play::demos::{auto_name, demo_file};
-        // `clc.demoName` holds 63 characters.
-        let name = match name {
-            Some(n) => n.chars().take(63).collect(),
-            None => auto_name(dir, EXTENSION),
-        };
-        let qpath = format!("demos/{name}.dm_{EXTENSION}");
-        let Some(file) = demo_file(dir, &name, EXTENSION) else {
-            return "ERROR: couldn't open.".into();
-        };
-        let out = std::fs::create_dir_all(dir).and_then(|_| std::fs::File::create(file));
-        let Ok(out) = out else {
-            return "ERROR: couldn't open.".into();
+        let (name, qpath, out) = match crate::play::demos::create_recording(dir, name, EXTENSION) {
+            Ok(r) => r,
+            Err(line) => return line,
         };
         match self.client.start_recording(
             Box::new(std::io::BufWriter::new(out)),

@@ -1175,7 +1175,8 @@ pub fn list_rows(lb: &ListBox, h: f32) -> usize {
     }
 }
 
-/// `I_CleanStr`: the colour codes and the message bytes (0x14, 0x15) out.
+/// `I_CleanStr`: the colour codes and the message bytes (0x14, 0x15) out;
+/// `text::clean_str`, CoD2's, drops every non-printable.
 pub fn clean(s: &str) -> String {
     let mut out = String::new();
     let mut chars = s.chars().peekable();

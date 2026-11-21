@@ -183,7 +183,7 @@ fn run(c: Conditions, weapon: &str) -> Option<Outcome> {
     let mut now = t0;
     let mut sv = vcod_server::Server::new(common::cfg("mp_carentan", "dm"), now);
     sv.set_protocol(p);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&*fs)));
     sv.load_scripts(fs.clone()).expect("load the scripts");
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let (mut net, _) = common::join(&mut sv, &q, &mut now, "axis", weapon);
@@ -389,7 +389,7 @@ fn switch_run(weapon: &str, give: &[&str], binds: &[super::input::Action]) -> Op
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(common::cfg("mp_carentan", "dm"), now);
     sv.set_protocol(p);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&*fs)));
     sv.load_scripts(fs.clone()).expect("load the scripts");
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let (mut net, _) = common::join(&mut sv, &q, &mut now, "axis", weapon);
@@ -556,7 +556,7 @@ fn each_thrown_frag_explodes_once() {
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(common::cfg("mp_carentan", "dm"), now);
     sv.set_protocol(p);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&*fs)));
     sv.load_scripts(fs.clone()).expect("load the scripts");
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let (mut net, _) = common::join(&mut sv, &q, &mut now, "axis", "kar98k_mp");
@@ -626,7 +626,7 @@ fn a_key_catcher_lights_the_talk_flag() {
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(common::cfg("mp_carentan", "dm"), now);
     sv.set_protocol(p);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&*fs)));
     sv.load_scripts(fs.clone()).expect("load the scripts");
     let q = Rc::new(RefCell::new(common::Queues::default()));
     let (mut net, _) = common::join(&mut sv, &q, &mut now, "axis", "kar98k_mp");

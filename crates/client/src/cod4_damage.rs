@@ -32,8 +32,7 @@ pub(crate) const HIT_DIRECTION: &str = "hit_direction";
 /// `damageYaw` and `damagePitch` both 255: a hit from no direction.
 const NO_DIRECTION: (u32, u32) = (255, 255);
 
-/// `pm_type` 7, dead.
-const PM_DEAD: u32 = 7;
+use vcod_cod4::net::flags::PM_DEAD;
 
 /// A straight ease of the overlay's alpha from `from` to `to` over `ms`
 /// from `start`.
@@ -306,7 +305,7 @@ impl Cod4Damage {
             let (sin, cos) = (view_yaw - icon.yaw).to_radians().sin_cos();
             HudQuad {
                 verts: corners.map(|c| turn_on_grid(centre, c, [sin, cos], [sx, sy])),
-                uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                uvs: HudQuad::UNIT_UVS,
                 rgba: [1.0, 1.0, 1.0, fade.min(1.0)],
                 texture: texture.to_string(),
             }

@@ -25,11 +25,11 @@ const CS_HINT_STRINGS: u16 = 277;
 const HINT_NOICON: u32 = 1;
 const HINT_HEALTH: u32 = 3;
 const HINT_MATERIALS: [&str; 3] = ["hint_usable", "hint_health", "hint_friendly"];
-const FIRST_WEAPON_HINT: u32 = 5;
+pub(super) const FIRST_WEAPON_HINT: u32 = 5;
 const LAST_WEAPON_HINT: u32 = 132;
-/// `weapClass` 7, a turret; `offhandClass` 1, a frag.
-const WEAPCLASS_TURRET: i32 = 7;
+/// `offhandClass` 1, a frag.
 const OFFHAND_FRAG: i32 = 1;
+use vcod_cod4::net::flags::WEAPCLASS_TURRET;
 
 /// `cg.cursorHintTime`, `cursorHintFade`, `cursorHintIcon` and
 /// `cursorHintString`, which `CG_UpdateCursorHints` (0x443000) keeps
@@ -206,7 +206,7 @@ impl Cod4Hud {
         let subject = self.hint_subject(l, s, &snap.ps, shell)?;
         let font = l.fonts.pick(it.font, it.text_scale, sp);
         let measure = |t: &str| font::measure(font, t, it.text_scale / font.unit_scale());
-        let line = (48.0 * it.text_scale) as i32 as f32;
+        let line = text_height(it.text_scale);
         Some((lay_out_hint(subject, it.rect, line, measure)?, alpha))
     }
 

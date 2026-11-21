@@ -3,9 +3,11 @@
 use vcod_cod4::hud as h;
 
 use super::assets::Loaded;
-use super::compass::{OBJECTIVE_SIZE, angle_normalize_180};
+use super::compass::OBJECTIVE_SIZE;
 use super::text::text;
+use super::text_height;
 use super::{Cod4Hud, image_of, quad};
+use crate::hud::angle_normalize_180;
 use crate::hud::cod2elem::ScreenPlacement;
 use crate::hud::{HudQuad, font};
 use crate::play::cod4::Cod4Session;
@@ -45,19 +47,19 @@ impl Cod4Hud {
         let turn = self.north_yaw(s) - yaw;
         for (from, to, s0, s1) in ticker_spans(turn / 360.0) {
             let (qx, qw) = (x + from * w, (to - from) * w);
-            out.push(HudQuad {
-                verts: [[qx, y], [qx + qw, y], [qx + qw, y + h], [qx, y + h]],
-                uvs: [[s0, 0.0], [s1, 0.0], [s1, 1.0], [s0, 1.0]],
-                rgba: [1.0; 4],
-                texture: tex.clone(),
-            });
+            out.push(HudQuad::rect_uv(
+                [qx, y, qw, h],
+                [s0, 0.0, s1, 1.0],
+                [1.0; 4],
+                tex.clone(),
+            ));
         }
         let Some(snap) = s.client().snapshots.last() else {
             return;
         };
         let font = l.fonts.pick(0, TICKER_TEXT_SCALE, sp);
         let px = TICKER_TEXT_SCALE / font.unit_scale();
-        let text_height = (48.0 * TICKER_TEXT_SCALE) as i32 as f32;
+        let text_height = text_height(TICKER_TEXT_SCALE);
         let [tx, ty, tw, th] = tape.rect;
         for mark in self.objective_marks(s, snap) {
             if mark.at == glam::Vec3::ZERO {

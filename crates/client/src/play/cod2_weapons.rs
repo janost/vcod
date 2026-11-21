@@ -10,8 +10,9 @@ use vcod_common::asset_source::AssetSource;
 
 use crate::play::cod2_fx::WeaponFx;
 use crate::play::cod2_gun::GunKeys;
-use crate::play::cod2_recoil::KickDef;
+use crate::play::cod2_recoil::kick_def;
 use crate::play::cod2_view::SightDef;
+use crate::play::recoil::KickDef;
 
 /// One CS 7 weapon's file and the consumers' views of it.
 pub struct LevelWeapon {
@@ -25,7 +26,7 @@ impl LevelWeapon {
     fn of(def: WeaponDef) -> LevelWeapon {
         LevelWeapon {
             fx: WeaponFx::of(&def),
-            kick: KickDef::new(&def),
+            kick: kick_def(&def),
             sight: (SightDef::of(&def), GunKeys::of(&def)),
             def,
         }
