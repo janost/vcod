@@ -41,6 +41,7 @@ mod edge_probe;
 mod entities;
 mod entity_light;
 mod entity_material;
+mod fatal;
 mod flame_probe;
 mod frame_clock;
 mod frame_digest;
@@ -1452,6 +1453,10 @@ fn hud_lines(
 }
 
 fn main() -> Result<()> {
+    run().inspect_err(|e| fatal::record(TITLE, &format!("Error: {e:?}")))
+}
+
+fn run() -> Result<()> {
     let started = Instant::now();
     console::log::init();
     frame_digest::init();
@@ -1462,6 +1467,7 @@ fn main() -> Result<()> {
     std::panic::set_hook(Box::new(move |info| {
         eprintln!("{TITLE} panicked");
         default_panic(info);
+        fatal::record(TITLE, &info.to_string());
     }));
     quit::install();
     use vcod_common::game::Game;
