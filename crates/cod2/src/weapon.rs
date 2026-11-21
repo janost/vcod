@@ -515,10 +515,21 @@ impl Value {
 }
 
 /// A field's index in [`FIELDS`] by name, case-insensitive as the info
-/// string lookup is.
+/// string lookup is. The table's own spelling is found without folding.
 pub fn field_index(key: &str) -> Option<usize> {
-    static INDEX: OnceLock<HashMap<String, usize>> = OnceLock::new();
-    INDEX
+    static EXACT: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();
+    static FOLDED: OnceLock<HashMap<String, usize>> = OnceLock::new();
+    let exact = EXACT.get_or_init(|| {
+        FIELDS
+            .iter()
+            .enumerate()
+            .map(|(i, &(name, _, _))| (name, i))
+            .collect()
+    });
+    if let Some(&i) = exact.get(key) {
+        return Some(i);
+    }
+    FOLDED
         .get_or_init(|| {
             FIELDS
                 .iter()
@@ -545,27 +556,45 @@ impl WeaponDef {
         self.values.get(field_index(key)?)
     }
 
-    /// A string field; `""` unset or not a string.
+    /// The value a typed accessor reads: in a debug build a key not in
+    /// [`FIELDS`] panics, so a misspelt literal fails its first test.
+    fn typed(&self, key: &str) -> Option<&Value> {
+        let v = self.get(key);
+        debug_assert!(v.is_some(), "weapon field {key:?} is not in FIELDS");
+        v
+    }
+
+    /// A string field; `""` unset. A debug build panics on another type.
     pub fn str(&self, key: &str) -> &str {
-        match self.get(key) {
+        match self.typed(key) {
             Some(Value::Str(s)) => s,
-            _ => "",
+            v => {
+                debug_assert!(v.is_none(), "weapon field {key:?} is not a string");
+                ""
+            }
         }
     }
 
-    /// An int, ms or enum field; 0 otherwise.
+    /// An int, ms, bool or enum field; a debug build panics on another type.
     pub fn int(&self, key: &str) -> i32 {
-        match self.get(key) {
+        match self.typed(key) {
             Some(Value::Int(v) | Value::Enum(v)) => *v,
             Some(Value::Bool(b)) => i32::from(*b),
-            _ => 0,
+            v => {
+                debug_assert!(v.is_none(), "weapon field {key:?} is not an int");
+                0
+            }
         }
     }
 
+    /// A float field; a debug build panics on another type.
     pub fn float(&self, key: &str) -> f32 {
-        match self.get(key) {
+        match self.typed(key) {
             Some(Value::Float(v)) => *v,
-            _ => 0.0,
+            v => {
+                debug_assert!(v.is_none(), "weapon field {key:?} is not a float");
+                0.0
+            }
         }
     }
 
@@ -919,6 +948,19 @@ mod tests {
         for k in STALE_KEYS {
             assert!(field_index(k).is_none(), "{k}");
         }
+    }
+
+    /// A misspelt key or the wrong accessor fails in a debug build instead
+    /// of reading 0.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn a_wrong_key_or_type_panics() {
+        let def = parse("x", b"WEAPONFILE\\displayName\\X", &[]).unwrap().def;
+        assert!(std::panic::catch_unwind(|| def.float("nope")).is_err());
+        assert!(std::panic::catch_unwind(|| def.float("displayName")).is_err());
+        assert!(std::panic::catch_unwind(|| def.str("fireTime")).is_err());
+        assert_eq!(def.str("displayName"), "X");
+        assert_eq!(field_index("firetime"), field_index("fireTime"));
     }
 
     #[test]
