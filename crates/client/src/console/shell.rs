@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use vcod_common::game::Game;
 use vcod_common::localize::Localized;
 use vcod_common::net::{self, Userinfo};
-use vcod_common::text::atoi_msvc;
+use vcod_common::text::{atoi_msvc, with_ascii_lowercase};
 
 use crate::play::input::Action;
 
@@ -958,10 +958,7 @@ impl Shell {
     }
 
     pub fn cvar(&self, name: &str) -> Option<&str> {
-        let mut buf = [0; 64];
-        self.cvars
-            .get(lower_key(name, &mut buf).as_ref())
-            .map(|c| c.value.as_str())
+        with_ascii_lowercase(name, |n| self.cvars.get(n)).map(|c| c.value.as_str())
     }
 
     /// Sets a cvar for this run without touching what the config file keeps
@@ -985,7 +982,7 @@ impl Shell {
     /// `Cvar_Set2` with `force`: the value now, past a latch, any pending
     /// one dropped.
     pub fn force_set(&mut self, name: &str, value: &str) {
-        if let Some(c) = self.cvars.get_mut(&name.to_ascii_lowercase()) {
+        if let Some(c) = with_ascii_lowercase(name, |n| self.cvars.get_mut(n)) {
             c.value = value.to_string();
             c.latched = None;
         }
@@ -993,7 +990,7 @@ impl Shell {
 
     /// Sets a read-only cvar's value, which no console or config set moves.
     pub fn set_rom(&mut self, name: &str, value: &str) {
-        if let Some(c) = self.cvars.get_mut(&name.to_ascii_lowercase()) {
+        if let Some(c) = with_ascii_lowercase(name, |n| self.cvars.get_mut(n)) {
             c.value = value.to_string();
         }
     }
@@ -1106,9 +1103,7 @@ impl Shell {
 
     /// An enum dvar's entries, `None` for any other cvar.
     pub fn enum_domain(&self, name: &str) -> Option<&[String]> {
-        self.enums
-            .get(&name.to_ascii_lowercase())
-            .map(Vec::as_slice)
+        with_ascii_lowercase(name, |n| self.enums.get(n)).map(Vec::as_slice)
     }
 
     /// `Dvar_GetInt` (Mac 0x51dca): an enum dvar's index, any other's
@@ -1952,23 +1947,6 @@ pub fn split_commands(text: &str) -> Vec<String> {
     out.push(cur);
     out.retain(|l| !l.trim().is_empty());
     out
-}
-
-/// The store's key for `name`, lowercased into `buf` when it fits, so a
-/// read allocates nothing.
-fn lower_key<'a>(name: &'a str, buf: &'a mut [u8; 64]) -> std::borrow::Cow<'a, str> {
-    if !name.bytes().any(|b| b.is_ascii_uppercase()) {
-        return name.into();
-    }
-    match buf.get_mut(..name.len()) {
-        Some(b) => {
-            b.copy_from_slice(name.as_bytes());
-            b.make_ascii_lowercase();
-            // ASCII lowercasing keeps UTF-8 valid.
-            std::str::from_utf8(b).unwrap_or_default().into()
-        }
-        None => name.to_ascii_lowercase().into(),
-    }
 }
 
 #[cfg(test)]

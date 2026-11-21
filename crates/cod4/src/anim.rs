@@ -714,8 +714,7 @@ impl AssetSource for BodySource {
 
     fn decoded_anim(&self, name: &str) -> Option<Result<cxanim::XAnim>> {
         Some(
-            self.clips
-                .get(&name.to_ascii_lowercase())
+            vcod_common::text::with_ascii_lowercase(name, |n| self.clips.get(n))
                 .cloned()
                 .with_context(|| format!("no zone holds xanim {name}")),
         )
@@ -723,8 +722,7 @@ impl AssetSource for BodySource {
 
     fn decoded_model(&self, name: &str) -> Option<Result<Model>> {
         Some(
-            self.models
-                .get(&name.to_ascii_lowercase())
+            vcod_common::text::with_ascii_lowercase(name, |n| self.models.get(n))
                 .cloned()
                 .with_context(|| format!("no zone holds xmodel {name}")),
         )
