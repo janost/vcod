@@ -1233,6 +1233,7 @@ impl<'a> Cod2Builder<'a> {
             setup,
             texture,
             time: None,
+            scratch: Default::default(),
         };
         sim.update(self.queue, 0.0);
         let view = sim.texture.create_view(&Default::default());
@@ -1835,6 +1836,7 @@ pub(super) struct Cod4WaterSim {
     setup: vcod_cod2::water::WaterSetup,
     texture: wgpu::Texture,
     time: Option<f32>,
+    scratch: vcod_cod2::water::WaterScratch,
 }
 
 impl Cod4WaterSim {
@@ -1843,8 +1845,9 @@ impl Cod4WaterSim {
             return;
         }
         self.time = Some(time);
-        let levels = self.setup.levels_cod4(time);
-        super::cod2_water::write_levels(queue, &self.texture, &levels);
+        let kept = self.texture.mip_level_count() as usize;
+        self.setup.levels_cod4_into(time, kept, &mut self.scratch);
+        super::cod2_water::write_levels(queue, &self.texture, &self.scratch.levels);
     }
 }
 

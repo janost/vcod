@@ -1691,7 +1691,8 @@ fallback; only the visible ones log a warning (9.13). The rest:
 - vcod: `vcod_cod2::water::WaterSetup` ports the setup, the per-frame
   field and the L8 levels in f32 operation order; the renderer
   (`renderer/cod2_water.rs`, `cod2_water.wgsl`) uploads the levels each
-  frame at the frame's clock and draws the HLSL with the sun of 9.1 and
+  frame at the frame's clock (only those its texture keeps, built in
+  buffers kept from frame to frame: `WaterSetup::levels_into`) and draws the HLSL with the sun of 9.1 and
   the world's fog, scaled by identityLight as the lit family is. The
   stage keeps the colour-map draw for the passes that read stages.
   `fft_is_the_unscaled_inverse_dft` holds the FFT to a direct inverse DFT
