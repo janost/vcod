@@ -131,7 +131,7 @@ impl Cod4Hud {
         ceiling: &dyn Fn() -> f32,
         now: i32,
     ) -> Vec<HudGrenade> {
-        use crate::play::cod4::{ET_MISSILE, ent_f32, ent_u32, position_at, weapon_list};
+        use crate::play::cod4::{ET_MISSILE, position_at, weapon_list};
         let (Some(Some(l)), Some(gs), Some(snap)) =
             (&self.loaded, s.gamestate(), s.client().snapshots.last())
         else {
@@ -145,8 +145,9 @@ impl Cod4Hud {
         let hinted = (snap.ps.word(vcod_cod4::ps_word!("cursorHint")) >= FIRST_WEAPON_HINT)
             .then(|| snap.ps.word(vcod_cod4::ps_word!("cursorHintEntIndex")));
         let resting = |e: &EntityState| {
-            let speed2: f32 = (0..3)
-                .map(|k| ent_f32(e, &format!("lerp.pos.trDelta[{k}]")).powi(2))
+            let speed2: f32 = vcod_cod4::es_word!(ET_MISSILE, 3 "lerp.pos.trDelta")
+                .iter()
+                .map(|&w| f32::from_bits(e.0[w]).powi(2))
                 .sum();
             speed2 <= RESTING_SPEED * RESTING_SPEED
         };
@@ -154,7 +155,7 @@ impl Cod4Hud {
             .iter()
             .filter(|e| e.etype() == ET_MISSILE)
             .filter_map(|e| {
-                let def = def_of(ent_u32(e, "weapon"))?;
+                let def = def_of(e.0[vcod_cod4::es_word!(ET_MISSILE, "weapon")])?;
                 let frag = def.def.weap_type == WEAPTYPE_GRENADE
                     && FRAG_EXPLOSIONS.contains(&def.def.proj_explosion)
                     && def.def.timed_detonation;

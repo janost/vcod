@@ -812,6 +812,35 @@ macro_rules! ps_word {
     };
 }
 
+/// An entity field's word for eType `etype`, or an array field's `N`
+/// words (`es_word!(ET_MISSILE, 3 "lerp.pos.trDelta")`), resolved at
+/// compile time against that type's table: a name the table lacks fails
+/// the build. Over an entity of that type, `e.0[w]` reads what a lookup by
+/// name does.
+#[macro_export]
+macro_rules! es_word {
+    ($etype:expr, $name:literal) => {
+        const {
+            $crate::net::delta::word_named(
+                $crate::net::fields::ENTITY_BY_TYPE[$etype as usize],
+                $name,
+            )
+        }
+    };
+    ($etype:expr, $n:literal $name:literal) => {
+        const {
+            let table = $crate::net::fields::ENTITY_BY_TYPE[$etype as usize];
+            let mut words = [0usize; $n];
+            let mut k = 0;
+            while k < $n {
+                words[k] = $crate::net::delta::word_at(table, $name, k);
+                k += 1;
+            }
+            words
+        }
+    };
+}
+
 impl PlayerState {
     /// Word `w`, a [`ps_word!`](crate::ps_word): 0 past a short `words`.
     pub fn word(&self, w: usize) -> u32 {
