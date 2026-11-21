@@ -1667,6 +1667,7 @@ impl Renderer {
         self.hud_pass.textures.clear();
         self.vm_pass.cache.clear();
         self.model_images.clear();
+        self.dynamic.skin_groups.clear();
     }
 
     /// Drops the map and every model uploaded for it; the old map's
@@ -1691,6 +1692,7 @@ impl Renderer {
         self.dynamic.cod2_light = None;
         self.dynamic.cod4_light = None;
         self.dynamic.materials.clear();
+        self.dynamic.skin_groups.clear();
         self.vm_pass.skins.clear();
         // decoded under the old map's search path, which a CoD4 map change
         // swaps without a `reopen`

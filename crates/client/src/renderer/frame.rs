@@ -950,7 +950,8 @@ impl Renderer {
                                 model.index_buf.slice(..),
                                 wgpu::IndexFormat::Uint16,
                             );
-                            pass.set_bind_group(2, &model.bone_bg, &[]);
+                            let bones = model.bones.as_ref().expect("view model bones");
+                            pass.set_bind_group(2, &bones.bg, &[]);
                             tally(&self.census, |c| c.bind_groups += 1);
                         }
                         let surf = &model.surfaces[d.surf as usize];
@@ -1918,8 +1919,8 @@ impl Renderer {
                         .take(VM_BONE_COUNT)
                         .map(glam::Mat4::to_cols_array)
                         .collect();
-                    self.queue
-                        .write_buffer(&model.bone_buf, 0, bytemuck::cast_slice(&cols));
+                    let buf = &model.bones.as_ref().expect("view model bones").buf;
+                    self.queue.write_buffer(buf, 0, bytemuck::cast_slice(&cols));
                     frame_write!(self, "upload view model bones", cols.len() * 64);
                 }
                 true

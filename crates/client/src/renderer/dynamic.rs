@@ -221,8 +221,15 @@ pub(super) struct VmModel {
     pub(super) surfaces: Vec<VmSurface>,
     /// Per surface, its skin's name: the key of its material.
     pub(super) skins: Vec<String>,
-    pub(super) bone_buf: wgpu::Buffer,
-    pub(super) bone_bg: wgpu::BindGroup,
+    /// The view model's own bone matrices; a dynamic model's LODs pose
+    /// through the shared `DynamicPass::bone_buf` and carry none.
+    pub(super) bones: Option<VmBones>,
+}
+
+#[derive(Clone)]
+pub(super) struct VmBones {
+    pub(super) buf: wgpu::Buffer,
+    pub(super) bg: wgpu::BindGroup,
 }
 
 /// Built up front so the shader is validated at startup even with no viewmodel set.
@@ -461,6 +468,9 @@ pub(super) struct DynamicPass {
     /// `projectileDLight`), queued after the fx lights.
     pub(super) entity_scene_lights: Vec<SceneLight>,
     pub(super) materials: EntityMaterials,
+    /// Each skin's image bind group, uploaded once a map for every LOD and
+    /// model that binds it; [`Renderer::unload_world`] clears it.
+    pub(super) skin_groups: HashMap<String, wgpu::BindGroup>,
 }
 
 /// A dynamic model and, per drawn surface, its material.
@@ -694,11 +704,15 @@ impl Renderer {
         }
         let Some(model) = upload_vm_model(
             &self.device,
-            &self.queue,
             &self.vm_pass,
             m.surfaces(),
             m.materials(),
-            &|skin| self.skin_image(fs, skin),
+            true,
+            &mut |skin| {
+                let (img, levels) = self.skin_image(fs, skin);
+                let view = upload_levels(&self.device, &self.queue, skin, &img, &levels);
+                vm_skin_group(&self.device, &self.vm_pass, &view)
+            },
         ) else {
             log::warn!("viewmodel {}: no drawable surfaces, skipping it", m.name);
             return None;
@@ -806,15 +820,26 @@ impl Renderer {
         surfaces: &[model::Surface],
         materials: &[String],
     ) -> Option<usize> {
-        let vm = &self.vm_pass;
+        let mut groups = std::mem::take(&mut self.dynamic.skin_groups);
         let uploaded = upload_vm_model(
             &self.device,
-            &self.queue,
-            vm,
+            &self.vm_pass,
             surfaces,
             materials,
-            &|skin| self.skin_image(fs, skin),
-        )?;
+            false,
+            &mut |skin| {
+                if let Some(g) = groups.get(skin) {
+                    return g.clone();
+                }
+                let (img, levels) = self.skin_image(fs, skin);
+                let view = upload_levels(&self.device, &self.queue, skin, &img, &levels);
+                let g = vm_skin_group(&self.device, &self.vm_pass, &view);
+                groups.insert(skin.to_string(), g.clone());
+                g
+            },
+        );
+        self.dynamic.skin_groups = groups;
+        let uploaded = uploaded?;
         let gamma = self.image_gamma;
         let skins: Vec<_> = uploaded
             .skins
@@ -1307,6 +1332,7 @@ pub(super) fn create_dynamic_pass(
         scene_lights: Vec::new(),
         entity_scene_lights: Vec::new(),
         materials,
+        skin_groups: HashMap::new(),
     }
 }
 
@@ -1319,16 +1345,33 @@ pub(super) fn vm_uniform(model: glam::Mat4, fov_x: f32, aspect: f32) -> [f32; 32
     out
 }
 
+/// A skin image's group for `VmPass::skin_layout`.
+pub(super) fn vm_skin_group(
+    device: &wgpu::Device,
+    vm: &VmPass,
+    view: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("viewmodel skin bind group"),
+        layout: &vm.skin_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::TextureView(view),
+        }],
+    })
+}
+
 /// `None` when nothing is drawable (empty buffers are invalid to create).
-/// `load_image` resolves a material name; the callers name materials
-/// differently (skin filenames vs `textures/...`).
+/// `bind_skin` gives a skin name's image group, called once per skin the
+/// upload binds, in surface order; `bones` makes the view model's own
+/// bone buffer.
 pub(super) fn upload_vm_model(
     device: &wgpu::Device,
-    queue: &wgpu::Queue,
     vm: &VmPass,
     model_surfaces: &[model::Surface],
     materials: &[String],
-    load_image: &dyn Fn(&str) -> PreparedImage,
+    bones: bool,
+    bind_skin: &mut dyn FnMut(&str) -> wgpu::BindGroup,
 ) -> Option<VmModel> {
     let mut verts: Vec<VmVert> = Vec::new();
     let mut indices: Vec<u16> = Vec::new();
@@ -1347,16 +1390,7 @@ pub(super) fn upload_vm_model(
             .map(String::as_str)
             .unwrap_or_default();
         let bind_group = *bound_skins.entry(skin).or_insert_with(|| {
-            let (img, levels) = load_image(skin);
-            let view = upload_levels(device, queue, skin, &img, &levels);
-            bind_groups.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("viewmodel skin bind group"),
-                layout: &vm.skin_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                }],
-            }));
+            bind_groups.push(bind_skin(skin));
             bind_groups.len() - 1
         });
         skins.push(skin.to_string());
@@ -1378,20 +1412,23 @@ pub(super) fn upload_vm_model(
     if surfaces.is_empty() {
         return None;
     }
-    // Identity bones: skinning is a no-op until an animation is sampled.
-    let identity: Vec<[f32; 16]> = vec![glam::Mat4::IDENTITY.to_cols_array(); VM_BONE_COUNT];
-    let bone_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("viewmodel bone matrices"),
-        contents: bytemuck::cast_slice(&identity),
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    });
-    let bone_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("viewmodel bone bind group"),
-        layout: &vm.bone_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: bone_buf.as_entire_binding(),
-        }],
+    let bones = bones.then(|| {
+        // Identity bones: skinning is a no-op until an animation is sampled.
+        let identity: Vec<[f32; 16]> = vec![glam::Mat4::IDENTITY.to_cols_array(); VM_BONE_COUNT];
+        let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("viewmodel bone matrices"),
+            contents: bytemuck::cast_slice(&identity),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("viewmodel bone bind group"),
+            layout: &vm.bone_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buf.as_entire_binding(),
+            }],
+        });
+        VmBones { buf, bg }
     });
     Some(VmModel {
         vertex_buf: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1407,8 +1444,7 @@ pub(super) fn upload_vm_model(
         bind_groups,
         surfaces,
         skins,
-        bone_buf,
-        bone_bg,
+        bones,
     })
 }
 
