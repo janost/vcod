@@ -156,7 +156,9 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     `games_mp.log`.
 - CoD1: `server.rs` (the types, construction, the packet entry and the
   test helpers several seams share), `server/cod1_game.rs` (`Cod1Game`),
-  `server/cod1_frame.rs`, `spectate.rs` (usercmds in, playerstate out).
+  `server/cod1_frame.rs`, `spectate.rs` (usercmds in, playerstate out),
+  `server/cod1_think.rs` (`ClientThink_real` for each packet since the
+  last frame, in arrival order).
   `impl Server` is split by seam under `server/`, each file with its tests:
   - `frame.rs` `enter_world`, the tick, the game clock, `game_frame`,
     `replay_moves`; `snapshots.rs` the world frame, snapshot build and send,
@@ -185,6 +187,16 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
   through `game::cod4::level::Cod4Level`. Its wire is
   `vcod_cod4::net::wire::PROTOCOL_17`.
 - `game/`: the script host, combat, entities, links.
+  - `game/host.rs` `GameHost`, the CoD side of `vcod_gsc::Host`: builtin
+    dispatch and the entity field routing over retail's field tables.
+    `game/entity.rs` the script object table (gentities and hudelems,
+    numbered as the wire numbers them).
+  - CoD1's level parts: `spawn.rs` (the BSP entity lump to objects),
+    `combat.rs` (bullets, swings, hit locations), `missile.rs`
+    (grenades), `item.rs` (items, the drop ring, pickups), `mover.rs` and
+    `mover/` (the scriptent mover verbs), `trigger.rs` (the triggers and
+    the touch test), `turret.rs`, `vote.rs`, `teams.rs`, and `vehicle/`
+    (UO's vehicles: definitions, pool, seats, drive, guns, damage).
   - `game/profile.rs`: `HostProfile`, one static per game version naming
     every rule the host tells the versions apart by.
   - A game's own host state is `GameHost::ext`, a `HostExt` arm: CoD2's
@@ -233,7 +245,10 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
   part), and `engine/bots.rs` is the server glue the two share (adding a
   bot, `AdminHost`) over a `BotGame`. `server/bot_admin.rs` is the bot
   admin every server calls (the pass, `addbot`, `removebot`, `listbots`)
-  over `AdminHost`.
+  over `AdminHost`; `botmgmt.rs` the name pool, the bot cvars and the
+  planner that turns a roster into joins, drops and team moves.
+  `server/bot_vehicles.rs` is the server half of UO's bots in vehicles
+  (`bots::vehicle`).
   - `nav.rs` + `nav/`: `graph.rs` the graph (nodes, edges, components,
     lookups, paths), `build.rs` its build passes and ladders, `cache.rs`
     the per-map cache and `NavJob`, `disk.rs` the disk cache, `search.rs`
@@ -275,6 +290,20 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
     lit world; `headless.rs` a windowless `Renderer`.
   - `tests.rs` the unit tests; `pipeline_check.rs` and `*_live.rs` the GPU
     gates.
+- `hud/`: CoD1's HUD (chat, messages, kill feed, scoreboard, hudelems,
+  script menus, UO's parts) as quads for `Renderer::set_hud_quads`.
+- `fx/`: effects (`efx.rs` the grammar, `sim.rs` the particles,
+  `registry.rs` which event plays what, CoD2's and CoD4's effects and
+  trails).
+- `audio/`: sound for every game and the front end (aliases, banks,
+  voices, streams, occlusion).
+- `entities.rs`: CoD1 snapshot entities to drawables and the legs and
+  torso anim driver.
+- `cod2_*.rs`: CoD2's client parts, `cod2_client.rs` the session (below),
+  `cod2_scene.rs` the snapshot as draws, `cod2_players.rs` the bodies,
+  `cod2_hud.rs` the 2D layer over `cod2_player_hud.rs` and
+  `cod2_world_hud.rs`, `cod2_viewmodel.rs`, `cod2_light.rs`,
+  `cod2_glow.rs`, `cod2_front.rs` the front end.
 - `console/`: drop-down console, cvars, binds.
 - `frontend/`: stock main menu, server browser, options screens, Start New
   Server, the server's script menus; `frontend/cod2.rs` CoD2's. `mod.rs`
