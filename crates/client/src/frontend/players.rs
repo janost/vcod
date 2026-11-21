@@ -29,7 +29,8 @@ impl Ui {
         self.players_due = Some(now + REFRESH);
         self.players = names().iter().map(|n| clean_str(n)).collect();
         self.player_clients.clear();
-        self.player_top = self.player_top.min(self.players.len().saturating_sub(1));
+        self.tops[FEEDER_PLAYER_LIST] =
+            self.tops[FEEDER_PLAYER_LIST].min(self.players.len().saturating_sub(1));
     }
 
     /// CoD2's `UI_BuildPlayerList` (Mac 0x14f5e2) on the same 3 s clock
@@ -43,7 +44,8 @@ impl Ui {
         let rows = rows();
         self.players = rows.iter().map(|(_, n)| clean_str(n)).collect();
         self.player_clients = rows.iter().map(|&(c, _)| c).collect();
-        self.player_top = self.player_top.min(self.players.len().saturating_sub(1));
+        self.tops[FEEDER_PLAYER_LIST] =
+            self.tops[FEEDER_PLAYER_LIST].min(self.players.len().saturating_sub(1));
     }
 
     /// `CL_IsPlayerMuted` for the mute list's column, read live as the list
@@ -64,7 +66,7 @@ impl Ui {
     /// A click on the kick list selects the row under the cursor
     /// (`UI_FeederSelection` 0x4000cdd9 keeps the index).
     pub(super) fn player_click(&mut self, item: &UiItem) {
-        let row = listbox::row_at(item, self.cursor[1], self.player_top);
+        let row = listbox::row_at(item, self.cursor[1], self.tops[FEEDER_PLAYER_LIST]);
         if row < self.players.len() {
             self.player_row = row;
         }
@@ -82,12 +84,12 @@ impl Ui {
         match listbox::key(
             item,
             self.players.len(),
-            self.player_top,
+            self.tops[FEEDER_PLAYER_LIST],
             self.player_row,
             code,
         ) {
             Some((top, row)) => {
-                (self.player_top, self.player_row) = (top, row);
+                (self.tops[FEEDER_PLAYER_LIST], self.player_row) = (top, row);
                 true
             }
             None => false,
@@ -103,7 +105,7 @@ impl Ui {
             p,
             item,
             self.players.len(),
-            self.player_top,
+            self.tops[FEEDER_PLAYER_LIST],
             selected,
             |i, row, out| {
                 let text = truncate_visible(&self.players[i], col.map_or(0, |c| c.max_chars));
@@ -129,7 +131,7 @@ impl Ui {
             p,
             item,
             self.players.len(),
-            self.player_top,
+            self.tops[FEEDER_PLAYER_LIST],
             selected,
             |i, row, out| {
                 let client = self.player_clients.get(i).copied().unwrap_or(u32::MAX);

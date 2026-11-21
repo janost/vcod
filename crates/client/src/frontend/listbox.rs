@@ -5,7 +5,10 @@
 
 use std::time::{Duration, Instant};
 
-use vcod_common::ui_menu::UiItem;
+use vcod_common::ui_menu::{
+    FEEDER_ALLMAPS, FEEDER_MODS, FEEDER_MUTELIST, FEEDER_PLAYER_LIST, FEEDER_PLAYER_PROFILES,
+    FEEDER_SERVERS, FEEDER_SERVERSTATUS, UiItem,
+};
 use winit::keyboard::KeyCode;
 
 use super::SCROLLBAR_SIZE;
@@ -16,6 +19,49 @@ const ARROW_UP: &str = "ui/assets/scrollbar_arrow_up_a.tga";
 const ARROW_DOWN: &str = "ui/assets/scrollbar_arrow_dwn_a.tga";
 const BAR: &str = "ui/assets/scrollbar.tga";
 const THUMB: &str = "ui/assets/scrollbar_thumb.tga";
+
+/// The first row each scrolled feeder list draws. The mute list shares
+/// the player list's: they are one list (`UI_FeederCount`).
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct Tops([usize; 6]);
+
+impl Tops {
+    fn slot(feeder: i32) -> Option<usize> {
+        Some(match feeder {
+            FEEDER_ALLMAPS => 0,
+            FEEDER_SERVERS => 1,
+            FEEDER_MODS => 2,
+            FEEDER_PLAYER_LIST | FEEDER_MUTELIST => 3,
+            FEEDER_PLAYER_PROFILES => 4,
+            FEEDER_SERVERSTATUS => 5,
+            _ => return None,
+        })
+    }
+
+    /// `None` for a feeder that does not scroll.
+    pub(super) fn get(&self, feeder: i32) -> Option<usize> {
+        Self::slot(feeder).map(|i| self.0[i])
+    }
+
+    pub(super) fn set(&mut self, feeder: i32, top: usize) {
+        if let Some(i) = Self::slot(feeder) {
+            self.0[i] = top;
+        }
+    }
+}
+
+impl std::ops::Index<i32> for Tops {
+    type Output = usize;
+    fn index(&self, feeder: i32) -> &usize {
+        &self.0[Self::slot(feeder).expect("a scrolled feeder")]
+    }
+}
+
+impl std::ops::IndexMut<i32> for Tops {
+    fn index_mut(&mut self, feeder: i32) -> &mut usize {
+        &mut self.0[Self::slot(feeder).expect("a scrolled feeder")]
+    }
+}
 
 /// The part of the bar under a point (`Item_ListBox_OverLB`, 0x40011840:
 /// the window flags 0x800, 0x1000, 0x2000, 0x4000, 0x8000).
@@ -276,6 +322,17 @@ pub(super) fn drag_thumb(item: &UiItem, cursor_y: f32) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_mute_list_scrolls_with_the_player_list_and_others_apart() {
+        let mut t = Tops::default();
+        t.set(FEEDER_MUTELIST, 3);
+        t.set(FEEDER_MODS, 5);
+        t.set(1, 9);
+        assert_eq!(t.get(FEEDER_PLAYER_LIST), Some(3));
+        assert_eq!((t[FEEDER_MODS], t[FEEDER_SERVERS]), (5, 0));
+        assert_eq!(t.get(1), None, "a feeder that does not scroll keeps no top");
+    }
 
     /// The stock map list: `rect 404 271 192 130` less `origin -405 -135`
     /// inside `createserver_maps` at 404 137, 20 per row.

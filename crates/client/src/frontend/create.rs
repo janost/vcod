@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use vcod_common::localize::Localized;
 use vcod_common::pk3::Pk3Fs;
-use vcod_common::ui_menu::{UiItem, script_commands};
+use vcod_common::ui_menu::{FEEDER_ALLMAPS, UiItem, script_commands};
 
 use super::paint::{Painter, truncate_visible};
 use super::{Ui, UiEffect, listbox};
@@ -242,7 +242,7 @@ impl Ui {
         self.set_cvar("ui_netGametype", &i.to_string(), out);
         self.set_cvar("ui_netGametypeName", &name, out);
         self.map_row = 0;
-        self.map_top = 0;
+        self.tops[FEEDER_ALLMAPS] = 0;
     }
 
     /// `uiScript loadArenas` (0x4000a980): the game type follows
@@ -258,7 +258,7 @@ impl Ui {
             Some(i) => self.select_gametype(i, out),
             None => {
                 self.map_row = 0;
-                self.map_top = 0;
+                self.tops[FEEDER_ALLMAPS] = 0;
             }
         }
     }
@@ -373,7 +373,7 @@ impl Ui {
 
     /// A click on `FEEDER_ALLMAPS`: selects the row under the cursor.
     pub(super) fn map_click(&mut self, item: &UiItem) {
-        let row = listbox::row_at(item, self.cursor[1], self.map_top);
+        let row = listbox::row_at(item, self.cursor[1], self.tops[FEEDER_ALLMAPS]);
         if row < self.active_maps().len() {
             self.map_row = row;
         }
@@ -392,9 +392,9 @@ impl Ui {
             return false;
         }
         let len = self.active_maps().len();
-        match listbox::key(item, len, self.map_top, self.map_row, code) {
+        match listbox::key(item, len, self.tops[FEEDER_ALLMAPS], self.map_row, code) {
             Some((top, row)) => {
-                (self.map_top, self.map_row) = (top, row);
+                (self.tops[FEEDER_ALLMAPS], self.map_row) = (top, row);
                 true
             }
             None => false,
@@ -411,7 +411,7 @@ impl Ui {
             p,
             item,
             maps.len(),
-            self.map_top,
+            self.tops[FEEDER_ALLMAPS],
             selected,
             |i, row, out| {
                 let text = truncate_visible(&maps[i].long_name, col.map_or(0, |c| c.max_chars));

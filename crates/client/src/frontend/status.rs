@@ -50,8 +50,6 @@ pub struct StatusQuery {
     started: Instant,
     sent: Instant,
     pub rows: Vec<Row>,
-    /// The first row the popup's list draws.
-    pub top: usize,
 }
 
 impl StatusQuery {
@@ -65,7 +63,6 @@ impl StatusQuery {
             started: now,
             sent: now,
             rows: Vec::new(),
-            top: 0,
         }
     }
 
@@ -79,7 +76,6 @@ impl StatusQuery {
             started: now,
             sent: now,
             rows,
-            top: 0,
         }
     }
 

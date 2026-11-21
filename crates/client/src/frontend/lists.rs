@@ -52,7 +52,7 @@ impl Ui {
             self.browser.source = source;
             self.browser.status = Status::Idle;
             self.selected = None;
-            self.list_top = 0;
+            self.tops[FEEDER_SERVERS] = 0;
         }
         self.browser.max_ping = shell.cvar_f32("cl_maxPing") as u32;
         self.browser.poll(now);
@@ -97,9 +97,13 @@ impl Ui {
         let at = self
             .selected
             .and_then(|a| rows.iter().position(|&r| r == a));
-        let Some((first, row)) =
-            listbox::key(item, rows.len(), self.list_top, at.unwrap_or(0), code)
-        else {
+        let Some((first, row)) = listbox::key(
+            item,
+            rows.len(),
+            self.tops[FEEDER_SERVERS],
+            at.unwrap_or(0),
+            code,
+        ) else {
             return false;
         };
         let row = match (at, code) {
@@ -109,7 +113,7 @@ impl Ui {
             _ => row,
         };
         self.selected = rows.get(row).copied();
-        self.list_top = first.min(row);
+        self.tops[FEEDER_SERVERS] = first.min(row);
         self.keep_visible(row, m);
         true
     }
@@ -121,32 +125,22 @@ impl Ui {
         if item.kind != ITEM_TYPE_LISTBOX {
             return None;
         }
-        match item.feeder {
-            Some(FEEDER_ALLMAPS) => Some((self.active_maps().len(), self.map_top)),
-            Some(FEEDER_SERVERS) => Some((self.browser.row_count(), self.list_top)),
-            Some(FEEDER_MODS) => Some((self.mods.len(), self.mod_top)),
-            Some(FEEDER_PLAYER_LIST | FEEDER_MUTELIST) => {
-                Some((self.players.len(), self.player_top))
-            }
-            Some(FEEDER_PLAYER_PROFILES) => Some((self.profiles.len(), self.profiles.top)),
-            Some(FEEDER_SERVERSTATUS) => self.status.as_ref().map(|q| (q.rows.len(), q.top)),
-            _ => None,
-        }
+        let feeder = item.feeder?;
+        let len = match feeder {
+            FEEDER_ALLMAPS => self.active_maps().len(),
+            FEEDER_SERVERS => self.browser.row_count(),
+            FEEDER_MODS => self.mods.len(),
+            FEEDER_PLAYER_LIST | FEEDER_MUTELIST => self.players.len(),
+            FEEDER_PLAYER_PROFILES => self.profiles.len(),
+            FEEDER_SERVERSTATUS => self.status.as_ref()?.rows.len(),
+            _ => return None,
+        };
+        Some((len, self.tops.get(feeder)?))
     }
 
     pub(super) fn set_list_top(&mut self, feeder: Option<i32>, top: usize) {
-        match feeder {
-            Some(FEEDER_ALLMAPS) => self.map_top = top,
-            Some(FEEDER_SERVERS) => self.list_top = top,
-            Some(FEEDER_MODS) => self.mod_top = top,
-            Some(FEEDER_PLAYER_LIST | FEEDER_MUTELIST) => self.player_top = top,
-            Some(FEEDER_PLAYER_PROFILES) => self.profiles.top = top,
-            Some(FEEDER_SERVERSTATUS) => {
-                if let Some(q) = &mut self.status {
-                    q.top = top;
-                }
-            }
-            _ => {}
+        if let Some(f) = feeder {
+            self.tops.set(f, top);
         }
     }
 
@@ -160,10 +154,10 @@ impl Ui {
 
     fn keep_visible(&mut self, row: usize, top: usize) {
         let n = self.list_rows_visible(top);
-        if row < self.list_top {
-            self.list_top = row;
-        } else if row >= self.list_top + n {
-            self.list_top = row + 1 - n;
+        if row < self.tops[FEEDER_SERVERS] {
+            self.tops[FEEDER_SERVERS] = row;
+        } else if row >= self.tops[FEEDER_SERVERS] + n {
+            self.tops[FEEDER_SERVERS] = row + 1 - n;
         }
     }
 
@@ -174,10 +168,10 @@ impl Ui {
         };
         let n = self.list_rows_visible(top);
         let len = self.browser.row_count();
-        self.list_top = if up {
-            self.list_top.saturating_sub(n / 2)
+        self.tops[FEEDER_SERVERS] = if up {
+            self.tops[FEEDER_SERVERS].saturating_sub(n / 2)
         } else {
-            (self.list_top + n / 2).min(len.saturating_sub(n))
+            (self.tops[FEEDER_SERVERS] + n / 2).min(len.saturating_sub(n))
         };
     }
 
@@ -261,7 +255,7 @@ impl Ui {
         out: &mut Vec<HudQuad>,
     ) {
         let Some(q) = &self.status else { return };
-        let top = q.top.min(listbox::max_scroll(item, q.rows.len()));
+        let top = self.tops[FEEDER_SERVERSTATUS].min(listbox::max_scroll(item, q.rows.len()));
         listbox::paint_rows(
             p,
             item,
@@ -290,9 +284,9 @@ impl Ui {
             return false;
         }
         let sel = self.mod_selected.unwrap_or(0);
-        match listbox::key(item, self.mods.len(), self.mod_top, sel, code) {
+        match listbox::key(item, self.mods.len(), self.tops[FEEDER_MODS], sel, code) {
             Some((top, row)) => {
-                (self.mod_top, self.mod_selected) = (top, Some(row));
+                (self.tops[FEEDER_MODS], self.mod_selected) = (top, Some(row));
                 true
             }
             None => false,
@@ -307,7 +301,7 @@ impl Ui {
             p,
             item,
             self.mods.len(),
-            self.mod_top,
+            self.tops[FEEDER_MODS],
             selected,
             |i, row, out| {
                 let m = &self.mods[i];
@@ -350,7 +344,7 @@ impl Ui {
             p,
             item,
             rows.len(),
-            self.list_top,
+            self.tops[FEEDER_SERVERS],
             selected,
             |i, row, out| {
                 for (&kind, col) in self.browser.columns.iter().zip(&item.columns) {
@@ -448,7 +442,7 @@ mod tests {
         assert_eq!(ui.hover, Some((m, i)));
         ui.wheel(true, &shell);
         ui.wheel(true, &shell);
-        assert_eq!(ui.status.as_ref().unwrap().top, 2);
+        assert_eq!(ui.tops[FEEDER_SERVERSTATUS], 2);
         let item = ui.menus[m].items[i].clone();
         assert_eq!(ui.list_scroll(&item), Some((40, 2)));
     }
@@ -461,12 +455,16 @@ mod tests {
         let t0 = Instant::now();
         ui.mouse_move(arrow[0], arrow[1], 640.0, 480.0, &shell);
         ui.click(t0, &shell);
-        assert_eq!((ui.map_top, ui.map_row), (1, 0));
+        assert_eq!((ui.tops[FEEDER_ALLMAPS], ui.map_row), (1, 0));
         ui.wheel(true, &shell);
         ui.wheel(true, &shell);
         ui.wheel(false, &shell);
         ui.frame(t0 + Duration::from_millis(700), &shell);
-        assert_eq!((ui.map_top, ui.map_row), (2, 0), "no repeat after the hold");
+        assert_eq!(
+            (ui.tops[FEEDER_ALLMAPS], ui.map_row),
+            (2, 0),
+            "no repeat after the hold"
+        );
     }
 
     #[test]
@@ -502,7 +500,10 @@ mod tests {
         assert_eq!(row(&ui), Some(1));
         ui.key(KeyCode::PageDown, &shell);
         assert_eq!(row(&ui), Some(1 + page), "a page moves the selection");
-        assert!(ui.list_top <= 1 + page && 1 + page < ui.list_top + visible_rows(&item));
+        assert!(
+            ui.tops[FEEDER_SERVERS] <= 1 + page
+                && 1 + page < ui.tops[FEEDER_SERVERS] + visible_rows(&item)
+        );
         ui.key(KeyCode::End, &shell);
         assert_eq!(row(&ui), Some(39));
         ui.key(KeyCode::PageUp, &shell);
@@ -548,23 +549,23 @@ mod tests {
         let t0 = Instant::now();
         ui.mouse_move(x + w - 8.0, y + h - 4.0, 640.0, 480.0, &shell);
         ui.click(t0, &shell);
-        assert_eq!(ui.mod_top, 1);
+        assert_eq!(ui.tops[FEEDER_MODS], 1);
         ui.frame(t0 + Duration::from_millis(490), &shell);
-        assert_eq!(ui.mod_top, 1);
+        assert_eq!(ui.tops[FEEDER_MODS], 1);
         // Off the arrow the capture still steps it.
         ui.mouse_move(x + 10.0, y + 10.0, 640.0, 480.0, &shell);
         ui.frame(t0 + Duration::from_millis(510), &shell);
-        assert_eq!(ui.mod_top, 2);
+        assert_eq!(ui.tops[FEEDER_MODS], 2);
         ui.release();
         ui.frame(t0 + Duration::from_millis(2000), &shell);
-        assert_eq!(ui.mod_top, 2);
+        assert_eq!(ui.tops[FEEDER_MODS], 2);
         assert_eq!(ui.mod_selected, None, "the bar picks no row");
         // A row click counts from the first row drawn.
         ui.click(t0 + Duration::from_secs(3), &shell);
         assert_eq!(ui.mod_selected, Some(2));
         assert!(ui.key(KeyCode::End, &shell).0);
         assert_eq!(ui.mod_selected, Some(15));
-        assert_eq!(ui.mod_top, 16 - listbox::view_max(&item));
+        assert_eq!(ui.tops[FEEDER_MODS], 16 - listbox::view_max(&item));
     }
 
     /// 1.5's nine-column list: the hardware and PunkBuster columns draw
