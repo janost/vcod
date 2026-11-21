@@ -282,7 +282,9 @@ fn headless_device_has_the_window_limits() {
 
 /// mp_carentan through the app's path: the world, its submodels, a player
 /// body bind-posed and skinned, the kar98k viewmodel, a smoke and an
-/// impact sprite, a bullet hole and the HUD, every cvar pass on.
+/// impact sprite, a bullet hole and the HUD, every cvar pass on. With
+/// `VCOD_C1_SHOTS=<dir>` the frame is written there as a TGA, for the GPU
+/// kit to compare builds byte for byte.
 #[test]
 fn cod1_renderer_builds_and_draws_without_validation_errors() {
     let Some(fs) = vcod_common::testing::game_fs() else {
@@ -352,6 +354,21 @@ fn cod1_renderer_builds_and_draws_without_validation_errors() {
         },
     );
     assert_clean(&errors, "CoD1 mp_carentan frame");
+    if let Some(dir) = std::env::var_os("VCOD_C1_SHOTS").map(std::path::PathBuf::from) {
+        let (w, h, bgra) = r.read_offscreen().expect("offscreen target");
+        let rgba: Vec<u8> = bgra
+            .chunks(4)
+            .flat_map(|p| [p[2], p[1], p[0], 255])
+            .collect();
+        image::save_buffer(
+            dir.join("mp_carentan.tga"),
+            &rgba,
+            w,
+            h,
+            image::ExtendedColorType::Rgba8,
+        )
+        .unwrap();
+    }
     assert!(
         r.fx.textures
             .get(vcod_common::shader::DEFAULT_IMAGE)
