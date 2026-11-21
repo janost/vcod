@@ -204,6 +204,17 @@ impl Renderer {
 
     /// Builds the map's GPU state; a previous map is dropped first.
     pub fn load_world(&mut self, bsp: &MapWorld, fs: &Pk3Fs) -> Result<()> {
+        self.load_world_placed(bsp, fs, None)
+    }
+
+    /// [`Self::load_world`] baking its props off `placed`, the map's
+    /// placements and models a caller already decoded for its collision.
+    pub fn load_world_placed(
+        &mut self,
+        bsp: &MapWorld,
+        fs: &Pk3Fs,
+        placed: Option<&props::Placed>,
+    ) -> Result<()> {
         let mut laps = vcod_common::laps::Laps::new("world GPU state");
         self.unload_world();
         let device = &self.device;
@@ -249,7 +260,7 @@ impl Renderer {
                 .light_grid
                 .is_some()
                 .then(|| sc.spawn(|| vcod_common::collision::CollisionWorld::build(bsp, &[])));
-            let props = props::build(fs, bsp, &mut lighting, &|skin| {
+            let skin_draw = |skin: &str| {
                 let script = prop_material(lib, cod2, skin);
                 props::SkinDraw {
                     sprite: script.and_then(|sh| sh.sprite),
@@ -266,7 +277,11 @@ impl Renderer {
                         && script.is_some_and(cod2_smodel),
                     skip: cod2 && script.is_some_and(|m| m.model_light == ModelLight::Objective),
                 }
-            });
+            };
+            let props = match placed {
+                Some(placed) => props::build_placed(fs, placed, &mut lighting, &skin_draw),
+                None => props::build(fs, bsp, &mut lighting, &skin_draw),
+            };
             (props, clip.map(vcod_common::laps::joined))
         });
         laps.lap("props");
