@@ -444,6 +444,18 @@ pub fn load_material_image(fs: &dyn AssetSource, shaders: &Shaders, name: &str) 
     default_image()
 }
 
+/// The pak read [`load_material_image`] of `name` marks, made without
+/// reading or decoding: the first image its probe finds, by name, then by
+/// the script's image. (A file that fails to decode, where the load reads
+/// on, marks only itself.)
+pub fn mark_material_image(fs: &Pk3Fs, shaders: &Shaders, name: &str) {
+    let found = probe_image_path(fs, name)
+        .or_else(|| shaders.image(name).and_then(|m| probe_image_path(fs, m)));
+    if let Some(path) = found {
+        fs.mark_read(&path);
+    }
+}
+
 /// Foliage skins (`foliage_masked@`, `foliage_detail@`, tga and dds) store
 /// the cutout mask inverted: leaves at alpha 0, fill at 255. Measured by RGB
 /// variance per alpha half over every masked skin in the retail pk3s. The
@@ -595,6 +607,13 @@ pub fn load_skin_image(fs: &dyn AssetSource, filename: &str) -> Image {
 pub fn skin_image_exists(fs: &dyn AssetSource, filename: &str) -> bool {
     let named = format!("skins/{filename}");
     resolve_bundle_image(fs, &named).is_some() || fs.exists(&named)
+}
+
+/// The pak read [`load_skin_image`] of `filename` marks, made without
+/// reading or decoding.
+pub fn mark_skin_image(fs: &Pk3Fs, filename: &str) {
+    let named = format!("skins/{filename}");
+    fs.mark_read(&resolve_bundle_image(fs, &named).unwrap_or(named));
 }
 
 /// Loads by full pk3 path, extension included; no probing, no shader lookup.
@@ -896,6 +915,46 @@ mod tests {
         let missing = |p: &str| Image::find(&fs, p).err().map(|e| e.is::<ImageMissing>());
         assert_eq!(missing("gfx/b.tga"), Some(true));
         assert_eq!(missing("gfx/bad.dds"), Some(false));
+    }
+
+    /// A material or skin load the renderer skips marks the paks its read
+    /// would have.
+    #[test]
+    fn skipped_image_loads_mark_the_paks_their_reads_would() {
+        let dir = tempfile::tempdir().unwrap();
+        let tga = gray_tga(2, 2);
+        let script = b"textures/b\n{\n\t{\n\t\tmap textures/c.tga\n\t}\n}\n";
+        let pak0 = crate::testing::pk3_with(&[("textures/a.tga", &tga)]);
+        let pak1 = crate::testing::pk3_with(&[
+            ("scripts/x.shader", script),
+            ("textures/c.tga", &tga),
+            ("skins/s.tga", &tga),
+        ]);
+        std::fs::write(dir.path().join("pak0.pk3"), pak0).unwrap();
+        std::fs::write(dir.path().join("pak1.pk3"), pak1).unwrap();
+        let fs = Pk3Fs::open(dir.path()).unwrap();
+        let shaders = load_shaders(&fs);
+        let marked = |f: &dyn Fn()| {
+            fs.clear_references();
+            f();
+            let mut v: Vec<String> = fs
+                .referenced_paks()
+                .iter()
+                .map(|p| p.name.clone())
+                .collect();
+            v.sort();
+            v
+        };
+        for name in ["textures/a", "textures/b", "textures/none"] {
+            let loaded = marked(&|| drop(load_material_image(&fs, &shaders, name)));
+            assert_eq!(marked(&|| mark_material_image(&fs, &shaders, name)), loaded, "{name}");
+        }
+        assert_eq!(marked(&|| mark_material_image(&fs, &shaders, "textures/b")).len(), 1);
+        for skin in ["s.dds", "none.tga"] {
+            let loaded = marked(&|| drop(load_skin_image(&fs, skin)));
+            assert_eq!(marked(&|| mark_skin_image(&fs, skin)), loaded, "{skin}");
+        }
+        assert_eq!(marked(&|| mark_skin_image(&fs, "s.dds")).len(), 1);
     }
 
     /// The decoded cache stops keeping images at its byte budget; a path

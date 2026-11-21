@@ -370,49 +370,74 @@ impl Renderer {
         let mut solid_materials: HashSet<u16> = HashSet::new();
         let (mut loaded, mut fallbacks) = (0usize, 0usize);
         let load_level = texture_settings::path_levels(fs);
-        for batch in &batches {
-            if material_views.contains_key(&batch.material) {
-                continue;
-            }
-            let name = &bsp.materials[batch.material as usize].name;
-            let sh = self.shader_lib.get(name);
-            let mut img = if cod2 {
-                colour_map_image(fs, sh, &prefetched)
+        let lib = &self.shader_lib;
+        let (textures, gamma) = (self.textures, self.image_gamma.as_ref());
+        // A material that draws through its stages never binds its base
+        // image (`Pass::Stage`): white, with the reads its load would mark.
+        let mut seen = HashSet::new();
+        let firsts: Vec<u16> = batches
+            .iter()
+            .map(|b| b.material)
+            .filter(|&m| seen.insert(m))
+            .collect();
+        let (staged, based): (Vec<u16>, Vec<u16>) = firsts.into_iter().partition(|&m| {
+            kinds[m as usize] == MaterialKind::Draw
+                && lib
+                    .get(&bsp.materials[m as usize].name)
+                    .is_some_and(|sh| !sh.stages.is_empty())
+        });
+        for m in staged {
+            let name = &bsp.materials[m as usize].name;
+            if cod2 {
+                mark_colour_map(fs, lib.get(name));
             } else {
-                assets::load_material_image(fs, &shaders, name)
-            };
-            let picmip = self.textures.world_picmip(sh.is_some_and(|sh| sh.nopicmip));
-            let mips = if sh.is_some_and(|sh| sh.nomipmaps) {
-                texture_settings::Mips::single(name, &load_level)
-            } else {
-                texture_settings::Mips::chain(name, &load_level)
-            };
-            if is_fallback(&img, &fallback_px) {
-                fallbacks += 1;
-            } else {
-                loaded += 1;
+                assets::mark_material_image(fs, &shaders, name);
             }
-            let mat = &bsp.materials[batch.material as usize];
-            if sh.is_none() && !mesh::is_overlay(mat) && world_type_draws_opaque(fs, name) {
-                assets::force_opaque(&mut img);
+            material_views.insert(m, white_view.clone());
+        }
+        // decoded and mipped on every core a chunk at a time, uploaded in
+        // first-use order
+        for chunk in based.chunks(par_chunk()) {
+            let prepared = vcod_common::laps::par_map(chunk, |&m| {
+                let mat = &bsp.materials[m as usize];
+                let name = &mat.name;
+                let sh = lib.get(name);
+                let mut img = if cod2 {
+                    colour_map_image(fs, sh, &prefetched)
+                } else {
+                    assets::load_material_image(fs, &shaders, name)
+                };
+                let picmip = textures.world_picmip(sh.is_some_and(|sh| sh.nopicmip));
+                let mips = if sh.is_some_and(|sh| sh.nomipmaps) {
+                    texture_settings::Mips::single(name, &load_level)
+                } else {
+                    texture_settings::Mips::chain(name, &load_level)
+                };
+                let fallback = is_fallback(&img, &fallback_px);
+                if sh.is_none() && !mesh::is_overlay(mat) && world_type_draws_opaque(fs, name) {
+                    assets::force_opaque(&mut img);
+                }
+                let cut = assets::has_cutout_alpha(&img);
+                let levels =
+                    texture_settings::prepare(&mut img, picmip, gamma, textures.store(), mips);
+                let solid = cod1 && !uploads_cutout(&img, &levels);
+                (img, levels, fallback, cut, solid)
+            });
+            for (&m, (img, levels, fallback, cut, solid)) in chunk.iter().zip(prepared) {
+                if fallback {
+                    fallbacks += 1;
+                } else {
+                    loaded += 1;
+                }
+                if cut {
+                    cut_materials.insert(m);
+                }
+                if solid {
+                    solid_materials.insert(m);
+                }
+                let name = &bsp.materials[m as usize].name;
+                material_views.insert(m, upload_levels(device, queue, name, &img, &levels));
             }
-            if assets::has_cutout_alpha(&img) {
-                cut_materials.insert(batch.material);
-            }
-            let levels = texture_settings::prepare(
-                &mut img,
-                picmip,
-                self.image_gamma.as_ref(),
-                self.textures.store(),
-                mips,
-            );
-            if cod1 && !uploads_cutout(&img, &levels) {
-                solid_materials.insert(batch.material);
-            }
-            material_views.insert(
-                batch.material,
-                upload_levels(device, queue, name, &img, &levels),
-            );
         }
 
         laps.lap("material images");
@@ -517,73 +542,133 @@ impl Renderer {
         laps.lap("bind groups");
         // Prop materials are skin filenames, not `textures/...` names, so
         // `load_skin_image` resolves them.
-        let mut skin_cache: HashMap<&str, (usize, bool, Option<usize>, Pass)> = HashMap::new();
         let skin_level = texture_settings::skin_levels(fs);
         let mut prop_cut: Vec<bool> = Vec::with_capacity(props.batches.len());
         // `type@` templates past one unblended stage (metal_env, the
         // blends), bound to their skin; they draw through the stage path
         let mut prop_templates: Vec<Material> = Vec::new();
         let mut prop_template_of: Vec<Option<usize>> = Vec::with_capacity(props.batches.len());
+        // each skin once, in first-use order: its script, its template and
+        // whether it draws through stages, which bind no base image
+        struct SkinPlan<'s> {
+            skin: &'s str,
+            scripted: bool,
+            template: Option<usize>,
+            opaque: bool,
+            staged: bool,
+        }
+        let mut plan_of: HashMap<&str, usize> = HashMap::new();
+        let mut plans: Vec<SkinPlan> = Vec::new();
         for batch in &props.batches {
-            let (idx, cut, template, pass) =
-                *skin_cache.entry(batch.skin.as_str()).or_insert_with(|| {
-                    let script = prop_material(&self.shader_lib, cod2, &batch.skin);
-                    let scripted = script.is_some_and(|sh| !sh.stages.is_empty());
-                    let mut img = if cod2 {
-                        colour_map_image(fs, script, &prefetched)
-                    } else {
-                        assets::load_skin_image(fs, &batch.skin)
-                    };
-                    let mut template = None;
-                    if !scripted {
-                        match prop_skin_draw(fs, &batch.skin) {
-                            PropSkinDraw::Stages(sh) => {
-                                prop_templates.push(*sh);
-                                template = Some(prop_templates.len() - 1);
-                            }
-                            PropSkinDraw::Opaque => assets::force_opaque(&mut img),
-                            PropSkinDraw::Cut => {}
-                        }
+            let skin = batch.skin.as_str();
+            if plan_of.contains_key(skin) {
+                continue;
+            }
+            let scripted =
+                prop_material(lib, cod2, skin).is_some_and(|sh| !sh.stages.is_empty());
+            let (mut template, mut opaque) = (None, false);
+            if !scripted {
+                match prop_skin_draw(fs, skin) {
+                    PropSkinDraw::Stages(sh) => {
+                        prop_templates.push(*sh);
+                        template = Some(prop_templates.len() - 1);
                     }
-                    let cut = assets::has_cutout_alpha(&img);
-                    let levels = texture_settings::prepare(
-                        &mut img,
-                        self.textures.picmip2,
-                        self.image_gamma.as_ref(),
-                        self.textures.store(),
-                        texture_settings::Mips::chain(&batch.skin, &skin_level),
-                    );
-                    let view = upload_levels(device, queue, &batch.skin, &img, &levels);
-                    let pass = Pass::Prop {
-                        culled: cod1 && !scripted && !prop_skin_two_sided(fs, &batch.skin),
-                        solid: cod1 && !uploads_cutout(&img, &levels),
-                    };
-                    bind_groups.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("prop skin bind group"),
-                        layout: material_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(&view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::TextureView(white_view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 3,
-                                resource: wgpu::BindingResource::Sampler(lightmap_sampler),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 4,
-                                resource: wgpu::BindingResource::TextureView(&white_lightmap.edges),
-                            },
-                        ],
-                    }));
-                    (bind_groups.len() - 1, cut, template, pass)
-                });
+                    PropSkinDraw::Opaque => opaque = true,
+                    PropSkinDraw::Cut => {}
+                }
+            }
+            let staged =
+                scripted || template.is_some_and(|i| !prop_templates[i].stages.is_empty());
+            plan_of.insert(skin, plans.len());
+            plans.push(SkinPlan {
+                skin,
+                scripted,
+                template,
+                opaque,
+                staged,
+            });
+        }
+        let skin_bind_group = |view: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("prop skin bind group"),
+                layout: material_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(white_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::Sampler(lightmap_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::TextureView(&white_lightmap.edges),
+                    },
+                ],
+            })
+        };
+        // per plan: its bind group, cut and pass (`Pass::Stage` replaces a
+        // staged one's below)
+        let mut skin_draws: Vec<(usize, bool, Pass)> = Vec::with_capacity(plans.len());
+        for chunk in plans.chunks(par_chunk()) {
+            let prepared = vcod_common::laps::par_map(chunk, |p| {
+                if p.staged {
+                    if cod2 {
+                        mark_colour_map(fs, prop_material(lib, cod2, p.skin));
+                    } else {
+                        assets::mark_skin_image(fs, p.skin);
+                    }
+                    return None;
+                }
+                let mut img = if cod2 {
+                    colour_map_image(fs, prop_material(lib, cod2, p.skin), &prefetched)
+                } else {
+                    assets::load_skin_image(fs, p.skin)
+                };
+                if p.opaque {
+                    assets::force_opaque(&mut img);
+                }
+                let cut = assets::has_cutout_alpha(&img);
+                let levels = texture_settings::prepare(
+                    &mut img,
+                    textures.picmip2,
+                    gamma,
+                    textures.store(),
+                    texture_settings::Mips::chain(p.skin, &skin_level),
+                );
+                let pass = Pass::Prop {
+                    culled: cod1 && !p.scripted && !prop_skin_two_sided(fs, p.skin),
+                    solid: cod1 && !uploads_cutout(&img, &levels),
+                };
+                Some((img, levels, cut, pass))
+            });
+            for (p, prepared) in chunk.iter().zip(prepared) {
+                let (view, cut, pass) = match prepared {
+                    Some((img, levels, cut, pass)) => {
+                        (upload_levels(device, queue, p.skin, &img, &levels), cut, pass)
+                    }
+                    None => {
+                        let pass = Pass::Prop {
+                            culled: false,
+                            solid: false,
+                        };
+                        (white_view.clone(), false, pass)
+                    }
+                };
+                bind_groups.push(skin_bind_group(&view));
+                skin_draws.push((bind_groups.len() - 1, cut, pass));
+            }
+        }
+        for batch in &props.batches {
+            let pi = plan_of[batch.skin.as_str()];
+            let (idx, cut, pass) = skin_draws[pi];
             prop_cut.push(cut);
-            prop_template_of.push(template);
+            prop_template_of.push(plans[pi].template);
             batch_draws.push(DrawCall {
                 bind_group: idx,
                 pass,
@@ -1610,6 +1695,12 @@ impl Renderer {
         self.dynamic.entity_scene_lights.clear();
         self.vis_counts = VisCounts::default();
     }
+}
+
+/// How many images a load decodes on every core before uploading them:
+/// a few a core, so the decoded copies held at once stay bounded.
+fn par_chunk() -> usize {
+    4 * std::thread::available_parallelism().map_or(1, |n| n.get())
 }
 
 /// Whether an image as uploaded, `img` after `texture_settings::prepare`

@@ -123,6 +123,14 @@ pub(super) fn prefetch_paths<'m>(
     out
 }
 
+/// The pak read [`colour_map_image`] of `material` marks, made without
+/// reading or decoding.
+pub(super) fn mark_colour_map(fs: &Pk3Fs, material: Option<&Material>) {
+    if let Some(ImageRef::Path(path)) = material.and_then(|m| m.texture(TexSemantic::Color)) {
+        fs.mark_read(path);
+    }
+}
+
 /// A CoD2 material's colour map: the image its base draw and cutout test
 /// read, the default image without one.
 pub(super) fn colour_map_image(
