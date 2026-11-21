@@ -86,7 +86,7 @@ The game is the detected install's (or `--game`'s).
 `env_vars_documented` (`crates/common/tests`) fails on a `VCOD_*` or
 `VC_*` name in `crates/` that this table lacks. The A/B gates' `*_REPORT`,
 `*_TRACE` and `*_DUMP` knobs are [retail.md](retail.md)'s; `bot_match`'s
-are its header's.
+are its `KNOBS` table's.
 
 | Variable | Read by | Does |
 |---|---|---|

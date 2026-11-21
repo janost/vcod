@@ -447,24 +447,12 @@ names a wrapper command, default `nice -n 10`) runs `cod4_soak` in
 - `VCOD_FRAME_PROFILE=<path>` on `vcod` writes each frame's CPU ms by stage
   (net, bodies, fx, hud, cull, encode...), its counts and its GPU ms per pass
   group (`frame_prof`).
-- `tools/cod4_perf.sh <outdir> <map> <secs>` runs a CoD4 server with 12
+- `tools/cod4_perf.sh <outdir> <map> <secs>` runs a server with 12
   shooting bots and a spectating client under it in a nested kwin, and
-  prints the summary.
-  - `SESSION=1`: a window in the current session, on a real GPU.
-  - `GAMETYPE=war` holds the view still for a GPU A/B. `TURN=<deg/s>` turns
-    it on its own for a moving view's CPU.
-  - `GAME=cod2` with `COD2_DIR` runs CoD2's, whose free spectator holds still
-    on any gametype. `GAME=cod1` or `GAME=uo` with `COD_DIR` runs a CoD1 or
-    UO server, whose spectator stands still.
-  - `SIZE=WxH` sizes the client's window (`vcod --window`) in both modes.
-    `SESSION=1` without it keeps the game's saved video mode.
-  - `SWEEP=1 SESSION=1 tools/cod4_perf.sh <outdir> mp_crossfire 10` holds one
-    view in one session and toggles one setting a pass (MSAA, prepass, sun
-    shadow, feather, distortion, `fx_draw`, specular, normal maps, fog, glow,
-    dof, film), printing a row a pass with the finer `gpu.<group>` stamps
-    (world, smodel, ents, gun, fx, each post pass). It restores the
-    install's `vcod_mp.cfg` files at the end. `cod4-client-perf.md` 25 has
-    the command and each column.
+  prints the summary. It runs every game (`GAME=`), a real GPU in the
+  current session (`SESSION=1`) and a one-setting-a-pass sweep (`SWEEP=1`);
+  its header lists every knob, and `cod4-client-perf.md` 25 the sweep's
+  columns.
 - Per-game numbers: `cod4-client-perf.md` (the per-map table),
   `cod2-client-perf.md`, `cod11-client-perf.md`.
 - `cod2_load_profile` (ignored, in `renderer/pipeline_check.rs`, run on
@@ -478,44 +466,15 @@ names a wrapper command, default `nice -n 10`) runs `cod4_soak` in
 Bot play is measured, not eyeballed. Retail has no bots, so these are the
 only yardstick.
 
-- `cargo run --release -p vcod-server --example bot_match [seed...]` runs
-  seeded bot-vs-bot matches. It is the one bot measuring tool: extend it
-  rather than add another example. Knobs:
-  - `MAPS=`, `GAMETYPE=`, `BOTS=`, `TICKS=`, `JOBS=`, `SET=`, `UO=1`.
-  - Per side `AXIS_SKILL=`/`ALLIES_SKILL=`; one-sided `COVER=`, `RETREAT=`,
-    `TEAMPLAY=`, `AWARE=`, `FOOTWORK=`, `WARY=`, `SQUAD=`, `AIM=`, `TACTICS=`,
-    `CONVERGE=`, `LANES=`, `FAR=`, `CUES=`, `TRAVEL=`, `CARRY=` arms
-    (`dm` splits them by slot parity), and `ESCORT=`, `ROUTE=`, `HOLD=`,
-    `SPRINT=`, `WATCH=`, `CLOSE=`, `NEAROUT=`, which turn on rules that
-    are off by default (bot-objectives.md 14.12, 14.13). On `ctf` it counts the carries and how each
-    ends (`ctf_carry_*`), and `CTF_TRACE=1` prints each carry's end.
-  - `GAME=cod2` runs `vcod-server --game cod2`'s bots, split by weapon class
-    and skill; `GUNS=0` keeps them off the mounted guns (docs/bots.md
-    "CoD2"). `GAME=cod4` runs CoD4's, with each level's line and every script
-    error the levels raised (docs/bots.md "CoD4").
-  - `DIGEST=1` or `DIGEST=<N>` adds a per-tick hash of every bot's cmd and
-    body, the check that a refactor moved no bot. `NETDIGEST=<N>` hashes
-    every datagram sent, with an observer client joined. `OBSERVERS=<N>`
-    joins N more (CoD4's in process), whose snapshots the server builds;
-    `OBSERVERS_PLAY=1` (CoD1, CoD4) puts them in the world, walking.
-    `VCOD_TICK_TRACE=<dir>` writes the tick's step log (bot-combat.md
-    section 1). `SPIKE_MS` logs slow ticks (every game), with the ticking
-    thread's instructions where the kernel lets a process count them, the
-    number to compare on a loaded machine (cod4-server-frame.md 9.1); on
-    CoD1 and CoD2 `RESTART=<n>` runs `map_restart` every `n` ticks, a spawn wave
-    each (cod4-server-frame.md 9). `TICKSTATS=1` (with `JOBS=1`) prints each
-    phase's mean, p50, p99 and max a tick; `TICKSTATS=insns` counts each
-    phase's user-space instructions instead, the number to compare on a
-    loaded machine. `VCOD_BOT_THREADS=1` runs the
-    bots' pass serial: its digests match the threaded run's.
-
-  It prints kills, deaths, damage, time-to-kill, wins, objective actions,
-  lives, wounds survived, retreats, cover holds, peeks and hunts and the
-  deaths after them, hits answered, deaths blindsided, stalls (split from
-  deliberate holds), shots, hits, accuracy, sight to first shot and first
-  hit, and fights and how they end, re-engagements included, per team,
-  skill and arm.
-  `bot-combat.md` section 1 says what each number means.
+- `cargo run --release -p vcod-server --example bot_match -- [seed...]
+  [KEY=VALUE...]` runs seeded bot-vs-bot matches in every game. It is the
+  one bot measuring tool: extend it rather than add another example. Its
+  `KNOBS` table is the one list of knobs, which an unknown key prints.
+  `DIGEST=1` is the check that a refactor moved no bot; `TICKSTATS=insns`
+  and `SPIKE_MS` the tick's cost on a loaded machine (cod4-server-frame.md
+  9.1); `VCOD_BOT_THREADS=1` runs the bots' pass serial, with the threaded
+  run's digests. `bot-combat.md` section 1 says what each printed number
+  means.
 - A bot behaviour change reports its before and after on the same seeds in
   `docs/research/bot-combat.md`.
 - `cargo run --release -p vcod-server --example ship_stalls` is the stall
