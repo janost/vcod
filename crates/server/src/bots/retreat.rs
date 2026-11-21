@@ -811,9 +811,6 @@ mod tests {
         assert_ne!(bot.goal(&v), Goal::To(pack));
     }
 
-    /// A pack dropped where no body fits: the plan to it walked out, the
-    /// body comes no nearer, and after `SHORT_TICKS` the bot passes it
-    /// over. One still walking its plan, or closing in, keeps it.
     /// Two items in reach: the one nearer by the graph's way, not by
     /// straight line; with one alone, or no graph, the straight line.
     #[test]
@@ -839,6 +836,9 @@ mod tests {
         assert_eq!(nearest_pack(&v, &[walled], None, Some(&g)), Some(walled));
     }
 
+    /// A pack dropped where no body fits: the plan to it walked out, the
+    /// body comes no nearer, and after `SHORT_TICKS` the bot passes it
+    /// over. One still walking its plan, or closing in, keeps it.
     #[test]
     fn a_health_item_no_body_reaches_is_passed_over() {
         let (mut bot, mut v) = hurt(1);
