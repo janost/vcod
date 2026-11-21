@@ -10,10 +10,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::fxhash::FxHashMap;
+use crate::fxhash::{FxHashMap, FxHashSet};
 
 use crate::atom::Atom;
-use crate::value::{ArrayId, StructId, Value};
+use crate::value::{ArrayId, EntId, StructId, Value};
 
 /// An array index: gsc arrays are associative, keyed by either a string
 /// (`a["allies"]`) or an integer (`a[0]`). Ordered so iteration over an
@@ -186,6 +186,8 @@ pub struct Heap {
     survivors: usize,
     /// [`Heap::vars`].
     vars: u64,
+    /// The entities script has been handed ([`Heap::reach`]).
+    reached: FxHashSet<EntId>,
 }
 
 impl Heap {
@@ -500,6 +502,27 @@ impl Heap {
         {
             self.vars -= 1;
         }
+    }
+
+    /// Notes that script was handed `v` if it is an entity: retail makes an
+    /// entity's object the first time it goes on the script stack
+    /// (`Scr_AddEntity`, a thread's `self`), and `scriptUsage` counts the
+    /// entities with one (cod11-server-handshake.md, "The entity line").
+    pub fn reach(&mut self, v: Value) {
+        if let Value::Entity(e) = v {
+            self.reached.insert(e);
+        }
+    }
+
+    /// Whether script has been handed `e` ([`Heap::reach`]).
+    pub fn reached(&self, e: EntId) -> bool {
+        self.reached.contains(&e)
+    }
+
+    /// Forgets the reached entities `live` says are gone, whose objects
+    /// went with them.
+    pub fn retain_reached(&mut self, live: impl Fn(EntId) -> bool) {
+        self.reached.retain(|&e| live(e));
     }
 
     /// An array's element count, for `.size` and for a host that walks one.

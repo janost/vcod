@@ -375,18 +375,23 @@ pub(crate) fn call_builtin(
             cx.interner.pin(v);
         }
     }
-    if !CONTAIN.get() {
-        return host.builtin(cx, name, recv, args);
+    let v = if !CONTAIN.get() {
+        host.builtin(cx, name, recv, args)
+    } else {
+        let call = std::panic::AssertUnwindSafe(|| host.builtin(cx, name, recv, args));
+        std::panic::catch_unwind(call).unwrap_or_else(|p| {
+            let text = p
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| p.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "a non-text panic".into());
+            Err(ErrorKind::Panic(text))
+        })
+    };
+    if let Ok(r) = &v {
+        cx.heap.reach(*r);
     }
-    let call = std::panic::AssertUnwindSafe(|| host.builtin(cx, name, recv, args));
-    std::panic::catch_unwind(call).unwrap_or_else(|p| {
-        let text = p
-            .downcast_ref::<&str>()
-            .map(|s| s.to_string())
-            .or_else(|| p.downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "a non-text panic".into());
-        Err(ErrorKind::Panic(text))
-    })
+    v
 }
 
 impl ErrorKind {
@@ -543,7 +548,14 @@ impl Cx<'_> {
     }
 
     pub fn set_field(&mut self, s: StructId, f: Atom, v: Value) {
+        self.heap.reach(v);
         self.heap.set_field(s, f, v);
+    }
+
+    /// Notes that script was handed `v` ([`Heap::reach`]): an entity the
+    /// engine gives an object without handing it over.
+    pub fn reach(&mut self, v: Value) {
+        self.heap.reach(v);
     }
 
     /// Gives `s` an undefined `f` if it has none: what reading an unset
@@ -566,6 +578,7 @@ impl Cx<'_> {
     }
 
     pub fn set_index(&mut self, a: ArrayId, k: ArrayKey, v: Value) {
+        self.heap.reach(v);
         self.heap.set_index(a, k, v);
     }
 
@@ -1086,6 +1099,7 @@ impl Vm {
         }
         host.roots(&mut roots);
         self.heap.collect(roots, &mut atoms);
+        self.heap.retain_reached(|e| host.is_live(e));
         self.interner.sweep(atoms);
     }
 

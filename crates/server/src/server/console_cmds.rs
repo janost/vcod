@@ -962,10 +962,8 @@ mod tests {
     /// `probe_usage_ents` on retail 1.1d, mp_brecourt (handshake doc,
     /// "Console commands over rcon"): the caret under a path call and a
     /// method call through a pointer, and the entity line under each
-    /// `probe_mode`. vcod gives every in-use entity an object where retail
-    /// makes one when script first reaches the entity, so the count differs
-    /// off stock gametypes; what the objects hold (`var usage` less
-    /// `count`) is compared.
+    /// `probe_mode`: only the entities script reached, a named radiant key
+    /// or the spawn gave an object count.
     #[test]
     fn script_usage_entities_as_retail() {
         const SRC: &str = include_str!(concat!(
@@ -983,8 +981,8 @@ mod tests {
         )));
         let threads = |t: &str| t.split("ent type").next().unwrap().to_string();
         assert_eq!(threads(&base), threads(&retail));
-        // `var usage` less `count` on the entity line.
-        let held = |t: &str| -> i64 {
+        // The entity line's count and var usage.
+        let held = |t: &str| -> (i64, i64) {
             let l = t
                 .lines()
                 .find(|l| l.starts_with("ent type 'entity'"))
@@ -993,7 +991,7 @@ mod tests {
                 .split(|c: char| !c.is_ascii_digit())
                 .filter_map(|w| w.parse().ok())
                 .collect();
-            n[1] - n[0]
+            (n[0], n[1])
         };
         // Retail's entity line per mode (count, var usage), captured.
         let modes: [([&str; 3], i64, i64); 19] = [
@@ -1019,7 +1017,7 @@ mod tests {
         ];
         for (mode, count, usage) in modes {
             let ours = usage_under("probe_usage_ents", SRC, "1", mode).unwrap();
-            assert_eq!(held(&ours), usage - count, "{mode:?}: {ours}");
+            assert_eq!(held(&ours), (count, usage), "{mode:?}: {ours}");
         }
         // Naming three radiant keys stores them: `export` once,
         // `script_noteworthy` twice, `script_gameobjectname` 27 times
@@ -1029,7 +1027,7 @@ mod tests {
             "/../gsc/tests/fixtures/semantics/client-probes/probe_usage_keys.gsc"
         ));
         let keys = usage_under("probe_usage_keys", KEYS, "1", ["", "", ""]).unwrap();
-        assert_eq!(held(&keys), 314 - 63);
+        assert_eq!(held(&keys), (63, 314));
     }
 
     /// An rcon line is tokenized whole, comments dropped, rebuilt and

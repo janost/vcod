@@ -196,7 +196,19 @@ impl Vm {
         // needs to observe them starts the thread suspended (e.g. behind
         // a leading `wait 0;`) and lets `run_frame` step it instead.
         let mut errors = Vec::new();
+        self.reach_all(recv, &args);
         self.spawn(host, func, f, recv, args, &mut errors)
+    }
+
+    /// The host hands script a thread's `self` and arguments
+    /// ([`crate::heap::Heap::reach`]).
+    pub(crate) fn reach_all(&mut self, recv: Option<Target>, args: &[Value]) {
+        if let Some(Target::Entity(e)) = recv {
+            self.heap.reach(Value::Entity(e));
+        }
+        for &v in args {
+            self.heap.reach(v);
+        }
     }
 
     /// Pushes a new `Runnable` thread and immediately steps it to its own
@@ -267,6 +279,7 @@ impl Vm {
     /// The event folds first: `waittill`/`endon` store the folded atom, and
     /// the name here may have arrived as any spelling of it (atom.rs).
     pub fn notify(&mut self, target: impl Into<Target>, event: Atom, args: &[Value]) {
+        self.reach_all(None, args);
         self.notify_from(None, target, event, args);
     }
 
@@ -669,6 +682,7 @@ impl Vm {
         // Attributed to the thread whose instructions queued them, so its
         // own endons do not kill it (`notify_from`).
         for (target, event, args) in notifies {
+            self.reach_all(None, &args);
             self.notify_from(Some(id), target, event, &args);
         }
         returned
@@ -880,6 +894,7 @@ impl Vm {
                 line: 0,
                 kind: ErrorKind::Custom("no such function".to_string()),
             })?;
+        self.reach_all(recv, &args);
         let mut frames = vec![self.make_frame(func, f, recv, args)];
         let mut notifies = Vec::new();
         // Errors from a threaded call spawned (and immediately run) during
