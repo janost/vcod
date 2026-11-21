@@ -684,6 +684,18 @@ pub struct StaticLighting {
 
 impl StaticLighting {
     pub fn new(bsp: &MapWorld) -> Self {
+        Self::with_collision(bsp, Self::collision_for(bsp))
+    }
+
+    /// What [`Self::new`] traces through: `bsp`'s world brushes, on a map
+    /// with leaf lights. A load builds it beside other work and hands it
+    /// to [`Self::with_collision`].
+    pub fn collision_for(bsp: &MapWorld) -> Option<Arc<CollisionWorld>> {
+        (!bsp.light_indices.is_empty()).then(|| Arc::new(CollisionWorld::build(bsp, &[])))
+    }
+
+    /// [`Self::new`] over `collision`, [`Self::collision_for`]'s world.
+    pub fn with_collision(bsp: &MapWorld, collision: Option<Arc<CollisionWorld>>) -> Self {
         let world = WorldLight::parse(&bsp.entities);
         let lights: Vec<Light> = bsp
             .lights
@@ -697,8 +709,7 @@ impl StaticLighting {
             lights,
             sun,
             cache: VisCache::from_lump(&bsp.light_vis),
-            collision: (!bsp.light_indices.is_empty())
-                .then(|| Arc::new(CollisionWorld::build(bsp, &[]))),
+            collision,
             misses: 0,
         }
     }

@@ -90,7 +90,10 @@ by doc and section. Grep `Trap:` in the subsystem doc you were sent to.
   `Pk3Fs::read_unflagged`). A read that must set a pak's referenced flag goes
   through `Pk3Fs::read` or `mark_read`, never the unflagged read alone.
 - A load made faster must keep the texture digest and the marked paks
-  `cod2_load_profile` prints ([testing.md](testing.md#performance)).
+  `cod2_load_profile` prints ([testing.md](testing.md#performance)). One
+  that stops uploading an image nothing binds moves the digest; the frames
+  must stay byte for byte and the marked paks the same (a skipped read
+  marks its pak through `Pk3Fs::mark_read`).
 
 ### Net
 

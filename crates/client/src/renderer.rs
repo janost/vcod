@@ -470,9 +470,10 @@ pub struct Renderer {
     world_blur: f32,
     /// When the blend last captured, for render command 10's wall clock.
     shock_captured_at: Option<std::time::Instant>,
-    /// CoD2 model skins and their stage images decoded, kept across maps
-    /// (players and weapons come back on the next one) until the search
-    /// path reopens.
+    /// Model skins and their stage images decoded for the upload batch
+    /// running (prefetched on CoD2 and CoD4), or the single uploads since
+    /// the last one: emptied at each batch's end and with the map, as the
+    /// GPU holds what was taken.
     model_images: assets::DecodedImages,
     /// A batch's model skins decoded and mipped ahead on every core
     /// ([`Self::upload_dynamic_models`]), emptied when the batch ends.
@@ -485,6 +486,7 @@ pub struct Renderer {
     /// The loaded world's feathered and distortion stage pipelines
     /// (`cod4_worldfx`); `None` when it has none.
     world_fx: Option<cod4_worldfx::WorldFxPass>,
+    world_fx_keep: cod4_worldfx::WorldFxKeep,
     /// Retail's `identityLight` for the current overbright bits
     /// (`gamma::identity_light`): what lit colours are scaled by.
     identity_light: f32,
@@ -1150,6 +1152,7 @@ impl Renderer {
             soft,
             scene_copy,
             world_fx: None,
+            world_fx_keep: Default::default(),
             identity_light: 0.5,
             image_gamma: None,
             textures,
