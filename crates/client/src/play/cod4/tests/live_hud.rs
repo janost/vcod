@@ -662,6 +662,15 @@ fn cod4_live_enemy_shot_ping_holds_for_its_fire_sound() {
         if !f.both || frozen(f.e) || frozen(f.s) {
             return None;
         }
+        // The enemy's cmds past his spawn's `commandTime`.
+        let spawned_at =
+            f.e.client()
+                .snapshots
+                .last()
+                .and_then(|x| x.ps.get("commandTime"));
+        if pressed.is_none() && spawned_at.is_none_or(|ct| f.e.cmd_time() <= ct as i32) {
+            return None;
+        }
         let t = f.level;
         // One tap of the trigger.
         match pressed {

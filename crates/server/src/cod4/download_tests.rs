@@ -55,7 +55,7 @@ fn fetch(base: &Path, home: &Path, wanted: Vec<Wanted>, sets: &[(&str, &str)]) -
                 }
                 _ => Vec::new(),
             };
-            conn.send(&cmds).unwrap();
+            conn.send(&cmds, None).unwrap();
             for got in conn
                 .poll(Instant::now() + Duration::from_millis(20))
                 .unwrap()

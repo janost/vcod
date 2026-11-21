@@ -1289,12 +1289,15 @@ The entity line:
   (`Cx::touch_field`), a write of `undefined` removes the field, a field
   counts when its name was interned by the compile (`Program::atom_count`,
   standing for retail's canonical strings), and each thread's `waittill`
-  and `endon` on the entity are counted as above. vcod counts every in-use
-  entity and HUD element, not those script reached: off a stock gametype
-  the count is higher (on stock `tdm`, whose scripts reach every entity on
-  mp_brecourt, both say 210, 619). `script_usage_entities_as_retail` checks
-  var usage less count under every `probe_mode` above and
-  `probe_usage_keys`.
+  and `endon` on the entity are counted as above. vcod counts an entity
+  or HUD element once the VM was handed it (`Heap::reach`: a builtin's
+  return, an entity field's read, a thread's `self` or argument and a
+  notify's argument from the host, an entity the host stores in a struct
+  or array) or a named radiant key was stored on it, and a map's
+  `misc_mg42`/`misc_turret` from its spawn, the measured rule whose call
+  is unread (INFERRED for `misc_turret`, which takes the same `SP_turret`).
+  `script_usage_entities_as_retail` matches count and var usage under
+  every `probe_mode` above and `probe_usage_keys`.
 
 `stringUsage` (0x8084d74 -> 0x809a780, ported in shape):
 
