@@ -845,7 +845,7 @@ vcod: `pmove::update_stance` is the arms above and `update_prone_pitch` the
 airborne one; `PmInput::stance_held` is `wbuttons` 0x2; `ClientSim::step`
 raises the spectator's 140. The playing client sets its wanted stance off
 its own client's 140-142 (`play::events::forced_stance`), and the offline
-walk mode turns its prone toggle off on 140 or 141.
+walk mode sets its kept stance off the same handler.
 
 `cl_stanceTemp`. VERIFIED: CoDMP.exe registers it at 0x4120e6 and the
 cgame's cvar table at file offset 0x74f60, both with default "0" and flags
