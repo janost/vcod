@@ -88,6 +88,51 @@ pub fn end_load() -> Option<String> {
     Some(text)
 }
 
+/// Hands the heap's free pages back to the system after a load, on its
+/// own thread: glibc keeps what the load's parse and decode buffers
+/// freed, the threads' arenas included, until `malloc_trim`
+/// (cod4-client-perf.md 34.5). Logs the time and the resident set before
+/// and after at info. Nothing off glibc.
+pub fn trim_heap() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        let trim = || {
+            let t0 = Instant::now();
+            let before = rss_kb();
+            // SAFETY: malloc_trim takes a pad and touches only the
+            // allocator's own state, under its own locks.
+            #[allow(unsafe_code)]
+            let freed = unsafe { libc::malloc_trim(0) } != 0;
+            log::info!(
+                "heap trim: {:.1} ms, RSS {} -> {} MB{}",
+                ms_since(t0, Instant::now()),
+                before / 1024,
+                rss_kb() / 1024,
+                if freed { "" } else { " (nothing to free)" }
+            );
+        };
+        if let Err(e) = std::thread::Builder::new()
+            .name("heap trim".into())
+            .spawn(trim)
+        {
+            log::warn!("heap trim: no thread: {e}");
+        }
+    }
+}
+
+/// VmRSS in kB off `/proc/self/status`; 0 where unread.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn rss_kb() -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find_map(|l| l.strip_prefix("VmRSS:"))
+                .and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())
+        })
+        .unwrap_or(0)
+}
+
 /// Named stages of one load, each timed from the end of the last.
 /// [`Laps::finish`] logs them on one `load` line at info.
 pub struct Laps {

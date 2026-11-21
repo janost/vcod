@@ -223,6 +223,7 @@ impl App {
         {
             vcod_common::laps::span(frame_start, || "the first frame in game".into());
             vcod_common::laps::end_load();
+            vcod_common::laps::trim_heap();
         }
         if frame_digest::on() {
             frame_digest::end_frame(self.digest_time());
