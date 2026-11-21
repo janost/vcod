@@ -1481,7 +1481,7 @@ impl Cod4Client {
                     }
                     _ => f,
                 };
-                for p in e.plays(f, &weapons, &cs, &tags, self.view_tags.as_ref()) {
+                for p in e.plays(f, &weapons, &cs, tags, self.view_tags.as_ref()) {
                     let sounds = e.start(cx.fx, cx.fs, &p, f64::from(cx.time), None);
                     cx.audio.play_fx(cx.fs, sounds);
                 }
