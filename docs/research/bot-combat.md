@@ -266,6 +266,33 @@ first `exitLevel`, for a level's play over a rotation (2026-11-17,
 mp_carentan `tdm`, 4 bots, `scr_tdm_timelimit 1`, `LEVELS=2`: two levels,
 one `W;` each, the scores of both summed). VERIFIED (measured).
 
+### 3.1 Cover and retreat off at easy (2026-11-21, not shipped)
+
+Tried: `Skill` flags turning cover spots (section 4) and the retreat
+(section 5) off at level 0 only, levels 1 to 3 as before, so a default
+server plays the same. VERIFIED (measured, ours, release, master
+af564b3c7 plus section 5.3, `dm`, `SKILLS=0,1,2,3,0,1,2,3`, 12000 ticks,
+seeds 1..=8, one row per level before and after):
+
+| Map, level | Kills | Deaths | K/D | Life s |
+|---|---|---|---|---|
+| mp_carentan 0 before | 286 | 493 | 0.58 | 16.5 |
+| mp_carentan 0 after | 384 | 597 | 0.64 | 13.0 |
+| mp_carentan 1 before / after | 368 / 391 | 472 / 457 | 0.78 / 0.86 | 17.3 / 17.7 |
+| mp_depot 0 before | 247 | 420 | 0.59 | 19.9 |
+| mp_depot 0 after | 330 | 467 | 0.71 | 17.7 |
+| mp_depot 1 before / after | 325 / 350 | 368 / 366 | 0.88 / 0.96 | 22.9 / 23.3 |
+
+- An easy bot that stands and trades shots kills a third more and dies
+  a fifth more, at a higher K/D: the flags made level 0 more dangerous,
+  not less, so they were taken out. VERIFIED (the table). INFERRED:
+  cover and the retreat lengthen fights (section 4.5), and a bot whose
+  aim is poor gains more from the other bot's time in the open than it
+  loses from its own.
+- So no decision is tied to the level yet. A decision that makes a
+  level easier against bots would have to cut its fire, not its care;
+  how a level plays against a human is a hand check. Open.
+
 ## 4. Cover and lean
 
 The brain is `crates/server/src/bots/cover.rs`; the server fills
