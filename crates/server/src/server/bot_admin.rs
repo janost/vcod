@@ -627,7 +627,7 @@ mod tests {
         };
         let mut sv = Server::new(cfg, Instant::now());
         sv.test_seed_rng(5);
-        let before = sv.core.rng;
+        let before = sv.core.rng.fork();
         let s = sv.bot_settings();
         let a = sv.add_bot(Side::Axis, s, None).expect("a slot");
         let b = sv.add_bot(Side::Allies, s, None).expect("a slot");

@@ -4,8 +4,10 @@
 //! game's client slot; both drive it through `engine::tick`
 //! (docs/dev/server-tick.md, "One skeleton for every game").
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::net::SocketAddr;
+use std::rc::Rc;
 use vcod_common::net::huffman::Huffman;
 use vcod_common::net::wire::Transport;
 
@@ -17,8 +19,10 @@ pub struct EngineCore<C> {
     /// The datagrams this frame or packet produced, drained by the binary.
     pub outbox: Vec<(SocketAddr, Vec<u8>)>,
     /// The process's `rand()` stream: the challenges, the checksum feed
-    /// and every draw the game borrows.
-    pub rng: u64,
+    /// and every draw the game borrows. CoD1's is glibc's, shared with its
+    /// game host (map-cycle doc 4.8.1); CoD2's and CoD4's engines keep
+    /// vcod's xorshift until a level's own stream is up.
+    pub rng: LibcRand,
     /// `checksumFeed`, drawn at each spawn and sent in the gamestate.
     pub checksum_feed: i32,
     /// The configstring table: the game's writes as the engine sends them.
@@ -68,7 +72,7 @@ impl<C> EngineCore<C> {
             transport,
             huff: Huffman::new(),
             outbox: Vec::new(),
-            rng: seed,
+            rng: LibcRand::xorshift(seed),
             checksum_feed: 0,
             configstrings: Vec::new(),
             sent_configstrings: Vec::new(),
@@ -93,4 +97,85 @@ impl<C> EngineCore<C> {
 /// challenges come out signed like retail's.
 pub fn rand_from(rng: &mut u64) -> i32 {
     (vcod_common::rng::xorshift(rng) >> 33) as i32
+}
+
+/// A libc `rand()` stream as a handle: [`LibcRand::share`] hands out the
+/// same stream, so the engine and a game host draw in one sequence, as
+/// retail's game module calls its engine's libc. CoD1's is glibc's
+/// (`vcod_common::rng::GlibcRand`); the xorshift variant is vcod's own
+/// stream for the games and tests that keep it, with the draws it always
+/// gave.
+#[derive(Debug)]
+pub struct LibcRand(Rc<RefCell<Stream>>);
+
+#[derive(Clone, Debug, PartialEq)]
+enum Stream {
+    Glibc(vcod_common::rng::GlibcRand),
+    Xorshift(u64),
+}
+
+impl LibcRand {
+    /// glibc's generator after `srand(seed)`.
+    pub fn glibc(seed: u32) -> Self {
+        Self::of(Stream::Glibc(vcod_common::rng::GlibcRand::new(seed)))
+    }
+
+    /// vcod's xorshift64* from `state`, which must not be 0 (the state
+    /// xorshift never leaves).
+    pub fn xorshift(state: u64) -> Self {
+        Self::of(Stream::Xorshift(state))
+    }
+
+    fn of(s: Stream) -> Self {
+        LibcRand(Rc::new(RefCell::new(s)))
+    }
+
+    /// Another handle on the same stream.
+    pub fn share(&self) -> Self {
+        LibcRand(Rc::clone(&self.0))
+    }
+
+    /// A new stream that draws what this one would from here on.
+    pub fn fork(&self) -> Self {
+        Self::of(self.0.borrow().clone())
+    }
+
+    /// `rand()`: `0..2^31`.
+    pub fn rand(&mut self) -> i32 {
+        match &mut *self.0.borrow_mut() {
+            Stream::Glibc(g) => g.next_u31() as i32,
+            Stream::Xorshift(s) => rand_from(s),
+        }
+    }
+
+    /// A uniform draw in `[0, 1)`: one `rand()` over 2^31 on glibc's
+    /// stream, the whole xorshift word on vcod's
+    /// ([`crate::game::host::rand_unit`]).
+    pub fn unit(&mut self) -> f32 {
+        match &mut *self.0.borrow_mut() {
+            Stream::Glibc(g) => {
+                let u = f64::from(g.next_u31()) / 2_147_483_648.0;
+                // Above 2^31 - 64 the quotient rounds to 1 as f32.
+                (u as f32).min(f32::from_bits(0x3f7f_ffff))
+            }
+            Stream::Xorshift(s) => crate::game::host::rand_unit(s),
+        }
+    }
+
+    /// `srand(seed)`: glibc's takes the low 32 bits; the xorshift stream
+    /// restarts at `seed | 1`.
+    pub fn srand(&mut self, seed: u64) {
+        let mut s = self.0.borrow_mut();
+        *s = match &*s {
+            Stream::Glibc(_) => Stream::Glibc(vcod_common::rng::GlibcRand::new(seed as u32)),
+            Stream::Xorshift(_) => Stream::Xorshift(seed | 1),
+        };
+    }
+}
+
+/// Two handles are equal when their streams would draw alike from here.
+impl PartialEq for LibcRand {
+    fn eq(&self, other: &Self) -> bool {
+        *self.0.borrow() == *other.0.borrow()
+    }
 }

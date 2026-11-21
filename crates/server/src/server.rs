@@ -436,6 +436,9 @@ impl Server {
             &PROTOCOL_V1,
         );
         core.sent_configstrings = core.configstrings.clone();
+        // One glibc `rand()` for the engine and the game module; each level's
+        // `G_InitGame` seeds it again (map-cycle doc 4.8.1).
+        core.rng = crate::engine::core::LibcRand::glibc(seed as u32);
         let game = Cod1Game {
             zombies: (0..cfg.max_clients).map(|_| None).collect(),
             cfg,

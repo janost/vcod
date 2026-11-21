@@ -160,12 +160,19 @@ fn direct_buttons(tokens: &[String]) -> Option<u8> {
 /// logs `PROBE done`, and returns its `PROBE` lines. `None` without a UO
 /// install.
 fn direct_run(map: &str, probe: &str) -> Option<Vec<String>> {
+    direct_run_seeded(map, probe, None)
+}
+
+/// [`direct_run`] with `srand(seed)` on the server's `rand()` once the
+/// level is up.
+fn direct_run_seeded(map: &str, probe: &str, seed: Option<u64>) -> Option<Vec<String>> {
     let fs = vcod_common::testing::uo_fs()?;
     Some(direct_run_on(
         fs,
         &vcod_common::net::protocol::PROTOCOL_V22,
         map,
         probe,
+        seed,
     ))
 }
 
@@ -175,6 +182,7 @@ fn direct_run_on(
     proto: &'static vcod_common::net::protocol::Cod1Wire,
     map: &str,
     probe: &str,
+    seed: Option<u64>,
 ) -> Vec<String> {
     use common::{Join, Queues};
     use std::cell::RefCell;
@@ -193,6 +201,9 @@ fn direct_run_on(
         ..common::Boot::new(map, probe)
     }
     .start(fs);
+    if let Some(seed) = seed {
+        sv.test_seed_rng(seed);
+    }
     common::run_alone(&mut sv, &mut now, 3000);
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl = NetClient::start_with_qport(common::ClientEnd(q.clone()), now, 0x2001);
@@ -349,9 +360,13 @@ fn touch_walks(v: &[&str]) -> Vec<String> {
     out
 }
 
+const TOUCH_SEED: u64 = 1;
+
 #[test]
 fn grenade_touch_and_shell_walks_on_trigger_damage_match_retail_uo() {
-    let Some(ours) = direct_run("mp_uo_stanjel", "probe_dmgtouch") else {
+    // A `rand()` seed whose rocket spread takes the shell into the bush
+    // retail's took.
+    let Some(ours) = direct_run_seeded("mp_uo_stanjel", "probe_dmgtouch", Some(TOUCH_SEED)) else {
         return;
     };
     let ours: Vec<&str> = ours.iter().map(String::as_str).collect();
@@ -552,7 +567,7 @@ fn a_round_on_a_script_spawned_trigger_damage_matches_retail() {
     if proto.transport.version == vcod_common::net::protocol::PROTOCOL_V22.transport.version {
         return;
     }
-    let ours = direct_run_on(fs, proto, "mp_carentan", "probe_dmgspawnshot");
+    let ours = direct_run_on(fs, proto, "mp_carentan", "probe_dmgspawnshot", None);
     let ours: Vec<&str> = ours.iter().map(String::as_str).collect();
     assert_eq!(ours, RETAIL_SPAWNED_SHOT);
 }
@@ -565,7 +580,7 @@ fn a_round_on_a_script_spawned_trigger_damage_matches_retail_uo() {
         return;
     };
     let proto = vcod_server::server::install_protocol(&fs);
-    let ours = direct_run_on(fs, proto, "mp_carentan", "probe_dmgspawnshot");
+    let ours = direct_run_on(fs, proto, "mp_carentan", "probe_dmgspawnshot", None);
     let ours: Vec<&str> = ours.iter().map(String::as_str).collect();
     assert_eq!(ours, RETAIL_SPAWNED_SHOT);
 }

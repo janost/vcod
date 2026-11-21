@@ -305,12 +305,15 @@ impl Server {
         true
     }
 
-    /// Test-facing: the seed the spread and the melee rolls draw from, so a
-    /// gate that needs a shot to land where it did once can have it again.
-    /// The bots added after it draw their own streams off `seed` too.
+    /// Test-facing: `srand(seed)` on the process's `rand()`, the stream the
+    /// spread, the melee rolls and the level's draws take, so a gate that
+    /// needs a shot to land where it did once can have it again; each later
+    /// level's `srand` takes the seed in too. The bots added after it draw
+    /// their own streams off `seed` too.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_seed_rng(&mut self, seed: u64) {
-        self.core.rng = seed | 1;
+        self.core.rng.srand(seed);
+        self.game.module.test_rand_seed = seed;
         self.game.module.bot_admin.seed_rng = bot_admin::seed_stream(seed);
     }
 

@@ -1917,8 +1917,13 @@ impl Missiles {
         self.live.iter_mut()
     }
 
+    /// The bounces draw from `rand` (a CoD1 level's host stream).
+    pub fn share_rand(&mut self, rand: &crate::engine::core::LibcRand) {
+        self.draws.rng = rand.share();
+    }
+
     /// Test-facing: the draws the next throws and bounces take, in order,
-    /// before the pool's own state takes over. A tumble draw is the rate
+    /// before the stream takes over. A tumble draw is the rate
     /// itself, a floor contact's the factor its pitch rate is scaled by, a
     /// wall's the whole degrees added to it ([`Missile::land_angles`]).
     pub fn pin_draws(&mut self, draws: impl IntoIterator<Item = f64>) {
@@ -1933,20 +1938,19 @@ impl Missiles {
     }
 }
 
-/// Retail's `rand()` for the bounces (12.7): the pool's own state, so a
-/// throw draws the same numbers whatever else the frame did, or a gate's
-/// pins. The pins cover the launch tumble too, which draws `holdrand`.
+/// Retail's `rand()` for the bounces (12.7): a CoD1 level's is the host's
+/// stream, the engine's glibc `rand()` ([`Missiles::share_rand`]), or a
+/// gate's pins. The pins cover the launch tumble too, which draws
+/// `holdrand`.
 pub struct Draws {
-    rng: u64,
+    rng: crate::engine::core::LibcRand,
     pinned: std::collections::VecDeque<f64>,
 }
 
 impl Default for Draws {
     fn default() -> Draws {
         Draws {
-            // xorshift degenerates on a zero state, so an unseeded pool
-            // would bounce every grenade identically.
-            rng: crate::game::host::RNG_SEED,
+            rng: crate::engine::core::LibcRand::xorshift(crate::game::host::RNG_SEED),
             pinned: std::collections::VecDeque::new(),
         }
     }
@@ -1968,7 +1972,7 @@ impl Draws {
         if let Some(v) = self.pinned.pop_front() {
             return v;
         }
-        let r = f64::from(crate::game::host::rand_int(&mut self.rng)) / 2_147_483_648.0;
+        let r = f64::from(self.rng.rand()) / 2_147_483_648.0;
         let r = if v11 { -r } else { r };
         r * f64::from(0.3f32) + f64::from(0.85f32)
     }
@@ -1978,7 +1982,7 @@ impl Draws {
         if let Some(v) = self.pinned.pop_front() {
             return v;
         }
-        f64::from((crate::game::host::rand_int(&mut self.rng) & 0x7f) - 63)
+        f64::from((self.rng.rand() & 0x7f) - 63)
     }
 }
 

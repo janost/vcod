@@ -79,7 +79,7 @@ pub(super) fn apply_sim_ops(
     rt: &mut script::ScriptRuntime,
     anims: Option<&vcod_common::animtree::PlayerAnims>,
     weapons: &crate::weapons::WeaponTable,
-    rng: &mut u64,
+    rng: &mut crate::engine::core::LibcRand,
     now_ms: i32,
 ) {
     for (slot, op) in rt.take_sim_ops() {
@@ -103,7 +103,7 @@ fn apply_sim_op(
     op: crate::game::host::SimOp,
     anims: Option<&vcod_common::animtree::PlayerAnims>,
     weapons: &crate::weapons::WeaponTable,
-    rng: &mut u64,
+    rng: &mut crate::engine::core::LibcRand,
     (now_ms, cmd_ms): (i32, i32),
 ) {
     use crate::game::host::SimOp;
@@ -177,7 +177,7 @@ pub(super) fn deliver_turret_rounds(
     gunner: usize,
     anims: Option<&vcod_common::animtree::PlayerAnims>,
     weapons: &crate::weapons::WeaponTable,
-    rng: &mut u64,
+    rng: &mut crate::engine::core::LibcRand,
     now_ms: i32,
 ) {
     if effects.is_empty() {
@@ -352,7 +352,7 @@ pub(super) fn apply_callback_ops(
     slot: usize,
     anims: Option<&vcod_common::animtree::PlayerAnims>,
     weapons: &crate::weapons::WeaponTable,
-    rng: &mut u64,
+    rng: &mut crate::engine::core::LibcRand,
     at: (i32, i32),
 ) {
     let (weapon_ops, sim_ops) = rt.take_ops_of(slot);

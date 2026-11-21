@@ -1858,7 +1858,7 @@ impl Cod4Level {
     /// replays a stock script's draws (an airstrike's path) the same on
     /// every run; for tests.
     pub fn reseed_script_rand(&mut self, seed: u64) {
-        self.rt.host.rng = seed | 1;
+        self.rt.host.rng = crate::engine::core::LibcRand::xorshift(seed | 1);
     }
 
     /// Starts `path::name(args...)` (string arguments) on slot `slot`'s

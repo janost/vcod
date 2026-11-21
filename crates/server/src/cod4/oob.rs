@@ -406,7 +406,7 @@ impl Cod4Server {
             Some(c4) => Box::new(move || c4.rand()),
             None => {
                 let rng = &mut self.core.rng;
-                Box::new(move || crate::engine::core::rand_from(rng))
+                Box::new(move || rng.rand())
             }
         };
         let challenge = self

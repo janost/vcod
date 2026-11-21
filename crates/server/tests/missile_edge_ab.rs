@@ -307,6 +307,15 @@ fn same_climb(r: &[(i32, [f32; 3])], o: &[(i32, [f32; 3])], frames: usize, skip:
     }
 }
 
+/// A rocket's whole-unit `trDelta` read off one frame's step of its
+/// positions: the spread's `rand()` draws are the process's, which no seed
+/// replays.
+fn frame_delta(m: &[(i32, [f32; 3])]) -> [f32; 3] {
+    ((glam::Vec3::from(m[2].1) - glam::Vec3::from(m[1].1)) * 20.0)
+        .round()
+        .to_array()
+}
+
 /// 1.1d: the rocket flies its six frames and is gone the frame its move
 /// meets the sky, with no explode on the wire.
 #[test]
@@ -317,7 +326,8 @@ fn a_rocket_at_the_sky_is_freed_silently() {
     let fixture = retail(include_str!(
         "fixtures/missiles/mp_carentan-skyshot-rocket.txt"
     ));
-    let log = ours(
+    let r = first_rocket(&fixture);
+    let log = ours_pinned(
         fs,
         "mp_carentan",
         "probe_skyshot",
@@ -325,9 +335,11 @@ fn a_rocket_at_the_sky_is_freed_silently() {
         &[("probe_part", "sky"), ("probe_weapon", "panzerfaust_mp")],
         Script::Aim,
         15_000,
+        Vec::new(),
+        vec![frame_delta(&r)],
     );
     report(&fixture, &log);
-    let (r, o) = (first_rocket(&fixture), first_rocket(&log));
+    let o = first_rocket(&log);
     assert_eq!(o.len(), r.len(), "retail {r:?}\nours {o:?}");
     same_climb(&r, &o, r.len(), &[]);
     assert!(
@@ -347,7 +359,8 @@ fn a_uo_rocket_flies_on_through_the_sky() {
     let fixture = retail(include_str!(
         "fixtures/missiles/mp_carentan-skyshot-rocket-uo.txt"
     ));
-    let log = ours(
+    let r = first_rocket(&fixture);
+    let log = ours_pinned(
         fs,
         "mp_carentan",
         "probe_skyshot",
@@ -355,9 +368,11 @@ fn a_uo_rocket_flies_on_through_the_sky() {
         &[("probe_part", "sky"), ("probe_weapon", "bazooka_mp")],
         Script::Aim,
         25_000,
+        Vec::new(),
+        vec![frame_delta(&r)],
     );
     report(&fixture, &log);
-    let (r, o) = (first_rocket(&fixture), first_rocket(&log));
+    let o = first_rocket(&log);
     let through = |v: &[(i32, [f32; 3])]| v.iter().position(|p| p.1[2] > 2304.0);
     assert_eq!(
         through(&o),

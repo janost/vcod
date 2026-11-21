@@ -229,11 +229,7 @@ impl Cod2Server {
         let game = self.game.level.as_ref().map(|l| l.combat.rand.clone());
         let challenge = self.core.challenges.issue(from, svs, || match &game {
             Some(r) => ((r.rand() << 16) ^ r.rand()) as i32 ^ xor,
-            None => {
-                (crate::engine::core::rand_from(rng) << 16)
-                    ^ crate::engine::core::rand_from(rng)
-                    ^ xor
-            }
+            None => (rng.rand() << 16) ^ rng.rand() ^ xor,
         });
         self.send_oob(from, &format!("challengeResponse {challenge}"));
     }

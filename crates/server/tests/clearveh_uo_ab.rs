@@ -30,6 +30,8 @@ const RETAIL: &[&str] = &[
     "PROBE done 7800",
 ];
 
+const CLEARVEH_SEED: u64 = 5;
+
 #[test]
 fn a_vehicle_clears_a_dropped_weapon_as_retail_uo_does() {
     let Some(fs) = vcod_common::testing::uo_fs() else {
@@ -45,6 +47,9 @@ fn a_vehicle_clears_a_dropped_weapon_as_retail_uo_does() {
         ..common::Boot::new("mp_cassino", "probe_clearveh")
     }
     .start(fs);
+    // A `rand()` seed whose near toss lands in the tank's padded box, as
+    // retail's did.
+    sv.test_seed_rng(CLEARVEH_SEED);
     common::run_alone(&mut sv, &mut now, 10_000);
     // `PROBE item <tag> <number>`, the drop's landing cut.
     let unplaced = |l: &str| -> String {

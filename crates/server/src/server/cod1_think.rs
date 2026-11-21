@@ -1343,7 +1343,7 @@ fn player_events(
                 | EV_FIRE_WEAPON_MG42
                 | EV_UO_FIRE_WEAPONC
         ) {
-            sim.fire_recoil(weapons.defs(), || rand_from(eng.rng));
+            sim.fire_recoil(weapons.defs(), || eng.rng.rand());
         }
     }
 }
