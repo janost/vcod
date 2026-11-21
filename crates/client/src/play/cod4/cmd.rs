@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use glam::Vec3;
 use vcod_cod4::net::clmsg::UserCmd;
-use vcod_cod4::net::conn::angle2short;
+use vcod_cod4::net::conn::{angle2short, cmd_angles};
 use vcod_cod4::net::delta::PlayerState;
 use vcod_cod4::net::parse::Client;
 use vcod_cod4::pmove::weapon::WeaponDef;
@@ -211,9 +211,11 @@ impl Cod4Session {
             // a spawn's turn. The snapshot's viewangles are stale unless
             // the view is locked (cod4-netfields.md 7); only the first
             // own playerstate takes them.
+            // A plain wrap: the short grid's truncation would move the cmd
+            // a short off the one the delta was pushed for.
             self.view = match self.own_delta {
                 Some(old) => std::array::from_fn(|i| {
-                    vcod_common::pmove::angle_normalize180(self.view[i] + delta[i] - old[i])
+                    (self.view[i] + delta[i] - old[i] + 180.0).rem_euclid(360.0) - 180.0
                 }),
                 None => [ps_f32(&ps, "viewangles[0]"), ps_f32(&ps, "viewangles[1]")],
             };
@@ -541,7 +543,7 @@ fn own_cmd(
         .snapshots
         .last()
         .map_or(0, |s| (s.server_time + snap_age.as_millis() as i32).raw());
-    let delta = |i: usize| angle2short(ps_f32(ps, &format!("delta_angles[{i}]")));
+    let delta: [f32; 3] = std::array::from_fn(|i| ps_f32(ps, &format!("delta_angles[{i}]")));
     let [forwardmove, rightmove] = input.moves(talking);
     let (weapon, offhand) = input.weapons();
     let pm_type = ps.word(vcod_cod4::ps_word!("pm_type")) as i32;
@@ -550,11 +552,7 @@ fn own_cmd(
         buttons: input.buttons(pm_type, talking),
         weapon,
         offhand,
-        angles: [
-            angle2short(view[0]).wrapping_sub(delta(0)),
-            angle2short(view[1]).wrapping_sub(delta(1)),
-            0u16.wrapping_sub(delta(2)),
-        ],
+        angles: cmd_angles([view[0], view[1], 0.0], delta),
         forwardmove,
         rightmove,
         ..UserCmd::default()

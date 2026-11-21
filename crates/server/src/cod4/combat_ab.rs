@@ -612,12 +612,7 @@ fn a_shot_at_the_head_scores_the_head() {
         let d = head - eye;
         let flat = (d.x * d.x + d.y * d.y).sqrt();
         let view = [-d.z.atan2(flat).to_degrees(), d.y.atan2(d.x).to_degrees()];
-        let short = |a: f32| ((a * 65536.0 / 360.0).round() as i32 & 0xffff) as u16;
-        let angles = [
-            short(view[0]).wrapping_sub(short(ps.delta_angles[0])),
-            short(view[1]).wrapping_sub(short(ps.delta_angles[1])),
-            0u16.wrapping_sub(short(ps.delta_angles[2])),
-        ];
+        let angles = vcod_cod4::net::conn::cmd_angles([view[0], view[1], 0.0], ps.delta_angles);
         let attack = if (47_800..47_850).contains(&svs) {
             1
         } else {
@@ -666,12 +661,7 @@ fn the_melee_key_swings_and_hits() {
         let d = target.origin + glam::Vec3::Z * 45.0 - eye;
         let flat = (d.x * d.x + d.y * d.y).sqrt();
         let view = [-d.z.atan2(flat).to_degrees(), d.y.atan2(d.x).to_degrees()];
-        let short = |a: f32| ((a * 65536.0 / 360.0).round() as i32 & 0xffff) as u16;
-        let angles = [
-            short(view[0]).wrapping_sub(short(ps.delta_angles[0])),
-            short(view[1]).wrapping_sub(short(ps.delta_angles[1])),
-            0u16.wrapping_sub(short(ps.delta_angles[2])),
-        ];
+        let angles = vcod_cod4::net::conn::cmd_angles([view[0], view[1], 0.0], ps.delta_angles);
         let melee = if (47_800..47_850).contains(&svs) {
             4
         } else {
@@ -797,7 +787,6 @@ fn the_grenade_launcher_fires_its_grenade() {
         for m in &level.rt.host.cod4().missiles {
             seen.push((m.weapon, m.pos.delta.length()));
         }
-        let short = |a: f32| ((a * 65536.0 / 360.0).round() as i32 & 0xffff) as u16;
         let c = UserCmd {
             server_time: svs + 10,
             buttons: if (48_400..48_450).contains(&svs) {
@@ -807,11 +796,10 @@ fn the_grenade_launcher_fires_its_grenade() {
             },
             weapon: alt,
             offhand: 40,
-            angles: [
-                0u16.wrapping_sub(short(ps.delta_angles[0])),
-                short(ps.view_angles[1]).wrapping_sub(short(ps.delta_angles[1])),
-                0u16.wrapping_sub(short(ps.delta_angles[2])),
-            ],
+            angles: vcod_cod4::net::conn::cmd_angles(
+                [0.0, ps.view_angles[1], 0.0],
+                ps.delta_angles,
+            ),
             ..Default::default()
         };
         probes[1].replay.clear();

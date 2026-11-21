@@ -2,7 +2,43 @@
 
 use super::*;
 
+/// How near a mantle's landing another body stands, flat, for the climb
+/// to end in him ([`Follower::mantle_held`]): two half-widths and a margin.
+const MANTLE_HELD_REACH: f32 = 2.0 * vcod_common::pmove::HALF_WIDTH + 2.0;
+/// How near the landing, flat, a body under it gives the climb up.
+const MANTLE_HELD_NEAR: f32 = 96.0;
+/// A body this slow on the landing stands still on it.
+const MANTLE_HELD_STILL: f32 = 10.0;
+
 impl Follower {
+    /// Whether the body, on the ground under the landing of the mantle
+    /// edge it follows, would climb into another standing still there
+    /// (`others`, off the rungs: origin and velocity): the climb ends in
+    /// him, the two boxes push apart and the climber falls back to climb
+    /// again (mp_crash's ledge at (1403, 196, 188), bot-combat.md 20).
+    /// The caller plans round the edge ([`Self::stuck`]).
+    pub fn mantle_held(
+        &self,
+        g: &NavGraph,
+        at: Vec3,
+        on_ground: bool,
+        others: &[(Vec3, Vec3)],
+    ) -> bool {
+        use vcod_common::pmove::STEPSIZE;
+        let Some(edge) = self.mantle_edge(g) else {
+            return false;
+        };
+        let land = self.mantle_land(g).unwrap_or(g.nodes[edge.1 as usize]);
+        on_ground
+            && land.z - at.z > STEPSIZE
+            && (land - at).truncate().length() < MANTLE_HELD_NEAR
+            && others.iter().any(|&(o, v)| {
+                v.length() < MANTLE_HELD_STILL
+                    && (o - land).truncate().length() < MANTLE_HELD_REACH
+                    && (o.z - land.z).abs() < STEPSIZE
+            })
+    }
+
     /// Where to wait instead of following the path: the bot is at one end
     /// of the ladder its path takes next, off the rungs, and another player
     /// on those rungs is about to step off there or hangs there. Two players
@@ -565,6 +601,39 @@ impl Follower {
 mod tests {
     use super::*;
     use crate::nav::build::tests::map_world;
+
+    /// A mantle edge up 60 onto a ledge: a body standing still on its
+    /// landing holds the climb, one walking past or off to the side does
+    /// not, and neither does one on the next edge.
+    #[test]
+    fn a_body_still_on_a_mantle_landing_holds_the_climb() {
+        let (foot, top, on) = (
+            Vec3::new(1440.0, 180.0, 127.0),
+            Vec3::new(1400.0, 190.0, 188.0),
+            Vec3::new(1300.0, 190.0, 188.0),
+        );
+        let mut g = NavGraph::from_parts(vec![foot, top, on], vec![vec![1], vec![2], vec![]]);
+        g.mantles.insert((0, 1));
+        let mut f = Follower {
+            path: vec![0, 1, 2],
+            next: 1,
+            ..Follower::default()
+        };
+        let at = foot + Vec3::new(-10.0, 0.0, 0.0);
+        let still = |o: Vec3| [(o, Vec3::ZERO)];
+        let mate = Vec3::new(1403.0, 196.0, 188.0);
+        assert!(f.mantle_held(&g, at, true, &still(mate)));
+        assert!(!f.mantle_held(&g, at, false, &still(mate)));
+        assert!(!f.mantle_held(&g, at, true, &[(mate, Vec3::new(150.0, 0.0, 0.0))]));
+        assert!(!f.mantle_held(&g, at, true, &still(mate + Vec3::new(0.0, 40.0, 0.0))));
+        // The landing the probe proved, off the node, is the one read.
+        g.mantle_lands
+            .insert((0, 1), Vec3::new(1380.0, 150.0, 188.0));
+        assert!(!f.mantle_held(&g, at, true, &still(mate)));
+        g.mantle_lands.clear();
+        f.next = 2;
+        assert!(!f.mantle_held(&g, at, true, &still(mate)));
+    }
 
     /// Two bodies meet head-on in a corridor along +x with an alcove off
     /// node 1: the one whose plan goes through the other stands aside in

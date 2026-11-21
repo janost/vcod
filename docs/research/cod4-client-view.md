@@ -1151,12 +1151,23 @@ damage kick), each a client joined to vcod-server's `war` on mp_crash.
   0x79e75c, 0x452a10). VERIFIED. `CG_DrawActive` hands `kickAngles` plus
   `offsetAngles` (0x79e760) to the client (0xc84f98, 0x42f831..0x42f89f),
   and the cmd's angles are `ANGLE2SHORT(cl.viewangles + those)`: the
-  float times 182.0444 plus 0.5 through the truncating store, masked to
-  16 bits (0x463aa9..0x463acf). VERIFIED. So the kick turns the aim: the
+  two floats summed on the x87, times the double 182.04445 (0x70afb0)
+  plus the double 0.5 (0x70ace8), then 0x68b360 (`fstp QWORD`,
+  `cvttsd2si`) truncates the double, masked to 16 bits (0x463aa9..
+  0x463acf). VERIFIED (the instructions). So the kick turns the aim: the
   server reads it off the cmd like a mouse turn, and the prediction draws
   it for the same reason. vcod adds `Cod4Kick::view_kick` to the cmd's
-  view in `live_frame`; its `angle2short` truncates without the 0.5, a
-  rounding difference of at most one short that predates this.
+  view in `live_frame` and makes the cmd with
+  `vcod_cod4::net::conn::cmd_angles` off the float difference from
+  `delta_angles`. vcod's view is not retail's `cl.viewangles`, which
+  piles up the mouse unwrapped, so the helper wraps the difference into
+  0..360 first; where retail's is negative the truncation toward zero
+  gives up to a short more than vcod's. INFERRED (Q3's `cl.viewangles`).
+  The view a `delta_angles` change moves wraps as a plain float, off the
+  short grid: the grid's truncation moved the cmd a short off the one
+  the server pushed the delta for, and the wire sends a negative delta
+  a short nearer zero (`angle16_sent`), so the SAW gate's barrel held
+  at 44.9945 past its arc, not retail's 45. VERIFIED (the gate, ours).
 - Order: vcod steps the kick in the scene by the cg time's change, then
   takes the frame's own fire events (the predicted ring's, else the
   snapshot's), so the cmd the next step builds carries the stepped kick,

@@ -1657,10 +1657,11 @@ pub fn mantle_walk(
     )
 }
 
-/// A cmd angle as 1.7 makes one: `(int)` of the stored float `deg *
-/// 182.04445f + 0.5f`, masked (`iw3mp.exe` 0x463aa9..0x463acf, the
-/// server's cmd base `cod4_lnxded` 0x8130adc..0x8130b29). CoD2 1.3
-/// truncates without the half ([`vcod_common::x87::angle_shorts`]).
+/// A cmd angle as 1.7's server makes its cmd base: `(int)` of the stored
+/// float `deg * 182.04445f + 0.5f`, masked (`cod4_lnxded`
+/// 0x8130adc..0x8130b29). The client truncates the double, never stored
+/// ([`vcod_cod4::net::conn::cmd_angles`]); CoD2 1.3 truncates without the
+/// half ([`vcod_common::x87::angle_shorts`]).
 pub(crate) fn cmd_short(deg: f32) -> u16 {
     (cmd_angle(f64::from(deg)) & 0xffff) as u16
 }
