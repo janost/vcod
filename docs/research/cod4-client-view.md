@@ -1168,6 +1168,9 @@ damage kick), each a client joined to vcod-server's `war` on mp_crash.
   the server pushed the delta for, and the wire sends a negative delta
   a short nearer zero (`angle16_sent`), so the SAW gate's barrel held
   at 44.9945 past its arc, not retail's 45. VERIFIED (the gate, ours).
+  `Cod4Session::turn` wraps the mouse's turn the same way: through the
+  grid a turn under a short a frame truncated back and a still negative
+  view crept toward 0 (`a_turn_under_a_short_a_frame_adds_up`).
 - Order: vcod steps the kick in the scene by the cg time's change, then
   takes the frame's own fire events (the predicted ring's, else the
   snapshot's), so the cmd the next step builds carries the stepped kick,
