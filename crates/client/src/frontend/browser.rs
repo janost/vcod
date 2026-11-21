@@ -180,8 +180,11 @@ pub struct Browser {
     /// Indexed by [`Source`].
     pub(super) lists: [Vec<Server>; 3],
     pub status: Status,
-    /// `ServerSort` column, `None` for arrival order.
+    /// `ServerSort`'s column (`uiInfo.serverStatus.sortKey`); `None` is the
+    /// UI init's, [`Browser::sort_key`].
     pub sort: Option<usize>,
+    /// `sortDir`: `ServerSort` on the sorted column flips it.
+    pub sort_dir: bool,
     /// What each list column shows, set off the loaded `joinserver.menu`.
     pub columns: &'static [Column],
     pub filter: Filter,
@@ -214,6 +217,7 @@ impl Default for Browser {
             lists: Default::default(),
             status: Status::Idle,
             sort: None,
+            sort_dir: false,
             columns: &COLUMNS_V1,
             filter: Filter::default(),
             lan_targets: LAN_PORTS
@@ -531,19 +535,56 @@ impl Browser {
         self.filtered().find(|s| s.addr == addr)
     }
 
+    /// The sort key in force: the last `ServerSort`'s, else the one the UI's
+    /// init sorts on, 1 (the name) on 1.1 (ui_mp_x86.dll 0x4000d667) and 8
+    /// (the ping) on 1.5 (0x4000de41) and UO (0x4000fd45). CoD2 lists in
+    /// arrival order until a `ServerSort`.
+    pub fn sort_key(&self) -> Option<usize> {
+        self.sort.or(match self.columns.len() {
+            6 => Some(1),
+            9 => Some(8),
+            _ => None,
+        })
+    }
+
+    /// `ServerSort <column>`: the sorted column again flips `sortDir`
+    /// (ui_mp_x86.dll 1.1 0x4000aed6, 1.5 0x4000b295, UO 0x4000cc9e).
+    pub fn server_sort(&mut self, column: usize) {
+        if self.sort_key() == Some(column) {
+            self.sort_dir = !self.sort_dir;
+        }
+        self.sort = Some(column);
+    }
+
     /// The servers the list shows, in display order: those that answered
-    /// (every favourite, answered or not) that pass the filter.
+    /// (every favourite, answered or not) that pass the filter, sorted by
+    /// `LAN_CompareServers`. A tie keeps the list's order; retail's binary
+    /// insertion (1.5 0x4000bc10) and qsort place it by their probes.
     pub fn rows(&self) -> Vec<&Server> {
-        let blank = ServerInfo::default();
         let mut rows: Vec<&Server> = self.filtered().collect();
-        let Some(&col) = self.sort.and_then(|c| self.columns.get(c)) else {
+        let Some(key) = self.sort_key() else {
             return rows;
+        };
+        let blank = ServerInfo::default();
+        let dir = self.sort_dir;
+        let of = |s| Compared::of(s, &blank);
+        match self.columns.len() {
+            6 => rows.sort_by(|a, b| compare_v1(key, dir, &of(a), &of(b))),
+            9 => rows.sort_by(|a, b| compare_v5(key, dir, &of(a), &of(b))),
+            _ => self.sort_cod2(&mut rows, key),
+        }
+        rows
+    }
+
+    /// CoD2's list, on vcod's own keys: its `LAN_CompareServers` is unread.
+    fn sort_cod2(&self, rows: &mut [&Server], key: usize) {
+        let blank = ServerInfo::default();
+        let Some(&col) = self.columns.get(key) else {
+            return;
         };
         fn of<'a>(s: &'a Server, blank: &'a ServerInfo) -> &'a ServerInfo {
             s.info.as_ref().unwrap_or(blank)
         }
-        // A string key is built once a row, not twice a comparison; both
-        // sorts are stable, so ties keep the list's order either way.
         match col {
             Column::Name => {
                 rows.sort_by_cached_key(|s| strip(&of(s, &blank).hostname).to_lowercase())
@@ -555,13 +596,7 @@ impl Browser {
                 match col {
                     Column::Players => ib.clients.cmp(&ia.clients),
                     Column::Ping => a.ping.cmp(&b.ping),
-                    // 1.5's `LAN_CompareServers` (CoDMP.exe 0x419c00) keys 1, 6, 7;
-                    // an unknown `hw` (0) after every known one (0x419c4d).
-                    Column::Hardware => {
-                        let (ha, hb) = (ia.hardware as u8, ib.hardware as u8);
-                        (ha == 0).cmp(&(hb == 0)).then(ha.cmp(&hb))
-                    }
-                    Column::Hardware2 => ia.hardware.cmp(&ib.hardware),
+                    Column::Hardware | Column::Hardware2 => ia.hardware.cmp(&ib.hardware),
                     Column::PunkBuster | Column::PunkBusterText => {
                         ia.punkbuster.cmp(&ib.punkbuster)
                     }
@@ -574,7 +609,6 @@ impl Browser {
                 }
             }),
         }
-        rows
     }
 
     /// The source's list length (`LAN_GetServerCount`) and how many
@@ -674,6 +708,140 @@ pub fn strip(text: &str) -> String {
         out.push(c);
     }
     out
+}
+
+/// A list entry as `LAN_CompareServers` reads it: the strings cut to their
+/// 32-byte fields, the 1.5 entry's bytes and short ping
+/// (cod15-protocol-diff.md 11; 1.1's int fields, cod11-front-end.md 8).
+struct Compared<'a> {
+    password: bool,
+    hardware: u8,
+    hostname: &'a [u8],
+    mapname: &'a [u8],
+    gametype: &'a [u8],
+    clients: u32,
+    punkbuster: bool,
+    modded: bool,
+    /// -1 unpinged, as `LAN_ResetPings` leaves it.
+    ping: i32,
+}
+
+impl<'a> Compared<'a> {
+    fn of(s: &'a Server, blank: &'a ServerInfo) -> Compared<'a> {
+        let i = s.info.as_ref().unwrap_or(blank);
+        let field = |t: &'a str| &t.as_bytes()[..t.len().min(31)];
+        Compared {
+            password: i.password,
+            hardware: i.hardware as u8,
+            hostname: field(&i.hostname),
+            mapname: field(&i.mapname),
+            gametype: field(&i.gametype),
+            clients: i.clients,
+            punkbuster: i.punkbuster,
+            modded: i.modded,
+            ping: s.ping.map_or(-1, |p| p as i32),
+        }
+    }
+}
+
+/// `Q_stricmp`: a-z folded to upper over signed chars, -1 or 1 at the
+/// first difference (CoDMP.exe 1.1 0x44aa90, 1.5 0x44d980).
+fn q_stricmp(a: &[u8], b: &[u8]) -> i32 {
+    let at = |s: &[u8], i: usize| s.get(i).map_or(0, |&c| i32::from(c as i8));
+    let fold = |c: i32| {
+        if (0x61..=0x7a).contains(&c) {
+            c - 0x20
+        } else {
+            c
+        }
+    };
+    for i in 0.. {
+        let (c1, c2) = (at(a, i), at(b, i));
+        if c1 != c2 && fold(c1) != fold(c2) {
+            return if fold(c1) < fold(c2) { -1 } else { 1 };
+        }
+        if c1 == 0 {
+            break;
+        }
+    }
+    0
+}
+
+/// `r` under `sortDir`, as an ordering.
+fn directed(r: i32, dir: bool) -> std::cmp::Ordering {
+    if dir { 0.cmp(&r) } else { r.cmp(&0) }
+}
+
+/// 1.1's `LAN_CompareServers` (CoDMP.exe 0x417d40): keys 0..5 are the six
+/// columns, a password after none; a tie is a tie.
+fn compare_v1(key: usize, dir: bool, a: &Compared, b: &Compared) -> std::cmp::Ordering {
+    let ord = |o: std::cmp::Ordering| o as i32;
+    let r = match key {
+        0 => ord(a.password.cmp(&b.password)),
+        1 => q_stricmp(a.hostname, b.hostname),
+        2 => q_stricmp(a.mapname, b.mapname),
+        3 => ord(a.clients.cmp(&b.clients)),
+        4 => q_stricmp(a.gametype, b.gametype),
+        5 => ord(a.ping.cmp(&b.ping)),
+        _ => 0,
+    };
+    directed(r, dir)
+}
+
+/// 1.5's and UO's `LAN_CompareServers` (CoDMP.exe 1.5 0x419c00, UO
+/// 0x41b110): the key's difference under `sortDir`; a tie (and key 8)
+/// goes on to ping, game type and name, a tie ascending whatever `sortDir`.
+fn compare_v5(key: usize, dir: bool, a: &Compared, b: &Compared) -> std::cmp::Ordering {
+    let byte = |x: bool, y: bool| i32::from(x) - i32::from(y);
+    let first = match key {
+        0 => byte(a.password, b.password),
+        1 => match i32::from(a.hardware) - i32::from(b.hardware) {
+            0 => 0,
+            // an unknown `hw` after every known one (0x419c4d)
+            r if r < 0 && a.hardware == 0 => return directed(1, dir),
+            r if r > 0 && b.hardware == 0 => return directed(-1, dir),
+            r => return directed(r, dir),
+        },
+        2 => hostname_v5(a, b),
+        3 => q_stricmp(a.mapname, b.mapname),
+        4 => i32::from(a.clients as u8) - i32::from(b.clients as u8),
+        5 => q_stricmp(a.gametype, b.gametype),
+        6 => byte(a.punkbuster, b.punkbuster),
+        7 => byte(a.modded, b.modded),
+        8 => return directed(ping_chain_v5(a, b), dir),
+        _ => return std::cmp::Ordering::Equal,
+    };
+    match first {
+        0 => directed(ping_chain_v5(a, b), false),
+        r => directed(r, dir),
+    }
+}
+
+/// 1.5's tie chain (0x419ce0): the short ping, then game type, then name.
+fn ping_chain_v5(a: &Compared, b: &Compared) -> i32 {
+    let ping = |c: &Compared| i32::from(c.ping as i16);
+    match ping(a) - ping(b) {
+        0 => match q_stricmp(a.gametype, b.gametype) {
+            0 => hostname_v5(a, b),
+            r => r,
+        },
+        r => r,
+    }
+}
+
+/// 1.5's name compare (0x419b80): the names' alphanumerics alone, then the
+/// whole names on a tie.
+fn hostname_v5(a: &Compared, b: &Compared) -> i32 {
+    let alnum = |s: &[u8]| -> Vec<u8> {
+        s.iter()
+            .copied()
+            .filter(u8::is_ascii_alphanumeric)
+            .collect()
+    };
+    match q_stricmp(&alnum(a.hostname), &alnum(b.hostname)) {
+        0 => q_stricmp(a.hostname, b.hostname),
+        r => r,
+    }
 }
 
 /// What a server list column shows. `ServerSort` numbers the columns the
@@ -885,16 +1053,49 @@ mod tests {
         assert_eq!(b.status, Status::Done);
     }
 
+    /// 1.1 sorts on the name from the start, `Q_stricmp` over the raw
+    /// names (folded to upper, so `[` and `^` come after the letters);
+    /// `ServerSort` on the sorted column turns the order round.
     #[test]
-    fn sort_by_players_puts_the_fullest_first() {
+    fn the_11_list_sorts_as_lan_compare_servers_does() {
+        let mut b = Browser::default();
+        b.lists[0] = ["_x", "^1zed", "Beta", "[clan]a", "alpha"]
+            .iter()
+            .zip([5, 1, 9, 4, 2])
+            .map(|(n, c)| server(n, c, 50))
+            .collect();
+        assert_eq!(names(&b), ["alpha", "Beta", "[clan]a", "^1zed", "_x"]);
+        b.server_sort(1);
+        assert_eq!(names(&b), ["_x", "^1zed", "[clan]a", "Beta", "alpha"]);
+        // `sortDir` stays as it was on another column.
+        b.server_sort(3);
+        assert_eq!(names(&b), ["Beta", "_x", "[clan]a", "alpha", "^1zed"]);
+        b.server_sort(3);
+        assert_eq!(names(&b), ["^1zed", "alpha", "[clan]a", "_x", "Beta"]);
+    }
+
+    /// 1.5 sorts on the ping from the start; a tie on any key goes on to
+    /// ping, game type and the name's alphanumerics, ascending whatever
+    /// `sortDir` says, where key 8's own tie-breaks follow it.
+    #[test]
+    fn the_15_list_breaks_ties_on_ping_game_type_and_name() {
         let mut b = Browser {
-            sort: Some(3),
+            columns: &COLUMNS_V5,
             ..Browser::default()
         };
-        b.lists[0] = vec![server("a", 1, 50), server("b", 9, 80), server("c", 4, 20)];
-        assert_eq!(names(&b), ["b", "c", "a"]);
-        b.sort = Some(5);
-        assert_eq!(b.rows()[0].info.as_ref().unwrap().hostname, "c");
+        b.lists[0] = vec![
+            server("b", 1, 40),
+            server("^1zed", 1, 20),
+            server("[a]", 1, 20),
+            server("c", 1, 30),
+        ];
+        // "1zed" before "a"
+        assert_eq!(names(&b), ["^1zed", "[a]", "c", "b"]);
+        b.server_sort(8);
+        assert_eq!(names(&b), ["b", "c", "[a]", "^1zed"]);
+        b.server_sort(0);
+        assert!(b.sort_dir);
+        assert_eq!(names(&b), ["^1zed", "[a]", "c", "b"]);
     }
 
     #[test]
