@@ -1155,10 +1155,11 @@ impl Cod4Client {
         cx.r.set_cod4_dof(dof);
     }
 
-    /// Whether a snapshot's view has been drawn, the game frame
-    /// `--exec-in-game` waits for.
+    /// Whether a snapshot's view has been drawn and no map change loads
+    /// under the loading screen: the game frame `--exec-in-game` and the
+    /// load profile's end wait for.
     pub(crate) fn in_game(&self) -> bool {
-        self.view.is_some()
+        self.view.is_some() && self.map_load.is_none()
     }
 
     /// The drawn playerstate's view fields, last pump's.
@@ -2942,5 +2943,41 @@ mod new_map_tests {
             c.session.legs_movetypes.is_none(),
             "no bodies, no movetypes"
         );
+    }
+
+    /// A map change loading under the loading screen is out of the game
+    /// until it lands, so the load profile times the load itself
+    /// (cod4-client-perf.md 34.4), though the last map's view is kept.
+    #[test]
+    fn a_map_change_is_out_of_the_game_until_its_load_lands() {
+        let text =
+            std::fs::read_to_string(format!("{FIXTURES}/play-1.7-csb0-shooter.txt")).unwrap();
+        let s = Cod4Session::open_capture(&text).unwrap();
+        let mut c = Cod4Client::new(
+            s,
+            HashMap::new(),
+            Default::default(),
+            HashMap::new(),
+            None,
+            None,
+            None,
+            Default::default(),
+        );
+        c.view = Some((Vec3::ZERO, 0.0));
+        assert!(c.in_game());
+        // no install there: the load fails, which lands it all the same
+        let dir = tempfile::tempdir().unwrap();
+        c.start_map_load(dir.path(), "mp_crash".into());
+        assert!(!c.in_game(), "in game while the map loads");
+        let t0 = Instant::now();
+        let landed = loop {
+            if let Some(done) = c.take_map_load() {
+                break done;
+            }
+            assert!(t0.elapsed().as_secs() < 30, "the load never landed");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert!(landed.is_err());
+        assert!(c.in_game());
     }
 }
