@@ -1816,23 +1816,14 @@ impl Renderer {
                 }
             }
             let sets = self.pick_entity_lights();
-            self.queue
-                .write_buffer(&self.dynamic.light_buf, 0, bytemuck::cast_slice(&sets));
             let raw: Vec<InstanceRaw> = self.dynamic.instances.iter().map(|(_, r)| *r).collect();
-            self.queue
-                .write_buffer(&self.dynamic.instance_buf, 0, bytemuck::cast_slice(&raw));
-            self.queue.write_buffer(
-                &self.dynamic.bone_buf,
-                0,
-                bytemuck::cast_slice(&self.dynamic.bone_mats),
-            );
-            frame_write!(
-                self,
-                "upload entity lights, instances and bones",
-                std::mem::size_of_val(sets.as_slice())
-                    + std::mem::size_of_val(raw.as_slice())
-                    + std::mem::size_of_val(self.dynamic.bone_mats.as_slice())
-            );
+            let d = &mut self.dynamic;
+            // the spans that changed since the last write
+            #[cfg_attr(not(test), expect(unused_variables))]
+            let bytes = d.light_written.write(&self.queue, &d.light_buf, &sets)
+                + d.instance_written.write(&self.queue, &d.instance_buf, &raw)
+                + d.bone_written.write(&self.queue, &d.bone_buf, &d.bone_mats);
+            frame_write!(self, "upload entity lights, instances and bones", bytes);
         }
     }
 

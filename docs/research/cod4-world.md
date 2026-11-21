@@ -320,10 +320,13 @@ the HLSL in bytes).
   `viewHeightCurrent` and + 0x5c `leanf` is INFERRED (`CG_AddViewWeapon`).
 
 vcod: `MapWorld::entity_lighting` (`vcod_cod4::mapworld::entity_lighter`)
-looks a block up per distinct lighting origin each frame, traced through
-the clip map, into the frame's entity volume (`entity_material::Cod4Volume`,
-256 x 64 x 4: 1024 blocks, 1.7's entry limit for one view; set `i` takes
-block `i`, the view model the last). `entity_light::pack_cod4` packs the
+looks a block up per distinct lighting origin, traced through the clip
+map, into the frame's entity volume (`entity_material::Cod4Volume`, 256 x
+64 x 4: 1024 blocks, 1.7's entry limit for one view; set `i` takes block
+`i`, the view model the last). A lookup whose origin and box held since
+the last frame is kept (`Cod4EntityLight::frame_sets`), as 1.7 keeps a
+block while the origin holds, and the frame writes only the block rows,
+light sets and instances that changed (cod4-client-perf.md 42). `entity_light::pack_cod4` packs the
 sun and the block's centre into the instance's light set;
 `cod2_model.wgsl`'s `cod4_model` (the entity and view model passes' probe
 path, `entity_material::cod4`) reads the block in one filtered fetch, as
