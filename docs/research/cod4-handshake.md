@@ -148,14 +148,10 @@ The range bounds come from the indexers in `cod4_lnxded`. VERIFIED (the constant
 
 ## 6. Not decoded, and what is still open
 
-Closed since this capture:
-
-- Baselines, `svc_EOF`, `clientNum` and `checksumFeed` (`cod4-netfields.md` 4).
-- `crates/cod4/examples/cod4_probe.rs` sends `sv_serverid` back in keyed move messages and captures snapshots (`cod4-netfields.md` 5, 6).
-- Both scramble directions over non-empty commands (`cod4-netfields.md` 5, 8).
-- `constantConfigStrings` from both binaries (section 5, "Configstring defaults").
-- `requeststats` and the authorize round trip off the LAN: section 15.
-- The pure check: section 8.
+What this capture left undecoded is read elsewhere: baselines, `svc_EOF`,
+`clientNum`, `checksumFeed` and the scramble (`cod4-netfields.md` 4 to 8),
+`constantConfigStrings` (section 5), the pure check (8), `requeststats`
+and the authorize round trip (15).
 
 Still open: the rate pacing on loopback (section 3) and why the first two fragments go out together.
 

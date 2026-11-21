@@ -171,16 +171,8 @@ column was bots holding on purpose. INFERRED: the before and afters in
 
 ## 2. Baseline
 
-Master at the harness's commit, `bot_match` defaults (mp_carentan `tdm`,
-six bots, seeds 1..=8, 12000 ticks, none ended):
-
-| Team | Kills | Deaths | Damage | TTK mean / median ms |
-|---|---|---|---|---|
-| allies | 644 | 568 | 87952 | 1603 / 250 |
-| axis | 568 | 644 | 82955 | 1889 / 0 |
-
-1212 kills over 80 minutes of play, 88 stalled bot-ticks, no suicides, no
-team kills.
+The first baseline ran at the harness's commit on mp_carentan `tdm`; its
+numbers are superseded by section 6's rows, all from one tip.
 
 ## 3. Skill levels
 
@@ -347,8 +339,9 @@ its side swap; its seeds went straight to `test_seed_rng`, so seeds 2k and
 2k+1 played one match). `tdm`, 8 fighting bots, 6000 ticks a seed, one
 team with cover and one without, sides swapped every other seed. Over 20
 seeds the per-seed difference has a standard deviation of 12 to 14
-deaths, so a total difference under about 60 is noise. Section 6
-re-measures on `bot_match`.
+deaths, so a total difference under about 60 is noise. Section 6.1's
+`COVER=alt` row supersedes the table; the rejected variants below stay as
+what not to retry.
 
 | Run (mp_carentan unless named, seeds 1-20) | Cover side deaths | Other side deaths |
 |---|---|---|
@@ -435,13 +428,8 @@ Measured with `bot_fights` (since folded into `bot_match`): 8 bots, `tdm`,
 3000 ticks, mp_carentan, mp_harbor, mp_depot, mp_brecourt, 16 seeds each,
 one side retreating. VERIFIED (measured):
 
-- A wounded bot running the retreat dies within 5 s 5 to 10 points less
-  often, on all six 1.1 runs (seeds 101-116 and 117-132, each side) and
-  on UO (mp_cassino, mp_kursk, seeds 1-8: 83% / 86% with none, 72-73%
-  for the retreating side).
-- K/D of the treated side against `none`, geometric mean: 1.02 on 1.1,
-  0.99 on UO, inside the noise (the same side's K/D swung 0.15 across seed
-  sets with only the other side's brain changed).
+- The retreat's effect on wounded deaths and K/D: section 6.1's
+  `RETREAT=alt` row, measured on one tool at one tip.
 - Rejected variants (treated side's K/D against `none`, seeds 101-116,
   allies / axis / geometric mean): sights dropped while backing off 1.03 /
   0.93 / 0.98; hurt retreat only past 400 units 1.02 / 0.92 / 0.97; dry

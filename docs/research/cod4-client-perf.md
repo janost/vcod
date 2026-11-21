@@ -10,7 +10,21 @@ numbers say so.
 
 Superseded rounds are kept as one line each with their headline delta;
 the current state of each piece is in the latest section that touches
-it.
+it, the last one listed here:
+
+| Piece | Sections |
+|---|---|
+| Feather and distortion | 13, 14, 30, 32, 35 |
+| Shadows | 9, 10, 11, 28, 38 |
+| Bodies, events, net | 16, 31, 36, 38 |
+| Cull and gather | 6, 31, 36, 40 |
+| Depth prepass | 12, 19, 35, 37, 40 |
+| Effects | 6, 20, 32, 33 |
+| Draws, materials, shaders | 21, 22, 24, 26, 27, 29 |
+| HUD | 33 |
+| Load and first frame | 17, 34 |
+| Resident set | 23 |
+| Dynamic entities | 41 |
 
 Current real-card reference points (1920 x 1080, one sample):
 
@@ -113,21 +127,10 @@ mp_creek, mp_overgrown.
 
 ## 3. What the GPU time follows (mp_crossfire, war spectator, fixed view)
 
-First pass, before section 6:
-
-| Run | GPU scene ms | world tris |
-|---|---|---|
-| base | 1072 | 427247 |
-| base again | 1019 | 427247 |
-| `r_zFeather 0` | 1093 | 427247 |
-| `r_glow_allowed 0` | 1206 | 427247 |
-| `r_dof_enable 0` | 1193 | 427247 |
-| `sm_enable 0` (dm, moving view) | 520 vs 618 | 171905 vs 194176 |
-
-Feather, glow and depth of field cost nothing measurable; the scene
-followed the world triangles (dm frames at 170k draw in ~500 ms, the war
-spot's 427k in ~1050 ms). The sun shadow was 40-90 ms a frame on every
-map (cut in 10).
+First pass, before section 6, on lavapipe: `r_zFeather`, glow and depth of
+field cost nothing measurable, the scene followed world triangles, and the
+sun shadow took 40 to 90 ms a frame. VERIFIED (measured). Superseded by 6,
+10 and 21.
 
 ## 4. Fixes
 
@@ -141,17 +144,10 @@ map (cut in 10).
 
 ## 5. What to cut next, ranked
 
-The first pass's list, every item since taken:
-
-1. World triangles drawn: sections 6 and 21 (cod4-world.md 9.9, 9.10).
-2. The sun shadow pass: sections 10 and 11.
-3. `bodies`: sections 7, 16, 31, 36, 38.
-4. Effects: sections 6, 32, 33.
-5. `gather` and `cull`: sections 6, 31, 36.
-6. `events` and `net`: section 16.
-
-The p99 `other` spikes (~12 ms) were first-use uploads inside the
-measured window: section 17.
+The first pass's ranked list, every item since taken: world triangles (6,
+21), the sun shadow (10, 11), `bodies` (7, 16, 31, 36, 38), effects (6, 32,
+33), `gather` and `cull` (6, 31, 36), `events` and `net` (16), first-use
+upload spikes (17).
 
 ## 6. The cuts from section 5's items 1, 4 and 5
 
@@ -213,17 +209,11 @@ What a ragdoll costs: section 36.
 
 ## 8. Close to a car on mp_crash (playtest 2026-10-26)
 
-Superseded by sections 15, 20, 32, 35 and 37. The playtest's F3 by a
-damaged `vehicle_80s_sedan1_red_destructible_mp` (-279 1396 293, yaw -15,
-pitch -28) read 10.9 fps, GPU scene 89 ms, 168 world draws, 42 model
-instances, 132168 triangles, `fx p913 m108 l7`. VERIFIED (the
-screenshot). The car's LOD 0 is eight surfaces, 2608 triangles: the body
-(`mc/mtl_80s_econ_red`, 2248), the intact and shattered glass inside and
-out (`mtl_80s_econ_glass_outside`/`_inside`,
-`com_glass_shattered_outside`/`_inside`, 50 to 94 each, set
-`mc_l_sm_b0c0s0`), and the engine, rubber and destroyed parts. VERIFIED
-(the zone through `cod4_fly`). All four glass layers drew; retail hides
-one pair by `hidePart`, as vcod now does (15, cod4-client-view.md 15).
+Superseded by sections 15, 20, 32, 35 and 37. The playtest's F3 by the
+damaged sedan (-279 1396 293, yaw -15, pitch -28) read 10.9 fps, GPU scene
+89 ms. VERIFIED (the screenshot). All four of the car's glass layers drew;
+retail hides one pair by `hidePart`, and vcod now does (15,
+cod4-client-view.md 15).
 
 ## 9. The spot light shadow tiles (mp_crash's tiled room)
 
