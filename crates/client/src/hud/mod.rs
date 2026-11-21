@@ -56,6 +56,32 @@ pub struct HudQuad {
     pub texture: String, // pk3 image name, extensionless ok
 }
 
+impl HudQuad {
+    /// The whole texture, in ring order.
+    pub const UNIT_UVS: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+
+    /// An upright rect `[x, y, w, h]` over the whole texture.
+    pub fn rect(r: [f32; 4], rgba: [f32; 4], texture: impl Into<String>) -> HudQuad {
+        HudQuad::rect_uv(r, [0.0, 0.0, 1.0, 1.0], rgba, texture)
+    }
+
+    /// An upright rect `[x, y, w, h]` with texture corners `[s0, t0, s1, t1]`,
+    /// `(s0, t0)` at the top left.
+    pub fn rect_uv(
+        [x, y, w, h]: [f32; 4],
+        [s0, t0, s1, t1]: [f32; 4],
+        rgba: [f32; 4],
+        texture: impl Into<String>,
+    ) -> HudQuad {
+        HudQuad {
+            verts: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
+            uvs: [[s0, t0], [s1, t0], [s1, t1], [s0, t1]],
+            rgba,
+            texture: texture.into(),
+        }
+    }
+}
+
 /// A texture name's prefix that draws its quad blended `SrcAlpha One`
 /// (CoD4's font glow materials, `fonts/*_glow`), the image the rest names.
 pub const ADDITIVE: &str = "$add:";

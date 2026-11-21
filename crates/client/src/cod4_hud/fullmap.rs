@@ -326,17 +326,12 @@ impl Cod4Hud {
                 };
                 for ([px, py, pw, ph], st) in border_pieces(r) {
                     let [qx, qy, qw, qh] = place(px, py, pw, ph);
-                    out.push(HudQuad {
-                        verts: [[qx, qy], [qx + qw, qy], [qx + qw, qy + qh], [qx, qy + qh]],
-                        uvs: [
-                            [st[0], st[1]],
-                            [st[2], st[1]],
-                            [st[2], st[3]],
-                            [st[0], st[3]],
-                        ],
-                        rgba: it.fore_color,
-                        texture: tex.clone(),
-                    });
+                    out.push(HudQuad::rect_uv(
+                        [qx, qy, qw, qh],
+                        st,
+                        it.fore_color,
+                        tex.clone(),
+                    ));
                 }
             }
             _ => {}
@@ -418,7 +413,7 @@ fn turned([x, y, w, h]: [f32; 4], angle: f32, rgba: [f32; 4], texture: String) -
             corner(1.0, 1.0),
             corner(-1.0, 1.0),
         ],
-        uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        uvs: HudQuad::UNIT_UVS,
         rgba,
         texture,
     }

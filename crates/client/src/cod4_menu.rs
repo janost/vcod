@@ -782,12 +782,7 @@ fn list(open: &OpenMenu, font: &Font, size: (f32, f32)) -> Vec<HudQuad> {
     let lines = open.responses.len().min(9);
     let (x, w) = sp.axis(0, LEFT, 640.0 - 2.0 * LEFT, 0);
     let (y, h) = sp.axis(1, TOP - STEP, STEP * (lines as f32 + 2.5), 0);
-    out.push(HudQuad {
-        verts: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
-        uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-        rgba: [0.0, 0.0, 0.0, 0.7],
-        texture: "white".into(),
-    });
+    out.push(HudQuad::rect([x, y, w, h], [0.0, 0.0, 0.0, 0.7], "white"));
     let px = SCALE / font.unit_scale() * sp.virtual_to_real[1];
     let line = |row: f32, text: &str, rgba: [f32; 4], out: &mut Vec<HudQuad>| {
         let (lx, _) = sp.axis(0, LEFT + 12.0, 0.0, 0);

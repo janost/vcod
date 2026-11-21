@@ -442,12 +442,12 @@ fn push_quad(
     rgba: [f32; 4],
     texture: &str,
 ) {
-    out.push(HudQuad {
-        verts: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
-        uvs: [[g.s, g.t], [g.s2, g.t], [g.s2, g.t2], [g.s, g.t2]],
+    out.push(HudQuad::rect_uv(
+        [x, y, w, h],
+        [g.s, g.t, g.s2, g.t2],
         rgba,
-        texture: texture.to_string(),
-    });
+        texture,
+    ));
 }
 
 /// Lays out `text` with its top-left at (x, y): a 1px black shadow quad, then

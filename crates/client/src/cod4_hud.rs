@@ -489,12 +489,7 @@ pub(crate) fn quad(
     flip: bool,
 ) -> HudQuad {
     let (u0, u1) = if flip { (1.0, 0.0) } else { (0.0, 1.0) };
-    HudQuad {
-        verts: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
-        uvs: [[u0, 0.0], [u1, 0.0], [u1, 1.0], [u0, 1.0]],
-        rgba,
-        texture,
-    }
+    HudQuad::rect_uv([x, y, w, h], [u0, 0.0, u1, 1.0], rgba, texture)
 }
 
 #[cfg(test)]

@@ -245,11 +245,9 @@ impl Cod4Hud {
             return;
         };
         let (mx, my, mw, mh) = to_screen(map_item, map_item.rect);
-        let over_map = |uvs, texture| HudQuad {
-            verts: [[mx, my], [mx + mw, my], [mx + mw, my + mh], [mx, my + mh]],
+        let over_map = |uvs, texture: String| HudQuad {
             uvs,
-            rgba: [1.0; 4],
-            texture,
+            ..HudQuad::rect([mx, my, mw, mh], [1.0; 4], texture)
         };
         let minimap = self.minimap(s);
         if let Some((material, map)) = &minimap
@@ -496,7 +494,7 @@ fn spun_quad(
             corner(1.0, 1.0),
             corner(-1.0, 1.0),
         ],
-        uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        uvs: HudQuad::UNIT_UVS,
         rgba: [1.0, 1.0, 1.0, alpha],
         texture,
     }

@@ -261,12 +261,12 @@ impl Cod4Hud {
                     if let Some(t) = it.background.as_deref().and_then(tex) {
                         let f = st.loaded;
                         let w = w * f;
-                        out.push(HudQuad {
-                            verts: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
-                            uvs: [[0.0, 0.0], [f, 0.0], [f, 1.0], [0.0, 1.0]],
-                            rgba: it.fore_color,
-                            texture: t,
-                        });
+                        out.push(HudQuad::rect_uv(
+                            [x, y, w, h],
+                            [0.0, 0.0, f, 1.0],
+                            it.fore_color,
+                            t,
+                        ));
                     }
                 }
                 _ => {}

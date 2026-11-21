@@ -307,7 +307,7 @@ pub fn build(
                             corner(1.0, 1.0),
                             corner(-1.0, 1.0),
                         ],
-                        uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                        uvs: HudQuad::UNIT_UVS,
                         rgba,
                         texture,
                     }

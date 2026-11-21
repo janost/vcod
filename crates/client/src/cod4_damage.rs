@@ -306,7 +306,7 @@ impl Cod4Damage {
             let (sin, cos) = (view_yaw - icon.yaw).to_radians().sin_cos();
             HudQuad {
                 verts: corners.map(|c| turn_on_grid(centre, c, [sin, cos], [sx, sy])),
-                uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                uvs: HudQuad::UNIT_UVS,
                 rgba: [1.0, 1.0, 1.0, fade.min(1.0)],
                 texture: texture.to_string(),
             }

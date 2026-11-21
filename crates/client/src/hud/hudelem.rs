@@ -59,8 +59,6 @@ pub fn full_width(x: f32, w: f32) -> bool {
     x <= 0.0 && x + w >= 640.0
 }
 
-const FULL_UV: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
-
 /// One axis of [`Virtual::quad_fill`]: the span `at..at + len` of a grid
 /// `grid` long, placed at `offset` px with `scale`, or, when it covers the
 /// whole grid, stretched over the window's `window` px, overhang kept.
@@ -164,14 +162,14 @@ impl Virtual {
         );
         HudQuad {
             verts: [[left, top], [right, top], [right, bottom], [left, bottom]],
-            uvs: FULL_UV,
+            uvs: HudQuad::UNIT_UVS,
             rgba,
             texture: texture.to_string(),
         }
     }
 
     pub fn quad(&self, x: f32, y: f32, w: f32, h: f32, rgba: [f32; 4], texture: &str) -> HudQuad {
-        self.quad_uv(x, y, w, h, FULL_UV, rgba, texture)
+        self.quad_uv(x, y, w, h, HudQuad::UNIT_UVS, rgba, texture)
     }
 
     /// `uvs` in the quad's ring order: TL, TR, BR, BL.
@@ -213,7 +211,7 @@ impl Virtual {
             corners.map(|[x, y]| self.point(cx + x * cos - y * sin, cy + x * sin + y * cos));
         HudQuad {
             verts,
-            uvs: FULL_UV,
+            uvs: HudQuad::UNIT_UVS,
             rgba,
             texture: texture.to_string(),
         }

@@ -94,11 +94,10 @@ pub(crate) fn glow_text(
         for (ox, oy) in GLOW_OFFSETS {
             let qx = gx - 0.375 * gw + ox * 2.0 * px;
             let qy = gy - 0.0625 * gh + oy * 2.0 * px;
+            let rgba = [glow[0] * 0.1, glow[1] * 0.1, glow[2] * 0.1, a];
             out.push(HudQuad {
-                verts: [[qx, qy], [qx + w, qy], [qx + w, qy + h], [qx, qy + h]],
                 uvs,
-                rgba: [glow[0] * 0.1, glow[1] * 0.1, glow[2] * 0.1, a],
-                texture: page.clone(),
+                ..HudQuad::rect([qx, qy, w, h], rgba, page.clone())
             });
         }
     }

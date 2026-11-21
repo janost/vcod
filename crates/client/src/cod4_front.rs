@@ -312,7 +312,7 @@ impl Cod4Front {
         let (w, h) = size;
         let mut out = vec![HudQuad {
             verts: [[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]],
-            uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            uvs: HudQuad::UNIT_UVS,
             rgba: [0.0, 0.0, 0.0, 1.0],
             texture: "white".into(),
         }];

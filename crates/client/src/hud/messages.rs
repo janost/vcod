@@ -395,7 +395,7 @@ fn kill_line(
     let uvs = if k.icon_flip {
         [[1.0, 0.0], [0.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
     } else {
-        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+        HudQuad::UNIT_UVS
     };
     out.push(v.quad_uv(x, top, w, h, uvs, [1.0, 1.0, 1.0, alpha], &k.icon));
     x += w;

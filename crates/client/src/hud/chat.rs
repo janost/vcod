@@ -256,12 +256,8 @@ impl Chat {
             let width = text_width(font, line, SCALE).trunc();
             let (x, w) = sp.axis(0, 0.0, width + 24.0, 1);
             let (y, h) = sp.axis(1, top, 10.0, 1);
-            out.push(HudQuad {
-                verts: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
-                uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-                rgba: [lead[0] * 0.25, lead[1] * 0.25, lead[2] * 0.25, alpha * 0.6],
-                texture: "hudColorBar".into(),
-            });
+            let rgba = [lead[0] * 0.25, lead[1] * 0.25, lead[2] * 0.25, alpha * 0.6];
+            out.push(HudQuad::rect([x, y, w, h], rgba, "hudColorBar"));
             let (tx, _) = sp.axis(0, x0, 0.0, 1);
             let (ty, _) = sp.axis(1, top + 9.0 - 48.0 * SCALE, 0.0, 1);
             let px = SCALE / font.unit_scale() * k;

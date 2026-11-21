@@ -689,14 +689,7 @@ impl Ctx<'_> {
     /// `CL_DrawStretchPicPhysical`: real pixels, texture corners `uv`
     /// (`s0, t0, s1, t1`).
     fn physical(&self, r: [f32; 4], uv: [f32; 4], rgba: [f32; 4], m: &str, out: &mut Vec<HudQuad>) {
-        let [x, y, w, h] = r;
-        let [s0, t0, s1, t1] = uv;
-        out.push(HudQuad {
-            verts: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
-            uvs: [[s0, t0], [s1, t0], [s1, t1], [s0, t1]],
-            rgba,
-            texture: m.to_string(),
-        });
+        out.push(HudQuad::rect_uv(r, uv, rgba, m));
     }
 
     /// `CL_DrawStretchPic`: `r` placed by `align`, texture corners `uv`.
@@ -746,7 +739,7 @@ impl Ctx<'_> {
                 corner(1.0, 1.0),
                 corner(-1.0, 1.0),
             ],
-            uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            uvs: HudQuad::UNIT_UVS,
             rgba,
             texture: m.to_string(),
         });
@@ -2056,7 +2049,7 @@ impl PlayerHud {
             let (s, c) = (yaw - d.yaw).to_radians().sin_cos();
             out.push(HudQuad {
                 verts: quad.map(|[px, py]| [c * px + cx0 - s * py, s * px + cy0 + c * py]),
-                uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                uvs: HudQuad::UNIT_UVS,
                 rgba: [1.0, 1.0, 1.0, a],
                 texture: "hit_direction".to_string(),
             });

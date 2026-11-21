@@ -837,15 +837,13 @@ pub fn crosshair(
     }
     let [cx, cy] = v.point(320.0, 240.0);
     let px_quad = |x: f32, y: f32, s: f32, uvs: [[f32; 2]; 4], rgba, texture: &str| HudQuad {
-        verts: [[x, y], [x + s, y], [x + s, y + s], [x, y + s]],
         uvs,
-        rgba,
-        texture: texture.to_string(),
+        ..HudQuad::rect([x, y, s, s], rgba, texture)
     };
 
     if let Some(center) = &def.reticle_center {
         let s = def.reticle_center_size * shrink;
-        let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        let uvs = HudQuad::UNIT_UVS;
         let rgba = [1.0, 1.0, 1.0, CROSSHAIR_ALPHA * fade];
         out.push(px_quad(cx - s / 2.0, cy - s / 2.0, s, uvs, rgba, center));
     }

@@ -108,7 +108,7 @@ impl WorldView {
                 screen(at + rx - uy),
                 screen(at - rx - uy),
             ],
-            uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            uvs: HudQuad::UNIT_UVS,
             rgba,
             texture: m.to_string(),
         })

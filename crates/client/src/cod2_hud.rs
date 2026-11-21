@@ -318,12 +318,7 @@ fn lagometer(l: &crate::play::cod2_net::Lagometer, sp: &ScreenPlacement, out: &m
     let mut quad = |x: f32, y: f32, w: f32, h: f32, rgba: [f32; 4], texture: &str| {
         let (x0, w) = sp.axis(0, x, w, 3);
         let (y0, h) = sp.axis(1, y, h, 3);
-        out.push(HudQuad {
-            verts: [[x0, y0], [x0 + w, y0], [x0 + w, y0 + h], [x0, y0 + h]],
-            uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-            rgba,
-            texture: texture.to_string(),
-        });
+        out.push(HudQuad::rect([x0, y0, w, h], rgba, texture));
     };
     quad(-55.0, -140.0, 48.0, 48.0, [1.0; 4], "lagometer");
     for (i, offset) in l.frames(48).enumerate() {

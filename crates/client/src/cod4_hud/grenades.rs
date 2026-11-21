@@ -107,7 +107,7 @@ fn draw_indicator(
                 corner(w, h),
                 corner(0.0, h),
             ],
-            uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            uvs: HudQuad::UNIT_UVS,
             rgba,
             texture,
         });

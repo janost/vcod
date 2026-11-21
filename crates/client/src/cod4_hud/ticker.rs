@@ -45,12 +45,12 @@ impl Cod4Hud {
         let turn = self.north_yaw(s) - yaw;
         for (from, to, s0, s1) in ticker_spans(turn / 360.0) {
             let (qx, qw) = (x + from * w, (to - from) * w);
-            out.push(HudQuad {
-                verts: [[qx, y], [qx + qw, y], [qx + qw, y + h], [qx, y + h]],
-                uvs: [[s0, 0.0], [s1, 0.0], [s1, 1.0], [s0, 1.0]],
-                rgba: [1.0; 4],
-                texture: tex.clone(),
-            });
+            out.push(HudQuad::rect_uv(
+                [qx, y, qw, h],
+                [s0, 0.0, s1, 1.0],
+                [1.0; 4],
+                tex.clone(),
+            ));
         }
         let Some(snap) = s.client().snapshots.last() else {
             return;
