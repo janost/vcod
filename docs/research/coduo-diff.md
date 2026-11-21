@@ -1026,22 +1026,8 @@ What the cgame's case 9 and syscall 199 do with an `ET_SOUND_BLEND` entity
 
 ## 17. Scope estimate and staging
 
-Historical: the estimate made before any UO work. All three stages have
-landed (client watch and play, sections 18-19; server, sections 20-22). The
-risks still apply:
-
-| Area | Risk |
-|---|---|
-| Wire (3-6) | a width off by one bit desyncs silently; `handshake_probe` and the committed UO fixtures test it |
-| Ids and layouts (7, 8, 11) | a missed `eFlags` remap gives wrong poses with no error |
-| Movement | shared pmove must stay byte-identical for 1.1 (the pmove A/B gates) |
-| Weapons and combat | `weaponClass` shifted by `lmg`: every class test needs the version |
-| Vehicles | many physics constants and partly read steering; the decompile suggested 4-5k lines; A/B gates run against the local retail UO server |
-| Script | the stock gametypes need nearly all of the new API before one round runs |
-| Shared code | version gating (pmove, combat, the weapon enums, the 1.1 "no cook" rule) without moving 1.1's A/B gates |
-
-No public UO server was joined for this doc, so third-party UO content and
-live player behaviour stay unmeasured.
+The pre-port estimate is spent: all three stages landed (18 to 22). What
+guards each risky area is in the gates of `docs/dev/testing.md`.
 
 ## 18. What vcod does
 
@@ -2128,16 +2114,10 @@ gates.
 
 ### 20.4 Not done (stage 1)
 
-Stage 1's list is mostly closed: the gametypes are section 22; artillery,
-smoke, the satchel and the flamethrower's `fdc` damage section 21; the mount
-hint and `spawnTriggerMount` `coduo-movement.md` 11; the cooked-out frag's
-`EV_GRENADE_SUICIDE` death (`Attack::Suicide`); `EV_BULLET_HIT`'s reflected
-direction and a projectile explode's type in `es.scale` (section 21);
-battle rank section 22. Left:
-
-- what `coduo-vehicles.md` 14 leaves out; `iCompassTankInfo` stays 0, as on
-  stock retail (section 9);
-- a retail UO client against vcod-server is a pending hand check.
+Open: what `coduo-vehicles.md` 14 leaves out (`iCompassTankInfo` stays 0,
+as on stock retail, section 9), and a retail UO client against vcod-server
+is a pending hand check. The rest of stage 1's list is in sections 21 and
+22 and `coduo-movement.md` 11.
 
 ## 21. Server: UO's weapons on vcod-server
 
@@ -2548,7 +2528,7 @@ a UO install:
   health -5500, status `destroyed`, the attacker's score 8 (VERIFIED, the
   retail log). No tank is needed: the base takes any player's `MOD_GRENADE*`,
   `MOD_PROJECTILE*` or `MOD_ARTILLERY*` (INFERRED from bas.gsc 3954). The
-  gate matches every view ("Gaps" below).
+  gate matches every view (22.5).
 
 ### 22.2 Round and map ends
 
@@ -2951,9 +2931,9 @@ compares every view. Ranks below are the icons' 1..5, `pers["rank"]` 0..4.
   `M_PI` (VERIFIED, 1.1 disassembly; the UO rows by name,
   `tools/re/dump_builtins.py`). `probe_basend` calls `cos` and `sin`.
 
-### 22.5 Gaps
+### 22.5 What the gate once missed
 
-All closed; `gametypes_ab::GAPS` is empty.
+`gametypes_ab::GAPS` is empty. The rows it held, and what closed each:
 
 - **bas `hud`.** Retail's `map_restart` recompiles the scripts, about 850 ms
   of wall time, and catches the frames up before its first snapshot (level

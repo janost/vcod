@@ -1548,10 +1548,6 @@ mirror `cod11-hud-protocol.md` reads at CS 140/204, at a new base.
 
 ## 8. Open questions
 
-- The server command whose letter is a space (` "MP_CONNECTED\x15<name>"`, 9)
-  is `iPrintLn`'s own word, emptied by `va`'s two buffers (15.5). The retail
-  client logs it as `Unknown client game command` (16.2). VERIFIED live.
-  Closed.
 - What the client sends in `getchallenge` when it has no CD key (a server
   build, a LAN game). Off loopback the client refuses to connect without one
   (16.1).
