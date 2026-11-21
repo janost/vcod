@@ -350,6 +350,8 @@ pub struct Bot {
     /// The health item headed straight at, the nearest the body came to
     /// it and the ticks since it last came [`SHORT_GAIN`] nearer.
     heal_short: Option<([f32; 3], f32, u32)>,
+    /// The same for a remembered or heard spot ([`Bot::track_recall`]).
+    recall_short: Option<([f32; 3], f32, u32)>,
     /// The last think's view was set by a fight, a hurt look, a cover
     /// peek, a recalled spot or a retreat, not the walk: the walking
     /// view takes the path's heading at once ([`Bot::walk_turn`]).
@@ -396,9 +398,10 @@ pub struct Bot {
     /// `ps.weapon` reads it (docs/dev/traps.md, "Wire and netcode", "The cmd's
     /// weapon byte").
     switch_to: Option<u8>,
-    /// `bas` launchers tapped for with nothing taken and health items no
-    /// body reaches (`Bot::track_heal`), and the ticks each stays passed
-    /// over ([`SHUN_TICKS`]); the last launcher tapped and its taps.
+    /// `bas` launchers tapped for with nothing taken, and health items and
+    /// heard or remembered spots no body reaches (`Bot::track_heal`,
+    /// `Bot::track_recall`), and the ticks each stays passed over
+    /// ([`SHUN_TICKS`]); the last launcher tapped and its taps.
     shunned: Vec<([f32; 3], u32)>,
     tapped: Option<([f32; 3], u32)>,
     /// The `bas` launcher walked to, the nearest the body has come to it
@@ -579,6 +582,7 @@ impl Bot {
             heal_walked: false,
             walked_to: None,
             heal_short: None,
+            recall_short: None,
             view_owned: false,
             rungs_ago: u32::MAX,
             rung_spell: false,
@@ -802,6 +806,7 @@ impl Bot {
         self.clock = self.clock.wrapping_add(1);
         self.track_reach(view);
         self.track_heal(view);
+        self.track_recall(view);
         // Read before the think moves the objective's state, as the goal was.
         let target = self.objective_target(view);
         self.on_objective =

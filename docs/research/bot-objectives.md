@@ -4646,3 +4646,38 @@ same build with the fix): that match's stalls 4046 to 8, the bot out
 with a jump at t88200; the 128 matches above and the CoD2 digests
 unchanged (the case never comes up on them). Not traced: why the climb
 to (5861, -2064, 52) failed, and the graph's edge over the dent.
+
+### 14.14 A heard spot no body reaches, 2026-11-21
+
+Retail has no bots; this section is measured on vcod-server only.
+`bots::uo_bots_fight_and_sprint_in_tdm` at its default seed 1 (UO,
+mp_cassino `tdm`, vehicles on) failed once CoD1's draws moved to glibc's
+`rand()` (`cod11-map-cycle.md` 4.8.1): bot 2 held 12 s at (2878, -2855,
+1) from tick 1166. Traced per tick (temporary prints of the brain's goal,
+its recall and the noises heard, debug, UO, 8afc118ad merged in):
+
+- VERIFIED (trace): the goal was `Bot::recall_goal`'s, a heard spot at
+  (2957.7, -2900.4, 273.2), not a seen enemy's. Its source was bot 5 in
+  tank 191's driver seat at (1032, -1381, 58), laying the main gun on an
+  enemy hull (`think_seat`'s `armor`) and firing every 61 ticks; each
+  shell struck a wall 272 units over the floor and its blast (radius
+  1500) renewed the spot's `noise_ticks`.
+- VERIFIED (trace): the plan to the spot ended at node (2929, -2880, 1)
+  on the floor under the blast, `Follower::walked_out` held, and the
+  body walked straight at the spot into the wall, its unstick spells
+  bringing it back, from tick 940 to the gate's end.
+- The fix, a bot rule (`Bot::track_recall`), the heard-spot twin of
+  14.8's: a bot whose follower walked out the plan to its remembered or
+  heard spot (`Bot::walked_to`) and that comes no `SHORT_GAIN` (16) nearer
+  it in `SHORT_TICKS` (3 s) drops the spot and passes it over for
+  `SHUN_TICKS` (60 s), a noise heard there again included
+  (`bots::sight::tests::a_heard_spot_no_body_reaches_is_given_up`).
+
+VERIFIED (measured, release, 8afc118ad merged with this branch, the rule
+off then on, `bot_match`, 6000 ticks a match on mp_cassino and the
+default 12000 on mp_carentan): UO mp_cassino seeds 1-8 play
+the same to the score (axis 170, allies 190, stalled 0 both); UO
+mp_carentan seeds 1-4 score 196-266 → 201-279, kills 464 → 483, stalled 0
+both; 1.1 mp_carentan seeds 1-4 205-314 → 223-306, kills 519 → 529,
+stalled 0 both. The gate passes at seed 1 again, and the ignored `bots::`
+set at 1.1 and UO.
