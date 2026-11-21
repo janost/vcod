@@ -1121,13 +1121,13 @@ pub(super) mod tests {
     use super::*;
     use crate::nav::build::tests::map_world;
 
-    /// 0 - 1 - 2 in a row with a shortcut 0 -> 3 -> 2 that is longer, and a
-    /// one-way drop 2 -> 4.
     /// Each node's edge targets, what [`NavGraph::from_parts`] takes.
     fn targets(g: &NavGraph) -> Vec<Vec<u32>> {
         (0..g.len() as u32).map(|a| g.next(a).collect()).collect()
     }
 
+    /// 0 - 1 - 2 in a row with a shortcut 0 -> 3 -> 2 that is longer, and a
+    /// one-way drop 2 -> 4.
     pub(in crate::nav) fn tiny() -> NavGraph {
         NavGraph::from_parts(
             vec![
