@@ -11,20 +11,13 @@ use super::protocol::CsLayout;
 use crate::game::Game;
 
 /// One game's wire descriptor: its [`Transport`], its configstring layout,
-/// and the types its snapshots and usercmds decode into. Each game keeps
-/// its own numbering in those types.
+/// and what the engine's generic code writes through it: the status reply
+/// (`engine::answer_status`) and the snapshot (`engine::conn::write_snapshot`).
+/// Each game keeps its own numbering in its frame. The gamestate writer is
+/// each wire's own method: every caller names its game.
 pub trait WireGame: Sync + 'static {
-    /// The client's move command.
-    type UserCmd;
-    /// An entity in a snapshot.
-    type EntityState;
-    /// The playerstate a snapshot carries.
-    type PlayerState;
     /// One snapshot frame, the unit a delta is taken against.
     type Frame;
-    /// What `SV_SendClientGameState` sends: the configstrings, the
-    /// baselines, the client's number and the checksum feed.
-    type Gamestate;
     /// The entity baselines a snapshot deltas a new entity from.
     type Baselines;
 
@@ -40,10 +33,6 @@ pub trait WireGame: Sync + 'static {
     /// A connectionless packet: `ff ff ff ff` and `text` in the game's
     /// encoding.
     fn oob_packet(&self, text: &str) -> Vec<u8>;
-
-    /// `svc_gamestate` to its `svc_EOF`. The caller writes the
-    /// `reliableAcknowledge` and the pending server commands ahead of it.
-    fn write_gamestate(&self, w: &mut MsgWriter, gs: &Self::Gamestate);
 
     /// `SV_WriteSnapshotToClient` from `svc_snapshot` on: `frame` deltaed
     /// from `base`, which went out `head.delta_num` messages back (`None`

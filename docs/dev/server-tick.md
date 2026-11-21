@@ -134,9 +134,10 @@ ping rings, pacing, fragments and timeout clock are its `link`
   `next_fragment`, `flush_game_commands`) is one
   `impl<G: ConnGame> Engine<G>` (`engine/conn.rs`); a step that differs
   is a `ConnGame` hook.
-- The frame writers are the wire's (`WireGame::write_gamestate`,
-  `write_snapshot`). A game builds its frame in its own numbering (CoD1 maps
-  1.1's once a snapshot).
+- The frame writers are the wire's (each wire's own `write_gamestate`;
+  `WireGame::write_snapshot`, which `engine::conn::write_snapshot` calls).
+  A game builds its frame in its own numbering (CoD1 maps 1.1's once a
+  snapshot).
 - `getinfo` and `getstatus` reply through `engine::answer_status`: the
   game's `GameModule::status` text framed by `WireGame::oob_packet`.
 - `Cod1Game` (`server/cod1_game.rs`) still holds the engine state CoD1 keeps

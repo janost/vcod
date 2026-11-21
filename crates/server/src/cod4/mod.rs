@@ -38,7 +38,6 @@ use vcod_cod4::net::stats::{STAT_PACKETS, Stats};
 use vcod_cod4::net::wire::{Cod4Wire, EOF, Frame4, PROTOCOL_17};
 use vcod_common::net::codec::MsgWriter;
 use vcod_common::net::netchan::{NetchanParams, ServerNetchan};
-use vcod_common::net::protocol::WireGame;
 use vcod_common::text::latin1_bytes;
 
 use crate::engine::{conn, link};

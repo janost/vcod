@@ -120,12 +120,16 @@ pub struct Frame4 {
     pub clients: Vec<ClientState>,
 }
 
+impl Cod4Wire {
+    /// `svc_gamestate` to its `svc_EOF`. The caller writes the
+    /// `reliableAcknowledge` and the pending server commands ahead of it.
+    pub fn write_gamestate(&self, w: &mut MsgWriter, gs: &Gamestate) {
+        super::parse::write_gamestate(w, gs);
+    }
+}
+
 impl WireGame for Cod4Wire {
-    type UserCmd = super::clmsg::UserCmd;
-    type EntityState = EntityState;
-    type PlayerState = PlayerState;
     type Frame = Frame4;
-    type Gamestate = Gamestate;
     type Baselines = BTreeMap<u32, EntityState>;
 
     fn transport(&self) -> &Transport {
@@ -141,10 +145,6 @@ impl WireGame for Cod4Wire {
         let mut p = vec![0xff; 4];
         p.extend_from_slice(text.as_bytes());
         p
-    }
-
-    fn write_gamestate(&self, w: &mut MsgWriter, gs: &Gamestate) {
-        super::parse::write_gamestate(w, gs);
     }
 
     fn write_snapshot(
