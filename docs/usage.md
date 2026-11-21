@@ -25,7 +25,7 @@ Both binaries share these flags.
 | `--game-dir <dir>` | The install. Default: `$COD_DIR`, else the executable's directory. |
 | `--game cod1\|cod2\|cod4` | The install's game. Default: detected. `zone/` or `iw3mp.exe` is CoD4, `main/iw_*.iwd` or `CoD2MP_s.exe` CoD2, anything else CoD1. |
 | `--mod-dir uo` | United Offensive: `uo/` searched over the `main/` beside it, as UO does. Default `main`. |
-| `--vanilla` | CoD1 and UO: only the patch's stock paks (`pak0`..`pak8` on 1.1, `pak0`..`pakf` on 1.5, UO's `pakuo*` and `uomappack00`, and their `localized_*` paks). Every other pk3 in `main/` and `uo/` is ignored. |
+| `--vanilla` | CoD1 and UO: only the patch's stock paks (`pak0`..`pak8` on 1.1, `pak0`..`pakf` on 1.5, UO's `pakuo*` and `uomappack00`, and their `localized_*` paks). Every other pk3 in `main/` and `uo/` is ignored, and so is every loose file. |
 
 `COD_DIR` is the only install variable the binaries read, for every game.
 `COD2_DIR` and `COD4_DIR` point tests and tools at those installs. The

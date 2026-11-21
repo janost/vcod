@@ -60,6 +60,22 @@ language `SEH_GetLanguageIndexForName` does not know is skipped with a
 warning. VERIFIED (the two warning strings). vcod does not check the
 language (`pk3::search_archives`).
 
+Loose files (`CoD2MP_s.exe` 1.3, `FS_FOpenFileRead`'s directory branch
+0x422978..0x422a10): a directory's own file is read where its entry stands,
+under its iwds. When `fs_restrict` (dvar pointer 0xb1a5b0, registered at
+0x425234) or `fs_numServerIwds` (0x19a1b74) is set, a non-localized
+directory gives only the extensions `cfg` and `menu` (0x422530,
+case-blind; its `.dm_NETWORK_PROTOCOL_VERSION` never equals an extension);
+a file of another type that exists there is skipped and the open returns
+-2 instead of -1. VERIFIED (the instructions, the strings). A loose read
+outside the list on an unpure path sets the fake checksum (0x422a68..
+0x422a82, `rand() + 1` into 0xb1a5c4), as CoD1's does
+(cod11-server-handshake.md, "Loose files"). VERIFIED (the instructions).
+`FS_ListFilteredFiles` lists a directory on a pure path only for a caller
+that asks (0x423d60..0x423d7e). VERIFIED (the instructions). vcod reads every
+loose file, as no CoD2 search path of its is pure (`pk3::Pk3Fs`, the
+`Cod2` rule); `open_iwd_stock` reads none.
+
 ## 2. The `.iwi` header
 
 `Image_LoadFromFile` (0xfcb88) reads `images/<name>.iwi`, checks the low
