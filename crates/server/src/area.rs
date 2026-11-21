@@ -205,8 +205,24 @@ impl AreaTree {
         let Some(world) = bsp.models.first() else {
             return Self::unbounded();
         };
-        let mut t = Self::new(world.mins, world.maxs, MAX_ENTITIES);
-        for (lo, hi) in vcod_common::props::area_bounds(fs, &bsp.entities) {
+        let props = vcod_common::props::area_bounds(fs, &bsp.entities);
+        Self::with_props(world.mins, world.maxs, &props)
+    }
+
+    /// [`Self::for_map`] off boxes already read (`World::prop_areas`).
+    pub fn for_map_with(
+        bsp: &vcod_common::mapworld::MapWorld,
+        props: &[(glam::Vec3, glam::Vec3)],
+    ) -> Self {
+        let Some(world) = bsp.models.first() else {
+            return Self::unbounded();
+        };
+        Self::with_props(world.mins, world.maxs, props)
+    }
+
+    fn with_props(mins: [f32; 3], maxs: [f32; 3], props: &[(glam::Vec3, glam::Vec3)]) -> Self {
+        let mut t = Self::new(mins, maxs, MAX_ENTITIES);
+        for (lo, hi) in props {
             t.link_static(lo.to_array(), hi.to_array());
         }
         t

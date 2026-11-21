@@ -408,6 +408,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -471,6 +472,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         });
         install_script(&mut sv, rt);
         sv.game.module.weapon_table =
@@ -828,6 +830,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         });
         install_script(
             &mut sv,
@@ -913,6 +916,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         });
         install_script(
             &mut sv,
@@ -960,6 +964,7 @@ mod tests {
                 hazards: Vec::new(),
                 rubble: Vec::new(),
                 nav_cover: Vec::new(),
+                prop_areas: None,
             });
             install_script(
                 &mut sv,
@@ -1024,6 +1029,7 @@ mod tests {
                 hazards: Vec::new(),
                 rubble: Vec::new(),
                 nav_cover: Vec::new(),
+                prop_areas: None,
             });
             install_script(
                 &mut sv,
@@ -1081,6 +1087,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         });
         install_script(
             &mut sv,
@@ -1272,6 +1279,7 @@ mod tests {
             hazards: Vec::new(),
             rubble: Vec::new(),
             nav_cover: Vec::new(),
+            prop_areas: None,
         });
         let mut nc = active(&mut sv, now);
 

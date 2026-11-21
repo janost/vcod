@@ -1623,6 +1623,7 @@ mod tests {
                 hazards: Vec::new(),
                 rubble: Vec::new(),
                 nav_cover: Vec::new(),
+                prop_areas: None,
             }))
         };
         vm.with_cx(|cx| {

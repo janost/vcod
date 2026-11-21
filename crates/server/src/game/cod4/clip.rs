@@ -103,6 +103,7 @@ pub fn level_world(clip: Arc<ClipMap>) -> Rc<crate::world::World> {
         hazards: Vec::new(),
         rubble: Vec::new(),
         nav_cover: Vec::new(),
+        prop_areas: None,
     })
 }
 

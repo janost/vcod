@@ -130,6 +130,7 @@ pub fn level_world(
         hazards: Vec::new(),
         rubble: Vec::new(),
         nav_cover: Vec::new(),
+        prop_areas: None,
     }
 }
 

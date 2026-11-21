@@ -623,66 +623,91 @@ pub fn placed_collision_tris(p: &Placement, model: &model::Model, out: &mut Vec<
     }
 }
 
-/// Every collision triangle of every placed prop, for
-/// `CollisionWorld::build`. Models load once each.
-pub fn collision_tris(fs: &dyn AssetSource, entities: &str) -> Vec<ModelTri> {
-    let placements = placements(entities);
-    let cache = load_models(fs, placements.iter().map(|p| p.model.as_str()));
-    let mut out = Vec::new();
-    let mut collidable = 0usize;
-    for p in &placements {
-        let Some(model) = &cache[&p.model] else {
-            continue;
-        };
-        let before = out.len();
-        placed_collision_tris(p, model, &mut out);
-        collidable += (out.len() > before) as usize;
-    }
-    log::info!(
-        "props: {collidable}/{} placements collide, {} triangles",
-        placements.len(),
-        out.len()
-    );
-    out
+/// A map's placements and each distinct model they name, decoded once, so
+/// a map load that wants both [`Placed::collision_tris`] and
+/// [`Placed::area_bounds`] reads each prop's xmodel once.
+pub struct Placed {
+    placements: Vec<Placement>,
+    models: HashMap<String, Option<model::Model>>,
 }
 
-/// The world box the engine files each collidable `misc_model` under in its
-/// entity area tree, in entity-string order. VERIFIED, `cod_lnxded`: the
-/// loader (0x8051420) takes the eight corners of every collision surface's
-/// stored bounds through the scaled axis (0x80c241c), adds the origin, and
-/// links the model (0x80594c4) only when the OR of its surfaces' contents,
-/// masked `& 0xdfff7ffb`, is non-zero. INFERRED: the stored bounds are read
-/// unbaked, in the bone's space, which is model space for a rigid prop.
-pub fn area_bounds(fs: &dyn AssetSource, entities: &str) -> Vec<(Vec3, Vec3)> {
-    let placements = placements(entities);
-    let cache = load_models(fs, placements.iter().map(|p| p.model.as_str()));
-    let mut out = Vec::new();
-    for p in &placements {
-        let Some(model) = &cache[&p.model] else {
-            continue;
-        };
-        let contents = model.collision.iter().fold(0, |c, s| c | s.contents) & 0xdfff_7ffb;
-        if model.collision.is_empty() || contents == 0 {
-            continue;
-        }
-        let rot = rotation(p.angles);
-        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
-        for surf in &model.collision {
-            let (a, b) = surf.bounds;
-            for corner in 0..8 {
-                let c = Vec3::new(
-                    if corner & 1 == 0 { b.x } else { a.x },
-                    if corner & 2 == 0 { b.y } else { a.y },
-                    if corner & 4 == 0 { b.z } else { a.z },
-                );
-                let w = rot * (p.scale * c);
-                lo = lo.min(w);
-                hi = hi.max(w);
-            }
-        }
-        out.push((lo + p.origin, hi + p.origin));
+impl Placed {
+    pub fn load(fs: &dyn AssetSource, entities: &str) -> Self {
+        let placements = placements(entities);
+        let models = load_models(fs, placements.iter().map(|p| p.model.as_str()));
+        Placed { placements, models }
     }
-    out
+
+    /// Each placement with its model, in entity-string order; a model that
+    /// failed to load leaves its placements out.
+    fn each(&self) -> impl Iterator<Item = (&Placement, &model::Model)> {
+        self.placements
+            .iter()
+            .filter_map(|p| Some((p, self.models[&p.model].as_ref()?)))
+    }
+
+    /// Every collision triangle of every placed prop, for
+    /// `CollisionWorld::build`.
+    pub fn collision_tris(&self) -> Vec<ModelTri> {
+        let mut out = Vec::new();
+        let mut collidable = 0usize;
+        for (p, model) in self.each() {
+            let before = out.len();
+            placed_collision_tris(p, model, &mut out);
+            collidable += (out.len() > before) as usize;
+        }
+        log::info!(
+            "props: {collidable}/{} placements collide, {} triangles",
+            self.placements.len(),
+            out.len()
+        );
+        out
+    }
+
+    /// The world box the engine files each collidable `misc_model` under in
+    /// its entity area tree, in entity-string order. VERIFIED, `cod_lnxded`:
+    /// the loader (0x8051420) takes the eight corners of every collision
+    /// surface's stored bounds through the scaled axis (0x80c241c), adds the
+    /// origin, and links the model (0x80594c4) only when the OR of its
+    /// surfaces' contents, masked `& 0xdfff7ffb`, is non-zero. INFERRED: the
+    /// stored bounds are read unbaked, in the bone's space, which is model
+    /// space for a rigid prop.
+    pub fn area_bounds(&self) -> Vec<(Vec3, Vec3)> {
+        let mut out = Vec::new();
+        for (p, model) in self.each() {
+            let contents = model.collision.iter().fold(0, |c, s| c | s.contents) & 0xdfff_7ffb;
+            if model.collision.is_empty() || contents == 0 {
+                continue;
+            }
+            let rot = rotation(p.angles);
+            let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+            for surf in &model.collision {
+                let (a, b) = surf.bounds;
+                for corner in 0..8 {
+                    let c = Vec3::new(
+                        if corner & 1 == 0 { b.x } else { a.x },
+                        if corner & 2 == 0 { b.y } else { a.y },
+                        if corner & 4 == 0 { b.z } else { a.z },
+                    );
+                    let w = rot * (p.scale * c);
+                    lo = lo.min(w);
+                    hi = hi.max(w);
+                }
+            }
+            out.push((lo + p.origin, hi + p.origin));
+        }
+        out
+    }
+}
+
+/// [`Placed::collision_tris`] off a fresh load.
+pub fn collision_tris(fs: &dyn AssetSource, entities: &str) -> Vec<ModelTri> {
+    Placed::load(fs, entities).collision_tris()
+}
+
+/// [`Placed::area_bounds`] off a fresh load.
+pub fn area_bounds(fs: &dyn AssetSource, entities: &str) -> Vec<(Vec3, Vec3)> {
+    Placed::load(fs, entities).area_bounds()
 }
 
 #[cfg(test)]
