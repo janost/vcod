@@ -369,7 +369,7 @@ impl Renderer {
         }
         laps.lap("prefetch");
         let fallback_px = fallback_pixels();
-        let shaders = assets::load_shaders(fs);
+        let shaders = ShaderLib::load(fs);
         let mut material_views: HashMap<u16, wgpu::TextureView> = HashMap::new();
         // materials whose image has texels the 0.5 alpha test cuts
         let mut cut_materials: HashSet<u16> = HashSet::new();
@@ -1668,7 +1668,7 @@ impl Renderer {
     /// next `load_world` classifies against, and drop the fx and HUD textures
     /// resolved off the old paks, misses included.
     pub fn reopen(&mut self, fs: &dyn AssetSource) {
-        self.shaders = assets::load_shaders(fs);
+        self.shaders = ShaderLib::load(fs);
         self.shader_lib = material_lib(fs);
         self.lib_warn_count = self.shader_lib.warn_count();
         self.fx.textures.clear();

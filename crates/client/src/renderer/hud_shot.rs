@@ -91,7 +91,7 @@ fn shoot(
     out: &std::ffi::OsStr,
 ) {
     let mut pass = create_hud_pass(device, SCENE_FORMAT);
-    let shaders = assets::load_shaders(fs);
+    let shaders = ShaderLib::load(fs);
     let lib = material_lib(fs);
     let textures = texture_settings::TextureSettings::default();
     let samplers = TexSamplers::new(device, textures.filter);

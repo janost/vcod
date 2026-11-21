@@ -400,7 +400,7 @@ fn resolve_fx_path_uses_fxshaders_materials() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    let shaders = vcod_common::assets::load_shaders(&fs);
+    let shaders = ShaderLib::load(&fs);
     assert_eq!(
         resolve_fx_path(shaders.image_map(), &fs, "gfx/misc/tracer"),
         Some("textures/sfx/tracer.jpg".to_string())
@@ -526,7 +526,7 @@ fn hud_texture_path_resolves_a_material_a_plain_path_and_a_miss() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    let shaders = vcod_common::assets::load_shaders(&fs);
+    let shaders = ShaderLib::load(&fs);
     assert_eq!(
         hud_texture_path("hudStanceStand", shaders.image_map(), &fs),
         HudTex::Path("gfx/hud/stance_stand.dds".to_string())
@@ -2064,7 +2064,7 @@ fn chateaus_door_draws_opaque() {
         return;
     };
     let name = "textures/austria/doors/wood@chateau_exteriordoor";
-    let mut img = assets::load_material_image(&fs, &assets::load_shaders(&fs), name);
+    let mut img = assets::load_material_image(&fs, &ShaderLib::load(&fs), name);
     assert!(assets::has_cutout_alpha(&img));
     assert!(world_type_draws_opaque(&fs, name));
     assets::force_opaque(&mut img);

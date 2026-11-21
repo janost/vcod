@@ -549,7 +549,7 @@ pub struct Renderer {
     dlight_quality: bool,
     /// Kept past map load so later inline submodels resolve `textures/...`
     /// names the same way the world did.
-    shaders: assets::Shaders,
+    shaders: Arc<ShaderLib>,
     /// Parsed shader scripts; map materials are classified against it.
     shader_lib: MaterialLib,
     /// The map's active sky (farbox + optional cloud dome); `None` without a
@@ -870,7 +870,7 @@ impl Renderer {
             ),
         };
 
-        let shaders = assets::load_shaders(fs);
+        let shaders = ShaderLib::load(fs);
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("shader.wgsl"),
