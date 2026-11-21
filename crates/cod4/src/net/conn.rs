@@ -6,7 +6,7 @@
 //! `examples/cod4_probe.rs` and the vcod client both join through it.
 
 use super::clmsg::{self, ClOp, CmdWire, UserCmd};
-use super::parse::{Client, Op, Parsed};
+use super::parse::{Client, Illegible, Op, Parsed};
 use super::pure;
 use super::stats::{STAT_PACKETS, Stats};
 use super::voice;
@@ -513,6 +513,7 @@ impl Conn {
                 continue;
             }
             let rack = i32::from_le_bytes(msg[..4].try_into().unwrap());
+            let kept = (self.ack, self.commands_acked);
             self.ack = s as i32;
             // `CL_PacketEvent` drops a message acknowledging less than the
             // ring and takes every command as acknowledged (`iw3mp.exe`
@@ -525,16 +526,22 @@ impl Conn {
             let key = self.command_text(rack).to_vec();
             self.chan.decode(s, &key, &mut msg);
             self.commands_acked = self.commands_acked.max(rack);
-            self.drop_acked_commands();
             // `CL_PacketEvent` warns `ignoring illegible message` and goes
-            // on (`iw3mp.exe` 0x46c53c..0x46c548, cod4-handshake.md 4).
+            // on (`iw3mp.exe` 0x46c53c..0x46c548, cod4-handshake.md 4); one
+            // it marked overflowed puts both acknowledges back (0x46c550,
+            // 0x46c556), so the next move acknowledges the message before
+            // it and resends the commands it acknowledged.
             let parsed = match self.client.parse(s, &msg[4..]) {
                 Ok(p) => p,
                 Err(e) => {
+                    if e.downcast_ref::<Illegible>().is_some() {
+                        (self.ack, self.commands_acked) = kept;
+                    }
                     log::warn!("cod4: ignoring illegible message {s}: {e:#}");
                     continue;
                 }
             };
+            self.drop_acked_commands();
             self.apply_configstrings(&parsed);
             if parsed.ops.iter().any(|o| matches!(o, Op::Gamestate)) {
                 self.answer_gamestate()?;
@@ -1008,6 +1015,47 @@ mod tests {
         assert_eq!(got.iter().map(|r| r.sequence).collect::<Vec<_>>(), [1, 3]);
         assert!(matches!(got[0].parsed.ops[..], [Op::Nop]));
         assert_eq!(c.ack, 3);
+    }
+
+    /// A message the parse marks overflowed (an unknown op, a read past
+    /// the end) puts `serverMessageSequence` and `reliableAcknowledge`
+    /// back (`iw3mp.exe` 0x46c550, 0x46c556): the next move acknowledges
+    /// the message before it and resends the command it acknowledged.
+    #[test]
+    fn an_illegible_message_rolls_its_acknowledges_back() {
+        use super::super::huffman::Huffman;
+        use super::super::parse::{SVC_EOF, SVC_SERVERCOMMAND};
+        use vcod_common::net::netchan::ServerNetchan;
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut c = joined(server.local_addr().unwrap());
+        c.command("say hi");
+        let me = c.sock.local_addr().unwrap();
+        let mut chan = ServerNetchan::with_params(1, 0, NetchanParams::COD2);
+        let huff = Huffman::new();
+        let mut send = |rack: i32, ops: &[u8]| {
+            for p in chan.transmit_block(rack, &huff.compress(ops)) {
+                server.send_to(&p, me).unwrap();
+            }
+        };
+        let until = || Instant::now() + Duration::from_millis(200);
+        send(0, &[SVC_EOF]);
+        assert_eq!(c.poll(until()).unwrap().len(), 1);
+        assert_eq!((c.ack, c.commands_acked), (1, 0));
+        // The server keys its messages on the command it acknowledges.
+        chan.last_client_command_string = "say hi".into();
+        let mut send = |rack: i32, ops: &[u8]| {
+            for p in chan.transmit_block(rack, &huff.compress(ops)) {
+                server.send_to(&p, me).unwrap();
+            }
+        };
+        for ops in [&[0xc8][..], &[SVC_SERVERCOMMAND, 1]] {
+            send(1, ops);
+            assert!(c.poll(until()).unwrap().is_empty());
+            assert_eq!((c.ack, c.commands_acked), (1, 0), "{ops:?}");
+        }
+        send(1, &[SVC_EOF]);
+        assert_eq!(c.poll(until()).unwrap().len(), 1);
+        assert_eq!((c.ack, c.commands_acked), (4, 1));
     }
 
     /// A `reliableAcknowledge` at either end of `int`: `i32::MIN` is below
