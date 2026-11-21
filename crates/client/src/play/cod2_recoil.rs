@@ -19,10 +19,9 @@
 
 use vcod_cod2::net::PlayerView;
 use vcod_cod2::net::events as ev;
-use vcod_common::weapon::WeaponDef as KickKeys;
 
 use crate::play::cod2_events::Event2;
-use crate::play::recoil::Recoil;
+use crate::play::recoil::{KickDef, Kicker};
 
 /// `pm_flags` under which `CG_FireWeapon` kicks the playerstate's own
 /// shot (`snap->ps.pm_flags & 0xc00000`).
@@ -34,69 +33,21 @@ const PMF_OWN_VIEW: i32 = 0x80_0000;
 /// `offHandIndex`.
 const PMF_OFFHAND: i32 = 0x10;
 
-/// The keys `BG_WeaponFireRecoil` and `BG_CalculateWeaponAngles` read.
-/// They carry CoD1's names, so they parse into CoD1's def, which
-/// [`Recoil`] steps.
-const KICK_KEYS: &[&str] = &[
-    "aimDownSight",
-    "gunMaxPitch",
-    "gunMaxYaw",
-    "hipGunKickPitchMin",
-    "hipGunKickPitchMax",
-    "hipGunKickYawMin",
-    "hipGunKickYawMax",
-    "hipGunKickAccel",
-    "hipGunKickSpeedMax",
-    "hipGunKickSpeedDecay",
-    "hipGunKickStaticDecay",
-    "hipViewKickPitchMin",
-    "hipViewKickPitchMax",
-    "hipViewKickYawMin",
-    "hipViewKickYawMax",
-    "hipViewKickCenterSpeed",
-    "adsGunKickPitchMin",
-    "adsGunKickPitchMax",
-    "adsGunKickYawMin",
-    "adsGunKickYawMax",
-    "adsGunKickAccel",
-    "adsGunKickSpeedMax",
-    "adsGunKickSpeedDecay",
-    "adsGunKickStaticDecay",
-    "adsViewKickPitchMin",
-    "adsViewKickPitchMax",
-    "adsViewKickYawMin",
-    "adsViewKickYawMax",
-    "adsViewKickCenterSpeed",
-];
-
-/// One weapon's kick keys.
-pub struct KickDef {
-    keys: KickKeys,
-    /// `hipGunKickReducedKickPercent`, `adsGunKickReducedKickPercent`.
-    reduced_percent: [f32; 2],
-}
-
-impl KickDef {
-    pub fn new(def: &vcod_cod2::weapon::WeaponDef) -> KickDef {
-        let map: vcod_common::xmodel::WeaponKeys = KICK_KEYS
-            .iter()
-            .map(|&k| {
-                let v = if k == "aimDownSight" {
-                    u8::from(def.flag(k)).to_string()
-                } else {
-                    def.float(k).to_string()
-                };
-                (k.to_string(), v)
-            })
-            .collect();
-        KickDef {
-            keys: KickKeys::from_map(&map),
-            reduced_percent: [
-                def.float("hipGunKickReducedKickPercent"),
-                def.float("adsGunKickReducedKickPercent"),
-            ],
-        }
-    }
+/// One weapon's kick keys off its parsed weapon file.
+pub fn kick_def(def: &vcod_cod2::weapon::WeaponDef) -> KickDef {
+    KickDef::from_lookup(
+        &|k| {
+            if k == "aimDownSight" {
+                u8::from(def.flag(k)).to_string()
+            } else {
+                def.float(k).to_string()
+            }
+        },
+        [
+            def.float("hipGunKickReducedKickPercent"),
+            def.float("adsGunKickReducedKickPercent"),
+        ],
+    )
 }
 
 /// How many times `event` runs `CG_FireWeapon` (`CG_EntityEvent`, Mac
@@ -113,17 +64,6 @@ pub fn fire_calls(event: i32) -> usize {
     }
 }
 
-/// `BG_WeaponFireRecoil`'s scale on every draw: 1, or while
-/// `weaponRestrictKickTime` runs the reduced percent (the sight's only at
-/// a full `frac`) over 100.
-pub fn kick_scale(restrict_kick_time: i32, frac: f32, reduced_percent: [f32; 2]) -> f32 {
-    if restrict_kick_time > 0 {
-        0.01 * reduced_percent[usize::from(frac == 1.0)]
-    } else {
-        1.0
-    }
-}
-
 /// `BG_GetViewmodelWeaponIndex` less the binoculars, which fire nothing
 /// and whose index the kick does not need.
 pub fn kick_weapon(ps: &PlayerView) -> i32 {
@@ -137,9 +77,7 @@ pub fn kick_weapon(ps: &PlayerView) -> i32 {
 /// The recoil of a CoD2 connection's own body.
 #[derive(Default)]
 pub struct Cod2Recoil {
-    recoil: Recoil,
-    /// `cg.time` at the last step.
-    last_ms: Option<i32>,
+    kicker: Kicker,
 }
 
 impl Cod2Recoil {
@@ -158,45 +96,34 @@ impl Cod2Recoil {
         if let Some(def) = def
             && ps.pm_flags & PMF_FIRST_PERSON != 0
         {
-            let scale = kick_scale(
-                ps.raw.i32("weaponRestrictKickTime"),
-                frac,
-                def.reduced_percent,
-            );
+            let restrict = ps.raw.i32("weaponRestrictKickTime");
             let shots: usize = events
                 .iter()
                 .filter(|e| e.entity as i32 == ps.client_num)
                 .map(|e| fire_calls(e.event))
                 .sum();
             for _ in 0..shots {
-                self.recoil.fire_scaled(&def.keys, frac, scale);
+                self.kicker.fire(def, frac, restrict);
             }
         }
-        let ms = self.last_ms.map_or(0, |l| (time_ms - l).clamp(0, 1000));
-        self.last_ms = Some(time_ms);
-        self.recoil.step(
-            ms,
-            def.map(|d| &d.keys),
-            frac,
-            ps.pm_flags & PMF_OWN_VIEW != 0,
-        );
+        self.kicker
+            .step(time_ms, def, frac, ps.pm_flags & PMF_OWN_VIEW != 0);
     }
 
     /// Zeroes both kicks (`CG_Respawn`, Mac 0x1e3c56).
     pub fn reset(&mut self) {
-        self.recoil.reset();
-        self.last_ms = None;
+        self.kicker.reset();
     }
 
     /// The view kick, degrees (pitch positive down, yaw, roll), which the
     /// cmd's angles carry.
     pub fn view_kick(&self) -> [f32; 3] {
-        self.recoil.view_kick()
+        self.kicker.view_kick()
     }
 
     /// The gun spring's pitch and yaw, degrees.
     pub fn gun_kick(&self) -> [f32; 2] {
-        self.recoil.gun_kick()
+        self.kicker.gun_kick()
     }
 }
 
@@ -215,6 +142,7 @@ pub(crate) fn kicked() -> Cod2Recoil {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::play::recoil::kick_scale;
     use glam::Vec3;
     use vcod_cod2::net::PlayerState2;
     use vcod_cod2::net::delta::field_index;
@@ -238,7 +166,7 @@ mod tests {
 
     pub(super) fn bar() -> KickDef {
         let p = vcod_cod2::weapon::parse("bar_mp", BAR.as_bytes(), &[]).expect("parses");
-        KickDef::new(&p.def)
+        kick_def(&p.def)
     }
 
     pub(super) fn own_ps(pm_flags: i32, frac: f32) -> PlayerView {

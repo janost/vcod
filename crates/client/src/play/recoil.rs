@@ -175,6 +175,120 @@ impl Recoil {
     }
 }
 
+/// The keys CoD2's and CoD4's `BG_WeaponFireRecoil` and gun spring read.
+/// They carry CoD1's names, so they parse into CoD1's def, which
+/// [`Recoil`] steps.
+const KICK_KEYS: &[&str] = &[
+    "aimDownSight",
+    "gunMaxPitch",
+    "gunMaxYaw",
+    "hipGunKickPitchMin",
+    "hipGunKickPitchMax",
+    "hipGunKickYawMin",
+    "hipGunKickYawMax",
+    "hipGunKickAccel",
+    "hipGunKickSpeedMax",
+    "hipGunKickSpeedDecay",
+    "hipGunKickStaticDecay",
+    "hipViewKickPitchMin",
+    "hipViewKickPitchMax",
+    "hipViewKickYawMin",
+    "hipViewKickYawMax",
+    "hipViewKickCenterSpeed",
+    "adsGunKickPitchMin",
+    "adsGunKickPitchMax",
+    "adsGunKickYawMin",
+    "adsGunKickYawMax",
+    "adsGunKickAccel",
+    "adsGunKickSpeedMax",
+    "adsGunKickSpeedDecay",
+    "adsGunKickStaticDecay",
+    "adsViewKickPitchMin",
+    "adsViewKickPitchMax",
+    "adsViewKickYawMin",
+    "adsViewKickYawMax",
+    "adsViewKickCenterSpeed",
+];
+
+/// One weapon's kick keys for CoD2 and CoD4, which add the reduced kick
+/// to CoD1's.
+#[derive(Clone)]
+pub struct KickDef {
+    pub(super) keys: WeaponDef,
+    /// `hipGunKickReducedKickPercent`, `adsGunKickReducedKickPercent`.
+    reduced_percent: [f32; 2],
+}
+
+impl KickDef {
+    /// `value` gives each of the kick keys' text as the game's weapon file
+    /// holds it.
+    pub fn from_lookup(value: &dyn Fn(&str) -> String, reduced_percent: [f32; 2]) -> KickDef {
+        let map: vcod_common::xmodel::WeaponKeys = KICK_KEYS
+            .iter()
+            .map(|&k| (k.to_string(), value(k)))
+            .collect();
+        KickDef {
+            keys: WeaponDef::from_map(&map),
+            reduced_percent,
+        }
+    }
+}
+
+/// `BG_WeaponFireRecoil`'s scale on every draw: 1, or while
+/// `weaponRestrictKickTime` runs the reduced percent (the sight's only at
+/// a full `frac`) over 100.
+pub fn kick_scale(restrict_kick_time: i32, frac: f32, reduced_percent: [f32; 2]) -> f32 {
+    if restrict_kick_time > 0 {
+        0.01 * reduced_percent[usize::from(frac == 1.0)]
+    } else {
+        1.0
+    }
+}
+
+/// CoD2's and CoD4's [`Recoil`] with its frame clock. Each game keeps its
+/// own gate for whose shot kicks.
+#[derive(Default)]
+pub struct Kicker {
+    recoil: Recoil,
+    /// `cg.time` at the last step.
+    last_ms: Option<i32>,
+}
+
+impl Kicker {
+    /// One own shot: `BG_WeaponFireRecoil`, its draws cut by [`kick_scale`].
+    pub fn fire(&mut self, def: &KickDef, frac: f32, restrict_kick_time: i32) {
+        let scale = kick_scale(restrict_kick_time, frac, def.reduced_percent);
+        self.recoil.fire_scaled(&def.keys, frac, scale);
+    }
+
+    /// One frame at cg time `now`: both kicks step by the time since the
+    /// last, at most a second.
+    pub fn step(&mut self, now: i32, def: Option<&KickDef>, frac: f32, own_view: bool) {
+        let ms = self.last_ms.map_or(0, |l| (now - l).clamp(0, 1000));
+        self.last_ms = Some(now);
+        self.recoil.step(ms, def.map(|d| &d.keys), frac, own_view);
+    }
+
+    /// Both kicks zeroed; the clock runs on.
+    pub fn zero(&mut self) {
+        self.recoil.reset();
+    }
+
+    /// Both kicks zeroed and the clock restarted.
+    pub fn reset(&mut self) {
+        self.recoil.reset();
+        self.last_ms = None;
+    }
+
+    pub fn view_kick(&self) -> [f32; 3] {
+        self.recoil.view_kick()
+    }
+
+    pub fn gun_kick(&self) -> [f32; 2] {
+        self.recoil.gun_kick()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

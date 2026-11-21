@@ -66,7 +66,7 @@ pub struct Cod4World {
     /// lower-case name (`vcod_cod4::shock`).
     pub shocks: HashMap<String, vcod_cod4::shock::ShockParms>,
     /// Each weapon's recoil keys by name (`play::cod4_kick`).
-    pub kicks: HashMap<String, crate::play::cod4_kick::KickDef>,
+    pub kicks: HashMap<String, crate::play::recoil::KickDef>,
     /// The corpses' ragdoll def, `ragdoll.cfg`'s def 1 off the search path
     /// ([`Cod4World::read_ragdoll`]); `None` leaves corpses on their death
     /// anims.
@@ -117,7 +117,7 @@ impl Cod4World {
                 }
                 kicks
                     .entry(key)
-                    .or_insert_with(|| crate::play::cod4_kick::KickDef::from_raw(&d.raw));
+                    .or_insert_with(|| crate::play::cod4_kick::kick_def(&d.raw));
                 if let Some(def) = WeaponDef::of(d) {
                     let s = |k: &str| d.strings.get(k).cloned().unwrap_or_default();
                     let names = [s("ammoName"), s("clipName"), s("altWeapon")];
@@ -190,10 +190,8 @@ impl Cod4World {
             if let Some(m) = WeaponMove::from_raw(&w.raw) {
                 self.weapons.insert(name.clone(), m);
             }
-            self.kicks.insert(
-                name.clone(),
-                crate::play::cod4_kick::KickDef::from_raw(&w.raw),
-            );
+            self.kicks
+                .insert(name.clone(), crate::play::cod4_kick::kick_def(&w.raw));
             if w.raw.get(316..320) == Some(&[0; 4]) {
                 self.primaries.insert(name.clone());
             } else {
@@ -221,7 +219,7 @@ impl Cod4World {
     }
 
     /// A weapon's recoil keys by its name in any case.
-    pub fn kick(&self, name: &str) -> Option<&crate::play::cod4_kick::KickDef> {
+    pub fn kick(&self, name: &str) -> Option<&crate::play::recoil::KickDef> {
         self.kicks.get(&name.to_ascii_lowercase())
     }
 
