@@ -335,16 +335,21 @@ pub fn scale(v: Vec3, s: f64) -> Vec3 {
 }
 
 /// 1.5b's `VectorNormalize` in place (game.mp 0x32f73), which United
-/// Offensive shares: the squared length, the length and its reciprocal each
-/// stored as a float, every component rounded once. A zero vector is left
-/// as it was.
+/// Offensive shares (UO 0x3a1c3): the squared length, summed x, y, z, the
+/// length and its reciprocal each stored as a float, every component
+/// rounded once. A zero vector is left as it was.
 pub fn normalize_stored(v: Vec3) -> Vec3 {
+    normalize_stored_len(v).0
+}
+
+/// [`normalize_stored`] with the stored length it returns.
+pub fn normalize_stored_len(v: Vec3) -> (Vec3, f32) {
     let len = f64::from(dot(v, v) as f32).sqrt() as f32;
     if len == 0.0 {
-        return v;
+        return (v, len);
     }
     let inv = 1.0 / len;
-    (v.as_dvec3() * f64::from(inv)).as_vec3()
+    ((v.as_dvec3() * f64::from(inv)).as_vec3(), len)
 }
 
 /// 1.5b's and UO's `VectorNormalize2` (game.mp 0x33216, UO 0x3a466): the
