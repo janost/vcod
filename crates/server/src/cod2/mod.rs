@@ -1346,10 +1346,12 @@ impl Cod2Server {
 
     /// `SV_CheckTimeouts` (0x809657e): a zombie silent `sv_zombietime` is
     /// freed; anyone else silent `sv_timeout` is dropped on the sixth such
-    /// frame and freed at once, with no zombie turn (17.3).
+    /// frame and freed at once, with no zombie turn (17.3). A slot no
+    /// netchan message came for yet is held to `slot::NO_NETCHAN_TIMEOUT_S`
+    /// (vcod's).
     fn check_timeouts(&mut self) {
         let svs = self.core.sv_time_ms;
-        let drop_before = svs - self.int("sv_timeout") * 1000;
+        let timeout_s = self.int("sv_timeout");
         let free_before = svs - self.int("sv_zombietime") * 1000;
         for slot in 0..self.core.clients.len() {
             let Some(c) = self.core.clients[slot].as_mut() else {
@@ -1359,6 +1361,7 @@ impl Cod2Server {
                 continue;
             }
             c.link.last_packet_ms = c.link.last_packet_ms.min(svs);
+            let drop_before = svs.wrapping_sub(crate::engine::slot::timeout_ms(&c.link, timeout_s));
             if c.state == State::Zombie && c.link.last_packet_ms < free_before {
                 log::debug!("cod2: client {slot} from CS_ZOMBIE to CS_FREE");
                 self.core.clients[slot] = None;

@@ -448,7 +448,8 @@ impl Server {
     /// clock is pulled back to it; one more than `sv_timeout` seconds old
     /// counts a frame, a fresh one resets the count, and the sixth stale
     /// frame in a row drops the client and frees the slot at once, its
-    /// notice never sent. A zombie whose last packet is more than
+    /// notice never sent; a slot no netchan message came for yet is held
+    /// to `slot::NO_NETCHAN_TIMEOUT_S` (vcod's). A zombie whose last packet is more than
     /// `sv_zombietime` old goes `CS_FREE` first, before any message.
     pub(super) fn check_timeouts(&mut self) {
         let now = self.svs_time_ms();
@@ -459,7 +460,7 @@ impl Server {
             }
         }
         let timeout = self.live_cvar("sv_timeout", TIMEOUT_DEFAULT);
-        let timeout_ms = crate::game::builtins::cvar::atoi(&timeout).wrapping_mul(1000);
+        let timeout_s = crate::game::builtins::cvar::atoi(&timeout);
         let mut stale = Vec::new();
         for (slot, c) in self.core.clients.iter_mut().enumerate() {
             let Some(c) = c.as_mut().filter(|c| !c.is_bot) else {
@@ -468,6 +469,7 @@ impl Server {
             if now.wrapping_sub(c.link.last_packet_ms) < 0 {
                 c.link.last_packet_ms = now;
             }
+            let timeout_ms = crate::engine::slot::timeout_ms(&c.link, timeout_s);
             if now.wrapping_sub(c.link.last_packet_ms) > timeout_ms {
                 c.link.timeout_count += 1;
                 if c.link.timeout_count > 5 {
@@ -661,6 +663,29 @@ mod tests {
         }
         assert_eq!(lan_n, 22);
         assert_eq!(wan_n, 2, "a keepalive at 0 and at 1000 ms");
+    }
+
+    /// A slot that never had a netchan message taken times out at
+    /// `NO_NETCHAN_TIMEOUT_S` under the default `sv_timeout`; one that has
+    /// keeps the whole `sv_timeout` (vcod's, SEC-066).
+    #[test]
+    fn a_slot_that_never_sent_a_netchan_message_times_out_early() {
+        use crate::engine::slot::NO_NETCHAN_TIMEOUT_S;
+        let t = Instant::now();
+        let mut sv = Server::new(cfg(), t);
+        let _talker = active(&mut sv, t);
+        sv.take_outgoing();
+        let quiet = 1;
+        sv.core.clients[quiet] = Some(Client::new(addr(6), 0x3001, 0, "\\name\\quiet".into(), t));
+        let stale = sv.core.sv_time_ms - NO_NETCHAN_TIMEOUT_S * 1000 - 1;
+        for c in sv.core.clients.iter_mut().flatten() {
+            c.link.last_packet_ms = stale;
+        }
+        for _ in 0..6 {
+            sv.tick(t);
+        }
+        assert!(sv.core.clients[quiet].is_none());
+        assert_eq!(sv.client_count(), 1, "the talker stays");
     }
 
     /// `SV_CheckTimeouts` (0x808cbc0): after the clock advance, a last

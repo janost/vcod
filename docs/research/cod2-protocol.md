@@ -3400,6 +3400,15 @@ frame, and on the sixth is dropped `EXE_TIMEDOUT` and freed at once, with no
 zombie turn; anyone else's count is reset. VERIFIED (defaults at `SV_Init`
 0x8093adc).
 
+vcod-server holds a slot no netchan message has been taken from yet to 15 s
+when `sv_timeout` is longer (`slot::NO_NETCHAN_TIMEOUT_S`, shared with CoD1;
+`a_slot_that_never_sent_a_netchan_message_times_out_early`). Retail holds it
+the whole `sv_timeout`, so a host that sends `getchallenge` and `connect` from
+many ports and nothing after keeps the slots for four minutes. That a retail
+client sends its first netchan message well inside 15 s of `connectResponse`
+is INFERRED (Q3's connect flow; every join vcod's gates run does). vcod's, a
+hardening (SEC-066), not a retail rule.
+
 Live (VERIFIED live): a loopback client's `disconnect` was followed by 40
 messages a frame apart, the first carrying `w "EXE_DISCONNECTED"`, and the
 server logged `Going from CS_ZOMBIE to CS_FREE` 2 s after

@@ -105,6 +105,26 @@ impl<F> Link<F> {
     }
 }
 
+/// How long a CoD1 or CoD2 slot that has not had one netchan message
+/// taken keeps it, seconds, when `sv_timeout` is longer: a client sends
+/// its first one as soon as `connectResponse` lands, so only one that died
+/// or a flood that never answers waits this out. vcod's (SEC-066); retail holds
+/// such a slot the whole `sv_timeout`, and CoD4's `sv_connectTimeout`
+/// already covers it there.
+pub const NO_NETCHAN_TIMEOUT_S: i32 = 15;
+
+/// The timeout, in ms, `SV_CheckTimeouts` holds a CoD1 or CoD2 slot to:
+/// `sv_timeout`, capped at [`NO_NETCHAN_TIMEOUT_S`] until a netchan
+/// message from the client has been taken.
+pub fn timeout_ms<F>(link: &Link<F>, sv_timeout_s: i32) -> i32 {
+    let s = if link.netchan.incoming_sequence == 0 {
+        sv_timeout_s.min(NO_NETCHAN_TIMEOUT_S)
+    } else {
+        sv_timeout_s
+    };
+    s.wrapping_mul(1000)
+}
+
 /// `MAX_RELIABLE_COMMANDS` of CoD2's and CoD4's netchan: the reliable
 /// rings' length.
 pub const RELIABLE_COMMANDS: usize = NetchanParams::COD2.reliable_commands;

@@ -626,6 +626,13 @@ A silent client:
   `a_silent_client_s_last_snapshot_is_250_ms_past_its_timeout`
   (`crates/server/tests/connect.rs`). Trap: a wall-clock check ahead of the
   clock advance drops on the first stale frame.
+- vcod: a slot no netchan message has been taken from yet is held to 15 s
+  when `sv_timeout` is longer (`engine::slot::NO_NETCHAN_TIMEOUT_S`, shared
+  with CoD2, `a_slot_that_never_sent_a_netchan_message_times_out_early`).
+  vcod's (SEC-066): retail holds it the whole `sv_timeout`, so a host that
+  sends `getchallenge` and `connect` from many ports keeps the slots four
+  minutes. That a retail client sends its first netchan message well
+  inside 15 s of `connectResponse` is INFERRED (Q3's connect flow).
 
 A zombie never active:
 

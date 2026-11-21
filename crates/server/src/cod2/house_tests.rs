@@ -425,6 +425,25 @@ fn a_silent_client_times_out_with_no_zombie_turn() {
     assert!(h.sv.core.clients[0].is_none());
 }
 
+/// A slot that never sent a netchan message times out at
+/// `NO_NETCHAN_TIMEOUT_S` under the default `sv_timeout` 240, not at 240 s
+/// (vcod's, SEC-066).
+#[test]
+fn a_slot_that_never_sent_a_netchan_message_times_out_early() {
+    use crate::engine::slot::NO_NETCHAN_TIMEOUT_S;
+    let mut h = Harness::new(4, &[]);
+    let out = h.step(&Step::Connect(false, 0, 7, &[]));
+    assert!(
+        out.iter().any(|r| r.starts_with("connectResponse")),
+        "{out:?}"
+    );
+    assert!(h.sv.core.clients[0].is_some());
+    h.frames((NO_NETCHAN_TIMEOUT_S * 1000 / FRAME_MS) as u64);
+    assert!(h.sv.core.clients[0].is_some(), "not before the timeout");
+    h.frames(10);
+    assert!(h.sv.core.clients[0].is_none());
+}
+
 /// A served iwd under `fs_basepath`.
 fn base_with_iwd() -> (tempfile::TempDir, Vec<u8>) {
     let dir = tempfile::tempdir().unwrap();
