@@ -280,8 +280,8 @@ impl Server {
                 }
             };
             self.game.module.weapon_table =
-                Rc::new(crate::weapons::WeaponTable::load(&fs, self.defs()));
-            self.game.module.hitlocs = crate::game::combat::HitLocTable::load(&fs);
+                Rc::new(crate::weapons::WeaponTable::load(&*fs, self.defs()));
+            self.game.module.hitlocs = crate::game::combat::HitLocTable::load(&*fs);
         }
         // `game[]` and `pers[]` are the script's and go only under
         // `savePersist`; the item registry is the engine's and survives a
@@ -878,7 +878,7 @@ mod tests {
         let path = fs.resolve_map("mp_carentan").expect("map in the paks");
         let bsp =
             vcod_common::bsp::parse(&fs.read(&path).expect("read the bsp")).expect("parse the bsp");
-        sv.load_world(World::from_bsp(&bsp, Some(&fs)));
+        sv.load_world(World::from_bsp(&bsp, Some(&*fs)));
         sv.load_scripts(fs).expect("load the scripts");
         assert_eq!(sv.script_cvar("g_gametype").as_deref(), Some("dm"));
 
@@ -914,7 +914,7 @@ mod tests {
         let path = fs.resolve_map("mp_carentan").expect("map in the paks");
         let bsp =
             vcod_common::bsp::parse(&fs.read(&path).expect("read the bsp")).expect("parse the bsp");
-        sv.load_world(World::from_bsp(&bsp, Some(&fs)));
+        sv.load_world(World::from_bsp(&bsp, Some(&*fs)));
         sv.load_scripts(fs).expect("load the scripts");
         sv.game.module.script.as_mut().unwrap().host.cvars.set(
             "sv_mapRotation",

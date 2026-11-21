@@ -600,7 +600,7 @@ impl<'a> Boot<'a> {
         if let Some(prep) = self.prep {
             prep(&mut sv);
         }
-        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&*fs)));
         sv.load_scripts(fs).expect("load the scripts");
         (sv, now)
     }

@@ -7,12 +7,12 @@ use crate::game::temp_entity::{Scope, TempEntity};
 use crate::spectate::ClientSim;
 use glam::{Quat, Vec3};
 use vcod_common::animtree::PlayerAnims;
+use vcod_common::asset_source::AssetSource;
 use vcod_common::bonetrace::{PriorityMap, bone_trace_in, into_frame_kept, into_frame_stored};
 use vcod_common::collision::{CONTENTS_GLASS, CollisionWorld, sound_material};
 use vcod_common::net::events::dir_to_byte;
 use vcod_common::net::protocol::ENTITYNUM_WORLD;
 use vcod_common::patch::Arith;
-use vcod_common::pk3::Pk3Fs;
 use vcod_common::playerpose::pose_player;
 use vcod_common::pmove::weapon::{SpreadStance, hip_spread_min};
 use vcod_common::pmove::{MoveRules, PlayerState};
@@ -120,7 +120,7 @@ impl HitLocTable {
     /// The shipped table out of the paks. Retail `Com_Error`s on a missing or
     /// malformed file and never starts; a server here keeps serving on the
     /// all-ones default and says so.
-    pub fn load(fs: &Pk3Fs) -> HitLocTable {
+    pub fn load(fs: &dyn AssetSource) -> HitLocTable {
         let Some(bytes) = fs.read(HITLOC_TABLE_PATH) else {
             log::error!(
                 "{HITLOC_TABLE_PATH} not in the mounted paks; every hit location does full damage"
@@ -180,7 +180,7 @@ pub const RIFLE_PRIORITY: PriorityMap = [1, 9, 9, 9, 8, 7, 6, 6, 6, 6, 5, 5, 4, 
 /// victim's models out of, the animtree its clip names come from, and the rig
 /// cache. Without one a hit still lands, at hit location `none`.
 pub struct BoneTraceCtx<'a> {
-    pub fs: &'a vcod_common::pk3::Pk3Fs,
+    pub fs: &'a dyn vcod_common::asset_source::AssetSource,
     pub anims: &'a PlayerAnims,
     pub rigs: &'a mut HitRigs,
     /// serverTime the shot is posed at.
@@ -1750,7 +1750,7 @@ pub fn trace_bodies_faced(
         let frame = body_frame(angles);
         let axis_stored = vcod_common::x87::angles_to_axis(angles.into());
         let p = crate::tick_profile::phase("trace/pose");
-        let pose = stamped_pose(&skel, body, anims, rigs, fs, *now_ms, stamps);
+        let pose = stamped_pose(&skel, body, anims, rigs, *fs, *now_ms, stamps);
         drop(p);
         // Into the body's own frame: its `tag_origin` sits at the feet.
         let (ls, le) = match arith {
@@ -1807,7 +1807,7 @@ fn stamped_pose(
     body: &HitBody,
     anims: &PlayerAnims,
     rigs: &mut HitRigs,
-    fs: &vcod_common::pk3::Pk3Fs,
+    fs: &dyn vcod_common::asset_source::AssetSource,
     now_ms: i32,
     stamps: Option<&mut DobjStamps>,
 ) -> vcod_common::skeleton::PoseBuffer {

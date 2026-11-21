@@ -440,7 +440,7 @@ fn cod1_server(args: Args, sock: UdpSocket, sets_after_map: &[bool]) -> Result<(
     );
     server.set_protocol(protocol);
     server.build_nav_in_background(true);
-    let mut world = vcod_server::world::World::from_bsp(&bsp, Some(&fs));
+    let mut world = vcod_server::world::World::from_bsp(&bsp, Some(&*fs));
     world.collision.set_source(map_source);
     server.load_world(world);
     if let Some((stem, text)) = &overlay {

@@ -1629,7 +1629,7 @@ fn serverinfo_of(cvars: &crate::cvars::Cvars) -> String {
 /// `default_mp_gamesettings.cfg`, and retail reads the later one: no
 /// `scr_game_playerwaittime` line, so the prematch waits the script's 15 s
 /// (VERIFIED live, rcon and the game end time 619800).
-fn iwd_cfg(fs: &vcod_common::pk3::Pk3Fs, name: &str, depth: u32) -> String {
+fn iwd_cfg(fs: &dyn vcod_common::asset_source::AssetSource, name: &str, depth: u32) -> String {
     let Some(raw) = fs.read(name) else {
         return String::new();
     };

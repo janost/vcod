@@ -95,7 +95,7 @@ fn main() {
             let (k, v) = kv.split_once('=').expect("SET name=value");
             sv.set_cvar(k, v);
         }
-        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&*fs)));
         sv.load_scripts(fs.clone()).expect("load the scripts");
         let mut hist: Vec<VecDeque<[f32; 3]>> = vec![VecDeque::new(); slots];
         let mut stalled = vec![false; slots];

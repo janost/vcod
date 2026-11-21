@@ -30,7 +30,6 @@ use vcod_cod2::pmove::{PlayerState, Stance, pm_type};
 use vcod_common::animclock::Times;
 use vcod_common::bonetrace::PriorityMap;
 use vcod_common::net::events::dir_to_byte;
-use vcod_common::pk3::Pk3Fs;
 use vcod_common::x87::{F80, angle_vectors};
 use vcod_gsc::{EntId, Value};
 
@@ -281,7 +280,7 @@ pub fn parse_hitloc_table(text: &str) -> Option<[f32; 19]> {
 impl Combat {
     /// What the combat reads off the paks: the hit-location multipliers and
     /// the player anim set the hit poses play (no clip loaded yet).
-    pub fn tables(fs: Option<&Pk3Fs>) -> ([f32; 19], Option<PlayerAnimSet>) {
+    pub fn tables(fs: Option<&dyn AssetSource>) -> ([f32; 19], Option<PlayerAnimSet>) {
         let hitloc_mult = fs
             .and_then(|fs| fs.load::<RawFile>("info/mp_lochit_dmgtable").ok())
             .and_then(|b| parse_hitloc_table(&b.text()))
@@ -466,7 +465,7 @@ impl Combat {
     }
 
     /// The rig of the character `c` names, loaded once.
-    fn rig(&mut self, fs: &Pk3Fs, c: &Character) -> Option<Rc<PlayerRig>> {
+    fn rig(&mut self, fs: &dyn AssetSource, c: &Character) -> Option<Rc<PlayerRig>> {
         if let Some(r) = self.rigs.rigs.get(c) {
             return r.clone();
         }
@@ -750,7 +749,7 @@ impl Cod2Level {
     ) -> Option<(Rc<PlayerRig>, Rc<Vec<Mat>>, BodyFrame)> {
         let fs = self.rt.host.fs.clone()?;
         let character = self.rt.client_character(slot)?;
-        let rig = self.combat.rig(&fs, &character)?;
+        let rig = self.combat.rig(&*fs, &character)?;
         let now = self.level_time();
         let stamp = self.combat.stamp;
         let frametime = self.frametime_ms();
@@ -902,7 +901,7 @@ impl Cod2Level {
         let ps = &self.players[slot].as_ref().unwrap().ps;
         let (origin, yaw) = (ps.origin, ps.view_angles[1]);
         let f = self.body_frame(slot, origin).unwrap();
-        let rig = self.combat.rig(&fs, &character).unwrap();
+        let rig = self.combat.rig(&*fs, &character).unwrap();
         let frametime = self.frametime_ms();
         let Combat { anims, bodies, .. } = &mut self.combat;
         let set = anims.as_mut().unwrap();

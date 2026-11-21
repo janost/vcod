@@ -2591,7 +2591,9 @@ impl GameHost {
             .register(name, &self.weapons, self.initializing)
             .map_err(ErrorKind::Custom)?;
         for item in registered {
-            for model in crate::items::item_models(self.defs, self.fs.as_deref(), item) {
+            for model in
+                crate::items::item_models(self.defs, self.fs.as_deref().map(|f| f as _), item)
+            {
                 if let Err(e) =
                     self.allocators
                         .index(&mut self.configstrings, CsRange::Model, &model)
