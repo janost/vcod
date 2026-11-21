@@ -6,6 +6,7 @@
 //! visibility (cod4_sunshadow_recv.wgsl;
 //! docs/research/cod4-world.md 3.6).
 
+use crate::renderer::gpu_util;
 use bytemuck::Zeroable;
 use glam::{Mat4, Vec3};
 use std::sync::Arc;
@@ -87,32 +88,9 @@ struct PartitionUniform {
 /// The receivers' camera group entries.
 pub(crate) fn layout_entries() -> [wgpu::BindGroupLayoutEntry; 3] {
     [
-        wgpu::BindGroupLayoutEntry {
-            binding: ATLAS_BINDING,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Depth,
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        },
-        wgpu::BindGroupLayoutEntry {
-            binding: UNIFORM_BINDING,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        },
-        wgpu::BindGroupLayoutEntry {
-            binding: SAMPLER_BINDING,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
-            count: None,
-        },
+        gpu_util::depth_2d(ATLAS_BINDING, false),
+        gpu_util::uniform(UNIFORM_BINDING, wgpu::ShaderStages::FRAGMENT),
+        gpu_util::sampler(SAMPLER_BINDING, wgpu::SamplerBindingType::Comparison),
     ]
 }
 
@@ -598,36 +576,13 @@ impl SunShadowPass {
         let part_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("cod4 sun shadow partition"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
+                gpu_util::uniform(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
+                gpu_util::filtering_sampler(1),
             ],
         });
         let cut_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("cod4 sun shadow cut"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
+            entries: &[gpu_util::texture_2d(1)],
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("cod4 sun shadow cut"),
@@ -665,16 +620,7 @@ impl SunShadowPass {
             [0; crate::cod4_spotshadow::MAX_LIGHTS].map(|_| part_uniform("cod4 spot shadow"));
         let static_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("cod4 spot static"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Depth,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
+            entries: &[gpu_util::depth_2d(0, false)],
         });
         let spot_static = [0; crate::cod4_spotshadow::MAX_LIGHTS].map(|_| {
             let tile = crate::cod4_spotshadow::TILE;

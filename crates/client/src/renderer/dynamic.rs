@@ -3,6 +3,7 @@
 //! pass.
 
 use super::*;
+use crate::renderer::gpu_util;
 
 /// The viewmodel shares the world's fov but has its own near plane, retail's
 /// `r_znear_depthhack` default (docs/research/xmodel-v14-format.md, "The
@@ -1010,16 +1011,12 @@ pub(super) fn create_vm_pass(device: &wgpu::Device, tex: &TexSamplers) -> VmPass
     let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("viewmodel uniform layout"),
         entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(VM_UNIFORM_SIZE),
-                },
-                count: None,
-            },
+            gpu_util::uniform_sized(
+                0,
+                wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                false,
+                VM_UNIFORM_SIZE,
+            ),
             s0,
             s1,
             s2,
@@ -1032,29 +1029,16 @@ pub(super) fn create_vm_pass(device: &wgpu::Device, tex: &TexSamplers) -> VmPass
     });
     let skin_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("viewmodel skin layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        }],
+        entries: &[gpu_util::texture_2d(0)],
     });
     let bone_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("viewmodel bone layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: wgpu::BufferSize::new(VM_BONE_BUF_SIZE),
-            },
-            count: None,
-        }],
+        entries: &[gpu_util::uniform_sized(
+            0,
+            wgpu::ShaderStages::VERTEX,
+            false,
+            VM_BONE_BUF_SIZE,
+        )],
     });
     let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("viewmodel uniform"),
@@ -1216,16 +1200,7 @@ pub(super) fn create_dynamic_pass(
     });
 
     // Worst case: every skinned instance at the bone cap, plus the identity block.
-    let storage = |binding, visibility| wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Storage { read_only: true },
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    };
+    let storage = gpu_util::storage_ro;
     // Binding 1 holds the frame's light sets; a CoD2 probe-lit surface
     // reads its set in the fragment stage.
     let bone_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

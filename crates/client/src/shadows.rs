@@ -15,6 +15,7 @@
 //! layer hides the sun and the static layer does not, so indoor and
 //! already-shadowed points keep their baked light.
 
+use crate::renderer::gpu_util;
 use glam::{Mat4, Vec3, Vec4};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -831,62 +832,22 @@ fn compare_sampler(device: &wgpu::Device) -> wgpu::Sampler {
 /// The camera group's receiver entries, bindings 2..=8
 /// (`shadow_receive.wgsl`).
 pub(crate) fn receive_layout_entries() -> [wgpu::BindGroupLayoutEntry; 7] {
-    let map = |binding| wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Depth,
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    };
-    let sampler = |binding| wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
-        count: None,
-    };
+    let map = |binding| gpu_util::depth_2d(binding, false);
+    let sampler = |binding| gpu_util::sampler(binding, wgpu::SamplerBindingType::Comparison);
     [
-        wgpu::BindGroupLayoutEntry {
-            binding: 2,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: wgpu::BufferSize::new(MASK_FLOATS as u64 * 4),
-            },
-            count: None,
-        },
+        gpu_util::uniform_sized(
+            2,
+            wgpu::ShaderStages::FRAGMENT,
+            false,
+            MASK_FLOATS as u64 * 4,
+        ),
         map(3),
         sampler(4),
         map(5),
         sampler(6),
-        keep_layout_entry(7),
-        keep_sampler_entry(8),
+        gpu_util::texture_2d(7),
+        gpu_util::filtering_sampler(8),
     ]
-}
-
-fn keep_layout_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    }
-}
-
-fn keep_sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-        count: None,
-    }
 }
 
 impl Receive<'_> {
@@ -1021,23 +982,9 @@ impl ShadowPass {
         let slots_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("shadow light slots layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(64),
-                    },
-                    count: None,
-                },
+                gpu_util::uniform_sized(0, wgpu::ShaderStages::VERTEX, true, 64),
                 // the cutout casters' alpha test reads images through it
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
+                gpu_util::filtering_sampler(1),
             ],
         });
         let cut_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -1247,60 +1194,19 @@ impl ShadowPass {
         let mask_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("shadow mask layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(MASK_FLOATS as u64 * 4),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: samples > 1,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                keep_layout_entry(6),
-                keep_sampler_entry(7),
+                gpu_util::uniform_sized(
+                    0,
+                    wgpu::ShaderStages::FRAGMENT,
+                    false,
+                    MASK_FLOATS as u64 * 4,
+                ),
+                gpu_util::depth_2d(1, samples > 1),
+                gpu_util::depth_2d(2, false),
+                gpu_util::sampler(3, wgpu::SamplerBindingType::Comparison),
+                gpu_util::sampler(4, wgpu::SamplerBindingType::Comparison),
+                gpu_util::depth_2d(5, false),
+                gpu_util::texture_2d(6),
+                gpu_util::filtering_sampler(7),
             ],
         });
         let mask_buf = device.create_buffer(&wgpu::BufferDescriptor {

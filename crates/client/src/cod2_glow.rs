@@ -14,6 +14,7 @@
 //! no apply here: the post pass adds the result after the film tweak
 //! (`crate::post`).
 
+use crate::renderer::gpu_util;
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
 
@@ -425,38 +426,18 @@ impl Cod2Glow {
         width: u32,
         height: u32,
     ) -> Cod2Glow {
-        let tex = |binding, dim| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: dim,
-                multisampled: false,
-            },
-            count: None,
-        };
+        let tex = gpu_util::texture_float;
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("cod2 glow layout"),
             entries: &[
                 tex(0, wgpu::TextureViewDimension::D2),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(
-                            std::mem::size_of::<Params>() as u64
-                        ),
-                    },
-                    count: None,
-                },
+                gpu_util::filtering_sampler(1),
+                gpu_util::uniform_sized(
+                    2,
+                    wgpu::ShaderStages::FRAGMENT,
+                    true,
+                    std::mem::size_of::<Params>() as u64,
+                ),
                 tex(3, wgpu::TextureViewDimension::Cube),
             ],
         });

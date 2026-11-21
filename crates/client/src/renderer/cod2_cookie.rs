@@ -11,6 +11,7 @@
 //! prepass when it runs; each draw carries the cookies its box can reach
 //! ([`Cookies::receiver_masks`]), and its pixels test only those.
 
+use crate::renderer::gpu_util;
 use glam::{Mat4, Vec3, Vec4};
 use std::ops::Range;
 use wgpu::util::DeviceExt;
@@ -406,32 +407,9 @@ impl Cookies {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let uniform = |binding, visibility, dynamic, size| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: dynamic,
-                min_binding_size: wgpu::BufferSize::new(size),
-            },
-            count: None,
-        };
-        let tex = |binding| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        };
-        let samp = |binding| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-            count: None,
-        };
+        let uniform = gpu_util::uniform_sized;
+        let tex = gpu_util::texture_2d;
+        let samp = gpu_util::filtering_sampler;
         let buffer = |label, size| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
@@ -1181,16 +1159,7 @@ mod tests {
 
     /// The dynamic models' bone group layout the caster pipeline takes.
     fn bones_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-        let storage = |binding| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::VERTEX,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
+        let storage = |binding| gpu_util::storage_ro(binding, wgpu::ShaderStages::VERTEX);
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[storage(0), storage(1)],

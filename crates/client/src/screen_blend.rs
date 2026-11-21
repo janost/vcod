@@ -12,6 +12,7 @@
 //! 8).
 
 use crate::renderer::SCENE_FORMAT;
+use crate::renderer::gpu_util;
 
 pub struct ScreenBlend {
     blend: wgpu::RenderPipeline,
@@ -31,31 +32,11 @@ pub struct ScreenBlend {
 
 impl ScreenBlend {
     pub fn new(device: &wgpu::Device, scene: &wgpu::TextureView, width: u32, height: u32) -> Self {
-        let entry = |binding, ty| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty,
-            count: None,
-        };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("screen blend layout"),
             entries: &[
-                entry(
-                    0,
-                    wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                ),
-                entry(
-                    1,
-                    wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                ),
+                gpu_util::unfilterable_2d(0),
+                gpu_util::uniform(1, wgpu::ShaderStages::FRAGMENT),
             ],
         });
         let params = device.create_buffer(&wgpu::BufferDescriptor {

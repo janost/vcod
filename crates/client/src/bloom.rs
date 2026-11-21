@@ -9,6 +9,8 @@
 //! so only what retail would clip glows: stacked blends (fx, flares, the
 //! sun), and full screen the overbright part of a surface.
 
+use crate::renderer::gpu_util;
+
 const CHAIN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// Most levels below the half-resolution one, and the smallest side a
 /// level may have.
@@ -48,32 +50,9 @@ impl Bloom {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("bloom layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                gpu_util::texture_2d(0),
+                gpu_util::filtering_sampler(1),
+                gpu_util::uniform(2, wgpu::ShaderStages::FRAGMENT),
             ],
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {

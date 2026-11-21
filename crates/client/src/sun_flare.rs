@@ -6,6 +6,7 @@
 //! occlusion query instead of a depth read and uses the newest finished
 //! result, a frame or two old; the fades absorb the lag.
 
+use crate::renderer::gpu_util;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -334,18 +335,9 @@ impl SunFlareGpu {
         let tex_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("sun flare layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                sampler_entry(1),
-                sampler_entry(2),
+                gpu_util::texture_2d(0),
+                gpu_util::filtering_sampler(1),
+                gpu_util::filtering_sampler(2),
             ],
         });
         let image_view = image.clone();
@@ -629,15 +621,6 @@ impl SunFlareGpu {
         rb.buf.slice(..).map_async(wgpu::MapMode::Read, move |r| {
             state.store(if r.is_ok() { 2 } else { 0 }, Ordering::Release);
         });
-    }
-}
-
-fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-        count: None,
     }
 }
 

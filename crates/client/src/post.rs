@@ -10,6 +10,7 @@
 //! section 9).
 
 use crate::renderer::SCENE_FORMAT;
+use crate::renderer::gpu_util;
 
 /// The user's settings, read every frame (`vc_hdr` only at renderer build).
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -86,26 +87,8 @@ impl PostPass {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("post layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                gpu_util::unfilterable_2d(0),
+                gpu_util::uniform(1, wgpu::ShaderStages::FRAGMENT),
             ],
         });
         let params = device.create_buffer(&wgpu::BufferDescriptor {
@@ -116,24 +99,7 @@ impl PostPass {
         });
         let glow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("post glow layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
+            entries: &[gpu_util::texture_2d(0), gpu_util::filtering_sampler(1)],
         });
         let glow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("post glow sampler"),

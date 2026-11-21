@@ -90,6 +90,7 @@ mod frame;
 #[cfg(test)]
 mod fx_feather;
 mod fx_pass;
+pub(crate) mod gpu_util;
 pub(crate) mod headless;
 mod hud_pass;
 #[cfg(test)]
@@ -778,29 +779,11 @@ impl Renderer {
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("camera layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                gpu_util::uniform(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
                 // Fx lights. The fx pass shares this layout without declaring
                 // binding 1 in fx.wgsl, which wgpu allows. Props light
                 // per vertex from them.
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                gpu_util::uniform(1, wgpu::ShaderStages::VERTEX_FRAGMENT),
                 // vc_shadows on what draws after the mask (2..=8)
                 r0,
                 r1,
@@ -820,16 +803,7 @@ impl Renderer {
                 s7,
                 // CoD2's dynamic shadow the lit world and models read
                 // (cod2_cookie::DynamicShadows)
-                wgpu::BindGroupLayoutEntry {
-                    binding: DYNAMIC_SHADOW_BINDING,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                gpu_util::texture_2d(DYNAMIC_SHADOW_BINDING),
                 // CoD4's sun shadow map (cod4_sunshadow, 18 and 19)
                 m0,
                 m1,

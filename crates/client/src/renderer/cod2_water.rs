@@ -3,11 +3,12 @@
 //! height map [`vcod_cod2::water::WaterSetup`] builds on the CPU each
 //! frame, as retail's `RB_UploadWaterTexture` does.
 
+use crate::renderer::gpu_util;
 use std::collections::HashMap;
 use vcod_common::asset_source::AssetSource;
 use wgpu::util::DeviceExt;
 
-use super::cod2::{load_cube_faces, make_lit_pipeline, tex_entry, uniform_entry, upload_cube};
+use super::cod2::{load_cube_faces, make_lit_pipeline, tex_entry, upload_cube};
 use super::{StageVariant, depth_bias};
 use vcod_cod2::water::WaterSetup;
 use vcod_common::assets::{Image, ImageData};
@@ -136,19 +137,6 @@ pub(super) struct WaterBuilder {
     sims: Vec<WaterSim>,
 }
 
-fn cube_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::Cube,
-            multisampled: false,
-        },
-        count: None,
-    }
-}
-
 impl WaterBuilder {
     pub fn new(device: &wgpu::Device, camera_layout: &wgpu::BindGroupLayout) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -158,21 +146,16 @@ impl WaterBuilder {
         let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("cod2 water material layout"),
             entries: &[
-                uniform_entry(0, wgpu::ShaderStages::FRAGMENT),
-                cube_entry(1),
+                gpu_util::uniform(0, wgpu::ShaderStages::FRAGMENT),
+                gpu_util::texture_float(1, wgpu::TextureViewDimension::Cube),
             ],
         });
         let sim_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("cod2 water height layout"),
             entries: &[
-                uniform_entry(0, wgpu::ShaderStages::FRAGMENT),
-                super::cod2::texture_entry(1),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
+                gpu_util::uniform(0, wgpu::ShaderStages::FRAGMENT),
+                gpu_util::texture_2d(1),
+                gpu_util::filtering_sampler(2),
             ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

@@ -14,6 +14,8 @@
 //! retail fades by the depth gap (cod2-materials.md 9.5): the fx pass
 //! splits and reads it for a feathered run whatever `vc_softParticles` is.
 
+use crate::renderer::gpu_util;
+
 /// The copy's target: linear view depth, world units.
 pub(crate) const LINZ_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 /// Past this the value only washes sprites out.
@@ -47,47 +49,17 @@ impl SoftParticles {
         width: u32,
         height: u32,
     ) -> SoftParticles {
-        let uniform_entry = wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
+        let uniform_entry = gpu_util::uniform(0, wgpu::ShaderStages::FRAGMENT);
         let copy_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("soft particles copy layout"),
             entries: &[
                 uniform_entry,
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: crate::renderer::msaa_samples() > 1,
-                    },
-                    count: None,
-                },
+                gpu_util::depth_2d(1, crate::renderer::msaa_samples() > 1),
             ],
         });
         let fx_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("soft particles fx layout"),
-            entries: &[
-                uniform_entry,
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-            ],
+            entries: &[uniform_entry, gpu_util::unfilterable_2d(1)],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("soft_particles.wgsl"),

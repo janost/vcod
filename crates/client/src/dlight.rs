@@ -3,6 +3,7 @@
 //! per-light uniform. The projection itself is `vs_dlight` in shader.wgsl
 //! (CoDMP.exe 0x4ff690; docs/research/cod11-shader-scripts.md, section 3).
 
+use crate::renderer::gpu_util;
 use crate::renderer::{DEPTH_FORMAT, msaa_samples, upload_image};
 use glam::Vec3;
 use vcod_common::assets;
@@ -188,32 +189,9 @@ impl DlightPass {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("dlight layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(UNIFORM_SIZE),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
+                gpu_util::uniform_sized(0, wgpu::ShaderStages::VERTEX_FRAGMENT, true, UNIFORM_SIZE),
+                gpu_util::texture_2d(1),
+                gpu_util::filtering_sampler(2),
             ],
         });
         let align = u64::from(device.limits().min_uniform_buffer_offset_alignment);

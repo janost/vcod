@@ -5,6 +5,8 @@
 //! swapchain draws there (`GammaPass::identity`, cod4-client-perf.md 30).
 //! Formula, clamps and addresses: docs/research/cod11-gamma.md.
 
+use crate::renderer::gpu_util;
+
 /// Retail's `overbrightBits` (0x4f0780): `r_overBrightBits` (1, latched)
 /// in full screen with device gamma, 0 windowed or with `r_ignorehwgamma 1`.
 /// CoD2 has none: its ramp is `r_gamma` alone and its shaders write
@@ -83,7 +85,7 @@ impl GammaPass {
     ) -> GammaPass {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("gamma layout"),
-            entries: &[texture_entry(0, false), texture_entry(1, false)],
+            entries: &[gpu_util::unfilterable_2d(0), gpu_util::unfilterable_2d(1)],
         });
         let ramp_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("gamma ramp"),
@@ -212,19 +214,6 @@ impl GammaPass {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.draw(0..3, 0..1);
-    }
-}
-
-fn texture_entry(binding: u32, filterable: bool) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
     }
 }
 

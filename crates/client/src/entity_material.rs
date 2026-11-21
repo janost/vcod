@@ -8,6 +8,7 @@
 //! rest draw their constant or wave colour
 //! (docs/research/cod11-light-grid-and-leaf-lights.md, section 13).
 
+use crate::renderer::gpu_util;
 use std::collections::HashMap;
 use std::rc::Rc;
 use vcod_common::asset_source::{AssetSource, RawFile};
@@ -453,29 +454,16 @@ impl EntityMaterials {
         textures: TextureSettings,
         white_view: &wgpu::TextureView,
     ) -> Self {
-        let map_entry = |binding| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        };
+        let map_entry = gpu_util::texture_2d;
         let params_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("entity stage params layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(STAGE_PARAMS_SIZE),
-                    },
-                    count: None,
-                },
+                gpu_util::uniform_sized(
+                    0,
+                    wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    true,
+                    STAGE_PARAMS_SIZE,
+                ),
                 // cod2_model.wgsl's normal, specular, detail maps and
                 // `$specularity`
                 map_entry(1),
@@ -483,38 +471,11 @@ impl EntityMaterials {
                 map_entry(3),
                 map_entry(4),
                 // cod2_model.wgsl's CoD4 reflection probes
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::CubeArray,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                gpu_util::texture_float(5, wgpu::TextureViewDimension::CubeArray),
                 // cod2_model.wgsl's CoD4 entity model lighting volume
-                wgpu::BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D3,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                gpu_util::texture_float(6, wgpu::TextureViewDimension::D3),
                 // cod2_model.wgsl's `$lightgridweights0` and `1`
-                wgpu::BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::CubeArray,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                gpu_util::texture_float(7, wgpu::TextureViewDimension::CubeArray),
             ],
         });
         let params_buf = device.create_buffer(&wgpu::BufferDescriptor {

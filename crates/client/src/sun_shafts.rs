@@ -8,6 +8,7 @@
 //! behind a gappy roof still shafts through the gaps. The strength fades
 //! out as the sun leaves the screen.
 
+use crate::renderer::gpu_util;
 use glam::{Mat4, Vec2, Vec3};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -77,15 +78,13 @@ impl SunShafts {
         width: u32,
         height: u32,
     ) -> SunShafts {
-        let tex = |binding, sample_type, multisampled| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
+        let tex = |binding, sample_type, multisampled| {
+            gpu_util::texture(
+                binding,
                 sample_type,
-                view_dimension: wgpu::TextureViewDimension::D2,
+                wgpu::TextureViewDimension::D2,
                 multisampled,
-            },
-            count: None,
+            )
         };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("sun shafts layout"),
@@ -95,22 +94,8 @@ impl SunShafts {
                     wgpu::TextureSampleType::Float { filterable: true },
                     false,
                 ),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                gpu_util::filtering_sampler(1),
+                gpu_util::uniform(2, wgpu::ShaderStages::FRAGMENT),
                 tex(
                     3,
                     wgpu::TextureSampleType::Depth,

@@ -12,6 +12,8 @@
 //! binds the same three at 5, 6 and 7, clear of the dlight pass's group 3
 //! in shader.wgsl.
 
+use crate::renderer::gpu_util;
+
 pub struct SceneCopy {
     /// Group 2 of `FxPass::distort_pipeline`.
     pub layout: wgpu::BindGroupLayout,
@@ -39,41 +41,21 @@ impl SceneCopy {
         width: u32,
         height: u32,
     ) -> SceneCopy {
-        let tex = |binding, filterable| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
+        let tex = |binding, filterable| {
+            gpu_util::texture(
+                binding,
+                wgpu::TextureSampleType::Float { filterable },
+                wgpu::TextureViewDimension::D2,
+                false,
+            )
         };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene copy layout"),
-            entries: &[
-                tex(1, false),
-                tex(2, true),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
+            entries: &[tex(1, false), tex(2, true), gpu_util::filtering_sampler(3)],
         });
         let world_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene copy world layout"),
-            entries: &[
-                tex(5, false),
-                tex(6, true),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
+            entries: &[tex(5, false), tex(6, true), gpu_util::filtering_sampler(7)],
         });
         let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene copy blit layout"),
