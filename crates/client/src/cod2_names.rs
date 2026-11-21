@@ -9,6 +9,9 @@ use vcod_cod2::net::delta::field_index;
 use vcod_cod2::net::fields::CLIENT_STATE_FIELDS;
 use vcod_common::collision::CollisionWorld;
 
+// Netfield indices the draw reads, resolved at compile time.
+const ES_SOLID: usize = vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "solid");
+
 /// The trace's reach (Mac 0x3265c8).
 const RANGE: f32 = 8192.0;
 /// `CG_TraceCapsule`'s mask: the world's solid and the bodies.
@@ -82,7 +85,7 @@ pub fn scan(
         .iter()
         .filter(|e| e.number as i32 != own && e.etype != ET_TRIGGER)
         .filter_map(|e| {
-            let solid = e.raw.i32("solid");
+            let solid = e.raw.i32_at(ES_SOLID);
             if solid == 0 || solid == SOLID_BMODEL {
                 return None;
             }
