@@ -1954,6 +1954,7 @@ fn an_entity_run_repeats_over_the_next_instances_of_its_model() {
         surf,
         sort: SORT_OPAQUE,
         order: 0,
+        anchor: AFTER_THE_WORLD,
         gun: false,
     };
     let draws: Vec<EntDraw> = (0..4).flat_map(|i| [ent(i, 0), ent(i, 1)]).collect();
