@@ -147,8 +147,10 @@ impl Challenges {
         }
     }
 
-    /// Sends each draw unmasked, as retail does.
-    #[cfg(test)]
+    /// Sends each draw unmasked, as retail does: the A/B gates, and
+    /// `bot_match`'s `NETDIGEST`, whose bytes the per-process key would
+    /// change every run.
+    #[cfg(any(test, feature = "testing"))]
     pub fn unmasked(&mut self) {
         self.key = None;
     }
