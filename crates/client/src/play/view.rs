@@ -2,7 +2,7 @@
 //! with the hands `ps.viewmodelIndex` names, posed from `ps.weapAnim`.
 
 use super::quake::{Quake, Quakes};
-use super::recoil::{self, Recoil};
+use super::recoil::Recoil;
 use crate::hud::scope;
 use crate::renderer::VmDraw;
 use crate::viewmodel::{self, ViewWeapon};
@@ -39,7 +39,7 @@ pub struct ViewPs {
 }
 
 /// `pm_type` at intermission.
-use vcod_common::net::flags::PM_INTERMISSION;
+use vcod_common::net::flags::{PM_INTERMISSION, PMF_OWN_VIEW, PMF_VIEW_BODY};
 
 /// The eye's height over the drawn origin. `CG_CalcViewValues`' intermission
 /// arm (cgame 0x300333f2) puts the view at `ps.origin` itself, where retail
@@ -64,7 +64,7 @@ impl ViewPs {
             ammoclip: pred.ps.ammoclip,
             pm_type: pred.pm_type,
             mounted: pred.ps.mounted.is_some(),
-            pm_flags: recoil::PMF_OWN_VIEW,
+            pm_flags: PMF_OWN_VIEW,
             eye: pred.ps.origin + Vec3::Z * pred.ps.view_height(),
             seat: None,
         }
@@ -362,7 +362,7 @@ impl OnlineView {
     /// (`0x30038bd2`), made under `pm_flags` 0x50000, own view or a follow.
     pub fn fire(&mut self, weapons: &[Option<WeaponDef>], ps: &ViewPs) {
         if let Some(def) = weapons.get(usize::from(ps.weapon)).and_then(Option::as_ref)
-            && ps.pm_flags & recoil::PMF_VIEW_BODY != 0
+            && ps.pm_flags & PMF_VIEW_BODY != 0
         {
             self.recoil.fire(def, ps.ads_frac);
         }
@@ -471,7 +471,7 @@ impl OnlineView {
                 frametime,
                 held,
                 ps.ads_frac,
-                ps.pm_flags & recoil::PMF_OWN_VIEW != 0,
+                ps.pm_flags & PMF_OWN_VIEW != 0,
             ),
             None => self.recoil.reset(),
         }
@@ -648,7 +648,7 @@ mod tests {
             ammoclip: [0; NUM_AMMO],
             pm_type: 0,
             mounted: false,
-            pm_flags: recoil::PMF_OWN_VIEW,
+            pm_flags: PMF_OWN_VIEW,
             eye: Vec3::ZERO,
             seat: None,
         }

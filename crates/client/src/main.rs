@@ -4169,7 +4169,8 @@ impl App {
                     } = &mut self.mode
                         && matches!(phase, Phase::Live(_))
                         && net.snapshots().newest().is_some_and(|s| {
-                            s.ps.field_i32(net.protocol(), "pm_flags") & play::recoil::PMF_OWN_VIEW
+                            s.ps.field_i32(net.protocol(), "pm_flags")
+                                & vcod_common::net::flags::PMF_OWN_VIEW
                                 != 0
                         })
                     {

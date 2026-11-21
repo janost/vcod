@@ -6,7 +6,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use glam::Vec3;
-use vcod_common::net::flags::{EF_NODRAW, EF_TALK, ET_PLAYER};
+use vcod_common::net::flags::{
+    EF_DEAD, EF_DISCONNECTED, EF_NODRAW, EF_TALK, ET_PLAYER, TEAM_SPECTATOR,
+};
 use vcod_common::net::msg::{ClientState, EntityState};
 use vcod_common::net::protocol::{Cod1Wire, CsRange};
 
@@ -18,20 +20,14 @@ const ABOVE_HEAD: f32 = 18.0;
 const ABOVE_ORIGIN: f32 = 72.0;
 /// Sprite half-extent.
 const RADIUS: f32 = 6.66;
-const TEAM_SPECTATOR: i32 = 3;
 /// How far the second sprite sits over a drawn head icon (0x30027565).
 const STACK: f32 = 16.0;
 /// The talk balloon hangs this much lower than the other second sprites
 /// (0x30069414).
 const TALK_DROP: f32 = 5.0;
-/// `eFlags` 0x1000: `ClientEndFrame` sets it on a client whose last cmd is
-/// over 1000 ms old (game.mp 0x50e98).
-const EF_DISCONNECTED: i32 = 0x1000;
 const TALK_SHADER: &str = "headiconTalkBalloon";
 const DISCONNECTED_SHADER: &str = "headiconDisconnected";
 const KILLCAM_SHADER: &str = "headiconYouInKillCam";
-/// eFlags bit 1, which the player draw (0x30028210) skips with `EF_NODRAW`.
-const EF_SKIP_DRAW: i32 = 1;
 
 /// Whether a viewer on `viewer_team` sees an icon limited to `icon_team`
 /// (0 is everyone). A spectator sees every icon.
@@ -141,7 +137,8 @@ pub fn quads(s: &Scene, right: Vec3, up: Vec3) -> Vec<FxQuad> {
     let mut out = Vec::new();
     for (&num, ent) in s.entities {
         let int = |name: &str| ent.field_i32(p, name);
-        if int("eType") != ET_PLAYER || int("eFlags") & (EF_NODRAW | EF_SKIP_DRAW) != 0 {
+        // The player draw (0x30028210) skips both.
+        if int("eType") != ET_PLAYER || int("eFlags") & (EF_NODRAW | EF_DEAD) != 0 {
             continue;
         }
         let client = u32::try_from(int("clientNum"))

@@ -70,6 +70,11 @@ pub const EF_TALK: i32 = 0x40000;
 pub const EF_PING: i32 = 0x80000;
 /// The playerstate's copy of it for the `iCompassFriendInfo` teammate.
 pub const EF_FRIEND_PING: i32 = 0x100000;
+/// `ClientEndFrame` sets it on a client whose last cmd is over 1000 ms old
+/// (game.mp 0x50e98).
+pub const EF_DISCONNECTED: i32 = 0x1000;
+/// `ps.eFlags`: this client has voted.
+pub const EF_VOTED: i32 = 0x20000;
 
 pub const PMF_PRONE: i32 = 0x1;
 pub const PMF_DUCKED: i32 = 0x2;
@@ -100,6 +105,9 @@ pub const PMF_OWN_VIEW: i32 = 0x40000;
 pub const PMF_FOLLOW: i32 = 0x10000;
 /// `pm_flags` on a follow the script asked for (`spectatorclient >= 0`).
 pub const PMF_FORCED_FOLLOW: i32 = 0x20000;
+/// Own view or a follow: the view rides that body (cgame 0x30038bbf,
+/// docs/research/cod11-events-and-fx.md 7).
+pub const PMF_VIEW_BODY: i32 = PMF_OWN_VIEW | PMF_FOLLOW;
 
 /// Patch 1.5's jump penalty (docs/research/cod15-movement.md). 1.1 never
 /// sets 0x2000, so the bit keeps its 1.5 place in the 1.1 layout, where
@@ -325,6 +333,9 @@ pub const ET_VEHICLE_OWNER_ICON_V22: i32 = 15;
 /// for `r.bmodel` (cod_lnxded 0x80908da) whatever the entity's contents, so a
 /// `notSolid()`ed brush model keeps it (docs/research/cod11-movers.md 14).
 pub const SOLID_BMODEL: i32 = 0xff_ffff;
+
+/// `sessionTeam`'s spectator.
+pub const TEAM_SPECTATOR: i32 = 3;
 
 /// The restart toggle on `legsAnim`, `torsoAnim` and `ps.weapAnim`: every
 /// `set_anim` flips it, a repeat of the same clip included, so the index is

@@ -533,11 +533,7 @@ pub(super) const ENGAGE_RANGE: f32 = 700.0;
 /// nothing; the retail sweep that pinned the head line stood at 36 to 118.
 pub(super) const SWEEP_RANGE: f32 = 120.0;
 
-/// The two bullet-impact temp entities (`docs/research/cod11-events-and-fx.md`,
-/// section 1), which `--probe-sway` reads the impact origin off.
-pub(super) const EV_BULLET_HIT_SMALL: i32 = 173;
-
-pub(super) const EV_BULLET_HIT_LARGE: i32 = 174;
+pub(super) use vcod_common::net::event_ids::{EV_BULLET_HIT_LARGE, EV_BULLET_HIT_SMALL};
 
 /// Heights up the target's body the line-of-sight trace tries. Only the eye is
 /// aimed at, but a target behind a low wall is one a shot can still reach.

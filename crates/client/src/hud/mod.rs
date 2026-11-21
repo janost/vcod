@@ -26,7 +26,7 @@ use crate::play::input::{EF_CROUCH, EF_PRONE};
 use vcod_common::localize::Localized;
 use vcod_common::net::NetEvent;
 use vcod_common::net::events::GameEvent;
-use vcod_common::net::flags::{PM_DEAD, PMF_FOLLOW, PMF_PRONE_BLOCKED};
+use vcod_common::net::flags::{EF_VOTED, PM_DEAD, PMF_FOLLOW, PMF_PRONE_BLOCKED};
 use vcod_common::net::msg::{ClientState, EntityState, HudElem, PlayerState};
 use vcod_common::net::protocol::{Cod1Wire, CsRange};
 use vcod_common::pk3::Pk3Fs;
@@ -544,7 +544,7 @@ impl Hud {
             .update(f.configstrings, f.protocol.cs.match_timeout, now_ms);
         if f.ps.is_none_or(|ps| pm_type(ps) != 5) {
             let voted =
-                f.ps.is_some_and(|ps| ps.field_i32(f.protocol, "eFlags") & vote::EF_VOTED != 0);
+                f.ps.is_some_and(|ps| ps.field_i32(f.protocol, "eFlags") & EF_VOTED != 0);
             let clock = if relative { now_ms } else { f.server_time };
             let name = |n: i32| {
                 let c = f.clients.get(&u32::try_from(n).ok()?)?;

@@ -14,9 +14,6 @@ use vcod_common::text::atoi_msvc;
 const SCALE: f32 = 0.208_333_33;
 /// Yellow.
 const COLOR: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
-/// `ps.eFlags` 0x20000: this client has voted.
-pub const EF_VOTED: i32 = 0x20000;
-
 /// What `CG_ConfigStringModified` keeps of configstrings 15..18 (UO's
 /// 16..19).
 #[derive(Default)]
