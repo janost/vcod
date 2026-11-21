@@ -8,19 +8,18 @@
 //! [`Physics::finish`]; [`Physics::think`] runs both for a caller with no
 //! fire of its own. Every step is a fixed 0.05 s.
 
-use glam::{DVec3, Vec3};
+use glam::Vec3;
 
 use super::info::{KIND_ARTILLERY, KIND_FOUR_WHEEL, KIND_TANK, VehicleInfo};
 use vcod_common::x87::angles_to_axis;
 
 /// The step, seconds (0.05 f32 at 0xa6d54 and kin).
 pub const STEP: f32 = 0.05;
-pub const ENTITYNUM_WORLD: u32 = 1022;
-pub const ENTITYNUM_NONE: u32 = 1023;
+pub use vcod_common::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
 /// `ent+0x1a0` at spawn: what the hull's ground trace and slide clip.
 pub const CLIPMASK: u32 = 0x201;
 use vcod_common::clipmap::CONTENTS_BODY;
-const CONTENTS_VEHICLE: u32 = 0x800000;
+const CONTENTS_VEHICLE: u32 = super::CONTENTS_COLLMAP_BIT as u32;
 /// The wheel traces' masks, driven and not (0x81331).
 const WHEEL_MASK_DRIVEN: u32 = 0x10211;
 const WHEEL_MASK: u32 = 0x211;
@@ -96,7 +95,8 @@ pub struct HitEntity {
     /// A gentity with a client (a player body).
     pub client: bool,
     /// Classname `script_model` (scr_const 0x7e): the slide and the probes
-    /// notify it `trigger` with the vehicle.
+    /// notify it `trigger` with the vehicle. No writer yet
+    /// (coduo-vehicles.md 12, "Ported and unwired").
     pub script_model: bool,
     /// `eType` 12: a vehicle, which the step never climbs.
     pub vehicle: bool,
@@ -224,7 +224,8 @@ pub struct StepInput {
     /// `level.maxclients`: a probe hit below it is a body.
     pub max_clients: u32,
     /// Another pool vehicle within 1024 that itself needs physics
-    /// (`VEH_PhysicsNotRequired`'s neighbour test).
+    /// (`VEH_PhysicsNotRequired`'s neighbour test). Always false in
+    /// production (coduo-vehicles.md 12, "Ported and unwired").
     pub neighbour_moving: bool,
     /// `g_vehicleTexScrollScale`; 0 or less takes the file's.
     pub tex_scroll_scale: f32,
@@ -1929,17 +1930,8 @@ pub fn an180(a: f32) -> f32 {
     if 180.0 < a { a - 360.0 } else { a }
 }
 
-/// `AngleSubtract` (0x3dba0): wrapped by repeated 360s.
-pub fn angle_subtract(a: f32, b: f32) -> f32 {
-    let mut d = a - b;
-    while 180.0 < d {
-        d -= 360.0;
-    }
-    while d < -180.0 {
-        d += 360.0;
-    }
-    d
-}
+/// `AngleSubtract` (UO 0x3dba0).
+pub use vcod_common::x87::angle_subtract;
 
 fn angles_subtract(a: Vec3, b: Vec3) -> Vec3 {
     Vec3::new(
@@ -2035,15 +2027,7 @@ fn len(v: Vec3) -> f32 {
     dot64(v, v).sqrt() as f32
 }
 
-fn cross(a: Vec3, b: Vec3) -> Vec3 {
-    let (a, b) = (a.as_dvec3(), b.as_dvec3());
-    DVec3::new(
-        a.y * b.z - a.z * b.y,
-        a.z * b.x - a.x * b.z,
-        a.x * b.y - a.y * b.x,
-    )
-    .as_vec3()
-}
+use vcod_common::x87::cross;
 
 /// `VectorNormalize` (0x3a1c3): the squared length stored as a float, its
 /// root as a float, the reciprocal as a float; a zero vector left alone.

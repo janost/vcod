@@ -11,7 +11,7 @@ pub mod seat;
 pub mod think;
 
 use crate::configstrings::CsRange;
-use crate::game::host::GameHost;
+use crate::game::host::{ENTITYNUM_NONE, GameHost};
 use crate::game::slot::ClientSlot;
 use info::{VehicleInfo, VehicleInfos};
 use std::collections::HashMap;
@@ -26,9 +26,10 @@ pub const MAX_SEATS: usize = 6;
 /// spawnflag 1; a collmap's pairing makes it `0x800000 | 0x200000`.
 pub const CONTENTS_VEHICLE: i32 = 0x2080;
 pub const CONTENTS_USABLE: i32 = 0x0020_0000;
-pub const CONTENTS_COLLMAP: i32 = 0x0080_0000 | CONTENTS_USABLE;
-/// `ENTITYNUM_NONE`.
-const NONE: i32 = 1023;
+/// The bit a collmap's pairing adds, which the collision probes' mask
+/// carries to meet another vehicle.
+pub const CONTENTS_COLLMAP_BIT: i32 = 0x0080_0000;
+pub const CONTENTS_COLLMAP: i32 = CONTENTS_COLLMAP_BIT | CONTENTS_USABLE;
 /// `Scr_Vehicle_Init`'s first think, 50 ms after the spawn.
 pub const THINK_MS: i32 = 50;
 
@@ -71,7 +72,7 @@ impl Default for VehicleWire {
             time: 0,
             time2: 0,
             anim_movetype: 0,
-            other: NONE,
+            other: ENTITYNUM_NONE,
             driven_flag: false,
             head_icon: [0; 2],
             loop_sound: 0,

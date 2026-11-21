@@ -4,7 +4,6 @@
 //! the posed vehicle; the server traces it against the bodies and hands the
 //! result back to [`landed`].
 
-use super::physics::angle_subtract;
 use super::{Gun, seat};
 use crate::game::builtins::math::vectoangles;
 use crate::game::combat::{UO_BULLET_RANGE, gun_random, rocket_dir, spread_point};
@@ -12,6 +11,7 @@ use crate::game::host::GameHost;
 use glam::{Quat, Vec3};
 use vcod_common::net::event_ids::{EV_FIRE_WEAPON, EV_FIRE_WEAPONB, EV_UO_FIRE_WEAPONC};
 use vcod_common::patch::Arith;
+use vcod_common::x87::angle_subtract;
 use vcod_gsc::{Cx, EntId};
 
 /// The driver's aim point reaches this far along the view (0x86c57).
