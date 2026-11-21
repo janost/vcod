@@ -1481,6 +1481,49 @@ Not taken here: the card's numbers (kit `perf-mem`, after against wave
 4), and the frames byte for byte (kit `shots`, `render`); this box has no
 Vulkan adapter.
 
+### 34.6 The CoD4 change load after the trim
+
+Kit pack 4 (the 780M box, master4 9e2e5196e against wave4 fe7a1d0a0,
+three runs a side, mp_crossfire then mp_crash): the change's `load cod4
+map mp_crash` lap rose from 776, 793, 785 ms to 884, 901, 838 ms, while
+the join's mp_crossfire lap held (564, 561 past a cold first run,
+against 566, 561, 559).
+VERIFIED (the kit's client logs). By lap, medians: `map and stock zones`
+337 -> 382, `hud assets` 91 -> 115, `entity models` 74 -> 79, `sound and
+fx` 117 -> 123, while `mapworld` (56), `clip map` (9) and `player anims`
+(72 -> 75) held. On the GPU side `buffers` rose 37 -> 49 and `prefetch`
+157 -> 166, `prop skins` held at 0.1 and `stage images` within the runs.
+VERIFIED (the same logs). What rose is the laps that fill fresh buffers
+(zone reads and inflates, buffer and image copies), not the ones that
+compute. The skin skip is not in the map lap, and its own lap held.
+INFERRED (the laps).
+
+Of what the two builds differ by, only the heap trim (34.5) acts before
+a change:
+after the join's first frame it handed back 476 MB (RSS 1190-1195 ->
+703-741 MB) that master4 still held when the change loaded. The change
+load then takes its buffers from fresh pages, each a page fault and a
+zeroed page, where master4 reused the freed ones. The same pair of
+loads through `Loader::start_map` on this box (dev profile, mp_crossfire
+kept, then mp_crash), with and without a trim between, three runs a
+side, the process's transparent huge pages off (`PR_SET_THP_DISABLE`,
+4 KB faults as a box without THP `always` takes them): minor faults
+126k-146k without the trim, 191k-192k with it (+46k to +66k), and the
+mp_crash load 750-781 ms against 796-813 ms. With this box's THP
+`always` the faults rise only 15k-30k and the time within the runs'
+spread. VERIFIED (scratch timer and `/proc/self/stat`, ours, loaded
+box). So the rise is the trim's, paid once by the next load: 40-100 ms
+of a change whose first frame is 1755 ms in, against 476 MB less
+resident between loads and 1 GB less after a change (34.5). INFERRED
+(the two measurements together).
+
+Kept as is: no trim that keeps pages for the next load exists in glibc
+(`malloc_trim`'s pad only spares the main heap's top), and the trade
+favours the trim. `VCOD_HEAP_TRIM=0` turns it off so the kit can run
+the same build both ways. Pending, on a card: kit pack 5's `perf-mem`
+trim A/B (`GAMES=cod4`, the build with and without `VCOD_HEAP_TRIM=0`),
+whose `change: map load (log)` row should part by the rise above.
+
 ## 35. `floatZ` written in the depth prepass, no split and copy (P22)
 
 ### 35.1 What 1.7's prepass draws
