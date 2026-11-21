@@ -2015,10 +2015,12 @@ VERIFIED (measured, ours): every refactor commit printed these, every
 
 ## 20. CoD4 bots' cmd angles rounded as 1.7 rounds them (2026-11-21)
 
-1.7 makes a cmd angle as `(int)` of the stored float `deg * 182.04445f +
-0.5f`, masked to 16 bits: the client's `iw3mp.exe` 0x463aa9..0x463acf, and
-the server's cmd base `(viewangles - delta_angles)` the same way,
-`cod4_lnxded` 0x8130adc..0x8130b29. VERIFIED (the instructions). The mantle
+1.7's server makes its cmd base `(viewangles - delta_angles)` as `(int)`
+of the stored float `deg * 182.04445f + 0.5f`, masked to 16 bits,
+`cod4_lnxded` 0x8130adc..0x8130b29 (`fstp DWORD`, `cvttss2si`). The
+client's `iw3mp.exe` 0x463aa9..0x463acf adds the half the same way but
+truncates the double, never stored as a float (cod4-client-view.md 14.1).
+VERIFIED (the instructions). The mantle
 walk already did (`bots::cod4::cmd_short`). The brain's cmd
 (`bots::cmd_angles` over `BotView::delta_deg`) and the gunner's and frag
 throw-back's (`bots/cod4/gun.rs`) truncated each angle and subtracted a
