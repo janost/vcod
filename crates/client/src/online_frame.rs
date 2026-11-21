@@ -172,6 +172,9 @@ impl App {
                             &mut self.quick_chat,
                         ) {
                             Ok(()) => {
+                                // `CL_DownloadsComplete`'s `FS_Restart`.
+                                self.fs.restart_fake_checksum();
+                                self.fs_feed = net.gamestate().map_or(0, |g| g.checksum_feed);
                                 r.reopen(&self.fs);
                                 view.reopen();
                             }
@@ -641,6 +644,8 @@ impl App {
                     net::download::pure_paks(net.configstring(1)),
                 )
             };
+            let game_moved = game != self.fs_game;
+            let new_pure = pure.is_some() && pure != self.fs_pure;
             if game != self.fs_game || pure != self.fs_pure {
                 log::info!(
                     "fs_game {}{}: restarting the search path",
@@ -674,6 +679,18 @@ impl App {
                     }
                     Err(e) => *fatal = Some(e),
                 }
+            }
+            // The fake checksum's clears (cod11-server-handshake.md,
+            // "Loose files"): 1.5's and UO's at a new pure list, 1.1's
+            // at the parse's `FS_Restart` on a modified `fs_game` or a
+            // new feed (CoDMP.exe 0x416258..0x416273).
+            if new_pure {
+                self.fs.pure_list_fake_checksum();
+            }
+            let feed = net.gamestate().map_or(0, |g| g.checksum_feed);
+            if game_moved || feed != self.fs_feed {
+                self.fs.restart_fake_checksum();
+                self.fs_feed = feed;
             }
         }
         // Only with the map up: the first cmd after a gamestate

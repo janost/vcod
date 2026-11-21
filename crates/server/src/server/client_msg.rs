@@ -914,15 +914,23 @@ mod tests {
     #[test]
     fn a_pure_server_keeps_only_clients_whose_cp_verifies() {
         use vcod_common::pak_checksum::pure_command;
-        let good = |feed| vec![pure_command(Some(11), Some(22), &[6], feed)];
+        let good = |feed| vec![pure_command(Some(11), Some(22), &[6], feed, 0)];
         assert_eq!(pure_server_after(good).client_count(), 1);
         // No `cp` before the first move: `EXE_CANNOTVALIDATEPURECLIENT`.
         assert_eq!(pure_server_after(|_| Vec::new()).client_count(), 0);
         // A pak the server lacks: `EXE_UNPURECLIENTDETECTED`.
-        let bad = |feed| vec![pure_command(Some(11), Some(22), &[7], feed)];
+        let bad = |feed| vec![pure_command(Some(11), Some(22), &[7], feed, 0)];
         assert_eq!(pure_server_after(bad).client_count(), 0);
+        // A loose read's fake checksum after each pass: the same.
+        let faked = |feed| vec![pure_command(Some(11), Some(22), &[6], feed, 77)];
+        assert_eq!(pure_server_after(faked).client_count(), 0);
         // `vdr` forgets a good one.
-        let reset = |feed| vec![pure_command(Some(11), Some(22), &[6], feed), "vdr".into()];
+        let reset = |feed| {
+            vec![
+                pure_command(Some(11), Some(22), &[6], feed, 0),
+                "vdr".into(),
+            ]
+        };
         assert_eq!(pure_server_after(reset).client_count(), 0);
     }
 

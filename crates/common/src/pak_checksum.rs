@@ -93,11 +93,28 @@ pub fn checksums_of(crcs: &[u32], checksum_feed: i32) -> PakChecksums {
 /// the pak holding `cgame_mp_x86.dll` and of the one holding
 /// `ui_mp_x86.dll`, `@`, the pure checksum of every pak a file was read
 /// from, then `checksumFeed` XOR all of those XOR their count. Each number
-/// is followed by a space. A missing DLL pak contributes nothing.
-pub fn pure_command(cgame: Option<i32>, ui: Option<i32>, general: &[i32], feed: i32) -> String {
+/// is followed by a space. A missing DLL pak contributes nothing. A
+/// non-zero `fake` (`fs_fakeChkSum`) follows each of the three passes,
+/// outside the key (`FS_ReferencedPakPureChecksums`, CoDMP.exe
+/// 0x43c1ad..0x43c216).
+pub fn pure_command(
+    cgame: Option<i32>,
+    ui: Option<i32>,
+    general: &[i32],
+    feed: i32,
+    fake: i32,
+) -> String {
     let mut s = String::from("cp ");
-    for c in [cgame, ui].into_iter().flatten() {
-        s.push_str(&format!("{c} "));
+    let fake = |s: &mut String| {
+        if fake != 0 {
+            s.push_str(&format!("{fake} "));
+        }
+    };
+    for c in [cgame, ui] {
+        if let Some(c) = c {
+            s.push_str(&format!("{c} "));
+        }
+        fake(&mut s);
     }
     s.push_str("@ ");
     let mut key = feed;
@@ -105,6 +122,7 @@ pub fn pure_command(cgame: Option<i32>, ui: Option<i32>, general: &[i32], feed: 
         s.push_str(&format!("{g} "));
         key ^= g;
     }
+    fake(&mut s);
     s.push_str(&format!("{} ", key ^ general.len() as i32));
     s
 }
@@ -354,7 +372,7 @@ mod tests {
 
     #[test]
     fn a_pure_command_verifies_and_a_tampered_one_does_not() {
-        let cmd = pure_command(Some(11), Some(22), &[5, -7, 9], 0x1234);
+        let cmd = pure_command(Some(11), Some(22), &[5, -7, 9], 0x1234, 0);
         assert_eq!(
             cmd,
             format!("cp 11 22 @ 5 -7 9 {} ", 0x1234 ^ 5 ^ -7 ^ 9 ^ 3)
@@ -378,18 +396,27 @@ mod tests {
             !verify_pure(&args, Some(11), Some(22), &[5, -7], 0x1234),
             "unknown pak"
         );
-        let dup = pure_command(Some(11), Some(22), &[5, 5], 0x1234);
+        let dup = pure_command(Some(11), Some(22), &[5, 5], 0x1234, 0);
         let dup: Vec<&str> = dup.split_whitespace().collect();
         assert!(
             !verify_pure(&dup, Some(11), Some(22), &loaded, 0x1234),
             "duplicate"
         );
-        let none = pure_command(Some(11), Some(22), &[], 0x1234);
+        let none = pure_command(Some(11), Some(22), &[], 0x1234, 0);
         let none: Vec<&str> = none.split_whitespace().collect();
         assert!(
             !verify_pure(&none, Some(11), Some(22), &loaded, 0x1234),
             "argc 5"
         );
+        // A loose read off the list: the fake after each pass fails the ui
+        // token, as a pure server reads it.
+        let faked = pure_command(Some(11), Some(22), &[5, -7, 9], 0x1234, 77);
+        assert_eq!(
+            faked,
+            format!("cp 11 77 22 77 @ 5 -7 9 77 {} ", 0x1234 ^ 5 ^ -7 ^ 9 ^ 3)
+        );
+        let faked: Vec<&str> = faked.split_whitespace().collect();
+        assert!(!verify_pure(&faked, Some(11), Some(22), &loaded, 0x1234));
     }
 
     /// The stock paks' checksums against retail's `sv_referencedPaks`
