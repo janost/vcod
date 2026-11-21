@@ -270,7 +270,8 @@ show who talks. Without libspeex nothing is sent or played.
 **Demos** ([cod4-demos.md](../research/cod4-demos.md)). `record` writes
 1.7's typed records into `main/demos/` (the mod's under `fs_game`).
 `demo <name>` and `timedemo <name>` load the map behind the connect
-screen and play it unpredicted, the recorder's view off its archive rows.
+screen and play it unpredicted, the recorder's view off its archive rows;
+`timedemo` writes 1.7's `demos/timedemo_<map>_mode_<r_mode>.csv`.
 The `RECORDING` line draws where 1.7 draws it. `cl_avidemo <fps>` steps
 the clock a fixed `1000 / fps` ms a frame and writes each as a TGA.
 

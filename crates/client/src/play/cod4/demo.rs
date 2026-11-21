@@ -8,7 +8,7 @@ use vcod_cod4::net::parse::{Client, Op};
 use vcod_cod4::pmove as pm;
 
 use super::scene::lerp_angles;
-use super::{Cod4Session, Source, ps_f32};
+use super::{Cod4Session, Source, info_value, ps_f32};
 
 /// `demo` / `timedemo`: `CL_PlayDemo_f`'s `clc` fields (`iw3mp.exe`
 /// 0x469120) and `CL_SetCGameTime`'s demo arm (0x45c440).
@@ -22,7 +22,10 @@ pub(super) struct DemoPlay {
     pub(super) views: Vec<vcod_cod4::net::demo::Archive>,
     /// The clock: `clc.firstDemoFrameSkipped` (+0x401a0), `timedemo`
     /// (+0x40198), `clc.timeDemoBaseTime` (0x934e98).
-    clock: crate::play::demos::DemoTime,
+    pub(super) clock: crate::play::demos::DemoTime,
+    /// `timedemo`'s csv, when the caller asked for one
+    /// ([`Cod4Session::write_timedemo_csv`]).
+    pub(super) csv: Option<crate::play::demos::TimedemoCsv>,
     /// The file has no record left.
     pub(super) ended: bool,
     /// Gamestates read (a map change inside the demo).
@@ -86,6 +89,9 @@ impl DemoPlay {
                     }
                 }
                 self.ended = true;
+                // `CL_DemoCompleted` closes the csv (0x468e73; the drop
+                // flushes it).
+                self.csv = None;
                 false
             }
         }
@@ -128,6 +134,15 @@ impl DemoPlay {
                 return None;
             }
             self.clock.seed(snap.server_time.raw(), realtime);
+        }
+        // the csv's row counts the frames before this one's (0x45c3dd)
+        if let (Some(td), Some(csv)) = (self.clock.timedemo.as_ref(), self.csv.as_mut()) {
+            let map = self
+                .client
+                .gamestate
+                .as_ref()
+                .and_then(|gs| info_value(gs.configstring(super::CS_SERVERINFO), "mapname"));
+            csv.frame(map.as_deref().unwrap_or_default(), td, realtime);
         }
         let time = self.clock.tick(realtime)?;
         let gamestates = self.gamestates;
@@ -203,6 +218,7 @@ impl Cod4Session {
             client: Client::new(),
             archive: Default::default(),
             clock: crate::play::demos::DemoTime::new(timedemo),
+            csv: None,
             ended: false,
             gamestates: 0,
             applied: 0,
@@ -222,6 +238,17 @@ impl Cod4Session {
         s.level_gamestates = n;
         s.loaded_map = s.map_name();
         Ok(s)
+    }
+
+    /// Under `timedemo`, write its csv (`demos/timedemo_<map>_mode_<r_mode>.csv`,
+    /// `iw3mp.exe` 0x45c350) into `dir` (the game's `demos/`) with
+    /// `r_mode`'s index in its name.
+    pub fn write_timedemo_csv(&mut self, dir: std::path::PathBuf, r_mode: i32) {
+        if let Source::Demo(d) = &mut self.source
+            && d.clock.timedemo.is_some()
+        {
+            d.csv = Some(crate::play::demos::TimedemoCsv::new(dir, r_mode));
+        }
     }
 
     /// Whether this session plays a demo.

@@ -31,8 +31,7 @@ Ranked by how much a player notices.
 - Small HUD fades: the compass's voice fade, drawn off `isTalking` but
   not checked against a retail capture with a talker (cod4-hud.md 15.9).
   S.
-- Smaller open items, each in its doc: `timedemo`'s csv
-  and the front end's demo list (cod4-demos.md 7); effect model elements
+- Smaller open items, each in its doc: effect model elements
   and whether CoD4's sizes are radii (cod4-effects.md 9); the predicted
   origin ring a playerstate without bit 0 needs (cod4-netfields.md 11);
   `winvoice_mic_mute`, `winvoice_save_voice` and the record level meter
@@ -52,6 +51,11 @@ Ranked by how much a player notices.
 - Single Player's popup does nothing: vcod is multiplayer only.
 
 ## 3. Closed
+
+- `timedemo` wrote no csv. It now writes 1.7's
+  `demos/timedemo_<map>_mode_<r_mode>.csv`, a row a frame
+  (cod4-demos.md 5). 1.7's front end has no demo list to copy
+  (cod4-demos.md 7).
 
 - The clip graphic drew nothing for an alt weapon's kind (6) and the
   offhand highlight was not looked at. Kind 6 now draws the `altWeapon`'s

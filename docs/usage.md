@@ -340,7 +340,7 @@ commands.
 | `levelshot` | Write `levelshots/<map>.tga` (128 x 128) |
 | `savegame <name>` | Write `<name>.jpg` (512 x 512) |
 | `set timedemo 1` | CoD1, UO: the next `demo` is timed |
-| `timedemo <name>` | CoD2, CoD4, as retail's: play `<name>.dm_1` 50 ms a frame and print the frame count and fps. CoD2 also writes `demos/timedemo_<map>_mode_<r_mode>.csv`, a `<frame>,<ms>` line a frame |
+| `timedemo <name>` | CoD2, CoD4, as retail's: play `<name>.dm_1` 50 ms a frame and print the frame count and fps, and write `demos/timedemo_<map>_mode_<r_mode>.csv`, a `<frame>,<ms>` line a frame |
 
 Anything else goes to the server while connected (`callvote`, `kill`,
 `follownext`). Bindable commands and key names are retail's (`+attack`,

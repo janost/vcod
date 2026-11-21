@@ -271,6 +271,25 @@ cmd's view (`Cod4Session::archive_row`).
 - with `timedemo` (0x45c350): on its first frame the csv opens and the
   start time is taken; the frame count goes up and `serverTime` is
   `base + frames * 50`.
+- **The csv.** While its handle (0x934e88) is 0, each timed frame opens
+  `demos/timedemo_%s_mode_%i.csv` (0x6cefa8) through `FS_FOpenFileWrite`
+  (0x55b4d0, 0x45c3d3): the `%s` is `cl.mapname` (0xc84f18,
+  `maps/mp/%s.d3dbsp` off the `mapname` dvar in `CL_InitCGame`,
+  0x45bf44..0x45bf8c) past its last `/` or `\` and short of its last `.`
+  (0x45c2f0), the `%i` `r_mode`'s integer (the dvar looked up by name,
+  0x45c38b; an int or enum dvar's value, else `atoi` of its string; 0
+  with none). With no start yet (0x934e90 is 0) the frame takes the
+  start; else, the file open, it writes `%i,%i\n` (0x6cefc8): the frames
+  counted before this one (0x934e8c) and the ms since the last timed
+  frame (0x934e94), then counts the frame and stores the time
+  (0x45c3dd..0x45c42d). `CL_DemoCompleted` closes the file and zeroes
+  the handle (0x468e6a..0x468e78). VERIFIED (the instructions and the
+  strings). vcod writes it so, into the game's `demos/` beside the
+  recordings (`play::demos::TimedemoCsv`, the writer CoD2's `timedemo`
+  shares; `cod4_timedemo_writes_a_row_a_frame_after_the_first`). vcod
+  creates the file through its confined path, so a map name with `..`
+  or a colon opens nothing, as `FS_FOpenFileWrite`'s refusal of `..`
+  does (INFERRED for 1.7's client).
 - then records while `serverTime >= cl.snap.serverTime`, stopping when
   the state leaves 9 (0x45c5dc..0x45c63c).
 
@@ -338,8 +357,12 @@ count within two. VERIFIED live.
   for vcod to read nor played one of vcod's. Section 8 gates both ways
   against the binary's layout; the run itself (a CD-keyless 1.7 client
   under Wine, as `cod2-demos.md` 6 ran for CoD2) is still to do.
-- `timedemo`'s csv.
-- 1.7's front end demo list.
+- 1.7's front end lists no demos: `UI_RunMenuScript` (0x545bc0)
+  compares no demo name (`tools/re/cod4_menu_commands.py`: `LoadMods`
+  and `RunMod` are there, no `LoadDemos` or `RunDemo`), and `ui_mp`'s list
+  boxes take feeders 2, 4, 9, 13 and 24 (servers, maps, mods, the server
+  info, profiles). VERIFIED (the dump and `menu_dump`). Demos play
+  through the console, as on retail.
 
 ## 8. Interchange with retail
 
