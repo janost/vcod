@@ -2992,6 +2992,7 @@ fn reread_live_map(
 /// starts over as `CL_InitCGame` (CoDMP.exe 0x4049c0) loads a fresh cgame
 /// (docs/research/cod11-front-end.md section 17, "The cgame restart").
 /// False, touching nothing, before the game is live.
+#[expect(clippy::too_many_arguments)]
 fn restart_live_cgame(
     phase: &mut Phase,
     view: &mut play::view::OnlineView,
@@ -2999,6 +3000,7 @@ fn restart_live_cgame(
     predictor: &mut play::predict::Predictor,
     hud: Option<&mut hud::Hud>,
     fx: &mut fx::sim::FxSystem,
+    flame: &mut fx::flame::FlameSystem,
     fs: &Pk3Fs,
     configstrings: &[String],
 ) -> bool {
@@ -3010,12 +3012,13 @@ fn restart_live_cgame(
     };
     let weapons = live_weapons(fs, configstrings.get(7).map_or("", String::as_str));
     *phase = Phase::Live(Box::new(live.restart_cgame(weapons)));
-    fresh_cgame(view, input, predictor, hud, fx);
+    fresh_cgame(view, input, predictor, hud, fx, flame);
     true
 }
 
 /// What a freshly loaded cgame starts without, past the live phase: the
-/// view, the HUD with its chat ring, the effects and the prediction.
+/// view, the HUD with its chat ring, the effects, UO's flame pool and the
+/// prediction.
 /// `CL_InitCGame` (CoDMP.exe 0x4049c0) runs on a `vid_restart` and on every
 /// gamestate's `CL_DownloadsComplete` (0x40ffb0), which frees the old
 /// cgame first (docs/research/cod11-front-end.md section 17).
@@ -3025,6 +3028,7 @@ fn fresh_cgame(
     predictor: &mut play::predict::Predictor,
     hud: Option<&mut hud::Hud>,
     fx: &mut fx::sim::FxSystem,
+    flame: &mut fx::flame::FlameSystem,
 ) {
     view.restart_cgame();
     // The fresh cgame's first snapshot runs a load's resets.
@@ -3034,6 +3038,7 @@ fn fresh_cgame(
         hud.restart_cgame();
     }
     fx.restart_cgame();
+    *flame = fx::flame::FlameSystem::default();
 }
 
 /// What `CG_Init` (cgame 0x30022f90) does with the gamestate besides the
@@ -4952,6 +4957,7 @@ impl App {
             predictor,
             self.hud.as_mut(),
             &mut self.fx,
+            &mut self.flame,
             &self.fs,
             net.configstrings(),
         ) {
@@ -5161,6 +5167,7 @@ impl App {
         }
         self.world = None;
         self.fx.clear();
+        self.flame = fx::flame::FlameSystem::default();
         self.audio.on_gamestate("menu");
         if let Some(hud) = &mut self.hud {
             leave_server_hud(hud);
@@ -5915,6 +5922,7 @@ mod tests {
                 &mut predictor,
                 Some(hud),
                 &mut fx,
+                &mut fx::flame::FlameSystem::default(),
                 &fs,
                 &cs,
             )
@@ -5957,14 +5965,26 @@ mod tests {
         hud.on_gamestate();
         assert!(!hud.chat.is_empty(), "the gamestate parse keeps the ring");
         hud.chat.push("during the load", 1000);
+        // A flamethrower still firing as the old map ended.
+        let mut flame = fx::flame::FlameSystem::default();
+        let nozzle = fx::flame::Nozzle {
+            owner: 3,
+            pos: Vec3::new(0.0, 0.0, 60.0),
+            dir: Vec3::X,
+            own_view: false,
+        };
+        flame.step(100.0, 16.0, &[nozzle], Vec3::ZERO, None);
+        assert!(!flame.is_empty());
         fresh_cgame(
             &mut play::view::OnlineView::default(),
             &mut play::input::PlayInput::default(),
             &mut play::predict::Predictor::default(),
             Some(&mut hud),
             &mut fx::sim::FxSystem::new(),
+            &mut flame,
         );
         assert!(hud.chat.is_empty());
+        assert!(flame.is_empty(), "the new cgame starts its flame pool over");
     }
 
     /// A Mods pick in a game reads the map again off the mod's paks, as
