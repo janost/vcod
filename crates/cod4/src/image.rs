@@ -231,7 +231,7 @@ mod tests {
                 .map(|l| 4 * (usize::from(w >> l).max(1)) * usize::from(h >> l).max(1))
                 .sum();
             let (mut d, data) = def(d3dfmt::A8R8G8B8, w, h, 0, vec![0; 6 * n]);
-            d.data = Some(data);
+            d.data = Some(data.into());
             ZoneImage {
                 name: "probe".into(),
                 map_type: MAPTYPE_CUBE,
