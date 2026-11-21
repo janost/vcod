@@ -355,7 +355,10 @@ messages; `spec`: 902 and 469. VERIFIED live.
   -127 or 0 a side). VERIFIED (the bit masks 0x826e250, 0x826e290,
   0x826e25c and 0x826e260 and the button tests); the order INFERRED (the
   reader's flow). The base of a message's first cmd is built from the
-  server's playerstate (0x8130ab0, just before). `iw3mp.exe`'s writer
+  server's playerstate (0x8130ab0, just before), each angle `(int)` of the
+  stored float `(viewangles - delta_angles) * 182.04445f + 0.5f`, masked to
+  16 bits (0x8130adc..0x8130b29), as the client writes its own
+  (cod4-client-view.md 14.1). VERIFIED (the instructions). `iw3mp.exe`'s writer
   (0x505c60) sends a byte step when the new time is 0 to 255 ms past the
   base (0x505c75); nothing past the time when the attack bit, the two
   angles and the move masks match and so does everything the long branch

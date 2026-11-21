@@ -1105,8 +1105,9 @@ its own:
   (`mantleEndPos`) and 0x100 (`mantleDuration`); `Mantle_Move` clears
   0xf0 at the end. INFERRED, not yet confirmed on 1.7.
 - `Mantle_CapView` adds the wrapped difference to the float
-  `delta_angles[1]` unrounded (CoD2 adds shorts). INFERRED, not yet
-  confirmed on 1.7.
+  `delta_angles[1]` unrounded (`fadds`/`fstps` on ps +0x68,
+  0x8050e33..0x8050e36); CoD2 adds truncated shorts (cod2-movement.md 9).
+  VERIFIED (the instructions).
 
 The playerstate's `mantleState` is at 0x5e0 (yaw, timer, transIndex,
 flags), the four `mantleState.*` netfields. VERIFIED (the netfield

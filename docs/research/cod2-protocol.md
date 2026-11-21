@@ -1245,7 +1245,9 @@ drops `wbuttons` and `up` and widens the rest. The forward/right code is 1.1's
 
 The base cmd (`MSG_SetDefaultUserCmd`): all zero, `weapon` and `offHandIndex`
 from the playerstate, `angles[0..1]` as
-`ANGLE2SHORT(viewangles) - delta_angles` (the 182.044 at 0x81414c4),
+`ANGLE2SHORT(viewangles) - delta_angles` (the 182.044 at 0x81414c4; the
+product truncated by `fistp` under a 0xc00 control word, no half added,
+0x8068a04..0x8068a42),
 `angles[2]` 0; and only when `pm_flags & 0x800000`, the stance and lean button
 bits off `eFlags` (8 prone, 4 crouch) and `leanf` (`0x40` below 0, `0x80`
 above), and `0x1000` off `fWeaponPosFrac`. VERIFIED for the stores and the
