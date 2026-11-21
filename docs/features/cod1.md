@@ -282,6 +282,10 @@ Game:
   `randomFloatRange` draw from retail's generator, which the grenade's
   tumble and UO's artillery share, reseeded every level
   ([cod11-map-cycle.md](../research/cod11-map-cycle.md) 4.8).
+- The spread, melee, recoil, anim picks, pickups, drops, bounces and
+  trigger waits draw from glibc's `rand()`, one stream with the engine's
+  challenges, `srand`ed every level as retail's `G_InitGame` seeds it
+  ([cod11-map-cycle.md](../research/cod11-map-cycle.md) 4.8.1).
 - All five stock gametypes are checked against retail: `dm`, `tdm` and
   `sd` end to end, `re` and `bel` through their key events
   ([cod11-gametypes-re-bel.md](../research/cod11-gametypes-re-bel.md)).

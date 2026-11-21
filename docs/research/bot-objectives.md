@@ -1362,7 +1362,8 @@ hooks: CoD1's `Server` implements them there, `Cod2Server` and
   `0x3d4ac`, combat doc 2.2), the melee roll (`rand() % 5`), 1.5's and
   UO's fire recoil (`BG_WeaponFireRecoil`, cod15-movement.md 6), a
   missile's tumble and the stuck push (VERIFIED, each in its doc). vcod
-  keeps them on the server's one generator (`Server::rng`), in the
+  keeps them on the server's one generator (`Server::rng`, glibc's on
+  CoD1, map-cycle doc 4.8.1), in the
   order its tick takes them. The bots are vcod's own and have no retail
   draw: VERIFIED, `cod_lnxded` 1.1d, no call to `rand@plt` (0x804a5d8)
   in `SV_AddTestClient` (0x808753c..0x8087800) or `SV_DirectConnect`
