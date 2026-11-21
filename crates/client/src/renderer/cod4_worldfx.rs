@@ -11,9 +11,7 @@
 //! built at a world's load for the keys its batches use, once a renderer
 //! ([`WorldFxKeep`]).
 
-use super::{
-    DEPTH_FORMAT, Material, StageVariant, msaa_samples, scene_pipeline, stage_variant_state,
-};
+use super::{DEPTH_FORMAT, Material, StageVariant, scene_pipeline, stage_variant_state};
 use crate::renderer::gpu_util;
 use std::collections::HashMap;
 
@@ -70,12 +68,13 @@ pub(super) struct WorldFxKeep {
 }
 
 impl WorldFxKeep {
-    /// The pipelines for `keys` (fx, variant, two-sided, polygon offset),
-    /// those not made yet built on every core.
+    /// The pipelines for `keys` (fx, variant, two-sided, polygon offset)
+    /// into the scene target `target` (format, samples), those not made yet
+    /// built on every core.
     pub(super) fn pass(
         &mut self,
         device: &wgpu::Device,
-        format: wgpu::TextureFormat,
+        target: (wgpu::TextureFormat, u32),
         layouts: [&wgpu::BindGroupLayout; 4],
         bias: wgpu::DepthBiasState,
         keys: impl IntoIterator<Item = Key>,
@@ -104,7 +103,7 @@ impl WorldFxKeep {
             .collect();
         let (shader, layout) = (&*shader, &*layout);
         let built = super::par_build(fresh.len(), |i| {
-            make(device, shader, layout, format, bias, fresh[i])
+            make(device, shader, layout, target, bias, fresh[i])
         });
         self.pipelines.extend(fresh.into_iter().zip(built));
         WorldFxPass {
@@ -121,7 +120,7 @@ fn make(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
-    format: wgpu::TextureFormat,
+    target: (wgpu::TextureFormat, u32),
     bias: wgpu::DepthBiasState,
     (fx, variant, two_sided, want_bias): Key,
 ) -> wgpu::RenderPipeline {
@@ -133,7 +132,7 @@ fn make(
         WorldFx::Feather => scene_pipeline(
             device,
             shader,
-            format,
+            target,
             &label,
             layout,
             ("vs_stage", feather_entry(variant)),
@@ -146,7 +145,7 @@ fn make(
         _ => distort_pipeline(
             device,
             shader,
-            format,
+            target,
             &label,
             layout,
             (blend, depth_write),
@@ -174,7 +173,7 @@ impl WorldFxPass {
 fn distort_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
-    format: wgpu::TextureFormat,
+    (format, samples): (wgpu::TextureFormat, u32),
     label: &str,
     layout: &wgpu::PipelineLayout,
     (blend, depth_write): (Option<wgpu::BlendState>, bool),
@@ -217,7 +216,7 @@ fn distort_pipeline(
             bias,
         }),
         multisample: wgpu::MultisampleState {
-            count: msaa_samples(),
+            count: samples,
             mask: !0,
             alpha_to_coverage_enabled: false,
         },

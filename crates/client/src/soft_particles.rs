@@ -48,14 +48,12 @@ impl SoftParticles {
         depth: &wgpu::TextureView,
         width: u32,
         height: u32,
+        samples: u32,
     ) -> SoftParticles {
         let uniform_entry = gpu_util::uniform(0, wgpu::ShaderStages::FRAGMENT);
         let copy_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("soft particles copy layout"),
-            entries: &[
-                uniform_entry,
-                gpu_util::depth_2d(1, crate::renderer::msaa_samples() > 1),
-            ],
+            entries: &[uniform_entry, gpu_util::depth_2d(1, samples > 1)],
         });
         let fx_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("soft particles fx layout"),
@@ -63,9 +61,10 @@ impl SoftParticles {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("soft_particles.wgsl"),
-            source: wgpu::ShaderSource::Wgsl(crate::renderer::depth_wgsl(include_str!(
-                "soft_particles.wgsl"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(crate::renderer::depth_wgsl(
+                include_str!("soft_particles.wgsl"),
+                samples,
+            )),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("soft particles copy pipeline layout"),

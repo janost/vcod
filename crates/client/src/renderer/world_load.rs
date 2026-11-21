@@ -881,7 +881,7 @@ impl Renderer {
             let mut b = cod2::Cod2Builder::with_shared(
                 device,
                 queue,
-                self.world_format,
+                (self.world_format, self.samples),
                 &self.camera_layout,
                 bsp,
                 std::mem::take(&mut self.cod2_lit),
@@ -1196,7 +1196,7 @@ impl Renderer {
                 farbox = cod2::build_sky_cube(
                     device,
                     queue,
-                    self.world_format,
+                    (self.world_format, self.samples),
                     fs,
                     &self.camera_layout,
                     &parms.env,
@@ -1211,7 +1211,7 @@ impl Renderer {
                     farbox = Some(build_sky_box(
                         device,
                         queue,
-                        self.world_format,
+                        (self.world_format, self.samples),
                         fs,
                         &self.camera_layout,
                         &mut bundle_views,
@@ -1315,7 +1315,7 @@ impl Renderer {
                     sun = build_sun_sprite(
                         device,
                         queue,
-                        self.world_format,
+                        (self.world_format, self.samples),
                         fs,
                         &self.camera_layout,
                         &mut bundle_views,
@@ -1339,7 +1339,7 @@ impl Renderer {
                             upload_bundle_view(device, queue, fs, &mut bundle_views, &path, rule);
                         flare = Some(SunFlareGpu::new(
                             device,
-                            self.world_format,
+                            (self.world_format, self.samples),
                             FlareParams::of(sf),
                             light_dir,
                             dir,
@@ -1509,7 +1509,7 @@ impl Renderer {
         self.world_fx = (!fx_keys.is_empty()).then(|| {
             self.world_fx_keep.pass(
                 device,
-                self.world_format,
+                (self.world_format, self.samples),
                 [
                     &self.camera_layout,
                     material_layout,

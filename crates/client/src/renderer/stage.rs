@@ -686,7 +686,6 @@ pub(crate) fn par_build_on<T: Send>(
     n: usize,
     f: impl Fn(usize) -> T + Sync,
 ) -> Vec<T> {
-    let samples = msaa_samples();
     let next = std::sync::atomic::AtomicUsize::new(0);
     let mut out: Vec<Option<T>> = (0..n).map(|_| None).collect();
     std::thread::scope(|s| {
@@ -694,7 +693,6 @@ pub(crate) fn par_build_on<T: Send>(
         let handles: Vec<_> = (0..workers.min(n))
             .map(|_| {
                 s.spawn(move || {
-                    set_msaa_samples(samples);
                     let mut done = Vec::new();
                     loop {
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -717,13 +715,14 @@ pub(crate) fn par_build_on<T: Send>(
         .collect()
 }
 
-/// A pipeline over shader.wgsl's world vertex layout into the scene target:
-/// the world, layer, overlay and stage pipelines, and the marks'.
+/// A pipeline over shader.wgsl's world vertex layout into the scene target
+/// (its format and sample count): the world, layer, overlay and stage
+/// pipelines, and the marks'.
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn scene_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
-    format: wgpu::TextureFormat,
+    (format, samples): (wgpu::TextureFormat, u32),
     label: &str,
     layout: &wgpu::PipelineLayout,
     (vs_entry, fs_entry): (&str, &str),
@@ -771,7 +770,7 @@ pub(crate) fn scene_pipeline(
             bias,
         }),
         multisample: wgpu::MultisampleState {
-            count: msaa_samples(),
+            count: samples,
             mask: !0,
             alpha_to_coverage_enabled: alpha_to_coverage,
         },

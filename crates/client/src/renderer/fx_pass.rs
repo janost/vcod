@@ -549,6 +549,7 @@ pub(super) fn create_fx_pass(
     texture_layout: &wgpu::BindGroupLayout,
     soft_layout: &wgpu::BindGroupLayout,
     copy_layout: &wgpu::BindGroupLayout,
+    samples: u32,
 ) -> FxPass {
     let vertex_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("fx vertices"),
@@ -639,7 +640,7 @@ pub(super) fn create_fx_pass(
                 bias: Default::default(),
             }),
             multisample: wgpu::MultisampleState {
-                count: msaa_samples(),
+                count: samples,
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
@@ -697,7 +698,7 @@ pub(super) fn create_fx_pass(
         index_buf,
         textures: HashMap::new(),
         runs: Vec::new(),
-        clouds: fx_cloud::CloudPass::new(device, format, camera_layout, texture_layout),
+        clouds: fx_cloud::CloudPass::new(device, format, camera_layout, texture_layout, samples),
     }
 }
 

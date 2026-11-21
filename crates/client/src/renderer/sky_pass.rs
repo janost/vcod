@@ -73,7 +73,7 @@ pub(super) struct SunSprite {
 pub(super) fn build_sky_box(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    format: wgpu::TextureFormat,
+    (format, samples): (wgpu::TextureFormat, u32),
     fs: &Pk3Fs,
     camera_layout: &wgpu::BindGroupLayout,
     bundle_views: &mut BundleViews,
@@ -197,7 +197,7 @@ pub(super) fn build_sky_box(
             bias: Default::default(),
         }),
         multisample: wgpu::MultisampleState {
-            count: msaa_samples(),
+            count: samples,
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
@@ -227,7 +227,7 @@ pub(super) const SUN_SPRITE_SCALE: f32 = 0.001_311_092_9;
 pub(super) fn build_sun_sprite(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    format: wgpu::TextureFormat,
+    (format, samples): (wgpu::TextureFormat, u32),
     fs: &Pk3Fs,
     camera_layout: &wgpu::BindGroupLayout,
     bundle_views: &mut BundleViews,
@@ -310,7 +310,7 @@ pub(super) fn build_sun_sprite(
             bias: Default::default(),
         }),
         multisample: wgpu::MultisampleState {
-            count: msaa_samples(),
+            count: samples,
             mask: !0,
             alpha_to_coverage_enabled: false,
         },

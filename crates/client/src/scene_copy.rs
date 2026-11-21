@@ -135,7 +135,7 @@ impl SceneCopy {
         encoder: &mut wgpu::CommandEncoder,
         scene: &wgpu::TextureView,
     ) {
-        if crate::renderer::msaa_samples() > 1 {
+        if scene.texture().sample_count() > 1 {
             // an empty pass whose end resolves the samples into the copy
             encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("scene copy resolve"),

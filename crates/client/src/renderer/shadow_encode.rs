@@ -261,7 +261,7 @@ impl Renderer {
         self.depth_prepass
             && self.world.is_some()
             && self.dynamic.cod2_light.is_some()
-            && msaa_samples() == 1
+            && self.samples == 1
             && self.cookies_on_prepass
     }
 

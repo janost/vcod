@@ -11,7 +11,7 @@ use crate::renderer::gpu_util;
 use bytemuck::Zeroable;
 use vcod_common::sun::{SunFade, SunFile};
 
-use crate::renderer::{DEPTH_FORMAT, Frame, msaa_samples};
+use crate::renderer::{DEPTH_FORMAT, Frame};
 use crate::texture_settings::TexSamplers;
 
 /// Window sizes are in 640-wide virtual pixels (0x568fe4 is 1/640).
@@ -305,6 +305,8 @@ pub struct SunFlareGpu {
     probe: wgpu::RenderPipeline,
     wash: wgpu::RenderPipeline,
     flare: wgpu::RenderPipeline,
+    /// The scene's sample count, each probe pixel's share of the query.
+    scene_samples: u32,
     image: wgpu::BindGroup,
     image_layout: wgpu::BindGroupLayout,
     image_view: wgpu::TextureView,
@@ -319,9 +321,10 @@ pub struct SunFlareGpu {
 }
 
 impl SunFlareGpu {
+    /// The pipelines draw into the scene's format at its sample count.
     pub fn new(
         device: &wgpu::Device,
-        format: wgpu::TextureFormat,
+        (format, scene_samples): (wgpu::TextureFormat, u32),
         params: FlareParams,
         flare_dir: glam::Vec3,
         view_dir: glam::Vec3,
@@ -384,7 +387,7 @@ impl SunFlareGpu {
                     bias: Default::default(),
                 }),
                 multisample: wgpu::MultisampleState {
-                    count: msaa_samples(),
+                    count: scene_samples,
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },
@@ -459,6 +462,7 @@ impl SunFlareGpu {
             probe,
             wash,
             flare,
+            scene_samples,
             image,
             image_layout: tex_layout,
             image_view,
@@ -516,7 +520,7 @@ impl SunFlareGpu {
         self.issued = None;
         let mut quads = [[Vert::zeroed(); 6]; QUADS];
         if let (Some((rect, n)), Some(slot)) = (out.query, slot) {
-            let samples = (n * n) as u64 * u64::from(msaa_samples());
+            let samples = (n * n) as u64 * u64::from(self.scene_samples);
             self.issued = Some((slot, samples));
             let (x0, y0) = (rect.x as f32, rect.y as f32);
             let (x1, y1) = (x0 + rect.w as f32, y0 + rect.h as f32);

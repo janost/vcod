@@ -1281,7 +1281,7 @@ fn wgsl_modules_validate() {
         ("shadow_mask", include_str!("../shadow_mask.wgsl")),
     ];
     for (name, src) in modules {
-        for (samples, src) in [(4, depth_wgsl_at(src, 4)), (1, depth_wgsl_at(src, 1))] {
+        for (samples, src) in [(4, depth_wgsl(src, 4)), (1, depth_wgsl(src, 1))] {
             let module = naga::front::wgsl::parse_str(&src)
                 .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(&src)));
             naga::valid::Validator::new(
@@ -1949,7 +1949,6 @@ fn world_runs_bundle_once_their_commands_hold() {
     let Some((device, queue)) = headless::test_device(headless::Need::Any) else {
         return;
     };
-    set_msaa_samples(1);
     let tex = |format, usage| {
         device
             .create_texture(&wgpu::TextureDescriptor {
@@ -2003,7 +2002,7 @@ fn world_runs_bundle_once_their_commands_hold() {
                 }),
                 ..Default::default()
             });
-            wb.begin(Some(SCENE_FORMAT));
+            wb.begin(Some(SCENE_FORMAT), 1);
             for v in runs {
                 wb.draw(
                     &mut pass,
@@ -2029,7 +2028,7 @@ fn world_runs_bundle_once_their_commands_hold() {
     );
     frame(&mut wb, &[&a]);
     assert_eq!(bundled(&wb), [true], "runs past the last go");
-    wb.begin(None);
+    wb.begin(None, 1);
     assert!(wb.runs.is_empty(), "a new target drops every run");
 }
 

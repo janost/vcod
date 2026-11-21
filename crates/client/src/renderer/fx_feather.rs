@@ -64,9 +64,9 @@ fn feathered_sprite_fades_into_the_wall_as_the_hlsl_does() {
         label: None,
         entries: &[gpu_util::texture_2d(0)],
     });
-    let depth = create_depth_view(&device, N, N);
-    let msaa = create_msaa_view(&device, SCENE_FORMAT, N, N);
-    let soft = crate::soft_particles::SoftParticles::new(&device, &depth, N, N);
+    let depth = create_depth_view(&device, N, N, 4);
+    let msaa = create_msaa_view(&device, SCENE_FORMAT, N, N, 4);
+    let soft = crate::soft_particles::SoftParticles::new(&device, &depth, N, N, 4);
     let copy = crate::scene_copy::SceneCopy::new(&device, SCENE_FORMAT, soft.linz(), N, N);
     let fx = create_fx_pass(
         &device,
@@ -75,6 +75,7 @@ fn feathered_sprite_fades_into_the_wall_as_the_hlsl_does() {
         &texture_layout,
         &soft.fx_layout,
         &copy.layout,
+        4,
     );
 
     // the Camera block: view_proj, then five vec4s; fog mode 0

@@ -77,6 +77,7 @@ impl SunShafts {
         depth: &wgpu::TextureView,
         width: u32,
         height: u32,
+        samples: u32,
     ) -> SunShafts {
         let tex = |binding, sample_type, multisampled| {
             gpu_util::texture(
@@ -96,11 +97,7 @@ impl SunShafts {
                 ),
                 gpu_util::filtering_sampler(1),
                 gpu_util::uniform(2, wgpu::ShaderStages::FRAGMENT),
-                tex(
-                    3,
-                    wgpu::TextureSampleType::Depth,
-                    crate::renderer::msaa_samples() > 1,
-                ),
+                tex(3, wgpu::TextureSampleType::Depth, samples > 1),
             ],
         });
         let sampler = gpu_util::linear_clamp_sampler(device, Some("sun shafts sampler"));
@@ -112,9 +109,10 @@ impl SunShafts {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("sun_shafts.wgsl"),
-            source: wgpu::ShaderSource::Wgsl(crate::renderer::depth_wgsl(include_str!(
-                "sun_shafts.wgsl"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(crate::renderer::depth_wgsl(
+                include_str!("sun_shafts.wgsl"),
+                samples,
+            )),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("sun shafts pipeline layout"),

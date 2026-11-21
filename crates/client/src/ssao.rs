@@ -81,20 +81,22 @@ impl SsaoPass {
         width: u32,
         height: u32,
         timestamps: bool,
+        samples: u32,
     ) -> SsaoPass {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("ssao layout"),
             entries: &[
                 gpu_util::uniform(0, wgpu::ShaderStages::FRAGMENT),
-                gpu_util::depth_2d(1, crate::renderer::msaa_samples() > 1),
+                gpu_util::depth_2d(1, samples > 1),
                 gpu_util::unfilterable_2d(2),
             ],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ssao.wgsl"),
-            source: wgpu::ShaderSource::Wgsl(crate::renderer::depth_wgsl(include_str!(
-                "ssao.wgsl"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(crate::renderer::depth_wgsl(
+                include_str!("ssao.wgsl"),
+                samples,
+            )),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ssao pipeline layout"),
@@ -144,7 +146,7 @@ impl SsaoPass {
             "fs_apply",
             scene_format,
             Some(multiply),
-            crate::renderer::msaa_samples(),
+            samples,
             Some(wgpu::DepthStencilState {
                 format: crate::renderer::DEPTH_FORMAT,
                 depth_write_enabled: Some(false),

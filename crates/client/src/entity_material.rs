@@ -14,8 +14,8 @@ use std::rc::Rc;
 use vcod_common::asset_source::{AssetSource, RawFile};
 
 use crate::renderer::{
-    DEPTH_FORMAT, DYNAMIC_INSTANCE_STRIDE, STAGE_PARAMS_SIZE, msaa_samples, stage_animated,
-    stage_params, upload_levels,
+    DEPTH_FORMAT, DYNAMIC_INSTANCE_STRIDE, STAGE_PARAMS_SIZE, stage_animated, stage_params,
+    upload_levels,
 };
 use crate::texture_settings::{Mips, TextureSettings};
 use vcod_common::assets;
@@ -401,7 +401,8 @@ struct PassShader {
 /// and the images stages name.
 pub(crate) struct EntityMaterials {
     passes: [PassShader; 2],
-    format: wgpu::TextureFormat,
+    /// The scene target's format and sample count.
+    target: (wgpu::TextureFormat, u32),
     pub(crate) skin_layout: wgpu::BindGroupLayout,
     /// Group 3's layout, the stage params.
     pub(crate) params_layout: wgpu::BindGroupLayout,
@@ -468,7 +469,7 @@ impl EntityMaterials {
     pub(crate) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
+        target: (wgpu::TextureFormat, u32),
         layouts: PassLayouts,
         skin_layout: &wgpu::BindGroupLayout,
         textures: TextureSettings,
@@ -577,19 +578,19 @@ impl EntityMaterials {
                 ent_pipeline(
                     device,
                     &passes,
-                    format,
+                    target,
                     EntPass::World,
                     &(b, w, d, cull),
                     color,
                 )
             })
         });
-        let floatz = [false, true].map(|cull| ent_floatz_pipeline(device, &passes, cull));
+        let floatz = [false, true].map(|cull| ent_floatz_pipeline(device, &passes, target.1, cull));
         let mut materials = Self {
             prepass,
             floatz,
             passes,
-            format,
+            target,
             skin_layout: skin_layout.clone(),
             params_layout,
             pipelines: Vec::new(),
@@ -699,10 +700,10 @@ impl EntityMaterials {
                 jobs.push((i, EntPass::View));
             }
         }
-        let (shaders, format) = (&self.passes, self.format);
+        let (shaders, target) = (&self.passes, self.target);
         let built = crate::renderer::par_build(jobs.len(), |j| {
             let (i, pass) = jobs[j];
-            ent_pipeline(device, shaders, format, pass, &fresh[i], true)
+            ent_pipeline(device, shaders, target, pass, &fresh[i], true)
         });
         let mut pairs: Vec<[Option<wgpu::RenderPipeline>; 2]> = vec![[None, None]; fresh.len()];
         for (&(i, pass), pipeline) in jobs.iter().zip(built) {
@@ -754,7 +755,7 @@ impl EntityMaterials {
         pass: EntPass,
         key: &EntPipelineKey,
     ) -> wgpu::RenderPipeline {
-        ent_pipeline(device, &self.passes, self.format, pass, key, true)
+        ent_pipeline(device, &self.passes, self.target, pass, key, true)
     }
 }
 
@@ -764,12 +765,19 @@ impl EntityMaterials {
 fn ent_pipeline(
     device: &wgpu::Device,
     passes: &[PassShader; 2],
-    format: wgpu::TextureFormat,
+    (format, samples): (wgpu::TextureFormat, u32),
     pass: EntPass,
     key: &EntPipelineKey,
     color: bool,
 ) -> wgpu::RenderPipeline {
-    ent_pipeline_to(device, passes, (format, "fs_main"), pass, key, color)
+    ent_pipeline_to(
+        device,
+        passes,
+        (format, samples, "fs_main"),
+        pass,
+        key,
+        color,
+    )
 }
 
 /// The depth prepass's entity pipeline that writes `floatZ` (`fs_floatz`,
@@ -777,18 +785,20 @@ fn ent_pipeline(
 fn ent_floatz_pipeline(
     device: &wgpu::Device,
     passes: &[PassShader; 2],
+    samples: u32,
     cull: bool,
 ) -> wgpu::RenderPipeline {
     let key = (None, true, DepthFunc::LessEqual, cull);
-    let target = (crate::soft_particles::LINZ_FORMAT, "fs_floatz");
+    let target = (crate::soft_particles::LINZ_FORMAT, samples, "fs_floatz");
     ent_pipeline_to(device, passes, target, EntPass::World, &key, true)
 }
 
-/// [`ent_pipeline`] drawing fragment `entry` into a `format` target.
+/// [`ent_pipeline`] drawing fragment `entry` into a `format` target of
+/// `samples`.
 fn ent_pipeline_to(
     device: &wgpu::Device,
     passes: &[PassShader; 2],
-    (format, entry): (wgpu::TextureFormat, &str),
+    (format, samples, entry): (wgpu::TextureFormat, u32, &str),
     pass: EntPass,
     key: &EntPipelineKey,
     color: bool,
@@ -864,7 +874,7 @@ fn ent_pipeline_to(
             bias: Default::default(),
         }),
         multisample: wgpu::MultisampleState {
-            count: msaa_samples(),
+            count: samples,
             mask: !0,
             alpha_to_coverage_enabled: false,
         },

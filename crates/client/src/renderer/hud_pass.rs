@@ -133,6 +133,7 @@ pub(super) fn create_hud_text_pass(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     format: wgpu::TextureFormat,
+    samples: u32,
 ) -> HudTextPass {
     // Nearest sampling: glyphs draw at integer scales, filtering would blur them.
     let atlas = hud_text::build_atlas();
@@ -273,7 +274,7 @@ pub(super) fn create_hud_text_pass(
             cache: None,
         })
     };
-    let (pipeline, pipeline_1x) = (make(msaa_samples(), true), make(1, false));
+    let (pipeline, pipeline_1x) = (make(samples, true), make(1, false));
 
     HudTextPass {
         pipeline,
@@ -402,7 +403,11 @@ impl HudUpload<'_> {
 /// Like `create_hud_text_pass` but with `hud.wgsl`, which samples an image
 /// with mipmaps through `r_textureMode`'s sampler and one without through
 /// `GL_LINEAR` ([`HudTexture`]).
-pub(super) fn create_hud_pass(device: &wgpu::Device, format: wgpu::TextureFormat) -> HudPass {
+pub(super) fn create_hud_pass(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    samples: u32,
+) -> HudPass {
     let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("hud texture layout"),
         entries: &[
@@ -499,8 +504,8 @@ pub(super) fn create_hud_pass(device: &wgpu::Device, format: wgpu::TextureFormat
         color: add,
         alpha: add,
     };
-    let (pipeline, pipeline_1x) = (make(msaa_samples(), true, alpha), make(1, false, alpha));
-    let (additive, additive_1x) = (make(msaa_samples(), true, add), make(1, false, add));
+    let (pipeline, pipeline_1x) = (make(samples, true, alpha), make(1, false, alpha));
+    let (additive, additive_1x) = (make(samples, true, add), make(1, false, add));
 
     HudPass {
         pipeline,

@@ -4283,9 +4283,7 @@ impl App {
         let textures = self.texture_settings();
         let samples = renderer::aa_samples(self.shell.cvar_f32("r_aaSamples"));
         if self.renderer.as_ref().is_some_and(|r| {
-            r.hdr() != hdr_cvar(&self.shell)
-                || textures != self.textures
-                || samples != renderer::msaa_samples()
+            r.hdr() != hdr_cvar(&self.shell) || textures != self.textures || samples != r.samples()
         }) {
             self.rebuild_renderer(event_loop);
         }

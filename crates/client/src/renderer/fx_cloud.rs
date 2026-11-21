@@ -107,6 +107,7 @@ impl CloudPass {
         format: wgpu::TextureFormat,
         camera_layout: &wgpu::BindGroupLayout,
         texture_layout: &wgpu::BindGroupLayout,
+        samples: u32,
     ) -> CloudPass {
         let (verts, indices) = flake_buffer();
         let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -244,7 +245,7 @@ impl CloudPass {
                     bias: Default::default(),
                 }),
                 multisample: wgpu::MultisampleState {
-                    count: msaa_samples(),
+                    count: samples,
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },
@@ -629,7 +630,6 @@ mod tests {
             eprintln!("no adapter; skipped");
             return;
         };
-        set_msaa_samples(1);
         let mut entries = vec![gpu_util::uniform(0, wgpu::ShaderStages::VERTEX_FRAGMENT)];
         for binding in 9..=16 {
             entries.push(gpu_util::filtering_sampler(binding));
@@ -642,7 +642,7 @@ mod tests {
             label: None,
             entries: &[gpu_util::texture_2d(0)],
         });
-        let mut pass = CloudPass::new(&device, SCENE_FORMAT, &camera_layout, &texture_layout);
+        let mut pass = CloudPass::new(&device, SCENE_FORMAT, &camera_layout, &texture_layout, 1);
 
         // a view down +x: right is -y, up is +z
         let vp = crate::camera::view_proj_from(Vec3::ZERO, 0.0, 0.0, 0.0, 90.0, 1.0);
@@ -750,7 +750,7 @@ mod tests {
             view_formats: &[],
         });
         let view = target.create_view(&Default::default());
-        let depth = create_depth_view(&device, N, N);
+        let depth = create_depth_view(&device, N, N, 1);
         let mut enc = device.create_command_encoder(&Default::default());
         {
             let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {

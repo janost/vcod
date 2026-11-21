@@ -90,7 +90,7 @@ fn shoot(
     (w, h): (u32, u32),
     out: &std::ffi::OsStr,
 ) {
-    let mut pass = create_hud_pass(device, SCENE_FORMAT);
+    let mut pass = create_hud_pass(device, SCENE_FORMAT, 4);
     let shaders = ShaderLib::load(fs);
     let lib = material_lib(fs);
     let textures = texture_settings::TextureSettings::default();

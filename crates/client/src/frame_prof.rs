@@ -441,12 +441,11 @@ pub fn extra_features() -> wgpu::Features {
 
 /// Notes the frame's size and MSAA samples as a `# size WxH samples N`
 /// line when either changes (a resize, a `vid_restart`).
-pub fn size(w: u32, h: u32) {
+pub fn size(w: u32, h: u32, samples: u32) {
     if !on() {
         return;
     }
     static LAST: Mutex<(u32, u32, u32)> = Mutex::new((0, 0, 0));
-    let samples = crate::renderer::msaa_samples();
     let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
     if *last != (w, h, samples) {
         *last = (w, h, samples);

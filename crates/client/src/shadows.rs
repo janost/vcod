@@ -1183,9 +1183,10 @@ impl ShadowPass {
         });
         let mask = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("shadow_mask.wgsl"),
-            source: wgpu::ShaderSource::Wgsl(crate::renderer::depth_wgsl(include_str!(
-                "shadow_mask.wgsl"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(crate::renderer::depth_wgsl(
+                include_str!("shadow_mask.wgsl"),
+                samples,
+            )),
         });
         let mask_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("shadow mask pipeline layout"),

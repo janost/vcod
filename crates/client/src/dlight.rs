@@ -4,7 +4,7 @@
 //! (CoDMP.exe 0x4ff690; docs/research/cod11-shader-scripts.md, section 3).
 
 use crate::renderer::gpu_util;
-use crate::renderer::{DEPTH_FORMAT, msaa_samples, upload_image};
+use crate::renderer::{DEPTH_FORMAT, upload_image};
 use glam::Vec3;
 use vcod_common::assets;
 use vcod_common::mapworld::{DrawVert, MapWorld, TriangleSoup};
@@ -176,7 +176,8 @@ pub struct DlightPass {
 
 impl DlightPass {
     /// `groups` are the camera, material and stage layouts; `clamp` a
-    /// clamping sampler, `bias` the decal depth bias.
+    /// clamping sampler, `bias` the decal depth bias, `target` the scene's
+    /// format and sample count.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -184,7 +185,7 @@ impl DlightPass {
         groups: [&wgpu::BindGroupLayout; 3],
         clamp: &wgpu::Sampler,
         bias: wgpu::DepthBiasState,
-        format: wgpu::TextureFormat,
+        (format, samples): (wgpu::TextureFormat, u32),
     ) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("dlight layout"),
@@ -312,7 +313,7 @@ impl DlightPass {
                     bias: if want_bias { bias } else { Default::default() },
                 }),
                 multisample: wgpu::MultisampleState {
-                    count: msaa_samples(),
+                    count: samples,
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },

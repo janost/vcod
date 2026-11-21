@@ -232,7 +232,7 @@ impl WaterBuilder {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
+        target: (wgpu::TextureFormat, u32),
         fs: &dyn AssetSource,
         sun_buf: &wgpu::Buffer,
         sh: &Material,
@@ -246,7 +246,7 @@ impl WaterBuilder {
                     device,
                     &self.module,
                     &self.layout,
-                    format,
+                    target,
                     blend,
                     depth_write,
                     two_sided,
@@ -586,7 +586,7 @@ mod tests {
         let _ = b.bind(
             &device,
             &queue,
-            format,
+            (format, 4),
             &Pk3Fs::empty(),
             &sun_buf,
             &sh,
@@ -718,7 +718,8 @@ mod tests {
             })
         };
         let att = wgpu::TextureUsages::RENDER_ATTACHMENT;
-        let samples = super::super::msaa_samples();
+        // the count the test pipelines take
+        let samples = 4;
         let msaa = target(samples, format, att);
         let depth = target(samples, super::super::DEPTH_FORMAT, att);
         let resolved = target(1, format, att | wgpu::TextureUsages::COPY_SRC);

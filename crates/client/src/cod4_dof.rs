@@ -286,7 +286,13 @@ const PING: usize = 3;
 
 impl DofPass {
     /// `format` is the world target's (`Renderer::world_format`).
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, w: u32, h: u32) -> DofPass {
+    pub fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        w: u32,
+        h: u32,
+        samples: u32,
+    ) -> DofPass {
         let tex = gpu_util::texture_2d;
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("cod4 dof layout"),
@@ -295,15 +301,16 @@ impl DofPass {
                 tex(1),
                 tex(2),
                 tex(3),
-                gpu_util::depth_2d(4, crate::renderer::msaa_samples() > 1),
+                gpu_util::depth_2d(4, samples > 1),
                 gpu_util::filtering_sampler(5),
             ],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("cod4_dof.wgsl"),
-            source: wgpu::ShaderSource::Wgsl(crate::renderer::depth_wgsl(include_str!(
-                "cod4_dof.wgsl"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(crate::renderer::depth_wgsl(
+                include_str!("cod4_dof.wgsl"),
+                samples,
+            )),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("cod4 dof pipeline layout"),

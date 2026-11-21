@@ -14,8 +14,8 @@ use vcod_common::asset_source::AssetSource;
 use wgpu::util::DeviceExt;
 
 use super::{
-    BundleViews, DEPTH_FORMAT, ImageRule, SkyBox, StageVariant, depth_bias, msaa_samples,
-    upload_bundle_view, upload_levels,
+    BundleViews, DEPTH_FORMAT, ImageRule, SkyBox, StageVariant, depth_bias, upload_bundle_view,
+    upload_levels,
 };
 use crate::camera::{Z_FAR, Z_NEAR};
 use crate::sky;
@@ -436,11 +436,12 @@ pub(super) struct Cod2World {
     normal_maps: Vec<(wgpu::Buffer, MaterialUniform)>,
     /// Whether the uniforms hold their `M_NORMAL`s ([`Self::set_normal_maps`]).
     pub normal_maps_on: bool,
-    /// The shader, layout and target format, for [`Self::set_normal_maps`].
+    /// The shader, layout and target (format, samples), for
+    /// [`Self::set_normal_maps`].
     base: (
         wgpu::ShaderModule,
         wgpu::PipelineLayout,
-        wgpu::TextureFormat,
+        (wgpu::TextureFormat, u32),
     ),
 }
 
@@ -468,7 +469,7 @@ impl Cod2World {
         if on {
             return;
         }
-        let (module, layout, format) = &self.base;
+        let (module, layout, target) = &self.base;
         let off = |(e, p): FsKey| (e, p.map(LitPath::without_normal_map));
         let todo: Vec<(Key, MadeKey)> = self
             .made
@@ -490,7 +491,7 @@ impl Cod2World {
             .map(|&(_, made)| made)
             .filter(|m| !shared.pipelines.contains_key(m) && seen.insert(*m))
             .collect();
-        let built = par_compile(&fresh, |&m| build_made(device, module, layout, *format, m));
+        let built = par_compile(&fresh, |&m| build_made(device, module, layout, *target, m));
         shared.pipelines.extend(fresh.into_iter().zip(built));
         for (key, made) in todo {
             self.pipelines.insert(key, shared.pipelines[&made].clone());
@@ -508,7 +509,7 @@ impl Cod2World {
             .copied()
             .collect();
         let built = par_compile(&fresh, |&(ts, fs)| {
-            make_prepass_pipeline(device, module, layout, *format, ts, fs)
+            make_prepass_pipeline(device, module, layout, *target, ts, fs)
         });
         shared.prepass.extend(fresh.into_iter().zip(built));
         for key in todo {
@@ -609,7 +610,8 @@ impl Cod2World {
 pub(super) struct Cod2Builder<'a> {
     device: &'a wgpu::Device,
     queue: &'a wgpu::Queue,
-    format: wgpu::TextureFormat,
+    /// The scene target's format and sample count.
+    target: (wgpu::TextureFormat, u32),
     module: wgpu::ShaderModule,
     layout: wgpu::PipelineLayout,
     material_layout: wgpu::BindGroupLayout,
@@ -697,7 +699,7 @@ pub(super) struct LitShared {
 }
 
 struct LitBase {
-    format: wgpu::TextureFormat,
+    target: (wgpu::TextureFormat, u32),
     module: wgpu::ShaderModule,
     layout: wgpu::PipelineLayout,
     material_layout: wgpu::BindGroupLayout,
@@ -725,7 +727,7 @@ impl LitBase {
     fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
+        target: (wgpu::TextureFormat, u32),
         camera_layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -798,7 +800,7 @@ impl LitBase {
         );
         let black_volume = upload_volume(device, queue, "black volume", (1, 1), &[0; 16]);
         LitBase {
-            format,
+            target,
             module,
             layout,
             material_layout,
@@ -902,14 +904,14 @@ impl<'a> Cod2Builder<'a> {
     pub fn new(
         device: &'a wgpu::Device,
         queue: &'a wgpu::Queue,
-        format: wgpu::TextureFormat,
+        target: (wgpu::TextureFormat, u32),
         camera_layout: &'a wgpu::BindGroupLayout,
         bsp: &'a MapWorld,
     ) -> Self {
         Self::with_shared(
             device,
             queue,
-            format,
+            target,
             camera_layout,
             bsp,
             LitShared::default(),
@@ -920,14 +922,14 @@ impl<'a> Cod2Builder<'a> {
     pub fn with_shared(
         device: &'a wgpu::Device,
         queue: &'a wgpu::Queue,
-        format: wgpu::TextureFormat,
+        target: (wgpu::TextureFormat, u32),
         camera_layout: &'a wgpu::BindGroupLayout,
         bsp: &'a MapWorld,
         mut shared: LitShared,
     ) -> Self {
-        if shared.base.as_ref().is_none_or(|b| b.format != format) {
+        if shared.base.as_ref().is_none_or(|b| b.target != target) {
             shared = LitShared {
-                base: Some(LitBase::new(device, queue, format, camera_layout)),
+                base: Some(LitBase::new(device, queue, target, camera_layout)),
                 ..LitShared::default()
             };
         }
@@ -964,7 +966,7 @@ impl<'a> Cod2Builder<'a> {
         Cod2Builder {
             device,
             queue,
-            format,
+            target,
             module,
             layout,
             material_layout,
@@ -1104,7 +1106,7 @@ impl<'a> Cod2Builder<'a> {
         let i = water.bind(
             self.device,
             self.queue,
-            self.format,
+            self.target,
             fs,
             &self.sun_buf,
             sh,
@@ -1488,9 +1490,10 @@ impl<'a> Cod2Builder<'a> {
             .filter(|k| !self.shared.floatz.contains_key(k))
             .collect();
         let (device, module, layout) = (self.device, &self.module, &self.layout);
+        let samples = self.target.1;
         let t = std::time::Instant::now();
         let built = par_compile(&fresh, |&(two_sided, atest)| {
-            make_floatz_pipeline(device, module, layout, two_sided, atest)
+            make_floatz_pipeline(device, module, layout, samples, two_sided, atest)
         });
         self.compile += t.elapsed();
         self.shared.floatz.extend(fresh.into_iter().zip(built));
@@ -1534,7 +1537,7 @@ impl<'a> Cod2Builder<'a> {
             light_kinds: self.light_kinds,
             normal_maps: self.normal_maps,
             normal_maps_on: true,
-            base: (self.module.clone(), self.layout.clone(), self.format),
+            base: (self.module.clone(), self.layout.clone(), self.target),
         };
         (world, self.shared)
     }
@@ -1561,11 +1564,11 @@ impl<'a> Cod2Builder<'a> {
             .filter(|k| !self.shared.prepass.contains_key(k))
             .copied()
             .collect();
-        let (device, module, layout, format) =
-            (self.device, &self.module, &self.layout, self.format);
+        let (device, module, layout, target) =
+            (self.device, &self.module, &self.layout, self.target);
         let t = std::time::Instant::now();
         let built = par_compile(&fresh, |&(two_sided, fs)| {
-            make_prepass_pipeline(device, module, layout, format, two_sided, fs)
+            make_prepass_pipeline(device, module, layout, target, two_sided, fs)
         });
         self.compile += t.elapsed();
         self.shared.prepass.extend(fresh.into_iter().zip(built));
@@ -1585,10 +1588,10 @@ impl<'a> Cod2Builder<'a> {
             .filter(|m| !self.shared.pipelines.contains_key(m))
             .copied()
             .collect();
-        let (device, module, layout, format) =
-            (self.device, &self.module, &self.layout, self.format);
+        let (device, module, layout, target) =
+            (self.device, &self.module, &self.layout, self.target);
         let t = std::time::Instant::now();
-        let built = par_compile(&fresh, |&m| build_made(device, module, layout, format, m));
+        let built = par_compile(&fresh, |&m| build_made(device, module, layout, target, m));
         self.compile += t.elapsed();
         self.shared.pipelines.extend(fresh.into_iter().zip(built));
         self.made
@@ -1925,7 +1928,7 @@ pub(super) fn make_lit_pipeline(
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
-    format: wgpu::TextureFormat,
+    target: (wgpu::TextureFormat, u32),
     blend: Option<wgpu::BlendState>,
     depth_write: bool,
     two_sided: bool,
@@ -1936,7 +1939,7 @@ pub(super) fn make_lit_pipeline(
         device,
         module,
         layout,
-        format,
+        target,
         blend,
         (depth_write, wgpu::CompareFunction::LessEqual),
         two_sided,
@@ -1961,14 +1964,14 @@ fn build_made(
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
-    format: wgpu::TextureFormat,
+    target: (wgpu::TextureFormat, u32),
     made: MadeKey,
 ) -> wgpu::RenderPipeline {
     make_lit_pipeline(
         device,
         module,
         layout,
-        format,
+        target,
         made.blend,
         made.depth_write,
         made.two_sided,
@@ -1987,7 +1990,7 @@ fn make_prepass_pipeline(
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
-    format: wgpu::TextureFormat,
+    target: (wgpu::TextureFormat, u32),
     two_sided: bool,
     fs: Option<FsKey>,
 ) -> wgpu::RenderPipeline {
@@ -2000,7 +2003,7 @@ fn make_prepass_pipeline(
         device,
         module,
         layout,
-        format,
+        target,
         None,
         depth,
         two_sided,
@@ -2018,6 +2021,7 @@ fn make_floatz_pipeline(
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
+    samples: u32,
     two_sided: bool,
     atest: bool,
 ) -> wgpu::RenderPipeline {
@@ -2025,7 +2029,7 @@ fn make_floatz_pipeline(
         device,
         module,
         layout,
-        crate::soft_particles::LINZ_FORMAT,
+        (crate::soft_particles::LINZ_FORMAT, samples),
         None,
         (true, wgpu::CompareFunction::LessEqual),
         two_sided,
@@ -2044,7 +2048,7 @@ fn lit_pipeline(
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
-    format: wgpu::TextureFormat,
+    (format, samples): (wgpu::TextureFormat, u32),
     blend: Option<wgpu::BlendState>,
     (depth_write, depth_compare): (bool, wgpu::CompareFunction),
     two_sided: bool,
@@ -2105,7 +2109,7 @@ fn lit_pipeline(
             bias,
         }),
         multisample: wgpu::MultisampleState {
-            count: msaa_samples(),
+            count: samples,
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
@@ -2211,7 +2215,7 @@ pub fn load_cube_faces(fs: &dyn AssetSource, path: &str) -> Option<Vec<Image>> {
 pub(super) fn build_sky_cube(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    format: wgpu::TextureFormat,
+    target: (wgpu::TextureFormat, u32),
     fs: &dyn AssetSource,
     camera_layout: &wgpu::BindGroupLayout,
     path: &str,
@@ -2269,7 +2273,7 @@ pub(super) fn build_sky_cube(
             resource: eye_buf.as_entire_binding(),
         }],
     });
-    let pipeline = make_sky_pipeline(device, format, camera_layout, &tex_layout, &eye_layout);
+    let pipeline = make_sky_pipeline(device, target, camera_layout, &tex_layout, &eye_layout);
     log::info!(
         "cod2 sky: {path} {}x{}, {} levels",
         faces[0].width,
@@ -2292,7 +2296,7 @@ pub(super) fn build_sky_cube(
 /// as the CoD1 farbox draws (`build_sky_box`).
 fn make_sky_pipeline(
     device: &wgpu::Device,
-    format: wgpu::TextureFormat,
+    (format, samples): (wgpu::TextureFormat, u32),
     camera_layout: &wgpu::BindGroupLayout,
     tex_layout: &wgpu::BindGroupLayout,
     eye_layout: &wgpu::BindGroupLayout,
@@ -2343,7 +2347,7 @@ fn make_sky_pipeline(
             bias: Default::default(),
         }),
         multisample: wgpu::MultisampleState {
-            count: msaa_samples(),
+            count: samples,
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
@@ -2355,6 +2359,9 @@ fn make_sky_pipeline(
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+
+    /// The scene target the tests' pipelines draw into.
+    const TARGET: (wgpu::TextureFormat, u32) = (super::super::SCENE_FORMAT, 4);
 
     /// Two decals that differ only in their offset kind key two pipelines
     /// (BUG-148); a stage that takes none keys none.
@@ -2543,7 +2550,7 @@ pub(super) mod tests {
             return;
         };
         let camera = camera_layout(&device);
-        let base = LitBase::new(&device, &queue, super::super::SCENE_FORMAT, &camera);
+        let base = LitBase::new(&device, &queue, TARGET, &camera);
         let build = |label: &str, entry: LitEntry, path: Option<LitPath>| {
             eprintln!("LIT_REGS {label}");
             let made = MadeKey {
@@ -2553,13 +2560,7 @@ pub(super) mod tests {
                 blend: None,
                 depth_write: true,
             };
-            build_made(
-                &device,
-                &base.module,
-                &base.layout,
-                super::super::SCENE_FORMAT,
-                made,
-            );
+            build_made(&device, &base.module, &base.layout, TARGET, made);
         };
         build("fs_main unsplit", LitEntry::Main, None);
         build("fs_cod4_model unsplit", LitEntry::Cod4Model, None);
@@ -2605,7 +2606,7 @@ pub(super) mod tests {
             store: Default::default(),
             prefetched: None,
         };
-        let mut b = Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut b = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         let sh = Material {
             phong: Some(PhongLit {
                 specular: true,
@@ -2666,7 +2667,7 @@ pub(super) mod tests {
             label: None,
             entries: &[gpu_util::uniform(0, wgpu::ShaderStages::VERTEX)],
         });
-        make_sky_pipeline(&device, super::super::SCENE_FORMAT, &camera, &tex, &eye);
+        make_sky_pipeline(&device, TARGET, &camera, &tex, &eye);
         let err = pollster::block_on(scope.pop());
         assert!(err.is_none(), "{err:?}");
         let err = pollster::block_on(internal.pop());
@@ -2790,8 +2791,8 @@ pub(super) mod tests {
             })
         };
         let att = wgpu::TextureUsages::RENDER_ATTACHMENT;
-        let msaa = target(msaa_samples(), super::super::SCENE_FORMAT, att);
-        let depth = target(msaa_samples(), DEPTH_FORMAT, att);
+        let msaa = target(TARGET.1, TARGET.0, att);
+        let depth = target(TARGET.1, DEPTH_FORMAT, att);
         let resolved = target(
             1,
             super::super::SCENE_FORMAT,
@@ -2886,7 +2887,7 @@ pub(super) mod tests {
             store: Default::default(),
             prefetched: None,
         };
-        let mut b = Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut b = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         let sh = Material {
             phong: Some(PhongLit {
                 specular: false,
@@ -3043,7 +3044,7 @@ pub(super) mod tests {
             store: Default::default(),
             prefetched: None,
         };
-        let mut b = Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut b = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         let bind_tex = |semantic, name: &str| vcod_common::material::TextureBinding {
             semantic,
             image: ImageRef::Path(format!("images/{name}.iwi")),
@@ -3193,8 +3194,7 @@ pub(super) mod tests {
             store: Default::default(),
             prefetched: None,
         };
-        let mut builder =
-            Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut builder = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         let bind_tex = |semantic, name: &str| vcod_common::material::TextureBinding {
             semantic,
             image: ImageRef::Path(format!("images/{name}.iwi")),
@@ -3392,8 +3392,7 @@ pub(super) mod tests {
             store: Default::default(),
             prefetched: None,
         };
-        let mut builder =
-            Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut builder = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         let sh = Material {
             phong: Some(PhongLit {
                 specular: false,
@@ -3671,8 +3670,7 @@ pub(super) mod tests {
             store: Default::default(),
             prefetched: None,
         };
-        let mut builder =
-            Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut builder = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         let sh = Material {
             phong: Some(PhongLit {
                 specular: false,
@@ -3900,7 +3898,7 @@ pub(super) mod tests {
             store: Default::default(),
             prefetched: None,
         };
-        let mut b = Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut b = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         assert!(b.has_model_volume());
         let bind_tex = |semantic, name: &str| vcod_common::material::TextureBinding {
             semantic,
@@ -4227,7 +4225,7 @@ pub(super) mod tests {
             store: Default::default(),
             prefetched: None,
         };
-        let mut b = Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut b = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         let env = [0.2, 0.8, 2.0, 2.5];
         let water_color = [0.4, 0.35, 0.3, 1.0];
         let sh = Material {
@@ -4426,7 +4424,7 @@ pub(super) mod tests {
             store: Default::default(),
             prefetched: None,
         };
-        let mut b = Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut b = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         b.set_smodel_cache(&cache);
         let bind_tex = |semantic, name: &str| vcod_common::material::TextureBinding {
             semantic,
@@ -4566,7 +4564,7 @@ pub(super) mod tests {
             label: None,
             entries: &[gpu_util::uniform(0, wgpu::ShaderStages::VERTEX)],
         });
-        let pipeline = make_sky_pipeline(&device, super::super::SCENE_FORMAT, &camera, &tex, &eye);
+        let pipeline = make_sky_pipeline(&device, TARGET, &camera, &tex, &eye);
         let cube_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &tex,
@@ -4762,7 +4760,7 @@ pub(super) mod tests {
         assert_eq!(facts(&decal).0, StageVariant::Multiply);
         assert!(base.sort < layer.sort && layer.sort < decal.sort);
 
-        let mut b = Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut b = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         let base_bind = b.bind(
             &fs,
             &mut views,
@@ -4796,7 +4794,7 @@ pub(super) mod tests {
         let decal_pipeline = super::super::scene_pipeline(
             &device,
             &shader,
-            super::super::SCENE_FORMAT,
+            TARGET,
             "test multiply",
             &layout,
             ("vs_stage", fs_entry),
@@ -4956,7 +4954,7 @@ pub(super) mod tests {
         let clear = compiled("vertcol_simple", [0x0812_8812, 5], 3);
         assert!(!lit.nofog && !stage.nofog && clear.nofog);
 
-        let mut b = Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut b = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         let key = (StageVariant::Opaque, false, false);
         let lit_bind = b.bind(
             &fs,
@@ -4986,7 +4984,7 @@ pub(super) mod tests {
         let pipeline = super::super::scene_pipeline(
             &device,
             &shader,
-            super::super::SCENE_FORMAT,
+            TARGET,
             "test fog",
             &layout,
             ("vs_stage", fs_entry),

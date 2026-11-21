@@ -51,8 +51,8 @@ impl Renderer {
         if let Target::Surface(s) = &self.target {
             s.configure(&self.device, &self.config);
         }
-        self.msaa_view = create_msaa_view(&self.device, self.world_format, w, h);
-        self.depth_view = create_depth_view(&self.device, w, h);
+        self.msaa_view = create_msaa_view(&self.device, self.world_format, w, h, self.samples);
+        self.depth_view = create_depth_view(&self.device, w, h, self.samples);
         self.gamma.resize(&self.device, w, h);
         self.ssao.resize(&self.device, &self.depth_view, w, h);
         self.soft.resize(&self.device, &self.depth_view, w, h);
@@ -118,6 +118,11 @@ impl Renderer {
         self.world_format == HDR_FORMAT
     }
 
+    /// The scene's sample count the renderer was built with (1 or 4).
+    pub fn samples(&self) -> u32 {
+        self.samples
+    }
+
     /// `vc_bloom` (0 off) and `vc_bloomThreshold`, applied from the next frame.
     pub fn set_bloom(&mut self, intensity: f32, threshold: f32) {
         self.bloom_intensity = intensity.max(0.0);
@@ -178,7 +183,7 @@ impl Renderer {
                 &self.device,
                 &self.queue,
                 self.world_format,
-                msaa_samples(),
+                self.samples,
                 shadows::EntLayouts {
                     skin: &mats.skin_layout,
                     bones: &self.dynamic.bone_layout,

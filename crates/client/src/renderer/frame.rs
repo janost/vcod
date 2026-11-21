@@ -28,6 +28,8 @@ pub(super) struct SceneTargets<'a> {
     pub(super) sun_queries: Option<&'a wgpu::QuerySet>,
     /// The depth prepass laid the depth down: the first pass loads it.
     pub(super) depth_cleared: bool,
+    /// [`Renderer::samples`].
+    pub(super) samples: u32,
 }
 
 impl SceneTargets<'_> {
@@ -38,7 +40,7 @@ impl SceneTargets<'_> {
         last: bool,
     ) -> wgpu::RenderPass<'e> {
         // single-sampled, the scene draws straight into its resolve target
-        let resolving = msaa_samples() > 1;
+        let resolving = self.samples > 1;
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("map pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -315,7 +317,7 @@ impl Renderer {
             && ent_prepass
             && feather_on
             && !soft_all
-            && msaa_samples() == 1
+            && self.samples == 1
             && self.dynamic.cod4_light.is_some();
         // CoD4's entity runs and depth prepass replay from bundles as its
         // world runs do (cod4-client-perf.md 40)
@@ -560,6 +562,7 @@ impl Renderer {
             // its MSAA colour for the shadow mask and the SSAO multiply, the
             // second loads it and resolves.
             let targets = SceneTargets {
+                samples: self.samples,
                 msaa: &self.msaa_view,
                 depth: &self.depth_view,
                 resolve: if plan.post {
@@ -661,7 +664,7 @@ impl Renderer {
             // Past the items an entity surface run or a world bundle drew.
             let mut skip_to = 0;
             let mut bundles = std::mem::take(&mut self.world_bundles);
-            bundles.begin(Some(self.world_format));
+            bundles.begin(Some(self.world_format), self.samples);
             // The items where the loop below ends a pass or draws the
             // dlights: a world run stops short of them.
             let dlights_drawn = self
@@ -737,7 +740,7 @@ impl Renderer {
                     if let Some(g) = &self.prof_gpu {
                         g.stamp(prof_slot, &mut encoder, 4);
                     }
-                    let scene = if msaa_samples() > 1 {
+                    let scene = if self.samples > 1 {
                         &self.msaa_view
                     } else {
                         targets.resolve
@@ -1447,7 +1450,7 @@ impl Renderer {
         t0: std::time::Instant,
         prof: &mut crate::frame_prof::Span,
     ) {
-        crate::frame_prof::size(self.config.width, self.config.height);
+        crate::frame_prof::size(self.config.width, self.config.height, self.samples);
         let frustum = Frustum::from_view_proj(frame.view_proj);
         let cod4_lod = vcod_common::mapworld::cod4_lod_ramp(
             crate::camera::fov_y(frame.fov_x, self.aspect()),
@@ -2140,7 +2143,10 @@ impl Renderer {
         gpu_groups: &mut Option<crate::frame_prof::GpuGroups>,
     ) {
         let mut pre_bundles = std::mem::take(&mut self.prepass_bundles);
-        pre_bundles.begin(plan.floatz.then_some(crate::soft_particles::LINZ_FORMAT));
+        pre_bundles.begin(
+            plan.floatz.then_some(crate::soft_particles::LINZ_FORMAT),
+            self.samples,
+        );
         if plan.prepass_on {
             if let Some(g) = gpu_groups {
                 g.enc(encoder, Some(crate::frame_prof::Group::Prepass));
@@ -2202,7 +2208,7 @@ impl Renderer {
             frame_write!(
                 self,
                 "depth prepass (depth)",
-                self.target_bytes(4 * msaa_samples())
+                self.target_bytes(4 * self.samples)
             );
             if plan.floatz {
                 frame_write!(self, "depth prepass floatZ (R32F)", self.target_bytes(4));
@@ -2401,7 +2407,7 @@ impl Renderer {
 
     /// A scene pass's colour and depth (each sample), and its resolve.
     fn scene_pass_bytes(&self, last: bool) -> u64 {
-        let s = msaa_samples();
+        let s = self.samples;
         self.target_bytes((self.world_bpp() + 4) * s)
             + if last && s > 1 {
                 self.target_bytes(self.world_bpp())

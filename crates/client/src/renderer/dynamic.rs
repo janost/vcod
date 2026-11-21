@@ -1348,7 +1348,7 @@ pub(super) fn instance_seen(
 pub(super) fn create_dynamic_pass(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    format: wgpu::TextureFormat,
+    target: (wgpu::TextureFormat, u32),
     camera_layout: &wgpu::BindGroupLayout,
     vm: &VmPass,
     white_view: &wgpu::TextureView,
@@ -1402,7 +1402,7 @@ pub(super) fn create_dynamic_pass(
     let materials = EntityMaterials::new(
         device,
         queue,
-        format,
+        target,
         PassLayouts {
             camera: camera_layout,
             bones: &bone_layout,
