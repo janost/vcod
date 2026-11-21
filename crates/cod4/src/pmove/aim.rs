@@ -76,7 +76,7 @@ pub struct AimKeys {
 
 impl AimKeys {
     /// Off a zone weapon's 0x878-byte struct.
-    pub fn from_raw(raw: &[u8]) -> AimKeys {
+    pub fn from_raw(raw: &[u8; 0x878]) -> AimKeys {
         let i = |o: usize| i32::from_le_bytes(raw[o..o + 4].try_into().unwrap());
         let f = |o: usize| f32::from_le_bytes(raw[o..o + 4].try_into().unwrap());
         let v = |o: usize| [f(o), f(o + 4), f(o + 8)];
@@ -254,8 +254,8 @@ pub fn bob_cycle(ps: &PlayerState) -> f32 {
 /// flag.
 fn amplitude(ps: &PlayerState) -> [f32; 2] {
     match ps.view_height_target {
-        11 => BOB_PRONE,
-        40 => BOB_DUCKED,
+        super::VIEW_PRONE => BOB_PRONE,
+        super::VIEW_CROUCH => BOB_DUCKED,
         _ if ps.pm_flags & pmf::SPRINTING != 0 => BOB_SPRINTING,
         _ => BOB_STANDING,
     }
@@ -502,7 +502,7 @@ impl AimState {
         if frac != 0.0 {
             target = target.map(|t| t * (1.0 - frac));
         }
-        let rate = if ps.view_height_current == 11.0 {
+        let rate = if ps.view_height_current == super::VIEW_PRONE as f32 {
             k.pos_prone_rot_rate
         } else {
             k.pos_rot_rate

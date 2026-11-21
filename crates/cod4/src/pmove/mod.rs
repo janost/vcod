@@ -44,6 +44,7 @@ pub use stance::lerp_duration as view_height_lerp_duration;
 pub use vcod_common::pmove::Stance;
 pub(crate) use vcod_common::pmshared::leave_ladder;
 use vcod_common::pmshared::{PmState, TouchList};
+use weapon::state;
 
 /// `groundEntityNum` off the ground, and the world's number.
 pub const ENTITYNUM_NONE: i32 = 1023;
@@ -1131,7 +1132,7 @@ fn update_prone_still(pm: &mut Pmove) {
         ps.pm_flags &= !pmf::SIGHT;
         false
     } else {
-        let idle = ps.weapon_state <= 4 || ps.weapon_state == 7;
+        let idle = ps.weapon_state <= state::LOWER_QUICK || ps.weapon_state == state::RELOAD;
         ps.pm_flags & pmf::SIGHT != 0 || !idle
     };
     if !keep {
@@ -1147,7 +1148,7 @@ fn firing(pm: &Pmove) -> bool {
     pm.cmd.buttons & button::ATTACK != 0
         && ps.pm_type != pm_type::INTERMISSION
         && ps.pm_flags & pmf::RESPAWNED == 0
-        && matches!(ps.weapon_state, 0 | 5)
+        && matches!(ps.weapon_state, state::READY | state::FIRE)
         && pm.defs.is_none_or(|d| weapon::ammo_available(ps, d) != 0)
 }
 
@@ -1300,7 +1301,7 @@ fn can_stand(pm: &Pmove) -> bool {
 
 /// The reloading weapon states, which keep the sighted walk off.
 fn reloading(state: i32) -> bool {
-    matches!(state, 7..=11)
+    (weapon::state::RELOAD..=weapon::state::RELOAD_CLOSE).contains(&state)
 }
 
 /// `PM_UpdatePlayerWalkingFlag`: the sighted walk follows the held sight
@@ -1425,7 +1426,7 @@ fn sprint_posture(pm: &Pmove, keys: u32) -> bool {
 
 /// The melee and offhand weapon states (12..=20).
 fn busy_hands(state: i32) -> bool {
-    (12..=20).contains(&state)
+    (weapon::state::MELEE_SWING..=weapon::state::OFFHAND_RAISE).contains(&state)
 }
 
 /// `PM_UpdateSprint` (0x80570ae). Only a normal player (linked or not)
@@ -1457,7 +1458,7 @@ fn keep_sprint(pm: &mut Pmove) {
     let broken = ps.pm_flags & SPRINT_ENDERS != 0
         || !sprint_posture(pm, SPRINT_BREAKERS)
         || busy_hands(ps.weapon_state)
-        || matches!(ps.weapon_state, 25 | 26);
+        || matches!(ps.weapon_state, state::NVG_ON | state::NVG_OFF);
     let pressed = pm.cmd.buttons & button::SPRINT != 0 && pm.oldcmd.buttons & button::SPRINT == 0;
     if broken {
         end_sprint(pm);

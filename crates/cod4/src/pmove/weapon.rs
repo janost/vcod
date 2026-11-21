@@ -408,7 +408,7 @@ impl WeaponDef {
             destabilization_rate_time: f(2064),
             destabilization_curvature_max: f(2068),
             destabilize_distance: i(2072),
-            aim: super::aim::AimKeys::from_raw(raw),
+            aim: super::aim::AimKeys::from_raw(raw[..0x878].try_into().unwrap()),
         })
     }
 }

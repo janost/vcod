@@ -13,6 +13,8 @@ const HOLD_BREATH_KEY: u32 = 0x2000;
 /// `perk_extraBreath`'s 1.7 default, 5 s (`tools/re/cod4_dvars.py`,
 /// VERIFIED).
 const PERK_EXTRA_BREATH: f32 = 5.0;
+/// `perks` bit of `specialty_holdbreath`.
+const PERK_HOLD_BREATH: u32 = 0x10;
 
 /// Seconds of a breath dvar as whole ms: the product stored as a float,
 /// then truncated (`cod4_lnxded` 0x8062e66, 0x8062e91, 0x8062ef7).
@@ -51,7 +53,7 @@ pub(super) fn update(pm: &mut Pmove, pml: &Pml) {
     }
     // 1.7 adds the perk's time before it tests the hold (0x8062e9d, the
     // `jle` at 0x8062ea1): with the perk a hold time of 0 still holds.
-    let extra = if ps.perks & 0x10 != 0 {
+    let extra = if ps.perks & PERK_HOLD_BREATH != 0 {
         ms(PERK_EXTRA_BREATH)
     } else {
         0

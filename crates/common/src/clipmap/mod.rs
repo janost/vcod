@@ -59,6 +59,10 @@ pub const SURF_MANTLE_OVER: u32 = 0x400_0000;
 /// The sound material's bits.
 pub const SURF_MATERIAL_MASK: u32 = 0x1f0_0000;
 
+/// The material a ladder's rung footstep and jump carry without one of
+/// their own (1.7's immediate 0x15, pmladder.rs and cod4 `Jump_AddSurfaceEvent`).
+pub const LADDER_SURFACE: u32 = 0x15;
+
 /// The sound material a surface's flags carry (bits 20-24).
 pub const fn surface_material(flags: u32) -> u32 {
     (flags & SURF_MATERIAL_MASK) >> 20
