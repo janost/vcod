@@ -1169,7 +1169,7 @@ that bends a copy of the frame behind it.
   material of `common_mp` on it) takes the map unscaled and no depth
   test. VERIFIED (bytecode).
 - `r_distortion` (name 0x706cd0, description "Enable distortion" at
-  0x706cbc) registers at 0x62c59f through `Dvar_RegisterBool` (0x56c350)
+  0x706cbc) registers at 0x62c59f through `Dvar_RegisterNew` (0x56c350)
   with `ebx` as both its default and flags, as `r_zFeather`'s
   registration (0x62b96d) does: default 1, archived. VERIFIED (the
   disassembly; `r_zFeather`'s default in cod4-front-end.md 9.2).

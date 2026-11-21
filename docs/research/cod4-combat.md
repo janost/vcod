@@ -450,11 +450,11 @@ gates).
   0x817d82b and 0x817ded1; no store to it). VERIFIED (the instructions,
   the floats). Ours took (-31, -31, -16)..(31, 31, 86), so a grenade's
   step past the shooter's chest a frame before its strike built no pose.
-- The pose (0x80ca732, 0x80ca99e) returns early when the skeleton is
-  already built for the bones asked (0x80ca754, 0x80ca9c0); else it runs
-  the entity handler's `controller` (handler table +0x1c, 0x80ca785,
-  0x80ca9d3; the player's is 0x80a480e), then builds the skeleton
-  (0x81af4f8). VERIFIED (the instructions). The player's controller is
+- The pose (`G_DObjCalcBone` 0x80ca732, and 0x80ca99e) builds a body's
+  bones once a frame, running the entity handler's `controller` first:
+  cod4-gsc.md 3.2, "The skeleton", has the path. The player's handler's
+  controller is 0x80a480e (handler +0x1c, called at 0x80ca785 and
+  0x80ca9d3). VERIFIED (the instructions). The player's controller is
   `BG_Player_DoControllersInternal` (0x804cf90) at `level.frametime`
   (0x80a4838), easing each control 0.36 degrees a ms (0x820963c,
   0x804d5de..0x804d5e7). VERIFIED (the instructions, the float). So a
@@ -764,7 +764,7 @@ client's 0x94.
   callback (`Scr_PlayerKilled`, 0x80b1c75), before `player_die` sets
   `r.maxs[2]` to 30 (0x80b1da0). VERIFIED (the instructions). A standing
   clone swept `(-15, -15, 0)..(15, 15, 70)`. VERIFIED (gdb at 0x80b9988).
-  The sweep is `G_Trace` (0x80b408a, entities included) passing
+  The sweep is `G_TraceCapsule` (0x80b408a, entities included) passing
   `r.ownerNum - 1`, none for a clone (0x80b990e). INFERRED (the call).
 - A sweep that stopped short: the origin lerped by the raw fraction
   (0x80b9983..0x80b99fd), the fraction then read 0 for `startsolid`

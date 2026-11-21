@@ -1330,11 +1330,8 @@ VERIFIED (the registrations). Then:
   names).
 - Each explode case of
   `CG_EntityEvent` calls `Ragdoll_ExplosionEvent` (0x5bdc10) and then
-  0x48e670: the grenade's at 0x436b3e and 0x436b79, the rocket's at
-  0x436c75 and 0x436cb6, the custom one's at 0x436e24 and 0x436e65,
-  `physicsExplosionSphere`'s at 0x437241 and 0x437284, the cylinder's
-  at 0x4372ce and 0x437311, the jolt's at 0x437359 and 0x437311 (its
-  jump to 0x4372e6). VERIFIED (the calls). 0x48e670 walks the map's
+  `DynEntCl_ExplosionEvent` (0x48e670); the arms, their call sites and
+  their arguments are in cod4-world.md 13.3. 0x48e670 walks the map's
   dynamic entities (the lists at 0x14099b8..0x14099c8, picked by
   0x48e560) and pushes each through `Phys_ObjAddForce` (0x5a5900, call at
   0x48eaa1); the ragdoll's pushes go the same way at 0x5bdfe0.
@@ -1361,9 +1358,8 @@ VERIFIED (the registrations). Then:
   part, and a round does: after its launch's push it meets gravity, the
   world and the rounds this client draws, and the server sends nothing
   more (3.2). INFERRED (the callers above). The dynamic entities
-  themselves: cod4-world.md 13. The jitter's event is `EV_PHYS_JITTER`
-  (60): the jump table at 0x43740c sends 60 to 0x437374, whose call is
-  0x4373ab. VERIFIED (the table). Its push: cod4-world.md 13.8.
+  themselves: cod4-world.md 13. The jitter's event, `EV_PHYS_JITTER`,
+  and its push: cod4-world.md 13.8.
 - 0x48df10's push (from 0x455b92, the first leg only, after
   `BulletTrace` met something): a hit of type 1 under `dynEnt_active`
   on an entity whose `centity_t` +0x18 holds a body (neither 0 nor -1);

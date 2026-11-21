@@ -2083,7 +2083,7 @@ with `objdump`; `vcod_cod4::dynent` is vcod's.
   VERIFIED (the stores). That flag 2 is drawn is INFERRED (the break
   clears both, 0x48de69).
 - A body is made on a dynent's first push only (`DynEntCl_CreatePhysObj`
-  0x48dca0): `Phys_ObjCreate` in world 0 (`edi` 0, 0x48dcc1) at the pose
+  0x48dca0): `Phys_ObjCreate` in world 0 (cod4-gsc.md 3.6) at the pose
   at rest, then 0x490240 gives it the model's `physGeoms` through
   `Phys_ObjSetCollisionFromXModel` (0x5a5710), else a box on the model's
   bounds (0x48fd00, 0x5a5240) or, with the preset's +0x28 byte set, a
@@ -2098,9 +2098,8 @@ with `objdump`; `vcod_cod4::dynent` is vcod's.
   (0x55f4d0 with 0x6df494), then calls 0x5a6d50 with world 0 and
   `cg.time`. VERIFIED (the calls). That the bit is ODE's disabled body
   and 0x5a6d50 runs the world to the time is INFERRED (3.6's names).
-  World 0's `msecStep` lies between 17 and 67 ms as world 1's
-  (the tables at 0x71e7a4 and 0x71e7b0, index 0), picked off its bodies
-  awake after each step by the same rule (cod4-gsc.md 3.6). VERIFIED.
+  World 0's `msecStep` follows 3.6's rule, 17 to 67 ms by its bodies
+  awake (cod4-gsc.md 3.6).
   vcod's `DynEnts::advance_in` steps world 0's bodies together on its
   clock (`physics::WorldClock`).
 
@@ -2118,7 +2117,11 @@ in each explode arm of `CG_EntityEvent` (cod4-gsc.md 3.6): `(local
 client, cylinder, origin, inner, outer, direction, scale, inner damage,
 outer damage)`. VERIFIED (the pushes at 0x436b58..0x436b79,
 0x436c7d..0x436cb6, 0x437249..0x437284, 0x4372d6..0x437311,
-0x437361..0x43736f):
+0x437361..0x43736f). The two calls per arm, the ragdoll's then this one:
+grenade 0x436b3e and 0x436b79, rocket 0x436c75 and 0x436cb6, custom
+0x436e24 and 0x436e65, `physicsExplosionSphere` 0x437241 and 0x437284,
+cylinder 0x4372ce and 0x437311, jolt 0x437359 and 0x437311 (its jump to
+0x4372e6). VERIFIED (the calls). The arms:
 
 | Arm | Inner | Outer | Direction | Scale | Damage |
 |---|---|---|---|---|---|
@@ -2291,8 +2294,9 @@ nothing. VERIFIED (13.1's census).
   calls it: of every zone's rawfiles only `airplane.gsc` (SP) does,
   `physicsJitter(level.player.origin, 5000, 2500, .45, .9)`. VERIFIED
   (`rawfile_dump` over `zone/english`).
-- The client (0x48eb50, from `CG_EntityEvent`'s case 60 at 0x4373ab,
-  the jump table at 0x43740c): nothing under `dynEnt_active` 0 or an
+- The client (0x48eb50, from `CG_EntityEvent`'s case 60,
+  `EV_PHYS_JITTER`: the jump table at 0x43740c sends 60 to 0x437374,
+  whose call is 0x4373ab): nothing under `dynEnt_active` 0 or an
   outer radius of 0 (0x48ebb4). For each list the live entities whose
   contents meet 0x802013 and whose cube meets the box `origin +- outer
   sqrt 2` (the double at 0x70ae78), unbounded in z (0x70af5c,
