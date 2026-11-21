@@ -1095,9 +1095,10 @@ The legs and torso picks are `pmove::anim` (`cod2-player-anims.md` 9);
 
 The weapon half (`PM_Weapon`, the sight flag and lerp, the aim spread, the
 breath hold) is `vcod_cod2::pmove::weapon`, run beside `player_step` by
-`weapon::armed_step` (`cod2-combat.md` 1). The server, the client's
-predictor and `moves_ab` run it, the last with the probe's kar98k at
-retail's index 3.
+`weapon::armed_step` (`cod2-combat.md` 1). The server (through
+`armed_step_with`, with the anim script and its own `ClientEvents`), the
+client's predictor and `moves_ab` run it, the last with the probe's
+kar98k at retail's index 3.
 
 INFERRED choices where the binary's callee was not read:
 
