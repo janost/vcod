@@ -219,7 +219,12 @@ Any other byte is a plain 32-bit `sub` from `serverMessageSequence`
 (0x47378a), so the base wraps on a record sequence past `i32::MAX`; a
 positive one needs its ring slot (`& 0x1f`) valid (0x473842) and holding
 that number (0x47386a), else the message stops there (VERIFIED, the
-instructions). The `jg` that splits the arms tests the base itself
+instructions). Each of those refusals, and the two 0x780 ring-age ones
+(0x47389f, 0x4738c1), stores the message's +0x1c over its +0x14 and sets
+its first word (0x473852..0x473861, 0x47387b..0x47388a,
+0x4738d9..0x4738e8), which the parser carries out to the message
+`CL_PacketEvent` tests (cod4-handshake.md 10, "An illegible message is
+no drop"). VERIFIED (the instructions). The `jg` that splits the arms tests the base itself
 (0x4737c9..0x4737d1), so a byte that reaches message 0 or before takes
 the no-base arm too (VERIFIED, the instructions). vcod's
 `Client::parse_snapshot` wraps the same way and reads a base of 0 or

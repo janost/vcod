@@ -158,13 +158,15 @@ pub fn sender_slot<F, X>(
 
 /// `SV_PacketEvent`'s slot by address and qport and `Netchan_Process`,
 /// the acknowledges checked: a negative `messageAcknowledge` is dropped
-/// (cod2-protocol.md 2.2). So is one of a message never sent, and a
-/// `reliableAcknowledge` past what was sent or so far behind that its key
-/// is gone, which only a forgery or garbage carries (vcod's, as CoD1's
-/// `handle_client_packet`). Nothing is committed yet: a message of the
-/// running level is read to its end first ([`commit`]), so a forged one
-/// moves neither the sequence nor the address.
-pub fn incoming<F, X>(core: &EngineCore<Conn<F, X>>, from: SocketAddr, pkt: &[u8]) -> Incoming {
+/// (cod2-protocol.md 2.2). So is one of a message never sent, which only
+/// a forgery or garbage carries (vcod's, as CoD1's `handle_client_packet`).
+/// A `reliableAcknowledge` a ring behind is retail's clamp: every command
+/// taken as acknowledged and the message dropped
+/// (`Link::reliable_ack_behind`).
+/// Nothing else is committed yet: a message of the running level is read
+/// to its end first ([`commit`]), so a forged one moves neither the
+/// sequence nor the address.
+pub fn incoming<F, X>(core: &mut EngineCore<Conn<F, X>>, from: SocketAddr, pkt: &[u8]) -> Incoming {
     if pkt.len() < 6 {
         return Incoming::Dropped;
     }
@@ -172,15 +174,16 @@ pub fn incoming<F, X>(core: &EngineCore<Conn<F, X>>, from: SocketAddr, pkt: &[u8
     let Some(slot) = slot_of(core, from, qport) else {
         return Incoming::NoSlot;
     };
-    let c = core.clients[slot].as_ref().unwrap();
+    let c = core.clients[slot].as_mut().unwrap();
     let Some(m) = c.link.netchan.process_in(pkt) else {
         return Incoming::Dropped;
     };
     let sent = i64::from(c.link.netchan.outgoing_sequence);
-    if m.message_ack < 0
-        || i64::from(m.message_ack) >= sent
-        || !c.link.reliable_ack_in_window(m.reliable_ack)
-    {
+    if m.message_ack < 0 || i64::from(m.message_ack) >= sent {
+        return Incoming::Dropped;
+    }
+    if c.link.reliable_ack_behind(m.reliable_ack) {
+        c.link.reliable_ack = c.link.netchan.reliable_sequence as i32;
         return Incoming::Dropped;
     }
     Incoming::Message(slot, m)
@@ -281,7 +284,8 @@ pub fn write_snapshot<W: WireGame, X>(
 pub fn write_pending_commands<G: ConnGame>(w: &mut MsgWriter, c: &mut G::Client) {
     c.link.reliable_sent = c.link.netchan.reliable_sequence as i32;
     let mask = c.link.netchan.reliable.len() - 1;
-    for seq in c.link.reliable_ack + 1..=c.link.netchan.reliable_sequence as i32 {
+    // The ack may stand past the sequence (`reliable_ack_behind`).
+    for seq in c.link.reliable_ack.saturating_add(1)..=c.link.netchan.reliable_sequence as i32 {
         G::write_server_command(w, seq, &c.link.netchan.reliable[seq as usize & mask]);
     }
 }

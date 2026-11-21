@@ -1552,9 +1552,9 @@ mod tests {
         };
         let before = snapshot(&sv);
 
-        // Header checks: an ack we never sent.
+        // Header checks: a messageAcknowledge of a message we never sent.
         forged.outgoing_sequence = 0x7fff_fffe;
-        let pkt = forged.build_out(0, 0, 1, &eof, &huff).unwrap();
+        let pkt = forged.build_out(0, 1, 0, &eof, &huff).unwrap();
         sv.handle_packet(spoofer, &pkt, later);
         assert_eq!(snapshot(&sv), before, "a bad ack committed state");
 

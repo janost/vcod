@@ -105,13 +105,16 @@ impl Server {
             );
             return;
         }
-        // 0x808ca1a drops an ack too far behind. One ahead of what we sent is
-        // bogus too.
-        if !c.link.reliable_ack_in_window(m.reliable_ack) {
+        // A ring behind takes every command as acknowledged and drops the
+        // message (CoDMP.exe 0x45ac4a..0x45ac65, docs/protocol-1.1.md,
+        // "Message headers"); one past what we sent passes.
+        if c.link.reliable_ack_behind(m.reliable_ack) {
             log::debug!(
                 "client {slot}: reliableAcknowledge {} out of range",
                 m.reliable_ack
             );
+            let c = self.core.clients[slot].as_mut().unwrap();
+            c.link.reliable_ack = c.link.netchan.reliable_sequence as i32;
             return;
         }
 
@@ -777,8 +780,11 @@ mod tests {
         );
     }
 
+    /// A reliableAcknowledge a ring behind (here `i32::MIN`) takes every
+    /// command as acknowledged and drops the message; one past what was
+    /// sent is let through, as retail's signed test lets it.
     #[test]
-    fn a_message_with_an_out_of_range_reliable_acknowledge_is_ignored() {
+    fn a_reliable_acknowledge_a_ring_behind_is_clamped() {
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
         let mut nc = connected(&mut sv, addr(5), now);
@@ -786,15 +792,21 @@ mod tests {
         let mut w = MsgWriter::new(&huff);
         w.write_bits(CLC_EOF, 2);
         let ops = w.into_ops();
+        for i in 0..3 {
+            sv.send_server_command(0, &format!("v c{i} 1"));
+        }
+        let link = |sv: &Server| {
+            let c = sv.core.clients[0].as_ref().unwrap();
+            (c.link.reliable_ack, c.link.netchan.reliable_sequence as i32)
+        };
+        let (ack, seq) = link(&sv);
+        assert!(ack < seq);
 
         // serverId 0 asks for a gamestate; only the ack makes this inadmissible.
         let pkt = nc.build_out(0, 0, i32::MIN, &ops, &huff).unwrap();
         sv.handle_packet(addr(5), &pkt, now);
         assert!(sv.take_outgoing().is_empty(), "bogus ack got a reply");
-
-        let pkt = nc.build_out(0, 0, 1, &ops, &huff).unwrap();
-        sv.handle_packet(addr(5), &pkt, now);
-        assert!(sv.take_outgoing().is_empty(), "ack ahead of us got a reply");
+        assert_eq!(link(&sv), (seq, seq));
 
         // messageAcknowledge names a message we sent; we have sent none.
         let pkt = nc.build_out(0, 1, 0, &ops, &huff).unwrap();
@@ -804,12 +816,13 @@ mod tests {
             "messageAcknowledge ahead of us got a reply"
         );
 
-        let pkt = nc.build_out(0, 0, 0, &ops, &huff).unwrap();
+        let pkt = nc.build_out(0, 0, seq + 5, &ops, &huff).unwrap();
         sv.handle_packet(addr(5), &pkt, now);
         assert!(
             !sv.take_outgoing().is_empty(),
-            "no gamestate for a good ack"
+            "no gamestate for an ack ahead of us"
         );
+        assert_eq!(link(&sv).0, seq + 5);
         assert_eq!(sv.client_count(), 1);
     }
 

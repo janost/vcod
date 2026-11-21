@@ -675,16 +675,25 @@ impl App {
     }
 
     /// `Com_ChangePlayerProfile`:
-    /// `players/profiles/active.txt` names the profile and its
-    /// config takes over, vcod's `vcod_mp.cfg` there, else 1.7's
-    /// `config_mp.cfg`; with neither, `name` takes the profile's name as
-    /// `Com_SetPlayerProfile` gives an empty one. The config is written at
-    /// once, as every later change writes it. Retail resets every dvar
-    /// first; vcod keeps what the file does not set (cod4-front-end.md 3).
+    /// `players/profiles/active.txt` names the profile, every cvar goes
+    /// back to its default, `default_mp.cfg` and `language.cfg` run, and
+    /// the profile's config takes over, vcod's `vcod_mp.cfg` there, else
+    /// 1.7's `config_mp.cfg`; with neither, `name` takes the profile's name
+    /// as `Com_SetPlayerProfile` gives an empty one. The config is written
+    /// at once, as every later change writes it; a latched cvar left
+    /// pending runs `snd_restart` (cod4-front-end.md 3).
     fn load_cod4_profile(&mut self, name: &str) {
-        let Some(config) = change_profile(&self.game_dir, name, &mut self.shell) else {
+        let fs = &self.fs;
+        let mut read = |file: &str| fs.read(file);
+        let Some((config, snd_restart)) =
+            change_profile(&self.game_dir, name, &mut self.shell, &mut read)
+        else {
             return;
         };
+        if snd_restart {
+            self.ui_pending
+                .push(crate::frontend::UiEffect::Command("snd_restart".into()));
+        }
         self.config_path = config;
         if let Some(f) = self.session.cod4_front_mut() {
             f.sync(&self.shell);
@@ -740,11 +749,20 @@ fn cod4_mod_dir(value: &str) -> Option<String> {
     vcod_common::game_dir::confined_rel_path(value).map(|_| value.to_string())
 }
 
-/// [`App::load_cod4_profile`]'s files: `active.txt` written, the
-/// profile's config run (vcod's, else 1.7's), `name` given the profile's
-/// when it has none, and vcod's config written there. Returns that
-/// config's path; `None` when the profile's directory is gone.
-fn change_profile(root: &std::path::Path, name: &str, shell: &mut Shell) -> Option<PathBuf> {
+/// [`App::load_cod4_profile`]'s files and dvars, in `Com_ChangePlayerProfile`'s
+/// order (cod4-front-end.md 3): `active.txt` written, every cvar back to
+/// its default ([`Shell::reset_cvars`]), `default_mp.cfg` and
+/// `language.cfg` run through `read`, then the profile's config (vcod's,
+/// else 1.7's), `name` given the profile's when it has none, and vcod's
+/// config written there. Returns that config's path and whether a latched
+/// cvar asks for `snd_restart`; `None` when the profile's directory is
+/// gone.
+fn change_profile(
+    root: &std::path::Path,
+    name: &str,
+    shell: &mut Shell,
+    read: &mut dyn FnMut(&str) -> Option<Vec<u8>>,
+) -> Option<(PathBuf, bool)> {
     use crate::play::cod4_menus::front::{profile_dir, profiles_root};
     let Some(dir) = profile_dir(root, name) else {
         log::warn!("cod4: no profile {name:?}");
@@ -753,6 +771,11 @@ fn change_profile(root: &std::path::Path, name: &str, shell: &mut Shell) -> Opti
     let active = profiles_root(root).join("active.txt");
     if let Err(e) = std::fs::write(&active, name) {
         log::warn!("cannot write {}: {e}", active.display());
+    }
+    let reset = shell.reset_cvars();
+    let execs = shell.execute("exec default_mp.cfg\nexec language.cfg");
+    for e in reset.into_iter().chain(shell.run_execs(execs, read)) {
+        log::debug!("cod4 profile {name}: {e:?}");
     }
     let config = dir.join(crate::CONFIG_FILE);
     let text =
@@ -768,7 +791,7 @@ fn change_profile(root: &std::path::Path, name: &str, shell: &mut Shell) -> Opti
     if let Err(e) = std::fs::write(&config, shell.config_text()) {
         log::warn!("cannot write {}: {e}", config.display());
     }
-    Some(config)
+    Some((config, shell.latch_pending()))
 }
 
 /// With no server the menus answer nobody: a `scriptMenuResponse` in a
@@ -2101,7 +2124,7 @@ mod tests {
         )
         .unwrap();
         let mut shell = Shell::new();
-        let config = change_profile(root.path(), "Fresh", &mut shell).unwrap();
+        let (config, _) = change_profile(root.path(), "Fresh", &mut shell, &mut |_| None).unwrap();
         assert_eq!(config, profiles.join("Fresh").join(crate::CONFIG_FILE));
         assert_eq!(
             std::fs::read_to_string(profiles.join("active.txt")).unwrap(),
@@ -2109,11 +2132,11 @@ mod tests {
         );
         assert_eq!(shell.cvar("name"), Some("Fresh"));
         assert!(std::fs::read_to_string(&config).unwrap().contains("Fresh"));
-        let config = change_profile(root.path(), "retail", &mut shell).unwrap();
+        let (config, _) = change_profile(root.path(), "retail", &mut shell, &mut |_| None).unwrap();
         assert_eq!(config, profiles.join("Retail").join(crate::CONFIG_FILE));
         assert_eq!(shell.cvar("name"), Some("Old Hand"));
         assert_eq!(shell.cvar("sensitivity"), Some("7"));
-        assert!(change_profile(root.path(), "gone", &mut shell).is_none());
+        assert!(change_profile(root.path(), "gone", &mut shell, &mut |_| None).is_none());
     }
 
     /// 1.7's `config_mp.cfg` holding a byte that is not UTF-8 runs as
@@ -2125,9 +2148,46 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config_mp.cfg"), b"seta name \"J\xf6rg\"\n").unwrap();
         let mut shell = Shell::new();
-        change_profile(root.path(), "Retail", &mut shell).unwrap();
+        change_profile(root.path(), "Retail", &mut shell, &mut |_| None).unwrap();
         assert_eq!(shell.cvar("name"), Some("J\u{f6}rg"));
         let vcod = std::fs::read_to_string(dir.join(crate::CONFIG_FILE)).unwrap();
         assert!(vcod.contains("seta name \"J\u{f6}rg\""), "{vcod}");
+    }
+
+    /// A profile switch puts every cvar back to its default and runs
+    /// `default_mp.cfg` and `language.cfg` before the profile's config
+    /// (`iw3mp.exe` 0x4fad7e, 0x4ff130): a session's value the config does
+    /// not set goes, the default config's binds and dvars land, and the
+    /// profile's own values win over both.
+    #[test]
+    fn cod4_profile_change_resets_then_runs_the_default_configs() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("players/profiles/Retail");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config_mp.cfg"),
+            "unbindall\nbind w \"+forward\"\nseta name \"Old Hand\"\nseta m_pitch \"0.03\"\n",
+        )
+        .unwrap();
+        let mut shell = Shell::new();
+        shell.execute("seta sensitivity 9; seta cl_run 0");
+        let mut execed = Vec::new();
+        let mut read = |file: &str| {
+            execed.push(file.to_string());
+            match file {
+                "default_mp.cfg" => Some(
+                    b"set ui_buildLocation -60 460\nseta m_pitch 0.022\nseta cl_run 0\n".to_vec(),
+                ),
+                "language.cfg" => Some(Vec::new()),
+                _ => None,
+            }
+        };
+        change_profile(root.path(), "Retail", &mut shell, &mut read).unwrap();
+        assert_eq!(execed, ["default_mp.cfg", "language.cfg"]);
+        assert_eq!(shell.cvar("sensitivity"), Some("5"), "back to its default");
+        assert_eq!(shell.cvar("cl_run"), Some("0"), "default_mp.cfg's");
+        assert_eq!(shell.cvar("ui_buildLocation"), Some("-60 460"));
+        assert_eq!(shell.cvar("m_pitch"), Some("0.03"), "the profile's");
+        assert_eq!(shell.cvar("name"), Some("Old Hand"));
     }
 }

@@ -642,6 +642,48 @@ mod tests {
         }
     }
 
+    /// A positive base whose ring slot is empty reads against the zeroed
+    /// slot the gamestate left (`Delta from invalid frame`, CoD2MP_s.exe
+    /// 0x4137d4) and the frame is invalid, not an error.
+    #[test]
+    fn a_delta_from_an_empty_slot_reads_from_zero_and_is_invalid() {
+        let huff = Huffman::new();
+        let gs = Gamestate2 {
+            server_command_sequence: 0,
+            configstrings: Default::default(),
+            baselines: Default::default(),
+            client_num: 0,
+            checksum_feed: 0,
+        };
+        let mut ps = PlayerState2::default();
+        ps.f[field_index(&PLAYER_STATE_FIELDS, "pm_type")] = 4;
+        let f = Frame2 {
+            server_time: Msec::from_raw(1000),
+            ps,
+            entities: vec![],
+            clients: vec![],
+        };
+        let empty = Frame2 {
+            server_time: Msec::from_raw(0),
+            ps: PlayerState2::default(),
+            entities: vec![],
+            clients: vec![],
+        };
+        let mut parser = Parser::new();
+        let mut w = MsgWriter::new(&huff);
+        write_gamestate(&mut w, &gs);
+        w.write_byte(Svc::Eof as u8);
+        parser.parse(1, &w.into_ops()).unwrap();
+        let mut w = MsgWriter::new(&huff);
+        write_snapshot(&mut w, Some(&empty), 2, 4, &f, |_| None, 0);
+        w.write_byte(Svc::Eof as u8);
+        parser.parse(5, &w.into_ops()).unwrap();
+        let s = parser.frame(5).unwrap();
+        assert!(!s.valid);
+        assert_eq!(s.delta_num, 3);
+        assert_eq!(s.ps, f.ps);
+    }
+
     /// A message that fails after a server command, a gamestate or a
     /// snapshot leaves the parser as it was: the next packet acknowledges
     /// no command the caller never got.

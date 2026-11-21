@@ -149,19 +149,47 @@ confirmed on 1.7.
   and 0x4f9280 runs the command buffer is INFERRED. So a switch
   does exec the new profile's config, after `default_mp.cfg` and
   `language.cfg`.
+- The dvar walk 0x56d430 takes the dvar lock (0xcba73fc), then for each of
+  the 0xcba73f8 dvars (stride 0x4c from 0xcbab808) whose word at +0x8 is
+  not 0 calls 0x56b1b0 on it with its 16 bytes at +0x2c and a 1
+  (0x56d470..0x56d4ab). 0x56b1b0 is the dvar set: it prints `      dvar
+  set %s %s` (0x6f3de4) under a debug word, and for a source of 1 or 2
+  refuses a dvar whose word at +0x8 has 0x40 (`%s is read only.`,
+  0x56b335..0x56b347) or 0x10 (0x56b356..0x56b364), refuses one with 0x80
+  while the cheat dvar at 0xcba7404 is off (0x56b373..0x56b392), and for
+  0x20 compares against +0x1c and stores there instead (0x56b3a1..0x56b40a,
+  the `will be changed upon restarting` path). VERIFIED (the instructions
+  and the strings). That +0x8 is the flags (read-only, write-protected,
+  cheat, latched), +0x2c the reset value and +0x1c the latched one is
+  INFERRED (the refusals' strings). So the reset is a console set of each
+  flagged dvar to its default: a read-only, write-protected or cheat dvar
+  keeps its value, a latched one latches it. 0x56d370 walks the same table
+  comparing each dvar's +0xc with its +0x1c (0x56af70 on the type at
+  +0xa, 0x56d3b0..0x56d3fe) and returns 1 on the first that differs
+  (0x56d411..0x56d41e): the `snd_restart` test is a latched value left
+  pending. VERIFIED (the instructions). Between `Com_SetPlayerProfile` and
+  that test 0x579900 runs on `com_playerProfile` (`%s/%s` and `mpdata`,
+  0x6c81dc, 0x6f5c64: the profile's stats) and then 0x4fe930. VERIFIED
+  (the calls at 0x4fad99, 0x4fad9e); what 0x4fe930 does is unread.
 - vcod runs those scripts as written (`play::cod4_menus::front`): the
   list is `players/profiles/`' directories (`front::profile_list`, feeder
   24, `player_profile`'s list; VERIFIED, the walk's `feeder`), a pick
   sets `ui_playerProfileSelected`, create and delete make and remove the
   directory, and a load hands the client `front::Request::LoadProfile`.
-  The client (`cod4_front::change_profile`) writes `active.txt`, runs the
-  profile's `vcod_mp.cfg`, else its `config_mp.cfg`, gives `name` the
-  profile's name when it has no config or an empty `name`, and writes
-  `vcod_mp.cfg` there at once. A file that is not UTF-8 (1.7's config
-  with a Latin-1 name) reads as Latin-1, one char a byte. It resets no
-  dvar first and runs neither `default_mp.cfg` nor `language.cfg`: what
-  the config does not set keeps its value. The front end has no
-  connection to drop and no sound to restart. With no profile on disk the main menu
+  The client (`cod4_front::change_profile`) takes 1.7's order: it writes
+  `active.txt`, puts every cvar with a flag (archived, userinfo, cheat,
+  latched) back to its default through the console's set
+  (`Shell::reset_cvars`), runs `default_mp.cfg` and `language.cfg` off
+  the iwds, then the profile's `vcod_mp.cfg`, else its `config_mp.cfg`,
+  gives `name` the profile's name when it has no config or an empty
+  `name`, writes `vcod_mp.cfg` there at once, reloads the stats and runs
+  `snd_restart` when a latched cvar is left pending
+  (`cod4_profile_change_resets_then_runs_the_default_configs`). A file
+  that is not UTF-8 (1.7's config with a Latin-1 name) reads as Latin-1,
+  one char a byte. vcod's flags are fewer than 1.7's, so a 1.7 dvar
+  flagged only in ways vcod does not record is reset there and kept
+  here, and a value set on the command line keeps it (vcod's). The front
+  end has no connection to drop. With no profile on disk the main menu
   asks for one as 1.7's does; vcod has no stand-in profile. A deleted
   profile that held the config sends the config back to
   `main/vcod_mp.cfg` until another loads. Create, delete and load

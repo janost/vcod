@@ -314,3 +314,37 @@ fn a_cod4_server_shrugs_off_malformed_packets() {
     assert!(c.link.netchan.incoming_sequence > seq);
     assert_eq!(c.state, State::Active);
 }
+
+/// `sv_floodprotect` 4 (`cod4_lnxded` 0x8170c97..0x8170f97): an active
+/// client's fifth game command inside the window reaches no game; `team `,
+/// `score` and `mr ` never count, case for case; a refused one moves the
+/// window on, and one 800 ms past the last counted one refills the count.
+#[test]
+fn cod4_flood_protect_counts_game_commands_in_the_window() {
+    let (mut sv, _, _) = joined();
+    let c = sv.core.clients[0].as_mut().unwrap();
+    c.link.next_reliable_ms = 0;
+    let mut got = Vec::new();
+    for (t, text) in [
+        (1000, "say a"),
+        (1001, "say b"),
+        (1002, "say c"),
+        (1003, "say d"),
+        (1004, "say e"),
+        (1005, "score"),
+        (1005, "mr 3 1 x"),
+        (1005, "team axis"),
+        (1006, "Score"),
+        (1805, "say f"),
+        (2605, "say g"),
+        (2606, "say h"),
+    ] {
+        got.push((text, flood_check(c, 4, t, text)));
+    }
+    let refused: Vec<&str> = got.iter().filter(|(_, ok)| !ok).map(|(t, _)| *t).collect();
+    assert_eq!(refused, ["say e", "Score", "say f"]);
+    assert_eq!(c.extra.flood_count, 2, "{got:?}");
+    assert!(flood_check(c, 0, 2607, "say i"), "sv_floodprotect 0");
+    c.state = State::Primed;
+    assert!(flood_check(c, 4, 2607, "say j"), "not in the world");
+}

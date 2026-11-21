@@ -1710,6 +1710,39 @@ impl Shell {
         }
     }
 
+    /// `Com_ChangePlayerProfile`'s dvar walk (`iw3mp.exe` 0x56d430): every
+    /// cvar with a flag goes back to its default as a console `set` would
+    /// take it (0x56b1b0 under source 1), so a cheat cvar refuses and a
+    /// latched one latches. Read-only and write-protected ones refuse
+    /// anyway and are skipped; a command-line value stays (vcod's).
+    pub fn reset_cvars(&mut self) -> Vec<Effect> {
+        let reset: Vec<(String, String)> = self
+            .cvars
+            .iter()
+            .filter(|(k, c)| {
+                (c.archive || c.userinfo || c.cheat || c.latch)
+                    && !c.rom
+                    && !c.init
+                    && !self.run_only.contains_key(*k)
+            })
+            .map(|(_, c)| (c.name.clone(), c.default.clone()))
+            .collect();
+        let mut out = Vec::new();
+        for (name, value) in reset {
+            self.set(&name, &value, false, &mut out);
+        }
+        out
+    }
+
+    /// Whether a cvar holds a latched value other than its own: the test
+    /// `Com_ChangePlayerProfile` runs `snd_restart` on (`iw3mp.exe`
+    /// 0x56d370, current against latched for every dvar).
+    pub fn latch_pending(&self) -> bool {
+        self.cvars
+            .values()
+            .any(|c| c.latched.as_ref().is_some_and(|l| *l != c.value))
+    }
+
     /// Re-registration takes a latched value (`Cvar_Get`, CoDMP.exe
     /// 0x439489): `vid_restart` re-registers `cl_language` (0x40fd14), and
     /// startup registers it after the config ran. True when a value moved.
