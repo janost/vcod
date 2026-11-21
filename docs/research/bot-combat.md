@@ -146,7 +146,10 @@ knobs; `JOBS` does not change it.
 non-LAN address so rate and `snaps` pacing run; that changes the match, so
 its `digest` lines compare only with other `NETDIGEST` runs. A CoD2 server
 under it runs `svs.time` on the frame clock (`Cod2Server::test_frame_clock`),
-since the wall clock keys the challenge and so every netchan byte.
+since the wall clock keys the challenge and so every netchan byte. CoD4's
+observer is an in-process 1.7 client (`Spectator4`, the `OBSERVERS` one)
+fed the server's own datagrams; its challenge already runs off the frame
+clock and the level's `rand()`.
 `NETDUMP=<dir>` writes the datagrams. `VCOD_TICK_TRACE=<dir>` writes each
 match's tick step log (`vcod_server::tick_trace`, one line per `SV_Frame`
 step and its slot); the first differing line names the step that moved.
