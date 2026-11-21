@@ -93,15 +93,10 @@ impl Run {
     fn think(&mut self, slot: usize, view: [f32; 2], buttons: u32) {
         let level = self.level();
         let ps = level.pm_state(slot).unwrap();
-        let short = |a: f32, d: f32| ((a - d) * 65536.0 / 360.0) as i32 as u16;
         let cmd = UserCmd {
             server_time: level.level_time() + 50,
             buttons,
-            angles: [
-                short(view[0], ps.delta_angles[0]),
-                short(view[1], ps.delta_angles[1]),
-                0,
-            ],
+            angles: vcod_cod4::net::conn::cmd_angles([view[0], view[1], 0.0], ps.delta_angles),
             weapon: ps.weapon as u8,
             offhand: ps.off_hand_index as u8,
             ..Default::default()
