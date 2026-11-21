@@ -33,7 +33,7 @@ Ranked by how much a player notices.
   S.
 - Smaller open items, each in its doc: effect model elements
   and whether CoD4's sizes are radii (cod4-effects.md 9); the predicted
-  origin ring a playerstate without bit 0 needs (cod4-netfields.md 11);
+  origin vcod's moves report (cod4-netfields.md 11);
   `winvoice_mic_mute`, `winvoice_save_voice` and the record level meter
   (cod4-voice.md 5).
 
@@ -51,6 +51,11 @@ Ranked by how much a player notices.
 - Single Player's popup does nothing: vcod is multiplayer only.
 
 ## 3. Closed
+
+- A playerstate sent without origin (bit 0) kept the base's origin and
+  velocity. It now takes them, the view, `bobCycle` and `movementDir`
+  off the archive row for its `commandTime`, as `iw3mp.exe` 0x507280
+  does (cod4-netfields.md 11). What vcod's moves report is still open.
 
 - `timedemo` wrote no csv. It now writes 1.7's
   `demos/timedemo_<map>_mode_<r_mode>.csv`, a row a frame

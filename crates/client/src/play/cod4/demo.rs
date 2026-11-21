@@ -14,9 +14,8 @@ use super::{Cod4Session, Source, info_value, ps_f32};
 /// 0x469120) and `CL_SetCGameTime`'s demo arm (0x45c440).
 pub(super) struct DemoPlay {
     reader: vcod_cod4::net::demo::DemoReader,
+    /// Its `archive` holds the rows the demo carries (`cl.clientArchive`).
     pub(super) client: Client,
-    /// The archive rows the demo carries (`cl.clientArchive`).
-    pub(super) archive: vcod_cod4::net::demo::ArchiveRing,
     /// Every archive row in the file, by time: the recorder's view at
     /// each of his frames, read ahead of the messages (cod4-demos.md 5).
     pub(super) views: Vec<vcod_cod4::net::demo::Archive>,
@@ -49,8 +48,8 @@ impl DemoPlay {
         }
         match self.reader.next_record() {
             Ok(Record::Archive(i, a)) => {
-                self.archive.rows[i] = a;
-                self.archive.index = (i + 1) % vcod_cod4::net::demo::ARCHIVE_ROWS;
+                self.client.archive.rows[i] = a;
+                self.client.archive.index = (i + 1) % vcod_cod4::net::demo::ARCHIVE_ROWS;
                 true
             }
             Ok(Record::Message(seq, msg)) => {
@@ -216,7 +215,6 @@ impl Cod4Session {
             views,
             reader: vcod_cod4::net::demo::DemoReader::new(data),
             client: Client::new(),
-            archive: Default::default(),
             clock: crate::play::demos::DemoTime::new(timedemo),
             csv: None,
             ended: false,
@@ -322,7 +320,7 @@ impl Cod4Session {
             &name,
             conn.message_sequence(),
             &msg,
-            &self.archive,
+            &conn.client.archive,
         ) {
             Ok(r) => {
                 self.recording = Some(r);

@@ -193,6 +193,10 @@ pub struct Client {
     /// The newest server command and its text (keys the client's messages).
     pub server_command_sequence: i32,
     pub server_commands: BTreeMap<i32, Vec<u8>>,
+    /// `cl.clientArchive`: the rows a live client adds as each move goes
+    /// out, or a demo's archive records; a playerstate sent without
+    /// origin takes its predicted fields off it (cod4-netfields.md 11).
+    pub archive: super::demo::ArchiveRing,
 }
 
 impl Client {
@@ -354,8 +358,12 @@ impl Client {
             map_center: gs.map_center,
         };
         let mut wire = SnapshotWire::default();
-        let (ps, ps_wire) = delta::read_delta_playerstate(r, &ctx, old.map(|o| &o.ps))
+        let (mut ps, ps_wire) = delta::read_delta_playerstate(r, &ctx, old.map(|o| &o.ps))
             .with_context(|| format!("snapshot {message_num} playerstate"))?;
+        if !ps.origin_sent {
+            self.archive
+                .fill_unsent(&mut ps, old.map_or(&*delta::ZERO_PS, |o| &o.ps));
+        }
         wire.ps = ps_wire;
 
         let mut entities = Vec::new();
@@ -611,6 +619,85 @@ pub fn write_gamestate(w: &mut MsgWriter, gs: &Gamestate) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A delta snapshot sent without origin (its playerstate's first bit
+    /// 0) takes origin, velocity, view, `bobCycle` and `movementDir` off
+    /// the archive row for its `commandTime`, as 1.7's reader does
+    /// (`iw3mp.exe` 0x507252; cod4-netfields.md 11), not the base's.
+    #[test]
+    fn a_playerstate_sent_without_origin_takes_the_archive_row() {
+        use super::super::demo::Archive;
+        use super::super::wire::{EOF, Frame4, write_snapshot};
+        use crate::ps_word;
+        use vcod_common::net::protocol::SnapshotHead;
+        let mut c = Client::new();
+        c.gamestate = Some(Gamestate::default());
+        let mut ps1 = delta::PlayerState::default();
+        ps1.words[ps_word!("commandTime")] = 1000;
+        for (w, v) in ps_word!(3 "origin").into_iter().zip([10.0f32, 20.0, 30.0]) {
+            ps1.words[w] = v.to_bits();
+        }
+        let huff = Huffman::new();
+        let message = |w: MsgWriter| huff.compress(&w.into_ops());
+        let mut w = MsgWriter::new(&UNUSED_HUFF);
+        let frame = Frame4 {
+            server_time: Msec::from_raw(1000),
+            map_center: Default::default(),
+            ps: ps1.clone(),
+            entities: Vec::new(),
+            clients: Vec::new(),
+        };
+        let head = SnapshotHead {
+            delta_num: 0,
+            snap_flags: 0,
+        };
+        write_snapshot(&mut w, None, &frame, head, &BTreeMap::new());
+        w.write_byte(EOF);
+        let first = message(w);
+        c.parse(1, &first).unwrap();
+        // The row the client sent with its move at 1050, between two
+        // others.
+        let row = |t: i32, x: f32| Archive {
+            server_time: t,
+            origin: [x, 2.0, 3.0],
+            velocity: [4.0, 5.0, 6.0],
+            bob_cycle: 7,
+            movement_dir: -8,
+            view_angles: [9.0, 10.0, 11.0],
+        };
+        for (t, x) in [(1000, 1.0), (1050, 100.0), (1100, 200.0)] {
+            c.archive.add(row(t, x));
+        }
+        let mut ps2 = ps1.clone();
+        ps2.words[ps_word!("commandTime")] = 1050;
+        ps2.words[ps_word!("bobCycle")] = 99;
+        ps2.origin_sent = false;
+        let ctx = Ctx {
+            time: Msec::from_raw(1050),
+            map_center: Default::default(),
+        };
+        let mut w = MsgWriter::new(&UNUSED_HUFF);
+        w.write_byte(SVC_SNAPSHOT);
+        w.write_long(1050);
+        w.write_byte(1);
+        w.write_byte(0);
+        let wire = delta::PsWire::natural(&ps1, &ps2);
+        delta::write_delta_playerstate(&mut w, &ctx, Some(&ps1), &ps2, &wire);
+        delta::write_entity_index(&mut w, &mut -1, delta::ENTITYNUM_NONE, GENTITYNUM_BITS);
+        w.write_bits(0, 1);
+        w.write_byte(EOF);
+        let second = message(w);
+        c.parse(2, &second).unwrap();
+        let ps = &c.snapshots[1].ps;
+        assert!(!ps.origin_sent);
+        let f = |w: usize| ps.word_f32(w);
+        assert_eq!(ps_word!(3 "origin").map(f), [100.0, 2.0, 3.0]);
+        assert_eq!(ps_word!(3 "velocity").map(f), [4.0, 5.0, 6.0]);
+        assert_eq!(ps_word!(3 "viewangles").map(f), [9.0, 10.0, 11.0]);
+        assert_eq!(ps.word(ps_word!("bobCycle")), 7);
+        assert_eq!(ps.word(ps_word!("movementDir")) as i32, -8);
+        assert_eq!(ps.word(ps_word!("commandTime")), 1050);
+    }
 
     /// A long connection keeps a bounded window of server commands, and a
     /// `d` past the configstring table changes nothing.
