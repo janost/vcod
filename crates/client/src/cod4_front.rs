@@ -25,7 +25,7 @@ use crate::console::shell::Shell;
 use crate::hud::HudQuad;
 use crate::play::cod4_menus::browser::{Browser, JoinRequest};
 use crate::play::cod4_menus::front::{Request, active_profile};
-use crate::play::cod4_menus::{Host, MenuKey, ScriptMenus};
+use crate::play::cod4_menus::{MenuKey, ScriptMenus};
 use crate::play::cod4_profile::ProfileStats;
 use crate::session::Session;
 use crate::{App, Mode, cod4_fly, console, version_tag};
@@ -211,7 +211,7 @@ impl Cod4Front {
 
     /// The console's cvars and binds, as the option pages read them.
     pub(crate) fn sync(&mut self, shell: &Shell) {
-        self.menus.host = Host::from_shell(shell, Vec::new());
+        self.menus.host.refresh(shell, Vec::new());
     }
 
     /// A key while the front end is up (`Menu_HandleKey`): a bind row

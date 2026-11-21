@@ -124,8 +124,11 @@ pub struct Cod4Players {
     parts: RigParts,
     bodies: HashMap<u32, Body>,
     pub swing_speed: f32,
-    /// The server's lean dvars, which CoD4's controllers read.
+    /// The server's lean dvars, which CoD4's controllers read, and the
+    /// gamestate they were read off (its count, command sequence and
+    /// checksum feed).
     pub lean: LeanDvars,
+    pub lean_gamestate: Option<(u32, i32, i32)>,
     /// The last frame's render time, for the next frame's step.
     last_ms: Option<i32>,
     /// The last [`Self::posed`]'s weapon tags by entity number.
@@ -148,6 +151,7 @@ impl Default for Cod4Players {
             bodies: HashMap::new(),
             swing_speed: BG_SWING_SPEED,
             lean: LeanDvars::default(),
+            lean_gamestate: None,
             last_ms: None,
             tags: HashMap::new(),
             heads: HashMap::new(),

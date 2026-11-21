@@ -560,15 +560,40 @@ fn menu_cvar_latch(name: &str) -> u32 {
 
 pub struct Shell {
     /// Keyed by lowercase name; `Cvar::name` keeps the registered spelling.
-    cvars: BTreeMap<String, Cvar>,
+    cvars: Counted<BTreeMap<String, Cvar>>,
     /// Keyed by canonical key name ([`keys::canonical`]).
-    binds: BTreeMap<String, String>,
+    binds: Counted<BTreeMap<String, String>>,
     /// Cvars set for this run only ([`Shell::set_for_run`]), keyed like
     /// `cvars`, with the value the config keeps for them.
     run_only: BTreeMap<String, String>,
     /// CoD2's enum dvars' domains ([`Shell::set_enum_domain`]), keyed like
     /// `cvars`.
-    enums: BTreeMap<String, Vec<String>>,
+    enums: Counted<BTreeMap<String, Vec<String>>>,
+    /// Commands run, for [`Shell::generation`]: a refused `set` writes
+    /// nothing but still tells a copy to look again.
+    commands: u64,
+}
+
+/// A table every write to goes through [`Counted::edit`], which counts it
+/// for [`Shell::generation`].
+#[derive(Clone, Debug, Default)]
+struct Counted<T> {
+    inner: T,
+    writes: u64,
+}
+
+impl<T> std::ops::Deref for Counted<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.inner
+    }
+}
+
+impl<T> Counted<T> {
+    fn edit(&mut self) -> &mut T {
+        self.writes += 1;
+        &mut self.inner
+    }
 }
 
 impl Default for Shell {
@@ -598,10 +623,11 @@ impl Shell {
     /// The client's own cvars at their retail defaults, and [`DEFAULT_BINDS`].
     pub fn new() -> Shell {
         let mut s = Shell {
-            cvars: BTreeMap::new(),
-            binds: BTreeMap::new(),
+            cvars: Counted::default(),
+            binds: Counted::default(),
             run_only: BTreeMap::new(),
-            enums: BTreeMap::new(),
+            enums: Counted::default(),
+            commands: 0,
         };
         // CL_Init (CoDMP.exe 0x41236b; 1.5 and UO alike): "Unknown Soldier",
         // archived and userinfo (docs/research/cod11-console.md 5).
@@ -849,13 +875,13 @@ impl Shell {
         // (`Shell::upgrade_config`); a config without it reads 0.
         s.register("vc_cfgVersion", &CONFIG_VERSION.to_string(), ARCHIVE);
         for (key, cmd) in DEFAULT_BINDS {
-            s.binds.insert(key.to_string(), cmd.to_string());
+            s.binds.edit().insert(key.to_string(), cmd.to_string());
         }
         s
     }
 
     fn register(&mut self, name: &str, value: &str, flags: u32) {
-        self.cvars.insert(
+        self.cvars.edit().insert(
             name.to_ascii_lowercase(),
             Cvar {
                 name: name.to_string(),
@@ -880,7 +906,7 @@ impl Shell {
     pub fn apply_systeminfo(&mut self, info: &str) -> Vec<Effect> {
         let mut out = Vec::new();
         if atoi_msvc(net::info_value_for_key(info, "sv_cheats").unwrap_or("")) == 0 {
-            for c in self.cvars.values_mut().filter(|c| c.cheat) {
+            for c in self.cvars.edit().values_mut().filter(|c| c.cheat) {
                 if c.value != c.default {
                     c.value.clone_from(&c.default);
                     if c.archive {
@@ -907,7 +933,7 @@ impl Shell {
     fn set_forced(&mut self, name: &str, value: &str, out: &mut Vec<Effect>) {
         let key = name.to_ascii_lowercase();
         self.run_only.remove(&key);
-        let c = self.cvars.entry(key).or_insert_with(|| Cvar {
+        let c = self.cvars.edit().entry(key).or_insert_with(|| Cvar {
             name: name.to_string(),
             value: value.to_string(),
             default: value.to_string(),
@@ -969,7 +995,7 @@ impl Shell {
         self.set(name, value, false, &mut Vec::new());
         // A command-line value is the start-up value: a latched cvar takes
         // it now rather than at the next restart.
-        if let Some(c) = self.cvars.get_mut(&key)
+        if let Some(c) = self.cvars.edit().get_mut(&key)
             && let Some(v) = c.latched.take()
         {
             c.value = v;
@@ -982,7 +1008,7 @@ impl Shell {
     /// `Cvar_Set2` with `force`: the value now, past a latch, any pending
     /// one dropped.
     pub fn force_set(&mut self, name: &str, value: &str) {
-        if let Some(c) = with_ascii_lowercase(name, |n| self.cvars.get_mut(n)) {
+        if let Some(c) = with_ascii_lowercase(name, |n| self.cvars.edit().get_mut(n)) {
             c.value = value.to_string();
             c.latched = None;
         }
@@ -990,7 +1016,7 @@ impl Shell {
 
     /// Sets a read-only cvar's value, which no console or config set moves.
     pub fn set_rom(&mut self, name: &str, value: &str) {
-        if let Some(c) = with_ascii_lowercase(name, |n| self.cvars.get_mut(n)) {
+        if let Some(c) = with_ascii_lowercase(name, |n| self.cvars.edit().get_mut(n)) {
             c.value = value.to_string();
         }
     }
@@ -1013,7 +1039,7 @@ impl Shell {
         if !self.keys_bound_to(cmd).is_empty() || self.binds.contains_key(key) {
             return false;
         }
-        self.binds.insert(key.to_string(), cmd.to_string());
+        self.binds.edit().insert(key.to_string(), cmd.to_string());
         true
     }
 
@@ -1027,7 +1053,7 @@ impl Shell {
     /// `timedemo` cvar goes: CoD2's `timedemo` is a command.
     pub fn use_cod2_cvars(&mut self) {
         // `timedemo` is a command there (`CL_Init`, Mac 0x14b032).
-        self.cvars.remove("timedemo");
+        self.cvars.edit().remove("timedemo");
         // `CG_Init` (Mac 0x145214): a bool, 1, flags 0x1080, cheat and not
         // archived (cod2-efx.md 6.8).
         self.register("cg_drawGun", "1", CHEAT);
@@ -1088,12 +1114,12 @@ impl Shell {
     /// (its own window size) is.
     pub fn set_enum_domain(&mut self, name: &str, entries: Vec<String>) {
         let key = name.to_ascii_lowercase();
-        if let Some(c) = self.cvars.get_mut(&key)
+        if let Some(c) = self.cvars.edit().get_mut(&key)
             && let Some(e) = enum_entry(&entries, &c.value)
         {
             c.value = e.to_string();
         }
-        self.enums.insert(key, entries);
+        self.enums.edit().insert(key, entries);
     }
 
     /// Every enum dvar's entries, by lowercased name.
@@ -1147,7 +1173,7 @@ impl Shell {
     fn register_kept(&mut self, name: &str, value: &str, flags: u32) {
         let kept = self.cvar(name).map(str::to_string);
         self.register(name, value, flags);
-        if let (Some(v), Some(c)) = (kept, self.cvars.get_mut(&name.to_ascii_lowercase())) {
+        if let (Some(v), Some(c)) = (kept, self.cvars.edit().get_mut(&name.to_ascii_lowercase())) {
             c.value = v;
         }
     }
@@ -1165,7 +1191,7 @@ impl Shell {
     pub fn register_cod4_options(&mut self) {
         // `timedemo` is a command beside `demo` on 1.7 too (`CL_Init`,
         // `iw3mp.exe` 0x46f541).
-        self.cvars.remove("timedemo");
+        self.cvars.edit().remove("timedemo");
         for (name, value, flags) in COD4_OPTION_DVARS {
             self.register_kept(name, value, flags);
         }
@@ -1189,7 +1215,7 @@ impl Shell {
             return;
         }
         for name in ["r_picmip", "r_picmip_bump", "r_picmip_spec"] {
-            if let Some(c) = self.cvars.get_mut(name) {
+            if let Some(c) = self.cvars.edit().get_mut(name) {
                 c.value = "0".into();
             }
         }
@@ -1206,7 +1232,7 @@ impl Shell {
                 .get(*key)
                 .is_none_or(|b| Some(b.as_str()) == cod1)
             {
-                self.binds.insert(key.to_string(), cmd.to_string());
+                self.binds.edit().insert(key.to_string(), cmd.to_string());
                 n += 1;
             }
         }
@@ -1228,7 +1254,7 @@ impl Shell {
                 .get(*key)
                 .is_none_or(|b| Some(b.as_str()) == cod1 || Some(b.as_str()) == cod2)
             {
-                self.binds.insert(key.to_string(), cmd.to_string());
+                self.binds.edit().insert(key.to_string(), cmd.to_string());
                 n += 1;
             }
         }
@@ -1244,6 +1270,13 @@ impl Shell {
             return 0;
         }
         self.use_cod2_binds() + self.use_cod4_binds()
+    }
+
+    /// Moves on every write to a cvar, a bind or an enum domain and on
+    /// every command: a copy of them taken at one generation is current
+    /// while it reads the same.
+    pub fn generation(&self) -> u64 {
+        self.cvars.writes + self.binds.writes + self.enums.writes + self.commands
     }
 
     /// Every cvar's value by its lowercased name.
@@ -1380,6 +1413,7 @@ impl Shell {
     }
 
     fn execute_one(&mut self, line: &str, out: &mut Vec<Effect>) {
+        self.commands += 1;
         let tokens = tokenize(line);
         let Some(word) = tokens.first() else { return };
         let word = word.to_ascii_lowercase();
@@ -1489,17 +1523,17 @@ impl Shell {
                 Some(k) => match keys::canonical(k) {
                     None => print(out, format!("\"{k}\" isn't a valid key")),
                     Some(k) => {
-                        self.binds.remove(&k);
+                        self.binds.edit().remove(&k);
                         out.push(Effect::SaveConfig);
                     }
                 },
             },
             "unbindall" => {
-                self.binds.clear();
+                self.binds.edit().clear();
                 out.push(Effect::SaveConfig);
             }
             "bindlist" => {
-                for (k, v) in &self.binds {
+                for (k, v) in self.binds.iter() {
                     print(out, format!("{k} \"{v}\""));
                 }
             }
@@ -1539,7 +1573,7 @@ impl Shell {
             "cvarlist" => {
                 let prefix = arg(1).map(str::to_ascii_lowercase);
                 let mut n = 0;
-                for (key, c) in &self.cvars {
+                for (key, c) in self.cvars.iter() {
                     if prefix
                         .as_ref()
                         .is_some_and(|p| !key.starts_with(p.as_str()))
@@ -1617,7 +1651,7 @@ impl Shell {
         } else {
             args_from(line, 2)
         };
-        self.binds.insert(key, cmd);
+        self.binds.edit().insert(key, cmd);
         out.push(Effect::SaveConfig);
     }
 
@@ -1658,7 +1692,7 @@ impl Shell {
         let value = value.as_str();
         // An explicit set makes a run-only value the user's own.
         self.run_only.remove(&key);
-        let c = self.cvars.entry(key).or_insert_with(|| Cvar {
+        let c = self.cvars.edit().entry(key).or_insert_with(|| Cvar {
             name: name.to_string(),
             value: String::new(),
             default: value.to_string(),
@@ -1766,7 +1800,7 @@ impl Shell {
     /// accepts.
     fn apply_latched_where(&mut self, pick: impl Fn(&str) -> bool) -> bool {
         let mut moved = false;
-        for (_, c) in self.cvars.iter_mut().filter(|(k, _)| pick(k)) {
+        for (_, c) in self.cvars.edit().iter_mut().filter(|(k, _)| pick(k)) {
             if let Some(v) = c.latched.take() {
                 moved |= c.value != v;
                 c.value = v;
@@ -1828,7 +1862,7 @@ impl Shell {
         }
         let mut reset = Vec::new();
         for (version, name, old, games) in STALE_DEFAULTS {
-            let Some(c) = self.cvars.get_mut(&name.to_ascii_lowercase()) else {
+            let Some(c) = self.cvars.edit().get_mut(&name.to_ascii_lowercase()) else {
                 continue;
             };
             let held = c.latched.as_ref().unwrap_or(&c.value);
@@ -1847,7 +1881,7 @@ impl Shell {
     pub fn config_text(&self) -> String {
         let mut s = format!("{CONFIG_HEADER}\nunbindall\n");
         // Retail writes values unescaped; vcod drops what would end the line.
-        for (k, v) in &self.binds {
+        for (k, v) in self.binds.iter() {
             s.push_str(&format!("bind {k} \"{}\"\n", quotable(v)));
         }
         // `Cvar_WriteVariables` (CoDMP.exe 0x43a148) writes a pending latch.
