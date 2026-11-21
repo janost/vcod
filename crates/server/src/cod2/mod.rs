@@ -51,7 +51,7 @@ use vcod_common::net::Msec;
 
 use glam::Vec3;
 use vcod_cod2::net::PROTOCOL_118;
-use vcod_cod2::net::delta::{ClientState2, EntityState2, PlayerState2, field_index};
+use vcod_cod2::net::delta::{ClientState2, EntityState2, PlayerState2};
 use vcod_cod2::net::fields::{CLIENT_STATE_FIELDS, PLAYER_STATE_FIELDS};
 use vcod_cod2::net::ops::{CLC_BITS, Clc, ENTITYNUM_NONE, MAX_RELIABLE_COMMANDS, Svc};
 use vcod_cod2::net::usercmd::{MAX_PACKET_USERCMDS, default_usercmd, read_delta_usercmd};
@@ -1472,7 +1472,7 @@ impl Cod2Server {
                 .iter()
                 .find(|cs| cs.number as usize == slot)
                 .map_or(TEAM_SPECTATOR as i32, |cs| {
-                    cs.f[field_index(&CLIENT_STATE_FIELDS, "team")] as i32
+                    cs.f[vcod_cod2::field!(CLIENT_STATE_FIELDS, "team")] as i32
                 })
         };
         let dl_cvars = house::DownloadCvars {
@@ -1690,28 +1690,30 @@ fn angle_to_short(a: f32) -> i32 {
 /// A spectator's playerstate on the wire: the fields a retail spectator's
 /// carries (cod2-protocol.md 9), from the pmove state.
 fn spectator_wire(ps: &PlayerState, slot: usize) -> PlayerState2 {
-    let mut out = PlayerState2::default();
-    let mut set = |name: &str, v: u32| out.f[field_index(&PLAYER_STATE_FIELDS, name)] = v;
-    set("commandTime", ps.command_time as u32);
-    for i in 0..3 {
-        set(&format!("origin[{i}]"), ps.origin[i].to_bits());
-        set(&format!("velocity[{i}]"), ps.velocity[i].to_bits());
-        set(&format!("viewangles[{i}]"), ps.view_angles[i].to_bits());
-        set(
-            &format!("delta_angles[{i}]"),
-            ps.delta_angles[i] as u32 & 0xffff,
-        );
-        set(&format!("mins[{i}]"), ps.mins[i].to_bits());
-        set(&format!("maxs[{i}]"), ps.maxs[i].to_bits());
+    macro_rules! ix {
+        ($($t:tt)*) => {
+            vcod_cod2::field!(PLAYER_STATE_FIELDS, $($t)*)
+        };
     }
-    set("pm_type", ps.pm_type as u32);
-    set("pm_flags", ps.pm_flags);
-    set("pm_time", ps.pm_time as u32);
-    set("eFlags", ps.e_flags);
-    set("speed", ps.speed as u32);
-    set("gravity", ps.gravity as u32);
-    set("clientNum", slot as u32);
-    set("viewlocked_entNum", ENTITYNUM_NONE);
+    let mut out = PlayerState2::default();
+    let f = &mut out.f;
+    f[ix!("commandTime")] = ps.command_time as u32;
+    for i in 0..3 {
+        f[ix!(3 "origin")[i]] = ps.origin[i].to_bits();
+        f[ix!(3 "velocity")[i]] = ps.velocity[i].to_bits();
+        f[ix!(3 "viewangles")[i]] = ps.view_angles[i].to_bits();
+        f[ix!(3 "delta_angles")[i]] = ps.delta_angles[i] as u32 & 0xffff;
+        f[ix!(3 "mins")[i]] = ps.mins[i].to_bits();
+        f[ix!(3 "maxs")[i]] = ps.maxs[i].to_bits();
+    }
+    f[ix!("pm_type")] = ps.pm_type as u32;
+    f[ix!("pm_flags")] = ps.pm_flags;
+    f[ix!("pm_time")] = ps.pm_time as u32;
+    f[ix!("eFlags")] = ps.e_flags;
+    f[ix!("speed")] = ps.speed as u32;
+    f[ix!("gravity")] = ps.gravity as u32;
+    f[ix!("clientNum")] = slot as u32;
+    f[ix!("viewlocked_entNum")] = ENTITYNUM_NONE;
     // `stats[3]` and `stats[5]` as a retail spectator's read (9).
     out.stats[3] = 63;
     out.stats[5] = 1;

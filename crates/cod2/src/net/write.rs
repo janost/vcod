@@ -6,16 +6,12 @@
 use vcod_common::net::Msec;
 use vcod_common::net::codec::{MsgWriter, write_delta_field, write_delta_struct, write_ps_value};
 
-use super::delta::{ClientState2, EntityState2, HUD_FIELDS, HudElem2, PlayerState2, field_index};
+use super::delta::{ClientState2, EntityState2, HUD_FIELDS, HudElem2, PlayerState2};
 use super::fields::{
     CLIENT_STATE_FIELDS, ENTITY_STATE_FIELDS, HUDELEM_FIELDS, OBJECTIVE_FIELDS, PLAYER_STATE_FIELDS,
 };
 use super::ops::{CLIENTNUM_BITS, ENTITYNUM_NONE, GENTITYNUM_BITS, Svc};
 use super::parse::Gamestate2;
-
-fn words(f: &[u32]) -> Vec<i32> {
-    f.iter().map(|&v| v as i32).collect()
-}
 
 /// `MSG_WriteDeltaEntity`: the 10-bit number, then the struct delta of `to`
 /// against `from`; `None` removes the entity. An unchanged entity writes
@@ -28,19 +24,14 @@ pub fn write_delta_entity(
 ) {
     let Some(to) = to else {
         w.write_bits(from.number as i32, GENTITYNUM_BITS);
-        write_delta_struct(w, &ENTITY_STATE_FIELDS, &words(&from.f), None);
+        write_delta_struct(w, &ENTITY_STATE_FIELDS, &from.f, None);
         return;
     };
     if !force && from.f == to.f {
         return;
     }
     w.write_bits(to.number as i32, GENTITYNUM_BITS);
-    write_delta_struct(
-        w,
-        &ENTITY_STATE_FIELDS,
-        &words(&from.f),
-        Some(&words(&to.f)),
-    );
+    write_delta_struct(w, &ENTITY_STATE_FIELDS, &from.f, Some(&to.f));
 }
 
 /// `MSG_WriteDeltaClient` (0x80698e8): a set bit and the 6-bit number ahead
@@ -54,7 +45,7 @@ pub fn write_delta_client(
     let Some(to) = to else {
         w.write_bits(1, 1);
         w.write_bits(from.number as i32, CLIENTNUM_BITS);
-        write_delta_struct(w, &CLIENT_STATE_FIELDS, &words(&from.f), None);
+        write_delta_struct(w, &CLIENT_STATE_FIELDS, &from.f, None);
         return;
     };
     if !force && from.f == to.f {
@@ -62,12 +53,7 @@ pub fn write_delta_client(
     }
     w.write_bits(1, 1);
     w.write_bits(to.number as i32, CLIENTNUM_BITS);
-    write_delta_struct(
-        w,
-        &CLIENT_STATE_FIELDS,
-        &words(&from.f),
-        Some(&words(&to.f)),
-    );
+    write_delta_struct(w, &CLIENT_STATE_FIELDS, &from.f, Some(&to.f));
 }
 
 /// `stats[]`'s widths in mask order: shorts but `stats[3]` 6 bits and
@@ -107,7 +93,7 @@ fn write_short_blocks(w: &mut MsgWriter, from: &[i32; 64], to: &[i32; 64]) {
 /// then per element the index of its last changed field (0 when none) and
 /// fields `0..=last`.
 fn write_hudelems(w: &mut MsgWriter, from: &[HudElem2], to: &[HudElem2]) {
-    let ty = field_index(&HUDELEM_FIELDS, "type");
+    let ty = crate::field!(HUDELEM_FIELDS, "type");
     let count = to.iter().take_while(|e| e[ty] != 0).count();
     w.write_bits(count as i32, 5);
     for (e, base) in to.iter().zip(from).take(count) {
@@ -311,6 +297,7 @@ mod tests {
     use super::*;
     use crate::net::Parser;
     use crate::net::capture::{Capture, Dir};
+    use crate::net::delta::field_index;
     use crate::net::oob::{self, Reply};
     use vcod_common::net::huffman::Huffman;
     use vcod_common::net::netchan::{Netchan, NetchanParams};

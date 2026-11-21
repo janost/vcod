@@ -188,9 +188,31 @@ impl FieldCodec {
     }
 }
 
+/// A struct slot as a state keeps it: CoD1's `i32`, CoD2's `u32` words.
+pub trait Word: Copy + PartialEq {
+    fn word(self) -> i32;
+}
+
+impl Word for i32 {
+    fn word(self) -> i32 {
+        self
+    }
+}
+
+impl Word for u32 {
+    fn word(self) -> i32 {
+        self as i32
+    }
+}
+
 /// Inverse of [`FieldCodec::read_delta_struct`]; `None` writes the remove
 /// bit. Slots compare as raw ints, as in the C.
-pub fn write_delta_struct(w: &mut MsgWriter, table: &[NetField], from: &[i32], to: Option<&[i32]>) {
+pub fn write_delta_struct<T: Word>(
+    w: &mut MsgWriter,
+    table: &[NetField],
+    from: &[T],
+    to: Option<&[T]>,
+) {
     let Some(to) = to else {
         w.write_bits(1, 1); // removed
         return;
@@ -210,7 +232,7 @@ pub fn write_delta_struct(w: &mut MsgWriter, table: &[NetField], from: &[i32], t
     w.write_bits(1, 1);
     w.write_byte(lc as u8);
     for i in 0..lc {
-        write_delta_field(w, from[i], to[i], table[i].bits);
+        write_delta_field(w, from[i].word(), to[i].word(), table[i].bits);
     }
 }
 

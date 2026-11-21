@@ -10,9 +10,7 @@
 use std::collections::BTreeMap;
 
 use vcod_cod2::net::PROTOCOL_118;
-use vcod_cod2::net::delta::{
-    ClientState2, EntityState2, HudElem2, MAX_HUDELEMS, PlayerState2, field_index,
-};
+use vcod_cod2::net::delta::{ClientState2, EntityState2, HudElem2, MAX_HUDELEMS, PlayerState2};
 use vcod_cod2::net::events as c2ev;
 use vcod_cod2::net::fields::{CLIENT_STATE_FIELDS, HUDELEM_FIELDS, PLAYER_STATE_FIELDS};
 use vcod_cod2::pmove::{Stance, pm_type};
@@ -37,6 +35,13 @@ macro_rules! es2 {
 macro_rules! ps2 {
     ($($t:tt)*) => {
         vcod_cod2::field!(PLAYER_STATE_FIELDS, $($t)*)
+    };
+}
+
+/// A client state field's index (or `N` indices), resolved at compile time.
+macro_rules! cs2 {
+    ($($t:tt)*) => {
+        vcod_cod2::field!(CLIENT_STATE_FIELDS, $($t)*)
     };
 }
 
@@ -398,12 +403,13 @@ impl Cod2Level {
     /// and attachments as its end frame left them.
     pub fn client_state(&mut self, slot: usize, name: &str) -> ClientState2 {
         let mut cs = bare_client_state(slot, name);
-        let idx = |n: &str| field_index(&CLIENT_STATE_FIELDS, n);
-        cs.f[idx("team")] = self.rt.client_team(slot) as u32;
-        cs.f[idx("modelindex")] = self.rt.client_model_index(slot) as u32;
+        cs.f[cs2!("team")] = self.rt.client_team(slot) as u32;
+        cs.f[cs2!("modelindex")] = self.rt.client_model_index(slot) as u32;
+        let models = cs2!(6 "attachModelIndex");
+        let tags = cs2!(6 "attachTagIndex");
         for (n, (m, tag)) in self.rt.client_attachments(slot).iter().take(6).enumerate() {
-            cs.f[idx(&format!("attachModelIndex[{n}]"))] = *m as u32;
-            cs.f[idx(&format!("attachTagIndex[{n}]"))] = *tag as u32;
+            cs.f[models[n]] = *m as u32;
+            cs.f[tags[n]] = *tag as u32;
         }
         cs
     }
@@ -565,13 +571,23 @@ impl Cod2Level {
 /// A client state with no level behind it: a spectator with its name.
 pub fn bare_client_state(slot: usize, name: &str) -> ClientState2 {
     let mut cs = ClientState2::null(slot as u32);
-    cs.f[field_index(&CLIENT_STATE_FIELDS, "team")] = TEAM_SPECTATOR;
+    cs.f[cs2!("team")] = TEAM_SPECTATOR;
     let mut bytes = vcod_cod2::net::write::latin1_bytes(name);
     bytes.resize(32, 0);
     bytes[31] = 0;
-    for k in 0..8 {
-        let word = u32::from_le_bytes(bytes[k * 4..k * 4 + 4].try_into().unwrap());
-        cs.f[field_index(&CLIENT_STATE_FIELDS, &format!("name[{}]", k * 4))] = word;
+    // `name[0]`, `name[4]` .. `name[28]`: a word each.
+    let words = [
+        cs2!("name[0]"),
+        cs2!("name[4]"),
+        cs2!("name[8]"),
+        cs2!("name[12]"),
+        cs2!("name[16]"),
+        cs2!("name[20]"),
+        cs2!("name[24]"),
+        cs2!("name[28]"),
+    ];
+    for (k, &ix) in words.iter().enumerate() {
+        cs.f[ix] = u32::from_le_bytes(bytes[k * 4..k * 4 + 4].try_into().unwrap());
     }
     cs
 }

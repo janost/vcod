@@ -100,22 +100,19 @@ pub struct BodyFrame {
 
 impl BodyFrame {
     pub fn from_entity(e: &EntityState2) -> BodyFrame {
+        use crate::net::fields::ENTITY_STATE_FIELDS as F;
         BodyFrame {
             origin: Vec3::from(e.origin()),
-            angles: [
-                e.f32("apos.trBase[0]"),
-                e.f32("apos.trBase[1]"),
-                e.f32("apos.trBase[2]"),
-            ],
-            legs_anim: e.i32("legsAnim"),
-            torso_anim: e.i32("torsoAnim"),
-            eflags: e.i32("eFlags"),
-            movement_dir: e.f32("angles2[1]"),
-            lean: e.f32("leanf"),
-            torso_height: e.f32("fTorsoHeight"),
-            torso_pitch: e.f32("fTorsoPitch"),
-            waist_pitch: e.f32("fWaistPitch"),
-            client_num: e.i32("clientNum"),
+            angles: e.vec3_at(crate::field!(F, 3 "apos.trBase")),
+            legs_anim: e.i32_at(crate::field!(F, "legsAnim")),
+            torso_anim: e.i32_at(crate::field!(F, "torsoAnim")),
+            eflags: e.i32_at(crate::field!(F, "eFlags")),
+            movement_dir: e.f32_at(crate::field!(F, "angles2[1]")),
+            lean: e.f32_at(crate::field!(F, "leanf")),
+            torso_height: e.f32_at(crate::field!(F, "fTorsoHeight")),
+            torso_pitch: e.f32_at(crate::field!(F, "fTorsoPitch")),
+            waist_pitch: e.f32_at(crate::field!(F, "fWaistPitch")),
+            client_num: e.i32_at(crate::field!(F, "clientNum")),
         }
     }
 
