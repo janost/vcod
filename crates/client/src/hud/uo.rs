@@ -7,8 +7,7 @@
 use super::HudQuad;
 use super::friends::{Mark, decode_friend_info};
 use super::hudelem::Virtual;
-use super::player::{COMPASS_CENTRE, COMPASS_RADIUS, compass_offset};
-use vcod_common::weapon::WeaponDef;
+use super::player::{COMPASS_CENTRE, COMPASS_RADIUS, HintLayout, compass_offset};
 
 const WHITE: [f32; 4] = [1.0; 4];
 
@@ -204,8 +203,8 @@ pub const HEALTH_V22: HealthRects = HealthRects {
 /// UO's cursor hint icons (0x3044b6f8): 1.1's with `hintLMGMount` at 7,
 /// the bipod's mount point, and everything after it one higher; 128
 /// weapons' icons from 11 and their ammo's from 139.
-pub fn hint_material(hint: i32, weapons: &[Option<WeaponDef>]) -> Option<String> {
-    const NAMED: [&str; 9] = [
+pub const HINTS: HintLayout = HintLayout {
+    named: &[
         "hintActivate",
         "hintNoActivate",
         "hintDoor",
@@ -215,24 +214,10 @@ pub fn hint_material(hint: i32, weapons: &[Option<WeaponDef>]) -> Option<String>
         "hintHealth",
         "hintLadder",
         "hintFriendly",
-    ];
-    // A weapon never set up leaves its slot 0 and draws nothing; one with
-    // a blank icon key holds `hintActivate` (cod11-hud-protocol.md "Cursor hint").
-    let weapon_icon = |w: i32, icon: fn(&WeaponDef) -> &Option<String>| {
-        let def = weapons.get(w as usize).and_then(Option::as_ref)?;
-        Some(
-            icon(def)
-                .clone()
-                .unwrap_or_else(|| "hintActivate".to_string()),
-        )
-    };
-    match hint {
-        2..=10 => Some(NAMED[hint as usize - 2].to_string()),
-        11..=138 => weapon_icon(hint - 10, |d| &d.hud_icon),
-        139..=266 => weapon_icon(hint - 138, |d| &d.ammo_icon),
-        _ => None,
-    }
-}
+    ],
+    weapons: 128,
+    health: 8,
+};
 
 /// A friendly vehicle seen this frame (`CG_PLAYER_COMPASS_TANKS`,
 /// 0x30016c00): its slot in the game's vehicle pool, where it is, its yaw
@@ -347,6 +332,7 @@ impl CompassVehicles {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::weapon::WeaponDef;
 
     fn v() -> Virtual {
         Virtual::new((640.0, 480.0))
@@ -453,17 +439,20 @@ mod tests {
                 ..WeaponDef::default()
             }),
         ];
-        assert_eq!(hint_material(7, &weapons).as_deref(), Some("hintLMGMount"));
-        assert_eq!(hint_material(10, &weapons).as_deref(), Some("hintFriendly"));
-        assert_eq!(hint_material(11, &weapons).as_deref(), Some("w_icon"));
-        assert_eq!(hint_material(139, &weapons).as_deref(), Some("a_icon"));
-        assert_eq!(hint_material(267, &weapons), None);
+        assert_eq!(HINTS.material(7, &weapons).as_deref(), Some("hintLMGMount"));
+        assert_eq!(
+            HINTS.material(10, &weapons).as_deref(),
+            Some("hintFriendly")
+        );
+        assert_eq!(HINTS.material(11, &weapons).as_deref(), Some("w_icon"));
+        assert_eq!(HINTS.material(139, &weapons).as_deref(), Some("a_icon"));
+        assert_eq!(HINTS.material(267, &weapons), None);
         // Unset slots draw nothing (0x300303fe), blank keys `hintActivate`.
-        assert_eq!(hint_material(12, &weapons), None);
-        assert_eq!(hint_material(140, &weapons), None);
+        assert_eq!(HINTS.material(12, &weapons), None);
+        assert_eq!(HINTS.material(140, &weapons), None);
         let bare = vec![None, Some(WeaponDef::default())];
-        assert_eq!(hint_material(11, &bare).as_deref(), Some("hintActivate"));
-        assert_eq!(hint_material(139, &bare).as_deref(), Some("hintActivate"));
+        assert_eq!(HINTS.material(11, &bare).as_deref(), Some("hintActivate"));
+        assert_eq!(HINTS.material(139, &bare).as_deref(), Some("hintActivate"));
     }
 
     #[test]
