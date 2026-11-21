@@ -1605,9 +1605,7 @@ pub fn mantle_walk(
     if !rules.mantle_enable || rules.mantle_anims.is_none() {
         return None;
     }
-    // CoD4's walk rounds its yaw to a short, CoD2's truncates: kept, so
-    // the graphs stay as measured.
-    let angle = ((f64::from(yaw) * 65536.0 / 360.0).round() as i64 & 0xffff) as u16;
+    let angle = cmd_short(yaw);
     let mut old = Cmd::default();
     super::bridge::mantle_walk(
         from,
@@ -1625,6 +1623,15 @@ pub fn mantle_walk(
             vcod_cod4::pmove::player_step(ps, &cmd, &mut old, clip, rules, WeaponMove::NONE);
         },
     )
+}
+
+/// A cmd angle as 1.7 makes one: `(int)` of the stored float `deg *
+/// 182.04445f + 0.5f`, masked (`iw3mp.exe` 0x463aa9..0x463acf, the
+/// server's cmd base `cod4_lnxded` 0x8130adc..0x8130b29). CoD2 1.3
+/// truncates without the half ([`vcod_common::x87::angle_shorts`]).
+pub(crate) fn cmd_short(deg: f32) -> u16 {
+    let v = (f64::from(deg) * f64::from(vcod_common::x87::SHORT_PER_DEG) + 0.5) as f32;
+    (v as i32 & 0xffff) as u16
 }
 
 /// A weapon's time between rounds as the brain paces its trigger: a bolt
@@ -1775,6 +1782,19 @@ fn blasts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 1.7 adds the half and truncates toward zero, so -45 (-8192.0002
+    /// shorts) goes out as -8191, where a round and CoD2 1.3's truncation
+    /// both send -8192.
+    #[test]
+    fn a_mantle_walk_yaw_goes_out_as_1_7_sends_it() {
+        assert_eq!(cmd_short(-45.0), 0xe001);
+        assert_eq!(vcod_common::x87::angle_shorts(-45.0), 0xe000);
+        assert_eq!(cmd_short(45.0), 0x2000);
+        assert_eq!(cmd_short(315.0), 0xe000);
+        assert_eq!(cmd_short(13.0), 2367);
+        assert_eq!(vcod_common::x87::angle_shorts(13.0), 2366);
+    }
     use vcod_common::net::msg;
 
     /// A fuse's burst is its vanished frag's thrower's, heard once; a

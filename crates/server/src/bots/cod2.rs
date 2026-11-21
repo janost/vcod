@@ -1328,9 +1328,9 @@ pub fn mantle_walk(
     if !rules.mantle_enable || rules.mantle_anims.is_none() {
         return None;
     }
-    // CoD2's walk truncates its yaw to a short, CoD4's rounds: kept, so
-    // the graphs stay as measured.
-    let angle = (yaw * 65536.0 / 360.0) as i32 & 0xffff;
+    // 1.3 truncates a yaw to a short (cmd base `cod2_lnxded` 0x8068a04..
+    // 0x8068a42); 1.7 rounds ([`super::cod4::cmd_short`]).
+    let angle = vcod_common::x87::angle_shorts(yaw);
     let mut old = UserCmd2::default();
     super::bridge::mantle_walk(
         from,
