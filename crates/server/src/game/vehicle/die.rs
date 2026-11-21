@@ -109,7 +109,7 @@ fn probe_args(
         .occupant_damage(slot, Some(attacker), PROBE_DAMAGE, 0)?;
     let weapon = super::inflictor_weapon(host, Some(attacker));
     let weapon = host.defs.weapon_name(weapon).unwrap_or("none").to_string();
-    let point = crate::game::item::origin_of(host, cx, victim);
+    let point = host.vec_field(cx, victim, "origin").to_array();
     Some(vec![
         Value::Entity(attacker),
         Value::Entity(attacker),
@@ -136,7 +136,7 @@ fn finish_rider(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, health
     if host.vehicles.seat_of(slot).is_none_or(|(v, _)| v != id) {
         return;
     }
-    let from = crate::game::item::origin_of(host, cx, player);
+    let from = host.vec_field(cx, player, "origin").to_array();
     let raised = host.engine_notifies.len();
     let out = super::seat::unlink_player(host, cx, slot, shielded, from, super::seat::PLAYER_BOX);
     // `VEH_UnlinkPlayer`'s `deactivated` pair goes out inside the callback,

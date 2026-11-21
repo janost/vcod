@@ -920,18 +920,12 @@ impl ScriptRuntime {
 
     /// A client entity's `.origin` as the scripts read it.
     pub fn client_origin(&mut self, slot: usize) -> [f32; 3] {
-        use vcod_gsc::Host;
         let Some(ent) = self.client_entity(slot) else {
             return [0.0; 3];
         };
         let host = &mut self.host;
-        self.vm.with_cx(|cx| {
-            let field = cx.intern_folded("origin");
-            match host.get_field(cx, ent, field) {
-                Value::Vector(v) => v,
-                _ => [0.0; 3],
-            }
-        })
+        self.vm
+            .with_cx(|cx| host.vec_field(cx, ent, "origin").to_array())
     }
 
     /// The client's entity, once `Connect` has been drained. The object

@@ -336,7 +336,7 @@ pub fn run_item(host: &mut GameHost, cx: &mut Cx, id: EntId, now_ms: i32) -> boo
         if st.ground == ENTITYNUM_NONE as i32 && st.pos.is_none_or(|p| p.tr_type != TR_GRAVITY) {
             let base = st
                 .pos
-                .map_or_else(|| Vec3::from(origin_of(host, cx, id)), |p| p.base);
+                .map_or_else(|| host.vec_field(cx, id, "origin"), |p| p.base);
             st.pos = Some(Trajectory {
                 tr_type: TR_GRAVITY,
                 tr_time: now_ms,
@@ -352,7 +352,7 @@ pub fn run_item(host: &mut GameHost, cx: &mut Cx, id: EntId, now_ms: i32) -> boo
             } else {
                 RUN_CLIPMASK
             };
-            let mut origin = Vec3::from(origin_of(host, cx, id));
+            let mut origin = host.vec_field(cx, id, "origin");
             let ran = if host.profile.items.own_flight {
                 crate::game::cod2_items::run_flight(
                     &world.collision,
@@ -383,7 +383,7 @@ pub fn run_item(host: &mut GameHost, cx: &mut Cx, id: EntId, now_ms: i32) -> boo
                     st.pos = None;
                     st.apos = None;
                     st.ground = ground as i32;
-                    let current = angles_of(host, cx, id);
+                    let current = host.vec_field(cx, id, "angles").to_array();
                     let aligned =
                         crate::game::spawn::align_to_surface(current, normal.into(), weapon);
                     let _ = host.set_field(cx, id, angles_atom, Value::Vector(aligned));
@@ -469,7 +469,7 @@ pub fn push_body(host: &mut GameHost, cx: &mut Cx, id: EntId) -> Option<crate::p
         st.index as usize,
     ));
     Some(crate::push::ItemBody {
-        origin: Vec3::from(origin_of(host, cx, id)),
+        origin: host.vec_field(cx, id, "origin"),
         mins,
         maxs,
         mask: if st.clipmask != 0 {
@@ -680,14 +680,14 @@ fn launch_off(
         .ents
         .handle(slot as u32)
         .ok_or(ErrorKind::BadType("no such player"))?;
-    let yaw = angles_of(host, cx, player)[1];
+    let yaw = host.vec_field(cx, player, "angles").to_array()[1];
     if host.profile.items.cvar_launch {
         return crate::game::cod2_items::launch_off(host, cx, slot, index, yaw);
     }
     let yaw = yaw.to_radians();
     let up = (f64::from(LAUNCH_UP) + f64::from(LAUNCH_UP_SPREAD) * crandom(host)) as f32;
     let velocity = Vec3::new(yaw.cos() * LAUNCH_SPEED, yaw.sin() * LAUNCH_SPEED, up);
-    let mut origin = Vec3::from(origin_of(host, cx, player));
+    let mut origin = host.vec_field(cx, player, "origin");
     origin.z += host.clients.get(slot).map(|c| c.height).unwrap_or(0.0) * 0.5;
     launch(host, cx, index, origin, velocity, Some(slot as u8))
 }
@@ -738,10 +738,10 @@ pub fn misc_spawner_think(host: &mut GameHost, cx: &mut Cx, id: EntId) {
         log::warn!("misc_spawner {} failed to drop {name}", id.0);
         return;
     };
-    let yaw = angles_of(host, cx, id)[1].to_radians();
+    let yaw = host.vec_field(cx, id, "angles").to_array()[1].to_radians();
     let up = (f64::from(LAUNCH_UP) + f64::from(LAUNCH_UP_SPREAD) * crandom(host)) as f32;
     let velocity = Vec3::new(yaw.cos() * LAUNCH_SPEED, yaw.sin() * LAUNCH_SPEED, up);
-    let origin = Vec3::from(origin_of(host, cx, id));
+    let origin = host.vec_field(cx, id, "origin");
     if let Err(e) = launch(host, cx, index, origin, velocity, None) {
         log::warn!("misc_spawner {} failed to drop {name}: {e:?}", id.0);
     }
@@ -794,7 +794,7 @@ pub fn launch_weapon(
                         slot,
                         tag: tag.clone(),
                     });
-                let angles = angles_of(host, cx, player);
+                let angles = host.vec_field(cx, player, "angles").to_array();
                 let atom = cx.intern_folded("angles");
                 host.set_field(cx, id, atom, Value::Vector(angles))?;
                 let spin = crate::game::cod2_items::spin(host);
@@ -822,7 +822,7 @@ pub fn launch_weapon(
                     pos.base = start;
                 }
             }
-            let angles = angles_of(host, cx, player);
+            let angles = host.vec_field(cx, player, "angles").to_array();
             let atom = cx.intern_folded("angles");
             host.set_field(cx, id, atom, Value::Vector(angles))?;
             let spin = SPIN.map(|k| (f64::from(k) * crandom(host)) as f32);
@@ -894,23 +894,6 @@ fn tag_start(host: &mut GameHost, slot: usize, tag: &str) -> Option<Vec3> {
     )
 }
 
-pub fn origin_of(host: &mut GameHost, cx: &mut Cx, id: EntId) -> [f32; 3] {
-    let field = cx.intern_folded("origin");
-    match host.get_field(cx, id, field) {
-        Value::Vector(v) => v,
-        _ => [0.0; 3],
-    }
-}
-
-/// Any entity's `angles`, zero when unset.
-pub fn angles_of(host: &mut GameHost, cx: &mut Cx, id: EntId) -> [f32; 3] {
-    let field = cx.intern_folded("angles");
-    match host.get_field(cx, id, field) {
-        Value::Vector(v) => v,
-        _ => [0.0; 3],
-    }
-}
-
 /// What the use key and the cursor hint found: an item to take, a turret to
 /// man or a `trigger_use` to fire.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -956,7 +939,7 @@ pub fn activate_ent(
     let player = host
         .ents
         .handle(slot as u32)
-        .map_or([0.0; 3], |c| origin_of(host, cx, c));
+        .map_or([0.0; 3], |c| host.vec_field(cx, c, "origin").to_array());
     let grenade_ms = host.clients.get(slot).map(|c| c.grenade_ms).unwrap_or(0);
     let on_ground = host.clients.get(slot).map(|c| c.on_ground).unwrap_or(false);
     // The walk over `muzzle ± (192, 192, 96)` under mask 0x200000, in the
@@ -991,8 +974,8 @@ pub fn activate_ent(
             }
             Activate::Item(id)
         } else if host.turrets.contains_key(&id) {
-            let origin = origin_of(host, cx, id);
-            let yaw = angles_of(host, cx, id)[1];
+            let origin = host.vec_field(cx, id, "origin").to_array();
+            let yaw = host.vec_field(cx, id, "angles").to_array()[1];
             let rec = &host.turrets[&id];
             if !crate::game::turret::usable(rec, origin, yaw, player, grenade_ms, on_ground) {
                 continue;
@@ -1140,12 +1123,9 @@ pub fn touch(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, touched: 
     if !out.taken {
         return;
     }
-    let origin = origin_of(host, cx, id);
+    let origin = host.vec_field(cx, id, "origin").to_array();
     let angles_atom = cx.intern_folded("angles");
-    let angles = match host.get_field(cx, id, angles_atom) {
-        Value::Vector(v) => v,
-        _ => [0.0; 3],
-    };
+    let angles = host.vec_field_at(cx, id, angles_atom).to_array();
     let swapped = out.drop.and_then(|d| {
         launch_weapon(host, cx, slot, d, DropAt::Exactly { origin, angles })
             .inspect_err(|e| {

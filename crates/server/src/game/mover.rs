@@ -707,15 +707,9 @@ fn evaluate(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> (Vec<Done>
     });
     let angles_atom = cx.intern_folded("angles");
     // `.angles` is `r.currentAngles` itself (script field 16, offset 0x140).
-    let before = match host.get_field(cx, id, angles_atom) {
-        vcod_gsc::Value::Vector(v) => Vec3::from(v),
-        _ => Vec3::ZERO,
-    };
+    let before = host.vec_field_at(cx, id, angles_atom);
     let origin_atom = cx.intern_folded("origin");
-    let before_origin = match host.get_field(cx, id, origin_atom) {
-        vcod_gsc::Value::Vector(v) => Vec3::from(v),
-        _ => Vec3::ZERO,
-    };
+    let before_origin = host.vec_field_at(cx, id, origin_atom);
     // `G_MoverTeam`: `move` and `amove` are the trajectories less
     // `r.currentOrigin` and `r.currentAngles`, each stored as a float, which
     // `G_MoverPush` adds back (0x650f0) and the link snaps (movers doc 12,
@@ -1094,13 +1088,8 @@ pub fn spawn_sine(
         .get(model)
         .copied()
         .unwrap_or(([0.0; 3], [0.0; 3]));
-    let vector = |host: &mut GameHost, cx: &mut vcod_gsc::Cx, name: &str| {
-        let atom = cx.intern_folded(name);
-        match host.get_field(cx, id, atom) {
-            vcod_gsc::Value::Vector(v) => Vec3::from(v),
-            _ => Vec3::ZERO,
-        }
-    };
+    let vector =
+        |host: &mut GameHost, cx: &mut vcod_gsc::Cx, name: &str| host.vec_field(cx, id, name);
     let set = |host: &mut GameHost, cx: &mut vcod_gsc::Cx, name: &str, v: vcod_gsc::Value| {
         let atom = cx.intern_folded(name);
         let _ = host.write_field(cx, id, atom, v);
@@ -1271,13 +1260,7 @@ fn spawn_static(
     if spawnflags & 6 != 0 {
         set(host, cx, "health", vcod_gsc::Value::Int(STATIC_HEALTH));
     }
-    let angles = {
-        let atom = cx.intern_folded("angles");
-        match host.get_field(cx, id, atom) {
-            vcod_gsc::Value::Vector(v) => Vec3::from(v),
-            _ => Vec3::ZERO,
-        }
-    };
+    let angles = { host.vec_field(cx, id, "angles") };
     // `InitMover`'s `trDuration`: no distance over its speed, at least 1.
     let pos = Trajectory {
         tr_duration: 1,
@@ -1502,13 +1485,7 @@ fn boxes_from((mins, maxs): (Vec3, Vec3), mv: Vec3) -> ((Vec3, Vec3), (Vec3, Vec
 
 /// The entity's `origin` and `angles` fields.
 fn pose(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> (Vec3, Vec3) {
-    let mut field = |name: &str| {
-        let atom = cx.intern_folded(name);
-        match host.get_field(cx, id, atom) {
-            vcod_gsc::Value::Vector(v) => Vec3::from(v),
-            _ => Vec3::ZERO,
-        }
-    };
+    let mut field = |name: &str| host.vec_field(cx, id, name);
     (field("origin"), field("angles"))
 }
 
@@ -1531,13 +1508,8 @@ fn clip_step(
         None => return None,
     };
     let world = host.world.clone()?;
-    let field = |host: &mut GameHost, cx: &mut vcod_gsc::Cx, name: &str| {
-        let atom = cx.intern_folded(name);
-        match host.get_field(cx, id, atom) {
-            vcod_gsc::Value::Vector(v) => Vec3::from(v),
-            _ => Vec3::ZERO,
-        }
-    };
+    let field =
+        |host: &mut GameHost, cx: &mut vcod_gsc::Cx, name: &str| host.vec_field(cx, id, name);
     let origin = field(host, cx, "origin");
     // `r.currentAngles` as linked this frame; the push turns by
     // `turned - before`, `G_MoverTeam`'s `amove`.

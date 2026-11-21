@@ -430,8 +430,8 @@ fn dead_yaw(
         return None;
     };
     let (a, b) = (
-        crate::game::item::origin_of(host, cx, from),
-        crate::game::item::origin_of(host, cx, to),
+        host.vec_field(cx, from, "origin").to_array(),
+        host.vec_field(cx, to, "origin").to_array(),
     );
     let dir = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     Some(crate::game::builtins::math::vectoyaw(dir) as f32 as i32)

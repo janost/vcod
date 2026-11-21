@@ -102,15 +102,6 @@ fn ramped(
     Ok((id, m))
 }
 
-/// The entity's own `origin`/`angles`, which the integrator keeps current.
-fn field_vec(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> Vec3 {
-    let atom = cx.intern_folded(name);
-    match host.get_field(cx, id, atom) {
-        Value::Vector(v) => Vec3::from_array(v),
-        _ => Vec3::ZERO,
-    }
-}
-
 /// Every verb ends in `trap_LinkEntity`, whose snap rounds a component of
 /// `r.currentAngles` (`.angles`) within a thousandth of an integer
 /// (the profile's `link_snap`); a rotate first sets them to its start, a move
@@ -140,10 +131,10 @@ pub fn move_to(
     let Some(dest) = args.first().and_then(as_vector) else {
         return Err(ErrorKind::BadType("moveTo takes a point and a time"));
     };
-    let from = field_vec(host, cx, id, "origin");
+    let from = host.vec_field(cx, id, "origin");
     let now = host.level_time_ms;
     let start = host.movers.move_to(id, now, from, dest, m);
-    let angles = field_vec(host, cx, id, "angles");
+    let angles = host.vec_field(cx, id, "angles");
     linked(host, cx, id, Some(start), angles);
     Ok(Value::Undefined)
 }
@@ -165,12 +156,12 @@ fn move_axis(
     let Some(d) = args.first().and_then(as_float) else {
         return Err(ErrorKind::BadType(what));
     };
-    let from = field_vec(host, cx, id, "origin");
+    let from = host.vec_field(cx, id, "origin");
     let mut dest = from;
     dest[axis] += d;
     let now = host.level_time_ms;
     let start = host.movers.move_to(id, now, from, dest, m);
-    let angles = field_vec(host, cx, id, "angles");
+    let angles = host.vec_field(cx, id, "angles");
     linked(host, cx, id, Some(start), angles);
     Ok(Value::Undefined)
 }
@@ -219,10 +210,10 @@ pub fn move_gravity(
     let Some(v) = args.first().and_then(as_vector) else {
         return Err(ErrorKind::BadType(what));
     };
-    let from = field_vec(host, cx, id, "origin");
+    let from = host.vec_field(cx, id, "origin");
     let now = host.level_time_ms;
     host.movers.move_gravity(id, now, from, v, m.secs);
-    let angles = field_vec(host, cx, id, "angles");
+    let angles = host.vec_field(cx, id, "angles");
     linked(host, cx, id, None, angles);
     Ok(Value::Undefined)
 }
@@ -242,7 +233,7 @@ pub fn rotate_to(
     let Some(dest) = args.first().and_then(as_vector) else {
         return Err(ErrorKind::BadType(what));
     };
-    let from = field_vec(host, cx, id, "angles");
+    let from = host.vec_field(cx, id, "angles");
     // Each target component is taken to within 180 of `r.currentAngles`,
     // `AngleSubtract(dest, cur) + cur` on the x87 stack (0x60ad0..0x60afb).
     let near = |d: f32, c: f32| {
@@ -284,7 +275,7 @@ fn rotate_axis(
     let Some(d) = args.first().and_then(as_float) else {
         return Err(ErrorKind::BadType(what));
     };
-    let from = field_vec(host, cx, id, "angles");
+    let from = host.vec_field(cx, id, "angles");
     let mut dest = from;
     dest[axis] += d;
     let now = host.level_time_ms;
@@ -340,7 +331,7 @@ pub fn rotate_velocity(
     let Some(v) = args.first().and_then(as_vector) else {
         return Err(ErrorKind::BadType(what));
     };
-    let from = field_vec(host, cx, id, "angles");
+    let from = host.vec_field(cx, id, "angles");
     let now = host.level_time_ms;
     let start = host.movers.rotate_velocity(id, now, from, v, m);
     linked(host, cx, id, None, start);
@@ -391,7 +382,7 @@ mod tests {
             let mut done = crate::game::mover::run(&mut host, cx);
             for frame in 22..=45 {
                 host.level_time_ms = frame * 50;
-                let x = field_vec(&mut host, cx, e, "origin").x;
+                let x = host.vec_field(cx, e, "origin").x;
                 let want = (100.0 + 0.5 * (frame - 22) as f32 * 50.0).min(600.0);
                 assert!(
                     (x - want).abs() < 0.01,
@@ -423,7 +414,7 @@ mod tests {
             move_to(&mut host, cx, t, &[dest, Value::Int(1)]).unwrap();
             host.level_time_ms = 1050;
             crate::game::mover::run(&mut host, cx);
-            assert!((field_vec(&mut host, cx, e, "origin").x - 600.0).abs() < 0.01);
+            assert!((host.vec_field(cx, e, "origin").x - 600.0).abs() < 0.01);
             let origin = cx.intern_folded("origin");
             let b = [0.0, 300.0, 50.0];
             host.set_field(cx, e, origin, Value::Vector(b)).unwrap();
@@ -433,7 +424,7 @@ mod tests {
             for frame in 22..26 {
                 host.level_time_ms = frame * 50;
                 crate::game::mover::run(&mut host, cx);
-                assert_eq!(field_vec(&mut host, cx, e, "origin"), Vec3::from(b));
+                assert_eq!(host.vec_field(cx, e, "origin"), Vec3::from(b));
             }
             let (pos, _) = host.movers.wire(e, host.level_time_ms).unwrap();
             assert_eq!(pos.base, Vec3::from(b));
@@ -453,14 +444,14 @@ mod tests {
             move_x(&mut host, cx, t, &[Value::Int(500), Value::Int(2)]).unwrap();
             host.level_time_ms = 2050;
             crate::game::mover::run(&mut host, cx);
-            assert!((field_vec(&mut host, cx, e, "origin").x - 600.0).abs() < 0.01);
+            assert!((host.vec_field(cx, e, "origin").x - 600.0).abs() < 0.01);
 
             for (start, want) in [(2050, 90.0), (5000, 180.0)] {
                 host.level_time_ms = start;
                 rotate_yaw(&mut host, cx, t, &[Value::Int(90), Value::Int(2)]).unwrap();
                 host.level_time_ms = start + 2050;
                 crate::game::mover::run(&mut host, cx);
-                let yaw = field_vec(&mut host, cx, e, "angles").y;
+                let yaw = host.vec_field(cx, e, "angles").y;
                 assert!((yaw - want).abs() < 0.01, "yaw {yaw} want {want}");
             }
         });

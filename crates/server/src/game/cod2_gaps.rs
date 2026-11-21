@@ -272,7 +272,7 @@ fn items(f: &mut super::cod2_fight::Fight) -> Vec<(vcod_gsc::EntId, u8, Vec3)> {
             .collect();
         ids.into_iter()
             .map(|(id, index)| {
-                let at = crate::game::item::origin_of(h, cx, id);
+                let at = h.vec_field(cx, id, "origin").to_array();
                 (id, index, Vec3::from(at))
             })
             .collect()

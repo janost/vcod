@@ -163,8 +163,8 @@ impl Cod2Level {
                     UseKind::Item { weapon, grabbable }
                 } else if let Some(rec) = host.turrets.get(&id) {
                     if let Some(tags) = rec.tags {
-                        let origin = Vec3::from(crate::game::item::origin_of(host, cx, id));
-                        let angles = crate::game::item::angles_of(host, cx, id);
+                        let origin = host.vec_field(cx, id, "origin");
+                        let angles = host.vec_field(cx, id, "angles").to_array();
                         sight = origin + vcod_common::turretpose::angles_quat(angles) * tags.aim;
                     }
                     UseKind::Turret

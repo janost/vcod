@@ -390,10 +390,10 @@ pub fn use_by(
     let Some(slot) = ClientSlot::of_entity(&host.ents, user).map(ClientSlot::index) else {
         return true;
     };
-    let origin = crate::game::item::origin_of(host, cx, user);
+    let origin = host.vec_field(cx, user, "origin").to_array();
     let stance = host.clients[slot].stance;
     let aim = host.clients[slot].aim.1;
-    let angles = crate::game::item::angles_of(host, cx, id);
+    let angles = host.vec_field(cx, id, "angles").to_array();
     let Some(rec) = host.turrets.get_mut(&id) else {
         return true;
     };

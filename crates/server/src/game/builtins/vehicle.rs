@@ -499,7 +499,7 @@ fn get_dismount_spot(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = vehicle(host, recv)?;
-    let origin = crate::game::item::origin_of(host, cx, id);
+    let origin = host.vec_field(cx, id, "origin").to_array();
     let spot = crate::game::vehicle::dismount_spot(
         host,
         id,

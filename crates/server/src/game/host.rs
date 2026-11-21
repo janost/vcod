@@ -3372,6 +3372,32 @@ impl Host for GameHost {
 }
 
 impl GameHost {
+    /// Entity `id`'s vector field `name` (folded), zero when unset or not a
+    /// vector.
+    pub fn vec_field(&mut self, cx: &mut Cx, id: EntId, name: &str) -> glam::Vec3 {
+        let atom = cx.intern_folded(name);
+        self.vec_field_at(cx, id, atom)
+    }
+
+    /// [`Self::vec_field`] by an already-interned field atom.
+    pub fn vec_field_at(&mut self, cx: &mut Cx, id: EntId, field: Atom) -> glam::Vec3 {
+        match self.get_field(cx, id, field) {
+            Value::Vector(v) => glam::Vec3::from(v),
+            _ => glam::Vec3::ZERO,
+        }
+    }
+
+    /// Entity `id`'s number field `name` (folded) as a float, zero when
+    /// unset or not a number.
+    pub fn float_field(&mut self, cx: &mut Cx, id: EntId, name: &str) -> f32 {
+        let atom = cx.intern_folded(name);
+        match self.get_field(cx, id, atom) {
+            Value::Float(f) => f,
+            Value::Int(i) => i as f32,
+            _ => 0.0,
+        }
+    }
+
     /// The engine slot an entity's `field` reads, when its read is that slot
     /// alone (a plain name routed to the engine table); `None` for a client
     /// or script field, or one [`PLAIN_EXCEPT`] names.

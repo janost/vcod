@@ -454,7 +454,7 @@ impl ScriptRuntime {
             // `G_RadiusDamage` hands over `r.currentOrigin` less the blast,
             // lifted 24, and `G_Damage` normalizes it (game.mp.uo 0x5098b,
             // 0x4fedb).
-            let origin = crate::game::item::origin_of(host, cx, id);
+            let origin = host.vec_field(cx, id, "origin").to_array();
             let dir = (glam::Vec3::from(origin) - glam::Vec3::from(at) + glam::Vec3::Z * 24.0)
                 .normalize_or_zero()
                 .to_array();

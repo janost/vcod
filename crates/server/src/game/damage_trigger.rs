@@ -305,10 +305,7 @@ pub fn sweep(
         if grenade && !spec.grenade_touch {
             continue;
         }
-        let at = match host.get_field(cx, id, origin) {
-            Value::Vector(v) => Vec3::from(v),
-            _ => Vec3::ZERO,
-        };
+        let at = host.vec_field_at(cx, id, origin);
         let hulls = t
             .shape
             .model

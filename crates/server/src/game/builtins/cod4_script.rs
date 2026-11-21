@@ -356,13 +356,7 @@ fn get_corpse_anim(
 
 /// An entity's origin and angles as the script reads them.
 fn place(host: &mut GameHost, cx: &mut Cx, id: vcod_gsc::EntId) -> (Vec3, Vec3) {
-    let mut read = |n: &str| {
-        let f = cx.intern_folded(n);
-        match host.get_field(cx, id, f) {
-            Value::Vector(v) => Vec3::from(v),
-            _ => Vec3::ZERO,
-        }
-    };
+    let mut read = |n: &str| host.vec_field(cx, id, n);
     (read("origin"), read("angles"))
 }
 

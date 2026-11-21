@@ -539,16 +539,6 @@ pub fn abs_bounds(origin: [f32; 3], t: &Trigger) -> ([f32; 3], [f32; 3]) {
 pub const PLAYER_MINS: [f32; 3] = [-15.0, -15.0, 0.0];
 pub const PLAYER_MAXS: [f32; 3] = [15.0, 15.0, vcod_common::pmove::HEIGHT_STAND];
 
-/// `origin` is taken as an already-interned atom rather than folded here:
-/// the touch pass calls this once per client plus once per trigger row per
-/// cmd, and folding lowercases and allocates every time.
-fn entity_origin(host: &mut GameHost, cx: &mut Cx, id: EntId, origin: Atom) -> [f32; 3] {
-    match host.get_field(cx, id, origin) {
-        Value::Vector(v) => v,
-        _ => [0.0; 3],
-    }
-}
-
 /// An entity's absolute box: a registered trigger's submodel box around its
 /// current origin, a client's player box as its last cmd's stance left it
 /// (`GameHost::client_box`), and a point box for everything else, which is
@@ -564,7 +554,7 @@ fn abs_bounds_with_atom(
     id: EntId,
     origin_atom: Atom,
 ) -> ([f32; 3], [f32; 3]) {
-    let origin = entity_origin(host, cx, id, origin_atom);
+    let origin = host.vec_field_at(cx, id, origin_atom).to_array();
     if let Some(t) = host.triggers.get(id) {
         return abs_bounds(origin, t);
     }
@@ -701,7 +691,7 @@ pub fn touched(host: &mut GameHost, cx: &mut Cx, slot: usize, origin: [f32; 3]) 
     ids.into_iter()
         .filter(|id| {
             if host.ents.get(*id).is_some_and(|e| e.item.is_some()) {
-                let at = entity_origin(host, cx, *id, origin_atom);
+                let at = host.vec_field_at(cx, *id, origin_atom).to_array();
                 return crate::game::pickup::touches(origin, at);
             }
             let Some(t) = host.triggers.get(*id).copied() else {
@@ -747,7 +737,7 @@ pub fn contacts(
     let centre = (lo + hi) * 0.5;
     let half = (hi - lo) * 0.5;
     let origin_atom = cx.intern_folded("origin");
-    let t_origin = entity_origin(host, cx, id, origin_atom);
+    let t_origin = host.vec_field_at(cx, id, origin_atom).to_array();
     let b = abs_bounds(t_origin, t);
     if !boxes_overlap(exact, b) {
         return false;
@@ -846,7 +836,7 @@ pub fn mount_boxes(host: &mut GameHost, cx: &mut Cx) -> Vec<vcod_common::movetra
         .collect();
     rows.into_iter()
         .map(|(id, t)| {
-            let (lo, hi) = abs_bounds(entity_origin(host, cx, id, origin_atom), &t);
+            let (lo, hi) = abs_bounds(host.vec_field_at(cx, id, origin_atom).to_array(), &t);
             vcod_common::movetrace::ContentsBox {
                 mins: lo.into(),
                 maxs: hi.into(),
@@ -986,7 +976,7 @@ pub fn aim_trace(
     let origin_atom = cx.intern_folded("origin");
     let mut best: Option<(f32, EntId)> = None;
     for (id, t) in rows {
-        let origin = entity_origin(host, cx, id, origin_atom);
+        let origin = host.vec_field_at(cx, id, origin_atom).to_array();
         let f = match t
             .shape
             .model
@@ -1088,7 +1078,7 @@ pub fn entity_contact(host: &mut GameHost, cx: &mut Cx, a: EntId, b: EntId) -> b
     };
     let (lo, hi) = abs_bounds_with_atom(host, cx, boxed, origin_atom);
     let (lo, hi) = (Vec3::from_array(lo), Vec3::from_array(hi));
-    let at = Vec3::from_array(entity_origin(host, cx, brushes, origin_atom));
+    let at = Vec3::from_array(host.vec_field_at(cx, brushes, origin_atom).to_array());
     // `SVF_CAPSULE` (0x200) is on every client and nothing else here.
     let capsule = host.ents.get(boxed).is_some_and(|e| e.client.is_some());
     let contact = if capsule {

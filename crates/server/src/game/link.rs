@@ -231,11 +231,7 @@ fn client_slot(host: &GameHost, id: EntId) -> Option<usize> {
 }
 
 fn vector(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> [f32; 3] {
-    let atom = cx.intern_folded(name);
-    match host.get_field(cx, id, atom) {
-        Value::Vector(v) => v,
-        _ => [0.0; 3],
-    }
+    host.vec_field(cx, id, name).to_array()
 }
 
 /// A bone of the client's posed body in the body's own frame: the model

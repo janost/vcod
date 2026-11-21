@@ -363,11 +363,7 @@ pub(crate) fn dead_yaw(
         let Some(id) = id else {
             return [0.0; 3];
         };
-        let atom = cx.intern_folded(name);
-        match host.get_field(cx, id, atom) {
-            Value::Vector(v) => v,
-            _ => [0.0; 3],
-        }
+        host.vec_field(cx, id, name).to_array()
     };
     let Some(toward) = [attacker, inflictor]
         .into_iter()
