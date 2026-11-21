@@ -59,6 +59,9 @@ pub(crate) struct Cod4Client {
     parts: crate::cod4_fly::Parts,
     weapons: HashMap<String, WeaponModels>,
     uploaded: HashMap<String, Option<ModelHandle>>,
+    /// Per dynamic entity of the world at this address, its model's entry
+    /// of `uploaded` once looked up.
+    dynent_handles: (usize, Vec<Option<Option<ModelHandle>>>),
     /// The camera's (pitch, yaw) as the last pump left it: live, the
     /// mouse's turn since then is what moves the cmd's view.
     cam_left: Option<(f32, f32)>,
@@ -273,6 +276,7 @@ impl Cod4Client {
             parts,
             weapons,
             uploaded: HashMap::new(),
+            dynent_handles: (0, Vec::new()),
             cam_left: None,
             bodies,
             players,
@@ -1673,14 +1677,25 @@ impl Cod4Client {
         let Some(w) = self.session.world().cloned().filter(|_| !no_dynents()) else {
             return;
         };
+        let at = std::sync::Arc::as_ptr(&w) as usize;
+        if self.dynent_handles.0 != at {
+            self.dynent_handles = (at, vec![None; w.dynents.len()]);
+        }
         for &(i, origin, rot) in &scene.dynents {
-            let name = &w.dynents[i as usize].model;
-            // Checked first: a model clone for an uploaded name is only dropped.
-            let handle = match self.uploaded.get(name) {
-                Some(h) => *h,
+            let handle = match self.dynent_handles.1[i as usize] {
+                Some(h) => h,
                 None => {
-                    let model = self.models.get(name).cloned();
-                    self.upload(cx, name, || model)
+                    let name = &w.dynents[i as usize].model;
+                    // Checked first: a model clone for an uploaded name is only dropped.
+                    let h = match self.uploaded.get(name) {
+                        Some(h) => *h,
+                        None => {
+                            let model = self.models.get(name).cloned();
+                            self.upload(cx, name, || model)
+                        }
+                    };
+                    self.dynent_handles.1[i as usize] = Some(h);
+                    h
                 }
             };
             let Some(handle) = handle else {
@@ -2007,6 +2022,7 @@ impl Cod4Client {
     /// A new map or renderer: every handle is gone.
     pub(crate) fn reset_render(&mut self) {
         self.uploaded.clear();
+        self.dynent_handles = (0, Vec::new());
         // The view weapon's models go to the new renderer on its next frame.
         self.view_weapon.clear();
     }
