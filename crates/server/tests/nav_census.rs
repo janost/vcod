@@ -4,9 +4,8 @@
 //! spawn fails here, one that joins more passes and should raise the floor.
 //!
 //! Needs `COD_DIR`; without the paks it returns early. Ignored by default
-//! (about 20 s in release at 1.1, 80 s at UO). After touching nav, run it
-//! with `cargo test --release -p vcod-server --test server -- --ignored
-//! nav_census::`.
+//! (about 15 s at 1.1, 150 s at UO). After touching nav, run it with
+//! `cargo test -p vcod-server --test server -- --ignored nav_census::`.
 //!
 //! The United Offensive census runs only with `COD_DIR` at a UO install
 //! (`uo/` beside `main/`) and returns at once otherwise, so it costs the

@@ -33,6 +33,9 @@
 # no FAILED: a build that ran nothing, or a skip, is not a pass.
 # The suite skips the examples (`--lib --bins --tests`): clippy's
 # --all-targets already compiles them, and linking them costs a GB.
+# The ignored gates run in the dev profile the suite built; --release
+# would rebuild the chain for a few seconds a run (testing.md "Ignored
+# tests").
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 read -ra wrap <<< "${CARGO_WRAP:-}"
@@ -107,7 +110,7 @@ check suite "${base[@]}" -- test --workspace --lib --bins --tests --no-fail-fast
 uo=(COD_DIR="${COD_UO_DIR:-}" COD4_DIR= VCOD_REQUIRE_INSTALL=cod1,uo)
 [[ -n ${COD_UO_DIR:-} ]] && check "suite (UO)" "${uo[@]}" -- test -p vcod-server --no-fail-fast
 
-srv=(test --release -p vcod-server --test server --)
+srv=(test -p vcod-server --test server --)
 for area in "$@"; do
 	case $area in
 		nav)
@@ -119,7 +122,7 @@ for area in "$@"; do
 			[[ -n ${COD_UO_DIR:-} ]] && check "bots (UO)" "${uo[@]}" -- "${srv[@]}" --ignored bots::
 			check "bot_threads" "${base[@]}" -- "${srv[@]}" bot_threads::
 			[[ -n ${COD4_DIR:-} ]] && check "cod4 bots" "${base[@]}" -- \
-				test --release -p vcod-server --lib -- --ignored cod4::bots::
+				test -p vcod-server --lib -- --ignored cod4::bots::
 			;;
 		render)
 			lvp=()
@@ -128,13 +131,13 @@ for area in "$@"; do
 			;;
 		cod2)
 			[[ -n ${COD2_DIR:-} ]] && check "cod2_gametype_census" "${base[@]}" -- \
-				test --release -p vcod-server --lib -- --ignored cod2_gametype_census
+				test -p vcod-server --lib -- --ignored cod2_gametype_census
 			[[ -n ${COD2_DIR:-} ]] && check "cod2 live play" "${base[@]}" -- \
 				test -p vcod --bins -- --ignored play::cod2_soak::cod2_live_
 			;;
 		cod4)
 			[[ -n ${COD4_DIR:-} ]] && check "cod4 hit boxes" "${base[@]}" -- \
-				test --release -p vcod-server --lib -- --ignored cod4_every_map_poses_both_teams
+				test -p vcod-server --lib -- --ignored cod4_every_map_poses_both_teams
 			;;
 	esac
 done
