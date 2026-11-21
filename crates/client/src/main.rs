@@ -4402,8 +4402,10 @@ impl App {
     /// UO's filters the level.
     fn texture_settings(&self) -> texture_settings::TextureSettings {
         let mut t = texture_cvars(&self.shell, self.textures.filter);
-        t.refuse_bad_levels = self.game == vcod_common::game::Game::Cod1
-            && !net::protocol::install_protocol(&self.fs).is_uo();
+        let cod1 = self.game == vcod_common::game::Game::Cod1;
+        t.refuse_bad_levels = cod1 && !net::protocol::install_protocol(&self.fs).is_uo();
+        // 0x4ebf20 reads its integer (0x4ec256)
+        t.color_mips = cod1 && self.shell.cvar_f32("r_colorMipLevels") as i32 != 0;
         t
     }
 

@@ -7,7 +7,7 @@
 
 use crate::renderer::gpu_util;
 use vcod_common::asset_source::AssetSource;
-use vcod_common::assets::{self, Image, ImageData};
+use vcod_common::assets::{self, Image, ImageData, TextureFormat};
 
 /// What one renderer build loads and samples images with.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -29,6 +29,9 @@ pub struct TextureSettings {
     /// level of the wrong size refuses the whole image; UO's (CoDUOMP.exe
     /// 0x505520) and vcod's default filter that level instead.
     pub refuse_bad_levels: bool,
+    /// CoD1's `r_colorMipLevels` (latched): each level below the first
+    /// tinted ([`color_mip_level`]).
+    pub color_mips: bool,
 }
 
 impl Default for TextureSettings {
@@ -44,6 +47,7 @@ impl Default for TextureSettings {
             picmip_bump: 0,
             picmip_spec: 0,
             refuse_bad_levels: false,
+            color_mips: false,
         }
     }
 }
@@ -67,6 +71,7 @@ impl TextureSettings {
             picmip_bump: 0,
             picmip_spec: 0,
             refuse_bad_levels: false,
+            color_mips: false,
         }
     }
 
@@ -86,6 +91,7 @@ impl TextureSettings {
             bits: self.bits,
             mip_filter: self.mip_filter,
             refuse_bad_levels: self.refuse_bad_levels,
+            color_mips: self.color_mips,
         }
     }
 
@@ -138,6 +144,7 @@ pub struct Store {
     pub bits: u32,
     pub mip_filter: MipFilter,
     pub refuse_bad_levels: bool,
+    pub color_mips: bool,
 }
 
 /// `0x4ea380`: the cvar's integer clamped to 0..=3.
@@ -408,20 +415,34 @@ pub fn prepare(
     }
     let px = match &mut img.data {
         ImageData::Rgba8(px) => px,
-        ImageData::Bc { mips: levels, .. } => {
+        ImageData::Bc {
+            format,
+            mips: levels,
+        } => {
             // without flag 1 only level 0 goes up (0x4ebf20's mip loop)
             if !mips.chain {
                 levels.truncate(1);
             }
+            if store.color_mips {
+                let (w, h) = (img.width, img.height);
+                for (i, level) in levels.iter_mut().enumerate().skip(1) {
+                    let texels = (w >> i).max(1) * (h >> i).max(1);
+                    color_mip_blocks(level, *format, texels, i);
+                }
+            }
             return Vec::new();
         }
     };
-    let mut levels = Vec::new();
+    let mut levels: Vec<Vec<u8>> = Vec::new();
     if mips.chain {
         let (mut w, mut h) = (img.width, img.height);
         while w > 1 || h > 1 {
             let prev = levels.last().unwrap_or(&*px);
-            let (nw, nh, next) = down.step(w, h, prev);
+            let (nw, nh, mut next) = down.step(w, h, prev);
+            // tinted in place, so the next level filters the tint down
+            if store.color_mips {
+                color_mip_level(&mut next, levels.len() + 1);
+            }
             levels.push(next);
             (w, h) = (nw, nh);
         }
@@ -445,6 +466,92 @@ pub fn prepare(
         return prepare(img, 0, gamma, store, mips);
     }
     levels
+}
+
+/// `r_colorMipLevels`' tints (CoDMP.exe 0x571370): level `n` blends toward
+/// entry `n` by its alpha byte, 128 for every level; level 0 takes none.
+const COLOR_MIP_TINTS: [[u8; 4]; 16] = [
+    [0, 0, 0, 0],
+    [255, 0, 0, 128],
+    [0, 255, 0, 128],
+    [0, 0, 255, 128],
+    [255, 255, 0, 128],
+    [0, 255, 255, 128],
+    [255, 0, 255, 128],
+    [255, 0, 0, 128],
+    [0, 255, 0, 128],
+    [0, 0, 255, 128],
+    [255, 128, 0, 128],
+    [0, 255, 128, 128],
+    [128, 0, 255, 128],
+    [255, 0, 0, 128],
+    [0, 255, 0, 128],
+    [0, 0, 255, 128],
+];
+
+/// An RGBA level `n` under `r_colorMipLevels` (0x4ebb90, called from
+/// 0x4ebf20's mip loop at 0x4ec26e): each colour channel
+/// `(c * (255 - a) + tint * a) >> 8`, alpha kept.
+fn color_mip_level(px: &mut [u8], n: usize) {
+    let Some(&[r, g, b, a]) = COLOR_MIP_TINTS.get(n) else {
+        return;
+    };
+    let keep = 255 - u32::from(a);
+    let tint = [r, g, b].map(|c| u32::from(c) * u32::from(a));
+    for t in px.as_chunks_mut::<4>().0 {
+        for (c, add) in t[..3].iter_mut().zip(tint) {
+            *c = ((u32::from(*c) * keep + add) >> 8) as u8;
+        }
+    }
+}
+
+/// A DXT level `n` of `texels` (its width times height) under
+/// `r_colorMipLevels` (0x4ebc00 through 0x4ebd60): the two 565 endpoints of
+/// the first `(texels - 1) / 16 + 1` blocks' colour halves blend toward
+/// the tint per field, truncating. A DXT3 or DXT5 block whose endpoint
+/// order flips gets them swapped back and each index's low bit flipped
+/// where its high bit is clear (0 and 1 trade, 2 and 3 stay, as retail
+/// does).
+fn color_mip_blocks(level: &mut [u8], format: TextureFormat, texels: u32, n: usize) {
+    let Some(&[r, g, b, a]) = COLOR_MIP_TINTS.get(n) else {
+        return;
+    };
+    let stride = format.block_size() as usize;
+    // DXT3's and DXT5's colour half follows their alpha half
+    let colour = stride - 8;
+    let a = u32::from(a);
+    let keep = 255 - a;
+    let tint = [
+        (u32::from(r) & 0xf8) << 8,
+        (u32::from(g) & 0xfc) << 3,
+        u32::from(b) >> 3,
+    ];
+    let blend = |c: u16| -> u16 {
+        let c = u32::from(c);
+        let field = |mask: u32, t: u32| (((c & mask) * keep + t * a) >> 8) & mask;
+        (field(0xf800, tint[0]) | field(0x7e0, tint[1]) | field(0x1f, tint[2])) as u16
+    };
+    let blocks = ((texels.max(1) - 1) >> 4) as usize + 1;
+    for block in level.chunks_exact_mut(stride).take(blocks) {
+        let c = &mut block[colour..colour + 8];
+        let old = [
+            u16::from_le_bytes([c[0], c[1]]),
+            u16::from_le_bytes([c[2], c[3]]),
+        ];
+        let new = old.map(blend);
+        let flipped = stride == 16 && (new[1] < new[0]) != (old[1] < old[0]);
+        let ends = match flipped {
+            true => [new[1], new[0]],
+            false => new,
+        };
+        c[..2].copy_from_slice(&ends[0].to_le_bytes());
+        c[2..4].copy_from_slice(&ends[1].to_le_bytes());
+        if flipped {
+            let idx = u32::from_le_bytes([c[4], c[5], c[6], c[7]]);
+            let idx = idx ^ ((!idx >> 1) & 0x5555_5555);
+            c[4..].copy_from_slice(&idx.to_le_bytes());
+        }
+    }
 }
 
 /// Retail's level-down step (0x4eb1d0): the next `#N` image when one
@@ -701,6 +808,68 @@ mod tests {
     fn the_last_custom_level_ends_the_chain() {
         assert_eq!(next_custom_level("a#3.tga").as_deref(), Some("a#4.tga"));
         assert_eq!(next_custom_level("x#9223372036854775807.tga"), None);
+    }
+
+    /// `r_colorMipLevels 1`: level 1 half red, level 2 the box of tinted
+    /// level 1 then half green (0x4ebb90 runs in place, so the next level
+    /// filters the tint down); level 0 and alpha untouched.
+    #[test]
+    fn color_mip_levels_tint_each_level_from_the_tinted_one_above() {
+        let tinted = Store {
+            color_mips: true,
+            ..Store::default()
+        };
+        let mut img = rgba(4, 4, [100, 50, 200, 77].repeat(16));
+        let levels = prepare(&mut img, 0, None, tinted, Mips::chain("a", &|_| None));
+        let ImageData::Rgba8(top) = &img.data else {
+            unreachable!()
+        };
+        assert_eq!(&top[..4], &[100, 50, 200, 77]);
+        // (100 * 127 + 255 * 128) >> 8 = 177; (50 * 127) >> 8 = 24
+        assert_eq!(&levels[0][..4], &[177, 24, 99, 77]);
+        assert_eq!(&levels[1][..4], &[87, 139, 49, 77]);
+        let plain = prepare(
+            &mut rgba(4, 4, [100, 50, 200, 77].repeat(16)),
+            0,
+            None,
+            Store::default(),
+            Mips::chain("a", &|_| None),
+        );
+        assert_eq!(&plain[0][..4], &[100, 50, 200, 77]);
+    }
+
+    /// A DXT level's endpoints blend per 565 field; DXT1 keeps their order
+    /// where DXT5 swaps them back and trades indices 0 and 1 (0x4ebc00).
+    #[test]
+    fn color_mip_levels_tint_dxt_endpoints() {
+        // white over black, index pattern 0 1 2 3 repeated
+        let block = |alpha: bool| {
+            let mut b = if alpha { vec![0xff; 8] } else { Vec::new() };
+            b.extend([0xff, 0xff, 0x00, 0x00, 0xe4, 0xe4, 0xe4, 0xe4]);
+            b
+        };
+        let mut dxt1 = block(false);
+        color_mip_blocks(&mut dxt1, TextureFormat::Bc1RgbaUnorm, 16, 3);
+        // blue at 128: white 0xffff -> 0x7bfe, black 0 -> 0x000f
+        assert_eq!(dxt1, [0xfe, 0x7b, 0x0f, 0x00, 0xe4, 0xe4, 0xe4, 0xe4]);
+        let mut dxt5 = block(true);
+        color_mip_blocks(&mut dxt5, TextureFormat::Bc3RgbaUnorm, 16, 3);
+        assert_eq!(&dxt5[8..12], &[0xfe, 0x7b, 0x0f, 0x00]);
+        // an order flip under red: 0x0800 over 0x07e0 goes to 0x7800 under 0x7be0
+        let mut flip = vec![0xff; 8];
+        flip.extend([0x00, 0x08, 0xe0, 0x07, 0xe4, 0xe4, 0xe4, 0xe4]);
+        color_mip_blocks(&mut flip, TextureFormat::Bc3RgbaUnorm, 16, 1);
+        let ends = [
+            u16::from_le_bytes([flip[8], flip[9]]),
+            u16::from_le_bytes([flip[10], flip[11]]),
+        ];
+        assert_eq!(ends, [0x7be0, 0x7800]);
+        // 0 1 2 3 -> 1 0 2 3 per byte: 0b11_10_00_01
+        assert_eq!(&flip[12..], &[0xe1; 4]);
+        // only the blocks 0x4ebc00 counts: (2x1 - 1) / 16 + 1 = 1 of 2
+        let mut two = [block(false), block(false)].concat();
+        color_mip_blocks(&mut two, TextureFormat::Bc1RgbaUnorm, 2, 3);
+        assert_eq!(&two[8..], &block(false)[..]);
     }
 
     #[test]
