@@ -31,10 +31,10 @@ use crate::play::cod4_players::WeaponTags;
 use crate::renderer::VmDraw;
 use crate::viewmodel::ViewModels;
 
-/// `pm_type`s: a spectator and the intermission draw no view weapon
-/// (`CG_AddViewWeapon`), from `PM_DEAD` on its anims reset
-/// (`CG_UpdateViewWeaponAnim`).
-/// On a turret (`EF_TURRET`) there is no view weapon.
+// `pm_type`s: a spectator and the intermission draw no view weapon
+// (`CG_AddViewWeapon`), from `PM_DEAD` on its anims reset
+// (`CG_UpdateViewWeaponAnim`). On a turret (`EF_TURRET`) there is no view
+// weapon.
 use vcod_cod4::net::flags::{
     EF_CROUCH, EF_PRONE, EF_TURRET, PM_DEAD, PM_INTERMISSION, PM_SPECTATOR,
 };
