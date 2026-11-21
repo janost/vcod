@@ -3244,3 +3244,10 @@ capture's 27150 (VERIFIED, gdb, 2026-11-21).
   blast capture). vcod's duplicate ends that think on its BSP pose (its
   probes strike the wreck and the hit restores the committed copy, 10.4)
   where retail's stays on its settled one; why is not read.
+- The push a hit hands another vehicle (0x827ab's `script_vehicle` arm)
+  keeps the speed share on the stack into each component, `share * k *
+  d[i] + v[i]` stored once (0x83a7a..0x83b9f, 0x83c3c..0x83dcb) (VERIFIED
+  (the instructions)). vcod rounded `k * share` and the product apiece and
+  pushed each component an ulp high; it now matches the struck tank's
+  pushed velocity to the bit (41a5c060 41121df8 bf356778) (VERIFIED, gdb
+  on a rerun of `vehicle_runover_ab`'s capture).
