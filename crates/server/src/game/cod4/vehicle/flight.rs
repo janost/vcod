@@ -9,7 +9,8 @@
 use glam::Vec3;
 use vcod_common::x87::F80;
 
-use super::{DT, Heli4, INV_360, MAX_TILT_VEL, d, vectoangles4};
+use super::{DT, Heli4, INV_360, MAX_TILT_VEL, d};
+use crate::game::cod4::item::vectoangles;
 
 /// `AngleNormalize180` on the stack, its result kept: `(x - floor(x +
 /// 0.5)) * 360` with `x` the angle times the float 1/360 (0x8209630).
@@ -373,7 +374,7 @@ impl Heli4 {
                 (d(at.y) - d(o.y)) as f32,
                 (d(at.z) - d(o.z)) as f32,
             );
-            vectoangles4(to).y
+            vectoangles(to).y
         });
         let due = self.goal_yaw.filter(|&gy| {
             if !(self.stopping || hovering) {
@@ -392,7 +393,7 @@ impl Heli4 {
         let wanted = look
             .or(due)
             .or(self.target_yaw)
-            .unwrap_or_else(|| if hovering { ay } else { vectoangles4(dir).y });
+            .unwrap_or_else(|| if hovering { ay } else { vectoangles(dir).y });
         let off = self.goal_yaw.map(|gy| d(ay) - d(gy));
         let watch = off.is_some_and(|o| o.abs() as f32 > 0.001);
         let rate_before = self.angle_rates[1];

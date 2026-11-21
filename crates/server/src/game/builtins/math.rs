@@ -124,10 +124,12 @@ pub fn vectoangles(v: [f32; 3]) -> [f32; 3] {
 
 /// 1.7's `vectoangles` (0x8191a72), the missiles' and `vectorToAngles`'
 /// (0x80be762): each `atan2` times 180 (the pitch's -180) over the double
-/// pi on the stack, stored as a float, 360 added to a negative one before
-/// its one store. The pitch's flat length stays unrounded into its `atan2`
-/// (`fstpl`, 0x8191afc), where CoD1's [`vectoangles`] stores a float
-/// (cod4-gsc.md 3.2, "Missiles under 1.7").
+/// pi on the stack, stored as a float, then 360 added to a negative one and
+/// 0 to the rest before its one store, so a -0 comes back +0 (`fcmovnb` at
+/// 0x8191ae5 and 0x8191b2a, the adds at 0x8191b31 and 0x8191b36). The
+/// pitch's flat length stays unrounded into its `atan2` (`fstpl`,
+/// 0x8191afc), where CoD1's [`vectoangles`] stores a float (cod4-gsc.md
+/// 3.2, "Missiles under 1.7"). The one port of 0x8191a72.
 pub fn vectoangles_1_7(v: [f32; 3]) -> [f32; 3] {
     use vcod_common::x87::F80;
     if v[0] == 0.0 && v[1] == 0.0 {
@@ -136,11 +138,8 @@ pub fn vectoangles_1_7(v: [f32; 3]) -> [f32; 3] {
     let pi = F80::from_f64(std::f64::consts::PI);
     let degrees = |atan: f64, k: f32| {
         let a = (F80::from_f64(atan) * F80::from_f32(k) / pi).to_f32();
-        if a < 0.0 {
-            (F80::from_f32(a) + F80::from_f32(360.0)).to_f32()
-        } else {
-            a
-        }
+        let add = if a < 0.0 { 360.0 } else { 0.0 };
+        (F80::from_f32(add) + F80::from_f32(a)).to_f32()
     };
     let (x, y) = (F80::from_f32(v[0]), F80::from_f32(v[1]));
     let flat = (x * x + y * y).sqrt().to_f64();
@@ -415,6 +414,15 @@ mod tests {
         assert_eq!(cod1[0].to_bits(), 0x4110_e20d);
         assert_eq!(cod4[1], cod1[1]);
         assert_eq!(vectoangles_1_7([0.0, 0.0, 1.0]), [270.0, 0.0, 0.0]);
+    }
+
+    /// 0x8191a72 adds 0 to a non-negative angle before its store, so a
+    /// level forward vector's -0 pitch comes back +0.
+    #[test]
+    fn cod4_vectoangles_turns_a_negative_zero_positive() {
+        let a = vectoangles_1_7([1.0, 0.0, 0.0]);
+        assert_eq!(a[0].to_bits(), 0, "pitch +0");
+        assert_eq!(a[1].to_bits(), 0, "yaw +0");
     }
 
     /// Retail's math builtins, checked against values the retail captures

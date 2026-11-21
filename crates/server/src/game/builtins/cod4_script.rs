@@ -154,8 +154,11 @@ fn axis(angles: Vec3) -> [Vec3; 3] {
     [f, -r, u]
 }
 
-/// `AxisToAngles`: pitch and yaw off the forward row as `vectoangles`
-/// reads them (0..360), roll off the left and up rows' heights.
+/// An `AxisToAngles` in plain f32: pitch and yaw off the forward row as
+/// `vectoangles` reads them (0..360), roll off the left and up rows'
+/// heights. INFERRED: not read off 1.7, whose `AxisToAngles` (0x81951fe)
+/// is [`crate::game::cod4::item::axis_to_angles`]; no gate pins these
+/// builtins' last bits.
 fn axis_to_angles(a: [Vec3; 3]) -> Vec3 {
     let f = a[0];
     let mut yaw = f.y.atan2(f.x).to_degrees();

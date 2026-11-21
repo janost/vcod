@@ -389,7 +389,7 @@ pub(crate) fn heli_tag(c4: &Cod4HostState, h: &Heli4, tag: &str) -> Option<(Vec3
 /// `tag_barrel`'s place ([`heli_world_pos`]) and the angles of bone 0's
 /// matrix (`G_DObjGetWorldTagMatrix` 0x80cbe9a: the bone's weighted
 /// matrix, [`vcod_cod4::skel::AnimMat::axis`], times the body's axis, then
-/// [`axis_to_angles4`]): the vehicle's flash-tag slot (+0x320) is never
+/// [`super::item::axis_to_angles`]): the vehicle's flash-tag slot (+0x320) is never
 /// written, so it names bone 0. `None` without a `tag_barrel`, when the
 /// aim does not run (0x80a004c).
 fn heli_aim_from(c4: &Cod4HostState, h: &Heli4) -> Option<(Vec3, Vec3)> {
@@ -409,7 +409,7 @@ fn heli_aim_from(c4: &Cod4HostState, h: &Heli4) -> Option<(Vec3, Vec3)> {
     };
     let place = heli_world_pos(h, mats.get(barrel)?.trans);
     let world = mats.first()?.axis().map(through);
-    Some((place, axis_to_angles4(world)))
+    Some((place, super::item::axis_to_angles(world[0], world[1])))
 }
 
 /// The first helicopter but `skip` whose model collision the segment
@@ -569,51 +569,6 @@ fn axis4(a: Vec3) -> [Vec3; 3] {
         (cr * cp) as f32,
     );
     [forward, left, up]
-}
-
-/// `vectoangles` (`cod4_lnxded` 0x8191a72): each `atan2` in double times
-/// 180 (or -180) over the double pi, stored as a float, 360 added to a
-/// negative one and 0 to the rest (so a -0 comes back +0); the pitch's
-/// flat length kept as a double.
-fn vectoangles4(v: Vec3) -> Vec3 {
-    if v.y == 0.0 && v.x == 0.0 {
-        return Vec3::new(if -v.z < 0.0 { 270.0 } else { 90.0 }, 0.0, 0.0);
-    }
-    let pi = std::f64::consts::PI;
-    let wrap = |a: f32| (d(if a >= 0.0 { 0.0 } else { 360.0 }) + d(a)) as f32;
-    let yaw = (d(v.y).atan2(d(v.x)) * 180.0 / pi) as f32;
-    let flat = (d(v.x) * d(v.x) + d(v.y) * d(v.y)).sqrt();
-    let pitch = (d(v.z).atan2(flat) * -180.0 / pi) as f32;
-    Vec3::new(wrap(pitch), wrap(yaw), 0.0)
-}
-
-/// `AxisToAngles` (`cod4_lnxded` 0x81951fe): pitch and yaw off the
-/// forward row ([`vectoangles4`]); the roll off the left row turned back
-/// through the yaw and the pitch, each `sinf`/`cosf` of a stored radian.
-fn axis_to_angles4(m: [Vec3; 3]) -> Vec3 {
-    let a = vectoangles4(m[0]);
-    let l = m[1];
-    let sc = |deg: f32| {
-        let r = (-d(deg) * DEG2RAD) as f32;
-        (d(r.sin()), d(r.cos()))
-    };
-    let (s1, c1) = sc(a.y);
-    let t = (d((d(l.x) * c1) as f32) - d(l.y) * s1) as f32;
-    let v = (d(l.x) * s1 + c1 * d(l.y)) as f32;
-    let (s2, c2) = sc(a.x);
-    let w = d(t) * c2 + d(l.z) * s2;
-    let z = d(l.z) * c2 - d(t) * s2;
-    let roll = if v == 0.0 && w == 0.0 {
-        -(if -z >= 0.0 { 90.0 } else { -90.0 })
-    } else {
-        let r = (z.atan2((d(v) * d(v) + w * w).sqrt()) * -180.0 / std::f64::consts::PI) as f32;
-        if v < 0.0 {
-            (if r < 0.0 { 180.0 } else { -180.0 } + d(r)) as f32
-        } else {
-            -r
-        }
-    };
-    Vec3::new(a.x, a.y, roll)
 }
 
 /// `to - from` normalized as `VEH_UpdateAim` does (0x80a00c3..0x80a0119):
@@ -836,13 +791,13 @@ impl Heli4 {
     /// the sight notify after it (cod4-gsc.md 3.2, "The turret").
     pub fn aim(&mut self, barrel: Vec3, frame: Vec3, target: Vec3) -> Vec<&'static str> {
         let dir = normalize4(target, barrel);
-        let toward = axis4(vectoangles4(dir));
+        let toward = axis4(super::item::vectoangles(dir));
         let frame = axis4(frame);
         let el = |j: usize| {
             let (a, b) = (toward[0], frame[j]);
             (d(a.z) * d(b.z) + d(a.y) * d(b.y) + d(a.x) * d(b.x)) as f32
         };
-        let rel = vectoangles4(Vec3::new(el(0), el(1), el(2)));
+        let rel = super::item::vectoangles(Vec3::new(el(0), el(1), el(2)));
         let off = (
             angle_sub4(rel.x, self.gun_pitch).abs(),
             angle_sub4(rel.y, self.gun_yaw).abs(),
@@ -1334,7 +1289,7 @@ impl Cod4Level {
         }
         let forward = h.gun_forward();
         let [_, right, up] = vcod_common::x87::angle_vectors(Vec3::from(
-            crate::game::builtins::math::vectoangles(forward.to_array()),
+            crate::game::builtins::math::vectoangles_1_7(forward.to_array()),
         ));
         let aim = (d.hip_spread_stand_max * 0.017_453_292).tan() * BULLET_RANGE;
         let (x, y) = super::combat::random_dir(now + h.shots as i32);
@@ -1492,7 +1447,7 @@ mod tests {
         assert!(h.hovering);
         assert!(nose_down > 3.0 && nose_up < -3.0, "{nose_down} {nose_up}");
         assert!(
-            (h.angles.y - vectoangles4(h.goal).y).abs() < 5.0,
+            (h.angles.y - crate::game::cod4::item::vectoangles(h.goal).y).abs() < 5.0,
             "{:?}",
             h.angles
         );
