@@ -55,6 +55,7 @@ load a third-party map and refuses `--set fs_game`.
 | `--class <response>` | CoD4: answer the class menu, e.g. `assault_mp,0`. |
 | `--fs-game mods/<name>` | CoD4: load a map under a mod. A joined server's `fs_game` wins. |
 | `--debug-overlay` | Start with the F3 overlay up. |
+| `--pos "x y z yaw [pitch]"` | Fly mode: start there instead of at the first spawn, in the F3 camera line's order and degrees. |
 | `--rtx-on` | Turn on every beyond-retail extra for this run, unsaved: `vc_bicubic`, `vc_bloom`, `vc_shadows`, `vc_ssao`, `vc_sunShafts`, `vc_softParticles`, `vc_hdr`, `vc_grade`, `vc_vignette`, `vc_grain`. No rays are traced. |
 | `--no-audio` | Run silent. |
 | `--volume <0..1>` | Master volume (`mss_volume`, default 0.8, kept in the config). |

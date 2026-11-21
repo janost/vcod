@@ -207,6 +207,7 @@ pub const PITCH_MAX: f32 = 89.0 * std::f32::consts::PI / 180.0;
 pub const PITCH_MIN: f32 = -PITCH_MAX;
 
 /// Yaw 0 = +X, positive yaw toward +Y (entity "angles" convention). Radians.
+#[derive(Clone)]
 pub struct FlyCamera {
     pub pos: Vec3,
     pub yaw: f32,
@@ -222,6 +223,28 @@ impl FlyCamera {
             pitch: 0.0,
             speed: 500.0,
         }
+    }
+
+    /// `--pos`'s `x y z yaw [pitch]`: the order and units the F3 overlay's
+    /// camera line prints (degrees, pitch positive up), so a spot copies
+    /// back.
+    pub fn parse_view(s: &str) -> Result<FlyCamera, String> {
+        let v: Vec<f32> = s
+            .split_whitespace()
+            .map(|w| w.parse::<f32>().ok().filter(|f| f.is_finite()))
+            .collect::<Option<_>>()
+            .ok_or_else(|| format!("{s:?}: x y z yaw [pitch], numbers"))?;
+        let [x, y, z, yaw, rest @ ..] = v.as_slice() else {
+            return Err(format!("{s:?}: x y z yaw [pitch]"));
+        };
+        let pitch = match rest {
+            [] => 0.0,
+            [p] => *p,
+            _ => return Err(format!("{s:?}: x y z yaw [pitch]")),
+        };
+        let mut cam = FlyCamera::new(Vec3::new(*x, *y, *z), *yaw);
+        cam.pitch = pitch.to_radians().clamp(PITCH_MIN, PITCH_MAX);
+        Ok(cam)
     }
 
     pub fn forward(&self) -> Vec3 {
@@ -279,6 +302,18 @@ impl FlyCamera {
 mod tests {
     use super::*;
     use glam::Vec3;
+
+    #[test]
+    fn pos_reads_the_f3_camera_line_order() {
+        let cam = FlyCamera::parse_view("-279 1396 293 -15 28").unwrap();
+        assert_eq!(cam.pos, Vec3::new(-279.0, 1396.0, 293.0));
+        assert!((cam.yaw.to_degrees() + 15.0).abs() < 1e-4);
+        assert!((cam.pitch.to_degrees() - 28.0).abs() < 1e-4);
+        assert_eq!(FlyCamera::parse_view("1 2 3 90").unwrap().pitch, 0.0);
+        for bad in ["1 2 3", "1 2 3 4 5 6", "1 2 x 4", "1 2 3 inf"] {
+            assert!(FlyCamera::parse_view(bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn lerp_angle_takes_the_short_way_across_the_seam() {

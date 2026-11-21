@@ -160,9 +160,8 @@ drawn into each, and both passes' GPU ms (`cod4_sunshadow`, cod4-world.md
 
 - F4 cycles culling `on -> locked -> off`. `locked` freezes the visible set
   so you can fly out and inspect it.
-- To reproduce a screenshot spot in fly mode, add a temporary
-  `VCOD_POS="x y z yaw"` override to the `FlyCamera::new` spawn in `main.rs`
-  and remove it before committing.
+- To reproduce a screenshot spot in fly mode, copy the F3 camera line's
+  numbers into `vcod <map> --pos "x y z yaw pitch"`.
 - Pre-existing noise: a few `vkAcquireNextImageKHR` fence validation errors
   per run on Vulkan.
 - A stock install loads with no shader parser warning

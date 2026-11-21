@@ -175,6 +175,11 @@ struct Args {
     /// Spawn as a soldier and walk (first person) instead of flying
     #[arg(long)]
     walk: bool,
+    /// Fly mode (`vcod <map>`): start at "x y z yaw [pitch]", the order and
+    /// degrees the F3 overlay's camera line prints, instead of the first spawn
+    #[arg(long, value_name = "X Y Z YAW [PITCH]", allow_hyphen_values = true,
+          value_parser = FlyCamera::parse_view)]
+    pos: Option<FlyCamera>,
     /// Start with the debug overlay visible (F3 toggles it at runtime)
     #[arg(long)]
     debug_overlay: bool,
@@ -2002,9 +2007,12 @@ fn main() -> Result<()> {
                 Some(c) => Some(c.spawn),
                 None => bsp::find_spawn(&bsp.entities),
             };
-            let cam = match spawn {
-                Some((origin, yaw)) => FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw),
-                None => {
+            let cam = match (args.pos.clone(), spawn) {
+                (Some(cam), _) => cam,
+                (None, Some((origin, yaw))) => {
+                    FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw)
+                }
+                (None, None) => {
                     let (min, max) = mesh::map_bounds(&bsp);
                     let center = (Vec3::from(min) + Vec3::from(max)) * 0.5;
                     log::warn!("no player spawn found, starting at the center of the map");
