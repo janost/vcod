@@ -2,6 +2,7 @@
 //! sprite.
 
 use super::*;
+use crate::renderer::gpu_util;
 
 /// One cloud-dome draw: a stage of the active sky block over the whole dome
 /// mesh, through the shared stage pipelines and params slots.
@@ -72,10 +73,11 @@ pub(super) struct SunSprite {
 pub(super) fn build_sky_box(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    format: wgpu::TextureFormat,
+    (format, samples): (wgpu::TextureFormat, u32),
     fs: &Pk3Fs,
     camera_layout: &wgpu::BindGroupLayout,
     bundle_views: &mut BundleViews,
+    rule: ImageRule,
     white_view: &wgpu::TextureView,
     env: &str,
     sh_name: &str,
@@ -104,23 +106,14 @@ pub(super) fn build_sky_box(
 
     let tex_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("sky side layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        }],
+        entries: &[gpu_util::texture_2d(0)],
     });
     let mut side_bgs = Vec::with_capacity(6);
     for suffix in sky::AXIS_SUFFIX {
         let path = format!("{env}_{suffix}");
         let found = assets::resolve_bundle_image(fs, &path).is_some();
         let view = if found {
-            upload_bundle_view(device, queue, fs, bundle_views, &path)
+            upload_bundle_view(device, queue, fs, bundle_views, &path, rule)
         } else {
             // retail binds tr.defaultImage for a side the paks lack
             log::warn!("sky {sh_name}: env image {path} not found, drawing white");
@@ -145,16 +138,7 @@ pub(super) fn build_sky_box(
     });
     let eye_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("sky eye layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }],
+        entries: &[gpu_util::uniform(0, wgpu::ShaderStages::VERTEX)],
     });
     let eye_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("sky eye bind group"),
@@ -213,7 +197,7 @@ pub(super) fn build_sky_box(
             bias: Default::default(),
         }),
         multisample: wgpu::MultisampleState {
-            count: msaa_samples(),
+            count: samples,
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
@@ -243,10 +227,11 @@ pub(super) const SUN_SPRITE_SCALE: f32 = 0.001_311_092_9;
 pub(super) fn build_sun_sprite(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    format: wgpu::TextureFormat,
+    (format, samples): (wgpu::TextureFormat, u32),
     fs: &Pk3Fs,
     camera_layout: &wgpu::BindGroupLayout,
     bundle_views: &mut BundleViews,
+    rule: ImageRule,
     sprite: &str,
     dir: glam::Vec3,
     size: f32,
@@ -255,19 +240,10 @@ pub(super) fn build_sun_sprite(
         log::warn!("sunfile: sprite image {sprite} not found, drawing no sun");
         return None;
     }
-    let view = upload_bundle_view(device, queue, fs, bundle_views, sprite);
+    let view = upload_bundle_view(device, queue, fs, bundle_views, sprite, rule);
     let tex_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("sun sprite layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        }],
+        entries: &[gpu_util::texture_2d(0)],
     });
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("sun sprite bind group"),
@@ -334,7 +310,7 @@ pub(super) fn build_sun_sprite(
             bias: Default::default(),
         }),
         multisample: wgpu::MultisampleState {
-            count: msaa_samples(),
+            count: samples,
             mask: !0,
             alpha_to_coverage_enabled: false,
         },

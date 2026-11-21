@@ -18,6 +18,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use crate::renderer::gpu_util::Readback;
+
 /// Where a frame's CPU time goes, in file order.
 #[derive(Clone, Copy)]
 pub enum Stage {
@@ -342,9 +344,7 @@ pub struct GpuStamps {
 struct Slot {
     set: wgpu::QuerySet,
     resolve: wgpu::Buffer,
-    read: wgpu::Buffer,
-    /// 0 free, 1 copy submitted, 2 mapped, 3 waiting on the map.
-    state: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    read: Readback,
     frame: u64,
 }
 
@@ -373,13 +373,7 @@ impl GpuStamps {
                     usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
                 }),
-                read: device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("profile read"),
-                    size: bytes,
-                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }),
-                state: Default::default(),
+                read: Readback::new(device, "profile read", bytes),
                 frame: 0,
             })
             .collect();
@@ -393,7 +387,7 @@ impl GpuStamps {
     /// The slot this frame stamps into, when one is free.
     pub fn begin(&mut self) -> Option<usize> {
         let i = self.next;
-        (self.ring[i].state.load(Ordering::Acquire) == 0).then(|| {
+        self.ring[i].read.is_free().then(|| {
             self.ring[i].frame = frame();
             i
         })
@@ -410,36 +404,26 @@ impl GpuStamps {
         let Some(i) = slot else { return };
         let s = &self.ring[i];
         encoder.resolve_query_set(&s.set, 0..STAMPS, &s.resolve, 0);
-        encoder.copy_buffer_to_buffer(&s.resolve, 0, &s.read, 0, None);
-        s.state.store(1, Ordering::Release);
+        encoder.copy_buffer_to_buffer(&s.resolve, 0, &s.read.buf, 0, None);
+        s.read.copied();
         self.next = (i + 1) % self.ring.len();
     }
 
     /// After submit: maps the submitted copies and writes the mapped ones.
     pub fn collect(&mut self) {
         for s in &self.ring {
-            match s.state.load(Ordering::Acquire) {
-                1 => {
-                    s.state.store(3, Ordering::Release);
-                    let state = s.state.clone();
-                    s.read.map_async(wgpu::MapMode::Read, .., move |r| {
-                        state.store(if r.is_ok() { 2 } else { 0 }, Ordering::Release);
-                    });
-                }
-                2 => {
-                    let ticks: Vec<u64> = match s.read.get_mapped_range(..) {
-                        Ok(view) => bytemuck::pod_collect_to_vec(&view[..]),
-                        Err(_) => vec![0; STAMPS as usize],
-                    };
-                    s.read.unmap();
-                    s.state.store(0, Ordering::Release);
+            let read = |view: Option<&[u8]>| match view {
+                Some(view) => bytemuck::pod_collect_to_vec::<u8, u64>(view),
+                None => vec![0; STAMPS as usize],
+            };
+            if let Some(ticks) = s.read.collect(read) {
+                {
                     let ms: Vec<f32> = ticks
                         .windows(2)
                         .map(|w| w[1].saturating_sub(w[0]) as f32 * self.ns_per_tick / 1.0e6)
                         .collect();
                     gpu(s.frame, &ms);
                 }
-                _ => {}
             }
         }
     }
@@ -457,12 +441,11 @@ pub fn extra_features() -> wgpu::Features {
 
 /// Notes the frame's size and MSAA samples as a `# size WxH samples N`
 /// line when either changes (a resize, a `vid_restart`).
-pub fn size(w: u32, h: u32) {
+pub fn size(w: u32, h: u32, samples: u32) {
     if !on() {
         return;
     }
     static LAST: Mutex<(u32, u32, u32)> = Mutex::new((0, 0, 0));
-    let samples = crate::renderer::msaa_samples();
     let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
     if *last != (w, h, samples) {
         *last = (w, h, samples);
@@ -518,9 +501,7 @@ const FRAG_QUERIES: u32 = 4096;
 struct FragSlot {
     set: wgpu::QuerySet,
     resolve: wgpu::Buffer,
-    read: wgpu::Buffer,
-    /// As [`Slot::state`].
-    state: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    read: Readback,
     frame: u64,
     kinds: Vec<Frag>,
 }
@@ -562,13 +543,7 @@ impl FragStats {
                     usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
                 }),
-                read: device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("fragment counts read"),
-                    size: bytes,
-                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }),
-                state: Default::default(),
+                read: Readback::new(device, "fragment counts read", bytes),
                 frame: 0,
                 kinds: Vec::new(),
             })
@@ -586,7 +561,7 @@ impl FragStats {
     pub fn begin_frame(&mut self, frame: u64) {
         let i = self.next;
         let s = &mut self.ring[i];
-        self.slot = (s.state.load(Ordering::Acquire) == 0).then(|| {
+        self.slot = s.read.is_free().then(|| {
             s.frame = frame;
             s.kinds.clear();
             i
@@ -621,45 +596,37 @@ impl FragStats {
         let n = s.kinds.len() as u32;
         if n > 0 {
             encoder.resolve_query_set(&s.set, 0..n, &s.resolve, 0);
-            encoder.copy_buffer_to_buffer(&s.resolve, 0, &s.read, 0, u64::from(n) * 8);
+            encoder.copy_buffer_to_buffer(&s.resolve, 0, &s.read.buf, 0, u64::from(n) * 8);
         }
-        s.state.store(1, Ordering::Release);
+        s.read.copied();
         self.next = (i + 1) % self.ring.len();
     }
 
     /// After submit: maps the submitted copies and sums the mapped ones.
     pub fn collect(&mut self) {
         for s in &mut self.ring {
-            match s.state.load(Ordering::Acquire) {
-                1 if s.kinds.is_empty() => s.state.store(0, Ordering::Release),
-                1 => {
-                    s.state.store(3, Ordering::Release);
-                    let state = s.state.clone();
-                    s.read.map_async(wgpu::MapMode::Read, .., move |r| {
-                        state.store(if r.is_ok() { 2 } else { 0 }, Ordering::Release);
-                    });
+            if s.read.is_copied() && s.kinds.is_empty() {
+                s.read.release();
+                continue;
+            }
+            let n = s.kinds.len() * 8;
+            let read = |view: Option<&[u8]>| match view {
+                Some(view) => bytemuck::pod_collect_to_vec::<u8, u64>(&view[..n]),
+                None => Vec::new(),
+            };
+            if let Some(counts) = s.read.collect(read) {
+                let mut sum = [0u64; FRAG_NAMES.len()];
+                for (k, n) in s.kinds.iter().zip(counts) {
+                    sum[*k as usize] += n;
                 }
-                2 => {
-                    let counts: Vec<u64> = match s.read.get_mapped_range(..) {
-                        Ok(view) => bytemuck::pod_collect_to_vec(&view[..s.kinds.len() * 8]),
-                        Err(_) => Vec::new(),
-                    };
-                    s.read.unmap();
-                    s.state.store(0, Ordering::Release);
-                    let mut sum = [0u64; FRAG_NAMES.len()];
-                    for (k, n) in s.kinds.iter().zip(counts) {
-                        sum[*k as usize] += n;
+                self.last = Some((s.frame, sum));
+                if let Some(st) = STATE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                    let mut line = format!("p {}", s.frame);
+                    for n in sum {
+                        line += &format!(" {n}");
                     }
-                    self.last = Some((s.frame, sum));
-                    if let Some(st) = STATE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-                        let mut line = format!("p {}", s.frame);
-                        for n in sum {
-                            line += &format!(" {n}");
-                        }
-                        let _ = writeln!(st.out, "{line}");
-                    }
+                    let _ = writeln!(st.out, "{line}");
                 }
-                _ => {}
             }
         }
     }
@@ -746,9 +713,7 @@ const GROUP_STAMPS: u32 = 4096;
 struct GroupSlot {
     set: wgpu::QuerySet,
     resolve: wgpu::Buffer,
-    read: wgpu::Buffer,
-    /// As [`Slot::state`].
-    state: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    read: Readback,
     frame: u64,
     /// The group each stamp opens, `None` a gap no group owns.
     kinds: Vec<Option<Group>>,
@@ -803,13 +768,7 @@ impl GpuGroups {
                     usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
                 }),
-                read: device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("profile group read"),
-                    size: bytes,
-                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }),
-                state: Default::default(),
+                read: Readback::new(device, "profile group read", bytes),
                 frame: 0,
                 kinds: Vec::new(),
             })
@@ -827,7 +786,7 @@ impl GpuGroups {
     pub fn begin_frame(&mut self) {
         let i = self.next;
         let s = &mut self.ring[i];
-        self.slot = (s.state.load(Ordering::Acquire) == 0).then(|| {
+        self.slot = s.read.is_free().then(|| {
             s.frame = frame();
             s.kinds.clear();
             i
@@ -873,41 +832,33 @@ impl GpuGroups {
         let n = s.kinds.len() as u32;
         if n > 0 {
             encoder.resolve_query_set(&s.set, 0..n, &s.resolve, 0);
-            encoder.copy_buffer_to_buffer(&s.resolve, 0, &s.read, 0, u64::from(n) * 8);
+            encoder.copy_buffer_to_buffer(&s.resolve, 0, &s.read.buf, 0, u64::from(n) * 8);
         }
-        s.state.store(1, Ordering::Release);
+        s.read.copied();
         self.next = (i + 1) % self.ring.len();
     }
 
     /// After submit: maps the submitted copies and writes the mapped ones.
     pub fn collect(&mut self) {
         for s in &mut self.ring {
-            match s.state.load(Ordering::Acquire) {
-                1 if s.kinds.is_empty() => s.state.store(0, Ordering::Release),
-                1 => {
-                    s.state.store(3, Ordering::Release);
-                    let state = s.state.clone();
-                    s.read.map_async(wgpu::MapMode::Read, .., move |r| {
-                        state.store(if r.is_ok() { 2 } else { 0 }, Ordering::Release);
-                    });
-                }
-                2 => {
-                    let ticks: Vec<u64> = match s.read.get_mapped_range(..) {
-                        Ok(view) => bytemuck::pod_collect_to_vec(&view[..s.kinds.len() * 8]),
-                        Err(_) => Vec::new(),
-                    };
-                    s.read.unmap();
-                    s.state.store(0, Ordering::Release);
-                    let ms = group_ms(&s.kinds, &ticks, self.ns_per_tick);
-                    if let Some(st) = STATE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-                        let mut line = format!("q {}", s.frame);
-                        for m in ms {
-                            line += &format!(" {m:.3}");
-                        }
-                        let _ = writeln!(st.out, "{line}");
+            if s.read.is_copied() && s.kinds.is_empty() {
+                s.read.release();
+                continue;
+            }
+            let n = s.kinds.len() * 8;
+            let read = |view: Option<&[u8]>| match view {
+                Some(view) => bytemuck::pod_collect_to_vec::<u8, u64>(&view[..n]),
+                None => Vec::new(),
+            };
+            if let Some(ticks) = s.read.collect(read) {
+                let ms = group_ms(&s.kinds, &ticks, self.ns_per_tick);
+                if let Some(st) = STATE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                    let mut line = format!("q {}", s.frame);
+                    for m in ms {
+                        line += &format!(" {m:.3}");
                     }
+                    let _ = writeln!(st.out, "{line}");
                 }
-                _ => {}
             }
         }
     }

@@ -1382,7 +1382,10 @@ own polygon offset (9.5), so the stock decals draw at (-2, -4). The
 world's stage pipelines still draw any of the three offsets at (-1, -2);
 no stock world shader uses the other two. `cg_marks`,
 `EV_ROCKET_EXPLODE_NOMARKS`, `cg_shadows 1` (9.7) and the `map_restart`
-clear (9.8) are honoured.
+clear (9.8) are honoured. A surface's triangles carry a box per run of
+16 (`MarkWorld::chunks`, built with the map); the clip skips a run wholly
+past one side of the gather box, whose triangles each fail the box test
+too, so the fragments are those of a pass over every triangle.
 
 The marks' `perlight` stages draw nothing, in retail as in vcod:
 

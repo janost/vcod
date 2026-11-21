@@ -5,6 +5,7 @@
 //! (docs/research/cod11-front-end.md, section 14, "How retail applies the
 //! Graphics, Performance and Sound pages").
 
+use crate::renderer::gpu_util;
 use vcod_common::asset_source::AssetSource;
 use vcod_common::assets::{self, Image, ImageData};
 
@@ -333,12 +334,7 @@ impl TexSamplers {
     }
 
     pub fn layout_entries() -> [wgpu::BindGroupLayoutEntry; 8] {
-        Self::BINDINGS.map(|binding| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-            count: None,
-        })
+        Self::BINDINGS.map(gpu_util::filtering_sampler)
     }
 
     pub fn entries(&self) -> [wgpu::BindGroupEntry<'_>; 8] {

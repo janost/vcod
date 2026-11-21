@@ -14,6 +14,8 @@
 //! retail fades by the depth gap (cod2-materials.md 9.5): the fx pass
 //! splits and reads it for a feathered run whatever `vc_softParticles` is.
 
+use crate::renderer::gpu_util;
+
 /// The copy's target: linear view depth, world units.
 pub(crate) const LINZ_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 /// Past this the value only washes sprites out.
@@ -46,81 +48,38 @@ impl SoftParticles {
         depth: &wgpu::TextureView,
         width: u32,
         height: u32,
+        samples: u32,
     ) -> SoftParticles {
-        let uniform_entry = wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
+        let uniform_entry = gpu_util::uniform(0, wgpu::ShaderStages::FRAGMENT);
         let copy_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("soft particles copy layout"),
-            entries: &[
-                uniform_entry,
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: crate::renderer::msaa_samples() > 1,
-                    },
-                    count: None,
-                },
-            ],
+            entries: &[uniform_entry, gpu_util::depth_2d(1, samples > 1)],
         });
         let fx_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("soft particles fx layout"),
-            entries: &[
-                uniform_entry,
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-            ],
+            entries: &[uniform_entry, gpu_util::unfilterable_2d(1)],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("soft_particles.wgsl"),
-            source: wgpu::ShaderSource::Wgsl(crate::renderer::depth_wgsl(include_str!(
-                "soft_particles.wgsl"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(crate::renderer::depth_wgsl(
+                include_str!("soft_particles.wgsl"),
+                samples,
+            )),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("soft particles copy pipeline layout"),
             bind_group_layouts: &[Some(&copy_layout)],
             immediate_size: 0,
         });
-        let copy_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("soft particles depth copy"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_copy"),
-                compilation_options: Default::default(),
-                targets: &[Some(LINZ_FORMAT.into())],
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let copy_pipeline = gpu_util::Fullscreen::new(
+            Some("soft particles depth copy"),
+            Some(&pipeline_layout),
+            &shader,
+            "vs_main",
+            "fs_copy",
+            LINZ_FORMAT.into(),
+        )
+        .build(device);
         // near and far from the start: CoD2's feather reads the copy with
         // vc_softParticles off
         let uniform = wgpu::util::DeviceExt::create_buffer_init(
@@ -201,22 +160,12 @@ impl SoftParticles {
     /// Copies the MSAA depth as it stands into the linear target. Call
     /// between the frame's two halves, with no pass holding the depth.
     pub fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("soft particles depth copy"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.linz,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        let mut pass = gpu_util::color_pass(
+            encoder,
+            Some("soft particles depth copy"),
+            &self.linz,
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+        );
         pass.set_pipeline(&self.copy_pipeline);
         pass.set_bind_group(0, &self.copy_bg, &[]);
         pass.draw(0..3, 0..1);

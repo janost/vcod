@@ -12,6 +12,7 @@
 //! 8).
 
 use crate::renderer::SCENE_FORMAT;
+use crate::renderer::gpu_util;
 
 pub struct ScreenBlend {
     blend: wgpu::RenderPipeline,
@@ -31,31 +32,11 @@ pub struct ScreenBlend {
 
 impl ScreenBlend {
     pub fn new(device: &wgpu::Device, scene: &wgpu::TextureView, width: u32, height: u32) -> Self {
-        let entry = |binding, ty| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty,
-            count: None,
-        };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("screen blend layout"),
             entries: &[
-                entry(
-                    0,
-                    wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                ),
-                entry(
-                    1,
-                    wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                ),
+                gpu_util::unfilterable_2d(0),
+                gpu_util::uniform(1, wgpu::ShaderStages::FRAGMENT),
             ],
         });
         let params = device.create_buffer(&wgpu::BufferDescriptor {
@@ -71,31 +52,19 @@ impl ScreenBlend {
             immediate_size: 0,
         });
         let pipeline = |entry: &str, blend: Option<wgpu::BlendState>| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(entry),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
+            gpu_util::Fullscreen::new(
+                Some(entry),
+                Some(&pipeline_layout),
+                &shader,
+                "vs_main",
+                entry,
+                wgpu::ColorTargetState {
+                    format: SCENE_FORMAT,
+                    blend,
+                    write_mask: wgpu::ColorWrites::ALL,
                 },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(entry),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: SCENE_FORMAT,
-                        blend,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: Default::default(),
-                depth_stencil: None,
-                multisample: Default::default(),
-                multiview_mask: None,
-                cache: None,
-            })
+            )
+            .build(device)
         };
         let blend = pipeline("fs_blend", Some(wgpu::BlendState::ALPHA_BLENDING));
         let add = wgpu::BlendComponent {
@@ -194,22 +163,12 @@ impl ScreenBlend {
 
     /// Render command 9: the scene as it stands into the capture.
     pub fn capture(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("screen blend capture"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.capture,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        let mut pass = gpu_util::color_pass(
+            encoder,
+            Some("screen blend capture"),
+            &self.capture,
+            wgpu::LoadOp::Load,
+        );
         pass.set_pipeline(&self.copy);
         pass.set_bind_group(0, &self.from_scene, &[]);
         pass.draw(0..3, 0..1);
@@ -346,22 +305,7 @@ mod tests {
         let alpha = super::alpha(100, 400);
         let mut enc = device.create_command_encoder(&Default::default());
         {
-            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let mut pass = gpu_util::color_pass(&mut enc, None, &view, wgpu::LoadOp::Load);
             blend.blend(&queue, &mut pass, alpha, COD2_DESATURATE);
         }
         let readback = device.create_buffer(&wgpu::BufferDescriptor {

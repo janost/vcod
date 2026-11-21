@@ -7,8 +7,8 @@
 //! sky (cleared depth) and the viewmodel (its squeezed depth range) are
 //! masked by depth. docs/research/cod11-gamma.md, section 6.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use crate::renderer::gpu_util;
+use crate::renderer::gpu_util::Readback;
 
 /// The half-resolution intermediates: linear depth, then (visibility, depth).
 /// Depth stays f32: at half precision a flat floor's steps would occlude it.
@@ -81,47 +81,22 @@ impl SsaoPass {
         width: u32,
         height: u32,
         timestamps: bool,
+        samples: u32,
     ) -> SsaoPass {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("ssao layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: crate::renderer::msaa_samples() > 1,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                gpu_util::uniform(0, wgpu::ShaderStages::FRAGMENT),
+                gpu_util::depth_2d(1, samples > 1),
+                gpu_util::unfilterable_2d(2),
             ],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ssao.wgsl"),
-            source: wgpu::ShaderSource::Wgsl(crate::renderer::depth_wgsl(include_str!(
-                "ssao.wgsl"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(crate::renderer::depth_wgsl(
+                include_str!("ssao.wgsl"),
+                samples,
+            )),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ssao pipeline layout"),
@@ -129,34 +104,23 @@ impl SsaoPass {
             immediate_size: 0,
         });
         let pipeline = |label, vs, entry, format, blend, samples, depth| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some(vs),
-                    compilation_options: Default::default(),
-                    buffers: &[],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(entry),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
+            gpu_util::Fullscreen {
+                depth,
+                samples,
+                ..gpu_util::Fullscreen::new(
+                    Some(label),
+                    Some(&pipeline_layout),
+                    &shader,
+                    vs,
+                    entry,
+                    wgpu::ColorTargetState {
                         format,
                         blend,
                         write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: Default::default(),
-                depth_stencil: depth,
-                multisample: wgpu::MultisampleState {
-                    count: samples,
-                    ..Default::default()
-                },
-                multiview_mask: None,
-                cache: None,
-            })
+                    },
+                )
+            }
+            .build(device)
         };
         let half = |label, entry, format| pipeline(label, "vs_main", entry, format, None, 1, None);
         let depth_pipeline = half("ssao depth", "fs_depth", LINZ_FORMAT);
@@ -182,7 +146,7 @@ impl SsaoPass {
             "fs_apply",
             scene_format,
             Some(multiply),
-            crate::renderer::msaa_samples(),
+            samples,
             Some(wgpu::DepthStencilState {
                 format: crate::renderer::DEPTH_FORMAT,
                 depth_write_enabled: Some(false),
@@ -270,22 +234,13 @@ impl SsaoPass {
              pipeline: &wgpu::RenderPipeline,
              bg: &wgpu::BindGroup,
              stamp: Option<wgpu::RenderPassTimestampWrites<'_>>| {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("ssao half pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: target,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: stamp,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
+                let mut pass = gpu_util::color_pass_timed(
+                    encoder,
+                    Some("ssao half pass"),
+                    target,
+                    wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    stamp,
+                );
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, bg, &[]);
                 pass.draw(0..3, 0..1);
@@ -414,9 +369,7 @@ impl Targets {
 pub struct GpuTimer {
     set: wgpu::QuerySet,
     resolve: wgpu::Buffer,
-    read: wgpu::Buffer,
-    /// 0 idle, 1 copy submitted, 2 mapped, 3 waiting on the map.
-    state: Arc<AtomicU8>,
+    read: Readback,
     /// Whether the pending readback's frame ran the SSAO passes.
     pending_ao: bool,
     ns_per_tick: f32,
@@ -445,13 +398,7 @@ impl GpuTimer {
                 usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             }),
-            read: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("timestamp read"),
-                size: bytes,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
-            state: Arc::new(AtomicU8::new(0)),
+            read: Readback::new(device, "timestamp read", bytes),
             pending_ao: false,
             ns_per_tick: queue.get_timestamp_period(),
             ms: (0.0, None),
@@ -473,32 +420,23 @@ impl GpuTimer {
     /// After the frame's passes, before submit: copies the stamps out
     /// unless the previous copy is still being read.
     pub fn resolve(&mut self, encoder: &mut wgpu::CommandEncoder, ran_ao: bool) {
-        if self.state.load(Ordering::Acquire) != 0 {
+        if !self.read.is_free() {
             return;
         }
         encoder.resolve_query_set(&self.set, 0..Self::COUNT, &self.resolve, 0);
-        encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.read, 0, None);
+        encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.read.buf, 0, None);
         self.pending_ao = ran_ao;
-        self.state.store(1, Ordering::Release);
+        self.read.copied();
     }
 
     /// After submit: maps a fresh copy, or folds in one the map finished.
     pub fn collect(&mut self, device: &wgpu::Device) {
-        match self.state.load(Ordering::Acquire) {
-            1 => {
-                self.state.store(3, Ordering::Release);
-                let state = self.state.clone();
-                self.read.map_async(wgpu::MapMode::Read, .., move |r| {
-                    state.store(if r.is_ok() { 2 } else { 0 }, Ordering::Release);
-                });
-            }
-            2 => {
-                let ticks: Vec<u64> = match self.read.get_mapped_range(..) {
-                    Ok(view) => bytemuck::pod_collect_to_vec(&view[..]),
-                    Err(_) => vec![0; Self::COUNT as usize],
-                };
-                self.read.unmap();
-                self.state.store(0, Ordering::Release);
+        let read = |view: Option<&[u8]>| match view {
+            Some(view) => bytemuck::pod_collect_to_vec::<u8, u64>(view),
+            None => vec![0; Self::COUNT as usize],
+        };
+        if let Some(ticks) = self.read.collect(read) {
+            {
                 let ms = |a: u32, b: u32| {
                     let (a, b) = (ticks[a as usize], ticks[b as usize]);
                     (b > a).then(|| (b - a) as f32 * self.ns_per_tick / 1.0e6)
@@ -521,7 +459,6 @@ impl GpuTimer {
                     None
                 };
             }
-            _ => {}
         }
         let _ = device.poll(wgpu::PollType::Poll);
     }

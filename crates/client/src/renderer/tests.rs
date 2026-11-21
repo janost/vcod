@@ -400,7 +400,7 @@ fn resolve_fx_path_uses_fxshaders_materials() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    let shaders = vcod_common::assets::load_shaders(&fs);
+    let shaders = ShaderLib::load(&fs);
     assert_eq!(
         resolve_fx_path(shaders.image_map(), &fs, "gfx/misc/tracer"),
         Some("textures/sfx/tracer.jpg".to_string())
@@ -526,7 +526,7 @@ fn hud_texture_path_resolves_a_material_a_plain_path_and_a_miss() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    let shaders = vcod_common::assets::load_shaders(&fs);
+    let shaders = ShaderLib::load(&fs);
     assert_eq!(
         hud_texture_path("hudStanceStand", shaders.image_map(), &fs),
         HudTex::Path("gfx/hud/stance_stand.dds".to_string())
@@ -1281,7 +1281,7 @@ fn wgsl_modules_validate() {
         ("shadow_mask", include_str!("../shadow_mask.wgsl")),
     ];
     for (name, src) in modules {
-        for (samples, src) in [(4, depth_wgsl_at(src, 4)), (1, depth_wgsl_at(src, 1))] {
+        for (samples, src) in [(4, depth_wgsl(src, 4)), (1, depth_wgsl(src, 1))] {
             let module = naga::front::wgsl::parse_str(&src)
                 .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(&src)));
             naga::valid::Validator::new(
@@ -1949,7 +1949,6 @@ fn world_runs_bundle_once_their_commands_hold() {
     let Some((device, queue)) = headless::test_device(headless::Need::Any) else {
         return;
     };
-    set_msaa_samples(1);
     let tex = |format, usage| {
         device
             .create_texture(&wgpu::TextureDescriptor {
@@ -2003,7 +2002,7 @@ fn world_runs_bundle_once_their_commands_hold() {
                 }),
                 ..Default::default()
             });
-            wb.begin(Some(SCENE_FORMAT));
+            wb.begin(Some(SCENE_FORMAT), 1);
             for v in runs {
                 wb.draw(
                     &mut pass,
@@ -2029,7 +2028,7 @@ fn world_runs_bundle_once_their_commands_hold() {
     );
     frame(&mut wb, &[&a]);
     assert_eq!(bundled(&wb), [true], "runs past the last go");
-    wb.begin(None);
+    wb.begin(None, 1);
     assert!(wb.runs.is_empty(), "a new target drops every run");
 }
 
@@ -2064,7 +2063,7 @@ fn chateaus_door_draws_opaque() {
         return;
     };
     let name = "textures/austria/doors/wood@chateau_exteriordoor";
-    let mut img = assets::load_material_image(&fs, &assets::load_shaders(&fs), name);
+    let mut img = assets::load_material_image(&fs, &ShaderLib::load(&fs), name);
     assert!(assets::has_cutout_alpha(&img));
     assert!(world_type_draws_opaque(&fs, name));
     assets::force_opaque(&mut img);
@@ -2307,4 +2306,13 @@ fn ssao_splits_after_the_last_opaque_or_decal_draw() {
     let blends = [SORT_BLEND];
     let only = merge_by_sort(&blends, &[], &[], &[]);
     assert_eq!(ssao_split(&only, &blends, &[], &[], &[]), 0);
+}
+
+#[test]
+fn a_model_handle_from_an_unloaded_map_indexes_nothing() {
+    let h = ModelHandle::first_map(2);
+    assert_eq!(h.live(0, 5), Some(2));
+    // the next map's table, after one unload_world, already has 5 handles
+    assert_eq!(h.live(1, 5), None);
+    assert_eq!(h.live(0, 2), None);
 }

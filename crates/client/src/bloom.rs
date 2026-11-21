@@ -9,6 +9,8 @@
 //! so only what retail would clip glows: stacked blends (fx, flares, the
 //! sun), and full screen the overbright part of a surface.
 
+use crate::renderer::gpu_util;
+
 const CHAIN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// Most levels below the half-resolution one, and the smallest side a
 /// level may have.
@@ -48,42 +50,12 @@ impl Bloom {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("bloom layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                gpu_util::texture_2d(0),
+                gpu_util::filtering_sampler(1),
+                gpu_util::uniform(2, wgpu::ShaderStages::FRAGMENT),
             ],
         });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("bloom sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let sampler = gpu_util::linear_clamp_sampler(device, Some("bloom sampler"));
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("bloom params"),
             size: 16,
@@ -106,31 +78,19 @@ impl Bloom {
         };
         let pipeline =
             |entry: &str, format: wgpu::TextureFormat, blend: Option<wgpu::BlendState>| {
-                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some(entry),
-                    layout: Some(&pipeline_layout),
-                    vertex: wgpu::VertexState {
-                        module: &shader,
-                        entry_point: Some("vs_main"),
-                        compilation_options: Default::default(),
-                        buffers: &[],
+                gpu_util::Fullscreen::new(
+                    Some(entry),
+                    Some(&pipeline_layout),
+                    &shader,
+                    "vs_main",
+                    entry,
+                    wgpu::ColorTargetState {
+                        format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::COLOR,
                     },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &shader,
-                        entry_point: Some(entry),
-                        compilation_options: Default::default(),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format,
-                            blend,
-                            write_mask: wgpu::ColorWrites::COLOR,
-                        })],
-                    }),
-                    primitive: Default::default(),
-                    depth_stencil: None,
-                    multisample: Default::default(),
-                    multiview_mask: None,
-                    cache: None,
-                })
+                )
+                .build(device)
             };
         let prefilter = pipeline("fs_prefilter", CHAIN_FORMAT, None);
         let down = pipeline("fs_down", CHAIN_FORMAT, None);
@@ -242,26 +202,16 @@ impl Bloom {
         target: &wgpu::TextureView,
         clear: bool,
     ) {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("bloom pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: if clear {
-                        wgpu::LoadOp::Clear(wgpu::Color::BLACK)
-                    } else {
-                        wgpu::LoadOp::Load
-                    },
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        let mut pass = gpu_util::color_pass(
+            encoder,
+            Some("bloom pass"),
+            target,
+            if clear {
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+            } else {
+                wgpu::LoadOp::Load
+            },
+        );
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, src, &[]);
         pass.draw(0..3, 0..1);

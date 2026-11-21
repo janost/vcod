@@ -20,7 +20,7 @@ use vcod_common::pk3::Pk3Fs;
 use vcod_common::shader::Shader;
 
 use super::{
-    AnimFrames, BundleViews, Renderer, STAGE_PARAMS_SIZE, depth_bias, scene_pipeline,
+    AnimFrames, BundleViews, ImageRule, Renderer, STAGE_PARAMS_SIZE, depth_bias, scene_pipeline,
     stage_animated, stage_bind_groups, stage_params,
 };
 use crate::entity_material::wgpu_blend_factor;
@@ -99,8 +99,9 @@ pub(super) struct MarkPass {
     materials: HashMap<(String, u16), Vec<MarkBatch>>,
     module: wgpu::ShaderModule,
     layout: wgpu::PipelineLayout,
-    /// The scene target's (`Renderer::world_format`).
-    format: wgpu::TextureFormat,
+    /// The scene target's format and sample count (`Renderer::world_format`,
+    /// `Renderer::samples`).
+    target: (wgpu::TextureFormat, u32),
     pipelines: Vec<(PipeKey, wgpu::RenderPipeline)>,
     views: HashMap<String, wgpu::TextureView>,
     /// The marks' own runs and the vertex and index counts they fill.
@@ -116,7 +117,7 @@ impl MarkPass {
         device: &wgpu::Device,
         module: wgpu::ShaderModule,
         layout: wgpu::PipelineLayout,
-        format: wgpu::TextureFormat,
+        target: (wgpu::TextureFormat, u32),
     ) -> MarkPass {
         let align = device.limits().min_uniform_buffer_offset_alignment as u64;
         let params_stride = STAGE_PARAMS_SIZE.div_ceil(align) * align;
@@ -153,7 +154,7 @@ impl MarkPass {
             materials: HashMap::new(),
             module,
             layout,
-            format,
+            target,
             pipelines: Vec::new(),
             views: HashMap::new(),
             mark_runs: Vec::new(),
@@ -383,8 +384,6 @@ impl MarkPass {
             let mut bundle_views = BundleViews {
                 views: std::mem::take(&mut self.views),
                 table: ctx.image_gamma,
-                picmip: ctx.textures.world_picmip(ms.shader.nopicmip),
-                mipmap: !ms.shader.nomipmaps,
                 store: ctx.textures.store(),
                 prefetched: None,
             };
@@ -405,7 +404,7 @@ impl MarkPass {
                         let p = mark_pipeline(
                             ctx.device,
                             &self.module,
-                            self.format,
+                            self.target,
                             &self.layout,
                             &pipe_key,
                         );
@@ -425,6 +424,7 @@ impl MarkPass {
                     lm_view,
                     ctx.lightmap_sampler,
                     &mut bundle_views,
+                    ImageRule::world(&ctx.textures, &ms.shader),
                     st,
                 );
                 batches.push(MarkBatch {
@@ -477,9 +477,9 @@ impl MarkPass {
                 }
             }
         }
-        let (module, format, layout) = (&self.module, self.format, &self.layout);
+        let (module, target, layout) = (&self.module, self.target, &self.layout);
         let built = super::par_build(fresh.len(), |i| {
-            mark_pipeline(ctx.device, module, format, layout, &fresh[i])
+            mark_pipeline(ctx.device, module, target, layout, &fresh[i])
         });
         self.pipelines.extend(fresh.into_iter().zip(built));
         for name in names {
@@ -553,7 +553,7 @@ impl MarkPass {
 fn mark_pipeline(
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,
-    format: wgpu::TextureFormat,
+    target: (wgpu::TextureFormat, u32),
     layout: &wgpu::PipelineLayout,
     (blend, depth_write, two_sided, offset): &PipeKey,
 ) -> wgpu::RenderPipeline {
@@ -568,7 +568,7 @@ fn mark_pipeline(
     scene_pipeline(
         device,
         module,
-        format,
+        target,
         &format!("mark stage {blend:?} depthwrite={depth_write} twosided={two_sided} {offset:?}"),
         layout,
         ("vs_stage", "fs_stage"),

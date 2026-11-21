@@ -6,6 +6,7 @@
 //! visibility (cod4_sunshadow_recv.wgsl;
 //! docs/research/cod4-world.md 3.6).
 
+use crate::renderer::gpu_util;
 use bytemuck::Zeroable;
 use glam::{Mat4, Vec3};
 use std::sync::Arc;
@@ -87,32 +88,9 @@ struct PartitionUniform {
 /// The receivers' camera group entries.
 pub(crate) fn layout_entries() -> [wgpu::BindGroupLayoutEntry; 3] {
     [
-        wgpu::BindGroupLayoutEntry {
-            binding: ATLAS_BINDING,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Depth,
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        },
-        wgpu::BindGroupLayoutEntry {
-            binding: UNIFORM_BINDING,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        },
-        wgpu::BindGroupLayoutEntry {
-            binding: SAMPLER_BINDING,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
-            count: None,
-        },
+        gpu_util::depth_2d(ATLAS_BINDING, false),
+        gpu_util::uniform(UNIFORM_BINDING, wgpu::ShaderStages::FRAGMENT),
+        gpu_util::sampler(SAMPLER_BINDING, wgpu::SamplerBindingType::Comparison),
     ]
 }
 
@@ -293,6 +271,37 @@ fn picked_smodels<'a>(
     (runs, Picked(kept))
 }
 
+/// Binds the casters' buffers into `pass` (its group 0 bound), draws the
+/// world's solid then cut runs that `keep` passes, then the static models'
+/// `smodel_runs`; returns the triangles.
+fn draw_casters(
+    pass: &mut wgpu::RenderPass<'_>,
+    (c, vertex_buf): (&Casters, &wgpu::Buffer),
+    (solid, cut): (&wgpu::RenderPipeline, &wgpu::RenderPipeline),
+    keep: impl Fn(&Run) -> bool,
+    smodel_runs: &[&SmodelRun],
+) -> u32 {
+    let mut drawn = 0;
+    pass.set_vertex_buffer(0, vertex_buf.slice(..));
+    pass.set_index_buffer(c.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+    pass.set_pipeline(solid);
+    for r in c.solid.iter().filter(|r| keep(r)) {
+        pass.draw_indexed(r.range.clone(), 0, 0..1);
+        drawn += r.range.len() as u32 / 3;
+    }
+    pass.set_pipeline(cut);
+    let mut bound = None;
+    for (r, bg) in c.cuts.iter().filter(|(r, _)| keep(r)) {
+        if bound != Some(*bg) {
+            pass.set_bind_group(1, &c.cut_bgs[*bg], &[]);
+            bound = Some(*bg);
+        }
+        pass.draw_indexed(r.range.clone(), 0, 0..1);
+        drawn += r.range.len() as u32 / 3;
+    }
+    drawn + draw_runs(pass, c, (solid, cut), smodel_runs)
+}
+
 /// Draws `runs` (solid ones through `solid`, alpha-tested ones through
 /// `cut` with their image group) over the bound casters' buffers; returns
 /// the triangles.
@@ -447,6 +456,10 @@ fn plan_draws<B: PartialEq + Copy, I: PartialEq + Copy>(
     }
 }
 
+// SPOT_BLIT_WGSL writes these out: the spot tiles from x 1024, 512 square,
+// below the 1024-square sun partitions.
+const _: () = assert!(SPOT_X == 1024 && PARTITION == 1024 && crate::cod4_spotshadow::TILE == 512);
+
 /// Copies a spot tile's cached static depth into the atlas (a fullscreen
 /// triangle under the tile's viewport, writing its depth as it stands).
 pub(crate) const SPOT_BLIT_WGSL: &str = "
@@ -598,36 +611,13 @@ impl SunShadowPass {
         let part_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("cod4 sun shadow partition"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
+                gpu_util::uniform(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
+                gpu_util::filtering_sampler(1),
             ],
         });
         let cut_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("cod4 sun shadow cut"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
+            entries: &[gpu_util::texture_2d(1)],
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("cod4 sun shadow cut"),
@@ -638,7 +628,8 @@ impl SunShadowPass {
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
-        let part_uniform = |label| {
+        // a partition's or spot tile's uniform and its group
+        let part_uniform = |label, group_label| {
             let buf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
                 size: std::mem::size_of::<PartitionUniform>() as u64,
@@ -646,7 +637,7 @@ impl SunShadowPass {
                 mapped_at_creation: false,
             });
             let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(label),
+                label: Some(group_label),
                 layout: &part_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
@@ -661,29 +652,20 @@ impl SunShadowPass {
             });
             (buf, bg)
         };
-        let spot_parts =
-            [0; crate::cod4_spotshadow::MAX_LIGHTS].map(|_| part_uniform("cod4 spot shadow"));
+        let spot_parts = [0; crate::cod4_spotshadow::MAX_LIGHTS]
+            .map(|_| part_uniform("cod4 spot shadow", "cod4 spot shadow"));
         let static_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("cod4 spot static"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Depth,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
+            entries: &[gpu_util::depth_2d(0, false)],
         });
-        let spot_static = [0; crate::cod4_spotshadow::MAX_LIGHTS].map(|_| {
-            let tile = crate::cod4_spotshadow::TILE;
+        // a static depth cache, `side` square, and its group for the blit
+        let static_cache = |label, side| {
             let view = device
                 .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("cod4 spot static"),
+                    label: Some(label),
                     size: wgpu::Extent3d {
-                        width: tile,
-                        height: tile,
+                        width: side,
+                        height: side,
                         depth_or_array_layers: 1,
                     },
                     mip_level_count: 1,
@@ -696,7 +678,7 @@ impl SunShadowPass {
                 })
                 .create_view(&Default::default());
             let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("cod4 spot static"),
+                label: Some(label),
                 layout: &static_layout,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
@@ -704,7 +686,9 @@ impl SunShadowPass {
                 }],
             });
             (view, bg)
-        });
+        };
+        let spot_static = [0; crate::cod4_spotshadow::MAX_LIGHTS]
+            .map(|_| static_cache("cod4 spot static", crate::cod4_spotshadow::TILE));
         let blit = |entry: &str| {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("cod4 spot blit"),
@@ -715,91 +699,33 @@ impl SunShadowPass {
                 bind_group_layouts: &[Some(&static_layout)],
                 immediate_size: 0,
             });
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("cod4 spot blit"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &module,
-                    entry_point: Some("vs_blit"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &module,
-                    entry_point: Some(entry),
-                    compilation_options: Default::default(),
-                    targets: &[],
-                }),
-                primitive: Default::default(),
-                depth_stencil: Some(wgpu::DepthStencilState {
+            gpu_util::Fullscreen::depth(
+                Some("cod4 spot blit"),
+                Some(&layout),
+                &module,
+                "vs_blit",
+                Some(entry),
+                wgpu::DepthStencilState {
                     format: ATLAS_FORMAT,
                     depth_write_enabled: Some(true),
                     depth_compare: Some(wgpu::CompareFunction::Always),
                     stencil: Default::default(),
                     bias: Default::default(),
-                }),
-                multisample: Default::default(),
-                multiview_mask: None,
-                cache: None,
-            })
+                },
+            )
+            .build(device)
         };
         let spot_blit = blit("fs_blit");
         let sun_blit = blit("fs_blit_sun");
         // each sun partition's static casters, as the spot tiles' cache
-        let sun_static = [0, 1].map(|_| {
-            let view = device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("cod4 sun static"),
-                    size: wgpu::Extent3d {
-                        width: PARTITION,
-                        height: PARTITION,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: ATLAS_FORMAT,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                })
-                .create_view(&Default::default());
-            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("cod4 sun static"),
-                layout: &static_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                }],
-            });
-            (view, bg)
-        });
+        let sun_static = [0, 1].map(|_| static_cache("cod4 sun static", PARTITION));
         let parts = [0, 1].map(|p| {
-            let buf = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(if p == 0 {
-                    "cod4 sun shadow near"
-                } else {
-                    "cod4 sun shadow far"
-                }),
-                size: std::mem::size_of::<PartitionUniform>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("cod4 sun shadow partition"),
-                layout: &part_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                ],
-            });
-            (buf, bg)
+            let label = if p == 0 {
+                "cod4 sun shadow near"
+            } else {
+                "cod4 sun shadow far"
+            };
+            part_uniform(label, "cod4 sun shadow partition")
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("cod4_sunshadow.wgsl"),
@@ -957,25 +883,52 @@ impl SunShadowPass {
 
     /// The casters of `bsp`'s world and static model soups (`soup_model` 0)
     /// whose material casts, grouped (`sunshadow::caster_groups`), `None` on a map with no caster list (not
-    /// CoD4). `image` uploads an alpha-tested caster's colour map.
+    /// CoD4). `image` uploads an alpha-tested caster's colour map, given its
+    /// material index and the map's path.
     pub fn casters(
         &self,
         device: &wgpu::Device,
         bsp: &vcod_common::mapworld::MapWorld,
         soup_model: &[u32],
-        mut image: impl FnMut(&str) -> wgpu::TextureView,
+        mut image: impl FnMut(u16, &str) -> wgpu::TextureView,
     ) -> Option<Casters> {
         if bsp.sun_casters.is_empty() {
             return None;
         }
         let groups = sunshadow::caster_groups(bsp, soup_model, sunshadow::CASTER_CELL);
-        let mut tested = 0;
         let mut indices = Vec::new();
         let (mut solid, mut cuts) = (Vec::new(), Vec::new());
         let mut cut_bgs: Vec<wgpu::BindGroup> = Vec::new();
-        let mut last_cut = None;
+        // One image group per alpha-tested material, world and static
+        // models alike; `None` for a material with no caster entry.
+        let mut cut_of: std::collections::HashMap<u16, usize> = Default::default();
+        let mut cut_group = |m: u16| -> Option<usize> {
+            if let Some(&b) = cut_of.get(&m) {
+                return Some(b);
+            }
+            let Some(Some(c)) = bsp.sun_casters.get(usize::from(m)) else {
+                return None;
+            };
+            let view = image(m, &c.image);
+            cut_bgs.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("cod4 sun shadow cut image"),
+                layout: &self.cut_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                }],
+            }));
+            cut_of.insert(m, cut_bgs.len() - 1);
+            Some(cut_bgs.len() - 1)
+        };
         for g in groups {
-            let cut = g.cut;
+            let bg = match g.cut {
+                None => None,
+                Some(m) => match cut_group(m) {
+                    Some(bg) => Some(bg),
+                    None => continue,
+                },
+            };
             let first = indices.len() as u32;
             indices.extend(g.indices);
             let run = Run {
@@ -983,30 +936,12 @@ impl SunShadowPass {
                 lo: g.lo,
                 hi: g.hi,
             };
-            let Some(m) = cut else {
-                solid.push(run);
-                continue;
-            };
-            if last_cut != Some(m) {
-                let Some(Some(c)) = bsp.sun_casters.get(usize::from(m)) else {
-                    continue;
-                };
-                let view = image(&c.image);
-                cut_bgs.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("cod4 sun shadow cut image"),
-                    layout: &self.cut_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    }],
-                }));
-                last_cut = Some(m);
-                tested += 1;
+            match bg {
+                None => solid.push(run),
+                Some(bg) => cuts.push((run, bg)),
             }
-            cuts.push((run, cut_bgs.len() - 1));
         }
-        // the static models' runs, their cut images shared with the world's
-        let mut cut_of: std::collections::HashMap<u16, usize> = Default::default();
+        // the static models' runs
         let mut smodels = Vec::new();
         for sm in sunshadow::smodel_casters(bsp) {
             let mut lods = Vec::with_capacity(sm.lods.len());
@@ -1015,29 +950,10 @@ impl SunShadowPass {
                 for (cut, idx) in runs {
                     let bg = match cut {
                         None => None,
-                        Some(m) => {
-                            if let Some(&b) = cut_of.get(&m) {
-                                Some(b)
-                            } else {
-                                let Some(Some(c)) = bsp.sun_casters.get(usize::from(m)) else {
-                                    continue;
-                                };
-                                let view = image(&c.image);
-                                cut_bgs.push(device.create_bind_group(
-                                    &wgpu::BindGroupDescriptor {
-                                        label: Some("cod4 sun shadow cut image"),
-                                        layout: &self.cut_layout,
-                                        entries: &[wgpu::BindGroupEntry {
-                                            binding: 1,
-                                            resource: wgpu::BindingResource::TextureView(&view),
-                                        }],
-                                    },
-                                ));
-                                tested += 1;
-                                cut_of.insert(m, cut_bgs.len() - 1);
-                                Some(cut_bgs.len() - 1)
-                            }
-                        }
+                        Some(m) => match cut_group(m) {
+                            Some(bg) => Some(bg),
+                            None => continue,
+                        },
                     };
                     let first = indices.len() as u32;
                     indices.extend(idx);
@@ -1057,6 +973,7 @@ impl SunShadowPass {
         }
         let m0 = bsp.models.first()?;
         let tris = indices.len() as u32 / 3;
+        let tested = cut_bgs.len();
         log::info!(
             "cod4 sun shadow casters: {tris} triangles in {} cells, {tested} alpha-tested materials",
             solid.len() + cuts.len()
@@ -1170,25 +1087,14 @@ impl SunShadowPass {
             }
             pass.set_scissor_rect(vx, vy, vw.min(PARTITION - vx), vh.min(PARTITION - vy));
             pass.set_bind_group(0, &self.parts[p].1, &[]);
-            pass.set_vertex_buffer(0, vertex_buf.slice(..));
-            pass.set_index_buffer(c.index_buf.slice(..), wgpu::IndexFormat::Uint32);
             let cull = &part.cull;
-            pass.set_pipeline(&self.solid);
-            for r in c.solid.iter().filter(|r| !cull.culls(r.lo, r.hi)) {
-                pass.draw_indexed(r.range.clone(), 0, 0..1);
-                drawn += r.range.len() as u32 / 3;
-            }
-            pass.set_pipeline(&self.cut);
-            let mut bound = None;
-            for (r, bg) in c.cuts.iter().filter(|(r, _)| !cull.culls(r.lo, r.hi)) {
-                if bound != Some(*bg) {
-                    pass.set_bind_group(1, &c.cut_bgs[*bg], &[]);
-                    bound = Some(*bg);
-                }
-                pass.draw_indexed(r.range.clone(), 0, 0..1);
-                drawn += r.range.len() as u32 / 3;
-            }
-            drawn += draw_runs(&mut pass, c, (&self.solid, &self.cut), &smodel_runs);
+            drawn += draw_casters(
+                &mut pass,
+                (c, vertex_buf),
+                (&self.solid, &self.cut),
+                |r| !cull.culls(r.lo, r.hi),
+                &smodel_runs,
+            );
         }
         for (p, part) in sh.partitions.iter().enumerate() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1373,25 +1279,13 @@ impl SunShadowPass {
                     multiview_mask: None,
                 });
                 pass.set_bind_group(0, &self.spot_parts[t].1, &[]);
-                pass.set_vertex_buffer(0, vertex_buf.slice(..));
-                pass.set_index_buffer(c.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                let keep = |r: &Run| !spot::culls(&v.planes, r.lo, r.hi);
-                pass.set_pipeline(&self.solid);
-                for r in c.solid.iter().filter(|r| keep(r)) {
-                    pass.draw_indexed(r.range.clone(), 0, 0..1);
-                    drawn += r.range.len() as u32 / 3;
-                }
-                pass.set_pipeline(&self.cut);
-                let mut bound = None;
-                for (r, bg) in c.cuts.iter().filter(|(r, _)| keep(r)) {
-                    if bound != Some(*bg) {
-                        pass.set_bind_group(1, &c.cut_bgs[*bg], &[]);
-                        bound = Some(*bg);
-                    }
-                    pass.draw_indexed(r.range.clone(), 0, 0..1);
-                    drawn += r.range.len() as u32 / 3;
-                }
-                drawn += draw_runs(&mut pass, c, (&self.solid, &self.cut), &smodel_runs);
+                drawn += draw_casters(
+                    &mut pass,
+                    (c, vertex_buf),
+                    (&self.solid, &self.cut),
+                    |r| !spot::culls(&v.planes, r.lo, r.hi),
+                    &smodel_runs,
+                );
             }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("cod4 spot shadow"),

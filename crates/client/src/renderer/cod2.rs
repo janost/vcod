@@ -8,12 +8,13 @@
 //! instead of its stage; every other material, CoD1's included, keeps the
 //! stage path, so no CoD1 pipeline or key changes.
 
+use crate::renderer::gpu_util;
 use std::collections::HashMap;
 use vcod_common::asset_source::AssetSource;
 use wgpu::util::DeviceExt;
 
 use super::{
-    BundleViews, DEPTH_FORMAT, SkyBox, StageVariant, depth_bias, msaa_samples, upload_bundle_view,
+    BundleViews, DEPTH_FORMAT, ImageRule, SkyBox, StageVariant, depth_bias, upload_bundle_view,
     upload_levels,
 };
 use crate::camera::{Z_FAR, Z_NEAR};
@@ -140,7 +141,7 @@ const M_SPECULAR: u32 = 1;
 const M_DETAIL: u32 = 2;
 const M_ALPHA: u32 = 4;
 /// The material's fogged technique leaves the fog off (`Material::nofog`).
-const M_NOFOG: u32 = 8;
+pub(super) const M_NOFOG: u32 = 8;
 /// A CoD4 lit world set: CoD4's lightmap, normal and specular
 /// (`PhongLit::cod4`).
 const M_COD4: u32 = 16;
@@ -435,11 +436,12 @@ pub(super) struct Cod2World {
     normal_maps: Vec<(wgpu::Buffer, MaterialUniform)>,
     /// Whether the uniforms hold their `M_NORMAL`s ([`Self::set_normal_maps`]).
     pub normal_maps_on: bool,
-    /// The shader, layout and target format, for [`Self::set_normal_maps`].
+    /// The shader, layout and target (format, samples), for
+    /// [`Self::set_normal_maps`].
     base: (
         wgpu::ShaderModule,
         wgpu::PipelineLayout,
-        wgpu::TextureFormat,
+        (wgpu::TextureFormat, u32),
     ),
 }
 
@@ -447,8 +449,15 @@ impl Cod2World {
     /// `r_vc_normalMaps` (cod4-client-perf.md 25): off, every CoD4 set
     /// lights by its vertex normal and reads no normal map, as one
     /// without a map does. Its split pipelines' variants without the map
-    /// are made on the first switch off.
-    pub fn set_normal_maps(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, on: bool) {
+    /// are made on the first switch off, through `shared`, so a later map
+    /// takes them made.
+    pub fn set_normal_maps(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        on: bool,
+        shared: &mut LitShared,
+    ) {
         for (buf, u) in &self.normal_maps {
             let mut u = *u;
             if !on {
@@ -460,7 +469,7 @@ impl Cod2World {
         if on {
             return;
         }
-        let (module, layout, format) = &self.base;
+        let (module, layout, target) = &self.base;
         let off = |(e, p): FsKey| (e, p.map(LitPath::without_normal_map));
         let todo: Vec<(Key, MadeKey)> = self
             .made
@@ -476,9 +485,16 @@ impl Cod2World {
             })
             .filter(|(k, _)| !self.pipelines.contains_key(k))
             .collect();
+        let mut seen = std::collections::HashSet::new();
+        let fresh: Vec<MadeKey> = todo
+            .iter()
+            .map(|&(_, made)| made)
+            .filter(|m| !shared.pipelines.contains_key(m) && seen.insert(*m))
+            .collect();
+        let built = par_compile(&fresh, |&m| build_made(device, module, layout, *target, m));
+        shared.pipelines.extend(fresh.into_iter().zip(built));
         for (key, made) in todo {
-            let p = build_made(device, module, layout, *format, made);
-            self.pipelines.insert(key, p);
+            self.pipelines.insert(key, shared.pipelines[&made].clone());
             self.made.insert(key, made);
         }
         let todo: Vec<PrepassKey> = self
@@ -487,9 +503,17 @@ impl Cod2World {
             .map(|&(ts, fs)| (ts, fs.map(off)))
             .filter(|k| !self.prepass.contains_key(k))
             .collect();
+        let fresh: Vec<PrepassKey> = todo
+            .iter()
+            .filter(|k| !shared.prepass.contains_key(k))
+            .copied()
+            .collect();
+        let built = par_compile(&fresh, |&(ts, fs)| {
+            make_prepass_pipeline(device, module, layout, *target, ts, fs)
+        });
+        shared.prepass.extend(fresh.into_iter().zip(built));
         for key in todo {
-            let p = make_prepass_pipeline(device, module, layout, *format, key.0, key.1);
-            self.prepass.insert(key, p);
+            self.prepass.insert(key, shared.prepass[&key].clone());
         }
     }
 
@@ -586,7 +610,8 @@ impl Cod2World {
 pub(super) struct Cod2Builder<'a> {
     device: &'a wgpu::Device,
     queue: &'a wgpu::Queue,
-    format: wgpu::TextureFormat,
+    /// The scene target's format and sample count.
+    target: (wgpu::TextureFormat, u32),
     module: wgpu::ShaderModule,
     layout: wgpu::PipelineLayout,
     material_layout: wgpu::BindGroupLayout,
@@ -668,10 +693,13 @@ pub(super) struct LitShared {
     base: Option<LitBase>,
     pipelines: HashMap<MadeKey, wgpu::RenderPipeline>,
     prepass: HashMap<PrepassKey, wgpu::RenderPipeline>,
+    /// By (two-sided, alpha-tested).
+    floatz: HashMap<(bool, bool), wgpu::RenderPipeline>,
+    water: Option<super::cod2_water::WaterKeep>,
 }
 
 struct LitBase {
-    format: wgpu::TextureFormat,
+    target: (wgpu::TextureFormat, u32),
     module: wgpu::ShaderModule,
     layout: wgpu::PipelineLayout,
     material_layout: wgpu::BindGroupLayout,
@@ -699,7 +727,7 @@ impl LitBase {
     fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
+        target: (wgpu::TextureFormat, u32),
         camera_layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -710,45 +738,27 @@ impl LitBase {
             label: Some("cod2 material layout"),
             entries: &[
                 // the vertex stage reads a CoD4 flag's switch
-                uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
-                texture_entry(1),
-                texture_entry(2),
-                texture_entry(3),
-                texture_entry(4),
+                gpu_util::uniform(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
+                gpu_util::texture_2d(1),
+                gpu_util::texture_2d(2),
+                gpu_util::texture_2d(3),
+                gpu_util::texture_2d(4),
             ],
         });
         let lightmap_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("cod2 lightmap layout"),
             entries: &[
-                uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
-                texture_entry(1),
-                texture_entry(2),
-                texture_entry(3),
-                texture_entry(4),
-                texture_entry(5),
-                texture_entry(6),
+                gpu_util::uniform(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
+                gpu_util::texture_2d(1),
+                gpu_util::texture_2d(2),
+                gpu_util::texture_2d(3),
+                gpu_util::texture_2d(4),
+                gpu_util::texture_2d(5),
+                gpu_util::texture_2d(6),
                 // a CoD4 surface's reflection probe
-                wgpu::BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::Cube,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                gpu_util::texture_float(7, wgpu::TextureViewDimension::Cube),
                 // a CoD4 static model's lighting volume
-                wgpu::BindGroupLayoutEntry {
-                    binding: 8,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D3,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                gpu_util::texture_float(8, wgpu::TextureViewDimension::D3),
             ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -790,7 +800,7 @@ impl LitBase {
         );
         let black_volume = upload_volume(device, queue, "black volume", (1, 1), &[0; 16]);
         LitBase {
-            format,
+            target,
             module,
             layout,
             material_layout,
@@ -803,39 +813,10 @@ impl LitBase {
     }
 }
 
-pub(super) fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    }
-}
-
 pub(super) fn tex_entry(binding: u32, view: &wgpu::TextureView) -> wgpu::BindGroupEntry<'_> {
     wgpu::BindGroupEntry {
         binding,
         resource: wgpu::BindingResource::TextureView(view),
-    }
-}
-
-pub(super) fn uniform_entry(
-    binding: u32,
-    visibility: wgpu::ShaderStages,
-) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
     }
 }
 
@@ -923,14 +904,14 @@ impl<'a> Cod2Builder<'a> {
     pub fn new(
         device: &'a wgpu::Device,
         queue: &'a wgpu::Queue,
-        format: wgpu::TextureFormat,
+        target: (wgpu::TextureFormat, u32),
         camera_layout: &'a wgpu::BindGroupLayout,
         bsp: &'a MapWorld,
     ) -> Self {
         Self::with_shared(
             device,
             queue,
-            format,
+            target,
             camera_layout,
             bsp,
             LitShared::default(),
@@ -941,16 +922,15 @@ impl<'a> Cod2Builder<'a> {
     pub fn with_shared(
         device: &'a wgpu::Device,
         queue: &'a wgpu::Queue,
-        format: wgpu::TextureFormat,
+        target: (wgpu::TextureFormat, u32),
         camera_layout: &'a wgpu::BindGroupLayout,
         bsp: &'a MapWorld,
         mut shared: LitShared,
     ) -> Self {
-        if shared.base.as_ref().is_none_or(|b| b.format != format) {
+        if shared.base.as_ref().is_none_or(|b| b.target != target) {
             shared = LitShared {
-                base: Some(LitBase::new(device, queue, format, camera_layout)),
-                pipelines: HashMap::new(),
-                prepass: HashMap::new(),
+                base: Some(LitBase::new(device, queue, target, camera_layout)),
+                ..LitShared::default()
             };
         }
         let base = shared.base.as_ref().expect("made above");
@@ -986,7 +966,7 @@ impl<'a> Cod2Builder<'a> {
         Cod2Builder {
             device,
             queue,
-            format,
+            target,
             module,
             layout,
             material_layout,
@@ -1051,27 +1031,40 @@ impl<'a> Cod2Builder<'a> {
 
     /// [`Self::bind_in`] with probe 0, as every CoD2 batch's.
     #[cfg(test)]
+    #[expect(clippy::too_many_arguments)]
     pub fn bind(
         &mut self,
         fs: &Pk3Fs,
         bundle_views: &mut BundleViews,
+        rule: ImageRule,
         sh: &Material,
         lightmap: u16,
         v: StageVariant,
         two_sided: bool,
         bias: bool,
     ) -> LitBind {
-        self.bind_in(fs, bundle_views, sh, (lightmap, 0, 0), v, two_sided, bias)
+        self.bind_in(
+            fs,
+            bundle_views,
+            rule,
+            sh,
+            (lightmap, 0, 0),
+            v,
+            two_sided,
+            bias,
+        )
     }
 
     /// Binds a lit batch of `sh` on page `lightmap` under reflection probe
     /// `probe` and primary light `light` (a CoD4 surface's; 0 elsewhere),
     /// which [`draws_lit`] accepted. A spot or omni light in `light` lights
     /// it in the sun's place (`lm_spot_*`, `lm_omni_*`).
+    #[expect(clippy::too_many_arguments)]
     pub fn bind_in(
         &mut self,
         fs: &Pk3Fs,
         bundle_views: &mut BundleViews,
+        rule: ImageRule,
         sh: &Material,
         (lightmap, probe, light): (u16, u8, u8),
         v: StageVariant,
@@ -1079,7 +1072,7 @@ impl<'a> Cod2Builder<'a> {
         bias: bool,
     ) -> LitBind {
         let lit = sh.phong.expect("draws_lit checked");
-        let material = self.prepare(fs, bundle_views, sh, lit, LitEntry::Main);
+        let material = self.prepare(fs, bundle_views, rule, sh, lit, LitEntry::Main);
         // a set that reads no probe shares the page's group with probe 0
         let probe = if lit.specular { probe } else { 0 };
         let light = self.light_key(light);
@@ -1106,13 +1099,14 @@ impl<'a> Cod2Builder<'a> {
         bias: bool,
     ) -> LitBind {
         let (device, camera_layout) = (self.device, self.camera_layout);
-        let water = self
-            .water
-            .get_or_insert_with(|| super::cod2_water::WaterBuilder::new(device, camera_layout));
+        let keep = &mut self.shared.water;
+        let water = self.water.get_or_insert_with(|| {
+            super::cod2_water::WaterBuilder::with_keep(device, camera_layout, keep.take())
+        });
         let i = water.bind(
             self.device,
             self.queue,
-            self.format,
+            self.target,
             fs,
             &self.sun_buf,
             sh,
@@ -1138,6 +1132,7 @@ impl<'a> Cod2Builder<'a> {
         &mut self,
         fs: &Pk3Fs,
         bundle_views: &mut BundleViews,
+        rule: ImageRule,
         sh: &Material,
         v: StageVariant,
         bias: bool,
@@ -1151,7 +1146,7 @@ impl<'a> Cod2Builder<'a> {
             cod4: None,
         };
         // props keep the prop path's two-sidedness (xmodel winding)
-        let material = self.prepare(fs, bundle_views, sh, lit, LitEntry::Smodel);
+        let material = self.prepare(fs, bundle_views, rule, sh, lit, LitEntry::Smodel);
         let lightmap = match self.smodel_bg {
             Some(i) => i,
             None => {
@@ -1174,10 +1169,12 @@ impl<'a> Cod2Builder<'a> {
     /// primary light `light` (the sun's technique unless it names a spot
     /// or omni light), which [`draws_cod4_model`] accepted, over the map's
     /// model lighting volume.
+    #[expect(clippy::too_many_arguments)]
     pub fn bind_cod4_model(
         &mut self,
         fs: &Pk3Fs,
         bundle_views: &mut BundleViews,
+        rule: ImageRule,
         sh: &Material,
         (probe, light): (u8, u8),
         v: StageVariant,
@@ -1186,7 +1183,7 @@ impl<'a> Cod2Builder<'a> {
     ) -> LitBind {
         let lit = sh.phong.expect("draws_cod4_model checked");
         let entry = LitEntry::Cod4Model;
-        let material = self.prepare(fs, bundle_views, sh, lit, entry);
+        let material = self.prepare(fs, bundle_views, rule, sh, lit, entry);
         let probe = if lit.specular { probe } else { 0 };
         // the ambient set takes the sun alone (`lp_amb_sun_*`)
         let ambient = lit.cod4.is_some_and(|c| c.light == Cod4Light::GridAmbient);
@@ -1208,10 +1205,12 @@ impl<'a> Cod2Builder<'a> {
 
     /// Binds a CoD4 water batch of `sh` under reflection probe `probe`,
     /// which [`draws_cod4_water`] accepted.
+    #[expect(clippy::too_many_arguments)]
     pub fn bind_cod4_water(
         &mut self,
         fs: &Pk3Fs,
         bundle_views: &mut BundleViews,
+        rule: ImageRule,
         sh: &Material,
         probe: u8,
         v: StageVariant,
@@ -1223,7 +1222,7 @@ impl<'a> Cod2Builder<'a> {
         if !self.material_of.contains_key(&(sh.name.clone(), entry)) {
             self.water_normal = self.cod4_water_map(&sh.name);
         }
-        let material = self.prepare(fs, bundle_views, sh, lit, entry);
+        let material = self.prepare(fs, bundle_views, rule, sh, lit, entry);
         let lightmap = match self.probe_bgs.get(&probe) {
             Some(&i) => i,
             None => {
@@ -1279,6 +1278,7 @@ impl<'a> Cod2Builder<'a> {
             setup,
             texture,
             time: None,
+            scratch: Default::default(),
         };
         sim.update(self.queue, 0.0);
         let view = sim.texture.create_view(&Default::default());
@@ -1403,6 +1403,7 @@ impl<'a> Cod2Builder<'a> {
         &mut self,
         fs: &Pk3Fs,
         bundle_views: &mut BundleViews,
+        rule: ImageRule,
         sh: &Material,
         lit: PhongLit,
         entry: LitEntry,
@@ -1412,7 +1413,7 @@ impl<'a> Cod2Builder<'a> {
             Some(&i) => i,
             None => {
                 let waves = lit.cod4.is_some_and(|c| c.flag);
-                let (bg, buf, uniform) = self.material_group(fs, bundle_views, sh, lit);
+                let (bg, buf, uniform) = self.material_group(fs, bundle_views, rule, sh, lit);
                 self.out.push(bg);
                 // a lit world or model set runs its own path, as retail
                 // compiles one shader per technique (CoD2's `lmap_s_dtl` and
@@ -1484,15 +1485,22 @@ impl<'a> Cod2Builder<'a> {
         let pipelines = self.lit_pipelines();
         let prepass = self.prepass_pipelines();
         let keys = [(false, false), (false, true), (true, false), (true, true)];
+        let fresh: Vec<(bool, bool)> = keys
+            .into_iter()
+            .filter(|k| !self.shared.floatz.contains_key(k))
+            .collect();
         let (device, module, layout) = (self.device, &self.module, &self.layout);
+        let samples = self.target.1;
         let t = std::time::Instant::now();
+        let built = par_compile(&fresh, |&(two_sided, atest)| {
+            make_floatz_pipeline(device, module, layout, samples, two_sided, atest)
+        });
+        self.compile += t.elapsed();
+        self.shared.floatz.extend(fresh.into_iter().zip(built));
         let floatz: HashMap<(bool, bool), wgpu::RenderPipeline> = keys
             .into_iter()
-            .zip(par_compile(&keys, |&(two_sided, atest)| {
-                make_floatz_pipeline(device, module, layout, two_sided, atest)
-            }))
+            .map(|k| (k, self.shared.floatz[&k].clone()))
             .collect();
-        self.compile += t.elapsed();
         log::info!(
             "cod2 lit: {} materials, {} lightmap pages, {} pipelines ({} split), {} prepass, {:.0} ms compiling",
             self.out.len(),
@@ -1514,7 +1522,11 @@ impl<'a> Cod2Builder<'a> {
             made: self.made,
             material_bgs: self.out,
             lightmap_bgs: self.lightmap_bgs,
-            water: self.water.map(super::cod2_water::WaterBuilder::finish),
+            water: self.water.map(|w| {
+                let (waters, keep) = w.finish();
+                self.shared.water = Some(keep);
+                waters
+            }),
             cod4_waters: self.cod4_waters,
             prepass,
             floatz,
@@ -1525,7 +1537,7 @@ impl<'a> Cod2Builder<'a> {
             light_kinds: self.light_kinds,
             normal_maps: self.normal_maps,
             normal_maps_on: true,
-            base: (self.module.clone(), self.layout.clone(), self.format),
+            base: (self.module.clone(), self.layout.clone(), self.target),
         };
         (world, self.shared)
     }
@@ -1552,11 +1564,11 @@ impl<'a> Cod2Builder<'a> {
             .filter(|k| !self.shared.prepass.contains_key(k))
             .copied()
             .collect();
-        let (device, module, layout, format) =
-            (self.device, &self.module, &self.layout, self.format);
+        let (device, module, layout, target) =
+            (self.device, &self.module, &self.layout, self.target);
         let t = std::time::Instant::now();
         let built = par_compile(&fresh, |&(two_sided, fs)| {
-            make_prepass_pipeline(device, module, layout, format, two_sided, fs)
+            make_prepass_pipeline(device, module, layout, target, two_sided, fs)
         });
         self.compile += t.elapsed();
         self.shared.prepass.extend(fresh.into_iter().zip(built));
@@ -1576,10 +1588,10 @@ impl<'a> Cod2Builder<'a> {
             .filter(|m| !self.shared.pipelines.contains_key(m))
             .copied()
             .collect();
-        let (device, module, layout, format) =
-            (self.device, &self.module, &self.layout, self.format);
+        let (device, module, layout, target) =
+            (self.device, &self.module, &self.layout, self.target);
         let t = std::time::Instant::now();
-        let built = par_compile(&fresh, |&m| build_made(device, module, layout, format, m));
+        let built = par_compile(&fresh, |&m| build_made(device, module, layout, target, m));
         self.compile += t.elapsed();
         self.shared.pipelines.extend(fresh.into_iter().zip(built));
         self.made
@@ -1592,6 +1604,7 @@ impl<'a> Cod2Builder<'a> {
         &mut self,
         fs: &Pk3Fs,
         bundle_views: &mut BundleViews,
+        rule: ImageRule,
         sh: &Material,
         lit: PhongLit,
     ) -> (wgpu::BindGroup, wgpu::Buffer, MaterialUniform) {
@@ -1613,16 +1626,14 @@ impl<'a> Cod2Builder<'a> {
         // colour and detail as the stage path loads its images (gamma,
         // picmip); white for a missing detail map, which the switch skips
         let color = match path(TexSemantic::Color) {
-            Some(p) => upload_bundle_view(self.device, self.queue, fs, bundle_views, &p),
+            Some(p) => upload_bundle_view(self.device, self.queue, fs, bundle_views, &p, rule),
             None => self.raw_view(fs, None, "$white", None, 0),
         };
         // detail maps take no picmip (0x616d40)
         let detail = match path(TexSemantic::Detail) {
             Some(p) => {
-                let picmip = std::mem::take(&mut bundle_views.picmip);
-                let v = upload_bundle_view(self.device, self.queue, fs, bundle_views, &p);
-                bundle_views.picmip = picmip;
-                v
+                let rule = ImageRule { picmip: 0, ..rule };
+                upload_bundle_view(self.device, self.queue, fs, bundle_views, &p, rule)
             }
             None => self.raw_view(fs, None, "$white", None, 0),
         };
@@ -1881,6 +1892,7 @@ pub(super) struct Cod4WaterSim {
     setup: vcod_cod2::water::WaterSetup,
     texture: wgpu::Texture,
     time: Option<f32>,
+    scratch: vcod_cod2::water::WaterScratch,
 }
 
 impl Cod4WaterSim {
@@ -1889,8 +1901,9 @@ impl Cod4WaterSim {
             return;
         }
         self.time = Some(time);
-        let levels = self.setup.levels_cod4(time);
-        super::cod2_water::write_levels(queue, &self.texture, &levels);
+        let kept = self.texture.mip_level_count() as usize;
+        self.setup.levels_cod4_into(time, kept, &mut self.scratch);
+        super::cod2_water::write_levels(queue, &self.texture, &self.scratch.levels);
     }
 }
 
@@ -1915,7 +1928,7 @@ pub(super) fn make_lit_pipeline(
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
-    format: wgpu::TextureFormat,
+    target: (wgpu::TextureFormat, u32),
     blend: Option<wgpu::BlendState>,
     depth_write: bool,
     two_sided: bool,
@@ -1926,7 +1939,7 @@ pub(super) fn make_lit_pipeline(
         device,
         module,
         layout,
-        format,
+        target,
         blend,
         (depth_write, wgpu::CompareFunction::LessEqual),
         two_sided,
@@ -1951,14 +1964,14 @@ fn build_made(
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
-    format: wgpu::TextureFormat,
+    target: (wgpu::TextureFormat, u32),
     made: MadeKey,
 ) -> wgpu::RenderPipeline {
     make_lit_pipeline(
         device,
         module,
         layout,
-        format,
+        target,
         made.blend,
         made.depth_write,
         made.two_sided,
@@ -1977,7 +1990,7 @@ fn make_prepass_pipeline(
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
-    format: wgpu::TextureFormat,
+    target: (wgpu::TextureFormat, u32),
     two_sided: bool,
     fs: Option<FsKey>,
 ) -> wgpu::RenderPipeline {
@@ -1990,7 +2003,7 @@ fn make_prepass_pipeline(
         device,
         module,
         layout,
-        format,
+        target,
         None,
         depth,
         two_sided,
@@ -2008,6 +2021,7 @@ fn make_floatz_pipeline(
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
+    samples: u32,
     two_sided: bool,
     atest: bool,
 ) -> wgpu::RenderPipeline {
@@ -2015,7 +2029,7 @@ fn make_floatz_pipeline(
         device,
         module,
         layout,
-        crate::soft_particles::LINZ_FORMAT,
+        (crate::soft_particles::LINZ_FORMAT, samples),
         None,
         (true, wgpu::CompareFunction::LessEqual),
         two_sided,
@@ -2034,7 +2048,7 @@ fn lit_pipeline(
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
-    format: wgpu::TextureFormat,
+    (format, samples): (wgpu::TextureFormat, u32),
     blend: Option<wgpu::BlendState>,
     (depth_write, depth_compare): (bool, wgpu::CompareFunction),
     two_sided: bool,
@@ -2064,25 +2078,8 @@ fn lit_pipeline(
             entry_point: Some("vs_main"),
             compilation_options: Default::default(),
             buffers: &[
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: 44,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x3, // pos
-                        1 => Float32x2, // uv
-                        2 => Float32x2, // lm_uv
-                        3 => Float32x3, // normal
-                        4 => Unorm8x4,  // color
-                    ],
-                }),
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: 24,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![
-                        5 => Float32x3, // tangent
-                        6 => Float32x3, // binormal
-                    ],
-                }),
+                Some(gpu_util::world_vertex_layout(&gpu_util::WORLD_VERTEX_ATTRS)),
+                Some(gpu_util::tangent_layout()),
             ],
         },
         fragment: fs_entry.map(|(entry, _)| wgpu::FragmentState {
@@ -2112,7 +2109,7 @@ fn lit_pipeline(
             bias,
         }),
         multisample: wgpu::MultisampleState {
-            count: msaa_samples(),
+            count: samples,
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
@@ -2218,7 +2215,7 @@ pub fn load_cube_faces(fs: &dyn AssetSource, path: &str) -> Option<Vec<Image>> {
 pub(super) fn build_sky_cube(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    format: wgpu::TextureFormat,
+    target: (wgpu::TextureFormat, u32),
     fs: &dyn AssetSource,
     camera_layout: &wgpu::BindGroupLayout,
     path: &str,
@@ -2248,16 +2245,7 @@ pub(super) fn build_sky_cube(
     });
     let tex_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("cod2 sky cube layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::Cube,
-                multisampled: false,
-            },
-            count: None,
-        }],
+        entries: &[gpu_util::texture_float(0, wgpu::TextureViewDimension::Cube)],
     });
     let cube_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("cod2 sky cube"),
@@ -2275,7 +2263,7 @@ pub(super) fn build_sky_cube(
     });
     let eye_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("cod2 sky eye layout"),
-        entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX)],
+        entries: &[gpu_util::uniform(0, wgpu::ShaderStages::VERTEX)],
     });
     let eye_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("cod2 sky eye"),
@@ -2285,7 +2273,7 @@ pub(super) fn build_sky_cube(
             resource: eye_buf.as_entire_binding(),
         }],
     });
-    let pipeline = make_sky_pipeline(device, format, camera_layout, &tex_layout, &eye_layout);
+    let pipeline = make_sky_pipeline(device, target, camera_layout, &tex_layout, &eye_layout);
     log::info!(
         "cod2 sky: {path} {}x{}, {} levels",
         faces[0].width,
@@ -2308,7 +2296,7 @@ pub(super) fn build_sky_cube(
 /// as the CoD1 farbox draws (`build_sky_box`).
 fn make_sky_pipeline(
     device: &wgpu::Device,
-    format: wgpu::TextureFormat,
+    (format, samples): (wgpu::TextureFormat, u32),
     camera_layout: &wgpu::BindGroupLayout,
     tex_layout: &wgpu::BindGroupLayout,
     eye_layout: &wgpu::BindGroupLayout,
@@ -2359,7 +2347,7 @@ fn make_sky_pipeline(
             bias: Default::default(),
         }),
         multisample: wgpu::MultisampleState {
-            count: msaa_samples(),
+            count: samples,
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
@@ -2371,6 +2359,9 @@ fn make_sky_pipeline(
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+
+    /// The scene target the tests' pipelines draw into.
+    const TARGET: (wgpu::TextureFormat, u32) = (super::super::SCENE_FORMAT, 4);
 
     /// Two decals that differ only in their offset kind key two pipelines
     /// (BUG-148); a stage that takes none keys none.
@@ -2528,20 +2519,15 @@ pub(super) mod tests {
         // the renderer's camera layout: the Camera block, the fx lights,
         // vc_shadows' receiver (the stage path reads them) and the samplers
         let mut entries = vec![
-            uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
-            uniform_entry(1, wgpu::ShaderStages::VERTEX_FRAGMENT),
+            gpu_util::uniform(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
+            gpu_util::uniform(1, wgpu::ShaderStages::VERTEX_FRAGMENT),
         ];
         entries.extend(crate::shadows::receive_layout_entries());
         for binding in 9..=16 {
-            entries.push(wgpu::BindGroupLayoutEntry {
-                binding,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            });
+            entries.push(gpu_util::filtering_sampler(binding));
         }
         // the dynamic shadow (renderer::cod2_cookie)
-        entries.push(texture_entry(super::super::DYNAMIC_SHADOW_BINDING));
+        entries.push(gpu_util::texture_2d(super::super::DYNAMIC_SHADOW_BINDING));
         // CoD4's sun shadow map (cod4_sunshadow)
         entries.extend(crate::cod4_sunshadow::layout_entries());
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -2564,7 +2550,7 @@ pub(super) mod tests {
             return;
         };
         let camera = camera_layout(&device);
-        let base = LitBase::new(&device, &queue, super::super::SCENE_FORMAT, &camera);
+        let base = LitBase::new(&device, &queue, TARGET, &camera);
         let build = |label: &str, entry: LitEntry, path: Option<LitPath>| {
             eprintln!("LIT_REGS {label}");
             let made = MadeKey {
@@ -2574,13 +2560,7 @@ pub(super) mod tests {
                 blend: None,
                 depth_write: true,
             };
-            build_made(
-                &device,
-                &base.module,
-                &base.layout,
-                super::super::SCENE_FORMAT,
-                made,
-            );
+            build_made(&device, &base.module, &base.layout, TARGET, made);
         };
         build("fs_main unsplit", LitEntry::Main, None);
         build("fs_cod4_model unsplit", LitEntry::Cod4Model, None);
@@ -2623,12 +2603,10 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
-        let mut b = Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut b = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         let sh = Material {
             phong: Some(PhongLit {
                 specular: true,
@@ -2648,7 +2626,7 @@ pub(super) mod tests {
             for two_sided in [false, true] {
                 for bias in [false, true] {
                     assert!(draws_lit(&sh, 0, b.page_count(), v));
-                    let bind = b.bind(&fs, &mut views, &sh, 0, v, two_sided, bias);
+                    let bind = b.bind(&fs, &mut views, ImageRule::FULL, &sh, 0, v, two_sided, bias);
                     assert_eq!(
                         bind,
                         LitBind {
@@ -2683,22 +2661,13 @@ pub(super) mod tests {
         assert_eq!(view.texture().depth_or_array_layers(), 6);
         let tex = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::Cube,
-                    multisampled: false,
-                },
-                count: None,
-            }],
+            entries: &[gpu_util::texture_float(0, wgpu::TextureViewDimension::Cube)],
         });
         let eye = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX)],
+            entries: &[gpu_util::uniform(0, wgpu::ShaderStages::VERTEX)],
         });
-        make_sky_pipeline(&device, super::super::SCENE_FORMAT, &camera, &tex, &eye);
+        make_sky_pipeline(&device, TARGET, &camera, &tex, &eye);
         let err = pollster::block_on(scope.pop());
         assert!(err.is_none(), "{err:?}");
         let err = pollster::block_on(internal.pop());
@@ -2747,11 +2716,7 @@ pub(super) mod tests {
             contents: bytes,
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let sampler = gpu_util::linear_clamp_sampler(device, None);
         let lights = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: 256,
@@ -2826,8 +2791,8 @@ pub(super) mod tests {
             })
         };
         let att = wgpu::TextureUsages::RENDER_ATTACHMENT;
-        let msaa = target(msaa_samples(), super::super::SCENE_FORMAT, att);
-        let depth = target(msaa_samples(), DEPTH_FORMAT, att);
+        let msaa = target(TARGET.1, TARGET.0, att);
+        let depth = target(TARGET.1, DEPTH_FORMAT, att);
         let resolved = target(
             1,
             super::super::SCENE_FORMAT,
@@ -2919,12 +2884,10 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
-        let mut b = Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut b = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         let sh = Material {
             phong: Some(PhongLit {
                 specular: false,
@@ -2935,7 +2898,16 @@ pub(super) mod tests {
             }),
             ..Material::from_shader(&vcod_common::shader::Shader::default())
         };
-        let bind = b.bind(&fs, &mut views, &sh, 0, StageVariant::Opaque, true, false);
+        let bind = b.bind(
+            &fs,
+            &mut views,
+            ImageRule::FULL,
+            &sh,
+            0,
+            StageVariant::Opaque,
+            true,
+            false,
+        );
         let tangents = tangent_stream(&bsp, 3);
         let world = b.finish(&tangents);
         // clip-space positions under an identity view_proj
@@ -3069,12 +3041,10 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
-        let mut b = Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut b = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         let bind_tex = |semantic, name: &str| vcod_common::material::TextureBinding {
             semantic,
             image: ImageRef::Path(format!("images/{name}.iwi")),
@@ -3095,7 +3065,16 @@ pub(super) mod tests {
             ],
             ..Material::from_shader(&vcod_common::shader::Shader::default())
         };
-        let bind = b.bind(&fs, &mut views, &sh, 0, StageVariant::Opaque, true, false);
+        let bind = b.bind(
+            &fs,
+            &mut views,
+            ImageRule::FULL,
+            &sh,
+            0,
+            StageVariant::Opaque,
+            true,
+            false,
+        );
         let world = b.finish(&tangent_stream(&bsp, 3));
         let vcolor = [255u8, 204, 255, 255];
         let corners = [[-1.0f32, -1.0], [3.0, -1.0], [-1.0, 3.0]];
@@ -3212,13 +3191,10 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
-        let mut builder =
-            Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut builder = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         let bind_tex = |semantic, name: &str| vcod_common::material::TextureBinding {
             semantic,
             image: ImageRef::Path(format!("images/{name}.iwi")),
@@ -3246,7 +3222,16 @@ pub(super) mod tests {
             ],
             ..Material::from_shader(&vcod_common::shader::Shader::default())
         };
-        let bind = builder.bind(&fs, &mut views, &sh, 0, StageVariant::Opaque, true, false);
+        let bind = builder.bind(
+            &fs,
+            &mut views,
+            ImageRule::FULL,
+            &sh,
+            0,
+            StageVariant::Opaque,
+            true,
+            false,
+        );
         let world = builder.finish(&tangent_stream(&bsp, 3));
         let vcolor = [255u8, 204, 255, 255];
         let corners = [[-1.0f32, -1.0], [3.0, -1.0], [-1.0, 3.0]];
@@ -3404,13 +3389,10 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
-        let mut builder =
-            Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut builder = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         let sh = Material {
             phong: Some(PhongLit {
                 specular: false,
@@ -3432,7 +3414,16 @@ pub(super) mod tests {
             }],
             ..Material::from_shader(&vcod_common::shader::Shader::default())
         };
-        let bind = builder.bind(&fs, &mut views, &sh, 0, StageVariant::Opaque, true, false);
+        let bind = builder.bind(
+            &fs,
+            &mut views,
+            ImageRule::FULL,
+            &sh,
+            0,
+            StageVariant::Opaque,
+            true,
+            false,
+        );
         let world = builder.finish(&tangent_stream(&bsp, verts.len()));
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
@@ -3446,7 +3437,7 @@ pub(super) mod tests {
         });
         let mut pass = SunShadowPass::new(&device, &queue);
         let casters = pass
-            .casters(&device, &bsp, &[0, 0], |_| unreachable!("no cut"))
+            .casters(&device, &bsp, &[0, 0], |_, _| unreachable!("no cut"))
             .expect("both soups cast");
 
         // eye 48 up, looking down 50 degrees toward `at` on the floor
@@ -3676,13 +3667,10 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
-        let mut builder =
-            Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut builder = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         let sh = Material {
             phong: Some(PhongLit {
                 specular: false,
@@ -3708,6 +3696,7 @@ pub(super) mod tests {
             builder.bind_in(
                 &fs,
                 &mut views,
+                ImageRule::FULL,
                 &sh,
                 (0, 0, light),
                 StageVariant::Opaque,
@@ -3906,12 +3895,10 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
-        let mut b = Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut b = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         assert!(b.has_model_volume());
         let bind_tex = |semantic, name: &str| vcod_common::material::TextureBinding {
             semantic,
@@ -3948,6 +3935,7 @@ pub(super) mod tests {
         let bl = b.bind_cod4_model(
             &fs,
             &mut views,
+            ImageRule::FULL,
             &lit,
             (0, 1),
             StageVariant::Opaque,
@@ -3957,6 +3945,7 @@ pub(super) mod tests {
         let ba = b.bind_cod4_model(
             &fs,
             &mut views,
+            ImageRule::FULL,
             &amb,
             (0, 1),
             StageVariant::Opaque,
@@ -3966,6 +3955,7 @@ pub(super) mod tests {
         let bo = b.bind_cod4_model(
             &fs,
             &mut views,
+            ImageRule::FULL,
             &lit,
             (0, 2),
             StageVariant::Opaque,
@@ -3975,6 +3965,7 @@ pub(super) mod tests {
         let bs = b.bind_cod4_model(
             &fs,
             &mut views,
+            ImageRule::FULL,
             &lit,
             (0, 3),
             StageVariant::Opaque,
@@ -3985,6 +3976,7 @@ pub(super) mod tests {
         let bao = b.bind_cod4_model(
             &fs,
             &mut views,
+            ImageRule::FULL,
             &amb,
             (0, 2),
             StageVariant::Opaque,
@@ -3998,6 +3990,7 @@ pub(super) mod tests {
         let bn0 = b.bind_cod4_model(
             &fs,
             &mut views,
+            ImageRule::FULL,
             &lit,
             (0, 0),
             StageVariant::Opaque,
@@ -4229,12 +4222,10 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
-        let mut b = Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut b = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         let env = [0.2, 0.8, 2.0, 2.5];
         let water_color = [0.4, 0.35, 0.3, 1.0];
         let sh = Material {
@@ -4261,13 +4252,30 @@ pub(super) mod tests {
         assert!(draws_cod4_water(&sh, StageVariant::Opaque));
         assert!(!draws_cod4_model(&sh, StageVariant::Opaque));
         assert!(!draws_lit(&sh, 0, 1, StageVariant::Opaque));
-        let bind = b.bind_cod4_water(&fs, &mut views, &sh, 0, StageVariant::Opaque, true, false);
+        let bind = b.bind_cod4_water(
+            &fs,
+            &mut views,
+            ImageRule::FULL,
+            &sh,
+            0,
+            StageVariant::Opaque,
+            true,
+            false,
+        );
         let sim = Material {
             name: "sim".into(),
             ..sh.clone()
         };
-        let sim_bind =
-            b.bind_cod4_water(&fs, &mut views, &sim, 0, StageVariant::Opaque, true, false);
+        let sim_bind = b.bind_cod4_water(
+            &fs,
+            &mut views,
+            ImageRule::FULL,
+            &sim,
+            0,
+            StageVariant::Opaque,
+            true,
+            false,
+        );
         assert_ne!(sim_bind.material, bind.material);
         let mut world = b.finish(&tangent_stream(&bsp, 3));
         // the spectrum's height map is made and runs on the view's time
@@ -4413,12 +4421,10 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
-        let mut b = Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut b = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         b.set_smodel_cache(&cache);
         let bind_tex = |semantic, name: &str| vcod_common::material::TextureBinding {
             semantic,
@@ -4444,7 +4450,14 @@ pub(super) mod tests {
         };
         assert!(draws_smodel(&sh, StageVariant::Opaque));
         assert!(!draws_smodel(&sh, StageVariant::AdditiveFixed));
-        let bind = b.bind_smodel(&fs, &mut views, &sh, StageVariant::Opaque, false);
+        let bind = b.bind_smodel(
+            &fs,
+            &mut views,
+            ImageRule::FULL,
+            &sh,
+            StageVariant::Opaque,
+            false,
+        );
         assert_eq!(bind.entry, LitEntry::Smodel);
         // a prop's frame: normal up, tangent along +x turned 30 degrees
         // about z, binormal across it
@@ -4545,22 +4558,13 @@ pub(super) mod tests {
         let camera = camera_layout(&device);
         let tex = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::Cube,
-                    multisampled: false,
-                },
-                count: None,
-            }],
+            entries: &[gpu_util::texture_float(0, wgpu::TextureViewDimension::Cube)],
         });
         let eye = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX)],
+            entries: &[gpu_util::uniform(0, wgpu::ShaderStages::VERTEX)],
         });
-        let pipeline = make_sky_pipeline(&device, super::super::SCENE_FORMAT, &camera, &tex, &eye);
+        let pipeline = make_sky_pipeline(&device, TARGET, &camera, &tex, &eye);
         let cube_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &tex,
@@ -4742,8 +4746,6 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
@@ -4758,10 +4760,11 @@ pub(super) mod tests {
         assert_eq!(facts(&decal).0, StageVariant::Multiply);
         assert!(base.sort < layer.sort && layer.sort < decal.sort);
 
-        let mut b = Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut b = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         let base_bind = b.bind(
             &fs,
             &mut views,
+            ImageRule::FULL,
             &base,
             0,
             StageVariant::Opaque,
@@ -4770,7 +4773,7 @@ pub(super) mod tests {
         );
         let (v, two, bias) = facts(&layer);
         assert!(draws_lit(&layer, 0, b.page_count(), v));
-        let layer_bind = b.bind(&fs, &mut views, &layer, 0, v, two, bias);
+        let layer_bind = b.bind(&fs, &mut views, ImageRule::FULL, &layer, 0, v, two, bias);
         let lit_layer_key = (v, two, bias);
         let world = b.finish(&tangent_stream(&bsp, 3));
 
@@ -4791,7 +4794,7 @@ pub(super) mod tests {
         let decal_pipeline = super::super::scene_pipeline(
             &device,
             &shader,
-            super::super::SCENE_FORMAT,
+            TARGET,
             "test multiply",
             &layout,
             ("vs_stage", fs_entry),
@@ -4829,6 +4832,7 @@ pub(super) mod tests {
             &page,
             &lm_sampler,
             &mut views,
+            ImageRule::FULL,
             &decal.stages[0],
         );
 
@@ -4940,8 +4944,6 @@ pub(super) mod tests {
         let mut views = BundleViews {
             views: HashMap::new(),
             table: None,
-            picmip: 0,
-            mipmap: true,
             store: Default::default(),
             prefetched: None,
         };
@@ -4952,9 +4954,18 @@ pub(super) mod tests {
         let clear = compiled("vertcol_simple", [0x0812_8812, 5], 3);
         assert!(!lit.nofog && !stage.nofog && clear.nofog);
 
-        let mut b = Cod2Builder::new(&device, &queue, super::super::SCENE_FORMAT, &camera, &bsp);
+        let mut b = Cod2Builder::new(&device, &queue, TARGET, &camera, &bsp);
         let key = (StageVariant::Opaque, false, false);
-        let lit_bind = b.bind(&fs, &mut views, &lit, 0, key.0, key.1, key.2);
+        let lit_bind = b.bind(
+            &fs,
+            &mut views,
+            ImageRule::FULL,
+            &lit,
+            0,
+            key.0,
+            key.1,
+            key.2,
+        );
         let world = b.finish(&tangent_stream(&bsp, 3));
 
         let material_layout = super::super::material_layout(&device);
@@ -4973,7 +4984,7 @@ pub(super) mod tests {
         let pipeline = super::super::scene_pipeline(
             &device,
             &shader,
-            super::super::SCENE_FORMAT,
+            TARGET,
             "test fog",
             &layout,
             ("vs_stage", fs_entry),
@@ -5011,6 +5022,7 @@ pub(super) mod tests {
                 &page,
                 &lm_sampler,
                 views,
+                ImageRule::FULL,
                 &sh.stages[0],
             )
         };
