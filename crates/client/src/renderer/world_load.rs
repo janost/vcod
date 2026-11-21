@@ -282,6 +282,7 @@ impl Renderer {
                 sun_dir: glam::Vec3::from(sun.dir),
                 sun_colour: glam::Vec3::from(sun.colour),
                 lights: bsp.model_lights.clone(),
+                kept: Vec::new(),
             });
         // CoD4: the probes an entity's specular picks from (empty elsewhere)
         self.dynamic

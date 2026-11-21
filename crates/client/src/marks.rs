@@ -82,6 +82,8 @@ struct MarkSurface {
     mins: Vec3,
     maxs: Vec3,
     tris: Range<usize>,
+    /// Into `MarkWorld::chunks`.
+    chunks: Range<usize>,
 }
 
 /// The world's triangles that take marks: model 0's drawn soups whose
@@ -91,9 +93,36 @@ struct MarkSurface {
 pub struct MarkWorld {
     surfaces: Vec<MarkSurface>,
     tris: Vec<[ClipVert; 3]>,
+    /// Per run of [`CHUNK`] triangles of a surface, their box.
+    chunks: Vec<(Vec3, Vec3)>,
 }
 
+/// Triangles a chunk box covers.
+const CHUNK: usize = 16;
+
 impl MarkWorld {
+    /// `surfaces`' triangles in `tris`, each surface's chunks boxed.
+    fn new(mut surfaces: Vec<MarkSurface>, tris: Vec<[ClipVert; 3]>) -> MarkWorld {
+        let mut chunks = Vec::new();
+        for s in &mut surfaces {
+            let first = chunks.len();
+            for run in tris[s.tris.clone()].chunks(CHUNK) {
+                let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+                for c in run.iter().flatten() {
+                    lo = lo.min(c.pos);
+                    hi = hi.max(c.pos);
+                }
+                chunks.push((lo, hi));
+            }
+            s.chunks = first..chunks.len();
+        }
+        MarkWorld {
+            surfaces,
+            tris,
+            chunks,
+        }
+    }
+
     /// `drawn(material)` says whether the renderer draws the soup at all
     /// (sky and nodraw soups never reach the cells' surface lists).
     pub fn build(bsp: &MapWorld, drawn: impl Fn(u16) -> bool) -> MarkWorld {
@@ -140,10 +169,11 @@ impl MarkWorld {
                     mins,
                     maxs,
                     tris: first..out.tris.len(),
+                    chunks: 0..0,
                 });
             }
         }
-        out
+        MarkWorld::new(out.surfaces, out.tris)
     }
 
     pub fn triangle_count(&self) -> usize {
@@ -275,16 +305,20 @@ pub fn mark_fragments(
             maxs = maxs.max(q);
         }
     }
-    let mut planes: Vec<(Vec3, f32)> = (0..4)
-        .map(|i| {
-            let n = (points[(i + 1) % 4] - points[i])
-                .cross(a0)
-                .normalize_or_zero();
-            (n, n.dot(points[i]))
-        })
-        .collect();
-    planes.push((a0, a0.dot(points[0]) - radius));
-    planes.push((-a0, -a0.dot(points[0]) - radius));
+    let edge = |i: usize| {
+        let n = (points[(i + 1) % 4] - points[i])
+            .cross(a0)
+            .normalize_or_zero();
+        (n, n.dot(points[i]))
+    };
+    let planes = [
+        edge(0),
+        edge(1),
+        edge(2),
+        edge(3),
+        (a0, a0.dot(points[0]) - radius),
+        (-a0, -a0.dot(points[0]) - radius),
+    ];
     let st_scale = 0.5 / radius;
 
     let mut out: Vec<Fragment> = Vec::new();
@@ -299,7 +333,11 @@ pub fn mark_fragments(
     // clip's epsilon, leaves nothing after the chops: skipped unchopped.
     let (lo, hi) = (mins - Vec3::splat(1.0), maxs + Vec3::splat(1.0));
     for surf in surfaces {
-        for tri in &world.tris[surf.tris.clone()] {
+        // a chunk wholly past one side holds only triangles that are
+        let tris = &world.tris[surf.tris.clone()];
+        let runs = tris.chunks(CHUNK).zip(&world.chunks[surf.chunks.clone()]);
+        let near = runs.filter(|(_, (clo, chi))| !(chi.cmplt(lo).any() || clo.cmpgt(hi).any()));
+        for tri in near.flat_map(|(run, _)| run) {
             let [v0, v1, v2] = tri.map(|c| c.pos);
             if (v0.cmplt(lo) & v1.cmplt(lo) & v2.cmplt(lo)).any()
                 || (v0.cmpgt(hi) & v1.cmpgt(hi) & v2.cmpgt(hi)).any()
@@ -484,15 +522,16 @@ mod tests {
         );
         // wound so (v0 - v1) x (v2 - v1) is +z
         let tris = vec![[a, d, cc], [a, cc, b]];
-        MarkWorld {
-            surfaces: vec![MarkSurface {
+        MarkWorld::new(
+            vec![MarkSurface {
                 lightmap: 3,
                 mins: Vec3::new(-64.0, -64.0, 0.0),
                 maxs: Vec3::new(64.0, 64.0, 0.0),
                 tris: 0..2,
+                chunks: 0..0,
             }],
             tris,
-        }
+        )
     }
 
     fn request(origin: Vec3, radius: f32) -> MarkRequest {
@@ -665,6 +704,29 @@ mod tests {
         let bsp = vcod_common::bsp::parse(&raw).unwrap();
         let all = MarkWorld::build(&bsp, |_| true);
         let none = MarkWorld::build(&bsp, |_| false);
+        // the chunk boxes skip only triangles the box test skips: the same
+        // fragments as with boxes that never skip
+        let mut wide = MarkWorld::build(&bsp, |_| true);
+        wide.chunks
+            .fill((Vec3::splat(f32::MIN), Vec3::splat(f32::MAX)));
+        let mut frags = 0;
+        for soup in bsp.soups[..bsp.models[0].num_soups as usize]
+            .iter()
+            .step_by(7)
+        {
+            let v = bsp.verts[soup.first_vertex as usize];
+            for radius in [4.0, 32.0] {
+                let mut req = request(Vec3::from_array(v.pos), radius);
+                req.dir = Vec3::from_array(v.normal);
+                let got = place(&all, &req, 0);
+                assert_eq!(got.len(), place(&wide, &req, 0).len());
+                for (a, b) in got.iter().zip(place(&wide, &req, 0)) {
+                    assert!(a.verts == b.verts && a.lightmap == b.lightmap);
+                }
+                frags += got.len();
+            }
+        }
+        assert!(frags > 1000, "{frags}");
         assert!(all.triangle_count() > 0);
         assert_eq!(none.triangle_count(), 0);
         let world_soups = bsp.models[0].num_soups as usize;

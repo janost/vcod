@@ -52,6 +52,7 @@ pub(super) struct WaterSim {
     pub bg: wgpu::BindGroup,
     /// The time of the last upload; one a frame.
     time: Option<f32>,
+    scratch: vcod_cod2::water::WaterScratch,
 }
 
 impl WaterSim {
@@ -61,9 +62,9 @@ impl WaterSim {
             return;
         }
         self.time = Some(time);
-        let levels = self.setup.levels(time);
         let kept = self.texture.mip_level_count() as usize;
-        write_levels(queue, &self.texture, &levels[..kept]);
+        self.setup.levels_into(time, kept, &mut self.scratch);
+        write_levels(queue, &self.texture, &self.scratch.levels);
     }
 }
 
@@ -321,9 +322,9 @@ impl WaterBuilder {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        let levels = setup.levels(0.0);
-        let kept = texture.mip_level_count() as usize;
-        write_levels(queue, &texture, &levels[..kept]);
+        let mut scratch = vcod_cod2::water::WaterScratch::default();
+        setup.levels_into(0.0, texture.mip_level_count() as usize, &mut scratch);
+        write_levels(queue, &texture, &scratch.levels);
         let view = texture.create_view(&Default::default());
         let bg = self.sim_group(device, sun_buf, &view);
         self.sims.push(WaterSim {
@@ -331,6 +332,7 @@ impl WaterBuilder {
             texture,
             bg,
             time: Some(0.0),
+            scratch,
         });
         let i = self.material_bgs.len() as u32 - 1;
         self.material_of.insert(sh.name.clone(), i);

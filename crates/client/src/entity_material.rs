@@ -1200,6 +1200,8 @@ pub(crate) fn grid_weight_cubes(device: &wgpu::Device, queue: &wgpu::Queue) -> w
 pub(crate) struct Cod4Volume {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
+    /// The entity blocks as last written.
+    written: Vec<[[u8; 4]; 64]>,
 }
 
 impl Cod4Volume {
@@ -1220,16 +1222,34 @@ impl Cod4Volume {
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
-        Self { texture, view }
+        Self {
+            texture,
+            view,
+            written: Vec::new(),
+        }
     }
 
     /// Writes blocks `0..blocks.len()` (at most all but the last), whole
-    /// rows of them.
-    pub(crate) fn write_blocks(&self, queue: &wgpu::Queue, blocks: &[[[u8; 4]; 64]]) {
+    /// rows of them, from the first row holding a block that changed since
+    /// the last write to the last such row.
+    pub(crate) fn write_blocks(&mut self, queue: &wgpu::Queue, blocks: &[[[u8; 4]; 64]]) {
         use crate::entity_light::{COD4_VOLUME_BLOCKS, COD4_VOLUME_ROW};
         let blocks = &blocks[..blocks.len().min(COD4_VOLUME_BLOCKS as usize - 1)];
-        let (rows, rgba) = crate::entity_light::cod4_volume_rows(blocks);
-        self.write_box(queue, (0, 0), (4 * COD4_VOLUME_ROW, 4 * rows), &rgba);
+        let Some(span) = crate::renderer::changed_span(&self.written, blocks) else {
+            return;
+        };
+        let row = COD4_VOLUME_ROW as usize;
+        let (first, end) = (span.start / row, span.end.div_ceil(row));
+        let rows = &blocks[first * row..(end * row).min(blocks.len())];
+        let (n, rgba) = crate::entity_light::cod4_volume_rows(rows);
+        self.write_box(
+            queue,
+            (0, 4 * first as u32),
+            (4 * COD4_VOLUME_ROW, 4 * n),
+            &rgba,
+        );
+        self.written.clear();
+        self.written.extend_from_slice(blocks);
     }
 
     /// Writes the view model's block, the last.

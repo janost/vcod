@@ -183,9 +183,9 @@ impl WaterSetup {
     /// imaginary part by its sine of `omega t` in 1024ths of a turn, then
     /// an FFT along every row and down every column.
     pub fn field(&self, time: f32) -> Vec<[f32; 2]> {
-        self.field_by(|om| {
-            ((f64::from(om * time) * 162.974_661_726_100_83) as f32 + 0.5).floor() as i32
-        })
+        let mut out = Vec::new();
+        self.field_by(phase_cod2(time), &mut out);
+        out
     }
 
     /// The setup of a spectrum a CoD4 zone stores (`water_t`'s `H0` and
@@ -205,25 +205,22 @@ impl WaterSetup {
     /// scaled by 162.97466 and stored, each texel's phase its `wTerm` times
     /// that, truncated, in 1024ths of a turn; the FFTs as [`Self::field`].
     pub fn field_cod4(&self, time: f32) -> Vec<[f32; 2]> {
-        let scaled = (f64::from(time) * 162.974_655_151_367_2) as f32;
-        self.field_by(|om| (f64::from(om) * f64::from(scaled)) as i64 as i32)
+        let mut out = Vec::new();
+        self.field_by(phase_cod4(time), &mut out);
+        out
     }
 
-    /// The field off each texel's phase index (`phase(omega)`).
-    fn field_by(&self, phase: impl Fn(f32) -> i32) -> Vec<[f32; 2]> {
+    /// The field off each texel's phase index (`phase(omega)`), into `out`.
+    fn field_by(&self, phase: impl Fn(f32) -> i32, out: &mut Vec<[f32; 2]>) {
         let sine = &tables().sine;
-        let mut out: Vec<[f32; 2]> = self
-            .h0
-            .iter()
-            .zip(&self.omega)
-            .map(|(&[hr, hi], &om)| {
-                if om == 0.0 {
-                    return [0.0; 2];
-                }
-                let p = (phase(om) & 0x3ff) as usize;
-                [hr * sine[(p + 0xff) & 0x3ff], hi * sine[p]]
-            })
-            .collect();
+        out.clear();
+        out.extend(self.h0.iter().zip(&self.omega).map(|(&[hr, hi], &om)| {
+            if om == 0.0 {
+                return [0.0; 2];
+            }
+            let p = (phase(om) & 0x3ff) as usize;
+            [hr * sine[(p + 0xff) & 0x3ff], hi * sine[p]]
+        }));
         let (w, h) = (self.width, self.height);
         let (wb, hb) = (w.trailing_zeros(), h.trailing_zeros());
         for row in out.chunks_exact_mut(w) {
@@ -232,7 +229,6 @@ impl WaterSetup {
         for col in 0..w {
             fft(&mut out[col..], hb, w);
         }
-        out
     }
 
     /// The L8 image's levels at `time`: the field's magnitude over the
@@ -240,44 +236,65 @@ impl WaterSetup {
     /// level `R_DownsampleMipMapBilinear`'s truncated 2 x 2 mean, down to
     /// 1 x 1.
     pub fn levels(&self, time: f32) -> Vec<Vec<u8>> {
+        let mut s = WaterScratch::default();
+        self.levels_into(time, usize::MAX, &mut s);
+        s.levels
+    }
+
+    /// [`Self::levels`]' first `count` into `s.levels`, off `s`'s buffers.
+    pub fn levels_into(&self, time: f32, count: usize, s: &mut WaterScratch) {
+        self.field_by(phase_cod2(time), &mut s.field);
         let n = (self.width * self.height) as f32;
-        let top: Vec<u8> = self
-            .field(time)
-            .iter()
-            .map(|&[re, im]| {
-                let v = (re * re + im * im).sqrt() / n;
-                let b = if v - 1.0 < 0.0 { v * 255.0 } else { 255.0 };
-                (b + 0.5).floor() as u8
-            })
-            .collect();
-        self.mips(top)
+        let top = self.top(&mut s.levels, count);
+        top.extend(s.field.iter().map(|&[re, im]| {
+            let v = (re * re + im * im).sqrt() / n;
+            let b = if v - 1.0 < 0.0 { v * 255.0 } else { 255.0 };
+            (b + 0.5).floor() as u8
+        }));
+        self.mips(&mut s.levels);
     }
 
     /// CoD4 1.7's L8 levels at `time` (iw3mp.exe 0x616420): the field's
     /// magnitude times the stored inverse of the texel count, 1 past 1,
     /// times 255.99899 truncated; the mips as [`Self::levels`].
     pub fn levels_cod4(&self, time: f32) -> Vec<Vec<u8>> {
-        let inv = 1.0 / (self.width * self.height) as f32;
-        let top: Vec<u8> = self
-            .field_cod4(time)
-            .iter()
-            .map(|&[re, im]| {
-                let v = (im * im + re * re).sqrt() * inv;
-                let v = if 1.0 - v <= 0.0 { 1.0 } else { v };
-                (f64::from(v) * 255.998_992_919_921_9) as u8
-            })
-            .collect();
-        self.mips(top)
+        let mut s = WaterScratch::default();
+        self.levels_cod4_into(time, usize::MAX, &mut s);
+        s.levels
     }
 
-    /// `top` and its box-filtered levels down to 1 x 1.
-    fn mips(&self, top: Vec<u8>) -> Vec<Vec<u8>> {
-        let mut out = vec![top];
+    /// [`Self::levels_cod4`]' first `count` into `s.levels`, off `s`'s
+    /// buffers.
+    pub fn levels_cod4_into(&self, time: f32, count: usize, s: &mut WaterScratch) {
+        self.field_by(phase_cod4(time), &mut s.field);
+        let inv = 1.0 / (self.width * self.height) as f32;
+        let top = self.top(&mut s.levels, count);
+        top.extend(s.field.iter().map(|&[re, im]| {
+            let v = (im * im + re * re).sqrt() * inv;
+            let v = if 1.0 - v <= 0.0 { 1.0 } else { v };
+            (f64::from(v) * 255.998_992_919_921_9) as u8
+        }));
+        self.mips(&mut s.levels);
+    }
+
+    /// Sizes `levels` to `count` (at least one, at most the chain down to
+    /// 1 x 1) and returns the top one, emptied.
+    fn top<'a>(&self, levels: &'a mut Vec<Vec<u8>>, count: usize) -> &'a mut Vec<u8> {
+        let chain = self.width.max(self.height).ilog2() as usize + 1;
+        levels.resize_with(count.clamp(1, chain), Vec::new);
+        let top = &mut levels[0];
+        top.clear();
+        top
+    }
+
+    /// Each level after the first, box-filtered from the one before.
+    fn mips(&self, levels: &mut [Vec<u8>]) {
         let (mut w, mut h) = (self.width, self.height);
-        while w > 1 || h > 1 {
-            let src = out.last().expect("a level");
+        for l in 1..levels.len() {
+            let (done, rest) = levels.split_at_mut(l);
+            let (src, next) = (&done[l - 1], &mut rest[0]);
             let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
-            let mut next = Vec::with_capacity(nw * nh);
+            next.clear();
             for y in 0..nh {
                 for x in 0..nw {
                     let at = |dx: usize, dy: usize| {
@@ -291,11 +308,29 @@ impl WaterSetup {
                     next.push(sum as u8);
                 }
             }
-            out.push(next);
             (w, h) = (nw, nh);
         }
-        out
     }
+}
+
+/// The buffers [`WaterSetup::levels_into`] and
+/// [`WaterSetup::levels_cod4_into`] keep between frames.
+#[derive(Default)]
+pub struct WaterScratch {
+    field: Vec<[f32; 2]>,
+    /// The last call's levels, largest first.
+    pub levels: Vec<Vec<u8>>,
+}
+
+/// CoD2's phase index: `floor(omega t 162.97466 + 0.5)`.
+fn phase_cod2(time: f32) -> impl Fn(f32) -> i32 {
+    move |om| ((f64::from(om * time) * 162.974_661_726_100_83) as f32 + 0.5).floor() as i32
+}
+
+/// CoD4 1.7's: the scaled time stored, `wTerm` times it, truncated.
+fn phase_cod4(time: f32) -> impl Fn(f32) -> i32 {
+    let scaled = (f64::from(time) * 162.974_655_151_367_2) as f32;
+    move |om| (f64::from(om) * f64::from(scaled)) as i64 as i32
 }
 
 #[cfg(test)]
@@ -446,6 +481,21 @@ mod tests {
         let (t, l1) = (&a[0], &a[1]);
         let m = (u32::from(t[0]) + u32::from(t[1]) + u32::from(t[64]) + u32::from(t[65])) >> 2;
         assert_eq!(u32::from(l1[0]), m);
+    }
+
+    /// The kept buffers give each call's levels as a fresh build does, cut
+    /// to the count asked for.
+    #[test]
+    fn levels_into_reuses_its_buffers_for_the_same_bytes() {
+        let s = WaterSetup::new(&harbor(), &mut GlibcRand::new(1)).unwrap();
+        let mut kept = WaterScratch::default();
+        for (t, count) in [(10.0, 7), (10.5, 1), (11.0, 3), (12.0, 99)] {
+            s.levels_into(t, count, &mut kept);
+            let all = s.levels(t);
+            assert_eq!(kept.levels, all[..count.min(all.len())], "{t}");
+            s.levels_cod4_into(t, count, &mut kept);
+            assert_eq!(kept.levels, s.levels_cod4(t)[..count.min(all.len())], "{t}");
+        }
     }
 
     /// A width the FFT cannot take is refused, not run.

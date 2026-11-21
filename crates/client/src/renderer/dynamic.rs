@@ -382,6 +382,19 @@ pub(super) struct Cod4EntityLight {
     pub(super) sun_dir: glam::Vec3,
     pub(super) sun_colour: glam::Vec3,
     pub(super) lights: Vec<Option<vcod_common::mapworld::ModelLightSource>>,
+    /// Last frame's lookups in set order, kept as 1.7 keeps a model's block
+    /// while its lighting origin holds (cod4-world.md 3.3).
+    pub(super) kept: Vec<(LightKey, vcod_common::mapworld::EntityLight)>,
+}
+
+/// A lookup's lighting origin and world box, by their bits: the lighter is
+/// a function of the two alone (the world's clip map, no movers).
+pub(super) type LightKey = ([u32; 3], [u32; 6]);
+
+fn light_key(origin: glam::Vec3, [lo, hi]: [glam::Vec3; 2]) -> LightKey {
+    let bits = |v: glam::Vec3| v.to_array().map(f32::to_bits);
+    let (lo, hi) = (bits(lo), bits(hi));
+    (bits(origin), [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]])
 }
 
 impl Cod4EntityLight {
@@ -396,20 +409,116 @@ impl Cod4EntityLight {
         identity_light: f32,
     ) -> (GpuLightSet, [[u8; 4]; 64]) {
         let light = (self.lighter.0)(origin.to_array(), bounds.map(|v| v.to_array()));
+        (self.pack(&light, block, identity_light), light.texels)
+    }
+
+    fn pack(
+        &self,
+        light: &vcod_common::mapworld::EntityLight,
+        block: u32,
+        identity_light: f32,
+    ) -> GpuLightSet {
         let source = self
             .lights
             .get(usize::from(light.primary))
             .and_then(Option::as_ref);
-        let set = entity_light::pack_cod4(
-            &light,
+        entity_light::pack_cod4(
+            light,
             block,
             self.sun_dir,
             self.sun_colour,
             source,
             identity_light,
-        );
-        (set, light.texels)
+        )
     }
+
+    /// The frame's set and block per `(origin, box)`, set `i` naming block
+    /// `i` and past the volume's blocks the last entity block (the very
+    /// last is the view model's). A pair looked up last frame reuses that
+    /// lookup, so a held scene runs none.
+    pub(super) fn frame_sets(
+        &mut self,
+        origins: &[(glam::Vec3, [glam::Vec3; 2])],
+        identity_light: f32,
+    ) -> (Vec<GpuLightSet>, Vec<[[u8; 4]; 64]>) {
+        let last = entity_light::COD4_VOLUME_BLOCKS - 2;
+        let kept = std::mem::take(&mut self.kept);
+        // by key, built at the first set whose place in the list moved
+        let mut by_key: Option<HashMap<LightKey, usize>> = None;
+        let mut sets = Vec::with_capacity(origins.len());
+        let mut blocks = Vec::with_capacity(origins.len());
+        for (i, &(o, b)) in origins.iter().enumerate() {
+            let key = light_key(o, b);
+            let at = match kept.get(i) {
+                Some((k, _)) if *k == key => Some(i),
+                _ => by_key
+                    .get_or_insert_with(|| {
+                        kept.iter().enumerate().map(|(j, (k, _))| (*k, j)).collect()
+                    })
+                    .get(&key)
+                    .copied(),
+            };
+            let light = match at {
+                Some(j) => kept[j].1,
+                None => (self.lighter.0)(o.to_array(), b.map(|v| v.to_array())),
+            };
+            sets.push(self.pack(&light, (i as u32).min(last), identity_light));
+            blocks.push(light.texels);
+            self.kept.push((key, light));
+        }
+        (sets, blocks)
+    }
+}
+
+/// A buffer's contents as last written, so a frame writes only the span
+/// that changed since.
+pub(super) struct Written<T>(Vec<T>);
+
+impl<T> Default for Written<T> {
+    fn default() -> Self {
+        Written(Vec::new())
+    }
+}
+
+impl<T: bytemuck::Pod> Written<T> {
+    /// Writes `new` from offset 0 where it differs from the last write;
+    /// returns the bytes written.
+    pub(super) fn write(&mut self, queue: &wgpu::Queue, buf: &wgpu::Buffer, new: &[T]) -> usize {
+        let Some(span) = changed_span(&self.0, new) else {
+            return 0;
+        };
+        let bytes: &[u8] = bytemuck::cast_slice(&new[span.clone()]);
+        queue.write_buffer(buf, (span.start * size_of::<T>()) as u64, bytes);
+        self.0.clear();
+        self.0.extend_from_slice(new);
+        bytes.len()
+    }
+}
+
+/// The least range of `new` holding every element whose bytes differ from
+/// `old`'s or that `old` lacks; `None` when there is none.
+pub(crate) fn changed_span<T: bytemuck::Pod>(
+    old: &[T],
+    new: &[T],
+) -> Option<std::ops::Range<usize>> {
+    let same = |a: &T, b: &T| bytemuck::bytes_of(a) == bytemuck::bytes_of(b);
+    let common = old.len().min(new.len());
+    let start = (0..common)
+        .find(|&i| !same(&old[i], &new[i]))
+        .unwrap_or(common);
+    if start == new.len() {
+        return None;
+    }
+    let end = if new.len() > old.len() {
+        new.len()
+    } else {
+        (start..new.len())
+            .rev()
+            .find(|&i| !same(&old[i], &new[i]))
+            .expect("start differs")
+            + 1
+    };
+    Some(start..end)
 }
 
 /// Live snapshot entities: xmodels uploaded once with bind pose baked in,
@@ -453,6 +562,10 @@ pub(super) struct DynamicPass {
     pub(super) light_boxes: Vec<(glam::Vec3, glam::Vec3)>,
     /// One `GpuLightSet` per distinct lighting origin this frame.
     pub(super) light_buf: wgpu::Buffer,
+    /// What `light_buf`, `instance_buf` and `bone_buf` hold.
+    pub(super) light_written: Written<GpuLightSet>,
+    pub(super) instance_written: Written<InstanceRaw>,
+    pub(super) bone_written: Written<[f32; 16]>,
     /// The map's light grid; `None` with no map.
     pub(super) lighting: Option<StaticLighting>,
     /// A CoD2 map's light grid, which lights its models in place of
@@ -975,7 +1088,7 @@ impl Renderer {
     /// player's parts share one) and points its `light_set` at them.
     pub(super) fn pick_entity_lights(&mut self) -> Vec<GpuLightSet> {
         let d = &mut self.dynamic;
-        if let Some(c4) = &d.cod4_light {
+        if let Some(c4) = &mut d.cod4_light {
             // CoD4: a lit model's set is its own block, one per distinct
             // lighting origin as `R_AllocModelLighting`'s cache keeps, over
             // the box its instances span (a scene entity's)
@@ -999,14 +1112,7 @@ impl Renderer {
                 let b = &mut origins[raw.light_set as usize].1;
                 *b = [b[0].min(lo), b[1].max(hi)];
             }
-            // block i for set i; past the volume's blocks (the last is the
-            // view model's) the last entity block is shared
-            let last = entity_light::COD4_VOLUME_BLOCKS - 2;
-            let (mut sets, blocks): (Vec<GpuLightSet>, Vec<_>) = origins
-                .iter()
-                .enumerate()
-                .map(|(i, (o, b))| c4.set(*o, *b, (i as u32).min(last), self.identity_light))
-                .unzip();
+            let (mut sets, blocks) = c4.frame_sets(&origins, self.identity_light);
             d.materials.cod4_volume.write_blocks(&self.queue, &blocks);
             if sets.is_empty() {
                 sets.push(GpuLightSet::default());
@@ -1326,6 +1432,9 @@ pub(super) fn create_dynamic_pass(
         light_boxes: Vec::new(),
         instance_placed: Vec::new(),
         light_buf,
+        light_written: Written::default(),
+        instance_written: Written::default(),
+        bone_written: Written::default(),
         lighting: None,
         cod2_light: None,
         cod4_light: None,
@@ -1501,4 +1610,77 @@ pub(super) fn model_scene_lights(
     out.extend_from_slice(entity);
     out.truncate(crate::fx::sim::MAX_SCENE_LIGHTS);
     out
+}
+
+#[cfg(test)]
+mod light_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use vcod_common::mapworld::{EntityLight, EntityLighter};
+
+    /// A lighter whose texels read the origin's x and the box's low z,
+    /// counting its lookups.
+    fn counting() -> (Cod4EntityLight, Arc<AtomicUsize>) {
+        let n = Arc::new(AtomicUsize::new(0));
+        let seen = n.clone();
+        let lighter = EntityLighter(Arc::new(move |o: [f32; 3], b: [[f32; 3]; 2]| {
+            seen.fetch_add(1, Ordering::Relaxed);
+            EntityLight {
+                texels: [[o[0] as u8, b[0][2] as u8, 0, 255]; 64],
+                probe: 1,
+                primary: 0,
+            }
+        }));
+        let c4 = Cod4EntityLight {
+            lighter,
+            sun_dir: glam::Vec3::Z,
+            sun_colour: glam::Vec3::ONE,
+            lights: Vec::new(),
+            kept: Vec::new(),
+        };
+        (c4, n)
+    }
+
+    fn at(x: f32, z: f32) -> (glam::Vec3, [glam::Vec3; 2]) {
+        let o = glam::Vec3::new(x, 0.0, 4.0);
+        (o, [o - glam::Vec3::Z * z, o + glam::Vec3::ONE])
+    }
+
+    /// A held scene looks nothing up; an origin or box that moved, or one
+    /// new, is looked up alone, and every set and block is the one a fresh
+    /// lookup gives in its place.
+    #[test]
+    fn cod4_lookups_hold_while_their_origin_and_box_do() {
+        let (mut c4, n) = counting();
+        let first: Vec<_> = (0..5).map(|i| at(i as f32, 2.0)).collect();
+        let a = c4.frame_sets(&first, 0.5);
+        assert_eq!(n.swap(0, Ordering::Relaxed), 5);
+        assert!(c4.frame_sets(&first, 0.5) == a);
+        assert_eq!(n.swap(0, Ordering::Relaxed), 0, "held");
+        // one new in front shifts every set's block; a box grew
+        let mut next = vec![at(9.0, 2.0)];
+        next.extend_from_slice(&first);
+        next[3].1[0].z -= 1.0;
+        let b = c4.frame_sets(&next, 0.5);
+        assert_eq!(n.swap(0, Ordering::Relaxed), 2);
+        let (fresh, _) = counting();
+        for (i, &(o, bx)) in next.iter().enumerate() {
+            let (set, texels) = fresh.set(o, bx, i as u32, 0.5);
+            assert!(b.0[i] == set && b.1[i] == texels, "set {i}");
+        }
+    }
+
+    #[test]
+    fn changed_span_covers_what_differs_and_what_is_new() {
+        let old = [1u32, 2, 3, 4];
+        assert_eq!(changed_span(&old, &old), None);
+        assert_eq!(changed_span(&old, &old[..2]), None);
+        assert_eq!(changed_span(&old, &[1, 9, 3, 8]), Some(1..4));
+        assert_eq!(changed_span(&old, &[1, 2, 7]), Some(2..3));
+        assert_eq!(changed_span(&old, &[1, 2, 3, 4, 5]), Some(4..5));
+        assert_eq!(changed_span(&[], &[5u32]), Some(0..1));
+        // by bytes: -0 is not 0
+        assert_eq!(changed_span(&[0.0f32], &[-0.0]), Some(0..1));
+    }
 }
