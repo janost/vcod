@@ -170,6 +170,26 @@ ends on its block's last byte. VERIFIED live.
   server time. INFERRED. The 1.7 server takes it so: with
   `examples/cod4_probe.rs` answering each message, `commandTime` follows
   the sent cmd times to the end of the capture. VERIFIED live.
+- The server's read of that header (`cod4_lnxded` 0x8177d62..0x8177e32,
+  after `Netchan_Process` at 0x8177d59): the `serverId` byte into the
+  client's +0xa0d28 (0x8177d6d), `messageAcknowledge` into +0x20e5c
+  (0x8177d7e), and a negative one (`js` at 0x8177d86) prints `Invalid
+  reliableAcknowledge message from %s - reliableAcknowledge is %i`
+  (0x82325f0, with the old +0x20e54) and drops the message, no field
+  changed past +0x20e5c (0x8177ded..0x8177e14). Then `reliableAcknowledge`
+  into +0x20e54 (0x8177d95); when +0x20e50 minus it is over 0x7f (`sub`,
+  `cmp 0x7f`, `jle` at 0x8177da1..0x8177da8) it prints `Out of range
+  reliableAcknowledge message from %s - cl->reliableSequence is %i,
+  reliableAcknowledge is %i` (0x823263c), stores +0x20e50 over +0x20e54
+  (0x8177dd0..0x8177dd6) and drops the message. Else the ops are read
+  (0x8178530 at 0x8177e32). VERIFIED (the instructions and the strings).
+  The window test is a signed 32-bit difference, so an acknowledge past
+  `reliableSequence` or near `i32::MIN` passes it. vcod-server
+  (`engine::conn::incoming`) drops a negative `messageAcknowledge` as
+  retail does; it also drops a `messageAcknowledge` of a message never
+  sent and a `reliableAcknowledge` outside `0..=reliableSequence` or 128
+  behind it, in 64-bit math, without retail's clamp: only a forgery
+  carries one, and nothing of it is committed.
 - A usercmd: bit 0 and a long serverTime (or bit 1 and a byte step), then
   a 1-bit "changed" flag XOR the key (section 8 has the rest). The key is
   `checksumFeed ^ messageAcknowledge ^ Com_HashKey(server command, 32)`,

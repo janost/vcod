@@ -677,12 +677,7 @@ impl Cod2Session {
         }
         if let Some(n) = p.snapshot {
             self.stats.snapshots += 1;
-            if self
-                .client
-                .parser
-                .frame(n)
-                .is_some_and(|f| f.delta_num >= 0)
-            {
+            if self.client.parser.frame(n).is_some_and(|f| f.delta_num > 0) {
                 self.stats.deltas += 1;
             }
             self.snap_at = clock_now();

@@ -124,11 +124,31 @@ confirmed on 1.7.
   `com_playerProfile` when it was the active one) or opens
   `profile_delete_fail_popmenu`; the row after it is picked, or none.
   `UI_LoadPlayerProfile` runs `Com_ChangePlayerProfile` on
-  `ui_playerProfileSelected`: for another profile whose directory exists
-  it writes the name to `players/profiles/active.txt`, disconnects,
-  resets every dvar and runs `Com_SetPlayerProfile`, which sets
-  `com_playerProfile`, runs the profile's `config_mp.cfg` and sets `name`
-  to the profile's name when `name` is empty (registered `""`). INFERRED.
+  `ui_playerProfileSelected` (INFERRED). `Com_ChangePlayerProfile`
+  (`iw3mp.exe` 0x4fad00, its local client in `esi`, the name in `edi`)
+  returns at once when the name equals `com_playerProfile` (the dvar at
+  0x1435d1c) under the case-blind compare 0x571a90 (0x4fad06..0x4fad20)
+  or when the check 0x4fabb0 on its copy fails (0x4fad40..0x4fad4a; that it tests the directory is INFERRED).
+  Else it writes the name to `profiles/active.txt` (0x6e0d84, through
+  0x55c4e0 at 0x4fad69), runs `disconnect` (0x6d04d4, 0x4fad76), calls
+  0x56d430, which walks every registered dvar setting one of its stored
+  values (0x56d45e..0x56d4ad; that it is the reset is INFERRED), then
+  `Com_SetPlayerProfile` (0x4fac60, at 0x4fad89), and runs `snd_restart`
+  (0x6e0d98) when 0x56d370 says so (0x4fada3..0x4fadb3). VERIFIED (the
+  instructions and the strings). `Com_SetPlayerProfile` sets
+  `com_playerProfile` to the name (0x56ca90 on the dvar, 0x4fac69..0x4fac72),
+  builds the profile's `config_mp.cfg` path (0x6e0aa0 through 0x4faf90,
+  which prints `Tried to use a player profile before it was set.` on an
+  empty `com_playerProfile`), and hands it to 0x4ff130, which queues
+  `exec default_mp.cfg`, `exec language.cfg` and `exec <path>` (0x6e1cec,
+  0x6e1d04, 0x6e1d18) and calls 0x4f9280 (0x4ff16b), then
+  `exec safemode_mp.cfg` when 0x4fd660 is set. Then, when the dvar `name` (0x6c5ca0, found
+  through 0x56b5d0) is missing or empty, it calls 0x56d030 with `name` and
+  the profile's name (0x4facd5..0x4facdb). VERIFIED (the instructions and
+  the strings); that 0x56d030 sets a dvar by name, 0x55c4e0 writes a file
+  and 0x4f9280 runs the command buffer is INFERRED. So a switch
+  does exec the new profile's config, after `default_mp.cfg` and
+  `language.cfg`.
 - vcod runs those scripts as written (`play::cod4_menus::front`): the
   list is `players/profiles/`' directories (`front::profile_list`, feeder
   24, `player_profile`'s list; VERIFIED, the walk's `feeder`), a pick
@@ -137,8 +157,11 @@ confirmed on 1.7.
   The client (`cod4_front::change_profile`) writes `active.txt`, runs the
   profile's `vcod_mp.cfg`, else its `config_mp.cfg`, gives `name` the
   profile's name when it has no config or an empty `name`, and writes
-  `vcod_mp.cfg` there at once. It resets no dvar first: what the config
-  does not set keeps its value. With no profile on disk the main menu
+  `vcod_mp.cfg` there at once. A file that is not UTF-8 (1.7's config
+  with a Latin-1 name) reads as Latin-1, one char a byte. It resets no
+  dvar first and runs neither `default_mp.cfg` nor `language.cfg`: what
+  the config does not set keeps its value. The front end has no
+  connection to drop and no sound to restart. With no profile on disk the main menu
   asks for one as 1.7's does; vcod has no stand-in profile. A deleted
   profile that held the config sends the config back to
   `main/vcod_mp.cfg` until another loads. Create, delete and load

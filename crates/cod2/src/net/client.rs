@@ -108,9 +108,9 @@ impl Client {
             self.set_systeminfo(&si);
         }
         // `CL_ParseSnapshot` (Mac 0x1d5cb2) ends the wait on a frame
-        // that deltas from nothing.
+        // that deltas from nothing: a base of 0 or less.
         if let Some(n) = parsed.snapshot
-            && self.parser.frame(n).is_some_and(|f| f.delta_num < 0)
+            && self.parser.frame(n).is_some_and(|f| f.delta_num <= 0)
             && let Some(rec) = self.recording.as_mut()
         {
             rec.waiting = false;

@@ -478,6 +478,47 @@ mod tests {
         assert_eq!(s.ps.get_f32("origin[0]"), Some(336.0));
     }
 
+    /// A delta byte that reaches message 0 or before takes the no-base arm
+    /// (`jg` at iw3mp.exe 0x4737d1): the snapshot reads from nothing.
+    #[test]
+    fn a_delta_base_of_zero_or_less_reads_from_nothing() {
+        let gs = Gamestate::from_table(3, &table(), &BTreeMap::new(), 1, 77);
+        let huff = Huffman::new();
+        let mut ps = PlayerState::default();
+        let f = fields::PLAYER_STATE
+            .iter()
+            .find(|f| f.name == "origin[0]")
+            .unwrap();
+        ps.words[f.word()] = 336.0f32.to_bits();
+        let f1 = Frame4 {
+            server_time: Msec::from_raw(1000),
+            map_center: gs.map_center,
+            ps,
+            entities: Vec::new(),
+            clients: Vec::new(),
+        };
+        for (n, back) in [(3, 3u8), (2, 5)] {
+            let mut client = Client::new();
+            let mut w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
+            PROTOCOL_17.write_gamestate(&mut w, &gs);
+            w.write_byte(EOF);
+            client.parse(1, &huff.compress(&w.into_ops())).unwrap();
+            let mut w = MsgWriter::new(&crate::net::parse::UNUSED_HUFF);
+            let head = SnapshotHead {
+                delta_num: back,
+                snap_flags: 4,
+            };
+            // Written from nothing under a non-zero byte.
+            PROTOCOL_17.write_snapshot(&mut w, None, &f1, head, &BTreeMap::new());
+            w.write_byte(EOF);
+            client.parse(n, &huff.compress(&w.into_ops())).unwrap();
+            let s = client.snapshots.last().unwrap();
+            assert_eq!((s.message_num, s.base), (n as i32, None));
+            assert_eq!(s.delta_num, i32::from(back));
+            assert_eq!(s.ps.get_f32("origin[0]"), Some(336.0));
+        }
+    }
+
     /// Frames at `i32::MAX` and, one delta on, `i32::MIN`: the parser
     /// reads both times back and re-encodes each message byte for byte.
     #[test]

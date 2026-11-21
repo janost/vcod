@@ -49,7 +49,8 @@ pub struct Snapshot2 {
     /// The netchan sequence that carried it.
     pub message_num: i32,
     pub server_time: Msec,
-    /// The frame it deltas from, -1 for none.
+    /// The frame it deltas from; 0 or less (-1 for a zero delta byte) is
+    /// none.
     pub delta_num: i32,
     pub snap_flags: u8,
     /// False when the delta frame was not the one the server meant.
@@ -286,7 +287,8 @@ impl Parser {
         } else {
             message_num.wrapping_sub(back)
         };
-        let (from, valid) = if delta_num < 0 {
+        // A base of 0 or less takes the no-base arm (`jg` at 0x41377c).
+        let (from, valid) = if delta_num <= 0 {
             (None, true)
         } else {
             let slot = self.frames[delta_num as usize % PACKET_BACKUP]
