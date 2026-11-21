@@ -1393,12 +1393,17 @@ impl Physics {
             }
             // The share of the other's top speed this hit hands on: its
             // ratio to ours, times 100, times our speed's share of our own
-            // top speed clamped to 0.5..1.
-            let k = other_max / info.max_speed * 100.0;
-            let share = (len(self.s.velocity) / info.max_speed).clamp(0.5, 1.0);
-            if len(e.vehicle_velocity) < k * share {
+            // top speed clamped to 0.5..1. The share stays on the stack into
+            // each component, one rounding apiece (0x83a7a..0x83b9f,
+            // 0x83c3c..0x83dcb).
+            let k = f64::from(other_max / info.max_speed * 100.0);
+            let r = f64::from(len(self.s.velocity)) / f64::from(info.max_speed);
+            let share = r.clamp(0.5, 1.0);
+            if f64::from(len(e.vehicle_velocity)) < share * k {
                 let d = normalize(e.origin - self.s.origin);
-                let mut v = e.vehicle_velocity + d * (k * share);
+                let mut v = Vec3::from_array(std::array::from_fn(|i| {
+                    (share * k * f64::from(d[i]) + f64::from(e.vehicle_velocity[i])) as f32
+                }));
                 if other_max < len(v) {
                     v = normalize(v) * other_max;
                 }

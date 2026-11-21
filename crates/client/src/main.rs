@@ -2124,6 +2124,7 @@ fn run() -> Result<()> {
         mod_dir: args.mod_dir.clone(),
         fs_game: None,
         fs_pure: None,
+        fs_feed: 0,
         connect_addr: args.connect.clone(),
         team: args.team.clone(),
         weapon: args.weapon.clone(),
@@ -2984,10 +2985,12 @@ fn reopen_fs(
     quick_chat: &mut quick_chat::QuickChat,
 ) -> Result<()> {
     let cod2 = fs.game() == vcod_common::game::Game::Cod2;
-    *fs = match cod2 {
+    let new = match cod2 {
         true => Pk3Fs::open_iwd(base, game)?,
         false => Pk3Fs::open_search(base, game, pure, fs.vanilla())?,
     };
+    new.keep_fake_checksum(fs);
+    *fs = new;
     *localized = vcod_common::localize::Localized::load(fs);
     match hud {
         Some(h) => {
@@ -3318,6 +3321,8 @@ struct App {
     fs_game: Option<String>,
     /// A pure server's `sv_paks`: only paks with these checksums load.
     fs_pure: Option<Vec<i32>>,
+    /// `fs_checksumFeed`: the gamestate feed of the last `FS_Restart`.
+    fs_feed: i32,
     /// The last server connected to: the connecting screen's text and what
     /// `reconnect` reconnects to.
     connect_addr: Option<String>,
@@ -4871,6 +4876,9 @@ impl App {
         if self.fs_game == game && pure.is_none() {
             return;
         }
+        // `vid_restart` restarts on a modified `fs_game`; a disconnect
+        // leaving the pure list does not.
+        let restart = self.fs_game != game;
         self.fs_game = game;
         let (base, game) = search_dirs(&self.game_dir, &self.mod_dir, &self.fs_game);
         match reopen_fs(
@@ -4885,6 +4893,9 @@ impl App {
             &mut self.quick_chat,
         ) {
             Ok(()) => {
+                if restart {
+                    self.fs.restart_fake_checksum();
+                }
                 if let Some(r) = &mut self.renderer {
                     r.reopen(&self.fs);
                 }
@@ -4974,6 +4985,7 @@ impl App {
                 self.disconnect(Some(format!("cannot reopen {}: {e:#}", base.display())));
                 return;
             }
+            self.fs.restart_fake_checksum();
             if let Some(r) = &mut self.renderer {
                 r.reopen(&self.fs);
             }

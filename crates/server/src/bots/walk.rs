@@ -169,7 +169,7 @@ impl Bot {
             self.rungs_ago.saturating_add(1)
         };
         // Coming to rest at a leap's foot is not being stuck either.
-        if standing || view.stop {
+        if standing || view.stop || view.climbing {
             self.restart_stall(view.origin);
             self.unstick_ticks = 0;
         } else if (view.unpin.is_some() || view.detour) && self.unstick_ticks == 0 {
@@ -1904,6 +1904,26 @@ mod tests {
             assert_eq!(bot.unstick_ticks, 0, "tick {tick}");
         }
         v.origin = [0.0, 0.0, 64.0];
+        assert!((0..30).any(|_| {
+            bot.think(&v);
+            bot.unstick_ticks > 0
+        }));
+    }
+
+    /// A body held still by pmove's climb (`BotView::climbing`) gets no
+    /// spell: one fired mid-climb dropped the plan, and the plan from there
+    /// walked the bot back off mp_crash's ledge (bot-navigation.md 3.15).
+    #[test]
+    fn a_body_mid_climb_is_not_stuck() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([0.0, 300.0, 64.0]);
+        v.climbing = true;
+        for tick in 0..40 {
+            bot.think(&v);
+            assert_eq!(bot.unstick_ticks, 0, "tick {tick}");
+        }
+        v.climbing = false;
         assert!((0..30).any(|_| {
             bot.think(&v);
             bot.unstick_ticks > 0

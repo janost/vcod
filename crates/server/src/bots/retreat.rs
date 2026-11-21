@@ -48,6 +48,25 @@ pub(crate) enum Why {
     Ahead,
 }
 
+/// Why a retreat ended ([`Bot::retreat_end`]), as `bot_match` splits them
+/// (bot-combat.md 5.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum RetreatEnd {
+    /// Held the cover its time, or a health item near took over.
+    Held = 1,
+    /// The dry clip holds a round again.
+    Loaded = 2,
+    /// The dry clip's reserve ran out.
+    Empty = 3,
+    /// No cover from the threat (none found, or the threat moved).
+    NoCover = 4,
+    /// A duty came up ([`Bot::duty_bound`]).
+    Duty = 5,
+    /// [`RETREAT_TICKS`] ran out.
+    Timeout = 6,
+}
+
 /// A retreat under way.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Retreat {
@@ -98,10 +117,15 @@ pub(crate) const HEAL_PCT: i32 = 70;
 const HEAL_REACH: f32 = 1200.0;
 const HEAL_HEIGHT: f32 = 200.0;
 
+/// A health item's way is searched along the graph this far, units.
+const HEAL_PATH: f32 = 2.0 * HEAL_REACH;
+
 /// The nearest of `packs` within [`HEAL_REACH`] across and [`HEAL_HEIGHT`]
 /// up or down of a body under [`HEAL_PCT`]; `held`, the item walked to
 /// last tick, while it still lies there within [`HEAL_REACH`] across at
-/// any height. Picked afresh each tick, a bot between two items on
+/// any height. With the graph `g` and two or more in reach, nearest by
+/// the graph's way ([`HEAL_PATH`]), those it does not reach after the
+/// rest by straight line (bot-combat.md 5.3). Picked afresh each tick, a bot between two items on
 /// mp_ship's hold at (4450, 700, -64), one on the floor and one on the
 /// deck over it, turned for whichever stood nearer across and paced
 /// between their ways for 10 s; and one whose way to an item climbed a
@@ -112,6 +136,7 @@ pub(crate) fn nearest_pack(
     view: &BotView,
     packs: &[[f32; 3]],
     held: Option<[f32; 3]>,
+    g: Option<&NavGraph>,
 ) -> Option<[f32; 3]> {
     let v = &view.survive;
     if v.health * 100 >= v.max_health * HEAL_PCT {
@@ -122,12 +147,59 @@ pub(crate) fn nearest_pack(
     if let Some(h) = held.filter(|h| packs.contains(h) && across(h) < HEAL_REACH) {
         return Some(h);
     }
-    packs
+    let near: Vec<(f32, [f32; 3])> = packs
         .iter()
         .map(|p| (across(p), *p))
         .filter(|(d, p)| *d < HEAL_REACH && (p[2] - o[2]).abs() < HEAL_HEIGHT)
-        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .collect();
+    let by_line = || {
+        near.iter()
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, p)| *p)
+    };
+    let Some(g) = g.filter(|_| near.len() > 1) else {
+        return by_line();
+    };
+    let Some(cost) = path_costs(g, o, HEAL_PATH) else {
+        return by_line();
+    };
+    // Unreached ones rank after every reached one, by straight line.
+    let way = |p: [f32; 3]| {
+        g.nearest(p)
+            .map(|n| cost[n as usize] + Vec3::from(p).distance(g.nodes[n as usize]))
+            .filter(|c| c.is_finite())
+    };
+    near.iter()
+        .map(|&(d, p)| (way(p).map_or((1, d), |c| (0, c)), p))
+        .min_by(|a, b| a.0.0.cmp(&b.0.0).then(a.0.1.total_cmp(&b.0.1)))
         .map(|(_, p)| p)
+}
+
+/// The graph's way from the node nearest `from` to every node within
+/// `reach` along level and climbing edges (no risky one), infinite past it.
+fn path_costs(g: &NavGraph, from: [f32; 3], reach: f32) -> Option<Vec<f32>> {
+    let start = g.nearest(from)?;
+    let mut cost = vec![f32::INFINITY; g.nodes.len()];
+    let mut open = BinaryHeap::new();
+    cost[start as usize] = 0.0;
+    open.push((Reverse(0u32), start));
+    while let Some((Reverse(c), n)) = open.pop() {
+        if c as f32 > cost[n as usize] + 1.0 {
+            continue;
+        }
+        let p = g.nodes[n as usize];
+        for m in g.next(n) {
+            if g.has(n, m, |k| k.risky) {
+                continue;
+            }
+            let next = cost[n as usize] + p.distance(g.nodes[m as usize]);
+            if next < cost[m as usize] && next <= reach {
+                cost[m as usize] = next;
+                open.push((Reverse(next as u32), m));
+            }
+        }
+    }
+    Some(cost)
 }
 
 /// Whether `at` stands at the cover `c`.
@@ -151,6 +223,13 @@ impl Bot {
         if !on {
             self.retreat = None;
         }
+    }
+
+    /// How the last retreat ended in [`Self::retreat_update`], a
+    /// [`RetreatEnd`] code; 0 while one runs, before any, or after one cut
+    /// off elsewhere (a death, a seat, the cvar) (`BotBody::retreat_end`).
+    pub fn retreat_end(&self) -> u8 {
+        self.retreat_end.map_or(0, |e| e as u8)
     }
 
     /// Breaking contact ([`BotBody::retreating`]).
@@ -373,18 +452,28 @@ impl Bot {
             }
             let done = match r.why {
                 // A health item near ends the wait: the heal goal takes over.
-                Why::Hurt => {
-                    r.held >= HOLD_TICKS
-                        || (r.held > 0 && view.enemy.is_none() && view.survive.heal.is_some())
-                }
-                Why::Dry => (view.clip > 0 && view.busy_ms == 0) || !loaded,
-                Why::Ahead => {
-                    r.held >= HOLD_TICKS || !matches!(&view.uo, Some(UoView::Ctf(c)) if c.carrying)
-                }
+                Why::Hurt => (r.held >= HOLD_TICKS
+                    || (r.held > 0 && view.enemy.is_none() && view.survive.heal.is_some()))
+                .then_some(RetreatEnd::Held),
+                Why::Dry if view.clip > 0 && view.busy_ms == 0 => Some(RetreatEnd::Loaded),
+                Why::Dry => (!loaded).then_some(RetreatEnd::Empty),
+                Why::Ahead => (r.held >= HOLD_TICKS
+                    || !matches!(&view.uo, Some(UoView::Ctf(c)) if c.carrying))
+                .then_some(RetreatEnd::Held),
             };
             let ahead = r.why == Why::Ahead;
-            if (duty && !ahead) || done || r.cover.is_none() || r.ticks >= RETREAT_TICKS {
+            let end = if duty && !ahead {
+                Some(RetreatEnd::Duty)
+            } else if done.is_some() {
+                done
+            } else if r.cover.is_none() {
+                Some(RetreatEnd::NoCover)
+            } else {
+                (r.ticks >= RETREAT_TICKS).then_some(RetreatEnd::Timeout)
+            };
+            if let Some(end) = end {
                 self.retreat = None;
+                self.retreat_end = Some(end);
                 if ahead {
                     self.ahead_rest = AHEAD_REST;
                 }
@@ -405,6 +494,7 @@ impl Bot {
                 ticks: 0,
                 held: 0,
             });
+            self.retreat_end = None;
             return;
         }
         if duty || self.switch_to.is_some() {
@@ -432,6 +522,7 @@ impl Bot {
             ticks: 0,
             held: 0,
         });
+        self.retreat_end = None;
     }
 }
 
@@ -602,6 +693,7 @@ mod tests {
             bot.think(&v);
         }
         assert_eq!(bot.retreating(), 0);
+        assert_eq!(bot.retreat_end(), RetreatEnd::Held as u8);
         v.enemy = engaged(1).1.enemy;
         bot.think(&v);
         assert_eq!(bot.retreating(), 0, "retreated twice on one wound");
@@ -615,8 +707,10 @@ mod tests {
         let (mut bot, v) = hurt(1);
         bot.think(&v);
         assert_eq!(bot.retreating(), 1);
+        assert_eq!(bot.retreat_end(), 0, "under way");
         bot.think(&v);
         assert_eq!(bot.retreating(), 0);
+        assert_eq!(bot.retreat_end(), RetreatEnd::NoCover as u8);
         assert!(matches!(bot.goal(&v), Goal::To(e) if e == v.enemy.unwrap().origin));
     }
 
@@ -635,6 +729,7 @@ mod tests {
         v.busy_ms = 0;
         bot.think(&v);
         assert_eq!(bot.retreating(), 0);
+        assert_eq!(bot.retreat_end(), RetreatEnd::Loaded as u8);
     }
 
     #[test]
@@ -679,17 +774,17 @@ mod tests {
     fn a_hurt_bot_keeps_to_the_health_item_it_walks_to() {
         let (_, v) = hurt(1);
         let (far, near) = ([600.0, 0.0, 64.0], [300.0, 0.0, 64.0]);
-        assert_eq!(nearest_pack(&v, &[far, near], None), Some(near));
-        assert_eq!(nearest_pack(&v, &[far, near], Some(far)), Some(far));
+        assert_eq!(nearest_pack(&v, &[far, near], None, None), Some(near));
+        assert_eq!(nearest_pack(&v, &[far, near], Some(far), None), Some(far));
         let over = [600.0, 0.0, 64.0 + HEAL_HEIGHT + 10.0];
-        assert_eq!(nearest_pack(&v, &[over, near], None), Some(near));
+        assert_eq!(nearest_pack(&v, &[over, near], None, None), Some(near));
         assert_eq!(
-            nearest_pack(&v, &[over, near], Some(over)),
+            nearest_pack(&v, &[over, near], Some(over), None),
             Some(over),
             "any height"
         );
         assert_eq!(
-            nearest_pack(&v, &[near], Some(far)),
+            nearest_pack(&v, &[near], Some(far), None),
             Some(near),
             "picked up"
         );
@@ -700,7 +795,7 @@ mod tests {
         let (mut bot, mut v) = hurt(1);
         let pack = [400.0, 300.0, 64.0];
         assert_eq!(
-            nearest_pack(&v, &[pack, [5000.0, 0.0, 64.0]], None),
+            nearest_pack(&v, &[pack, [5000.0, 0.0, 64.0]], None, None),
             Some(pack)
         );
         v.survive.heal = Some(pack);
@@ -710,10 +805,35 @@ mod tests {
         assert_eq!(bot.goal(&v), Goal::To(pack));
         // Not hurt enough: no detour.
         v.survive.health = 90;
-        assert_eq!(nearest_pack(&v, &[pack], None), None);
+        assert_eq!(nearest_pack(&v, &[pack], None, None), None);
         bot.set_retreat(false);
         v.survive.health = 30;
         assert_ne!(bot.goal(&v), Goal::To(pack));
+    }
+
+    /// Two items in reach: the one nearer by the graph's way, not by
+    /// straight line; with one alone, or no graph, the straight line.
+    #[test]
+    fn a_health_item_is_picked_by_the_graphs_way() {
+        let (_, mut v) = hurt(1);
+        v.origin = [0.0, 0.0, 0.0];
+        let nodes = vec![
+            Vec3::ZERO,
+            Vec3::new(200.0, 0.0, 0.0),
+            Vec3::new(0.0, 400.0, 0.0),
+            Vec3::new(100.0, 400.0, 0.0),
+            Vec3::new(100.0, 50.0, 0.0),
+        ];
+        let next = vec![vec![1, 2], vec![0], vec![0, 3], vec![2, 4], vec![3]];
+        let g = NavGraph::from_parts(nodes, next);
+        // Behind a wall: 112 by line, 850 round it.
+        let (walled, open) = ([100.0, 50.0, 0.0], [200.0, 0.0, 0.0]);
+        assert_eq!(
+            nearest_pack(&v, &[walled, open], None, Some(&g)),
+            Some(open)
+        );
+        assert_eq!(nearest_pack(&v, &[walled, open], None, None), Some(walled));
+        assert_eq!(nearest_pack(&v, &[walled], None, Some(&g)), Some(walled));
     }
 
     /// A pack dropped where no body fits: the plan to it walked out, the

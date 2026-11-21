@@ -72,7 +72,11 @@ Joining:
 - Sends pure servers its pak checksums.
 - Reads loose files beside the paks, each directory's under its own paks
   and over the next one's, as retail does; on a pure server only the
-  types retail takes there (configs, menus and a few more). Both binaries.
+  types retail takes there (configs, menus and a few more). A loose file
+  of any other type marks the `cp` as retail's does, so a pure 1.1 server
+  drops a client that read one in the menu and rejoins the same map. UO's
+  own drop on a file only an unlisted pak holds is not modelled. Both
+  binaries.
 - Takes every systeminfo key into its cvars as retail does
   (`cl_allowDownload`, `rate`, `snaps`, `fs_game`, ...). A forced
   `fs_game` layers the mod over `main/`, swaps in its menus and stays
