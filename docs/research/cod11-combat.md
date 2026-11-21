@@ -3564,8 +3564,8 @@ snapshot land within microseconds. The `-turn` captures in the tree (all
 three 2026-11-13; the 2026-10-19 runs are in git at 55164194) log the
 server's own read order: `showpackets 1` prints each client packet as
 `Netchan_Process` takes it, ahead of the message's cmds
-(docs/dev/retail.md, "Receive order", which has the addresses and the
-counts). Each pair's order there decided the round:
+(cod11-server-handshake.md, "Receive order", which has the addresses
+and the counts). Each pair's order there decided the round:
 
 - VERIFIED, vcod measurement: `leanhit_ab` replays each run's cmds one a
   packet in the server's read order (`common::cmds_read`), and every

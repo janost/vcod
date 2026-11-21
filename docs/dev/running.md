@@ -14,8 +14,8 @@ debug overlays and env vars. The player-facing flags are in
   tools only (`docs/dev/testing.md`).
 - `--vanilla` keeps only the install patch's stock paks on the search path
   (`pk3::is_vanilla_pak`, `Pk3Fs::vanilla`).
-- `--game cod1|cod2|cod4` overrides `game::Game::detect`: CoD4 by `zone/` or
-  `iw3mp.exe`, CoD2 by `main/iw_*.iwd` or `CoD2MP_s.exe`, else CoD1.
+- `--game cod1|cod2|cod4` overrides `game::Game::detect` (AGENTS.md's game
+  table lists the markers it looks for).
 - A CoD1 install's version is its `Cod1Wire` (`is_uo`, `is_v1`). `pak1-4` are
   identical between 1.1 and 1.5 and `pak0` is not (its checksum differs), so
   a 1.5 install works as the asset source but not on a pure 1.1 server. The
@@ -70,16 +70,7 @@ The game is the detected install's (or `--game`'s).
 ## Logs and env vars
 
 - `RUST_LOG` drives env_logger (default `info`). `WGPU_BACKEND` narrows the
-  backend.
-- `VCOD_FRAME_PROFILE=<path>`: per-frame CPU and GPU stage times
-  ([testing.md](testing.md#performance)).
-- `VCOD_TICK_TRACE`, `VCOD_TICK_PROFILE_MS`: the server tick's step log and
-  slow ticks ([server-tick.md](server-tick.md#tracing-a-tick)).
-- `VCOD_BOT_THREADS=<n>`: the threads the bots' pass plans on, `1` serial
-  ([server-tick.md](server-tick.md#the-bots-threads)).
-- `VCOD_NO_DYNENTS=1`: a CoD4 map's dynamic entities are not drawn, for a
-  frame time A/B (cod4-client-perf.md 41). The F3 overlay's `cod4
-  dynents` line counts them, the drawn ones and the woken ones.
+  backend. Every `VCOD_*` variable is in the table below.
 - `VCOD_NETSIM="ping=100,jitter=20,loss=2"` gives the client a bad link
   without root. `vcod --net-probe ADDR --probe-clock` measures the clock on
   one.

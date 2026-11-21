@@ -13,7 +13,8 @@ names its own runs and binaries and each claim carries its own label.
 
 Contents: setup; connectionless replies; the gamestate message; configstrings
 at gamestate; what a minimal server has to set; retail client check;
-housekeeping (heartbeat, rcon, zombies, frame message order, drops,
+housekeeping (heartbeat, rcon, zombies, frame message order, receive
+order, drops,
 reconnects, console commands, the stdin console, pings, rate, bans, shutdown, OOB `disconnect`,
 challenge key, `fs_restrict`, private slots, ping limits, challenge table,
 pacing, bare messages, fragmented gamestate, `snaps`, `g_password`); pak
@@ -687,6 +688,37 @@ INFERRED (control flow of the three `SV_SendClientMessages` below).
   2026-10-24). `a_frames_messages_go_out_in_slot_order` pins both. Trap:
   separate in-world, unentered and zombie passes sent slot 1's snapshot first
   in 294/300 frames.
+
+### Receive order (`SV_PacketEvent`, 1.1d 0x808c870)
+
+Two probes on one server answer the same snapshot within microseconds,
+so neither their stamps nor their send clocks (`w=`) say whose packet
+the server ran first. The server says, under `+set showpackets 1`:
+
+- VERIFIED, the three servers: each client packet goes `recvfrom` (1.1d
+  0x80c723f, 1.5b 0x80d4c4b, UO 0x80c9f4b) to `SV_PacketEvent` (1.1d
+  0x808c870), which calls `Netchan_Process` (1.1d 0x80804f0 at 0x808c9ba,
+  1.5b 0x8083890 at 0x8093c0c, UO 0x8084378 at 0x8094b6d) and then
+  `SV_ExecuteClientMessage` (1.1d 0x80872ec at 0x808ca57, 1.5b 0x808cdd0
+  at 0x8093ce6, UO 0x808dba1 at 0x8094c47), whose `SV_UserMove` (1.1d
+  0x8086fa4, 1.5b 0x808cade, UO 0x808d8af, the `cmdCount` strings) runs
+  each cmd stamped past the client's last one. `Netchan_Process` prints
+  `%s recv %4i : s=%i` (1.1d 0x8080691, 1.5b 0x80839b7, UO 0x808449f)
+  under `showpackets`, ahead of its `Out of order packet` test (1.1d
+  0x80806e7), so the console has one line per packet in the order the
+  server ran them. INFERRED, off the call order: a `recv` line's cmds ran
+  before the next line's.
+- VERIFIED, the three `-turn` captures (2026-11-13): every cmd of both
+  probes was read (6420, 6300 and 6360 cmds), each client's in the order
+  it sent them, and no `Out of order` or `Dropped` line printed. Within a
+  tie either client's packet came first, about half the time each.
+  Ordering the two clients by `w=` disagrees with the server on 3, 1 and
+  2 pairs, all sent 1 to 3 microseconds apart. 1.5b's
+  `mp_carentan-dm-turret-victim-15-recv.txt` read all 1020 of its
+  gunner's cmds in send order (cod11-turrets.md 13.3).
+
+How to read the order off a run (`q=`, `s=`, `tools/recv_order.sh`):
+`docs/dev/retail.md`, "Receive order".
 
 ### When the game hears a drop (`SV_DropClient`, `ClientDisconnect`)
 
