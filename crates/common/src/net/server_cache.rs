@@ -512,7 +512,7 @@ pub fn write_internet(
         out[at..at + 4].copy_from_slice(&(addrs.len() as i32).to_le_bytes());
         let block = &mut out[overflow_at()..overflow_at() + OVERFLOW_11];
         block.fill(0);
-        for (a, slot) in addrs.iter().zip(block.chunks_exact_mut(OVERFLOW_ADDR)) {
+        for (a, slot) in addrs.iter().zip(block.as_chunks_mut::<OVERFLOW_ADDR>().0) {
             slot[..4].copy_from_slice(&a.ip().octets());
             slot[4..].copy_from_slice(&a.port().to_be_bytes());
         }
