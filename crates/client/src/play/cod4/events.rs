@@ -109,12 +109,10 @@ impl Cod4Session {
         ) else {
             return fired;
         };
-        let seed = self
-            .last_predicted
-            .as_ref()
-            .map_or(now.ps.get("commandTime").unwrap_or(0) as i32, |p| {
-                p.command_time
-            });
+        let seed = self.last_predicted.as_ref().map_or(
+            now.ps.word(vcod_cod4::ps_word!("commandTime")) as i32,
+            |p| p.command_time,
+        );
         let dt = now.server_time - prev.server_time;
         for f in fired
             .iter_mut()
@@ -217,11 +215,12 @@ fn walk_snapshot(
                             origin_of,
                         ),
                         state: ent.copied(),
-                        weapon: ent
-                            .map_or(s.ps.get("weapon").unwrap_or(0), |e| ent_u32(e, "weapon")),
+                        weapon: ent.map_or(s.ps.word(vcod_cod4::ps_word!("weapon")), |e| {
+                            ent_u32(e, "weapon")
+                        }),
                         perks: client_perks(
                             s,
-                            ent.map_or(s.ps.get("clientNum").unwrap_or(0), |e| {
+                            ent.map_or(s.ps.word(vcod_cod4::ps_word!("clientNum")), |e| {
                                 ent_u32(e, "clientNum")
                             }),
                         ),
@@ -231,7 +230,7 @@ fn walk_snapshot(
             }
             out
         };
-    let seq = s.ps.get("eventSequence").unwrap_or(0) & 0xff;
+    let seq = s.ps.word(vcod_cod4::ps_word!("eventSequence")) & 0xff;
     let get = |n: String| s.ps.get(&n).unwrap_or(0);
     let mut own_ring = ps_ring;
     // A predicted view with no ring yet (no scene since the gamestate)

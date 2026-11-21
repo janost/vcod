@@ -262,7 +262,7 @@ impl Cod4Hud {
                 let Some(snap) = s.client().snapshots.last() else {
                     return;
                 };
-                let me = snap.ps.get("clientNum").unwrap_or(0);
+                let me = snap.ps.word(vcod_cod4::ps_word!("clientNum"));
                 let team = |n: u32| {
                     snap.clients
                         .iter()

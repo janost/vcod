@@ -66,20 +66,8 @@ const NO_SPECTATE_FREELOOK: u8 = 1 << crate::follow::FREELOOK;
 /// A playerstate word by its literal field name, resolved at compile time:
 /// a name `PLAYER_STATE` lacks fails the build.
 macro_rules! ps {
-    ($name:literal) => {
-        const { vcod_cod4::net::delta::word_named(&vcod_cod4::net::fields::PLAYER_STATE, $name) }
-    };
-    ($n:literal $name:literal) => {
-        const {
-            let mut words = [0usize; $n];
-            let mut k = 0;
-            while k < $n {
-                words[k] =
-                    vcod_cod4::net::delta::word_at(&vcod_cod4::net::fields::PLAYER_STATE, $name, k);
-                k += 1;
-            }
-            words
-        }
+    ($($t:tt)*) => {
+        vcod_cod4::ps_word!($($t)*)
     };
 }
 pub(super) use ps;

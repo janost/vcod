@@ -1084,7 +1084,7 @@ mod tests {
                     })
                     .map(|w| names[w].clone())
                     .collect();
-                (spawned, ps.get("perks").unwrap_or(0), held)
+                (spawned, ps.word(vcod_cod4::ps_word!("perks")), held)
             })
             .expect("the install front() found");
         let spawned = spawned.expect("spawned");
