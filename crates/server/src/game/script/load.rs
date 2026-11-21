@@ -67,6 +67,11 @@ pub struct Carry {
     /// building a runtime by hand) takes [`crate::game::host::RNG_SEED`].
     /// CoD2's `srand` takes it as well.
     pub seed: Option<u64>,
+    /// The engine's `rand()` for a CoD1 level and `G_InitGame`'s
+    /// `srand(randomSeed)` seed: the host draws on it once reseeded
+    /// (map-cycle doc 4.8.1). `None` keeps a host-local xorshift from
+    /// `seed`.
+    pub rand: Option<(crate::engine::core::LibcRand, u64)>,
     /// A test's replay of another server's spawn picks
     /// ([`crate::game::host::SpawnPins`]), handed to every level.
     pub spawn_pins: Option<crate::game::host::SpawnPins>,
@@ -533,7 +538,14 @@ impl ScriptRuntime {
         host.ents.set_clock(now_ms);
         host.pers_carry = carry.pers;
         if let Some(seed) = carry.seed {
-            host.rng = seed | 1;
+            match carry.rand {
+                Some((rand, random_seed)) => {
+                    host.rng = rand;
+                    host.rng.srand(random_seed);
+                    host.missiles.share_rand(&host.rng);
+                }
+                None => host.rng = crate::engine::core::LibcRand::xorshift(seed | 1),
+            }
             host.holdrand = vcod_common::rng::HoldRand(seed as u32);
             // CoD2's `G_InitGame` hands the one seed to `srand` too
             // (cod2-combat.md 9.6).

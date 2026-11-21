@@ -374,8 +374,38 @@ impl Bot {
     /// The remembered spot not yet reached, else this tick's noise. The same
     /// rule [`Bot::remember`] applies a tick later, so the two agree.
     pub(super) fn recall_goal(&self, view: &BotView) -> Option<[f32; 3]> {
-        self.hunt_goal(view)
-            .or_else(|| view.noise.filter(|n| !arrived(view.origin, *n)))
+        self.hunt_goal(view).or_else(|| {
+            view.noise
+                .filter(|n| !arrived(view.origin, *n) && !self.passes_over(*n))
+        })
+    }
+
+    /// Gives up a remembered or heard spot the bot cannot close on: its
+    /// follower walked out the plan to it ([`Bot::walked_to`]) and the body
+    /// came no [`super::SHORT_GAIN`] nearer in [`super::SHORT_TICKS`]. The
+    /// spot is passed over for [`super::SHUN_TICKS`], a noise heard there
+    /// again included. A tank's shells struck a wall 272 units over the
+    /// floor of mp_cassino's (2950, -2892), the plan to each blast ended on
+    /// that floor, and a bot pressed the wall under it for 12 s, every shell
+    /// renewing the spot (bot-objectives.md 14.14).
+    pub(super) fn track_recall(&mut self, view: &BotView) {
+        let spot = self.recall.map(|r| r.at).or(view.noise);
+        let Some(p) = spot.filter(|p| self.walked_to == Some(*p)) else {
+            self.recall_short = None;
+            return;
+        };
+        let d = dist_sq(view.origin, p).sqrt();
+        let (best, ticks) = match self.recall_short {
+            Some((at, best, ticks)) if at == p && d > best - super::SHORT_GAIN => (best, ticks + 1),
+            _ => (d, 0),
+        };
+        if ticks >= super::SHORT_TICKS {
+            self.shunned.push((p, super::SHUN_TICKS));
+            self.recall = None;
+            self.recall_short = None;
+        } else {
+            self.recall_short = Some((p, best, ticks));
+        }
     }
 
     /// Keeps [`Bot::recall`] current: a visible enemy is remembered where it
@@ -405,6 +435,7 @@ impl Bot {
         }
         if let Some(at) = view.noise
             && !self.recall.is_some_and(|r| r.seen)
+            && !self.passes_over(at)
         {
             self.recall = Some(Recall {
                 at,
@@ -484,6 +515,29 @@ mod tests {
         bot.think(&v);
         v.noise = None;
         assert_eq!(bot.goal(&v), Goal::To([0.0, 900.0, 104.0]));
+    }
+
+    /// bot-objectives.md 14.14: a heard spot whose plan the follower
+    /// walked out, the body coming no nearer it, is given up after
+    /// `SHORT_TICKS`, and the same noise heard again does not bring it
+    /// back. One still walking its plan keeps it.
+    #[test]
+    fn a_heard_spot_no_body_reaches_is_given_up() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        let spot = [0.0, 900.0, 376.0];
+        v.noise = Some(spot);
+        for _ in 0..=super::super::SHORT_TICKS {
+            bot.think(&v);
+        }
+        assert_eq!(bot.goal(&v), Goal::To(spot), "still walking the plan");
+        for _ in 0..=super::super::SHORT_TICKS {
+            bot.walked_to = Some(spot);
+            bot.think(&v);
+        }
+        assert_eq!(bot.goal(&v), Goal::Roam, "the noise came back");
+        v.noise = None;
+        assert_eq!(bot.goal(&v), Goal::Roam, "the spot is still remembered");
     }
 
     #[test]

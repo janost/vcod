@@ -58,7 +58,7 @@ pub(super) struct VehicleFireCtx<'a> {
     pub(super) anims: Option<&'a vcod_common::animtree::PlayerAnims>,
     pub(super) rigs: &'a mut crate::game::hitrig::HitRigs,
     pub(super) weapons: &'a crate::weapons::WeaponTable,
-    pub(super) rng: &'a mut u64,
+    pub(super) rng: &'a mut crate::engine::core::LibcRand,
     pub(super) now_ms: i32,
 }
 

@@ -1810,7 +1810,7 @@ impl ClientSim {
         cmd: &UserCmd,
         (now_ms, hold_ms): (i32, i32),
         events: &[AnimEvent],
-        rng: &mut u64,
+        rng: &mut crate::engine::core::LibcRand,
     ) {
         use vcod_common::animscript::{Conditions, Side};
         // A dead body keeps the death anim `take_damage` chose: retail's
@@ -1880,6 +1880,9 @@ impl ClientSim {
         let jumped = std::mem::take(&mut self.jumped);
         let land_anim = std::mem::take(&mut self.land_anim);
         let script = &inputs.anims.script;
+        // Every `BG_AnimScriptEvent` draws one `rand()` for a clause that
+        // matched, forced or not (map-cycle doc 4.8.1).
+        let mut rand = || rng.rand();
         match (self.ps.on_ground, self.was_airborne) {
             _ if linked => {}
             // `PM_CrashLand` raises the land anim only on a fast landing and
@@ -1891,21 +1894,20 @@ impl ClientSim {
             {
                 // The landing writes the legs alone, `both` clause or not
                 // (combat doc, 1.14).
-                let mut sel = script.select_event("land", &conditions);
+                let mut sel = script.select_event_random("land", &conditions, &mut rand);
                 sel.torso = None;
                 Self::play_event(&mut self.anim, &sel, (now_ms, at), resolve, length);
             }
-            (_, _)
-                if let Some((t, at, movetype)) = jumped
-                    && (t.forced || !self.anim.legs_held(at)) =>
-            {
+            (_, _) if let Some((t, at, movetype)) = jumped => {
                 let event = if t.back { "jumpbk" } else { "jump" };
                 let conditions = Conditions {
                     movetype,
                     ..conditions.clone()
                 };
-                let sel = script.select_event(event, &conditions);
-                Self::play_event(&mut self.anim, &sel, (now_ms, at), resolve, length);
+                let sel = script.select_event_random(event, &conditions, &mut rand);
+                if t.forced || !self.anim.legs_held(at) {
+                    Self::play_event(&mut self.anim, &sel, (now_ms, at), resolve, length);
+                }
             }
             _ => {}
         }
@@ -1918,7 +1920,7 @@ impl ClientSim {
         let mut torso_cmds = std::mem::take(&mut self.torso_cmds).into_iter().peekable();
         for &(e, at, movetype) in events {
             while let Some((t, c)) = torso_cmds.next_if(|&(t, _)| t <= at) {
-                self.torso_cmd(c, (now_ms, t), &conditions, inputs);
+                self.torso_cmd(c, (now_ms, t), &conditions, inputs, &mut rand);
             }
             let Some(name) = weapon_anim_event(e.event) else {
                 continue;
@@ -1928,12 +1930,8 @@ impl ClientSim {
                 ..conditions.clone()
             };
             // `meleeattack` is the one weapon clause that lists several anims
-            // per channel, and retail draws among them (animscript.rs).
-            let sel = if name == "meleeattack" {
-                script.select_event_random(name, &conditions, rng)
-            } else {
-                script.select_event(name, &conditions)
-            };
+            // per channel; every one draws (animscript.rs).
+            let sel = script.select_event_random(name, &conditions, &mut rand);
             // The weapon change's two events are raised unforced (1.1d
             // game.mp 0x3c338's callers, UO's), every other one forced.
             if matches!(name, "dropweapon" | "raiseweapon") {
@@ -1943,7 +1941,7 @@ impl ClientSim {
             }
         }
         for (t, c) in torso_cmds {
-            self.torso_cmd(c, (now_ms, t), &conditions, inputs);
+            self.torso_cmd(c, (now_ms, t), &conditions, inputs, &mut rand);
         }
         // Nothing is selected while off the ground: retail returns before
         // the selection unless the ladder flag is set (@0x323a2), which is
@@ -1985,6 +1983,7 @@ impl ClientSim {
         (now_ms, at): (i32, i32),
         conditions: &vcod_common::animscript::Conditions,
         inputs: &AnimInputs,
+        rand: &mut dyn FnMut() -> i32,
     ) {
         let resolve = |name: &str| inputs.anims.wire_of(name);
         let length = |name: &str| inputs.anims.length_ms(name);
@@ -1995,10 +1994,11 @@ impl ClientSim {
                     movetype,
                     ..conditions.clone()
                 };
-                let sel = inputs
-                    .anims
-                    .script
-                    .select_event("lmg_breakdown", &conditions);
+                let sel =
+                    inputs
+                        .anims
+                        .script
+                        .select_event_random("lmg_breakdown", &conditions, rand);
                 let playing = self.anim.torso() & !vcod_common::net::flags::ANIM_TOGGLEBIT;
                 match sel.torso.as_ref().and_then(|a| resolve(&a.name)) {
                     Some(index) if index == playing => {
@@ -2074,8 +2074,8 @@ impl ClientSim {
     /// killing hit what `player_die` does to the playerstate (5.1):
     /// `EV_DEATH` with parm 0, the dead yaw into `stats[1]`, the death anim.
     /// The health itself is the host's and arrives through the mirror.
-    /// `rng` is the server's own draw state: the two anims here are the ones
-    /// the script lists several of, and retail picks among them at random.
+    /// `rng` is the process's `rand()`: the death clause lists several
+    /// anims, and retail picks among them with one draw.
     /// `now_ms` is the frame clock the death clip's phase starts on,
     /// `cmd_ms` the client's last processed cmd's serverTime, which its
     /// timers count from (combat doc 16.4, "The dying body").
@@ -2083,7 +2083,7 @@ impl ClientSim {
         &mut self,
         op: &SimOp,
         anims: Option<&AnimInputs>,
-        rng: &mut u64,
+        rng: &mut crate::engine::core::LibcRand,
         (now_ms, cmd_ms): (i32, i32),
     ) {
         let SimOp::Damaged {
@@ -2156,7 +2156,10 @@ impl ClientSim {
         // (`update_anims` returns on a dead one), so the drawn index is what
         // the corpse clone carries.
         if let (Some(inputs), Some(c)) = (anims, &conditions) {
-            let mut sel = inputs.anims.script.select_event_random("death", c, rng);
+            let mut sel = inputs
+                .anims
+                .script
+                .select_event_random("death", c, &mut || rng.rand());
             sel.torso = None;
             let resolve = |name: &str| inputs.anims.wire_of(name);
             let length = |name: &str| inputs.anims.length_ms(name);
@@ -3176,6 +3179,12 @@ pub fn attack_flag(ps: &pmove::PlayerState, buttons: u8, weapons: &[Option<Weapo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::core::LibcRand;
+
+    /// A fixed `rand()` stream.
+    fn draws() -> LibcRand {
+        LibcRand::xorshift(1)
+    }
     use crate::game::turret::TurretStance;
     use vcod_common::net::msg::NULL_USERCMD;
     use vcod_common::net::protocol::{ENTITYNUM_NONE, PROTOCOL_V1};
@@ -3519,9 +3528,44 @@ mod tests {
                 weapon,
                 weapon_class: class,
             };
-            sim.update_anims(&inputs, &cmd, (1000, 1000), &[], &mut 1u64);
+            sim.update_anims(&inputs, &cmd, (1000, 1000), &[], &mut draws());
             assert_eq!(anims.name(sim.anim.legs()), Some(*want), "{label}");
         }
+    }
+
+    /// `BG_AnimScriptEvent` draws one `rand()` for every event whose clause
+    /// matched, a one-line clause included, and the continuous pick draws
+    /// none (map-cycle doc 4.8.1).
+    #[test]
+    fn every_anim_event_draws_one_rand_and_the_idle_none() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
+        let inputs = AnimInputs {
+            anims: &anims,
+            weapon: "m1carbine_mp",
+            weapon_class: "rifle",
+        };
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.ps.on_ground = true;
+        let fresh = LibcRand::glibc(1);
+        let mut rng = fresh.fork();
+        sim.update_anims(&inputs, &NULL_USERCMD, (1000, 1000), &[], &mut rng);
+        assert!(rng == fresh, "the idle drew");
+        let fire = (
+            pmove::PmEvent {
+                event: vcod_common::pmove::weapon::EV_FIRE_WEAPON,
+                parm: 0,
+            },
+            1050,
+            vcod_common::animscript::Movetype::Idle,
+        );
+        sim.update_anims(&inputs, &NULL_USERCMD, (1050, 1050), &[fire], &mut rng);
+        let mut want = fresh.fork();
+        want.rand();
+        assert!(rng == want, "the fire's one line drew nothing");
     }
 
     /// Retail selects nothing while off the ground (@0x323a2), so the takeoff
@@ -3541,7 +3585,7 @@ mod tests {
         let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.ps.on_ground = true;
-        sim.update_anims(&inputs, &NULL_USERCMD, (1000, 1000), &[], &mut 1u64);
+        sim.update_anims(&inputs, &NULL_USERCMD, (1000, 1000), &[], &mut draws());
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_stand_alert"));
 
         // The impulse pmove reports, not merely leaving the ground.
@@ -3555,11 +3599,11 @@ mod tests {
             1050,
             vcod_common::animscript::Movetype::Idle,
         ));
-        sim.update_anims(&inputs, &NULL_USERCMD, (1050, 1050), &[], &mut 1u64);
+        sim.update_anims(&inputs, &NULL_USERCMD, (1050, 1050), &[], &mut draws());
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_standjump_takeoff"));
         // Well past the takeoff clause's `duration 5`.
         for t in [1100, 1150, 1200, 1250] {
-            sim.update_anims(&inputs, &NULL_USERCMD, (t, t), &[], &mut 1u64);
+            sim.update_anims(&inputs, &NULL_USERCMD, (t, t), &[], &mut draws());
             assert_eq!(
                 anims.name(sim.anim.legs()),
                 Some("pb_standjump_takeoff"),
@@ -3569,7 +3613,7 @@ mod tests {
         // The landing pmove reports, fast enough for the land anim.
         sim.ps.on_ground = true;
         sim.land_anim = Some(1300);
-        sim.update_anims(&inputs, &NULL_USERCMD, (1300, 1300), &[], &mut 1u64);
+        sim.update_anims(&inputs, &NULL_USERCMD, (1300, 1300), &[], &mut draws());
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_standjump_land"));
     }
 
@@ -3590,12 +3634,12 @@ mod tests {
         let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.ps.on_ground = true;
-        sim.update_anims(&inputs, &NULL_USERCMD, (1000, 1000), &[], &mut 1u64);
+        sim.update_anims(&inputs, &NULL_USERCMD, (1000, 1000), &[], &mut draws());
         let before = sim.anim.legs();
         sim.ps.on_ground = false;
-        sim.update_anims(&inputs, &NULL_USERCMD, (1050, 1050), &[], &mut 1u64);
+        sim.update_anims(&inputs, &NULL_USERCMD, (1050, 1050), &[], &mut draws());
         sim.ps.on_ground = true;
-        sim.update_anims(&inputs, &NULL_USERCMD, (1100, 1100), &[], &mut 1u64);
+        sim.update_anims(&inputs, &NULL_USERCMD, (1100, 1100), &[], &mut draws());
         assert_eq!(sim.anim.legs(), before, "no land anim, no toggle flip");
     }
 
@@ -3615,20 +3659,20 @@ mod tests {
         let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.ps.on_ground = true;
-        sim.update_anims(&inputs, &NULL_USERCMD, (1000, 1000), &[], &mut 1u64);
+        sim.update_anims(&inputs, &NULL_USERCMD, (1000, 1000), &[], &mut draws());
         sim.ps.on_ground = false;
-        sim.update_anims(&inputs, &NULL_USERCMD, (1050, 1050), &[], &mut 1u64);
+        sim.update_anims(&inputs, &NULL_USERCMD, (1050, 1050), &[], &mut draws());
         sim.ps.on_ground = true;
         sim.land_anim = Some(1100);
-        sim.update_anims(&inputs, &NULL_USERCMD, (1100, 1100), &[], &mut 1u64);
+        sim.update_anims(&inputs, &NULL_USERCMD, (1100, 1100), &[], &mut draws());
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_standjump_land"));
         let first = sim.anim.legs();
         // Airborne and down again inside the clause's `duration 100`.
         sim.ps.on_ground = false;
-        sim.update_anims(&inputs, &NULL_USERCMD, (1120, 1120), &[], &mut 1u64);
+        sim.update_anims(&inputs, &NULL_USERCMD, (1120, 1120), &[], &mut draws());
         sim.ps.on_ground = true;
         sim.land_anim = Some(1150);
-        sim.update_anims(&inputs, &NULL_USERCMD, (1150, 1150), &[], &mut 1u64);
+        sim.update_anims(&inputs, &NULL_USERCMD, (1150, 1150), &[], &mut draws());
         assert_eq!(
             sim.anim.legs(),
             first,
@@ -3659,7 +3703,7 @@ mod tests {
         sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.ps.on_ground = true;
         moving(&mut sim, Vec3::new(190.0, 0.0, 0.0));
-        sim.update_anims(&inputs, &running, (1000, 1000), &[], &mut 1u64);
+        sim.update_anims(&inputs, &running, (1000, 1000), &[], &mut draws());
         assert_eq!(
             anims.name(sim.anim.legs()),
             Some("pb_combatrun_forward_loop")
@@ -3669,7 +3713,7 @@ mod tests {
         sim.ps.on_ground = false;
         for t in [1050, 1100, 1150, 1200] {
             sim.ps.velocity.z -= 40.0;
-            sim.update_anims(&inputs, &running, (t, t), &[], &mut 1u64);
+            sim.update_anims(&inputs, &running, (t, t), &[], &mut draws());
             assert_eq!(
                 anims.name(sim.anim.legs()),
                 Some("pb_combatrun_forward_loop"),
@@ -3695,17 +3739,17 @@ mod tests {
         let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.ps.on_ground = true;
-        sim.update_anims(&inputs, &NULL_USERCMD, (1000, 1000), &[], &mut 1u64);
+        sim.update_anims(&inputs, &NULL_USERCMD, (1000, 1000), &[], &mut draws());
 
         // Mounted: off the ground without an impulse, climbing.
         sim.ps.on_ground = false;
         sim.ps.on_ladder = true;
         moving(&mut sim, Vec3::new(0.0, 0.0, 60.0));
-        sim.update_anims(&inputs, &NULL_USERCMD, (1050, 1050), &[], &mut 1u64);
+        sim.update_anims(&inputs, &NULL_USERCMD, (1050, 1050), &[], &mut draws());
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_climbup"));
 
         sim.ps.velocity.z = -60.0;
-        sim.update_anims(&inputs, &NULL_USERCMD, (1100, 1100), &[], &mut 1u64);
+        sim.update_anims(&inputs, &NULL_USERCMD, (1100, 1100), &[], &mut draws());
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_climbdown"));
     }
 
@@ -3730,18 +3774,18 @@ mod tests {
         sim.ps.view_lerp_target = pmove::VIEW_CROUCH;
         sim.ps.view_lerp_down = true;
         sim.ps.on_ground = true;
-        sim.update_anims(&inputs, &NULL_USERCMD, (1000, 1000), &[], &mut 1u64);
+        sim.update_anims(&inputs, &NULL_USERCMD, (1000, 1000), &[], &mut draws());
         assert_eq!(sim.movetype, vcod_common::animscript::Movetype::IdleCr);
         moving(&mut sim, Vec3::new(60.0, 0.0, 0.0));
         let fwd = UserCmd {
             forward: 127,
             ..NULL_USERCMD
         };
-        sim.update_anims(&inputs, &fwd, (1050, 1050), &[], &mut 1u64);
+        sim.update_anims(&inputs, &fwd, (1050, 1050), &[], &mut draws());
         assert_eq!(sim.movetype, vcod_common::animscript::Movetype::WalkProne);
         moving(&mut sim, Vec3::ZERO);
         sim.ps.view_lerp_target = pmove::VIEW_PRONE;
-        sim.update_anims(&inputs, &NULL_USERCMD, (1100, 1100), &[], &mut 1u64);
+        sim.update_anims(&inputs, &NULL_USERCMD, (1100, 1100), &[], &mut draws());
         assert_eq!(sim.movetype, vcod_common::animscript::Movetype::IdleProne);
     }
 
@@ -3770,7 +3814,7 @@ mod tests {
         sim.ps.backwards_run = true;
         sim.ps.on_ground = true;
         moving(&mut sim, Vec3::new(120.0, 0.0, 0.0));
-        sim.update_anims(&inputs, &back, (1000, 1000), &[], &mut 1u64);
+        sim.update_anims(&inputs, &back, (1000, 1000), &[], &mut draws());
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_crouch_run_back"));
 
         sim.ps.on_ground = false;
@@ -3783,7 +3827,7 @@ mod tests {
             1050,
             vcod_common::animscript::Movetype::RunCrBk,
         ));
-        sim.update_anims(&inputs, &back, (1050, 1050), &[], &mut 1u64);
+        sim.update_anims(&inputs, &back, (1050, 1050), &[], &mut draws());
         assert_eq!(
             anims.name(sim.anim.legs()),
             Some("pb_chicken_dance_crouch"),
@@ -3813,10 +3857,10 @@ mod tests {
             right: 127,
             ..NULL_USERCMD
         };
-        sim.update_anims(&inputs, &strafe, (1000, 1000), &[], &mut 1u64);
+        sim.update_anims(&inputs, &strafe, (1000, 1000), &[], &mut draws());
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_combatrun_right_loop"));
         // Still sliding, no longer asking: retail does not touch the condition.
-        sim.update_anims(&inputs, &NULL_USERCMD, (1050, 1050), &[], &mut 1u64);
+        sim.update_anims(&inputs, &NULL_USERCMD, (1050, 1050), &[], &mut draws());
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_combatrun_right_loop"));
         // A forward cmd clears it, even though nothing about the velocity
         // changed.
@@ -3824,7 +3868,7 @@ mod tests {
             forward: 127,
             ..NULL_USERCMD
         };
-        sim.update_anims(&inputs, &forward, (1100, 1100), &[], &mut 1u64);
+        sim.update_anims(&inputs, &forward, (1100, 1100), &[], &mut draws());
         assert_eq!(
             anims.name(sim.anim.legs()),
             Some("pb_combatrun_forward_loop")
@@ -4309,7 +4353,7 @@ mod tests {
             dead_yaw: 0,
             fatal: false,
         };
-        sim.take_damage(&op, None, &mut 1, (1000, 1000));
+        sim.take_damage(&op, None, &mut draws(), (1000, 1000));
         sim.health = 26;
         sim.end_frame(1000);
         let w = sim.to_wire(p, 0, 0);
@@ -4324,7 +4368,7 @@ mod tests {
         let push = |g: f32| {
             let mut sim = target();
             sim.knockback = g;
-            sim.take_damage(&hit_op(40, false), None, &mut 1, (1000, 1000));
+            sim.take_damage(&hit_op(40, false), None, &mut draws(), (1000, 1000));
             sim.ps.velocity
         };
         assert_eq!(push(0.0), Vec3::ZERO);
@@ -4340,7 +4384,7 @@ mod tests {
     fn a_hit_writes_the_feedback_the_capture_measured() {
         let p = &PROTOCOL_V1;
         let mut sim = target();
-        sim.take_damage(&hit_op(67, false), None, &mut 1, (1000, 1000));
+        sim.take_damage(&hit_op(67, false), None, &mut draws(), (1000, 1000));
         sim.health = 33; // the host's mirror
         sim.end_frame(1000);
         let w = sim.to_wire(p, 0, 0);
@@ -4359,7 +4403,7 @@ mod tests {
             sim.ps.velocity
         );
 
-        sim.take_damage(&hit_op(10, false), None, &mut 1, (1300, 1300));
+        sim.take_damage(&hit_op(10, false), None, &mut draws(), (1300, 1300));
         sim.health = 23;
         sim.end_frame(1300);
         let w = sim.to_wire(p, 0, 0);
@@ -4371,7 +4415,7 @@ mod tests {
             "no second EV_PAIN inside 700 ms"
         );
 
-        sim.take_damage(&hit_op(10, false), None, &mut 1, (1800, 1800));
+        sim.take_damage(&hit_op(10, false), None, &mut draws(), (1800, 1800));
         sim.health = 13;
         sim.end_frame(1800);
         let w = sim.to_wire(p, 0, 0);
@@ -4396,7 +4440,7 @@ mod tests {
         let mut sim = ClientSim::spectator([0.0; 3], 0.0, NULL_USERCMD.angles);
         sim.become_player([0.0; 3], 0.0, NULL_USERCMD.angles);
         assert_eq!(sim.body(3).map(|b| b.contents), Some(CONTENTS_BODY));
-        sim.take_damage(&hit_op(100, true), None, &mut 1, (1000, 1000));
+        sim.take_damage(&hit_op(100, true), None, &mut draws(), (1000, 1000));
         assert_eq!(sim.contents, CONTENTS_CORPSE);
         let b = sim.body(3).expect("a corpse stays linked");
         assert_eq!(b.contents & (MASK_PLAYERSOLID | MASK_DEADSOLID), 0);
@@ -4421,7 +4465,7 @@ mod tests {
         for _ in 0..20 {
             sim.step(&NULL_USERCMD, 0.05, Some(MoveWorld::bare(&w_test)), &[]);
         }
-        sim.take_damage(&op(false), None, &mut 1, (1000, 1000));
+        sim.take_damage(&op(false), None, &mut draws(), (1000, 1000));
         sim.health = 33;
         sim.end_frame(1000);
         for _ in 0..10 {
@@ -4429,7 +4473,7 @@ mod tests {
         }
         assert_eq!(sim.ps.velocity.length(), 0.0, "the knockback has decayed");
 
-        sim.take_damage(&op(true), None, &mut 1, (2000, 2000));
+        sim.take_damage(&op(true), None, &mut draws(), (2000, 2000));
         sim.health = 0;
         sim.end_frame(2000);
         assert!(sim.dead);
@@ -4517,7 +4561,7 @@ mod tests {
             dead_yaw: 0,
             fatal: false,
         };
-        sim.take_damage(&op, None, &mut 1, (500, 500));
+        sim.take_damage(&op, None, &mut draws(), (500, 500));
         sim.end_frame(500);
         let w = sim.to_wire(p, 0, 0);
         assert_eq!(w.field_i32(p, "damageYaw"), 255);

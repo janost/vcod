@@ -605,15 +605,26 @@ impl AnimScript {
         pick(block, c)
     }
 
-    /// The same, drawing among the clause's lines instead of taking the
-    /// first: `death`, `pain` and `meleeattack` list several. One draw per
-    /// clause, not one per channel, so a clause of `both` lines keeps its two
-    /// channels on the same line.
-    pub fn select_event_random(&self, event: &str, c: &Conditions, rng: &mut u64) -> Selection {
+    /// The same, as `BG_AnimScriptEvent` picks: one `rand()` (`rand`) for
+    /// a clause that matched and lists a line, the line `rand() %
+    /// numCommands`. `death`, `pain` and `meleeattack` list several; the
+    /// rest one, so the draw leaves the pick alone but still takes its
+    /// place in the stream (map-cycle doc 4.8.1). One draw per clause, not
+    /// one per channel, so a clause of `both` lines keeps its two channels
+    /// on the same line.
+    pub fn select_event_random(
+        &self,
+        event: &str,
+        c: &Conditions,
+        rand: &mut dyn FnMut() -> i32,
+    ) -> Selection {
         let Some(clause) = self.event(event).and_then(|b| matching_clause(b, c)) else {
             return Selection::default();
         };
-        let draw = crate::rng::xorshift(rng) as usize;
+        if clause.legs.is_empty() && clause.torso.is_empty() {
+            return Selection::default();
+        }
+        let draw = rand() as usize;
         let nth = |v: &[AnimRef]| v.get(draw % v.len().max(1)).cloned();
         Selection {
             legs: nth(&clause.legs),
@@ -1374,9 +1385,10 @@ land
             listed.len()
         );
         let mut rng = 7u64;
+        let mut rand = || (crate::rng::xorshift(&mut rng) >> 33) as i32;
         let mut seen = BTreeSet::new();
         for _ in 0..200 {
-            let sel = anims.script.select_event_random("death", &c, &mut rng);
+            let sel = anims.script.select_event_random("death", &c, &mut rand);
             let legs = sel.legs.expect("death selects a legs anim").name;
             assert_eq!(
                 sel.torso.map(|a| a.name).as_deref(),
@@ -1404,9 +1416,10 @@ land
             ["pb_prone_paina_holdchest", "pb_prone_painb_holdhead"]
         );
         let mut rng = 11u64;
+        let mut rand = || (crate::rng::xorshift(&mut rng) >> 33) as i32;
         let mut seen = BTreeSet::new();
         for _ in 0..100 {
-            let sel = anims.script.select_event_random("pain", &prone, &mut rng);
+            let sel = anims.script.select_event_random("pain", &prone, &mut rand);
             seen.insert(sel.legs.expect("pain selects a legs anim").name);
         }
         assert_eq!(seen.len(), 2, "both prone pain anims were drawn");
@@ -1418,7 +1431,7 @@ land
         );
         let drawn = anims
             .script
-            .select_event_random("pain", &stand, &mut rng)
+            .select_event_random("pain", &stand, &mut rand)
             .legs
             .expect("pain selects a legs anim")
             .name;

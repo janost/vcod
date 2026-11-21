@@ -614,6 +614,38 @@ mod tests {
         assert_eq!(wire(&sv.game.baselines[&414]), wire(&retail[&414]));
     }
 
+    /// Map-cycle doc 4.8.1: the engine's `rand()` and the level's are one
+    /// glibc stream, which the load `srand`s with the level seed.
+    #[test]
+    fn the_engine_and_the_level_draw_one_glibc_stream() {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
+            eprintln!("COD_DIR not at 1.1 install: skipping");
+            return;
+        };
+        let fs = Rc::new(fs);
+        let mut sv = Server::new(cfg(), Instant::now());
+        sv.set_cvar("g_gametype", "dm");
+        let path = fs.resolve_map("mp_carentan").expect("map in paks");
+        let bsp = vcod_common::bsp::parse(&fs.read(&path).expect("read bsp")).expect("parse bsp");
+        sv.load_world(World::from_bsp(&bsp, Some(&*fs)));
+        sv.load_scripts(fs).expect("load scripts");
+        let mut next = sv.game.module.script.as_ref().unwrap().host.rng.fork();
+        let mut seeded =
+            crate::engine::core::LibcRand::glibc(crate::game::host::RNG_SEED as u32 | 1);
+        let drawn = (0..1000).position(|_| {
+            let at = seeded == next;
+            seeded.rand();
+            at
+        });
+        assert!(
+            drawn.is_some(),
+            "the level's stream is not srand(level seed)'s"
+        );
+        assert_eq!(sv.rand(), next.rand(), "the engine draws apart");
+        let host = &mut sv.game.module.script.as_mut().unwrap().host;
+        assert_eq!(host.rand_int(), next.rand(), "the level draws apart");
+    }
+
     /// Map-cycle doc 4.8: `G_InitGame` reseeds the script's generator at
     /// every load, a restart too, so a restarted level does not replay the
     /// last one's draws (UO hq's radio pick, coduo-diff.md 22).

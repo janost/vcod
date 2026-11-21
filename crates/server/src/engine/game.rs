@@ -81,7 +81,7 @@ impl<G: GameModule> Engine<G> {
 
     /// `rand()`: the challenges', the checksum feed's and the game's draws.
     pub(crate) fn rand(&mut self) -> i32 {
-        super::core::rand_from(&mut self.core.rng)
+        self.core.rng.rand()
     }
 }
 

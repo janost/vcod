@@ -1,10 +1,9 @@
-//! The one pseudo-random step the server draws everything from: the anim
-//! clause a death or a pain picks, the bullet spread and the connect
-//! challenge. Retail's own generator is glibc's `rand()`:
-//! [`GlibcRand`] is that generator, which the CoD2 and CoD4 game modules
-//! draw from as retail's do, and a CoD1 test replays a capture's draws on
-//! from the seed recovered off it. [`HoldRand`] is the second stream
-//! CoD2's game keeps.
+//! The server's pseudo-random streams. Retail's generator is glibc's
+//! `rand()`: [`GlibcRand`] is that generator, which every game's server
+//! draws its game logic from as retail's does (CoD1's through the server's
+//! `engine::core::LibcRand`, map-cycle doc 4.8.1). [`xorshift`] is vcod's
+//! own step, for the bots and the streams retail has no counterpart of.
+//! [`HoldRand`] is the script's second stream.
 
 /// One xorshift64* step: advances `state` and returns the scrambled output.
 /// A zero state is the degenerate one xorshift never leaves, so a caller
@@ -20,7 +19,7 @@ pub fn xorshift(state: &mut u64) -> u64 {
 /// libc the retail Linux servers link. Their `G_InitGame` seeds it with
 /// `srand(Com_Milliseconds())` (map-cycle doc 4.8), so a capture's draws
 /// replay from the seed that fits them (player-clip doc 13.4).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GlibcRand {
     r: [i32; 34],
     i: usize,

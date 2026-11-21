@@ -97,6 +97,19 @@ impl ScriptRuntime {
                     .ents
                     .schedule(id, crate::game::entity::ThinkFn::Free, at);
             }
+            // A positive `wait` arms `multi_wait` unless it is armed already
+            // (movers doc 17, step 2).
+            use crate::game::trigger::TriggerKind;
+            let wait = self.host.triggers.get(id).and_then(|t| {
+                let multi = matches!(t.kind, TriggerKind::Multiple | TriggerKind::Once);
+                (multi && t.wait_ms > 0).then_some(t.wait_ms)
+            });
+            if let Some(wait_ms) = wait
+                && !linked
+                && self.host.ents.get(id).is_some_and(|e| e.nextthink == 0)
+            {
+                crate::game::trigger::arm_multi_wait(&mut self.host, id, wait_ms);
+            }
             if !self.host.queue_trigger(id, client) {
                 self.host
                     .engine_notifies

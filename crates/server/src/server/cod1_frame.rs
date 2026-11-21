@@ -662,7 +662,7 @@ impl Cod1Module {
                     let (rng, glibc) = (&mut *rng, &mut *stuck_rand);
                     let rand = || match glibc {
                         Some(g) => g.next_u31(),
-                        None => (vcod_common::rng::xorshift(rng) >> 33) as u32,
+                        None => rng.rand() as u32,
                     };
                     if let Some(push) = stuck_in_client(slot, &views, rules, rand) {
                         let me = clients[slot].as_mut().and_then(|c| c.sim.as_mut()).unwrap();

@@ -981,6 +981,7 @@ impl ScriptRuntime {
             scripts: self.scripts.clone(),
             gametype: self.scripts.as_ref().map(|s| s.gametype.clone()),
             seed: None,
+            rand: None,
             spawn_pins: None,
             models: Some(crate::game::host::ModelCaches {
                 collision: self.host.xmodel_collision.clone(),

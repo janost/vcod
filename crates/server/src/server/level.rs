@@ -297,6 +297,10 @@ impl Server {
             models: carry.models.filter(|_| restart),
             gametype: carry.gametype,
             seed: Some(self.game.module.level_seed),
+            rand: Some((
+                self.core.rng.share(),
+                self.game.module.level_seed ^ self.game.module.test_rand_seed,
+            )),
             spawn_pins: self.game.module.spawn_pins.clone(),
             weapon_files: None,
         };
