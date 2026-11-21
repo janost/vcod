@@ -200,12 +200,17 @@ fn turn(ps: &PlayerState) -> f64 {
     f64::from(ps.bob_cycle & 0xff) / 255.0 * std::f64::consts::PI
 }
 
-fn bob_amplitude(ps: &PlayerState, speed: f32, max: f32) -> f32 {
-    let amp = match ps.view_height_target {
+/// The bob amplitude of a body whose `viewHeightTarget` is `target`.
+pub fn stance_bob_amplitude(target: i32) -> f32 {
+    match target {
         VIEW_PRONE => BOB_AMPLITUDE[2],
         VIEW_CROUCH => BOB_AMPLITUDE[1],
         _ => BOB_AMPLITUDE[0],
-    };
+    }
+}
+
+fn bob_amplitude(ps: &PlayerState, speed: f32, max: f32) -> f32 {
+    let amp = stance_bob_amplitude(ps.view_height_target);
     let a = (d(speed) * d(amp)) as f32;
     if max < a { max } else { a }
 }

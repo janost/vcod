@@ -35,9 +35,8 @@ use crate::hud::scoreboard::{self, BoardView, Scoreboard};
 use crate::hud::{ChatField, HudQuad};
 use crate::play::cod2_events::Event2;
 
-/// `pm_type` 5: the board stays up (cod2-movement.md).
-const PM_INTERMISSION: i32 = 5;
-const PM_DEAD: i32 = 6;
+/// `pm_type` 5 keeps the board up (cod2-movement.md).
+use vcod_cod2::pmove::pm_type::{DEAD as PM_DEAD, INTERMISSION as PM_INTERMISSION};
 /// `b`'s status icon `n` is configstring `0x16 + n` (cod2-protocol.md 5).
 const CS_STATUS_ICONS: usize = 0x16;
 /// The vote's four configstrings, 1.1's 15..18.

@@ -9,6 +9,7 @@ use glam::Vec3;
 pub use vcod_common::net::flags::EF_MOUNTED;
 /// Flipped on a teleport, and on a turret's first mounted frame (turrets doc 6.2).
 use vcod_common::net::flags::EF_TELEPORT_BIT;
+use vcod_common::pmove::aim::angle_subtract;
 use vcod_common::skeleton::{PoseBuffer, Skeleton};
 use vcod_common::turretpose::angles_quat;
 
@@ -209,18 +210,6 @@ pub fn v15_eye(
         snap: moved.then_some([angles[0], angles[1]]),
         kicks: true,
     }
-}
-
-/// `AngleSubtract` (uo cgame 0x3004bd70): `a - b` folded into -180..180.
-fn angle_subtract(a: f32, b: f32) -> f32 {
-    let mut d = vcod_common::fguard::turns(a - b);
-    while d > 180.0 {
-        d -= 360.0;
-    }
-    while d < -180.0 {
-        d += 360.0;
-    }
-    d
 }
 
 /// The turn sway's offset in `tag_player`'s frame (0x300418a7..0x3004194b):

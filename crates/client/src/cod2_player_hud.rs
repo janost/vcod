@@ -23,6 +23,11 @@ use crate::hud::font::{self, Slot, UiFonts};
 use crate::hud::{HudQuad, angle_normalize_180, angle_normalize_360};
 use crate::play::cod2_events::Event2;
 use crate::play::cod2_view::{DamageKick, SightDef, SightLatch};
+use vcod_cod2::net::flags::{
+    EF_DEAD, EF_TURRET_STANCE as EF_TURRET, PMF_DUCKED as PMF_CROUCH, PMF_OFFHAND, PMF_PRONE,
+    PMF_SIGHT,
+};
+use vcod_cod2::pmove::pm_type::{DEAD as PM_DEAD, SPECTATOR as PM_SPECTATOR};
 use vcod_common::pmove::aim::angle_subtract;
 
 /// The owner draws `ui/menudefinition.h` numbers and `hud.menu` uses.
@@ -81,29 +86,16 @@ impl VoiceShown {
     }
 }
 
-/// `pm_type`: 4 spectator, 5 intermission, 6 dead.
-const PM_SPECTATOR: i32 = 4;
 /// `pm_flags` 0x400000: the view follows another client.
 const PMF_FOLLOW: i32 = 0x400000;
 /// `pm_flags` 0x1000000 and 0x2000000: a spectator may cycle whom he
 /// follows, and may stop following.
 const PMF_FOLLOW_NEXT: i32 = 0x1000000;
 const PMF_FOLLOW_STOP: i32 = 0x2000000;
-const PM_DEAD: i32 = 6;
-/// `pm_flags` 1 prone, 2 crouched; 0x10 an offhand in hand.
-const PMF_PRONE: i32 = 0x1;
-const PMF_CROUCH: i32 = 0x2;
-const PMF_OFFHAND: i32 = 0x10;
-/// `pm_flags` 0x40: the sight is up or coming up.
-const PMF_SIGHT: i32 = 0x40;
 /// `pm_flags` 0x100000: the crosshair is on a teammate (it draws green).
 const PMF_FRIENDLY_CROSSHAIR: i32 = 0x10_0000;
-/// `eFlags` 0x300: on a turret, which draws its own crosshair.
-const EF_TURRET: i32 = 0x300;
 /// `eFlags` 0x400000 on a player entity: talking (the compass flash).
 const EF_TALKING: i32 = 0x40_0000;
-/// `eFlags` 0x20000 on a player entity: dead.
-const EF_DEAD: i32 = 0x2_0000;
 /// `objective_t.state` 4, `"current"`: the compass points at it.
 const OBJST_CURRENT: u32 = 4;
 /// `objective_t.entNum` for none.

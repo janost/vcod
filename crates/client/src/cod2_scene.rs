@@ -34,12 +34,7 @@ use crate::renderer::{CookieEntity, DynamicModelInstance, ModelHandle, Renderer}
 use crate::turret::{ANIM_BLEND_MS, GunAnim, apply_controller};
 use vcod_cod2::player::GunFrame;
 
-/// `eFlags` bit every model draw skips on (`CG_General`'s `& 0x20`).
-const EF_NODRAW: i32 = 0x20;
-/// A dead player's `eFlags` (and a corpse's, `PlayerCmd_ClonePlayer`).
-const EF_DEAD: i32 = vcod_cod2::player::eflags::DEAD;
-/// A brush model's packed `solid`.
-const SOLID_BMODEL: i32 = 0xff_ffff;
+use vcod_cod2::net::flags::{EF_DEAD, EF_NODRAW, SOLID_BMODEL};
 /// `bg_itemlist` rows 1..=128 are the weapons by their CS 7 index.
 const MAX_WEAPON_ITEMS: i32 = 128;
 /// `bg_itemlist`'s rows past the weapons (`cod2_lnxded` .data 0x81850c0,

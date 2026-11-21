@@ -15,14 +15,13 @@ use vcod_cod2::net::fields::CLIENT_STATE_FIELDS;
 
 use crate::hud::HudQuad;
 
-/// `ET_PLAYER`.
-const ET_PLAYER: i32 = 1;
+use vcod_cod2::net::events::ET_PLAYER;
+use vcod_cod2::net::flags::TEAM_SPECTATOR;
 /// `he_type_t` 13, what `HECmd_SetWaypoint` (lnxded 0x81044c0) writes.
 const HE_TYPE_WAYPOINT: i32 = 13;
 /// The head icon block: an entity's `iHeadIcon` n is configstring
 /// `0x1e + n` (`CG_PlayerSprites`, Mac 0x1e662c).
 const CS_HEAD_ICONS: usize = 0x1e;
-const TEAM_SPECTATOR: i32 = 3;
 /// `eFlags` 0x80: the client's connection is interrupted.
 const EF_DISCONNECTED: i32 = 0x80;
 /// `eFlags` 0x200000: the client is typing.

@@ -24,6 +24,13 @@ pub const PMF_TIME_JUMP_SLOWDOWN: i32 = 0x80000;
 /// `MSG_SetDefaultUserCmd` reads the stance and lean off the playerstate
 /// only while this is set (cod2-protocol.md 4.3).
 pub const PMF_CMD_STANCE: i32 = 0x800000;
+/// The same bit as the cgame reads it: the playerstate is the own view,
+/// whose view kick steps (`CG_DrawActiveFrame`, Mac 0x1d4a50).
+pub const PMF_OWN_VIEW: i32 = PMF_CMD_STANCE;
+/// The own view or a follow (0x400000): the cgame draws the playerstate's
+/// body first person and plays its `_plr` aliases (`CG_EntityEvent`, Mac
+/// 0x1e4650; `CG_FireWeapon`'s `pm_flags & 0xc00000`).
+pub const PMF_FIRST_PERSON: i32 = 0xc0_0000;
 /// Set on a spectator's playerstate in every live capture
 /// (cod2-protocol.md 9); its meaning is not read off a binary.
 pub const PMF_SPECTATOR_SEEN: i32 = 0x1000000;
@@ -34,8 +41,19 @@ pub const PMF_SPECTATOR_SEEN: i32 = 0x1000000;
 pub const EF_TELEPORT_BIT: i32 = 0x2;
 pub const EF_CROUCHING: i32 = 0x4;
 pub const EF_PRONE: i32 = 0x8;
+/// Every model draw skips it (`CG_General`'s `& 0x20`).
+pub const EF_NODRAW: i32 = 0x20;
 pub const EF_FIRING: i32 = 0x40;
 /// A turret gunner's stance (both bits a mask).
 pub const EF_TURRET_STANCE: i32 = 0x300;
 pub const EF_MANTLE: i32 = 0x4000;
+/// A dead player and a corpse (`PlayerCmd_ClonePlayer`).
+pub const EF_DEAD: i32 = 0x2_0000;
 pub const EF_TALK: i32 = 0x200000;
+
+/// `entityState_t.solid` of a brush model: its packed box (`SV_LinkEntity`,
+/// `cod2_lnxded` 0x809c63a).
+pub const SOLID_BMODEL: i32 = 0xff_ffff;
+
+/// `team_t`'s spectator.
+pub const TEAM_SPECTATOR: i32 = 3;

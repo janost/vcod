@@ -7,17 +7,15 @@ use glam::Vec3;
 use vcod_cod2::net::Frame;
 use vcod_cod2::net::delta::field_index;
 use vcod_cod2::net::fields::CLIENT_STATE_FIELDS;
+use vcod_cod2::net::flags::{SOLID_BMODEL, TEAM_SPECTATOR};
 use vcod_common::collision::CollisionWorld;
 
 /// The trace's reach (Mac 0x3265c8).
 const RANGE: f32 = 8192.0;
 /// `CG_TraceCapsule`'s mask: the world's solid and the bodies.
 const MASK: u32 = 0x200_0001;
-/// The packed box of a brush model, which the scan does not clip.
-const SOLID_BMODEL: i32 = 0xff_ffff;
 /// `eType` 3, which `CG_BuildSolidList` keeps as a trigger.
-const ET_TRIGGER: i32 = 3;
-const TEAM_SPECTATOR: u32 = 3;
+const ET_TRIGGER: i32 = vcod_cod2::net::events::ET_ITEM;
 /// `CG_FadeColor(time, 150, 100)`.
 const SHOW_MS: i32 = 150;
 const FADE_MS: i32 = 100;
@@ -131,7 +129,7 @@ impl CrosshairNames {
             return None;
         }
         let target = client(self.client)?;
-        if viewer != TEAM_SPECTATOR && viewer != target.f[team] {
+        if viewer != TEAM_SPECTATOR as u32 && viewer != target.f[team] {
             return None;
         }
         let name = vcod_common::net::strip_colors(&target.name());

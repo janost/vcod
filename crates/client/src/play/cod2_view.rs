@@ -19,21 +19,15 @@ use crate::play::cod2_gun::{GunInput, GunKeys, GunPose, GunPs, GunState};
 use crate::play::cod2_shock;
 use crate::play::quake::{Quake, Quakes};
 use crate::play::shock::{ShellShock, ShockFrame, kicked_angles};
+use vcod_common::pmove::aim::lean_fraction;
 
-/// `pm_flags` 0x10: the offhand is up, its weapon the view's.
-const PMF_OFFHAND: i32 = 0x10;
-
-/// `pm_type` 5, intermission: a 90 degree view.
-const PM_INTERMISSION: i32 = 5;
-/// `eFlags` 0x300: on a turret, a 55 degree view.
-const EF_TURRET: i32 = 0x300;
-/// `eFlags` 4 and 8: crouched and prone, for the scope's idle factor.
-const EF_CROUCH: i32 = 0x4;
-const EF_PRONE: i32 = 0x8;
-/// `viewHeightTarget` of a prone and a crouched body.
-use vcod_cod2::pmove::{VIEW_CROUCH, VIEW_PRONE};
-/// `bg_bobAmplitudeStanding`, `Ducked`, `Prone` (cod2-movement.md 13).
-const BOB_AMPLITUDE: [f32; 3] = [0.007, 0.0075, 0.03];
+/// `pm_flags`' offhand bit: its weapon is the view's. `pm_type` 5
+/// (intermission) gives a 90 degree view, `eFlags` 0x300 (a turret) a 55
+/// degree one; crouched and prone set the scope's idle factor.
+use vcod_cod2::net::flags::{
+    EF_CROUCHING as EF_CROUCH, EF_PRONE, EF_TURRET_STANCE as EF_TURRET, PMF_OFFHAND,
+};
+use vcod_cod2::pmove::pm_type::{INTERMISSION as PM_INTERMISSION, SPECTATOR as PM_SPECTATOR};
 
 /// What the view reads of the weapon `BG_GetViewmodelWeaponIndex` names.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -333,11 +327,6 @@ impl Step {
     }
 }
 
-/// `GetLeanFraction` (Mac 0x28ec4).
-fn lean_fraction(f: f32) -> f32 {
-    (2.0 - f.abs()) * f
-}
-
 /// The playerstate fields `BG_CalculateViewAngles` reads.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ViewPs {
@@ -370,11 +359,7 @@ impl Default for IdleState {
 }
 
 fn bob_amplitude(ps: &ViewPs) -> f32 {
-    match ps.view_height_target {
-        VIEW_PRONE => BOB_AMPLITUDE[2],
-        VIEW_CROUCH => BOB_AMPLITUDE[1],
-        _ => BOB_AMPLITUDE[0],
-    }
+    vcod_cod2::pmove::aim::stance_bob_amplitude(ps.view_height_target)
 }
 
 /// `BG_CalculateViewAngles` (Mac 0x8033a): what the view's angles take
@@ -670,7 +655,9 @@ impl ViewFx {
         // `CG_AddViewWeapon` after the view: the gun off the view it drew.
         let mut breath = cod2_shock::BreathFrame::default();
         let gun = match defs {
-            Some((_, keys)) if first_person && ps.eflags & EF_TURRET == 0 && ps.pm_type < 4 => {
+            Some((_, keys))
+                if first_person && ps.eflags & EF_TURRET == 0 && ps.pm_type < PM_SPECTATOR =>
+            {
                 let gps = GunPs {
                     view: angles,
                     pos_frac: pos,

@@ -287,8 +287,7 @@ impl Cod2Predictor {
     }
 }
 
-/// `es.solid` of a brush model (`SV_LinkEntity` 0x809c63a).
-const SOLID_BMODEL: i32 = 0xff_ffff;
+use vcod_cod2::net::flags::SOLID_BMODEL;
 
 /// The entities of `frame.snap` (`cg.nextSnap`) the prediction clips, at
 /// where the frame draws them: `CG_BuildSolidList` (Mac 0x1dea06) lists
@@ -338,10 +337,7 @@ pub fn body_of_solid(entity: u32, origin: Vec3, solid: i32, contents: u32) -> Bo
     }
 }
 
-/// `bg_bobAmplitudeStanding`, `Ducked`, `Prone` and `bg_bobMax` at their
-/// `BG_RegisterDvars` defaults (cod2-movement.md 13).
-const BOB_AMPLITUDE: [f32; 3] = [0.007, 0.0075, 0.03];
-const BOB_MAX: f32 = 8.0;
+use vcod_cod2::pmove::aim::BOB_MAX;
 
 /// A gunner's eye: the gun's `tag_player` in the world, the barrel turned
 /// about `tag_aim` to where the view looks off the gun's `angles`, as the
@@ -376,11 +372,7 @@ pub fn first_person_eye(ps: &PlayerState, origin: Vec3, (land, step): (f32, f32)
         + std::f64::consts::TAU) as f32;
     // `BG_GetSpeed` off a ladder: the flat speed.
     let speed = ps.velocity.truncate().length();
-    let amp = match ps.view_height_target {
-        pmove::VIEW_PRONE => BOB_AMPLITUDE[2],
-        pmove::VIEW_CROUCH => BOB_AMPLITUDE[1],
-        _ => BOB_AMPLITUDE[0],
-    };
+    let amp = pmove::aim::stance_bob_amplitude(ps.view_height_target);
     let bob = (speed * amp).min(BOB_MAX);
     let vertical = bob
         * ((cycle + cycle).sin()

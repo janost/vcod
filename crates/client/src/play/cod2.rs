@@ -60,6 +60,7 @@ use anyhow::{Context, bail};
 use glam::Vec3;
 use std::path::{Path, PathBuf};
 use vcod_cod2::net::download::{DownloadEvent, Downloads, Progress};
+use vcod_cod2::net::flags::EF_TURRET_STANCE;
 use vcod_cod2::net::oob::{self, Reply};
 use vcod_cod2::net::protocol::CS_LAYOUT_118;
 use vcod_cod2::net::{Client, Frame, NetView, UserCmd2};
@@ -144,7 +145,7 @@ fn short_to_angle(d: i32) -> f32 {
 
 /// Shortest gap between two of the pump's cmds ([`Cod2Session::pump`]); the
 /// packet carries every cmd since the last one sent.
-const CMD_MS: u64 = 16;
+const PUMP_CMD_MS: u64 = 16;
 /// Shortest gap between two packets off the LAN: `1000 / cl_maxpackets`,
 /// 30 by default (`CL_SendCmdInternal`, Mac 0x18a032).
 const PACKET_MS: u64 = 1000 / 30;
@@ -712,7 +713,7 @@ impl Cod2Session {
     fn ridden_gun(&self) -> Option<(String, u32)> {
         let f = self.frame()?;
         let ps = &f.snap.ps;
-        if ps.eflags & vcod_cod2::net::flags::EF_TURRET_STANCE == 0 {
+        if ps.eflags & EF_TURRET_STANCE == 0 {
             return None;
         }
         let n = ps.raw.i32("viewlocked_entNum") as u32;
@@ -1094,7 +1095,7 @@ impl Cod2Session {
         let (p, _) = self.predicted.as_ref()?;
         let dips = (self.land_dips.0, self.step_dip);
         let mut eye = crate::play::cod2_predict::first_person_eye(&p.drawn, p.origin, dips);
-        if p.drawn.e_flags & 0x300 != 0
+        if p.drawn.e_flags & EF_TURRET_STANCE as u32 != 0
             && let Some(at) = self.gunner_eye(p.drawn.view_angles)
         {
             eye = at;
@@ -1131,7 +1132,7 @@ impl Cod2Session {
         if let Some(at) = self.gunner_eye(view) {
             return at;
         }
-        if f.snap.ps.pm_type == 5 {
+        if f.snap.ps.pm_type == vcod_cod2::pmove::pm_type::INTERMISSION {
             return Vec3::from(f.eye());
         }
         let ps = crate::play::cod2_predict::interpolated(f);
@@ -1166,7 +1167,7 @@ impl Cod2Session {
                 return [0.0; 2];
             };
             let ps = &f.snap.ps;
-            if ps.eflags & 0x300 == 0 || ps.raw.i32("viewlocked") != 2 {
+            if ps.eflags & EF_TURRET_STANCE == 0 || ps.raw.i32("viewlocked") != 2 {
                 return [0.0; 2];
             }
             let gun = f.snap.entity(ps.raw.i32("viewlocked_entNum") as u32);
@@ -1377,7 +1378,7 @@ impl Cod2Session {
 
     /// Queue a cmd looking along `view` (pitch down-positive, yaw, degrees;
     /// `None` holds the playerstate's) with `forward`/`right` keys and
-    /// `buttons` over the base cmd's, at most one each [`CMD_MS`], and send
+    /// `buttons` over the base cmd's, at most one each [`PUMP_CMD_MS`], and send
     /// a packet when one is due. Nothing is queued while a gamestate's `cp`
     /// is owed.
     pub fn send_move(
@@ -1390,7 +1391,7 @@ impl Cod2Session {
         self.advance_clock();
         if self.view.gamestates > 0
             && !self.cp_owed
-            && since(self.last_cmd) >= Duration::from_millis(CMD_MS)
+            && since(self.last_cmd) >= Duration::from_millis(PUMP_CMD_MS)
         {
             self.last_cmd = clock_now();
             let mut cmd = self.client.idle_cmd(self.cmd_time());

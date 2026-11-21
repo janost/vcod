@@ -23,15 +23,11 @@ use vcod_cod2::net::events as ev;
 use crate::play::cod2_events::Event2;
 use crate::play::recoil::{KickDef, Kicker};
 
-/// `pm_flags` under which `CG_FireWeapon` kicks the playerstate's own
-/// shot (`snap->ps.pm_flags & 0xc00000`).
-const PMF_FIRST_PERSON: i32 = 0xc0_0000;
-/// `pm_flags` under which the view kick steps; off it the kick is zeroed
-/// every frame (`snap->ps.pm_flags` byte 2 & 0x80).
-const PMF_OWN_VIEW: i32 = 0x80_0000;
-/// `pm_flags`: the off hand is out; `BG_GetViewmodelWeaponIndex` takes
+/// `CG_FireWeapon` kicks the playerstate's own shot under
+/// `PMF_FIRST_PERSON`; off `PMF_OWN_VIEW` the view kick is zeroed every
+/// frame; under `PMF_OFFHAND` `BG_GetViewmodelWeaponIndex` takes
 /// `offHandIndex`.
-const PMF_OFFHAND: i32 = 0x10;
+use vcod_cod2::net::flags::{PMF_FIRST_PERSON, PMF_OFFHAND, PMF_OWN_VIEW};
 
 /// One weapon's kick keys off its parsed weapon file.
 pub fn kick_def(def: &vcod_cod2::weapon::WeaponDef) -> KickDef {

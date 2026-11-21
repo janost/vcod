@@ -19,10 +19,7 @@ use crate::audio::cues::{self, Cue, Source};
 use crate::play::cod2_events::{Event2, surface_name};
 use crate::play::cod2_weapons::LevelWeapons;
 
-/// `ps.pm_flags` bits under which the cgame plays the `_plr` (first
-/// person) aliases for the playerstate's own entity (`CG_EntityEvent`,
-/// Mac 0x1e4650).
-pub(crate) const PMF_FIRST_PERSON: i32 = 0xc00000;
+pub(crate) use vcod_cod2::net::flags::PMF_FIRST_PERSON;
 /// The configstring `EV_SOUND_ALIAS`'s parm indexes from (Mac 0x1e4650:
 /// `CL_GetConfigString(parm + 0x24e)`).
 const CS_SOUND_ALIASES: usize = 0x24e;
@@ -42,11 +39,9 @@ const WHIZBY_BACK: f32 = -16.0;
 const MUZZLE_PRONE: f32 = 11.0;
 const MUZZLE_CROUCH: f32 = 40.0;
 const MUZZLE_STAND: f32 = 60.0;
-const EF_PRONE: i32 = 0x8;
-const EF_CROUCHING: i32 = 0x4;
-/// `CG_Missile` (Mac 0x1646da) plays no `projectileSound` under this
-/// `eFlags` bit.
-const EF_NODRAW: i32 = 0x20;
+/// `CG_Missile` (Mac 0x1646da) plays no `projectileSound` under
+/// `EF_NODRAW`.
+use vcod_cod2::net::flags::{EF_CROUCHING, EF_NODRAW, EF_PRONE};
 
 /// A server command `CG_ServerCommand` (Mac 0x1e2ea4) turns into sound.
 #[derive(Clone, Debug, PartialEq)]
