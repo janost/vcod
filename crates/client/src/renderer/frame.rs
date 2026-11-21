@@ -84,7 +84,333 @@ impl SceneTargets<'_> {
     }
 }
 
+/// The frame's shape, decided once before its passes
+/// ([`Renderer::plan_frame`]): which passes run, the targets they draw
+/// into and what the scene pass's draws read.
+pub(super) struct FramePlan {
+    /// The scene pass's clear colour.
+    pub(super) clear: wgpu::Color,
+    /// `vc_bloom` runs.
+    pub(super) bloom: bool,
+    /// `vc_hdr`.
+    pub(super) hdr: bool,
+    /// CoD4's film, glow (with its intensity) and depth of field.
+    pub(super) film: Option<crate::post::Film>,
+    pub(super) glow4: Option<(crate::cod2_glow::Plan, f32)>,
+    pub(super) dof4: Option<crate::cod4_dof::Dof>,
+    /// The world resolves into the post pass's target.
+    pub(super) post: bool,
+    /// The post pass and the 2D draw straight into the swapchain.
+    pub(super) gamma_direct: bool,
+    /// `vc_sunShafts` add into the resolved world.
+    pub(super) shafts: bool,
+    /// The scene resolves and the 2D draws straight into the swapchain.
+    pub(super) scene_direct: bool,
+    /// `vc_softParticles`: every fx run reads the depth copy.
+    pub(super) soft_all: bool,
+    /// A distortion draws: the split takes the colour copy.
+    pub(super) distort_on: bool,
+    /// A draw reads the depth copy.
+    pub(super) soft_on: bool,
+    /// A CoD2 feather reads a depth without the entities.
+    pub(super) feathered: bool,
+    /// `r_vc_depthprepass` runs, and takes the entities.
+    pub(super) prepass_on: bool,
+    pub(super) ent_prepass: bool,
+    /// The prepass writes `floatZ`, in place of the depth copy.
+    pub(super) floatz: bool,
+    /// The world runs, and the entity runs and the prepass, replay from
+    /// bundles.
+    pub(super) bundling: bool,
+    pub(super) ent_bundling: bool,
+    /// The scene pass splits after its last opaque or decal draw.
+    pub(super) split: bool,
+    /// The shellshock's decay and CoD4's shellshock screen.
+    pub(super) shock: Option<i32>,
+    pub(super) cod4_shock: Option<crate::play::cod4_shock::Screen>,
+    /// CoD2's glow and a `blurWorld` menu's blur.
+    pub(super) glow: Option<crate::cod2_glow::Plan>,
+    pub(super) world_blur: Option<crate::cod2_glow::BlurPlan>,
+    /// A pass follows the scene pass: the 2D draws single-sampled.
+    pub(super) after: bool,
+}
+
 impl Renderer {
+    /// The frame's [`FramePlan`]. It takes this frame's depth of field and
+    /// CoD4 shellshock screen, points the bloom and the shafts at the post
+    /// pass's target when that changes, and writes the shafts' parameters.
+    pub(super) fn plan_frame(
+        &mut self,
+        frame: &Frame,
+        ssao_on: bool,
+        shadow_on: bool,
+    ) -> FramePlan {
+        // Linear fog clears to the fog colour (docs/protocol-1.1.md,
+        // configstring 12);
+        // otherwise the fixed steel blue stands in until the sky draws.
+        let clear = if self.fog.set && self.fog.live.linear {
+            wgpu::Color {
+                r: self.fog.live.color[0] as f64,
+                g: self.fog.live.color[1] as f64,
+                b: self.fog.live.color[2] as f64,
+                a: 1.0,
+            }
+        } else {
+            wgpu::Color {
+                r: 0.35,
+                g: 0.42,
+                b: 0.50,
+                a: 1.0,
+            }
+        };
+        let bloom = self.bloom_intensity > 0.0;
+        let hdr = self.hdr();
+        // With vc_hdr or a grade the world resolves into the post
+        // pass's target; otherwise straight into the gamma scene.
+        let film = self
+            .level_look
+            .and_then(|l| l.film)
+            .filter(|_| self.cod4_options.film);
+        // a CoD4 glow: the setup reads the film off or on, and the post
+        // pass adds the result after the film
+        let glow4 = self
+            .level_look
+            .and_then(|l| l.glow)
+            .filter(|_| self.cod4_options.glow)
+            .and_then(|g| {
+                let consts = film.unwrap_or(crate::post::Film::OFF);
+                crate::cod2_glow::plan_cod4(
+                    &g,
+                    consts.setup(self.identity_light),
+                    self.config.width,
+                    self.config.height,
+                )
+                .map(|p| (p, g.intensity))
+            });
+        // CoD4's depth of field blurs the resolved world before the
+        // film and the glow (`RB_ProcessPostEffects`)
+        let dof4 = self
+            .cod4_dof
+            .take()
+            .filter(|d| self.cod4_options.dof && self.world.is_some() && d.used());
+        let post =
+            self.post_settings.active(hdr) || film.is_some() || glow4.is_some() || dof4.is_some();
+        if post != self.effects_read_post {
+            self.effects_read_post = post;
+            let src = if post {
+                self.post.world_view()
+            } else {
+                self.gamma.scene_view()
+            };
+            let (w, h) = (self.config.width, self.config.height);
+            self.bloom.resize(&self.device, src, w, h);
+            self.shafts
+                .resize(&self.device, src, &self.depth_view, w, h);
+        }
+        // An identity ramp leaves the gamma pass a copy, which 1.7 never
+        // makes (its ramp is the device's): the post pass and the 2D then
+        // draw straight into the swapchain (cod4-client-perf.md 30). It
+        // needs the swapchain in the scene's format and opaque (the 2D
+        // blends write alpha the gamma pass sets to 1), and nothing that
+        // samples or copies the gamma scene: without the post pass the
+        // glow, blur, bloom and shafts work in it (`scene_direct` below),
+        // and a shellshock captures it.
+        #[cfg(not(test))]
+        let swap_on = true;
+        #[cfg(test)]
+        let swap_on = self.swap_direct;
+        let swap_direct = swap_on
+            && self.gamma.identity()
+            && self.config.format == SCENE_FORMAT
+            && (matches!(self.target, Target::Offscreen(_))
+                || self.config.alpha_mode == wgpu::CompositeAlphaMode::Opaque)
+            && self.shock_blend.is_none()
+            && !matches!(
+                self.cod4_shock,
+                Some(
+                    crate::play::cod4_shock::Screen::Save
+                        | crate::play::cod4_shock::Screen::Blur { .. }
+                )
+            );
+        let gamma_direct = post && swap_direct;
+        // Shafts need a sun flare's direction (shader doc 8.7).
+        let shafts = self
+            .sky
+            .as_ref()
+            .and_then(|s| s.flare.as_ref())
+            .is_some_and(|f| {
+                self.shafts.prepare(
+                    &self.queue,
+                    frame.view_proj,
+                    f.dir(),
+                    (self.config.width as f32, self.config.height as f32),
+                    self.identity_light,
+                )
+            });
+        // A CoD1 or UO frame at an identity ramp (windowed, `r_gamma` 1)
+        // with no post pass resolves the scene and draws the 2D straight
+        // into the swapchain, as retail's ramp is the device's
+        // (cod11-client-perf.md 4): only while nothing reads the gamma
+        // scene (bloom, shafts, CoD2's glow and blur) or draws into the
+        // split's scene (vc_ssao, vc_shadows).
+        let scene_direct = swap_direct
+            && !post
+            && !bloom
+            && !shafts
+            && !ssao_on
+            && !shadow_on
+            && self.world_fx.is_none()
+            && self.world.as_ref().is_none_or(|w| w.cod2.is_none());
+        // only worth the split when an fx run that reads the depth
+        // copy draws after it: every run under vc_softParticles, a
+        // feathered one always, a CoD4 distortion one under
+        // r_distortion, which reads the colour copy too
+        // (`resolvedPostSun`)
+        let soft_all = self.soft.on();
+        // and a world feathered or distortion stage (`cod4_worldfx`)
+        let (world_feather, world_distort) = self
+            .world
+            .as_ref()
+            .map_or((false, false), |w| self.world_fx_drawn(w));
+        let distort_on = self.world.is_some()
+            && self.cod4_options.distortion
+            && (world_distort
+                || self
+                    .fx
+                    .runs
+                    .iter()
+                    .any(|r| r.sort > SORT_DECAL && r.distort));
+        let soft_on = distort_on
+            || world_feather && self.cod4_options.zfeather
+            || self.world.is_some()
+                && self
+                    .fx
+                    .runs
+                    .iter()
+                    .any(|r| r.sort > SORT_DECAL && (soft_all || r.feather));
+        // CoD2's feather reads a depth without the entities (floatZ,
+        // cod2-materials.md 9.5): its copy goes before the first one.
+        // CoD4's `floatZ` holds them (cod4-client-perf.md 20), so a
+        // CoD4 feather copies at the split and keeps them in the
+        // prepass.
+        let feathered = self.fx.runs.iter().any(|r| r.feather && !r.view_depth);
+        // `r_vc_depthprepass` (cod4-client-perf.md 12): the opaque lit
+        // world draws and the entities' opaque first stages lay their
+        // depth down in a pass of their own, then draw their colour
+        // under EQUAL in place. Every other draw keeps its state, so
+        // the frame comes out the same. The entities stay out while a
+        // feather's depth copy must hold the world alone.
+        let prepass_on = self.depth_prepass && self.world.is_some();
+        let ent_prepass = prepass_on && !feathered;
+        // A CoD4 frame a feather reads writes `floatZ` in the prepass,
+        // as 1.7's does (cod4-client-perf.md 35), and keeps no split or
+        // copy for it. One sample only: the copy reads sample 0 of an
+        // MSAA depth, which a fragment's write does not give. With
+        // `r_zFeather` 0 and the distortion alone the frame is as
+        // before.
+        let feather_on = self.cod4_options.zfeather
+            && (world_feather
+                || self
+                    .fx
+                    .runs
+                    .iter()
+                    .any(|r| r.sort > SORT_DECAL && r.feather));
+        let floatz = self.floatz_prepass
+            && ent_prepass
+            && feather_on
+            && !soft_all
+            && msaa_samples() == 1
+            && self.dynamic.cod4_light.is_some();
+        // CoD4's entity runs and depth prepass replay from bundles as its
+        // world runs do (cod4-client-perf.md 40)
+        let ent_bundling = self.ent_bundles_on && self.dynamic.cod4_light.is_some();
+        // the scene pass splits for the shadow mask, the SSAO multiply
+        // and the copies (`ssao_split`)
+        let split = ssao_on || shadow_on || distort_on || soft_on && !floatz;
+        // CoD4's world runs replay from bundles (cod4-client-perf.md 31): a
+        // run is one `Frag::World` kind for the fragment counts, and one GPU
+        // group, its first item's, for the profile's stamps
+        let bundling = self.world_bundles_on && self.dynamic.cod4_light.is_some();
+        let shock = self.shock_blend;
+        // A CoD4 session sets it every frame it draws.
+        let cod4_shock = self.cod4_shock.take();
+        // CoD2's r_glow, on at its default on every CoD2 map; a CoD4
+        // level's own
+        let sky_cube = self
+            .sky
+            .as_ref()
+            .and_then(|s| s.farbox.as_ref())
+            .and_then(|f| f.cube.as_ref());
+        let glow = self
+            .world
+            .as_ref()
+            .is_some_and(|w| w.cod2.is_some())
+            .then(|| match &glow4 {
+                Some((p, _)) => Some(p.clone()),
+                None if self.level_look.is_some() => None,
+                None => crate::cod2_glow::plan(
+                    &Default::default(),
+                    self.config.width,
+                    self.config.height,
+                    sky_cube.is_some(),
+                ),
+            })
+            .flatten();
+        // a `blurWorld` menu's blur, after the glow (cod2-materials.md 9.13)
+        let world_blur = self
+            .world
+            .as_ref()
+            .is_some_and(|w| w.cod2.is_some())
+            .then(|| {
+                crate::cod2_glow::blur_plan(self.world_blur, self.config.width, self.config.height)
+            })
+            .flatten();
+        // A CoD4 shellshock's capture and blends run single-sampled
+        // with no depth, as the CoD1 and CoD2 one does.
+        let cod4_screen = matches!(
+            cod4_shock,
+            Some(
+                crate::play::cod4_shock::Screen::Save
+                    | crate::play::cod4_shock::Screen::Blur { .. }
+                    | crate::play::cod4_shock::Screen::Flash { .. }
+            )
+        );
+        let after = bloom
+            || shafts
+            || post
+            || shock.is_some()
+            || cod4_screen
+            || glow.is_some()
+            || world_blur.is_some();
+        FramePlan {
+            clear,
+            bloom,
+            hdr,
+            film,
+            glow4,
+            dof4,
+            post,
+            gamma_direct,
+            shafts,
+            scene_direct,
+            soft_all,
+            distort_on,
+            soft_on,
+            feathered,
+            prepass_on,
+            ent_prepass,
+            floatz,
+            bundling,
+            ent_bundling,
+            split,
+            shock,
+            cod4_shock,
+            glow,
+            world_blur,
+            after,
+        }
+    }
+
     /// The visible set and the prop flags that go with it. A placement whose
     /// model failed to load has zero bounds and is never drawn or counted.
     /// `lod` is CoD4's rigid LOD ramp, `(scale, bias)`
@@ -837,110 +1163,7 @@ impl Renderer {
             sp.idle(&self.queue);
         }
         {
-            // Linear fog clears to the fog colour (docs/protocol-1.1.md,
-            // configstring 12);
-            // otherwise the fixed steel blue stands in until the sky draws.
-            let clear = if self.fog.set && self.fog.live.linear {
-                wgpu::Color {
-                    r: self.fog.live.color[0] as f64,
-                    g: self.fog.live.color[1] as f64,
-                    b: self.fog.live.color[2] as f64,
-                    a: 1.0,
-                }
-            } else {
-                wgpu::Color {
-                    r: 0.35,
-                    g: 0.42,
-                    b: 0.50,
-                    a: 1.0,
-                }
-            };
-            let bloom = self.bloom_intensity > 0.0;
-            let hdr = self.hdr();
-            // With vc_hdr or a grade the world resolves into the post
-            // pass's target; otherwise straight into the gamma scene.
-            let film = self
-                .level_look
-                .and_then(|l| l.film)
-                .filter(|_| self.cod4_options.film);
-            // a CoD4 glow: the setup reads the film off or on, and the post
-            // pass adds the result after the film
-            let glow4 = self
-                .level_look
-                .and_then(|l| l.glow)
-                .filter(|_| self.cod4_options.glow)
-                .and_then(|g| {
-                    let consts = film.unwrap_or(crate::post::Film::OFF);
-                    crate::cod2_glow::plan_cod4(
-                        &g,
-                        consts.setup(self.identity_light),
-                        self.config.width,
-                        self.config.height,
-                    )
-                    .map(|p| (p, g.intensity))
-                });
-            // CoD4's depth of field blurs the resolved world before the
-            // film and the glow (`RB_ProcessPostEffects`)
-            let dof4 = self
-                .cod4_dof
-                .take()
-                .filter(|d| self.cod4_options.dof && self.world.is_some() && d.used());
-            let post = self.post_settings.active(hdr)
-                || film.is_some()
-                || glow4.is_some()
-                || dof4.is_some();
-            if post != self.effects_read_post {
-                self.effects_read_post = post;
-                let src = if post {
-                    self.post.world_view()
-                } else {
-                    self.gamma.scene_view()
-                };
-                let (w, h) = (self.config.width, self.config.height);
-                self.bloom.resize(&self.device, src, w, h);
-                self.shafts
-                    .resize(&self.device, src, &self.depth_view, w, h);
-            }
-            // An identity ramp leaves the gamma pass a copy, which 1.7 never
-            // makes (its ramp is the device's): the post pass and the 2D then
-            // draw straight into the swapchain (cod4-client-perf.md 30). It
-            // needs the swapchain in the scene's format and opaque (the 2D
-            // blends write alpha the gamma pass sets to 1), and nothing that
-            // samples or copies the gamma scene: without the post pass the
-            // glow, blur, bloom and shafts work in it (`scene_direct` below),
-            // and a shellshock captures it.
-            #[cfg(not(test))]
-            let swap_on = true;
-            #[cfg(test)]
-            let swap_on = self.swap_direct;
-            let swap_direct = swap_on
-                && self.gamma.identity()
-                && self.config.format == SCENE_FORMAT
-                && (matches!(self.target, Target::Offscreen(_))
-                    || self.config.alpha_mode == wgpu::CompositeAlphaMode::Opaque)
-                && self.shock_blend.is_none()
-                && !matches!(
-                    self.cod4_shock,
-                    Some(
-                        crate::play::cod4_shock::Screen::Save
-                            | crate::play::cod4_shock::Screen::Blur { .. }
-                    )
-                );
-            let gamma_direct = post && swap_direct;
-            // Shafts need a sun flare's direction (shader doc 8.7).
-            let shafts = self
-                .sky
-                .as_ref()
-                .and_then(|s| s.flare.as_ref())
-                .is_some_and(|f| {
-                    self.shafts.prepare(
-                        &self.queue,
-                        frame.view_proj,
-                        f.dir(),
-                        (self.config.width as f32, self.config.height as f32),
-                        self.identity_light,
-                    )
-                });
+            let plan = self.plan_frame(&frame, ssao_on, shadow_on);
             if let Some(flare) = self
                 .sky
                 .as_mut()
@@ -956,21 +1179,7 @@ impl Renderer {
                     self.sky_drawn && self.draw_sun,
                 );
             }
-            // A CoD1 or UO frame at an identity ramp (windowed, `r_gamma` 1)
-            // with no post pass resolves the scene and draws the 2D straight
-            // into the swapchain, as retail's ramp is the device's
-            // (cod11-client-perf.md 4): only while nothing reads the gamma
-            // scene (bloom, shafts, CoD2's glow and blur) or draws into the
-            // split's scene (vc_ssao, vc_shadows).
-            let scene_direct = swap_direct
-                && !post
-                && !bloom
-                && !shafts
-                && !ssao_on
-                && !shadow_on
-                && self.world_fx.is_none()
-                && self.world.as_ref().is_none_or(|w| w.cod2.is_none());
-            self.gamma_skipped = gamma_direct || scene_direct;
+            self.gamma_skipped = plan.gamma_direct || plan.scene_direct;
             // With SSAO or vc_shadows the frame is two passes split after
             // the last opaque or decal draw (`ssao_split`): the first keeps
             // its MSAA colour for the shadow mask and the SSAO multiply, the
@@ -978,15 +1187,15 @@ impl Renderer {
             let targets = SceneTargets {
                 msaa: &self.msaa_view,
                 depth: &self.depth_view,
-                resolve: if post {
+                resolve: if plan.post {
                     self.post.world_view()
-                } else if scene_direct {
+                } else if plan.scene_direct {
                     &view
                 } else {
                     self.gamma.scene_view()
                 },
                 timer: self.ssao.timer(),
-                clear,
+                clear: plan.clear,
                 sun_queries: self
                     .sky
                     .as_ref()
@@ -994,33 +1203,6 @@ impl Renderer {
                     .and_then(SunFlareGpu::query_set),
                 depth_cleared: false,
             };
-            // only worth the split when an fx run that reads the depth
-            // copy draws after it: every run under vc_softParticles, a
-            // feathered one always, a CoD4 distortion one under
-            // r_distortion, which reads the colour copy too
-            // (`resolvedPostSun`)
-            let soft_all = self.soft.on();
-            // and a world feathered or distortion stage (`cod4_worldfx`)
-            let (world_feather, world_distort) = self
-                .world
-                .as_ref()
-                .map_or((false, false), |w| self.world_fx_drawn(w));
-            let distort_on = self.world.is_some()
-                && self.cod4_options.distortion
-                && (world_distort
-                    || self
-                        .fx
-                        .runs
-                        .iter()
-                        .any(|r| r.sort > SORT_DECAL && r.distort));
-            let soft_on = distort_on
-                || world_feather && self.cod4_options.zfeather
-                || self.world.is_some()
-                    && self
-                        .fx
-                        .runs
-                        .iter()
-                        .any(|r| r.sort > SORT_DECAL && (soft_all || r.feather));
             // The world's draws across the world and every moved brush
             // model, by their place in the sorted shader list; on one
             // shader a moved model, an entity in retail's key, draws before
@@ -1040,80 +1222,44 @@ impl Renderer {
             }
             // stable: a batch keeps its stage order
             world_list.sort_by_key(|w| (w.rank, w.set.wrapping_sub(1)));
-            // CoD2's feather reads a depth without the entities (floatZ,
-            // cod2-materials.md 9.5): its copy goes before the first one.
-            // CoD4's `floatZ` holds them (cod4-client-perf.md 20), so a
-            // CoD4 feather copies at the split and keeps them in the
-            // prepass.
-            let feathered = self.fx.runs.iter().any(|r| r.feather && !r.view_depth);
-            // `r_vc_depthprepass` (cod4-client-perf.md 12): the opaque lit
-            // world draws and the entities' opaque first stages lay their
-            // depth down in a pass of their own, then draw their colour
-            // under EQUAL in place. Every other draw keeps its state, so
-            // the frame comes out the same. The entities stay out while a
-            // feather's depth copy must hold the world alone.
-            let prepass_on = self.depth_prepass && self.world.is_some();
-            let ent_prepass = prepass_on && !feathered;
-            // A CoD4 frame a feather reads writes `floatZ` in the prepass,
-            // as 1.7's does (cod4-client-perf.md 35), and keeps no split or
-            // copy for it. One sample only: the copy reads sample 0 of an
-            // MSAA depth, which a fragment's write does not give. With
-            // `r_zFeather` 0 and the distortion alone the frame is as
-            // before.
-            let feather_on = self.cod4_options.zfeather
-                && (world_feather
-                    || self
-                        .fx
-                        .runs
-                        .iter()
-                        .any(|r| r.sort > SORT_DECAL && r.feather));
-            let floatz = self.floatz_prepass
-                && ent_prepass
-                && feather_on
-                && !soft_all
-                && msaa_samples() == 1
-                && self.dynamic.cod4_light.is_some();
             // the world draws the prepass laid down untested, which draw
             // their colour under EQUAL: a `floatZ` prepass takes only 1.7's
             // set
             let world_equal = |world: &WorldGpu, kind: DrawRef| {
-                prepass_on
+                plan.prepass_on
                     && takes_prepass(world, kind)
-                    && (!floatz || takes_floatz(world, kind) == Some(false))
+                    && (!plan.floatz || takes_floatz(world, kind) == Some(false))
             };
             // the entity skins whose first stage the prepass laid down
             let ent_equal = |skin: &EntSkin| {
-                ent_prepass
+                plan.ent_prepass
                     && ent_takes_prepass(skin)
-                    && (!floatz || skin.stages.first().is_some_and(|st| st.floatz))
+                    && (!plan.floatz || skin.stages.first().is_some_and(|st| st.floatz))
             };
             self.census.set(PassCensus::default());
-            // CoD4's entity runs and depth prepass replay from bundles as its
-            // world runs do (cod4-client-perf.md 40)
-            let ent_bundling = self.ent_bundles_on && self.dynamic.cod4_light.is_some();
             let mut pre_bundles = std::mem::take(&mut self.prepass_bundles);
-            pre_bundles.begin(floatz.then_some(crate::soft_particles::LINZ_FORMAT));
-            if prepass_on {
+            pre_bundles.begin(plan.floatz.then_some(crate::soft_particles::LINZ_FORMAT));
+            if plan.prepass_on {
                 if let Some(g) = &mut gpu_groups {
                     g.enc(&mut encoder, Some(crate::frame_prof::Group::Prepass));
                 }
                 // the cookie receivers test the world's depth alone, so the
                 // entities' prepass follows them
-                let split = receivers_on_prepass && !floatz;
+                let receivers_split = receivers_on_prepass && !plan.floatz;
                 let mut n = self.encode_depth_prepass(
                     &mut encoder,
                     &world_list,
                     &ent_draws,
                     PrepassParts {
                         world: true,
-                        ents: ent_prepass && !split,
-                        floatz,
+                        ents: plan.ent_prepass && !receivers_split,
+                        floatz: plan.floatz,
                         load: false,
                     },
                     frame.time,
-                    ent_bundling.then_some(&mut pre_bundles),
+                    plan.ent_bundling.then_some(&mut pre_bundles),
                 );
-                if split {
+                if receivers_split {
                     if let Some(g) = &mut gpu_groups {
                         g.enc(&mut encoder, Some(crate::frame_prof::Group::Receivers));
                     }
@@ -1131,7 +1277,7 @@ impl Renderer {
                         &frame,
                         true,
                     );
-                    if ent_prepass {
+                    if plan.ent_prepass {
                         if let Some(g) = &mut gpu_groups {
                             g.enc(&mut encoder, Some(crate::frame_prof::Group::Prepass));
                         }
@@ -1142,40 +1288,39 @@ impl Renderer {
                             PrepassParts {
                                 world: false,
                                 ents: true,
-                                floatz,
+                                floatz: plan.floatz,
                                 load: true,
                             },
                             frame.time,
-                            ent_bundling.then_some(&mut pre_bundles),
+                            plan.ent_bundling.then_some(&mut pre_bundles),
                         );
                     }
                 }
                 crate::frame_prof::count(crate::frame_prof::Count::Prepass, n);
                 frame_write!(self, "depth prepass (depth)", full(4 * msaa_samples()));
-                if floatz {
+                if plan.floatz {
                     frame_write!(self, "depth prepass floatZ (R32F)", full(4));
                 }
                 crate::frame_prof::count(
                     crate::frame_prof::Count::Feathered,
-                    usize::from(!ent_prepass),
+                    usize::from(!plan.ent_prepass),
                 );
                 #[cfg(test)]
                 self.prepass_drawn.set(n);
                 #[cfg(test)]
-                self.floatz_drawn.set(floatz);
+                self.floatz_drawn.set(plan.floatz);
             }
             pre_bundles.end();
             self.prepass_bundles = pre_bundles;
             let targets = SceneTargets {
-                depth_cleared: prepass_on,
+                depth_cleared: plan.prepass_on,
                 ..targets
             };
-            let split = ssao_on || shadow_on || distort_on || soft_on && !floatz;
             if let Some(g) = &mut gpu_groups {
                 g.enc(&mut encoder, Some(crate::frame_prof::Group::Sky));
             }
-            let mut pass = targets.begin(&mut encoder, true, !split);
-            frame_write!(self, "scene pass (colour + depth)", scene_pass(!split));
+            let mut pass = targets.begin(&mut encoder, true, !plan.split);
+            frame_write!(self, "scene pass (colour + depth)", scene_pass(!plan.split));
             pass.set_bind_group(0, &self.camera_bg, &[]);
             // The sky draws first so every world draw overwrites it; the box
             // and dome both ignore depth (cleared 1.0) and write none. CoD
@@ -1309,14 +1454,17 @@ impl Renderer {
             let items = merge_by_sort(&world_sorts, &mark_sorts, &model_sorts, &fx_sorts);
             crate::frame_prof::count(crate::frame_prof::Count::Draws, items.len());
             let mut dlight_at = dlight_slot(&items, &world_sorts);
-            let split_at = split
+            let split_at = plan
+                .split
                 .then(|| ssao_split(&items, &world_sorts, &mark_sorts, &model_sorts, &fx_sorts));
-            let copy_at = split_at.filter(|_| !floatz).map(|at| match feathered {
-                true => feather_copy_at(&items, at),
-                false => at,
-            });
+            let copy_at = split_at
+                .filter(|_| !plan.floatz)
+                .map(|at| match plan.feathered {
+                    true => feather_copy_at(&items, at),
+                    false => at,
+                });
             // where the effects may read the feather's depth from
-            let soft_from = if floatz { Some(0) } else { copy_at };
+            let soft_from = if plan.floatz { Some(0) } else { copy_at };
             // the dlights add light, so a shadow must not darken them
             if shadow_on && let Some(at) = split_at {
                 dlight_at = dlight_at.max(at);
@@ -1324,9 +1472,6 @@ impl Renderer {
             let mut emit = Emit::None;
             // Past the items an entity surface run or a world bundle drew.
             let mut skip_to = 0;
-            // (a run is one `Frag::World` kind for the fragment counts, and
-            // one GPU group, its first item's, for the profile's stamps)
-            let bundling = self.world_bundles_on && self.dynamic.cod4_light.is_some();
             let mut bundles = std::mem::take(&mut self.world_bundles);
             bundles.begin(Some(self.world_format));
             // The items where the loop below ends a pass or draws the
@@ -1336,7 +1481,7 @@ impl Renderer {
                 .as_ref()
                 .is_some_and(|w| !w.dlight_runs.is_empty());
             let stops = [
-                copy_at.filter(|_| soft_on && copy_at != split_at),
+                copy_at.filter(|_| plan.soft_on && copy_at != split_at),
                 split_at,
                 dlights_drawn.then_some(dlight_at),
             ];
@@ -1356,15 +1501,17 @@ impl Renderer {
             // `k` ([`Self::emit_world_draw`])
             let fx_ready = |k: usize| {
                 (
-                    soft_on && self.cod4_options.zfeather && soft_from.is_some_and(|at| k >= at),
-                    distort_on && split_at.is_some_and(|at| k >= at),
+                    plan.soft_on
+                        && self.cod4_options.zfeather
+                        && soft_from.is_some_and(|at| k >= at),
+                    plan.distort_on && split_at.is_some_and(|at| k >= at),
                 )
             };
             // whether fx run `r` at item `k` draws on the soft pipelines,
             // reading the depth copy: only after the split is it this frame's
             let fx_soft = |r: &FxRun, k: usize| {
-                soft_on
-                    && (soft_all || r.feather)
+                plan.soft_on
+                    && (plan.soft_all || r.feather)
                     && soft_from.is_some_and(|at| k >= at)
                     && !r.distort
                     && r.cloud.is_none()
@@ -1373,7 +1520,7 @@ impl Renderer {
                 if k < skip_to {
                     continue;
                 }
-                if soft_on && copy_at == Some(k) && copy_at != split_at {
+                if plan.soft_on && copy_at == Some(k) && copy_at != split_at {
                     if let Some(f) = &mut self.frag_stats {
                         f.switch(&mut pass, None);
                     }
@@ -1419,12 +1566,12 @@ impl Renderer {
                         self.ssao.encode(&mut encoder, scene, &self.depth_view);
                         frame_write!(self, "vc_ssao (not sized)", 0);
                     }
-                    if soft_on && copy_at == split_at {
+                    if plan.soft_on && copy_at == split_at {
                         group(&mut encoder, Group::SoftCopy);
                         self.soft.encode(&mut encoder);
                         frame_write!(self, "feather depth copy (R32F)", full(4));
                     }
-                    if distort_on {
+                    if plan.distort_on {
                         group(&mut encoder, Group::SceneCopy);
                         self.scene_copy.encode(&self.device, &mut encoder, scene);
                         frame_write!(self, "distortion colour copy", full(world_bpp));
@@ -1482,7 +1629,7 @@ impl Renderer {
                 match item {
                     SortedItem::World(_) => {
                         let world = self.world.as_ref().expect("world draws come from a world");
-                        if bundling {
+                        if plan.bundling {
                             // the run, recorded as one item at a time would
                             // encode it from `Emit::None`
                             let end = run_end(k, &|item| matches!(item, SortedItem::World(_)));
@@ -1533,7 +1680,7 @@ impl Renderer {
                         }
                     }
                     SortedItem::Model(mi) if !ent_draws[mi].gun => {
-                        if ent_bundling {
+                        if plan.ent_bundling {
                             // the entity runs, recorded as the items one at a
                             // time would encode them from `Emit::None`
                             let end = run_end(
@@ -1652,7 +1799,7 @@ impl Renderer {
                             // after the split only, where the copies are
                             // this frame's (retail skips the draw without
                             // r_distortion: `R_SetupMaterial`)
-                            if !distort_on || split_at.is_none_or(|at| k < at) {
+                            if !plan.distort_on || split_at.is_none_or(|at| k < at) {
                                 continue;
                             }
                             if matches!(emit, Emit::Gun { .. }) {
@@ -1784,62 +1931,12 @@ impl Renderer {
             // scene when it is on, and draw the HUD there single-sampled, so
             // the HUD never blooms, shafts or takes the grade and the MSAA
             // target is never reloaded.
-            let shock = self.shock_blend;
-            // A CoD4 session sets it every frame it draws.
-            let cod4_shock = self.cod4_shock.take();
-            // CoD2's r_glow, on at its default on every CoD2 map; a CoD4
-            // level's own
             let sky_cube = self
                 .sky
                 .as_ref()
                 .and_then(|s| s.farbox.as_ref())
                 .and_then(|f| f.cube.as_ref());
-            let glow = self
-                .world
-                .as_ref()
-                .is_some_and(|w| w.cod2.is_some())
-                .then(|| match &glow4 {
-                    Some((p, _)) => Some(p.clone()),
-                    None if self.level_look.is_some() => None,
-                    None => crate::cod2_glow::plan(
-                        &Default::default(),
-                        self.config.width,
-                        self.config.height,
-                        sky_cube.is_some(),
-                    ),
-                })
-                .flatten();
-            // a `blurWorld` menu's blur, after the glow (cod2-materials.md 9.13)
-            let world_blur = self
-                .world
-                .as_ref()
-                .is_some_and(|w| w.cod2.is_some())
-                .then(|| {
-                    crate::cod2_glow::blur_plan(
-                        self.world_blur,
-                        self.config.width,
-                        self.config.height,
-                    )
-                })
-                .flatten();
-            // A CoD4 shellshock's capture and blends run single-sampled
-            // with no depth, as the CoD1 and CoD2 one does.
-            let cod4_screen = matches!(
-                cod4_shock,
-                Some(
-                    crate::play::cod4_shock::Screen::Save
-                        | crate::play::cod4_shock::Screen::Blur { .. }
-                        | crate::play::cod4_shock::Screen::Flash { .. }
-                )
-            );
-            let after = bloom
-                || shafts
-                || post
-                || shock.is_some()
-                || cod4_screen
-                || glow.is_some()
-                || world_blur.is_some();
-            if after {
+            if plan.after {
                 drop(pass);
                 if let Some(g) = &self.prof_gpu {
                     if !split_stamped {
@@ -1850,7 +1947,7 @@ impl Renderer {
                     split_stamped = true;
                     post_stamped = true;
                 }
-                let world = if post {
+                let world = if plan.post {
                     self.post.world_view()
                 } else {
                     self.gamma.scene_view()
@@ -1861,7 +1958,7 @@ impl Renderer {
                         gg.enc(encoder, Some(g));
                     }
                 };
-                if let Some(d) = &dof4 {
+                if let Some(d) = &plan.dof4 {
                     group(&mut encoder, Group::Dof);
                     let c = d.consts(self.config.height, Z_NEAR, VM_NEAR);
                     self.dof.encode(
@@ -1880,14 +1977,14 @@ impl Renderer {
                         2 * full(world_bpp) + 5 * full(world_bpp) / 16
                     );
                 }
-                if shafts {
+                if plan.shafts {
                     group(&mut encoder, Group::Shafts);
                     self.shafts.encode(&mut encoder, world);
                     frame_write!(self, "vc_sunShafts (not sized)", 0);
                 }
                 #[cfg(test)]
                 {
-                    if let Some(g) = &glow {
+                    if let Some(g) = &plan.glow {
                         let steps: usize = 1 + g.chains.iter().map(Vec::len).sum::<usize>();
                         frame_write!(
                             self,
@@ -1895,7 +1992,7 @@ impl Renderer {
                             steps as u64 * full(4) / 16 + g.applies.len() as u64 * full(world_bpp)
                         );
                     }
-                    if let Some(b) = &world_blur {
+                    if let Some(b) = &plan.world_blur {
                         frame_write!(
                             self,
                             "blurWorld",
@@ -1912,49 +2009,49 @@ impl Renderer {
                     sky_cube,
                     frame.view_proj.inverse(),
                     frame.eye,
-                    glow.as_ref(),
-                    world_blur.as_ref(),
+                    plan.glow.as_ref(),
+                    plan.world_blur.as_ref(),
                 );
-                if bloom {
+                if plan.bloom {
                     group(&mut encoder, Group::Bloom);
                     self.bloom.set_params(
                         &self.queue,
                         self.bloom_intensity,
                         self.bloom_threshold,
                         self.identity_light,
-                        hdr,
+                        plan.hdr,
                     );
                     self.bloom.blur(&mut encoder);
                     frame_write!(self, "vc_bloom (not sized)", 0);
                 }
-                if post {
-                    if bloom {
-                        let mut glow =
+                if plan.post {
+                    if plan.bloom {
+                        let mut bloom_pass =
                             single_pass(&mut encoder, self.post.world_view(), "bloom pass");
-                        self.bloom.composite(&mut glow);
+                        self.bloom.composite(&mut bloom_pass);
                     }
                     self.post.bind_glow(
                         &self.device,
-                        glow4.as_ref().map(|_| self.cod2_glow.result()),
+                        plan.glow4.as_ref().map(|_| self.cod2_glow.result()),
                     );
                     self.post.set_params(
                         &self.queue,
                         self.post_settings,
-                        film,
-                        glow4.as_ref().map_or(0.0, |g| g.1),
-                        hdr,
+                        plan.film,
+                        plan.glow4.as_ref().map_or(0.0, |g| g.1),
+                        plan.hdr,
                         self.identity_light,
                         frame.time,
                     );
                     group(&mut encoder, Group::PostFx);
-                    pass = if gamma_direct {
+                    pass = if plan.gamma_direct {
                         // the post pass writes every texel
                         clear_pass(&mut encoder, &view, "hud pass")
                     } else {
                         single_pass(&mut encoder, self.gamma.scene_view(), "hud pass")
                     };
                     self.post.draw(&mut pass);
-                    if gamma_direct {
+                    if plan.gamma_direct {
                         frame_write!(self, "post pass into the swapchain, then the 2D", full(4));
                     } else {
                         frame_write!(self, "post pass into the gamma scene, then the 2D", full(4));
@@ -1962,7 +2059,7 @@ impl Renderer {
                 } else {
                     pass = single_pass(&mut encoder, self.gamma.scene_view(), "hud pass");
                     frame_write!(self, "2D pass (gamma scene)", full(4));
-                    if bloom {
+                    if plan.bloom {
                         self.bloom.composite(&mut pass);
                     }
                 }
@@ -1970,14 +2067,14 @@ impl Renderer {
             // The shellshock's render commands 10 and 9 on the finished 3D
             // view, before the 2D, as the cgame queues them.
             use crate::play::cod4_shock::Screen as Cod4Screen;
-            if (!matches!(cod4_shock, None | Some(Cod4Screen::Off)) || shock.is_some())
+            if (!matches!(plan.cod4_shock, None | Some(Cod4Screen::Off)) || plan.shock.is_some())
                 && let Some(g) = &mut gpu_groups
             {
                 g.pass(&mut pass, Some(crate::frame_prof::Group::Shock));
             }
             // a blend's decay and desaturation: the last capture over the 3D
             // view, captured again after
-            let blend = match (cod4_shock, shock) {
+            let blend = match (plan.cod4_shock, plan.shock) {
                 // CoD4's flashbang: the first frame saves the still, the
                 // later ones add it with the white (cod4-client-view.md 8).
                 (Some(Cod4Screen::Save), _) => {
@@ -2036,14 +2133,14 @@ impl Renderer {
                 g.pass(&mut pass, Some(crate::frame_prof::Group::Hud));
             }
             if !self.hud_pass.runs.is_empty() {
-                let n = self.hud_pass.draw(&mut pass, after);
+                let n = self.hud_pass.draw(&mut pass, plan.after);
                 crate::frame_prof::count(crate::frame_prof::Count::HudDraws, n);
             }
 
             // Debug HUD text, over everything.
             if hud_quads > 0 {
                 let hud = &self.hud;
-                pass.set_pipeline(if after {
+                pass.set_pipeline(if plan.after {
                     &hud.pipeline_1x
                 } else {
                     &hud.pipeline
