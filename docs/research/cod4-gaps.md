@@ -31,8 +31,7 @@ Ranked by how much a player notices.
 - Small HUD fades: the compass's voice fade, drawn off `isTalking` but
   not checked against a retail capture with a talker (cod4-hud.md 15.9).
   S.
-- Smaller open items, each in its doc: the alt weapon's clip graphic and
-  the offhand highlight (cod4-hud.md 24); `timedemo`'s csv
+- Smaller open items, each in its doc: `timedemo`'s csv
   and the front end's demo list (cod4-demos.md 7); effect model elements
   and whether CoD4's sizes are radii (cod4-effects.md 9); the predicted
   origin ring a playerstate without bit 0 needs (cod4-netfields.md 11);
@@ -53,6 +52,13 @@ Ranked by how much a player notices.
 - Single Player's popup does nothing: vcod is multiplayer only.
 
 ## 3. Closed
+
+- The clip graphic drew nothing for an alt weapon's kind (6) and the
+  offhand highlight was not looked at. Kind 6 now draws the `altWeapon`'s
+  clip, as 1.7's 0x422a40 does: `gl_m16_mp` shows the rifle's
+  magazine. The highlight (owner draws 109 and 110) sits in no stock
+  menu, so 1.7 draws none either; the offhand icon now takes the
+  equipped offhand first, as 0x45a360 does (cod4-hud.md 9).
 
 - `sv_clientSideBullets` 0 was not read: vcod's client ran its own
   rounds whatever the server said. vcod now reads it off the systeminfo

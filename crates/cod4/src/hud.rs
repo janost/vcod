@@ -663,6 +663,8 @@ pub struct WeaponHud {
     /// none, 1 magazine, 2 short magazine, 3 shotgun, 4 rocket, 5 belt
     /// fed, 6 the alt weapon's.
     pub ammo_counter_clip: i32,
+    /// `altWeapon`: the weapon the mode switch selects, empty for none.
+    pub alt_weapon: String,
     /// `sharedAmmoCap` (+840): with `maxAmmo` and `clipOnly`, what
     /// `BG_GetAmmoPlayerMax` sums (cod4-hud.md 15).
     pub shared_ammo_cap: i32,
@@ -738,6 +740,7 @@ impl WeaponHud {
             ammo_name: s("ammoName"),
             clip_name: s("clipName"),
             ammo_counter_clip: int(796),
+            alt_weapon: s("altWeapon"),
             shared_ammo_cap: int(840),
             dpad_icon: material("dpadIcon"),
             dpad_icon_ratio: int(1320),
