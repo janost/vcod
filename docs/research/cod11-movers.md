@@ -1810,8 +1810,11 @@ other); the goal setter 0x080bd674 writes the weight itself when its time is
 under 0.001; the step 0x080bb130 lands a node on its goal once the goal time
 is under the frame's `dt` plus 0.001. VERIFIED, decompile: UO's clear
 (`coduo_lnxded` 0x080bfe3e, per node 0x080bfc22) keeps a weighted node's
-weight the same way; 1.5b's was not read. INFERRED: a death shown at its last
-frame on the legs takes `legs` to 1 at once and `torso` (a sibling of `legs`
+weight the same way, and so does 1.5b's (`cod_lnxded` 1.5b 0x080caaaa, per
+node 0x080ca88e: weight, goal and time zeroed at 0x080ca8fd..0x080ca911
+only when 0x080ca848 reads the node unweighted; objdump agrees). INFERRED:
+a death shown at its last frame on the legs takes `legs` to 1 at once and
+`torso` (a sibling of `legs`
 under `main`) and `turning`, with every legs clip beside the death, to 0 at
 the next frame's step, so the frame of the set still draws them; the torso's
 own leaves keep their weights under a node at 0. A torso setter in the same

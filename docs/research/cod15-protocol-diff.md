@@ -380,9 +380,14 @@ to a client that asks, on either protocol, as retail does.
   enters after that write (`0x419ce0`). VERIFIED (asm). UO's `0x41b110` (jump
   table `0x41b234`, stride `0x98`, strings 4 later) is the same code.
   VERIFIED.
-- vcod sorts an unknown `hw` last on the nine-column list; its sort has no
-  direction and keeps arrival order on a tie, and the hostname, map and game
-  type compares are its own (lowercased, colour codes stripped).
+- The 1.5 UI's `ServerSort` (ui_mp_x86.dll 1.5 `0x4000b26a`) flips
+  `sortDir` (`0x401ebbec`) on the sorted column as 1.1's does, and its init
+  sorts on key 8, the ping (`0x4000de41`); UO's the same (`uo_ui_mp_x86.dll`
+  `0x4000cc9e`, init `0x4000fd45`). The binary insertion (`0x4000bc10`) moves
+  right on any compare above 0. VERIFIED (asm).
+- vcod sorts the nine-column list with `compare_v5` (`frontend::browser`),
+  the compare above to the tie chain; entries that compare equal keep the
+  list's order (`cod11-front-end.md` 6.4).
 - 1.5's master query asks `getservers 6`, so its list holds 1.5 servers only
   (INFERRED from section 1). No column marks a server's version (menu files,
   VERIFIED).

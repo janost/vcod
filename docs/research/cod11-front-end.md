@@ -507,6 +507,36 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   VERIFIED (pak listings, the DDS header).
 - Only a mod's menu shows any of this (section 4).
 
+### 6.4 The sort
+
+- `ServerSort <n>` (1.1 `0x4000aeab`) parses its column and does nothing
+  without one; a column equal to the sort key (`0x401ea68c`) flips `sortDir`
+  (`0x401ea690`), then the key is stored and the display list re-sorted
+  (`0x40009de0` with 1: qsort `0x4001a230` through the trap compare
+  `0x40009db0`). VERIFIED (asm). `sortDir` is never reset, so a new column
+  sorts in the direction the last one was left in. VERIFIED (no other
+  store). The UI init sorts on key 1, the name (`0x4000d667`), `sortDir` 0.
+  VERIFIED (asm).
+- A server joins the display list by binary insertion (`0x4000b790`..
+  `0x4000b7d3`, TA's `UI_BinaryServerInsertion`: a compare of 0 inserts at
+  the probe, only a 1 moves right). VERIFIED (asm).
+- `LAN_CompareServers` (trap `0x62`, CoDMP.exe `0x417d40`, arguments source,
+  key, `sortDir`, the two entries) takes keys 0..5, the six columns: 0 a
+  `pswrd` after none (`+0xb4`), 1 the hostname and 2 the mapname by
+  `Q_stricmp` (`0x44ab30` to `0x44aa90`, 99999: a-z folded to upper over
+  signed chars, so `[`, `^` and `_` come after the letters), 3 `clients`
+  (`+0x98`) and 5 the ping (`+0xa8`) as ints, 4 the game type (`+0x78`) by
+  `Q_stricmp`'s sign. A tie returns 0; `sortDir` negates the result
+  (`0x417dfa`..`0x417e16`). VERIFIED (asm). The strings are the raw 32-byte
+  fields, colour codes kept. INFERRED (the field layout, section 8).
+- 1.5's and UO's compare add a tie chain and the alphanumeric name compare
+  (`cod15-protocol-diff.md` 11).
+- vcod: `Browser::rows` sorts with `compare_v1`/`compare_v5` under
+  `Browser::sort_key` and `sort_dir`, `ServerSort` through
+  `Browser::server_sort`. Its sort is stable, so entries that compare equal
+  keep the list's order where retail's insertion and qsort put them at their
+  probes.
+
 ## 7. Local servers (`localservers`)
 
 - `CL_LocalServers_f` (CoDMP.exe `0x413710`, registered at `0x428840` as
@@ -649,7 +679,12 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   `fav_message_popmenu` shows `ui_favorite_message`.
 - vcod reads the favourites block at start and writes it back after every
   add and delete and at the end of a Favorites refresh, keeping every other
-  byte of an existing file. With no file it writes a 412688-byte one with
+  byte of an existing file. It reads the Internet block at start too, each
+  entry showing its saved row while its ping is above 0, and writes it at
+  the end of an Internet refresh: the rows and pings as they stand, 0 for a
+  server that timed out, -1 for one never answered. Retail writes the whole
+  file at UI shutdown instead. On 1.1 the overflow block and its count stay
+  as read. With no file it writes a 412688-byte one with
   empty Internet and address lists. An entry vcod cannot address (IPX,
   loopback) is kept as read. A reply's hostname, map, counts and ping go
   into the entry, as `CL_SetServerInfo` updates every list holding the
@@ -830,8 +865,7 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   `menu/art/unknownmap` draws nothing.
 - The Internet list stops at retail's size: 2048 entries plus the `0x800`
   overflow addresses on 1.1, 20000 on 1.5, UO and CoD2 (section 8).
-- Not done: the Internet list's cache in `servercache.dat` (section 8;
-  vcod's Internet list lives for one run), `focusColor`'s pulse (section
+- Not done: `focusColor`'s pulse (section
   20). The server, map
   and Mods lists draw retail's scroll bar (section 19).
 

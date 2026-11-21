@@ -17,11 +17,12 @@ Front end:
   broadcast to ports 28960-28963. Internet is what `master.cod.pm` lists
   on port 20510 for the install's protocol (1 on 1.1, 6 on 1.5), asked at
   most once a second; a server whose `getinfo` names another protocol is
-  dropped. Favorites live in `servercache.dat` beside `CoDMP.exe`, retail's
-  file.
+  dropped. Favorites and the last Internet list live in `servercache.dat`
+  beside `CoDMP.exe`, retail's file, so Internet opens on the last list
+  until a refresh.
 - The browser pings, filters (game type too), shows each source's last
-  refresh, sorts by column, joins on double-click, and runs the stock
-  password, server info, filter and favourite popups.
+  refresh, sorts by column as retail does, joins on double-click, and runs
+  the stock password, server info, filter and favourite popups.
 - Losing the server drops you back on the menu with the localized reason
   in the stock error popup.
 - In a game, Esc opens the script menu; its Main Menu tab opens the stock

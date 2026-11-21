@@ -3,9 +3,9 @@
 //! `LAN_SaveServersToCache`; docs/research/cod11-front-end.md 8,
 //! "Favourites", and "The other games' caches"). Two file shapes: 1.1's,
 //! and the one 1.5, UO, CoD2 and 1.7 share with their own entry sizes and
-//! version words. vcod writes only the favourites and leaves every other
-//! byte as it found it; a file that is not a cache of the install's own
-//! layout it neither reads nor writes.
+//! version words. vcod writes the favourites and the Internet list and
+//! leaves every other byte as it found it; a file that is not a cache of
+//! the install's own layout it neither reads nor writes.
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -206,6 +206,17 @@ const MAX_CLIENTS_11: usize = 0x9c;
 const PING_11: usize = 0xa8;
 const PASSWORD_11: usize = 0xb4;
 
+/// 1.5's and UO's byte fields (CoDMP.exe 1.5 `LAN_GetServerInfo` 0x4196d0,
+/// CoDUOMP.exe 0x41ac2c), then the short ping; their strings sit at
+/// [`Layout::hostname`] and the offsets [`Entry::strings_15`] gives.
+const CLIENTS_15: usize = 0x15;
+const MAX_CLIENTS_15: usize = 0x16;
+const PASSWORD_15: usize = 0x19;
+const HARDWARE_15: usize = 0x1e;
+const MOD_15: usize = 0x1f;
+const PB_15: usize = 0x20;
+const PING_15: usize = 0x26;
+
 impl Entry {
     /// What `LAN_AddServer` fills in: the 20-byte `netadr_t` (type, IP,
     /// big-endian port at [`Layout::port_at`]), the name cut to 31 bytes,
@@ -254,20 +265,84 @@ impl Entry {
         Entry { layout, bytes }
     }
 
-    /// What an `infoResponse` writes over a 1.1 cached server
-    /// (`CL_SetServerInfo`): the row's fields and the ping. The later
-    /// layouts keep the entry as read or added.
+    /// The map's and the game type's string fields on 1.5 and UO, and the
+    /// game type's length (16; the others are 32).
+    fn strings_15(&self) -> (usize, usize) {
+        let shift = self.layout.hostname() - 0x2a;
+        (0x4a + shift, 0x82 + shift)
+    }
+
+    /// What an `infoResponse` writes over a cached CoD1 server
+    /// (`CL_SetServerInfo`): the row's fields and the ping. CoD2's and
+    /// 1.7's keep the entry as read or added.
     pub fn set_info(&mut self, info: &super::master::ServerInfo, ping: i32) {
-        if self.layout != Layout::Cod11 {
-            return;
+        match self.layout {
+            Layout::Cod11 => {
+                self.set_str(self.layout.hostname(), &info.hostname);
+                self.set_str(MAPNAME_11, &info.mapname);
+                self.set_str(GAMETYPE_11, &info.gametype);
+                self.set_i32(CLIENTS_11, info.clients as i32);
+                self.set_i32(MAX_CLIENTS_11, info.max_clients as i32);
+                self.set_i32(PASSWORD_11, info.password as i32);
+                self.set_i32(PING_11, ping);
+            }
+            Layout::Cod15 | Layout::Uo => {
+                let (map, gametype) = self.strings_15();
+                self.set_str(self.layout.hostname(), &info.hostname);
+                self.set_str(map, &info.mapname);
+                self.set_str_n(gametype, 16, &info.gametype);
+                let b = &mut self.bytes;
+                b[CLIENTS_15] = info.clients as u8;
+                b[MAX_CLIENTS_15] = info.max_clients as u8;
+                b[PASSWORD_15] = info.password as u8;
+                b[HARDWARE_15] = info.hardware as u8;
+                b[MOD_15] = info.modded as u8;
+                b[PB_15] = info.punkbuster as u8;
+                b[PING_15..PING_15 + 2].copy_from_slice(&(ping as i16).to_le_bytes());
+            }
+            Layout::Cod2 | Layout::Cod4 => {}
         }
-        self.set_str(self.layout.hostname(), &info.hostname);
-        self.set_str(MAPNAME_11, &info.mapname);
-        self.set_str(GAMETYPE_11, &info.gametype);
-        self.set_i32(CLIENTS_11, info.clients as i32);
-        self.set_i32(MAX_CLIENTS_11, info.max_clients as i32);
-        self.set_i32(PASSWORD_11, info.password as i32);
-        self.set_i32(PING_11, ping);
+    }
+
+    /// The row and ping a CoD1 entry holds, as [`Entry::set_info`] writes
+    /// them; `None` on CoD2's and 1.7's.
+    pub fn info(&self) -> Option<(super::master::ServerInfo, i32)> {
+        use super::master::ServerInfo;
+        let host = self.hostname();
+        match self.layout {
+            Layout::Cod11 => Some((
+                ServerInfo {
+                    hostname: host,
+                    mapname: self.str(MAPNAME_11),
+                    gametype: self.str(GAMETYPE_11),
+                    clients: self.i32(CLIENTS_11).max(0) as u32,
+                    max_clients: self.i32(MAX_CLIENTS_11).max(0) as u32,
+                    password: self.i32(PASSWORD_11) != 0,
+                    ..ServerInfo::default()
+                },
+                self.i32(PING_11),
+            )),
+            Layout::Cod15 | Layout::Uo => {
+                let (map, gametype) = self.strings_15();
+                let b = &self.bytes;
+                Some((
+                    ServerInfo {
+                        hostname: host,
+                        mapname: self.str(map),
+                        gametype: self.str_n(gametype, 16),
+                        clients: b[CLIENTS_15].into(),
+                        max_clients: b[MAX_CLIENTS_15].into(),
+                        password: b[PASSWORD_15] != 0,
+                        hardware: b[HARDWARE_15].into(),
+                        modded: b[MOD_15] != 0,
+                        punkbuster: b[PB_15] != 0,
+                        ..ServerInfo::default()
+                    },
+                    i16::from_le_bytes([b[PING_15], b[PING_15 + 1]]).into(),
+                ))
+            }
+            Layout::Cod2 | Layout::Cod4 => None,
+        }
     }
 
     fn i32(&self, at: usize) -> i32 {
@@ -279,16 +354,24 @@ impl Entry {
     }
 
     fn str(&self, at: usize) -> String {
-        let field = &self.bytes[at..at + STRING];
-        let end = field.iter().position(|&b| b == 0).unwrap_or(STRING);
+        self.str_n(at, STRING)
+    }
+
+    fn str_n(&self, at: usize, len: usize) -> String {
+        let field = &self.bytes[at..at + len];
+        let end = field.iter().position(|&b| b == 0).unwrap_or(len);
         crate::text::latin1(&field[..end])
     }
 
     /// `Q_strncpyz` into a 32-byte field: at most 31 bytes and a NUL.
     fn set_str(&mut self, at: usize, s: &str) {
-        let field = &mut self.bytes[at..at + STRING];
+        self.set_str_n(at, STRING, s);
+    }
+
+    fn set_str_n(&mut self, at: usize, len: usize, s: &str) {
+        let field = &mut self.bytes[at..at + len];
         field.fill(0);
-        for (d, c) in field[..STRING - 1].iter_mut().zip(s.chars()) {
+        for (d, c) in field[..len - 1].iter_mut().zip(s.chars()) {
             *d = c as u32 as u8;
         }
     }
@@ -353,24 +436,82 @@ fn entries(layout: Layout, file: &[u8], count_at: usize, base: usize, cap: usize
 /// favourites read through [`read_favorites`]. `None` back when `old` is
 /// not a cache of `layout`: that file is left alone.
 pub fn write_favorites(layout: Layout, old: Option<&[u8]>, favorites: &[Entry]) -> Option<Vec<u8>> {
+    let (at, base) = (layout.favorite_count_at(), layout.favorites_at());
+    let out = write_block(
+        layout,
+        old,
+        favorites,
+        at,
+        base,
+        MAX_FAVORITES,
+        layout.max_favorites(),
+    );
+    debug_assert!(out.as_ref().is_none_or(|out| {
+        read_favorites(layout, out)
+            .is_some_and(|r| r.len() == favorites.len().min(layout.max_favorites()))
+    }));
+    out
+}
+
+/// `old` with its Internet list replaced by `servers`, as
+/// [`write_favorites`] writes the favourites: at most 2048 on 1.1 (its
+/// overflow block is left as it was) and 19999 on the later layouts, whose
+/// loaders refuse a count of 20000.
+pub fn write_internet(layout: Layout, old: Option<&[u8]>, servers: &[Entry]) -> Option<Vec<u8>> {
+    let (cap, keep) = match layout {
+        Layout::Cod11 => (MAX_GLOBAL_11, MAX_GLOBAL_11),
+        _ => (MAX_GLOBAL, MAX_GLOBAL - 1),
+    };
+    write_block(
+        layout,
+        old,
+        servers,
+        layout.internet_count_at(),
+        HEADER,
+        cap,
+        keep,
+    )
+}
+
+/// One list block of `old` replaced: its count int at `count_at`, `cap`
+/// records at `base`, `keep` of `entries` written.
+fn write_block(
+    layout: Layout,
+    old: Option<&[u8]>,
+    entries: &[Entry],
+    count_at: usize,
+    base: usize,
+    cap: usize,
+    keep: usize,
+) -> Option<Vec<u8>> {
     let mut out = match old {
         Some(f) if layout.valid(f) => f.to_vec(),
-        Some(f) if layout.migrates(f) => layout.fresh(),
+        Some(f) if layout.migrates(f) => {
+            let favs = read_favorites(layout, f)?;
+            let at = layout.favorite_count_at();
+            write_block(
+                layout,
+                None,
+                &favs,
+                at,
+                layout.favorites_at(),
+                MAX_FAVORITES,
+                layout.max_favorites(),
+            )?
+        }
         Some(_) => return None,
         None => layout.fresh(),
     };
-    let favorites: Vec<&Entry> = (favorites.iter())
+    let entries: Vec<&Entry> = (entries.iter())
         .filter(|e| e.layout == layout)
-        .take(layout.max_favorites())
+        .take(keep)
         .collect();
-    let at = layout.favorite_count_at();
-    out[at..at + 4].copy_from_slice(&(favorites.len() as i32).to_le_bytes());
-    let (base, size) = (layout.favorites_at(), layout.entry());
-    out[base..base + MAX_FAVORITES * size].fill(0);
-    for (i, e) in favorites.iter().enumerate() {
+    out[count_at..count_at + 4].copy_from_slice(&(entries.len() as i32).to_le_bytes());
+    let size = layout.entry();
+    out[base..base + cap * size].fill(0);
+    for (i, e) in entries.iter().enumerate() {
         out[base + i * size..base + (i + 1) * size].copy_from_slice(&e.bytes);
     }
-    debug_assert!(read_favorites(layout, &out).is_some_and(|r| r.len() == favorites.len()));
     Some(out)
 }
 
@@ -592,6 +733,37 @@ mod tests {
         }
         assert_eq!(read_favorites(Layout::Uo, &old), None);
         assert_eq!(write_favorites(Layout::Uo, Some(&old), &[]), None);
+    }
+
+    /// The Internet list writes beside the favourites and reads back; the
+    /// later layouts keep 19999, a count their loaders take.
+    #[test]
+    fn the_internet_list_round_trips_beside_the_favourites() {
+        let a: SocketAddrV4 = "10.0.0.5:28961".parse().unwrap();
+        for layout in [Layout::Cod11, Layout::Cod15, Layout::Uo] {
+            let favs = write_favorites(layout, None, &[Entry::new(layout, a, "Home")]).unwrap();
+            let mut e = Entry::new(layout, a, "");
+            let info = crate::net::master::ServerInfo {
+                hostname: "x".repeat(40),
+                gametype: "a_long_game_type_name".into(),
+                clients: 7,
+                ..Default::default()
+            };
+            e.set_info(&info, 123);
+            let file = write_internet(layout, Some(&favs), &[e]).unwrap();
+            assert_eq!(read_favorites(layout, &file).unwrap()[0].hostname(), "Home");
+            let (back, ping) = read_internet(layout, &file).unwrap()[0].info().unwrap();
+            assert_eq!((back.hostname.len(), back.clients, ping), (31, 7, 123));
+            // 1.5's game type field is 16 bytes.
+            let cut = if layout == Layout::Cod11 { 21 } else { 15 };
+            assert_eq!(back.gametype, info.gametype[..cut], "{layout:?}");
+        }
+        let many = vec![Entry::new(Layout::Cod15, a, "x"); MAX_GLOBAL];
+        let file = write_internet(Layout::Cod15, None, &many).unwrap();
+        assert_eq!(
+            read_internet(Layout::Cod15, &file).unwrap().len(),
+            MAX_GLOBAL - 1
+        );
     }
 
     #[test]

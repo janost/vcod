@@ -254,7 +254,9 @@ impl Ui {
                 }
             }
             "serversort" => {
-                self.browser.sort = args.get(1).and_then(|c| c.parse().ok());
+                if let Some(c) = args.get(1).and_then(|c| c.parse().ok()) {
+                    self.browser.server_sort(c);
+                }
             }
             // 1.5's opens `joinpb_popmenu` on a `pb` server while
             // `cl_punkbuster` is 0 (ui_mp_x86.dll 1.5 0x4000b124), whose Yes
