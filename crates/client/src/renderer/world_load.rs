@@ -213,14 +213,21 @@ impl Renderer {
         let white_view = &self.white_view;
         let white_lightmap = &self.white_lightmap;
 
-        // Per-material draw decision: authored blocks classify from their
-        // parsed surface bits, implicit names from the gameplay prefixes.
-        let kinds = vcod_common::sun::material_kinds(&self.shader_lib, bsp);
-        let active_sky = vcod_common::sun::active_sky(&self.shader_lib, bsp, &kinds);
-
-        // Props (misc_model entities) are baked to world space on the CPU in
-        // the same vertex format and extend the map's buffers.
-        let (mut indices, batches, soup_ranges) = mesh::build_batches(bsp, &kinds);
+        // The leaf lights' trace world builds beside the batches.
+        let (kinds, active_sky, (mut indices, batches, soup_ranges), light_world) =
+            std::thread::scope(|sc| {
+                let light_world = sc.spawn(|| StaticLighting::collision_for(bsp));
+                // Per-material draw decision: authored blocks classify from
+                // their parsed surface bits, implicit names from the
+                // gameplay prefixes.
+                let kinds = vcod_common::sun::material_kinds(&self.shader_lib, bsp);
+                let active_sky = vcod_common::sun::active_sky(&self.shader_lib, bsp, &kinds);
+                // Props (misc_model entities) are baked to world space on the
+                // CPU in the same vertex format and extend the map's buffers.
+                let built = mesh::build_batches(bsp, &kinds);
+                let light_world = vcod_common::laps::joined(light_world);
+                (kinds, active_sky, built, light_world)
+            });
         let mut soup_model = vec![0u32; bsp.soups.len()];
         for (mi, m) in bsp.models.iter().enumerate().skip(1) {
             let first = m.first_soup as usize;
@@ -232,7 +239,7 @@ impl Renderer {
             bail!("map has no drawable surfaces");
         }
         laps.lap("batches");
-        let mut lighting = StaticLighting::new(bsp);
+        let mut lighting = StaticLighting::with_collision(bsp, light_world);
         let lib = &self.shader_lib;
         let cod2 = fs.game() == vcod_common::game::Game::Cod2;
         self.fog.radial = cod2;
