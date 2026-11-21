@@ -2,7 +2,7 @@
 
 vcod-server can fill a server with bots in all four games: CoD 1.1 and
 1.5, United Offensive, CoD2 1.3 and CoD4 1.7. Retail has none, so
-everything here is vcod's own, faults included. A bot is a real client: it takes a slot,
+everything here is vcod's own. A bot is a real client: it takes a slot,
 joins through the stock menus, and shows in the scoreboard and in
 `status` like anyone else. Retail clients see bots as ordinary players.
 
@@ -93,8 +93,7 @@ A change applies within half a second.
 ## Skill
 
 Four levels set how fast a bot reacts and turns, how well it aims, how
-long it remembers a lost enemy, how far it hears and how wide it sees
-(`crates/server/src/bots/skill.rs`):
+long it remembers a lost enemy, how far it hears and how wide it sees:
 
 | Level | Name | Reaction | Turn rate | Walking turn | Aim error at first sight, settled | Hearing | Sight cone |
 |---|---|---|---|---|---|---|---|
@@ -132,7 +131,8 @@ rcon addbot axis 4 skill 0
 rcon addbot allies 4 skill 3
 ```
 
-How the levels play against each other: [research/bot-combat.md](research/bot-combat.md) section 3.
+How the levels play against each other:
+[research/bot-combat.md](research/bot-combat.md) section 3.
 
 ## Minimum player count
 
@@ -173,363 +173,166 @@ differ by at most one.
 
 ## Names
 
-A bot is named `[BOT] <name>`, drawn from a pool of over a hundred in
-`crates/server/src/botmgmt.rs` (`[BOT] Sir Camps-a-Lot`, `[BOT]
-NadeSpammer`, `[BOT] PronePatrol`). No two connected bots share a name;
-past the pool's unused names a number is added (`[BOT] NadeSpammer 2`).
-Every name fits retail's 31-byte limit with the prefix and a two-digit
-number. The draw has its own random generator, so `vc_bot_names` never
-changes how a seeded server plays. `status` prints a bot's address in
-retail's form for a test client.
+A bot is named `[BOT] <name>`, drawn from a pool of over a hundred
+(`[BOT] Sir Camps-a-Lot`, `[BOT] NadeSpammer`, `[BOT] PronePatrol`). No
+two connected bots share a name; past the pool's unused names a number
+is added (`[BOT] NadeSpammer 2`). Every name fits retail's 31-byte limit
+with the prefix and a two-digit number. The draw has its own random
+generator, so `vc_bot_names` never changes how a seeded server plays.
+`status` prints a bot's address in retail's form for a test client.
 
 ## How a bot thinks
 
-The brain is hand-written rules: no learning, no per-map script. All four
-games share one brain (`crates/server/src/bots.rs`).
+The brain is hand-written rules, with no learning and no per-map script,
+and all four games share it. Retail has no bots, so vcod's own seeded
+matches judge a change: it lands only when stalls drop and kills hold
+([research/bot-combat.md](research/bot-combat.md) section 1).
 
-### The loop
+Each server frame (50 ms) the server fills a view for every bot, and the
+brain answers with one usercmd: move keys, view angles, buttons and the
+selected weapon. That cmd goes through the game's own movement code, the
+path a human's cmd takes. The brain reads the view and nothing else, so
+it cannot see through a wall or skip a physics rule. The view holds the
+bot's own state, the enemies a line-of-sight trace reaches inside its
+sight cone, the gunfire it hears and the objective's state.
 
-Each server frame (50 ms) the server fills a view for every bot and asks
-its brain for one usercmd: move keys, view angles,
-buttons and the selected weapon. The server runs that cmd through the
-game's own `ClientThink` and pmove, the path a human's cmd takes.
+Each tick a bot does the first of these that applies:
 
-The brain reads the view and nothing else. It cannot move the body, see
-through a wall or skip a physics rule, so a player could do anything a
-bot does with the same keys. If one kills you, it earned it. The view holds:
-
-- the bot's own state (health, ammo, weapons, stance, ground, ladder)
-- the enemies a line-of-sight trace reaches inside its sight cone
-- gunfire within its hearing range
-- the objective's state for the gametype
-- probes the brain asks for on some ticks, such as a drop or a lob ahead
-
-### What a tick decides
-
-`think` stops at the first case that applies:
-
-1. Dead: waits 1.5 s, then presses use once a second until the stock
+1. Dead: it waits 1.5 s, then presses use once a second until the stock
    script respawns it.
-2. Spectating or at intermission: presses nothing.
+2. Spectating or at intermission: it presses nothing.
 3. In a UO vehicle seat: the vehicle code drives or guns.
-4. Stuck: a bot that has stood 10 s where the graph knows no way out (a
-   dead end, a pit, a ring of parked vehicles), or has had nothing to
-   fire for 10 s, kills itself to respawn. Where a death sits out the
-   round (`sd`, `re`) it holds on instead.
-5. A grenade throw in progress: switch to the grenade, pull back, cook
-   where the game has a cook, throw, switch back.
-6. Otherwise it fights if it has an enemy, plays the objective if there
-   is one, and roams toward fights if not.
+4. Stuck for 10 s where the graph knows no way out, or with nothing to
+   fire for 10 s: it kills itself to respawn, except where a death sits
+   out the round (`sd`, `re`).
+5. In a grenade throw: it switches to the grenade, pulls back, cooks
+   where the game has a cook, throws and switches back.
+6. Otherwise it fights an enemy, plays the objective, or roams toward
+   fights.
 
 ### Fighting
 
-- It spots a new enemy only inside its sight cone; a bot in a vehicle
-  seat sees all round. It keeps the enemy it fights while he stays in
-  sight; a new one takes over only under 60% of the current one's range.
-- Whoever just hit it comes first. Hit by someone it cannot see, it
-  turns toward the shot. Gunfire it hears draws it from any direction.
-- A new target costs a reaction delay; switching back to a recent enemy
-  or onto a fresh attacker costs less.
-- It fires before its aim settles: automatics spray early, bolt rifles
-  wait for a better line. On CoD1 and CoD2 it aims by where the gun
-  points, and pulls sway and recoil back late and in part, as a hand does
-  ([research/bot-combat.md](research/bot-combat.md) section 18).
-- Around the shooting it strafes on its sights, backs off a close enemy
-  with a bolt rifle, lies down at long range, takes cover and leans,
-  retreats when hurt, and peeks for or hunts an enemy it lost.
-- It throws frags at an enemy behind cover or one just lost, on a lob
-  whose arc comes down by him, and runs from a live frag near it. With
-  friendly fire on it throws none that would burst by a playing teammate.
+- It spots enemies inside its sight cone and keeps the one it fights
+  while he stays in sight. Whoever just hit it comes first, and gunfire
+  it hears draws it from any direction (bot-combat.md section 8).
+- A new target costs a reaction delay. It fires before its aim settles,
+  and on CoD1 and CoD2 it aims by where the gun points, pulling sway and
+  recoil back late and in part, as a hand does (section 18).
+- Around the shooting it strafes, takes cover and leans, retreats when
+  hurt, and peeks for or hunts an enemy it lost (sections 4, 5 and 10).
+- It throws frags at an enemy behind cover or one just lost, and runs
+  from a live frag near it. With friendly fire on it throws none that
+  would burst by a teammate (section 12).
 
 ### Getting around
 
-- At map load the server builds a navigation graph. It floods the
-  walkable space from every spawn point; each link (walk, jump, drop,
-  ladder, mantle) goes in only after a simulated body has travelled it
-  under the game's movement rules.
-- A* plans over the graph. Searches share a per-tick budget and may take
-  several ticks, so many bots planning at once do not spike the frame.
-- Each bot's cover, route and drop and wall probes are worked out on up to
-  four threads beside the server's own; the server keeps a result only
-  where the bot's turn reads what it was worked out from, so every bot
-  moves as it would on one thread
-  ([usage.md](usage.md#environment-variables) sets the thread count).
-- The follower turns the path into keys: it steers at the next node,
-  jumps by the rule that proved the jump, waits out the jump cooldown,
-  climbs at the rate the ladder was proven at, and takes a risky drop
-  only when no other route exists. Out of a fight the view turns at the
-  walking rate while the keys keep the path; on open floor it heads
-  straight for a node further along.
-- A teammate standing still in the way, or a parked UO vehicle, blocks
-  the nodes it covers for a while, and the bot plans round it. On CoD2
-  and CoD4 a bot held up for a second plans round the teammate for 10 s,
-  and the teammate steps aside.
-- On CoD1, 1.5 and UO any body in the way, teammate, enemy or human,
-  is planned round once it has held the bot up for a fifth of a second,
-  or walked through when no way goes round. Of two meeting head-on with
-  no way round, one stands aside on a node off the line until the other
-  has passed. On a ladder the one backing down climbs back to the top,
-  and the climber under it holds still on the rungs until it is clear.
+- At map load the server builds a navigation graph from every spawn
+  point. Each link (walk, jump, drop, ladder, mantle) goes in only after
+  a simulated body has travelled it under the game's movement rules
+  ([research/bot-navigation.md](research/bot-navigation.md) section 2).
+- A bot follows its path with the keys a player would press, and takes a
+  risky drop only when no other route exists (bot-navigation.md section
+  3). Paths and probes are worked out on up to four threads without
+  changing how any bot moves ([usage.md](usage.md#environment-variables)).
+- It plans round a teammate standing in its way or a parked UO vehicle,
+  and on CoD1, 1.5 and UO round any body. Two bots meeting head-on with
+  no way round take turns, on a ladder too (section 3.8).
 
-### Objectives
+### Team play
 
-Each gametype has its own goal rules: take and carry the bomb or flag,
-plant and defuse, capture and hold a flag or the radio. The objective
-decides where the bot walks; an enemy in sight takes over, and the bot
-goes back after the fight. A team spreads its bots over different
-routes, reshuffles who guards what each round, sends all its S&D
-attackers to one site and covers a planter
+Each gametype has its own goal: take and carry the bomb or flag, plant
+and defuse, capture and hold a flag or the radio. An enemy in sight
+takes over, and the bot goes back to the objective after the fight. A
+team spreads its bots over different routes
 ([research/bot-objectives.md](research/bot-objectives.md) section 9).
-On these levels a bot also keeps its distance from its own side. Out
-of a fight it walks while a teammate heading the same way is less than
-200 units ahead of it, and a one-life round starts with each bot holding
-still for its own 0 to 2 s; from four S&D attackers up one leaves 2 to
-4 s late as a rear guard. On CoD 1.1, 1.5 and UO each bot also plans
-with its own small random bias over the map, so ways of about the same
-length split the team, and in S&D one attacker flanks from three
-attackers up and two from six: it goes for the same site, but round the
-main group's way when one up to five times as long exists (section 9.1).
-
-Round an objective a team does not stand in one spot
-([research/bot-objectives.md](research/bot-objectives.md) section 13).
-Guards of a site, a planted bomb, a radio or a flag each take their own
-post round it, at least 128 units from a teammate's, picked where the
-ways in cannot see them and from where they see the objective. Each
-crouches where that hides it, watches the objective, and moves to
-another post after 8 to 16 s. Takers of a domination flag or the radio
-spread over the zone the same way. Attackers and takers far from their
-objective (1200 units or more) are each sent by a different way in
-before they close on it, and in S&D the defenders all go to a site once
-one of them sees an enemy near it. CoD2 and CoD4 bots spread their routes
-over the map as the CoD1 ones do.
-
-Most guards hold from farther out
-([research/bot-objectives.md](research/bot-objectives.md) section 14):
-S&D defenders before a plant, the planters round their bomb, `ctf`
-defenders, the holders of a `dom` flag or the radio. One of a side
-stays by the objective; the rest take posts 400 to 1500 units out on
-the ways in, 400 or more apart on different lanes, watching down the
-lane, crouched behind cover where there is some. A guard seen or shot
-on its post leaves it for another. When an enemy is seen near the
-objective, a shot is heard near it, a teammate dies there or an enemy
-stands on it (a defuse, the radio's capture), half the outlying guards,
-the nearest first and a second or so apart, walk back in by their own
-ways, slowed and looking at the objective, crouched for the last 300
-units; the rest hold. After a plant the defenders walk in the same way.
-In `ctf` the two bots nearest a sighting of the enemy carrying their
-flag go after him. A carrier keeps running home through a fight, gun on
-the enemy; home while its own flag is away, it returns that flag if it
-lies within 1000 units, else waits in cover near its base until the
-flag is back. On the move a bot keeps 360 units behind a teammate
-ahead, and takes its own way in from 700 units out.
+Guards take their own posts round an objective, most of them farther out
+on the ways in, and half walk back in when it comes under attack
+(sections 13 and 14).
 
 ### Yells
 
 On CoD 1.1, 1.5, UO and CoD2 a bot yells through the stock quick
-messages, the rows a player picks from the `V` menu
-([research/cod11-quick-chat.md](research/cod11-quick-chat.md)). The
-gametype script plays the team's voice line (American, British, Russian
-or German), puts up the quick-message head icon and prints the team chat
-line, so every client hears it, retail ones included.
-
-- "Follow me!" or "Move in!" as an `sd` or `re` round starts.
-- "Enemy spotted!" on a new enemy, not on one it lost a moment ago.
-- "Grenade!" as a frag leaves its hand.
-- "Enemy down!" when its hit was the last on an enemy who died.
-
-Each is a roll: 40, 30, 70 and 40 in 100. A bot keeps quiet for 8 s
-after its own yell, and its team for 2.5 s after any of theirs, so one
-voice goes out, not the whole squad. Only a living bot yells, and nobody
-in `dm`, which has no sides. CoD4 bots send none.
-
-### One brain, four games
-
-A thin adapter per game sits between the brain and the server. It
-rewrites the cmd into the game's button bits, renumbers the game's
-weapons for the brain, answers the game's menus and fills the view from
-the game's playerstate. Behaviour differs by game, never by map: each
-game sets a few switches on the shared driver (who gives way, who spreads
-out, who plans round bodies, who probes with pmove).
-
-### How a change is judged
-
-Retail has no bots, so for once there's no oracle. A behaviour
-change runs `bot_match` on the same seeds before and after and lands
-only when stalls drop and kills hold. The tool is `bot_match`
-([docs/dev/testing.md](dev/testing.md#bots)); results go in
-[research/bot-combat.md](research/bot-combat.md) and
-[research/bot-objectives.md](research/bot-objectives.md).
+messages, the rows a player picks from the `V` menu, so every client
+hears the team's voice line, retail ones included: "Follow me!" or "Move
+in!" as an `sd` or `re` round starts, "Enemy spotted!", "Grenade!" and
+"Enemy down!". Not every time, and one voice a team at a time
+(bot-combat.md section 21). CoD4 bots send none.
 
 ## Per game
 
+Behaviour differs by game, never by map.
+
 ### CoD 1.1, 1.5 and United Offensive
 
-- Gametypes: every stock one, `dm`, `tdm`, `sd`, `re` and `bel`, and UO's
-  `ctf`, `dom`, `hq` and `bas`.
-- Objectives: S&D plants and defuses; in Retrieval the team escorts the
-  carrier and holds the goal ahead of him, an escort steps off a carrier
-  it stands on, and a dropped objective
-  its clock sends home before a bot could run to it is awaited where it
-  comes back; UO's flags, radio and base
-  breaches as in [research/bot-objectives.md](research/bot-objectives.md)
-  sections 4 to 7.
-- `bas`: a bot making for a charge room where a teammate died in the
-  last 2 min stops and throws a frag into it before going in, once a
-  life, when it finds a lob in; the stock bunkers' rooms under a floor
-  rarely give one.
-- UO grenades are cooked; 1.1 has no cook.
-- UO sprint: a bot sprints only on a level, straight run with no jump or
-  drop.
-- UO vehicles: a bot with no fight and no objective close by walks to a
-  vehicle near it and gets in with the use key. A driver drives toward
-  its objective or an enemy, waits a moment for a teammate walking up to
-  board, holds or backs off for a teammate in its way, and in a tank
-  stops to lay the turret on an enemy or enemy vehicle and fire. In `bas`
-  a bot after a launcher takes a tank near it instead, and its driver
-  shells the other side's standing bases; a driver of the other side's
-  tank waits out the script's 15 s capture first. A gunner
-  fires the vehicle's machine gun. A bot on foot holding a rocket
-  launcher fires it at an enemy-crewed vehicle in sight. Bots get out
-  when they arrive, where the hull can get no nearer, when stuck, or
-  after 90 s (bot-objectives.md sections 10 and 14.10).
+- Gametypes: every stock one, `dm`, `tdm`, `sd`, `re` and `bel`, and
+  UO's `ctf`, `dom`, `hq` and `bas` (bot-objectives.md sections 4 to 7).
+- In Retrieval the team escorts the carrier and holds the goal ahead of
+  him.
+- In `bas` a bot throws a frag into a charge room where a teammate just
+  died before it goes in, when it finds a lob in.
+- UO grenades are cooked; 1.1 has none to cook. A UO bot sprints only on
+  a level, straight run.
+- UO vehicles: a bot with nothing nearer to do boards a vehicle near it.
+  Drivers head for the objective or an enemy and wait for a teammate
+  walking up. A tank stops to shell enemies, and in `bas` the other
+  side's bases. Gunners fire the machine gun, and a bot on foot fires a
+  rocket launcher at an enemy-crewed vehicle (bot-objectives.md section
+  10).
 - A bot on foot keeps out of a burning hull's reach until its second
-  blast, fight or no fight: inside it walks out, and outside it plans
-  round it and waits rather than walk into it (bot-objectives.md 10.10).
+  blast (section 10.10).
 
 Cannot:
 
-- Drive anywhere but along the infantry graph over ground the hull fits,
-  so a tank can still wedge itself. A driver backs off and gets out after
-  four stalls or 8 s without headway; a rider with nobody to shoot gives
-  up after the same 8 s; every rider leaves a hull that has scraped
-  something for 5 s, before the engine's 7 s stuck kill. A tank sliding
-  into a wall with nobody aboard still destroys itself.
+- Drive anywhere but along the infantry graph, so a tank can still wedge
+  itself. Its crew gets out before the engine's stuck kill, but a tank
+  sliding into a wall with nobody aboard still destroys itself (sections
+  10.3 and 10.4).
 - Change seats, use the hatch, or run an enemy over.
 - Fetch a rocket launcher outside `bas`.
 - Throw a satchel or call artillery at a `bas` base.
 
 ### CoD2
 
-- Gametypes: every stock one. Objective play in `sd`, `ctf` and `hq`:
-  attackers plant in a bombzone and the lead defender defuses, both by
-  holding use in the `trigger_use_touch`; a `ctf` bot takes the other
-  flag, returns its own and captures at home; an `hq` bot takes the radio
-  up and holds it (bot-objectives.md section 11).
-- Menus: `serverinfo_<gametype>` is answered `close`; the team menu
-  `autoassign` in `dm`, else alternately `allies` and `axis`; the weapon
-  menu with a weapon its nationality offers and the `scr_allow_*` cvars
-  allow, the one the fewest other bots carry, so a side spreads over the
-  menu.
-- A new level (`map`, a passed vote, `map_restart`, `fast_restart`,
-  `map_rotate`, a level end) keeps the bots; each answers the menus the
-  level opens again. A new map builds a new graph. An `sd` round opens no
-  menu and the bots play on.
-- Bots never vote and are not counted as voters, so one player's
+- Gametypes: every stock one, with objective play in `sd`, `ctf` and
+  `hq` (bot-objectives.md section 11).
+- Menus: it answers the gametype, team and weapon menus, taking the
+  weapon the fewest other bots carry. A new level keeps the bots, and
+  each answers the menus again (bot-objectives.md section 8.1).
+- Votes: bots never vote and are not counted as voters, so one player's
   `callvote` plus his own yes passes on a server full of bots
-  ([cod2-protocol.md](research/cod2-protocol.md) 3.4.2). Democracy, of a
-  kind.
-- Movement: the graph floods CoD2's collision (`SURF_LADDER` brushes as
-  ladders) under 1.5's movement rules, which CoD2's starts from. It keeps
-  no leap from a standstill. Every node is tried for a mantle in eight
-  directions with CoD2's own pmove; each climb that lands is a mantle
-  edge (mp_toujane 352, mp_carentan 334 in `dm`).
-- Weapons, read off the weapon file: a bolt rifle's cycle is `fireTime`
-  plus `rechamberTime` (kar98k 1330 ms), so it fights as a bolt rifle;
-  SMGs and automatic rifles fire bursts (2 to 7 ticks close, 1 to 3 past
-  800 units), semi-automatics tap at `fireTime`. Fully down a scope with
-  an enemy in sight it holds its breath for 3 s, short of the 4.5 s gasp.
-- Frags: the offhand frag key; CoD2's stock frag has no cook.
-- Smoke: a bot with a smoke grenade (the stock SMG and shotgun kits)
-  throws it a third of the way toward an enemy 400 to 1500 units off (at
-  least 250 out, 150 short of him), when it heads for a plant or defuse
-  within 800 units, covers a planting teammate, or starts a retreat. From
-  2 s to 35 s after the burst a cloud 150 units round and 48 up blocks
-  every bot's sight. Retail's crosshair smoke test (`SV_FX_GetVisibility`)
-  is not ported, so a human's crosshair names are not blocked.
-- Cover: it peeks with CoD2's leans (0.5 of the lean standing, as 1.5).
-  A hit is read off the playerstate: a new `damageEvent`, `damageYaw` and
-  `damagePitch`, the attacker the last client to hurt the bot.
-- Mounted guns, in `dm` and `tdm`: a bot that sees an enemy in a free
-  gun's arc, past 250 units from the gun, with a clear walk to the spot
-  behind it, mans it, fires on enemies in the arc and lets go after 4 s
-  with none (bot-combat.md section 14).
-- Dropped guns: with every primary dry and no enemy in sight it walks to
-  the nearest loaded gun lying within 600 units, the dry one in hand, and
-  takes it with use; a gun not taken in 6 s is passed over for 20 s.
-
-Measured (`MAPS=mp_toujane,mp_carentan,mp_burgundy`, seeds 1 and 2, six
-bots, 6000 ticks, `dm`, `tdm` and `sd`, 2026-10-23): 725 kills; hits per
-round 0.23 for SMGs and automatic rifles, 0.31 semi-automatics, 0.36 to
-0.37 bolt and scoped rifles; each skill level kills more than the one
-below and an expert side takes 70 to 84% of a `tdm`'s kills. Accuracy
-does not rise with the level: on CoD2's sights the gun's spread and kick
-are most of a miss. Blame the gun. Full tables and the earlier runs:
-[research/bot-measurements-cod2-cod4.md](research/bot-measurements-cod2-cod4.md).
+  ([research/cod2-protocol.md](research/cod2-protocol.md) section 3.4.2).
+- Movement: the graph floods CoD2's collision under 1.5's movement rules
+  and adds every mantle CoD2's own pmove climbs.
+- Weapons: bolt rifles fight as bolt rifles, automatics fire bursts, and
+  a scoped bot holds its breath. Frags go through the offhand key. Smoke
+  is thrown as cover and blocks every bot's sight, but not a human's
+  crosshair names (bot-combat.md section 22).
+- It mans mounted guns in `dm` and `tdm` (bot-combat.md section 14),
+  and with every gun dry it takes a loaded one lying near it.
 
 ### CoD4
 
-- Gametypes: `war`, `dm`, `sd`, `sab`, `dom` and `koth`. Bots enter a
-  fresh level 3 s past its first frame, as a loading client does, since
-  `koth`'s spawn script errors on an earlier spawn (as on retail).
-- Menus: the team menu alternately `allies` and `axis` (`autoassign` in
-  `dm`), then the class menu (`changeclass_marines`, `changeclass_opfor`)
-  through `changeclass` with a stock class (assault, spec ops, heavy
-  gunner, demolitions, sniper), the one the fewest other bots carry. A
-  new level, round or rotation keeps the bots; each answers the menus
-  again.
-- Weapons: 1.7 numbers every attachment as its own weapon, past the
-  brain's 63, so each bot's weapons are renumbered for its brain in the
-  order it picked them up (`bots::cod4::Arms`). The cmd's moves are sent
-  whole, as 1.7's wire carries only their sign.
-- Objectives (bot-objectives.md section 12): in `sd` and `sab` the bot
-  nearest a lying bomb takes it, the carrier plants at a zone through use
-  and the briefcase while the rest guard it, the nearest enemy defuses a
-  planted bomb and the planters guard it. In `dom` they take flags as in
-  UO; in `koth` they take the radio by standing in it and guard it. A bot
-  in a contested zone walks it until one side is dead or gone. A bot
-  that reaches an objective's spot and gets no nearer in 3 s guards round
-  it for 15 s before trying again.
+- Gametypes: `war`, `dm`, `sd`, `sab`, `dom` and `koth`.
+- Menus: the team menu, then the class menu with a stock class, the one
+  the fewest other bots carry. A new level, round or rotation keeps the
+  bots (bot-objectives.md section 8.1).
+- Objectives: the bomb in `sd` and `sab`, the flags in `dom`, the radio
+  in `koth` (bot-objectives.md section 12).
 - Movement: the graph floods the clip map under 1.5's movement rules and
-  adds the mantles 1.7's own pmove climbs, probing again from each
-  mantle's top (mp_crash: 8 458 nodes, 1 222 mantle edges, all 177 spawns
-  in one component). It keeps a mantle only where a bot running straight
-  at its landing is offered the climb, keeps no leap, and clips the
-  level's solid brush entities. A bot crouches when a climb forces it
-  (`EV_STANCE_FORCE_CROUCH`) and climbs on past a ladder's top.
-  A walk under 1.7's own pmove was tried: it killed 0.4% more and
-  stalled 3% more over six seeds of all maps, so it is off.
-- Frags: thrown through the frag key. A live frag under its cursor hint
-  with 1.5 s or more on the fuse is picked up and thrown back toward its
-  thrower, unless he is a teammate (else the enemy in sight).
-- Mounted SAWs, in `war` and `dm` only: a bot takes a free gun whose arc
-  covers the enemy it fights, or a lane its team saw an enemy in within
-  8 s, past 250 units from the gun, when the spot behind it is within
-  400 units, level and a clear walk. With no enemy for 20 s it may walk
-  over the graph to a gun on another floor within 800 units (one bot a
-  team, at most every 3 minutes). On the gun it turns 12 degrees a tick
-  onto the nearest visible enemy in the arc and fires within 2 degrees.
-  It lets go when flanked (an enemy outside the arc within 1 200 units)
-  or after 3 s with nobody in the arc, then takes no gun for 20 s.
-- Sight: an enemy behind a destructible car counts as seen only where a
-  round would get through (`Cod4Bots::shot_clear`): it traces the car's
-  collision triangles and skips a part `hidePart` removed, so a bot
-  shoots through an empty window frame. A round still goes through a
-  car's intact panels at reduced damage, which the sight does not count
-  on.
-- A dead bot that follows a teammate is left alone.
+  adds the mantles 1.7's own pmove climbs. It keeps no leap.
+- It throws frags, and throws live ones back.
+- It mans mounted SAWs in `war` and `dm`, and a destructible car blocks
+  its sight where it would stop a round (bot-combat.md section 23).
 
 Cannot:
 
 - Call in hardpoints (UAV, airstrike, helicopter) or use special
   grenades.
-- Compensate for gun sway; it holds its view on the enemy, which keeps
-  the turn sway and movement tilt small.
-- Make a few jump edges the graph proved under CoD1's movement rules;
-  a bot tries them until it gives up (bot-objectives.md 12.9).
+- Compensate for gun sway.
+- Make a few jump edges the graph proved under CoD1's movement rules; a
+  bot tries them until it gives up (bot-objectives.md section 12.9).
 
-Measured (`war` and `dm` on mp_backlot and mp_carentan, six bots, 6 000
-ticks, seeds 1 to 12, 2026-10-27): 2 284 kills, 8 637 hits, accuracy
-0.24 to 0.31, no script error. Full tables and how to measure:
+Kills and accuracy measured on CoD2 and CoD4:
 [research/bot-measurements-cod2-cod4.md](research/bot-measurements-cod2-cod4.md).
 
 ## Known limits
@@ -538,8 +341,8 @@ ticks, seeds 1 to 12, 2026-10-27): 2 284 kills, 8 637 hits, accuracy
   see it there. It takes no cover while planting, carrying or holding a
   capture zone, nor within 300 units of the enemy.
 - In cover it swaps between the spot's two ways out (both lean sides, or
-  standing and a crouched lean) from one peek to the next, sometimes
-  moves to the next spot while it reloads, and holds the spot for a time
-  set by its skill once its enemy is out of sight. To chase a lost enemy
-  it heads for a nearby spot that looks onto where he was, and gives up
-  sooner the higher its skill.
+  standing and a crouched lean) from one peek to the next, and sometimes
+  moves to the next spot while it reloads. Once its enemy is out of
+  sight it holds the spot for a time set by its skill. To chase a lost
+  enemy it heads for a nearby spot that looks onto where he was, and
+  gives up sooner the higher its skill.

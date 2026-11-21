@@ -119,8 +119,8 @@ The CoD1 view weapon: `cod11-combat.md` (its offsets), `xanim-v14-format.md` (th
 | Doc | Covers |
 |---|---|
 | [bot-navigation.md](bot-navigation.md) | The nav graph (stock maps carry no path nodes), following, memory and hearing; stall tables and build times (the census floors) |
-| [bot-objectives.md](bot-objectives.md) | What each gametype asks of a bot and the brain that plays it: CoD1, UO (vehicles included), CoD2 and CoD4 gametypes, bot management, team play |
-| [bot-combat.md](bot-combat.md) | Skill levels, the `bot_match` harness and its numbers (1), cover, retreat, aim, footwork, before and after tables |
+| [bot-objectives.md](bot-objectives.md) | What each gametype asks of a bot and the brain that plays it: CoD1, UO (vehicles included), CoD2 and CoD4 gametypes, bot management and the CoD2 and CoD4 menus (8), team play |
+| [bot-combat.md](bot-combat.md) | Skill levels, the `bot_match` harness and its numbers (1), cover, retreat, aim, footwork, yells (21), CoD2's and CoD4's arms (22, 23), before and after tables |
 | [bot-measurements-cod2-cod4.md](bot-measurements-cod2-cod4.md) | Older CoD2 and CoD4 `bot_match` runs, moved out of `docs/bots.md` (vcod's own measurements, no retail claims) |
 
 ## Formats

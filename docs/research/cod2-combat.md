@@ -2055,107 +2055,71 @@ file.
   damage or draws `rand()`. VERIFIED, the capture and the gate: each
   swing's event, hit location, damage and roll as retail's.
 
-Once in the gate's `GAPS`, both closed:
+#### 9.7.1 The melee's contact on a still body
 
-- "9.7 the melee's contact depth on a still body": six of the twelve
-  body contacts (`hit-melee` four, `hit-rocket-rand` two) sit 0.03 to
-  0.16 units deeper or shallower than retail's along the swing's own
-  line, and one such contact's normal gives another `eventParm`. The
-  legs and torso anims, the eye and the forward match retail's to the
-  printed digit, and the other six contacts match. VERIFIED, the gate.
-  The struck body's bones are posed a little off; why is not known.
-  `Melee_Trace` (Mac 0x1c823a) traces from `G_GetPlayerViewOrigin` along
-  `G_GetPlayerViewDirection` under `bulletPriorityMap`, mask 0x2802831,
-  as vcod does. VERIFIED, the decompile. In `hit-melee` retail's
-  shoulder, elbow and hand contacts (10250, 13250, 16250) sit 0.03 to
-  0.15 nearer the shooter than vcod's and the pelvis contact (19250) 0.08
-  farther, which reads as the target's upper body pitched a few tenths of
-  a degree further toward the shooter. INFERRED, the signs. The actor box
-  cull (9.5) and whole-packet cmds do not move them. VERIFIED, the gate.
-  The cause in `hit-melee` is the struck body's idle phase, not its
-  skeleton. With the target's `pb_stand_alert` (legs 153, 100 frames at
-  30 fps, a 3.3 s loop) sampled 3 frames (100 ms) further on, all six of
-  its body contacts print retail's digits, where they sat +0.157, +0.035,
-  +0.056 and -0.092 along the line (10250, 13250, 16250, 19250); 2.75 and
-  3.5 frames leave up to 0.007 and 0.014. VERIFIED, the gate with a
-  test-only shift of every node frame. The same shift on every capture
-  breaks `hit-torso`, `hit-legs`, `hit-smg` and others, so it is this
-  target's start and not the sampler. VERIFIED, the gate. The replay's
-  idle starts at its begin frame (6150, node time 0) and plays on when the
-  landing sets 153 again at 6250 (`legsAnim` 0x299); retail's reads as
-  started at 6050, 200 ms into the loop at 6250. INFERRED, the arithmetic.
-  What puts retail 100 ms ahead is not known. The tdm kill run's drops
-  read the same idle a step behind vcod's instead, its pose otherwise
-  retail's to the bit (cod2-protocol.md 15.7), so the two starts differ
-  in opposite senses. VERIFIED (gdb, the gates). There the cause is the
-  replayed joiner's spawn a frame early; retail's clip starts by the
-  rule vcod's clock runs (cod2-player-anims.md 7). VERIFIED (gdb). So
-  this target's start is likely its own spawn or begin frame against
-  retail's, not the clip's rule. INFERRED. The cause was the server's: it
-  posed a body whose playerstate carried no legs anim in the stance's
-  idle, so the target's idle was set at its spawn's own end frame, where
-  retail sets none and starts the idle at the next end frame
-  (cod2-player-anims.md 7). Posing no clip there, `hit-melee`'s four
-  contacts and its `eventParm` match retail's; the entry holds only
-  `hit-rocket-rand`'s two contacts (19650, 26550), which never moved with
-  the target's phase. VERIFIED (gdb, the gate). `BG_RunLerpFrameRate` (Mac
-  0x183492) gives a new legs clip a start time (`XAnimSetTime`, the
-  spread) only when it loops, has a non-zero `moveSpeed` (+0x44) and its
-  node's weight reads 0; the idle's `moveSpeed` is 0, so its set takes no
-  time of its own. VERIFIED, the decompile. The target's spawn snapshot
-  (6200) carries only the spawn think's 100 ms fall from `probe_vz` 1, so
-  the spawn is not earlier. INFERRED, the fall. That snapshot is the
-  target's sixth message, where the other captures' targets play from
-  their second or third (`move_probe.rs` records from the first snapshot
-  with `pm_type` 0 and a weapon), which points at the time between the
-  client's begin and its spawn. INFERRED. `hit-rocket-rand`'s two contacts
-  (19650, 26550, -0.035 and -0.032) do not move with the shift. VERIFIED,
-  the gate.
-  Closed: the replay began each client a frame early. Retail runs a
-  client's `begin` between frames and the script's `spawn` in the next
-  `G_RunFrame`, whose `ClientThink_real` stamps `commandTime` with that
-  frame's time: every capture's first playing snapshot carries a
-  `commandTime` equal to its own time. VERIFIED, the fixtures. The gate
-  began the client the frame before, so its idle ran a frame ahead: on a
-  retake of the recipe under gdb the target's `pb_stand_bombplant` read
-  0.67 at the 19350 swing in vcod against retail's 0.64. VERIFIED (gdb).
-  Begun in the snapshot's frame, all six of `hit-rocket-rand`'s contacts
-  print retail's digits (the last within 0.0001). VERIFIED, the gate.
-- "9.7 the look-at flag on a turned body": in `hit-melee` the target's
-  `pm_flags` 0x200000 (its look-at trace meeting the shooter, 9.2) is
-  set one snapshot where retail's is clear and clear one where retail's
-  is set, both while the shooter's view is turned off its body. INFERRED:
-  the same pose difference, on the shooter.
-  Closed, four causes, each read off retakes of `hit-melee` and
-  `hit-throw` under gdb (`tools/re/cod2_skel_gdb.py` with `CODSKEL_BT=1`):
-  - `Player_UpdateLookAtEntity` (lnxded 0x812200a) is called inside
-    `ClientEndFrame` (0x80f7516) at 0x80f7803, before
-    `BG_PlayerAnimation` (0x80f7aac), one client at a time. VERIFIED, the
-    disassembly; every per-frame build of a body returned through
-    0x80f7808. VERIFIED (gdb). So the target's (slot 0) trace meets the
-    shooter's body before the shooter's anims step that frame; vcod ran
-    every look-at after every body had stepped.
-  - The build reads the `clientInfo_t` the body's last end frame filled
-    (its view copy at ci+0x3e8): at 21050 retail's shooter controls were
-    its 21000 ones while its playerstate view had turned 90 degrees.
-    VERIFIED (gdb). vcod posed a traced body off the live playerstate.
-  - A body with no DObj is clipped as its temp box model:
-    `SV_ClipMoveToEntity` takes `Com_GetServerDObj` (0x8062bc4) and on
-    null (0x809cfbb) traces the capsule of `r.mins` and `r.maxs` about
-    `r.currentOrigin` with no part (0x809d24f..0x809d372). VERIFIED, the
-    disassembly. A spawning client's first build came the frame after its
-    spawn: its DObj appears at its first `G_RunFrame` end frame
-    (`G_DObjUpdate` 0x811e37e at 0x80f7a5c), after the lower slots' traces.
-    VERIFIED (gdb, no build of the spawning body in its spawn frame);
-    INFERRED, that the spawn's own end frame makes none because the
-    script sets the model after `spawn`.
-  - `ClientSpawn` (0x80f910e) sets the view to the spawn's whole angles
-    (`SetClientViewAngle` 0x80f85d8 at 0x80f940e) and ends in
-    `ClientEndFrame` (0x80f947b), so the swings step twice in the spawn's
-    frame: the anim dump reads two end frames for the spawning client at
-    one level time (legs 0, then 650), and the shooter's first build
-    carried a torso pitch two steps in (14.2 at `clientInfo_t` +0x3b8).
-    VERIFIED (gdb, the disassembly). vcod's spawn stepped none and set
-    the view's yaw alone.
-  With all four, `hit-melee`'s and `hit-throw`'s target flags match
-  retail's every snapshot. VERIFIED, the gate.
+A swing's contact on a body that stands still lands on retail's digits
+only when the body's idle runs at retail's phase. Every body contact in
+`hit-melee` and `hit-rocket-rand` and each `eventParm` print retail's
+digits, the last within 0.0001. VERIFIED, the gate. Three rules hold it:
+
+- `Melee_Trace` (Mac 0x1c823a) traces from `G_GetPlayerViewOrigin` along
+  `G_GetPlayerViewDirection` under `bulletPriorityMap`, mask 0x2802831.
+  VERIFIED, the decompile.
+- A body whose playerstate carries no legs anim in its stance's idle is
+  posed with no clip: retail sets none at the spawn's own end frame and
+  starts the idle at the next one (cod2-player-anims.md 7). VERIFIED (gdb,
+  the gate). `BG_RunLerpFrameRate` (Mac 0x183492) gives a new legs clip a
+  start time (`XAnimSetTime`) only when it loops, has a non-zero
+  `moveSpeed` (+0x44) and its node's weight reads 0; an idle's
+  `moveSpeed` is 0, so its set takes no time of its own. VERIFIED, the
+  decompile.
+- Retail runs a client's `begin` between frames and the script's `spawn`
+  in the next `G_RunFrame`, whose `ClientThink_real` stamps `commandTime`
+  with that frame's time: every capture's first playing snapshot carries
+  a `commandTime` equal to its own time. VERIFIED, the fixtures. The
+  replay begins each client in that snapshot's frame. Begun a frame
+  earlier, the target's `pb_stand_bombplant` read 0.67 at the 19350 swing
+  against retail's 0.64 under gdb. VERIFIED (gdb).
+
+The contact is that sensitive to the phase: `pb_stand_alert` (legs 153,
+100 frames at 30 fps, a 3.3 s loop) sampled 100 ms off moves
+`hit-melee`'s contacts by up to 0.157 units along the swing's line.
+VERIFIED, the gate with a test-only shift of every node frame.
+
+#### 9.7.2 The look-at flag on a turned body
+
+In `hit-melee` and `hit-throw` the target's `pm_flags` 0x200000 (its
+look-at trace meeting the shooter, 9.2) matches retail's every snapshot
+on four rules, each read off retakes under gdb
+(`tools/re/cod2_skel_gdb.py` with `CODSKEL_BT=1`). VERIFIED, the gate.
+
+- `Player_UpdateLookAtEntity` (lnxded 0x812200a) is called inside
+  `ClientEndFrame` (0x80f7516) at 0x80f7803, before
+  `BG_PlayerAnimation` (0x80f7aac), one client at a time. VERIFIED, the
+  disassembly; every per-frame build of a body returned through
+  0x80f7808. VERIFIED (gdb). So the target's (slot 0) trace meets the
+  shooter's body before the shooter's anims step that frame, and vcod
+  runs it there too.
+- The build reads the `clientInfo_t` the body's last end frame filled
+  (its view copy at ci+0x3e8): at 21050 retail's shooter controls were
+  its 21000 ones while its playerstate view had turned 90 degrees.
+  VERIFIED (gdb). vcod poses a traced body off that copy, not the live
+  playerstate.
+- A body with no DObj is clipped as its temp box model:
+  `SV_ClipMoveToEntity` takes `Com_GetServerDObj` (0x8062bc4) and on
+  null (0x809cfbb) traces the capsule of `r.mins` and `r.maxs` about
+  `r.currentOrigin` with no part (0x809d24f..0x809d372). VERIFIED, the
+  disassembly. A spawning client's first build came the frame after its
+  spawn: its DObj appears at its first `G_RunFrame` end frame
+  (`G_DObjUpdate` 0x811e37e at 0x80f7a5c), after the lower slots' traces.
+  VERIFIED (gdb, no build of the spawning body in its spawn frame);
+  INFERRED, that the spawn's own end frame makes none because the
+  script sets the model after `spawn`.
+- `ClientSpawn` (0x80f910e) sets the view to the spawn's whole angles
+  (`SetClientViewAngle` 0x80f85d8 at 0x80f940e) and ends in
+  `ClientEndFrame` (0x80f947b), so the swings step twice in the spawn's
+  frame: the anim dump reads two end frames for the spawning client at
+  one level time (legs 0, then 650), and the shooter's first build
+  carried a torso pitch two steps in (14.2 at `clientInfo_t` +0x3b8).
+  VERIFIED (gdb, the disassembly). vcod's spawn sets the whole angles
+  and runs that end frame, so its swings step twice too.

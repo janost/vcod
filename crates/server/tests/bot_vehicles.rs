@@ -1,8 +1,7 @@
 //! Bots in United Offensive vehicles (`bots::vehicle`): a bot set down
 //! beside mp_cassino's tanks walks up to one and boards it with the use
 //! key, drives it along the graph, and gets out again. Needs `COD_DIR` at a
-//! UO install; each test builds mp_cassino's graph, so they are ignored and
-//! run in release.
+//! UO install; each test builds mp_cassino's graph, so they are ignored.
 
 use crate::common;
 use std::time::{Duration, Instant};

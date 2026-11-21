@@ -233,12 +233,12 @@ ignored_tests_named` fails on one that is not.
 
 | Touching | Run | Cost |
 |---|---|---|
-| pmove, collision or nav | `cargo test --release -p vcod-server --test server -- --ignored nav_census::` | ~20 s at 1.1; ~80 s at UO |
-| bots | `cargo test --release -p vcod-server --test server -- --ignored bots::` | ~10 s at 1.1; ~8 min at UO |
-| the bots' driver or its threads | `cargo test --release -p vcod-server --test server -- bot_threads::` (not ignored; each install it finds; `tdm` and `sd`, UO `ctf`) | ~15 s a game |
+| pmove, collision or nav | `cargo test -p vcod-server --test server -- --ignored nav_census::` | ~15 s at 1.1; ~150 s at UO |
+| bots | `cargo test -p vcod-server --test server -- --ignored bots::` | ~10 s at 1.1; ~6.5 min at UO |
+| the bots' driver or its threads | `cargo test -p vcod-server --test server -- bot_threads::` (not ignored; each install it finds; `tdm` and `sd`, UO `ctf`) | ~15 s with the 1.1, CoD2 and CoD4 installs |
 | UO bot vehicles | `-- --ignored bot_vehicles::` at a UO install | ~12 s |
-| CoD4 bots | `cargo test --release -p vcod-server --lib -- --ignored cod4::bots::` (`COD4_DIR`) | ~4 s |
-| CoD4 hit boxes per map | `--lib -- --ignored cod4_every_map_poses_both_teams` (`COD4_DIR`) | 29 s of test, 7 min with the release build (2026-11-18) |
+| CoD4 bots | `cargo test -p vcod-server --lib -- --ignored cod4::bots::` (`COD4_DIR`) | ~4 s |
+| CoD4 hit boxes per map | `--lib -- --ignored cod4_every_map_poses_both_teams` (`COD4_DIR`) | ~22 s |
 | CoD2 gametypes | `--lib -- --ignored cod2_gametype_census` (`COD2_DIR`) | ~18 s |
 | CoD2 play: level effects, model pipelines, view weapons, muzzle flash and brass | `cargo test -p vcod --bins -- --ignored play::cod2_soak::cod2_live_` (`COD2_DIR`, a Vulkan adapter) | each plays 16 ms frames for its seconds after the spawn, client and server on one `sim` clock (`tests::run_held`), with a 120 to 180 s deadline on it |
 | 1.5 stuck seed | `--lib -- --ignored the_15_overlap_spectator_seed_is_the_only_fit` | ~2 s |
@@ -289,7 +289,31 @@ Never run by an agent: `master_list_live` (cod.pm's public master and every
 server it lists) and `lan_scan_live` (a LAN broadcast). Both panic unless
 `VCOD_LIVE_NET=1` is set as well.
 
-Times are release wall on a 30-thread box, the binary built.
+Times are dev-profile test wall on a 30-thread box, the binary built.
+These gates run in the dev profile, which the suite has already built:
+`--release` would compile vcod-common, vcod-cod4 and vcod-server a second
+time for runs it speeds up by a few seconds. Measured 2026-11-21 (rustc
+1.100, 8 jobs under `tmp/mg/heavy.sh`, test time from `finished in`):
+
+| Gate | Dev | Release |
+|---|---|---|
+| `nav_census::` at 1.1 | 14.4 s | 11.8 s |
+| `nav_census::` at UO | 150.0 s | 111.4 s |
+| `bots::` at 1.1 | 9.6 s | 7.7 s |
+| `bots::` at UO | 387.5 s | 334.4 s |
+| `bot_threads::` (1.1, CoD2, CoD4) | 13.3 s | 10.5 s |
+| `cod4::bots::` | 4.1 s | 2.9 s |
+| `cod2_gametype_census` | 18.3 s | 15.6 s |
+| `cod4_every_map_poses_both_teams` | 21.5 s | 17.7 s |
+| rebuild of `--test server --lib` after an edit in vcod-common's `pmove()` | 7.5 s | 68.7 s |
+| the same after an edit in vcod-server's `Bot::think` | 27.3 s | 60.0 s |
+| cold release build of `--test server`, then `--lib` | | 75.5 s, 40.5 s |
+
+Each row's dev run stays under the release rebuild it saves. Only the
+whole set at both installs comes out about 40 s ahead in release (618 s
+against 511 s and a 70 s rebuild), and the suite already pays the dev
+build. `bot_match`, `nav_build` and the gsc bench are measurements, not
+gates, and stay in release.
 
 The bit-exact gates (`moves_ab`, `cod4_moves_ab`, `cod4_combat_ab`,
 `trace_ab`, `nav_census`) were tuned on the host's glibc. Only `sinf` and

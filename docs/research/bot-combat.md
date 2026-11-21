@@ -10,7 +10,9 @@ Contents: 1 the harness, 2 baseline, 3 skill levels, 4 cover and lean,
 5 retreat, 6 one table of every arm, 7 team spread, 8 target choice and
 sight, 9 aim and footwork, 10 varied peeks and hunts, 11 the walking
 view, 12 frags, 13 broken fights, 14-17 CoD2 bots (guns, tick order,
-pmove walks, the pass's rules and mp_ship's ladders), 18 the hand's aim.
+pmove walks, the pass's rules and mp_ship's ladders), 18 the hand's aim,
+19 the senses CoD2 and CoD4 share, 20 CoD4's cmd angles, 21 yells, 22
+CoD2's arms, 23 CoD4's arms.
 
 ## 1. The harness
 
@@ -2063,3 +2065,90 @@ edge (bot-objectives.md 12.20); seed 1's 140 stalled ticks go to 0. The one othe
 integer delta, the flee's yaw in `bots.rs` (`angles[1] + delta_angles[1]`),
 adds the rounded delta back onto the rounded angle, within a short of
 the aim. VERIFIED (the code).
+
+## 21. Yells
+
+On CoD 1.1, 1.5, UO and CoD2 a bot yells through the stock quick
+messages (`bots/yell.rs`). VERIFIED (the code) for each rule below.
+
+- It sends the `mr` a player's `V` menu row sends, on the
+  `quickcommands` or `quickstatements` script menu, so the gametype
+  script plays the team's voice line, puts up the head icon and prints
+  the team chat line (cod11-quick-chat.md 5). Retail clients hear it
+  too.
+- The rows: `quickcommands` 1 "Follow me!" or 2 "Move in!" as an `sd` or
+  `re` round starts; `quickstatements` 1 "Enemy spotted!" on a new
+  target, not one it lost a moment ago; 5 "Grenade!" as a frag leaves
+  its hand; 2 "Enemy down!" when its hit was the last on an enemy who
+  died.
+- Each yell is a roll: 40, 30, 70 and 40 in 100 for the round start, the
+  sighting, the frag and the kill.
+- A bot keeps quiet 8 s after its own yell (`BOT_QUIET_MS`) and its team
+  2.5 s after any of theirs (`TEAM_QUIET_MS`), so one voice goes out,
+  not the squad.
+- Only a living bot yells, and none in `dm`. CoD4 bots send none.
+
+## 22. CoD2's arms
+
+The CoD2 adapter (`bots/cod2.rs`, `bots/cod2/`) reads its weapons off
+the weapon files and the hits off the playerstate. VERIFIED (the code)
+for each rule below.
+
+- Fire rate. A bolt rifle's cycle is `fireTime` plus `rechamberTime`
+  (kar98k 1330 ms), so it fights as a bolt rifle. SMGs and automatic
+  rifles fire bursts of 2 to 7 ticks close and 1 to 3 past 800 units;
+  semi-automatics tap at `fireTime`.
+- The scope. Fully down a scope with an enemy in sight a bot holds its
+  breath for 3 s (`BREATH_HOLD_MS`), short of the 4.5 s gasp.
+- Frags go through the offhand frag key; the stock frag has no cook.
+- Smoke. A bot carrying one (the stock SMG and shotgun kits) throws it a
+  third of the way toward an enemy 400 to 1500 units off, at least 250
+  out and 150 short of him, when it heads for a plant or defuse within
+  800 units, covers a planting teammate, or starts a retreat. From 2 s
+  to 35 s after the burst a cloud 150 units round and 48 up blocks every
+  bot's sight (`SMOKE_*`). Retail's crosshair smoke test
+  (`SV_FX_GetVisibility`, cod2-combat.md 9.2) is not ported, so a human's crosshair
+  names see through it.
+- Cover peeks use CoD2's leans at 0.5 of the lean standing, as 1.5. A
+  hit is read off the playerstate: a new `damageEvent`, `damageYaw` and
+  `damagePitch`, the attacker the last client to hurt the bot.
+- Dropped guns (`bots/cod2/fetch.rs`). With every primary dry and no
+  enemy in sight a bot walks to the nearest loaded gun lying within 600
+  units, the dry one in hand, and takes it with use. A gun not taken in
+  6 s is passed over for 20 s.
+- Mounted guns: section 14.
+
+## 23. CoD4's arms
+
+The CoD4 adapter (`bots/cod4.rs`, `bots/cod4/gun.rs`). VERIFIED (the
+code) for each rule below.
+
+- Weapon numbers. 1.7 numbers every attachment as its own weapon, past
+  the brain's 63, so each bot's weapons are renumbered for its brain in
+  the order it picked them up (`bots::cod4::Arms`). A cmd's moves are
+  sent whole, as 1.7's wire carries only their sign.
+- Entry. Bots enter a fresh level 3 s past its first frame
+  (`BOT_LOAD_MS`), as a loading client does: `koth`'s spawn script
+  errors on an earlier spawn, on retail too.
+- Throw backs. A live frag under the bot's cursor hint with 1.5 s or
+  more on its fuse is picked up and thrown back toward its thrower,
+  unless he is a teammate, else at the enemy in sight.
+- Mounted SAWs, in `war` and `dm` only. A bot takes a free gun whose arc
+  covers the enemy it fights, or a lane its team saw an enemy in within
+  8 s, past 250 units from the gun, when the spot behind it is within
+  400 units, level and a clear walk. With no enemy for 20 s it may walk
+  the graph to a gun on another floor within 800 units, one bot a team,
+  at most every 3 minutes. On the gun it turns 12 degrees a tick onto
+  the nearest visible enemy in the arc and fires within 2 degrees. It
+  lets go when flanked (an enemy outside the arc within 1200 units) or
+  after 3 s with nobody in the arc, then takes no gun for 20 s.
+  Measured: bot-measurements-cod2-cod4.md 5.
+- Cars in the sight. An enemy behind a destructible car counts as seen
+  only where a round would get through (`Cod4Bots::shot_clear`): the
+  test traces the car's collision triangles and skips a part `hidePart`
+  removed, so a bot shoots through an empty window frame. A round still
+  goes through a car's intact panels at reduced damage, which the sight
+  does not count on. Measured: bot-measurements-cod2-cod4.md 6.
+- Sway. A bot does not compensate for gun sway; it holds its view on
+  its enemy, which keeps the turn sway and the movement tilt small.
+- A dead bot that follows a teammate is left alone.

@@ -30,7 +30,7 @@
 //! the driver's own ([`SmokeThrow`]): a bot with a smoke grenade throws it
 //! on the line to the enemy when it heads for a plant or defuse, covers a
 //! planter or starts a retreat, and a cloud blocks every bot's sight for
-//! its life (docs/bots.md, "CoD2").
+//! its life (bot-combat.md 22).
 //!
 //! In `dm` and `tdm` a bot mans a mounted gun with an enemy in its arc
 //! ([`gun`], cod2-turrets.md 17).

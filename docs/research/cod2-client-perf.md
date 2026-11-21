@@ -1006,7 +1006,7 @@ mp_carentan 30`, reading fps, `gpu.cookies` plus the `receivers` group
 (base: `gpu.cookies` alone) and `gpu.total`. Pending by eye: a body's
 cookie shadow on the street and on a wall, the same as before.
 
-## 12. Retail's prepass, the stale config and the receivers per soup
+## 12. Retail's prepass, the cvar's default and the receivers per soup
 
 A real-card run (mp_carentan, 12 bots, 1920 x 1080) counted `prepass 0`,
 so section 11's receivers drew on their own depth there.
@@ -1050,17 +1050,16 @@ lit pass: as `build floatz` by default, as the depth prepass with
 `r_zFeather 0`. vcod's CoD2 default of `r_vc_depthprepass 1` has retail's
 shape: world part before the receivers, entities after.
 
-### Why it read 0
+### The cvar's default
 
-`r_vc_depthprepass` was archived, and an earlier build defaulted it to 0
-on CoD2. A run of that build wrote `seta r_vc_depthprepass "0"` into the
-profile's `vcod_mp.cfg`, and every later start kept it (`register_kept`).
-INFERRED (the history; that config was not available).
-
-Fix: `Shell::register_depth_prepass` registers it after the config at the
-game's default, not archived, so a config's line is dropped and no longer
-written (`a_config_s_depth_prepass_gives_way_to_the_game_s_default`). It
-stays live: `set r_vc_depthprepass 0` holds for the session.
+`r_vc_depthprepass` is registered after the config runs, at the game's
+default and not archived (`Shell::register_depth_prepass`), so a
+config's line for it is dropped and never written back
+(`a_config_s_depth_prepass_gives_way_to_the_game_s_default`); `set
+r_vc_depthprepass 0` holds for the session. The real-card run above read
+`prepass 0` from such a line, a `seta r_vc_depthprepass "0"` an earlier
+build that archived it had written into the profile's `vcod_mp.cfg`.
+INFERRED (that config was not available).
 
 ### The receivers per soup
 

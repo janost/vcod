@@ -2,7 +2,7 @@
 //! the `V` menu: an `mr` on the `quickcommands` or `quickstatements` script
 //! menu. The gametype script plays the team's voice line, sets the head
 //! icon and prints the team chat line (cod11-quick-chat.md, "The quick
-//! message menu"; docs/bots.md, "Yells").
+//! message menu"; bot-combat.md 21).
 
 use std::collections::BTreeMap;
 
