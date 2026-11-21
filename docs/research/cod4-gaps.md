@@ -31,8 +31,7 @@ Ranked by how much a player notices.
 - Small HUD fades: the compass's voice fade, drawn off `isTalking` but
   not checked against a retail capture with a talker (cod4-hud.md 15.9).
   S.
-- Smaller open items, each in its doc: effect model elements
-  and whether CoD4's sizes are radii (cod4-effects.md 9); the predicted
+- Smaller open items, each in its doc: the predicted
   origin vcod's moves report (cod4-netfields.md 11);
   `winvoice_mic_mute`, `winvoice_save_voice` and the record level meter
   (cod4-voice.md 5).
@@ -51,6 +50,12 @@ Ranked by how much a player notices.
 - Single Player's popup does nothing: vcod is multiplayer only.
 
 ## 3. Closed
+
+- Effect model elements did not draw, and whether CoD4's effect sizes
+  are radii was open. They are (`iw3mp.exe` 0x496ef0), so sprites were
+  right, but tails drew half 1.7's length; tails now run `2 * size[1]`,
+  and model elements load out of the zones and draw at the visual
+  state's scale (cod4-effects.md 9).
 
 - A playerstate sent without origin (bit 0) kept the base's origin and
   velocity. It now takes them, the view, `bobCycle` and `movementDir`

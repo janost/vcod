@@ -292,14 +292,38 @@ does the same, so the explode plays.
   converts one as an omni light (`cod4_fx::primitive`): the fx system's
   lights carry a position, radius and colour and no cone, and none of
   the stock effects needs one.
-- Model elements need the zone's xmodel uploaded; the fx draw looks
-  models up on the search path, where CoD4's are not.
+- **Model elements** (type 5). `FX_DrawElem_Model` (`iw3mp.exe`
+  0x498380, slot 5 of the draw table at 0x6bdb50) lerps the visual
+  state's `scale` (samples +0x14 and +0x2c, the next pair +0x44 and
+  +0x5c) into the draw's +0x80, draws nothing at 0, builds the axes
+  (0x497cc0, with flag 0x8000000 0x498340 after it), picks the model
+  among `visualCount` (+0xb1) by the spawn's random index, and adds it at
+  the draw's placement (0x609380). VERIFIED (the instructions). So a
+  model scales by `scale`, not by the sizes. vcod converts it with
+  `scale` in the size channel, loads every model element's xmodel out of
+  the zones with the entity models (`cod4_fly::entity_models`) and draws
+  the fx system's models as entity instances (`Cod4Client::draw`). Its
+  axes are the CoD2 debris model's (`FxSystem::models`), not 0x497cc0's;
+  how they sit beside retail's is pending a look.
+- **Sizes are radii.** VERIFIED (the instructions). The draw state's
+  visual (0x496ad0) is the lerp of the samples' `size[0]` (+0xc, +0x24,
+  +0x3c, +0x54) at the draw's +0x78, with no factor; `size[1]` takes its
+  own draw under flag 0x10000000 (0x496840), else `size[0]`'s, at +0x7c.
+  `FX_GenSpriteVerts` (0x496ef0) turns the two view axes by the
+  rotation (+0x74, `fsincos` at 0x49701d), scales them by +0x78 and +0x7c
+  (0x4970a9, 0x4970d4), and puts the corners at the origin less and plus
+  them (0x49711b..0x497163): a sprite is `2 * size` across, a half-extent
+  as CoD2's (`efx-grammar.md` R4). A tail (0x497e60) moves the centre back
+  `size[1]` along its direction (0x497eaf..0x497ee1) before the same
+  corners, so it runs `2 * size[1]` back from the element's origin,
+  `size[0]` either side; its cull (0x497dd0) tests the far end at -2.0
+  times `size[1]` (0x70b3f8). vcod drew a tail `size[1]` long, half
+  1.7's; it now converts `2 * size[1]` into the length, which CoD2's tail
+  spans from its head (`efx-grammar.md` R5).
 - A material draws by its zone material's stages as the map's material
   list compiles them; the lighting fraction, the sort order and
   collision against the world are not applied. The distance fades are
   (section 18).
-- Sizes are taken as CoD2's sizes; whether CoD4's are radii or diameters
-  is not settled (pending a look).
 
 ## 10. The weapon's tags
 

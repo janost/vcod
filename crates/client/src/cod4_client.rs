@@ -1840,6 +1840,33 @@ impl Cod4Client {
                 shader_time: None,
             });
         }
+        // The effects' model elements (`FX_DrawElem_Model`, iw3mp.exe
+        // 0x498380), off the zones' xmodels.
+        for m in cx.fx.models(cx.time) {
+            let handle = match self.uploaded.get(&m.model) {
+                Some(h) => *h,
+                None => {
+                    let model = self.models.get(&m.model).cloned();
+                    self.upload(cx, &m.model, || model)
+                }
+            };
+            let Some(model) = handle else {
+                continue;
+            };
+            let [f, l, u] = m.axis;
+            instances.push(DynamicModelInstance {
+                model,
+                transform: Mat4::from_cols(
+                    f.extend(0.0),
+                    l.extend(0.0),
+                    u.extend(0.0),
+                    m.origin.extend(1.0),
+                ),
+                bones: None,
+                light_origin: m.origin,
+                shader_time: None,
+            });
+        }
         self.vehicles.end();
         self.weapon_tags.clone_from(&self.players.tags);
         self.weapon_tags.extend(&self.turret_tags);

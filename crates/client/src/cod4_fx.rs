@@ -281,10 +281,22 @@ pub fn primitive(
             put(&mut p, Channel::Length, &s1, &s1r);
             p.non_uniform_scale = true;
             p.use_length = true;
+        } else if kind == Kind::Emitter {
+            // `FX_DrawElem_Model` (iw3mp.exe 0x498380) scales the model by
+            // the visual state's scale and draws none at 0.
+            let (sc, scr) = ch(&|v| v.scale);
+            put(&mut p, Channel::Size, &sc, &scr);
         } else {
+            // Sizes are half-extents (0x496ef0, cod4-effects.md 9); a tail
+            // runs `2 * size[1]` back from its head (0x497e60).
+            let (l, lr) = if kind == Kind::Tail {
+                ch(&|v| 2.0 * v.size[1])
+            } else {
+                (s1.clone(), s1r.clone())
+            };
             put(&mut p, Channel::Size, &s0, &s0r);
             put(&mut p, Channel::Size2, &s1, &s1r);
-            put(&mut p, Channel::Length, &s1, &s1r);
+            put(&mut p, Channel::Length, &l, &lr);
         }
         // Radians per ms of life over the interval count, to degrees per
         // 100 ms.
@@ -2691,6 +2703,46 @@ mod tests {
         };
         let k = &p.channels[Channel::Rgb as usize].curve.keys;
         assert!(k[1] > k[3], "{:?}", &k[..4]);
+    }
+
+    /// Every tail of `common_mp` runs twice its `size[1]` back from its
+    /// head (`FX_DrawElem_Tail`, iw3mp.exe 0x497e60), half-width
+    /// `size[0]`, and every model element scales by the visual scale
+    /// (0x498380), not the size (cod4-effects.md 9).
+    #[test]
+    fn tails_run_twice_their_size_and_models_take_the_scale() {
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let z = Zone::open_path(&install.zone("english", "common_mp")).unwrap();
+        let a = walk(z, WalkOptions { keep_bulk: true }).unwrap().assets;
+        let (mut tails, mut models) = (0, 0);
+        for fx in &a.fx {
+            for (i, (role, e)) in roles(fx).enumerate() {
+                let d = ElemDef::of(e);
+                let Some(v) = d.vis.first().map(|v| v.base) else {
+                    continue;
+                };
+                let Converted::Primitive(p, _) = primitive(&a, fx, role, &d, i, Looping::Spread)
+                else {
+                    continue;
+                };
+                let key = |c: Channel| p.channels[c as usize].curve.keys[1];
+                match d.elem_type {
+                    Some(ElemType::Tail) => {
+                        tails += 1;
+                        assert_eq!(key(Channel::Length), 2.0 * v.size[1], "{}", fx.name);
+                        assert_eq!(key(Channel::Size), v.size[0], "{}", fx.name);
+                    }
+                    Some(ElemType::Model) => {
+                        models += 1;
+                        assert_eq!(key(Channel::Size), v.scale, "{}", fx.name);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(tails > 10 && models > 10, "{tails} tails, {models} models");
     }
 
     /// mp_cargoship's rain (`weather/rain_mp_cargoship` element 0, a

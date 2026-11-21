@@ -250,7 +250,8 @@ CoD2 effect path:
 
 - Muzzle flashes and shell ejects on the posed weapon's tags, impacts,
   explosions, effects emitted along an element's flight, missile smoke
-  trails on `tag_fx`.
+  trails on `tag_fx`. Effect model elements (debris) draw the zones'
+  xmodels at their visual scale.
 - Looping effects for their whole life: `spawnFx`, `playLoopedFx` and
   the map's createfx ambience (mp_crash's fires start settled). Each
   element spawns inside its `spawnRange` and fades over its distances.
