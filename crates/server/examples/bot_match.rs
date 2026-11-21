@@ -30,8 +30,9 @@
 //! how fights end (target down, the bot down, broken off) and the
 //! re-engagements: the same bot on the same target again within 10 s of
 //! a fight broken off with both alive.
-//! Run: COD_DIR=<install> cargo run --release -p vcod-server --example
-//! bot_match -- [seed...] [KEY=VALUE...]. Every knob, its default and what
+//! Run, with `COD_DIR=<install>`:
+//! `cargo run --release -p vcod-server --example bot_match -- [seed...]
+//! [KEY=VALUE...]`. Every knob, its default and what
 //! it does is in [`KNOBS`], the one list: a `KEY=VALUE` argument wins over
 //! the environment, an unknown key or a bad value stops the run with the
 //! table, and the first line of output names every knob given. Seeds
