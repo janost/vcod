@@ -448,7 +448,7 @@ impl Server {
         let challenge = self
             .core
             .challenges
-            .issue(from, svs, || (rand_from(rng) << 16) ^ rand_from(rng) ^ game);
+            .issue(from, svs, || (rng.rand() << 16) ^ rng.rand() ^ game);
         self.send_oob(from, &format!("challengeResponse {challenge}"));
     }
 

@@ -195,7 +195,7 @@ pub struct Client {
     pub server_commands: BTreeMap<i32, Vec<u8>>,
     /// `cl.clientArchive`: the rows a live client adds as each move goes
     /// out, or a demo's archive records; a playerstate sent without
-    /// origin takes its predicted fields off it (cod4-netfields.md 11).
+    /// origin takes its predicted fields off it (cod4-netfields.md 13).
     pub archive: super::demo::ArchiveRing,
 }
 
@@ -623,7 +623,7 @@ mod tests {
     /// A delta snapshot sent without origin (its playerstate's first bit
     /// 0) takes origin, velocity, view, `bobCycle` and `movementDir` off
     /// the archive row for its `commandTime`, as 1.7's reader does
-    /// (`iw3mp.exe` 0x507252; cod4-netfields.md 11), not the base's.
+    /// (`iw3mp.exe` 0x507252; cod4-netfields.md 13), not the base's.
     #[test]
     fn a_playerstate_sent_without_origin_takes_the_archive_row() {
         use super::super::demo::Archive;

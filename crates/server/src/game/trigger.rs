@@ -425,6 +425,18 @@ pub fn spawn_scripted_multi(
     link(host, cx, id, spawnflags);
 }
 
+/// The `wait` arm `Touch_Multi` and `Use_Multi` share (1.1d
+/// 0x65ad1..0x65b28): `multi_wait` at `level.time + (wait + random *
+/// crandom) * 1000`, the `crandom` one `rand()` (map-cycle doc 4.8.1).
+/// vcod reads no `random` key (no stock map sets one, movers doc 17), so
+/// the draw only takes its place in the stream.
+pub fn arm_multi_wait(host: &mut GameHost, id: EntId, wait_ms: i32) {
+    let _ = host.rand_int();
+    let at = host.level_time_ms + wait_ms;
+    host.ents
+        .schedule(id, crate::game::entity::ThinkFn::MultiWait, at);
+}
+
 /// `Use_Multi` (1.1d 0x6594c, 1.5b 0x7a2f2, UO 0x865c7), `Touch_Multi`'s
 /// arm without the notify: unless the trigger's think is `enableLinkTo`'s or
 /// already armed, a `wait` above 0 arms `multi_wait` (which gates nothing),
@@ -446,8 +458,7 @@ pub fn use_multi(host: &mut GameHost, id: EntId) -> bool {
     }
     let now = host.level_time_ms;
     if t.wait_ms > 0 {
-        use crate::game::entity::ThinkFn;
-        host.ents.schedule(id, ThinkFn::MultiWait, now + t.wait_ms);
+        arm_multi_wait(host, id, t.wait_ms);
     } else {
         if let Some(t) = host.triggers.get_mut(id) {
             t.spent = true;
@@ -1728,6 +1739,29 @@ mod tests {
             host.free_entity(hurt);
             assert!(walk(&host, 0.0, CONTENTS_TOUCH_MASK).is_empty());
         });
+    }
+
+    /// `Use_Multi` on a positive `wait` arms `multi_wait` with one `rand()`
+    /// drawn for its `crandom` (movers doc 17, map-cycle doc 4.8.1), and an
+    /// armed trigger draws nothing.
+    #[test]
+    fn a_multiple_s_wait_arm_draws_once() {
+        let (mut vm, mut host) = crate::game::testing::fixture();
+        let id = vm.with_cx(|cx| host.ents.spawn(cx).unwrap());
+        host.triggers.register(
+            id,
+            TriggerKind::Multiple,
+            TriggerShape::boxed([-8.0; 3], [8.0; 3]),
+            MULTIPLE_DEFAULT_WAIT_MS,
+        );
+        host.level_time_ms = 1000;
+        let mut after_one = host.rng.fork();
+        after_one.rand();
+        assert!(use_multi(&mut host, id));
+        assert_eq!(host.ents.get(id).unwrap().nextthink, 1500);
+        assert!(host.rng == after_one, "one draw for the arm");
+        assert!(use_multi(&mut host, id));
+        assert!(host.rng == after_one, "an armed trigger draws nothing");
     }
 
     /// `delete()` takes the row with the entity. `sd.gsc` deletes both

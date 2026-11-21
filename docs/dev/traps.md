@@ -487,6 +487,11 @@ otherwise.
 
 ### Combat and items
 
+- The spread, melee, recoil, anim picks, pickups, drops, bounces and
+  `multi_wait` all step one glibc `rand()` the engine's challenges share,
+  `srand`ed at every level load (map-cycle doc 4.8.1). A draw added or
+  dropped anywhere moves every later one: a gate that stands on a draw
+  pins it or names its seed (`test_seed_rng`, `with_seed`).
 - A 1.1 shot, swing or throw starts at the truncated eye over the truncated
   origin. 1.5's and UO's start at the unsnapped origin's eye plus the walk
   bob, never truncated (`combat::muzzle_point_in`, combat doc 2.1).

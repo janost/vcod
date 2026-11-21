@@ -156,6 +156,9 @@ pub struct Cod1Module {
     /// repeats the last one's draws (map-cycle doc 4.8). Stepped at every
     /// load, from `RNG_SEED` under [`Server::new`].
     pub(super) level_seed: u64,
+    /// [`Server::test_seed_rng`]'s seed, xored into each level's `srand`
+    /// so a seeded test's `rand()` draws follow its seed; 0 otherwise.
+    pub(super) test_rand_seed: u64,
     /// [`Server::pin_spawns`]'s queues, handed to every level's script.
     pub(super) spawn_pins: Option<crate::game::host::SpawnPins>,
     /// Scripted entities driving the packet-entity path; `None` when
@@ -227,6 +230,7 @@ impl Cod1Module {
         Cod1Module {
             spread_draws: Default::default(),
             level_seed: seed,
+            test_rand_seed: 0,
             spawn_pins: None,
             test_entities: None,
             script: None,
@@ -265,7 +269,7 @@ pub(super) struct Lend<'a> {
     /// `svs.time`, the network clock (`Server::svs_time_ms`).
     pub(super) svs_time_ms: i32,
     /// The `rand()` stream the engine's challenges draw from too.
-    pub(super) rng: &'a mut u64,
+    pub(super) rng: &'a mut crate::engine::core::LibcRand,
     /// [`Server::pin_stuck_rand`]'s glibc `rand()`, when a test pinned it.
     pub(super) stuck_rand: &'a mut Option<vcod_common::rng::GlibcRand>,
     /// The engine's configstring table, as the last frame left it.

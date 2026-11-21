@@ -1493,8 +1493,8 @@ The server (`crates/server/src/spectate.rs`, `server/`, `game/stuck.rs`):
   rebuilt at that slot, so a partner marked CORPSE earlier in the loop is
   seen with it. A push writes both velocities and `knockback_ms` 300 on both
   and marks self CORPSE; nothing relinks there. The jitter's `rand()` is the
-  top 31 bits of the server's xorshift, or glibc's `rand()` once a gate pins
-  it (`Server::pin_stuck_rand`, 13.4).
+  server's glibc `rand()` (map-cycle doc 4.8.1), or a generator of its own
+  once a gate pins it (`Server::pin_stuck_rand`, 13.4).
 
 The client (`crates/client/src/play/predict.rs`, `live_frame.rs`): the predictor
 lands with `FallHeights::from_systeminfo` of configstring 1, reread at each

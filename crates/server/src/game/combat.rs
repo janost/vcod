@@ -2,6 +2,7 @@
 //! table, the box partition a hit point resolves to, and the two attacks
 //! themselves (`docs/research/cod11-combat.md`, sections 2 to 4).
 
+use crate::engine::core::LibcRand;
 use crate::game::hitrig::HitRigs;
 use crate::game::temp_entity::{Scope, TempEntity};
 use crate::spectate::ClientSim;
@@ -548,9 +549,9 @@ pub(crate) fn hip_spread_now(def: &WeaponDef, sim: &ClientSim) -> f32 {
 
 /// `gunrandom` (combat doc, 2.2): a point in the unit disc with the radius
 /// drawn uniformly, so the cone is denser at its centre.
-pub(crate) fn gun_random(rng: &mut u64) -> (f32, f32) {
-    let angle = crate::game::host::rand_unit(rng) * std::f32::consts::TAU;
-    let radius = crate::game::host::rand_unit(rng);
+pub(crate) fn gun_random(rng: &mut LibcRand) -> (f32, f32) {
+    let angle = rng.unit() * std::f32::consts::TAU;
+    let radius = rng.unit();
     (radius * angle.cos(), radius * angle.sin())
 }
 
@@ -702,7 +703,7 @@ pub fn bullet_fire(
     models: &[PlacedModel],
     hitlocs: &HitLocTable,
     bones: Option<&mut BoneTraceCtx>,
-    rng: &mut u64,
+    rng: &mut LibcRand,
 ) -> ShotResult {
     let Some((_, me)) = sims.iter().find(|(slot, _)| *slot == shooter) else {
         return ShotResult::default();
@@ -755,7 +756,7 @@ pub fn aim_end(
     aim: [f32; 2],
     range: f32,
     world: Option<MuzzleWorld<'_>>,
-    rng: &mut u64,
+    rng: &mut LibcRand,
 ) -> (Vec3, Vec3, Vec3) {
     let muzzle = muzzle_point_in(&me.ps, world);
     let frame = aim_frame(aim);
@@ -1072,7 +1073,7 @@ fn fire_round(
     models: &[PlacedModel],
     hitlocs: &HitLocTable,
     mut bones: Option<&mut BoneTraceCtx>,
-    mut rng: Option<&mut u64>,
+    mut rng: Option<&mut LibcRand>,
 ) -> ShotResult {
     let mut out = ShotResult::default();
     let priority = if round.rifle_bullet {
@@ -1091,7 +1092,7 @@ fn fire_round(
     // beats the leg's `rand()` (0x7adb7, 0x7aeb1).
     let mut tracer = |from: Vec3, to: Vec3| {
         let u = round.uo?;
-        let drawn = crate::game::host::rand_unit(rng.as_deref_mut()?) < u.tracer_chance;
+        let drawn = rng.as_deref_mut()?.unit() < u.tracer_chance;
         drawn.then(|| {
             Effect::Impact(TempEntity {
                 event: vcod_common::net::event_ids::EV_BULLET_TRACER,
@@ -1463,12 +1464,14 @@ impl BodyPose {
         now_ms: i32,
     ) -> vcod_common::playerpose::PoseInputs<'a> {
         let mounted = self.input.eflags & vcod_common::net::flags::EF_MOUNTED != 0;
+        let (legs_layers, torso_layers) =
+            vcod_common::animclock::body_layers(&self.legs_clock, &self.torso_clock, anims, now_ms);
         vcod_common::playerpose::PoseInputs {
             anims,
             legs: self.legs,
             torso: self.torso,
-            legs_layers: self.legs_clock.layers(now_ms),
-            torso_layers: self.torso_clock.layers(now_ms),
+            legs_layers,
+            torso_layers,
             nodes: self.torso_clock.node_weights(now_ms),
             // Down positive, as `descend_aim` reads it; only a gunner with no
             // placement blend descends an aim group.
@@ -1919,7 +1922,7 @@ pub fn melee_fire(
     models: &[PlacedModel],
     hitlocs: &HitLocTable,
     bones: Option<&mut BoneTraceCtx>,
-    rng: &mut u64,
+    rng: &mut LibcRand,
 ) -> ShotResult {
     let Some((_, me)) = sims.iter().find(|(slot, _)| *slot == attacker) else {
         return ShotResult::default();
@@ -1962,7 +1965,7 @@ pub fn melee_fire(
             ..
         } = traced
         {
-            let damage = def.melee_damage + (vcod_common::rng::xorshift(rng) % 5) as i32;
+            let damage = def.melee_damage + rng.rand() % 5;
             let damage = located_damage(damage, hitlocs.multiplier(hitloc));
             return ShotResult {
                 effects: vec![
@@ -2037,7 +2040,7 @@ pub fn melee_fire(
                         target: id,
                         attacker: Some(Attacker::Client(attacker)),
                         inflictor: None,
-                        damage: def.melee_damage + (vcod_common::rng::xorshift(rng) % 5) as i32,
+                        damage: def.melee_damage + rng.rand() % 5,
                         dflags: 0,
                         mod_: "MOD_MELEE",
                         point: at.into(),
@@ -2068,7 +2071,7 @@ pub fn melee_fire(
                         target,
                         attacker: Some(Attacker::Client(attacker)),
                         inflictor: None,
-                        damage: def.melee_damage + (vcod_common::rng::xorshift(rng) % 5) as i32,
+                        damage: def.melee_damage + rng.rand() % 5,
                         dflags: 0,
                         mod_: "MOD_MELEE",
                         point: t.endpos.into(),
@@ -2521,6 +2524,12 @@ pub(crate) fn segment_meets_box(start: Vec3, end: Vec3, lo: Vec3, hi: Vec3, limi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::core::LibcRand;
+
+    /// A fixed `rand()` stream.
+    fn draws() -> LibcRand {
+        LibcRand::xorshift(1)
+    }
 
     #[test]
     fn a_segment_meets_a_box_only_inside_its_limit() {
@@ -3053,7 +3062,7 @@ mod tests {
         def: &WeaponDef,
         sims: &[(usize, &ClientSim)],
         world: &CollisionWorld,
-        rng: &mut u64,
+        rng: &mut LibcRand,
     ) -> ShotResult {
         let table = HitLocTable::default();
         let ps = &sims[0].1.ps;
@@ -3199,7 +3208,7 @@ mod tests {
             &vcod_common::net::msg::NULL_USERCMD,
             (0, 0),
             &[],
-            &mut 1u64,
+            &mut draws(),
         );
         settle(&mut b);
         let mut rigs = HitRigs::default();
@@ -3212,7 +3221,7 @@ mod tests {
             now_ms: 0,
             posed: Some(&mut posed),
         };
-        let mut rng = 1u64;
+        let mut rng = LibcRand::xorshift(1);
         let r = bullet_fire(
             0,
             &zero_spread_carbine(),
@@ -3255,10 +3264,10 @@ mod tests {
         b.ps.on_ground = true;
         b.ps.settle_stance(vcod_common::pmove::Stance::Crouch);
         let idle = vcod_common::net::msg::NULL_USERCMD;
-        b.update_anims(&inputs, &idle, (0, 0), &[], &mut 1u64);
+        b.update_anims(&inputs, &idle, (0, 0), &[], &mut draws());
         settle(&mut b);
         b.ps.settle_stance(vcod_common::pmove::Stance::Stand);
-        b.update_anims(&inputs, &idle, (50, 50), &[], &mut 1u64);
+        b.update_anims(&inputs, &idle, (50, 50), &[], &mut draws());
         let body = b.hit_body(1).expect("a live body");
         assert_eq!(
             body.maxs.z,
@@ -3320,7 +3329,7 @@ mod tests {
         b.assembly = stock_assembly();
         b.ps.on_ground = true;
         let idle = vcod_common::net::msg::NULL_USERCMD;
-        b.update_anims(&inputs, &idle, (0, 0), &[], &mut 1u64);
+        b.update_anims(&inputs, &idle, (0, 0), &[], &mut draws());
         settle(&mut b);
         let body = b.hit_body(1).expect("a live body");
         let mut rigs = HitRigs::default();
@@ -3359,7 +3368,7 @@ mod tests {
         let mut a = new_for_test([0.0, 0.0, 0.0], 0.0);
         let b = new_for_test([100.0, 0.0, 0.0], 180.0);
         let def = zero_spread_carbine();
-        let mut rng = 1u64;
+        let mut rng = LibcRand::xorshift(1);
         let r = fire(&def, &[(0, &a), (1, &b)], &world, &mut rng);
         let hit = only(r.hits(), "the shot reached B");
         assert_eq!(hit.victim, 1);
@@ -3546,7 +3555,7 @@ mod tests {
 
         // A swing whose reach (64 from the eye) meets the model 40 out.
         let model = crate_(40.0);
-        let mut rng = 1;
+        let mut rng = LibcRand::xorshift(1);
         let r = melee_fire(
             0,
             &melee_carbine(),
@@ -3644,7 +3653,7 @@ mod tests {
         let a = new_for_test([0.0, 0.0, 0.0], 0.0);
         let mut b = new_for_test([100.0, 0.0, 0.0], 180.0);
         let def = zero_spread_carbine();
-        let mut rng = 1u64;
+        let mut rng = LibcRand::xorshift(1);
         let wall = vcod_common::collision::test_world(&[(
             Vec3::new(40.0, -64.0, 0.0),
             Vec3::new(48.0, 64.0, 128.0),
@@ -3694,7 +3703,7 @@ mod tests {
         let mut def = zero_spread_carbine();
         def.damage_inner_radius = 1000;
         def.damage_outer_radius = 5000;
-        let fire_uo = |sims: &[(usize, &ClientSim)], rng: &mut u64| {
+        let fire_uo = |sims: &[(usize, &ClientSim)], rng: &mut LibcRand| {
             let ps = &sims[0].1.ps;
             bullet_fire(
                 0,
@@ -3720,7 +3729,7 @@ mod tests {
                 .map(|te| (te.origin[0], te.origin2.unwrap()[0]))
                 .collect()
         };
-        let mut rng = 1u64;
+        let mut rng = LibcRand::xorshift(1);
         let r = fire_uo(&[(0, &a), (1, &b), (2, &c)], &mut rng);
         let got = tracers(&r);
         assert_eq!(got.len(), 2, "{got:?}");
@@ -3751,7 +3760,7 @@ mod tests {
             Vec3::new(300.0, -64.0, 0.0),
             Vec3::new(308.0, 64.0, 128.0),
         )]);
-        let mut rng = 1u64;
+        let mut rng = LibcRand::xorshift(1);
 
         let r = fire(&zero_spread_carbine(), &sims, &wall, &mut rng);
         let hits: Vec<&Hit> = r.hits().collect();
@@ -3805,7 +3814,7 @@ mod tests {
         );
         let mut a = new_for_test([0.0, 0.0, 0.0], 0.0);
         let b = new_for_test([100.0, 0.0, 0.0], 180.0);
-        let mut rng = 1u64;
+        let mut rng = LibcRand::xorshift(1);
 
         let r = fire(
             &zero_spread_carbine(),
@@ -3906,7 +3915,7 @@ mod tests {
         let near = new_for_test([30.0, 0.0, 0.0], 180.0);
         let far = new_for_test([100.0, 0.0, 0.0], 180.0);
         let def = melee_carbine();
-        let swing = |sims: &[(usize, &ClientSim)], rng: &mut u64| {
+        let swing = |sims: &[(usize, &ClientSim)], rng: &mut LibcRand| {
             melee_fire(
                 0,
                 &def,
@@ -3923,7 +3932,7 @@ mod tests {
                 rng,
             )
         };
-        let mut rng = 1u64;
+        let mut rng = LibcRand::xorshift(1);
         let r = swing(&[(0, &a), (1, &near)], &mut rng);
         let hit = only(r.hits(), "the swing reached B");
         assert_eq!(hit.victim, 1);
@@ -3997,7 +4006,7 @@ mod tests {
                 models,
                 &table,
                 None,
-                &mut 1u64,
+                &mut draws(),
             )
         };
         let r = swing(&[model(true)], &[]);
@@ -4043,9 +4052,8 @@ mod tests {
         let a = new_for_test([0.0, 0.0, 0.0], 0.0);
         let near = new_for_test([30.0, 0.0, 0.0], 180.0);
         let def = melee_carbine();
-        let mut rng = 1u64;
-        let mut expected_rng = rng;
-        let base = def.melee_damage + (vcod_common::rng::xorshift(&mut expected_rng) % 5) as i32;
+        let mut rng = LibcRand::xorshift(1);
+        let base = def.melee_damage + rng.fork().rand() % 5;
         let r = melee_fire(
             0,
             &def,
@@ -4366,7 +4374,7 @@ mod tests {
                     &vcod_common::net::msg::NULL_USERCMD,
                     (0, 0),
                     &[],
-                    &mut 1u64,
+                    &mut draws(),
                 );
                 settle(&mut front);
                 bodies.push(front.hit_body(0).expect("a live body"));

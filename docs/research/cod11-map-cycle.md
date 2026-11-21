@@ -871,8 +871,9 @@ first (`coduo-diff.md` 22).
 As implemented:
 
 - `Server::with_seed`, which the binary calls with the wall clock, keeps a
-  level seed that seeds `GameHost::rng` at each load through `Carry::seed`
-  and steps after it, so every level, restarts included, draws anew.
+  level seed that `srand`s the shared `rand()` stream (4.8.1) and seeds
+  `GameHost::holdrand` at each load through `Carry::seed`, and steps after
+  it, so every level, restarts included, draws anew.
   `Server::new` is `with_seed` from the constant `RNG_SEED`: a test's first
   level draws the same every run and every later level draws anew, as on
   retail. `server/map_cycle.rs`'s `a_restart_reseeds_the_script_draws`, on
@@ -895,8 +896,7 @@ As implemented:
   `GameHost::holdrand` (`vcod_common::rng::HoldRand`, the LCG CoD2 uses
   too), seeded `seed as u32` from the level seed at each load.
   `Server::pin_script_rand` sets it for the running level, for a gate that
-  replays a capture's draws. glibc's `rand()` stream (below) stays on
-  vcod's xorshift (`GameHost::rng`, `Missiles`' bounce draws).
+  replays a capture's draws. glibc's `rand()` stream is 4.8.1's.
 - Moving the draws to `holdrand` moved every test's first-level spawn
   picks and the probe target's head and gear: 31 `vcod-server` tests at
   1.1 and 7 at UO had stood on the xorshift's picks. The tests that need
@@ -955,6 +955,102 @@ way (INFERRED).
 INFERRED, off Q3's `trap_Milliseconds` being `Sys_Milliseconds`: it is
 the server process's wall clock in milliseconds, so no two runs draw
 alike and a capture's draws replay only from a seed recovered off them.
+
+### 4.8.1 The libc `rand()` stream
+
+The game's other draws (spread, melee, pickups, drops, bounces, anim picks)
+take libc `rand()`, apart from 4.8's `holdrand`.
+
+**The seed.** VERIFIED, 4.8: each module's `G_InitGame` calls
+`srand(randomSeed)` ahead of `Rand_Init`. VERIFIED, `game_mp_x86.dll` 1.1
+(image base 0x20000000): `srand` (0x2003fecc, the seed into the thread's
+CRT block, `+0x14`) has one caller, 0x20025e22; `rand` (0x2003fed9) steps
+the same word as `s * 0x343fd + 0x269ec3` and returns bits 16..30, MSVC's
+CRT linked into the DLL. INFERRED, off that link: on Windows the game
+module draws apart from the engine. VERIFIED: the Linux modules call libc
+`rand()` (1.1d `gunrandom` at 0x3d4bb, combat doc 2.2), and `cod_lnxded`
+draws the checksum feed (3, step 9) and the challenges
+(`cod11-server-handshake.md`, the challenge's `rand() << 16 ^ rand()`)
+from it. INFERRED, off the one libc in the process: the Linux engine and
+game module draw one sequence, which `G_InitGame` reseeds at every load,
+restarts included.
+
+**Who draws.** VERIFIED (the instructions), every `call 0x2003fed9` in
+`game_mp_x86.dll` 1.1, 41 sites, by caller:
+
+| Caller (identity INFERRED unless a string names it) | Sites | Draw |
+|---|---|---|
+| Out-of-line anim script picks 0x20003180, 0x200031f0, 0x20003350 | 0x200031cc, 0x20003235, 0x20003395 | `rand() % numCommands` (item `+0x70`); no `call` or `jmp` operand names their starts, so nothing runs them |
+| `BG_AnimScriptEvent`, inlined: script `+0x1fa84 + 0x204 * event` | 0x20007aa3, 0x20008ecf, 0x2000915d (event 4, the jump, lift and kickoff functions, strings `%i:jump base`, `%i:lift`, `%i:kickoff`), 0x20008867 (5, the crash land, behind `legsTimer == 0` at 0x2000881a), 0x200103d2 (10), 0x20010613 (6), 0x200108f1 (7), 0x20011453 and 0x20011b11 (2), 0x200118f6 (13), 0x2002042e (1, the death in `player_die` 0x200202b0) | one `rand() % numCommands` when a clause matched with a command; the force flag is an argument to the play after it, so an unforced event still draws |
+| `gunrandom` 0x20013380 | 0x20013383, 0x200133a8 | the angle, then the radius (combat doc 2.2) |
+| `player_die` 0x200202b0 | 0x20020347, 0x20020366, 0x20020385 | the held grenade's drop velocity, x, y, z (combat doc 5.1), ahead of the death pick |
+| The weapon pickup's ammo, 0x20022cb0 (`GAME_CANT_GET_PRIMARY_WEAP_MESSAGE`) | 0x20022d1f, 0x20022d66 | the clip fraction arm and `rand() % (max - min) + min` (`cod11-items.md`) |
+| `RespawnItem` 0x20023400 (`RespawnItem: bad teammaster`) | 0x20023440 | `rand() % count` down the team chain |
+| The pickup's respawn delay (0x20023776..0x2002386e) | 0x200237a9 | `crandom() * random`, drawn only when `random` is not 0 (0x2002379c) |
+| `LaunchItem` 0x20023c10 | 0x20023cee | the climb, `200 + 50 * crandom()` |
+| `Drop_Weapon` 0x20023e0f | 0x20023eb1, 0x20023efe; 0x20024162, 0x20024190; 0x200240bb, 0x200240e0, 0x20024105 | the clip and reserve fractions, or the `% (max - min)` and `% clipSize` arm; the tag drop's three spins (50, 40, 60) |
+| `G_BounceItem` 0x200249e0 | 0x20024b34 | the landing lift, `0.5 * (1 + r)` |
+| `G_MissileLandAngles` 0x200295d0 | 0x2002968a, 0x200296bc, 0x200297c4 | a floor's factor (one of two arms), a wall's `(rand() & 0x7f) - 63` (combat doc 12.7) |
+| `Static_Pain` 0x2002d940 (`SP_func_static`'s pain, combat doc 14.5) | 0x2002d95a, 0x2002d971 | `rand() % 1000` |
+| `multi_trigger` 0x20039c90 | 0x20039cd2 | the `wait` arm's `crandom` (`cod11-movers.md` 17) |
+| `G_TriggerDamage` 0x2003a1f0 | 0x2003a290 | the `wait` arm's `crandom` (combat doc 14.8) |
+| `G_PickTarget` 0x2003bc40 | 0x2003bc9d | `rand() % n`; no `call` reaches 0x2003bc40 |
+| The melee 0x2003c7e0 | 0x2003c905 | `meleeDamage + rand() % 5` |
+
+VERIFIED (the instructions): no site above reads the script table at
+`+0x1da44`, which only the uncalled 0x20003180 indexes (0x20003198).
+INFERRED, off that and the table's movetype stride: the continuous anim's
+pick draws nothing. 1.5b and UO add the fire recoil
+(cod15-movement.md 6), the stuck push (`cod11-player-clip.md` 13.4),
+UO's tracer roll and vehicle guns (`coduo-diff.md` 21.3) and the barrage's
+`crandom`s (`coduo-diff.md` 21.2), each VERIFIED in its doc.
+
+**As implemented.** `engine::core::LibcRand` is a handle on one stream:
+CoD1's `Server` makes it glibc's (`vcod_common::rng::GlibcRand`) with
+`srand(seed)` at construction, and every CoD1 level's load hands the same
+stream to its `GameHost` (`Carry::rand`) and calls `srand(level seed)`
+on it, 4.8's seed. The checksum feed and the challenges (`Server::rand`),
+the spread, the melee, the recoil, the anim picks and the stuck push (the
+frame's `Lend::rng`) and the host's draws (`GameHost::rng`: pickups,
+teams, drops, `multi_wait`, tracers, vehicle guns, the barrage, and
+`Missiles`' bounces through `share_rand`) all step it. CoD2's and CoD4's
+engines keep vcod's xorshift through the same type
+(`LibcRand::xorshift`), their draws unchanged. Every animscript event
+vcod raises draws one, `AnimScript::select_event_random` included for the
+one-line clauses (land, jump, the weapon events, the breakdown), with an
+unforced jump drawing before the hold test. `trigger_multiple`'s touch
+and `use` arm `multi_wait` with its draw when `nextthink` is 0; vcod reads
+no `random` key, so the delay is `wait` alone (no stock map sets one).
+
+Left open: the draws run in vcod's frame order, not retail's per-cmd
+order (an event's pick is taken in `update_anims` after the frame's
+moves; retail's inside each cmd's pmove, ahead of that cmd's spread).
+`gunrandom` keeps vcod's positive unit draw where 1.1d multiplies by
+`-2^-31` (combat doc 2.2), 1.5b's and UO's sign unread. `G_RunFrame`
+draws vcod does not model, if any, are not checked against a Linux
+module's call list.
+
+VERIFIED, vcod measurement, `bot_match 1 2` with `DIGEST=600
+NETDIGEST=600 TICKS=6000` on mp_carentan tdm, f82643883 against the
+change: every `digest` and `net` line moves from tick 600 on, at 1.1 and
+UO, since the spread, the melee, the anim picks and the drops now step one
+glibc stream seeded per level. The matches stay in range:
+
+| Run | Score axis-allies | Kills-deaths | Stalled |
+|---|---|---|---|
+| 1.1 seed 1, before / after | 33-30 / 21-38 | 63-63 / 59-59 | 20 / 0 |
+| 1.1 seed 2, before / after | 29-33 / 34-46 | 62-62 / 80-81 | 0 / 0 |
+| UO seed 1, before / after | 27-29 / 28-34 | 56-56 / 62-62 | 0 / 0 |
+| UO seed 2, before / after | 20-33 / 19-38 | 55-57 / 58-59 | 0 / 0 |
+
+The gates that had stood on a xorshift draw were moved to a glibc seed
+or a pin: `dyingpose_ab`'s death clips (seeds 12, 1 and 6 for 1.1d, 1.5b
+and UO), `vehicle_ab`'s jeep driver (28), `vehicle_blast_ab`'s jeep rocket
+(`srand(3)`), `clearveh_uo_ab`'s near toss (`srand(5)`), `dmgtrig_ab`'s
+shell (`srand(1)`); `missile_edge_ab`'s two sky rockets fly retail's
+`trDelta` off one frame's step. `Server::test_seed_rng` reseeds the stream
+and is xored into each later level's `srand`, so a seeded bot gate's draws
+still follow its seed.
 
 ### 4.9 What a restart costs
 

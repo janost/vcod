@@ -683,8 +683,11 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   entry showing its saved row while its ping is above 0, and writes it at
   the end of an Internet refresh: the rows and pings as they stand, 0 for a
   server that timed out, -1 for one never answered. Retail writes the whole
-  file at UI shutdown instead. On 1.1 the overflow block and its count stay
-  as read. With no file it writes a 412688-byte one with
+  file at UI shutdown instead. On 1.1 the master's addresses past the
+  2048 entries go into an overflow list (up to `0x800`), read from the
+  third block at start and written to it with the Internet list; an
+  Internet entry that timed out takes the list's last address on the next
+  ping pass, as `CL_UpdateVisiblePings` does. With no file it writes a 412688-byte one with
   empty Internet and address lists. An entry vcod cannot address (IPX,
   loopback) is kept as read. A reply's hostname, map, counts and ping go
   into the entry, as `CL_SetServerInfo` updates every list holding the
@@ -859,8 +862,9 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   `textalignx` whatever its alignment. INFERRED from RTCW; screenshots
   match the stock layout by eye.
 - The game type filter, refresh date and preview owner draws follow section
-  6. vcod keeps each source's date in the browser, not a
-  `ui_lastServerRefresh_<n>` cvar. A right click acts as a left click and
+  6. A refresh sets `ui_lastServerRefresh_<n>` with `set`, as a console
+  cvar nothing archives, and the date line reads it back, so a console
+  `set` of it shows too. A right click acts as a left click and
   steps the game type and source owner draws back (section 19). A missing
   `menu/art/unknownmap` draws nothing.
 - The Internet list stops at retail's size: 2048 entries plus the `0x800`

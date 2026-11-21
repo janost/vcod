@@ -219,7 +219,10 @@ pub fn spawn_entities_from_string(
                 }
                 None => {
                     let _p = crate::tick_profile::phase("spawn/turret");
-                    spawn_turret(host, cx, id, &item.name, &turret_keys(&pairs))?
+                    spawn_turret(host, cx, id, &item.name, &turret_keys(&pairs))?;
+                    // A map's turret has an object with no script near it
+                    // (1.1d `probe_usage_ents`; the call making it unread).
+                    cx.reach(Value::Entity(id));
                 }
             }
         }

@@ -1791,9 +1791,14 @@ frame holds or still blends out raises that one node: vcod hands it the other
 clock's clip and weight (`ChannelClock::shared`), its goal time off that
 weight (0x080bd674 reads the node's weight, VERIFIED), and the other clock
 drops its blend-out entry (`ChannelClock::release`). Where both clocks hold
-the node as their current clip, each draws it under its own channel node, the
-per-channel model's limit; on 1.1, whose setter always sets the node's time,
-the other clock keeps its own.
+the node as their current clip they carry one time: a setter's start is the
+other clock's too, and after the torso's update (which sets the node's rate
+last) the legs clock takes the torso's copy. The pose places each clip under
+the `main` child its anim sits under in the tree, whichever lerp frame set
+it, and a node both carry once (`animclock::body_layers`): a `both` line's
+`pb_*` node blends under `legs`, so the `torso` node holds only `pt_*`
+clips, as 0x080bbea8 walks the one tree. INFERRED from the tree and the
+walk; no capture poses a `both` line against it.
 
 VERIFIED, `cod_lnxded` 0x080bf8ac, whose arguments (DObj, anim, root, weight,
 time, rate) match syscall 0x8a's as the setter passes them (cgame 0x300039e1

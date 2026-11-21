@@ -769,8 +769,8 @@ pub struct PlayerState {
     pub hud_current: [HudElem; MAX_HUDELEMS],
     pub weapon_models: [u8; 128],
     /// The first bit: origin and velocity came on the wire. A message
-    /// without them leaves the client's own prediction in their place,
-    /// which a capture reader does not have (the fields keep the base).
+    /// without them takes the client's own prediction in their place, its
+    /// archive row for `commandTime` (cod4-netfields.md 13).
     pub origin_sent: bool,
 }
 

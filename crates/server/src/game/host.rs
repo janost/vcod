@@ -1056,10 +1056,11 @@ pub struct GameHost {
     /// entity goes through and a blast's victim walk reads
     /// (`crate::area`, combat doc 14.7).
     pub area: crate::area::AreaTree,
-    /// The engine draws' generator state (pain anims, spread, pickups):
-    /// xorshift64*, so a draw is a real uniform value and reproducible from
-    /// a seed. Each level's load seeds it anew (`Carry::seed`).
-    pub rng: u64,
+    /// The game's libc `rand()` (the pickups, the teams, the drops,
+    /// `multi_wait`, the bounces). CoD1's is the engine's glibc stream,
+    /// shared and `srand`ed at each level's load (`Carry::rand`, map-cycle
+    /// doc 4.8.1); CoD2's and CoD4's a host-local xorshift.
+    pub rng: crate::engine::core::LibcRand,
     /// CoD1's `holdrand`: the script's `randomInt`, `randomFloat`,
     /// `randomIntRange` and `randomFloatRange`, the grenade's launch tumble
     /// and UO's barrage draw from it. Each level's load seeds it
@@ -2458,7 +2459,7 @@ impl GameHost {
             frozen: false,
             world: None,
             area: crate::area::AreaTree::unbounded(),
-            rng: RNG_SEED,
+            rng: crate::engine::core::LibcRand::xorshift(RNG_SEED),
             holdrand: vcod_common::rng::HoldRand(RNG_SEED as u32),
             spawn_pins: None,
             script_log: Vec::new(),
@@ -2641,15 +2642,15 @@ impl GameHost {
         self.initializing = was;
     }
 
-    /// A uniform draw in `[0, 1)` off the host's own state.
+    /// A uniform draw in `[0, 1)` off [`Self::rng`] (`LibcRand::unit`).
     pub fn rand_unit(&mut self) -> f32 {
-        rand_unit(&mut self.rng)
+        self.rng.unit()
     }
 
-    /// [`rand_int`] off the host's own state; the pickup's
-    /// `dropAmmoMin..Max` draw uses it.
+    /// One `rand()` off [`Self::rng`]; the pickup's `dropAmmoMin..Max`
+    /// draw uses it.
     pub fn rand_int(&mut self) -> i32 {
-        rand_int(&mut self.rng)
+        self.rng.rand()
     }
 
     /// The host half of `TeleportPlayer` (1.1d 0x51380, combat doc 14.7):
@@ -2808,7 +2809,7 @@ impl GameHost {
             return true;
         }
         let (rng, hold) = (&mut self.rng, &mut self.holdrand);
-        let Some(mut outs) = b.think(now_ms, hold, || rand_unit(rng)) else {
+        let Some(mut outs) = b.think(now_ms, hold, || rng.unit()) else {
             return true;
         };
         for out in &mut outs {
@@ -3052,11 +3053,8 @@ fn hud_color_word(e: &crate::game::entity::GEntity, route: Route) -> u32 {
     }
 }
 
-/// A uniform draw in `[0, 1)` off [`vcod_common::rng::xorshift`], the step
-/// every draw on the server shares, minus the glibc `rand()`-compatible
-/// masking `Server::rand` puts on top of it and `randomFloat` has no reason
-/// to match. A free function so the bullet spread (`crate::game::combat`)
-/// draws from `Server`'s state the same way.
+/// A uniform draw in `[0, 1)` off [`vcod_common::rng::xorshift`]'s whole
+/// word: the xorshift `LibcRand`'s, and the bots' own streams'.
 pub fn rand_unit(state: &mut u64) -> f32 {
     unit_of(vcod_common::rng::xorshift(state))
 }

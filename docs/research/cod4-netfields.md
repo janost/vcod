@@ -142,17 +142,31 @@ says so; the semantics of each branch are INFERRED from that code. The codec in 
   `svc_EOF` in every message (section 6). VERIFIED live.
 - The server sends origin and velocity unless the client's echoed origin
   matches and its echo time equals `commandTime`. VERIFIED (the
-  instructions): `MSG_WriteDeltaPlayerstate` (`cod4_lnxded` 0x813f586),
-  given a base (`test edx,edx` at 0x813f5a0) and the context's byte +0xd
-  clear, with `sv_clientArchive` on (0x13f181e0, copied off the dvar at
-  0x13f18204 by 0x81789a0), takes the squared distance from the client's
-  +0x63c (the move's three floats, stored by `SV_UserMove` at
-  0x817270a) to the playerstate's origin (+0x1c); at or under 0.01
-  (0x8209644, so 0.1 units) and with the client's +0x648 (the move's
-  time, 0x8172752) equal to `commandTime` (0x813f60d..0x813f615) it
-  writes bit 0 (0x8140e13..0x8140e1e), else bit 1. The probe echoes an
-  origin of 1e6 at time 0, and every snapshot carries them. VERIFIED
-  live.
+  instructions): `MSG_WriteDeltaPlayerstate` (`cod4_lnxded` 0x813f586)
+  with no base (`test edx,edx; je` at 0x813f5a0) zeroes a playerstate
+  on its stack (`memset` of 0x2f64 bytes at 0x8140cf4..0x8140d0d), takes
+  it as the base (0x8140d12) and comes back to the same test at
+  0x813f5a8, so a full snapshot leaves origin out too. With the
+  context's byte +0xd clear (the live writer `SV_WriteSnapshotToClient`
+  clears it at 0x8179c93; the writer at 0x816b6b4 sets it, which then
+  writes bit 1 at 0x81409bb) and `sv_clientArchive` on (0x13f181e0,
+  copied off the dvar at 0x13f18204 by 0x81789a0), it takes the squared
+  distance, on the x87 stack, from the client's +0x63c (the move's three
+  floats, stored by `SV_UserMove` at 0x817270a..0x817273e, after the
+  cmds and before the state checks) to the playerstate's origin (+0x1c);
+  at or under the float 0.01 (0x8209644, so 0.1 units; `fucomip`, `jb`
+  at 0x813f601..0x813f60b, so a NaN fails) and with the client's +0x648
+  (the move's time, 0x8172752) equal to `commandTime`
+  (0x813f60d..0x813f615) it writes bit 0 (0x8140e13..0x8140e1e), else
+  bit 1. `sv_clientArchive` is a bool, on by default: `SV_Init` registers
+  it with 1 and flags 0 (0x8173944..0x8173968; the name at 0x8231957,
+  "Have the clients archive data to save bandwidth on the server" at
+  0x8231fb8). The probe echoes an origin of 1e6 at time 0, and every
+  snapshot carries them. VERIFIED live. vcod-server makes the same test
+  (`origin_echoed`, the f64 sum standing in for the x87 one), and
+  `cod4_live_a_predicted_walk_lets_the_server_leave_origin_out` has
+  vcod's client walking on it get nearly every snapshot without origin.
+  VERIFIED (the test).
 
 ## 4. The end of the gamestate
 
@@ -567,48 +581,6 @@ read nor written.
 
 ## 11. Still open
 
-- A playerstate without origin and velocity (bit 0) takes them off
-  the client's own prediction history. The server sends bit 0 only for a
-  delta snapshot, with `sv_clientArchive` on, when the predicted origin
-  the move op carried is within 0.1 units of the playerstate's and its
-  time equals `commandTime` (section 3). VERIFIED (the instructions).
-  - **The send.** `CL_SetUserCmdOrigin` (`iw3mp.exe` 0x45ad30) stores
-    `cl.serverTime` (0xc628d0) at 0xc84fd4 and the cgame's predicted
-    origin, velocity, view angles, `bobCycle` and `movementDir` beside it
-    (0xc84fa4..0xc84fcc); the cgame calls it off its predicted
-    playerstate (0x447b36, origin 0x794490, velocity 0x79449c, view
-    0x79457c) just before `CL_WritePacket` (0x447b47). The move op
-    writes the origin and that time (0x4641cd..0x464231), and the packet
-    adds the row to `cl.clientArchive` unless the newest holds the same
-    time (0x46423e..0x46428c; cod4-demos.md 4). VERIFIED (the
-    instructions).
-  - **The read.** `MSG_ReadDeltaPlayerstate` (0x507199..0x5072fd) reads
-    the first bit (0x50719b); set, each `changeHints` 3 row reads against
-    0 when the caller asks (0x5071e0..0x5071f7). Clear, it calls
-    0x472d00 (`CL_GetPredictedOriginForServerTime`, 0x507280) with the
-    new `commandTime` (+0x0) and the playerstate's origin (+0x1c),
-    velocity (+0x28), view angles (+0x108), `bobCycle` (+0x8) and
-    `movementDir` (+0xac): walking back from the ring's write index
-    (`cl` +0x696cc) less 1 over at most 256 rows, the first whose time
-    is at or before `commandTime` (`jle` at 0x472d3f), printing
-    `Couldn't find exact match for servertime %i, using servertime %i`
-    (0x6d25e0) when it is not equal, and copying its fields out. None
-    found prints `Unable find origin sent, delta not going to work`
-    (0x6e2bd8) and copies those five fields off the base (0x50728c..
-    0x5072fa). VERIFIED (the instructions and the strings).
-  - vcod: the ring is `Client::archive` (`ArchiveRing::at_or_before`,
-    `fill_unsent`); a live session adds a row as each move goes out
-    (`Cod4Session::archive_row`), a demo's archive records write it, and
-    `Client::parse` fills a bit-0 playerstate off it
-    (`a_playerstate_sent_without_origin_takes_the_archive_row`). So a
-    retail demo whose recorder took bit-0 snapshots plays his predicted
-    origins, as 1.7 plays them (INFERRED: no such demo is here). vcod's
-    client still sends an origin of 1e6 at time 0, so a server never
-    leaves origin out for it: vcod stamps its cmds off the newest
-    snapshot's time and its rows at the drawn time, where 1.7 stamps
-    both with `cl.serverTime`, and a real origin would seldom meet
-    `commandTime`. Reporting one waits on those two clocks lining up.
-    vcod-server sends bit 1 always (`write_snapshot`).
 - Re-encoding sound blend, fx, loop fx, helicopter, plane and vehicle
   entities (section 10).
 - A spectator following a player in these captures: the only follow on
@@ -655,8 +627,8 @@ through it. The clock and lerp it draws with are `cod4-client-view.md`'s.
   printed `EXE_DISCONNECTED`). VERIFIED live. That run also showed
   `EV_PLAY_FX_ON_TAG`, `EV_SOUND_ALIAS` and `EV_LANDING_GRASS`. VERIFIED
   live.
-- A live join plays (`play::cod4_input`): a cmd a frame on the newest
-  snapshot's time plus its age, packets every 33 ms with the cmds built
+- A live join plays (`play::cod4_input`): a cmd a frame stamped
+  `cl.serverTime` (section 13), packets every 33 ms with the cmds built
   since, the weapon byte the client's selection (the spawn's weapon,
   `weapnext` over the held primaries, the server's `a <n>`), never an
   echo of `ps.weapon`, and the offhand the spawn's or the server's `C
@@ -673,3 +645,71 @@ through it. The clock and lerp it draws with are `cod4-client-view.md`'s.
   past 85 into the delta. `cod4_live_pitch_held_past_the_limit_stays_at_the_limit`
   on vcod-server holds the camera at 85 (36 with the playerstate's
   angles). VERIFIED (the test).
+
+## 13. The predicted origin
+
+A playerstate without origin and velocity (bit 0) takes them off
+the client's own prediction history. The server sends bit 0, for a
+delta or a full snapshot, with `sv_clientArchive` on, when the
+predicted origin the move op carried is within 0.1 units of the
+playerstate's and its time equals `commandTime` (section 3). VERIFIED
+(the instructions).
+
+- **The order.** Active, the cgame's frame (0x452a3b..0x452a57) runs
+  `CL_CreateNewCommands` (0x463e00) and then the prediction (0x447980),
+  whose tail is `CL_SetUserCmdOrigin` (0x447b36) and, when
+  `CL_ReadyToSendPacket` (0x463e60) allows, `CL_WritePacket`
+  (0x463f50 at 0x447b47); before state 9 `CL_Frame` makes and sends
+  them itself after `CL_SetCGameTime` (0x46c9f6..0x46ca22). So each
+  packet carries the state predicted through its newest cmd. A cmd is
+  stamped `cl.serverTime`, at most 5000 past the newest snapshot
+  (0x463a73..0x463aa5: `cmp 0x1388`, `jle`, else snapshot + 0x1388),
+  and `CL_CreateNewCommands` makes one each call with no test of the
+  time (0x463e15..0x463e53). VERIFIED (the instructions); the
+  functions' names are INFERRED.
+- **The send.** `CL_SetUserCmdOrigin` (`iw3mp.exe` 0x45ad30) stores
+  `cl.serverTime` (0xc628d0) at 0xc84fd4 and the cgame's predicted
+  origin, velocity, view angles, `bobCycle` and `movementDir` beside it
+  (0xc84fa4..0xc84fcc); the cgame calls it off its predicted
+  playerstate (0x447b36, origin 0x794490, velocity 0x79449c, view
+  0x79457c) just before `CL_WritePacket` (0x447b47). The move op
+  writes the origin and that time (0x4641cd..0x464231), and the packet
+  adds the row to `cl.clientArchive` unless the newest holds the same
+  time (0x46423e..0x46428c; cod4-demos.md 4). VERIFIED (the
+  instructions).
+- **The read.** `MSG_ReadDeltaPlayerstate` (0x507199..0x5072fd) reads
+  the first bit (0x50719b); set, each `changeHints` 3 row reads against
+  0 when the caller asks (0x5071e0..0x5071f7). Clear, it calls
+  0x472d00 (`CL_GetPredictedOriginForServerTime`, 0x507280) with the
+  new `commandTime` (+0x0) and the playerstate's origin (+0x1c),
+  velocity (+0x28), view angles (+0x108), `bobCycle` (+0x8) and
+  `movementDir` (+0xac): walking back from the ring's write index
+  (`cl` +0x696cc) less 1 over at most 256 rows, the first whose time
+  is at or before `commandTime` (`jle` at 0x472d3f), printing
+  `Couldn't find exact match for servertime %i, using servertime %i`
+  (0x6d25e0) when it is not equal, and copying its fields out. None
+  found prints `Unable find origin sent, delta not going to work`
+  (0x6e2bd8) and copies those five fields off the base (0x50728c..
+  0x5072fa). VERIFIED (the instructions and the strings).
+- vcod: the ring is `Client::archive` (`ArchiveRing::at_or_before`,
+  `fill_unsent`), and `Client::parse` fills a bit-0 playerstate off it
+  (`a_playerstate_sent_without_origin_takes_the_archive_row`); a
+  demo's archive records write it, so a retail demo whose recorder
+  took bit-0 snapshots plays his predicted origins, as 1.7 plays them
+  (INFERRED: no such demo is here). A live session stamps its cmds
+  `cl.serverTime` with the cap (`Cod4Session::cmd_time`), predicts to
+  that time, and its scene sends the due packet after the prediction
+  with the predicted row (`Cod4Session::archive_row`, `send_packet`),
+  which `Conn::send` writes into the move and adds to the ring. A
+  packet no scene sent goes out at the next step with the far origin
+  at time 0. vcod's client makes no cmd on a millisecond it already
+  stamped, where 1.7 makes one the server then skips. vcod-server
+  leaves origin out as 0x813f586 does (section 3). The CoD4 bot
+  `NETDIGEST=600` lines (seeds 1 and 2, 6000 ticks) stay the same:
+  `bot_match`'s observer still echoes the far origin and its bots send
+  no moves, so no slot leaves origin out (2026-11-21).
+- A spawn's think puts `commandTime` at the level's time, which runs
+  ahead of `cl.serverTime`, so the cmds of the first 100 to 150 ms
+  after a spawn fall under it and the server skips them, a press with
+  them. INFERRED (Q3's `ClientSpawn` shape; vcod-server's spawn,
+  measured live in `cod4_live_every_server_round_fires_once`).

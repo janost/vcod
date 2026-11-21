@@ -72,7 +72,7 @@ fn join(cp: Cp, done: fn(&Seen) -> bool) -> (Seen, Vec<capture::Line>) {
                 }
                 None => Vec::new(),
             };
-            conn.send(&cmds).unwrap();
+            conn.send(&cmds, None).unwrap();
             for got in conn
                 .poll(Instant::now() + Duration::from_millis(50))
                 .unwrap()

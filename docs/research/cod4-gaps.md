@@ -31,9 +31,7 @@ Ranked by how much a player notices.
 - Small HUD fades: the compass's voice fade, drawn off `isTalking` but
   not checked against a retail capture with a talker (cod4-hud.md 15.9).
   S.
-- Smaller open items, each in its doc: the predicted
-  origin vcod's moves report (cod4-netfields.md 11);
-  `winvoice_mic_mute`, `winvoice_save_voice` and the record level meter
+- Smaller open items, each in its doc: `winvoice_mic_mute`, `winvoice_save_voice` and the record level meter
   (cod4-voice.md 5).
 
 ## 2. Not gaps
@@ -61,7 +59,14 @@ Ranked by how much a player notices.
 - A playerstate sent without origin (bit 0) kept the base's origin and
   velocity. It now takes them, the view, `bobCycle` and `movementDir`
   off the archive row for its `commandTime`, as `iw3mp.exe` 0x507280
-  does (cod4-netfields.md 11). What vcod's moves report is still open.
+  does (cod4-netfields.md 13).
+
+- vcod's moves reported an origin of 1e6 at time 0, so no server left
+  origin out for vcod, and vcod-server never left it out for anyone. The
+  client now stamps its cmds `cl.serverTime` and sends each packet after
+  the frame's prediction with the predicted origin and time, and
+  vcod-server leaves origin out on a match as `cod4_lnxded` 0x813f586
+  does (cod4-netfields.md 3, 13).
 
 - `timedemo` wrote no csv. It now writes 1.7's
   `demos/timedemo_<map>_mode_<r_mode>.csv`, a row a frame

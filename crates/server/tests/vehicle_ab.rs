@@ -906,8 +906,8 @@ fn the_jeep_driver_killed_in_his_seat_replays_on_ours() {
         ("probe_suicide", "3.5"),
     ];
     let setup = Setup {
-        // Seed 2 draws retail's death clip, `legsAnim` 20.
-        seed: Some(2),
+        // Seed 28 draws retail's death clip, `legsAnim` 20.
+        seed: Some(28),
         // The first spawn the gsc moves at once; the respawn is retail's.
         pins: vec![vec![
             None,

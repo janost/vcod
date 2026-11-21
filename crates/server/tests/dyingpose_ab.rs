@@ -38,11 +38,11 @@ const FIXTURE_UO: &str = include_str!("fixtures/dyingpose/mp_carentan-dm-uo.txt"
 const POSE_NEAR: f32 = 0.015;
 
 /// The server seed whose death draw is retail's, `legsAnim` 20: the pick is
-/// `rand()` on retail and ours draws its own sequence.
-const SEED: u64 = 2;
+/// one glibc `rand()` on both, but no seed of ours is the capture's.
+const SEED: u64 = 12;
 /// 1.5b's and UO's, drawing their captures' death clips.
-const SEED_15: u64 = 6;
-const SEED_UO: u64 = 68;
+const SEED_15: u64 = 1;
+const SEED_UO: u64 = 6;
 
 /// One dead snapshot's `commandTime`, `legsTimer` and `torsoTimer`.
 type Timers = (i32, i32, i32);

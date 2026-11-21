@@ -74,6 +74,7 @@ impl Cod4Server {
         self.core.checksum_feed = self.rand();
         let carry = crate::game::script::Carry {
             seed: Some(self.rand() as u32 as u64),
+            rand: None,
             ..carry
         };
         self.load_level(carry)?;
@@ -154,6 +155,7 @@ impl Cod4Server {
         let persist = old.rt.host.save_persist;
         let carry = crate::game::script::Carry {
             seed: Some(self.rand() as u32 as u64),
+            rand: None,
             ..old.take_carry(true)
         };
         let configstrings = old.rt.configstrings().to_vec();

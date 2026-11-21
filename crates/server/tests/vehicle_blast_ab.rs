@@ -57,6 +57,9 @@ struct Case {
     /// clock when its client joined, where the fixture carries that
     /// client's `CMDS` lines and ours replays their cmd times.
     join_ms: i64,
+    /// `srand` on the server's `rand()` once the level is up, for a spread
+    /// [`retail_deltas`] cannot pin.
+    seed: Option<u64>,
 }
 
 /// mp_cassino's spot 300 ahead of the Panzer IV, (4376, -1979), is on a
@@ -74,6 +77,7 @@ const ROCKET_TANK: Case = Case {
     gaps: ROCKET_TANK_GAPS,
     // The recipe's client started 18 s in and its first cmd ran at 20500.
     join_ms: 19450,
+    seed: None,
 };
 const FRAG_TANK: Case = Case {
     map: "mp_cassino",
@@ -82,7 +86,9 @@ const FRAG_TANK: Case = Case {
     spread: false,
     gaps: &[],
     join_ms: common::PROBE_JOIN_MS,
+    seed: None,
 };
+const JEEP_SEED: u64 = 3;
 const ROCKET_JEEP: Case = Case {
     map: "mp_peaks",
     fixture: include_str!("fixtures/vehicles/mp_peaks-blast-jeep-rocket-uo.txt"),
@@ -90,6 +96,10 @@ const ROCKET_JEEP: Case = Case {
     spread: true,
     gaps: &[],
     join_ms: common::PROBE_JOIN_MS,
+    // Retail's first round missed the hull, so no delta is pinned: a seed
+    // whose second round strikes where retail's did (899 through the
+    // falloff).
+    seed: Some(JEEP_SEED),
 };
 const FRAG_JEEP: Case = Case {
     map: "mp_peaks",
@@ -98,6 +108,7 @@ const FRAG_JEEP: Case = Case {
     spread: false,
     gaps: &[],
     join_ms: common::PROBE_JOIN_MS,
+    seed: None,
 };
 
 /// Each retail round's `trDelta`, rebuilt from its direct hit's `vdamage`
@@ -217,6 +228,9 @@ fn ours(c: &Case) -> Option<(Vec<String>, Explodes)> {
     .start(fs);
     if c.spread {
         sv.pin_rocket_deltas(retail_deltas(c));
+    }
+    if let Some(seed) = c.seed {
+        sv.test_seed_rng(seed);
     }
     common::run_alone(&mut sv, &mut now, c.join_ms);
     let q = Rc::new(RefCell::new(Queues::default()));

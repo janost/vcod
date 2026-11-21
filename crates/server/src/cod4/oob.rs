@@ -40,6 +40,8 @@ pub(super) const ENGINE_CVARS: &[(&str, &str)] = &[
     ("g_synchronousClients", "0"),
     ("sv_cheats", "0"),
     ("sv_clientSideBullets", "1"),
+    // `SV_Init`'s bool (0x8173944..0x8173968), on.
+    ("sv_clientArchive", "1"),
     ("sv_voiceQuality", "3"),
     ("timescale", "1"),
     ("scr_game_allowkillcam", "1"),
@@ -406,7 +408,7 @@ impl Cod4Server {
             Some(c4) => Box::new(move || c4.rand()),
             None => {
                 let rng = &mut self.core.rng;
-                Box::new(move || crate::engine::core::rand_from(rng))
+                Box::new(move || rng.rand())
             }
         };
         let challenge = self

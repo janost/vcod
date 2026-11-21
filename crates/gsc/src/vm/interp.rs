@@ -1159,6 +1159,7 @@ impl Vm {
                                 spawns: field_spawns,
                             };
                             let cur = host.get_field(&mut cx, eid, name);
+                            cx.heap.reach(cur);
                             debug_assert!(
                                 field_spawns.is_empty(),
                                 "Cx::spawn is only honoured from a builtin"
@@ -2092,6 +2093,9 @@ impl Vm {
             spawns: field_spawns,
         };
         let v = host.get_live_field(&mut cx, id, name);
+        if let Some(v) = v {
+            cx.heap.reach(v);
+        }
         debug_assert!(
             field_spawns.is_empty(),
             "Cx::spawn is only honoured from a builtin"
@@ -2152,6 +2156,7 @@ impl Vm {
                     errors.push(e);
                 }
                 Some(f) => {
+                    self.reach_all(queued.recv, &queued.args);
                     self.spawn(host, target, f, queued.recv, queued.args, errors);
                     spawned = true;
                 }
