@@ -947,9 +947,16 @@ mod tests {
         };
         for name in ["textures/a", "textures/b", "textures/none"] {
             let loaded = marked(&|| drop(load_material_image(&fs, &shaders, name)));
-            assert_eq!(marked(&|| mark_material_image(&fs, &shaders, name)), loaded, "{name}");
+            assert_eq!(
+                marked(&|| mark_material_image(&fs, &shaders, name)),
+                loaded,
+                "{name}"
+            );
         }
-        assert_eq!(marked(&|| mark_material_image(&fs, &shaders, "textures/b")).len(), 1);
+        assert_eq!(
+            marked(&|| mark_material_image(&fs, &shaders, "textures/b")).len(),
+            1
+        );
         for skin in ["s.dds", "none.tga"] {
             let loaded = marked(&|| drop(load_skin_image(&fs, skin)));
             assert_eq!(marked(&|| mark_skin_image(&fs, skin)), loaded, "{skin}");

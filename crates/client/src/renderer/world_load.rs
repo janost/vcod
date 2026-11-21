@@ -571,8 +571,7 @@ impl Renderer {
             if plan_of.contains_key(skin) {
                 continue;
             }
-            let scripted =
-                prop_material(lib, cod2, skin).is_some_and(|sh| !sh.stages.is_empty());
+            let scripted = prop_material(lib, cod2, skin).is_some_and(|sh| !sh.stages.is_empty());
             let (mut template, mut opaque) = (None, false);
             if !scripted {
                 match prop_skin_draw(fs, skin) {
@@ -584,8 +583,7 @@ impl Renderer {
                     PropSkinDraw::Cut => {}
                 }
             }
-            let staged =
-                scripted || template.is_some_and(|i| !prop_templates[i].stages.is_empty());
+            let staged = scripted || template.is_some_and(|i| !prop_templates[i].stages.is_empty());
             plan_of.insert(skin, plans.len());
             plans.push(SkinPlan {
                 skin,
@@ -656,9 +654,11 @@ impl Renderer {
             });
             for (p, prepared) in chunk.iter().zip(prepared) {
                 let (view, cut, pass) = match prepared {
-                    Some((img, levels, cut, pass)) => {
-                        (upload_levels(device, queue, p.skin, &img, &levels), cut, pass)
-                    }
+                    Some((img, levels, cut, pass)) => (
+                        upload_levels(device, queue, p.skin, &img, &levels),
+                        cut,
+                        pass,
+                    ),
                     None => {
                         let pass = Pass::Prop {
                             culled: false,
