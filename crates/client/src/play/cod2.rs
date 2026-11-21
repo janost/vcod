@@ -995,7 +995,7 @@ impl Cod2Session {
     fn render_time(&self) -> Option<i32> {
         let snap = self.view.snap.as_ref()?;
         if let Some(d) = &self.demo {
-            return d.active.then_some(d.server_time);
+            return d.clock.time();
         }
         if self.clock.started() {
             return Some(self.cg_time.unwrap_or_else(|| self.clock.server_time()));

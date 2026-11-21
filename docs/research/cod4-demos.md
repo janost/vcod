@@ -281,7 +281,8 @@ closes; `CL_Disconnect(0)`; `CL_NextDemo` (0x469380), which runs
 
 vcod: `Cod4Session::play_demo` reads to the gamestate, `Loader::start_demo`
 loads its map behind the connect screen, and `DemoPlay::frame` runs the
-arms above each step; the session walks the snapshots for their events
+arms above each step on `play::demos::DemoTime`, the clock CoD2's demo
+runs on too; the session walks the snapshots for their events
 and HUD as a watched capture does, predicts nothing and sends nothing.
 That the cgame predicts nothing in a demo is INFERRED from CoD2's
 (`cod2-demos.md` 5). The recorder's eye is his playerstate lerped

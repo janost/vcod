@@ -8,23 +8,13 @@ use vcod_common::net::Msec;
 /// clock (0x17ba76).
 pub(super) struct DemoPlay {
     reader: vcod_common::net::demo::DemoReader,
-    /// `clc.firstDemoFrameSkipped` (+0x40194): only a new playback clears it.
-    skipped: bool,
-    /// `timedemo` (+0x4018c) and its count, kept for the whole demo.
-    timedemo: Option<crate::play::demos::TimeDemo>,
+    /// The clock: `clc.firstDemoFrameSkipped` (+0x40194), `timedemo`
+    /// (+0x4018c), `clc.timeDemoBaseTime` (+0x401ac); active once a
+    /// snapshot since the last gamestate seeded it.
+    pub(super) clock: crate::play::demos::DemoTime,
     /// `timedemo`'s csv, when the caller asked for one
     /// ([`Cod2Session::write_timedemo_csv`]).
     csv: Option<TimedemoCsv>,
-    /// `cl_freezeDemo`: the clock holds.
-    freeze: bool,
-    /// `CA_ACTIVE`: a snapshot since the last gamestate seeded the clock.
-    pub(super) active: bool,
-    /// `cl.serverTimeDelta`, `cl.serverTime`, `cl.oldServerTime`.
-    delta: i32,
-    pub(super) server_time: i32,
-    old_server_time: i32,
-    /// `clc.timeDemoBaseTime` (+0x401ac): the first snapshot's time.
-    base: i32,
     /// The file ran out (or was cut short).
     ended: bool,
 }
@@ -85,15 +75,8 @@ impl Cod2Session {
         let mut s = Cod2Session::new(None, Client::new(0, 0));
         s.demo = Some(Box::new(DemoPlay {
             reader: vcod_cod2::net::demo::reader(data),
-            skipped: false,
-            timedemo: timedemo.then(Default::default),
+            clock: crate::play::demos::DemoTime::new(timedemo),
             csv: None,
-            freeze: false,
-            active: false,
-            delta: 0,
-            server_time: 0,
-            old_server_time: 0,
-            base: 0,
             ended: false,
         }));
         while s.view.gamestates == 0 {
@@ -112,7 +95,7 @@ impl Cod2Session {
     /// Under `timedemo`, write its csv into `dir` (the game's `demos/`)
     /// with `r_mode`'s index in its name.
     pub fn write_timedemo_csv(&mut self, dir: PathBuf, r_mode: i32) {
-        if let Some(d) = self.demo.as_mut().filter(|d| d.timedemo.is_some()) {
+        if let Some(d) = self.demo.as_mut().filter(|d| d.clock.timedemo.is_some()) {
             d.csv = Some(TimedemoCsv {
                 dir,
                 r_mode,
@@ -130,7 +113,7 @@ impl Cod2Session {
     /// `cl_freezeDemo` for the next frames.
     pub fn set_freeze_demo(&mut self, freeze: bool) {
         if let Some(d) = self.demo.as_mut() {
-            d.freeze = freeze;
+            d.clock.freeze = freeze;
         }
     }
 
@@ -143,8 +126,10 @@ impl Cod2Session {
     /// `CL_DemoCompleted`'s `%i frames, %3.1f seconds: %3.1f fps` under
     /// `timedemo`, when any time passed.
     pub fn timedemo_report(&self) -> Option<String> {
-        let td = self.demo.as_ref()?.timedemo.as_ref()?;
-        td.report(self.real_ms() as i32)
+        self.demo
+            .as_ref()?
+            .clock
+            .timedemo_report(self.real_ms() as i32)
     }
 
     /// `CL_ReadDemoMessage` (Mac 0x14c132): one record parsed; false once
@@ -202,9 +187,8 @@ impl Cod2Session {
         if d.ended {
             return;
         }
-        if !d.active {
-            if !d.skipped {
-                d.skipped = true;
+        if !d.clock.started() {
+            if !d.clock.primed_read() {
                 return;
             }
             let snaps = self.stats.snapshots;
@@ -224,25 +208,15 @@ impl Cod2Session {
                 return;
             }
             let d = self.demo.as_mut().expect("playing");
-            d.active = true;
-            d.delta = (time - real).raw();
-            d.old_server_time = time.raw();
-            d.server_time = time.raw();
-            d.base = time.raw();
+            d.clock.seed(time.raw(), real);
         }
         let d = self.demo.as_mut().expect("playing");
-        if !d.freeze {
-            d.server_time = (real + d.delta).max(d.old_server_time);
-            d.old_server_time = d.server_time;
+        // the csv's row counts the frames before this one's
+        if let (Some(td), Some(csv)) = (d.clock.timedemo.as_ref(), d.csv.as_mut()) {
+            let map = self.view.configstrings.map_name().unwrap_or_default();
+            csv.frame(map, td, real);
         }
-        if let Some(td) = d.timedemo.as_mut() {
-            if let Some(csv) = d.csv.as_mut() {
-                let map = self.view.configstrings.map_name().unwrap_or_default();
-                csv.frame(map, td, real);
-            }
-            d.server_time = d.base + td.step(real) * 50;
-        }
-        let until = d.server_time;
+        let until = d.clock.tick(real).expect("seeded");
         while self
             .client
             .parser
@@ -254,7 +228,7 @@ impl Cod2Session {
             }
             if self.view.gamestates != gamestates {
                 if let Some(d) = self.demo.as_mut() {
-                    d.active = false;
+                    d.clock.reprime();
                 }
                 return;
             }
@@ -363,7 +337,15 @@ mod tests {
         }
         crate::frame_clock::tick(std::time::Instant::now(), None);
         assert!(s.demo_over(), "the demo never ended");
-        let counted = s.demo.as_ref().unwrap().timedemo.as_ref().unwrap().frames();
+        let counted = s
+            .demo
+            .as_ref()
+            .unwrap()
+            .clock
+            .timedemo
+            .as_ref()
+            .unwrap()
+            .frames();
         let text = std::fs::read_to_string(dir.join("timedemo_mp_toujane_mode_3.csv")).unwrap();
         let rows: Vec<(i32, i32)> = text
             .lines()
