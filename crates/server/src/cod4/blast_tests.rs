@@ -62,9 +62,9 @@ fn seen(level: &Cod4Level, id: EntId, svs: i32) -> Option<Seen> {
     let m = level.rt.host.cod4().missiles.iter().find(|m| m.id == id)?;
     Some((
         svs,
-        m.event_seq,
-        m.events,
-        m.parms,
+        m.events.seq as u32,
+        m.events.events.map(|e| e as u32),
+        m.events.parms.map(|p| p as u32),
         m.pos.tr_type,
         m.ground,
         m.origin.to_array().map(|v| (v * 8.0).round() as i32),
