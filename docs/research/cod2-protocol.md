@@ -501,8 +501,12 @@ of the delta byte from the message's sequence (0x413751), so it wraps; a
 `jg` (0x41377c) sends a base of 0 or less down the no-base arm, and the ring
 slot must be valid (0x4137d4, `Delta from invalid frame`) and hold that
 `messageNum` (0x4137e8, `Delta frame too old.`). VERIFIED (the instructions
-and the strings). vcod's parser wraps the same way: a demo's record sequence
-is any word.
+and the strings). The `jg` tests the base itself (0x41377a), so a delta byte
+that reaches message 0 or before also takes the no-base arm, which clears
+the word at 0x64a178 (0x413780) and marks the frame valid (0x413786).
+VERIFIED (the instructions). That the word is `demowaiting` is INFERRED
+(CoD4's same arm, cod4-demos.md 4). vcod's parser wraps the same way (a demo's record sequence is
+any word) and reads a base of 0 or less from nothing.
 
 The entity, client and baseline deltas are 1.1's `MSG_ReadDeltaStruct` shape:
 a remove bit, a no-change bit, an `lc` byte, then `lc` fields through

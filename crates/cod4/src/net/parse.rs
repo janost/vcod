@@ -123,7 +123,8 @@ pub struct Snapshot {
     /// The netchan sequence of the message that carried it.
     pub message_num: i32,
     pub server_time: Msec,
-    /// 0 for a snapshot from nothing, else the message it deltas from.
+    /// The delta byte: how many messages back its base went out, 0 for
+    /// none. A byte that reaches message 0 or before has no base either.
     pub delta_num: i32,
     /// Index into [`Client::snapshots`] of the snapshot it deltas from.
     pub base: Option<usize>,
@@ -296,12 +297,17 @@ impl Client {
         let server_time = Msec::from_raw(r.read_long());
         let delta = r.read_byte() as i32;
         let snap_flags = r.read_byte();
-        let base = if delta == 0 {
+        // Retail's wrapping `int` (iw3mp.exe 0x47378a): a demo's sequence
+        // is any word. A zero byte reads as -1, and a base of 0 or less
+        // takes the no-base arm (`jg` at 0x4737d1).
+        let num = if delta == 0 {
+            -1
+        } else {
+            message_num.wrapping_sub(delta)
+        };
+        let base = if num <= 0 {
             None
         } else {
-            // Retail's wrapping `int` (iw3mp.exe 0x47378a): a demo's
-            // sequence is any word.
-            let num = message_num.wrapping_sub(delta);
             match self.ring[num.rem_euclid(PACKET_BACKUP as i32) as usize] {
                 Some((n, i)) if n == num => Some(i),
                 _ => bail!("snapshot {message_num} deltas from {num}, which I don't hold"),

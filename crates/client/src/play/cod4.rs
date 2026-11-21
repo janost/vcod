@@ -770,7 +770,7 @@ impl Cod4Session {
                         // `CL_ParseSnapshot` clears `demowaiting` on a full
                         // frame (0x4737d5) before `CL_PacketEvent` writes.
                         if r.parsed.ops.iter().any(|o| {
-                            matches!(o, Op::Snapshot(i) if conn.client.snapshots[*i].delta_num == 0)
+                            matches!(o, Op::Snapshot(i) if conn.client.snapshots[*i].base.is_none())
                         }) {
                             rec.waiting = false;
                         }

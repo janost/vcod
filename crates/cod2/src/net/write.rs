@@ -597,6 +597,51 @@ mod tests {
         assert_eq!(s.ps, f.ps);
     }
 
+    /// A delta byte that reaches message 0 or before takes the no-base arm
+    /// (`jg` at CoD2MP_s.exe 0x41377c): the frame reads from nothing and
+    /// is valid, ring slot 0 never looked at.
+    #[test]
+    fn a_delta_base_of_zero_or_less_reads_from_nothing() {
+        let huff = Huffman::new();
+        let gs = Gamestate2 {
+            server_command_sequence: 0,
+            configstrings: Default::default(),
+            baselines: Default::default(),
+            client_num: 0,
+            checksum_feed: 0,
+        };
+        let mut ps = PlayerState2::default();
+        ps.f[field_index(&PLAYER_STATE_FIELDS, "pm_type")] = 4;
+        let f = Frame2 {
+            server_time: Msec::from_raw(1000),
+            ps,
+            entities: vec![],
+            clients: vec![],
+        };
+        // Written against an empty frame, which reads as one from nothing.
+        let empty = Frame2 {
+            server_time: Msec::from_raw(0),
+            ps: PlayerState2::default(),
+            entities: vec![],
+            clients: vec![],
+        };
+        for (n, back) in [(3, 3), (2, 5)] {
+            let mut parser = Parser::new();
+            let mut w = MsgWriter::new(&huff);
+            write_gamestate(&mut w, &gs);
+            w.write_byte(Svc::Eof as u8);
+            parser.parse(1, &w.into_ops()).unwrap();
+            let mut w = MsgWriter::new(&huff);
+            write_snapshot(&mut w, Some(&empty), back, 4, &f, |_| None, 0);
+            w.write_byte(Svc::Eof as u8);
+            parser.parse(n, &w.into_ops()).unwrap();
+            let s = parser.frame(n).unwrap();
+            assert!(s.valid, "{n} - {back}");
+            assert_eq!(s.delta_num, n - i32::from(back));
+            assert_eq!(s.ps, f.ps);
+        }
+    }
+
     /// A message that fails after a server command, a gamestate or a
     /// snapshot leaves the parser as it was: the next packet acknowledges
     /// no command the caller never got.
