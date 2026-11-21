@@ -2637,6 +2637,44 @@ mod tests {
         assert_eq!(s.dropped.as_deref(), Some("EXE_PLAYERKICKED"));
     }
 
+    /// A sequenced message off the socket whose op is illegible drops the
+    /// session with retail's `Com_Error` text (cod2-protocol.md 2.2); a
+    /// legible one before it does not.
+    #[test]
+    fn an_illegible_server_message_drops_the_session() {
+        use vcod_common::net::huffman::Huffman;
+        use vcod_common::net::netchan::{NetchanParams, ServerNetchan};
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let me = sock.local_addr().unwrap();
+        let mut s = Cod2Session::new(Some(sock), Client::new(1, 2));
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut nc = ServerNetchan::with_params(1, 2, NetchanParams::COD2);
+        let h = Huffman::new();
+        let mut send = |ops: &[u8]| {
+            for p in nc.transmit_eof(0, ops, 7, &h) {
+                server.send_to(&p, me).unwrap();
+            }
+        };
+        let poll = |s: &mut Cod2Session, messages: usize, errors: usize| {
+            let until = Instant::now() + Duration::from_secs(2);
+            while (s.stats.messages, s.stats.parse_errors) < (messages, errors)
+                && Instant::now() < until
+            {
+                s.poll(None);
+            }
+        };
+        send(&[]);
+        poll(&mut s, 1, 0);
+        assert_eq!((s.stats.messages, s.dropped.as_deref()), (1, None));
+        send(&[9]);
+        poll(&mut s, 1, 1);
+        assert_eq!(s.stats.parse_errors, 1);
+        assert_eq!(
+            s.dropped.as_deref(),
+            Some("CL_ParseServerMessage: Illegible server message 9")
+        );
+    }
+
     #[test]
     fn a_systeminfo_update_moves_the_server_id() {
         let mut s = session(None);
