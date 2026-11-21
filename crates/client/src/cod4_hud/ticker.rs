@@ -3,9 +3,11 @@
 use vcod_cod4::hud as h;
 
 use super::assets::Loaded;
-use super::compass::{OBJECTIVE_SIZE, angle_normalize_180};
+use super::compass::OBJECTIVE_SIZE;
 use super::text::text;
+use super::text_height;
 use super::{Cod4Hud, image_of, quad};
+use crate::hud::angle_normalize_180;
 use crate::hud::cod2elem::ScreenPlacement;
 use crate::hud::{HudQuad, font};
 use crate::play::cod4::Cod4Session;
@@ -57,7 +59,7 @@ impl Cod4Hud {
         };
         let font = l.fonts.pick(0, TICKER_TEXT_SCALE, sp);
         let px = TICKER_TEXT_SCALE / font.unit_scale();
-        let text_height = (48.0 * TICKER_TEXT_SCALE) as i32 as f32;
+        let text_height = text_height(TICKER_TEXT_SCALE);
         let [tx, ty, tw, th] = tape.rect;
         for mark in self.objective_marks(s, snap) {
             if mark.at == glam::Vec3::ZERO {

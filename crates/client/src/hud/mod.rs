@@ -82,6 +82,18 @@ impl HudQuad {
     }
 }
 
+/// The HUD's angle in 0..360: the float remainder. pmove's
+/// `AngleNormalize360` (`pmove::aim`) runs through the short grid instead.
+pub fn angle_normalize_360(a: f32) -> f32 {
+    a.rem_euclid(360.0)
+}
+
+/// The HUD's angle in -180..180, off [`angle_normalize_360`].
+pub fn angle_normalize_180(a: f32) -> f32 {
+    let a = angle_normalize_360(a);
+    if a > 180.0 { a - 360.0 } else { a }
+}
+
 /// A texture name's prefix that draws its quad blended `SrcAlpha One`
 /// (CoD4's font glow materials, `fonts/*_glow`), the image the rest names.
 pub const ADDITIVE: &str = "$add:";

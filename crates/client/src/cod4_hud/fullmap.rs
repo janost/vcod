@@ -97,7 +97,7 @@ impl Cod4Hud {
                 let f = l.fonts.pick(it.font, it.text_scale, sp);
                 let px = it.text_scale / f.unit_scale();
                 let tw = font::measure(f, &t, px);
-                let fh = (48.0 * it.text_scale) as i32 as f32;
+                let fh = text_height(it.text_scale);
                 let [x, y, w, hh] = it.rect;
                 let tx = match it.text_align {
                     1 => x + 0.5 * w - 0.5 * tw,
@@ -267,7 +267,7 @@ impl Cod4Hud {
                     snap.clients
                         .iter()
                         .find(|c| c.0[0] == n)
-                        .map_or(0, |c| client_word(c, "team"))
+                        .map_or(0, |c| client_u32(c, "team"))
                 };
                 let mine = team(me);
                 if !matches!(mine, 1 | 2) {

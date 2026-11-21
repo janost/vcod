@@ -1,7 +1,7 @@
 //! Text and its glow, and a line cut off by a newer one.
 
 use super::assets::Loaded;
-use super::{image_of, quad};
+use super::{image_of, quad, text_height};
 use crate::hud::HudQuad;
 use crate::hud::cod2elem::ScreenPlacement;
 use crate::hud::font::{self, Font};
@@ -20,7 +20,7 @@ pub(super) fn draw_interrupted(l: &Loaded, sp: &ScreenPlacement, now: i32, out: 
     let f = l.fonts.pick(0, scale, sp);
     let px = scale / f.unit_scale();
     let w = font::measure(f, line, px);
-    let h = (48.0 * scale) as i32 as f32;
+    let h = text_height(scale);
     let (x, _) = sp.axis(0, ((640.0 - w) / 2.0).trunc(), w, 0);
     let (y, _) = sp.axis(1, 100.0 - h, h, 0);
     text(f, line, x, y, px * sp.virtual_to_real[1], [1.0; 4], out);
@@ -33,8 +33,7 @@ pub(super) fn draw_interrupted(l: &Loaded, sp: &ScreenPlacement, now: i32, out: 
     }
 }
 
-/// [`font::layout`] with its shadow faded with the text: the shared
-/// layout draws every shadow at 0.8 alpha.
+/// [`font::layout`] with its shadow faded with the text.
 pub(crate) fn text(
     f: &Font,
     s: &str,
@@ -44,14 +43,7 @@ pub(crate) fn text(
     rgba: [f32; 4],
     out: &mut Vec<HudQuad>,
 ) -> f32 {
-    let from = out.len();
-    let w = font::layout(f, s, x, y, scale, rgba, out);
-    for q in &mut out[from..] {
-        if q.rgba == [0.0, 0.0, 0.0, 0.8] {
-            q.rgba[3] *= rgba[3];
-        }
-    }
-    w
+    font::layout_shadowed(f, s, x, y, scale, rgba, 0.8 * rgba[3], out)
 }
 
 /// [`text`] with its glow (`R_AddCmdDrawTextWithEffects`): nothing more

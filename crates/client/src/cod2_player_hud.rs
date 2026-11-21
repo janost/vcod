@@ -18,11 +18,12 @@ use vcod_common::asset_source::{Asset, AssetSource};
 use vcod_common::localize::Localized;
 use vcod_common::ui_menu::{MenuFile, UiItem};
 
-use crate::hud::HudQuad;
 use crate::hud::cod2elem::ScreenPlacement;
 use crate::hud::font::{self, Slot, UiFonts};
+use crate::hud::{HudQuad, angle_normalize_180, angle_normalize_360};
 use crate::play::cod2_events::Event2;
 use crate::play::cod2_view::{DamageKick, SightDef, SightLatch};
+use vcod_common::pmove::aim::angle_subtract;
 
 /// The owner draws `ui/menudefinition.h` numbers and `hud.menu` uses.
 mod od {
@@ -314,28 +315,6 @@ fn fade(start: i32, now: i32, total: i32, fade: i32) -> Option<f32> {
     } else {
         1.0
     })
-}
-
-fn angle_normalize_360(a: f32) -> f32 {
-    a.rem_euclid(360.0)
-}
-
-/// `AngleNormalize180`.
-fn angle_normalize_180(a: f32) -> f32 {
-    let a = angle_normalize_360(a);
-    if a > 180.0 { a - 360.0 } else { a }
-}
-
-/// `AngleSubtract`: `a - b` into -180..180.
-fn angle_subtract(a: f32, b: f32) -> f32 {
-    let mut d = vcod_common::fguard::turns(a - b);
-    while d > 180.0 {
-        d -= 360.0;
-    }
-    while d < -180.0 {
-        d += 360.0;
-    }
-    d
 }
 
 /// `vectoyaw`, degrees.
@@ -673,7 +652,27 @@ struct Ctx<'a> {
     now: i32,
 }
 
-impl Ctx<'_> {
+impl<'a> Ctx<'a> {
+    /// A context for a `w` by `h` window.
+    fn new(
+        fonts: &'a UiFonts,
+        slot: Slot,
+        (w, h): (f32, f32),
+        loc: &'a Localized,
+        now: i32,
+    ) -> Self {
+        Ctx {
+            fonts,
+            slot,
+            sp: ScreenPlacement::new(w, h),
+            k: h / 480.0,
+            screen_w: w,
+            screen_h: h,
+            loc,
+            now,
+        }
+    }
+
     /// `UI_DrawHandlePic`: `rect` placed by `align`, `uv` its corners.
     fn pic(
         &self,
@@ -723,26 +722,12 @@ impl Ctx<'_> {
         }
         let (x, w) = self.sp.axis(0, r[0], r[2], align[0]);
         let (y, h) = self.sp.axis(1, r[1], r[3], align[1]);
-        let (s, c) = angle.to_radians().sin_cos();
-        let (hw, hh) = (0.5 * w, 0.5 * h);
-        let (cx, cy) = (x + hw, y + hh);
-        let corner = |sx: f32, sy: f32| {
-            [
-                cx + c * hw * sx - s * hw * sy,
-                cy + s * hh * sx + c * hh * sy,
-            ]
-        };
-        out.push(HudQuad {
-            verts: [
-                corner(-1.0, -1.0),
-                corner(1.0, -1.0),
-                corner(1.0, 1.0),
-                corner(-1.0, 1.0),
-            ],
-            uvs: HudQuad::UNIT_UVS,
+        out.push(crate::hud::cod2elem::rotated_pic(
+            [x, y, w, h],
+            angle,
             rgba,
-            texture: m.to_string(),
-        });
+            m,
+        ));
     }
 
     fn font(&self, scale: f32) -> &font::Font {
@@ -841,16 +826,7 @@ impl PlayerHud {
         if ps.pm_type >= PM_SPECTATOR && ps.pm_type != PM_DEAD {
             return;
         }
-        let cx = Ctx {
-            fonts,
-            slot: Slot::Default,
-            sp: ScreenPlacement::new(w, h),
-            k: h / 480.0,
-            screen_w: w,
-            screen_h: h,
-            loc,
-            now,
-        };
+        let cx = Ctx::new(fonts, Slot::Default, (w, h), loc, now);
         if ps.pm_type < PM_DEAD {
             self.crosshair(frame, &cx, input.draw_gun, out);
         }
@@ -875,16 +851,7 @@ impl PlayerHud {
         if frame.snap.ps.pm_type != PM_SPECTATOR {
             return;
         }
-        let cx = Ctx {
-            fonts,
-            slot: Slot::BigFixed,
-            sp: ScreenPlacement::new(w, h),
-            k: h / 480.0,
-            screen_w: w,
-            screen_h: h,
-            loc,
-            now: 0,
-        };
+        let cx = Ctx::new(fonts, Slot::BigFixed, (w, h), loc, 0);
         let s = loc.get("CGAME_SPECTATOR").unwrap_or("CGAME_SPECTATOR");
         let x = -cx.width(s, 0.5) * 0.5;
         cx.text(s, x, -27.0, [7, 3], 0.5, [1.0; 4], out);
@@ -903,16 +870,7 @@ impl PlayerHud {
         loc: &Localized,
         out: &mut Vec<HudQuad>,
     ) {
-        let cx = Ctx {
-            fonts,
-            slot: Slot::Default,
-            sp: ScreenPlacement::new(w, h),
-            k: h / 480.0,
-            screen_w: w,
-            screen_h: h,
-            loc,
-            now: 0,
-        };
+        let cx = Ctx::new(fonts, Slot::Default, (w, h), loc, 0);
         cx.text(s, x as f32, (y + 16) as f32, [0, 0], 1.0 / 3.0, rgba, out);
     }
 
@@ -936,16 +894,7 @@ impl PlayerHud {
         out: &mut Vec<HudQuad>,
     ) {
         let ps = &frame.snap.ps;
-        let cx = Ctx {
-            fonts,
-            slot: Slot::Default,
-            sp: ScreenPlacement::new(w, h),
-            k: h / 480.0,
-            screen_w: w,
-            screen_h: h,
-            loc,
-            now: 0,
-        };
+        let cx = Ctx::new(fonts, Slot::Default, (w, h), loc, 0);
         if ps.pm_flags & (PMF_FOLLOW_NEXT | PMF_FOLLOW_STOP) != 0 {
             const SCALE: f32 = 0.208_333_33;
             let line = cx.height(SCALE).trunc();
@@ -1000,16 +949,7 @@ impl PlayerHud {
         if ps.pm_type >= PM_SPECTATOR && ps.pm_type != PM_DEAD {
             return;
         }
-        let cx = Ctx {
-            fonts,
-            slot: Slot::Default,
-            sp: ScreenPlacement::new(w, h),
-            k: h / 480.0,
-            screen_w: w,
-            screen_h: h,
-            loc,
-            now,
-        };
+        let cx = Ctx::new(fonts, Slot::Default, (w, h), loc, now);
         if let Some(c) = self.kick.flash(now) {
             cx.physical(
                 [-10.0, -10.0, w + 10.0, h + 10.0],
@@ -2309,16 +2249,7 @@ mod tests {
     fn draw(now: i32, f: impl FnOnce(&Ctx, &mut Vec<HudQuad>)) -> Vec<HudQuad> {
         let fonts = crate::hud::hudelem::tests::test_fonts();
         let loc = Localized::default();
-        let cx = Ctx {
-            fonts: &fonts,
-            slot: Slot::Default,
-            sp: ScreenPlacement::new(640.0, 480.0),
-            k: 1.0,
-            screen_w: 640.0,
-            screen_h: 480.0,
-            loc: &loc,
-            now,
-        };
+        let cx = Ctx::new(&fonts, Slot::Default, (640.0, 480.0), &loc, now);
         let mut out = Vec::new();
         f(&cx, &mut out);
         // the text's drop shadows

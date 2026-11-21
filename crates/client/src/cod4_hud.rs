@@ -53,7 +53,7 @@ use crate::console::shell::Shell;
 use crate::hud::HudQuad;
 use crate::hud::cod2elem::ScreenPlacement;
 use crate::hud::font::{self, Font};
-use crate::play::cod4::{Cod4Session, EV_OBITUARY, Fired};
+use crate::play::cod4::{Cod4Session, EV_OBITUARY, Fired, client_u32};
 
 /// `cg_chatHeight` 8 and `cg_chatTime` 12000 (`iw3mp.exe` 0x43ce07,
 /// 0x43cdd0), drawn at `cg_hudChatPosition` (5, 204).
@@ -99,13 +99,12 @@ const EF_COMPASS_PING: u32 = 0x80_0000;
 const ET_HELICOPTER: u32 = 12;
 const ET_PLANE: u32 = 13;
 
-/// A `clientState_t` field by name.
-fn client_word(c: &vcod_cod4::net::delta::ClientState, name: &str) -> u32 {
-    vcod_cod4::net::fields::CLIENT_STATE
-        .iter()
-        .find(|f| f.name == name)
-        .map_or(0, |f| c.0[f.word()])
+/// A line of text at `scale`, grid units: the 48-unit font height,
+/// truncated as the layouts read it.
+fn text_height(scale: f32) -> f32 {
+    (48.0 * scale) as i32 as f32
 }
+
 /// `cg_hudVotePosition`'s default (`iw3mp.exe` 0x43bb44: 5 and 220).
 const VOTE_POSITION: [f32; 2] = [5.0, 220.0];
 /// `CG_Obituary`'s icon: 1.4 font heights square, twice as wide for a

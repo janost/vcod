@@ -8,6 +8,7 @@ use vcod_cod4::net::parse::Snapshot;
 
 use super::assets::Loaded;
 use super::text::text;
+use super::text_height;
 use super::{
     CENTER_MS, CENTER_SCALE, CENTER_Y, CHAT_MS, CHAT_POS, CHAT_SCALE, CHAT_WIDTH, CS_VOTE_NO,
     CS_VOTE_STRING, CS_VOTE_TIME, CS_VOTE_YES, Cod4Hud, EF_VOTED, FADE_IN_MS, FADE_OUT_MS,
@@ -31,12 +32,7 @@ impl Cod4Hud {
         let in_killcam = in_killcam(snap);
         let client = |n: u32| snap.clients.iter().find(|c| c.0[0] == n);
         let Some(v) = client(victim) else { return };
-        let team = |c: &vcod_cod4::net::delta::ClientState| {
-            vcod_cod4::net::fields::CLIENT_STATE
-                .iter()
-                .find(|f| f.name == "team")
-                .map_or(0, |f| c.0[f.word()])
-        };
+        let team = |c| crate::play::cod4::client_u32(c, "team");
         let me = client(own).map_or(0, team);
         let colour = |t: u32| match (t, me) {
             (1 | 2, 1 | 2) if t == me => '8',
@@ -90,15 +86,7 @@ impl Cod4Hud {
         };
         if parm & 0x80 != 0 {
             return icon(
-                match parm & 0x7f {
-                    7 => "killiconmelee",
-                    8 => "killiconheadshot",
-                    9 => "killiconcrush",
-                    11 => "killiconfalling",
-                    12 => "killiconsuicide",
-                    15 => "killiconimpact",
-                    _ => "killicondied",
-                },
+                crate::hud::killfeed::iw_mod_icon(parm & 0x7f, true),
                 ICON_SIZE,
             );
         }
@@ -261,7 +249,7 @@ impl Cod4Hud {
         for (k, line) in [first, second].iter().enumerate() {
             // UI_DrawText's y is the baseline, a font size under the last.
             let baseline = y + size * (k + 1) as f32;
-            let h = (48.0 * scale) as i32 as f32;
+            let h = text_height(scale);
             let (rx, _) = sp.axis(0, x, 0.0, 1);
             let (ry, _) = sp.axis(1, baseline - h, h, 1);
             text(f, line, rx, ry, px * sp.virtual_to_real[1], [1.0; 4], out);
@@ -297,7 +285,7 @@ impl Cod4Hud {
         let f = l.fonts.pick(0, CENTER_SCALE, sp);
         let px = CENTER_SCALE / f.unit_scale();
         let w = font::measure(f, line, px);
-        let h = (48.0 * CENTER_SCALE) as i32 as f32;
+        let h = text_height(CENTER_SCALE);
         let (x, _) = sp.axis(0, -0.5 * w, w, 2);
         let (y, _) = sp.axis(1, CENTER_Y - h, h, 2);
         text(f, line, x, y, px * sp.virtual_to_real[1], [1.0; 4], out);
@@ -314,7 +302,7 @@ impl Cod4Hud {
                 let f = l.fonts.pick(it.font, it.text_scale, sp);
                 let px = it.text_scale / f.unit_scale();
                 let tw = font::measure(f, t, px);
-                let fh = (48.0 * it.text_scale) as i32 as f32;
+                let fh = text_height(it.text_scale);
                 let tx = match it.text_align {
                     1 => x + 0.5 * w - 0.5 * tw,
                     2 => x + w - tw,
@@ -381,7 +369,7 @@ impl Cod4Hud {
         let Some(Some(l)) = &self.loaded else { return };
         let scale = w.text_scale;
         let px = scale / f.unit_scale();
-        let h = (48.0 * scale) as i32 as f32;
+        let h = text_height(scale);
         let width: f32 = line
             .pieces
             .iter()
@@ -431,7 +419,7 @@ impl Cod4Hud {
     ) {
         let f = l.fonts.pick(0, CHAT_SCALE, sp);
         let px = CHAT_SCALE / f.unit_scale();
-        let h = (48.0 * CHAT_SCALE) as i32 as f32;
+        let h = text_height(CHAT_SCALE);
         let live = self.chat.iter().filter(|c| now - c.at < CHAT_MS);
         for (row, line) in live.enumerate() {
             let Some(Piece::Text(t)) = line.pieces.first() else {

@@ -6,6 +6,7 @@ use vcod_cod4::net::parse::Snapshot;
 
 use super::assets::Loaded;
 use super::text::text;
+use super::text_height;
 use super::weapon_info::{VOICE_OFF, VOICE_ON};
 use super::{Cod4Hud, image_of, quad};
 use crate::console::shell::Shell;
@@ -223,7 +224,7 @@ impl Cod4Hud {
             } => {
                 let f = l.fonts.pick(h::scoreboard::FONT, *scale, sp);
                 let px = scale / f.unit_scale();
-                let h = (48.0 * scale) as i32 as f32;
+                let h = text_height(*scale);
                 let (rx, _) = sp.axis(0, *x, 0.0, 1);
                 let (ry, _) = sp.axis(1, y - h, h, 0);
                 text(f, t, rx, ry, px * sp.virtual_to_real[1], *rgba, out);

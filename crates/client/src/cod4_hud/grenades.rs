@@ -5,6 +5,7 @@
 //! zones it draws with.
 
 use super::*;
+use crate::hud::angle_normalize_360;
 use glam::Vec3;
 
 /// The `cg_hudGrenade*` and `bg_maxGrenadeIndicatorSpeed` 1.7 defaults
@@ -225,10 +226,6 @@ impl Cod4Hud {
         }
         out
     }
-}
-
-fn angle_normalize_360(a: f32) -> f32 {
-    a.rem_euclid(360.0)
 }
 
 #[cfg(test)]

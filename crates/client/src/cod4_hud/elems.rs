@@ -5,6 +5,7 @@ use vcod_cod4::hud::{self as h, HudElem};
 
 use super::assets::Loaded;
 use super::text::glow_text;
+use super::text_height;
 use super::{Cod4Hud, image_of, quad};
 use crate::console::shell::Shell;
 use crate::hud::cod2elem::{self, ScreenPlacement};
@@ -75,7 +76,7 @@ impl Cod4Hud {
             let f = l.fonts.pick(font_enum, scale * k, sp);
             let px = scale / f.unit_scale();
             let w = font::measure(f, &t, px);
-            let h = (48.0 * scale) as i32 as f32;
+            let h = text_height(scale);
             let [x, y] = cod2elem::position(sp, &at, (w, h), now);
             // `CG_DrawHudElemText`: the element's `glowColor`, unfaded.
             let glow = e.glow_color.map(|c| f32::from(c) / 255.0);

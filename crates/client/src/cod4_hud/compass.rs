@@ -6,7 +6,7 @@ use vcod_cod4::net::parse::Snapshot;
 
 use super::assets::Loaded;
 use super::{
-    Cod4Hud, EF_COMPASS_PING, EF_PING, EF_TURRET_ACTIVE, ET_HELICOPTER, ET_PLANE, client_word,
+    Cod4Hud, EF_COMPASS_PING, EF_PING, EF_TURRET_ACTIVE, ET_HELICOPTER, ET_PLANE, client_u32,
     image_of, quad,
 };
 use crate::cod4_radar::{COMPASS_RANGE, MapAxes, SWEEP_HALF};
@@ -50,8 +50,8 @@ impl Cod4Hud {
             if let Some(i) = infos.get_mut(c.0[0] as usize) {
                 *i = Info {
                     valid: true,
-                    team: client_word(c, "team"),
-                    perks: client_word(c, "perks"),
+                    team: client_u32(c, "team"),
+                    perks: client_u32(c, "perks"),
                 };
             }
         }
@@ -341,7 +341,7 @@ impl Cod4Hud {
             snap.clients
                 .iter()
                 .find(|c| c.0[0] == n)
-                .map_or(0, |c| client_word(c, "team"))
+                .map_or(0, |c| client_u32(c, "team"))
         };
         let my_team = team_of(me);
         for mark in self.objective_marks(s, snap) {
@@ -524,12 +524,6 @@ fn minimap_uvs(map: &MapAxes, eye: [f32; 2], yaw: f32) -> [[f32; 2]; 4] {
 fn sweep_uvs(map: &MapAxes, progress: f32, eye: [f32; 2], yaw: f32) -> [[f32; 2]; 4] {
     let s = crate::cod4_radar::sweep_texture(map, progress, eye);
     window_uvs([s, 0.0], [SWEEP_HALF; 2], map.north_yaw - yaw)
-}
-
-/// An angle in -180..180.
-pub(super) fn angle_normalize_180(a: f32) -> f32 {
-    let a = a.rem_euclid(360.0);
-    if a > 180.0 { a - 360.0 } else { a }
 }
 
 /// A world point on the compass rect, off its centre (cod4-hud.md 10):
@@ -847,7 +841,7 @@ mod tests {
                     snap.clients
                         .iter()
                         .find(|c| c.0[0] == n)
-                        .map_or(0, |c| client_word(c, "team"))
+                        .map_or(0, |c| client_u32(c, "team"))
                 };
                 mates += snap
                     .entities

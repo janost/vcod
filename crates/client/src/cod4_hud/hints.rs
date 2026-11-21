@@ -206,7 +206,7 @@ impl Cod4Hud {
         let subject = self.hint_subject(l, s, &snap.ps, shell)?;
         let font = l.fonts.pick(it.font, it.text_scale, sp);
         let measure = |t: &str| font::measure(font, t, it.text_scale / font.unit_scale());
-        let line = (48.0 * it.text_scale) as i32 as f32;
+        let line = text_height(it.text_scale);
         Some((lay_out_hint(subject, it.rect, line, measure)?, alpha))
     }
 

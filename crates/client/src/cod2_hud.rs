@@ -399,14 +399,7 @@ pub fn obituary(
     team_rgb: impl Fn(i32) -> [f32; 3],
 ) -> Option<Obit> {
     let (icon, icon_wide, icon_flip) = if parm & 0x80 != 0 {
-        let icon = match parm & 0x7f {
-            7 => "killiconmelee",
-            8 => "killiconheadshot",
-            9 => "killiconcrush",
-            11 => "killiconfalling",
-            12 => "killiconsuicide",
-            _ => "killicondied",
-        };
+        let icon = crate::hud::killfeed::iw_mod_icon((parm & 0x7f) as u32, false);
         (icon.to_string(), false, false)
     } else {
         kill_icon(parm)

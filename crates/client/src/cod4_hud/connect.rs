@@ -476,7 +476,7 @@ fn put_glow(
     out: &mut Vec<HudQuad>,
 ) {
     let px = scale / f.unit_scale();
-    let h = (48.0 * scale) as i32 as f32;
+    let h = text_height(scale);
     let (rx, _) = sp.axis(0, x, 0.0, FULL);
     let (ry, _) = sp.axis(1, y - h, h, FULL);
     glow_text(f, t, rx, ry, px * sp.virtual_to_full(1), rgba, glow, out);

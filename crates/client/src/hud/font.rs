@@ -461,6 +461,21 @@ pub fn layout(
     color: [f32; 4],
     out: &mut Vec<HudQuad>,
 ) -> f32 {
+    layout_shadowed(font, text, x, y, scale, color, 0.8, out)
+}
+
+/// [`layout`] with the shadow at `shadow_alpha`.
+#[expect(clippy::too_many_arguments)]
+pub fn layout_shadowed(
+    font: &Font,
+    text: &str,
+    x: f32,
+    y: f32,
+    scale: f32,
+    color: [f32; 4],
+    shadow_alpha: f32,
+    out: &mut Vec<HudQuad>,
+) -> f32 {
     let s = font.glyph_scale * font.unit_scale() * scale;
     let mut cursor = x;
     for (seg, seg_color) in split_color_codes(text, color) {
@@ -478,7 +493,7 @@ pub fn layout(
                 w,
                 h,
                 g,
-                [0.0, 0.0, 0.0, 0.8],
+                [0.0, 0.0, 0.0, shadow_alpha],
                 font.glyph_page(g),
             );
             push_quad(out, gx, gy, w, h, g, seg_color, font.glyph_page(g));

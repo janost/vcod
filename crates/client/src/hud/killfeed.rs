@@ -81,6 +81,20 @@ pub fn icon_for(ob: &Obituary, kill_icon: Option<&str>, uo: bool) -> String {
     mod_icon(ob.mod_, uo).to_string()
 }
 
+/// CoD2's and CoD4's means-of-death icon (`eventParm & 0x7f` under bit
+/// 7); CoD4 adds `killiconimpact` for 15.
+pub fn iw_mod_icon(mod_: u32, cod4: bool) -> &'static str {
+    match mod_ {
+        7 => "killiconmelee",
+        8 => "killiconheadshot",
+        9 => "killiconcrush",
+        11 => "killiconfalling",
+        12 => "killiconsuicide",
+        15 if cod4 => "killiconimpact",
+        _ => "killicondied",
+    }
+}
+
 /// Stock `g_TeamColor_Axis`/`g_TeamColor_Allies` from
 /// `pak0.pk3:safemode_mp.cfg`; the cvars are server-settable.
 const AXIS_COLOR: [f32; 4] = [1.0, 0.5, 0.5, 1.0];
