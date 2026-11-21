@@ -11,26 +11,22 @@ const MANTLE_HELD_NEAR: f32 = 96.0;
 const MANTLE_HELD_STILL: f32 = 10.0;
 
 impl Follower {
-    /// Whether the body, on the ground under the landing of the mantle
-    /// edge it follows, would climb into another standing still there
-    /// (`others`, off the rungs: origin and velocity): the climb ends in
-    /// him, the two boxes push apart and the climber falls back to climb
-    /// again (mp_crash's ledge at (1403, 196, 188), bot-combat.md 20).
-    /// 1.7's pmove offers that climb too (bot-objectives.md 12.20). The
-    /// caller plans round the edge ([`Self::stuck`]).
-    pub fn mantle_held(
-        &self,
-        g: &NavGraph,
-        at: Vec3,
-        on_ground: bool,
-        others: &[(Vec3, Vec3)],
-    ) -> bool {
+    /// Whether the body under the landing of the mantle edge it follows,
+    /// on the ground or in the jump that starts the climb, would climb
+    /// into another standing still there (`others`, off the rungs: origin
+    /// and velocity): the climb ends in him, the two boxes push apart and
+    /// the climber falls back to climb again (mp_crash's ledge at (1403,
+    /// 196, 188), bot-combat.md 20, bot-navigation.md 3.15). 1.7's pmove
+    /// offers that climb too (bot-objectives.md 12.20). Not once the climb
+    /// is under way ([`Self::climbing`]). The caller plans round the edge
+    /// ([`Self::stuck`]).
+    pub fn mantle_held(&self, g: &NavGraph, at: Vec3, others: &[(Vec3, Vec3)]) -> bool {
         use vcod_common::pmove::STEPSIZE;
         let Some(edge) = self.mantle_edge(g) else {
             return false;
         };
         let land = self.mantle_land(g).unwrap_or(g.nodes[edge.1 as usize]);
-        on_ground
+        !self.climbing
             && land.z - at.z > STEPSIZE
             && (land - at).truncate().length() < MANTLE_HELD_NEAR
             && others.iter().any(|&(o, v)| {
@@ -620,16 +616,21 @@ mod tests {
         let at = foot + Vec3::new(-10.0, 0.0, 0.0);
         let still = |o: Vec3| [(o, Vec3::ZERO)];
         let mate = Vec3::new(1403.0, 196.0, 188.0);
-        assert!(f.mantle_held(&g, at, true, &still(mate)));
-        assert!(!f.mantle_held(&g, at, false, &still(mate)));
-        assert!(!f.mantle_held(&g, at, true, &[(mate, Vec3::new(150.0, 0.0, 0.0))]));
-        assert!(!f.mantle_held(&g, at, true, &still(mate + Vec3::new(0.0, 40.0, 0.0))));
+        assert!(f.mantle_held(&g, at, &still(mate)));
+        // In the jump that starts the climb too: from it the bot climbed
+        // into him (bot-navigation.md 3.15). Not once the climb runs.
+        assert!(f.mantle_held(&g, at + Vec3::Z * 12.0, &still(mate)));
+        f.climbing = true;
+        assert!(!f.mantle_held(&g, at, &still(mate)));
+        f.climbing = false;
+        assert!(!f.mantle_held(&g, at, &[(mate, Vec3::new(150.0, 0.0, 0.0))]));
+        assert!(!f.mantle_held(&g, at, &still(mate + Vec3::new(0.0, 40.0, 0.0))));
         // The landing the probe proved, off the node, is the one read.
         g.edge_mut(0, 1).unwrap().land = Some(Vec3::new(1380.0, 150.0, 188.0));
-        assert!(!f.mantle_held(&g, at, true, &still(mate)));
+        assert!(!f.mantle_held(&g, at, &still(mate)));
         g.edge_mut(0, 1).unwrap().land = None;
         f.next = 2;
-        assert!(!f.mantle_held(&g, at, true, &still(mate)));
+        assert!(!f.mantle_held(&g, at, &still(mate)));
     }
 
     /// Two bodies meet head-on in a corridor along +x with an alcove off

@@ -682,6 +682,36 @@ the run from `frag_near`. It set off at 910 and took the blast at 928,
 (`Bot::flee`). With it seeds 1 and 59 pass, and seeds 1 to 63 odd show
 no own-frag kill.
 
+### 6.1 An LMG bot camping on a long sightline (2026-11-21, not shipped)
+
+An LMG fires only off the bipod, and the bot sets it down only with an
+enemy in sight, so its fights start at whatever range it walked into.
+Tried, vcod's own: a UO LMG bot with no enemy, no objective, no memory or
+noise to follow and not in a seat probes 16 yaws from its prone eye
+(`shot_trace` 3000 out); on a sightline of 1200 or more it holds still,
+turns onto it, deploys and watches it until 15 s pass with no enemy (60 s
+at most), then walks 20 s before the next camp; a deploy not down 20
+ticks after the press ends the camp. VERIFIED (measured, ours, release,
+master af564b3c7 plus bot-combat.md 5.3, UO `tdm`, mp_cassino and
+mp_kursk, 8 bots, 6000 ticks, seeds 1..=8, kills by weapon off `VERBOSE`'s
+kill lines):
+
+| Run | LMG kills (mg34, mg30cal, dp28) | All kills | Stalled |
+|---|---|---|---|
+| master | 37 (20, 15, 2) | 671 | 34 |
+| camping, no deploy give-up | 10 | 595 | 1369 |
+| camping | 18 (12, 5, 1) | 636 | 0 |
+
+- The first cut stood bots where no bipod goes down (a probe trace at
+  mp_cassino (87, 95, 0): turned onto the lane, sight button down, never
+  deployed) for the camp's whole 15 s. VERIFIED (the trace).
+- With the give-up, LMG kills halve: the longest sightline from where the
+  bot happens to stand is not where enemies come from, and a camped body
+  faces one lane while the fight finds it from another. INFERRED (the
+  kill counts). Not kept. A lane chosen toward the enemy's side or the
+  last noise, and preferring mounts (`bg_lmg_yawcap`'s arc on a sill),
+  are untried. Open.
+
 ## 7. United Offensive's `ctf`, `dom`, `hq` and `bas`
 
 Line numbers are `maps/mp/gametypes/<gt>.gsc` in `pakuo00.pk3`; the
@@ -3619,6 +3649,7 @@ the third column the give-up with every jump edge 64 longer in A*
   seeds 1 and 3 keep the after digests below, 51dfa08218229289 and
   496428420667275d. VERIFIED (the runs).
 - The rule, vcod's own (retail has no bots): a CoD4 bot on the ground
+  (or, since bot-navigation.md 3.15, in the jump that starts the climb)
   more than a step under the landing of the mantle edge it follows
   (the probe's, else the edge's end node), within 96 flat of it, with
   another body slower than 10 units/s within two half-widths and a
