@@ -433,7 +433,6 @@ pub struct Renderer {
     /// [`Renderer::take_capture`].
     captured: Option<Option<Capture>>,
     /// Off keeps the gamma pass on an identity ramp, for an A/B.
-    #[cfg(test)]
     swap_direct: bool,
     /// `SCENE_FORMAT`, or `HDR_FORMAT` with `vc_hdr`: what every world,
     /// entity, fx and sky pipeline draws into. Fixed for the renderer's life.
@@ -513,10 +512,8 @@ pub struct Renderer {
     /// depth, for an A/B.
     cookies_on_prepass: bool,
     /// The last frame's prepass draws.
-    #[cfg(test)]
     prepass_drawn: std::cell::Cell<usize>,
     /// Whether the last frame's prepass wrote `floatZ`.
-    #[cfg(test)]
     pub(crate) floatz_drawn: std::cell::Cell<bool>,
     /// The depth prepass joins its draws ([`Self::encode_prepass_world_joined`]),
     /// the world draws skip a bind group already bound ([`WorldGroups`])
@@ -1156,7 +1153,6 @@ impl Renderer {
             gamma_skipped: false,
             capture_wanted: None,
             captured: None,
-            #[cfg(test)]
             swap_direct: true,
             world_format,
             post,
@@ -1191,9 +1187,7 @@ impl Renderer {
             cod4_options: Cod4Options::default(),
             depth_prepass: false,
             cookies_on_prepass: true,
-            #[cfg(test)]
             prepass_drawn: Default::default(),
-            #[cfg(test)]
             floatz_drawn: Default::default(),
             draw_joins: true,
             world_bundles_on: std::env::var_os("VCOD_WORLD_BUNDLES").is_none_or(|v| v != "0"),

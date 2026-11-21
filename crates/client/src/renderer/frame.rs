@@ -215,11 +215,7 @@ impl Renderer {
         // samples or copies the gamma scene: without the post pass the
         // glow, blur, bloom and shafts work in it (`scene_direct` below),
         // and a shellshock captures it.
-        #[cfg(not(test))]
-        let swap_on = true;
-        #[cfg(test)]
-        let swap_on = self.swap_direct;
-        let swap_direct = swap_on
+        let swap_direct = self.swap_direct
             && self.gamma.identity()
             && self.config.format == SCENE_FORMAT
             && (matches!(self.target, Target::Offscreen(_))
@@ -1130,20 +1126,6 @@ impl Renderer {
         if shadow_on {
             frame_write!(self, "vc_shadows maps (not sized)", 0);
         }
-        // a full-screen target's bytes at `bpp` a texel, for the write log
-        #[cfg(test)]
-        let full = {
-            let px = u64::from(self.config.width) * u64::from(self.config.height);
-            move |bpp: u32| px * u64::from(bpp)
-        };
-        #[cfg(test)]
-        let world_bpp = self.world_format.block_copy_size(None).unwrap_or(4);
-        // a scene pass's colour and depth (each sample), and its resolve
-        #[cfg(test)]
-        let scene_pass = |last: bool| {
-            let s = msaa_samples();
-            full((world_bpp + 4) * s) + if last && s > 1 { full(world_bpp) } else { 0 }
-        };
         if let Some(g) = &self.prof_gpu {
             g.stamp(prof_slot, &mut encoder, 1);
         }
@@ -1297,17 +1279,19 @@ impl Renderer {
                     }
                 }
                 crate::frame_prof::count(crate::frame_prof::Count::Prepass, n);
-                frame_write!(self, "depth prepass (depth)", full(4 * msaa_samples()));
+                frame_write!(
+                    self,
+                    "depth prepass (depth)",
+                    self.target_bytes(4 * msaa_samples())
+                );
                 if plan.floatz {
-                    frame_write!(self, "depth prepass floatZ (R32F)", full(4));
+                    frame_write!(self, "depth prepass floatZ (R32F)", self.target_bytes(4));
                 }
                 crate::frame_prof::count(
                     crate::frame_prof::Count::Feathered,
                     usize::from(!plan.ent_prepass),
                 );
-                #[cfg(test)]
                 self.prepass_drawn.set(n);
-                #[cfg(test)]
                 self.floatz_drawn.set(plan.floatz);
             }
             pre_bundles.end();
@@ -1320,7 +1304,11 @@ impl Renderer {
                 g.enc(&mut encoder, Some(crate::frame_prof::Group::Sky));
             }
             let mut pass = targets.begin(&mut encoder, true, !plan.split);
-            frame_write!(self, "scene pass (colour + depth)", scene_pass(!plan.split));
+            frame_write!(
+                self,
+                "scene pass (colour + depth)",
+                self.scene_pass_bytes(!plan.split)
+            );
             pass.set_bind_group(0, &self.camera_bg, &[]);
             // The sky draws first so every world draw overwrites it; the box
             // and dome both ignore depth (cleared 1.0) and write none. CoD
@@ -1529,9 +1517,13 @@ impl Renderer {
                         g.enc(&mut encoder, Some(crate::frame_prof::Group::SoftCopy));
                     }
                     self.soft.encode(&mut encoder);
-                    frame_write!(self, "feather depth copy (R32F)", full(4));
+                    frame_write!(self, "feather depth copy (R32F)", self.target_bytes(4));
                     pass = targets.begin(&mut encoder, false, false);
-                    frame_write!(self, "scene pass after the depth copy", scene_pass(false));
+                    frame_write!(
+                        self,
+                        "scene pass after the depth copy",
+                        self.scene_pass_bytes(false)
+                    );
                     pass.set_bind_group(0, &self.camera_bg, &[]);
                     emit = Emit::None;
                 }
@@ -1569,19 +1561,27 @@ impl Renderer {
                     if plan.soft_on && copy_at == split_at {
                         group(&mut encoder, Group::SoftCopy);
                         self.soft.encode(&mut encoder);
-                        frame_write!(self, "feather depth copy (R32F)", full(4));
+                        frame_write!(self, "feather depth copy (R32F)", self.target_bytes(4));
                     }
                     if plan.distort_on {
                         group(&mut encoder, Group::SceneCopy);
                         self.scene_copy.encode(&self.device, &mut encoder, scene);
-                        frame_write!(self, "distortion colour copy", full(world_bpp));
+                        frame_write!(
+                            self,
+                            "distortion colour copy",
+                            self.target_bytes(self.world_bpp())
+                        );
                     }
                     if let Some(g) = &self.prof_gpu {
                         g.stamp(prof_slot, &mut encoder, 5);
                     }
                     split_stamped = true;
                     pass = targets.begin(&mut encoder, false, true);
-                    frame_write!(self, "scene pass after the split", scene_pass(true));
+                    frame_write!(
+                        self,
+                        "scene pass after the split",
+                        self.scene_pass_bytes(true)
+                    );
                     pass.set_bind_group(0, &self.camera_bg, &[]);
                     emit = Emit::None;
                 }
@@ -1974,7 +1974,8 @@ impl Renderer {
                     frame_write!(
                         self,
                         "r_dof (copy, 5 quarter passes, composite)",
-                        2 * full(world_bpp) + 5 * full(world_bpp) / 16
+                        2 * self.target_bytes(self.world_bpp())
+                            + 5 * self.target_bytes(self.world_bpp()) / 16
                     );
                 }
                 if plan.shafts {
@@ -1989,14 +1990,16 @@ impl Renderer {
                         frame_write!(
                             self,
                             format!("glow ({steps} quarter passes, {} applies)", g.applies.len()),
-                            steps as u64 * full(4) / 16 + g.applies.len() as u64 * full(world_bpp)
+                            steps as u64 * self.target_bytes(4) / 16
+                                + g.applies.len() as u64 * self.target_bytes(self.world_bpp())
                         );
                     }
                     if let Some(b) = &plan.world_blur {
                         frame_write!(
                             self,
                             "blurWorld",
-                            b.chain.len() as u64 * full(4) / 16 + full(world_bpp)
+                            b.chain.len() as u64 * self.target_bytes(4) / 16
+                                + self.target_bytes(self.world_bpp())
                         );
                     }
                 }
@@ -2052,13 +2055,21 @@ impl Renderer {
                     };
                     self.post.draw(&mut pass);
                     if plan.gamma_direct {
-                        frame_write!(self, "post pass into the swapchain, then the 2D", full(4));
+                        frame_write!(
+                            self,
+                            "post pass into the swapchain, then the 2D",
+                            self.target_bytes(4)
+                        );
                     } else {
-                        frame_write!(self, "post pass into the gamma scene, then the 2D", full(4));
+                        frame_write!(
+                            self,
+                            "post pass into the gamma scene, then the 2D",
+                            self.target_bytes(4)
+                        );
                     }
                 } else {
                     pass = single_pass(&mut encoder, self.gamma.scene_view(), "hud pass");
-                    frame_write!(self, "2D pass (gamma scene)", full(4));
+                    frame_write!(self, "2D pass (gamma scene)", self.target_bytes(4));
                     if plan.bloom {
                         self.bloom.composite(&mut pass);
                     }
@@ -2080,7 +2091,7 @@ impl Renderer {
                 (Some(Cod4Screen::Save), _) => {
                     drop(pass);
                     self.screen_blend.capture(&mut encoder);
-                    frame_write!(self, "screen capture", full(4));
+                    frame_write!(self, "screen capture", self.target_bytes(4));
                     pass = single_pass(&mut encoder, self.gamma.scene_view(), "hud pass");
                     None
                 }
@@ -2122,7 +2133,7 @@ impl Renderer {
                 );
                 drop(pass);
                 self.screen_blend.capture(&mut encoder);
-                frame_write!(self, "screen capture", full(4));
+                frame_write!(self, "screen capture", self.target_bytes(4));
                 self.shock_captured_at = Some(std::time::Instant::now());
                 pass = single_pass(&mut encoder, self.gamma.scene_view(), "hud pass");
             }
@@ -2178,7 +2189,7 @@ impl Renderer {
         }
         if !self.gamma_skipped {
             self.gamma.draw(&mut encoder, &view);
-            frame_write!(self, "gamma pass into the swapchain", full(4));
+            frame_write!(self, "gamma pass into the swapchain", self.target_bytes(4));
         }
         if let Some(g) = &mut self.prof_gpu {
             g.stamp(prof_slot, &mut encoder, 8);
@@ -2282,4 +2293,29 @@ pub(super) fn single_pass<'e>(
         occlusion_query_set: None,
         multiview_mask: None,
     })
+}
+
+/// The bytes `frame_write!` logs.
+#[cfg(test)]
+impl Renderer {
+    /// A full-screen target's bytes at `bpp` a texel.
+    fn target_bytes(&self, bpp: u32) -> u64 {
+        u64::from(self.config.width) * u64::from(self.config.height) * u64::from(bpp)
+    }
+
+    /// A texel of the world's colour target.
+    fn world_bpp(&self) -> u32 {
+        self.world_format.block_copy_size(None).unwrap_or(4)
+    }
+
+    /// A scene pass's colour and depth (each sample), and its resolve.
+    fn scene_pass_bytes(&self, last: bool) -> u64 {
+        let s = msaa_samples();
+        self.target_bytes((self.world_bpp() + 4) * s)
+            + if last && s > 1 {
+                self.target_bytes(self.world_bpp())
+            } else {
+                0
+            }
+    }
 }
