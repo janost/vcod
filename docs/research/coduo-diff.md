@@ -301,7 +301,7 @@ ET_EVENTS`.
 | 9 | `ET_SOUND_BLEND`: `SP_sound_blend` (0x5a5e7) sets it; the vehicle init (0x7c935) spawns four through `G_SpawnSoundBlend` (0x5a65d) for its engine; cgame case 9 (0x30021860) crossfades two aliases indexed from configstring 661 (VERIFIED decompile) | 1.1's cgame has a case 9 (0x3001ce40); no 1.1 or 1.5 game module sets 9 (VERIFIED, no store found) |
 | 10, 11 | FX, turret, as 1.1 (VERIFIED, `G_SpawnTurret` 0x5cc27 stores 11) | |
 | 12 | `ET_VEHICLE`, from the vehicle init behind `G_SpawnVehicle` (0x8abfd) (VERIFIED); sent through the alternate netfield table (section 3) | first event |
-| 13 | a destroyed vehicle: `G_FreeVehicle` (0x8e72f) stores 13 and classname `script_vehicle_corpse`; cgame draws 12 and 13 with one function, 0x30021660 (VERIFIED decompile) | |
+| 13 | a destroyed vehicle: `freeVehicle()` (0x8e72f, which runs `G_FreeVehicle` 0x8ad7d, `coduo-vehicles.md` 17.4) stores 13 and classname `script_vehicle_corpse`; cgame draws 12 and 13 with one function, 0x30021660 (VERIFIED decompile) | |
 | 14 | `script_vehicle_collmap` (0x8df52 stores 14 and clears contents, VERIFIED); cgame has no case 14 (VERIFIED); never sent (INFERRED) | |
 | 15 | `script_vehicle_owner_icon` (0xa19fd, VERIFIED); cgame case 15 is 0x30021540 (VERIFIED) | |
 | 16 + n | event n (`ET_EVENTS` 16, `G_TempEntity` 0x79cba stores `event + 0x10`, VERIFIED) | 12 + n |
@@ -397,75 +397,25 @@ physics, collmap code or strings (VERIFIED, absence). A vehicle is therefore
 an interpolated snapshot entity on the client (INFERRED). `coduo-vehicles.md`
 has the seats, the drive step and vcod-server's vehicles.
 
-- **Definition files.** `G_ParseScrVehicleInfo` (0x8a51f) loads up to 64
-  `vehicles/*` files (`VEHICLEFILE` header, under 8 KB, an info string over
-  58 keys, table 0xae9c0). Speeds are mph times 17.6; `type` is one of `4
-  wheel`, `tank`, `plane`, `boat`, `artillery` (VERIFIED decompile). The 23
-  stock files live in `pakuo03.pk3`, re-shipped in `pakuo07.pk3`; nine are
-  MP: `elefant_mp`, `flak88_mp`, `gaz67b_mp`, `horch_mp`, `panzeriv_mp`,
-  `shermantank_mp`, `su152_mp`, `t34_mp`, `willyjeep_mp` (VERIFIED). On a
-  UO-over-1.5 install the server lists 39 files, those and `main/pak0`'s, in
-  search-path order (`coduo-vehicles.md` 10.1). The format is 1.1's
-  `VEHICLEFILE\k\v` with new keys (`hasGunner`, `numPassengers`,
-  `turretAltWeapon`, `turretGunnerWeapon` and its spans,
-  `dmgScale{Front,Side,Behind,Bullet,Under}`, box `mins/maxs`, `stepsize`,
-  `collision{Front,Back}Dist`, `impactSnd`, ...) (VERIFIED, the files).
-- **Spawn.** `SP_script_vehicle` (0x8dec6) takes one of 64 pool slots of
-  0x3ec bytes through `G_SpawnVehicle`; contents 0x2080, plus 0x200000 while
-  usable. The vehicle takes its `script_vehicle_collmap`'s brush model and
-  contents 0x800000 | 0x200000 (VERIFIED decompile, `coduo-vehicles.md`
-  10.3). 246 `script_vehicle` entities sit in 10 stock MP maps (`panzeriv_mp`
-  71, `shermantank_mp` 43, `horch_mp` 33, `t34_mp` 27, `Flak88_MP` 22,
-  `willyjeep_mp` 22, `gaz67b_mp` 12, `elefant_mp` 8, `su152_mp` 8)
-  (VERIFIED, BSP entity lumps). `G_CallSpawn` (0x719a6) special-cases
-  `info_vehicle_node` paths; no stock `maps/mp` script uses them (VERIFIED,
-  grep).
-- **Physics.** `G_VehicleClientThink` (0x8b0ce) runs a driven vehicle from
-  `G_RunFrame`, after the client loop and before `ClientEndFrame`, on a fixed
-  50 ms step (VERIFIED decompile). It reads the driver's last stored usercmd,
-  so one input per server frame (INFERRED). Forward accelerates to 0.8
-  `maxSpeed`, reverse to half that (VERIFIED). Then, INFERRED from callees
-  and constants: `rightmove` steers; a tank with `upmove > 0` turns its hull
-  to the view yaw; friction; a box slide (`VEH_SlideMove`, mask |
-  0x2800000); suspension off the wheel tags; `VEH_CheckPushClients`; and
-  collision damage (`MOD_CRUSH_JEEP`, `MOD_CRUSH_TANK`, `MOD_COLLISION`,
-  notify `vehicle_collision`).
-- **Occupancy.**
-  - The use button (0x40) reaches `Cmd_Activate_f` on the cursor-hint
-    entity. `G_IsVehicleUsable` wants the usable flag, speed at most 100,
-    health, no grenade in hand and the same team (VERIFIED decompile).
-  - The player takes the first free seat 1..6 (seat 2 only with
-    `hasGunner`, passengers up to `numPassengers`) and links at the seat tag
-    (`tag_player`, `tag_secondary_player`, `tag_passenger*`) (VERIFIED
-    decompile).
-  - Mounting sets eFlags 0x100000 and 0x200000, `viewlocked_entNum`,
-    `vehPos` and `vehType`, sends `v cl_run 1` and `v cl_stance 0`, and
-    notifies `activated` on the vehicle and `vehicle_activated` on the
-    player (VERIFIED decompile).
-  - `VEH_UnlinkPlayer` (0x89fb2) dismounts on a grid search about a point
-    beside the vehicle, or at `tag_detach` for artillery (`coduo-vehicles.md`
-    11.2). `nextvehslot` / `prevvehslot` cycle seats (`G_VEH_CycleSlot`
-    0x8da1e) (VERIFIED decompile).
-  - Only the jeep's seat 3 may fire a personal weapon
-    (`BG_AllowPlayerWeaponAtVehiclePos`, enforced in `FireWeapon` 0x7bd05) (VERIFIED decompile).
-  - In a vehicle `PM_UpdateViewAngles` clamps pitch to 12000 short units
-    either way (VERIFIED decompile).
-  - `vehMotion` is 1 idle, 2 forward, 3 reverse;
-    `BG_PlayerStateToEntityState` mirrors it into the player entity's
-    `surfType` bits 6-7 (INFERRED).
-- **Firing.** The think notifies `turret_fire`, `turret_alt_fire` (button
-  0x20) and `turret_gunner_fire`; the stock `_tankdrive_gmi`,
-  `_jeepdrive_gmi` and `_flak_gmi` scripts answer with `fireTurret` and
-  `fireGunner` (VERIFIED). `CMD_VEH_FireTurret` (0x8ee02) fires from
-  `tag_flash` through `Bullet_Fire` or `Weapon_Artillery_Fire` (0x7b594,
-  `fire_rocket` with `trType` 5) and raises event 163 (174/175 for quad
-  barrels), the gunner 165 (VERIFIED). At overheat it raises 208, notifies
-  `overheating` and sets `pm_flags` 0x800000 on the gunner, cleared in
-  `VEH_UnlinkPlayer` (VERIFIED).
-- **Damage.** `G_IsVehicleImmune` gates by damage type,
-  `Scr_Vehicle_DamageScale` (0x8ccad) scales by hit direction, a tank driver
-  is invulnerable, and occupants take 0.1 of radius damage (0.2 in
-  artillery) (VERIFIED decompile).
+- **Definition files.** `G_ParseScrVehicleInfo` (0x8a51f), the 23 stock
+  files and their keys: `coduo-vehicles.md` 10.1.
+- **Spawn.** `SP_script_vehicle` (0x8dec6), the pool, the collmap and the
+  246 stock MP vehicles: `coduo-vehicles.md` 10.2 and 10.3.
+- **Physics.** `G_VehicleClientThink` (0x8b0ce), the drive step:
+  `coduo-vehicles.md` 12. Read off its callees here and not traced there:
+  a box slide (`VEH_SlideMove`, mask | 0x2800000) and a
+  `vehicle_collision` notify beside the crush damage. INFERRED (the
+  callees and strings).
+- **Occupancy.** Boarding, getting out (`VEH_UnlinkPlayer` 0x89fb2, or
+  `tag_detach` for artillery: INFERRED, the tag string) and seat changes:
+  `coduo-vehicles.md` 11.1 to 11.3; the personal weapon on the jeep's
+  seat 3 (enforced in `FireWeapon` 0x7bd05) and the pitch clamp:
+  `coduo-vehicles.md` 3; `vehMotion`: 6 and 11.4.
+- **Firing.** The turret notifies, `CMD_VEH_FireTurret` (0x8ee02), the
+  events and the overheat: `coduo-vehicles.md` 13.1.
+- **Damage.** `G_IsVehicleImmune`, `Scr_Vehicle_DamageScale` (0x8ccad),
+  the driver's protection and the riders' share of a blast:
+  `coduo-vehicles.md` 13.2 and 13.3.
 - **Compass.** `G_GetNonPVSTankInfo` (0x8bf6d) packs yaw, dy, dx and a tank
   index into `iCompassTankInfo`; the cgame (0x30016c00) draws same-team
   eType 12 entities and that non-PVS tank (VERIFIED). On stock MP it never
@@ -725,46 +675,21 @@ UO gate's crouch, prone and teleport bits agree; dropping 1.1's 0x80 loses
 nothing a 1.1 server sends (INFERRED).
 
 **Sprint and fatigue.** The usercmd's `buttons` 0x08 is sprint (`+sprint`,
-`CL_CmdButtons` 0x40bfd0 in `CoDUOMP.exe`, VERIFIED). The tunables are
-constants: `pm_sprintFatigue` 1/3, `pm_fatigueRegen` 1/7,
-`pm_fatigueRegenDelay` 1000 (0x9b4e8 and neighbours, VERIFIED). The only
-cvars are `bg_nofatigue` and `bg_lmg_yawcap` 55, both mirrored (VERIFIED).
-INFERRED, decompile: a sprint starts standing, unsighted, off a ladder, on
-the ground, moving, outside a vehicle or turret and with fatigue above 0.25;
-`fatigueScale` drains from 1 to 0 in 3 s, regenerates over 7 s after a 1 s
-delay and raises event 140 under 0.5; the speed uses `sprintSpeedScale`
-(1.6) in place of `runSpeedScale`; `PM_InteruptWeaponWithSprintMove`
-(0x33a44) and the fire and melee gates keep the weapon down. Script gets
-`getFatigue` / `setFatigue` (VERIFIED). Every UO weapon file carries a
-sprint pose (`sprintMove*`, `sprintRot*`, `sprintMoveMinSpeed 110`)
-(VERIFIED).
+`CL_CmdButtons` 0x40bfd0 in `CoDUOMP.exe`, VERIFIED), and script gets
+`getFatigue` / `setFatigue` (VERIFIED). The flag, the speed, the fatigue's
+tunables and the weapon while sprinting: `coduo-movement.md` 2 to 4 and 6.
 
 **Deployable MGs.** There is no deploy flag: sighting a `weaponClass lmg`
-weapon (`mg30cal_mp`, `mg34_mp`, `dp28`...) deploys it (INFERRED).
-`PM_UpdateAimDownSightFlag` (0x32c0b) probes `pointcontents` with mask
-0x404000 15 units ahead. A hit deploys standing, or crouched when the
-contents carry 0x400000; else a `serverCursorHint` of 7 (`trigger_mount`)
-gives the stance; else the player goes prone if that is valid (INFERRED,
-decompile). `G_CheckForCursorHints` (0x575bb) runs the same probe on the
-server to set hint 7 (VERIFIED). The contents are the new
-`textures/common/hmgstanding` (0x4000) and `hmgcrouching` (0x400000)
-brushes, in no 1.1 MP map (VERIFIED, BSP material lumps); `trigger_mount`
-uses the same bits (VERIFIED). Deploy goes to `weaponstate` 12 with event
-160, breakdown to 13 with 161; while deployed the moves are zeroed, stance
-and lean refused and the yaw capped by `bg_lmg_yawcap` around
-`proneDirection` (INFERRED). On mp_cassino an mg34 sighted in the open
+weapon deploys it. The probe, the stances, the contents and the events:
+`coduo-movement.md` 7 and 11. On mp_cassino an mg34 sighted in the open
 deployed prone with event 160 and broke down with 161 (live, VERIFIED,
 section 19 "Captures").
 
-**Grenade cooking exists.** `PM_Weapon` (0x3726c) counts `grenadeTimeLeft`
-down by the frame msec for a grenade with `cookOffHold`, raises
-`EV_GRENADE_SPOON` (182) on the button edge, throws by itself under 51 ms
-(event 163, plus 210 when `explosionInnerDamage` is non-zero), and
-`fire_grenade` (0x5f7ad) fuses with what is left (VERIFIED decompile). Every
-stock UO grenade, smoke, flash and satchel has `cookOffHold 1` (VERIFIED).
-1.1 MP has no cook (`docs/dev/traps.md`, "Combat and items"), so shared code gates it by version
-(`pmove::weapon::cooking`). The cook starts only on the sight button's edge;
-`coduo-movement.md` 12 measures it.
+**Grenade cooking exists.** `PM_Weapon` (0x3726c) cooks a grenade whose
+weapon file sets `cookOffHold`, as every stock UO grenade, smoke, flash and
+satchel does: `coduo-movement.md` 12. 1.1 MP has no cook
+(`docs/dev/traps.md`, "Combat and items"), so shared code gates it by
+version (`pmove::weapon::cooking`).
 
 ## 12. Weapons and items
 
