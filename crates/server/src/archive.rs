@@ -78,7 +78,7 @@ impl WorldFrame {
         vis: Option<&Visibility>,
         shift: i32,
         p: &Cod1Wire,
-    ) -> BTreeMap<u32, msg::EntityState> {
+    ) -> BTreeMap<u32, Rc<msg::EntityState>> {
         let viewer = vis.map(|v| crate::world::Viewer::at(v, eye));
         if viewer.is_some_and(|v| v.sees_nothing()) {
             return BTreeMap::new();
@@ -98,13 +98,15 @@ impl WorldFrame {
         };
         let times = (shift != 0).then(|| entity_time_fields(p));
         // The shifted times and the fields the protocol renumbers are apart,
-        // so shifting the wire form is shifting before the renumbering.
-        let take = |e: &FrameEntity| {
-            let mut e = (*e.wire).clone();
-            if let Some(times) = &times {
+        // so shifting the wire form is shifting before the renumbering. A live
+        // frame shares the frame's state.
+        let take = |e: &FrameEntity| match &times {
+            Some(times) => {
+                let mut e = (*e.wire).clone();
                 shift_times(&mut e.fields, times, shift);
+                Rc::new(e)
             }
-            e
+            None => e.wire.clone(),
         };
         let mut out = BTreeMap::new();
         for (n, e) in &self.culled {

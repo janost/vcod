@@ -505,7 +505,7 @@ impl Server {
             let cull = crate::tick_profile::phase("messages/snapshot/cull");
             let visible =
                 world.entities_for(client_num, eye, collision_vis, shift, self.game.proto);
-            let roster = (*world.roster).clone();
+            let roster = world.roster.clone();
             drop(cull);
 
             let mut ps = match follow_frame {
@@ -545,7 +545,7 @@ impl Server {
                 ps.arrays.hud_archived.clear();
                 ps.arrays.hud_current.clear();
             }
-            let frame = snapshot::Snapshot {
+            let frame = snapshot::SentSnapshot {
                 server_time: Msec::from_raw(self.core.sv_time_ms),
                 message_num,
                 delta_num: -1,
