@@ -166,31 +166,73 @@ impl FieldCodec {
     /// A whole struct delta, `MSG_ReadDeltaStruct`'s shape (cod_lnxded
     /// 0x807f758, cod2_lnxded 0x8069d4a) past whatever the caller read
     /// before it: a remove bit, a no-change bit, an `lc` byte, then `lc`
-    /// fields of `table`, the rest kept from `from`. `None` is a remove.
-    pub fn read_delta_struct(
+    /// fields of `table` (at most all of them), the rest kept from `from`.
+    /// `to` takes the struct unless it was removed; the `lc` comes back
+    /// as sent, for a caller that refuses one past the table.
+    pub fn read_delta_struct<T: Word>(
         self,
         r: &mut MsgReader,
         table: &[NetField],
-        from: &[i32],
-    ) -> Option<Vec<i32>> {
+        from: &[T],
+        to: &mut [T],
+    ) -> Delta {
         if r.read_bits(1) == 1 {
-            return None;
+            return Delta::Removed;
         }
-        let mut to = from.to_vec();
+        to.copy_from_slice(from);
         if r.read_bits(1) == 0 {
-            return Some(to);
+            return Delta::Unchanged;
         }
-        let lc = (r.read_byte() as usize).min(table.len());
-        for (i, field) in table.iter().take(lc).enumerate() {
-            to[i] = self.read_delta_field(r, to[i], field.bits);
+        let lc = r.read_byte();
+        for (i, field) in table.iter().take(usize::from(lc)).enumerate() {
+            to[i] = T::of_word(self.read_delta_field(r, to[i].word(), field.bits));
         }
-        Some(to)
+        Delta::Changed { lc }
+    }
+}
+
+/// What [`FieldCodec::read_delta_struct`] found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delta {
+    Removed,
+    Unchanged,
+    Changed { lc: u8 },
+}
+
+/// A struct slot as a state keeps it: CoD1's `i32`, CoD2's `u32` words.
+pub trait Word: Copy + PartialEq {
+    fn word(self) -> i32;
+    fn of_word(v: i32) -> Self;
+}
+
+impl Word for i32 {
+    fn word(self) -> i32 {
+        self
+    }
+
+    fn of_word(v: i32) -> i32 {
+        v
+    }
+}
+
+impl Word for u32 {
+    fn word(self) -> i32 {
+        self as i32
+    }
+
+    fn of_word(v: i32) -> u32 {
+        v as u32
     }
 }
 
 /// Inverse of [`FieldCodec::read_delta_struct`]; `None` writes the remove
 /// bit. Slots compare as raw ints, as in the C.
-pub fn write_delta_struct(w: &mut MsgWriter, table: &[NetField], from: &[i32], to: Option<&[i32]>) {
+pub fn write_delta_struct<T: Word>(
+    w: &mut MsgWriter,
+    table: &[NetField],
+    from: &[T],
+    to: Option<&[T]>,
+) {
     let Some(to) = to else {
         w.write_bits(1, 1); // removed
         return;
@@ -210,7 +252,7 @@ pub fn write_delta_struct(w: &mut MsgWriter, table: &[NetField], from: &[i32], t
     w.write_bits(1, 1);
     w.write_byte(lc as u8);
     for i in 0..lc {
-        write_delta_field(w, from[i], to[i], table[i].bits);
+        write_delta_field(w, from[i].word(), to[i].word(), table[i].bits);
     }
 }
 
@@ -836,6 +878,15 @@ mod tests {
         assert_eq!(f32::from_bits(got as u32), -1821.0 * 360.0 / 65536.0);
     }
 
+    /// `from` and its delta off `r`, `None` for a remove.
+    fn struct_of(codec: FieldCodec, r: &mut MsgReader, from: &[i32]) -> Option<Vec<i32>> {
+        let mut to = from.to_vec();
+        match codec.read_delta_struct(r, &TABLE, from, &mut to) {
+            Delta::Removed => None,
+            _ => Some(to),
+        }
+    }
+
     /// A struct of every code round-trips through the writer, and a value
     /// read back equal to its base (a difference above the width) re-encodes
     /// as the change it was, signed or not.
@@ -851,7 +902,7 @@ mod tests {
             let got = read(
                 &h,
                 |w| ops.iter().for_each(|&b| w.write_byte(b)),
-                |r| codec.read_delta_struct(r, &TABLE, &from).unwrap(),
+                |r| struct_of(codec, r, &from).unwrap(),
             );
             let mut again = MsgWriter::new(&h);
             write_delta_struct(&mut again, &TABLE, &from, Some(&got));
@@ -879,7 +930,7 @@ mod tests {
             let got = read(
                 &h,
                 |w| ops.iter().for_each(|&b| w.write_byte(b)),
-                |r| codec.read_delta_struct(r, &TABLE, &base).unwrap(),
+                |r| struct_of(codec, r, &base).unwrap(),
             );
             assert_ne!(got[3], base[3], "{codec:?}");
             let mut again = MsgWriter::new(&h);
@@ -890,13 +941,13 @@ mod tests {
         let none = read(
             &h,
             |w| write_delta_struct(w, &TABLE, &from, None),
-            |r| FieldCodec::COD2.read_delta_struct(r, &TABLE, &from),
+            |r| struct_of(FieldCodec::COD2, r, &from),
         );
         assert!(none.is_none());
         let same = read(
             &h,
             |w| write_delta_struct(w, &TABLE, &from, Some(&from)),
-            |r| FieldCodec::COD2.read_delta_struct(r, &TABLE, &from),
+            |r| struct_of(FieldCodec::COD2, r, &from),
         );
         assert_eq!(same.as_deref(), Some(&from[..]));
     }

@@ -80,7 +80,7 @@ pub fn replay(cap: &Capture) -> anyhow::Result<Replayed> {
     use super::ops::{CLC_BITS, Clc, MAX_RELIABLE_COMMANDS};
     use vcod_common::net::codec::MsgReader;
     use vcod_common::net::huffman::Huffman;
-    use vcod_common::net::netchan::{Netchan, NetchanParams, scramble_client_ops};
+    use vcod_common::net::netchan::{Netchan, NetchanParams, read_client_message};
 
     let huff = Huffman::new();
     let mut challenge = None;
@@ -112,32 +112,26 @@ pub fn replay(cap: &Capture) -> anyhow::Result<Replayed> {
         let Some(nc) = nc.as_mut() else { continue };
         match dir {
             Dir::ToServer => {
-                anyhow::ensure!(p.len() >= 15, "short client packet");
-                let msg_ack = i32::from_le_bytes(p[7..11].try_into()?);
-                let rel_ack = i32::from_le_bytes(p[11..15].try_into()?);
-                let key = out.parser.server_command(rel_ack).to_vec();
-                let mut block = p[15..].to_vec();
-                scramble_client_ops(
-                    (nc.challenge ^ i32::from(p[6]) ^ msg_ack) as u8,
-                    &key,
-                    &mut block,
-                );
-                let mut r = MsgReader::from_plain(huff.decompress_block(&block));
+                let key = |ack| out.parser.server_command(ack).to_vec();
+                let m = read_client_message(p, nc.challenge, key)
+                    .ok_or_else(|| anyhow::anyhow!("short client packet"))?;
+                let mut r = MsgReader::from_plain(huff.decompress_block(&m.ops));
                 while r.read_bits(CLC_BITS) == Clc::ClientCommand as i32 {
                     let seq = r.read_long();
                     client_commands[seq as usize % MAX_RELIABLE_COMMANDS] = r.read_string_bytes();
                 }
             }
             Dir::FromServer => {
-                let Some((seq, mut body)) = nc.frame(p)? else {
+                let key = |_: &Netchan, ack: i32| {
+                    client_commands[ack as usize % MAX_RELIABLE_COMMANDS].clone()
+                };
+                let Some((seq, body)) = nc.process_keyed(p, key)? else {
                     continue;
                 };
-                let head = body
-                    .get(..4)
-                    .ok_or_else(|| anyhow::anyhow!("message {seq} shorter than its acknowledge"))?;
-                let ack = i32::from_le_bytes(head.try_into()?);
-                let key = client_commands[ack as usize % MAX_RELIABLE_COMMANDS].clone();
-                nc.decode(seq, &key, &mut body);
+                anyhow::ensure!(
+                    body.len() >= 4,
+                    "message {seq} shorter than its acknowledge"
+                );
                 out.messages.push((seq as i32, body.clone()));
                 let plain = huff.decompress_block(&body[4..]);
                 let parsed = out.parser.parse(seq as i32, &plain)?;

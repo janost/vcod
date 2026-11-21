@@ -883,6 +883,7 @@ mod tests {
             .unwrap()
             .world
             .culled[&2]
+            .cull
             .field_i32(&PROTOCOL_V1, "pos.trTime");
         if archived_tr != 0 {
             assert_eq!(tr, archived_tr + 1000);

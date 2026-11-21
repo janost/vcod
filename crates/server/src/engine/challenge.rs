@@ -7,7 +7,7 @@
 //! (0x80889d0), UO 1.51b's at 0x84f7060 (0x80897d4), CoD2 1.3's at
 //! 0x84230dc (0x808d18e). Times are the caller's server clock in ms.
 
-use std::hash::{BuildHasher, RandomState};
+use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, RandomState};
 use std::net::SocketAddr;
 
 /// `MAX_CHALLENGES`: the loop bound 0x400 in all four.
@@ -40,14 +40,21 @@ pub struct Challenges {
     /// nothing of the `rand()` stream it came off and one sent to a spoofed
     /// address cannot be guessed. Retail sends the draw itself. `None`
     /// sends the draw (the A/B gates that compare it with retail's).
-    key: Option<RandomState>,
+    key: Option<Key>,
+}
+
+/// The mask's key: the OS's, or a fixed one a harness that compares sent
+/// bytes run to run pins ([`Challenges::pin_key`]).
+enum Key {
+    Process(RandomState),
+    Fixed(u64),
 }
 
 impl Default for Challenges {
     fn default() -> Self {
         Challenges {
             slots: vec![Slot::default(); MAX_CHALLENGES],
-            key: Some(RandomState::new()),
+            key: Some(Key::Process(RandomState::new())),
         }
     }
 }
@@ -75,7 +82,13 @@ impl Challenges {
         }
         let i = found.unwrap_or_else(|| {
             let drawn = draw();
-            let mask = self.key.as_ref().map_or(0, |k| k.hash_one((from, drawn)));
+            let mask = match &self.key {
+                Some(Key::Process(k)) => k.hash_one((from, drawn)),
+                Some(Key::Fixed(seed)) => {
+                    BuildHasherDefault::<DefaultHasher>::default().hash_one((seed, from, drawn))
+                }
+                None => 0,
+            };
             self.slots[oldest] = Slot {
                 addr: Some(from),
                 challenge: drawn ^ mask as i32,
@@ -147,12 +160,18 @@ impl Challenges {
         }
     }
 
-    /// Sends each draw unmasked, as retail does: the A/B gates, and
-    /// `bot_match`'s `NETDIGEST`, whose bytes the per-process key would
-    /// change every run.
-    #[cfg(any(test, feature = "testing"))]
+    /// Sends each draw unmasked, as retail does.
+    #[cfg(test)]
     pub fn unmasked(&mut self) {
         self.key = None;
+    }
+
+    /// Masks under `seed` in place of the process's key, so two runs send
+    /// the same challenges (`bot_match`'s `NETDIGEST`). Live servers never
+    /// call it.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn pin_key(&mut self, seed: u64) {
+        self.key = Some(Key::Fixed(seed));
     }
 
     /// `SV_Shutdown`'s zeroed table.
@@ -193,6 +212,18 @@ mod tests {
         let cb = b.issue(addr(1, 5), 0, || 7);
         assert!(ca != cb && ca != 7, "{ca} {cb}");
         assert!(a.connect(addr(1, 5), 7, 10).is_none());
+        assert!(a.connect(addr(1, 5), ca, 10).is_some());
+    }
+
+    /// A pinned key masks the same way in every table, and still masks.
+    #[test]
+    fn a_pinned_key_masks_the_same_in_every_process() {
+        let (mut a, mut b) = (Challenges::default(), Challenges::default());
+        a.pin_key(1);
+        b.pin_key(1);
+        let ca = a.issue(addr(1, 5), 0, || 7);
+        assert_eq!(ca, b.issue(addr(1, 5), 0, || 7));
+        assert_ne!(ca, 7);
         assert!(a.connect(addr(1, 5), ca, 10).is_some());
     }
 

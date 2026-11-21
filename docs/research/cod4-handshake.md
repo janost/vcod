@@ -395,7 +395,7 @@ names).
 
 ### 12.4 vcod
 
-- `vcod_cod4::net::browser` holds the wire (`getservers`, the master's answer, `ServerInfo` as 12.1 reads it, `Status`) and `servercache.dat` (`ServerCache`, `Record`).
+- `vcod_cod4::net::browser` holds the wire (`getservers`, the master's answer, `ServerInfo` as 12.1 reads it, `Status`) and `servercache.dat` (`ServerCache`, `Record`), typed views over the walk and the file shape CoD1's browser and cache use (`net::master::servers_response`, `net::server_cache::Layout::Cod4`).
 - The client's `play::cod4_menus::browser` runs 12.2 and 12.3 on the script menus. The front end (`cod4_front::Cod4Front`) reads `servercache.dat` from the install root at start (`Browser::with_cache`), pumps the browser once a frame (`pump_browser`), hands `take_join`'s address and `password` dvar to the join (`App::connect_cod4`, the connect screen's `cod4_loading::Loader`), and passes typed keys to an edit field (`type_text`).
 - A script's `open` stacks the new menu over the open one and `close` uncovers it (`Menus_OpenByName`, INFERRED); a server's `t`, `u` and `L` replace or clear the stack. An edit field takes typed text after a click, Enter or `setfocus`; Backspace drops a character and Enter runs its `onAccept` (`Item_TextField_HandleKey`, INFERRED).
 - Departures from retail:

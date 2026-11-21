@@ -206,6 +206,10 @@ impl BotWorld for Cod4Server {
     /// roof's parapet at (708, 608, 192), so the follower avoided each in
     /// turn and the roof held its bots (bot-objectives.md 12.16).
     const MANTLE_RESTS: bool = true;
+    /// On: on mp_crash a bot climbed onto a teammate standing on the ledge
+    /// at (1403, 196, 188), was pushed off and climbed again for 140
+    /// ticks (bot-combat.md 20).
+    const MANTLE_YIELDS: bool = true;
     /// On: a plan's end short of a point no node reaches left bots walking
     /// at mp_bog's `sab` zone over its wall and round mp_bloc's `koth`
     /// radio stand outside its room (bot-objectives.md 12.19).

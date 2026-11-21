@@ -240,10 +240,11 @@ impl Server {
         // (combat doc, 11.1), so it skips the cull the way a broadcast temp
         // entity does.
         // So does anything `playSound` touched, a player included.
-        let mut culled: BTreeMap<u32, Rc<msg::EntityState>> =
-            entities.into_iter().map(|(n, e)| (n, Rc::new(e))).collect();
-        culled.extend(client_entities.into_iter().map(|(n, e)| (n, Rc::new(e))));
-        let mut broadcast: BTreeMap<u32, Rc<msg::EntityState>> = self
+        let entity = |e| crate::archive::FrameEntity::new(e, proto);
+        let mut culled: BTreeMap<u32, crate::archive::FrameEntity> =
+            entities.into_iter().map(|(n, e)| (n, entity(e))).collect();
+        culled.extend(client_entities.into_iter().map(|(n, e)| (n, entity(e))));
+        let mut broadcast: BTreeMap<u32, crate::archive::FrameEntity> = self
             .game
             .module
             .script
@@ -251,7 +252,7 @@ impl Server {
             .map_or_else(BTreeMap::new, |rt| {
                 rt.missiles()
                     .entities(self.game.proto)
-                    .map(|(n, e)| (n, Rc::new(e)))
+                    .map(|(n, e)| (n, entity(e)))
                     .collect()
             });
         if let Some(rt) = self.game.module.script.as_ref() {
@@ -276,7 +277,7 @@ impl Server {
             temps: temps
                 .into_iter()
                 .zip(temp_states)
-                .map(|(scope, (_, e))| (scope, Rc::new(e)))
+                .map(|(scope, (_, e))| (scope, entity(e)))
                 .collect(),
             broadcast,
             roster: Rc::new(roster),
@@ -502,14 +503,9 @@ impl Server {
                 None => (live, 0),
             };
             let cull = crate::tick_profile::phase("messages/snapshot/cull");
-            let mut visible =
+            let visible =
                 world.entities_for(client_num, eye, collision_vis, shift, self.game.proto);
-            if self.game.proto.et_events != vcod_common::net::events::ET_EVENTS {
-                for es in visible.values_mut() {
-                    crate::game::wire::entity_to_protocol(self.game.proto, es);
-                }
-            }
-            let roster = (*world.roster).clone();
+            let roster = world.roster.clone();
             drop(cull);
 
             let mut ps = match follow_frame {
@@ -549,7 +545,7 @@ impl Server {
                 ps.arrays.hud_archived.clear();
                 ps.arrays.hud_current.clear();
             }
-            let frame = snapshot::Snapshot {
+            let frame = snapshot::SentSnapshot {
                 server_time: Msec::from_raw(self.core.sv_time_ms),
                 message_num,
                 delta_num: -1,

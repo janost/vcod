@@ -285,9 +285,6 @@ pub struct PlayerAnims {
     motions: Vec<Option<AnimMotion>>,
     /// [`Self::leaf_motion`]'s table, by node id.
     leaf_motions: HashMap<usize, (f32, bool)>,
-    /// The rate divides by [`AnimMotion::move_speed_f`], CoD2's float
-    /// `moveSpeed`, not the truncated one; CoD2's loaders set it.
-    pub float_move_speed: bool,
 }
 
 /// The leaves under a `complete` node that are not under a sync one: each
@@ -330,7 +327,8 @@ pub struct AnimMotion {
     /// CoD2's `animation_t +0x44`, a float: the root's travel over the
     /// clip's float length (lnxded `BG_LoadAnim` fill 0x80d72e6), 268.47
     /// for `pb_stumble_forward` where [`Self::move_speed`] reads 268. Read
-    /// in its place under [`PlayerAnims::float_move_speed`].
+    /// in its place by CoD2's and CoD4's clocks
+    /// (`animclock::Flavour::Cod2`, `Flavour::Cod4`).
     pub move_speed_f: f32,
     /// `animation_t +0x50` bit 2: a `climbup` or `climbdown` anim with a
     /// `moveSpeed`, whose rate reads the vertical travel alone (0x287f5).
@@ -431,7 +429,6 @@ impl PlayerAnims {
             lengths,
             motions,
             leaf_motions,
-            float_move_speed: false,
         })
     }
 

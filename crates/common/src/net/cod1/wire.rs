@@ -125,7 +125,7 @@ impl Cod1Wire {
 }
 
 impl WireGame for Cod1Wire {
-    type Frame = crate::net::snapshot::Snapshot;
+    type Frame = crate::net::snapshot::SentSnapshot;
     type Baselines = std::collections::HashMap<u32, crate::net::msg::EntityState>;
 
     fn transport(&self) -> &Transport {

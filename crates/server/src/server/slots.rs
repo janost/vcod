@@ -58,7 +58,7 @@ fn zombie_message(
     let ps = c.link.frames[message_num as usize % crate::client::SV_PACKET_BACKUP]
         .as_ref()
         .map_or_else(|| msg::PlayerState::null(proto), |f| f.ps.clone());
-    let frame = snapshot::Snapshot {
+    let frame = snapshot::SentSnapshot {
         server_time: Msec::from_raw(sv_time_ms),
         message_num,
         delta_num: -1,
@@ -901,14 +901,14 @@ mod tests {
         for n in 1..=40u32 {
             let mut e = msg::EntityState::null(p);
             e.number = 100;
-            c.record_frame(snapshot::Snapshot {
+            c.record_frame(snapshot::SentSnapshot {
                 server_time: Msec::from_raw(50 * n as i32),
                 message_num: n,
                 delta_num: -1,
                 snap_flags: 0,
                 ps: commandtime(n as i32),
-                entities: [(100, e)].into(),
-                clients: [(0, msg::ClientState::null(p))].into(),
+                entities: [(100, Rc::new(e))].into(),
+                clients: Rc::new([(0, msg::ClientState::null(p))].into()),
                 valid: true,
             });
         }

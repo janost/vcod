@@ -34,14 +34,11 @@ fn shocked(weapon: &str, ahead: f32) -> Option<(Vec<Row>, String, Vec<String>)> 
             && let Some(ps) = level.pm_state(1)
         {
             // The shooter holds still: its own view, no keys.
-            let short = |a: f32| ((a * 65536.0 / 360.0).round() as i32 & 0xffff) as u16;
             let c = UserCmd {
                 server_time: svs + 10,
                 weapon: 27,
                 offhand: 40,
-                angles: std::array::from_fn(|k| {
-                    short(ps.view_angles[k]).wrapping_sub(short(ps.delta_angles[k]))
-                }),
+                angles: vcod_cod4::net::conn::cmd_angles(ps.view_angles, ps.delta_angles),
                 ..Default::default()
             };
             probes[1].replay.clear();

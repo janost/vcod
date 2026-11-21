@@ -32,14 +32,11 @@ fn run(act: &mut dyn FnMut(&mut Cod4Level, i32)) -> Option<()> {
         if svs >= 46_900
             && let Some(ps) = level.pm_state(1)
         {
-            let short = |a: f32| ((a * 65536.0 / 360.0).round() as i32 & 0xffff) as u16;
             let c = UserCmd {
                 server_time: svs + 10,
                 weapon: ps.weapon as u8,
                 offhand: ps.off_hand_index as u8,
-                angles: std::array::from_fn(|k| {
-                    short(ps.view_angles[k]).wrapping_sub(short(ps.delta_angles[k]))
-                }),
+                angles: vcod_cod4::net::conn::cmd_angles(ps.view_angles, ps.delta_angles),
                 ..Default::default()
             };
             probes[1].replay.clear();

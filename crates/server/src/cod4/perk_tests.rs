@@ -20,12 +20,7 @@ fn aim(ps: &vcod_cod4::pmove::PlayerState, at: Vec3) -> [u16; 3] {
     let d = at - eye;
     let flat = (d.x * d.x + d.y * d.y).sqrt();
     let view = [-d.z.atan2(flat).to_degrees(), d.y.atan2(d.x).to_degrees()];
-    let short = |a: f32| ((a * 65536.0 / 360.0).round() as i32 & 0xffff) as u16;
-    [
-        short(view[0]).wrapping_sub(short(ps.delta_angles[0])),
-        short(view[1]).wrapping_sub(short(ps.delta_angles[1])),
-        0u16.wrapping_sub(short(ps.delta_angles[2])),
-    ]
+    vcod_cod4::net::conn::cmd_angles([view[0], view[1], 0.0], ps.delta_angles)
 }
 
 /// `slot`'s cmd this tick: viewing `at` (or holding its view), `buttons`,

@@ -100,16 +100,11 @@ impl Trio {
                 let (Some(yaw), Some(ps)) = (yaw, self.level().pm_state(slot)) else {
                     continue;
                 };
-                let short = |a: f32| ((a * 65536.0 / 360.0).round() as i32 & 0xffff) as u16;
                 let c = UserCmd {
                     server_time: svs + 10,
                     weapon: ps.weapon as u8,
                     offhand: ps.off_hand_index as u8,
-                    angles: [
-                        0u16.wrapping_sub(short(ps.delta_angles[0])),
-                        short(yaw).wrapping_sub(short(ps.delta_angles[1])),
-                        0u16.wrapping_sub(short(ps.delta_angles[2])),
-                    ],
+                    angles: vcod_cod4::net::conn::cmd_angles([0.0, yaw, 0.0], ps.delta_angles),
                     ..Default::default()
                 };
                 let p = &mut self.probes[slot];

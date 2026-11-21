@@ -910,6 +910,20 @@ pub fn angle2short(deg: f32) -> u16 {
     ((deg * 65536.0 / 360.0) as i32 & 0xffff) as u16
 }
 
+/// A cmd's angles as the 1.7 client makes them off a view net of the
+/// playerstate's float `delta_angles`: `(int)` of the x87 double `deg *
+/// 182.04445f + 0.5`, masked (`iw3mp.exe` 0x463aa9..0x463acf,
+/// cod4-client-view.md 14.1). The difference wraps into 0..360 first, as
+/// the truncation would carry a negative one a short toward 0 each time a
+/// caller feeds the server's view back in.
+pub fn cmd_angles(view: [f32; 3], delta: [f32; 3]) -> [u16; 3] {
+    let k = f64::from(vcod_common::x87::SHORT_PER_DEG);
+    std::array::from_fn(|i| {
+        let deg = (f64::from(view[i]) - f64::from(delta[i])).rem_euclid(360.0);
+        ((deg * k + 0.5) as i32 & 0xffff) as u16
+    })
+}
+
 /// `CL_ConfigstringModified`: each `d <index> <string>` newer than the
 /// table into it; one read ahead of a gamestate in the same message is
 /// the last level's. `applied` is the newest command already applied.
@@ -951,6 +965,30 @@ pub fn apply_configstrings(client: &mut Client, applied: &mut i32, parsed: &Pars
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The half rounds the float difference up, where two truncated shorts
+    /// lose it, and a negative difference rounds as its wrap does.
+    #[test]
+    fn cmd_angles_round_the_float_difference() {
+        let c = cmd_angles([0.003, -0.004, 0.0], [-0.003, 0.0, 0.0]);
+        assert_eq!(c, [1, 65535, 0]);
+        assert_eq!(angle2short(0.003).wrapping_sub(angle2short(-0.003)), 0);
+        assert_eq!(cmd_angles([90.0, -90.0, 0.0], [0.0; 3]), [16384, 49152, 0]);
+    }
+
+    /// The server's view fed back in (`PM_UpdateViewAngles`' wrap to
+    /// -180..180) gives the cmd that made it, either sign.
+    #[test]
+    fn cmd_angles_hold_the_server_view() {
+        let delta = [3.7f32, -151.3, 0.0];
+        for cmd in [0u16, 1, 5000, 32767, 32768, 60000, 65535] {
+            let view = delta.map(|d| {
+                let a = f64::from(d) + f64::from(cmd) * 360.0 / 65536.0;
+                ((a + 180.0).rem_euclid(360.0) - 180.0) as f32
+            });
+            assert_eq!(cmd_angles(view, delta)[..2], [cmd, cmd], "cmd {cmd}");
+        }
+    }
 
     /// A joined connection to `server`, as [`Conn::join`] leaves one.
     fn joined(server: SocketAddr) -> Conn {

@@ -135,6 +135,12 @@ pub fn parse_address(s: &str) -> Option<SocketAddrV4> {
 /// fewer than seven bytes are left; the live master ends its list with
 /// `\EOF`, which the length check catches.
 pub fn parse_servers_response(body: &[u8]) -> Vec<SocketAddrV4> {
+    servers_response(body, &[*b"EOT"])
+}
+
+/// [`parse_servers_response`]'s walk, stopping at a `\` followed by any of
+/// `trailers` (1.7's takes `EOF` too, cod4-handshake.md 12).
+pub fn servers_response(body: &[u8], trailers: &[[u8; 3]]) -> Vec<SocketAddrV4> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < body.len() {
@@ -152,7 +158,8 @@ pub fn parse_servers_response(body: &[u8]) -> Vec<SocketAddrV4> {
         let ip = Ipv4Addr::new(b[0], b[1], b[2], b[3]);
         let port = u16::from_be_bytes([b[4], b[5]]);
         out.push(SocketAddrV4::new(ip, port));
-        if out.len() >= 256 || body.get(i + 8..i + 11) == Some(b"EOT") {
+        let trailer = body.get(i + 8..i + 11);
+        if out.len() >= 256 || trailers.iter().any(|t| trailer == Some(t)) {
             break;
         }
         i += 7;

@@ -814,7 +814,8 @@ fn walk_rows(run: &Ours, server: &str, client: &str) -> (usize, Vec<String>) {
 /// frames were compared and how far, at worst, a foot sat off where the end
 /// frame's clock puts it `LEAD_MS` later; `None` without the paks.
 fn drawn_feet(draw_ms: i32) -> Option<(usize, f32)> {
-    use vcod_common::animclock::{ChannelClock, Seen, Times};
+    use vcod_common::animclock::Flavour::V1_1;
+    use vcod_common::animclock::{ChannelClock, Seen, Times, update_body};
     use vcod_common::playerpose::{PoseInputs, pose_player};
     let fs = vcod_common::testing::game_fs_11()?;
     let anims = vcod_common::animtree::PlayerAnims::load(&fs).unwrap();
@@ -877,10 +878,16 @@ fn drawn_feet(draw_ms: i32) -> Option<(usize, f32)> {
     let mut end = (ChannelClock::default(), ChannelClock::default());
     let mut ends = BTreeMap::new();
     for &(t, tr, l, to) in &snaps {
-        end.0
-            .update(&anims, true, l, &seen(tr), Times::end_frame(t));
-        end.1
-            .update(&anims, false, to, &seen(tr), Times::end_frame(t));
+        let clocks = (&mut end.0, &mut end.1);
+        update_body(
+            clocks,
+            &anims,
+            (l, to),
+            &seen(tr),
+            Times::end_frame(t),
+            V1_1,
+            &mut 0,
+        );
         ends.insert(t, end);
     }
     let mut drawn = (ChannelClock::default(), ChannelClock::default());
@@ -893,8 +900,8 @@ fn drawn_feet(draw_ms: i32) -> Option<(usize, f32)> {
             clock_ms: r,
             snapshot_ms: t,
         };
-        drawn.0.update(&anims, true, l, &seen(tr), at);
-        drawn.1.update(&anims, false, to, &seen(tr), at);
+        let clocks = (&mut drawn.0, &mut drawn.1);
+        update_body(clocks, &anims, (l, to), &seen(tr), at, V1_1, &mut 0);
         let later = r + LEAD_MS;
         // Between two end frames the end frame's clock runs on from the
         // last one.

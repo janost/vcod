@@ -12,7 +12,7 @@ use anyhow::Result;
 use glam::{Mat4, Quat, Vec3};
 use std::collections::HashMap;
 use std::rc::Rc;
-use vcod_common::animclock::{ChannelClock, Seen, Times, update_body};
+use vcod_common::animclock::{ChannelClock, Flavour, Seen, Times, update_body};
 use vcod_common::animtree::PlayerAnims;
 use vcod_common::asset_source::AssetSource;
 use vcod_common::model::{self, Model};
@@ -100,22 +100,19 @@ pub struct BodyFrame {
 
 impl BodyFrame {
     pub fn from_entity(e: &EntityState2) -> BodyFrame {
+        use crate::net::fields::ENTITY_STATE_FIELDS as F;
         BodyFrame {
             origin: Vec3::from(e.origin()),
-            angles: [
-                e.f32("apos.trBase[0]"),
-                e.f32("apos.trBase[1]"),
-                e.f32("apos.trBase[2]"),
-            ],
-            legs_anim: e.i32("legsAnim"),
-            torso_anim: e.i32("torsoAnim"),
-            eflags: e.i32("eFlags"),
-            movement_dir: e.f32("angles2[1]"),
-            lean: e.f32("leanf"),
-            torso_height: e.f32("fTorsoHeight"),
-            torso_pitch: e.f32("fTorsoPitch"),
-            waist_pitch: e.f32("fWaistPitch"),
-            client_num: e.i32("clientNum"),
+            angles: e.vec3_at(crate::field!(F, 3 "apos.trBase")),
+            legs_anim: e.i32_at(crate::field!(F, "legsAnim")),
+            torso_anim: e.i32_at(crate::field!(F, "torsoAnim")),
+            eflags: e.i32_at(crate::field!(F, "eFlags")),
+            movement_dir: e.f32_at(crate::field!(F, "angles2[1]")),
+            lean: e.f32_at(crate::field!(F, "leanf")),
+            torso_height: e.f32_at(crate::field!(F, "fTorsoHeight")),
+            torso_pitch: e.f32_at(crate::field!(F, "fTorsoPitch")),
+            waist_pitch: e.f32_at(crate::field!(F, "fWaistPitch")),
+            client_num: e.i32_at(crate::field!(F, "clientNum")),
         }
     }
 
@@ -203,11 +200,8 @@ impl PlayerAnimSet {
     /// The wire's anim array is 1.1's walk over CoD2's tree and script
     /// (cod2-player-anims.md 3).
     pub fn load(fs: &dyn AssetSource) -> Result<PlayerAnimSet> {
-        let mut anims = PlayerAnims::load(fs)?;
-        // `moveSpeed` is a float on CoD2 (lnxded 0x80d72e6; cod2-combat.md 9.3).
-        anims.float_move_speed = true;
         Ok(PlayerAnimSet {
-            anims: Rc::new(anims),
+            anims: Rc::new(PlayerAnims::load(fs)?),
             clips: HashMap::new(),
         })
     }
@@ -427,19 +421,18 @@ impl PlayerBody {
             tr_base: f.origin,
             eflags: flags,
         };
-        if self.cod4_lean.is_none() {
-            self.legs.store_steps();
-            self.torso.store_steps();
-        }
-        self.legs.cod2_tree();
-        self.torso.cod2_tree();
+        let flavour = match self.cod4_lean {
+            Some(_) => Flavour::Cod4,
+            None => Flavour::Cod2,
+        };
         update_body(
             (&mut self.legs, &mut self.torso),
             anims,
             (f.legs_anim, f.torso_anim),
             &seen,
             at,
-            Some(&mut self.window_ms),
+            flavour,
+            &mut self.window_ms,
         );
         let input = Self::input(anims, f);
         let (_, mantle) = body_flags(f.eflags);

@@ -10,7 +10,9 @@ use super::msg::{
     read_delta_entity, read_delta_playerstate, write_delta_entity,
 };
 use super::protocol::{CLIENTNUM_BITS, Cod1Wire, ENTITYNUM_NONE, ENTITYNUM_WORLD, GENTITYNUM_BITS};
+use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::rc::Rc;
 
 pub use super::msg::{
     SVC_BAD, SVC_BASELINE, SVC_CONFIGSTRING, SVC_DOWNLOAD, SVC_EOF, SVC_GAMESTATE, SVC_NOP,
@@ -20,25 +22,47 @@ pub use super::msg::{
 /// `PACKET_BACKUP`.
 const RING_CAP: usize = 32;
 
-#[derive(Clone, Debug, Default)]
-pub struct Snapshot {
+/// One frame. `E` holds an entity and `C` the roster: owned where a client
+/// parses them, shared where a server sends one frame's states to every
+/// client ([`SentSnapshot`]).
+#[derive(Clone, Debug)]
+pub struct Snapshot<E = EntityState, C = BTreeMap<u32, ClientState>> {
     pub server_time: Msec,
     pub message_num: u32,
     /// Base message, or -1 when uncompressed.
     pub delta_num: i32,
     pub snap_flags: u32,
     pub ps: PlayerState,
-    pub entities: BTreeMap<u32, EntityState>,
-    pub clients: BTreeMap<u32, ClientState>,
+    pub entities: BTreeMap<u32, E>,
+    pub clients: C,
     /// False when the delta base was missing; such a frame is not kept as a
     /// base.
     pub valid: bool,
 }
 
-impl Snapshot {
+/// A frame as a server sends it: its entity states and roster are the
+/// world frame's, shared by every client's frame and the ring that keeps it.
+pub type SentSnapshot = Snapshot<Rc<EntityState>, Rc<BTreeMap<u32, ClientState>>>;
+
+impl<E, C: Default> Default for Snapshot<E, C> {
+    fn default() -> Self {
+        Snapshot {
+            server_time: Msec::default(),
+            message_num: 0,
+            delta_num: 0,
+            snap_flags: 0,
+            ps: PlayerState::default(),
+            entities: BTreeMap::new(),
+            clients: C::default(),
+            valid: false,
+        }
+    }
+}
+
+impl<E, C> Snapshot<E, C> {
     /// The header this frame goes out with over `base`
     /// ([`crate::net::wire::WireGame::write_snapshot`]).
-    pub fn head(&self, base: Option<&Snapshot>) -> crate::net::wire::SnapshotHead {
+    pub fn head(&self, base: Option<&Self>) -> crate::net::wire::SnapshotHead {
         crate::net::wire::SnapshotHead {
             delta_num: base.map_or(0, |b| self.message_num.wrapping_sub(b.message_num) as u8),
             snap_flags: self.snap_flags,
@@ -159,7 +183,7 @@ impl SnapshotRing {
             "snapshot {message_num} overran the message"
         );
 
-        let snap = Snapshot {
+        let snap: Snapshot = Snapshot {
             server_time,
             message_num,
             delta_num,
@@ -297,11 +321,11 @@ fn parse_clients(
 /// `SV_WriteSnapshotToClient`. `from` is the base frame the client acked, or
 /// `None` for an uncompressed frame. No areamask on CoD 1.1: the header goes
 /// straight into the playerstate delta (docs/protocol-1.1.md, divergence 6).
-pub fn write(
+pub fn write<E: Borrow<EntityState>, C: Borrow<BTreeMap<u32, ClientState>>>(
     w: &mut MsgWriter,
     p: &Cod1Wire,
-    from: Option<&Snapshot>,
-    to: &Snapshot,
+    from: Option<&Snapshot<E, C>>,
+    to: &Snapshot<E, C>,
     baselines: &HashMap<u32, EntityState>,
 ) {
     use super::msg::{write_delta_client, write_delta_playerstate};
@@ -334,26 +358,27 @@ pub fn write(
     write_packet_entities(w, p, from.map(|b| &b.entities), &to.entities, baselines);
 
     let null_cs = ClientState::null(p);
+    let to_clients: &BTreeMap<u32, ClientState> = to.clients.borrow();
     match from {
         // Every present client full from null; the reader restarts its roster
         // on an uncompressed frame, so departures need no removal bit.
         None => {
-            for (&num, cs) in &to.clients {
+            for (&num, cs) in to_clients {
                 w.write_bits(1, 1);
                 w.write_bits(num as i32, CLIENTNUM_BITS as i32);
                 write_delta_client(w, p, &null_cs, Some(cs));
             }
         }
         Some(base) => {
-            let nums: BTreeSet<u32> = base
-                .clients
+            let base_clients: &BTreeMap<u32, ClientState> = base.clients.borrow();
+            let nums: BTreeSet<u32> = base_clients
                 .keys()
-                .chain(to.clients.keys())
+                .chain(to_clients.keys())
                 .copied()
                 .collect();
             for num in nums {
-                let old = base.clients.get(&num);
-                let new = to.clients.get(&num);
+                let old = base_clients.get(&num);
+                let new = to_clients.get(&num);
                 if old == new {
                     continue;
                 }
@@ -370,11 +395,11 @@ pub fn write(
 /// An entity unchanged from the base frame is omitted and the reader carries
 /// it forward; one absent from the base is always written, even unchanged
 /// from its baseline, or the reader never learns it exists.
-fn write_packet_entities(
+fn write_packet_entities<E: Borrow<EntityState>>(
     w: &mut MsgWriter,
     p: &Cod1Wire,
-    from: Option<&BTreeMap<u32, EntityState>>,
-    to: &BTreeMap<u32, EntityState>,
+    from: Option<&BTreeMap<u32, E>>,
+    to: &BTreeMap<u32, E>,
     baselines: &HashMap<u32, EntityState>,
 ) {
     let empty = BTreeMap::new();
@@ -392,8 +417,8 @@ fn write_packet_entities(
             num < ENTITYNUM_WORLD,
             "entity {num} not below ENTITYNUM_WORLD"
         );
-        let old = base.get(&num);
-        let new = to.get(&num);
+        let old = base.get(&num).map(E::borrow);
+        let new = to.get(&num).map(E::borrow);
         match (old, new) {
             // Compare fields only, not the whole EntityState: `number` is not
             // meaningful in `o` unless it came off the same construction path
@@ -996,7 +1021,7 @@ pub(crate) mod tests {
         let p = &PROTOCOL_V1;
         let h = Huffman::new();
         for t in [i32::MAX, i32::MIN] {
-            let a = Snapshot {
+            let a: Snapshot = Snapshot {
                 message_num: 10,
                 server_time: Msec::from_raw(t),
                 valid: true,
@@ -1043,7 +1068,7 @@ pub(crate) mod tests {
         ps.fields[PlayerState::field_index(p, "origin[0]").unwrap()] = 384f32.to_bits() as i32;
 
         // Frame A: client 0 appears out of nothing.
-        let mut a = Snapshot {
+        let mut a: Snapshot = Snapshot {
             message_num: 10,
             server_time: Msec::from_raw(48_000),
             valid: true,
@@ -1069,7 +1094,7 @@ pub(crate) mod tests {
 
         // Frame B: client 0 renamed shorter, client 3 joins. Slot indexes are
         // client numbers, so the gap stays absent.
-        let mut b = Snapshot {
+        let mut b: Snapshot = Snapshot {
             message_num: 11,
             server_time: Msec::from_raw(48_050),
             valid: true,
@@ -1098,7 +1123,7 @@ pub(crate) mod tests {
         let mut eve_cleared = ClientState::named(p, 3, 1, "eve");
         let ti = ClientState::field_index(p, "team").unwrap();
         eve_cleared.fields[ti] = 0;
-        let mut c = Snapshot {
+        let mut c: Snapshot = Snapshot {
             message_num: 12,
             server_time: Msec::from_raw(48_100),
             valid: true,
@@ -1127,7 +1152,7 @@ pub(crate) mod tests {
         let p = &PROTOCOL_V1;
         let h = Huffman::new();
 
-        let mut base = Snapshot {
+        let mut base: Snapshot = Snapshot {
             message_num: 10,
             server_time: Msec::from_raw(1000),
             valid: true,
@@ -1139,7 +1164,7 @@ pub(crate) mod tests {
         base.clients.insert(2, ClientState::named(p, 2, 3, "carol"));
 
         // alice unchanged, bob renamed, carol gone, dave new.
-        let mut to = Snapshot {
+        let mut to: Snapshot = Snapshot {
             message_num: 11,
             server_time: Msec::from_raw(1050),
             valid: true,
@@ -1194,7 +1219,7 @@ pub(crate) mod tests {
         let mut baselines = HashMap::new();
         baselines.insert(7u32, ent(700));
 
-        let mut base = Snapshot {
+        let mut base: Snapshot = Snapshot {
             message_num: 20,
             server_time: Msec::from_raw(2000),
             valid: true,
@@ -1210,7 +1235,7 @@ pub(crate) mod tests {
         base.entities.insert(5, e5);
         base.entities.insert(6, ent(600)); // removed
 
-        let mut to = Snapshot {
+        let mut to: Snapshot = Snapshot {
             message_num: 21,
             server_time: Msec::from_raw(2050),
             valid: true,
@@ -1314,13 +1339,13 @@ pub(crate) mod tests {
     fn write_rejects_a_zero_delta_offset() {
         let p = &PROTOCOL_V1;
         let h = Huffman::new();
-        let base = Snapshot {
+        let base: Snapshot = Snapshot {
             message_num: 5,
             valid: true,
             ps: PlayerState::null(p),
             ..Default::default()
         };
-        let to = Snapshot {
+        let to: Snapshot = Snapshot {
             message_num: 5,
             valid: true,
             ps: PlayerState::null(p),

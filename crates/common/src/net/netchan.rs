@@ -123,6 +123,23 @@ impl Netchan {
         packet: &[u8],
         _huff: &Huffman,
     ) -> anyhow::Result<Option<Vec<u8>>> {
+        let ring = |nc: &Self, ack: i32| {
+            latin1_bytes(&nc.reliable[ack as usize & (nc.reliable.len() - 1)])
+        };
+        Ok(self
+            .process_keyed(packet, ring)?
+            .map(|(_, payload)| payload))
+    }
+
+    /// [`Self::process_in`] with the sequence, keyed on `key(self,
+    /// reliableAcknowledge)` (0 for a payload too short to hold one): a
+    /// capture's replay, which keys on the commands it read off the
+    /// client's packets.
+    pub fn process_keyed(
+        &mut self,
+        packet: &[u8],
+        key: impl FnOnce(&Self, i32) -> Vec<u8>,
+    ) -> anyhow::Result<Option<(u32, Vec<u8>)>> {
         let Some((sequence, mut payload)) = self.frame(packet)? else {
             return Ok(None);
         };
@@ -131,9 +148,9 @@ impl Netchan {
         } else {
             0
         };
-        let key = latin1_bytes(&self.reliable[ack as usize & (self.reliable.len() - 1)]);
+        let key = key(self, ack);
         self.decode(sequence, &key, &mut payload);
-        Ok(Some(payload))
+        Ok(Some((sequence, payload)))
     }
 
     /// `Netchan_Process` alone: the sequence and the payload past it, the
@@ -309,6 +326,36 @@ pub struct ClientMessage {
     pub ops: Vec<u8>,
 }
 
+/// A client packet's plain header past its sequence and qport, and its op
+/// block unscrambled under `key(reliableAcknowledge)`, the server command
+/// it names (`SV_Netchan_Decode`); `None` for a packet shorter than the
+/// header. [`ServerNetchan::process_in`] runs it once the packet passed its
+/// checks, a capture's replay on every client packet.
+pub fn read_client_message(
+    packet: &[u8],
+    challenge: i32,
+    key: impl FnOnce(i32) -> Vec<u8>,
+) -> Option<ClientMessage> {
+    if packet.len() < CLIENT_PACKET_PREFIX + CLIENT_HEADER_LEN {
+        return None;
+    }
+    let raw = u32::from_le_bytes(packet[..4].try_into().unwrap());
+    let body = &packet[CLIENT_PACKET_PREFIX..];
+    let server_id = body[0];
+    let message_ack = i32::from_le_bytes(body[1..5].try_into().unwrap());
+    let reliable_ack = i32::from_le_bytes(body[5..9].try_into().unwrap());
+    let mut ops = body[CLIENT_HEADER_LEN..].to_vec();
+    let seed = challenge as u32 ^ u32::from(server_id) ^ message_ack as u32;
+    scramble_client_ops(seed as u8, &key(reliable_ack), &mut ops);
+    Some(ClientMessage {
+        sequence: raw,
+        server_id,
+        message_ack,
+        reliable_ack,
+        ops,
+    })
+}
+
 impl ServerNetchan {
     /// A CoD1 netchan ([`NetchanParams::COD1`]).
     pub fn new(qport: u16, challenge: i32) -> Self {
@@ -350,22 +397,9 @@ impl ServerNetchan {
         if raw <= self.incoming_sequence {
             return None;
         }
-        let body = &packet[CLIENT_PACKET_PREFIX..];
-        let server_id = body[0];
-        let message_ack = i32::from_le_bytes(body[1..5].try_into().unwrap());
-        let reliable_ack = i32::from_le_bytes(body[5..9].try_into().unwrap());
-        let mut ops = body[CLIENT_HEADER_LEN..].to_vec();
-        let string =
-            latin1_bytes(&self.reliable[reliable_ack as usize & (self.reliable.len() - 1)]);
-        let seed = self.challenge as u32 ^ u32::from(server_id) ^ message_ack as u32;
-        scramble_client_ops(seed as u8, &string, &mut ops);
-        Some(ClientMessage {
-            sequence: raw,
-            server_id,
-            message_ack,
-            reliable_ack,
-            ops,
-        })
+        let ring =
+            |ack: i32| latin1_bytes(&self.reliable[ack as usize & (self.reliable.len() - 1)]);
+        read_client_message(packet, self.challenge, ring)
     }
 
     /// The most `clc_clientCommand`s one message may carry: twice what a

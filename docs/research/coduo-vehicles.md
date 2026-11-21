@@ -2267,7 +2267,7 @@ hull".
   window (no `bg.time + 400` store in the `game.mp.i386.so` decompile,
   VERIFIED decompile). The gunner's `standMG42` legs are of another class
   than a seat's, so a change in or out of seat 2 blends over 400 ms. vcod
-  ports it (`animclock::ChannelClock::update_windowed`, the server's 1.5
+  ports it (`animclock::Flavour::Server15`, the server's 1.5
   and UO end frames); without it ours arrived in four frames, up to 6
   units apart on the way. Measured 2026-10-17 (retail UO 1.51b, `tank`
   run, `probe_bones 1`): the change into the gunner's seat matches

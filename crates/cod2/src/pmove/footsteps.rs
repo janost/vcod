@@ -139,14 +139,10 @@ pub(crate) fn footsteps(pm: &mut Pmove, pml: &Pml) {
     if sighted {
         base = (d(SIGHTED) * d(base)) as f32;
     }
-    let t = pm.cmd.server_time;
-    let down = super::moves::lerp_frac(ps, 40, 11, t);
-    let up = super::moves::lerp_frac(ps, 11, 40, t);
-    let blend = |a: f32, b: f32, f: f32| d(a) * (1.0 - d(f)) + d(b) * d(f);
-    if down != 0.0 {
-        base = (d(base) * blend(CROUCH_SPEED, PRONE_SPEED, down)) as f32;
-    } else if up != 0.0 {
-        base = (d(base) * blend(PRONE_SPEED, CROUCH_SPEED, up)) as f32;
+    let lerp = super::moves::prone_lerp(ps, pm.cmd.server_time, CROUCH_SPEED, PRONE_SPEED);
+    if let Some((a, b, f)) = lerp {
+        // The blend stays on the stack.
+        base = (d(base) * (d(a) * (1.0 - d(f)) + d(b) * d(f))) as f32;
     } else if stance == Stance::Prone {
         base = (d(PRONE_SPEED) * d(base)) as f32;
     } else if stance == Stance::Crouch {

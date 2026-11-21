@@ -7,10 +7,11 @@
 //! "Delta field encoding".
 
 use super::codec::{
-    ANGLE_BITS, FieldCodec, NetField, write_delta_field, write_delta_struct, write_ps_value,
+    ANGLE_BITS, Delta, FieldCodec, NetField, write_delta_field, write_delta_struct, write_ps_value,
 };
 pub use super::codec::{MsgReader, MsgWriter};
 use super::protocol::Cod1Wire;
+use super::ps_arrays;
 
 /// `svc_ops_e`, the server->client op bytes (confirmed against cod_lnxded 1.1d).
 pub const SVC_BAD: u8 = 0;
@@ -217,11 +218,12 @@ pub fn read_delta_client(
     from: &ClientState,
     client_num: u32,
 ) -> Option<ClientState> {
-    let fields = p
-        .transport
-        .field_codec
-        .read_delta_struct(r, p.client_fields, &from.fields)?;
-    Some(ClientState { client_num, fields })
+    let mut fields = from.fields.clone();
+    let codec = p.transport.field_codec;
+    match codec.read_delta_struct(r, p.client_fields, &from.fields, &mut fields) {
+        Delta::Removed => None,
+        _ => Some(ClientState { client_num, fields }),
+    }
 }
 
 /// Inverse of [`read_delta_client`]. The caller has written the presence bit
@@ -314,6 +316,19 @@ impl Objective {
             o[2].to_bits() as i32,
         ];
     }
+
+    /// The six delta fields in wire order.
+    pub fn fields(&self) -> [i32; 6] {
+        let [x, y, z] = self.origin;
+        [x, y, z, self.icon, self.ent_num, self.team_num]
+    }
+
+    pub fn set_fields(&mut self, [x, y, z, icon, ent_num, team_num]: [i32; 6]) {
+        self.origin = [x, y, z];
+        self.icon = icon;
+        self.ent_num = ent_num;
+        self.team_num = team_num;
+    }
 }
 
 /// Fields per `hudelem_t` held, the widest protocol's: 1.1 sends table
@@ -400,7 +415,7 @@ pub struct PsArrays {
     /// Block 1, `ps.stats[6]`; index 0 health, 2 max health. The widths are
     /// per element: `stats[3]` is 6 unsigned bits and `stats[5]` a byte, so a
     /// retail `-1` in `stats[3]` arrives as 63.
-    pub stats: [i32; STAT_WIDTHS.len()],
+    pub stats: [i32; ps_arrays::STATS],
     /// Block 2, `ps.ammo[64]`, the reserve, indexed by the weapon def's ammo
     /// index and not by weapon.
     pub ammo: [i16; 64],
@@ -420,7 +435,7 @@ pub struct PsArrays {
 impl Default for PsArrays {
     fn default() -> Self {
         PsArrays {
-            stats: [0; STAT_WIDTHS.len()],
+            stats: [0; ps_arrays::STATS],
             ammo: [0; 64],
             ammoclip: [0; 64],
             objectives: [Objective::default(); MAX_OBJECTIVES],
@@ -596,60 +611,24 @@ pub fn write_delta_playerstate(
 /// Mirror of [`read_ps_arrays`]. Every block carries only what differs from
 /// the base.
 fn write_ps_arrays(w: &mut MsgWriter, p: &Cod1Wire, from: &PsArrays, to: &PsArrays) {
-    // Block 1: the gate, then a raw mask selecting the changed scalars.
-    let mut mask = 0i32;
-    for i in 0..STAT_WIDTHS.len() {
-        if from.stats[i] != to.stats[i] {
-            mask |= 1 << i;
-        }
-    }
-    if mask == 0 {
-        w.write_bits(0, 1);
-    } else {
-        w.write_bits(1, 1);
-        w.write_bits(mask, STAT_WIDTHS.len() as i32);
-        for (i, width) in STAT_WIDTHS.iter().enumerate() {
-            if mask & (1 << i) != 0 {
-                match width {
-                    StatWidth::Short => w.write_short(to.stats[i] as i16),
-                    StatWidth::Bits(bits) => w.write_bits(to.stats[i], *bits),
-                    StatWidth::Byte => w.write_byte(to.stats[i] as u8),
-                }
-            }
-        }
-    }
+    ps_arrays::write_stats(w, &from.stats, &to.stats);
     // Block 2 behind its group gate, block 3 without one.
     if from.ammo == to.ammo {
         w.write_bits(0, 1);
     } else {
         w.write_bits(1, 1);
-        write_short_array_group(w, &from.ammo, &to.ammo);
+        ps_arrays::write_short_groups(w, &from.ammo, &to.ammo);
     }
-    write_short_array_group(w, &from.ammoclip, &to.ammoclip);
+    ps_arrays::write_short_groups(w, &from.ammoclip, &to.ammoclip);
     // Block 4: ps.objective[16], each a 3-bit state then six delta fields
     // (docs/protocol-1.1.md, "Block 4").
     if from.objectives == to.objectives {
         w.write_bits(0, 1);
     } else {
         w.write_bits(1, 1);
-        for i in 0..MAX_OBJECTIVES {
-            let from_o = from.objectives[i];
-            let o = to.objectives[i];
-            w.write_bits(o.state, OBJECTIVE_STATE_BITS);
-            if o == (Objective {
-                state: o.state,
-                ..from_o
-            }) {
-                w.write_bits(0, 1);
-            } else {
-                w.write_bits(1, 1);
-                write_delta_field(w, from_o.origin[0], o.origin[0], HUD_FIELD_BITS[0]);
-                write_delta_field(w, from_o.origin[1], o.origin[1], HUD_FIELD_BITS[1]);
-                write_delta_field(w, from_o.origin[2], o.origin[2], HUD_FIELD_BITS[2]);
-                write_delta_field(w, from_o.icon, o.icon, HUD_FIELD_BITS[3]);
-                write_delta_field(w, from_o.ent_num, o.ent_num, HUD_FIELD_BITS[4]);
-                write_delta_field(w, from_o.team_num, o.team_num, HUD_FIELD_BITS[5]);
-            }
+        for (base, o) in from.objectives.iter().zip(&to.objectives) {
+            let (from, to) = (base.fields(), o.fields());
+            ps_arrays::write_objective(w, o.state, &from, &to, &OBJECTIVE_BITS);
         }
     }
     // Block 5's gate covers both arrays at once: retail compares the pair
@@ -663,57 +642,9 @@ fn write_ps_arrays(w: &mut MsgWriter, p: &Cod1Wire, from: &PsArrays, to: &PsArra
     write_hud_array(w, p, &from.hud_current, &to.hud_current);
 }
 
-/// Mirror of [`read_short_array_group`]: four sub-blocks of 16, each a gate,
-/// a byte-aligned 16-bit changed mask and the changed elements.
-fn write_short_array_group(w: &mut MsgWriter, from: &[i16; 64], to: &[i16; 64]) {
-    for s in 0..to.len() / SHORT_SUB_BLOCK {
-        let base = s * SHORT_SUB_BLOCK;
-        let mut mask = 0u16;
-        for i in 0..SHORT_SUB_BLOCK {
-            if from[base + i] != to[base + i] {
-                mask |= 1 << i;
-            }
-        }
-        if mask == 0 {
-            w.write_bits(0, 1);
-            continue;
-        }
-        w.write_bits(1, 1);
-        w.write_short(mask as i16);
-        for i in 0..SHORT_SUB_BLOCK {
-            if mask & (1 << i) != 0 {
-                w.write_short(to[base + i]);
-            }
-        }
-    }
-}
-
-/// Block 1's six scalars by width, in mask-bit order: `stats[3]` is 6
-/// unsigned bits and `stats[5]` a byte.
-enum StatWidth {
-    Short,
-    Bits(i32),
-    Byte,
-}
-
-const STAT_WIDTHS: [StatWidth; 6] = [
-    StatWidth::Short,
-    StatWidth::Short,
-    StatWidth::Short,
-    StatWidth::Bits(6),
-    StatWidth::Short,
-    StatWidth::Byte,
-];
-
-/// Elements per gated sub-block of blocks 2 and 3; the mask is one short.
-const SHORT_SUB_BLOCK: usize = 16;
-
-/// Block 4's per-objective state, sent ahead of the delta gate.
-const OBJECTIVE_STATE_BITS: i32 = 3;
-
-/// Block 5's per-element last-changed field index; the element count's
-/// width is the protocol's ([`Cod1Wire::hud`]).
-const HUD_INDEX_BITS: i32 = 5;
+/// Block 5's element count's width is the protocol's ([`Cod1Wire::hud`]);
+/// the last-changed index is [`ps_arrays::HUD_INDEX_BITS`].
+const HUD_INDEX_BITS: i32 = ps_arrays::HUD_INDEX_BITS;
 
 /// Where the HUD-element fields start in [`HUD_FIELD_BITS`], past the
 /// objective's six.
@@ -732,6 +663,16 @@ const HUD_FIELD_BITS: [i32; HUD_ELEM_FIELD_BASE + HUD_ELEM_FIELDS] = [
     32, 32,               // SCOORD, TCOORD
 ];
 
+/// Block 4's six fields' widths, the table's first six.
+const OBJECTIVE_BITS: [i32; 6] = [
+    HUD_FIELD_BITS[0],
+    HUD_FIELD_BITS[1],
+    HUD_FIELD_BITS[2],
+    HUD_FIELD_BITS[3],
+    HUD_FIELD_BITS[4],
+    HUD_FIELD_BITS[5],
+];
+
 /// The trailing array blocks (cod_lnxded 0x807e7b3..0x807eeb6). Everything a
 /// block does not carry keeps the base frame's value.
 fn read_ps_arrays(r: &mut MsgReader, p: &Cod1Wire, from: &PsArrays) -> PsArrays {
@@ -743,45 +684,23 @@ fn read_ps_arrays(r: &mut MsgReader, p: &Cod1Wire, from: &PsArrays) -> PsArrays 
         ..PsArrays::default()
     };
     // Block 1: a mask selecting up to six scalars, each its own width.
-    if r.read_bits(1) == 1 {
-        let m = r.read_bits(STAT_WIDTHS.len() as i32);
-        for (i, width) in STAT_WIDTHS.iter().enumerate() {
-            if m & (1 << i) != 0 {
-                out.stats[i] = match width {
-                    StatWidth::Short => i32::from(r.read_short()),
-                    StatWidth::Bits(bits) => r.read_bits(*bits),
-                    StatWidth::Byte => i32::from(r.read_byte()),
-                };
-            }
-        }
-    }
+    ps_arrays::read_stats(r, &mut out.stats);
     // Block 2: ps.ammo[64] behind a group gate.
     if r.read_bits(1) == 1 {
-        read_short_array_group(r, &mut out.ammo);
+        ps_arrays::read_short_groups(r, &mut out.ammo);
     }
     // Block 3: ps.ammoclip[64], the same four sub-blocks with no group gate.
-    read_short_array_group(r, &mut out.ammoclip);
+    ps_arrays::read_short_groups(r, &mut out.ammoclip);
 
     // Block 4: ps.objective[16], each a 3-bit state then six delta fields
     // (docs/protocol-1.1.md, "Block 4").
     if r.read_bits(1) == 1 {
-        for i in 0..MAX_OBJECTIVES {
-            let from_o = from.objectives[i];
-            let o = &mut out.objectives[i];
-            o.state = r.read_bits(OBJECTIVE_STATE_BITS);
-            if r.read_bits(1) == 1 {
-                o.origin[0] = read_delta_field(r, from_o.origin[0], HUD_FIELD_BITS[0]);
-                o.origin[1] = read_delta_field(r, from_o.origin[1], HUD_FIELD_BITS[1]);
-                o.origin[2] = read_delta_field(r, from_o.origin[2], HUD_FIELD_BITS[2]);
-                o.icon = read_delta_field(r, from_o.icon, HUD_FIELD_BITS[3]);
-                o.ent_num = read_delta_field(r, from_o.ent_num, HUD_FIELD_BITS[4]);
-                o.team_num = read_delta_field(r, from_o.team_num, HUD_FIELD_BITS[5]);
-            } else {
-                *o = Objective {
-                    state: o.state,
-                    ..from_o
-                };
-            }
+        for (o, base) in out.objectives.iter_mut().zip(&from.objectives) {
+            let mut fields = [0; 6];
+            let codec = FieldCodec::COD1;
+            o.state =
+                ps_arrays::read_objective(r, codec, &base.fields(), &mut fields, &OBJECTIVE_BITS);
+            o.set_fields(fields);
         }
     }
     // Block 5: one gate for the pair, then the archived array and the
@@ -794,22 +713,6 @@ fn read_ps_arrays(r: &mut MsgReader, p: &Cod1Wire, from: &PsArrays) -> PsArrays 
         out.hud_current = from.hud_current.clone();
     }
     out
-}
-
-/// Four gated 16-entry sub-blocks (cod_lnxded 0x807ea4b / 0x807eb49): a gate,
-/// a byte-aligned 16-bit changed mask, then the changed elements low to high.
-fn read_short_array_group(r: &mut MsgReader, out: &mut [i16; 64]) {
-    for s in 0..out.len() / SHORT_SUB_BLOCK {
-        if r.read_bits(1) == 0 {
-            continue;
-        }
-        let mask = r.read_short() as u16;
-        for i in 0..SHORT_SUB_BLOCK {
-            if mask & (1 << i) != 0 {
-                out[s * SHORT_SUB_BLOCK + i] = r.read_short();
-            }
-        }
-    }
 }
 
 /// One HUD-element array (cod_lnxded 0x807cf5c): a 5-bit count (6 on
@@ -855,23 +758,8 @@ fn write_hud_array(w: &mut MsgWriter, p: &Cod1Wire, from: &[HudElem], to: &[HudE
     w.write_bits(count as i32, p.hud.count_bits);
     for (i, e) in to.iter().take(count).enumerate() {
         let base = from.get(i).copied().unwrap_or_default();
-        // Retail's index of the last differing field, 0 when none differs
-        // (0x807ce85), so an unchanged element still carries one clear bit.
-        let last = base
-            .fields
-            .iter()
-            .zip(&e.fields)
-            .rposition(|(a, b)| a != b)
-            .unwrap_or(0);
-        w.write_bits(last as i32, HUD_INDEX_BITS);
-        for k in 0..=last {
-            write_delta_field(
-                w,
-                base.fields[k],
-                e.fields[k],
-                HUD_FIELD_BITS[HUD_ELEM_FIELD_BASE + k],
-            );
-        }
+        let bits = |k: usize| HUD_FIELD_BITS[HUD_ELEM_FIELD_BASE + k];
+        ps_arrays::write_hud_elem(w, &base.fields, &e.fields, bits);
     }
 }
 

@@ -163,17 +163,12 @@ pub(super) fn aim_cmd(
         }
         None => [ps.view_angles[0], ps.view_angles[1]],
     };
-    let short = |a: f32| ((a * 65536.0 / 360.0).round() as i32 & 0xffff) as u16;
     Some(UserCmd {
         server_time: svs + 10 - lag_ms,
         buttons,
         weapon: ps.weapon as u8,
         offhand: ps.off_hand_index as u8,
-        angles: [
-            short(view[0]).wrapping_sub(short(ps.delta_angles[0])),
-            short(view[1]).wrapping_sub(short(ps.delta_angles[1])),
-            0u16.wrapping_sub(short(ps.delta_angles[2])),
-        ],
+        angles: vcod_cod4::net::conn::cmd_angles([view[0], view[1], 0.0], ps.delta_angles),
         ..Default::default()
     })
 }

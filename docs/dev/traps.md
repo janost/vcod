@@ -218,9 +218,10 @@ otherwise.
   `serverinfo_<gametype>` before the team menu, so a `t` index is not
   `g_scriptMainMenu`'s.
 - vcod-server builds every entity and playerstate in 1.1's numbering
-  (events, `eFlags`, an event entity's `eType`) and maps it to the protocol's
-  once a snapshot (`game::wire::entity_to_protocol`, `ps_to_protocol`;
-  baselines too). `pm_flags` maps in the writer. A new wire path that skips
+  (events, `eFlags`, an event entity's `eType`) and maps it to the protocol's:
+  an entity once a frame (`archive::FrameEntity`, through
+  `game::wire::entity_to_protocol`), a playerstate once a snapshot
+  (`ps_to_protocol`), baselines too. `pm_flags` maps in the writer. A new wire path that skips
   them sends 1.1 numbers to a UO client.
 - Every playerstate field `predict::from_wire` reads, `ClientSim::to_wire`
   has to write. The predictor rebuilds from the snapshot each time, and a
