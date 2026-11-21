@@ -58,6 +58,7 @@ mod lightmap_blocks;
 mod live_frame;
 mod loading;
 mod marks;
+mod offline_binds;
 mod online_frame;
 mod play;
 mod post;
@@ -104,7 +105,7 @@ use vcod_common::movetrace::MoveWorld;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::{bsp, collision, mesh, model, net, pmove, props, weapon};
 
-use camera::{FlyCamera, InputState};
+use camera::FlyCamera;
 use renderer::{DynamicModelInstance, Renderer};
 
 /// Window title and the version every surface names: the main menu, the
@@ -1155,7 +1156,9 @@ enum Mode {
         /// Boxed to keep the variants a similar size.
         ps: Box<pmove::PlayerState>,
         input: pmove::PmInput,
-        keys: WalkKeys,
+        /// The binds' held keys and kept stance, folded into `input` each
+        /// frame. Boxed to keep the variants a similar size.
+        keys: Box<offline_binds::OfflineKeys>,
         /// `None` when the anims failed to load; the viewmodel then draws
         /// statically. Boxed to keep the variants a similar size.
         view_weapon: Option<Box<viewmodel::ViewWeapon>>,
@@ -1166,11 +1169,12 @@ enum Mode {
         weapon_slot: usize,
         /// Rounds behind the clip; refilled per weapon from its file.
         reserve: u32,
-        /// Digit press latched until the next redraw loads that slot.
+        /// A weapon bind's pick, latched until the next redraw loads it.
         switch_to: Option<usize>,
         /// Rigs already loaded, so switching back to a weapon is a lookup.
         rigs: viewmodel::RigCache,
-        /// Press edges latched until the next redraw; `ads_held`/`fire_held` are level.
+        /// Press edges latched until the next redraw; `ads_held`/`fire_held`
+        /// are level, read off `keys` each frame.
         fire_edge: bool,
         fire_held: bool,
         reload_edge: bool,
@@ -1188,19 +1192,10 @@ impl Mode {
     }
 }
 
-/// Held movement keys, folded into `PmInput`'s float axes once per frame.
-#[derive(Default)]
-struct WalkKeys {
-    w: bool,
-    s: bool,
-    a: bool,
-    d: bool,
-}
-
-/// The walk-mode arsenal on number keys 1..=N: every retail archetype (semi
-/// pistol, full-auto SMGs, auto rifle, big-clip bolt rifle) plus kar98k as
-/// the baseline and its scoped twin. Files carry `semiAuto`, `startAmmo`,
-/// `adsBobFactor`.
+/// The walk-mode arsenal, picked by `weaponslot N` and the weapon cycle:
+/// every retail archetype (semi pistol, full-auto SMGs, auto rifle,
+/// big-clip bolt rifle) plus kar98k as the baseline and its scoped twin.
+/// Files carry `semiAuto`, `startAmmo`, `adsBobFactor`.
 const WALK_LOADOUT: [&str; 7] = [
     "colt_mp",
     "thompson_mp",
@@ -1210,27 +1205,6 @@ const WALK_LOADOUT: [&str; 7] = [
     "kar98k_mp",
     "kar98k_sniper_mp",
 ];
-
-fn digit_slot(code: KeyCode) -> Option<usize> {
-    Some(match code {
-        KeyCode::Digit1 => 0,
-        KeyCode::Digit2 => 1,
-        KeyCode::Digit3 => 2,
-        KeyCode::Digit4 => 3,
-        KeyCode::Digit5 => 4,
-        KeyCode::Digit6 => 5,
-        KeyCode::Digit7 => 6,
-        _ => return None,
-    })
-}
-
-impl WalkKeys {
-    /// (forward, right) in -1..1, opposite keys cancel.
-    fn axes(&self) -> (f32, f32) {
-        let axis = |pos: bool, neg: bool| (pos as i32 - neg as i32) as f32;
-        (axis(self.w, self.s), axis(self.d, self.a))
-    }
-}
 
 /// The free camera's frame once its view is set, `Mode::Fly`'s and
 /// `Mode::Cod2`'s alike: the listener, the effects' step and draw, CoD2's
@@ -2161,7 +2135,7 @@ fn run() -> Result<()> {
         key_releases: Vec::new(),
         mode,
         viewmodel,
-        input: InputState::default(),
+        input: offline_binds::OfflineKeys::default(),
         window: None,
         renderer: None,
         grabbed: false,
@@ -3314,7 +3288,7 @@ fn walk_mode(
         world: Box::new(world),
         ps: Box::new(ps),
         input: pmove::PmInput::default(),
-        keys: WalkKeys::default(),
+        keys: Box::default(),
         view_weapon,
         configstrings,
         weapon_slot: start_slot,
@@ -3364,8 +3338,9 @@ struct App {
     key_releases: Vec<console::shell::Effect>,
     mode: Mode,
     viewmodel: Arc<[model::Model]>,
-    /// Fly-mode keys; walk keeps its own in `Mode::Walk`.
-    input: InputState,
+    /// The fly camera's binds (`offline_binds::fly`); walk keeps its own
+    /// in `Mode::Walk`.
+    input: offline_binds::OfflineKeys,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     grabbed: bool,
@@ -3620,31 +3595,21 @@ impl App {
     fn clear_held_keys(&mut self) {
         match &mut self.mode {
             Mode::Idle => {}
-            Mode::Fly(_) => self.input = InputState::default(),
+            Mode::Fly(_) => self.input.release_all(),
             Mode::Cod2(_) => {
-                self.input = InputState::default();
+                self.input.release_all();
                 self.session.release_keys();
             }
             Mode::Online { input, .. } => input.release_all(),
             Mode::Walk {
-                input,
                 keys,
                 fire_edge,
-                fire_held,
                 reload_edge,
-                ads_held,
                 ..
             } => {
-                *keys = WalkKeys::default();
-                input.jump = false;
-                input.crouch = false;
-                input.walk_slow = false;
-                input.lean_left = false;
-                input.lean_right = false;
+                keys.release_all();
                 *fire_edge = false;
-                *fire_held = false;
                 *reload_edge = false;
-                *ads_held = false;
             }
         }
         if let Some(hud) = &mut self.hud {
@@ -3687,11 +3652,11 @@ impl App {
         true
     }
 
-    /// Keys, mouse buttons and the wheel go through the binds: online,
-    /// a CoD2 session included (`Mode::Cod2`,
-    /// `play::cod2_input`).
+    /// Keys, mouse buttons and the wheel go through the binds: online, in
+    /// a CoD2 or CoD4 session (`Mode::Cod2`, `play::cod2_input`) and in
+    /// the offline modes (`offline_binds`).
     fn plays_binds(&self) -> bool {
-        matches!(self.mode, Mode::Online { .. }) || self.session.live()
+        !matches!(self.mode, Mode::Idle) || self.session.live()
     }
 
     /// Whether keys go to the console: it is down, or there is nothing else.
@@ -3932,7 +3897,7 @@ impl App {
         }
     }
 
-    /// A bound key or button's edge, online only.
+    /// A bound key or button's edge ([`Self::plays_binds`]).
     fn bound_key(&mut self, event_loop: &ActiveEventLoop, key: &str, pressed: bool) {
         // A gameplay press counts only while the mouse is captured; a
         // release always passes so nothing stays held.
@@ -3979,6 +3944,55 @@ impl App {
         }
         let effects = self.shell.key_event(key, pressed);
         self.apply(event_loop, effects);
+    }
+
+    /// A `+button` bind's edge offline: the fly camera's keys (a session
+    /// that leaves the bind, as a CoD4 capture does, flies by them too), or
+    /// walk's.
+    fn offline_button(&mut self, action: play::input::Action, down: bool) {
+        use play::input::Action;
+        match &mut self.mode {
+            Mode::Walk {
+                keys,
+                fire_edge,
+                reload_edge,
+                ..
+            } => {
+                let was = keys.key(action, down);
+                if down && !was {
+                    match action {
+                        Action::Attack => *fire_edge = true,
+                        Action::Reload => *reload_edge = true,
+                        _ => {}
+                    }
+                }
+            }
+            _ => {
+                self.input.key(action, down);
+            }
+        }
+    }
+
+    /// A one-shot bind offline: the stance and sight ones, and walk's
+    /// weapon picks.
+    fn offline_impulse(&mut self, action: play::input::Action) {
+        match &mut self.mode {
+            Mode::Walk {
+                keys,
+                weapon_slot,
+                switch_to,
+                ..
+            } => {
+                if let Some(pick) = offline_binds::impulse(keys, action) {
+                    let len = WALK_LOADOUT.len();
+                    let from = switch_to.filter(|&s| s < len).unwrap_or(*weapon_slot);
+                    *switch_to = Some(pick.index(from, len));
+                }
+            }
+            _ => {
+                offline_binds::impulse(&mut self.input, action);
+            }
+        }
     }
 
     /// Carries out what the console's commands asked for.
@@ -4070,6 +4084,12 @@ impl App {
                     }
                     _ => console::log::print(&format!("Unknown command \"{word}\"")),
                 },
+                Effect::Button(action, down) if !matches!(self.mode, Mode::Online { .. }) => {
+                    self.offline_button(action, down)
+                }
+                Effect::Impulse(action) if !matches!(self.mode, Mode::Online { .. }) => {
+                    self.offline_impulse(action)
+                }
                 Effect::Button(action, down) => {
                     let freelook = self.shell.cvar_f32("cl_freelook") as i32 != 0;
                     if let Mode::Online { input, net, .. } = &mut self.mode {
