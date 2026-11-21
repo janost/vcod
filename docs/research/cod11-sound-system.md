@@ -27,11 +27,14 @@ surrounding code or lineage, untested. The events-and-fx doc reserves
 
 ### Evidence sources
 
+The modules' md5s live in `cod11-events-and-fx.md`, Evidence sources;
+"events doc" below points there.
+
 | File | md5 | Used for |
 |---|---|---|
-| `CoDMP.exe` (1.1 install) | `753fbcabd0fdda7f7dad3dbb29c3c008` | alias csv loader, pick, channel table, Miles playback, falloff, master/slave, listener |
-| `cgame_mp_x86.dll` (1.1 install) | `4912169a9eb22b404f95c52863a5feb6` | per-event alias selection, whizby, weapon sound keys, server-command handlers, loop sounds |
-| `game.mp.i386.so` (the 1.1d Linux dedicated server's game module) | `de8947beb6f86fbfb46f5adfaab3d3ed` | gsc `ambientPlay`/`playSound`/`playLoopSound`/`playLocalSound`/`musicPlay` handlers, `G_PlaySoundAlias*`, `G_SoundAliasIndex`, `G_Voice`. Has a symbol table |
+| `CoDMP.exe` (1.1 install) | events doc | alias csv loader, pick, channel table, Miles playback, falloff, master/slave, listener |
+| `cgame_mp_x86.dll` (1.1 install) | events doc | per-event alias selection, whizby, weapon sound keys, server-command handlers, loop sounds |
+| `game.mp.i386.so` (the 1.1d Linux dedicated server's game module) | events doc | gsc `ambientPlay`/`playSound`/`playLoopSound`/`playLocalSound`/`musicPlay` handlers, `G_PlaySoundAlias*`, `G_SoundAliasIndex`, `G_Voice`. Has a symbol table |
 | `pak1.pk3 : soundaliases/*.csv` | none | alias data, csv legend |
 | `pak5.pk3 : maps/MP/gametypes/sd.gsc`, `pak4.pk3 : maps/MP/mp_carentan.gsc` | none | which gsc sound calls the stock MP scripts actually make |
 | CoDExtended `src/shared.h`, `server.h` | none | `entityType_t`, `SVF_*` names |
@@ -1450,10 +1453,13 @@ listen-server snapshot writer, not the sound system.
 
 ## 12. Module md5s and image bases
 
-Same conventions as `cod11-events-and-fx.md`:
+The md5s and image bases are in `cod11-events-and-fx.md`, Evidence sources.
+What this doc adds: `CoDMP.exe` 1.1 maps `.text` at `0x401000`, `.rdata` at
+`0x53d000` and `.data` at `0x570000`; `game.mp.i386.so`'s second `LOAD`
+maps file `0x7a3a0` to vaddr `0x7b3a0`, and the data addresses above are
+vaddrs. The 1.5 `cgame_mp_x86.dll` was not diffed for sound.
 
-| File | md5 | Base |
-|---|---|---|
+---|---|---|
 | `CoDMP.exe` (1.1) | `753fbcabd0fdda7f7dad3dbb29c3c008` | `0x00400000` (`.text` `0x401000`, `.rdata` `0x53d000`, `.data` `0x570000`) |
 | `cgame_mp_x86.dll` (1.1) | `4912169a9eb22b404f95c52863a5feb6` | `0x30000000` |
 | `game_mp_x86.dll` (1.1) | `25e2fcfe02ca0c46f4e9ad2530d50691` | `0x20000000` (not used here; the `.so` has symbols) |

@@ -10,17 +10,19 @@ module, whose event enum diverges above id 172).
 
 ### Evidence sources
 
-All binaries are from the 1.1 install unless stated otherwise.
+All binaries are from the 1.1 install unless stated otherwise. The modules'
+md5s live in `cod11-events-and-fx.md`, Evidence sources; "events doc" below
+points there.
 
 | File | md5 | Used for |
 |---|---|---|
-| `cgame_mp_x86.dll` | `4912169a9eb22b404f95c52863a5feb6` | `CG_Obituary`, `CG_ServerCommand`, scores parser, configstring consumers |
-| `CoDMP.exe` | `753fbcabd0fdda7f7dad3dbb29c3c008` | font `.dat` loader, text renderer, `^N` colour table |
-| `game.mp.i386.so` (1.1d Linux server's game module) | `de8947beb6f86fbfb46f5adfaab3d3ed` | who writes each configstring, obituary event builder, scoreboard message builder; it has a symbol table, so its function names are its own |
+| `cgame_mp_x86.dll` | events doc | `CG_Obituary`, `CG_ServerCommand`, scores parser, configstring consumers |
+| `CoDMP.exe` | events doc | font `.dat` loader, text renderer, `^N` colour table |
+| `game.mp.i386.so` (1.1d Linux server's game module) | events doc | who writes each configstring, obituary event builder, scoreboard message builder; it has a symbol table, so its function names are its own |
 | `pak5.pk3` | `0cb20baa66ddecc72ccb7f17b3062bb3` | `fonts/fontImage_*.dat`, `gfx/hud/*death*` art |
 | `pak0.pk3` | | `weapons/mp/*` weapon defs, `ui/assets/reticle_q.tga` |
 | `pak4.pk3` | | `scripts/ui_hud.shader`, `scripts/hud.shader` |
-| `cgame_mp_x86.dll` from the 1.5 install | `075e2af18aeaf2aeaf2a75ce22db683a` | 1.5 diff (icon names unchanged) |
+| `cgame_mp_x86.dll` from the 1.5 install | events doc | 1.5 diff (icon names unchanged) |
 | live: a public TDM server, mp_carentan, 2026-08-24 | | `serverCommand` stream, gamestate |
 
 Addresses are virtual: base `0x30000000` for the cgame DLL, `0x00400000`
