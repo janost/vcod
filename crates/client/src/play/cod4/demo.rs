@@ -164,12 +164,15 @@ impl DemoPlay {
 }
 
 impl Cod4Session {
-    /// What `CL_SetUserCmdOrigin` (0x45ad30) last handed the client: the
-    /// predicted body, else the newest snapshot's, at `cl.serverTime`.
-    pub(super) fn archive_row(&self) -> Option<vcod_cod4::net::demo::Archive> {
+    /// What `CL_SetUserCmdOrigin` (0x45ad30) hands the client: the
+    /// `predicted` body, else the newest snapshot's, at `cl.serverTime`.
+    pub(super) fn archive_row(
+        &self,
+        predicted: Option<&pm::PlayerState>,
+    ) -> Option<vcod_cod4::net::demo::Archive> {
         let time = self.cg_time?;
         let built;
-        let ps = match &self.last_predicted {
+        let ps = match predicted {
             Some(p) => p,
             None => {
                 // Unpredicted, the view is the last cmd's over the newest

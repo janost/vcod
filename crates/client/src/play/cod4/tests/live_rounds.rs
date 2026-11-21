@@ -1114,11 +1114,14 @@ fn own_rounds(class: &'static str, hold: usize) -> Option<(Vec<(i32, bool)>, Vec
                 let ps = &s.client().snapshots.last().unwrap().ps;
                 (ps.get(n).unwrap_or(0), ps_f32(ps, n))
             };
-            // Not frozen, and the weapon ready on the server's clock.
+            // Not frozen, the weapon ready on the server's clock, and our
+            // cmds past the spawn's `commandTime`, which the spawn's think
+            // put at the level's time, ahead of `cl.serverTime`.
             let ready = |s: &Cod4Session| {
                 snap(s, "pm_flags").0 & 0x800 == 0
                     && snap(s, "weaponstate").0 == 0
                     && snap(s, "weaponTime").0 == 0
+                    && s.cmd_time() > snap(s, "commandTime").0 as i32
             };
             for ads in [false, true] {
                 s.input.key(Action::Ads, ads);

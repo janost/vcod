@@ -1,7 +1,7 @@
 //! Our own cmds on a live server: the frame's send, the weapon picks, the
 //! location selector and the melee charge.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Result;
 use glam::Vec3;
@@ -118,39 +118,39 @@ impl Cod4Session {
         if let Some(d) = self.ran_dry.take() {
             self.out_of_ammo_change(&d);
         }
+        // A packet no scene sent since the last step goes out first, with
+        // no predicted origin.
+        if self.packet_due {
+            self.send_packet(None)?;
+        }
         let now = clock_now();
-        let send_due = |t: &Option<Instant>| {
-            t.is_none_or(|t| now.saturating_duration_since(t) >= Duration::from_millis(SEND_MS))
-        };
-        // The packet's archive row, built only when one goes out.
-        let row = match &self.source {
-            Source::Live { last_send, .. } if send_due(last_send) => self.archive_row(),
-            _ => None,
-        };
+        let time = self.cmd_time();
         let Source::Live {
-            conn,
-            last_send,
-            last_snap_at,
-            ..
+            conn, last_send, ..
         } = &mut self.source
         else {
             return Ok(());
         };
         if conn.client.gamestate.is_some() {
             let floor = self.pending.last().unwrap_or(conn.last_cmd()).server_time;
-            // `CL_SetUserCmdAimValues`: the recoil rides the cmd's angles.
-            let [kp, ky, kr] = self.kick.view_kick();
-            let c = own_cmd(
-                &conn.client,
-                now.saturating_duration_since(*last_snap_at),
-                [self.view[0] + kp, self.view[1] + ky, kr],
-                &self.input,
-                self.talking,
-            );
-            // One cmd a frame, never two on one millisecond.
-            if c.server_time >= floor {
+            // One cmd a frame, never two on one millisecond. Before the
+            // first snapshot there is no clock: each frame's takes the next
+            // ms, so a primed client's move still enters the world.
+            let time = match self.cg_time {
+                Some(_) => (time > floor).then_some(time),
+                None => Some(floor + 1),
+            };
+            if let Some(time) = time {
+                // `CL_SetUserCmdAimValues`: the recoil rides the cmd's angles.
+                let [kp, ky, kr] = self.kick.view_kick();
+                let c = own_cmd(
+                    &conn.client,
+                    time,
+                    [self.view[0] + kp, self.view[1] + ky, kr],
+                    &self.input,
+                    self.talking,
+                );
                 let mut c = UserCmd {
-                    server_time: c.server_time.max(floor + 1),
                     buttons: c.buttons | self.input.take_extra(),
                     ..c
                 };
@@ -173,17 +173,49 @@ impl Cod4Session {
                 self.sent_cmds.push_back(Cmd::from(&c));
             }
         }
-        if send_due(last_send) {
+        let due = last_send
+            .is_none_or(|t| now.saturating_duration_since(t) >= Duration::from_millis(SEND_MS));
+        if due {
             *last_send = Some(now);
-            // `cl.clientArchive`: our predicted state at each packet's time.
-            if let Some(r) = row {
-                conn.client.archive.add(r);
+            // The scene sends it once its prediction has run this cmd, as
+            // the cgame's frame does; a step with no scene to come (no
+            // gamestate or clock yet) sends it now.
+            let no_scene = conn.client.gamestate.is_none() || self.cg_time.is_none();
+            self.packet_due = true;
+            if no_scene {
+                self.send_packet(None)?;
             }
-            let from = self.pending.len().saturating_sub(MAX_PACKET_CMDS);
-            conn.send(&self.pending[from..])?;
-            self.pending.clear();
         }
         Ok(())
+    }
+
+    /// `cl.serverTime`, what a cmd built now is stamped (`iw3mp.exe`
+    /// 0x463a73), at most 5 s past the newest snapshot (0x463a85); 0
+    /// before the clock starts.
+    pub(super) fn cmd_time(&self) -> i32 {
+        let newest = self.client().snapshots.last().map(|s| s.server_time.raw());
+        match (self.cg_time, newest) {
+            (Some(t), Some(n)) => t.min(n.saturating_add(5000)),
+            (t, _) => t.unwrap_or(0),
+        }
+    }
+
+    /// `CL_WritePacket` (0x463f50) with what `CL_SetUserCmdOrigin` last
+    /// stored: the cmds built since the last packet, and `origin`, the
+    /// predicted state at `cl.serverTime`, which the move carries and the
+    /// archive keeps (cod4-netfields.md 13).
+    pub(super) fn send_packet(
+        &mut self,
+        origin: Option<vcod_cod4::net::demo::Archive>,
+    ) -> Result<()> {
+        self.packet_due = false;
+        let Source::Live { conn, .. } = &mut self.source else {
+            return Ok(());
+        };
+        let from = self.pending.len().saturating_sub(MAX_PACKET_CMDS);
+        let sent = conn.send(&self.pending[from..], origin);
+        self.pending.clear();
+        sent
     }
 
     /// The newest snapshot's own playerstate: a spawn or a turn the
@@ -521,12 +553,12 @@ fn melee_charge(
     (angle2short(yaw), dist)
 }
 
-/// This frame's cmd on the newest snapshot's time plus its age (0 before
-/// one), `view` over the playerstate's `delta_angles`, the keys, the
-/// selected weapon and offhand (`play::cod4_input`).
+/// This frame's cmd at `server_time` ([`Cod4Session::cmd_time`]), `view`
+/// over the playerstate's `delta_angles`, the keys, the selected weapon
+/// and offhand (`play::cod4_input`).
 fn own_cmd(
     c: &Client,
-    snap_age: Duration,
+    server_time: i32,
     view: [f32; 3],
     input: &Cod4Input,
     talking: bool,
@@ -539,10 +571,6 @@ fn own_cmd(
             &none
         }
     };
-    let server_time = c
-        .snapshots
-        .last()
-        .map_or(0, |s| (s.server_time + snap_age.as_millis() as i32).raw());
     let delta: [f32; 3] = std::array::from_fn(|i| ps_f32(ps, &format!("delta_angles[{i}]")));
     let [forwardmove, rightmove] = input.moves(talking);
     let (weapon, offhand) = input.weapons();
@@ -600,7 +628,7 @@ mod turn_tests {
     fn the_cmd_carries_the_kick_roll() {
         let c = super::own_cmd(
             &vcod_cod4::net::parse::Client::default(),
-            std::time::Duration::ZERO,
+            0,
             [0.0, 0.0, -1.5],
             &crate::play::cod4_input::Cod4Input::default(),
             false,

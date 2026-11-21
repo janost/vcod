@@ -228,11 +228,11 @@ fn a_cod4_move_of_33_cmds_or_none_is_refused() {
             })
             .collect()
     };
-    sv.user_move(0, -1, false, &cmds(33));
+    sv.user_move(0, -1, false, &cmds(33), ([0.0; 3], 0));
     assert_eq!(last(&sv), t0);
-    sv.user_move(0, -1, false, &[]);
+    sv.user_move(0, -1, false, &[], ([0.0; 3], 0));
     assert_eq!(last(&sv), t0);
-    sv.user_move(0, -1, false, &cmds(32));
+    sv.user_move(0, -1, false, &cmds(32), ([0.0; 3], 0));
     assert_eq!(last(&sv), t0 + 32);
 }
 
@@ -347,4 +347,22 @@ fn cod4_flood_protect_counts_game_commands_in_the_window() {
     assert!(flood_check(c, 0, 2607, "say i"), "sv_floodprotect 0");
     c.state = State::Primed;
     assert!(flood_check(c, 4, 2607, "say j"), "not in the world");
+}
+
+/// `MSG_WriteDeltaPlayerstate` leaves origin out only for a move's
+/// predicted origin within 0.1 of the playerstate's at its own
+/// `commandTime` (`cod4_lnxded` 0x813f5b5..0x813f615).
+#[test]
+fn origin_goes_out_unless_the_move_predicted_it() {
+    let mut ps = PlayerState::default();
+    ps.words[vcod_cod4::ps_word!("commandTime")] = 5000;
+    let at = vcod_cod4::ps_word!(3 "origin");
+    for (w, v) in at.into_iter().zip([100.0f32, -200.0, 30.0]) {
+        ps.words[w] = v.to_bits();
+    }
+    assert!(origin_echoed(&ps, ([100.0, -200.0, 30.0], 5000)));
+    assert!(origin_echoed(&ps, ([100.05, -200.05, 30.05], 5000)));
+    assert!(!origin_echoed(&ps, ([100.0, -200.0, 30.11], 5000)));
+    assert!(!origin_echoed(&ps, ([100.0, -200.0, 30.0], 4999)));
+    assert!(!origin_echoed(&ps, ([f32::NAN, -200.0, 30.0], 5000)));
 }

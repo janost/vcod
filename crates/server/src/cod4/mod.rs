@@ -90,6 +90,9 @@ pub type Client = crate::engine::slot::Conn<(i32, Frame4), Cod4Client>;
 pub struct Cod4Client {
     /// The playerstate's `commandTime`: the newest cmd thought.
     command_time: i32,
+    /// The predicted origin and its time the newest move carried
+    /// (`SV_UserMove`'s +0x63c and +0x648, 0x817270a..0x8172752).
+    predicted: ([f32; 3], i32),
     /// The 0x2000-byte stats block and which of its seven packets came.
     stats: Stats,
     stat_packets: u8,
@@ -1005,9 +1008,15 @@ impl Cod4Server {
                         return;
                     }
                 }
-                ClOp::Move { delta, cmds, .. } => {
+                ClOp::Move {
+                    delta,
+                    cmds,
+                    origin,
+                    origin_time,
+                } => {
                     let cmds: Vec<UserCmd> = cmds.into_iter().map(|(c, _)| c).collect();
-                    self.user_move(slot, m.message_ack, delta, &cmds);
+                    let predicted = (origin.map(f32::from_bits), origin_time);
+                    self.user_move(slot, m.message_ack, delta, &cmds, predicted);
                     return;
                 }
                 ClOp::Eof => return,
@@ -1243,7 +1252,14 @@ impl Cod4Server {
     /// into the world, the pure check (0x81727b8: no `cp` drops with
     /// `EXE_CANNOTVALIDATEPURECLIENT`, a failed one `EXE_UNPURECLIENTDETECTED`,
     /// cod4-handshake.md 8), then each cmd newer than the last thought.
-    fn user_move(&mut self, slot: usize, message_ack: i32, delta: bool, cmds: &[UserCmd]) {
+    fn user_move(
+        &mut self,
+        slot: usize,
+        message_ack: i32,
+        delta: bool,
+        cmds: &[UserCmd],
+        predicted: ([f32; 3], i32),
+    ) {
         crate::tick_trace::step!("SV_UserMove slot {slot}");
         let pure = self.pure();
         let now = self.core.sv_time_ms;
@@ -1254,6 +1270,7 @@ impl Cod4Server {
         if cmds.is_empty() || cmds.len() > clmsg::MAX_PACKET_USERCMDS {
             return;
         }
+        c.extra.predicted = predicted;
         if message_ack >= 0 {
             c.link.ping_ring[message_ack as usize % PACKET_BACKUP].1 = now;
         }
@@ -1499,6 +1516,7 @@ impl Cod4Server {
             self.core.configstrings[vcod_cod4::net::parse::CS_MAPCENTER as usize].as_bytes(),
         );
         let flags_base = self.game.snap_flags;
+        let client_archive = self.int("sv_clientArchive") != 0;
         let max_rate = self.int("sv_maxRate");
         let dl_cvars = download::DownloadCvars {
             allow: self.int("sv_allowDownload") != 0,
@@ -1523,6 +1541,7 @@ impl Cod4Server {
                 spectator_ps(slot, origin, angles, c.extra.command_time.max(svs - frame))
             });
             ps.sent_angles();
+            ps.origin_sent = !(client_archive && origin_echoed(&ps, c.extra.predicted));
             // Every entity but the one the playerstate views from: retail
             // culls none by position (cod4-pmove.md 15).
             let viewer = ps.word(vcod_cod4::ps_word!("clientNum"));
@@ -1600,6 +1619,7 @@ impl Cod4Server {
             voice::client_voice(userinfo),
             Cod4Client {
                 command_time: svs,
+                predicted: ([0.0; 3], 0),
                 stats: Stats(Box::new([0; vcod_cod4::net::stats::STATS_BYTES])),
                 stat_packets: 0,
                 guid,
@@ -1720,6 +1740,19 @@ const MAX_USERINFO: usize = 1023;
 /// `pm_type` 4, `eFlags` 2, gravity 800, `moveSpeedScaleMultiplier` 1, the
 /// depth of field's 6 and 1.8, `throwBackGrenadeOwner` and
 /// `viewlocked_entNum` 1023, `stats[3]` 63, `stats[4]` 1).
+/// `MSG_WriteDeltaPlayerstate`'s test for leaving origin and velocity out
+/// (`cod4_lnxded` 0x813f5b5..0x813f615): the move's predicted origin within
+/// 0.1 of `ps`'s (its square at most the float 0.01 at 0x8209644) and its
+/// time `commandTime` (cod4-netfields.md 3).
+fn origin_echoed(ps: &PlayerState, (origin, time): ([f32; 3], i32)) -> bool {
+    let at = vcod_cod4::ps_word!(3 "origin");
+    let d2: f64 = (0..3)
+        .map(|k| f64::from(f32::from_bits(ps.word(at[k]))) - f64::from(origin[k]))
+        .map(|d| d * d)
+        .sum();
+    d2 <= f64::from(0.01f32) && ps.word(vcod_cod4::ps_word!("commandTime")) as i32 == time
+}
+
 fn spectator_ps(slot: usize, origin: [f32; 3], angles: [f32; 3], command_time: i32) -> PlayerState {
     let mut ps = PlayerState::default();
     let mut set = |name: &str, v: u32| {

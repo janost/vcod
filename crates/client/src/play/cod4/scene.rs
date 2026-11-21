@@ -360,7 +360,10 @@ impl Cod4Session {
         let predicted = match &self.world {
             Some(w) if predicts => {
                 let now = {
-                    let t = (self.now_ms + self.cmd_delta.unwrap_or(0.0)).floor() as i32;
+                    let t = match self.source {
+                        Source::Live { .. } => self.cmd_time(),
+                        _ => (self.now_ms + self.cmd_delta.unwrap_or(0.0)).floor() as i32,
+                    };
                     self.cmd_last = self.cmd_last.max(t);
                     self.cmd_last
                 };
@@ -440,6 +443,12 @@ impl Cod4Session {
         if let Some(p) = &predicted {
             self.last_predicted = Some(p.ps.clone());
         }
+        // `CL_SetUserCmdOrigin` off the predicted state; the due packet
+        // goes out with it at the end (`iw3mp.exe` 0x447b36..0x447b47).
+        let origin_row = match self.packet_due {
+            true => self.archive_row(predicted.as_ref().map(|p| &p.ps)),
+            false => None,
+        };
         if let Some(p) = &predicted {
             let ring = cod4_predict::Ring::of(&p.ps);
             let from = self.fired.len();
@@ -672,7 +681,7 @@ impl Cod4Session {
                     .map(|(i, e)| (i as u32, e.origin, e.rot)),
             );
         }
-        Some(Scene {
+        let scene = Scene {
             crosshair_hit,
             eye,
             light_eye,
@@ -698,7 +707,13 @@ impl Cod4Session {
                 viewmodel: ["dofViewmodelStart", "dofViewmodelEnd"].map(|n| f(&new.ps, n)),
             },
             third_person,
-        })
+        };
+        if self.packet_due
+            && let Err(e) = self.send_packet(origin_row)
+        {
+            log::warn!("cod4: {e:#}");
+        }
+        Some(scene)
     }
 
     /// `CG_OffsetThirdPersonView`'s camera off `vieworg` (raised by the

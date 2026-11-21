@@ -252,8 +252,8 @@ pub(crate) fn entity_wire(from: &EntityState, to: &EntityState, force: bool) -> 
 }
 
 /// `SV_WriteSnapshotToClient` from `svc_snapshot` on: the playerstate
-/// deltaed from `base`'s (origin and velocity always sent, where retail
-/// skips them on a matching echo, cod4-netfields.md 3), every entity and
+/// deltaed from `base`'s (origin and velocity left out when its
+/// `origin_sent` is clear, cod4-netfields.md 3), every entity and
 /// client against `base`'s or, new to the frame, its baseline or nothing.
 /// The caller writes the `svc_EOF` terminator.
 pub fn write_snapshot(
@@ -272,10 +272,8 @@ pub fn write_snapshot(
     w.write_byte(head.delta_num);
     w.write_byte(head.snap_flags as u8);
     let from_ps = base.map_or(&*delta::ZERO_PS, |b| &b.ps);
-    let mut to_ps = frame.ps.clone();
-    to_ps.origin_sent = true;
-    let ps_wire = PsWire::natural(from_ps, &to_ps);
-    delta::write_delta_playerstate(w, &ctx, base.map(|b| &b.ps), &to_ps, &ps_wire);
+    let ps_wire = PsWire::natural(from_ps, &frame.ps);
+    delta::write_delta_playerstate(w, &ctx, base.map(|b| &b.ps), &frame.ps, &ps_wire);
 
     let old: &[EntityState] = base.map_or(&[], |b| &b.entities);
     let mut last = -1;
