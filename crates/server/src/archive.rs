@@ -17,18 +17,42 @@ pub use crate::engine::archive::MAX_FRAMES;
 /// `sv_fps`, which turns an age into frames.
 const SV_FPS: i32 = 1000 / crate::server::FRAME_MS;
 
+/// One entity of a [`WorldFrame`]: as the cull reads it, in vcod's (1.1's)
+/// numbering, and as the wire sends it, put into the protocol's once per
+/// frame ([`crate::game::wire::entity_to_protocol`]). The two share one
+/// allocation where they agree.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameEntity {
+    pub cull: Rc<msg::EntityState>,
+    pub wire: Rc<msg::EntityState>,
+}
+
+impl FrameEntity {
+    pub fn new(e: msg::EntityState, p: &Cod1Wire) -> Self {
+        let cull = Rc::new(e);
+        let wire = if p.et_events == vcod_common::net::events::ET_EVENTS {
+            cull.clone()
+        } else {
+            let mut e = (*cull).clone();
+            crate::game::wire::entity_to_protocol(p, &mut e);
+            Rc::new(e)
+        };
+        FrameEntity { cull, wire }
+    }
+}
+
 /// What one frame's snapshots take their entities and roster from, built once
 /// per frame and kept by the archive as it was sent.
 #[derive(Clone, Default)]
 pub struct WorldFrame {
     /// Culled per client against its PVS: the map's entities, the bodies and
     /// every linked player.
-    pub culled: BTreeMap<u32, Rc<msg::EntityState>>,
+    pub culled: BTreeMap<u32, FrameEntity>,
     /// The frame's temp entities, each with the snapshots it is scoped to.
-    pub temps: Vec<(Scope, Rc<msg::EntityState>)>,
+    pub temps: Vec<(Scope, FrameEntity)>,
     /// `SVF_BROADCAST` entities outside the temp block, the missiles and
     /// whatever `playSound` touched: sent with no cull.
-    pub broadcast: BTreeMap<u32, Rc<msg::EntityState>>,
+    pub broadcast: BTreeMap<u32, FrameEntity>,
     pub roster: Rc<BTreeMap<u32, msg::ClientState>>,
     /// The frame's level time, where the cull places a moving entity.
     pub time: i32,
@@ -69,12 +93,14 @@ impl WorldFrame {
         // A UO sound blend goes wherever its vehicle would.
         let seen = |e: &msg::EntityState| match crate::game::wire::sound_blend_vehicle(p, e) {
             Some(v) if self.broadcast.contains_key(&v) => true,
-            Some(v) => self.culled.get(&v).is_some_and(|v| culled_seen(v)),
+            Some(v) => self.culled.get(&v).is_some_and(|v| culled_seen(&v.cull)),
             None => culled_seen(e),
         };
         let times = (shift != 0).then(|| entity_time_fields(p));
-        let take = |e: &msg::EntityState| {
-            let mut e = e.clone();
+        // The shifted times and the fields the protocol renumbers are apart,
+        // so shifting the wire form is shifting before the renumbering.
+        let take = |e: &FrameEntity| {
+            let mut e = (*e.wire).clone();
             if let Some(times) = &times {
                 shift_times(&mut e.fields, times, shift);
             }
@@ -82,13 +108,13 @@ impl WorldFrame {
         };
         let mut out = BTreeMap::new();
         for (n, e) in &self.culled {
-            if *n != client_num as u32 && seen(e) {
+            if *n != client_num as u32 && seen(&e.cull) {
                 out.insert(*n, take(e));
             }
         }
         for (scope, e) in &self.temps {
-            if scope.admits(client_num) && (*scope == Scope::Broadcast || seen(e)) {
-                out.insert(e.number, take(e));
+            if scope.admits(client_num) && (*scope == Scope::Broadcast || seen(&e.cull)) {
+                out.insert(e.cull.number, take(e));
             }
         }
         for (n, e) in self
@@ -210,13 +236,10 @@ impl Archive {
     }
 }
 
-fn share_unchanged(
-    new: &mut BTreeMap<u32, Rc<msg::EntityState>>,
-    old: &BTreeMap<u32, Rc<msg::EntityState>>,
-) {
+fn share_unchanged(new: &mut BTreeMap<u32, FrameEntity>, old: &BTreeMap<u32, FrameEntity>) {
     for (n, e) in new.iter_mut() {
         if let Some(o) = old.get(n)
-            && o == e
+            && o.cull == e.cull
         {
             *e = o.clone();
         }
@@ -284,11 +307,11 @@ mod tests {
 
     const P: &Cod1Wire = &PROTOCOL_V1;
 
-    fn entity(n: u32, x: f32) -> Rc<msg::EntityState> {
+    fn entity(n: u32, x: f32) -> FrameEntity {
         let mut e = msg::EntityState::null(P);
         e.number = n;
         e.fields[msg::EntityState::field_index(P, "pos.trBase[0]").unwrap()] = x.to_bits() as i32;
-        Rc::new(e)
+        FrameEntity::new(e, P)
     }
 
     fn view(slot: i32, command_time: i32) -> Rc<ArchivedView> {
@@ -412,10 +435,10 @@ mod tests {
     #[test]
     fn a_replayed_entity_s_times_shift_and_its_scope_follows_the_replayed_client() {
         let mut w = WorldFrame::default();
-        let mut e = (*entity(80, 10.0)).clone();
+        let mut e = (*entity(80, 10.0).cull).clone();
         let tr = msg::EntityState::field_index(P, "pos.trTime").unwrap();
         e.fields[tr] = 1000;
-        w.culled.insert(80, Rc::new(e));
+        w.culled.insert(80, FrameEntity::new(e, P));
         w.culled.insert(1, entity(1, 0.0));
         w.culled.insert(2, entity(2, 0.0));
         w.temps.push((Scope::Only(1), entity(958, 0.0)));
@@ -424,6 +447,31 @@ mod tests {
         assert_eq!(got.keys().copied().collect::<Vec<_>>(), [2, 80, 958]);
         assert_eq!(got[&80].fields[tr], 10_000);
         assert_eq!(got[&2].fields[tr], 0);
+    }
+
+    #[test]
+    fn a_replayed_uo_entity_is_renumbered_once_and_shifted_the_same() {
+        use vcod_common::net::protocol::PROTOCOL_V22 as UO;
+        let field = |n: &str| msg::EntityState::field_index(&UO, n).unwrap();
+        let mut e = msg::EntityState::null(&UO);
+        e.number = 80;
+        for (n, v) in [
+            ("eType", vcod_common::net::events::ET_EVENTS + 5),
+            ("eFlags", 0x3f),
+            ("events[0]", 7),
+            ("pos.trTime", 1000),
+            ("time", 2000),
+        ] {
+            e.fields[field(n)] = v;
+        }
+        let mut w = WorldFrame::default();
+        w.culled.insert(80, FrameEntity::new(e.clone(), &UO));
+        let mut want = e;
+        shift_times(&mut want.fields, &entity_time_fields(&UO), 9000);
+        crate::game::wire::entity_to_protocol(&UO, &mut want);
+        let got = w.entities_for(1, [0.0; 3], None, 9000, &UO);
+        assert_eq!(got[&80].fields, want.fields);
+        assert_ne!(w.culled[&80].cull, w.culled[&80].wire);
     }
 
     #[test]
@@ -442,8 +490,8 @@ mod tests {
         a.push(frame(1.0));
         a.push(frame(2.0));
         let (f0, f1) = (a.frame(0).unwrap(), a.frame(1).unwrap());
-        assert!(Rc::ptr_eq(&f0.world.culled[&80], &f1.world.culled[&80]));
-        assert!(!Rc::ptr_eq(&f0.world.culled[&81], &f1.world.culled[&81]));
+        assert!(Rc::ptr_eq(&f0.world.culled[&80].cull, &f1.world.culled[&80].cull));
+        assert!(!Rc::ptr_eq(&f0.world.culled[&81].cull, &f1.world.culled[&81].cull));
         assert!(Rc::ptr_eq(&f0.world.roster, &f1.world.roster));
     }
 }
