@@ -34,6 +34,7 @@
 //! on the cmd that raised them; the snapshot's copies of them are skipped
 //! ([`predicted_event`]) and everything else plays off the snapshot.
 
+use crate::play::predict::{Correction, OldVelocity};
 use std::collections::VecDeque;
 
 use glam::Vec3;
@@ -46,10 +47,6 @@ use vcod_cod2::pmove::{self, PlayerState, Rules, ev, pm_type};
 use vcod_common::collision::CollisionWorld;
 use vcod_common::movetrace::{Body, CONTENTS_BODY, MoveWorld};
 
-/// `cg_errordecay`'s default (`Dvar_RegisterFloat("cg_errordecay", 100.0`).
-const ERROR_DECAY_MS: f64 = 100.0;
-/// `CG_PredictPlayerState`'s miss threshold (Mac 0x326388).
-const MISS_EPSILON: f32 = 0.1;
 /// `pm_flags` that make the cgame interpolate instead
 /// (`CG_PredictPlayerState`'s `snap->ps.pm_flags` byte 2 & 0x40): a
 /// spectator following someone.
@@ -98,7 +95,7 @@ pub struct PredictStats {
     /// snapshot's `commandTime`.
     pub misses: u64,
     /// Snapshots whose replay moved last frame's prediction at all, and
-    /// past [`MISS_EPSILON`].
+    /// past [`crate::play::predict::MISS_EPSILON`].
     pub corrected: u64,
     pub missed: u64,
     /// The longest correction since [`Cod2Predictor::take_max`].
@@ -114,14 +111,12 @@ pub struct Cod2Predictor {
     last: Option<(i32, Vec3)>,
     /// The snapshot last predicted from: its `commandTime` and teleport bit.
     from: Option<(i32, bool)>,
-    error: Vec3,
-    /// Local ms the error eases from (`cg.predictedErrorTime`).
-    error_ms: f64,
+    correction: Correction,
     /// The last frame's local ms (`cg.oldTime`): a miss eases from there,
     /// so the frame that finds it already draws part of it.
     last_ms: Option<f64>,
     /// `oldVelocity` after each replayed cmd, oldest first.
-    old_velocity: VecDeque<(i32, [f32; 2])>,
+    old_velocity: OldVelocity,
     /// The move events fired, by the cmd time that raised them.
     fired: VecDeque<(i32, i32, i32)>,
 }
@@ -175,7 +170,7 @@ impl Cod2Predictor {
                 return None;
             }
         }
-        if let Some(&(_, v)) = self.old_velocity.iter().find(|(t, _)| *t == ct) {
+        if let Some(v) = self.old_velocity.at(ct) {
             ps.old_velocity = v;
         }
         let mut old = cmds
@@ -192,7 +187,7 @@ impl Cod2Predictor {
         let last = self.last;
         let mut at_last = last.filter(|&(t, _)| t == ct).map(|_| ps.origin);
         let mut events = Vec::new();
-        self.old_velocity.retain(|(t, _)| *t >= ct);
+        self.old_velocity.keep_from(ct);
         self.fired.retain(|(t, _, _)| *t > ct);
         // `CG_ClipMoveToEntities` passes over `ps.clientNum`.
         let pass = ps.client_num;
@@ -220,10 +215,7 @@ impl Cod2Predictor {
                     events.push((e, p));
                 }
             }
-            match self.old_velocity.iter_mut().find(|(at, _)| *at == t) {
-                Some(slot) => slot.1 = ps.old_velocity,
-                None => self.old_velocity.push_back((t, ps.old_velocity)),
-            }
+            self.old_velocity.store(t, ps.old_velocity);
             if last.is_some_and(|(lt, _)| lt == t) {
                 at_last = Some(ps.origin);
             }
@@ -235,11 +227,9 @@ impl Cod2Predictor {
             if delta != Vec3::ZERO {
                 self.stats.corrected += 1;
             }
-            if len > MISS_EPSILON {
+            // `cg.predictedErrorTime = cg.oldTime` (Mac 0x1ddafa).
+            if self.correction.note(delta, now_ms, old_ms) {
                 self.stats.missed += 1;
-                self.error = self.error * self.decay(now_ms) + delta;
-                // `cg.predictedErrorTime = cg.oldTime` (Mac 0x1ddafa).
-                self.error_ms = old_ms.unwrap_or(now_ms);
             }
         }
         self.last = Some((ps.command_time, ps.origin));
@@ -249,7 +239,7 @@ impl Cod2Predictor {
             let mut o = old;
             step(&mut drawn, &mut drawn_ws, p, &mut o);
         }
-        let origin = drawn.origin - self.error * self.decay(now_ms);
+        let origin = drawn.origin - self.correction.drawn(now_ms);
         Some(Predicted2 {
             ps,
             ws,
@@ -268,22 +258,15 @@ impl Cod2Predictor {
     /// The correction still drawn at `now_ms`.
     #[cfg(test)]
     fn drawn_error(&self, now_ms: f64) -> f32 {
-        (self.error * self.decay(now_ms)).length()
+        self.correction.drawn(now_ms).length()
     }
 
     /// Forgets the last frame and any correction in flight.
     pub fn reset(&mut self) {
         self.last = None;
         self.from = None;
-        self.error = Vec3::ZERO;
+        self.correction.error = Vec3::ZERO;
         self.old_velocity.clear();
-    }
-
-    /// `(cg_errordecay - (cg.time - predictedErrorTime)) / cg_errordecay`,
-    /// 0 outside (0, 1) as `CG_CalcViewValues` drops it.
-    fn decay(&self, now_ms: f64) -> f32 {
-        let f = (ERROR_DECAY_MS - (now_ms - self.error_ms)) / ERROR_DECAY_MS;
-        if f > 0.0 && f < 1.0 { f as f32 } else { 0.0 }
     }
 }
 
@@ -552,8 +535,10 @@ mod tests {
     #[test]
     fn a_correction_eases_out_over_the_decay() {
         let mut p = Cod2Predictor {
-            error: Vec3::new(10.0, 0.0, 0.0),
-            error_ms: 1000.0,
+            correction: Correction {
+                error: Vec3::new(10.0, 0.0, 0.0),
+                error_ms: 1000.0,
+            },
             ..Default::default()
         };
         assert_eq!(p.drawn_error(1000.0), 0.0, "f = 1 is outside (0, 1)");

@@ -20,6 +20,7 @@
 //! them ([`new_events`], `CG_CheckPlayerstateEvents`). Item pickups are
 //! not predicted.
 
+use crate::play::predict::{Correction, OldVelocity};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
@@ -37,10 +38,6 @@ use vcod_cod4::pmove::{
 
 /// `cg_errordecay`'s default: `Dvar_RegisterFloat` (iw3mp.exe 0x43c3d6)
 /// of the name at 0x6ca2cc with the float 100.0 at 0x6f9e58
-/// (cod4-client-view.md 5).
-pub const ERROR_DECAY_MS: f64 = 100.0;
-/// `CG_PredictPlayerState`'s miss threshold.
-const MISS_EPSILON: f32 = 0.1;
 /// `cg_viewZSmoothingMin`, `Max` and `Time` (seconds) at their registered
 /// defaults.
 const STEP_SMOOTH_MIN: f32 = 1.0;
@@ -603,13 +600,11 @@ pub struct Cod4Predictor {
     /// What starts the view over when it changes (the teleport bit, the
     /// view's client, `stats[4]`), as of the last snapshot predicted from.
     cut: Option<(u32, u32, i32)>,
-    error: Vec3,
-    /// Local ms the error eases from (`cg.predictedErrorTime`).
-    error_ms: f64,
+    correction: Correction,
     /// The last frame's local ms (`cg.oldTime`).
     last_ms: Option<f64>,
     /// `oldVelocity` after each replayed cmd, oldest first.
-    old_velocity: VecDeque<(i32, [f32; 2])>,
+    old_velocity: OldVelocity,
     /// Last frame's view: kept when no cmd runs past the snapshot.
     view: Option<[f32; 3]>,
     /// `viewChangeTime`'s start: the newest kept cmd whose step counted.
@@ -753,7 +748,7 @@ impl Cod4Predictor {
         self.cut = Some(cut);
         let defs = defs.filter(|_| ps.pm_type != pmove::pm_type::SPECTATOR);
         let ct = ps.command_time;
-        if let Some(&(_, v)) = self.old_velocity.iter().find(|(t, _)| *t == ct) {
+        if let Some(v) = self.old_velocity.at(ct) {
             ps.old_velocity = v;
         }
         // `ClientThink`'s `oldcmd`: the cmd the server last ran.
@@ -765,7 +760,7 @@ impl Cod4Predictor {
             .unwrap_or_default();
         let last = self.last;
         let mut at_last = last.filter(|&(t, _)| t == ct).map(|_| ps.origin);
-        self.old_velocity.retain(|(t, _)| *t >= ct);
+        self.old_velocity.keep_from(ct);
         // `pmove_t.viewChange`: the kept cmds' steps, each cmd's once
         // (`viewChangeTime`).
         let mut view_change = 0.0;
@@ -803,10 +798,7 @@ impl Cod4Predictor {
             ran = true;
             self.stats.cmds_run += 1;
             let t = cmd.server_time;
-            match self.old_velocity.iter_mut().find(|(at, _)| *at == t) {
-                Some(slot) => slot.1 = ps.old_velocity,
-                None => self.old_velocity.push_back((t, ps.old_velocity)),
-            }
+            self.old_velocity.store(t, ps.old_velocity);
             if last.is_some_and(|(lt, _)| lt == t) {
                 at_last = Some(ps.origin);
             }
@@ -819,10 +811,8 @@ impl Cod4Predictor {
             if delta != Vec3::ZERO {
                 self.stats.corrected += 1;
             }
-            if len > MISS_EPSILON {
+            if self.correction.note(delta, now_ms, old_ms) {
                 self.stats.missed += 1;
-                self.error = self.error * self.decay(now_ms) + delta;
-                self.error_ms = old_ms.unwrap_or(now_ms);
             }
         }
         self.last = Some((ps.command_time, ps.origin));
@@ -855,7 +845,7 @@ impl Cod4Predictor {
             pmove::pm_type::NORMAL | pmove::pm_type::NOCLIP | pmove::pm_type::UFO
         );
         self.smooth_steps(view_change, time, smooth);
-        let mut origin = ps.origin + self.error * self.decay(now_ms);
+        let mut origin = ps.origin + self.correction.drawn(now_ms);
         origin.z -= self.step_left(time);
         Predicted {
             ps,
@@ -898,7 +888,7 @@ impl Cod4Predictor {
     pub fn reset(&mut self) {
         self.last = None;
         self.cut = None;
-        self.error = Vec3::ZERO;
+        self.correction.error = Vec3::ZERO;
         self.old_velocity.clear();
         self.view = None;
         self.step_change = 0.0;
@@ -915,14 +905,7 @@ impl Cod4Predictor {
     /// The correction still drawn at `now_ms`.
     #[cfg(test)]
     pub fn drawn_error(&self, now_ms: f64) -> f32 {
-        (self.error * self.decay(now_ms)).length()
-    }
-
-    /// `(cg_errordecay - (cg.time - predictedErrorTime)) / cg_errordecay`,
-    /// 0 outside (0, 1) as `CG_CalcViewValues` drops it.
-    fn decay(&self, now_ms: f64) -> f32 {
-        let f = (ERROR_DECAY_MS - (now_ms - self.error_ms)) / ERROR_DECAY_MS;
-        if f > 0.0 && f < 1.0 { f as f32 } else { 0.0 }
+        self.correction.drawn(now_ms).length()
     }
 }
 
