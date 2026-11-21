@@ -530,18 +530,22 @@ weapon scales (`cod4_fly::load` builds them for a watched session).
 
 ### 5.2 What vcod does
 
-- The cmds. Retail stamps a cmd with `cl.serverTime` every frame. vcod's
-  live cmds, and the probe's in every capture, go out every 33 to 100 ms
+- The cmds. Retail stamps a cmd with `cl.serverTime` every frame, at
+  most 5 s past the newest snapshot (cod4-netfields.md 13). vcod's live
+  cmds do too (`Cod4Session::cmd_time`), one a frame on a new
+  millisecond, and go out every 33 ms after the frame's prediction with
+  its origin. The probe's, in every capture, went out every 33 to 100 ms
   stamped with the newest snapshot's time plus its age, which leads the
-  drawn time by about a snapshot interval. The prediction keeps that
-  clock (its offset off the session's ms slewed a ms a snapshot, as
-  `CL_AdjustTimeDelta` slews, so arrival jitter does not step it): it
-  replays the cmds sent by then (a capture's: its client's, by their
-  stamps) and puts the frame's own cmd on top, stamped at the clock with
-  the keys and view of the cmd that covers the moment (live, the last
-  sent). The frame's cmd is not kept: the next frame builds its own off
-  the same kept cmds, so a step it takes is counted once, its change from
-  last frame's. INFERRED (vcod's design; retail keeps every frame's cmd).
+  drawn time by about a snapshot interval; a capture's prediction keeps
+  that clock (its offset off the session's ms slewed a ms a snapshot, as
+  `CL_AdjustTimeDelta` slews, so arrival jitter does not step it). The
+  prediction replays the cmds sent by then (a capture's: its client's,
+  by their stamps) and puts the frame's own cmd on top, stamped at the
+  clock with the keys and view of the cmd that covers the moment (live,
+  the last built, which is the frame's). The frame's cmd is not kept: the
+  next frame builds its own off the same kept cmds, so a step it takes
+  is counted once, its change from last frame's. INFERRED (vcod's
+  design; retail keeps every frame's cmd).
 - The rules are the dvar mirror's (`CS_CODINFO` names, the values 128 on;
   cod4-pmove.md 12), each name the mirror leaves out at its default; the
   held weapon's scales come from the zones' `WeaponDef`s by the level's
