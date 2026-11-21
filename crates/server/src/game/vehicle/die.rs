@@ -110,17 +110,18 @@ fn probe_args(
     let weapon = super::inflictor_weapon(host, Some(attacker));
     let weapon = host.defs.weapon_name(weapon).unwrap_or("none").to_string();
     let point = host.vec_field(cx, victim, "origin").to_array();
-    Some(vec![
-        Value::Entity(attacker),
-        Value::Entity(attacker),
-        Value::Int(damage),
-        Value::Int(0),
-        Value::String(cx.intern_exact("MOD_EXPLOSIVE")),
-        Value::String(cx.intern_exact(&weapon)),
-        Value::Vector(point),
-        Value::Vector([0.0; 3]),
-        Value::String(cx.intern_exact("none")),
-    ])
+    let args = crate::game::script::PlayerDamage {
+        inflictor: Value::Entity(attacker),
+        attacker: Value::Entity(attacker),
+        damage,
+        dflags: 0,
+        mod_: cx.intern_exact("MOD_EXPLOSIVE"),
+        weapon: cx.intern_exact(&weapon),
+        point: Value::Vector(point),
+        dir: Value::Vector([0.0; 3]),
+        hitloc: cx.intern_exact("none"),
+    };
+    Some(args.into_args())
 }
 
 /// The rider's health back as it was; a hit that left the padded health
