@@ -378,7 +378,7 @@ impl App {
             unreachable!()
         };
         self.look_zoom = (1.0, false);
-        cam.update(&self.input, dt);
+        cam.update(&offline_binds::fly(&self.input), dt);
         if let Some(av) = &mut self.cod4_fly {
             av.frame(&self.fs, &mut self.audio, &mut self.fx, time);
             r.set_level_look(Some(av.look.at((time * 1000.0) as i32, false)));
@@ -426,7 +426,7 @@ impl App {
             unreachable!()
         };
         self.session.finish_pump();
-        self.session.set_fly_keys(&self.input);
+        self.session.set_fly_keys(&offline_binds::fly(&self.input));
         let mut cod2_vm = None;
         let mut cod2_fx = None;
         let mut cx = session::ClientFrame {
@@ -458,7 +458,7 @@ impl App {
         } else {
             self.look_zoom = (1.0, false);
             self.session.idle();
-            cam.update(&self.input, dt);
+            cam.update(&offline_binds::fly(&self.input), dt);
         }
         let fly_fov = camera::view_fov_x(camera::DEFAULT_FOV_DEG, aspect, widescreen);
         let view = self.session.draw_view(
@@ -511,6 +511,8 @@ impl App {
             reserve,
             switch_to,
             rigs,
+            fire_held,
+            ads_held,
             ..
         } = &mut self.mode
         else {
@@ -551,41 +553,38 @@ impl App {
             }
         }
 
-        (input.forward, input.right) = keys.axes();
+        *ads_held = offline_binds::walk(keys, input);
+        *fire_held = keys.held(play::input::Action::Attack);
         let mw = MoveWorld::bare(world);
         for ev in pmove::pmove(ps, input, &mw, dt, &[]) {
-            // A refused prone toggles the key back off, as
-            // retail's `cl_stance` would be.
-            if matches!(
-                ev.event,
-                net::event_ids::EV_STANCE_FORCE_STAND | net::event_ids::EV_STANCE_FORCE_CROUCH
-            ) {
-                input.prone = false;
+            let ev = net::events::GameEvent {
+                event: ev.event,
+                parm: 0,
+                // playerState-ring form: no entity, rides the listener
+                entity_num: u32::MAX,
+                client_num: -1,
+                weapon: 0,
+                surf_type: 0,
+                pos: ps.origin.to_array(),
+                dir: [0.0; 3],
+                scale: 0,
+                other_entity_num: u32::MAX,
+                attacker_entity_num: -1,
+                e_type: 0,
+                eflags: 0,
+            };
+            // A refused stance moves the kept one, as retail's `cl_stance`.
+            if let Some(s) = play::events::forced_stance(&ev, -1, keys.held_stance().is_some()) {
+                keys.stance = s;
             }
             self.audio.on_game_event(
                 &self.fs,
-                &net::events::GameEvent {
-                    event: ev.event,
-                    parm: 0,
-                    // playerState-ring form: no entity, rides the listener
-                    entity_num: u32::MAX,
-                    client_num: -1,
-                    weapon: 0,
-                    surf_type: 0,
-                    pos: ps.origin.to_array(),
-                    dir: [0.0; 3],
-                    scale: 0,
-                    other_entity_num: u32::MAX,
-                    attacker_entity_num: -1,
-                    e_type: 0,
-                    eflags: 0,
-                },
+                &ev,
                 configstrings,
                 &HashMap::new(),
                 &HashMap::new(),
             );
         }
-        input.jump = false; // Q3: a held jump doesn't autohop
         let v = ps.view();
         let (eye_forward, eye_right, eye_up) = camera::basis(v.yaw, v.pitch);
         self.audio
