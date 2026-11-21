@@ -1091,12 +1091,16 @@ impl Renderer {
             self.prefetch_skins(fs, skins.iter());
             return;
         }
-        let (lib, images) = (&self.shader_lib, &self.model_images);
-        let (textures, gamma) = (self.textures, self.image_gamma);
+        // a skin no stage of reads its own image is left to its draw's
+        // white group (`upload_dyn_lod`)
+        let mats = &mut self.dynamic.materials;
         let fresh: Vec<&String> = skins
             .iter()
             .filter(|s| !self.prepared_skins.contains_key(s.as_str()))
+            .filter(|s| mats.may_read_skin_image(fs, &self.shader_lib, s))
             .collect();
+        let (lib, images) = (&self.shader_lib, &self.model_images);
+        let (textures, gamma) = (self.textures, self.image_gamma);
         let prepared = vcod_common::laps::par_map(&fresh, |skin| {
             prepare_skin(fs, lib, images, &textures, gamma.as_ref(), skin)
         });
@@ -1246,35 +1250,39 @@ impl Renderer {
         materials: &[String],
     ) -> Option<usize> {
         let gamma = self.image_gamma;
-        if fs.game() == vcod_common::game::Game::Cod2 {
-            // CoD2's and CoD4's stages bind their images by path: a skin
-            // image only a `$texturename` stage or the fallback reads
-            // uploads, the others bind white, their pak read marked
-            for skin in drawn_skins(std::iter::once((surfaces, materials))) {
-                if self.dynamic.skin_groups.contains_key(&skin) {
-                    continue;
-                }
-                let ent = self.dynamic.materials.skin(
-                    &self.device,
-                    &self.queue,
-                    (fs, &self.model_images),
-                    &self.shader_lib,
-                    gamma.as_ref(),
-                    &skin,
-                );
-                let g = match ent.reads_skin_image() {
-                    true => {
-                        let (img, levels) = self.skin_image(fs, &skin);
-                        let view = upload_levels(&self.device, &self.queue, &skin, &img, &levels);
-                        vm_skin_group(&self.device, &self.vm_pass, &view)
-                    }
-                    false => {
-                        super::prop_skin::mark_colour_map(fs, self.shader_lib.get(&skin));
-                        self.dynamic.materials.images[0].clone()
-                    }
-                };
-                self.dynamic.skin_groups.insert(skin, g);
+        let cod2 = fs.game() == vcod_common::game::Game::Cod2;
+        // Stages bind their images by path: a skin image only a
+        // `$texturename` stage or the fallback reads uploads, the others
+        // bind white. Built in surface order, as the upload's loop
+        // below reads them, so each skin's load order holds.
+        for skin in drawn_skins(std::iter::once((surfaces, materials))) {
+            if self.dynamic.skin_groups.contains_key(&skin) {
+                continue;
             }
+            let ent = self.dynamic.materials.skin(
+                &self.device,
+                &self.queue,
+                (fs, &self.model_images),
+                &self.shader_lib,
+                gamma.as_ref(),
+                &skin,
+            );
+            let g = match ent.reads_skin_image() {
+                true => {
+                    let (img, levels) = self.skin_image(fs, &skin);
+                    let view = upload_levels(&self.device, &self.queue, &skin, &img, &levels);
+                    vm_skin_group(&self.device, &self.vm_pass, &view)
+                }
+                false => {
+                    // CoD2's pak read of the colour map is marked; CoD1's
+                    // retail never opens a scripted skin's own image
+                    if cod2 {
+                        super::prop_skin::mark_colour_map(fs, self.shader_lib.get(&skin));
+                    }
+                    self.dynamic.materials.images[0].clone()
+                }
+            };
+            self.dynamic.skin_groups.insert(skin, g);
         }
         let mut groups = std::mem::take(&mut self.dynamic.skin_groups);
         let uploaded = upload_vm_model(

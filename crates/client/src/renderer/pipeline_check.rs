@@ -1139,6 +1139,42 @@ fn cod2_dynamic_skins_upload_only_what_a_stage_reads() {
     assert_clean(&errors, "CoD2 dynamic model upload");
 }
 
+/// The CoD1 twin: the S&D bomb's `timer_face.dds` skin has a `skins/`
+/// block that maps its images by path, so its own image never uploads,
+/// through the prewarm's batch or alone.
+#[test]
+fn cod1_dynamic_skins_upload_only_what_a_stage_reads() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    let Some((mut r, errors)) = Renderer::headless(&fs, false, 1) else {
+        eprintln!("no adapter with BC textures; skipped");
+        return;
+    };
+    let bomb = model::load(&fs, "mp_bomb1").unwrap();
+    let bomb2 = model::load(&fs, "mp_bomb2").unwrap();
+    r.upload_dynamic_models(&fs, &[&bomb]);
+    r.upload_dynamic_model(&fs, &bomb2)
+        .expect("the model uploads");
+    let d = &r.dynamic;
+    let white = &d.materials.images[0];
+    let mut by_path = Vec::new();
+    for model in &d.models {
+        for (name, ent) in model.vm.skins.iter().zip(&model.skins) {
+            assert_eq!(
+                &d.skin_groups[name] == white,
+                !ent.reads_skin_image(),
+                "{name}"
+            );
+            if !ent.reads_skin_image() {
+                by_path.push(name.to_ascii_lowercase());
+            }
+        }
+    }
+    assert!(by_path.iter().any(|n| n == "timer_face.dds"), "{by_path:?}");
+    assert_clean(&errors, "CoD1 dynamic model upload");
+}
+
 /// The front end with no map loaded, single-sampled as CoD2 runs by
 /// default (`r_aaSamples` 1): the HUD draws in the pass that carries the
 /// depth target, so its pipeline must name the depth format too.

@@ -725,6 +725,31 @@ impl EntityMaterials {
         }
     }
 
+    /// Whether `skin`'s draw may read the surface's skin image, before
+    /// [`Self::skin`] builds it: a `$texturename` stage, no stage, or more
+    /// stages than the slots left now (the plain fallback). The material
+    /// waits in `loaded` for [`Self::skin`].
+    pub(crate) fn may_read_skin_image(
+        &mut self,
+        fs: &dyn AssetSource,
+        lib: &MaterialLib,
+        skin: &str,
+    ) -> bool {
+        if let Some(d) = self.by_skin.get(skin) {
+            return d.reads_skin_image();
+        }
+        let warns = &mut self.warns;
+        let sh = self
+            .loaded
+            .entry(skin.to_string())
+            .or_insert_with(|| load(fs, lib, skin, warns));
+        sh.stages.is_empty()
+            || stage_slots(self.next_slot.max(1), sh.stages.len(), MAX_ENT_STAGES).is_none()
+            || sh.stages.iter().any(|st| {
+                matches!(&st.bundles[0].image, ImageRef::Path(p) if p.eq_ignore_ascii_case(TEXTURE_NAME))
+            })
+    }
+
     /// The pipeline keys [`Self::skin`] would build for `skins` not
     /// built yet, read off their materials as it reads them, for
     /// [`Self::prewarm`] to build at once. The materials wait in
