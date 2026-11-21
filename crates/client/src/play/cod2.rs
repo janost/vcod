@@ -609,6 +609,7 @@ impl Cod2Session {
                 Err(e) => {
                     self.stats.parse_errors += 1;
                     log::warn!("cod2: message parse failed: {e:#}");
+                    self.drop_on_illegible(&e);
                 }
             }
         }
@@ -650,6 +651,16 @@ impl Cod2Session {
                     Some((tag("tag_aim")?, tag("tag_player")?))
                 });
             self.gun_tags.insert(model, tags);
+        }
+    }
+
+    /// An illegible message is retail's `Com_Error` drop (cod2-protocol.md
+    /// 2.2); vcod's own refusals only skip the message.
+    fn drop_on_illegible(&mut self, e: &anyhow::Error) {
+        if let Some(i) = e.downcast_ref::<vcod_cod2::net::parse::Illegible>()
+            && self.dropped.is_none()
+        {
+            self.dropped = Some(i.to_string());
         }
     }
 

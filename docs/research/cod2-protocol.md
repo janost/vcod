@@ -387,13 +387,29 @@ packet too short for its `reliableAcknowledge` (`MSG_ReadLong` 0x444410 at
 (0x4144df..0x4144e7) and, like any op above 6 (0x414501), is
 `CL_ParseServerMessage: Illegible server message %d` (0x5a40bc) through
 0x4324c0 with code 1 (0x414546..0x41454e). VERIFIED (the instructions and
-the strings). That 0x4324c0 is `Com_Error` and code 1 `ERR_DROP` is
-INFERRED (its other callers, `configstring > MAX_CONFIGSTRINGS` at
-0x413c6c). vcod's `Client::receive` takes the clamp and fails a packet too
-short for the acknowledge before it changes anything, which is the
-rollback; a message that fails to parse keeps both acknowledges, as the
-local overflow does. vcod logs an unknown op and skips the message where
-retail drops the connection.
+the strings). The jump table at 0x4145b4 sends 0 back to the loop
+(0x414556), 1 to 0x413bd0, 4 to 0x414380, 5 to 0x4140b0, 6 to 0x4136c0,
+and 2 and 3 to the error with the rest; 7 leaves before it (0x4144af).
+VERIFIED (the table's seven words). 0x4324c0 formats the message into
+0xc26280 (0x43250e), stores the code at 0xc26270 and `longjmp`s (0x432540..
+0x432563). The catch arm reads the code back: a code other than 1, 2 and
+3 first goes through 0x465750 (0x432420), the call the
+`recursive error after: %s` path takes (0x4324e9); 2 puts up
+`EXE_DISCONNECTEDFROMOWNLISTENSERVER` (0x432443); the rest print
+`********************\nERROR: %s\n********************` (0x432466). Code
+1 also hands the text to 0x4320d0 (0x4322e5), which sets
+`com_errorMessage` (0x4320f6).
+VERIFIED (the instructions and the strings). That this is `Com_Error`, code
+1 `ERR_DROP` and the arm the client's disconnect, is INFERRED (Q3's
+`errorParm_t` order, the popup's dvars). vcod's `Client::receive` takes the
+clamp and fails a packet too short for the acknowledge before it changes
+anything, which is the rollback; a message that fails to parse keeps both
+acknowledges, as the local overflow does. An op over 6, a top-level 2 or 3,
+or one read at the end is `parse::Illegible`, and the session drops on it
+with retail's text, live or in a demo. Every other parse failure is vcod's
+own refusal (an op's body read past the end, where retail ends the parse
+and keeps what it read; the non-rising entity numbers of 3.3): it is logged
+and the message skipped.
 
 ### 2.3 Netchan framing
 

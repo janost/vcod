@@ -151,6 +151,7 @@ impl Cod2Session {
                     Err(e) => {
                         self.stats.parse_errors += 1;
                         log::warn!("cod2: demo message parse failed: {e:#}");
+                        self.drop_on_illegible(&e);
                     }
                 }
                 true
