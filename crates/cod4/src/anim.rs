@@ -773,7 +773,7 @@ mod tests {
             base_tri_index: 0,
             base_vert_index: 0,
             blend_counts: counts,
-            verts_blend: Some(le(blend)),
+            verts_blend: Some(le(blend).into()),
             verts: None,
             tris: None,
             rigid,

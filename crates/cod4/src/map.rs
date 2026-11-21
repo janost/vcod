@@ -563,7 +563,7 @@ pub fn stub_name(name: &str) -> &str {
     name.strip_prefix(',').unwrap_or(name)
 }
 
-fn bulk<'a>(b: &'a Option<Vec<u8>>, what: &str) -> Result<&'a [u8]> {
+fn bulk<'a, B: std::ops::Deref<Target = [u8]>>(b: &'a Option<B>, what: &str) -> Result<&'a [u8]> {
     b.as_deref()
         .with_context(|| format!("{what} not kept (walk without keep_bulk)"))
 }
