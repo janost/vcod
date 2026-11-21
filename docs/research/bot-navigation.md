@@ -985,11 +985,11 @@ mp_uo_dawnville 189 / 243, mp_uo_powcamp 226 / 254, mp_uo_hurtgen 281 /
     0x208), and `PM_CrashLand` measures the fall from where the body's
     rise ends (`pmove::crash_land`, the height out of the landing's
     speed). A walk now gives up at a fall of 250 from the highest point
-    since it last stood (`nav::MAX_DROP`), measured on the landing tick
+    since it last stood (`nav::max_drop`), measured on the landing tick
     too, where the old test read only the ticks in the air. The
     follower's walks again from a bot's own pace keep the old test, a
     fall past 200 under where the body last stood read in the air
-    (`nav::PACED_DROP`): at 250 the back down onto mp_ship's ledge 211
+    (`nav::paced_drop`): at 250 the back down onto mp_ship's ledge 211
     under the deck node (3647, -352.9, 611.1) lands at the 190 a bot came
     along the deck with, and a bot that did fell past it (section 3),
     so a bot moving onto a drop that deep is still held to take it from
@@ -3126,6 +3126,144 @@ for a nav pass:
   parts. VERIFIED (measured). Not traced.
 - mp_carentan `re` seed 2's carrier held upstairs at (446, 1799, 160) was
   no nav fault: an escort stood on his next node (bot-objectives.md 4.2).
+
+### 3.14 CoD4's fall heights, 2026-11-21
+
+Retail has no bots; this section is measured on vcod-server only.
+
+- The graph's walks and the bots judged every drop by CoD1's
+  `bg_fallDamageMinHeight` 256 and `MaxHeight` 480 in all games: a walk
+  falling past 250 failed (`nav::max_drop`), a paced one past 200
+  (`paced_drop`), the hurt probes looked 256 down, the perches and the
+  deadly ladders 480, and a cornered bot shunned a drop past 256. 1.7's
+  are 128 and 300 (cod4-pmove.md's dvar table), and 1.7 now deals the
+  fall's damage (cod4-combat.md 16), so a CoD4 graph kept drops that hurt
+  its bots. INFERRED (the code).
+- Each is now read off the fall heights in force (`nav::with_falls`,
+  `nav::falls`): `max_drop` 6 under the minimum, `paced_drop` four fifths
+  of that, the hurt probes the minimum, the perches and ladders the
+  maximum. A graph keeps the heights it was built under
+  (`NavGraph::falls`, `moving`) and its cache key names any but CoD1's.
+  CoD4 builds and steps its bots under `bots::cod4::FALLS` (122 and 97.6
+  for the two walks), and its follower's `fall_kills` reads the level's
+  `bg_fallDamage*` and the bot's health. CoD1's numbers are unchanged
+  (250, 200, 256, 480). VERIFIED (the code).
+- CoD1 graphs do not move: `nav_build` 1.1 `mp_carentan` digest
+  `1baf499747ec4377` and `mp_depot` `4fc972434e1c5317` before and after.
+  VERIFIED (measured, release).
+- CoD4 graphs move (`GAME=cod4 nav_build`, release, on 9e2e5196e and the
+  branch):
+
+| Map | Nodes | Edges | Aimed jumps | Mantles | Digest |
+|---|---|---|---|---|---|
+| mp_crash before | 8444 | 60723 | 151 | 1091 | `1208f8a971ee304f` |
+| mp_crash after | 8441 | 60240 | 152 | 1092 | `73280528fc53949e` |
+| mp_crossfire before | 12308 | 88854 | 189 | 1425 | `6f7cd722c8450ed1` |
+| mp_crossfire after | 12313 | 88462 | 191 | 1421 | `9160085b8a1662a1` |
+| mp_overgrown before | 9633 | 68011 | 80 | 331 | `a185278ff20e7b7b` |
+| mp_overgrown after | 9643 | 67865 | 82 | 331 | `fa92e6bb819a6acf` |
+
+  Every spawn stays on the graph and in one component on all three. About
+  0.5% of the edges go, the drops past 122. VERIFIED (measured).
+- The CoD4 bot digests move with the graph and the damage
+  (`GAME=cod4 DIGEST=1 BOTS=12 TICKS=3000`, mp_crash `war`, release):
+
+| Seed | Digest before | Digest after | Kills | Suicides | Stalled bot-ticks |
+|---|---|---|---|---|---|
+| 1 | `d209948883f72da6` | `2571b0b2e5ce4648` | 47 / 44 | 0 / 0 | 19 / 0 |
+| 2 | `441fe509d19f9699` | `8ae7618cdb6e8ae8` | 42 / 51 | 0 / 0 | 0 / 109 |
+| 3 | `8e2244c1cbeb8b9c` | `d9816850deb9a922` | 43 / 48 | 0 / 1 | 0 / 4 |
+| 4 | `a3eba214d55804b4` | `87939ed1880d0902` | 45 / 42 | 1 / 0 | 0 / 0 |
+| 5 | `fcdf81da56f1f345` | `780fe923937e70df` | 49 / 42 | 0 / 0 | 0 / 0 |
+| 6 | `0d1140148c0fb2d9` | `5661bad59f254abd` | 39 / 42 | 0 / 0 | 0 / 0 |
+
+  Kills 265 before, 269 after; suicides 1 and 1; stalled bot-ticks 19
+  and 113. VERIFIED (measured).
+- The stalls are one spot, on master's build as on this one: the foot of
+  the mantle up onto the ledge at about (1400, 195, 188), 60 over the
+  ground at 126, with a teammate standing on the ledge's top. Its local
+  graph is the same before and after (`NEAR=1380,190,60 EDGES=1`: nodes
+  (1414, 190, 126), (1408, 195, 187), (1391, 189, 186) and their edges,
+  mantles included, only renumbered), and no drop near it is past the new
+  122. `STALLS=1`, 12 bots, 3000 ticks, release:
+
+| Build | Seed | Bot-ticks | Bot | Where, first line | Teammate on the ledge |
+|---|---|---|---|---|---|
+| master | 1 | 19 | slot 10, allies | (1425, 125, 126) tick 980 | slot 4 at (1403, 190, 186) |
+| master | 9 | 7 | slot 6, allies | (1426, 86, 116) tick 740 | slot 2 at (1355, 238, 200) |
+| branch | 2 | 109 | slot 9, axis | (1398, 182, 137) tick 1760, mantling | slot 7 at (1373, 235, 226) |
+| branch | 3 | 4 | slot 0, allies | (1384, 159, 175) tick 1360 | slot 10 at (1372, 204, 190) |
+| branch | 16 | 19 | slot 10, allies | (1431, 189, 127) tick 1040 | slot 8 at (1367, 233, 198) |
+
+  Seed 2's bot mantles up (`pmf` 0x4, the mantle's flags 4), reaches
+  the top at z 189 beside the teammate 31 off, and comes back down to
+  126, four times over 100 ticks (ticks 1760 to 1860). Master's seeds 2
+  to 8 and 10 to 16 and the branch's 1, 4 to 15 stall nowhere. The new
+  heights leave no node without an edge out (mp_crash, `NEAR=0,0,100000`:
+  0 dead ends of 8444 before, 0 of 8441 after) and every spawn in the one
+  component. VERIFIED (measured). The mantle loop under a teammate is
+  older than this change; 3.15 traces and closes it. INFERRED (the runs).
+
+### 3.15 The mantle loop under a body on mp_crash's ledge, 2026-11-21
+
+Retail has no bots; this section is measured on vcod-server only. The
+3.14 stalls, traced per tick (temporary prints of each `Follower::reset`
+and `stuck` caller, the goal, the edge and the bodies within 200; release,
+`GAME=cod4`, mp_crash `war`, 12 bots):
+
+- Seed 2, slot 9: a teammate stands still at the landing, so
+  `Follower::mantle_held` (bot-objectives.md 12.20) gives up one ledge
+  edge after another and the bot dawdles at the foot. Its own stall
+  circle (`Bot::think`, `STALL_TICKS`) fills meanwhile and
+  fires on the tick the next climb starts (z 119, `PMF_MANTLE` set),
+  which drops the plan. The plan made in the air picks the nearest node,
+  the foot (3774), and its next waypoint is another foot node (2959):
+  once up, the bot walks back off the top, falls to 126 and climbs
+  again. Four times in 100 ticks. VERIFIED (the trace).
+- Seed 52, slot 10: the bot jumps for the climb before the hold test
+  sees it under the landing on the ground, so the rule never fires; the
+  climb ends at (1409, 195, 187) with a teammate still at (1381, 207,
+  191), 28 across and 12 along, the boxes push apart and the bot falls
+  off the lip. VERIFIED (the trace).
+- The fixes, all vcod's own. A body mid-climb (`BotView::climbing`,
+  `BotWorld::climbing`, CoD4's `PMF_MANTLE`) restarts the stall circle,
+  so no spell fires during a climb
+  (`bots::walk::tests::a_body_mid_climb_is_not_stuck`), and the follower
+  starts no plan until the climb is over
+  (`nav::follower::tests::no_plan_starts_mid_climb`). `mantle_held`
+  reads the body in the climb's jump as well as on the ground, but not
+  once the climb runs. VERIFIED (the code). CoD1, UO and CoD2 never set
+  `climbing`: the 1.1 `tdm` set (mp_carentan, mp_harbor, mp_depot,
+  mp_brecourt, 8 bots, 3000 ticks, seeds 1..=16) prints the same 64
+  digests before and after. VERIFIED (measured).
+
+`GAME=cod4 STALLS=1 DIGEST=1 BOTS=12 TICKS=3000`, mp_crash `war`,
+release, before is master af564b3c7:
+
+| Seed | Digest before | Digest after | Kills | Stalled |
+|---|---|---|---|---|
+| 1 | `2571b0b2e5ce4648` | `c5268d6d872da7f5` | 44 to 42 | 0, 0 |
+| 2 | `8ae7618cdb6e8ae8` | `36e1ab1f17d56a22` | 51 to 45 | 109 to 0 |
+| 3 | `d9816850deb9a922` | `71a10ff9ac23625f` | 48 to 49 | 4 to 0 |
+| 9 | `bba447b173f576d5` | `0aad33d337184eac` | 34 to 55 | 0, 0 |
+| 16 | `a5e3bc40a989c2b9` | `6c9f1bbe37b3565c` | 42 to 45 | 19 to 0 |
+| 25 | `41a6911ab82bd2ee` | `03767e7707cc1916` | 53 to 42 | 19 to 0 |
+| 39 | `5454caf85e37dcc4` | `6a4a217a5a905b47` | 57 to 46 | 0 to 49 |
+
+- Seeds 1 to 64: kills 2831 to 2891, stalled bot-ticks 151 to 62,
+  mantles 3387 to 3102 (fewer climbs made twice), suicides 21 and 21
+  (all own frags). Every digest moves: a stall spell or a plan dropped
+  mid-climb happens in every match. VERIFIED (measured).
+- Left: seed 39, slot 10, 49 bot-ticks at the same ledge. Its goal is a
+  point 39 over a body standing still on the landing (the noise or the
+  memory of whoever stands there), so the rule gives the climb up, the
+  plan round ends at the same ledge's other edges, and the bot paces the
+  foot until the body moves. Seeds 5 and 7 (6 and 7) stall elsewhere.
+  INFERRED (the trace's goal against the bodies). Open.
+- `koth`, `sd`, `sab` and `dom`, seeds 1 to 4: stalled 0 to 76, all but
+  3 in `sab` seed 2, two bots head-on on a ladder at (-91, -883, 160..235)
+  (`pmf` 0x8; section 3, "the head-on ladder"), a meeting the new
+  matches reach and master's do not. Kills 781 to 770. VERIFIED (measured).
 
 ## 4. Memory and hearing
 

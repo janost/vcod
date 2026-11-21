@@ -658,9 +658,37 @@ impl Cod4Level {
                 wev::RELOAD_ADDAMMO => self.notify_player(slot, "reload"),
                 wev::GRENADE_SUICIDE => self.grenade_suicide(slot, parm),
                 wev::SWITCH_OFFHAND => self.attempt_live_grenade_pickup(slot, parm),
+                e if (LANDING_PAIN_FIRST..=LANDING_PAIN_LAST).contains(&e) => {
+                    self.fall_damage(slot, parm);
+                }
                 _ => {}
             }
         }
+    }
+
+    /// `ClientEvents`' landing arm (`cod4_lnxded` 0x80a5841..0x80a58d9,
+    /// cod4-combat.md 16): `G_Damage` on the body with no inflictor,
+    /// attacker, direction or point, `MOD_FALLING`, by [`fall_damage`].
+    /// `G_DamageClient` (0x80b14f8) turns the weapon -1 with neither
+    /// party into weapon 0, whose `mp_lochit_dmgtable` multiplier at hit
+    /// location 0 is 1.
+    fn fall_damage(&mut self, slot: usize, parm: u32) {
+        let Some(p) = self.players[slot].as_ref() else {
+            return;
+        };
+        let Some(damage) = fall_damage(parm as i32, p.ps.stats[2]) else {
+            return;
+        };
+        let session = self.rt.client_session(slot).map(|s| s.state);
+        if damage <= 0
+            || session != Some(SessionState::Playing)
+            || !self.rt.client_vitals(slot).takedamage
+        {
+            return;
+        }
+        self.rt.host.cod4_mut().callback.time_offset = 0;
+        self.rt.deliver_fall(slot, damage);
+        self.apply_damage_ops();
     }
 
     /// `FireWeapon` for a bullet weapon: the spread between the
@@ -1931,6 +1959,27 @@ fn knock_back(ps: &mut vcod_cod4::pmove::PlayerState, damage: i32, dir: Vec3, g_
     }
 }
 
+/// The painful landings' events, one a surface (`EV_LANDING_PAIN_DEFAULT`
+/// to `_CERAMIC`, 106 to 134): `ClientEvents` (0x80a5841) takes them past
+/// its jump table.
+const LANDING_PAIN_FIRST: u32 = vcod_cod4::pmove::ev::LANDING_PAIN_FIRST;
+const LANDING_PAIN_LAST: u32 = LANDING_PAIN_FIRST + 28;
+
+/// A painful landing's damage off its event parm, the percent
+/// `PM_CrashLand` stored, and the body's `stats[2]`, its max health
+/// (0x80a5859..0x80a58ae, 0x80a5b22): past 99 the float 1.1 times it, else
+/// the float 0.01 times the parm times it, both products on the x87 stack
+/// stored to a float and truncated; `None` when the share is 0, which
+/// deals nothing. Both products are exact in `f64`.
+pub(crate) fn fall_damage(parm: i32, max_health: i32) -> Option<i32> {
+    let share = if parm > 99 {
+        f64::from(f32::from_bits(0x3f8c_cccd))
+    } else {
+        f64::from(f32::from_bits(0x3c23_d70a)) * f64::from(parm)
+    };
+    (share != 0.0).then(|| (share * f64::from(max_health)) as f32 as i32)
+}
+
 /// Where a hit came from as `damagePitch` and `damageYaw`: its angles in
 /// 256ths of a turn, truncated, or 255 both ways for a hit from nowhere
 /// (cod4-combat.md 4).
@@ -1949,6 +1998,21 @@ impl Cod4Level {
     pub fn fire_melee_for_test(&mut self, slot: usize) {
         let now = self.level_time();
         self.fire_melee(slot, now);
+    }
+
+    /// `slot`'s cmd raising `EV_LANDING_PAIN_DEFAULT` with `parm`, through
+    /// `ClientEvents`; for tests.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn land_hurt_for_test(&mut self, slot: usize, parm: u32) {
+        let Some(p) = self.players[slot].as_mut() else {
+            return;
+        };
+        let seq = p.ps.word(ps!("eventSequence"));
+        p.ps.set(ps!(4 "events")[(seq & 3) as usize], LANDING_PAIN_FIRST);
+        p.ps.set(ps!(4 "eventParms")[(seq & 3) as usize], parm);
+        p.ps.set(ps!("eventSequence"), seq + 1);
+        let now = self.level_time();
+        self.client_events(slot, seq as i32, now);
     }
 
     /// Applies the queued [`Damage4`]s now; for tests.
@@ -2147,6 +2211,24 @@ pub(super) const CONTENTS_CORPSE_FRESH: u32 = 0x400_4000;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// cod4-combat.md 16: 1.1 of max health past 99, else the parm's
+    /// share rounded once, as a float, so 25 of 100 deals 25 (1.1d's
+    /// unrounded product deals 24); 0 deals nothing.
+    #[test]
+    fn fall_damage_is_1_7s_share_of_max_health() {
+        for (parm, max, damage) in [
+            (25, 100, Some(25)),
+            (13, 100, Some(13)),
+            (50, 30, Some(15)),
+            (99, 100, Some(99)),
+            (100, 100, Some(110)),
+            (255, 30, Some(33)),
+            (0, 100, None),
+        ] {
+            assert_eq!(fall_damage(parm, max), damage, "{parm} of {max}");
+        }
+    }
 
     /// `flinchYawAnim` off the blow's yaw less the view's whole degrees:
     /// 0 from 315 or under 45, 2 to 135, 1 to 225, 3 to 315, and 0 with

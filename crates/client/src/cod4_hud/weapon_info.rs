@@ -267,6 +267,20 @@ const CLIP_MATERIALS: [&str; 5] = [
     "ammo_counter_beltbullet",
 ];
 
+/// Whose clip the clip graphic draws, with its slots: the held weapon's
+/// for kinds 1..=5; for 6 its `altWeapon`'s, nothing when that is
+/// missing or 6 too (`iw3mp.exe` 0x422a40, 0x422430; cod4-hud.md 9).
+fn clip_source<'a, T>(
+    held: (&'a h::WeaponHud, T),
+    alt: impl FnOnce(&str) -> Option<(&'a h::WeaponHud, T)>,
+) -> Option<(&'a h::WeaponHud, T)> {
+    match held.0.ammo_counter_clip {
+        1..=5 => Some(held),
+        6 => alt(&held.0.alt_weapon).filter(|(a, _)| (1..=5).contains(&a.ammo_counter_clip)),
+        _ => None,
+    }
+}
+
 /// vcod's bound on the clip graphic's rounds, far above any stock clip: a
 /// mod's weapon file names the count (cod4-hud.md 9).
 const MAX_CLIP_ROUNDS: usize = 1000;
@@ -510,10 +524,14 @@ impl Cod4Hud {
                     rgba,
                 );
             }
-            // An alt weapon's (6) is not drawn: the walk keeps no
-            // `altWeapon`.
+            let by_name = |n: &str| {
+                let i = list
+                    .iter()
+                    .position(|w| !n.is_empty() && w.eq_ignore_ascii_case(n))?;
+                def(i + 1)
+            };
             if let Some(it) = item("clipGraphic")
-                && (1..=5).contains(&d.ammo_counter_clip)
+                && let Some((c, (_, ccl))) = clip_source((d, (ammo, cl)), by_name)
             {
                 let rgba = if low.is_some_and(|w| w.low_clip()) {
                     low_clip_flash(it.fore_color, now - self.clip_flash_from)
@@ -521,9 +539,9 @@ impl Cod4Hud {
                     it.fore_color
                 };
                 out.push(OwnerDraw::Clip {
-                    kind: d.ammo_counter_clip,
-                    size: d.def.clip_size,
-                    rounds: clip(cl),
+                    kind: c.ammo_counter_clip,
+                    size: c.def.clip_size,
+                    rounds: clip(ccl),
                     item: it.clone(),
                     rgba,
                 });
@@ -544,18 +562,29 @@ impl Cod4Hud {
             ("offhandFragIcon", "offHandFragAmmo", 1),
             ("offhandSmokeIcon", "offHandSmokeAmmo", second),
         ] {
-            let of_class: Vec<(usize, i32)> = held
+            let of_class: Vec<(usize, i32, i32)> = held
                 .iter()
                 .filter_map(|&w| {
-                    let (d, (_, cl)) = def(w)?;
-                    (d.def.offhand_class == class).then_some((w, clip(cl)))
+                    let (d, (ammo, cl)) = def(w)?;
+                    (d.def.offhand_class == class).then_some((w, clip(cl), stock(ammo)))
                 })
                 .collect();
-            // The class's first weapon with rounds, else its first
-            // (cod4-hud.md 9).
-            let Some(&(best, _)) = of_class.iter().find(|(_, n)| *n > 0).or(of_class.first())
-            else {
+            let Some(&(first, ..)) = of_class.first() else {
                 continue;
+            };
+            // The equipped offhand when it is of the class, else the
+            // class's first with rounds, else its first (cod4-hud.md 9).
+            let equipped = u("offHandIndex") as usize;
+            let throwback = (u("throwBackGrenadeTimeLeft") as i32) > 0;
+            let best = if equipped != 0
+                && def(equipped).is_some_and(|(d, _)| d.def.offhand_class == class)
+            {
+                equipped
+            } else {
+                of_class
+                    .iter()
+                    .find(|&&(_, c, a)| throwback || c + a > 0)
+                    .map_or(first, |&(w, ..)| w)
             };
             if let (Some(it), Some(m)) =
                 (item(icon), def(best).and_then(|(d, _)| d.hud_icon.clone()))
@@ -566,7 +595,7 @@ impl Cod4Hud {
                 });
             }
             if let Some(it) = item(count) {
-                let n: i32 = of_class.iter().map(|(_, n)| n).sum();
+                let n: i32 = of_class.iter().map(|(_, n, _)| n).sum();
                 let rgba = if n != 0 {
                     it.fore_color
                 } else {
@@ -856,6 +885,35 @@ mod tests {
         for (fore, ms, want) in cases {
             assert_eq!(low_clip_flash(fore, ms), want, "{fore:?} at {ms} ms");
         }
+    }
+
+    /// Kind 6 draws its `altWeapon`'s clip with that weapon's slot; a
+    /// missing alt or one set to 6 itself draws nothing, as 1.7 refuses
+    /// both (cod4-hud.md 9).
+    #[test]
+    fn the_alt_weapons_clip_graphic_is_its_alts() {
+        let hud = |kind, alt: &str| h::WeaponHud {
+            ammo_counter_clip: kind,
+            alt_weapon: alt.into(),
+            ..Default::default()
+        };
+        let (gl, rifle, other_gl) = (
+            hud(6, "m16_gl_mp"),
+            hud(1, "gl_m16_mp"),
+            hud(6, "gl_m16_mp"),
+        );
+        let lookup = |n: &str| match n {
+            "m16_gl_mp" => Some((&rifle, 27)),
+            "gl_m16_mp" => Some((&other_gl, 28)),
+            _ => None,
+        };
+        let kind = |r: Option<(&h::WeaponHud, i32)>| r.map(|(d, slot)| (d.ammo_counter_clip, slot));
+        assert_eq!(kind(clip_source((&gl, 28), lookup)), Some((1, 27)));
+        assert_eq!(kind(clip_source((&rifle, 27), lookup)), Some((1, 27)));
+        assert_eq!(kind(clip_source((&other_gl, 28), lookup)), None);
+        let (no_alt, no_kind) = (hud(6, ""), hud(0, "m16_gl_mp"));
+        assert_eq!(kind(clip_source((&no_alt, 3), lookup)), None);
+        assert_eq!(kind(clip_source((&no_kind, 3), lookup)), None);
     }
 
     /// The magazine's bullets run left of the corner, 4 by 8 pixels each

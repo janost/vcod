@@ -169,7 +169,7 @@ impl Bot {
             self.rungs_ago.saturating_add(1)
         };
         // Coming to rest at a leap's foot is not being stuck either.
-        if standing || view.stop {
+        if standing || view.stop || view.climbing {
             self.restart_stall(view.origin);
             self.unstick_ticks = 0;
         } else if (view.unpin.is_some() || view.detour) && self.unstick_ticks == 0 {
@@ -888,11 +888,14 @@ impl Bot {
         let jump = vcod_common::pmove::JUMP_HEIGHT;
         let path_drop = view.waypoint.map_or(0.0, |w| view.origin[2] - w[2]);
         let path_drops = path_drop > jump;
+        // Past `bg_fallDamageMinHeight` the fall hurts. mp_ship's 280 off
+        // the 216 floor at x 2010 took a bot's health with it (section 3).
+        let hurts = crate::nav::falls().min;
         let shun = |depth: f32| {
             if path_drops {
-                depth > FALL_HURTS && depth > path_drop + jump
+                depth > hurts && depth > path_drop + jump
             } else {
-                self.unstick_tries < CORNERED || depth > FALL_HURTS
+                self.unstick_tries < CORNERED || depth > hurts
             }
         };
         view.hazard_ahead[o] || view.drop_ahead[o].is_some_and(shun)
@@ -915,10 +918,6 @@ pub fn octant(yaw: f32) -> usize {
     ((yaw.rem_euclid(360.0) + 22.5) / 45.0) as usize % 8
 }
 
-/// A cornered bot still keeps off a drop this deep: past
-/// `bg_fallDamageMinHeight` the fall hurts. mp_ship's 280 off the 216
-/// floor at x 2010 took a bot's health with it (section 3).
-const FALL_HURTS: f32 = 256.0;
 /// A climb this near the middle of the rungs along the face stops strafing.
 const LADDER_CENTRED: f32 = 2.0;
 /// A climb this near under its waypoint stops strafing: a body still
@@ -1905,6 +1904,26 @@ mod tests {
             assert_eq!(bot.unstick_ticks, 0, "tick {tick}");
         }
         v.origin = [0.0, 0.0, 64.0];
+        assert!((0..30).any(|_| {
+            bot.think(&v);
+            bot.unstick_ticks > 0
+        }));
+    }
+
+    /// A body held still by pmove's climb (`BotView::climbing`) gets no
+    /// spell: one fired mid-climb dropped the plan, and the plan from there
+    /// walked the bot back off mp_crash's ledge (bot-navigation.md 3.15).
+    #[test]
+    fn a_body_mid_climb_is_not_stuck() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([0.0, 300.0, 64.0]);
+        v.climbing = true;
+        for tick in 0..40 {
+            bot.think(&v);
+            assert_eq!(bot.unstick_ticks, 0, "tick {tick}");
+        }
+        v.climbing = false;
         assert!((0..30).any(|_| {
             bot.think(&v);
             bot.unstick_ticks > 0

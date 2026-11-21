@@ -93,6 +93,50 @@ impl ArchiveRing {
         self.rows[self.index] = a;
         self.index = (self.index + 1) % ARCHIVE_ROWS;
     }
+
+    /// `CL_GetPredictedOriginForServerTime` (0x472d00): walking back from
+    /// the last row written, the first whose time is at or before `time`;
+    /// `None` past all 256. An unwritten row holds time 0.
+    pub fn at_or_before(&self, time: i32) -> Option<&Archive> {
+        (1..=ARCHIVE_ROWS)
+            .map(|k| &self.rows[(self.index + ARCHIVE_ROWS - k) % ARCHIVE_ROWS])
+            .find(|r| r.server_time <= time)
+    }
+
+    /// `MSG_ReadDeltaPlayerstate` on a playerstate sent without origin
+    /// (its first bit 0, 0x507252..0x5072fd): origin, velocity, view
+    /// angles, `bobCycle` and `movementDir` come off the row for its
+    /// `commandTime`, else, none found, off `from` (cod4-netfields.md 11).
+    pub fn fill_unsent(&self, ps: &mut delta::PlayerState, from: &delta::PlayerState) {
+        use crate::ps_word;
+        let words = [
+            ps_word!(3 "origin"),
+            ps_word!(3 "velocity"),
+            ps_word!(3 "viewangles"),
+        ];
+        let (bob, dir) = (ps_word!("bobCycle"), ps_word!("movementDir"));
+        let time = ps.word(ps_word!("commandTime")) as i32;
+        let Some(a) = self.at_or_before(time) else {
+            log::debug!("Unable find origin sent, delta not going to work");
+            for w in words.iter().flatten().copied().chain([bob, dir]) {
+                ps.words[w] = from.word(w);
+            }
+            return;
+        };
+        if a.server_time != time {
+            log::debug!(
+                "Couldn't find exact match for servertime {time}, using servertime {}",
+                a.server_time
+            );
+        }
+        for (ws, v) in words.iter().zip([a.origin, a.velocity, a.view_angles]) {
+            for (&w, v) in ws.iter().zip(v) {
+                ps.words[w] = v.to_bits();
+            }
+        }
+        ps.words[bob] = a.bob_cycle as u32;
+        ps.words[dir] = a.movement_dir as u32;
+    }
 }
 
 /// What `CL_Record_f` (0x468960) writes as the first record's message:
@@ -364,6 +408,40 @@ impl Recording {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    /// `CL_GetPredictedOriginForServerTime` walks back from the newest row
+    /// to the first at or before the time; with every row past it, none,
+    /// and the playerstate keeps the base's fields (0x472d00, 0x50728c).
+    #[test]
+    fn the_archive_lookup_takes_the_newest_row_at_or_before() {
+        let row = |t: i32| Archive {
+            server_time: t,
+            origin: [t as f32, 0.0, 0.0],
+            ..Default::default()
+        };
+        let mut ring = ArchiveRing::default();
+        // An unwritten ring holds time 0 everywhere.
+        assert_eq!(ring.at_or_before(500).map(|a| a.server_time), Some(0));
+        for t in (1000..1000 + 50 * ARCHIVE_ROWS as i32).step_by(50) {
+            ring.add(row(t));
+        }
+        let at = |t: i32| ring.at_or_before(t).map(|a| a.server_time);
+        assert_eq!(at(1050), Some(1050));
+        assert_eq!(at(1074), Some(1050));
+        assert_eq!(at(i32::MAX), Some(1000 + 50 * (ARCHIVE_ROWS as i32 - 1)));
+        assert_eq!(at(999), None);
+        let mut from = delta::PlayerState::default();
+        let ox = crate::ps_word!("origin[0]");
+        from.words[ox] = 7.5f32.to_bits();
+        let mut ps = delta::PlayerState::default();
+        ps.words[crate::ps_word!("commandTime")] = 999;
+        ps.words[ox] = 1.0f32.to_bits();
+        ring.fill_unsent(&mut ps, &from);
+        assert_eq!(ps.word_f32(ox), 7.5);
+        ps.words[crate::ps_word!("commandTime")] = 1100;
+        ring.fill_unsent(&mut ps, &from);
+        assert_eq!(ps.word_f32(ox), 1100.0);
+    }
 
     #[derive(Clone, Default)]
     struct Shared(Arc<Mutex<Vec<u8>>>);

@@ -966,11 +966,61 @@ pub fn noise_get4f(x: f32, y: f32, z: f32, t: f32) -> f32 {
     lerp(at(it), at(it.wrapping_add(1)), ft) as f32
 }
 
+/// Seconds since the client started (f64), as a stage's time-driven terms
+/// read it. A term `rate * t` multiplies `rate` by [`Self::at`]`(rate)`
+/// ([`Self::at_every`] for a cycle other than 1): the time less a whole
+/// number of that term's cycles, so the f32 product keeps its fraction at
+/// any uptime. Under [`Self::EXACT`] seconds every term reads the plain
+/// `secs as f32`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ShaderClock(pub f64);
+
+impl ShaderClock {
+    /// The uptime below which no term's time is reduced. Past it a term's
+    /// time stays under this plus one of its cycles.
+    pub const EXACT: f64 = 3840.0;
+
+    /// The time a term `rate * t` that repeats every 1 reads.
+    pub fn at(self, rate: f32) -> f32 {
+        self.at_every(rate, 1.0)
+    }
+
+    /// The time a term `rate * t` that repeats every `every` reads: less a
+    /// whole number of its cycles, taken in f64 off the same f32 `rate`.
+    pub fn at_every(self, rate: f32, every: f64) -> f32 {
+        let rate = f64::from(rate).abs();
+        if self.0 < Self::EXACT || !(rate > 0.0 && rate.is_finite()) {
+            return self.0 as f32;
+        }
+        let span = (Self::EXACT * rate / every).ceil() * every / rate;
+        (self.0 % span) as f32
+    }
+
+    /// The time wrapped at `period` seconds, for a reader whose every time
+    /// term repeats over it; the plain `secs as f32` under `period`.
+    pub fn wrapped(self, period: f64) -> f32 {
+        (self.0 % period) as f32
+    }
+}
+
+impl From<f64> for ShaderClock {
+    fn from(secs: f64) -> Self {
+        Self(secs)
+    }
+}
+
+impl From<f32> for ShaderClock {
+    fn from(secs: f32) -> Self {
+        Self(f64::from(secs))
+    }
+}
+
 /// WAVEVALUE (tr_shade_calc.c:34): base + table[idx]*amp with
 /// idx = ftol(phase + t*freq, scaled by 1024) & 1023. myftol is x87 fistp,
 /// which rounds to nearest even, so 511.9 indexes 512 where an `as` cast
 /// would truncate to 511.
-pub fn wave_value(w: &Wave, t: f32) -> f32 {
+pub fn wave_value(w: &Wave, t: impl Into<ShaderClock>) -> f32 {
+    let t = t.into().at(w.freq);
     let table = match w.form {
         WaveForm::Sin => &SIN_TABLE,
         WaveForm::Square => &SQUARE_TABLE,
@@ -989,8 +1039,11 @@ pub fn wave_value(w: &Wave, t: f32) -> f32 {
 /// `rgbGen wave` before its clamp (CoDMP.exe 0x514c00): a noise wave is
 /// `base + amp * R_NoiseGet4f(0, 0, 0, (t + phase) * freq)`, any other the
 /// table wave, which the renderer then scales by identityLight.
-pub fn rgb_wave_value(w: &Wave, t: f32) -> f32 {
+pub fn rgb_wave_value(w: &Wave, t: impl Into<ShaderClock>) -> f32 {
+    let t = t.into();
     if w.form == WaveForm::Noise {
+        // the noise repeats every 256 along t (its lattice's low byte)
+        let t = t.at_every(w.freq, 256.0);
         return w.base + noise_get4f(0.0, 0.0, 0.0, (t + w.phase) * w.freq) * w.amp;
     }
     wave_value(w, t)
@@ -1016,21 +1069,22 @@ fn compose_affine(o: &Affine, i: &Affine) -> Affine {
 
 /// Folds the tcMods of one bundle left from identity in listed order.
 /// Turb is not affine and rides separately in [`bundle_turb`].
-pub fn bundle_affine(tcmods: &[TcMod], t: f32) -> [f32; 6] {
+pub fn bundle_affine(tcmods: &[TcMod], t: impl Into<ShaderClock>) -> [f32; 6] {
+    let t = t.into();
     let mut acc = AFFINE_IDENTITY;
     for m in tcmods {
         let next = match m {
             TcMod::Scroll(sx, sy) => {
                 // RB_CalcScrollTexCoords keeps the fractional part only
-                let fx = sx * t;
-                let fy = sy * t;
+                let fx = sx * t.at(*sx);
+                let fy = sy * t.at(*sy);
                 [1.0, 0.0, 0.0, 1.0, fx - fx.floor(), fy - fy.floor()]
             }
             TcMod::Scale(sx, sy) => [*sx, 0.0, 0.0, *sy, 0.0, 0.0],
             TcMod::Rotate(dps) => {
                 // RB_CalcRotateTexCoords: negated degrees, index truncated
                 // toward zero before masking, cos read a quarter ahead
-                let degs = -dps * t;
+                let degs = -dps * t.at_every(*dps, 360.0);
                 let idx = (degs * (FUNCTABLE_SIZE as f32 / 360.0)) as i64 & FUNCTABLE_MASK;
                 let sin_v = SIN_TABLE[idx as usize];
                 let cos_v =
@@ -1061,11 +1115,13 @@ pub fn bundle_affine(tcmods: &[TcMod], t: f32) -> [f32; 6] {
 /// [amp0, now0, amp1, now1] with now = phase + t*freq for the last Turb of
 /// the list; zeros when there is none. The VS adds
 /// amp*sin(worldpos_axis/1024 + now) per axis.
-pub fn bundle_turb(tcmods: &[TcMod], t: f32) -> [f32; 4] {
+pub fn bundle_turb(tcmods: &[TcMod], t: impl Into<ShaderClock>) -> [f32; 4] {
+    let t = t.into();
     let mut out = [0.0f32; 4];
     for m in tcmods {
         if let TcMod::Turb { amp, phase, freq } = m {
-            let now = phase + t * freq;
+            // the shader takes sin(... + now): a cycle is 2 pi of `now`
+            let now = phase + t.at_every(*freq, std::f64::consts::TAU) * freq;
             out = [*amp, now, *amp, now];
         }
     }
@@ -1301,6 +1357,57 @@ mod tests {
                 .sin() as f32;
             assert!((v - want).abs() < 1e-5, "SIN_TABLE[{i}] {v} vs libm {want}");
         }
+    }
+
+    /// Under [`ShaderClock::EXACT`] every term reads the plain f32 time;
+    /// at 11.6 days a scroll, a rotation and a sin wave still land where
+    /// the exact f64 phase puts them, where f32 seconds step 62 ms.
+    #[test]
+    fn a_long_uptime_keeps_each_terms_phase() {
+        for secs in [0.0, 1.25, 1000.37, 3839.99] {
+            for rate in [0.07, -0.00025, 13.9, 0.0] {
+                assert_eq!(ShaderClock(secs).at(rate), secs as f32);
+            }
+        }
+        // 0.031 s off the nearest f32 second
+        let secs = 1.0e6 + 0.031;
+        let clock = ShaderClock(secs);
+        // the exact phase of an f32 rate
+        let frac = |rate: f32| (f64::from(rate) * secs).rem_euclid(1.0) as f32;
+        let scroll = bundle_affine(&[TcMod::Scroll(0.07, -0.011_25)], clock);
+        assert!(close(scroll[4], frac(0.07), 1e-4), "{}", scroll[4]);
+        assert!(close(scroll[5], frac(-0.011_25), 1e-4), "{}", scroll[5]);
+        // 90 degrees a second: 2.79 degrees into a turn
+        let rot = bundle_affine(&[TcMod::Rotate(-90.0)], clock);
+        let deg = (90.0 * secs).rem_euclid(360.0);
+        assert!(
+            close(rot[1], deg.to_radians().sin() as f32, 0.01),
+            "{}",
+            rot[1]
+        );
+        let w = Wave {
+            form: WaveForm::Sawtooth,
+            base: 0.0,
+            amp: 1.0,
+            phase: 0.0,
+            freq: 0.4,
+        };
+        assert!(close(wave_value(&w, clock), frac(0.4), 2e-3));
+        // the turbulence's sin turns every 2 pi of its `now`
+        let turb = bundle_turb(
+            &[TcMod::Turb {
+                amp: 1.0,
+                phase: 0.0,
+                freq: 0.25,
+            }],
+            clock,
+        );
+        let tau = std::f64::consts::TAU;
+        let (got, want) = (
+            f64::from(turb[1]).rem_euclid(tau),
+            (f64::from(0.25f32) * secs).rem_euclid(tau),
+        );
+        assert!((got - want).abs() < 1e-3, "{got} {want}");
     }
 
     #[test]

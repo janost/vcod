@@ -2262,3 +2262,42 @@ What the gates once listed, each closed:
   no leaf reaches (the head's `j_neck` and `j_head` among them) did not
   move it: the bounce matches with those left to CoD1's sampler too.
   VERIFIED (the gate, both ways).
+
+## 16. Fall damage
+
+- The arm. `ClientEvents` (`cod4_lnxded` 0x80a5bf9..0x80a5c11 calls its
+  per-event body 0x80a581e with the client, the entity, the event and its
+  parm) sends events 19 to 63 through the jump table at 0x8217d98; past
+  it, an event from 106 to 134 (`EV_LANDING_PAIN_DEFAULT` to
+  `_CERAMIC`, 0x80a5841..0x80a5847) on an entity whose `s.eType` (+4) is
+  1 (`ET_PLAYER`, 0x80a5849) deals damage; anything else returns.
+  VERIFIED (the instructions).
+- The amount. A parm over 99 (0x80a5859) takes the float at 0x8217d94,
+  0x3f8ccccd (1.1); any other the float at 0x8209644, 0x3c23d70a (0.01),
+  times the parm (`fimul`, 0x80a5b22), returning when that is 0
+  (0x80a5b33..0x80a5b45). Either is multiplied by the playerstate's
+  `stats[2]` (`fimul` of +0x150, 0x80a58a0), the max health
+  (cod4-hud.md 19), stored as a float and truncated (`cvttss2si`,
+  0x80a58ae). The two products stay on the x87 stack, so only the last
+  store rounds: parm 25 of 100 deals 25 where 1.1d's unrounded product
+  deals 24. VERIFIED (the instructions).
+- The call. `G_Damage` (0x80b16c0, called at 0x80a58d9) with the entity
+  as target, no inflictor, attacker, direction or point, `dflags` 0,
+  means 11 (`MOD_FALLING`, `modNames`), weapon -1, hit location 0 and
+  time offset 0. A client target goes on to `G_DamageClient` (0x80b14f8,
+  called at 0x80b1722), which with weapon -1 and neither party takes
+  weapon 0 (0x80b1625..0x80b167d), multiplies by `mp_lochit_dmgtable`'s
+  hit location 0 (0x836f620, 0x80b158b) and keeps at least 1, then hands
+  `Scr_PlayerDamage` (0x80c27d6) the lot: the callback reads undefined
+  inflictor, attacker, point and direction, weapon `"none"` and hit
+  location `"none"`. VERIFIED (the instructions). That table's row 0 is
+  1 (section 10.3, `info/mp_lochit_dmgtable`). INFERRED (the rawfile, not
+  read again here).
+- vcod: `Cod4Level::client_events` takes the same events to
+  `fall_damage` (`game::cod4::combat`), which deals through
+  `ScriptRuntime::deliver_fall` as CoD2's does. Before this the arm was
+  missing and a CoD4 fall took no health, only the landing stun.
+  VERIFIED (the code, `fall_damage_is_1_7s_share_of_max_health`).
+- The bots judge a drop by 1.7's `bg_fallDamageMinHeight` 128 and
+  `MaxHeight` 300 (cod4-pmove.md's dvar table), not CoD1's 256 and 480
+  (bot-navigation.md 3.14). VERIFIED (the code).

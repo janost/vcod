@@ -49,9 +49,8 @@ const WEAPON_NV_WEAR: u32 = 25;
 const WEAPON_NV_REMOVE: u32 = 26;
 /// `weapAnim`'s restart toggle.
 const ANIM_TOGGLEBIT: u32 = 0x200;
-/// The view tree's nodes under its root (0): the main clips 1..=30, the
-/// sight's two (`CG_CreateWeaponViewModelXAnim`, iw3mp.exe 0x4541d0).
-const NODES: usize = 33;
+/// The view tree's main clips under its root (0); the sight's two follow
+/// at 31 and 32 (`CG_CreateWeaponViewModelXAnim`, iw3mp.exe 0x4541d0).
 const MAIN: std::ops::RangeInclusive<usize> = 1..=30;
 const IDLE: usize = 1;
 const EMPTY_IDLE: usize = 2;
@@ -207,8 +206,8 @@ impl ViewPs {
     }
 }
 
-/// `WeaponDef`'s fields the view weapon reads, at their 1.7 offsets
-/// (cod4-client-view.md 4.1).
+/// `WeaponDef`'s fields the view weapon reads (`Weapon`'s accessors,
+/// cod4-client-view.md 4.1).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ViewNumbers {
     pub aim_down_sight: bool,
@@ -253,54 +252,38 @@ pub struct ViewNumbers {
     pub anim_ms: Vec<Option<i32>>,
 }
 
-/// `g_animRateOffsets` (iw3mp.exe 0x727580): each node's time field in
-/// `WeaponDef`, -1 for none.
-const ANIM_RATE_OFFSETS: [i32; NODES] = [
-    -1, -1, -1, -1, 888, -1, -1, 896, 900, 904, 912, 920, 928, 936, 956, 932, 944, 940, 952, 948,
-    960, 964, 968, 972, 976, -1, 980, 992, -1, -1, -1, -1, -1,
-];
-
 impl ViewNumbers {
-    /// Read off a `WeaponDef`'s 0x878 bytes as the zone loaded them.
-    pub fn from_raw(raw: &[u8]) -> ViewNumbers {
-        let i = |o: usize| {
-            raw.get(o..o + 4)
-                .map_or(0, |b| i32::from_le_bytes(b.try_into().unwrap()))
-        };
-        let f = |o: usize| f32::from_bits(i(o) as u32);
-        let v = |o: usize| [f(o), f(o + 4), f(o + 8)];
+    /// The fields off a zone's `WeaponDef`.
+    pub fn from_weapon(w: &vcod_cod4::assets::weapon::Weapon) -> ViewNumbers {
+        let [ducked_ofs, prone_ofs] = w.stance_ofs();
+        let (ads_zoom_in_frac, ads_zoom_out_frac) = w.ads_zoom_fracs();
+        let (reload_time, reload_show_rocket_time) = w.reload_times();
         ViewNumbers {
-            aim_down_sight: i(1260) != 0,
-            overlay_reticle: i(1080) != 0,
-            overlay_material: i(1072) != 0,
-            ads_zoom_fov: f(1060),
-            ads_zoom_in_frac: f(1064),
-            ads_zoom_out_frac: f(1068),
-            ads_bob_factor: f(1096),
-            ads_aim_pitch: f(1740),
-            position_reload_trans_time: i(1940),
-            move_ofs: [v(564), v(600), v(636)],
-            move_rot: [v(576), v(612), v(648)],
-            stance_ofs: [[0.0; 3], v(588), v(624)],
-            move_min_speed: [f(668), f(672), f(676)],
-            rot_min_speed: [f(688), f(692), f(696)],
-            move_rate: [f(660), f(664)],
-            rot_rate: [f(680), f(684)],
-            idle_amount: [f(1164), f(1168)],
-            idle_speed: [f(1172), f(1176)],
-            idle_factor: [f(1180), f(1184)],
-            sway: [
-                [f(1196), f(1200), f(1204), f(1208), f(1212), f(1216)],
-                [f(1224), f(1228), f(1232), f(1236), f(1240), f(1244)],
-            ],
-            nv_wear_time: i(980),
-            reload_time: i(904),
-            reload_show_rocket_time: i(908),
-            ads_dof: [f(2160), f(2164)],
-            anim_ms: ANIM_RATE_OFFSETS
-                .iter()
-                .map(|&o| (o >= 0).then(|| i(o as usize)))
-                .collect(),
+            aim_down_sight: w.aim_down_sight(),
+            overlay_reticle: w.ads_overlay_reticle() != 0,
+            overlay_material: w.has_ads_overlay_shader(),
+            ads_zoom_fov: w.ads_zoom_fov(),
+            ads_zoom_in_frac,
+            ads_zoom_out_frac,
+            ads_bob_factor: w.ads_bob_factor(),
+            ads_aim_pitch: w.ads_aim_pitch(),
+            position_reload_trans_time: w.ads_reload_trans_time(),
+            move_ofs: w.stance_moves(),
+            move_rot: w.stance_rots(),
+            stance_ofs: [[0.0; 3], ducked_ofs, prone_ofs],
+            move_min_speed: w.move_min_speeds(),
+            rot_min_speed: w.rot_min_speeds(),
+            move_rate: w.pos_move_rates(),
+            rot_rate: w.pos_rot_rates(),
+            idle_amount: w.idle_amounts(),
+            idle_speed: w.idle_speeds(),
+            idle_factor: w.idle_factors(),
+            sway: w.sways(),
+            nv_wear_time: w.night_vision_wear_time(),
+            reload_time,
+            reload_show_rocket_time,
+            ads_dof: w.ads_dof(),
+            anim_ms: w.anim_rate_times().to_vec(),
         }
     }
 }

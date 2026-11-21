@@ -507,7 +507,7 @@ impl SunFlareGpu {
         let out = self.sim.step(
             &self.params,
             &FrameIn {
-                now_ms: frame.time * 1000.0,
+                now_ms: frame.time as f32 * 1000.0,
                 dot: frame.fwd.dot(self.view_dir),
                 window,
                 width,

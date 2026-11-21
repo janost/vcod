@@ -250,11 +250,19 @@ impl Loader {
 
     /// `demo` / `timedemo` (cod4-demos.md 5): the demo read to its
     /// gamestate and its map loaded behind the same screen, `name` in the
-    /// server's place.
-    pub fn start_demo(name: String, data: Vec<u8>, timedemo: bool, game_dir: PathBuf) -> Loader {
+    /// server's place; `timedemo`'s csv goes in `csv`'s dir with its
+    /// `r_mode`.
+    pub fn start_demo(
+        name: String,
+        data: Vec<u8>,
+        timedemo: bool,
+        game_dir: PathBuf,
+        csv: (PathBuf, i32),
+    ) -> Loader {
         let dir = game_dir.clone();
         Self::start_job(Status::named(name), game_dir, move |p, flag| {
-            let s = Cod4Session::play_demo(data, timedemo)?;
+            let mut s = Cod4Session::play_demo(data, timedemo)?;
+            s.write_timedemo_csv(csv.0, csv.1);
             load_level(s, &dir, p, flag, None)
         })
     }

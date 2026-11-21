@@ -96,9 +96,7 @@ impl Cod4Server {
             }
             match self.game.bots.as_ref().and_then(|b| b.graph().cloned()) {
                 Some(g) => g.moving(|| crate::bots::driver::step(self)),
-                None => {
-                    crate::nav::with_rules(cod4::GRAPH_RULES, || crate::bots::driver::step(self))
-                }
+                None => cod4::moving(|| crate::bots::driver::step(self)),
             }
         }
         if let Some(b) = self.game.bots.as_mut() {
@@ -388,6 +386,21 @@ impl BotWorld for Cod4Server {
 
     fn move_ps(&self, slot: usize) -> Option<vcod_common::pmove::PlayerState> {
         self.cod4_bots().move_ps(slot)
+    }
+
+    fn climbing(&self, slot: usize) -> bool {
+        self.cod4_bots().climbing(slot)
+    }
+
+    /// Under the level's `bg_fallDamageMinHeight` and `MaxHeight`.
+    fn fall_kills(&self, slot: usize) -> Option<f32> {
+        let level = self.game.level.as_ref()?;
+        let v = level.rt.client_vitals(slot);
+        let h = vcod_common::pmove::FallHeights {
+            min: level.rules.fall_damage_min_height,
+            max: level.rules.fall_damage_max_height,
+        };
+        Some(crate::nav::fall_that_kills(v.health, v.max_health, h))
     }
 
     fn lob_probe(

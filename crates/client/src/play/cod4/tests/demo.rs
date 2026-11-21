@@ -494,6 +494,90 @@ fn a_gamestate_inside_a_demo_primes_its_clock_again() {
     assert_eq!(d.gamestates, 2);
 }
 
+/// `timedemo`'s csv (`iw3mp.exe` 0x45c350): named for the gamestate's
+/// map and `r_mode`, opened on the first timed frame, a
+/// `<frames counted>,<ms since the last>` row each frame after it, whole
+/// once the demo ends; a plain `demo` writes none.
+#[test]
+fn cod4_timedemo_writes_a_row_a_frame_after_the_first() {
+    use std::collections::BTreeMap;
+    use vcod_cod4::net::parse::{Gamestate, MAX_CONFIGSTRINGS, UNUSED_HUFF};
+    use vcod_cod4::net::wire::{EOF, Frame4, write_snapshot};
+    use vcod_common::net::Msec;
+    use vcod_common::net::codec::MsgWriter;
+    use vcod_common::net::protocol::SnapshotHead;
+    let huff = vcod_cod4::net::huffman::Huffman::new();
+    let mut table = vec![String::new(); MAX_CONFIGSTRINGS as usize];
+    table[0] = "\\mapname\\mp_crash".into();
+    let gs = Gamestate::from_table(0, &table, &BTreeMap::new(), 0, 0);
+    let mut demo = RetailDemo::default();
+    demo.message(
+        1,
+        &vcod_cod4::net::demo::gamestate_message(&huff, 0, 0, &gs),
+    );
+    for (seq, time) in (2..).zip((1000..1400).step_by(50)) {
+        let mut w = MsgWriter::new(&UNUSED_HUFF);
+        let frame = Frame4 {
+            server_time: Msec::from_raw(time),
+            map_center: gs.map_center,
+            ps: Default::default(),
+            entities: Vec::new(),
+            clients: Vec::new(),
+        };
+        let head = SnapshotHead {
+            delta_num: 0,
+            snap_flags: 0,
+        };
+        write_snapshot(&mut w, None, &frame, head, &BTreeMap::new());
+        w.write_byte(EOF);
+        let mut m = 0i32.to_le_bytes().to_vec();
+        m.extend(huff.compress(&w.into_ops()));
+        demo.message(seq, &m);
+    }
+    demo.stop();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
+    let mut plain = Cod4Session::play_demo(demo.0.clone(), false).unwrap();
+    plain.write_timedemo_csv(dir.clone(), 2);
+    let Source::Demo(d) = &plain.source else {
+        unreachable!()
+    };
+    assert!(d.csv.is_none());
+    let mut s = Cod4Session::play_demo(demo.0, true).unwrap();
+    s.write_timedemo_csv(dir.clone(), 2);
+    let Source::Demo(d) = &mut s.source else {
+        unreachable!()
+    };
+    let mut now = 0;
+    for step in [16, 17, 15, 30, 16, 16, 16, 16, 16, 16, 16] {
+        if d.ended {
+            break;
+        }
+        d.frame(now);
+        now += step;
+    }
+    assert!(d.ended, "the demo never ended");
+    let counted = d.clock.timedemo.as_ref().unwrap().frames();
+    let text = std::fs::read_to_string(dir.join("timedemo_mp_crash_mode_2.csv")).unwrap();
+    // The first frame reads the opening record, the second seeds and
+    // counts frame 1 at 16 ms; each later frame writes its row first.
+    let want: String = [
+        (1, 17),
+        (2, 15),
+        (3, 30),
+        (4, 16),
+        (5, 16),
+        (6, 16),
+        (7, 16),
+    ]
+    .iter()
+    .take(counted as usize - 1)
+    .map(|(f, ms)| format!("{f},{ms}\n"))
+    .collect();
+    assert_eq!(text, want, "{counted} frames");
+    assert!(counted >= 4, "{counted}");
+}
+
 /// A demo sheds its old snapshots as a live session does and plays the
 /// same events to its end.
 #[test]

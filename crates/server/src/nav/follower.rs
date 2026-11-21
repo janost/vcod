@@ -118,12 +118,14 @@ const ABREAST_HEIGHT: f32 = 70.0;
 /// sends it back up ([`Follower::head_on_yield`]): two bodies' height.
 const HEAD_ON: f32 = 2.0 * ABREAST_HEIGHT;
 
-/// Only on a ladder taller than a fall that kills (`bg_fallDamageMaxHeight`;
-/// a hurt bot's is shorter, [`fall_that_kills`]): off a shorter one a whole
-/// body slides off a climber's head and lives, and
-/// turning back held two bots at mp_ship's hold ladder (3369, -379) for
-/// 12 s (bot-navigation.md section 3).
-pub(super) const DEADLY_LADDER: f32 = 480.0;
+/// Only on a ladder taller than a fall that kills (`bg_fallDamageMaxHeight`,
+/// [`falls`]: 480 on CoD1; a hurt bot's is shorter, [`fall_that_kills`]):
+/// off a shorter one a whole body slides off a climber's head and lives,
+/// and turning back held two bots at mp_ship's hold ladder (3369, -379)
+/// for 12 s (bot-navigation.md section 3).
+pub(super) fn deadly_fall() -> f32 {
+    falls().max
+}
 
 /// The lowest fall a body with `health` of `max_health` does not live
 /// through: `PM_CrashLand`'s percent, linear from `h.min` to 100 at
@@ -382,8 +384,12 @@ pub struct Follower {
     pressed_ticks: u32,
     give: Option<(Vec3, u32)>,
     /// The lowest fall that kills this body now ([`fall_that_kills`]):
-    /// a hurt bot dies off a shorter ladder. `None` reads [`DEADLY_LADDER`].
+    /// a hurt bot dies off a shorter ladder. `None` reads [`deadly_fall`].
     pub fall_kills: Option<f32>,
+    /// pmove's climb is under way: no plan starts until it lands, since a
+    /// plan from mid-climb starts at the foot (bot-navigation.md 3.15). Set
+    /// by the driver per tick.
+    pub climbing: bool,
     /// A mantle edge whose landing lies past [`OFF_PATH_STEPS`] is still
     /// followed: the probe's climb ends where the body comes down, which
     /// on CoD4's mp_crash rubble at (291, -1439, 84) is 162 across
@@ -639,6 +645,9 @@ impl Follower {
             self.fell = true;
         }
         if self.path.is_empty() {
+            if self.climbing {
+                return None;
+            }
             self.on_rungs = body.on_ladder;
             self.path = self.plan(g, world, goal, here, budget, rand)?;
             self.next = 0;
@@ -1930,6 +1939,42 @@ mod tests {
         let w = (0..REST_TICKS + 2).find_map(|_| step(&mut f, goal));
         assert_eq!(w, Some([32.0, 0.0, 0.0]));
         assert!(!f.penned());
+    }
+
+    /// No plan starts while pmove's climb is under way: from mid-climb the
+    /// nearest node is the foot, and a plan from there walked the bot back
+    /// off mp_crash's ledge (bot-navigation.md 3.15). Landed on top, it
+    /// plans from there.
+    #[test]
+    fn no_plan_starts_mid_climb() {
+        use crate::bots::Goal;
+        let nodes = vec![
+            Vec3::ZERO,
+            Vec3::new(40.0, 0.0, 60.0),
+            Vec3::new(120.0, 0.0, 60.0),
+        ];
+        let mut g = NavGraph::from_parts(nodes, vec![vec![1], vec![0, 2], vec![1]]);
+        g.edge_mut(0, 1).unwrap().mantle = true;
+        let goal = Goal::To([120.0, 0.0, 60.0]);
+        let air = Footing {
+            still: false,
+            on_ground: false,
+            ..Footing::STANDING
+        };
+        let mut f = Follower {
+            climbing: true,
+            ..Follower::default()
+        };
+        let mid = [8.0, 0.0, 30.0];
+        assert_eq!(
+            f.waypoint(&g, None, goal, mid, air, &mut 100, &mut || 0),
+            None
+        );
+        assert!(f.path.is_empty());
+        f.climbing = false;
+        let top = [40.0, 0.0, 60.0];
+        f.waypoint(&g, None, goal, top, Footing::STANDING, &mut 100, &mut || 0);
+        assert_eq!(f.path.first(), Some(&1));
     }
 
     /// A body standing on node 1 of [`tiny`], in the way of a bot bound

@@ -12,7 +12,7 @@ use super::player::{menu_text_rgba, text_height, text_width};
 use vcod_common::localize::Localized;
 
 /// The stock client's re-request cadence while the board is up (doc section 4).
-pub const REQUEST_INTERVAL: f32 = 2.0;
+pub const REQUEST_INTERVAL: f64 = 2.0;
 
 /// `cl[+0x217c] == 3` (doc section 3). Team 0 is "none", which every row
 /// carries in `dm`.
@@ -201,7 +201,7 @@ pub fn parse_scores(tokens: &[String]) -> Result<ScoresMessage, String> {
 /// What the board reads besides the `b` reply.
 pub struct BoardView<'a> {
     /// HUD clock, seconds.
-    pub now: f32,
+    pub now: f64,
     /// The local client's number (`CG_Init`'s), whose row is lit.
     pub own_client: Option<u32>,
     /// A client's name and team; `None` without client info, which drops
@@ -234,13 +234,13 @@ pub struct Scoreboard {
     /// `+scores` is held.
     held: bool,
     /// When `-scores` came, HUD seconds: the board fades out from there.
-    released_at: Option<f32>,
+    released_at: Option<f64>,
     /// The drawn playerstate is in intermission (`pm_type` 5), which draws
     /// the board without the key (0x30018530).
     pub intermission: bool,
     /// Render-clock seconds of the next due `score` request; `f32::MIN` so
     /// the first check fires at once.
-    next_request: f32,
+    next_request: f64,
     warned_malformed: bool,
     warned_truncated: bool,
     /// A `b` reply came since the last gamestate; gates [`Self::totals`] so
@@ -269,7 +269,7 @@ impl Scoreboard {
             held: false,
             released_at: None,
             intermission: false,
-            next_request: f32::MIN,
+            next_request: f64::MIN,
             warned_malformed: false,
             warned_truncated: false,
             received: false,
@@ -329,7 +329,7 @@ impl Scoreboard {
     /// is to go out, at most once in [`REQUEST_INTERVAL`]; a press that
     /// sends while the board is down also drops the old rows and the
     /// scroll.
-    pub fn press(&mut self, now: f32) -> bool {
+    pub fn press(&mut self, now: f64) -> bool {
         let send = now >= self.next_request;
         if send {
             self.mark_requested(now);
@@ -344,7 +344,7 @@ impl Scoreboard {
 
     /// `-scores` (0x30013cc0), and a `map_restart` (0x3002ca60): the board
     /// fades from `now`.
-    pub fn release(&mut self, now: f32) {
+    pub fn release(&mut self, now: f64) {
         if self.held {
             self.released_at = Some(now);
         }
@@ -363,11 +363,11 @@ impl Scoreboard {
 
     /// True while the board is up and [`REQUEST_INTERVAL`] has elapsed. The
     /// caller sends `score` and then calls [`Self::mark_requested`].
-    pub fn due(&self, now: f32) -> bool {
+    pub fn due(&self, now: f64) -> bool {
         (self.held || self.intermission) && now >= self.next_request
     }
 
-    pub fn mark_requested(&mut self, now: f32) {
+    pub fn mark_requested(&mut self, now: f64) {
         self.next_request = now + REQUEST_INTERVAL;
     }
 
@@ -380,7 +380,7 @@ impl Scoreboard {
 
     /// The board's alpha at `now`, `None` when it is not drawn: 1 while
     /// held or in intermission, then `left * 0.01` over the 100 ms fade.
-    pub fn alpha(&self, now: f32) -> Option<f32> {
+    pub fn alpha(&self, now: f64) -> Option<f32> {
         if self.held || self.intermission {
             return Some(1.0);
         }
@@ -1157,6 +1157,19 @@ mod tests {
         b.press(3.0);
         b.hide();
         assert_eq!(b.alpha(3.01), None);
+    }
+
+    /// 11.6 days up the fade still runs its 100 ms, where f32 seconds
+    /// step 62 ms.
+    #[test]
+    fn the_fade_keeps_its_ms_at_a_long_uptime() {
+        let mut b = Scoreboard::new();
+        let t = 1.0e6 + 0.01;
+        b.press(t);
+        b.release(t);
+        let a = b.alpha(t + 0.05).unwrap();
+        assert!((a - 0.5).abs() < 0.02, "{a}");
+        assert_eq!(b.alpha(t + 0.11), None);
     }
 
     #[test]

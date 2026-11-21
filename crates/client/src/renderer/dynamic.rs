@@ -27,6 +27,7 @@ pub(crate) const VM_BONE_COUNT: usize = 128;
 pub(super) const VM_BONE_BUF_SIZE: u64 = (VM_BONE_COUNT * 64) as u64;
 
 /// One entity or viewmodel surface in draw order.
+#[derive(Clone, Copy)]
 pub(super) struct EntDraw {
     /// Instance (or viewmodel part) and its surface.
     pub(super) inst: u32,
@@ -57,13 +58,86 @@ pub(super) fn sorted_ent_draws<'a>(
     };
     let mut out: Vec<EntDraw> = ents.map(draw(false)).chain(gun.map(draw(true))).collect();
     // stable: equal keys keep instance then surface order
-    out.sort_by(|a, b| {
-        a.sort
-            .total_cmp(&b.sort)
-            .then(a.order.cmp(&b.order))
-            .then(a.gun.cmp(&b.gun))
-    });
+    out.sort_by(draw_order);
     out
+}
+
+/// [`sorted_ent_draws`]' key.
+fn draw_order(a: &EntDraw, b: &EntDraw) -> std::cmp::Ordering {
+    a.sort
+        .total_cmp(&b.sort)
+        .then(a.order.cmp(&b.order))
+        .then(a.gun.cmp(&b.gun))
+}
+
+/// Two lists sorted by [`draw_order`] as one, `a`'s first on a tie: what a
+/// stable sort of `a` then `b` gives.
+pub(super) fn merge_draws(
+    a: impl IntoIterator<Item = EntDraw>,
+    b: impl IntoIterator<Item = EntDraw>,
+) -> Vec<EntDraw> {
+    let (mut a, mut b) = (a.into_iter().peekable(), b.into_iter().peekable());
+    let mut out = Vec::with_capacity(a.size_hint().0 + b.size_hint().0);
+    loop {
+        let next = match (a.peek(), b.peek()) {
+            (Some(x), Some(y)) if draw_order(x, y).is_gt() => b.next(),
+            (Some(_), _) => a.next(),
+            (None, _) => b.next(),
+        };
+        match next {
+            Some(d) => out.push(d),
+            None => return out,
+        }
+    }
+}
+
+/// Every instance's entity draws sorted as [`sorted_ent_draws`] sorts
+/// them, kept from frame to frame: the instances that lead in last frame's
+/// models keep their draws, and only those after them sort again. A map's
+/// held dynamic entities lead the list (cod4-client-perf.md 41).
+#[derive(Default)]
+pub(super) struct EntSorted {
+    /// Per instance, its `DynamicPass::models` index.
+    models: Vec<usize>,
+    pub(super) draws: Vec<EntDraw>,
+}
+
+impl EntSorted {
+    pub(super) fn update(&mut self, instances: &[(usize, InstanceRaw)], models: &[DynModel]) {
+        self.update_by(instances.iter().map(|(m, _)| *m), |m| &models[m].skins);
+    }
+
+    /// [`Self::update`] over the instances' model indices, each model's
+    /// skins by surface from `skins`.
+    pub(super) fn update_by<'a>(
+        &mut self,
+        instances: impl ExactSizeIterator<Item = usize> + Clone,
+        skins: impl Fn(usize) -> &'a [Rc<EntSkin>],
+    ) {
+        let n = instances.len();
+        let held = self
+            .models
+            .iter()
+            .zip(instances.clone())
+            .take_while(|(a, b)| **a == *b)
+            .count();
+        if held == n && held == self.models.len() {
+            return;
+        }
+        self.models.truncate(held);
+        self.models.extend(instances.skip(held));
+        let rest = sorted_ent_draws(
+            self.models[held..].iter().enumerate().flat_map(|(j, &m)| {
+                skins(m)
+                    .iter()
+                    .enumerate()
+                    .map(move |(s, sk)| ((held + j) as u32, s as u32, &**sk))
+            }),
+            std::iter::empty(),
+        );
+        let kept = std::mem::take(&mut self.draws);
+        self.draws = merge_draws(kept.into_iter().filter(|e| (e.inst as usize) < held), rest);
+    }
 }
 
 /// What a run of entity draws left bound: the pipeline (a stage's index,
@@ -384,7 +458,12 @@ pub(super) struct Cod4EntityLight {
     pub(super) lights: Vec<Option<vcod_common::mapworld::ModelLightSource>>,
     /// Last frame's lookups in set order, kept as 1.7 keeps a model's block
     /// while its lighting origin holds (cod4-world.md 3.3).
-    pub(super) kept: Vec<(LightKey, vcod_common::mapworld::EntityLight)>,
+    kept: Vec<(LightKey, vcod_common::mapworld::EntityLight)>,
+    /// Last frame's sets and blocks, by set: set `i` is `kept[i]` packed
+    /// for its block at `identity`'s bits.
+    sets: Vec<GpuLightSet>,
+    blocks: Vec<[[u8; 4]; 64]>,
+    identity: u32,
 }
 
 /// A lookup's lighting origin and world box, by their bits: the lighter is
@@ -398,6 +477,24 @@ fn light_key(origin: glam::Vec3, [lo, hi]: [glam::Vec3; 2]) -> LightKey {
 }
 
 impl Cod4EntityLight {
+    pub(super) fn new(
+        lighter: vcod_common::mapworld::EntityLighter,
+        sun_dir: glam::Vec3,
+        sun_colour: glam::Vec3,
+        lights: Vec<Option<vcod_common::mapworld::ModelLightSource>>,
+    ) -> Self {
+        Cod4EntityLight {
+            lighter,
+            sun_dir,
+            sun_colour,
+            lights,
+            kept: Vec::new(),
+            sets: Vec::new(),
+            blocks: Vec::new(),
+            identity: 0,
+        }
+    }
+
     /// The light set of a model lit from `origin` whose world box is
     /// `bounds` (mins, maxs), naming entity volume block `block`, and the
     /// texels that block takes.
@@ -432,41 +529,80 @@ impl Cod4EntityLight {
         )
     }
 
-    /// The frame's set and block per `(origin, box)`, set `i` naming block
-    /// `i` and past the volume's blocks the last entity block (the very
-    /// last is the view model's). A pair looked up last frame reuses that
-    /// lookup, so a held scene runs none.
+    /// The frame's set and block per `(origin, box)` ([`Self::sets`],
+    /// [`Self::blocks`]), set `i` naming block `i` and past the volume's
+    /// blocks the last entity block (the very last is the view model's).
+    /// A pair looked up last frame reuses that lookup, and one in the same
+    /// place its set and block, so a held scene runs and packs none.
+    /// Returns the sets that may differ from last frame's: those outside
+    /// it, up to the shorter list's end, hold the same bytes.
     pub(super) fn frame_sets(
         &mut self,
         origins: &[(glam::Vec3, [glam::Vec3; 2])],
         identity_light: f32,
-    ) -> (Vec<GpuLightSet>, Vec<[[u8; 4]; 64]>) {
+    ) -> std::ops::Range<usize> {
         let last = entity_light::COD4_VOLUME_BLOCKS - 2;
-        let kept = std::mem::take(&mut self.kept);
+        let repack = identity_light.to_bits() != self.identity;
+        self.identity = identity_light.to_bits();
         // by key, built at the first set whose place in the list moved
-        let mut by_key: Option<HashMap<LightKey, usize>> = None;
-        let mut sets = Vec::with_capacity(origins.len());
-        let mut blocks = Vec::with_capacity(origins.len());
+        let mut by_key: Option<BitsMap<LightKey, usize>> = None;
+        let mut fresh = Vec::new();
         for (i, &(o, b)) in origins.iter().enumerate() {
             let key = light_key(o, b);
-            let at = match kept.get(i) {
-                Some((k, _)) if *k == key => Some(i),
+            let at = match self.kept.get(i) {
+                Some((k, _)) if *k == key => {
+                    if !repack {
+                        continue;
+                    }
+                    Some(i)
+                }
                 _ => by_key
                     .get_or_insert_with(|| {
-                        kept.iter().enumerate().map(|(j, (k, _))| (*k, j)).collect()
+                        self.kept
+                            .iter()
+                            .enumerate()
+                            .map(|(j, (k, _))| (*k, j))
+                            .collect()
                     })
                     .get(&key)
                     .copied(),
             };
             let light = match at {
-                Some(j) => kept[j].1,
+                Some(j) => self.kept[j].1,
                 None => (self.lighter.0)(o.to_array(), b.map(|v| v.to_array())),
             };
-            sets.push(self.pack(&light, (i as u32).min(last), identity_light));
-            blocks.push(light.texels);
-            self.kept.push((key, light));
+            fresh.push((i, key, light));
         }
-        (sets, blocks)
+        let n = origins.len();
+        self.kept.truncate(n);
+        self.sets.truncate(n);
+        self.blocks.truncate(n);
+        let changed = fresh.first().map_or(n, |f| f.0)..fresh.last().map_or(n, |f| f.0 + 1);
+        for (i, key, light) in fresh {
+            let set = self.pack(&light, (i as u32).min(last), identity_light);
+            if i < self.kept.len() {
+                self.kept[i] = (key, light);
+                self.sets[i] = set;
+                self.blocks[i] = light.texels;
+            } else {
+                // every set past the old end is fresh, in order
+                debug_assert_eq!(i, self.kept.len());
+                self.kept.push((key, light));
+                self.sets.push(set);
+                self.blocks.push(light.texels);
+            }
+        }
+        changed
+    }
+
+    /// The last [`Self::frame_sets`]' sets.
+    pub(super) fn sets(&self) -> &[GpuLightSet] {
+        &self.sets
+    }
+
+    /// The last [`Self::frame_sets`]' blocks, by set.
+    pub(super) fn blocks(&self) -> &[[[u8; 4]; 64]] {
+        &self.blocks
     }
 }
 
@@ -484,15 +620,56 @@ impl<T: bytemuck::Pod> Written<T> {
     /// Writes `new` from offset 0 where it differs from the last write;
     /// returns the bytes written.
     pub(super) fn write(&mut self, queue: &wgpu::Queue, buf: &wgpu::Buffer, new: &[T]) -> usize {
-        let Some(span) = changed_span(&self.0, new) else {
+        self.write_within(queue, buf, new, 0..new.len())
+    }
+
+    /// [`Self::write`] when only the elements in `maybe` (and any past the
+    /// last write's end) can differ from the last write.
+    pub(super) fn write_within(
+        &mut self,
+        queue: &wgpu::Queue,
+        buf: &wgpu::Buffer,
+        new: &[T],
+        maybe: std::ops::Range<usize>,
+    ) -> usize {
+        let Some(span) = write_span(&self.0, new, maybe) else {
             return 0;
         };
         let bytes: &[u8] = bytemuck::cast_slice(&new[span.clone()]);
         queue.write_buffer(buf, (span.start * size_of::<T>()) as u64, bytes);
-        self.0.clear();
-        self.0.extend_from_slice(new);
+        // the span holds every element past the old end
+        self.0.resize(new.len(), T::zeroed());
+        self.0[span.clone()].copy_from_slice(&new[span]);
         bytes.len()
     }
+}
+
+/// `VCOD_WRITE_ALL=1`: the entity lists (light sets, instances, bones,
+/// volume blocks) are written whole each frame, not their changed span
+/// (cod4-client-perf.md 42.1's A/B).
+fn write_all() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("VCOD_WRITE_ALL").is_ok_and(|v| v == "1"))
+}
+
+/// What a write of `new` over `old` covers: [`changed_span_within`], or
+/// all of `new` under [`write_all`].
+pub(crate) fn write_span<T: bytemuck::Pod>(
+    old: &[T],
+    new: &[T],
+    maybe: std::ops::Range<usize>,
+) -> Option<std::ops::Range<usize>> {
+    if write_all() {
+        return (!new.is_empty()).then_some(0..new.len());
+    }
+    let span = changed_span_within(old, new, maybe);
+    #[cfg(test)]
+    assert_eq!(
+        span,
+        changed_span(old, new),
+        "an element outside the hint changed"
+    );
+    span
 }
 
 /// The least range of `new` holding every element whose bytes differ from
@@ -520,6 +697,59 @@ pub(crate) fn changed_span<T: bytemuck::Pod>(
     };
     Some(start..end)
 }
+
+/// [`changed_span`] when the elements both hold outside `maybe` are known
+/// to be the same: only `maybe` is compared.
+pub(crate) fn changed_span_within<T: bytemuck::Pod>(
+    old: &[T],
+    new: &[T],
+    maybe: std::ops::Range<usize>,
+) -> Option<std::ops::Range<usize>> {
+    let a = maybe.start.min(old.len()).min(new.len());
+    let b = if new.len() > old.len() {
+        new.len()
+    } else {
+        maybe.end.clamp(a, new.len())
+    };
+    let span = changed_span(&old[a..b.min(old.len())], &new[a..b])?;
+    Some(span.start + a..span.end + a)
+}
+
+/// FxHash's step over a key's 32-bit words: the light picks key a few
+/// hundred float triples a frame, where SipHash's cost shows.
+#[derive(Default)]
+pub(super) struct BitsHasher(u64);
+
+impl BitsHasher {
+    fn add(&mut self, w: u64) {
+        self.0 = (self.0.rotate_left(5) ^ w).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+}
+
+impl std::hash::Hasher for BitsHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for c in bytes.chunks(4) {
+            let mut w = [0u8; 4];
+            w[..c.len()].copy_from_slice(c);
+            self.add(u64::from(u32::from_le_bytes(w)));
+        }
+    }
+
+    fn write_u32(&mut self, i: u32) {
+        self.add(u64::from(i));
+    }
+
+    fn write_usize(&mut self, i: usize) {
+        self.add(i as u64);
+    }
+}
+
+/// A map keyed by float bits, hashed by [`BitsHasher`].
+pub(super) type BitsMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<BitsHasher>>;
 
 /// Live snapshot entities: xmodels uploaded once with bind pose baked in,
 /// drawn with per-instance transforms streamed through one instance-step
@@ -555,6 +785,11 @@ pub(super) struct DynamicPass {
     pub(super) bone_mats: Vec<[f32; 16]>,
     /// Per instance, its index in `placed`.
     pub(super) instance_placed: Vec<usize>,
+    /// Per entry of `placed`, its posed boxes, kept while its model and
+    /// transform hold.
+    pub(super) placed_boxes: PlacedBoxes,
+    /// The instances' entity draws in draw order, before the view cull.
+    pub(super) ent_sorted: EntSorted,
     /// Per instance, where its lights are picked.
     pub(super) light_origins: Vec<glam::Vec3>,
     /// CoD4: each instance's posed world box (mins, maxs), as
@@ -618,6 +853,83 @@ pub(super) struct Placed {
     pub(super) lod_origin: glam::Vec3,
     pub(super) light_origin: glam::Vec3,
     pub(super) shader_time: Option<f32>,
+}
+
+/// Per entry of `DynamicPass::placed`, its posed world box ([`posed_box`],
+/// CoD4 only) and its view box ([`instance_seen`]), with the model and
+/// transform they were posed from. An unskinned entry whose two hold
+/// keeps its boxes: they read no other instance's bones.
+#[derive(Default)]
+pub(super) struct PlacedBoxes {
+    /// Whether `light` was posed (a CoD4 map).
+    cod4: bool,
+    boxes: Vec<PlacedBox>,
+}
+
+struct PlacedBox {
+    handle: usize,
+    transform: [u32; 16],
+    light: Option<(glam::Vec3, glam::Vec3)>,
+    /// Grown as [`instance_seen`] grows it.
+    view: Option<(glam::Vec3, glam::Vec3)>,
+}
+
+impl PlacedBoxes {
+    /// Poses each of `d.placed` that did not hold since the last call.
+    fn update(d: &mut DynamicPass) {
+        let cod4 = d.cod4_light.is_some();
+        let mut boxes = std::mem::take(&mut d.placed_boxes);
+        if boxes.cod4 != cod4 {
+            boxes = PlacedBoxes {
+                cod4,
+                boxes: Vec::new(),
+            };
+        }
+        boxes.boxes.truncate(d.placed.len());
+        for (i, p) in d.placed.iter().enumerate() {
+            let transform = p.raw.transform.map(f32::to_bits);
+            let h = &d.handles[p.handle];
+            let rigid = p.raw.bone_base == 0
+                && [&h.bone_boxes, &h.view_boxes].iter().all(|b| {
+                    b.last()
+                        .is_none_or(|b| usize::from(b.0) < MAX_INSTANCE_BONES)
+                });
+            let held = boxes
+                .boxes
+                .get(i)
+                .filter(|b| rigid && b.handle == p.handle && b.transform == transform);
+            if held.is_some() && !cfg!(test) {
+                continue;
+            }
+            let view = posed_box_of(d, p, &h.view_boxes).map(|(lo, hi)| {
+                let origin = glam::Vec3::from_slice(&p.raw.transform[12..15]);
+                let reach = (lo - origin).abs().max((hi - origin).abs()).max_element();
+                let grow = glam::Vec3::splat(1.0 + reach * 0.01);
+                (lo - grow, hi + grow)
+            });
+            let b = PlacedBox {
+                handle: p.handle,
+                transform,
+                light: if cod4 { posed_box(d, p) } else { None },
+                view,
+            };
+            #[cfg(test)]
+            if let Some(h) = held {
+                let bits = |b: Option<(glam::Vec3, glam::Vec3)>| {
+                    b.map(|(lo, hi)| [lo.to_array(), hi.to_array()].map(|v| v.map(f32::to_bits)))
+                };
+                assert!(
+                    bits(h.light) == bits(b.light) && bits(h.view) == bits(b.view),
+                    "kept box {i}"
+                );
+            }
+            match boxes.boxes.get_mut(i) {
+                Some(old) => *old = b,
+                None => boxes.boxes.push(b),
+            }
+        }
+        d.placed_boxes = boxes;
+    }
 }
 
 /// F3's `lod` counts for the dynamic models.
@@ -933,6 +1245,37 @@ impl Renderer {
         surfaces: &[model::Surface],
         materials: &[String],
     ) -> Option<usize> {
+        let gamma = self.image_gamma;
+        if fs.game() == vcod_common::game::Game::Cod2 {
+            // CoD2's and CoD4's stages bind their images by path: a skin
+            // image only a `$texturename` stage or the fallback reads
+            // uploads, the others bind white, their pak read marked
+            for skin in drawn_skins(std::iter::once((surfaces, materials))) {
+                if self.dynamic.skin_groups.contains_key(&skin) {
+                    continue;
+                }
+                let ent = self.dynamic.materials.skin(
+                    &self.device,
+                    &self.queue,
+                    (fs, &self.model_images),
+                    &self.shader_lib,
+                    gamma.as_ref(),
+                    &skin,
+                );
+                let g = match ent.reads_skin_image() {
+                    true => {
+                        let (img, levels) = self.skin_image(fs, &skin);
+                        let view = upload_levels(&self.device, &self.queue, &skin, &img, &levels);
+                        vm_skin_group(&self.device, &self.vm_pass, &view)
+                    }
+                    false => {
+                        super::prop_skin::mark_colour_map(fs, self.shader_lib.get(&skin));
+                        self.dynamic.materials.images[0].clone()
+                    }
+                };
+                self.dynamic.skin_groups.insert(skin, g);
+            }
+        }
         let mut groups = std::mem::take(&mut self.dynamic.skin_groups);
         let uploaded = upload_vm_model(
             &self.device,
@@ -953,7 +1296,6 @@ impl Renderer {
         );
         self.dynamic.skin_groups = groups;
         let uploaded = uploaded?;
-        let gamma = self.image_gamma;
         let skins: Vec<_> = uploaded
             .skins
             .iter()
@@ -1041,8 +1383,10 @@ impl Renderer {
 
     /// Picks each placed instance's LOD from the view; one past its last LOD
     /// is not drawn (docs/research/xmodel-v14-format.md, "LOD selection").
-    /// Entities carry no refEntity scale. `time` is the frame's material
-    /// clock, which an instance's own `shader_time` is taken against.
+    /// Entities carry no refEntity scale. `time` is the frame's unwrapped
+    /// clock, which an instance's own `shader_time` is taken against: the
+    /// offset slides a stage uv whose phase is the unwrapped time's, and
+    /// [`gpu_time`]'s wrap is a whole number of every shader cycle.
     pub(super) fn pick_dynamic_lods(&mut self, eye: glam::Vec3, view: &model::LodView, time: f32) {
         let d = &mut self.dynamic;
         d.instances.clear();
@@ -1051,10 +1395,8 @@ impl Renderer {
         d.light_origins.clear();
         d.light_boxes.clear();
         // CoD4: each instance's posed world box picks its spot or omni light
-        let boxes: Vec<_> = match d.cod4_light {
-            Some(_) => d.placed.iter().map(|p| posed_box(d, p)).collect(),
-            None => Vec::new(),
-        };
+        PlacedBoxes::update(d);
+        let boxes = &d.placed_boxes;
         let mut counts = LodCounts::default();
         for (i, p) in d.placed.iter().enumerate() {
             let h = &d.handles[p.handle];
@@ -1076,24 +1418,30 @@ impl Renderer {
             d.instance_src.push(p.src);
             d.instance_placed.push(i);
             d.light_origins.push(p.light_origin);
-            if let Some(&b) = boxes.get(i) {
-                d.light_boxes
-                    .push(b.unwrap_or((p.light_origin, p.light_origin)));
+            if boxes.cod4 {
+                d.light_boxes.push(
+                    boxes.boxes[i]
+                        .light
+                        .unwrap_or((p.light_origin, p.light_origin)),
+                );
             }
         }
         d.lod_counts = counts;
     }
 
     /// Picks each instance's lights (one pick per distinct origin, so a
-    /// player's parts share one) and points its `light_set` at them.
-    pub(super) fn pick_entity_lights(&mut self) -> Vec<GpuLightSet> {
+    /// player's parts share one), points its `light_set` at them and writes
+    /// the sets that changed; returns the bytes written.
+    pub(super) fn write_entity_lights(&mut self) -> usize {
         let d = &mut self.dynamic;
         if let Some(c4) = &mut d.cod4_light {
             // CoD4: a lit model's set is its own block, one per distinct
             // lighting origin as `R_AllocModelLighting`'s cache keeps, over
             // the box its instances span (a scene entity's)
-            let mut origins: Vec<(glam::Vec3, [glam::Vec3; 2])> = Vec::new();
-            let mut seen: HashMap<[u32; 3], u32> = HashMap::new();
+            let n = d.instances.len();
+            let mut origins: Vec<(glam::Vec3, [glam::Vec3; 2])> = Vec::with_capacity(n);
+            let mut seen: BitsMap<[u32; 3], u32> =
+                BitsMap::with_capacity_and_hasher(n, Default::default());
             let ents = d
                 .instances
                 .iter_mut()
@@ -1112,17 +1460,24 @@ impl Renderer {
                 let b = &mut origins[raw.light_set as usize].1;
                 *b = [b[0].min(lo), b[1].max(hi)];
             }
-            let (mut sets, blocks) = c4.frame_sets(&origins, self.identity_light);
-            d.materials.cod4_volume.write_blocks(&self.queue, &blocks);
-            if sets.is_empty() {
-                sets.push(GpuLightSet::default());
-            }
-            return sets;
+            let changed = c4.frame_sets(&origins, self.identity_light);
+            d.materials
+                .cod4_volume
+                .write_blocks(&self.queue, c4.blocks(), changed.clone());
+            return match c4.sets() {
+                [] => d
+                    .light_written
+                    .write(&self.queue, &d.light_buf, &[GpuLightSet::default()]),
+                sets => d
+                    .light_written
+                    .write_within(&self.queue, &d.light_buf, sets, changed),
+            };
         }
+        let mut sets = Vec::new();
+        let mut seen: BitsMap<[u32; 3], u32> =
+            BitsMap::with_capacity_and_hasher(d.instances.len(), Default::default());
         if let Some(c2) = &d.cod2_light {
             // CoD2: a lit model's light set is its grid sample
-            let mut sets = Vec::new();
-            let mut seen: HashMap<[u32; 3], u32> = HashMap::new();
             for ((model, raw), origin) in d.instances.iter_mut().zip(&d.light_origins) {
                 if !d.models[*model].lit {
                     raw.light_set = 0;
@@ -1134,34 +1489,27 @@ impl Renderer {
                     sets.len() as u32 - 1
                 });
             }
-            if sets.is_empty() {
-                sets.push(GpuLightSet::default());
+        } else if let Some(lighting) = d.lighting.as_mut() {
+            let scene =
+                model_scene_lights(&d.scene_lights, &d.entity_scene_lights, self.dynamic_light);
+            for ((model, raw), origin) in d.instances.iter_mut().zip(&d.light_origins) {
+                // retail picks only for a model with a lit surface (0x50e3e0)
+                if !d.models[*model].lit {
+                    raw.light_set = 0;
+                    continue;
+                }
+                let key = origin.to_array().map(f32::to_bits);
+                raw.light_set = *seen.entry(key).or_insert_with(|| {
+                    let l = lighting.entity_lights(*origin, &scene);
+                    sets.push(entity_light::pack(&l, None, self.identity_light));
+                    sets.len() as u32 - 1
+                });
             }
-            return sets;
-        }
-        let Some(lighting) = d.lighting.as_mut() else {
-            return vec![GpuLightSet::default()];
-        };
-        let scene = model_scene_lights(&d.scene_lights, &d.entity_scene_lights, self.dynamic_light);
-        let mut sets = Vec::new();
-        let mut seen: HashMap<[u32; 3], u32> = HashMap::new();
-        for ((model, raw), origin) in d.instances.iter_mut().zip(&d.light_origins) {
-            // retail picks only for a model with a lit surface (0x50e3e0)
-            if !d.models[*model].lit {
-                raw.light_set = 0;
-                continue;
-            }
-            let key = origin.to_array().map(f32::to_bits);
-            raw.light_set = *seen.entry(key).or_insert_with(|| {
-                let l = lighting.entity_lights(*origin, &scene);
-                sets.push(entity_light::pack(&l, None, self.identity_light));
-                sets.len() as u32 - 1
-            });
         }
         if sets.is_empty() {
             sets.push(GpuLightSet::default());
         }
-        sets
+        d.light_written.write(&self.queue, &d.light_buf, &sets)
     }
 }
 
@@ -1328,16 +1676,10 @@ pub(super) fn instance_seen(
     {
         return true;
     }
-    let p = &d.placed[d.instance_placed[k]];
-    let Some((lo, hi)) = posed_box_of(d, p, &d.handles[p.handle].view_boxes) else {
-        return true;
-    };
-    let origin = glam::Mat4::from_cols_array(&p.raw.transform)
-        .w_axis
-        .truncate();
-    let reach = (lo - origin).abs().max((hi - origin).abs()).max_element();
-    let grow = glam::Vec3::splat(1.0 + reach * 0.01);
-    frustum.intersects_aabb(lo - grow, hi + grow)
+    match d.placed_boxes.boxes[d.instance_placed[k]].view {
+        Some((lo, hi)) => frustum.intersects_aabb(lo, hi),
+        None => true,
+    }
 }
 
 /// Group 0 is the camera, group 1 the viewmodel skin layout (the uploaded
@@ -1432,6 +1774,8 @@ pub(super) fn create_dynamic_pass(
         light_boxes: Vec::new(),
         instance_placed: Vec::new(),
         light_buf,
+        placed_boxes: PlacedBoxes::default(),
+        ent_sorted: EntSorted::default(),
         light_written: Written::default(),
         instance_written: Written::default(),
         bone_written: Written::default(),
@@ -1632,13 +1976,7 @@ mod light_tests {
                 primary: 0,
             }
         }));
-        let c4 = Cod4EntityLight {
-            lighter,
-            sun_dir: glam::Vec3::Z,
-            sun_colour: glam::Vec3::ONE,
-            lights: Vec::new(),
-            kept: Vec::new(),
-        };
+        let c4 = Cod4EntityLight::new(lighter, glam::Vec3::Z, glam::Vec3::ONE, Vec::new());
         (c4, n)
     }
 
@@ -1649,26 +1987,63 @@ mod light_tests {
 
     /// A held scene looks nothing up; an origin or box that moved, or one
     /// new, is looked up alone, and every set and block is the one a fresh
-    /// lookup gives in its place.
+    /// lookup gives in its place. The changed range covers each set that
+    /// moved.
     #[test]
     fn cod4_lookups_hold_while_their_origin_and_box_do() {
         let (mut c4, n) = counting();
         let first: Vec<_> = (0..5).map(|i| at(i as f32, 2.0)).collect();
-        let a = c4.frame_sets(&first, 0.5);
+        assert_eq!(c4.frame_sets(&first, 0.5), 0..5);
         assert_eq!(n.swap(0, Ordering::Relaxed), 5);
-        assert!(c4.frame_sets(&first, 0.5) == a);
+        let a = (c4.sets().to_vec(), c4.blocks().to_vec());
+        assert_eq!(c4.frame_sets(&first, 0.5), 5..5, "held");
+        assert!((c4.sets(), c4.blocks()) == (&a.0[..], &a.1[..]));
         assert_eq!(n.swap(0, Ordering::Relaxed), 0, "held");
         // one new in front shifts every set's block; a box grew
         let mut next = vec![at(9.0, 2.0)];
         next.extend_from_slice(&first);
         next[3].1[0].z -= 1.0;
-        let b = c4.frame_sets(&next, 0.5);
+        assert_eq!(c4.frame_sets(&next, 0.5), 0..6);
         assert_eq!(n.swap(0, Ordering::Relaxed), 2);
         let (fresh, _) = counting();
-        for (i, &(o, bx)) in next.iter().enumerate() {
-            let (set, texels) = fresh.set(o, bx, i as u32, 0.5);
-            assert!(b.0[i] == set && b.1[i] == texels, "set {i}");
-        }
+        let check = |c4: &Cod4EntityLight, list: &[(glam::Vec3, [glam::Vec3; 2])], identity| {
+            assert_eq!(c4.sets().len(), list.len());
+            for (i, &(o, bx)) in list.iter().enumerate() {
+                let (set, texels) = fresh.set(o, bx, i as u32, identity);
+                assert!(c4.sets()[i] == set && c4.blocks()[i] == texels, "set {i}");
+            }
+        };
+        check(&c4, &next, 0.5);
+        // one moved in place: that set alone; the list shrank: none
+        next[2].0.x += 1.0;
+        assert_eq!(c4.frame_sets(&next, 0.5), 2..3);
+        check(&c4, &next, 0.5);
+        assert_eq!(c4.frame_sets(&next[..4], 0.5), 4..4);
+        check(&c4, &next[..4], 0.5);
+        // a new identityLight repacks every set, looking none up
+        n.swap(0, Ordering::Relaxed);
+        assert_eq!(c4.frame_sets(&next[..4], 1.0), 0..4);
+        assert_eq!(n.swap(0, Ordering::Relaxed), 0);
+        check(&c4, &next[..4], 1.0);
+    }
+
+    /// Only the hint is compared; what lies past the old end is new.
+    #[test]
+    fn changed_span_within_compares_the_hint_alone() {
+        let old = [1u32, 2, 3, 4];
+        assert_eq!(changed_span_within(&old, &[1, 9, 3, 8], 1..4), Some(1..4));
+        assert_eq!(changed_span_within(&old, &[1, 9, 3, 4], 1..2), Some(1..2));
+        assert_eq!(changed_span_within(&old, &old, 4..4), None);
+        assert_eq!(changed_span_within(&old, &[1, 2], 2..2), None);
+        assert_eq!(
+            changed_span_within(&old, &[1, 2, 3, 4, 5, 6], 6..6),
+            Some(4..6)
+        );
+        assert_eq!(
+            changed_span_within(&old, &[1, 7, 3, 4, 5], 1..2),
+            Some(1..5)
+        );
+        assert_eq!(changed_span_within(&[], &[5u32], 0..0), Some(0..1));
     }
 
     #[test]

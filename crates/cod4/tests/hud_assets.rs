@@ -84,6 +84,16 @@ fn hud_assets_come_out_of_the_ui_zones() {
     assert_eq!(clip("rpg_mp"), (4, 1));
     assert_eq!(clip("m60e4_mp"), (5, 100));
     assert_eq!(clip("gl_m16_mp"), (6, 1));
+    // Kind 6 draws the alt weapon's clip: the launcher's is the rifle's
+    // magazine (cod4-hud.md 9).
+    assert_eq!(a.weapon_hud["gl_m16_mp"].alt_weapon, "m16_gl_mp");
+    let alt6: Vec<_> = a
+        .weapon_hud
+        .values()
+        .filter(|d| d.ammo_counter_clip == 6)
+        .map(|d| a.weapon_hud.get(&d.alt_weapon).map(|t| t.ammo_counter_clip))
+        .collect();
+    assert!(alt6.iter().all(|k| matches!(k, Some(1..=5))), "{alt6:?}");
     for m in [
         "ammo_counter_bullet",
         "ammo_counter_riflebullet",

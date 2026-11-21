@@ -435,6 +435,11 @@ pub(crate) trait BotWorld {
     fn fall_kills(&self, _slot: usize) -> Option<f32> {
         None
     }
+    /// Whether pmove's climb is under way for the body in `slot`
+    /// ([`crate::nav::Follower::climbing`]); never by default.
+    fn climbing(&self, _slot: usize) -> bool {
+        false
+    }
     /// The graph nodes the follower of the bot in `slot` keeps off; none
     /// by default (only UO's parked vehicles block nodes).
     fn blocked_nodes(&self, _slot: usize) -> Arc<[u32]> {
@@ -1530,7 +1535,8 @@ fn sense<W: BotWorld>(
         .copied()
         .filter(|p| bot.is_none_or(|b| !b.passes_over(*p)))
         .collect();
-    view.survive.heal = super::retreat::nearest_pack(&view, &open, heal_at);
+    view.survive.heal =
+        super::retreat::nearest_pack(&view, &open, heal_at, w.driver().nav.as_deref());
     let held = w.driver_mut().sidesteps.remove(&slot);
     if let Some(e) = enemy {
         (view.friend_in_line, view.sidestep) = w.friend_in_line(slot, e.origin, teams, held);
@@ -2013,6 +2019,7 @@ struct RouteIn {
     body: Option<Body>,
     ps: Option<vcod_common::pmove::PlayerState>,
     fall_kills: Option<f32>,
+    climbing: bool,
 }
 
 /// [`RouteIn`] for the bot in `slot` as its route starts, its stuck flag
@@ -2037,6 +2044,7 @@ fn route_in<W: BotWorld>(w: &mut W, slot: usize) -> RouteIn {
         body: w.body(slot),
         ps: w.move_ps(slot),
         fall_kills: w.fall_kills(slot),
+        climbing: w.climbing(slot),
     }
 }
 
@@ -2232,14 +2240,14 @@ fn route_core<W: BotWorld>(
         follower.stuck();
     }
     let ps = input.ps;
-    let on_ground = ps.as_ref().is_some_and(|ps| ps.on_ground);
+    follower.climbing = input.climbing;
     if W::MANTLE_YIELDS {
         let others: Vec<(Vec3, Vec3)> = standing
             .iter()
             .filter(|c| c.0 != slot)
             .map(|c| (c.1, c.2))
             .collect();
-        if follower.mantle_held(g, view.origin.into(), on_ground, &others) {
+        if follower.mantle_held(g, view.origin.into(), &others) {
             follower.stuck();
         }
     }
@@ -2505,6 +2513,7 @@ fn plan<W: BotWorld>(
                 body: bodies[*slot],
                 ps: w.move_ps(*slot),
                 fall_kills: w.fall_kills(*slot),
+                climbing: w.climbing(*slot),
             };
             (*slot, view, covers.and_then(|c| c.get(i)), input)
         })

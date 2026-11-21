@@ -351,6 +351,7 @@ fn decode(
         safe: Vec::new(),
         ladder_boxes,
         rules,
+        falls: super::falls(),
         step,
     };
     g.index_components();

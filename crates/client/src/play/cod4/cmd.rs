@@ -175,8 +175,9 @@ impl Cod4Session {
         }
         if send_due(last_send) {
             *last_send = Some(now);
+            // `cl.clientArchive`: our predicted state at each packet's time.
             if let Some(r) = row {
-                self.archive.add(r);
+                conn.client.archive.add(r);
             }
             let from = self.pending.len().saturating_sub(MAX_PACKET_CMDS);
             conn.send(&self.pending[from..])?;

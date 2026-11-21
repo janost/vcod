@@ -100,6 +100,7 @@ are its `KNOBS` table's.
 | `VCOD_VOICE_INPUT=tone` | `vcod` | A 440 Hz tone in place of the microphone (cod2-voice.md). |
 | `VCOD_NO_DYNENTS=1` | `vcod` | CoD4 dynamic entities not drawn, for a frame time A/B (cod4-client-perf.md 41); F3's `cod4 dynents` line counts them. |
 | `VCOD_PERF_TURN=<deg/s>` | `vcod` | Turns a CoD4 spectator's view on its own (`tools/cod4_perf.sh`'s `TURN`). |
+| `VCOD_WRITE_ALL=1` | `vcod` | The entity light sets, instances, bones and CoD4 volume blocks written whole each frame, not their changed span, for the `finish` A/B (cod4-client-perf.md 42.1). |
 | `VCOD_C4_DRAW_ORDER=0`, `VCOD_C4_ENTITY_CULL=0`, `VCOD_C4_FLOATZ=0`, `VCOD_WORLD_BUNDLES=0`, `VCOD_ENT_BUNDLES=0` | `vcod` | CoD4 renderer A/B switches back to the older path, each named in cod4-client-perf.md. |
 | `VCOD_LIT_SPLIT=0` | `vcod` | CoD2 lit draws not split by light kind (cod2-client-perf.md). |
 | `VCOD_SOAK=<path>`, `VCOD_SOAK_SEED=<n>` | `vcod` | The CoD1 soak player and its seed (`play::cod1_soak`, `tools/cod1_soak.sh`). |

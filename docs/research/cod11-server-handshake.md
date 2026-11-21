@@ -2452,6 +2452,85 @@ Defaults and order:
   on disk makes the download land as `<name>.%08x.pk3` (lowercase hex) and
   adds ` (local file exists with wrong checksum)` to `Need paks:`. VERIFIED.
 
+### Loose files
+
+`FS_FOpenFileRead` walks the search path in order and tries a
+directory's own file (`fopen` of `<path>/<game>/<name>`) where the
+directory entry stands: under its paks, over every lower directory's and
+every `localized_*` pak (the order above). Addresses are the Windows
+clients unless named.
+
+- 1.1 `CoDMP.exe` 0x429d1a..0x429da5: when `fs_restrict` (cvar pointer
+  0x162d760, `Cvar_Get` at 0x42ce85) or `fs_numServerPaks` (0x162d764,
+  written by `FS_PureServerSetLoadedPaks` at 0x43c4de) is non-zero, a
+  directory is skipped unless the name ends in `.cfg`, `.menu`, `.svg`,
+  `.game`, `.dm_PROTOCOL_VERSION` or `.dat`, compared case-blind at the
+  name's end. The demo suffix is that literal string (0x5646a4), so a
+  pure path never takes a `.dm_1`. VERIFIED (the instructions, the
+  strings). cod_lnxded's list reads `.dm_1` (section "`fs_restrict`").
+- 1.5 `CoDMP.exe` 0x42becd..0x42bef6 and UO `CoDUOMP.exe`
+  0x42da40..0x42da68 make the same test on a non-localized directory
+  through 0x42bc00 / 0x42d6f0, which takes the extension (what follows
+  the last `.` of the last path component, 0x42d6b0) and passes `cfg`,
+  `menu` or `dat`, case-blind (`.dm_NETWORK_PROTOCOL_VERSION`, with its
+  dot, never equals an extension). UO's pointers: `fs_restrict` 0x49311e0
+  (`Cvar_Get` at 0x4308df), `fs_numServerPaks` 0x49311e4 (written at
+  0x4413f8). VERIFIED (the instructions, the strings).
+- On an unpure path every directory gives every file. VERIFIED (the
+  branches above fall through to the `fopen`).
+- `FS_ListFilteredFiles` lists a directory on an unpure path only, or on
+  a pure one for the extension `svg` (1.1 0x42b59c..0x42b5d8, UO
+  0x42f194..0x42f1d1). VERIFIED (the instructions). Its order within a
+  directory is `Sys_ListFiles`'s (0x460770). INFERRED that it comes back
+  in name order, as a Windows directory listing does.
+- A loose read of a type outside that list (1.1 0x42a0b3..0x42a11c:
+  `.cfg`, `.menu`, `.game`, `.dm_PROTOCOL_VERSION`, `.dat`, the pure list
+  less `.svg`; 1.5 0x42c293..0x42c2ad and UO 0x42ddf5..0x42de0d through
+  0x42bc00 / 0x42d6f0, a localized directory exempt) sets `fs_fakeChkSum`
+  to `rand() + 1` (1.1 0x1631788, 1.5 0x1908e68, UO 0x4935308). VERIFIED
+  (the instructions, the strings). So on a pure path only 1.1's `.svg`
+  sets it. `FS_ReferencedPakPureChecksums` appends it as `%i ` after each
+  of its three passes, outside the key: `cp <cgame> <fake> <ui> <fake> @
+  <paks> <fake> <key>` (1.1 0x43c1ad..0x43c216, the pass counter 2 down to
+  0 from 0x43c06e; UO 0x4410ad). VERIFIED (the instructions). Its second
+  token is then no `ui` checksum, and a pure server sets `pureAuthentic`
+  2 ("The server's check"). INFERRED (the two read together).
+- What clears it differs. 1.1's `FS_Shutdown` (0x42cd68), run by
+  `FS_Restart` (0x42d2b6): the gamestate parse restarts on a modified
+  `fs_game` or a feed other than the last restart's (0x416258..0x416273,
+  skipped while the word at `[0x163a23c]+0x20` is set, INFERRED
+  `sv_running`), `CL_DownloadsComplete` after a download (0x41002a) and
+  `vid_restart` on the same test (0x40fd66). VERIFIED (the instructions).
+  1.5 and UO clear it only in `FS_PureServerSetLoadedPaks` taking a
+  non-empty list other than the one it holds (1.5 0x43f268..0x43f2ab, UO
+  0x4413f6..0x441439; the same list returns at UO 0x4412fa..0x441320).
+  VERIFIED (the instructions). So a 1.1 client that read such a file in
+  the menu and reconnects to a pure server on the same map (same feed, no
+  restart) sends it. INFERRED.
+- vcod models the fake checksum for CoD1 (`Pk3Fs::fake_checksum`, the
+  `cp` of `pak_checksum::pure_command`): a search path reopen hands it on,
+  and the client clears it at retail's points, 1.1's off the gamestate's
+  feed and `fs_game`, after a download and at an `fs_game` switch, 1.5's
+  and UO's at a new pure list.
+- UO also remembers the last pak that held the name but failed
+  `FS_PakIsPure`, and when nothing on the path gave the file it drops the
+  game: `Com_Error(1, "EXE_UNPURECLIENTDETECTED\x15\n%s")` with the pak's
+  path (0x42da06..0x42da20, 0x42dadc..0x42db1e). Only an open that takes
+  a handle remembers; the handle-less test (0x42d78d..0x42d870) does not.
+  VERIFIED (the instructions, the string 0x596b60). vcod leaves such a
+  pak off the search path, so the name reads as missing, and does not
+  model the drop: it would rest on retail's exact sequence of opens, and
+  vcod's are its own (existence probes, parallel prefetch, reads retail
+  never makes), so a player with a third-party pak would be dropped where
+  retail keeps him and kept where retail drops him.
+- vcod (`pk3::Pk3Fs`): the directories' files are indexed at open, keyed
+  case-blind as the paks are, and ranked as above; a pure search path
+  (`sv_paks` given) takes 1.1's suffixes or 1.5 and UO's extensions and
+  lists no directory but for `svg`. A loose file marks no pak referenced.
+  `--vanilla` and the tests' stock trees read none. A file written after
+  the open is not seen until the next one; retail opens it live. On Linux
+  the dedicated servers' `fopen` matches case; vcod matches case-blind.
+
 ### The server's check
 
 - `cp` is `SV_VerifyPaks_f` (`0x808674c`) in the ucmd table at `0x80e2f5c`

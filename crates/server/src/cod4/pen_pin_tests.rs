@@ -49,7 +49,7 @@ impl Trio {
         }
         sv.load(Some(&install)).unwrap();
         let class = "mr {sid} 15 assault_mp,0";
-        let probes = vec![
+        let mut probes = vec![
             Probe::new(
                 "a",
                 0,
@@ -72,6 +72,11 @@ impl Trio {
                 &[(1_000, "mr {sid} 8 axis"), (2_500, class)],
             ),
         ];
+        // Their cmds start at the placing, well before the walker's spawn
+        // that `replay_from` defaults to.
+        for p in probes.iter_mut() {
+            p.replay_from = 0;
+        }
         let mut t = Trio {
             sv,
             probes,
@@ -178,6 +183,73 @@ impl Trio {
 const IN_ROOM: [f32; 3] = [207.0, 2250.0, 296.0];
 const A_SPOT: [f32; 3] = [207.0, 2380.0, 292.0];
 const B_SPOT: [f32; 3] = [207.0, 2500.0, 285.0];
+
+/// A painful landing takes its percent of max health through
+/// `ClientEvents`' landing arm (cod4-combat.md 16): B, at 100 of 100,
+/// loses 40 to a landing of 40, nothing to one of 0, and dies to one of
+/// 100 (1.1 of max health). Before the arm he lost nothing.
+#[test]
+fn a_painful_landing_takes_its_share_of_max_health() {
+    let Some(mut t) = Trio::new(&[("scr_player_maxhealth", "100")]) else {
+        return;
+    };
+    t.place([(A_SPOT, -90.0), (B_SPOT, -90.0), (IN_ROOM, 90.0)]);
+    let level = t.level();
+    let health = |l: &Cod4Level| l.rt.client_vitals(B).health;
+    assert_eq!(health(level), 100);
+    level.land_hurt_for_test(B, 40);
+    assert_eq!(health(level), 60);
+    level.land_hurt_for_test(B, 0);
+    assert_eq!(health(level), 60);
+    level.land_hurt_for_test(B, 100);
+    assert!(health(level) <= 0, "health {}", health(level));
+}
+
+/// A fall end to end (cod4-combat.md 16): B set 200 over the open ground
+/// west of the town (floor 264.125, nothing over it for 260) falls under
+/// his own cmds, lands with `EV_LANDING_PAIN_*` (a drop between 1.7's
+/// `bg_fallDamageMinHeight` 128 and `MaxHeight` 300) and loses what
+/// [`fall_damage`] makes of its percent. Over the yard by the plate the
+/// same 200 starts the box in a playerclip brush, where the body stays
+/// put as `PM_SlideMove` leaves an all-solid one.
+///
+/// [`fall_damage`]: crate::game::cod4::combat::fall_damage
+#[test]
+fn a_drop_of_200_takes_its_share_of_max_health() {
+    let Some(mut t) = Trio::new(&[("scr_player_maxhealth", "100")]) else {
+        return;
+    };
+    t.place([(A_SPOT, -90.0), (B_SPOT, -90.0), (IN_ROOM, 90.0)]);
+    const FLOOR: f32 = 264.125;
+    let eye = 200.0 + t.level().pm_state(B).unwrap().view_height_current - 1.0;
+    t.level()
+        .set_view_pos(B, [-1400.0, 1200.0, FLOOR + eye], [0.0, -90.0, 0.0]);
+    let before = t.level().rt.client_vitals(B).health;
+    let pain =
+        vcod_cod4::pmove::ev::LANDING_PAIN_FIRST..=vcod_cod4::pmove::ev::LANDING_PAIN_FIRST + 28;
+    let mut landing = None;
+    for _ in 0..40 {
+        let seq = t.level().pm_state(B).unwrap().event_sequence;
+        let t0 = t.sv.core.sv_time_ms;
+        t.run_to(t0 + FRAME_MS);
+        let ps = t.level().pm_state(B).unwrap();
+        landing = landing.or_else(|| {
+            (seq..ps.event_sequence)
+                .map(|k| (k & 3) as usize)
+                .find(|&k| pain.contains(&ps.events[k]))
+                .map(|k| (ps.event_parms[k] as i32, ps.origin.z))
+        });
+    }
+    let (parm, z) = landing.expect("a painful landing");
+    assert!((z - FLOOR).abs() < 1.0, "landed at {z}");
+    assert!((30..60).contains(&parm), "percent {parm}");
+    let lost = before - t.level().rt.client_vitals(B).health;
+    assert_eq!(
+        Some(lost),
+        crate::game::cod4::combat::fall_damage(parm, 100),
+        "percent {parm}"
+    );
+}
 
 /// Rounds north along x 207 through the plate, A's body, B's body and
 /// the yard's far concrete wall, and the variants: perks, weapons,
@@ -398,19 +470,19 @@ fn melee_swings_hit_miss_and_pass_behind() {
 }
 
 const MELEE: &str = "\
-ahead: lost [135, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [207.0, 2281.4976, 297.0] events [37, 0, 0, 0] parms [0, 0, 0, 0]
-side: lost [138, 0, 0] hits [(2, 0, 6)] te 35 parm 1 other 0 weapon 27 at [215.01053, 2301.2676, 288.98947] events [37, 37, 0, 0] parms [0, 0, 0, 0]
+ahead: lost [135, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [207.0, 2281.4976, 296.125] events [37, 0, 0, 0] parms [0, 0, 0, 0]
+side: lost [138, 0, 0] hits [(2, 0, 6)] te 35 parm 1 other 0 weapon 27 at [215.01053, 2301.2676, 288.11444] events [37, 37, 0, 0] parms [0, 0, 0, 0]
 edge: lost [0, 0, 0] hits [] events [37, 37, 0, 0] parms [0, 0, 0, 0]
 edge near: lost [0, 0, 0] hits [] events [37, 37, 0, 0] parms [0, 0, 0, 0]
 far right: lost [0, 0, 0] hits [] events [37, 37, 0, 0] parms [0, 0, 0, 0]
-far ahead: lost [136, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [207.0, 2310.835, 297.0] events [37, 37, 37, 0] parms [0, 0, 0, 0]
-reach 2322: lost [138, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [207.0, 2312.0305, 297.0] events [37, 37, 37, 37] parms [0, 0, 0, 0]
+far ahead: lost [136, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [206.99998, 2311.1252, 296.125] events [37, 37, 37, 0] parms [0, 0, 0, 0]
+reach 2322: lost [138, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [206.99998, 2312.5745, 296.125] events [37, 37, 37, 37] parms [0, 0, 0, 0]
 reach 2326: lost [0, 0, 0] hits [] events [37, 37, 37, 37] parms [0, 0, 0, 0]
 reach right: lost [0, 0, 0] hits [] events [37, 37, 37, 37] parms [0, 0, 0, 0]
 cross: lost [0, 0, 0] hits [] events [37, 37, 37, 37] parms [0, 0, 0, 0]
-turned: lost [138, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [207.0, 2286.1614, 297.0] events [37, 37, 37, 37] parms [0, 0, 0, 0]
-behind: lost [0, 0, 0] hits [] te 36 parm 1 other 1022 weapon 27 at [207.0, 2331.875, 297.0] events [37, 37, 37, 37] parms [0, 0, 0, 0]
-plate: lost [0, 0, 0] hits [] te 36 parm 1 other 1022 weapon 27 at [207.0, 2331.875, 297.0] events [37, 37, 37, 37] parms [0, 0, 0, 0]
+turned: lost [138, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [207.0, 2286.1614, 296.125] events [37, 37, 37, 37] parms [0, 0, 0, 0]
+behind: lost [0, 0, 0] hits [] te 36 parm 1 other 1022 weapon 27 at [206.99998, 2331.875, 296.125] events [37, 37, 37, 37] parms [0, 0, 0, 0]
+plate: lost [0, 0, 0] hits [] te 36 parm 1 other 1022 weapon 27 at [206.99998, 2331.875, 296.125] events [37, 37, 37, 37] parms [0, 0, 0, 0]
 nothing: lost [0, 0, 0] hits [] events [37, 37, 37, 37] parms [0, 0, 0, 0]
 ";
 
@@ -469,6 +541,8 @@ fn damage_playerstate_by_stance_and_flags() {
             set(&mut p.ps, "eFlags", e_flags);
             set(&mut p.ps, "pm_time", pm_time);
             set(&mut p.ps, "damageTimer", 0);
+            // The cmds' pmove widens it between rows.
+            set(&mut p.ps, "aimSpreadScale", 0);
         }
         l.rt.host.cod4_mut().damage_ops.push(Damage4 {
             slot: A,
@@ -517,7 +591,6 @@ fn damage_playerstate_by_stance_and_flags() {
         set(&mut p.ps, "pm_type", 0);
         set(&mut p.ps, "pm_flags", 0);
         set(&mut p.ps, "eFlags", 0);
-        set(&mut p.ps, "aimSpreadScale", 0);
         let t2 = t.sv.core.sv_time_ms + 600;
         t.run_to(t2);
     }

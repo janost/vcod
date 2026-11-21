@@ -100,6 +100,7 @@ Everything it counts comes off the script's `logPrint` lines (the
 | life | bodies | Mean life: bot-ticks playing over the lives they made up (a life still running at the end is left out). |
 | wounds, dead in 5 s | bodies | A life's first tick under 50 health while `BotBody::engaged`, and the share of those whose bot died within 5 s. |
 | retreats hurt, dry | bodies | `BotBody::retreating` going from 0 to 1 (hurt) or 2 (dry): retreats started (section 5). |
+| retreats ended | bodies | `BotBody::retreating` going back to 0, split by `BotBody::retreat_end` (`held` its time or a health item took over, `loaded`, `empty` reserve, `nocover`, `duty`, `timeout`), `cut` for one ended alive by none of those (a seat, the cvar), and `died-on-way` or `died-at-cover` for a body dead by then; `reached cover` is the share that stood at the cover first (section 5.2). |
 | cover hold, lean | `bot_cover_state` | Bot-ticks playing on a held cover spot, and with `ps.lean` off zero (section 4). |
 | answered | `D;`, bodies | Of the hits a bot takes from an enemy (one per attacker until answered or 1 s passes), the share it answers within 1 s: a tick after the hit's with `BotBody::firing` and that attacker as `BotBody::target`. Fire at someone else does not count; a bot killed inside the second has not answered. Printed with the hit count. |
 | blindsided | `K;`, bodies | Of a bot's deaths to an enemy, the share whose killer was never its `BotBody::target` that life, reaction delay included. Printed with the death count. |
@@ -122,7 +123,8 @@ Everything it counts comes off the script's `logPrint` lines (the
 
 Each match prints one line, then the totals by team, by skill and (arm
 one-sided) by arm; with several maps a block per map comes first. Each
-row prints seven lines: the log's columns, the bodies', the aim, the
+row prints eight lines: the log's columns, the bodies', the retreats'
+ends, the aim, the
 grenades and the clip, the peeks and hunts, the walking view, the fights.
 
 A change to bot behaviour reports its before and after on the same seeds,
@@ -264,6 +266,33 @@ first `exitLevel`, for a level's play over a rotation (2026-11-17,
 mp_carentan `tdm`, 4 bots, `scr_tdm_timelimit 1`, `LEVELS=2`: two levels,
 one `W;` each, the scores of both summed). VERIFIED (measured).
 
+### 3.1 Cover and retreat off at easy (2026-11-21, not shipped)
+
+Tried: `Skill` flags turning cover spots (section 4) and the retreat
+(section 5) off at level 0 only, levels 1 to 3 as before, so a default
+server plays the same. VERIFIED (measured, ours, release, master
+af564b3c7 plus section 5.3, `dm`, `SKILLS=0,1,2,3,0,1,2,3`, 12000 ticks,
+seeds 1..=8, one row per level before and after):
+
+| Map, level | Kills | Deaths | K/D | Life s |
+|---|---|---|---|---|
+| mp_carentan 0 before | 286 | 493 | 0.58 | 16.5 |
+| mp_carentan 0 after | 384 | 597 | 0.64 | 13.0 |
+| mp_carentan 1 before / after | 368 / 391 | 472 / 457 | 0.78 / 0.86 | 17.3 / 17.7 |
+| mp_depot 0 before | 247 | 420 | 0.59 | 19.9 |
+| mp_depot 0 after | 330 | 467 | 0.71 | 17.7 |
+| mp_depot 1 before / after | 325 / 350 | 368 / 366 | 0.88 / 0.96 | 22.9 / 23.3 |
+
+- An easy bot that stands and trades shots kills a third more and dies
+  a fifth more, at a higher K/D: the flags made level 0 more dangerous,
+  not less, so they were taken out. VERIFIED (the table). INFERRED:
+  cover and the retreat lengthen fights (section 4.5), and a bot whose
+  aim is poor gains more from the other bot's time in the open than it
+  loses from its own.
+- So no decision is tied to the level yet. A decision that makes a
+  level easier against bots would have to cut its fire, not its care;
+  how a level plays against a human is a hand check. Open.
+
 ## 4. Cover and lean
 
 The brain is `crates/server/src/bots/cover.rs`; the server fills
@@ -376,6 +405,30 @@ what not to retry.
   of sight on every reload and the threat's target lapses after
   `Skill::forget_ticks` while the bot's own does not.
 
+### 4.6 Cover against more than one enemy (2026-11-21, not shipped)
+
+A spot hides the body from its threat alone. Tried: the server hands the
+search the eyes of the three nearest other enemies within 2000 units
+whose standing eye has a line to the bot's chest, and a spot's hidden
+pose must hide the chest from each of them too. VERIFIED (measured,
+ours, release, master af564b3c7 plus 5.3, `COVER=alt`, `tdm`, 8 bots,
+6000 ticks, mp_carentan, mp_harbor, mp_depot, mp_brecourt, seeds
+1..=32, 128 matches a row):
+
+| Run | Cover side kills : deaths | Control kills : deaths | Cover hold bot-ticks |
+|---|---|---|---|
+| master | 5402 : 5578 | 5577 : 5402 | 819 700 |
+| one threat or more | 5477 : 5716 | 5715 : 5477 | 782 930 |
+
+- The cover side dies 176 more than the control on master and 239 more
+  with the rule: 63 apart, inside the spread (about 150 over 128
+  matches at 4.5's 12 to 14 deaths a seed). Not kept. VERIFIED (the
+  table).
+- On master the cover side now loses its fights by 3%, where 4.5 had it
+  6% ahead: the fights round it changed since (sections 9 to 13, the
+  retreat's cover, 18's aim). INFERRED. Lean break-even, node-only spots
+  and a prone peek (backlog) are left untried. Open.
+
 ## 5. Retreat
 
 A bot in a fight breaks contact when it is hurt or its clip runs dry,
@@ -422,10 +475,10 @@ On by default; `RETREAT=` in `bot_match`.
   `vc_bot_retreat 0` (`Bot::allow_retreat`, applied every bot pass, half
   a second, on all four games) for every bot, with the health detour;
   a retreat under way ends.
-- Health items are picked by straight-line distance (`nearest_pack`,
-  1200 across and 200 up or down), not by the graph's way to them; one
-  the plan reaches no nearer is passed over (bot-objectives.md 14.8).
-  Open.
+- Health items in reach are those within 1200 across and 200 up or down
+  (`nearest_pack`); of two or more, the one nearest by the graph's way
+  (section 5.3). One the plan reaches no nearer is passed over
+  (bot-objectives.md 14.8).
 
 ### 5.1 Measured (2026-10-20)
 
@@ -442,7 +495,59 @@ one side retreating. VERIFIED (measured):
 - 1150 to 1440 hurt and 40 to 100 dry starts in 64 matches with one side
   on; 28 to 32% reach the cover. The rest die on the way, or the retreat
   ends first (a dry clip refilled, or no cover left from a moved threat).
-  Not split by cause yet; open (2026-11-17).
+  Split by cause in 5.2.
+
+### 5.2 How retreats end (2026-11-21)
+
+`bot_match` counts each retreat's end (section 1, "retreats ended").
+VERIFIED (measured, ours, release, master af564b3c7, 1.1 `tdm`, 8 bots,
+3000 ticks, mp_carentan, mp_harbor, mp_depot, mp_brecourt, seeds 1..=16,
+both sides retreating; 2137 hurt and 132 dry starts):
+
+| End | Retreats | Share |
+|---|---|---|
+| held its time, or a health item took over | 955 | 42% |
+| died on the way to the cover | 840 | 37% |
+| died at the cover | 333 | 15% |
+| dry clip loaded again | 104 | 5% |
+| no cover left from the threat | 15 | 1% |
+| timed out (10 s) | 1 | 0% |
+
+- 42% stood at their cover before the end (`reached cover`). The rest
+  are mostly deaths on the way: the cover search tests up to 1200 units
+  of path, and a hurt body walks there under fire with its sights up.
+  INFERRED (the split against 5's search reach). A refilled clip ends a
+  dry retreat before the cover in about half of them.
+- No duty ended one, and no retreat was cut alive by a seat or the cvar
+  in `tdm`. VERIFIED (the counts).
+
+### 5.3 Health items by the graph's way (2026-11-21)
+
+Before, `nearest_pack` took the item nearest in a straight line, so one
+behind a wall or a floor's lip beat one down an open corridor. Now, with
+two or more in reach, it searches the graph from the body's node along
+non-risky edges up to 2400 units of path (`HEAL_PATH`) and takes the
+least path to the item's nearest node plus the step from there; items it
+does not reach rank after the rest by straight line. One item alone, or
+no graph, is the straight line as before
+(`bots::retreat::tests::a_health_item_is_picked_by_the_graphs_way`).
+VERIFIED (the code).
+
+VERIFIED (measured, ours, release, 5.2's set, before is 5.2's tip):
+
+| Run | Digests moved | Kills | Wounds | Life s | Hurt retreats | Stalled |
+|---|---|---|---|---|---|---|
+| `tdm` before | | 2335 | 1770 | 25.8 | 2137 | 0 |
+| `tdm` after | 44 of 64 | 2354 | 1800 | 25.9 | 2170 | 0 |
+| `dm` before | | 3000 | 2319 | 20.4 | 2657 | 0 |
+| `dm` after | 51 of 64 | 3018 | 2340 | 20.4 | 2683 | 0 |
+
+- Of the `tdm` bot-ticks with two or more items in reach, 322 of 4363
+  (7.4%) pick another item than the straight line did (a temporary
+  count). VERIFIED (measured).
+- Kills, wounds, life and retreats move inside the seed spread; no stall
+  either way. INFERRED: a pickup is short whichever item it is, so the
+  pick changes the walk, not the fights.
 
 ## 6. One table on `bot_match` (2026-10-21)
 

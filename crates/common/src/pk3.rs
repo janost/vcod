@@ -5,7 +5,9 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+
+mod loose;
 
 /// One open archive file read at a cursor of its own: clones share the
 /// handle and read with positioned reads, so no clone moves another's.
@@ -119,22 +121,63 @@ impl Drop for ReadLogGuard {
     }
 }
 
+/// Where a lookup lands: an archive and its entry's exact name, or a loose
+/// file on disk.
+enum Hit<'a> {
+    Pak(usize, &'a str),
+    Loose(&'a Path),
+}
+
+/// A loose file's bytes, `None` past `limit` as an archive entry is.
+fn read_loose(path: &Path, limit: u64) -> Option<Vec<u8>> {
+    let mut buf = Vec::new();
+    File::open(path)
+        .ok()?
+        .take(limit + 1)
+        .read_to_end(&mut buf)
+        .ok()?;
+    if buf.len() as u64 > limit {
+        log::warn!("{}: past {limit} bytes", path.display());
+        return None;
+    }
+    log::trace!("read {}", path.display());
+    Some(buf)
+}
+
+/// `rand() + 1`, the Windows CRT's range: never 0.
+fn fake_rand() -> i32 {
+    use std::hash::{BuildHasher, Hasher};
+    let h = std::collections::hash_map::RandomState::new()
+        .build_hasher()
+        .finish();
+    (h % 0x8000) as i32 + 1
+}
+
 /// Largest entry `Pk3Fs::read` will inflate. The biggest stock asset is a
 /// lightmapped BSP under 32 MiB; anything past this is a corrupt or hostile pak.
 pub const MAX_ENTRY_BYTES: u64 = 64 << 20;
 
 /// Case-insensitive virtual filesystem over the *.pk3 (CoD2: *.iwd) archives of one mod
-/// directory. Later archives override earlier ones, as the game layers paks.
+/// directory and the loose files beside them. Later archives override earlier ones, as
+/// the game layers paks; a directory's archives sit over its loose files.
 pub struct Pk3Fs {
     /// The directories searched, lowest priority first.
     dirs: Vec<PathBuf>,
     archives: Vec<PathBuf>,
     /// Parallel to `archives`.
     paks: Vec<PakInfo>,
+    /// Parallel to `archives`: the pak's index in `dirs`, `None` for a
+    /// `localized_*` one, which sits under every directory.
+    pak_dir: Vec<Option<usize>>,
+    /// The directories' own files.
+    loose: loose::Loose,
     /// `pack->referenced`, set by a read (see `referenced_paks`).
     referenced: Vec<AtomicBool>,
     /// [`Self::set_surfs_unflagged`]: an `xmodelsurfs/` read flags nothing.
     surfs_unflagged: AtomicBool,
+    /// `fs_fakeChkSum`, 0 unset (docs/research/cod11-server-handshake.md,
+    /// "Loose files").
+    fake_checksum: AtomicI32,
     // lowercased entry path -> (archive index, exact entry name in that zip)
     index: HashMap<String, (usize, String)>,
     // Same with '@' normalized to '_'; BSP material names sometimes spell the
@@ -275,7 +318,8 @@ fn archives_in(dir: &Path, kind: ArchiveKind) -> Result<Vec<PathBuf>> {
 /// aside), then its loose file; then every directory's `localized_*`
 /// archives. CoD4 1.7's `path` lists a home path's iwds, its directory,
 /// then the base path's (docs/research/cod4-handshake.md 14.1). A loose
-/// file is read only when `name` stays under its directory; an archive
+/// file is read only when `name` stays under its directory, and out of a
+/// `main/` only when 1.7 reads it there (`ban.txt`, a `.cfg`); an archive
 /// member that inflates past `MAX_ENTRY_BYTES` reads as missing.
 pub fn read_search(dirs: &[PathBuf], kind: ArchiveKind, name: &str) -> Option<Vec<u8>> {
     read_search_limited(dirs, kind, name, MAX_ENTRY_BYTES)
@@ -317,7 +361,11 @@ fn read_search_limited(
         {
             return Some(data);
         }
+        let main = dir
+            .file_name()
+            .is_some_and(|n| n.eq_ignore_ascii_case("main"));
         if let Some(rel) = &loose
+            && (!main || loose::cod4_main_reads(&key))
             && let Ok(data) = std::fs::read(dir.join(rel))
         {
             return Some(data);
@@ -560,6 +608,24 @@ impl Pk3Fs {
         let base = dirs.first().cloned().unwrap_or_default();
         let dir_refs: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
         let mut paks = search_archives(&dir_refs, kind);
+        let rule = match kind {
+            _ if vanilla => loose::Rule::Off,
+            ArchiveKind::Pk3 => {
+                let proto = crate::net::protocol::install_protocol_of(&paks);
+                match proto.transport.version == crate::net::protocol::PROTOCOL_V1.transport.version
+                {
+                    true => loose::Rule::Cod11,
+                    false => loose::Rule::Cod15,
+                }
+            }
+            ArchiveKind::Iwd => {
+                let root = base.parent().unwrap_or(Path::new(""));
+                match crate::game::Game::detect(root) {
+                    crate::game::Game::Cod4 => loose::Rule::Cod4,
+                    _ => loose::Rule::Cod2,
+                }
+            }
+        };
         if vanilla {
             let proto = crate::net::protocol::install_protocol_of(&paks);
             paks.retain(|p| {
@@ -621,12 +687,23 @@ impl Pk3Fs {
             bail!("no readable .{} archives in {}", kind.ext(), base.display());
         }
         let referenced = readable.iter().map(|_| AtomicBool::new(false)).collect();
+        let pak_dir = readable
+            .iter()
+            .map(|p| {
+                let dir = p.path.parent()?;
+                (!p.localized).then(|| dirs.iter().position(|d| d == dir))?
+            })
+            .collect();
+        let loose = loose::Loose::scan(&dirs, kind.ext(), rule, pure.is_some());
         Ok(Self {
             dirs,
             archives: readable.iter().map(|p| p.path.clone()).collect(),
+            pak_dir,
+            loose,
             paks: readable,
             referenced,
             surfs_unflagged: AtomicBool::new(false),
+            fake_checksum: AtomicI32::new(0),
             index,
             alias_index,
             open: Mutex::new(HashMap::new()),
@@ -709,12 +786,28 @@ impl Pk3Fs {
     /// Marks `path`'s pak referenced as a read would, without reading it.
     pub fn touch(&self, path: &str) {
         let key = path_key(path);
-        if let Some((ai, _)) = self.index.get(&key).or_else(|| self.alias_index.get(&key))
+        if let Some(Hit::Pak(ai, _)) = self.hit(&key)
             && self.flags(&key)
         {
-            self.referenced[*ai].store(true, Ordering::Relaxed);
+            self.referenced[ai].store(true, Ordering::Relaxed);
             ReadLog::note(&key);
         }
+    }
+
+    /// Where a read of `key` lands: the highest directory's paks, then its
+    /// loose files, then the next directory's, the `localized_*` paks under
+    /// them all (`FS_FOpenFileRead`'s search path walk). The `@` alias
+    /// answers only when no exact name does.
+    fn hit(&self, key: &str) -> Option<Hit<'_>> {
+        let pak = self.index.get(key);
+        if let Some(f) = self.loose.readable(key) {
+            let over = pak.and_then(|(ai, _)| self.pak_dir[*ai]);
+            if over.is_none_or(|d| f.dir > d) {
+                return Some(Hit::Loose(&f.path));
+            }
+        }
+        pak.or_else(|| self.alias_index.get(key))
+            .map(|(ai, entry)| Hit::Pak(*ai, entry))
     }
 
     /// The `cp` command `CL_SendPureChecksums` sends after a map load, keyed
@@ -733,17 +826,47 @@ impl Pk3Fs {
             .filter(|p| !p.localized)
             .map(|p| p.pure_checksum(checksum_feed))
             .collect();
-        crate::pak_checksum::pure_command(dll(dlls[0]), dll(dlls[1]), &general, checksum_feed)
+        let fake = self.fake_checksum();
+        crate::pak_checksum::pure_command(dll(dlls[0]), dll(dlls[1]), &general, checksum_feed, fake)
     }
 
-    /// The pak `path` comes from, by the same lookup as `read`.
+    /// `fs_fakeChkSum`: `rand() + 1` from a loose read of a type off the
+    /// list, 0 before one.
+    pub fn fake_checksum(&self) -> i32 {
+        self.fake_checksum.load(Ordering::Relaxed)
+    }
+
+    /// Hands the fake checksum to a reopened search path: vcod's reopen is
+    /// none of the points that clear retail's.
+    pub fn keep_fake_checksum(&self, from: &Pk3Fs) {
+        self.fake_checksum
+            .store(from.fake_checksum(), Ordering::Relaxed);
+    }
+
+    /// `FS_Restart`: 1.1's `FS_Shutdown` clears the fake checksum
+    /// (CoDMP.exe 0x42cd68); 1.5's and UO's keep it.
+    pub fn restart_fake_checksum(&self) {
+        if self.loose.cod11() {
+            self.fake_checksum.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// `FS_PureServerSetLoadedPaks` taking a new non-empty list: 1.5 and UO
+    /// clear the fake checksum (CoDMP.exe 0x43f2ab, CoDUOMP.exe 0x441439);
+    /// 1.1 keeps it.
+    pub fn pure_list_fake_checksum(&self) {
+        if !self.loose.cod11() {
+            self.fake_checksum.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// The pak `path` comes from, by the same lookup as `read`; `None`
+    /// for a loose file.
     pub fn source_pak(&self, path: &str) -> Option<&PakInfo> {
-        let key = path_key(path);
-        let (ai, _) = self
-            .index
-            .get(&key)
-            .or_else(|| self.alias_index.get(&key))?;
-        Some(&self.paks[*ai])
+        match self.hit(&path_key(path))? {
+            Hit::Pak(ai, _) => Some(&self.paks[ai]),
+            Hit::Loose(_) => None,
+        }
     }
 
     /// A filesystem with no archives; every lookup misses. For tests that
@@ -753,8 +876,11 @@ impl Pk3Fs {
             dirs: Vec::new(),
             archives: Vec::new(),
             paks: Vec::new(),
+            pak_dir: Vec::new(),
+            loose: loose::Loose::off(),
             referenced: Vec::new(),
             surfs_unflagged: AtomicBool::new(false),
+            fake_checksum: AtomicI32::new(0),
             index: HashMap::new(),
             alias_index: HashMap::new(),
             open: Mutex::new(HashMap::new()),
@@ -775,19 +901,15 @@ impl Pk3Fs {
     /// Same lookup as `read`, without touching the archive.
     pub fn contains(&self, path: &str) -> bool {
         let key = path_key(path);
-        self.overlay.contains_key(&key)
-            || self.index.contains_key(&key)
-            || self.alias_index.contains_key(&key)
+        self.overlay.contains_key(&key) || self.hit(&key).is_some()
     }
 
-    /// The archive `read(path)` would hit.
+    /// The archive `read(path)` would hit; `None` for a loose file.
     pub fn source_archive(&self, path: &str) -> Option<&Path> {
-        let key = path_key(path);
-        let (ai, _) = self
-            .index
-            .get(&key)
-            .or_else(|| self.alias_index.get(&key))?;
-        Some(&self.archives[*ai])
+        match self.hit(&path_key(path))? {
+            Hit::Pak(ai, _) => Some(&self.archives[ai]),
+            Hit::Loose(_) => None,
+        }
     }
 
     /// `read` with `MAX_ENTRY_BYTES` as the size limit.
@@ -814,17 +936,22 @@ impl Pk3Fs {
         if let Some(bytes) = self.overlay.get(&key) {
             return (bytes.len() as u64 <= limit).then(|| bytes.clone());
         }
-        let (ai, entry) = self
-            .index
-            .get(&key)
-            .or_else(|| self.alias_index.get(&key))?;
+        let (ai, entry) = match self.hit(&key)? {
+            Hit::Pak(ai, entry) => (ai, entry),
+            Hit::Loose(file) => {
+                if self.loose.fakes_checksum(&key) {
+                    self.fake_checksum.store(fake_rand(), Ordering::Relaxed);
+                }
+                return read_loose(file, limit);
+            }
+        };
         if flag && self.flags(&key) {
-            self.referenced[*ai].store(true, Ordering::Relaxed);
+            self.referenced[ai].store(true, Ordering::Relaxed);
             ReadLog::note(&key);
         }
         // `fs_debug 1`'s line, for diffing what a load reads against retail.
-        log::trace!("read {path} from {}", self.paks[*ai].qualified_name());
-        let mut zip = self.archive(*ai)?;
+        log::trace!("read {path} from {}", self.paks[ai].qualified_name());
+        let mut zip = self.archive(ai)?;
         let f = zip.by_name(entry).ok()?;
         if f.size() > limit {
             log::warn!("{path}: declared size {} exceeds {limit} bytes", f.size());
@@ -843,17 +970,16 @@ impl Pk3Fs {
 
     /// `path`'s size and the CRC-32 its archive's central directory keeps
     /// for its bytes, `size << 32 | crc`, read without inflating it; `None`
-    /// for an overlaid or missing entry.
+    /// for an overlaid, loose or missing entry.
     pub fn entry_checksum(&self, path: &str) -> Option<u64> {
         let key = path_key(path);
         if self.overlay.contains_key(&key) {
             return None;
         }
-        let (ai, entry) = self
-            .index
-            .get(&key)
-            .or_else(|| self.alias_index.get(&key))?;
-        let mut zip = self.archive(*ai)?;
+        let Hit::Pak(ai, entry) = self.hit(&key)? else {
+            return None;
+        };
+        let mut zip = self.archive(ai)?;
         let f = zip.by_name(entry).ok()?;
         Some(f.size() << 32 | u64::from(f.crc32()))
     }
@@ -872,23 +998,29 @@ impl Pk3Fs {
         }
     }
 
-    /// Lowercased entry paths ending in `suffix`, e.g. ".shader".
+    /// The lowercased paths a read finds: every pak entry, then the loose
+    /// files a read takes.
+    fn keys(&self) -> impl Iterator<Item = &String> {
+        self.index.keys().chain(self.loose.keys())
+    }
+
+    /// Lowercased entry paths ending in `suffix`, e.g. ".shader", loose
+    /// files included.
     pub fn names_with_suffix(&self, suffix: &str) -> Vec<String> {
         let mut names: Vec<String> = self
-            .index
             .keys()
             .filter(|k| k.ends_with(suffix))
             .cloned()
             .collect();
         names.sort();
+        names.dedup();
         names
     }
 
     /// Lowercased entry paths starting with `prefix`, e.g. "xanim/",
-    /// overlaid ones included.
+    /// overlaid and loose ones included.
     pub fn list_prefix(&self, prefix: &str) -> Vec<String> {
         let mut names: Vec<String> = self
-            .index
             .keys()
             .chain(self.overlay.keys())
             .filter(|k| k.starts_with(prefix))
@@ -899,18 +1031,46 @@ impl Pk3Fs {
         names
     }
 
-    /// `FS_GetFileList(dir, "")` over the paks: the files directly under
-    /// `dir/`, highest-priority pak first and each pak in its own
-    /// central-directory order, a name already listed (case-insensitively)
-    /// skipped. No sort; names as the pak spells them, without `dir/`
+    /// `FS_GetFileList(dir, "")` over the search path: the files directly
+    /// under `dir/`, highest-priority pak first and each pak in its own
+    /// central-directory order, each directory's loose files after its
+    /// paks, a name already listed (case-insensitively) skipped. No sort;
+    /// names as the pak spells them, without `dir/`
     /// (docs/research/coduo-vehicles.md 10.1).
     pub fn list_dir_in_search_order(&self, dir: &str) -> Vec<String> {
+        self.list_dir_for(dir, "")
+    }
+
+    /// [`Self::list_dir_in_search_order`] for a list of `ext` files, whose
+    /// extension decides whether a pure path lists the directories.
+    fn list_dir_for(&self, dir: &str, ext: &str) -> Vec<String> {
         let prefix = format!("{}/", dir.to_lowercase());
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
+        let mut add = |name: &str| {
+            if !name.is_empty() && !name.contains('/') && seen.insert(name.to_lowercase()) {
+                out.push(name.to_string());
+            }
+        };
+        let lists = self.loose.lists(ext);
+        // The directories not listed yet are `0..next_dir`.
+        let mut next_dir = self.dirs.len();
+        let mut loose_above = |d: usize, add: &mut dyn FnMut(&str)| {
+            while next_dir > d {
+                next_dir -= 1;
+                if lists {
+                    for name in self.loose.in_dir(next_dir, &prefix) {
+                        add(name);
+                    }
+                }
+            }
+        };
         // Off the open cache: reparsing every pak's central directory cost
         // UO's `map_restart` 100 ms (cod11-map-cycle.md 4.9).
         for ai in (0..self.archives.len()).rev() {
+            // Each directory's files come after its paks, before the next
+            // directory's; the localized paks come after them all.
+            loose_above(self.pak_dir[ai].map_or(0, |d| d + 1), &mut add);
             let Some(zip) = self.archive(ai) else {
                 continue;
             };
@@ -918,21 +1078,16 @@ impl Pk3Fs {
                 let Some(Ok(name)) = zip.name_for_index(i) else {
                     continue;
                 };
-                let Some(rest) = name
+                if let Some(rest) = name
                     .get(..prefix.len())
                     .filter(|p| p.eq_ignore_ascii_case(&prefix))
                     .map(|_| &name[prefix.len()..])
-                else {
-                    continue;
-                };
-                if rest.is_empty() || rest.contains('/') {
-                    continue;
-                }
-                if seen.insert(rest.to_lowercase()) {
-                    out.push(rest.to_string());
+                {
+                    add(rest);
                 }
             }
         }
+        loose_above(0, &mut add);
         out
     }
 
@@ -959,7 +1114,7 @@ impl Pk3Fs {
         let names = overlaid
             .into_iter()
             .map(|k| k[prefix.len()..].to_string())
-            .chain(self.list_dir_in_search_order(dir));
+            .chain(self.list_dir_for(dir, ext));
         for name in names {
             if ends(&name) && seen.insert(name.to_lowercase()) {
                 out.push(format!("{dir}/{name}"));
@@ -979,7 +1134,6 @@ impl Pk3Fs {
     pub fn find_maps(&self) -> Vec<String> {
         let ext = self.map_ext();
         let mut maps: Vec<String> = self
-            .index
             .keys()
             .filter(|k| k.ends_with(ext))
             .filter(|k| {
@@ -996,8 +1150,12 @@ impl Pk3Fs {
     pub fn resolve_map(&self, name: &str) -> Option<String> {
         let (name, ext) = (name.to_lowercase(), self.map_ext());
         for candidate in [format!("maps/{name}{ext}"), format!("maps/mp/{name}{ext}")] {
-            if let Some((_, entry)) = self.index.get(&candidate) {
-                return Some(entry.clone());
+            match self.hit(&candidate) {
+                Some(Hit::Pak(_, entry)) if self.index.contains_key(&candidate) => {
+                    return Some(entry.to_string());
+                }
+                Some(Hit::Loose(_)) => return Some(candidate),
+                _ => {}
             }
         }
         None
@@ -1087,6 +1245,17 @@ mod tests {
         assert_eq!(read("b.cfg").as_deref(), Some("base iwd"));
         assert_eq!(read("c.cfg").as_deref(), Some("base loose"));
         assert_eq!(read("nothere.cfg"), None);
+        // `main/` gives only its configs and `ban.txt`; a mod's anything.
+        let game = dir.path().join("home/mods/m");
+        std::fs::create_dir_all(&game).unwrap();
+        for d in [&dirs[0], &game] {
+            std::fs::write(d.join("x.txt"), "loose").unwrap();
+            std::fs::write(d.join("ban.txt"), "loose").unwrap();
+        }
+        assert_eq!(read("x.txt"), None);
+        assert_eq!(read("ban.txt").as_deref(), Some("loose"));
+        let dirs = [game, dirs[0].clone()];
+        assert!(read_search(&dirs, ArchiveKind::Iwd, "x.txt").is_some());
     }
 
     /// A loose read stays under each directory: `..` and an absolute name
@@ -1580,6 +1749,224 @@ mod tests {
         let fs = Pk3Fs::open_search(dir.path(), None, Some(&[pak0]), false).unwrap();
         assert_eq!(fs.read("a.txt").unwrap(), b"pak0");
         assert_eq!(fs.read("b.txt").unwrap(), b"loc");
+    }
+
+    /// A loose file sits under its own directory's paks and over every
+    /// lower directory's and every `localized_*` pak: UO's loose
+    /// `ui/options_sound.menu` replaces `localized_english_pakuo00`'s.
+    #[test]
+    fn a_loose_file_sits_under_its_dirs_paks_and_over_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let (main, uo) = (dir.path().join("main"), dir.path().join("uo"));
+        for (d, f) in [
+            (&main, "a.txt"),
+            (&main, "b.txt"),
+            (&uo, "c.txt"),
+            (&uo, "ui/x.menu"),
+        ] {
+            let path = d.join(f);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                path,
+                format!("loose {}", d.file_name().unwrap().to_string_lossy()),
+            )
+            .unwrap();
+        }
+        make_pk3(&main, "pak0.pk3", &[("a.txt", "pak0"), ("b.txt", "pak0")]);
+        make_pk3(
+            &uo,
+            "pakuo00.pk3",
+            &[("c.txt", "pakuo00"), ("D.txt", "pakuo00")],
+        );
+        make_pk3(
+            &uo,
+            "localized_english_pakuo00.pk3",
+            &[("ui/X.menu", "loc")],
+        );
+        let fs = Pk3Fs::open(&uo).unwrap();
+        let read = |p: &str| fs.read(p).map(|b| String::from_utf8(b).unwrap());
+        assert_eq!(read("a.txt").as_deref(), Some("pak0"));
+        assert_eq!(read("c.txt").as_deref(), Some("pakuo00"));
+        assert_eq!(read("UI/x.MENU").as_deref(), Some("loose uo"));
+        assert!(fs.source_archive("ui/x.menu").is_none());
+        assert!(fs.contains("ui/x.menu"));
+        assert_eq!(fs.list_prefix("ui/"), ["ui/x.menu"]);
+        // A pak beside it, not the file, is the one a read references.
+        assert!(fs.read("ui/x.menu").is_some() && fs.referenced_paks().is_empty());
+        std::fs::write(uo.join("a.txt"), "loose uo").unwrap();
+        let fs = Pk3Fs::open(&uo).unwrap();
+        assert_eq!(fs.read("a.txt").unwrap(), b"loose uo");
+        assert_eq!(fs.read("b.txt").unwrap(), b"pak0");
+    }
+
+    /// A pure path reads only the game's loose types (1.1's suffixes, 1.5
+    /// and UO's extensions) and lists no directory but for saved games.
+    #[test]
+    fn a_pure_path_reads_only_its_games_loose_types() {
+        for (pak, version) in [("pak0.pk3", "1.1"), ("uo/pakuo00.pk3", "uo")] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(pak);
+            let base = path.parent().unwrap();
+            std::fs::create_dir_all(base).unwrap();
+            make_pk3(
+                base,
+                &path.file_name().unwrap().to_string_lossy(),
+                &[("p.txt", "")],
+            );
+            for f in [
+                "a.cfg",
+                "b.gsc",
+                "save/c.svg",
+                "d.dat",
+                "e.game",
+                "ui/f.menu",
+            ] {
+                let path = base.join(f);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, f).unwrap();
+            }
+            let all = Pk3Fs::open(base).unwrap();
+            let sum = all.paks().next().unwrap().checksum;
+            let fs = Pk3Fs::open_search(base, None, Some(&[sum]), false).unwrap();
+            let read: Vec<&str> = [
+                "a.cfg",
+                "b.gsc",
+                "save/c.svg",
+                "d.dat",
+                "e.game",
+                "ui/f.menu",
+            ]
+            .into_iter()
+            .filter(|f| fs.read(f).is_some())
+            .collect();
+            let want: &[&str] = match version {
+                "1.1" => &["a.cfg", "save/c.svg", "d.dat", "e.game", "ui/f.menu"],
+                _ => &["a.cfg", "d.dat", "ui/f.menu"],
+            };
+            assert_eq!(read, want, "{version}");
+            assert!(all.read("b.gsc").is_some(), "{version}");
+            assert!(fs.file_list("ui", ".menu").is_empty(), "{version}");
+            assert_eq!(fs.file_list("save", "svg"), ["save/c.svg"], "{version}");
+            assert_eq!(all.file_list("ui", ".menu"), ["ui/f.menu"], "{version}");
+        }
+    }
+
+    /// A loose read off the list sets the fake checksum the `cp` carries
+    /// after each pass; 1.1 clears it at a restart, 1.5 and UO at a new pure
+    /// list, and a 1.1 pure path still sets it off a saved game.
+    #[test]
+    fn a_loose_read_off_the_list_fakes_the_checksum_until_its_clear() {
+        for (pak, version) in [("pak0.pk3", "1.1"), ("uo/pakuo00.pk3", "uo")] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(pak);
+            let base = path.parent().unwrap();
+            std::fs::create_dir_all(base.join("save")).unwrap();
+            make_pk3(
+                base,
+                &path.file_name().unwrap().to_string_lossy(),
+                &[("p.txt", "")],
+            );
+            for f in ["a.cfg", "b.tga", "save/c.svg"] {
+                std::fs::write(base.join(f), f).unwrap();
+            }
+            let fs = Pk3Fs::open(base).unwrap();
+            fs.read("a.cfg").unwrap();
+            assert_eq!(fs.fake_checksum(), 0, "{version}");
+            assert!(fs.pure_command(9, ["x", "y"]).starts_with("cp @ "));
+            fs.read("b.tga").unwrap();
+            let fake = fs.fake_checksum();
+            assert!((1..=0x8000).contains(&fake), "{version}: {fake}");
+            assert_eq!(
+                fs.pure_command(9, ["x", "y"]),
+                format!("cp {fake} {fake} @ {fake} 9 "),
+                "{version}"
+            );
+            let sum = fs.paks().next().unwrap().checksum;
+            let pure = Pk3Fs::open_search(base, None, Some(&[sum]), false).unwrap();
+            pure.keep_fake_checksum(&fs);
+            assert_eq!(pure.fake_checksum(), fake, "{version}");
+            let cod11 = version == "1.1";
+            match cod11 {
+                true => pure.pure_list_fake_checksum(),
+                false => pure.restart_fake_checksum(),
+            }
+            assert_eq!(pure.fake_checksum(), fake, "{version}");
+            match cod11 {
+                true => pure.restart_fake_checksum(),
+                false => pure.pure_list_fake_checksum(),
+            }
+            assert_eq!(pure.fake_checksum(), 0, "{version}");
+            let svg = pure.read("save/c.svg").is_some();
+            assert_eq!(svg, cod11);
+            assert_eq!(pure.fake_checksum() != 0, svg, "{version}");
+        }
+    }
+
+    /// `--vanilla` and the stock iwd tree read no loose file.
+    #[test]
+    fn the_stock_trees_read_no_loose_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        make_pk3(&main, "pak0.pk3", &[("a.txt", "")]);
+        make_pk3(&main, "iw_00.iwd", &[("a.txt", "")]);
+        std::fs::write(main.join("b.cfg"), "").unwrap();
+        assert!(Pk3Fs::open(&main).unwrap().contains("b.cfg"));
+        assert!(
+            !Pk3Fs::open_search(&main, None, None, true)
+                .unwrap()
+                .contains("b.cfg")
+        );
+        assert!(Pk3Fs::open_iwd(&main, None).unwrap().contains("b.cfg"));
+        assert!(!Pk3Fs::open_iwd_stock(&main).unwrap().contains("b.cfg"));
+    }
+
+    /// `FS_GetFileList` walks the search path: each directory's paks, then
+    /// its loose files (sorted case-blind), the higher directory first, the
+    /// localized paks last.
+    #[test]
+    fn a_file_list_takes_each_dirs_loose_files_after_its_paks() {
+        let dir = tempfile::tempdir().unwrap();
+        let (main, game) = (dir.path().join("main"), dir.path().join("mod"));
+        let gt = "maps/mp/gametypes";
+        for (d, f) in [
+            (&main, "m2.gsc"),
+            (&main, "M1.gsc"),
+            (&game, "g.gsc"),
+            (&main, "x/s.gsc"),
+        ] {
+            let path = d.join(gt).join(f);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+        make_pk3(&main, "pak5.pk3", &[(&format!("{gt}/dm.gsc"), "")]);
+        make_pk3(&main, "localized_x.pk3", &[(&format!("{gt}/loc.gsc"), "")]);
+        make_pk3(&game, "z.pk3", &[(&format!("{gt}/zm.gsc"), "")]);
+        let fs = Pk3Fs::open_layered(&main, Some(&game)).unwrap();
+        let want = ["zm.gsc", "g.gsc", "dm.gsc", "M1.gsc", "m2.gsc", "loc.gsc"]
+            .map(|f| format!("{gt}/{f}"));
+        assert_eq!(fs.file_list(gt, ".gsc"), want);
+    }
+
+    /// CoD4 1.7 reads only `ban.txt` and `.cfg` loose out of `main/`, on
+    /// any path, and anything out of a mod's directory.
+    #[test]
+    fn cod4s_main_reads_only_its_configs_loose() {
+        let dir = tempfile::tempdir().unwrap();
+        let (main, m) = (dir.path().join("main"), dir.path().join("mods/m"));
+        std::fs::create_dir_all(dir.path().join("zone")).unwrap();
+        for d in [&main, &m] {
+            std::fs::create_dir_all(d.join("images")).unwrap();
+            make_pk3(d, "iw_00.iwd", &[("a.txt", "")]);
+        }
+        for f in ["x.cfg", "ban.txt", "images/main.iwi"] {
+            std::fs::write(main.join(f), "").unwrap();
+        }
+        std::fs::write(m.join("images/mod.iwi"), "").unwrap();
+        let fs = Pk3Fs::open_iwd_layers(&main, std::slice::from_ref(&m)).unwrap();
+        assert!(fs.contains("x.cfg") && fs.contains("ban.txt"));
+        assert!(!fs.contains("images/main.iwi"));
+        assert!(fs.contains("images/mod.iwi"));
     }
 
     /// A part a reload reuses touches what its reads flagged: the log takes
