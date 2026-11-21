@@ -139,11 +139,11 @@ impl Cod4Session {
         if conn.client.gamestate.is_some() {
             let floor = self.pending.last().unwrap_or(conn.last_cmd()).server_time;
             // `CL_SetUserCmdAimValues`: the recoil rides the cmd's angles.
-            let [kp, ky, _] = self.kick.view_kick();
+            let [kp, ky, kr] = self.kick.view_kick();
             let c = own_cmd(
                 &conn.client,
                 now.saturating_duration_since(*last_snap_at),
-                [self.view[0] + kp, self.view[1] + ky],
+                [self.view[0] + kp, self.view[1] + ky, kr],
                 &self.input,
                 self.talking,
             );
@@ -526,7 +526,7 @@ fn melee_charge(
 fn own_cmd(
     c: &Client,
     snap_age: Duration,
-    view: [f32; 2],
+    view: [f32; 3],
     input: &Cod4Input,
     talking: bool,
 ) -> UserCmd {
@@ -551,7 +551,7 @@ fn own_cmd(
         buttons: input.buttons(pm_type, talking),
         weapon,
         offhand,
-        angles: cmd_angles([view[0], view[1], 0.0], delta),
+        angles: cmd_angles(view, delta),
         forwardmove,
         rightmove,
         ..UserCmd::default()
@@ -591,5 +591,20 @@ mod turn_tests {
             "yaw wraps past 180: {}",
             view[1]
         );
+    }
+
+    /// The recoil's roll rides the cmd with its pitch and yaw: 1.7's cmd
+    /// loop converts all three angles (0x463aa9..0x463acf).
+    #[test]
+    fn the_cmd_carries_the_kick_roll() {
+        let c = super::own_cmd(
+            &vcod_cod4::net::parse::Client::default(),
+            std::time::Duration::ZERO,
+            [0.0, 0.0, -1.5],
+            &crate::play::cod4_input::Cod4Input::default(),
+            false,
+        );
+        let roll = f32::from(c.angles[2] as i16) * (360.0 / 65536.0);
+        assert!((roll + 1.5).abs() < 0.01, "roll {roll}");
     }
 }
