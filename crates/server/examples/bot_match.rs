@@ -1926,7 +1926,7 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
     for (k, v) in &o.set {
         sv.set_cvar(k, v);
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&*fs)));
     sv.load_scripts(fs.clone()).expect("load the scripts");
     for line in &o.console {
         sv.push_console(line);

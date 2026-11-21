@@ -2284,6 +2284,34 @@ impl GameHost {
     }
 
     /// CoD2's state, `None` on another game's host: the way in for code
+    /// When `slot` last relayed a voice frame (CoD2 and CoD4), `None` on
+    /// CoD1 or before any.
+    pub fn last_voice_time(&self, slot: usize) -> Option<i32> {
+        match &self.ext {
+            HostExt::Cod1 => None,
+            HostExt::Cod2(c) => c.clients.get(slot)?.last_voice_time,
+            HostExt::Cod4(c) => c.clients.get(slot)?.last_voice_time,
+        }
+    }
+
+    /// `irand` off the generator a game's script draws from: CoD2's
+    /// `holdrand` beside its other draws (cod2-combat.md 2.6.1), else
+    /// CoD1's.
+    pub fn script_irand(&mut self, min: i32, max: i32) -> i32 {
+        match &self.ext {
+            HostExt::Cod2(c) => c.rand.irand(min, max),
+            _ => self.holdrand.irand(min, max),
+        }
+    }
+
+    /// [`Self::script_irand`]'s `flrand`.
+    pub fn script_flrand(&mut self, min: f32, max: f32) -> f32 {
+        match &self.ext {
+            HostExt::Cod2(c) => c.rand.flrand(min, max),
+            _ => self.holdrand.flrand(min, max),
+        }
+    }
+
     /// every game shares.
     pub fn as_cod2(&self) -> Option<&Cod2HostState> {
         match &self.ext {
@@ -2591,7 +2619,9 @@ impl GameHost {
             .register(name, &self.weapons, self.initializing)
             .map_err(ErrorKind::Custom)?;
         for item in registered {
-            for model in crate::items::item_models(self.defs, self.fs.as_deref(), item) {
+            for model in
+                crate::items::item_models(self.defs, self.fs.as_deref().map(|f| f as _), item)
+            {
                 if let Err(e) =
                     self.allocators
                         .index(&mut self.configstrings, CsRange::Model, &model)
@@ -3370,6 +3400,32 @@ impl Host for GameHost {
 }
 
 impl GameHost {
+    /// Entity `id`'s vector field `name` (folded), zero when unset or not a
+    /// vector.
+    pub fn vec_field(&mut self, cx: &mut Cx, id: EntId, name: &str) -> glam::Vec3 {
+        let atom = cx.intern_folded(name);
+        self.vec_field_at(cx, id, atom)
+    }
+
+    /// [`Self::vec_field`] by an already-interned field atom.
+    pub fn vec_field_at(&mut self, cx: &mut Cx, id: EntId, field: Atom) -> glam::Vec3 {
+        match self.get_field(cx, id, field) {
+            Value::Vector(v) => glam::Vec3::from(v),
+            _ => glam::Vec3::ZERO,
+        }
+    }
+
+    /// Entity `id`'s number field `name` (folded) as a float, zero when
+    /// unset or not a number.
+    pub fn float_field(&mut self, cx: &mut Cx, id: EntId, name: &str) -> f32 {
+        let atom = cx.intern_folded(name);
+        match self.get_field(cx, id, atom) {
+            Value::Float(f) => f,
+            Value::Int(i) => i as f32,
+            _ => 0.0,
+        }
+    }
+
     /// The engine slot an entity's `field` reads, when its read is that slot
     /// alone (a plain name routed to the engine table); `None` for a client
     /// or script field, or one [`PLAIN_EXCEPT`] names.

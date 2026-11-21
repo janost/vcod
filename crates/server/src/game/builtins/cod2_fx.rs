@@ -3,6 +3,7 @@
 //! `loadFx` and `playFxOnTag` are CoD1's (`builtins::fx`) over CoD2's
 //! configstring blocks. Addresses are cod2_lnxded's.
 
+use super::args::{float, vector};
 use crate::game::host::GameHost;
 use crate::game::temp_entity::{Scope, TempEntity};
 use glam::Vec3;
@@ -15,21 +16,6 @@ use super::fx::{LoopedFx, spawn_looped_fx};
 use super::math::vectoangles;
 
 pub const NAMES: &[(&str, Builtin)] = &[("playfx", play_fx), ("playloopedfx", play_looped_fx)];
-
-fn number(v: Option<&Value>, usage: &'static str) -> Result<f32, ErrorKind> {
-    match v {
-        Some(Value::Int(n)) => Ok(*n as f32),
-        Some(Value::Float(f)) => Ok(*f),
-        _ => Err(ErrorKind::BadType(usage)),
-    }
-}
-
-fn vector(v: Option<&Value>, usage: &'static str) -> Result<Vec3, ErrorKind> {
-    match v {
-        Some(Value::Vector(v)) => Ok(Vec3::from(*v)),
-        _ => Err(ErrorKind::BadType(usage)),
-    }
-}
 
 /// `v` scaled by `1 / |v|`, `None` for a zero vector.
 fn unit(v: Vec3) -> Option<Vec3> {
@@ -175,11 +161,11 @@ pub fn play_looped_fx(
         None => Vec3::ZERO,
     };
     let cull = match args.get(3) {
-        Some(v) => number(Some(v), USAGE)?,
+        Some(v) => float(Some(v), USAGE)?,
         None => 0.0,
     };
     let origin = vector(args.get(2), USAGE)?;
-    let period_ms = (number(args.get(1), USAGE)? * 1000.0 + 0.5).floor() as i32;
+    let period_ms = (float(args.get(1), USAGE)? * 1000.0 + 0.5).floor() as i32;
     if period_ms < 1 {
         return Err(ErrorKind::BadType(
             "playLoopedFx called with a repeat under 0.0005s",

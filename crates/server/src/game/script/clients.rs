@@ -575,46 +575,41 @@ impl ScriptRuntime {
     /// only writer, `positionWouldTelefrag` would test where each client last
     /// spawned rather than where it now stands.
     pub fn set_client_origin(&mut self, slot: usize, origin: [f32; 3]) {
-        use vcod_gsc::Host;
         self.host.vehicles.lifted.remove(&slot);
         self.host.vehicles.stale_seated.remove(&slot);
         let Some(ent) = self.client_entity(slot) else {
             return;
         };
+        self.set_vec_field(ent, "origin", origin);
+    }
+
+    /// Writes entity `id`'s vector field `name` through the script field
+    /// write, no link.
+    fn set_vec_field(&mut self, id: EntId, name: &str, v: [f32; 3]) {
+        use vcod_gsc::Host;
         let host = &mut self.host;
         self.vm.with_cx(|cx| {
-            let field = cx.intern_folded("origin");
-            let _ = host.set_field(cx, ent, field, Value::Vector(origin));
+            let field = cx.intern_folded(name);
+            let _ = host.set_field(cx, id, field, Value::Vector(v));
         });
     }
 
     /// Writes a client's `angles` field (`r.currentAngles`), no link.
     pub fn set_client_angles(&mut self, slot: usize, angles: [f32; 3]) {
-        use vcod_gsc::Host;
         let Some(ent) = self.client_entity(slot) else {
             return;
         };
-        let host = &mut self.host;
-        self.vm.with_cx(|cx| {
-            let field = cx.intern_folded("angles");
-            let _ = host.set_field(cx, ent, field, Value::Vector(angles));
-        });
+        self.set_vec_field(ent, "angles", angles);
     }
 
     /// Writes an entity's `origin` and `angles` as script would. Test-facing
     /// (`Server::test_place_entity`).
     pub fn place_entity(&mut self, num: u32, origin: [f32; 3], angles: [f32; 3]) {
-        use vcod_gsc::Host;
         let Some(id) = self.host.ents.handle(num) else {
             return;
         };
-        let host = &mut self.host;
-        self.vm.with_cx(|cx| {
-            for (name, v) in [("origin", origin), ("angles", angles)] {
-                let field = cx.intern_folded(name);
-                let _ = host.set_field(cx, id, field, Value::Vector(v));
-            }
-        });
+        self.set_vec_field(id, "origin", origin);
+        self.set_vec_field(id, "angles", angles);
     }
 
     /// Raises entity `num`'s `origin` by `dz` through the field write, and
@@ -640,15 +635,10 @@ impl ScriptRuntime {
     /// cmd it runs: pitch and roll 0, yaw the view's
     /// (docs/research/cod11-gsc-object-model.md 23.6).
     pub fn set_client_yaw(&mut self, slot: usize, yaw: f32) {
-        use vcod_gsc::Host;
         let Some(ent) = self.client_entity(slot) else {
             return;
         };
-        let host = &mut self.host;
-        self.vm.with_cx(|cx| {
-            let field = cx.intern_folded("angles");
-            let _ = host.set_field(cx, ent, field, Value::Vector([0.0, yaw, 0.0]));
-        });
+        self.set_vec_field(ent, "angles", [0.0, yaw, 0.0]);
     }
 
     /// A client's body model as the roster's `modelindex`: the model number
@@ -803,12 +793,7 @@ impl ScriptRuntime {
         let Some(ent) = self.client_entity(slot) else {
             return;
         };
-        use vcod_gsc::Host;
-        let host = &mut self.host;
-        self.vm.with_cx(|cx| {
-            let field = cx.intern_folded("angles");
-            let _ = host.set_field(cx, ent, field, Value::Vector([0.0, yaw_deg, 0.0]));
-        });
+        self.set_vec_field(ent, "angles", [0.0, yaw_deg, 0.0]);
     }
 
     /// Whether script has turned the frame archive on (`setarchive`).
@@ -920,18 +905,12 @@ impl ScriptRuntime {
 
     /// A client entity's `.origin` as the scripts read it.
     pub fn client_origin(&mut self, slot: usize) -> [f32; 3] {
-        use vcod_gsc::Host;
         let Some(ent) = self.client_entity(slot) else {
             return [0.0; 3];
         };
         let host = &mut self.host;
-        self.vm.with_cx(|cx| {
-            let field = cx.intern_folded("origin");
-            match host.get_field(cx, ent, field) {
-                Value::Vector(v) => v,
-                _ => [0.0; 3],
-            }
-        })
+        self.vm
+            .with_cx(|cx| host.vec_field(cx, ent, "origin").to_array())
     }
 
     /// The client's entity, once `Connect` has been drained. The object

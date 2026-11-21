@@ -6,6 +6,7 @@
 //! set (`game::cod4::vehicle`). Semantics are INFERRED
 //! (`GScr_SpawnPlane`, `GScr_SpawnHelicopter`, `CMD_VEH_*`).
 
+use super::args::{float, string, vector};
 use crate::game::slot::ClientSlot;
 use glam::Vec3;
 use vcod_gsc::{Cx, ErrorKind, Host, Target, Value};
@@ -69,28 +70,6 @@ const EV_PHYS_JITTER: i32 = 60;
 /// `TR_PHYSICS`.
 pub const TR_PHYSICS: u32 = 8;
 
-fn num(v: Option<&Value>, what: &'static str) -> Result<f32, ErrorKind> {
-    match v {
-        Some(&Value::Int(i)) => Ok(i as f32),
-        Some(&Value::Float(f)) => Ok(f),
-        _ => Err(ErrorKind::BadType(what)),
-    }
-}
-
-fn vec(v: Option<&Value>, what: &'static str) -> Result<Vec3, ErrorKind> {
-    match v {
-        Some(&Value::Vector(v)) => Ok(Vec3::from(v)),
-        _ => Err(ErrorKind::BadType(what)),
-    }
-}
-
-fn string(cx: &Cx, v: Option<&Value>, what: &'static str) -> Result<String, ErrorKind> {
-    match v {
-        Some(&Value::String(s)) => Ok(cx.resolve(s).to_string()),
-        _ => Err(ErrorKind::BadType(what)),
-    }
-}
-
 /// The owner argument: a player's slot and its `sess.cs.team` (0 free,
 /// 1 axis, 2 allies, 3 spectator).
 fn owner(host: &mut GameHost, cx: &mut Cx, v: Option<&Value>) -> Result<(usize, u32), ErrorKind> {
@@ -141,10 +120,10 @@ fn spawn_helicopter(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     let (slot, team) = owner(host, cx, a.first())?;
-    let origin = vec(a.get(1), "spawnHelicopter takes an origin")?;
-    let angles = vec(a.get(2), "spawnHelicopter takes angles")?;
-    let info_name = string(cx, a.get(3), "spawnHelicopter takes a vehicle info")?;
-    let model = string(cx, a.get(4), "spawnHelicopter takes a model")?;
+    let origin = vector(a.get(1), "spawnHelicopter takes an origin")?;
+    let angles = vector(a.get(2), "spawnHelicopter takes angles")?;
+    let info_name = string(cx, a.get(3), "spawnHelicopter takes a vehicle info")?.to_owned();
+    let model = string(cx, a.get(4), "spawnHelicopter takes a model")?.to_owned();
     let id = host.ents.spawn(cx)?;
     let cn = cx.intern_folded("classname");
     let class = Value::String(cx.intern_exact("script_vehicle"));
@@ -207,7 +186,7 @@ fn set_speed(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     let h = heli(host, recv)?;
-    let speed = num(a.first(), "setSpeed takes a speed")? * MPH;
+    let speed = float(a.first(), "setSpeed takes a speed")? * MPH;
     if speed < 0.0 {
         return Err(ErrorKind::Custom(
             "Cannot set negative speed on vehicle".into(),
@@ -215,13 +194,13 @@ fn set_speed(
     }
     h.pace.speed = speed;
     if a.len() > 1 {
-        h.pace.accel = num(a.get(1), "setSpeed takes an acceleration")? * MPH;
+        h.pace.accel = float(a.get(1), "setSpeed takes an acceleration")? * MPH;
     }
     if h.speed < h.pace.speed && h.pace.accel > h.pace.speed {
         h.pace.accel = h.pace.speed;
     }
     h.pace.decel = if a.len() > 2 {
-        num(a.get(2), "setSpeed takes a deceleration")? * MPH
+        float(a.get(2), "setSpeed takes a deceleration")? * MPH
     } else {
         h.pace.accel * 0.5
     };
@@ -260,15 +239,15 @@ fn set_yaw_speed(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let speed = num(a.first(), "setYawSpeed takes a speed")?;
-    let accel = num(a.get(1), "setYawSpeed takes an acceleration")?;
+    let speed = float(a.first(), "setYawSpeed takes a speed")?;
+    let accel = float(a.get(1), "setYawSpeed takes an acceleration")?;
     let decel = match a.get(2) {
-        Some(v) => num(Some(v), "setYawSpeed takes a deceleration")?,
+        Some(v) => float(Some(v), "setYawSpeed takes a deceleration")?,
         None => accel,
     };
     let overshoot = a
         .get(3)
-        .map(|v| num(Some(v), "setYawSpeed takes an overshoot"))
+        .map(|v| float(Some(v), "setYawSpeed takes an overshoot"))
         .transpose()?;
     let h = heli(host, recv)?;
     h.yaw.top = speed;
@@ -296,8 +275,8 @@ fn set_max_pitch_roll(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let p = num(a.first(), "setMaxPitchRoll takes a pitch")?;
-    let r = num(a.get(1), "setMaxPitchRoll takes a roll")?;
+    let p = float(a.first(), "setMaxPitchRoll takes a pitch")?;
+    let r = float(a.get(1), "setMaxPitchRoll takes a roll")?;
     let h = heli(host, recv)?;
     h.max_pitch = p;
     h.max_roll = r;
@@ -312,14 +291,14 @@ fn set_hover_params(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let r = num(a.first(), "setHoverParams takes a radius")?;
+    let r = float(a.first(), "setHoverParams takes a radius")?;
     let speed = a
         .get(1)
-        .map(|v| num(Some(v), "setHoverParams takes a speed"))
+        .map(|v| float(Some(v), "setHoverParams takes a speed"))
         .transpose()?;
     let accel = a
         .get(2)
-        .map(|v| num(Some(v), "setHoverParams takes an acceleration"))
+        .map(|v| float(Some(v), "setHoverParams takes an acceleration"))
         .transpose()?;
     let h = heli(host, recv)?;
     h.hover.radius = r;
@@ -339,7 +318,7 @@ fn set_air_resistance(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let s = num(a.first(), "setAirResistance takes a speed")? * MPH;
+    let s = float(a.first(), "setAirResistance takes a speed")? * MPH;
     heli(host, recv)?.air_resistance = s;
     Ok(Value::Undefined)
 }
@@ -350,7 +329,7 @@ fn set_turning_ability(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let t = num(a.first(), "setTurningAbility takes a number")?;
+    let t = float(a.first(), "setTurningAbility takes a number")?;
     heli(host, recv)?.turning_ability = t;
     Ok(Value::Undefined)
 }
@@ -361,7 +340,7 @@ fn set_near_goal_notify_dist(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let d = num(a.first(), "setNearGoalNotifyDist takes a distance")?;
+    let d = float(a.first(), "setNearGoalNotifyDist takes a distance")?;
     heli(host, recv)?.near_goal_dist = d;
     Ok(Value::Undefined)
 }
@@ -374,7 +353,7 @@ fn set_veh_goal_pos(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let goal = vec(a.first(), "setVehGoalPos takes a position")?;
+    let goal = vector(a.first(), "setVehGoalPos takes a position")?;
     let stop = match a.get(1) {
         Some(v) => v.as_bool()?,
         None => false,
@@ -399,7 +378,7 @@ fn set_goal_yaw(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let y = num(a.first(), "setGoalYaw takes a yaw")?;
+    let y = float(a.first(), "setGoalYaw takes a yaw")?;
     heli(host, recv)?.goal_yaw = Some(y);
     Ok(Value::Undefined)
 }
@@ -420,7 +399,7 @@ fn set_target_yaw(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let y = num(a.first(), "setTargetYaw takes a yaw")?;
+    let y = float(a.first(), "setTargetYaw takes a yaw")?;
     heli(host, recv)?.target_yaw = Some(y);
     Ok(Value::Undefined)
 }
@@ -483,7 +462,7 @@ fn set_veh_weapon(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let name = string(cx, a.first(), "setVehWeapon takes a weapon")?;
+    let name = string(cx, a.first(), "setVehWeapon takes a weapon")?.to_owned();
     let w = weapon_index(host, &name);
     heli(host, recv)?.weapon = w;
     Ok(Value::Undefined)
@@ -549,7 +528,7 @@ fn set_turret_target_vec(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let p = vec(a.first(), "setTurretTargetVec takes a position")?;
+    let p = vector(a.first(), "setTurretTargetVec takes a position")?;
     heli(host, recv)?.target = Some(TurretTarget::Pos(p));
     Ok(Value::Undefined)
 }
@@ -564,7 +543,7 @@ fn set_turret_target_ent(
         return Err(ErrorKind::BadType("setTurretTargetEnt takes an entity"));
     };
     let off = match a.get(1) {
-        Some(v) => vec(Some(v), "setTurretTargetEnt takes an offset")?,
+        Some(v) => vector(Some(v), "setTurretTargetEnt takes an offset")?,
         None => Vec3::ZERO,
     };
     heli(host, recv)?.target = Some(TurretTarget::Ent(t, off));
@@ -589,7 +568,7 @@ fn set_damage_stage(
     recv: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let s = num(a.first(), "setDamageStage takes a stage")? as u32;
+    let s = float(a.first(), "setDamageStage takes a stage")? as u32;
     heli(host, recv)?.stage = s & 7;
     Ok(Value::Undefined)
 }
@@ -627,10 +606,10 @@ fn create_attractor(
             _ => return Err(ErrorKind::BadType("not an entity")),
         }
     } else {
-        (None, vec(a.first(), "not a vector")?)
+        (None, vector(a.first(), "not a vector")?)
     };
-    let strength = num(a.get(1), "not a float")?;
-    let reach = num(a.get(2), "not a float")?;
+    let strength = float(a.get(1), "not a float")?;
+    let reach = float(a.get(2), "not a float")?;
     if reach <= 0.0 {
         return Err(ErrorKind::Custom(
             "maxDist must be greater than zero".into(),
@@ -762,8 +741,8 @@ fn physics_launch(
     }
     let (contact, force) = if a.len() == 2 {
         (
-            vec(a.first(), "physicsLaunch takes a contact point")?,
-            vec(a.get(1), "physicsLaunch takes a force")?,
+            vector(a.first(), "physicsLaunch takes a contact point")?,
+            vector(a.get(1), "physicsLaunch takes a force")?,
         )
     } else {
         (Vec3::ZERO, Vec3::ZERO)
@@ -826,9 +805,9 @@ fn physics_jitter(
     if a.len() != 5 {
         return Err(ErrorKind::Custom("Incorrect number of parameters".into()));
     }
-    let origin = vec(a.first(), "physicsJitter takes an origin")?;
-    let outer = num(a.get(1), "physicsJitter takes a radius")? as i32;
-    let inner = num(a.get(2), "physicsJitter takes a radius")?;
+    let origin = vector(a.first(), "physicsJitter takes an origin")?;
+    let outer = float(a.get(1), "physicsJitter takes a radius")? as i32;
+    let inner = float(a.get(2), "physicsJitter takes a radius")?;
     if inner < 0.0 {
         return Err(ErrorKind::Custom("Radius is negative".into()));
     }
@@ -838,8 +817,8 @@ fn physics_jitter(
             "Inner radius is outside the outer radius".into(),
         ));
     }
-    let min = num(a.get(3), "physicsJitter takes a displacement")?;
-    let max = num(a.get(4), "physicsJitter takes a displacement")?;
+    let min = float(a.get(3), "physicsJitter takes a displacement")?;
+    let max = float(a.get(4), "physicsJitter takes a displacement")?;
     if min > max {
         return Err(ErrorKind::Custom(
             "Maximum jitter is less than minimum jitter".into(),
@@ -874,10 +853,10 @@ fn physics_explosion(
     if a.len() != 4 {
         return Err(ErrorKind::Custom("Incorrect number of parameters".into()));
     }
-    let origin = vec(a.first(), "physicsExplosion* takes an origin")?;
-    let outer = num(a.get(1), "physicsExplosion* takes a radius")? as i32;
-    let inner = num(a.get(2), "physicsExplosion* takes a radius")?;
-    let magnitude = num(a.get(3), "physicsExplosion* takes a magnitude")?;
+    let origin = vector(a.first(), "physicsExplosion* takes an origin")?;
+    let outer = float(a.get(1), "physicsExplosion* takes a radius")? as i32;
+    let inner = float(a.get(2), "physicsExplosion* takes a radius")?;
+    let magnitude = float(a.get(3), "physicsExplosion* takes a magnitude")?;
     if inner < 0.0 {
         return Err(ErrorKind::Custom("Radius is negative".into()));
     }

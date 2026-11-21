@@ -18,6 +18,7 @@ use vcod_gsc::{EntId, Loader, ScriptSource, Target, Value, Vm};
 
 mod clients;
 mod damage;
+pub(crate) use damage::PlayerDamage;
 mod frame;
 mod load;
 mod movers;

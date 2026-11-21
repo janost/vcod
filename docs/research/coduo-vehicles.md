@@ -1564,6 +1564,21 @@ trace").
 
   A blend goes out with `eventParm` and `scale` the aliases and
   `angles2[1]` the crossfade, unlinked when both aliases are 0.
+- **Ported and unwired.** Two step inputs have no writer in vcod-server,
+  so three ported branches never run (read off vcod's code, not a retail
+  claim):
+  - `StepInput::neighbour_moving`, `VEH_PhysicsNotRequired`'s (0x87a13)
+    test for another pool vehicle within 1024 units that itself needs
+    physics: `think::think` passes `false`, so a parked vehicle next
+    to a moving one stops stepping where retail may keep it awake
+    (INFERRED: the neighbour walk's range and order are not read here).
+  - `HitEntity::script_model`, classname `script_model` (scr_const 0x7e)
+    on an entity a trace struck: `BodiesWorld::entity` fills only bodies
+    and vehicles. So the slide's `trigger` notify to a struck script_model,
+    the collision probes' 700 jolt with its 150 ms lockout, and the
+    `trigger` notify in `think` never run (INFERRED: the struck-entity
+    arms are ported off the decompile of 0x8036e and 0x827ab; no capture
+    drives a vehicle into a script_model).
 
 ## 13. Guns, heat and damage
 

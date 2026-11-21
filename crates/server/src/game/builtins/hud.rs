@@ -11,6 +11,7 @@
 //!
 //! Still missing from the method table: `reset`. No stock gametype calls it.
 
+use super::args::{as_float, as_int};
 use crate::game::builtins::entity::entity_receiver;
 use crate::game::entity::{FIRST_HUD_ELEM, HudState};
 use crate::game::host::GameHost;
@@ -202,11 +203,11 @@ pub fn set_shader(
     let (name, w, h, st) = match args {
         [name] => (name, 0, 0, (1.0, 1.0)),
         [name, w, h, rest @ ..] if rest.is_empty() || (uo && rest.len() == 2) => {
-            let (Some(w), Some(h)) = (as_int(*w), as_int(*h)) else {
+            let (Some(w), Some(h)) = (as_int(w), as_int(h)) else {
                 return Err(ErrorKind::BadType("setShader takes a numeric size"));
             };
             let st = match rest {
-                [s, t] => match (as_f32(*s), as_f32(*t)) {
+                [s, t] => match (as_float(s), as_float(t)) {
                     (Some(s), Some(t)) => (s, t),
                     _ => return Err(ErrorKind::BadType("setShader takes numeric texcoords")),
                 },
@@ -262,23 +263,6 @@ pub(crate) fn with_hud(
     };
     f(state);
     Ok(())
-}
-
-fn as_f32(v: Value) -> Option<f32> {
-    match v {
-        Value::Int(i) => Some(i as f32),
-        Value::Float(f) => Some(f),
-        _ => None,
-    }
-}
-
-/// A size argument, which retail reads with `Scr_GetInt`.
-fn as_int(v: Value) -> Option<i32> {
-    match v {
-        Value::Int(i) => Some(i),
-        Value::Float(f) => Some(f as i32),
-        _ => None,
-    }
 }
 
 /// `<hudelem> setTimer(seconds)` (0x4b8e4, hudelem method 2): a countdown
@@ -422,7 +406,7 @@ fn set_any_clock(
         .allocators
         .shader_index(&mut host.configstrings, &name, host.initializing)?;
     let (w, h) = match args.get(3..5) {
-        Some([w, h]) => match (as_int(*w), as_int(*h)) {
+        Some([w, h]) => match (as_int(w), as_int(h)) {
             (Some(w), Some(h)) if w >= 0 && h >= 0 => (w, h),
             _ => return Err(ErrorKind::BadType("a clock's size must be at least 0")),
         },
@@ -477,7 +461,7 @@ pub fn scale_over_time(
         ));
     };
     let ms = tween_ms(*t)?;
-    let (w, h) = match (as_int(*w), as_int(*h)) {
+    let (w, h) = match (as_int(w), as_int(h)) {
         (Some(w), Some(h)) => (w, h),
         _ => return Err(ErrorKind::BadType("a size must be a number")),
     };

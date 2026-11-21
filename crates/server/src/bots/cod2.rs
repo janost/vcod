@@ -336,18 +336,37 @@ impl OwnBots for Cod2Own {
         };
     }
 
+    /// Every field named, so a new one is placed: per-slot or per-game.
     fn forget(&mut self, slot: usize) {
-        self.throwing.remove(&slot);
-        self.mantling.remove(&slot);
-        self.crouched.remove(&slot);
-        self.stance_seq.remove(&slot);
-        self.guns.remove(&slot);
-        self.fetches.remove(&slot);
-        self.last_views.remove(&slot);
-        self.hits.remove(&slot);
-        self.heard.remove(&slot);
-        self.smoking.remove(&slot);
-        self.retreats.remove(&slot);
+        let Cod2Own {
+            man_guns: _,
+            throwing,
+            mantling,
+            crouched,
+            stance_seq,
+            guns,
+            fetches,
+            last_views,
+            smokes: _,
+            hits,
+            heard,
+            last_tick: _,
+            clouds: _,
+            smoking,
+            retreats,
+            pass: _,
+        } = self;
+        throwing.remove(&slot);
+        mantling.remove(&slot);
+        crouched.remove(&slot);
+        stance_seq.remove(&slot);
+        guns.remove(&slot);
+        fetches.remove(&slot);
+        last_views.remove(&slot);
+        hits.remove(&slot);
+        heard.remove(&slot);
+        smoking.remove(&slot);
+        retreats.remove(&slot);
     }
 }
 

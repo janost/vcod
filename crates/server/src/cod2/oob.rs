@@ -434,8 +434,8 @@ impl Cod2Server {
                 self.core.quit = true;
             }
             "set" | "seta" | "sets" => {
-                if args.len() >= 3 {
-                    self.console_set(arg(1), &args[2..].join(" "), out);
+                if let Some((name, value)) = crate::cvars::set_args(&args) {
+                    self.console_set(name, &value, out);
                 }
             }
             name => match self.game.cvars.lookup(name) {

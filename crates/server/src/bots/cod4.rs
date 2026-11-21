@@ -263,19 +263,50 @@ impl OwnBots for Cod4Own {
         *self = fresh;
     }
 
+    /// Every field named, so a new one is placed: per-slot or per-game.
+    /// `attackers` is keyed by every victim, bot or not, and stays.
     fn forget(&mut self, slot: usize) {
-        self.held.remove(&slot);
-        self.throwing.remove(&slot);
-        self.mantling.remove(&slot);
-        self.climbed.remove(&slot);
-        self.crouched.remove(&slot);
-        self.stance_seq.remove(&slot);
-        self.arms.remove(&slot);
-        self.hits.remove(&slot);
-        self.heard.remove(&slot);
-        self.classes.remove(&slot);
-        self.switches.remove(&slot);
-        self.gun.forget(slot);
+        let Cod4Own {
+            world: _,
+            brush_key: _,
+            recheck_brushes: _,
+            on_level: _,
+            level_start: _,
+            throwing,
+            mantling,
+            climbed,
+            crouched,
+            stance_seq,
+            arms,
+            hits,
+            hits_read: _,
+            attackers: _,
+            heard,
+            flying: _,
+            heard_blasts: _,
+            classes,
+            switches,
+            objectives: _,
+            man_guns: _,
+            throw_back: _,
+            gun,
+            pass: _,
+            next_think: _,
+            think_at: _,
+            held,
+        } = self;
+        held.remove(&slot);
+        throwing.remove(&slot);
+        mantling.remove(&slot);
+        climbed.remove(&slot);
+        crouched.remove(&slot);
+        stance_seq.remove(&slot);
+        arms.remove(&slot);
+        hits.remove(&slot);
+        heard.remove(&slot);
+        classes.remove(&slot);
+        switches.remove(&slot);
+        gun.forget(slot);
     }
 }
 

@@ -4,7 +4,7 @@
 //! `ClientSim::to_wire` renders it into `ps.weapons`, `ps.weaponslots` and
 //! `ps.weapon`.
 
-use vcod_common::pk3::Pk3Fs;
+use vcod_common::asset_source::AssetSource;
 use vcod_common::pmove::weapon;
 use vcod_common::weapon::WeaponDef;
 
@@ -136,7 +136,7 @@ impl WeaponTable {
     /// Walks the weapon list in wire order, parsing each weapon file. A
     /// missing file logs and leaves that slot `None` rather than failing
     /// the map load.
-    pub fn load(fs: &Pk3Fs, list: &'static crate::defs::Defs) -> WeaponTable {
+    pub fn load(fs: &dyn AssetSource, list: &'static crate::defs::Defs) -> WeaponTable {
         let mut defs: Vec<Option<WeaponDef>> = vec![None; list.num_items()];
         for (i, name) in list.weapons.split(' ').enumerate() {
             match vcod_common::weapon::load(fs, name) {

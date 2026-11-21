@@ -184,7 +184,8 @@ pub static COD4_DEFS: Defs = Defs {
         "MOD_EXPLOSIVE",
         "MOD_IMPACT",
     ],
-    mod_flagged: &[],
+    // The obituary's flagged means: CoD2's and `MOD_IMPACT`.
+    mod_flagged: &[7, 8, 9, 11, 12, 15],
 };
 
 /// The zones a 1.7 server loads ahead of the map's (the three

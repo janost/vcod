@@ -123,16 +123,11 @@ impl ScriptRuntime {
     /// level time, a frame ahead of the `.origin` script reads
     /// (docs/research/cod11-movers.md, section 13).
     pub fn link_anchor(&mut self, id: EntId) -> Option<([f32; 3], [f32; 3])> {
-        use vcod_gsc::Host;
         let origin = self.entity_origin_of(id)?;
         let host = &mut self.host;
-        let angles = self.vm.with_cx(|cx| {
-            let field = cx.intern_folded("angles");
-            match host.get_field(cx, id, field) {
-                Value::Vector(v) => v,
-                _ => [0.0; 3],
-            }
-        });
+        let angles = self
+            .vm
+            .with_cx(|cx| host.vec_field(cx, id, "angles").to_array());
         let (pos, apos) = self
             .host
             .movers

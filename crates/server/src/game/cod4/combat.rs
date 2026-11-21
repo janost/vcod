@@ -1938,7 +1938,7 @@ fn damage_direction(from: Option<[f32; 3]>) -> [u32; 2] {
     let Some(d) = from else {
         return [255; 2];
     };
-    let angles = crate::game::builtins::math::vectoangles(d);
+    let angles = crate::game::builtins::math::vectoangles_1_7(d);
     [angles[0], angles[1]].map(|a| (f64::from(a) / 360.0 * 256.0) as i32 as u32)
 }
 

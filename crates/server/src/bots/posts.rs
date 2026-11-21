@@ -41,35 +41,68 @@ pub enum Anchor {
     },
 }
 
-/// An anchor's bits: the survey cache and the deal key on them.
-pub type Key = [u32; 10];
+/// What the survey cache and the deal key on: an anchor's bits, the band
+/// its outposts were made in, and whether the guard holds an outpost.
+/// Fields are compared in order, as the words of the old flat key were.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Key {
+    /// The kind (1.0 ring, 2.0 zone, 3.0 radio) and its fields, as f32 bits.
+    anchor: [u32; 8],
+    /// A band other than [`OUT_BAND`]'s `far_max` bits, 0 for it.
+    band: u32,
+    hold: Hold,
+}
+
+/// Where a guard keyed on an anchor stands: round it or at an outpost.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Hold {
+    #[default]
+    Inner,
+    Outer,
+}
+
+const RING: f32 = 1.0;
+const ZONE: f32 = 2.0;
+const RADIO: f32 = 3.0;
+
+impl Key {
+    /// The point of a [`Anchor::Ring`]'s key, `None` for another kind.
+    fn ring_at(&self) -> Option<[f32; 3]> {
+        let f = |i: usize| f32::from_bits(self.anchor[i]);
+        (f(0) == RING).then(|| [f(1), f(2), f(3)])
+    }
+}
 
 impl Anchor {
     pub fn key(&self) -> Key {
-        let mut k = [0u32; 10];
+        let mut k = [0u32; 8];
         let mut put = |i: usize, v: f32| k[i] = v.to_bits();
         match *self {
             Anchor::Ring { at, inner, outer } => {
-                put(0, 1.0);
+                put(0, RING);
                 (0..3).for_each(|i| put(1 + i, at[i]));
                 put(4, inner);
                 put(5, outer);
             }
             Anchor::Zone { mins, maxs, .. } => {
-                put(0, 2.0);
+                put(0, ZONE);
                 (0..3).for_each(|i| put(1 + i, mins[i]));
                 (0..3).for_each(|i| put(4 + i, maxs[i]));
             }
             Anchor::Radio {
                 at, radius, height, ..
             } => {
-                put(0, 3.0);
+                put(0, RADIO);
                 (0..3).for_each(|i| put(1 + i, at[i]));
                 put(4, radius);
                 put(5, height);
             }
         }
-        k
+        Key {
+            anchor: k,
+            band: 0,
+            hold: Hold::Inner,
+        }
     }
 
     /// The point a post looks at and the survey floods from.
@@ -900,6 +933,14 @@ impl Posts {
         self.outers = std::mem::take(&mut old.outers);
     }
 
+    /// The outposts made round a ring anchor at `at`, in every band.
+    pub fn ring_outposts(&self, at: [f32; 3]) -> impl Iterator<Item = &Outer> {
+        self.outers
+            .iter()
+            .filter(move |(k, _)| k.ring_at() == Some(at))
+            .map(|(_, o)| &**o)
+    }
+
     /// Drops what the posts keep for `slot`'s bot.
     pub fn forget(&mut self, slot: usize) {
         self.held.remove(&slot);
@@ -944,7 +985,7 @@ impl Posts {
 
     /// The outposts of `a` on `g` in `band` ([`outer`]), made now if new;
     /// cached under the anchor's key with a band other than [`OUT_BAND`]
-    /// in its eighth word.
+    /// in [`Key::band`].
     pub fn outer(
         &mut self,
         graph: u64,
@@ -956,7 +997,7 @@ impl Posts {
         self.on_graph(graph);
         let mut key = a.key();
         if *band != OUT_BAND {
-            key[8] = band.far_max.to_bits();
+            key.band = band.far_max.to_bits();
         }
         if let Some((_, s)) = self.outers.iter().find(|(k, _)| *k == key) {
             return s.clone();
@@ -970,13 +1011,14 @@ impl Posts {
     }
 }
 
-/// The key outposts are held under: the anchor's with its spare word set,
+/// The key outposts are held under: the anchor's marked [`Hold::Outer`],
 /// so a guard moving between an outpost and a post round the objective
 /// takes a fresh pick.
 pub fn outer_key(key: Key) -> Key {
-    let mut k = key;
-    k[9] = 1;
-    k
+    Key {
+        hold: Hold::Outer,
+        ..key
+    }
 }
 
 #[cfg(test)]
@@ -1009,14 +1051,14 @@ mod tests {
         let s = row();
         let guards = [(1, Vec3::ZERO), (2, Vec3::ZERO), (3, Vec3::ZERO)];
         let mut held = BTreeMap::new();
-        let a = assign(&s, [0; 10], &guards, &mut held, 0, 1);
+        let a = assign(&s, Key::default(), &guards, &mut held, 0, 1);
         assert_eq!(a.len(), 3);
         for (i, x) in a.iter().enumerate() {
             for y in &a[i + 1..] {
                 assert!(x.1.at.distance(y.1.at) >= SPREAD, "{x:?} {y:?}");
             }
         }
-        let b = assign(&s, [0; 10], &guards, &mut held, 50, 1);
+        let b = assign(&s, Key::default(), &guards, &mut held, 50, 1);
         assert_eq!(a, b, "kept");
     }
 
@@ -1027,15 +1069,15 @@ mod tests {
         let s = row();
         let mut held = BTreeMap::new();
         let far = [(1, Vec3::new(0.0, 3000.0, 0.0))];
-        let first = assign(&s, [0; 10], &far, &mut held, 0, 1)[0].1;
+        let first = assign(&s, Key::default(), &far, &mut held, 0, 1)[0].1;
         let on = [(1, first.at)];
-        assign(&s, [0; 10], &on, &mut held, 50, 1);
+        assign(&s, Key::default(), &on, &mut held, 50, 1);
         assert_eq!(held[&1].reached, Some(50));
         let hold = held[&1].hold;
         assert!((HOLD_MS..HOLD_MS + HOLD_SPREAD_MS).contains(&hold));
-        let before = assign(&s, [0; 10], &on, &mut held, 50 + hold - 50, 1)[0].1;
+        let before = assign(&s, Key::default(), &on, &mut held, 50 + hold - 50, 1)[0].1;
         assert_eq!(before, first);
-        let after = assign(&s, [0; 10], &on, &mut held, 50 + hold, 1)[0].1;
+        let after = assign(&s, Key::default(), &on, &mut held, 50 + hold, 1)[0].1;
         assert!(after.at.distance(first.at) >= SPREAD * 0.5, "moved on");
     }
 
@@ -1106,7 +1148,7 @@ mod tests {
         let dealt = assign_by(
             &o.posts,
             &OUTER,
-            outer_key([0; 10]),
+            outer_key(Key::default()),
             &guards,
             &mut held,
             0,
@@ -1128,11 +1170,11 @@ mod tests {
         let s = row();
         let mut held = BTreeMap::new();
         let guards = [(1, Vec3::ZERO)];
-        let first = assign(&s, [0; 10], &guards, &mut held, 0, 1)[0].1;
+        let first = assign(&s, Key::default(), &guards, &mut held, 0, 1)[0].1;
         let h = held.get_mut(&1).unwrap();
         h.burnt = Some((first.at, BURN_MS));
         h.reached = Some(-h.hold);
-        let next = assign(&s, [0; 10], &guards, &mut held, 50, 1)[0].1;
+        let next = assign(&s, Key::default(), &guards, &mut held, 50, 1)[0].1;
         assert!(
             next.at.distance(first.at) >= BURN_NEAR,
             "{first:?} {next:?}"
@@ -1151,11 +1193,56 @@ mod tests {
             (3, Vec3::new(300.0, 0.0, 0.0)),
         ];
         let mut kept = BTreeMap::new();
-        let l = lanes(&s, [0; 10], centre, &bots, &mut kept, 0, LANE_FAR);
+        let l = lanes(&s, Key::default(), centre, &bots, &mut kept, 0, LANE_FAR);
         assert_eq!(l.len(), 2);
         assert_ne!(l[0].1, l[1].1);
         // Once nearer the objective than its way in, the lane is passed.
         let on = [(1, Vec3::new(100.0, 0.0, 0.0))];
-        assert!(lanes(&s, [0; 10], centre, &on, &mut kept, 50, LANE_FAR).is_empty());
+        assert!(lanes(&s, Key::default(), centre, &on, &mut kept, 50, LANE_FAR).is_empty());
+    }
+
+    #[test]
+    fn ring_outposts_are_the_rings_at_the_point_in_every_band() {
+        let at = [10.0, 20.0, 30.0];
+        let ring = Anchor::Ring {
+            at,
+            inner: 0.0,
+            outer: 300.0,
+        };
+        let zone = Anchor::Zone {
+            mins: at,
+            maxs: [40.0, 50.0, 60.0],
+            stand: at,
+        };
+        let far = Key {
+            band: 900.0f32.to_bits(),
+            ..ring.key()
+        };
+        let outer = |x: f32| {
+            Arc::new(Outer {
+                posts: row()
+                    .posts
+                    .into_iter()
+                    .take(1)
+                    .map(|p| Post {
+                        at: Vec3::splat(x),
+                        ..p
+                    })
+                    .collect(),
+            })
+        };
+        let p = Posts {
+            outers: vec![
+                (ring.key(), outer(1.0)),
+                (zone.key(), outer(2.0)),
+                (far, outer(3.0)),
+            ],
+            ..Posts::default()
+        };
+        let got: Vec<f32> = p.ring_outposts(at).map(|o| o.posts[0].at.x).collect();
+        assert_eq!(got, [1.0, 3.0]);
+        assert_eq!(p.ring_outposts([10.0, 20.0, 31.0]).count(), 0);
+        assert_ne!(outer_key(ring.key()), ring.key());
+        assert_ne!(far, ring.key());
     }
 }

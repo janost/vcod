@@ -212,7 +212,7 @@ fn no_stock_vehicle_takes_the_stuck_kill_at_the_start() {
         let mut sv = vcod_server::Server::new(common::cfg(map, probe), now);
         sv.set_protocol(&PROTOCOL_V22);
         sv.overlay_script(&format!("maps/mp/gametypes/{probe}"), gsc);
-        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&*fs)));
         sv.load_scripts(fs.clone()).expect("load the scripts");
         common::run_alone(&mut sv, &mut now, 3_200);
         for l in sv.script_log() {

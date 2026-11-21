@@ -92,10 +92,7 @@ impl ScriptRuntime {
             let bomb = if truthy(cx.get_field(level, planted)) {
                 entities(host, cx, "bombtrigger").first().map(|&id| {
                     let origin = cx.intern_folded("origin");
-                    let at = match host.get_field(cx, id, origin) {
-                        Value::Vector(v) => v,
-                        _ => [0.0; 3],
-                    };
+                    let at = host.vec_field_at(cx, id, origin).to_array();
                     (at, entity_abs_bounds(host, cx, id))
                 })
             } else {

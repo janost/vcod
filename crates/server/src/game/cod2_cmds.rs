@@ -6,7 +6,6 @@
 use glam::Vec3;
 use vcod_cod2::pmove::pm_type;
 use vcod_common::text::atoi;
-use vcod_gsc::Host as _;
 
 use super::cod2::{Cod2Level, PMF_PLAYING};
 use super::host::WeaponOp;
@@ -178,13 +177,9 @@ impl Cod2Level {
                 let (class, o) = match self.rt.host.ents.handle(i) {
                     Some(ent) => {
                         let class = self.rt.field_str(ent, "classname");
-                        let o = self.rt.with_host(|h, cx| {
-                            let atom = cx.intern_folded("origin");
-                            match h.get_field(cx, ent, atom) {
-                                vcod_gsc::Value::Vector(v) => v,
-                                _ => [0.0; 3],
-                            }
-                        });
+                        let o = self
+                            .rt
+                            .with_host(|h, cx| h.vec_field(cx, ent, "origin").to_array());
                         (class, o)
                     }
                     None => (String::new(), [0.0; 3]),

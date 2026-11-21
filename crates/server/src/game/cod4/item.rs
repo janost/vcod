@@ -154,20 +154,9 @@ pub fn rest_angles(angles: Vec3, normal: Vec3) -> Vec3 {
     axis_to_angles(forward.as_vec3(), left.as_vec3())
 }
 
-/// `vectoangles` (0x8191a72): yaw then pitch off `atan2` in double, each
-/// stored as a float and then taking its add, 360 or 0, before the store;
-/// the flat length goes to `atan2` unrounded.
+/// `vectoangles` (0x8191a72): [`crate::game::builtins::math::vectoangles_1_7`].
 pub fn vectoangles(v: Vec3) -> Vec3 {
-    let d = v.as_dvec3();
-    if v.x == 0.0 && v.y == 0.0 {
-        let pitch = if -v.z < 0.0 { 270.0 } else { 90.0 };
-        return Vec3::new(pitch, 0.0, 0.0);
-    }
-    let wrap = |a: f32| (f64::from(a) + if a < 0.0 { 360.0 } else { 0.0 }) as f32;
-    let yaw = (d.y.atan2(d.x) * 180.0 / std::f64::consts::PI) as f32;
-    let flat = (d.x * d.x + d.y * d.y).sqrt();
-    let pitch = (d.z.atan2(flat) * -180.0 / std::f64::consts::PI) as f32;
-    Vec3::new(wrap(pitch), wrap(yaw), 0.0)
+    Vec3::from(crate::game::builtins::math::vectoangles_1_7(v.to_array()))
 }
 
 /// `AxisToAngles` (0x81951fe): pitch and yaw are the forward's

@@ -253,17 +253,7 @@ pub fn link_box_of(class: LinkBox) -> ([f32; 3], [f32; 3]) {
 pub fn hud_elems(host: &GameHost, slot: usize, team: i32) -> (Vec<HudElem>, Vec<HudElem>) {
     let mut archived = Vec::new();
     let mut current = Vec::new();
-    let ids: Vec<EntId> = host.ents.iter_hud_elems().map(|(id, _)| id).collect();
-    for id in ids {
-        let Some(state) = host.ents.get(id).and_then(|e| e.hud) else {
-            continue;
-        };
-        if state.team != 0 && state.team != team {
-            continue;
-        }
-        if state.owner != HUD_OWNER_ALL && state.owner != slot as u32 {
-            continue;
-        }
+    for (id, _, state) in hud_visible(host, slot, team, false) {
         let out = match hud_field_i32(host, id, "archived") {
             0 => &mut current,
             _ => &mut archived,
@@ -273,6 +263,25 @@ pub fn hud_elems(host: &GameHost, slot: usize, team: i32) -> (Vec<HudElem>, Vec<
         }
     }
     (archived, current)
+}
+
+/// `HudElem_UpdateClient`'s walk and filter, the same in all three games
+/// (1.1 0x4be8c, CoD2 0x8104882, cod4-hud.md 5): the pool from slot 0, an
+/// element with a team kept for that team, an owned one for its owner.
+/// CoD2 and CoD4 also pass over a free element (`skip_free`, type 0).
+pub(crate) fn hud_visible(
+    host: &GameHost,
+    slot: usize,
+    team: i32,
+    skip_free: bool,
+) -> impl Iterator<Item = (EntId, &crate::game::entity::GEntity, HudState)> {
+    host.ents.iter_hud_elems().filter_map(move |(id, e)| {
+        let state = e.hud?;
+        let shown = !(skip_free && state.elem_type == 0)
+            && (state.team == 0 || state.team == team)
+            && (state.owner == HUD_OWNER_ALL || state.owner == slot as u32);
+        shown.then_some((id, e, state))
+    })
 }
 
 /// One record as block 5 carries it: the script-visible fields out of the

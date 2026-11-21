@@ -4,10 +4,54 @@
 
 use super::*;
 
+/// A gametype script's side name as a team, -1 for any other.
+fn team(t: &str) -> i32 {
+    match t {
+        "axis" => script::TEAM_AXIS,
+        "allies" => script::TEAM_ALLIES,
+        _ => -1,
+    }
+}
+
+/// The middle of a box.
+fn mid((lo, hi): script::Bounds) -> [f32; 3] {
+    std::array::from_fn(|i| (lo[i] + hi[i]) * 0.5)
+}
+
+/// `slot`'s team in a tick's team list, 0 past its end.
+pub(super) fn team_of(teams: &[i32], slot: usize) -> i32 {
+    teams.get(slot).copied().unwrap_or(0)
+}
+
 impl Server {
     /// The bots' pass of the tick ([`crate::bots::driver::step`]).
     pub(super) fn step_bots(&mut self) {
         crate::bots::driver::step(self);
+    }
+
+    /// The boxes of every playing client but `skip` that `keep` passes,
+    /// each grown by `grow` a side, in slot order.
+    fn live_boxes(
+        &self,
+        skip: usize,
+        keep: impl Fn(usize, &crate::spectate::ClientSim) -> bool,
+        grow: f32,
+    ) -> Vec<(glam::Vec3, glam::Vec3)> {
+        let grow = glam::Vec3::splat(grow);
+        self.core
+            .clients
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != skip)
+            .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
+            .filter(|(i, o)| o.playing() && keep(*i, o))
+            .map(|(_, o)| {
+                (
+                    o.ps.origin + o.ps.mins() - grow,
+                    o.ps.origin + o.ps.maxs() + grow,
+                )
+            })
+            .collect()
     }
 
     /// Whether the graph stands over the brushes the script links now, with
@@ -89,7 +133,7 @@ impl Server {
         let sim = self.core.clients[slot].as_ref()?.sim.as_ref()?;
         let def = self.game.module.weapon_table.get(weapon as usize)?;
         let rt = self.game.module.script.as_ref()?;
-        let my_team = teams.get(slot).copied().unwrap_or(0);
+        let my_team = team_of(teams, slot);
         let radius = def.explosion_radius;
         let target = glam::Vec3::from(target);
         // Teammates matter only with friendly fire on (1.1's `tdm` ships
@@ -103,7 +147,7 @@ impl Server {
             .enumerate()
             .filter(|(i, _)| teamplay && *i != slot && teams.get(*i).copied() == Some(my_team))
             .filter_map(|(_, c)| c.as_ref()?.sim.as_ref())
-            .filter(|o| o.pm_type == crate::spectate::PmType::Normal && !o.dead)
+            .filter(|o| o.playing())
             .map(|o| (o.ps.origin, o.ps.velocity))
             .collect();
         // A teammate where he stands or where his pace takes him while the
@@ -121,22 +165,7 @@ impl Server {
         let to = target - eye;
         let range = to.truncate().length();
         let yaw = to.y.atan2(to.x).to_degrees();
-        let bodies: Vec<(glam::Vec3, glam::Vec3)> = self
-            .core
-            .clients
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i != slot)
-            .filter_map(|(_, c)| c.as_ref()?.sim.as_ref())
-            .filter(|o| o.pm_type == crate::spectate::PmType::Normal && !o.dead)
-            .map(|o| {
-                let grow = glam::Vec3::splat(crate::bots::LOB_BODY_GROW);
-                (
-                    o.ps.origin + o.ps.mins() - grow,
-                    o.ps.origin + o.ps.maxs() + grow,
-                )
-            })
-            .collect();
+        let bodies = self.live_boxes(slot, |_, _| true, crate::bots::LOB_BODY_GROW);
         // When it goes off: a 1.1 or 1.5 fuse runs in full from the
         // release; a UO cook burns `COOK_MEAN_MS` of it in the hand on the
         // mean and up to `COOK_MOST_MS`, so a burst near the thrower is
@@ -282,16 +311,7 @@ impl Server {
         // A body on the way bursts the rocket there, on the shooter as
         // often as not: no shot while any other player's box crosses the
         // line.
-        let bodies: Vec<(glam::Vec3, glam::Vec3)> = self
-            .core
-            .clients
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i != slot)
-            .filter_map(|(_, c)| c.as_ref()?.sim.as_ref())
-            .filter(|o| o.pm_type == crate::spectate::PmType::Normal && !o.dead)
-            .map(|o| (o.ps.origin + o.ps.mins(), o.ps.origin + o.ps.maxs()))
-            .collect();
+        let bodies = self.live_boxes(slot, |_, _| true, 0.0);
         (!crate::bots::friend_in_line(muzzle, spot.into(), &bodies)).then_some(spot)
     }
 
@@ -315,16 +335,7 @@ impl Server {
         if !shell_lands(world, models, hull, muzzle, dir, gun.speed, at.into()) {
             return (shot, false);
         }
-        let bodies: Vec<(glam::Vec3, glam::Vec3)> = self
-            .core
-            .clients
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i != slot)
-            .filter_map(|(_, c)| c.as_ref()?.sim.as_ref())
-            .filter(|o| o.pm_type == crate::spectate::PmType::Normal && !o.dead && o.seat.is_none())
-            .map(|o| (o.ps.origin + o.ps.mins(), o.ps.origin + o.ps.maxs()))
-            .collect();
+        let bodies = self.live_boxes(slot, |_, o| o.seat.is_none(), 0.0);
         let near = muzzle.distance(at.into()) + crate::bots::BREACH_NEAR;
         let laid = !crate::bots::friend_in_line(muzzle, muzzle + dir * near, &bodies);
         (shot, laid)
@@ -528,7 +539,7 @@ impl Server {
             speed: sim.ps.velocity.truncate().length(),
             velocity: sim.ps.velocity.into(),
             dead: sim.dead,
-            playing: sim.pm_type == crate::spectate::PmType::Normal && !sim.dead,
+            playing: sim.playing(),
             enemy,
             hurt: self.bot_hurt(sim),
             use_takes_weapon: sim.cursor_hint >= self.game.proto.cursor_hints.weapon,
@@ -651,11 +662,6 @@ impl Server {
             return None;
         }
         let o = self.game.module.script.as_mut()?.sd_objectives();
-        let team = |t: &str| match t {
-            "axis" => script::TEAM_AXIS,
-            "allies" => script::TEAM_ALLIES,
-            _ => -1,
-        };
         let sites = o
             .sites
             .iter()
@@ -736,9 +742,6 @@ impl Server {
             mins,
             maxs,
             stand: self.site_stand(mins, maxs),
-        };
-        let mid = |(lo, hi): script::Bounds| -> [f32; 3] {
-            std::array::from_fn(|i| (lo[i] + hi[i]) * 0.5)
         };
         match uo {
             script::UoObjectives::Ctf(flags) => {
@@ -878,11 +881,6 @@ impl Server {
         }
         let clients = self.core.clients.len();
         let o = self.game.module.script.as_mut()?.re_objectives(clients);
-        let team = |t: &str| match t {
-            "axis" => script::TEAM_AXIS,
-            "allies" => script::TEAM_ALLIES,
-            _ => -1,
-        };
         // `objective_timeout`'s wait (`re.gsc` 2425), from the first frame
         // an objective lies away from its start.
         const RE_TIMEOUT_S: f32 = 60.0;
@@ -904,9 +902,6 @@ impl Server {
             .objectives
             .iter()
             .map(|r| {
-                let mid = |(lo, hi): ([f32; 3], [f32; 3])| -> [f32; 3] {
-                    std::array::from_fn(|i| (lo[i] + hi[i]) * 0.5)
-                };
                 // The trigger's middle back at its start.
                 let returns = r.pickup.zip(r.dropped).and_then(|(b, (start, at))| {
                     let since = drops.iter().find(|d| d.0 == start)?.1;
@@ -988,10 +983,10 @@ impl Server {
             return None;
         }
         let me = self.core.clients[slot].as_ref()?.sim.as_ref()?;
-        if me.pm_type != crate::spectate::PmType::Normal || me.dead {
+        if !me.playing() {
             return None;
         }
-        let my_team = teams.get(slot).copied().unwrap_or(0);
+        let my_team = team_of(teams, slot);
         let team_enemy = |their: i32| match my_team {
             script::TEAM_AXIS => their != script::TEAM_AXIS,
             script::TEAM_ALLIES => their != script::TEAM_ALLIES,
@@ -1022,8 +1017,8 @@ impl Server {
         let foes = (self.core.clients.iter().enumerate())
             .filter(|&(i, _)| i != slot)
             .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
-            .filter(|(_, s)| s.pm_type == crate::spectate::PmType::Normal && !s.dead)
-            .filter(|&(i, _)| team_enemy(teams.get(i).copied().unwrap_or(0)))
+            .filter(|(_, s)| s.playing())
+            .filter(|&(i, _)| team_enemy(team_of(teams, i)))
             // A tank's driver is out of every client's sight and every
             // round's reach (docs/research/coduo-vehicles.md 13).
             .filter(|&(i, _)| {
@@ -1052,7 +1047,7 @@ impl Server {
             return None;
         }
         let s = self.core.clients.get(a)?.as_ref()?.sim.as_ref()?;
-        if s.pm_type != crate::spectate::PmType::Normal || s.dead {
+        if !s.playing() {
             return None;
         }
         Some(crate::bots::Hurt {
@@ -1077,7 +1072,7 @@ impl Server {
         held: Option<([f32; 3], i32)>,
         step: bool,
     ) -> (bool, Option<[f32; 3]>) {
-        let my_team = teams.get(slot).copied().unwrap_or(0);
+        let my_team = team_of(teams, slot);
         if my_team != script::TEAM_AXIS && my_team != script::TEAM_ALLIES {
             return (false, None);
         }
@@ -1087,20 +1082,16 @@ impl Server {
         else {
             return (false, None);
         };
-        let friends: Vec<(glam::Vec3, glam::Vec3)> = self
-            .core
-            .clients
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i != slot && teams.get(*i).copied() == Some(my_team))
-            .filter_map(|(_, c)| c.as_ref()?.sim.as_ref())
-            .filter(|o| o.pm_type == crate::spectate::PmType::Normal && !o.dead)
-            // A crew mate in the bot's own vehicle sits beside its gun.
-            .filter(|o| {
-                me.seat.is_none() || o.seat.map(|s| s.vehicle) != me.seat.map(|s| s.vehicle)
-            })
-            .map(|o| (o.ps.origin + o.ps.mins(), o.ps.origin + o.ps.maxs()))
-            .collect();
+        let friends = self.live_boxes(
+            slot,
+            |i, o| {
+                teams.get(i).copied() == Some(my_team)
+                    // A crew mate in the bot's own vehicle sits beside its gun.
+                    && (me.seat.is_none()
+                        || o.seat.map(|s| s.vehicle) != me.seat.map(|s| s.vehicle))
+            },
+            0.0,
+        );
         let eye = crate::game::combat::muzzle_point(&me.ps);
         let target = glam::Vec3::from(target);
         if !crate::bots::friend_in_line(eye, target, &friends) {
@@ -1337,7 +1328,7 @@ impl crate::bots::driver::BotWorld for Server {
         Some(crate::bots::driver::Body {
             origin: sim.ps.origin,
             velocity: sim.ps.velocity,
-            playing: sim.pm_type == crate::spectate::PmType::Normal && !sim.dead,
+            playing: sim.playing(),
             on_ground: sim.ps.on_ground,
             on_ladder: sim.ps.on_ladder,
         })
@@ -1393,7 +1384,7 @@ impl crate::bots::driver::BotWorld for Server {
             guns,
         } = frame;
         if let Some((attackers, defenders, objectives)) = &re {
-            let team = |slot: usize| teams.get(slot).copied().unwrap_or(0);
+            let team = |slot: usize| team_of(teams, slot);
             let slots: Vec<usize> = views.iter().map(|(s, _)| *s).collect();
             // The attackers by each carrier who keep by him (`team::escorts`).
             let escorts: Vec<usize> = objectives
@@ -1446,7 +1437,7 @@ impl crate::bots::driver::BotWorld for Server {
         }
         if let Some(markers) = &bel {
             for (slot, view) in views.iter_mut() {
-                let mine = teams.get(*slot).copied().unwrap_or(0);
+                let mine = team_of(teams, *slot);
                 if mine != script::TEAM_AXIS && mine != script::TEAM_ALLIES {
                     continue;
                 }
@@ -1482,7 +1473,7 @@ impl crate::bots::driver::BotWorld for Server {
         drop(p);
         let p = crate::tick_profile::phase("deal/uo");
         if let Some(uo) = &uo {
-            let team = |slot: usize| teams.get(slot).copied().unwrap_or(0);
+            let team = |slot: usize| team_of(teams, slot);
             let slots: Vec<usize> = views.iter().map(|(s, _)| *s).collect();
             for (slot, view) in views.iter_mut() {
                 let mine = team(*slot);
@@ -1510,7 +1501,7 @@ impl crate::bots::driver::BotWorld for Server {
         }
         drop(p);
         if let Some((attackers, defenders, sd)) = &sd {
-            let team = |slot: usize| teams.get(slot).copied().unwrap_or(0);
+            let team = |slot: usize| team_of(teams, slot);
             // The team's bots that play, by slot, and each one's distance
             // to the bomb.
             let bomb_dist = |v: &crate::bots::BotView| {

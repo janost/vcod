@@ -21,7 +21,7 @@ use vcod_common::net::msg::EntityState;
 use vcod_gsc::{EntId, Value};
 
 use super::cod2::Cod2Level;
-use super::entity::{HUD_OWNER_ALL, HudState};
+use super::entity::HudState;
 use super::fields::{Route, route_hud_cod2};
 use super::host::GameHost;
 
@@ -813,16 +813,7 @@ pub fn hud_elems(
     let mut archived = [[0; HUDELEM_FIELDS.len()]; MAX_HUDELEMS];
     let mut current = archived;
     let (mut na, mut nc) = (0, 0);
-    for (id, _) in host.ents.iter_hud_elems() {
-        let Some(state) = host.ents.get(id).and_then(|e| e.hud) else {
-            continue;
-        };
-        if state.elem_type == 0
-            || (state.team != 0 && state.team != team)
-            || (state.owner != HUD_OWNER_ALL && state.owner != slot as u32)
-        {
-            continue;
-        }
+    for (id, _, state) in crate::game::wire::hud_visible(host, slot, team, true) {
         let (out, n) = if hud_i32(host, id, hr!("archived")) != 0 {
             (&mut archived, &mut na)
         } else {
@@ -842,7 +833,7 @@ pub fn hud_elems(
 /// 0x8104022 stores 6, `HECmd_SetTimer` .. `HECmd_SetTenthsTimerUp` pass
 /// 7..10 to 0x8104124, `HECmd_SetClock` and `HECmd_SetClockUp` 11 and 12
 /// to 0x81041d8). A CoD2-only type (`setWaypoint`'s 13) is already CoD2's.
-fn cod2_elem_type(t: i32) -> i32 {
+pub(crate) fn cod2_elem_type(t: i32) -> i32 {
     match t {
         3 => 6,
         4..=9 => t + 3,
@@ -969,19 +960,17 @@ fn hud_value(host: &GameHost, id: EntId, read: usize) -> Option<Value> {
 }
 
 fn hud_i32(host: &GameHost, id: EntId, read: usize) -> i32 {
-    match hud_value(host, id, read) {
-        Some(Value::Int(i)) => i,
-        Some(Value::Float(f)) => f as i32,
-        _ => 0,
-    }
+    hud_value(host, id, read)
+        .as_ref()
+        .and_then(crate::game::builtins::args::as_int)
+        .unwrap_or(0)
 }
 
 fn hud_f32(host: &GameHost, id: EntId, read: usize) -> f32 {
-    match hud_value(host, id, read) {
-        Some(Value::Int(i)) => i as f32,
-        Some(Value::Float(f)) => f,
-        _ => 0.0,
-    }
+    hud_value(host, id, read)
+        .as_ref()
+        .and_then(crate::game::builtins::args::as_float)
+        .unwrap_or(0.0)
 }
 
 /// One `objective_t` as CoD2's six netfield words (`OBJECTIVE_FIELDS`):

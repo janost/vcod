@@ -466,15 +466,11 @@ pub(super) fn homes(home: &mut [Option<[f32; 3]>; 2], views: &[(usize, BotView)]
 
 /// The outposts the guards of a flag at home `at` hold from
 /// ([`super::super::posts::outer`], made for a `GuardHold::Far` guard
-/// round it): a ring anchor's key holds its point's bits.
+/// round it).
 fn outposts(posts: &super::super::posts::Posts, at: [f32; 3]) -> Vec<Vec3> {
     posts
-        .outers
-        .iter()
-        .filter(|(k, _)| {
-            f32::from_bits(k[0]) == 1.0 && (0..3).all(|i| f32::from_bits(k[1 + i]) == at[i])
-        })
-        .flat_map(|(_, o)| o.posts.iter().map(|p| p.at))
+        .ring_outposts(at)
+        .flat_map(|o| o.posts.iter().map(|p| p.at))
         .collect()
 }
 

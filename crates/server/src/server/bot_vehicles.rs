@@ -2,6 +2,7 @@
 //! (`crate::bots::vehicle`): each bot's seat, and the vehicles it could
 //! board, as the use key would find them (`game::vehicle::seat::usable`).
 
+use super::bot_world::team_of;
 use super::*;
 use crate::bots::{ArmorView, Crowd, GunSight, SeatView, VehicleSpot};
 use crate::game::vehicle::info::KIND_TANK;
@@ -27,9 +28,8 @@ impl Server {
             .enumerate()
             .filter_map(|(i, c)| {
                 let s = c.as_ref()?.sim.as_ref()?;
-                let up =
-                    s.pm_type == crate::spectate::PmType::Normal && !s.dead && s.seat.is_none();
-                up.then(|| (i, s.ps.origin.into(), teams.get(i).copied().unwrap_or(0)))
+                let up = s.playing() && s.seat.is_none();
+                up.then(|| (i, s.ps.origin.into(), team_of(teams, i)))
             })
             .collect();
         let crewed = self.crewed_vehicles(teams);
@@ -58,7 +58,7 @@ impl Server {
                     seat.off = !on;
                 }
                 if let Some(seat) = view.seat.as_mut().filter(|s| s.seat == 1) {
-                    let mine = teams.get(*slot).copied().unwrap_or(0);
+                    let mine = team_of(teams, *slot);
                     seat.crowd = crowd(host, *slot, mine, &walkers);
                     if let Some((id, _)) = host.vehicles.seat_of(*slot) {
                         seat.capturing = crate::game::vehicle::think::capturing(host, cx, id);
@@ -90,14 +90,7 @@ impl Server {
                         continue;
                     };
                     let info = host.vehicles.info_of(v);
-                    let spot = VehicleSpot {
-                        num: id.0,
-                        origin: v.pose.origin,
-                        yaw: v.pose.angles[1],
-                        mins: info.mins,
-                        maxs: info.maxs,
-                        tank: info.kind == KIND_TANK,
-                    };
+                    let spot = spot_of(id, v, info);
                     if spot.gap(view.origin) < reach
                         && crate::game::vehicle::seat::usable(host, cx, id, *slot)
                     {
@@ -146,22 +139,12 @@ impl Server {
                     return None;
                 }
                 let info = host.vehicles.info_of(v);
-                let spot = VehicleSpot {
-                    num: id.0,
-                    origin: v.pose.origin,
-                    yaw: v.pose.angles[1],
-                    mins: info.mins,
-                    maxs: info.maxs,
-                    tank: info.kind == KIND_TANK,
-                };
+                let spot = spot_of(id, v, info);
                 let mask = riders
                     .iter()
                     .filter(|s| **s < 64)
                     .fold(0u64, |m, s| m | 1 << s);
-                let sides = riders
-                    .iter()
-                    .map(|s| teams.get(*s).copied().unwrap_or(0))
-                    .collect();
+                let sides = riders.iter().map(|s| team_of(teams, *s)).collect();
                 Some(Crewed {
                     spot,
                     velocity: v.velocity,
@@ -203,7 +186,7 @@ impl Server {
                 )
             }
         };
-        let mine = teams.get(slot).copied().unwrap_or(0);
+        let mine = team_of(teams, slot);
         let hostile = |their: i32| match mine {
             script::TEAM_AXIS => their != script::TEAM_AXIS,
             script::TEAM_ALLIES => their != script::TEAM_ALLIES,
@@ -315,16 +298,30 @@ impl Server {
             .filter_map(|id| {
                 let v = host.vehicles.live.get(&id)?;
                 let info = host.vehicles.info_of(v);
-                Some(VehicleSpot {
-                    num: id.0,
-                    origin: v.pose.origin,
-                    yaw: v.pose.angles[1],
-                    mins: info.mins,
-                    maxs: info.maxs,
-                    tank: info.kind == KIND_TANK,
-                })
+                Some(spot_of(id, v, info))
             })
             .collect()
+    }
+}
+
+/// Half the narrower side of a vehicle's box: what its fits are keyed by.
+fn half_width(info: &crate::game::vehicle::info::VehicleInfo) -> f32 {
+    (info.maxs[0] - info.mins[0]).min(info.maxs[1] - info.mins[1]) * 0.5
+}
+
+/// Vehicle `id` as a bot sees it: where it stands, its box, whether a tank.
+fn spot_of(
+    id: vcod_gsc::EntId,
+    v: &crate::game::vehicle::Vehicle,
+    info: &crate::game::vehicle::info::VehicleInfo,
+) -> VehicleSpot {
+    VehicleSpot {
+        num: id.0,
+        origin: v.pose.origin,
+        yaw: v.pose.angles[1],
+        mins: info.mins,
+        maxs: info.maxs,
+        tank: info.kind == KIND_TANK,
     }
 }
 
@@ -422,14 +419,7 @@ fn crowd(
         return Crowd::default();
     };
     let info = host.vehicles.info_of(v);
-    let hull = VehicleSpot {
-        num: id.0,
-        origin: v.pose.origin,
-        yaw: v.pose.angles[1],
-        mins: info.mins,
-        maxs: info.maxs,
-        tank: info.kind == KIND_TANK,
-    };
+    let hull = spot_of(id, v, info);
     crowd_round(&hull, v.forward_speed, slot, mine, walkers)
 }
 
@@ -489,7 +479,6 @@ const WARM_LOOKUPS: usize = 8000;
 const FIT_SHARE: f32 = 0.75;
 const FIT_LIFT: f32 = 18.0;
 const FIT_HEIGHT: f32 = 48.0;
-const VEHICLE_CLIP: u32 = 0x200;
 
 /// One driver's route over the navigation graph.
 pub(super) struct DriveRoute {
@@ -619,7 +608,7 @@ fn test_fit(collision: &vcod_common::collision::CollisionWorld, node: glam::Vec3
         p,
         glam::Vec3::new(-r, -r, 0.0),
         glam::Vec3::new(r, r, FIT_HEIGHT),
-        vcod_common::collision::CONTENTS_SOLID | VEHICLE_CLIP,
+        vcod_common::collision::CONTENTS_SOLID | vcod_common::collision::CONTENTS_VEHICLE_CLIP,
     )
 }
 
@@ -805,9 +794,7 @@ impl Server {
             .live
             .values()
             .map(|v| {
-                let info = host.vehicles.info_of(v);
-                let half = (info.maxs[0] - info.mins[0]).min(info.maxs[1] - info.mins[1]) * 0.5;
-                let r = half * FIT_SHARE;
+                let r = half_width(host.vehicles.info_of(v)) * FIT_SHARE;
                 (r as u32, r)
             })
             .collect();
@@ -833,7 +820,7 @@ impl Server {
         let host = &self.game.module.script.as_ref()?.host;
         let (id, _) = host.vehicles.seat_of(slot)?;
         let info = host.vehicles.info_of(host.vehicles.live.get(&id)?);
-        Some(((info.maxs[0] - info.mins[0]).min(info.maxs[1] - info.mins[1])) * 0.5)
+        Some(half_width(info))
     }
 
     /// The fits' link epoch, once they have dropped what the brush links

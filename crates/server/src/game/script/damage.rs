@@ -2,8 +2,52 @@
 //! charged to.
 
 use super::*;
+use vcod_gsc::Atom;
+
+/// `CodeCallback_PlayerDamage`'s nine arguments, in its order (combat doc
+/// 4.4). Which a caller leaves undefined is retail's, per caller.
+pub(crate) struct PlayerDamage {
+    pub inflictor: Value,
+    pub attacker: Value,
+    pub damage: i32,
+    pub dflags: i32,
+    pub mod_: Atom,
+    pub weapon: Atom,
+    pub point: Value,
+    pub dir: Value,
+    pub hitloc: Atom,
+}
+
+impl PlayerDamage {
+    pub fn into_args(self) -> Vec<Value> {
+        vec![
+            self.inflictor,
+            self.attacker,
+            Value::Int(self.damage),
+            Value::Int(self.dflags),
+            Value::String(self.mod_),
+            Value::String(self.weapon),
+            self.point,
+            self.dir,
+            Value::String(self.hitloc),
+        ]
+    }
+}
 
 impl ScriptRuntime {
+    /// Starts `CodeCallback_PlayerDamage` on `victim` with `args`
+    /// ([`PlayerDamage::into_args`]); a failed start is logged.
+    fn player_damage(&mut self, victim: EntId, args: Vec<Value>) {
+        if let Err(e) = self.start_with_args(
+            CALLBACK_SETUP,
+            "CodeCallback_PlayerDamage",
+            Some(Target::Entity(victim)),
+            args,
+        ) {
+            log::error!("gsc: {e:#}");
+        }
+    }
+
     /// `Scr_PlayerDamage` (combat doc, section 4.4) for every hit this
     /// frame's attacks made: `CodeCallback_PlayerDamage` on the victim's
     /// entity with the nine arguments. The inflictor is the attacker himself
@@ -54,25 +98,18 @@ impl ScriptRuntime {
                     cx.intern_exact(hit.hitloc),
                 )
             });
-            let args = vec![
-                inflictor.map_or(Value::Undefined, Value::Entity),
+            let args = PlayerDamage {
+                inflictor: inflictor.map_or(Value::Undefined, Value::Entity),
                 attacker,
-                Value::Int(hit.damage),
-                Value::Int(hit.dflags),
-                Value::String(mod_),
-                Value::String(weapon),
-                Value::Vector(hit.point),
-                Value::Vector(hit.dir),
-                Value::String(hitloc),
-            ];
-            if let Err(e) = self.start_with_args(
-                CALLBACK_SETUP,
-                "CodeCallback_PlayerDamage",
-                Some(Target::Entity(victim)),
-                args,
-            ) {
-                log::error!("gsc: {e:#}");
-            }
+                damage: hit.damage,
+                dflags: hit.dflags,
+                mod_,
+                weapon,
+                point: Value::Vector(hit.point),
+                dir: Value::Vector(hit.dir),
+                hitloc,
+            };
+            self.player_damage(victim, args.into_args());
         }
     }
 
@@ -153,16 +190,7 @@ impl ScriptRuntime {
                 self.vm.notify(Target::Entity(on), event, &args);
             }
             match next {
-                Some((victim, args)) => {
-                    if let Err(e) = self.start_with_args(
-                        CALLBACK_SETUP,
-                        "CodeCallback_PlayerDamage",
-                        Some(Target::Entity(victim)),
-                        args,
-                    ) {
-                        log::error!("gsc: {e:#}");
-                    }
-                }
+                Some((victim, args)) => self.player_damage(victim, args),
                 None if self.host.vehicles.deaths.is_empty()
                     && self.host.vehicles.dying.is_empty() =>
                 {
@@ -277,25 +305,18 @@ impl ScriptRuntime {
                 cx.intern_exact("none"),
             )
         });
-        let args = vec![
-            Value::Entity(inflictor),
-            Value::Entity(attacker),
-            Value::Int(damage),
-            Value::Int(dflags),
-            Value::String(mod_),
-            Value::String(weapon),
-            point.map_or(Value::Undefined, Value::Vector),
-            dir.map_or(Value::Undefined, Value::Vector),
-            Value::String(hitloc),
-        ];
-        if let Err(e) = self.start_with_args(
-            CALLBACK_SETUP,
-            "CodeCallback_PlayerDamage",
-            Some(Target::Entity(victim)),
-            args,
-        ) {
-            log::error!("gsc: {e:#}");
-        }
+        let args = PlayerDamage {
+            inflictor: Value::Entity(inflictor),
+            attacker: Value::Entity(attacker),
+            damage,
+            dflags,
+            mod_,
+            weapon,
+            point: point.map_or(Value::Undefined, Value::Vector),
+            dir: dir.map_or(Value::Undefined, Value::Vector),
+            hitloc,
+        };
+        self.player_damage(victim, args.into_args());
     }
 
     /// `ClientEvents`' fall damage (player-clip doc 8.8): `G_Damage` with no
@@ -309,25 +330,18 @@ impl ScriptRuntime {
         let (mod_, none) = self
             .vm
             .with_cx(|cx| (cx.intern_exact("MOD_FALLING"), cx.intern_exact("none")));
-        let args = vec![
-            Value::Undefined,
-            Value::Undefined,
-            Value::Int(damage),
-            Value::Int(0),
-            Value::String(mod_),
-            Value::String(none),
-            Value::Undefined,
-            Value::Undefined,
-            Value::String(none),
-        ];
-        if let Err(e) = self.start_with_args(
-            CALLBACK_SETUP,
-            "CodeCallback_PlayerDamage",
-            Some(Target::Entity(victim)),
-            args,
-        ) {
-            log::error!("gsc: {e:#}");
-        }
+        let args = PlayerDamage {
+            inflictor: Value::Undefined,
+            attacker: Value::Undefined,
+            damage,
+            dflags: 0,
+            mod_,
+            weapon: none,
+            point: Value::Undefined,
+            dir: Value::Undefined,
+            hitloc: none,
+        };
+        self.player_damage(victim, args.into_args());
     }
 
     /// `Cmd_Kill_f`: the `kill` client command, which is the `suicide` builtin
@@ -454,7 +468,7 @@ impl ScriptRuntime {
             // `G_RadiusDamage` hands over `r.currentOrigin` less the blast,
             // lifted 24, and `G_Damage` normalizes it (game.mp.uo 0x5098b,
             // 0x4fedb).
-            let origin = crate::game::item::origin_of(host, cx, id);
+            let origin = host.vec_field(cx, id, "origin").to_array();
             let dir = (glam::Vec3::from(origin) - glam::Vec3::from(at) + glam::Vec3::Z * 24.0)
                 .normalize_or_zero()
                 .to_array();

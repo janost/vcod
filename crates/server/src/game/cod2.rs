@@ -637,7 +637,10 @@ impl Cod2Level {
                             .ok()
                             .map(Rc::new)
                     });
-                    (crate::game::cod2_combat::Combat::tables(host_fs), anims)
+                    (
+                        crate::game::cod2_combat::Combat::tables(host_fs.map(|f| f as _)),
+                        anims,
+                    )
                 });
                 Rc::new(MapParts {
                     map,

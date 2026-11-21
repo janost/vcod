@@ -7,6 +7,7 @@
 //! clears. `musicPlay`, `musicStop` and `soundFade` are reliable commands
 //! to every client.
 
+use super::args::double;
 use crate::configstrings::CsRange;
 use crate::game::builtins::client::client_receiver;
 use crate::game::builtins::entity::entity_receiver;
@@ -167,14 +168,6 @@ pub fn play_local_sound(
     Ok(Value::Undefined)
 }
 
-fn number(v: &Value) -> Result<f64, ErrorKind> {
-    match v {
-        Value::Int(i) => Ok(*i as f64),
-        Value::Float(f) => Ok(*f as f64),
-        _ => Err(ErrorKind::BadType("expected a number")),
-    }
-}
-
 /// `trap_SendServerCommand(-1, 1, cmd)`: every client.
 fn broadcast(host: &mut GameHost, cmd: String) {
     for slot in host.client_slots() {
@@ -208,7 +201,7 @@ pub fn music_stop(
 ) -> Result<Value, ErrorKind> {
     let ms = match args {
         [] => 0,
-        [t] => (number(t)? * 1000.0 + 0.5) as i32,
+        [t] => (double(Some(t), "expected a number")? * 1000.0 + 0.5) as i32,
         _ => return Err(ErrorKind::BadType("USAGE: musicStop([fadetime]);")),
     };
     if ms < 0 {
@@ -227,12 +220,15 @@ pub fn sound_fade(
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let volume = number(
-        args.first()
-            .ok_or(ErrorKind::BadType("soundFade needs a volume"))?,
+    let volume = double(
+        Some(
+            args.first()
+                .ok_or(ErrorKind::BadType("soundFade needs a volume"))?,
+        ),
+        "expected a number",
     )?;
     let ms = match args.get(1) {
-        Some(t) => (number(t)? * 1000.0) as i32,
+        Some(t) => (double(Some(t), "expected a number")? * 1000.0) as i32,
         None => 0,
     };
     broadcast(host, format!("q {volume:.6} {ms}\n"));

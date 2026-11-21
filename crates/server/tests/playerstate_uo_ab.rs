@@ -75,7 +75,7 @@ fn a_spawned_uo_player_matches_retail() {
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(common::cfg("mp_cassino", "dm"), now);
     sv.set_protocol(&PROTOCOL_V22);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&*fs)));
     sv.load_scripts(fs).expect("load the scripts");
     let q = Rc::new(RefCell::new(Queues::default()));
     let (cl, join) = common::join(&mut sv, &q, &mut now, &team, &weapon);

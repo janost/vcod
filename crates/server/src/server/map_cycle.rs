@@ -138,7 +138,7 @@ impl Server {
         self.game.snap_flag_server_bit ^= console::SNAPFLAG_SERVERCOUNT;
         // Step 15's `Cvar_Set("mapname", ...)` and the collision with it.
         self.game.cfg.map = map.to_string();
-        let mut world = World::from_bsp(&bsp, Some(&fs));
+        let mut world = World::from_bsp(&bsp, Some(&*fs));
         world
             .collision
             .set_source(fs.map_checksum(map).unwrap_or(0));
@@ -557,7 +557,7 @@ mod tests {
         let path = fs.resolve_map("mp_carentan").expect("map in the paks");
         let bsp =
             vcod_common::bsp::parse(&fs.read(&path).expect("read the bsp")).expect("parse the bsp");
-        sv.load_world(World::from_bsp(&bsp, Some(&fs)));
+        sv.load_world(World::from_bsp(&bsp, Some(&*fs)));
         sv.load_scripts(fs).expect("load the scripts");
 
         let mut ours: Vec<u32> = sv.game.baselines.keys().copied().collect();
@@ -603,7 +603,7 @@ mod tests {
         sv.set_protocol(p);
         let path = fs.resolve_map("mp_cassino").expect("map in the paks");
         let bsp = vcod_common::bsp::parse(&fs.read(&path).unwrap()).unwrap();
-        sv.load_world(World::from_bsp(&bsp, Some(&fs)));
+        sv.load_world(World::from_bsp(&bsp, Some(&*fs)));
         sv.load_scripts(fs).expect("load the scripts");
         let null = msg::EntityState::null(p);
         let wire = |e: &msg::EntityState| {
@@ -629,7 +629,7 @@ mod tests {
         sv.set_cvar("g_gametype", "dm");
         let path = fs.resolve_map("mp_carentan").expect("map in paks");
         let bsp = vcod_common::bsp::parse(&fs.read(&path).expect("read bsp")).expect("parse bsp");
-        sv.load_world(World::from_bsp(&bsp, Some(&fs)));
+        sv.load_world(World::from_bsp(&bsp, Some(&*fs)));
         sv.load_scripts(fs).expect("load scripts");
         let draws = |sv: &mut Server| -> Vec<i32> {
             let host = &mut sv.game.module.script.as_mut().unwrap().host;

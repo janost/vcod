@@ -8,7 +8,7 @@
 
 use crate::defs::Defs;
 use crate::weapons::WeaponTable;
-use vcod_common::pk3::Pk3Fs;
+use vcod_common::asset_source::AssetSource;
 
 /// `BG_FindItem` (0x2e214) is a `strcmp`, so the lookup is case-sensitive;
 /// an unmatched name returns `None`, same as retail's miss.
@@ -56,7 +56,7 @@ pub(crate) fn item_name(defs: &Defs, index: usize) -> Option<&'static str> {
 /// configstring holds the spelling the file uses. Without a filesystem
 /// (every unit test that does not mount the paks) a weapon contributes
 /// nothing.
-pub fn item_models(defs: &Defs, fs: Option<&Pk3Fs>, name: &str) -> Vec<String> {
+pub fn item_models(defs: &Defs, fs: Option<&dyn AssetSource>, name: &str) -> Vec<String> {
     if let Some((.., model)) = defs.static_items().find(|(_, n, _)| *n == name) {
         return vec![model.to_string()];
     }
