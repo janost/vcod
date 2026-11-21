@@ -639,8 +639,8 @@ VERIFIED, the loads and stores below.
   under that branch prints
   `Out of range reliableAcknowledge message from %s ...`, stores
   `reliableSequence` as the acknowledge (0x809630c) and jumps past the
-  message's ops (0x8096312). VERIFIED. vcod skips the message and keeps the
-  old acknowledge.
+  message's ops (0x8096312). VERIFIED. vcod skips the message and stores
+  `reliableSequence` as the acknowledge too (2.2).
 
 vcod: `engine::commands::add`, shared with CoD4, with the type read off the
 letter (`cod2::ignorable`).
