@@ -513,29 +513,6 @@ impl Renderer {
                 );
             }
             self.gamma_skipped = plan.gamma_direct || plan.scene_direct;
-            // With SSAO or vc_shadows the frame is two passes split after
-            // the last opaque or decal draw (`ssao_split`): the first keeps
-            // its MSAA colour for the shadow mask and the SSAO multiply, the
-            // second loads it and resolves.
-            let targets = SceneTargets {
-                msaa: &self.msaa_view,
-                depth: &self.depth_view,
-                resolve: if plan.post {
-                    self.post.world_view()
-                } else if plan.scene_direct {
-                    &view
-                } else {
-                    self.gamma.scene_view()
-                },
-                timer: self.ssao.timer(),
-                clear: plan.clear,
-                sun_queries: self
-                    .sky
-                    .as_ref()
-                    .and_then(|s| s.flare.as_ref())
-                    .and_then(SunFlareGpu::query_set),
-                depth_cleared: false,
-            };
             // The world's draws across the world and every moved brush
             // model, by their place in the sorted shader list; on one
             // shader a moved model, an entity in retail's key, draws before
@@ -570,86 +547,36 @@ impl Renderer {
                     && (!plan.floatz || skin.stages.first().is_some_and(|st| st.floatz))
             };
             self.census.set(PassCensus::default());
-            let mut pre_bundles = std::mem::take(&mut self.prepass_bundles);
-            pre_bundles.begin(plan.floatz.then_some(crate::soft_particles::LINZ_FORMAT));
-            if plan.prepass_on {
-                if let Some(g) = &mut gpu_groups {
-                    g.enc(&mut encoder, Some(crate::frame_prof::Group::Prepass));
-                }
-                // the cookie receivers test the world's depth alone, so the
-                // entities' prepass follows them
-                let receivers_split = receivers_on_prepass && !plan.floatz;
-                let mut n = self.encode_depth_prepass(
-                    &mut encoder,
-                    &world_list,
-                    &ent_draws,
-                    PrepassParts {
-                        world: true,
-                        ents: plan.ent_prepass && !receivers_split,
-                        floatz: plan.floatz,
-                        load: false,
-                    },
-                    frame.time,
-                    plan.ent_bundling.then_some(&mut pre_bundles),
-                );
-                if receivers_split {
-                    if let Some(g) = &mut gpu_groups {
-                        g.enc(&mut encoder, Some(crate::frame_prof::Group::Receivers));
-                    }
-                    Self::encode_cookie_receivers(
-                        CookieReceivers {
-                            device: &self.device,
-                            queue: &self.queue,
-                            world: self.world.as_ref(),
-                            cookies: &mut self.cookies,
-                            dyn_shadows: &mut self.dyn_shadows,
-                            depth_view: &self.depth_view,
-                            cod2: self.dynamic.cod2_light.is_some(),
-                        },
-                        &mut encoder,
-                        &frame,
-                        true,
-                    );
-                    if plan.ent_prepass {
-                        if let Some(g) = &mut gpu_groups {
-                            g.enc(&mut encoder, Some(crate::frame_prof::Group::Prepass));
-                        }
-                        n += self.encode_depth_prepass(
-                            &mut encoder,
-                            &world_list,
-                            &ent_draws,
-                            PrepassParts {
-                                world: false,
-                                ents: true,
-                                floatz: plan.floatz,
-                                load: true,
-                            },
-                            frame.time,
-                            plan.ent_bundling.then_some(&mut pre_bundles),
-                        );
-                    }
-                }
-                crate::frame_prof::count(crate::frame_prof::Count::Prepass, n);
-                frame_write!(
-                    self,
-                    "depth prepass (depth)",
-                    self.target_bytes(4 * msaa_samples())
-                );
-                if plan.floatz {
-                    frame_write!(self, "depth prepass floatZ (R32F)", self.target_bytes(4));
-                }
-                crate::frame_prof::count(
-                    crate::frame_prof::Count::Feathered,
-                    usize::from(!plan.ent_prepass),
-                );
-                self.prepass_drawn.set(n);
-                self.floatz_drawn.set(plan.floatz);
-            }
-            pre_bundles.end();
-            self.prepass_bundles = pre_bundles;
+            self.encode_prepass(
+                &mut encoder,
+                &frame,
+                &plan,
+                (&world_list, &ent_draws),
+                receivers_on_prepass,
+                &mut gpu_groups,
+            );
+            // With SSAO or vc_shadows the frame is two passes split after
+            // the last opaque or decal draw (`ssao_split`): the first keeps
+            // its MSAA colour for the shadow mask and the SSAO multiply, the
+            // second loads it and resolves.
             let targets = SceneTargets {
+                msaa: &self.msaa_view,
+                depth: &self.depth_view,
+                resolve: if plan.post {
+                    self.post.world_view()
+                } else if plan.scene_direct {
+                    &view
+                } else {
+                    self.gamma.scene_view()
+                },
+                timer: self.ssao.timer(),
+                clear: plan.clear,
+                sun_queries: self
+                    .sky
+                    .as_ref()
+                    .and_then(|s| s.flare.as_ref())
+                    .and_then(SunFlareGpu::query_set),
                 depth_cleared: plan.prepass_on,
-                ..targets
             };
             if let Some(g) = &mut gpu_groups {
                 g.enc(&mut encoder, Some(crate::frame_prof::Group::Sky));
@@ -1204,11 +1131,6 @@ impl Renderer {
             // scene when it is on, and draw the HUD there single-sampled, so
             // the HUD never blooms, shafts or takes the grade and the MSAA
             // target is never reloaded.
-            let sky_cube = self
-                .sky
-                .as_ref()
-                .and_then(|s| s.farbox.as_ref())
-                .and_then(|f| f.cube.as_ref());
             if plan.after {
                 drop(pass);
                 if let Some(g) = &self.prof_gpu {
@@ -1220,133 +1142,7 @@ impl Renderer {
                     split_stamped = true;
                     post_stamped = true;
                 }
-                let world = if plan.post {
-                    self.post.world_view()
-                } else {
-                    self.gamma.scene_view()
-                };
-                use crate::frame_prof::Group;
-                let mut group = |encoder: &mut wgpu::CommandEncoder, g| {
-                    if let Some(gg) = &mut gpu_groups {
-                        gg.enc(encoder, Some(g));
-                    }
-                };
-                if let Some(d) = &plan.dof4 {
-                    group(&mut encoder, Group::Dof);
-                    let c = d.consts(self.config.height, Z_NEAR, VM_NEAR);
-                    self.dof.encode(
-                        &self.device,
-                        &self.queue,
-                        &mut encoder,
-                        self.post.world(),
-                        self.post.world_view(),
-                        &self.depth_view,
-                        &c,
-                    );
-                    // the copy, five quarter steps and the composite
-                    frame_write!(
-                        self,
-                        "r_dof (copy, 5 quarter passes, composite)",
-                        2 * self.target_bytes(self.world_bpp())
-                            + 5 * self.target_bytes(self.world_bpp()) / 16
-                    );
-                }
-                if plan.shafts {
-                    group(&mut encoder, Group::Shafts);
-                    self.shafts.encode(&mut encoder, world);
-                    frame_write!(self, "vc_sunShafts (not sized)", 0);
-                }
-                #[cfg(test)]
-                {
-                    if let Some(g) = &plan.glow {
-                        let steps: usize = 1 + g.chains.iter().map(Vec::len).sum::<usize>();
-                        frame_write!(
-                            self,
-                            format!("glow ({steps} quarter passes, {} applies)", g.applies.len()),
-                            steps as u64 * self.target_bytes(4) / 16
-                                + g.applies.len() as u64 * self.target_bytes(self.world_bpp())
-                        );
-                    }
-                    if let Some(b) = &plan.world_blur {
-                        frame_write!(
-                            self,
-                            "blurWorld",
-                            b.chain.len() as u64 * self.target_bytes(4) / 16
-                                + self.target_bytes(self.world_bpp())
-                        );
-                    }
-                }
-                group(&mut encoder, Group::Glow);
-                self.cod2_glow.encode(
-                    &self.device,
-                    &self.queue,
-                    &mut encoder,
-                    world,
-                    sky_cube,
-                    frame.view_proj.inverse(),
-                    frame.eye,
-                    plan.glow.as_ref(),
-                    plan.world_blur.as_ref(),
-                );
-                if plan.bloom {
-                    group(&mut encoder, Group::Bloom);
-                    self.bloom.set_params(
-                        &self.queue,
-                        self.bloom_intensity,
-                        self.bloom_threshold,
-                        self.identity_light,
-                        plan.hdr,
-                    );
-                    self.bloom.blur(&mut encoder);
-                    frame_write!(self, "vc_bloom (not sized)", 0);
-                }
-                if plan.post {
-                    if plan.bloom {
-                        let mut bloom_pass =
-                            single_pass(&mut encoder, self.post.world_view(), "bloom pass");
-                        self.bloom.composite(&mut bloom_pass);
-                    }
-                    self.post.bind_glow(
-                        &self.device,
-                        plan.glow4.as_ref().map(|_| self.cod2_glow.result()),
-                    );
-                    self.post.set_params(
-                        &self.queue,
-                        self.post_settings,
-                        plan.film,
-                        plan.glow4.as_ref().map_or(0.0, |g| g.1),
-                        plan.hdr,
-                        self.identity_light,
-                        frame.time,
-                    );
-                    group(&mut encoder, Group::PostFx);
-                    pass = if plan.gamma_direct {
-                        // the post pass writes every texel
-                        clear_pass(&mut encoder, &view, "hud pass")
-                    } else {
-                        single_pass(&mut encoder, self.gamma.scene_view(), "hud pass")
-                    };
-                    self.post.draw(&mut pass);
-                    if plan.gamma_direct {
-                        frame_write!(
-                            self,
-                            "post pass into the swapchain, then the 2D",
-                            self.target_bytes(4)
-                        );
-                    } else {
-                        frame_write!(
-                            self,
-                            "post pass into the gamma scene, then the 2D",
-                            self.target_bytes(4)
-                        );
-                    }
-                } else {
-                    pass = single_pass(&mut encoder, self.gamma.scene_view(), "hud pass");
-                    frame_write!(self, "2D pass (gamma scene)", self.target_bytes(4));
-                    if plan.bloom {
-                        self.bloom.composite(&mut pass);
-                    }
-                }
+                pass = self.encode_post_chain(&mut encoder, &frame, &plan, &view, &mut gpu_groups);
             }
             // The shellshock's render commands 10 and 9 on the finished 3D
             // view, before the 2D, as the cgame queues them.
@@ -2322,6 +2118,244 @@ impl Renderer {
                 }
             }
         }
+    }
+
+    /// `r_vc_depthprepass`'s passes ([`Self::encode_depth_prepass`]): the
+    /// world's, then the entities', with CoD2's cookie receivers between
+    /// them when they draw over the world's depth.
+    fn encode_prepass(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        frame: &Frame,
+        plan: &FramePlan,
+        (world_list, ent_draws): (&[WorldItem], &[EntDraw]),
+        receivers_on_prepass: bool,
+        gpu_groups: &mut Option<crate::frame_prof::GpuGroups>,
+    ) {
+        let mut pre_bundles = std::mem::take(&mut self.prepass_bundles);
+        pre_bundles.begin(plan.floatz.then_some(crate::soft_particles::LINZ_FORMAT));
+        if plan.prepass_on {
+            if let Some(g) = gpu_groups {
+                g.enc(encoder, Some(crate::frame_prof::Group::Prepass));
+            }
+            // the cookie receivers test the world's depth alone, so the
+            // entities' prepass follows them
+            let receivers_split = receivers_on_prepass && !plan.floatz;
+            let mut n = self.encode_depth_prepass(
+                encoder,
+                world_list,
+                ent_draws,
+                PrepassParts {
+                    world: true,
+                    ents: plan.ent_prepass && !receivers_split,
+                    floatz: plan.floatz,
+                    load: false,
+                },
+                frame.time,
+                plan.ent_bundling.then_some(&mut pre_bundles),
+            );
+            if receivers_split {
+                if let Some(g) = gpu_groups {
+                    g.enc(encoder, Some(crate::frame_prof::Group::Receivers));
+                }
+                Self::encode_cookie_receivers(
+                    CookieReceivers {
+                        device: &self.device,
+                        queue: &self.queue,
+                        world: self.world.as_ref(),
+                        cookies: &mut self.cookies,
+                        dyn_shadows: &mut self.dyn_shadows,
+                        depth_view: &self.depth_view,
+                        cod2: self.dynamic.cod2_light.is_some(),
+                    },
+                    encoder,
+                    frame,
+                    true,
+                );
+                if plan.ent_prepass {
+                    if let Some(g) = gpu_groups {
+                        g.enc(encoder, Some(crate::frame_prof::Group::Prepass));
+                    }
+                    n += self.encode_depth_prepass(
+                        encoder,
+                        world_list,
+                        ent_draws,
+                        PrepassParts {
+                            world: false,
+                            ents: true,
+                            floatz: plan.floatz,
+                            load: true,
+                        },
+                        frame.time,
+                        plan.ent_bundling.then_some(&mut pre_bundles),
+                    );
+                }
+            }
+            crate::frame_prof::count(crate::frame_prof::Count::Prepass, n);
+            frame_write!(
+                self,
+                "depth prepass (depth)",
+                self.target_bytes(4 * msaa_samples())
+            );
+            if plan.floatz {
+                frame_write!(self, "depth prepass floatZ (R32F)", self.target_bytes(4));
+            }
+            crate::frame_prof::count(
+                crate::frame_prof::Count::Feathered,
+                usize::from(!plan.ent_prepass),
+            );
+            self.prepass_drawn.set(n);
+            self.floatz_drawn.set(plan.floatz);
+        }
+        pre_bundles.end();
+        self.prepass_bundles = pre_bundles;
+    }
+
+    /// The passes after the scene pass, on the resolved world: CoD4's depth
+    /// of field, the shafts, the glow and blur, bloom and the post pass.
+    /// Returns the 2D's pass: into the swapchain (`view`) past an identity
+    /// ramp, else the gamma scene.
+    fn encode_post_chain<'e>(
+        &mut self,
+        encoder: &'e mut wgpu::CommandEncoder,
+        frame: &Frame,
+        plan: &FramePlan,
+        view: &wgpu::TextureView,
+        gpu_groups: &mut Option<crate::frame_prof::GpuGroups>,
+    ) -> wgpu::RenderPass<'e> {
+        let sky_cube = self
+            .sky
+            .as_ref()
+            .and_then(|s| s.farbox.as_ref())
+            .and_then(|f| f.cube.as_ref());
+        let mut pass;
+        let world = if plan.post {
+            self.post.world_view()
+        } else {
+            self.gamma.scene_view()
+        };
+        use crate::frame_prof::Group;
+        let mut group = |encoder: &mut wgpu::CommandEncoder, g| {
+            if let Some(gg) = gpu_groups {
+                gg.enc(encoder, Some(g));
+            }
+        };
+        if let Some(d) = &plan.dof4 {
+            group(encoder, Group::Dof);
+            let c = d.consts(self.config.height, Z_NEAR, VM_NEAR);
+            self.dof.encode(
+                &self.device,
+                &self.queue,
+                encoder,
+                self.post.world(),
+                self.post.world_view(),
+                &self.depth_view,
+                &c,
+            );
+            // the copy, five quarter steps and the composite
+            frame_write!(
+                self,
+                "r_dof (copy, 5 quarter passes, composite)",
+                2 * self.target_bytes(self.world_bpp())
+                    + 5 * self.target_bytes(self.world_bpp()) / 16
+            );
+        }
+        if plan.shafts {
+            group(encoder, Group::Shafts);
+            self.shafts.encode(encoder, world);
+            frame_write!(self, "vc_sunShafts (not sized)", 0);
+        }
+        #[cfg(test)]
+        {
+            if let Some(g) = &plan.glow {
+                let steps: usize = 1 + g.chains.iter().map(Vec::len).sum::<usize>();
+                frame_write!(
+                    self,
+                    format!("glow ({steps} quarter passes, {} applies)", g.applies.len()),
+                    steps as u64 * self.target_bytes(4) / 16
+                        + g.applies.len() as u64 * self.target_bytes(self.world_bpp())
+                );
+            }
+            if let Some(b) = &plan.world_blur {
+                frame_write!(
+                    self,
+                    "blurWorld",
+                    b.chain.len() as u64 * self.target_bytes(4) / 16
+                        + self.target_bytes(self.world_bpp())
+                );
+            }
+        }
+        group(encoder, Group::Glow);
+        self.cod2_glow.encode(
+            &self.device,
+            &self.queue,
+            encoder,
+            world,
+            sky_cube,
+            frame.view_proj.inverse(),
+            frame.eye,
+            plan.glow.as_ref(),
+            plan.world_blur.as_ref(),
+        );
+        if plan.bloom {
+            group(encoder, Group::Bloom);
+            self.bloom.set_params(
+                &self.queue,
+                self.bloom_intensity,
+                self.bloom_threshold,
+                self.identity_light,
+                plan.hdr,
+            );
+            self.bloom.blur(encoder);
+            frame_write!(self, "vc_bloom (not sized)", 0);
+        }
+        if plan.post {
+            if plan.bloom {
+                let mut bloom_pass = single_pass(encoder, self.post.world_view(), "bloom pass");
+                self.bloom.composite(&mut bloom_pass);
+            }
+            self.post.bind_glow(
+                &self.device,
+                plan.glow4.as_ref().map(|_| self.cod2_glow.result()),
+            );
+            self.post.set_params(
+                &self.queue,
+                self.post_settings,
+                plan.film,
+                plan.glow4.as_ref().map_or(0.0, |g| g.1),
+                plan.hdr,
+                self.identity_light,
+                frame.time,
+            );
+            group(encoder, Group::PostFx);
+            pass = if plan.gamma_direct {
+                // the post pass writes every texel
+                clear_pass(encoder, view, "hud pass")
+            } else {
+                single_pass(encoder, self.gamma.scene_view(), "hud pass")
+            };
+            self.post.draw(&mut pass);
+            if plan.gamma_direct {
+                frame_write!(
+                    self,
+                    "post pass into the swapchain, then the 2D",
+                    self.target_bytes(4)
+                );
+            } else {
+                frame_write!(
+                    self,
+                    "post pass into the gamma scene, then the 2D",
+                    self.target_bytes(4)
+                );
+            }
+        } else {
+            pass = single_pass(encoder, self.gamma.scene_view(), "hud pass");
+            frame_write!(self, "2D pass (gamma scene)", self.target_bytes(4));
+            if plan.bloom {
+                self.bloom.composite(&mut pass);
+            }
+        }
+        pass
     }
 }
 
