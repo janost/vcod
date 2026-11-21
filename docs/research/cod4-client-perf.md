@@ -24,7 +24,8 @@ it, the last one listed here:
 | HUD | 33 |
 | Load and first frame | 17, 34 |
 | Resident set | 23 |
-| Dynamic entities | 41 |
+| Dynamic entities | 41, 42 |
+| Renderer refactors on a card | 43 |
 
 Current real-card reference points (1920 x 1080, one sample):
 
@@ -1344,13 +1345,14 @@ cost.
   leaves shader warm-up to a dvar; vcod's prewarm is that warm-up always
   on.
 
-Pending, real card: the `load profile` line before and after on each
-game's join; the first shot, frag and tracer should not hitch.
+Not taken on a card: this change's own before and after. 34.4 has a
+card's join timelines from two later builds. Pending, by eye: the first
+shot, frag and tracer should not hitch.
 
-### What a load keeps and what it skips (perf/client-mem)
+### 34.4 What a load keeps and what it skips (perf/client-mem)
 
 What changed, none of it in what a frame binds or draws (read off the
-draw paths; no frame compared on this box, which has no adapter):
+draw paths, then the frames compared on a card, below):
 
 - A world material or static model skin that draws through its stages
   (`Pass::Stage`: every CoD2 and CoD4 one, CoD1's scripted ones) binds
@@ -1383,10 +1385,42 @@ in for it: it traces under the client's patch arithmetic
 (`Arith::for_client`) with its brush models unlinked, and offline modes
 build none.
 
-Pending, real card: each game's join and a map change on the server's
-console, before and after, three runs a side: the `load profile` lines and
-the client's VmRSS and VmHWM after each load; and the CoD4 frames byte for
-byte (`VCOD_C4_SHOTS`, 39).
+On a card: an AMD Radeon 780M (RADV PHOENIX, Mesa 26.3.1), release
+builds, stack/p23 3b4ec6fc8 against perf/client-mem 7a8613e9c, 2026-11-21.
+Each run starts the base build's vcod-server on 127.0.0.1 with four
+shooting bots and a client joined as a spectator under
+`VCOD_LOAD_PROFILE`; 8 s after the join's first frame it reads the
+client's VmRSS and VmHWM, changes the map on the server's console, and
+reads them again after that load. Three rounds, each game and build in
+turn, medians (ms, MB). VERIFIED (live runs on the 780M, ours):
+
+| | p23 | perf/client-mem |
+|---|---|---|
+| CoD1 mp_carentan join, to first frame | 1096 | 957 |
+| CoD1 join, world GPU state | 243 | 167 |
+| CoD1 change to mp_brecourt, to first frame | 406 | 303 |
+| CoD1 change, world GPU state | 209 | 130 |
+| CoD1 RSS after join / after change | 255 / 300 | 249 / 303 |
+| CoD1 peak RSS after change | 314 | 321 |
+| CoD2 mp_toujane join, to first frame | 1058 | 1033 |
+| CoD2 change to mp_burgundy, to first frame | 486 | 460 |
+| CoD2 RSS after join / after change | 338 / 537 | 322 / 452 |
+| CoD2 peak RSS after change | 587 | 513 |
+| CoD4 mp_crossfire join, to first frame | 5053 | 4854 |
+| CoD4 join, `cod4 prewarm` | 410 | 257 |
+| CoD4 map load (`load cod4 map`), mp_crossfire / mp_crash | 631 / 835 | 626 / 828 |
+| CoD4 RSS after join / after change to mp_crash | 1297 / 2168 | 1140 / 1974 |
+| CoD4 peak RSS after join / after change | 1419 / 2429 | 1419 / 2203 |
+
+The CoD4 frames held byte for byte: `cod4_live` under `VCOD_C4_SHOTS`
+(39) wrote 93 files on each build, 93 the same, 109 tests ok each.
+VERIFIED (frames on the 780M, ours).
+
+Open: CoD4's map-change timeline (`load profile cod4 map change`) ends 5-6
+ms in, on a frame drawn before the new map loads; the map load itself is
+the `load cod4 map` lap above. VERIFIED (the client logs). CoD1's peak RSS
+after the change rose 314 -> 321 MB; a `malloc_trim` after the load is the
+untried follow-up.
 
 ## 35. `floatZ` written in the depth prepass, no split and copy (P22)
 
@@ -1814,7 +1848,8 @@ Pending, real card: the fight with and without `VCOD_ENT_BUNDLES=0`,
 reading `encode`, `finish`, `submit`, `calls`, `entcalls`, `entbundled`,
 `prebundled`, `rebundled`; then the held view. If the fight's `finish`
 rises with it on, bundles are made more often than they replay, and the
-fix is a longer hold before a bundle, not the per-body split.
+fix is a longer hold before a bundle, not the per-body split. The frames
+with bundles off match those with them on, on a card (43).
 
 ## 41. The map's dynamic entities
 
@@ -1845,9 +1880,18 @@ census).
   the turn). `build`, `hud` and the GPU groups move within the runs'
   spread. VERIFIED (the runs, ours, 2026-11-19).
 
-What the dynents still cost is CPU in `build` (0.8 ms on mp_crash): the
-next cut is batching each model's dynents into one static draw while none
-is awake.
+- After 42, the same card and command at 1280 x 800 and four samples
+  (`SESSION=1 SIZE=1280x800 GAMETYPE=war tools/cod4_perf.sh <out>
+  mp_crash 25`, 12 bots, one run a side), perf/client-frame c7a121895:
+  with the dynents `build` 0.30, `pose` 0.11, `encode` 0.40, `finish`
+  0.82 and 369 entity calls, against 0.10, 0.03, 0.29, 0.60 and 76 with
+  `VCOD_NO_DYNENTS=1`; `gpu.scene` 2.85 against 2.66; 268 against 324
+  fps. VERIFIED (the runs on the 780M, ours, 2026-11-21).
+
+What the dynents still cost is CPU: 0.2 ms of `build` and 0.3 of `encode`
+plus `finish` on mp_crash, the last two from their 290-odd entity calls.
+The next cut is batching each model's dynents into one static draw while
+none is awake, which takes the calls with it.
 
 ## 42. Entity lighting held across frames, and the frame's uploads by span
 
@@ -1885,12 +1929,90 @@ under its 0.1 ms bar: left as is. VERIFIED (scratch timer, ours).
 
 Not done: a draw per model of the sleeping dynents (41's next cut). With
 the lookups gone a held dynent costs its placement, LOD pick, posed box,
-light set pack and draw sort each frame; the real card's `build` with
-and without dynents says whether that is worth a static batch.
+light set pack and draw sort each frame, 0.2 ms of `build` on mp_crash
+on the card, and its entity calls in `encode` and `finish` (41).
 
-Pending, real card: GPU kit `./run.sh perf-frame` (`bin/p23` against
-`bin/perfframe`): mp_crash with and without `VCOD_NO_DYNENTS=1` and held
-with no bots, mp_backlot, mp_shipment, mp_crossfire at `TURN=90`, CoD1
-mp_carentan with `cg_shadows 1`, CoD2 mp_harbor; reading `build`,
-`pose`, `fxdraw` and the frame. `./run.sh shots` for the frames byte for
-byte.
+### 42.1 On a card
+
+AMD Radeon 780M (RADV PHOENIX, Mesa 26.3.1), release builds, stack/p23
+3b4ec6fc8 against perf/client-frame c7a121895, 2026-11-21. Each case is
+`SESSION=1 SIZE=1280x800 tools/cod4_perf.sh <out> <map> 25` (12 shooting
+bots, `war`, the spectator spot, the first 10 s dropped), once a side,
+the p23 build first. CoD4 draws at four samples, CoD1 and CoD2 at one.
+Mean ms. VERIFIED (the runs on the 780M, ours):
+
+| Case | fps | wall | `build` | `encode` | `finish` | `gpu.total` |
+|---|---|---|---|---|---|---|
+| mp_crash | 268 -> 268 | 3.73 -> 3.73 | 0.83 -> 0.30 | 0.36 -> 0.40 | 0.68 -> 0.82 | 3.20 -> 3.25 |
+| mp_crash, `VCOD_NO_DYNENTS=1` | 329 -> 324 | 3.04 -> 3.09 | 0.11 -> 0.10 | 0.29 -> 0.29 | 0.62 -> 0.60 | 2.94 -> 3.00 |
+| mp_crash, `BOTS=0` (held) | 332 -> 344 | 3.02 -> 2.90 | 0.70 -> 0.16 | 0.30 -> 0.31 | 0.56 -> 0.59 | 2.92 -> 2.83 |
+| mp_backlot | 194 -> 227 | 5.15 -> 4.41 | 1.31 -> 0.36 | 0.51 -> 0.47 | 0.80 -> 1.05 | 3.86 -> 3.80 |
+| mp_shipment | 184 -> 226 | 5.44 -> 4.43 | 2.00 -> 0.71 | 0.37 -> 0.42 | 0.58 -> 0.66 | 3.61 -> 3.49 |
+| mp_crossfire, `TURN=90` | 154 -> 220 | 6.48 -> 4.54 | 2.53 -> 0.49 | 0.48 -> 0.49 | 0.71 -> 0.65 | 4.01 -> 3.02 |
+| CoD1 mp_carentan, `cg_shadows 1` | 851 -> 839 | 1.17 -> 1.19 | 0.11 -> 0.12 | 0.07 -> 0.07 | 0.28 -> 0.29 | 0.82 -> 0.83 |
+| CoD2 mp_harbor | 582 -> 576 | 1.72 -> 1.74 | 0.03 -> 0.05 | 0.19 -> 0.21 | 0.54 -> 0.53 | 1.61 -> 1.61 |
+
+mp_crash with bots keeps its fps though `build` fell 0.53 ms: the other
+CPU stages took the time up. CoD1 and CoD2 move within one run's spread. `cod4_live` under `VCOD_C4_SHOTS` (39) wrote 93 files on each
+build, 93 the same, 109 tests ok each. VERIFIED (frames on the 780M,
+ours).
+
+Open: `finish` rose 0.03-0.25 ms on the CoD4 maps that draw dynents
+(mp_crash, held mp_crash, mp_backlot, mp_shipment) and not on mp_crash
+without them or the turn. The calls held: mp_backlot 2231 against 2230,
+0.36 -> 0.47 us a call, its p50 0.77 -> 1.05 ms. The span compare does
+not explain it: `changed_span` and the `write_buffer`s run inside
+`build`, which fell, and `finish` times `CommandEncoder::finish` alone
+(31), which encodes the pass commands and none of the queue's writes.
+VERIFIED (the runs on the 780M; `renderer/frame.rs` and `wgpu-core` 30.0.2
+`command::encode_commands`). The held view with no bots, where a frame
+writes no span (43's census), rose 0.03. One run a side with the base always first
+cannot tell that from the APU's clocks or the bots' fight; the next run
+alternates three a side on mp_backlot and mp_shipment, and adds a build
+that writes the whole lists, to split the partial writes from the rest.
+
+## 43. The renderer refactors checked on a card (P2, P3, P4)
+
+The renderer stack (P2's `FramePlan` and one draw encoder, P3's layout
+helpers and `build_instances` steps, P4's image rules and renderer-held
+sample count, with perf/client-mem and perf/client-frame) was built to
+draw what its base drew. These checks ran on an AMD Radeon 780M (RADV
+PHOENIX, Mesa 26.3.1), release builds, 2026-11-21, in two packs: base
+7f386db5c against stack/p23 3b4ec6fc8 (P2 and P3), then master e9931d894
+against the whole stack on it, 2e143b02c (merged as bddb9de0c).
+
+- The frame digest (`VCOD_FRAME_DIGEST`, `frame_digest.rs`: the view,
+  every model's transform and bones, HUD, sound, effects; not the pixels)
+  over a `timedemo` in a 1024 x 768 window, `--vanilla --no-audio`, each
+  build twice, the lines compared without their clock field: a CoD1 1.1
+  demo, 588 frames, and CoD2's `mp_toujane-retail` demo, 1255 frames. Each
+  build's two runs the same, and base against p23 and master against the
+  stack the same, both games. VERIFIED (the runs on the 780M, ours).
+- The client suite with `VCOD_REQUIRE_GPU=1` (a render test that finds no
+  adapter fails): base 1887, p23 1888, perf/client-mem 1889,
+  perf/client-frame 1890, master 1892, the stack 1896 passed, 0 failed,
+  19 ignored each. `renderer::pipeline_check`: 12 passed on base, master
+  and the stack. VERIFIED (the runs on the 780M, ours).
+- The CoD4 census (`cod4_census`, `cod4_draws_live::`,
+  `cod4_live_crossfire_frame_writes`, 4 tests) on master, the stack, and
+  the stack with `VCOD_WORLD_BUNDLES=0 VCOD_ENT_BUNDLES=0`: 429 rows each.
+  Master and the stack differ only in the held frames' `upload entity
+  lights, instances and bones`, 797184 bytes -> 0 (42's spans), and the
+  totals with them. The two frame hashes (`view 1`, `view 2`) are the same
+  on all three. VERIFIED (the runs on the 780M, ours).
+- `cod4_live` under `VCOD_C4_SHOTS` (39): 93 files, 93 the same, for p23
+  against perf/client-mem, p23 against perf/client-frame, and master
+  against the stack; 109 tests ok each. VERIFIED (frames on the 780M,
+  ours).
+- `r_aaSamples` 1, 4, 1 through `vid_restart` in each game on master and
+  the stack: frames drawn at each, no error line. CoD4 started at 4 on
+  master and 1 on the stack: both read the archived value, which master's
+  run had latched to 1 in the CoD4 profile config before the stack's run.
+  1.7 registers `r_aaSamples` archive and latch, default 1
+  (cod4-front-end.md 9.1). VERIFIED (the runs on the 780M, ours). A
+  repeat sets `r_aaSamples 1` and restarts first.
+
+Pending, by eye, on the stack: CoD4's flash, stun, sight blur, scope and
+sun flare, and `vc_ssao 1`'s F3 line; `r_picmip`, `vc_hdr` and CoD4's
+`r_applyPicmip` through `vid_restart` in each game (34.4's re-read map);
+CoD2's effects and the CoD2 and CoD4 HUDs against master.
