@@ -27,7 +27,7 @@ use vcod_cod4::net::delta::ENTITYNUM_NONE;
 use vcod_cod4::pmove::{PlayerState, button, ef};
 use vcod_gsc::EntId;
 
-use super::{Cod4Bots, deg_short, eye};
+use super::{Cod4Bots, cmd_angle, eye};
 use crate::bots::BotView;
 use crate::bots::gun::{
     GUN_STEP, MIN_RANGE, aim_barrel, arc_enemy, floor_spot, in_arc, look_at, mount_spot,
@@ -165,7 +165,7 @@ fn covers(gun: &GunInfo, at: Vec3) -> bool {
 /// The cmd's angles for `view` over 1.7's float `delta_angles`.
 fn cmd_angles(c: &mut UserCmd4, view: [f32; 2], delta: [f32; 3]) {
     for i in 0..2 {
-        c.angles[i] = ((deg_short(view[i]) - deg_short(delta[i])) & 0xffff) as u16;
+        c.angles[i] = (cmd_angle(f64::from(view[i]) - f64::from(delta[i])) & 0xffff) as u16;
     }
 }
 
@@ -621,6 +621,17 @@ mod tests {
         assert!((spot - Vec3::new(-768.0, 68.0, 290.0)).length() < 1e-3);
     }
 
+    /// 1.7 rounds `view - delta_angles` to the short (cmd base `cod4_lnxded`
+    /// 0x8130adc); a truncation sends 2366 for each.
+    #[test]
+    fn a_gunner_s_cmd_angles_round_off_the_float_delta() {
+        let mut c = UserCmd4::default();
+        cmd_angles(&mut c, [13.0, 103.0], [0.0, 90.0, 0.0]);
+        assert_eq!(&c.angles[..2], &[2367, 2367]);
+        cmd_angles(&mut c, [-45.0, 45.0], [0.0, 90.0, 0.0]);
+        assert_eq!(&c.angles[..2], &[0xe001, 0xe001]);
+    }
+
     #[test]
     fn a_gunner_cmd_holds_still_and_fires_or_lets_go() {
         let ps = PlayerState {
@@ -655,7 +666,7 @@ mod tests {
         };
         apply_throw(&mut c, &take, &ps);
         assert_eq!(c.buttons, button::FRAG);
-        assert_eq!(c.angles[1], deg_short(45.0) as u16);
+        assert_eq!(c.angles[1], 8192);
         let throw = ThrowBack {
             hold: false,
             ..take

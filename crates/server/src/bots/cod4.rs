@@ -847,7 +847,8 @@ impl Cod4Bots {
                 ps.leanf,
             )
             .into(),
-            delta_angles: ps.delta_angles.map(deg_short),
+            delta_angles: ps.delta_angles.map(|d| cmd_angle(f64::from(d))),
+            delta_deg: Some(ps.delta_angles),
             view: ps.view_angles,
             weapon,
             weapons_held,
@@ -1630,8 +1631,13 @@ pub fn mantle_walk(
 /// server's cmd base `cod4_lnxded` 0x8130adc..0x8130b29). CoD2 1.3
 /// truncates without the half ([`vcod_common::x87::angle_shorts`]).
 pub(crate) fn cmd_short(deg: f32) -> u16 {
-    let v = (f64::from(deg) * f64::from(vcod_common::x87::SHORT_PER_DEG) + 0.5) as f32;
-    (v as i32 & 0xffff) as u16
+    (cmd_angle(f64::from(deg)) & 0xffff) as u16
+}
+
+/// [`cmd_short`] before the mask. The server's base takes `viewangles -
+/// delta_angles` on the x87 stack, so a difference comes in as an `f64`.
+pub(crate) fn cmd_angle(deg: f64) -> i32 {
+    (deg * f64::from(vcod_common::x87::SHORT_PER_DEG) + 0.5) as f32 as i32
 }
 
 /// A weapon's time between rounds as the brain paces its trigger: a bolt
@@ -1642,12 +1648,6 @@ fn fire_cycle(d: &WeaponDef) -> i32 {
     } else {
         d.fire_time
     }
-}
-
-/// `ANGLE2SHORT` of 1.7's float `delta_angles`, as the brain's cmd angles
-/// subtract them.
-fn deg_short(a: f32) -> i32 {
-    (a * (65536.0 / 360.0)) as i32
 }
 
 /// The cmd the brain asks for, in 1.7's bits, and the frag throw's state
@@ -1782,6 +1782,19 @@ fn blasts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The brain's aim goes out as 1.7 rounds it off the float delta;
+    /// truncated shorts less the truncated delta send 2366 for each.
+    #[test]
+    fn a_brain_cmd_angle_rounds_as_1_7_does() {
+        let d = [0.0, 90.0, 0.0];
+        let v = crate::bots::BotView {
+            delta_angles: d.map(|d| cmd_angle(f64::from(d))),
+            delta_deg: Some(d),
+            ..Default::default()
+        };
+        assert_eq!(crate::bots::cmd_angles(&v, [13.0, 103.0]), [2367, 2367, 0]);
+    }
 
     /// 1.7 adds the half and truncates toward zero, so -45 (-8192.0002
     /// shorts) goes out as -8191, where a round and CoD2 1.3's truncation

@@ -2024,3 +2024,29 @@ VERIFIED (measured, ours): every refactor commit printed these, every
   script menus, `CL_OpenScriptMenu_f`), as CoD4's `menu_names` reads its
   own; it scans all 32 now. Digests unchanged: the stock team menu sits
   low in the block.
+
+## 20. CoD4 bots' cmd angles rounded as 1.7 rounds them (2026-11-21)
+
+1.7 makes a cmd angle as `(int)` of the stored float `deg * 182.04445f +
+0.5f`, masked to 16 bits: the client's `iw3mp.exe` 0x463aa9..0x463acf, and
+the server's cmd base `(viewangles - delta_angles)` the same way,
+`cod4_lnxded` 0x8130adc..0x8130b29. VERIFIED (the instructions). The mantle
+walk already did (`bots::cod4::cmd_short`). The brain's cmd
+(`bots::cmd_angles` over `BotView::delta_deg`) and the gunner's and frag
+throw-back's (`bots/cod4/gun.rs`) truncated each angle and subtracted a
+truncated delta, up to two shorts off; they now round the float
+difference. CoD2 1.3 still truncates (cod2-protocol.md 4.3).
+
+`bot_match GAME=cod4 DIGEST=600 TICKS=6000`, seeds 1 and 2, release,
+mp_crash `war`, from master 7f386db5c:
+
+| Seed | Digest before | Digest after | Kills | Hits, rounds | Throws | Stalled |
+|---|---|---|---|---|---|---|
+| 1 | 2b2bffc3935d12e9 | 0cf2dbc2e1a49354 | 47 to 40 | 159, 659 to 167, 848 | 14 to 22 | 0 to 140 |
+| 2 | d1428bb5e367aacd | a00fb1c9c848a566 | 48 to 46 | 168, 645 to 197, 731 | 13 to 11 | 0 to 0 |
+
+VERIFIED (measured, ours). Both part from `digest@600` on, the first
+window: a cmd angle moves a short wherever the two conversions part.
+Script errors 0 both. INFERRED: the counts move by the matches' chaos,
+not by any aim change a short's 0.0055 degrees could make; two seeds tell
+nothing past that.
