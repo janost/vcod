@@ -11,7 +11,7 @@ Every claim names the module, the virtual address and the string or table it res
 
 A doc may keep a stricter rule and label all control flow INFERRED (`cod4-server-frame.md`, `cod4-voice.md`, `cod4-netfields.md`, the CoD2 docs, and each doc whose header says so). A stricter label is not a defect; a VERIFIED branch or order with no address behind it is.
 
-One label per claim. A document may open with a document-level VERIFIED default only when its provenance is uniform and every exception is labelled. A section-level blanket, including one in a heading, is never allowed. Docs carry derived facts (offsets, tables, enum orders), never pasted decompiler output. `crates/common/tests/evidence_labels.rs` catches two mechanical shapes; its header lists what a reader still has to check.
+One label per claim. A document may open with a document-level VERIFIED default only when its provenance is uniform and every exception is labelled. A lead-in may carry one label for the table or the list right under it when every row or item rests on the source it names ("The results, each VERIFIED live:"); an item that rests on another carries its own. A section-level blanket, a label over prose or over more than that one table or list, including one in a heading, is never allowed. Docs carry derived facts (offsets, tables, enum orders), never pasted decompiler output. `crates/common/tests/evidence_labels.rs` catches two mechanical shapes; its header lists what a reader still has to check.
 
 ## CoD1 1.1 (the base the other games diff against)
 

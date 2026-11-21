@@ -383,9 +383,9 @@ Off the LAN, `sv_fps` and `snaps` together set the rate (section 12).
 
 A soak (`cod4-map-sweep.md`, "The soak") saw three vcod-server ticks of
 101 to 125 ms over 105 map and gametype pairs. This section is vcod's own
-tick, measured; retail has no counterpart. Every number below is VERIFIED
-(the logs of the runs named), on a many-core machine shared with other
-jobs, each run pinned to cores 0-7 (`taskset`) under a memory cap.
+tick, measured; retail has no counterpart. The runs are on a many-core
+machine shared with other jobs, each pinned to cores 0-7 (`taskset`)
+under a memory cap, and each number carries its own label.
 
 ### 9.3 The instruments
 

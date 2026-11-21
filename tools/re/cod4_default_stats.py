@@ -13,7 +13,7 @@ registers it loads with immediates, and prints every non-zero stat.
     python3 -I tools/re/cod4_default_stats.py iw3mp.exe          # index value rows
     python3 -I tools/re/cod4_default_stats.py iw3mp.exe --rust   # crates/cod4/src/net/stats.rs table
 
-Layout (docs/research/cod4-netfields.md, "The stats block"): buffer byte 0
+Layout (docs/research/cod4-netfields.md 10.1): buffer byte 0
 holds a CRC-32 of bytes 4..0x2000, byte stat i sits at 4 + i, int stat
 i (2000..3497) at 4 * i - 5996.
 """

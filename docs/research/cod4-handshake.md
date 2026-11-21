@@ -325,7 +325,8 @@ Read off `iw3mp.exe`'s disassembly and data; addresses are in it. Function names
 
 ### 12.2 The wire
 
-All VERIFIED (the code).
+Each item in this list is VERIFIED (the instructions at the addresses it
+names).
 
 - **Refresh.** `UI_StartServerRefresh` (0x54aaf0) first writes `ui_lastServerRefresh_<source>` as `%s %i, %i   %i:%02i` (0x6eb858): localized month (`EXE_MONTH_ABV_JANUARY`.., table 0x723dc0), day, year, hour, minute. A quick refresh (argument 0) then resets the source's pings (0x475560: ping -1, no send time) and stops. A full one marks every row of the source (+0x1b = 1, 0x54abf5), resets the pings, then Local runs `localservers` (0x6eb86c), Internet `globalservers 0 6 full empty` (0x6eb89c; `globalservers 0 %s full empty` with `debug_protocol` when that dvar is set, 0x54ac4d), Favorites nothing more.
 - **`localservers`** (`CL_LocalServers` 0x470220) prints `Scanning for servers on the local network...`, empties the Local list keeping each row's mark, and broadcasts `getinfo xxx` (0x6d1e9c) to ports 28960 (0x7120) to 28963, the whole round twice.
