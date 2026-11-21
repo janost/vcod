@@ -2,12 +2,13 @@
 //! steps it, and flattens it into [`FxQuad`]/[`FxLight`] data. No wgpu, no
 //! wire knowledge. Engine semantics: `docs/research/efx-grammar.md`, R1 to R10.
 
-use crate::fx::efx::{self, Effect, Emitter, R1, R3};
+use crate::fx::efx::{self, Effect, Emitter, Kind, R1, R3};
 use crate::fx::{cod2, cod2_cloud, cod2_tracer, cod4_trail};
 use crate::marks::MarkRequest;
 use glam::Vec3;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use vcod_cod2::efx::{attr, spawn};
 use vcod_common::asset_source::{Asset, AssetSource};
 use vcod_common::collision::{CONTENTS_SOLID, CollisionWorld};
 use vcod_common::pmove::aim::angles_to_axis_msvc;
@@ -161,17 +162,19 @@ enum Behavior {
 /// `origin2` is not parsed, so it stretches along velocity like `Tail`.
 /// `Sound` is handled by [`spawn_sound_cues`]. An `Emitter` flies its
 /// model and plays its `emitfx` along the way.
-fn classify(kind: &str) -> Behavior {
+fn classify(kind: &Kind) -> Behavior {
     match kind {
         // CoD2's `Cloud` lives as a sprite does and draws through
         // `FxSystem::clouds` (docs/research/cod2-efx.md 5).
-        "Particle" | "OrientedParticle" | "Cylinder" | "Cloud" => Behavior::Billboard,
-        "Decal" => Behavior::Decal,
-        "Tail" | "Line" => Behavior::Stretch,
-        "Light" => Behavior::Light,
-        "Emitter" => Behavior::Emitter,
-        "FxRunner" => Behavior::Runner,
-        _ => Behavior::NoOp,
+        Kind::Particle | Kind::OrientedParticle | Kind::Cylinder | Kind::Cloud => {
+            Behavior::Billboard
+        }
+        Kind::Decal => Behavior::Decal,
+        Kind::Tail | Kind::Line => Behavior::Stretch,
+        Kind::Light => Behavior::Light,
+        Kind::Emitter => Behavior::Emitter,
+        Kind::FxRunner => Behavior::Runner,
+        Kind::Sound | Kind::CameraShake | Kind::Flash | Kind::Other => Behavior::NoOp,
     }
 }
 
@@ -396,32 +399,19 @@ fn sample_r3(rng: &mut Rng, r: R3) -> Vec3 {
     )
 }
 
-/// Only `linear` animates; an unflagged curve holds `start` (grammar doc R3).
-fn curve_animates(flags: &[String]) -> bool {
-    flags.iter().any(|f| f == "linear")
-}
-
 /// Non-animating curves collapse onto `start`. Both ends are always sampled
 /// so the rng stream does not depend on the flags.
 fn sample_curve(rng: &mut Rng, c: &efx::Curve) -> (f32, f32) {
     let a = sample_r1(rng, c.start);
     let b = sample_r1(rng, c.end);
-    if curve_animates(&c.flags) {
-        (a, b)
-    } else {
-        (a, a)
-    }
+    if c.linear { (a, b) } else { (a, a) }
 }
 
 /// [`sample_curve`] for the `rgb` curve.
 fn sample_curve_v3(rng: &mut Rng, c: &efx::CurveV3) -> (Vec3, Vec3) {
     let a = sample_r3(rng, c.start);
     let b = sample_r3(rng, c.end);
-    if curve_animates(&c.flags) {
-        (a, b)
-    } else {
-        (a, a)
-    }
+    if c.linear { (a, b) } else { (a, a) }
 }
 
 fn spawn_pos(at: SpawnAt) -> Vec3 {
@@ -461,7 +451,7 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 /// orgOnSphere / orgOnCylinder placement (grammar doc R6); otherwise `base`.
 fn distribute_origin(rng: &mut Rng, em: &Emitter, base: Vec3) -> Vec3 {
     use std::f32::consts::TAU;
-    if em.spawn_flags.iter().any(|f| f == "orgOnSphere") {
+    if em.spawn_flags & spawn::ORG_ON_SPHERE != 0 {
         let radius = sample_r1(rng, em.radius);
         let theta = rng.next_f32() * TAU;
         // Uniform on the unit sphere: cos(phi) uniform in [-1, 1].
@@ -469,7 +459,7 @@ fn distribute_origin(rng: &mut Rng, em: &Emitter, base: Vec3) -> Vec3 {
         let sin_phi = (1.0 - cos_phi * cos_phi).max(0.0).sqrt();
         let dir = Vec3::new(sin_phi * theta.cos(), sin_phi * theta.sin(), cos_phi);
         base + dir * radius
-    } else if em.spawn_flags.iter().any(|f| f == "orgOnCylinder") {
+    } else if em.spawn_flags & spawn::ORG_ON_CYLINDER != 0 {
         let radius = sample_r1(rng, em.radius);
         let height = sample_r1(rng, em.height);
         let theta = rng.next_f32() * TAU;
@@ -483,7 +473,7 @@ fn distribute_origin(rng: &mut Rng, em: &Emitter, base: Vec3) -> Vec3 {
 /// One [`FxSound`] per alias of a `Sound` block; origin and delay are
 /// sampled once per block, since it has no `count`.
 fn spawn_sound_cues(rng: &mut Rng, em: &Emitter, at: SpawnAt) -> Vec<FxSound> {
-    if em.kind != "Sound" || em.sounds.is_empty() {
+    if em.kind != Kind::Sound || em.sounds.is_empty() {
         return Vec::new();
     }
     let pos = spawn_pos(at) + sample_r3(rng, em.origin);
@@ -601,7 +591,7 @@ fn element_origin(
 ) -> (Vec3, Vec3) {
     let mut offset = sample_r3(rng, em.origin);
     if let Some((x, y, z)) = frame
-        && !em.spawn_flags.iter().any(|f| f == "cheapOrgCalc")
+        && em.spawn_flags & spawn::CHEAP_ORG_CALC == 0
     {
         offset = offset.x * x + offset.y * y + offset.z * z;
     }
@@ -651,7 +641,7 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
     // A `relative` element rides the tag; with the tag gone it is not
     // created (0x494050's 0x200000 branch, R10).
     let bolt = match cx.bolt {
-        Some((id, frame)) if em.flags.iter().any(|f| f == "relative") => match frame {
+        Some((id, frame)) if em.flags & attr::RELATIVE != 0 => match frame {
             Some(frame) => Some((id, frame)),
             None => return,
         },
@@ -748,10 +738,10 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
         // world-space (grammar doc R6).
         let frame = spawn_frame(at);
         if let Some((x, y, z)) = frame {
-            if !em.spawn_flags.iter().any(|f| f == "absoluteVel") {
+            if em.flags & attr::ABSOLUTE_VEL == 0 {
                 vel = vel.x * x + vel.y * y + vel.z * z;
             }
-            if !em.spawn_flags.iter().any(|f| f == "absoluteAccel") {
+            if em.flags & attr::ABSOLUTE_VEL2 == 0 {
                 accel = accel.x * x + accel.y * y + accel.z * z;
             }
         }
@@ -762,11 +752,8 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
 
         // axisFromSphere: velocity points radially out from the spawn center,
         // magnitude kept. Without orgOnSphere/orgOnCylinder, base == center.
-        if em.spawn_flags.iter().any(|f| f == "axisFromSphere")
-            && em
-                .spawn_flags
-                .iter()
-                .any(|f| f == "orgOnSphere" || f == "orgOnCylinder")
+        if em.spawn_flags & spawn::AXIS_FROM_SPHERE != 0
+            && em.spawn_flags & (spawn::ORG_ON_SPHERE | spawn::ORG_ON_CYLINDER) != 0
         {
             let radial = (base - center).normalize_or_zero();
             if radial != Vec3::ZERO {
@@ -801,10 +788,10 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
         // bolted particle does not trace: vcod integrates it in the tag's
         // frame.
         let physics = bolt.is_none()
-            && (em.flags.iter().any(|f| f == "usePhysics")
+            && (em.flags & attr::USE_PHYSICS != 0
                 || em.bounce.is_some()
                 || !em.impact_fx.is_empty());
-        let impact_kills = em.flags.iter().any(|f| f == "impactKills");
+        let impact_kills = em.flags & attr::IMPACT_KILLS != 0;
         let elasticity = em.bounce.map_or(0.0, |b| sample_r1(rng, b));
         let impact_fx = pick(rng, &em.impact_fx).cloned();
         let death_fx = pick(rng, &em.death_fx).map(|f| efx::chained_path(f));
@@ -928,7 +915,7 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
             alpha1,
             rgb0,
             rgb1,
-            use_alpha: em.flags.iter().any(|f| f == "useAlpha"),
+            use_alpha: em.flags & attr::USE_ALPHA != 0,
             physics,
             impact_kills,
             elasticity,
@@ -1726,7 +1713,7 @@ impl FxSystem {
                 continue;
             };
             for m in &e.emitters {
-                let set = if m.kind == "Decal" {
+                let set = if m.kind == Kind::Decal {
                     &mut marks
                 } else {
                     &mut sprites
@@ -1770,7 +1757,7 @@ impl FxSystem {
                 continue;
             };
             for em in &effect.emitters {
-                let set = if em.kind == "Decal" {
+                let set = if em.kind == Kind::Decal {
                     &mut marks
                 } else {
                     &mut sprites
@@ -2040,13 +2027,13 @@ impl FxSystem {
                 budget: &mut self.budget,
             };
             for em in &effect.emitters {
-                if em.kind == "CameraShake" && em.cod2.is_some() {
+                if em.kind == Kind::CameraShake && em.cod2.is_some() {
                     // `FX_AddCameraShake` (Mac 0x59fec) hands the cgame
                     // origin, intensity and radius; not drawn yet.
                     log::debug!("fx {path}: CoD2 CameraShake at {:?}", spawn_pos(at));
                     continue;
                 }
-                if em.kind == "CameraShake" {
+                if em.kind == Kind::CameraShake {
                     let origin = spawn_pos(at);
                     let culled = em.cullrange > 0.0
                         && self.view.is_some_and(|v| {
@@ -2415,11 +2402,14 @@ mod tests {
     use glam::Vec3;
     use vcod_common::pk3::Pk3Fs;
 
+    /// `absoluteVel` and `absoluteAccel`: world-space velocity and accel.
+    const ABSOLUTE: u32 = attr::ABSOLUTE_VEL | attr::ABSOLUTE_VEL2;
+
     /// A minimal one-particle emitter: no ranges, so behavior is exact.
     #[allow(clippy::field_reassign_with_default)]
     fn simple_emitter() -> Emitter {
         let mut e = Emitter::default();
-        e.kind = "Particle".into();
+        e.kind = Kind::Particle;
         e.count = R1 { a: 1.0, b: 1.0 };
         e.life = R1 {
             a: 1000.0,
@@ -2434,16 +2424,16 @@ mod tests {
         e.size = Curve {
             start: R1 { a: 2.0, b: 2.0 },
             end: R1 { a: 4.0, b: 4.0 },
-            flags: vec!["linear".into()],
+            linear: true,
         };
         e.alpha = Curve {
             start: R1 { a: 1.0, b: 1.0 },
             end: R1 { a: 0.0, b: 0.0 },
-            flags: vec!["linear".into()],
+            linear: true,
         };
         e.shaders = vec!["gfx/effects/test".into()];
         // World-space vectors, so a `Point` spawn's up axis leaves them be.
-        e.spawn_flags = vec!["absoluteVel".into(), "absoluteAccel".into()];
+        e.flags = ABSOLUTE;
         e
     }
 
@@ -2486,7 +2476,7 @@ mod tests {
             a: [0.7608, 0.4353, 0.2392],
             b: [0.7608, 0.4353, 0.2392],
         };
-        e.rgb.flags = vec!["linear".into()];
+        e.rgb.linear = true;
         e.alpha.start = R1 { a: 1.5, b: 1.5 };
         e.alpha.end = R1 { a: -0.5, b: -0.5 };
         let colour = |e: &Emitter, t: f32| {
@@ -2504,7 +2494,7 @@ mod tests {
         // The curve passes 1 early on: clamped first.
         let a = colour(&e, 0.1);
         assert!(a[3] == 1.0 && a[0] > 0.97, "{a:?}");
-        e.flags = vec!["useAlpha".into()];
+        e.flags |= attr::USE_ALPHA;
         let a = colour(&e, 0.5);
         assert!(near(a, [rgb[0], rgb[1], rgb[2], 0.5]), "{a:?}");
     }
@@ -2587,11 +2577,11 @@ mod tests {
 
     #[test]
     fn sound_and_trigger_kinds_spawn_nothing() {
-        for kind in ["Sound", "FxRunner"] {
+        for kind in [Kind::Sound, Kind::FxRunner] {
             let mut e = simple_emitter();
-            e.kind = kind.into();
+            e.kind = kind.clone();
             let s = sys_with(e, SpawnAt::Point { pos: Vec3::ZERO });
-            assert_eq!(s.counts(), (0, 0, 0), "kind {kind} should be a no-op");
+            assert_eq!(s.counts(), (0, 0, 0), "kind {kind:?} should be a no-op");
         }
     }
 
@@ -2599,7 +2589,7 @@ mod tests {
     #[allow(clippy::field_reassign_with_default)]
     fn spawn_returns_sound_cues_at_the_spawn_point() {
         let mut em = Emitter::default();
-        em.kind = "Sound".to_string();
+        em.kind = Kind::Sound;
         em.sounds = vec!["kaboom".to_string()];
         em.delay = R1 { a: 250.0, b: 250.0 };
         let effect = Effect { emitters: vec![em] };
@@ -2621,7 +2611,7 @@ mod tests {
     #[test]
     fn decal_kind_hands_the_mark_code_a_request_not_a_quad() {
         let mut e = simple_emitter();
-        e.kind = "Decal".into();
+        e.kind = Kind::Decal;
         e.rotation = R1 { a: 90.0, b: 90.0 };
         e.cullrange = 1200.0;
         let mut s = sys_with(
@@ -2674,7 +2664,7 @@ mod tests {
     #[test]
     fn a_map_restart_drops_particles_and_pending_decals() {
         let mut decal = simple_emitter();
-        decal.kind = "Decal".into();
+        decal.kind = Kind::Decal;
         let mut s = FxSystem::new();
         s.spawn_effect_for_test(
             Effect {
@@ -2695,7 +2685,7 @@ mod tests {
     #[test]
     fn a_decal_spawned_past_its_cullrange_places_no_mark() {
         let mut e = simple_emitter();
-        e.kind = "Decal".into();
+        e.kind = Kind::Decal;
         e.cullrange = 100.0;
         let mut s = FxSystem::new();
         s.set_view(Vec3::new(0.0, 101.0, 0.0));
@@ -2711,7 +2701,7 @@ mod tests {
     #[test]
     fn light_kind_contributes_a_light_not_a_quad() {
         let mut e = simple_emitter();
-        e.kind = "Light".into();
+        e.kind = Kind::Light;
         let s = sys_with(
             e,
             SpawnAt::Point {
@@ -2730,7 +2720,7 @@ mod tests {
     #[test]
     fn lights_are_returned_nearest_cam_pos_first() {
         let mut e = simple_emitter();
-        e.kind = "Light".into();
+        e.kind = Kind::Light;
         let mut s = FxSystem::new();
         for x in [50.0f32, 5.0, 20.0] {
             s.spawn_effect_for_test(
@@ -2752,7 +2742,7 @@ mod tests {
     #[test]
     fn lights_keep_the_first_32_spawned() {
         let mut e = simple_emitter();
-        e.kind = "Light".into();
+        e.kind = Kind::Light;
         let mut s = FxSystem::new();
         for i in 0..40 {
             s.spawn_effect_for_test(
@@ -2791,7 +2781,7 @@ mod tests {
     #[test]
     fn directed_spawn_rotates_velocity_into_dir_frame() {
         let mut e = simple_emitter();
-        e.spawn_flags.clear();
+        e.flags &= !ABSOLUTE;
         e.velocity = R3 {
             a: [1.0, 0.0, 0.0],
             b: [1.0, 0.0, 0.0],
@@ -2842,7 +2832,8 @@ mod tests {
             a: [10.0, 0.0, 0.0],
             b: [10.0, 0.0, 0.0],
         };
-        e.spawn_flags = vec!["cheapOrgCalc".into()];
+        e.flags &= !ABSOLUTE;
+        e.spawn_flags = spawn::CHEAP_ORG_CALC;
         let s = sys_with(
             e,
             SpawnAt::Directed {
@@ -2879,7 +2870,7 @@ mod tests {
     #[test]
     fn stretch_quad_axis_is_parallel_to_velocity_with_curve_length() {
         let mut e = simple_emitter();
-        e.kind = "Tail".into();
+        e.kind = Kind::Tail;
         e.velocity = R3 {
             a: [0.0, 10.0, 0.0],
             b: [0.0, 10.0, 0.0],
@@ -2887,7 +2878,7 @@ mod tests {
         e.length = Curve {
             start: R1 { a: 6.0, b: 6.0 },
             end: R1 { a: 12.0, b: 12.0 },
-            flags: vec!["linear".into()],
+            linear: true,
         };
         let s = sys_with(e, SpawnAt::Point { pos: Vec3::ZERO });
         // t = 0.5 (life is 1s, spawn at 0): length(t) = 6 + (12-6)*0.5 = 9
@@ -2902,7 +2893,7 @@ mod tests {
     #[test]
     fn stretch_quad_is_anchored_at_the_head_and_trails_backwards() {
         let mut e = simple_emitter();
-        e.kind = "Tail".into();
+        e.kind = Kind::Tail;
         e.gravity = R1 { a: 0.0, b: 0.0 };
         e.velocity = R3 {
             a: [0.0, 10.0, 0.0],
@@ -2911,7 +2902,7 @@ mod tests {
         e.length = Curve {
             start: R1 { a: 8.0, b: 8.0 },
             end: R1 { a: 8.0, b: 8.0 },
-            flags: vec![],
+            linear: false,
         };
         let s = sys_with(e, SpawnAt::Point { pos: Vec3::ZERO });
         let q = s.build_quads(Vec3::new(100.0, 0.0, 0.0), Vec3::X, Vec3::Z, 0.0);
@@ -2935,7 +2926,7 @@ mod tests {
         e.length = Curve {
             start: R1 { a: 12.0, b: 12.0 },
             end: R1 { a: 275.0, b: 275.0 },
-            flags: vec!["linear".into()],
+            linear: true,
         };
         let s = sys_with(e, SpawnAt::Point { pos: Vec3::ZERO });
         let q = s.build_quads(Vec3::new(0.0, -100.0, 0.0), Vec3::X, Vec3::Z, 0.5);
@@ -2954,7 +2945,7 @@ mod tests {
         e.size = Curve {
             start: R1 { a: 3.0, b: 3.0 },
             end: R1 { a: 40.0, b: 40.0 },
-            flags: vec![],
+            linear: false,
         };
         let s = sys_with(e, SpawnAt::Point { pos: Vec3::ZERO });
         for now in [0.0f32, 0.5, 0.99] {
@@ -2975,7 +2966,7 @@ mod tests {
         e.size = Curve {
             start: R1 { a: 3.0, b: 3.0 },
             end: R1 { a: 3.0, b: 3.0 },
-            flags: vec![],
+            linear: false,
         };
         let s = sys_with(e, SpawnAt::Point { pos: Vec3::ZERO });
         let q = s.build_quads(Vec3::new(0.0, -100.0, 0.0), Vec3::X, Vec3::Z, 0.0);
@@ -3197,7 +3188,7 @@ mod tests {
     #[test]
     fn stretch_quad_falls_back_to_cam_up_when_velocity_is_parallel_to_view_dir() {
         let mut e = simple_emitter();
-        e.kind = "Tail".into();
+        e.kind = Kind::Tail;
         e.velocity = R3 {
             a: [0.0, 0.0, 10.0],
             b: [0.0, 0.0, 10.0],
@@ -3205,7 +3196,7 @@ mod tests {
         e.length = Curve {
             start: R1 { a: 6.0, b: 6.0 },
             end: R1 { a: 6.0, b: 6.0 },
-            flags: vec![],
+            linear: false,
         };
         let s = sys_with(e, SpawnAt::Point { pos: Vec3::ZERO });
         // Camera along the velocity axis degenerates the primary cross product.
@@ -3235,7 +3226,7 @@ mod tests {
             a: [1.0, 0.0, 0.0],
             b: [1.0, 0.0, 0.0],
         };
-        e.spawn_flags = vec!["absoluteVel".into()];
+        e.flags = attr::ABSOLUTE_VEL;
         let s = sys_with(
             e,
             SpawnAt::Directed {
@@ -3250,7 +3241,7 @@ mod tests {
     #[test]
     fn surface_spawn_rotates_non_decal_velocity_into_normal_hemisphere() {
         let mut e = simple_emitter();
-        e.spawn_flags.clear();
+        e.flags &= !ABSOLUTE;
         e.velocity = R3 {
             a: [1.0, 0.0, 0.0],
             b: [1.0, 0.0, 0.0],
@@ -3271,7 +3262,8 @@ mod tests {
     fn org_on_sphere_distributes_spawn_positions_on_a_sphere() {
         let mut e = simple_emitter();
         e.count = R1 { a: 8.0, b: 8.0 };
-        e.spawn_flags = vec!["orgOnSphere".into()];
+        e.flags &= !ABSOLUTE;
+        e.spawn_flags = spawn::ORG_ON_SPHERE;
         e.radius = R1 { a: 50.0, b: 50.0 };
         let s = sys_with(e, SpawnAt::Point { pos: Vec3::ZERO });
         assert_eq!(s.counts().0, 8);
@@ -3288,7 +3280,8 @@ mod tests {
     fn axis_from_sphere_points_velocity_radially_outward() {
         let mut e = simple_emitter();
         e.count = R1 { a: 8.0, b: 8.0 };
-        e.spawn_flags = vec!["orgOnSphere".into(), "axisFromSphere".into()];
+        e.flags &= !ABSOLUTE;
+        e.spawn_flags = spawn::ORG_ON_SPHERE | spawn::AXIS_FROM_SPHERE;
         e.radius = R1 { a: 50.0, b: 50.0 };
         e.velocity = R3 {
             a: [700.0, 0.0, 0.0],
@@ -3391,7 +3384,7 @@ mod tests {
             b: [0.0, 0.0, -50.0],
         };
         e.gravity = R1 { a: 0.0, b: 0.0 };
-        e.flags = vec!["usePhysics".into()];
+        e.flags |= attr::USE_PHYSICS;
         // floor top face is at z=0 (see collision::test_world)
         let mut s = sys_with(
             e,
@@ -3416,7 +3409,7 @@ mod tests {
             b: [0.0, 0.0, -50.0],
         };
         e.gravity = R1 { a: 0.0, b: 0.0 };
-        e.flags = vec!["usePhysics".into(), "impactKills".into()];
+        e.flags |= attr::USE_PHYSICS | attr::IMPACT_KILLS;
         let mut s = sys_with(
             e,
             SpawnAt::Point {
@@ -3596,7 +3589,7 @@ mod tests {
     #[allow(clippy::field_reassign_with_default)]
     fn runner(play: &str) -> Emitter {
         let mut e = Emitter::default();
-        e.kind = "FxRunner".into();
+        e.kind = Kind::FxRunner;
         e.play_fx = vec![play.into()];
         e
     }
@@ -3732,7 +3725,7 @@ mod tests {
     #[allow(clippy::field_reassign_with_default)]
     fn emitter_plays_its_emitfx_every_density_units_along_its_path() {
         let mut e = Emitter::default();
-        e.kind = "Emitter".into();
+        e.kind = Kind::Emitter;
         e.life = R1 { a: 100.0, b: 100.0 };
         e.velocity = R3 {
             a: [200.0, 0.0, 0.0],
@@ -3833,7 +3826,7 @@ mod tests {
             a: [0.0, 0.0, -50.0],
             b: [0.0, 0.0, -50.0],
         };
-        e.flags = vec!["usePhysics".into(), "impactKills".into()];
+        e.flags |= attr::USE_PHYSICS | attr::IMPACT_KILLS;
         e.death_fx = vec!["fx/x".into()];
         let mut s = sys_with(
             e,
@@ -3851,13 +3844,13 @@ mod tests {
     #[test]
     fn relative_elements_ride_their_tag_and_die_with_it() {
         let mut rel = still_particle();
-        rel.flags = vec!["relative".into()];
+        rel.flags |= attr::RELATIVE;
         rel.origin = R3 {
             a: [5.0, 0.0, 0.0],
             b: [5.0, 0.0, 0.0],
         };
         let mut fixed = rel.clone();
-        fixed.flags.clear();
+        fixed.flags &= !attr::RELATIVE;
         let mut s = sys_with_files(&[("fx/flash.efx", vec![rel, fixed])]);
         let mut bolts = HashMap::from([(7, (Vec3::ZERO, Vec3::X))]);
         s.set_bolts(&bolts);
@@ -3885,13 +3878,13 @@ mod tests {
     #[test]
     fn an_effect_on_a_tag_plays_on_its_axis_and_rides_it() {
         let mut rel = still_particle();
-        rel.flags = vec!["relative".into()];
+        rel.flags |= attr::RELATIVE;
         rel.origin = R3 {
             a: [5.0, 0.0, 0.0],
             b: [5.0, 0.0, 0.0],
         };
         let mut fixed = rel.clone();
-        fixed.flags.clear();
+        fixed.flags &= !attr::RELATIVE;
         let mut s = sys_with_files(&[("fx/tag.efx", vec![rel, fixed])]);
         let tag = TagBolt {
             entity: 70,
@@ -4003,7 +3996,7 @@ mod tests {
     #[test]
     fn a_relative_elements_deathfx_plays_where_it_last_stood() {
         let mut rel = still_particle();
-        rel.flags = vec!["relative".into()];
+        rel.flags |= attr::RELATIVE;
         rel.origin = R3 {
             a: [5.0, 0.0, 0.0],
             b: [5.0, 0.0, 0.0],
@@ -4041,7 +4034,7 @@ mod tests {
     #[test]
     fn a_delayed_decal_on_a_tag_lands_where_the_tag_is_when_due() {
         let mut decal = simple_emitter();
-        decal.kind = "Decal".into();
+        decal.kind = Kind::Decal;
         decal.delay = R1 { a: 100.0, b: 100.0 };
         let mut s = sys_with_files(&[("fx/late.efx", vec![decal.clone()])]);
         let tag = TagBolt {
@@ -4103,7 +4096,7 @@ mod tests {
     #[test]
     fn a_relative_element_on_an_unposed_tag_is_not_created() {
         let mut rel = still_particle();
-        rel.flags = vec!["relative".into()];
+        rel.flags |= attr::RELATIVE;
         let mut s = sys_with_files(&[("fx/flash.efx", vec![rel, still_particle()])]);
         let at = SpawnAt::Point { pos: Vec3::ZERO };
         s.spawn_marked(&Pk3Fs::empty(), "fx/flash.efx", at, Some(7), 0.0, true);
@@ -4154,7 +4147,7 @@ mod tests {
         e.size2 = Curve {
             start: R1 { a: 122.0, b: 122.0 },
             end: R1 { a: 2.0, b: 2.0 },
-            flags: vec!["linear".into()],
+            linear: true,
         };
         let extents = |e: &Emitter| {
             let mut s = sys_with_files(&[("fx/flash.efx", vec![e.clone()])]);

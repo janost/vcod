@@ -1,6 +1,7 @@
 //! Parser for CoD's `.efx` particle-script text. Curves are parsed, not
 //! evaluated; that is `fx::sim`. Grammar and defaults: `docs/research/efx-grammar.md`.
 
+use vcod_cod2::efx::{attr, spawn};
 use vcod_common::asset_source::{Asset, AssetKind, AssetSource};
 use vcod_common::game::Game;
 use vcod_common::text::atoi_msvc;
@@ -42,27 +43,130 @@ pub struct R3 {
     pub b: [f32; 3],
 }
 
+/// `linear` is the one curve flag that animates; the rest (`random`,
+/// `clamp`, `wave`, `nonlinear`) hold `start` (grammar doc R3).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Curve {
     pub start: R1,
     pub end: R1,
-    pub flags: Vec<String>,
+    pub linear: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CurveV3 {
     pub start: R3,
     pub end: R3,
-    pub flags: Vec<String>,
+    pub linear: bool,
 }
+
+/// A block's keyword, as CoD1 spells it (CoD2's [`vcod_cod2::efx::Kind`]
+/// maps onto it).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Kind {
+    Particle,
+    OrientedParticle,
+    Cylinder,
+    Cloud,
+    Decal,
+    Tail,
+    Line,
+    Light,
+    Emitter,
+    FxRunner,
+    Sound,
+    CameraShake,
+    Flash,
+    /// A keyword vcod does not draw, as written.
+    #[default]
+    Other,
+}
+
+impl Kind {
+    /// The block keyword as written; anything unknown is [`Kind::Other`].
+    pub fn parse(word: &str) -> Kind {
+        match word {
+            "Particle" => Kind::Particle,
+            "OrientedParticle" => Kind::OrientedParticle,
+            "Cylinder" => Kind::Cylinder,
+            "Cloud" => Kind::Cloud,
+            "Decal" => Kind::Decal,
+            "Tail" => Kind::Tail,
+            "Line" => Kind::Line,
+            "Light" => Kind::Light,
+            "Emitter" => Kind::Emitter,
+            "FxRunner" => Kind::FxRunner,
+            "Sound" => Kind::Sound,
+            "CameraShake" => Kind::CameraShake,
+            "Flash" => Kind::Flash,
+            _ => Kind::Other,
+        }
+    }
+}
+
+impl From<vcod_cod2::efx::Kind> for Kind {
+    fn from(k: vcod_cod2::efx::Kind) -> Kind {
+        use vcod_cod2::efx::Kind as K;
+        match k {
+            K::Particle => Kind::Particle,
+            K::Line => Kind::Line,
+            K::Tail => Kind::Tail,
+            K::Cylinder => Kind::Cylinder,
+            K::Emitter => Kind::Emitter,
+            K::Decal => Kind::Decal,
+            K::OrientedParticle => Kind::OrientedParticle,
+            K::FxRunner => Kind::FxRunner,
+            K::Light => Kind::Light,
+            K::CameraShake => Kind::CameraShake,
+            K::Flash => Kind::Flash,
+            K::Cloud => Kind::Cloud,
+        }
+    }
+}
+
+/// CoD1's top-level `flags` tokens (grammar doc 3) as CoD2's attribute
+/// bits; `expensivePhysics` is parsed and ignored (R9).
+const FLAG_BITS: [(&str, u32); 11] = [
+    ("useAlpha", attr::USE_ALPHA),
+    ("emitFx", attr::EMIT_FX),
+    ("relative", attr::RELATIVE),
+    ("usePhysics", attr::USE_PHYSICS),
+    ("impactKills", attr::IMPACT_KILLS),
+    ("useModel", attr::USE_MODEL),
+    ("impactFx", attr::IMPACT_FX),
+    ("depthHack", attr::DEPTH_HACK),
+    ("deathFx", attr::DEATH_FX),
+    ("setShaderTime", attr::SET_SHADER_TIME),
+    ("expensivePhysics", 0),
+];
+
+/// CoD1's `spawnFlags` tokens (grammar doc 3): (name, attribute bits,
+/// spawn bits) in CoD2's layout, whose `absoluteVel` and `absoluteAccel`
+/// are attribute bits too. `rgbComponentInterpolation` sets none.
+const SPAWN_BITS: [(&str, u32, u32); 10] = [
+    ("orgOnCylinder", 0, spawn::ORG_ON_CYLINDER),
+    ("axisFromSphere", 0, spawn::AXIS_FROM_SPHERE),
+    ("evenDistribution", 0, spawn::EVEN_DISTRIBUTION),
+    ("rgbComponentInterpolation", 0, 0),
+    ("orgOnSphere", 0, spawn::ORG_ON_SPHERE),
+    ("absoluteAccel", attr::ABSOLUTE_VEL2, 0),
+    ("cheapOrgCalc", 0, spawn::CHEAP_ORG_CALC),
+    ("absoluteVel", attr::ABSOLUTE_VEL, 0),
+    ("randrotaroundfwd", 0, spawn::RAND_ROT_AROUND_FWD),
+    ("affectedByWind", attr::AFFECTED_BY_WIND, 0),
+];
+
+/// The attribute bits [`SPAWN_BITS`] sets.
+const SPAWN_ATTR: u32 = attr::ABSOLUTE_VEL | attr::ABSOLUTE_VEL2 | attr::AFFECTED_BY_WIND;
 
 #[derive(Clone, Debug)]
 pub struct Emitter {
-    /// Block keyword as written, e.g. "Particle".
-    pub kind: String,
+    pub kind: Kind,
     pub name: Option<String>,
-    pub flags: Vec<String>,
-    pub spawn_flags: Vec<String>,
+    /// `flags` (and CoD1's `spawnFlags` `absoluteVel`, `absoluteAccel`) as
+    /// CoD2's attribute bits ([`attr`]).
+    pub flags: u32,
+    /// `spawnFlags` as CoD2's spawn bits ([`spawn`]).
+    pub spawn_flags: u32,
     pub count: R1,
     pub life: R1,  // ms
     pub delay: R1, // ms
@@ -149,10 +253,10 @@ impl Default for Emitter {
             b: [0.0; 3],
         };
         Emitter {
-            kind: String::new(),
+            kind: Kind::Other,
             name: None,
-            flags: Vec::new(),
-            spawn_flags: Vec::new(),
+            flags: 0,
+            spawn_flags: 0,
             count: R1 { a: 1.0, b: 1.0 },
             life: R1 { a: 1.0, b: 1.0 },
             delay: zero1,
@@ -180,23 +284,23 @@ impl Default for Emitter {
             size: Curve {
                 start: zero1,
                 end: zero1,
-                flags: Vec::new(),
+                linear: false,
             },
             size2: Curve {
                 start: zero1,
                 end: zero1,
-                flags: Vec::new(),
+                linear: false,
             },
             non_uniform_scale: false,
             length: Curve {
                 start: zero1,
                 end: zero1,
-                flags: Vec::new(),
+                linear: false,
             },
             alpha: Curve {
                 start: R1 { a: 1.0, b: 1.0 },
                 end: R1 { a: 1.0, b: 1.0 },
-                flags: Vec::new(),
+                linear: false,
             },
             rgb: CurveV3 {
                 start: R3 {
@@ -207,7 +311,7 @@ impl Default for Emitter {
                     a: [1.0; 3],
                     b: [1.0; 3],
                 },
-                flags: Vec::new(),
+                linear: false,
             },
             shaders: Vec::new(),
             sounds: Vec::new(),
@@ -404,7 +508,7 @@ fn scalar_from_tokens(vals: &[&str], line: usize) -> Result<f32, String> {
 struct CurveRaw {
     start: Option<Vec<f32>>,
     end: Option<Vec<f32>>,
-    flags: Vec<String>,
+    linear: bool,
 }
 
 /// Parse a curve sub-block body after its `{`, through its `}`.
@@ -438,7 +542,7 @@ fn parse_curve_body(p: &mut Cursor, em: &mut Emitter) -> Result<CurveRaw, String
                 match key {
                     "start" => raw.start = Some(parse_f32_list(&vals, line)?),
                     "end" => raw.end = Some(parse_f32_list(&vals, line)?),
-                    "flags" => raw.flags = vals.iter().map(|s| s.to_string()).collect(),
+                    "flags" => raw.linear = vals.contains(&"linear"),
                     "parm" => {} // wave-mode parameters, not modeled
                     _ => em.unknown_keys.push(key.to_string()),
                 }
@@ -466,7 +570,7 @@ fn curve_from_raw(raw: CurveRaw, missing_default: f32, line: usize) -> Result<Cu
     Ok(Curve {
         start,
         end,
-        flags: raw.flags,
+        linear: raw.linear,
     })
 }
 
@@ -491,7 +595,7 @@ fn curve_v3_from_raw(
     Ok(CurveV3 {
         start,
         end,
-        flags: raw.flags,
+        linear: raw.linear,
     })
 }
 
@@ -525,8 +629,29 @@ fn dispatch_list(em: &mut Emitter, key: &str, items: Vec<String>) {
 fn dispatch_keyval(em: &mut Emitter, key: &str, vals: &[&str], line: usize) -> Result<(), String> {
     match key {
         "name" => em.name = Some(vals.join(" ")),
-        "flags" => em.flags = vals.iter().map(|s| s.to_string()).collect(),
-        "spawnFlags" => em.spawn_flags = vals.iter().map(|s| s.to_string()).collect(),
+        // A repeated key replaces its own tokens only.
+        "flags" => {
+            em.flags &= SPAWN_ATTR;
+            for &v in vals {
+                match FLAG_BITS.iter().find(|(n, _)| *n == v) {
+                    Some((_, bit)) => em.flags |= bit,
+                    None => em.unknown_keys.push(v.to_string()),
+                }
+            }
+        }
+        "spawnFlags" => {
+            em.flags &= !SPAWN_ATTR;
+            em.spawn_flags = 0;
+            for &v in vals {
+                match SPAWN_BITS.iter().find(|(n, _, _)| *n == v) {
+                    Some((_, a, s)) => {
+                        em.flags |= a;
+                        em.spawn_flags |= s;
+                    }
+                    None => em.unknown_keys.push(v.to_string()),
+                }
+            }
+        }
         "count" => em.count = r1_from_tokens(vals, line)?,
         "life" => em.life = r1_from_tokens(vals, line)?,
         "delay" => em.delay = r1_from_tokens(vals, line)?,
@@ -611,7 +736,7 @@ pub fn parse(text: &str) -> Result<Effect, String> {
     let mut p = Cursor::new(tokenize(text));
     let mut emitters = Vec::new();
     while let Some(kind_tok) = p.next() {
-        let kind = kind_tok.text.to_string();
+        let kind = kind_tok.text;
         match p.next() {
             Some(t) if t.text == "{" => {}
             Some(t) => {
@@ -628,7 +753,7 @@ pub fn parse(text: &str) -> Result<Effect, String> {
             }
         }
         let mut emitter = Emitter {
-            kind,
+            kind: Kind::parse(kind),
             ..Emitter::default()
         };
         parse_block_body(&mut p, &mut emitter)?;
@@ -697,9 +822,14 @@ Tail
         let e = parse(TRACER).unwrap();
         assert_eq!(e.emitters.len(), 1);
         let em = &e.emitters[0];
-        assert_eq!(em.kind, "Tail");
+        assert_eq!(em.kind, Kind::Tail);
         assert_eq!(em.name.as_deref(), Some("tracer"));
-        assert_eq!(em.flags, vec!["useAlpha"]);
+        // `absoluteAccel` is a spawnFlags token CoD2 keeps as an attribute bit.
+        assert_eq!(em.flags, attr::USE_ALPHA | attr::ABSOLUTE_VEL2);
+        assert_eq!(
+            em.spawn_flags,
+            spawn::CHEAP_ORG_CALC | spawn::EVEN_DISTRIBUTION
+        );
         assert_eq!(
             em.life,
             R1 {
@@ -736,7 +866,7 @@ Tail
         assert!(em.non_uniform_scale);
         assert_eq!(em.size2.start, R1 { a: 122.0, b: 122.0 });
         assert_eq!(em.size2.end, R1 { a: 2.0, b: 2.0 });
-        assert_eq!(em.size2.flags, vec!["linear"]);
+        assert!(em.size2.linear);
         assert!(
             !parse("Particle\n{\n\tnonUniformScale 0\n}\n")
                 .unwrap()
@@ -750,7 +880,7 @@ Tail
         let text = "Sound\n{\n\tsounds\n\t[\n\t\tglass_break\n\t]\n}\n";
         let e = parse(text).unwrap();
         assert_eq!(e.emitters.len(), 1);
-        assert_eq!(e.emitters[0].kind, "Sound");
+        assert_eq!(e.emitters[0].kind, Kind::Sound);
         assert_eq!(e.emitters[0].sounds, vec!["glass_break".to_string()]);
         assert!(e.emitters[0].unknown_keys.is_empty());
     }
@@ -847,12 +977,14 @@ Tail
             for name in fs.names_with_suffix(".efx") {
                 let text = String::from_utf8_lossy(&fs.read(&name).unwrap()).into_owned();
                 let eff = parse(&text).unwrap_or_else(|e| panic!("{name}: {e}"));
-                let drawn = ["Particle", "OrientedParticle", "Cylinder", "Tail", "Line"];
-                for em in eff
-                    .emitters
-                    .iter()
-                    .filter(|em| drawn.contains(&em.kind.as_str()))
-                {
+                let drawn = [
+                    Kind::Particle,
+                    Kind::OrientedParticle,
+                    Kind::Cylinder,
+                    Kind::Tail,
+                    Kind::Line,
+                ];
+                for em in eff.emitters.iter().filter(|em| drawn.contains(&em.kind)) {
                     assert!(em.shaders.iter().all(|s| !s.is_empty()), "{name}");
                     if !em.shaders.is_empty() {
                         continue;

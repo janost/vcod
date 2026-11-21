@@ -12,7 +12,7 @@ use crate::fx::sim::Rng;
 use glam::Vec3;
 use std::collections::HashMap;
 use std::sync::Arc;
-use vcod_cod2::efx::{Channel, Kind, Primitive, attr, spawn};
+use vcod_cod2::efx::{Channel, Kind, Primitive, attr};
 use vcod_common::asset_source::{Asset, AssetSource};
 
 /// One primitive, shared by every particle it spawns.
@@ -32,7 +32,7 @@ pub fn load(fs: &dyn AssetSource, path: &str) -> Result<efx::Effect, String> {
         emitters: e
             .primitives
             .into_iter()
-            .map(|p| to_emitter(p, fs))
+            .map(|p| to_emitter(p, &|m| atlas_of(fs, m)))
             .collect(),
     })
 }
@@ -68,7 +68,7 @@ fn ends(p: &Primitive, c: Channel) -> Curve {
     Curve {
         start: v(0.0),
         end: v(1.0),
-        flags: vec!["linear".into()],
+        linear: true,
     }
 }
 
@@ -83,19 +83,10 @@ fn atlas_of(fs: &dyn AssetSource, name: &str) -> (u32, u32) {
         })
 }
 
-/// What the sim reads, from the primitive; the primitive itself rides
-/// along in [`Emitter::cod2`].
-pub fn to_emitter(p: Primitive, fs: &dyn AssetSource) -> Emitter {
-    let flags = attr::NAMES
-        .iter()
-        .filter(|(_, b)| p.flags & b != 0)
-        .map(|(n, _)| n.to_string())
-        .collect();
-    let spawn_flags = spawn::NAMES
-        .iter()
-        .filter(|(_, a, s)| (*s != 0 && p.spawn_flags & s != 0) || (*a != 0 && p.flags & a != 0))
-        .map(|(n, _, _)| n.to_string())
-        .collect();
+/// What the sim reads, from the primitive, each material's atlas
+/// `(rows, columns)` read by `atlas`; the primitive itself rides along in
+/// [`Emitter::cod2`].
+pub fn to_emitter(p: Primitive, atlas: &dyn Fn(&str) -> (u32, u32)) -> Emitter {
     let rgb = {
         let ch = p.channel(Channel::Rgb);
         let s = mid(ch.scale);
@@ -106,20 +97,16 @@ pub fn to_emitter(p: Primitive, fs: &dyn AssetSource) -> Emitter {
         CurveV3 {
             start: v(0.0),
             end: v(1.0),
-            flags: vec!["linear".into()],
+            linear: true,
         }
     };
-    let atlas = p
-        .materials
-        .iter()
-        .map(|m| (m.clone(), atlas_of(fs, m)))
-        .collect();
+    let atlas = p.materials.iter().map(|m| (m.clone(), atlas(m))).collect();
     let names = |v: &[String]| v.iter().map(|n| fx_name(n)).collect::<Vec<_>>();
     Emitter {
-        kind: p.kind.name().to_string(),
+        kind: p.kind.into(),
         name: Some(p.name.clone()),
-        flags,
-        spawn_flags,
+        flags: p.flags,
+        spawn_flags: p.spawn_flags,
         count: r1(p.count),
         life: r1(p.life),
         delay: r1(p.delay),

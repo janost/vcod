@@ -114,7 +114,7 @@ A curve's `flags` is a separate vocabulary from the top-level `flags`/`spawnFlag
 
 One tab of indent is a block's own `flags`/`spawnFlags`; two tabs a curve's `flags` (2b). 4143 lines at any depth, matching the key census (3697 `flags` + 446 `spawnFlags`).
 
-vcod's parser keeps the tokens as strings (`efx::Emitter::flags`, `spawn_flags`); `fx::sim` reads the ones the R sections decode.
+vcod's parser turns the tokens into CoD2's attribute and spawn bits (`efx::Emitter::flags`, `spawn_flags`; `absoluteVel` and `absoluteAccel` land in the attribute bits, as CoD2 keeps them) and a token it does not know into `unknown_keys`; `fx::sim` reads the ones the R sections decode. A curve keeps only whether `linear` is set.
 
 Top-level `flags`, 11 tokens:
 
