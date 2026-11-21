@@ -25,13 +25,11 @@ use crate::common;
 
 use common::{FRAME_MS, Sample, parse_fixture, replay};
 use std::collections::{BTreeMap, BTreeSet};
+use vcod_common::net::event_ids::{EV_GRENADE_BOUNCE, EV_GRENADE_EXPLODE};
+use vcod_common::net::flags::ET_MISSILE;
 use vcod_common::net::msg::EntityState;
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::trajectory::{TR_STATIONARY, Trajectory};
-
-const ET_MISSILE: i32 = 4;
-const EV_GRENADE_BOUNCE: i32 = 177;
-const EV_GRENADE_EXPLODE: i32 = 178;
 
 /// One missile as a snapshot carries it, on either side of the comparison.
 #[derive(Clone)]

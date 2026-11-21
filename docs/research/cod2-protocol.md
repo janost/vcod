@@ -364,10 +364,24 @@ The test is a signed 32-bit difference, so an acknowledge past
 acknowledge past the sequence through (`Link::reliable_ack_behind`, shared
 with CoD1 and CoD4); it takes the difference in 64 bits, so an acknowledge
 near `i32::MIN` is clamped where retail's wraps into the window (SEC-001).
-The clamp is the one thing a dropped message commits: the netchan sequence
-and the address move only once a message is read to its end
+`SV_PacketEvent` runs the clamp after `Netchan_Process` (0x806be8a at
+0x8096236) has taken the sequence, and after the port fix-up
+(0x80961fb..0x809621d); the store of `svs.time` into +0x20e20 comes
+only past the decode (0x809634f), so the clamp leaves it. VERIFIED (the
+instructions). That +0x20e20 is `lastPacketTime` is INFERRED. Every
+other netchan check in vcod-server commits nothing: the sequence and the
+address move only once a message is read to its end
 (`engine::conn::commit`), so a forged one cannot stall the slot behind a
-huge sequence or redirect its replies (vcod's).
+huge sequence or redirect its replies (vcod's). The clamp keeps the
+sequence as retail does, which a forgery could use to stall the slot, so
+vcod keeps it only when it is at most `CLAMP_SEQUENCE_WINDOW` (32) past
+the last one (`Link::take_ack_clamp`). A client's sequence steps by one a
+packet, so a real client's clamp message lands in the window unless more
+than 31 packets were lost in a row; past it the only difference from
+retail is that a late packet below that sequence is still read. The
+address and `lastPacketTime` stay. CoD1 (`CoDMP.exe` 0x45abda before
+0x45ac5f, the `+0x10b0c` store at 0x45ac98 after it) and CoD4 (`cod4_lnxded` 0x8177d59
+before 0x8177dd6) order it the same way. VERIFIED (the instructions).
 
 The client's side, `CL_PacketEvent` (`CoD2MP_s.exe` 0x40f3a4..0x40f46b):
 after `Netchan_Process` (0x4481b0 at 0x40f3b6) it keeps

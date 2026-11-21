@@ -161,8 +161,8 @@ pub fn sender_slot<F, X>(
 /// (cod2-protocol.md 2.2). So is one of a message never sent, which only
 /// a forgery or garbage carries (vcod's, as CoD1's `handle_client_packet`).
 /// A `reliableAcknowledge` a ring behind is retail's clamp: every command
-/// taken as acknowledged and the message dropped
-/// (`Link::reliable_ack_behind`).
+/// taken as acknowledged, the sequence kept within a window and the
+/// message dropped (`Link::take_ack_clamp`).
 /// Nothing else is committed yet: a message of the running level is read
 /// to its end first ([`commit`]), so a forged one moves neither the
 /// sequence nor the address.
@@ -183,7 +183,7 @@ pub fn incoming<F, X>(core: &mut EngineCore<Conn<F, X>>, from: SocketAddr, pkt: 
         return Incoming::Dropped;
     }
     if c.link.reliable_ack_behind(m.reliable_ack) {
-        c.link.reliable_ack = c.link.netchan.reliable_sequence as i32;
+        c.link.take_ack_clamp(&m);
         return Incoming::Dropped;
     }
     Incoming::Message(slot, m)

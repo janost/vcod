@@ -28,6 +28,8 @@ use std::time::{Duration, Instant};
 
 use common::{CMD_MS, ClientEnd, FRAME_MS, Queues, SdFixture, SdTrace, holding, step_pair};
 use vcod_common::net::NetClient;
+use vcod_common::net::event_ids::{EV_OBITUARY, EV_PLAY_FX};
+use vcod_common::net::events::ET_EVENTS;
 use vcod_common::net::msg::{HudElem, PlayerState, UserCmd, hud_field as h};
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_server::Server;
@@ -871,9 +873,6 @@ const CHARGE: [f32; 3] = [-176.8, 2473.1, -22.956871];
 /// neither (combat doc, 14.4).
 const OPEN_STATION: [f32; 3] = [-196.0, 2455.0, -22.0];
 const FLAK_STATION: [f32; 3] = [-112.0, 2446.0, -22.0];
-const EV_PLAY_FX: i32 = 191;
-const EV_OBITUARY: i32 = 201;
-const ET_EVENTS: i32 = 12;
 
 /// The charge left alone: when the fuse runs out, `bomb_countdown`'s
 /// `playfx` reaches the wire as the bomb effect's event, and its

@@ -74,7 +74,7 @@ fn run_until_seated(
 /// A lone bot (nobody to fight) set down beside a tank boards it within
 /// 10 s, in the driver's seat.
 #[test]
-#[ignore = "builds mp_cassino's UO graph, ~5 s in release; run with --ignored"]
+#[ignore = "builds mp_cassino's UO graph, ~4 s; run with --ignored"]
 fn a_bot_beside_a_tank_boards_it() {
     let Some((mut sv, mut now)) = uo_server(1, false) else {
         eprintln!("COD_DIR has no uo/: skipping");
@@ -98,7 +98,7 @@ fn a_bot_beside_a_tank_boards_it() {
 /// Once in, the bot drives the tank off along the graph toward its roam,
 /// and backs off and gets out when it is stuck or the ride is long.
 #[test]
-#[ignore = "builds mp_cassino's UO graph and runs a bot 100 s of game time, ~10 s in release; run with --ignored"]
+#[ignore = "builds mp_cassino's UO graph and runs a bot 100 s of game time, ~5 s; run with --ignored"]
 fn a_bot_drives_a_tank_off_and_gets_out() {
     let Some((mut sv, mut now)) = uo_server(1, false) else {
         eprintln!("COD_DIR has no uo/: skipping");
@@ -112,7 +112,7 @@ fn a_bot_drives_a_tank_off_and_gets_out() {
 /// As the tank, a jeep on mp_kharkov's `tdm`: a four-wheel steers only
 /// rolling and has no gun for its driver.
 #[test]
-#[ignore = "builds mp_kharkov's UO graph and runs a bot 100 s of game time, ~20 s in release; run with --ignored"]
+#[ignore = "builds mp_kharkov's UO graph and runs a bot 100 s of game time, ~13 s; run with --ignored"]
 fn a_bot_drives_a_jeep_off_and_gets_out() {
     let Some((mut sv, mut now)) = uo_server_on("mp_kharkov", 1, false) else {
         eprintln!("COD_DIR has no uo/: skipping");
@@ -190,7 +190,7 @@ fn gun_kills(sv: &vcod_server::Server) -> Vec<(String, String)> {
 /// turret on him and fires; a teammate who boards after takes the
 /// gunner's seat and fires its MG.
 #[test]
-#[ignore = "builds mp_cassino's UO graph and runs three bots 40 s of game time, ~10 s in release; run with --ignored"]
+#[ignore = "builds mp_cassino's UO graph and runs three bots 40 s of game time, ~7 s; run with --ignored"]
 fn tank_bots_lay_their_guns_on_an_enemy() {
     let Some((mut sv, mut now)) = uo_server(3, true) else {
         eprintln!("COD_DIR has no uo/: skipping");
@@ -263,7 +263,7 @@ fn tank_bots_lay_their_guns_on_an_enemy() {
 /// held dead behind the hull until he fires, so the rocket strikes inside
 /// the 20 degree cone where the behind scale applies.
 #[test]
-#[ignore = "builds mp_cassino's UO graph and runs two bots 20 s of game time, ~10 s in release; run with --ignored"]
+#[ignore = "builds mp_cassino's UO graph and runs two bots 20 s of game time, ~5 s; run with --ignored"]
 fn a_bot_fires_rockets_at_an_enemy_tank() {
     const BEHIND: f32 = 600.0;
     let Some((mut sv, mut now)) = uo_server(2, true) else {
@@ -334,7 +334,7 @@ fn a_bot_fires_rockets_at_an_enemy_tank() {
 /// `tank_death` sets off ten seconds on (bot-objectives.md 10.10): no
 /// damage, never inside the blast's reach while the hull burns.
 #[test]
-#[ignore = "builds mp_cassino's UO graph and runs a bot 16 s of game time, ~10 s in release; run with --ignored"]
+#[ignore = "builds mp_cassino's UO graph and runs a bot 16 s of game time, ~4 s; run with --ignored"]
 fn a_bot_keeps_out_of_a_burning_hull() {
     // The second blast's 300 from the origin's 25 up, met by the box.
     const BLAST: f32 = 315.0;
@@ -396,7 +396,7 @@ fn a_bot_keeps_out_of_a_burning_hull() {
 /// next tick: the restart reissues the map's vehicles under the same
 /// handles, alive.
 #[test]
-#[ignore = "builds mp_cassino's UO graph, ~10 s in release; run with --ignored"]
+#[ignore = "builds mp_cassino's UO graph, ~5 s; run with --ignored"]
 fn a_restart_clears_a_burning_hull_s_wreck() {
     let Some((mut sv, mut now)) = uo_server(1, false) else {
         eprintln!("COD_DIR has no uo/: skipping");

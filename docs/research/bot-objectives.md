@@ -3599,8 +3599,25 @@ the third column the give-up with every jump edge 64 longer in A*
   then climbs again. Four mantle edges end on the two landing nodes
   there (2959 and 3752 to 8345, 3779 and 4140 to 8352). VERIFIED (the
   run, ours).
-- Why pmove offers the climb (the hint) with him standing there is not
-  traced.
+- Why pmove offers the climb with him standing there: 1.7 does too.
+  `Mantle_CheckLedge`'s traces read `pm->tracemask` (pm+0x44) afresh
+  each time (`cod4_lnxded` 0x805181d, 0x805189c, the crouch fit at
+  0x80519eb before "Mantle Failed: Player can't fit crouched on ledge"
+  0x820a878), and `PM_GroundTrace` (0x805ae58), which runs just before
+  `Mantle_Check` (0x805d226, `jmp` to the call at 0x805bffc), clears
+  `CONTENTS_BODY` there when its trace starts in a body (`and
+  [pm+0x44], 0xfdffffff` at 0x805b0c8, 0x805b5cc, 0x805b686, 0x805b74f,
+  after adding the body to the touch list). VERIFIED (the
+  instructions). Under the ledge the climber's box (to z 196) reaches
+  into the teammate's (from z 188), up to 25 apart in y and 30 in x, so
+  the ground trace starts in him and the fit test no longer sees him.
+  INFERRED (the positions above against the 30 by 70 box). Where the
+  boxes do not meet, the fit test does see a body on the ledge and 1.7
+  refuses. vcod's pmove is the same (`Pmove::trace_box`, cod4-pmove.md
+  17.1), so `Follower::mantle_held` stays: the bot's answer, not
+  pmove's. Re-run on fix/server-cleanups (no pmove or bot change), `war`
+  seeds 1 and 3 keep the after digests below, 51dfa08218229289 and
+  496428420667275d. VERIFIED (the runs).
 - The rule, vcod's own (retail has no bots): a CoD4 bot on the ground
   more than a step under the landing of the mantle edge it follows
   (the probe's, else the edge's end node), within 96 flat of it, with

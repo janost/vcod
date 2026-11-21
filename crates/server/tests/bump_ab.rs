@@ -40,7 +40,7 @@ use glam::Vec3;
 use std::collections::BTreeMap;
 use vcod_common::collision::CollisionWorld;
 use vcod_common::movetrace::{Body, CONTENTS_BODY, MoveWorld};
-use vcod_common::net::flags::PMF_JUMP_PENALTY;
+use vcod_common::net::flags::{PMF_JUMP_HELD, PMF_JUMP_PENALTY};
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 use vcod_common::net::protocol::ENTITYNUM_NONE;
 use vcod_common::patch::Arith;
@@ -79,9 +79,6 @@ const CASES: &[Case] = &[
 ];
 const PUSHES_15: &[(&str, i32)] = &[("crouch/jump", 70234), ("prone/jump", 96833)];
 const PUSHES_UO: &[(&str, i32)] = &[("crouch/jump", 69882), ("prone/jump", 97082)];
-
-/// `pm_flags` 0x8, retail's held-jump latch.
-const PMF_JUMP_HELD: i32 = 0x8;
 
 #[derive(Clone, Debug)]
 struct Snap {

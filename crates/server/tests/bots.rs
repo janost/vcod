@@ -344,7 +344,7 @@ fn a_bot_walks_toward_gunfire_it_cannot_see() {
 /// a leap's foot at its head, and others for good under a spar on a deck
 /// ladder, wandering with a level view.
 #[test]
-#[ignore = "runs 6 bots on mp_ship for 4 seeds, ~2 min; run with --ignored"]
+#[ignore = "runs 6 bots on mp_ship for 4 seeds, ~5 s; run with --ignored"]
 fn bots_on_mp_ships_ladders_keep_climbing() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
@@ -385,7 +385,7 @@ fn bots_on_mp_ships_ladders_keep_climbing() {
 /// leave the ground at its top and land a storey down; the stair walks
 /// back.
 #[test]
-#[ignore = "runs 6 bots on mp_ship for 90 s of game time, ~1 min; run with --ignored"]
+#[ignore = "runs 6 bots on mp_ship for 90 s of game time, ~4 s; run with --ignored"]
 fn bots_on_mp_ship_unstick_without_walking_off_the_deck() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
@@ -450,7 +450,7 @@ fn bots_on_mp_ship_unstick_without_walking_off_the_deck() {
 /// let go of them and fell back down the shaft, again and again (tick
 /// 1169 before the fix). No bot stays 12 s within 150 units of one spot.
 #[test]
-#[ignore = "runs 6 bots on mp_ship for 65 s of game time, ~1 min; run with --ignored"]
+#[ignore = "runs 6 bots on mp_ship for 65 s of game time, ~4 s; run with --ignored"]
 fn bots_on_mp_ship_get_off_the_mast_ladder() {
     let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
@@ -885,7 +885,7 @@ fn a_bot_gets_down_off_mp_depots_roof_onto_the_ledges() {
 /// still on purpose), seated or not: they board, drive and leave the map's
 /// tanks (bot-objectives.md 10). Needs `COD_DIR` at a UO install.
 #[test]
-#[ignore = "builds mp_cassino's UO graph and runs 6 bots for 90 s of game time, ~5 s in release; run with --ignored"]
+#[ignore = "builds mp_cassino's UO graph and runs 6 bots for 90 s of game time, ~6 s; run with --ignored"]
 fn uo_bots_fight_and_sprint_in_tdm() {
     if vcod_common::testing::uo_fs().is_none() {
         eprintln!("COD_DIR has no uo/: skipping");
@@ -949,7 +949,7 @@ fn a_uo_bot_in_mp_cassinos_roof_dent_jumps_out() {
 /// the fixes they name (bot-navigation.md "Jumps", bot-objectives.md 10.3,
 /// 10.4 and 10.7), with vehicles off for two, one thread each.
 #[test]
-#[ignore = "runs eight 90 s mp_cassino UO games, ~10 s in release on 8 threads; run with --ignored"]
+#[ignore = "runs eight 90 s mp_cassino UO games, ~8 s on 8 threads; run with --ignored"]
 fn uo_tdm_games_that_stalled_or_never_sprinted() {
     if vcod_common::testing::uo_fs().is_none() {
         return;
@@ -1108,7 +1108,7 @@ fn uo_tdm_game(seed: u64, vehicles: bool) {
 /// each leaves within 30 s of game time (bot-navigation.md, "Other
 /// rules"). Needs `COD_DIR` at a UO install.
 #[test]
-#[ignore = "builds mp_cassino's and mp_streets' UO graphs and runs a bot in five rooms, ~6 s in release; run with --ignored"]
+#[ignore = "builds mp_cassino's and mp_streets' UO graphs and runs a bot in five rooms, ~5 s; run with --ignored"]
 fn uo_bots_leave_their_walled_in_spawns() {
     let Some(fs) = vcod_common::testing::uo_fs() else {
         return;
@@ -1189,7 +1189,7 @@ fn uo_bots_leave_their_walled_in_spawns() {
 /// the stock 24500 is 25, and the round runs half an hour. Needs `COD_DIR`
 /// at a UO install.
 #[test]
-#[ignore = "builds mp_foy's UO graph and its rebuilds, runs 2 bots for up to 29 min of game time, ~4 min in release; run with --ignored"]
+#[ignore = "builds mp_foy's UO graph and its rebuilds, runs 2 bots for up to 29 min of game time, ~2 min; run with --ignored"]
 fn uo_bots_breach_bases_until_a_bas_round_ends() {
     for map in bas_maps() {
         bas_round(&map, 2, false);
@@ -1410,7 +1410,7 @@ fn bas_round(map: &str, bots: usize, shoot: bool) -> Option<vcod_server::Server>
 /// reached those links first had built round its own vehicles
 /// (bot-navigation.md, "Build times"). Needs `COD_DIR` at a UO install.
 #[test]
-#[ignore = "builds mp_foy's UO graph and its rebuilds, runs three 4-bot matches of 4 min of game time, ~10 min in release; run with --ignored"]
+#[ignore = "builds mp_foy's UO graph and its rebuilds, runs three 4-bot matches of 4 min of game time, ~2 min; run with --ignored"]
 fn a_seeded_bas_match_replays_beside_another() {
     if vcod_common::testing::uo_fs().is_none() {
         return;
@@ -1628,7 +1628,7 @@ fn a_fighting_uo_bot_yells_a_stock_quick_message() {
 /// taps there that took nothing (bot-objectives.md 7.2). Needs `COD_DIR`
 /// at a UO install.
 #[test]
-#[ignore = "builds mp_rhinevalley's UO graph and runs a bot from three starts, ~1 min in release; run with --ignored"]
+#[ignore = "builds mp_rhinevalley's UO graph and runs a bot from three starts, ~41 s; run with --ignored"]
 fn a_bas_bot_taps_mp_rhinevalleys_corridor_launcher() {
     if vcod_common::testing::uo_fs().is_none() {
         eprintln!("COD_DIR has no uo/: skipping");

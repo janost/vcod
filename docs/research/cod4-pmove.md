@@ -1097,7 +1097,13 @@ its own:
 - The ledge's floor must be the trace's walkable flag (CoD2 compares its
   normal with 0.7). INFERRED, not yet confirmed on 1.7.
 - The traces are `PM_trace` (0x8055f10, the handler's trace, the
-  client's number passed, `pm->tracemask`). INFERRED (the calls).
+  client's number passed, `pm->tracemask`). INFERRED (the calls). Each
+  ledge trace loads `pm->tracemask` (pm+0x44) when it runs (0x805181d,
+  0x805189c, 0x80519eb), and `PM_GroundTrace`, run just before
+  `Mantle_Check` (0x805d226, then the call at 0x805bffc), drops
+  `CONTENTS_BODY` from it when its trace starts in a body (0x805b0c8),
+  so on such a frame the ledge and fit tests pass through bodies.
+  VERIFIED (the instructions).
 - The binoculars' weapon states no longer refuse a mantle; dead
   (`pm_type` 7 or more), mantling and crouched or prone (`eFlags` 0xc)
   still do. INFERRED, not yet confirmed on 1.7.

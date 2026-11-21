@@ -8,12 +8,17 @@
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
-use vcod_common::net::netchan::{NetchanParams, ServerNetchan};
+use vcod_common::net::netchan::{ClientMessage, NetchanParams, ServerNetchan};
 
 use super::link::Rates;
 
 /// `PACKET_BACKUP`, the same 32 on every game: the frame and ping rings.
 pub const PACKET_BACKUP: usize = 32;
+
+/// How far past `incoming_sequence` a message that takes the acknowledge
+/// clamp may move it ([`Link::take_ack_clamp`]). vcod's bound: retail
+/// commits any sequence (cod2-protocol.md 2.2).
+pub const CLAMP_SEQUENCE_WINDOW: u32 = 32;
 
 /// `F` is the game's sent frame, filed by message number.
 pub struct Link<F> {
@@ -102,6 +107,18 @@ impl<F> Link<F> {
     pub fn reliable_ack_behind(&self, ack: i32) -> bool {
         let seq = i64::from(self.netchan.reliable_sequence);
         seq - i64::from(ack) >= self.netchan.reliable.len() as i64
+    }
+
+    /// Retail's clamp on a message [`Self::reliable_ack_behind`] names:
+    /// every command taken as acknowledged and the message dropped, its
+    /// sequence kept as `Netchan_Process` already took it. Only within
+    /// [`CLAMP_SEQUENCE_WINDOW`] of the last one: a forged clamp message
+    /// cannot stall the slot behind a huge sequence (cod2-protocol.md 2.2).
+    pub fn take_ack_clamp(&mut self, m: &ClientMessage) {
+        self.reliable_ack = self.netchan.reliable_sequence as i32;
+        if m.sequence.wrapping_sub(self.netchan.incoming_sequence) <= CLAMP_SEQUENCE_WINDOW {
+            self.netchan.accept(m);
+        }
     }
 }
 

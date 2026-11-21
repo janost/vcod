@@ -37,10 +37,6 @@ impl GameHost {
     }
 }
 
-/// `ps.eFlags` 0x20000: this client's vote is in. A call clears it on
-/// every slot and sets it on the caller; a spawn keeps it.
-pub const EF_VOTED: i32 = 0x20000;
-
 /// How long a vote runs.
 const VOTE_MS: i32 = 30_000;
 /// How long after a pass the command runs.

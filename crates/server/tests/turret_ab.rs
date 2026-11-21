@@ -21,15 +21,16 @@ use std::time::{Duration, Instant};
 use common::{CMD_MS, ClientEnd, FRAME_MS, PROBE_CMD_MS, Queues, holding};
 use vcod_common::animtree::PlayerAnims;
 use vcod_common::net::NetClient;
+use vcod_common::net::event_ids::{
+    EV_BULLET_HIT_LARGE, EV_BULLET_HIT_SMALL, EV_BULLET_TRACER, EV_FIRE_WEAPON_MG42, EV_SOUND_ALIAS,
+};
 use vcod_common::net::events::EventTracker;
+use vcod_common::net::flags::{ANIM_TOGGLEBIT, ET_TURRET};
 use vcod_common::net::msg::{BUTTON_ATTACK, BUTTON_USE, NULL_USERCMD, UserCmd, WBUTTON_CROUCH};
 use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::aim::angle_subtract;
 use vcod_server::Server;
-
-/// `animscript.rs:494`.
-const ANIM_TOGGLEBIT: i32 = 512;
 
 const MAP: &str = "mp_carentan";
 const PROBE_PATH: &str = "maps/mp/gametypes/probe_turret";
@@ -37,14 +38,6 @@ const PROBE_SRC: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../gsc/tests/fixtures/semantics/client-probes/probe_turret.gsc"
 );
-/// `misc_mg42`'s wire `eType`.
-const ET_MG42: i32 = 11;
-/// `docs/research/cod11-events-and-fx.md` section 1.
-const EV_FIRE_WEAPON_MG42: i32 = 168;
-const EV_SOUND_ALIAS: i32 = 172;
-const EV_BULLET_TRACER: i32 = 171;
-const EV_BULLET_HIT_SMALL: i32 = 173;
-const EV_BULLET_HIT_LARGE: i32 = 174;
 /// The spot the probe script places its clients around (its own comment).
 const GUN_NEAR: [f32; 2] = [1712.0, 1830.0];
 
@@ -317,7 +310,7 @@ fn build_on(
         .expect("a snapshot once the placement has settled")
         .entities
         .iter()
-        .filter(|(_, e)| e.field_i32(p, "eType") == ET_MG42)
+        .filter(|(_, e)| e.field_i32(p, "eType") == ET_TURRET)
         .min_by(|(_, a), (_, b)| {
             dist_xy(a.origin(p), GUN_NEAR)
                 .partial_cmp(&dist_xy(b.origin(p), GUN_NEAR))
@@ -1257,7 +1250,7 @@ fn a_gunner_killed_by_a_turret_round_lets_go_that_frame() {
         .sv
         .all_entities()
         .into_iter()
-        .find(|(n, e)| *n != rig.gun && e.field_i32(p, "eType") == ET_MG42)
+        .find(|(n, e)| *n != rig.gun && e.field_i32(p, "eType") == ET_TURRET)
         .map(|(n, _)| n)
         .expect("carentan's second gun");
     let stood = rig

@@ -19,13 +19,13 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
+use vcod_common::net::flags::ET_ITEM;
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::trajectory::Trajectory;
 use vcod_common::net::{NetClient, NetEvent};
 
 const MAP: &str = "mp_carentan";
 const FIXTURE: &str = "tests/fixtures/movers/mp_carentan-dm-push.txt";
-const ET_ITEM: i32 = 3;
 
 /// The landing's random lift: `G_BounceItem` rests an item up to half a
 /// unit above its sweep's end (items doc, section 14), on z alone, and the

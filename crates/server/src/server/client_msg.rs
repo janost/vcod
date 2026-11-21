@@ -106,15 +106,19 @@ impl Server {
             return;
         }
         // A ring behind takes every command as acknowledged and drops the
-        // message (CoDMP.exe 0x45ac4a..0x45ac65, docs/protocol-1.1.md,
-        // "Message headers"); one past what we sent passes.
+        // message, its sequence kept (CoDMP.exe 0x45ac4a..0x45ac65,
+        // docs/protocol-1.1.md, "Message headers"); one past what we sent
+        // passes.
         if c.link.reliable_ack_behind(m.reliable_ack) {
             log::debug!(
                 "client {slot}: reliableAcknowledge {} out of range",
                 m.reliable_ack
             );
-            let c = self.core.clients[slot].as_mut().unwrap();
-            c.link.reliable_ack = c.link.netchan.reliable_sequence as i32;
+            self.core.clients[slot]
+                .as_mut()
+                .unwrap()
+                .link
+                .take_ack_clamp(&m);
             return;
         }
 
@@ -781,8 +785,9 @@ mod tests {
     }
 
     /// A reliableAcknowledge a ring behind (here `i32::MIN`) takes every
-    /// command as acknowledged and drops the message; one past what was
-    /// sent is let through, as retail's signed test lets it.
+    /// command as acknowledged and drops the message, its sequence kept
+    /// within the window; one past what was sent is let through, as
+    /// retail's signed test lets it.
     #[test]
     fn a_reliable_acknowledge_a_ring_behind_is_clamped() {
         let now = Instant::now();
@@ -802,11 +807,27 @@ mod tests {
         let (ack, seq) = link(&sv);
         assert!(ack < seq);
 
+        let incoming = |sv: &Server| {
+            sv.core.clients[0]
+                .as_ref()
+                .unwrap()
+                .link
+                .netchan
+                .incoming_sequence
+        };
         // serverId 0 asks for a gamestate; only the ack makes this inadmissible.
         let pkt = nc.build_out(0, 0, i32::MIN, &ops, &huff).unwrap();
         sv.handle_packet(addr(5), &pkt, now);
         assert!(sv.take_outgoing().is_empty(), "bogus ack got a reply");
         assert_eq!(link(&sv), (seq, seq));
+        assert_eq!(incoming(&sv), nc.outgoing_sequence - 1, "sequence kept");
+
+        // One past the window is dropped with its sequence.
+        let before = incoming(&sv);
+        nc.outgoing_sequence += crate::engine::slot::CLAMP_SEQUENCE_WINDOW;
+        let pkt = nc.build_out(0, 0, i32::MIN, &ops, &huff).unwrap();
+        sv.handle_packet(addr(5), &pkt, now);
+        assert_eq!(incoming(&sv), before);
 
         // messageAcknowledge names a message we sent; we have sent none.
         let pkt = nc.build_out(0, 1, 0, &ops, &huff).unwrap();

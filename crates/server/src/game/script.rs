@@ -96,13 +96,8 @@ pub(crate) fn wear(
     })
 }
 
-/// `clientState.team`, the roster's 2-bit team field. The four values are
-/// what retail's `sessionteam` setter writes for the four names script may
-/// assign it (`docs/research/clientstate-wire-format.md`).
-pub const TEAM_NONE: i32 = 0;
-pub const TEAM_AXIS: i32 = 1;
-pub const TEAM_ALLIES: i32 = 2;
-pub const TEAM_SPECTATOR: i32 = 3;
+/// `clientState.team`'s four values (`net::flags`).
+pub use vcod_common::net::flags::{TEAM_ALLIES, TEAM_AXIS, TEAM_NONE, TEAM_SPECTATOR};
 
 /// The highest `ps.pm_type` `G_TouchTriggers` runs its pass for
 /// (docs/research/cod11-gsc-object-model.md 8.2).

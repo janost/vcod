@@ -216,8 +216,9 @@ fn move_packet(cl: &mut Client, sv: &Cod2Server, message_ack: i32, reliable_ack:
 }
 
 /// A message whose reliableAcknowledge is i32::MIN, or a `clc_move` whose
-/// messageAcknowledge is, is dropped whole: the server takes neither ack
-/// nor a delta base from it and its next frames go out as before.
+/// messageAcknowledge is, is dropped: the server takes neither ack nor a
+/// delta base from it and its next frames go out as before. The first is
+/// retail's clamp, which keeps the sequence (cod2-protocol.md 2.2).
 #[test]
 fn a_cod2_message_with_an_acknowledge_near_i32_min_is_ignored() {
     let now = Instant::now();
@@ -238,10 +239,13 @@ fn a_cod2_message_with_an_acknowledge_near_i32_min_is_ignored() {
                 c.delta_message,
             )
         };
-        let before = state(&sv);
+        let mut want = state(&sv);
         let pkt = move_packet(&mut cl, &sv, message_ack, reliable_ack);
+        if reliable_ack == i32::MIN {
+            want.0 = cl.netchan.outgoing_sequence - 1;
+        }
         sv.handle_packet(addr(), &pkt, later);
-        assert_eq!(state(&sv), before, "acks ({message_ack}, {reliable_ack})");
+        assert_eq!(state(&sv), want, "acks ({message_ack}, {reliable_ack})");
         later += Duration::from_millis(FRAME_MS as u64);
         sv.tick_frames(later, 1);
         assert!(!sv.take_outgoing().is_empty());

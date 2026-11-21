@@ -16,7 +16,8 @@ impl Follower {
     /// (`others`, off the rungs: origin and velocity): the climb ends in
     /// him, the two boxes push apart and the climber falls back to climb
     /// again (mp_crash's ledge at (1403, 196, 188), bot-combat.md 20).
-    /// The caller plans round the edge ([`Self::stuck`]).
+    /// 1.7's pmove offers that climb too (bot-objectives.md 12.20). The
+    /// caller plans round the edge ([`Self::stuck`]).
     pub fn mantle_held(
         &self,
         g: &NavGraph,

@@ -2061,7 +2061,8 @@ build stalls the same way on seed 11 (35 ticks): allies slot 0 at (1402,
 teammate holds, which the new angles reach on seed 1 by the matches'
 chaos. INFERRED from the two traces. A CoD4 bot under a mantle's
 landing with another body standing still on it now plans round the
-edge (bot-objectives.md 12.20); seed 1's 140 stalled ticks go to 0. The one other reader of the
+edge (bot-objectives.md 12.20, which also says why 1.7's pmove offers
+that climb); seed 1's 140 stalled ticks go to 0. The one other reader of the
 integer delta, the flee's yaw in `bots.rs` (`angles[1] + delta_angles[1]`),
 adds the rounded delta back onto the rounded angle, within a short of
 the aim. VERIFIED (the code).

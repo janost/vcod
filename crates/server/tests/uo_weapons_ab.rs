@@ -22,11 +22,9 @@ use vcod_common::net::event_ids::{
     EV_NOAMMO, EV_UO_REMOVE_WEAPON_ATTACHMENTS,
 };
 use vcod_common::net::events::{EventTracker, GameEvent};
-use vcod_common::net::flags::EF_FIRING;
+use vcod_common::net::flags::{EF_FIRING, ET_TURRET};
 use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, BUTTON_USE, UserCmd};
 
-/// A mounted gun's `eType` (11 on both protocols).
-const ET_TURRET_V22: i32 = 11;
 use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V22};
 use vcod_common::net::snapshot::Snapshot;
 
@@ -574,7 +572,7 @@ fn the_mounted_mg_overheats_and_cools_as_on_uo() {
     for f in &frames {
         retail.record(&mut tracker, &f.snapshot, p);
         for (&n, e) in &f.snapshot.entities {
-            if e.field_i32(p, "eType") == ET_TURRET_V22 {
+            if e.field_i32(p, "eType") == ET_TURRET {
                 if e.field_i32(p, "eFlags") & EF_FIRING != 0 {
                     gun = Some(n);
                 }
@@ -615,7 +613,7 @@ fn the_mounted_mg_overheats_and_cools_as_on_uo() {
             && let Some(at) = s
                 .entities
                 .values()
-                .filter(|e| e.field_i32(p, "eType") == ET_TURRET_V22)
+                .filter(|e| e.field_i32(p, "eType") == ET_TURRET)
                 .map(|e| e.origin(p))
                 .min_by(|a, b| {
                     let d = |o: &[f32; 3]| (o[0] - 1712.0).hypot(o[1] - 1830.0);
@@ -644,7 +642,7 @@ fn the_mounted_mg_overheats_and_cools_as_on_uo() {
         if let Some(s) = cl.snapshots().newest() {
             ours.record(&mut tracker, s, p);
             for (&n, e) in &s.entities {
-                if e.field_i32(p, "eType") == ET_TURRET_V22 {
+                if e.field_i32(p, "eType") == ET_TURRET {
                     if e.field_i32(p, "eFlags") & EF_FIRING != 0 {
                         our_gun = Some(n);
                     }
