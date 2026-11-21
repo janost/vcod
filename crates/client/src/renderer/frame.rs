@@ -642,7 +642,10 @@ impl Renderer {
                 })
                 .collect();
             let mark_sorts: Vec<f32> = self.marks.runs.iter().map(|r| r.sort).collect();
-            let items = merge_by_sort(&world_sorts, &mark_sorts, &model_sorts, &fx_sorts);
+            let world_keys: Vec<(f32, u32)> = world_list.iter().map(|w| (w.sort, w.rank)).collect();
+            let model_keys: Vec<(f32, u32)> =
+                ent_draws.iter().map(|d| (d.sort, d.anchor)).collect();
+            let items = merge_by_place(&world_keys, &mark_sorts, &model_keys, &fx_sorts);
             crate::frame_prof::count(crate::frame_prof::Count::Draws, items.len());
             let mut dlight_at = dlight_slot(&items, &world_sorts);
             let split_at = plan
@@ -1950,6 +1953,11 @@ impl Renderer {
         let seen: Vec<bool> = (0..d.instances.len())
             .map(|k| !self.draw_joins || instance_seen(d, k, &frustum))
             .collect();
+        // a model shader registered since reorders the kept sort
+        if d.ent_sorted_epoch != d.materials.order_epoch() {
+            d.ent_sorted = Default::default();
+            d.ent_sorted_epoch = d.materials.order_epoch();
+        }
         d.ent_sorted.update(&d.instances, &d.models);
         let gun = sorted_ent_draws(
             std::iter::empty(),

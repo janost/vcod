@@ -771,7 +771,7 @@ surfaces load, in the shader lump's first-use order, after the lightmap
 images; so shaders of one sort order by their texture's first load, then
 by lightmap page.
 
-vcod (`sorted_places`, `ImageNumbers`, `order_draws`, `merge_by_sort`
+vcod (`sorted_places`, `ImageNumbers`, `order_draws`, `merge_by_place`
 in `renderer/draw_list.rs`): at map load each batch (material x lightmap) is one
 shader, registered in batch order; image numbers go to white, the
 lightmap pages, then every stage's bundle images (animMap frames
@@ -781,15 +781,25 @@ the world's draws, across the world and the moved brush models, order by
 that place with a batch's stages back to back in stage order, a moved
 model before the world on one shader. Still vcod's own: the props and
 the script-less overlays (`decal@`, `*_masked@`) keep sort 5 and sort
-after every other opaque; images loaded before the map (the UI's, the
-console's) are not numbered, so a world shader whose image reuses one of
-them sorts later than in retail; `collapse` covers only the
+after every other opaque; the UI's and the console's images, loaded
+before the map, are not numbered, so a world shader whose image reuses one
+of them sorts later than in retail; `collapse` covers only the
 lightmap-then-filter row of CollapseMultitexture's table.
 
-Entity surfaces sort by material sort, then the material's load order
-(standing in for the sorted index; INFERRED: the cgame's images load
-after the world's), then instance order; each surface draws its stages
-back to back.
+Entity surfaces (CoD1, `ShaderList`, `EntSkin::order` and `anchor`): the
+world's list stays past the load, and each entity or viewmodel skin
+registers into it as its material builds, R_SortNewShader's walk with its
+stages' images numbered on through the world's `ImageNumbers`
+(`$texturename` as `skins/<skin>` cut at its first `.`). A skin's place
+among the model shaders orders the entity list (sort, place, then
+instance), and a skin that the walk put before a world shader of its own
+sort (its sorting image numbered lower, as an image the world loaded or
+`$white` is) carries that world rank as its anchor: `merge_by_place` draws
+it ahead of that rank's draws, where every other model draws after the
+world's draws of its sort. A registration that moves the places drops the
+kept entity sort (`DynamicPass::ent_sorted`). Each surface draws its
+stages back to back. CoD2 and CoD4 keep load order and the world first on
+a tie.
 
 The images numbered before the map. VERIFIED, 0x4f057e..0x4f06ea (the
 builtin images, after 0x4f057e calls `R_CreateDefaultImage` 0x4f0380):
@@ -797,19 +807,13 @@ builtin images, after 0x4f057e calls `R_CreateDefaultImage` 0x4f0380):
 (0x54b564), `*gray` (0x54ba34) and the `*scratch` images (0x54b558), each
 through the image create 0x4ec310, so they take the first numbers.
 INFERRED: the UI's and the console's images follow before any map
-image. Not ported, and what it would take:
-
-- the builtins: vcod numbers `$white` first and nothing before it, which
-  orders the world's images alike; a world shader that falls back to
-  `<default>` (an image that is missing) would sort first among the
-  opaque shaders on retail, which registered it at start-up.
-- the entity materials: one registration list over the world's batches,
-  the prop scripts and each `EntityMaterials` skin as it loads, numbered
-  through one `ImageNumbers`, with `sorted_places` giving every draw its
-  place, `EntSkin::order` and the world's keys read from it and
-  `merge_by_sort` breaking a tie on the place instead of putting the
-  world first. A skin that reuses a world image would then sort among
-  the world's shaders, as R_SortNewShader puts it.
+image. vcod numbers the five builtins first (`$white` for `*white`),
+which shifts every world number alike and leaves the world's order as it
+was; a model stage on `$whiteimage` takes `*white`'s low number. Still
+vcod's own: a world shader whose missing image falls back to `<default>`
+numbers by its own path, not `*default`'s; the UI's and console's images
+are not numbered; a prop batch without a script registers with no image
+numbers, so an entity skin it shares sorts after it.
 
 The viewmodel. VERIFIED, cgame `0x30036cf0` builds the gun's refEntity
 with `reType` 1 and `renderfx` 0x8c (`0x30036e27`, `0x30036e2f`) and
@@ -831,10 +835,11 @@ one sort, R_SortNewShader's image-number tie puts the gun's materials
 after the world's (the cgame registers its weapon models after the world
 load), and on a material it shares with a packet entity the gun draws
 after it, since the gun is added later (`0x30033e04`). vcod
-(`sorted_ent_draws`, `merge_by_sort`, `dlight_slot`): the live entities'
+(`sorted_ent_draws`, `merge_by_place`, `dlight_slot`): the live entities'
 and the gun's surfaces form one list sorted by material sort, load order,
 then entity with the gun last; it merges with the world's draws by sort,
-a world draw first on a tie. The gun's runs draw in the viewport depth
+a world draw first on a tie unless the skin's anchor puts it ahead
+("Entity surfaces" above). The gun's runs draw in the viewport depth
 range 0..0.2 under its own camera, the rest in 0..1. The dlight pass goes
 after the last world draw that sorts up to opaque.
 
@@ -844,7 +849,7 @@ among the world's surfaces; between equal sorts, R_SortNewShader's tie on
 image numbers puts the effect's material after the world's, which load
 first at map load. The stock `gfx/...` blocks (effects and HUD art) sort blend 15
 (70 blocks), additive 19 (87), nearest 22 (8) or opaque 5 (15). vcod
-(`merge_by_sort`, `set_fx_quads` in `renderer/draw_list.rs` and `renderer/fx_pass.rs`): the fx quads order by
+(`merge_by_place`, `set_fx_quads` in `renderer/draw_list.rs` and `renderer/fx_pass.rs`): the fx quads order by
 material sort, keeping the sim's back-to-front order within one, and
 merge into the frame's one list with the world's draws and the entity
 and viewmodel surfaces by sort; on a tie the world first, then the

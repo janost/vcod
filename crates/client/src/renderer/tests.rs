@@ -1857,7 +1857,8 @@ fn ent_skin(stages: usize) -> Rc<EntSkin> {
         stages: vec![st; stages],
         lit: true,
         sort: SORT_OPAQUE,
-        order: 0,
+        order: std::cell::Cell::new(0),
+        anchor: std::cell::Cell::new(AFTER_THE_WORLD),
         cookie_caster: false,
         sun_caster: false,
         sun_cut: None,
@@ -1875,6 +1876,7 @@ fn an_entity_run_joins_only_contiguous_surfaces_of_one_skin() {
         surf,
         sort: SORT_OPAQUE,
         order: 0,
+        anchor: AFTER_THE_WORLD,
         gun,
     };
     let skin = ent_skin(1);
@@ -2057,6 +2059,67 @@ fn image_numbers_follow_first_load_and_ignore_case_and_extension() {
     assert_eq!(n.number("textures/a/floor.jpg"), 3);
 }
 
+/// A model shader registers into the map's sorted list as
+/// R_SortNewShader puts it (0x4fb790): one on an image the world loaded
+/// (a lower number, no bundle 1) passes the world shaders of its sort
+/// down to the first with a lower image, so it draws ahead of them on the
+/// tie; a fresh image numbers after every world one and draws after the
+/// world's shaders of its sort.
+#[test]
+fn a_model_shader_reusing_a_world_image_sorts_among_the_worlds() {
+    use SortedItem::{Model, World};
+    let mut images = ImageNumbers::default();
+    let wall = images.number("textures/a/wall");
+    let floor = images.number("textures/a/floor");
+    let e = |sort, b0| SortEntry {
+        sort,
+        images: Some([b0, 0]),
+    };
+    let world = vec![
+        e(SORT_OPAQUE, wall),
+        e(SORT_OPAQUE, floor),
+        e(SORT_BLEND, floor),
+    ];
+    let ranks = sorted_places(&world);
+    assert_eq!(ranks, [0, 1, 2]);
+    let mut list = ShaderList::new(world, images);
+    let sh = |path: &str| {
+        Material::from_shader(&vcod_common::shader::Shader {
+            name: "skin".into(),
+            stages: vec![vcod_common::shader::Stage {
+                bundles: vec![vcod_common::shader::Bundle {
+                    image: ImageRef::Path(path.into()),
+                    ..crate::entity_material::implicit("x").stages[0].bundles[0].clone()
+                }],
+                ..crate::entity_material::implicit("x").stages[0].clone()
+            }],
+            ..Default::default()
+        })
+    };
+    // a fresh skin: after the world; then one on the wall's image
+    list.register(&sh("$texturename"), "skins/crate");
+    list.register(&sh("textures/a/wall.tga"), "skins/unused");
+    // the wall skin passes the wall too (same bundle 0, no bundle 1) and
+    // leads; the crate follows the floor, the last opaque world shader
+    assert_eq!(list.model_keys(), [(1, AFTER_THE_WORLD), (0, 0)]);
+    let world_keys = [(SORT_OPAQUE, 0), (SORT_OPAQUE, 1), (SORT_BLEND, 2)];
+    let models = [(SORT_OPAQUE, 0), (SORT_OPAQUE, AFTER_THE_WORLD)];
+    assert_eq!(
+        merge_by_place(&world_keys, &[], &models, &[]),
+        [Model(0), World(0), World(1), Model(1), World(2)]
+    );
+    // without anchors the merge is the old one: the world first on a tie
+    assert_eq!(
+        merge_by_place(&world_keys, &[], &[(SORT_OPAQUE, AFTER_THE_WORLD)], &[]),
+        merge_by_sort(
+            &[SORT_OPAQUE, SORT_OPAQUE, SORT_BLEND],
+            &[],
+            &[SORT_OPAQUE],
+            &[]
+        ),
+    );
+}
+
 /// The stock world types (pak4 `shadertypes/world/`): wood's gloss
 /// alpha is read by nothing, foliage and the masked types cut, a decal
 /// blends.
@@ -2222,7 +2285,8 @@ fn entity_draws_sort_by_material_sort_then_load_order_then_entity() {
         stages: Vec::new(),
         lit: true,
         sort,
-        order,
+        order: std::cell::Cell::new(order),
+        anchor: std::cell::Cell::new(AFTER_THE_WORLD),
         cookie_caster: false,
         sun_caster: false,
         sun_cut: None,
@@ -2247,7 +2311,8 @@ fn the_gun_interleaves_with_the_world_and_entities_by_material() {
         stages: Vec::new(),
         lit: true,
         sort,
-        order,
+        order: std::cell::Cell::new(order),
+        anchor: std::cell::Cell::new(AFTER_THE_WORLD),
         cookie_caster: false,
         sun_caster: false,
         sun_cut: None,
@@ -2317,7 +2382,8 @@ fn kept_entity_sort_matches_a_fresh_sort() {
             stages: Vec::new(),
             lit: true,
             sort,
-            order,
+            order: std::cell::Cell::new(order),
+            anchor: std::cell::Cell::new(AFTER_THE_WORLD),
             cookie_caster: false,
             sun_caster: false,
             sun_cut: None,
@@ -2375,6 +2441,7 @@ fn merged_draws_put_the_first_list_first_on_a_tie() {
         surf: 0,
         sort,
         order: 0,
+        anchor: AFTER_THE_WORLD,
         gun,
     };
     let a = [

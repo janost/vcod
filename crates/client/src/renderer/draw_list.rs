@@ -216,34 +216,115 @@ pub(super) fn staged_sort_entry(
 /// bundle 1 included.
 pub(super) fn sorted_places(entries: &[SortEntry]) -> Vec<u32> {
     let mut list: Vec<usize> = Vec::with_capacity(entries.len());
-    for (n, new) in entries.iter().enumerate() {
-        let [b0, b1] = new.images.unwrap_or([0, 0]);
-        let mut at = list.len();
-        while at > 0 {
-            let e = &entries[list[at - 1]];
-            if e.sort < new.sort {
-                break;
-            }
-            if e.sort == new.sort
-                && let Some([e0, e1]) = e.images
-            {
-                let b0_holds = e0 == 0 || e0 == b0;
-                if e0 != 0 && e0 < b0 {
-                    break;
-                }
-                if b0_holds && e1 != 0 && e1 <= b1 {
-                    break;
-                }
-            }
-            at -= 1;
-        }
-        list.insert(at, n);
+    for n in 0..entries.len() {
+        insert_sorted(entries, &mut list, n);
     }
     let mut place = vec![0; entries.len()];
     for (p, &e) in list.iter().enumerate() {
         place[e] = p as u32;
     }
     place
+}
+
+/// R_SortNewShader's walk for `entries[n]` into `list` (indices into
+/// `entries` in sorted order).
+fn insert_sorted(entries: &[SortEntry], list: &mut Vec<usize>, n: usize) {
+    let new = &entries[n];
+    let [b0, b1] = new.images.unwrap_or([0, 0]);
+    let mut at = list.len();
+    while at > 0 {
+        let e = &entries[list[at - 1]];
+        if e.sort < new.sort {
+            break;
+        }
+        if e.sort == new.sort
+            && let Some([e0, e1]) = e.images
+        {
+            let b0_holds = e0 == 0 || e0 == b0;
+            if e0 != 0 && e0 < b0 {
+                break;
+            }
+            if b0_holds && e1 != 0 && e1 <= b1 {
+                break;
+            }
+        }
+        at -= 1;
+    }
+    list.insert(at, n);
+}
+
+/// No world shader of a model's sort follows it in the sorted list
+/// ([`ShaderList::model_keys`]): on a tie it draws after the world's.
+pub(crate) const AFTER_THE_WORLD: u32 = u32::MAX;
+
+/// A CoD1 map's sorted shader list kept past the load, so the cgame's
+/// model shaders register into it as R_SortNewShader (CoDMP.exe 0x4fb790)
+/// puts them, their images numbered on from the world's (shader doc 5).
+pub(crate) struct ShaderList {
+    entries: Vec<SortEntry>,
+    /// `entries` in sorted order.
+    list: Vec<usize>,
+    /// The world's entries lead `entries`.
+    world: usize,
+    images: ImageNumbers,
+}
+
+impl ShaderList {
+    /// The list over the world's `entries` as `sorted_places` sorts them,
+    /// numbering on through `images`.
+    pub(super) fn new(entries: Vec<SortEntry>, images: ImageNumbers) -> Self {
+        let mut list = Vec::with_capacity(entries.len());
+        for n in 0..entries.len() {
+            insert_sorted(&entries, &mut list, n);
+        }
+        let world = entries.len();
+        ShaderList {
+            entries,
+            list,
+            world,
+            images,
+        }
+    }
+
+    /// Registers a model's shader: its stages' images numbered in stage
+    /// order, `skin_image` standing for `$texturename`, `Lightmap` and
+    /// `White` for `$white`.
+    pub(crate) fn register(&mut self, sh: &Material, skin_image: &str) {
+        let images = &mut self.images;
+        let entry = staged_sort_entry(sh, &mut |r: &ImageRef| match r {
+            ImageRef::Path(p) if p.eq_ignore_ascii_case(crate::entity_material::TEXTURE_NAME) => {
+                images.number(skin_image)
+            }
+            ImageRef::Path(p) => images.number(p),
+            ImageRef::Lightmap | ImageRef::White => images.number("$white"),
+        });
+        self.entries.push(entry);
+        insert_sorted(&self.entries, &mut self.list, self.entries.len() - 1);
+    }
+
+    /// Each registered model shader's `(order, anchor)`, in registration
+    /// order: its place among the model shaders, and the world rank
+    /// (`sorted_places`) it draws before on a sort tie, or
+    /// [`AFTER_THE_WORLD`].
+    pub(crate) fn model_keys(&self) -> Vec<(u32, u32)> {
+        let mut keys = vec![(0, AFTER_THE_WORLD); self.entries.len() - self.world];
+        let (mut world_seen, mut models_seen) = (0u32, 0u32);
+        for (at, &e) in self.list.iter().enumerate() {
+            if e < self.world {
+                world_seen += 1;
+                continue;
+            }
+            let sort = self.entries[e].sort;
+            let next_world = self.list[at + 1..].iter().find(|&&n| n < self.world);
+            let anchor = match next_world {
+                Some(&w) if self.entries[w].sort == sort => world_seen,
+                _ => AFTER_THE_WORLD,
+            };
+            keys[e - self.world] = (models_seen, anchor);
+            models_seen += 1;
+        }
+        keys
+    }
 }
 
 /// Each entry's place in a CoD4 frame's order: by sort, then the first
@@ -314,19 +395,48 @@ pub(super) enum SortedItem {
 /// fx: the world's materials and images register at map load, before the
 /// cgame's (R_SortNewShader breaks ties on image numbers, 0x4fb790). The
 /// marks' place among the cgame's lists is vcod's guess.
+#[cfg(test)]
 pub(super) fn merge_by_sort(
     world: &[f32],
     marks: &[f32],
     models: &[f32],
     fx: &[f32],
 ) -> Vec<SortedItem> {
-    let lists = [world, marks, models, fx];
+    let world: Vec<(f32, u32)> = world.iter().map(|&s| (s, 0)).collect();
+    let models: Vec<(f32, u32)> = models.iter().map(|&s| (s, AFTER_THE_WORLD)).collect();
+    merge_by_place(&world, marks, &models, fx)
+}
+
+/// [`merge_by_sort`] with the world's draws' ranks and the models'
+/// anchors ([`ShaderList::model_keys`]): on a tie a model whose shader
+/// sorts before a world shader of its sort (one whose image numbers are
+/// lower, as a reused image's are) draws before that shader's draws.
+pub(super) fn merge_by_place(
+    world: &[(f32, u32)],
+    marks: &[f32],
+    models: &[(f32, u32)],
+    fx: &[f32],
+) -> Vec<SortedItem> {
+    // (sort, place, class): the world by rank, an anchored model before
+    // the rank it anchors to, the rest after the world in list order
+    let key = |l: usize, i: usize| -> (f32, u32, u8) {
+        match l {
+            0 => (world[i].0, world[i].1, 1),
+            1 => (marks[i], u32::MAX, 2),
+            2 if models[i].1 == AFTER_THE_WORLD => (models[i].0, u32::MAX, 3),
+            2 => (models[i].0, models[i].1, 0),
+            _ => (fx[i], u32::MAX, 4),
+        }
+    };
+    let less =
+        |a: (f32, u32, u8), b: (f32, u32, u8)| a.0 < b.0 || (a.0 == b.0 && (a.1, a.2) < (b.1, b.2));
+    let lens = [world.len(), marks.len(), models.len(), fx.len()];
     let mut at = [0usize; 4];
-    let mut out = Vec::with_capacity(lists.iter().map(|l| l.len()).sum());
+    let mut out = Vec::with_capacity(lens.iter().sum());
     loop {
         let mut best: Option<usize> = None;
         for l in 0..4 {
-            if at[l] < lists[l].len() && best.is_none_or(|b| lists[l][at[l]] < lists[b][at[b]]) {
+            if at[l] < lens[l] && best.is_none_or(|b| less(key(l, at[l]), key(b, at[b]))) {
                 best = Some(l);
             }
         }

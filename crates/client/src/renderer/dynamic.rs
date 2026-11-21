@@ -34,14 +34,16 @@ pub(super) struct EntDraw {
     pub(super) surf: u32,
     pub(super) sort: f32,
     pub(super) order: u32,
+    /// `EntSkin::anchor`: where it draws among the world's on a sort tie.
+    pub(super) anchor: u32,
     /// A viewmodel surface: depth-hack range and the view camera.
     pub(super) gun: bool,
 }
 
 /// The live entities' and the viewmodel's `(instance, surface, material)`
 /// in instance order, in one list sorted as retail's key does: the
-/// material's sort, its load order (the sorted index), then the entity
-/// number. The gun is added after the packet entities, so on one material
+/// material's sort, its place among the model shaders (`EntSkin::order`,
+/// the sorted index), then the entity number. The gun is added after the packet entities, so on one material
 /// it draws after them (docs/research/cod11-shader-scripts.md, §5).
 pub(super) fn sorted_ent_draws<'a>(
     ents: impl Iterator<Item = (u32, u32, &'a EntSkin)>,
@@ -52,7 +54,8 @@ pub(super) fn sorted_ent_draws<'a>(
             inst,
             surf,
             sort: sk.sort,
-            order: sk.order,
+            order: sk.order.get(),
+            anchor: sk.anchor.get(),
             gun: is_gun,
         }
     };
@@ -790,6 +793,8 @@ pub(super) struct DynamicPass {
     pub(super) placed_boxes: PlacedBoxes,
     /// The instances' entity draws in draw order, before the view cull.
     pub(super) ent_sorted: EntSorted,
+    /// `EntityMaterials::order_epoch` `ent_sorted` was sorted under.
+    pub(super) ent_sorted_epoch: u32,
     /// Per instance, where its lights are picked.
     pub(super) light_origins: Vec<glam::Vec3>,
     /// CoD4: each instance's posed world box (mins, maxs), as
@@ -1784,6 +1789,7 @@ pub(super) fn create_dynamic_pass(
         light_buf,
         placed_boxes: PlacedBoxes::default(),
         ent_sorted: EntSorted::default(),
+        ent_sorted_epoch: 0,
         light_written: Written::default(),
         instance_written: Written::default(),
         bone_written: Written::default(),
