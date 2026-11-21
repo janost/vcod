@@ -1816,24 +1816,41 @@ fn stamped_pose(
         return pose_player(skel, &inputs, |name| rigs.clip(fs, name));
     };
     let all: Vec<usize> = (0..skel.bones().len()).collect();
-    let marks = stamps.stamp(all.len(), &all, now_ms, &body.pose);
+    stamped_bones(skel, &body.pose, anims, rigs, fs, stamps, &all, now_ms)
+}
+
+/// `want`'s bones posed under `stamps`: each stamped (`DobjStamps::stamp`)
+/// and posed at its first stamp's time and build, one `pose_player` per
+/// distinct stamp, merged into one buffer. A bone outside `want` reads the
+/// earliest stamp's pose.
+pub fn stamped_bones(
+    skel: &vcod_common::skeleton::Skeleton,
+    pose: &BodyPose,
+    anims: &PlayerAnims,
+    rigs: &mut HitRigs,
+    fs: &dyn vcod_common::asset_source::AssetSource,
+    stamps: &mut DobjStamps,
+    want: &[usize],
+    now_ms: i32,
+) -> vcod_common::skeleton::PoseBuffer {
+    let marks = stamps.stamp(skel.bones().len(), want, now_ms, pose);
     let mut kinds: Vec<(i32, usize)> = marks.clone();
     kinds.sort_unstable();
     kinds.dedup();
-    let mut pose: Option<vcod_common::skeleton::PoseBuffer> = None;
+    let mut out: Option<vcod_common::skeleton::PoseBuffer> = None;
     for k in kinds {
-        let inputs = stamps.inputs(&body.pose, anims, k.0, k.1);
+        let inputs = stamps.inputs(pose, anims, k.0, k.1);
         let then = pose_player(skel, &inputs, |name| rigs.clip(fs, name));
-        match pose.as_mut() {
-            None => pose = Some(then),
+        match out.as_mut() {
+            None => out = Some(then),
             Some(p) => {
-                for (b, _) in marks.iter().enumerate().filter(|(_, m)| **m == k) {
+                for (&b, _) in want.iter().zip(&marks).filter(|(_, m)| **m == k) {
                     p.copy_bone(&then, b);
                 }
             }
         }
     }
-    pose.expect("a skeleton has bones")
+    out.expect("want names a bone")
 }
 
 /// The two a swing spawns a temp entity for
