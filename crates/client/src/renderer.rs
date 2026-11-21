@@ -470,9 +470,10 @@ pub struct Renderer {
     world_blur: f32,
     /// When the blend last captured, for render command 10's wall clock.
     shock_captured_at: Option<std::time::Instant>,
-    /// CoD2 model skins and their stage images decoded, kept across maps
-    /// (players and weapons come back on the next one) until the search
-    /// path reopens.
+    /// Model skins and their stage images decoded for the upload batch
+    /// running (prefetched on CoD2 and CoD4), or the single uploads since
+    /// the last one: emptied at each batch's end and with the map, as the
+    /// GPU holds what was taken.
     model_images: assets::DecodedImages,
     /// A batch's model skins decoded and mipped ahead on every core
     /// ([`Self::upload_dynamic_models`]), emptied when the batch ends.

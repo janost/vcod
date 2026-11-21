@@ -1692,6 +1692,9 @@ impl Renderer {
         self.dynamic.cod4_light = None;
         self.dynamic.materials.clear();
         self.vm_pass.skins.clear();
+        // decoded under the old map's search path, which a CoD4 map change
+        // swaps without a `reopen`
+        self.model_images.clear();
         self.dynamic.entity_scene_lights.clear();
         self.vis_counts = VisCounts::default();
     }

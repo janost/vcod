@@ -608,6 +608,7 @@ impl Renderer {
             self.vm_upload(fs, m);
         }
         self.prepared_skins.clear();
+        self.model_images.clear();
     }
 
     /// `models` uploaded as [`Self::upload_dynamic_model`] uploads each,
@@ -642,6 +643,7 @@ impl Renderer {
             .map(|m| self.upload_dynamic_model(fs, m))
             .collect();
         self.prepared_skins.clear();
+        self.model_images.clear();
         out
     }
 
