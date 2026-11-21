@@ -2298,3 +2298,6 @@ What the gates once listed, each closed:
   `ScriptRuntime::deliver_fall` as CoD2's does. Before this the arm was
   missing and a CoD4 fall took no health, only the landing stun.
   VERIFIED (the code, `fall_damage_is_1_7s_share_of_max_health`).
+- The bots judge a drop by 1.7's `bg_fallDamageMinHeight` 128 and
+  `MaxHeight` 300 (cod4-pmove.md's dvar table), not CoD1's 256 and 480
+  (bot-navigation.md 3.14). VERIFIED (the code).

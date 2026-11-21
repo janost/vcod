@@ -508,16 +508,18 @@ pub struct FallHeights {
 }
 
 impl Default for FallHeights {
-    /// The `gameCvarTable` defaults (rows 0x7e368 and 0x7e380).
     fn default() -> Self {
-        FallHeights {
-            min: 256.0,
-            max: 480.0,
-        }
+        FallHeights::COD1
     }
 }
 
 impl FallHeights {
+    /// The `gameCvarTable` defaults (rows 0x7e368 and 0x7e380).
+    pub const COD1: FallHeights = FallHeights {
+        min: 256.0,
+        max: 480.0,
+    };
+
     /// The two bounds out of a systeminfo string (configstring 1), the way a
     /// client's cvars take them: a missing key keeps its default.
     pub fn from_systeminfo(info: &str) -> Self {

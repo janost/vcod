@@ -83,6 +83,8 @@ pub struct NavGraph {
     pub(super) ladder_boxes: Vec<(Vec3, Vec3)>,
     /// The movement rules the walks proved the edges under.
     pub rules: MoveRules,
+    /// The fall heights they judged drops by ([`with_falls`]).
+    pub falls: FallHeights,
     /// The game's own step they moved by instead, if any ([`with_step`]).
     pub step: Option<Arc<dyn WalkStep>>,
 }
@@ -117,9 +119,12 @@ impl NavGraph {
         (most, spawns.len() - lost.len())
     }
 
-    /// Runs `f` with the walks' bodies moving as this graph's did.
+    /// Runs `f` with the walks' bodies moving, and drops judged, as this
+    /// graph's were.
     pub fn moving<R>(&self, f: impl FnOnce() -> R) -> R {
-        with_rules(self.rules, || with_step(self.step.clone(), f))
+        with_rules(self.rules, || {
+            with_falls(self.falls, || with_step(self.step.clone(), f))
+        })
     }
 
     /// The plain edges down more than a step and no more than 64 whose
@@ -994,6 +999,7 @@ impl NavGraph {
             safe: Vec::new(),
             ladder_boxes: Vec::new(),
             rules: MoveRules::V1_1,
+            falls: FallHeights::COD1,
             step: None,
         };
         for p in nodes {

@@ -31,20 +31,25 @@ pub(super) const Z_MERGE: f32 = 40.0;
 pub(super) const ARRIVE: f32 = 8.0;
 
 /// A walk whose fall, from the highest the body rose to where it lands,
-/// is deeper than this is refused: past `bg_fallDamageMinHeight` (256 in
-/// 1.1d's and UO's `gameCvarTable`) the fall hurts. mp_cassino's allied
-/// upper floor leaves by a window sill 240 over the street
-/// (bot-navigation.md, "Other rules").
-pub(super) const MAX_DROP: f32 = 250.0;
+/// is deeper than this is refused: 6 under `bg_fallDamageMinHeight`
+/// ([`falls`]; 256 in 1.1d's and UO's `gameCvarTable`, so 250), past
+/// which the fall hurts. mp_cassino's allied upper floor leaves by a
+/// window sill 240 over the street (bot-navigation.md, "Other rules").
+pub(super) fn max_drop() -> f32 {
+    falls().min - 6.0
+}
 
-/// [`MAX_DROP`] for a walk set off at a body's own pace, the follower's
+/// [`max_drop`] for a walk set off at a body's own pace, the follower's
 /// proof again from where a bot stands, read in the air from where the
-/// body last stood: a bot moving onto a drop deeper than this is held to
-/// take it from rest. mp_ship's ledge 211 under the
+/// body last stood: a bot moving onto a drop deeper than this, four
+/// fifths of it (200 under CoD1's heights), is held to take it from rest.
+/// mp_ship's ledge 211 under the
 /// deck at (3647, -352.9, 611.1) lands a back down at the 190 a bot came
 /// along the deck with, and a bot that did fell past it to the hold
 /// (bot-navigation.md section 3).
-pub(super) const PACED_DROP: f32 = 200.0;
+pub(super) fn paced_drop() -> f32 {
+    max_drop() * 4.0 / 5.0
+}
 
 /// How long [`coasts_off`] lets a body coast: 190 units/s coasts to rest
 /// in about 35 units and half a second.
@@ -192,6 +197,7 @@ impl NavGraph {
             safe: Vec::new(),
             ladder_boxes: ladders(world),
             rules: RULES.get(),
+            falls: falls(),
             step: own_step(),
         };
         let mut queue = Vec::new();
@@ -282,7 +288,7 @@ impl NavGraph {
             // nest exits back off the rim into the hatch, and bots that came
             // onto the rungs off its line slid off them (bot-navigation.md
             // section 3).
-            if q.z < p.z - DEADLY_LADDER
+            if q.z < p.z - deadly_fall()
                 && self
                     .ladder_boxes
                     .iter()
@@ -370,13 +376,14 @@ impl NavGraph {
     }
 
     /// Marks [`Self::perches`]: nodes with no floor under their middle
-    /// within a fall that kills ([`DEADLY_LADDER`]). mp_ship's crow's nest
+    /// within a fall that kills ([`deadly_fall`]). mp_ship's crow's nest
     /// rails stand a body 2 units from the edge: bots whose roam ended on
     /// one at a run, the next plan a few ticks off, ran on off the rail to
     /// the deck (bot-navigation.md section 3).
     fn mark_perches(&mut self, world: &CollisionWorld) {
+        let deadly = deadly_fall();
         let over = par_map(&self.nodes, |&p| {
-            let down = p - Vec3::Z * DEADLY_LADDER;
+            let down = p - Vec3::Z * deadly;
             world
                 .point_trace(p + Vec3::Z, down, MASK_PLAYERSOLID, false)
                 .fraction

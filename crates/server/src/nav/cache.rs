@@ -45,15 +45,21 @@ fn cache() -> std::sync::MutexGuard<'static, Cache> {
 /// Where the movers, world copies and vehicles stand is in it as well: a
 /// rebuild walks round them, and two servers on one map hold them apart,
 /// so a graph keyed without them made a gate's result ride which test
-/// built first.
+/// built first. Fall heights other than CoD1's ([`with_falls`]) name
+/// themselves in the map's part, so CoD1's keys stay as they were.
 fn cache_key(
     map: &str,
     c: &CollisionWorld,
     world: &crate::world::World,
     rules: MoveRules,
 ) -> CacheKey {
+    let mut map = map.to_ascii_lowercase();
+    let f = falls();
+    if f != FallHeights::COD1 {
+        map.push_str(&format!(" (falls {} {})", f.min, f.max));
+    }
     (
-        map.to_ascii_lowercase(),
+        map,
         rules,
         own_step().map(|s| s.key()),
         c.brushes.len(),
@@ -180,7 +186,8 @@ pub(super) struct Cancelled;
 impl NavJob {
     /// The cached graph when there is one, else a build started over a copy
     /// of `world`'s collision as it stands now: the links and poses scripts
-    /// change later never reach the build. The walks move by `rules`. The
+    /// change later never reach the build. The walks move by `rules` and
+    /// judge drops by the calling thread's fall heights ([`with_falls`]). The
     /// build thread first looks for the graph on disk ([`set_disk_cache`]),
     /// keyed by the world's map file (`CollisionWorld::source`).
     pub fn start(map: &str, world: &crate::world::World, rules: MoveRules) -> NavJob {
@@ -230,6 +237,7 @@ impl NavJob {
                 cancel,
             };
         }
+        let falls = falls();
         let seeds = world.spawn_points.clone();
         let cover = world.nav_cover.clone();
         let hazards = world.hazards.clone();
@@ -239,6 +247,7 @@ impl NavJob {
             // schedule it runs beside.
             SPARE_CORE.set(true);
             CANCEL.set(Some(cancelled));
+            FALLS.set(falls);
             let disk = disk::key(&key, collision.source());
             cached(key, || {
                 if let Some(g) = disk

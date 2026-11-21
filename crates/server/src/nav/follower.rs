@@ -118,12 +118,14 @@ const ABREAST_HEIGHT: f32 = 70.0;
 /// sends it back up ([`Follower::head_on_yield`]): two bodies' height.
 const HEAD_ON: f32 = 2.0 * ABREAST_HEIGHT;
 
-/// Only on a ladder taller than a fall that kills (`bg_fallDamageMaxHeight`;
-/// a hurt bot's is shorter, [`fall_that_kills`]): off a shorter one a whole
-/// body slides off a climber's head and lives, and
-/// turning back held two bots at mp_ship's hold ladder (3369, -379) for
-/// 12 s (bot-navigation.md section 3).
-pub(super) const DEADLY_LADDER: f32 = 480.0;
+/// Only on a ladder taller than a fall that kills (`bg_fallDamageMaxHeight`,
+/// [`falls`]: 480 on CoD1; a hurt bot's is shorter, [`fall_that_kills`]):
+/// off a shorter one a whole body slides off a climber's head and lives,
+/// and turning back held two bots at mp_ship's hold ladder (3369, -379)
+/// for 12 s (bot-navigation.md section 3).
+pub(super) fn deadly_fall() -> f32 {
+    falls().max
+}
 
 /// The lowest fall a body with `health` of `max_health` does not live
 /// through: `PM_CrashLand`'s percent, linear from `h.min` to 100 at
@@ -382,7 +384,7 @@ pub struct Follower {
     pressed_ticks: u32,
     give: Option<(Vec3, u32)>,
     /// The lowest fall that kills this body now ([`fall_that_kills`]):
-    /// a hurt bot dies off a shorter ladder. `None` reads [`DEADLY_LADDER`].
+    /// a hurt bot dies off a shorter ladder. `None` reads [`deadly_fall`].
     pub fall_kills: Option<f32>,
     /// A mantle edge whose landing lies past [`OFF_PATH_STEPS`] is still
     /// followed: the probe's climb ends where the body comes down, which
