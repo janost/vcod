@@ -117,10 +117,15 @@ pub(crate) const HEAL_PCT: i32 = 70;
 const HEAL_REACH: f32 = 1200.0;
 const HEAL_HEIGHT: f32 = 200.0;
 
+/// A health item's way is searched along the graph this far, units.
+const HEAL_PATH: f32 = 2.0 * HEAL_REACH;
+
 /// The nearest of `packs` within [`HEAL_REACH`] across and [`HEAL_HEIGHT`]
 /// up or down of a body under [`HEAL_PCT`]; `held`, the item walked to
 /// last tick, while it still lies there within [`HEAL_REACH`] across at
-/// any height. Picked afresh each tick, a bot between two items on
+/// any height. With the graph `g` and two or more in reach, nearest by
+/// the graph's way ([`HEAL_PATH`]), those it does not reach after the
+/// rest by straight line (bot-combat.md 5.3). Picked afresh each tick, a bot between two items on
 /// mp_ship's hold at (4450, 700, -64), one on the floor and one on the
 /// deck over it, turned for whichever stood nearer across and paced
 /// between their ways for 10 s; and one whose way to an item climbed a
@@ -131,6 +136,7 @@ pub(crate) fn nearest_pack(
     view: &BotView,
     packs: &[[f32; 3]],
     held: Option<[f32; 3]>,
+    g: Option<&NavGraph>,
 ) -> Option<[f32; 3]> {
     let v = &view.survive;
     if v.health * 100 >= v.max_health * HEAL_PCT {
@@ -141,12 +147,59 @@ pub(crate) fn nearest_pack(
     if let Some(h) = held.filter(|h| packs.contains(h) && across(h) < HEAL_REACH) {
         return Some(h);
     }
-    packs
+    let near: Vec<(f32, [f32; 3])> = packs
         .iter()
         .map(|p| (across(p), *p))
         .filter(|(d, p)| *d < HEAL_REACH && (p[2] - o[2]).abs() < HEAL_HEIGHT)
-        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .collect();
+    let by_line = || {
+        near.iter()
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, p)| *p)
+    };
+    let Some(g) = g.filter(|_| near.len() > 1) else {
+        return by_line();
+    };
+    let Some(cost) = path_costs(g, o, HEAL_PATH) else {
+        return by_line();
+    };
+    // Unreached ones rank after every reached one, by straight line.
+    let way = |p: [f32; 3]| {
+        g.nearest(p)
+            .map(|n| cost[n as usize] + Vec3::from(p).distance(g.nodes[n as usize]))
+            .filter(|c| c.is_finite())
+    };
+    near.iter()
+        .map(|&(d, p)| (way(p).map_or((1, d), |c| (0, c)), p))
+        .min_by(|a, b| a.0.0.cmp(&b.0.0).then(a.0.1.total_cmp(&b.0.1)))
         .map(|(_, p)| p)
+}
+
+/// The graph's way from the node nearest `from` to every node within
+/// `reach` along level and climbing edges (no risky one), infinite past it.
+fn path_costs(g: &NavGraph, from: [f32; 3], reach: f32) -> Option<Vec<f32>> {
+    let start = g.nearest(from)?;
+    let mut cost = vec![f32::INFINITY; g.nodes.len()];
+    let mut open = BinaryHeap::new();
+    cost[start as usize] = 0.0;
+    open.push((Reverse(0u32), start));
+    while let Some((Reverse(c), n)) = open.pop() {
+        if c as f32 > cost[n as usize] + 1.0 {
+            continue;
+        }
+        let p = g.nodes[n as usize];
+        for m in g.next(n) {
+            if g.has(n, m, |k| k.risky) {
+                continue;
+            }
+            let next = cost[n as usize] + p.distance(g.nodes[m as usize]);
+            if next < cost[m as usize] && next <= reach {
+                cost[m as usize] = next;
+                open.push((Reverse(next as u32), m));
+            }
+        }
+    }
+    Some(cost)
 }
 
 /// Whether `at` stands at the cover `c`.
@@ -721,17 +774,17 @@ mod tests {
     fn a_hurt_bot_keeps_to_the_health_item_it_walks_to() {
         let (_, v) = hurt(1);
         let (far, near) = ([600.0, 0.0, 64.0], [300.0, 0.0, 64.0]);
-        assert_eq!(nearest_pack(&v, &[far, near], None), Some(near));
-        assert_eq!(nearest_pack(&v, &[far, near], Some(far)), Some(far));
+        assert_eq!(nearest_pack(&v, &[far, near], None, None), Some(near));
+        assert_eq!(nearest_pack(&v, &[far, near], Some(far), None), Some(far));
         let over = [600.0, 0.0, 64.0 + HEAL_HEIGHT + 10.0];
-        assert_eq!(nearest_pack(&v, &[over, near], None), Some(near));
+        assert_eq!(nearest_pack(&v, &[over, near], None, None), Some(near));
         assert_eq!(
-            nearest_pack(&v, &[over, near], Some(over)),
+            nearest_pack(&v, &[over, near], Some(over), None),
             Some(over),
             "any height"
         );
         assert_eq!(
-            nearest_pack(&v, &[near], Some(far)),
+            nearest_pack(&v, &[near], Some(far), None),
             Some(near),
             "picked up"
         );
@@ -742,7 +795,7 @@ mod tests {
         let (mut bot, mut v) = hurt(1);
         let pack = [400.0, 300.0, 64.0];
         assert_eq!(
-            nearest_pack(&v, &[pack, [5000.0, 0.0, 64.0]], None),
+            nearest_pack(&v, &[pack, [5000.0, 0.0, 64.0]], None, None),
             Some(pack)
         );
         v.survive.heal = Some(pack);
@@ -752,7 +805,7 @@ mod tests {
         assert_eq!(bot.goal(&v), Goal::To(pack));
         // Not hurt enough: no detour.
         v.survive.health = 90;
-        assert_eq!(nearest_pack(&v, &[pack], None), None);
+        assert_eq!(nearest_pack(&v, &[pack], None, None), None);
         bot.set_retreat(false);
         v.survive.health = 30;
         assert_ne!(bot.goal(&v), Goal::To(pack));
@@ -761,6 +814,31 @@ mod tests {
     /// A pack dropped where no body fits: the plan to it walked out, the
     /// body comes no nearer, and after `SHORT_TICKS` the bot passes it
     /// over. One still walking its plan, or closing in, keeps it.
+    /// Two items in reach: the one nearer by the graph's way, not by
+    /// straight line; with one alone, or no graph, the straight line.
+    #[test]
+    fn a_health_item_is_picked_by_the_graphs_way() {
+        let (_, mut v) = hurt(1);
+        v.origin = [0.0, 0.0, 0.0];
+        let nodes = vec![
+            Vec3::ZERO,
+            Vec3::new(200.0, 0.0, 0.0),
+            Vec3::new(0.0, 400.0, 0.0),
+            Vec3::new(100.0, 400.0, 0.0),
+            Vec3::new(100.0, 50.0, 0.0),
+        ];
+        let next = vec![vec![1, 2], vec![0], vec![0, 3], vec![2, 4], vec![3]];
+        let g = NavGraph::from_parts(nodes, next);
+        // Behind a wall: 112 by line, 850 round it.
+        let (walled, open) = ([100.0, 50.0, 0.0], [200.0, 0.0, 0.0]);
+        assert_eq!(
+            nearest_pack(&v, &[walled, open], None, Some(&g)),
+            Some(open)
+        );
+        assert_eq!(nearest_pack(&v, &[walled, open], None, None), Some(walled));
+        assert_eq!(nearest_pack(&v, &[walled], None, Some(&g)), Some(walled));
+    }
+
     #[test]
     fn a_health_item_no_body_reaches_is_passed_over() {
         let (mut bot, mut v) = hurt(1);

@@ -1535,7 +1535,8 @@ fn sense<W: BotWorld>(
         .copied()
         .filter(|p| bot.is_none_or(|b| !b.passes_over(*p)))
         .collect();
-    view.survive.heal = super::retreat::nearest_pack(&view, &open, heal_at);
+    view.survive.heal =
+        super::retreat::nearest_pack(&view, &open, heal_at, w.driver().nav.as_deref());
     let held = w.driver_mut().sidesteps.remove(&slot);
     if let Some(e) = enemy {
         (view.friend_in_line, view.sidestep) = w.friend_in_line(slot, e.origin, teams, held);

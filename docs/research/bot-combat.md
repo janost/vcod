@@ -424,10 +424,10 @@ On by default; `RETREAT=` in `bot_match`.
   `vc_bot_retreat 0` (`Bot::allow_retreat`, applied every bot pass, half
   a second, on all four games) for every bot, with the health detour;
   a retreat under way ends.
-- Health items are picked by straight-line distance (`nearest_pack`,
-  1200 across and 200 up or down), not by the graph's way to them; one
-  the plan reaches no nearer is passed over (bot-objectives.md 14.8).
-  Open.
+- Health items in reach are those within 1200 across and 200 up or down
+  (`nearest_pack`); of two or more, the one nearest by the graph's way
+  (section 5.3). One the plan reaches no nearer is passed over
+  (bot-objectives.md 14.8).
 
 ### 5.1 Measured (2026-10-20)
 
@@ -469,6 +469,34 @@ both sides retreating; 2137 hurt and 132 dry starts):
   dry retreat before the cover in about half of them.
 - No duty ended one, and no retreat was cut alive by a seat or the cvar
   in `tdm`. VERIFIED (the counts).
+
+### 5.3 Health items by the graph's way (2026-11-21)
+
+Before, `nearest_pack` took the item nearest in a straight line, so one
+behind a wall or a floor's lip beat one down an open corridor. Now, with
+two or more in reach, it searches the graph from the body's node along
+non-risky edges up to 2400 units of path (`HEAL_PATH`) and takes the
+least path to the item's nearest node plus the step from there; items it
+does not reach rank after the rest by straight line. One item alone, or
+no graph, is the straight line as before
+(`bots::retreat::tests::a_health_item_is_picked_by_the_graphs_way`).
+VERIFIED (the code).
+
+VERIFIED (measured, ours, release, 5.2's set, before is 5.2's tip):
+
+| Run | Digests moved | Kills | Wounds | Life s | Hurt retreats | Stalled |
+|---|---|---|---|---|---|---|
+| `tdm` before | | 2335 | 1770 | 25.8 | 2137 | 0 |
+| `tdm` after | 44 of 64 | 2354 | 1800 | 25.9 | 2170 | 0 |
+| `dm` before | | 3000 | 2319 | 20.4 | 2657 | 0 |
+| `dm` after | 51 of 64 | 3018 | 2340 | 20.4 | 2683 | 0 |
+
+- Of the `tdm` bot-ticks with two or more items in reach, 322 of 4363
+  (7.4%) pick another item than the straight line did (a temporary
+  count). VERIFIED (measured).
+- Kills, wounds, life and retreats move inside the seed spread; no stall
+  either way. INFERRED: a pickup is short whichever item it is, so the
+  pick changes the walk, not the fights.
 
 ## 6. One table on `bot_match` (2026-10-21)
 
