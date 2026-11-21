@@ -261,9 +261,9 @@ retail server output that I made (wire captures, configstring tables,
 debugger readings, log lines, one retail client demo) beside probe scripts and
 pinned outputs written for the tests, and hold no game assets; each fixture
 root's README says how they were made. The reverse engineering was done to
-interoperate with the game's own files and servers. The research notes document file formats and the network
-protocol for that purpose: layouts and addresses recovered from the
-binaries, no copied code. The projects under "Consulted, not copied" were
+interoperate with the game's own files and servers. The research notes
+document file formats and the network protocol for that purpose: layouts
+and addresses recovered from the binaries, no copied code. The projects under "Consulted, not copied" were
 read as references, and no code from them is included. The screenshots show
 art owned by Activision.
 
