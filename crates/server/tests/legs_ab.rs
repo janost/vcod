@@ -824,12 +824,14 @@ fn drawn_feet(draw_ms: i32) -> Option<(usize, f32)> {
     let feet = ["bip01 l foot", "bip01 r foot"].map(|n| skel.bone_index(n).expect(n));
     let mut clips: BTreeMap<String, Option<Rc<vcod_common::xanim::XAnim>>> = BTreeMap::new();
     let mut feet_of = |legs: &ChannelClock, torso: &ChannelClock, now: i32| {
+        let (legs_layers, torso_layers) =
+            vcod_common::animclock::body_layers(legs, torso, &anims, now);
         let inputs = PoseInputs {
             anims: &anims,
             legs: 0,
             torso: 0,
-            legs_layers: legs.layers(now),
-            torso_layers: torso.layers(now),
+            legs_layers,
+            torso_layers,
             nodes: torso.node_weights(now),
             group_pitch: 0.0,
             turret_leaves: None,
