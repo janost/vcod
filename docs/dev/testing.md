@@ -236,7 +236,7 @@ ignored_tests_named` fails on one that is not.
 | pmove, collision or nav | `cargo test -p vcod-server --test server -- --ignored nav_census::` | ~15 s at 1.1; ~150 s at UO |
 | bots | `cargo test -p vcod-server --test server -- --ignored bots::` | ~10 s at 1.1; ~6.5 min at UO |
 | the bots' driver or its threads | `cargo test -p vcod-server --test server -- bot_threads::` (not ignored; each install it finds; `tdm` and `sd`, UO `ctf`) | ~15 s with the 1.1, CoD2 and CoD4 installs |
-| UO bot vehicles | `-- --ignored bot_vehicles::` at a UO install | ~12 s |
+| UO bot vehicles | `-- --ignored bot_vehicles::` at a UO install | ~16 s |
 | CoD4 bots | `cargo test -p vcod-server --lib -- --ignored cod4::bots::` (`COD4_DIR`) | ~4 s |
 | CoD4 hit boxes per map | `--lib -- --ignored cod4_every_map_poses_both_teams` (`COD4_DIR`) | ~22 s |
 | CoD2 gametypes | `--lib -- --ignored cod2_gametype_census` (`COD2_DIR`) | ~18 s |
@@ -251,7 +251,9 @@ ignored_tests_named` fails on one that is not.
 a graph build each; their doc comments name the map and the gametype, and
 the UO ones return at once at a 1.1 install. In the `bas` rounds
 `BAS_HEALTH=24500` plays stock base health, `BAS_MAP=all` the five stock
-bas maps, `BOTS_SEED=` another seed.
+bas maps, `BOTS_SEED=` another seed. Each `#[ignore]` reason there quotes the test's
+own dev-profile wall, run alone under `tmp/mg/heavy.sh` (2026-11-21): the
+`bas` rounds take 2 to 3 min each, the rest under 45 s.
 
 Measurements and by-hand tools, not gates. Each prints what it measured;
 its doc comment says what it reads and which env vars drive it.
@@ -301,6 +303,7 @@ time for runs it speeds up by a few seconds. Measured 2026-11-21 (rustc
 | `nav_census::` at UO | 150.0 s | 111.4 s |
 | `bots::` at 1.1 | 9.6 s | 7.7 s |
 | `bots::` at UO | 387.5 s | 334.4 s |
+| `bot_vehicles::` at UO | 15.8 s | |
 | `bot_threads::` (1.1, CoD2, CoD4) | 13.3 s | 10.5 s |
 | `cod4::bots::` | 4.1 s | 2.9 s |
 | `cod2_gametype_census` | 18.3 s | 15.6 s |
