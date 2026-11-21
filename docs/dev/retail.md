@@ -116,7 +116,9 @@ neither side prints `EXE_SERVER_IS_DIFFERENT_VER`.
 per-second snapshot summary, and dumps captures to `tmp/`. Each scripted mode
 (`--save-*`, `--probe-*`) is documented on its flag in
 `crates/client/src/main.rs` (`vcod --help`): what it does, which fixture it
-writes, which gsc probe it pairs with. A multi-shell recipe (gsc probe,
+writes, which gsc probe it pairs with. The fixture paths are fixed at build
+time under the checkout the binary was built from, so the fixture modes need
+a source build; a release binary writes to its build machine's path. A multi-shell recipe (gsc probe,
 target client, shooter client, `+set` cvars, start order, `--probe-secs`) is
 in the header of the fixture it produced. Some header text is fixed, not
 read off the run: the "Retail CoD <build>" label (picked from the protocol
