@@ -91,8 +91,7 @@ pub const ET_PLANE: u32 = 13;
 /// name is INFERRED.
 pub const ET_VEHICLE: u32 = 14;
 pub const ET_EVENTS: u32 = 17;
-/// A brush model's `solid`.
-const SOLID_BMODEL: u32 = 0xff_ffff;
+use vcod_cod4::net::flags::SOLID_BMODEL;
 pub const EV_OBITUARY: u32 = 66;
 /// `EF_TELEPORT_BIT`: toggled, the entity or view starts over instead of
 /// lerping (`CG_SetNextSnap`, cod4-client-view.md 2).

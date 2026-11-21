@@ -453,8 +453,7 @@ pub fn loop_sounds(
     out
 }
 
-/// `solid`'s brush model mark (`SOLID_BMODEL`).
-const SOLID_BMODEL: u32 = 0xff_ffff;
+use vcod_cod4::net::flags::SOLID_BMODEL;
 
 /// Where `CG_AddEntityLoopSound` plays `e`'s loop (cod4-sound.md 4): its
 /// drawn origin (`drawn`, else its `trBase`), and for a brush model

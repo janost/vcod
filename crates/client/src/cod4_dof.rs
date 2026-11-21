@@ -6,8 +6,8 @@
 
 use crate::cod4_viewmodel::ViewPs;
 
-/// `PM_DEAD`; at or past it the sight's targets ease in as with the gun up.
-const PM_DEAD: u32 = 7;
+/// At or past `PM_DEAD` the sight's targets ease in as with the gun up.
+use vcod_cod4::net::flags::PM_DEAD;
 /// `r_dof_bias`' default (iw3mp.exe 0x6be648).
 const BIAS: f32 = 0.5;
 

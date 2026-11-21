@@ -24,8 +24,7 @@ const HEARD_MS: i32 = 1500;
 const MAX_CLIENTS: usize = 64;
 /// `perks` bit 0, `specialty_gpsjammer`: the sweep never pings its owner.
 const PERK_GPS_JAMMER: u32 = 1;
-/// The spectator team.
-const TEAM_SPECTATOR: u32 = 3;
+use vcod_cod4::net::flags::TEAM_SPECTATOR;
 /// `pingPlayer`'s flash runs 3 s (0x429728, 0x429867).
 const FLASH_MS: i32 = 3000;
 /// A talker's ping holds 50 ms past the frame (0x429711).

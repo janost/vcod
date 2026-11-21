@@ -336,10 +336,9 @@ fn in_killcam(snap: &Snapshot) -> bool {
     snap.ps.get("deltaTime").unwrap_or(0) != 0
 }
 
-/// `pmtype_t`: `PM_DEAD` and up hide `HE_FLAG_HIDE_WHEN_DEAD` elements;
+/// `PM_DEAD` and up hide `HE_FLAG_HIDE_WHEN_DEAD` elements;
 /// `PM_SPECTATOR` and up draw no weapon HUD.
-const PM_DEAD: u32 = 7;
-const PM_SPECTATOR: u32 = 4;
+use vcod_cod4::net::flags::{PM_DEAD, PM_SPECTATOR};
 
 impl Cod4Hud {
     /// The HUD at server time `now` on a `size` window, empty until the

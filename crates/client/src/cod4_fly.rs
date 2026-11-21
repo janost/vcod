@@ -113,9 +113,9 @@ pub fn visual_model(weapons: &HashMap<String, WeaponModels>, key: &str) -> Optio
     })
 }
 
-/// `WeaponDef.weapClass` (+304) and its turret value (`weapClass_t` 7).
+/// `WeaponDef.weapClass` (+304).
 const WEAP_CLASS: usize = 304;
-const WEAPCLASS_TURRET: i32 = 7;
+use vcod_cod4::net::flags::WEAPCLASS_TURRET;
 
 /// The little-endian int at `at` in a `WeaponDef`'s bytes, 0 past them.
 fn i32_at(raw: &[u8], at: usize) -> i32 {

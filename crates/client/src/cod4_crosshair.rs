@@ -176,13 +176,12 @@ pub(crate) struct View<'a> {
     pub team_rgb: [[f32; 3]; 2],
 }
 
-/// `eFlags` 0x300: on a turret, whose crosshair this is not.
-const EF_TURRET: u32 = 0x300;
+/// On a turret (`EF_TURRET`) the crosshair is not this one; a grenade
+/// (`WEAPTYPE_GRENADE`) grows the dot while it cooks.
+use vcod_cod4::net::flags::{EF_TURRET, WEAPTYPE_GRENADE};
 /// `weapFlags` bits naming who is under the crosshair (cod4-hud.md 17).
 const WF_FRIENDLY: u32 = 8;
 const WF_ENEMY: u32 = 0x10;
-/// `weapType` 1: a grenade, whose dot grows while it cooks.
-const WEAPTYPE_GRENADE: i32 = 1;
 /// The grid's half height, which the spread and the sight's pitch project
 /// onto (the 240 at `iw3mp.exe` 0x70b548).
 const HALF_GRID_H: f32 = 240.0;
