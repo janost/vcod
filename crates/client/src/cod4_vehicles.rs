@@ -902,7 +902,7 @@ mod tests {
                         eye,
                         fwd,
                         up,
-                        time: time as f32,
+                        time,
                         fov_x: FOV,
                         cull: CullMode::On,
                         hud_lines: Vec::new(),

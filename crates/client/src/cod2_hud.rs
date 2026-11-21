@@ -573,7 +573,7 @@ impl Cod2Hud {
         loc: &Localized,
         (w, h): (f32, f32),
         now: i32,
-        clock: f32,
+        clock: f64,
     ) -> Vec<HudQuad> {
         let ps = &frame.snap.ps;
         let mut out = Vec::new();

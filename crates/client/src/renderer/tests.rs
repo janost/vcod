@@ -1480,6 +1480,22 @@ fn anim_frame_index_floors_wraps_and_clamps() {
     assert_eq!(anim_frame_index(5.0, 3, -1.0), 0);
 }
 
+/// The shaders' clock is the plain f32 time for the first 3840 s; at 11.6
+/// days the flag's 1.5 Hz wave and a 5 fps animMap still read the exact
+/// time's phase and frame, where f32 seconds step 62 ms.
+#[test]
+fn a_long_uptime_keeps_the_shader_clocks_phase() {
+    for t in [0.0, 0.016, 2.5, 3839.9] {
+        assert_eq!(gpu_time(t), t as f32);
+    }
+    let t = 1.0e6 + 0.21;
+    let tau = std::f64::consts::TAU;
+    let wave = |s: f64| (s * 1.5 * tau).rem_euclid(tau);
+    assert!((wave(f64::from(gpu_time(t))) - wave(t)).abs() < 1e-3);
+    // floor(5 * t) is 5000001, 0 of 3; the f32 time's is 5000000
+    assert_eq!(anim_frame_index(5.0, 3, ShaderClock(t)), 0);
+}
+
 // ---- StageBatch classification ----
 
 use vcod_common::shader::{SkyParms, SurfaceBits};

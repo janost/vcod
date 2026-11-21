@@ -183,7 +183,7 @@ fn play(root: &std::path::Path, addr: std::net::SocketAddr) -> Option<Seen> {
                 eye: cam.pos,
                 fwd,
                 up,
-                time: time as f32,
+                time,
                 fov_x: view.fov,
                 cull: CullMode::On,
                 hud_lines: Vec::new(),
@@ -238,16 +238,7 @@ fn play(root: &std::path::Path, addr: std::net::SocketAddr) -> Option<Seen> {
             r.render(frame(&r, view.pitch), None);
             let sharp = shot(&mut r, "dof_off");
             seen.dof_pixels = diff(&blurred, &sharp).0;
-            feather(
-                &mut r,
-                &c,
-                &fs,
-                cam.pos,
-                view.yaw,
-                time as f32,
-                &mut seen,
-                frame,
-            );
+            feather(&mut r, &c, &fs, cam.pos, view.yaw, time, &mut seen, frame);
             break;
         }
         // the frame main would draw, for the depth of field to read
@@ -268,7 +259,7 @@ fn feather(
     fs: &vcod_common::pk3::Pk3Fs,
     eye: Vec3,
     yaw: f32,
-    time: f32,
+    time: f64,
     seen: &mut Seen,
     frame: impl Fn(&Renderer, f32) -> Frame,
 ) {

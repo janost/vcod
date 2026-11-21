@@ -118,7 +118,7 @@ impl Renderer {
             }
         }
         let moved_models: Vec<usize> = world.moved.iter().map(|&(m, _)| m).collect();
-        let time = frame.time;
+        let time = ShaderClock(frame.time);
         let cut = |b: u32| match *world.shadow_cast.get(b as usize)? {
             ShadowCast::Cut => Some(shadows::CutBinding {
                 mat: &world.bind_groups[world.batch_draws[b as usize].bind_group],
@@ -191,7 +191,7 @@ impl Renderer {
             })
             .collect();
         let sun = glam::Vec3::from(c2.sun().dir);
-        let now_ms = (frame.time * 1000.0) as i32;
+        let now_ms = (frame.time as f32 * 1000.0) as i32;
         let cookies = self
             .cookies
             .prepare(&self.queue, sun, frame.eye, &cands, now_ms);
@@ -478,7 +478,7 @@ impl Renderer {
             casters,
             Some(&entities),
             (lights, &used),
-            (frame.eye, frame.fwd, frame.time),
+            (frame.eye, frame.fwd, frame.time as f32),
             &self.spot_shadow_set,
         );
     }

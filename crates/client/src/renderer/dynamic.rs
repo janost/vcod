@@ -1383,8 +1383,10 @@ impl Renderer {
 
     /// Picks each placed instance's LOD from the view; one past its last LOD
     /// is not drawn (docs/research/xmodel-v14-format.md, "LOD selection").
-    /// Entities carry no refEntity scale. `time` is the frame's material
-    /// clock, which an instance's own `shader_time` is taken against.
+    /// Entities carry no refEntity scale. `time` is the frame's unwrapped
+    /// clock, which an instance's own `shader_time` is taken against: the
+    /// offset slides a stage uv whose phase is the unwrapped time's, and
+    /// [`gpu_time`]'s wrap is a whole number of every shader cycle.
     pub(super) fn pick_dynamic_lods(&mut self, eye: glam::Vec3, view: &model::LodView, time: f32) {
         let d = &mut self.dynamic;
         d.instances.clear();

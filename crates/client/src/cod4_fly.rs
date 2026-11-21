@@ -1349,7 +1349,7 @@ fn view_def(
         parts,
         ads_down: anim_name(32).is_some(),
         clip_name: def.strings.get("clipName").cloned().unwrap_or_default(),
-        numbers: crate::cod4_viewmodel::ViewNumbers::from_raw(&def.raw),
+        numbers: crate::cod4_viewmodel::ViewNumbers::from_weapon(def),
         note_sounds: note_sounds(a, def),
     }))
 }

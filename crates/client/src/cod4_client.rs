@@ -2871,7 +2871,7 @@ mod saw_tests {
                 eye: cam.pos,
                 fwd,
                 up,
-                time: clk_since(start).as_secs_f32(),
+                time: clk_since(start).as_secs_f64(),
                 fov_x: FOV,
                 cull: CullMode::On,
                 hud_lines: Vec::new(),

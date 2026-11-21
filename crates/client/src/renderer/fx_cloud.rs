@@ -434,8 +434,9 @@ impl Renderer {
         fs: &dyn AssetSource,
         map: Option<&str>,
         clouds: &Clouds,
-        time: f32,
+        time: f64,
     ) {
+        let time = ShaderClock(time);
         if clouds.list.is_empty() {
             return;
         }
@@ -542,7 +543,7 @@ fn instance(
     flags: u32,
     outdoor: u32,
     identity_light: f32,
-    time: f32,
+    time: ShaderClock,
 ) -> CloudInstance {
     let row = |a: Vec3, o: f32| [a.x, a.y, a.z, o];
     CloudInstance {
@@ -731,7 +732,7 @@ mod tests {
         );
         assert_ne!(cloud.matrix[2], 0.0, "{:?}", cloud.matrix);
         let flags = FX_VERT_CLAMP_S | FX_VERT_CLAMP_T;
-        let inst = instance(&cloud, None, flags, 1, 1.0, 0.0);
+        let inst = instance(&cloud, None, flags, 1, 1.0, ShaderClock(0.0));
         pass.upload(&queue, &[inst], right, up);
         pass.spheres = vec![(cloud.origin, cloud.cull_radius)];
 

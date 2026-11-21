@@ -1272,13 +1272,13 @@ impl ViewTail<'_> {
             true => fx.build_quads(cam.pos, cam_right, cam_up, time),
             false => Vec::new(),
         };
-        r.set_fx_quads(fs, quads, time as f32);
+        r.set_fx_quads(fs, quads, time);
         // CoD2's snow (fx::cod2_cloud), tested against the map's roofs
         let clouds = match draw_fx {
             true => fx.clouds(cam.pos, cam_right, cam_up, time),
             false => Default::default(),
         };
-        r.set_fx_clouds(fs, session.map_name(), &clouds, time as f32);
+        r.set_fx_clouds(fs, session.map_name(), &clouds, time);
         r.set_marks(
             fs,
             &fx.take_marks(time),
@@ -1314,7 +1314,7 @@ impl ViewTail<'_> {
                 eye: cam.pos,
                 fwd: cam_forward,
                 up: Vec3::Z,
-                time: time as f32,
+                time,
                 fov_x: world_fov,
                 cull,
                 hud_lines: Vec::new(),
@@ -3163,7 +3163,7 @@ fn loading_frame(
     r: &mut Renderer,
     localized: &vcod_common::localize::Localized,
     hud: &mut Option<hud::Hud>,
-    now: f32,
+    now: f64,
     aspect: f32,
     cull: renderer::CullMode,
     configstrings: &[String],
@@ -4163,7 +4163,7 @@ impl App {
                         // when the gun has no other mode (0x30037f90).
                         if action == play::input::Action::AltWeapon {
                             let now_ms =
-                                ((Instant::now() - self.start).as_secs_f32() * 1000.0) as i32;
+                                ((Instant::now() - self.start).as_secs_f64() * 1000.0) as i32;
                             match (input.alt_weapon(), &mut self.hud) {
                                 (play::input::AltWeapon::Selected, Some(hud)) => {
                                     hud.weapon_selected()
@@ -4210,7 +4210,7 @@ impl App {
                 // docs/research/cod11-hud-protocol.md, sections 3.1 and 4).
                 Effect::Scores(down) => {
                     if let (Mode::Online { net, .. }, Some(hud)) = (&mut self.mode, &mut self.hud) {
-                        let now = (Instant::now() - self.start).as_secs_f32();
+                        let now = (Instant::now() - self.start).as_secs_f64();
                         if !down {
                             hud.scoreboard.release(now);
                         } else if hud.scoreboard.press(now) {

@@ -17,7 +17,7 @@ const ALLIES_FILE: &str = "mp/allies_chat.voice";
 /// Retail's ring holds 32 entries.
 const QUEUE_CAP: usize = 32;
 /// `FUN_3002d5d0`: one entry per 1000 ms.
-const DRAIN_INTERVAL_S: f32 = 1.0;
+const DRAIN_INTERVAL_S: f64 = 1.0;
 /// Retail reads the file through a 0x4000-byte cap ("voice chat file too large").
 const FILE_LIMIT: u64 = 0x4000;
 
@@ -43,7 +43,7 @@ pub struct DrainedLine {
 pub struct QuickChat {
     tables: Option<Tables>,
     queue: VecDeque<Queued>,
-    next_due_s: f32,
+    next_due_s: f64,
     rng: Rng,
 }
 
@@ -127,7 +127,7 @@ impl QuickChat {
     }
 
     /// At most one line per second, oldest first. The first line is immediate.
-    pub fn drain(&mut self, now: f32) -> Option<DrainedLine> {
+    pub fn drain(&mut self, now: f64) -> Option<DrainedLine> {
         if now < self.next_due_s || self.queue.is_empty() {
             return None;
         }
