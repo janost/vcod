@@ -344,27 +344,30 @@ pub(super) fn merge_by_sort(
     out
 }
 
+/// What a run of world draws left bound: the draw set whose camera group
+/// is bound ([`Renderer::world_sets`]), the pipeline and groups 1 and 2.
+#[derive(Clone, Copy, Default)]
+pub(super) struct WorldRunState {
+    pub(super) set: Option<usize>,
+    pub(super) bound: Option<Bound>,
+    pub(super) groups: WorldGroups,
+}
+
+/// What a run of entity draws left bound: the `DynamicPass::models` index
+/// whose buffers are bound, and the stage state.
+#[derive(Clone, Copy, Default)]
+pub(super) struct EntRunState {
+    pub(super) model: Option<usize>,
+    pub(super) bound: EntBound,
+}
+
 /// What a merged list's last draw left bound.
 pub(super) enum Emit {
     None,
-    World {
-        set: usize,
-        bound: Option<Bound>,
-        groups: WorldGroups,
-    },
-    Ent {
-        /// The `DynamicPass::models` index whose buffers are bound.
-        model: usize,
-        bound: EntBound,
-    },
-    Gun {
-        part: u32,
-        bound: EntBound,
-    },
-    Fx {
-        blend: FxBlend,
-        soft: bool,
-    },
+    World(WorldRunState),
+    Ent(EntRunState),
+    Gun { part: u32, bound: EntBound },
+    Fx { blend: FxBlend, soft: bool },
 }
 
 /// Copies the visible `ranges` out of `src` batch by batch into `out`, one

@@ -309,6 +309,62 @@ impl Renderer {
         });
     }
 
+    /// The scene pass's world items `items` (each a `SortedItem::World`)
+    /// into `sink`, from what `at` left bound, or from nothing: then the
+    /// world's buffers bind first. Returns what the last draw left bound.
+    /// `fx_ready` is [`Self::emit_world_draw`]'s; `equal` picks the draws
+    /// the depth prepass laid down, whose colour draws under EQUAL.
+    #[expect(clippy::too_many_arguments)]
+    pub(super) fn encode_world_items(
+        &self,
+        sink: &mut impl DrawSink,
+        world: &WorldGpu,
+        world_list: &[WorldItem],
+        items: &[SortedItem],
+        at: Option<WorldRunState>,
+        time: f32,
+        fx_ready: (bool, bool),
+        equal: impl Fn(&WorldGpu, DrawRef) -> bool,
+    ) -> WorldRunState {
+        let mut at = at.unwrap_or_else(|| {
+            sink.vertices(0, world.vertex_buf.slice(..));
+            sink.indices(world.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+            WorldRunState::default()
+        });
+        for item in items {
+            let SortedItem::World(wi) = *item else {
+                unreachable!("a world run holds world items")
+            };
+            let WorldItem { set, draw: i, .. } = world_list[wi];
+            let (draws, frame_draws, cam) = self
+                .world_sets(world)
+                .nth(set)
+                .expect("collected from these sets");
+            if at.set != Some(set) {
+                sink.group(0, cam, None);
+                tally(&self.census, |c| c.bind_groups += 1);
+                at.set = Some(set);
+            }
+            let fd = &frame_draws[i as usize];
+            let depth = match equal(world, fd.kind) {
+                true => Depth::Equal,
+                false => Depth::Plain,
+            };
+            self.emit_world_draw(
+                sink,
+                world,
+                &draws[fd.src as usize],
+                fd.kind,
+                &mut at.bound,
+                &mut at.groups,
+                time,
+                fx_ready,
+                depth,
+            );
+        }
+        at
+    }
+
     /// The depth prepass's world draws joined. A pass that only writes the
     /// nearest depth (LessEqual, no colour) leaves every sample at its
     /// nearest fragment whatever the draw order, so per set, sidedness and
@@ -642,6 +698,76 @@ impl Renderer {
             n += 1;
         }
         n
+    }
+
+    /// The scene pass's entity surface items `items[from..end]` (no gun)
+    /// into `sink`, each run [`ent_run`] joins (never across `stops`) one
+    /// draw, from what `at` left bound, or from nothing: then the camera,
+    /// bone and instance buffers bind first. `equal` picks the skins whose
+    /// first stage the depth prepass laid down, drawn under EQUAL. Returns
+    /// what the last draw left bound and the item after it.
+    pub(super) fn encode_ent_items(
+        &self,
+        sink: &mut impl DrawSink,
+        items: &[SortedItem],
+        (from, end): (usize, usize),
+        ent_draws: &[EntDraw],
+        stops: &[Option<usize>],
+        at: Option<EntRunState>,
+        equal: impl Fn(&EntSkin) -> bool,
+    ) -> (EntRunState, usize) {
+        let dynamic = &self.dynamic;
+        let mut at = at.unwrap_or_else(|| {
+            sink.group(0, &self.camera_bg, None);
+            sink.group(2, &dynamic.bone_bg, None);
+            sink.vertices(1, dynamic.instance_buf.slice(..));
+            tally(&self.census, |c| c.bind_groups += 2);
+            EntRunState::default()
+        });
+        let mut j = from;
+        while j < end {
+            let SortedItem::Model(mi) = items[j] else {
+                unreachable!("an entity run holds entity items")
+            };
+            let d = &ent_draws[mi];
+            let model_at = dynamic.instances[d.inst as usize].0;
+            let model = &dynamic.models[model_at];
+            let vm = &model.vm;
+            // the instance comes in as `first_instance` over the whole
+            // instance buffer, so instances of one model keep its buffers
+            if at.model != Some(model_at) {
+                sink.vertices(0, vm.vertex_buf.slice(..));
+                sink.indices(vm.index_buf.slice(..), wgpu::IndexFormat::Uint16);
+                at.model = Some(model_at);
+            }
+            let surf = &vm.surfaces[d.surf as usize];
+            let n = ent_run(items, j, ent_draws, (&vm.surfaces, &model.skins), stops);
+            let last = &vm.surfaces[d.surf as usize + n - 1];
+            let skin = &model.skins[d.surf as usize];
+            // a run is one skin, so one answer for all of it
+            let depth = match equal(skin) {
+                true => Depth::Equal,
+                false => Depth::Plain,
+            };
+            draw_ent_stages(
+                sink,
+                &dynamic.materials,
+                EntPass::World,
+                &vm.bind_groups[surf.bind_group],
+                skin,
+                surf,
+                (
+                    surf.first_index..last.first_index + last.index_count,
+                    d.inst,
+                ),
+                &mut at.bound,
+                depth,
+                &self.census,
+            );
+            crate::frame_prof::count(crate::frame_prof::Count::EntDraws, 1);
+            j += n;
+        }
+        (at, j)
     }
 
     /// Each light over the opaque surfaces it reaches (`dlight.rs`).

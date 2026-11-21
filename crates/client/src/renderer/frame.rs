@@ -1073,10 +1073,19 @@ impl Renderer {
                 && !soft_all
                 && msaa_samples() == 1
                 && self.dynamic.cod4_light.is_some();
-            // the draws the prepass laid down untested, which draw their
-            // colour under EQUAL: a `floatZ` prepass takes only 1.7's set
-            let in_prepass = |world: &WorldGpu, kind: DrawRef| {
-                takes_prepass(world, kind) && (!floatz || takes_floatz(world, kind) == Some(false))
+            // the world draws the prepass laid down untested, which draw
+            // their colour under EQUAL: a `floatZ` prepass takes only 1.7's
+            // set
+            let world_equal = |world: &WorldGpu, kind: DrawRef| {
+                prepass_on
+                    && takes_prepass(world, kind)
+                    && (!floatz || takes_floatz(world, kind) == Some(false))
+            };
+            // the entity skins whose first stage the prepass laid down
+            let ent_equal = |skin: &EntSkin| {
+                ent_prepass
+                    && ent_takes_prepass(skin)
+                    && (!floatz || skin.stages.first().is_some_and(|st| st.floatz))
             };
             self.census.set(PassCensus::default());
             // CoD4's entity runs and depth prepass replay from bundles as its
@@ -1269,9 +1278,7 @@ impl Renderer {
                         let model = &self.dynamic.models[self.dynamic.instances[e.inst as usize].0];
                         let skin = &model.skins[e.surf as usize];
                         let surf = &model.vm.surfaces[e.surf as usize];
-                        let equal = ent_prepass
-                            && ent_takes_prepass(skin)
-                            && (!floatz || skin.stages.first().is_some_and(|st| st.floatz));
+                        let equal = ent_equal(skin);
                         let takes = ent_takes_prepass(skin);
                         (
                             e.inst,
@@ -1333,6 +1340,35 @@ impl Renderer {
                 split_at,
                 dlights_drawn.then_some(dlight_at),
             ];
+            // a superset of `stops`, so no entity run crosses a run's end
+            let ent_stops = [copy_at, split_at, Some(dlight_at)];
+            // the run from `k`: the items up to the next stop or one `joins`
+            // turns down
+            let run_end = |k: usize, joins: &dyn Fn(SortedItem) -> bool| {
+                let mut end = k + 1;
+                while items.get(end).is_some_and(|&item| joins(item)) && !stops.contains(&Some(end))
+                {
+                    end += 1;
+                }
+                end
+            };
+            // whether this frame's depth and colour copies are taken by item
+            // `k` ([`Self::emit_world_draw`])
+            let fx_ready = |k: usize| {
+                (
+                    soft_on && self.cod4_options.zfeather && soft_from.is_some_and(|at| k >= at),
+                    distort_on && split_at.is_some_and(|at| k >= at),
+                )
+            };
+            // whether fx run `r` at item `k` draws on the soft pipelines,
+            // reading the depth copy: only after the split is it this frame's
+            let fx_soft = |r: &FxRun, k: usize| {
+                soft_on
+                    && (soft_all || r.feather)
+                    && soft_from.is_some_and(|at| k >= at)
+                    && !r.distort
+                    && r.cloud.is_none()
+            };
             for k in 0..=items.len() {
                 if k < skip_to {
                     continue;
@@ -1430,307 +1466,123 @@ impl Renderer {
                         SortedItem::Model(mi) if ent_draws[mi].gun => Frag::Gun,
                         SortedItem::Model(_) => Frag::Ents,
                         SortedItem::Mark(_) => Frag::Marks,
-                        SortedItem::Fx(fi) => {
-                            let r = &self.fx.runs[fi];
-                            let soft = soft_on
-                                && (soft_all || r.feather)
-                                && soft_from.is_some_and(|at| k >= at);
-                            if soft && !r.distort && r.cloud.is_none() {
-                                Frag::FxSoft
-                            } else {
-                                Frag::Fx
-                            }
-                        }
+                        SortedItem::Fx(fi) if fx_soft(&self.fx.runs[fi], k) => Frag::FxSoft,
+                        SortedItem::Fx(_) => Frag::Fx,
                     };
                     f.switch(&mut pass, Some(kind));
                 }
                 if gpu_groups.is_some() {
                     let g = self.draw_group(item, &world_list, &ent_draws, |fi| {
-                        let r = &self.fx.runs[fi];
-                        soft_on
-                            && (soft_all || r.feather)
-                            && soft_from.is_some_and(|at| k >= at)
-                            && !r.distort
-                            && r.cloud.is_none()
+                        fx_soft(&self.fx.runs[fi], k)
                     });
                     if let Some(gg) = &mut gpu_groups {
                         gg.pass(&mut pass, Some(g));
                     }
                 }
                 match item {
-                    SortedItem::World(_) if bundling => {
-                        // the run: the world items up to the next stop or
-                        // other item, recorded as `SortedItem::World`
-                        // below would encode them from `Emit::None`
+                    SortedItem::World(_) => {
                         let world = self.world.as_ref().expect("world draws come from a world");
-                        let mut end = k + 1;
-                        while matches!(items.get(end), Some(SortedItem::World(_)))
-                            && !stops.contains(&Some(end))
-                        {
-                            end += 1;
-                        }
-                        if matches!(emit, Emit::Gun { .. }) {
-                            pass.set_viewport(0.0, 0.0, vw, vh, 0.0, 1.0);
-                        }
-                        let fx_ready = (
-                            soft_on
-                                && self.cod4_options.zfeather
-                                && soft_from.is_some_and(|at| k >= at),
-                            distort_on && split_at.is_some_and(|at| k >= at),
-                        );
-                        let mut rec = Recording::default();
-                        rec.vertices(0, world.vertex_buf.slice(..));
-                        rec.indices(world.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                        let (mut cam_set, mut bound, mut groups) =
-                            (None, None, WorldGroups::default());
-                        for item in &items[k..end] {
-                            let SortedItem::World(wi) = *item else {
-                                unreachable!("a world run holds world items")
-                            };
-                            let WorldItem { set, draw: i, .. } = world_list[wi];
-                            let (draws, frame_draws, cam) = self
-                                .world_sets(world)
-                                .nth(set)
-                                .expect("collected from these sets");
-                            if cam_set != Some(set) {
-                                rec.group(0, cam, None);
-                                tally(&self.census, |c| c.bind_groups += 1);
-                                cam_set = Some(set);
+                        if bundling {
+                            // the run, recorded as one item at a time would
+                            // encode it from `Emit::None`
+                            let end = run_end(k, &|item| matches!(item, SortedItem::World(_)));
+                            if matches!(emit, Emit::Gun { .. }) {
+                                pass.set_viewport(0.0, 0.0, vw, vh, 0.0, 1.0);
                             }
-                            let fd = &frame_draws[i as usize];
-                            let depth = if prepass_on && in_prepass(world, fd.kind) {
-                                Depth::Equal
-                            } else {
-                                Depth::Plain
-                            };
-                            self.emit_world_draw(
+                            let mut rec = Recording::default();
+                            self.encode_world_items(
                                 &mut rec,
                                 world,
-                                &draws[fd.src as usize],
-                                fd.kind,
-                                &mut bound,
-                                &mut groups,
+                                &world_list,
+                                &items[k..end],
+                                None,
                                 frame.time,
-                                fx_ready,
-                                depth,
+                                fx_ready(k),
+                                world_equal,
                             );
-                        }
-                        bundles.draw(
-                            &mut pass,
-                            &self.device,
-                            rec,
-                            crate::frame_prof::Count::Bundled,
-                        );
-                        // a bundle leaves the pass's pipeline, groups and
-                        // buffers unset
-                        skip_to = end;
-                        emit = Emit::None;
-                    }
-                    SortedItem::World(wi) => {
-                        let world = self.world.as_ref().expect("world draws come from a world");
-                        let WorldItem { set, draw: i, .. } = world_list[wi];
-                        let (draws, frame_draws, cam) = self
-                            .world_sets(world)
-                            .nth(set)
-                            .expect("collected from these sets");
-                        let (mut bound, mut groups) = match emit {
-                            Emit::World {
-                                set: s,
-                                bound,
-                                groups,
-                            } if s == set => (bound, groups),
-                            Emit::World { bound, groups, .. } => {
-                                pass.set_bind_group(0, cam, &[]);
-                                tally(&self.census, |c| c.bind_groups += 1);
-                                (bound, groups)
-                            }
-                            other => {
-                                if matches!(other, Emit::Gun { .. }) {
-                                    pass.set_viewport(0.0, 0.0, vw, vh, 0.0, 1.0);
-                                }
-                                pass.set_vertex_buffer(0, world.vertex_buf.slice(..));
-                                pass.set_index_buffer(
-                                    world.index_buf.slice(..),
-                                    wgpu::IndexFormat::Uint32,
-                                );
-                                pass.set_bind_group(0, cam, &[]);
-                                tally(&self.census, |c| c.bind_groups += 1);
-                                (None, WorldGroups::default())
-                            }
-                        };
-                        let fd = &frame_draws[i as usize];
-                        // the copies are this frame's past the split only
-                        let fx_ready = (
-                            soft_on
-                                && self.cod4_options.zfeather
-                                && soft_from.is_some_and(|at| k >= at),
-                            distort_on && split_at.is_some_and(|at| k >= at),
-                        );
-                        let depth = if prepass_on && in_prepass(world, fd.kind) {
-                            Depth::Equal
+                            bundles.draw(
+                                &mut pass,
+                                &self.device,
+                                rec,
+                                crate::frame_prof::Count::Bundled,
+                            );
+                            // a bundle leaves the pass's pipeline, groups and
+                            // buffers unset
+                            skip_to = end;
+                            emit = Emit::None;
                         } else {
-                            Depth::Plain
-                        };
-                        self.emit_world_draw(
-                            &mut pass,
-                            world,
-                            &draws[fd.src as usize],
-                            fd.kind,
-                            &mut bound,
-                            &mut groups,
-                            frame.time,
-                            fx_ready,
-                            depth,
-                        );
-                        emit = Emit::World { set, bound, groups };
-                    }
-                    SortedItem::Model(mi) if ent_bundling && !ent_draws[mi].gun => {
-                        // the entity runs up to the next stop or other item,
-                        // recorded as the arm below would encode them from
-                        // `Emit::None`
-                        let mut end = k + 1;
-                        while let Some(&SortedItem::Model(m)) = items.get(end)
-                            && !ent_draws[m].gun
-                            && !stops.contains(&Some(end))
-                        {
-                            end += 1;
-                        }
-                        if matches!(emit, Emit::Gun { .. }) {
-                            pass.set_viewport(0.0, 0.0, vw, vh, 0.0, 1.0);
-                        }
-                        let dynamic = &self.dynamic;
-                        let mut rec = Recording::default();
-                        rec.group(0, &self.camera_bg, None);
-                        rec.group(2, &dynamic.bone_bg, None);
-                        rec.vertices(1, dynamic.instance_buf.slice(..));
-                        tally(&self.census, |c| c.bind_groups += 2);
-                        let (mut bound_model, mut bound) = (None, EntBound::default());
-                        // a superset of `stops`, so no run crosses `end`
-                        let run_stops = [copy_at, split_at, Some(dlight_at)];
-                        let mut j = k;
-                        while j < end {
-                            let SortedItem::Model(mi) = items[j] else {
-                                unreachable!("an entity run holds entity items")
+                            let at = match emit {
+                                Emit::World(at) => Some(at),
+                                other => {
+                                    if matches!(other, Emit::Gun { .. }) {
+                                        pass.set_viewport(0.0, 0.0, vw, vh, 0.0, 1.0);
+                                    }
+                                    None
+                                }
                             };
-                            let d = &ent_draws[mi];
-                            let model_at = dynamic.instances[d.inst as usize].0;
-                            let model = &dynamic.models[model_at];
-                            let vm = &model.vm;
-                            if bound_model != Some(model_at) {
-                                rec.vertices(0, vm.vertex_buf.slice(..));
-                                rec.indices(vm.index_buf.slice(..), wgpu::IndexFormat::Uint16);
-                                bound_model = Some(model_at);
-                            }
-                            let surf = &vm.surfaces[d.surf as usize];
-                            let n = ent_run(
-                                &items,
-                                j,
-                                &ent_draws,
-                                (&vm.surfaces, &model.skins),
-                                &run_stops,
-                            );
-                            let last = &vm.surfaces[d.surf as usize + n - 1];
-                            let skin = &model.skins[d.surf as usize];
-                            let depth = if ent_prepass
-                                && ent_takes_prepass(skin)
-                                && (!floatz || skin.stages.first().is_some_and(|st| st.floatz))
-                            {
-                                Depth::Equal
-                            } else {
-                                Depth::Plain
-                            };
-                            draw_ent_stages(
-                                &mut rec,
-                                &dynamic.materials,
-                                EntPass::World,
-                                &vm.bind_groups[surf.bind_group],
-                                skin,
-                                surf,
-                                (
-                                    surf.first_index..last.first_index + last.index_count,
-                                    d.inst,
-                                ),
-                                &mut bound,
-                                depth,
-                                &self.census,
-                            );
-                            crate::frame_prof::count(crate::frame_prof::Count::EntDraws, 1);
-                            j += n;
+                            emit = Emit::World(self.encode_world_items(
+                                &mut pass,
+                                world,
+                                &world_list,
+                                &items[k..=k],
+                                at,
+                                frame.time,
+                                fx_ready(k),
+                                world_equal,
+                            ));
                         }
-                        bundles.draw(
-                            &mut pass,
-                            &self.device,
-                            rec,
-                            crate::frame_prof::Count::EntBundled,
-                        );
-                        skip_to = end;
-                        emit = Emit::None;
                     }
                     SortedItem::Model(mi) if !ent_draws[mi].gun => {
-                        let d = &ent_draws[mi];
-                        let dynamic = &self.dynamic;
-                        let model_at = dynamic.instances[d.inst as usize].0;
-                        let model = &dynamic.models[model_at];
-                        let vm = &model.vm;
-                        // the instance comes in as `first_instance` over the
-                        // whole instance buffer, so instances of one model
-                        // keep its buffers bound
-                        let (same_model, mut bound) = match emit {
-                            Emit::Ent { model, bound } => (model == model_at, bound),
-                            other => {
-                                if matches!(other, Emit::Gun { .. }) {
-                                    pass.set_viewport(0.0, 0.0, vw, vh, 0.0, 1.0);
-                                }
-                                pass.set_bind_group(0, &self.camera_bg, &[]);
-                                pass.set_bind_group(2, &dynamic.bone_bg, &[]);
-                                pass.set_vertex_buffer(1, dynamic.instance_buf.slice(..));
-                                tally(&self.census, |c| c.bind_groups += 2);
-                                (false, EntBound::default())
-                            }
-                        };
-                        if !same_model {
-                            pass.set_vertex_buffer(0, vm.vertex_buf.slice(..));
-                            pass.set_index_buffer(
-                                vm.index_buf.slice(..),
-                                wgpu::IndexFormat::Uint16,
+                        if ent_bundling {
+                            // the entity runs, recorded as the items one at a
+                            // time would encode them from `Emit::None`
+                            let end = run_end(
+                                k,
+                                &|item| matches!(item, SortedItem::Model(m) if !ent_draws[m].gun),
                             );
-                        }
-                        let surf = &vm.surfaces[d.surf as usize];
-                        let stops = [copy_at, split_at, Some(dlight_at)];
-                        let n =
-                            ent_run(&items, k, &ent_draws, (&vm.surfaces, &model.skins), &stops);
-                        let last = &vm.surfaces[ent_draws[mi].surf as usize + n - 1];
-                        let skin = &model.skins[d.surf as usize];
-                        // a run is one skin, so one answer for all of it
-                        let depth = if ent_prepass
-                            && ent_takes_prepass(skin)
-                            && (!floatz || skin.stages.first().is_some_and(|st| st.floatz))
-                        {
-                            Depth::Equal
+                            if matches!(emit, Emit::Gun { .. }) {
+                                pass.set_viewport(0.0, 0.0, vw, vh, 0.0, 1.0);
+                            }
+                            let mut rec = Recording::default();
+                            self.encode_ent_items(
+                                &mut rec,
+                                &items,
+                                (k, end),
+                                &ent_draws,
+                                &ent_stops,
+                                None,
+                                ent_equal,
+                            );
+                            bundles.draw(
+                                &mut pass,
+                                &self.device,
+                                rec,
+                                crate::frame_prof::Count::EntBundled,
+                            );
+                            skip_to = end;
+                            emit = Emit::None;
                         } else {
-                            Depth::Plain
-                        };
-                        draw_ent_stages(
-                            &mut pass,
-                            &dynamic.materials,
-                            EntPass::World,
-                            &vm.bind_groups[surf.bind_group],
-                            skin,
-                            surf,
-                            (
-                                surf.first_index..last.first_index + last.index_count,
-                                d.inst,
-                            ),
-                            &mut bound,
-                            depth,
-                            &self.census,
-                        );
-                        skip_to = k + n;
-                        crate::frame_prof::count(crate::frame_prof::Count::EntDraws, 1);
-                        emit = Emit::Ent {
-                            model: model_at,
-                            bound,
-                        };
+                            let at = match emit {
+                                Emit::Ent(at) => Some(at),
+                                other => {
+                                    if matches!(other, Emit::Gun { .. }) {
+                                        pass.set_viewport(0.0, 0.0, vw, vh, 0.0, 1.0);
+                                    }
+                                    None
+                                }
+                            };
+                            let (at, next) = self.encode_ent_items(
+                                &mut pass,
+                                &items,
+                                (k, k + 1),
+                                &ent_draws,
+                                &ent_stops,
+                                at,
+                                ent_equal,
+                            );
+                            skip_to = next;
+                            emit = Emit::Ent(at);
+                        }
                     }
                     SortedItem::Model(mi) => {
                         let d = &ent_draws[mi];
@@ -1791,7 +1643,6 @@ impl Renderer {
                             image,
                             blend,
                             quads: count,
-                            feather,
                             ..
                         } = &fx.runs[fi];
                         let Some(Some(bg)) = fx.textures.get(image) else {
@@ -1842,10 +1693,8 @@ impl Renderer {
                             emit = Emit::None;
                             continue;
                         }
-                        // only after the split is the depth copy this frame's
-                        let soft = soft_on
-                            && (soft_all || *feather)
-                            && soft_from.is_some_and(|at| k >= at);
+                        // a distortion or cloud run went on above
+                        let soft = fx_soft(&fx.runs[fi], k);
                         let bound = match emit {
                             Emit::Fx { blend, soft: s } => {
                                 if soft && !s {
