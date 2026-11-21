@@ -2015,7 +2015,25 @@ VERIFIED (the runs on the 780M; `renderer/frame.rs` and `wgpu-core` 30.0.2
 writes no span (43's census), rose 0.03. One run a side with the base always first
 cannot tell that from the APU's clocks or the bots' fight; the next run
 alternates three a side on mp_backlot and mp_shipment, and adds a build
-that writes the whole lists, to split the partial writes from the rest.
+that writes the whole lists, to split the partial writes from the rest. The kit mode and the switch are in 42.2.
+
+### 42.2 The `finish` probe
+
+What the next run takes (42.1's open item):
+
+- `VCOD_WRITE_ALL=1` on `vcod`: the light sets, instances, bones and the
+  CoD4 volume's blocks are written whole each frame, from offset 0, not
+  their changed span (`renderer::write_span`). Off by default; read once.
+- The GPU kit's `finish` mode: mp_backlot and mp_shipment as `perf-frame`
+  runs them (12 shooting bots, `war`, 25 s), three rounds of the base, the
+  candidate and the candidate with `VCOD_WRITE_ALL=1`, each round in
+  another order so no build always runs first, each run's `finish`,
+  `build`, `encode`, `submit`, `gpu.total`, `calls`, `entcalls` and
+  `entbundled` with their mean.
+
+A `finish` that falls with the whole lists written puts the rise on the
+partial writes; one that holds puts it elsewhere (the APU's clocks, the
+fight). Pending, on a card.
 
 ## 43. The renderer refactors checked on a card (P2, P3, P4)
 

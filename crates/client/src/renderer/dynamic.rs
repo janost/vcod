@@ -644,12 +644,24 @@ impl<T: bytemuck::Pod> Written<T> {
     }
 }
 
-/// What a write of `new` over `old` covers: [`changed_span_within`].
+/// `VCOD_WRITE_ALL=1`: the entity lists (light sets, instances, bones,
+/// volume blocks) are written whole each frame, not their changed span
+/// (cod4-client-perf.md 42.1's A/B).
+fn write_all() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("VCOD_WRITE_ALL").is_ok_and(|v| v == "1"))
+}
+
+/// What a write of `new` over `old` covers: [`changed_span_within`], or
+/// all of `new` under [`write_all`].
 pub(crate) fn write_span<T: bytemuck::Pod>(
     old: &[T],
     new: &[T],
     maybe: std::ops::Range<usize>,
 ) -> Option<std::ops::Range<usize>> {
+    if write_all() {
+        return (!new.is_empty()).then_some(0..new.len());
+    }
     let span = changed_span_within(old, new, maybe);
     #[cfg(test)]
     assert_eq!(
