@@ -477,11 +477,14 @@ impl App {
         }
         log::info!("playing demos/{file}");
         self.connect_addr = None;
+        // `timedemo`'s csv goes where `record` writes.
+        let csv = (self.cod4_demo_dirs()[0].clone(), self.shell.int("r_mode"));
         self.cod4_loading = Some(Loader::start_demo(
             name.to_string(),
             data,
             timedemo,
             self.game_dir.clone(),
+            csv,
         ));
     }
 

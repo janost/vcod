@@ -1063,8 +1063,22 @@ fn entity_models(
             },
         );
     }
+    // The effects' model elements draw as entity models too
+    // (`FX_DrawElem_Model`, cod4-effects.md 9).
+    let fx_models = zones.iter().flat_map(|a| {
+        a.fx.iter()
+            .flat_map(|f| &f.elems)
+            .flat_map(|e| &e.visuals)
+            .filter_map(move |v| match v {
+                vcod_cod4::assets::fx::FxVisual::Model(Some(id)) => Some(model_name(a, *id)),
+                _ => None,
+            })
+    });
     // The map's dynamic entities draw as entity models (`vcod_cod4::dynent`).
-    let dynents = zones.iter().flat_map(|a| vcod_cod4::dynent::model_names(a));
+    let dynents = zones
+        .iter()
+        .flat_map(|a| vcod_cod4::dynent::model_names(a))
+        .chain(fx_models);
     let wanted = ents.models.iter().cloned().chain(dynents).chain(
         weapons
             .values()
@@ -1462,6 +1476,38 @@ mod tests {
         assert_eq!(shot.as_deref(), Some("loadscreen_mp_crash"));
 
         assert_eq!(walked.levelshot.as_deref(), Some("loadscreen_mp_crash"));
+    }
+
+    /// The effects' model elements load with the entity models, so the
+    /// fx system's debris finds its xmodel (cod4-effects.md 9): every
+    /// model element of mp_crash's and `common_mp`'s effects whose xmodel
+    /// a zone holds whole. Vacuous without `COD4_DIR`.
+    #[test]
+    fn effect_model_elements_load_with_the_entity_models() {
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let (models, _, _) =
+            super::load_bodies(install.root(), "mp_crash", &Default::default()).unwrap();
+        let common = super::Zone::open_path(&install.zone("english", "common_mp")).unwrap();
+        let a = super::walk(common, super::WalkOptions { keep_bulk: false })
+            .unwrap()
+            .assets;
+        let named: std::collections::BTreeSet<String> =
+            a.fx.iter()
+                .flat_map(|f| &f.elems)
+                .flat_map(|e| &e.visuals)
+                .filter_map(|v| match v {
+                    vcod_cod4::assets::fx::FxVisual::Model(Some(id)) => {
+                        let x = &a.xmodels[id.index()];
+                        (!x.name.starts_with(',')).then(|| x.name.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+        assert!(named.len() > 5, "{named:?}");
+        let missing: Vec<_> = named.iter().filter(|n| !models.contains_key(*n)).collect();
+        assert!(missing.is_empty(), "{missing:?}");
     }
 
     /// Fly mode over mp_crash plays what a session on it does (C4-19's
