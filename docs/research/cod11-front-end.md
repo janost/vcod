@@ -1446,6 +1446,26 @@ file).
   implicit images take 0x4ebf20's path. VERIFIED: 0x80 is set at 0x4eee2d
   (in 0x4eed80, for an image without flag 0x100); which images reach it is
   not traced.
+- The sheet candidates. VERIFIED (the instructions), 0x4eed80's only
+  caller is the shader-type path's image loop (0x4fc2ce, 0x4fc0c0), which
+  loads a typed skin's `$texturename` image (bundle slot `+0x50 == 10`)
+  with `edi = (0x16c4e68 == 0)`; 0x4eed80 sets 0x80 at 0x4eee2d only when
+  that is 0 (a model number is set, so a model registration is running),
+  `r_optimizeTextures` (0x16c3854) and `r_optimize` (0x16c383c) are both
+  non-zero and flag 0x100 is clear, else clears it (0x4eee34). 0x4ed9f0,
+  called first, parses a `:` suffix of the name (`strchr` 0x526200 with
+  0x3a) into four floats compared against 1.0 (0x568e60). VERIFIED,
+  0x4ec730: an image keeping 0x80 is created (0x4ec310) and, when its
+  format is `GL_RGBA` (0x1908) or both sides are 4 or more, not uploaded:
+  0x4ec79e stores its format and the model number (0x16c4e68 into `+0x6c`)
+  and returns it for the sheet build; else 0x80 is cleared and the image
+  goes up through 0x4ec490. VERIFIED, 0x4f0d20 sets a shader's 0x800 when
+  a stage image kept 0x80 (0x4f0db3). INFERRED: so with the defaults the
+  typed skins (`type@image`) of the models registered before the precache
+  ends draw from `*sheet%03i` atlases, with the sheet path's picmip
+  (0x4ef590) and remapped texture coordinates. vcod uploads each such
+  image alone (backlog 154, 157); the packer (0x4fcdf0, 0x4ef8e0,
+  0x4ef800) and the coordinate remap are not read.
 - `r_texturebits`. VERIFIED, 0x4ebe30, uncompressed only (a compressed
   format returns at once): an image with any alpha below 255 goes up as
   `GL_RGBA4` (0x8056) with 16, `GL_RGBA8` with 32, else generic `GL_RGBA`;
