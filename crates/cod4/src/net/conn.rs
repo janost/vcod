@@ -604,7 +604,7 @@ impl Conn {
     /// The block a later `requeststats` sends: the profile's as the
     /// server's `N`s and the menus' `statset`s left it. Retail's packets
     /// read the live `LiveStorage` buffer those write (`iw3mp.exe`
-    /// 0x46af95; cod4-netfields.md, "The stats file").
+    /// 0x46af95; cod4-netfields.md 10.2).
     pub fn set_stats(&mut self, stats: &Stats) {
         if self.stats.0[..] != stats.0[..] {
             self.stats.0.copy_from_slice(&stats.0[..]);

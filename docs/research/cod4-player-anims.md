@@ -395,7 +395,7 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   client dump).
 - 1.7 turns a player's six control bones in `tag_origin`'s frame,
   `r * c * r^-1 * p`, the anim's own turn of each dropped
-  (`DObjCalcSkel`'s second arm, cod4-gsc.md 3.2, "The skeleton").
+  (`DObjCalcSkel`'s second arm, cod4-gsc.md 3.2.5).
   VERIFIED (gdb). CoD1 turned them in the model's frame
   (`apply_controllers`), which reads the same while the legs face the view
   and moves the head by the legs' yaw off it: 5 units on a body strafing 45

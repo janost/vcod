@@ -4,7 +4,7 @@ Every claim here is VERIFIED by the sweep itself (vcod-server and the
 in-process client on this repo's code, lavapipe) unless it carries its
 own label.
 
-## The tool
+## 1. The tool
 
 `COD4_DIR=... cargo test -p vcod --bins -- --ignored cod4_map_sweep
 --nocapture` (`crates/client/src/play/cod4_sweep.rs`, its header lists the
@@ -24,7 +24,7 @@ client's and the server's own warnings (repeats counted), and a panic.
 Run one map a process (`VCOD_SWEEP_MAPS=<map>`, `VCOD_SWEEP_JOBS=1`)
 under a local wrapper script: a map peaks near 3 GB and takes 5 to 8 minutes.
 
-## Run of 2026-10-27
+## 2. Run of 2026-10-27
 
 All 21 maps, 126 pairs, one map a process under a local wrapper, with
 `VCOD_SWEEP_LEVEL_SECS=180`. The first ten maps ran on a tree with the
@@ -181,7 +181,7 @@ with no script error and no panic. Against the 2026-10-26 run:
 - The stall share moves from run to run (mp_broadcast `koth` 4.8 on an
   earlier tree, 0.0 here); every other column matched.
 
-## Findings and fixes, by count
+## 3. Findings and fixes, by count
 
 Fixes 1 to 7 came out of the 2026-10-26 run, 8 to 10 out of the 2026-10-27 one.
 
@@ -253,7 +253,7 @@ Fixes 1 to 7 came out of the 2026-10-26 run, 8 to 10 out of the 2026-10-27 one.
    ahead of the frame's lines. VERIFIED (the re-sweep files it under
    `sab`).
 
-## Left, ranked
+## 4. Left, ranked
 
 1. Bot stalls: after fix 9 no pair of the three maps re-swept is over
    1 %; mp_vacant `sd` (2.1 %) was not re-swept.
@@ -266,7 +266,7 @@ Fixes 1 to 7 came out of the 2026-10-26 run, 8 to 10 out of the 2026-10-27 one.
    `zone/english/*.ff` is the script line. VERIFIED (the inflated zones).
    Retail has nothing to play there either. INFERRED.
 
-## The soak
+## 5. The soak
 
 The sweep checks that every level loads, ends and rotates; the soak
 checks what a player would hit on the way. `tools/cod4_soak.sh <outdir>
@@ -300,7 +300,7 @@ because the harness asks it to (`wait_for_graph`). A live server builds
 the graph in the background, so the soak counts no server stall before
 the graph lands.
 
-### Run of 2026-10-27
+### 5.1 Run of 2026-10-27
 
 All 21 maps x 5 gametypes, 105 pairs, about 25 minutes a map, with fix 1
 below in. Totals: 522 spawns, 445 deaths, 951 frags,

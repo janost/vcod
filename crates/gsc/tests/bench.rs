@@ -2,7 +2,7 @@
 //! (`maps/mp/gametypes/_spawnlogic.gsc`) cut to its loops, one call per
 //! spawning player, every spawn point weighed against every other player,
 //! over a host that answers the entity fields and builtins it reads from
-//! plain tables (cod4-server-frame.md 9, "The spawn wave"). Run in release:
+//! plain tables (cod4-server-frame.md 9.7). Run in release:
 //!
 //!     cargo test --release -p vcod-gsc --test gsc bench:: -- --ignored --nocapture
 //!

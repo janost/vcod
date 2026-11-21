@@ -1,7 +1,7 @@
 //! A multiply-rotate hasher (rustc's FxHash) for the VM's maps keyed by
 //! atoms, ids and short strings. SipHash's flood resistance buys nothing on
 //! script data, and hashing was a tenth of the interpreter's time in the
-//! spawn wave (cod4-server-frame.md 9, "The spawn wave"). No map keyed by
+//! spawn wave (cod4-server-frame.md 9.7). No map keyed by
 //! it is iterated where the order shows.
 
 use std::collections::HashMap;

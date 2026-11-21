@@ -485,4 +485,4 @@ only yardstick.
 --nocapture` runs `tests/bench.rs`: CoD2's `getSpawnpoint_DM` loops for
 60 spawns over a table host, best of ten, and the result it must keep. A
 change to the interpreter, the heap or the scheduler reports it before and
-after (cod4-server-frame.md 9, "The spawn wave").
+after (cod4-server-frame.md 9.7).

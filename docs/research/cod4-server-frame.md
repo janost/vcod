@@ -59,7 +59,7 @@ Its steps, in order:
    unlike CoD1 and CoD2, which run one round
    of timeouts and messages per `SV_Frame`.
 
-### `SV_PreFrame`
+### 1.1 `SV_PreFrame`
 
 `SV_PreFrame` (0x8176ede) opens a profile scope named `SERVER: bots`
 (0x82322ff). VERIFIED. It then calls 0x817bed2 and runs, in this order
@@ -213,7 +213,7 @@ keep one pass.
 
 ## 8. `sv_fps`
 
-### The dvar
+### 8.1 The dvar
 
 `SV_Init` registers `sv_fps` (name 0x82317c1, description `Server frames
 per second` 0x82317a8) through the int registrar 0x81a2596 with default
@@ -229,7 +229,7 @@ INFERRED. A change takes the next frame: an rcon `sv_fps 40` on a server
 started at 30 stepped the next snapshot 25 past the last, and `sv_fps 20`
 after it 50. VERIFIED live.
 
-### What it scales
+### 8.2 What it scales
 
 The frame is `1000 / sv_fps` in integer milliseconds (0x81770c4's
 `idiv`). INFERRED. Live, loopback,
@@ -301,7 +301,7 @@ What stays 50 whatever the dvar:
   steering) read neither clock. INFERRED (no `level.frametime` read in
   0x8095928..0x8098832).
 
-### What vcod does with it
+### 8.3 What vcod does with it
 
 `Cod4Server::frame_ms` reads the dvar each frame (out of the domain it
 reads 20, and the console refuses such a value with retail's text), and
@@ -387,7 +387,7 @@ tick, measured; retail has no counterpart. Every number below is VERIFIED
 (the logs of the runs named), on a many-core machine shared with other
 jobs, each run pinned to cores 0-7 (`taskset`) under a memory cap.
 
-### The instruments
+### 9.3 The instruments
 
 - `vcod_server::tick_profile`: a `phase` guard times a part of the tick
   per thread, nested parts named `outer/inner`: `console`, `packets`,
@@ -447,7 +447,7 @@ jobs, each run pinned to cores 0-7 (`taskset`) under a memory cap.
   the waits, and `VCOD_SOAK_CLIENT_LOG_MS` the client's slow frames
   beside them, all stamped with the seconds since the process started.
 
-### The server alone
+### 9.4 The server alone
 
 | run | ticks | past 20 ms | worst outside a load |
 |---|---|---|---|
@@ -472,7 +472,7 @@ jobs, each run pinned to cores 0-7 (`taskset`) under a memory cap.
   (a phase under 1 ms is left off the line), and none grew with the
   level's age.
 
-### The soak's spikes
+### 9.5 The soak's spikes
 
 The soak's server shares its process, and eight cores, with a client and
 lavapipe. Four soak runs (`tools/cod4_soak.sh`):
@@ -517,7 +517,7 @@ not compiled).
 The soak's table counts the stalls past 100 ms on a CPU apart (`server
 stalls, on CPU`): a stall there is the server's own work.
 
-### Long runs, past 40 ms
+### 9.6 Long runs, past 40 ms
 
 Server alone, the same core pinning, every tick past 40 ms logged
 (`SPIKE_MS=40`, `VCOD_TICK_PROFILE_MS=40`); `bot_match`'s first tick
@@ -544,7 +544,7 @@ of a level, which waits on the graph it asks for, is left out. VERIFIED
   harness reading (the client's draws in the same process) is the one
   left standing. INFERRED.
 
-### The spawn wave
+### 9.7 The spawn wave
 
 A live CoD2 server with bots logged a 113 ms tick whose `frame` was
 103.9 ms with only 8.4 ms named (`models/script` x992), on a CPU, 1548
@@ -593,7 +593,7 @@ minor faults. The phases above, added for it, name the rest. VERIFIED
   was 13% of the script's samples. INFERRED (75 gdb stack samples of a
   dev build).
 
-#### The interpreter and the host, made faster
+#### 9.7.1 The interpreter and the host, made faster
 
 A release build profiled with gperftools' CPU profiler (2 kHz, 24 waves
 of the 60-bot mp_toujane `dm` run, `RESTART=5`) put the script pass's
@@ -672,7 +672,7 @@ queued), the ticks `TICKSTATS=1`'s ms a tick. VERIFIED (the logs).
   `getEntArray`'s walk of every entity). The first two are "The restart's
   load" below.
 
-#### The restart's load
+#### 9.7.2 The restart's load
 
 A CoD2 `map_restart` (the console's, a full `SV_SpawnServer`) and a
 `fast_restart` (the script's `map_restart(true)`, every `sd` round) both
@@ -962,7 +962,7 @@ many-core machine under a memory cap, one match a process
 (`JOBS=1`), seed 1, 2400 ticks (2 minutes), tick 0 (the nav graph's
 wait) left out.
 
-### The instrument
+### 10.1 The instrument
 
 `bot_match TICKSTATS=1` (any game) prints each match's tick time (p50,
 p90, p99, max and the slowest tick's phases) and every
@@ -982,7 +982,7 @@ Live, the same phases on a running server:
 
 logs every tick past 15 ms with its phases while a client plays on it.
 
-### Before and after
+### 10.2 Before and after
 
 ms a tick, p50 / p99 / max. Before is the base, after the
 change; each pair's `DIGEST=1` line is the same, so
@@ -1002,7 +1002,7 @@ every bot did the same thing on every tick. VERIFIED (the runs' logs).
 `max_clients` is the bots plus two. The 20 to 27 ms maxima left on
 mp_crash are a level's first scripted frames (`frame/scripts`, tick 60).
 
-### What cost what
+### 10.3 What cost what
 
 - CoD4: `touch_items` (`G_TouchItems` per item and player, each frame)
   rebuilt every playing client's pmove state off the wire playerstate,
@@ -1047,7 +1047,7 @@ mp_crash are a level's first scripted frames (`frame/scripts`, tick 60).
   (CoD1 mp_carentan) and 0.45 ms (CoD2 mp_toujane) to `messages`, about
   0.07 ms a client. VERIFIED.
 
-### What is left
+### 10.4 What is left
 
 CoD4 at 32 bots on mp_crossfire spends its tick in the bots' own work:
 the drop probe's box traces (`probes/drops and walls`, 4.6 ms mean, 45 ms
@@ -1065,7 +1065,7 @@ cmd: every change below is a pure-cost path. vcod's own tick; retail has
 no counterpart. Runs as section 10's (seed 1, 2400 ticks, `JOBS=1`, the
 shared machine under a memory cap).
 
-### Before and after
+### 11.1 Before and after
 
 ms a tick, p50 / p99 / max, `war`. Before is the base,
 after the change. Each pair's `DIGEST=1` line is the
@@ -1085,7 +1085,7 @@ mp_carentan) `tdm` matches. VERIFIED (the runs' logs).
 The before column is lower than section 10's after: other branches
 landed between the two.
 
-### What cost what
+### 11.2 What cost what
 
 A sampling profile (gdb's backtraces on a signal, 300 to 400 samples of
 a 32-bot mp_crossfire match) put two thirds of the tick in
@@ -1126,7 +1126,7 @@ both pmoves.
   the waiters; it picks the waiters first, then sorts them, which keeps
   their order (a stable sort of a subsequence).
 
-### What is left
+### 11.3 What is left
 
 At 32 bots on mp_crossfire the tick's mean is the follower's walks
 (`bots/route`, 2.4 ms), CoD4's pmove for the bots' cmds (`bots/moves`,
@@ -1141,7 +1141,7 @@ repeat one the same sweep already made. VERIFIED (counters in a
 
 ## 12. Off the LAN: the snapshot rate and the unacked back-off
 
-### The runs
+### 12.1 The runs
 
 `tools/cod4_offlan_capture.sh retail|ours <dir> [SVFPS:SNAPS ...]`:
 `cod4_lnxded` (or vcod-server) at 203.0.113.1, `cod4_probe` at
@@ -1154,7 +1154,7 @@ over rcon and joins a spectator for 12 s; `cod4_probe --snaps N` sends a
 userinfo with that `snaps` on its first snapshot. mp_crash `war`, rate
 25000, `sv_maxRate` 0.
 
-### The rate
+### 12.2 The rate
 
 A message goes out on the first frame whose `svs.time` has reached the
 slot's `nextSnapshotTime` (0x817b080's `jl`, section 4). INFERRED (control
@@ -1182,7 +1182,7 @@ So off the LAN no client gets more than `snaps` 30 allows, and one at
 frame (section 8). vcod-server matched every row before this run; nothing
 changed for it.
 
-### The back-off
+### 12.3 The back-off
 
 `SV_SendMessageToClient` reads the slot's state first (0x8178aff). For a
 client at `CS_ACTIVE` (4) whose `deltaMessage` (+0x8) is not negative and

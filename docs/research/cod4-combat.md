@@ -452,7 +452,7 @@ gates).
   step past the shooter's chest a frame before its strike built no pose.
 - The pose (`G_DObjCalcBone` 0x80ca732, and 0x80ca99e) builds a body's
   bones once a frame, running the entity handler's `controller` first:
-  cod4-gsc.md 3.2, "The skeleton", has the path. The player's handler's
+  cod4-gsc.md 3.2.5, has the path. The player's handler's
   controller is 0x80a480e (handler +0x1c, called at 0x80ca785 and
   0x80ca9d3). VERIFIED (the instructions). The player's controller is
   `BG_Player_DoControllersInternal` (0x804cf90) at `level.frametime`
@@ -1082,7 +1082,7 @@ prone and killcam runs. VERIFIED (the gates).
   -134.989, roll 90, ground 1022. VERIFIED live (`play-1.7-prone-*`).
   Ours matches every word of both runs' items, on the live frames and the
   killcam's, the hit's `trDelta` included. VERIFIED (the gates). Before
-  the bodies' tags took 1.7's skeleton (cod4-gsc.md 3.2, "The skeleton")
+  the bodies' tags took 1.7's skeleton (cod4-gsc.md 3.2.5)
   the `trDelta` read (-24.8591, -24.4986, -31.1734) against (-24.8587,
   -24.4981, -31.1728) prone, (4.3898, -0.9870, -39.2181) against (4.3897,
   -0.9870, -39.2175) standing, the tag some 3e-5 units off retail's,
@@ -2059,7 +2059,7 @@ What the captures fixed on ours:
 
 The dropped weapon (6.1) matches word for word on both runs, the hit's
 `trDelta` included, since the bodies' tags compose through 1.7's skeleton
-(cod4-gsc.md 3.2, "The skeleton"); before, the posed tag sat some 3e-5
+(cod4-gsc.md 3.2.5); before, the posed tag sat some 3e-5
 units off retail's. VERIFIED (the gates, both ways).
 
 What the gates once listed, each closed:
@@ -2205,7 +2205,7 @@ What the gates once listed, each closed:
   one to three ulps from retail's and x and y ten and six. VERIFIED (the
   gate).
 - The head bone's matrix: a player's six control bones go down
-  `DObjCalcSkel`'s second arm (cod4-gsc.md 3.2, "The skeleton"), turned
+  `DObjCalcSkel`'s second arm (cod4-gsc.md 3.2.5), turned
   in `tag_origin`'s frame with no anim of their own, where the server
   had posed them as CoD1's `G_DObjSetControlTagAngles` did, a glam quat
   turned into the parent's frame. VERIFIED (gdb; `skel_ab`). Ported

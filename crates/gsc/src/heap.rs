@@ -32,7 +32,7 @@ pub enum ArrayKey {
 /// One array's elements: the int keys 0, 1, 2, ... in a vector while they
 /// run unbroken from 0, every other key in a `BTreeMap`. Most script arrays
 /// are lists, and the spawn wave reads and copies them in its inner loops
-/// (cod4-server-frame.md 9, "The spawn wave"). Walked in `ArrayKey` order:
+/// (cod4-server-frame.md 9.7). Walked in `ArrayKey` order:
 /// the negative ints, the vector, then the rest. `sparse` never holds an
 /// int key in `0..=dense.len()`.
 #[derive(Clone, Default)]

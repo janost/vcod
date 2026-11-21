@@ -445,7 +445,7 @@ messages; the shooter: 349 and 382. VERIFIED live.
   cod4-gsc.md 3.2), which the hardpoint gates read; this gate does not
   re-encode them.
 
-### The stats block
+### 10.1 The stats block
 
 The client sends 0x2000 bytes in seven `stats` packets
 (`cod4-handshake.md` 3), the buffer `LiveStorage` keeps at `iw3mp.exe`
@@ -492,7 +492,7 @@ The client sends 0x2000 bytes in seven `stats` packets
   first-time client sends is not settled. INFERRED (the order
   in `LiveStorage_NoStatsFound`).
 
-### The stats file
+### 10.2 The stats file
 
 vcod keeps its own stats file,
 `players/profiles/<profile>/[<fs_game>/]vcod_mpdata`, the 0x2000-byte
@@ -521,7 +521,7 @@ read nor written.
   there (cod4-front-end.md 4, 4.1).
 - The chain on vcod-server: a ranked match (`sv_pure 1`) runs
   `_rank.gsc`'s `giveRankXP`, whose `setStat`s go out as `N`
-  (cod4-gsc.md, "The stats, the loadout, the perks"). Gate:
+  (cod4-gsc.md 7.3). Gate:
   `stat_tests::cod4_ranked_xp_unlocks_create_a_class` (300 XP: stat 2301
   300, rank 3, 260 at 2).
 

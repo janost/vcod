@@ -1100,7 +1100,7 @@ mod tests {
         assert_ne!(perks & (1 << bit), 0, "{} in {perks:#x}", p.perk_name);
     }
 
-    /// `bg_perkNames`, the `perks` bit order (cod4-gsc.md, "The perks").
+    /// `bg_perkNames`, the `perks` bit order (cod4-gsc.md 7.4).
     const PERK_NAMES: [&str; 20] = [
         "specialty_gpsjammer",
         "specialty_bulletaccuracy",

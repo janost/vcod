@@ -8,7 +8,7 @@
 //! read in place off the caller's stack, and a returned frame's buffers go
 //! back to `Vm::frame_pool`. Two numbers of one type take an inline arm in
 //! the arithmetic and compare ops ahead of the general `eval_*`
-//! (docs/research/cod4-server-frame.md 9, "The spawn wave", and 9.2;
+//! (docs/research/cod4-server-frame.md 9.7, and 9.2;
 //! `tests/bench.rs` is the microbench).
 
 use std::rc::Rc;

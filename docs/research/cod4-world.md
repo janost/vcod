@@ -529,7 +529,7 @@ Gates: `cod4_spot_and_omni_light_a_sphere_as_the_hlsl_does`,
 `cod4_world_surface_takes_its_primary_light_as_the_hlsl_does` (lavapipe),
 `primarylight`'s unit tests, `lightgrid_census`.
 
-#### The spot's shadow map (techniques 11 and 13)
+#### 3.5.1 The spot's shadow map (techniques 11 and 13)
 
 - The bools and the floats register through `Dvar_RegisterBool`'s call
   (0x56c350); a float's value, minimum and maximum are the constants

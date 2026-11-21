@@ -422,7 +422,7 @@ On by default; `RETREAT=` in `bot_match`.
   the plan reaches no nearer is passed over (bot-objectives.md 14.8).
   Open.
 
-### Measured (2026-10-20)
+### 5.1 Measured (2026-10-20)
 
 Measured with `bot_fights` (since folded into `bot_match`): 8 bots, `tdm`,
 3000 ticks, mp_carentan, mp_harbor, mp_depot, mp_brecourt, 16 seeds each,
