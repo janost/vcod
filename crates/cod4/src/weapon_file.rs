@@ -111,7 +111,11 @@ pub fn parse(name: &str, text: &[u8], anim_types: &[&str]) -> Result<TextWeapon>
         bail!("{name} is too long of a weapon file to parse");
     }
     let body = vcod_common::text::latin1(body);
-    let pairs = info_pairs(&body);
+    // Each key's first value, keys folded to lower case.
+    let mut first: HashMap<String, &str> = HashMap::new();
+    for (k, v) in info_pairs(&body) {
+        first.entry(k.to_ascii_lowercase()).or_insert(v);
+    }
     let mut raw = vec![0u8; SIZE];
     let mut weapon = Weapon {
         name: name.to_string(),
@@ -142,7 +146,7 @@ pub fn parse(name: &str, text: &[u8], anim_types: &[&str]) -> Result<TextWeapon>
     let put = |raw: &mut [u8], at: usize, v: u32| raw[at..at + 4].copy_from_slice(&v.to_le_bytes());
     for &(key, at, ty) in FIELDS.iter() {
         let at = usize::from(at);
-        let Some(&(_, v)) = pairs.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)) else {
+        let Some(&v) = first.get(&key.to_ascii_lowercase()) else {
             continue;
         };
         if v.is_empty() {
@@ -267,17 +271,34 @@ fn finish(weapon: &mut Weapon, raw: &mut [u8]) {
 /// `weapons/mp/<name>` off `fs`, with `mp/playeranimtypes.txt`'s names
 /// (`BG_LoadWeaponDef_LoadObj`); `None` when the file is not there.
 pub fn load(fs: &(impl AssetSource + ?Sized), name: &str) -> Option<Result<TextWeapon>> {
-    let text = fs.read(&format!("weapons/mp/{name}"))?;
-    let types = fs
+    load_with(fs, name, &anim_types(fs))
+}
+
+/// `mp/playeranimtypes.txt`'s names off `fs`, 1.7's own list without one.
+fn anim_types(fs: &(impl AssetSource + ?Sized)) -> Vec<String> {
+    let text = fs
         .read("mp/playeranimtypes.txt")
         .map(|t| vcod_common::text::latin1(&t))
         .unwrap_or_default();
-    let types: Vec<&str> = types.split_whitespace().collect();
-    let types = if types.is_empty() {
-        crate::pmove::anim::PLAYER_ANIM_TYPES.to_vec()
+    let types: Vec<String> = text.split_whitespace().map(str::to_string).collect();
+    if types.is_empty() {
+        crate::pmove::anim::PLAYER_ANIM_TYPES
+            .iter()
+            .map(|t| t.to_string())
+            .collect()
     } else {
         types
-    };
+    }
+}
+
+/// [`load`] with the anim type names already read.
+fn load_with(
+    fs: &(impl AssetSource + ?Sized),
+    name: &str,
+    types: &[String],
+) -> Option<Result<TextWeapon>> {
+    let text = fs.read(&format!("weapons/mp/{name}"))?;
+    let types: Vec<&str> = types.iter().map(String::as_str).collect();
     Some(parse(name, &text, &types))
 }
 
@@ -301,7 +322,8 @@ pub fn load_overlay(
     }
     names.sort();
     names.dedup();
-    let text = |name: &str| match load(fs, name)? {
+    let types = anim_types(fs);
+    let text = |name: &str| match load_with(fs, name, &types)? {
         Ok(t) => Some(t),
         Err(e) => {
             log::warn!("cod4: weapons/mp/{name}: {e:#}");
