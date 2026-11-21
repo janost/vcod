@@ -3615,7 +3615,9 @@ the third column the give-up with every jump edge 64 longer in A*
   boxes do not meet, the fit test does see a body on the ledge and 1.7
   refuses. vcod's pmove is the same (`Pmove::trace_box`, cod4-pmove.md
   17.1), so `Follower::mantle_held` stays: the bot's answer, not
-  pmove's.
+  pmove's. Re-run on fix/server-cleanups (no pmove or bot change), `war`
+  seeds 1 and 3 keep the after digests below, 51dfa08218229289 and
+  496428420667275d. VERIFIED (the runs).
 - The rule, vcod's own (retail has no bots): a CoD4 bot on the ground
   more than a step under the landing of the mantle edge it follows
   (the probe's, else the edge's end node), within 96 flat of it, with
