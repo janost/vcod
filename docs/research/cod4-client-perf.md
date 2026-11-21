@@ -1420,7 +1420,66 @@ Open: CoD4's map-change timeline (`load profile cod4 map change`) ends 5-6
 ms in, on a frame drawn before the new map loads; the map load itself is
 the `load cod4 map` lap above. VERIFIED (the client logs). CoD1's peak RSS
 after the change rose 314 -> 321 MB; a `malloc_trim` after the load is the
-untried follow-up.
+untried follow-up. Both taken up in 34.5.
+
+### 34.5 The heap trim, the CoD4 change timeline, skins and pipelines a load skips (perf/gpu-load-2)
+
+What changed, none of it in what a frame binds or draws:
+
+- After each load's first frame in game the client calls glibc's
+  `malloc_trim(0)` on a thread of its own (`laps::trim_heap`, glibc
+  builds only) and logs `heap trim: <ms> ms, RSS <before> -> <after>
+  MB`. glibc keeps the pages a load's parses and decodes freed, the
+  worker threads' arenas included, until a trim.
+- A CoD4 session is out of the game while a map change loads under the
+  loading screen (`Cod4Client::in_game` is false while `map_load` is
+  set), so `load profile cod4 map change` ends at the new map's first
+  frame, past the zones, the world's GPU state and the prewarm. The same
+  test holds `--exec-in-game` and `cl_avidemo` (`client_active`) through
+  the load.
+- CoD2 and CoD4 dynamic models: a skin's image uploads only when its
+  entity material reads it (`EntSkin::reads_skin_image`: a `$texturename`
+  stage, or the fallback past the stage slots). Every other skin binds
+  the materials' white group, its stages binding their images by path,
+  and its colour map's pak read is marked without reading
+  (`prop_skin::mark_colour_map`), so the `cp` list holds. The entity
+  material is built before the skin's image, in the same skin order as
+  before, so stage slots and load order are unchanged; the upload order
+  differs only in the skins left out and in each kept skin image now
+  following its material's own images.
+- The four `floatZ` writers are built only for a map with a draw whose
+  material writes `floatZ` (`Material::floatz`, every CoD2 map has none).
+- Water's pipelines a load has not made before build at once on eight
+  threads at the end of the world build (`WaterBuilder::finish`), their
+  time in the `cod2 lit` line's compile figure.
+
+Without a card, the CPU side, this box (30 cores), the dev profile
+(opt-level 1), each load through the client's own code with the map
+dropped as the client drops it. VERIFIED (scratch timer, ours):
+
+| | RSS before trim | after | trim |
+|---|---|---|---|
+| CoD1 mp_carentan, the bsp dropped | 30 MB | 24 MB | 0.3 ms |
+| CoD1 then mp_brecourt, the first map and the bsp dropped | 48 | 27 | 1.0 |
+| CoD2 mp_toujane (parse, prediction world), the bsp dropped | 42 | 26 | 0.7 |
+| CoD2 then mp_burgundy, the first map and the bsp dropped | 72 | 27 | 1.3 |
+| CoD4 mp_crossfire (the worker's `Loader::start_map`), kept | 705 | 438 | 15.2 |
+| CoD4 then mp_crash, mp_crossfire dropped | 935 | 417 | 30.9 |
+
+A main-thread allocation loop running beside the CoD4 trim stalled 0.17
+ms at worst. VERIFIED (scratch timer, ours).
+
+mp_crash's level models as the csb0 capture's gamestate names them
+(`play-1.7-csb0-shooter.txt`, `entity_assets`): 535 models drawing 275
+skins, of which one material reads the skin image. The 275
+`prepare_skin` calls (a colour map's copy and its mip chain, on the main
+thread) take 187 ms and make 107 MB of image; the load now makes one.
+VERIFIED (scratch timer, ours; the one that reads it counted off the
+materials' stages).
+
+Not taken here: the card's numbers (kit `perf-mem`, after against wave
+4), and the frames byte for byte (kit `shots`, `render`); this box has no
+Vulkan adapter.
 
 ## 35. `floatZ` written in the depth prepass, no split and copy (P22)
 
