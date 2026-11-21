@@ -495,7 +495,9 @@ Client:
   - Mods runs a `mods/<dir>` mod. Options and Controls set the options
     and binds vcod has.
   - Select Profile creates, deletes and loads a profile in
-    `players/profiles/`. The active profile's `vcod_mp.cfg` is the
+    `players/profiles/`. A load resets the cvars to their defaults and
+    runs `default_mp.cfg` before the profile's config, as 1.7 does. The
+    active profile's `vcod_mp.cfg` is the
     config, its `vcod_mpdata` the stats a join sends and the main menu
     reads (rank, unlocks, the Create a Class picks), stored plain and
     written back as they change. Retail's `mpdata` is left alone. The
