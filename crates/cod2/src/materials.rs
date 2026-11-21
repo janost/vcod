@@ -611,9 +611,6 @@ fn fallback_material(
 fn base_material(file: &MaterialFile, bits: StateBits) -> Material {
     let sf = file.surface_flags;
     Material {
-        name: file.name.clone(),
-        technique: Technique::None,
-        sort: SORT_OPAQUE,
         surface: SurfaceBits {
             sky: sf & 0x4 != 0 || file.game_flags & 0x8 != 0,
             nodraw: sf & 0x80 != 0,
@@ -623,37 +620,9 @@ fn base_material(file: &MaterialFile, bits: StateBits) -> Material {
             nolightmap: sf & 0x400 != 0,
             nodlight: sf & 0x20000 != 0,
         },
-        cull: Cull::Back,
-        depth_bias: None,
         nofog: bits[0] & FOG_BIT == 0,
-        nopicmip: false,
-        nomipmaps: false,
-        sky: None,
-        sunfile: None,
-        deforms: Vec::new(),
-        sprite: None,
         textures: textures_of(file),
-        stages: Vec::new(),
-        dlight: None,
-        sort_images: None,
-        dropped_stages: 0,
-        model_axes: None,
-        phong: None,
-        vertex_multiply: false,
-        falloff: None,
-        premultiplied: false,
-        eye_offset: None,
-        reflex: None,
-        model_light: ModelLight::None,
-        probe: None,
-        smodel: None,
-        feather: None,
-        feather_view_depth: false,
-        floatz: None,
-        entity_cull: false,
-        distortion: None,
-        cookie: Default::default(),
-        water: None,
+        ..Material::base(file.name.clone())
     }
 }
 

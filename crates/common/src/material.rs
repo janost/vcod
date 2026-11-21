@@ -644,6 +644,48 @@ pub enum ModelLight {
 }
 
 impl Material {
+    /// `name` drawing nothing: opaque sort, back faces culled, every other
+    /// field off. Each game's builder names only what it sets.
+    pub fn base(name: impl Into<String>) -> Material {
+        Material {
+            name: name.into(),
+            technique: Technique::None,
+            sort: SORT_OPAQUE,
+            surface: SurfaceBits::default(),
+            cull: Cull::Back,
+            depth_bias: None,
+            nofog: false,
+            nopicmip: false,
+            nomipmaps: false,
+            sky: None,
+            sunfile: None,
+            deforms: Vec::new(),
+            sprite: None,
+            textures: Vec::new(),
+            stages: Vec::new(),
+            dlight: None,
+            sort_images: None,
+            dropped_stages: 0,
+            model_axes: None,
+            phong: None,
+            vertex_multiply: false,
+            falloff: None,
+            premultiplied: false,
+            eye_offset: None,
+            reflex: None,
+            model_light: ModelLight::None,
+            probe: None,
+            smodel: None,
+            feather: None,
+            feather_view_depth: false,
+            floatz: None,
+            entity_cull: false,
+            distortion: None,
+            cookie: CookieRole::default(),
+            water: None,
+        }
+    }
+
     /// Whether some bundle takes `tcGen environment`.
     pub fn reflects(&self) -> bool {
         self.stages

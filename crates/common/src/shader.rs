@@ -187,14 +187,6 @@ pub fn map_sort_token(tok: &str) -> Option<f32> {
 }
 
 impl Shader {
-    /// Whether some bundle takes `tcGen environment`.
-    pub fn reflects(&self) -> bool {
-        self.stages
-            .iter()
-            .flat_map(|st| &st.bundles)
-            .any(|b| b.tc_gen == TcGen::Environment)
-    }
-
     /// Explicit `sort` wins; otherwise CoDMP.exe's FinishShader defaults
     /// (0x4fb9d0..): sky, then polygon offset, then a blended stage 0
     /// (see-through while it writes depth, additive onto `GL_ONE`, blend
@@ -295,24 +287,6 @@ impl Shader {
         self.polygon_offset
             .or((self.sort == Some(SORT_DECAL)).then_some(PolygonOffset::Single))
     }
-
-    /// Per-stage draw facts; `None` when `idx` is out of range.
-    pub fn classify_stage(&self, idx: usize) -> Option<ClassedStage> {
-        let st = self.stages.get(idx)?;
-        let class = match st.blend {
-            None => DrawClass::Opaque,
-            Some((_, BlendFactor::One)) | Some((_, BlendFactor::SrcAlphaSaturate)) => {
-                DrawClass::Additive
-            }
-            Some(_) => DrawClass::Blend,
-        };
-        Some(ClassedStage {
-            class,
-            depth_write: st.writes_depth(),
-            bias: self.depth_bias().is_some(),
-            two_sided: self.two_sided,
-        })
-    }
 }
 
 impl Material {
@@ -367,22 +341,7 @@ impl Material {
                 .map(|st| st.bundles.iter().take(2).map(|b| b.image.clone()).collect()),
             dropped_stages: sh.dropped_stages,
             model_axes: sh.model_axes,
-            phong: None,
-            vertex_multiply: false,
-            falloff: None,
-            premultiplied: false,
-            eye_offset: None,
-            reflex: None,
-            model_light: crate::material::ModelLight::None,
-            probe: None,
-            smodel: None,
-            feather: None,
-            feather_view_depth: false,
-            floatz: None,
-            entity_cull: false,
-            distortion: None,
-            cookie: crate::material::CookieRole::default(),
-            water: None,
+            ..Material::base(sh.name.clone())
         }
     }
 }
@@ -2971,7 +2930,12 @@ textures/sfx/test_water
             None,
         )]);
         assert_eq!(degen.sort_value(), SORT_SEETHROUGH);
-        assert!(degen.classify_stage(0).unwrap().depth_write);
+        assert!(
+            Material::from_shader(&degen)
+                .classify_stage(0)
+                .unwrap()
+                .depth_write
+        );
         // polygon offset outranks the stage-derived keys
         let mut decal_blend = shader_of(vec![stage_of(
             Some((BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha)),
@@ -3005,7 +2969,7 @@ textures/sfx/test_water
             ),
         ] {
             let sh = shader_of(vec![stage_of(blend.clone(), explicit)]);
-            let cs = sh.classify_stage(0).unwrap();
+            let cs = Material::from_shader(&sh).classify_stage(0).unwrap();
             assert_eq!(cs.depth_write, want, "{blend:?} {explicit:?}");
         }
     }
@@ -3040,42 +3004,64 @@ textures/sfx/test_water
             ),
         ] {
             let sh = shader_of(vec![stage_of(blend.clone(), None)]);
-            assert_eq!(sh.classify_stage(0).unwrap().class, want, "{blend:?}");
+            assert_eq!(
+                Material::from_shader(&sh).classify_stage(0).unwrap().class,
+                want,
+                "{blend:?}"
+            );
         }
     }
 
     #[test]
     fn out_of_range_stage_is_none() {
         let sh = shader_of(vec![stage_of(None, None)]);
-        assert_eq!(sh.classify_stage(1), None);
-        assert_eq!(shader_of(Vec::new()).classify_stage(0), None);
+        assert_eq!(Material::from_shader(&sh).classify_stage(1), None);
+        assert_eq!(
+            Material::from_shader(&shader_of(Vec::new())).classify_stage(0),
+            None
+        );
     }
 
     #[test]
     fn bias_and_two_sided_flags() {
         let mut sh = shader_of(vec![stage_of(None, None)]);
-        let cs = sh.classify_stage(0).unwrap();
+        let cs = Material::from_shader(&sh).classify_stage(0).unwrap();
         assert!(!cs.bias);
         assert!(!cs.two_sided);
         sh.two_sided = true;
-        assert!(sh.classify_stage(0).unwrap().two_sided);
+        assert!(
+            Material::from_shader(&sh)
+                .classify_stage(0)
+                .unwrap()
+                .two_sided
+        );
 
         sh.two_sided = false;
         sh.polygon_offset = Some(PolygonOffset::Single);
-        assert!(sh.classify_stage(0).unwrap().bias);
+        assert!(Material::from_shader(&sh).classify_stage(0).unwrap().bias);
 
         let mut named = shader_of(vec![stage_of(None, None)]);
         named.sort = map_sort_token("decal");
-        assert!(named.classify_stage(0).unwrap().bias);
+        assert!(
+            Material::from_shader(&named)
+                .classify_stage(0)
+                .unwrap()
+                .bias
+        );
         assert_eq!(named.sort_value(), SORT_DECAL);
 
         let mut num = shader_of(vec![stage_of(None, None)]);
         num.sort = Some(6.0);
-        assert!(num.classify_stage(0).unwrap().bias);
+        assert!(Material::from_shader(&num).classify_stage(0).unwrap().bias);
 
         let mut other = shader_of(vec![stage_of(None, None)]);
         other.sort = Some(6.25);
-        assert!(!other.classify_stage(0).unwrap().bias);
+        assert!(
+            !Material::from_shader(&other)
+                .classify_stage(0)
+                .unwrap()
+                .bias
+        );
     }
 
     #[test]
@@ -3087,7 +3073,10 @@ textures/sfx/test_water
         ] {
             let sh = parse_one(&format!("t {{ {kw} {{ map a.tga blendFunc blend }} }}"));
             assert_eq!(sh.sort_value(), SORT_DECAL, "{kw}");
-            assert!(sh.classify_stage(0).unwrap().bias, "{kw}");
+            assert!(
+                Material::from_shader(&sh).classify_stage(0).unwrap().bias,
+                "{kw}"
+            );
             assert_eq!(sh.depth_bias(), Some(form), "{kw}");
         }
         // the last keyword wins, as each clears the other two bits
@@ -3112,7 +3101,7 @@ textures/sfx/test_water
         );
         assert_eq!(sh.sort_value(), SORT_DECAL);
         assert_eq!(
-            sh.classify_stage(0),
+            Material::from_shader(&sh).classify_stage(0),
             Some(ClassedStage {
                 class: DrawClass::Blend,
                 depth_write: true,
