@@ -659,6 +659,7 @@ impl Renderer {
         let mut k = 0;
         while k < surfs.len() {
             let (i, s) = surfs[k];
+            let first = k;
             k += 1;
             let model_at = dynamic.instances[i as usize].0;
             let model = &dynamic.models[model_at];
@@ -683,6 +684,15 @@ impl Renderer {
                     k += 1;
                 }
             }
+            // the next instances of the model that repeat these surfaces
+            // draw in the same call, in the same order
+            let r = match self.draw_joins {
+                true => prepass_instances(&surfs, (first, k - first), |i| {
+                    dynamic.instances[i as usize].0
+                }),
+                false => 1,
+            };
+            k = first + r * (k - first);
             draw_ent_stages(
                 sink,
                 &dynamic.materials,
@@ -690,7 +700,7 @@ impl Renderer {
                 &vm.bind_groups[surf.bind_group],
                 skin,
                 surf,
-                (surf.first_index..end, i),
+                (surf.first_index..end, i..i + r as u32),
                 &mut bound,
                 depth,
                 &self.census,
@@ -702,7 +712,7 @@ impl Renderer {
 
     /// The scene pass's entity surface items `items[from..end]` (no gun)
     /// into `sink`, each run [`ent_run`] joins (never across `stops`) one
-    /// draw, from what `at` left bound, or from nothing: then the camera,
+    /// draw over the instances [`ent_instances`] repeats it on, from what `at` left bound, or from nothing: then the camera,
     /// bone and instance buffers bind first. `equal` picks the skins whose
     /// first stage the depth prepass laid down, drawn under EQUAL. Returns
     /// what the last draw left bound and the item after it.
@@ -744,6 +754,17 @@ impl Renderer {
             let n = ent_run(items, j, ent_draws, (&vm.surfaces, &model.skins), stops);
             let last = &vm.surfaces[d.surf as usize + n - 1];
             let skin = &model.skins[d.surf as usize];
+            let r = match self.draw_joins {
+                true => ent_instances(
+                    items,
+                    (j, n),
+                    ent_draws,
+                    |i| dynamic.instances[i as usize].0,
+                    skin.stages.len() == 1,
+                    stops,
+                ),
+                false => 1,
+            };
             // a run is one skin, so one answer for all of it
             let depth = match equal(skin) {
                 true => Depth::Equal,
@@ -758,14 +779,14 @@ impl Renderer {
                 surf,
                 (
                     surf.first_index..last.first_index + last.index_count,
-                    d.inst,
+                    d.inst..d.inst + r as u32,
                 ),
                 &mut at.bound,
                 depth,
                 &self.census,
             );
             crate::frame_prof::count(crate::frame_prof::Count::EntDraws, 1);
-            j += n;
+            j += n * r;
         }
         (at, j)
     }

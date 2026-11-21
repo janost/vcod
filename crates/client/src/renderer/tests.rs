@@ -1942,6 +1942,78 @@ fn an_entity_run_joins_only_contiguous_surfaces_of_one_skin() {
     );
 }
 
+/// A run of entity items repeats as one instanced draw while each next
+/// run of as many items is the next instance of the same model on the
+/// same surfaces with no stop among them; a two-stage skin, the gun, a
+/// gap in the instances, another model or kind of item ends it
+/// (cod4-client-perf.md 41.2).
+#[test]
+fn an_entity_run_repeats_over_the_next_instances_of_its_model() {
+    let ent = |inst, surf| EntDraw {
+        inst,
+        surf,
+        sort: SORT_OPAQUE,
+        order: 0,
+        gun: false,
+    };
+    let draws: Vec<EntDraw> = (0..4).flat_map(|i| [ent(i, 0), ent(i, 1)]).collect();
+    let items: Vec<SortedItem> = (0..draws.len()).map(SortedItem::Model).collect();
+    let one_model = |_| 0;
+    let reps = |draws: &[EntDraw], k, model_of: &dyn Fn(u32) -> usize, stops: &[Option<usize>]| {
+        ent_instances(&items, (k, 2), draws, model_of, true, stops)
+    };
+    assert_eq!(reps(&draws, 0, &one_model, &[None]), 4);
+    assert_eq!(reps(&draws, 2, &one_model, &[None]), 3);
+    assert_eq!(reps(&draws, 0, &one_model, &[Some(5)]), 2, "a stop");
+    assert_eq!(
+        reps(&draws, 0, &|i| usize::from(i >= 2), &[None]),
+        2,
+        "another model"
+    );
+    assert_eq!(
+        ent_instances(&items, (0, 2), &draws, one_model, false, &[None]),
+        1,
+        "a two-stage skin"
+    );
+    let mut gap = draws.clone();
+    gap[4].inst = 5;
+    gap[5].inst = 5;
+    assert_eq!(
+        reps(&gap, 0, &one_model, &[None]),
+        2,
+        "a gap in the instances"
+    );
+    let mut gun = draws.clone();
+    gun[6].gun = true;
+    assert_eq!(reps(&gun, 0, &one_model, &[None]), 3, "the gun");
+    let mut short = draws.clone();
+    short[3].surf = 0;
+    assert_eq!(
+        reps(&short, 0, &one_model, &[None]),
+        1,
+        "not the same surfaces"
+    );
+    let mixed = [
+        SortedItem::Model(0),
+        SortedItem::Model(1),
+        SortedItem::Fx(0),
+        SortedItem::Model(3),
+    ];
+    assert_eq!(
+        ent_instances(&mixed, (0, 2), &draws, one_model, true, &[None]),
+        1,
+        "another kind of item"
+    );
+    // the prepass's entries, (instance, surface)
+    let surfs = [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (3, 0)];
+    assert_eq!(prepass_instances(&surfs, (0, 2), one_model), 2);
+    assert_eq!(prepass_instances(&surfs, (4, 1), one_model), 2);
+    assert_eq!(
+        prepass_instances(&surfs, (4, 1), |i| usize::from(i == 3)),
+        1
+    );
+}
+
 /// `keep` is by the model's surfaces, and an empty one uploads no
 /// surface, so the filter reads each uploaded surface's `src`.
 #[test]

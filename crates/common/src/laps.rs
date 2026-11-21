@@ -92,10 +92,15 @@ pub fn end_load() -> Option<String> {
 /// own thread: glibc keeps what the load's parse and decode buffers
 /// freed, the threads' arenas included, until `malloc_trim`
 /// (cod4-client-perf.md 34.5). Logs the time and the resident set before
-/// and after at info. Nothing off glibc.
+/// and after at info. Nothing off glibc, nor under `VCOD_HEAP_TRIM=0`,
+/// the kit's A/B of what the next load pays for it (34.6).
 pub fn trim_heap() {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     {
+        if std::env::var_os("VCOD_HEAP_TRIM").is_some_and(|v| v == "0") {
+            log::info!("heap trim: off (VCOD_HEAP_TRIM=0)");
+            return;
+        }
         let trim = || {
             let t0 = Instant::now();
             let before = rss_kb();
