@@ -1,6 +1,6 @@
 # CoD 1.1 player model & animation system
 
-How a CoD1 player body is built, which anim indices the server picks and how both sides play them. Sources: `game.mp.i386.so` disassembly (symbols intact), CoDExtended and RTCW-MP source, and the pk3 assets. Claims with no label are VERIFIED; everything else carries its own. `clientstate-wire-format.md` covers how the model indices reach the client.
+How a CoD1 player body is built, which anim indices the server picks and how both sides play them. Sources: `game.mp.i386.so` disassembly (symbols intact), CoDExtended and RTCW-MP source, and the pk3 assets. Claims with no label are VERIFIED, read out of `game.mp.i386.so` or the pk3 assets; a claim that rests on CoDExtended or RTCW-MP source is labelled INFERRED, and every other exception carries its own label. `clientstate-wire-format.md` covers how the model indices reach the client.
 
 ## Model assembly: body + attachments
 
@@ -33,7 +33,7 @@ bip01 head          -2.18   -0.00    62.68
 tag_helmet          -1.17   -0.00    70.88
 ```
 
-Root `tag_origin` sits at the feet. Draw the model with its root at `entityState.pos.trBase`, no Z offset; Q3's -24 waist offset does not apply. `standViewHeight = 60` (CoDExtended `bg_pmove.c:135`) agrees with `bip01 neck` at z 59.82; crouch is 40, prone 11. vcod's pmove uses mins z = 0.
+Root `tag_origin` sits at the feet. Draw the model with its root at `entityState.pos.trBase`, no Z offset; Q3's -24 waist offset does not apply. INFERRED (CoDExtended source): `standViewHeight = 60` (`bg_pmove.c:135`) agrees with `bip01 neck` at z 59.82; crouch is 40, prone 11. vcod's pmove uses mins z = 0.
 
 ## Animation indices: the animtree
 

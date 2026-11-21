@@ -1,11 +1,9 @@
 # CoD 1.1 sound system: aliases, channels, falloff, events, wire path
 
-Read out of the CoD 1.1 binaries and stock assets. `VERIFIED` means read
-from the decompilation or disassembly of the code path that runs it (static),
-or from a live capture where the claim says so; `inferred` means deduced from
-surrounding code or lineage, untested. The events-and-fx doc reserves
-`VERIFIED` for live observation. Section 9's wire path is also checked live
-("Live verification" at its end); everything else is static.
+Read out of the CoD 1.1 binaries and stock assets. Labels follow
+`docs/research/README.md`, "Evidence labels". Section 9's wire path is also
+checked live ("Live verification" at its end); everything else is read
+statically.
 
 ## Read this first
 
@@ -199,7 +197,7 @@ parse struct `+0x10f4` is set. Retail usage counts in `iw_sound.csv`
 (1936 rows): blank 708 (plus 191 rows with the column missing), `!Truckride`
 429, `Truckride` 429, `all_mp` 31, `all_sp` 17, `! burnville` 17, per-map names
 for the rest. The `all_mp` exact-match rule means a cell like `all_mp
-mp_carentan` would only load on `mp_carentan` (inferred edge case, no retail row
+mp_carentan` would only load on `mp_carentan` (INFERRED edge case, no retail row
 does this).
 
 The menu set loads with the name `menu` (`FUN_00433e90(&"menu", 0)` from
@@ -467,7 +465,7 @@ Retail MP relevance: `iw_sound.csv` has 10 `master` rows, all SP ambients or
 SP-only weapon loops (`ambient_dam_int`, `weap_nagant_sniper` on Stalingrad,
 `flakpanzer_loop`...), and 445 numeric rows (`weap_mg42_loop 0.75`, ...). No
 `master` row has an MP loadspec, so in MP the mechanism never engages
-(inferred from the csv).
+(INFERRED from the csv).
 
 ---
 
@@ -510,7 +508,7 @@ one entity number replace each other.
 
 The `s` server command (`CG_LocalSound`, `FUN_3002e040` @ `0x3002e040`) plays
 configstring `524 + idx` with entity `cg.snap->ps.clientNum` at
-`cg.snap->ps.origin` (`DAT_301e2160 + 0x20`; inferred from the `ps` layout,
+`cg.snap->ps.origin` (`DAT_301e2160 + 0x20`; INFERRED from the `ps` layout,
 `ps` at `snap+0xc` with `pm_flags` at `+0xc` and `clientNum` at `+0xac` as
 anchors); the alias's own channel decides
 2D or 3D. Chat messages (`h`, `i`) play `player_talk` and bold game messages
@@ -700,7 +698,7 @@ Other registered handles (`FUN_30020a00`): `player_gib`,
 
 ### 7d. Pickup aliases
 
-`VERIFIED` for the table shape, inferred for the weapon rows. `DAT_301dc3fc +
+The table's shape is VERIFIED. The weapon rows are INFERRED. `DAT_301dc3fc +
 item*0x24` is filled by `FUN_30034cf0` @ `0x30034cf0` from
 `bg_itemlist[item].pickup_sound` (`DAT_300762f4 + item*0x30`). In the DLL's
 static data only items 65-69 carry a name: `grenade_pickup` (65, 66),
@@ -709,7 +707,7 @@ at weapon registration (also in `FUN_30034cf0`): `pickupSound` (`+0x8c`)
 with fallback alias `weap_pickup`, and `ammoPickupSound` (`+0x90`) with
 fallback `weap_ammo_pickup` into the next field. Because `EV_AMMO_PICKUP`
 reads the copy of the pickup column, **`ammoPickupSound` is never heard**
-(inferred: `DAT_301dc400` has no other writer).
+(INFERRED: `DAT_301dc400` has no other writer).
 
 ---
 
@@ -872,7 +870,7 @@ Shared plumbing, `VERIFIED`:
   Sets `ent->eventTime` (`+0x180`) and `+0x150` to `level.time`.
 - `G_PlaySoundAliasAtPoint(point, idx)` @ `0x67a2c`: `G_Spawn`, `eType = 0xb8`
   (`ET_EVENTS 12 + 172`), origin from the rounded point, `+0x184 = 1`
-  (inferred: `freeAfterEvent`), links, `eventParm = idx`. In MP only
+  (INFERRED: `freeAfterEvent`), links, `eventParm = idx`. In MP only
   `hurt_touch` calls it.
 - `G_SetClientSound(ent)` @ `0x41614`: `es.loopSound = 0` (offset 132) and
   nothing else. **No caller** (no `R_386_PC32` reloc, no direct
@@ -883,8 +881,8 @@ Per gsc call:
 | gsc | Handler | What goes on the wire | Reaches a spectator? | Expected observable |
 |---|---|---|---|---|
 | `ambientPlay(alias [, fade])` | `0x5adc4` | `trap_SetConfigstring(3, va("n\\%s\\t\\%i", alias, level.time + fade_ms))` (format `0x77865`); `fade` is seconds, `* 1000 + 0.5` | yes, configstring 3 is in the gamestate and updated by `d 3 ...` | at connect on `mp_carentan`: CS 3 = `n\ambient_mp_carentan\t\<time>`. Client: `CG_ConfigStringModified` (`FUN_3002c6b0` @ `0x3002c6b0`, the index 3 case) and `CG_Init`/map restart (`FUN_30022f90`, `FUN_3002ca60`) call `FUN_30021b30` @ `0x30021b30`: `pick(Info_ValueForKey(cs, "n"))` (keys `0x300636a0` = `"n"`, `0x3006369c` = `"t"`), `fade = max(0, atol(t) - cg.time)`, syscall `0xd6` = `FUN_0044dc80` crossfades into the ambient stream slot; the alias is `local`/`streamed`/`looping`, so a 2D loop |
-| `ambientStop([fade])` | `0x5ee40` | CS 3 = `t\\%i` (`0x778e5`), no `n` | yes | inferred: the client picks the empty name, gets 0, and `FUN_0044dc80` returns early on a null record, i.e. **`ambientStop` does nothing on the client**. Not used by stock MP scripts anyway |
-| `<ent> playSound(alias)` | `0x5d910` (`Scr_MakeGameMessage+0xc38`) | `G_SoundAliasIndex` -> `G_PlaySoundAlias(ent, idx)`; also `r.svFlags = (svFlags & ~SVF_NOCLIENT) \| 8` (`+0xf4`; bit 8 unnamed in CoDExtended) | yes, `EV_SOUND_ALIAS` on the entity; for a player it rides `ps.events`, which `BG_PlayerStateToEntityState` copies to `es.event` for everyone else (inferred, Q3 lineage; seen live, open item 6) | SD: `other playsound("MP_bomb_plant")` -> event 172 on the planter's entity, `parm = idx`, CS `524+idx` = `MP_bomb_plant`; `level.bombmodel playSound("Explo_plant_no_tick")` -> 172 on a non-player entity |
+| `ambientStop([fade])` | `0x5ee40` | CS 3 = `t\\%i` (`0x778e5`), no `n` | yes | INFERRED: the client picks the empty name, gets 0, and `FUN_0044dc80` returns early on a null record, i.e. **`ambientStop` does nothing on the client**. Not used by stock MP scripts anyway |
+| `<ent> playSound(alias)` | `0x5d910` (`Scr_MakeGameMessage+0xc38`) | `G_SoundAliasIndex` -> `G_PlaySoundAlias(ent, idx)`; also `r.svFlags = (svFlags & ~SVF_NOCLIENT) \| 8` (`+0xf4`; bit 8 unnamed in CoDExtended) | yes, `EV_SOUND_ALIAS` on the entity; for a player it rides `ps.events`, which `BG_PlayerStateToEntityState` copies to `es.event` for everyone else (INFERRED, Q3 lineage; seen live, open item 6) | SD: `other playsound("MP_bomb_plant")` -> event 172 on the planter's entity, `parm = idx`, CS `524+idx` = `MP_bomb_plant`; `level.bombmodel playSound("Explo_plant_no_tick")` -> 172 on a non-player entity |
 | `<ent> playLoopSound(alias)` | `0x5d980` | `es.loopSound = idx` (offset 132, 8 bits) | yes, it is a netfield | after a plant, the bomb entity's `loopSound` = idx of `bomb_tick` (`voice`, `1200/6000`, looping) until defuse/explosion sets it back to 0 via `stopLoopSound` (`0x5d9d8`: `es.loopSound = 0`). Client: `FUN_3001af20` @ `0x3001af20` (add-entity) plays CS `524 + loopSound` **every frame** at the entity's lerp origin (brush models: origin + model centre, `DAT_301d39c0[modelindex]`), and the engine's looping dedupe (section 2) plus the end-of-frame reaper (syscall `0xd2`, `FUN_0044e600`: looping voices not refreshed this frame are ended) turn that into one continuous loop. A non-looping alias in `loopSound` would restart every frame |
 | `<player> playLocalSound(alias)` | `0x45800` (`PlayerCmd_pingPlayer+0x75c`) | `trap_SendServerCommand(entnum, 0, va("s %i", idx))` (`0x733d4`) to **that client only**; errors if not a player | only when addressed to the spectator itself | SD round end: `players[i] playLocalSound("MP_announcer_allies_win")` iterates `getentarray("player","classname")`, which includes spectators, so the spectator receives `s <idx>` with CS `524+idx` = `MP_announcer_allies_win`; the same for `MP_announcer_bomb_planted/defused`, `MP_announcer_round_draw`. Sounds addressed to the followed player are **not** forwarded. Client: `CG_LocalSound` (section 5), alias channel `announcer` = 2D |
 | `musicPlay(alias)` | `0x5eb5c` | `trap_SendServerCommand(-1, 1, va("o %s", alias))` (`0x77510`) to everyone | yes | none expected; no stock MP gametype or map script calls it (grep of `sd.gsc`, `tdm.gsc`, `_utility.gsc`, `mp_carentan.gsc`). Client `o`: pick + syscall `0xd4` |
@@ -1045,7 +1043,7 @@ makes that call.
 | `ambientStop` | not observed | CS 3 always carried an `n` key in both captures |
 | `<ent> playSound` | **VERIFIED live** | 29 `EV_SOUND_ALIAS` in capture A. Plant: `EV_SOUND_ALIAS entity 2 clientNum 2 parm 40 (cs 564) = "MP_bomb_plant" at [-9171,-6495,0]`. It rides the **planter's own client entity**: the `ps.events` -> `es.event` copy, seen by a third-party observer. Also `MP_bomb_defuse` (parm 43, on the defuser) and `generic_pain_german_1/3`. No event on a non-player entity: the mod's `sd.gsc` does not call `Explo_plant_no_tick`, so that half stays unverified |
 | `<ent> playLoopSound` | **VERIFIED live** | One second after each plant: `entity 263 loopSound 0 -> 6 (cs 530) = "bomb_tick" at [-9191,-6360,0]`. The bomb is a fresh entity number per round (263, 263, 223). The loop **stop never showed as `loopSound -> 0`**: the entity leaves the snapshot at defuse/round end, so a client must silence a loop when its entity disappears, not only when the field clears |
-| `<player> playLocalSound` | **VERIFIED live**, spectator forwarding included | Capture A, addressed to our spectator: `serverCommand: ["s", "42"]` -> `cs 566 = "MP_announcer_bomb_planted"`, and `["s", "11"]` -> `cs 535 = "MP_announcer_allies_win"` (3x). Consistent with the `getentarray("player","classname")` reading above; the mod's `sd.gsc` was not read, so its enumeration is inferred. Capture B shows the **lazy alias registration**: `d 528` creating `MP_announcer_allies_win` right before `s 4`, `G_SoundAliasIndex` filling the first empty slot at first use |
+| `<player> playLocalSound` | **VERIFIED live**, spectator forwarding included | Capture A, addressed to our spectator: `serverCommand: ["s", "42"]` -> `cs 566 = "MP_announcer_bomb_planted"`, and `["s", "11"]` -> `cs 535 = "MP_announcer_allies_win"` (3x). Consistent with the `getentarray("player","classname")` reading above; the mod's `sd.gsc` was not read, so its enumeration is INFERRED. Capture B shows the **lazy alias registration**: `d 528` creating `MP_announcer_allies_win` right before `s 4`, `G_SoundAliasIndex` filling the first empty slot at first use |
 | `musicPlay` / `musicStop` / `soundFade` | not observed live; **VERIFIED on the local retail server** | No `o`, `p` or `q` in either capture. `client-probes/probe_soundfade.gsc` on the retail 1.1d server (mp_carentan, one probe client) delivered `o codtheme`, `q 0.200000 3000`, `q 1.000000 2000`, `p 10000`, `q 0.000000 2000`, `q 1.000000 0`, each `q` ending in a newline and `o`/`p` not; vcod's server sends the same bytes |
 | quick chat (`j`/`k`/`l`) | not observed; this mod uses `playSound` instead | No `j`/`k`/`l` command arrived. The voice lines came through as `EV_SOUND_ALIAS` with `russian_*`/`german_*` alias names, e.g. `EV_SOUND_ALIAS entity 2 clientNum 2 parm 17 (cs 541) = "russian_suppressing_fire" at [-7607,-7244,0]` (16 of them), plus `russian_yes_sir`, `russian_great_shot`, `russian_enemy_down`, `russian_need_reinforcements`. Stock `G_Voice` stays unverified live |
 
@@ -1528,7 +1526,7 @@ What vcod knowingly does differently, and why.
    to Miles; the pan curve inside the Miles 3D software provider is unread.
    The stream pan formula `(1 - u . left) / 2` is the engine's own and the
    safe model for both.
-4. **`ambientStop` client no-op** is inferred from the null-record early return
+4. **`ambientStop` client no-op** is INFERRED from the null-record early return
    in `FUN_0044dc80`; not observed live.
 5. Quick-chat id to alias table: `cod11-quick-chat.md`.
 6. **`ps.events` to `es.event` copy** for `playSound` on a player entity:
