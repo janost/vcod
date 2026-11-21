@@ -28,6 +28,29 @@ pub fn demo_file(dir: &Path, name: &str, ext: impl std::fmt::Display) -> Option<
     vcod_common::game_dir::confined(dir, &format!("{name}.dm_{ext}"))
 }
 
+/// CoD2's and CoD4's `CL_Record_f` file: `name` cut to `clc.demoName`'s
+/// 63 characters, else the first free `demoNNNN`, created under `dir`.
+/// The name, its `demos/` qpath and the file; `Err` is the console line.
+pub fn create_recording(
+    dir: &Path,
+    name: Option<&str>,
+    ext: impl std::fmt::Display + Copy,
+) -> Result<(String, String, std::fs::File), String> {
+    let name = match name {
+        Some(n) => n.chars().take(63).collect(),
+        None => auto_name(dir, ext),
+    };
+    let qpath = format!("demos/{name}.dm_{ext}");
+    let file = demo_file(dir, &name, ext)
+        .and_then(|f| {
+            std::fs::create_dir_all(dir)
+                .and_then(|_| std::fs::File::create(f))
+                .ok()
+        })
+        .ok_or_else(|| "ERROR: couldn't open.".to_string())?;
+    Ok((name, qpath, file))
+}
+
 /// The first `demoNNNN` with no `.dm_<ext>` in `dir`.
 pub fn auto_name(dir: &Path, ext: impl std::fmt::Display) -> String {
     demo::auto_name(|n| dir.join(format!("{n}.dm_{ext}")).exists())

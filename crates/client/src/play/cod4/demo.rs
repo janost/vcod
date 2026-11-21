@@ -300,19 +300,9 @@ impl Cod4Session {
         else {
             return "You must be in level to record.".into();
         };
-        use crate::play::demos::{auto_name, demo_file};
-        let name = match name {
-            // `clc.demoName` keeps 63 characters.
-            Some(n) => n.chars().take(63).collect(),
-            None => auto_name(dir, EXTENSION),
-        };
-        let qpath = format!("demos/{name}.dm_{EXTENSION}");
-        let Some(file) = demo_file(dir, &name, EXTENSION) else {
-            return "ERROR: couldn't open.".into();
-        };
-        let opened = std::fs::create_dir_all(dir).and_then(|_| std::fs::File::create(file));
-        let Ok(f) = opened else {
-            return "ERROR: couldn't open.".into();
+        let (name, qpath, f) = match crate::play::demos::create_recording(dir, name, EXTENSION) {
+            Ok(r) => r,
+            Err(line) => return line,
         };
         let msg = gamestate_message(
             &conn.client.huff,

@@ -153,7 +153,8 @@ fn vec3(f: impl Fn(usize) -> f32) -> Vec3 {
     Vec3::new(f(0), f(1), f(2))
 }
 
-/// An info string's value (`\key\value\...`).
+/// An info string's value (`\key\value\...`). Unlike common's
+/// `info_value_for_key` the key matches case-blind and the bytes read lossy.
 pub fn info_value(info: &[u8], key: &str) -> Option<String> {
     let s = String::from_utf8_lossy(info);
     let parts: Vec<&str> = s.split('\\').collect();
