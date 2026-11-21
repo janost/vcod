@@ -1735,11 +1735,6 @@ fn game_name(userinfo: &str) -> String {
 /// `SV_UpdateUserinfo_f` (0x8170536) copies the userinfo into 0x400 bytes.
 const MAX_USERINFO: usize = 1023;
 
-/// A spectator floating at the intermission spot: the fields the retail
-/// spectator's first snapshot carries (`play-1.7-spec.txt`, VERIFIED live:
-/// `pm_type` 4, `eFlags` 2, gravity 800, `moveSpeedScaleMultiplier` 1, the
-/// depth of field's 6 and 1.8, `throwBackGrenadeOwner` and
-/// `viewlocked_entNum` 1023, `stats[3]` 63, `stats[4]` 1).
 /// `MSG_WriteDeltaPlayerstate`'s test for leaving origin and velocity out
 /// (`cod4_lnxded` 0x813f5b5..0x813f615): the move's predicted origin within
 /// 0.1 of `ps`'s (its square at most the float 0.01 at 0x8209644) and its
@@ -1753,6 +1748,11 @@ fn origin_echoed(ps: &PlayerState, (origin, time): ([f32; 3], i32)) -> bool {
     d2 <= f64::from(0.01f32) && ps.word(vcod_cod4::ps_word!("commandTime")) as i32 == time
 }
 
+/// A spectator floating at the intermission spot: the fields the retail
+/// spectator's first snapshot carries (`play-1.7-spec.txt`, VERIFIED live:
+/// `pm_type` 4, `eFlags` 2, gravity 800, `moveSpeedScaleMultiplier` 1, the
+/// depth of field's 6 and 1.8, `throwBackGrenadeOwner` and
+/// `viewlocked_entNum` 1023, `stats[3]` 63, `stats[4]` 1).
 fn spectator_ps(slot: usize, origin: [f32; 3], angles: [f32; 3], command_time: i32) -> PlayerState {
     let mut ps = PlayerState::default();
     let mut set = |name: &str, v: u32| {
