@@ -207,20 +207,7 @@ impl Cod2Players {
                                 .push((m.clone(), Some(WEAPON_TAG.to_string())));
                         }
                     }
-                    let rig = self
-                        .rigs
-                        .entry(armed.clone())
-                        .or_insert_with(|| {
-                            PlayerRig::assemble_with(fs, &armed, &mut self.parts)
-                                .inspect_err(|e| log::warn!("cod2 player {}: {e:#}", armed.body))
-                                .ok()
-                                .map(Rc::new)
-                        })
-                        .clone()
-                        .map(|rig| {
-                            let tags = rig_tags(&rig.skeleton);
-                            (rig, tags)
-                        });
+                    let rig = rig_for(&mut self.rigs, &mut self.parts, fs, armed, "cod2");
                     self.held
                         .insert(p.number, (character.clone(), p.weapon.clone(), rig.clone()));
                     rig
@@ -238,21 +225,16 @@ impl Cod2Players {
                 body.character = character.clone();
                 body.body = PlayerBody::default();
             }
-            let unseen = render_time
-                .wrapping_sub(frametime_ms)
-                .wrapping_sub(body.seen_ms);
-            if unseen > 0 {
-                body.body.pause(unseen);
-            }
-            body.seen_ms = render_time;
-            let at = Times {
-                clock_ms: render_time,
+            step_body(
+                &mut body.body,
+                &mut body.seen_ms,
+                &set.anims,
+                &p.frame,
+                render_time,
+                frametime_ms,
                 snapshot_ms,
-            };
-            body.body
-                .advance(&set.anims, &p.frame, at, frametime_ms, self.swing_speed);
-            // A gunner stands where his gun's placement puts him, turned
-            // with it; the height stays the server's trace.
+                self.swing_speed,
+            );
             let mut frame = p.frame;
             let placed = p.gun.as_ref().and_then(|gun| {
                 let tags = *self.gun_tags.entry(gun.model.clone()).or_insert_with(|| {
@@ -277,11 +259,7 @@ impl Cod2Players {
                     inc,
                 )
             });
-            if let Some(g) = placed.as_ref().filter(|g| g.origin.is_finite()) {
-                frame.origin = Vec3::new(g.origin.x, g.origin.y, frame.origin.z);
-                frame.angles = [0.0, g.yaw(), 0.0];
-            }
-            let turret = placed.as_ref().map(|g| (g.node, g.rows.as_slice()));
+            let turret = place_gunner(&mut frame, placed.as_ref());
             let pose = body.body.pose(&rig, set, fs, &frame, render_time, turret);
             let drawn = posed(&rig, &pose, &frame);
             if let Some(b) = flash {
@@ -380,6 +358,74 @@ pub fn tag_pose(model: Mat4, (at, rot): (Vec3, Quat)) -> TagPose {
         origin: model.transform_point3(at),
         axis: [q * Vec3::X, q * Vec3::Y, q * Vec3::Z],
     }
+}
+
+/// A rig and its [`rig_tags`].
+pub(crate) type TaggedRig = (Rc<PlayerRig>, [Option<usize>; 3]);
+
+/// The rig `armed` keys in `rigs`, assembled off `fs` into `parts` the
+/// first time it is asked for; `None` when it does not build (`game`
+/// names the warning). CoD2's and CoD4's bodies take theirs here.
+pub(crate) fn rig_for(
+    rigs: &mut HashMap<Character, Option<Rc<PlayerRig>>>,
+    parts: &mut RigParts,
+    fs: &dyn AssetSource,
+    armed: Character,
+    game: &str,
+) -> Option<TaggedRig> {
+    let rig = rigs
+        .entry(armed)
+        .or_insert_with_key(|armed| {
+            PlayerRig::assemble_with(fs, armed, parts)
+                .inspect_err(|e| log::warn!("{game} player {}: {e:#}", armed.body))
+                .ok()
+                .map(Rc::new)
+        })
+        .clone()?;
+    let tags = rig_tags(&rig.skeleton);
+    Some((rig, tags))
+}
+
+/// Steps `body`, last drawn at `seen_ms`, one frame to `render_time`
+/// (`frametime_ms` after the last frame): the time it went undrawn paused
+/// out of its clips first, then advanced on the clock and the newest
+/// snapshot's `snapshot_ms`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn step_body(
+    body: &mut PlayerBody,
+    seen_ms: &mut i32,
+    anims: &vcod_common::animtree::PlayerAnims,
+    frame: &BodyFrame,
+    render_time: i32,
+    frametime_ms: i32,
+    snapshot_ms: i32,
+    swing_speed: f32,
+) {
+    let unseen = render_time
+        .wrapping_sub(frametime_ms)
+        .wrapping_sub(*seen_ms);
+    if unseen > 0 {
+        body.pause(unseen);
+    }
+    *seen_ms = render_time;
+    let at = Times {
+        clock_ms: render_time,
+        snapshot_ms,
+    };
+    body.advance(anims, frame, at, frametime_ms, swing_speed);
+}
+
+/// A gunner stands where his gun's `placed` puts him, turned with it; the
+/// height stays the server's trace. The turret rows the pose blends.
+pub(crate) fn place_gunner<'a>(
+    frame: &mut BodyFrame,
+    placed: Option<&'a vcod_common::turretpose::GunnerPlacement>,
+) -> Option<(usize, &'a [vcod_common::turretpose::TurretRow])> {
+    if let Some(g) = placed.filter(|g| g.origin.is_finite()) {
+        frame.origin = Vec3::new(g.origin.x, g.origin.y, frame.origin.z);
+        frame.angles = [0.0, g.yaw(), 0.0];
+    }
+    placed.map(|g| (g.node, g.rows.as_slice()))
 }
 
 /// A player rig's `tag_flash`, `j_head` and `tag_brass` bones, by
