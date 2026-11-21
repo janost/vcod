@@ -855,6 +855,8 @@ A connect from a held slot's address and qport (or port), past
   INFERRED.
 - vcod's own guard: a connect with another challenge into a slot heard from in
   the last 3 s is refused; retail takes it at once.
+  Kept on purpose: it stops a host holding its own challenge from taking a
+  live player's slot by sending his qport.
 
 ### When the client's `begin` is heard (`ClientBegin`)
 

@@ -1203,6 +1203,8 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   the 5171 typed skin slots of the 1012 stock 1.1 xmodels all build, so
   no stock model draws it. Drawing the implicit skin there would be
   wrong.
+  The default shader is kept on purpose: a mod's stageless template
+  draws instead of dropping the game.
 - VERIFIED, census: 12 skins placed on stock MP maps have a `skins/` block:
   `light_sprite` (autosprite, additive), `lightbulb_on`, `ceilinglight1on`,
   `ind_lamp1_on`, `lantern_on`, `exteriorlamp2_on` (all `rgbGen
