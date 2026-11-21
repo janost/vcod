@@ -136,18 +136,20 @@ pub fn open_fs(game_dir: &Path, fs_game: Option<&str>, map: Option<&str>) -> Res
 }
 
 /// Loads `zone/english/<map>.ff` (or a usermap's) from the install at
-/// `game_dir`, with the entity assets `ents` names (none for fly mode).
+/// `game_dir`, with the entity assets `ents` names; a list naming none
+/// loads fly mode ([`Mode::of`]).
 /// Under `fs_game` its `mod.ff` loads too, and its assets win over the
 /// map's and `common_mp`'s (cod4-fastfile.md 13).
 ///
 /// A thread that set [`set_load_report`] hears how far the load has got.
+#[cfg(test)]
 pub fn load(
     game_dir: &Path,
     fs_game: Option<&str>,
     map: &str,
     ents: &EntityAssets,
 ) -> Result<Cod4Map> {
-    load_from(game_dir, fs_game, map, ents, None, None)
+    load_from(game_dir, fs_game, map, Mode::of(ents), None, None)
 }
 
 /// The stock zones every level's load walks whatever its map:
@@ -209,17 +211,107 @@ pub fn walk_stock(game_dir: &Path) -> Result<StockZones> {
     Ok(StockZones { common, sound })
 }
 
-/// [`load`] over `stock` walked already, or with none walked beside the
-/// map's zone, and over `load`, the map's `_load` zone the connect screen
-/// walked ([`walk_load_zone`]), or walked here.
+/// What a level loads besides its world.
+#[derive(Clone, Copy, Debug)]
+pub enum Mode<'a> {
+    /// The free camera: the map's own effects, sounds and script fog, no
+    /// entities, HUD, bodies or prediction world.
+    Fly,
+    /// A watched or played session, which draws `ents`.
+    Session(&'a EntityAssets),
+}
+
+impl<'a> Mode<'a> {
+    /// [`Mode::Fly`] when `ents` names nothing, as [`load`] reads it.
+    #[cfg(test)]
+    pub fn of(ents: &'a EntityAssets) -> Self {
+        if ents.models.is_empty() && ents.weapons.is_empty() {
+            Mode::Fly
+        } else {
+            Mode::Session(ents)
+        }
+    }
+}
+
+/// [`load`] in `mode`, over `stock` walked already, or with none walked
+/// beside the map's zone, and over `load`, the map's `_load` zone the
+/// connect screen walked ([`walk_load_zone`]), or walked here.
 pub fn load_from(
     game_dir: &Path,
     fs_game: Option<&str>,
     map: &str,
-    ents: &EntityAssets,
+    mode: Mode,
     stock: Option<StockZones>,
     load: Option<LoadZone>,
 ) -> Result<Cod4Map> {
+    let mut laps = vcod_common::laps::Laps::new(format!("cod4 map {map}"));
+    let (install, mut m, zones) = walk_level(game_dir, fs_game, map, stock, &mut laps)?;
+    let mut src = Cod4Source::open(&install)?;
+    let level = level_assets(&mut m, &zones, map, mode, fs_game, &src, &mut laps)?;
+    // the entity and effect materials added since: a model's stub set
+    // left unresolved read prepass key 3, no `floatZ`, and kept the
+    // entity out of the depth prepass (cod4-client-perf.md 37)
+    m.resolve_material_orders(&zones.by_priority());
+    let (bsp, spawn) = build_level(&install, map, &m, zones, &mut src, &level, load, &mut laps)?;
+    laps.finish();
+    let LevelAssets {
+        models,
+        parts,
+        weapons,
+        bodies,
+        av,
+        sound_files,
+        world,
+        look,
+        hud,
+        ambient,
+    } = level;
+    Ok(Cod4Map {
+        bsp,
+        materials: vcod_cod4::materials::material_lib(&m),
+        spawn,
+        models,
+        parts,
+        weapons,
+        bodies,
+        av,
+        ambient,
+        sound_files,
+        world,
+        look,
+        hud,
+    })
+}
+
+/// The zones a level's load walked: the map's, `common_mp`, the
+/// [`SOUND_ZONES`] and under `fs_game` its `mod.ff`.
+struct LevelZones {
+    map: vcod_cod4::walk::Walked,
+    common: vcod_cod4::walk::Walked,
+    sound: Vec<vcod_cod4::walk::Walked>,
+    mod_zone: Option<vcod_cod4::walk::Walked>,
+}
+
+impl LevelZones {
+    /// Highest priority first: the mod's, the map's, `common_mp`'s.
+    fn by_priority(&self) -> Vec<&Assets> {
+        self.mod_zone
+            .iter()
+            .map(|z| &z.assets)
+            .chain([&self.map.assets, &self.common.assets])
+            .collect()
+    }
+}
+
+/// The install under `fs_game` and `map`, the map out of its zone with its
+/// materials' order keys resolved, and the zones walked.
+fn walk_level(
+    game_dir: &Path,
+    fs_game: Option<&str>,
+    map: &str,
+    stock: Option<StockZones>,
+    laps: &mut vcod_common::laps::Laps,
+) -> Result<(Install, Map, LevelZones)> {
     let install = Install::at(game_dir)
         .with_context(|| {
             format!(
@@ -230,7 +322,6 @@ pub fn load_from(
         })?
         .with_fs_game(fs_game)
         .with_map(Some(map));
-    let mut laps = vcod_common::laps::Laps::new(format!("cod4 map {map}"));
     report_load(0.05);
     let (map_zone, stock) = std::thread::scope(|s| {
         let stock = match stock {
@@ -243,7 +334,6 @@ pub fn load_from(
     let StockZones { common, sound } = stock?;
     laps.lap("map and stock zones");
     report_load(0.6);
-    let ambient = map_ambient(&walked.assets, map);
     let mod_zone = install
         .mod_zone()
         .map(|path| {
@@ -260,112 +350,160 @@ pub fn load_from(
             z.assets.materials.len()
         );
     }
-    // Highest priority first: the mod's, the map's, `common_mp`'s.
-    let zones: Vec<&Assets> = mod_zone
-        .iter()
-        .map(|z| &z.assets)
-        .chain([&walked.assets, &common.assets])
-        .collect();
+    let zones = LevelZones {
+        map: walked,
+        common,
+        sound,
+        mod_zone,
+    };
     // stub technique sets' keys for 1.7's material order (cod4-world.md 12)
-    m.resolve_material_orders(&zones);
-    let fly = ents.models.is_empty() && ents.weapons.is_empty();
-    let mut hud = (!fly).then(|| {
-        let stock = std::iter::once(("common_mp", &common.assets))
-            .chain(SOUND_ZONES.into_iter().zip(sound.iter().map(|z| &z.assets)));
-        hud_assets(stock, &walked.assets, mod_zone.as_ref().map(|z| &z.assets))
-    });
-    laps.lap("hud assets");
+    m.resolve_material_orders(&zones.by_priority());
+    Ok((install, m, zones))
+}
+
+/// [`Cod4Map`]'s fields past the world, as `mode` asks for them.
+struct LevelAssets {
+    models: HashMap<String, vcod_common::model::Model>,
+    parts: Parts,
+    weapons: HashMap<String, WeaponModels>,
+    bodies: Option<vcod_cod4::anim::BodySource>,
+    av: Option<Av>,
+    sound_files: OverlayFiles,
+    world: Option<Arc<crate::play::cod4_predict::Cod4World>>,
+    look: crate::cod4_look::Cod4Look,
+    hud: Option<vcod_cod4::hud::HudAssets>,
+    ambient: Option<String>,
+}
+
+/// The look, sounds and effects every level loads, and a session's HUD
+/// assets, entity models, bodies and prediction world, whose weapon files
+/// and `ragdoll.cfg` read off `src`'s iwds.
+fn level_assets(
+    m: &mut Map,
+    zones: &LevelZones,
+    map: &str,
+    mode: Mode,
+    fs_game: Option<&str>,
+    src: &Cod4Source,
+    laps: &mut vcod_common::laps::Laps,
+) -> Result<LevelAssets> {
+    let ambient = map_ambient(&zones.map.assets, map);
+    let by_priority = zones.by_priority();
     // the maps after the first release carry their vision set in their zone
-    let mut visions = vcod_cod4::look::visions(&common.assets.raw_files);
-    visions.extend(vcod_cod4::look::visions(&walked.assets.raw_files));
-    let look = if fly {
-        let fog = vcod_cod4::look::map_fog(&walked.assets.raw_files, map);
+    let mut visions = vcod_cod4::look::visions(&zones.common.assets.raw_files);
+    visions.extend(vcod_cod4::look::visions(&zones.map.assets.raw_files));
+    let Mode::Session(ents) = mode else {
+        let fog = vcod_cod4::look::map_fog(&zones.map.assets.raw_files, map);
         log::info!("{map}: script fog {fog:?}");
-        crate::cod4_look::Cod4Look::fly(visions, map, fog)
-    } else {
-        crate::cod4_look::Cod4Look::new(visions)
+        let (av, sound_files) = sound_and_fx(m, &by_priority, map, &zones.sound)?;
+        return Ok(LevelAssets {
+            models: HashMap::new(),
+            parts: Parts::new(),
+            weapons: HashMap::new(),
+            bodies: None,
+            av: Some(av),
+            sound_files,
+            world: None,
+            look: crate::cod4_look::Cod4Look::fly(visions, map, fog),
+            hud: None,
+            ambient,
+        });
     };
-    // One search path: the session's weapon files and ragdoll.cfg, then
-    // the images.
-    let mut src = Cod4Source::open(&install)?;
-    let (models, parts, weapons, bodies, av, sound_files, world) = if fly {
-        // Fly mode: no entities, but the map's effects and sounds.
-        let (av, files) = sound_and_fx(&mut m, &zones, map, &sound)?;
-        (
-            HashMap::new(),
-            Parts::new(),
-            HashMap::new(),
-            None,
-            Some(av),
-            files,
-            None,
-        )
-    } else {
-        let (models, weapons, parts) = entity_models(&mut m, &zones, ents);
-        laps.lap("entity models");
-        let bodies = vcod_cod4::anim::BodySource::from_zones(&zones, models.clone())
-            .inspect(|b| log::info!("cod4: {} player clips", b.clip_count()))
-            .inspect_err(|e| log::warn!("cod4: player anims: {e:#}, players stay unposed"))
-            .ok();
-        laps.lap("player anims");
-        let (av, files) = sound_and_fx(&mut m, &zones, map, &sound)?;
-        laps.lap("sound and fx");
-        let world = crate::play::cod4_predict::Cod4World::from_assets(&walked.assets, &zones)
-            .inspect_err(|e| log::warn!("cod4: clip map: {e:#}, no prediction"))
-            .ok()
-            .map(|mut w| {
-                let fs = src.iwds();
-                if fs_game.is_some() {
-                    let files = w.overlay_weapon_files(fs);
-                    log::info!(
-                        "cod4: {} weapon files read off the search path",
-                        files.len()
-                    );
-                    if let Some(h) = hud.as_mut() {
-                        h.overlay_weapon_files(&files);
-                    }
-                }
-                if !w.read_ragdoll(fs) {
-                    log::warn!("cod4: no ragdoll.cfg, corpses keep their death anims");
-                }
-                Arc::new(w)
-            });
-        (models, parts, weapons, bodies, Some(av), files, world)
-    };
-    // the entity and effect materials added since: a model's stub set
-    // left unresolved read prepass key 3, no `floatZ`, and kept the
-    // entity out of the depth prepass (cod4-client-perf.md 37)
-    m.resolve_material_orders(&zones);
+    let stock = std::iter::once(("common_mp", &zones.common.assets)).chain(
+        SOUND_ZONES
+            .into_iter()
+            .zip(zones.sound.iter().map(|z| &z.assets)),
+    );
+    let mod_assets = zones.mod_zone.as_ref().map(|z| &z.assets);
+    let mut hud = hud_assets(stock, &zones.map.assets, mod_assets);
+    laps.lap("hud assets");
+    let (models, weapons, parts) = entity_models(m, &by_priority, ents);
+    laps.lap("entity models");
+    let bodies = vcod_cod4::anim::BodySource::from_zones(&by_priority, models.clone())
+        .inspect(|b| log::info!("cod4: {} player clips", b.clip_count()))
+        .inspect_err(|e| log::warn!("cod4: player anims: {e:#}, players stay unposed"))
+        .ok();
+    laps.lap("player anims");
+    let (av, sound_files) = sound_and_fx(m, &by_priority, map, &zones.sound)?;
+    laps.lap("sound and fx");
+    let world = crate::play::cod4_predict::Cod4World::from_assets(&zones.map.assets, &by_priority)
+        .inspect_err(|e| log::warn!("cod4: clip map: {e:#}, no prediction"))
+        .ok()
+        .map(|mut w| {
+            let fs = src.iwds();
+            if fs_game.is_some() {
+                let files = w.overlay_weapon_files(fs);
+                log::info!(
+                    "cod4: {} weapon files read off the search path",
+                    files.len()
+                );
+                hud.overlay_weapon_files(&files);
+            }
+            if !w.read_ragdoll(fs) {
+                log::warn!("cod4: no ragdoll.cfg, corpses keep their death anims");
+            }
+            Arc::new(w)
+        });
+    Ok(LevelAssets {
+        models,
+        parts,
+        weapons,
+        bodies,
+        av: Some(av),
+        sound_files,
+        world,
+        look: crate::cod4_look::Cod4Look::new(visions),
+        hud: Some(hud),
+        ambient,
+    })
+}
+
+/// The world `m` draws as and where the camera starts: the zones join
+/// `src` (the map's, the mod's, the `_load` zone `load` or walked here),
+/// the light grid traces through the level's clip map.
+#[allow(clippy::too_many_arguments)]
+fn build_level(
+    install: &Install,
+    map: &str,
+    m: &Map,
+    zones: LevelZones,
+    src: &mut Cod4Source,
+    level: &LevelAssets,
+    load: Option<LoadZone>,
+    laps: &mut vcod_common::laps::Laps,
+) -> Result<(MapWorld, ([f32; 3], f32))> {
     laps.lap("clip map");
     report_load(0.85);
     // the static models' light grid samples trace through the clip map
-    let clip = match &world {
+    let clip = match &level.world {
         Some(w) => Some(w.clip.clone()),
-        None => vcod_cod4::collision::ClipMap::from_assets(&walked.assets)
+        None => vcod_cod4::collision::ClipMap::from_assets(&zones.map.assets)
             .inspect_err(|e| log::warn!("cod4: clip map: {e:#}, grid corners untraced"))
             .ok()
             .map(Arc::new),
     };
     // each light def's attenuation image, by def name
-    let light_def_images: HashMap<String, String> = walked
-        .assets
+    let assets = &zones.map.assets;
+    let light_def_images: HashMap<String, String> = assets
         .light_defs
         .iter()
         .filter_map(|d| {
-            let img = &walked.assets.images[d.image?.index()];
+            let img = &assets.images[d.image?.index()];
             Some((d.name.clone(), img.name.trim_start_matches(',').to_string()))
         })
         .collect();
-    src.add_zone_flagged(Arc::new(walked.assets), vcod_cod4::install::zone_flags::MAP);
-    if let Some(z) = mod_zone {
+    src.add_zone_flagged(
+        Arc::new(zones.map.assets),
+        vcod_cod4::install::zone_flags::MAP,
+    );
+    if let Some(z) = zones.mod_zone {
         src.add_zone_flagged(Arc::new(z.assets), vcod_cod4::install::zone_flags::MOD);
     }
     // Only the zone's assets are kept; the connect screen read its image
     // off the walk (`walk_load_zone`).
-    load_zone(&install, map, &mut src, load);
+    load_zone(install, map, src, load);
     laps.lap("load zone");
-    let bsp = build_world(map, &m, &src, clip, &light_def_images, &mut laps)?;
-    laps.finish();
+    let bsp = build_world(map, m, src, clip, &light_def_images, laps)?;
     let spawn = m
         .entities
         .iter()
@@ -382,21 +520,7 @@ pub fn load_from(
             Some((origin, yaw))
         })
         .unwrap_or_else(|| ([0, 1, 2].map(|k| (m.mins[k] + m.maxs[k]) * 0.5), 0.0));
-    Ok(Cod4Map {
-        bsp,
-        materials: vcod_cod4::materials::material_lib(&m),
-        spawn,
-        models,
-        parts,
-        weapons,
-        bodies,
-        av,
-        ambient,
-        sound_files,
-        world,
-        look,
-        hud,
-    })
+    Ok((bsp, spawn))
 }
 
 /// The world the renderer draws off `m`, level `map`: its lightmap pages read off
@@ -485,7 +609,7 @@ fn hud_assets<'a>(
     out
 }
 
-/// [`load_from`] with the level's HUD zones off its walks
+/// A session's [`load_from`], drawing `ents`, with the level's HUD zones off its walks
 /// (`Cod4Hud::read_level`), as `Cod4Client::prewarm` would read them
 /// after it.
 pub fn load_with_hud(
@@ -496,7 +620,7 @@ pub fn load_with_hud(
     stock: Option<StockZones>,
     load: Option<LoadZone>,
 ) -> Result<(Cod4Map, crate::cod4_hud::LevelZones)> {
-    let mut m = load_from(game_dir, fs_game, map, ents, stock, load)?;
+    let mut m = load_from(game_dir, fs_game, map, Mode::Session(ents), stock, load)?;
     let t0 = std::time::Instant::now();
     let z =
         crate::cod4_hud::Cod4Hud::read_level(&game_dir.join("main"), map, fs_game, m.hud.take());
@@ -1232,6 +1356,28 @@ fn note_sounds(a: &Assets, def: &vcod_cod4::assets::weapon::Weapon) -> Vec<(Stri
 
 #[cfg(test)]
 mod tests {
+    /// A session whose gamestate precaches no model or weapon still loads
+    /// as a session: its HUD, bodies' tree and prediction world. Vacuous
+    /// without `COD4_DIR`.
+    #[test]
+    fn a_session_naming_no_entities_is_no_fly_mode() {
+        let Some(install) = vcod_cod4::testing::cod4_install() else {
+            return;
+        };
+        let none = super::EntityAssets::default();
+        let m = super::load_from(
+            install.root(),
+            None,
+            "mp_crash",
+            super::Mode::Session(&none),
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(m.hud.is_some() && m.world.is_some() && m.bodies.is_some());
+        assert!(m.ambient.is_some());
+    }
+
     /// A session's load builds the HUD's assets off the zones it walked
     /// for the map (keeping bulk data) as the HUD's own walk of them
     /// (dropping it) reads them. Vacuous without `COD4_DIR`.
