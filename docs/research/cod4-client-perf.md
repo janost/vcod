@@ -1996,6 +1996,43 @@ origin each, two surfaces each over 20 models, microseconds. VERIFIED
 Pending, on a card: the kit's `perf-frame` cases `crash`, `crash-nodyn`
 and `crash-held` (and `backlot`, `shipment`) against the build before it.
 
+### 41.2 One draw per model's run of instances
+
+A map's dynent defs come grouped by model: mp_crash's 516 dynents are 28
+runs of one model in def order over 28 models, mp_backlot's 678 are 35
+over 35, mp_shipment's 1901 are 9 over 9 (`dynent_dump`, def order).
+VERIFIED (the zones). They lead the instance list in def order (41), so
+each model's dynents hold consecutive instance slots, and the sorted
+entity draws of one material run instance by instance.
+
+- The scene pass: a run of entity items (`renderer::ent_run`'s surfaces of one
+  instance) and each next run of as many items that is the next instance
+  of the same model on the same surfaces, no stop (a split, the dlights)
+  among them, draw as one call over the instance range
+  (`renderer::ent_instances`). Only a one-stage skin repeats: a second
+  stage draws after its own instance's first, not after every
+  instance's.
+- The depth prepass: an instance's joined surfaces repeat on the next
+  instances of its model the same way (`renderer::prepass_instances`).
+- The sun and spot shadow casters: a caster draw with no state change
+  before it, over the last draw's indices and base vertex on the next
+  instance, extends that draw's instances (`cod4_sunshadow::plan_draws`).
+
+An instanced draw rasterizes its instances in order, each instance's
+primitives before the next one's, so the same fragments meet the depth
+test and blend in the same order as one call each (the Vulkan spec's
+primitive order; INFERRED for every backend wgpu drives): frames are the
+same by construction. Bodies, culled dynents (a gap in the slots), a LOD
+change and every other entity split a run. All three follow
+`draw_joins`, so `cod4_draws_live`'s one-by-one frames against the
+joined ones gate them on a card. `entcalls` and `shadowdraws` fall; the
+census rows' draw counts move with them.
+
+Pending, on a card: kit pack 5's `perf-frame` cases `crash`,
+`crash-held`, `backlot` and `shipment` against master (`encode`,
+`finish`, `entcalls`, `shadowdraws`), its `shots` and census frame
+hashes.
+
 ## 42. Entity lighting held across frames, and the frame's uploads by span
 
 1. `Cod4EntityLight::frame_sets` keeps each lookup with its lighting

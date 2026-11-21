@@ -153,8 +153,9 @@ pub(super) struct EntBound {
 
 /// Draws one entity surface's stages back to back, as retail's stage
 /// iterator does, over `indices` (the surface's own, or a run of its
-/// neighbours' from [`ent_run`]). `bound` tracks the bound pipeline across
-/// calls.
+/// neighbours' from [`ent_run`]) and `instances` (one, or a run of one
+/// model's from [`ent_instances`]). `bound` tracks the bound pipeline
+/// across calls.
 #[expect(clippy::too_many_arguments)]
 pub(super) fn draw_ent_stages(
     pass: &mut impl DrawSink,
@@ -163,7 +164,7 @@ pub(super) fn draw_ent_stages(
     skin_bg: &wgpu::BindGroup,
     skin: &EntSkin,
     surf: &VmSurface,
-    (indices, instance): (std::ops::Range<u32>, u32),
+    (indices, instances): (std::ops::Range<u32>, std::ops::Range<u32>),
     bound: &mut EntBound,
     depth: Depth,
     census: &std::cell::Cell<PassCensus>,
@@ -207,7 +208,7 @@ pub(super) fn draw_ent_stages(
             bound.params = Some(params);
             tally(census, |c| c.bind_groups += 1);
         }
-        pass.draw_inst(indices.clone(), surf.base_vertex, instance);
+        pass.draw_inst(indices.clone(), surf.base_vertex, instances.clone());
         tally(census, |c| match (depth, which) {
             (Depth::Prepass | Depth::FloatZ, _) => c.prepass_ents += 1,
             (_, EntPass::View) => c.gun += 1,
@@ -260,6 +261,76 @@ pub(super) fn ent_run(
         n += 1;
     }
     n
+}
+
+/// How many instances the run of `n` items at `k` ([`ent_run`]) draws
+/// over as one instanced draw: it and each next `n` items that repeat it
+/// on the next instance of the same model, no stop among them. The draw
+/// rasterizes instance by instance, so in the same order as one draw
+/// each. Only a one-stage skin repeats: a second stage would draw after
+/// every instance's first. `model_of` is an instance's model.
+pub(super) fn ent_instances(
+    items: &[SortedItem],
+    (k, n): (usize, usize),
+    draws: &[EntDraw],
+    model_of: impl Fn(u32) -> usize,
+    one_stage: bool,
+    stops: &[Option<usize>],
+) -> usize {
+    let SortedItem::Model(first) = items[k] else {
+        return 1;
+    };
+    let d = &draws[first];
+    if !one_stage || d.gun {
+        return 1;
+    }
+    let model = model_of(d.inst);
+    let repeats = |r: usize| {
+        (0..n).all(|t| {
+            let at = k + r * n + t;
+            match items.get(at) {
+                Some(&SortedItem::Model(m)) => {
+                    let e = &draws[m];
+                    !e.gun
+                        && e.inst as usize == d.inst as usize + r
+                        && e.surf as usize == d.surf as usize + t
+                        && model_of(e.inst) == model
+                        && !stops.contains(&Some(at))
+                }
+                _ => false,
+            }
+        })
+    };
+    let mut r = 1;
+    while repeats(r) {
+        r += 1;
+    }
+    r
+}
+
+/// The depth prepass's [`ent_instances`]: how many instances the draw
+/// of `surfs[k..k + n]` (one instance's surfaces, `(instance, surface)`)
+/// takes, it and each next `n` entries that repeat it on the next
+/// instance of the same model.
+pub(super) fn prepass_instances(
+    surfs: &[(u32, u32)],
+    (k, n): (usize, usize),
+    model_of: impl Fn(u32) -> usize,
+) -> usize {
+    let (inst, _) = surfs[k];
+    let model = model_of(inst);
+    let repeats = |r: usize| {
+        (0..n).all(|t| {
+            surfs.get(k + r * n + t).is_some_and(|&(i, s)| {
+                i as usize == inst as usize + r && s == surfs[k + t].1 && model_of(i) == model
+            })
+        })
+    };
+    let mut r = 1;
+    while repeats(r) {
+        r += 1;
+    }
+    r
 }
 
 /// The uploaded surfaces [`Renderer::dynamic_model_hiding`] draws, by

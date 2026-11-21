@@ -46,8 +46,14 @@ pub(super) trait DrawSink {
     fn vertices(&mut self, slot: u32, s: wgpu::BufferSlice<'_>);
     fn indices(&mut self, s: wgpu::BufferSlice<'_>, f: wgpu::IndexFormat);
     fn draw(&mut self, indices: std::ops::Range<u32>);
-    /// An entity surface's draw: its vertices from `base`, one instance.
-    fn draw_inst(&mut self, indices: std::ops::Range<u32>, base: i32, instance: u32);
+    /// An entity surface's draw: its vertices from `base`, over
+    /// `instances` of one model in order.
+    fn draw_inst(
+        &mut self,
+        indices: std::ops::Range<u32>,
+        base: i32,
+        instances: std::ops::Range<u32>,
+    );
 }
 
 impl DrawSink for wgpu::RenderPass<'_> {
@@ -66,8 +72,13 @@ impl DrawSink for wgpu::RenderPass<'_> {
     fn draw(&mut self, indices: std::ops::Range<u32>) {
         self.draw_indexed(indices, 0, 0..1);
     }
-    fn draw_inst(&mut self, indices: std::ops::Range<u32>, base: i32, instance: u32) {
-        self.draw_indexed(indices, base, instance..instance + 1);
+    fn draw_inst(
+        &mut self,
+        indices: std::ops::Range<u32>,
+        base: i32,
+        instances: std::ops::Range<u32>,
+    ) {
+        self.draw_indexed(indices, base, instances);
     }
 }
 
@@ -79,7 +90,7 @@ pub(super) enum Cmd {
     Vertices(u32, wgpu::Buffer, u64, u64),
     Indices(wgpu::Buffer, wgpu::IndexFormat, u64, u64),
     Draw(std::ops::Range<u32>),
-    DrawInst(std::ops::Range<u32>, i32, u32),
+    DrawInst(std::ops::Range<u32>, i32, std::ops::Range<u32>),
 }
 
 /// A run of world draws' commands, recorded every frame (an `Arc` clone
@@ -110,8 +121,13 @@ impl DrawSink for Recording {
     fn draw(&mut self, indices: std::ops::Range<u32>) {
         self.0.push(Cmd::Draw(indices));
     }
-    fn draw_inst(&mut self, indices: std::ops::Range<u32>, base: i32, instance: u32) {
-        self.0.push(Cmd::DrawInst(indices, base, instance));
+    fn draw_inst(
+        &mut self,
+        indices: std::ops::Range<u32>,
+        base: i32,
+        instances: std::ops::Range<u32>,
+    ) {
+        self.0.push(Cmd::DrawInst(indices, base, instances));
     }
 }
 
@@ -132,7 +148,7 @@ impl Recording {
                 Cmd::Vertices(slot, b, o, n) => pass.vertices(*slot, b.slice(*o..*o + *n)),
                 Cmd::Indices(b, f, o, n) => pass.indices(b.slice(*o..*o + *n), *f),
                 Cmd::Draw(r) => pass.draw(r.clone()),
-                Cmd::DrawInst(r, b, i) => pass.draw_inst(r.clone(), *b, *i),
+                Cmd::DrawInst(r, b, i) => pass.draw_inst(r.clone(), *b, i.clone()),
             }
         }
     }
@@ -166,7 +182,7 @@ impl Recording {
                 Cmd::Vertices(slot, b, o, n) => enc.set_vertex_buffer(*slot, b.slice(*o..*o + *n)),
                 Cmd::Indices(b, f, o, n) => enc.set_index_buffer(b.slice(*o..*o + *n), *f),
                 Cmd::Draw(r) => enc.draw_indexed(r.clone(), 0, 0..1),
-                Cmd::DrawInst(r, b, i) => enc.draw_indexed(r.clone(), *b, *i..*i + 1),
+                Cmd::DrawInst(r, b, i) => enc.draw_indexed(r.clone(), *b, i.clone()),
             }
         }
         enc.finish(&wgpu::RenderBundleDescriptor {

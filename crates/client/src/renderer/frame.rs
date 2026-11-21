@@ -965,7 +965,7 @@ impl Renderer {
                             &model.bind_groups[surf.bind_group],
                             &vmp.skins[d.inst as usize][d.surf as usize],
                             surf,
-                            (surf.first_index..surf.first_index + surf.index_count, 0),
+                            (surf.first_index..surf.first_index + surf.index_count, 0..1),
                             &mut bound,
                             Depth::Plain,
                             &self.census,
