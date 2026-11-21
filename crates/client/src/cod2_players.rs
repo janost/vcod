@@ -218,13 +218,7 @@ impl Cod2Players {
                         })
                         .clone()
                         .map(|rig| {
-                            let bone = |name: &str| {
-                                rig.skeleton
-                                    .bones()
-                                    .iter()
-                                    .position(|b| b.name.eq_ignore_ascii_case(name))
-                            };
-                            let tags = [bone("tag_flash"), bone("j_head"), bone("tag_brass")];
+                            let tags = rig_tags(&rig.skeleton);
                             (rig, tags)
                         });
                     self.held
@@ -386,6 +380,18 @@ pub fn tag_pose(model: Mat4, (at, rot): (Vec3, Quat)) -> TagPose {
         origin: model.transform_point3(at),
         axis: [q * Vec3::X, q * Vec3::Y, q * Vec3::Z],
     }
+}
+
+/// A player rig's `tag_flash`, `j_head` and `tag_brass` bones, by
+/// case-blind name, in that order; CoD2's and CoD4's bodies read them.
+pub(crate) fn rig_tags(skeleton: &vcod_common::skeleton::Skeleton) -> [Option<usize>; 3] {
+    let bone = |name: &str| {
+        skeleton
+            .bones()
+            .iter()
+            .position(|b| b.name.eq_ignore_ascii_case(name))
+    };
+    [bone("tag_flash"), bone("j_head"), bone("tag_brass")]
 }
 
 #[cfg(test)]

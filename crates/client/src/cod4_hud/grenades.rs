@@ -4,8 +4,11 @@
 //! (docs/research/cod4-hud.md 21). A child of `cod4_hud`, whose loaded
 //! zones it draws with.
 
+use super::hints::FIRST_WEAPON_HINT;
 use super::*;
+use crate::hud::angle_normalize_360;
 use glam::Vec3;
+use vcod_cod4::net::flags::{PM_SPECTATOR, WEAPTYPE_GRENADE};
 
 /// The `cg_hudGrenade*` and `bg_maxGrenadeIndicatorSpeed` 1.7 defaults
 /// (cod4-hud.md 21; registered at `iw3mp.exe` 0x43b54e..0x43b9f1 and
@@ -24,17 +27,12 @@ const PULSE_RANGE: [f32; 2] = [0.3, 1.85];
 const RESTING_SPEED: f32 = 20.0;
 /// What a frame takes at most.
 const MAX_GRENADES: usize = 32;
-/// `weapType` 1, a grenade; `projExplosionType` 0 (grenade) or 6 (heavy).
-const WEAPTYPE_GRENADE: i32 = 1;
+/// A grenade's `projExplosionType`: 0 (grenade) or 6 (heavy).
 const FRAG_EXPLOSIONS: [i32; 2] = [0, 6];
-/// A `cursorHint` from 5 on names a weapon, here the frag to throw back.
-const FIRST_WEAPON_HINT: u32 = 5;
 const FRAG_ICON: &str = "hud_grenadeicon";
 const THROWBACK_ICON: &str = "hud_grenadethrowback";
 const POINTER: &str = "hud_grenadepointer";
-/// `pm_type` 4, a spectator, and `otherFlags` 2, a follower: no
-/// indicators for either.
-const PM_SPECTATOR: u32 = 4;
+/// `otherFlags` 2, a follower: no indicators, as for a spectator.
 const OF_FOLLOWING: u32 = 2;
 
 /// A grenade the frame takes: where it is and its icon's material.
@@ -107,7 +105,7 @@ fn draw_indicator(
                 corner(w, h),
                 corner(0.0, h),
             ],
-            uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            uvs: HudQuad::UNIT_UVS,
             rgba,
             texture,
         });
@@ -225,10 +223,6 @@ impl Cod4Hud {
         }
         out
     }
-}
-
-fn angle_normalize_360(a: f32) -> f32 {
-    a.rem_euclid(360.0)
 }
 
 #[cfg(test)]

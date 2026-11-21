@@ -467,7 +467,8 @@ pub fn localize_refusal(e: anyhow::Error, install: &std::path::Path) -> anyhow::
 /// (cod4-front-end.md 7): tokens split by 0x14 (the next one localized,
 /// as the first is) and 0x15 (the next one as it stands); each token
 /// after the first fills the text's next `&&n` in turn, or goes on its
-/// end when none is left. `None` when a localized token has no string.
+/// end when none is left. `None` when a localized token has no string,
+/// where CoD2's `Localized::message` keeps the token and also escapes `%s`.
 pub fn localize_message(msg: &str, get: impl Fn(&str) -> Option<String>) -> Option<String> {
     let mut out = String::new();
     let mut next = 1;

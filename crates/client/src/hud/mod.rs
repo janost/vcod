@@ -19,7 +19,7 @@ pub mod uo;
 pub mod vote;
 pub mod weapstrip;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use crate::fx::registry::EV_OBITUARY;
 use crate::play::input::{EF_CROUCH, EF_PRONE};
@@ -54,6 +54,44 @@ pub struct HudQuad {
     pub uvs: [[f32; 2]; 4],
     pub rgba: [f32; 4],
     pub texture: String, // pk3 image name, extensionless ok
+}
+
+impl HudQuad {
+    /// The whole texture, in ring order.
+    pub const UNIT_UVS: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+
+    /// An upright rect `[x, y, w, h]` over the whole texture.
+    pub fn rect(r: [f32; 4], rgba: [f32; 4], texture: impl Into<String>) -> HudQuad {
+        HudQuad::rect_uv(r, [0.0, 0.0, 1.0, 1.0], rgba, texture)
+    }
+
+    /// An upright rect `[x, y, w, h]` with texture corners `[s0, t0, s1, t1]`,
+    /// `(s0, t0)` at the top left.
+    pub fn rect_uv(
+        [x, y, w, h]: [f32; 4],
+        [s0, t0, s1, t1]: [f32; 4],
+        rgba: [f32; 4],
+        texture: impl Into<String>,
+    ) -> HudQuad {
+        HudQuad {
+            verts: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
+            uvs: [[s0, t0], [s1, t0], [s1, t1], [s0, t1]],
+            rgba,
+            texture: texture.into(),
+        }
+    }
+}
+
+/// The HUD's angle in 0..360: the float remainder. pmove's
+/// `AngleNormalize360` (`pmove::aim`) runs through the short grid instead.
+pub fn angle_normalize_360(a: f32) -> f32 {
+    a.rem_euclid(360.0)
+}
+
+/// The HUD's angle in -180..180, off [`angle_normalize_360`].
+pub fn angle_normalize_180(a: f32) -> f32 {
+    let a = angle_normalize_360(a);
+    if a > 180.0 { a - 360.0 } else { a }
 }
 
 /// A texture name's prefix that draws its quad blended `SrcAlpha One`
@@ -91,9 +129,6 @@ pub struct Hud {
     pub scoreboard: Scoreboard,
     /// `UI_LoadGameTypes`' list, which names the board's game type.
     game_types: Vec<vcod_common::ui_menu::GameType>,
-    /// Per-CS7-index `(killIcon, wideKillIcon)`. `None` caches a failed load
-    /// so it is tried once.
-    kill_icons: HashMap<i32, Option<(String, bool)>>,
     player: PlayerHud,
     /// A mod's own `hud.menu` items.
     hud_menu: hudmenu::HudMenu,
@@ -130,8 +165,6 @@ pub struct HudFrame<'a> {
     /// retail's `cg.snap->serverTime`, which the crosshair's stance blend
     /// reads the eye's leg against.
     pub snap_time: i32,
-    /// Lazy weapon-file loads for killfeed icons.
-    pub fs: &'a Pk3Fs,
     /// The newest snapshot's playerstate: ours, or the followed player's.
     /// The native HUD and the hudelems are drawn whoever it belongs to.
     pub ps: Option<&'a PlayerState>,
@@ -209,7 +242,6 @@ impl Hud {
             chat_field: None,
             scoreboard: Scoreboard::new(),
             game_types: vcod_common::ui_menu::game_types(fs),
-            kill_icons: HashMap::new(),
             player: PlayerHud::default(),
             hud_menu: hudmenu::HudMenu::load(fs),
             timeout: timeout::MatchTimeout::default(),
@@ -223,12 +255,10 @@ impl Hud {
         }
     }
 
-    /// A download reopened the search path: reload the fonts and `hud.menu`,
-    /// and drop the kill icons read out of the old weapon files. A font the new paks do
-    /// not parse keeps the old one.
+    /// A download reopened the search path: reload the fonts and `hud.menu`.
+    /// A font the new paks do not parse keeps the old one.
     pub fn reopen(&mut self, fs: &Pk3Fs) -> Result<(), String> {
         self.fonts = UiFonts::load(fs)?;
-        self.kill_icons.clear();
         self.hud_menu = hudmenu::HudMenu::load(fs);
         self.game_types = vcod_common::ui_menu::game_types(fs);
         Ok(())
@@ -337,7 +367,6 @@ impl Hud {
     /// scoreboard change. The chat ring goes once the cgame loads
     /// ([`Self::restart_cgame`]).
     pub fn on_gamestate(&mut self) {
-        self.kill_icons.clear();
         // CL_InitCGame empties the message windows (cod11-hud-protocol.md 1.1).
         self.game_messages.clear();
         self.bold_messages.clear();
@@ -390,12 +419,17 @@ impl Hud {
         };
         let attacker = ob.attacker.and_then(resolve);
 
-        let kill_icon = (ob.weapon > 0)
-            .then(|| self.weapon_kill_icon(f.fs, f.configstrings, ob.weapon))
-            .flatten();
-        let icon_wide = kill_icon.as_ref().is_some_and(|(_, wide)| *wide);
+        // The weapon's def by its configstring 7 index, as the rest of the
+        // frame reads it.
+        let def = usize::try_from(ob.weapon)
+            .ok()
+            .filter(|&w| w > 0)
+            .and_then(|w| f.weapons.get(w))
+            .and_then(Option::as_ref);
+        let kill_icon = def.and_then(|d| d.kill_icon.as_deref());
+        let icon_wide = kill_icon.is_some() && def.is_some_and(|d| d.wide_kill_icon);
         let uo = f.protocol.is_uo();
-        let icon = killfeed::icon_for(&ob, kill_icon.as_ref().map(|(path, _)| path.as_str()), uo);
+        let icon = killfeed::icon_for(&ob, kill_icon, uo);
 
         let line = messages::KillLine {
             attacker,
@@ -442,29 +476,6 @@ impl Hud {
             .and_then(Option::as_ref);
         self.player.gun_pose = gun.step(def, &gun_ps, gun_ms, kick);
         self.player.gun_pose
-    }
-
-    /// CS7 index to the weapon file's `(killIcon, wideKillIcon)`, cached hit
-    /// or miss. Same 1-based convention as `entities::resolve_held_weapon`.
-    fn weapon_kill_icon(
-        &mut self,
-        fs: &Pk3Fs,
-        configstrings: &[String],
-        weapon_index: i32,
-    ) -> Option<(String, bool)> {
-        if let Some(cached) = self.kill_icons.get(&weapon_index) {
-            return cached.clone();
-        }
-        let list = configstrings.get(7).map(String::as_str).unwrap_or("");
-        let weapons = crate::entities::split_weapon_list(list);
-        let resolved = crate::entities::weapon_name_for_index(&weapons, weapon_index)
-            .and_then(|name| vcod_common::weapon::load(fs, name).ok())
-            .and_then(|def| {
-                let wide = def.wide_kill_icon;
-                def.kill_icon.map(|icon| (icon, wide))
-            });
-        self.kill_icons.insert(weapon_index, resolved.clone());
-        resolved
     }
 
     /// This frame's quads from every element, at [`HUD_SCALE`].
@@ -1184,7 +1195,6 @@ mod tests {
     fn frame<'a>(
         ps: &'a PlayerState,
         predicted: Option<&'a Predicted>,
-        fs: &'a Pk3Fs,
         loc: &'a Localized,
         clients: &'a BTreeMap<u32, ClientState>,
     ) -> HudFrame<'a> {
@@ -1197,7 +1207,6 @@ mod tests {
             protocol: &PROTOCOL_V1,
             server_time: 0,
             snap_time: 0,
-            fs,
             ps: Some(ps),
             entities: &NO_ENTITIES,
             predicted,
@@ -1237,12 +1246,12 @@ mod tests {
             })
         };
         let weapons = [None, def("rifle"), def("pistol"), def("grenade"), def("mg")];
-        let (fs, loc, clients) = (Pk3Fs::empty(), Localized::default(), BTreeMap::new());
+        let (loc, clients) = (Localized::default(), BTreeMap::new());
         let named = |select: u8| {
             let f = HudFrame {
                 weapons: &weapons,
                 weapon_select: select,
-                ..frame(&ps, None, &fs, &loc, &clients)
+                ..frame(&ps, None, &loc, &clients)
             };
             let v = player_view(&ps, &[], &f);
             assert_eq!(v.weapon.map(|d| d.display_name.as_str()), Some("rifle"));
@@ -1273,12 +1282,12 @@ mod tests {
             })
         };
         let weapons = [None, def("rifle"), def("pistol"), def("grenade")];
-        let (fs, loc, clients) = (Pk3Fs::empty(), Localized::default(), BTreeMap::new());
+        let (loc, clients) = (Localized::default(), BTreeMap::new());
         let counted = |ps: &PlayerState, select: u8| {
             let f = HudFrame {
                 weapons: &weapons,
                 weapon_select: select,
-                ..frame(ps, None, &fs, &loc, &clients)
+                ..frame(ps, None, &loc, &clients)
             };
             let v = player_view(ps, &[], &f);
             v.ammo_weapon.map(|d| d.display_name.clone())
@@ -1324,14 +1333,14 @@ mod tests {
         pred.ps.ammoclip[10] = 4;
         pred.ps.aim_spread_scale = 50.0;
         pred.ps.stance = Stance::Crouch;
-        let (fs, loc, clients) = (Pk3Fs::empty(), Localized::default(), BTreeMap::new());
+        let (loc, clients) = (Localized::default(), BTreeMap::new());
 
         let snap = player_view(
             &ps,
             &[],
             &HudFrame {
                 snap_time: 1100,
-                ..frame(&ps, None, &fs, &loc, &clients)
+                ..frame(&ps, None, &loc, &clients)
             },
         );
         assert_eq!(
@@ -1353,7 +1362,7 @@ mod tests {
         assert_eq!(snap.cursor_hint_string, -1, "retail's -1 arrives as 255");
         assert_eq!(snap.fov, (80.0, crate::camera::fov_y(80.0, 640.0 / 480.0)));
 
-        let own = player_view(&ps, &[], &frame(&ps, Some(&pred), &fs, &loc, &clients));
+        let own = player_view(&ps, &[], &frame(&ps, Some(&pred), &loc, &clients));
         assert_eq!(
             (own.ammoclip[10], own.aim_spread_scale, own.eflags),
             (4, 50.0, 0x10 | EF_CROUCH)
@@ -1366,7 +1375,7 @@ mod tests {
             &[],
             &HudFrame {
                 snap_time: i32::MAX,
-                ..frame(&ps, None, &fs, &loc, &clients)
+                ..frame(&ps, None, &loc, &clients)
             },
         );
         assert_eq!(wrapped.spread_stance.into_leg_ms, Some(-1));
@@ -1395,7 +1404,7 @@ mod tests {
             let f = HudFrame {
                 configstrings: &cs,
                 local_player,
-                ..frame(&ps, None, &fs, &loc, &clients)
+                ..frame(&ps, None, &loc, &clients)
             };
             hud.build(&f).into_iter().map(|q| q.texture).collect()
         };
@@ -1444,7 +1453,7 @@ mod tests {
                     crosshair: true,
                     status,
                 },
-                ..frame(&ps, None, &fs, &loc, &clients)
+                ..frame(&ps, None, &loc, &clients)
             };
             hud.build(&f).into_iter().map(|q| q.texture).collect()
         };
@@ -1492,10 +1501,10 @@ mod tests {
         entities.insert(2, player(1, 0)); // enemy
         entities.insert(3, player(1, 1)); // dead teammate
         entities.insert(4, player(2, 0)); // a teammate's corpse
-        let (fs, loc) = (Pk3Fs::empty(), Localized::default());
+        let loc = Localized::default();
         let f = HudFrame {
             entities: &entities,
-            ..frame(&ps, None, &fs, &loc, &clients)
+            ..frame(&ps, None, &loc, &clients)
         };
         let seen = compass_friends(&ps, &f);
         let who: Vec<(u32, bool)> = seen.iter().map(|s| (s.client, s.pinged)).collect();
@@ -1507,7 +1516,7 @@ mod tests {
             clients.insert(0, client(team));
             let f = HudFrame {
                 entities: &entities,
-                ..frame(&ps, None, &fs, &loc, &clients)
+                ..frame(&ps, None, &loc, &clients)
             };
             assert!(compass_friends(&ps, &f).is_empty(), "team {team}");
         }
@@ -1632,7 +1641,6 @@ mod tests {
     #[test]
     fn on_gamestate_forgets_the_map_but_keeps_chat() {
         let mut hud = bare_hud();
-        hud.kill_icons.insert(3, None);
         hud.game_messages.push_kill(
             messages::KillLine {
                 attacker: None,
@@ -1658,7 +1666,6 @@ mod tests {
 
         hud.on_gamestate();
 
-        assert!(hud.kill_icons.is_empty());
         assert!(hud.game_messages.is_empty());
         assert!(hud.scoreboard.rows_for_team(0).is_empty());
         assert!(!hud.chat.is_empty());
@@ -1686,7 +1693,6 @@ mod tests {
     #[test]
     fn an_obituary_goes_to_the_game_message_window() {
         use vcod_common::net::events::GameEvent;
-        let fs = Pk3Fs::empty();
         let mut hud = bare_hud();
         let p = &vcod_common::net::protocol::PROTOCOL_V1;
         let ps = PlayerState::null(p);
@@ -1695,7 +1701,7 @@ mod tests {
             .map(|(n, team, name)| (n, ClientState::named(p, n, team, name)))
             .collect();
         let loc = Localized::default();
-        let f = frame(&ps, None, &fs, &loc, &clients);
+        let f = frame(&ps, None, &loc, &clients);
         let ev = GameEvent {
             event: EV_OBITUARY,
             parm: 0x80 | 7, // MOD_MELEE
@@ -1722,6 +1728,54 @@ mod tests {
                 icon_flip: false,
                 victim: ("Bob".into(), [0.5, 0.5, 1.0]),
             }]
+        );
+    }
+
+    /// A weapon kill's icon is its def's `killIcon` from the frame's
+    /// configstring 7 table, wide when the def says so.
+    #[test]
+    fn a_weapon_kill_draws_the_frames_kill_icon() {
+        use vcod_common::net::events::GameEvent;
+        let mut hud = bare_hud();
+        let p = &vcod_common::net::protocol::PROTOCOL_V1;
+        let ps = PlayerState::null(p);
+        let clients: BTreeMap<u32, ClientState> = [(2, 1, "Me"), (3, 2, "Bob")]
+            .into_iter()
+            .map(|(n, team, name)| (n, ClientState::named(p, n, team, name)))
+            .collect();
+        let loc = Localized::default();
+        let weapons = [
+            None,
+            Some(WeaponDef {
+                kill_icon: Some("gfx/hud/death_kar98".into()),
+                wide_kill_icon: true,
+                ..Default::default()
+            }),
+        ];
+        let f = HudFrame {
+            weapons: &weapons,
+            ..frame(&ps, None, &loc, &clients)
+        };
+        let ev = GameEvent {
+            event: EV_OBITUARY,
+            parm: 1,
+            entity_num: 99,
+            client_num: -1,
+            weapon: 0,
+            surf_type: 0,
+            pos: [0.0; 3],
+            dir: [0.0; 3],
+            scale: 0,
+            other_entity_num: 3,
+            attacker_entity_num: 2,
+            e_type: 0,
+            eflags: 0,
+        };
+        hud.on_game_event(&ev, &f);
+        let line = hud.game_messages.kill_lines()[0];
+        assert_eq!(
+            (line.icon.as_str(), line.icon_wide),
+            ("gfx/hud/death_kar98", true)
         );
     }
 
@@ -1759,10 +1813,9 @@ mod tests {
                 .into_iter()
                 .map(|(n, team, name)| (n, ClientState::named(p, n, team, name)))
                 .collect();
-            let fs = Pk3Fs::empty();
             let f = HudFrame {
                 protocol: p,
-                ..frame(&ps, None, &fs, &loc, &clients)
+                ..frame(&ps, None, &loc, &clients)
             };
             obituary_center_print(&killfeed::decode_obituary(ev), &f)
         };

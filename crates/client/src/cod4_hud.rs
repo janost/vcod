@@ -53,7 +53,7 @@ use crate::console::shell::Shell;
 use crate::hud::HudQuad;
 use crate::hud::cod2elem::ScreenPlacement;
 use crate::hud::font::{self, Font};
-use crate::play::cod4::{Cod4Session, EV_OBITUARY, Fired};
+use crate::play::cod4::{Cod4Session, ET_HELICOPTER, ET_PLANE, EV_OBITUARY, Fired, client_u32};
 
 /// `cg_chatHeight` 8 and `cg_chatTime` 12000 (`iw3mp.exe` 0x43ce07,
 /// 0x43cdd0), drawn at `cg_hudChatPosition` (5, 204).
@@ -94,18 +94,13 @@ const EF_TURRET_ACTIVE: u32 = 0x2_0000;
 /// (`iw3mp.exe` 0x429717, 0x429856).
 const EF_PING: u32 = 0x40_0000;
 const EF_COMPASS_PING: u32 = 0x80_0000;
-/// 1.7's `ET_HELICOPTER` and `ET_PLANE`, the compass's owner draws 155
-/// and 156.
-const ET_HELICOPTER: u32 = 12;
-const ET_PLANE: u32 = 13;
 
-/// A `clientState_t` field by name.
-fn client_word(c: &vcod_cod4::net::delta::ClientState, name: &str) -> u32 {
-    vcod_cod4::net::fields::CLIENT_STATE
-        .iter()
-        .find(|f| f.name == name)
-        .map_or(0, |f| c.0[f.word()])
+/// A line of text at `scale`, grid units: the 48-unit font height,
+/// truncated as the layouts read it.
+fn text_height(scale: f32) -> f32 {
+    (48.0 * scale) as i32 as f32
 }
+
 /// `cg_hudVotePosition`'s default (`iw3mp.exe` 0x43bb44: 5 and 220).
 const VOTE_POSITION: [f32; 2] = [5.0, 220.0];
 /// `CG_Obituary`'s icon: 1.4 font heights square, twice as wide for a
@@ -341,10 +336,9 @@ fn in_killcam(snap: &Snapshot) -> bool {
     snap.ps.word(vcod_cod4::ps_word!("deltaTime")) != 0
 }
 
-/// `pmtype_t`: `PM_DEAD` and up hide `HE_FLAG_HIDE_WHEN_DEAD` elements;
+/// `PM_DEAD` and up hide `HE_FLAG_HIDE_WHEN_DEAD` elements;
 /// `PM_SPECTATOR` and up draw no weapon HUD.
-const PM_DEAD: u32 = 7;
-const PM_SPECTATOR: u32 = 4;
+use vcod_cod4::net::flags::{PM_DEAD, PM_SPECTATOR};
 
 impl Cod4Hud {
     /// The HUD at server time `now` on a `size` window, empty until the
@@ -489,12 +483,7 @@ pub(crate) fn quad(
     flip: bool,
 ) -> HudQuad {
     let (u0, u1) = if flip { (1.0, 0.0) } else { (0.0, 1.0) };
-    HudQuad {
-        verts: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
-        uvs: [[u0, 0.0], [u1, 0.0], [u1, 1.0], [u0, 1.0]],
-        rgba,
-        texture,
-    }
+    HudQuad::rect_uv([x, y, w, h], [u0, 0.0, u1, 1.0], rgba, texture)
 }
 
 #[cfg(test)]

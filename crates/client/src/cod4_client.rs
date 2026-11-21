@@ -630,24 +630,8 @@ impl Cod4Client {
         }
         if self.session.menus.open().is_some() {
             self.session.menus.mirror = self.hud.mirrored_dvars(&self.session);
-            self.session.menus.host = crate::play::cod4_menus::Host {
-                cvars: cx
-                    .shell
-                    .cvar_values()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-                    .collect(),
-                enums: cx
-                    .shell
-                    .enum_domains()
-                    .map(|(k, v)| (k.to_string(), v.to_vec()))
-                    .collect(),
-                binds: cx
-                    .shell
-                    .binds()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-                    .collect(),
-                players: self.session.players(),
-            };
+            self.session.menus.host =
+                crate::play::cod4_menus::Host::from_shell(cx.shell, self.session.players());
             self.session.menus.game = self.hud.menu_game(&self.session, self.render_time);
             let (gametype, name, objective) = self.hud.gametype_strings(&self.session);
             let m = &mut self.session.menus;
@@ -752,7 +736,7 @@ impl Cod4Client {
         // In third person the camera backs off the gun's `tag_player`
         // raised by the view height, and nothing jitters (0x4508ba).
         if !self.free
-            && let Some(eye) = self.turret_eye(&scene)
+            && let Some(eye) = self.turret_eye()
         {
             self.aim = Some((eye, scene.angles));
             if let Some(t) = third {
@@ -885,7 +869,7 @@ impl Cod4Client {
     /// batch while [`crate::voice::may_send`] holds, the heard ones
     /// played. `cl_voice` defaults to 1 and `rate` to the userinfo's 25000.
     fn voice_frame(&mut self, cx: &mut Cod2Frame) {
-        use crate::voice::{VoiceChat, VoiceFrame, may_send};
+        use crate::voice::may_send;
         let atoi = vcod_cod4::menuexp::atoi;
         let (sv_voice, quality) = self.session.voice_settings();
         let cl_voice = cx.shell.cvar("cl_voice").is_none_or(|v| atoi(v) != 0);
@@ -893,14 +877,15 @@ impl Cod4Client {
         let active = self.session.client().snapshots.last().is_some();
         let held = self.session.input.held(crate::play::input::Action::Talk);
         self.session.voice.enabled = cl_voice;
-        let f = VoiceFrame {
-            sending: may_send(held, active, sv_voice, cl_voice, rate),
+        crate::voice::step(
+            &mut self.voice,
+            vcod_cod4::net::voice::SAMPLE_RATE,
+            &mut self.session.voice,
+            may_send(held, active, sv_voice, cl_voice, rate),
             quality,
-            mic: crate::voice::shell_mic_gain(cx.shell),
-        };
-        self.voice
-            .get_or_insert_with(|| VoiceChat::new(vcod_cod4::net::voice::SAMPLE_RATE))
-            .frame(&mut self.session.voice, &f, Some(&mut *cx.audio));
+            cx.shell,
+            cx.audio,
+        );
     }
 
     /// The drawn snapshot's shellshock at the render time `now`
@@ -1632,7 +1617,7 @@ impl Cod4Client {
 
     /// The gun our view is locked to, its `tag_player` this frame: `None`
     /// off a gun or for a gun not drawn.
-    fn turret_eye(&self, _scene: &Scene) -> Option<Vec3> {
+    fn turret_eye(&self) -> Option<Vec3> {
         let gun = self.own_gun()?;
         self.vehicles.tag(gun, "tag_player").map(|(_, p)| p.origin)
     }
@@ -1786,14 +1771,7 @@ impl Cod4Client {
                                 render_ms: scene.render_time,
                             });
                         let bones = self.vehicles.place_turret(d.number, m, pose, gun, anims);
-                        let tag = |t: &str| {
-                            self.vehicles.tag(d.number, t).map(|(_, p)| {
-                                let q = Quat::from_mat3(&glam::Mat3::from_cols(
-                                    p.axis[0], p.axis[1], p.axis[2],
-                                ));
-                                (p.origin, q)
-                            })
-                        };
+                        let tag = |t: &str| self.vehicles.tag_origin_turn(d.number, t);
                         // `CG_FireWeapon` flashes an `ET_MG42` on its
                         // `tag_flash` and ejects nothing.
                         let tags = WeaponTags {
@@ -1815,14 +1793,7 @@ impl Cod4Client {
                         // helicopter's own `tag_flash` and ejects on its
                         // `tag_brass` (cod4-client-view.md 11.1).
                         if d.vehicle.is_some() {
-                            let tag = |t: &str| {
-                                self.vehicles.tag(d.number, t).map(|(_, p)| {
-                                    let q = Quat::from_mat3(&glam::Mat3::from_cols(
-                                        p.axis[0], p.axis[1], p.axis[2],
-                                    ));
-                                    (p.origin, q)
-                                })
-                            };
+                            let tag = |t: &str| self.vehicles.tag_origin_turn(d.number, t);
                             let tags = WeaponTags {
                                 flash: tag("tag_flash"),
                                 brass: tag("tag_brass"),
@@ -2050,13 +2021,11 @@ impl Cod4Client {
         if self.map_load.is_some() {
             return;
         }
-        let up = crate::camera::up_hint(yaw, pitch, roll);
-        let fwd = crate::camera::basis(yaw, pitch).0;
-        let right = fwd.cross(up).normalize();
+        let (fwd, right, up) = crate::camera::rolled_basis(yaw, pitch, roll);
         let view = crate::cod2_world_hud::WorldView {
             view_proj,
             right,
-            up: right.cross(fwd),
+            up,
             size,
         };
         let mut q = self.hud.world_quads(&self.session, &view, self.render_time);
@@ -2327,13 +2296,6 @@ fn lie_down(d: &Drawn) -> Mat4 {
     }
 }
 
-/// `eType` 11 (a turret) and 14 (a vehicle): the slots of 1.7's per-eType
-/// table list (`cod4_lnxded` 0x8228be0) whose rows are the general table
-/// and the vehicle one (0x8225f80), cod4-netfields.md 1. The names are
-/// INFERRED.
-const ET_MG42: u32 = 11;
-const ET_VEHICLE: u32 = 14;
-
 /// Where a non-body entity samples the light grid (cod4-world.md 3.3):
 /// its drawn origin raised 32 for a turret or a vehicle, 4 for the rest
 /// (`CG_General`, `CG_Item`, `CG_Missile`, `CG_ScriptMover`: iw3mp.exe
@@ -2341,7 +2303,7 @@ const ET_VEHICLE: u32 = 14;
 /// 0x44f857). A player or a corpse is lit from `BodyFrame::light_origin`.
 fn light_origin(d: &Drawn) -> Vec3 {
     let up = match d.etype {
-        ET_MG42 | ET_VEHICLE => 32.0,
+        crate::play::cod4::ET_MG42 | crate::play::cod4::ET_VEHICLE => 32.0,
         _ => 4.0,
     };
     d.origin + Vec3::Z * up

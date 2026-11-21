@@ -8,18 +8,17 @@
 
 use vcod_cod2::weapon::WeaponDef;
 use vcod_common::fguard::clamp;
+use vcod_common::pmove::aim::angle_subtract;
+use vcod_common::pmove::aim::lean_fraction;
 
 use crate::play::cod2_view::{DamageKick, IdleState};
 
 /// `weaponstate` 5, reloading: no movement offset or tilt.
 const WEAPON_RELOADING: i32 = 5;
 /// `eFlags` 4 crouched, 8 prone: the tilt's stance.
-const EF_CROUCH: i32 = 0x4;
-const EF_PRONE: i32 = 0x8;
+use vcod_cod2::net::flags::{EF_CROUCHING as EF_CROUCH, EF_PRONE};
 /// `viewHeightTarget` of a crouched and a prone body: the offset's stance.
 use vcod_cod2::pmove::{VIEW_CROUCH, VIEW_PRONE};
-/// `bg_bobAmplitudeStanding`, `Ducked`, `Prone` (cod2-movement.md 13).
-const BOB_AMPLITUDE: [f32; 3] = [0.007, 0.0075, 0.03];
 
 /// The weapon file's keys the gun's pose reads.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -167,21 +166,6 @@ fn diff_track_angle(target: f32, cur: f32, rate: f32, dt: f32) -> f32 {
     };
     let a = ((v * 182.044_45) as i32 & 0xffff) as f32 * 0.005_493_164;
     if a > 180.0 { a - 360.0 } else { a }
-}
-
-fn angle_subtract(a: f32, b: f32) -> f32 {
-    let mut d = vcod_common::fguard::turns(a - b);
-    while d > 180.0 {
-        d -= 360.0;
-    }
-    while d < -180.0 {
-        d += 360.0;
-    }
-    d
-}
-
-fn lean_fraction(f: f32) -> f32 {
-    (2.0 - f.abs()) * f
 }
 
 /// The movement offset's and tilt's ease: `rate * dt` of the gap, at least
@@ -387,11 +371,7 @@ impl GunState {
 }
 
 fn bob_amplitude(ps: &GunPs) -> f32 {
-    match ps.view_height_target {
-        VIEW_PRONE => BOB_AMPLITUDE[2],
-        VIEW_CROUCH => BOB_AMPLITUDE[1],
-        _ => BOB_AMPLITUDE[0],
-    }
+    vcod_cod2::pmove::aim::stance_bob_amplitude(ps.view_height_target)
 }
 
 /// The idle drift: `hipIdleAmount` (80 at speed 1 when the file has none)

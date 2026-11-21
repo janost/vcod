@@ -290,28 +290,8 @@ pub fn build(
                 let [x, y] = position(sp, e, (w, h), now);
                 let rw = sp.axis(0, 0.0, w, e.align_screen >> 3 & 7).1;
                 let rh = sp.axis(1, 0.0, h, e.align_screen & 7).1;
-                let quad = |angle: f32, texture: String| {
-                    let (s, c) = angle.to_radians().sin_cos();
-                    let (hw, hh) = (0.5 * rw, 0.5 * rh);
-                    let (cx, cy) = (x + hw, y + hh);
-                    let corner = |sx: f32, sy: f32| {
-                        [
-                            cx + c * hw * sx - s * hw * sy,
-                            cy + s * hh * sx + c * hh * sy,
-                        ]
-                    };
-                    HudQuad {
-                        verts: [
-                            corner(-1.0, -1.0),
-                            corner(1.0, -1.0),
-                            corner(1.0, 1.0),
-                            corner(-1.0, 1.0),
-                        ],
-                        uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-                        rgba,
-                        texture,
-                    }
-                };
+                let quad =
+                    |angle: f32, texture: String| rotated_pic([x, y, rw, rh], angle, rgba, texture);
                 if e.kind == 6 {
                     out.push(quad(0.0, name));
                     continue;
@@ -337,6 +317,37 @@ pub fn build(
         }
     }
     out
+}
+
+/// `CG_DrawRotatedPic` (Mac 0x1a242e)'s corners: the real-pixel rect
+/// `[x, y, w, h]` turned `degrees` about its centre, each axis scaled by
+/// its own half size.
+pub fn rotated_pic(
+    [x, y, w, h]: [f32; 4],
+    degrees: f32,
+    rgba: [f32; 4],
+    texture: impl Into<String>,
+) -> HudQuad {
+    let (s, c) = degrees.to_radians().sin_cos();
+    let (hw, hh) = (0.5 * w, 0.5 * h);
+    let (cx, cy) = (x + hw, y + hh);
+    let corner = |sx: f32, sy: f32| {
+        [
+            cx + c * hw * sx - s * hw * sy,
+            cy + s * hh * sx + c * hh * sy,
+        ]
+    };
+    HudQuad {
+        verts: [
+            corner(-1.0, -1.0),
+            corner(1.0, -1.0),
+            corner(1.0, 1.0),
+            corner(-1.0, 1.0),
+        ],
+        uvs: HudQuad::UNIT_UVS,
+        rgba,
+        texture: texture.into(),
+    }
 }
 
 #[cfg(test)]

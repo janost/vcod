@@ -702,6 +702,27 @@ pub fn mic_gain(reclevel: f32, scaler: f32) -> MicGain {
     MicGain { level, scaler }
 }
 
+/// One session frame of voice: `chat`, started at `sample_rate` on first
+/// use, sends while `sending` ([`may_send`]) at `quality` and plays what
+/// `link` heard. Each game reads its own settings.
+pub fn step(
+    chat: &mut Option<VoiceChat>,
+    sample_rate: u32,
+    link: &mut VoiceLink,
+    sending: bool,
+    quality: i32,
+    shell: &crate::console::shell::Shell,
+    audio: &mut crate::audio::AudioSystem,
+) {
+    let f = VoiceFrame {
+        sending,
+        quality,
+        mic: shell_mic_gain(shell),
+    };
+    chat.get_or_insert_with(|| VoiceChat::new(sample_rate))
+        .frame(link, &f, Some(audio));
+}
+
 /// The app's voice: the codec, the input and a stream a talker.
 pub struct VoiceChat {
     /// The game's codec rate (`vcod_cod2::net::voice::SAMPLE_RATE`,

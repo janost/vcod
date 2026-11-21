@@ -3117,7 +3117,6 @@ fn load_map(
 #[expect(clippy::too_many_arguments)]
 fn loading_frame(
     r: &mut Renderer,
-    fs: &Pk3Fs,
     localized: &vcod_common::localize::Localized,
     hud: &mut Option<hud::Hud>,
     now: f32,
@@ -3139,7 +3138,6 @@ fn loading_frame(
             protocol: &net::protocol::PROTOCOL_V1,
             server_time: 0,
             snap_time: 0,
-            fs,
             ps: None,
             entities: &BTreeMap::new(),
             predicted: None,
@@ -5464,6 +5462,11 @@ impl ApplicationHandler for App {
         self.ui_effects(event_loop, pending);
         let releases = std::mem::take(&mut self.key_releases);
         self.apply(event_loop, releases);
+        // The CoD4 front end's option pages read the console as it is now,
+        // the menus' own lines and anything typed included, as in a game.
+        if let Some(f) = self.session.cod4_front_mut().filter(|f| f.active()) {
+            f.sync(&self.shell);
+        }
         self.sync_menu_mouse();
         self.sync_capture();
     }

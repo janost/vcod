@@ -322,6 +322,212 @@ pub fn held_stance(down: &HashSet<Action>) -> Option<Stance> {
     }
 }
 
+/// The buttons a held stance, the jump and the sight toggle set, in one
+/// game's layout.
+pub struct StanceBits<B> {
+    /// `+prone` or `+movedown` held.
+    pub held: B,
+    pub crouch: B,
+    pub prone: B,
+    pub jump: B,
+    pub ads: B,
+}
+
+/// The key state CoD2's and CoD4's inputs share (`play::cod2_input`,
+/// `play::cod4_input`): the held keys, `cl_stance`, the sight toggle, the
+/// selection and the offhand, and the spawn `S` the selection was last
+/// reset for. Each game keeps its bits and its extras.
+pub struct KeyState<S> {
+    down: HashSet<Action>,
+    pub stance: Stance,
+    /// `cl.toggleADS` / `cl->usingAds`.
+    pub ads_toggle: bool,
+    /// The held `+gostand` / `+moveup` keys that pressed the jump rather
+    /// than moving the stance.
+    jump_by: HashSet<Action>,
+    /// `cg_weaponSelect`, the weapon every cmd asks for.
+    pub selected: u8,
+    /// The equipped offhand.
+    pub offhand: u8,
+    spawn: Option<S>,
+}
+
+impl<S> Default for KeyState<S> {
+    fn default() -> Self {
+        KeyState {
+            down: HashSet::new(),
+            stance: Stance::default(),
+            ads_toggle: false,
+            jump_by: HashSet::new(),
+            selected: 0,
+            offhand: 0,
+            spawn: None,
+        }
+    }
+}
+
+impl<S: Copy + PartialEq> KeyState<S> {
+    /// Whether `action`'s key is held.
+    pub fn held(&self, action: Action) -> bool {
+        self.down.contains(&action)
+    }
+
+    /// A `+button` bind's edge: a fresh `+gostand` or `+moveup` press
+    /// steps the stance. Whether the key was already down.
+    pub fn key(&mut self, action: Action, pressed: bool) -> bool {
+        let was = self.down.contains(&action);
+        if pressed {
+            self.down.insert(action);
+        } else {
+            self.down.remove(&action);
+            self.jump_by.remove(&action);
+        }
+        if pressed && !was && matches!(action, Action::Jump | Action::MoveUp) {
+            self.stance_press(action);
+        }
+        was
+    }
+
+    /// `IN_GoStandDown`, `IN_UpDown` and the stance one-shots, each gated
+    /// on the held `+prone` and `+movedown`.
+    pub fn stance_press(&mut self, action: Action) {
+        match stance_press(action, self.stance, held_stance(&self.down).is_some()) {
+            StancePress::Set(s) => self.stance = s,
+            StancePress::Jump => {
+                self.jump_by.insert(action);
+            }
+            StancePress::Nothing => {}
+        }
+    }
+
+    /// The stance and sight one-shots (`toggleads`, `leaveads`). False for
+    /// any other.
+    pub fn stance_or_sight(&mut self, action: Action) -> bool {
+        match action {
+            Action::Crouch
+            | Action::Prone
+            | Action::ToggleCrouch
+            | Action::ToggleProne
+            | Action::LowerStance
+            | Action::RaiseStance => self.stance_press(action),
+            Action::ToggleAds => self.ads_toggle = !self.ads_toggle,
+            Action::LeaveAds => self.ads_toggle = false,
+            _ => return false,
+        }
+        true
+    }
+
+    /// The stance a held `+prone` or `+movedown` forces, if either is.
+    pub fn held_stance(&self) -> Option<Stance> {
+        held_stance(&self.down)
+    }
+
+    /// Lets go of every held key; the stance and the selection stay.
+    pub fn release_all(&mut self) {
+        self.down.clear();
+        self.jump_by.clear();
+    }
+
+    /// `CG_SelectWeaponIndex`: another weapon drops the sight toggle.
+    pub fn select(&mut self, w: u8) {
+        if w != self.selected {
+            self.selected = w;
+            self.ads_toggle = false;
+        }
+    }
+
+    /// `CG_NextWeapon_f` / `CG_PrevWeapon_f` over `weapons`: the next or
+    /// previous after the selection, the first when it is none of them.
+    pub fn cycle(&mut self, weapons: &[u8], forward: bool) {
+        let n = weapons.len();
+        if n == 0 {
+            return;
+        }
+        let next = match weapons.iter().position(|&w| w == self.selected) {
+            Some(i) if forward => (i + 1) % n,
+            Some(i) => (i + n - 1) % n,
+            None => 0,
+        };
+        self.select(weapons[next]);
+    }
+
+    /// `CG_Respawn` on a new `spawn`: the selection takes the spawn
+    /// `weapon` and `offhand`, the body stands and the sight drops. Else a
+    /// selection the playerstate no longer holds (`holds_selected`) falls
+    /// back to its weapon.
+    pub fn respawn(&mut self, spawn: S, weapon: u8, offhand: u8, holds_selected: bool) {
+        if self.spawn.replace(spawn) != Some(spawn) {
+            self.selected = weapon;
+            self.offhand = offhand;
+            self.stance = Stance::Stand;
+            self.ads_toggle = false;
+        } else if !holds_selected && weapon != 0 {
+            self.selected = weapon;
+        }
+    }
+
+    /// The next playerstate is a respawn.
+    pub fn forget_spawn(&mut self) {
+        self.spawn = None;
+    }
+
+    /// The cmd's `weapon` and `offHandIndex`.
+    pub fn weapons(&self) -> (u8, u8) {
+        (self.selected, self.offhand)
+    }
+
+    /// The bits of the keys `table` holds.
+    pub fn held_bits<B: Copy + Default + std::ops::BitOrAssign>(&self, table: &[(Action, B)]) -> B {
+        let mut b = B::default();
+        for &(a, bits) in table {
+            if self.down.contains(&a) {
+                b |= bits;
+            }
+        }
+        b
+    }
+
+    /// The held stance (else `cl_stance`), the jump for a body of
+    /// `pm_type` (a noclip, UFO or spectator jumps on a held `+gostand` or
+    /// `+moveup`) and the sight toggle against `+speed_throw`, as `bits`.
+    pub fn stance_and_jump_bits<B: Copy + Default + std::ops::BitOrAssign>(
+        &self,
+        pm_type: i32,
+        bits: &StanceBits<B>,
+    ) -> B {
+        let mut b = B::default();
+        let key_stance = held_stance(&self.down);
+        if key_stance.is_some() {
+            b |= bits.held;
+        }
+        match key_stance.unwrap_or(self.stance) {
+            Stance::Crouch => b |= bits.crouch,
+            Stance::Prone => b |= bits.prone,
+            Stance::Stand => {}
+        }
+        let up = self.down.contains(&Action::Jump) || self.down.contains(&Action::MoveUp);
+        if !self.jump_by.is_empty() || (up && (2..=4).contains(&pm_type)) {
+            b |= bits.jump;
+        }
+        if self.ads_toggle != self.down.contains(&Action::Ads) {
+            b |= bits.ads;
+        }
+        b
+    }
+
+    /// `forwardmove` and `rightmove`: 127 a held key, opposite keys cancel.
+    pub fn move_axes(&self) -> [i8; 2] {
+        let axis = |plus: Action, minus: Action| {
+            let (p, m) = (self.down.contains(&plus), self.down.contains(&minus));
+            127 * i8::from(p) - 127 * i8::from(m)
+        };
+        [
+            axis(Action::Forward, Action::Back),
+            axis(Action::Right, Action::Left),
+        ]
+    }
+}
+
 /// The bit of the newest playerstate a cmd and the weapon selection read:
 /// the weapon held, the eight weapon slots (`weaponslots[0]`/`weaponslots[4]`
 /// unpacked little-endian, the inverse of

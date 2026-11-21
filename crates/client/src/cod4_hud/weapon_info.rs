@@ -7,6 +7,7 @@ use vcod_cod4::net::parse::Snapshot;
 use super::assets::Loaded;
 use super::env::{HudEnv, action_slot};
 use super::text::text;
+use super::text_height;
 use super::{Cod4Hud, PM_SPECTATOR, image_of, quad};
 use crate::console::shell::Shell;
 use crate::hud::cod2elem::ScreenPlacement;
@@ -42,21 +43,6 @@ impl Cod4Hud {
         let list = crate::play::cod4::weapon_list(gs);
         let slots = l.ammo_slots(&list);
         let ps = &snap.ps;
-        let item = |it: &vcod_cod4::scriptmenu::LayoutItem, rect: [f32; 4], rgba| h::MenuItem {
-            rect: h::MenuRect {
-                rect,
-                horz_align: it.align[0],
-                vert_align: it.align[1],
-                background: None,
-            },
-            owner_draw: it.owner_draw,
-            font: it.font,
-            text_scale: it.text_scale,
-            text_style: it.text_style,
-            fore_color: rgba,
-            text_align: it.text_align,
-            text: None,
-        };
         for it in &layout.items {
             if it.dynamic_flags & vcod_cod4::scriptmenu::WINDOW_VISIBLE == 0
                 || !(it.exps.visible.is_empty()
@@ -79,7 +65,7 @@ impl Cod4Hud {
                     if slot.night_vision {
                         out.push(OwnerDraw::Pic {
                             material: NVG_ICON.into(),
-                            item: item(it, r, rgba),
+                            item: layout_item(it, r, rgba),
                         });
                         continue;
                     }
@@ -106,7 +92,7 @@ impl Cod4Hud {
                     if let Some(m) = &d.dpad_icon {
                         out.push(OwnerDraw::Pic {
                             material: m.clone(),
-                            item: item(it, [x, iy, iw, ih], rgba),
+                            item: layout_item(it, [x, iy, iw, ih], rgba),
                         });
                     }
                     // `BG_WeaponAmmo`: the clip and the reserve.
@@ -124,7 +110,7 @@ impl Cod4Hud {
                     out.push(OwnerDraw::Text {
                         text: format!("{rounds:3}"),
                         x: tx,
-                        item: item(it, [tx, y + r[3] + 3.0, 0.0, 0.0], rgba),
+                        item: layout_item(it, [tx, y + r[3] + 3.0, 0.0, 0.0], rgba),
                         rgba,
                     });
                 }
@@ -141,12 +127,12 @@ impl Cod4Hud {
                     let grid = ScreenPlacement::new(640.0, 480.0);
                     let f = l.fonts.pick(it.font, it.text_scale, &grid);
                     let tw = font::measure(f, &t, it.text_scale / f.unit_scale());
-                    let th = (48.0 * it.text_scale) as i32 as f32;
+                    let th = text_height(it.text_scale);
                     let [x, y] = crate::cod4_menu::text_origin(it, it.rect, tw, th);
                     out.push(OwnerDraw::Text {
                         text: t,
                         x,
-                        item: item(it, [x, y, 0.0, 0.0], rgba),
+                        item: layout_item(it, [x, y, 0.0, 0.0], rgba),
                         rgba,
                     });
                 }
@@ -221,32 +207,17 @@ impl Cod4Hud {
             } else {
                 VOICE_ON.into()
             };
-            let item = |rect: [f32; 4], rgba| h::MenuItem {
-                rect: h::MenuRect {
-                    rect,
-                    horz_align: it.align[0],
-                    vert_align: it.align[1],
-                    background: None,
-                },
-                owner_draw: it.owner_draw,
-                font: it.font,
-                text_scale: it.text_scale,
-                text_style: it.text_style,
-                fore_color: rgba,
-                text_align: it.text_align,
-                text: None,
-            };
             let [x, y, w, hh] = it.rect;
             out.push(OwnerDraw::Pic {
                 material,
-                item: item(it.rect, it.fore_color),
+                item: layout_item(it, it.rect, it.fore_color),
             });
-            let th = (48.0 * it.text_scale) as i32 as f32;
+            let th = text_height(it.text_scale);
             let (tx, ty) = (x + w + 2.0, th + y + (hh - th) / 2.0);
             out.push(OwnerDraw::Text {
                 text: name,
                 x: tx,
-                item: item([tx, ty, 0.0, 0.0], text_rgba),
+                item: layout_item(it, [tx, ty, 0.0, 0.0], text_rgba),
                 rgba: text_rgba,
             });
         }
@@ -620,7 +591,7 @@ impl Cod4Hud {
                 let scale = it.text_scale;
                 let f = l.fonts.pick(it.font, scale, sp);
                 let px = scale / f.unit_scale();
-                let h = (48.0 * scale) as i32 as f32;
+                let h = text_height(scale);
                 let (rx, _) = sp.axis(0, x, 0.0, it.rect.horz_align);
                 let (ry, _) = sp.axis(1, it.rect.rect[1] - h, h, it.rect.vert_align);
                 text(f, t, rx, ry, px * sp.virtual_to_real[1], rgba, out);
@@ -681,6 +652,29 @@ fn draws_talker(cg_draw_talk: Option<&str>, enemy: bool) -> bool {
         Some("FRIENDLY") | Some("2") => !enemy,
         Some("ENEMY") | Some("3") => enemy,
         _ => true,
+    }
+}
+
+/// A layout item as a HUD menu item at `rect`, coloured `rgba`.
+fn layout_item(
+    it: &vcod_cod4::scriptmenu::LayoutItem,
+    rect: [f32; 4],
+    rgba: [f32; 4],
+) -> h::MenuItem {
+    h::MenuItem {
+        rect: h::MenuRect {
+            rect,
+            horz_align: it.align[0],
+            vert_align: it.align[1],
+            background: None,
+        },
+        owner_draw: it.owner_draw,
+        font: it.font,
+        text_scale: it.text_scale,
+        text_style: it.text_style,
+        fore_color: rgba,
+        text_align: it.text_align,
+        text: None,
     }
 }
 

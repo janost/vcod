@@ -113,8 +113,7 @@ pub fn visual_model(weapons: &HashMap<String, WeaponModels>, key: &str) -> Optio
     })
 }
 
-/// `weapClass_t`'s turret value.
-const WEAPCLASS_TURRET: i32 = 7;
+use vcod_cod4::net::flags::WEAPCLASS_TURRET;
 
 /// What a session draws its entities with: xmodel and weapon names (the
 /// gamestate's model configstrings and its weapon list).

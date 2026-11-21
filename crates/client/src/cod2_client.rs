@@ -187,7 +187,7 @@ impl Cod2Client {
     /// batch sent on `CL_VoiceTransmit`'s clock, the heard ones played.
     /// `cl_voice` goes to the server in the userinfo when it changes.
     fn voice_frame(&mut self, cx: &mut Cod2Frame) {
-        use crate::voice::{VoiceChat, VoiceFrame, may_send};
+        use crate::voice::may_send;
         let Some(s) = self.session.as_deref_mut() else {
             return;
         };
@@ -201,14 +201,15 @@ impl Cod2Client {
         let active = s.frame().is_some();
         let held = s.input.held(play::input::Action::Talk);
         s.set_cl_voice(cl_voice);
-        let f = VoiceFrame {
-            sending: may_send(held, active, sv_voice, cl_voice, rate),
+        crate::voice::step(
+            &mut self.voice,
+            vcod_cod2::net::voice::SAMPLE_RATE,
+            &mut s.voice,
+            may_send(held, active, sv_voice, cl_voice, rate),
             quality,
-            mic: crate::voice::shell_mic_gain(cx.shell),
-        };
-        self.voice
-            .get_or_insert_with(|| VoiceChat::new(vcod_cod2::net::voice::SAMPLE_RATE))
-            .frame(&mut s.voice, &f, Some(&mut *cx.audio));
+            cx.shell,
+            cx.audio,
+        );
         s.transmit_voice();
         self.hud.voice = cod2_hud::VoiceShown {
             own: crate::voice::cod2_own_talking(held, sv_voice, cl_voice),
@@ -556,9 +557,7 @@ impl Cod2Client {
                 -out.angles[0].to_radians(),
                 out.angles[2].to_radians(),
             );
-            let forward = camera::basis(yaw, pitch).0;
-            let right = forward.cross(camera::up_hint(yaw, pitch, roll)).normalize();
-            let basis = (forward, right, right.cross(forward));
+            let basis = camera::rolled_basis(yaw, pitch, roll);
             let world = |tag: Option<(Vec3, glam::Quat)>| {
                 let (p, q) = tag?;
                 let (_, turn, _) = model.to_scale_rotation_translation();
@@ -701,13 +700,11 @@ impl Cod2Client {
         let Some(f) = self.session.as_deref().and_then(|s| s.frame()) else {
             return;
         };
-        let up = camera::up_hint(yaw, pitch, roll);
-        let fwd = camera::basis(yaw, pitch).0;
-        let right = fwd.cross(up).normalize();
+        let (_, right, up) = camera::rolled_basis(yaw, pitch, roll);
         let view = cod2_world_hud::WorldView {
             view_proj,
             right,
-            up: right.cross(fwd),
+            up,
             size,
         };
         let mut q = cod2_world_hud::build(&f, self.draw.heads(), &view, f.time_ms);

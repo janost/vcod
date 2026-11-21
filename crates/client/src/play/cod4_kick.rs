@@ -7,78 +7,28 @@
 //! steps are CoD1's (`play::recoil::Recoil`): 1.7's `CG_KickAngles`
 //! (`iw3mp.exe` 0x44fe20) and the gun spring keep its constants.
 
-use crate::play::recoil::Recoil;
-use vcod_common::weapon::WeaponDef as KickKeys;
+use crate::play::recoil::{KickDef, Kicker};
 
-/// The keys `BG_WeaponFireRecoil` (0x41a7b0) and the gun spring read,
-/// CoD1's names at their 1.7 `WeaponDef` offsets
-/// (`vcod_cod4::weapon_file::FIELDS`).
-const KICK_KEYS: &[&str] = &[
-    "aimDownSight",
-    "gunMaxPitch",
-    "gunMaxYaw",
-    "hipGunKickPitchMin",
-    "hipGunKickPitchMax",
-    "hipGunKickYawMin",
-    "hipGunKickYawMax",
-    "hipGunKickAccel",
-    "hipGunKickSpeedMax",
-    "hipGunKickSpeedDecay",
-    "hipGunKickStaticDecay",
-    "hipViewKickPitchMin",
-    "hipViewKickPitchMax",
-    "hipViewKickYawMin",
-    "hipViewKickYawMax",
-    "hipViewKickCenterSpeed",
-    "adsGunKickPitchMin",
-    "adsGunKickPitchMax",
-    "adsGunKickYawMin",
-    "adsGunKickYawMax",
-    "adsGunKickAccel",
-    "adsGunKickSpeedMax",
-    "adsGunKickSpeedDecay",
-    "adsGunKickStaticDecay",
-    "adsViewKickPitchMin",
-    "adsViewKickPitchMax",
-    "adsViewKickYawMin",
-    "adsViewKickYawMax",
-    "adsViewKickCenterSpeed",
-];
-
-/// One weapon's kick keys, read off its 0x878-byte `WeaponDef`.
-#[derive(Clone)]
-pub struct KickDef {
-    keys: KickKeys,
-    /// `hipGunKickReducedKickPercent` (+1828), `adsGunKickReducedKickPercent`
-    /// (+1756).
-    reduced_percent: [f32; 2],
-}
-
-impl KickDef {
-    pub fn from_raw(raw: &[u8]) -> KickDef {
-        let word = |o: u16| {
-            raw.get(o as usize..o as usize + 4)
-                .map_or([0; 4], |b| b.try_into().unwrap())
-        };
-        let field = |name: &str| {
-            vcod_cod4::weapon_file::FIELDS
-                .iter()
-                .find(|f| f.0 == name)
-                .map(|&(_, o, kind)| match kind {
-                    6 => f32::from_le_bytes(word(o)).to_string(),
-                    _ => i32::from_le_bytes(word(o)).to_string(),
-                })
-                .unwrap_or_default()
-        };
-        let map = KICK_KEYS
+/// One weapon's kick keys off its 0x878-byte `WeaponDef`: CoD1's names
+/// at their 1.7 offsets (`vcod_cod4::weapon_file::FIELDS`), and
+/// `hipGunKickReducedKickPercent` (+1828), `adsGunKickReducedKickPercent`
+/// (+1756).
+pub fn kick_def(raw: &[u8]) -> KickDef {
+    let word = |o: u16| {
+        raw.get(o as usize..o as usize + 4)
+            .map_or([0; 4], |b| b.try_into().unwrap())
+    };
+    let field = |name: &str| {
+        vcod_cod4::weapon_file::FIELDS
             .iter()
-            .map(|&k| (k.to_string(), field(k)))
-            .collect();
-        KickDef {
-            keys: KickKeys::from_map(&map),
-            reduced_percent: [1828, 1756].map(|o| f32::from_le_bytes(word(o))),
-        }
-    }
+            .find(|f| f.0 == name)
+            .map(|&(_, o, kind)| match kind {
+                6 => f32::from_le_bytes(word(o)).to_string(),
+                _ => i32::from_le_bytes(word(o)).to_string(),
+            })
+            .unwrap_or_default()
+    };
+    KickDef::from_lookup(&field, [1828, 1756].map(|o| f32::from_le_bytes(word(o))))
 }
 
 /// Whether a fired event's name runs `CG_FireWeapon`'s recoil for the
@@ -99,8 +49,7 @@ const OF_VIEW_BODY: u32 = 6;
 /// `cg.landTime`.
 #[derive(Default)]
 pub struct Cod4Kick {
-    recoil: Recoil,
-    last_ms: Option<i32>,
+    kicker: Kicker,
     /// `landChange` and `landTime` (cg time).
     land: (f32, i32),
     /// `clientNum` and `stats[4]`: a change is `CG_Respawn`.
@@ -112,7 +61,7 @@ impl Cod4Kick {
     /// kicks zeroed.
     pub fn check_respawn(&mut self, client: u32, spawn_count: i32) {
         if self.spawn.is_some_and(|s| s != (client, spawn_count)) {
-            self.recoil.reset();
+            self.kicker.zero();
         }
         self.spawn = Some((client, spawn_count));
     }
@@ -124,21 +73,13 @@ impl Cod4Kick {
         if other & OF_VIEW_BODY == 0 {
             return;
         }
-        let scale = if restrict_kick_time > 0 {
-            0.01 * def.reduced_percent[usize::from(frac == 1.0)]
-        } else {
-            1.0
-        };
-        self.recoil.fire_scaled(&def.keys, frac, scale);
+        self.kicker.fire(def, frac, restrict_kick_time);
     }
 
     /// One frame at cg time `now`: `CG_KickAngles` while `other` names our
     /// own view, else the view kick zeroed; then the gun spring.
     pub fn step(&mut self, now: i32, def: Option<&KickDef>, frac: f32, other: u32) {
-        let ms = self.last_ms.map_or(0, |l| (now - l).clamp(0, 1000));
-        self.last_ms = Some(now);
-        self.recoil
-            .step(ms, def.map(|d| &d.keys), frac, other & OF_OWN_VIEW != 0);
+        self.kicker.step(now, def, frac, other & OF_OWN_VIEW != 0);
     }
 
     /// An own landing event at cg time `now` (`CG_EntityEvent`, 0x435e43
@@ -163,12 +104,12 @@ impl Cod4Kick {
     /// The view kick, degrees (pitch positive down, yaw, roll), which the
     /// next cmd's angles carry (0x463aa9).
     pub fn view_kick(&self) -> [f32; 3] {
-        self.recoil.view_kick()
+        self.kicker.view_kick()
     }
 
     /// The gun spring's pitch and yaw, degrees.
     pub fn gun_kick(&self) -> [f32; 2] {
-        self.recoil.gun_kick()
+        self.kicker.gun_kick()
     }
 
     /// `landChange` and the ms since `landTime` at `now`.

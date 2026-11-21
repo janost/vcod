@@ -47,18 +47,18 @@ const PS_WEAP_ANIM: usize =
 /// `pm_flags`: the binoculars are up (`BG_GetViewmodelWeaponIndex`, Mac
 /// 0x7b226).
 const PMF_BINOCULARS: i32 = 0x20000;
-/// `pm_flags`: the off-hand weapon is out; also drops the sight layer
+/// `pm_flags`' off-hand bit also drops the sight layer
 /// (`CG_WeaponRunXModelAnims`, Mac 0x1dc3cc).
-const PMF_OFFHAND: i32 = 0x10;
+use vcod_cod2::net::flags::PMF_OFFHAND;
 /// `pm_flags`: the sight is up.
 const PMF_SIGHT: i32 = 0x40;
-/// `eFlags`: on a turret; no view weapon (`CG_AddViewWeapon`, Mac 0x1da2f8).
-const EF_TURRET: i32 = 0x300;
+/// On a turret, no view weapon (`CG_AddViewWeapon`, Mac 0x1da2f8).
+use vcod_cod2::net::flags::EF_TURRET_STANCE as EF_TURRET;
 /// `weaponstate` reloading, under which the sight drops once `weaponTime`
 /// is past `adsReloadTransTime`.
 const WEAPON_RELOADING: i32 = 5;
 /// `pm_type` 4 (spectator) and 5 (intermission) draw no view weapon.
-const PM_SPECTATOR: i32 = 4;
+use vcod_cod2::pmove::pm_type::SPECTATOR as PM_SPECTATOR;
 
 /// One weapon's hands and gun, its skeleton and its 22 clips by tree node.
 pub struct Rig {

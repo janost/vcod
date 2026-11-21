@@ -35,9 +35,8 @@ use crate::hud::scoreboard::{self, BoardView, Scoreboard};
 use crate::hud::{ChatField, HudQuad};
 use crate::play::cod2_events::Event2;
 
-/// `pm_type` 5: the board stays up (cod2-movement.md).
-const PM_INTERMISSION: i32 = 5;
-const PM_DEAD: i32 = 6;
+/// `pm_type` 5 keeps the board up (cod2-movement.md).
+use vcod_cod2::pmove::pm_type::{DEAD as PM_DEAD, INTERMISSION as PM_INTERMISSION};
 /// `b`'s status icon `n` is configstring `0x16 + n` (cod2-protocol.md 5).
 const CS_STATUS_ICONS: usize = 0x16;
 /// The vote's four configstrings, 1.1's 15..18.
@@ -318,12 +317,7 @@ fn lagometer(l: &crate::play::cod2_net::Lagometer, sp: &ScreenPlacement, out: &m
     let mut quad = |x: f32, y: f32, w: f32, h: f32, rgba: [f32; 4], texture: &str| {
         let (x0, w) = sp.axis(0, x, w, 3);
         let (y0, h) = sp.axis(1, y, h, 3);
-        out.push(HudQuad {
-            verts: [[x0, y0], [x0 + w, y0], [x0 + w, y0 + h], [x0, y0 + h]],
-            uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-            rgba,
-            texture: texture.to_string(),
-        });
+        out.push(HudQuad::rect([x0, y0, w, h], rgba, texture));
     };
     quad(-55.0, -140.0, 48.0, 48.0, [1.0; 4], "lagometer");
     for (i, offset) in l.frames(48).enumerate() {
@@ -404,14 +398,7 @@ pub fn obituary(
     team_rgb: impl Fn(i32) -> [f32; 3],
 ) -> Option<Obit> {
     let (icon, icon_wide, icon_flip) = if parm & 0x80 != 0 {
-        let icon = match parm & 0x7f {
-            7 => "killiconmelee",
-            8 => "killiconheadshot",
-            9 => "killiconcrush",
-            11 => "killiconfalling",
-            12 => "killiconsuicide",
-            _ => "killicondied",
-        };
+        let icon = crate::hud::killfeed::iw_mod_icon((parm & 0x7f) as u32, false);
         (icon.to_string(), false, false)
     } else {
         kill_icon(parm)

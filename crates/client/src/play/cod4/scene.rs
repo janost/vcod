@@ -1015,7 +1015,8 @@ pub(super) fn lerp_wrapped(a: f32, b: f32, t: f32) -> f32 {
     (d - (d + 0.5).floor()) * 360.0 * t + a
 }
 
-/// Angles stepped the short way round.
+/// Angles stepped the short way round. Unlike `vcod_cod2::net::view`'s,
+/// a turn of exactly 180 keeps its sign.
 pub(super) fn lerp_angles(a: Vec3, b: Vec3, t: f32) -> Vec3 {
     let d = |x: f32, y: f32| {
         let mut d = (y - x) % 360.0;

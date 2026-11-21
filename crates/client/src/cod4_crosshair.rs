@@ -176,13 +176,12 @@ pub(crate) struct View<'a> {
     pub team_rgb: [[f32; 3]; 2],
 }
 
-/// `eFlags` 0x300: on a turret, whose crosshair this is not.
-const EF_TURRET: u32 = 0x300;
+/// On a turret (`EF_TURRET`) the crosshair is not this one; a grenade
+/// (`WEAPTYPE_GRENADE`) grows the dot while it cooks.
+use vcod_cod4::net::flags::{EF_TURRET, WEAPTYPE_GRENADE};
 /// `weapFlags` bits naming who is under the crosshair (cod4-hud.md 17).
 const WF_FRIENDLY: u32 = 8;
 const WF_ENEMY: u32 = 0x10;
-/// `weapType` 1: a grenade, whose dot grows while it cooks.
-const WEAPTYPE_GRENADE: i32 = 1;
 /// The grid's half height, which the spread and the sight's pitch project
 /// onto (the 240 at `iw3mp.exe` 0x70b548).
 const HALF_GRID_H: f32 = 240.0;
@@ -471,7 +470,7 @@ impl Canvas<'_> {
         };
         self.quads.push(HudQuad {
             verts: [at(-1.0, -1.0), at(1.0, -1.0), at(1.0, 1.0), at(-1.0, 1.0)],
-            uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            uvs: HudQuad::UNIT_UVS,
             rgba,
             texture: img,
         });
@@ -489,7 +488,7 @@ impl Canvas<'_> {
             [rx, ry, rw, rh]
         };
         let mut stretched = |rect: [f32; 4], st: [f32; 4]| {
-            self.quads.push(rect_quad(rect, st, rgba, img));
+            self.quads.push(HudQuad::rect_uv(rect, st, rgba, img));
         };
         let inner = if w <= 320.0 && h <= 240.0 {
             // Each quarter flips its texture away from the centre.
@@ -522,21 +521,6 @@ impl Canvas<'_> {
         for (_, rect, st) in bars.into_iter().filter(|b| b.0) {
             stretched(rect, st);
         }
-    }
-}
-
-/// A real-pixel rect `[x, y, w, h]` with its texture's `[s0, t0, s1, t1]`.
-fn rect_quad(
-    [x, y, w, h]: [f32; 4],
-    [s0, t0, s1, t1]: [f32; 4],
-    rgba: [f32; 4],
-    img: &str,
-) -> HudQuad {
-    HudQuad {
-        verts: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
-        uvs: [[s0, t0], [s1, t0], [s1, t1], [s0, t1]],
-        rgba,
-        texture: img.to_string(),
     }
 }
 

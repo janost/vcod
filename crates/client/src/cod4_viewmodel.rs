@@ -34,13 +34,10 @@ use crate::viewmodel::ViewModels;
 /// `pm_type`s: a spectator and the intermission draw no view weapon
 /// (`CG_AddViewWeapon`), from `PM_DEAD` on its anims reset
 /// (`CG_UpdateViewWeaponAnim`).
-const PM_SPECTATOR: u32 = 4;
-const PM_INTERMISSION: u32 = 5;
-const PM_DEAD: u32 = 7;
-/// `eFlags`: on a turret (no view weapon), crouched, prone.
-const EF_TURRET: u32 = 0x300;
-const EF_CROUCH: u32 = 4;
-const EF_PRONE: u32 = 8;
+/// On a turret (`EF_TURRET`) there is no view weapon.
+use vcod_cod4::net::flags::{
+    EF_CROUCH, EF_PRONE, EF_TURRET, PM_DEAD, PM_INTERMISSION, PM_SPECTATOR,
+};
 /// `pm_flags`: the sight is up; sprinting.
 pub(crate) const PMF_SIGHT: u32 = 0x10;
 const PMF_SPRINT: u32 = 0x8000;

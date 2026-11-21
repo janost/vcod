@@ -442,12 +442,12 @@ fn push_quad(
     rgba: [f32; 4],
     texture: &str,
 ) {
-    out.push(HudQuad {
-        verts: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
-        uvs: [[g.s, g.t], [g.s2, g.t], [g.s2, g.t2], [g.s, g.t2]],
+    out.push(HudQuad::rect_uv(
+        [x, y, w, h],
+        [g.s, g.t, g.s2, g.t2],
         rgba,
-        texture: texture.to_string(),
-    });
+        texture,
+    ));
 }
 
 /// Lays out `text` with its top-left at (x, y): a 1px black shadow quad, then
@@ -459,6 +459,20 @@ pub fn layout(
     y: f32,
     scale: f32,
     color: [f32; 4],
+    out: &mut Vec<HudQuad>,
+) -> f32 {
+    layout_shadowed(font, text, x, y, scale, color, 0.8, out)
+}
+
+/// [`layout`] with the shadow at `shadow_alpha`.
+pub fn layout_shadowed(
+    font: &Font,
+    text: &str,
+    x: f32,
+    y: f32,
+    scale: f32,
+    color: [f32; 4],
+    shadow_alpha: f32,
     out: &mut Vec<HudQuad>,
 ) -> f32 {
     let s = font.glyph_scale * font.unit_scale() * scale;
@@ -478,7 +492,7 @@ pub fn layout(
                 w,
                 h,
                 g,
-                [0.0, 0.0, 0.0, 0.8],
+                [0.0, 0.0, 0.0, shadow_alpha],
                 font.glyph_page(g),
             );
             push_quad(out, gx, gy, w, h, g, seg_color, font.glyph_page(g));

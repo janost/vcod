@@ -61,17 +61,6 @@ struct Rig {
     clips: HashMap<String, AnimBinding>,
 }
 
-/// The anim a mounted gun plays (`CG_mg42_PreControllers`): its goal,
-/// 0 for the weapon's idle (anim 1) or 1 for its fire (anim 2), since
-/// when, and the one it blends from over [`GUN_BLEND_MS`] with that
-/// one's start.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct GunClock {
-    pub goal: usize,
-    pub since_ms: i32,
-    pub from: Option<(usize, i32)>,
-}
-
 /// `XAnimSetGoalWeightKnobAll`'s blend time for a gun's anim, 0.1 s
 /// (the float at 0x6b72dc, pushed at iw3mp.exe 0x432dc8).
 const GUN_BLEND_MS: i32 = 100;
@@ -115,8 +104,10 @@ pub(crate) struct Cod4Vehicles {
     /// Helicopters drawn this frame: number, origin, damage stage.
     helis: Vec<(u32, Vec3, u32)>,
     clocks: HashMap<u32, HeliClock>,
-    /// Each drawn gun's anim.
-    pub(crate) guns: HashMap<u32, GunClock>,
+    /// Each gun's anim (`CG_mg42_PreControllers`): 0 for the weapon's
+    /// idle (anim 1) or 1 for its fire (anim 2), blended over
+    /// [`GUN_BLEND_MS`].
+    pub(crate) guns: HashMap<u32, crate::turret::GunClock<usize>>,
     /// Tags an effect rides, posed while their entity draws.
     bolts: HashSet<TagBolt>,
     /// Helicopter frames posed and effects the helicopters started, for
@@ -232,18 +223,11 @@ impl Cod4Vehicles {
         let mut pose = PoseBuffer::new(&rig.skeleton);
         if let Some(a) = anims {
             let now = a.render_ms;
-            let c = self.guns.entry(number).or_insert(GunClock {
-                goal: a.goal,
-                since_ms: now,
-                from: None,
-            });
-            if c.goal != a.goal {
-                *c = GunClock {
-                    goal: a.goal,
-                    since_ms: now,
-                    from: Some((c.goal, c.since_ms)),
-                };
-            }
+            let c = self
+                .guns
+                .entry(number)
+                .or_insert(crate::turret::GunClock::new(a.goal, now));
+            c.set(a.goal, now);
             let c = *c;
             let mut play = |pose: &mut PoseBuffer, n: usize, start: i32, w: f32| {
                 let clip = &a.clips[n];
@@ -254,16 +238,9 @@ impl Cod4Vehicles {
                 let at = clip.frame_pos((now - start).max(0) as f32 / 1000.0, clip.looping);
                 pose.apply_weighted(clip, b, at, w);
             };
-            let w = ((now - c.since_ms) as f32 / GUN_BLEND_MS as f32).clamp(0.0, 1.0);
-            if let Some((n, start)) = c.from.filter(|_| w < 1.0) {
-                play(&mut pose, n, start, 1.0);
+            for (n, start, w) in c.layers(now, GUN_BLEND_MS) {
+                play(&mut pose, n, start, w);
             }
-            play(
-                &mut pose,
-                c.goal,
-                c.since_ms,
-                if c.from.is_some() { w } else { 1.0 },
-            );
         }
         let turn = |pose: &mut PoseBuffer, name: &str, angles: [f32; 3]| {
             if let Some(b) = rig.skeleton.bone_index(name) {
@@ -295,6 +272,14 @@ impl Cod4Vehicles {
         self.clocks.retain(|n, _| placed.contains_key(n));
         self.guns.retain(|n, _| placed.contains_key(n));
         self.bolts.retain(|b| placed.contains_key(&b.entity));
+    }
+
+    /// [`Self::tag`]'s world origin and turn, as weapon tags carry them.
+    pub(crate) fn tag_origin_turn(&self, number: u32, tag: &str) -> Option<(Vec3, Quat)> {
+        self.tag(number, tag).map(|(_, p)| {
+            let q = Quat::from_mat3(&glam::Mat3::from_cols(p.axis[0], p.axis[1], p.axis[2]));
+            (p.origin, q)
+        })
     }
 
     /// Entity `number`'s `tag` this frame, by name (case-blind, as the

@@ -261,12 +261,12 @@ impl Cod4Hud {
                     if let Some(t) = it.background.as_deref().and_then(tex) {
                         let f = st.loaded;
                         let w = w * f;
-                        out.push(HudQuad {
-                            verts: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
-                            uvs: [[0.0, 0.0], [f, 0.0], [f, 1.0], [0.0, 1.0]],
-                            rgba: it.fore_color,
-                            texture: t,
-                        });
+                        out.push(HudQuad::rect_uv(
+                            [x, y, w, h],
+                            [0.0, 0.0, f, 1.0],
+                            it.fore_color,
+                            t,
+                        ));
                     }
                 }
                 _ => {}
@@ -476,7 +476,7 @@ fn put_glow(
     out: &mut Vec<HudQuad>,
 ) {
     let px = scale / f.unit_scale();
-    let h = (48.0 * scale) as i32 as f32;
+    let h = text_height(scale);
     let (rx, _) = sp.axis(0, x, 0.0, FULL);
     let (ry, _) = sp.axis(1, y - h, h, FULL);
     glow_text(f, t, rx, ry, px * sp.virtual_to_full(1), rgba, glow, out);
