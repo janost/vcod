@@ -46,11 +46,7 @@ pub fn set_exp_fog(
 
 fn floats(args: &[Value], err: &'static str) -> Result<Vec<f32>, ErrorKind> {
     args.iter()
-        .map(|a| match a {
-            Value::Int(i) => Ok(*i as f32),
-            Value::Float(f) => Ok(*f),
-            _ => Err(ErrorKind::BadType(err)),
-        })
+        .map(|a| super::args::float(Some(a), err))
         .collect()
 }
 

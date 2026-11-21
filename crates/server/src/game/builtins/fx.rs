@@ -110,12 +110,11 @@ pub fn earthquake(
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let num = |i: usize| match args.get(i) {
-        Some(Value::Int(n)) => Ok(*n as f32),
-        Some(Value::Float(f)) => Ok(*f),
-        _ => Err(ErrorKind::BadType(
+    let num = |i: usize| {
+        super::args::float(
+            args.get(i),
             "earthquake takes a scale, a duration, an origin and a radius",
-        )),
+        )
     };
     let (scale, duration, radius) = (num(0)?, num(1)?, num(3)?);
     let Some(Value::Vector(origin)) = args.get(2) else {
@@ -272,11 +271,7 @@ pub fn play_looped_fx(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     const USAGE: &str = "USAGE: playLoopedFx <effect id from loadFx> <repeat delay> <vector position of effect> <optional cull distance (0 = never cull)> <optional forward vector>";
-    let float = |v: Option<&Value>| match v {
-        Some(Value::Int(n)) => Ok(*n as f32),
-        Some(Value::Float(f)) => Ok(*f),
-        _ => Err(ErrorKind::BadType(USAGE)),
-    };
+    let float = |v: Option<&Value>| super::args::float(v, USAGE);
     let (3..=5, Some(Value::Int(fx)), Some(Value::Vector(origin))) =
         (args.len(), args.first(), args.get(2))
     else {

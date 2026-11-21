@@ -2,6 +2,7 @@
 //! the configstrings; the random draws step `GameHost::holdrand`, the rest
 //! read only their arguments.
 
+use super::args::{float, int};
 use crate::game::host::GameHost;
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
@@ -229,24 +230,6 @@ pub fn angles_to_up(
     Ok(Value::Vector(angle_vectors(args)?[2]))
 }
 
-/// `Scr_GetInt(i)`: a float reads truncated.
-fn int_at(args: &[Value], i: usize, usage: &'static str) -> Result<i32, ErrorKind> {
-    match args.get(i) {
-        Some(Value::Int(n)) => Ok(*n),
-        Some(Value::Float(f)) => Ok(*f as i32),
-        _ => Err(ErrorKind::BadType(usage)),
-    }
-}
-
-/// `Scr_GetFloat(i)`: an int reads as its value.
-fn float_at(args: &[Value], i: usize, usage: &'static str) -> Result<f32, ErrorKind> {
-    match args.get(i) {
-        Some(Value::Int(n)) => Ok(*n as f32),
-        Some(Value::Float(f)) => Ok(*f),
-        _ => Err(ErrorKind::BadType(usage)),
-    }
-}
-
 /// `randomInt(n)` (1.1d 0x5e470, 1.5b 0x5f6a8, UO 0x6b397): `irand(0, n)`
 /// off `holdrand`; `n` under 1 is an error and draws nothing (map-cycle
 /// doc 4.8).
@@ -256,7 +239,7 @@ pub fn random_int(
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let n = int_at(args, 0, "randomInt takes a number")?;
+    let n = int(args.first(), "randomInt takes a number")?;
     if n <= 0 {
         return Err(ErrorKind::Custom(
             "RandomInt parm must be positive integer.".into(),
@@ -273,7 +256,7 @@ pub fn random_float(
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let f = float_at(args, 0, "randomFloat takes a number")?;
+    let f = float(args.first(), "randomFloat takes a number")?;
     Ok(Value::Float(host.holdrand.flrand(0.0, f)))
 }
 
@@ -286,7 +269,7 @@ pub fn random_int_range(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     const USAGE: &str = "randomIntRange takes two numbers";
-    let (lo, hi) = (int_at(args, 0, USAGE)?, int_at(args, 1, USAGE)?);
+    let (lo, hi) = (int(args.first(), USAGE)?, int(args.get(1), USAGE)?);
     if hi <= lo {
         return Err(ErrorKind::Custom(
             "RandomIntRange range must be positive integer.".into(),
@@ -305,18 +288,13 @@ pub fn random_float_range(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     const USAGE: &str = "randomFloatRange takes two numbers";
-    let (lo, hi) = (float_at(args, 0, USAGE)?, float_at(args, 1, USAGE)?);
+    let (lo, hi) = (float(args.first(), USAGE)?, float(args.get(1), USAGE)?);
     if lo >= hi {
         return Err(ErrorKind::Custom(
             "Scr_RandomFloatRange range must be positive float.".into(),
         ));
     }
     Ok(Value::Float(host.holdrand.flrand(lo, hi)))
-}
-
-/// `Scr_GetFloat(0)`.
-fn float_arg(args: &[Value], usage: &'static str) -> Result<f32, ErrorKind> {
-    float_at(args, 0, usage)
 }
 
 /// Degrees to radians the way the builtins do it, `x * M_PI / 180` in
@@ -334,7 +312,7 @@ fn degrees(rad: f64) -> Value {
 /// `asin`/`acos` refuse anything outside [-1, 1] with `"%g out of range"`
 /// (1.1 .rodata 0x77500).
 fn unit_arg(args: &[Value], usage: &'static str) -> Result<f32, ErrorKind> {
-    let x = float_arg(args, usage)?;
+    let x = float(args.first(), usage)?;
     if !(-1.0..=1.0).contains(&x) {
         return Err(ErrorKind::Custom(format!(
             "{} out of range",
@@ -351,7 +329,7 @@ pub fn sin(
     _: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let x = float_arg(args, "sin takes a number")?;
+    let x = float(args.first(), "sin takes a number")?;
     Ok(Value::Float(radians(x).sin() as f32))
 }
 
@@ -362,7 +340,7 @@ pub fn cos(
     _: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let x = float_arg(args, "cos takes a number")?;
+    let x = float(args.first(), "cos takes a number")?;
     Ok(Value::Float(radians(x).cos() as f32))
 }
 
@@ -374,7 +352,7 @@ pub fn tan(
     _: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let r = radians(float_arg(args, "tan takes a number")?) as f32;
+    let r = radians(float(args.first(), "tan takes a number")?) as f32;
     let (s, c) = (r.sin(), r.cos());
     if c == 0.0 {
         return Err(ErrorKind::Custom("divide by 0".into()));
@@ -411,7 +389,7 @@ pub fn atan(
     _: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let x = float_arg(args, "atan takes a number")?;
+    let x = float(args.first(), "atan takes a number")?;
     Ok(degrees((x as f64).atan()))
 }
 

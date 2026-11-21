@@ -9,6 +9,7 @@ use vcod_gsc::{Cx, ErrorKind, Target, Value};
 /// arguments.
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
 
+pub mod args;
 pub mod attach;
 pub mod client;
 pub mod cod2;

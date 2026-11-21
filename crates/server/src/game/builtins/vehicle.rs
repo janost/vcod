@@ -6,6 +6,7 @@
 //! node, so the path methods (`attachPath` .. `resumeSpeed`) only check
 //! their arguments and raise their errors (17).
 
+use super::args::as_float;
 use super::entity::entity_receiver;
 use crate::game::host::GameHost;
 use crate::game::vehicle::{Gun, Jolt, TurretTarget};
@@ -64,14 +65,6 @@ fn vehicle(host: &GameHost, recv: Option<Target>) -> Result<EntId, ErrorKind> {
     }
 }
 
-fn number(v: Option<&Value>) -> Option<f32> {
-    match v? {
-        Value::Int(i) => Some(*i as f32),
-        Value::Float(f) => Some(*f),
-        _ => None,
-    }
-}
-
 /// `precacheVehicle(type)` (0x8b51c): `RegisterItem` on the three guns,
 /// only while the level initializes.
 fn precache_vehicle(
@@ -124,16 +117,17 @@ fn jolt_body(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = vehicle(host, recv)?;
-    let (Some(Value::Vector(from)), Some(force)) = (args.first(), number(args.get(1))) else {
+    let (Some(Value::Vector(from)), Some(force)) = (args.first(), args.get(1).and_then(as_float))
+    else {
         return Err(ErrorKind::BadType("joltBody takes a point and a force"));
     };
-    let speed_frac = number(args.get(2)).unwrap_or(0.0);
+    let speed_frac = args.get(2).and_then(as_float).unwrap_or(0.0);
     if !(0.0..=1.0).contains(&speed_frac) {
         return Err(ErrorKind::Custom(
             "speed fraction must be from 0 to 1".into(),
         ));
     }
-    let decel = number(args.get(3)).unwrap_or(0.0) * crate::game::vehicle::info::MPH;
+    let decel = args.get(3).and_then(as_float).unwrap_or(0.0) * crate::game::vehicle::info::MPH;
     if decel < 0.0 {
         return Err(ErrorKind::Custom("deceleration must be positive".into()));
     }
@@ -612,7 +606,8 @@ fn path_usable(host: &GameHost, id: EntId) -> Result<(), ErrorKind> {
 }
 
 fn mph_arg(args: &[Value], i: usize) -> Result<f32, ErrorKind> {
-    number(args.get(i))
+    args.get(i)
+        .and_then(as_float)
         .map(|x| x * crate::game::vehicle::info::MPH)
         .ok_or(ErrorKind::BadType("vehicle speeds take a number"))
 }

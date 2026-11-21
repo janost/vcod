@@ -3,6 +3,7 @@
 //! (docs/research/cod4-gsc.md 3). CoD4 says dvar where CoD1 says cvar, so
 //! the dvar calls take the cvar handlers.
 
+use super::args::{double, noop, string, vector};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -46,14 +47,17 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("randomfloat", random_float),
     ("randomintrange", random_int_range),
     ("randomfloatrange", random_float_range),
-    ("assert", developer_statement),
-    ("assertex", developer_statement),
-    ("assertmsg", developer_statement),
-    ("println", developer_statement),
-    ("print", developer_statement),
-    ("line", developer_statement),
-    ("precacherumble", empty),
-    ("playrumbleonposition", empty),
+    // A developer-only statement (`assert*`, `print*`, `line`; the table's
+    // developer column, cod4-gsc.md 2): nothing at `developer 0`.
+    ("assert", noop),
+    ("assertex", noop),
+    ("assertmsg", noop),
+    ("println", noop),
+    ("print", noop),
+    ("line", noop),
+    // Nothing the server keeps (rumble).
+    ("precacherumble", noop),
+    ("playrumbleonposition", noop),
     ("precacheitem", precache_item),
     ("hidepart", hide_part),
     ("showpart", show_part),
@@ -111,63 +115,39 @@ fn get_guid(
     Ok(Value::String(cx.intern_exact(&guid)))
 }
 
-/// A developer-only statement (`assert*`, `print*`, `line`; the table's
-/// developer column, cod4-gsc.md 2): nothing at `developer 0`.
-fn developer_statement(
-    _: &mut GameHost,
-    _: &mut Cx,
-    _: Option<Target>,
-    _: &[Value],
-) -> Result<Value, ErrorKind> {
-    Ok(Value::Undefined)
-}
-
-/// A builtin whose PC effect is nothing the server keeps (rumble).
-fn empty(_: &mut GameHost, _: &mut Cx, _: Option<Target>, _: &[Value]) -> Result<Value, ErrorKind> {
-    Ok(Value::Undefined)
-}
-
-fn number(v: Option<&Value>, what: &'static str) -> Result<f64, ErrorKind> {
-    match v {
-        Some(Value::Int(i)) => Ok(f64::from(*i)),
-        Some(Value::Float(f)) => Ok(f64::from(*f)),
-        _ => Err(ErrorKind::BadType(what)),
-    }
-}
-
 /// `abs(x)`: a float back.
 fn abs(_: &mut GameHost, _: &mut Cx, _: Option<Target>, a: &[Value]) -> Result<Value, ErrorKind> {
     Ok(Value::Float(
-        number(a.first(), "abs takes a number")?.abs() as f32
+        double(a.first(), "abs takes a number")?.abs() as f32
     ))
 }
 
 /// `min(a, b)` and `max(a, b)`: floats back.
 fn min(_: &mut GameHost, _: &mut Cx, _: Option<Target>, a: &[Value]) -> Result<Value, ErrorKind> {
     let (x, y) = (
-        number(a.first(), "min takes numbers")?,
-        number(a.get(1), "min takes numbers")?,
+        double(a.first(), "min takes numbers")?,
+        double(a.get(1), "min takes numbers")?,
     );
     Ok(Value::Float(x.min(y) as f32))
 }
 
 fn max(_: &mut GameHost, _: &mut Cx, _: Option<Target>, a: &[Value]) -> Result<Value, ErrorKind> {
     let (x, y) = (
-        number(a.first(), "max takes numbers")?,
-        number(a.get(1), "max takes numbers")?,
+        double(a.first(), "max takes numbers")?,
+        double(a.get(1), "max takes numbers")?,
     );
     Ok(Value::Float(x.max(y) as f32))
 }
 
 fn floor(_: &mut GameHost, _: &mut Cx, _: Option<Target>, a: &[Value]) -> Result<Value, ErrorKind> {
     Ok(Value::Float(
-        number(a.first(), "floor takes a number")?.floor() as f32,
+        double(a.first(), "floor takes a number")?.floor() as f32,
     ))
 }
 
 fn ceil(_: &mut GameHost, _: &mut Cx, _: Option<Target>, a: &[Value]) -> Result<Value, ErrorKind> {
     Ok(Value::Float(
-        number(a.first(), "ceil takes a number")?.ceil() as f32,
+        double(a.first(), "ceil takes a number")?.ceil() as f32,
     ))
 }
 
@@ -209,7 +189,7 @@ fn random_float(
     _: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let f = number(a.first(), "randomFloat takes a number")?;
+    let f = double(a.first(), "randomFloat takes a number")?;
     Ok(Value::Float(host.rand_unit() * f as f32))
 }
 
@@ -234,8 +214,8 @@ fn random_float_range(
     _: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let lo = number(a.first(), "randomFloatRange takes numbers")?;
-    let hi = number(a.get(1), "randomFloatRange takes numbers")?;
+    let lo = double(a.first(), "randomFloatRange takes numbers")?;
+    let hi = double(a.get(1), "randomFloatRange takes numbers")?;
     Ok(Value::Float(
         (lo + (hi - lo) * f64::from(host.rand_unit())) as f32,
     ))
@@ -436,7 +416,7 @@ fn vision_set(
     };
     let secs = match a.get(1) {
         None => 1.0,
-        v => number(v, usage)?,
+        v => double(v, usage)?,
     };
     let text = format!("\"{}\" {}", cx.resolve(name), (secs * 1000.0) as i32);
     host.configstrings.set(slot, &text);
@@ -492,7 +472,7 @@ fn set_exp_fog(
     }
     let v: Vec<f32> = a
         .iter()
-        .map(|x| number(Some(x), USAGE).map(|f| f as f32))
+        .map(|x| double(Some(x), USAGE).map(|f| f as f32))
         .collect::<Result<_, _>>()?;
     if v[0] < 0.0 {
         return Err(ErrorKind::BadType(
@@ -556,13 +536,6 @@ fn get_array_keys(
     Ok(Value::Array(out))
 }
 
-fn string_arg<'a>(cx: &'a Cx, v: Option<&Value>, what: &'static str) -> Result<&'a str, ErrorKind> {
-    match v {
-        Some(&Value::String(s)) => Ok(cx.resolve(s)),
-        _ => Err(ErrorKind::BadType(what)),
-    }
-}
-
 /// `toLower(s)`: ASCII lowercase.
 fn to_lower(
     _: &mut GameHost,
@@ -570,7 +543,7 @@ fn to_lower(
     _: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let s = string_arg(cx, a.first(), "toLower takes a string")?.to_ascii_lowercase();
+    let s = string(cx, a.first(), "toLower takes a string")?.to_ascii_lowercase();
     Ok(Value::String(cx.intern_exact(&s)))
 }
 
@@ -582,8 +555,8 @@ fn str_tok(
     _: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let s = string_arg(cx, a.first(), "strTok takes two strings")?.to_string();
-    let d = string_arg(cx, a.get(1), "strTok takes two strings")?.to_string();
+    let s = string(cx, a.first(), "strTok takes two strings")?.to_string();
+    let d = string(cx, a.get(1), "strTok takes two strings")?.to_string();
     let out = cx.new_array();
     for (i, t) in s
         .split(|c| d.contains(c))
@@ -603,8 +576,8 @@ fn is_substr(
     _: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let s = string_arg(cx, a.first(), "isSubStr takes two strings")?;
-    let sub = string_arg(cx, a.get(1), "isSubStr takes two strings")?;
+    let s = string(cx, a.first(), "isSubStr takes two strings")?;
+    let sub = string(cx, a.get(1), "isSubStr takes two strings")?;
     Ok(Value::Int(s.contains(sub) as i32))
 }
 
@@ -615,7 +588,7 @@ fn get_substr(
     _: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let s = string_arg(cx, a.first(), "getSubStr takes a string")?
+    let s = string(cx, a.first(), "getSubStr takes a string")?
         .as_bytes()
         .to_vec();
     let idx = |v: Option<&Value>, default: usize| -> Result<usize, ErrorKind> {
@@ -760,7 +733,7 @@ fn precache_item(
     _: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let name = string_arg(cx, a.first(), "precacheItem takes a weapon name")?.to_ascii_lowercase();
+    let name = string(cx, a.first(), "precacheItem takes a weapon name")?.to_ascii_lowercase();
     if !host.initializing {
         return Err(ErrorKind::Custom(
             "precacheItem must be called before any wait statements in the gametype or level script".into(),
@@ -849,7 +822,7 @@ fn make_dvar_server_info(
     _: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let name = string_arg(cx, a.first(), "makeDvarServerInfo takes a dvar name")?.to_string();
+    let name = string(cx, a.first(), "makeDvarServerInfo takes a dvar name")?.to_string();
     let default = match a.get(1) {
         None => String::new(),
         Some(&v) => cx.format_number(v).ok_or(ErrorKind::BadType(
@@ -860,13 +833,6 @@ fn make_dvar_server_info(
     Ok(Value::Undefined)
 }
 
-fn vector_arg(v: Option<&Value>, what: &'static str) -> Result<[f32; 3], ErrorKind> {
-    match v {
-        Some(&Value::Vector(v)) => Ok(v),
-        _ => Err(ErrorKind::BadType(what)),
-    }
-}
-
 /// `setMapCenter(origin)`: configstring 12 at `"%f %f %f"` (the capture's
 /// `429.000000 126.500000 137.000000`).
 fn set_map_center(
@@ -875,7 +841,7 @@ fn set_map_center(
     _: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let v = vector_arg(a.first(), "setMapCenter takes a vector")?;
+    let v = vector(a.first(), "setMapCenter takes a vector")?;
     host.configstrings.set(
         crate::game::cod4::CS_MAPCENTER,
         format!("{:.6} {:.6} {:.6}", v[0], v[1], v[2]),
@@ -904,7 +870,7 @@ fn set_mini_map(
     _: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let name = string_arg(
+    let name = string(
         cx,
         a.first(),
         "setMiniMap takes a material and four numbers",
@@ -912,7 +878,7 @@ fn set_mini_map(
     .to_string();
     let mut v = [0.0f32; 4];
     for (i, x) in v.iter_mut().enumerate() {
-        *x = number(a.get(i + 1), "setMiniMap takes a material and four numbers")? as f32;
+        *x = double(a.get(i + 1), "setMiniMap takes a material and four numbers")? as f32;
     }
     host.configstrings.set(
         crate::game::cod4::CS_MINIMAP,
@@ -932,7 +898,7 @@ fn precache_location_selector(
     _: Option<Target>,
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let name = string_arg(cx, a.first(), "precacheLocationSelector takes a material")?.to_string();
+    let name = string(cx, a.first(), "precacheLocationSelector takes a material")?.to_string();
     let base = crate::game::cod4::CS_LOC_SEL_MTLS;
     let mut free = None;
     for slot in base..base + 3 {

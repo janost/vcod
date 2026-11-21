@@ -2,6 +2,7 @@
 //! and CoD1 names whose CoD2 behaviour vcod has measured where CoD1's is
 //! not. Addresses are cod2_lnxded's (cod2-gsc-diff.md section 1).
 
+use super::args::{float, int, noop, string_or_localized, vector};
 use crate::game::host::{GameHost, WeaponOp};
 use crate::game::slot::ClientSlot;
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
@@ -11,27 +12,40 @@ use super::client::client_receiver;
 use super::precache::{before_any_wait, name_arg};
 
 pub const NAMES: &[(&str, Builtin)] = &[
-    ("assert", developer_statement),
-    ("assertex", developer_statement),
-    ("assertmsg", developer_statement),
+    // `assert`, `assertEx`, `assertMsg`, `print` and `line`: `developer` 1
+    // records, which retail compiles as if inside `/# #/` when used as a
+    // statement, so below `developer_script 1` they never run
+    // (cod2-gsc-diff.md 1.1, 3.3, probe `probe_c2g`; `GScr_line` 0x8110c02
+    // is empty anyway). vcod still evaluates the arguments.
+    ("assert", noop),
+    ("assertex", noop),
+    ("assertmsg", noop),
     ("issplitscreen", is_split_screen),
     ("istalking", is_talking),
     ("precacheitem", precache_item),
     ("precacheturret", precache_turret),
     ("spawnturret", spawn_turret),
-    ("precacherumble", empty),
-    ("playrumbleonpos", empty),
-    ("playlooprumbleonpos", empty),
-    ("stopallrumbles", empty),
-    ("playrumble", empty),
-    ("playlooprumble", empty),
-    ("stoprumble", empty),
-    ("matchend", empty),
-    ("setplayerteamrank", empty),
-    ("sendranks", empty),
-    ("endparty", empty),
-    ("print", developer_statement),
-    ("line", developer_statement),
+    // The console builtins whose PC handlers are empty, VERIFIED:
+    // `Scr_PrecacheRumble` 0x8114a36, `Scr_PlayRumbleOnPos` 0x8117906,
+    // `Scr_PlayLoopRumbleOnPos` 0x811790c, `Scr_StopAllRumbles` 0x8117912,
+    // `ScrCmd_PlayRumble` 0x8111e90, `ScrCmd_PlayLoopRumble` 0x8111e96,
+    // `ScrCmd_StopRumble` 0x8111e9c, `GScr_MatchEnd` 0x811792c,
+    // `GScr_SetPlayerTeamRank` 0x8117932, `GScr_SendXboxLiveRanks` 0x8117938,
+    // `GScr_EndXboxLiveLobby` 0x811793e.
+    ("precacherumble", noop),
+    ("playrumbleonpos", noop),
+    ("playlooprumbleonpos", noop),
+    ("stopallrumbles", noop),
+    ("playrumble", noop),
+    ("playlooprumble", noop),
+    ("stoprumble", noop),
+    ("matchend", noop),
+    ("setplayerteamrank", noop),
+    ("sendranks", noop),
+    ("endparty", noop),
+    // Developer statements, as `assert` above.
+    ("print", noop),
+    ("line", noop),
     ("bullettracepassed", bullet_trace_passed),
     ("closeingamemenu", close_in_game_menu),
     ("cloneplayer", clone_player),
@@ -58,36 +72,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("updatescores", update_scores),
     ("vectordot", vector_dot),
 ];
-
-/// The console builtins whose PC handlers are empty, VERIFIED:
-/// `Scr_PrecacheRumble` 0x8114a36, `Scr_PlayRumbleOnPos` 0x8117906,
-/// `Scr_PlayLoopRumbleOnPos` 0x811790c, `Scr_StopAllRumbles` 0x8117912,
-/// `ScrCmd_PlayRumble` 0x8111e90, `ScrCmd_PlayLoopRumble` 0x8111e96,
-/// `ScrCmd_StopRumble` 0x8111e9c, `GScr_MatchEnd` 0x811792c,
-/// `GScr_SetPlayerTeamRank` 0x8117932, `GScr_SendXboxLiveRanks` 0x8117938,
-/// `GScr_EndXboxLiveLobby` 0x811793e.
-fn empty(
-    _host: &mut GameHost,
-    _cx: &mut Cx,
-    _recv: Option<Target>,
-    _args: &[Value],
-) -> Result<Value, ErrorKind> {
-    Ok(Value::Undefined)
-}
-
-/// `assert`, `assertEx`, `assertMsg`, `print` and `line`: `developer` 1
-/// records, which retail compiles as if inside `/# #/` when used as a
-/// statement, so below `developer_script 1` they never run
-/// (cod2-gsc-diff.md 1.1, 3.3, probe `probe_c2g`; `GScr_line` 0x8110c02
-/// is empty anyway). vcod still evaluates the arguments.
-fn developer_statement(
-    _host: &mut GameHost,
-    _cx: &mut Cx,
-    _recv: Option<Target>,
-    _args: &[Value],
-) -> Result<Value, ErrorKind> {
-    Ok(Value::Undefined)
-}
 
 /// `isSplitScreen()` (`Scr_IsSplitscreen` 0x8117918): pushes 0, VERIFIED.
 fn is_split_screen(
@@ -282,9 +266,11 @@ fn spawn_turret(
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let classname = string_arg(cx, args, 0, "spawnTurret takes a classname")?;
-    let origin = vector_arg(args, 1, "spawnTurret takes an origin")?;
-    let weapon = string_arg(cx, args, 2, "spawnTurret takes a weapon name")?;
+    let classname =
+        string_or_localized(cx, args.first(), "spawnTurret takes a classname")?.to_owned();
+    let origin = vector(args.get(1), "spawnTurret takes an origin")?.to_array();
+    let weapon =
+        string_or_localized(cx, args.get(2), "spawnTurret takes a weapon name")?.to_owned();
     use vcod_gsc::Host;
     let id = host.ents.spawn(cx)?;
     for (f, v) in [
@@ -296,40 +282,6 @@ fn spawn_turret(
     }
     crate::game::spawn::spawn_turret(host, cx, id, &weapon, &Default::default())?;
     Ok(Value::Entity(id))
-}
-
-/// A string argument, resolved.
-fn string_arg(cx: &Cx, args: &[Value], i: usize, what: &'static str) -> Result<String, ErrorKind> {
-    match args.get(i) {
-        Some(Value::String(s) | Value::Localized(s)) => Ok(cx.resolve(*s).to_string()),
-        _ => Err(ErrorKind::BadType(what)),
-    }
-}
-
-/// A vector argument.
-fn vector_arg(args: &[Value], i: usize, what: &'static str) -> Result<[f32; 3], ErrorKind> {
-    match args.get(i) {
-        Some(Value::Vector(v)) => Ok(*v),
-        _ => Err(ErrorKind::BadType(what)),
-    }
-}
-
-/// `Scr_GetFloat`: an int or a float.
-fn float_arg(args: &[Value], i: usize, what: &'static str) -> Result<f32, ErrorKind> {
-    match args.get(i) {
-        Some(Value::Float(f)) => Ok(*f),
-        Some(Value::Int(n)) => Ok(*n as f32),
-        _ => Err(ErrorKind::BadType(what)),
-    }
-}
-
-/// `Scr_GetInt`: an int, or a float truncated.
-fn int_arg(args: &[Value], i: usize, what: &'static str) -> Result<i32, ErrorKind> {
-    match args.get(i) {
-        Some(Value::Int(n)) => Ok(*n),
-        Some(Value::Float(f)) => Ok(*f as i32),
-        _ => Err(ErrorKind::BadType(what)),
-    }
 }
 
 /// `bulletTracePassed(start, end, hitCharacters, ignoreEnt)`
@@ -344,9 +296,9 @@ pub(crate) fn bullet_trace_passed(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     const USAGE: &str = "bulletTracePassed takes a start, an end, hitCharacters and ignoreEnt";
-    let from = vector_arg(args, 0, USAGE)?;
-    let to = vector_arg(args, 1, USAGE)?;
-    let chars = int_arg(args, 2, USAGE)? != 0;
+    let from = vector(args.first(), USAGE)?.to_array();
+    let to = vector(args.get(1), USAGE)?.to_array();
+    let chars = int(args.get(2), USAGE)? != 0;
     let ignore = match args.get(3) {
         Some(Value::Entity(id)) => Some(*id),
         _ => None,
@@ -385,7 +337,8 @@ fn get_ammo_count(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?.index();
-    let name = string_arg(cx, args, 0, "getAmmoCount takes a weapon name")?;
+    let name =
+        string_or_localized(cx, args.first(), "getAmmoCount takes a weapon name")?.to_owned();
     let Some(index) = host.weapon_index(&name) else {
         return Ok(Value::Int(0));
     };
@@ -456,10 +409,10 @@ fn radius_damage(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     const USAGE: &str = "radiusDamage takes an origin, a range, a max damage and a min damage";
-    let origin = vector_arg(args, 0, USAGE)?;
-    let range = float_arg(args, 1, USAGE)?;
-    let max = float_arg(args, 2, USAGE)?;
-    let min = float_arg(args, 3, USAGE)?;
+    let origin = vector(args.first(), USAGE)?.to_array();
+    let range = float(args.get(1), USAGE)?;
+    let max = float(args.get(2), USAGE)?;
+    let min = float(args.get(3), USAGE)?;
     crate::game::cod2_blast::radius_damage(host, cx, glam::Vec3::from(origin), range, max, min);
     Ok(Value::Undefined)
 }
@@ -473,7 +426,7 @@ fn random_int(
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let n = int_arg(args, 0, "randomInt takes a number")?;
+    let n = int(args.first(), "randomInt takes a number")?;
     if n <= 0 {
         return Err(ErrorKind::Custom(
             "RandomInt parm must be positive integer.".into(),
@@ -489,7 +442,7 @@ fn random_float(
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let f = float_arg(args, 0, "randomFloat takes a number")?;
+    let f = float(args.first(), "randomFloat takes a number")?;
     Ok(Value::Float(host.cod2().rand.flrand(0.0, f)))
 }
 
@@ -502,7 +455,7 @@ fn random_int_range(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     const USAGE: &str = "randomIntRange takes two numbers";
-    let (lo, hi) = (int_arg(args, 0, USAGE)?, int_arg(args, 1, USAGE)?);
+    let (lo, hi) = (int(args.first(), USAGE)?, int(args.get(1), USAGE)?);
     if hi <= lo {
         return Err(ErrorKind::Custom(
             "RandomIntRange range must be positive integer.".into(),
@@ -520,7 +473,7 @@ fn random_float_range(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     const USAGE: &str = "randomFloatRange takes two numbers";
-    let (lo, hi) = (float_arg(args, 0, USAGE)?, float_arg(args, 1, USAGE)?);
+    let (lo, hi) = (float(args.first(), USAGE)?, float(args.get(1), USAGE)?);
     if lo >= hi {
         return Err(ErrorKind::Custom(
             "Scr_RandomFloatRange range must be positive float.".into(),
@@ -542,7 +495,7 @@ fn set_stable_missile(
     let slot = client_receiver(host, recv)
         .map_err(|_| ErrorKind::Custom("Type should be a player".into()))?
         .index();
-    let on = int_arg(args, 0, "setStableMissile takes a number")?;
+    let on = int(args.first(), "setStableMissile takes a number")?;
     let flags = &mut host.cod2_mut().clients[slot].flags;
     if on != 0 {
         *flags |= crate::game::cod2_cmds::FL_STABLE_MISSILE;
@@ -586,7 +539,7 @@ fn set_normal_health(
 ) -> Result<Value, ErrorKind> {
     use vcod_gsc::Host;
     let id = super::entity::entity_receiver(recv)?;
-    let f = float_arg(args, 0, "setNormalHealth takes a number")?.min(1.0);
+    let f = float(args.first(), "setNormalHealth takes a number")?.min(1.0);
     let health = if let Some(to) = ClientSlot::of_entity(&host.ents, id) {
         let max = host.clients[to.index()].vitals.max_health;
         host.client_commands.push(to, "I \"0\"".to_string());
@@ -631,7 +584,7 @@ fn set_team_score(
             )));
         }
     };
-    let n = int_arg(args, 1, "setTeamScore takes a number")?;
+    let n = int(args.get(1), "setTeamScore takes a number")?;
     host.team_scores[i] = n;
     // `SV_GameSendServerCommand(-1, ..)`: the engine's clients, so a
     // restart's `resetScores` reaches the clients its level has not yet
@@ -655,7 +608,7 @@ fn set_waypoint(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = super::hud::hud_receiver(host, recv)?;
-    let on = int_arg(args, 0, "setWaypoint takes a boolean")?;
+    let on = int(args.first(), "setWaypoint takes a boolean")?;
     super::hud::with_hud(host, id, |h| {
         h.elem_type = HE_TYPE_WAYPOINT;
         h.value = on as f32;
@@ -676,8 +629,9 @@ fn set_weapon_clip_ammo(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?.index();
-    let name = string_arg(cx, args, 0, "setWeaponClipAmmo takes a weapon name")?;
-    let rounds = int_arg(args, 1, "setWeaponClipAmmo takes a round count")?;
+    let name =
+        string_or_localized(cx, args.first(), "setWeaponClipAmmo takes a weapon name")?.to_owned();
+    let rounds = int(args.get(1), "setWeaponClipAmmo takes a round count")?;
     let Some(index) = host.weapon_index(&name) else {
         return Ok(Value::Undefined);
     };
@@ -701,7 +655,8 @@ fn switch_to_offhand(
 ) -> Result<Value, ErrorKind> {
     let to = client_receiver(host, recv)?;
     let slot = to.index();
-    let name = string_arg(cx, args, 0, "switchToOffhand takes a weapon name")?;
+    let name =
+        string_or_localized(cx, args.first(), "switchToOffhand takes a weapon name")?.to_owned();
     let Some(index) = host.weapon_index(&name) else {
         return Err(ErrorKind::Custom(format!("unknown weapon '{name}'")));
     };
@@ -736,7 +691,10 @@ pub(super) fn vector_dot(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     const USAGE: &str = "vectorDot takes two vectors";
-    let (a, b) = (vector_arg(args, 0, USAGE)?, vector_arg(args, 1, USAGE)?);
+    let (a, b) = (
+        vector(args.first(), USAGE)?.to_array(),
+        vector(args.get(1), USAGE)?.to_array(),
+    );
     let dot: f64 = (0..3).map(|i| f64::from(a[i]) * f64::from(b[i])).sum();
     Ok(Value::Float(dot as f32))
 }
@@ -773,7 +731,7 @@ fn give_weapon(
 ) -> Result<Value, ErrorKind> {
     let to = client_receiver(host, recv)?;
     let slot = to.index();
-    let name = string_arg(cx, args, 0, "giveWeapon takes a weapon name")?;
+    let name = string_or_localized(cx, args.first(), "giveWeapon takes a weapon name")?.to_owned();
     let had = host
         .weapon_index(&name)
         .is_some_and(|i| host.clients[slot].weapons.holds(i));
@@ -882,14 +840,6 @@ fn first_available_offhand(host: &GameHost, slot: usize, class: i32) -> Option<u
     })
 }
 
-fn number(v: &Value) -> Result<i32, ErrorKind> {
-    match v {
-        Value::Int(i) => Ok(*i),
-        Value::Float(f) => Ok(*f as i32),
-        _ => Err(ErrorKind::BadType("expected a number")),
-    }
-}
-
 /// `self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags,
 /// sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc, psOffsetTime)`
 /// (`PlayerCmd_finishPlayerDamage`, Mac 0x1c2e32, lnxded 0x80fb170):
@@ -918,9 +868,13 @@ fn finish_player_damage(
     }
     let (inflictor, attacker, mod_, weapon, hitloc) =
         (&args[0], &args[1], &args[4], &args[5], &args[8]);
-    let damage = number(&args[2])?;
-    let dflags = number(&args[3])?;
-    let time_offset = args.get(9).map(number).transpose()?.unwrap_or(0);
+    let damage = int(args.get(2), "expected a number")?;
+    let dflags = int(args.get(3), "expected a number")?;
+    let time_offset = args
+        .get(9)
+        .map(|v| int(Some(v), "expected a number"))
+        .transpose()?
+        .unwrap_or(0);
     if damage < 1 {
         return Ok(Value::Undefined);
     }

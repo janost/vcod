@@ -3,6 +3,7 @@
 //! Each command's text is the walk capture's (`play-1.7-walk.txt`) where
 //! the capture carries one.
 
+use super::args::{int, noop};
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
 use super::Builtin;
@@ -16,9 +17,12 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("closeingamemenu", close_in_game_menu),
     ("updatescores", update_scores),
     ("setteamscore", set_team_score),
-    ("logstring", nothing),
+    // Nothing a 1.7 server keeps: no log line on 1.7's dedicated build
+    // (INFERRED).
+    ("logstring", noop),
     ("addtestclient", add_test_client),
-    ("stoprumble", nothing),
+    // Rumble: client-side.
+    ("stoprumble", noop),
     ("setperk", set_perk),
     ("pingplayer", ping_player),
     ("unsetperk", unset_perk),
@@ -61,7 +65,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("stopshellshock", stop_shell_shock),
     // The scoreboard's order within a team; vcod's scoreboard sorts by
     // score itself.
-    ("setplayerteamrank", nothing),
+    ("setplayerteamrank", noop),
 ];
 
 /// `self disableWeapons()` / `enableWeapons()`: `ps.weapFlags` 0x80
@@ -125,7 +129,7 @@ fn set_pulse_fx(
     };
     let mut t = [0; 3];
     for (o, v) in t.iter_mut().zip([l, s, d]) {
-        *o = int_arg(Some(v), "setPulseFX takes times")?;
+        *o = int(Some(v), "setPulseFX takes times")?;
         if *o < 0 {
             return Err(ErrorKind::BadType("setPulseFX takes times of 0 or more"));
         }
@@ -444,14 +448,6 @@ fn get_weapons_list(
     Ok(Value::Array(out))
 }
 
-fn int_arg(v: Option<&Value>, what: &'static str) -> Result<i32, ErrorKind> {
-    match v {
-        Some(&Value::Int(i)) => Ok(i),
-        Some(&Value::Float(f)) => Ok(f as i32),
-        _ => Err(ErrorKind::BadType(what)),
-    }
-}
-
 /// `self setWeaponAmmoClip(name, count)`: the clip, clamped to 0 and the
 /// clip size.
 fn set_weapon_ammo_clip(
@@ -461,7 +457,7 @@ fn set_weapon_ammo_clip(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?.index();
-    let n = int_arg(a.get(1), "setWeaponAmmoClip takes a count")?;
+    let n = int(a.get(1), "setWeaponAmmoClip takes a count")?;
     if let Some(w) = weapon_arg(host, cx, a.first())? {
         with_loadout(host, slot, |l, t| {
             let d = &t.defs[w];
@@ -480,7 +476,7 @@ fn set_weapon_ammo_stock(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?.index();
-    let n = int_arg(a.get(1), "setWeaponAmmoStock takes a count")?;
+    let n = int(a.get(1), "setWeaponAmmoStock takes a count")?;
     if let Some(w) = weapon_arg(host, cx, a.first())? {
         with_loadout(host, slot, |l, t| {
             let d = &t.defs[w];
@@ -577,7 +573,7 @@ fn set_action_slot(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?.index();
-    let n = int_arg(a.first(), "setActionSlot takes a slot")?;
+    let n = int(a.first(), "setActionSlot takes a slot")?;
     if !(1..=4).contains(&n) {
         return Err(ErrorKind::Custom(format!(
             "Invalid slot ({n}) given, expecting 1 - 4\n"
@@ -879,17 +875,6 @@ fn clear_perks(
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?.index();
     host.cod4_mut().clients[slot].perks = 0;
-    Ok(Value::Undefined)
-}
-
-/// A builtin whose 1.7 effect is nothing a server keeps: `logString` (no
-/// log line on 1.7's dedicated build, INFERRED), `stopRumble`.
-fn nothing(
-    _: &mut GameHost,
-    _: &mut Cx,
-    _: Option<Target>,
-    _: &[Value],
-) -> Result<Value, ErrorKind> {
     Ok(Value::Undefined)
 }
 

@@ -13,6 +13,7 @@
 //! `self moveGravity((x, y, z), 12)` and
 //! `self rotateVelocity((250,250,250), 1, 0, 0)`.
 
+use super::args::{as_float, as_vector};
 use crate::game::builtins::entity::entity_receiver;
 use crate::game::host::GameHost;
 use crate::game::mover::Ramp;
@@ -39,21 +40,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
 /// (movers doc, section 1), which cost the probe that measured it a run.
 const MOVABLE: [&str; 3] = ["script_brushmodel", "script_model", "script_origin"];
 
-fn number(v: Option<&Value>) -> Option<f32> {
-    match v {
-        Some(Value::Int(i)) => Some(*i as f32),
-        Some(Value::Float(f)) => Some(*f),
-        _ => None,
-    }
-}
-
-fn vector(v: Option<&Value>) -> Option<Vec3> {
-    match v {
-        Some(Value::Vector(v)) => Some(Vec3::from_array(*v)),
-        _ => None,
-    }
-}
-
 /// The receiver, checked against retail's class gate, and the `(duration,
 /// accel, decel)` triple every verb but `moveGravity` ends with. `first` is
 /// how many arguments come before the duration.
@@ -68,11 +54,11 @@ fn call(
     what: &'static str,
 ) -> Result<(EntId, Ramp), ErrorKind> {
     let id = movable(host, cx, recv)?;
-    let Some(secs) = number(args.get(first)) else {
+    let Some(secs) = args.get(first).and_then(as_float) else {
         return Err(ErrorKind::BadType(what));
     };
-    let accel = number(args.get(first + 1)).unwrap_or(0.0);
-    let decel = number(args.get(first + 2)).unwrap_or(0.0);
+    let accel = args.get(first + 1).and_then(as_float).unwrap_or(0.0);
+    let decel = args.get(first + 2).and_then(as_float).unwrap_or(0.0);
     Ok((id, Ramp::new(secs, accel, decel)))
 }
 
@@ -151,7 +137,7 @@ pub fn move_to(
         return Ok(Value::Undefined);
     }
     let (id, m) = ramped(host, cx, recv, args, 1, "moveTo takes a point and a time")?;
-    let Some(dest) = vector(args.first()) else {
+    let Some(dest) = args.first().and_then(as_vector) else {
         return Err(ErrorKind::BadType("moveTo takes a point and a time"));
     };
     let from = field_vec(host, cx, id, "origin");
@@ -176,7 +162,7 @@ fn move_axis(
         return Ok(Value::Undefined);
     }
     let (id, m) = ramped(host, cx, recv, args, 1, what)?;
-    let Some(d) = number(args.first()) else {
+    let Some(d) = args.first().and_then(as_float) else {
         return Err(ErrorKind::BadType(what));
     };
     let from = field_vec(host, cx, id, "origin");
@@ -230,7 +216,7 @@ pub fn move_gravity(
     }
     let what = "moveGravity takes a velocity and a time";
     let (id, m) = call(host, cx, recv, args, 1, what)?;
-    let Some(v) = vector(args.first()) else {
+    let Some(v) = args.first().and_then(as_vector) else {
         return Err(ErrorKind::BadType(what));
     };
     let from = field_vec(host, cx, id, "origin");
@@ -253,7 +239,7 @@ pub fn rotate_to(
     }
     let what = "rotateTo takes angles and a time";
     let (id, m) = ramped(host, cx, recv, args, 1, what)?;
-    let Some(dest) = vector(args.first()) else {
+    let Some(dest) = args.first().and_then(as_vector) else {
         return Err(ErrorKind::BadType(what));
     };
     let from = field_vec(host, cx, id, "angles");
@@ -295,7 +281,7 @@ fn rotate_axis(
         return Ok(Value::Undefined);
     }
     let (id, m) = ramped(host, cx, recv, args, 1, what)?;
-    let Some(d) = number(args.first()) else {
+    let Some(d) = args.first().and_then(as_float) else {
         return Err(ErrorKind::BadType(what));
     };
     let from = field_vec(host, cx, id, "angles");
@@ -351,7 +337,7 @@ pub fn rotate_velocity(
     }
     let what = "rotateVelocity takes a velocity and a time";
     let (id, m) = ramped(host, cx, recv, args, 1, what)?;
-    let Some(v) = vector(args.first()) else {
+    let Some(v) = args.first().and_then(as_vector) else {
         return Err(ErrorKind::BadType(what));
     };
     let from = field_vec(host, cx, id, "angles");

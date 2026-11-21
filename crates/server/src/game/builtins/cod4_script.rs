@@ -5,6 +5,7 @@
 //! (docs/research/cod4-gsc.md 3.1). A row's semantics are
 //! INFERRED unless its comment says VERIFIED.
 
+use super::args::{float, string, vector};
 use glam::{Mat3, Vec3};
 use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
 
@@ -130,30 +131,10 @@ fn zero(_: &mut GameHost, _: &mut Cx, _: Option<Target>, _: &[Value]) -> Result<
     Ok(Value::Int(0))
 }
 
-fn num(v: Option<&Value>, what: &'static str) -> Result<f32, ErrorKind> {
-    match v {
-        Some(&Value::Int(i)) => Ok(i as f32),
-        Some(&Value::Float(f)) => Ok(f),
-        _ => Err(ErrorKind::BadType(what)),
-    }
-}
-
-fn vec(v: Option<&Value>, what: &'static str) -> Result<Vec3, ErrorKind> {
-    match v {
-        Some(&Value::Vector(v)) => Ok(Vec3::from(v)),
-        _ => Err(ErrorKind::BadType(what)),
-    }
-}
-
-fn string(cx: &Cx, v: Option<&Value>, what: &'static str) -> Result<String, ErrorKind> {
-    match v {
-        Some(&Value::String(s)) => Ok(cx.resolve(s).to_string()),
-        _ => Err(ErrorKind::BadType(what)),
-    }
-}
-
 fn sqrt(_: &mut GameHost, _: &mut Cx, _: Option<Target>, a: &[Value]) -> Result<Value, ErrorKind> {
-    Ok(Value::Float(num(a.first(), "sqrt takes a number")?.sqrt()))
+    Ok(Value::Float(
+        float(a.first(), "sqrt takes a number")?.sqrt(),
+    ))
 }
 
 fn length_squared(
@@ -163,7 +144,7 @@ fn length_squared(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     Ok(Value::Float(
-        vec(a.first(), "lengthSquared takes a vector")?.length_squared(),
+        vector(a.first(), "lengthSquared takes a vector")?.length_squared(),
     ))
 }
 
@@ -202,7 +183,7 @@ fn combine_angles(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     const USAGE: &str = "combineAngles takes two vectors";
-    let (x, y) = (vec(a.first(), USAGE)?, vec(a.get(1), USAGE)?);
+    let (x, y) = (vector(a.first(), USAGE)?, vector(a.get(1), USAGE)?);
     Ok(Value::Vector(
         axis_to_angles(mul(axis(y), axis(x))).to_array(),
     ))
@@ -218,9 +199,9 @@ fn point_on_segment(
 ) -> Result<Value, ErrorKind> {
     const USAGE: &str = "pointOnSegmentNearestToPoint takes three vectors";
     let (s, e, p) = (
-        vec(a.first(), USAGE)?,
-        vec(a.get(1), USAGE)?,
-        vec(a.get(2), USAGE)?,
+        vector(a.first(), USAGE)?,
+        vector(a.get(1), USAGE)?,
+        vector(a.get(2), USAGE)?,
     );
     let ba = e - s;
     let len = ba.length_squared();
@@ -322,7 +303,7 @@ fn anim_has_notetrack(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     let clip = clip_of(host, cx, a.first())?;
-    let note = string(cx, a.get(1), "animHasNotetrack takes a notetrack")?;
+    let note = string(cx, a.get(1), "animHasNotetrack takes a notetrack")?.to_owned();
     Ok(Value::Int(i32::from(
         clip.notes
             .iter()
@@ -339,7 +320,7 @@ fn get_notetrack_times(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     let clip = clip_of(host, cx, a.first())?;
-    let note = string(cx, a.get(1), "getNotetrackTimes takes a notetrack")?;
+    let note = string(cx, a.get(1), "getNotetrackTimes takes a notetrack")?.to_owned();
     let arr = cx.new_array();
     for (i, (_, t)) in clip
         .notes
@@ -451,7 +432,7 @@ fn kick(
 
 /// `teamHasRadar`'s index for `allies` (2), `axis` (1) or `none` (0).
 fn radar_team(cx: &Cx, v: Option<&Value>) -> Result<usize, ErrorKind> {
-    let t = string(cx, v, "takes a team")?;
+    let t = string(cx, v, "takes a team")?.to_owned();
     match t.as_str() {
         "allies" => Ok(2),
         "axis" => Ok(1),
@@ -502,7 +483,7 @@ fn world_trace(
 
 fn traced(host: &GameHost, a: &[Value], mins: Vec3, maxs: Vec3) -> Result<Value, ErrorKind> {
     const USAGE: &str = "takes a start and an end";
-    let (s, e) = (vec(a.first(), USAGE)?, vec(a.get(1), USAGE)?);
+    let (s, e) = (vector(a.first(), USAGE)?, vector(a.get(1), USAGE)?);
     let f = world_trace(host, s, e, mins, maxs, MASK_PHYSICS).unwrap_or(1.0);
     Ok(Value::Vector(s.lerp(e, f).to_array()))
 }
@@ -540,7 +521,7 @@ fn cone_trace(
     mask: u32,
 ) -> Result<Value, ErrorKind> {
     let id = entity_receiver(recv)?;
-    let from = vec(a.first(), "takes an origin")?;
+    let from = vector(a.first(), "takes an origin")?;
     let (origin, _) = place(host, cx, id);
     let points: Vec<Vec3> = if let Some(slot) = ClientSlot::of_entity(&host.ents, id) {
         let eye = Vec3::from(host.clients[slot.index()].aim.0);
@@ -649,7 +630,7 @@ fn play_sound_to_team(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = entity_receiver(recv)?;
-    let team = match string(cx, a.get(1), "playSoundToTeam takes a team")?.as_str() {
+    let team = match string(cx, a.get(1), "playSoundToTeam takes a team")? {
         t @ ("allies" | "axis") => t.to_string(),
         t => {
             return Err(ErrorKind::Custom(format!(
@@ -790,15 +771,15 @@ fn play_fx(
     if !(2..=4).contains(&a.len()) {
         return Err(ErrorKind::Custom("Incorrect number of parameters".into()));
     }
-    let fx = num(a.first(), "playFx takes an effect id")? as i32;
-    let origin = vec(a.get(1), "playFx takes an origin")?;
+    let fx = float(a.first(), "playFx takes an effect id")? as i32;
+    let origin = vector(a.get(1), "playFx takes an origin")?;
     let forward = a
         .get(2)
-        .map(|v| vec(Some(v), "playFx takes a forward"))
+        .map(|v| vector(Some(v), "playFx takes a forward"))
         .transpose()?;
     let up = a
         .get(3)
-        .map(|v| vec(Some(v), "playFx takes an up"))
+        .map(|v| vector(Some(v), "playFx takes an up"))
         .transpose()?;
     let angles = fx_angles(forward, up, fx)?;
     host.add_temp_entity(
@@ -822,15 +803,15 @@ fn spawn_fx(
     if !(2..=4).contains(&a.len()) {
         return Err(ErrorKind::Custom("Incorrect number of parameters".into()));
     }
-    let fx = num(a.first(), "spawnFx takes an effect id")? as i32;
-    let origin = vec(a.get(1), "spawnFx takes an origin")?;
+    let fx = float(a.first(), "spawnFx takes an effect id")? as i32;
+    let origin = vector(a.get(1), "spawnFx takes an origin")?;
     let forward = a
         .get(2)
-        .map(|v| vec(Some(v), "spawnFx takes a forward"))
+        .map(|v| vector(Some(v), "spawnFx takes a forward"))
         .transpose()?;
     let up = a
         .get(3)
-        .map(|v| vec(Some(v), "spawnFx takes an up"))
+        .map(|v| vector(Some(v), "spawnFx takes an up"))
         .transpose()?;
     let angles = fx_angles(forward, up, fx)?;
     let rec = Fx4 {
@@ -857,7 +838,7 @@ fn trigger_fx(
         return Err(ErrorKind::BadType("triggerFx takes an entity"));
     };
     let at = match a.get(1) {
-        Some(v) => (num(Some(v), "triggerFx takes a time")? * 1000.0).round() as i32,
+        Some(v) => (float(Some(v), "triggerFx takes a time")? * 1000.0).round() as i32,
         None => host.level_time_ms,
     };
     match host.cod4_mut().fx.get_mut(&id) {
@@ -883,20 +864,20 @@ fn play_looped_fx(
     if !(3..=6).contains(&a.len()) {
         return Err(ErrorKind::Custom("Incorrect number of parameters".into()));
     }
-    let fx = num(a.first(), "playLoopedFx takes an effect id")? as i32;
-    let period_ms = (num(a.get(1), "playLoopedFx takes a repeat")? * 1000.0).round() as i32;
-    let origin = vec(a.get(2), "playLoopedFx takes an origin")?;
+    let fx = float(a.first(), "playLoopedFx takes an effect id")? as i32;
+    let period_ms = (float(a.get(1), "playLoopedFx takes a repeat")? * 1000.0).round() as i32;
+    let origin = vector(a.get(2), "playLoopedFx takes an origin")?;
     let cull = a
         .get(3)
-        .map(|v| num(Some(v), "playLoopedFx takes a cull distance"))
+        .map(|v| float(Some(v), "playLoopedFx takes a cull distance"))
         .transpose()?;
     let forward = a
         .get(4)
-        .map(|v| vec(Some(v), "playLoopedFx takes a forward"))
+        .map(|v| vector(Some(v), "playLoopedFx takes a forward"))
         .transpose()?;
     let up = a
         .get(5)
-        .map(|v| vec(Some(v), "playLoopedFx takes an up"))
+        .map(|v| vector(Some(v), "playLoopedFx takes an up"))
         .transpose()?;
     if period_ms <= 0 {
         return Err(ErrorKind::Custom(format!(
@@ -1001,7 +982,7 @@ fn tag(
     a: &[Value],
 ) -> Result<(Vec3, [Vec3; 3]), ErrorKind> {
     let id = entity_receiver(recv)?;
-    let name = string(cx, a.first(), "takes a tag name")?;
+    let name = string(cx, a.first(), "takes a tag name")?.to_owned();
     let model_atom = cx.intern_folded("model");
     let mut model = match host.get_field(cx, id, model_atom) {
         Value::String(s) => cx.resolve(s).to_string(),
@@ -1148,7 +1129,7 @@ fn set_depth_of_field(
     let slot = client_receiver(host, recv)?.index();
     let mut v = [0.0f32; 6];
     for (i, x) in v.iter_mut().enumerate() {
-        *x = num(a.get(i), "setDepthOfField takes six numbers")?;
+        *x = float(a.get(i), "setDepthOfField takes six numbers")?;
     }
     host.cod4_mut().clients[slot].dof = Some(v);
     Ok(Value::Undefined)
@@ -1233,7 +1214,7 @@ fn begin_location_selection(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?.index();
-    let name = string(cx, a.first(), "beginLocationSelection takes a material")?;
+    let name = string(cx, a.first(), "beginLocationSelection takes a material")?.to_owned();
     let base = crate::game::cod4::CS_LOC_SEL_MTLS;
     let index = (base..base + 3)
         .position(|i| host.configstrings[i].eq_ignore_ascii_case(&name))
@@ -1242,7 +1223,7 @@ fn begin_location_selection(
     let radius = match a.get(1) {
         None => 0.15,
         Some(v) => {
-            let r = num(Some(v), "beginLocationSelection takes a radius")?;
+            let r = float(Some(v), "beginLocationSelection takes a radius")?;
             if r <= 0.0 {
                 return Err(ErrorKind::Custom(
                     "Radius of location selector must be greater than zero".into(),
@@ -1316,10 +1297,10 @@ fn set_waypoint(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = super::hud::hud_receiver(host, recv)?;
-    let on = num(a.first(), "setWaypoint takes a boolean")? as i32;
+    let on = float(a.first(), "setWaypoint takes a boolean")? as i32;
     let material = match a.get(1) {
         Some(v) => {
-            let name = string(cx, Some(v), "setWaypoint takes a material")?;
+            let name = string(cx, Some(v), "setWaypoint takes a material")?.to_owned();
             let name = host.shader_name(&name);
             host.allocators
                 .shader_index(&mut host.configstrings, &name, host.initializing)?

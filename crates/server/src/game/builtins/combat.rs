@@ -1,6 +1,7 @@
 //! Combat builtins: the damage path's script half, the blast radius and a
 //! real collision trace.
 
+use super::args::{float, int};
 use crate::game::builtins::client::client_receiver;
 use crate::game::combat::{DFLAG_NO_KNOCKBACK, DFLAG_RADIUS};
 use crate::game::host::{GameHost, SimOp};
@@ -67,8 +68,8 @@ pub fn finish_player_damage(
             "finishPlayerDamage takes nine arguments",
         ));
     };
-    let damage = as_i32(damage)?;
-    let dflags = as_i32(dflags)?;
+    let damage = int(Some(damage), "expected a number")?;
+    let dflags = int(Some(dflags), "expected a number")?;
     // `iDamage <= 0` returns without doing anything (4.5).
     if damage <= 0 {
         return Ok(Value::Undefined);
@@ -279,14 +280,6 @@ fn drop_cooking_grenade(host: &mut GameHost, cx: &mut Cx, slot: usize) {
     }
 }
 
-fn as_i32(v: &Value) -> Result<i32, ErrorKind> {
-    match v {
-        Value::Int(i) => Ok(*i),
-        Value::Float(f) => Ok(*f as i32),
-        _ => Err(ErrorKind::BadType("expected a number")),
-    }
-}
-
 /// `obituary(victim, attacker, weapon, meansOfDeath)` (`.so` 0x5a750): one
 /// broadcast temp entity, encoded as `docs/research/cod11-hud-protocol.md`
 /// sections 1 and 2 read it off the builtin. UO's (0x6a819) does nothing
@@ -466,14 +459,6 @@ fn notify_death(cx: &mut Cx, victim: Option<Target>, attacker: Value) {
     }
 }
 
-fn as_f32(v: &Value) -> Result<f32, ErrorKind> {
-    match v {
-        Value::Int(i) => Ok(*i as f32),
-        Value::Float(f) => Ok(*f),
-        _ => Err(ErrorKind::BadType("expected a number")),
-    }
-}
-
 /// `radiusDamage(origin, range, maxDamage, minDamage)` (`functions[72]`,
 /// `.so` 0x5eef4): the blast a script sets off, with the world as the
 /// attacker and `MOD_EXPLOSIVE` as the means of death.
@@ -510,9 +495,9 @@ pub fn radius_damage(
     };
     let blast = crate::game::combat::Blast::new(
         Vec3::from(*origin),
-        as_f32(radius)?,
-        as_f32(max_damage)?,
-        as_f32(min_damage)?,
+        float(Some(radius), "expected a number")?,
+        float(Some(max_damage), "expected a number")?,
+        float(Some(min_damage), "expected a number")?,
         None,
         None,
         "none",

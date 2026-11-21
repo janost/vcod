@@ -6,6 +6,7 @@
 //! lands on what the scripts read at once. `cod4_combat_ab` and
 //! `cod4::capture_ab` check it against retail captures.
 
+use super::args::{int, noop};
 use crate::game::slot::ClientSlot;
 use vcod_cod4::pmove::anim::EventAnim;
 use vcod_gsc::{Cx, EntId, ErrorKind, Target, Value};
@@ -27,7 +28,8 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("anyammoforweaponmodes", any_ammo_for_weapon_modes),
     ("startragdoll", start_ragdoll),
     ("isragdoll", is_ragdoll),
-    ("playrumbleonentity", nothing),
+    // Rumble: client-side.
+    ("playrumbleonentity", noop),
     ("isonladder", is_on_ladder),
     ("ismantling", is_mantling),
     ("getplayerangles", get_player_angles),
@@ -103,24 +105,6 @@ fn is_ragdoll(
     ))
 }
 
-/// A builtin whose effect is client-side (rumble).
-fn nothing(
-    _: &mut GameHost,
-    _: &mut Cx,
-    _: Option<Target>,
-    _: &[Value],
-) -> Result<Value, ErrorKind> {
-    Ok(Value::Undefined)
-}
-
-fn number(v: &Value) -> Result<i32, ErrorKind> {
-    match v {
-        Value::Int(i) => Ok(*i),
-        Value::Float(f) => Ok(*f as i32),
-        _ => Err(ErrorKind::BadType("expected a number")),
-    }
-}
-
 /// Where a hit leaves its victim, decided on the health it leaves
 /// (`cod4_lnxded` 0x80ac8e9, 0x80acc2a; cod4-combat.md 4).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -189,7 +173,7 @@ impl Hit {
             attacker,
             attacker_slot,
             damage,
-            dflags: number(&args[3])?,
+            dflags: int(args.get(3), "expected a number")?,
             means: args[4],
             means_name: string(cx, &args[4]).unwrap_or_default(),
             weapon: args[5],
@@ -198,7 +182,11 @@ impl Hit {
             dir: vector(&args[7]).map(|d| glam::Vec3::from(d).normalize_or_zero().to_array()),
             hit_loc: args[8],
             head: string(cx, &args[8]).as_deref() == Some(HITLOC_NAMES[2]),
-            time_offset: args.get(9).map(number).transpose()?.unwrap_or(0),
+            time_offset: args
+                .get(9)
+                .map(|v| int(Some(v), "expected a number"))
+                .transpose()?
+                .unwrap_or(0),
         })
     }
 
@@ -267,7 +255,7 @@ fn finish_player_damage(
     let now = host.level_time_ms;
     let client = &host.cod4().clients[slot];
     let shielded = client.last_stand && client.last_stand_time > now;
-    let damage = number(&args[2])?;
+    let damage = int(args.get(2), "expected a number")?;
     if shielded || damage <= 0 {
         return Ok(Value::Undefined);
     }
@@ -988,7 +976,10 @@ fn item_weapon_set_ammo(
     if args.len() != 2 {
         return Ok(Value::Undefined);
     }
-    let (clip, stock) = (number(&args[0])?, number(&args[1])?);
+    let (clip, stock) = (
+        int(args.first(), "expected a number")?,
+        int(args.get(1), "expected a number")?,
+    );
     if let Some(it) = host.cod4_mut().items.iter_mut().find(|i| i.id == id) {
         it.clip = clip;
         it.stock = stock;

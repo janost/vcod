@@ -498,11 +498,7 @@ fn spawn_think(
 /// the fields set, numbered after everything already in the table. An item
 /// classname makes an item (`dm.gsc`'s `dropHealth` spawns `item_health`).
 fn spawn_entity(host: &mut GameHost, cx: &mut Cx, args: &[Value]) -> Result<Value, ErrorKind> {
-    let num = |v: &Value| match v {
-        Value::Int(i) => Some(*i as f32),
-        Value::Float(f) => Some(*f),
-        _ => None,
-    };
+    let num = super::args::as_float;
     // CoD4's `spawn("trigger_radius", origin, flags, radius, height)`: the
     // stock claymore and C4 detection triggers (`_weapons.gsc`,
     // cod4-hud.md 16.2).
