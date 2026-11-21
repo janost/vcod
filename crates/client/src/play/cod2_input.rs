@@ -25,11 +25,9 @@
 //! Not modelled: `+stance`'s hold timer, the binoculars' sight, `CG_CycleWeap`'s ammo and alt-mode tests (the
 //! cycle here walks the two `weaponslots`) and the offhand switch command.
 
-use std::collections::HashSet;
-
 use vcod_cod2::net::PlayerState2;
 
-use super::input::{Action, StancePress, held_stance, stance_press};
+use super::input::{Action, KeyState, StanceBits};
 use crate::console::shell::Effect;
 
 pub mod bit {
@@ -70,24 +68,12 @@ const HELD: [(Action, i32); 12] = [
     (Action::Smoke, bit::SMOKE),
 ];
 
-/// `cl_stance`.
-pub use super::input::Stance;
-
 #[derive(Default)]
 pub struct Cod2Input {
-    down: HashSet<Action>,
-    pub stance: Stance,
-    /// `cl.toggleADS` (cl +0xb).
-    ads_toggle: bool,
-    /// The held `+gostand` / `+moveup` keys that pressed the jump (`kb`
-    /// 200) rather than moving the stance.
-    jump_by: HashSet<Action>,
-    /// `cg_weaponSelect`, the weapon every cmd asks for.
-    selected: u8,
-    /// The equipped offhand, `offHandIndex`'s byte.
-    offhand: u8,
-    /// The `(clientNum, stats[5])` the selection was last reset for.
-    spawn: Option<(i32, i32)>,
+    /// The held keys, `cl_stance`, `cl.toggleADS` (cl +0xb),
+    /// `cg_weaponSelect` and `offHandIndex`'s byte, reset per
+    /// `(clientNum, stats[5])`.
+    pub keys: KeyState<(i32, i32)>,
     /// `CL_SetUserCmdInShellshock` (Mac 0x17a28c): the shellshock runs,
     /// every cmd carries 0x800 (`CL_CmdButtons`, Mac 0x188ee2).
     pub shellshock: bool,
@@ -108,50 +94,25 @@ fn slot_weapon(ps: &PlayerState2, slot: usize) -> u8 {
 impl Cod2Input {
     /// Whether `action`'s key is held (`+talk` for voice chat).
     pub fn held(&self, action: Action) -> bool {
-        self.down.contains(&action)
+        self.keys.held(action)
     }
 
     /// A `+button` bind's edge.
     pub fn key(&mut self, action: Action, pressed: bool) {
-        let was = self.down.contains(&action);
-        if pressed {
-            self.down.insert(action);
-        } else {
-            self.down.remove(&action);
-            self.jump_by.remove(&action);
-        }
-        if pressed && !was && matches!(action, Action::Jump | Action::MoveUp) {
-            self.stance_press(action);
-        }
+        self.keys.key(action, pressed);
     }
 
-    /// `IN_GoStandDown`, `IN_UpDown` and the stance one-shots (Mac
-    /// 0x187e98, 0x187732, 0x187d64..0x187e6e), each gated on the held
-    /// `+prone` (kb 0x1f4) and `+movedown` (kb 0xdc).
-    fn stance_press(&mut self, action: Action) {
-        match stance_press(action, self.stance, held_stance(&self.down).is_some()) {
-            StancePress::Set(s) => self.stance = s,
-            StancePress::Jump => {
-                self.jump_by.insert(action);
-            }
-            StancePress::Nothing => {}
-        }
-    }
-
-    /// A one-shot bind: the stance ones, `toggleads`, `leaveads`,
-    /// `weapnext`, `weapprev`, `weaponslot`. `ps` is the newest
-    /// playerstate, what a weapon pick reads. False for one CoD2 has no
-    /// use for.
+    /// A one-shot bind: the stance ones (`IN_GoStandDown`, `IN_UpDown`
+    /// and the stance one-shots, Mac 0x187e98, 0x187732,
+    /// 0x187d64..0x187e6e, each gated on the held `+prone` kb 0x1f4 and
+    /// `+movedown` kb 0xdc), `toggleads`, `leaveads`, `weapnext`,
+    /// `weapprev`, `weaponslot`. `ps` is the newest playerstate, what a
+    /// weapon pick reads. False for one CoD2 has no use for.
     pub fn impulse(&mut self, action: Action, ps: Option<&PlayerState2>) -> bool {
+        if self.keys.stance_or_sight(action) {
+            return true;
+        }
         match action {
-            Action::Crouch
-            | Action::Prone
-            | Action::ToggleCrouch
-            | Action::ToggleProne
-            | Action::LowerStance
-            | Action::RaiseStance => self.stance_press(action),
-            Action::ToggleAds => self.ads_toggle = !self.ads_toggle,
-            Action::LeaveAds => self.ads_toggle = false,
             Action::NextWeapon | Action::PrevWeapon => {
                 if let Some(ps) = ps {
                     self.cycle(ps, action == Action::NextWeapon);
@@ -187,17 +148,13 @@ impl Cod2Input {
 
     /// Lets go of every held key; the stance and the selection stay.
     pub fn release_all(&mut self) {
-        self.down.clear();
-        self.jump_by.clear();
+        self.keys.release_all();
     }
 
     /// `CG_SelectWeaponIndex` (Mac 0x1d7ef6): another weapon drops the
     /// sight toggle. The cycle keys and the server's `a <index>` call it.
     pub fn select(&mut self, w: u8) {
-        if w != self.selected {
-            self.selected = w;
-            self.ads_toggle = false;
-        }
+        self.keys.select(w);
     }
 
     /// `CG_CycleWeap` over the two weapon slots: the other slot's weapon.
@@ -207,17 +164,7 @@ impl Cod2Input {
             .into_iter()
             .filter(|&w| w != 0)
             .collect();
-        if slots.is_empty() {
-            return;
-        }
-        let at = slots.iter().position(|&w| w == self.selected);
-        let n = slots.len();
-        let next = match at {
-            Some(i) if forward => (i + 1) % n,
-            Some(i) => (i + n - 1) % n,
-            None => 0,
-        };
-        self.select(slots[next]);
+        self.keys.cycle(&slots, forward);
     }
 
     /// Takes the newest playerstate: `CG_Respawn` (a new
@@ -228,53 +175,37 @@ impl Cod2Input {
     pub fn sync(&mut self, ps: &PlayerState2) {
         let spawn = (ps.i32("clientNum"), ps.stats[5]);
         let weapon = ps.i32("weapon") as u8;
-        if self.spawn.replace(spawn) != Some(spawn) {
-            self.selected = weapon;
-            self.offhand = ps.i32("offHandIndex") as u8;
-            self.stance = Stance::Stand;
-            self.ads_toggle = false;
-        } else if !holds(ps, self.selected) && weapon != 0 {
-            self.selected = weapon;
-        }
+        let offhand = ps.i32("offHandIndex") as u8;
+        let holds_selected = holds(ps, self.keys.selected);
+        self.keys.respawn(spawn, weapon, offhand, holds_selected);
     }
 
     /// A gamestate: the next playerstate is a respawn.
     pub fn reset(&mut self) {
-        self.spawn = None;
+        self.keys.forget_spawn();
         self.release_all();
     }
 
     /// The cmd's `weapon` and `offHandIndex`.
     pub fn weapons(&self) -> (u8, u8) {
-        (self.selected, self.offhand)
+        self.keys.weapons()
     }
 
     /// The cmd's buttons for a body of `pm_type`; `talking` while a key
     /// catcher (console, chat) is up.
     pub fn buttons(&self, pm_type: i32, talking: bool) -> i32 {
-        let mut b = 0;
-        for (a, bits) in HELD {
-            if self.down.contains(&a) {
-                b |= bits;
-            }
-        }
-        let key_stance = held_stance(&self.down);
-        if key_stance.is_some() {
-            b |= bit::STANCE_HELD;
-        }
-        b |= match key_stance.unwrap_or(self.stance) {
-            Stance::Crouch => bit::CROUCH,
-            Stance::Prone => bit::PRONE,
-            Stance::Stand => 0,
-        };
-        // kb 0xf0, which `+gostand` and `+moveup` hold.
-        let up = self.down.contains(&Action::Jump) || self.down.contains(&Action::MoveUp);
-        if !self.jump_by.is_empty() || (up && (2..=4).contains(&pm_type)) {
-            b |= bit::JUMP;
-        }
-        if self.ads_toggle != self.down.contains(&Action::Ads) {
-            b |= bit::ADS;
-        }
+        let mut b = self.keys.held_bits(&HELD);
+        // kb 0xf0, which `+gostand` and `+moveup` hold, jumps.
+        b |= self.keys.stance_and_jump_bits(
+            pm_type,
+            &StanceBits {
+                held: bit::STANCE_HELD,
+                crouch: bit::CROUCH,
+                prone: bit::PRONE,
+                jump: bit::JUMP,
+                ads: bit::ADS,
+            },
+        );
         if talking {
             b |= bit::TALK;
         }
@@ -286,14 +217,8 @@ impl Cod2Input {
 
     /// `forwardmove` and `rightmove`: 127 a held key, opposite keys cancel.
     pub fn moves(&self) -> (i8, i8) {
-        let axis = |plus: Action, minus: Action| {
-            let (p, m) = (self.down.contains(&plus), self.down.contains(&minus));
-            127 * i8::from(p) - 127 * i8::from(m)
-        };
-        (
-            axis(Action::Forward, Action::Back),
-            axis(Action::Right, Action::Left),
-        )
+        let [f, r] = self.keys.move_axes();
+        (f, r)
     }
 }
 

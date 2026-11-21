@@ -38,7 +38,7 @@ fn cod4_live_sprint_out_of_a_crouch_stays_standing() {
         step(s, 3000);
         s.input.effect(&Effect::Impulse(Action::Crouch), &[]);
         step(s, 800);
-        let crouched = (s.input.stance, flags(s) & pmf::DUCKED != 0);
+        let crouched = (s.input.keys.stance, flags(s) & pmf::DUCKED != 0);
         s.input.key(Action::Forward, true);
         s.input.key(Action::Sprint, true);
         let mut sprinted = false;
@@ -49,7 +49,7 @@ fn cod4_live_sprint_out_of_a_crouch_stays_standing() {
         s.input.key(Action::Sprint, false);
         s.input.key(Action::Forward, false);
         step(s, 1000);
-        Some((crouched, sprinted, s.input.stance, flags(s)))
+        Some((crouched, sprinted, s.input.keys.stance, flags(s)))
     }) else {
         return;
     };
