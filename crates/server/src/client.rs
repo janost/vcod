@@ -9,7 +9,7 @@ use std::time::Instant;
 use vcod_common::net::codec::client_read_string;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 use vcod_common::net::netchan::{ClientMessage, MAX_RELIABLE_COMMANDS, ServerNetchan};
-use vcod_common::net::snapshot::Snapshot;
+use vcod_common::net::snapshot::SentSnapshot as Snapshot;
 
 /// `MAX_NAME_LENGTH`, a byte cap since the value is remote input.
 const MAX_NAME: usize = 32;

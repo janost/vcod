@@ -2027,8 +2027,9 @@ loopback (`COD_VERSION=uo tools/run_server.sh`, mp_cassino dm).
   `0x80 | mod` for 7, 8, 13, 15, 16, 17, 18, 20, 21 and 26, the weapon index
   otherwise (`obituary` 0x6a819, VERIFIED decompile).
 - **Wire numbering.** The server builds every entity and playerstate in
-  1.1's numbering and maps it once a snapshot
-  (`game::wire::entity_to_protocol`, `ps_to_protocol`; baselines too):
+  1.1's numbering and maps it, an entity once a frame and a playerstate
+  once a snapshot (`game::wire::entity_to_protocol`, `ps_to_protocol`;
+  baselines too):
   `eFlags` one place down from 0x100 (`flags::eflags_v1_to_v22`), the event
   ids by section 8's table read backwards (`event_ids::event_v1_to_v22`,
   both bullet hits to 178, the explodes to 185 and 186), and an event
