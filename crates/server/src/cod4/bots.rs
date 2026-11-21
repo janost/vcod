@@ -388,6 +388,10 @@ impl BotWorld for Cod4Server {
         self.cod4_bots().move_ps(slot)
     }
 
+    fn climbing(&self, slot: usize) -> bool {
+        self.cod4_bots().climbing(slot)
+    }
+
     /// Under the level's `bg_fallDamageMinHeight` and `MaxHeight`.
     fn fall_kills(&self, slot: usize) -> Option<f32> {
         let level = self.game.level.as_ref()?;

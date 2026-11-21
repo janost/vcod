@@ -3619,6 +3619,7 @@ the third column the give-up with every jump edge 64 longer in A*
   seeds 1 and 3 keep the after digests below, 51dfa08218229289 and
   496428420667275d. VERIFIED (the runs).
 - The rule, vcod's own (retail has no bots): a CoD4 bot on the ground
+  (or, since bot-navigation.md 3.15, in the jump that starts the climb)
   more than a step under the landing of the mantle edge it follows
   (the probe's, else the edge's end node), within 96 flat of it, with
   another body slower than 10 units/s within two half-widths and a

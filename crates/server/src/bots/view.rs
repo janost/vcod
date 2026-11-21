@@ -227,6 +227,9 @@ pub struct BotView {
     /// pmove offers the climb only to a view on the wall
     /// (bot-combat.md 17.1), so no look turns it away.
     pub mantle: bool,
+    /// pmove's climb is under way (CoD4's `PMF_MANTLE`): the body moves on
+    /// the climb's own track, so it is no stall (bot-navigation.md 3.15).
+    pub climbing: bool,
     /// The held weapon's `moveSpeedScale`: a bot following its path on the
     /// ground runs at the graph's pace, not the weapon's (`Bot::think`).
     pub move_scale: f32,
