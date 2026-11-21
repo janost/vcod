@@ -70,6 +70,9 @@ Joining:
   asked for again and a later redirect of it refused, so the server sends
   it over UDP.
 - Sends pure servers its pak checksums.
+- Reads loose files beside the paks, each directory's under its own paks
+  and over the next one's, as retail does; on a pure server only the
+  types retail takes there (configs, menus and a few more). Both binaries.
 - Takes every systeminfo key into its cvars as retail does
   (`cl_allowDownload`, `rate`, `snaps`, `fs_game`, ...). A forced
   `fs_game` layers the mod over `main/`, swaps in its menus and stays
@@ -475,7 +478,7 @@ Server:
 - The F3 overlay: frame, draw, vis, shader, fog, audio, camera, clock,
   prediction, net and snapshot counters ([usage.md](../usage.md)).
 - `--vanilla` on both binaries keeps only the patch's stock paks on the
-  search path; the client downloads nothing under it.
+  search path, and no loose file; the client downloads nothing under it.
 
 ### Things that look like gaps and aren't
 
