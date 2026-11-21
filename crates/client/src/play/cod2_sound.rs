@@ -15,7 +15,7 @@ use vcod_cod2::net::events as ev;
 use vcod_cod2::net::{ConfigStrings, Frame, SnapshotView};
 
 use crate::audio::blend::BlendSource;
-use crate::audio::cues::{Cue, Source};
+use crate::audio::cues::{self, Cue, Source};
 use crate::play::cod2_events::{Event2, surface_name};
 use crate::play::cod2_weapons::LevelWeapons;
 
@@ -135,14 +135,14 @@ pub fn sound_command(text: &str, cs: &ConfigStrings) -> Option<SoundCommand> {
 /// is heard passing `view`, `None` when it passes too far or too near
 /// either end.
 pub fn whizby(muzzle: Vec3, hit: Vec3, view: Vec3) -> Option<Vec3> {
-    let shot = hit - muzzle;
-    let dir = shot.normalize_or_zero();
-    let along = (view - muzzle).dot(dir);
-    if along < WHIZBY_MARGIN || along + WHIZBY_MARGIN > dir.dot(shot) {
-        return None;
-    }
-    let closest = muzzle + dir * along;
-    (closest.distance(view) <= WHIZBY_RADIUS).then(|| closest + dir * WHIZBY_BACK)
+    cues::whizby(
+        muzzle,
+        hit,
+        view,
+        WHIZBY_MARGIN,
+        WHIZBY_RADIUS,
+        -WHIZBY_BACK,
+    )
 }
 
 /// `CG_CalcMuzzlePoint` (Mac 0x1d7f72) for `shooter`: the view for the

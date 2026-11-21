@@ -13,7 +13,7 @@ use vcod_cod4::sound::{Alias, ChannelDef, SURFACES, SoundSet};
 
 use crate::audio::alias::{AliasRow, AliasTable, Channel, MAX_PROBABILITY, MasterSlave};
 use crate::audio::cod2::{PROBABILITY_SCALE, VfCurve};
-use crate::audio::cues::{Cue, Source};
+use crate::audio::cues::{self, Cue, Source};
 use crate::play::cod4::{Fired, ent_u32};
 
 /// `ENTITYNUM_WORLD`, which retail plays positional one-shots on.
@@ -538,15 +538,7 @@ pub fn whizby_cue(muzzle: Vec3, end: Vec3, eye: Vec3) -> Option<Cue> {
 /// the 64 at 0x70b128 and -64 at 0x70bd70), within 140 units of its line
 /// (0x70bbe8), the sound 16 units back up the line from the nearest point.
 fn whizby_at(muzzle: Vec3, end: Vec3, eye: Vec3) -> Option<Vec3> {
-    let delta = end - muzzle;
-    let dir = delta.normalize_or_zero();
-    let dist = delta.dot(dir);
-    let along = (eye - muzzle).dot(dir);
-    if along < 64.0 || dist < along + 64.0 {
-        return None;
-    }
-    let nearest = muzzle + dir * along;
-    ((nearest - eye).length() <= 140.0).then(|| nearest - dir * 16.0)
+    cues::whizby(muzzle, end, eye, 64.0, 140.0, 16.0)
 }
 
 /// `specialty_quieter`'s bit in `perks` (Dead Silence; `bg_perkNames`'

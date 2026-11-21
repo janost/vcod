@@ -161,21 +161,37 @@ fn weapon<'a>(ctx: &'a CueCtx, index: i32) -> Option<&'a WeaponSounds> {
 /// `CG_BulletWhizby` (`cgame 0x30038dc0`, section 6). Emitter position, or
 /// `None` when the shot passes too far or misses the end margins.
 fn whizby_point(start: Vec3, impact: Vec3, listener: Vec3) -> Option<Vec3> {
-    let seg = impact - start;
-    let len = seg.length();
-    if len <= 0.0 {
+    whizby(
+        start,
+        impact,
+        listener,
+        WHIZBY_MARGIN,
+        WHIZBY_RADIUS,
+        WHIZBY_SETBACK,
+    )
+}
+
+/// The whizby test all three games run: where a round from `start` to
+/// `end` is heard passing `listener`, `None` unless the listener's foot on
+/// the shot is `margin` from both ends and within `radius` of the line.
+/// The sound sits `setback` back up the line from that point. Each game's
+/// numbers and addresses live at its caller.
+pub fn whizby(
+    start: Vec3,
+    end: Vec3,
+    listener: Vec3,
+    margin: f32,
+    radius: f32,
+    setback: f32,
+) -> Option<Vec3> {
+    let shot = end - start;
+    let dir = shot.normalize_or_zero();
+    let along = (listener - start).dot(dir);
+    if along < margin || along + margin > dir.dot(shot) {
         return None;
     }
-    let u = seg / len;
-    let t = (listener - start).dot(u);
-    if t < WHIZBY_MARGIN || t + WHIZBY_MARGIN > len {
-        return None;
-    }
-    let closest = start + u * t;
-    if closest.distance(listener) > WHIZBY_RADIUS {
-        return None;
-    }
-    Some(closest - u * WHIZBY_SETBACK)
+    let closest = start + dir * along;
+    (closest.distance(listener) <= radius).then(|| closest - dir * setback)
 }
 
 /// The events `CG_FireWeapon` runs for.
