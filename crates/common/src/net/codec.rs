@@ -878,9 +878,6 @@ mod tests {
         assert_eq!(f32::from_bits(got as u32), -1821.0 * 360.0 / 65536.0);
     }
 
-    /// A struct of every code round-trips through the writer, and a value
-    /// read back equal to its base (a difference above the width) re-encodes
-    /// as the change it was, signed or not.
     /// `from` and its delta off `r`, `None` for a remove.
     fn struct_of(codec: FieldCodec, r: &mut MsgReader, from: &[i32]) -> Option<Vec<i32>> {
         let mut to = from.to_vec();
@@ -890,6 +887,9 @@ mod tests {
         }
     }
 
+    /// A struct of every code round-trips through the writer, and a value
+    /// read back equal to its base (a difference above the width) re-encodes
+    /// as the change it was, signed or not.
     #[test]
     fn struct_deltas_round_trip_on_both_codecs() {
         let h = Huffman::new();
