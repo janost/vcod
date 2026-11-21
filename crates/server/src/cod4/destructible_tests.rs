@@ -141,6 +141,8 @@ fn rounds_shoot_a_backlot_sedan_until_it_blows() {
             (2_500, "mr {sid} 15 assault_mp,0"),
         ],
     );
+    // Its cmds start once it stands, before the walker's spawn `replay_from` defaults to.
+    probe.replay_from = 0;
     let (car, at) = sedans(sv.game.level.as_mut().unwrap())[0];
     let target = at + Vec3::Z * 30.0;
     let mut now = Instant::now();

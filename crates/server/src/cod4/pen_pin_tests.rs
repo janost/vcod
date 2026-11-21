@@ -49,7 +49,7 @@ impl Trio {
         }
         sv.load(Some(&install)).unwrap();
         let class = "mr {sid} 15 assault_mp,0";
-        let probes = vec![
+        let mut probes = vec![
             Probe::new(
                 "a",
                 0,
@@ -72,6 +72,11 @@ impl Trio {
                 &[(1_000, "mr {sid} 8 axis"), (2_500, class)],
             ),
         ];
+        // Their cmds start at the placing, well before the walker's spawn
+        // that `replay_from` defaults to.
+        for p in probes.iter_mut() {
+            p.replay_from = 0;
+        }
         let mut t = Trio {
             sv,
             probes,
@@ -223,28 +228,17 @@ fn a_drop_of_200_takes_its_share_of_max_health() {
     let pain =
         vcod_cod4::pmove::ev::LANDING_PAIN_FIRST..=vcod_cod4::pmove::ev::LANDING_PAIN_FIRST + 28;
     let mut landing = None;
-    // The probes' cmds go no further than the placing; B's go straight in.
     for _ in 0..40 {
-        let svs = t.sv.core.sv_time_ms;
-        let level = t.level();
-        let ps = level.pm_state(B).unwrap();
-        let seq = ps.event_sequence;
-        let cmd = UserCmd {
-            server_time: svs + 10,
-            weapon: ps.weapon as u8,
-            offhand: ps.off_hand_index as u8,
-            angles: vcod_cod4::net::conn::cmd_angles([0.0, -90.0, 0.0], ps.delta_angles),
-            ..Default::default()
-        };
-        level.client_think(B, &cmd);
-        let ps = level.pm_state(B).unwrap();
+        let seq = t.level().pm_state(B).unwrap().event_sequence;
+        let t0 = t.sv.core.sv_time_ms;
+        t.run_to(t0 + FRAME_MS);
+        let ps = t.level().pm_state(B).unwrap();
         landing = landing.or_else(|| {
             (seq..ps.event_sequence)
                 .map(|k| (k & 3) as usize)
                 .find(|&k| pain.contains(&ps.events[k]))
                 .map(|k| (ps.event_parms[k] as i32, ps.origin.z))
         });
-        t.run_to(svs + 50);
     }
     let (parm, z) = landing.expect("a painful landing");
     assert!((z - FLOOR).abs() < 1.0, "landed at {z}");
@@ -476,19 +470,19 @@ fn melee_swings_hit_miss_and_pass_behind() {
 }
 
 const MELEE: &str = "\
-ahead: lost [135, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [207.0, 2281.4976, 297.0] events [37, 0, 0, 0] parms [0, 0, 0, 0]
-side: lost [138, 0, 0] hits [(2, 0, 6)] te 35 parm 1 other 0 weapon 27 at [215.01053, 2301.2676, 288.98947] events [37, 37, 0, 0] parms [0, 0, 0, 0]
+ahead: lost [135, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [207.0, 2281.4976, 296.125] events [37, 0, 0, 0] parms [0, 0, 0, 0]
+side: lost [138, 0, 0] hits [(2, 0, 6)] te 35 parm 1 other 0 weapon 27 at [215.01053, 2301.2676, 288.11444] events [37, 37, 0, 0] parms [0, 0, 0, 0]
 edge: lost [0, 0, 0] hits [] events [37, 37, 0, 0] parms [0, 0, 0, 0]
 edge near: lost [0, 0, 0] hits [] events [37, 37, 0, 0] parms [0, 0, 0, 0]
 far right: lost [0, 0, 0] hits [] events [37, 37, 0, 0] parms [0, 0, 0, 0]
-far ahead: lost [136, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [207.0, 2310.835, 297.0] events [37, 37, 37, 0] parms [0, 0, 0, 0]
-reach 2322: lost [138, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [207.0, 2312.0305, 297.0] events [37, 37, 37, 37] parms [0, 0, 0, 0]
+far ahead: lost [136, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [206.99998, 2311.1252, 296.125] events [37, 37, 37, 0] parms [0, 0, 0, 0]
+reach 2322: lost [138, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [206.99998, 2312.5745, 296.125] events [37, 37, 37, 37] parms [0, 0, 0, 0]
 reach 2326: lost [0, 0, 0] hits [] events [37, 37, 37, 37] parms [0, 0, 0, 0]
 reach right: lost [0, 0, 0] hits [] events [37, 37, 37, 37] parms [0, 0, 0, 0]
 cross: lost [0, 0, 0] hits [] events [37, 37, 37, 37] parms [0, 0, 0, 0]
-turned: lost [138, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [207.0, 2286.1614, 297.0] events [37, 37, 37, 37] parms [0, 0, 0, 0]
-behind: lost [0, 0, 0] hits [] te 36 parm 1 other 1022 weapon 27 at [207.0, 2331.875, 297.0] events [37, 37, 37, 37] parms [0, 0, 0, 0]
-plate: lost [0, 0, 0] hits [] te 36 parm 1 other 1022 weapon 27 at [207.0, 2331.875, 297.0] events [37, 37, 37, 37] parms [0, 0, 0, 0]
+turned: lost [138, 0, 0] hits [(2, 0, 2)] te 35 parm 1 other 0 weapon 27 at [207.0, 2286.1614, 296.125] events [37, 37, 37, 37] parms [0, 0, 0, 0]
+behind: lost [0, 0, 0] hits [] te 36 parm 1 other 1022 weapon 27 at [206.99998, 2331.875, 296.125] events [37, 37, 37, 37] parms [0, 0, 0, 0]
+plate: lost [0, 0, 0] hits [] te 36 parm 1 other 1022 weapon 27 at [206.99998, 2331.875, 296.125] events [37, 37, 37, 37] parms [0, 0, 0, 0]
 nothing: lost [0, 0, 0] hits [] events [37, 37, 37, 37] parms [0, 0, 0, 0]
 ";
 
@@ -547,6 +541,8 @@ fn damage_playerstate_by_stance_and_flags() {
             set(&mut p.ps, "eFlags", e_flags);
             set(&mut p.ps, "pm_time", pm_time);
             set(&mut p.ps, "damageTimer", 0);
+            // The cmds' pmove widens it between rows.
+            set(&mut p.ps, "aimSpreadScale", 0);
         }
         l.rt.host.cod4_mut().damage_ops.push(Damage4 {
             slot: A,
@@ -595,7 +591,6 @@ fn damage_playerstate_by_stance_and_flags() {
         set(&mut p.ps, "pm_type", 0);
         set(&mut p.ps, "pm_flags", 0);
         set(&mut p.ps, "eFlags", 0);
-        set(&mut p.ps, "aimSpreadScale", 0);
         let t2 = t.sv.core.sv_time_ms + 600;
         t.run_to(t2);
     }

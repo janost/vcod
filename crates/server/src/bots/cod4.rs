@@ -793,6 +793,12 @@ impl Cod4Bots {
         ))
     }
 
+    /// Whether the body in `slot` is mid-climb (`PMF_MANTLE`).
+    pub(crate) fn climbing(&self, slot: usize) -> bool {
+        self.ps(slot)
+            .is_some_and(|ps| ps.pm_flags & pmf::MANTLE != 0)
+    }
+
     /// The bots following a mantle edge (`BotWorld::routed`).
     pub(crate) fn routed(&mut self, slot: usize, follower: &crate::nav::Follower, g: &NavGraph) {
         match follower.mantle_edge(g) {
@@ -927,6 +933,7 @@ impl Cod4Bots {
             grenade_ready: ps.weapon_state == weap::state::GRENADE_HELD,
             frag_near,
             stand_room: true,
+            climbing: ps.pm_flags & pmf::MANTLE != 0,
             linked: ps.pm_type == pm_type::NORMAL_LINKED,
             stranded: nav.is_some_and(|g| g.dead_end(origin) || g.pit(origin, &w.spawn_points)),
             on_ladder,

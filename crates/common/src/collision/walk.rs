@@ -5,8 +5,8 @@
 
 use super::clip::NEAR_TIE;
 use super::clip::{
-    Capsule, TIE_WINDOW, capsule_sweep, clip_brush_capsule, clip_patch, clip_segment,
-    clip_segment_model, expand_brush_box, patch_meets,
+    Capsule, TIE_WINDOW, capsule_sweep, clip_brush_box, clip_brush_capsule, clip_patch,
+    clip_segment_model, patch_meets,
 };
 use super::{CollisionWorld, Prim, Trace};
 use crate::leafwalk::{Item, LeafWalk, Listing};
@@ -328,27 +328,23 @@ impl CollisionWorld {
                 {
                     return;
                 }
+                let same_model = matches!(trace.hit,
+                    Some(Prim::Brush(o)) if self.brushes[o as usize].model == brush.model);
                 if boxed {
-                    thread_local! {
-                        static PLANES: std::cell::Cell<Vec<(Vec3, f32)>> =
-                            const { std::cell::Cell::new(Vec::new()) };
-                    }
-                    let mut planes = PLANES.take();
-                    expand_brush_box(&brush.planes, mins, maxs, &mut planes);
-                    clip_segment(
+                    clip_brush_box(
                         trace,
                         start,
                         end,
-                        &planes,
+                        mins,
+                        maxs,
+                        &brush.planes,
                         &brush.side_surface_flags,
-                        Vec3::ZERO,
                         prim,
+                        self.arith(),
+                        same_model,
                     );
-                    PLANES.set(planes);
                 } else {
                     let sweep = capsule_sweep(start, end, mins, maxs);
-                    let same_model = matches!(trace.hit,
-                        Some(Prim::Brush(o)) if self.brushes[o as usize].model == brush.model);
                     clip_brush_capsule(
                         trace,
                         &sweep,

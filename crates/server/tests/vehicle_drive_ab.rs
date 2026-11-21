@@ -626,15 +626,7 @@ fn jeep_closespeed_drive_anchored() {
     assert_frames(&case, case.driven_len());
     let tally = anchored(&case);
     tally.report("jeep closespeed anchored");
-    tally.assert_gaps(
-        "jeep closespeed anchored",
-        &[(
-            18500,
-            i32::MAX,
-            "coduo-vehicles.md 17: retail's front-left probe meets a face ours clears",
-        )],
-        &EXACT,
-    );
+    tally.assert_gaps("jeep closespeed anchored", &[], &EXACT);
 }
 
 /// Under `closespeed` 0.5 the Willys runs at half the cap through the
@@ -646,15 +638,7 @@ fn jeep_closespeed_drive_free_run() {
     };
     let tally = free_run(&case);
     tally.report("jeep closespeed free run");
-    tally.assert_gaps(
-        "jeep closespeed free run",
-        &[(
-            18500,
-            i32::MAX,
-            "coduo-vehicles.md 17: retail's front-left probe meets a face ours clears",
-        )],
-        &EXACT,
-    );
+    tally.assert_gaps("jeep closespeed free run", &[], &EXACT);
 }
 
 /// Under `closespeed` 0.5 and `harc` 10 the Panzer IV runs at half the cap
@@ -674,7 +658,7 @@ fn tank_closespeed_harc_drive_free_run() {
         &[(
             27200,
             i32::MAX,
-            "coduo-vehicles.md 17: the track clock parts at 27200, unread",
+            "coduo-vehicles.md 17.5: retail's velocity reaches 0 a frame before ours",
         )],
         &EXACT,
     );

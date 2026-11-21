@@ -27,11 +27,16 @@ const MAX_PING_FLOOR: u32 = 100;
 /// `MAX_OTHER_SERVERS`, the Local list's cap.
 const MAX_LOCAL: usize = 0x80;
 
-/// The Internet list's cap for a master protocol: 1.1's 2048 entries and
-/// the `0x800` addresses its overflow block holds (`CL_ServersResponsePacket`
-/// 0x4107b0), else the 20000 of 1.5, UO and CoD2 (front-end doc 8).
-fn max_internet(protocol: u32) -> usize {
-    if protocol == 1 { 2048 + 0x800 } else { 20000 }
+/// The Internet list's cap for a master protocol and the overflow
+/// addresses kept past it: 1.1's 2048 entries and `0x800` addresses
+/// (`CL_ServersResponsePacket` 0x4107b0), else the 20000 of 1.5, UO and
+/// CoD2 with none (front-end doc 8).
+fn max_internet(protocol: u32) -> (usize, usize) {
+    if protocol == 1 {
+        (2048, 0x800)
+    } else {
+        (20000, 0)
+    }
 }
 
 /// The master an Internet refresh asks and the one protocol it asks for:
@@ -198,9 +203,13 @@ pub struct Browser {
     cached: std::collections::HashMap<SocketAddrV4, Entry>,
     /// Favourites vcod cannot address (IPX, loopback), written back as read.
     foreign: Vec<Entry>,
-    /// When each source's last refresh started, local time
-    /// (`ui_lastServerRefresh_<source>`).
-    pub last_refresh: [Option<jiff::civil::DateTime>; 3],
+    /// 1.1's master addresses past the 2048 Internet entries, which take
+    /// the place of entries that timed out, from the end
+    /// (`CL_UpdateVisiblePings` 0x4140a7).
+    overflow: Vec<SocketAddrV4>,
+    /// Refreshes started since the UI last dated them: the source and the
+    /// local time, for `ui_lastServerRefresh_<source>`.
+    pub(super) stamps: Vec<(Source, jiff::civil::DateTime)>,
     /// `cl_maxPing`, ms: how long a ping waits for its reply.
     pub max_ping: u32,
 }
@@ -227,7 +236,8 @@ impl Default for Browser {
             cache: None,
             cached: Default::default(),
             foreign: Vec::new(),
-            last_refresh: [None; 3],
+            overflow: Vec::new(),
+            stamps: Vec::new(),
             max_ping: MAX_PING_DEFAULT,
         }
     }
@@ -262,6 +272,9 @@ impl Browser {
                 ping: saved.map(|(_, ping)| ping as u32),
                 ..Server::new(addr)
             });
+        }
+        if let Some(Some(bytes)) = &file {
+            b.overflow = server_cache::read_overflow(layout, bytes);
         }
         let Some(entries) = entries else {
             log::warn!(
@@ -301,15 +314,20 @@ impl Browser {
         &mut self.lists[self.source as usize]
     }
 
-    /// A master's addresses not listed yet, up to [`max_internet`].
+    /// A master's addresses not listed yet, up to [`max_internet`]: the
+    /// list first, then 1.1's overflow.
     fn add_master_servers(&mut self, addrs: impl IntoIterator<Item = SocketAddrV4>) {
-        let cap = max_internet(self.master_query.map_or(1, |q| q.protocol));
+        let (cap, spill) = max_internet(self.master_query.map_or(1, |q| q.protocol));
         for addr in addrs {
-            if self.list().len() >= cap {
-                break;
+            if self.list().iter().any(|s| s.addr == addr) || self.overflow.contains(&addr) {
+                continue;
             }
-            if !self.list().iter().any(|s| s.addr == addr) {
+            if self.list().len() < cap {
                 self.list_mut().push(Server::new(addr));
+            } else if self.overflow.len() < spill {
+                self.overflow.push(addr);
+            } else {
+                break;
             }
         }
     }
@@ -348,6 +366,7 @@ impl Browser {
             }
             (Source::Internet, Some(q)) => {
                 self.list_mut().clear();
+                self.overflow.clear();
                 self.scan.ask_master(q.master.host, q.master.port);
                 self.status = Status::Master;
             }
@@ -366,12 +385,31 @@ impl Browser {
     /// `UI_StartServerRefresh` (ui_mp_x86.dll 0x4000ea90) dates the source
     /// before it asks anyone, on a full and a quick refresh alike.
     fn stamp(&mut self) {
-        self.last_refresh[self.source as usize] = Some(jiff::Zoned::now().datetime());
+        self.stamps
+            .push((self.source, jiff::Zoned::now().datetime()));
     }
 
     fn reset_pings(&mut self) {
         for s in self.list_mut() {
             (s.info, s.ping, s.sent, s.timed_out) = (None, None, None, false);
+        }
+    }
+
+    /// `CL_UpdateVisiblePings`' fill pass on Internet (0x414096..0x4140c6):
+    /// each entry that timed out takes the last overflow address, to be
+    /// pinged on a later pass.
+    fn refill_timed_out(&mut self) {
+        if self.source != Source::Internet {
+            return;
+        }
+        for s in self.lists[Source::Internet as usize].iter_mut() {
+            if !s.timed_out {
+                continue;
+            }
+            let Some(addr) = self.overflow.pop() else {
+                break;
+            };
+            *s = Server::new(addr);
         }
     }
 
@@ -512,6 +550,9 @@ impl Browser {
                 s.sent = Some(now);
             })
             .count();
+        if free > 0 {
+            self.refill_timed_out();
+        }
         let acted = busy + sent > 0;
         let max_ping = Duration::from_millis(self.max_ping.max(MAX_PING_FLOOR).into());
         for s in self.list_mut().iter_mut().filter(|s| waiting(s)) {
@@ -696,7 +737,7 @@ impl Browser {
                 e
             })
             .collect();
-        self.write(|old| server_cache::write_internet(*layout, old, &entries));
+        self.write(|old| server_cache::write_internet(*layout, old, &entries, &self.overflow));
     }
 
     /// Writes the favourites into the server cache, keeping the rest of
@@ -1194,7 +1235,7 @@ mod tests {
         let addrs = |from: u32, n: u32| {
             (from..from + n).map(|i| SocketAddrV4::new(Ipv4Addr::from(0x0a00_0000 + i), 28960))
         };
-        for (protocol, cap) in [(1, 4096), (6, 20000), (118, 20000)] {
+        for (protocol, cap, spill) in [(1, 2048, 0x800), (6, 20000, 0), (118, 20000, 0)] {
             let mut b = Browser {
                 source: Source::Internet,
                 master_query: Some(MasterQuery {
@@ -1209,8 +1250,43 @@ mod tests {
             for k in 0..100 {
                 b.add_master_servers(addrs(k * 256, 256));
             }
-            assert_eq!(b.list().len(), cap);
+            assert_eq!((b.list().len(), b.overflow.len()), (cap, spill));
         }
+    }
+
+    /// 1.1's overflow addresses stand in for Internet entries that timed
+    /// out, the last first, and the rest go into the cache's third block
+    /// and come back at the next start.
+    #[test]
+    fn timed_out_entries_take_the_overflow_from_its_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("servercache.dat");
+        let mut b = Browser {
+            master_query: Some(MasterQuery {
+                master: vcod_common::net::master::COD1_MASTER,
+                protocol: 1,
+            }),
+            ..Browser::with_cache(path.clone(), Layout::Cod11)
+        };
+        b.source = Source::Internet;
+        let addr = |i: u32| SocketAddrV4::new(Ipv4Addr::from(0x0a00_0000 + i), 28960);
+        b.add_master_servers((0..2048 + 3).map(addr));
+        assert_eq!(b.overflow, [addr(2048), addr(2049), addr(2050)]);
+        for i in [5, 9] {
+            b.lists[1][i].timed_out = true;
+        }
+        b.refill_timed_out();
+        assert_eq!(
+            (b.lists[1][5].addr, b.lists[1][9].addr),
+            (addr(2050), addr(2049))
+        );
+        assert!(!b.lists[1][5].timed_out && b.lists[1][5].sent.is_none());
+        assert_eq!(b.overflow, [addr(2048)]);
+        b.status = Status::Pinging;
+        b.finish();
+        let b = Browser::with_cache(path, Layout::Cod11);
+        assert_eq!(b.overflow, [addr(2048)]);
+        assert_eq!(b.lists[1].len(), 2048);
     }
 
     /// A loopback "server" that answers `getinfo` with `info`.

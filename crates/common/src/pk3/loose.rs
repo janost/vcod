@@ -162,6 +162,25 @@ impl Loose {
         }
     }
 
+    /// Whether a loose read of `key` sets `fs_fakeChkSum`: a type off the
+    /// list, 1.1's being its pure one less `.svg` (CoDMP.exe 0x42a0b3), 1.5's
+    /// and UO's their pure test (CoDMP.exe 0x42c293, CoDUOMP.exe 0x42ddf5).
+    /// CoD2's and CoD4's `cp` are built elsewhere and carry none.
+    pub fn fakes_checksum(&self, key: &str) -> bool {
+        match self.rule {
+            Rule::Cod11 => ![".cfg", ".menu", ".game", ".dm_protocol_version", ".dat"]
+                .iter()
+                .any(|e| key.ends_with(e)),
+            Rule::Cod15 => !["cfg", "menu", "dat"].contains(&extension(key)),
+            Rule::Off | Rule::Cod2 | Rule::Cod4 => false,
+        }
+    }
+
+    /// Whose clear points the fake checksum keeps: true for 1.1's.
+    pub fn cod11(&self) -> bool {
+        self.rule == Rule::Cod11
+    }
+
     /// The file a read of `key` takes from the directories, if any.
     pub fn readable(&self, key: &str) -> Option<&File> {
         self.files
@@ -255,6 +274,31 @@ mod tests {
             assert_eq!(take(&loose(rule, false, 1)).len(), names.len(), "{rule:?}");
         }
         assert!(take(&loose(Rule::Off, false, 1)).is_empty());
+    }
+
+    #[test]
+    fn an_off_list_type_fakes_the_checksum() {
+        let names = [
+            "a.cfg", "b.menu", "c.svg", "d.game", "e.dat", "f.tga", "g.dm_1",
+        ];
+        let fakes = |l: &Loose| -> Vec<&str> {
+            names
+                .iter()
+                .copied()
+                .filter(|n| l.fakes_checksum(n))
+                .collect()
+        };
+        assert_eq!(
+            fakes(&loose(Rule::Cod11, false, 1)),
+            ["c.svg", "f.tga", "g.dm_1"]
+        );
+        assert_eq!(
+            fakes(&loose(Rule::Cod15, false, 1)),
+            ["c.svg", "d.game", "f.tga", "g.dm_1"]
+        );
+        for rule in [Rule::Off, Rule::Cod2, Rule::Cod4] {
+            assert!(fakes(&loose(rule, false, 1)).is_empty(), "{rule:?}");
+        }
     }
 
     #[test]

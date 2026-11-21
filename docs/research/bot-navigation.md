@@ -730,6 +730,11 @@ How it got there, one line a round (VERIFIED, measured):
   10.4-10.7 of CPU, `mp_carentan` 6.3-6.5 to 5.8-6.2 (release, three runs
   each, the two binaries alternating, load 10-30); every graph digest of
   the 1.1 and UO builds unchanged.
+- Memory, 2026-11-21 at 392a0d445 (release `nav_build`, peak RSS of the
+  whole process, map load included): `mp_ship` 57-58 MB, `mp_hurtgen` 76
+  MB. The build is not memory-bound; the "~4 G over" an older backlog gave
+  `mp_ship` was instructions (the leaf walk round above). VERIFIED
+  (measured).
 - Not changed: the flood's layers are a barrier each (walks kept 16
   threads 66% busy on `mp_ship`'s 149 layers, 85-89% on `mp_rocket` and
   `mp_hurtgen`'s 46-54, at load 57); a back down off a ledge away from a
@@ -3202,7 +3207,68 @@ Retail has no bots; this section is measured on vcod-server only.
   heights leave no node without an edge out (mp_crash, `NEAR=0,0,100000`:
   0 dead ends of 8444 before, 0 of 8441 after) and every spawn in the one
   component. VERIFIED (measured). The mantle loop under a teammate is
-  older than this change and left open. INFERRED (the runs).
+  older than this change; 3.15 traces and closes it. INFERRED (the runs).
+
+### 3.15 The mantle loop under a body on mp_crash's ledge, 2026-11-21
+
+Retail has no bots; this section is measured on vcod-server only. The
+3.14 stalls, traced per tick (temporary prints of each `Follower::reset`
+and `stuck` caller, the goal, the edge and the bodies within 200; release,
+`GAME=cod4`, mp_crash `war`, 12 bots):
+
+- Seed 2, slot 9: a teammate stands still at the landing, so
+  `Follower::mantle_held` (bot-objectives.md 12.20) gives up one ledge
+  edge after another and the bot dawdles at the foot. Its own stall
+  circle (`Bot::think`, `STALL_TICKS`) fills meanwhile and
+  fires on the tick the next climb starts (z 119, `PMF_MANTLE` set),
+  which drops the plan. The plan made in the air picks the nearest node,
+  the foot (3774), and its next waypoint is another foot node (2959):
+  once up, the bot walks back off the top, falls to 126 and climbs
+  again. Four times in 100 ticks. VERIFIED (the trace).
+- Seed 52, slot 10: the bot jumps for the climb before the hold test
+  sees it under the landing on the ground, so the rule never fires; the
+  climb ends at (1409, 195, 187) with a teammate still at (1381, 207,
+  191), 28 across and 12 along, the boxes push apart and the bot falls
+  off the lip. VERIFIED (the trace).
+- The fixes, all vcod's own. A body mid-climb (`BotView::climbing`,
+  `BotWorld::climbing`, CoD4's `PMF_MANTLE`) restarts the stall circle,
+  so no spell fires during a climb
+  (`bots::walk::tests::a_body_mid_climb_is_not_stuck`), and the follower
+  starts no plan until the climb is over
+  (`nav::follower::tests::no_plan_starts_mid_climb`). `mantle_held`
+  reads the body in the climb's jump as well as on the ground, but not
+  once the climb runs. VERIFIED (the code). CoD1, UO and CoD2 never set
+  `climbing`: the 1.1 `tdm` set (mp_carentan, mp_harbor, mp_depot,
+  mp_brecourt, 8 bots, 3000 ticks, seeds 1..=16) prints the same 64
+  digests before and after. VERIFIED (measured).
+
+`GAME=cod4 STALLS=1 DIGEST=1 BOTS=12 TICKS=3000`, mp_crash `war`,
+release, before is master af564b3c7:
+
+| Seed | Digest before | Digest after | Kills | Stalled |
+|---|---|---|---|---|
+| 1 | `2571b0b2e5ce4648` | `c5268d6d872da7f5` | 44 to 42 | 0, 0 |
+| 2 | `8ae7618cdb6e8ae8` | `36e1ab1f17d56a22` | 51 to 45 | 109 to 0 |
+| 3 | `d9816850deb9a922` | `71a10ff9ac23625f` | 48 to 49 | 4 to 0 |
+| 9 | `bba447b173f576d5` | `0aad33d337184eac` | 34 to 55 | 0, 0 |
+| 16 | `a5e3bc40a989c2b9` | `6c9f1bbe37b3565c` | 42 to 45 | 19 to 0 |
+| 25 | `41a6911ab82bd2ee` | `03767e7707cc1916` | 53 to 42 | 19 to 0 |
+| 39 | `5454caf85e37dcc4` | `6a4a217a5a905b47` | 57 to 46 | 0 to 49 |
+
+- Seeds 1 to 64: kills 2831 to 2891, stalled bot-ticks 151 to 62,
+  mantles 3387 to 3102 (fewer climbs made twice), suicides 21 and 21
+  (all own frags). Every digest moves: a stall spell or a plan dropped
+  mid-climb happens in every match. VERIFIED (measured).
+- Left: seed 39, slot 10, 49 bot-ticks at the same ledge. Its goal is a
+  point 39 over a body standing still on the landing (the noise or the
+  memory of whoever stands there), so the rule gives the climb up, the
+  plan round ends at the same ledge's other edges, and the bot paces the
+  foot until the body moves. Seeds 5 and 7 (6 and 7) stall elsewhere.
+  INFERRED (the trace's goal against the bodies). Open.
+- `koth`, `sd`, `sab` and `dom`, seeds 1 to 4: stalled 0 to 76, all but
+  3 in `sab` seed 2, two bots head-on on a ladder at (-91, -883, 160..235)
+  (`pmf` 0x8; section 3, "the head-on ladder"), a meeting the new
+  matches reach and master's do not. Kills 781 to 770. VERIFIED (measured).
 
 ## 4. Memory and hearing
 

@@ -1289,12 +1289,15 @@ The entity line:
   (`Cx::touch_field`), a write of `undefined` removes the field, a field
   counts when its name was interned by the compile (`Program::atom_count`,
   standing for retail's canonical strings), and each thread's `waittill`
-  and `endon` on the entity are counted as above. vcod counts every in-use
-  entity and HUD element, not those script reached: off a stock gametype
-  the count is higher (on stock `tdm`, whose scripts reach every entity on
-  mp_brecourt, both say 210, 619). `script_usage_entities_as_retail` checks
-  var usage less count under every `probe_mode` above and
-  `probe_usage_keys`.
+  and `endon` on the entity are counted as above. vcod counts an entity
+  or HUD element once the VM was handed it (`Heap::reach`: a builtin's
+  return, an entity field's read, a thread's `self` or argument and a
+  notify's argument from the host, an entity the host stores in a struct
+  or array) or a named radiant key was stored on it, and a map's
+  `misc_mg42`/`misc_turret` from its spawn, the measured rule whose call
+  is unread (INFERRED for `misc_turret`, which takes the same `SP_turret`).
+  `script_usage_entities_as_retail` matches count and var usage under
+  every `probe_mode` above and `probe_usage_keys`.
 
 `stringUsage` (0x8084d74 -> 0x809a780, ported in shape):
 
@@ -2483,19 +2486,46 @@ clients unless named.
   0x42f194..0x42f1d1). VERIFIED (the instructions). Its order within a
   directory is `Sys_ListFiles`'s (0x460770). INFERRED that it comes back
   in name order, as a Windows directory listing does.
-- A loose read of a type outside that list (1.1 0x42a0b3..0x42a11c, whose
-  list lacks `.svg`; 1.5 0x42c293..0x42c2ad, through 0x42bc00) sets `fs_fakeChkSum` to
-  `rand() + 1` (1.1 0x1631788), which `FS_ReferencedPakPureChecksums`
-  appends to the `cp` as one more `%i ` (0x43c1ad..0x43c205) until
-  `FS_Startup` clears it (0x42cd68). VERIFIED (the instructions). A pure
-  server then reads the client as unpure. INFERRED. vcod does not model
-  it: its client reopens the search path at each connect, which clears
-  what an earlier read set, and on a pure path it reads no such file.
-- UO also remembers a pak that held the name but failed `FS_PakIsPure`
-  and drops the game with `EXE_UNPURECLIENTDETECTED` (0x596b60) when
-  nothing pure had it (0x42da06..0x42da20, 0x42db02..0x42db1e). VERIFIED
-  (the instructions). vcod leaves such a pak off the search path, so the
-  name reads as missing.
+- A loose read of a type outside that list (1.1 0x42a0b3..0x42a11c:
+  `.cfg`, `.menu`, `.game`, `.dm_PROTOCOL_VERSION`, `.dat`, the pure list
+  less `.svg`; 1.5 0x42c293..0x42c2ad and UO 0x42ddf5..0x42de0d through
+  0x42bc00 / 0x42d6f0, a localized directory exempt) sets `fs_fakeChkSum`
+  to `rand() + 1` (1.1 0x1631788, 1.5 0x1908e68, UO 0x4935308). VERIFIED
+  (the instructions, the strings). So on a pure path only 1.1's `.svg`
+  sets it. `FS_ReferencedPakPureChecksums` appends it as `%i ` after each
+  of its three passes, outside the key: `cp <cgame> <fake> <ui> <fake> @
+  <paks> <fake> <key>` (1.1 0x43c1ad..0x43c216, the pass counter 2 down to
+  0 from 0x43c06e; UO 0x4410ad). VERIFIED (the instructions). Its second
+  token is then no `ui` checksum, and a pure server sets `pureAuthentic`
+  2 ("The server's check"). INFERRED (the two read together).
+- What clears it differs. 1.1's `FS_Shutdown` (0x42cd68), run by
+  `FS_Restart` (0x42d2b6): the gamestate parse restarts on a modified
+  `fs_game` or a feed other than the last restart's (0x416258..0x416273,
+  skipped while the word at `[0x163a23c]+0x20` is set, INFERRED
+  `sv_running`), `CL_DownloadsComplete` after a download (0x41002a) and
+  `vid_restart` on the same test (0x40fd66). VERIFIED (the instructions).
+  1.5 and UO clear it only in `FS_PureServerSetLoadedPaks` taking a
+  non-empty list other than the one it holds (1.5 0x43f268..0x43f2ab, UO
+  0x4413f6..0x441439; the same list returns at UO 0x4412fa..0x441320).
+  VERIFIED (the instructions). So a 1.1 client that read such a file in
+  the menu and reconnects to a pure server on the same map (same feed, no
+  restart) sends it. INFERRED.
+- vcod models the fake checksum for CoD1 (`Pk3Fs::fake_checksum`, the
+  `cp` of `pak_checksum::pure_command`): a search path reopen hands it on,
+  and the client clears it at retail's points, 1.1's off the gamestate's
+  feed and `fs_game`, after a download and at an `fs_game` switch, 1.5's
+  and UO's at a new pure list.
+- UO also remembers the last pak that held the name but failed
+  `FS_PakIsPure`, and when nothing on the path gave the file it drops the
+  game: `Com_Error(1, "EXE_UNPURECLIENTDETECTED\x15\n%s")` with the pak's
+  path (0x42da06..0x42da20, 0x42dadc..0x42db1e). Only an open that takes
+  a handle remembers; the handle-less test (0x42d78d..0x42d870) does not.
+  VERIFIED (the instructions, the string 0x596b60). vcod leaves such a
+  pak off the search path, so the name reads as missing, and does not
+  model the drop: it would rest on retail's exact sequence of opens, and
+  vcod's are its own (existence probes, parallel prefetch, reads retail
+  never makes), so a player with a third-party pak would be dropped where
+  retail keeps him and kept where retail drops him.
 - vcod (`pk3::Pk3Fs`): the directories' files are indexed at open, keyed
   case-blind as the paks are, and ranked as above; a pure search path
   (`sv_paks` given) takes 1.1's suffixes or 1.5 and UO's extensions and

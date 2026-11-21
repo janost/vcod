@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 mod loose;
 
@@ -144,6 +144,15 @@ fn read_loose(path: &Path, limit: u64) -> Option<Vec<u8>> {
     Some(buf)
 }
 
+/// `rand() + 1`, the Windows CRT's range: never 0.
+fn fake_rand() -> i32 {
+    use std::hash::{BuildHasher, Hasher};
+    let h = std::collections::hash_map::RandomState::new()
+        .build_hasher()
+        .finish();
+    (h % 0x8000) as i32 + 1
+}
+
 /// Largest entry `Pk3Fs::read` will inflate. The biggest stock asset is a
 /// lightmapped BSP under 32 MiB; anything past this is a corrupt or hostile pak.
 pub const MAX_ENTRY_BYTES: u64 = 64 << 20;
@@ -166,6 +175,9 @@ pub struct Pk3Fs {
     referenced: Vec<AtomicBool>,
     /// [`Self::set_surfs_unflagged`]: an `xmodelsurfs/` read flags nothing.
     surfs_unflagged: AtomicBool,
+    /// `fs_fakeChkSum`, 0 unset (docs/research/cod11-server-handshake.md,
+    /// "Loose files").
+    fake_checksum: AtomicI32,
     // lowercased entry path -> (archive index, exact entry name in that zip)
     index: HashMap<String, (usize, String)>,
     // Same with '@' normalized to '_'; BSP material names sometimes spell the
@@ -691,6 +703,7 @@ impl Pk3Fs {
             paks: readable,
             referenced,
             surfs_unflagged: AtomicBool::new(false),
+            fake_checksum: AtomicI32::new(0),
             index,
             alias_index,
             open: Mutex::new(HashMap::new()),
@@ -813,7 +826,38 @@ impl Pk3Fs {
             .filter(|p| !p.localized)
             .map(|p| p.pure_checksum(checksum_feed))
             .collect();
-        crate::pak_checksum::pure_command(dll(dlls[0]), dll(dlls[1]), &general, checksum_feed)
+        let fake = self.fake_checksum();
+        crate::pak_checksum::pure_command(dll(dlls[0]), dll(dlls[1]), &general, checksum_feed, fake)
+    }
+
+    /// `fs_fakeChkSum`: `rand() + 1` from a loose read of a type off the
+    /// list, 0 before one.
+    pub fn fake_checksum(&self) -> i32 {
+        self.fake_checksum.load(Ordering::Relaxed)
+    }
+
+    /// Hands the fake checksum to a reopened search path: vcod's reopen is
+    /// none of the points that clear retail's.
+    pub fn keep_fake_checksum(&self, from: &Pk3Fs) {
+        self.fake_checksum
+            .store(from.fake_checksum(), Ordering::Relaxed);
+    }
+
+    /// `FS_Restart`: 1.1's `FS_Shutdown` clears the fake checksum
+    /// (CoDMP.exe 0x42cd68); 1.5's and UO's keep it.
+    pub fn restart_fake_checksum(&self) {
+        if self.loose.cod11() {
+            self.fake_checksum.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// `FS_PureServerSetLoadedPaks` taking a new non-empty list: 1.5 and UO
+    /// clear the fake checksum (CoDMP.exe 0x43f2ab, CoDUOMP.exe 0x441439);
+    /// 1.1 keeps it.
+    pub fn pure_list_fake_checksum(&self) {
+        if !self.loose.cod11() {
+            self.fake_checksum.store(0, Ordering::Relaxed);
+        }
     }
 
     /// The pak `path` comes from, by the same lookup as `read`; `None`
@@ -836,6 +880,7 @@ impl Pk3Fs {
             loose: loose::Loose::off(),
             referenced: Vec::new(),
             surfs_unflagged: AtomicBool::new(false),
+            fake_checksum: AtomicI32::new(0),
             index: HashMap::new(),
             alias_index: HashMap::new(),
             open: Mutex::new(HashMap::new()),
@@ -893,7 +938,12 @@ impl Pk3Fs {
         }
         let (ai, entry) = match self.hit(&key)? {
             Hit::Pak(ai, entry) => (ai, entry),
-            Hit::Loose(file) => return read_loose(file, limit),
+            Hit::Loose(file) => {
+                if self.loose.fakes_checksum(&key) {
+                    self.fake_checksum.store(fake_rand(), Ordering::Relaxed);
+                }
+                return read_loose(file, limit);
+            }
         };
         if flag && self.flags(&key) {
             self.referenced[ai].store(true, Ordering::Relaxed);
@@ -1798,6 +1848,57 @@ mod tests {
             assert!(fs.file_list("ui", ".menu").is_empty(), "{version}");
             assert_eq!(fs.file_list("save", "svg"), ["save/c.svg"], "{version}");
             assert_eq!(all.file_list("ui", ".menu"), ["ui/f.menu"], "{version}");
+        }
+    }
+
+    /// A loose read off the list sets the fake checksum the `cp` carries
+    /// after each pass; 1.1 clears it at a restart, 1.5 and UO at a new pure
+    /// list, and a 1.1 pure path still sets it off a saved game.
+    #[test]
+    fn a_loose_read_off_the_list_fakes_the_checksum_until_its_clear() {
+        for (pak, version) in [("pak0.pk3", "1.1"), ("uo/pakuo00.pk3", "uo")] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(pak);
+            let base = path.parent().unwrap();
+            std::fs::create_dir_all(base.join("save")).unwrap();
+            make_pk3(
+                base,
+                &path.file_name().unwrap().to_string_lossy(),
+                &[("p.txt", "")],
+            );
+            for f in ["a.cfg", "b.tga", "save/c.svg"] {
+                std::fs::write(base.join(f), f).unwrap();
+            }
+            let fs = Pk3Fs::open(base).unwrap();
+            fs.read("a.cfg").unwrap();
+            assert_eq!(fs.fake_checksum(), 0, "{version}");
+            assert!(fs.pure_command(9, ["x", "y"]).starts_with("cp @ "));
+            fs.read("b.tga").unwrap();
+            let fake = fs.fake_checksum();
+            assert!((1..=0x8000).contains(&fake), "{version}: {fake}");
+            assert_eq!(
+                fs.pure_command(9, ["x", "y"]),
+                format!("cp {fake} {fake} @ {fake} 9 "),
+                "{version}"
+            );
+            let sum = fs.paks().next().unwrap().checksum;
+            let pure = Pk3Fs::open_search(base, None, Some(&[sum]), false).unwrap();
+            pure.keep_fake_checksum(&fs);
+            assert_eq!(pure.fake_checksum(), fake, "{version}");
+            let cod11 = version == "1.1";
+            match cod11 {
+                true => pure.pure_list_fake_checksum(),
+                false => pure.restart_fake_checksum(),
+            }
+            assert_eq!(pure.fake_checksum(), fake, "{version}");
+            match cod11 {
+                true => pure.restart_fake_checksum(),
+                false => pure.pure_list_fake_checksum(),
+            }
+            assert_eq!(pure.fake_checksum(), 0, "{version}");
+            let svg = pure.read("save/c.svg").is_some();
+            assert_eq!(svg, cod11);
+            assert_eq!(pure.fake_checksum() != 0, svg, "{version}");
         }
     }
 
