@@ -196,7 +196,7 @@ fn play(root: &std::path::Path, addr: std::net::SocketAddr) -> Option<Seen> {
         let now = clk_now();
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
-        let time = clk_since(start).as_secs_f32();
+        let time = clk_since(start).as_secs_f64();
         let mut cx = ClientFrame {
             fs: &fs,
             shell: &shell,
@@ -227,7 +227,7 @@ fn play(root: &std::path::Path, addr: std::net::SocketAddr) -> Option<Seen> {
                 eye: cam.pos,
                 fwd,
                 up,
-                time,
+                time: time as f32,
                 fov_x: view.fov,
                 cull: CullMode::On,
                 hud_lines: Vec::new(),

@@ -34,7 +34,7 @@ pub(super) struct Live<'a> {
     pub yaw: f32,
     pub pitch: f32,
     pub fov: f32,
-    pub time: f32,
+    pub time: f64,
 }
 
 impl Live<'_> {
@@ -52,7 +52,7 @@ impl Live<'_> {
             eye: self.eye,
             fwd,
             up,
-            time: self.time,
+            time: self.time as f32,
             fov_x: self.fov,
             cull: CullMode::On,
             hud_lines: Vec::new(),
@@ -75,7 +75,7 @@ impl Live<'_> {
     ) -> Vec<u8> {
         // the options first: the quads' feather reads `r_zFeather`
         self.r.set_cod4_options(options);
-        self.r.set_fx_quads(self.fs, quads, self.time);
+        self.r.set_fx_quads(self.fs, quads, self.time as f32);
         let frame = self.frame();
         self.r.render(frame, None);
         self.r.set_cod4_options(Cod4Options::default());
@@ -262,7 +262,7 @@ fn play(
         let now = clk_now();
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
-        let time = clk_since(start).as_secs_f32();
+        let time = clk_since(start).as_secs_f64();
         let mut cx = ClientFrame {
             fs: &fs,
             shell: &shell,
@@ -859,7 +859,7 @@ fn frag_counts(l: &mut Live, zfeather: bool) -> Option<[u64; crate::frame_prof::
         ..Default::default()
     });
     let quads = l.quads();
-    l.r.set_fx_quads(l.fs, quads, l.time);
+    l.r.set_fx_quads(l.fs, quads, l.time as f32);
     for _ in 0..8 {
         let frame = l.frame();
         l.r.render(frame, None);

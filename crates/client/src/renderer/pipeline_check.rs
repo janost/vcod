@@ -207,7 +207,7 @@ fn draw_frames(
         radius: 8.0,
         life_ms: 8000,
     };
-    r.set_marks(fs, &[mark], &[], 1000, 1.0, true);
+    r.set_marks(fs, &[mark], &[], 1.0, true);
     r.set_hud_quads(
         fs,
         // A plain quad, then one through the additive pipelines (the font

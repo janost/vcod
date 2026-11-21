@@ -64,7 +64,7 @@ impl Falloff {
 /// axes at the drop.
 struct Section {
     live: Live,
-    start: f32,
+    start: f64,
     along: f32,
     ordinal: u32,
     right: Vec3,
@@ -74,11 +74,11 @@ struct Section {
 impl Section {
     /// Life used up at `now`, 0 at the start and 1 at the end; negative
     /// while the delay runs.
-    fn age_frac(&self, now: f32) -> f32 {
-        (now - self.start) * 1000.0 / self.live.life_ms
+    fn age_frac(&self, now: f64) -> f32 {
+        (now - self.start) as f32 * 1000.0 / self.live.life_ms
     }
 
-    fn is_spent(&self, now: f32) -> bool {
+    fn is_spent(&self, now: f64) -> bool {
         self.age_frac(now) >= 1.0
     }
 }
@@ -93,7 +93,7 @@ pub(crate) struct Trail {
     shader: Arc<str>,
     /// The pose and fx time the last advance saw.
     prev_pose: Pose,
-    prev_time: f32,
+    prev_time: f64,
     /// Units the effect has travelled since the trail started.
     travelled: f32,
     dropped: u32,
@@ -110,7 +110,7 @@ impl Trail {
         def: TrailDef,
         shader: Arc<str>,
         pose: Pose,
-        now: f32,
+        now: f64,
         rng: &mut Rng,
     ) -> Trail {
         let mut trail = Trail {
@@ -132,7 +132,7 @@ impl Trail {
 
     /// Appends a section dropped at `pose` and fx time `at`, `along` units
     /// down the trail; its life and delay are the element's draws.
-    fn push_section(&mut self, (origin, axes): Pose, at: f32, along: f32, rng: &mut Rng) {
+    fn push_section(&mut self, (origin, axes): Pose, at: f64, along: f32, rng: &mut Rng) {
         let life_ms = rng.range(self.def.life_ms.a, self.def.life_ms.b).max(1.0);
         let delay_s = rng.range(self.def.delay_ms.a, self.def.delay_ms.b) * 0.001;
         let live = Live::spawn(
@@ -149,7 +149,7 @@ impl Trail {
         }
         self.sections.push_back(Section {
             live,
-            start: at + delay_s,
+            start: at + f64::from(delay_s),
             along,
             ordinal: self.dropped,
             right: axes[1],
@@ -163,7 +163,7 @@ impl Trail {
     /// the travel passes (the move's own end excluded) drops a section at
     /// the pose and time interpolated there. Spent sections then leave,
     /// except the newest spent one, which the tail still reaches back to.
-    pub(crate) fn advance(&mut self, pose: Option<Pose>, now: f32, rng: &mut Rng) {
+    pub(crate) fn advance(&mut self, pose: Option<Pose>, now: f64, rng: &mut Rng) {
         match pose {
             Some(pose) if !self.ended => self.travel(pose, now, rng),
             _ => self.ended = true,
@@ -173,7 +173,7 @@ impl Trail {
         }
     }
 
-    fn travel(&mut self, pose: Pose, now: f32, rng: &mut Rng) {
+    fn travel(&mut self, pose: Pose, now: f64, rng: &mut Rng) {
         let (from, from_axes) = self.prev_pose;
         let (from_t, from_d) = (self.prev_time, self.travelled);
         let step = from.distance(pose.0);
@@ -187,7 +187,7 @@ impl Trail {
         for mark in marks {
             let f = (mark - from_d) / step;
             let axes = std::array::from_fn(|k| from_axes[k].lerp(pose.1[k], f).normalize_or_zero());
-            let at = from_t + (now - from_t) * f;
+            let at = from_t + (now - from_t) * f64::from(f);
             self.push_section((from.lerp(pose.0, f), axes), at, mark, rng);
         }
         self.prev_pose = pose;
@@ -196,7 +196,7 @@ impl Trail {
     }
 
     /// Nothing left to draw or drop.
-    pub(crate) fn done(&self, now: f32) -> bool {
+    pub(crate) fn done(&self, now: f64) -> bool {
         self.ended && self.sections.iter().all(|s| s.is_spent(now))
     }
 
@@ -205,7 +205,7 @@ impl Trail {
     /// transparent. A live section that follows a spent one gets a point
     /// ahead of it where the spent one's neighbour runs out of life, which
     /// carries the spent one's size and colour.
-    fn cuts(&self, now: f32, repeat: f32, u_shift: f32) -> Vec<Cut> {
+    fn cuts(&self, now: f64, repeat: f32, u_shift: f32) -> Vec<Cut> {
         let mut cuts = Vec::with_capacity(self.sections.len() + 1);
         let mut behind: Option<(Cut, f32)> = None;
         for (idx, s) in self.sections.iter().enumerate() {
@@ -232,7 +232,7 @@ impl Trail {
     /// the cut, one quad per neighbouring pair of drawn sections. `u` runs
     /// along the trail (distance over `repeatDist`, wrapped to the first
     /// section, scrolled by `scrollTimeMsec`), `v` is the vertex's own.
-    pub(crate) fn quads(&self, now: f32, eye: Vec3, out: &mut Vec<FxQuad>) {
+    pub(crate) fn quads(&self, now: f64, eye: Vec3, out: &mut Vec<FxQuad>) {
         let def = &self.def.def;
         if def.verts.is_empty() || def.inds.len() < 2 || self.shader.is_empty() {
             return;
@@ -244,8 +244,8 @@ impl Trail {
         let scroll = match def.scroll_ms {
             0 => 0.0,
             ms => {
-                let period = ms.unsigned_abs() as f32;
-                let phase = (now * 1000.0).rem_euclid(period) / period;
+                let period = f64::from(ms.unsigned_abs());
+                let phase = ((now * 1000.0).rem_euclid(period) / period) as f32;
                 if ms > 0 { phase } else { 1.0 - phase }
             }
         };
@@ -298,10 +298,10 @@ struct Cut {
 
 impl Cut {
     /// `s` drawn at `now`, its channels sampled at life fraction `frac`.
-    fn of(s: &Section, now: f32, frac: f32, u: f32) -> Cut {
+    fn of(s: &Section, now: f64, frac: f32, u: f32) -> Cut {
         let rgb = s.live.rgb(frac);
         Cut {
-            centre: s.live.position((now - s.start).max(0.0)),
+            centre: s.live.position(((now - s.start) as f32).max(0.0)),
             right: s.right,
             up: s.up,
             size: [s.live.size(frac), s.live.size2(frac)],

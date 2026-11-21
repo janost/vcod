@@ -29,7 +29,7 @@ impl App {
             .min(0.1);
         self.last_frame = now;
         let elapsed = now.saturating_duration_since(self.start);
-        let time = elapsed.as_secs_f32();
+        let time = elapsed.as_secs_f64();
         let local_ms = elapsed.as_secs_f64() * 1000.0;
         let cull = self.cull_mode;
         let blood = self.shell.cvar_f32("cg_blood") as i32 != 0;
@@ -131,7 +131,7 @@ impl App {
                     eye: Vec3::ZERO,
                     fwd: camera::basis(0.0, 0.0).0,
                     up: Vec3::Z,
-                    time,
+                    time: time as f32,
                     fov_x: camera::DEFAULT_FOV_DEG,
                     cull,
                     hud_lines: Vec::new(),
@@ -380,7 +380,7 @@ impl App {
         self.look_zoom = (1.0, false);
         cam.update(&self.input, dt);
         if let Some(av) = &mut self.cod4_fly {
-            av.frame(&self.fs, &mut self.audio, &mut self.fx, f64::from(time));
+            av.frame(&self.fs, &mut self.audio, &mut self.fx, time);
             r.set_level_look(Some(av.look.at((time * 1000.0) as i32, false)));
         }
         let fly_fov = camera::view_fov_x(camera::DEFAULT_FOV_DEG, aspect, widescreen);
@@ -616,16 +616,15 @@ impl App {
         r.set_fx_quads(
             &self.fs,
             self.fx.build_quads(v.eye, eye_right, eye_up, time),
-            time,
+            time as f32,
         );
         let clouds = self.fx.clouds(v.eye, eye_right, eye_up, time);
         let map = self.session.map_name();
-        r.set_fx_clouds(&self.fs, map, &clouds, time);
+        r.set_fx_clouds(&self.fs, map, &clouds, time as f32);
         r.set_marks(
             &self.fs,
             &self.fx.take_marks(time),
             &[],
-            (time * 1000.0) as i32,
             time,
             self.shell.cvar_f32("cg_marks") != 0.0,
         );
@@ -637,7 +636,7 @@ impl App {
                     .map(String::as_str)
                     .unwrap_or(""),
             ),
-            time,
+            time as f32,
         );
         self.fx_ms = fx_t0.elapsed().as_secs_f32() * 1000.0;
         (
@@ -646,7 +645,7 @@ impl App {
                 eye: v.eye,
                 fwd: camera::basis(v.yaw, v.pitch).0,
                 up: camera::up_hint(v.yaw, v.pitch, 0.0),
-                time,
+                time: time as f32,
                 fov_x: fov,
                 cull,
                 hud_lines: vec![format!(
@@ -977,7 +976,7 @@ pub(crate) struct Tick {
     pub now: Instant,
     pub dt: f32,
     pub elapsed: std::time::Duration,
-    pub time: f32,
+    pub time: f64,
     pub local_ms: f64,
     pub cull: renderer::CullMode,
     pub blood: bool,

@@ -75,7 +75,7 @@ pub struct View {
 pub struct ClientBullets {
     /// The frame and entity last traced: the cgame traces one round per
     /// entity per frame (0x3004556e).
-    last: Option<(u32, u32)>,
+    last: Option<(u64, u32)>,
     rng: Rng,
 }
 
@@ -115,7 +115,7 @@ impl ClientBullets {
     /// tag (0x30045638..0x30045806).
     pub fn fire(
         &mut self,
-        frame: u32,
+        frame: u64,
         round: &ClientRound,
         def: Option<&WeaponDef>,
         pose: &TagPose,

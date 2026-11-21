@@ -1242,7 +1242,7 @@ struct ViewTail<'a> {
     fx: &'a mut fx::sim::FxSystem,
     session: &'a session::Session,
     r: &'a mut Renderer,
-    time: f32,
+    time: f64,
     dt: f32,
     aspect: f32,
     cull: renderer::CullMode,
@@ -1298,18 +1298,17 @@ impl ViewTail<'_> {
             true => fx.build_quads(cam.pos, cam_right, cam_up, time),
             false => Vec::new(),
         };
-        r.set_fx_quads(fs, quads, time);
+        r.set_fx_quads(fs, quads, time as f32);
         // CoD2's snow (fx::cod2_cloud), tested against the map's roofs
         let clouds = match draw_fx {
             true => fx.clouds(cam.pos, cam_right, cam_up, time),
             false => Default::default(),
         };
-        r.set_fx_clouds(fs, session.map_name(), &clouds, time);
+        r.set_fx_clouds(fs, session.map_name(), &clouds, time as f32);
         r.set_marks(
             fs,
             &fx.take_marks(time),
             &[],
-            (time * 1000.0) as i32,
             time,
             shell.cvar_f32("cg_marks") != 0.0,
         );
@@ -1341,7 +1340,7 @@ impl ViewTail<'_> {
                 eye: cam.pos,
                 fwd: cam_forward,
                 up: Vec3::Z,
-                time,
+                time: time as f32,
                 fov_x: world_fov,
                 cull,
                 hud_lines: Vec::new(),

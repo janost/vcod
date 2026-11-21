@@ -147,9 +147,9 @@ impl Cod2Client {
             self.hud.chat.push(&line, chat_ms);
         }
         // `score` again every 2 s while Tab is held.
-        if self.hud.scoreboard.due(cx.time) {
+        if self.hud.scoreboard.due(cx.time as f32) {
             s.send_command("score");
-            self.hud.scoreboard.mark_requested(cx.time);
+            self.hud.scoreboard.mark_requested(cx.time as f32);
         }
         // `CL_GetMenuBlurRadius`: none on a demo
         cx.r.set_world_blur(if s.is_demo() { 0.0 } else { cx.ui.blur_world() });
@@ -307,7 +307,7 @@ impl Cod2Client {
             cx.localized,
             cx.r.screen_size(),
             f.time_ms,
-            cx.time,
+            cx.time as f32,
         );
         if f.snap.ps.followed().is_some() || s.is_demo() {
             let [pitch, yaw, _] = cod2_viewmodel::view_angles(&f);

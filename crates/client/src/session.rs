@@ -37,8 +37,9 @@ pub(crate) struct ClientFrame<'a> {
     pub(crate) ui: &'a Ui,
     pub(crate) r: &'a mut Renderer,
     pub(crate) console_open: bool,
-    /// Seconds since the client started, the effects' clock.
-    pub(crate) time: f32,
+    /// Seconds since the client started, the effects' clock, f64: an
+    /// f32 steps 2 ms past 4.6 h.
+    pub(crate) time: f64,
     pub(crate) dt: f32,
 }
 

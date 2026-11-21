@@ -1204,7 +1204,7 @@ fn play(root: &Path, map: &str, addr: std::net::SocketAddr, shared: &Shared) -> 
         let now = Instant::now();
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
-        let time = start.elapsed().as_secs_f32();
+        let time = start.elapsed().as_secs_f64();
         // A gamestate naming another map loads it, as `main.rs` does.
         if let Some(new) = c.session.take_map_change() {
             log::warn!("sweep: the client changed map to {new}");
@@ -1230,7 +1230,7 @@ fn play(root: &Path, map: &str, addr: std::net::SocketAddr, shared: &Shared) -> 
             audio.pump_mixer(f64::from(dt));
             audio.step(&positions, &HashMap::new(), None);
         } else {
-            c.session.step(time as f64 * 1000.0)?;
+            c.session.step(time * 1000.0)?;
             c.session.take_fired();
             c.session.take_lines();
         }
@@ -1586,14 +1586,14 @@ fn play_soak(
         let now = Instant::now();
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
-        let time = start.elapsed().as_secs_f32();
+        let time = start.elapsed().as_secs_f64();
         let graph = shared.graph.lock().unwrap().clone();
         let c = sess.cod4_mut().unwrap();
         if let Some(new) = c.session.take_map_change() {
             log::warn!("sweep: the client changed map to {new}");
         }
         let mut frame = SoakPair::default();
-        me.act(c, &mut cam, time, graph.as_deref(), &mut frame);
+        me.act(c, &mut cam, time as f32, graph.as_deref(), &mut frame);
         let warm = Tally::warm(&r);
         // `main`'s `Mode::Cod2` arm, which a CoD4 session runs.
         let t0 = Instant::now();
@@ -1661,8 +1661,8 @@ fn play_soak(
         let tally = Tally {
             parts: &parts,
             render_ms,
-            time,
-            level_at: me.level_at(&gametype, time),
+            time: time as f32,
+            level_at: me.level_at(&gametype, time as f32),
             errors: &errors,
             audio: &audio,
             warm: [warm, Tally::warm(&r)],
@@ -2039,7 +2039,7 @@ fn first_marks(root: &Path, addr: SocketAddr) -> Option<MarksSeen> {
         let now = clk_now();
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
-        let time = now.duration_since(start).as_secs_f32();
+        let time = now.duration_since(start).as_secs_f64();
         let frozen = c
             .session
             .client()
@@ -2073,7 +2073,7 @@ fn first_marks(root: &Path, addr: SocketAddr) -> Option<MarksSeen> {
         c.pump(&mut cx, &mut cam);
         let (f, rt, u) = crate::camera::basis(cam.yaw, cam.pitch);
         let marks_due = fx.take_marks(time);
-        r.set_marks(&fs, &marks_due, &[], (time * 1000.0) as i32, time, true);
+        r.set_marks(&fs, &marks_due, &[], time, true);
         fx.step(dt, time, None);
         audio.set_listener(cam.pos, f, rt, u, u32::MAX);
         c.session.take_commands();
@@ -2181,7 +2181,7 @@ fn join_models(root: &Path, addr: SocketAddr) -> Option<JoinSeen> {
             ui: &ui,
             r: &mut r,
             console_open: false,
-            time: now.duration_since(start).as_secs_f32(),
+            time: now.duration_since(start).as_secs_f64(),
             dt,
         };
         c.pump(&mut cx, &mut cam);
@@ -2288,7 +2288,7 @@ fn shoot_car(root: &Path, addr: SocketAddr) -> Option<CarSeen> {
         let now = clk_now();
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
-        let time = now.duration_since(start).as_secs_f32();
+        let time = now.duration_since(start).as_secs_f64();
         let frozen = c
             .session
             .client()

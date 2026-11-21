@@ -1456,7 +1456,7 @@ mod tests {
                 ui: &ui,
                 r: &mut r,
                 console_open: false,
-                time: clk_since(start).as_secs_f32(),
+                time: clk_since(start).as_secs_f64(),
                 dt,
             };
             c.pump(&mut cx, &mut cam);
@@ -1573,7 +1573,7 @@ mod tests {
                 ui: &ui,
                 r: &mut r,
                 console_open: false,
-                time: clk_since(start).as_secs_f32(),
+                time: clk_since(start).as_secs_f64(),
                 dt,
             };
             c.pump(&mut cx, &mut cam);

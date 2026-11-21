@@ -167,7 +167,7 @@ fn play(root: &std::path::Path, addr: std::net::SocketAddr) -> Option<Seen> {
         let now = clk_now();
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
-        let time = clk_since(start).as_secs_f32();
+        let time = clk_since(start).as_secs_f64();
         let mut cx = ClientFrame {
             fs: &fs,
             shell: &shell,
@@ -204,14 +204,14 @@ fn play(root: &std::path::Path, addr: std::net::SocketAddr) -> Option<Seen> {
             .unwrap()
             .1;
         let pitch = (-40f32).to_radians();
-        let frame = |t: f32| {
+        let frame = |t: f64| {
             let (fwd, _, up) = crate::camera::basis(yaw, pitch);
             Frame {
                 view_proj: crate::camera::view_proj_from(eye, yaw, pitch, 0.0, view.fov, aspect),
                 eye,
                 fwd,
                 up,
-                time: t,
+                time: t as f32,
                 fov_x: view.fov,
                 cull: CullMode::On,
                 hud_lines: Vec::new(),

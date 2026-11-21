@@ -35,7 +35,7 @@ pub struct FlameProbe {
     weapons: Vec<Option<WeaponDef>>,
     in_flame: bool,
     t0: Option<Instant>,
-    last_ms: f32,
+    last_ms: f64,
     health: Option<i32>,
     fdcs: u32,
     /// `sv_maxclients`, which the chunks' residue test reads.
@@ -87,9 +87,9 @@ impl FlameProbe {
     ) -> Option<String> {
         let ms = now
             .duration_since(*self.t0.get_or_insert(now))
-            .as_secs_f32()
+            .as_secs_f64()
             * 1000.0;
-        let dt = (ms - self.last_ms).max(0.0);
+        let dt = (ms - self.last_ms).max(0.0) as f32;
         self.last_ms = ms;
         let own = snap.ps.field_i32(p, "clientNum");
         let muzzles = match (&mut self.scene, fs) {

@@ -982,7 +982,7 @@ impl Cod4Client {
         let (Some(e), Some(gs)) = (&mut self.effects, self.session.gamestate()) else {
             return;
         };
-        let now = f64::from(cx.time);
+        let now = cx.time;
         e.set_tags(cx.fx, &self.weapon_tags, self.view_tags.as_ref());
         // The helicopters' smoke and wash, then every model tag an effect
         // rides.
@@ -1454,7 +1454,7 @@ impl Cod4Client {
             // (0x48dec7).
             for (i, hit) in &dyn_hits {
                 for p in e.bullet_plays(&fired[*i], &weapons, hit) {
-                    let sounds = e.start(cx.fx, cx.fs, &p, f64::from(cx.time), None);
+                    let sounds = e.start(cx.fx, cx.fs, &p, cx.time, None);
                     cx.audio.play_fx(cx.fs, sounds);
                 }
             }
@@ -1465,7 +1465,7 @@ impl Cod4Client {
                     axis: b.axis,
                 };
                 if let Some(p) = e.play_named(name, at, None) {
-                    let sounds = e.start(cx.fx, cx.fs, &p, f64::from(cx.time), None);
+                    let sounds = e.start(cx.fx, cx.fs, &p, cx.time, None);
                     cx.audio.play_fx(cx.fs, sounds);
                 }
             }
@@ -1482,7 +1482,7 @@ impl Cod4Client {
                     _ => f,
                 };
                 for p in e.plays(f, &weapons, &cs, tags, self.view_tags.as_ref()) {
-                    let sounds = e.start(cx.fx, cx.fs, &p, f64::from(cx.time), None);
+                    let sounds = e.start(cx.fx, cx.fs, &p, cx.time, None);
                     cx.audio.play_fx(cx.fs, sounds);
                 }
                 // `CG_PlayFxOnTag`: the effect bolted to the entity's tag;
@@ -1505,7 +1505,7 @@ impl Cod4Client {
                     axis: pose.axis,
                 };
                 if let Some(p) = e.play_named(&name, at, Some(b)) {
-                    let sounds = e.start(cx.fx, cx.fs, &p, f64::from(cx.time), None);
+                    let sounds = e.start(cx.fx, cx.fs, &p, cx.time, None);
                     cx.audio.play_fx(cx.fs, sounds);
                 }
             }
@@ -1536,7 +1536,7 @@ impl Cod4Client {
                     .flat_map(|h| e.bullet_plays(f, &weapons, h))
                     .collect();
                 for p in plays {
-                    let sounds = e.start(cx.fx, cx.fs, &p, f64::from(cx.time), None);
+                    let sounds = e.start(cx.fx, cx.fs, &p, cx.time, None);
                     cx.audio.play_fx(cx.fs, sounds);
                 }
             }
@@ -2776,7 +2776,7 @@ mod saw_tests {
                 ui: &ui,
                 r,
                 console_open: false,
-                time: clk_since(start).as_secs_f32(),
+                time: clk_since(start).as_secs_f64(),
                 dt,
             };
             c.pump(&mut cx, cam);

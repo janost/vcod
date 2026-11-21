@@ -79,8 +79,8 @@ pub enum FlameSound {
 #[derive(Clone, Copy)]
 struct Owner {
     /// When the last chunk left the nozzle, and the last frame it fired.
-    last_emit: f32,
-    last_fire: f32,
+    last_emit: f64,
+    last_fire: f64,
     pos: Vec3,
 }
 
@@ -94,7 +94,7 @@ struct Chunk {
     rise: f32,
     size: f32,
     size_max: f32,
-    born: f32,
+    born: f64,
     life: f32,
     roll: f32,
     smoke: Option<u8>,
@@ -125,9 +125,9 @@ struct Residue {
     /// The struck face's normal (`+0x118`).
     normal: Vec3,
     size: f32,
-    born: f32,
-    death: f32,
-    next_emit: f32,
+    born: f64,
+    death: f64,
+    next_emit: f64,
     /// Its `+0xa8`: -0.2 at the bounce, redrawn each step on a wall.
     sink: f32,
 }
@@ -278,8 +278,8 @@ pub struct FlameReport {
 /// 0x300ab7f8 rows).
 #[derive(Clone, Copy)]
 struct ReportClock {
-    next_check: f32,
-    last_fdc: f32,
+    next_check: f64,
+    last_fdc: f64,
 }
 
 pub struct FlameSystem {
@@ -288,13 +288,13 @@ pub struct FlameSystem {
     residues: Vec<Residue>,
     /// Each owner's last residue, when and where (`centFlameInfo` rows
     /// 0x300ab7f0, 0x300ab7e4).
-    last_residue: HashMap<u32, (f32, Vec3)>,
+    last_residue: HashMap<u32, (f64, Vec3)>,
     rng: u32,
     report_clocks: HashMap<u32, ReportClock>,
     in_flame: bool,
     /// The last chunk tested and when: a nearby chunk in the same frame is
     /// skipped (0x300a8710, 0x300d9760).
-    last_test: Option<(f32, Vec3)>,
+    last_test: Option<(f64, Vec3)>,
 }
 
 impl Default for FlameSystem {
@@ -332,7 +332,7 @@ impl FlameSystem {
     /// body's spacing with its distance.
     pub fn step(
         &mut self,
-        now: f32,
+        now: f64,
         dt_ms: f32,
         nozzles: &[Nozzle],
         eye: Vec3,
@@ -341,7 +341,7 @@ impl FlameSystem {
         let mut sounds = Vec::new();
         for n in nozzles {
             let started = match self.owners.get(&n.owner) {
-                Some(o) => now - o.last_fire > dt_ms.max(1.0) + REMOTE_GRACE_MS,
+                Some(o) => (now - o.last_fire) as f32 > dt_ms.max(1.0) + REMOTE_GRACE_MS,
                 None => true,
             };
             if started {
@@ -368,7 +368,7 @@ impl FlameSystem {
             } else {
                 (n.pos.distance(eye).clamp(2048.0, 6000.0)) / 2048.0
             };
-            let spacing = (k * SPACING_MS * far).max(1.0);
+            let spacing = f64::from((k * SPACING_MS * far).max(1.0));
             let speed_scale = if n.own_view { 1.0 } else { 1.8 };
             // A new stream's first chunk leaves now.
             let mut t = match started {
@@ -394,7 +394,7 @@ impl FlameSystem {
         // Released: no nozzle this frame and past the grace.
         let firing: Vec<u32> = nozzles.iter().map(|n| n.owner).collect();
         self.owners.retain(|&owner, o| {
-            let keep = firing.contains(&owner) || now - o.last_fire <= REMOTE_GRACE_MS;
+            let keep = firing.contains(&owner) || (now - o.last_fire) as f32 <= REMOTE_GRACE_MS;
             if !keep {
                 sounds.push(FlameSound::Stop { owner, pos: o.pos });
             }
@@ -418,7 +418,7 @@ impl FlameSystem {
                 // 0x30025c60: half its cap to the whole over half its life
                 // at the stream's speed scale `+0xb8` of 1.
                 c.size = (c.size + c.size_max / c.life * dt_ms).min(c.size_max);
-                let age = (now - c.born) / 500.0;
+                let age = (now - c.born) as f32 / 500.0;
                 c.pos + c.dir * c.speed * dt + Vec3::Z * (c.lift * dt_ms / 500.0 * age)
             } else {
                 c.speed = (c.speed - FRICTION * dt).max(MIN_SPEED);
@@ -450,7 +450,7 @@ impl FlameSystem {
                 }
                 _ => c.pos = to,
             }
-            let frac = (now - c.born) / c.life;
+            let frac = (now - c.born) as f32 / c.life;
             if !c.shed && frac >= 0.5 {
                 c.shed = true;
                 smoke.push((c.owner, c.pos, c.size));
@@ -485,7 +485,7 @@ impl FlameSystem {
                 });
             }
         }
-        self.chunks.retain(|c| now - c.born < c.life);
+        self.chunks.retain(|c| ((now - c.born) as f32) < c.life);
         self.residues.retain(|r| now < r.death);
         sounds
     }
@@ -495,24 +495,26 @@ impl FlameSystem {
     /// in the last 3 s, a residue of the chunk's size (at most 145) at the
     /// contact, living one to two and a half seconds by the face's slope
     /// (0x30027ad0 and the death and trail it is given there).
-    fn leave_residue(&mut self, c: &Chunk, normal: Vec3, now: f32) {
+    fn leave_residue(&mut self, c: &Chunk, normal: Vec3, now: f64) {
         if let Some(&(t, at)) = self.last_residue.get(&c.owner)
-            && (now - t < RESIDUE_EVERY_MS
-                || (t <= now && now - t <= RESIDUE_NEAR_MS && at.distance(c.pos) <= RESIDUE_NEAR))
+            && (((now - t) as f32) < RESIDUE_EVERY_MS
+                || (t <= now
+                    && (now - t) as f32 <= RESIDUE_NEAR_MS
+                    && at.distance(c.pos) <= RESIDUE_NEAR))
         {
             return;
         }
         self.last_residue.insert(c.owner, (now, c.pos));
         let life =
             RESIDUE_LIFE_MS * (1.0 + (1.0 - normal.z.abs()) * 0.5) + self.rand() * RESIDUE_LIFE_MS;
-        let next_emit = now + self.rand() * RESIDUE_STEP_MS;
+        let next_emit = now + f64::from(self.rand() * RESIDUE_STEP_MS);
         self.residues.push(Residue {
             owner: c.owner,
             pos: c.pos,
             normal,
             size: c.size.min(RESIDUE_MAX_SIZE),
             born: now,
-            death: now + life,
+            death: now + f64::from(life),
             next_emit,
             sink: RESIDUE_SINK,
         });
@@ -524,7 +526,7 @@ impl FlameSystem {
     /// residue's held to 60..120 plus up to 25, from half of that. It
     /// drifts along the face at 4 units a second or more, off a wall
     /// as well, and rises ever faster ([`Chunk::lift`]).
-    fn shed_residue_flames(&mut self, now: f32) {
+    fn shed_residue_flames(&mut self, now: f64) {
         for i in 0..self.residues.len() {
             while self.residues[i].next_emit < now.min(self.residues[i].death) {
                 // A wall's residue redraws its `+0xa8` each step (|z| of
@@ -554,7 +556,7 @@ impl FlameSystem {
                 dir += Vec3::from_array(
                     [n.x, n.y, n.z].map(|a| wall * (self.rand() * 0.45 + 0.25) * a),
                 );
-                let frac = (r.next_emit - r.born) / (r.death - r.born);
+                let frac = ((r.next_emit - r.born) / (r.death - r.born)) as f32;
                 // Units per 1000 ticks (500 ms): `(1 - frac) * rand * |+0xa8|
                 // + 2`.
                 let speed = ((1.0 - frac) * self.rand() * r.sink.abs() + 2.0) * 2.0;
@@ -567,7 +569,7 @@ impl FlameSystem {
                     rise: 0.0,
                     size: size_max * 0.5,
                     size_max,
-                    born: r.next_emit - lag,
+                    born: r.next_emit - f64::from(lag),
                     life: RESIDUE_FLAME_LIFE_MS,
                     roll,
                     smoke: None,
@@ -580,7 +582,7 @@ impl FlameSystem {
                     braked: false,
                 });
                 let step = RESIDUE_STEP_MS * (0.5 + self.rand());
-                self.residues[i].next_emit += step;
+                self.residues[i].next_emit += f64::from(step);
             }
         }
     }
@@ -597,7 +599,7 @@ impl FlameSystem {
     /// `flood_open` the report holds it back for a later check.
     pub fn report(
         &mut self,
-        now: f32,
+        now: f64,
         victim: Option<Victim>,
         flood_open: bool,
         trace: Option<ShotTrace>,
@@ -607,8 +609,8 @@ impl FlameSystem {
             return FlameReport::default();
         };
         let clock = *self.report_clocks.entry(v.client).or_insert(ReportClock {
-            next_check: f32::NEG_INFINITY,
-            last_fdc: f32::NEG_INFINITY,
+            next_check: f64::NEG_INFINITY,
+            last_fdc: f64::NEG_INFINITY,
         });
         let mut fdc = None;
         if clock.next_check < now {
@@ -621,17 +623,17 @@ impl FlameSystem {
                 if c.smoke.is_some() || (self.rand() * 5.0) as u32 != 0 {
                     continue;
                 }
-                let frac = (now - c.born) / c.life;
+                let frac = (now - c.born) as f32 / c.life;
                 if frac >= MAX_FRAC || !self.reaches(&c, frac, now, &v, trace) {
                     continue;
                 }
                 self.in_flame = true;
-                if clock.last_fdc <= now - FDC_MS && !flood_open {
+                if clock.last_fdc <= now - f64::from(FDC_MS) && !flood_open {
                     self.report_clocks.get_mut(&v.client).unwrap().last_fdc = now;
                     fdc = Some(c.owner);
                 }
             }
-            self.report_clocks.get_mut(&v.client).unwrap().next_check = now + CHECK_MS;
+            self.report_clocks.get_mut(&v.client).unwrap().next_check = now + f64::from(CHECK_MS);
         }
         FlameReport {
             in_flame: self.in_flame,
@@ -647,7 +649,7 @@ impl FlameSystem {
         &mut self,
         c: &Chunk,
         frac: f32,
-        now: f32,
+        now: f64,
         v: &Victim,
         trace: Option<ShotTrace>,
     ) -> bool {
@@ -694,9 +696,9 @@ impl FlameSystem {
     fn emit(
         &mut self,
         n: &Nozzle,
-        born: f32,
+        born: f64,
         speed_scale: f32,
-        now: f32,
+        now: f64,
         world: Option<&ChunkWorld>,
     ) {
         let size_rand = (self.rand() * 140.0).min(110.0);
@@ -716,7 +718,7 @@ impl FlameSystem {
             _ => (START_SPEED, LIFE_MS),
         };
         // Chunks due earlier in this frame start along their path.
-        let ahead = (now - born).max(0.0) / 1000.0 * speed;
+        let ahead = ((now - born) as f32).max(0.0) / 1000.0 * speed;
         self.chunks.push(Chunk {
             owner: n.owner,
             pos: n.pos + n.dir * ahead,
@@ -740,11 +742,11 @@ impl FlameSystem {
     /// Camera-facing sprites: `flamethrowerFire{2..44}` by the chunk's
     /// share of its life (0x300268e0), at a radius of half its size and no
     /// less than 6; smoke as `flameSmoke{1..6}`, fading out.
-    pub fn quads(&self, now: f32, cam_right: Vec3, cam_up: Vec3) -> Vec<FxQuad> {
+    pub fn quads(&self, now: f64, cam_right: Vec3, cam_up: Vec3) -> Vec<FxQuad> {
         self.chunks
             .iter()
             .map(|c| {
-                let frac = ((now - c.born) / c.life).clamp(0.0, 1.0);
+                let frac = ((now - c.born) as f32 / c.life).clamp(0.0, 1.0);
                 let (shader, a) = match c.smoke {
                     Some(n) => (format!("flameSmoke{n}"), 0.4 * (1.0 - frac)),
                     None => {
@@ -846,7 +848,7 @@ mod tests {
         }
     }
 
-    fn fire(owner: u32, pos: Vec3, size: f32, born: f32, life: f32) -> Chunk {
+    fn fire(owner: u32, pos: Vec3, size: f32, born: f64, life: f32) -> Chunk {
         Chunk {
             owner,
             pos,
@@ -881,7 +883,7 @@ mod tests {
     #[test]
     fn a_chunk_reaches_the_box_within_its_reach() {
         let mut f = FlameSystem::default();
-        let mut reaches = |owner: u32, pos: Vec3, size: f32, frac: f32, now: f32| {
+        let mut reaches = |owner: u32, pos: Vec3, size: f32, frac: f32, now: f64| {
             let c = fire(owner, pos, size, 0.0, 1000.0);
             f.reaches(&c, frac, now, &VICTIM, None)
         };
@@ -938,7 +940,10 @@ mod tests {
         assert_eq!(checks, 79);
         assert!(flagged > 0);
         assert!(sent.len() >= 2, "{sent:?}");
-        assert!(sent.windows(2).all(|w| w[1] - w[0] >= FDC_MS), "{sent:?}");
+        assert!(
+            sent.windows(2).all(|w| w[1] - w[0] >= f64::from(FDC_MS)),
+            "{sent:?}"
+        );
 
         // The flag holds between checks and drops at the next one.
         f.chunks.clear();
@@ -947,7 +952,11 @@ mod tests {
         while f.report(t, Some(VICTIM), false, None).in_flame {
             t += 16.0;
         }
-        assert!(t - now <= CHECK_MS + 16.0, "{held:?} {}", t - now);
+        assert!(
+            t - now <= f64::from(CHECK_MS) + 16.0,
+            "{held:?} {}",
+            t - now
+        );
 
         // Inside the flood window the flag rises but `fdc` waits.
         let mut f = FlameSystem::default();
@@ -1009,6 +1018,26 @@ mod tests {
         assert!(f.step(1032.0, 16.0, &[], Vec3::ZERO, None).is_empty());
         let stop = f.step(1100.0, 16.0, &[], Vec3::ZERO, None);
         assert!(matches!(stop[..], [FlameSound::Stop { owner: 3, .. }]));
+    }
+
+    /// The fx clock is f64: 22 h in, a held stream sheds the
+    /// chunks it sheds 1 s in, where f32 ms spaced them 8 ms apart at best.
+    #[test]
+    fn a_stream_sheds_alike_a_day_into_the_clock() {
+        let shed = |base: f64| {
+            let mut f = FlameSystem::default();
+            for k in 0..30 {
+                f.step(
+                    base + 16.0 * f64::from(k),
+                    16.0,
+                    &[nozzle(3)],
+                    Vec3::ZERO,
+                    None,
+                );
+            }
+            f.chunks.iter().filter(|c| c.smoke.is_none()).count()
+        };
+        assert_eq!(shed(80e6), shed(1000.0));
     }
 
     #[test]
@@ -1117,8 +1146,13 @@ mod tests {
             f.chunks.push(chunk);
             let t = move |_: Vec3, _: Vec3| hit;
             (0..200).any(|i| {
-                f.report(10_000.0 + 16.0 * i as f32, Some(VICTIM), false, Some(&t))
-                    .in_flame
+                f.report(
+                    10_000.0 + 16.0 * f64::from(i),
+                    Some(VICTIM),
+                    false,
+                    Some(&t),
+                )
+                .in_flame
             })
         };
         assert!(burns((1.0, 1023)));

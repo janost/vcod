@@ -358,7 +358,7 @@ fn rig(map: &str, addr: SocketAddr) -> anyhow::Result<Rig> {
 /// render's.
 fn step(
     rig: &mut Rig,
-    time: f32,
+    time: f64,
     dt: f32,
     render: bool,
     fx_ms: &mut f32,
@@ -496,7 +496,7 @@ fn play_soak(map: &str, addr: SocketAddr, shared: &Shared, opts: SoakOpts) -> an
         let now = Instant::now();
         let dt = now.duration_since(last).as_secs_f32();
         last = now;
-        let time = start.elapsed().as_secs_f32();
+        let time = start.elapsed().as_secs_f64();
         let graph = shared.graph.lock().unwrap().clone();
         let mut frame = SoakPair::default();
         let Rig {
@@ -512,7 +512,7 @@ fn play_soak(map: &str, addr: SocketAddr, shared: &Shared, opts: SoakOpts) -> an
             shell,
             start,
         };
-        me.act(&mut pilot, cam, time, graph.as_deref(), &mut frame);
+        me.act(&mut pilot, cam, time as f32, graph.as_deref(), &mut frame);
         let warm = Tally::warm(&rig.r);
         let render = now >= next_render;
         if render {
@@ -524,8 +524,8 @@ fn play_soak(map: &str, addr: SocketAddr, shared: &Shared, opts: SoakOpts) -> an
         Tally {
             parts: &parts,
             render_ms,
-            time,
-            level_at: me.level_at(&gametype, time),
+            time: time as f32,
+            level_at: me.level_at(&gametype, time as f32),
             errors: &rig.errors,
             audio: &rig.audio,
             warm: [warm, Tally::warm(&rig.r)],
@@ -613,7 +613,7 @@ fn cod2_live_level_effects_and_models_build_nothing_in_play() {
             let now = clk_now();
             let dt = now.duration_since(last).as_secs_f32();
             last = now;
-            let time = since(start).as_secs_f32();
+            let time = since(start).as_secs_f64();
             let spawned = rig.pilot(start).spawned();
             if spawned {
                 if warm.is_none() {
@@ -691,7 +691,7 @@ fn cod2_live_same_map_gamestate_builds_no_model_pipeline() {
                 let now = clk_now();
                 let dt = now.duration_since(last).as_secs_f32();
                 last = now;
-                let time = since(start).as_secs_f32();
+                let time = since(start).as_secs_f64();
                 if warm.is_none() && rig.pilot(start).spawned() {
                     warm = Some(rig.r.entity_pipelines());
                     console.send("map_rotate".into()).unwrap();
@@ -747,18 +747,18 @@ fn cod2_live_view_weapons_build_nothing_in_play() {
         let start = clk_now();
         let mut last = start;
         let mut fx_ms = 0.0;
-        let mut spawned_at: Option<f32> = None;
+        let mut spawned_at: Option<f64> = None;
         let mut drawn: Vec<String> = Vec::new();
         // the worst `view weapon` and `hud` parts past the first spawn
         let (mut worst_vw, mut worst_hud) = (0.0f32, 0.0f32);
         let mut rigs_at_spawn = 0;
         while since(start) < Duration::from_secs(120)
-            && spawned_at.is_none_or(|t| since(start).as_secs_f32() - t < 9.0)
+            && spawned_at.is_none_or(|t| since(start).as_secs_f64() - t < 9.0)
         {
             let now = clk_now();
             let dt = now.duration_since(last).as_secs_f32();
             last = now;
-            let time = since(start).as_secs_f32();
+            let time = since(start).as_secs_f64();
             if spawned_at.is_none() && rig.pilot(start).spawned() {
                 spawned_at = Some(time);
                 rigs_at_spawn = rig.sess.cod2().unwrap().view.rigs_loaded();
@@ -768,7 +768,7 @@ fn cod2_live_view_weapons_build_nothing_in_play() {
                 let t = time - at;
                 let mut pilot = rig.pilot(start);
                 for edge in [1.0, 6.0] {
-                    if t >= edge && t - dt < edge {
+                    if t >= edge && t - f64::from(dt) < edge {
                         pilot
                             .c
                             .apply(&Effect::Impulse(Action::NextWeapon), pilot.shell, start);
@@ -845,7 +845,7 @@ fn cod2_live_shots_flash_and_eject_on_their_guns() {
             let now = clk_now();
             let dt = now.duration_since(last).as_secs_f32();
             last = now;
-            let time = since(start).as_secs_f32();
+            let time = since(start).as_secs_f64();
             if rig.pilot(start).spawned() {
                 if !bots {
                     console.send("addbot 3".into()).unwrap();
