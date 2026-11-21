@@ -1,8 +1,10 @@
 //! CoD4 1.7's player methods the connect, the team and class menus and the
-//! spawn reach (docs/research/cod4-gsc.md 7, "The connect, the menus and the spawn").
+//! spawn reach (docs/research/cod4-gsc.md 7).
 //! Each command's text is the walk capture's (`play-1.7-walk.txt`) where
 //! the capture carries one.
 
+use super::args::{int, noop};
+use super::cod2::{is_talking, update_scores};
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
 use super::Builtin;
@@ -16,9 +18,12 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("closeingamemenu", close_in_game_menu),
     ("updatescores", update_scores),
     ("setteamscore", set_team_score),
-    ("logstring", nothing),
+    // Nothing a 1.7 server keeps: no log line on 1.7's dedicated build
+    // (INFERRED).
+    ("logstring", noop),
     ("addtestclient", add_test_client),
-    ("stoprumble", nothing),
+    // Rumble: client-side.
+    ("stoprumble", noop),
     ("setperk", set_perk),
     ("pingplayer", ping_player),
     ("unsetperk", unset_perk),
@@ -61,7 +66,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("stopshellshock", stop_shell_shock),
     // The scoreboard's order within a team; vcod's scoreboard sorts by
     // score itself.
-    ("setplayerteamrank", nothing),
+    ("setplayerteamrank", noop),
 ];
 
 /// `self disableWeapons()` / `enableWeapons()`: `ps.weapFlags` 0x80
@@ -125,7 +130,7 @@ fn set_pulse_fx(
     };
     let mut t = [0; 3];
     for (o, v) in t.iter_mut().zip([l, s, d]) {
-        *o = int_arg(Some(v), "setPulseFX takes times")?;
+        *o = int(Some(v), "setPulseFX takes times")?;
         if *o < 0 {
             return Err(ErrorKind::BadType("setPulseFX takes times of 0 or more"));
         }
@@ -444,14 +449,6 @@ fn get_weapons_list(
     Ok(Value::Array(out))
 }
 
-fn int_arg(v: Option<&Value>, what: &'static str) -> Result<i32, ErrorKind> {
-    match v {
-        Some(&Value::Int(i)) => Ok(i),
-        Some(&Value::Float(f)) => Ok(f as i32),
-        _ => Err(ErrorKind::BadType(what)),
-    }
-}
-
 /// `self setWeaponAmmoClip(name, count)`: the clip, clamped to 0 and the
 /// clip size.
 fn set_weapon_ammo_clip(
@@ -461,7 +458,7 @@ fn set_weapon_ammo_clip(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?.index();
-    let n = int_arg(a.get(1), "setWeaponAmmoClip takes a count")?;
+    let n = int(a.get(1), "setWeaponAmmoClip takes a count")?;
     if let Some(w) = weapon_arg(host, cx, a.first())? {
         with_loadout(host, slot, |l, t| {
             let d = &t.defs[w];
@@ -480,7 +477,7 @@ fn set_weapon_ammo_stock(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?.index();
-    let n = int_arg(a.get(1), "setWeaponAmmoStock takes a count")?;
+    let n = int(a.get(1), "setWeaponAmmoStock takes a count")?;
     if let Some(w) = weapon_arg(host, cx, a.first())? {
         with_loadout(host, slot, |l, t| {
             let d = &t.defs[w];
@@ -577,7 +574,7 @@ fn set_action_slot(
     a: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?.index();
-    let n = int_arg(a.first(), "setActionSlot takes a slot")?;
+    let n = int(a.first(), "setActionSlot takes a slot")?;
     if !(1..=4).contains(&n) {
         return Err(ErrorKind::Custom(format!(
             "Invalid slot ({n}) given, expecting 1 - 4\n"
@@ -853,24 +850,6 @@ fn has_perk(
     Ok(Value::Int(i32::from(on)))
 }
 
-/// `self isTalking()` (`PlayerCmd_IsTalking`, 0x80a96f8): a voice frame
-/// relayed within `g_voiceChatTalkingDuration` (500 ms) of `level.time`,
-/// a negative age not.
-fn is_talking(
-    host: &mut GameHost,
-    _: &mut Cx,
-    recv: Option<Target>,
-    _: &[Value],
-) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?.index();
-    let window = crate::game::builtins::cvar::atoi(host.cvars.get("g_voiceChatTalkingDuration"));
-    let now = host.level_time_ms;
-    let on = host.cod4().clients[slot]
-        .last_voice_time
-        .is_some_and(|t| (0..window).contains(&(now - t)));
-    Ok(Value::Int(i32::from(on)))
-}
-
 fn clear_perks(
     host: &mut GameHost,
     _: &mut Cx,
@@ -879,17 +858,6 @@ fn clear_perks(
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?.index();
     host.cod4_mut().clients[slot].perks = 0;
-    Ok(Value::Undefined)
-}
-
-/// A builtin whose 1.7 effect is nothing a server keeps: `logString` (no
-/// log line on 1.7's dedicated build, INFERRED), `stopRumble`.
-fn nothing(
-    _: &mut GameHost,
-    _: &mut Cx,
-    _: Option<Target>,
-    _: &[Value],
-) -> Result<Value, ErrorKind> {
     Ok(Value::Undefined)
 }
 
@@ -902,21 +870,6 @@ fn add_test_client(
     _: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    Ok(Value::Undefined)
-}
-
-/// `self updateScores()`: the team scores to the receiver, allies as `H`
-/// then axis as `G` (the capture's `H 0`, `G 0` on the connect).
-fn update_scores(
-    host: &mut GameHost,
-    _: &mut Cx,
-    recv: Option<Target>,
-    _: &[Value],
-) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
-    let [axis, allies] = host.team_scores;
-    host.client_commands.push(slot, format!("H {allies}"));
-    host.client_commands.push(slot, format!("G {axis}"));
     Ok(Value::Undefined)
 }
 

@@ -215,6 +215,7 @@ impl App {
                                     predictor,
                                     self.hud.as_mut(),
                                     &mut self.fx,
+                                    &mut self.flame,
                                 );
                                 if let Err(e) = cgame_init(
                                     view,

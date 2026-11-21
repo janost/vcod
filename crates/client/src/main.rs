@@ -41,6 +41,7 @@ mod edge_probe;
 mod entities;
 mod entity_light;
 mod entity_material;
+mod fatal;
 mod flame_probe;
 mod frame_clock;
 mod frame_digest;
@@ -142,7 +143,7 @@ fn version_tag() -> String {
 }
 
 #[derive(Parser)]
-#[command(about = "Call of Duty (2003) map viewer and client", version = env!("VCOD_VERSION"))]
+#[command(about = "Client and map viewer for Call of Duty 1.1 and 1.5, United Offensive, Call of Duty 2 and Call of Duty 4", version = env!("VCOD_VERSION"))]
 struct Args {
     /// Map name, e.g. mp_pavlov
     map: Option<String>,
@@ -175,6 +176,11 @@ struct Args {
     /// Spawn as a soldier and walk (first person) instead of flying
     #[arg(long)]
     walk: bool,
+    /// Fly mode (`vcod <map>`): start at "x y z yaw [pitch]", the order and
+    /// degrees the F3 overlay's camera line prints, instead of the first spawn
+    #[arg(long, value_name = "X Y Z YAW [PITCH]", allow_hyphen_values = true,
+          value_parser = FlyCamera::parse_view)]
+    pos: Option<FlyCamera>,
     /// Start with the debug overlay visible (F3 toggles it at runtime)
     #[arg(long)]
     debug_overlay: bool,
@@ -183,7 +189,9 @@ struct Args {
     /// settings.
     #[arg(long)]
     rtx_on: bool,
-    /// Headless: connect to a CoD server, dump the gamestate, then exit
+    /// Headless: connect to a CoD server, dump the gamestate, then exit.
+    /// The fixture modes write under the source checkout the binary was
+    /// built from.
     #[arg(long)]
     net_probe: Option<String>,
     /// Headless, CoD2: play this `.dm_1` demo through the client's demo
@@ -1049,10 +1057,11 @@ enum Mode {
     /// no menu is up, as retail's is when disconnected. A CoD1 install
     /// reopens main each frame none is up (`App::cod1_front_end`).
     Idle,
-    /// `vcod <map>`: a free camera over a CoD1 or CoD2 map, no server.
+    /// `vcod <map>`: a free camera over a CoD1, CoD2 or CoD4 map, no server.
     Fly(FlyCamera),
-    /// A CoD2 session, online or a demo (`App::session`'s `Cod2Client`):
-    /// the camera follows its frames, or flies until the first one.
+    /// A CoD2 or CoD4 session, online or a demo (`App::session`'s
+    /// `Cod2Client` or `Cod4Client`): the camera follows its frames, or
+    /// flies until the first one.
     Cod2(FlyCamera),
     /// Position follows the interpolated playerstate. The client joins
     /// through the stock menus and plays or spectates as the snapshot says.
@@ -1447,6 +1456,10 @@ fn hud_lines(
 }
 
 fn main() -> Result<()> {
+    run().inspect_err(|e| fatal::record(TITLE, &format!("Error: {e:?}")))
+}
+
+fn run() -> Result<()> {
     let started = Instant::now();
     console::log::init();
     frame_digest::init();
@@ -1457,6 +1470,7 @@ fn main() -> Result<()> {
     std::panic::set_hook(Box::new(move |info| {
         eprintln!("{TITLE} panicked");
         default_panic(info);
+        fatal::record(TITLE, &info.to_string());
     }));
     quit::install();
     use vcod_common::game::Game;
@@ -1468,7 +1482,7 @@ fn main() -> Result<()> {
     net::cdkey::set_install(&args.game_dir);
     // Where a CoD4 join reads and writes its profile's stats.
     play::cod4_profile::set_context(&args.game_dir, "");
-    // CoD2 runs in fly mode only: a map with no walk, server, probe or list.
+    // `vcod <map>` on CoD2 flies over it: no walk, server, probe or list.
     let cod2_fly = game == Game::Cod2
         && args.map.is_some()
         && !args.walk
@@ -2002,9 +2016,12 @@ fn main() -> Result<()> {
                 Some(c) => Some(c.spawn),
                 None => bsp::find_spawn(&bsp.entities),
             };
-            let cam = match spawn {
-                Some((origin, yaw)) => FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw),
-                None => {
+            let cam = match (args.pos.clone(), spawn) {
+                (Some(cam), _) => cam,
+                (None, Some((origin, yaw))) => {
+                    FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw)
+                }
+                (None, None) => {
                     let (min, max) = mesh::map_bounds(&bsp);
                     let center = (Vec3::from(min) + Vec3::from(max)) * 0.5;
                     log::warn!("no player spawn found, starting at the center of the map");
@@ -2204,7 +2221,6 @@ fn gamma_cvar(shell: &mut console::shell::Shell) -> f32 {
     }
 }
 
-/// What the next renderer loads and samples images with: the latched
 /// The cvars the samplers follow, as one key: `r_textureMode` and CoD4's
 /// mip mode and anisotropy pair.
 fn texture_mode_key(shell: &console::shell::Shell) -> String {
@@ -2753,7 +2769,7 @@ fn start_loading(
                 .for_systeminfo(systeminfo),
         });
     }
-    // Same candidate order as the old blocking downloader; `MapLoader` caps it.
+    // The pak candidates in search order; `MapLoader` caps them.
     let exists = |rel: &std::path::Path| game_dir.join(rel).exists();
     // The base dir's own base under it (`main/` under `uo/`), then the rest.
     let dir_paths: Vec<std::path::PathBuf> = dirs
@@ -2978,6 +2994,7 @@ fn reread_live_map(
 /// starts over as `CL_InitCGame` (CoDMP.exe 0x4049c0) loads a fresh cgame
 /// (docs/research/cod11-front-end.md section 17, "The cgame restart").
 /// False, touching nothing, before the game is live.
+#[expect(clippy::too_many_arguments)]
 fn restart_live_cgame(
     phase: &mut Phase,
     view: &mut play::view::OnlineView,
@@ -2985,6 +3002,7 @@ fn restart_live_cgame(
     predictor: &mut play::predict::Predictor,
     hud: Option<&mut hud::Hud>,
     fx: &mut fx::sim::FxSystem,
+    flame: &mut fx::flame::FlameSystem,
     fs: &Pk3Fs,
     configstrings: &[String],
 ) -> bool {
@@ -2996,12 +3014,13 @@ fn restart_live_cgame(
     };
     let weapons = live_weapons(fs, configstrings.get(7).map_or("", String::as_str));
     *phase = Phase::Live(Box::new(live.restart_cgame(weapons)));
-    fresh_cgame(view, input, predictor, hud, fx);
+    fresh_cgame(view, input, predictor, hud, fx, flame);
     true
 }
 
 /// What a freshly loaded cgame starts without, past the live phase: the
-/// view, the HUD with its chat ring, the effects and the prediction.
+/// view, the HUD with its chat ring, the effects, UO's flame pool and the
+/// prediction.
 /// `CL_InitCGame` (CoDMP.exe 0x4049c0) runs on a `vid_restart` and on every
 /// gamestate's `CL_DownloadsComplete` (0x40ffb0), which frees the old
 /// cgame first (docs/research/cod11-front-end.md section 17).
@@ -3011,6 +3030,7 @@ fn fresh_cgame(
     predictor: &mut play::predict::Predictor,
     hud: Option<&mut hud::Hud>,
     fx: &mut fx::sim::FxSystem,
+    flame: &mut fx::flame::FlameSystem,
 ) {
     view.restart_cgame();
     // The fresh cgame's first snapshot runs a load's resets.
@@ -3020,6 +3040,7 @@ fn fresh_cgame(
         hud.restart_cgame();
     }
     fx.restart_cgame();
+    *flame = fx::flame::FlameSystem::default();
 }
 
 /// What `CG_Init` (cgame 0x30022f90) does with the gamestate besides the
@@ -3323,7 +3344,7 @@ struct App {
     texture_mode_seen: String,
     hud: Option<hud::Hud>,
     hud_ms: f32,
-    /// Menu labels; empty outside `--connect`.
+    /// Menu labels and localized strings, loaded off the search path.
     localized: vcod_common::localize::Localized,
     audio: audio::AudioSystem,
     quick_chat: quick_chat::QuickChat,
@@ -3372,7 +3393,8 @@ struct App {
     /// Nested `exec`s running.
     exec_depth: u8,
     error: Option<anyhow::Error>,
-    /// The game's session: CoD2's client, or CoD1's (whose state is
+    /// The game's session: CoD2's or CoD4's client or CoD4's main menu,
+    /// or CoD1's (whose state is
     /// `mode`, `world` and `hud`).
     session: session::Session,
     /// The wheel's turn not yet a whole notch.
@@ -4328,9 +4350,10 @@ impl App {
         Ok(r)
     }
 
-    /// `vid_restart` with a changed `vc_hdr`: every world pipeline targets
-    /// the scene format, so the renderer is rebuilt and the map reloaded
-    /// into it. The entity scene's model handles index the old renderer, so
+    /// `vid_restart` with a changed `vc_hdr`, MSAA or image setting (or
+    /// CoD4's `r_applyPicmip`): every world pipeline targets the scene
+    /// format and samples the images, so the renderer is rebuilt and the
+    /// map reloaded into it. The entity scene's model handles index the old renderer, so
     /// a live game starts a fresh one, as a gamestate does.
     fn rebuild_renderer(&mut self, event_loop: &ActiveEventLoop) {
         let Some(window) = self.window.clone() else {
@@ -4934,6 +4957,7 @@ impl App {
             predictor,
             self.hud.as_mut(),
             &mut self.fx,
+            &mut self.flame,
             &self.fs,
             net.configstrings(),
         ) {
@@ -5143,6 +5167,7 @@ impl App {
         }
         self.world = None;
         self.fx.clear();
+        self.flame = fx::flame::FlameSystem::default();
         self.audio.on_gamestate("menu");
         if let Some(hud) = &mut self.hud {
             leave_server_hud(hud);
@@ -5902,6 +5927,7 @@ mod tests {
                 &mut predictor,
                 Some(hud),
                 &mut fx,
+                &mut fx::flame::FlameSystem::default(),
                 &fs,
                 &cs,
             )
@@ -5944,14 +5970,26 @@ mod tests {
         hud.on_gamestate();
         assert!(!hud.chat.is_empty(), "the gamestate parse keeps the ring");
         hud.chat.push("during the load", 1000);
+        // A flamethrower still firing as the old map ended.
+        let mut flame = fx::flame::FlameSystem::default();
+        let nozzle = fx::flame::Nozzle {
+            owner: 3,
+            pos: Vec3::new(0.0, 0.0, 60.0),
+            dir: Vec3::X,
+            own_view: false,
+        };
+        flame.step(100.0, 16.0, &[nozzle], Vec3::ZERO, None);
+        assert!(!flame.is_empty());
         fresh_cgame(
             &mut play::view::OnlineView::default(),
             &mut play::input::PlayInput::default(),
             &mut play::predict::Predictor::default(),
             Some(&mut hud),
             &mut fx::sim::FxSystem::new(),
+            &mut flame,
         );
         assert!(hud.chat.is_empty());
+        assert!(flame.is_empty(), "the new cgame starts its flame pool over");
     }
 
     /// A Mods pick in a game reads the map again off the mod's paks, as

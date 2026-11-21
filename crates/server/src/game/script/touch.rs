@@ -167,7 +167,7 @@ impl ScriptRuntime {
             self.vm.with_cx(|cx| {
                 // `ps.origin`, which the cmd's touch pass left in the
                 // entity's `origin`.
-                let from = crate::game::item::origin_of(host, cx, client);
+                let from = host.vec_field(cx, client, "origin").to_array();
                 crate::game::vehicle::seat::unlink_player(
                     host,
                     cx,

@@ -11,7 +11,7 @@ commands 1.7 registers (their strings in `cod4_lnxded`) against
 the code 2026-10-30, edited as items close since. Open items lead; closed
 ones are kept at the end for the causes they name.
 
-## Open
+## 1. Open
 
 By how much a player notices.
 
@@ -36,7 +36,7 @@ By how much a player notices.
   key's weapon swap (cod4-combat.md 12). Both want a fresh capture beside
   the other pairs of `cod4::capture_ab`.
 
-## Not gaps
+## 2. Not gaps
 
 - The authorize round trip, out on purpose: with its authorize
   server silent, 1.7 answers no off-LAN challenge for its first 20
@@ -55,7 +55,7 @@ By how much a player notices.
   too. VERIFIED (cod4-gsc.md 3.2). Each client flies it off the
   launch's contact and force (cod4-gsc.md 3.6).
 
-## The retail run
+## 3. The retail run
 
 `cod4_lnxded` 1.7 in `unshare -rnm` (cod4-handshake.md 7), stock `war`
 on mp_crash, `+set g_log games_mp.log +set g_logSync 1 +set
@@ -65,7 +65,7 @@ g_inactivity 30 +set sv_pure 0 +set rcon_password ...`. Two
 and `bravo` (a spectator); the console commands went over rcon, then
 `kick bravo`, `killserver` and queries.
 
-## games_mp.log
+## 4. games_mp.log
 
 - `G_LogPrintf` (0x80b43c4) does nothing without the open file
   (0x836f6d8); else it formats the text and writes `%3i:%i%i %s`
@@ -114,7 +114,7 @@ and `bravo` (a spectator); the console commands went over rcon, then
   packet and command; `vcod-server` fills `fs_homepath` with the game
   directory, and a server with none (a test's) writes no file.
 
-## g_inactivity
+## 5. g_inactivity
 
 - `g_inactivity` is an int, 0..INT_MAX, default 0 (0x80b4a3c).
   VERIFIED. 1.7 has no `g_inactivitySpectator` (no such string in
@@ -140,7 +140,7 @@ and `bravo` (a spectator); the console commands went over rcon, then
 - vcod (`Cod4Level::inactivity_timer`) runs the timer for the network
   clients' cmds only, so its bots, like retail's, are never timed.
 
-## Closed
+## 6. Closed
 
 - The helicopter's flight is 1.7's `VEH_UpdateMoveToGoal` (0x809e38a)
   with its float model: what the x87 keeps on its stack and what it
@@ -148,11 +148,11 @@ and `bravo` (a spectator); the console commands went over rcon, then
   which alone the link snaps. Its yaw takes `setGoalYaw`'s and
   `setLookAtEnt`'s arms as 1.7 does. Every think of three gdb runs
   replays word for word, and `hardpoint_ab`'s four captures match with no
-  tolerance (cod4-gsc.md 3.2, "The flight's float model", "The yaw
-  capture").
+  tolerance (cod4-gsc.md 3.2.8 and
+  3.2.9).
 - Every CoD4 link snaps `r.currentAngles` with 1.7's flooring snap
   (`SV_LinkEntity` 0x817e3f0): movers, script models and the rest of the
-  host's links (cod4-gsc.md 3.2, "The link's snap").
+  host's links (cod4-gsc.md 3.2.6).
 - A -100 angle field under half a unit, or -0, goes out with its zero bit
   set and a short 0, which the client reads as the smallest float above
   zero, as 1.7's writer sends it (cod4-gsc.md 3.2, "The flight's float
@@ -171,21 +171,21 @@ and `bravo` (a spectator); the console commands went over rcon, then
   the posed `tag_barrel`, in the frame of bone 0's angles, the step and
   the spans as 1.7 rounds them, and `turret_rotate_stopped`,
   `turret_no_vis` and `turret_on_vistarget`. A retail capture of an idle
-  helicopter gates both (cod4-gsc.md 3.2, "The no-goal think", "The
-  turret", "The idle capture").
+  helicopter gates both (cod4-gsc.md 3.2.3, 3.2.4
+  and 3.2.7).
 - The helicopter's think runs 1.7's move trace (`script_vehicle_collision`
   with the normal on a world contact, the DObj radius' box) and its touch
   (a sticky missile resting on it rides along); its collision and tags
   are posed by the controller (`tag_turret`, `tag_barrel`), and a posed
   surface's contact keeps its bind pose normal. The collision capture
-  matches retail line for line (cod4-gsc.md 3.2, "The collision capture").
+  matches retail line for line (cod4-gsc.md 3.2.2).
 - `setStat` sends a changed stat as 1.7's reliable `N <index> <value>`
   (`SV_SetClientStat`), with `GScr_SetStat`'s index and byte checks;
   `getStat` and `setStat` refuse as 1.7's do, receiver and
   `developer_script` included (cod4-gsc.md, "The stats, the loadout, the
   perks"). A `fast_restart` keeps what the scripts wrote; a map change
   takes the client's block again. The client keeps the profile's stats in
-  a plain file of its own (cod4-netfields.md, "The stats file").
+  a plain file of its own (cod4-netfields.md 10.2).
 - `status` and `getstatus` read the script's `score`; `status` has the
   separator line, the `^7` after the name, a right-aligned GUID, pings
   past 999, and `lastmsg` as `svs.time` less `lastPacketTime`
@@ -198,6 +198,8 @@ and `bravo` (a spectator); the console commands went over rcon, then
 - `games_mp.log`: `g_log`, `g_logSync`, `logPrint`, the engine's own
   lines and `getGuid` ("games_mp.log" below).
 - `g_inactivity` warns and drops ("g_inactivity" below).
+- `sv_floodprotect`: 1.7's count of game commands per 800 ms
+  (cod4-handshake.md 16).
 - Rounds, throws and rockets leave from the eye with its walk bob and
   lean, along the angles the last cmd's aim block left: sway, movement
   tilt, idle drift, gun spring, and `P_DamageFeedback`'s damage kick, in

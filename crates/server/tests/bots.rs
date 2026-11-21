@@ -662,7 +662,7 @@ fn a_bot_backing_onto_a_climber_climbs_back_onto_the_crows_nest() {
         let mut cfg = cfg(2, false, "dm");
         cfg.map = "mp_ship".into();
         let mut sv = vcod_server::Server::new(cfg, now);
-        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&*fs)));
         sv.load_scripts(fs.clone()).expect("load the scripts");
         let slots = (0..600)
             .find_map(|_| {
@@ -736,7 +736,7 @@ fn a_bot_climbs_over_mp_ships_hold_ladder_top() {
         let mut cfg = cfg(1, false, "dm");
         cfg.map = "mp_ship".into();
         let mut sv = vcod_server::Server::new(cfg, now);
-        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&*fs)));
         sv.load_scripts(fs.clone()).expect("load the scripts");
         let slot = (0..600)
             .find_map(|_| {
@@ -839,7 +839,7 @@ fn a_bot_gets_down_off_mp_depots_roof_onto_the_ledges() {
             let mut cfg = cfg(1, false, "dm");
             cfg.map = "mp_depot".into();
             let mut sv = vcod_server::Server::new(cfg, now);
-            sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+            sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&*fs)));
             sv.load_scripts(fs.clone()).expect("load scripts");
             let slot = (0..900)
                 .find_map(|_| {

@@ -456,7 +456,8 @@ INFERRED. No `probe_*.gsc` under `crates/cod2/tests/fixtures/` but
 `probe_antilag.gsc` (2.3.2) calls `setarchive`. VERIFIED.
 
 vcod: `Cod2Level::rewound_origin` runs `cod2_archive::position_at_time`
-over the archive's `client_info`
+over the archive's `client_origin`, `client_info`'s origin read off the
+record in place, since the time shift moves no origin word
 (`the_rewind_reads_the_archive_and_without_it_the_live_origin`), and
 `bullet_fire` moves the bodies there for the shot (2.3.2).
 

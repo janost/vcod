@@ -3,7 +3,7 @@
 //! (docs/research/cod11-server-handshake.md, "Rate" and "Pings";
 //! docs/research/cod2-protocol.md 17).
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use vcod_common::text::atoi;
 
@@ -40,6 +40,47 @@ impl Lan {
             }
         }
     }
+}
+
+/// vcod's cap on the client slots one public address holds, connected or
+/// on its way in; 0 turns it off. Retail has none (docs/protocol-1.1.md,
+/// "What vcod's server does that retail does not").
+pub const PER_IP_CVAR: &str = "vc_maxClientsPerIP";
+/// Its default: above what one household behind NAT runs, below a flood.
+pub const PER_IP_DEFAULT: &str = "4";
+
+/// The refusal past [`PER_IP_CVAR`].
+pub const PER_IP_REFUSAL: &str = "error\n\u{15}Too many clients from your address";
+
+/// Whether [`PER_IP_CVAR`] counts `ip`: loopback, private (RFC 1918) and
+/// link-local addresses are exempt, so a LAN party is never capped.
+pub fn per_ip_capped(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => !(v4.is_loopback() || v4.is_private() || v4.is_link_local()),
+        IpAddr::V6(v6) => !(v6.is_loopback() || v6.is_unicast_link_local()),
+    }
+}
+
+/// Whether `from` already holds `cap` of the human slots at `held` and is
+/// not one of them (`exact` takes the port into account: a `getchallenge`
+/// from a held socket is that client reconnecting).
+pub fn per_ip_full(
+    cap: i32,
+    from: SocketAddr,
+    exact: bool,
+    held: impl IntoIterator<Item = SocketAddr>,
+) -> bool {
+    if cap <= 0 || !per_ip_capped(from.ip()) {
+        return false;
+    }
+    let mut same_ip = 0;
+    for a in held {
+        if exact && a == from {
+            return false;
+        }
+        same_ip += usize::from(a.ip() == from.ip());
+    }
+    same_ip >= cap as usize
 }
 
 /// What `SV_UserinfoChanged` (cod_lnxded 0x8086ab4, cod2_lnxded
@@ -175,6 +216,41 @@ mod tests {
 
     fn cod2_rates(userinfo: &str, lan: bool, dedicated: i32) -> Rates {
         Rates::of(userinfo, lan, dedicated)
+    }
+
+    /// Four slots from one public address fill its share; a held socket
+    /// still gets through, LAN addresses and a cap of 0 are never full.
+    #[test]
+    fn per_ip_full_counts_one_public_address() {
+        let at = |ip: [u8; 4], port| SocketAddr::from((ip, port));
+        let wan = [203, 0, 113, 5];
+        let held: Vec<_> = (0..4).map(|p| at(wan, 28960 + p)).collect();
+        assert!(!per_ip_full(
+            4,
+            at(wan, 1),
+            false,
+            held[..3].iter().copied()
+        ));
+        assert!(per_ip_full(4, at(wan, 1), false, held.iter().copied()));
+        assert!(per_ip_full(4, at(wan, 28960), false, held.iter().copied()));
+        assert!(!per_ip_full(4, at(wan, 28960), true, held.iter().copied()));
+        assert!(!per_ip_full(
+            4,
+            at([203, 0, 113, 6], 1),
+            false,
+            held.iter().copied()
+        ));
+        assert!(!per_ip_full(0, at(wan, 1), false, held.iter().copied()));
+        for lan in [
+            [127, 0, 0, 1],
+            [10, 1, 2, 3],
+            [172, 16, 0, 1],
+            [192, 168, 1, 2],
+            [169, 254, 0, 9],
+        ] {
+            let held = (0..8).map(|p| at(lan, p));
+            assert!(!per_ip_full(4, at(lan, 99), false, held), "{lan:?}");
+        }
     }
 
     #[test]

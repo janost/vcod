@@ -26,7 +26,7 @@ impl ScriptRuntime {
             let host = &mut self.host;
             let angles = self
                 .vm
-                .with_cx(|cx| crate::game::item::angles_of(host, cx, turret));
+                .with_cx(|cx| host.vec_field(cx, turret, "angles").to_array());
             let Some(rec) = self.host.turrets.get_mut(&turret) else {
                 continue;
             };
@@ -75,8 +75,8 @@ impl ScriptRuntime {
         let host = &mut self.host;
         let (origin, angles) = self.vm.with_cx(|cx| {
             (
-                crate::game::item::origin_of(host, cx, id),
-                crate::game::item::angles_of(host, cx, id),
+                host.vec_field(cx, id, "origin").to_array(),
+                host.vec_field(cx, id, "angles").to_array(),
             )
         });
         let rec = self.host.turrets.get_mut(&id)?;

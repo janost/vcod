@@ -226,7 +226,7 @@ impl Cod4Hud {
         let secs = ((end - now) / 1000).max(0);
         let first = format!("{}({secs}):{what}", loc("CGAME_VOTE"));
         let (yes, no) = (count(CS_VOTE_YES), count(CS_VOTE_NO));
-        let second = if snap.ps.get("eFlags").unwrap_or(0) & EF_VOTED != 0 {
+        let second = if snap.ps.word(vcod_cod4::ps_word!("eFlags")) & EF_VOTED != 0 {
             format!("{}:{yes}, {}:{no}", loc("CGAME_YES"), loc("CGAME_NO"))
         } else {
             let key = |cmd: &str| match shell.key_text(cmd, &l.localized) {

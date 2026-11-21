@@ -395,6 +395,9 @@ impl Cod4Server {
     /// tying the hex to a key, an off-LAN address is banned beside it
     /// ([`address_guid`]).
     fn get_challenge(&mut self, from: SocketAddr, guid: &str) {
+        if self.refuse_per_ip(from, true) {
+            return;
+        }
         let svs = self.core.sv_time_ms;
         // Two draws off the process's `rand()` (0x816f394), the level's
         // stream once one is up (cod4-combat.md 10.9).
@@ -620,8 +623,8 @@ impl Cod4Server {
                 self.core.quit = true;
             }
             "set" | "seta" | "sets" | "setu" => {
-                if args.len() >= 3 {
-                    if !self.console_set(arg(1), &args[2..].join(" "), out) {
+                if let Some((name, value)) = crate::cvars::set_args(&args) {
+                    if !self.console_set(name, &value, out) {
                         return;
                     }
                     // `seta` archives the dvar, a registered one too
@@ -1260,5 +1263,38 @@ mod query_tests {
         assert!(reply[0].starts_with("connectResponse"), "{reply:?}");
         let client = sv.core.clients.iter().flatten().next().unwrap();
         assert_eq!(client.extra.guid, hex[..32]);
+    }
+
+    /// vcod's `vc_maxClientsPerIP` (4): one public address's fifth
+    /// `getchallenge` and fifth `connect` are refused, its held sockets
+    /// still get a challenge, another address still gets in.
+    #[test]
+    fn cod4_one_public_address_takes_at_most_four_slots() {
+        let mut sv = bare();
+        let now = Instant::now();
+        let refused = ["error\n\u{15}Too many clients from your address"];
+        let wan = |port: u16| SocketAddr::from(([198, 51, 100, 2], port));
+        let challenge = |sv: &mut Cod4Server, from| {
+            let reply = ask(sv, from, "getchallenge 0 \"ab\"", now);
+            reply[0]
+                .strip_prefix("challengeResponse ")
+                .unwrap()
+                .to_string()
+        };
+        let connect = |sv: &mut Cod4Server, from: SocketAddr, c: &str| {
+            let ui = format!("\\protocol\\6\\challenge\\{c}\\qport\\{}", from.port());
+            ask(sv, from, &format!("connect \"{ui}\""), now)
+        };
+        let challenges: Vec<String> = (0..5).map(|p| challenge(&mut sv, wan(p))).collect();
+        for (p, c) in challenges.iter().enumerate().take(4) {
+            let reply = connect(&mut sv, wan(p as u16), c);
+            assert!(reply[0].starts_with("connectResponse"), "{reply:?}");
+        }
+        assert_eq!(connect(&mut sv, wan(4), &challenges[4]), refused);
+        assert_eq!(ask(&mut sv, wan(9), "getchallenge 0 \"ab\"", now), refused);
+        challenge(&mut sv, wan(0));
+        let other = SocketAddr::from(([198, 51, 100, 3], 1));
+        let c = challenge(&mut sv, other);
+        assert!(connect(&mut sv, other, &c)[0].starts_with("connectResponse"));
     }
 }

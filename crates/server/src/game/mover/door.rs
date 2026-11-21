@@ -121,23 +121,6 @@ impl Door {
     }
 }
 
-fn float_field(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> f32 {
-    let atom = cx.intern_folded(name);
-    match host.get_field(cx, id, atom) {
-        Value::Float(f) => f,
-        Value::Int(i) => i as f32,
-        _ => 0.0,
-    }
-}
-
-fn vec_field(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> Vec3 {
-    let atom = cx.intern_folded(name);
-    match host.get_field(cx, id, atom) {
-        Value::Vector(v) => Vec3::from(v),
-        _ => Vec3::ZERO,
-    }
-}
-
 fn set_field(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str, v: Value) {
     let atom = cx.intern_folded(name);
     let _ = host.write_field(cx, id, atom, v);
@@ -220,7 +203,7 @@ fn door_sounds(host: &mut GameHost) -> [i32; 12] {
 /// `(0, -2, 0)` down, anything else `AngleVectors`' forward; the angles are
 /// cleared.
 fn set_movedir(host: &mut GameHost, cx: &mut Cx, id: EntId) -> Vec3 {
-    let a = vec_field(host, cx, id, "angles");
+    let a = host.vec_field(cx, id, "angles");
     let dir = if a == Vec3::new(0.0, -1.0, 0.0) {
         Vec3::Z
     } else if a == Vec3::new(0.0, -2.0, 0.0) {
@@ -285,7 +268,7 @@ pub fn spawn(
     // reaches it through the field pass too.
     let spawnflags = match vcod_common::bsp::field_value(keys, "spawnflags") {
         Some(v) => atoi(v),
-        None => float_field(host, cx, id, "spawnflags") as i32,
+        None => host.float_field(cx, id, "spawnflags") as i32,
     };
     let mut d = Door::blank(class, spawnflags);
     let stored = host.movers.stored;
@@ -294,11 +277,11 @@ pub fn spawn(
     match class {
         Class::Slide => {
             d.sounds = door_sounds(host);
-            let mut speed = float_field(host, cx, id, "speed");
+            let mut speed = host.float_field(cx, id, "speed");
             if speed == 0.0 {
                 speed = 400.0;
             }
-            let mut wait = float_field(host, cx, id, "wait");
+            let mut wait = host.float_field(cx, id, "wait");
             if wait == 0.0 {
                 wait = 2.0;
             }
@@ -308,13 +291,13 @@ pub fn spawn(
             let lip = atof(key("lip").unwrap_or("8"));
             d.dmg = atoi(key("dmg").unwrap_or("2"));
             set_field(host, cx, id, "dmg", Value::Int(d.dmg));
-            let origin = vec_field(host, cx, id, "origin");
+            let origin = host.vec_field(cx, id, "origin");
             d.pos1 = origin;
             link_brush(host, cx, id);
             // The spawn left the `angles` key in `apos.trBase` too, which
             // `G_SetMovedir` does not clear: the first `G_MoverTeam` turns
             // the door by it (movers doc 26, "The angles key").
-            apos.base = vec_field(host, cx, id, "angles");
+            apos.base = host.vec_field(cx, id, "angles");
             let dir = set_movedir(host, cx, id);
             let (mins, maxs) = brush_box(host, id);
             let size = maxs - mins;
@@ -323,7 +306,7 @@ pub fn spawn(
                 + f64::from(dir.z.abs()) * f64::from(size.z)
                 - f64::from(lip)) as f32;
             d.pos2 = (origin.as_dvec3() + dir.as_dvec3() * f64::from(dist)).as_vec3();
-            let mut closespeed = float_field(host, cx, id, "closespeed");
+            let mut closespeed = host.float_field(cx, id, "closespeed");
             if spawnflags & 1 != 0 {
                 let old2 = d.pos2;
                 d.pos2 = origin;
@@ -351,11 +334,11 @@ pub fn spawn(
             d.spawnflags = flags;
             set_field(host, cx, id, "spawnflags", Value::Int(flags));
             d.sounds = door_sounds(host);
-            let mut speed = float_field(host, cx, id, "speed");
+            let mut speed = host.float_field(cx, id, "speed");
             if speed == 0.0 {
                 speed = 1000.0;
             }
-            let mut angle = float_field(host, cx, id, "degrees");
+            let mut angle = host.float_field(cx, id, "degrees");
             if angle == 0.0 {
                 angle = 90.0;
             }
@@ -376,7 +359,7 @@ pub fn spawn(
                 Vec3::Y
             };
             set_field(host, cx, id, "rotate", Value::Vector(d.rotate.to_array()));
-            let mut wait = float_field(host, cx, id, "wait");
+            let mut wait = host.float_field(cx, id, "wait");
             if wait == 0.0 {
                 wait = 2.0;
             }
@@ -386,7 +369,7 @@ pub fn spawn(
             d.state = POS1_ROTATE;
             super::set_constant_light(host, id, Some(keys));
             link_brush(host, cx, id);
-            pos.base = vec_field(host, cx, id, "origin");
+            pos.base = host.vec_field(cx, id, "origin");
             if speed == 0.0 {
                 speed = 100.0;
             }
@@ -395,10 +378,10 @@ pub fn spawn(
             apos.tr_duration = ms;
             d.duration = ms;
             d.duration_back = ms;
-            apos.base = vec_field(host, cx, id, "angles");
+            apos.base = host.vec_field(cx, id, "angles");
         }
         Class::Rotating => {
-            let mut speed = float_field(host, cx, id, "speed");
+            let mut speed = host.float_field(cx, id, "speed");
             if speed == 0.0 {
                 speed = 100.0;
             }
@@ -412,7 +395,7 @@ pub fn spawn(
             }
             link_brush(host, cx, id);
             init_mover(host, cx, id, &mut d, &mut pos, keys);
-            apos.base = vec_field(host, cx, id, "angles");
+            apos.base = host.vec_field(cx, id, "angles");
             if spawnflags & 2 != 0 {
                 if let Some(e) = host.ents.get_mut(id) {
                     e.team.slave = true;
@@ -492,7 +475,7 @@ fn init_mover(
     d.state = POS1;
     host.link_entity(cx, id);
     pos.base = d.pos1;
-    let mut speed = float_field(host, cx, id, "speed");
+    let mut speed = host.float_field(cx, id, "speed");
     if speed == 0.0 {
         speed = 100.0;
         set_field(host, cx, id, "speed", Value::Float(speed));
@@ -501,7 +484,7 @@ fn init_mover(
     pos.tr_duration = leg_ms(dist, speed);
     d.duration = pos.tr_duration;
     d.duration_back = pos.tr_duration;
-    let closespeed = float_field(host, cx, id, "closespeed");
+    let closespeed = host.float_field(cx, id, "closespeed");
     if closespeed != 0.0 {
         d.closespeed = true;
         d.duration_back = leg_ms(dist, closespeed);
@@ -514,7 +497,7 @@ fn init_mover(
 /// to a float (1.5b 0x56dea).
 pub fn set_state(host: &mut GameHost, cx: &mut Cx, id: EntId, state: u8, t: i32) {
     let level = host.level_time_ms;
-    let angles = vec_field(host, cx, id, "angles");
+    let angles = host.vec_field(cx, id, "angles");
     let Some(m) = host.movers.rows.get_mut(&id) else {
         return;
     };
@@ -714,8 +697,8 @@ fn player_in_pvs(host: &mut GameHost, cx: &mut Cx, id: EntId) -> bool {
     }) else {
         return false;
     };
-    let from = vec_field(host, cx, player, "origin").to_array();
-    let to = vec_field(host, cx, id, "origin").to_array();
+    let from = host.vec_field(cx, player, "origin").to_array();
+    let to = host.vec_field(cx, id, "origin").to_array();
     host.world.as_ref().is_none_or(|w| in_pvs(&w.vis, from, to))
 }
 
@@ -767,7 +750,7 @@ fn auto_trigger(host: &mut GameHost, cx: &mut Cx, id: EntId) {
         return;
     }
     let angle = d.angle;
-    let mut a = vec_field(host, cx, id, "angles");
+    let mut a = host.vec_field(cx, id, "angles");
     a.y = (f64::from(a.y) + f64::from(angle)) as f32;
     set_field(host, cx, id, "angles", Value::Vector(a.to_array()));
     if let Some(d) = door_mut(host, id) {
@@ -900,7 +883,7 @@ fn opens_into(host: &mut GameHost, cx: &mut Cx, id: EntId, activator: Option<Ent
         return false;
     };
     let pos = (Vec3::from(link.absmin) + Vec3::from(link.absmax)) * 0.5;
-    let origin = vec_field(host, cx, id, "origin");
+    let origin = host.vec_field(cx, id, "origin");
     let mut a = Vec3::from(crate::game::builtins::math::vectoangles(
         (pos - origin).to_array(),
     ));
@@ -915,7 +898,7 @@ fn opens_into(host: &mut GameHost, cx: &mut Cx, id: EntId, activator: Option<Ent
     let Some(act) = activator else {
         return false;
     };
-    let at = vec_field(host, cx, act, "origin");
+    let at = host.vec_field(cx, act, "origin");
     let v = (at - pos).normalize_or_zero();
     v.dot(forward) >= 0.0
 }
@@ -1028,7 +1011,7 @@ fn use_func_rotate(host: &mut GameHost, cx: &mut Cx, id: EntId) {
         return;
     };
     let flags = d.spawnflags;
-    let speed = float_field(host, cx, id, "speed");
+    let speed = host.float_field(cx, id, "speed");
     if let Some(m) = host.movers.rows.get_mut(&id) {
         let axis = rotating_axis(flags);
         let delta = &mut m.apos.current.delta;
@@ -1055,14 +1038,17 @@ pub fn damageable(host: &GameHost) -> Vec<EntId> {
     let mut ids: Vec<EntId> = host
         .movers
         .rows
-        .iter()
-        .filter(|(id, m)| {
-            m.door.as_ref().is_some_and(|d| d.takedamage) && host.area.last_link(id.0).is_some()
-        })
-        .map(|(id, _)| *id)
+        .keys()
+        .copied()
+        .filter(|&id| is_damageable(host, id))
         .collect();
     ids.sort_by_key(|id| id.0);
     ids
+}
+
+/// Whether `id` is one of [`damageable`].
+pub fn is_damageable(host: &GameHost, id: EntId) -> bool {
+    door(host, id).is_some_and(|d| d.takedamage) && host.area.last_link(id.0).is_some()
 }
 
 /// `G_Damage`'s `eType` 5 arm (0x49e93..0x49ee1) on a door with

@@ -2,6 +2,7 @@
 //! the configstrings; the random draws step `GameHost::holdrand`, the rest
 //! read only their arguments.
 
+use super::args::{float, int};
 use crate::game::host::GameHost;
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
@@ -123,10 +124,12 @@ pub fn vectoangles(v: [f32; 3]) -> [f32; 3] {
 
 /// 1.7's `vectoangles` (0x8191a72), the missiles' and `vectorToAngles`'
 /// (0x80be762): each `atan2` times 180 (the pitch's -180) over the double
-/// pi on the stack, stored as a float, 360 added to a negative one before
-/// its one store. The pitch's flat length stays unrounded into its `atan2`
-/// (`fstpl`, 0x8191afc), where CoD1's [`vectoangles`] stores a float
-/// (cod4-gsc.md 3.2, "Missiles under 1.7").
+/// pi on the stack, stored as a float, then 360 added to a negative one and
+/// 0 to the rest before its one store, so a -0 comes back +0 (`fcmovnb` at
+/// 0x8191ae5 and 0x8191b2a, the adds at 0x8191b31 and 0x8191b36). The
+/// pitch's flat length stays unrounded into its `atan2` (`fstpl`,
+/// 0x8191afc), where CoD1's [`vectoangles`] stores a float (cod4-gsc.md
+/// 3.2, "Missiles under 1.7"). The one port of 0x8191a72.
 pub fn vectoangles_1_7(v: [f32; 3]) -> [f32; 3] {
     use vcod_common::x87::F80;
     if v[0] == 0.0 && v[1] == 0.0 {
@@ -135,11 +138,8 @@ pub fn vectoangles_1_7(v: [f32; 3]) -> [f32; 3] {
     let pi = F80::from_f64(std::f64::consts::PI);
     let degrees = |atan: f64, k: f32| {
         let a = (F80::from_f64(atan) * F80::from_f32(k) / pi).to_f32();
-        if a < 0.0 {
-            (F80::from_f32(a) + F80::from_f32(360.0)).to_f32()
-        } else {
-            a
-        }
+        let add = if a < 0.0 { 360.0 } else { 0.0 };
+        (F80::from_f32(add) + F80::from_f32(a)).to_f32()
     };
     let (x, y) = (F80::from_f32(v[0]), F80::from_f32(v[1]));
     let flat = (x * x + y * y).sqrt().to_f64();
@@ -229,25 +229,9 @@ pub fn angles_to_up(
     Ok(Value::Vector(angle_vectors(args)?[2]))
 }
 
-/// `Scr_GetInt(i)`: a float reads truncated.
-fn int_at(args: &[Value], i: usize, usage: &'static str) -> Result<i32, ErrorKind> {
-    match args.get(i) {
-        Some(Value::Int(n)) => Ok(*n),
-        Some(Value::Float(f)) => Ok(*f as i32),
-        _ => Err(ErrorKind::BadType(usage)),
-    }
-}
-
-/// `Scr_GetFloat(i)`: an int reads as its value.
-fn float_at(args: &[Value], i: usize, usage: &'static str) -> Result<f32, ErrorKind> {
-    match args.get(i) {
-        Some(Value::Int(n)) => Ok(*n as f32),
-        Some(Value::Float(f)) => Ok(*f),
-        _ => Err(ErrorKind::BadType(usage)),
-    }
-}
-
-/// `randomInt(n)` (1.1d 0x5e470, 1.5b 0x5f6a8, UO 0x6b397): `irand(0, n)`
+/// The four draws step [`GameHost::script_irand`]'s generator: CoD2's
+/// shares `holdrand` with the rocket's wobble (cod2-combat.md 2.6.1).
+/// `randomInt(n)` (1.1d 0x5e470, 1.5b 0x5f6a8, UO 0x6b397, CoD2 0x8113ca4): `irand(0, n)`
 /// off `holdrand`; `n` under 1 is an error and draws nothing (map-cycle
 /// doc 4.8).
 pub fn random_int(
@@ -256,16 +240,17 @@ pub fn random_int(
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let n = int_at(args, 0, "randomInt takes a number")?;
+    let n = int(args.first(), "randomInt takes a number")?;
     if n <= 0 {
         return Err(ErrorKind::Custom(
             "RandomInt parm must be positive integer.".into(),
         ));
     }
-    Ok(Value::Int(host.holdrand.irand(0, n)))
+    Ok(Value::Int(host.script_irand(0, n)))
 }
 
-/// `randomFloat(f)` (1.1d 0x5e4bc, 1.5b 0x5f715, UO 0x6b404): `flrand(0,
+/// `randomFloat(f)` (1.1d 0x5e4bc, 1.5b 0x5f715, UO 0x6b404, CoD2
+/// 0x8113cfe): `flrand(0,
 /// f)` off `holdrand`, any `f`.
 pub fn random_float(
     host: &mut GameHost,
@@ -273,11 +258,12 @@ pub fn random_float(
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let f = float_at(args, 0, "randomFloat takes a number")?;
-    Ok(Value::Float(host.holdrand.flrand(0.0, f)))
+    let f = float(args.first(), "randomFloat takes a number")?;
+    Ok(Value::Float(host.script_flrand(0.0, f)))
 }
 
-/// `randomIntRange(lo, hi)` (1.1d 0x5e4f0, 1.5b 0x5f757, UO 0x6b446):
+/// `randomIntRange(lo, hi)` (1.1d 0x5e4f0, 1.5b 0x5f757, UO 0x6b446,
+/// CoD2 0x8113d32):
 /// `irand(lo, hi)` off `holdrand`; `hi` not above `lo` is an error.
 pub fn random_int_range(
     host: &mut GameHost,
@@ -286,16 +272,17 @@ pub fn random_int_range(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     const USAGE: &str = "randomIntRange takes two numbers";
-    let (lo, hi) = (int_at(args, 0, USAGE)?, int_at(args, 1, USAGE)?);
+    let (lo, hi) = (int(args.first(), USAGE)?, int(args.get(1), USAGE)?);
     if hi <= lo {
         return Err(ErrorKind::Custom(
             "RandomIntRange range must be positive integer.".into(),
         ));
     }
-    Ok(Value::Int(host.holdrand.irand(lo, hi)))
+    Ok(Value::Int(host.script_irand(lo, hi)))
 }
 
-/// `randomFloatRange(lo, hi)` (1.1d 0x5e554, 1.5b 0x5f7d9, UO 0x6b4c8):
+/// `randomFloatRange(lo, hi)` (1.1d 0x5e554, 1.5b 0x5f7d9, UO 0x6b4c8,
+/// CoD2 0x8113da0):
 /// `flrand(lo, hi)` off `holdrand`; `hi` not above `lo` is an error, a NaN
 /// bound is not.
 pub fn random_float_range(
@@ -305,18 +292,13 @@ pub fn random_float_range(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     const USAGE: &str = "randomFloatRange takes two numbers";
-    let (lo, hi) = (float_at(args, 0, USAGE)?, float_at(args, 1, USAGE)?);
+    let (lo, hi) = (float(args.first(), USAGE)?, float(args.get(1), USAGE)?);
     if lo >= hi {
         return Err(ErrorKind::Custom(
             "Scr_RandomFloatRange range must be positive float.".into(),
         ));
     }
-    Ok(Value::Float(host.holdrand.flrand(lo, hi)))
-}
-
-/// `Scr_GetFloat(0)`.
-fn float_arg(args: &[Value], usage: &'static str) -> Result<f32, ErrorKind> {
-    float_at(args, 0, usage)
+    Ok(Value::Float(host.script_flrand(lo, hi)))
 }
 
 /// Degrees to radians the way the builtins do it, `x * M_PI / 180` in
@@ -334,7 +316,7 @@ fn degrees(rad: f64) -> Value {
 /// `asin`/`acos` refuse anything outside [-1, 1] with `"%g out of range"`
 /// (1.1 .rodata 0x77500).
 fn unit_arg(args: &[Value], usage: &'static str) -> Result<f32, ErrorKind> {
-    let x = float_arg(args, usage)?;
+    let x = float(args.first(), usage)?;
     if !(-1.0..=1.0).contains(&x) {
         return Err(ErrorKind::Custom(format!(
             "{} out of range",
@@ -351,7 +333,7 @@ pub fn sin(
     _: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let x = float_arg(args, "sin takes a number")?;
+    let x = float(args.first(), "sin takes a number")?;
     Ok(Value::Float(radians(x).sin() as f32))
 }
 
@@ -362,7 +344,7 @@ pub fn cos(
     _: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let x = float_arg(args, "cos takes a number")?;
+    let x = float(args.first(), "cos takes a number")?;
     Ok(Value::Float(radians(x).cos() as f32))
 }
 
@@ -374,7 +356,7 @@ pub fn tan(
     _: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let r = radians(float_arg(args, "tan takes a number")?) as f32;
+    let r = radians(float(args.first(), "tan takes a number")?) as f32;
     let (s, c) = (r.sin(), r.cos());
     if c == 0.0 {
         return Err(ErrorKind::Custom("divide by 0".into()));
@@ -411,7 +393,7 @@ pub fn atan(
     _: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let x = float_arg(args, "atan takes a number")?;
+    let x = float(args.first(), "atan takes a number")?;
     Ok(degrees((x as f64).atan()))
 }
 
@@ -432,6 +414,15 @@ mod tests {
         assert_eq!(cod1[0].to_bits(), 0x4110_e20d);
         assert_eq!(cod4[1], cod1[1]);
         assert_eq!(vectoangles_1_7([0.0, 0.0, 1.0]), [270.0, 0.0, 0.0]);
+    }
+
+    /// 0x8191a72 adds 0 to a non-negative angle before its store, so a
+    /// level forward vector's -0 pitch comes back +0.
+    #[test]
+    fn cod4_vectoangles_turns_a_negative_zero_positive() {
+        let a = vectoangles_1_7([1.0, 0.0, 0.0]);
+        assert_eq!(a[0].to_bits(), 0, "pitch +0");
+        assert_eq!(a[1].to_bits(), 0, "yaw +0");
     }
 
     /// Retail's math builtins, checked against values the retail captures

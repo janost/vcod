@@ -142,7 +142,7 @@ VERIFIED, `0x3002f270`: the sound reset `0x3002f190` (volumes all 1 from
 scale `0x3020d5c0` back to 1, syscall 0xf0 (0, 0), the kick
 (`0x3020d5c4`, `c8`) to 0, syscall 0x57 0.
 
-### Sound (`0x3002f2d0`)
+### 5.1 Sound (`0x3002f2d0`)
 
 VERIFIED, with `+0x14` clear the reset `0x3002f190` and nothing else.
 Otherwise, all in ms:
@@ -187,7 +187,7 @@ ramps to (`0x8e0844`..`0x8e084c`) and every sample's reverb levels are set
 to dry 1, wet that level (`AIL_set_sample_reverb_levels`,
 `AIL_set_stream_reverb_levels`, `AIL_set_3D_sample_effects_level`).
 
-### Mouse (`0x3002f5b0`)
+### 5.2 Mouse (`0x3002f5b0`)
 
 VERIFIED: with `+0x68` clear, scale 1 and syscall 0xf0 (0, 0). Otherwise
 `remaining = duration - elapsed`; under `mouse_fadeTime` (and at least 1)
@@ -204,7 +204,7 @@ VERIFIED, syscall 0xf0 stores pitch and yaw caps at `CoDMP.exe
 yaw turn (`0x40b43e`) and pitch turn (`0x40b51e`) to `±frame_msec * cap *
 0.001` when the cap is not 0: degrees a second.
 
-### View kick (`0x3002f6b0`, `0x3002e7a0`)
+### 5.3 View kick (`0x3002f6b0`, `0x3002e7a0`)
 
 VERIFIED, `0x3002f6b0` (`eax` the duration, `edx` the record, the stack
 argument `elapsed`): `remaining = duration - elapsed`; under 1 the kick is
@@ -226,7 +226,7 @@ normalize(1, kx, ky)`, `v1 = normalize((0,0,1) x v0)`, `v2 = v0 x v1`, and
 `ky` toward its up. INFERRED: the viewmodel, posed later off the refdef
 (`0x300371f0` at `0x30033e04`), moves with it.
 
-### Weapon sway
+### 5.4 Weapon sway
 
 VERIFIED, `0x300361f0` (`cod11-combat.md` 15.3): the turn sway's scale is
 `1 + (swayShellShockScale - 1) * (3 - 2f) f^2`, `f` the kick's fade off the
@@ -235,7 +235,7 @@ files: every one has `swayShellShockScale 5` but the three `mg42_bipod_*`
 and `PTRS41_Antitank_Rifle_mp`, which have none (0, so the sway stops at a
 shock's height).
 
-### Movement
+### 5.5 Movement
 
 - VERIFIED, `CoDMP.exe` syscall 0x57 stores `0x143a978`, and the cmd's
   button fill (`0x40b600`, the test at `0x40b675`) sets `wbuttons` 0x4
@@ -248,7 +248,7 @@ shock's height).
   at 62.72 (the wire's snapped 90 and -63), 0.4 of the 224 and 156.8 the
   same walk reads unshocked.
 
-### Screen blend (`0x3002e900`)
+### 5.6 Screen blend (`0x3002e900`)
 
 VERIFIED, called from `0x30018940` at `0x30018932` and
 `0x30018c95`, after syscall 0x45 (`RenderScene`) and before the 2D
@@ -330,7 +330,7 @@ the placement frame to 14968 and that cmd at 15000 before the log's first.
 Without it the first forward cmd runs from 14950 and leaves a constant 1.66
 units on the origin.
 
-## vcod
+## 9. vcod
 
 - The server writes the fields (`builtins/client.rs`); `pmove::wish` takes
   `SCALE_SHELLSHOCK` on `PmInput::shellshock` (`wbuttons` 0x4), on the

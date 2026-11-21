@@ -359,6 +359,41 @@ Both are 1.1's shape. VERIFIED:
 one whose `reliableSequence - reliableAcknowledge` is 128 or more (1.1: 64),
 setting the acknowledge to the sequence. VERIFIED. A datagram from an address
 and qport no client holds is answered with an OOB `disconnect`. VERIFIED.
+The test is a signed 32-bit difference, so an acknowledge past
+`reliableSequence` passes. vcod-server takes the clamp and lets an
+acknowledge past the sequence through (`Link::reliable_ack_behind`, shared
+with CoD1 and CoD4); it takes the difference in 64 bits, so an acknowledge
+near `i32::MIN` is clamped where retail's wraps into the window (SEC-001).
+The clamp is the one thing a dropped message commits: the netchan sequence
+and the address move only once a message is read to its end
+(`engine::conn::commit`), so a forged one cannot stall the slot behind a
+huge sequence or redirect its replies (vcod's).
+
+The client's side, `CL_PacketEvent` (`CoD2MP_s.exe` 0x40f3a4..0x40f46b):
+after `Netchan_Process` (0x4481b0 at 0x40f3b6) it keeps
+`serverMessageSequence` (0x62a120) and `reliableAcknowledge` (0x60a11c) in
+`esi` and `ebp` (0x40f3ca, 0x40f3d0), stores the packet's sequence as the
+first (0x40f3d6) and the message's first long as the second (0x40f3ee), and
+when that is below `reliableSequence` (0x60a118) less 0x80 stores the
+sequence over it and returns (0x40f3e3..0x40f404). Else it decodes
+(0x412860), parses (0x4143e0 at 0x40f41e), and when the message's first
+word is set prints `ignoring illegible message` (0x5a35d4) and puts both
+back (0x40f435, 0x40f43b). VERIFIED (the instructions and the string).
+The parser decompresses into a message of its own (0x444050 at 0x41448a)
+and walks that one: after each op a set first word on it ends the parse
+(0x414556..0x41455c) and nothing reaches the outer message, so only a
+packet too short for its `reliableAcknowledge` (`MSG_ReadLong` 0x444410 at
+0x40f3de on the outer one) rolls back. An op read at the end reads as -1
+(0x4144df..0x4144e7) and, like any op above 6 (0x414501), is
+`CL_ParseServerMessage: Illegible server message %d` (0x5a40bc) through
+0x4324c0 with code 1 (0x414546..0x41454e). VERIFIED (the instructions and
+the strings). That 0x4324c0 is `Com_Error` and code 1 `ERR_DROP` is
+INFERRED (its other callers, `configstring > MAX_CONFIGSTRINGS` at
+0x413c6c). vcod's `Client::receive` takes the clamp and fails a packet too
+short for the acknowledge before it changes anything, which is the
+rollback; a message that fails to parse keeps both acknowledges, as the
+local overflow does. vcod logs an unknown op and skips the message where
+retail drops the connection.
 
 ### 2.3 Netchan framing
 
@@ -507,6 +542,22 @@ the word at 0x64a178 (0x413780) and marks the frame valid (0x413786).
 VERIFIED (the instructions). That the word is `demowaiting` is INFERRED
 (CoD4's same arm, cod4-demos.md 4). vcod's parser wraps the same way (a demo's record sequence is
 any word) and reads a base of 0 or less from nothing.
+A failed slot test does not stop the parse. `Delta from invalid frame`
+(0x5a443c, printed through 0x431ee0 at 0x4137de), `Delta frame too old.`
+(0x4137f2) and the two 0x780 ring-age prints (0x413815, 0x41383f) each
+jump back to 0x41378c with `edi` still the slot, past the arm's
+`xor edi, edi` (0x41377e) and its valid mark (0x413786): the playerstate
+reads against the slot's (`edi + 0x1c`, 0x4137b6..0x4137bd), the entities
+and clients against its lists (0x413882, 0x4138b2), and the frame stays
+invalid. The same jump skips the 0x64a178 clear, so such a frame does not
+end a demo's wait. VERIFIED (the instructions and the strings).
+`CL_ParseGamestate` (0x413bd0, its error string at 0x5a4298) zeroes the
+0x195d94 bytes from 0x96b650 through 0x40cca0 (0x413beb; the `rep stos`
+at 0x40ccd5), which hold the ring (0x9d0db0, 32 slots of 0x26d8). VERIFIED
+(the instructions). So a slot no frame has filled since the gamestate
+reads as zeros: no playerstate, entity or client state. vcod reads an empty
+slot from nothing and marks the frame invalid (`Parser::parse_snapshot`),
+a slot that holds another frame against that frame, invalid too.
 
 The entity, client and baseline deltas are 1.1's `MSG_ReadDeltaStruct` shape:
 a remove bit, a no-change bit, an `lc` byte, then `lc` fields through
@@ -588,8 +639,8 @@ VERIFIED, the loads and stores below.
   under that branch prints
   `Out of range reliableAcknowledge message from %s ...`, stores
   `reliableSequence` as the acknowledge (0x809630c) and jumps past the
-  message's ops (0x8096312). VERIFIED. vcod skips the message and keeps the
-  old acknowledge.
+  message's ops (0x8096312). VERIFIED. vcod skips the message and stores
+  `reliableSequence` as the acknowledge too (2.2).
 
 vcod: `engine::commands::add`, shared with CoD4, with the type read off the
 letter (`cod2::ignorable`).
@@ -1245,7 +1296,9 @@ drops `wbuttons` and `up` and widens the rest. The forward/right code is 1.1's
 
 The base cmd (`MSG_SetDefaultUserCmd`): all zero, `weapon` and `offHandIndex`
 from the playerstate, `angles[0..1]` as
-`ANGLE2SHORT(viewangles) - delta_angles` (the 182.044 at 0x81414c4),
+`ANGLE2SHORT(viewangles) - delta_angles` (the 182.044 at 0x81414c4; the
+product truncated by `fistp` under a 0xc00 control word, no half added,
+0x8068a04..0x8068a42),
 `angles[2]` 0; and only when `pm_flags & 0x800000`, the stance and lean button
 bits off `eFlags` (8 prone, 4 crouch) and `leanf` (`0x40` below 0, `0x80`
 above), and `0x1000` off `fWeaponPosFrac`. VERIFIED for the stores and the
@@ -1552,10 +1605,6 @@ mirror `cod11-hud-protocol.md` reads at CS 140/204, at a new base.
 
 ## 8. Open questions
 
-- The server command whose letter is a space (` "MP_CONNECTED\x15<name>"`, 9)
-  is `iPrintLn`'s own word, emptied by `va`'s two buffers (15.5). The retail
-  client logs it as `Unknown client game command` (16.2). VERIFIED live.
-  Closed.
 - What the client sends in `getchallenge` when it has no CD key (a server
   build, a LAN game). Off loopback the client refuses to connect without one
   (16.1).
@@ -1577,7 +1626,7 @@ inside `unshare -rn`, loopback only, driven by a Python client written from
 this doc: Huffman codes from `vcod_common::net::huffman`, netfield tables from
 `tools/re/netfields.py`, the rest as sections 1 to 5 describe. Outside a
 namespace with the socket bound to 127.0.0.1 the heartbeats fail with
-`NET_SendPacket ERROR: Invalid argument`. Every result below is VERIFIED live.
+`NET_SendPacket ERROR: Invalid argument`. The results, each VERIFIED live:
 
 - `getinfo xyz` with `sv_pure 1`:
   `infoResponse\n\challenge\xyz\protocol\118\hostname\CoD2Host\mapname\mp_toujane\sv_maxclients\8\gametype\dm\pure\1\kc\1\hw\1\mod\0\voice\0\pb\0`.
@@ -1664,8 +1713,8 @@ Nothing was written at 9, 10, 21, 46..109 or 1182..1245 on this map.
 `tools/re/netfields.py` at the VAs of 5.1), the playerstate delta, the keyed
 usercmd delta and the parser; the field codec, message reader and netchan are
 vcod-common's (`FieldCodec::COD2`, `NetchanParams::COD2`: 4-byte fragment
-starts, 128-slot rings, a raw key string). Every result below is VERIFIED
-live. A 30 s rerun on the shared codec and netchan parsed 592 messages, 588
+starts, 128-slot rings, a raw key string). The results in the list that
+follows are VERIFIED live. A 30 s rerun on the shared codec and netchan parsed 592 messages, 588
 delta snapshots, with no parse error.
 
 - A 62 s session: 1235 messages, 1228 of them delta snapshots against the
@@ -2297,7 +2346,8 @@ world and flew, and both left with `disconnect`. The probe's eye ended at
 
 `Cod2Server` drives `Cod2Level` in `cod2_lnxded`'s order, read off the
 functions each item names. Calls and their order are read off control flow, so
-every ordering claim below is INFERRED unless it says otherwise.
+in the list that follows an ordering claim is INFERRED unless it says
+otherwise.
 
 - `SV_SpawnServer` (0x8093520): after `SV_InitGameProgs` three `SV_RunFrame`s,
   each 100 ms on, then `SV_CreateBaseline`, then `ClientConnect` again for
@@ -2476,7 +2526,8 @@ same two clients against `vcod-server --game cod2` gave the diff below; each
 item ends with what vcod does. The captures are
 `crates/server/tests/fixtures/cod2-wire/` (15.7 lists the gametype ones), and
 `cod2::wire_ab` replays the same two clients in process and pins what still
-differs (15.7). Every "live" claim below is VERIFIED live from those captures.
+differs (15.7). A claim in 15.1 to 15.7 that says "live" rests on those
+captures: VERIFIED live.
 
 ### 15.1 Entity numbers
 
@@ -3364,6 +3415,15 @@ client past `CS_ZOMBIE` silent longer than `sv_timeout` (240) seconds counts a
 frame, and on the sixth is dropped `EXE_TIMEDOUT` and freed at once, with no
 zombie turn; anyone else's count is reset. VERIFIED (defaults at `SV_Init`
 0x8093adc).
+
+vcod-server holds a slot no netchan message has been taken from yet to 15 s
+when `sv_timeout` is longer (`slot::NO_NETCHAN_TIMEOUT_S`, shared with CoD1;
+`a_slot_that_never_sent_a_netchan_message_times_out_early`). Retail holds it
+the whole `sv_timeout`, so a host that sends `getchallenge` and `connect` from
+many ports and nothing after keeps the slots for four minutes. That a retail
+client sends its first netchan message well inside 15 s of `connectResponse`
+is INFERRED (Q3's connect flow; every join vcod's gates run does). vcod's, a
+hardening (SEC-066), not a retail rule.
 
 Live (VERIFIED live): a loopback client's `disconnect` was followed by 40
 messages a frame apart, the first carrying `w "EXE_DISCONNECTED"`, and the

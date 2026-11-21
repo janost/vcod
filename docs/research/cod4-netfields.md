@@ -186,10 +186,17 @@ ends on its block's last byte. VERIFIED live.
   The window test is a signed 32-bit difference, so an acknowledge past
   `reliableSequence` or near `i32::MIN` passes it. vcod-server
   (`engine::conn::incoming`) drops a negative `messageAcknowledge` as
-  retail does; it also drops a `messageAcknowledge` of a message never
-  sent and a `reliableAcknowledge` outside `0..=reliableSequence` or 128
-  behind it, in 64-bit math, without retail's clamp: only a forgery
-  carries one, and nothing of it is committed.
+  retail does, and also one of a message never sent (vcod's). A
+  `reliableAcknowledge` 128 or more behind takes retail's clamp:
+  `reliableSequence` stored over it and the message dropped
+  (`Link::reliable_ack_behind`). One past `reliableSequence` passes, as
+  retail's signed test lets it, and the next message's command walk
+  starts past it (none sent). vcod takes the difference in 64-bit math,
+  so an acknowledge near `i32::MIN` counts as 128 behind and is clamped
+  where retail's wrapping test lets it in and walks 2^31 commands
+  (SEC-001). The clamp commits before the message is read; the netchan
+  sequence and the address still wait for the read (cod2-protocol.md
+  2.2).
 - A usercmd: bit 0 and a long serverTime (or bit 1 and a byte step), then
   a 1-bit "changed" flag XOR the key (section 8 has the rest). The key is
   `checksumFeed ^ messageAcknowledge ^ Com_HashKey(server command, 32)`,
@@ -355,7 +362,10 @@ messages; `spec`: 902 and 469. VERIFIED live.
   -127 or 0 a side). VERIFIED (the bit masks 0x826e250, 0x826e290,
   0x826e25c and 0x826e260 and the button tests); the order INFERRED (the
   reader's flow). The base of a message's first cmd is built from the
-  server's playerstate (0x8130ab0, just before). `iw3mp.exe`'s writer
+  server's playerstate (0x8130ab0, just before), each angle `(int)` of the
+  stored float `(viewangles - delta_angles) * 182.04445f + 0.5f`, masked to
+  16 bits (0x8130adc..0x8130b29), as the client writes its own
+  (cod4-client-view.md 14.1). VERIFIED (the instructions). `iw3mp.exe`'s writer
   (0x505c60) sends a byte step when the new time is 0 to 255 ms past the
   base (0x505c75); nothing past the time when the attack bit, the two
   angles and the move masks match and so does everything the long branch
@@ -465,7 +475,7 @@ messages; the shooter: 349 and 382. VERIFIED live.
   cod4-gsc.md 3.2), which the hardpoint gates read; this gate does not
   re-encode them.
 
-### The stats block
+### 10.1 The stats block
 
 The client sends 0x2000 bytes in seven `stats` packets
 (`cod4-handshake.md` 3), the buffer `LiveStorage` keeps at `iw3mp.exe`
@@ -512,7 +522,7 @@ The client sends 0x2000 bytes in seven `stats` packets
   first-time client sends is not settled. INFERRED (the order
   in `LiveStorage_NoStatsFound`).
 
-### The stats file
+### 10.2 The stats file
 
 vcod keeps its own stats file,
 `players/profiles/<profile>/[<fs_game>/]vcod_mpdata`, the 0x2000-byte
@@ -541,7 +551,7 @@ read nor written.
   there (cod4-front-end.md 4, 4.1).
 - The chain on vcod-server: a ranked match (`sv_pure 1`) runs
   `_rank.gsc`'s `giveRankXP`, whose `setStat`s go out as `N`
-  (cod4-gsc.md, "The stats, the loadout, the perks"). Gate:
+  (cod4-gsc.md 7.3). Gate:
   `stat_tests::cod4_ranked_xp_unlocks_create_a_class` (300 XP: stat 2301
   300, rank 3, 260 at 2).
 

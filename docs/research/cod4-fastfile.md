@@ -145,7 +145,7 @@ one each).
   code_post_gfx's one snddriverglobals, whose token is 0x0051C354.
   VERIFIED (all 85).
 
-### Types with no loader
+### 5.1 Types with no loader
 
 `Load_XAssetHeader` in `cod4_lnxded-bin` (0x08201B18) compares the type
 against 1-9, the range 0xA-0xB, 0xC-0x11, 0x13-0x17, 0x19, 0x1A, 0x1F and

@@ -479,7 +479,7 @@ impl Cod4Session {
         else {
             return false;
         };
-        let command_time = snap.ps.get("commandTime").unwrap_or(0) as i32;
+        let command_time = snap.ps.word(vcod_cod4::ps_word!("commandTime")) as i32;
         command_time < oldest.server_time && oldest.server_time <= time
     }
 
@@ -623,7 +623,13 @@ impl Cod4Session {
 
     /// Our client number off the newest snapshot.
     pub fn own_client(&self) -> Option<u32> {
-        self.client().snapshots.last()?.ps.get("clientNum")
+        Some(
+            self.client()
+                .snapshots
+                .last()?
+                .ps
+                .word(vcod_cod4::ps_word!("clientNum")),
+        )
     }
 
     /// The local player's `team_t` in the newest snapshot's client
@@ -632,7 +638,7 @@ impl Cod4Session {
         let Some(snap) = self.client().snapshots.last() else {
             return 0;
         };
-        let me = snap.ps.get("clientNum").unwrap_or(u32::MAX);
+        let me = snap.ps.word(vcod_cod4::ps_word!("clientNum"));
         snap.clients
             .iter()
             .find(|c| c.0[0] == me)
@@ -851,7 +857,7 @@ impl Cod4Session {
         self.walk();
         // A live connection and a demo keep the snapshots they still draw,
         // delta and walk: with every one kept the soak's client grew 100 to
-        // 250 MB a three-minute level (cod4-map-sweep.md, "The soak").
+        // 250 MB a three-minute level (cod4-map-sweep.md 5).
         let client = match &mut self.source {
             Source::Live { conn, .. } => Some(&mut conn.client),
             Source::Demo(d) => Some(&mut d.client),

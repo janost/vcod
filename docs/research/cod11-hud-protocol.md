@@ -10,17 +10,19 @@ module, whose event enum diverges above id 172).
 
 ### Evidence sources
 
-All binaries are from the 1.1 install unless stated otherwise.
+All binaries are from the 1.1 install unless stated otherwise. The modules'
+md5s live in `cod11-events-and-fx.md`, Evidence sources; "events doc" below
+points there.
 
 | File | md5 | Used for |
 |---|---|---|
-| `cgame_mp_x86.dll` | `4912169a9eb22b404f95c52863a5feb6` | `CG_Obituary`, `CG_ServerCommand`, scores parser, configstring consumers |
-| `CoDMP.exe` | `753fbcabd0fdda7f7dad3dbb29c3c008` | font `.dat` loader, text renderer, `^N` colour table |
-| `game.mp.i386.so` (1.1d Linux server's game module) | `de8947beb6f86fbfb46f5adfaab3d3ed` | who writes each configstring, obituary event builder, scoreboard message builder; it has a symbol table, so its function names are its own |
+| `cgame_mp_x86.dll` | events doc | `CG_Obituary`, `CG_ServerCommand`, scores parser, configstring consumers |
+| `CoDMP.exe` | events doc | font `.dat` loader, text renderer, `^N` colour table |
+| `game.mp.i386.so` (1.1d Linux server's game module) | events doc | who writes each configstring, obituary event builder, scoreboard message builder; it has a symbol table, so its function names are its own |
 | `pak5.pk3` | `0cb20baa66ddecc72ccb7f17b3062bb3` | `fonts/fontImage_*.dat`, `gfx/hud/*death*` art |
 | `pak0.pk3` | | `weapons/mp/*` weapon defs, `ui/assets/reticle_q.tga` |
 | `pak4.pk3` | | `scripts/ui_hud.shader`, `scripts/hud.shader` |
-| `cgame_mp_x86.dll` from the 1.5 install | `075e2af18aeaf2aeaf2a75ce22db683a` | 1.5 diff (icon names unchanged) |
+| `cgame_mp_x86.dll` from the 1.5 install | events doc | 1.5 diff (icon names unchanged) |
 | live: a public TDM server, mp_carentan, 2026-08-24 | | `serverCommand` stream, gamestate |
 
 Addresses are virtual: base `0x30000000` for the cgame DLL, `0x00400000`
@@ -267,7 +269,7 @@ comes from one of two localized formats:
   (`0x30064c50`) when the attacker's team is non-zero and equals the
   victim's.
 
-### The centre print
+### 1.2 The centre print
 
 Read with `objdump -d -M intel`, 1.1 `cgame_mp_x86.dll` unless named.
 
@@ -430,7 +432,7 @@ The stock files agree: `pak0.pk3:weapons/mp/thompson_mp` has
 (`0x40333333`) only for wide weapon icons. The MOD branch never sets it, so
 every MOD icon is 1.4 wide.
 
-### Means-of-death enum
+### 2.1 Means-of-death enum
 
 From the pointer table at `.so` file offset `0x7cda0`, 25 entries:
 
@@ -446,7 +448,7 @@ From the pointer table at `.so` file offset `0x7cda0`, 25 entries:
 | 7 | `MOD_MELEE` | 16 | `MOD_WATER` | | |
 | 8 | `MOD_HEAD_SHOT` | 17 | `MOD_SLIME` | | |
 
-### Which deaths get the `0x80` flag
+### 2.2 Which deaths get the `0x80` flag
 
 The server tags seven. The `obituary()` builtin at `.so` `0x5a7f6` takes
 the tag path for mod 7 or 8 (a `mod - 7 <= 1` unsigned compare) and for mods
@@ -455,7 +457,7 @@ the tag path for mod 7 or 8 (a `mod - 7 <= 1` unsigned compare) and for mods
 mod stores the weapon index there (`0x5a822`). `{7, 8, 16, 17, 19, 21, 22}`
 is the client switch's case set, so the two halves agree.
 
-### The table
+### 2.3 The table
 
 | `eventParm` | Means of death | Icon name the client uses | Stock art |
 |---|---|---|---|
@@ -497,7 +499,7 @@ material.
 Letter `b`, built by `DeathmatchScoreboardMessage` (`.so` `0x459c0`), parsed
 by `0x3002b920`.
 
-### Grammar
+### 3.2 Grammar
 
 ```
 b <numRows> <axisScore> <alliesScore>{ <client> <score> <ping> <time> <statusIcon>}*
@@ -546,7 +548,7 @@ Header tokens:
   (Allies) (section 5). The client stores them at `0x3020ba04` /
   `0x3020ba08`; `-9999` means no score and renders `"-"` (`0x300630c8`).
 
-### Spectators
+### 3.3 Spectators
 
 Spectators are ordinary rows. `DeathmatchScoreboardMessage` walks
 `level.sortedClients[]` and emits every entry. The sort comparator (`.so`
@@ -556,7 +558,7 @@ team-colour helper `0x3002a810` renders white. Server-side banner strings
 `g_ScoresBanner_Allies` / `_Axis` / `_None` / `_Spectators` cover the four
 buckets.
 
-### Live example
+### 3.4 Live example
 
 The first 90 s probe capture, before vcod sent `score`, logged 49
 `serverCommand` lines (42 `d`, 3 `v`, 2 `f`, 1 `i`, 1 `t`) and no `b`: the
@@ -884,7 +886,7 @@ update (`prewarm_viewmodels`, `crates/client/src/main.rs`); cached rigs cost
 a lookup, and weapon files, models and clips are shared by name across rigs
 (`viewmodel::RigCache`).
 
-### Which team score is which
+### 5.1 Which team score is which
 
 `setteamscore` (`.so` `0x5b9dc`):
 
@@ -905,7 +907,7 @@ allies, matching the cgame's `g_TeamColor_Axis` (team 1) /
 `DeathmatchScoreboardMessage` pushes `level[+0x1fc]` before `level[+0x200]`,
 so `b`'s token 2 is axis and token 3 allies, the CS 5, CS 6 order.
 
-### Header vs. scoreboard totals can disagree in the same frame
+### 5.2 Header vs. scoreboard totals can disagree in the same frame
 
 A live capture (2026-08-24, a public TDM server, mp_chateau) caught vcod's
 status header, read off CS 5/6, at `219 tdm 214` while the same frame's `b`
@@ -922,7 +924,7 @@ CS 5/6 wait on a `d` push, so `b` is the more current; once the board is
 down no reply comes and CS 5/6 are. The header is vcod's own, drawn for spectators only (`hud/mod.rs`);
 retail draws team totals only on the scoreboard (section 3.1).
 
-### There is no round-timer configstring
+### 5.3 There is no round-timer configstring
 
 Nothing writes a match or round clock to a configstring, and the cgame's
 clock formatters read none. `0x3001ece0` (`"%i:%02i"` / `"%i:%02i:%02i"`)
@@ -950,7 +952,7 @@ vcod draws the clock as the hudelem it is (`hud/hudelem.rs`). Its spectator
 header (`hud/status.rs`) shows elapsed time since level start
 (`server_time - cs[13]`).
 
-### How a hudelem reaches the client
+### 5.4 How a hudelem reaches the client
 
 Hudelems travel in the playerstate, in the two 31-entry arrays of array
 block 5, past the 103 scalar fields, so `PLAYER_FIELDS` has no `hudElem*`
@@ -983,7 +985,7 @@ decoded in `docs/protocol-1.1.md` holds one: type 4, `x` 320, `y` 460, both
 alignments 1, `font` 1, `fontScale` 1.0, colour `0xFFFFFFFF`, `time`
 1800000, field for field `dm.gsc`'s `startGame`.
 
-### A client's elements die with it
+### 5.5 A client's elements die with it
 
 VERIFIED, `game.mp.i386.so` with relocations resolved
 (`tools/re/annotate_func.py`): `ClientDisconnect` (0x42aac) calls
@@ -1091,7 +1093,7 @@ One record per font has an empty name. Drawing every glyph from page 0
 garbles the 24, 30 and 32 point fonts; vcod reads the page per glyph
 (`hud/font.rs`, `Font::glyph_page`).
 
-### The extra 4 bytes
+### 6.1 The extra 4 bytes
 
 `20552 - 20480 = 72` bytes follow the glyph array; Q3's tail is `float
 glyphScale` + `char name[64]` = 68. The extra 4 are a second float at 20484
@@ -1187,7 +1189,7 @@ The chat handlers (`h`/`i`) pass every incoming string through
 `0x3002df00`, which strips every `0x19` byte before display. A renderer
 should do the same, and strip `^N` pairs before measuring width.
 
-### `^8` and `^9` on 1.5 and UO
+### 7.1 `^8` and `^9` on 1.5 and UO
 
 VERIFIED, the renderer: CoDMP.exe 1.5's text draw (0x4bab80..0x4babdf) and
 CoDUOMP.exe's (0x4c0581) take `^` followed by `'0'..'9'` (`0x30..0x39`) as a
@@ -1249,7 +1251,7 @@ Read out of `cgame_mp_x86.dll` (1.1). Element fields are named by their
 `hudelem_t` offsets, which `docs/protocol-1.1.md` "Block 5" maps to the
 wire.
 
-### Order
+### 8.1 Order
 
 VERIFIED: `0x3001f920` holds the bound 31 (`0x1f`), the element stride 112
 (`0x1c` dwords) and the snapshot playerstate's `+0x1338` and `+0x5A8`, reads
@@ -1263,7 +1265,7 @@ INFERRED: the CRT `qsort` is not stable, so equal `sort`s come in
 unspecified order; vcod sorts stably, archived first, one of the orders
 retail can produce.
 
-### Font slots
+### 8.2 Font slots
 
 VERIFIED, the constants `0x3001f120` loads: 0.25 (`0x3006950c`), the font
 height trap `0x35`, 0.33333334 (`0x30069548`), and the immediates 16 and 16,
@@ -1332,7 +1334,7 @@ drawn size. vcod does all three with the screen height in place of
 element's scale. INFERRED: trap `0x3a` counts the characters the renderer
 draws, colour codes excluded; vcod measures a fixed-slot string that way.
 
-### What each type prints
+### 8.3 What each type prints
 
 VERIFIED, strings and constants: a non-zero `label` (`+0x2c`) is looked up
 as configstring `0x4dc + n` through the localize call tagged `"hudelem
@@ -1365,7 +1367,7 @@ shader's. So a shader or clock with a label is laid out label first, the
 pair aligned as one box; for the text types the merge empties the label, so
 it rides in the text.
 
-### Size, position and colour
+### 8.4 Size, position and colour
 
 INFERRED, off `0x3001ee20` and `0x3001ee90`: a shader element's width is
 its `width` (`+0x30`), or the font height when 0. While `0 < scaleTime`
@@ -1410,7 +1412,7 @@ INFERRED: none of the three tweens clamps a start time ahead of `cg.time`;
 the fraction goes negative and extrapolates past `from`. vcod clamps it to
 0..1.
 
-### The two clocks
+### 8.5 The two clocks
 
 VERIFIED: `0x3001f520` registers the element's material and a second one
 named after it with `"Needle"` (`0x30064b20`) appended, reads `duration`
@@ -1498,7 +1500,7 @@ records around `0x30075558`):
 
 The scope's keys are under "Scope overlay".
 
-### Which views draw it
+### 9.1 Which views draw it
 
 VERIFIED, `0x30018810`, the 2D pass: it returns early on `cg_draw2D` 0
 (`0x301db42c`), else branches on the snapshot playerstate's `pm_type`
@@ -1567,7 +1569,7 @@ INFERRED: both options are inert in all three, so the compass always draws
 and there is no team overlay. vcod registers both at retail's defaults so
 the menu keeps the choice, and reads neither.
 
-### Crosshair
+### 9.2 Crosshair
 
 INFERRED, off `0x30016760` and `0x3000fa50`: the hip spread in degrees is
 `min + (max - min) * aimSpreadScale / 255`, `min` the prone minimum when
@@ -1638,7 +1640,7 @@ zoom tail, the centre to nothing and the arms to `cg_crosshairAlphaMin`.
 vcod reads `aimSpreadScale` off the prediction or the newest snapshot, not
 lerped.
 
-### Scope overlay
+### 9.3 Scope overlay
 
 VERIFIED, the weapon field table (`0x30075dc8`..`0x30075e10`):
 `adsZoomFov` `+0x218`, `adsZoomInFrac` `+0x21c`, `adsZoomOutFrac` `+0x220`,
@@ -1819,7 +1821,7 @@ vcod scales the overlay by the window height on both axes, as the rest of
 its HUD, where retail scales x by `width / 640`: on a window wider than 4:3
 the circle stays round and the side bands widen.
 
-### Health
+### 9.4 Health
 
 INFERRED, off `0x300248c0`: the share is `stats[0] / stats[2]` clamped to
 0..1, 0 when either is 0; the bar is cropped (texture `s` 0 to the share),
@@ -1830,7 +1832,7 @@ frame, then drains by `0x30069490` per ms, and resets when the
 playerstate's client number changes. VERIFIED, the constants: `0x300693d4`
 0.2, `0x30069454` 0.3, `0x30069490` 0.0012.
 
-### Weapon name and ammo
+### 9.5 Weapon name and ammo
 
 INFERRED, off `0x30023c30` and `0x30023d50`: the name is the localized
 `displayName`, or `"%s / %s"` with the localized `modeName` when that is
@@ -1898,7 +1900,7 @@ name and its backdrop by that rule (`WeaponNameFade`). The selection is
 `cod11-combat.md` 9.8 lists; the name, mode icon and ammo count read it as
 that section's readers do (`PlayerView`'s `name_weapon`, `ammo_weapon`).
 
-### Weapon mode icon
+### 9.6 Weapon mode icon
 
 VERIFIED: the weapon setup registers the def's `modeIcon` (`+0x190`) at
 `0x30035cab` and stores it at `+0x11c` of the weapon's `0x198`-byte record
@@ -1914,7 +1916,7 @@ name one, `hud@weaponmode_full.tga` on `bar_mp`, `fg42_mp`, `mp44_mp`,
 `ppsh_mp`, `thompson_mp`, `hud@weaponmode_semi.tga` on their `_semi` and
 `bar_slow_mp` variants; every other weapon leaves it blank.
 
-### The weapon-slot strip
+### 9.7 The weapon-slot strip
 
 VERIFIED: `0x30037790` has one caller, `0x30018896` in the 2D pass
 `0x30018810`, after the crosshair (`0x30016760`) and `0x30016f70` and before
@@ -2003,7 +2005,7 @@ clock reads 0, and on UO the strip hides with `cg_drawStatus` 0
 (`weapstrip::tests::uo_draws_the_satchel_and_binocular_slots`). A look by
 eye is pending.
 
-### Weapon slots
+### 9.8 Weapon slots
 
 The `weaponslot` command, per protocol (all three cgames load at
 0x30000000).
@@ -2107,7 +2109,7 @@ snapshot (14100) turns `cg.snap`'s bit on; the `nextvehslot` branch runs
 first, off the newest snapshot. `play::input::tests::select_gates_run_before_the_stamp`
 and `uo_weapalt_refuses_in_a_seat` pin both.
 
-### Stance
+### 9.9 Stance
 
 VERIFIED: `0x30023f50` reads the dword at `0x30207168` and keeps its low
 two bits at `0x30074988`. VERIFIED: `0x30028a70` copies `0x834` dwords from
@@ -2187,7 +2189,7 @@ vcod reads the icon and the flash off `pm_flags`' two bits, the replay's
 while predicting. Its first frame counts as a change, as the -1 start makes
 it on retail.
 
-### Compass
+### 9.10 Compass
 
 VERIFIED: `hud.menu` lists back (84), highlight (85), face (84), needle
 (85), friendlies, objective pointers (86). INFERRED: a menu draws its items
@@ -2242,7 +2244,7 @@ than 70 units above or below the view. VERIFIED: `0x30024c40` holds the
 suffixes `""`, `"_up"`, `"_down"`. Which suffix goes with which side, and
 that `a` grows to the left, are INFERRED from the geometry, not measured.
 
-### Compass friendlies
+### 9.11 Compass friendlies
 
 VERIFIED, `0x30013540`: it returns unless the client info of
 `cg.nextSnap`'s playerstate `clientNum` (`0x301e2164`, `+0xb8`) is valid and
@@ -2455,7 +2457,7 @@ it already did the ping bit, and printed the same two sequences under the
 same runs (it lost the teammate on the same snapshot before). Gated by
 `compass::a_lower_slot_reads_a_higher_ones_end_frame_a_frame_late`.
 
-### Cursor hint
+### 9.12 Cursor hint
 
 VERIFIED, the registrations: `hintActivate`, `hintNoActivate`, `hintDoor`,
 `hintNoDoor`, `hintMg42`, `hintHealth`, `hintLadder`, `hintFriendly` at
@@ -2532,7 +2534,7 @@ string loads; UO's `0x300303a0` the same with its numbering (weapons
 `0x30030ae9`; slot types 1..7 in `0x30011520`). vcod:
 `hud::player::hint_text`.
 
-### Damage direction
+### 9.13 Damage direction
 
 VERIFIED: `0x3002faa0` and `0x30028d00` pass `0x300287f0` the
 playerstate's `damageYaw`, `damagePitch` and `damageCount`, and each reads
@@ -2618,7 +2620,7 @@ crosshair. VERIFIED: 1.5's `cgame_mp_x86.dll` (`075e2af1...`, array
 (`d83491ca...`, `0x30071854` pushed at `0x3001aad5`) carry the same array
 and the same 128/32/64/2000 defaults.
 
-### Mod items
+### 9.14 Mod items
 
 - `0x30022ba0` registers `cg_hudFiles` with default `ui_mp/hud.txt` (trap
   9) and reads it back (trap 0xb). VERIFIED (strings). Its `loadMenu`
@@ -2644,7 +2646,7 @@ and the same 128/32/64/2000 defaults.
   gates, right after the native items on the views that draw the native
   HUD. `textstyle`, `textfont`, borders and item scripts are ignored.
 
-### What vcod does not draw
+### 9.15 What vcod does not draw
 
 | Retail piece | Where | vcod |
 |---|---|---|
@@ -2729,7 +2731,7 @@ fov the game names is a 4:3 view's width, and a wider view keeps that
 vertical fov). The crosshair's side arms read the fov a 4:3 view as tall
 would be wide, at 4:3 retail's `640 / fov_x` (`hud::player::arm_offset`).
 
-## Unverified
+## 11. Unverified
 
 | Claim | Check that settles it |
 |---|---|

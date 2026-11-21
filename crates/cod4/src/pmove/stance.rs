@@ -316,13 +316,6 @@ pub(crate) fn check_prone(pm: &mut Pmove, q: ProneCheck) -> bool {
     }
 }
 
-/// `(s - floor(s + 0.5)) * 360` of the turns `s`, all on the stack: the
-/// `AngleNormalize180` 1.7 inlines (0x8055562, 0x8057dd2).
-fn turns180(deg: f64) -> f64 {
-    let s = deg * INV_360;
-    (s - (s + 0.5).floor()) * 360.0
-}
-
 /// A body not yet prone needs its box clear 10 up (0x80553b2..0x8055429).
 fn room_to_lie(pm: &Pmove, q: &ProneCheck) -> bool {
     let (o, r) = (q.origin, q.size);
@@ -560,10 +553,11 @@ fn bent_feet(
 /// each stored (0x80555b1, 0x8055641), the bend between them in -50..70,
 /// and both lines along the body open.
 fn lie_along(probes: &Probes, o: Vec3, mid: Vec3, ground: Vec3) -> Lie {
-    let pitch = |from: Vec3, to: Vec3| turns180(d(fpu::vectopitch(from - to))) as f32;
+    let pitch =
+        |from: Vec3, to: Vec3| fpu::angle_normalize180_kept(d(fpu::vectopitch(from - to))) as f32;
     let torso = pitch(o, mid);
     let legs = pitch(mid, ground);
-    let bend_ok = BEND.contains(&turns180(d(torso) - d(legs)));
+    let bend_ok = BEND.contains(&fpu::angle_normalize180_kept(d(torso) - d(legs)));
     let lines_open = probes.sight(o, mid) & probes.sight(mid, ground);
     Lie {
         torso,
@@ -663,8 +657,8 @@ fn clamp_angles(pm: &mut Pmove) {
     let down = d(pm.rules.view_pitch_down);
     let ps = &mut *pm.ps;
     for i in 0..3 {
-        let short = f64::from(pm.cmd.angles[i]) * DEG_PER_SHORT_F64;
-        let mut t = turns180(d(ps.delta_angles[i]) + short);
+        let short = f64::from(pm.cmd.angles[i]) * fpu::DEG_PER_SHORT;
+        let mut t = fpu::angle_normalize180_kept(d(ps.delta_angles[i]) + short);
         if i == 0 {
             if t > down {
                 ps.delta_angles[0] = (down - short) as f32;
@@ -674,15 +668,9 @@ fn clamp_angles(pm: &mut Pmove) {
                 t = -up;
             }
         }
-        ps.view_angles[i] = turns180(t) as f32;
+        ps.view_angles[i] = fpu::angle_normalize180_kept(t) as f32;
     }
 }
-
-/// 1 / 360 as the double constant the clamp multiplies by.
-const INV_360: f64 = 0.002777777845039964;
-
-/// 360 / 65536 as the double the clamp multiplies a short by.
-const DEG_PER_SHORT_F64: f64 = 0.0054931640625;
 
 /// How far `off` lies past `±limit`, or `None` inside: the arc test the
 /// gunner's and the prone caps share (0x80576cd, 0x8057d12, 0x8057d8c).
@@ -754,7 +742,7 @@ fn prone_caps(pm: &mut Pmove, msec: f32, old_yaw: f32) {
     if let Some(excess) = overshoot(d(tilt), d(PRONE_PITCHCAP)) {
         ps.delta_angles[0] = (d(ps.delta_angles[0]) + excess) as f32;
         let edge = d(ps.prone_torso_pitch) - d(PRONE_PITCHCAP) * excess.signum();
-        ps.view_angles[0] = turns180(edge) as f32;
+        ps.view_angles[0] = fpu::angle_normalize180_kept(edge) as f32;
     }
 }
 

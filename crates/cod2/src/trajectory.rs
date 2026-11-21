@@ -28,17 +28,57 @@ pub struct Trajectory2 {
 }
 
 impl Trajectory2 {
-    /// `prefix` is `"pos"` or `"apos"`.
+    /// `prefix` is `"pos"` or `"apos"`; any other panics.
     pub fn read(es: &EntityState2, prefix: &str) -> Self {
-        let v = |name: &str| {
-            Vec3::from_array([0, 1, 2].map(|i| es.f32(&format!("{prefix}.{name}[{i}]"))))
-        };
+        match prefix {
+            "pos" => Self::pos(es),
+            "apos" => Self::apos(es),
+            _ => panic!("no trajectory {prefix}"),
+        }
+    }
+
+    /// `pos`.
+    pub fn pos(es: &EntityState2) -> Self {
+        use crate::net::fields::ENTITY_STATE_FIELDS as T;
+        Self::at(
+            es,
+            [
+                crate::field!(T, "pos.trType"),
+                crate::field!(T, "pos.trTime"),
+                crate::field!(T, "pos.trDuration"),
+            ],
+            crate::field!(T, 3 "pos.trBase"),
+            crate::field!(T, 3 "pos.trDelta"),
+        )
+    }
+
+    /// `apos`.
+    pub fn apos(es: &EntityState2) -> Self {
+        use crate::net::fields::ENTITY_STATE_FIELDS as T;
+        Self::at(
+            es,
+            [
+                crate::field!(T, "apos.trType"),
+                crate::field!(T, "apos.trTime"),
+                crate::field!(T, "apos.trDuration"),
+            ],
+            crate::field!(T, 3 "apos.trBase"),
+            crate::field!(T, 3 "apos.trDelta"),
+        )
+    }
+
+    fn at(
+        es: &EntityState2,
+        [ty, time, dur]: [usize; 3],
+        base: [usize; 3],
+        delta: [usize; 3],
+    ) -> Self {
         Trajectory2 {
-            tr_type: es.i32(&format!("{prefix}.trType")),
-            tr_time: es.i32(&format!("{prefix}.trTime")),
-            tr_duration: es.i32(&format!("{prefix}.trDuration")),
-            base: v("trBase"),
-            delta: v("trDelta"),
+            tr_type: es.i32_at(ty),
+            tr_time: es.i32_at(time),
+            tr_duration: es.i32_at(dur),
+            base: Vec3::from_array(es.vec3_at(base)),
+            delta: Vec3::from_array(es.vec3_at(delta)),
         }
     }
 

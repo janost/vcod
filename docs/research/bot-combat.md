@@ -171,16 +171,8 @@ column was bots holding on purpose. INFERRED: the before and afters in
 
 ## 2. Baseline
 
-Master at the harness's commit, `bot_match` defaults (mp_carentan `tdm`,
-six bots, seeds 1..=8, 12000 ticks, none ended):
-
-| Team | Kills | Deaths | Damage | TTK mean / median ms |
-|---|---|---|---|---|
-| allies | 644 | 568 | 87952 | 1603 / 250 |
-| axis | 568 | 644 | 82955 | 1889 / 0 |
-
-1212 kills over 80 minutes of play, 88 stalled bot-ticks, no suicides, no
-team kills.
+The first baseline ran at the harness's commit on mp_carentan `tdm`; its
+numbers are superseded by section 6's rows, all from one tip.
 
 ## 3. Skill levels
 
@@ -347,8 +339,9 @@ its side swap; its seeds went straight to `test_seed_rng`, so seeds 2k and
 2k+1 played one match). `tdm`, 8 fighting bots, 6000 ticks a seed, one
 team with cover and one without, sides swapped every other seed. Over 20
 seeds the per-seed difference has a standard deviation of 12 to 14
-deaths, so a total difference under about 60 is noise. Section 6
-re-measures on `bot_match`.
+deaths, so a total difference under about 60 is noise. Section 6.1's
+`COVER=alt` row supersedes the table; the rejected variants below stay as
+what not to retry.
 
 | Run (mp_carentan unless named, seeds 1-20) | Cover side deaths | Other side deaths |
 |---|---|---|
@@ -429,19 +422,14 @@ On by default; `RETREAT=` in `bot_match`.
   the plan reaches no nearer is passed over (bot-objectives.md 14.8).
   Open.
 
-### Measured (2026-10-20)
+### 5.1 Measured (2026-10-20)
 
 Measured with `bot_fights` (since folded into `bot_match`): 8 bots, `tdm`,
 3000 ticks, mp_carentan, mp_harbor, mp_depot, mp_brecourt, 16 seeds each,
 one side retreating. VERIFIED (measured):
 
-- A wounded bot running the retreat dies within 5 s 5 to 10 points less
-  often, on all six 1.1 runs (seeds 101-116 and 117-132, each side) and
-  on UO (mp_cassino, mp_kursk, seeds 1-8: 83% / 86% with none, 72-73%
-  for the retreating side).
-- K/D of the treated side against `none`, geometric mean: 1.02 on 1.1,
-  0.99 on UO, inside the noise (the same side's K/D swung 0.15 across seed
-  sets with only the other side's brain changed).
+- The retreat's effect on wounded deaths and K/D: section 6.1's
+  `RETREAT=alt` row, measured on one tool at one tip.
 - Rejected variants (treated side's K/D against `none`, seeds 101-116,
   allies / axis / geometric mean): sights dropped while backing off 1.03 /
   0.93 / 0.98; hurt retreat only past 400 units 1.02 / 0.92 / 0.97; dry
@@ -2024,3 +2012,50 @@ VERIFIED (measured, ours): every refactor commit printed these, every
   script menus, `CL_OpenScriptMenu_f`), as CoD4's `menu_names` reads its
   own; it scans all 32 now. Digests unchanged: the stock team menu sits
   low in the block.
+
+## 20. CoD4 bots' cmd angles rounded as 1.7 rounds them (2026-11-21)
+
+1.7 makes a cmd angle as `(int)` of the stored float `deg * 182.04445f +
+0.5f`, masked to 16 bits: the client's `iw3mp.exe` 0x463aa9..0x463acf, and
+the server's cmd base `(viewangles - delta_angles)` the same way,
+`cod4_lnxded` 0x8130adc..0x8130b29. VERIFIED (the instructions). The mantle
+walk already did (`bots::cod4::cmd_short`). The brain's cmd
+(`bots::cmd_angles` over `BotView::delta_deg`) and the gunner's and frag
+throw-back's (`bots/cod4/gun.rs`) truncated each angle and subtracted a
+truncated delta, up to two shorts off; they now round the float
+difference. CoD2 1.3 still truncates (cod2-protocol.md 4.3).
+
+`bot_match GAME=cod4 DIGEST=600 TICKS=6000`, seeds 1 and 2, release,
+mp_crash `war`, from master 7f386db5c:
+
+| Seed | Digest before | Digest after | Kills | Hits, rounds | Throws | Stalled |
+|---|---|---|---|---|---|---|
+| 1 | 2b2bffc3935d12e9 | 0cf2dbc2e1a49354 | 47 to 40 | 159, 659 to 167, 848 | 14 to 22 | 0 to 140 |
+| 2 | d1428bb5e367aacd | a00fb1c9c848a566 | 48 to 46 | 168, 645 to 197, 731 | 13 to 11 | 0 to 0 |
+
+VERIFIED (measured, ours). Both part from `digest@600` on, the first
+window: a cmd angle moves a short wherever the two conversions part.
+Script errors 0 both.
+
+Seeds 3 to 6, same command, stalled ticks 0 on both builds:
+
+| Seed | Kills before, after | Throws before, after | Stalled before, after |
+|---|---|---|---|
+| 3 | 44, 43 | 18, 13 | 0, 0 |
+| 4 | 37, 48 | 14, 20 | 0, 0 |
+| 5 | 54, 52 | 25, 16 | 0, 0 |
+| 6 | 44, 52 | 15, 24 | 0, 0 |
+
+Seed 1's 140 stalled ticks are one bot (`STALLS=1`): axis slot 3 at
+about (1410, 180, 127), ticks 2180 to 2300, mantling west (mantle yaw
+180, `pmf` 0x4) onto the ledge where its teammate slot 1 stands still 60
+units up at (1403, 196, 188), and falling back each time. The before
+build stalls the same way on seed 11 (35 ticks): allies slot 0 at (1402,
+156, 126), mantle yaw 180, under teammate slot 4 on the ledge at (1397,
+181, 184). Seeds 7 to 12 on the before build stall nowhere else. VERIFIED
+(measured, ours). So the stall is an old one, a mantle onto a ledge a
+teammate holds, which the new angles reach on seed 1 by the matches'
+chaos. INFERRED from the two traces. The one other reader of the
+integer delta, the flee's yaw in `bots.rs` (`angles[1] + delta_angles[1]`),
+adds the rounded delta back onto the rounded angle, within a short of
+the aim. VERIFIED (the code).

@@ -137,6 +137,12 @@ const MAX_PACKETS_PER_FRAME: usize = 256;
 /// socket's own buffer drops the excess.
 const PACKET_QUEUE: usize = 4 * MAX_PACKETS_PER_FRAME;
 
+/// The longest datagram kept: CoD1's `MAX_MSGLEN` (docs/protocol-1.1.md),
+/// past anything a client sends on any game. vcod's bound; CoD2 1.3's
+/// `Sys_GetPacket` drops only one that fills its 0x20000 buffer
+/// (cod2_lnxded 0x80d5437).
+const MAX_DATAGRAM: usize = 32768;
+
 fn main() -> Result<()> {
     // Only tests and gates read the script log.
     vcod_server::game::host::KEEP_SCRIPT_LOG.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -440,7 +446,7 @@ fn cod1_server(args: Args, sock: UdpSocket, sets_after_map: &[bool]) -> Result<(
     );
     server.set_protocol(protocol);
     server.build_nav_in_background(true);
-    let mut world = vcod_server::world::World::from_bsp(&bsp, Some(&fs));
+    let mut world = vcod_server::world::World::from_bsp(&bsp, Some(&*fs));
     world.collision.set_source(map_source);
     server.load_world(world);
     if let Some((stem, text)) = &overlay {
@@ -666,9 +672,10 @@ fn listen(sock: UdpSocket) -> Result<Net> {
     let (packet_tx, packets) = std::sync::mpsc::sync_channel(PACKET_QUEUE);
     let reader = sock.try_clone().context("cloning the socket")?;
     std::thread::spawn(move || {
-        let mut buf = vec![0u8; 65536];
+        let mut buf = vec![0u8; MAX_DATAGRAM + 1];
         loop {
             match reader.recv_from(&mut buf) {
+                Ok((n, from)) if n > MAX_DATAGRAM => log::debug!("oversize packet from {from}"),
                 Ok((n, from)) => {
                     ARRIVALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     if packet_tx

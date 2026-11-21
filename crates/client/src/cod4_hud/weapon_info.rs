@@ -169,8 +169,8 @@ impl Cod4Hud {
         let draw_talk = shell.cvar("cg_drawTalk");
         let talkers = s.talkers();
         let own_team = s.own_team();
-        let perks = snap.ps.get("perks").unwrap_or(0);
-        let intermission = snap.ps.get("pm_type") == Some(h::PM_INTERMISSION);
+        let perks = snap.ps.word(vcod_cod4::ps_word!("perks"));
+        let intermission = snap.ps.word(vcod_cod4::ps_word!("pm_type")) == h::PM_INTERMISSION;
         for it in &layout.items {
             let Some(n) = it
                 .owner_draw
@@ -768,7 +768,9 @@ mod tests {
             let (Some(Some(l)), Some(snap)) = (&hud.loaded, s.client().snapshots.last()) else {
                 return;
             };
-            if snap.ps.get("weapon") == Some(27) && snap.ps.get("pm_type") == Some(0) {
+            if snap.ps.word(vcod_cod4::ps_word!("weapon")) == 27
+                && snap.ps.word(vcod_cod4::ps_word!("pm_type")) == 0
+            {
                 seen = hud.weapon_info(l, s, snap, 0);
             }
         });

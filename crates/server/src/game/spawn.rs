@@ -485,7 +485,7 @@ fn round_trigger(
 /// `stopFireSoundPlayer`, as mp_toujane's 591..594 read live
 /// (cod2-protocol.md 15.3, cod2-turrets.md 2).
 fn turret_sound_aliases(
-    fs: Option<&vcod_common::pk3::Pk3Fs>,
+    fs: Option<&dyn vcod_common::asset_source::AssetSource>,
     weaponinfo: &str,
     player_sounds: bool,
 ) -> Vec<String> {
@@ -522,7 +522,7 @@ const MAX_TURRETS: usize = 32;
 /// Reads the same file `turret_sound_aliases` already read for the alias
 /// names, keyed by the entity's own `weaponinfo` value.
 fn turret_def(
-    fs: Option<&vcod_common::pk3::Pk3Fs>,
+    fs: Option<&dyn vcod_common::asset_source::AssetSource>,
     weaponinfo: &str,
 ) -> Option<crate::game::turret::TurretDef> {
     let bytes = fs?.read(&format!("weapons/mp/{weaponinfo}"))?;
@@ -1173,12 +1173,12 @@ pub(crate) fn spawn_turret(
             host.weapon_index(weaponinfo);
         }
     }
-    for alias in turret_sound_aliases(host.fs.as_deref(), weaponinfo, cod2_rules) {
+    for alias in turret_sound_aliases(host.fs.as_deref().map(|f| f as _), weaponinfo, cod2_rules) {
         register_sound_alias(host, alias);
     }
     let bones = turret_bones(host, cx, id);
     let rest = settle_turret_pitch(host, cx, id, bones.as_deref());
-    let Some(def) = turret_def(host.fs.as_deref(), weaponinfo) else {
+    let Some(def) = turret_def(host.fs.as_deref().map(|f| f as _), weaponinfo) else {
         return Ok(());
     };
     if host.turrets.len() >= MAX_TURRETS {

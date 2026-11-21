@@ -330,15 +330,17 @@ impl ServerNetchan {
     }
 
     /// `Netchan_Process` then `SV_Netchan_Decode`. `None` for stale, truncated
-    /// or fragmented packets (client messages never fragment). The caller
-    /// already matched the qport.
+    /// or fragmented packets (client messages never fragment), and for one
+    /// past [`MAX_PACKETLEN`]: a client fragments anything that long, so only a
+    /// forgery sends it (vcod's bound; retail reads up to `MAX_MSGLEN`). The
+    /// caller already matched the qport.
     ///
     /// Unlike `Netchan_Process` this commits nothing: the sequence only
     /// advances in [`Self::accept`], once the caller has checked the message.
     /// A packet forged with the client's address and qport otherwise stalls
     /// the real client behind a huge sequence until it times out.
     pub fn process_in(&self, packet: &[u8]) -> Option<ClientMessage> {
-        if packet.len() < CLIENT_PACKET_PREFIX + CLIENT_HEADER_LEN {
+        if !(CLIENT_PACKET_PREFIX + CLIENT_HEADER_LEN..=MAX_PACKETLEN).contains(&packet.len()) {
             return None;
         }
         let raw = u32::from_le_bytes(packet[..4].try_into().unwrap());
@@ -364,6 +366,13 @@ impl ServerNetchan {
             reliable_ack,
             ops,
         })
+    }
+
+    /// The most `clc_clientCommand`s one message may carry: twice what a
+    /// client's ring holds unacknowledged, which no client reaches. vcod's
+    /// bound; retail runs any number.
+    pub fn max_commands(&self) -> usize {
+        2 * self.params.reliable_commands
     }
 
     /// The sequence half of `Netchan_Process`, run for a message the caller
@@ -978,6 +987,20 @@ mod tests {
         // Replay and stale sequences are dropped.
         assert!(sv.process_in(&pkt).is_none());
         assert!(sv.process_in(&pkt[..8]).is_none());
+    }
+
+    /// The largest message a client sends whole is short of `FRAGMENT_SIZE`;
+    /// a packet past `MAX_PACKETLEN` is refused before any of it is read.
+    #[test]
+    fn server_process_in_refuses_a_packet_past_max_packetlen() {
+        let h = Huffman::new();
+        let mut cl = Netchan::new(7, 0);
+        let sv = ServerNetchan::new(7, 0);
+        let mut pkt = cl.build_out(0, 0, 0, &[3], &h).unwrap();
+        pkt.resize(MAX_PACKETLEN, 0);
+        assert!(sv.process_in(&pkt).is_some());
+        pkt.push(0);
+        assert!(sv.process_in(&pkt).is_none());
     }
 
     #[test]

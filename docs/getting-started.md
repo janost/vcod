@@ -147,6 +147,7 @@ vcod --exec "set nextdemo quit" --exec "demo mydemo"
 
 | Symptom | Cause and fix |
 |---|---|
+| vcod closes at start with nothing to read (a double-click, a launcher) | It writes the error to `vcod-error.log` beside the executable. |
 | `no main/ in <dir>`, `cannot open game data in <dir>` or `cannot read mod dir <dir>` | The install was not found where the message says it looked. Pass `--game-dir` or set `COD_DIR` to the directory that holds `main/` (`zone/` for CoD4). |
 | `--walk and --list are CoD1 only` | Those modes read CoD1 maps only, or the game was misdetected. Pass `--game cod1`, `cod2` or `cod4`. |
 | `<flag> is Cod1 only; this is Cod4` (server) | The flag does nothing on the detected game. Drop it, or pass the right `--game`. |

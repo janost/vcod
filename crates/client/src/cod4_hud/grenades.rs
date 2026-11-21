@@ -142,8 +142,8 @@ impl Cod4Hud {
             let name = names.get((weapon as usize).checked_sub(1)?)?;
             l.weapon_hud.get(name)
         };
-        let hinted = (snap.ps.get("cursorHint").unwrap_or(0) >= FIRST_WEAPON_HINT)
-            .then(|| snap.ps.get("cursorHintEntIndex").unwrap_or(1023));
+        let hinted = (snap.ps.word(vcod_cod4::ps_word!("cursorHint")) >= FIRST_WEAPON_HINT)
+            .then(|| snap.ps.word(vcod_cod4::ps_word!("cursorHintEntIndex")));
         let resting = |e: &EntityState| {
             let speed2: f32 = (0..3)
                 .map(|k| ent_f32(e, &format!("lerp.pos.trDelta[{k}]")).powi(2))

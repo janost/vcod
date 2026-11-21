@@ -1612,7 +1612,7 @@ impl Cod4Client {
             return None;
         }
         let ps = &self.session.client().snapshots.last()?.ps;
-        ps.get("viewlocked_entNum").filter(|&n| n != 1023)
+        Some(ps.word(vcod_cod4::ps_word!("viewlocked_entNum"))).filter(|&n| n != 1023)
     }
 
     /// The gun our view is locked to, its `tag_player` this frame: `None`
@@ -1629,7 +1629,7 @@ impl Cod4Client {
         let Some(snap) = self.session.client().snapshots.last() else {
             return [0.0; 2];
         };
-        if snap.ps.get("viewlocked") != Some(2) {
+        if snap.ps.word(vcod_cod4::ps_word!("viewlocked")) != 2 {
             return [0.0; 2];
         }
         let Some(gun) = self.own_gun() else {
@@ -2247,14 +2247,14 @@ impl Cod4Client {
 
 /// The level's effects, once they are read: their sprite images and mark
 /// materials build with the level, not in an effect's or a surface's first
-/// frame (cod4-map-sweep.md, "The soak"), and the defs go to the fx system.
+/// frame (cod4-map-sweep.md 5), and the defs go to the fx system.
 fn take_level_effects(e: &mut Cod4Effects, cx: &mut Cod2Frame) {
     let Some(all) = e.take_effects() else {
         return;
     };
     let (mut marks, mut sprites) = (BTreeSet::new(), BTreeSet::new());
     for m in all.values().flat_map(|e| &e.emitters) {
-        let set = if m.kind == "Decal" {
+        let set = if m.kind == crate::fx::efx::Kind::Decal {
             &mut marks
         } else {
             &mut sprites

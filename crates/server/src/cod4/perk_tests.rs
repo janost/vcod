@@ -1,4 +1,4 @@
-//! Every CoD4 1.7 perk on ours (docs/research/cod4-gsc.md, "The perks"):
+//! Every CoD4 1.7 perk on ours (docs/research/cod4-gsc.md 7.4):
 //! the kill pair's two clients (`combat_ab::ours_set_up`), a perk set on
 //! one side or a custom class built off its stats, an act, and the effect
 //! asserted. Needs `COD4_DIR`.

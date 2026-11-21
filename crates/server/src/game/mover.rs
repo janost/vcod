@@ -707,15 +707,9 @@ fn evaluate(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> (Vec<Done>
     });
     let angles_atom = cx.intern_folded("angles");
     // `.angles` is `r.currentAngles` itself (script field 16, offset 0x140).
-    let before = match host.get_field(cx, id, angles_atom) {
-        vcod_gsc::Value::Vector(v) => Vec3::from(v),
-        _ => Vec3::ZERO,
-    };
+    let before = host.vec_field_at(cx, id, angles_atom);
     let origin_atom = cx.intern_folded("origin");
-    let before_origin = match host.get_field(cx, id, origin_atom) {
-        vcod_gsc::Value::Vector(v) => Vec3::from(v),
-        _ => Vec3::ZERO,
-    };
+    let before_origin = host.vec_field_at(cx, id, origin_atom);
     // `G_MoverTeam`: `move` and `amove` are the trajectories less
     // `r.currentOrigin` and `r.currentAngles`, each stored as a float, which
     // `G_MoverPush` adds back (0x650f0) and the link snaps (movers doc 12,
@@ -998,7 +992,7 @@ pub fn snap_angles(a: Vec3) -> Vec3 {
 }
 
 /// 1.7's `SV_LinkEntity` snap (`cod4_lnxded` 0x817e426..0x817e5ba,
-/// cod4-gsc.md 3.2, "The link's snap"): as [`snap_angles`], but `n =
+/// cod4-gsc.md 3.2.6): as [`snap_angles`], but `n =
 /// floor(a + 0.5)` (`frndint` rounding down, then `fistp`) against the
 /// float 0x358637be (0x8212470), so a negative angle snaps too.
 pub fn snap_angles4(a: Vec3) -> Vec3 {
@@ -1094,13 +1088,8 @@ pub fn spawn_sine(
         .get(model)
         .copied()
         .unwrap_or(([0.0; 3], [0.0; 3]));
-    let vector = |host: &mut GameHost, cx: &mut vcod_gsc::Cx, name: &str| {
-        let atom = cx.intern_folded(name);
-        match host.get_field(cx, id, atom) {
-            vcod_gsc::Value::Vector(v) => Vec3::from(v),
-            _ => Vec3::ZERO,
-        }
-    };
+    let vector =
+        |host: &mut GameHost, cx: &mut vcod_gsc::Cx, name: &str| host.vec_field(cx, id, name);
     let set = |host: &mut GameHost, cx: &mut vcod_gsc::Cx, name: &str, v: vcod_gsc::Value| {
         let atom = cx.intern_folded(name);
         let _ = host.write_field(cx, id, atom, v);
@@ -1271,13 +1260,7 @@ fn spawn_static(
     if spawnflags & 6 != 0 {
         set(host, cx, "health", vcod_gsc::Value::Int(STATIC_HEALTH));
     }
-    let angles = {
-        let atom = cx.intern_folded("angles");
-        match host.get_field(cx, id, atom) {
-            vcod_gsc::Value::Vector(v) => Vec3::from(v),
-            _ => Vec3::ZERO,
-        }
-    };
+    let angles = { host.vec_field(cx, id, "angles") };
     // `InitMover`'s `trDuration`: no distance over its speed, at least 1.
     let pos = Trajectory {
         tr_duration: 1,
@@ -1325,12 +1308,17 @@ pub fn damageable_statics(host: &GameHost) -> Vec<EntId> {
     let mut ids: Vec<EntId> = host
         .movers
         .rows
-        .iter()
-        .filter(|(id, m)| m.use_static && host.area.last_link(id.0).is_some())
-        .map(|(id, _)| *id)
+        .keys()
+        .copied()
+        .filter(|&id| is_damageable_static(host, id))
         .collect();
     ids.sort_by_key(|id| id.0);
     ids
+}
+
+/// Whether `id` is one of [`damageable_statics`].
+pub fn is_damageable_static(host: &GameHost, id: EntId) -> bool {
+    host.movers.rows.get(&id).is_some_and(|m| m.use_static) && host.area.last_link(id.0).is_some()
 }
 
 /// `G_Damage`'s arm for an `eType` 5 entity (game.mp `0x49e93`): with a
@@ -1502,13 +1490,7 @@ fn boxes_from((mins, maxs): (Vec3, Vec3), mv: Vec3) -> ((Vec3, Vec3), (Vec3, Vec
 
 /// The entity's `origin` and `angles` fields.
 fn pose(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> (Vec3, Vec3) {
-    let mut field = |name: &str| {
-        let atom = cx.intern_folded(name);
-        match host.get_field(cx, id, atom) {
-            vcod_gsc::Value::Vector(v) => Vec3::from(v),
-            _ => Vec3::ZERO,
-        }
-    };
+    let mut field = |name: &str| host.vec_field(cx, id, name);
     (field("origin"), field("angles"))
 }
 
@@ -1531,13 +1513,8 @@ fn clip_step(
         None => return None,
     };
     let world = host.world.clone()?;
-    let field = |host: &mut GameHost, cx: &mut vcod_gsc::Cx, name: &str| {
-        let atom = cx.intern_folded(name);
-        match host.get_field(cx, id, atom) {
-            vcod_gsc::Value::Vector(v) => Vec3::from(v),
-            _ => Vec3::ZERO,
-        }
-    };
+    let field =
+        |host: &mut GameHost, cx: &mut vcod_gsc::Cx, name: &str| host.vec_field(cx, id, name);
     let origin = field(host, cx, "origin");
     // `r.currentAngles` as linked this frame; the push turns by
     // `turned - before`, `G_MoverTeam`'s `amove`.

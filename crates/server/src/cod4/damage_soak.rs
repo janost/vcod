@@ -807,7 +807,7 @@ fn cod4_damage_survives_a_long_spectate() {
 /// play, and each class's: the hit boxes a shot or a knife needs
 /// (`SOAK_MAPS` narrows the list).
 #[test]
-#[ignore]
+#[ignore = "every stock map: COD4_DIR, ~7 min with the release build"]
 fn cod4_every_map_poses_both_teams() {
     let Some(install) = vcod_cod4::testing::cod4_install() else {
         return;

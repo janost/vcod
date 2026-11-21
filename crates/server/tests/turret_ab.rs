@@ -243,7 +243,7 @@ fn build_on(
     for (name, value) in cvars {
         sv.set_cvar(name, value);
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&*fs)));
     sv.load_scripts(fs).expect("load the scripts");
     if let Some(late) = late {
         sv.pin_spawns(vec![vec![target_spawn], vec![Some(late.spawn)]]);

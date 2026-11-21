@@ -91,7 +91,7 @@ fn ours_with(
         sv.set_cvar(k, v);
     }
     let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&*fs)));
     sv.load_scripts(fs).expect("load the scripts");
     if after_map {
         for (k, v) in sets {

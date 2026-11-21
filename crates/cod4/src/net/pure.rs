@@ -1,5 +1,5 @@
 //! The `cp` command a CoD4 1.7 client owes a pure server after each
-//! gamestate (docs/research/cod4-handshake.md, "The pure check"). Without it
+//! gamestate (docs/research/cod4-handshake.md 8). Without it
 //! the first move after the client enters the world drops it with
 //! `EXE_CANNOTVALIDATEPURECLIENT`.
 

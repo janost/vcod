@@ -2067,7 +2067,7 @@ mod tests {
     fn armed_fixture() -> Option<(vcod_gsc::Vm, GameHost)> {
         let fs = std::rc::Rc::new(vcod_common::testing::game_fs()?);
         let (vm, mut host) = fixture();
-        host.weapons = std::rc::Rc::new(crate::weapons::WeaponTable::load(&fs, &crate::defs::V1));
+        host.weapons = std::rc::Rc::new(crate::weapons::WeaponTable::load(&*fs, &crate::defs::V1));
         host.fs = Some(fs);
         Some((vm, host))
     }

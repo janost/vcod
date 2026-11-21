@@ -14,8 +14,8 @@ debug overlays and env vars. The player-facing flags are in
   tools only (`docs/dev/testing.md`).
 - `--vanilla` keeps only the install patch's stock paks on the search path
   (`pk3::is_vanilla_pak`, `Pk3Fs::vanilla`).
-- `--game cod1|cod2|cod4` overrides `game::Game::detect`: CoD4 by `zone/` or
-  `iw3mp.exe`, CoD2 by `main/iw_*.iwd` or `CoD2MP_s.exe`, else CoD1.
+- `--game cod1|cod2|cod4` overrides `game::Game::detect` (AGENTS.md's game
+  table lists the markers it looks for).
 - A CoD1 install's version is its `Cod1Wire` (`is_uo`, `is_v1`). `pak1-4` are
   identical between 1.1 and 1.5 and `pak0` is not (its checksum differs), so
   a 1.5 install works as the asset source but not on a pure 1.1 server. The
@@ -70,16 +70,7 @@ The game is the detected install's (or `--game`'s).
 ## Logs and env vars
 
 - `RUST_LOG` drives env_logger (default `info`). `WGPU_BACKEND` narrows the
-  backend.
-- `VCOD_FRAME_PROFILE=<path>`: per-frame CPU and GPU stage times
-  ([testing.md](testing.md#performance)).
-- `VCOD_TICK_TRACE`, `VCOD_TICK_PROFILE_MS`: the server tick's step log and
-  slow ticks ([server-tick.md](server-tick.md#tracing-a-tick)).
-- `VCOD_BOT_THREADS=<n>`: the threads the bots' pass plans on, `1` serial
-  ([server-tick.md](server-tick.md#the-bots-threads)).
-- `VCOD_NO_DYNENTS=1`: a CoD4 map's dynamic entities are not drawn, for a
-  frame time A/B (cod4-client-perf.md 41). The F3 overlay's `cod4
-  dynents` line counts them, the drawn ones and the woken ones.
+  backend. Every `VCOD_*` variable is in the table below.
 - `VCOD_NETSIM="ping=100,jitter=20,loss=2"` gives the client a bad link
   without root. `vcod --net-probe ADDR --probe-clock` measures the clock on
   one.
@@ -95,7 +86,7 @@ The game is the detected install's (or `--game`'s).
 `env_vars_documented` (`crates/common/tests`) fails on a `VCOD_*` or
 `VC_*` name in `crates/` that this table lacks. The A/B gates' `*_REPORT`,
 `*_TRACE` and `*_DUMP` knobs are [retail.md](retail.md)'s; `bot_match`'s
-are its header's.
+are its `KNOBS` table's.
 
 | Variable | Read by | Does |
 |---|---|---|
@@ -124,7 +115,7 @@ are its header's.
 | `VCOD_TICK_TRACE=<path or dir>` | `vcod-server`, `bot_match` | The tick's step log ([server-tick.md](server-tick.md#tracing-a-tick)). |
 | `VCOD_TICK_PROFILE_MS=<ms>` | `vcod-server` | Logs each tick past it with its phases. |
 | `VCOD_BOT_THREADS=<n>` | `vcod-server` | The threads the bots' pass plans on, `1` serial ([server-tick.md](server-tick.md#the-bots-threads)). |
-| `VC_NAV_COD4=1` | `vcod-server` | CoD4 bots walk the nav graph's CoD4 step ([bots.md](../bots.md), traps.md). |
+| `VC_NAV_COD4=1` | `vcod-server` | CoD4 bots walk the nav graph's CoD4 step, off by default (traps.md, Bots). |
 | `VCOD_REQUIRE_INSTALL=<names>` | tests | Turns an install skip into a failure ([testing.md](testing.md)). |
 | `VCOD_REQUIRE_GPU=1` | tests | Turns a headless render test's adapter skip into a failure ([testing.md](testing.md#headless-render-pipeline_check)). |
 | `VCOD_LIVE_SLOTS=<n>` | CoD4 live tests | How many test servers run at once, 3 by default ([testing.md](testing.md#cod4-live-tests)). |
@@ -169,9 +160,8 @@ drawn into each, and both passes' GPU ms (`cod4_sunshadow`, cod4-world.md
 
 - F4 cycles culling `on -> locked -> off`. `locked` freezes the visible set
   so you can fly out and inspect it.
-- To reproduce a screenshot spot in fly mode, add a temporary
-  `VCOD_POS="x y z yaw"` override to the `FlyCamera::new` spawn in `main.rs`
-  and remove it before committing.
+- To reproduce a screenshot spot in fly mode, copy the F3 camera line's
+  numbers into `vcod <map> --pos "x y z yaw pitch"`.
 - Pre-existing noise: a few `vkAcquireNextImageKHR` fence validation errors
   per run on Vulkan.
 - A stock install loads with no shader parser warning

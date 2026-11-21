@@ -55,11 +55,12 @@ pub struct DownloadFile {
 }
 
 impl DownloadFile {
-    /// The regular file at `path`; `None` when it does not open.
+    /// The regular file at `path`; `None` when it does not open, or when it
+    /// is past the `i32` size block 0 and a redirect carry.
     pub fn open(path: &Path) -> Option<Self> {
         let file = std::fs::File::open(path).ok()?;
         let meta = file.metadata().ok()?;
-        meta.is_file().then(|| DownloadFile {
+        (meta.is_file() && meta.len() <= i32::MAX as u64).then(|| DownloadFile {
             src: Box::new(file),
             len: meta.len(),
         })
@@ -562,6 +563,12 @@ mod tests {
             .unwrap();
         assert_eq!(f.read_block(0).unwrap(), bytes[..BLOCK]);
         assert!(f.read_block(1).is_err(), "cut short after the open");
+        // Sparse: past 2 GiB the size no longer fits block 0's `i32`.
+        let big = std::fs::File::create(dir.join("big.pk3")).unwrap();
+        big.set_len(i32::MAX as u64).unwrap();
+        assert!(DownloadFile::open(&dir.join("big.pk3")).is_some());
+        big.set_len(i32::MAX as u64 + 1).unwrap();
+        assert!(DownloadFile::open(&dir.join("big.pk3")).is_none());
     }
 
     #[test]

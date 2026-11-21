@@ -2,7 +2,7 @@
 //! `DObjCalcAnim` writes (`cod4_lnxded` 0x81b4c8c), the locals a
 //! controller sets (0x81b00de), and `DObjCalcSkel`'s composition of them
 //! into model-space bones (0x81af4f8, 0x81ae164), each float rounded where
-//! the binary stores it. docs/research/cod4-gsc.md 3.2, "The skeleton".
+//! the binary stores it. docs/research/cod4-gsc.md 3.2.5.
 //! `iw3mp.exe`'s `DObjCalcSkel` runs the same quat sums, its x87 at double
 //! precision, with its own stores and its own translation's order
 //! ([`Cod4Arith::Client`], cod4-player-anims.md 8).

@@ -8,7 +8,7 @@
 
 use super::info::{KIND_FOUR_WHEEL, KIND_TANK};
 use super::{MAX_SEATS, Vehicle};
-use crate::game::host::GameHost;
+use crate::game::host::{ENTITYNUM_NONE, GameHost};
 use glam::{Quat, Vec3};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -31,8 +31,6 @@ const TANK_EXIT_DELAY_MS: i32 = 1500;
 const DELAY_MESSAGE_MS: i32 = 500;
 /// A tank driver's exit inside its coast window pops up at 200.
 const EXIT_POP: f32 = 200.0;
-/// `ENTITYNUM_NONE`.
-const NONE: i32 = 1023;
 /// A player's `r.mins`/`r.maxs`, what the dismount search fits.
 pub const PLAYER_BOX: ([f32; 3], [f32; 3]) = (
     [
@@ -608,7 +606,7 @@ pub fn unlink_player(
     v.wire.anim_movetype &= !(1 << seat);
     if seat == 1 {
         v.wire.driven_flag = false;
-        v.wire.other = NONE;
+        v.wire.other = ENTITYNUM_NONE;
         v.wire.head_icon[0] = 0;
         // A tank coasts on for 3 s after its driver leaves.
         if info.kind == KIND_TANK {
@@ -617,7 +615,7 @@ pub fn unlink_player(
         }
     }
     if v.wire.other == slot as i32 {
-        v.wire.other = NONE;
+        v.wire.other = ENTITYNUM_NONE;
     }
     let pop = voluntary && now < v.coast_until;
     // `isInVehicle` reads the entity state's bit, which only a dismount's
@@ -783,7 +781,7 @@ mod tests {
             // A forced exit goes whatever the clock.
             assert!(unlink_player(&mut host, cx, 3, false, [0.0; 3], bounds));
             assert_eq!(host.vehicles.seat_of(3), None);
-            assert_eq!(host.vehicles.live[&id].wire.other, NONE);
+            assert_eq!(host.vehicles.live[&id].wire.other, ENTITYNUM_NONE);
             // Inside 250 ms of a stamp no entry is taken.
             clock(&mut host, 4).stamp = 11_300;
             board(&mut host, cx, id, 4, true, 0.0);

@@ -260,7 +260,10 @@ impl World {
     /// bullet passes through a barrel (`crates/server/tests/missile_ab.rs`,
     /// where the capture's own grenade comes to rest on one). `None` is the
     /// bare world every test that mounts no paks builds.
-    pub fn from_bsp(b: &mapworld::MapWorld, fs: Option<&vcod_common::pk3::Pk3Fs>) -> Self {
+    pub fn from_bsp(
+        b: &mapworld::MapWorld,
+        fs: Option<&dyn vcod_common::asset_source::AssetSource>,
+    ) -> Self {
         let props = fs.map_or_else(Vec::new, |fs| {
             vcod_common::props::collision_tris(fs, &b.entities)
         });

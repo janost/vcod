@@ -6,7 +6,7 @@ Byte layouts of the three files that make up a CoD 1 model. Facts are VERIFIED u
 - `crates/common/src/skeleton.rs` grafts several models into one skeleton and builds the inverse binds.
 - Little-endian; `cstr` is NUL-terminated.
 
-## The three files
+## 1. The three files
 
 | pk3 entry | Holds |
 |---|---|
@@ -16,7 +16,7 @@ Byte layouts of the three files that make up a CoD 1 model. Facts are VERIFIED u
 
 The first present LOD's name selects the parts entry; every present LOD names its own surfs entry ("LOD selection"). Texture filenames resolve under `skins/` (`skins/viewmodel@woodk98.dds`, `skins/viewhands@default.jpg`), as dds, jpg or tga.
 
-## `xmodel/<name>` (descriptor)
+## 2. `xmodel/<name>` (descriptor)
 
 ```
 u16 version                 // 14
@@ -38,7 +38,7 @@ per present LOD: u16 tex_count; tex_count x cstr   // texture filenames, one per
 - The LOD name's last character is the model type: `'0'` rigid, `'1'` animated, `'2'` viewmodel, `'3'` playerbody, `'4'` viewhands. The parser reads it off the LOD name.
 - `viewhands@default.jpg` is a 4x4 white placeholder the engine replaces per surface at run time. Hands surfaces 0 and 1 are the left and right hand meshes (UVs match the `viewhands@hand.dds` atlas); 2 and 3 are the sleeves (UVs match the 512x512 `viewhands@vsleeve_<nation>` textures). vcod substitutes `viewhands@hand.dds` and `viewhands@vsleeve_whermact.tga` only when a model's materials are exactly the four placeholders.
 
-### Collision block
+### 2.1 Collision block
 
 The layout is CoD2's `XModelCollSurf_s` / `XModelCollTri_s` unchanged. VERIFIED on every descriptor in the stock paks (1018 models): each parses to exact EOF, and every reconstructed vertex but 9 of 544k lies inside its surface bounds within 0.5.
 
@@ -50,7 +50,7 @@ The layout is CoD2's `XModelCollSurf_s` / `XModelCollTri_s` unchanged. VERIFIED 
 - The render mesh is far denser: `barrel_high0` has 372 triangles, its collision surface 28.
 - Stock MP maps place 7168 `misc_model`s over 235 models; 2700 placements (184 models) carry collision. The 51 placed models without (`bookrow`, `grasstuft`, `bottle_wine`, `doorknobcrystal`, `boxhedge`) are passable in retail too. `spawnflags` on those entities is only 0 or 2, mostly on winter trees; INFERRED, not verified: it is unrelated to collision. vcod ignores it.
 
-## `xmodelparts/<lod>`
+## 3. `xmodelparts/<lod>`
 
 ```
 u16 version                 // 14
@@ -68,7 +68,7 @@ num_bones x { i8 parent; f32 pos[3]; i16 rot[3] }
 - kar98k gun: 6 bones, root `tag_weapon`, then `kar98`, `tag_brass`, `tag_flash`, `k98 clip` (with the space, also the anim track name), `kar98_bolt`. Hands: 55 bones, root `tag_view`, containing `tag_view > tag_torso > tag_weapon`.
 - Viewhands quirk (model type `'4'`): the stored bind positions of hand bones are placeholders the engine re-poses at run time. Before composing worlds the parser zeroes the local position (rotation kept) of every bone named `tag_view`, `tag_torso` or `tag_weapon`, starting with `bip01 `, containing `webbing`, or starting with `r cuff` or `r wrist`: all 55 observed hands bones. The gun (type `'2'`) needs nothing. So every shipped `viewmodel_*` model has all-zero bind local positions (the translation-key gotcha in `xanim-v14-format.md`).
 
-## `xmodelsurfs/<lod>`
+## 4. `xmodelsurfs/<lod>`
 
 ```
 u16 version                 // 14
@@ -96,11 +96,11 @@ per surface:
 - UVs are used raw, no v-flip: the engine's v-down convention matches the BSP pipeline. The reference importer flips for Blender's v-up; do not copy that. Gun UVs run outside 0..1 (-0.99..1.98), so sample with wrap.
 - Totals: gun 5 surfaces, 1125 vertices, 1001 triangles; hands 4 surfaces, 1914 vertices, 2924 triangles. Every baked vertex lies inside the descriptor bounds within 0.5.
 
-## LOD selection
+## 5. LOD selection
 
 All CoDMP.exe 1.1. Each claim carries its own label.
 
-### Loading
+### 5.1 Loading
 
 - VERIFIED, the descriptor reader 0x48b020: the three LOD slots are `{f32 dist; cstr name}` pairs copied raw into a parse buffer of 0x404-byte records (name, then dist at +0x400).
 - VERIFIED, the loader 0x48b290: per slot it copies the name, stores the dist at `xmodel+4 + i*0x14` and the name pointer at `+8 + i*0x14`, and increments the LOD count at `xmodel+0x64` (a short). INFERRED, off the `je 0x48b53c` on an empty name at 0x48b414: the count stops at the first empty slot. VERIFIED by a census: the stock paks have no gap (1012 descriptors).
@@ -115,7 +115,7 @@ All CoDMP.exe 1.1. Each claim carries its own label.
   | world weapons | `150 500 1000` | 18 |
   | `crate_misc1a` | `512 0` | 1 |
 
-### The per-frame inputs
+### 5.2 The per-frame inputs
 
 - VERIFIED, `RE_RenderScene` (0x4e9cb0), at 0x4e9f6b..0x4ea02d: the view's `lodBias` is `r_lodbias->value` (cvar pointer 0x16c3750) and its `lodScale` is `tan(min(fov_x, fov_y) * pi/360) / tan(0.6981317)` times `r_lodscale->value` (0x16c37a4). The constants are the float pi/360 at 0x56904c and the double 0.6981317 (40 degrees) at 0x569190; `fov_x`/`fov_y` are the refdef's (0x16c5648, 0x16c564c). The min is an `fcomp` of the two with `test ah,0x41; jp`, picking `fov_y` only when `fov_x` is larger. The pair lands at viewParms +0x140/+0x144, which `R_RenderView` (0x4d5310) copies to `tr.viewParms` at 0x16c5350, so 0x16c5490 / 0x16c5494.
 - So at `cg_fov 80` across 4:3 (64.4 tall) a table is read at 0.75 of the true distance, a scope's zoom reads it nearer still, and `r_lodscale 0` reads every model at distance `r_lodbias`.
@@ -129,7 +129,7 @@ All CoDMP.exe 1.1. Each claim carries its own label.
   | High | 0.5 | 0 |
   | Off | 0 | 0 |
 
-### The pick
+### 5.3 The pick
 
 - VERIFIED, 0x4ea0c0 (refEntity in `esi`): `lodDist = lodScale * |viewOrigin - ent.origin| + lodBias`, divided by the float at refEntity +0x40 when that is non-zero. `viewOrigin` is `tr.viewParms`' first vector (0x16c5350); `ent.origin` is refEntity +0x44.
 - VERIFIED, 0x48bd70: walks the LODs in order and returns the first whose dist is 0 or greater than `lodDist` (`fcomp` then `test ah,0x5; jnp`, so strictly greater); past the last it returns -1. No hysteresis, no per-entity state.
@@ -137,23 +137,23 @@ All CoDMP.exe 1.1. Each claim carries its own label.
 - VERIFIED: these are the only callers of 0x4ea0c0 and 0x48bd70, so every xmodel draw goes through the pick. Static models (`misc_model`) reach it as refEntities: the cell walk at 0x50b4c4..0x50b50f pushes each cell's static-model records through `RE_AddRefEntityToScene` (0x4e9a00, which copies 0x9c bytes). INFERRED: the refEntity +0x40 divisor is the static model's scale, which 0x504a20 sets to the largest `modelscale_vec` axis (0x42dea0) and leaves 0 when all three are 1 (0x504b55).
 - VERIFIED, not ported (cheats): `r_highLodDist` "-1", `r_mediumLodDist` "0", `r_lowLodDist` "0", `r_lodViewDist` "0" (flags 0x200, 0x4b3300). `R_RenderView` copies them to 0xa9ce18/0xa9ce2c/0xa9ce40 and 0xa9ce10 each frame; a non-negative `r_highLodDist` swaps every model's table for theirs, and a positive `r_lodViewDist` replaces `lodDist`.
 
-### vcod
+### 5.4 vcod
 
 - `model::LodView` (`distance`) and `model::select_lod` are the two functions above. The renderer picks each entity part's LOD at the start of `Renderer::render` (`pick_dynamic_lods`) from the instance's origin, at scale 0, and draws nothing for one past its last LOD; `vc_shadows`' entity casters are the drawn instances, so they agree. Props bake every LOD into the map buffers (`props::Props::ranges` carries the LOD); the gather keeps the one picked at the prop's origin and scale. The static `vc_shadows` layer casts LOD 0, since it is cached across views.
 - The viewmodel is a DObj in retail too. INFERRED: it sits at the eye, so its `lodDist` is about `r_lodbias` and a stock gun or hands model (one LOD at 0, or `viewmodel_ammo` at 5000) never drops; vcod's viewmodel pass draws LOD 0. Model Detail Aggressive's -200 only lowers the distance.
 - Collision is untouched: the collision mesh is the descriptor's own, and hit boxes ride LOD 0's `xmodelparts`, shared by every LOD.
 
-## Weapon files
+## 6. Weapon files
 
 `weapons/mp/<name>` is `\key\value\key\value...` text. The leading backslash is optional. The shipped files open with a bare `WEAPONFILE` token before the first key, which shifts every pair by one if kept. `kar98k_mp` names `gunModel viewmodel_kar98k` and `handModel viewmodel_hands_new`.
 
-## Model space and the view basis
+## 7. Model space and the view basis
 
 Viewmodels are authored around `tag_view` at the eye with X forward, Y left, Z up. Tags point +X forward, so the muzzle direction is `tag_flash`'s rotation applied to +X. View space is X right, Y up, -Z forward; the remap in `crates/client/src/viewmodel.rs` sends model +X to view -Z, +Y to -X and +Z to +Y. Its determinant is +1, a rotation, so the models' one-sided winding survives.
 
 The gun hangs off the hands' `tag_weapon` whatever its own root is called. VERIFIED: the viewmodel setup in `cgame_mp_x86.dll` (1.1) at 0x30034cf0 builds a two-model list from the weapon def's strings at +0x14 and then +0x10, each prefixed `xmodel/`, and stores the literal `"tag_weapon"` in the second entry beside its model handle. VERIFIED (table entries 0x30075588 and 0x3007557C): the module's weapon field table names +0x14 `handModel` and +0x10 `gunModel`. INFERRED (from its slot): the literal is the tag the gun attaches at. VERIFIED (`xmodelparts`): the gun's root name varies, `tag_weapon` in `viewmodel_kar98k` and `tag_origin` in `viewmodel_m1carbine`. `viewmodel.rs` grafts the gun at an explicit `tag_weapon`, so a `tag_torso`-only ADS anim moves either gun; a graft by root name leaves the carbine as a separate root at the eye. Elsewhere a graft without a tag aliases a later model's root to the base bone of the same name, and a root name the base skeleton lacks becomes a new root with a warning.
 
-## The view fov
+## 8. The view fov
 
 Retail draws the viewmodel with the world's own fov. A fixed viewmodel fov matches retail's gun size at the hip of a 4:3 window only and leaves the gun unzoomed down the sight.
 

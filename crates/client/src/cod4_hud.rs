@@ -333,7 +333,7 @@ impl Cod4Hud {
 /// `cg.inKillCam`: the drawn playerstate is an archived one
 /// (`ps.deltaTime` set, `CG_TransitionKillcam`).
 fn in_killcam(snap: &Snapshot) -> bool {
-    snap.ps.get("deltaTime").unwrap_or(0) != 0
+    snap.ps.word(vcod_cod4::ps_word!("deltaTime")) != 0
 }
 
 /// `PM_DEAD` and up hide `HE_FLAG_HIDE_WHEN_DEAD` elements;
@@ -368,7 +368,7 @@ impl Cod4Hud {
         });
         // `CG_Draw2D`'s intermission arm (`DrawIntermission`):
         // the board and the chat, then the say field, nothing else.
-        if snap.ps.get("pm_type") == Some(h::PM_INTERMISSION) {
+        if snap.ps.word(vcod_cod4::ps_word!("pm_type")) == h::PM_INTERMISSION {
             for p in self.scoreboard(l, s, snap, &sp, 1.0, shell) {
                 self.draw_piece(l, &sp, &p, &mut out);
             }
@@ -387,7 +387,7 @@ impl Cod4Hud {
         if in_killcam(snap) {
             self.draw_killcam(l, &sp, &mut out);
         }
-        let dead = snap.ps.get("pm_type").unwrap_or(0) >= PM_DEAD;
+        let dead = snap.ps.word(vcod_cod4::ps_word!("pm_type")) >= PM_DEAD;
         let in_menu = s.menus.open().is_some();
         let elems: Vec<HudElem> = h::hud_elems(&snap.ps)
             .into_iter()

@@ -593,7 +593,7 @@ mod tests {
     /// The search behind the seed above: one fit in the first 2^16 seeds
     /// and 512 draws (player-clip doc 13.4). A few seconds.
     #[test]
-    #[ignore]
+    #[ignore = "seed search behind the pinned 1.5 seed, a few seconds"]
     fn the_15_overlap_spectator_seed_is_the_only_fit() {
         let found = seed_search(
             StuckRules::V1_5,

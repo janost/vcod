@@ -100,8 +100,6 @@ const RAD_TO_DEG: f64 = f64::from_bits(0x404c_a5dc_1a63_c1f8);
 const DEG_TO_RAD: f64 = f64::from_bits(0x3f91_df46_a252_9d39);
 /// rodata 0x8153928: ms to seconds.
 const MSEC_TO_SEC: f32 = f32::from_bits(0x3a83_126f);
-/// `eFlags` 0x4000: mantling.
-pub const EF_MANTLE: u32 = 0x4000;
 
 /// One anim's root translation as the engine samples it.
 #[derive(Clone, Debug, PartialEq)]
@@ -500,7 +498,7 @@ fn start_mantle(pm: &mut Pmove, anims: &MantleAnims, res: &Results) {
     let delta = anims.delta(&ps.mantle, up + over);
     ps.origin = sub(res.end, delta);
     ps.pm_flags |= pmf::MANTLE;
-    ps.e_flags |= EF_MANTLE;
+    ps.e_flags |= ef::MANTLE;
 }
 
 /// `Mantle_Move` (0x80de260): the timer steps by the frame, the body by the
@@ -541,7 +539,7 @@ pub(crate) fn mantle_move(pm: &mut Pmove, pml: &Pml) {
         let ps = &mut *pm.ps;
         if ps.mantle.flags & flag::STAND != 0 {
             ps.add_event(super::ev::STANCE_FORCE_STAND, 0);
-            ps.e_flags &= !EF_MANTLE;
+            ps.e_flags &= !ef::MANTLE;
         }
     }
 }

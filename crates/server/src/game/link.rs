@@ -231,11 +231,7 @@ fn client_slot(host: &GameHost, id: EntId) -> Option<usize> {
 }
 
 fn vector(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> [f32; 3] {
-    let atom = cx.intern_folded(name);
-    match host.get_field(cx, id, atom) {
-        Value::Vector(v) => v,
-        _ => [0.0; 3],
-    }
+    host.vec_field(cx, id, name).to_array()
 }
 
 /// A bone of the client's posed body in the body's own frame: the model
@@ -254,26 +250,39 @@ pub fn client_bone(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Vec3,
     while let Ok(p) = usize::try_from(skel.bones()[*chain.last()?].parent) {
         chain.push(p);
     }
-    let now = host.dobj_time_ms;
-    let posed = host.dobj_posed.get_mut(slot)?;
-    let times = posed.stamp(skel.bones().len(), &chain, now, &body.pose);
-    let mut poses: Vec<((i32, usize), vcod_common::skeleton::PoseBuffer)> = Vec::new();
-    for &t in &times {
-        if poses.iter().all(|(pt, _)| *pt != t) {
-            let inputs = posed.inputs(&body.pose, &anims, t.0, t.1);
-            let rigs = &mut host.hit_rigs;
-            let pose = vcod_common::playerpose::pose_player(&skel, &inputs, |n| rigs.clip(&*fs, n));
-            poses.push((t, pose));
-        }
-    }
+    let pose = chain_pose(host, slot, &body, &anims, &*fs, &skel, &chain)?;
     let (mut local, mut rot) = (Vec3::ZERO, Quat::IDENTITY);
-    for (&b, t) in chain.iter().zip(&times).rev() {
-        let pose = &poses.iter().find(|(pt, _)| pt == t)?.1;
+    for &b in chain.iter().rev() {
         let (lp, lr) = pose.local(b);
         (local, rot) = (local + rot * lp, rot * lr);
     }
     let frame = host.dobj_posed[slot].frame();
     Some((frame * local, frame * rot))
+}
+
+/// `chain`'s bones of the client's body, each at the time and with the
+/// controls the frame first posed it ([`crate::game::combat::stamped_bones`]).
+fn chain_pose(
+    host: &mut GameHost,
+    slot: usize,
+    body: &crate::game::combat::HitBody,
+    anims: &vcod_common::animtree::PlayerAnims,
+    fs: &dyn vcod_common::asset_source::AssetSource,
+    skel: &vcod_common::skeleton::Skeleton,
+    chain: &[usize],
+) -> Option<vcod_common::skeleton::PoseBuffer> {
+    let now = host.dobj_time_ms;
+    let posed = host.dobj_posed.get_mut(slot)?;
+    Some(crate::game::combat::stamped_bones(
+        skel,
+        &body.pose,
+        anims,
+        &mut host.hit_rigs,
+        fs,
+        posed,
+        chain,
+        now,
+    ))
 }
 
 /// [`client_bone`] in the model's own frame as 1.5b's and UO's skeleton
@@ -290,29 +299,8 @@ fn client_bone_stored(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Ve
     while let Ok(p) = usize::try_from(skel.bones()[*chain.last()?].parent) {
         chain.push(p);
     }
-    let now = host.dobj_time_ms;
-    let posed = host.dobj_posed.get_mut(slot)?;
-    let times = posed.stamp(skel.bones().len(), &chain, now, &body.pose);
-    let mut merged: Option<vcod_common::skeleton::PoseBuffer> = None;
-    let mut done: Vec<(i32, usize)> = Vec::new();
-    for &t in &times {
-        if done.contains(&t) {
-            continue;
-        }
-        done.push(t);
-        let inputs = posed.inputs(&body.pose, &anims, t.0, t.1);
-        let rigs = &mut host.hit_rigs;
-        let pose = vcod_common::playerpose::pose_player(&skel, &inputs, |n| rigs.clip(&*fs, n));
-        match merged.as_mut() {
-            None => merged = Some(pose),
-            Some(m) => {
-                for (&b, _) in chain.iter().zip(&times).filter(|(_, bt)| **bt == t) {
-                    m.copy_bone(&pose, b);
-                }
-            }
-        }
-    }
-    let b = merged?.stored_worlds(&skel)?[bone];
+    let pose = chain_pose(host, slot, &body, &anims, &*fs, &skel, &chain)?;
+    let b = pose.stored_worlds(&skel)?[bone];
     Some((b.origin, b.axes))
 }
 

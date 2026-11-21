@@ -812,8 +812,7 @@ mod tests {
         assert!(hud.arenas.is_none());
     }
 
-    /// The HUD dvars: a vec2 dvar's two numbers, the stance prints' keys
-    /// only while they are on, defaults for what is missing.
+    /// A value hudelem prints as C's `%g`: six significant digits.
     #[test]
     fn a_value_hudelem_prints_as_percent_g() {
         let e = HudElem {
@@ -829,6 +828,8 @@ mod tests {
         assert_eq!(elem_body(&e, String::new, 0), "1.23457e+06");
     }
 
+    /// The HUD dvars: a vec2 dvar's two numbers, the stance prints' keys
+    /// only while they are on, defaults for what is missing.
     #[test]
     fn hud_dvars_read_the_positions_and_the_hint_keys() {
         let off = HudDvars::read(|_| None, |_| Some("X".into()));

@@ -198,7 +198,10 @@ impl AreaTree {
     /// The tree a map load builds (`CM_LoadMap`, `0x804b3c0`): the root over
     /// inline model 0, then every collidable `misc_model` in entity-string
     /// order.
-    pub fn for_map(bsp: &vcod_common::mapworld::MapWorld, fs: &vcod_common::pk3::Pk3Fs) -> Self {
+    pub fn for_map(
+        bsp: &vcod_common::mapworld::MapWorld,
+        fs: &dyn vcod_common::asset_source::AssetSource,
+    ) -> Self {
         let Some(world) = bsp.models.first() else {
             return Self::unbounded();
         };

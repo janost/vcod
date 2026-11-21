@@ -173,7 +173,7 @@ differ by at most one.
 
 ## Names
 
-A bot is named `[BOT] <name>`, drawn from 120 names in
+A bot is named `[BOT] <name>`, drawn from a pool of over a hundred in
 `crates/server/src/botmgmt.rs` (`[BOT] Sir Camps-a-Lot`, `[BOT]
 NadeSpammer`, `[BOT] PronePatrol`). No two connected bots share a name;
 past the pool's unused names a number is added (`[BOT] NadeSpammer 2`).
@@ -189,12 +189,12 @@ games share one brain (`crates/server/src/bots.rs`).
 
 ### The loop
 
-Each server frame (50 ms) the server fills a `BotView` for every bot and
-calls `Bot::think`, which returns one usercmd: move keys, view angles,
+Each server frame (50 ms) the server fills a view for every bot and asks
+its brain for one usercmd: move keys, view angles,
 buttons and the selected weapon. The server runs that cmd through the
 game's own `ClientThink` and pmove, the path a human's cmd takes.
 
-`think` reads the view and nothing else. It cannot move the body, see
+The brain reads the view and nothing else. It cannot move the body, see
 through a wall or skip a physics rule, so a player could do anything a
 bot does with the same keys. If one kills you, it earned it. The view holds:
 
@@ -225,8 +225,7 @@ bot does with the same keys. If one kills you, it earned it. The view holds:
 
 - It spots a new enemy only inside its sight cone; a bot in a vehicle
   seat sees all round. It keeps the enemy it fights while he stays in
-  sight; a new one takes over only under 60% of the current one's range
-  (`RETARGET_RATIO`).
+  sight; a new one takes over only under 60% of the current one's range.
 - Whoever just hit it comes first. Hit by someone it cannot see, it
   turns toward the shot. Gunfire it hears draws it from any direction.
 - A new target costs a reaction delay; switching back to a recent enemy
@@ -253,8 +252,8 @@ bot does with the same keys. If one kills you, it earned it. The view holds:
 - Each bot's cover, route and drop and wall probes are worked out on up to
   four threads beside the server's own; the server keeps a result only
   where the bot's turn reads what it was worked out from, so every bot
-  moves as it would on one thread. `VCOD_BOT_THREADS=<n>` sets the
-  threads, `1` none.
+  moves as it would on one thread
+  ([usage.md](usage.md#environment-variables) sets the thread count).
 - The follower turns the path into keys: it steers at the next node,
   jumps by the rule that proved the jump, waits out the jump cooldown,
   climbs at the rate the ladder was proven at, and takes a risky drop
@@ -348,25 +347,17 @@ in `dm`, which has no sides. CoD4 bots send none.
 A thin adapter per game sits between the brain and the server. It
 rewrites the cmd into the game's button bits, renumbers the game's
 weapons for the brain, answers the game's menus and fills the view from
-the game's playerstate. Behaviour differs by game, never by map: the
-`BotWorld` trait in `crates/server/src/bots/driver.rs` holds the
-differences as constants each game sets (`YIELDS`, `SPREADS`, `SHUNS_BODIES`, `PMOVE_PROBES`,
-CoD4's `MANTLE_RESTS` and `PARTS_MATES_FLAT`).
+the game's playerstate. Behaviour differs by game, never by map: each
+game sets a few switches on the shared driver (who gives way, who spreads
+out, who plans round bodies, who probes with pmove).
 
 ### How a change is judged
 
 Retail has no bots, so for once there's no oracle. A behaviour
 change runs `bot_match` on the same seeds before and after and lands
-only when stalls drop and kills hold:
-
-```
-cargo run --release -p vcod-server --example bot_match [seed...]
-```
-
-`MAPS=`, `GAMETYPE=`, `BOTS=`, `TICKS=`, `SET=`, `UO=1`, `GAME=cod2` or
-`GAME=cod4`, per-side `AXIS_SKILL=` / `ALLIES_SKILL=` and more;
-[research/bot-combat.md](research/bot-combat.md) section 1 explains the
-switches and every number it prints. Results go in that doc and
+only when stalls drop and kills hold. The tool is `bot_match`
+([docs/dev/testing.md](dev/testing.md#bots)); results go in
+[research/bot-combat.md](research/bot-combat.md) and
 [research/bot-objectives.md](research/bot-objectives.md).
 
 ## Per game
@@ -505,8 +496,8 @@ are most of a miss. Blame the gun. Full tables and the earlier runs:
   at its landing is offered the climb, keeps no leap, and clips the
   level's solid brush entities. A bot crouches when a climb forces it
   (`EV_STANCE_FORCE_CROUCH`) and climbs on past a ladder's top.
-  `VC_NAV_COD4=1` walks the graph under 1.7's own pmove instead; it kills
-  0.4% more and stalls 3% more over six seeds of all maps, so it is off.
+  A walk under 1.7's own pmove was tried: it killed 0.4% more and
+  stalled 3% more over six seeds of all maps, so it is off.
 - Frags: thrown through the frag key. A live frag under its cursor hint
   with 1.5 s or more on the fuse is picked up and thrown back toward its
   thrower, unless he is a teammate (else the enemy in sight).
@@ -538,12 +529,7 @@ Cannot:
 
 Measured (`war` and `dm` on mp_backlot and mp_carentan, six bots, 6 000
 ticks, seeds 1 to 12, 2026-10-27): 2 284 kills, 8 637 hits, accuracy
-0.24 to 0.31, no script error. Measure with `GAME=cod4
-COD4_DIR=<install> cargo run --release -p vcod-server --example
-bot_match` (`OBJ=0` keeps bots off objectives, `GUNS=0` and
-`THROWBACK=0` turn those off, `LEAVE=<tick>,...` drops a bot at each
-tick, `STALLS=1` prints stalled samples) and `--example nav_build` for
-the graph. Full tables:
+0.24 to 0.31, no script error. Full tables and how to measure:
 [research/bot-measurements-cod2-cod4.md](research/bot-measurements-cod2-cod4.md).
 
 ## Known limits

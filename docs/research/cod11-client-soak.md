@@ -7,7 +7,7 @@ what both left. It asks of CoD1 what the CoD4 soak (`cod4-map-sweep.md`,
 "The soak") asked of CoD4, which found the client keeping every snapshot
 and building marks and effect images on first use.
 
-## The harness
+## 1. The harness
 
 `tools/cod1_soak.sh <outdir> [map...]` (`COD_DIR`, `UO=1`, `LVP_ICD`,
 `MINUTES`, `GAMETYPES`; see the script header) runs one map at a time in a
@@ -56,7 +56,7 @@ session's `pump` in a test into a headless renderer. CoD1 has no such
 pump: its frame is `main.rs`'s `App`, menus, HUD and render included. So
 this soak drives the real binary and shares only the frame profile.
 
-## Findings before the fixes
+## 2. Findings before the fixes
 
 mp_carentan tdm and dm at 1 min, with the level prewarm off:
 
@@ -79,7 +79,7 @@ mp_carentan tdm and dm at 1 min, with the level prewarm off:
    `LOADING... %s` steps, cgame_mp_x86.dll 0x30020da0). VERIFIED (the
    strings and the calls). Not a stall in play.
 
-## The fix: the level prewarm
+## 3. The fix: the level prewarm
 
 Retail's `CG_RegisterGraphics` (cgame_mp_x86.dll 0x30020da0) registers,
 under `LOADING... - server models`, every model configstring from 0x10d
@@ -129,7 +129,7 @@ Gate: `fx::sim::tests::a_preloaded_level_plays_its_effects_without_reading_a_fil
 (the level list's effects, spawned and stepped after the preload over an
 empty search path, read nothing).
 
-## The sweep
+## 4. The sweep
 
 ### 1.1
 
@@ -167,7 +167,7 @@ every gametype its arena lists: 70 levels, 65 minutes of play.
   - The server: `spawn point entity is in solid` on mp_powcamp (a stock
     spawn point; vcod-server warns, retail does not check).
 
-### United Offensive 1.51
+### 4.1 United Offensive 1.51
 
 `UO=1 JOBS=2 MINUTES=1`, `COD_DIR` at a stock-only UO tree, every stock
 UO map (nineteen) under every gametype its arena lists (dm, tdm, sd, re,

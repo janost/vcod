@@ -425,6 +425,25 @@ fn a_silent_client_times_out_with_no_zombie_turn() {
     assert!(h.sv.core.clients[0].is_none());
 }
 
+/// A slot that never sent a netchan message times out at
+/// `NO_NETCHAN_TIMEOUT_S` under the default `sv_timeout` 240, not at 240 s
+/// (vcod's, SEC-066).
+#[test]
+fn a_slot_that_never_sent_a_netchan_message_times_out_early() {
+    use crate::engine::slot::NO_NETCHAN_TIMEOUT_S;
+    let mut h = Harness::new(4, &[]);
+    let out = h.step(&Step::Connect(false, 0, 7, &[]));
+    assert!(
+        out.iter().any(|r| r.starts_with("connectResponse")),
+        "{out:?}"
+    );
+    assert!(h.sv.core.clients[0].is_some());
+    h.frames((NO_NETCHAN_TIMEOUT_S * 1000 / FRAME_MS) as u64);
+    assert!(h.sv.core.clients[0].is_some(), "not before the timeout");
+    h.frames(10);
+    assert!(h.sv.core.clients[0].is_none());
+}
+
 /// A served iwd under `fs_basepath`.
 fn base_with_iwd() -> (tempfile::TempDir, Vec<u8>) {
     let dir = tempfile::tempdir().unwrap();
@@ -757,6 +776,35 @@ fn ban_txt_refuses_a_banned_guid_until_unbanned() {
         "no banned user has name badguy\n"
     );
     assert_eq!(challenge_reply(&mut h, OFF), ["challengeResponse N"]);
+}
+
+/// vcod's `vc_maxClientsPerIP` (4): a fifth slot for one public address
+/// is refused at `getchallenge` and at `connect`; a held socket and
+/// another address still get in.
+#[test]
+fn one_public_address_takes_at_most_four_cod2_slots() {
+    const OFF: [u8; 4] = [198, 51, 100, 2];
+    let refused = ["error\n\u{15}Too many clients from your address"];
+    let mut h = Harness::new(8, &[]);
+    // A challenge asked before the address filled up, after svs.time 0: a
+    // tie on the clock replaces the first slot.
+    h.frames(1);
+    h.port += 1;
+    let late = SocketAddr::from((OFF, h.port));
+    h.sv.handle_packet(late, &oob::packet("getchallenge"), h.now);
+    h.replies(late);
+    let peers: Vec<_> = (0..4).map(|_| h.join(OFF, "")).collect();
+    assert_eq!(challenge_reply(&mut h, OFF), refused);
+    let challenge = h.sv.core.challenges.open(late).unwrap();
+    let ui = format!(
+        "\\protocol\\118\\challenge\\{challenge}\\qport\\{}",
+        late.port()
+    );
+    h.sv.handle_packet(late, &oob::packet(&format!("connect \"{ui}\"")), h.now);
+    assert_eq!(h.replies(late), refused);
+    h.sv.handle_packet(peers[0].from, &oob::packet("getchallenge"), h.now);
+    assert_eq!(h.replies(peers[0].from), ["challengeResponse N"]);
+    let _other = h.join([198, 51, 100, 3], "");
 }
 
 /// `kick` is `SV_TempBan_f` (17.7): the guid is refused for

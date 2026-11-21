@@ -468,7 +468,7 @@ fn kill_captures_decode_and_reencode() {
 }
 
 /// `sv_iwds` lists each iwd's unkeyed checksum: the CRC-32 of its entries'
-/// CRC-32s (cod4-handshake.md, "The pure check"). With `$COD4_DIR` the
+/// CRC-32s (cod4-handshake.md 8). With `$COD4_DIR` the
 /// install's iwds give the capture's list, and the shooter's `cp` carries
 /// exactly their checksums keyed with the gamestate's feed.
 #[test]

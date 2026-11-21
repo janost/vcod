@@ -837,7 +837,7 @@ fn cod2_cookie_receivers_over_the_prepass() {
 /// `mp_global_intermission` view, where `cod4_perf.sh`'s CoD2 spectator
 /// stands (cod2-client-perf.md 8). Maps from `VCOD_PROFILE_MAPS`.
 #[test]
-#[ignore]
+#[ignore = "profile, not a check: COD2_DIR, VCOD_PROFILE_MAPS"]
 fn cod2_cull_profile() {
     let Some(fs) = vcod_common::testing::cod2_fs() else {
         return;
@@ -911,7 +911,7 @@ fn cod2_cull_profile() {
 /// that a view shows is a hole. Maps from `VCOD_PROFILE_MAPS`; at most
 /// `VCOD_WALK_SPAWNS` (default 8) spawns a map.
 #[test]
-#[ignore]
+#[ignore = "profile, not a check: COD2_DIR and a Vulkan adapter, VCOD_PROFILE_MAPS"]
 fn cod2_cell_walks_draw_alike() {
     let Some(fs) = vcod_common::testing::cod2_fs() else {
         return;
@@ -993,7 +993,7 @@ fn cod2_cell_walks_draw_alike() {
 /// uploaded so a faster load can show it uploads the same. Maps from
 /// `VCOD_PROFILE_MAPS` (space-separated). Stage lines log at info.
 #[test]
-#[ignore]
+#[ignore = "profile, not a check: COD2_DIR and a Vulkan adapter, VCOD_PROFILE_MAPS"]
 fn cod2_load_profile() {
     let _ = env_logger::builder()
         .is_test(true)

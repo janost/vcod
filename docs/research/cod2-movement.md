@@ -1005,7 +1005,7 @@ changes every client's predictor. vcod's predictor runs the defaults
 
 A VERIFIED row rests on the dvar default (`BG_RegisterDvars`'s
 immediates), the rodata VA or the immediate it names; the 1.1 column is
-vcod's `pmove.rs` and `bsp-ibsp59-format.md`. The walk accel floor is read
+vcod's `pmove.rs` and `cod11-mantle.md`. The walk accel floor is read
 off `PM_Accelerate`'s use of `stopspeed` and the plane count off
 `PM_SlideMove`'s `> 7` test, both control flow.
 
@@ -1017,9 +1017,10 @@ off `PM_Accelerate`'s use of `stopspeed` and the plane count off
   unsent `oldVelocity`.
 - The `almostGroundPlane` field's readers.
 
-## 15. What a CoD2 `MoveRules` needs
+## 15. What CoD2's pmove differs in, ranked
 
-Ranked by how much an A/B replay would miss without it:
+Ranked by how much an A/B replay misses without it (16 indexes the port by
+these ranks):
 
 1. **The usercmd.** Jump, stance and lean as `buttons` bits, the jump on
    the edge against `oldcmd`, no `upmove` latch. Nothing replays without
@@ -1251,7 +1252,7 @@ right):
   its first divergence; the resynced run starts each row from retail's
   last. VERIFIED (`crates/cod2/tests/moves_ab.rs`).
 
-### 17.3 The gaps
+### 17.3 Rows the gate once missed
 
 - **Terrain fractions and the crease on a slope (closed).** 11
   `origin[2]` rows on curved floors and one `steps` row sliding 0.035

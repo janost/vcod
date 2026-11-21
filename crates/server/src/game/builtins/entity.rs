@@ -498,11 +498,7 @@ fn spawn_think(
 /// the fields set, numbered after everything already in the table. An item
 /// classname makes an item (`dm.gsc`'s `dropHealth` spawns `item_health`).
 fn spawn_entity(host: &mut GameHost, cx: &mut Cx, args: &[Value]) -> Result<Value, ErrorKind> {
-    let num = |v: &Value| match v {
-        Value::Int(i) => Some(*i as f32),
-        Value::Float(f) => Some(*f),
-        _ => None,
-    };
+    let num = super::args::as_float;
     // CoD4's `spawn("trigger_radius", origin, flags, radius, height)`: the
     // stock claymore and C4 detection triggers (`_weapons.gsc`,
     // cod4-hud.md 16.2).
@@ -1028,17 +1024,11 @@ fn link_client(
     parent: EntId,
 ) -> Result<Value, ErrorKind> {
     let origin = cx.intern_folded("origin");
-    let at = |host: &mut GameHost, cx: &mut Cx, id| match host.get_field(cx, id, origin) {
-        Value::Vector(v) => v,
-        _ => [0.0; 3],
-    };
+    let at = |host: &mut GameHost, cx: &mut Cx, id| host.vec_field_at(cx, id, origin).to_array();
     let child = at(host, cx, child);
     let anchor = at(host, cx, parent);
     let angles = cx.intern_folded("angles");
-    let parent_angles = match host.get_field(cx, parent, angles) {
-        Value::Vector(v) => v,
-        _ => [0.0; 3],
-    };
+    let parent_angles = host.vec_field_at(cx, parent, angles).to_array();
     // In the parent's own frame, so a turning parent swings the child round
     // with it (docs/research/cod11-movers.md, section 13).
     let d = glam::Vec3::from(child) - glam::Vec3::from(anchor);

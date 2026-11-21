@@ -203,7 +203,7 @@ pub fn unget_lean_fraction(f: f32) -> f32 {
 /// `AddLeanToPosition` (`0x6ba9c`): `pos` moved `lean_fraction(leanf) * 20`
 /// along the right vector of `(0, yaw, lean_fraction(leanf) * 16)` degrees,
 /// `yaw` the sim's radians of `ps.viewangles[YAW]`. The roll only tips the
-/// offset down; nothing rolls the view (docs/research/bsp-ibsp59-format.md,
+/// offset down; nothing rolls the view (docs/research/cod11-mantle.md,
 /// "Lean"). `arith` names the build: 1.1d keeps the fraction and the
 /// distance on the stack, 1.5b and UO store both, and the Windows cgames
 /// store both and turn through their own `AngleVectors`

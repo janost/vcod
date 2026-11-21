@@ -78,13 +78,13 @@ impl Cod4Hud {
         let map = self.minimap(s).map(|(_, m)| m);
         self.radar.step(&Frame {
             time: now,
-            radar: ps.get("radarEnabled").unwrap_or(0) != 0,
+            radar: ps.word(vcod_cod4::ps_word!("radarEnabled")) != 0,
             map,
-            me: ps.get("clientNum").unwrap_or(0) as usize,
+            me: ps.word(vcod_cod4::ps_word!("clientNum")) as usize,
             infos: &infos,
             bodies: &bodies,
-            compass_info: ps.get("iCompassPlayerInfo").unwrap_or(0),
-            compass_pinged: ps.get("eFlags").unwrap_or(0) & EF_COMPASS_PING != 0,
+            compass_info: ps.word(vcod_cod4::ps_word!("iCompassPlayerInfo")),
+            compass_pinged: ps.word(vcod_cod4::ps_word!("eFlags")) & EF_COMPASS_PING != 0,
             view: [f("origin[0]"), f("origin[1]")],
             shots: &shots,
         });
@@ -107,7 +107,7 @@ impl Cod4Hud {
         let Some(Some(l)) = &self.loaded else {
             return out;
         };
-        let me = snap.ps.get("clientNum").unwrap_or(0);
+        let me = snap.ps.word(vcod_cod4::ps_word!("clientNum"));
         let player = |n: u32| {
             snap.entities
                 .iter()
@@ -138,7 +138,7 @@ impl Cod4Hud {
                     let Some(gunner) = player(f.parm) else {
                         continue;
                     };
-                    if snap.ps.get("viewlocked_entNum") == Some(n) {
+                    if snap.ps.word(vcod_cod4::ps_word!("viewlocked_entNum")) == n {
                         continue;
                     }
                     out.push(crate::cod4_radar::Shot {
@@ -259,7 +259,7 @@ impl Cod4Hud {
             .client()
             .snapshots
             .last()
-            .is_some_and(|snap| snap.ps.get("radarEnabled").unwrap_or(0) != 0);
+            .is_some_and(|snap| snap.ps.word(vcod_cod4::ps_word!("radarEnabled")) != 0);
         if uav
             && let Some((_, map)) = &minimap
             && let Some(tex) = image_of(l, "compass_radarline")
@@ -336,7 +336,7 @@ impl Cod4Hud {
                 lines: false,
                 alpha,
             };
-        let me = snap.ps.get("clientNum").unwrap_or(0);
+        let me = snap.ps.word(vcod_cod4::ps_word!("clientNum"));
         let team_of = |n: u32| {
             snap.clients
                 .iter()
@@ -835,8 +835,12 @@ mod tests {
                     return;
                 }
                 last = Some(snap.server_time);
-                assert_eq!(snap.ps.get("iCompassPlayerInfo").unwrap_or(0), 0, "{name}");
-                let me = snap.ps.get("clientNum").unwrap_or(0);
+                assert_eq!(
+                    snap.ps.word(vcod_cod4::ps_word!("iCompassPlayerInfo")),
+                    0,
+                    "{name}"
+                );
+                let me = snap.ps.word(vcod_cod4::ps_word!("clientNum"));
                 let team = |n: u32| {
                     snap.clients
                         .iter()

@@ -8,7 +8,9 @@
 
 use glam::Vec3;
 
-use crate::clipmap::{CONTENTS_BODY, CONTENTS_PLAYERCLIP, SURF_LADDER, surface_material};
+use crate::clipmap::{
+    CONTENTS_BODY, CONTENTS_PLAYERCLIP, LADDER_SURFACE, SURF_LADDER, surface_material,
+};
 use crate::net::protocol::ENTITYNUM_NONE;
 use crate::pmove::Stance;
 use crate::pmshared::{PmState, Pml, airborne, leave_ladder};
@@ -51,7 +53,7 @@ const REFLECT: f32 = -2.0;
 const RUNG_REACH: f32 = -31.0;
 /// The rung footstep's material with none under the probe: immediate 0x15,
 /// 0x805a4d5..0x805a4f8.
-const RUNG_DEFAULT_SURFACE: u32 = 0x15;
+const RUNG_DEFAULT_SURFACE: u32 = LADDER_SURFACE;
 
 #[inline]
 fn d(x: f32) -> f64 {

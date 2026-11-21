@@ -979,9 +979,20 @@ pub fn compass_offset(view_yaw: f32, eye: [f32; 3], target: [f32; 3]) -> (f32, f
     (-bearing.sin() * r, -bearing.cos() * r)
 }
 
-/// The icon a `serverCursorHint` shows, `None` for none.
-pub fn hint_material(hint: i32, weapons: &[Option<WeaponDef>]) -> Option<String> {
-    const NAMED: [&str; 8] = [
+/// A game's `serverCursorHint` numbering (cod11-hud-protocol.md "Cursor
+/// hint"): the named icons from 2, then `weapons` weapons' icons from the
+/// one after them, then those weapons' ammo icons.
+pub struct HintLayout {
+    pub(super) named: &'static [&'static str],
+    pub(super) weapons: i32,
+    /// `hintHealth`'s number.
+    pub(super) health: i32,
+}
+
+/// 1.1's and 1.5's cursor hints: 64 weapons' icons from 10, their ammo's
+/// from 74.
+pub const HINTS_V1: HintLayout = HintLayout {
+    named: &[
         "hintActivate",
         "hintNoActivate",
         "hintDoor",
@@ -990,22 +1001,55 @@ pub fn hint_material(hint: i32, weapons: &[Option<WeaponDef>]) -> Option<String>
         "hintHealth",
         "hintLadder",
         "hintFriendly",
-    ];
-    // A weapon never set up leaves its slot 0 and draws nothing; one with
-    // a blank icon key holds `hintActivate` (cod11-hud-protocol.md "Cursor hint").
-    let weapon_icon = |w: i32, icon: fn(&WeaponDef) -> &Option<String>| {
-        let def = weapons.get(w as usize).and_then(Option::as_ref)?;
-        Some(
-            icon(def)
-                .clone()
-                .unwrap_or_else(|| "hintActivate".to_string()),
-        )
-    };
-    match hint {
-        2..=9 => Some(NAMED[hint as usize - 2].to_string()),
-        10..=73 => weapon_icon(hint - 9, |d| &d.hud_icon),
-        74..=137 => weapon_icon(hint - 73, |d| &d.ammo_icon),
-        _ => None,
+    ],
+    weapons: 64,
+    health: 7,
+};
+
+impl HintLayout {
+    /// The number before the first weapon's icon.
+    fn weapon_base(&self) -> i32 {
+        1 + self.named.len() as i32
+    }
+
+    /// The weapon whose icon `hint` shows.
+    pub fn weapon(&self, hint: i32) -> Option<usize> {
+        Self::slot(hint, self.weapon_base(), self.weapons)
+    }
+
+    /// The weapon whose ammo icon `hint` shows.
+    pub fn ammo(&self, hint: i32) -> Option<usize> {
+        Self::slot(hint, self.weapon_base() + self.weapons, self.weapons)
+    }
+
+    fn slot(hint: i32, base: i32, count: i32) -> Option<usize> {
+        (base + 1..=base + count)
+            .contains(&hint)
+            .then(|| (hint - base) as usize)
+    }
+
+    /// The icon `hint` shows, `None` for none.
+    pub fn material(&self, hint: i32, weapons: &[Option<WeaponDef>]) -> Option<String> {
+        // A weapon never set up leaves its slot 0 and draws nothing; one with
+        // a blank icon key holds `hintActivate` (cod11-hud-protocol.md "Cursor hint").
+        let weapon_icon = |w: usize, icon: fn(&WeaponDef) -> &Option<String>| {
+            let def = weapons.get(w).and_then(Option::as_ref)?;
+            Some(
+                icon(def)
+                    .clone()
+                    .unwrap_or_else(|| "hintActivate".to_string()),
+            )
+        };
+        if let Some(name) = usize::try_from(hint - 2)
+            .ok()
+            .and_then(|i| self.named.get(i))
+        {
+            return Some(name.to_string());
+        }
+        if let Some(w) = self.weapon(hint) {
+            return weapon_icon(w, |d| &d.hud_icon);
+        }
+        weapon_icon(self.ammo(hint)?, |d| &d.ammo_icon)
     }
 }
 
@@ -1013,15 +1057,10 @@ pub fn hint_material(hint: i32, weapons: &[Option<WeaponDef>]) -> Option<String>
 /// (0x300229b0) and with its `[%s]` filled with the use key
 /// ([`hint_use_key`]).
 fn cursor_hint(p: &PlayerView, cx: &Context, now: i32, v: &Virtual, out: &mut Vec<HudQuad>) {
-    let material = match p.uo {
-        Some(_) => uo::hint_material(p.cursor_hint, cx.weapons),
-        None => hint_material(p.cursor_hint, cx.weapons),
-    };
-    let Some(material) = material else {
+    let hints = hint_layout(p);
+    let Some(material) = hints.material(p.cursor_hint, cx.weapons) else {
         return;
     };
-    // The weapon icons start at 10 on 1.1, 11 on UO.
-    let first_weapon = if p.uo.is_some() { 10 } else { 9 };
     let text = match hint_text(p, cx) {
         HintText::Hidden => return,
         HintText::Text(text) => Some(text),
@@ -1029,13 +1068,11 @@ fn cursor_hint(p: &PlayerView, cx: &Context, now: i32, v: &Virtual, out: &mut Ve
     };
     let (x, y, w, h) = (300.0, 325.0, 40.0, 40.0);
     let pulse = ((now as f32 * 0.006_666_667).sin() + 1.0) * 0.5;
-    let wide = (first_weapon + 1..=first_weapon + 64 * (1 + i32::from(p.uo.is_some())))
-        .contains(&p.cursor_hint)
-        && cx
-            .weapons
-            .get((p.cursor_hint - first_weapon) as usize)
-            .and_then(Option::as_ref)
-            .is_some_and(|d| d.wide_list_icon);
+    let wide = hints
+        .weapon(p.cursor_hint)
+        .and_then(|w| cx.weapons.get(w))
+        .and_then(Option::as_ref)
+        .is_some_and(|d| d.wide_list_icon);
     let (qx, qw) = if wide { (x - w / 2.0, w * 2.0) } else { (x, w) };
     out.push(v.quad(qx, y, qw, h, [1.0, 1.0, 1.0, pulse], &material));
 
@@ -1064,6 +1101,14 @@ fn cursor_hint(p: &PlayerView, cx: &Context, now: i32, v: &Virtual, out: &mut Ve
     menu_text(cx.font, &s, (x + (w - tw) / 2.0, baseline), 0.21, v, out);
 }
 
+/// The cursor hint numbering `p`'s game sends.
+fn hint_layout(p: &PlayerView) -> &'static HintLayout {
+    match p.uo {
+        Some(_) => &uo::HINTS,
+        None => &HINTS_V1,
+    }
+}
+
 /// What a cursor hint prints over its icon.
 #[derive(Debug, PartialEq)]
 enum HintText {
@@ -1082,11 +1127,7 @@ enum HintText {
 /// server's string; health prints its own only while none is sent.
 fn hint_text(p: &PlayerView, cx: &Context) -> HintText {
     let uo = p.uo.is_some();
-    let (first_weapon, first_ammo, health, count) = if uo {
-        (10, 138, 8, 128)
-    } else {
-        (9, 73, 7, 64)
-    };
+    let hints = hint_layout(p);
     let hint = p.cursor_hint;
     let loc = |k: &str| cx.loc.get(k).unwrap_or(k).to_string();
     // 0x30046940 with no unbound fallback of its own: `KEY_UNBOUND`.
@@ -1096,12 +1137,7 @@ fn hint_text(p: &PlayerView, cx: &Context) -> HintText {
     let def = |w: usize| cx.weapons.get(w).and_then(Option::as_ref);
     let name = |w: usize| def(w).map_or(String::new(), |d| loc(&d.display_name));
     let slot = |w: usize| def(w).map_or(0, WeaponDef::slot_type);
-    let weapon = |base: i32| {
-        (base + 1..=base + count)
-            .contains(&hint)
-            .then(|| (hint - base) as usize)
-    };
-    if let Some(w) = weapon(first_weapon) {
+    if let Some(w) = hints.weapon(hint) {
         if free_slot(slot(w), &p.slots, uo) {
             let text = fill_use_key(&loc("CGAME_PICKUPNEWWEAPON"), &key());
             return HintText::Text(text.replacen("%s", &name(w), 1));
@@ -1124,11 +1160,11 @@ fn hint_text(p: &PlayerView, cx: &Context) -> HintText {
             name(w)
         ));
     }
-    if let Some(w) = weapon(first_ammo) {
+    if let Some(w) = hints.ammo(hint) {
         let text = fill_use_key(&loc("CGAME_PICKUPAMMO"), &key());
         return HintText::Text(text.replacen("%s", &name(w), 1));
     }
-    if hint == health && p.cursor_hint_string < 0 {
+    if hint == hints.health && p.cursor_hint_string < 0 {
         return HintText::Text(loc("CGAME_PICKUPHEALTH").replacen("%s", &key(), 1));
     }
     HintText::Server
@@ -2463,32 +2499,52 @@ LANG_ENGLISH "Press USE [%s] to pickup health"
         assert!(free_slot(6, &full, true) && !free_slot(6, &full, false));
     }
 
+    /// Each game's health hint number names `hintHealth`.
+    #[test]
+    fn hint_layouts_number_the_health_hint() {
+        for hints in [&HINTS_V1, &uo::HINTS] {
+            assert_eq!(
+                hints.material(hints.health, &[]).as_deref(),
+                Some("hintHealth")
+            );
+        }
+    }
+
     #[test]
     fn cursor_hint_maps_health_weapons_and_none() {
         let weapons = vec![None, Some(carbine())];
-        assert_eq!(hint_material(7, &weapons).as_deref(), Some("hintHealth"));
-        assert_eq!(hint_material(2, &weapons).as_deref(), Some("hintActivate"));
-        assert_eq!(hint_material(0, &weapons), None);
-        assert_eq!(hint_material(1, &weapons), None);
-        assert_eq!(hint_material(255, &weapons), None);
         assert_eq!(
-            hint_material(9 + 1, &weapons).as_deref(),
+            HINTS_V1.material(7, &weapons).as_deref(),
+            Some("hintHealth")
+        );
+        assert_eq!(
+            HINTS_V1.material(2, &weapons).as_deref(),
+            Some("hintActivate")
+        );
+        assert_eq!(HINTS_V1.material(0, &weapons), None);
+        assert_eq!(HINTS_V1.material(1, &weapons), None);
+        assert_eq!(HINTS_V1.material(255, &weapons), None);
+        assert_eq!(
+            HINTS_V1.material(9 + 1, &weapons).as_deref(),
             Some("gfx/icons/hud@m1carbine.tga")
         );
         assert_eq!(
-            hint_material(73 + 1, &weapons).as_deref(),
+            HINTS_V1.material(73 + 1, &weapons).as_deref(),
             Some("gfx/icons/hud@ammo2.tga")
         );
         // A weapon with a blank icon key shows the use hint, one never set
         // up nothing (0x30035c71, 0x30025255).
         let bare = vec![None, None, Some(WeaponDef::default())];
-        assert_eq!(hint_material(9 + 2, &bare).as_deref(), Some("hintActivate"));
         assert_eq!(
-            hint_material(73 + 2, &bare).as_deref(),
+            HINTS_V1.material(9 + 2, &bare).as_deref(),
             Some("hintActivate")
         );
-        assert_eq!(hint_material(9 + 1, &bare), None);
-        assert_eq!(hint_material(73 + 1, &bare), None);
-        assert_eq!(hint_material(9 + 3, &bare), None);
+        assert_eq!(
+            HINTS_V1.material(73 + 2, &bare).as_deref(),
+            Some("hintActivate")
+        );
+        assert_eq!(HINTS_V1.material(9 + 1, &bare), None);
+        assert_eq!(HINTS_V1.material(73 + 1, &bare), None);
+        assert_eq!(HINTS_V1.material(9 + 3, &bare), None);
     }
 }

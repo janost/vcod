@@ -200,7 +200,7 @@ impl Cod4Hud {
         let snap = s.client().snapshots.last()?;
         // vcod-server's dead end frame leaves a dead body's last hint; the
         // HUD draws none past `PM_DEAD` (cod4-hud.md 20).
-        if snap.ps.get("pm_type").unwrap_or(0) >= PM_DEAD {
+        if snap.ps.word(vcod_cod4::ps_word!("pm_type")) >= PM_DEAD {
             return None;
         }
         let subject = self.hint_subject(l, s, &snap.ps, shell)?;

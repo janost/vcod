@@ -6,7 +6,7 @@
 //! `examples/cod4_probe.rs` and the vcod client both join through it.
 
 use super::clmsg::{self, ClOp, CmdWire, UserCmd};
-use super::parse::{Client, Op, Parsed};
+use super::parse::{Client, Illegible, Op, Parsed};
 use super::pure;
 use super::stats::{STAT_PACKETS, Stats};
 use super::voice;
@@ -211,6 +211,8 @@ pub struct Conn {
     recv_buf: Vec<u8>,
     /// The newest the server executed (each server message's first long).
     commands_acked: i32,
+    /// [`Self::command`] found the ring full: the connection is dropped.
+    overflowed: bool,
     last_cmd: UserCmd,
     /// The checksum feed of the gamestate the last `cp` answered.
     cp_feed: Option<i32>,
@@ -269,6 +271,7 @@ impl Conn {
             commands_base: 0,
             recv_buf: Vec::new(),
             commands_acked: 0,
+            overflowed: false,
             last_cmd: UserCmd::default(),
             cp_feed: None,
             applied: 0,
@@ -349,9 +352,18 @@ impl Conn {
         self.server
     }
 
-    /// Queues a reliable command; returns its sequence.
+    /// Queues a reliable command; returns its sequence. Past
+    /// [`KEPT_COMMANDS`] unacknowledged, `CL_AddReliableCommand` drops the
+    /// connection with `EXE_ERR_CLIENT_CMD_OVERFLOW` (cod4-handshake.md 4):
+    /// nothing queues and the next [`Self::send`] or [`Self::poll`] fails.
     pub fn command(&mut self, text: impl Into<Vec<u8>>) -> usize {
-        self.commands.push(text.into());
+        if i64::from(self.reliable_sequence()) - i64::from(self.commands_acked)
+            > KEPT_COMMANDS as i64
+        {
+            self.overflowed = true;
+        } else {
+            self.commands.push(text.into());
+        }
         self.reliable_sequence() as usize
     }
 
@@ -396,6 +408,13 @@ impl Conn {
         self.ack
     }
 
+    fn check_overflow(&self) -> Result<()> {
+        if self.overflowed {
+            bail!("EXE_ERR_CLIENT_CMD_OVERFLOW");
+        }
+        Ok(())
+    }
+
     /// The newest usercmd sent (its `server_time` the floor for the next).
     pub fn last_cmd(&self) -> &UserCmd {
         &self.last_cmd
@@ -406,6 +425,7 @@ impl Conn {
     /// before (no move op without cmds). Before the gamestate it is the
     /// bare header the client sends while it waits.
     pub fn send(&mut self, cmds: &[UserCmd]) -> Result<()> {
+        self.check_overflow()?;
         let mut pkt = self.seq.to_le_bytes().to_vec();
         self.seq += 1;
         pkt.extend_from_slice(&self.qport.to_le_bytes());
@@ -487,6 +507,7 @@ impl Conn {
     /// [`Conn::poll`] reading at most `max` datagrams, so a flood cannot
     /// hold the frame.
     fn poll_at_most(&mut self, until: Instant, max: usize) -> Result<Vec<Received>> {
+        self.check_overflow()?;
         let mut out = Vec::new();
         let mut read = 0;
         while read < max
@@ -513,6 +534,7 @@ impl Conn {
                 continue;
             }
             let rack = i32::from_le_bytes(msg[..4].try_into().unwrap());
+            let kept = (self.ack, self.commands_acked);
             self.ack = s as i32;
             // `CL_PacketEvent` drops a message acknowledging less than the
             // ring and takes every command as acknowledged (`iw3mp.exe`
@@ -525,16 +547,22 @@ impl Conn {
             let key = self.command_text(rack).to_vec();
             self.chan.decode(s, &key, &mut msg);
             self.commands_acked = self.commands_acked.max(rack);
-            self.drop_acked_commands();
             // `CL_PacketEvent` warns `ignoring illegible message` and goes
-            // on (`iw3mp.exe` 0x46c53c..0x46c548, cod4-handshake.md 4).
+            // on (`iw3mp.exe` 0x46c53c..0x46c548, cod4-handshake.md 4); one
+            // it marked overflowed puts both acknowledges back (0x46c550,
+            // 0x46c556), so the next move acknowledges the message before
+            // it and resends the commands it acknowledged.
             let parsed = match self.client.parse(s, &msg[4..]) {
                 Ok(p) => p,
                 Err(e) => {
+                    if e.downcast_ref::<Illegible>().is_some() {
+                        (self.ack, self.commands_acked) = kept;
+                    }
                     log::warn!("cod4: ignoring illegible message {s}: {e:#}");
                     continue;
                 }
             };
+            self.drop_acked_commands();
             self.apply_configstrings(&parsed);
             if parsed.ops.iter().any(|o| matches!(o, Op::Gamestate)) {
                 self.answer_gamestate()?;
@@ -607,7 +635,7 @@ impl Conn {
     /// The block a later `requeststats` sends: the profile's as the
     /// server's `N`s and the menus' `statset`s left it. Retail's packets
     /// read the live `LiveStorage` buffer those write (`iw3mp.exe`
-    /// 0x46af95; cod4-netfields.md, "The stats file").
+    /// 0x46af95; cod4-netfields.md 10.2).
     pub fn set_stats(&mut self, stats: &Stats) {
         if self.stats.0[..] != stats.0[..] {
             self.stats.0.copy_from_slice(&stats.0[..]);
@@ -945,6 +973,7 @@ mod tests {
             commands_base: 0,
             recv_buf: Vec::new(),
             commands_acked: 0,
+            overflowed: false,
             last_cmd: UserCmd::default(),
             cp_feed: None,
             applied: 0,
@@ -1008,6 +1037,47 @@ mod tests {
         assert_eq!(got.iter().map(|r| r.sequence).collect::<Vec<_>>(), [1, 3]);
         assert!(matches!(got[0].parsed.ops[..], [Op::Nop]));
         assert_eq!(c.ack, 3);
+    }
+
+    /// A message the parse marks overflowed (an unknown op, a read past
+    /// the end) puts `serverMessageSequence` and `reliableAcknowledge`
+    /// back (`iw3mp.exe` 0x46c550, 0x46c556): the next move acknowledges
+    /// the message before it and resends the command it acknowledged.
+    #[test]
+    fn an_illegible_message_rolls_its_acknowledges_back() {
+        use super::super::huffman::Huffman;
+        use super::super::parse::{SVC_EOF, SVC_SERVERCOMMAND};
+        use vcod_common::net::netchan::ServerNetchan;
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut c = joined(server.local_addr().unwrap());
+        c.command("say hi");
+        let me = c.sock.local_addr().unwrap();
+        let mut chan = ServerNetchan::with_params(1, 0, NetchanParams::COD2);
+        let huff = Huffman::new();
+        let mut send = |rack: i32, ops: &[u8]| {
+            for p in chan.transmit_block(rack, &huff.compress(ops)) {
+                server.send_to(&p, me).unwrap();
+            }
+        };
+        let until = || Instant::now() + Duration::from_millis(200);
+        send(0, &[SVC_EOF]);
+        assert_eq!(c.poll(until()).unwrap().len(), 1);
+        assert_eq!((c.ack, c.commands_acked), (1, 0));
+        // The server keys its messages on the command it acknowledges.
+        chan.last_client_command_string = "say hi".into();
+        let mut send = |rack: i32, ops: &[u8]| {
+            for p in chan.transmit_block(rack, &huff.compress(ops)) {
+                server.send_to(&p, me).unwrap();
+            }
+        };
+        for ops in [&[0xc8][..], &[SVC_SERVERCOMMAND, 1]] {
+            send(1, ops);
+            assert!(c.poll(until()).unwrap().is_empty());
+            assert_eq!((c.ack, c.commands_acked), (1, 0), "{ops:?}");
+        }
+        send(1, &[SVC_EOF]);
+        assert_eq!(c.poll(until()).unwrap().len(), 1);
+        assert_eq!((c.ack, c.commands_acked), (4, 1));
     }
 
     /// A `reliableAcknowledge` at either end of `int`: `i32::MIN` is below
@@ -1086,6 +1156,22 @@ mod tests {
         assert_eq!(c.command_text(100_000), b"c100000");
         assert_eq!(c.command_text(99_997 - KEPT_COMMANDS as i32 + 1), b"c99870");
         assert_eq!(c.command_text(1), b"");
+    }
+
+    /// More than the ring unacknowledged refuses the next command and
+    /// drops the connection, as `CL_AddReliableCommand` does.
+    #[test]
+    fn unacknowledged_commands_past_the_ring_overflow() {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut c = joined(server.local_addr().unwrap());
+        for i in 1..=KEPT_COMMANDS + 1 {
+            assert_eq!(c.command("x"), i);
+        }
+        c.send(&[]).unwrap();
+        assert_eq!(c.command("x"), KEPT_COMMANDS + 1);
+        let e = c.send(&[]).unwrap_err();
+        assert_eq!(e.to_string(), "EXE_ERR_CLIENT_CMD_OVERFLOW");
+        assert!(c.poll(Instant::now()).is_err());
     }
 
     /// The challenge replies of a CoD4x server and of retail 1.7

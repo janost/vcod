@@ -9,6 +9,7 @@
 //! engine's writer is in `docs/research/cod11-map-cycle.md` 3.2.
 
 use std::collections::BTreeMap;
+use vcod_common::text::with_ascii_lowercase;
 use vcod_gsc::ErrorKind;
 
 mod registry;
@@ -111,6 +112,10 @@ struct Cvar {
     default: String,
     /// Created by a `set` and not registered since.
     user_created: bool,
+    /// Last written by something other than a registration or a cfg exec:
+    /// the command line, the console, rcon or a script. A level load's cfg
+    /// ([`Cvars::exec_cfg_under_sets`]) leaves such a value alone.
+    set_by_hand: bool,
     flags: u16,
     /// `latchedString`: a console write to a `LATCH` cvar, taken at the
     /// next level load by [`Cvars::apply_latched`].
@@ -159,6 +164,15 @@ impl Default for Cvars {
 }
 
 impl Cvars {
+    /// The cvar any spelling of `name` names, found without allocating.
+    fn var(&self, name: &str) -> Option<&Cvar> {
+        with_ascii_lowercase(name, |n| self.vars.get(n))
+    }
+
+    fn var_mut(&mut self, name: &str) -> Option<&mut Cvar> {
+        with_ascii_lowercase(name, |n| self.vars.get_mut(n))
+    }
+
     pub fn new() -> Cvars {
         Cvars::for_protocol(1)
     }
@@ -242,24 +256,19 @@ impl Cvars {
     }
 
     pub fn get(&self, name: &str) -> &str {
-        self.vars
-            .get(&name.to_ascii_lowercase())
-            .map_or("", |c| c.value.as_str())
+        self.var(name).map_or("", |c| c.value.as_str())
     }
 
     /// `Cvar_Command`'s view of one cvar: the registration spelling, the
     /// value and the default. `None` when no such cvar exists.
     pub fn lookup(&self, name: &str) -> Option<(&str, &str, &str)> {
-        self.vars
-            .get(&name.to_ascii_lowercase())
+        self.var(name)
             .map(|c| (c.name.as_str(), c.value.as_str(), c.default.as_str()))
     }
 
     /// Whether a `set` made the cvar rather than a registration.
     pub fn user_created(&self, name: &str) -> bool {
-        self.vars
-            .get(&name.to_ascii_lowercase())
-            .is_some_and(|c| c.user_created)
+        self.var(name).is_some_and(|c| c.user_created)
     }
 
     /// `Cvar_Set`: registers the cvar if it does not exist, and never
@@ -273,11 +282,13 @@ impl Cvars {
                 value: String::new(),
                 default: value.to_string(),
                 user_created: true,
+                set_by_hand: false,
                 flags: 0,
                 latched: None,
                 mirrored: false,
             });
         entry.value = value.to_string();
+        entry.set_by_hand = true;
     }
 
     /// `Cvar_Set2` without `force`, as `set` and a bare `<name> <value>`
@@ -285,7 +296,7 @@ impl Cvars {
     /// holds the value for the next load. `cheats` is `sv_cheats`.
     /// The messages name the cvar as the caller spelled it.
     pub fn console_set(&mut self, name: &str, value: &str, cheats: bool) -> ConsoleSet {
-        let Some(c) = self.vars.get_mut(&name.to_ascii_lowercase()) else {
+        let Some(c) = self.var_mut(name) else {
             self.set(name, value);
             return ConsoleSet::Applied;
         };
@@ -302,14 +313,13 @@ impl Cvars {
             return ConsoleSet::Refused(format!("{name} is cheat protected.\n"));
         }
         c.value = value.to_string();
+        c.set_by_hand = true;
         ConsoleSet::Applied
     }
 
     /// The value a latched cvar waits with, if any.
     pub fn latched(&self, name: &str) -> Option<&str> {
-        self.vars
-            .get(&name.to_ascii_lowercase())
-            .and_then(|c| c.latched.as_deref())
+        self.var(name).and_then(|c| c.latched.as_deref())
     }
 
     /// A level load's `Cvar_Get` of every latched cvar: the waiting value
@@ -318,13 +328,14 @@ impl Cvars {
         for c in self.vars.values_mut() {
             if let Some(v) = c.latched.take() {
                 c.value = v;
+                c.set_by_hand = true;
             }
         }
     }
 
     /// ORs flag bits into an existing cvar, as a registration does.
     pub fn add_flags(&mut self, name: &str, bits: u16) {
-        if let Some(c) = self.vars.get_mut(&name.to_ascii_lowercase()) {
+        if let Some(c) = self.var_mut(name) {
             c.flags |= bits;
         }
     }
@@ -347,7 +358,7 @@ impl Cvars {
     /// Gives an existing cvar `name`'s spelling, as another game registers
     /// it (CoD4's `sv_floodprotect` over CoD1's `sv_floodProtect`).
     pub fn respell(&mut self, name: &str) {
-        if let Some(c) = self.vars.get_mut(&name.to_ascii_lowercase()) {
+        if let Some(c) = self.var_mut(name) {
             c.name = name.to_string();
         }
     }
@@ -370,7 +381,7 @@ impl Cvars {
     }
 
     pub fn flags(&self, name: &str) -> Option<u16> {
-        self.vars.get(&name.to_ascii_lowercase()).map(|c| c.flags)
+        self.var(name).map(|c| c.flags)
     }
 
     /// `Cvar_List_f` (cod_lnxded 0x806f530): every cvar whose name matches
@@ -407,6 +418,7 @@ impl Cvars {
                 value: default.to_string(),
                 default: default.to_string(),
                 user_created: false,
+                set_by_hand: false,
                 flags: 0,
                 latched: None,
                 mirrored: false,
@@ -417,10 +429,13 @@ impl Cvars {
         }
     }
 
-    /// Applies a config file's `set` lines, as `Cvar_Set` each, and returns
-    /// how many it applied. `bind`, `unbindall` and everything else in the
-    /// file is dropped: nothing else in `default_mp.cfg` reaches a
-    /// dedicated server's cvar table.
+    /// Applies a config file's `set`, `seta`, `sets` and `setu` lines, as
+    /// `Cvar_Set` each (`seta` archives too), and returns how many it
+    /// applied. `bind`, `unbindall` and everything else in the file is
+    /// dropped: nothing else in `default_mp.cfg` reaches a dedicated
+    /// server's cvar table. A line is split as the console splits it
+    /// (`Cmd_TokenizeString`) and a set's value is argv 2 onward joined, as
+    /// the console's `set` takes it (cod11-server-handshake.md, Cvars).
     ///
     /// `set` and not `register` is the right primitive here. Nothing the
     /// stock file names is in the game module's own cvar table, so there is
@@ -429,33 +444,39 @@ impl Cvars {
     /// only if a script later calls `makeCvarServerInfo` on that name,
     /// which keeps the existing value.
     pub fn exec_cfg(&mut self, text: &str) -> usize {
-        let mut applied = 0;
-        for line in text.lines() {
-            let tokens = cfg_tokens(line);
-            if tokens.len() >= 2 && tokens[0].eq_ignore_ascii_case("set") {
-                self.set(&tokens[1], tokens.get(2).map_or("", |s| s.as_str()));
-                applied += 1;
-            }
-        }
-        applied
+        self.exec_cfg_lines(text, false)
     }
 
-    /// [`Self::exec_cfg`] under the command line: a row the operator
-    /// already set (`+set` runs after the startup configs) keeps its value.
+    /// [`Self::exec_cfg`] under the command line: a cvar the operator or a
+    /// script already set (`+set` runs after the startup configs) keeps its
+    /// value, its default value included.
     pub fn exec_cfg_under_sets(&mut self, text: &str) -> usize {
+        self.exec_cfg_lines(text, true)
+    }
+
+    fn exec_cfg_lines(&mut self, text: &str, under_sets: bool) -> usize {
         let mut applied = 0;
         for line in text.lines() {
-            let tokens = cfg_tokens(line);
-            if tokens.len() >= 2 && tokens[0].eq_ignore_ascii_case("set") {
-                let set_by_hand = self
-                    .vars
-                    .get(&tokens[1].to_ascii_lowercase())
-                    .is_some_and(|c| c.user_created || c.value != c.default);
-                if !set_by_hand {
-                    self.set(&tokens[1], tokens.get(2).map_or("", |s| s.as_str()));
-                    applied += 1;
-                }
+            let argv = crate::game::say::tokenize(line);
+            let Some(cmd) = argv.first().map(|c| c.to_ascii_lowercase()) else {
+                continue;
+            };
+            if !matches!(cmd.as_str(), "set" | "seta" | "sets" | "setu") {
+                continue;
             }
+            let Some((name, value)) = set_args(&argv) else {
+                continue;
+            };
+            if under_sets && self.var(name).is_some_and(|c| c.set_by_hand) {
+                continue;
+            }
+            self.set(name, &value);
+            let c = self.var_mut(name).expect("set just made it");
+            c.set_by_hand = false;
+            if cmd == "seta" {
+                c.flags |= flag::ARCHIVE;
+            }
+            applied += 1;
         }
         applied
     }
@@ -464,7 +485,7 @@ impl Cvars {
     /// flag, which it sets whether or not the cvar already existed.
     pub fn make_server_info(&mut self, name: &str, default: &str) {
         self.register(name, default);
-        if let Some(c) = self.vars.get_mut(&name.to_ascii_lowercase()) {
+        if let Some(c) = self.var_mut(name) {
             c.mirrored = true;
         }
     }
@@ -483,7 +504,7 @@ impl Cvars {
         self.mirror = layout;
         for &(name, value) in rows {
             self.register(name, value);
-            if let Some(c) = self.vars.get_mut(&name.to_ascii_lowercase()) {
+            if let Some(c) = self.var_mut(name) {
                 c.value = value.to_string();
                 c.default = value.to_string();
                 c.mirrored = true;
@@ -618,39 +639,11 @@ fn com_filter(filter: &str, name: &str) -> bool {
     true
 }
 
-/// `Cmd_TokenizeString` cut down to what a cfg line needs: `//` starts a
-/// comment, a double-quoted run is one token, everything else splits on
-/// whitespace.
-fn cfg_tokens(line: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut cur = String::new();
-    let mut chars = line.chars().peekable();
-    let mut quoted = false;
-    while let Some(c) = chars.next() {
-        if quoted {
-            if c == '"' {
-                tokens.push(std::mem::take(&mut cur));
-                quoted = false;
-            } else {
-                cur.push(c);
-            }
-            continue;
-        }
-        match c {
-            '"' => quoted = true,
-            '/' if chars.peek() == Some(&'/') => break,
-            c if c.is_whitespace() => {
-                if !cur.is_empty() {
-                    tokens.push(std::mem::take(&mut cur));
-                }
-            }
-            c => cur.push(c),
-        }
-    }
-    if !cur.is_empty() {
-        tokens.push(cur);
-    }
-    tokens
+/// A `set`-family command's name and value off its argv: argv 1 and
+/// argv 2 onward joined by single spaces, `None` under three arguments,
+/// where retail prints its usage line (cod11-server-handshake.md, Cvars).
+pub fn set_args(argv: &[String]) -> Option<(&str, String)> {
+    (argv.len() >= 3).then(|| (argv[1].as_str(), argv[2..].join(" ")))
 }
 
 #[cfg(test)]
@@ -839,6 +832,37 @@ mod tests {
         assert_eq!(cv.get("m_pitch"), "0.022");
         assert_eq!(cv.get("scr_allow_mp40"), "");
         assert_eq!(cv.get("toggle cl_paused"), "");
+    }
+
+    /// A level load's cfg under the command line: a registered cvar the
+    /// operator set, to its default value too, keeps it; one only the
+    /// registration or an earlier cfg wrote takes the file's. A line is the
+    /// console's: `seta` sets and archives, argv 2 onward is the value, and
+    /// a `set` with no value is a usage line, not an empty write.
+    #[test]
+    fn exec_cfg_under_sets_keeps_what_was_set_by_hand() {
+        let mut cv = Cvars::new();
+        for name in ["scr_dm_scorelimit", "scr_dm_timelimit", "scr_motd"] {
+            cv.register(name, "30");
+        }
+        cv.set("scr_dm_scorelimit", "30");
+        let cfg =
+            "set scr_dm_scorelimit 50\nset scr_dm_timelimit 20\nseta scr_motd \"a\" b c\nset g_x\n";
+        assert_eq!(cv.exec_cfg_under_sets(cfg), 2);
+        assert_eq!(cv.get("scr_dm_scorelimit"), "30");
+        assert_eq!(cv.get("scr_dm_timelimit"), "20");
+        assert_eq!(cv.get("scr_motd"), "a b c");
+        assert!(cv.lookup("g_x").is_none());
+        assert_eq!(
+            cv.flags("scr_motd").map(|f| f & flag::ARCHIVE),
+            Some(flag::ARCHIVE)
+        );
+        assert_eq!(
+            cv.exec_cfg_under_sets("set scr_dm_timelimit 25\n"),
+            1,
+            "a cfg's own value is not the operator's"
+        );
+        assert_eq!(cv.get("scr_dm_timelimit"), "25");
     }
 
     /// A cfg value never reaches the 140/204 mirror by itself: `set` does

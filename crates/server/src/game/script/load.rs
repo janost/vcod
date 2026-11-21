@@ -582,7 +582,7 @@ impl ScriptRuntime {
             }
             _ => {
                 let bsp = vcod_common::mapworld::find(&*fs, map)?;
-                let area = crate::area::AreaTree::for_map(&bsp, &fs);
+                let area = crate::area::AreaTree::for_map(&bsp, &*fs);
                 (Rc::new(LevelMap::of(&bsp)), area)
             }
         };

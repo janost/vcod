@@ -61,7 +61,7 @@ fn game(
     sv.set_protocol(&vcod_common::net::protocol::PROTOCOL_V22);
     sv.test_seed_rng(seed);
     sv.set_cvar("vc_bot_vehicles", if on { "1" } else { "0" });
-    sv.load_world(vcod_server::world::World::from_bsp(bsp, Some(fs)));
+    sv.load_world(vcod_server::world::World::from_bsp(bsp, Some(&**fs)));
     sv.load_scripts(fs.clone()).expect("load the scripts");
     let mut t = Tally::default();
     let mut last: std::collections::HashMap<u32, [f32; 3]> = Default::default();

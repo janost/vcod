@@ -180,7 +180,7 @@ impl Cod4Session {
         // Our own view is the newest cmd's over the next snapshot's
         // `delta_angles` (`PM_UpdateViewAngles`, unlerped); one we follow
         // (the killcam) lerps its own.
-        let own = new.ps.get("clientNum") == Some(gs.client_num as u32);
+        let own = new.ps.word(vcod_cod4::ps_word!("clientNum")) == gs.client_num as u32;
         let mut angles = match self.cmd_angles.filter(|_| own) {
             Some(a) => vec3(|k| {
                 let d = angle2short(f(&new.ps, &format!("delta_angles[{k}]")));

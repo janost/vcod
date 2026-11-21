@@ -347,7 +347,7 @@ fn ours_pair_run(
     while let (Some(k), Some(v)) = (words.next(), words.next()) {
         sv.set_cvar(k, v);
     }
-    let world = vcod_server::world::World::from_bsp(&bsp, Some(&fs));
+    let world = vcod_server::world::World::from_bsp(&bsp, Some(&*fs));
     let target_play = target_log.map(first_play);
     if let Some(at) = thrower_at {
         // The target joins first, slot 0; the thrower is slot 1.

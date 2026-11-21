@@ -34,6 +34,21 @@ use std::collections::VecDeque;
 use glam::Vec3;
 
 use super::delta::{ClientState2, EntityState2, PlayerState2};
+use super::fields::{ENTITY_STATE_FIELDS, PLAYER_STATE_FIELDS};
+
+/// An entity field's index (or `N` indices), resolved at compile time.
+macro_rules! es2 {
+    ($($t:tt)*) => {
+        crate::field!(ENTITY_STATE_FIELDS, $($t)*)
+    };
+}
+
+/// A playerstate field's index (or `N` indices), resolved at compile time.
+macro_rules! ps2 {
+    ($($t:tt)*) => {
+        crate::field!(PLAYER_STATE_FIELDS, $($t)*)
+    };
+}
 use super::events::{ET_SCRIPTMOVER, event_of};
 use super::flags::EF_TELEPORT_BIT;
 use super::parse::{Gamestate2, Parsed, Parser, Snapshot2};
@@ -64,20 +79,21 @@ pub struct EntityView {
 
 impl EntityView {
     pub fn new(es: &EntityState2) -> Self {
-        let etype = es.i32("eType");
+        let f = |ix: usize| es.i32_at(ix);
+        let etype = f(es2!("eType"));
         EntityView {
             number: es.number,
             etype,
             event: event_of(etype),
-            pos: Trajectory2::read(es, "pos"),
-            apos: Trajectory2::read(es, "apos"),
-            model_index: es.i32("index"),
-            eflags: es.i32("eFlags"),
-            legs_anim: es.i32("legsAnim"),
-            torso_anim: es.i32("torsoAnim"),
-            weapon: es.i32("weapon"),
-            client_num: es.i32("clientNum"),
-            ground_entity: es.i32("groundEntityNum"),
+            pos: Trajectory2::pos(es),
+            apos: Trajectory2::apos(es),
+            model_index: f(es2!("index")),
+            eflags: f(es2!("eFlags")),
+            legs_anim: f(es2!("legsAnim")),
+            torso_anim: f(es2!("torsoAnim")),
+            weapon: f(es2!("weapon")),
+            client_num: f(es2!("clientNum")),
+            ground_entity: f(es2!("groundEntityNum")),
             raw: *es,
         }
     }
@@ -107,20 +123,20 @@ pub struct PlayerView {
 
 impl PlayerView {
     pub fn new(ps: &PlayerState2, own_client_num: i32) -> Self {
-        let v = |k: &str| [0, 1, 2].map(|i| ps.f32(&format!("{k}[{i}]")));
+        let f = |ix: usize| ps.i32_at(ix);
         PlayerView {
-            command_time: Msec::from_raw(ps.i32("commandTime")),
+            command_time: Msec::from_raw(f(ps2!("commandTime"))),
             origin: ps.origin(),
-            velocity: v("velocity"),
+            velocity: ps.vec3_at(ps2!(3 "velocity")),
             viewangles: ps.viewangles(),
-            delta_angles: [0, 1, 2].map(|i| ps.i32(&format!("delta_angles[{i}]"))),
-            view_height: ps.f32("viewHeightCurrent"),
-            pm_type: ps.i32("pm_type"),
-            pm_flags: ps.i32("pm_flags"),
-            eflags: ps.i32("eFlags"),
-            client_num: ps.i32("clientNum"),
+            delta_angles: ps2!(3 "delta_angles").map(f),
+            view_height: ps.f32_at(ps2!("viewHeightCurrent")),
+            pm_type: f(ps2!("pm_type")),
+            pm_flags: f(ps2!("pm_flags")),
+            eflags: f(ps2!("eFlags")),
+            client_num: f(ps2!("clientNum")),
             own_client_num,
-            weapon: ps.i32("weapon"),
+            weapon: f(ps2!("weapon")),
             raw: ps.clone(),
         }
     }

@@ -8,9 +8,10 @@
 //! shape. Five review rounds across four implementers went on enforcing labels
 //! by reading, so the two blunt shapes are enforced here instead:
 //!
-//! - a per-section blanket, spelled `VERIFIED throughout`, which the rule
-//!   forbids outright: a section is a mix of claims and a blanket covers the
-//!   ones it should not;
+//! - a per-section blanket past the document's header, in the spellings
+//!   `BLANKETS` lists (`VERIFIED throughout`, "every number below is
+//!   VERIFIED"), which the rule forbids outright: a section is a mix of
+//!   claims and a blanket covers the ones it should not;
 //! - one clause carrying both labels, which is how a single claim ends up
 //!   opening VERIFIED and closing INFERRED and is really neither. `UNVERIFIED`
 //!   is a third label the docs use and does not count as VERIFIED here: it
@@ -117,15 +118,48 @@ fn has_verified(s: &str) -> bool {
         .any(|(i, _)| !s[..i].ends_with("UN"))
 }
 
+/// The spellings of a label that covers more than the one table or list it
+/// leads: `VERIFIED throughout` (so `UNVERIFIED throughout` too), "every
+/// number below is VERIFIED", "everything here". A lead-in that labels the
+/// table or list right under it is allowed (`docs/research/README.md`).
+const BLANKETS: [&str; 6] = [
+    "VERIFIED throughout",
+    "INFERRED throughout",
+    " below is VERIFIED",
+    " below is INFERRED",
+    "verything here is VERIFIED",
+    "verything here is INFERRED",
+];
+
+/// Byte offset of the first `## ` heading: what sits above it is the
+/// document's header, where a document-level default may stand.
+fn first_h2(text: &str) -> usize {
+    if text.starts_with("## ") {
+        return 0;
+    }
+    text.find("\n## ").map_or(text.len(), |i| i + 1)
+}
+
+/// The blankets in `text` past its header, as byte offsets.
+fn blankets(text: &str) -> Vec<usize> {
+    let from = first_h2(text);
+    let mut out: Vec<usize> = BLANKETS
+        .iter()
+        .flat_map(|b| text.match_indices(b).map(|(i, _)| i))
+        .filter(|&i| i >= from)
+        .collect();
+    out.sort();
+    out
+}
+
 /// A section is a mix of claims, so no label may cover a whole one. Every
-/// claim carries its own. The phrase match is deliberately left as a
-/// substring, so `UNVERIFIED throughout` is caught too: it is the same
-/// per-section blanket.
+/// claim carries its own, or the table or list it sits in carries one
+/// lead-in label.
 #[test]
 fn no_research_doc_blankets_a_section_as_verified() {
     let mut hits = Vec::new();
     for (name, text) in research_docs() {
-        for (offset, _) in text.match_indices("VERIFIED throughout") {
+        for offset in blankets(&text) {
             hits.push(format!(
                 "{name}:{}: {}",
                 line_of(&text, offset),
@@ -203,4 +237,14 @@ fn the_check_fires_on_the_shapes_it_claims_to_catch() {
         "UNVERIFIED, and INFERRED FROM DECOMPILATION."
     ));
     assert!(has_verified("UNVERIFIED there, VERIFIED here."));
+
+    // A blanket past the header is caught; a document-level default above
+    // the first section and a lead-in for one list are not.
+    let doc = "# T\n\nEverything here is VERIFIED unless marked.\n\n## 1. A\n\n\
+               Every number below is VERIFIED (the logs).\n\nThe table, VERIFIED:\n";
+    assert_eq!(blankets(doc).len(), 1);
+    assert_eq!(
+        blankets("## 1. A\n\nOne list, VERIFIED throughout.\n").len(),
+        1
+    );
 }

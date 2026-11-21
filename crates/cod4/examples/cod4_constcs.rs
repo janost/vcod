@@ -2,7 +2,7 @@
 //! `{int configStringNum; char *configString; int hash; int lowercaseHash}`,
 //! ascending by slot, ended by a row of slot 0. The table is found as the
 //! row whose string pointer names `bg_aimSpreadMoveSpeedThreshold`, its
-//! first entry (docs/research/cod4-handshake.md, "Configstring defaults").
+//! first entry (docs/research/cod4-handshake.md 5.1).
 //!
 //!     cargo run -p vcod-cod4 --example cod4_constcs -- <cod4_lnxded> [<iw3mp.exe>] [--rust]
 //!

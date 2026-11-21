@@ -522,7 +522,7 @@ On ours (`game::cod4::vehicle`):
   fields). VERIFIED (the error). 1.7 reaches client fields only through
   `ent->client`. INFERRED.
 
-#### The flight against retail
+#### 3.2.1 The flight against retail
 
 `cod4::hardpoint_ab` (`COD4_DIR`) replays
 `crates/cod4/tests/fixtures/net/play-1.7-hardpoint.txt`. Recipe: retail
@@ -547,7 +547,7 @@ helicopter word at the same time past spawn.
   0.08 degrees of yaw and the gun by up to 0.13. VERIFIED (the gate,
   both ways).
 
-#### The collision capture
+#### 3.2.2 The collision capture
 
 `cod4::hardpoint_ab::helicopter_collision_and_pose_match_retail` replays
 `crates/cod4/tests/fixtures/net/play-1.7-heli-collide.txt`. Recipe: the
@@ -574,7 +574,7 @@ counted from the spawn. VERIFIED (the capture).
   normals, places and count, the last place 0.1 off. VERIFIED (the
   gate).
 
-#### The no-goal think
+#### 3.2.3 The no-goal think
 
 `cod4_lnxded` 0x808ba22, run by the vehicle think for a helicopter with
 no goal (above). Read off the disassembly; `Heli4::hold` is what it does
@@ -618,7 +618,7 @@ on the server.
   second; `VEH_UpdateMoveToGoal` stores them too (0x809e9ce), and nothing
   outside 0x808ba22 reads them. VERIFIED (the disassembly).
 
-#### The turret
+#### 3.2.4 The turret
 
 `VEH_UpdateAim`, inlined in the vehicle think (0x809ff9b..0x80a038c).
 
@@ -683,7 +683,7 @@ on the server.
   (gdb against ours). With "The flight's float model" all 159 match.
   VERIFIED (the idle capture's gate).
 
-#### The skeleton
+#### 3.2.5 The skeleton
 
 How 1.7's server builds a DObj's bones, read off `cod4_lnxded`.
 `vcod_cod4::skel` is its port; `heli_mats` runs it for a helicopter and
@@ -787,7 +787,7 @@ How 1.7's server builds a DObj's bones, read off `cod4_lnxded`.
   with no anim (`Cod4Zones::model_tags`); they sit within 0.01 of the
   zone's `baseMat` (cod4-player-anims.md 4). VERIFIED (the census).
 
-#### The link's snap
+#### 3.2.6 The link's snap
 
 `SV_LinkEntity` (0x817e3f0) snaps each component of `r.currentAngles`
 within a thousandth of a degree of a whole one to it: `n = floor(a +
@@ -812,7 +812,7 @@ INFERRED (the code). The mover, combat and capture gates read the same
 with either snap; no capture yet holds a CoD4 mover at a negative angle
 a thousandth off a whole one. VERIFIED (the gates).
 
-#### The idle capture
+#### 3.2.7 The idle capture
 
 `cod4::hardpoint_ab::helicopter_idle_matches_retail` replays
 `crates/cod4/tests/fixtures/net/play-1.7-heli-idle.txt`. Recipe: the
@@ -835,7 +835,7 @@ deleted. No hover radius and no stop goal, so no random draw. VERIFIED
   at worst, after the body's yaw parted by an ulp at think 82. VERIFIED
   (the gate, gdb).
 
-#### The flight's float model
+#### 3.2.8 The flight's float model
 
 `VEH_UpdateMoveToGoal` (0x809e38a) as `game::cod4::vehicle::flight` ports
 it, x87 values kept on the stack as `f64`, stores as `f32`. A Ghidra
@@ -913,7 +913,7 @@ with overshoot, the climb's ease, the turn's brake, the shed into a stop
 entered at speed, the turn that never brakes, and the look-at. VERIFIED
 (the replay, counted).
 
-#### The yaw capture
+#### 3.2.9 The yaw capture
 
 `cod4::hardpoint_ab::helicopter_yaw_matches_retail` replays
 `crates/cod4/tests/fixtures/net/play-1.7-heli-yaw.txt`, the probe's
@@ -938,7 +938,7 @@ the client reads as the smallest float above zero. The flight capture's
 hovering roll sits there for 49 snapshots. VERIFIED (the gate;
 `delta::angle_field_sent`).
 
-#### Missiles under 1.7: attractors, the wobble, guidance
+#### 3.2.10 Missiles under 1.7: attractors, the wobble, guidance
 
 Read off `cod4_lnxded` 1.7 and the stock weapon files (`main/iw_11.iwd`
 `weapons/mp/rpg_mp`, `cobra_ffar_mp`); `game::cod4::missile`
@@ -1330,11 +1330,8 @@ VERIFIED (the registrations). Then:
   names).
 - Each explode case of
   `CG_EntityEvent` calls `Ragdoll_ExplosionEvent` (0x5bdc10) and then
-  0x48e670: the grenade's at 0x436b3e and 0x436b79, the rocket's at
-  0x436c75 and 0x436cb6, the custom one's at 0x436e24 and 0x436e65,
-  `physicsExplosionSphere`'s at 0x437241 and 0x437284, the cylinder's
-  at 0x4372ce and 0x437311, the jolt's at 0x437359 and 0x437311 (its
-  jump to 0x4372e6). VERIFIED (the calls). 0x48e670 walks the map's
+  `DynEntCl_ExplosionEvent` (0x48e670); the arms, their call sites and
+  their arguments are in cod4-world.md 13.3. 0x48e670 walks the map's
   dynamic entities (the lists at 0x14099b8..0x14099c8, picked by
   0x48e560) and pushes each through `Phys_ObjAddForce` (0x5a5900, call at
   0x48eaa1); the ragdoll's pushes go the same way at 0x5bdfe0.
@@ -1361,9 +1358,8 @@ VERIFIED (the registrations). Then:
   part, and a round does: after its launch's push it meets gravity, the
   world and the rounds this client draws, and the server sends nothing
   more (3.2). INFERRED (the callers above). The dynamic entities
-  themselves: cod4-world.md 13. The jitter's event is `EV_PHYS_JITTER`
-  (60): the jump table at 0x43740c sends 60 to 0x437374, whose call is
-  0x4373ab. VERIFIED (the table). Its push: cod4-world.md 13.8.
+  themselves: cod4-world.md 13. The jitter's event, `EV_PHYS_JITTER`,
+  and its push: cod4-world.md 13.8.
 - 0x48df10's push (from 0x455b92, the first leg only, after
   `BulletTrace` met something): a hit of type 1 under `dynEnt_active`
   on an entity whose `centity_t` +0x18 holds a body (neither 0 nor -1);
@@ -1463,7 +1459,7 @@ vcod (`vcod_cod4::physics`, `play::cod4_physics`):
   body could carry it once the bones are rigid capsules held by joint
   constraints, which it lacks. INFERRED (vcod's design).
 
-### 3.6.1 The world collider
+#### 3.6.1 The world collider
 
 Addresses in this section are `iw3mp.exe`'s (3.6), read with `objdump`.
 
@@ -2105,7 +2101,7 @@ level clock; it diffs the gamestate, both clients' server commands up to
 retail clients read up to the cut matches, in order; the rest is the
 gate's `GAPS`.
 
-### Server commands
+### 7.1 Server commands
 
 - The connect callback's two `v` lines go out before the gamestate (the
   walker's commands 1 and 2, `v ui_3dwaypointtext "1"`, `v
@@ -2157,7 +2153,7 @@ gate's `GAPS`.
   `level waittill("connected")` alternate with each notify, as vcod's
   newest-first resume gives. INFERRED.
 
-### The start-up configs
+### 7.2 The start-up configs
 
 - The dedicated server execs `default_mp.cfg` and its `exec`s from its
   iwds before any zone loads (console: `execing default_mp.cfg from disk`,
@@ -2175,7 +2171,7 @@ gate's `GAPS`.
   every 1.7 capture. VERIFIED live. vcod reads the cfgs through `Pk3Fs`,
   which also keeps the later entry.
 
-### The stats, the loadout, the perks
+### 7.3 The stats, the loadout, the perks
 
 - `getStat` / `setStat` use the slot's own 0x2000-byte block, the one its
   seven `stats` packets carried, a fresh profile's until they are in.
@@ -2215,7 +2211,7 @@ gate's `GAPS`.
   (the disassembly). vcod treats a slot whose roster entry
   `ClientDisconnect` cleared as disconnected. The client stores `N` into
   its stats buffer (`iw3mp.exe` 0x44c42d calling 0x579c70;
-  cod4-netfields.md, "The stats file"). VERIFIED (the disassembly).
+  cod4-netfields.md 10.2). VERIFIED (the disassembly).
   `cod4_live_set_stat_reaches_the_clients_profile` joins a ranked (`sv_pure
   1`) mp_crash: the rank scripts move stats 2317 and 2352 (`maxxp`, 30)
   off a fresh profile's, and the client's block ends equal to the
@@ -2238,7 +2234,7 @@ gate's `GAPS`.
   copy, carried across the restart (`Cod4Server::map_restart`;
   `stat_tests::cod4_fast_restart_keeps_the_scripts_stats`). A map change
   asks the client for its block again (`requeststats`), which holds every
-  `N` (cod4-netfields.md, "The stats file").
+  `N` (cod4-netfields.md 10.2).
 - Loadout `WeaponDef` fields come from the zone at the offsets of 1.7's
   `weaponDefFields` (`cod4_lnxded` 0x826a160, 502 rows;
   `tools/re/cod4_weapon_fields.py`): `weaponClass` +304, `inventoryType`
@@ -2267,7 +2263,7 @@ gate's `GAPS`.
   `moveSpeedScaleMultiplier`. VERIFIED live.
 - `disableWeapons` sets `weapFlags` 0x80. INFERRED.
 
-### The perks
+### 7.4 The perks
 
 Each perk's bit in `perks` (its `bg_perkNames` row), where 1.7 acts on it,
 and ours. The engine sites are the ten tests of the playerstate's `perks`
@@ -2306,7 +2302,7 @@ The custom class tests build `custom1` off the stats `cac_getdata` reads
 (201 primary, 203 secondary, 205..207 perks, 208 special grenade, each a
 `mp/statsTable.csv` number). VERIFIED (the stock gsc).
 
-### The spawn and the end frame
+### 7.5 The spawn and the end frame
 
 - `ClientSpawn` ends in its own think, before the script's loadout lands:
   the spawn frame's ground, `holdBreathScale` and `pm_flags` are that
@@ -2369,7 +2365,7 @@ The custom class tests build `custom1` off the stats `cac_getdata` reads
   0.5f)`, cod4-netfields.md 2), yaw `101.765` as 101.7664 (the angle
   writer's half short). VERIFIED (`cod4::wire_ab`).
 
-### Open
+### 7.6 Open
 
 Nothing left. 1.7 sends no PVS cull (cod4-pmove.md 15); pmove writes
 `holdBreathScale` and `groundEntityNum` (`vcod_cod4::pmove`), the anim

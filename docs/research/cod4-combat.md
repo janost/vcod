@@ -138,8 +138,13 @@ the shot's start (`PM_Weapon_StartFiring`, inlined at 0x80640af).
   Either rounds half up: `fadd` 0.5 (0x8209628 = 0x3f000000), `frndint`
   under round-down, truncating `fistp` (0x80645c8..0x80645ed,
   0x80636f0..0x806372b). VERIFIED (the disassembly). A multiplier of 0
-  steps by the larger timer (0x806394f). INFERRED (the branch). vcod:
-  `pmove::weapon::run_clocks`, `clock_step`, `perk_msec`.
+  steps by the larger of `weaponTime` and `weaponDelay`
+  (0x806394f..0x8063963; the reload dvar's test at 0x80636dd..0x80636ea,
+  the rate dvar's at 0x8063938..0x8063949, a NaN taking the quotient).
+  VERIFIED (the instructions). vcod: `pmove::weapon::run_clocks`,
+  `clock_step`, `perk_msec`, the multipliers, `player_burstFireCooldown`
+  and `bg_aimSpreadMoveSpeedThreshold` off `Rules` (the client's off the
+  server's dvar mirror when it carries them).
 - A timer stepped to 0 or below is set to 0 (`weaponTime` 0x8064592,
   `weaponDelay` 0x80645b5): the overshoot is dropped, never carried.
   INFERRED (the branches into both stores).
@@ -158,6 +163,29 @@ the shot's start (`PM_Weapon_StartFiring`, inlined at 0x80640af).
   armed: 306 rows each (913 and 911 cmds), every word exact, free and
   resynced. `cod4_fire_rate_ab` replays their cmds free and fires
   retail's rounds in each burst. VERIFIED (the gates).
+
+### 2.2 The reload's delayed action
+
+`cod4_lnxded` 0x80624a6 (`PM_Weapon_ReloadDelayedAction` by its shape,
+INFERRED) runs when a reload's `weaponDelay` runs out.
+
+- A bolt-action weapon (`WeaponDef` +0x4e8) with its `weaponrechamber`
+  bit set (ps+0x57c) clears the bit and adds `EV_EJECT_BRASS` (0x1d) at
+  0x8062572..0x8062586. In a reload start (state 9 or 10) whose
+  `reloadStartAddTime` (+0x39c) is 0 it returns there (0x806258b,
+  0x806270c..0x8062714): no rounds. VERIFIED (the instructions). CoD2's
+  copy does the same.
+- Else, with `weaponTime` running, the add moment (a start's
+  `min(reloadStartAddTime, reloadStartTime)`, a segment's
+  `reloadTime` or, from an empty bullet clip, `reloadEmptyTime`, capped
+  by `reloadAddTime`) less `rechamberBoltTime` (+0x374, 1 when the moment
+  is no longer) goes into `weaponDelay` when positive
+  (0x80625e8..0x8062602). VERIFIED (the instructions).
+- Otherwise the rounds go in: a start's `reloadStartAdd` (+0x538),
+  nothing when 0, or a segment's `reloadAmmoAdd`, capped by the clip's
+  room and the reserve, with `EV_RELOAD_ADDAMMO` (0x14) when any move
+  (0x80624e4..0x806255d, 0x806260a..0x806265d). VERIFIED (the
+  instructions). vcod: `pmove::weapon::reload_delay_out`.
 
 ## 3. The shot
 
@@ -450,11 +478,11 @@ gates).
   0x817d82b and 0x817ded1; no store to it). VERIFIED (the instructions,
   the floats). Ours took (-31, -31, -16)..(31, 31, 86), so a grenade's
   step past the shooter's chest a frame before its strike built no pose.
-- The pose (0x80ca732, 0x80ca99e) returns early when the skeleton is
-  already built for the bones asked (0x80ca754, 0x80ca9c0); else it runs
-  the entity handler's `controller` (handler table +0x1c, 0x80ca785,
-  0x80ca9d3; the player's is 0x80a480e), then builds the skeleton
-  (0x81af4f8). VERIFIED (the instructions). The player's controller is
+- The pose (`G_DObjCalcBone` 0x80ca732, and 0x80ca99e) builds a body's
+  bones once a frame, running the entity handler's `controller` first:
+  cod4-gsc.md 3.2.5, has the path. The player's handler's
+  controller is 0x80a480e (handler +0x1c, called at 0x80ca785 and
+  0x80ca9d3). VERIFIED (the instructions). The player's controller is
   `BG_Player_DoControllersInternal` (0x804cf90) at `level.frametime`
   (0x80a4838), easing each control 0.36 degrees a ms (0x820963c,
   0x804d5de..0x804d5e7). VERIFIED (the instructions, the float). So a
@@ -764,7 +792,7 @@ client's 0x94.
   callback (`Scr_PlayerKilled`, 0x80b1c75), before `player_die` sets
   `r.maxs[2]` to 30 (0x80b1da0). VERIFIED (the instructions). A standing
   clone swept `(-15, -15, 0)..(15, 15, 70)`. VERIFIED (gdb at 0x80b9988).
-  The sweep is `G_Trace` (0x80b408a, entities included) passing
+  The sweep is `G_TraceCapsule` (0x80b408a, entities included) passing
   `r.ownerNum - 1`, none for a clone (0x80b990e). INFERRED (the call).
 - A sweep that stopped short: the origin lerped by the raw fraction
   (0x80b9983..0x80b99fd), the fraction then read 0 for `startsolid`
@@ -1082,7 +1110,7 @@ prone and killcam runs. VERIFIED (the gates).
   -134.989, roll 90, ground 1022. VERIFIED live (`play-1.7-prone-*`).
   Ours matches every word of both runs' items, on the live frames and the
   killcam's, the hit's `trDelta` included. VERIFIED (the gates). Before
-  the bodies' tags took 1.7's skeleton (cod4-gsc.md 3.2, "The skeleton")
+  the bodies' tags took 1.7's skeleton (cod4-gsc.md 3.2.5)
   the `trDelta` read (-24.8591, -24.4986, -31.1734) against (-24.8587,
   -24.4981, -31.1728) prone, (4.3898, -0.9870, -39.2181) against (4.3897,
   -0.9870, -39.2175) standing, the tag some 3e-5 units off retail's,
@@ -2059,7 +2087,7 @@ What the captures fixed on ours:
 
 The dropped weapon (6.1) matches word for word on both runs, the hit's
 `trDelta` included, since the bodies' tags compose through 1.7's skeleton
-(cod4-gsc.md 3.2, "The skeleton"); before, the posed tag sat some 3e-5
+(cod4-gsc.md 3.2.5); before, the posed tag sat some 3e-5
 units off retail's. VERIFIED (the gates, both ways).
 
 What the gates once listed, each closed:
@@ -2205,7 +2233,7 @@ What the gates once listed, each closed:
   one to three ulps from retail's and x and y ten and six. VERIFIED (the
   gate).
 - The head bone's matrix: a player's six control bones go down
-  `DObjCalcSkel`'s second arm (cod4-gsc.md 3.2, "The skeleton"), turned
+  `DObjCalcSkel`'s second arm (cod4-gsc.md 3.2.5), turned
   in `tag_origin`'s frame with no anim of their own, where the server
   had posed them as CoD1's `G_DObjSetControlTagAngles` did, a glam quat
   turned into the parent's frame. VERIFIED (gdb; `skel_ab`). Ported

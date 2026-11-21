@@ -116,7 +116,9 @@ neither side prints `EXE_SERVER_IS_DIFFERENT_VER`.
 per-second snapshot summary, and dumps captures to `tmp/`. Each scripted mode
 (`--save-*`, `--probe-*`) is documented on its flag in
 `crates/client/src/main.rs` (`vcod --help`): what it does, which fixture it
-writes, which gsc probe it pairs with. A multi-shell recipe (gsc probe,
+writes, which gsc probe it pairs with. The fixture paths are fixed at build
+time under the checkout the binary was built from, so the fixture modes need
+a source build; a release binary writes to its build machine's path. A multi-shell recipe (gsc probe,
 target client, shooter client, `+set` cvars, start order, `--probe-secs`) is
 in the header of the fixture it produced. Some header text is fixed, not
 read off the run: the "Retail CoD <build>" label (picked from the protocol
@@ -239,23 +241,13 @@ the wire's numbering.
 
 ### Receive order
 
-Two probes on one server answer the same snapshot within microseconds,
-so neither their stamps nor their send clocks (`w=`) say whose packet
-the server ran first. The server says, under `+set showpackets 1`:
+Two probes on one server answer the same snapshot within microseconds, so
+neither their stamps nor their send clocks (`w=`) say whose packet the
+server ran first. Run it with `+set showpackets 1`: its console then has
+one `recv` line per packet in the order the server ran them
+(cod11-server-handshake.md, "Receive order", has the addresses and the
+captures that checked it).
 
-- VERIFIED, the three servers: each client packet goes `recvfrom` (1.1d
-  0x80c723f, 1.5b 0x80d4c4b, UO 0x80c9f4b) to `SV_PacketEvent` (1.1d
-  0x808c870), which calls `Netchan_Process` (1.1d 0x80804f0 at 0x808c9ba,
-  1.5b 0x8083890 at 0x8093c0c, UO 0x8084378 at 0x8094b6d) and then
-  `SV_ExecuteClientMessage` (1.1d 0x80872ec at 0x808ca57, 1.5b 0x808cdd0
-  at 0x8093ce6, UO 0x808dba1 at 0x8094c47), whose `SV_UserMove` (1.1d
-  0x8086fa4, 1.5b 0x808cade, UO 0x808d8af, the `cmdCount` strings) runs
-  each cmd stamped past the client's last one. `Netchan_Process` prints
-  `%s recv %4i : s=%i` (1.1d 0x8080691, 1.5b 0x80839b7, UO 0x808449f)
-  under `showpackets`, ahead of its `Out of order packet` test (1.1d
-  0x80806e7), so the console has one line per packet in the order the
-  server ran them. INFERRED, off the call order: a `recv` line's cmds ran
-  before the next line's.
 - The print names no client. Each probe's `CMDS` lines carry the netchan
   sequence of each cmd's message (`q=`, `--save-turret`'s `!cmd` lines
   too), and the line's `s=` is that sequence; two clients joined seconds
@@ -266,14 +258,6 @@ the server ran first. The server says, under `+set showpackets 1`:
   `common::cmds_read` matches them to each client's cmds. Run the server
   and both probes inside one `unshare -rn` (the recipe in
   `mp_carentan-leanhit-turn.txt`'s header).
-- VERIFIED, the three `-turn` captures (2026-11-13): every cmd of both
-  probes was read (6420, 6300 and 6360 cmds), each client's in the order
-  it sent them, and no `Out of order` or `Dropped` line printed. Within a
-  tie either client's packet came first, about half the time each.
-  Ordering the two clients by `w=` disagrees with the server on 3, 1 and
-  2 pairs, all sent 1 to 3 microseconds apart. 1.5b's
-  `mp_carentan-dm-turret-victim-15-recv.txt` read all 1020 of its
-  gunner's cmds in send order (cod11-turrets.md 13.3).
 
 ### On 1.5 and UO
 

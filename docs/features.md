@@ -30,8 +30,9 @@ still missing against retail, and what vcod adds that retail never had.
   from its menu files. Start New Server spawns `vcod-server` beside
   `vcod`; there is no listen server.
 - The browser's Internet source is `master.cod.pm`, one protocol per
-  query, at most one query a second: port 20510 for CoD1, 20610 for UO,
-  20710 for CoD2, 20810 for CoD4. Local and Favorites work as retail's.
+  query, at most one query a second, on each game's master port
+  ([usage.md](usage.md#master-server)). Local and Favorites work as
+  retail's.
 - Joins retail servers and vcod-server alike, downloads missing paks or
   iwds (UDP or an HTTP redirect), plays or spectates through the server's
   script menus, and predicts its own movement through the same pmove the
@@ -53,8 +54,9 @@ still missing against retail, and what vcod adds that retail never had.
 - Graphics extras retail never had (`vc_ssao`, `vc_shadows`, `vc_bloom`,
   `vc_hdr` and more, all off by default; `--rtx-on` turns them all on)
   are listed in [features/cod1.md](features/cod1.md#beyond-retail).
-- `VCOD_FRAME_PROFILE` writes per-frame CPU and GPU times by stage;
-  `tools/cod4_perf.sh` drives it for every game (`GAME=cod1|uo|cod2`).
+- A per-frame CPU and GPU profile by stage
+  ([usage.md](usage.md#environment-variables)), which `tools/cod4_perf.sh`
+  drives for every game (`GAME=cod1|uo|cod2`).
 
 ### Server
 
@@ -83,8 +85,8 @@ and `listbots` work in all four games. One driver runs them over a nav
 graph built from each game's own pmove; they join through the stock
 menus, play the objectives and fight. On CoD1, UO and CoD2 they also yell
 the stock quick messages ("Grenade!", "Enemy down!"). Their routes, cover
-and probes are worked out on up to four threads beside the server's own
-(`VCOD_BOT_THREADS`), moving every bot as one thread would. Retail has no
+and probes are worked out on up to four threads beside the server's own,
+moving every bot as one thread would. Retail has no
 bots, so they have no retail reference ([bots.md](bots.md)).
 
 ### Measuring against retail

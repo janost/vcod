@@ -10,7 +10,7 @@ First audit 2026-10-26 at 0f20b5ed; rechecked against the code
 2026-10-30, edited as items close since. Open items lead; closed ones are
 kept at the end. Sizes: S under an hour, M a few hours, L a day or more.
 
-## Open
+## 1. Open
 
 Ranked by how much a player notices.
 
@@ -32,14 +32,14 @@ Ranked by how much a player notices.
   not checked against a retail capture with a talker (cod4-hud.md 15.9).
   S.
 - Smaller open items, each in its doc: the alt weapon's clip graphic and
-  the offhand highlight (cod4-hud.md, "What is left"); `timedemo`'s csv
+  the offhand highlight (cod4-hud.md 24); `timedemo`'s csv
   and the front end's demo list (cod4-demos.md 7); effect model elements
   and whether CoD4's sizes are radii (cod4-effects.md 9); the predicted
   origin ring a playerstate without bit 0 needs (cod4-netfields.md 11);
   `winvoice_mic_mute`, `winvoice_save_voice` and the record level meter
   (cod4-voice.md 5).
 
-## Not gaps
+## 2. Not gaps
 
 - CoD4x servers, by choice for now. Most public servers run CoD4x, which parks a 1.7
   client and hands it to its own update backend; vcod refuses them at the
@@ -52,7 +52,7 @@ Ranked by how much a player notices.
   one (cod4-effects.md 9).
 - Single Player's popup does nothing: vcod is multiplayer only.
 
-## Closed
+## 3. Closed
 
 - `sv_clientSideBullets` 0 was not read: vcod's client ran its own
   rounds whatever the server said. vcod now reads it off the systeminfo

@@ -194,7 +194,7 @@ impl Cod2Players {
                     if let Some(w) = &p.weapon {
                         let model = self.weapon_models.entry(w.clone()).or_insert_with(|| {
                             match vcod_common::weapon::load(fs, w) {
-                                Ok(d) => d.world_model.filter(|m| !m.is_empty()),
+                                Ok(d) => d.world_model,
                                 Err(e) => {
                                     log::warn!("CoD2 weapon '{w}': {e:#}");
                                     None

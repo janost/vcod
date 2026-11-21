@@ -30,30 +30,24 @@
 //! how fights end (target down, the bot down, broken off) and the
 //! re-engagements: the same bot on the same target again within 10 s of
 //! a fight broken off with both alive.
-//! Run: COD_DIR=<install> cargo run --release -p vcod-server --example bot_match [seed...]
-//! `MAPS=` a comma list (`MAP=` alias; mp_carentan), `GAMETYPE=` (tdm),
-//! `BOTS=` (6), `TICKS=` (12000, ten minutes), `LEVELS=` (1, the
-//! `exitLevel`s a match runs through), `JOBS=` (4, matches run in
-//! parallel), `SET=name=value,...` cvars, `UO=1` a United Offensive
-//! server. `AXIS_SKILL=` / `ALLIES_SKILL=` add the bots per side at those
+//! Run, with `COD_DIR=<install>`:
+//! `cargo run --release -p vcod-server --example bot_match -- [seed...]
+//! [KEY=VALUE...]`. Every knob, its default and what
+//! it does is in [`KNOBS`], the one list: a `KEY=VALUE` argument wins over
+//! the environment, an unknown key or a bad value stops the run with the
+//! table, and the first line of output names every knob given. Seeds
+//! default to 1..=8 (1..=4 on CoD2 and CoD4).
+//!
+//! `AXIS_SKILL=` / `ALLIES_SKILL=` add the bots per side at those
 //! `vc_bot_skill` levels, half each (dm: `SKILLS=a,b,...`, one bot per
-//! entry); without them `BOTS` join by balance at `vc_bot_skill`.
-//! One-sided feature arms: `COVER=`, `RETREAT=`, `TEAMPLAY=`, `AWARE=`,
-//! `FOOTWORK=`, `WARY=`, `SQUAD=` and `AIM=` (cover and lean, `bots/cover.rs`; the
-//! retreat, `bots/retreat.rs`; team play, `bots/team.rs`;
-//! `Bot::aware`; moving while fighting, `Bot::footwork`; varied peeks
-//! and hunts, `Bot::wary`; spacing out, `Bot::squad`; the hand's aim,
-//! `Bot::human_aim`) each take `all` (the default), `none`, `axis`,
-//! `allies` or `alt` (axis on odd seeds, allies on even, so the map's own
-//! asymmetry cancels). `dm` has no sides: there an odd slot takes axis's
-//! arm and an even one allies'.
-//! `ESCORT=`, `ROUTE=`, `HOLD=` and `SPRINT=` take the same values but turn
-//! on bot-objectives.md 14.12's rules, off by default, where they say;
-//! `WATCH=`, `CLOSE=` and `NEAROUT=` 14.13's. On
-//! `ctf` the actions add each carry and how it ended ([`CtfCarries`]).
+//! entry); without them `BOTS` join by balance at `vc_bot_skill`. An arm
+//! (`COVER=` to `NEAROUT=`) takes `all`, `none`, `axis`, `allies` or `alt`
+//! (axis on odd seeds, allies on even, so the map's own asymmetry cancels);
+//! `dm` has no sides, so there an odd slot takes axis's arm and an even one
+//! allies'. `ESCORT=` to `NEAROUT=` turn on rules that are off by default.
+//! On `ctf` the actions add each carry and how it ended ([`CtfCarries`]).
 //! With an arm one-sided the totals add a row per arm, named by the
-//! one-sided features on for it. `VERBOSE=1` prints every kill. Seeds
-//! default to 1..=8.
+//! one-sided features on for it.
 //!
 //! `DIGEST=1` (any game) prints a line per match, `digest <map>
 //! <gametype> seed <s> ticks <n> <hex>`: a running FNV-1a 64 over each
@@ -134,6 +128,327 @@ const TICK_MS: u64 = 50;
 /// A carrier's death this near a goal (or his pickup) counts as there.
 const NEAR_GOAL: f32 = 600.0;
 
+/// What a knob's value may be.
+#[derive(Clone, Copy)]
+enum Kind {
+    /// A whole number.
+    Count,
+    /// Whole numbers, comma separated.
+    Counts,
+    /// A number, fractions allowed.
+    Ms,
+    /// `0` or `1`.
+    Flag,
+    /// An arm: `all`, `none`, `axis`, `allies` or `alt`; `0` and `1` where a
+    /// game reads it as off or on.
+    Arm,
+    /// One of these words.
+    Pick(&'static [&'static str]),
+    /// A name, a list, a path.
+    Text,
+}
+
+/// Every knob bot_match reads: name, default, kind, what it does. A
+/// `KEY=VALUE` argument wins over the environment, and an unknown key or a
+/// bad value stops the run before it starts.
+const KNOBS: &[(&str, &str, Kind, &str)] = &[
+    (
+        "GAME",
+        "cod1",
+        Kind::Pick(&["cod1", "cod2", "cod4"]),
+        "the game",
+    ),
+    (
+        "MAPS",
+        "per game",
+        Kind::Text,
+        "comma list (mp_carentan, mp_toujane, mp_crash)",
+    ),
+    ("MAP", "", Kind::Text, "alias of MAPS"),
+    (
+        "GAMETYPE",
+        "per game",
+        Kind::Text,
+        "tdm on CoD1, dm on CoD2, war on CoD4",
+    ),
+    ("BOTS", "6", Kind::Count, "bots a match"),
+    (
+        "TICKS",
+        "per game",
+        Kind::Count,
+        "12000 on CoD1, 6000 on CoD2 and CoD4",
+    ),
+    (
+        "LEVELS",
+        "1",
+        Kind::Count,
+        "CoD1: the exitLevels a match runs through",
+    ),
+    ("JOBS", "4", Kind::Count, "matches run in parallel"),
+    ("SET", "", Kind::Text, "name=value,... cvars"),
+    ("UO", "0", Kind::Flag, "CoD1: a United Offensive server"),
+    (
+        "SKILLS",
+        "",
+        Kind::Counts,
+        "a vc_bot_skill a bot, in join order",
+    ),
+    ("AXIS_SKILL", "", Kind::Count, "the axis bots' vc_bot_skill"),
+    (
+        "ALLIES_SKILL",
+        "",
+        Kind::Count,
+        "the allied bots' vc_bot_skill",
+    ),
+    ("VERBOSE", "0", Kind::Flag, "print every kill"),
+    (
+        "DIGEST",
+        "0",
+        Kind::Count,
+        "1: a digest line a match; N: and every N ticks",
+    ),
+    (
+        "NETDIGEST",
+        "0",
+        Kind::Count,
+        "N: hash every datagram, an observer joined",
+    ),
+    (
+        "NETDUMP",
+        "",
+        Kind::Text,
+        "a directory for the datagrams themselves",
+    ),
+    (
+        "OBSERVERS",
+        "0",
+        Kind::Count,
+        "spectator clients the server builds snapshots for",
+    ),
+    (
+        "OBSERVERS_PLAY",
+        "0",
+        Kind::Flag,
+        "CoD1, CoD4: the observers play, walking",
+    ),
+    (
+        "VCOD_TICK_TRACE",
+        "",
+        Kind::Text,
+        "a directory for each match's tick step log",
+    ),
+    (
+        "TICKSTATS",
+        "0",
+        Kind::Pick(&["0", "1", "insns"]),
+        "each phase's times, or its instructions",
+    ),
+    (
+        "SPIKE_MS",
+        "",
+        Kind::Ms,
+        "print every tick slower than this",
+    ),
+    ("RESTART", "0", Kind::Count, "a map_restart every N ticks"),
+    (
+        "STALLS",
+        "0",
+        Kind::Flag,
+        "print stalled bot samples to stderr",
+    ),
+    ("CTF_TRACE", "0", Kind::Flag, "ctf: print each carry's end"),
+    (
+        "GUNS",
+        "1",
+        Kind::Flag,
+        "CoD2, CoD4: 0 keeps bots off mounted guns",
+    ),
+    (
+        "OBJ",
+        "1",
+        Kind::Flag,
+        "CoD4: 0 keeps bots off the objectives",
+    ),
+    ("THROWBACK", "1", Kind::Flag, "CoD4: 0 throws no frag back"),
+    (
+        "LEAVE",
+        "",
+        Kind::Counts,
+        "CoD4: ticks at which the lowest scoring bot leaves",
+    ),
+    ("COVER", "all", Kind::Arm, "cover and lean"),
+    ("RETREAT", "all", Kind::Arm, "the retreat"),
+    ("TEAMPLAY", "all", Kind::Arm, "team play"),
+    ("AWARE", "all", Kind::Arm, "awareness"),
+    ("FOOTWORK", "all", Kind::Arm, "moving while fighting"),
+    ("WARY", "all", Kind::Arm, "varied peeks and hunts"),
+    ("SQUAD", "all", Kind::Arm, "spacing out"),
+    ("AIM", "all", Kind::Arm, "the hand's aim"),
+    ("TACTICS", "all", Kind::Arm, "objective tactics"),
+    (
+        "CONVERGE",
+        "all",
+        Kind::Arm,
+        "defenders converge on a site under attack",
+    ),
+    ("LANES", "all", Kind::Arm, "lanes to the objective"),
+    ("FAR", "all", Kind::Arm, "bot-objectives.md 14's far rule"),
+    ("CUES", "all", Kind::Arm, "bot-objectives.md 14's cues"),
+    (
+        "TRAVEL",
+        "all",
+        Kind::Arm,
+        "bot-objectives.md 14's travel rule",
+    ),
+    ("CARRY", "all", Kind::Arm, "bot-objectives.md 14.11's carry"),
+    (
+        "ESCORT",
+        "off",
+        Kind::Arm,
+        "bot-objectives.md 14.12, off unless set",
+    ),
+    (
+        "ROUTE",
+        "off",
+        Kind::Arm,
+        "bot-objectives.md 14.12, off unless set",
+    ),
+    (
+        "HOLD",
+        "off",
+        Kind::Arm,
+        "bot-objectives.md 14.12, off unless set",
+    ),
+    (
+        "SPRINT",
+        "off",
+        Kind::Arm,
+        "bot-objectives.md 14.12, off unless set",
+    ),
+    (
+        "WATCH",
+        "off",
+        Kind::Arm,
+        "bot-objectives.md 14.13, off unless set",
+    ),
+    (
+        "CLOSE",
+        "off",
+        Kind::Arm,
+        "bot-objectives.md 14.13, off unless set",
+    ),
+    (
+        "NEAROUT",
+        "off",
+        Kind::Arm,
+        "bot-objectives.md 14.13, off unless set",
+    ),
+];
+
+/// The command line: the `KEY=VALUE` knobs and the seeds.
+struct Args {
+    given: HashMap<String, String>,
+    seeds: Vec<u64>,
+}
+
+static ARGS: std::sync::OnceLock<Args> = std::sync::OnceLock::new();
+
+/// Whether `v` is a value `kind` takes.
+fn valid(kind: Kind, v: &str) -> bool {
+    let count = |s: &str| s.trim().parse::<u64>().is_ok();
+    match kind {
+        Kind::Count => count(v),
+        Kind::Counts => v.split(',').all(count),
+        Kind::Ms => v.parse::<f32>().is_ok_and(f32::is_finite),
+        Kind::Flag => matches!(v, "0" | "1"),
+        Kind::Arm => matches!(v, "all" | "none" | "axis" | "allies" | "alt" | "0" | "1"),
+        Kind::Pick(words) => words.contains(&v),
+        Kind::Text => true,
+    }
+}
+
+/// The knob table, for an error.
+fn knob_table() -> String {
+    let mut out = String::from("knobs (KEY=VALUE beside the seeds, or in the environment):\n");
+    for (name, default, _, help) in KNOBS {
+        out += &format!("  {name:<16} {default:<9} {help}\n");
+    }
+    out
+}
+
+/// Reads the command line and checks every knob given, as an argument or
+/// in the environment; prints the given ones as the run's first line.
+fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args, String> {
+    let mut given = HashMap::new();
+    let mut seeds = Vec::new();
+    for a in argv {
+        if let Some((k, v)) = a.split_once('=') {
+            if !KNOBS.iter().any(|n| n.0 == k) {
+                return Err(format!("unknown key {k}\n{}", knob_table()));
+            }
+            given.insert(k.to_string(), v.to_string());
+        } else {
+            seeds.push(a.parse().map_err(|_| format!("{a}: a seed or KEY=VALUE"))?);
+        }
+    }
+    for &(name, _, kind, _) in KNOBS {
+        let v = given
+            .get(name)
+            .cloned()
+            .or_else(|| std::env::var(name).ok());
+        if let Some(v) = v.filter(|v| !valid(kind, v)) {
+            return Err(format!(
+                "{name}={v} is not a value it takes\n{}",
+                knob_table()
+            ));
+        }
+    }
+    Ok(Args { given, seeds })
+}
+
+/// The parsed command line; exits with the knob table on a bad one.
+fn args() -> &'static Args {
+    ARGS.get_or_init(|| {
+        parse_args(std::env::args().skip(1)).unwrap_or_else(|e| {
+            eprintln!("bot_match: {e}");
+            std::process::exit(2)
+        })
+    })
+}
+
+/// Knob `k`, an argument first, then the environment. `k` must be in
+/// [`KNOBS`]: a read the table lacks is the tool drifting from its list.
+fn knob(k: &str) -> Result<String, std::env::VarError> {
+    assert!(
+        KNOBS.iter().any(|n| n.0 == k),
+        "bot_match reads {k}, which KNOBS lacks"
+    );
+    args()
+        .given
+        .get(k)
+        .cloned()
+        .ok_or(std::env::VarError::NotPresent)
+        .or_else(|_| std::env::var(k))
+}
+
+/// The seeds the command line names.
+fn seeds() -> Vec<u64> {
+    args().seeds.clone()
+}
+
+/// The run's first line: every knob given and its value.
+fn print_knobs() {
+    let set: Vec<String> = KNOBS
+        .iter()
+        .filter_map(|&(k, ..)| knob(k).ok().map(|v| format!("{k}={v}")))
+        .collect();
+    if set.is_empty() {
+        println!("knobs: defaults");
+    } else {
+        println!("knobs: {}", set.join(" "));
+    }
+}
+
 /// `ctf` carries, UO's and CoD2's (bot-objectives.md 14.12), off the
 /// flags each tick: per flag its carrier, where he stood and his side's
 /// score. A carry counts `ctf_carries`; it ends in `ctf_carry_captured`
@@ -161,7 +476,7 @@ struct CtfCarries {
 impl CtfCarries {
     fn new(label: String) -> Self {
         CtfCarries {
-            trace: (std::env::var("CTF_TRACE").as_deref() == Ok("1")).then_some(label),
+            trace: (crate::knob("CTF_TRACE").as_deref() == Ok("1")).then_some(label),
             ..Default::default()
         }
     }
@@ -309,7 +624,7 @@ enum Arm {
 
 impl Arm {
     fn parse(k: &str) -> Arm {
-        match std::env::var(k).as_deref().unwrap_or("all") {
+        match crate::knob(k).as_deref().unwrap_or("all") {
             "all" => Arm::All,
             "none" => Arm::None,
             "axis" => Arm::Axis,
@@ -674,7 +989,7 @@ struct TickStats {
 
 impl TickStats {
     fn from_env() -> Option<TickStats> {
-        match std::env::var("TICKSTATS").as_deref() {
+        match crate::knob("TICKSTATS").as_deref() {
             Ok("1") => {
                 vcod_server::tick_profile::enable();
                 Some(TickStats::default())
@@ -786,7 +1101,7 @@ impl Digest {
     }
 
     fn from_var(var: &str, label: &'static str) -> Option<Digest> {
-        let every: usize = std::env::var(var).ok()?.parse().expect(var);
+        let every: usize = crate::knob(var).ok()?.parse().expect(var);
         (every > 0).then_some(Digest {
             label,
             hash: 0xcbf2_9ce4_8422_2325,
@@ -976,13 +1291,13 @@ struct Play {
 
 /// `OBSERVERS=`' count, 0 without it.
 fn observers_from_env() -> usize {
-    std::env::var("OBSERVERS").map_or(0, |v| v.parse().expect("OBSERVERS"))
+    crate::knob("OBSERVERS").map_or(0, |v| v.parse().expect("OBSERVERS"))
 }
 
 /// `OBSERVERS_PLAY=1`: the `OBSERVERS` clients join a team and walk, so the
 /// server builds them snapshots in the world.
 fn play_from_env() -> bool {
-    std::env::var("OBSERVERS_PLAY").as_deref() == Ok("1")
+    crate::knob("OBSERVERS_PLAY").as_deref() == Ok("1")
 }
 
 /// The `i`th observer's address and qport: [`OBSERVER`] and 4660 for the
@@ -1120,7 +1435,7 @@ fn net_dump(
     gametype: &str,
     seed: u64,
 ) -> Option<std::io::BufWriter<std::fs::File>> {
-    let dir = std::env::var_os("NETDUMP")?;
+    let dir = crate::knob("NETDUMP").ok()?;
     let path = std::path::Path::new(&dir).join(format!("{game}_{map}_{gametype}_s{seed}.net"));
     Some(std::io::BufWriter::new(
         std::fs::File::create(path).expect("NETDUMP"),
@@ -1143,7 +1458,7 @@ fn dump_datagrams(
 
 /// `VCOD_TICK_TRACE=<dir>`: this match's step log, on this thread.
 fn install_trace(game: &str, map: &str, gametype: &str, seed: u64) {
-    if let Some(dir) = std::env::var_os("VCOD_TICK_TRACE") {
+    if let Ok(dir) = crate::knob("VCOD_TICK_TRACE") {
         let path =
             std::path::Path::new(&dir).join(format!("{game}_{map}_{gametype}_s{seed}.trace"));
         vcod_server::tick_trace::install(&path).expect("VCOD_TICK_TRACE");
@@ -1338,7 +1653,8 @@ struct Match {
 }
 
 fn main() {
-    let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.into());
+    print_knobs();
+    let env = |k: &str, d: &str| crate::knob(k).unwrap_or_else(|_| d.into());
     if env("GAME", "cod1") == "cod2" {
         return cod2::main();
     }
@@ -1349,8 +1665,8 @@ fn main() {
     let gametype = env("GAMETYPE", "tdm");
     let mut bots: usize = env("BOTS", "6").parse().expect("BOTS");
     let mut console = Vec::new();
-    let side_skill = (std::env::var("AXIS_SKILL"), std::env::var("ALLIES_SKILL"));
-    if let Ok(list) = std::env::var("SKILLS") {
+    let side_skill = (crate::knob("AXIS_SKILL"), crate::knob("ALLIES_SKILL"));
+    if let Ok(list) = crate::knob("SKILLS") {
         let list: Vec<&str> = list.split(',').collect();
         for s in &list {
             console.push(format!("addbot 1 skill {s}"));
@@ -1385,10 +1701,7 @@ fn main() {
         arms: ARMS.map(Arm::parse),
     };
     let jobs: usize = env("JOBS", "4").parse().expect("JOBS");
-    let mut seeds: Vec<u64> = std::env::args()
-        .skip(1)
-        .map(|s| s.parse().expect("seed"))
-        .collect();
+    let mut seeds: Vec<u64> = crate::seeds();
     if seeds.is_empty() {
         seeds = (1..=8).collect();
     }
@@ -1401,7 +1714,7 @@ fn main() {
         opts.uo,
         opts.set,
         opts.console,
-        ARMS.map(|k| std::env::var(k).unwrap_or_else(|_| "all".into())),
+        ARMS.map(|k| crate::knob(k).unwrap_or_else(|_| "all".into())),
     );
     let started = Instant::now();
     let jobs_list: Vec<(String, u64)> = opts
@@ -1613,7 +1926,7 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
     for (k, v) in &o.set {
         sv.set_cvar(k, v);
     }
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&*fs)));
     sv.load_scripts(fs.clone()).expect("load the scripts");
     for line in &o.console {
         sv.push_console(line);
@@ -1661,17 +1974,17 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
     let mut hist: HashMap<usize, VecDeque<([f32; 3], bool)>> = HashMap::new();
     let mut trail: HashMap<usize, VecDeque<[f32; 3]>> = HashMap::new();
     // `STALLS=1`: where each stalled window begins, to stderr.
-    let stall_log = std::env::var("STALLS").as_deref() == Ok("1");
+    let stall_log = crate::knob("STALLS").as_deref() == Ok("1");
     let mut stalled_now: HashSet<usize> = HashSet::new();
     let mut bots: HashMap<usize, Life> = HashMap::new();
     let mut react = React::default();
     let mut stats = TickStats::from_env();
     // `SPIKE_MS=<ms>` and `RESTART=<n>`, as CoD2's.
-    let spike_ms: Option<f32> = std::env::var("SPIKE_MS").ok().and_then(|v| v.parse().ok());
+    let spike_ms: Option<f32> = crate::knob("SPIKE_MS").ok().and_then(|v| v.parse().ok());
     if spike_ms.is_some() {
         vcod_server::tick_profile::enable();
     }
-    let restart: usize = std::env::var("RESTART")
+    let restart: usize = crate::knob("RESTART")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
@@ -1755,7 +2068,7 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
             }
             // bot-objectives.md 14.12's rules are off by default: set, the
             // arm turns them on where it says.
-            let given = |k: &str| std::env::var(k).is_ok();
+            let given = |k: &str| crate::knob(k).is_ok();
             if given("ESCORT") {
                 sv.test_bot_ctf_escort(slot, escort.on(team, seed));
             }
@@ -2938,7 +3251,7 @@ mod cod2 {
     }
 
     pub(super) fn main() {
-        let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.into());
+        let env = |k: &str, d: &str| crate::knob(k).unwrap_or_else(|_| d.into());
         let maps: Vec<String> = env("MAPS", &env("MAP", "mp_toujane"))
             .split(',')
             .map(str::to_string)
@@ -2948,10 +3261,7 @@ mod cod2 {
         let ticks: usize = env("TICKS", "6000").parse().expect("TICKS");
         let jobs: usize = env("JOBS", "4").parse().expect("JOBS");
         let verbose = env("VERBOSE", "0") == "1";
-        let mut seeds: Vec<u64> = std::env::args()
-            .skip(1)
-            .map(|s| s.parse().expect("seed"))
-            .collect();
+        let mut seeds: Vec<u64> = crate::seeds();
         if seeds.is_empty() {
             seeds = (1..=4).collect();
         }
@@ -3146,15 +3456,15 @@ mod cod2 {
         // `SKILLS=a,b,...` one level a bot in join order, else
         // `AXIS_SKILL=` / `ALLIES_SKILL=` by team (`add_bots` alternates
         // allies and axis), else `vc_bot_skill`'s.
-        let list: Vec<u8> = std::env::var("SKILLS")
+        let list: Vec<u8> = crate::knob("SKILLS")
             .map(|l| l.split(',').filter_map(|s| s.trim().parse().ok()).collect())
             .unwrap_or_default();
-        let side = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<u8>().ok());
+        let side = |k: &str| crate::knob(k).ok().and_then(|v| v.parse::<u8>().ok());
         let (axis, allies) = (side("AXIS_SKILL"), side("ALLIES_SKILL"));
         let mut level_of: HashMap<usize, u8> = HashMap::new();
         if let Some(b) = sv.bots_mut() {
             b.wait_for_graph();
-            b.own.man_guns = std::env::var("GUNS").map_or(true, |v| v != "0");
+            b.own.man_guns = crate::knob("GUNS").map_or(true, |v| v != "0");
             for (i, &slot) in slots.iter().enumerate() {
                 let l = if !list.is_empty() {
                     Some(list[i % list.len()])
@@ -3199,7 +3509,7 @@ mod cod2 {
             sv.test_frame_clock();
         }
         // `STALLS=1`: every 20th tick of a stalled sample to stderr.
-        let stall_log = std::env::var("STALLS").as_deref() == Ok("1");
+        let stall_log = crate::knob("STALLS").as_deref() == Ok("1");
         let mut seen = 0;
         let mut hist: HashMap<usize, VecDeque<([f32; 3], bool)>> = HashMap::new();
         let mut trail: HashMap<usize, VecDeque<[f32; 3]>> = HashMap::new();
@@ -3211,13 +3521,13 @@ mod cod2 {
         let mut pending: HashMap<(usize, usize), usize> = HashMap::new();
         let mut stats = super::TickStats::from_env();
         // `SPIKE_MS=<ms>`: each tick past it to stderr with its phases.
-        let spike_ms: Option<f32> = std::env::var("SPIKE_MS").ok().and_then(|v| v.parse().ok());
+        let spike_ms: Option<f32> = crate::knob("SPIKE_MS").ok().and_then(|v| v.parse().ok());
         if spike_ms.is_some() {
             vcod_server::tick_profile::enable();
         }
         // `RESTART=<n>`: a console `map_restart` every `n` ticks, each a
         // spawn wave of every bot at once.
-        let restart: usize = std::env::var("RESTART")
+        let restart: usize = crate::knob("RESTART")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
@@ -3234,7 +3544,7 @@ mod cod2 {
             // 14.12's, `WATCH=1`, `CLOSE=1`, `NEAROUT=1` 14.13's, off by
             // default.
             if let Some(b) = sv.bots_mut() {
-                let off = |k: &str| matches!(std::env::var(k).as_deref(), Ok("0" | "none"));
+                let off = |k: &str| matches!(crate::knob(k).as_deref(), Ok("0" | "none"));
                 let arms = [
                     !off("TACTICS"),
                     !off("CONVERGE"),
@@ -3244,7 +3554,7 @@ mod cod2 {
                     !off("TRAVEL"),
                     !off("CARRY"),
                 ];
-                let on = |k: &str| matches!(std::env::var(k).as_deref(), Ok("1" | "all"));
+                let on = |k: &str| matches!(crate::knob(k).as_deref(), Ok("1" | "all"));
                 let tried = [
                     on("ESCORT"),
                     on("ROUTE"),
@@ -3989,7 +4299,7 @@ mod cod4 {
         // The server's warnings at `RUST_LOG`'s level, none without it.
         let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("off"))
             .try_init();
-        let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.into());
+        let env = |k: &str, d: &str| crate::knob(k).unwrap_or_else(|_| d.into());
         let maps: Vec<String> = env("MAPS", &env("MAP", "mp_crash"))
             .split(',')
             .map(str::to_string)
@@ -4004,10 +4314,7 @@ mod cod4 {
             .filter_map(|p| p.split_once('='))
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        let mut seeds: Vec<u64> = std::env::args()
-            .skip(1)
-            .map(|s| s.parse().expect("seed"))
-            .collect();
+        let mut seeds: Vec<u64> = crate::seeds();
         if seeds.is_empty() {
             seeds = (1..=4).collect();
         }
@@ -4168,7 +4475,7 @@ mod cod4 {
         sets: &[(String, String)],
     ) -> Option<Cod4Match> {
         let install = vcod_cod4::testing::cod4_install()?;
-        let leave: Vec<usize> = std::env::var("LEAVE")
+        let leave: Vec<usize> = crate::knob("LEAVE")
             .unwrap_or_default()
             .split(',')
             .filter_map(|t| t.trim().parse().ok())
@@ -4196,13 +4503,13 @@ mod cod4 {
         let slots = sv.add_bots(bots, true);
         if let Some(b) = sv.bots_mut() {
             b.wait_for_graph();
-            b.own.objectives = std::env::var("OBJ").as_deref() != Ok("0");
-            b.own.man_guns = std::env::var("GUNS").as_deref() != Ok("0");
-            b.own.throw_back = std::env::var("THROWBACK").as_deref() != Ok("0");
+            b.own.objectives = crate::knob("OBJ").as_deref() != Ok("0");
+            b.own.man_guns = crate::knob("GUNS").as_deref() != Ok("0");
+            b.own.throw_back = crate::knob("THROWBACK").as_deref() != Ok("0");
         }
         let mut last_obj = None;
         // `STALLS=1`: every 20th tick of a stalled sample to stderr.
-        let stall_log = std::env::var("STALLS").as_deref() == Ok("1");
+        let stall_log = crate::knob("STALLS").as_deref() == Ok("1");
         let mut m = Cod4Match {
             map: map.to_string(),
             seed,
@@ -4213,7 +4520,7 @@ mod cod4 {
         install_trace("cod4", map, gametype, seed);
         // `SPIKE_MS=<ms>`: each tick past it to stderr with its phases
         // (`vcod_server::tick_profile`).
-        let spike_ms: Option<f32> = std::env::var("SPIKE_MS").ok().and_then(|v| v.parse().ok());
+        let spike_ms: Option<f32> = crate::knob("SPIKE_MS").ok().and_then(|v| v.parse().ok());
         if spike_ms.is_some() {
             vcod_server::tick_profile::enable();
         }
@@ -4252,7 +4559,7 @@ mod cod4 {
             // 14.12's, `WATCH=1`, `CLOSE=1`, `NEAROUT=1` 14.13's, off by
             // default.
             if let Some(b) = sv.bots_mut() {
-                let off = |k: &str| matches!(std::env::var(k).as_deref(), Ok("0" | "none"));
+                let off = |k: &str| matches!(crate::knob(k).as_deref(), Ok("0" | "none"));
                 let arms = [
                     !off("TACTICS"),
                     !off("CONVERGE"),
@@ -4262,7 +4569,7 @@ mod cod4 {
                     !off("TRAVEL"),
                     !off("CARRY"),
                 ];
-                let on = |k: &str| matches!(std::env::var(k).as_deref(), Ok("1" | "all"));
+                let on = |k: &str| matches!(crate::knob(k).as_deref(), Ok("1" | "all"));
                 let tried = [
                     on("ESCORT"),
                     on("ROUTE"),
@@ -4583,5 +4890,42 @@ mod cod4 {
             );
         }
         Some(m)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_args;
+
+    fn parse(args: &[&str]) -> Result<super::Args, String> {
+        parse_args(args.iter().map(|s| s.to_string()))
+    }
+
+    #[test]
+    fn an_unknown_key_stops_the_run_with_the_table() {
+        let e = parse(&["1", "TICK=2000"]).err().expect("TICK is no knob");
+        assert!(e.starts_with("unknown key TICK"), "{e}");
+        assert!(e.contains("TICKS"), "{e}");
+    }
+
+    #[test]
+    fn a_bad_value_stops_the_run() {
+        for bad in [
+            "TICKS=abc",
+            "GAME=cod3",
+            "SPIKE_MS=abc",
+            "RESTART=x",
+            "COVER=some",
+        ] {
+            assert!(parse(&[bad]).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn seeds_and_knobs_split() {
+        let a = parse(&["3", "TICKS=600", "5", "COVER=alt"]).unwrap();
+        assert_eq!(a.seeds, [3, 5]);
+        assert_eq!(a.given["TICKS"], "600");
+        assert!(parse(&["x"]).is_err());
     }
 }

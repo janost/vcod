@@ -53,7 +53,7 @@ pub fn launch_off(
         .ok_or(ErrorKind::BadType("no such player"))?;
     let mut origin = match body {
         Some(b) => b.origin,
-        None => Vec3::from(super::item::origin_of(host, cx, player)),
+        None => host.vec_field(cx, player, "origin"),
     };
     // `z + 0.5 * (maxs.z - mins.z)` on the stack, one store.
     let half = body.map_or(35.0, |b| 0.5 * (f64::from(b.maxs.z) - f64::from(b.mins.z)));

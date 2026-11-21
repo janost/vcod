@@ -790,8 +790,41 @@ impl Default for PlayerState {
     }
 }
 
+/// A playerstate field's word in [`PlayerState::words`], or an array
+/// field's `N` words (`ps_word!(3 "origin")`), resolved at compile time: a
+/// name the table lacks fails the build. `ps.word(ps_word!("pm_type"))`.
+#[macro_export]
+macro_rules! ps_word {
+    ($name:literal) => {
+        const { $crate::net::delta::word_named(&$crate::net::fields::PLAYER_STATE, $name) }
+    };
+    ($n:literal $name:literal) => {
+        const {
+            let mut words = [0usize; $n];
+            let mut k = 0;
+            while k < $n {
+                words[k] =
+                    $crate::net::delta::word_at(&$crate::net::fields::PLAYER_STATE, $name, k);
+                k += 1;
+            }
+            words
+        }
+    };
+}
+
 impl PlayerState {
-    /// A field's word by its table name.
+    /// Word `w`, a [`ps_word!`](crate::ps_word): 0 past a short `words`.
+    pub fn word(&self, w: usize) -> u32 {
+        self.words.get(w).copied().unwrap_or(0)
+    }
+
+    /// [`Self::word`] as the float it holds.
+    pub fn word_f32(&self, w: usize) -> f32 {
+        f32::from_bits(self.word(w))
+    }
+
+    /// A field's word by a table name known only at run time (a tool's
+    /// argument); code naming a field uses [`ps_word!`](crate::ps_word).
     pub fn get(&self, name: &str) -> Option<u32> {
         fields::PLAYER_STATE
             .iter()
@@ -1148,11 +1181,11 @@ impl PsWire {
 /// inline, for the last-sent count (0x813fa4a..0x813fa81) and the row
 /// writes (0x813faba..0x8140c05); cod4-netfields.md 7.
 fn view_goes_out(from: &PlayerState, to: &PlayerState) -> bool {
-    let word = |ps: &PlayerState, name: &str| ps.get(name).unwrap_or(0);
-    word(to, "otherFlags") & 2 != 0
-        || word(to, "viewlocked_entNum") != ENTITYNUM_NONE
-        || word(to, "pm_type") == PM_INTERMISSION
-        || (word(from, "eFlags") ^ word(to, "eFlags")) & 2 != 0
+    let e_flags = crate::ps_word!("eFlags");
+    to.word(crate::ps_word!("otherFlags")) & 2 != 0
+        || to.word(crate::ps_word!("viewlocked_entNum")) != ENTITYNUM_NONE
+        || to.word(crate::ps_word!("pm_type")) == PM_INTERMISSION
+        || (from.word(e_flags) ^ to.word(e_flags)) & 2 != 0
 }
 
 /// One objective's rows, every one of them, or `None` when none changed.

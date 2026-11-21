@@ -109,18 +109,19 @@ fn probe_args(
         .occupant_damage(slot, Some(attacker), PROBE_DAMAGE, 0)?;
     let weapon = super::inflictor_weapon(host, Some(attacker));
     let weapon = host.defs.weapon_name(weapon).unwrap_or("none").to_string();
-    let point = crate::game::item::origin_of(host, cx, victim);
-    Some(vec![
-        Value::Entity(attacker),
-        Value::Entity(attacker),
-        Value::Int(damage),
-        Value::Int(0),
-        Value::String(cx.intern_exact("MOD_EXPLOSIVE")),
-        Value::String(cx.intern_exact(&weapon)),
-        Value::Vector(point),
-        Value::Vector([0.0; 3]),
-        Value::String(cx.intern_exact("none")),
-    ])
+    let point = host.vec_field(cx, victim, "origin").to_array();
+    let args = crate::game::script::PlayerDamage {
+        inflictor: Value::Entity(attacker),
+        attacker: Value::Entity(attacker),
+        damage,
+        dflags: 0,
+        mod_: cx.intern_exact("MOD_EXPLOSIVE"),
+        weapon: cx.intern_exact(&weapon),
+        point: Value::Vector(point),
+        dir: Value::Vector([0.0; 3]),
+        hitloc: cx.intern_exact("none"),
+    };
+    Some(args.into_args())
 }
 
 /// The rider's health back as it was; a hit that left the padded health
@@ -136,7 +137,7 @@ fn finish_rider(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, health
     if host.vehicles.seat_of(slot).is_none_or(|(v, _)| v != id) {
         return;
     }
-    let from = crate::game::item::origin_of(host, cx, player);
+    let from = host.vec_field(cx, player, "origin").to_array();
     let raised = host.engine_notifies.len();
     let out = super::seat::unlink_player(host, cx, slot, shielded, from, super::seat::PLAYER_BOX);
     // `VEH_UnlinkPlayer`'s `deactivated` pair goes out inside the callback,

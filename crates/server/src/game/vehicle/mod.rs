@@ -11,7 +11,7 @@ pub mod seat;
 pub mod think;
 
 use crate::configstrings::CsRange;
-use crate::game::host::GameHost;
+use crate::game::host::{ENTITYNUM_NONE, GameHost};
 use crate::game::slot::ClientSlot;
 use info::{VehicleInfo, VehicleInfos};
 use std::collections::HashMap;
@@ -26,9 +26,10 @@ pub const MAX_SEATS: usize = 6;
 /// spawnflag 1; a collmap's pairing makes it `0x800000 | 0x200000`.
 pub const CONTENTS_VEHICLE: i32 = 0x2080;
 pub const CONTENTS_USABLE: i32 = 0x0020_0000;
-pub const CONTENTS_COLLMAP: i32 = 0x0080_0000 | CONTENTS_USABLE;
-/// `ENTITYNUM_NONE`.
-const NONE: i32 = 1023;
+/// The bit a collmap's pairing adds, which the collision probes' mask
+/// carries to meet another vehicle.
+pub const CONTENTS_COLLMAP_BIT: i32 = 0x0080_0000;
+pub const CONTENTS_COLLMAP: i32 = CONTENTS_COLLMAP_BIT | CONTENTS_USABLE;
 /// `Scr_Vehicle_Init`'s first think, 50 ms after the spawn.
 pub const THINK_MS: i32 = 50;
 
@@ -71,7 +72,7 @@ impl Default for VehicleWire {
             time: 0,
             time2: 0,
             anim_movetype: 0,
-            other: NONE,
+            other: ENTITYNUM_NONE,
             driven_flag: false,
             head_icon: [0; 2],
             loop_sound: 0,
@@ -514,8 +515,8 @@ pub fn spawn(
         ..VehicleWire::default()
     };
     let pose = Pose {
-        origin: crate::game::item::origin_of(host, cx, id),
-        angles: crate::game::item::angles_of(host, cx, id),
+        origin: host.vec_field(cx, id, "origin").to_array(),
+        angles: host.vec_field(cx, id, "angles").to_array(),
     };
     let model_name = field_string(host, cx, id, "model");
     let phys = physics::Physics::spawn(
@@ -1077,7 +1078,7 @@ pub fn g_damage(
         .and_then(|slot| host.vehicles.lifted.get(&slot.index()));
     let origin = match lifted {
         Some(o) => *o,
-        None => crate::game::item::origin_of(host, cx, target),
+        None => host.vec_field(cx, target, "origin").to_array(),
     };
     let d = glam::Vec3::from(origin) - glam::Vec3::from(point);
     let dir = d.normalize_or_zero().to_array();
@@ -1193,7 +1194,7 @@ pub fn vehicle_damage(
     if dflags & crate::game::combat::DFLAG_RADIUS != 0 && damage < 100 {
         return Vec::new();
     }
-    let origin = crate::game::item::origin_of(host, cx, id);
+    let origin = host.vec_field(cx, id, "origin").to_array();
     let (pose, maxs) = host
         .vehicles
         .live
@@ -1287,7 +1288,7 @@ fn boxes_touch(a: ([f32; 3], [f32; 3]), b: ([f32; 3], [f32; 3])) -> bool {
 /// `verifyPosition` on a vehicle (0x692e8): no player and no other vehicle
 /// in its box.
 pub fn position_clear(host: &mut GameHost, cx: &mut Cx, id: EntId) -> bool {
-    let origin = crate::game::item::origin_of(host, cx, id);
+    let origin = host.vec_field(cx, id, "origin").to_array();
     let Some(me) = vehicle_box(host, id, origin) else {
         return true;
     };
@@ -1309,7 +1310,7 @@ pub fn position_clear(host: &mut GameHost, cx: &mut Cx, id: EntId) -> bool {
         if host.ents.get(o).is_some_and(|e| e.unlinked) {
             continue;
         }
-        let at = crate::game::item::origin_of(host, cx, o);
+        let at = host.vec_field(cx, o, "origin").to_array();
         if vehicle_box(host, o, at).is_some_and(|b| boxes_touch(me, b)) {
             return false;
         }
@@ -1337,7 +1338,7 @@ fn search_box(host: &GameHost, id: EntId, origin: [f32; 3]) -> Option<([f32; 3],
 /// ten, in the area tree's order.
 pub fn clutter_in_box(host: &mut GameHost, cx: &mut Cx, id: EntId) -> Vec<EntId> {
     const MASK: i32 = 0x4000100;
-    let origin = crate::game::item::origin_of(host, cx, id);
+    let origin = host.vec_field(cx, id, "origin").to_array();
     let Some((lo, hi)) = search_box(host, id, origin) else {
         return Vec::new();
     };

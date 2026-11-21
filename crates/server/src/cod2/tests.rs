@@ -352,6 +352,48 @@ fn a_cod2_donedl_flood_sends_one_gamestate() {
     assert_eq!(c.gamestate_message, before as i32);
 }
 
+/// A message carrying more commands than twice the 128-slot ring does not
+/// read: none of them runs and the netchan does not take it.
+#[test]
+fn a_cod2_message_past_the_command_cap_runs_nothing() {
+    use vcod_common::net::huffman::Huffman;
+    let now = Instant::now();
+    let mut sv = Cod2Server::new(cfg("mp_toujane"), 7, now);
+    sv.load(None).unwrap();
+    let mut cl = connect(&mut sv, now);
+    run(&mut sv, &mut cl, None, 2);
+    let last = |sv: &Cod2Server| {
+        sv.core.clients[0]
+            .as_ref()
+            .unwrap()
+            .link
+            .last_client_command
+    };
+    let (first, sid) = (last(&sv) + 1, sv.server_id());
+    let packet = |cl: &mut Client, n: i32| {
+        let huff = Huffman::new();
+        let mut w = MsgWriter::new(&huff);
+        for seq in first..first + n {
+            w.write_bits(Clc::ClientCommand as i32, CLC_BITS);
+            w.write_long(seq);
+            w.write_string("x");
+        }
+        w.write_bits(Clc::Eof as i32, CLC_BITS);
+        let rel_ack = cl.parser.server_command_sequence;
+        let key = cl.parser.server_command(rel_ack).to_vec();
+        let ack = cl.netchan.incoming_sequence as i32;
+        cl.netchan
+            .build_out_keyed(sid, ack, rel_ack, &key, &w.into_ops(), &huff)
+            .unwrap()
+    };
+    let over = packet(&mut cl, 257);
+    sv.handle_packet(addr(), &over, now);
+    assert_eq!(last(&sv), first - 1);
+    let at = packet(&mut cl, 256);
+    sv.handle_packet(addr(), &at, now);
+    assert_eq!(last(&sv), first + 255);
+}
+
 /// `heartbeat COD-2` to cod.pm's CoD2 port at `dedicated 2` only, every
 /// three minutes, and the flatline on `quit`; a loopback fake stands in
 /// for the master.

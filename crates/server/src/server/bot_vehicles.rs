@@ -2,6 +2,7 @@
 //! (`crate::bots::vehicle`): each bot's seat, and the vehicles it could
 //! board, as the use key would find them (`game::vehicle::seat::usable`).
 
+use super::bot_world::team_of;
 use super::*;
 use crate::bots::{ArmorView, Crowd, GunSight, SeatView, VehicleSpot};
 use crate::game::vehicle::info::KIND_TANK;
@@ -27,9 +28,8 @@ impl Server {
             .enumerate()
             .filter_map(|(i, c)| {
                 let s = c.as_ref()?.sim.as_ref()?;
-                let up =
-                    s.pm_type == crate::spectate::PmType::Normal && !s.dead && s.seat.is_none();
-                up.then(|| (i, s.ps.origin.into(), teams.get(i).copied().unwrap_or(0)))
+                let up = s.playing() && s.seat.is_none();
+                up.then(|| (i, s.ps.origin.into(), team_of(teams, i)))
             })
             .collect();
         let crewed = self.crewed_vehicles(teams);
@@ -58,7 +58,7 @@ impl Server {
                     seat.off = !on;
                 }
                 if let Some(seat) = view.seat.as_mut().filter(|s| s.seat == 1) {
-                    let mine = teams.get(*slot).copied().unwrap_or(0);
+                    let mine = team_of(teams, *slot);
                     seat.crowd = crowd(host, *slot, mine, &walkers);
                     if let Some((id, _)) = host.vehicles.seat_of(*slot) {
                         seat.capturing = crate::game::vehicle::think::capturing(host, cx, id);
@@ -90,14 +90,7 @@ impl Server {
                         continue;
                     };
                     let info = host.vehicles.info_of(v);
-                    let spot = VehicleSpot {
-                        num: id.0,
-                        origin: v.pose.origin,
-                        yaw: v.pose.angles[1],
-                        mins: info.mins,
-                        maxs: info.maxs,
-                        tank: info.kind == KIND_TANK,
-                    };
+                    let spot = spot_of(id, v, info);
                     if spot.gap(view.origin) < reach
                         && crate::game::vehicle::seat::usable(host, cx, id, *slot)
                     {
@@ -146,22 +139,12 @@ impl Server {
                     return None;
                 }
                 let info = host.vehicles.info_of(v);
-                let spot = VehicleSpot {
-                    num: id.0,
-                    origin: v.pose.origin,
-                    yaw: v.pose.angles[1],
-                    mins: info.mins,
-                    maxs: info.maxs,
-                    tank: info.kind == KIND_TANK,
-                };
+                let spot = spot_of(id, v, info);
                 let mask = riders
                     .iter()
                     .filter(|s| **s < 64)
                     .fold(0u64, |m, s| m | 1 << s);
-                let sides = riders
-                    .iter()
-                    .map(|s| teams.get(*s).copied().unwrap_or(0))
-                    .collect();
+                let sides = riders.iter().map(|s| team_of(teams, *s)).collect();
                 Some(Crewed {
                     spot,
                     velocity: v.velocity,
@@ -203,7 +186,7 @@ impl Server {
                 )
             }
         };
-        let mine = teams.get(slot).copied().unwrap_or(0);
+        let mine = team_of(teams, slot);
         let hostile = |their: i32| match mine {
             script::TEAM_AXIS => their != script::TEAM_AXIS,
             script::TEAM_ALLIES => their != script::TEAM_ALLIES,
@@ -315,16 +298,30 @@ impl Server {
             .filter_map(|id| {
                 let v = host.vehicles.live.get(&id)?;
                 let info = host.vehicles.info_of(v);
-                Some(VehicleSpot {
-                    num: id.0,
-                    origin: v.pose.origin,
-                    yaw: v.pose.angles[1],
-                    mins: info.mins,
-                    maxs: info.maxs,
-                    tank: info.kind == KIND_TANK,
-                })
+                Some(spot_of(id, v, info))
             })
             .collect()
+    }
+}
+
+/// Half the narrower side of a vehicle's box: what its fits are keyed by.
+fn half_width(info: &crate::game::vehicle::info::VehicleInfo) -> f32 {
+    (info.maxs[0] - info.mins[0]).min(info.maxs[1] - info.mins[1]) * 0.5
+}
+
+/// Vehicle `id` as a bot sees it: where it stands, its box, whether a tank.
+fn spot_of(
+    id: vcod_gsc::EntId,
+    v: &crate::game::vehicle::Vehicle,
+    info: &crate::game::vehicle::info::VehicleInfo,
+) -> VehicleSpot {
+    VehicleSpot {
+        num: id.0,
+        origin: v.pose.origin,
+        yaw: v.pose.angles[1],
+        mins: info.mins,
+        maxs: info.maxs,
+        tank: info.kind == KIND_TANK,
     }
 }
 
@@ -422,14 +419,7 @@ fn crowd(
         return Crowd::default();
     };
     let info = host.vehicles.info_of(v);
-    let hull = VehicleSpot {
-        num: id.0,
-        origin: v.pose.origin,
-        yaw: v.pose.angles[1],
-        mins: info.mins,
-        maxs: info.maxs,
-        tank: info.kind == KIND_TANK,
-    };
+    let hull = spot_of(id, v, info);
     crowd_round(&hull, v.forward_speed, slot, mine, walkers)
 }
 
@@ -489,7 +479,6 @@ const WARM_LOOKUPS: usize = 8000;
 const FIT_SHARE: f32 = 0.75;
 const FIT_LIFT: f32 = 18.0;
 const FIT_HEIGHT: f32 = 48.0;
-const VEHICLE_CLIP: u32 = 0x200;
 
 /// One driver's route over the navigation graph.
 pub(super) struct DriveRoute {
@@ -504,6 +493,36 @@ pub(super) struct DriveRoute {
     /// Nearest the hull has come to the next node, and when.
     best: f32,
     best_ms: i32,
+    /// For a goal the plan found no route to, what it failed on.
+    failed: Option<PlanInputs>,
+}
+
+/// What a plan toward a goal answers from: its start and goal nodes, the
+/// fit key and the fits' link epoch. The same inputs replay the same A*
+/// over the same cached fits, so a failure stands until one moves.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PlanInputs {
+    from: u32,
+    to: u32,
+    key: u32,
+    links: u64,
+}
+
+impl PlanInputs {
+    fn of(
+        g: &crate::nav::NavGraph,
+        half: f32,
+        at: glam::Vec3,
+        want: [f32; 3],
+        links: u64,
+    ) -> Option<Self> {
+        Some(PlanInputs {
+            from: g.nearest(at.into())?,
+            to: g.goal_node(want).or_else(|| g.nearest(want))?,
+            key: (half * FIT_SHARE) as u32,
+            links,
+        })
+    }
 }
 
 /// The drivers' routes, for the graph they were found on, and where a hull
@@ -539,6 +558,8 @@ struct HullFits {
     /// once it has passed every node.
     warm: usize,
     warm_graph: u64,
+    /// Counts the relinks that dropped fits.
+    links: u64,
 }
 
 impl HullFits {
@@ -555,8 +576,10 @@ impl HullFits {
         if linked.len() != self.linked.len() {
             self.fit.clear();
             self.warm = 0;
+            self.links += 1;
         } else if linked != self.linked {
             self.warm = 0;
+            self.links += 1;
             let toggled: Vec<(glam::Vec3, glam::Vec3)> = (0..linked.len())
                 .filter(|&m| linked[m] != self.linked[m])
                 .map(|m| {
@@ -585,7 +608,7 @@ fn test_fit(collision: &vcod_common::collision::CollisionWorld, node: glam::Vec3
         p,
         glam::Vec3::new(-r, -r, 0.0),
         glam::Vec3::new(r, r, FIT_HEIGHT),
-        vcod_common::collision::CONTENTS_SOLID | VEHICLE_CLIP,
+        vcod_common::collision::CONTENTS_SOLID | vcod_common::collision::CONTENTS_VEHICLE_CLIP,
     )
 }
 
@@ -601,6 +624,51 @@ fn fit_box(node: glam::Vec3, r: f32) -> (glam::Vec3, glam::Vec3) {
 impl BotDrives {
     pub(super) fn forget(&mut self, slot: usize) {
         self.routes.remove(&slot);
+    }
+
+    /// Whether `slot`'s route toward `want` (`None` a roam) is to be
+    /// planned again at `now`: none kept, the goal moved, a roam driven
+    /// out, no headway, or old.
+    fn stale(&self, slot: usize, want: Option<[f32; 3]>, now: i32) -> bool {
+        self.routes.get(&slot).is_none_or(|r| {
+            let moved = match (r.goal, want) {
+                (Some(a), Some(b)) => glam::Vec3::from(a).distance(b.into()) > RETARGET,
+                (None, None) => false,
+                _ => true,
+            };
+            moved
+                || r.next >= r.path.len() && want.is_none()
+                || now.wrapping_sub(r.best_ms) > HEADWAY_MS
+                || now.wrapping_sub(r.planned_ms) > REPLAN_MS
+        })
+    }
+
+    /// Keeps a plan's route, or for a goal no route reached an empty one
+    /// with the inputs it `failed` on.
+    fn keep(
+        &mut self,
+        slot: usize,
+        path: Option<Vec<u32>>,
+        want: Option<[f32; 3]>,
+        short: bool,
+        failed: Option<PlanInputs>,
+        now: i32,
+    ) {
+        let failed = if path.is_some() { None } else { failed };
+        if path.is_none() && failed.is_none() {
+            return;
+        }
+        let route = DriveRoute {
+            path: path.unwrap_or_default(),
+            next: 0,
+            goal: want,
+            short,
+            planned_ms: now,
+            best: f32::INFINITY,
+            best_ms: now,
+            failed,
+        };
+        self.routes.insert(slot, route);
     }
 }
 
@@ -635,23 +703,20 @@ impl Server {
             Goal::To(p) => Some(p),
             Goal::Roam | Goal::Away(_) => None,
         };
-        let stale = self
-            .game
-            .module
-            .bot_drives
-            .routes
-            .get(&slot)
-            .is_none_or(|r| {
-                let moved = match (r.goal, want) {
-                    (Some(a), Some(b)) => glam::Vec3::from(a).distance(b.into()) > RETARGET,
-                    (None, None) => false,
-                    _ => true,
-                };
-                moved
-                    || r.next >= r.path.len() && want.is_none()
-                    || now.wrapping_sub(r.best_ms) > HEADWAY_MS
-                    || now.wrapping_sub(r.planned_ms) > REPLAN_MS
-            });
+        let mut stale = self.game.module.bot_drives.stale(slot, want, now);
+        // A failure stands while its inputs do: the same A* would fail again.
+        if !stale
+            && let Some(failed) = self
+                .game
+                .module
+                .bot_drives
+                .routes
+                .get(&slot)
+                .and_then(|r| r.failed)
+        {
+            let links = self.fit_links();
+            stale = want.and_then(|p| PlanInputs::of(&g, half, at, p, links)) != Some(failed);
+        }
         if stale {
             self.game.module.bot_drives.routes.remove(&slot);
             let mut rng = self.game.module.driver.bots.get(&slot).map_or(1, |b| b.rng);
@@ -659,22 +724,15 @@ impl Server {
             if let Some(b) = self.game.module.driver.bots.get_mut(&slot) {
                 b.rng = rng;
             }
-            let path = path?;
             let short = want
-                .zip(path.last())
+                .zip(path.as_ref().and_then(|p| p.last()))
                 .is_some_and(|(p, &n)| g.nodes[n as usize].distance(glam::Vec3::from(p)) > PASS);
-            self.game.module.bot_drives.routes.insert(
-                slot,
-                DriveRoute {
-                    path,
-                    next: 0,
-                    goal: want,
-                    short,
-                    planned_ms: now,
-                    best: f32::INFINITY,
-                    best_ms: now,
-                },
-            );
+            let links = self.game.module.bot_drives.fits.links;
+            let failed = want.and_then(|p| PlanInputs::of(&g, half, at, p, links));
+            self.game
+                .module
+                .bot_drives
+                .keep(slot, path, want, short, failed, now);
         }
         let r = self.game.module.bot_drives.routes.get_mut(&slot)?;
         while r.next < r.path.len() && flat(g.nodes[r.path[r.next] as usize]) < PASS {
@@ -736,9 +794,7 @@ impl Server {
             .live
             .values()
             .map(|v| {
-                let info = host.vehicles.info_of(v);
-                let half = (info.maxs[0] - info.mins[0]).min(info.maxs[1] - info.mins[1]) * 0.5;
-                let r = half * FIT_SHARE;
+                let r = half_width(host.vehicles.info_of(v)) * FIT_SHARE;
                 (r as u32, r)
             })
             .collect();
@@ -764,7 +820,23 @@ impl Server {
         let host = &self.game.module.script.as_ref()?.host;
         let (id, _) = host.vehicles.seat_of(slot)?;
         let info = host.vehicles.info_of(host.vehicles.live.get(&id)?);
-        Some(((info.maxs[0] - info.mins[0]).min(info.maxs[1] - info.mins[1])) * 0.5)
+        Some(half_width(info))
+    }
+
+    /// The fits' link epoch, once they have dropped what the brush links
+    /// since moved.
+    fn fit_links(&mut self) -> u64 {
+        let hull = &mut self.game.module.bot_drives.fits;
+        if let Some(world) = self.game.world.as_ref() {
+            let bounds = self
+                .game
+                .module
+                .script
+                .as_ref()
+                .map_or(&[][..], |rt| &rt.host.model_bounds[..]);
+            hull.relink(&world.collision, bounds);
+        }
+        hull.links
     }
 
     /// [`plan_route`] for the vehicle's hull, on the fits cache once it has
@@ -1160,6 +1232,45 @@ mod tests {
             assert!(g.edges[w[0] as usize].contains(&w[1]), "{w:?} is no edge");
         }
         path
+    }
+
+    /// A goal no route reaches is planned for again only when the plan's
+    /// inputs move or the headway runs out; a roam that found none draws
+    /// again the next tick.
+    #[test]
+    fn a_failed_plan_stands_while_its_inputs_do() {
+        let failed = PlanInputs {
+            from: 1,
+            to: 9,
+            key: 40,
+            links: 0,
+        };
+        let plans = |want: Option<[f32; 3]>, moves_at: Option<i32>| {
+            let mut drives = BotDrives::default();
+            (0..=100)
+                .filter(|tick| {
+                    let now = tick * 50;
+                    let inputs = PlanInputs {
+                        from: if moves_at.is_some_and(|t| *tick >= t) {
+                            2
+                        } else {
+                            1
+                        },
+                        ..failed
+                    };
+                    let stale = drives.stale(3, want, now)
+                        || drives.routes[&3].failed.is_some_and(|f| f != inputs);
+                    if stale {
+                        drives.keep(3, None, want, false, want.and(Some(inputs)), now);
+                    }
+                    stale
+                })
+                .count()
+        };
+        let goal = Some([1000.0, 0.0, 0.0]);
+        assert_eq!(plans(goal, None), 1);
+        assert_eq!(plans(goal, Some(40)), 2);
+        assert_eq!(plans(None, None), 101);
     }
 
     /// A pillar 40 wide on the middle of a 5 x 3 grid's first row, 48

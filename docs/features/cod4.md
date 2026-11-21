@@ -296,6 +296,8 @@ shot holds the frame before `r_gamma`, as 1.7's front buffer read does.
   configstrings and the script's; the pure `cp` check (9).
 - Off the LAN it refuses on `sv_minPing` / `sv_maxPing` and holds a
   client out of the world to a message a second, as 1.7 does (15).
+- `sv_floodprotect` (default 4) lets a client's game commands through
+  four at a time and then one per 800 ms, as 1.7 does (16).
 - `sv_fps` (10..1000, default 20) sets the frame, read every frame; the
   scripts' `wait` counts frames as on retail
   ([cod4-server-frame.md](../research/cod4-server-frame.md) 8).
@@ -496,7 +498,8 @@ Ranked by how much a player notices. The research-side lists are
    the registry.
 7. **Server-side differences.** vcod-server never asks the authorize
    server, so it answers an off-LAN challenge at once where 1.7 waits on
-   the authorize server (cod4-handshake.md 15). No PunkBuster (a stock
+   the authorize server (cod4-handshake.md 15); in its place one public
+   address holds at most `vc_maxClientsPerIP` slots (4). No PunkBuster (a stock
    dedicated server runs none either).
 
 Pending human checks: pixel and by-ear comparisons with retail.

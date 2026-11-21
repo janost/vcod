@@ -388,7 +388,7 @@ impl Renderer {
 
     /// Loads every image the fx materials in `shaders` draw now, so an
     /// effect's first play binds them without reading and uploading them
-    /// in its frame (cod4-map-sweep.md, "The soak").
+    /// in its frame (cod4-map-sweep.md 5).
     pub fn prewarm_fx<'a>(
         &mut self,
         fs: &dyn AssetSource,

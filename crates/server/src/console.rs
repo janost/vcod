@@ -186,7 +186,7 @@ impl Command {
             )),
             Some(w @ ("set" | "seta")) => Command::Set {
                 cmd: if w == "set" { "set" } else { "seta" },
-                args: (argv.len() >= 3).then(|| (argv[1].clone(), argv[2..].join(" "))),
+                args: crate::cvars::set_args(&argv).map(|(n, v)| (n.to_string(), v)),
             },
             Some("heartbeat") => Command::Heartbeat,
             Some("gamecompletestatus") => {

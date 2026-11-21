@@ -633,6 +633,11 @@ pub const ANIM_IDLE_SPEED: f32 = 10.0;
 pub const ANIM_STOP_SPEED: f32 = 120.0;
 
 impl ClientSim {
+    /// Alive in the world: `PM_NORMAL` and not dead.
+    pub fn playing(&self) -> bool {
+        self.pm_type == PmType::Normal && !self.dead
+    }
+
     /// A client entering the world: the spectator fly
     /// ([`pmove::spectator_move`]), angles straight off the latest cmd.
     /// `cmd_angles` are the angles of the usercmd that brought the client in

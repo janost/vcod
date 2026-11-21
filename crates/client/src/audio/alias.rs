@@ -424,7 +424,7 @@ impl AliasTable {
     }
 
     pub fn get(&self, name: &str) -> Option<&[AliasRow]> {
-        self.rows.get(&name.to_ascii_lowercase()).map(Vec::as_slice)
+        vcod_common::text::with_ascii_lowercase(name, |n| self.rows.get(n)).map(Vec::as_slice)
     }
 
     pub fn len(&self) -> usize {

@@ -400,6 +400,12 @@ pub fn rules_from_mirror<'a>(cs: impl Fn(u16) -> &'a [u8]) -> Rules {
             "player_meleechargefriction" => (&mut r.melee_charge_friction, f32::MIN, f32::MAX),
             "player_dmgtimer_minscale" => (&mut r.dmgtimer_min_scale, 0.0, 1.0),
             "perk_sprintmultiplier" => (&mut r.perk_sprint_multiplier, 0.0, f32::MAX),
+            "perk_weapreloadmultiplier" => (&mut r.perk_weap_reload_multiplier, 0.0, 1.0),
+            "perk_weapratemultiplier" => (&mut r.perk_weap_rate_multiplier, 0.0, 1.0),
+            "player_burstfirecooldown" => (&mut r.burst_fire_cooldown, 0.0, 60.0),
+            "bg_aimspreadmovespeedthreshold" => {
+                (&mut r.aim_spread_move_speed_threshold, 0.0, 300.0)
+            }
             "mantle_check_range" => (&mut r.mantle_check_range, 0.0, 128.0),
             "mantle_check_radius" => (&mut r.mantle_check_radius, 0.0, 15.0),
             "mantle_check_angle" => (&mut r.mantle_check_angle, 0.0, 180.0),
@@ -1013,6 +1019,10 @@ mod tests {
             "player_meleeChargeFriction",
             "player_dmgtimer_minScale",
             "perk_sprintMultiplier",
+            "perk_weapReloadMultiplier",
+            "perk_weapRateMultiplier",
+            "player_burstFireCooldown",
+            "bg_aimSpreadMoveSpeedThreshold",
             "mantle_check_range",
             "mantle_check_radius",
             "mantle_check_angle",

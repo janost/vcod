@@ -21,6 +21,9 @@ pub struct BotView {
     pub lean_offset: [f32; 3],
     /// `ps.delta_angles`, so the bot's absolute aim lands right after a spawn.
     pub delta_angles: [i32; 3],
+    /// 1.7's float `ps.delta_angles`, degrees, which [`cmd_angles`] rounds
+    /// the cmd off as 1.7 does; `None` on CoD1 and CoD2.
+    pub delta_deg: Option<[f32; 3]>,
     /// `ps.viewangles`, degrees, wire convention (pitch positive down).
     pub view: [f32; 3],
     /// Where the last cmd's shot went off the view it was aimed from,
