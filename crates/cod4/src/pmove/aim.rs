@@ -706,22 +706,11 @@ fn matrix_multiply(a: [Vec3; 3], b: [Vec3; 3]) -> [Vec3; 3] {
     std::array::from_fn(|i| Vec3::new(el(i, 0), el(i, 1), el(i, 2)))
 }
 
-/// `AxisToAngles`' pitch and yaw: `vectoangles` of the forward.
+/// `AxisToAngles`' pitch and yaw (0x81951fe): `vectoangles` (0x8191a72)
+/// of the forward, the same arithmetic as `vectopitch` and `vectoyaw`
+/// (cod4-combat.md 6.1).
 fn axis_to_angles(m: [Vec3; 3]) -> [f32; 2] {
-    let v = m[0];
-    if v.y == 0.0 && v.x == 0.0 {
-        return [if v.z > 0.0 { 270.0 } else { 90.0 }, 0.0];
-    }
-    let mut yaw = (d(v.y).atan2(d(v.x)).to_degrees()) as f32;
-    if yaw < 0.0 {
-        yaw += 360.0;
-    }
-    let flat = (d(v.y) * d(v.y) + d(v.x) * d(v.x)).sqrt();
-    let mut pitch = (-d(v.z).atan2(flat).to_degrees()) as f32;
-    if pitch < 0.0 {
-        pitch += 360.0;
-    }
-    [pitch, yaw]
+    [super::fpu::vectopitch(m[0]), super::fpu::vectoyaw(m[0])]
 }
 
 #[cfg(test)]
