@@ -759,6 +759,35 @@ fn ban_txt_refuses_a_banned_guid_until_unbanned() {
     assert_eq!(challenge_reply(&mut h, OFF), ["challengeResponse N"]);
 }
 
+/// vcod's `vc_maxClientsPerIP` (4): a fifth slot for one public address
+/// is refused at `getchallenge` and at `connect`; a held socket and
+/// another address still get in.
+#[test]
+fn one_public_address_takes_at_most_four_cod2_slots() {
+    const OFF: [u8; 4] = [198, 51, 100, 2];
+    let refused = ["error\n\u{15}Too many clients from your address"];
+    let mut h = Harness::new(8, &[]);
+    // A challenge asked before the address filled up, after svs.time 0: a
+    // tie on the clock replaces the first slot.
+    h.frames(1);
+    h.port += 1;
+    let late = SocketAddr::from((OFF, h.port));
+    h.sv.handle_packet(late, &oob::packet("getchallenge"), h.now);
+    h.replies(late);
+    let peers: Vec<_> = (0..4).map(|_| h.join(OFF, "")).collect();
+    assert_eq!(challenge_reply(&mut h, OFF), refused);
+    let challenge = h.sv.core.challenges.open(late).unwrap();
+    let ui = format!(
+        "\\protocol\\118\\challenge\\{challenge}\\qport\\{}",
+        late.port()
+    );
+    h.sv.handle_packet(late, &oob::packet(&format!("connect \"{ui}\"")), h.now);
+    assert_eq!(h.replies(late), refused);
+    h.sv.handle_packet(peers[0].from, &oob::packet("getchallenge"), h.now);
+    assert_eq!(h.replies(peers[0].from), ["challengeResponse N"]);
+    let _other = h.join([198, 51, 100, 3], "");
+}
+
 /// `kick` is `SV_TempBan_f` (17.7): the guid is refused for
 /// `sv_kickBanTime` seconds; `onlykick` and `clientkick` only kick.
 #[test]

@@ -219,7 +219,7 @@ impl Cod2Server {
     /// the LAN retail waits on the authorize server first (1.1, 1.3), which
     /// vcod does not ask.
     fn get_challenge(&mut self, from: SocketAddr, _now: Instant) {
-        if self.refuse_banned(from) {
+        if self.refuse_banned(from) || self.refuse_per_ip(from, true) {
             return;
         }
         let (svs, xor) = (self.core.sv_time_ms, self.wall_ms());
