@@ -331,3 +331,94 @@ pub(crate) const fn tangent_layout() -> wgpu::VertexBufferLayout<'static> {
         attributes: &TANGENT_ATTRS,
     }
 }
+
+const FREE: u8 = 0;
+const COPIED: u8 = 1;
+const MAPPED: u8 = 2;
+const MAPPING: u8 = 3;
+
+/// A mappable copy of query results, read back a few frames late without
+/// stalling: the copy is encoded into `buf`, mapped after the submit and
+/// taken once the map lands.
+pub(crate) struct Readback {
+    pub(crate) buf: wgpu::Buffer,
+    /// [`FREE`], [`COPIED`], [`MAPPING`] or [`MAPPED`]; the map callback
+    /// writes it from wgpu's thread.
+    state: std::sync::Arc<std::sync::atomic::AtomicU8>,
+}
+
+impl Readback {
+    pub(crate) fn new(device: &wgpu::Device, label: &str, size: u64) -> Self {
+        Readback {
+            buf: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            state: Default::default(),
+        }
+    }
+
+    fn state(&self) -> u8 {
+        self.state.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    fn set(&self, s: u8) {
+        self.state.store(s, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Neither copied into, nor mapped, nor waiting on a map.
+    pub(crate) fn is_free(&self) -> bool {
+        self.state() == FREE
+    }
+
+    pub(crate) fn is_copied(&self) -> bool {
+        self.state() == COPIED
+    }
+
+    /// After the copy into `buf` is encoded.
+    pub(crate) fn copied(&self) {
+        self.set(COPIED);
+    }
+
+    /// Frees a buffer marked copied that holds nothing to read.
+    pub(crate) fn release(&self) {
+        self.set(FREE);
+    }
+
+    /// After the submit: starts the map; the buffer is free again if it fails.
+    pub(crate) fn map(&self) {
+        self.set(MAPPING);
+        let state = self.state.clone();
+        self.buf.map_async(wgpu::MapMode::Read, .., move |r| {
+            let s = if r.is_ok() { MAPPED } else { FREE };
+            state.store(s, std::sync::atomic::Ordering::Release);
+        });
+    }
+
+    /// Once mapped: hands `read` the bytes (`None` when the range cannot be
+    /// read), then unmaps and frees the buffer. `None` before the map lands.
+    pub(crate) fn take<R>(&self, read: impl FnOnce(Option<&[u8]>) -> R) -> Option<R> {
+        if self.state() != MAPPED {
+            return None;
+        }
+        let out = match self.buf.get_mapped_range(..) {
+            Ok(view) => read(Some(&view[..])),
+            Err(_) => read(None),
+        };
+        self.buf.unmap();
+        self.set(FREE);
+        Some(out)
+    }
+
+    /// The after-submit step of a reader that maps as late as it reads:
+    /// maps a copied buffer, or takes a mapped one.
+    pub(crate) fn collect<R>(&self, read: impl FnOnce(Option<&[u8]>) -> R) -> Option<R> {
+        if self.is_copied() {
+            self.map();
+            return None;
+        }
+        self.take(read)
+    }
+}

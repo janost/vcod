@@ -8,8 +8,7 @@
 //! masked by depth. docs/research/cod11-gamma.md, section 6.
 
 use crate::renderer::gpu_util;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use crate::renderer::gpu_util::Readback;
 
 /// The half-resolution intermediates: linear depth, then (visibility, depth).
 /// Depth stays f32: at half precision a flat floor's steps would occlude it.
@@ -368,9 +367,7 @@ impl Targets {
 pub struct GpuTimer {
     set: wgpu::QuerySet,
     resolve: wgpu::Buffer,
-    read: wgpu::Buffer,
-    /// 0 idle, 1 copy submitted, 2 mapped, 3 waiting on the map.
-    state: Arc<AtomicU8>,
+    read: Readback,
     /// Whether the pending readback's frame ran the SSAO passes.
     pending_ao: bool,
     ns_per_tick: f32,
@@ -399,13 +396,7 @@ impl GpuTimer {
                 usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             }),
-            read: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("timestamp read"),
-                size: bytes,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
-            state: Arc::new(AtomicU8::new(0)),
+            read: Readback::new(device, "timestamp read", bytes),
             pending_ao: false,
             ns_per_tick: queue.get_timestamp_period(),
             ms: (0.0, None),
@@ -427,32 +418,23 @@ impl GpuTimer {
     /// After the frame's passes, before submit: copies the stamps out
     /// unless the previous copy is still being read.
     pub fn resolve(&mut self, encoder: &mut wgpu::CommandEncoder, ran_ao: bool) {
-        if self.state.load(Ordering::Acquire) != 0 {
+        if !self.read.is_free() {
             return;
         }
         encoder.resolve_query_set(&self.set, 0..Self::COUNT, &self.resolve, 0);
-        encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.read, 0, None);
+        encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.read.buf, 0, None);
         self.pending_ao = ran_ao;
-        self.state.store(1, Ordering::Release);
+        self.read.copied();
     }
 
     /// After submit: maps a fresh copy, or folds in one the map finished.
     pub fn collect(&mut self, device: &wgpu::Device) {
-        match self.state.load(Ordering::Acquire) {
-            1 => {
-                self.state.store(3, Ordering::Release);
-                let state = self.state.clone();
-                self.read.map_async(wgpu::MapMode::Read, .., move |r| {
-                    state.store(if r.is_ok() { 2 } else { 0 }, Ordering::Release);
-                });
-            }
-            2 => {
-                let ticks: Vec<u64> = match self.read.get_mapped_range(..) {
-                    Ok(view) => bytemuck::pod_collect_to_vec(&view[..]),
-                    Err(_) => vec![0; Self::COUNT as usize],
-                };
-                self.read.unmap();
-                self.state.store(0, Ordering::Release);
+        let read = |view: Option<&[u8]>| match view {
+            Some(view) => bytemuck::pod_collect_to_vec::<u8, u64>(view),
+            None => vec![0; Self::COUNT as usize],
+        };
+        if let Some(ticks) = self.read.collect(read) {
+            {
                 let ms = |a: u32, b: u32| {
                     let (a, b) = (ticks[a as usize], ticks[b as usize]);
                     (b > a).then(|| (b - a) as f32 * self.ns_per_tick / 1.0e6)
@@ -475,7 +457,6 @@ impl GpuTimer {
                     None
                 };
             }
-            _ => {}
         }
         let _ = device.poll(wgpu::PollType::Poll);
     }
