@@ -3,8 +3,8 @@
 //! `LAN_SaveServersToCache`; docs/research/cod11-front-end.md 8,
 //! "Favourites", and "The other games' caches"). Two file shapes: 1.1's,
 //! and the one 1.5, UO, CoD2 and 1.7 share with their own entry sizes and
-//! version words. vcod writes the favourites and the Internet list and
-//! leaves every other byte as it found it; a file that is not a cache of
+//! version words. vcod writes the favourites, the Internet list and 1.1's
+//! overflow addresses and leaves every other byte as it found it; a file that is not a cache of
 //! the install's own layout it neither reads nor writes.
 
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -32,8 +32,13 @@ const MAX_GLOBAL: usize = 20000;
 pub const MAX_FAVORITES: usize = 0x80;
 /// Four ints before the blocks.
 const HEADER: usize = 16;
-/// 1.1's third block, the master's overflow addresses.
+/// 1.1's third block, the master's overflow addresses: `0x800` of six
+/// bytes, its count the third header int.
 const OVERFLOW_11: usize = 0x3000;
+const OVERFLOW_COUNT_11: usize = 8;
+/// One overflow address: the IP's four bytes and the port, big-endian, as
+/// `CL_ServersResponsePacket` copies them (CoDMP.exe 0x410978..0x41099f).
+const OVERFLOW_ADDR: usize = 6;
 
 /// `netadrtype_t`'s `NA_IP`, the same in every game.
 const NA_IP: i32 = 4;
@@ -416,6 +421,30 @@ pub fn read_internet(layout: Layout, file: &[u8]) -> Option<Vec<Entry>> {
     ))
 }
 
+/// 1.1's overflow addresses in a cache file, the master's past the 2048
+/// Internet entries; none for a later layout or a file 1.1 would drop.
+pub fn read_overflow(layout: Layout, file: &[u8]) -> Vec<SocketAddrV4> {
+    if layout != Layout::Cod11 || !layout.valid(file) {
+        return Vec::new();
+    }
+    let at = OVERFLOW_COUNT_11;
+    let n = i32::from_le_bytes(file[at..at + 4].try_into().unwrap()).max(0) as usize;
+    let base = overflow_at();
+    (0..n.min(OVERFLOW_11 / OVERFLOW_ADDR))
+        .map(|i| {
+            let a = &file[base + i * OVERFLOW_ADDR..base + (i + 1) * OVERFLOW_ADDR];
+            let ip = Ipv4Addr::new(a[0], a[1], a[2], a[3]);
+            SocketAddrV4::new(ip, u16::from_be_bytes([a[4], a[5]]))
+        })
+        .collect()
+}
+
+/// Where 1.1's overflow block starts, after the Internet entries and the
+/// favourites.
+fn overflow_at() -> usize {
+    HEADER + (MAX_GLOBAL_11 + MAX_FAVORITES) * Layout::Cod11.entry()
+}
+
 /// The records of the block at `base` whose count int sits at `count_at`,
 /// at most `cap`.
 fn entries(layout: Layout, file: &[u8], count_at: usize, base: usize, cap: usize) -> Vec<Entry> {
@@ -454,15 +483,21 @@ pub fn write_favorites(layout: Layout, old: Option<&[u8]>, favorites: &[Entry]) 
 }
 
 /// `old` with its Internet list replaced by `servers`, as
-/// [`write_favorites`] writes the favourites: at most 2048 on 1.1 (its
-/// overflow block is left as it was) and 19999 on the later layouts, whose
-/// loaders refuse a count of 20000.
-pub fn write_internet(layout: Layout, old: Option<&[u8]>, servers: &[Entry]) -> Option<Vec<u8>> {
+/// [`write_favorites`] writes the favourites: at most 2048 on 1.1, with
+/// `overflow` (up to `0x800`) in its third block, and 19999 on the later
+/// layouts, whose loaders refuse a count of 20000 and which keep no
+/// overflow.
+pub fn write_internet(
+    layout: Layout,
+    old: Option<&[u8]>,
+    servers: &[Entry],
+    overflow: &[SocketAddrV4],
+) -> Option<Vec<u8>> {
     let (cap, keep) = match layout {
         Layout::Cod11 => (MAX_GLOBAL_11, MAX_GLOBAL_11),
         _ => (MAX_GLOBAL, MAX_GLOBAL - 1),
     };
-    write_block(
+    let mut out = write_block(
         layout,
         old,
         servers,
@@ -470,7 +505,19 @@ pub fn write_internet(layout: Layout, old: Option<&[u8]>, servers: &[Entry]) -> 
         HEADER,
         cap,
         keep,
-    )
+    )?;
+    if layout == Layout::Cod11 {
+        let addrs = &overflow[..overflow.len().min(OVERFLOW_11 / OVERFLOW_ADDR)];
+        let at = OVERFLOW_COUNT_11;
+        out[at..at + 4].copy_from_slice(&(addrs.len() as i32).to_le_bytes());
+        let block = &mut out[overflow_at()..overflow_at() + OVERFLOW_11];
+        block.fill(0);
+        for (a, slot) in addrs.iter().zip(block.chunks_exact_mut(OVERFLOW_ADDR)) {
+            slot[..4].copy_from_slice(&a.ip().octets());
+            slot[4..].copy_from_slice(&a.port().to_be_bytes());
+        }
+    }
+    Some(out)
 }
 
 /// One list block of `old` replaced: its count int at `count_at`, `cap`
@@ -750,7 +797,7 @@ mod tests {
                 ..Default::default()
             };
             e.set_info(&info, 123);
-            let file = write_internet(layout, Some(&favs), &[e]).unwrap();
+            let file = write_internet(layout, Some(&favs), &[e], &[]).unwrap();
             assert_eq!(read_favorites(layout, &file).unwrap()[0].hostname(), "Home");
             let (back, ping) = read_internet(layout, &file).unwrap()[0].info().unwrap();
             assert_eq!((back.hostname.len(), back.clients, ping), (31, 7, 123));
@@ -759,11 +806,43 @@ mod tests {
             assert_eq!(back.gametype, info.gametype[..cut], "{layout:?}");
         }
         let many = vec![Entry::new(Layout::Cod15, a, "x"); MAX_GLOBAL];
-        let file = write_internet(Layout::Cod15, None, &many).unwrap();
+        let file = write_internet(Layout::Cod15, None, &many, &[a]).unwrap();
         assert_eq!(
             read_internet(Layout::Cod15, &file).unwrap().len(),
             MAX_GLOBAL - 1
         );
+        assert!(read_overflow(Layout::Cod15, &file).is_empty());
+    }
+
+    /// 1.1's overflow addresses go into the third block after the 2048
+    /// entries and the favourites, six bytes each in network order, their
+    /// count the third header int, and read back; past `0x800` they stop.
+    #[test]
+    fn the_11_overflow_block_round_trips() {
+        let addr = |i: u32| SocketAddrV4::new(Ipv4Addr::from(0x0a00_0000 + i), 28960 + i as u16);
+        let favs = write_favorites(
+            Layout::Cod11,
+            None,
+            &[Entry::new(Layout::Cod11, addr(0), "Home")],
+        )
+        .unwrap();
+        let spill: Vec<_> = (1..=3).map(addr).collect();
+        let file = write_internet(Layout::Cod11, Some(&favs), &[], &spill).unwrap();
+        assert_eq!(file.len(), Layout::Cod11.file_len());
+        assert_eq!(&file[8..12], &3i32.to_le_bytes());
+        let at = HEADER + (MAX_GLOBAL_11 + MAX_FAVORITES) * 0xb8;
+        assert_eq!(&file[at..at + 6], &[10, 0, 0, 1, 0x71, 0x21]);
+        assert_eq!(read_overflow(Layout::Cod11, &file), spill);
+        assert_eq!(
+            read_favorites(Layout::Cod11, &file).unwrap()[0].hostname(),
+            "Home"
+        );
+        let many: Vec<_> = (0..0x900).map(addr).collect();
+        let file = write_internet(Layout::Cod11, Some(&file), &[], &many).unwrap();
+        assert_eq!(read_overflow(Layout::Cod11, &file), many[..0x800]);
+        let file = write_internet(Layout::Cod11, Some(&file), &[], &[]).unwrap();
+        assert!(read_overflow(Layout::Cod11, &file).is_empty());
+        assert!(file[at..at + OVERFLOW_11].iter().all(|&b| b == 0));
     }
 
     #[test]

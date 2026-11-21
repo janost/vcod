@@ -946,6 +946,8 @@ impl App {
                 });
             }
             self.ui.frame(now, &self.shell);
+            let dated = self.ui.date_refreshes(&self.localized);
+            self.ui_pending.extend(dated);
             let (w, h) = r.screen_size();
             self.ui.set_screen(w, h);
             hud_quads.extend(self.ui.build(w, h, &self.localized, &self.shell));
