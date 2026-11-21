@@ -2284,6 +2284,34 @@ impl GameHost {
     }
 
     /// CoD2's state, `None` on another game's host: the way in for code
+    /// When `slot` last relayed a voice frame (CoD2 and CoD4), `None` on
+    /// CoD1 or before any.
+    pub fn last_voice_time(&self, slot: usize) -> Option<i32> {
+        match &self.ext {
+            HostExt::Cod1 => None,
+            HostExt::Cod2(c) => c.clients.get(slot)?.last_voice_time,
+            HostExt::Cod4(c) => c.clients.get(slot)?.last_voice_time,
+        }
+    }
+
+    /// `irand` off the generator a game's script draws from: CoD2's
+    /// `holdrand` beside its other draws (cod2-combat.md 2.6.1), else
+    /// CoD1's.
+    pub fn script_irand(&mut self, min: i32, max: i32) -> i32 {
+        match &self.ext {
+            HostExt::Cod2(c) => c.rand.irand(min, max),
+            _ => self.holdrand.irand(min, max),
+        }
+    }
+
+    /// [`Self::script_irand`]'s `flrand`.
+    pub fn script_flrand(&mut self, min: f32, max: f32) -> f32 {
+        match &self.ext {
+            HostExt::Cod2(c) => c.rand.flrand(min, max),
+            _ => self.holdrand.flrand(min, max),
+        }
+    }
+
     /// every game shares.
     pub fn as_cod2(&self) -> Option<&Cod2HostState> {
         match &self.ext {

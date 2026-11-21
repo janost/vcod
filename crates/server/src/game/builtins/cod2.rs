@@ -59,10 +59,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("getplayerangles", get_player_angles),
     ("int", cast_int),
     ("radiusdamage", radius_damage),
-    ("randomint", random_int),
-    ("randomfloat", random_float),
-    ("randomintrange", random_int_range),
-    ("randomfloatrange", random_float_range),
     ("setnormalhealth", set_normal_health),
     ("setstablemissile", set_stable_missile),
     ("setteamscore", set_team_score),
@@ -83,10 +79,10 @@ fn is_split_screen(
     Ok(Value::Int(0))
 }
 
-/// `self isTalking()` (`PlayerCmd_IsTalking` 0x80fd15a): a voice frame
-/// relayed within `g_voiceChatTalkingDuration` (500 ms) of `level.time`, a
-/// negative age not (cod2-voice.md 3).
-fn is_talking(
+/// `self isTalking()` (`PlayerCmd_IsTalking`, CoD2 0x80fd15a, CoD4
+/// 0x80a96f8): a voice frame relayed within `g_voiceChatTalkingDuration`
+/// (500 ms) of `level.time`, a negative age not (cod2-voice.md 3).
+pub(super) fn is_talking(
     host: &mut GameHost,
     _: &mut Cx,
     recv: Option<Target>,
@@ -95,8 +91,8 @@ fn is_talking(
     let slot = client_receiver(host, recv)?.index();
     let window = crate::game::builtins::cvar::atoi(host.cvars.get("g_voiceChatTalkingDuration"));
     let now = host.level_time_ms;
-    let on = host.cod2().clients[slot]
-        .last_voice_time
+    let on = host
+        .last_voice_time(slot)
         .is_some_and(|t| (0..window).contains(&(now - t)));
     Ok(Value::Int(i32::from(on)))
 }
@@ -417,71 +413,6 @@ fn radius_damage(
     Ok(Value::Undefined)
 }
 
-/// `randomInt(n)` (0x8113ca4): `irand(0, n)` off `holdrand`, the
-/// generator the rocket's wobble draws from (cod2-combat.md 2.6.1); `n`
-/// under 1 is an error. VERIFIED.
-fn random_int(
-    host: &mut GameHost,
-    _cx: &mut Cx,
-    _recv: Option<Target>,
-    args: &[Value],
-) -> Result<Value, ErrorKind> {
-    let n = int(args.first(), "randomInt takes a number")?;
-    if n <= 0 {
-        return Err(ErrorKind::Custom(
-            "RandomInt parm must be positive integer.".into(),
-        ));
-    }
-    Ok(Value::Int(host.cod2().rand.irand(0, n)))
-}
-
-/// `randomFloat(f)` (0x8113cfe): `flrand(0, f)` off `holdrand`. VERIFIED.
-fn random_float(
-    host: &mut GameHost,
-    _cx: &mut Cx,
-    _recv: Option<Target>,
-    args: &[Value],
-) -> Result<Value, ErrorKind> {
-    let f = float(args.first(), "randomFloat takes a number")?;
-    Ok(Value::Float(host.cod2().rand.flrand(0.0, f)))
-}
-
-/// `randomIntRange(lo, hi)` (0x8113d32): `irand(lo, hi)` off `holdrand`;
-/// `hi` not above `lo` is an error. VERIFIED.
-fn random_int_range(
-    host: &mut GameHost,
-    _cx: &mut Cx,
-    _recv: Option<Target>,
-    args: &[Value],
-) -> Result<Value, ErrorKind> {
-    const USAGE: &str = "randomIntRange takes two numbers";
-    let (lo, hi) = (int(args.first(), USAGE)?, int(args.get(1), USAGE)?);
-    if hi <= lo {
-        return Err(ErrorKind::Custom(
-            "RandomIntRange range must be positive integer.".into(),
-        ));
-    }
-    Ok(Value::Int(host.cod2().rand.irand(lo, hi)))
-}
-
-/// `randomFloatRange(lo, hi)` (0x8113da0): `flrand(lo, hi)` off
-/// `holdrand`; `lo` at or above `hi` is an error. VERIFIED.
-fn random_float_range(
-    host: &mut GameHost,
-    _cx: &mut Cx,
-    _recv: Option<Target>,
-    args: &[Value],
-) -> Result<Value, ErrorKind> {
-    const USAGE: &str = "randomFloatRange takes two numbers";
-    let (lo, hi) = (float(args.first(), USAGE)?, float(args.get(1), USAGE)?);
-    if lo >= hi {
-        return Err(ErrorKind::Custom(
-            "Scr_RandomFloatRange range must be positive float.".into(),
-        ));
-    }
-    Ok(Value::Float(host.cod2().rand.flrand(lo, hi)))
-}
-
 /// `self setStableMissile(on)` (`Scr_SetStableMissile` 0x811225a): a
 /// player's `ent->flags` 0x20000 set or cleared, which `fire_rocket`
 /// copies onto the rocket and which keeps it from wobbling
@@ -667,9 +598,10 @@ fn switch_to_offhand(
     Ok(Value::Int(1))
 }
 
-/// `self updateScores()` (`GScr_UpdateScores` 0x81169a2): the two team
-/// scores to this client alone, `H` allies then `G` axis. VERIFIED.
-fn update_scores(
+/// `self updateScores()` (`GScr_UpdateScores`, CoD2 0x81169a2): the two
+/// team scores to this client alone, `H` allies then `G` axis. VERIFIED;
+/// CoD4's capture reads the same `H 0`, `G 0` on the connect.
+pub(super) fn update_scores(
     host: &mut GameHost,
     _cx: &mut Cx,
     recv: Option<Target>,
@@ -1214,7 +1146,7 @@ fn obituary(
         _ => 1022,
     };
     let means = host.defs.mod_index(cx.resolve(*means)).unwrap_or(0);
-    let parm = if matches!(means, 7 | 8 | 9 | 11 | 12) {
+    let parm = if host.defs.mod_flagged.contains(&means) {
         0x80 | means
     } else {
         let name = cx.resolve(*weapon).to_string();

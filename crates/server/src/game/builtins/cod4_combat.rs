@@ -632,7 +632,7 @@ fn obituary(
         Value::String(m) => host.defs.mod_index(cx.resolve(*m)).unwrap_or(0),
         _ => 0,
     };
-    let parm = if matches!(means, 7 | 8 | 9 | 11 | 12 | 15) {
+    let parm = if host.defs.mod_flagged.contains(&means) {
         0x80 | means
     } else {
         host.cod4().table.index(cx.resolve(*weapon)).unwrap_or(0) as i32

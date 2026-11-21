@@ -4,6 +4,7 @@
 //! the capture carries one.
 
 use super::args::{int, noop};
+use super::cod2::{is_talking, update_scores};
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
 use super::Builtin;
@@ -849,24 +850,6 @@ fn has_perk(
     Ok(Value::Int(i32::from(on)))
 }
 
-/// `self isTalking()` (`PlayerCmd_IsTalking`, 0x80a96f8): a voice frame
-/// relayed within `g_voiceChatTalkingDuration` (500 ms) of `level.time`,
-/// a negative age not.
-fn is_talking(
-    host: &mut GameHost,
-    _: &mut Cx,
-    recv: Option<Target>,
-    _: &[Value],
-) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?.index();
-    let window = crate::game::builtins::cvar::atoi(host.cvars.get("g_voiceChatTalkingDuration"));
-    let now = host.level_time_ms;
-    let on = host.cod4().clients[slot]
-        .last_voice_time
-        .is_some_and(|t| (0..window).contains(&(now - t)));
-    Ok(Value::Int(i32::from(on)))
-}
-
 fn clear_perks(
     host: &mut GameHost,
     _: &mut Cx,
@@ -887,21 +870,6 @@ fn add_test_client(
     _: Option<Target>,
     _: &[Value],
 ) -> Result<Value, ErrorKind> {
-    Ok(Value::Undefined)
-}
-
-/// `self updateScores()`: the team scores to the receiver, allies as `H`
-/// then axis as `G` (the capture's `H 0`, `G 0` on the connect).
-fn update_scores(
-    host: &mut GameHost,
-    _: &mut Cx,
-    recv: Option<Target>,
-    _: &[Value],
-) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
-    let [axis, allies] = host.team_scores;
-    host.client_commands.push(slot, format!("H {allies}"));
-    host.client_commands.push(slot, format!("G {axis}"));
     Ok(Value::Undefined)
 }
 

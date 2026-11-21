@@ -230,7 +230,9 @@ pub fn angles_to_up(
     Ok(Value::Vector(angle_vectors(args)?[2]))
 }
 
-/// `randomInt(n)` (1.1d 0x5e470, 1.5b 0x5f6a8, UO 0x6b397): `irand(0, n)`
+/// The four draws step [`GameHost::script_irand`]'s generator: CoD2's
+/// shares `holdrand` with the rocket's wobble (cod2-combat.md 2.6.1).
+/// `randomInt(n)` (1.1d 0x5e470, 1.5b 0x5f6a8, UO 0x6b397, CoD2 0x8113ca4): `irand(0, n)`
 /// off `holdrand`; `n` under 1 is an error and draws nothing (map-cycle
 /// doc 4.8).
 pub fn random_int(
@@ -245,10 +247,11 @@ pub fn random_int(
             "RandomInt parm must be positive integer.".into(),
         ));
     }
-    Ok(Value::Int(host.holdrand.irand(0, n)))
+    Ok(Value::Int(host.script_irand(0, n)))
 }
 
-/// `randomFloat(f)` (1.1d 0x5e4bc, 1.5b 0x5f715, UO 0x6b404): `flrand(0,
+/// `randomFloat(f)` (1.1d 0x5e4bc, 1.5b 0x5f715, UO 0x6b404, CoD2
+/// 0x8113cfe): `flrand(0,
 /// f)` off `holdrand`, any `f`.
 pub fn random_float(
     host: &mut GameHost,
@@ -257,10 +260,11 @@ pub fn random_float(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let f = float(args.first(), "randomFloat takes a number")?;
-    Ok(Value::Float(host.holdrand.flrand(0.0, f)))
+    Ok(Value::Float(host.script_flrand(0.0, f)))
 }
 
-/// `randomIntRange(lo, hi)` (1.1d 0x5e4f0, 1.5b 0x5f757, UO 0x6b446):
+/// `randomIntRange(lo, hi)` (1.1d 0x5e4f0, 1.5b 0x5f757, UO 0x6b446,
+/// CoD2 0x8113d32):
 /// `irand(lo, hi)` off `holdrand`; `hi` not above `lo` is an error.
 pub fn random_int_range(
     host: &mut GameHost,
@@ -275,10 +279,11 @@ pub fn random_int_range(
             "RandomIntRange range must be positive integer.".into(),
         ));
     }
-    Ok(Value::Int(host.holdrand.irand(lo, hi)))
+    Ok(Value::Int(host.script_irand(lo, hi)))
 }
 
-/// `randomFloatRange(lo, hi)` (1.1d 0x5e554, 1.5b 0x5f7d9, UO 0x6b4c8):
+/// `randomFloatRange(lo, hi)` (1.1d 0x5e554, 1.5b 0x5f7d9, UO 0x6b4c8,
+/// CoD2 0x8113da0):
 /// `flrand(lo, hi)` off `holdrand`; `hi` not above `lo` is an error, a NaN
 /// bound is not.
 pub fn random_float_range(
@@ -294,7 +299,7 @@ pub fn random_float_range(
             "Scr_RandomFloatRange range must be positive float.".into(),
         ));
     }
-    Ok(Value::Float(host.holdrand.flrand(lo, hi)))
+    Ok(Value::Float(host.script_flrand(lo, hi)))
 }
 
 /// Degrees to radians the way the builtins do it, `x * M_PI / 180` in

@@ -49,13 +49,13 @@ pub static UO: Defs = Defs {
 /// CoD2 1.3's: no fixed weapon list, so `weapons` is empty and a level's
 /// list is the order it named each weapon (`Cod2HostState::weapons`,
 /// `builtins::cod2::register_weapon`); `modNames` off cod2_lnxded 0x8187c40
-/// (cod2-gsc-diff.md 4.1). Which means of death the obituary flags is
-/// unread, so none is.
+/// (cod2-gsc-diff.md 4.1). The obituary flags melee, a headshot, a crush,
+/// a fall and a suicide (`GScr_Obituary`'s stores, VERIFIED).
 pub static COD2: Defs = Defs {
     proto: vcod_cod2::net::PROTOCOL_118.as_cod1_shim(),
     weapons: "",
     mod_names: &MOD_NAMES_COD2,
-    mod_flagged: &[],
+    mod_flagged: &[7, 8, 9, 11, 12],
 };
 
 const MOD_NAMES_COD2: [&str; 15] = [
