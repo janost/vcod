@@ -9,7 +9,9 @@ use std::sync::LazyLock;
 use std::sync::{PoisonError, RwLock};
 use vcod_common::asset_source::{Asset, AssetKind, AssetSource};
 use vcod_common::net::events::{GameEvent, byte_to_dir};
-use vcod_common::net::flags::{EF_CROUCH, EF_IN_VEHICLE_V22, EF_PRONE, ET_TURRET, ET_VEHICLE_V22};
+use vcod_common::net::flags::{
+    EF_CROUCH, EF_IN_VEHICLE_V22, EF_PRONE, ET_TURRET, ET_VEHICLE_V22, PMF_VIEW_BODY,
+};
 use vcod_common::net::protocol::{CsLayout, CsRange};
 use vcod_common::pmove::{VIEW_CROUCH, VIEW_PRONE, VIEW_STAND};
 use vcod_common::weapon::WeaponDef;
@@ -422,10 +424,6 @@ fn fire_ejects_brass(ev: &GameEvent, ctx: &ResolveCtx) -> bool {
 /// The flesh hit `cg_blood 0` draws (docs/research/cod11-events-and-fx.md,
 /// the surface type table).
 pub const FLESH_NOBLOOD: &str = "fx/impacts/flesh_hit_noblood.efx";
-
-/// `ps.pm_flags` bits that attach the view to a player body: 0x40000 our own
-/// live one, 0x10000 a followed one (docs/research/cod11-events-and-fx.md 7).
-const PMF_VIEW_BODY: i32 = 0x50000;
 
 /// The body the view rides, whose shots `CG_Tracer` draws no tracer for
 /// (docs/research/cod11-events-and-fx.md 6): `ps.clientNum` while `pm_flags`

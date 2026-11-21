@@ -278,11 +278,13 @@ impl Cod4Hud {
                     .iter()
                     .filter(|e| e.etype() == crate::play::cod4::ET_PLAYER)
                 {
-                    let n = crate::play::cod4::ent_u32(e, "clientNum");
+                    use crate::play::cod4::ET_PLAYER;
+                    let n = e.0[vcod_cod4::es_word!(ET_PLAYER, "clientNum")];
                     if n == me || team(n) != mine {
                         continue;
                     }
-                    let yaw = crate::play::cod4::ent_f32(e, "lerp.apos.trBase[1]");
+                    let yaw =
+                        f32::from_bits(e.0[vcod_cod4::es_word!(ET_PLAYER, "lerp.apos.trBase[1]")]);
                     let at = crate::play::cod4::origin_of(e);
                     let angle = angle_delta(map.north_yaw, yaw);
                     icon(

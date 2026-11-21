@@ -15,6 +15,7 @@
 //! trigger wherever the gsc aims it.
 
 use std::time::Instant;
+use vcod_common::net::flags::ET_MISSILE;
 use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, BUTTON_MELEE, BUTTON_USE, UserCmd};
 use vcod_common::net::protocol::Cod1Wire;
 use vcod_common::net::snapshot::Snapshot;
@@ -723,8 +724,6 @@ impl VehicleProbe {
         }
     }
 }
-
-const ET_MISSILE: i32 = 4;
 
 /// What a gsc `PROBE_IN` line asks [`WeaponScript::Direct`] to hold.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

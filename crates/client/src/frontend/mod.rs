@@ -216,8 +216,8 @@ pub struct Ui {
     over: HashSet<(usize, usize)>,
     pub browser: Browser,
     selected: Option<SocketAddrV4>,
-    /// First list row drawn.
-    list_top: usize,
+    /// Each scrolled list's first row drawn, by feeder.
+    tops: listbox::Tops,
     last_click: Option<(Instant, SocketAddrV4)>,
     /// `com_errorMessage`, which `error_popmenu` shows.
     error: String,
@@ -234,27 +234,24 @@ pub struct Ui {
     /// The install root and the base game directory the Mods menu lists
     /// beside; `None` lists nothing.
     mod_root: Option<(PathBuf, String)>,
-    /// `LoadMods`' list, the selected row and the first row drawn.
+    /// `LoadMods`' list and the selected row.
     mods: Vec<vcod_common::pk3::ModEntry>,
     mod_selected: Option<usize>,
-    mod_top: usize,
     last_mod_click: Option<(Instant, usize)>,
     /// The `.arena` maps on the search path.
     arenas: Vec<create::Arena>,
-    /// The selected row of `FEEDER_ALLMAPS` and its first row drawn.
+    /// The selected row of `FEEDER_ALLMAPS`.
     map_row: usize,
-    map_top: usize,
     /// `FEEDER_PLAYER_LIST`'s and CoD2's `FEEDER_MUTELIST`'s cleaned names
     /// (one list, `UI_FeederCount` Mac 0x156946), their client numbers
     /// (CoD2's only), the selected row (0 until a pick, as retail's zeroed
-    /// `uiInfo`), first row drawn and next rebuild.
+    /// `uiInfo`) and next rebuild.
     players: Vec<String>,
     player_clients: Vec<u32>,
     /// `CL_IsPlayerMuted` for the mute list, bit `n` for client `n`, set
     /// each frame ([`Self::set_muted`]).
     muted: u64,
     player_row: usize,
-    player_top: usize,
     players_due: Option<Instant>,
     /// CoD2's player profiles (`FEEDER_PLAYER_PROFILES`) and the last
     /// click on their list.

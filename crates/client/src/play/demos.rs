@@ -101,6 +101,88 @@ impl TimeDemo {
     }
 }
 
+/// CoD2's and CoD4's `CL_SetCGameTime` demo clock (Mac 0x17ba76,
+/// `iw3mp.exe` 0x45c440; cod2-demos.md 5, cod4-demos.md 5): primed, the
+/// first frame reads nothing and later frames one record each, until a
+/// snapshot without flag 2 seeds it ([`Self::seed`]); active, the wall
+/// clock past that snapshot, held under `cl_freezeDemo`, never adjusted,
+/// or under `timedemo` 50 ms a frame past it ([`Self::tick`]). Each game
+/// reads its records and decides when a snapshot seeds it.
+#[derive(Default)]
+pub struct DemoTime {
+    /// `clc.firstDemoFrameSkipped`: only a new playback clears it.
+    skipped: bool,
+    /// `cl.serverTimeDelta` once a snapshot seeded it; `None` primed.
+    delta: Option<i32>,
+    /// `cl.serverTime` and `cl.oldServerTime`.
+    time: i32,
+    old: i32,
+    /// `clc.timeDemoBaseTime`: the seeding snapshot's time.
+    base: i32,
+    /// `cl_freezeDemo`: the clock holds.
+    pub freeze: bool,
+    /// `timedemo` and its count, kept for the whole demo.
+    pub timedemo: Option<TimeDemo>,
+}
+
+impl DemoTime {
+    pub fn new(timedemo: bool) -> Self {
+        DemoTime {
+            timedemo: timedemo.then(Default::default),
+            ..Default::default()
+        }
+    }
+
+    /// Whether a snapshot seeded the clock (`CA_ACTIVE`).
+    pub fn started(&self) -> bool {
+        self.delta.is_some()
+    }
+
+    /// Primed: whether this frame reads its record. The first frame of the
+    /// playback reads none.
+    pub fn primed_read(&mut self) -> bool {
+        std::mem::replace(&mut self.skipped, true)
+    }
+
+    /// `CL_FirstSnapshot`: the snapshot at server time `snap` seeds the
+    /// clock at local `realtime`.
+    pub fn seed(&mut self, snap: i32, realtime: i32) {
+        self.delta = Some(snap.wrapping_sub(realtime));
+        (self.time, self.old, self.base) = (snap, snap, snap);
+    }
+
+    /// A gamestate inside the demo: primed again, the skip and the
+    /// `timedemo` count kept.
+    pub fn reprime(&mut self) {
+        self.delta = None;
+    }
+
+    /// The active arm at local `realtime`: the server time the frame
+    /// draws at and reads up to. `None` primed.
+    pub fn tick(&mut self, realtime: i32) -> Option<i32> {
+        let delta = self.delta?;
+        if !self.freeze {
+            self.time = realtime.wrapping_add(delta).max(self.old);
+            self.old = self.time;
+        }
+        if let Some(td) = self.timedemo.as_mut() {
+            self.time = self.base.wrapping_add(td.step(realtime).wrapping_mul(50));
+        }
+        Some(self.time)
+    }
+
+    /// The last [`Self::tick`]'s time, `None` primed.
+    pub fn time(&self) -> Option<i32> {
+        self.started().then_some(self.time)
+    }
+
+    /// `CL_DemoCompleted`'s `%i frames, %3.1f seconds: %3.1f fps` under
+    /// `timedemo`, when any time passed.
+    pub fn timedemo_report(&self, now_ms: i32) -> Option<String> {
+        self.timedemo.as_ref()?.report(now_ms)
+    }
+}
+
 /// The demo knobs a frame reads: `cl_freezeDemo`, `timedemo` and
 /// `cl_timeNudge`.
 #[derive(Clone, Copy, Debug, Default)]
@@ -212,6 +294,34 @@ mod tests {
     use super::*;
     use vcod_common::net::Msec;
     use vcod_common::net::protocol::PROTOCOL_V1;
+
+    #[test]
+    fn the_demo_time_skips_a_frame_seeds_off_a_snapshot_and_holds_frozen() {
+        let mut c = DemoTime::new(false);
+        assert!(!c.primed_read(), "the first frame reads nothing");
+        assert!(c.primed_read());
+        assert_eq!(c.tick(100), None);
+        c.seed(5000, 100);
+        assert_eq!(c.tick(130), Some(5030));
+        c.freeze = true;
+        assert_eq!(c.tick(400), Some(5030));
+        c.freeze = false;
+        // the delta stands through the hold, and the clock never goes back
+        assert_eq!((c.tick(120), c.tick(450)), (Some(5030), Some(5350)));
+        c.reprime();
+        assert_eq!((c.time(), c.tick(500)), (None, None));
+        assert!(c.primed_read(), "a gamestate's prime reads at once");
+    }
+
+    #[test]
+    fn a_timedemo_steps_fifty_ms_a_frame_off_the_seeding_snapshot() {
+        let mut c = DemoTime::new(true);
+        c.seed(7000, 10);
+        c.freeze = true;
+        let times: Vec<_> = (0..3).map(|i| c.tick(20 + i).unwrap()).collect();
+        assert_eq!(times, [7050, 7100, 7150]);
+        assert_eq!(c.timedemo.as_ref().map(TimeDemo::frames), Some(3));
+    }
     use vcod_common::net::protocol::{PROTOCOL_V6, PROTOCOL_V22};
     use vcod_common::net::{NetEvent, UdpTransport};
 

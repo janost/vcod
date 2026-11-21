@@ -20,19 +20,9 @@ pub(super) struct DemoPlay {
     /// Every archive row in the file, by time: the recorder's view at
     /// each of his frames, read ahead of the messages (cod4-demos.md 5).
     pub(super) views: Vec<vcod_cod4::net::demo::Archive>,
-    /// `clc.firstDemoFrameSkipped` (+0x401a0).
-    first_frame_skipped: bool,
-    /// `timedemo` (+0x40198) and its count.
-    timedemo: Option<crate::play::demos::TimeDemo>,
-    /// `clc.timeDemoBaseTime` (0x934e98): the first snapshot's time.
-    base_time: i32,
-    /// `cl_freezeDemo`: the clock holds.
-    freeze: bool,
-    /// `cl.serverTimeDelta` once the first snapshot set it; `None` primed.
-    pub(super) delta: Option<i32>,
-    /// `cl.oldServerTime` and `cl.serverTime`.
-    old_time: i32,
-    pub(super) time: i32,
+    /// The clock: `clc.firstDemoFrameSkipped` (+0x401a0), `timedemo`
+    /// (+0x40198), `clc.timeDemoBaseTime` (0x934e98).
+    clock: crate::play::demos::DemoTime,
     /// The file has no record left.
     pub(super) ended: bool,
     /// Gamestates read (a map change inside the demo).
@@ -126,9 +116,8 @@ impl DemoPlay {
     /// or under `timedemo` 50 ms a frame off the first snapshot
     /// (0x45c350), then records while the newest snapshot is not past it.
     pub(super) fn frame(&mut self, realtime: i32) -> Option<i32> {
-        if self.delta.is_none() {
-            if !self.first_frame_skipped {
-                self.first_frame_skipped = true;
+        if !self.clock.started() {
+            if !self.clock.primed_read() {
                 return None;
             }
             let had = self.client.snapshots.len();
@@ -137,29 +126,20 @@ impl DemoPlay {
             if self.client.snapshots.len() == had || snap.snap_flags & 2 != 0 {
                 return None;
             }
-            let t = snap.server_time.raw();
-            self.delta = Some(t - realtime);
-            (self.old_time, self.time, self.base_time) = (t, t, t);
+            self.clock.seed(snap.server_time.raw(), realtime);
         }
-        let delta = self.delta?;
-        if !self.freeze {
-            self.time = (realtime + delta).max(self.old_time);
-        }
-        if let Some(td) = self.timedemo.as_mut() {
-            self.time = self.base_time + td.step(realtime) * 50;
-        }
-        self.old_time = self.time;
+        let time = self.clock.tick(realtime)?;
         while self
             .client
             .snapshots
             .last()
-            .is_none_or(|s| self.time >= s.server_time.raw())
+            .is_none_or(|s| time >= s.server_time.raw())
         {
             if !self.read() {
                 break;
             }
         }
-        Some(self.time)
+        Some(time)
     }
 }
 
@@ -216,13 +196,7 @@ impl Cod4Session {
             reader: vcod_cod4::net::demo::DemoReader::new(data),
             client: Client::new(),
             archive: Default::default(),
-            first_frame_skipped: false,
-            timedemo: timedemo.then(Default::default),
-            base_time: 0,
-            freeze: false,
-            delta: None,
-            old_time: 0,
-            time: 0,
+            clock: crate::play::demos::DemoTime::new(timedemo),
             ended: false,
             gamestates: 0,
             applied: 0,
@@ -252,7 +226,7 @@ impl Cod4Session {
     /// `cl_freezeDemo` for the next frames.
     pub fn set_freeze_demo(&mut self, freeze: bool) {
         if let Source::Demo(d) = &mut self.source {
-            d.freeze = freeze;
+            d.clock.freeze = freeze;
         }
     }
 
@@ -275,7 +249,7 @@ impl Cod4Session {
     /// `timedemo`, when any time passed (0x468e2b).
     pub fn timedemo_report(&self, now_ms: i32) -> Option<String> {
         match &self.source {
-            Source::Demo(d) => d.timedemo.as_ref()?.report(now_ms),
+            Source::Demo(d) => d.clock.timedemo_report(now_ms),
             _ => None,
         }
     }

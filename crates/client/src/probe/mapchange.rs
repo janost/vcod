@@ -6,6 +6,7 @@ use super::fixture::{
 };
 use super::hit::keep_sample;
 use super::*;
+use vcod_common::net::flags::PM_INTERMISSION;
 
 /// Directory the map-cycle captures land in. They pin what the wire does
 /// across a map change and a round restart, which no playerstate fixture holds.
@@ -13,10 +14,6 @@ const NETCHAN_FIXTURE_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../server/tests/fixtures/netchan"
 );
-
-/// `pmove_t`'s intermission state, the one retail's `spawnIntermission` puts a
-/// client in at a map end.
-const PM_INTERMISSION: i32 = 5;
 
 /// One `!trace` line: the playerstate fields a map end and a round restart
 /// move, plus the weapon the `pers[]` carry is measured through.

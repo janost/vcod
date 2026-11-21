@@ -1,7 +1,7 @@
 //! `--net-probe`, the headless spectate client. Lives in the client crate
 //! because cue resolution needs the audio alias tables.
 
-use net::flags::{ET_TURRET, PM_DEAD};
+use net::flags::{ET_TURRET, PM_DEAD, PM_NORMAL};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 use vcod_common::net::trajectory::Trajectory;
@@ -2187,10 +2187,6 @@ impl Drop for Connected {
         self.0.disconnect();
     }
 }
-
-/// `pmove_t`'s first entry, the state a spawned player is in; a client still
-/// on the menus sits at 4, the spectator's.
-const PM_NORMAL: i32 = 0;
 
 /// `buttons` bit 0, fire (docs/protocol-1.1.md, "Usercmd input bits").
 const BUTTON_ATTACK: u8 = 0x01;

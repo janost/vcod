@@ -211,7 +211,7 @@ colour `'7'`, at (5, 479) through `CalcScreenPlacement`, font scale
 
 vcod's playback: `Cod2Session::play_demo` reads up to the gamestate, the
 caller loads the map as a server's, and `Cod2Session::demo_frame` runs
-the arms above; the frame draws the recorder from the snapshots with no
+the arms above on `play::demos::DemoTime`, which CoD4's demo shares; the frame draws the recorder from the snapshots with no
 prediction and sends nothing. That the cgame skips prediction during a
 demo is INFERRED from `CG_PredictPlayerState` (Mac 0x1ddafa) opening on
 `cg` +8, the `CG_DrawActiveFrame` argument `SCR_UpdateFrame` passes as

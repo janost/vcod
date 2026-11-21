@@ -111,6 +111,9 @@ pub struct Host {
     pub enums: HashMap<String, Vec<String>>,
     pub binds: Vec<(String, String)>,
     pub players: Vec<(u32, String)>,
+    /// The [`Shell::generation`](crate::console::shell::Shell::generation)
+    /// the tables were copied at.
+    generation: Option<u64>,
 }
 
 impl Host {
@@ -130,6 +133,17 @@ impl Host {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             players,
+            generation: Some(shell.generation()),
+        }
+    }
+
+    /// [`Self::from_shell`] when the shell moved since the tables were
+    /// copied, else only the players.
+    pub fn refresh(&mut self, shell: &crate::console::shell::Shell, players: Vec<(u32, String)>) {
+        if self.generation == Some(shell.generation()) {
+            self.players = players;
+        } else {
+            *self = Self::from_shell(shell, players);
         }
     }
 }
@@ -1517,5 +1531,32 @@ mod tests {
             "{effects:?}"
         );
         assert_eq!(shell.cvar("sensitivity"), Some("5quit"));
+    }
+
+    #[test]
+    fn host_refresh_copies_the_shell_only_after_it_moved() {
+        let mut shell = Shell::new();
+        let mut host = Host::from_shell(&shell, Vec::new());
+        // A menu's own edit stands while the shell has not moved.
+        host.cvars.insert("sensitivity".into(), "9".into());
+        host.refresh(&shell, vec![(2, "p".into())]);
+        assert_eq!(host.cvars.get("sensitivity").map(String::as_str), Some("9"));
+        assert_eq!(host.players, vec![(2, "p".into())]);
+        shell.execute("bind F5 screenshot");
+        host.refresh(&shell, Vec::new());
+        assert_eq!(host.cvars.get("sensitivity").map(String::as_str), Some("5"));
+        assert!(
+            host.binds
+                .iter()
+                .any(|(k, c)| k == "F5" && c == "screenshot")
+        );
+        // A refused set moves nothing but still counts.
+        host.cvars.insert("cg_fov".into(), "1".into());
+        shell.execute("set cg_fov 100");
+        host.refresh(&shell, Vec::new());
+        assert_eq!(
+            host.cvars.get("cg_fov"),
+            shell.cvar("cg_fov").map(str::to_string).as_ref()
+        );
     }
 }

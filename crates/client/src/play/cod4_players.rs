@@ -15,7 +15,6 @@ use vcod_cod4::anim::BodySource;
 use vcod_cod4::ragdoll::{
     CLIP_MASK, Dvars, Explosion, Ragdoll, RagdollDef, State as RagState, Sweep,
 };
-use vcod_common::animclock::Times;
 use vcod_common::playerpose::{BG_SWING_SPEED, Cod4Arith, LeanDvars};
 
 use crate::cod4_fly::WeaponModels;
@@ -124,8 +123,11 @@ pub struct Cod4Players {
     parts: RigParts,
     bodies: HashMap<u32, Body>,
     pub swing_speed: f32,
-    /// The server's lean dvars, which CoD4's controllers read.
+    /// The server's lean dvars, which CoD4's controllers read, and the
+    /// gamestate they were read off (its count, command sequence and
+    /// checksum feed).
     pub lean: LeanDvars,
+    pub lean_gamestate: Option<(u32, i32, i32)>,
     /// The last frame's render time, for the next frame's step.
     last_ms: Option<i32>,
     /// The last [`Self::posed`]'s weapon tags by entity number.
@@ -148,6 +150,7 @@ impl Default for Cod4Players {
             bodies: HashMap::new(),
             swing_speed: BG_SWING_SPEED,
             lean: LeanDvars::default(),
+            lean_gamestate: None,
             last_ms: None,
             tags: HashMap::new(),
             heads: HashMap::new(),
@@ -394,20 +397,13 @@ impl Cod4Players {
                             .attachments
                             .insert(0, (model.clone(), Some(WEAPON_TAG.to_string())));
                     }
-                    let rig = self
-                        .rigs
-                        .entry(armed.clone())
-                        .or_insert_with(|| {
-                            PlayerRig::assemble_with(src, &armed, &mut self.parts)
-                                .inspect_err(|e| log::warn!("cod4 player {}: {e:#}", armed.body))
-                                .ok()
-                                .map(Rc::new)
-                        })
-                        .clone()
-                        .map(|rig| {
-                            let tags = crate::cod2_players::rig_tags(&rig.skeleton);
-                            (rig, tags)
-                        });
+                    let rig = crate::cod2_players::rig_for(
+                        &mut self.rigs,
+                        &mut self.parts,
+                        src,
+                        armed,
+                        "cod4",
+                    );
                     body.rig = Some((held.cloned(), rig.clone()));
                     rig
                 }
@@ -416,23 +412,20 @@ impl Cod4Players {
                 continue;
             };
             let body = self.bodies.get_mut(n).expect("inserted above");
-            let unseen = render_time
-                .wrapping_sub(frametime_ms)
-                .wrapping_sub(body.seen_ms);
-            if unseen > 0 {
-                body.body.pause(unseen);
-            }
-            body.seen_ms = render_time;
             body.body.cod4_lean = Some(self.lean);
             let Some(set) = self.anims.as_mut().and_then(|s| s.as_mut()) else {
                 return out;
             };
-            let at = Times {
-                clock_ms: render_time,
+            crate::cod2_players::step_body(
+                &mut body.body,
+                &mut body.seen_ms,
+                &set.anims,
+                &v.frame,
+                render_time,
+                frametime_ms,
                 snapshot_ms,
-            };
-            body.body
-                .advance(&set.anims, &v.frame, at, frametime_ms, swing_speed);
+                swing_speed,
+            );
             // `CG_PlayerTurretPositionAndBlend`: a gunner stands where his
             // gun's placement puts him, turned with it, the group's leaves
             // weighted as the server's; the height stays the server's
@@ -449,11 +442,7 @@ impl Cod4Players {
                     g.rotate_inc,
                 )
             });
-            if let Some(g) = placed.as_ref().filter(|g| g.origin.is_finite()) {
-                frame.origin = Vec3::new(g.origin.x, g.origin.y, frame.origin.z);
-                frame.angles = [0.0, g.yaw(), 0.0];
-            }
-            let turret = placed.as_ref().map(|g| (g.node, g.rows.as_slice()));
+            let turret = crate::cod2_players::place_gunner(&mut frame, placed.as_ref());
             let rag = self
                 .ragdoll
                 .as_ref()

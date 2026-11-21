@@ -257,8 +257,7 @@ impl Cod4Session {
     /// the pitch limit it piles up until the server's `delta_angles` push
     /// takes it back, while the drawn view stays clamped.
     pub fn turn(&mut self, by: [f32; 2]) {
-        use vcod_common::pmove::angle_normalize180;
-        self.view = std::array::from_fn(|i| angle_normalize180(self.view[i] + by[i]));
+        self.view = turned(self.view, by);
     }
 
     /// The server turned the view since the last call: [`Self::view`] is
@@ -556,5 +555,41 @@ fn own_cmd(
         forwardmove,
         rightmove,
         ..UserCmd::default()
+    }
+}
+
+/// `view` turned `by`, wrapped to -180..180 as a plain float: the short
+/// grid's truncation would drop a turn under a short a frame and creep a
+/// negative view toward 0 (cod4-client-view.md 14.1). An angle in range
+/// is kept as it is, so the frames' sums lose nothing to the wrap.
+fn turned(view: [f32; 2], by: [f32; 2]) -> [f32; 2] {
+    std::array::from_fn(|i| match view[i] + by[i] {
+        a if (-180.0..=180.0).contains(&a) => a,
+        a => (a + 180.0).rem_euclid(360.0) - 180.0,
+    })
+}
+
+#[cfg(test)]
+mod turn_tests {
+    /// A slow mouse turns the view less than one short a frame; the turns
+    /// still add up, and a still mouse leaves a negative view where it is.
+    #[test]
+    fn a_turn_under_a_short_a_frame_adds_up() {
+        let mut view = [-10.0, 10.0];
+        for _ in 0..1000 {
+            view = super::turned(view, [0.0, 0.001]);
+        }
+        assert!((view[1] - 11.0).abs() < 1e-3, "yaw {}", view[1]);
+        assert!((view[0] + 10.0).abs() < 1e-4, "pitch {}", view[0]);
+        let mut view = [-170.0, 179.9995];
+        for _ in 0..3 {
+            view = super::turned(view, [-0.0004, 0.0004]);
+        }
+        assert!((view[0] + 170.0012).abs() < 1e-4, "pitch {}", view[0]);
+        assert!(
+            (view[1] + 179.9993).abs() < 1e-4,
+            "yaw wraps past 180: {}",
+            view[1]
+        );
     }
 }

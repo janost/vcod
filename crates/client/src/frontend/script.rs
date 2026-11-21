@@ -7,7 +7,7 @@
 use std::time::Instant;
 
 use vcod_common::net::cdkey;
-use vcod_common::ui_menu;
+use vcod_common::ui_menu::{self, FEEDER_MODS, FEEDER_SERVERS, FEEDER_SERVERSTATUS};
 
 use super::browser::{AddFavorite, Source};
 use super::paint::fill;
@@ -205,7 +205,7 @@ impl Ui {
         match name.to_ascii_lowercase().as_str() {
             "refreshservers" => {
                 self.browser.refresh();
-                self.list_top = 0;
+                self.tops[FEEDER_SERVERS] = 0;
             }
             "refreshfilter" => self.browser.requery(),
             // CoD2's `mutePlayer` (`UI_RunMenuScript`, Mac 0x1548e8): the
@@ -227,6 +227,7 @@ impl Ui {
                 self.status = self
                     .selected
                     .map(|addr| StatusQuery::start(addr, Instant::now()));
+                self.tops[FEEDER_SERVERSTATUS] = 0;
             }
             "addfavorite" if self.browser.source != Source::Favorites => {
                 let rows = self.browser.rows();
@@ -275,7 +276,7 @@ impl Ui {
                     .unwrap_or_default();
                 self.mods.truncate(64);
                 self.mod_selected = None;
-                self.mod_top = 0;
+                self.tops[FEEDER_MODS] = 0;
             }
             "runmod" => {
                 if let Some(m) = self.mod_selected.and_then(|i| self.mods.get(i)) {

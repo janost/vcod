@@ -31,7 +31,6 @@ pub(super) struct Profiles {
     /// `sortPlayerProfiles` flips.
     ascending: bool,
     pub(super) row: usize,
-    pub(super) top: usize,
 }
 
 /// The directories under `dir` (`FS_ListFiles("players", "/")`).
@@ -278,7 +277,7 @@ impl Ui {
     /// A click on the profile list selects the row under the cursor; a
     /// second within the double-click time runs the list's `doubleClick`.
     pub(super) fn profile_click(&mut self, item: &UiItem, double: bool) -> bool {
-        let row = listbox::row_at(item, self.cursor[1], self.profiles.top);
+        let row = listbox::row_at(item, self.cursor[1], self.tops[FEEDER_PLAYER_PROFILES]);
         if row >= self.profiles.len() {
             return false;
         }
@@ -296,7 +295,7 @@ impl Ui {
     /// (`UI_FeederItemText`), the selected row outlined.
     pub(super) fn profile_rows(&self, p: &Painter, item: &UiItem, out: &mut Vec<HudQuad>) {
         let col = item.columns.first().copied();
-        let (len, top) = (self.profiles.len(), self.profiles.top);
+        let (len, top) = (self.profiles.len(), self.tops[FEEDER_PLAYER_PROFILES]);
         let selected = |i| i == self.profiles.row;
         listbox::paint_rows(
             p,

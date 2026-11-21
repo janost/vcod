@@ -109,6 +109,9 @@ pub(crate) struct Cod4Client {
     view_tags: Option<(u32, WeaponTags)>,
     /// Each drawn mounted gun's `tag_flash` in the world this frame.
     turret_tags: HashMap<u32, WeaponTags>,
+    /// The bodies' tags and `turret_tags` together, as the last draw left
+    /// them: where the others' shots flash and leave from.
+    weapon_tags: HashMap<u32, WeaponTags>,
     /// msvcrt `rand()`'s state for the gunner's view jitter.
     jitter_rand: u32,
     /// The zones' script menus went to the session.
@@ -294,6 +297,7 @@ impl Cod4Client {
             view_ps: None,
             view_tags: None,
             turret_tags: HashMap::new(),
+            weapon_tags: HashMap::new(),
             jitter_rand: 1,
             menus_loaded: false,
             look,
@@ -369,6 +373,8 @@ impl Cod4Client {
             self.session.set_world(w);
         }
         self.players = Cod4Players::default();
+        self.turret_tags.clear();
+        self.weapon_tags.clear();
         // The level's start clears the friendly names' sightings (the
         // memset of 0x7439d0 at `iw3mp.exe` 0x43fba8).
         self.names = Default::default();
@@ -630,8 +636,8 @@ impl Cod4Client {
         }
         if self.session.menus.open().is_some() {
             self.session.menus.mirror = self.hud.mirrored_dvars(&self.session);
-            self.session.menus.host =
-                crate::play::cod4_menus::Host::from_shell(cx.shell, self.session.players());
+            let players = self.session.players();
+            self.session.menus.host.refresh(cx.shell, players);
             self.session.menus.game = self.hud.menu_game(&self.session, self.render_time);
             let (gametype, name, objective) = self.hud.gametype_strings(&self.session);
             let m = &mut self.session.menus;
@@ -973,12 +979,11 @@ impl Cod4Client {
     /// ambience on the first frame, the `ET_FX` / `ET_LOOP_FX` entities
     /// and the looping elements' spawns.
     fn effects_frame(&mut self, cx: &mut Cod2Frame, scene: &Scene) {
-        let tags = self.weapon_tags();
         let (Some(e), Some(gs)) = (&mut self.effects, self.session.gamestate()) else {
             return;
         };
         let now = f64::from(cx.time);
-        e.set_tags(cx.fx, &tags, self.view_tags.as_ref());
+        e.set_tags(cx.fx, &self.weapon_tags, self.view_tags.as_ref());
         // The helicopters' smoke and wash, then every model tag an effect
         // rides.
         let clip = self.session.world().map(|w| w.clip.clone());
@@ -1238,9 +1243,11 @@ impl Cod4Client {
         // Out of the session while its gamestate is read.
         let mut dynents = self.session.dynents.take();
         let mut physics = std::mem::take(&mut self.session.physics);
-        self.sound_and_fx_with(cx, fired, now_ms, &mut dynents, &mut physics);
+        let tags = std::mem::take(&mut self.weapon_tags);
+        self.sound_and_fx_with(cx, fired, now_ms, &mut dynents, &mut physics, &tags);
         self.session.dynents = dynents;
         self.session.physics = physics;
+        self.weapon_tags = tags;
     }
 
     fn sound_and_fx_with(
@@ -1250,8 +1257,8 @@ impl Cod4Client {
         now_ms: i32,
         dynents: &mut Option<vcod_cod4::dynent::DynEnts>,
         physics: &mut crate::play::cod4_physics::Cod4Physics,
+        tags: &HashMap<u32, WeaponTags>,
     ) {
-        let tags = self.weapon_tags();
         let Some(gs) = self.session.gamestate() else {
             return;
         };
@@ -1306,7 +1313,7 @@ impl Cod4Client {
                 fired,
                 &weapons,
                 &s.weapons,
-                &tags,
+                tags,
                 own.as_ref(),
                 cod4_fx::ShotWorld {
                     clip: &w.clip,
@@ -1474,7 +1481,7 @@ impl Cod4Client {
                     }
                     _ => f,
                 };
-                for p in e.plays(f, &weapons, &cs, &tags, self.view_tags.as_ref()) {
+                for p in e.plays(f, &weapons, &cs, tags, self.view_tags.as_ref()) {
                     let sounds = e.start(cx.fx, cx.fs, &p, f64::from(cx.time), None);
                     cx.audio.play_fx(cx.fs, sounds);
                 }
@@ -1594,14 +1601,6 @@ impl Cod4Client {
             &dv,
         );
         self.overhead = (names, dv);
-    }
-
-    /// The drawn bodies' weapon tags and the mounted guns' flashes, by
-    /// entity: where the others' shots flash and leave from.
-    fn weapon_tags(&self) -> HashMap<u32, WeaponTags> {
-        let mut out = self.players.tags.clone();
-        out.extend(self.turret_tags.iter().map(|(&n, &t)| (n, t)));
-        out
     }
 
     /// The gun our drawn view is locked to (`eFlags` 0x300 and
@@ -1842,6 +1841,8 @@ impl Cod4Client {
             });
         }
         self.vehicles.end();
+        self.weapon_tags.clone_from(&self.players.tags);
+        self.weapon_tags.extend(&self.turret_tags);
         self.drawn = (instances.len(), submodels.len(), posed.len());
         crate::frame_prof::count(crate::frame_prof::Count::Models, instances.len());
         cx.r.set_dynamic_models(&instances);
@@ -1864,8 +1865,16 @@ impl Cod4Client {
             .iter()
             .filter_map(|d| Some((d.number, d.body.as_ref()?)))
             .collect();
+        // Once a gamestate: a capture's gamestates do not move the count,
+        // so its sequence and feed tell them apart.
+        let count = self.session.gamestate_count();
         if let Some(gs) = self.session.gamestate() {
-            self.players.lean = crate::play::cod4_predict::lean_from_mirror(|i| gs.configstring(i));
+            let at = (count, gs.server_command_sequence, gs.checksum_feed);
+            if self.players.lean_gamestate != Some(at) {
+                self.players.lean =
+                    crate::play::cod4_predict::lean_from_mirror(|i| gs.configstring(i));
+                self.players.lean_gamestate = Some(at);
+            }
         }
         // Each gunner's gun as drawn: its model's two tags at the bind and
         // its weapon's column step.

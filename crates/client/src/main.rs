@@ -1860,10 +1860,7 @@ fn run() -> Result<()> {
     let local = if (cod4_fly || cod4_watch)
         && let Some(map) = map_arg.as_deref()
     {
-        let ents = cod4_session
-            .as_ref()
-            .map(|s| s.entity_assets())
-            .unwrap_or_default();
+        let ents = cod4_session.as_ref().map(|s| s.entity_assets());
         // A joined server's `fs_game` (configstring 1) over `--fs-game`:
         // its mod's zone and iwds load before the map (cod4-fastfile.md 13).
         let fs_game = match &cod4_session {
@@ -1874,7 +1871,10 @@ fn run() -> Result<()> {
         if fs_game != args.fs_game || fs_game.is_some() {
             fs = cod4_fly::open_fs(&args.game_dir, fs_game.as_deref(), Some(map))?;
         }
-        let mut c = cod4_fly::load(&args.game_dir, fs_game.as_deref(), map, &ents)
+        let mode = ents
+            .as_ref()
+            .map_or(cod4_fly::Mode::Fly, cod4_fly::Mode::Session);
+        let mut c = cod4_fly::load_from(&args.game_dir, fs_game.as_deref(), map, mode, None, None)
             .with_context(|| format!("cannot load CoD4 map '{map}'"))?;
         for (path, wav) in std::mem::take(&mut c.sound_files) {
             fs.overlay(&path, wav);
@@ -4169,7 +4169,8 @@ impl App {
                     } = &mut self.mode
                         && matches!(phase, Phase::Live(_))
                         && net.snapshots().newest().is_some_and(|s| {
-                            s.ps.field_i32(net.protocol(), "pm_flags") & play::recoil::PMF_OWN_VIEW
+                            s.ps.field_i32(net.protocol(), "pm_flags")
+                                & vcod_common::net::flags::PMF_OWN_VIEW
                                 != 0
                         })
                     {

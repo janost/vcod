@@ -273,9 +273,9 @@ impl Cod4Hud {
                 (Some(prompt("PLATFORM_PICKUPNEWWEAPON", "+activate")), name)
             }
         } else {
-            let holds = |n: usize| {
-                ps.get(&format!("weapons[{}]", n / 32)).unwrap_or(0) & 1 << (n % 32) != 0
-            };
+            let words = vcod_cod4::ps_word!(4 "weapons");
+            let holds =
+                |n: usize| words.get(n / 32).map_or(0, |&w| ps.word(w)) & 1 << (n % 32) != 0;
             let primaries_held = (1..=list.len())
                 .filter(|&n| holds(n) && def_of(n).is_some_and(|d| d.def.inventory_type == 0))
                 .count();

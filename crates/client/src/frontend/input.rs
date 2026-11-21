@@ -431,7 +431,7 @@ impl Ui {
             return;
         }
         if item.kind == ITEM_TYPE_LISTBOX && item.feeder == Some(FEEDER_MODS) {
-            let row = listbox::row_at(&item, self.cursor[1], self.mod_top);
+            let row = listbox::row_at(&item, self.cursor[1], self.tops[FEEDER_MODS]);
             if row < self.mods.len() {
                 let double = self
                     .last_mod_click
@@ -472,7 +472,7 @@ impl Ui {
             return;
         }
         if item.kind == ITEM_TYPE_LISTBOX && item.feeder == Some(FEEDER_SERVERS) {
-            let row = listbox::row_at(&item, self.cursor[1], self.list_top);
+            let row = listbox::row_at(&item, self.cursor[1], self.tops[FEEDER_SERVERS]);
             let rows = self.browser.rows();
             let Some(addr) = rows.get(row).map(|s| s.addr) else {
                 return;
@@ -501,7 +501,7 @@ impl Ui {
             };
             self.browser.set_source(next);
             self.selected = None;
-            self.list_top = 0;
+            self.tops[FEEDER_SERVERS] = 0;
             self.set_cvar("ui_netSource", &(next as i32).to_string(), out);
         }
         if item.ownerdraw == UI_NETGAMETYPE {
@@ -863,21 +863,21 @@ mod tests {
         // The down arrow, then the page below the thumb.
         ui.mouse_move(bar, y + h - 4.0, 640.0, 480.0, &shell);
         ui.click(Instant::now(), &shell);
-        assert_eq!((ui.map_top, ui.map_row), (1, 0));
+        assert_eq!((ui.tops[FEEDER_ALLMAPS], ui.map_row), (1, 0));
         ui.mouse_move(bar, y + h - 20.0, 640.0, 480.0, &shell);
         ui.click(Instant::now(), &shell);
-        assert_eq!(ui.map_top, max);
+        assert_eq!(ui.tops[FEEDER_ALLMAPS], max);
         // The thumb dragged back to the top.
         ui.mouse_move(bar, y + h - 30.0, 640.0, 480.0, &shell);
         ui.click(Instant::now(), &shell);
         ui.mouse_move(bar, y, 640.0, 480.0, &shell);
         ui.release();
-        assert_eq!(ui.map_top, 0);
+        assert_eq!(ui.tops[FEEDER_ALLMAPS], 0);
         // End over the list selects the last map and scrolls to it.
         ui.mouse_move(x + 10.0, y + 30.0, 640.0, 480.0, &shell);
         assert!(ui.key(KeyCode::End, &shell).0);
         assert_eq!(ui.map_row, len - 1);
-        assert_eq!(ui.map_top, len - listbox::view_max(&item));
+        assert_eq!(ui.tops[FEEDER_ALLMAPS], len - listbox::view_max(&item));
         assert!(ui.key(KeyCode::ArrowUp, &shell).0);
         assert_eq!(ui.map_row, len - 2);
     }
@@ -891,9 +891,12 @@ mod tests {
         ui.mouse_move(arrow[0], arrow[1], 640.0, 480.0, &shell);
         ui.click(t0, &shell);
         ui.right_click(t0 + Duration::from_millis(100), &shell);
-        assert_eq!(ui.map_top, 2);
+        assert_eq!(ui.tops[FEEDER_ALLMAPS], 2);
         ui.frame(t0 + Duration::from_millis(700), &shell);
-        assert_eq!(ui.map_top, 2, "the right press started no new hold");
+        assert_eq!(
+            ui.tops[FEEDER_ALLMAPS], 2,
+            "the right press started no new hold"
+        );
     }
 
     #[test]
