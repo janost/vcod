@@ -36,10 +36,11 @@ use super::cod2::{Cod2Session, ConnectOpts, Join};
 use super::cod4_sweep::{
     BOTS, Game, Opts, Pilot, Player, Sample, Shared, SoakOpts, SoakPair, SoakServer, Tally,
 };
-use crate::cod2_client::{Cod2Client, Cod2Frame};
+use crate::cod2_client::Cod2Client;
 use crate::console::shell::{Effect, Shell};
 use crate::frontend::Ui;
 use crate::play::input::Action;
+use crate::session::ClientFrame;
 
 const GAMETYPES: [&str; 5] = ["dm", "tdm", "sd", "ctf", "hq"];
 
@@ -388,7 +389,7 @@ fn step(
     let mut hud_quads = Vec::new();
     let mut vm = None;
     let mut view_fx = None;
-    let mut cx = Cod2Frame {
+    let mut cx = ClientFrame {
         fs,
         shell,
         localized,

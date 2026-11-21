@@ -341,7 +341,7 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
   - `Session::Cod2`, whose online or demo session plays in `Mode::Cod2` (an
     offline `vcod <map>` on CoD2 stays `Mode::Fly`). `cod2_client.rs` is the
     session, pump, draw, view, HUD, menus and those steps, borrowing `App`
-    through `Cod2Frame`.
+    through `session::ClientFrame`.
   - `Session::Cod4`: `cod4_client.rs` over `play/cod4.rs`, a watched CoD4
     capture or a live join (as a player or a spectator), also in
     `Mode::Cod2`. `play/cod4.rs` holds `Cod4Session`, `step` and the

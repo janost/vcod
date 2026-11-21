@@ -384,7 +384,7 @@ impl App {
             r.set_level_look(Some(av.look.at((time * 1000.0) as i32, false)));
         }
         let fly_fov = camera::view_fov_x(camera::DEFAULT_FOV_DEG, aspect, widescreen);
-        let view = cod2_client::DrawView {
+        let view = session::DrawView {
             yaw: cam.yaw,
             pitch: cam.pitch,
             roll: 0.0,
@@ -429,7 +429,7 @@ impl App {
         self.session.set_fly_keys(&self.input);
         let mut cod2_vm = None;
         let mut cod2_fx = None;
-        let mut cx = cod2_client::Cod2Frame {
+        let mut cx = session::ClientFrame {
             fs: &self.fs,
             shell: &self.shell,
             localized: &self.localized,

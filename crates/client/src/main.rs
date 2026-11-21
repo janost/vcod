@@ -1254,7 +1254,7 @@ impl ViewTail<'_> {
     fn run(
         self,
         cam: &FlyCamera,
-        view: cod2_client::DrawView,
+        view: session::DrawView,
         fly_fov: f32,
         hud_quads: &mut Vec<hud::HudQuad>,
         fx_ms: &mut f32,
@@ -1271,7 +1271,7 @@ impl ViewTail<'_> {
             aspect,
             cull,
         } = self;
-        let cod2_client::DrawView {
+        let session::DrawView {
             yaw: draw_yaw,
             pitch: draw_pitch,
             roll: draw_roll,
@@ -5146,7 +5146,7 @@ impl App {
         let (Some(c), Some(r)) = (self.session.cod4_mut(), &mut self.renderer) else {
             return;
         };
-        let mut cx = cod2_client::Cod2Frame {
+        let mut cx = session::ClientFrame {
             fs: &self.fs,
             shell: &self.shell,
             localized: &self.localized,

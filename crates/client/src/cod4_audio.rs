@@ -1447,7 +1447,7 @@ mod tests {
             let now = clk_now();
             let dt = now.duration_since(last).as_secs_f32();
             last = now;
-            let mut cx = crate::cod2_client::Cod2Frame {
+            let mut cx = crate::session::ClientFrame {
                 fs: &fs,
                 shell: &shell,
                 localized: &localized,
@@ -1564,7 +1564,7 @@ mod tests {
             let now = clk_now();
             let dt = now.duration_since(last).as_secs_f32();
             last = now;
-            let mut cx = crate::cod2_client::Cod2Frame {
+            let mut cx = crate::session::ClientFrame {
                 fs: &fs,
                 shell: &shell,
                 localized: &localized,

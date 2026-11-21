@@ -696,8 +696,8 @@ mod tests {
         tx: std::sync::mpsc::Sender<Call>,
     ) -> Option<Seen> {
         use crate::audio::{AudioOpts, AudioSystem, bank};
-        use crate::cod2_client::Cod2Frame;
         use crate::renderer::{CullMode, Frame, Renderer};
+        use crate::session::ClientFrame;
         let join = crate::play::cod4_menus::Join {
             team: Some("allies".into()),
             class: Some("assault_mp,0".into()),
@@ -773,7 +773,7 @@ mod tests {
             let dt = now.duration_since(last).as_secs_f32();
             last = now;
             let time = clk_since(start).as_secs_f32();
-            let mut cx = Cod2Frame {
+            let mut cx = ClientFrame {
                 fs: &fs,
                 shell: &shell,
                 localized: &localized,

@@ -1134,7 +1134,7 @@ fn rig(root: &Path, map: &str, addr: std::net::SocketAddr) -> anyhow::Result<Rig
     // The level's first-use builds behind the load, as `main`'s join runs
     // them (`App::cod4_prewarm`).
     if let Some((r, _)) = &mut renderer {
-        c.prewarm(&mut crate::cod2_client::Cod2Frame {
+        c.prewarm(&mut crate::session::ClientFrame {
             fs: &fs,
             shell: &shell,
             localized: &localized,
@@ -1184,7 +1184,7 @@ fn answer_menu(c: &mut crate::cod4_client::Cod4Client, since: &mut Option<Instan
 /// The client's side: join, then play through the live pump until the
 /// server is done; `Err` when the join itself fails.
 fn play(root: &Path, map: &str, addr: std::net::SocketAddr, shared: &Shared) -> anyhow::Result<()> {
-    use crate::cod2_client::Cod2Frame;
+    use crate::session::ClientFrame;
     let Rig {
         mut c,
         fs,
@@ -1210,7 +1210,7 @@ fn play(root: &Path, map: &str, addr: std::net::SocketAddr, shared: &Shared) -> 
             log::warn!("sweep: the client changed map to {new}");
         }
         if let Some((r, _)) = &mut renderer {
-            let mut cx = Cod2Frame {
+            let mut cx = ClientFrame {
                 fs: &fs,
                 shell: &shell,
                 localized: &localized,
@@ -1553,7 +1553,7 @@ fn play_soak(
     shared: &Shared,
     opts: SoakOpts,
 ) -> anyhow::Result<()> {
-    use crate::cod2_client::Cod2Frame;
+    use crate::session::ClientFrame;
     let Rig {
         c,
         fs,
@@ -1599,7 +1599,7 @@ fn play_soak(
         let t0 = Instant::now();
         let mut hud_quads = Vec::new();
         let mut vm = None;
-        let mut cx = Cod2Frame {
+        let mut cx = ClientFrame {
             fs: &fs,
             shell: &shell,
             localized: &localized,
@@ -2013,7 +2013,7 @@ struct MarksSeen {
 /// [`cod4_live_first_impact_marks_build_nothing_in_play`]'s client; `None`
 /// without an adapter.
 fn first_marks(root: &Path, addr: SocketAddr) -> Option<MarksSeen> {
-    use crate::cod2_client::Cod2Frame;
+    use crate::session::ClientFrame;
     let Rig {
         mut c,
         fs,
@@ -2058,7 +2058,7 @@ fn first_marks(root: &Path, addr: SocketAddr) -> Option<MarksSeen> {
         } else if c.session.menus.open().is_some() {
             answer_menu(&mut c, &mut menu_since);
         }
-        let mut cx = Cod2Frame {
+        let mut cx = ClientFrame {
             fs: &fs,
             shell: &shell,
             localized: &localized,
@@ -2139,7 +2139,7 @@ struct JoinSeen {
 /// [`cod4_live_join_builds_its_models_with_the_load`]'s client; `None`
 /// without an adapter.
 fn join_models(root: &Path, addr: SocketAddr) -> Option<JoinSeen> {
-    use crate::cod2_client::Cod2Frame;
+    use crate::session::ClientFrame;
     let Rig {
         mut c,
         fs,
@@ -2172,7 +2172,7 @@ fn join_models(root: &Path, addr: SocketAddr) -> Option<JoinSeen> {
         if c.session.spawn().is_none() && c.session.menus.open().is_some() {
             answer_menu(&mut c, &mut menu_since);
         }
-        let mut cx = Cod2Frame {
+        let mut cx = ClientFrame {
             fs: &fs,
             shell: &shell,
             localized: &localized,
@@ -2254,7 +2254,7 @@ struct CarSeen {
 /// an adapter.
 fn shoot_car(root: &Path, addr: SocketAddr) -> Option<CarSeen> {
     use super::cod4::Visual;
-    use crate::cod2_client::Cod2Frame;
+    use crate::session::ClientFrame;
     let Rig {
         mut c,
         fs,
@@ -2330,7 +2330,7 @@ fn shoot_car(root: &Path, addr: SocketAddr) -> Option<CarSeen> {
         } else if c.session.menus.open().is_some() {
             answer_menu(&mut c, &mut menu_since);
         }
-        let mut cx = Cod2Frame {
+        let mut cx = ClientFrame {
             fs: &fs,
             shell: &shell,
             localized: &localized,

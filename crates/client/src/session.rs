@@ -14,15 +14,43 @@ use std::collections::HashMap;
 use vcod_common::localize::Localized;
 use vcod_common::pk3::Pk3Fs;
 
+use crate::audio::AudioSystem;
 use crate::camera::FlyCamera;
-use crate::cod2_client::{Cod2Client, Cod2Frame, DrawView};
+use crate::cod2_client::Cod2Client;
 use crate::cod4_client::Cod4Client;
 use crate::cod4_front::Cod4Front;
 use crate::console::shell::{Effect, Shell};
 use crate::frontend::{Ui, UiEffect};
+use crate::fx::sim::FxSystem;
 use crate::play::cod2_events::Event2;
-use crate::renderer::Renderer;
+use crate::renderer::{self, Renderer};
 use crate::{cod2_viewmodel, console, hud, play};
+
+/// What a CoD2 or CoD4 client's frame step borrows from `App`, built at
+/// the call site so the client and the rest of `App` borrow apart.
+pub(crate) struct ClientFrame<'a> {
+    pub(crate) fs: &'a Pk3Fs,
+    pub(crate) shell: &'a Shell,
+    pub(crate) localized: &'a Localized,
+    pub(crate) audio: &'a mut AudioSystem,
+    pub(crate) fx: &'a mut FxSystem,
+    pub(crate) ui: &'a Ui,
+    pub(crate) r: &'a mut Renderer,
+    pub(crate) console_open: bool,
+    /// Seconds since the client started, the effects' clock.
+    pub(crate) time: f32,
+    pub(crate) dt: f32,
+}
+
+/// The fly camera's draw for a frame: the view effects' (or predicted)
+/// angles, the world's fov and the view weapon.
+pub(crate) struct DrawView {
+    pub(crate) yaw: f32,
+    pub(crate) pitch: f32,
+    pub(crate) roll: f32,
+    pub(crate) fov: f32,
+    pub(crate) vm: Option<renderer::VmDraw>,
+}
 
 pub(crate) enum Session {
     Cod1,
@@ -121,7 +149,7 @@ impl Session {
     }
 
     /// The session read off the wire; false with none (the camera flies).
-    pub(crate) fn pump(&mut self, cx: &mut Cod2Frame, cam: &mut FlyCamera) -> bool {
+    pub(crate) fn pump(&mut self, cx: &mut ClientFrame, cam: &mut FlyCamera) -> bool {
         match self {
             Session::Cod4(c) => c.pump(cx, cam),
             Session::Cod2(c) => c.pump(cx, cam),
@@ -131,7 +159,7 @@ impl Session {
 
     pub(crate) fn scene(
         &mut self,
-        cx: &mut Cod2Frame,
+        cx: &mut ClientFrame,
         cam: &mut FlyCamera,
     ) -> (Option<cod2_viewmodel::ViewFrame>, Vec<hud::HudQuad>) {
         match self {
@@ -147,14 +175,14 @@ impl Session {
         }
     }
 
-    pub(crate) fn events(&mut self, cx: &mut Cod2Frame) -> Vec<Event2> {
+    pub(crate) fn events(&mut self, cx: &mut ClientFrame) -> Vec<Event2> {
         match self {
             Session::Cod2(c) => c.events(cx),
             Session::Cod1 | Session::Cod4(_) | Session::Cod4Menu(_) => Vec::new(),
         }
     }
 
-    pub(crate) fn audio(&mut self, cx: &mut Cod2Frame, events: &[Event2], cam_pos: Vec3) {
+    pub(crate) fn audio(&mut self, cx: &mut ClientFrame, events: &[Event2], cam_pos: Vec3) {
         match self {
             Session::Cod2(c) => {
                 c.audio(cx, events, cam_pos);
@@ -163,7 +191,7 @@ impl Session {
         }
     }
 
-    pub(crate) fn effects(&mut self, cx: &mut Cod2Frame, events: &[Event2], cam_pos: Vec3) {
+    pub(crate) fn effects(&mut self, cx: &mut ClientFrame, events: &[Event2], cam_pos: Vec3) {
         match self {
             Session::Cod2(c) => {
                 c.effects(cx, events, cam_pos);
@@ -174,7 +202,7 @@ impl Session {
 
     pub(crate) fn view(
         &mut self,
-        cx: &mut Cod2Frame,
+        cx: &mut ClientFrame,
         events: &[Event2],
         cam: &FlyCamera,
     ) -> Option<play::cod2_view::ViewOut> {
