@@ -620,8 +620,8 @@ impl Cod4Server {
                 self.core.quit = true;
             }
             "set" | "seta" | "sets" | "setu" => {
-                if args.len() >= 3 {
-                    if !self.console_set(arg(1), &args[2..].join(" "), out) {
+                if let Some((name, value)) = crate::cvars::set_args(&args) {
+                    if !self.console_set(name, &value, out) {
                         return;
                     }
                     // `seta` archives the dvar, a registered one too
