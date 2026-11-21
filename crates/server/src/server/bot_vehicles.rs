@@ -272,7 +272,7 @@ impl Server {
         rt.damage_vehicle(
             id,
             damage,
-            num as usize,
+            crate::game::combat::Attacker::Entity(id),
             id,
             [o[0], o[1], o[2] + 1.0],
             "MOD_EXPLOSIVE",

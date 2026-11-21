@@ -461,7 +461,7 @@ impl super::cod2::Cod2Level {
         }
         self.rt.deliver_entity_hit(&super::combat::EntityHit {
             target: id,
-            attacker,
+            attacker: super::combat::Attacker::of_slot(attacker),
             inflictor,
             damage,
             dflags,

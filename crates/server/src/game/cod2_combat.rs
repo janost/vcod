@@ -1401,7 +1401,7 @@ impl Cod2Level {
         // `G_CheckHitTriggerDamage` along the leg, the weapon's `damage` and
         // its means (Mac 0x1c867e).
         self.rt.trigger_sweep(&super::combat::TriggerSweep {
-            attacker,
+            attacker: super::combat::Attacker::of_slot(attacker),
             start,
             end: hit,
             damage: w.damage,
@@ -1605,7 +1605,7 @@ impl Cod2Level {
         self.rt.host.cod2_mut().callback.time_offset = time_offset;
         let hit = Hit {
             victim,
-            attacker,
+            attacker: super::combat::Attacker::of_slot(attacker),
             inflictor,
             damage,
             dflags,
@@ -1678,7 +1678,7 @@ impl Cod2Level {
             let hit = vec3_lerp(eye, end, tr.fraction);
             if k == 0 {
                 self.rt.trigger_sweep(&super::combat::TriggerSweep {
-                    attacker: slot,
+                    attacker: Some(super::combat::Attacker::Client(slot)),
                     start: eye,
                     end: hit,
                     damage,
@@ -2130,7 +2130,7 @@ impl Cod2Level {
             .map_or(0, |w| w.damage);
         if let (Some(attacker), true) = (m.owner, damage != 0) {
             self.rt.trigger_sweep(&super::combat::TriggerSweep {
-                attacker,
+                attacker: Some(super::combat::Attacker::Client(attacker)),
                 start: hit,
                 end: hit,
                 damage,

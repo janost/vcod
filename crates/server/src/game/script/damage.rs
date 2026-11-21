@@ -2,6 +2,7 @@
 //! charged to.
 
 use super::*;
+use crate::game::combat::Attacker;
 use vcod_gsc::Atom;
 
 /// `CodeCallback_PlayerDamage`'s nine arguments, in its order (combat doc
@@ -54,8 +55,8 @@ impl ScriptRuntime {
     /// unless the hit names one, which a blast does: there the missile that
     /// went off is handed over, still alive for as long as its explode event
     /// rides the wire. A hit on a slot with no entity, or from one, is
-    /// dropped: there is nobody to call and nobody to name. An attacker of
-    /// `ENTITYNUM_NONE` is a missile's whose thrower left, delivered with an
+    /// dropped: there is nobody to call and nobody to name. A NULL attacker
+    /// (`None`) is a missile's whose thrower left, delivered with an
     /// undefined attacker (and on UO an undefined inflictor). So is one on a
     /// victim without `takedamage`, `G_Damage`'s first test (4.2 step 1),
     /// and one a vehicle seat shuts out ([`crate::game::vehicle::Vehicles::occupant_damage`]).
@@ -71,14 +72,14 @@ impl ScriptRuntime {
             // which `Scr_PlayerDamage` passes as undefined (combat doc 13.7).
             // UO's drops the inflictor too, which `GScr_AddEntity` pushes as
             // undefined.
-            let (attacker, inflictor) = match (self.attacker_entity(hit.attacker), hit.inflictor) {
+            let (attacker, inflictor) = match (
+                hit.attacker.and_then(|a| self.attacker_entity(a)),
+                hit.inflictor,
+            ) {
                 (Some(a), i) => (Value::Entity(a), Some(i.unwrap_or(a))),
                 // A zeroed attacker with no entity 0 in use: retail pushes
                 // the free entity's object, which vcod has none of.
-                (None, i)
-                    if hit.attacker == crate::game::host::ENTITYNUM_NONE as usize
-                        || hit.attacker == crate::game::host::ZEROED_ENTITY =>
-                {
+                (None, i) if matches!(hit.attacker, None | Some(Attacker::Unspawned)) => {
                     (Value::Undefined, i)
                 }
                 _ => continue,
@@ -117,7 +118,7 @@ impl ScriptRuntime {
     /// (`crate::game::damage_trigger::sweep`), charged to the attacker's
     /// client entity, or the world when it has none.
     pub fn trigger_sweep(&mut self, t: &crate::game::combat::TriggerSweep) {
-        let attacker = self.attacker_entity(t.attacker);
+        let attacker = t.attacker.and_then(|a| self.attacker_entity(a));
         let host = &mut self.host;
         self.vm.with_cx(|cx| {
             let attacker = attacker.unwrap_or_else(|| host.ents.world(cx));
@@ -137,7 +138,7 @@ impl ScriptRuntime {
         if self.host.ents.get(id).is_none() {
             return;
         }
-        let attacker = self.attacker_entity(hit.attacker);
+        let attacker = hit.attacker.and_then(|a| self.attacker_entity(a));
         let host = &mut self.host;
         let notifies = self.vm.with_cx(|cx| {
             let world = host.ents.world(cx);
@@ -396,31 +397,27 @@ impl ScriptRuntime {
     }
 
     /// The entity `Scr_AddEntity` pushes for a damage's attacker: the
-    /// slot's client, a UO vehicle by its number (a shell's fuse blast), or
-    /// entity 0 for a [`crate::game::host::ZEROED_ENTITY`] attacker (combat
-    /// doc 13.7).
-    pub fn attacker_entity(&self, slot: usize) -> Option<EntId> {
-        if slot == crate::game::host::ZEROED_ENTITY {
-            return self.host.ents.handle(0);
+    /// slot's client, a live UO vehicle (a shell's fuse blast), or entity 0
+    /// for [`Attacker::Unspawned`] (combat doc 13.7). `None` for the world,
+    /// which a caller names itself.
+    pub fn attacker_entity(&self, attacker: Attacker) -> Option<EntId> {
+        match attacker {
+            Attacker::Client(slot) => self.client_entity(slot),
+            Attacker::Entity(id) => self.host.vehicles.live.contains_key(&id).then_some(id),
+            Attacker::Unspawned => self.host.ents.handle(0),
+            Attacker::World => None,
         }
-        self.attacker_vehicle(slot)
-            .or_else(|| self.client_entity(slot))
-    }
-
-    fn attacker_vehicle(&self, n: usize) -> Option<EntId> {
-        let id = self.host.ents.handle(u32::try_from(n).ok()?)?;
-        self.host.vehicles.live.contains_key(&id).then_some(id)
     }
 
     /// A blast's owner as `G_Damage` is handed it: a slot with no client
     /// left (a UO vehicle shell keeps its driver's `+0x330` after he left)
     /// is the freed entity there, whose number reads 0
-    /// ([`crate::game::host::ZEROED_ENTITY`], combat doc 13.7). A live
-    /// vehicle's number, a shell's fuse blast, stays.
-    pub fn charged_owner(&self, owner: Option<usize>) -> Option<usize> {
-        owner.map(|slot| match self.attacker_entity(slot) {
-            Some(_) => slot,
-            None => crate::game::host::ZEROED_ENTITY,
+    /// ([`Attacker::Unspawned`], combat doc 13.7). A live vehicle, a
+    /// shell's fuse blast, stays.
+    pub fn charged_owner(&self, owner: Option<Attacker>) -> Option<Attacker> {
+        owner.map(|a| match self.attacker_entity(a) {
+            Some(_) => a,
+            None => Attacker::Unspawned,
         })
     }
 
@@ -433,7 +430,7 @@ impl ScriptRuntime {
         victim: &crate::game::combat::EntityVictim,
         blast: &crate::game::combat::Blast,
         damage: i32,
-        attacker: usize,
+        attacker: Attacker,
     ) {
         let id = victim.id;
         let attacker = self.attacker_entity(attacker);
@@ -457,7 +454,7 @@ impl ScriptRuntime {
         &mut self,
         id: EntId,
         damage: i32,
-        attacker: usize,
+        attacker: Attacker,
         inflictor: EntId,
         at: [f32; 3],
         mod_: &str,

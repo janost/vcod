@@ -27,11 +27,6 @@ const CONCUSSIVE_LIFE_MS: i32 = 500;
 /// `ENTITYNUM_NONE`, the entity number an unattached objective record and an
 /// unowned HUD element both carry.
 pub const ENTITYNUM_NONE: i32 = vcod_common::net::protocol::ENTITYNUM_NONE as i32;
-/// An attacker that is no client but not NULL either, whose `s.number`
-/// reads 0: a client slot `G_FreeEntity` memset, or `g_entities[1023]`,
-/// which nothing spawns. `Scr_AddEntity` pushes entity 0 for it
-/// (combat doc 13.7).
-pub const ZEROED_ENTITY: usize = usize::MAX - 1;
 /// `G_Trigger`'s queue: 0x100 entries of 12 bytes on all three patches
 /// (1.1d `level+0x1dec`, 1.5b `+0x2210`, UO `+0x2260`).
 pub const TRIGGER_QUEUE_LEN: usize = 0x100;

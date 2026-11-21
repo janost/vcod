@@ -11,6 +11,7 @@
 //! shapes are `g_missile.c`'s; the constants, the damping split and the
 //! ordering are retail CoD 1.1's, which differ in most of them.
 
+use crate::game::combat::Attacker;
 use crate::game::entity::ObjectTable;
 use crate::spectate::{ClientSim, PmType};
 use glam::Vec3;
@@ -304,10 +305,10 @@ pub struct Explosion {
     /// `parent` (the splash's attacker) and `r.ownerNum` (the direct hit's):
     /// `None` when the thrower left before it went off, and then
     /// `G_RadiusDamage` returns before its walk (combat doc 13.7).
-    /// [`crate::game::host::ZEROED_ENTITY`] for a fuse's blast charged to
+    /// [`Attacker::Unspawned`] for a fuse's blast charged to
     /// `&g_entities[1023]`, and a UO vehicle shell's fuse blast names the
-    /// vehicle's entity number.
-    pub owner: Option<usize>,
+    /// vehicle.
+    pub owner: Option<Attacker>,
     pub inflictor: EntId,
     pub weapon: u8,
     pub at: Vec3,
@@ -499,10 +500,10 @@ impl Missile {
 
     /// The client its move trace passes, `r.ownerNum`: the thrower, until a
     /// shootable grenade's leave-owner think makes it its own owner.
-    fn passes(&self) -> usize {
+    fn passes(&self) -> Option<usize> {
         match self.shootable {
-            Some(s) if !s.owner_passes => usize::MAX,
-            _ => self.owner.unwrap_or(usize::MAX),
+            Some(s) if !s.owner_passes => None,
+            _ => self.owner,
         }
     }
 
@@ -567,7 +568,7 @@ impl Missile {
             .shell
             .and_then(|s| s.vehicle)
             .map(|v| v.0)
-            .or_else(|| (self.passes() != usize::MAX).then_some(self.passes() as u32));
+            .or_else(|| self.passes().map(|p| p as u32));
         let mut hit = MissileHit {
             tr: self.trace(world, from, to),
             player: None,
@@ -596,7 +597,7 @@ impl Missile {
         if let Some(h) = crate::game::combat::trace_bodies_faced(
             from,
             to,
-            self.passes(),
+            self.passes().unwrap_or(usize::MAX),
             &bodies,
             hit.tr.fraction,
             &crate::game::combat::BULLET_PRIORITY,
@@ -1077,9 +1078,9 @@ impl Missile {
         // is the spawn's `splashMethodOfDeath` (`+0x25c`: `fire_rocket` 6,
         // `fire_artillery` 14).
         let owner = match (self.owner, self.shell.and_then(|s| s.vehicle)) {
-            (None, _) if self.parent_unspawned => Some(crate::game::host::ZEROED_ENTITY),
-            (Some(_), Some(vehicle)) => Some(vehicle.0 as usize),
-            (owner, _) => owner,
+            (None, _) if self.parent_unspawned => Some(Attacker::Unspawned),
+            (Some(_), Some(vehicle)) => Some(Attacker::Entity(vehicle)),
+            (owner, _) => owner.map(Attacker::Client),
         };
         let (mod_, direct_mod) = if self.rocket {
             ("MOD_PROJECTILE_SPLASH", "MOD_PROJECTILE")
@@ -1188,7 +1189,7 @@ impl Missile {
             ("MOD_ARTILLERY_SPLASH", "MOD_ARTILLERY")
         };
         Explosion {
-            owner: self.owner,
+            owner: self.owner.map(Attacker::Client),
             inflictor: vehicle.unwrap_or(self.id),
             weapon: self.weapon,
             at,
@@ -2160,7 +2161,7 @@ mod tests {
         let frame = ms.run(None, &[], &[], None, 14_000);
         assert_eq!(frame.exploded.len(), 1);
         assert_eq!(frame.exploded[0].inflictor, id);
-        assert_eq!(frame.exploded[0].owner, Some(0));
+        assert_eq!(frame.exploded[0].owner, Some(Attacker::Client(0)));
         assert!(
             frame.temp.is_empty(),
             "the explode rides the missile's ring"
@@ -2189,12 +2190,12 @@ mod tests {
         ms.free_owner_refs(1);
         assert_eq!(
             ms.missiles()[0].passes(),
-            0,
+            Some(0),
             "another slot's leave cleared it"
         );
         ms.free_owner_refs(0);
         assert_eq!(ms.missiles()[0].owner, None);
-        assert_eq!(ms.missiles()[0].passes(), usize::MAX);
+        assert_eq!(ms.missiles()[0].passes(), None);
         assert_eq!(ms.missiles()[1].owner, Some(0));
         let frame = ms.run(None, &[], &[], None, 14_000);
         assert_eq!(frame.exploded[0].owner, None);
@@ -3273,9 +3274,9 @@ mod tests {
         assert_eq!(
             went,
             [
-                (15_100, Some(0), splash),
+                (15_100, Some(Attacker::Client(0)), splash),
                 (15_100, None, splash),
-                (15_100, Some(crate::game::host::ZEROED_ENTITY), splash),
+                (15_100, Some(Attacker::Unspawned), splash),
             ]
         );
     }
@@ -3323,7 +3324,7 @@ mod tests {
         assert_eq!(
             went,
             [
-                (ROCKET_LIFE_MS, Some(200), splash),
+                (ROCKET_LIFE_MS, Some(Attacker::Entity(tank)), splash),
                 (ROCKET_LIFE_MS, None, splash),
             ]
         );

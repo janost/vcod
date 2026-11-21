@@ -361,7 +361,7 @@ pub(super) fn vehicle_player_damage(
         Some(driver) => {
             let hit = crate::game::combat::Hit {
                 victim: slot,
-                attacker: driver,
+                attacker: Some(crate::game::combat::Attacker::Client(driver)),
                 inflictor: Some(veh),
                 damage,
                 dflags: 0,
