@@ -173,7 +173,7 @@ differ by at most one.
 
 ## Names
 
-A bot is named `[BOT] <name>`, drawn from 120 names in
+A bot is named `[BOT] <name>`, drawn from a pool of over a hundred in
 `crates/server/src/botmgmt.rs` (`[BOT] Sir Camps-a-Lot`, `[BOT]
 NadeSpammer`, `[BOT] PronePatrol`). No two connected bots share a name;
 past the pool's unused names a number is added (`[BOT] NadeSpammer 2`).
