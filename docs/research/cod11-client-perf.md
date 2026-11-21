@@ -96,7 +96,15 @@ are too.
 - `build` and `acquire` spikes (p99 4-24 ms on mp_cassino) land on the
   frames the GPU is behind on: `queue.write_buffer` and the acquire wait
   on lavapipe's queue, as `cod4-client-perf.md` 7 item 4 found.
-- What a real card spends is not known. The profile to take is
+- One real card's mp_carentan: an AMD Radeon 780M (RADV, Mesa 26.3.1),
+  `SESSION=1 SIZE=1280x800 GAME=cod1 tools/cod4_perf.sh <out>
+  mp_carentan 25` with `cg_shadows 1`, one sample, 12 bots, at
+  perf/client-frame c7a121895 (2026-11-21): 839 fps, wall 1.19 ms,
+  `gpu.opaque` 0.82, then `finish` 0.29, `bodies` 0.18, `submit` 0.12,
+  `build` 0.12; 663 draws, 574 calls, the props' fragments 4.0 M of
+  the main pass's 5.4 M (5.29 screens). VERIFIED (the run on the 780M, ours;
+  cod4-client-perf.md 42.1). Fill leads there. The profile to take
+  elsewhere is
   `SESSION=1 GAME=cod1 COD_DIR=<1.1 install> tools/cod4_perf.sh <out>
   mp_carentan 30` (and `GAME=uo ... GAMETYPE=tdm mp_cassino`) at the
   desktop's own size: if `gpu.opaque` leads, the question is fill
