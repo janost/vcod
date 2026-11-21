@@ -460,103 +460,7 @@ impl Renderer {
             self.lod_cvars.1,
         );
         self.pick_dynamic_lods(frame.eye, &lod_view, frame.time);
-        // `proj` (64) + `time_pad` (16) + eye/fog tail (48) + view forward
-        // (16), matching Camera in the WGSL modules.
-        self.fog.advance(frame.time);
-        let mut camera = [0.0f32; CAMERA_FLOATS];
-        camera[..16].copy_from_slice(&frame.view_proj.to_cols_array());
-        camera[16] = frame.time;
-        camera[17] = self.identity_light;
-        camera[18] = if self.bicubic { 1.0 } else { 0.0 };
-        // `r_specular` 0 drops a CoD4 set's specular (cod2_world.wgsl).
-        camera[19] = if self.cod4_options.specular { 0.0 } else { 1.0 };
-        if let Some(c2) = self.world.as_mut().and_then(|w| w.cod2.as_mut())
-            && c2.normal_maps_on != self.cod4_options.normal_maps
-        {
-            c2.set_normal_maps(&self.device, &self.queue, self.cod4_options.normal_maps);
-        }
-        if self.fog.set && self.cod4_options.fog {
-            let f = &self.fog.live;
-            camera[20..24].copy_from_slice(&[frame.eye.x, frame.eye.y, frame.eye.z, f.mode()]);
-            // GL_FOG_COLOR carries identityLight (0x4d2ad0); the clear doesn't.
-            let il = self.identity_light;
-            camera[24..28].copy_from_slice(&[
-                f.color[0] * il,
-                f.color[1] * il,
-                f.color[2] * il,
-                f.density,
-            ]);
-            let radial = if self.fog.radial { 1.0 } else { 0.0 };
-            camera[28..32].copy_from_slice(&[f.near, f.far, radial, f.start]);
-        } else {
-            camera[20..24].copy_from_slice(&[frame.eye.x, frame.eye.y, frame.eye.z, 0.0]);
-        }
-        camera[32..36].copy_from_slice(&[frame.fwd.x, frame.fwd.y, frame.fwd.z, 0.0]);
-        camera[36..52].copy_from_slice(&glam::Mat4::IDENTITY.to_cols_array());
-        self.queue
-            .write_buffer(&self.camera_buf, 0, bytemuck::cast_slice(&camera));
-        frame_write!(self, "upload camera", CAMERA_BYTES);
-        // CoD4's water height maps at the view's time (cod4-world.md 9.8),
-        // held under `r_drawWater` 0 (cod4-front-end.md 9)
-        if self.cod4_options.water {
-            self.water_time = frame.time;
-        }
-        if let Some(c2) = self.world.as_mut().and_then(|w| w.cod2.as_mut()) {
-            for w in &mut c2.cod4_waters {
-                w.update(&self.queue, self.water_time);
-            }
-        }
-        // CoD2's water height maps at the view's time (cod2-materials.md 9.12)
-        if let Some(w) = self
-            .world
-            .as_mut()
-            .and_then(|w| w.cod2.as_mut()?.water.as_mut())
-        {
-            w.update(&self.queue, frame.time);
-        }
-        let ssao_on = self.ssao.strength() > 0.0 && self.world.is_some();
-        if ssao_on {
-            self.ssao.prepare(
-                &self.queue,
-                &crate::ssao::FrameParams {
-                    view_proj: frame.view_proj,
-                    near: Z_NEAR,
-                    far: Z_FAR,
-                    fog_mode: camera[23],
-                    fog_density: camera[27],
-                    fog_near: camera[28],
-                    fog_far: camera[29],
-                },
-            );
-        }
-        let moved: Vec<glam::Mat4> = self.world.as_ref().map_or_else(Vec::new, |w| {
-            w.moved.iter().map(|&(_, pose)| pose).collect()
-        });
-        while self.moved_cams.len() < moved.len() {
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("moved brush model camera"),
-                size: CAMERA_BYTES,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            let bg = self.camera_group(&buf);
-            self.moved_cams.push((buf, bg));
-        }
-        for (pose, (buf, _)) in moved.iter().zip(&self.moved_cams) {
-            camera[36..52].copy_from_slice(&pose.to_cols_array());
-            self.queue
-                .write_buffer(buf, 0, bytemuck::cast_slice(&camera));
-            frame_write!(self, "upload moved model camera", CAMERA_BYTES);
-        }
-        if let Some(sky) = &self.sky
-            && let Some(farbox) = &sky.farbox
-        {
-            self.queue.write_buffer(
-                &farbox.eye_buf,
-                0,
-                bytemuck::bytes_of(&[frame.eye.x, frame.eye.y, frame.eye.z, 0.0f32]),
-            );
-        }
+        let (camera, moved, ssao_on) = self.upload_frame_uniforms(&frame);
         let t0 = std::time::Instant::now();
         let mut prof = crate::frame_prof::span(crate::frame_prof::Stage::Cull);
         crate::frame_prof::size(self.config.width, self.config.height);
@@ -2242,6 +2146,114 @@ impl Renderer {
             g.collect();
             let _ = self.device.poll(wgpu::PollType::Poll);
         }
+    }
+
+    /// The frame's uniforms: the Camera block, the waters, SSAO's and each
+    /// moved brush model's camera, the farbox's eye. Returns the camera
+    /// block (the last moved model's pose in its model matrix), the moved
+    /// models' poses and whether SSAO draws.
+    fn upload_frame_uniforms(
+        &mut self,
+        frame: &Frame,
+    ) -> ([f32; CAMERA_FLOATS], Vec<glam::Mat4>, bool) {
+        // `proj` (64) + `time_pad` (16) + eye/fog tail (48) + view forward
+        // (16), matching Camera in the WGSL modules.
+        self.fog.advance(frame.time);
+        let mut camera = [0.0f32; CAMERA_FLOATS];
+        camera[..16].copy_from_slice(&frame.view_proj.to_cols_array());
+        camera[16] = frame.time;
+        camera[17] = self.identity_light;
+        camera[18] = if self.bicubic { 1.0 } else { 0.0 };
+        // `r_specular` 0 drops a CoD4 set's specular (cod2_world.wgsl).
+        camera[19] = if self.cod4_options.specular { 0.0 } else { 1.0 };
+        if let Some(c2) = self.world.as_mut().and_then(|w| w.cod2.as_mut())
+            && c2.normal_maps_on != self.cod4_options.normal_maps
+        {
+            c2.set_normal_maps(&self.device, &self.queue, self.cod4_options.normal_maps);
+        }
+        if self.fog.set && self.cod4_options.fog {
+            let f = &self.fog.live;
+            camera[20..24].copy_from_slice(&[frame.eye.x, frame.eye.y, frame.eye.z, f.mode()]);
+            // GL_FOG_COLOR carries identityLight (0x4d2ad0); the clear doesn't.
+            let il = self.identity_light;
+            camera[24..28].copy_from_slice(&[
+                f.color[0] * il,
+                f.color[1] * il,
+                f.color[2] * il,
+                f.density,
+            ]);
+            let radial = if self.fog.radial { 1.0 } else { 0.0 };
+            camera[28..32].copy_from_slice(&[f.near, f.far, radial, f.start]);
+        } else {
+            camera[20..24].copy_from_slice(&[frame.eye.x, frame.eye.y, frame.eye.z, 0.0]);
+        }
+        camera[32..36].copy_from_slice(&[frame.fwd.x, frame.fwd.y, frame.fwd.z, 0.0]);
+        camera[36..52].copy_from_slice(&glam::Mat4::IDENTITY.to_cols_array());
+        self.queue
+            .write_buffer(&self.camera_buf, 0, bytemuck::cast_slice(&camera));
+        frame_write!(self, "upload camera", CAMERA_BYTES);
+        // CoD4's water height maps at the view's time (cod4-world.md 9.8),
+        // held under `r_drawWater` 0 (cod4-front-end.md 9)
+        if self.cod4_options.water {
+            self.water_time = frame.time;
+        }
+        if let Some(c2) = self.world.as_mut().and_then(|w| w.cod2.as_mut()) {
+            for w in &mut c2.cod4_waters {
+                w.update(&self.queue, self.water_time);
+            }
+        }
+        // CoD2's water height maps at the view's time (cod2-materials.md 9.12)
+        if let Some(w) = self
+            .world
+            .as_mut()
+            .and_then(|w| w.cod2.as_mut()?.water.as_mut())
+        {
+            w.update(&self.queue, frame.time);
+        }
+        let ssao_on = self.ssao.strength() > 0.0 && self.world.is_some();
+        if ssao_on {
+            self.ssao.prepare(
+                &self.queue,
+                &crate::ssao::FrameParams {
+                    view_proj: frame.view_proj,
+                    near: Z_NEAR,
+                    far: Z_FAR,
+                    fog_mode: camera[23],
+                    fog_density: camera[27],
+                    fog_near: camera[28],
+                    fog_far: camera[29],
+                },
+            );
+        }
+        let moved: Vec<glam::Mat4> = self.world.as_ref().map_or_else(Vec::new, |w| {
+            w.moved.iter().map(|&(_, pose)| pose).collect()
+        });
+        while self.moved_cams.len() < moved.len() {
+            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("moved brush model camera"),
+                size: CAMERA_BYTES,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bg = self.camera_group(&buf);
+            self.moved_cams.push((buf, bg));
+        }
+        for (pose, (buf, _)) in moved.iter().zip(&self.moved_cams) {
+            camera[36..52].copy_from_slice(&pose.to_cols_array());
+            self.queue
+                .write_buffer(buf, 0, bytemuck::cast_slice(&camera));
+            frame_write!(self, "upload moved model camera", CAMERA_BYTES);
+        }
+        if let Some(sky) = &self.sky
+            && let Some(farbox) = &sky.farbox
+        {
+            self.queue.write_buffer(
+                &farbox.eye_buf,
+                0,
+                bytemuck::bytes_of(&[frame.eye.x, frame.eye.y, frame.eye.z, 0.0f32]),
+            );
+        }
+        (camera, moved, ssao_on)
     }
 }
 
