@@ -2291,6 +2291,92 @@ fn the_gun_interleaves_with_the_world_and_entities_by_material() {
     assert_eq!(dlight_slot(&[], &[]), 0);
 }
 
+/// The kept sort gives what a fresh sort of every instance's draws gives,
+/// frame after frame, while the leading instances hold, one changes model,
+/// the list grows and shrinks.
+#[test]
+fn kept_entity_sort_matches_a_fresh_sort() {
+    let skin = |sort, order| {
+        Rc::new(EntSkin {
+            stages: Vec::new(),
+            lit: true,
+            sort,
+            order,
+            cookie_caster: false,
+            sun_caster: false,
+            sun_cut: None,
+        })
+    };
+    let (a, b, c, d) = (
+        skin(SORT_OPAQUE, 0),
+        skin(SORT_OPAQUE, 1),
+        skin(SORT_BLEND, 2),
+        skin(SORT_OPAQUE, 3),
+    );
+    // per model, its surfaces' skins
+    let models: Vec<Vec<Rc<EntSkin>>> = vec![
+        vec![a.clone(), c.clone()],
+        vec![b.clone()],
+        vec![c.clone(), a.clone(), d.clone()],
+        vec![d, b, c, a],
+    ];
+    let fresh = |list: &[usize]| -> Vec<(u32, u32)> {
+        sorted_ent_draws(
+            list.iter().enumerate().flat_map(|(i, &m)| {
+                models[m]
+                    .iter()
+                    .enumerate()
+                    .map(move |(j, sk)| (i as u32, j as u32, &**sk))
+            }),
+            std::iter::empty(),
+        )
+        .iter()
+        .map(|e| (e.inst, e.surf))
+        .collect()
+    };
+    let frames: [&[usize]; 7] = [
+        &[0, 1, 2, 3, 0, 1],
+        &[0, 1, 2, 3, 0, 1],
+        &[0, 1, 3, 3, 0, 1],
+        &[0, 1, 3, 3, 0, 1, 2, 2],
+        &[0, 1, 3],
+        &[],
+        &[2, 0],
+    ];
+    let mut kept = EntSorted::default();
+    for (f, list) in frames.iter().enumerate() {
+        kept.update_by(list.iter().copied(), |m| &models[m]);
+        let got: Vec<_> = kept.draws.iter().map(|e| (e.inst, e.surf)).collect();
+        assert_eq!(got, fresh(list), "frame {f}");
+    }
+}
+
+/// Two sorted lists merge as a stable sort of the first then the second.
+#[test]
+fn merged_draws_put_the_first_list_first_on_a_tie() {
+    let draw = |inst, sort, gun| EntDraw {
+        inst,
+        surf: 0,
+        sort,
+        order: 0,
+        gun,
+    };
+    let a = [
+        draw(0, 1.0, false),
+        draw(1, 5.0, false),
+        draw(2, 5.0, false),
+    ];
+    let b = [draw(9, 5.0, false), draw(8, 3.0, false)];
+    let got: Vec<u32> = merge_draws(a, [b[1], b[0]])
+        .iter()
+        .map(|e| e.inst)
+        .collect();
+    assert_eq!(got, [0, 8, 1, 2, 9]);
+    let gun = [draw(7, 1.0, true)];
+    let got: Vec<u32> = merge_draws(a, gun).iter().map(|e| e.inst).collect();
+    assert_eq!(got, [0, 7, 1, 2]);
+}
+
 /// The SSAO split follows the last draw of any list sorting up to
 /// decal, past an opaque effect, a mark run and a decal model, before every blend.
 #[test]

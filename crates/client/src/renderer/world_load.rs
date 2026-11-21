@@ -277,12 +277,13 @@ impl Renderer {
             .entity_lighting
             .clone()
             .zip(bsp.sun)
-            .map(|(lighter, sun)| Cod4EntityLight {
-                lighter,
-                sun_dir: glam::Vec3::from(sun.dir),
-                sun_colour: glam::Vec3::from(sun.colour),
-                lights: bsp.model_lights.clone(),
-                kept: Vec::new(),
+            .map(|(lighter, sun)| {
+                Cod4EntityLight::new(
+                    lighter,
+                    glam::Vec3::from(sun.dir),
+                    glam::Vec3::from(sun.colour),
+                    bsp.model_lights.clone(),
+                )
             });
         // CoD4: the probes an entity's specular picks from (empty elsewhere)
         self.dynamic
@@ -1697,6 +1698,9 @@ impl Renderer {
         self.dynamic.bone_mats.clear();
         self.dynamic.light_origins.clear();
         self.dynamic.light_boxes.clear();
+        // they name the old map's handles and models
+        self.dynamic.placed_boxes = Default::default();
+        self.dynamic.ent_sorted = Default::default();
         self.dynamic.lighting = None;
         self.dynamic.cod2_light = None;
         self.dynamic.cod4_light = None;

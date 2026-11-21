@@ -24,7 +24,7 @@ it, the last one listed here:
 | HUD | 33 |
 | Load and first frame | 17, 34 |
 | Resident set | 23 |
-| Dynamic entities | 41, 42 |
+| Dynamic entities | 41, 42, 41.1 |
 | Renderer refactors on a card | 43 |
 
 Current real-card reference points (1920 x 1080, one sample):
@@ -1890,8 +1890,52 @@ census).
 
 What the dynents still cost is CPU: 0.2 ms of `build` and 0.3 of `encode`
 plus `finish` on mp_crash, the last two from their 290-odd entity calls.
-The next cut is batching each model's dynents into one static draw while
-none is awake, which takes the calls with it.
+41.1 keeps their `build` work from frame to frame. The next cut is
+batching each model's dynents into one static draw while none is awake,
+which takes the calls with it.
+
+### 41.1 The held dynents' frame work kept
+
+A held dynent's inputs are the same bits frame after frame, so what the
+renderer derives from them is kept and reused while they hold:
+
+1. `PlacedBoxes`: each placed entry's posed light box and grown view box,
+   kept while its handle and transform bits hold and it is unskinned
+   (bone base 0, every box bone inside the identity block).
+2. `Cod4EntityLight::frame_sets` keeps last frame's packed sets and
+   blocks: a pair in the same place packs nothing (42's lookups were
+   already kept; the packing was not), and it returns the range of sets
+   that can differ. `Written::write_within` and `write_blocks` compare
+   only that range, so a held list is not compared byte by byte either.
+   The bytes written are those of the full compare.
+3. `EntSorted`: every instance's entity draws sorted by material, kept
+   while the leading instances keep their models; only those after them
+   sort again, merged after the kept ones on a tie. The view cull filters
+   the kept list, which a stable sort allows.
+4. The light pick's origin dedupe hashes the float bits with FxHash's step
+   (`BitsMap`), sized for the instances, in place of SipHash.
+5. The client keeps each dynent's model handle by its def, not a name
+   lookup a frame.
+
+A test build checks each kept result against a fresh one on every frame
+it draws (the hinted span against the full compare, each kept box, the
+kept sort), so the GPU runs of the client suite cover it. Frames are the
+same by construction.
+
+CPU per frame, opt-level 1 test build on this box (no adapter), held lists
+of 516, 678 and 1901 instances (mp_crash, mp_backlot, mp_shipment), one
+origin each, two surfaces each over 20 models, microseconds. VERIFIED
+(scratch timer, ours):
+
+| Step | 516 | 678 | 1901 |
+|---|---|---|---|
+| origin dedupe, SipHash -> `BitsMap` | 25.0 -> 7.6 | 28.1 -> 10.1 | 93.0 -> 28.3 |
+| sets packed and compared -> kept | 64.3 -> 10.2 | 84.0 -> 13.6 | 222.0 -> 37.5 |
+| entity draw sort -> kept, filtered and merged | 22.5 -> 7.5 | 29.0 -> 9.6 | 84.9 -> 26.3 |
+| posed boxes, each of the two passes (now a compare) | 5.0 | 6.4 | 17.7 |
+
+Pending, on a card: the kit's `perf-frame` cases `crash`, `crash-nodyn`
+and `crash-held` (and `backlot`, `shipment`) against the build before it.
 
 ## 42. Entity lighting held across frames, and the frame's uploads by span
 
@@ -1928,9 +1972,11 @@ rebuild (1024 marks, eight shaders, PERF-081) is 0.06 ms at opt-level 1,
 under its 0.1 ms bar: left as is. VERIFIED (scratch timer, ours).
 
 Not done: a draw per model of the sleeping dynents (41's next cut). With
-the lookups gone a held dynent costs its placement, LOD pick, posed box,
+the lookups gone a held dynent cost its placement, LOD pick, posed box,
 light set pack and draw sort each frame, 0.2 ms of `build` on mp_crash
-on the card, and its entity calls in `encode` and `finish` (41).
+on the card, and its entity calls in `encode` and `finish` (41). 41.1
+keeps all of those but the LOD pick and the instance packing; the calls
+stay.
 
 ### 42.1 On a card
 
@@ -1969,7 +2015,25 @@ VERIFIED (the runs on the 780M; `renderer/frame.rs` and `wgpu-core` 30.0.2
 writes no span (43's census), rose 0.03. One run a side with the base always first
 cannot tell that from the APU's clocks or the bots' fight; the next run
 alternates three a side on mp_backlot and mp_shipment, and adds a build
-that writes the whole lists, to split the partial writes from the rest.
+that writes the whole lists, to split the partial writes from the rest. The kit mode and the switch are in 42.2.
+
+### 42.2 The `finish` probe
+
+What the next run takes (42.1's open item):
+
+- `VCOD_WRITE_ALL=1` on `vcod`: the light sets, instances, bones and the
+  CoD4 volume's blocks are written whole each frame, from offset 0, not
+  their changed span (`renderer::write_span`). Off by default; read once.
+- The GPU kit's `finish` mode: mp_backlot and mp_shipment as `perf-frame`
+  runs them (12 shooting bots, `war`, 25 s), three rounds of the base, the
+  candidate and the candidate with `VCOD_WRITE_ALL=1`, each round in
+  another order so no build always runs first, each run's `finish`,
+  `build`, `encode`, `submit`, `gpu.total`, `calls`, `entcalls` and
+  `entbundled` with their mean.
+
+A `finish` that falls with the whole lists written puts the rise on the
+partial writes; one that holds puts it elsewhere (the APU's clocks, the
+fight). Pending, on a card.
 
 ## 43. The renderer refactors checked on a card (P2, P3, P4)
 

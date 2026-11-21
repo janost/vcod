@@ -1834,12 +1834,12 @@ impl Renderer {
                     );
                 }
             }
-            let sets = self.pick_entity_lights();
+            // the spans that changed since the last write
+            let lights = self.write_entity_lights();
             let raw: Vec<InstanceRaw> = self.dynamic.instances.iter().map(|(_, r)| *r).collect();
             let d = &mut self.dynamic;
-            // the spans that changed since the last write
             #[cfg_attr(not(test), expect(unused_variables))]
-            let bytes = d.light_written.write(&self.queue, &d.light_buf, &sets)
+            let bytes = lights
                 + d.instance_written.write(&self.queue, &d.instance_buf, &raw)
                 + d.bone_written.write(&self.queue, &d.bone_buf, &d.bone_mats);
             frame_write!(self, "upload entity lights, instances and bones", bytes);
@@ -1942,34 +1942,57 @@ impl Renderer {
 
     /// The frame's entity and view model surfaces in draw order; the
     /// shadow casters keep every instance.
-    fn frame_ent_draws(&self, frame: &Frame, draw_vm: bool) -> Vec<EntDraw> {
+    fn frame_ent_draws(&mut self, frame: &Frame, draw_vm: bool) -> Vec<EntDraw> {
         let vm_skins: &[Vec<Rc<EntSkin>>] = if draw_vm { &self.vm_pass.skins } else { &[] };
         // the instances the view can see; the shadow casters keep them all
         let frustum = vcod_common::vis::Frustum::from_view_proj(frame.view_proj);
-        let seen: Vec<bool> = (0..self.dynamic.instances.len())
-            .map(|k| !self.draw_joins || instance_seen(&self.dynamic, k, &frustum))
+        let d = &mut self.dynamic;
+        let seen: Vec<bool> = (0..d.instances.len())
+            .map(|k| !self.draw_joins || instance_seen(d, k, &frustum))
             .collect();
-
-        sorted_ent_draws(
-            self.dynamic
-                .instances
-                .iter()
-                .enumerate()
-                .filter(|&(i, _)| seen[i])
-                .flat_map(|(i, (m, _))| {
-                    self.dynamic.models[*m]
-                        .skins
-                        .iter()
-                        .enumerate()
-                        .map(move |(j, sk)| (i as u32, j as u32, &**sk))
-                }),
+        d.ent_sorted.update(&d.instances, &d.models);
+        let gun = sorted_ent_draws(
+            std::iter::empty(),
             vm_skins.iter().enumerate().flat_map(|(i, skins)| {
                 skins
                     .iter()
                     .enumerate()
                     .map(move |(j, sk)| (i as u32, j as u32, &**sk))
             }),
-        )
+        );
+        // a stable sort of the seen instances' draws and the gun's
+        let draws = merge_draws(
+            d.ent_sorted
+                .draws
+                .iter()
+                .copied()
+                .filter(|e| seen[e.inst as usize]),
+            gun,
+        );
+        #[cfg(test)]
+        {
+            let skins = |(i, (m, _)): (usize, &(usize, InstanceRaw))| {
+                d.models[*m]
+                    .skins
+                    .iter()
+                    .enumerate()
+                    .map(move |(j, sk)| (i as u32, j as u32, &**sk))
+            };
+            let gun = vm_skins.iter().enumerate().flat_map(|(i, skins)| {
+                skins
+                    .iter()
+                    .enumerate()
+                    .map(move |(j, sk)| (i as u32, j as u32, &**sk))
+            });
+            let ents = d.instances.iter().enumerate().filter(|&(i, _)| seen[i]);
+            let fresh = sorted_ent_draws(ents.flat_map(skins), gun);
+            let key = |e: &EntDraw| (e.inst, e.surf, e.gun);
+            assert!(
+                draws.iter().map(key).eq(fresh.iter().map(key)),
+                "the kept entity sort"
+            );
+        }
+        draws
     }
 
     /// The frame's target and its view. `None` skips the frame: the
