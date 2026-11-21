@@ -1369,16 +1369,20 @@ fn arm_add_delay(ps: &mut super::PlayerState, d: &WeaponDef) {
     }
 }
 
-/// `PM_Weapon_ReloadDelayedAction` (unverified on 1.7): a reload's delay
-/// ran out. An
-/// unchambered bolt ejects its brass (`EV_EJECT_BRASS`) and, while the
-/// segment still runs, waits again for the rest of the add moment past
-/// `rechamberBoltTime` (when that is at least a millisecond); otherwise
-/// the rounds go in now.
-fn reload_delay_out(ps: &mut super::PlayerState, d: &WeaponDef) {
+/// `PM_Weapon_ReloadDelayedAction` (`cod4_lnxded` 0x80624a6, the name by
+/// its shape): a reload's delay ran out. An unchambered bolt ejects its
+/// brass (`EV_EJECT_BRASS`, 0x806257b); in a start without
+/// `reloadStartAddTime` that is all (0x806258b..0x8062714), as CoD2's
+/// copy does. Else, while the segment still runs, it waits again for the
+/// rest of the add moment past `rechamberBoltTime` (when that is at least
+/// a millisecond, 0x80625e8..0x8062602); otherwise the rounds go in now.
+pub(super) fn reload_delay_out(ps: &mut super::PlayerState, d: &WeaponDef) {
     if unchambered(ps, d) {
         set_bit(&mut ps.weaponrechamber, ps.weapon, false);
         ps.add_event(ev::EJECT_BRASS, 0);
+        if in_reload_start(ps.weapon_state) && d.reload_start_add_time == 0 {
+            return;
+        }
         if let Some(moment) = add_moment(ps, d).filter(|_| ps.weapon_time != 0) {
             let bolt = if d.rechamber_bolt_time >= moment {
                 1

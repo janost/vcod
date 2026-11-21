@@ -159,6 +159,28 @@ the shot's start (`PM_Weapon_StartFiring`, inlined at 0x80640af).
   resynced. `cod4_fire_rate_ab` replays their cmds free and fires
   retail's rounds in each burst. VERIFIED (the gates).
 
+### 2.2 The reload's delayed action
+
+`cod4_lnxded` 0x80624a6 (`PM_Weapon_ReloadDelayedAction` by its shape,
+INFERRED) runs when a reload's `weaponDelay` runs out. VERIFIED (the
+instructions):
+
+- A bolt-action weapon (`WeaponDef` +0x4e8) with its `weaponrechamber`
+  bit set (ps+0x57c) clears the bit and adds `EV_EJECT_BRASS` (0x1d) at
+  0x8062572..0x8062586. In a reload start (state 9 or 10) whose
+  `reloadStartAddTime` (+0x39c) is 0 it returns there (0x806258b,
+  0x806270c..0x8062714): no rounds. CoD2's copy does the same.
+- Else, with `weaponTime` running, the add moment (a start's
+  `min(reloadStartAddTime, reloadStartTime)`, a segment's
+  `reloadTime` or, from an empty bullet clip, `reloadEmptyTime`, capped
+  by `reloadAddTime`) less `rechamberBoltTime` (+0x374, 1 when the moment
+  is no longer) goes into `weaponDelay` when positive
+  (0x80625e8..0x8062602).
+- Otherwise the rounds go in: a start's `reloadStartAdd` (+0x538),
+  nothing when 0, or a segment's `reloadAmmoAdd`, capped by the clip's
+  room and the reserve, with `EV_RELOAD_ADDAMMO` (0x14) when any move.
+  vcod: `pmove::weapon::reload_delay_out`.
+
 ## 3. The shot
 
 INFERRED: `ClientEvents` after each cmd reads its events; a fire event
