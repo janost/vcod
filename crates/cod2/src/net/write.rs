@@ -4,11 +4,12 @@
 //! re-encode byte for byte through these (`tests::retail_*`).
 
 use vcod_common::net::Msec;
-use vcod_common::net::codec::{MsgWriter, write_delta_field, write_delta_struct, write_ps_value};
+use vcod_common::net::codec::{MsgWriter, write_delta_struct, write_ps_value};
+use vcod_common::net::ps_arrays;
 
-use super::delta::{ClientState2, EntityState2, HUD_FIELDS, HudElem2, PlayerState2};
+use super::delta::{ClientState2, EntityState2, HudElem2, OBJECTIVE_BITS, PlayerState2};
 use super::fields::{
-    CLIENT_STATE_FIELDS, ENTITY_STATE_FIELDS, HUDELEM_FIELDS, OBJECTIVE_FIELDS, PLAYER_STATE_FIELDS,
+    CLIENT_STATE_FIELDS, ENTITY_STATE_FIELDS, HUDELEM_FIELDS, PLAYER_STATE_FIELDS,
 };
 use super::ops::{CLIENTNUM_BITS, ENTITYNUM_NONE, GENTITYNUM_BITS, Svc};
 use super::parse::Gamestate2;
@@ -56,39 +57,6 @@ pub fn write_delta_client(
     write_delta_struct(w, &CLIENT_STATE_FIELDS, &from.f, Some(&to.f));
 }
 
-/// `stats[]`'s widths in mask order: shorts but `stats[3]` 6 bits and
-/// `stats[5]` a byte (5.3).
-fn write_stat(w: &mut MsgWriter, i: usize, v: i32) {
-    match i {
-        3 => w.write_bits(v, 6),
-        5 => w.write_byte(v as u8),
-        _ => w.write_short(v as i16),
-    }
-}
-
-/// Four sub-blocks of 16: a gate, a 16-bit changed mask, the changed shorts.
-fn write_short_blocks(w: &mut MsgWriter, from: &[i32; 64], to: &[i32; 64]) {
-    for block in 0..4 {
-        let mut mask = 0u16;
-        for i in 0..16 {
-            if from[block * 16 + i] != to[block * 16 + i] {
-                mask |= 1 << i;
-            }
-        }
-        if mask == 0 {
-            w.write_bits(0, 1);
-            continue;
-        }
-        w.write_bits(1, 1);
-        w.write_short(mask as i16);
-        for i in 0..16 {
-            if mask >> i & 1 != 0 {
-                w.write_short(to[block * 16 + i] as i16);
-            }
-        }
-    }
-}
-
 /// `MSG_WriteDeltaHudElems`: the count of leading elements with a `type`,
 /// then per element the index of its last changed field (0 when none) and
 /// fields `0..=last`.
@@ -97,11 +65,7 @@ fn write_hudelems(w: &mut MsgWriter, from: &[HudElem2], to: &[HudElem2]) {
     let count = to.iter().take_while(|e| e[ty] != 0).count();
     w.write_bits(count as i32, 5);
     for (e, base) in to.iter().zip(from).take(count) {
-        let last = (0..HUD_FIELDS).rposition(|i| e[i] != base[i]).unwrap_or(0);
-        w.write_bits(last as i32, 5);
-        for i in 0..=last {
-            write_delta_field(w, base[i] as i32, e[i] as i32, HUDELEM_FIELDS[i].bits);
-        }
+        ps_arrays::write_hud_elem(w, base, e, |k| HUDELEM_FIELDS[k].bits);
     }
 }
 
@@ -129,39 +93,20 @@ pub fn write_delta_playerstate(w: &mut MsgWriter, from: Option<&PlayerState2>, t
         }
     }
 
-    let mask = (0..6).fold(0, |m, i| m | i32::from(from.stats[i] != to.stats[i]) << i);
-    if mask == 0 {
-        w.write_bits(0, 1);
-    } else {
-        w.write_bits(1, 1);
-        w.write_bits(mask, 6);
-        for i in 0..6 {
-            if mask >> i & 1 != 0 {
-                write_stat(w, i, to.stats[i]);
-            }
-        }
-    }
+    ps_arrays::write_stats(w, &from.stats, &to.stats);
     if from.ammo == to.ammo {
         w.write_bits(0, 1);
     } else {
         w.write_bits(1, 1);
-        write_short_blocks(w, &from.ammo, &to.ammo);
+        ps_arrays::write_short_groups(w, &from.ammo, &to.ammo);
     }
-    write_short_blocks(w, &from.ammoclip, &to.ammoclip);
+    ps_arrays::write_short_groups(w, &from.ammoclip, &to.ammoclip);
     if from.objectives == to.objectives {
         w.write_bits(0, 1);
     } else {
         w.write_bits(1, 1);
         for (o, base) in to.objectives.iter().zip(&from.objectives) {
-            w.write_bits(o.state as i32, 3);
-            if o.f == base.f {
-                w.write_bits(0, 1);
-            } else {
-                w.write_bits(1, 1);
-                for (i, field) in OBJECTIVE_FIELDS.iter().enumerate() {
-                    write_delta_field(w, base.f[i] as i32, o.f[i] as i32, field.bits);
-                }
-            }
+            ps_arrays::write_objective(w, o.state as i32, &base.f, &o.f, &OBJECTIVE_BITS);
         }
     }
     if from.hud_archival == to.hud_archival && from.hud_current == to.hud_current {
@@ -297,7 +242,7 @@ mod tests {
     use super::*;
     use crate::net::Parser;
     use crate::net::capture::{Capture, Dir};
-    use crate::net::delta::field_index;
+    use crate::net::delta::{HUD_FIELDS, field_index};
     use crate::net::oob::{self, Reply};
     use vcod_common::net::huffman::Huffman;
     use vcod_common::net::netchan::{Netchan, NetchanParams};

@@ -22,6 +22,7 @@ pub mod msg;
 pub mod netchan;
 pub mod netsim;
 pub mod protocol;
+pub mod ps_arrays;
 pub mod server_cache;
 pub use protocol::{CS_FOG_V1, FogParams};
 pub mod snapshot;

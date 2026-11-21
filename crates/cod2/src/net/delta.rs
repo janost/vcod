@@ -9,6 +9,7 @@ use super::fields::{
     PLAYER_STATE_FIELDS,
 };
 use vcod_common::net::codec::{FieldCodec, MsgReader};
+use vcod_common::net::ps_arrays;
 
 pub const ENTITY_FIELDS: usize = ENTITY_STATE_FIELDS.len();
 pub const CLIENT_FIELDS: usize = CLIENT_STATE_FIELDS.len();
@@ -168,6 +169,17 @@ impl ClientState2 {
     }
 }
 
+/// The objective table's six widths.
+pub(crate) const OBJECTIVE_BITS: [i32; OBJ_FIELDS] = {
+    let mut bits = [0; OBJ_FIELDS];
+    let mut i = 0;
+    while i < OBJ_FIELDS {
+        bits[i] = OBJECTIVE_FIELDS[i].bits;
+        i += 1;
+    }
+    bits
+};
+
 /// `objective_t`, 28 bytes: the 3-bit state and the six netfield words.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Objective2 {
@@ -256,43 +268,25 @@ fn read_ps_field(r: &mut MsgReader, field: &NetField, from: u32) -> u32 {
     CODEC.read_ps_value(r, from as i32, field.bits) as u32
 }
 
-/// What `MSG_ReadDeltaStruct` (0x8069d4a) found.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Delta {
-    Removed,
-    Unchanged,
-    Changed { lc: u8 },
-}
+pub use vcod_common::net::codec::Delta;
 
-/// `MSG_ReadDeltaStruct`: remove bit, no-change bit, `lc` byte, `lc` fields,
-/// the rest copied from `from`. `to` is written unless the entry is removed.
+/// `MSG_ReadDeltaStruct` (0x8069d4a) on CoD2's codec; an `lc` past the
+/// table is an error.
 fn read_delta_struct(
     r: &mut MsgReader,
     table: &[NetField],
     from: &[u32],
     to: &mut [u32],
 ) -> anyhow::Result<Delta> {
-    if r.read_bits(1) == 1 {
-        return Ok(Delta::Removed);
+    let d = CODEC.read_delta_struct(r, table, from, to);
+    if let Delta::Changed { lc } = d {
+        anyhow::ensure!(
+            usize::from(lc) <= table.len(),
+            "delta lc {lc} past {}",
+            table.len()
+        );
     }
-    if r.read_bits(1) == 0 {
-        to.copy_from_slice(from);
-        return Ok(Delta::Unchanged);
-    }
-    let lc = r.read_byte();
-    anyhow::ensure!(
-        usize::from(lc) <= table.len(),
-        "delta lc {lc} past {}",
-        table.len()
-    );
-    for (i, field) in table.iter().enumerate() {
-        to[i] = if i < usize::from(lc) {
-            read_delta_field(r, field, from[i])
-        } else {
-            from[i]
-        };
-    }
-    Ok(Delta::Changed { lc })
+    Ok(d)
 }
 
 /// `MSG_ReadDeltaEntity`: entity `number` against `from`.
@@ -357,45 +351,17 @@ pub fn read_delta_playerstate(
     }
 
     // stats[6]: shorts, but stats[3] 6 bits and stats[5] a byte.
-    if r.read_bits(1) != 0 {
-        let mask = r.read_bits(6);
-        for i in 0..6 {
-            if mask >> i & 1 != 0 {
-                to.stats[i] = match i {
-                    3 => r.read_bits(6),
-                    5 => i32::from(r.read_byte()),
-                    _ => i32::from(r.read_short()),
-                };
-            }
-        }
-    }
+    ps_arrays::read_stats(r, &mut to.stats);
     // ammo behind a group gate, ammoclip without one.
-    for (gated, arr) in [(true, &mut to.ammo), (false, &mut to.ammoclip)] {
-        if gated && r.read_bits(1) == 0 {
-            continue;
-        }
-        for block in 0..4 {
-            if r.read_bits(1) != 0 {
-                let mask = r.read_short() as u16;
-                for i in 0..16 {
-                    if mask >> i & 1 != 0 {
-                        arr[block * 16 + i] = i32::from(r.read_short());
-                    }
-                }
-            }
-        }
+    if r.read_bits(1) != 0 {
+        ps_arrays::read_short_groups(r, &mut to.ammo);
     }
+    ps_arrays::read_short_groups(r, &mut to.ammoclip);
     // objectives: 3 raw bits of state, then the fields behind a gate (0x8069c98).
     if r.read_bits(1) != 0 {
         for (o, base) in to.objectives.iter_mut().zip(&from.objectives) {
-            o.state = r.read_bits(3) as u32;
-            if r.read_bits(1) != 0 {
-                for (i, field) in OBJECTIVE_FIELDS.iter().enumerate() {
-                    o.f[i] = read_delta_field(r, field, base.f[i]);
-                }
-            } else {
-                o.f = base.f;
-            }
+            let bits = &OBJECTIVE_BITS;
+            o.state = ps_arrays::read_objective(r, CODEC, &base.f, &mut o.f, bits) as u32;
         }
     }
     if r.read_bits(1) != 0 {
