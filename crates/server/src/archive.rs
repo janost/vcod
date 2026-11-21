@@ -452,6 +452,16 @@ mod tests {
     }
 
     #[test]
+    fn a_live_snapshot_shares_the_frame_s_entity_states() {
+        let mut w = WorldFrame::default();
+        w.culled.insert(80, entity(80, 1.0));
+        w.temps.push((Scope::Broadcast, entity(958, 0.0)));
+        let got = w.entities_for(1, [0.0; 3], None, 0, P);
+        assert!(Rc::ptr_eq(&got[&80], &w.culled[&80].wire));
+        assert!(Rc::ptr_eq(&got[&958], &w.temps[0].1.wire));
+    }
+
+    #[test]
     fn a_replayed_uo_entity_is_renumbered_once_and_shifted_the_same() {
         use vcod_common::net::protocol::PROTOCOL_V22 as UO;
         let field = |n: &str| msg::EntityState::field_index(&UO, n).unwrap();
@@ -492,8 +502,9 @@ mod tests {
         a.push(frame(1.0));
         a.push(frame(2.0));
         let (f0, f1) = (a.frame(0).unwrap(), a.frame(1).unwrap());
-        assert!(Rc::ptr_eq(&f0.world.culled[&80].cull, &f1.world.culled[&80].cull));
-        assert!(!Rc::ptr_eq(&f0.world.culled[&81].cull, &f1.world.culled[&81].cull));
+        let (c0, c1) = (&f0.world.culled, &f1.world.culled);
+        assert!(Rc::ptr_eq(&c0[&80].cull, &c1[&80].cull));
+        assert!(!Rc::ptr_eq(&c0[&81].cull, &c1[&81].cull));
         assert!(Rc::ptr_eq(&f0.world.roster, &f1.world.roster));
     }
 }
