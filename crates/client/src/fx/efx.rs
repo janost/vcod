@@ -231,6 +231,23 @@ pub struct Emitter {
     /// A CoD4 trail element (type 3): its cross-section and life, drawn by
     /// `fx::cod4_trail` on a moving effect (cod4-effects.md 16).
     pub cod4_trail: Option<crate::fx::cod4_trail::TrailDef>,
+    /// A CoD4 model element (type 5): the frame its angles turn in
+    /// (`FX_DrawElem_Model`'s axes, cod4-effects.md 9.1); `None` for CoD1
+    /// and CoD2.
+    pub cod4_model: Option<Cod4ModelFrame>,
+}
+
+/// The frame a CoD4 model element's angles turn in: 0x4a5d30's by the
+/// element's run bits (`FxElemDef` flags 0xc0, cod4-effects.md 9.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cod4ModelFrame {
+    /// Run bits 0: the world's axes.
+    World,
+    /// 0x40 and 0x80: the effect's, as it spawned or as it stands.
+    Effect,
+    /// 0xc0: a frame on the spawn offset's direction, built as a sphere
+    /// offset's (spawn bits 0x10) or as any other's.
+    Offset { sphere: bool },
 }
 
 /// `FX_ProcessEmitting`'s spacing: an element draws `dist` once, adds
@@ -319,6 +336,7 @@ impl Default for Emitter {
             cod2: None,
             cod4_emit: None,
             cod4_trail: None,
+            cod4_model: None,
         }
     }
 }

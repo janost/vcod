@@ -370,6 +370,81 @@ struct Debris {
     angles: Vec3,
     /// Degrees per 100 ms (0x490300 scales by `frametime * 0.01`).
     angle_delta: Vec3,
+    /// A CoD4 model element's pose, which takes the place of the three
+    /// above's CoD1 spin.
+    cod4: Option<Cod4Pose>,
+}
+
+/// A CoD4 model element's axes (`FX_DrawElem_Model`, iw3mp.exe 0x497cc0,
+/// cod4-effects.md 9.1): its angles at a time, turned through its frame.
+struct Cod4Pose {
+    /// `spawnAngles` and `angularVelocity` as drawn: degrees, degrees per
+    /// ms.
+    angles: Vec3,
+    rate: Vec3,
+    frame: PoseFrame,
+    /// `atRestFraction`: the 255ths of its life at which it came to rest,
+    /// 255 while it moves.
+    at_rest: u8,
+}
+
+/// [`Cod4Pose`]'s frame, bolt-local on a bolted element.
+enum PoseFrame {
+    Axes([Vec3; 3]),
+    /// Run bits 0xc0: built each draw on the spawn offset's direction.
+    Offset {
+        dir: Vec3,
+        sphere: bool,
+    },
+}
+
+/// The ms 0x497c40 turns a CoD4 model element's angles by: its elapsed
+/// time, slowed to a stop over the 300 ms after the time it came to rest.
+fn spin_msec(elapsed: f32, life: f32, at_rest: u8) -> f32 {
+    let rest = f32::from(at_rest) * life / 255.0;
+    let d = elapsed - rest;
+    if d <= 0.0 {
+        elapsed
+    } else if d >= 300.0 {
+        rest + 150.0
+    } else {
+        elapsed - d * d / 600.0
+    }
+}
+
+/// `atRestFraction` of an element come to rest `elapsed` ms into a
+/// `life` ms life (iw3mp.exe 0x4a3e90 and its caller's truncating store).
+fn at_rest_fraction(elapsed: f32, life: f32) -> u8 {
+    (elapsed * 255.0 / life - 0.25).ceil().clamp(0.0, 255.0) as u8
+}
+
+/// 0x55fed0: the unit vector off the axis `v` is shortest along (the
+/// lower index on a tie), less its share along `v`.
+fn perpendicular(v: Vec3) -> Vec3 {
+    let sq = v * v;
+    let mut i = usize::from(sq.x > sq.y);
+    if sq[i] > sq.z {
+        i = 2;
+    }
+    let mut d = v * -v[i];
+    d[i] += 1.0;
+    d.normalize_or_zero()
+}
+
+/// 0x4a5d30's run bits 0xc0 frame on `dir` (forward, left, up): forward
+/// along it, `(1, 0, 0)` for none. A sphere offset's up is
+/// [`perpendicular`] to it and left is up x forward; any other's left is
+/// z (y within 0.999 of z) x forward, normalized, and up forward x left.
+fn offset_frame(dir: Vec3, sphere: bool) -> [Vec3; 3] {
+    let f = dir.try_normalize().unwrap_or(Vec3::X);
+    if sphere {
+        let up = perpendicular(f);
+        [f, up.cross(f), up]
+    } else {
+        let r = if f.z.abs() < 0.999 { Vec3::Z } else { Vec3::Y };
+        let left = r.cross(f).normalize_or_zero();
+        [f, left, f.cross(left)]
+    }
 }
 
 /// xorshift64. Also used by `audio::AudioSystem`.
@@ -812,6 +887,38 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
             // The models list turns `useModel` on (0x49cae0).
             let model = pick(rng, &em.models).cloned();
             let mut angles = sample_r3(rng, em.angle);
+            let angle_delta = sample_r3(rng, em.angle_delta);
+            if let Some(run) = em.cod4_model {
+                use efx::Cod4ModelFrame;
+                let effect = frame.map_or([Vec3::X, Vec3::Y, Vec3::Z], |(x, y, z)| [x, y, z]);
+                let frame = match run {
+                    Cod4ModelFrame::World => PoseFrame::Axes([Vec3::X, Vec3::Y, Vec3::Z]),
+                    // a bolted element turns with the tag as it stands
+                    Cod4ModelFrame::Effect if bolt.is_some() => {
+                        PoseFrame::Axes([Vec3::X, Vec3::Y, Vec3::Z])
+                    }
+                    Cod4ModelFrame::Effect => PoseFrame::Axes(effect),
+                    Cod4ModelFrame::Offset { sphere } => PoseFrame::Offset {
+                        dir: match bolt {
+                            Some((_, f)) => f.unrotate(base - center),
+                            None => base - center,
+                        },
+                        sphere,
+                    },
+                };
+                return Debris {
+                    model,
+                    angles: Vec3::ZERO,
+                    angle_delta: Vec3::ZERO,
+                    cod4: Some(Cod4Pose {
+                        angles,
+                        // degrees per second to per ms
+                        rate: angle_delta / 1000.0,
+                        frame,
+                        at_rest: 255,
+                    }),
+                };
+            }
             // A bolted model's angles are in the tag's frame, whose forward
             // is the spawn direction.
             if let Some((x, _, _)) = frame.filter(|_| bolt.is_none()) {
@@ -820,7 +927,8 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
             Debris {
                 model,
                 angles,
-                angle_delta: sample_r3(rng, em.angle_delta),
+                angle_delta,
+                cod4: None,
             }
         });
         // `CEmitter` (0x4a02c0) starts its cursor at its own origin and
@@ -892,7 +1000,7 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
                 e.pos = pos;
                 e.vel = vel;
             }
-            if let Some(d) = &mut debris {
+            if let Some(d) = debris.as_mut().filter(|d| d.cod4.is_none()) {
                 d.angles -= super::vectoangles(frame.axis.0);
             }
         }
@@ -1045,7 +1153,7 @@ fn step_pool(pool: &mut VecDeque<Particle>, cx: &StepCx, rng: &mut Rng, chains: 
             if let Some(e) = &mut p.emit4 {
                 e.at = p.pos;
             }
-            if let Some(d) = &mut p.debris {
+            if let Some(d) = p.debris.as_mut().filter(|d| d.cod4.is_none()) {
                 d.angles += super::vectoangles(f.axis.0);
             }
         }
@@ -1079,12 +1187,24 @@ fn step_pool(pool: &mut VecDeque<Particle>, cx: &StepCx, rng: &mut Rng, chains: 
             p.rot_delta = l.rotation_delta(p.frac(now)) * 10.0;
         }
         p.rot += p.rot_delta * dt;
+        let (age_ms, life_ms) = (p.age(now) * 1000.0, p.life * 1000.0);
         if let Some(d) = &mut p.debris {
-            // A resting model's spin dies away (CEmitter::Update, 0x48fa2f).
-            if p.pos == before {
-                d.angle_delta *= 0.7;
+            match &mut d.cod4 {
+                // An element whose position held over an update comes to
+                // rest (iw3mp.exe 0x4a4b51..0x4a4bb2).
+                Some(c) => {
+                    if p.pos == before && c.at_rest == 255 {
+                        c.at_rest = at_rest_fraction(age_ms.min(life_ms), life_ms);
+                    }
+                }
+                // A resting model's spin dies away (CEmitter::Update, 0x48fa2f).
+                None => {
+                    if p.pos == before {
+                        d.angle_delta *= 0.7;
+                    }
+                    d.angles += d.angle_delta * (dt * 1000.0 * 0.01);
+                }
             }
-            d.angles += d.angle_delta * (dt * 1000.0 * 0.01);
         }
         if let Some(mut e) = p.emit.take() {
             let now_ms = (now * 1000.0).round() as i64;
@@ -2243,10 +2363,24 @@ impl FxSystem {
                 let frame = p.bolt.and_then(|id| self.bolts.get(&id)).copied();
                 let t = p.frac(now);
                 let scale = Shape::at(p, t).half;
-                let axis = angles_to_axis_msvc(d.angles.to_array()).map(|a| {
-                    let a = Vec3::from(a) * scale;
-                    frame.map_or(a, |f| f.rotate(a))
-                });
+                let axis = match &d.cod4 {
+                    Some(c) => {
+                        let life = p.life * 1000.0;
+                        let ms = spin_msec((p.age(now) * 1000.0).min(life), life, c.at_rest);
+                        let local = angles_to_axis_msvc((c.angles + c.rate * ms).to_array());
+                        let rotate = |v: Vec3| frame.map_or(v, |f| f.rotate(v));
+                        let f = match c.frame {
+                            PoseFrame::Axes(a) => a.map(rotate),
+                            PoseFrame::Offset { dir, sphere } => offset_frame(rotate(dir), sphere),
+                        };
+                        // 0x4a62f0: each axis is the angles' in the frame's
+                        local.map(|a| (a[0] * f[0] + a[1] * f[1] + a[2] * f[2]) * scale)
+                    }
+                    None => angles_to_axis_msvc(d.angles.to_array()).map(|a| {
+                        let a = Vec3::from(a) * scale;
+                        frame.map_or(a, |f| f.rotate(a))
+                    }),
+                };
                 Some(FxModel {
                     model,
                     origin,
@@ -3491,6 +3625,122 @@ mod tests {
             assert!(f.culls(p, 30.0) && !f.culls(p, 40.0), "{p}");
         }
         assert!(f.culls(Vec3::new(100.0, 0.0, -150.0), 30.0));
+    }
+
+    /// A CoD4 model element: one `xmodel/m` of 1000 ms at angles
+    /// (10, 20, 30) turning at (0, 90, 0) degrees a second, scale 2, its
+    /// frame `run`.
+    fn cod4_model(run: efx::Cod4ModelFrame) -> Effect {
+        let one = |v| R1 { a: v, b: v };
+        let three = |v: [f32; 3]| R3 { a: v, b: v };
+        let size = efx::Curve {
+            start: one(2.0),
+            end: one(2.0),
+            linear: false,
+        };
+        Effect {
+            emitters: vec![Emitter {
+                kind: Kind::Emitter,
+                flags: attr::USE_MODEL,
+                life: one(1000.0),
+                angle: three([10.0, 20.0, 30.0]),
+                angle_delta: three([0.0, 90.0, 0.0]),
+                models: vec!["xmodel/m".into()],
+                size,
+                cod4_model: Some(run),
+                ..Emitter::default()
+            }],
+        }
+    }
+
+    fn near(a: [Vec3; 3], b: [Vec3; 3]) -> bool {
+        a.iter().zip(&b).all(|(a, b)| a.distance(*b) < 1e-4)
+    }
+
+    /// `FX_DrawElem_Model`'s axes (iw3mp.exe 0x497cc0, cod4-effects.md
+    /// 9.1): the spawn angles plus the angular velocity times the elapsed
+    /// ms, in the world's axes under run bits 0 and in the effect's
+    /// under 0x40 and 0x80, scaled; a degree a ms of `angularVelocity` is
+    /// a degree a ms, not CoD1's per 100 ms.
+    #[test]
+    fn a_cod4_model_turns_by_its_angular_velocity_in_its_frame() {
+        use efx::Cod4ModelFrame;
+        // the effect faces +y, its left -x
+        let axis = [Vec3::Y, -Vec3::X, Vec3::Z];
+        let at = SpawnAt::Oriented {
+            pos: Vec3::new(5.0, 6.0, 7.0),
+            axis,
+        };
+        let want = |t: f32, frame: [Vec3; 3]| {
+            let a = angles_to_axis_msvc([10.0, 20.0 + 90.0 * t, 30.0]);
+            a.map(|a| (a[0] * frame[0] + a[1] * frame[1] + a[2] * frame[2]) * 2.0)
+        };
+        for (run, frame) in [
+            (Cod4ModelFrame::World, [Vec3::X, Vec3::Y, Vec3::Z]),
+            (Cod4ModelFrame::Effect, axis),
+        ] {
+            let mut s = FxSystem::new();
+            s.spawn_effect_for_test(cod4_model(run), at, 0.0);
+            for t in [0.0, 0.25, 0.5] {
+                let m = s.models(f64::from(t));
+                assert_eq!(m.len(), 1);
+                assert!(
+                    near(m[0].axis, want(t, frame)),
+                    "{run:?} {t}: {:?}",
+                    m[0].axis
+                );
+            }
+        }
+    }
+
+    /// An element whose position holds over an update comes to rest
+    /// (iw3mp.exe 0x4a4b51..0x4a4bb2) and its turn slows to a stop over the
+    /// next 300 ms, 150 ms of turn past the rest (0x497c40).
+    #[test]
+    fn a_resting_cod4_model_slows_to_a_stop_over_300_ms() {
+        let at = SpawnAt::Oriented {
+            pos: Vec3::ZERO,
+            axis: [Vec3::X, Vec3::Y, Vec3::Z],
+        };
+        let mut s = FxSystem::new();
+        s.spawn_effect_for_test(cod4_model(efx::Cod4ModelFrame::World), at, 0.0);
+        // no velocity: it rests on the first update, 100 ms in
+        s.step(0.1, 0.1, None);
+        let rest = f32::from(at_rest_fraction(100.0, 1000.0)) * 1000.0 / 255.0;
+        for (t, ms) in [
+            (0.05, 50.0),
+            (0.2, rest + (200.0 - rest) - (200.0 - rest).powi(2) / 600.0),
+            (0.6, rest + 150.0),
+        ] {
+            let a =
+                angles_to_axis_msvc([10.0, 20.0 + 0.09 * ms, 30.0]).map(|a| Vec3::from(a) * 2.0);
+            assert!(near(s.models(t)[0].axis, a), "{t}");
+        }
+        assert_eq!(at_rest_fraction(100.0, 1000.0), 26);
+        assert_eq!(spin_msec(700.0, 1000.0, 255), 700.0);
+    }
+
+    /// Run bits 0xc0's frame: forward along the offset, a sphere's up off
+    /// `PerpendicularVector` (0x55fed0), any other's left off z or, near
+    /// z, y (0x4a5e55..0x4a5eac); orthonormal and right-handed either way.
+    #[test]
+    fn a_cod4_offset_frame_is_built_on_the_offset() {
+        for (dir, sphere) in [
+            (Vec3::new(3.0, -4.0, 1.0), true),
+            (Vec3::new(3.0, -4.0, 1.0), false),
+            (Vec3::new(0.0, 0.01, 1.0), false),
+            (Vec3::ZERO, true),
+        ] {
+            let [f, l, u] = offset_frame(dir, sphere);
+            assert!(f.distance(dir.try_normalize().unwrap_or(Vec3::X)) < 1e-6);
+            for (a, b) in [(f, l), (l, u), (u, f)] {
+                assert!(a.dot(b).abs() < 1e-5 && (a.length() - 1.0).abs() < 1e-5);
+            }
+            assert!(f.cross(l).distance(u) < 1e-5, "{dir} {sphere}");
+        }
+        // the axis (1, 0, 0) is shortest along y on a tie with z: y less its share
+        assert_eq!(perpendicular(Vec3::new(1.0, 0.0, 0.0)), Vec3::Y);
+        assert_eq!(offset_frame(Vec3::Z, false)[1], Vec3::X);
     }
 
     /// `fx/shellejects/pistol.efx` from `pak5.pk3`, verbatim but for the
