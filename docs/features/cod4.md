@@ -56,6 +56,9 @@ with its `mouse_over`, `mouse_click` and `music_mainmenu_mp` sounds.
   `mod.ff` and iwds over the stock zones and `main/` in 1.7's order. The
   HUD and script menus read `mod.ff` too (ModWarfare's class menus).
   Prediction uses the mod's weapon files off its iwds, as the server does.
+- Loose files under a mod's directory read under its iwds, as 1.7 reads
+  them; out of `main/` only `.cfg` files and `ban.txt` (cod4-handshake.md
+  14.1).
 - A map missing from `zone/<language>/` loads from `usermaps/<map>/`.
   `<map>_load.ff` gives the connect screen its levelshot.
 - Missing mod or usermap iwds and fastfiles download before the map
@@ -250,7 +253,8 @@ CoD2 effect path:
 
 - Muzzle flashes and shell ejects on the posed weapon's tags, impacts,
   explosions, effects emitted along an element's flight, missile smoke
-  trails on `tag_fx`.
+  trails on `tag_fx`. Effect model elements (debris) draw the zones'
+  xmodels at their visual scale.
 - Looping effects for their whole life: `spawnFx`, `playLoopedFx` and
   the map's createfx ambience (mp_crash's fires start settled). Each
   element spawns inside its `spawnRange` and fades over its distances.
@@ -270,7 +274,8 @@ show who talks. Without libspeex nothing is sent or played.
 **Demos** ([cod4-demos.md](../research/cod4-demos.md)). `record` writes
 1.7's typed records into `main/demos/` (the mod's under `fs_game`).
 `demo <name>` and `timedemo <name>` load the map behind the connect
-screen and play it unpredicted, the recorder's view off its archive rows.
+screen and play it unpredicted, the recorder's view off its archive rows;
+`timedemo` writes 1.7's `demos/timedemo_<map>_mode_<r_mode>.csv`.
 The `RECORDING` line draws where 1.7 draws it. `cl_avidemo <fps>` steps
 the clock a fixed `1000 / fps` ms a frame and writes each as a TGA.
 
@@ -385,6 +390,8 @@ against a retail kill capture, entity numbers included:
 - Rockets wobble, curve and accelerate as 1.7's do; an RPG bends toward
   the helicopter's attractor; the helicopter's guided rockets steer.
 - Melee swings and hurts; `kill` works under `sv_cheats` (10.4, 10.5).
+- A fall past `bg_fallDamageMinHeight` hurts by 1.7's share of max
+  health (16).
 - Retail captures gate a rocket's flight, a grenade's throw back, a
   prone death and a killcam on a helicopter-style kill (15). A hit's push
   and timers land a frame late (12, 15). A dropped weapon leaves the

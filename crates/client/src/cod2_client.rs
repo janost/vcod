@@ -147,9 +147,9 @@ impl Cod2Client {
             self.hud.chat.push(&line, chat_ms);
         }
         // `score` again every 2 s while Tab is held.
-        if self.hud.scoreboard.due(cx.time as f32) {
+        if self.hud.scoreboard.due(cx.time) {
             s.send_command("score");
-            self.hud.scoreboard.mark_requested(cx.time as f32);
+            self.hud.scoreboard.mark_requested(cx.time);
         }
         // `CL_GetMenuBlurRadius`: none on a demo
         cx.r.set_world_blur(if s.is_demo() { 0.0 } else { cx.ui.blur_world() });
@@ -307,7 +307,7 @@ impl Cod2Client {
             cx.localized,
             cx.r.screen_size(),
             f.time_ms,
-            cx.time as f32,
+            cx.time,
         );
         if f.snap.ps.followed().is_some() || s.is_demo() {
             let [pitch, yaw, _] = cod2_viewmodel::view_angles(&f);
@@ -833,7 +833,7 @@ impl Cod2Client {
             // `score` on the down edge, again every 2 s while held
             // (the Cod2 arm), as CoD1's board does.
             Effect::Scores(down) => {
-                let now = (crate::play::cod2::clock_now() - start).as_secs_f32();
+                let now = (crate::play::cod2::clock_now() - start).as_secs_f64();
                 let board = &mut self.hud.scoreboard;
                 if !*down {
                     board.release(now);

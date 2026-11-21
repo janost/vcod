@@ -56,6 +56,21 @@ mod gun;
 /// graph walks under 1.5's ([`super::cod2::GRAPH_RULES`]).
 pub const GRAPH_RULES: vcod_common::pmove::MoveRules = vcod_common::pmove::MoveRules::V1_5;
 
+/// 1.7's `bg_fallDamageMinHeight` and `MaxHeight` (cod4-pmove.md's dvar
+/// table, `vcod_cod4::pmove::Rules`' defaults): the graph's walks and the
+/// bots judge a drop by them ([`crate::nav::with_falls`]), not CoD1's 256
+/// and 480.
+pub const FALLS: vcod_common::pmove::FallHeights = vcod_common::pmove::FallHeights {
+    min: 128.0,
+    max: 300.0,
+};
+
+/// Runs `f` with the graph's walks moving and judging drops as CoD4's:
+/// [`GRAPH_RULES`] and [`FALLS`].
+pub fn moving<R>(f: impl FnOnce() -> R) -> R {
+    crate::nav::with_rules(GRAPH_RULES, || crate::nav::with_falls(FALLS, f))
+}
+
 /// Whether the graph is built for bots that read a leap's lip: CoD4's
 /// route has no pmove probes (`BotWorld::PMOVE_PROBES`), so its leaps are
 /// kept only as plain jumps (`NavGraph::build_opts`, bot-objectives.md
@@ -407,14 +422,16 @@ impl Cod4Bots {
         if self.driver.nav.is_none() {
             let rules = level.rules;
             let job = self.driver.nav_job.get_or_insert_with(|| {
-                NavJob::start_opts(
-                    &format!("cod4 {map}{}", self.own.brush_key),
-                    world,
-                    GRAPH_RULES,
-                    Some(mantle_probe(clip.clone(), rules)),
-                    walk_step(clip.clone(), rules, entities),
-                    LIP,
-                )
+                crate::nav::with_falls(FALLS, || {
+                    NavJob::start_opts(
+                        &format!("cod4 {map}{}", self.own.brush_key),
+                        world,
+                        GRAPH_RULES,
+                        Some(mantle_probe(clip.clone(), rules)),
+                        walk_step(clip.clone(), rules, entities),
+                        LIP,
+                    )
+                })
             });
             self.driver.nav = job.poll(!self.driver.nav_background);
         }
@@ -2022,13 +2039,15 @@ mod tests {
         let clip = zones.clip.clone().unwrap();
         let world = bot_world(clip.clone(), &zones.map.entities, Vec::new());
         let probe = mantle_probe(clip, vcod_cod4::pmove::Rules::default());
-        let mut job = crate::nav::NavJob::start_with(
-            "cod4 mp_shipment",
-            &world,
-            GRAPH_RULES,
-            Some(probe),
-            None,
-        );
+        let mut job = moving(|| {
+            crate::nav::NavJob::start_with(
+                "cod4 mp_shipment",
+                &world,
+                GRAPH_RULES,
+                Some(probe),
+                None,
+            )
+        });
         let g = job.poll(true).expect("the graph");
         let (lo, hi) = ([-113.0, -89.0, 261.0], [121.0, 129.0, 289.0]);
         let stand = g.zone_stand(lo, hi).expect("a stand");
@@ -2077,8 +2096,9 @@ mod tests {
         let rules = vcod_cod4::pmove::Rules::default();
         let world = bot_world(clip.clone(), &zones.map.entities, Vec::new());
         let probe = mantle_probe(clip.clone(), rules);
-        let mut job =
-            crate::nav::NavJob::start_with("cod4 mp_crash", &world, GRAPH_RULES, Some(probe), None);
+        let mut job = moving(|| {
+            crate::nav::NavJob::start_with("cod4 mp_crash", &world, GRAPH_RULES, Some(probe), None)
+        });
         let g = job.poll(true).expect("the graph");
         let node = |p: Vec3| {
             (0..g.nodes.len() as u32)
@@ -2116,14 +2136,16 @@ mod tests {
         let clip = zones.clip.clone().unwrap();
         let world = bot_world(clip.clone(), &zones.map.entities, Vec::new());
         let probe = mantle_probe(clip, vcod_cod4::pmove::Rules::default());
-        let mut job = crate::nav::NavJob::start_opts(
-            "cod4 mp_killhouse",
-            &world,
-            GRAPH_RULES,
-            Some(probe),
-            None,
-            LIP,
-        );
+        let mut job = moving(|| {
+            crate::nav::NavJob::start_opts(
+                "cod4 mp_killhouse",
+                &world,
+                GRAPH_RULES,
+                Some(probe),
+                None,
+                LIP,
+            )
+        });
         let g = job.poll(true).expect("the graph");
         assert!(g.edges_where(|k| k.leap).next().is_none());
         let node = |p: Vec3| {
@@ -2157,14 +2179,16 @@ mod tests {
         let clip = zones.clip.clone().unwrap();
         let world = bot_world(clip.clone(), &zones.map.entities, Vec::new());
         let probe = mantle_probe(clip, vcod_cod4::pmove::Rules::default());
-        let mut job = crate::nav::NavJob::start_opts(
-            "cod4 mp_crash",
-            &world,
-            GRAPH_RULES,
-            Some(probe),
-            None,
-            LIP,
-        );
+        let mut job = moving(|| {
+            crate::nav::NavJob::start_opts(
+                "cod4 mp_crash",
+                &world,
+                GRAPH_RULES,
+                Some(probe),
+                None,
+                LIP,
+            )
+        });
         let g = job.poll(true).expect("the graph");
         let reach = 4.0 * g.spacing;
         for (a, out) in g.edges.iter().enumerate() {
@@ -2204,8 +2228,9 @@ mod tests {
             let key = format!("cod4 mp_cargoship{}", brush_key(&brushes));
             let world = bot_world(clip.clone(), &zones.map.entities, brushes);
             let probe = mantle_probe(clip.clone(), vcod_cod4::pmove::Rules::default());
-            let mut job =
-                crate::nav::NavJob::start_opts(&key, &world, GRAPH_RULES, Some(probe), None, LIP);
+            let mut job = moving(|| {
+                crate::nav::NavJob::start_opts(&key, &world, GRAPH_RULES, Some(probe), None, LIP)
+            });
             job.poll(true).expect("the graph")
         };
         let pipe = map_brushes(&zones.map.entities)
@@ -2280,14 +2305,16 @@ mod tests {
         let clip = zones.clip.clone().unwrap();
         let world = bot_world(clip.clone(), &zones.map.entities, Vec::new());
         let probe = mantle_probe(clip, vcod_cod4::pmove::Rules::default());
-        let mut job = crate::nav::NavJob::start_opts(
-            "cod4 mp_bloc",
-            &world,
-            GRAPH_RULES,
-            Some(probe),
-            None,
-            LIP,
-        );
+        let mut job = moving(|| {
+            crate::nav::NavJob::start_opts(
+                "cod4 mp_bloc",
+                &world,
+                GRAPH_RULES,
+                Some(probe),
+                None,
+                LIP,
+            )
+        });
         let g = job.poll(true).expect("the graph");
         let pool = g.nearest([51.0, -5709.0, -20.0]).unwrap();
         let site = g.nearest([-864.0, -6044.0, 0.0]).unwrap();

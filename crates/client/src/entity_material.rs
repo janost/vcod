@@ -313,6 +313,14 @@ pub(crate) struct EntSkin {
     pub(crate) sun_cut: Option<StageImage>,
 }
 
+impl EntSkin {
+    /// Whether a draw reads the surface's skin image: a `$texturename`
+    /// stage or the fallback. The other stages bind their images by path.
+    pub(crate) fn reads_skin_image(&self) -> bool {
+        self.stages.iter().any(|st| st.image == StageImage::Skin)
+    }
+}
+
 /// One `StageParams` slot per entity material stage, a multiple of the
 /// widest uniform offset alignment so no device limit is needed.
 pub(crate) const ENT_STAGE_STRIDE: u64 = 512;
@@ -1241,11 +1249,17 @@ impl Cod4Volume {
 
     /// Writes blocks `0..blocks.len()` (at most all but the last), whole
     /// rows of them, from the first row holding a block that changed since
-    /// the last write to the last such row.
-    pub(crate) fn write_blocks(&mut self, queue: &wgpu::Queue, blocks: &[[[u8; 4]; 64]]) {
+    /// the last write to the last such row. Only the blocks in `maybe` and
+    /// any past the last write's end can have changed.
+    pub(crate) fn write_blocks(
+        &mut self,
+        queue: &wgpu::Queue,
+        blocks: &[[[u8; 4]; 64]],
+        maybe: std::ops::Range<usize>,
+    ) {
         use crate::entity_light::{COD4_VOLUME_BLOCKS, COD4_VOLUME_ROW};
         let blocks = &blocks[..blocks.len().min(COD4_VOLUME_BLOCKS as usize - 1)];
-        let Some(span) = crate::renderer::changed_span(&self.written, blocks) else {
+        let Some(span) = crate::renderer::write_span(&self.written, blocks, maybe) else {
             return;
         };
         let row = COD4_VOLUME_ROW as usize;

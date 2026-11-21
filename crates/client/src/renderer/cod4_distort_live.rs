@@ -175,7 +175,7 @@ fn play(root: &std::path::Path, addr: std::net::SocketAddr) -> Option<Seen> {
         let explode = quads
             .iter()
             .any(|q| &*q.shader == "gfx_distortion_heat_far");
-        r.set_fx_quads(&fs, quads, time as f32);
+        r.set_fx_quads(&fs, quads, time);
         let aspect = r.aspect();
         let frame = || Frame {
             view_proj: crate::camera::view_proj_from(
@@ -184,7 +184,7 @@ fn play(root: &std::path::Path, addr: std::net::SocketAddr) -> Option<Seen> {
             eye: cam.pos,
             fwd,
             up,
-            time: time as f32,
+            time,
             fov_x: view.fov,
             cull: CullMode::On,
             hud_lines: Vec::new(),

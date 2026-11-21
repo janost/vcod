@@ -91,8 +91,9 @@ pub(super) struct FxStageDraw<'a> {
 pub(super) fn fx_stage_draws<'a>(
     shader: Option<&'a Material>,
     name: &'a str,
-    t: f32,
+    t: impl Into<ShaderClock>,
 ) -> Vec<FxStageDraw<'a>> {
+    let t = t.into();
     let Some(sh) = shader else {
         return vec![FxStageDraw {
             image: name,
@@ -230,8 +231,9 @@ pub(super) fn fx_stage_rgba(
     stage: Option<&Stage>,
     v: [f32; 4],
     identity_light: f32,
-    t: f32,
+    t: impl Into<ShaderClock>,
 ) -> [f32; 4] {
+    let t = t.into();
     let [r, g, b, a] = v;
     let il = identity_light;
     let Some(st) = stage else {
@@ -411,11 +413,12 @@ impl Renderer {
         self.fx.textures.len()
     }
 
-    /// Quads in draw order (already back-to-front); `time` is the shader
-    /// clock in seconds (tcMod, animMap, wave gens). Unseen images resolve
+    /// Quads in draw order (already back-to-front); `time` is the client's
+    /// clock in seconds ([`ShaderClock`]) (tcMod, animMap, wave gens). Unseen images resolve
     /// lazily; an unresolvable one warns once and is cached as `None`. Each
     /// run draws once per stage (`fx_stage_draws`).
-    pub fn set_fx_quads(&mut self, fs: &dyn AssetSource, quads: Vec<FxQuad>, time: f32) {
+    pub fn set_fx_quads(&mut self, fs: &dyn AssetSource, quads: Vec<FxQuad>, time: f64) {
+        let time = ShaderClock(time);
         // build_quads is capped by construction; the vertex buffer is sized
         // exactly, so truncate anyway.
         let quads = if quads.len() > MAX_FX_QUADS {

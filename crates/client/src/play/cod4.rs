@@ -296,8 +296,6 @@ pub struct Cod4Session {
     pub selector: Selector,
     /// `record`'s file, while one is open (cod4-demos.md 1).
     recording: Option<vcod_cod4::net::demo::Recording>,
-    /// `cl.clientArchive`: our predicted state at each packet's time.
-    archive: vcod_cod4::net::demo::ArchiveRing,
     /// The last predicted playerstate, which the archive copies.
     last_predicted: Option<pm::PlayerState>,
     /// The recoil and the landing dip (`play::cod4_kick`), and how many of
@@ -422,7 +420,6 @@ impl Cod4Session {
             systeminfo_seen: None,
             selector: Selector::default(),
             recording: None,
-            archive: Default::default(),
             last_predicted: None,
             kick: Default::default(),
             kick_seen: 0,
@@ -784,7 +781,7 @@ impl Cod4Session {
                         }) {
                             rec.waiting = false;
                         }
-                        if let Err(e) = rec.write(r.sequence as i32, &r.msg, &self.archive) {
+                        if let Err(e) = rec.write(r.sequence as i32, &r.msg, &conn.client.archive) {
                             log::warn!("cod4: demo write: {e}");
                         }
                     }

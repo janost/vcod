@@ -291,7 +291,7 @@ impl Follower {
 
     /// The height of a fall off a ladder that kills this body.
     pub(super) fn deadly_fall(&self) -> f32 {
-        self.fall_kills.unwrap_or(DEADLY_LADDER)
+        self.fall_kills.unwrap_or_else(deadly_fall)
     }
 }
 

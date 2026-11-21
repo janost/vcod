@@ -263,16 +263,18 @@ fn cod4_main() {
         );
         let mantle = cod4::mantle_probe(clip, vcod_cod4::pmove::Rules::default());
         let t = Instant::now();
-        let g = NavGraph::build_opts(
-            &world.collision,
-            &seeds,
-            &[],
-            &[],
-            cod4::GRAPH_RULES,
-            Some(&mantle),
-            step,
-            cod4::LIP,
-        );
+        let g = vcod_server::nav::with_falls(cod4::FALLS, || {
+            NavGraph::build_opts(
+                &world.collision,
+                &seeds,
+                &[],
+                &[],
+                cod4::GRAPH_RULES,
+                Some(&mantle),
+                step,
+                cod4::LIP,
+            )
+        });
         let ms = t.elapsed().as_secs_f64() * 1000.0;
         let on = seeds.iter().filter(|s| g.nearest(**s).is_some()).count();
         let (reach, leave) = g.spawn_census(&world.collision, &seeds);

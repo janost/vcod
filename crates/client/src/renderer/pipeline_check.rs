@@ -1111,6 +1111,34 @@ fn cod2_water_builds_and_draws_without_validation_errors() {
     assert_clean(&errors, "CoD2 mp_harbor water frame");
 }
 
+/// A CoD2 model's skin image uploads only where a stage reads it: a skin
+/// whose stages bind their images by path takes the white group.
+#[test]
+fn cod2_dynamic_skins_upload_only_what_a_stage_reads() {
+    let Some(fs) = vcod_common::testing::cod2_fs() else {
+        return;
+    };
+    let Some((mut r, errors)) = Renderer::headless(&fs, false, 1) else {
+        eprintln!("no adapter with BC textures; skipped");
+        return;
+    };
+    vcod_cod2::model::register();
+    let m = model::load(&fs, "health_small").unwrap();
+    r.upload_dynamic_model(&fs, &m).expect("the model uploads");
+    let d = &r.dynamic;
+    let white = &d.materials.images[0];
+    let mut by_path = 0;
+    for model in &d.models {
+        for (name, ent) in model.vm.skins.iter().zip(&model.skins) {
+            let g = &d.skin_groups[name];
+            assert_eq!(g == white, !ent.reads_skin_image(), "{name}");
+            by_path += usize::from(!ent.reads_skin_image());
+        }
+    }
+    assert!(by_path > 0, "no skin binds its images by path");
+    assert_clean(&errors, "CoD2 dynamic model upload");
+}
+
 /// The front end with no map loaded, single-sampled as CoD2 runs by
 /// default (`r_aaSamples` 1): the HUD draws in the pass that carries the
 /// depth target, so its pipeline must name the depth format too.

@@ -101,6 +101,67 @@ impl TimeDemo {
     }
 }
 
+/// `timedemo`'s csv, CoD2's and CoD4's (`CL_SetCGameTime`, Mac 0x17ba76,
+/// `iw3mp.exe` 0x45c350): the file (CoD2 `clc` +0x4019c, CoD4 0x934e88)
+/// and the last timed frame's `Sys_Milliseconds` (+0x401a8, 0x934e94).
+pub struct TimedemoCsv {
+    dir: PathBuf,
+    r_mode: i32,
+    out: Option<std::io::BufWriter<std::fs::File>>,
+    last_ms: i32,
+}
+
+impl TimedemoCsv {
+    /// A csv for `dir` (the game's `demos/`) with `r_mode`'s index in its
+    /// name, opened on the first timed frame.
+    pub fn new(dir: PathBuf, r_mode: i32) -> Self {
+        TimedemoCsv {
+            dir,
+            r_mode,
+            out: None,
+            last_ms: 0,
+        }
+    }
+
+    /// One timed frame, before it counts: the file is opened while it is
+    /// not (`FS_FOpenFileWrite`, so every frame until one opens), then each
+    /// frame after the first writes `<frames counted>,<ms since the last>`.
+    pub fn frame(&mut self, map: &str, td: &TimeDemo, now_ms: i32) {
+        use std::io::Write;
+        if self.out.is_none() {
+            // the map is the demo's: a drive or stream colon opens nothing
+            let name = timedemo_csv_name(map, self.r_mode);
+            let file = vcod_common::game_dir::confined(&self.dir, &name)
+                .ok_or_else(|| std::io::Error::other("not a file name"))
+                .and_then(|path| {
+                    std::fs::create_dir_all(&self.dir)?;
+                    std::fs::File::create(path)
+                });
+            match file {
+                Ok(f) => self.out = Some(std::io::BufWriter::new(f)),
+                Err(e) => log::warn!("timedemo: {name}: {e}"),
+            }
+        }
+        if td.started()
+            && let Some(out) = self.out.as_mut()
+        {
+            let _ = writeln!(out, "{},{}", td.frames(), now_ms - self.last_ms);
+        }
+        self.last_ms = now_ms;
+    }
+}
+
+/// `timedemo_<map>_mode_<r_mode>.csv`: the map is `cl.mapname`
+/// (`maps/mp/<mapname>.d3dbsp`, `CL_InitCGame`, Mac 0x17b412, `iw3mp.exe`
+/// 0x45bf87) past its last slash and short of its last dot
+/// (`CL_SetCGameTime`, 0x17ba76; 0x45c2f0).
+fn timedemo_csv_name(map: &str, r_mode: i32) -> String {
+    let full = format!("maps/mp/{map}.d3dbsp");
+    let base = full.rsplit(['/', '\\']).next().unwrap_or("");
+    let base = base.rsplit_once('.').map_or(base, |(b, _)| b);
+    format!("timedemo_{base}_mode_{r_mode}.csv")
+}
+
 /// CoD2's and CoD4's `CL_SetCGameTime` demo clock (Mac 0x17ba76,
 /// `iw3mp.exe` 0x45c440; cod2-demos.md 5, cod4-demos.md 5): primed, the
 /// first frame reads nothing and later frames one record each, until a
@@ -294,6 +355,19 @@ mod tests {
     use super::*;
     use vcod_common::net::Msec;
     use vcod_common::net::protocol::PROTOCOL_V1;
+
+    /// `timedemo_<map>_mode_<r_mode>.csv`, the map short of its directory
+    /// and last extension.
+    #[test]
+    fn the_timedemo_csv_is_named_for_the_map_and_mode() {
+        assert_eq!(
+            timedemo_csv_name("mp_toujane", 3),
+            "timedemo_mp_toujane_mode_3.csv"
+        );
+        assert_eq!(timedemo_csv_name("a.b", -1), "timedemo_a.b_mode_-1.csv");
+        assert_eq!(timedemo_csv_name("x/y", 0), "timedemo_y_mode_0.csv");
+        assert_eq!(timedemo_csv_name("", 0), "timedemo__mode_0.csv");
+    }
 
     #[test]
     fn the_demo_time_skips_a_frame_seeds_off_a_snapshot_and_holds_frozen() {

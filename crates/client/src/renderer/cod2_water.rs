@@ -146,9 +146,20 @@ pub(super) struct WaterBuilder {
     made: HashMap<(usize, bool, Option<PolygonOffset>), wgpu::RenderPipeline>,
     /// This load's.
     pipelines: HashMap<(usize, bool, Option<PolygonOffset>), wgpu::RenderPipeline>,
+    /// This load's pipelines no load made yet, built at once in
+    /// [`Self::finish`].
+    todo: Vec<WaterPipeline>,
     material_bgs: Vec<wgpu::BindGroup>,
     sims: Vec<WaterSim>,
 }
+
+/// A water pipeline to build: its key, blend, depth write and target.
+type WaterPipeline = (
+    (usize, bool, Option<PolygonOffset>),
+    Option<wgpu::BlendState>,
+    bool,
+    (wgpu::TextureFormat, u32),
+);
 
 impl WaterBuilder {
     /// A builder over an earlier load's `keep`, or a new one.
@@ -168,6 +179,7 @@ impl WaterBuilder {
             material_of: HashMap::new(),
             made: keep.pipelines,
             pipelines: HashMap::new(),
+            todo: Vec::new(),
             material_bgs: Vec::new(),
             sims: Vec::new(),
         }
@@ -227,7 +239,8 @@ impl WaterKeep {
 
 impl WaterBuilder {
     /// Binds a water batch of `sh`, which [`draws_water`] accepted: the
-    /// material's group (and its height map, same index) and the pipeline.
+    /// material's group (and its height map, same index) and the pipeline,
+    /// which [`Self::finish`] builds if no load made it.
     pub fn bind(
         &mut self,
         device: &wgpu::Device,
@@ -240,21 +253,13 @@ impl WaterBuilder {
     ) -> u32 {
         let (slot, blend, depth_write) = super::cod2::variant_state(v).expect("a lit variant");
         let key = (slot, two_sided, offset);
-        if !self.pipelines.contains_key(&key) {
-            let p = self.made.entry(key).or_insert_with(|| {
-                make_lit_pipeline(
-                    device,
-                    &self.module,
-                    &self.layout,
-                    target,
-                    blend,
-                    depth_write,
-                    two_sided,
-                    ("fs_main", None),
-                    offset.map_or_else(Default::default, depth_bias),
-                )
-            });
-            self.pipelines.insert(key, p.clone());
+        if !self.pipelines.contains_key(&key) && !self.todo.iter().any(|t| t.0 == key) {
+            match self.made.get(&key) {
+                Some(p) => {
+                    self.pipelines.insert(key, p.clone());
+                }
+                None => self.todo.push((key, blend, depth_write, target)),
+            }
         }
         if let Some(&i) = self.material_of.get(&sh.name) {
             return i;
@@ -362,10 +367,30 @@ impl WaterBuilder {
         })
     }
 
-    /// The load's waters, and what the next load reuses.
-    pub fn finish(self) -> (Waters, WaterKeep) {
+    /// The load's waters, their new pipelines built on every core, and
+    /// what the next load reuses.
+    pub fn finish(mut self, device: &wgpu::Device) -> (Waters, WaterKeep) {
         if !self.sims.is_empty() {
             log::info!("cod2 water: {} materials", self.sims.len());
+        }
+        let (module, layout, todo) = (&self.module, &self.layout, &self.todo);
+        let built = super::par_build_on(8, todo.len(), |i| {
+            let ((_, two_sided, offset), blend, depth_write, target) = todo[i];
+            make_lit_pipeline(
+                device,
+                module,
+                layout,
+                target,
+                blend,
+                depth_write,
+                two_sided,
+                ("fs_main", None),
+                offset.map_or_else(Default::default, depth_bias),
+            )
+        });
+        for ((key, ..), p) in std::mem::take(&mut self.todo).into_iter().zip(built) {
+            self.made.insert(key, p.clone());
+            self.pipelines.insert(key, p);
         }
         let waters = Waters {
             pipelines: self.pipelines,
@@ -603,7 +628,7 @@ mod tests {
             &b.sims[i as usize].texture,
             std::slice::from_ref(&tex),
         );
-        let (waters, _) = b.finish();
+        let (waters, _) = b.finish(&device);
 
         let eye = Vec3::new(0.0, 0.0, 120.0);
         let target = Vec3::new(100.0, 30.0, 0.0);

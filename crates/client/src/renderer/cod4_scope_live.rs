@@ -227,7 +227,7 @@ fn play(root: &std::path::Path, addr: std::net::SocketAddr) -> Option<Seen> {
                 eye: cam.pos,
                 fwd,
                 up,
-                time: time as f32,
+                time,
                 fov_x: view.fov,
                 cull: CullMode::On,
                 hud_lines: Vec::new(),

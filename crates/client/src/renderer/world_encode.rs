@@ -159,7 +159,7 @@ impl Renderer {
         kind: DrawRef,
         bound: &mut Option<Bound>,
         groups: &mut WorldGroups,
-        time: f32,
+        time: ShaderClock,
         fx_ready: (bool, bool),
         depth: Depth,
     ) {
@@ -322,7 +322,7 @@ impl Renderer {
         world_list: &[WorldItem],
         items: &[SortedItem],
         at: Option<WorldRunState>,
-        time: f32,
+        time: ShaderClock,
         fx_ready: (bool, bool),
         equal: impl Fn(&WorldGpu, DrawRef) -> bool,
     ) -> WorldRunState {
@@ -493,7 +493,7 @@ impl Renderer {
             floatz,
             load,
         }: PrepassParts,
-        time: f32,
+        time: ShaderClock,
         bundles: Option<&mut WorldBundles>,
     ) -> usize {
         let Some(world) = &self.world else {
@@ -775,7 +775,7 @@ impl Renderer {
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         world: &WorldGpu,
-        time: f32,
+        time: ShaderClock,
     ) {
         pass.set_vertex_buffer(0, world.vertex_buf.slice(..));
         pass.set_vertex_buffer(1, world.s_axis_buf.slice(..));

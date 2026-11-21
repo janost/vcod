@@ -419,7 +419,8 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   an unpure path. VERIFIED (the branch). So a mod pak's game types come
   ahead of pak5's five, which are alphabetical in the zip (`unzip -l`).
   VERIFIED. `UI_LoadArenas`' `.arena` files list the same way. vcod reads
-  both off `Pk3Fs::file_list` and has no loose files.
+  both off `Pk3Fs::file_list`, each directory's loose files after its paks
+  on an unpure path (cod11-server-handshake.md, "Loose files").
 - 1.1 `CoDMP.exe` calls `FS_ListFilteredFiles` from four places:
   `FS_GetFileList` (`0x42b750`, which hands `$modlist` to `FS_GetModList`
   `0x43b030`), the sound alias loader (`0x4028e0`, `soundaliases`/`csv`),
@@ -428,9 +429,8 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   `Pk3Fs::file_list`; the order of the csvs settles only rows tied on name
   and sequence (`cod11-sound-system.md` 1a, 1e). Script menus, levelshots
   and effects load by name on retail, so vcod's sorted listings of them
-  change nothing. INFERRED (no list call reaches them). vcod still reads
-  no loose files, so an unpure path's loose game types, arenas or csvs are
-  missing from its lists.
+  change nothing. INFERRED (no list call reaches them). An unpure path's
+  loose game types, arenas and csvs are in vcod's lists too.
 - The UI also runs the loader from `UI_Load` (`0x4000871d`) and the
   `loadGameInfo` menu script (`0x4002eb40`, call at `0x4000aa25`). VERIFIED
   (the calls).
@@ -817,8 +817,8 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   (section 1, `ui_menu::check_language`): `cl_languagesavailable` counts
   the `localized_<language>_*` paks, and a `cl_language` whose
   `localizedstrings/<language>/` holds no `.str` is forced to the first
-  language with a pak whose strings do, else `0`. vcod has no loose files,
-  so `0x42c250`'s directory entries never count.
+  language with a pak whose strings do, else `0`. vcod makes no localized
+  directory entry, so `0x42c250`'s never count.
 - Restarts: every `vid_restart` restarts the UI closed and rebuilds the
   script menu cache (section 1). With no game up the main menu comes back.
   The server lists carry over, as retail's survive in `servercache.dat`.

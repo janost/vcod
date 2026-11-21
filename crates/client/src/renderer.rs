@@ -27,8 +27,8 @@ use vcod_common::mapworld::MapWorld;
 use vcod_common::material::{
     AlphaFunc, AlphaGen, BlendFactor, Bundle, Clamp, DLIGHT_IMAGE, Deform, DepthFunc, DrawClass,
     FalloffKind, ImageRef, Material, MaterialLib, ModelLight, PolygonOffset, RgbGen, SORT_BLEND,
-    SORT_DECAL, SORT_OPAQUE, Sprite, Stage, TcGen, TcMod, TexEnv, TexSemantic, Wave, WaveForm,
-    bundle_affine, bundle_turb, has_animated_tcmods, rgb_wave_value, wave_value,
+    SORT_DECAL, SORT_OPAQUE, ShaderClock, Sprite, Stage, TcGen, TcMod, TexEnv, TexSemantic, Wave,
+    WaveForm, bundle_affine, bundle_turb, has_animated_tcmods, rgb_wave_value, wave_value,
 };
 use vcod_common::mesh::{self, Batch, IndexRange, MaterialKind};
 use vcod_common::model::{self, Vertex as VmVert};
@@ -199,6 +199,14 @@ pub(crate) struct FrameWrite {
     pub bytes: u64,
 }
 
+/// The shaders' seconds (`time_pad.x`, the view weapon's and the post
+/// pass's): `time` wrapped at 3840 s, a whole number of every cycle those
+/// shaders run off it (the flag and flap waves' 10 s, the scroll and
+/// objective pulse's 1 s, the grain seed's 128/3 s); `time as f32` under it.
+pub(crate) fn gpu_time(time: f64) -> f32 {
+    ShaderClock(time).wrapped(3840.0)
+}
+
 pub struct Frame {
     pub view_proj: glam::Mat4,
     /// Camera position, the cell the visibility walk starts from.
@@ -209,8 +217,9 @@ pub struct Frame {
     /// The view matrix's up (`camera::up_hint`); with `fwd` it takes world
     /// lights into the viewmodel's view space.
     pub up: glam::Vec3,
-    /// Seconds since start; drives tcMod and wave animation in the stage shaders.
-    pub time: f32,
+    /// Seconds since start (f64): the stage terms read it through
+    /// [`ShaderClock`], the shaders' own clock as [`gpu_time`].
+    pub time: f64,
     /// The refdef's horizontal fov in degrees; the LOD pick reads it.
     pub fov_x: f32,
     pub cull: CullMode,

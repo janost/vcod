@@ -52,7 +52,7 @@ impl Live<'_> {
             eye: self.eye,
             fwd,
             up,
-            time: self.time as f32,
+            time: self.time,
             fov_x: self.fov,
             cull: CullMode::On,
             hud_lines: Vec::new(),
@@ -75,7 +75,7 @@ impl Live<'_> {
     ) -> Vec<u8> {
         // the options first: the quads' feather reads `r_zFeather`
         self.r.set_cod4_options(options);
-        self.r.set_fx_quads(self.fs, quads, self.time as f32);
+        self.r.set_fx_quads(self.fs, quads, self.time);
         let frame = self.frame();
         self.r.render(frame, None);
         self.r.set_cod4_options(Cod4Options::default());
@@ -859,7 +859,7 @@ fn frag_counts(l: &mut Live, zfeather: bool) -> Option<[u64; crate::frame_prof::
         ..Default::default()
     });
     let quads = l.quads();
-    l.r.set_fx_quads(l.fs, quads, l.time as f32);
+    l.r.set_fx_quads(l.fs, quads, l.time);
     for _ in 0..8 {
         let frame = l.frame();
         l.r.render(frame, None);
