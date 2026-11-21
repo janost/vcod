@@ -1,8 +1,40 @@
 # Testing: suites, ignored gates, soaks, perf
 
-AGENTS.md has the rules every commit follows. This file has the per-install
-gates, the ignored tests, and the census, soak, perf and bot harness recipes.
+AGENTS.md has the rules every commit follows. This file has the host
+setup, the per-install gates, the ignored tests, and the census, soak, perf
+and bot harness recipes.
 The A/B gates against retail captures are in [retail.md](retail.md).
+
+## Host setup
+
+The build needs ALSA's headers on Linux (`alsa-sys` links it in its build
+script) and `pkg-config` to find them:
+
+| Distro family | Build | Lavapipe (headless render tests) |
+|---|---|---|
+| Debian, Ubuntu | `libasound2-dev pkg-config` | `mesa-vulkan-drivers` |
+| Fedora | `alsa-lib-devel pkgconf-pkg-config` | `mesa-vulkan-drivers` |
+| Arch | `alsa-lib pkgconf` | `vulkan-swrast` |
+
+Lavapipe's ICD json is the `lvp_icd.*.json` the package puts in the Vulkan
+loader's `icd.d/` directory (`/usr/share/vulkan/icd.d/` on these three).
+Every script that draws takes its path as `LVP_ICD`; `VCOD_REQUIRE_GPU=1`
+then makes a render test that finds no adapter fail instead of skip. CoD2
+voice needs the system's libspeex at run time only.
+
+The gates and tools shell out to more. Each script's header names what it
+needs, and the soak, perf and off-LAN scripts stop on the first one missing
+(`tools/lib.sh`):
+
+| Tool | Used by |
+|---|---|
+| a 32-bit glibc (`libc6-i386`, `glibc.i686`, `lib32-glibc`) | `run_server.sh`, `run_probe.sh`, `capture_probes.sh`: the retail Linux servers; 1.5b and UO bring their own `libstdc++.so.5` |
+| `gdb`, `gcc -m32` | `GDB_PY` runs (`retail_home.sh`), `run_probe_cod2.sh`'s `RAND_TRACE` |
+| `objdump`, `readelf` (binutils), `python3` | `tools/re/` |
+| `unshare`, `nsenter`, `taskset`, `ip`, `ss` | the retail servers' namespaces, the soaks, the off-LAN captures |
+| `kwin_wayland`, `dbus-run-session` | `cod1_soak.sh`, `cod4_perf.sh`: the nested compositor |
+| `unzip` | `cod1_soak.sh` (the maps' arenas) |
+| ImageMagick 7, `jpegoptim` | `screenshots.sh` |
 
 ## Installs and which tests they run
 
@@ -265,8 +297,8 @@ CoD1, a CoD2 and a CoD4 frame under wgpu validation. Its gates are plain
 `#[test]`s, not ignored: they need a Vulkan (not GL) adapter with BC
 textures, and without one each prints `skipped` and passes, as every
 headless render test does; `VCOD_REQUIRE_GPU=1` fails them instead, as
-CI sets it on lavapipe. On lavapipe:
-`VK_DRIVER_FILES=<lvp_icd.json> WGPU_BACKEND=vulkan GALLIVM_PERF=nopt`. Run it
+CI sets it on lavapipe. On lavapipe ([Host setup](#host-setup)):
+`VK_DRIVER_FILES=$LVP_ICD WGPU_BACKEND=vulkan GALLIVM_PERF=nopt`. Run it
 after any shader or layout change. A render test that passes headless can
 still draw wrong live; a change to a draw path also needs a test through the
 session or replay path.

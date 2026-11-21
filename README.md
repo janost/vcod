@@ -124,7 +124,9 @@ asphalt. Twenty-three years late, Infinity Ward, you're welcome.
 
 Rust 1.95 or newer. The client needs a GPU with BC (DXT) texture
 compression, and wgpu picks the backend (`WGPU_BACKEND=vulkan|gl|dx12|metal`
-narrows it). The server needs no GPU.
+narrows it). The server needs no GPU. On Linux the build needs ALSA's
+headers; the packages per distro are in
+[docs/dev/testing.md](docs/dev/testing.md#host-setup).
 
 ```
 cargo build --release

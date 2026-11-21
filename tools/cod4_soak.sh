@@ -15,12 +15,16 @@
 #   VCOD_SWEEP_LEVEL_SECS, VCOD_SOAK_TICK_LOG_MS, VCOD_SOAK_CLIENT_LOG_MS,
 #   VCOD_SOAK_TICK_WATCH
 #   pass through (the test's header says what they do)
+#   LVP_ICD       lavapipe's ICD json: sets VK_DRIVER_FILES and
+#                 WGPU_BACKEND=vulkan (or pass those two through)
 #   VK_DRIVER_FILES / WGPU_BACKEND pass through: the soak draws, so it
 #   needs a Vulkan adapter with BC textures (lavapipe will do, with
 #   GALLIVM_PERF=nopt; LP_NUM_THREADS defaults to 4 here).
 # The run is pinned to cores 0-7 (`taskset`), which also caps the nav
 # build's workers.
 set -u
+# LVP_ICD, as gate.sh and cod1_soak.sh take it: lavapipe's ICD json.
+[[ -n ${LVP_ICD:-} ]] && export VK_DRIVER_FILES=$LVP_ICD WGPU_BACKEND=${WGPU_BACKEND:-vulkan}
 out=${1:?usage: cod4_soak.sh <outdir> [map...]}
 shift
 : "${GAME:=cod4}"
