@@ -1464,7 +1464,7 @@ All match where `GAPS` does not name a row. VERIFIED, the gate.
   `moveSpeed` (+0x44) is the root's travel over `XAnimGetLength` in float
   seconds (0x80d72e6, `BG_LoadAnim`'s array fill): 268.47 for the
   stumble, not a truncated 268. VERIFIED, the decompile and the paks.
-  vcod divides by the float on CoD2 (`PlayerAnims::float_move_speed`).
+  vcod divides by the float on CoD2 (`animclock::Flavour::Cod2`).
 - The body's place. The rounds' lag times run ahead of `level.time`, so
   neither side rewinds. VERIFIED, the gate. `probe_combat.gsc` never
   calls `setarchive`, so retail would not rewind here at any lag (2.3.1).

@@ -479,7 +479,7 @@ pub struct ClientSim {
     /// next one (combat doc 2.1).
     pub spread_frac: f32,
     /// 1.5's and UO's `ci+0x4a4` / `ci+0x4c0`: until when a crouch or
-    /// prone change stretches every blend (`animclock::ChannelClock::update_windowed`).
+    /// prone change stretches every blend (`animclock::update_body`).
     stance_window_ms: i32,
     /// What `ClientEndFrame` stores in a playing body's `ps.speed`: `g_speed`
     /// on 1.1, the client's `maxspeed` on 1.5 and UO, mirrored off the host
@@ -2469,10 +2469,13 @@ impl ClientSim {
                     clock_ms: now_ms.wrapping_sub(ahead),
                     snapshot_ms: now_ms,
                 };
-                let window = (self.ps.rules != vcod_common::pmove::MoveRules::V1_1)
-                    .then_some(&mut self.stance_window_ms);
+                let flavour = match self.ps.rules {
+                    vcod_common::pmove::MoveRules::V1_1 => animclock::Flavour::V1_1,
+                    _ => animclock::Flavour::Server15,
+                };
+                let window = &mut self.stance_window_ms;
                 let clocks = (&mut legs_clock, &mut torso_clock);
-                animclock::update_body(clocks, a, (legs, torso), &seen, at, window);
+                animclock::update_body(clocks, a, (legs, torso), &seen, at, flavour, window);
             }
             None => {
                 legs_clock = ChannelClock::started(legs, self.anim.legs_start_ms());

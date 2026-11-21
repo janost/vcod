@@ -210,7 +210,7 @@ is `float(t + float(0.05 * frequency))` at every frame, the wrap taken
 after the store, where a sum with the increment kept on the stack leaves
 it at the 17th step (0x3e83e0f9 against 0x3e83e0f8). VERIFIED (gdb,
 `cod2_anim_gdb.py`). vcod's CoD2 bodies step so
-(`ChannelClock::store_steps`); off it the struck body's bones sat a few
+(`animclock::Flavour::Cod2`); off it the struck body's bones sat a few
 ulps off retail's (cod2-combat.md 9.4). A
 spawn's own end frame (the spawn calls it, at the level time the begin
 ran) carries `legsAnim` 0 and sets no clip; the idle is set at the next
@@ -290,8 +290,8 @@ next snapshot's playerstate (`Side::ran_at`).
   (movetypes 32 and up by CoD2's names, clear for a CoD1 script), which
   `animclock`'s windowed setter reads for the crouched stumbles; the float
   `moveSpeed` is `animtree::AnimMotion::move_speed_f`, which the rate
-  divides by once `PlayerAnims::float_move_speed` is set
-  (`PlayerAnimSet::load` sets it).
+  divides by under `animclock::Flavour::Cod2` and
+  `Flavour::Cod4`.
 - Not modelled: the blend table's exact 1.5 differences in section 7.
 - The drawn body's light origin (`BodyFrame::light_origin`) is the one
   `CG_Player` (Mac 0x1e6834) and `CG_Corpse` (0x1e78ea) build, the same
