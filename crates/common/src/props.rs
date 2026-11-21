@@ -27,6 +27,9 @@ pub struct Placement {
     pub scale: Vec3,
     /// `lightingPrecalc`, clamped to 0..1; white when absent.
     pub precalc: Vec3,
+    /// The entity block's keys as the map spells them (CoD2's `gndLt` and
+    /// light scales read them).
+    pub keys: HashMap<String, String>,
 }
 
 /// Retail's static-model loader skips every `xmodel/shadow_*` placement
@@ -189,6 +192,7 @@ pub fn placements(entities: &str) -> Vec<Placement> {
             angles: Vec3::from_array(angles),
             scale: Vec3::from_array(scale),
             precalc,
+            keys: e,
         });
     }
     out
@@ -739,6 +743,7 @@ mod tests {
             angles: Vec3::new(0.0, 90.0, 0.0),
             scale: Vec3::splat(2.0),
             precalc: Vec3::ONE,
+            keys: HashMap::new(),
         };
         let mut out = Vec::new();
         placed_collision_tris(&p, &model, &mut out);
@@ -817,8 +822,10 @@ mod tests {
                 angles: Vec3::new(5.0, 90.0, 15.0),
                 scale: Vec3::splat(2.0),
                 precalc: Vec3::new(0.5, 0.25, 0.0),
+                keys: p[0].keys.clone(),
             }
         );
+        assert_eq!(p[0].keys["classname"], "misc_model");
         assert_eq!(
             p[1],
             Placement {
@@ -827,8 +834,10 @@ mod tests {
                 angles: Vec3::ZERO,
                 scale: Vec3::ONE,
                 precalc: Vec3::ONE,
+                keys: p[1].keys.clone(),
             }
         );
+        assert_eq!(p[1].keys["model"], "xmodel/crate_misc1");
     }
 
     #[test]
@@ -901,6 +910,7 @@ mod tests {
             angles: Vec3::new(0.0, 90.0, 0.0), // yaw +90: +x turns into +y
             scale: Vec3::new(2.0, 2.0, 4.0),
             precalc: Vec3::ONE,
+            keys: HashMap::new(),
         };
         let v = model::Vertex {
             pos: [1.0, 0.0, 1.0],

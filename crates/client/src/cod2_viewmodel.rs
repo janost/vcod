@@ -26,6 +26,24 @@ use vcod_common::{model, skeleton, xanim};
 use crate::renderer::VmDraw;
 use crate::viewmodel::ViewModels;
 
+// Netfield indices the draw reads, resolved at compile time.
+const PS_F_WEAPON_POS_FRAC: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+    "fWeaponPosFrac"
+);
+const PS_OFF_HAND_INDEX: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "offHandIndex");
+const PS_VIEWMODEL_INDEX: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+    "viewmodelIndex"
+);
+const PS_WEAPONSTATE: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "weaponstate");
+const PS_WEAPON_TIME: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "weaponTime");
+const PS_WEAP_ANIM: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "weapAnim");
+
 /// `pm_flags`: the binoculars are up (`BG_GetViewmodelWeaponIndex`, Mac
 /// 0x7b226).
 const PMF_BINOCULARS: i32 = 0x20000;
@@ -294,10 +312,10 @@ pub fn pos_frac(frame: &Frame, predicted: bool) -> f32 {
     let ps = &frame.snap.ps;
     match frame.prev {
         Some(p) if !predicted && p.ps.client_num == ps.client_num => {
-            let a = p.ps.raw.f32("fWeaponPosFrac");
-            a + (ps.raw.f32("fWeaponPosFrac") - a) * frame.frac
+            let a = p.ps.raw.f32_at(PS_F_WEAPON_POS_FRAC);
+            a + (ps.raw.f32_at(PS_F_WEAPON_POS_FRAC) - a) * frame.frac
         }
-        _ => ps.raw.f32("fWeaponPosFrac"),
+        _ => ps.raw.f32_at(PS_F_WEAPON_POS_FRAC),
     }
 }
 
@@ -305,8 +323,8 @@ pub fn pos_frac(frame: &Frame, predicted: bool) -> f32 {
 /// while a reload's `weaponTime` is still past `adsReloadTransTime`
 /// (`CG_WeaponRunXModelAnims`).
 pub fn sight_up(ps: &PlayerView, def: &WeaponDef) -> bool {
-    let reloading = ps.raw.i32("weaponstate") == WEAPON_RELOADING
-        && ps.raw.i32("weaponTime") > def.int("adsReloadTransTime");
+    let reloading = ps.raw.i32_at(PS_WEAPONSTATE) == WEAPON_RELOADING
+        && ps.raw.i32_at(PS_WEAPON_TIME) > def.int("adsReloadTransTime");
     !reloading && ps.pm_flags & PMF_SIGHT != 0 && ps.pm_flags & PMF_OFFHAND == 0
 }
 
@@ -317,7 +335,7 @@ pub fn view_weapon_index(ps: &PlayerView, binoculars: i32) -> i32 {
     if ps.pm_flags & PMF_BINOCULARS != 0 {
         binoculars
     } else if ps.pm_flags & PMF_OFFHAND != 0 {
-        ps.raw.i32("offHandIndex")
+        ps.raw.i32_at(PS_OFF_HAND_INDEX)
     } else {
         ps.weapon
     }
@@ -501,7 +519,9 @@ impl Cod2View {
             return None;
         }
         let weapon = cs.weapon_name(view_weapon_index(ps, binoculars))?;
-        let hands = cs.model(ps.raw.i32("viewmodelIndex")).map(str::to_string);
+        let hands = cs
+            .model(ps.raw.i32_at(PS_VIEWMODEL_INDEX))
+            .map(str::to_string);
         Some((weapon.to_string(), hands))
     }
 
@@ -541,7 +561,12 @@ impl Cod2View {
             .ok()
             .and_then(|w| self.table.clips.get(w));
         let clip_empty = clip.is_some_and(|&c| ps.raw.ammoclip.get(c) == Some(&0));
-        let from = anim.step(&rig, ps.raw.i32("weapAnim"), clip_empty, dt as f32 / 1000.0);
+        let from = anim.step(
+            &rig,
+            ps.raw.i32_at(PS_WEAP_ANIM),
+            clip_empty,
+            dt as f32 / 1000.0,
+        );
         // The main clip's notes only: the sight layer's clips are set to
         // their times, not run through them.
         if let Some((c, _)) = rig.clip(anim.node) {

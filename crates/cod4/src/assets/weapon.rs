@@ -33,6 +33,44 @@ pub struct Weapon {
 }
 
 impl Weapon {
+    /// The little-endian int at `at` in [`Self::raw`], 0 past it.
+    fn i32_at(&self, at: usize) -> i32 {
+        self.raw
+            .get(at..at + 4)
+            .map_or(0, |b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    /// The little-endian float at `at` in [`Self::raw`], 0 past it.
+    fn f32_at(&self, at: usize) -> f32 {
+        f32::from_bits(self.i32_at(at) as u32)
+    }
+
+    /// `weapClass` (+304, the weapon file's `weaponClass`); 7 a turret.
+    pub fn weap_class(&self) -> i32 {
+        self.i32_at(304)
+    }
+
+    /// `animHorRotateInc` (+2004): a turret gunner's column step.
+    pub fn anim_hor_rotate_inc(&self) -> f32 {
+        self.f32_at(2004)
+    }
+
+    /// `horizViewJitter` (+2028) and `vertViewJitter` (+2032).
+    pub fn view_jitter(&self) -> (f32, f32) {
+        (self.f32_at(2028), self.f32_at(2032))
+    }
+
+    /// `notetrackSoundMap`: 16 key and 16 value script strings at +232 and
+    /// +264, as (key, value) pairs; 0 past [`Self::raw`].
+    pub fn notetrack_sound_map(&self) -> [(u16, u16); 16] {
+        let at = |o: usize| {
+            self.raw
+                .get(o..o + 2)
+                .map_or(0, |b| u16::from_le_bytes([b[0], b[1]]))
+        };
+        std::array::from_fn(|k| (at(232 + 2 * k), at(264 + 2 * k)))
+    }
+
     /// `hideTags[8]` at 216: the gun model's bones whose surfaces the view
     /// weapon hides, script strings of the zone `a` the weapon came from
     /// (cod4-client-view.md 4.2).

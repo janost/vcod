@@ -15,6 +15,14 @@ use vcod_cod2::net::fields::CLIENT_STATE_FIELDS;
 
 use crate::hud::HudQuad;
 
+// Netfield indices the draw reads, resolved at compile time.
+const ES_I_HEAD_ICON: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "iHeadIcon");
+const ES_I_HEAD_ICON_TEAM: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "iHeadIconTeam");
+const PS_DELTA_TIME: usize =
+    vcod_cod2::field!(vcod_cod2::net::fields::PLAYER_STATE_FIELDS, "deltaTime");
+
 /// `ET_PLAYER`.
 const ET_PLAYER: i32 = 1;
 /// `he_type_t` 13, what `HECmd_SetWaypoint` (lnxded 0x81044c0) writes.
@@ -191,7 +199,7 @@ fn head_icons(frame: &Frame, heads: &HashMap<u32, Vec3>, view: &WorldView, out: 
     let Some(viewer) = team_of(ps.client_num) else {
         return;
     };
-    let killcam = ps.raw.i32("deltaTime") != 0;
+    let killcam = ps.raw.i32_at(PS_DELTA_TIME) != 0;
     for e in frame.snap.entities.iter().filter(|e| e.etype == ET_PLAYER) {
         // The viewed body, seen from inside: `CG_PlayerFloatSprite` skips
         // it in the first person (`ps.pm_flags` 0xc00000 while following).
@@ -209,8 +217,8 @@ fn head_icons(frame: &Frame, heads: &HashMap<u32, Vec3>, view: &WorldView, out: 
             radius: ICON_RADIUS,
             min: MIN_SCREEN_RADIUS,
         };
-        let icon = e.raw.i32("iHeadIcon");
-        let icon_team = e.raw.i32("iHeadIconTeam");
+        let icon = e.raw.i32_at(ES_I_HEAD_ICON);
+        let icon_team = e.raw.i32_at(ES_I_HEAD_ICON_TEAM);
         let mut offset = 0.0;
         if icon != 0 && (icon_team == 0 || viewer == TEAM_SPECTATOR || viewer == icon_team) {
             let m = frame.configstrings.get(CS_HEAD_ICONS + icon as usize);

@@ -113,21 +113,8 @@ pub fn visual_model(weapons: &HashMap<String, WeaponModels>, key: &str) -> Optio
     })
 }
 
-/// `WeaponDef.weapClass` (+304) and its turret value (`weapClass_t` 7).
-const WEAP_CLASS: usize = 304;
+/// `weapClass_t`'s turret value.
 const WEAPCLASS_TURRET: i32 = 7;
-
-/// The little-endian int at `at` in a `WeaponDef`'s bytes, 0 past them.
-fn i32_at(raw: &[u8], at: usize) -> i32 {
-    raw.get(at..at + 4)
-        .map_or(0, |b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-}
-
-/// The little-endian float at `at` in a `WeaponDef`'s bytes, 0 past them.
-fn float(raw: &[u8], at: usize) -> f32 {
-    raw.get(at..at + 4)
-        .map_or(0.0, |b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-}
 
 /// What a session draws its entities with: xmodel and weapon names (the
 /// gamestate's model configstrings and its weapon list).
@@ -299,6 +286,9 @@ pub fn load_from(
     } else {
         crate::cod4_look::Cod4Look::new(visions)
     };
+    // One search path: the session's weapon files and ragdoll.cfg, then
+    // the images.
+    let mut src = Cod4Source::open(&install)?;
     let (models, parts, weapons, bodies, av, sound_files, world) = if fly {
         // Fly mode: no entities, but the map's effects and sounds.
         let (av, files) = sound_and_fx(&mut m, &zones, map, &sound)?;
@@ -325,20 +315,19 @@ pub fn load_from(
             .inspect_err(|e| log::warn!("cod4: clip map: {e:#}, no prediction"))
             .ok()
             .map(|mut w| {
-                if let Ok(fs) = open_fs(game_dir, fs_game, Some(map)) {
-                    if fs_game.is_some() {
-                        let files = w.overlay_weapon_files(&fs);
-                        log::info!(
-                            "cod4: {} weapon files read off the search path",
-                            files.len()
-                        );
-                        if let Some(h) = hud.as_mut() {
-                            h.overlay_weapon_files(&files);
-                        }
+                let fs = src.iwds();
+                if fs_game.is_some() {
+                    let files = w.overlay_weapon_files(fs);
+                    log::info!(
+                        "cod4: {} weapon files read off the search path",
+                        files.len()
+                    );
+                    if let Some(h) = hud.as_mut() {
+                        h.overlay_weapon_files(&files);
                     }
-                    if !w.read_ragdoll(&fs) {
-                        log::warn!("cod4: no ragdoll.cfg, corpses keep their death anims");
-                    }
+                }
+                if !w.read_ragdoll(fs) {
+                    log::warn!("cod4: no ragdoll.cfg, corpses keep their death anims");
                 }
                 Arc::new(w)
             });
@@ -368,7 +357,6 @@ pub fn load_from(
             Some((d.name.clone(), img.name.trim_start_matches(',').to_string()))
         })
         .collect();
-    let mut src = Cod4Source::open(&install)?;
     src.add_zone_flagged(Arc::new(walked.assets), vcod_cod4::install::zone_flags::MAP);
     if let Some(z) = mod_zone {
         src.add_zone_flagged(Arc::new(z.assets), vcod_cod4::install::zone_flags::MOD);
@@ -377,64 +365,8 @@ pub fn load_from(
     // off the walk (`walk_load_zone`).
     load_zone(&install, map, &mut src, load);
     laps.lap("load zone");
-    let lightmaps = m
-        .lightmaps
-        .iter()
-        .enumerate()
-        .map(|(i, [p, s])| {
-            let image = |n: &Option<String>| {
-                let n = n
-                    .as_deref()
-                    .with_context(|| format!("lightmap {i} lacks an image"))?;
-                src.image(n)
-            };
-            Ok(LightmapImages {
-                primary: image(p)?,
-                secondary: image(s)?,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    laps.lap("lightmap images");
-    let (mut bsp, built) = to_mapworld(&m, &lightmaps)?;
-    laps.lap("mapworld");
-    let blocked = |a: [f32; 3], b: [f32; 3]| {
-        clip.as_ref().is_some_and(|c| {
-            let z = glam::Vec3::ZERO;
-            c.trace(a.into(), b.into(), z, z, vcod_cod4::lightgrid::SIGHT_MASK)
-                .fraction
-                < 1.0
-        })
-    };
-    bsp.model_lighting = vcod_cod4::mapworld::model_lighting(&m, &blocked);
-    let entity_clip = clip.clone();
-    bsp.entity_lighting = vcod_cod4::mapworld::entity_lighter(
-        &m,
-        Arc::new(move |a: [f32; 3], b: [f32; 3]| {
-            entity_clip.as_ref().is_some_and(|c| {
-                let z = glam::Vec3::ZERO;
-                c.trace(a.into(), b.into(), z, z, vcod_cod4::lightgrid::SIGHT_MASK)
-                    .fraction
-                    < 1.0
-            })
-        }),
-    );
-    laps.lap("lighting");
-    bsp.reflection_probes = reflection_probes(&src, &m);
-    bsp.model_lights = vcod_cod4::mapworld::model_lights(&m, &|def| {
-        let name = light_def_images.get(def)?;
-        attenuation_row(&src, name)
-            .inspect_err(|e| log::warn!("cod4: light def {def}'s attenuation {name}: {e:#}"))
-            .ok()
-    });
-    laps.lap("probes, lights");
+    let bsp = build_world(map, &m, &src, clip, &light_def_images, &mut laps)?;
     laps.finish();
-    log::info!(
-        "{map}: {} soups ({} static model), {} lightmap pages, {} cells",
-        bsp.soups.len(),
-        built.static_soups,
-        built.tiles,
-        bsp.cells.len()
-    );
     let spawn = m
         .entities
         .iter()
@@ -466,6 +398,68 @@ pub fn load_from(
         look,
         hud,
     })
+}
+
+/// The world the renderer draws off `m`, level `map`: its lightmap pages read off
+/// `src`, the mapworld, the grid's model and entity lighting with sight
+/// traced through `clip`, the reflection probes and each light def's
+/// attenuation row (`light_def_images`, by def name).
+fn build_world(
+    map: &str,
+    m: &Map,
+    src: &Cod4Source,
+    clip: Option<Arc<vcod_cod4::collision::ClipMap>>,
+    light_def_images: &HashMap<String, String>,
+    laps: &mut vcod_common::laps::Laps,
+) -> Result<MapWorld> {
+    let lightmaps = m
+        .lightmaps
+        .iter()
+        .enumerate()
+        .map(|(i, [p, s])| {
+            let image = |n: &Option<String>| {
+                let n = n
+                    .as_deref()
+                    .with_context(|| format!("lightmap {i} lacks an image"))?;
+                src.image(n)
+            };
+            Ok(LightmapImages {
+                primary: image(p)?,
+                secondary: image(s)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    laps.lap("lightmap images");
+    let (mut bsp, built) = to_mapworld(m, &lightmaps)?;
+    laps.lap("mapworld");
+    // Whether the clip map blocks sight between two points.
+    let blocked = Arc::new(move |a: [f32; 3], b: [f32; 3]| {
+        clip.as_ref().is_some_and(|c| {
+            let z = glam::Vec3::ZERO;
+            c.trace(a.into(), b.into(), z, z, vcod_cod4::lightgrid::SIGHT_MASK)
+                .fraction
+                < 1.0
+        })
+    });
+    bsp.model_lighting = vcod_cod4::mapworld::model_lighting(m, &*blocked);
+    bsp.entity_lighting = vcod_cod4::mapworld::entity_lighter(m, blocked);
+    laps.lap("lighting");
+    bsp.reflection_probes = reflection_probes(src, m);
+    bsp.model_lights = vcod_cod4::mapworld::model_lights(m, &|def| {
+        let name = light_def_images.get(def)?;
+        attenuation_row(src, name)
+            .inspect_err(|e| log::warn!("cod4: light def {def}'s attenuation {name}: {e:#}"))
+            .ok()
+    });
+    laps.lap("probes, lights");
+    log::info!(
+        "{map}: {} soups ({} static model), {} lightmap pages, {} cells",
+        bsp.soups.len(),
+        built.static_soups,
+        built.tiles,
+        bsp.cells.len()
+    );
+    Ok(bsp)
 }
 
 /// [`vcod_cod4::hud::HudAssets::load`]'s assets off zones walked already:
@@ -921,7 +915,7 @@ fn entity_models(
             .get("projectileModel")
             .map(|&id| model_name(a, id));
         let view = view_def(m, a, def, zones, &mut clips);
-        let gun_anims = (i32_at(&def.raw, WEAP_CLASS) == WEAPCLASS_TURRET)
+        let gun_anims = (def.weap_class() == WEAPCLASS_TURRET)
             .then(|| {
                 let mut anim = |n: usize| {
                     let name = def.xanims.get(n).cloned().flatten()?;
@@ -937,8 +931,11 @@ fn entity_models(
                 worlds,
                 projectile: projectile.clone(),
                 view,
-                rotate_inc: float(&def.raw, 2004),
-                view_jitter: [float(&def.raw, 2032), float(&def.raw, 2028)],
+                rotate_inc: def.anim_hor_rotate_inc(),
+                view_jitter: {
+                    let (horiz, vert) = def.view_jitter();
+                    [vert, horiz]
+                },
                 gun_anims,
             },
         );
@@ -1216,20 +1213,15 @@ fn view_def(
         ads_down: anim_name(32).is_some(),
         clip_name: def.strings.get("clipName").cloned().unwrap_or_default(),
         numbers: crate::cod4_viewmodel::ViewNumbers::from_raw(&def.raw),
-        note_sounds: note_sounds(a, &def.raw),
+        note_sounds: note_sounds(a, def),
     }))
 }
 
-/// `notetrackSoundMap`: 16 key and 16 value script strings at
-/// `WeaponDef` +232 and +264 (the notetrack sound step, `iw3mp.exe`
-/// 0x454a70), up to the first empty key; a pair with no value is left out.
-fn note_sounds(a: &Assets, raw: &[u8]) -> Vec<(String, String)> {
-    let at = |o: usize| {
-        raw.get(o..o + 2)
-            .map_or(0, |b| u16::from_le_bytes([b[0], b[1]]))
-    };
-    (0..16)
-        .map(|k| (at(232 + 2 * k), at(264 + 2 * k)))
+/// `notetrackSoundMap` (the notetrack sound step, `iw3mp.exe` 0x454a70)
+/// up to the first empty key; a pair with no value is left out.
+fn note_sounds(a: &Assets, def: &vcod_cod4::assets::weapon::Weapon) -> Vec<(String, String)> {
+    def.notetrack_sound_map()
+        .into_iter()
         .take_while(|&(key, _)| key != 0)
         .filter(|&(_, value)| value != 0)
         .map(|(key, value)| {

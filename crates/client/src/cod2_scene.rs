@@ -34,6 +34,20 @@ use crate::renderer::{CookieEntity, DynamicModelInstance, ModelHandle, Renderer}
 use crate::turret::{ANIM_BLEND_MS, GunAnim, apply_controller};
 use vcod_cod2::player::GunFrame;
 
+// Netfield indices the draw reads, resolved at compile time.
+const ES_ANGLES2: [usize; 3] =
+    vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, 3 "angles2");
+const ES_OTHER_ENTITY_NUM: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::ENTITY_STATE_FIELDS,
+    "otherEntityNum"
+);
+const ES_SOLID: usize = vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "solid");
+const ES_TIME: usize = vcod_cod2::field!(vcod_cod2::net::fields::ENTITY_STATE_FIELDS, "time");
+const PS_VIEWLOCKED_ENT_NUM: usize = vcod_cod2::field!(
+    vcod_cod2::net::fields::PLAYER_STATE_FIELDS,
+    "viewlocked_entNum"
+);
+
 /// `eFlags` bit every model draw skips on (`CG_General`'s `& 0x20`).
 const EF_NODRAW: i32 = 0x20;
 /// A dead player's `eFlags` (and a corpse's, `PlayerCmd_ClonePlayer`).
@@ -78,10 +92,10 @@ impl TurretAim {
     /// where the view looks off the gun's drawn `angles`, and idles. Any
     /// other plays its fire anim while `eFlags & 0x40`.
     pub fn of(e: &EntityView, frame: &Frame, angles: Vec3) -> TurretAim {
-        let a2 = |i: usize| e.raw.f32(&format!("angles2[{i}]"));
+        let a2 = |i: usize| e.raw.f32_at(ES_ANGLES2[i]);
         let ps = &frame.snap.ps;
-        let ridden =
-            ps.eflags & EF_TURRET_STANCE != 0 && ps.raw.i32("viewlocked_entNum") == e.number as i32;
+        let ridden = ps.eflags & EF_TURRET_STANCE != 0
+            && ps.raw.i32_at(PS_VIEWLOCKED_ENT_NUM) == e.number as i32;
         let (barrel, anim) = if ridden {
             let v = ps.viewangles;
             (
@@ -140,7 +154,7 @@ pub fn resolve(e: &EntityView, cs: &ConfigStrings, render_time: i32) -> Option<V
         ET_GENERAL => model_at(cs, index).map(Visual2::Model),
         // `CG_ScriptMover` (Mac 0x164972): a brush model's `index` is its
         // inline model, anything else an xmodel.
-        ET_SCRIPTMOVER if e.raw.i32("solid") == SOLID_BMODEL => {
+        ET_SCRIPTMOVER if e.raw.i32_at(ES_SOLID) == SOLID_BMODEL => {
             (index > 0).then_some(Visual2::Submodel(index as usize))
         }
         ET_SCRIPTMOVER => model_at(cs, index).map(Visual2::Model),
@@ -151,7 +165,7 @@ pub fn resolve(e: &EntityView, cs: &ConfigStrings, render_time: i32) -> Option<V
             .find(|(row, _)| *row == index)
             .map(|(_, m)| Visual2::Model(m.to_string())),
         // `CG_Missile` (Mac 0x1646da) waits out `time`.
-        ET_MISSILE if e.raw.i32("time") <= render_time => {
+        ET_MISSILE if e.raw.i32_at(ES_TIME) <= render_time => {
             weapon_at(cs, e.weapon).map(Visual2::Missile)
         }
         ET_TURRET => model_at(cs, index).map(Visual2::Turret),
@@ -233,7 +247,7 @@ fn gun_ridden(frame: &Frame, e: &EntityView) -> Option<GunFrame> {
     if e.eflags & EF_TURRET_STANCE == 0 {
         return None;
     }
-    let n = e.raw.i32("otherEntityNum");
+    let n = e.raw.i32_at(ES_OTHER_ENTITY_NUM);
     if !(64..1023).contains(&n) {
         return None;
     }
@@ -242,7 +256,7 @@ fn gun_ridden(frame: &Frame, e: &EntityView) -> Option<GunFrame> {
         .entity(n as u32)
         .filter(|g| g.etype == ET_TURRET)?;
     let (origin, angles) = frame.entity_place(g);
-    let a2 = |i: usize| g.raw.f32(&format!("angles2[{i}]"));
+    let a2 = |i: usize| g.raw.f32_at(ES_ANGLES2[i]);
     Some(GunFrame {
         model: model_at(frame.configstrings, g.model_index)?,
         weapon: weapon_at(frame.configstrings, g.weapon)?,

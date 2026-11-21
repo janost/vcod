@@ -2285,7 +2285,7 @@ fn take_level_effects(e: &mut Cod4Effects, cx: &mut Cod2Frame) {
     };
     let (mut marks, mut sprites) = (BTreeSet::new(), BTreeSet::new());
     for m in all.values().flat_map(|e| &e.emitters) {
-        let set = if m.kind == "Decal" {
+        let set = if m.kind == crate::fx::efx::Kind::Decal {
             &mut marks
         } else {
             &mut sprites
