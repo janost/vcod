@@ -128,11 +128,7 @@ impl Renderer {
                 let sb = &world.stage_batches[sb as usize];
                 Some(shadows::CutBinding {
                     mat: sb.mat.bind_group(time),
-                    stage: Some((
-                        sb.stage.bind_group(time),
-                        u32::try_from(u64::from(sb.slot) * world.stage_params_stride)
-                            .expect("stage params slot offset fits a dynamic offset"),
-                    )),
+                    stage: Some((sb.stage.bind_group(time), world.stage_offset(sb.slot))),
                 })
             }
             ShadowCast::None | ShadowCast::Solid => None,

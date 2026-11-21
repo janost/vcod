@@ -47,6 +47,14 @@ pub(super) fn ent_takes_prepass(skin: &EntSkin) -> bool {
     skin.stages.first().is_some_and(|st| st.prepass)
 }
 
+impl WorldGpu {
+    /// Stage params slot `slot`'s dynamic offset into `stage_params_buf`.
+    pub(super) fn stage_offset(&self, slot: u32) -> u32 {
+        u32::try_from(u64::from(slot) * self.stage_params_stride)
+            .expect("stage params slot offset fits a dynamic offset")
+    }
+}
+
 impl Renderer {
     /// The profile's GPU group of the main pass's `item` (`frame_prof::Group`):
     /// a world draw on a static model's lit set is `Smodel`; `soft` says
@@ -54,14 +62,14 @@ impl Renderer {
     pub(super) fn draw_group(
         &self,
         item: SortedItem,
-        world_list: &[(f32, u32, usize, u32)],
+        world_list: &[WorldItem],
         ent_draws: &[EntDraw],
         soft: impl Fn(usize) -> bool,
     ) -> crate::frame_prof::Group {
         use crate::frame_prof::Group;
         match item {
             SortedItem::World(wi) => {
-                let (_, _, set, i) = world_list[wi];
+                let WorldItem { set, draw: i, .. } = world_list[wi];
                 let smodel = self.world.as_ref().is_some_and(|world| {
                     self.world_sets(world).nth(set).is_some_and(|(_, fds, _)| {
                         match fds[i as usize].kind {
@@ -89,15 +97,11 @@ impl Renderer {
 
     /// Whether `item` is a CoD1 static model draw (`Pass::Prop`), which the
     /// fragment counts keep apart.
-    pub(super) fn is_prop_draw(
-        &self,
-        item: SortedItem,
-        world_list: &[(f32, u32, usize, u32)],
-    ) -> bool {
+    pub(super) fn is_prop_draw(&self, item: SortedItem, world_list: &[WorldItem]) -> bool {
         let SortedItem::World(wi) = item else {
             return false;
         };
-        let (_, _, set, i) = world_list[wi];
+        let WorldItem { set, draw: i, .. } = world_list[wi];
         self.world.as_ref().is_some_and(|world| {
             self.world_sets(world).nth(set).is_some_and(|(_, fds, _)| {
                 matches!(fds[i as usize].kind, DrawRef::Legacy(Pass::Prop { .. }))
@@ -198,10 +202,7 @@ impl Renderer {
                         pass,
                         2,
                         sb.stage.bind_group(time),
-                        Some(
-                            u32::try_from(u64::from(sb.slot) * world.stage_params_stride)
-                                .expect("stage params slot offset fits a dynamic offset"),
-                        ),
+                        Some(world.stage_offset(sb.slot)),
                         &self.census,
                     );
                     pass.draw(draw.first..draw.first + draw.count);
@@ -296,10 +297,7 @@ impl Renderer {
                     pass,
                     2,
                     sb.stage.bind_group(time),
-                    Some(
-                        u32::try_from(u64::from(sb.slot) * world.stage_params_stride)
-                            .expect("stage params slot offset fits a dynamic offset"),
-                    ),
+                    Some(world.stage_offset(sb.slot)),
                     &self.census,
                 );
             }
@@ -309,6 +307,62 @@ impl Renderer {
             Depth::Prepass | Depth::FloatZ => c.prepass_world += 1,
             _ => c.world += 1,
         });
+    }
+
+    /// The scene pass's world items `items` (each a `SortedItem::World`)
+    /// into `sink`, from what `at` left bound, or from nothing: then the
+    /// world's buffers bind first. Returns what the last draw left bound.
+    /// `fx_ready` is [`Self::emit_world_draw`]'s; `equal` picks the draws
+    /// the depth prepass laid down, whose colour draws under EQUAL.
+    #[expect(clippy::too_many_arguments)]
+    pub(super) fn encode_world_items(
+        &self,
+        sink: &mut impl DrawSink,
+        world: &WorldGpu,
+        world_list: &[WorldItem],
+        items: &[SortedItem],
+        at: Option<WorldRunState>,
+        time: f32,
+        fx_ready: (bool, bool),
+        equal: impl Fn(&WorldGpu, DrawRef) -> bool,
+    ) -> WorldRunState {
+        let mut at = at.unwrap_or_else(|| {
+            sink.vertices(0, world.vertex_buf.slice(..));
+            sink.indices(world.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+            WorldRunState::default()
+        });
+        for item in items {
+            let SortedItem::World(wi) = *item else {
+                unreachable!("a world run holds world items")
+            };
+            let WorldItem { set, draw: i, .. } = world_list[wi];
+            let (draws, frame_draws, cam) = self
+                .world_sets(world)
+                .nth(set)
+                .expect("collected from these sets");
+            if at.set != Some(set) {
+                sink.group(0, cam, None);
+                tally(&self.census, |c| c.bind_groups += 1);
+                at.set = Some(set);
+            }
+            let fd = &frame_draws[i as usize];
+            let depth = match equal(world, fd.kind) {
+                true => Depth::Equal,
+                false => Depth::Plain,
+            };
+            self.emit_world_draw(
+                sink,
+                world,
+                &draws[fd.src as usize],
+                fd.kind,
+                &mut at.bound,
+                &mut at.groups,
+                time,
+                fx_ready,
+                depth,
+            );
+        }
+        at
     }
 
     /// The depth prepass's world draws joined. A pass that only writes the
@@ -324,7 +378,7 @@ impl Renderer {
         &self,
         pass: &mut impl DrawSink,
         world: &WorldGpu,
-        world_list: &[(f32, u32, usize, u32)],
+        world_list: &[WorldItem],
         floatz: bool,
     ) -> usize {
         let Some(c2) = &world.cod2 else {
@@ -334,7 +388,7 @@ impl Renderer {
         // count, material, lightmap
         type Range = ((usize, bool, bool, Option<u32>), u32, u32, u32, u32);
         let mut ranges: Vec<Range> = Vec::new();
-        for &(_, _, set, i) in world_list {
+        for &WorldItem { set, draw: i, .. } in world_list {
             let (draws, frame_draws, _) = self
                 .world_sets(world)
                 .nth(set)
@@ -431,7 +485,7 @@ impl Renderer {
     pub(super) fn encode_depth_prepass(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        world_list: &[(f32, u32, usize, u32)],
+        world_list: &[WorldItem],
         ent_draws: &[EntDraw],
         PrepassParts {
             world: world_draws,
@@ -513,7 +567,7 @@ impl Renderer {
         } else if self.draw_joins {
             n += self.encode_prepass_world_joined(pass, world, world_list, floatz);
         } else {
-            for &(_, _, set, i) in world_list {
+            for &WorldItem { set, draw: i, .. } in world_list {
                 let (draws, frame_draws, cam) = self
                     .world_sets(world)
                     .nth(set)
@@ -646,6 +700,76 @@ impl Renderer {
         n
     }
 
+    /// The scene pass's entity surface items `items[from..end]` (no gun)
+    /// into `sink`, each run [`ent_run`] joins (never across `stops`) one
+    /// draw, from what `at` left bound, or from nothing: then the camera,
+    /// bone and instance buffers bind first. `equal` picks the skins whose
+    /// first stage the depth prepass laid down, drawn under EQUAL. Returns
+    /// what the last draw left bound and the item after it.
+    pub(super) fn encode_ent_items(
+        &self,
+        sink: &mut impl DrawSink,
+        items: &[SortedItem],
+        (from, end): (usize, usize),
+        ent_draws: &[EntDraw],
+        stops: &[Option<usize>],
+        at: Option<EntRunState>,
+        equal: impl Fn(&EntSkin) -> bool,
+    ) -> (EntRunState, usize) {
+        let dynamic = &self.dynamic;
+        let mut at = at.unwrap_or_else(|| {
+            sink.group(0, &self.camera_bg, None);
+            sink.group(2, &dynamic.bone_bg, None);
+            sink.vertices(1, dynamic.instance_buf.slice(..));
+            tally(&self.census, |c| c.bind_groups += 2);
+            EntRunState::default()
+        });
+        let mut j = from;
+        while j < end {
+            let SortedItem::Model(mi) = items[j] else {
+                unreachable!("an entity run holds entity items")
+            };
+            let d = &ent_draws[mi];
+            let model_at = dynamic.instances[d.inst as usize].0;
+            let model = &dynamic.models[model_at];
+            let vm = &model.vm;
+            // the instance comes in as `first_instance` over the whole
+            // instance buffer, so instances of one model keep its buffers
+            if at.model != Some(model_at) {
+                sink.vertices(0, vm.vertex_buf.slice(..));
+                sink.indices(vm.index_buf.slice(..), wgpu::IndexFormat::Uint16);
+                at.model = Some(model_at);
+            }
+            let surf = &vm.surfaces[d.surf as usize];
+            let n = ent_run(items, j, ent_draws, (&vm.surfaces, &model.skins), stops);
+            let last = &vm.surfaces[d.surf as usize + n - 1];
+            let skin = &model.skins[d.surf as usize];
+            // a run is one skin, so one answer for all of it
+            let depth = match equal(skin) {
+                true => Depth::Equal,
+                false => Depth::Plain,
+            };
+            draw_ent_stages(
+                sink,
+                &dynamic.materials,
+                EntPass::World,
+                &vm.bind_groups[surf.bind_group],
+                skin,
+                surf,
+                (
+                    surf.first_index..last.first_index + last.index_count,
+                    d.inst,
+                ),
+                &mut at.bound,
+                depth,
+                &self.census,
+            );
+            crate::frame_prof::count(crate::frame_prof::Count::EntDraws, 1);
+            j += n;
+        }
+        (at, j)
+    }
+
     /// Each light over the opaque surfaces it reaches (`dlight.rs`).
     pub(super) fn emit_dlights(
         &self,
@@ -681,12 +805,7 @@ impl Renderer {
                     c.dlights += 1;
                 });
                 pass.set_bind_group(1, d.mat.bind_group(time), &[]);
-                pass.set_bind_group(
-                    2,
-                    d.stage.bind_group(time),
-                    &[u32::try_from(u64::from(d.slot) * world.stage_params_stride)
-                        .expect("stage params slot offset fits a dynamic offset")],
-                );
+                pass.set_bind_group(2, d.stage.bind_group(time), &[world.stage_offset(d.slot)]);
                 pass.draw_indexed(run.draw.first..run.draw.first + run.draw.count, 0, 0..1);
             }
         }

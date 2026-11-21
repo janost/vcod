@@ -251,10 +251,11 @@ a list plus a map), `fxhash.rs` (the hasher its maps use).
 - Window, renderer (`renderer.rs`, `renderer/`), HUD, fx, audio.
   `renderer.rs` holds `Renderer`, `new`, `build`, the frame types and the
   shared formats; `renderer/` the rest:
-  - `frame.rs` the cull, the scene targets and `render`.
+  - `frame.rs` the cull, the scene targets, the `FramePlan` (the frame's
+    shape, decided once) and `render` with its phases.
   - `world_load.rs` `WorldGpu`, `load_world` and its helpers, unload.
-  - `world_encode.rs` the world's draws into a pass or a bundle, the depth
-    prepass, the dlights.
+  - `world_encode.rs` the world's draws into a pass or a bundle, the scene
+    pass's world and entity items, the depth prepass, the dlights.
   - `shadow_encode.rs` `vc_shadows`' maps, CoD2's cookies and their
     receivers, the sun shadow.
   - `stage.rs` `StageParams`, the stage flags and deforms, the stage

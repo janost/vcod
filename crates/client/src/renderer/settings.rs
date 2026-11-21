@@ -71,17 +71,7 @@ impl Renderer {
             .resize(&self.device, self.gamma.scene_view(), w, h);
         self.cod2_glow.resize(&self.device, w, h);
         self.dyn_shadows = cod2_cookie::DynamicShadows::new(&self.device, &self.queue, w, h);
-        self.camera_bg = camera_bind_group(
-            &self.device,
-            &self.camera_layout,
-            &self.camera_buf,
-            &self.fx_lights_buf,
-            &self.shadow_receive(),
-            &self.tex_samplers,
-            self.dyn_shadows.view(),
-            &self.sun_shadow,
-        );
-        self.moved_cams.clear();
+        self.rebuild_camera_bg();
     }
 
     /// The shellshock's screen blend for the next frame
@@ -143,17 +133,7 @@ impl Renderer {
         }
         self.textures.filter = filter;
         self.tex_samplers = TexSamplers::new(&self.device, filter);
-        self.camera_bg = camera_bind_group(
-            &self.device,
-            &self.camera_layout,
-            &self.camera_buf,
-            &self.fx_lights_buf,
-            &self.shadow_receive(),
-            &self.tex_samplers,
-            self.dyn_shadows.view(),
-            &self.sun_shadow,
-        );
-        self.moved_cams.clear();
+        self.rebuild_camera_bg();
         self.vm_pass.uniform_bg = vm_uniform_group(
             &self.device,
             &self.vm_pass.uniform_layout,
@@ -213,16 +193,28 @@ impl Renderer {
             )
         });
         // the camera groups bind the receiver inputs of the new state
-        self.camera_bg = camera_bind_group(
+        self.rebuild_camera_bg();
+    }
+
+    /// The camera group over `camera` (the shared Camera block or a moved
+    /// brush model's) and the renderer's receiver inputs and samplers.
+    pub(super) fn camera_group(&self, camera: &wgpu::Buffer) -> wgpu::BindGroup {
+        camera_bind_group(
             &self.device,
             &self.camera_layout,
-            &self.camera_buf,
+            camera,
             &self.fx_lights_buf,
             &self.shadow_receive(),
             &self.tex_samplers,
             self.dyn_shadows.view(),
             &self.sun_shadow,
-        );
+        )
+    }
+
+    /// Rebuilds the camera group after an input it binds changed; the moved
+    /// brush models' groups are rebuilt as the next frame needs them.
+    pub(super) fn rebuild_camera_bg(&mut self) {
+        self.camera_bg = self.camera_group(&self.camera_buf);
         self.moved_cams.clear();
     }
 
