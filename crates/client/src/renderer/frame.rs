@@ -217,16 +217,7 @@ impl Renderer {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            let bg = camera_bind_group(
-                &self.device,
-                &self.camera_layout,
-                &buf,
-                &self.fx_lights_buf,
-                &self.shadow_receive(),
-                &self.tex_samplers,
-                self.dyn_shadows.view(),
-                &self.sun_shadow,
-            );
+            let bg = self.camera_group(&buf);
             self.moved_cams.push((buf, bg));
         }
         for (pose, (buf, _)) in moved.iter().zip(&self.moved_cams) {
@@ -1034,16 +1025,21 @@ impl Renderer {
             // model, by their place in the sorted shader list; on one
             // shader a moved model, an entity in retail's key, draws before
             // the world (entity 0x3fe, shader doc 5).
-            let mut world_list: Vec<(f32, u32, usize, u32)> = Vec::new();
+            let mut world_list: Vec<WorldItem> = Vec::new();
             if let Some(world) = &self.world {
                 for (set, (_, frame_draws, _)) in self.world_sets(world).enumerate() {
                     for (i, fd) in frame_draws.iter().enumerate() {
-                        world_list.push((fd.sort, fd.rank, set, i as u32));
+                        world_list.push(WorldItem {
+                            sort: fd.sort,
+                            rank: fd.rank,
+                            set,
+                            draw: i as u32,
+                        });
                     }
                 }
             }
             // stable: a batch keeps its stage order
-            world_list.sort_by_key(|&(_, rank, set, _)| (rank, set.wrapping_sub(1)));
+            world_list.sort_by_key(|w| (w.rank, w.set.wrapping_sub(1)));
             // CoD2's feather reads a depth without the entities (floatZ,
             // cod2-materials.md 9.5): its copy goes before the first one.
             // CoD4's `floatZ` holds them (cod4-client-perf.md 20), so a
@@ -1241,10 +1237,7 @@ impl Renderer {
                         pass.set_bind_group(
                             2,
                             ds.stage.bind_group(frame.time),
-                            &[
-                                u32::try_from(u64::from(ds.slot) * world.stage_params_stride)
-                                    .expect("stage params slot offset fits a dynamic offset"),
-                            ],
+                            &[world.stage_offset(ds.slot)],
                         );
                         pass.draw_indexed(0..dome.index_count, 0, 0..1);
                         tally(&self.census, |c| {
@@ -1292,7 +1285,7 @@ impl Renderer {
                     .collect();
                 d
             };
-            let world_sorts: Vec<f32> = world_list.iter().map(|w| w.0).collect();
+            let world_sorts: Vec<f32> = world_list.iter().map(|w| w.sort).collect();
             let model_sorts: Vec<f32> = ent_draws.iter().map(|d| d.sort).collect();
             let fx_sorts: Vec<f32> = self.fx.runs.iter().map(|r| r.sort).collect();
             let fx_firsts: Vec<usize> = self
@@ -1494,7 +1487,7 @@ impl Renderer {
                             let SortedItem::World(wi) = *item else {
                                 unreachable!("a world run holds world items")
                             };
-                            let (_, _, set, i) = world_list[wi];
+                            let WorldItem { set, draw: i, .. } = world_list[wi];
                             let (draws, frame_draws, cam) = self
                                 .world_sets(world)
                                 .nth(set)
@@ -1535,7 +1528,7 @@ impl Renderer {
                     }
                     SortedItem::World(wi) => {
                         let world = self.world.as_ref().expect("world draws come from a world");
-                        let (_, _, set, i) = world_list[wi];
+                        let WorldItem { set, draw: i, .. } = world_list[wi];
                         let (draws, frame_draws, cam) = self
                             .world_sets(world)
                             .nth(set)

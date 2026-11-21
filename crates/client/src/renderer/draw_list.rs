@@ -58,6 +58,17 @@ pub(super) struct FrameDraw {
     pub(super) src: u32,
 }
 
+/// One entry of the frame's world list: a [`FrameDraw`]'s sort and rank,
+/// the draw set it is in ([`Renderer::world_sets`]) and its index in that
+/// set's frame draws.
+#[derive(Clone, Copy)]
+pub(super) struct WorldItem {
+    pub(super) sort: f32,
+    pub(super) rank: u32,
+    pub(super) set: usize,
+    pub(super) draw: u32,
+}
+
 /// The pipeline a run of world draws has bound.
 #[derive(Copy, Clone, PartialEq)]
 pub(super) enum Bound {
