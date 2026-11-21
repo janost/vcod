@@ -504,7 +504,11 @@ fn a_box_sweep_over_an_edge_leaves_without_the_epsilon() {
         0x1,
         None,
     );
-    assert!((t.fraction - 0.4925).abs() < 1e-5, "fraction {}", t.fraction);
+    assert!(
+        (t.fraction - 0.4925).abs() < 1e-5,
+        "fraction {}",
+        t.fraction
+    );
     assert!(t.normal.abs_diff_eq(-Vec3::X, 1e-6), "normal {}", t.normal);
 }
 
